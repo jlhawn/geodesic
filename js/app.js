@@ -1,4 +1,5 @@
 const RADIUS = 1;
+const HOUR = 10000; // Length of simulated hour in real milliseconds.
 
 function projectOntoUnitSphere(triangle) {
     var { a, b, c } = triangle;
@@ -299,7 +300,6 @@ function runApp() {
         // model this as the sun rotating around the earth that way we only
         // need to move the position of the sun with each frame instead of the
         // position of the earth and the camera.
-        const HOUR = 10000; // Length of simulated hour in real milliseconds.
         const orbitAngularVelocity = 2*Math.PI/(365*24*HOUR);
         var theta = orbitAngularVelocity * dt % (2*Math.PI);
         q.setFromAxisAngle(Z_AXIS, theta);
@@ -446,8 +446,17 @@ function SetupCameraControls(camera, domElement) {
     domElement.addEventListener('wheel', function(e) {
         e.preventDefault();
 
-        let factor = 1 + e.deltaY*0.01;
+        let factor = 1 + e.deltaY*0.002;
 
         camera.position.multiplyScalar(factor);
+
+        let distanceSq = camera.position.lengthSq();
+        if (distanceSq < 4) { // 2 squared.
+            camera.position.normalize();
+            camera.position.multiplyScalar(2);
+        } else if (distanceSq > 400) { // 20 squared.
+            camera.position.normalize();
+            camera.position.multiplyScalar(20);
+        }
     });
 }
