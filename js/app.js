@@ -1,5 +1,6 @@
 const RADIUS = 1;
-const HOUR = 10000; // Length of simulated hour in real milliseconds.
+const HOUR = 4000; // Length of simulated hour in real milliseconds.
+const SUBDIVISIONS = 2;
 
 function projectOntoUnitSphere(triangle) {
     var { a, b, c } = triangle;
@@ -201,7 +202,7 @@ function GeodesicTriangles(N) {
 }
 
 function runApp() {
-    const triangles = GeodesicTriangles(6);
+    const triangles = GeodesicTriangles(SUBDIVISIONS);
 
     const positions = [];
     const normals = [];
@@ -458,5 +459,12 @@ function SetupCameraControls(camera, domElement) {
             camera.position.normalize();
             camera.position.multiplyScalar(20);
         }
+    });
+
+    // For mobile web, need to prevent swiping on the screen from scrolling
+    // around the page.
+    const preventDefault = function(e) { e.preventDefault(); };
+    ["touchstart", "touchend", "touchmove", "touchcancel"].forEach(function(eventType) {
+        domElement.addEventListener(eventType, preventDefault);
     });
 }
