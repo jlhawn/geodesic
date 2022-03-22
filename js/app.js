@@ -1,17 +1,36 @@
 const RADIUS = 1;
-const HOUR = 4000; // Length of simulated hour in real milliseconds.
-const SUBDIVISIONS = 2;
+const HOUR = 1000; // Length of simulated hour in real milliseconds.
+const SUBDIVISIONS = 4;
 
 function projectOntoUnitSphere(triangle) {
-    var { a, b, c } = triangle;
+    let { a, b, c } = triangle;
     a.normalize();
     b.normalize();
     c.normalize();
 }
 
-function subdivideTriangleRecursive(triangle, N, addCallback) {
+function circumcenter(triangle) {
+    const { a, b, c } = triangle;
+
+    const p1p2 = a.clone().sub(b);
+    const p2p1 = b.clone().sub(a);
+    const p1p3 = a.clone().sub(c);
+    const p3p1 = c.clone().sub(a);
+    const p2p3 = b.clone().sub(c);
+    const p3p2 = c.clone().sub(b);
+
+    const p1p2Xp2p3 = p1p2.clone().cross(p2p3);
+
+    const alpha = p2p3.lengthSq() * p1p2.dot(p1p3) / (2 * p1p2Xp2p3.lengthSq());
+    const beta = p1p3.lengthSq() * p2p1.dot(p2p3) / (2 * p1p2Xp2p3.lengthSq());
+    const gamma = p1p2.lengthSq() * p3p1.dot(p3p2) / (2 * p1p2Xp2p3.lengthSq());
+
+    return a.clone().multiplyScalar(alpha).add(b.clone().multiplyScalar(beta)).add(c.clone().multiplyScalar(gamma));
+}
+
+function subdivideTriangle(triangle, N, callback) {
     if (N == 0) {
-        addCallback(triangle);
+        callback(triangle.clone());
         return;
     }
 
@@ -36,20 +55,24 @@ function subdivideTriangleRecursive(triangle, N, addCallback) {
 
     let t = new THREE.Triangle();
     t = t.set(a, d, f);
-    subdivideTriangleRecursive(t.clone(), N-1, addCallback);
+    subdivideTriangle(t, N-1, callback);
     t = t.set(d, b, e);
-    subdivideTriangleRecursive(t.clone(), N-1, addCallback);
+    subdivideTriangle(t, N-1, callback);
     t = t.set(e, f, d);
-    subdivideTriangleRecursive(t.clone(), N-1, addCallback);
+    subdivideTriangle(t, N-1, callback);
     t = t.set(f, e, c);
-    subdivideTriangleRecursive(t, N-1, addCallback);
+    subdivideTriangle(t, N-1, callback);
 }
 
-// subdivideTriangle divides the given triangle into multiple smaller triangles
+// subdivideTriangleOLD divides the given triangle into multiple smaller triangles
 // with 'N' triangles along each side. The number of new smaller
 // triangles grows as the square of 'N':
 //     2->4, 3->9, 4->16, etc.
-function subdivideTriangle(triangle, N) {
+//
+// NOTE: I stopped using this function because the size of the triangles varied
+// too much. The recursive solution creates much better triangles because it
+// projects the vertexes to the sphere with each iteration.
+function subdivideTriangleOLD(triangle, N) {
     // NOTE: Points a, b, c make a counter-clockwise turn in the front-facing
     // direction. i.e., by right hand rule, the normal vector at b points in
     // the direction that the triangle's "front" side faces. This is important
@@ -111,7 +134,7 @@ function subdivideTriangle(triangle, N) {
     return triangles;
 }
 
-function GeodesicTriangles(N) {
+function GeodesicTriangles(N, callback) {
     const a = 0.525731112119133606;
     const b = 0.850650808352039932;
 
@@ -186,24 +209,108 @@ function GeodesicTriangles(N) {
         new THREE.Triangle( vI, vK, vD ),
     ];
 
-    // return triangles.flatMap(function(triangle) {
-    //     return subdivideTriangle(triangle, N).map(function(subTriangle) {
-    //         projectOntoUnitSphere(subTriangle);
-    //         return subTriangle;
-    //     });
-    // });
-
-    const subTriangles = [];
     triangles.forEach(function(triangle) {
-        subdivideTriangleRecursive(triangle, N, function(t) { subTriangles.push(t); });
+        subdivideTriangle(triangle, N, callback);
+    });
+}
+
+function vectorKey(v) {
+    return [v.x.toFixed(5), v.y.toFixed(5), v.z.toFixed(5)].toString();
+}
+
+function vertexKeys(triangle) {
+    const { a, b, c } = triangle;
+
+    return [
+        vectorKey(a),
+        vectorKey(b),
+        vectorKey(c),
+    ];
+}
+
+function canonicalizeVertexOrder(firstVertexKey, triangle) {
+    const {a, b, c} = triangle;
+    if (vectorKey(a) == firstVertexKey) {
+        return;
+    }
+    if (vectorKey(b) == firstVertexKey) {
+        triangle.a = b;
+        triangle.b = c;
+        triangle.c = a;
+        return;
+    }
+    if (vectorKey(c) != firstVertexKey) {
+        throw `expected vertex c of triangle ${triangle.toString()} to be ${firstVertexKey} but it was ${vectorKey(c)}`;
+    }
+    triangle.a = c;
+    triangle.b = a;
+    triangle.c = b;
+}
+
+function findTriangleWithSecondVertexKey(triangles, vertexKey) {
+    for (const triangle of triangles) {
+        let secondKey = vectorKey(triangle.b);
+        if (secondKey == vertexKey) {
+            return triangle;
+        }
+    }
+    throw `could not find triangle with 2nd vertex with key ${vertexKey} in ${triangles.toString()}`;
+}
+
+function veronoi(commonVertexKey, triangles) {
+    // The given triangles all meet at a common vertex, making either
+    // a pentagon (5 triangles) or a hexagon (6 triangles);
+    // First, we canonicalize each of the triangles such that their first
+    // vertex is this shared vertex.
+    for (const triangle of triangles) {
+        canonicalizeVertexOrder(commonVertexKey, triangle);
+    }
+
+    // Next, we'll want to arrange the ordering of these triangles such that
+    // we go around the common vertex in a counter-clockwise direction. If we
+    // chose the first triangle to be {a, b, c}, then there should be another
+    // triangle whose vertices are {a, c, d}, then the next would have vertices
+    // {a, d, e}, etc.
+    //
+    //            b _____ g
+    //             /\    /\
+    //            /  \  /  \
+    //         c /___a\/____\ 
+    //           \    /\    / f
+    //            \  /  \  /
+    //             \/____\/
+    //              d     e
+
+    let triangle = triangles[0];
+    const orderedTriangles = [triangle];
+    while (triangles.length > orderedTriangles.length) {
+        triangle = findTriangleWithSecondVertexKey(triangles, vectorKey(triangle.c));
+        orderedTriangles.push(triangle);
+    }
+
+    // Now that we have the ordered triangles, we can calculate the
+    // circumcenter of each triangle.
+    const circumcenters = orderedTriangles.map(function(triangle) {
+        return circumcenter(triangle).normalize();
     });
 
-    return subTriangles;
+    const finalTriangles = [new THREE.Triangle(
+        circumcenters[0].clone(),
+        circumcenters[1].clone(),
+        circumcenters[2].clone(),
+    )];
+    for(let i = 2; i+1 < circumcenters.length; i++) {
+        finalTriangles.push(new THREE.Triangle(
+            circumcenters[0].clone(),
+            circumcenters[i].clone(),
+            circumcenters[i+1].clone(),
+        ));
+    }
+
+    return finalTriangles;
 }
 
 function runApp() {
-    const triangles = GeodesicTriangles(SUBDIVISIONS);
-
     const positions = [];
     const normals = [];
     const colors = [];
@@ -211,35 +318,57 @@ function runApp() {
     const color = new THREE.Color();
     const n = new THREE.Vector3();
 
-    triangles.forEach(function(triangle) {
-        const { a, b, c } = triangle;
+    const vertexMap = new Map();
 
-        // Set vertex positions.
-        positions.push(a.x, a.y, a.z);
-        positions.push(b.x, b.y, b.z);
-        positions.push(c.x, c.y, c.z);
+    GeodesicTriangles(SUBDIVISIONS, function(triangle) {
+        for (const key of vertexKeys(triangle)) {
+            const existing = vertexMap.get(key);
+            if (existing) {
+                existing.push(triangle);
+            } else {
+                vertexMap.set(key, [triangle]);
+            }
+        }
+    });
 
-        // Get normal vector.
-        triangle.getNormal(n);
+    for (let [vertex, triangles] of vertexMap.entries()) {
+        // Make pentagon or Hexagon.
+        if (triangles.length !== 5 && triangles.length !== 6) {
+            throw `vertex ${vertex} has ${triangles.length} triangles`;
+        }
 
-        // One for each vertex.
-        normals.push(n.x, n.y, n.z);
-        normals.push(n.x, n.y, n.z);
-        normals.push(n.x, n.y, n.z);
+        const veronoiTriangles = veronoi(vertex, triangles);
 
         {
             // Generate a random color.
-            const r = Math.random()*0.75 + 0.25;
-            const g = Math.random()*0.75 + 0.25;
-            const b = Math.random()*0.75 + 0.25;
+            const r = Math.abs(triangles[0].a.x);
+            const g = Math.abs(triangles[0].a.y);
+            const b = Math.abs(triangles[0].a.z);
+            color.setRGB(r, g, b);
+        }
+
+        veronoiTriangles.forEach(function(triangle) {
+            const { a, b, c } = triangle;
+
+            // Set vertex positions.
+            positions.push(a.x, a.y, a.z);
+            positions.push(b.x, b.y, b.z);
+            positions.push(c.x, c.y, c.z);
+
+            // Get normal vector.
+            triangle.getNormal(n);
+
+            // One for each vertex.
+            normals.push(n.x, n.y, n.z);
+            normals.push(n.x, n.y, n.z);
+            normals.push(n.x, n.y, n.z);
 
             // Set color for each vertex to be the same.
-            color.setRGB(r, g, b);
             colors.push(color.r, color.g, color.b, 1);
             colors.push(color.r, color.g, color.b, 1);
             colors.push(color.r, color.g, color.b, 1);
-        }
-    });
+        });
+    }
 
     function disposeArray() { this.array = null; };
 
@@ -256,7 +385,7 @@ function runApp() {
     const mesh = new THREE.Mesh(geometry, material);
 
     const scene = new THREE.Scene();
-    scene.add( new THREE.AmbientLight(0x181818) );
+    scene.add( new THREE.AmbientLight(0x404040) );
 
     const SUN = new THREE.DirectionalLight(0xffffff);
     SUN.position.set(1, 0, 0);
