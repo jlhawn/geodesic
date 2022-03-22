@@ -1,13 +1,26 @@
 const RADIUS = 1;
-const HOUR = 1000; // Length of simulated hour in real milliseconds.
-const SUBDIVISIONS = 4;
 
-function projectOntoUnitSphere(triangle) {
-    let { a, b, c } = triangle;
-    a.normalize();
-    b.normalize();
-    c.normalize();
-}
+// Length of simulated hour in real milliseconds.
+const HOUR = 10000;
+
+// The equation for the number of faces is 5*2^(2*n+1)+2
+//  0 ->         12
+//  1 ->         42
+//  2 ->        162
+//  3 ->        642
+//  4 ->      2,562
+//  5 ->     10,242
+//  6 ->     40,962
+//  7 ->    163,842
+//  8 ->    655,362
+//  9 ->  2,621,442
+// 10 -> 10,485,762
+const SUBDIVISIONS = 6;
+
+const defaultSimplex = new SimplexNoise(0);
+const redSimplex = new SimplexNoise(Math.random());
+const greenSimplex = new SimplexNoise(Math.random());
+const blueSimplex = new SimplexNoise(Math.random());
 
 function circumcenter(triangle) {
     const { a, b, c } = triangle;
@@ -62,76 +75,6 @@ function subdivideTriangle(triangle, N, callback) {
     subdivideTriangle(t, N-1, callback);
     t = t.set(f, e, c);
     subdivideTriangle(t, N-1, callback);
-}
-
-// subdivideTriangleOLD divides the given triangle into multiple smaller triangles
-// with 'N' triangles along each side. The number of new smaller
-// triangles grows as the square of 'N':
-//     2->4, 3->9, 4->16, etc.
-//
-// NOTE: I stopped using this function because the size of the triangles varied
-// too much. The recursive solution creates much better triangles because it
-// projects the vertexes to the sphere with each iteration.
-function subdivideTriangleOLD(triangle, N) {
-    // NOTE: Points a, b, c make a counter-clockwise turn in the front-facing
-    // direction. i.e., by right hand rule, the normal vector at b points in
-    // the direction that the triangle's "front" side faces. This is important
-    // to know because the rederer performs back-face culling by default.
-    const { a, b, c } = triangle;
-
-    // It will be helpful to orient our thinking such that a is at the 'top' of
-    // the triangle, b is the bottom-left, and c is the bottom-right.
-
-    const a0 = a.clone().divideScalar(N);
-    const b0 = b.clone().divideScalar(N);
-    const c0 = c.clone().divideScalar(N);
-
-    const triangles = [];
-
-    // Each vertex in our subdivided triangles will be some linear combination
-    // of a0, b0, and c0 such that for each each vertex:
-    //     a0*i + b0*j + c0*k = vertex
-    // where i + j + k = N.
-
-    // We'll be creating the subdivided triangles by going row-by row from top
-    // to bottom of the triangle.
-
-    // Each row begins with an upward-pointing triangle followed by a
-    // downward-pointing triangle. This repeats 0 or more times and always ends
-    // with an upward-pointing triangle.
-
-    // For the pair of upward and downward facing triangles, there will be 4
-    // vertices with 2 shared by both triangles:
-    //     v1  ____  v4
-    //       /\    /
-    //      /  \  /
-    //  v2 /____\/ v3
-    //
-
-    for (var i = N; i > 0; i--) {
-        var j = N-i;
-
-        var v1 = a0.clone().multiplyScalar(i).add(b0.clone().multiplyScalar(j));
-        var v2 = v1.clone().sub(a0).add(b0);
-        var v3 = v1.clone().sub(a0).add(c0);
-
-        while (j > 0) {
-            var v4 = v1.clone().sub(b0).add(c0);
-            
-            triangles.push(new THREE.Triangle(v1, v2, v3));
-            triangles.push(new THREE.Triangle(v3.clone(), v4, v1.clone()));
-
-            v1 = v4.clone();
-            v2 = v3.clone();
-            v3 = v1.clone().sub(a0).add(c0);
-
-            j--;
-        }
-
-        triangles.push(new THREE.Triangle(v1, v2, v3));
-    }
-
-    return triangles;
 }
 
 function GeodesicTriangles(N, callback) {
@@ -310,6 +253,31 @@ function veronoi(commonVertexKey, triangles) {
     return finalTriangles;
 }
 
+function lerp(aVal, aMin, aMax, bMin, bMax) {
+    var aRange = aMax - aMin;
+    var valRatio = (aVal - aMin)/aRange;
+
+    var bRange = bMax - bMin;
+    var bVal = valRatio*bRange + bMin;
+    return bVal;
+}
+
+function simplex3D(x, y, z, min, max, simplex) {
+    if (simplex === undefined) {
+        simplex = defaultSimplex;
+    }
+    // Simplex lib produces values between -1 and 1.
+    var val = simplex.noise3D(x, y, z);
+    return lerp(val, -1, 1, min, max);
+}
+
+function simplexColor(x, y, z) {
+    const r = simplex3D(x/2, y/2, z*4, 0.2, 0.9, redSimplex);
+    const g = simplex3D(x/2, y/2, z*4, 0.2, 0.9, greenSimplex);
+    const b = simplex3D(x/2, y/2, z*4, 0.2, 0.9, blueSimplex);
+    return {r, g, b};
+}
+
 function runApp() {
     const positions = [];
     const normals = [];
@@ -340,10 +308,8 @@ function runApp() {
         const veronoiTriangles = veronoi(vertex, triangles);
 
         {
-            // Generate a random color.
-            const r = Math.abs(triangles[0].a.x);
-            const g = Math.abs(triangles[0].a.y);
-            const b = Math.abs(triangles[0].a.z);
+            let {x, y, z} = triangles[0].a.clone();
+            let {r, g, b} = simplexColor(x, y, z);
             color.setRGB(r, g, b);
         }
 
@@ -405,6 +371,12 @@ function runApp() {
     // we want it to point in the positive-y direction.
     camera.position.y = -10;
     q.setFromAxisAngle(X_AXIS, Math.PI/2);
+    camera.applyQuaternion(q);
+
+    // Next we want to rotate the camera pi/4 radians around the z-axis to
+    // have a more interesting perspective.
+    q.setFromAxisAngle(Z_AXIS, Math.PI/4);
+    camera.position.applyQuaternion(q);
     camera.applyQuaternion(q);
 
     SetupCameraControls(camera, renderer.domElement);
