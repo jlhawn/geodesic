@@ -1,9 +1,14 @@
 const RADIUS = 1;
 
-// Length of simulated hour in real milliseconds.
-const HOUR = 10000;
+// Length of simulated second in real milliseconds.
+const SECOND = 0.5;
+const MINUTE = 60*SECOND;
+const HOUR = 60*MINUTE;
+const DAY = 24*HOUR;
+const YEAR = 365*DAY;
+const AXIAL_TILT = 23.4*Math.PI/180;
 
-// The equation for the number of faces is 5*2^(2*n+1)+2
+// The equation for the number of cells is 5*2^(2*n+1)+2
 //  0 ->         12
 //  1 ->         42
 //  2 ->        162
@@ -17,241 +22,19 @@ const HOUR = 10000;
 // 10 -> 10,485,762
 const SUBDIVISIONS = 6;
 
-const defaultSimplex = new SimplexNoise(0);
-const redSimplex = new SimplexNoise(Math.random());
-const greenSimplex = new SimplexNoise(Math.random());
-const blueSimplex = new SimplexNoise(Math.random());
-
-function circumcenter(triangle) {
-    const { a, b, c } = triangle;
-
-    const p1p2 = a.clone().sub(b);
-    const p2p1 = b.clone().sub(a);
-    const p1p3 = a.clone().sub(c);
-    const p3p1 = c.clone().sub(a);
-    const p2p3 = b.clone().sub(c);
-    const p3p2 = c.clone().sub(b);
-
-    const p1p2Xp2p3 = p1p2.clone().cross(p2p3);
-
-    const alpha = p2p3.lengthSq() * p1p2.dot(p1p3) / (2 * p1p2Xp2p3.lengthSq());
-    const beta = p1p3.lengthSq() * p2p1.dot(p2p3) / (2 * p1p2Xp2p3.lengthSq());
-    const gamma = p1p2.lengthSq() * p3p1.dot(p3p2) / (2 * p1p2Xp2p3.lengthSq());
-
-    return a.clone().multiplyScalar(alpha).add(b.clone().multiplyScalar(beta)).add(c.clone().multiplyScalar(gamma));
+if (SUBDIVISIONS < 1) {
+    throw "SUBDIVISIONS must be greater than zero.";
 }
 
-function subdivideTriangle(triangle, N, callback) {
-    if (N == 0) {
-        callback(triangle.clone());
-        return;
-    }
+const NUM_CELLS = 5 * (1 << (2*SUBDIVISIONS + 1)) + 2;
+const EARTH_SURFACE_AREA_SQKM = 5.1007e8;
+const CELL_AREA_SQKM = EARTH_SURFACE_AREA_SQKM / NUM_CELLS;
+// Assuming each cell is a regular hexagon, the equation for the area of a
+// hexagon is A = 3*√3/2 * a^2 where a is a side length. Solving for a side
+// length gives: a = √(2√3*A/9). The diameter is double a side length.
+const CELL_AVG_DIAMETER_KM = 2*Math.sqrt(2*Math.sqrt(3)*CELL_AREA_SQKM/9);
 
-    const { a, b, c } = triangle;
-
-    // It will be helpful to orient our thinking such that a is at the 'top' of
-    // the triangle, b is the bottom-left, and c is the bottom-right.
-    //
-    //         a
-    //          /\
-    //         /  \
-    //      d /____\ f 
-    //       /\    /\
-    //      /  \  /  \
-    //   b /____\/____\ c
-    //          e
-    //
-
-    const d = a.clone().add(b).normalize();
-    const e = b.clone().add(c).normalize();
-    const f = c.clone().add(a).normalize();
-
-    let t = new THREE.Triangle();
-    t = t.set(a, d, f);
-    subdivideTriangle(t, N-1, callback);
-    t = t.set(d, b, e);
-    subdivideTriangle(t, N-1, callback);
-    t = t.set(e, f, d);
-    subdivideTriangle(t, N-1, callback);
-    t = t.set(f, e, c);
-    subdivideTriangle(t, N-1, callback);
-}
-
-function GeodesicTriangles(N, callback) {
-    const a = 0.525731112119133606;
-    const b = 0.850650808352039932;
-
-    // 12 Vertices of an Icosahedron.
-
-    const vA = new THREE.Vector3(-a, 0, b);
-    const vB = new THREE.Vector3( a, 0, b);
-    const vC = new THREE.Vector3(-a, 0, -b);
-    const vD = new THREE.Vector3( a, 0, -b);
-    const vE = new THREE.Vector3( 0, b, a);
-    const vF = new THREE.Vector3( 0, b, -a);
-    const vG = new THREE.Vector3( 0, -b, a);
-    const vH = new THREE.Vector3( 0, -b, -a);
-    const vI = new THREE.Vector3( b, a, 0);
-    const vJ = new THREE.Vector3(-b, a, 0);
-    const vK = new THREE.Vector3( b, -a, 0);
-    const vL = new THREE.Vector3(-b, -a, 0);
-
-    const vertices = [vA, vB, vC, vD, vE, vF, vG, vH, vI, vJ, vK, vL];
-
-    /*
-
-    These vertices start out pretty symmetrical, each being within a plane
-    of two of the x, y, or z axes. We want to rotate it about the y axis such
-    that vA becomes a unit vector in the direction of the z axis. The sine of
-    that rotation angle happens to be 'a' and the cosine happens to be 'b'. The
-    transformation matrix for this rotation is given by:
-
-        [ b   0  a ]
-        [ 0   1  0 ]
-        [ -a  0  b ]
-
-    After applying this rotation, vA is the "north pole" and vD is the
-    "south pole".
-
-    */
-    const m = new THREE.Matrix3();
-    m.set( b, 0, a,
-           0, 1, 0,
-          -a, 0, b );
-
-    vertices.forEach(function(vec) {
-        vec.applyMatrix3(m);
-    });
-
-    // Next, we'll make the 20 triangle faces of the icosahedron.
-    // The order of these vertices matters in each triangle to establish which
-    // side of the triangle is the "front" side according to the right hand
-    // rule. If the "back" side faces the camera then it will not be rendered
-    // by default, so all of the triangles here are created such that the
-    // "front" sides face out from the base icosahedron.
-    const triangles = [
-        new THREE.Triangle( vA, vB, vE ),
-        new THREE.Triangle( vE, vB, vI ),
-        new THREE.Triangle( vE, vI, vF ),
-        new THREE.Triangle( vF, vI, vD ),
-        new THREE.Triangle( vD, vC, vF ),
-        new THREE.Triangle( vF, vC, vJ ),
-        new THREE.Triangle( vF, vJ, vE ),
-        new THREE.Triangle( vE, vJ, vA ),
-        new THREE.Triangle( vA, vJ, vL ),
-        new THREE.Triangle( vL, vJ, vC ),
-        new THREE.Triangle( vL, vC, vH ),
-        new THREE.Triangle( vH, vC, vD ),
-        new THREE.Triangle( vD, vK, vH ),
-        new THREE.Triangle( vH, vK, vG ),
-        new THREE.Triangle( vH, vG, vL ),
-        new THREE.Triangle( vL, vG, vA ),
-        new THREE.Triangle( vA, vG, vB ),
-        new THREE.Triangle( vB, vG, vK ),
-        new THREE.Triangle( vB, vK, vI ),
-        new THREE.Triangle( vI, vK, vD ),
-    ];
-
-    triangles.forEach(function(triangle) {
-        subdivideTriangle(triangle, N, callback);
-    });
-}
-
-function vectorKey(v) {
-    return [v.x.toFixed(5), v.y.toFixed(5), v.z.toFixed(5)].toString();
-}
-
-function vertexKeys(triangle) {
-    const { a, b, c } = triangle;
-
-    return [
-        vectorKey(a),
-        vectorKey(b),
-        vectorKey(c),
-    ];
-}
-
-function canonicalizeVertexOrder(firstVertexKey, triangle) {
-    const {a, b, c} = triangle;
-    if (vectorKey(a) == firstVertexKey) {
-        return;
-    }
-    if (vectorKey(b) == firstVertexKey) {
-        triangle.a = b;
-        triangle.b = c;
-        triangle.c = a;
-        return;
-    }
-    if (vectorKey(c) != firstVertexKey) {
-        throw `expected vertex c of triangle ${triangle.toString()} to be ${firstVertexKey} but it was ${vectorKey(c)}`;
-    }
-    triangle.a = c;
-    triangle.b = a;
-    triangle.c = b;
-}
-
-function findTriangleWithSecondVertexKey(triangles, vertexKey) {
-    for (const triangle of triangles) {
-        let secondKey = vectorKey(triangle.b);
-        if (secondKey == vertexKey) {
-            return triangle;
-        }
-    }
-    throw `could not find triangle with 2nd vertex with key ${vertexKey} in ${triangles.toString()}`;
-}
-
-function veronoi(commonVertexKey, triangles) {
-    // The given triangles all meet at a common vertex, making either
-    // a pentagon (5 triangles) or a hexagon (6 triangles);
-    // First, we canonicalize each of the triangles such that their first
-    // vertex is this shared vertex.
-    for (const triangle of triangles) {
-        canonicalizeVertexOrder(commonVertexKey, triangle);
-    }
-
-    // Next, we'll want to arrange the ordering of these triangles such that
-    // we go around the common vertex in a counter-clockwise direction. If we
-    // chose the first triangle to be {a, b, c}, then there should be another
-    // triangle whose vertices are {a, c, d}, then the next would have vertices
-    // {a, d, e}, etc.
-    //
-    //            b _____ g
-    //             /\    /\
-    //            /  \  /  \
-    //         c /___a\/____\ 
-    //           \    /\    / f
-    //            \  /  \  /
-    //             \/____\/
-    //              d     e
-
-    let triangle = triangles[0];
-    const orderedTriangles = [triangle];
-    while (triangles.length > orderedTriangles.length) {
-        triangle = findTriangleWithSecondVertexKey(triangles, vectorKey(triangle.c));
-        orderedTriangles.push(triangle);
-    }
-
-    // Now that we have the ordered triangles, we can calculate the
-    // circumcenter of each triangle.
-    const circumcenters = orderedTriangles.map(function(triangle) {
-        return circumcenter(triangle).normalize();
-    });
-
-    const finalTriangles = [new THREE.Triangle(
-        circumcenters[0].clone(),
-        circumcenters[1].clone(),
-        circumcenters[2].clone(),
-    )];
-    for(let i = 2; i+1 < circumcenters.length; i++) {
-        finalTriangles.push(new THREE.Triangle(
-            circumcenters[0].clone(),
-            circumcenters[i].clone(),
-            circumcenters[i+1].clone(),
-        ));
-    }
-
-    return finalTriangles;
-}
+const simplex = new SimplexNoise(Math.random());
 
 function lerp(aVal, aMin, aMax, bMin, bMax) {
     var aRange = aMax - aMin;
@@ -262,87 +45,103 @@ function lerp(aVal, aMin, aMax, bMin, bMax) {
     return bVal;
 }
 
-function simplex3D(x, y, z, min, max, simplex) {
-    if (simplex === undefined) {
-        simplex = defaultSimplex;
-    }
-    // Simplex lib produces values between -1 and 1.
-    var val = simplex.noise3D(x, y, z);
-    return lerp(val, -1, 1, min, max);
+function terrainSimplex(x, y, z) {
+    // Use 4 different harmonics.
+    const e0 = simplex.noise3D(x/2, y/2, z/2)*2;
+    const e1 = simplex.noise3D(x, y, z);
+    const e2 = simplex.noise3D(2*x, 2*y, 2*z)/2;
+    const e3 = simplex.noise3D(3*x, 3*y, 3*z)/3;
+    const e4 = simplex.noise3D(4*x, 4*y, 4*z)/4;
+
+    return (e0+e1+e2+e3+e4)/(2 + 1 + 1/2 + 1/3 + 1/4);
 }
 
 function simplexColor(x, y, z) {
-    const r = simplex3D(x/2, y/2, z*4, 0.2, 0.9, redSimplex);
-    const g = simplex3D(x/2, y/2, z*4, 0.2, 0.9, greenSimplex);
-    const b = simplex3D(x/2, y/2, z*4, 0.2, 0.9, blueSimplex);
+    const height = terrainSimplex(x, y, z);
+    let r = height;
+    let g = height;
+    let b = height;
+
+    if (height < 0) {
+        r = lerp(height, -1, 0, 0.1, 0.25);
+        b = lerp(height, -1, 0, 0.25, 1);
+        g = lerp(height, -1, 0, 0.1, 0.25);
+    } else {
+        r = lerp(height, 0, 1, 0.2, 0.5);
+        g = lerp(height, 0, 1, 0.5, 1);
+        b = lerp(height, 0, 1, 0.2, 0.5);
+    }
+
     return {r, g, b};
 }
 
 function runApp() {
-    const positions = [];
-    const normals = [];
-    const colors = [];
+    let start = performance.now();
+
+    const grid = new Grid(SUBDIVISIONS);
+
+    console.log(`completed grid construction in ${performance.now()-start}ms`);
+    start = performance.now();
+
+    const numPentagons = 12;
+    const numHexagons = NUM_CELLS - numPentagons;
+    const numTriangles = 4*numPentagons + 5*numHexagons;
+
+    const vertices = new Float32Array(9*numTriangles);
+    const normals = new Float32Array(9*numTriangles);
+    const colors = new Float32Array(12*numTriangles);
 
     const color = new THREE.Color();
     const n = new THREE.Vector3();
 
-    const vertexMap = new Map();
+    i = 0; // Triangle counter.
 
-    GeodesicTriangles(SUBDIVISIONS, function(triangle) {
-        for (const key of vertexKeys(triangle)) {
-            const existing = vertexMap.get(key);
-            if (existing) {
-                existing.push(triangle);
-            } else {
-                vertexMap.set(key, [triangle]);
-            }
-        }
-    });
-
-    for (let [vertex, triangles] of vertexMap.entries()) {
-        // Make pentagon or Hexagon.
-        if (triangles.length !== 5 && triangles.length !== 6) {
-            throw `vertex ${vertex} has ${triangles.length} triangles`;
-        }
-
-        const veronoiTriangles = veronoi(vertex, triangles);
-
+    for (const gridCell of grid) {
         {
-            let {x, y, z} = triangles[0].a.clone();
+            const {x, y, z} = gridCell.centerVertex;
             let {r, g, b} = simplexColor(x, y, z);
+            if (gridCell.isAlongIcosahedronEdge) {
+                r = lerp(r, 0, 1, 0.1, 1);
+                g = lerp(g, 0, 1, 0.1, 1);
+                b = lerp(b, 0, 1, 0.1, 1);
+            }
             color.setRGB(r, g, b);
         }
 
-        veronoiTriangles.forEach(function(triangle) {
+        gridCell.faceTriangles.forEach(function(triangle) {
             const { a, b, c } = triangle;
 
             // Set vertex positions.
-            positions.push(a.x, a.y, a.z);
-            positions.push(b.x, b.y, b.z);
-            positions.push(c.x, c.y, c.z);
+            vertices.set([a.x, a.y, a.z], i*9);
+            vertices.set([b.x, b.y, b.z], i*9+3);
+            vertices.set([c.x, c.y, c.z], i*9+6);
 
             // Get normal vector.
             triangle.getNormal(n);
 
             // One for each vertex.
-            normals.push(n.x, n.y, n.z);
-            normals.push(n.x, n.y, n.z);
-            normals.push(n.x, n.y, n.z);
+            normals.set([n.x, n.y, n.z], i*9);
+            normals.set([n.x, n.y, n.z], i*9+3);
+            normals.set([n.x, n.y, n.z], i*9+6);
 
             // Set color for each vertex to be the same.
-            colors.push(color.r, color.g, color.b, 1);
-            colors.push(color.r, color.g, color.b, 1);
-            colors.push(color.r, color.g, color.b, 1);
+            colors.set([color.r, color.g, color.b, 1], i*12);
+            colors.set([color.r, color.g, color.b, 1], i*12+4);
+            colors.set([color.r, color.g, color.b, 1], i*12+8);
+
+            i++; // IMPORTANT! Increment triangle counter.
         });
     }
+
+    console.log(`completed vertex positions/normals/colors in ${performance.now()-start}ms`);
 
     function disposeArray() { this.array = null; };
 
     const geometry = new THREE.BufferGeometry();
 
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3).onUpload(disposeArray));
-    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3).onUpload(disposeArray));
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 4).onUpload(disposeArray));
+    geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3).onUpload(disposeArray));
+    geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3).onUpload(disposeArray));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 4).onUpload(disposeArray));
 
     geometry.computeBoundingSphere();
 
@@ -352,10 +151,6 @@ function runApp() {
 
     const scene = new THREE.Scene();
     scene.add( new THREE.AmbientLight(0x404040) );
-
-    const SUN = new THREE.DirectionalLight(0xffffff);
-    SUN.position.set(1, 0, 0);
-    scene.add( SUN );
     
     const { camera, renderer, stats } = SetupCameraAndRenderer();
 
@@ -365,6 +160,10 @@ function runApp() {
     const Y_AXIS = new THREE.Vector3(0, 1, 0);
     const Z_AXIS = new THREE.Vector3(0, 0, 1);
     var q = new THREE.Quaternion();
+
+    const SUN = new THREE.DirectionalLight(0xffffff);
+    SUN.position.copy(X_AXIS);
+    scene.add( SUN );
 
     // Move the camera away from the origin and rotate it to point back
     // to the origin (it starts out pointing in the negative-z) direction but
@@ -381,43 +180,56 @@ function runApp() {
 
     SetupCameraControls(camera, renderer.domElement);
 
-    // We want to tilt the sphere mesh to be 23.4 degrees away from the z axis.
-    // We can rotate it about any axis in the xy-plane, but we'll choose the
-    // y-axis for simplicity. This will rotate it clockwise from the
-    // perspective of the camera.
-    q.setFromAxisAngle(Y_AXIS, 23.4*Math.PI/180);
-    mesh.applyQuaternion(q);
+    const SUN_START_POS = X_AXIS.clone();
+    const TILT_AXIS = Z_AXIS.clone();
 
-    const EARTH_AXIS = Z_AXIS.clone().applyQuaternion(q);
+    const timer = document.createElement("div");
+    timer.style.position = "fixed";
+    timer.style.top = "50px";
+    timer.style.left = "5px";
+    timer.style.color = "cyan";
+    timer.style.fontFamily = "sans-serif";
+    document.body.appendChild(timer);
 
     var t0 = 0;
-    function animate(elapsedMilliseconds) {
-        var dt = elapsedMilliseconds - t0;
-        t0 = elapsedMilliseconds;
-
+    function animate(t) {
         requestAnimationFrame( animate );
 
-        // Rotate the earth around the sun.
-        // While the earth actually rotates around the sun, it's easier to
-        // model this as the sun rotating around the earth that way we only
-        // need to move the position of the sun with each frame instead of the
-        // position of the earth and the camera.
-        const orbitAngularVelocity = 2*Math.PI/(365*24*HOUR);
-        var theta = orbitAngularVelocity * dt % (2*Math.PI);
+        const years = Math.floor(t / YEAR);
+        const days = Math.floor((t%YEAR) / DAY);
+        const hours = Math.floor((t%DAY) / HOUR);
+        const minutes = Math.floor((t%HOUR) / MINUTE);
+
+        timer.innerText = `${years} years, ${days} days, ${hours} hours, ${minutes} minutes`;
+
+        // Simulate the axial tilt of the earth.
+        // To do this, we tilt the sun towards or away from the Z_AXIS by a
+        // tiny bit with each time step. Assuming t=0 is the spring equinox,
+        // the angle between the sun's position vector and the equator follows
+        // a sine function which ossilates between 23.4 degrees at its max at
+        // the summer solstice (tilted towards the Z_AXIS) to negative 23.4 at
+        // its minimum (tilted towards the negative Z_AXIS)
+        // 
+        // Equation for axial tilt (from perspective of the sun):
+        //
+        //     AXIAL_TILT*sin(2*PI*t/YEAR)
+        //
+        let theta = AXIAL_TILT*Math.sin(2*Math.PI*(t % YEAR)/YEAR);
+        q.setFromAxisAngle(Y_AXIS, -theta); // Clockwise (negative) rotation.
+        SUN.position.copy(SUN_START_POS).applyQuaternion(q);
+
+        // Simulate earth rotating around its axis.
+        // To avoid modifying the sphere mesh, we will rotate the sun
+        // around the Z_AXIS.
+        // NOTE: while the earth actually rotates counter-clockwise around its
+        // axis, the sun appears to rotate clockwise so we negate this angle.
+        theta = -(t % DAY)*2*Math.PI/DAY;
         q.setFromAxisAngle(Z_AXIS, theta);
         // Note that we're changing the *position* of the light source and not
         // the orientation which would have no effect.
         SUN.position.applyQuaternion(q);
 
-
-        // Rotate the earth around its axis.
-        const rotationAngularVelocity = 2*Math.PI/(24*HOUR); 
-        theta = rotationAngularVelocity*dt % (2*Math.PI);
-        q.setFromAxisAngle(EARTH_AXIS, theta);
-        mesh.applyQuaternion(q);
-
         renderer.render( scene, camera );
-
         stats.update();
     }
     requestAnimationFrame( animate );
