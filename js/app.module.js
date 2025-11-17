@@ -1,4 +1,15 @@
-const RADIUS = 1;
+import SimplexNoise from "./simplex-noise.module.js";
+import * as THREE from "./three.module.js";
+import { Grid, circumcenter } from "./grid.module.js";
+import { SetupCameraControls } from "./camera.module.js";
+
+const DRAW_CENTER_VERTICES = false;
+const DRAW_AREA_DIFF = false;
+const DRAW_CELL_EDGES = false;
+
+const HIGHLIGHT_ICOSAHEDRON_EDGE = false;
+
+const AMBIENT_LIGHT = 0x555555;
 
 // Length of simulated second in real milliseconds.
 const SECOND = 0.5;
@@ -8,25 +19,22 @@ const DAY = 24*HOUR;
 const YEAR = 365*DAY;
 const AXIAL_TILT = 23.4*Math.PI/180;
 
-// The equation for the number of cells is 5*2^(2*n+1)+2
-//  0 ->         12
-//  1 ->         42
-//  2 ->        162
-//  3 ->        642
-//  4 ->      2,562
-//  5 ->     10,242
-//  6 ->     40,962
-//  7 ->    163,842
-//  8 ->    655,362
-//  9 ->  2,621,442
-// 10 -> 10,485,762
-const SUBDIVISIONS = 6;
+// The equation for the number of cells is 10*N^2+2
+//  10 ->     1,002
+//  20 ->     4,002
+//  50 ->    25,002
+// 100 ->   100,002
+// 200 ->   400,002
+// 320 -> 1,024,002
+// 400 -> 1,600,002
+// 500 -> 2,500,002
+const SUBDIVISIONS = 100;
 
 if (SUBDIVISIONS < 1) {
     throw "SUBDIVISIONS must be greater than zero.";
 }
 
-const NUM_CELLS = 5 * (1 << (2*SUBDIVISIONS + 1)) + 2;
+const NUM_CELLS = 10*SUBDIVISIONS*SUBDIVISIONS + 2;
 const EARTH_SURFACE_AREA_SQKM = 5.1007e8;
 const CELL_AREA_SQKM = EARTH_SURFACE_AREA_SQKM / NUM_CELLS;
 // Assuming each cell is a regular hexagon, the equation for the area of a
@@ -80,12 +88,42 @@ function runApp() {
 
     const grid = new Grid(SUBDIVISIONS);
 
-    console.log(`completed grid construction in ${performance.now()-start}ms`);
+    // --- NEW: precompute per-cell average neighbor angles and min/max ---
+    let minArea = Infinity;
+    let maxArea = -Infinity;
+    let avgArea = 0;
+    const areas = [];
+    for (const cell of grid) {
+        if (cell.isPentagon) continue;
+        const a = cell.area;
+        areas.push(a);
+        if (a < minArea) minArea = a;
+        if (a > maxArea) maxArea = a;
+        avgArea += a;
+    }
+    avgArea /= NUM_CELLS;
+
+    // Calculate percentiles
+    areas.sort((a, b) => a - b);
+    const p1Index = Math.floor(NUM_CELLS * 0.01);
+    const p50Index = Math.floor(NUM_CELLS * 0.50);
+    const p99Index = Math.floor(NUM_CELLS * 0.99);
+    const p1Area = areas[p1Index];
+    const p50Area = areas[p50Index];
+    const p99Area = areas[p99Index];
+
+    const areaRange = maxArea - minArea;
+    const areaRangeOverAverage = areaRange/avgArea;
+    const areaRangeOverp50 = areaRange/p50Area;
+    const invRange = 1 / Math.max(1e-12, areaRange); // guard against division by zero
+    console.log({avgArea, minArea, maxArea, areaRange, areaRangeOverAverage, areaRangeOverp50, p1Area, p50Area, p99Area});
+
+    // console.log(`completed grid construction in ${performance.now()-start}ms`);
     start = performance.now();
 
     const numPentagons = 12;
     const numHexagons = NUM_CELLS - numPentagons;
-    const numTriangles = 4*numPentagons + 5*numHexagons;
+    const numTriangles = 3*numPentagons + 4*numHexagons;
 
     const vertices = new Float32Array(9*numTriangles);
     const normals = new Float32Array(9*numTriangles);
@@ -94,16 +132,41 @@ function runApp() {
     const color = new THREE.Color();
     const n = new THREE.Vector3();
 
-    i = 0; // Triangle counter.
+    let tri = 0; // Triangle counter.
 
     for (const gridCell of grid) {
-        {
+        if (DRAW_AREA_DIFF) {
+            let r, g, b;
+            if (gridCell.isPentagon) {
+                r = 0; g = 1; b = 0;
+            } else {
+                // Map angle to [0,1]
+                const t = (gridCell.area - minArea) * invRange;
+
+                // Red (low) → Blue (high)
+                r = 1 - t;
+                g = 0;
+                b = t;
+
+                // if (gridCell.isAlongIcosahedronEdge) {
+                //     r = 0.5, g = 0.5, b = 0.5;
+                // }
+
+                // if (gridCell.area > p99Area) {
+                //     console.log(`grid cell ${gridCell.id} is in the top 1% of largest cells with an area of ${gridCell.area}`);
+                //     r = 0.9, g = 0.9, b = 0.9;
+                // }
+            }
+
+            color.setRGB(r, g, b);
+        } else {
             const {x, y, z} = gridCell.centerVertex;
             let {r, g, b} = simplexColor(x, y, z);
-            if (gridCell.isAlongIcosahedronEdge) {
+            if (HIGHLIGHT_ICOSAHEDRON_EDGE && gridCell.isAlongIcosahedronEdge) {
                 r = lerp(r, 0, 1, 0.1, 1);
                 g = lerp(g, 0, 1, 0.1, 1);
                 b = lerp(b, 0, 1, 0.1, 1);
+                // [r, g, b] = [0.9, 0.9, 0.9];
             }
             color.setRGB(r, g, b);
         }
@@ -112,24 +175,24 @@ function runApp() {
             const { a, b, c } = triangle;
 
             // Set vertex positions.
-            vertices.set([a.x, a.y, a.z], i*9);
-            vertices.set([b.x, b.y, b.z], i*9+3);
-            vertices.set([c.x, c.y, c.z], i*9+6);
+            vertices.set([a.x, a.y, a.z], tri*9);
+            vertices.set([b.x, b.y, b.z], tri*9+3);
+            vertices.set([c.x, c.y, c.z], tri*9+6);
 
             // Get normal vector.
             triangle.getNormal(n);
 
             // One for each vertex.
-            normals.set([n.x, n.y, n.z], i*9);
-            normals.set([n.x, n.y, n.z], i*9+3);
-            normals.set([n.x, n.y, n.z], i*9+6);
+            normals.set([n.x, n.y, n.z], tri*9);
+            normals.set([n.x, n.y, n.z], tri*9+3);
+            normals.set([n.x, n.y, n.z], tri*9+6);
 
             // Set color for each vertex to be the same.
-            colors.set([color.r, color.g, color.b, 1], i*12);
-            colors.set([color.r, color.g, color.b, 1], i*12+4);
-            colors.set([color.r, color.g, color.b, 1], i*12+8);
+            colors.set([color.r, color.g, color.b, 1], tri*12);
+            colors.set([color.r, color.g, color.b, 1], tri*12+4);
+            colors.set([color.r, color.g, color.b, 1], tri*12+8);
 
-            i++; // IMPORTANT! Increment triangle counter.
+            tri++; // IMPORTANT! Increment triangle counter.
         });
     }
 
@@ -145,16 +208,80 @@ function runApp() {
 
     geometry.computeBoundingSphere();
 
-    const material = new THREE.MeshLambertMaterial({vertexColors: true});
+    const material = new THREE.MeshLambertMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: 1.0
+    });
 
     const mesh = new THREE.Mesh(geometry, material);
 
     const scene = new THREE.Scene();
-    scene.add( new THREE.AmbientLight(0x404040) );
+    scene.add( new THREE.AmbientLight(AMBIENT_LIGHT) );
     
     const { camera, renderer, stats } = SetupCameraAndRenderer();
 
     scene.add(mesh);
+
+    // Create lines for cell edges
+    if (DRAW_CELL_EDGES) {
+        const edgePositions = [];
+        for (const gridCell of grid) {
+            const circumcenters = gridCell.vertices;
+
+            // Scale slightly above surface
+            const hoverScale = 1.0001;
+
+            // Create line segments connecting adjacent vertices
+            for (let i = 0; i < circumcenters.length; i++) {
+                const v1 = circumcenters[i];
+                const v2 = circumcenters[(i + 1) % circumcenters.length];
+
+                edgePositions.push(
+                    v1.x * hoverScale, v1.y * hoverScale, v1.z * hoverScale,
+                    v2.x * hoverScale, v2.y * hoverScale, v2.z * hoverScale
+                );
+            }
+        }
+
+        const edgesGeometry = new THREE.BufferGeometry();
+        edgesGeometry.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
+
+        const edgesMaterial = new THREE.LineBasicMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.05
+        });
+
+        const edges = new THREE.LineSegments(edgesGeometry, edgesMaterial);
+        scene.add(edges);
+    }
+
+    // Create points for cell centers (scaled to float above surface)
+    if (DRAW_CENTER_VERTICES) {
+        const pointPositions = new Float32Array(NUM_CELLS * 3);
+        let pointIndex = 0;
+        for (const gridCell of grid) {
+            const {x, y, z} = gridCell.centerVertex;
+            const hoverScale = 1.0001;
+            pointPositions[pointIndex++] = x * hoverScale;
+            pointPositions[pointIndex++] = y * hoverScale;
+            pointPositions[pointIndex++] = z * hoverScale;
+        }
+
+        const pointsGeometry = new THREE.BufferGeometry();
+        pointsGeometry.setAttribute('position', new THREE.BufferAttribute(pointPositions, 3).onUpload(disposeArray));
+
+        const pointsMaterial = new THREE.PointsMaterial({
+            color: 0xffffff,
+            size: 0.005,
+            transparent: true,
+            opacity: 0.5,
+        });
+
+        const points = new THREE.Points(pointsGeometry, pointsMaterial);
+        scene.add(points);
+    }
 
     const X_AXIS = new THREE.Vector3(1, 0, 0);
     const Y_AXIS = new THREE.Vector3(0, 1, 0);
@@ -260,124 +387,4 @@ function SetupCameraAndRenderer() {
     }
 }
 
-function SetupCameraControls(camera, domElement) {
-    // The camera is always looking towards its local negative-z axis.
-    // Up is its local positive-y axis.
-    // Right is its local positive-x axis.
-    const forward = new THREE.Vector3(0, 0, -1);
-    const      up = new THREE.Vector3(0, 1,  0);
-    const   right = new THREE.Vector3(1, 0,  0);
-
-    // We can apply the camera's current orientation quaternion to each of
-    // these vectors to determine their real directions. If it's still the
-    // default quaternion (w=1, x=0, y=0, z=0) then this has no effect.
-    [forward, up, right].forEach((v) => v.applyQuaternion(camera.quaternion));
-
-    // Now that we know which way is right and which way is up, we can tilt the
-    // camera up and down around the origin when the mouse is dragged up or
-    // down by rotating its position about the right vector axis and rotating
-    // the camera orientation in the same way. Likewise, when the mouse is
-    // dragged left or right, we can rotate the camera about the up vector axis
-    // and rotate teh camera orientation in the same way.
-
-    const raycaster = new THREE.Raycaster();
-    const pointer = new THREE.Vector2();
-
-    const target = new THREE.Vector2();
-    const tangentPlane = new THREE.Plane(forward.clone().negate(), -RADIUS);
-
-    const q = new THREE.Quaternion();
-
-    const move = function(e) {
-        let dx = e.clientX - pointer.x; // Horizontal delta.
-        let dy = pointer.y - e.clientY; // Vertical delta.
-
-        pointer.x = e.clientX;
-        pointer.y = e.clientY;
-
-        // Normalize the deltas to a coordinate within the camera's field of
-        // view (between -1 to 1) relative to the center.
-        dx = (dx / domElement.clientWidth) * 2;
-        dy = (dy / domElement.clientHeight) * 2;
-
-        target.set(dx, dy);
-
-        // Now that we have the delta between where the pointer was and where
-        // it is now, we can cast a ray from the camera to a point on a plane
-        // which is tangent to the surface of the sphere and facing the camera.
-        // The means that the plane's normal vector will need to be the
-        // negative of the camera's forward vector.
-        tangentPlane.normal.copy(forward).negate();
-        raycaster.setFromCamera(target, camera);
-        let intersection = new THREE.Vector3();
-        raycaster.ray.intersectPlane(tangentPlane, intersection);
-        intersection.normalize();
-
-
-        // Next we find the horizontal and vertical angles between these two
-        // points. The horizontal angle we will denote as theta. The vertical
-        // angle we will denote as phi.
-        let upPlane = new THREE.Plane(up);
-        let rightPlane = new THREE.Plane(right);
-        let proj = new THREE.Vector3();
-        upPlane.projectPoint(intersection, proj);
-        let theta = tangentPlane.normal.angleTo(proj);
-        theta = dx > 0 ? -theta : theta;
-        rightPlane.projectPoint(intersection, proj);
-        let phi = tangentPlane.normal.angleTo(proj);
-        phi = dy > 0 ? phi : -phi;
-
-        q.setFromAxisAngle(up, theta);
-        camera.applyQuaternion(q);
-        camera.position.applyQuaternion(q);
-
-        // Up vector has not changed but forward and right have.
-        forward.applyQuaternion(q);
-        right.applyQuaternion(q);
-
-        q.setFromAxisAngle(right, phi);
-        camera.applyQuaternion(q);
-        camera.position.applyQuaternion(q);
-
-        // Right vector has not changed but forward and up have.
-        forward.applyQuaternion(q);
-        up.applyQuaternion(q);
-    };
-
-    domElement.addEventListener('pointerdown', function(e) {
-        pointer.x = e.clientX;
-        pointer.y = e.clientY;
-
-        domElement.addEventListener('pointermove', move);
-        domElement.setPointerCapture(e.pointerId);
-
-        domElement.addEventListener('pointerup', function(e) {
-            domElement.removeEventListener('pointermove', move);
-            domElement.releasePointerCapture(e.pointerId);
-        });
-    });
-
-    domElement.addEventListener('wheel', function(e) {
-        e.preventDefault();
-
-        let factor = 1 + e.deltaY*0.002;
-
-        camera.position.multiplyScalar(factor);
-
-        let distanceSq = camera.position.lengthSq();
-        if (distanceSq < 4) { // 2 squared.
-            camera.position.normalize();
-            camera.position.multiplyScalar(2);
-        } else if (distanceSq > 400) { // 20 squared.
-            camera.position.normalize();
-            camera.position.multiplyScalar(20);
-        }
-    });
-
-    // For mobile web, need to prevent swiping on the screen from scrolling
-    // around the page.
-    const preventDefault = function(e) { e.preventDefault(); };
-    ["touchstart", "touchend", "touchmove", "touchcancel"].forEach(function(eventType) {
-        domElement.addEventListener(eventType, preventDefault);
-    });
-}
+export default runApp;
