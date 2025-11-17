@@ -1,15 +1,15 @@
-import SimplexNoise from "./simplex-noise.module.js";
 import * as THREE from "./three.module.js";
 import { Grid, circumcenter } from "./grid.module.js";
-import { SetupCameraControls } from "./camera.module.js";
+import { SetupCameraAndRenderer } from "./camera.module.js";
+import { earthLikeHeight } from "./terrain.module.js";
 
 const DRAW_CENTER_VERTICES = false;
 const DRAW_AREA_DIFF = false;
-const DRAW_CELL_EDGES = false;
+const DRAW_CELL_EDGES = true;
 
 const HIGHLIGHT_ICOSAHEDRON_EDGE = false;
 
-const AMBIENT_LIGHT = 0x555555;
+const AMBIENT_LIGHT = 0x888888;
 
 // Length of simulated second in real milliseconds.
 const SECOND = 0.5;
@@ -42,8 +42,6 @@ const CELL_AREA_SQKM = EARTH_SURFACE_AREA_SQKM / NUM_CELLS;
 // length gives: a = √(2√3*A/9). The diameter is double a side length.
 const CELL_AVG_DIAMETER_KM = 2*Math.sqrt(2*Math.sqrt(3)*CELL_AREA_SQKM/9);
 
-const simplex = new SimplexNoise(Math.random());
-
 function lerp(aVal, aMin, aMax, bMin, bMax) {
     var aRange = aMax - aMin;
     var valRatio = (aVal - aMin)/aRange;
@@ -53,19 +51,8 @@ function lerp(aVal, aMin, aMax, bMin, bMax) {
     return bVal;
 }
 
-function terrainSimplex(x, y, z) {
-    // Use 4 different harmonics.
-    const e0 = simplex.noise3D(x/2, y/2, z/2)*2;
-    const e1 = simplex.noise3D(x, y, z);
-    const e2 = simplex.noise3D(2*x, 2*y, 2*z)/2;
-    const e3 = simplex.noise3D(3*x, 3*y, 3*z)/3;
-    const e4 = simplex.noise3D(4*x, 4*y, 4*z)/4;
-
-    return (e0+e1+e2+e3+e4)/(2 + 1 + 1/2 + 1/3 + 1/4);
-}
-
 function simplexColor(x, y, z) {
-    const height = terrainSimplex(x, y, z);
+    const height = earthLikeHeight(x, y, z);
     let r = height;
     let g = height;
     let b = height;
@@ -219,7 +206,10 @@ function runApp() {
     const scene = new THREE.Scene();
     scene.add( new THREE.AmbientLight(AMBIENT_LIGHT) );
     
-    const { camera, renderer, stats } = SetupCameraAndRenderer();
+    const { camera, renderer } = SetupCameraAndRenderer();
+
+    const stats = new Stats();
+    document.body.appendChild( stats.dom );
 
     scene.add(mesh);
 
@@ -295,7 +285,7 @@ function runApp() {
     // Move the camera away from the origin and rotate it to point back
     // to the origin (it starts out pointing in the negative-z) direction but
     // we want it to point in the positive-y direction.
-    camera.position.y = -10;
+    camera.position.set(0, -5, 0);
     q.setFromAxisAngle(X_AXIS, Math.PI/2);
     camera.applyQuaternion(q);
 
@@ -304,8 +294,6 @@ function runApp() {
     q.setFromAxisAngle(Z_AXIS, Math.PI/4);
     camera.position.applyQuaternion(q);
     camera.applyQuaternion(q);
-
-    SetupCameraControls(camera, renderer.domElement);
 
     const SUN_START_POS = X_AXIS.clone();
     const TILT_AXIS = Z_AXIS.clone();
@@ -360,31 +348,6 @@ function runApp() {
         stats.update();
     }
     requestAnimationFrame( animate );
-}
-
-function SetupCameraAndRenderer() {
-    const camera = new THREE.PerspectiveCamera( 15, window.innerWidth / window.innerHeight, 0.1, 1000 );
-
-    const renderer = new THREE.WebGLRenderer();
-    renderer.setSize( window.innerWidth, window.innerHeight );
-    document.body.appendChild( renderer.domElement );
-
-    const stats = new Stats();
-    document.body.appendChild( stats.dom );
-
-    const setWindowSize = function() {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    };
-    window.addEventListener('resize', setWindowSize, false);
-
-    return {
-        camera: camera,
-        renderer: renderer,
-        stats: stats,
-    }
 }
 
 export default runApp;
