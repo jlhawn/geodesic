@@ -1,6 +1,9 @@
 import * as THREE from "./three.module.js";
 import * as ISEA from "./isea.module.js";
 
+const NORTH_POLE_QUAD_ID = 'NP';
+const SOUTH_POLE_QUAD_ID = 'SP';
+
 /**
  * Computes the circumcenter of a triangle on (or near) the unit sphere.
  *
@@ -59,11 +62,12 @@ function centroid(a, b, c) {
 class GridCell {
   constructor(N, quadId, x, y, center) {
     this.coords = [quadId, N, x, y];
-    this.isNorthPole = quadId === -1;
-    this.isSouthPole = quadId === -2;
+    this.isNorthPole = quadId === NORTH_POLE_QUAD_ID;
+    this.isSouthPole = quadId === SOUTH_POLE_QUAD_ID;
+    this.isPole = this.isNorthPole || this.isSouthPole;
     this.id = `${quadId}-${N}-${x}-${y}`;
     this.centerVertex = center;
-    this.isPentagon = quadId < 0 || (x === N-1 && y === 0);
+    this.isPentagon = this.isPole || (x === N-1 && y === 0);
     this.isAlongIcosahedronEdge = this.isPentagon || (x === N-1) || (y === 0) || (x+y === N-1);
     this.vertices = null;
     this.faceTriangles = null;
@@ -359,7 +363,6 @@ class Grid {
   constructor(N) {
     let start = performance.now()
     const { quadCells, northPole, southPole } = Grid.make(N);
-    console.log(`Grid make completed in ${performance.now()-start}ms`)
 
     this.quadCells = quadCells;
     this.northPole = northPole;
@@ -420,8 +423,8 @@ class Grid {
     const northPoleCenter = ISEA.unprojectFromFace(refGrid[0][0].up, ico.quads[0].up.frame);
     const southPoleCenter = ISEA.unprojectFromFace(refGrid[N][N].down, ico.quads[5].down.frame);
 
-    const northPole = new GridCell(N, -1, 0, 0, northPoleCenter);
-    const southPole = new GridCell(N, -2, 0, 0, southPoleCenter);
+    const northPole = new GridCell(N, NORTH_POLE_QUAD_ID, 0, 0, northPoleCenter);
+    const southPole = new GridCell(N, SOUTH_POLE_QUAD_ID, 0, 0, southPoleCenter);
 
     return { northPole, southPole, quadCells };
   }

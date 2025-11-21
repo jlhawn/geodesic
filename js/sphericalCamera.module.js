@@ -1,22 +1,17 @@
 import * as THREE from "./three.module.js";
 
-const RADIUS = 1;
-const KEY_DELTA = 4;    // pixel-equivalent per frame
-const FIELD_OF_VIEW = 50;
+const FIELD_OF_VIEW = 10;
 
 const viewSize = new THREE.Vector2();
 
-function SetupCameraAndRenderer() {
+function SetupCameraAndRenderer(container) {
   viewSize.set(window.innerWidth, window.innerHeight);
 
   const camera = new THREE.PerspectiveCamera( FIELD_OF_VIEW, viewSize.x/viewSize.y, 0.1, 1000 );
 
   const renderer = new THREE.WebGLRenderer();
   renderer.setSize( viewSize.x, viewSize.y );
-  document.body.appendChild( renderer.domElement );
-
-  const stats = new Stats();
-  document.body.appendChild( stats.dom );
+  container.appendChild( renderer.domElement );
 
   const setWindowSize = function() {
     viewSize.set(window.innerWidth, window.innerHeight);
@@ -29,7 +24,30 @@ function SetupCameraAndRenderer() {
 
   SetupCameraControls(camera, renderer.domElement);
 
-  return { camera, renderer };
+  const scene = new THREE.Scene();
+
+  const X_AXIS = new THREE.Vector3(1, 0, 0);
+  const Z_AXIS = new THREE.Vector3(0, 0, 1);
+  var q = new THREE.Quaternion();
+
+  // Move the camera away from the origin and rotate it to point back
+  // to the origin (it starts out pointing in the negative-z) direction but
+  // we want it to point in the positive-y direction.
+  camera.position.set(0, -15, 0);
+  q.setFromAxisAngle(X_AXIS, Math.PI/2);
+  camera.applyQuaternion(q);
+
+  // Next we want to rotate the camera pi/4 radians around the z-axis to
+  // have a more interesting perspective.
+  q.setFromAxisAngle(Z_AXIS, Math.PI/4);
+  camera.position.applyQuaternion(q);
+  camera.applyQuaternion(q);
+
+  const render = function() {
+    renderer.render(scene, camera);
+  };
+
+  return { scene, render };
 };
 
 function SetupCameraControls(camera, domElement) {
@@ -322,7 +340,7 @@ function SetupCameraControls(camera, domElement) {
 
   const _pivotToCamera = new THREE.Vector3();
   const MIN_DISTANCE = 0.2;
-  const MAX_DISTANCE = 5;
+  const MAX_DISTANCE = 15;
 
   domElement.addEventListener('wheel', function(e) {
     e.preventDefault();

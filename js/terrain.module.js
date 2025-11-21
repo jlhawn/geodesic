@@ -1,11 +1,12 @@
 import SimplexNoise from "./simplex-noise.module.js";
+import { lerp, clamp } from "./utils.module.js"
 
 const simplex = new SimplexNoise(Math.random());
 
 /* ===== TUNING CONSTANTS ===== */
 
 // Continents (land vs ocean)
-const CONT_SCALE        = 1.4;   // frequency of continent field (1.2–1.6 is a good range)
+const CONT_SCALE        = 1.0;   // frequency of continent field (1.2–1.6 is a good range)
 const CONT_OCTAVES      = 2;     // fewer octaves → simpler, blob-like continents
 const CONT_LACUNARITY   = 1.9;
 const CONT_PERSISTENCE  = 0.6;
@@ -15,7 +16,7 @@ const COAST_NOISE_SCALE      = 4.0;
 const COAST_NOISE_OCTAVES    = 1;
 const COAST_NOISE_LACUNARITY = 2.0;
 const COAST_NOISE_PERSIST    = 0.5;
-const COAST_NOISE_AMPLITUDE  = 0.03; // small; raise slightly for more jagged coasts
+const COAST_NOISE_AMPLITUDE  = 0.12; // small; raise slightly for more jagged coasts
 
 // Sea level: higher → more ocean, smaller continents
 const SEA_LEVEL = 0.55; // 0.6–0.7: more ocean, 0.5–0.6: more land
@@ -118,7 +119,7 @@ function earthLikeHeight(x, y, z) {
     ); // ~[-1, 1]
 
     cont01 += COAST_NOISE_AMPLITUDE * coastNoise;
-    cont01 = Math.min(1, Math.max(0, cont01)); // clamp
+    cont01 = clamp(cont01, 0, 1);
   }
 
   // 2. Land/ocean split
@@ -183,7 +184,26 @@ function earthLikeHeight(x, y, z) {
   // 6. Combine ocean (negative) and land (positive)
   const final = oceanDepth + elevation; // <0 ocean, >0 land, ≈0 coast
 
-  return final;
+  return clamp(final, -1, 1);
 }
 
-export { earthLikeHeight };
+function terrainColor(x, y, z) {
+    const height = earthLikeHeight(x, y, z);
+    let r = height;
+    let g = height;
+    let b = height;
+
+    if (height < 0) {
+        r = lerp(height, -1, 0, 0.1, 0.25);
+        b = lerp(height, -1, 0, 0.25, 1);
+        g = lerp(height, -1, 0, 0.1, 0.25);
+    } else {
+        r = lerp(height, 0, 1, 0.2, 0.5);
+        g = lerp(height, 0, 1, 0.5, 1);
+        b = lerp(height, 0, 1, 0.2, 0.5);
+    }
+
+    return { r, g, b };
+}
+
+export { terrainColor };

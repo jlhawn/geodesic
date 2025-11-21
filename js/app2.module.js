@@ -1,6 +1,6 @@
 import * as THREE from "./three.module.js";
 import { Grid } from "./grid.module.js";
-import { initSphericalViewer } from "./sphericalViewer.module.js";
+import { initEqualEarthViewer } from "./equalEarthViewer.module.js";
 import { terrainColor } from "./terrain.module.js";
 
 // The equation for the number of cells is 10*N^2+2
@@ -22,7 +22,7 @@ if (SUBDIVISIONS < 2) {
 export default function runApp() {
     const grid = new Grid(SUBDIVISIONS);
 
-    initSphericalViewer(document.body, grid, {
+    initEqualEarthViewer(document.body, grid, {
         backgroundColor: BACKGROUND_COLOR,
         getColor: (cell) => {
             const cv = cell.centerVertex;
