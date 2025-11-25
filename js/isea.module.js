@@ -9,11 +9,10 @@ import * as THREE from "./three.module.js";
  */
 const DEG = Math.PI / 180;
 const RAD = 1 / DEG;
-const g  = 37.37736814 * DEG;
-const G  = 36.0        * DEG;
-const th = 30.0        * DEG;
+const g = 37.37736814 * DEG;
+const G = 36.0 * DEG;
+const th = 30.0 * DEG;
 
-const sin_g = Math.sin(g);
 const cos_g = Math.cos(g);
 const tan_g = Math.tan(g);
 const tan2_g = tan_g ** 2;
@@ -27,21 +26,17 @@ const tan_th = Math.tan(th);
 const cot_th = 1 / tan_th;
 
 
-const SECTOR = Math.PI * 2/3; // 120°
+const SECTOR = Math.PI * 2 / 3; // 120°
 
-const EPS        = 1e-9;
+const EPS = 1e-9;
 const NEWTON_MAX = 8;
 
 // Roughly 0.91038
 // (G-th)*R^2 = R'^2 tan(g)^2 sin(th)cos(th)/2
 // R'^2 = (G-th)*R^2 / (tan(g)^2 sin(th)cos(th)/2)
 // R' = R √((G-th) / (tan(g)^2 sin(th)cos(th)/2))
-const RpOverR = Math.sqrt(2 * (G-th) / (tan2_g*sin_th*cos_th))
+const RpOverR = Math.sqrt(2 * (G - th) / (tan2_g * sin_th * cos_th))
 const RpOverR_squared = RpOverR ** 2;
-
-function roundIfNearZero(x) {
-  return Math.abs(x) < EPS ? 0 : x;
-}
 
 /**
  *            A       
@@ -58,7 +53,7 @@ function roundIfNearZero(x) {
  *  - u: x-axis in tangent plane (projected b→c edge)
  *  - v: y-axis in tangent plane, v = n × u (right-handed)
  */
-export function triangleFrame({a, b, c}) {
+export function triangleFrame({ a, b, c }) {
   // 1) face-center direction (spherical centroid)
   const n = a.clone().add(b).add(c).normalize();
   // 2) base direction: b -> c, then Gram–Schmidt into tangent plane
@@ -79,15 +74,6 @@ function foldAzimuth(Az_) {
   }
   return [k, Az];
 }
-
-function divmod(x, y) {
-  if (y === 0) {
-    throw new Error("Division by zero is not allowed.");
-  }
-  const quotient = Math.floor(x / y);
-  const remainder = x % y;
-  return [quotient, remainder];
-};
 
 /** Convert 3D unit vector -> (lon, lat) in radians. */
 function xyzToLonLat(p) {
@@ -120,14 +106,14 @@ function q_of_Az(Az, cos_Az, sin_Az) {
   cos_Az = cos_Az === undefined ? Math.cos(Az) : cos_Az;
   sin_Az = sin_Az === undefined ? Math.sin(Az) : sin_Az;
 
-  return Math.atan2(tan_g, cos_Az + sin_Az*cot_th);
+  return Math.atan2(tan_g, cos_Az + sin_Az * cot_th);
 }
 
 function H_of_Az(Az, cos_Az, sin_Az) {
   cos_Az = cos_Az === undefined ? Math.cos(Az) : cos_Az;
   sin_Az = sin_Az === undefined ? Math.sin(Az) : sin_Az;
 
-  const val = sin_Az*sin_G*cos_g - cos_Az*cos_G;
+  const val = sin_Az * sin_G * cos_g - cos_Az * cos_G;
   return Math.acos(THREE.MathUtils.clamp(val, -1, 1));
 }
 
@@ -139,7 +125,7 @@ function Fprime_of_AZ_H(Az, H, cos_Az, sin_Az) {
   cos_Az = cos_Az === undefined ? Math.cos(Az) : cos_Az;
   sin_Az = sin_Az === undefined ? Math.sin(Az) : sin_Az;
 
-  return ((cos_Az*sin_G*cos_g + sin_Az*cos_G) / Math.sin(H) ) - 1;
+  return ((cos_Az * sin_G * cos_g + sin_Az * cos_G) / Math.sin(H)) - 1;
 }
 
 function delta_Az(Az, AG, cos_Az, sin_Az) {
@@ -152,15 +138,15 @@ function delta_Az(Az, AG, cos_Az, sin_Az) {
 }
 
 function dp_of_Azp(Azp) {
-  return RpOverR*tan_g / (Math.cos(Azp) + Math.sin(Azp)*cot_th);
+  return RpOverR * tan_g / (Math.cos(Azp) + Math.sin(Azp) * cot_th);
 }
 
 function f_of_dp_q(dp, q) {
-  return dp / (2 * RpOverR * Math.sin(q/2));
+  return dp / (2 * RpOverR * Math.sin(q / 2));
 }
 
 function rho_of_f_z(f, z) {
-  return 2 * RpOverR * f * Math.sin(z/2);
+  return 2 * RpOverR * f * Math.sin(z / 2);
 }
 
 function z_of_rho_f(rho, f) {
@@ -176,18 +162,18 @@ export function projectVectorToFace(P, frame) {
 
   // z is the spherical angle beween P and n.
   const dot = THREE.MathUtils.clamp(n.dot(P), -1, 1);
-  const z   = Math.acos(dot);
+  const z = Math.acos(dot);
 
   // If z is greater than g, then P is not in the given frame as it is
   // further away in angle than any vertex on this face.
-  if (z > (g+EPS)) {
-    console.log(`Warning - z (${z * RAD} degrees) exceeds g (${g * RAD} degrees) by ${(z-g) * RAD} degrees.`);
+  if (z > (g + EPS)) {
+    console.log(`Warning - z (${z * RAD} degrees) exceeds g (${g * RAD} degrees) by ${(z - g) * RAD} degrees.`);
   }
 
   // t is the projection of P into the normal plane.
   // We use this gnomonic projection to find spherical azimuth,
   // Az by breaking t into its components of u and v.
-  const t   = P.clone().sub(n.clone().multiplyScalar(dot)).normalize();
+  const t = P.clone().sub(n.clone().multiplyScalar(dot)).normalize();
   const Az_ = azimuthFromApex(t.dot(u), t.dot(v));
 
   // The following code assumes an azimuth between 0 and SECTOR so we fold
@@ -203,8 +189,8 @@ export function projectVectorToFace(P, frame) {
 
   // If z is greater than q, then P is not in the given frame as it is beyond
   // the edge of the triangle face (though not as far as a vertex is, g).
-  if (z > (q+EPS)) {
-    console.log(`Warning - z (${z * RAD} degrees) exceeds q (${q * RAD} degrees) by ${(z-q) * RAD} degrees.`);
+  if (z > (q + EPS)) {
+    console.log(`Warning - z (${z * RAD} degrees) exceeds q (${q * RAD} degrees) by ${(z - q) * RAD} degrees.`);
   }
 
   // H is the internal angle on the spherical triangle A'B'D' along the edge at D'.
@@ -213,13 +199,13 @@ export function projectVectorToFace(P, frame) {
   // AG is the Area of the triangle A'B'D'.
   const AG = Az + G + H - Math.PI;
   // Azp is the azimuth on our flat projection.
-  const Azp = Math.atan2(2*AG, RpOverR_squared*tan2_g - 2*AG*cot_th);
+  const Azp = Math.atan2(2 * AG, RpOverR_squared * tan2_g - 2 * AG * cot_th);
   // dp is the point along the flat edge BC that is Azp from A.
   const dp = dp_of_Azp(Azp);
   // f is a scaling factor which varies with azimuth to maintain equal area.
   const f = f_of_dp_q(dp, q);
   // rho is the length of the flattened arc to point P in our projection.
-  const rho = 2 * RpOverR * f * Math.sin(z/2);
+  const rho = rho_of_f_z(f, z);
 
   // Now rotate the azimuth back to the correct sector.
   const Azp_ = Azp + k * SECTOR;
@@ -254,7 +240,7 @@ export function projectVectorToFace(P, frame) {
 /**
  * Inverse: (x, y) → P (Vector3)
  */
-export function unprojectFromFace({x, y}, frame, trace) {
+export function unprojectFromFace({ x, y }, frame, trace) {
   const { n, u, v } = frame;
 
   // x = roundIfNearZero(x);
@@ -269,14 +255,14 @@ export function unprojectFromFace({x, y}, frame, trace) {
   const [k, Azp] = foldAzimuth(Azp_);
 
   if (trace) {
-    console.log({ n, u, v, x, y, Azp_: Azp_*RAD, rho, k, Azp: Azp*RAD});
+    console.log({ n, u, v, x, y, Azp_: Azp_ * RAD, rho, k, Azp: Azp * RAD });
   }
 
   // Calculate the area AG using Azp.
   const cos_AZp = Math.cos(Azp);
   const sin_Azp = Math.sin(Azp);
-  const AG_denom = 2 * (cos_AZp + cot_th*sin_Azp); // Never near zero in our range of Azp.
-  const AG = RpOverR_squared*tan2_g*sin_Azp/AG_denom;
+  const AG_denom = 2 * (cos_AZp + cot_th * sin_Azp); // Never near zero in our range of Azp.
+  const AG = RpOverR_squared * tan2_g * sin_Azp / AG_denom;
 
   let Az = Azp;
   let cos_Az = cos_AZp;
@@ -292,9 +278,9 @@ export function unprojectFromFace({x, y}, frame, trace) {
 
     if (Math.abs(dAz) < EPS) break;
   }
-  if (iter == NEWTON_MAX) {
-    console.log(`Azp=${Azp*RAD} converged to Az=${Az*RAD} in ${iter} iterations.`);
-  }
+  // if (iter == NEWTON_MAX) {
+  //   console.log(`Azp=${Azp * RAD} converged to Az=${Az * RAD} in ${iter} iterations.`);
+  // }
 
   const q = q_of_Az(Az, cos_Az, sin_Az);
   const dp = dp_of_Azp(Azp);
@@ -363,24 +349,24 @@ export class Icosahedron {
     // The simplist costruction is with a = 1 and b = (1+√5)/2
     // however we want all vectors to begin normalized so we
     // scale those values so that the magnitude of <a,b> is 1.
-    const a = 1 / Math.sqrt((5 + Math.sqrt(5))/2)
-    const b = a * (1 + Math.sqrt(5))/2;
+    const a = 1 / Math.sqrt((5 + Math.sqrt(5)) / 2)
+    const b = a * (1 + Math.sqrt(5)) / 2;
 
     // 12 Vertices of an Icosahedron.
 
-    const A = new THREE.Vector3(-a,  0,  b);
-    const B = new THREE.Vector3( a,  0,  b);
-    const C = new THREE.Vector3( 0,  b,  a);
-    const D = new THREE.Vector3(-b,  a,  0);
-    const E = new THREE.Vector3(-b, -a,  0);
-    const F = new THREE.Vector3( 0, -b,  a);
-    const G = new THREE.Vector3( b,  a,  0);
-    const H = new THREE.Vector3( 0,  b, -a);
-    const I = new THREE.Vector3(-a,  0, -b);
-    const J = new THREE.Vector3( 0, -b, -a);
-    const K = new THREE.Vector3( b, -a,  0);
-    const L = new THREE.Vector3( a,  0, -b);
-    
+    const A = new THREE.Vector3(-a, 0, b);
+    const B = new THREE.Vector3(a, 0, b);
+    const C = new THREE.Vector3(0, b, a);
+    const D = new THREE.Vector3(-b, a, 0);
+    const E = new THREE.Vector3(-b, -a, 0);
+    const F = new THREE.Vector3(0, -b, a);
+    const G = new THREE.Vector3(b, a, 0);
+    const H = new THREE.Vector3(0, b, -a);
+    const I = new THREE.Vector3(-a, 0, -b);
+    const J = new THREE.Vector3(0, -b, -a);
+    const K = new THREE.Vector3(b, -a, 0);
+    const L = new THREE.Vector3(a, 0, -b);
+
 
     this.vertices = [A, B, C, D, E, F, G, H, I, J, K, L];
 
@@ -408,7 +394,7 @@ export class Icosahedron {
       0, 1, 0,
       -a, 0, b,
     );
-    this.vertices.forEach(function(vec) {
+    this.vertices.forEach(function (vec) {
       vec.applyMatrix3(m);
     });
 

@@ -49,14 +49,14 @@ function circumcenter(a, b, c) {
   // u = (ba2 * (ca x n) + ca2 * (n x ba)) / denom
   const u = new THREE.Vector3()
     .copy(ca).cross(n).multiplyScalar(ba2)
-    .add( new THREE.Vector3().copy(n).cross(ba).multiplyScalar(ca2) )
-    .multiplyScalar(1/denom);
+    .add(new THREE.Vector3().copy(n).cross(ba).multiplyScalar(ca2))
+    .multiplyScalar(1 / denom);
 
   return new THREE.Vector3().copy(a).add(u);
 }
 
 function centroid(a, b, c) {
-  return a.clone().add(b).add(c).multiplyScalar(1/3);
+  return a.clone().add(b).add(c).multiplyScalar(1 / 3);
 }
 
 class GridCell {
@@ -67,8 +67,8 @@ class GridCell {
     this.isPole = this.isNorthPole || this.isSouthPole;
     this.id = `${quadId}-${N}-${x}-${y}`;
     this.centerVertex = center;
-    this.isPentagon = this.isPole || (x === N-1 && y === 0);
-    this.isAlongIcosahedronEdge = this.isPentagon || (x === N-1) || (y === 0) || (x+y === N-1);
+    this.isPentagon = this.isPole || (x === N - 1 && y === 0);
+    this.isAlongIcosahedronEdge = this.isPentagon || (x === N - 1) || (y === 0) || (x + y === N - 1);
     this.vertices = null;
     this.faceTriangles = null;
     this.area = 0;
@@ -77,16 +77,16 @@ class GridCell {
   neighbors({ quadCells, northPole, southPole }) {
     const [quadId, N, x, y] = this.coords;
 
-    if (quadId >= 0 && (0 < x && x < N-1) && (0 < y && y < N-1)) {
+    if (quadId >= 0 && (0 < x && x < N - 1) && (0 < y && y < N - 1)) {
       // Common case: all neighbors are on the same quad.
       const quad = quadCells[quadId];
       return [
-        quad[N*(x-1) + y],
-        quad[N*(x-1) + y+1],
-        quad[N*x + y+1],
-        quad[N*(x+1) + y],
-        quad[N*(x+1) + y-1],
-        quad[N*x + y-1],
+        quad[N * (x - 1) + y],
+        quad[N * (x - 1) + y + 1],
+        quad[N * x + y + 1],
+        quad[N * (x + 1) + y],
+        quad[N * (x + 1) + y - 1],
+        quad[N * x + y - 1],
       ];
     }
 
@@ -98,93 +98,93 @@ class GridCell {
           // top corner.
           return [
             northPole,
-            quadCells[(quadId+4)%5][0],
+            quadCells[(quadId + 4) % 5][0],
             quadCells[quadId][1],
             quadCells[quadId][N],
-            quadCells[(quadId+1)%5][1],
-            quadCells[(quadId+1)%5][0],
+            quadCells[(quadId + 1) % 5][1],
+            quadCells[(quadId + 1) % 5][0],
           ];
         }
 
-        if (y < N-1) {
+        if (y < N - 1) {
           // Inner edge.
           return [
-            quadCells[(quadId+4)%5][N*(y-1)],
-            quadCells[(quadId+4)%5][N*y],
-            quadCells[quadId][y+1],
+            quadCells[(quadId + 4) % 5][N * (y - 1)],
+            quadCells[(quadId + 4) % 5][N * y],
+            quadCells[quadId][y + 1],
             quadCells[quadId][N + y],
-            quadCells[quadId][N + y-1],
-            quadCells[quadId][y-1],
+            quadCells[quadId][N + y - 1],
+            quadCells[quadId][y - 1],
           ];
         }
 
         // Must be left corner. y === N-1
         return [
-          quadCells[(quadId+4)%5][N*(N-2)],
-          quadCells[(quadId+4)%5][N*(N-1)],
-          quadCells[5+((quadId+4)%5)][0],
-          quadCells[quadId][2*N - 1],
-          quadCells[quadId][2*N - 2],
-          quadCells[quadId][N-2],
+          quadCells[(quadId + 4) % 5][N * (N - 2)],
+          quadCells[(quadId + 4) % 5][N * (N - 1)],
+          quadCells[5 + ((quadId + 4) % 5)][0],
+          quadCells[quadId][2 * N - 1],
+          quadCells[quadId][2 * N - 2],
+          quadCells[quadId][N - 2],
         ]
       }
 
-      if (x < N-1) {
+      if (x < N - 1) {
         if (y === 0) {
           // Along top-right edge.
           return [
-            quadCells[quadId][N*(x-1)],
-            quadCells[quadId][N*(x-1) + 1],
-            quadCells[quadId][N*x + 1],
-            quadCells[quadId][N*(x+1)],
-            quadCells[(quadId+1)%5][x+1],
-            quadCells[(quadId+1)%5][x],
+            quadCells[quadId][N * (x - 1)],
+            quadCells[quadId][N * (x - 1) + 1],
+            quadCells[quadId][N * x + 1],
+            quadCells[quadId][N * (x + 1)],
+            quadCells[(quadId + 1) % 5][x + 1],
+            quadCells[(quadId + 1) % 5][x],
           ];
         }
 
         // Must be bottom-left edge. y === N-1
         return [
-            quadCells[quadId][N*x - 1],
-            quadCells[5+((quadId+4)%5)][N*(x-1)],
-            quadCells[5+((quadId+4)%5)][N*x],
-            quadCells[quadId][N*(x+2) - 1],
-            quadCells[quadId][N*(x+2) - 2],
-            quadCells[quadId][N*(x+1) - 2],
-          ];
+          quadCells[quadId][N * x - 1],
+          quadCells[5 + ((quadId + 4) % 5)][N * (x - 1)],
+          quadCells[5 + ((quadId + 4) % 5)][N * x],
+          quadCells[quadId][N * (x + 2) - 1],
+          quadCells[quadId][N * (x + 2) - 2],
+          quadCells[quadId][N * (x + 1) - 2],
+        ];
       }
 
       // Bottom right edge. x === N-1
       if (y === 0) {
         // right-corner
         return [
-          quadCells[quadId][N*(N-2)],
-          quadCells[quadId][N*(N-2)+1],
-          quadCells[quadId][N*(N-1)+1],
-          quadCells[quadId+5][0],
-          quadCells[(quadId+1)%5][N-1],
+          quadCells[quadId][N * (N - 2)],
+          quadCells[quadId][N * (N - 2) + 1],
+          quadCells[quadId][N * (N - 1) + 1],
+          quadCells[quadId + 5][0],
+          quadCells[(quadId + 1) % 5][N - 1],
         ];
       }
 
-      if (y < N-1) {
+      if (y < N - 1) {
         // inner right edge.
         return [
-          quadCells[quadId][N*(N-2) + y],
-          quadCells[quadId][N*(N-2) + y+1],
-          quadCells[quadId][N*(N-1) + y+1],
-          quadCells[quadId+5][y],
-          quadCells[quadId+5][y-1],
-          quadCells[quadId][N*(N-1) + y-1],
+          quadCells[quadId][N * (N - 2) + y],
+          quadCells[quadId][N * (N - 2) + y + 1],
+          quadCells[quadId][N * (N - 1) + y + 1],
+          quadCells[quadId + 5][y],
+          quadCells[quadId + 5][y - 1],
+          quadCells[quadId][N * (N - 1) + y - 1],
         ];
       }
 
       // bottom corner. y === N-1
       return [
-        quadCells[quadId][N*(N-1) - 1],
-        quadCells[5+((quadId+4)%5)][N*(N-2)],
-        quadCells[5+((quadId+4)%5)][N*(N-1)],
-        quadCells[quadId+5][N-1],
-        quadCells[quadId+5][N-2],
-        quadCells[quadId][N*N - 2],
+        quadCells[quadId][N * (N - 1) - 1],
+        quadCells[5 + ((quadId + 4) % 5)][N * (N - 2)],
+        quadCells[5 + ((quadId + 4) % 5)][N * (N - 1)],
+        quadCells[quadId + 5][N - 1],
+        quadCells[quadId + 5][N - 2],
+        quadCells[quadId][N * N - 2],
       ];
     }
 
@@ -195,94 +195,94 @@ class GridCell {
         if (y === 0) {
           // top corner.
           return [
-            quadCells[quadId-5][N*(N-1)],
-            quadCells[quadId-5][N*(N-1) + 1],
+            quadCells[quadId - 5][N * (N - 1)],
+            quadCells[quadId - 5][N * (N - 1) + 1],
             quadCells[quadId][1],
             quadCells[quadId][N],
-            quadCells[(quadId-4)%5][2*N - 1],
-            quadCells[(quadId-4)%5][N - 1],
+            quadCells[(quadId - 4) % 5][2 * N - 1],
+            quadCells[(quadId - 4) % 5][N - 1],
           ];
         }
 
-        if (y < N-1) {
+        if (y < N - 1) {
           // Inner edge.
           return [
-            quadCells[quadId-5][N*(N-1) + y],
-            quadCells[quadId-5][N*(N-1) + y+1],
-            quadCells[quadId][y+1],
+            quadCells[quadId - 5][N * (N - 1) + y],
+            quadCells[quadId - 5][N * (N - 1) + y + 1],
+            quadCells[quadId][y + 1],
             quadCells[quadId][N + y],
-            quadCells[quadId][N + y-1],
-            quadCells[quadId][y-1],
+            quadCells[quadId][N + y - 1],
+            quadCells[quadId][y - 1],
           ];
         }
 
         // Must be left corner. y === N-1
         return [
-          quadCells[quadId-5][N*N - 1],
-          quadCells[5+((quadId-1)%5)][N*(N-1)],
-          quadCells[5+((quadId-1)%5)][N*(N-1) + 1],
-          quadCells[quadId][2*N - 1],
-          quadCells[quadId][2*N - 2],
+          quadCells[quadId - 5][N * N - 1],
+          quadCells[5 + ((quadId - 1) % 5)][N * (N - 1)],
+          quadCells[5 + ((quadId - 1) % 5)][N * (N - 1) + 1],
+          quadCells[quadId][2 * N - 1],
+          quadCells[quadId][2 * N - 2],
           quadCells[quadId][N - 2],
         ]
       }
 
-      if (x < N-1) {
+      if (x < N - 1) {
         if (y === 0) {
           // Along top-right edge.
           return [
-            quadCells[quadId][N*(x-1)],
-            quadCells[quadId][N*(x-1) + 1],
-            quadCells[quadId][N*x + 1],
-            quadCells[quadId][N*(x+1)],
-            quadCells[(quadId-4)%5][N*(x+2) - 1],
-            quadCells[(quadId-4)%5][N*(x+1) - 1],
+            quadCells[quadId][N * (x - 1)],
+            quadCells[quadId][N * (x - 1) + 1],
+            quadCells[quadId][N * x + 1],
+            quadCells[quadId][N * (x + 1)],
+            quadCells[(quadId - 4) % 5][N * (x + 2) - 1],
+            quadCells[(quadId - 4) % 5][N * (x + 1) - 1],
           ];
         }
 
         // Must be bottom-left edge. y === N-1
         return [
-            quadCells[quadId][N*x - 1],
-            quadCells[5+((quadId-1)%5)][N*(N-1) + x],
-            quadCells[5+((quadId-1)%5)][N*(N-1) + x+1],
-            quadCells[quadId][N*(x+2) - 1],
-            quadCells[quadId][N*(x+2) - 2],
-            quadCells[quadId][N*(x+1) - 2],
-          ];
+          quadCells[quadId][N * x - 1],
+          quadCells[5 + ((quadId - 1) % 5)][N * (N - 1) + x],
+          quadCells[5 + ((quadId - 1) % 5)][N * (N - 1) + x + 1],
+          quadCells[quadId][N * (x + 2) - 1],
+          quadCells[quadId][N * (x + 2) - 2],
+          quadCells[quadId][N * (x + 1) - 2],
+        ];
       }
 
       // Bottom right edge. x === N-1
       if (y === 0) {
         // right-corner
         return [
-          quadCells[quadId][N*(N-2)],
-          quadCells[quadId][N*(N-2) + 1],
-          quadCells[quadId][N*(N-1) + 1],
-          quadCells[5+((quadId+1)%5)][N-1],
-          quadCells[(quadId-4)%5][N*N - 1],
+          quadCells[quadId][N * (N - 2)],
+          quadCells[quadId][N * (N - 2) + 1],
+          quadCells[quadId][N * (N - 1) + 1],
+          quadCells[5 + ((quadId + 1) % 5)][N - 1],
+          quadCells[(quadId - 4) % 5][N * N - 1],
         ];
       }
 
-      if (y < N-1) {
+      if (y < N - 1) {
         // inner right edge.
         return [
-          quadCells[quadId][N*(N-2) + y],
-          quadCells[quadId][N*(N-2) + y+1],
-          quadCells[quadId][N*(N-1) + y+1],
-          quadCells[5+((quadId+1)%5)][N*(y+1) - 1],
-          quadCells[5+((quadId+1)%5)][N*y - 1],
-          quadCells[quadId][N*(N-1) + y-1],
+          quadCells[quadId][N * (N - 2) + y],
+          quadCells[quadId][N * (N - 2) + y + 1],
+          quadCells[quadId][N * (N - 1) + y + 1],
+          quadCells[5 + ((quadId + 1) % 5)][N * (y + 1) - 1],
+          quadCells[5 + ((quadId + 1) % 5)][N * y - 1],
+          quadCells[quadId][N * (N - 1) + y - 1],
         ];
       }
 
       // bottom corner. y === N-1
       return [
-        quadCells[quadId][N*(N-1) - 1],
-        quadCells[5+((quadId-1)%5)][N*N - 1],
+        quadCells[quadId][N * (N - 1) - 1],
+        quadCells[5 + ((quadId - 1) % 5)][N * N - 1],
         southPole,
-        quadCells[5+((quadId+1)%5)][N*N - 1],
-        quadCells[5+((quadId+1)%5)][N*(N-1) - 1],
-        quadCells[quadId][N*N - 2],
+        quadCells[5 + ((quadId + 1) % 5)][N * N - 1],
+        quadCells[5 + ((quadId + 1) % 5)][N * (N - 1) - 1],
+        quadCells[quadId][N * N - 2],
       ];
     }
 
@@ -298,11 +298,11 @@ class GridCell {
 
     // Must be south pole.
     return [
-      quadCells[9][N*N - 1],
-      quadCells[8][N*N - 1],
-      quadCells[7][N*N - 1],
-      quadCells[6][N*N - 1],
-      quadCells[5][N*N - 1],
+      quadCells[9][N * N - 1],
+      quadCells[8][N * N - 1],
+      quadCells[7][N * N - 1],
+      quadCells[6][N * N - 1],
+      quadCells[5][N * N - 1],
     ];
   }
 
@@ -311,7 +311,7 @@ class GridCell {
     this.vertices = new Array(neighborCells.length);
     for (let i = 0; i < neighborCells.length; i++) {
       const neighborA = neighborCells[i];
-      const neighborB = neighborCells[(i+1)%neighborCells.length];
+      const neighborB = neighborCells[(i + 1) % neighborCells.length];
       const vertex = circumcenter(this.centerVertex, neighborA.centerVertex, neighborB.centerVertex);
       this.vertices[i] = vertex;
     }
@@ -321,41 +321,23 @@ class GridCell {
   calculateFaceTriangles() {
     // NOTE: This only works correctly if the vertices array
     // is in a counter-clockwise order around this cell.
-    this.faceTriangles = new Array(this.vertices.length-2);
+    this.faceTriangles = new Array(this.vertices.length - 2);
     let tri = 0;
     this.faceTriangles[tri++] = new THREE.Triangle(
       this.vertices[0],
       this.vertices[1],
       this.vertices[2],
     );
-    for(let i = 2; i+1 < this.vertices.length; i++) {
+    for (let i = 2; i + 1 < this.vertices.length; i++) {
       this.faceTriangles[tri++] = new THREE.Triangle(
         this.vertices[0],
         this.vertices[i],
-        this.vertices[i+1],
+        this.vertices[i + 1],
       );
     }
     for (let triangle of this.faceTriangles) {
       this.area += triangle.getArea();
     }
-  }
-
-  /**
-   * Returns the average angle (in radians) between this cell's center vertex
-   * and all of its neighbors' center vertices.
-   * Assumes vertices are unit vectors on a sphere.
-   */
-  averageNeighborAngle() {
-    const p = this.centerVertex;
-    let total = 0;
-
-    for (const n of this.neighbors) {
-      // Clamp dot product to avoid numerical errors outside [-1, 1]
-      const dot = Math.max(-1, Math.min(1, p.dot(n.centerVertex)));
-      total += Math.acos(dot);
-    }
-
-    return total / this.neighbors.length;
   }
 }
 
@@ -367,7 +349,7 @@ class Grid {
     this.quadCells = quadCells;
     this.northPole = northPole;
     this.southPole = southPole;
-    this.size = 10*N*N + 2
+    this.size = 10 * N * N + 2
 
     for (const cell of this) {
       cell.calculateVertices(this);
@@ -394,14 +376,14 @@ class Grid {
       const upFrame = ico.quads[i].up.frame;
       const downFrame = ico.quads[i].down.frame;
 
-      const cells = new Array(N*N);
+      const cells = new Array(N * N);
       // The refGrid is (N+1)^2 in order to span all edges
       // of the triangle faces. The points we care about
       // range from x=1 to x=N and from y=0 to Y=N-1.
       for (let x = 1; x <= N; x++) {
         for (let y = 0; y < N; y++) {
           let refPoint, refFrame;
-          if (x+y <= N) {
+          if (x + y <= N) {
             // Point is in UP triangle.
             refPoint = refGrid[x][y].up;
             refFrame = upFrame;
@@ -414,7 +396,7 @@ class Grid {
             refFrame = downFrame;
           }
           const center = ISEA.unprojectFromFace(refPoint, refFrame);
-          cells[N*(x-1)+y] = new GridCell(N, i, x-1, y, center);
+          cells[N * (x - 1) + y] = new GridCell(N, i, x - 1, y, center);
         }
       }
       quadCells[i] = cells;
@@ -470,10 +452,10 @@ class Grid {
     const x0 = (new THREE.Vector2(Cx, Cy)).sub(A0).divideScalar(N);
     const y0 = (new THREE.Vector2(Bx, By)).sub(A0).divideScalar(N);
 
-    const grid = new Array(N+1);
+    const grid = new Array(N + 1);
     for (let col = 0; col <= N; col++) {
-      grid[col] = new Array(N+1);
-      for (let row =0; row <= N; row++) {
+      grid[col] = new Array(N + 1);
+      for (let row = 0; row <= N; row++) {
         grid[col][row] = {};
       }
     }
@@ -481,7 +463,7 @@ class Grid {
     for (let x = 0; x <= N; x++) {
       // Only traverse up to x+y <= N.
       // This keeps the loop within the face of triangle ABC.
-      for (let y = 0; x+y <= N; y++) {
+      for (let y = 0; x + y <= N; y++) {
         const p = A0.clone();
         if (x > 0) p.add(x0.clone().multiplyScalar(x));
         if (y > 0) p.add(y0.clone().multiplyScalar(y));
@@ -492,7 +474,7 @@ class Grid {
         // coordinates at (x, y) are also the same at (N-x, N-y)
         // which is in triangle DCB. Along the diangonal BC, this
         // is equivalent to swapping the row and column.
-        grid[N-x][N-y].down = p;
+        grid[N - x][N - y].down = p;
       }
     }
 

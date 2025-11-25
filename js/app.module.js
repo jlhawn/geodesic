@@ -1,32 +1,26 @@
-import * as THREE from "./three.module.js";
 import { Grid } from "./grid.module.js";
-import { initSphericalViewer } from "./sphericalViewer.module.js";
+import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { terrainColor } from "./terrain.module.js";
 
-// The equation for the number of cells is 10*N^2+2
-//  10 ->     1,002
-//  20 ->     4,002
-//  50 ->    25,002
-// 100 ->   100,002
-// 200 ->   400,002
-// 320 -> 1,024,002
-// 400 -> 1,600,002
-// 500 -> 2,500,002
-const SUBDIVISIONS = 100;
-const BACKGROUND_COLOR = 0x222222;
-
-if (SUBDIVISIONS < 2) {
-  throw "SUBDIVISIONS must be greater than 2.";
-}
+const SUBDIVISIONS = 320;
 
 export default function runApp() {
-    const grid = new Grid(SUBDIVISIONS);
+  const grid = new Grid(SUBDIVISIONS);
+  
+  // Initialize Viewer
+  initUnifiedViewer(document.body, grid, {
+    backgroundColor: 0x222222,
+    getColor: (cell) => {
+      // if (cell.isPole) {
+      //   return {r: 0, g: 1, b: 1};
+      // } else if (cell.isPentagon) {
+      //   return {r: 1, g: 0, b: 0};
+      // } else if (cell.isAlongIcosahedronEdge) {
+      //   return {r: 1, g: 1, b: 0};
+      // }
 
-    initSphericalViewer(document.body, grid, {
-        backgroundColor: BACKGROUND_COLOR,
-        getColor: (cell) => {
-            const cv = cell.centerVertex;
-            return terrainColor(cv.x, cv.y, cv.z);
-        },
-    });
+      return terrainColor(cell.centerVertex.x, cell.centerVertex.y, cell.centerVertex.z)
+    },
+  });
 };
+
