@@ -5,7 +5,7 @@
  * wind. The trails live in screen space, so they are cleared whenever
  * the view moves; the particles themselves stay on the globe.
  */
-export function createWindParticles(container, viewer, grid, { density = 0.015, fade = 0.993, referenceSpeed = 15, pixelsPerFrame = 0.1875 } = {}) {
+export function createWindParticles(container, viewer, grid, { density = 0.006, fade = 0.993, referenceSpeed = 15, pixelsPerFrame = 0.1875 } = {}) {
   const C = grid.size;
   const centers = new Float32Array(3 * C);
   const neighborCount = new Uint8Array(C);
