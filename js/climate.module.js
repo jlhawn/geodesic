@@ -1,23 +1,84 @@
 import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
+import { createWindParticles } from "./windParticles.module.js";
 
 const FIELDS = {
   ps: { label: 'Surface pressure (hPa)', scale: 0.01, min: 960, max: 1060, center: 1013, palette: 'diverging' },
   ts: { label: 'Surface temperature (K)', scale: 1, min: 240, max: 310, palette: 'sequential' },
-  wind: { label: 'Surface wind speed (m/s)', scale: 1, min: 0, max: 25, palette: 'sequential' },
-  jetZonal: { label: 'Zonal wind at 250 hPa (m/s)', scale: 1, min: -40, max: 40, center: 0, palette: 'diverging' },
+  wind: { label: 'Surface wind speed (m/s)', scale: 1, min: 0, max: 25, palette: 'sequential', arrows: 'surface' },
+  jet: { label: 'Wind speed at 250 hPa (m/s)', scale: 1, min: 0, max: 80, palette: 'sequential', arrows: 'jet' },
+  jetZonal: { label: 'Zonal wind at 250 hPa (m/s)', scale: 1, min: -40, max: 40, center: 0, palette: 'diverging', arrows: 'jet' },
+};
+
+const WINDS = {
+  surface: { vector: 'windVector', referenceSpeed: 15, label: 'surface wind' },
+  jet: { vector: 'jetVector', referenceSpeed: 60, label: 'wind at 250 hPa' },
+};
+
+/*
+ * Palettes are kept mid-dark so that the white wind trails read on top
+ * of them: the diverging one runs blue → neutral gray → red, the
+ * sequential one indigo → blue → teal → olive → red.
+ */
+const PALETTES = {
+  diverging: [[0.13, 0.30, 0.75], [0.35, 0.42, 0.62], [0.50, 0.50, 0.50], [0.68, 0.38, 0.32], [0.80, 0.20, 0.15]],
+  sequential: [[0.16, 0.10, 0.45], [0.15, 0.35, 0.65], [0.15, 0.60, 0.45], [0.55, 0.70, 0.20], [0.85, 0.30, 0.15]],
 };
 
 function color(t, palette, out, at) {
-  const x = Math.max(0, Math.min(1, t));
-  let r, g, b;
-  if (palette === 'diverging') {
-    if (x < 0.5) { const s = x / 0.5; r = 0.15 + 0.8 * s; g = 0.3 + 0.65 * s; b = 0.85 + 0.1 * s; }
-    else { const s = (x - 0.5) / 0.5; r = 0.95; g = 0.95 - 0.7 * s; b = 0.95 - 0.8 * s; }
-  } else {
-    r = 0.1 + 0.85 * x; g = 0.1 + 0.7 * Math.sin(Math.PI * x); b = 0.9 - 0.8 * x;
+  const stops = PALETTES[palette];
+  const x = Math.max(0, Math.min(1, t)) * (stops.length - 1);
+  const k = Math.min(stops.length - 2, Math.floor(x)), f = x - k;
+  const a = stops[k], b = stops[k + 1];
+  out[at] = Math.round(255 * (a[0] + f * (b[0] - a[0])));
+  out[at + 1] = Math.round(255 * (a[1] + f * (b[1] - a[1])));
+  out[at + 2] = Math.round(255 * (a[2] + f * (b[2] - a[2])));
+}
+
+function renderLegend(spec, min, max) {
+  const canvas = document.querySelector('#legend canvas');
+  const context = canvas.getContext('2d');
+  const image = context.createImageData(canvas.width, 1);
+  const rgb = new Uint8Array(3);
+  for (let x = 0; x < canvas.width; x++) {
+    color(x / (canvas.width - 1), spec.palette, rgb, 0);
+    image.data.set([rgb[0], rgb[1], rgb[2], 255], 4 * x);
   }
-  out[at] = Math.round(255 * r); out[at + 1] = Math.round(255 * g); out[at + 2] = Math.round(255 * b);
+  context.putImageData(image, 0, 0);
+  document.getElementById('legendTitle').textContent = spec.label;
+  const ticks = document.querySelectorAll('#legendTicks span');
+  const digits = max - min < 10 ? 1 : 0;
+  ticks[0].textContent = `≤ ${min.toFixed(digits)}`;
+  ticks[1].textContent = ((min + max) / 2).toFixed(digits);
+  ticks[2].textContent = `≥ ${max.toFixed(digits)}`;
+}
+
+/*
+ * The wind layer shows the selected field's own wind when it is a wind
+ * field and the surface wind otherwise, as particle trails or arrows.
+ * Arrows are strided so that no more than a few thousand are drawn.
+ */
+function createWindLayer(container, viewer, grid) {
+  const arrows = viewer.addArrowLayer();
+  const particles = createWindParticles(container, viewer, grid);
+  const mode = document.getElementById('windLayer');
+  const note = document.getElementById('legendNote');
+  return function paint(frame, spec) {
+    const kind = WINDS[spec.arrows ?? 'surface'];
+    const vectors = frame[kind.vector];
+    const shown = vectors ? mode.value : 'none';
+    arrows.setVisible(shown === 'arrows');
+    particles.setVisible(shown === 'particles');
+    if (shown === 'arrows') {
+      arrows.update(vectors, { referenceSpeed: kind.referenceSpeed, stride: Math.ceil(grid.size / 4000) });
+      note.textContent = `Arrows point downwind (${kind.label}); full length at ${kind.referenceSpeed} m/s`;
+    } else if (shown === 'particles') {
+      particles.setField(vectors, kind.referenceSpeed);
+      note.textContent = `Particles drift downwind (${kind.label}); brighter trails are faster`;
+    } else {
+      note.textContent = vectors ? '' : 'No wind vectors in this snapshot';
+    }
+  };
 }
 
 function addOption(select, value, label) {
@@ -42,6 +103,7 @@ export async function showSnapshot(url) {
   const readout = document.getElementById('readout');
   const select = document.getElementById('field');
   addOption(select, 'jetZonal', 'Zonal wind at 250 hPa');
+  const paintWind = createWindLayer(document.getElementById('globe'), viewer, grid);
   const pauseButton = document.getElementById('pause');
   pauseButton.textContent = 'Previous day';
   const nextButton = document.createElement('button');
@@ -56,7 +118,9 @@ export async function showSnapshot(url) {
     if (spec.palette === 'diverging') { const half = Math.max(Math.abs(lo - spec.center), Math.abs(hi - spec.center)); min = spec.center - half; max = spec.center + half; }
     for (let i = 0; i < cells; i++) color((values[i] * spec.scale - min) / (max - min), spec.palette, rgb, 3 * i);
     viewer.updateColors(rgb);
-    readout.textContent = `${spec.label} — snapshot day ${snapshot.day}, N=${snapshot.N} · colors span ${min.toFixed(1)} to ${max.toFixed(1)} · field range ${sorted[0].toFixed(1)} to ${sorted[cells - 1].toFixed(1)}`;
+    renderLegend(spec, min, max);
+    paintWind(snapshot, spec);
+    readout.textContent = `${spec.label} — snapshot day ${snapshot.day}, N=${snapshot.N} · field range ${sorted[0].toFixed(1)} to ${sorted[cells - 1].toFixed(1)}`;
   }
   const step = (delta) => {
     const match = url.match(/day(\d{3})\.json$/);
@@ -67,6 +131,7 @@ export async function showSnapshot(url) {
   pauseButton.addEventListener('click', () => step(-10));
   nextButton.addEventListener('click', () => step(10));
   select.addEventListener('change', paint);
+  document.getElementById('windLayer').addEventListener('change', paint);
   paint();
 }
 
@@ -83,6 +148,7 @@ export default function runClimate(N = 16) {
   const readout = document.getElementById('readout');
   const select = document.getElementById('field');
   const pauseButton = document.getElementById('pause');
+  const paintWind = createWindLayer(document.getElementById('globe'), viewer, grid);
   let latest = null, paused = false;
 
   function paint() {
@@ -93,6 +159,8 @@ export default function runClimate(N = 16) {
       color((values[i] * spec.scale - spec.min) / (spec.max - spec.min), spec.palette, rgb, 3 * i);
     }
     viewer.updateColors(rgb);
+    renderLegend(spec, spec.min, spec.max);
+    paintWind(latest, spec);
     const d = latest.diagnostics;
     readout.textContent = `${spec.label} — day ${latest.day.toFixed(2)} · ps ${(d.piMin / 100).toFixed(1)}–${(d.piMax / 100).toFixed(1)} hPa · Ts ${d.meanSurfaceT.toFixed(2)} K · max wind ${d.maxWind.toFixed(1)} m/s · solar ${d.absorbedSolar.toFixed(0)} / OLR ${d.outgoingLongwave.toFixed(0)} W/m²`;
   }
@@ -107,6 +175,7 @@ export default function runClimate(N = 16) {
   worker.postMessage({ type: 'start', N });
 
   select.addEventListener('change', paint);
+  document.getElementById('windLayer').addEventListener('change', paint);
   pauseButton.addEventListener('click', () => {
     paused = !paused;
     worker.postMessage({ type: paused ? 'pause' : 'resume' });

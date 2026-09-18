@@ -766,7 +766,8 @@ js/
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase
   model.worker.js           browser worker: steps the model, fills shared buffers
-  climate.module.js         live model page (climate.html)
+  climate.module.js         live model page (climate.html): fields, legend, wind layers
+  windParticles.module.js   wind traced by particles with fading trails over the globe
   charts.module.js          synoptic charts from saved states (charts.html)
   unifiedViewer.module.js   existing, gains model-overlay mode
 test/

@@ -10,6 +10,7 @@ uniform mat4 uModelRotation;
 uniform sampler2D uCenterTexture;
 uniform vec2 uTexSize; 
 uniform float uBlend; // 0.0 = Sphere, 1.0 = Map
+uniform float uMapLift;
 
 attribute float cellIndex; 
 
@@ -72,7 +73,7 @@ const vertexLogic = `
 
   // Project
   vec2 proj = projectEqualEarth(lat, lon);
-  vec3 posMap = vec3(proj, 0.0);
+  vec3 posMap = vec3(proj, uMapLift);
 
   // 5. MORPH
   vec3 finalPos = mix(posSphere, posMap, uBlend);
@@ -90,6 +91,16 @@ const A4 = 0.003796;
 const SQRT3 = 1.73205080757;
 const M_SQRT3_2 = 0.86602540378;
 const PI = 3.14159265359;
+
+function equalEarth(lat, lon, out) {
+  const theta = Math.asin(M_SQRT3_2 * Math.sin(lat));
+  const theta2 = theta * theta;
+  const theta6 = theta2 * theta2 * theta2;
+  const denom = 3 * (9 * A4 * theta6 * theta2 + 7 * A3 * theta6 + 3 * A2 * theta2 + A1);
+  out[0] = (2 * SQRT3 * lon * Math.cos(theta)) / denom;
+  out[1] = A4 * theta6 * theta2 * theta + A3 * theta6 * theta + A2 * theta2 * theta + A1 * theta;
+  return out;
+}
 
 function getThetaFromY(y) {
   let theta = y / A1; 
@@ -147,7 +158,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
   } = config;
 
   // --- 1. Geometry Generation ---
-  const pData = [], kData = [], iData = [], idxData = [], texDataArray = [];
+  const pData = [], kData = [], iData = [], idxData = [], texDataArray = [], centerData = [];
   const cellVertexStart = [], cellVertexCount = [];
   const colorHelper = new THREE.Color();
   let vertexCounter = 0, cellCounter = 0;
@@ -160,6 +171,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
     cellVertexCount.push(verts.length);
 
     texDataArray.push(cv.x, cv.y, cv.z, 1.0);
+    centerData.push(cv.x, cv.y, cv.z);
 
     const cVal = getColor(cell);
     if (cVal && typeof cVal === 'object' && 'r' in cVal) colorHelper.setRGB(cVal.r, cVal.g, cVal.b);
@@ -253,19 +265,27 @@ export function initUnifiedViewer(container, grid, config = {}) {
 
   const viewState = {
     blend: 0.0,
-    targetBlend: 0.0
+    targetBlend: 0.0,
+    version: 0,
   };
 
+  const projectedMaterials = [];
+  function projectMaterial(material, mapLift = 0.0) {
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uModelRotation = { value: rotationMatrix };
+      shader.uniforms.uCenterTexture = { value: centerTexture };
+      shader.uniforms.uTexSize = { value: new THREE.Vector2(width, height) };
+      shader.uniforms.uBlend = { value: viewState.blend };
+      shader.uniforms.uMapLift = { value: mapLift };
+      material.userData.shader = shader;
+      shader.vertexShader = vertexHead + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', vertexLogic);
+    };
+    projectedMaterials.push(material);
+  }
+
   const material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
-  material.onBeforeCompile = (shader) => {
-    shader.uniforms.uModelRotation = { value: rotationMatrix };
-    shader.uniforms.uCenterTexture = { value: centerTexture };
-    shader.uniforms.uTexSize = { value: new THREE.Vector2(width, height) };
-    shader.uniforms.uBlend = { value: 0.0 };
-    material.userData.shader = shader;
-    shader.vertexShader = vertexHead + shader.vertexShader;
-    shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', vertexLogic);
-  };
+  projectMaterial(material);
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false; 
@@ -313,11 +333,12 @@ export function initUnifiedViewer(container, grid, config = {}) {
 
     if (Math.abs(viewState.blend - viewState.targetBlend) > 0.001) {
       viewState.blend += (viewState.targetBlend - viewState.blend) * 0.05;
-      if (material.userData.shader) {
-        material.userData.shader.uniforms.uBlend.value = viewState.blend;
-      }
+      viewState.version++;
     } else {
        viewState.blend = viewState.targetBlend; 
+    }
+    for (const projected of projectedMaterials) {
+      if (projected.userData.shader) projected.userData.shader.uniforms.uBlend.value = viewState.blend;
     }
 
     const aspect = container.clientWidth / container.clientHeight;
@@ -367,6 +388,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
     const zoomSpeed = 0.001;
     state.zoom += -e.deltaY * zoomSpeed * state.zoom; 
     state.zoom = Math.max(10, Math.min(state.zoom, 10000)); 
+    viewState.version++;
   }, { passive: false });
 
   canvas.addEventListener('mousedown', (e) => {
@@ -385,6 +407,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
     if (!state.isDragging) return;
     const dx = e.clientX - state.lastX;
     const dy = e.clientY - state.lastY;
+    viewState.version++;
 
     if (e.buttons === 2) {
        if (container.clientHeight > 0) {
@@ -432,8 +455,93 @@ export function initUnifiedViewer(container, grid, config = {}) {
   });
   resizeObserver.observe(container);
 
+  /*
+   * Screen position of a point given in the grid's coordinates, following
+   * the same rotation and sphere-to-map morph as the shader. out[2] is
+   * positive where the point is on the visible side of the globe.
+   */
+  const mapPoint = [0, 0];
+  function projectPoint(x, y, z, out) {
+    const e = rotationMatrix.elements;
+    const rx = e[0] * x + e[4] * y + e[8] * z;
+    const ry = e[1] * x + e[5] * y + e[9] * z;
+    const rz = e[2] * x + e[6] * y + e[10] * z;
+    const blend = viewState.blend;
+    let fx = rx, fy = ry;
+    if (blend > 0) {
+      equalEarth(Math.asin(Math.max(-1, Math.min(1, ry))), Math.atan2(rx, rz), mapPoint);
+      fx += (mapPoint[0] - rx) * blend;
+      fy += (mapPoint[1] - ry) * blend;
+    }
+    out[0] = (fx - camera.left) / (camera.right - camera.left) * container.clientWidth;
+    out[1] = (camera.top - fy) / (camera.top - camera.bottom) * container.clientHeight;
+    out[2] = blend > 0.5 ? 1 : rz;
+    return out;
+  }
+
+  /*
+   * A layer of arrows, one per cell, drawn in the cell's tangent plane
+   * and projected with the same shader as the cells so they follow the
+   * globe in both views. update() takes a vector per cell in the grid's
+   * coordinates (3 components per cell) and scales the arrow with the
+   * speed up to referenceSpeed, at which it spans about a cell.
+   */
+  function addArrowLayer({ color = 0xffffff, opacity = 0.8 } = {}) {
+    const centers = Float32Array.from(centerData);
+    const positions = new Float32Array(3 * 6 * cellCounter);
+    const cellIndex = new Float32Array(6 * cellCounter);
+    for (let c = 0; c < cellCounter; c++) cellIndex.fill(c, 6 * c, 6 * c + 6);
+    const arrowGeometry = new THREE.BufferGeometry();
+    const positionAttribute = new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage);
+    arrowGeometry.setAttribute('position', positionAttribute);
+    arrowGeometry.setAttribute('cellIndex', new THREE.BufferAttribute(cellIndex, 1));
+    const arrowMaterial = new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity });
+    projectMaterial(arrowMaterial, 0.01);
+    const lines = new THREE.LineSegments(arrowGeometry, arrowMaterial);
+    lines.frustumCulled = false;
+    lines.visible = false;
+    scene.add(lines);
+    const cellSpan = 0.8 * Math.sqrt(4 * Math.PI / cellCounter);
+    const lift = 1.004;
+
+    function update(vectors, { referenceSpeed = 20, stride = 1 } = {}) {
+      positions.fill(0);
+      for (let c = 0; c < cellCounter; c += stride) {
+        const cx = centers[3 * c], cy = centers[3 * c + 1], cz = centers[3 * c + 2];
+        let dx = vectors[3 * c], dy = vectors[3 * c + 1], dz = vectors[3 * c + 2];
+        const radial = dx * cx + dy * cy + dz * cz;
+        dx -= radial * cx; dy -= radial * cy; dz -= radial * cz;
+        const speed = Math.hypot(dx, dy, dz);
+        if (!(speed > 1e-6)) continue;
+        const length = cellSpan * Math.min(1, speed / referenceSpeed);
+        dx /= speed; dy /= speed; dz /= speed;
+        const tx = cy * dz - cz * dy, ty = cz * dx - cx * dz, tz = cx * dy - cy * dx;
+        const half = 0.5 * length, head = 0.35 * length, along = 0.866 * head, across = 0.5 * head;
+        const tipX = lift * cx + half * dx, tipY = lift * cy + half * dy, tipZ = lift * cz + half * dz;
+        let at = 18 * c;
+        positions[at++] = lift * cx - half * dx; positions[at++] = lift * cy - half * dy; positions[at++] = lift * cz - half * dz;
+        positions[at++] = tipX; positions[at++] = tipY; positions[at++] = tipZ;
+        positions[at++] = tipX; positions[at++] = tipY; positions[at++] = tipZ;
+        positions[at++] = tipX - along * dx + across * tx; positions[at++] = tipY - along * dy + across * ty; positions[at++] = tipZ - along * dz + across * tz;
+        positions[at++] = tipX; positions[at++] = tipY; positions[at++] = tipZ;
+        positions[at++] = tipX - along * dx - across * tx; positions[at++] = tipY - along * dy - across * ty; positions[at++] = tipZ - along * dz - across * tz;
+      }
+      positionAttribute.needsUpdate = true;
+    }
+
+    return {
+      update,
+      setVisible(visible) { lines.visible = visible; },
+      dispose() { scene.remove(lines); arrowGeometry.dispose(); arrowMaterial.dispose(); },
+    };
+  }
+
   return {
     updateColors: dynamicColors ? updateColors : null,
+    addArrowLayer,
+    projectPoint,
+    pixelsPerUnit: () => container.clientHeight / (camera.top - camera.bottom),
+    viewVersion: () => viewState.version,
     dispose: () => {
       resizeObserver.disconnect();
       renderer.dispose();

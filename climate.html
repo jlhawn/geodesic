@@ -8,7 +8,12 @@
     body { margin: 0; background: #151515; color: #ddd; font: 14px system-ui, sans-serif; }
     #globe { position: absolute; inset: 0; }
     #panel { position: absolute; top: 12px; left: 12px; z-index: 10; display: flex; gap: 10px; align-items: center; background: rgba(0, 0, 0, 0.55); padding: 8px 12px; border-radius: 6px; }
-    #readout { position: absolute; bottom: 12px; left: 12px; z-index: 10; background: rgba(0, 0, 0, 0.55); padding: 6px 10px; border-radius: 6px; }
+    #readout { position: absolute; bottom: 12px; left: 12px; z-index: 10; background: rgba(0, 0, 0, 0.55); padding: 6px 10px; border-radius: 6px; max-width: calc(100% - 320px); }
+    #legend { position: absolute; bottom: 12px; right: 12px; z-index: 10; background: rgba(0, 0, 0, 0.55); padding: 8px 10px; border-radius: 6px; width: 260px; }
+    #legend canvas { display: block; width: 260px; height: 14px; border-radius: 2px; }
+    #legendTicks { display: flex; justify-content: space-between; font-size: 12px; margin-top: 2px; }
+    #legendTitle { margin-bottom: 4px; }
+    #legendNote { font-size: 12px; color: #bbb; margin-top: 4px; }
     select, button { font: inherit; }
   </style>
 </head>
@@ -20,10 +25,22 @@
         <option value="ps">Surface pressure</option>
         <option value="ts">Surface temperature</option>
         <option value="wind">Surface wind speed</option>
+        <option value="jet">Wind speed at 250 hPa</option>
+      </select></label>
+    <label>Wind <select id="windLayer">
+        <option value="particles">Particles</option>
+        <option value="arrows">Arrows</option>
+        <option value="none">Hidden</option>
       </select></label>
     <button id="pause">Pause</button>
   </div>
   <div id="readout">starting…</div>
+  <div id="legend">
+    <div id="legendTitle"></div>
+    <canvas width="256" height="1"></canvas>
+    <div id="legendTicks"><span></span><span></span><span></span></div>
+    <div id="legendNote"></div>
+  </div>
   <script type="module">
     import runClimate, { showSnapshot } from './js/climate.module.js';
     const params = new URLSearchParams(location.search);
