@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createSigmaCore, sigmaInterfaces, stretchedSigmaInterfaces, CP_DRY, P0 } from '../js/dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, CP_DRY, P0 } from '../js/dynamics/sigmaCore.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 
 const N = +(process.env.SIGMA_TEST_N ?? 8);
@@ -50,12 +50,11 @@ test(`N=${N}: an isentropic column reproduces the analytic hydrostatic geopotent
 });
 
 test('sigma interfaces are monotone from 0 to 1', () => {
-  for (const levels of [sigmaInterfaces(), stretchedSigmaInterfaces()]) {
+  for (const levels of [sigmaInterfaces()]) {
     const K = levels.length - 1;
     assert.equal(levels[0], 0);
     assert.equal(levels[K], 1);
     for (let k = 1; k <= K; k++) assert.ok(levels[k] > levels[k - 1]);
   }
   assert.equal(sigmaInterfaces().length, 28);
-  assert.equal(stretchedSigmaInterfaces().length, 23);
 });

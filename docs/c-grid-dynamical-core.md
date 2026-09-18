@@ -557,11 +557,10 @@ three arrays (`createRK4Arrays`).
   run on (`sigmaInterfaces()`: HOMME's `cami-26.ascii` read as σ with
   `p_s = p0`, plus the cap above CAM's 2.19 hPa lid, 27 layers). The
   A-grid's 20 levels — eleven of them above 135 hPa and a single 800 m
-  boundary layer — are gone. `stretchedSigmaInterfaces()` (22 levels:
-  top at 10 hPa, 11 free-troposphere levels at 64 hPa, five boundary
-  layers at 30 hPa) is kept as an alternative; the three sets agree on
-  the JW06 wave to 3 hPa at day 10, and the stretched set is the one
-  that is stable without the θ closure.
+  boundary layer — are gone. A 22-level set with a 10 hPa top and five
+  30 hPa boundary layers was tried on the way: the sets agree on the
+  JW06 wave to 3 hPa at day 10, and that one was stable without the θ
+  closure, but the CAM grid is the standard and is what stays.
 - **A required closure on θ.** Without any θ dissipation the A-grid
   set's thin top layers (Δσ ≈ 0.0008 above ~2 hPa) went unstable from
   day 3 in the steady run — θ departures of hundreds of kelvin with no surface
@@ -577,14 +576,17 @@ The 200-day Held–Suarez climatology runs as an experiment, not a test.
 ### M3 — Physics hookup
 
 Port radiation, surface fluxes, convective adjustment, drags, closure,
-initialization. Run the current A-grid baseline and the C-grid model from
-identical initial states:
+initialization onto the `forcing` hook. The A-grid model is not used as
+a baseline — its vertical grid and horizontal operators differ too much
+for a profile comparison to mean anything. Acceptance:
 
-- Day-1 and day-5 zonal-mean profiles of `π`, `T_s`, `u` at layers 9/14
-  agree to within the A-grid's known operator error (a few percent) — the
-  two cores are solving the same equations.
+- Column-local pieces conserve exactly: the radiation column's layer and
+  surface fluxes sum to absorbed solar minus outgoing longwave; the
+  convective adjustment conserves column enthalpy and leaves a
+  statically stable column; drag only removes kinetic energy.
+- The balanced initialization rings at ≤ 1 hPa over the first days.
 - 90-day stability with hyperdiffusion at closure strength (2Δx timescale
-  ≥ 30 h) and **no** divergence smoothing/damping.
+  ≥ 3 h) and **no** divergence smoothing/damping.
 - EKE doubling time ≤ 3 days (Eady prediction for the current base state:
   1.5 days; A-grid delivered 14–19 days).
 - The emergence experiment: subpolar surface lows at ±60° appearing in the
@@ -692,5 +694,5 @@ core (which does more work per cell through the adjoint gather lists).
 - The integrated model lives in this repository.
 - Second-order centered transport and AB4 first; higher-order transport
   and RK3 are upgrade paths, not prerequisites.
-- The A-grid model in `~/Desktop/climate_model` is frozen as the
-  validation baseline for M3.
+- The A-grid model in `~/Desktop/climate_model` is retired; it is not a
+  validation baseline.

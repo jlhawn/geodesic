@@ -36,21 +36,6 @@ export function sigmaInterfaces() {
 }
 
 /*
- * Interface sigma values with the levels placed where the dynamics are:
- * one layer above `top`, geometric spacing from `top` to `tropopause`,
- * uniform spacing through the free troposphere to `boundaryTop`, and
- * finer uniform spacing in the boundary layer.
- */
-export function stretchedSigmaInterfaces({ top = 0.01, tropopause = 0.15, boundaryTop = 0.85, stratosphere = 5, troposphere = 11, boundary = 5 } = {}) {
-  const levels = [0, top];
-  for (let k = 1; k <= stratosphere; k++) levels.push(top * Math.pow(tropopause / top, k / stratosphere));
-  for (let k = 1; k <= troposphere; k++) levels.push(tropopause + (boundaryTop - tropopause) * k / troposphere);
-  for (let k = 1; k <= boundary; k++) levels.push(boundaryTop + (1 - boundaryTop) * k / boundary);
-  levels[levels.length - 1] = 1;
-  return Float64Array.from(levels);
-}
-
-/*
  * Hydrostatic primitive equations in sigma coordinates on the C-grid.
  * State: pi[C] surface pressure, theta[K*C] layer potential temperature,
  * u[K*E] layer normal velocity (layer k occupies [k*C, (k+1)*C) and
