@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Synoptic charts</title>
+  <style>
+    body { margin: 0; background: #f4f4f2; color: #222; font: 14px system-ui, sans-serif; }
+    #panel { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 16px; background: #fff; border-bottom: 1px solid #ddd; }
+    #status { color: #666; }
+    #chart { padding: 16px; }
+    #chart svg { width: 100%; height: auto; max-width: 1600px; display: block; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15); }
+    select, button { font: inherit; }
+  </style>
+</head>
+
+<body>
+  <div id="panel">
+    <label>Run <select id="state"></select></label>
+    <label>Level <select id="level"></select></label>
+    <button id="download-svg">Download SVG</button>
+    <button id="download-png">Download PNG</button>
+    <span id="status">loading…</span>
+  </div>
+  <div id="chart"></div>
+  <script type="module">
+    import runCharts from './js/charts.module.js';
+    runCharts();
+  </script>
+</body>
+
+</html>
