@@ -637,7 +637,7 @@ vertex color array and exposes `updateColors(rgbPerCell)`;
 diagnostics in a readout. The synoptic contour layer of the A-grid
 viewer is not ported.
 
-### M5 — Dissipation diet and emergence — in progress
+### M5 — Dissipation diet and emergence — done
 
 Runs from the balanced initialization with the full physics, tilt on
 from the spring equinox, N=16 unless noted; `emergence.mjs` logs the
@@ -698,7 +698,20 @@ pressure at 35° minus that at 65° in each hemisphere; it starts at
   instead of growing. That drag is now the model default
   (`createModel`: `topSigma: 0.005, topDragDays: 10`).
 
-Still running: the N=32 run.
+- **Resolution.** N=32 (240 km, 120 days, 4.6 hours) tracks N=16
+  closely: eddy kinetic energy 235 vs 255, jet 40 vs 46 m/s, the
+  winter trough +8.5 vs +22.6 hPa at day 120 with the same sign
+  reversal near day 50–70 — the emergence is not a resolution artifact,
+  and the timing of the surface trough is the chaotic part of a single
+  realization at either resolution.
+
+The A-grid project's stated goal — surface pressure cells maintained by
+the model's own eddies rather than imposed — is met in the winter
+hemisphere at both resolutions. Open next steps: ensembles or longer
+runs to average the trough statistics; the gray radiation's climate
+(the slab settles near 286.5 K, cooler than the 288 K it was aimed at);
+and the summer-hemisphere weakness, which follows from the base state's
+lack of baroclinicity there.
 
 ---
 
