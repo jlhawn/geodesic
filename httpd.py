@@ -14,6 +14,7 @@ class CustomHTTPRequestHandler(server.SimpleHTTPRequestHandler):
     def send_custom_headers(self):
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+        self.send_header("Cache-Control", "no-cache")
 
 if __name__ == '__main__':
     server.test(HandlerClass=CustomHTTPRequestHandler)
