@@ -49,10 +49,10 @@
   <script type="module">
     import runClimate, { showSnapshot } from './js/climate.module.js';
     const params = new URLSearchParams(location.search);
-    const from = params.get('from') ?? 'runs/cascade32_state_day374.json';
+    const from = params.get('from') ?? 'runs/cascade64_state_day388.json';
     const workers = Number(params.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 2));
     if (params.get('snapshot')) showSnapshot(params.get('snapshot'));
-    else runClimate(Number(params.get('N') ?? 32), from === 'none' ? null : from, workers);
+    else runClimate(Number(params.get('N') ?? 64), from === 'none' ? null : from, workers);
   </script>
 </body>
 
