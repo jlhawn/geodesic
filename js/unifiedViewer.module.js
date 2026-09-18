@@ -227,7 +227,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
   const sphereQuaternion = new THREE.Quaternion(); 
   
   // Initialize rotation: North Up, Prime Meridian Front
-  const initialEuler = new THREE.Euler(-Math.PI/2, -Math.PI/2, 0, 'XYZ');
+  const initialEuler = new THREE.Euler(-Math.PI/2, -Math.PI/2, 0, 'YXZ');
   sphereQuaternion.setFromEuler(initialEuler);
   rotationMatrix.makeRotationFromQuaternion(sphereQuaternion);
 
