@@ -2,6 +2,7 @@ import { Grid } from './grid.module.js';
 import { createModel } from './model.module.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
+import { regridState } from './physics/regrid.module.js';
 
 let model = null, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
 let vector = null, jetLayer = 0;
@@ -32,19 +33,38 @@ function loop() {
   setTimeout(loop, 0);
 }
 
-self.onmessage = (event) => {
+const status = (text) => self.postMessage({ type: 'status', text });
+
+/*
+ * The initial state comes from a saved run (a *_state_*.json written by
+ * the emergence driver) when the start message names one, regridded if
+ * it was saved at another resolution; otherwise from initializeState.
+ */
+async function initialState(model, message) {
+  if (!message.from) return initializeState(model, message.init ?? {});
+  status(`loading ${message.from.replace(/.*\//, '')}…`);
+  const saved = await (await fetch(message.from)).json();
+  const arrays = [saved.pi, saved.theta, saved.u, saved.surfaceT].map((a) => Float64Array.from(a));
+  model.time = saved.time;
+  if (saved.N === message.N) return arrays;
+  status(`regridding day ${saved.day} from N=${saved.N} to N=${message.N}…`);
+  return regridState(createModel(new Grid(saved.N)), model, arrays);
+}
+
+self.onmessage = async (event) => {
   const message = event.data;
   if (message.type === 'start') {
     const N = message.N ?? 16;
     dt = message.dt ?? 450 * 16 / N;
-    stepsPerFrame = message.stepsPerFrame ?? 24;
+    stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round(24 * 16 / N));
+    status(`building the N=${N} grid…`);
     const grid = new Grid(N);
     model = createModel(grid, message.options ?? {});
-    const init = initializeState(model, message.init ?? {});
+    const init = await initialState(model, message);
     for (let a = 0; a < 4; a++) model.state[a].set(init[a]);
     vector = new Float64Array(3 * model.mesh.nCells);
     jetLayer = model.core.sigmaMid.findIndex((s) => s > 0.25);
-    self.postMessage({ type: 'ready', N, cells: model.mesh.nCells, layers: model.core.K, dt });
+    self.postMessage({ type: 'ready', N, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400 });
     postFrame();
     running = true;
     loop();

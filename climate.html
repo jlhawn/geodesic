@@ -49,8 +49,9 @@
   <script type="module">
     import runClimate, { showSnapshot } from './js/climate.module.js';
     const params = new URLSearchParams(location.search);
+    const from = params.get('from') ?? 'runs/cascade32_state_day374.json';
     if (params.get('snapshot')) showSnapshot(params.get('snapshot'));
-    else runClimate(Number(params.get('N') ?? 16));
+    else runClimate(Number(params.get('N') ?? 64), from === 'none' ? null : from);
   </script>
 </body>
 
