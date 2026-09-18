@@ -683,7 +683,17 @@ pressure at 35° minus that at 65° in each hemisphere; it starts at
   solstice. The energy budget closes from about day 250 (OLR 235–240
   against 238 absorbed) with the slab ocean settling near 286.5–287.2 K.
 
-Still running: the 360-day top-drag twin and the N=32 run.
+- **Top drag over a full year.** The 10-day drag above σ = 0.05 keeps
+  the model's maximum wind at 60–100 m/s (in the real subtropical jet
+  near 50–100 hPa rather than the cap) but costs the troposphere: eddy
+  kinetic energy 7–10% lower through the year, jets 1–5 m/s weaker, and
+  the winter surface trough weaker or later (11 vs 24 hPa at day 360,
+  −2 vs +23 hPa at day 120). Part of that is the chaotic timing of a
+  single realization, part is the ramp reaching the lower stratosphere.
+  A drag confined to the cap layer (σ < 0.005) is being run to separate
+  the two.
+
+Still running: the cap-only drag twin and the N=32 run.
 
 ---
 
