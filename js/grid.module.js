@@ -4,77 +4,74 @@ import * as ISEA from "./isea.module.js";
 const NORTH_POLE_QUAD_ID = 'NP';
 const SOUTH_POLE_QUAD_ID = 'SP';
 
+const _ab = new THREE.Vector3();
+const _ac = new THREE.Vector3();
+const _bc = new THREE.Vector3();
+
 /**
- * Computes the circumcenter of a triangle on (or near) the unit sphere.
- *
- * The circumcenter is the unique point equidistant from the triangle’s
- * three vertices a, b, and c. In Euclidean space, it is the intersection
- * of the triangle’s perpendicular bisectors; for small spherical
- * triangles this Cartesian version is an excellent approximation
- * before normalizing back to the sphere.
- *
- * Implementation notes:
- *  - Uses the vector cross-product formulation found in
- *    *Shewchuk, J. R., “Lecture Notes on Geometric Robustness,”*
- *    and in *Eberly, D. H., “Intersection of Three Planes,” Geometric Tools, 2008*.
- *  - The formula avoids explicit matrix inversion and is robust for
- *    acute and obtuse triangles alike.
- *  - Falls back to the centroid if the points are degenerate (colinear
- *    or nearly coincident).
- *
- * Returns: THREE.Vector3 — the unnormalized circumcenter (normalize it
- * externally if you need it on the unit sphere).
+ * Circumcenter of a triangle whose vertices lie on the unit sphere, written
+ * to `target` as a unit vector on the triangle's side of the sphere: the
+ * point equidistant (in arc length) from a, b and c. Degenerate (colinear or
+ * coincident) inputs fall back to the normalized centroid.
  */
-function circumcenter(a, b, c) {
-  const tmp1 = new THREE.Vector3();
-  const tmp2 = new THREE.Vector3();
-  const tmp3 = new THREE.Vector3();
-
-  // ba = b - a, ca = c - a
-  const ba = tmp1.copy(b).sub(a);
-  const ca = tmp2.copy(c).sub(a);
-
-  // n = ba x ca
-  const n = tmp3.copy(ba).cross(ca);
-  const denom = 2 * n.lengthSq();
-  if (denom === 0) {
-    // Degenerate: fall back to centroid (then normalize by caller)
-    return centroid(a, b, c);
+function circumcenter(a, b, c, target = new THREE.Vector3()) {
+  target.crossVectors(_ab.subVectors(b, a), _ac.subVectors(c, a));
+  if (target.lengthSq() === 0) {
+    return target.copy(centroid(a, b, c)).normalize();
   }
-
-  // weights from |v|^2 and cross products; see Eberly/Shewchuk-style formula
-  const ba2 = ba.lengthSq();
-  const ca2 = ca.lengthSq();
-
-  // u = (ba2 * (ca x n) + ca2 * (n x ba)) / denom
-  const u = new THREE.Vector3()
-    .copy(ca).cross(n).multiplyScalar(ba2)
-    .add(new THREE.Vector3().copy(n).cross(ba).multiplyScalar(ca2))
-    .multiplyScalar(1 / denom);
-
-  return new THREE.Vector3().copy(a).add(u);
+  target.normalize();
+  if (target.dot(a) < 0) target.negate();
+  return target;
 }
 
 function centroid(a, b, c) {
   return a.clone().add(b).add(c).multiplyScalar(1 / 3);
 }
 
+function sphericalExcess(a, b, c) {
+  return 2 * Math.atan2(_bc.crossVectors(b, c).dot(a), 1 + a.dot(b) + b.dot(c) + c.dot(a));
+}
+
+class GridVertex extends THREE.Vector3 {
+  index = -1;
+}
+
+/*
+ * Invariants every consumer may rely on:
+ *  - `neighbors` and `vertices` are parallel arrays, counter-clockwise when
+ *    viewed from outside the sphere; both have 5 entries on pentagons.
+ *  - `vertices[k]` is the unit-sphere circumcenter of (centerVertex,
+ *    neighbors[k], neighbors[k+1]) and is the same GridVertex object in the
+ *    three cells that share it.
+ *  - The edge shared with `neighbors[k]` runs from `vertices[k-1]` to
+ *    `vertices[k]`.
+ *  - `index` is the cell's position in Grid iteration order.
+ */
 class GridCell {
   constructor(N, quadId, x, y, center) {
     this.coords = [quadId, N, x, y];
+    this.index = -1;
     this.isNorthPole = quadId === NORTH_POLE_QUAD_ID;
     this.isSouthPole = quadId === SOUTH_POLE_QUAD_ID;
     this.isPole = this.isNorthPole || this.isSouthPole;
-    this.id = `${quadId}-${N}-${x}-${y}`;
     this.centerVertex = center;
     this.isPentagon = this.isPole || (x === N - 1 && y === 0);
     this.isAlongIcosahedronEdge = this.isPentagon || (x === N - 1) || (y === 0) || (x + y === N - 1);
+    this.neighbors = null;
     this.vertices = null;
-    this.faceTriangles = null;
     this.area = 0;
   }
 
-  neighbors({ quadCells, northPole, southPole }) {
+  get id() {
+    const [quadId, N, x, y] = this.coords;
+    return `${quadId}-${N}-${x}-${y}`;
+  }
+
+  calculateNeighbors(grid) {
+    this.neighbors = this.#lookupNeighbors(grid);
+  }
+
+  #lookupNeighbors({ quadCells, northPole, southPole }) {
     const [quadId, N, x, y] = this.coords;
 
     if (quadId >= 0 && (0 < x && x < N - 1) && (0 < y && y < N - 1)) {
@@ -307,52 +304,68 @@ class GridCell {
   }
 
   calculateVertices(grid) {
-    const neighborCells = this.neighbors(grid);
-    this.vertices = new Array(neighborCells.length);
-    for (let i = 0; i < neighborCells.length; i++) {
-      const neighborA = neighborCells[i];
-      const neighborB = neighborCells[(i + 1) % neighborCells.length];
-      const vertex = circumcenter(this.centerVertex, neighborA.centerVertex, neighborB.centerVertex);
-      this.vertices[i] = vertex;
+    const neighbors = this.neighbors;
+    const n = neighbors.length;
+    this.vertices = new Array(n);
+    for (let k = 0; k < n; k++) {
+      const a = neighbors[k];
+      const b = neighbors[(k + 1) % n];
+      let vertex;
+      if (a.index < this.index) {
+        vertex = a.vertexBetween(b, this);
+      } else if (b.index < this.index) {
+        vertex = b.vertexBetween(this, a);
+      } else {
+        vertex = circumcenter(this.centerVertex, a.centerVertex, b.centerVertex, new GridVertex());
+        vertex.index = grid.vertices.length;
+        grid.vertices.push(vertex);
+      }
+      this.vertices[k] = vertex;
     }
-    this.calculateFaceTriangles();
   }
 
-  calculateFaceTriangles() {
-    // NOTE: This only works correctly if the vertices array
-    // is in a counter-clockwise order around this cell.
-    this.faceTriangles = new Array(this.vertices.length - 2);
-    let tri = 0;
-    this.faceTriangles[tri++] = new THREE.Triangle(
-      this.vertices[0],
-      this.vertices[1],
-      this.vertices[2],
-    );
-    for (let i = 2; i + 1 < this.vertices.length; i++) {
-      this.faceTriangles[tri++] = new THREE.Triangle(
-        this.vertices[0],
-        this.vertices[i],
-        this.vertices[i + 1],
-      );
+  vertexBetween(first, second) {
+    const neighbors = this.neighbors;
+    const n = neighbors.length;
+    for (let k = 0; k < n; k++) {
+      if (neighbors[k] === first && neighbors[(k + 1) % n] === second) {
+        return this.vertices[k];
+      }
     }
-    for (let triangle of this.faceTriangles) {
-      this.area += triangle.getArea();
+    throw new Error(`cell ${this.id} has no vertex between ${first.id} and ${second.id}`);
+  }
+
+  calculateArea() {
+    const c = this.centerVertex;
+    const v = this.vertices;
+    const n = v.length;
+    let area = 0;
+    for (let k = 0; k < n; k++) {
+      area += sphericalExcess(c, v[k], v[(k + 1) % n]);
     }
+    this.area = area;
   }
 }
 
 class Grid {
   constructor(N) {
-    let start = performance.now()
     const { quadCells, northPole, southPole } = Grid.make(N);
 
+    this.N = N;
     this.quadCells = quadCells;
     this.northPole = northPole;
     this.southPole = southPole;
-    this.size = 10 * N * N + 2
+    this.size = 10 * N * N + 2;
+    this.vertices = [];
 
+    let index = 0;
+    for (const cell of this) {
+      cell.index = index++;
+      cell.calculateNeighbors(this);
+    }
     for (const cell of this) {
       cell.calculateVertices(this);
+      cell.calculateArea();
     }
   }
 
@@ -483,5 +496,5 @@ class Grid {
 }
 
 export {
-  Grid, GridCell, circumcenter, centroid
+  Grid, GridCell, GridVertex, circumcenter, centroid
 };
