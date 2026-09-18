@@ -741,8 +741,15 @@ asserts element-wise equality of all four state arrays after four steps.
 Speedup on 8 workers of a 10-core laptop: N=16 98 → 28 ms/step (3.5×),
 N=32 410 → 89 ms/step (4.6×). Larger N gives a larger fraction because
 the per-phase synchronization cost is fixed. The emergence driver takes
-`WORKERS=<n>` in the environment; the same phase split is what a
-browser build with Web Workers and `Atomics.waitAsync` would use.
+`WORKERS=<n>` in the environment.
+
+The same two files run in the browser: `threads.module.js` provides
+the spawn/receive primitives from `worker_threads` or Web Workers, and
+the page's model worker acts as coordinator — a dedicated worker may
+block in `Atomics.wait`, and it spawns the phase workers as nested
+workers. `SharedArrayBuffer` needs the page cross-origin isolated,
+which `httpd.py` provides (COOP/COEP). `climate.html?workers=<n>`
+chooses the count (cores minus two by default).
 
 ---
 
@@ -765,6 +772,7 @@ js/
   model.module.js           assembles core + physics, RK4 step, diagnostics
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase
+  threads.module.js         M6: worker_threads / Web Worker primitives behind the engine
   model.worker.js           browser worker: steps the model, fills shared buffers
   climate.module.js         live model page (climate.html): fields, legend, wind layers
   windParticles.module.js   wind traced by particles with fading trails over the globe
