@@ -637,12 +637,43 @@ vertex color array and exposes `updateColors(rgbPerCell)`;
 diagnostics in a readout. The synoptic contour layer of the A-grid
 viewer is not ported.
 
-### M5 — Dissipation diet and emergence
+### M5 — Dissipation diet and emergence — in progress
 
-With the stack deleted, tune only the single remaining knob (∇⁴
-timescale) by the Galewsky and Held–Suarez results, then run the
-long emergence experiments. The A-grid baseline stays available for
-side-by-side climatology.
+Runs from the balanced initialization with the full physics, tilt on
+from the spring equinox, N=16 unless noted; `emergence.mjs` logs the
+zonal means every 5 days and writes surface snapshots every 10 days for
+`climate.html?snapshot=`. The trough metric is the zonal-mean surface
+pressure at 35° minus that at 65° in each hemisphere; it starts at
+−34 hPa because the balanced initialization has polar highs.
+
+- **Emergent subpolar lows.** In the winter (southern) hemisphere the
+  trough metric crosses zero at day 60–80 and reaches +18 to +23 hPa by
+  day 120–180, the zonal-mean surface wind at 50–60°S turns from −4.6 to
+  +3 m/s westerly, the 250 hPa jet grows to 49–53 m/s, and eddy kinetic
+  energy at 250 hPa saturates around 320–340 m²/s². The summer
+  hemisphere stays quiet (jet 7–9 m/s, no trough), as its base state
+  provides little baroclinicity. This is the structure the A-grid never
+  reached.
+- **Dissipation diet.** Relaxing the ∇⁴ closures from 3 h to 10 h at
+  the 2Δx mode changes nothing that matters (EKE 326 vs 335, jet 49 vs
+  51, trough 17 vs 20 hPa at day 180): the closure is not what limits
+  the eddies here, unlike the A-grid where it was the dominant sink.
+- **The cap layer.** With nothing above the closure to bound a zonally
+  symmetric flow, the winter jet in the σ < 0.002 cap above CAM's lid
+  grows about 1.3 m/s per day to 230 m/s by day 180. A Rayleigh drag
+  above σ = 0.05 with a 10-day timescale at the top holds it near
+  60 m/s and moves the model's maximum wind to the real subtropical jet
+  near 50–100 hPa at 80–90 m/s, at a small cost to the troposphere
+  (EKE 293 vs 318, trough 15 vs 19 hPa at day 150). Whether to make it
+  the default, or to replace the cap with a rigid lid at CAM's top, is
+  open.
+- **Energy balance.** Absorbed solar 238 W/m² against OLR falling from
+  253 to 240: the initialization is warmer than this gray atmosphere's
+  equilibrium, and the slab ocean cools at 0.02 K/day, from 288.9 K at
+  day 40 to 286.2 K at day 180, slowing as OLR approaches 238.
+
+Still running: the 360-day seasonal cycle (base and top-drag) and the
+N=32 run.
 
 ---
 
