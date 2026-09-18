@@ -90,37 +90,34 @@ export function createSigmaCore(mesh, options = {}) {
   const lapTheta = new Float64Array(C);
   const lapTheta2 = new Float64Array(C);
 
-  function diagnose(pi, theta) {
+  function diagnoseColumn(i, pi, theta) {
     for (let k = 0; k < K; k++) {
-      const upper = sigmaUpper[k], lower = sigmaLower[k];
-      for (let i = 0; i < C; i++) {
-        const idx = k * C + i;
-        const exLower = Math.pow(pi[i] * lower / p0, kappa);
-        const exUpper = k === 0 ? 0 : exnerLower[idx - C];
-        const span = exLower * lower - exUpper * upper;
-        exnerLower[idx] = exLower;
-        exnerLayer[idx] = span / ((1 + kappa) * dSigma[k]);
-        dExnerDpi[idx] = (kappa / (1 + kappa)) * span / (pi[i] * dSigma[k]);
-      }
+      const idx = k * C + i;
+      const exLower = Math.pow(pi[i] * sigmaLower[k] / p0, kappa);
+      const exUpper = k === 0 ? 0 : exnerLower[idx - C];
+      const span = exLower * sigmaLower[k] - exUpper * sigmaUpper[k];
+      exnerLower[idx] = exLower;
+      exnerLayer[idx] = span / ((1 + kappa) * dSigma[k]);
+      dExnerDpi[idx] = (kappa / (1 + kappa)) * span / (pi[i] * dSigma[k]);
     }
     for (let k = 0; k < K - 1; k++) {
-      for (let i = 0; i < C; i++) {
-        const idx = k * C + i;
-        const t = (exnerLower[idx] - exnerLayer[idx]) / (exnerLayer[idx + C] - exnerLayer[idx]);
-        thetaLower[idx] = theta[idx] + t * (theta[idx + C] - theta[idx]);
-      }
+      const idx = k * C + i;
+      const t = (exnerLower[idx] - exnerLayer[idx]) / (exnerLayer[idx + C] - exnerLayer[idx]);
+      thetaLower[idx] = theta[idx] + t * (theta[idx + C] - theta[idx]);
     }
-    for (let i = 0; i < C; i++) {
-      const bottom = (K - 1) * C + i;
-      geopotential[bottom] = (surfaceGeopotential ? surfaceGeopotential[i] : 0) + cp * theta[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
-      for (let k = K - 2; k >= 0; k--) {
-        const idx = k * C + i;
-        const below = idx + C;
-        geopotential[idx] = geopotential[below]
-          + cp * theta[below] * (exnerLayer[below] - exnerLower[idx])
-          + cp * theta[idx] * (exnerLower[idx] - exnerLayer[idx]);
-      }
+    const bottom = (K - 1) * C + i;
+    geopotential[bottom] = (surfaceGeopotential ? surfaceGeopotential[i] : 0) + cp * theta[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
+    for (let k = K - 2; k >= 0; k--) {
+      const idx = k * C + i;
+      const below = idx + C;
+      geopotential[idx] = geopotential[below]
+        + cp * theta[below] * (exnerLayer[below] - exnerLower[idx])
+        + cp * theta[idx] * (exnerLower[idx] - exnerLayer[idx]);
     }
+  }
+
+  function diagnose(pi, theta) {
+    for (let i = 0; i < C; i++) diagnoseColumn(i, pi, theta);
   }
 
   function tendency(state, out) {
@@ -219,7 +216,7 @@ export function createSigmaCore(mesh, options = {}) {
     applyForcing = fn;
   }
 
-  const diagnostics = { K, C, E, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, geopotential, piSigmaDot, diagnose };
+  const diagnostics = { K, C, E, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, diagnose, diagnoseColumn };
 
   function mass(pi) {
     let m = 0;
@@ -227,7 +224,7 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, tendency, diagnose, diagnostics, mass, setForcing, arrays: { exnerLayer, exnerLower, geopotential, piSigmaDot, thetaLower } };
+  return { K, levels, sigmaMid, tendency, diagnose, diagnoseColumn, diagnostics, mass, setForcing, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower } };
 }
 
 /*

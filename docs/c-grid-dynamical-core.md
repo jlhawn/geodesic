@@ -587,6 +587,22 @@ for a profile comparison to mean anything. Acceptance:
 - The balanced initialization rings at ≤ 1 hPa over the first days.
 - 90-day stability with hyperdiffusion at closure strength (2Δx timescale
   ≥ 3 h) and **no** divergence smoothing/damping.
+
+Status: `js/physics/radiation.module.js` (gray column, insolation with
+tilt, slab ocean, sensible heat flux), `js/physics/surface.module.js`
+(bulk drag, boundary-layer drag, convective adjustment) and
+`js/physics/init.module.js` are ported and `js/model.module.js`
+assembles them on the `forcing` hook with state `[π, θ, u, T_s]`.
+`test/physics.test.mjs` certifies the column budgets to roundoff;
+`test/init.test.mjs` shows the balanced state ringing at 1.3 hPa (N=8)
+and 1.2 hPa (N=16) over three days with the physics off. The
+subtropical/subpolar pressure bands of the A-grid initialization are off
+by default: nothing balances them and they ring at 10 hPa, and the
+Held–Suarez run produces the surface wind structure they imitated on its
+own. Held–Suarez at N=16 for 200 days: 213 hPa jets 28–32 m/s at
+±40–50°, surface westerlies +9 m/s at ±50°, tropical easterlies −7,
+upper-level eddy kinetic energy ≈ 210 m²/s², surface pressure
+980–1035 hPa, statistically steady from day 100.
 - EKE doubling time ≤ 3 days (Eady prediction for the current base state:
   1.5 days; A-grid delivered 14–19 days).
 - The emergence experiment: subpolar surface lows at ±60° appearing in the
