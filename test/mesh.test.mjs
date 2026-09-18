@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { divergence, gradient, curl, tangential, kineticEnergy, cellVector } from '../js/dynamics/operators.module.js';
+import { divergence, gradient, curl, tangential, kineticEnergy, cellVector, laplacianVelocity } from '../js/dynamics/operators.module.js';
 
 const SIZES = (process.env.MESH_TEST_N ?? '4,8,16').split(',').map(Number);
 const RELAX = (process.env.MESH_TEST_RELAX ?? '0,10').split(',').map(Number);
@@ -245,6 +245,27 @@ for (const relax of RELAX) for (const N of SIZES) {
       worst = Math.max(worst, relative(flux, scale));
     }
     assert.ok(worst < EPS);
+  });
+
+  test(`N=${N} relax=${relax}: velocity Laplacian is self-adjoint and dissipative`, () => {
+    const u = randomArray(nEdges, 61);
+    const w = randomArray(nEdges, 67);
+    const Lu = laplacianVelocity(mesh, u);
+    const Lw = laplacianVelocity(mesh, w);
+    const D = divergence(mesh, u);
+    const Z = curl(mesh, u);
+    let uLu = 0, uLw = 0, wLu = 0, scale = 0, energy = 0;
+    for (let e = 0; e < nEdges; e++) {
+      const a = mesh.dcEdge[e] * mesh.dvEdge[e];
+      uLu += a * u[e] * Lu[e];
+      uLw += a * u[e] * Lw[e];
+      wLu += a * w[e] * Lu[e];
+      scale += Math.abs(a * u[e] * Lw[e]);
+    }
+    for (let i = 0; i < nCells; i++) energy += mesh.areaCell[i] * D[i] * D[i];
+    for (let v = 0; v < nVertices; v++) energy += mesh.areaTriangle[v] * Z[v] * Z[v];
+    assert.ok(relative(uLw - wLu, scale) < EPS);
+    assert.ok(relative(uLu + energy, energy) < EPS);
   });
 
   test(`N=${N} relax=${relax}: kinetic energy and cell-vector reconstruction of solid-body rotation`, () => {

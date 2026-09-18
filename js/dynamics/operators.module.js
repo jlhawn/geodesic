@@ -75,3 +75,14 @@ export function cellVector(mesh, u, out = new Float64Array(3 * mesh.nCells)) {
   }
   return out;
 }
+
+export function laplacianVelocity(mesh, u, out = new Float64Array(mesh.nEdges), div = new Float64Array(mesh.nCells), vort = new Float64Array(mesh.nVertices)) {
+  const { nEdges, cellsOnEdge, verticesOnEdge, dcEdge, dvEdge } = mesh;
+  divergence(mesh, u, div);
+  curl(mesh, u, vort);
+  for (let e = 0; e < nEdges; e++) {
+    out[e] = (div[cellsOnEdge[2 * e + 1]] - div[cellsOnEdge[2 * e]]) / dcEdge[e]
+      - (vort[verticesOnEdge[2 * e + 1]] - vort[verticesOnEdge[2 * e]]) / dvEdge[e];
+  }
+  return out;
+}
