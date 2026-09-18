@@ -713,6 +713,37 @@ runs to average the trough statistics; the gray radiation's climate
 and the summer-hemisphere weakness, which follows from the base state's
 lack of baroclinicity there.
 
+### M6 — Worker-thread time step (`js/parallel.module.js`) — done
+
+The dependency chain inside one RK4 stage rules out pipelining across
+workers (every phase needs the previous phase's output for the whole
+sphere), so the parallel engine partitions each phase instead. The
+σ-core tendency is split into phases that partition cleanly:
+
+| phase  | partitioned over | work                                                  |
+|--------|------------------|-------------------------------------------------------|
+| flux   | layers           | edge mass fluxes and their divergence                  |
+| column | cells, vertices  | dπ/dt, σ̇, Exner/geopotential column, vertex π, surface wind |
+| layer  | layers           | θ tendency, momentum (PV flux, PGF, vertical advection), ∇⁴, drag |
+| cell   | cells            | radiation and surface fluxes, slab ocean               |
+
+Every array that crosses a phase boundary — the state, the four RK4
+stages, the trial state and the core's intermediate arrays — lives once
+in `SharedArrayBuffer`s (`createModel(..., { buffers })` adopts them;
+`shareMesh`/`meshFromShared` pass the mesh the same way). Each worker
+owns one block of every partition, and the main thread drives the
+phases through an `Atomics` generation counter, so a step costs 16
+phase barriers plus advance, combine and adjust. Partial sums (radiation
+totals) are combined in the single-thread order, so the worker-thread
+step reproduces `createModel` bit for bit — `test/parallel.test.mjs`
+asserts element-wise equality of all four state arrays after four steps.
+
+Speedup on 8 workers of a 10-core laptop: N=16 98 → 28 ms/step (3.5×),
+N=32 410 → 89 ms/step (4.6×). Larger N gives a larger fraction because
+the per-phase synchronization cost is fixed. The emergence driver takes
+`WORKERS=<n>` in the environment; the same phase split is what a
+browser build with Web Workers and `Atomics.waitAsync` would use.
+
 ---
 
 ## 7. Module layout in this repo
@@ -730,7 +761,13 @@ js/
     radiation.module.js     ported from sim.js RadiationColumn
     surface.module.js       ported: drag, sensible heat, slab ocean, convective adjustment
     init.module.js          ported: thermal init, balance, seed, bands, geostrophic winds
-  model.worker.js           NEW: assembles core + physics, steps, fills shared buffers
+    regrid.module.js        barycentric interpolation of a state between meshes
+  model.module.js           assembles core + physics, RK4 step, diagnostics
+  parallel.module.js        M6: the same model stepped on worker threads
+  parallel.worker.js        M6: one worker's block of every phase
+  model.worker.js           browser worker: steps the model, fills shared buffers
+  climate.module.js         live model page (climate.html)
+  charts.module.js          synoptic charts from saved states (charts.html)
   unifiedViewer.module.js   existing, gains model-overlay mode
 test/
   mesh.test.mjs, operators.test.mjs, trisk.test.mjs, sw_tc2.mjs, sw_tc6.mjs,
