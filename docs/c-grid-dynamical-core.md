@@ -672,8 +672,18 @@ pressure at 35° minus that at 65° in each hemisphere; it starts at
   equilibrium, and the slab ocean cools at 0.02 K/day, from 288.9 K at
   day 40 to 286.2 K at day 180, slowing as OLR approaches 238.
 
-Still running: the 360-day seasonal cycle (base and top-drag) and the
-N=32 run.
+- **A full seasonal cycle** (base, 360 days, 97 minutes at N=16). The
+  storm track follows the winter hemisphere: the southern trough peaks
+  at +24 hPa around day 210 and decays to zero by day 300 as the sun
+  moves north, while the northern one goes from −9 hPa at day 230
+  through zero at day 280 to +24 hPa at day 360, with surface
+  westerlies of +3 m/s at 50–60°N and a 43 m/s jet by the end. Eddy
+  kinetic energy at 250 hPa cycles from 335 at the southern solstice
+  through 125 near the equinox to 238 approaching the northern
+  solstice. The energy budget closes from about day 250 (OLR 235–240
+  against 238 absorbed) with the slab ocean settling near 286.5–287.2 K.
+
+Still running: the 360-day top-drag twin and the N=32 run.
 
 ---
 
