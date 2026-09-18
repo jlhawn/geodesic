@@ -80,7 +80,7 @@ function createWindLayer(container, viewer, grid) {
   const particles = createWindParticles(container, viewer, grid);
   const mode = document.getElementById('windLayer');
   const level = document.getElementById('windLevel');
-  const note = document.getElementById('legendNote');
+  const note = document.getElementById('windNote');
   return function paint(frame, spec) {
     if (spec.arrows) level.value = spec.arrows;
     const kind = WINDS[level.value];
@@ -90,12 +90,14 @@ function createWindLayer(container, viewer, grid) {
     particles.setVisible(shown === 'particles');
     if (shown === 'arrows') {
       arrows.update(vectors, { referenceSpeed: kind.referenceSpeed, stride: Math.ceil(grid.size / 4000) });
-      note.textContent = `Arrows point downwind (${kind.label}); full length at ${kind.referenceSpeed} m/s`;
+      note.textContent = `arrows point downwind, full length at ${kind.referenceSpeed} m/s`;
     } else if (shown === 'particles') {
       particles.setField(vectors, kind.referenceSpeed);
-      note.textContent = `Particles drift downwind (${kind.label}); brighter trails are faster`;
+      note.textContent = `particles drift downwind, brighter when faster`;
+    } else if (vectors) {
+      note.textContent = '';
     } else {
-      note.textContent = vectors ? '' : 'No wind vectors in this snapshot';
+      note.textContent = `no ${kind.label} vectors in this ${frame.diagnostics ? 'frame (worker script stale? hard-reload)' : 'snapshot'}`;
     }
   };
 }
