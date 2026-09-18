@@ -51,9 +51,9 @@ export async function createParallelModel(grid, options = {}, workers = Math.max
       if (message.type === 'error') failures.push(`worker ${message.index} phase ${message.phase}: ${message.message}`);
     });
     thread.on('error', (error) => { failures.push(`worker ${index}: ${error && error.stack ? error.stack : error}`); reject(error); });
-    thread.unref();
     threads.push(thread);
   })));
+  for (const thread of threads) thread.unref();
 
   function run(phase, { useTrial = 0, stage = 0, dt = 0, factor = 0 } = {}) {
     Atomics.store(ctrl, 3, useTrial);
