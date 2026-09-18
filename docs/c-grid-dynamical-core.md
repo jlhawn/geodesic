@@ -412,7 +412,8 @@ diffusion on θ is dropped; add a ∇⁴ on θ only if fronts demand it.
 
 ### 4.4 Time integration
 
-Adams–Bashforth (order ramp 1→4) as now; the state to step is the flat
+M1 uses classical RK4 for clean convergence and conservation studies.
+For the full model, Adams–Bashforth (order ramp 1→4) as now; the state to step is the flat
 `u`, `theta`, `pi`, `surfaceT` arrays, so the stepper history becomes a
 few large typed arrays instead of an object per variable. `dt` from the
 gravity-wave CFL using the *minimum* `d_e` (pentagon neighborhoods have
@@ -488,30 +489,37 @@ negative adjoint (1e-12); curl of solid-body rotation converging to
 cell reconstructions converging in the mean. The velocity Laplacian (3.6)
 is built and tested in M1 with the closure.
 
-### M1 — Shallow-water core (single layer, `js/dynamics/shallowWater.module.js`)
+### M1 — Shallow-water core (`js/dynamics/shallowWater.module.js`) — done
 
-Implements 3.1–3.7 and the vector-invariant momentum equation with
-`h` in place of `π`. Purpose: certify the horizontal core in isolation,
-where exact solutions exist.
+The vector-invariant equations of Section 4.2 with `h` in place of `π`,
+the energy-conserving PV flux of RTSK eq. 49, the ∇⁴ closure of 3.6, and
+RK4 time stepping (`integrators.module.js`; AB4 is the M2 swap when
+cost matters). Shared initial-condition and norm helpers live in
+`test/helpers/sphere.mjs`; every test builds `new Grid(N)` (relaxed).
 
-- **Williamson TC2** (steady geostrophic zonal flow; `u₀ = 2πa/12 days`,
-  `g h₀ = 2.94×10⁴ m²/s²`): an exact steady state. Acceptance: relative
-  `l₂` error in `h` after 5 days < 1e-3 at N=32 and decreasing ~2× per
-  doubling of N. **This test is the sign/convention oracle**: any error in
-  the Coriolis term, PGF, or TRiSK weights breaks the balance within
-  hours.
-- **Williamson TC6** (Rossby–Haurwitz wavenumber 4, 14 days): pattern
-  propagates without breaking up; total energy and potential enstrophy
-  drift < 0.1% over 14 days with the ∇⁴ closure off (TRiSK conserves both
-  in space; the residual is time truncation).
-- **Galewsky et al. 2004** (barotropic instability of a mid-latitude jet
-  with a small perturbation): the perturbation must grow at the published
-  rate and the vorticity field at day 6 must match the reference
-  qualitatively. This is the eddy-growth acid test in a setting with a
-  known answer, and it directly probes the question that motivated the
-  port.
-- Mass conserved to roundoff; energy conserved to time-truncation
-  accuracy in inviscid runs; no NaN for 30 days with closure on.
+- **Williamson TC2** (`test/sw_tc2.test.mjs`, 5 days): `h` l₂ error
+  2.2e-4 at N=16, 9.7e-5 at N=32; `u` l₂ 5.1e-3 and 1.3e-3; mass to
+  1e-15, energy to 1e-10. This certified the sign conventions: the
+  momentum tendency is `+Q⊥_e − (Φ_j − Φ_i)/d_e` with `u⊥_e = u·t_e`,
+  `t_e = m_e × n_e`. On the raw ISEA grid the N=32 error is 4.8e-4 — 5×
+  worse — which settled the relaxation default.
+- **Williamson TC6** (`test/sw_tc6.test.mjs`, 14 days, N=32): mass
+  exact, energy drift 1.5e-9, potential enstrophy drift 7.6e-4 (bounded;
+  the energy-conserving PV average does not also conserve enstrophy),
+  wavenumber-4 phase speed 11.3°/day against the nondivergent analytic
+  12.2°/day, the usual shallow-water lag. No breakup.
+- **Galewsky et al. 2004** (`test/sw_galewsky.test.mjs`, N=32, ∇⁴ at a
+  3 h timescale on the 2Δx mode): the unperturbed balanced jet holds at
+  2–5e-4 for three days and then goes unstable on its own, growing ×3.6
+  per day (e-folding ≈ 0.8 d) from grid-scale truncation noise — the
+  behaviour the paper describes for under-resolved grids, so the test
+  asserts the pre-onset window. With the 120 m perturbation the eddy
+  kinetic energy grows from 2e-4 to 0.9 of the total over six days,
+  e-folding ≈ 0.6 d through days 2–4, and the jet has rolled up by day
+  6. Mass exact.
+
+All three run in about a minute at N=32; `SW_TEST_N` selects other
+resolutions.
 
 ### M2 — Multi-layer σ-coordinate dynamics (`js/dynamics/sigmaCore.module.js`)
 
