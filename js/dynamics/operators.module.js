@@ -86,3 +86,16 @@ export function laplacianVelocity(mesh, u, out = new Float64Array(mesh.nEdges), 
   }
   return out;
 }
+
+export function laplacianScalar(mesh, phi, out = new Float64Array(mesh.nCells)) {
+  const { nCells, maxEdges, nEdgesOnCell, edgesOnCell, cellsOnCell, edgeSignOnCell, dcEdge, dvEdge, areaCell } = mesh;
+  for (let i = 0; i < nCells; i++) {
+    let sum = 0;
+    for (let k = 0; k < nEdgesOnCell[i]; k++) {
+      const e = edgesOnCell[maxEdges * i + k];
+      sum += dvEdge[e] * (phi[cellsOnCell[maxEdges * i + k]] - phi[i]) / dcEdge[e];
+    }
+    out[i] = sum / areaCell[i];
+  }
+  return out;
+}

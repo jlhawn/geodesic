@@ -1,0 +1,251 @@
+import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, laplacianScalar } from './operators.module.js';
+
+export const R_DRY = 287.06;
+export const CP_DRY = 1003.5;
+export const P0 = 101325;
+export const GRAVITY = 9.806;
+
+const A20 = Math.log(Math.pow(100, 1 / 9));
+const M20 = (1000 - Math.exp(10 * A20)) / 9000;
+const B20 = (Math.exp(10 * A20) - 550) / 450;
+
+/*
+ * Interface sigma values, top (0) to ground (1). The 20-layer set is the
+ * A-grid model's: eleven levels spaced geometrically from 0.001 to 0.1,
+ * then linear to 1.
+ */
+export function sigmaInterfaces(K = 20) {
+  const levels = new Float64Array(K + 1);
+  for (let x = 1; x <= K; x++) {
+    if (K === 20) {
+      levels[x] = x <= 11 ? Math.exp(A20 * (x - 1)) / 1000 : x === 20 ? 1 : M20 * x + B20;
+    } else {
+      levels[x] = x / K;
+    }
+  }
+  return levels;
+}
+
+/*
+ * Hydrostatic primitive equations in sigma coordinates on the C-grid.
+ * State: pi[C] surface pressure, theta[K*C] layer potential temperature,
+ * u[K*E] layer normal velocity (layer k occupies [k*C, (k+1)*C) and
+ * [k*E, (k+1)*E)). Interface quantities use K+1 slots per column, top
+ * first. Steps follow the A-grid column: mass flux and divergence per
+ * layer, dpi/dt, pi*sigma-dot telescoping to zero at the ground, Exner
+ * ratios from the exact layer integral of sigma^kappa, interface theta
+ * interpolated in Exner, geopotential integrated upward with each layer's
+ * theta over its own Exner span, then flux-form theta transport and the
+ * vector-invariant momentum equation with the RTSK PV flux.
+ */
+export function createSigmaCore(mesh, options = {}) {
+  const {
+    levels = sigmaInterfaces(20), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
+    nu4 = 0, nu4Theta = 0, forcing = null, surfaceGeopotential = null,
+  } = options;
+  const {
+    nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
+    cellsOnEdge, verticesOnEdge, cellsOnVertex, kiteAreasOnVertex, areaTriangle, dcEdge, dvEdge, fVertex,
+  } = mesh;
+  const K = levels.length - 1;
+  const kappa = R / cp;
+  const sigmaUpper = levels.subarray(0, K);
+  const sigmaLower = levels.subarray(1, K + 1);
+  const dSigma = Float64Array.from(sigmaLower, (s, k) => s - sigmaUpper[k]);
+  const sigmaMid = Float64Array.from(sigmaLower, (s, k) => 0.5 * (s + sigmaUpper[k]));
+
+  const piEdge = new Float64Array(E);
+  const flux = new Float64Array(K * E);
+  const divFlux = new Float64Array(K * C);
+  const piSigmaDot = new Float64Array((K + 1) * C);
+  const exnerLower = new Float64Array(K * C);
+  const exnerLayer = new Float64Array(K * C);
+  const dExnerDpi = new Float64Array(K * C);
+  const thetaLower = new Float64Array(K * C);
+  const geopotential = new Float64Array(K * C);
+  const thetaFlux = new Float64Array(E);
+  const divThetaFlux = new Float64Array(C);
+  const zeta = new Float64Array(V);
+  const piVertex = new Float64Array(V);
+  const qVertex = new Float64Array(V);
+  const qEdge = new Float64Array(E);
+  const kinetic = new Float64Array(C);
+  const phi = new Float64Array(C);
+  const gradPhi = new Float64Array(E);
+  const gradPi = new Float64Array(E);
+  const lap = new Float64Array(E);
+  const lap2 = new Float64Array(E);
+  const divScratch = new Float64Array(C);
+  const curlScratch = new Float64Array(V);
+  const lapTheta = new Float64Array(C);
+  const lapTheta2 = new Float64Array(C);
+
+  function diagnose(pi, theta) {
+    for (let k = 0; k < K; k++) {
+      const upper = sigmaUpper[k], lower = sigmaLower[k];
+      for (let i = 0; i < C; i++) {
+        const idx = k * C + i;
+        const exLower = Math.pow(pi[i] * lower / p0, kappa);
+        const exUpper = k === 0 ? 0 : exnerLower[idx - C];
+        const span = exLower * lower - exUpper * upper;
+        exnerLower[idx] = exLower;
+        exnerLayer[idx] = span / ((1 + kappa) * dSigma[k]);
+        dExnerDpi[idx] = (kappa / (1 + kappa)) * span / (pi[i] * dSigma[k]);
+      }
+    }
+    for (let k = 0; k < K - 1; k++) {
+      for (let i = 0; i < C; i++) {
+        const idx = k * C + i;
+        const t = (exnerLower[idx] - exnerLayer[idx]) / (exnerLayer[idx + C] - exnerLayer[idx]);
+        thetaLower[idx] = theta[idx] + t * (theta[idx + C] - theta[idx]);
+      }
+    }
+    for (let i = 0; i < C; i++) {
+      const bottom = (K - 1) * C + i;
+      geopotential[bottom] = (surfaceGeopotential ? surfaceGeopotential[i] : 0) + cp * theta[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
+      for (let k = K - 2; k >= 0; k--) {
+        const idx = k * C + i;
+        const below = idx + C;
+        geopotential[idx] = geopotential[below]
+          + cp * theta[below] * (exnerLayer[below] - exnerLower[idx])
+          + cp * theta[idx] * (exnerLower[idx] - exnerLayer[idx]);
+      }
+    }
+  }
+
+  function tendency(state, out) {
+    const [pi, theta, u] = state;
+    const [dPi, dTheta, dU] = out;
+
+    for (let e = 0; e < E; e++) piEdge[e] = 0.5 * (pi[cellsOnEdge[2 * e]] + pi[cellsOnEdge[2 * e + 1]]);
+    for (let k = 0; k < K; k++) {
+      const fk = flux.subarray(k * E, (k + 1) * E);
+      const uk = u.subarray(k * E, (k + 1) * E);
+      for (let e = 0; e < E; e++) fk[e] = piEdge[e] * uk[e];
+      divergence(mesh, fk, divFlux.subarray(k * C, (k + 1) * C));
+    }
+    for (let i = 0; i < C; i++) {
+      let sum = 0;
+      for (let k = 0; k < K; k++) sum += divFlux[k * C + i] * dSigma[k];
+      dPi[i] = -sum;
+      let cumulative = 0;
+      piSigmaDot[i] = 0;
+      for (let k = 0; k < K; k++) {
+        cumulative += divFlux[k * C + i] * dSigma[k];
+        piSigmaDot[(k + 1) * C + i] = -cumulative - sigmaLower[k] * dPi[i];
+      }
+      piSigmaDot[K * C + i] = 0;
+    }
+
+    diagnose(pi, theta);
+
+    for (let k = 0; k < K; k++) {
+      const off = k * C;
+      const fk = flux.subarray(k * E, (k + 1) * E);
+      for (let e = 0; e < E; e++) {
+        thetaFlux[e] = fk[e] * 0.5 * (theta[off + cellsOnEdge[2 * e]] + theta[off + cellsOnEdge[2 * e + 1]]);
+      }
+      divergence(mesh, thetaFlux, divThetaFlux);
+      for (let i = 0; i < C; i++) {
+        const idx = off + i;
+        const lowerFlow = piSigmaDot[(k + 1) * C + i];
+        const upperFlow = piSigmaDot[k * C + i];
+        const lowerTheta = k === K - 1 ? 0 : thetaLower[idx];
+        const upperTheta = k === 0 ? 0 : thetaLower[idx - C];
+        const vertical = (lowerFlow * lowerTheta - upperFlow * upperTheta - theta[idx] * (lowerFlow - upperFlow)) / (pi[i] * dSigma[k]);
+        dTheta[idx] = -(divThetaFlux[i] - theta[idx] * divFlux[idx]) / pi[i] - vertical;
+      }
+      if (nu4Theta > 0) {
+        laplacianScalar(mesh, theta.subarray(off, off + C), lapTheta);
+        laplacianScalar(mesh, lapTheta, lapTheta2);
+        for (let i = 0; i < C; i++) dTheta[off + i] -= nu4Theta * lapTheta2[i];
+      }
+    }
+
+    for (let v = 0; v < V; v++) {
+      let sum = 0;
+      for (let m = 0; m < 3; m++) sum += kiteAreasOnVertex[3 * v + m] * pi[cellsOnVertex[3 * v + m]];
+      piVertex[v] = sum / areaTriangle[v];
+    }
+    gradient(mesh, pi, gradPi);
+
+    for (let k = 0; k < K; k++) {
+      const off = k * C;
+      const uk = u.subarray(k * E, (k + 1) * E);
+      const fk = flux.subarray(k * E, (k + 1) * E);
+      const dUk = dU.subarray(k * E, (k + 1) * E);
+      curl(mesh, uk, zeta);
+      for (let v = 0; v < V; v++) qVertex[v] = (zeta[v] + fVertex[v]) / piVertex[v];
+      for (let e = 0; e < E; e++) qEdge[e] = 0.5 * (qVertex[verticesOnEdge[2 * e]] + qVertex[verticesOnEdge[2 * e + 1]]);
+      kineticEnergy(mesh, uk, kinetic);
+      for (let i = 0; i < C; i++) phi[i] = geopotential[off + i] + kinetic[i];
+      gradient(mesh, phi, gradPhi);
+      for (let e = 0; e < E; e++) {
+        const i = cellsOnEdge[2 * e], j = cellsOnEdge[2 * e + 1];
+        let pv = 0;
+        for (let s = 0; s < nEdgesOnEdge[e]; s++) {
+          const other = edgesOnEdge[maxEdgesOnEdge * e + s];
+          pv += weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[other] * fk[other] * 0.5 * (qEdge[e] + qEdge[other]);
+        }
+        const pgfPi = cp * 0.5 * (theta[off + i] * dExnerDpi[off + i] + theta[off + j] * dExnerDpi[off + j]) * gradPi[e];
+        const lowerFlow = 0.5 * (piSigmaDot[(k + 1) * C + i] + piSigmaDot[(k + 1) * C + j]);
+        const upperFlow = 0.5 * (piSigmaDot[k * C + i] + piSigmaDot[k * C + j]);
+        const lowerU = k === K - 1 ? 0 : 0.5 * (uk[e] + u[(k + 1) * E + e]);
+        const upperU = k === 0 ? 0 : 0.5 * (uk[e] + u[(k - 1) * E + e]);
+        const vertical = (lowerFlow * lowerU - upperFlow * upperU - uk[e] * (lowerFlow - upperFlow)) / (piEdge[e] * dSigma[k]);
+        dUk[e] = pv / dcEdge[e] - gradPhi[e] - pgfPi - vertical;
+      }
+      if (nu4 > 0) {
+        laplacianVelocity(mesh, uk, lap, divScratch, curlScratch);
+        laplacianVelocity(mesh, lap, lap2, divScratch, curlScratch);
+        for (let e = 0; e < E; e++) dUk[e] -= nu4 * lap2[e];
+      }
+    }
+
+    if (forcing) forcing(state, out, diagnostics);
+  }
+
+  const diagnostics = { K, C, E, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, geopotential, piSigmaDot, diagnose };
+
+  function mass(pi) {
+    let m = 0;
+    for (let i = 0; i < C; i++) m += mesh.areaCell[i] * pi[i];
+    return m / g;
+  }
+
+  return { K, levels, sigmaMid, tendency, diagnose, diagnostics, mass, arrays: { exnerLayer, exnerLower, geopotential, piSigmaDot, thetaLower } };
+}
+
+/*
+ * Held & Suarez 1994 forcing: Newtonian relaxation of temperature toward
+ * the prescribed radiative-equilibrium profile and Rayleigh friction in
+ * the boundary layer, as tendencies added to theta and u.
+ */
+export function createHeldSuarez(mesh, core, {
+  kf = 1 / 86400, ka = 1 / (40 * 86400), ks = 1 / (4 * 86400), sigmaB = 0.7,
+  deltaTy = 60, deltaThetaZ = 10, tMin = 200, tMax = 315, pRef = 1e5,
+} = {}) {
+  const { K, C, E, sigmaMid, kappa, cp, exnerLayer } = core.diagnostics;
+  const cosLat = Float64Array.from(mesh.latCell, Math.cos);
+  const sinLat = Float64Array.from(mesh.latCell, Math.sin);
+  const cosLatEdge = Float64Array.from(mesh.latEdge, Math.cos);
+  return function forcing(state, out) {
+    const [pi, theta, u] = state;
+    const [, dTheta, dU] = out;
+    for (let k = 0; k < K; k++) {
+      const s = sigmaMid[k];
+      const weight = Math.max(0, (s - sigmaB) / (1 - sigmaB));
+      for (let i = 0; i < C; i++) {
+        const idx = k * C + i;
+        const p = pi[i] * s;
+        const c2 = cosLat[i] * cosLat[i];
+        const tEq = Math.max(tMin, (tMax - deltaTy * sinLat[i] * sinLat[i] - deltaThetaZ * Math.log(p / pRef) * c2) * Math.pow(p / pRef, kappa));
+        const kT = ka + (ks - ka) * weight * c2 * c2;
+        dTheta[idx] -= kT * (theta[idx] - tEq / exnerLayer[idx]);
+      }
+      if (weight > 0) {
+        for (let e = 0; e < E; e++) dU[k * E + e] -= kf * weight * u[k * E + e];
+      }
+    }
+  };
+}
