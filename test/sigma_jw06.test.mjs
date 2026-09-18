@@ -77,7 +77,7 @@ function build(N) {
   const grid = new Grid(N);
   const mesh = buildMesh(grid, { radius: a, omega });
   const surface = Float64Array.from(mesh.latCell, (lat) => geopotentialJW(1, lat));
-  const levels = process.env.SIGMA_LEVELS === 'legacy' ? sigmaInterfaces(20) : stretchedSigmaInterfaces();
+  const levels = process.env.SIGMA_LEVELS === 'stretched' ? stretchedSigmaInterfaces() : sigmaInterfaces();
   const core = createSigmaCore(mesh, { levels, g, cp, R, p0, surfaceGeopotential: surface, nu4: hyperdiffusion(mesh, 3), nu4Theta: hyperdiffusion(mesh, 3) });
   core.surface = surface;
   const step = createRK4Arrays([mesh.nCells, core.K * mesh.nCells, core.K * mesh.nEdges]);

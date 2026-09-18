@@ -5,26 +5,34 @@ export const CP_DRY = 1003.5;
 export const P0 = 101325;
 export const GRAVITY = 9.806;
 
-const A20 = Math.log(Math.pow(100, 1 / 9));
-const M20 = (1000 - Math.exp(10 * A20)) / 9000;
-const B20 = (Math.exp(10 * A20) - 550) / 450;
+const CAM_L26_HYAI = [
+  0.00219406700000001, 0.00489520900000001, 0.009882418, 0.01805201,
+  0.02983724, 0.0446233400000002, 0.0616058700000002, 0.0785124300000004,
+  0.0773127100000002, 0.0759013100000003, 0.0742408600000002,
+  0.0722874400000002, 0.0699893299999998, 0.06728574, 0.06410509,
+  0.0603632200000002, 0.0559611100000001, 0.0507822500000001,
+  0.0446896000000001, 0.0375219099999999, 0.0290894900000001, 0.02084739,
+  0.01334443, 0.00708499000000001, 0.00252136, 0, 0,
+];
+const CAM_L26_HYBI = [
+  0, 0, 0, 0, 0, 0, 0, 0, 0.01505309, 0.03276228, 0.05359622,
+  0.0781062700000006, 0.1069411, 0.140863700000001, 0.180772, 0.227722,
+  0.282956200000001, 0.347936400000002, 0.4243822, 0.514316800000003,
+  0.620120200000002, 0.723535500000004, 0.817676800000001,
+  0.896215300000001, 0.953476100000003, 0.9851122, 1,
+];
 
 /*
- * The A-grid model's interface sigma values, top (0) to ground (1): for
- * K = 20, eleven levels spaced geometrically from 0.001 to 0.1, then
- * linear to 1; uniform otherwise. Kept for comparison runs; the model
- * defaults to stretchedSigmaInterfaces.
+ * Interface sigma values, top (0) to ground (1): the CAM 26-level hybrid
+ * grid that Jablonowski & Williamson 2006 ran on, read as sigma with
+ * p_s = p0 (hyai + hybi from HOMME's cami-26.ascii), plus the cap above
+ * CAM's 2.19 hPa lid that a sigma coordinate needs. 27 layers.
  */
-export function sigmaInterfaces(K = 20) {
-  const levels = new Float64Array(K + 1);
-  for (let x = 1; x <= K; x++) {
-    if (K === 20) {
-      levels[x] = x <= 11 ? Math.exp(A20 * (x - 1)) / 1000 : x === 20 ? 1 : M20 * x + B20;
-    } else {
-      levels[x] = x / K;
-    }
-  }
-  return levels;
+export function sigmaInterfaces() {
+  const levels = [0];
+  for (let k = 0; k < CAM_L26_HYAI.length; k++) levels.push(CAM_L26_HYAI[k] + CAM_L26_HYBI[k]);
+  levels[levels.length - 1] = 1;
+  return Float64Array.from(levels);
 }
 
 /*
@@ -56,7 +64,7 @@ export function stretchedSigmaInterfaces({ top = 0.01, tropopause = 0.15, bounda
  */
 export function createSigmaCore(mesh, options = {}) {
   const {
-    levels = stretchedSigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
+    levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
     nu4 = 0, nu4Theta = 0, forcing = null, surfaceGeopotential = null,
   } = options;
   const {

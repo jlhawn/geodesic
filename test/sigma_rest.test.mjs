@@ -50,11 +50,12 @@ test(`N=${N}: an isentropic column reproduces the analytic hydrostatic geopotent
 });
 
 test('sigma interfaces are monotone from 0 to 1', () => {
-  for (const levels of [sigmaInterfaces(20), sigmaInterfaces(10), stretchedSigmaInterfaces()]) {
+  for (const levels of [sigmaInterfaces(), stretchedSigmaInterfaces()]) {
     const K = levels.length - 1;
     assert.equal(levels[0], 0);
     assert.equal(levels[K], 1);
     for (let k = 1; k <= K; k++) assert.ok(levels[k] > levels[k - 1]);
   }
+  assert.equal(sigmaInterfaces().length, 28);
   assert.equal(stretchedSigmaInterfaces().length, 23);
 });

@@ -545,17 +545,26 @@ three arrays (`createRK4Arrays`).
   the analytic hydrostatic geopotential and the exact layer-mean Exner
   to 1e-12.
 - **Jablonowski & Williamson 2006** (`test/sigma_jw06.test.mjs`, N=16,
-  the 20 A-grid levels, θ initialized so the model's own hydrostatic
-  integration reproduces the analytic geopotential, `π` uniform, the
-  JW06 surface geopotential): the balanced base state holds for five
-  days with surface pressure within 999.5–1000.8 hPa and winds within
-  0.9 m/s of the initial field, mass to 1e-15. The 1 m/s perturbation
-  grows into the baroclinic wave on schedule — surface pressure
-  961/1024 hPa at day 10 at this 480 km resolution, deepening fastest
-  through days 7–10, against the paper's ~940 hPa at high resolution.
-- **A required closure on θ.** Without any θ dissipation the thin top
-  layers (Δσ ≈ 0.0008 above ~2 hPa) went unstable from day 3 in the
-  steady run — θ departures of hundreds of kelvin with no surface
+  θ initialized so the model's own hydrostatic integration reproduces
+  the analytic geopotential, `π` uniform, the JW06 surface
+  geopotential): the balanced base state holds for five days with
+  surface pressure within 999.5–1000.8 hPa and winds within 0.9 m/s of
+  the initial field, mass to 1e-15. The 1 m/s perturbation grows into
+  the baroclinic wave on schedule — surface pressure 961/1023 hPa at
+  day 10 at this 480 km resolution, deepening fastest through days
+  7–10, against the paper's ~940 hPa at high resolution.
+- **Levels.** The model's default is the CAM 26-level grid the paper was
+  run on (`sigmaInterfaces()`: HOMME's `cami-26.ascii` read as σ with
+  `p_s = p0`, plus the cap above CAM's 2.19 hPa lid, 27 layers). The
+  A-grid's 20 levels — eleven of them above 135 hPa and a single 800 m
+  boundary layer — are gone. `stretchedSigmaInterfaces()` (22 levels:
+  top at 10 hPa, 11 free-troposphere levels at 64 hPa, five boundary
+  layers at 30 hPa) is kept as an alternative; the three sets agree on
+  the JW06 wave to 3 hPa at day 10, and the stretched set is the one
+  that is stable without the θ closure.
+- **A required closure on θ.** Without any θ dissipation the A-grid
+  set's thin top layers (Δσ ≈ 0.0008 above ~2 hPa) went unstable from
+  day 3 in the steady run — θ departures of hundreds of kelvin with no surface
   signal — independently of the time step. Uniform layers avoid it,
   top-of-model Rayleigh drag makes it worse (it unbalances the jet),
   and a scale-selective ∇⁴ on θ at the same 3 h timescale as the
