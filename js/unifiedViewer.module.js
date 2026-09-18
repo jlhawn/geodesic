@@ -142,11 +142,13 @@ function inverseEqualEarthToVector(x, y) {
 export function initUnifiedViewer(container, grid, config = {}) {
   const {
     backgroundColor = 0x111111,
-    getColor = (cell) => cell.color 
+    getColor = (cell) => cell.color,
+    dynamicColors = false,
   } = config;
 
   // --- 1. Geometry Generation ---
   const pData = [], kData = [], iData = [], idxData = [], texDataArray = [];
+  const cellVertexStart = [], cellVertexCount = [];
   const colorHelper = new THREE.Color();
   let vertexCounter = 0, cellCounter = 0;
 
@@ -154,6 +156,8 @@ export function initUnifiedViewer(container, grid, config = {}) {
     const cv = cell.centerVertex; 
     const verts = cell.vertices || []; 
     const currentCellID = cellCounter++;
+    cellVertexStart.push(vertexCounter);
+    cellVertexCount.push(verts.length);
 
     texDataArray.push(cv.x, cv.y, cv.z, 1.0);
 
@@ -197,8 +201,24 @@ export function initUnifiedViewer(container, grid, config = {}) {
   geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(iData), 1).onUpload(disposeArray));
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pData), 3).onUpload(disposeArray));
   geometry.setAttribute('cellIndex', new THREE.BufferAttribute(new Float32Array(idxData), 1).onUpload(disposeArray));
-  geometry.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(kData), 3, true).onUpload(disposeArray));
+  const colorAttribute = new THREE.BufferAttribute(new Uint8Array(kData), 3, true);
+  if (!dynamicColors) colorAttribute.onUpload(disposeArray);
+  geometry.setAttribute('color', colorAttribute);
   geometry.computeBoundingSphere();
+
+  function updateColors(rgb) {
+    const array = colorAttribute.array;
+    for (let c = 0; c < cellCounter; c++) {
+      const r = rgb[3 * c], g = rgb[3 * c + 1], b = rgb[3 * c + 2];
+      let v = 3 * cellVertexStart[c];
+      for (let k = 0; k < cellVertexCount[c]; k++) {
+        array[v++] = r;
+        array[v++] = g;
+        array[v++] = b;
+      }
+    }
+    colorAttribute.needsUpdate = true;
+  }
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(backgroundColor);
@@ -413,6 +433,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
   resizeObserver.observe(container);
 
   return {
+    updateColors: dynamicColors ? updateColors : null,
     dispose: () => {
       resizeObserver.disconnect();
       renderer.dispose();
