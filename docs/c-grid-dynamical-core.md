@@ -1,0 +1,622 @@
+# C-Grid Dynamical Core on the ISEA Icosahedral Mesh
+
+Design document for replacing the climate model's A-grid horizontal
+dynamical core with a C-grid (TRiSK) formulation built on
+`js/grid.module.js`. Status: **draft for review**. Everything marked
+`VERIFY` must be checked against the primary references before
+implementation; every operator carries a test that catches sign and
+convention errors independently of anyone's memory of the formula.
+
+References:
+
+- Thuburn, Ringler, Skamarock & Klemp (2009), *Numerical representation of
+  geostrophic modes on arbitrarily structured C-grids*, J. Comput. Phys. 228.
+- Ringler, Thuburn, Klemp & Skamarock (2010), *A unified approach to energy
+  conservation and potential vorticity dynamics for arbitrarily-structured
+  C-grids*, J. Comput. Phys. 229. ("RTSK" below; the MPAS formulation.)
+- Williamson, Drake, Hack, Jakob & Swarztrauber (1992), the standard
+  shallow-water test suite.
+- Galewsky, Scott & Polvani (2004), barotropic-instability test case.
+- MPAS mesh specification (variable names below follow it where possible,
+  so the MPAS documentation and source can be used as a cross-check).
+
+---
+
+## 1. Why
+
+The A-grid core (all variables at cell centers) has been made stable, but
+every mechanism that stabilizes it also suppresses the weather it is
+supposed to produce. Measured on the current code:
+
+| mechanism | why it exists on the A-grid | cost to eddies |
+|---|---|---|
+| adjoint (transposed-gradient) divergence | energy-neutral pairing kills the 2Δx checkerboard null mode | rough pointwise output |
+| divergence-field Jacobi smoothing | hides the adjoint operator's roughness | removes ~10% of eddy-scale divergence per step |
+| divergence damping (ν=1e7) | residual checkerboard, gravity-wave noise | ~11 h e-fold on eddy secondary circulations |
+| strong ∇⁴ hyperdiffusion (1–3 h at 2Δx) | operator-generated grid noise | measured to be the dominant eddy suppressor: EKE doubling 18 d with it, 1.5 d without it (= the Eady-predicted rate) — but without it the grid dies in 10 days |
+
+The root cause is structural: with pressure and velocity collocated, the
+pressure gradient cannot see a 2Δx pressure checkerboard, so the
+gravity-wave subsystem has a null mode that must be damped from outside.
+On a C-grid the normal velocity lives on cell edges; the pressure gradient
+across an edge is a two-point difference between the adjacent cells, and
+the divergence of a cell is the sum of fluxes through its own edges. A
+checkerboard produces the *maximum* pressure force on every edge; the
+null mode does not exist. The stabilization stack above is deleted and
+only a closure-strength ∇⁴ (the sub-grid turbulence closure every model
+carries) remains.
+
+Everything vertical and everything physical is untouched (Section 8).
+
+### Non-goals
+
+Moisture, non-hydrostatic dynamics, topography (the C-grid makes it
+easier later, but the aqua-planet stays flat for now), higher-order
+transport schemes (2nd-order centered first; upgrade path noted), and a
+new time integrator (AB4 stays; RK3 is an optional later swap).
+
+---
+
+## 2. Mesh
+
+### 2.1 What `grid.module.js` already provides
+
+- Cell centers `centerVertex` (unit vectors) from the Snyder equal-area
+  (ISEA) projection; `10N²+2` cells with `N` cells per icosahedron edge.
+- `cell.index`: position in `Grid` iteration order (north pole 0, quads
+  0..9 row-major, south pole last); `grid.size = 10N²+2`.
+- `cell.neighbors`: the 5 or 6 neighbors in counter-clockwise order (viewed
+  from outside), every seam case handled, computed once at construction;
+  symmetric (A lists B ⇔ B lists A) and duplicate-free.
+- `cell.vertices[k]`: the unit-sphere circumcenter of `(center,
+  neighbors[k], neighbors[k+1])` — the Voronoi vertex, in CCW order — as a
+  `GridVertex` object shared by the three cells around it; `grid.vertices`
+  lists all `2C−4` of them by `vertex.index`. Because they are true
+  circumcenters of the Delaunay triangles, the mesh is exactly orthogonal:
+  every primal edge is perpendicular to its dual edge to roundoff. This is
+  the property TRiSK requires.
+- `cell.area`: exact spherical polygon area (sums to 4π to roundoff);
+  `cell.isPentagon`, `cell.isPole`.
+- `test/grid.test.mjs` certifies all of the above at N = 2, 3, 5, 8, 16
+  (`node --test`).
+
+Measured at N=32 (10,242 cells, ≈240 km spacing): 30,720 edges (= 3C−6),
+12 pentagons, primal/dual edge-length ratio `l_e/d_e` in [0.40, 0.89]
+(regular hexagon: 0.577), max/min cell area 1.24. The distortion is
+concentrated around the 12 pentagons and is intrinsic to icosahedral
+meshes; it degrades operator accuracy locally but not the scheme's
+conservation properties.
+
+### 2.2 The three staggered locations
+
+```
+        primal cell i (hexagon/pentagon): scalars   — mass, θ, π, Φ, K, divergence
+        primal edge e (between cells i,j): u_e      — normal velocity component
+        dual vertex v (triangle center):   ζ_v, q_v — vorticity, PV
+```
+
+Each edge `e` separates cells `i,j` and joins vertices `v1,v2`. Two
+lengths: `d_e` = arc distance between the cell centers (the dual edge),
+`l_e` = arc distance between the vertices (the primal edge). The rhombus
+`(i, v1, j, v2)` has area `½ d_e l_e`; the primal edge splits it into two
+triangles of area `¼ d_e l_e`, one in each cell, and the dual edge splits
+it into two triangles of area `¼ d_e l_e`, one in each dual triangle.
+These are planar identities: on the sphere with arc lengths the kite sum
+over all cells falls short of 4π by 4e-5 at N=32 (1e-5 at N=64), so they
+hold only to O(Δx²). The scheme needs an exact partition of area, not
+planar areas, so all areas are spherical:
+
+```
+A_i     = cell.area from Grid                       spherical polygon
+A_v     = spherical excess of triangle (i, j, k)    dual-triangle area
+R_{i,v} = area of spherical quadrilateral (x_i, m_e, x_v, m_e')   kite,
+          m_e = normalize(x_i + x_j) the point where edge e crosses its dual edge
+```
+
+With these, `Σ_v R_{i,v} = A_i` and `Σ_i R_{i,v} = A_v` hold to roundoff
+(measured 6e-15 at N=8, 2e-12 at N=128). The planar `¼ d_e l_e` appears
+only as the edge weight in the operators of Section 3, where the
+identities that matter (3.2, T1, T3) need only internal consistency.
+
+`EC(i)`: edges of cell i. `EV(v)`: the 3 edges meeting at vertex v.
+`ECP(e)`: the edges of the two cells sharing e, excluding e (10 for two
+hexagons).
+
+### 2.3 Orientation conventions (fixed; every operator below uses them)
+
+- `n_e`: unit normal to the primal edge at `m_e = normalize(x_i + x_j)`, the
+  point where the primal and dual edges cross (the primal edge's own
+  midpoint differs from it by up to 0.2 l_e near pentagons), pointing from
+  `cellsOnEdge[e][0]` to `cellsOnEdge[e][1]`, tangent to the sphere.
+- `t_e = k_e × n_e`, where `k_e = m_e` is the local vertical. `t_e` is `n_e` rotated 90° counter-clockwise when
+  viewed from outside the sphere.
+- `verticesOnEdge[e] = [v1, v2]` ordered so that `(x_v2 − x_v1) · t_e > 0`.
+- `n_{e,i} = +1` if `n_e` points out of cell i (i.e. `i = cellsOnEdge[e][0]`), else −1.
+- `t_{e,v} = +1` if traversing the dual edge in the `n_e` direction circulates
+  counter-clockwise around vertex v, else −1.
+- `u_e = u · n_e` is the prognostic normal velocity; `u⊥_e = u · t_e` is
+  the diagnosed tangential velocity.
+
+### 2.4 Data layout (structure-of-arrays, typed arrays)
+
+Cells (C = 10N²+2):
+
+| array | length | contents |
+|---|---|---|
+| `xCell` | 3C | unit position vectors |
+| `latCell`, `lonCell` | C | for Coriolis at cells (init, radiation, diagnostics) |
+| `areaCell` | C | `A_i` on the unit sphere × `a²` |
+| `nEdgesOnCell` | C | 5 or 6 |
+| `edgesOnCell`, `cellsOnCell`, `verticesOnCell` | 6C (padded with −1) | CCW order; `verticesOnCell[i][k]` is between `edgesOnCell[i][k]` and `[k+1]` |
+| `edgeSignOnCell` | 6C | `n_{e,i}` |
+| `kiteAreasOnCell` | 6C | `R_{i,v}` aligned with `verticesOnCell` |
+
+Edges (E = 3C−6):
+
+| array | length | contents |
+|---|---|---|
+| `cellsOnEdge`, `verticesOnEdge` | 2E | oriented per 2.3 |
+| `dcEdge`, `dvEdge` | E | `d_e`, `l_e` (meters) |
+| `xEdge`, `nEdge`, `tEdge` | 3E | midpoint, normal, tangent |
+| `nEdgesOnEdge` | E | size of `ECP(e)` (≤ 10) |
+| `edgesOnEdge`, `weightsOnEdge` | 10E (padded) | `ECP(e)` and TRiSK weights `w_{e,e'}` |
+| `fEdge` | E | Coriolis parameter at edge midpoint |
+
+Vertices (V = 2C−4):
+
+| array | length | contents |
+|---|---|---|
+| `xVertex` | 3V | circumcenters (deduplicated across the 3 cells that share each) |
+| `areaTriangle` | V | `A_v` |
+| `cellsOnVertex`, `edgesOnVertex` | 3V | CCW |
+| `edgeSignOnVertex` | 3V | `t_{e,v}` |
+| `kiteAreasOnVertex` | 3V | `R_{i,v}` |
+| `fVertex` | V | Coriolis parameter at vertex |
+
+Prognostic state, per layer k (K=20 layers, unchanged):
+`u[k*E+e]`, `theta[k*C+i]`; per column: `pi[i]`, `surfaceT[i]`.
+Diagnostic per layer: `massFlux[E]`, `uPerp[E]`, `divergence[C]`,
+`vorticity[V]`, `ke[C]`, plus the column diagnostics already present
+(Exner, geopotential, `pi*dSigma/dt`).
+
+Sizes at N=32, K=20: `u` 614k doubles, `theta` 205k. Fine.
+
+### 2.5 Mesh builder (`js/mesh.module.js`, pure geometry, testable standalone)
+
+1. Cell indices are `cell.index`; neighbors are `cell.neighbors`.
+2. Enumerate edges: for cell i and neighbor index k, the edge to
+   `cellsOnCell[i][k]` is created once (when `i < j`) and lies between
+   `verticesOnCell[i][k−1]` and `[k]`.
+3. Vertices are `grid.vertices`, already deduplicated and indexed;
+   `cellsOnVertex[v]` is `(i, nb[k], nb[k+1])` for any cell `i` whose
+   `vertices[k]` is `v` (CCW by construction).
+4. Compute lengths, areas, kites, normals/tangents, orientation signs.
+5. Compute TRiSK weights (Section 3.5).
+6. Compute `f` at vertices, edges, cells from latitude
+   (`f = 2Ω sin φ`, sidereal Ω).
+7. Emit typed arrays; the worker consumes only these (no `Grid` objects).
+
+Geometry tests (M0 acceptance):
+
+- Counts: `E = 3C−6`, `V = 2C−4`; every edge has 2 cells and 2 vertices;
+  every vertex has exactly 3 cells and 3 edges.
+- `Σ_v R_{i,v} = A_i` and `Σ_i R_{i,v} = A_v` to 1e-12 relative (spherical
+  kites); `Σ_e ¼ d_e l_e` matches `A_i` to O(Δx²) and no better.
+- Orthogonality: `|n_e · (x_v2 − x_v1)| / l_e < 1e-10` for every edge.
+- Orientation: `edgeSignOnCell` sums to zero flux for the constant vector
+  field (discrete divergence of a uniform tangent field is O(Δx²), not
+  O(1)); `t_{e,v}` gives positive circulation for a solid-body rotation.
+- Total area `4πa²` to 1e-12 relative.
+
+---
+
+## 3. Discrete operators
+
+All per layer; `i,j` cells, `e` edges, `v` vertices.
+
+### 3.1 Divergence (edges → cells)
+
+```
+D_i = (1/A_i) Σ_{e ∈ EC(i)} n_{e,i} F_e l_e
+```
+
+with `F_e` any edge flux (e.g. `m_e u_e`). Mass-conserving by
+construction: each edge's flux enters one cell and leaves the other with
+opposite sign, so `Σ_i A_i D_i = 0` to roundoff for any `F`.
+
+Test: uniform tangent field → `D` is O(Δx²) and its global area integral
+is < 1e-12 relative; solid-body rotation → `D` ≈ 0 pointwise.
+
+### 3.2 Gradient (cells → edge normal component)
+
+```
+(∇φ)_e = (φ_j − φ_i) / d_e        j = cellsOnEdge[e][1], i = cellsOnEdge[e][0]
+```
+
+This is the *only* horizontal derivative the momentum equation needs, and
+it is the one that sees the checkerboard. `Σ_e ½ d_e l_e (∇φ)_e F_e =
+−Σ_i A_i φ_i D_i(F)` holds exactly (discrete integration by parts) — the
+energy-consistency property the A-grid needed the adjoint construction to
+fake.
+
+Test: the identity above for random `φ`, `F`, to 1e-12 relative.
+
+### 3.3 Curl (edges → vertices)
+
+```
+ζ_v = (1/A_v) Σ_{e ∈ EV(v)} t_{e,v} u_e d_e
+```
+
+(Circulation around the dual triangle: `u_e` is the component along the
+dual edge of length `d_e`.) Absolute vorticity `η_v = ζ_v + f_v`.
+
+Test: solid-body rotation with angular velocity `ω` about the polar axis
+gives `ζ_v = 2ω sin φ_v` to O(Δx²); `Σ_v A_v ζ_v = 0` for any `u`.
+
+### 3.4 Kinetic energy (edges → cells)
+
+```
+K_i = (1/A_i) Σ_{e ∈ EC(i)} ¼ d_e l_e u_e²
+```
+
+Test: uniform field `U`: `K_i = ½|U|²` exactly on a regular hexagon, to
+O(Δx) elsewhere.
+
+### 3.5 Tangential velocity reconstruction (TRiSK)
+
+```
+u⊥_e = (1/d_e) Σ_{e' ∈ ECP(e)} w_{e,e'} l_{e'} u_{e'}
+
+w_{e,e'} = n_{e',i} t_{e,i} ( Σ_{v ∈ V(e→e', i)} R_{i,v} / A_i  −  ½ )      VERIFY
+```
+
+where `i` is the cell containing both `e` and `e'`, `V(e→e', i)` is the
+set of vertices of cell `i` passed when walking counter-clockwise around
+`i` from edge `e` to edge `e'`, and `t_{e,i}` is the sign making `t_e`
+point counter-clockwise around cell `i`. **The exact vertex-set
+convention (inclusive/exclusive endpoints, direction) must be verified
+against RTSK 2010 eq. 22–24 and the MPAS `weightsOnEdge` construction
+before implementation** — this is the one formula in the design that is
+easy to get subtly wrong, and the property tests below are what actually
+certify it:
+
+- **T1 (energy):** `w_{e,e'} = −w_{e',e}` for every pair. Equivalently the
+  Coriolis term does no work: `Σ_e ½ d_e l_e u_e (f u⊥_e) = 0` for any `u`
+  and constant `f`, to roundoff.
+- **T2 (consistency):** for a uniform field `U` on a regular hexagonal
+  patch, `u⊥_e = U · t_e` exactly; on the real mesh the error is O(Δx) and
+  decreases with N.
+- **T3 (PV compatibility):** `Σ_{e ∈ EC(i)} n_{e,i} l_e u⊥_e = −Σ_{v ∈ V(i)}
+  R_{i,v} ζ_v` for every cell and any `u` (the discrete "divergence of the
+  perpendicular field equals minus the cell-averaged curl"). This is the
+  property that makes the scheme conserve potential vorticity and lets
+  geostrophic balance be represented exactly (Thuburn et al. 2009).
+  VERIFY the exact statement.
+
+If T1 or T3 fails, the vertex-set convention is wrong; do not proceed to
+dynamics until they pass.
+
+### 3.6 Laplacian of velocity (for the ∇⁴ closure)
+
+```
+(∇²u)_e = (D_j − D_i)/d_e  −  (ζ_v2 − ζ_v1)/l_e
+(∇⁴u)_e = ∇²(∇²u)_e
+```
+
+(vector Laplacian = grad div − curl curl, evaluated with the operators
+above). Scale-selective by construction — no first-derivative
+contamination, unlike the hex ring-average Laplacian on the A-grid — so
+the (2Δx/L)⁴ selectivity estimate should actually hold. Test: on a
+uniform field both terms vanish; on a checkerboard `u` the result has the
+expected sign and magnitude.
+
+### 3.7 Cell-center velocity reconstruction (edges → cell vectors)
+
+```
+v_i = (1/A_i) Σ_{e ∈ EC(i)} ½ d_e l_e u_e n_e
+```
+
+Exact for a uniform field on a regular hexagon (`Σ_e ½ d l (U·n_e) n_e =
+½ d l · 3U = A_i U`). Used only by physics that need a speed (surface
+drag, sensible heat flux), by the Rayleigh sponge, and by the viewer.
+Pole cells need no special basis: `v_i` is a 3-vector in the tangent
+plane; zonal/meridional components are computed for display only.
+
+---
+
+## 4. Governing equations on the C-grid
+
+Vertical coordinate `σ = p/π`, K layers, unchanged. Per layer `k` the
+layer mass per area is `m_i = π_i Δσ_k / g`; edge mass `m_e = ½(m_i + m_j)`
+(centered; an upwinded variant is a later option). `Δσ_k` is fixed so
+`m_e u_e Δ`-bookkeeping reduces to `π_e u_e Δσ_k`.
+
+### 4.1 Continuity and vertical velocity (Steps 1–3, structure preserved)
+
+```
+F_{e,k}      = π_e u_{e,k}                                    (per unit Δσ)
+D_{i,k}      = (1/A_i) Σ_e n_{e,i} F_{e,k} l_e
+∂π_i/∂t      = −Σ_k D_{i,k} Δσ_k
+(π σ̇)_{i,k+½} = −Σ_{k'≤k} D_{i,k'} Δσ_{k'}  −  σ_{k+½} ∂π_i/∂t
+```
+
+The last line is exactly the current `calculate_lower_pi_dSigma_dt`; it
+telescopes to zero at the ground because `∂π/∂t` is exactly the column
+sum (no smoothing is folded in — the π smoothing filter is deleted along
+with the reason for it).
+
+### 4.2 Momentum (vector-invariant form, on edges)
+
+```
+∂u_e/∂t = + η_e u⊥_e
+          − (K_j − K_i)/d_e
+          − (Φ_j − Φ_i)/d_e  −  c_p θ_e (∂Π/∂π)_e (π_j − π_i)/d_e
+          − [ (π σ̇ u)_{e,k+½} − (π σ̇ u)_{e,k−½} − u_{e,k} ((π σ̇)_{e,k+½} − (π σ̇)_{e,k−½}) ] / (π_e Δσ_k)
+          + F_e
+```
+
+- `η_e = ½(η_v1 + η_v2)`: absolute vorticity averaged to the edge. RTSK's
+  fully PV-conserving variant uses the PV-weighted mass flux `q_e F⊥_e`
+  with `q_v = η_v/m_v`, `m_v = (1/A_v) Σ_i R_{i,v} m_i`; adopt that form
+  in M1 if the simpler one shows PV drift in the Rossby–Haurwitz test.
+- **Sign of the Coriolis/vorticity term**, derived from the conventions in
+  2.3: `−η (k×u) · n_e = +η u⊥_e`. Sanity check: NH, `Φ` decreasing
+  poleward, edge with `n_e` northward ⇒ `t_e` westward, steady state gives
+  `u = −(∂Φ/∂y)/f > 0`, westerly. The geostrophic-init sign error that
+  produced the "very wobbly" start on the A-grid came from deriving this
+  by hand from the textbook convention instead of from the code's; here
+  the convention is fixed above and **Williamson TC2 (Section 6) is the
+  test that certifies the sign** — a wrong sign fails it within hours.
+- Pressure-gradient force: the same two-term σ-coordinate PGF as now
+  (`−∇Φ|_σ − c_p θ ∂Π/∂π ∇π`), with both gradients now honest two-point
+  edge differences; `θ_e`, `(∂Π/∂π)_e` are cell averages to the edge.
+- Vertical advection: the current energy-consistent flux-difference form,
+  with `(π σ̇)_e` averaged from the two cells and `u_{e,k±½}` averaged
+  between layers.
+- `F_e`: Rayleigh drag terms (PBL `σ>0.7`, top `σ<0.05`), bulk surface drag
+  on the lowest layer using `|v|_e = ½(|v_i| + |v_j|)` from 3.7, and the
+  ∇⁴ closure `−K₄ (∇⁴u)_e`.
+
+### 4.3 Thermodynamics (cells)
+
+Flux form, consistent with the mass flux used in continuity so that
+`∫θ dm` is conserved exactly by horizontal transport:
+
+```
+∂(π θ)_i/∂t Δσ_k = −(1/A_i) Σ_e n_{e,i} F_{e,k} θ_e l_e Δσ_k
+                   − [ (π σ̇ θ)_{i,k+½} − (π σ̇ θ)_{i,k−½} ]
+                   + π_i Δσ_k Q_i / (c_p Π_i)
+```
+
+with `θ_e = ½(θ_i + θ_j)` (second-order centered) initially. Upgrade
+path: 3rd/4th-order upwind-biased flux (Skamarock & Gassmann 2011) when
+the centered scheme's dispersive ripples at fronts become the limiting
+noise source. The interface `θ_{k±½}` interpolation and the radiation
+heating `Q_i` are unchanged from the current code. The thermal ∇²
+diffusion on θ is dropped; add a ∇⁴ on θ only if fronts demand it.
+
+### 4.4 Time integration
+
+Adams–Bashforth (order ramp 1→4) as now; the state to step is the flat
+`u`, `theta`, `pi`, `surfaceT` arrays, so the stepper history becomes a
+few large typed arrays instead of an object per variable. `dt` from the
+gravity-wave CFL using the *minimum* `d_e` (pentagon neighborhoods have
+the shortest dual edges), with the same ~2× margin found empirically on
+the A-grid (`c·dt/d_min ≲ 0.3–0.4` with `c ≈ 300 m/s`). At N=32 expect
+`dt ≈ 300 s` again. RK3 is the optional later swap if the AB4
+imaginary-axis limit bites at finer N.
+
+---
+
+## 5. What is deleted, what is kept
+
+Deleted from `sim.js` (A-grid life support, never ported):
+
+- `GradientHelper` (lerp stencils, 2-neighbor selections), `ColumnNeighbor`
+  / `LayerNeighbor` and all velocity rotation between local bases.
+- Adjoint divergence: `extractStencilWeights`, `divIncoming`,
+  `divergenceOfPiV`/`divergenceOfV`.
+- Divergence-field Jacobi smoothing (`smooth_divergence_layers`,
+  `DIVERGENCE_SMOOTHING_*`).
+- Divergence damping (`gradDivergence`, `DIVERGENCE_DAMPING_COEFFICIENT`).
+  Keep a *small* optional `ν ∇_e D` term available: hexagonal C-grids do
+  carry an extra branch of velocity degrees of freedom (E = 3C vs. the 2C
+  a vector field needs) and MPAS retains weak divergence damping for it.
+- ∇² eddy viscosity and the hex ring-average `laplacian()`; the π
+  smoothing filter (`pi_smoothing`); the surface-pressure diffusion.
+- `RayleighSponge` (zonal-mean relaxation): replace with the existing
+  top-of-model Rayleigh friction toward zero (`σ < 0.05`), which is the
+  wave absorber the sponge was meant to be. The ablation fleet showed the
+  sponge neither helps stability nor limits eddies at current settings.
+- Per-column `Layer`/`Column` object graph for the horizontal state
+  (`layer.v`, `lap2v`, `divPiV`, …) → flat arrays.
+
+Kept, ported to operate on flat arrays (no algorithmic change):
+
+- σ levels, `calculateSigma`, `initialThetas`, the Exner steps 4–6, the
+  interface-θ hydrostatic integration (step 8), the σ̇ telescoping (steps
+  1–3, now fed by the edge divergence).
+- Gray longwave radiation column (`RadiationColumn`), solar geometry, slab
+  ocean heat capacity, surface albedo.
+- Bulk surface drag and sensible heat flux (speed from 3.7), gustiness
+  floor, dry convective adjustment, PBL and top Rayleigh drag.
+- Initialization: latitude-dependent surface temperature and σ-tapered θ
+  shift, balanced surface pressure (bisection on a level 500 hPa
+  surface), the wavenumber-5 eddy seed, the ±30°/±60° pressure bands.
+  Geostrophic wind initialization changes representation: compute the
+  cell-center geostrophic vector `v_i` from the cell-center PGF, then
+  project to edges, `u_e = ½(v_i + v_j) · n_e`; TC2 certifies balance.
+- Positivity floors, sidereal day, axial tilt, dt scaling.
+- The synoptic-chart viewer path: cell-centered scalars (π, θ, T, z500)
+  are unchanged; wind vectors come from 3.7; the contour layer's
+  triangulation is the dual mesh, which the mesh builder now provides
+  directly.
+
+---
+
+## 6. Validation protocol and milestones
+
+Each milestone has acceptance tests that gate the next. All tests are Node
+scripts under `test/` (the same harness style used throughout the A-grid
+work; `three.module.js` imports cleanly in Node).
+
+### M0 — Mesh (`js/mesh.module.js`)
+
+Geometry tests of Section 2.5; TRiSK property tests T1–T3 of Section 3.5;
+operator identity tests of 3.1–3.4 and 3.6–3.7 on analytic fields, with
+error decreasing at the expected order between N=16, 32, 64.
+
+### M1 — Shallow-water core (single layer, `js/dynamics/shallowWater.module.js`)
+
+Implements 3.1–3.7 and the vector-invariant momentum equation with
+`h` in place of `π`. Purpose: certify the horizontal core in isolation,
+where exact solutions exist.
+
+- **Williamson TC2** (steady geostrophic zonal flow; `u₀ = 2πa/12 days`,
+  `g h₀ = 2.94×10⁴ m²/s²`): an exact steady state. Acceptance: relative
+  `l₂` error in `h` after 5 days < 1e-3 at N=32 and decreasing ~2× per
+  doubling of N. **This test is the sign/convention oracle**: any error in
+  the Coriolis term, PGF, or TRiSK weights breaks the balance within
+  hours.
+- **Williamson TC6** (Rossby–Haurwitz wavenumber 4, 14 days): pattern
+  propagates without breaking up; total energy and potential enstrophy
+  drift < 0.1% over 14 days with the ∇⁴ closure off (TRiSK conserves both
+  in space; the residual is time truncation).
+- **Galewsky et al. 2004** (barotropic instability of a mid-latitude jet
+  with a small perturbation): the perturbation must grow at the published
+  rate and the vorticity field at day 6 must match the reference
+  qualitatively. This is the eddy-growth acid test in a setting with a
+  known answer, and it directly probes the question that motivated the
+  port.
+- Mass conserved to roundoff; energy conserved to time-truncation
+  accuracy in inviscid runs; no NaN for 30 days with closure on.
+
+### M2 — Multi-layer σ-coordinate dynamics (`js/dynamics/sigmaCore.module.js`)
+
+Bolt the column structure onto the SW core: K layers, continuity/σ̇,
+Exner/geopotential, PGF, vertical advection, θ transport. Radiation off.
+
+- Atmosphere at rest with horizontally uniform θ stays at rest to
+  roundoff (uniform `π` gives zero PGF everywhere — the same test the
+  A-grid passed).
+- Balanced latitude-dependent initialization (Section 5) rings at
+  ≤ 1 hPa (A-grid achieved 0.3–0.7 hPa).
+- Held–Suarez-style forcing (Newtonian θ relaxation, PBL drag) for 200
+  days: stable; zonal-mean jets 25–40 m/s at ±40–50°; EKE saturates at
+  tens of m²/s². This is the standard dry-core benchmark and gives a
+  literature comparison independent of our radiation scheme.
+
+### M3 — Physics hookup
+
+Port radiation, surface fluxes, convective adjustment, drags, closure,
+initialization. Run the current A-grid baseline and the C-grid model from
+identical initial states:
+
+- Day-1 and day-5 zonal-mean profiles of `π`, `T_s`, `u` at layers 9/14
+  agree to within the A-grid's known operator error (a few percent) — the
+  two cores are solving the same equations.
+- 90-day stability with hyperdiffusion at closure strength (2Δx timescale
+  ≥ 30 h) and **no** divergence smoothing/damping.
+- EKE doubling time ≤ 3 days (Eady prediction for the current base state:
+  1.5 days; A-grid delivered 14–19 days).
+- The emergence experiment: subpolar surface lows at ±60° appearing in the
+  zonal-mean profile within ~60 simulated days at N=32.
+
+### M4 — Worker and viewer
+
+Worker protocol carries edge arrays; cell scalars and reconstructed cell
+vectors go to the shared buffers the viewer already reads; synoptic
+contour layer uses the mesh's dual triangulation. `unifiedViewer.module.js`
+gains a model overlay mode (cell colors from the shared buffers instead of
+terrain) with the existing projection/camera code.
+
+### M5 — Dissipation diet and emergence
+
+With the stack deleted, tune only the single remaining knob (∇⁴
+timescale) by the Galewsky and Held–Suarez results, then run the
+long emergence experiments. The A-grid baseline stays available for
+side-by-side climatology.
+
+---
+
+## 7. Module layout in this repo
+
+```
+js/
+  grid.module.js            existing: ISEA cells, neighbors, Voronoi vertices
+  isea.module.js            existing: projection
+  mesh.module.js            NEW  M0: edges, vertices, kites, TRiSK weights → typed arrays
+  dynamics/
+    operators.module.js     NEW  M0: div, grad, curl, KE, uPerp, ∇², reconstruct
+    shallowWater.module.js  NEW  M1: single-layer test core
+    sigmaCore.module.js     NEW  M2: K-layer hydrostatic core (steps 1–8 on arrays)
+  physics/
+    radiation.module.js     ported from sim.js RadiationColumn
+    surface.module.js       ported: drag, sensible heat, slab ocean, convective adjustment
+    init.module.js          ported: thermal init, balance, seed, bands, geostrophic winds
+  model.worker.js           NEW: assembles core + physics, steps, fills shared buffers
+  unifiedViewer.module.js   existing, gains model-overlay mode
+test/
+  mesh.test.mjs, operators.test.mjs, trisk.test.mjs, sw_tc2.mjs, sw_tc6.mjs,
+  sw_galewsky.mjs, rest_state.mjs, held_suarez.mjs, baseline_compare.mjs
+```
+
+Performance envelope at N=32, K=20: per step, roughly 6 flops/cell for
+divergence, 1/edge for gradient, 3/vertex for curl, 10/edge for TRiSK,
+6/cell for KE — order 50 flops per edge per layer, ~3×10⁷ per step, on
+flat typed arrays. Comparable to or faster than the current object-graph
+core (which does more work per cell through the adjoint gather lists).
+
+---
+
+## 8. Risks and open questions
+
+1. **TRiSK weight convention.** The single most error-prone formula.
+   Mitigation: implement against RTSK eq. 22–24 and the MPAS mesh spec,
+   certify with T1–T3 before any dynamics, and treat TC2 as the final
+   oracle. Do not reason about signs from memory (Section 4.2 note).
+2. **Pentagon-neighborhood accuracy.** `l_e/d_e` spans 0.40–0.89 there;
+   TRiSK's reconstruction is only first-order on irregular cells and MPAS
+   reports "pentagon noise" as its dominant grid imprint. Mitigation: the
+   closure-strength ∇⁴; measure TC2 error localization in M1; local
+   sensitivity to N. If severe, the ISEA cell centers can be relaxed
+   toward centroids (a few Lloyd iterations — MPAS uses centroidal Voronoi
+   tessellations for exactly this reason) at the cost of the equal-area
+   property.
+3. **Extra velocity degrees of freedom.** E = 3C edges carry more
+   information than a 2-component vector field needs, so hexagonal
+   C-grids have a computational mode branch in the divergent part.
+   TRiSK keeps it from growing; the ∇⁴ and, if needed, a weak divergence
+   damping keep it quiet. Watch for it in TC6 as small-scale divergence
+   noise.
+4. **Interaction with AB4.** The C-grid has no null mode but its
+   gravity-wave phase speeds at 2Δx are *higher* than the smoothed A-grid
+   operators' (the A-grid's low gain at grid scale was accidentally
+   softening the CFL). Expect the same `dt` at the same spacing but less
+   margin; RK3 is the fallback.
+5. **Coriolis placement.** `f` at vertices for the vorticity, at edges for
+   the geostrophic init. Poles are ordinary pentagon cells — no
+   singularity, no arbitrary basis — but `f` at the pole *vertex ring* is
+   the maximum; check TC2 error near the poles specifically.
+6. **Base-state physics is not fixed by this work.** The Eady analysis
+   showed the free troposphere is ~1.65× too statically stable (gray
+   radiation equilibrium), capping eddy growth at ~3× slower than Earth
+   even with perfect numerics. That is a radiation-scheme item for after
+   M5.
+7. **Two large changes remain stacked** (new mesh + new core) by decision.
+   The milestone structure — M0/M1 certify the mesh and horizontal core
+   against exact solutions before any column physics is attached — is the
+   mitigation: if M1 passes TC2/TC6/Galewsky, the mesh and operators are
+   right, and any later regression is in M2/M3.
+
+---
+
+## 9. Decisions recorded
+
+- C-grid built directly on the ISEA `Grid`; no intermediate port of the
+  A-grid model to the new mesh.
+- The integrated model lives in this repository.
+- Second-order centered transport and AB4 first; higher-order transport
+  and RK3 are upgrade paths, not prerequisites.
+- The A-grid model in `~/Desktop/climate_model` is frozen as the
+  validation baseline for M3.
