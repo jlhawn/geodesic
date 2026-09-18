@@ -10,9 +10,10 @@ const M20 = (1000 - Math.exp(10 * A20)) / 9000;
 const B20 = (Math.exp(10 * A20) - 550) / 450;
 
 /*
- * Interface sigma values, top (0) to ground (1). The 20-layer set is the
- * A-grid model's: eleven levels spaced geometrically from 0.001 to 0.1,
- * then linear to 1.
+ * The A-grid model's interface sigma values, top (0) to ground (1): for
+ * K = 20, eleven levels spaced geometrically from 0.001 to 0.1, then
+ * linear to 1; uniform otherwise. Kept for comparison runs; the model
+ * defaults to stretchedSigmaInterfaces.
  */
 export function sigmaInterfaces(K = 20) {
   const levels = new Float64Array(K + 1);
@@ -24,6 +25,21 @@ export function sigmaInterfaces(K = 20) {
     }
   }
   return levels;
+}
+
+/*
+ * Interface sigma values with the levels placed where the dynamics are:
+ * one layer above `top`, geometric spacing from `top` to `tropopause`,
+ * uniform spacing through the free troposphere to `boundaryTop`, and
+ * finer uniform spacing in the boundary layer.
+ */
+export function stretchedSigmaInterfaces({ top = 0.01, tropopause = 0.15, boundaryTop = 0.85, stratosphere = 5, troposphere = 11, boundary = 5 } = {}) {
+  const levels = [0, top];
+  for (let k = 1; k <= stratosphere; k++) levels.push(top * Math.pow(tropopause / top, k / stratosphere));
+  for (let k = 1; k <= troposphere; k++) levels.push(tropopause + (boundaryTop - tropopause) * k / troposphere);
+  for (let k = 1; k <= boundary; k++) levels.push(boundaryTop + (1 - boundaryTop) * k / boundary);
+  levels[levels.length - 1] = 1;
+  return Float64Array.from(levels);
 }
 
 /*
@@ -40,7 +56,7 @@ export function sigmaInterfaces(K = 20) {
  */
 export function createSigmaCore(mesh, options = {}) {
   const {
-    levels = sigmaInterfaces(20), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
+    levels = stretchedSigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
     nu4 = 0, nu4Theta = 0, forcing = null, surfaceGeopotential = null,
   } = options;
   const {
@@ -49,6 +65,7 @@ export function createSigmaCore(mesh, options = {}) {
   } = mesh;
   const K = levels.length - 1;
   const kappa = R / cp;
+  let applyForcing = forcing;
   const sigmaUpper = levels.subarray(0, K);
   const sigmaLower = levels.subarray(1, K + 1);
   const dSigma = Float64Array.from(sigmaLower, (s, k) => s - sigmaUpper[k]);
@@ -202,7 +219,11 @@ export function createSigmaCore(mesh, options = {}) {
       }
     }
 
-    if (forcing) forcing(state, out, diagnostics);
+    if (applyForcing) applyForcing(state, out, diagnostics);
+  }
+
+  function setForcing(fn) {
+    applyForcing = fn;
   }
 
   const diagnostics = { K, C, E, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, geopotential, piSigmaDot, diagnose };
@@ -213,7 +234,7 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, tendency, diagnose, diagnostics, mass, arrays: { exnerLayer, exnerLower, geopotential, piSigmaDot, thetaLower } };
+  return { K, levels, sigmaMid, tendency, diagnose, diagnostics, mass, setForcing, arrays: { exnerLayer, exnerLower, geopotential, piSigmaDot, thetaLower } };
 }
 
 /*

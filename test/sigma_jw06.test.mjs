@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createSigmaCore, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, stretchedSigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 import { EARTH, DAY, edgeNormalVelocity, hyperdiffusion } from './helpers/sphere.mjs';
 
@@ -77,7 +77,8 @@ function build(N) {
   const grid = new Grid(N);
   const mesh = buildMesh(grid, { radius: a, omega });
   const surface = Float64Array.from(mesh.latCell, (lat) => geopotentialJW(1, lat));
-  const core = createSigmaCore(mesh, { levels: sigmaInterfaces(20), g, cp, R, p0, surfaceGeopotential: surface, nu4: hyperdiffusion(mesh, 3), nu4Theta: hyperdiffusion(mesh, 3) });
+  const levels = process.env.SIGMA_LEVELS === 'legacy' ? sigmaInterfaces(20) : stretchedSigmaInterfaces();
+  const core = createSigmaCore(mesh, { levels, g, cp, R, p0, surfaceGeopotential: surface, nu4: hyperdiffusion(mesh, 3), nu4Theta: hyperdiffusion(mesh, 3) });
   core.surface = surface;
   const step = createRK4Arrays([mesh.nCells, core.K * mesh.nCells, core.K * mesh.nEdges]);
   return { mesh, core, step };
