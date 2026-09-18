@@ -5,30 +5,29 @@ const AVERAGE_SURFACE_T = 288;
 const EQUATOR_POLE_CONTRAST = 45;
 
 /*
- * Reference θ(σ) at the A-grid model's layer midpoints, the profile that
- * model equilibrated against a 305.086 K surface. Interpolated in ln σ.
+ * Radiative–convective equilibrium θ(σ) of a single column over a surface
+ * held at surfaceT: the model's own gray radiation and sensible heat
+ * flux, with convective adjustment after every step, integrated until
+ * the column stops changing. Computed on column 0 of the given model.
  */
-const REFERENCE_PROFILE = [
-  [0.0005, 2054.310], [0.0013, 1474.639], [0.0022, 1274.302], [0.0037, 1101.444], [0.0062, 952.410],
-  [0.0103, 824.078], [0.0172, 713.805], [0.0287, 619.371], [0.0479, 538.942], [0.0800, 471.030],
-  [0.1334, 414.425], [0.2131, 371.456], [0.3057, 343.659], [0.3983, 326.167], [0.4908, 313.928],
-  [0.5834, 304.787], [0.6760, 297.649], [0.7686, 291.890], [0.8611, 287.126], [0.9537, 283.107],
-];
-
-export function referenceTheta(sigma) {
-  const x = Math.log(sigma);
-  const first = REFERENCE_PROFILE[0], last = REFERENCE_PROFILE[REFERENCE_PROFILE.length - 1];
-  if (sigma <= first[0]) return first[1];
-  if (sigma >= last[0]) return last[1];
-  for (let k = 1; k < REFERENCE_PROFILE.length; k++) {
-    const [s1, t1] = REFERENCE_PROFILE[k];
-    if (sigma <= s1) {
-      const [s0, t0] = REFERENCE_PROFILE[k - 1];
-      const f = (x - Math.log(s0)) / (Math.log(s1) - Math.log(s0));
-      return t0 + f * (t1 - t0);
+export function equilibriumProfile(model, { surfaceT = REFERENCE_SURFACE_T, days = 600, dt = 900, windSpeed = 3, p0 = 101325 } = {}) {
+  const { core, radiation, surface } = model;
+  const { K, C, dSigma, cp, g, sigmaMid, exnerLayer } = core.diagnostics;
+  const pi = new Float64Array(C).fill(p0);
+  const theta = new Float64Array(K * C);
+  core.diagnoseColumn(0, pi, theta);
+  for (let k = 0; k < K; k++) theta[k * C] = surfaceT * Math.pow(sigmaMid[k], 0.19) / exnerLayer[k * C];
+  const steps = Math.round(days * 86400 / dt);
+  for (let n = 0; n < steps; n++) {
+    core.diagnoseColumn(0, pi, theta);
+    radiation.column(0, p0, theta, surfaceT, windSpeed);
+    for (let k = 0; k < K; k++) {
+      const massPerArea = p0 * dSigma[k] / g;
+      theta[k * C] += dt * radiation.layerFlux[k] / (cp * massPerArea) / exnerLayer[k * C];
     }
+    surface.convectiveAdjustColumn(0, pi, theta);
   }
-  return last[1];
+  return Float64Array.from({ length: K }, (_, k) => theta[k * C]);
 }
 
 export function surfaceTemperature(lat) {
@@ -52,19 +51,21 @@ function geopotentialHeightAt(core, i, pi, pressure) {
 }
 
 /*
- * The A-grid model's initial state on the C-grid: the reference profile
- * shifted by each column's surface-temperature offset (tapered by σ), a
+ * Initial state: the equilibrium profile shifted by each column's
+ * surface-temperature offset (tapered by σ), a
  * wavenumber-5 θ seed at ±45°, surface pressure set by bisection so the
  * 500 hPa surface is level, optionally the hand-drawn subtropical-high /
  * subpolar-low pressure bands (off: they are not balanced by anything and
  * ring at 10 hPa), and winds in geostrophic balance with the model's own
  * pressure gradient force, tapered to zero inside ±15°.
  */
-export function initializeState(mesh, core, {
+export function initializeState(model, {
   p0 = 101325, seedAmplitude = 2, seedWavenumber = 5, seedLatitude = 45, seedWidth = 15,
-  bands = false, geostrophic = true, referencePressure = 50000, taperLatitude = 15,
+  bands = false, geostrophic = true, referencePressure = 50000, taperLatitude = 15, profile = null,
 } = {}) {
+  const { mesh, core } = model;
   const { K, C, E, sigmaMid, cp, exnerLayer, dExnerDpi, geopotential } = core.diagnostics;
+  const reference = profile ?? equilibriumProfile(model, { p0 });
   const { nCells, latCell, lonCell, areaCell, cellsOnEdge, dcEdge, nEdge, xCell, fCell } = mesh;
   const deg = Math.PI / 180;
   const pi = new Float64Array(C).fill(p0);
@@ -79,7 +80,7 @@ export function initializeState(mesh, core, {
     const envelope = Math.exp(-north * north) + Math.exp(-south * south);
     const wave = Math.cos(seedWavenumber * lonCell[i]);
     for (let k = 0; k < K; k++) {
-      theta[k * C + i] = referenceTheta(sigmaMid[k]) + offset * sigmaMid[k] + seedAmplitude * envelope * wave * sigmaMid[k];
+      theta[k * C + i] = reference[k] + offset * sigmaMid[k] + seedAmplitude * envelope * wave * sigmaMid[k];
     }
   }
 

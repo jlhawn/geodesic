@@ -6,7 +6,7 @@ import { createSigmaCore, P0, CP_DRY } from '../js/dynamics/sigmaCore.module.js'
 import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR } from '../js/physics/radiation.module.js';
 import { createSurface } from '../js/physics/surface.module.js';
 import { createModel } from '../js/model.module.js';
-import { referenceTheta } from '../js/physics/init.module.js';
+import { initializeState } from '../js/physics/init.module.js';
 
 const N = +(process.env.PHYSICS_TEST_N ?? 6);
 const grid = new Grid(N);
@@ -111,10 +111,9 @@ test('surface and boundary-layer drag only remove kinetic energy', () => {
 
 test('the assembled model steps a uniform atmosphere without blowing up', () => {
   const model = createModel(new Grid(4));
-  const [pi, theta, u, surfaceT] = model.state;
-  pi.fill(P0);
-  surfaceT.fill(288);
-  for (let k = 0; k < model.core.K; k++) for (let i = 0; i < model.mesh.nCells; i++) theta[k * model.mesh.nCells + i] = referenceTheta(model.core.sigmaMid[k]);
+  const init = initializeState(model, { seedAmplitude: 0, geostrophic: false });
+  for (let a = 0; a < 4; a++) model.state[a].set(init[a]);
+  model.state[0].fill(P0);
   for (let n = 0; n < 20; n++) model.step(600);
   const d = model.diagnostics();
   assert.ok(Number.isFinite(d.maxWind) && d.maxWind < 30);

@@ -43,34 +43,38 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness 
   }
 
   /*
-   * Mixes every statically unstable layer pair to a common θ, weighted by
-   * Exner·Δσ so column enthalpy Σ cp θ Π Δσ is unchanged, sweeping until
-   * the column is stable. Requires exnerLayer for the current π.
+   * Mixes every statically unstable layer pair of column i to a common θ,
+   * weighted by Exner·Δσ so column enthalpy Σ cp θ Π Δσ is unchanged,
+   * sweeping until the column is stable. Refreshes the column's Exner
+   * ratios for the current π first.
    */
-  function convectiveAdjustment(pi, theta) {
-    core.diagnose(pi, theta);
-    let mixes = 0;
-    for (let i = 0; i < C; i++) {
-      let dirty = true, guard = 0;
-      while (dirty && guard < K * K) {
-        dirty = false;
-        guard++;
-        for (let k = K - 2; k >= 0; k--) {
-          const above = k * C + i, below = above + C;
-          if (theta[below] > theta[above] * (1 + 1e-9)) {
-            const wAbove = exnerLayer[above] * dSigma[k];
-            const wBelow = exnerLayer[below] * dSigma[k + 1];
-            const mixed = (theta[above] * wAbove + theta[below] * wBelow) / (wAbove + wBelow);
-            theta[above] = mixed;
-            theta[below] = mixed;
-            dirty = true;
-            mixes++;
-          }
+  function convectiveAdjustColumn(i, pi, theta) {
+    core.diagnoseColumn(i, pi, theta);
+    let mixes = 0, dirty = true, guard = 0;
+    while (dirty && guard < K * K) {
+      dirty = false;
+      guard++;
+      for (let k = K - 2; k >= 0; k--) {
+        const above = k * C + i, below = above + C;
+        if (theta[below] > theta[above] * (1 + 1e-9)) {
+          const wAbove = exnerLayer[above] * dSigma[k];
+          const wBelow = exnerLayer[below] * dSigma[k + 1];
+          const mixed = (theta[above] * wAbove + theta[below] * wBelow) / (wAbove + wBelow);
+          theta[above] = mixed;
+          theta[below] = mixed;
+          dirty = true;
+          mixes++;
         }
       }
     }
     return mixes;
   }
 
-  return { lowestWindSpeed, apply, convectiveAdjustment, windSpeed };
+  function convectiveAdjustment(pi, theta) {
+    let mixes = 0;
+    for (let i = 0; i < C; i++) mixes += convectiveAdjustColumn(i, pi, theta);
+    return mixes;
+  }
+
+  return { lowestWindSpeed, apply, convectiveAdjustment, convectiveAdjustColumn, windSpeed };
 }

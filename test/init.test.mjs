@@ -2,24 +2,41 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { initializeState, referenceTheta, surfaceTemperature } from '../js/physics/init.module.js';
+import { initializeState, equilibriumProfile, surfaceTemperature } from '../js/physics/init.module.js';
 import { P0 } from '../js/dynamics/sigmaCore.module.js';
 
 const N = +(process.env.INIT_TEST_N ?? 8);
 const DAYS = +(process.env.INIT_TEST_DAYS ?? 3);
 
-test('the reference profile and surface temperature reproduce the A-grid values', () => {
-  assert.equal(referenceTheta(0.9537), 283.107);
-  assert.equal(referenceTheta(0.0005), 2054.310);
-  assert.ok(referenceTheta(0.5) > 300 && referenceTheta(0.5) < 330);
-  assert.ok(Math.abs(surfaceTemperature(0) - 303) < 1e-12);
-  assert.ok(Math.abs(surfaceTemperature(Math.PI / 2) - 258) < 1e-12);
+test('the radiative-convective equilibrium column is stable, warm at the ground, and in balance', () => {
+  const model = createModel(new Grid(2));
+  const { core, radiation } = model;
+  const { K, C, dSigma, cp, g, exnerLayer, sigmaMid } = core.diagnostics;
+  const surfaceT = 305.086;
+  const profile = equilibriumProfile(model, { surfaceT });
+  for (let k = 0; k < K - 1; k++) assert.ok(profile[k] >= profile[k + 1] * (1 - 1e-9));
+  const pi = new Float64Array(C).fill(P0);
+  const theta = new Float64Array(K * C);
+  for (let k = 0; k < K; k++) theta[k * C] = profile[k];
+  core.diagnoseColumn(0, pi, theta);
+  const airT = profile[K - 1] * exnerLayer[(K - 1) * C];
+  assert.ok(surfaceT - airT > 0 && surfaceT - airT < 20);
+  radiation.column(0, P0, theta, surfaceT, 3);
+  let column = 0, scale = 0;
+  for (let k = 0; k < K; k++) { column += radiation.layerFlux[k]; scale += Math.abs(radiation.layerFlux[k]); }
+  const longer = equilibriumProfile(model, { surfaceT, days: 1200 });
+  let drift = 0;
+  for (let k = 0; k < K; k++) drift = Math.max(drift, Math.abs(longer[k] - profile[k]) / profile[k]);
+  console.log(`equilibrium column: surface air ${airT.toFixed(1)} K under a ${surfaceT} K surface; column net flux ${column.toFixed(3)} W/m² (scale ${scale.toFixed(0)}); θ at 850/500/200/50 hPa ≈ ${[0.85, 0.5, 0.2, 0.05].map((s) => profile[sigmaMid.findIndex((m) => m > s)].toFixed(0)).join('/')} K; 600→1200 day drift ${drift.toExponential(1)}`);
+  assert.ok(Math.abs(column) / scale < 1e-3);
+  assert.ok(drift < 1e-3);
+  assert.ok(Math.abs(surfaceTemperature(0) - 303) < 1e-12 && Math.abs(surfaceTemperature(Math.PI / 2) - 258) < 1e-12);
 });
 
 test(`N=${N}: the initial state is balanced, stable, and has the intended mass and pressure structure`, () => {
   const model = createModel(new Grid(N));
   const { mesh, core } = model;
-  const [pi, theta, u, surfaceT] = initializeState(mesh, core, { seedAmplitude: 0 });
+  const [pi, theta, u, surfaceT] = initializeState(model, { seedAmplitude: 0 });
   const C = mesh.nCells, K = core.K;
   let area = 0, mass = 0;
   for (let i = 0; i < C; i++) { area += mesh.areaCell[i]; mass += mesh.areaCell[i] * pi[i]; }
@@ -40,7 +57,7 @@ test(`N=${N}: the initial state is balanced, stable, and has the intended mass a
 test(`N=${N}: the balanced initial state rings quietly for ${DAYS} days with the physics off`, () => {
   const model = createModel(new Grid(N), { physics: false });
   const { mesh, core, state } = model;
-  const init = initializeState(mesh, core, { seedAmplitude: 0 });
+  const init = initializeState(model, { seedAmplitude: 0 });
   for (let a = 0; a < 4; a++) state[a].set(init[a]);
   const pi0 = Float64Array.from(state[0]);
   const dt = 450 * 16 / N;

@@ -592,7 +592,12 @@ Status: `js/physics/radiation.module.js` (gray column, insolation with
 tilt, slab ocean, sensible heat flux), `js/physics/surface.module.js`
 (bulk drag, boundary-layer drag, convective adjustment) and
 `js/physics/init.module.js` are ported and `js/model.module.js`
-assembles them on the `forcing` hook with state `[π, θ, u, T_s]`.
+assembles them on the `forcing` hook with state `[π, θ, u, T_s]`. The
+reference θ(σ) is not inherited from the old model: `equilibriumProfile`
+integrates a single column of this model's own radiation and convective
+adjustment over a 305 K surface to radiative–convective equilibrium
+(converged to roundoff in 600 days of column time, about a second of
+compute; θ ≈ 299/315/371/532 K at 850/500/200/50 hPa, surface air 298 K).
 `test/physics.test.mjs` certifies the column budgets to roundoff;
 `test/init.test.mjs` shows the balanced state ringing at 1.3 hPa (N=8)
 and 1.2 hPa (N=16) over three days with the physics off. The
@@ -601,20 +606,23 @@ by default: nothing balances them and they ring at 10 hPa, and the
 Held–Suarez run produces the surface wind structure they imitated on its
 own. Held–Suarez at N=16 for 200 days: 213 hPa jets 28–32 m/s at
 ±40–50°, surface westerlies +9 m/s at ±50°, tropical easterlies −7,
-upper-level eddy kinetic energy ≈ 210 m²/s², surface pressure
-980–1035 hPa, statistically steady from day 100.
+upper-level eddy kinetic energy ≈ 210–240 m²/s², surface pressure
+975–1035 hPa, statistically steady from day 100.
 - EKE doubling time ≤ 3 days (Eady prediction for the current base state:
   1.5 days; A-grid delivered 14–19 days).
 - The emergence experiment: subpolar surface lows at ±60° appearing in the
   zonal-mean profile within ~60 simulated days at N=32.
 
-### M4 — Worker and viewer
+### M4 — Worker and viewer — done
 
-Worker protocol carries edge arrays; cell scalars and reconstructed cell
-vectors go to the shared buffers the viewer already reads; synoptic
-contour layer uses the mesh's dual triangulation. `unifiedViewer.module.js`
-gains a model overlay mode (cell colors from the shared buffers instead of
-terrain) with the existing projection/camera code.
+`js/model.worker.js` builds the grid and the model in a module worker,
+integrates it, and posts surface pressure, surface temperature and
+surface wind speed as transferable arrays every few simulated hours.
+`unifiedViewer.module.js` gains a `dynamicColors` mode that keeps the
+vertex color array and exposes `updateColors(rgbPerCell)`;
+`climate.html` colors the globe by the chosen field with the global
+diagnostics in a readout. The synoptic contour layer of the A-grid
+viewer is not ported.
 
 ### M5 — Dissipation diet and emergence
 

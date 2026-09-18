@@ -32,7 +32,7 @@ self.onmessage = (event) => {
     stepsPerFrame = message.stepsPerFrame ?? 24;
     const grid = new Grid(N);
     model = createModel(grid, message.options ?? {});
-    const init = initializeState(model.mesh, model.core, message.init ?? {});
+    const init = initializeState(model, message.init ?? {});
     for (let a = 0; a < 4; a++) model.state[a].set(init[a]);
     surfaceWind = new Float64Array(model.mesh.nCells);
     vector = new Float64Array(3 * model.mesh.nCells);
