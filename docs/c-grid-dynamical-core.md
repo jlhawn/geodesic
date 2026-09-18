@@ -408,7 +408,8 @@ path: 3rd/4th-order upwind-biased flux (Skamarock & Gassmann 2011) when
 the centered scheme's dispersive ripples at fronts become the limiting
 noise source. The interface `θ_{k±½}` interpolation and the radiation
 heating `Q_i` are unchanged from the current code. The thermal ∇²
-diffusion on θ is dropped; add a ∇⁴ on θ only if fronts demand it.
+diffusion on θ is dropped in favour of a ∇⁴ on θ (`nu4Theta`), which
+the thin top layers require (Section 6, M2).
 
 ### 4.4 Time integration
 
@@ -524,20 +525,45 @@ cost matters). Shared initial-condition and norm helpers live in
 All three run in about a minute at N=32; `SW_TEST_N` selects other
 resolutions.
 
-### M2 — Multi-layer σ-coordinate dynamics (`js/dynamics/sigmaCore.module.js`)
+### M2 — Multi-layer σ-coordinate dynamics (`js/dynamics/sigmaCore.module.js`) — done
 
-Bolt the column structure onto the SW core: K layers, continuity/σ̇,
-Exner/geopotential, PGF, vertical advection, θ transport. Radiation off.
+`createSigmaCore(mesh, {levels, g, cp, R, p0, nu4, nu4Theta, forcing,
+surfaceGeopotential})` carries the A-grid column onto flat arrays: state
+`pi[C]`, `theta[K·C]`, `u[K·E]`; per step the layer mass fluxes and
+divergences, `dπ/dt`, `πσ̇` telescoping to zero at the ground, Exner
+ratios from the exact layer integral of `σ^κ`, interface θ interpolated
+in Exner, geopotential integrated upward with each layer's θ over its
+own Exner span, flux-form θ transport, and the vector-invariant momentum
+equation of 4.2 with the RTSK PV flux, the two-term PGF, and the
+flux-difference vertical advection. `createHeldSuarez` supplies the
+Held & Suarez 1994 forcing through the `forcing` hook. RK4 over the
+three arrays (`createRK4Arrays`).
 
-- Atmosphere at rest with horizontally uniform θ stays at rest to
-  roundoff (uniform `π` gives zero PGF everywhere — the same test the
-  A-grid passed).
-- Balanced latitude-dependent initialization (Section 5) rings at
-  ≤ 1 hPa (A-grid achieved 0.3–0.7 hPa).
-- Held–Suarez-style forcing (Newtonian θ relaxation, PBL drag) for 200
-  days: stable; zonal-mean jets 25–40 m/s at ±40–50°; EKE saturates at
-  tens of m²/s². This is the standard dry-core benchmark and gives a
-  literature comparison independent of our radiation scheme.
+- **Rest state** (`test/sigma_rest.test.mjs`): uniform `π` with
+  horizontally uniform θ(σ) gives identically zero tendencies and a
+  bit-identical state after 50 steps; an isentropic column reproduces
+  the analytic hydrostatic geopotential and the exact layer-mean Exner
+  to 1e-12.
+- **Jablonowski & Williamson 2006** (`test/sigma_jw06.test.mjs`, N=16,
+  the 20 A-grid levels, θ initialized so the model's own hydrostatic
+  integration reproduces the analytic geopotential, `π` uniform, the
+  JW06 surface geopotential): the balanced base state holds for five
+  days with surface pressure within 999.5–1000.8 hPa and winds within
+  0.9 m/s of the initial field, mass to 1e-15. The 1 m/s perturbation
+  grows into the baroclinic wave on schedule — surface pressure
+  961/1024 hPa at day 10 at this 480 km resolution, deepening fastest
+  through days 7–10, against the paper's ~940 hPa at high resolution.
+- **A required closure on θ.** Without any θ dissipation the thin top
+  layers (Δσ ≈ 0.0008 above ~2 hPa) went unstable from day 3 in the
+  steady run — θ departures of hundreds of kelvin with no surface
+  signal — independently of the time step. Uniform layers avoid it,
+  top-of-model Rayleigh drag makes it worse (it unbalances the jet),
+  and a scale-selective ∇⁴ on θ at the same 3 h timescale as the
+  momentum closure removes it without touching the troposphere. Both
+  closures are on in the tests; Section 4.3's "only if fronts demand
+  it" has been answered by the stratosphere instead.
+
+The 200-day Held–Suarez climatology runs as an experiment, not a test.
 
 ### M3 — Physics hookup
 
