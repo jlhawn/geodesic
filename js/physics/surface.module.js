@@ -5,9 +5,11 @@ import { cellVector } from '../dynamics/operators.module.js';
  * aerodynamic drag acts on the lowest layer with a gustiness floor on the
  * wind speed; Rayleigh drag ramps from zero at pblTop to pblRate at the
  * ground. Both are applied to edge velocities with the rate averaged from
- * the two adjacent cells, so they only ever remove kinetic energy.
+ * the two adjacent cells, so they only ever remove kinetic energy. An
+ * optional Rayleigh drag above topSigma, ramping to 1/topDragDays at the
+ * model top, absorbs what reaches the lid.
  */
-export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness = 3, pblTop = 0.7, pblRate = 1 / 86400 } = {}) {
+export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness = 3, pblTop = 0.7, pblRate = 1 / 86400, topSigma = 0.05, topDragDays = 0 } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, exnerLayer } = core.diagnostics;
   const { cellsOnEdge } = mesh;
   const bottom = K - 1;
@@ -39,6 +41,13 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness 
       if (sigmaMid[k] <= pblTop) continue;
       const rate = pblRate * (sigmaMid[k] - pblTop) / (1 - pblTop);
       for (let e = 0; e < E; e++) dU[k * E + e] -= rate * u[k * E + e];
+    }
+    if (topDragDays > 0) {
+      for (let k = 0; k < K; k++) {
+        if (sigmaMid[k] >= topSigma) continue;
+        const rate = (topSigma - sigmaMid[k]) / topSigma / (topDragDays * 86400);
+        for (let e = 0; e < E; e++) dU[k * E + e] -= rate * u[k * E + e];
+      }
     }
   }
 
