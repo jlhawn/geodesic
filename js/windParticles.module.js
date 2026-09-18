@@ -79,17 +79,23 @@ export function createWindParticles(container, viewer, grid, { density = 0.006, 
   const from = [0, 0, 0], to = [0, 0, 0];
   const buckets = 8;
   const paths = Array.from({ length: buckets }, () => new Path2D());
-  let lastVersion = -1, running = true;
+  let lastVersion = -1, running = true, frames = 0;
+  // Fading by a few percent per frame leaves a permanent haze because 8-bit
+  // alpha rounds back to itself; fading every third frame by the compounded
+  // factor takes the same time to fade but reaches near zero.
+  const fadeEvery = 3, fadeStep = fade ** fadeEvery;
 
   function frame() {
     if (!running) return;
     requestAnimationFrame(frame);
     if (!field || width === 0) return;
     if (viewer.viewVersion() !== lastVersion) { lastVersion = viewer.viewVersion(); context.clearRect(0, 0, width, height); }
-    context.globalCompositeOperation = 'destination-in';
-    context.fillStyle = `rgba(0, 0, 0, ${fade})`;
-    context.fillRect(0, 0, width, height);
-    context.globalCompositeOperation = 'source-over';
+    if (++frames % fadeEvery === 0) {
+      context.globalCompositeOperation = 'destination-in';
+      context.fillStyle = `rgba(0, 0, 0, ${fadeStep})`;
+      context.fillRect(0, 0, width, height);
+      context.globalCompositeOperation = 'source-over';
+    }
 
     const step = pixelsPerFrame / (reference * viewer.pixelsPerUnit());
     for (let b = 0; b < buckets; b++) paths[b] = new Path2D();
