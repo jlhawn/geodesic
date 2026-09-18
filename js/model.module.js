@@ -8,8 +8,10 @@ export const SIDEREAL_DAY = 86164.0905;
 
 /*
  * The climate model: the sigma-coordinate core with gray radiation, a
- * slab-ocean surface, bulk surface fluxes, boundary-layer drag, and dry
- * convective adjustment. State is [pi, theta, u, surfaceT].
+ * slab-ocean surface, bulk surface fluxes, boundary-layer drag, dry
+ * convective adjustment, and a 10-day Rayleigh drag in the cap layer
+ * above CAM's lid (σ < 0.005), where nothing else bounds the winter
+ * jet. State is [pi, theta, u, surfaceT].
  */
 export function createModel(grid, {
   radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {},
@@ -23,7 +25,7 @@ export function createModel(grid, {
   const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, ...coreOptions });
   const { K, C, E } = core.diagnostics;
   const radiation = createRadiation(mesh, core, radiationOptions);
-  const surface = createSurface(mesh, core, surfaceOptions);
+  const surface = createSurface(mesh, core, { topSigma: 0.005, topDragDays: 10, ...surfaceOptions });
   const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0 };
 
   core.setForcing((state, out) => {

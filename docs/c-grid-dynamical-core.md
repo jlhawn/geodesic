@@ -690,10 +690,15 @@ pressure at 35° minus that at 65° in each hemisphere; it starts at
   the winter surface trough weaker or later (11 vs 24 hPa at day 360,
   −2 vs +23 hPa at day 120). Part of that is the chaotic timing of a
   single realization, part is the ramp reaching the lower stratosphere.
-  A drag confined to the cap layer (σ < 0.005) is being run to separate
-  the two.
+  A drag confined to the cap layer (σ < 0.005) separates the two: over
+  the same year its winter-mean eddy kinetic energy (306/196 vs
+  308/199), jets (49.8/38.2 vs 50.7/37.4 m/s), troughs and westerlies
+  are indistinguishable from the undamped run, while the maximum wind
+  stays at 90–140 m/s in the upper CAM layers and follows the season
+  instead of growing. That drag is now the model default
+  (`createModel`: `topSigma: 0.005, topDragDays: 10`).
 
-Still running: the cap-only drag twin and the N=32 run.
+Still running: the N=32 run.
 
 ---
 
