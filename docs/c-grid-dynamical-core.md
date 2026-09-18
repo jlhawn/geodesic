@@ -586,7 +586,20 @@ for a profile comparison to mean anything. Acceptance:
   statically stable column; drag only removes kinetic energy.
 - The balanced initialization rings at ≤ 1 hPa over the first days.
 - 90-day stability with hyperdiffusion at closure strength (2Δx timescale
-  ≥ 3 h) and **no** divergence smoothing/damping.
+  ≥ 3 h) and **no** divergence smoothing/damping. **Met** at N=16 from
+  the balanced initialization with the full physics: mass to roundoff,
+  surface temperature steady at 287.5–287.9 K, absorbed solar 238 and
+  OLR 238–240 W/m² after day 30, and the ∇⁴ closures as the only
+  dissipation. Eddy kinetic energy at 250 hPa grew from 4 to 184 m²/s²
+  (5-day doubling early; the A-grid reached 4 in 90 days at an 18-day
+  doubling), the jets to 23 m/s in the winter hemisphere, and by day 90
+  the winter hemisphere's zonal-mean surface pressure had a subtropical
+  high (1025 hPa at 35°S) above a subpolar minimum (1016 hPa at 65°S)
+  with surface westerlies beginning at 50–60°S — the structure the
+  A-grid never produced. The maximum wind anywhere climbed 1.5 m/s per
+  day to 136 m/s, presumably the stratospheric winter jet with nothing
+  above the closure to bound a zonally symmetric flow; the M5 runs
+  locate it and test a top-of-model drag.
 
 Status: `js/physics/radiation.module.js` (gray column, insolation with
 tilt, slab ocean, sensible heat flux), `js/physics/surface.module.js`
