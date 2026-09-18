@@ -513,7 +513,10 @@ cost matters). Shared initial-condition and norm helpers live in
   2–5e-4 for three days and then goes unstable on its own, growing ×3.6
   per day (e-folding ≈ 0.8 d) from grid-scale truncation noise — the
   behaviour the paper describes for under-resolved grids, so the test
-  asserts the pre-onset window. With the 120 m perturbation the eddy
+  asserts the pre-onset window. At N=64 the pre-onset error is 4.4×
+  smaller (4.8e-5, second order) and the same growth starts about half a
+  day later; the seed shrinks with resolution, the growth rate is the
+  jet's own. With the 120 m perturbation the eddy
   kinetic energy grows from 2e-4 to 0.9 of the total over six days,
   e-folding ≈ 0.6 d through days 2–4, and the jet has rolled up by day
   6. Mass exact.
