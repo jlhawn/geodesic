@@ -9,46 +9,53 @@ import { cellVector } from '../dynamics/operators.module.js';
  * optional Rayleigh drag above topSigma, ramping to 1/topDragDays at the
  * model top, absorbs what reaches the lid.
  */
-export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness = 3, pblTop = 0.7, pblRate = 1 / 86400, topSigma = 0.05, topDragDays = 0 } = {}) {
+export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness = 3, pblTop = 0.7, pblRate = 1 / 86400, topSigma = 0.05, topDragDays = 0, buffers = null } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, exnerLayer } = core.diagnostics;
   const { cellsOnEdge } = mesh;
   const bottom = K - 1;
   const vector = new Float64Array(3 * C);
-  const windSpeed = new Float64Array(C);
+  const windBuffer = buffers && buffers.windSpeed ? buffers.windSpeed : new SharedArrayBuffer(8 * C);
+  const windSpeed = new Float64Array(windBuffer);
   const dragRate = new Float64Array(C);
 
-  function lowestWindSpeed(u) {
-    cellVector(mesh, u.subarray(bottom * E, K * E), vector);
-    for (let i = 0; i < C; i++) windSpeed[i] = Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]);
+  function lowestWindSpeed(u, iFrom = 0, iTo = C) {
+    cellVector(mesh, u.subarray(bottom * E, K * E), vector, iFrom, iTo);
+    for (let i = iFrom; i < iTo; i++) windSpeed[i] = Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]);
     return windSpeed;
   }
 
-  function apply(state, out) {
+  function applyLayers(state, out, kFrom = 0, kTo = K) {
     const [pi, theta, u] = state;
     const [, , dU] = out;
-    for (let i = 0; i < C; i++) {
-      const idx = bottom * C + i;
-      const airTemperature = theta[idx] * exnerLayer[idx];
-      const airDensity = pi[i] * sigmaMid[bottom] / (R * airTemperature);
-      const massPerArea = pi[i] * dSigma[bottom] / g;
-      dragRate[i] = dragCoefficient * airDensity * Math.max(windSpeed[i], gustiness) / massPerArea;
+    if (kFrom <= bottom && bottom < kTo) {
+      for (let i = 0; i < C; i++) {
+        const idx = bottom * C + i;
+        const airTemperature = theta[idx] * exnerLayer[idx];
+        const airDensity = pi[i] * sigmaMid[bottom] / (R * airTemperature);
+        const massPerArea = pi[i] * dSigma[bottom] / g;
+        dragRate[i] = dragCoefficient * airDensity * Math.max(windSpeed[i], gustiness) / massPerArea;
+      }
+      for (let e = 0; e < E; e++) {
+        const rate = 0.5 * (dragRate[cellsOnEdge[2 * e]] + dragRate[cellsOnEdge[2 * e + 1]]);
+        dU[bottom * E + e] -= rate * u[bottom * E + e];
+      }
     }
-    for (let e = 0; e < E; e++) {
-      const rate = 0.5 * (dragRate[cellsOnEdge[2 * e]] + dragRate[cellsOnEdge[2 * e + 1]]);
-      dU[bottom * E + e] -= rate * u[bottom * E + e];
-    }
-    for (let k = 0; k < K; k++) {
+    for (let k = kFrom; k < kTo; k++) {
       if (sigmaMid[k] <= pblTop) continue;
       const rate = pblRate * (sigmaMid[k] - pblTop) / (1 - pblTop);
       for (let e = 0; e < E; e++) dU[k * E + e] -= rate * u[k * E + e];
     }
     if (topDragDays > 0) {
-      for (let k = 0; k < K; k++) {
+      for (let k = kFrom; k < kTo; k++) {
         if (sigmaMid[k] >= topSigma) continue;
         const rate = (topSigma - sigmaMid[k]) / topSigma / (topDragDays * 86400);
         for (let e = 0; e < E; e++) dU[k * E + e] -= rate * u[k * E + e];
       }
     }
+  }
+
+  function apply(state, out) {
+    applyLayers(state, out, 0, K);
   }
 
   /*
@@ -79,11 +86,11 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness 
     return mixes;
   }
 
-  function convectiveAdjustment(pi, theta) {
+  function convectiveAdjustment(pi, theta, iFrom = 0, iTo = C) {
     let mixes = 0;
-    for (let i = 0; i < C; i++) mixes += convectiveAdjustColumn(i, pi, theta);
+    for (let i = iFrom; i < iTo; i++) mixes += convectiveAdjustColumn(i, pi, theta);
     return mixes;
   }
 
-  return { lowestWindSpeed, apply, convectiveAdjustment, convectiveAdjustColumn, windSpeed };
+  return { lowestWindSpeed, apply, applyLayers, convectiveAdjustment, convectiveAdjustColumn, windSpeed, shared: { windSpeed: windBuffer } };
 }

@@ -226,3 +226,30 @@ export function buildMesh(grid, { radius = EARTH_RADIUS, omega = SIDEREAL_OMEGA 
     nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
   };
 }
+
+/*
+ * Copies every array of a mesh into SharedArrayBuffers so worker threads
+ * can adopt the same mesh without rebuilding it; meshFromShared makes the
+ * views on the other side.
+ */
+export function shareMesh(mesh) {
+  const buffers = {}, types = {}, scalars = {};
+  for (const [name, value] of Object.entries(mesh)) {
+    if (ArrayBuffer.isView(value)) {
+      const buffer = new SharedArrayBuffer(value.byteLength);
+      new value.constructor(buffer).set(value);
+      buffers[name] = buffer;
+      types[name] = value.constructor.name;
+    } else {
+      scalars[name] = value;
+    }
+  }
+  return { buffers, types, scalars };
+}
+
+export function meshFromShared({ buffers, types, scalars }) {
+  const mesh = { ...scalars };
+  const constructors = { Float64Array, Int32Array, Float32Array, Int8Array, Uint8Array };
+  for (const [name, buffer] of Object.entries(buffers)) mesh[name] = new constructors[types[name]](buffer);
+  return mesh;
+}

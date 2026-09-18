@@ -58,9 +58,9 @@ export function kineticEnergy(mesh, u, out = new Float64Array(mesh.nCells)) {
   return out;
 }
 
-export function cellVector(mesh, u, out = new Float64Array(3 * mesh.nCells)) {
-  const { nCells, maxEdges, nEdgesOnCell, edgesOnCell, dcEdge, dvEdge, nEdge, areaCell } = mesh;
-  for (let i = 0; i < nCells; i++) {
+export function cellVector(mesh, u, out = new Float64Array(3 * mesh.nCells), iFrom = 0, iTo = mesh.nCells) {
+  const { maxEdges, nEdgesOnCell, edgesOnCell, dcEdge, dvEdge, nEdge, areaCell } = mesh;
+  for (let i = iFrom; i < iTo; i++) {
     let x = 0, y = 0, z = 0;
     for (let k = 0; k < nEdgesOnCell[i]; k++) {
       const e = edgesOnCell[maxEdges * i + k];

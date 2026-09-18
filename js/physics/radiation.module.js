@@ -93,11 +93,11 @@ export function createRadiation(mesh, core, {
     return surfaceFlux;
   }
 
-  function apply(state, out, windSpeed, totals) {
+  function apply(state, out, windSpeed, totals, iFrom = 0, iTo = C) {
     const [pi, theta, , surfaceT] = state;
     const [, dTheta, , dSurfaceT] = out;
     if (totals) { totals.absorbedSolar = 0; totals.outgoingLongwave = 0; totals.sensibleHeat = 0; }
-    for (let i = 0; i < C; i++) {
+    for (let i = iFrom; i < iTo; i++) {
       const surfaceFlux = column(i, pi[i], theta, surfaceT[i], windSpeed[i]);
       for (let k = 0; k < K; k++) {
         const massPerArea = pi[i] * dSigma[k] / g;

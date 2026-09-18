@@ -50,7 +50,7 @@ export function sigmaInterfaces() {
 export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
-    nu4 = 0, nu4Theta = 0, forcing = null, surfaceGeopotential = null,
+    nu4 = 0, nu4Theta = 0, forcing = null, surfaceGeopotential = null, buffers = null,
   } = options;
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -64,19 +64,25 @@ export function createSigmaCore(mesh, options = {}) {
   const dSigma = Float64Array.from(sigmaLower, (s, k) => s - sigmaUpper[k]);
   const sigmaMid = Float64Array.from(sigmaLower, (s, k) => 0.5 * (s + sigmaUpper[k]));
 
+  const shared = {};
+  const sharedArray = (name, n) => {
+    const buffer = buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * n);
+    shared[name] = buffer;
+    return new Float64Array(buffer);
+  };
+  const flux = sharedArray('flux', K * E);
+  const divFlux = sharedArray('divFlux', K * C);
+  const piSigmaDot = sharedArray('piSigmaDot', (K + 1) * C);
+  const exnerLower = sharedArray('exnerLower', K * C);
+  const exnerLayer = sharedArray('exnerLayer', K * C);
+  const dExnerDpi = sharedArray('dExnerDpi', K * C);
+  const thetaLower = sharedArray('thetaLower', K * C);
+  const geopotential = sharedArray('geopotential', K * C);
+  const piVertex = sharedArray('piVertex', V);
   const piEdge = new Float64Array(E);
-  const flux = new Float64Array(K * E);
-  const divFlux = new Float64Array(K * C);
-  const piSigmaDot = new Float64Array((K + 1) * C);
-  const exnerLower = new Float64Array(K * C);
-  const exnerLayer = new Float64Array(K * C);
-  const dExnerDpi = new Float64Array(K * C);
-  const thetaLower = new Float64Array(K * C);
-  const geopotential = new Float64Array(K * C);
   const thetaFlux = new Float64Array(E);
   const divThetaFlux = new Float64Array(C);
   const zeta = new Float64Array(V);
-  const piVertex = new Float64Array(V);
   const qVertex = new Float64Array(V);
   const qEdge = new Float64Array(E);
   const kinetic = new Float64Array(C);
@@ -120,18 +126,25 @@ export function createSigmaCore(mesh, options = {}) {
     for (let i = 0; i < C; i++) diagnoseColumn(i, pi, theta);
   }
 
-  function tendency(state, out) {
-    const [pi, theta, u] = state;
-    const [dPi, dTheta, dU] = out;
-
+  function edgePi(pi) {
     for (let e = 0; e < E; e++) piEdge[e] = 0.5 * (pi[cellsOnEdge[2 * e]] + pi[cellsOnEdge[2 * e + 1]]);
-    for (let k = 0; k < K; k++) {
+  }
+
+  function phaseFlux(state, kFrom, kTo) {
+    const [pi, , u] = state;
+    edgePi(pi);
+    for (let k = kFrom; k < kTo; k++) {
       const fk = flux.subarray(k * E, (k + 1) * E);
       const uk = u.subarray(k * E, (k + 1) * E);
       for (let e = 0; e < E; e++) fk[e] = piEdge[e] * uk[e];
       divergence(mesh, fk, divFlux.subarray(k * C, (k + 1) * C));
     }
-    for (let i = 0; i < C; i++) {
+  }
+
+  function phaseColumn(state, out, iFrom, iTo) {
+    const [pi, theta] = state;
+    const [dPi] = out;
+    for (let i = iFrom; i < iTo; i++) {
       let sum = 0;
       for (let k = 0; k < K; k++) sum += divFlux[k * C + i] * dSigma[k];
       dPi[i] = -sum;
@@ -142,11 +155,25 @@ export function createSigmaCore(mesh, options = {}) {
         piSigmaDot[(k + 1) * C + i] = -cumulative - sigmaLower[k] * dPi[i];
       }
       piSigmaDot[K * C + i] = 0;
+      diagnoseColumn(i, pi, theta);
     }
+  }
 
-    diagnose(pi, theta);
+  function phaseVertex(state, vFrom, vTo) {
+    const [pi] = state;
+    for (let v = vFrom; v < vTo; v++) {
+      let sum = 0;
+      for (let m = 0; m < 3; m++) sum += kiteAreasOnVertex[3 * v + m] * pi[cellsOnVertex[3 * v + m]];
+      piVertex[v] = sum / areaTriangle[v];
+    }
+  }
 
-    for (let k = 0; k < K; k++) {
+  function phaseLayer(state, out, kFrom, kTo) {
+    const [pi, theta, u] = state;
+    const [, dTheta, dU] = out;
+    edgePi(pi);
+    gradient(mesh, pi, gradPi);
+    for (let k = kFrom; k < kTo; k++) {
       const off = k * C;
       const fk = flux.subarray(k * E, (k + 1) * E);
       for (let e = 0; e < E; e++) {
@@ -167,19 +194,7 @@ export function createSigmaCore(mesh, options = {}) {
         laplacianScalar(mesh, lapTheta, lapTheta2);
         for (let i = 0; i < C; i++) dTheta[off + i] -= nu4Theta * lapTheta2[i];
       }
-    }
-
-    for (let v = 0; v < V; v++) {
-      let sum = 0;
-      for (let m = 0; m < 3; m++) sum += kiteAreasOnVertex[3 * v + m] * pi[cellsOnVertex[3 * v + m]];
-      piVertex[v] = sum / areaTriangle[v];
-    }
-    gradient(mesh, pi, gradPi);
-
-    for (let k = 0; k < K; k++) {
-      const off = k * C;
       const uk = u.subarray(k * E, (k + 1) * E);
-      const fk = flux.subarray(k * E, (k + 1) * E);
       const dUk = dU.subarray(k * E, (k + 1) * E);
       curl(mesh, uk, zeta);
       for (let v = 0; v < V; v++) qVertex[v] = (zeta[v] + fVertex[v]) / piVertex[v];
@@ -208,7 +223,13 @@ export function createSigmaCore(mesh, options = {}) {
         for (let e = 0; e < E; e++) dUk[e] -= nu4 * lap2[e];
       }
     }
+  }
 
+  function tendency(state, out) {
+    phaseFlux(state, 0, K);
+    phaseColumn(state, out, 0, C);
+    phaseVertex(state, 0, V);
+    phaseLayer(state, out, 0, K);
     if (applyForcing) applyForcing(state, out, diagnostics);
   }
 
@@ -216,7 +237,7 @@ export function createSigmaCore(mesh, options = {}) {
     applyForcing = fn;
   }
 
-  const diagnostics = { K, C, E, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, diagnose, diagnoseColumn };
+  const diagnostics = { K, C, E, V, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, diagnose, diagnoseColumn };
 
   function mass(pi) {
     let m = 0;
@@ -224,7 +245,7 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, tendency, diagnose, diagnoseColumn, diagnostics, mass, setForcing, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower } };
+  return { K, levels, sigmaMid, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, diagnose, diagnoseColumn, diagnostics, mass, setForcing, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower } };
 }
 
 /*
