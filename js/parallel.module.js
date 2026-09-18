@@ -1,7 +1,6 @@
-import { availableParallelism } from 'node:os';
-import { Worker } from 'node:worker_threads';
 import { createModel } from './model.module.js';
 import { shareMesh } from './mesh.module.js';
+import { parallelism, spawn } from './threads.module.js';
 
 export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, CELL: 4, ADVANCE: 5, COMBINE: 6, ADJUST: 7, EXIT: 8 };
 
@@ -26,7 +25,8 @@ export function workerRanges(index, workers, { K, C, E, V }) {
  * the RK4 phases through a shared counter. Sums are done in the same
  * order as on one thread, so the result is bit-identical to createModel.
  */
-export async function createParallelModel(grid, options = {}, workers = Math.max(1, availableParallelism() - 2)) {
+export async function createParallelModel(grid, options = {}, workers = null) {
+  workers ??= Math.max(1, await parallelism() - 2);
   const model = createModel(grid, options);
   const { K, C, E, V } = model.core.diagnostics;
   const lengths = { pi: C, theta: K * C, u: K * E, surfaceT: C };
@@ -44,15 +44,19 @@ export async function createParallelModel(grid, options = {}, workers = Math.max
 
   const threads = [];
   const failures = [];
-  await Promise.all(Array.from({ length: workers }, (_, index) => new Promise((resolve, reject) => {
-    const thread = new Worker(new URL('./parallel.worker.js', import.meta.url), { workerData: { index, workers, meshShared, buffers, options: workerOptions, control } });
-    thread.on('message', (message) => {
-      if (message.type === 'ready') resolve();
-      if (message.type === 'error') failures.push(`worker ${message.index} phase ${message.phase}: ${message.message}`);
-    });
-    thread.on('error', (error) => { failures.push(`worker ${index}: ${error && error.stack ? error.stack : error}`); reject(error); });
-    threads.push(thread);
-  })));
+  const ready = [];
+  for (let index = 0; index < workers; index++) {
+    let resolveReady, rejectReady;
+    ready.push(new Promise((resolve, reject) => { resolveReady = resolve; rejectReady = reject; }));
+    threads.push(await spawn(new URL('./parallel.worker.js', import.meta.url), { index, workers, meshShared, buffers, options: workerOptions, control }, {
+      onMessage(message) {
+        if (message.type === 'ready') resolveReady();
+        if (message.type === 'error') failures.push(`worker ${message.index} phase ${message.phase}: ${message.message}`);
+      },
+      onError(error) { failures.push(`worker ${index}: ${error && error.stack ? error.stack : error}`); rejectReady(new Error(failures.join('\n'))); },
+    }));
+  }
+  await Promise.all(ready);
   for (const thread of threads) thread.unref();
 
   function run(phase, { useTrial = 0, stage = 0, dt = 0, factor = 0 } = {}) {

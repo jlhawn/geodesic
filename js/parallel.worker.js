@@ -1,9 +1,17 @@
-import { parentPort, workerData } from 'node:worker_threads';
 import { meshFromShared } from './mesh.module.js';
 import { createModel } from './model.module.js';
 import { PHASE, workerRanges } from './parallel.module.js';
+import { workerInit } from './threads.module.js';
 
-const { index, workers, meshShared, buffers, options, control } = workerData;
+const { data, post } = await workerInit();
+try {
+  main(data);
+} catch (error) {
+  post({ type: 'error', index: data.index, phase: 'setup', message: error && error.stack ? error.stack : String(error) });
+  throw error;
+}
+
+function main({ index, workers, meshShared, buffers, options, control }) {
 const mesh = meshFromShared(meshShared);
 const model = createModel(mesh, { ...options, buffers });
 const { K, C, E, V } = model.core.diagnostics;
@@ -56,7 +64,7 @@ function run(phase) {
   }
 }
 
-parentPort.postMessage({ type: 'ready', index });
+post({ type: 'ready', index });
 let generation = 0;
 for (;;) {
   Atomics.wait(ctrl, 0, generation);
@@ -67,8 +75,9 @@ for (;;) {
     run(phase);
   } catch (error) {
     Atomics.store(ctrl, 5, 1);
-    parentPort.postMessage({ type: 'error', index, phase, message: error && error.stack ? error.stack : String(error) });
+    post({ type: 'error', index, phase, message: error && error.stack ? error.stack : String(error) });
   }
   Atomics.add(ctrl, 2, 1);
   Atomics.notify(ctrl, 2);
+}
 }

@@ -165,7 +165,7 @@ export async function showSnapshot(url) {
   paint();
 }
 
-export default function runClimate(N = 16, from = null) {
+export default function runClimate(N = 16, from = null, workers = 1) {
   const grid = new Grid(N);
   const cells = grid.size;
   const rgb = new Uint8Array(3 * cells).fill(60);
@@ -198,11 +198,11 @@ export default function runClimate(N = 16, from = null) {
   worker.onmessage = (event) => {
     const message = event.data;
     if (message.type === 'status') readout.textContent = message.text;
-    if (message.type === 'ready') readout.textContent = `model ready: ${message.cells} cells × ${message.layers} layers, dt ${message.dt} s, day ${message.day.toFixed(1)}`;
+    if (message.type === 'ready') readout.textContent = `model ready: ${message.cells} cells × ${message.layers} layers, dt ${message.dt} s, day ${message.day.toFixed(1)}, ${message.workers > 1 ? `${message.workers} workers` : 'one thread'}`;
     if (message.type === 'frame') { latest = message; paint(); }
   };
   worker.onerror = (error) => { readout.textContent = `worker error: ${error.message}`; };
-  worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null });
+  worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null, workers: crossOriginIsolated ? workers : 1 });
 
   select.addEventListener('change', paint);
   document.getElementById('windLayer').addEventListener('change', paint);
