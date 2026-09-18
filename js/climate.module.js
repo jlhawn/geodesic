@@ -2,9 +2,10 @@ import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
 
 const FIELDS = {
-  ps: { label: 'Surface pressure (hPa)', scale: 0.01, min: 960, max: 1060, palette: 'diverging' },
+  ps: { label: 'Surface pressure (hPa)', scale: 0.01, min: 960, max: 1060, center: 1013, palette: 'diverging' },
   ts: { label: 'Surface temperature (K)', scale: 1, min: 240, max: 310, palette: 'sequential' },
   wind: { label: 'Surface wind speed (m/s)', scale: 1, min: 0, max: 25, palette: 'sequential' },
+  jetZonal: { label: 'Zonal wind at 250 hPa (m/s)', scale: 1, min: -40, max: 40, center: 0, palette: 'diverging' },
 };
 
 function color(t, palette, out, at) {
@@ -17,6 +18,56 @@ function color(t, palette, out, at) {
     r = 0.1 + 0.85 * x; g = 0.1 + 0.7 * Math.sin(Math.PI * x); b = 0.9 - 0.8 * x;
   }
   out[at] = Math.round(255 * r); out[at + 1] = Math.round(255 * g); out[at + 2] = Math.round(255 * b);
+}
+
+function addOption(select, value, label) {
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = label;
+  select.appendChild(option);
+}
+
+/*
+ * Shows one saved snapshot (the JSON the emergence runs write) instead
+ * of running the model: ?snapshot=<url>. Sibling days of the same run
+ * are reachable with the prev/next buttons.
+ */
+export async function showSnapshot(url) {
+  const response = await fetch(url);
+  const snapshot = await response.json();
+  const grid = new Grid(snapshot.N);
+  const cells = grid.size;
+  const rgb = new Uint8Array(3 * cells);
+  const viewer = initUnifiedViewer(document.getElementById('globe'), grid, { backgroundColor: 0x151515, dynamicColors: true, getColor: () => ({ r: 0.25, g: 0.25, b: 0.25 }) });
+  const readout = document.getElementById('readout');
+  const select = document.getElementById('field');
+  addOption(select, 'jetZonal', 'Zonal wind at 250 hPa');
+  const pauseButton = document.getElementById('pause');
+  pauseButton.textContent = 'Previous day';
+  const nextButton = document.createElement('button');
+  nextButton.textContent = 'Next day';
+  pauseButton.after(nextButton);
+  function paint() {
+    const spec = FIELDS[select.value];
+    const values = snapshot[select.value];
+    const sorted = Float64Array.from(values, (v) => v * spec.scale).sort();
+    const lo = sorted[Math.floor(0.02 * cells)], hi = sorted[Math.ceil(0.98 * cells) - 1];
+    let min = lo, max = hi;
+    if (spec.palette === 'diverging') { const half = Math.max(Math.abs(lo - spec.center), Math.abs(hi - spec.center)); min = spec.center - half; max = spec.center + half; }
+    for (let i = 0; i < cells; i++) color((values[i] * spec.scale - min) / (max - min), spec.palette, rgb, 3 * i);
+    viewer.updateColors(rgb);
+    readout.textContent = `${spec.label} — snapshot day ${snapshot.day}, N=${snapshot.N} · colors span ${min.toFixed(1)} to ${max.toFixed(1)} · field range ${sorted[0].toFixed(1)} to ${sorted[cells - 1].toFixed(1)}`;
+  }
+  const step = (delta) => {
+    const match = url.match(/day(\d{3})\.json$/);
+    if (!match) return;
+    const day = Math.max(0, Number(match[1]) + delta);
+    location.search = `?snapshot=${encodeURIComponent(url.replace(/day\d{3}\.json$/, `day${String(day).padStart(3, '0')}.json`))}`;
+  };
+  pauseButton.addEventListener('click', () => step(-10));
+  nextButton.addEventListener('click', () => step(10));
+  select.addEventListener('change', paint);
+  paint();
 }
 
 export default function runClimate(N = 16) {

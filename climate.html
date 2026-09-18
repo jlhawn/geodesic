@@ -25,8 +25,10 @@
   </div>
   <div id="readout">starting…</div>
   <script type="module">
-    import runClimate from './js/climate.module.js';
-    runClimate(Number(new URLSearchParams(location.search).get('N') ?? 16));
+    import runClimate, { showSnapshot } from './js/climate.module.js';
+    const params = new URLSearchParams(location.search);
+    if (params.get('snapshot')) showSnapshot(params.get('snapshot'));
+    else runClimate(Number(params.get('N') ?? 16));
   </script>
 </body>
 
