@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import { Grid, GridVertex } from '../js/grid.module.js';
 
 const SIZES = (process.env.GRID_TEST_N ?? '2,3,5,8,16').split(',').map(Number);
+const RELAX = (process.env.GRID_TEST_RELAX ?? '0,10').split(',').map(Number);
 const EPS = 1e-12;
 
-for (const N of SIZES) {
-  const grid = new Grid(N);
+for (const relax of RELAX) for (const N of SIZES) {
+  const grid = new Grid(N, { relax });
   const cells = [...grid];
   const C = 10 * N * N + 2;
 
-  test(`N=${N}: cell count and index follow iteration order`, () => {
+  test(`N=${N} relax=${relax}: cell count and index follow iteration order`, () => {
     assert.equal(grid.size, C);
     assert.equal(cells.length, C);
     cells.forEach((cell, i) => assert.equal(cell.index, i));
@@ -19,7 +20,7 @@ for (const N of SIZES) {
     for (const cell of cells) assert.ok(Math.abs(cell.centerVertex.length() - 1) < EPS);
   });
 
-  test(`N=${N}: neighbors are symmetric and distinct, 5 on the 12 pentagons and 6 elsewhere`, () => {
+  test(`N=${N} relax=${relax}: neighbors are symmetric and distinct, 5 on the 12 pentagons and 6 elsewhere`, () => {
     let pentagons = 0;
     for (const cell of cells) {
       const nb = cell.neighbors;
@@ -31,7 +32,7 @@ for (const N of SIZES) {
     assert.equal(pentagons, 12);
   });
 
-  test(`N=${N}: neighbors and vertices are counter-clockwise viewed from outside`, () => {
+  test(`N=${N} relax=${relax}: neighbors and vertices are counter-clockwise viewed from outside`, () => {
     for (const cell of cells) {
       const c = cell.centerVertex;
       const nb = cell.neighbors;
@@ -46,7 +47,7 @@ for (const N of SIZES) {
     }
   });
 
-  test(`N=${N}: vertices are unit circumcenters, each shared by exactly three cells`, () => {
+  test(`N=${N} relax=${relax}: vertices are unit circumcenters, each shared by exactly three cells`, () => {
     assert.equal(grid.vertices.length, 2 * C - 4);
     grid.vertices.forEach((v, i) => {
       assert.ok(v instanceof GridVertex);
@@ -71,7 +72,7 @@ for (const N of SIZES) {
     assert.ok(uses.every((u) => u === 3));
   });
 
-  test(`N=${N}: the edge to neighbors[k] runs from vertices[k-1] to vertices[k], perpendicular to the dual edge`, () => {
+  test(`N=${N} relax=${relax}: the edge to neighbors[k] runs from vertices[k-1] to vertices[k], perpendicular to the dual edge`, () => {
     let edges = 0;
     for (const cell of cells) {
       const c = cell.centerVertex;
@@ -92,7 +93,7 @@ for (const N of SIZES) {
     assert.equal(edges, 3 * C - 6);
   });
 
-  test(`N=${N}: spherical cell areas are positive and sum to 4π`, () => {
+  test(`N=${N} relax=${relax}: spherical cell areas are positive and sum to 4π`, () => {
     let sum = 0;
     for (const cell of cells) {
       assert.ok(cell.area > 0);

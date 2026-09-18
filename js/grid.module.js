@@ -345,10 +345,24 @@ class GridCell {
     }
     this.area = area;
   }
+
+  calculateCentroid() {
+    const c = this.centerVertex;
+    const v = this.vertices;
+    const n = v.length;
+    const centroid = new THREE.Vector3();
+    for (let k = 0; k < n; k++) {
+      const a = v[k];
+      const b = v[(k + 1) % n];
+      _ab.copy(c).add(a).add(b).normalize();
+      centroid.addScaledVector(_ab, sphericalExcess(c, a, b));
+    }
+    return centroid.normalize();
+  }
 }
 
 class Grid {
-  constructor(N) {
+  constructor(N, { relax = 8 } = {}) {
     const { quadCells, northPole, southPole } = Grid.make(N);
 
     this.N = N;
@@ -365,7 +379,37 @@ class Grid {
     }
     for (const cell of this) {
       cell.calculateVertices(this);
+    }
+    for (let i = 0; i < relax; i++) {
+      this.relax();
+    }
+    for (const cell of this) {
       cell.calculateArea();
+    }
+  }
+
+  /*
+   * One Lloyd iteration toward a centroidal Voronoi tessellation: every
+   * center moves to the centroid of its cell, then the shared vertices are
+   * recomputed as circumcenters. Topology and ordering are unchanged; the
+   * ISEA points become the seed rather than the result.
+   */
+  relax() {
+    const centroids = new Array(this.size);
+    for (const cell of this) {
+      centroids[cell.index] = cell.calculateCentroid();
+    }
+    for (const cell of this) {
+      cell.centerVertex.copy(centroids[cell.index]);
+    }
+    for (const cell of this) {
+      const neighbors = cell.neighbors;
+      const n = neighbors.length;
+      for (let k = 0; k < n; k++) {
+        if (neighbors[k].index > cell.index && neighbors[(k + 1) % n].index > cell.index) {
+          circumcenter(cell.centerVertex, neighbors[k].centerVertex, neighbors[(k + 1) % n].centerVertex, cell.vertices[k]);
+        }
+      }
     }
   }
 
