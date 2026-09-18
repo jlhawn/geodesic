@@ -2,10 +2,10 @@
 
 Design document for replacing the climate model's A-grid horizontal
 dynamical core with a C-grid (TRiSK) formulation built on
-`js/grid.module.js`. Status: **draft for review**. Everything marked
-`VERIFY` must be checked against the primary references before
-implementation; every operator carries a test that catches sign and
-convention errors independently of anyone's memory of the formula.
+`js/grid.module.js`. Status: **M0 complete** (mesh, operators, TRiSK
+weights, all cross-checked against MPAS and the papers); M1 next. Every
+operator carries a test that catches sign and convention errors
+independently of anyone's memory of the formula.
 
 References:
 
@@ -77,6 +77,8 @@ new time integrator (AB4 stays; RK3 is an optional later swap).
   the property TRiSK requires.
 - `cell.area`: exact spherical polygon area (sums to 4π to roundoff);
   `cell.isPentagon`, `cell.isPole`.
+- `new Grid(N)` applies 10 Lloyd iterations by default (Section 8 item
+  2); `new Grid(N, { relax: 0 })` is the raw ISEA tessellation.
 - `test/grid.test.mjs` certifies all of the above at N = 2, 3, 5, 8, 16
   (`node --test`).
 
@@ -234,12 +236,15 @@ is < 1e-12 relative; solid-body rotation → `D` ≈ 0 pointwise.
 ```
 
 This is the *only* horizontal derivative the momentum equation needs, and
-it is the one that sees the checkerboard. `Σ_e ½ d_e l_e (∇φ)_e F_e =
-−Σ_i A_i φ_i D_i(F)` holds exactly (discrete integration by parts) — the
+it is the one that sees the checkerboard. `Σ_e d_e l_e (∇φ)_e F_e =
+−Σ_i A_i φ_i D_i(F)` holds exactly (discrete integration by parts; RTSK
+Appendix A.1 — the weight is the full `d_e l_e`, twice the rhombus area
+`½ d_e l_e` that an edge owns geometrically). This is the
 energy-consistency property the A-grid needed the adjoint construction to
 fake.
 
-Test: the identity above for random `φ`, `F`, to 1e-12 relative.
+Test: the identity above for random `φ`, `F`, to 1e-12 relative
+(`test/mesh.test.mjs`, passes at 1e-15).
 
 ### 3.3 Curl (edges → vertices)
 
@@ -267,34 +272,40 @@ O(Δx) elsewhere.
 ```
 u⊥_e = (1/d_e) Σ_{e' ∈ ECP(e)} w_{e,e'} l_{e'} u_{e'}
 
-w_{e,e'} = n_{e',i} t_{e,i} ( Σ_{v ∈ V(e→e', i)} R_{i,v} / A_i  −  ½ )      VERIFY
+w_{e,e'} = n_{e,i} n_{e',i} ( ½ − Σ_{v ∈ V(e→e', i)} R_{i,v} / A_i )
 ```
 
-where `i` is the cell containing both `e` and `e'`, `V(e→e', i)` is the
-set of vertices of cell `i` passed when walking counter-clockwise around
-`i` from edge `e` to edge `e'`, and `t_{e,i}` is the sign making `t_e`
-point counter-clockwise around cell `i`. **The exact vertex-set
-convention (inclusive/exclusive endpoints, direction) must be verified
-against RTSK 2010 eq. 22–24 and the MPAS `weightsOnEdge` construction
-before implementation** — this is the one formula in the design that is
-easy to get subtly wrong, and the property tests below are what actually
-certify it:
+where `i` is the cell containing both `e` and `e'` and `V(e→e', i)` is
+the set of vertices of cell `i` strictly between `e` and `e'` walking
+counter-clockwise around `i`. This is Thuburn et al. 2009 eq. 33–34 with
+the energy-conserving split constant `a = ½`, and it follows from one
+physical statement: the mass leaving each kite `R_{i,v}` through its two
+primal half-edges (half of each edge's flux) and its two dual half-edges
+balances the cell divergence apportioned by kite area. Implemented in
+`mesh.module.js` and checked three independent ways: the property tests
+below; a literal port of MPAS's `buildEdgesOnEdgeArrays` (which folds
+`l_{e'}/d_e` into `weightsOnEdge`) agrees bit for bit at N=8; and the
+closed form was re-derived from both papers.
 
-- **T1 (energy):** `w_{e,e'} = −w_{e',e}` for every pair. Equivalently the
-  Coriolis term does no work: `Σ_e ½ d_e l_e u_e (f u⊥_e) = 0` for any `u`
-  and constant `f`, to roundoff.
-- **T2 (consistency):** for a uniform field `U` on a regular hexagonal
-  patch, `u⊥_e = U · t_e` exactly; on the real mesh the error is O(Δx) and
-  decreases with N.
-- **T3 (PV compatibility):** `Σ_{e ∈ EC(i)} n_{e,i} l_e u⊥_e = −Σ_{v ∈ V(i)}
-  R_{i,v} ζ_v` for every cell and any `u` (the discrete "divergence of the
-  perpendicular field equals minus the cell-averaged curl"). This is the
-  property that makes the scheme conserve potential vorticity and lets
-  geostrophic balance be represented exactly (Thuburn et al. 2009).
-  VERIFY the exact statement.
-
-If T1 or T3 fails, the vertex-set convention is wrong; do not proceed to
-dynamics until they pass.
+- **T1 (energy):** `w_{e,e'} = −w_{e',e}` for every pair, so the Coriolis
+  term does no work: `Σ_e d_e l_e u_e u⊥_e = 0` for any `u`. Measured
+  1e-13 relative.
+- **T2 (consistency):** the reconstruction is exact for a uniform field
+  only when the dual edge bisects the primal edge. On the raw ISEA grid
+  the crossing point `m_e` sits up to 0.19 `l_e` from the primal midpoint —
+  a property of the projection, not of the pentagons — and the worst-edge
+  error for solid-body rotation is 12% at every N (mean 1.5% at N=32),
+  tracking that offset edge for edge. Eight Lloyd iterations (cell centers
+  moved to their spherical-polygon centroids, vertices recomputed) reduce
+  it to 0.9% worst / 0.2% mean with the area ratio unchanged; see Section
+  8 item 2.
+- **T3 (mass consistency on the dual mesh):** for any `u` and every vertex
+  `v`, `Σ_{e ∈ EV(v)} t_{e,v} u⊥_e d_e = −Σ_{i ∈ CV(v)} R_{i,v} D_i`: the
+  flux of `u` out of each dual triangle equals its kite-weighted
+  divergence (RTSK eq. 25 with the dual divergence of eq. 28; T09 eq. 12
+  states it with the opposite circulation sign). It is what makes the
+  dual-cell mass — and hence PV — evolve consistently and keeps
+  geostrophic modes stationary. Measured 1e-15.
 
 ### 3.6 Laplacian of velocity (for the ∇⁴ closure)
 
@@ -359,6 +370,10 @@ with the reason for it).
   fully PV-conserving variant uses the PV-weighted mass flux `q_e F⊥_e`
   with `q_v = η_v/m_v`, `m_v = (1/A_v) Σ_i R_{i,v} m_i`; adopt that form
   in M1 if the simpler one shows PV drift in the Rossby–Haurwitz test.
+  With variable `q` energy conservation needs the PV averaged *inside* the
+  reconstruction sum, `Q⊥_e = (1/d_e) Σ_{e'} w_{e,e'} l_{e'} F_{e'}
+  ½(q̃_e + q̃_{e'})` with `q̃_e = ½(q_v1 + q_v2)` (RTSK eq. 49–50), not
+  multiplied onto `F⊥_e` afterwards.
 - **Sign of the Coriolis/vorticity term**, derived from the conventions in
   2.3: `−η (k×u) · n_e = +η u⊥_e`. Sanity check: NH, `Φ` decreasing
   poleward, edge with `n_e` northward ⇒ `t_e` westward, steady state gives
@@ -460,11 +475,18 @@ Each milestone has acceptance tests that gate the next. All tests are Node
 scripts under `test/` (the same harness style used throughout the A-grid
 work; `three.module.js` imports cleanly in Node).
 
-### M0 — Mesh (`js/mesh.module.js`)
+### M0 — Mesh (`js/mesh.module.js`) — done
 
-Geometry tests of Section 2.5; TRiSK property tests T1–T3 of Section 3.5;
-operator identity tests of 3.1–3.4 and 3.6–3.7 on analytic fields, with
-error decreasing at the expected order between N=16, 32, 64.
+`buildMesh(grid, {radius, omega})` emits the arrays of Section 2.4;
+`js/dynamics/operators.module.js` implements 3.1–3.5 and 3.7.
+`test/mesh.test.mjs` (`node --test`) certifies at N = 4, 8, 16: the
+counts and connectivity of 2.5; kites partitioning every cell and dual
+triangle and summing to `4πa²` (1e-12); edge frames orthogonal and
+oriented as documented; divergence conserving mass and the gradient its
+negative adjoint (1e-12); curl of solid-body rotation converging to
+`2ω sin φ` and integrating to zero; T1 and T3 at roundoff; T2 and the
+cell reconstructions converging in the mean. The velocity Laplacian (3.6)
+is built and tested in M1 with the closure.
 
 ### M1 — Shallow-water core (single layer, `js/dynamics/shallowWater.module.js`)
 
@@ -575,14 +597,20 @@ core (which does more work per cell through the adjoint gather lists).
    Mitigation: implement against RTSK eq. 22–24 and the MPAS mesh spec,
    certify with T1–T3 before any dynamics, and treat TC2 as the final
    oracle. Do not reason about signs from memory (Section 4.2 note).
-2. **Pentagon-neighborhood accuracy.** `l_e/d_e` spans 0.40–0.89 there;
-   TRiSK's reconstruction is only first-order on irregular cells and MPAS
-   reports "pentagon noise" as its dominant grid imprint. Mitigation: the
-   closure-strength ∇⁴; measure TC2 error localization in M1; local
-   sensitivity to N. If severe, the ISEA cell centers can be relaxed
-   toward centroids (a few Lloyd iterations — MPAS uses centroidal Voronoi
-   tessellations for exactly this reason) at the cost of the equal-area
-   property.
+2. **ISEA cell asymmetry (measured).** TRiSK's reconstruction is exact
+   for a uniform field only where the dual edge bisects the primal edge.
+   On the raw ISEA grid the crossing point is up to 0.19 `l_e` off the
+   primal midpoint on ~30% of edges at every N, and the tangential
+   velocity — hence the Coriolis force — is 12% wrong on the worst of
+   them (T2, Section 3.5). Conservation (T1, T3) is unaffected. Lloyd
+   relaxation (centers → spherical-polygon centroids, circumcenters
+   recomputed, topology unchanged) is the standard remedy — MPAS meshes
+   are centroidal Voronoi tessellations for this reason — and measured
+   at N=32 it takes the worst edge from 12% to 1.6% after 4 iterations
+   and 0.9% after 8, the mean from 1.5% to 0.2%, with the cell-area ratio
+   unchanged (1.245 → 1.244). The residual sits at the pentagons. `Grid`
+   now relaxes by default (`relax: 10`); the raw grid remains available
+   with `relax: 0` and both are covered by the test suites.
 3. **Extra velocity degrees of freedom.** E = 3C edges carry more
    information than a 2-component vector field needs, so hexagonal
    C-grids have a computational mode branch in the divergent part.
