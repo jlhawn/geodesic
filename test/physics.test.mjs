@@ -4,6 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, P0, CP_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR } from '../js/physics/radiation.module.js';
+import { LATENT_HEAT } from '../js/physics/moist.module.js';
 import { createSurface } from '../js/physics/surface.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
@@ -75,8 +76,8 @@ test('radiation warms the column where it absorbs and cools the slab where it em
   let night = -1;
   for (let i = 0; i < C; i++) if (radiation.insolation(i) === 0) { night = i; break; }
   assert.ok(night >= 0);
-  assert.ok(out[3][night] < 0);
-  assert.ok(out[1].every(Number.isFinite) && out[3].every(Number.isFinite));
+  assert.ok(radiation.surfaceFlux[night] < 0);
+  assert.ok(out[1].every(Number.isFinite) && radiation.surfaceFlux.every(Number.isFinite));
 });
 
 test('convective adjustment leaves a stable column and conserves enthalpy', () => {
@@ -113,12 +114,38 @@ test('surface and boundary-layer drag only remove kinetic energy', () => {
 test('the assembled model steps a uniform atmosphere without blowing up', () => {
   const model = createModel(new Grid(4));
   const init = initializeState(model, { seedAmplitude: 0, geostrophic: false });
-  for (let a = 0; a < 4; a++) model.state[a].set(init[a]);
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   model.state[0].fill(P0);
   for (let n = 0; n < 20; n++) model.step(600);
   const d = model.diagnostics();
   assert.ok(Number.isFinite(d.maxWind) && d.maxWind < 30);
   assert.ok(Math.abs(d.mass - P0) / P0 < 1e-12);
-  assert.ok(d.absorbedSolar > 150 && d.absorbedSolar < 300);
+  assert.ok(d.absorbedSolar > 150 && d.absorbedSolar < 350, `absorbed solar ${d.absorbedSolar}`);
   assert.ok(d.outgoingLongwave > 100 && d.outgoingLongwave < 400);
 });
+
+test('cloud water reflects sunlight and closes the window: lower OLR, higher reflection, exact closure', () => {
+  const radiation = createRadiation(mesh, core);
+  const [pi, theta, u, surfaceT] = sampleState(3);
+  const q = new Float64Array(K * C), qc = new Float64Array(K * C);
+  core.diagnose(pi, theta, q, qc);
+  radiation.setTime(0);
+  let day = -1;
+  for (let i = 0; i < C; i++) if (radiation.insolation(i) > 300) { day = i; break; }
+  assert.ok(day >= 0);
+  const clear = { ...evaluate(radiation, day, pi, theta, surfaceT, q, qc) };
+  for (let k = 12; k < 16; k++) qc[k * C + day] = 5e-4;
+  const cloudy = { ...evaluate(radiation, day, pi, theta, surfaceT, q, qc) };
+  assert.ok(cloudy.reflected > clear.reflected + 50, `reflected ${clear.reflected} → ${cloudy.reflected}`);
+  assert.ok(cloudy.olr < clear.olr - 20, `OLR ${clear.olr} → ${cloudy.olr}`);
+  assert.ok(cloudy.closure < EPS && clear.closure < EPS);
+});
+
+function evaluate(radiation, i, pi, theta, surfaceT, q, qc) {
+  const flux = radiation.column(i, pi[i], theta, surfaceT[i], 5, radiation.opticalDepth(mesh.latCell[i]), radiation.insolation(i), q[(K - 1) * C + i], q, qc, 0.07);
+  let layers = 0, scale = 0;
+  for (let k = 0; k < K; k++) { layers += radiation.layerFlux[k]; scale += Math.abs(radiation.layerFlux[k]); }
+  const latent = LATENT_HEAT * radiation.budget.evaporation;
+  const residual = layers + flux + latent - (radiation.budget.absorbedSolar - radiation.budget.outgoingLongwave);
+  return { reflected: radiation.budget.reflectedSolar, olr: radiation.budget.outgoingLongwave, closure: Math.abs(residual) / (scale + Math.abs(flux) + latent) };
+}

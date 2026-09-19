@@ -4,10 +4,11 @@ import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
 import { createSurface } from './physics/surface.module.js';
 import { createMoistPhysics } from './physics/moist.module.js';
+import { createSeaIce } from './physics/ice.module.js';
 
 export const SIDEREAL_DAY = 86164.0905;
-export const STATE_NAMES = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc'];
-export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, surfaceT: C, q: K * C, qc: K * C });
+export const STATE_NAMES = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
+export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, surfaceT: C, q: K * C, qc: K * C, ice: C });
 
 /*
  * The climate model: the sigma-coordinate core with gray radiation, a
@@ -15,9 +16,11 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * boundary-layer drag, large-scale condensation, Betts–Miller and dry
  * convective adjustment, and a 5-day Rayleigh sponge above σ = 0.02 in
  * the role of gravity-wave drag on the polar-night jet. State is
- * [pi, theta, u, surfaceT, q, qc] (vapour and cloud condensate), each
- * on a SharedArrayBuffer; with `moist: false` q and qc are carried but
- * never sourced, so they stay zero.
+ * [pi, theta, u, surfaceT, q, qc, ice] (vapour, cloud condensate, sea
+ * ice thickness), each on a SharedArrayBuffer; with `moist: false` q
+ * and qc are carried but never sourced, so they stay zero. surfaceT is
+ * the skin temperature: the mixed layer's over open water, the ice's
+ * over ice.
  *
  * One time-step tendency is four phases; each takes an index range so
  * the same code runs whole on one thread or sliced across workers:
@@ -33,7 +36,7 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * instance's so a worker computes on the same memory.
  */
 export function createModel(gridOrMesh, {
-  radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {},
+  radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {},
   physics = true, moist = true, nu4Hours = 3, buffers = null,
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
@@ -46,7 +49,9 @@ export function createModel(gridOrMesh, {
   const radiation = createRadiation(mesh, core, radiationOptions);
   const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, ...surfaceOptions });
   const moistPhysics = createMoistPhysics(mesh, core, { buffers: buffers ? buffers.moist : null, ...moistOptions });
-  const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0 };
+  const seaIce = createSeaIce(mesh, iceOptions);
+  const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
+  const surfaceAlbedo = new Float64Array(C);
 
   const lengths = stateLengths({ K, C, E });
   const stateArray = (name) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * lengths[name]));
@@ -67,9 +72,10 @@ export function createModel(gridOrMesh, {
       const bottom = (K - 1) * C;
       forcing[3].fill(0, iFrom, iTo);
       for (let k = 0; k < K; k++) { forcing[1].fill(0, k * C + iFrom, k * C + iTo); forcing[4].fill(0, k * C + iFrom, k * C + iTo); }
-      radiation.apply(moist ? state : state.slice(0, 4), forcing, surface.windSpeed, sums, iFrom, iTo);
+      for (let i = iFrom; i < iTo; i++) surfaceAlbedo[i] = seaIce.albedo(state[6][i]);
+      radiation.apply(moist ? state : state.slice(0, 4), forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo);
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
-      for (let i = iFrom; i < iTo; i++) state[3][i] += dt * forcing[3][i];
+      for (let i = iFrom; i < iTo; i++) seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt);
       if (moist) for (let i = bottom + iFrom; i < bottom + iTo; i++) state[4][i] += dt * forcing[4][i];
     },
     closure(kFrom, kTo, dt, part = 'all') { core.phaseClosure(state, kFrom, kTo, dt, part); },
@@ -86,11 +92,12 @@ export function createModel(gridOrMesh, {
     phases.vertex(input, 0, V);
     phases.layer(input, out, 0, K);
     out[3].fill(0);
+    out[6].fill(0);
   }
 
   let rk4 = null;
   const model = {
-    mesh, core, radiation, surface, moist: moistPhysics, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
+    mesh, core, radiation, surface, moist: moistPhysics, seaIce, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
     shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
@@ -106,9 +113,9 @@ export function createModel(gridOrMesh, {
 
   let lastPrecipTime = 0;
   model.diagnostics = function diagnostics(sums = totals) {
-    const [pi, theta, u, surfaceT, q, qc] = state;
+    const [pi, theta, u, surfaceT, q, qc, ice] = state;
     const precipitation = moistPhysics.precipitation;
-    let area = 0, mass = 0, meanSurfaceT = 0, piMin = Infinity, piMax = -Infinity, maxWind = 0, water = 0, cloud = 0, rain = 0;
+    let area = 0, mass = 0, meanSurfaceT = 0, piMin = Infinity, piMax = -Infinity, maxWind = 0, water = 0, cloud = 0, rain = 0, iceArea = 0, iceVolume = 0, albedoSum = 0;
     for (let i = 0; i < C; i++) {
       const a = mesh.areaCell[i];
       area += a;
@@ -119,6 +126,8 @@ export function createModel(gridOrMesh, {
       water += a * moistPhysics.columnWater(pi, q, i);
       cloud += a * moistPhysics.columnWater(pi, qc, i);
       rain += a * precipitation[i];
+      if (ice[i] > 0) { iceArea += a; iceVolume += a * ice[i]; }
+      albedoSum += a * seaIce.albedo(ice[i]);
     }
     for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));
     const interval = model.time - lastPrecipTime;
@@ -127,6 +136,8 @@ export function createModel(gridOrMesh, {
       absorbedSolar: sums.absorbedSolar / area, outgoingLongwave: sums.outgoingLongwave / area, sensibleHeat: sums.sensibleHeat / area,
       evaporation: sums.evaporation / area, latentHeat: moistPhysics.latentHeat * sums.evaporation / area,
       columnWater: water / area, columnCloud: cloud / area, precipitation: interval > 0 ? rain / area / interval : 0,
+      iceFraction: iceArea / area, iceThickness: iceArea > 0 ? iceVolume / iceArea : 0, surfaceAlbedo: albedoSum / area,
+      planetaryAlbedo: sums.insolation > 0 ? sums.reflectedSolar / sums.insolation : 0,
     };
     precipitation.fill(0);
     lastPrecipTime = model.time;

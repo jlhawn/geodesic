@@ -905,6 +905,44 @@ Column cloud water (TCW) is a diagnostic and a page overlay; the step
 costs 126 ms serial at N=16 against 98 ms dry. Cloud–radiation
 coupling (albedo and longwave emissivity of cloud) is the next step.
 
+### M9 — Sea ice and surface albedo — done (untuned)
+
+`js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model
+in the manner of Semtner (1976) on the slab ocean, with ice thickness
+as the seventh state array. Open water is the mixed layer (2.1×10⁷
+J/m²/K); when it cools to the seawater freezing point (271.35 K) the
+deficit freezes into ice of latent heat ρ_i L_f. Ice has a skin of
+small heat capacity (2×10⁵ J/m²/K) whose temperature answers the
+surface flux and the conduction k (T_f − T_skin)/h from the base (k = 2
+W/m/K, h floored at 0.1 m for stability); the conducted heat freezes
+water onto the base, a skin that would pass 273.15 K melts the ice from
+the top instead, and ice that melts away returns its leftover energy to
+the mixed layer. The surface energy — mixed-layer heat over the freezing
+point, skin heat, minus the ice's latent heat — changes by exactly the
+surface flux through every transition (`test/ice.test.mjs`).
+`surfaceT` is the skin temperature the atmosphere sees in both states.
+Albedo is 0.07 for open water, rising linearly to 0.6 at 0.5 m of ice.
+The initial state carries 0.5 m of ice wherever the initial surface is
+below freezing (poleward of ~60°).
+
+### M10 — Clouds in radiation — done (untuned)
+
+Each layer's cloud water path gives it a gray emissivity
+1 − exp(−130 m²/kg × path) that joins every longwave band: the vapour
+and gas bands as 1 − (1 − ε_gas)(1 − ε_cloud), and the window, which is
+now an exchange band of its own that is transparent only where there is
+no cloud. In the shortwave the column's cloud optical depth (22.5 m²/kg
+× path, i.e. 150 m²/kg scaled by 1 − g with g = 0.85) reflects the beam
+with the two-stream reflectance τ/(τ + 2μ); what passes is absorbed by
+the surface with its per-cell albedo, with the multiple reflections
+between surface and cloud summed. The fixed planetary albedo of 0.3 is
+gone: it is now produced by clouds and ice, and diagnosed. Radiation's
+closure still holds exactly (with the latent heat of evaporation
+counted as leaving the surface). The cloud–albedo, cloud–longwave and
+ice–albedo feedbacks are all live from here, so the climate needs a
+tuning pass over the cloud optical scale, the autoconversion threshold
+and the vapour coupling.
+
 ## 7. Module layout in this repo
 
 ```
@@ -922,6 +960,7 @@ js/
     init.module.js          ported: thermal init, balance, seed, bands, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
+    ice.module.js           M9: slab ocean with zero-layer sea ice and surface albedo
   model.module.js           assembles core + physics, RK4 step, diagnostics
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase

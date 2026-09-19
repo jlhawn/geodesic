@@ -62,7 +62,7 @@ function apply(field, offset, { cells, weights }, out, outOffset, count) {
  * normals.
  */
 export function regridState(source, target, state) {
-  const [pi, theta, u, surfaceT, q = null, qc = null] = state;
+  const [pi, theta, u, surfaceT, q = null, qc = null, ice = null] = state;
   const K = source.core.K;
   if (K !== target.core.K) throw new Error(`layer counts differ: ${K} vs ${target.core.K}`);
   const sm = source.mesh, tm = target.mesh;
@@ -71,6 +71,8 @@ export function regridState(source, target, state) {
   const outPi = new Float64Array(tm.nCells), outTheta = new Float64Array(K * tm.nCells), outU = new Float64Array(K * tm.nEdges), outSurfaceT = new Float64Array(tm.nCells);
   const outQ = q ? new Float64Array(K * tm.nCells) : null;
   const outQc = qc ? new Float64Array(K * tm.nCells) : null;
+  const outIce = ice ? new Float64Array(tm.nCells) : null;
+  if (ice) apply(ice, 0, atCells, outIce, 0, tm.nCells);
   apply(pi, 0, atCells, outPi, 0, tm.nCells);
   apply(surfaceT, 0, atCells, outSurfaceT, 0, tm.nCells);
   const vector = new Float64Array(3 * sm.nCells);
@@ -88,7 +90,7 @@ export function regridState(source, target, state) {
     }
   }
   const out = [outPi, outTheta, outU, outSurfaceT];
-  for (const tracer of [outQ, outQc]) {
+  for (const tracer of [outQ, outQc, outIce]) {
     if (!tracer) continue;
     for (let x = 0; x < tracer.length; x++) if (tracer[x] < 0) tracer[x] = 0;
     out.push(tracer);

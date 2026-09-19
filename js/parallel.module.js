@@ -33,7 +33,7 @@ export function phaseChunks({ K, C, E, V }, workers = 8) {
   };
 }
 
-export const TOTALS = ['absorbedSolar', 'outgoingLongwave', 'sensibleHeat', 'evaporation'];
+export const TOTALS = ['absorbedSolar', 'outgoingLongwave', 'sensibleHeat', 'evaporation', 'insolation', 'reflectedSolar'];
 
 /*
  * The model with its time step computed by worker threads. The mesh and

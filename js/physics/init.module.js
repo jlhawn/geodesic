@@ -1,6 +1,7 @@
 import { cellVector } from '../dynamics/operators.module.js';
 import { SOLAR_CONSTANT } from './radiation.module.js';
 import { saturationHumidity } from './moist.module.js';
+import { FREEZING_POINT } from './ice.module.js';
 
 const REFERENCE_SURFACE_T = 305.086;
 const AVERAGE_SURFACE_T = 288;
@@ -179,5 +180,6 @@ export function initializeState(model, {
     }
   }
 
-  return [pi, theta, u, surfaceT, initialHumidity(model, pi, theta, { surfaceHumidity }), new Float64Array(K * C)];
+  const ice = Float64Array.from(surfaceT, (t) => (t < FREEZING_POINT ? 0.5 : 0));
+  return [pi, theta, u, surfaceT, initialHumidity(model, pi, theta, { surfaceHumidity }), new Float64Array(K * C), ice];
 }
