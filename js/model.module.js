@@ -22,10 +22,13 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * One time-step tendency is four phases; each takes an index range so
  * the same code runs whole on one thread or sliced across workers:
  *   flux(layers)   mass flux and divergence
- *   column(cells)  dπ/dt, σ̇, Exner and geopotential, lowest-layer wind
+ *   column(cells)  dπ/dt, σ̇, Exner and geopotential
  *   vertex(verts)  kite-weighted π
- *   layer(layers)  θ and momentum tendencies, closures, drag
- *   cell(cells)    radiation and the slab surface
+ *   layer(layers)  θ and momentum tendencies, drag
+ * After the RK4 step, once per step and applied to the state directly:
+ *   physics(cells) radiation, surface fluxes and evaporation
+ *   closure(layers) the ∇⁴ closures
+ *   adjust(cells)  condensation, convection, filler
  * Arrays read across phases live in `shared`; `buffers` adopts another
  * instance's so a worker computes on the same memory.
  */
@@ -38,7 +41,7 @@ export function createModel(gridOrMesh, {
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;
   const nu4 = Math.pow(spacing / Math.PI, 4) / (nu4Hours * 3600);
-  const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, buffers: buffers ? buffers.core : null, ...coreOptions });
+  const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, splitClosure: true, buffers: buffers ? buffers.core : null, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const radiation = createRadiation(mesh, core, radiationOptions);
   const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, ...surfaceOptions });
@@ -48,22 +51,28 @@ export function createModel(gridOrMesh, {
   const lengths = stateLengths({ K, C, E });
   const stateArray = (name) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * lengths[name]));
   const state = STATE_NAMES.map(stateArray);
+  const forcing = STATE_NAMES.map((name) => new Float64Array(lengths[name]));
 
   const phases = {
     flux(input, kFrom, kTo) { core.phaseFlux(input, kFrom, kTo); },
-    column(input, out, iFrom, iTo) {
-      core.phaseColumn(input, out, iFrom, iTo);
-      if (physics) surface.lowestWindSpeed(input[2], iFrom, iTo);
-    },
+    column(input, out, iFrom, iTo) { core.phaseColumn(input, out, iFrom, iTo); },
     vertex(input, vFrom, vTo) { core.phaseVertex(input, vFrom, vTo); },
     layer(input, out, kFrom, kTo, part = 'all') {
       core.phaseLayer(input, out, kFrom, kTo, part);
       if (physics && part !== 'tracers') surface.applyLayers(input, out, kFrom, kTo);
     },
-    cell(input, out, iFrom, iTo, sums) {
-      out[3].fill(0, iFrom, iTo);
-      if (physics) radiation.apply(moist ? input : input.slice(0, 4), out, surface.windSpeed, sums, iFrom, iTo);
+    physics(iFrom, iTo, dt, sums) {
+      if (!physics) return;
+      surface.lowestWindSpeed(state[2], iFrom, iTo);
+      const bottom = (K - 1) * C;
+      forcing[3].fill(0, iFrom, iTo);
+      for (let k = 0; k < K; k++) { forcing[1].fill(0, k * C + iFrom, k * C + iTo); forcing[4].fill(0, k * C + iFrom, k * C + iTo); }
+      radiation.apply(moist ? state : state.slice(0, 4), forcing, surface.windSpeed, sums, iFrom, iTo);
+      for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
+      for (let i = iFrom; i < iTo; i++) state[3][i] += dt * forcing[3][i];
+      if (moist) for (let i = bottom + iFrom; i < bottom + iTo; i++) state[4][i] += dt * forcing[4][i];
     },
+    closure(kFrom, kTo, dt, part = 'all') { core.phaseClosure(state, kFrom, kTo, dt, part); },
     adjust(iFrom, iTo, dt) {
       if (!physics) return;
       if (moist) moistPhysics.adjust(state, iFrom, iTo, dt);
@@ -76,7 +85,7 @@ export function createModel(gridOrMesh, {
     phases.column(input, out, 0, C);
     phases.vertex(input, 0, V);
     phases.layer(input, out, 0, K);
-    phases.cell(input, out, 0, C, totals);
+    out[3].fill(0);
   }
 
   let rk4 = null;
@@ -89,6 +98,8 @@ export function createModel(gridOrMesh, {
     rk4 ??= createRK4Arrays(STATE_NAMES.map((name) => lengths[name]));
     radiation.setTime(model.time);
     rk4(tendency, state, dt);
+    phases.physics(0, C, dt, totals);
+    phases.closure(0, K, dt);
     phases.adjust(0, C, dt);
     model.time += dt;
   };

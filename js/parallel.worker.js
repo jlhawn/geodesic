@@ -35,8 +35,8 @@ function unit(phase, chunk, input, out) {
       else model.phases.vertex(input, from, to);
       break;
     case PHASE.LAYER: model.phases.layer(input, out, from, to, chunk.kind); break;
-    case PHASE.CELL:
-      model.phases.cell(input, out, from, to, partial);
+    case PHASE.PHYSICS:
+      model.phases.physics(from, to, params[0], partial);
       for (const name of TOTALS) sums[name] += partial[name];
       break;
     case PHASE.ADVANCE: {
@@ -52,6 +52,7 @@ function unit(phase, chunk, input, out) {
       for (let i = from; i < to; i++) s[i] += w * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
       break;
     }
+    case PHASE.CLOSURE: model.phases.closure(from, to, params[0], chunk.kind); break;
     case PHASE.ADJUST: model.phases.adjust(from, to, params[0]); break;
     default: break;
   }
@@ -62,13 +63,13 @@ function run(phase) {
   const out = stages[Atomics.load(ctrl, 4)];
   const units = chunks[phase];
   if (!units) return;
-  if (phase === PHASE.CELL) { model.radiation.setTime(params[2]); for (const name of TOTALS) sums[name] = 0; }
+  if (phase === PHASE.PHYSICS) { model.radiation.setTime(params[2]); for (const name of TOTALS) sums[name] = 0; }
   for (;;) {
     const c = Atomics.add(ctrl, 6, 1);
     if (c >= units.length) break;
     unit(phase, units[c], input, out);
   }
-  if (phase === PHASE.CELL) TOTALS.forEach((name, t) => { totals[TOTALS.length * index + t] = sums[name]; });
+  if (phase === PHASE.PHYSICS) TOTALS.forEach((name, t) => { totals[TOTALS.length * index + t] = sums[name]; });
 }
 
 post({ type: 'ready', index });

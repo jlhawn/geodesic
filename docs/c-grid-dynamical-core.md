@@ -793,6 +793,20 @@ phase, 60% of the step, scales to 6.5× and is most likely memory-bound.
 The emergence driver takes `WORKERS=<n>` in the environment; the default
 is every core.
 
+**Step cost (Sept 19, 2026).** Three changes took the N=64 step from
+359 to 253 ms on 10 workers: the ∇⁴ closures are applied once per step
+after the RK4 dynamics instead of inside all four stages (with a 3 h
+timescale the explicit step is far inside stability; JW06 unchanged);
+radiation, surface fluxes and evaporation likewise run once per step as
+an explicit increment of the state, which also makes the water budget
+close to roundoff because evaporation is applied exactly once; and the
+TRiSK weights carry the neighbour's `dvEdge` from mesh build. Fusing the
+three tracer transports into one sweep gained nothing and was dropped.
+The time step is now 900·16/N s (2× the original; RK4's gravity-wave
+limit is ~3×, where a 3-day N=16 run differs by 0.1 hPa RMS and 0.36 m/s
+from the original step), so N=64 runs a simulated day in 1.65 min of
+wall time, 1.07 min at 3× (`DT_FACTOR=3` for the driver).
+
 The same two files run in the browser: `threads.module.js` provides
 the spawn/receive primitives from `worker_threads` or Web Workers, and
 the page's model worker acts as coordinator — a dedicated worker may

@@ -2,7 +2,7 @@ import { createModel, STATE_NAMES, stateLengths } from './model.module.js';
 import { shareMesh } from './mesh.module.js';
 import { parallelism, spawn } from './threads.module.js';
 
-export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, CELL: 4, ADVANCE: 5, COMBINE: 6, ADJUST: 7, EXIT: 8 };
+export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, PHYSICS: 4, ADVANCE: 5, COMBINE: 6, CLOSURE: 7, ADJUST: 8, EXIT: 9 };
 
 function blocks(kind, n, size, extra = {}) {
   const chunks = [];
@@ -23,9 +23,10 @@ export function phaseChunks({ K, C, E, V }) {
     [PHASE.FLUX]: blocks('layers', K, 1),
     [PHASE.COLUMN]: [...blocks('cells', C, 2048), ...blocks('vertices', V, 4096)],
     [PHASE.LAYER]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
-    [PHASE.CELL]: blocks('cells', C, 1024),
+    [PHASE.PHYSICS]: blocks('cells', C, 1024),
     [PHASE.ADVANCE]: arrays,
     [PHASE.COMBINE]: arrays,
+    [PHASE.CLOSURE]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
     [PHASE.ADJUST]: blocks('cells', C, 512),
   };
 }
@@ -104,7 +105,6 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     run(PHASE.FLUX, { useTrial, stage });
     run(PHASE.COLUMN, { useTrial, stage });
     run(PHASE.LAYER, { useTrial, stage });
-    run(PHASE.CELL, { useTrial, stage });
   }
 
   model.step = function step(dt) {
@@ -116,6 +116,8 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     run(PHASE.ADVANCE, { stage: 2, factor: dt });
     tendencyPhases(1, 3);
     run(PHASE.COMBINE, { dt });
+    run(PHASE.PHYSICS, { dt });
+    run(PHASE.CLOSURE, { dt });
     run(PHASE.ADJUST, { dt });
     model.time += dt;
   };

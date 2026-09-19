@@ -56,7 +56,7 @@ export function sigmaInterfaces() {
 export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
-    nu4 = 0, nu4Theta = 0, forcing = null, surfaceGeopotential = null, buffers = null,
+    nu4 = 0, nu4Theta = 0, forcing = null, surfaceGeopotential = null, buffers = null, splitClosure = false,
   } = options;
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -109,6 +109,7 @@ export function createSigmaCore(mesh, options = {}) {
   const qcFlux = new Float64Array(E);
   const divQcFlux = new Float64Array(C);
   const massField = new Float64Array(C);
+  const pvWeights = Float64Array.from(weightsOnEdge, (w, slot) => w * dvEdge[edgesOnEdge[slot]]);
 
   function diagnoseColumn(i, pi, theta, q = null, qc = null) {
     for (let k = 0; k < K; k++) {
@@ -190,10 +191,37 @@ export function createSigmaCore(mesh, options = {}) {
   }
 
   /*
+   * The ∇⁴ closure of one layer of a scalar field as a tendency (or, with
+   * a time step, as an explicit increment of the field). `conservative`
+   * applies it to the mass-weighted field so the column's total is
+   * preserved exactly under it (used for water); theta keeps the closure
+   * on the field itself.
+   */
+  function scalarClosure(k, pi, field, target, coefficient, conservative) {
+    const off = k * C;
+    if (conservative) {
+      for (let i = 0; i < C; i++) massField[i] = pi[i] * field[off + i];
+      laplacianScalar(mesh, massField, lapTheta);
+      laplacianScalar(mesh, lapTheta, lapTheta2);
+      for (let i = 0; i < C; i++) target[off + i] -= coefficient * lapTheta2[i] / pi[i];
+    } else {
+      laplacianScalar(mesh, field.subarray(off, off + C), lapTheta);
+      laplacianScalar(mesh, lapTheta, lapTheta2);
+      for (let i = 0; i < C; i++) target[off + i] -= coefficient * lapTheta2[i];
+    }
+  }
+
+  function momentumClosure(k, u, target, coefficient) {
+    const uk = u.subarray(k * E, (k + 1) * E);
+    laplacianVelocity(mesh, uk, lap, divScratch, curlScratch);
+    laplacianVelocity(mesh, lap, lap2, divScratch, curlScratch);
+    const off = k * E;
+    for (let e = 0; e < E; e++) target[off + e] -= coefficient * lap2[e];
+  }
+
+  /*
    * Flux-form transport of a layer scalar by the mass fluxes, with the
-   * ∇⁴ closure. `conservative` applies the closure to the mass-weighted
-   * field so the column's total is preserved exactly under it (used for
-   * water); theta keeps the closure on the field itself.
+   * ∇⁴ closure as part of the tendency unless the closure is split off.
    */
   function transportLayer(k, pi, field, fieldLower, edgeFlux, divField, dField, conservative = false) {
     const off = k * C;
@@ -211,17 +239,24 @@ export function createSigmaCore(mesh, options = {}) {
       const vertical = (lowerFlow * lower - upperFlow * upper - field[idx] * (lowerFlow - upperFlow)) / (pi[i] * dSigma[k]);
       dField[idx] = -(divField[i] - field[idx] * divFlux[idx]) / pi[i] - vertical;
     }
-    if (nu4Theta > 0) {
-      if (conservative) {
-        for (let i = 0; i < C; i++) massField[i] = pi[i] * field[off + i];
-        laplacianScalar(mesh, massField, lapTheta);
-        laplacianScalar(mesh, lapTheta, lapTheta2);
-        for (let i = 0; i < C; i++) dField[off + i] -= nu4Theta * lapTheta2[i] / pi[i];
-      } else {
-        laplacianScalar(mesh, field.subarray(off, off + C), lapTheta);
-        laplacianScalar(mesh, lapTheta, lapTheta2);
-        for (let i = 0; i < C; i++) dField[off + i] -= nu4Theta * lapTheta2[i];
+    if (nu4Theta > 0 && !splitClosure) scalarClosure(k, pi, field, dField, nu4Theta, conservative);
+  }
+
+  /*
+   * The ∇⁴ closures applied to the state itself over one time step,
+   * for cores built with splitClosure: the model runs this once per
+   * step after the RK4 dynamics instead of inside every stage.
+   */
+  function phaseClosure(state, kFrom, kTo, dt, part = 'all') {
+    const [pi, theta, u] = state;
+    const q = state[4] ?? null, qc = state[5] ?? null;
+    for (let k = kFrom; k < kTo; k++) {
+      if (part !== 'momentum' && nu4Theta > 0) {
+        scalarClosure(k, pi, theta, theta, dt * nu4Theta, false);
+        if (q) scalarClosure(k, pi, q, q, dt * nu4Theta, true);
+        if (qc) scalarClosure(k, pi, qc, qc, dt * nu4Theta, true);
       }
+      if (part !== 'tracers' && nu4 > 0) momentumClosure(k, u, u, dt * nu4);
     }
   }
 
@@ -258,9 +293,10 @@ export function createSigmaCore(mesh, options = {}) {
       for (let e = 0; e < E; e++) {
         const i = cellsOnEdge[2 * e], j = cellsOnEdge[2 * e + 1];
         let pv = 0;
+        const qHere = 0.5 * qEdge[e];
         for (let s = 0; s < nEdgesOnEdge[e]; s++) {
-          const other = edgesOnEdge[maxEdgesOnEdge * e + s];
-          pv += weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[other] * fk[other] * 0.5 * (qEdge[e] + qEdge[other]);
+          const slot = maxEdgesOnEdge * e + s, other = edgesOnEdge[slot];
+          pv += pvWeights[slot] * fk[other] * (qHere + 0.5 * qEdge[other]);
         }
         const pgfPi = cp * 0.5 * (thetaV[off + i] * dExnerDpi[off + i] + thetaV[off + j] * dExnerDpi[off + j]) * gradPi[e];
         const lowerFlow = 0.5 * (piSigmaDot[(k + 1) * C + i] + piSigmaDot[(k + 1) * C + j]);
@@ -270,11 +306,7 @@ export function createSigmaCore(mesh, options = {}) {
         const vertical = (lowerFlow * lowerU - upperFlow * upperU - uk[e] * (lowerFlow - upperFlow)) / (piEdge[e] * dSigma[k]);
         dUk[e] = pv / dcEdge[e] - gradPhi[e] - pgfPi - vertical;
       }
-      if (nu4 > 0) {
-        laplacianVelocity(mesh, uk, lap, divScratch, curlScratch);
-        laplacianVelocity(mesh, lap, lap2, divScratch, curlScratch);
-        for (let e = 0; e < E; e++) dUk[e] -= nu4 * lap2[e];
-      }
+      if (nu4 > 0 && !splitClosure) momentumClosure(k, u, dU, nu4);
     }
   }
 
@@ -298,7 +330,7 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, diagnose, diagnoseColumn, diagnostics, mass, setForcing, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV } };
+  return { K, levels, sigmaMid, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, setForcing, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV } };
 }
 
 /*
