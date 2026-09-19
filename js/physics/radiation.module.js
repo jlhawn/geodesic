@@ -34,7 +34,10 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * stratosphere do. In each absorbing band every emission is either
  * absorbed on its way or leaves through the top or reaches the surface,
  * so the layer and surface energy fluxes sum exactly to absorbed solar
- * minus outgoing longwave.
+ * minus outgoing longwave. With vaporCoupling > 0 (m²/kg) and a
+ * humidity field, the vapour band's optical depth is instead
+ * vaporCoupling times each layer's water mass, so the greenhouse
+ * follows the model's own humidity.
  *
  * Shortwave: the fraction `ozoneAbsorption` of the incoming beam is
  * absorbed aloft. The ozone column follows Lacis & Hansen (1974)
@@ -48,7 +51,7 @@ export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.3, surfaceHeatCapacity = 2.1e7,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 5,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3,
-  exchangeCoefficient = 1.5e-3, gustiness = 3, latentHeat = LATENT_HEAT,
+  exchangeCoefficient = 1.5e-3, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, exnerLayer } = core.diagnostics;
   const levels = core.levels;
@@ -102,12 +105,13 @@ export function createRadiation(mesh, core, {
     return [outgoing, back];
   }
 
-  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null) {
+  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null) {
     const ozoneHeating = beam * ozoneAbsorption;
     const absorbedSolar = (1 - albedo) * (beam - ozoneHeating);
     const surfaceEmission = STEFAN_BOLTZMANN * surfaceT * surfaceT * surfaceT * surfaceT;
+    const coupled = vaporCoupling > 0 && q !== null;
     for (let k = 0; k < K; k++) {
-      emissivity[k] = 1 - Math.exp(-tau0 * shape[k]);
+      emissivity[k] = 1 - Math.exp(coupled ? -vaporCoupling * Math.max(0, q[k * C + i]) * pi * dSigma[k] / g : -tau0 * shape[k]);
       temperature[k] = theta[k * C + i] * exnerLayer[k * C + i];
       netFlux[k] = ozoneHeating * ozoneFraction[k];
     }
@@ -138,7 +142,7 @@ export function createRadiation(mesh, core, {
     const bottom = (K - 1) * C;
     if (totals) { totals.absorbedSolar = 0; totals.outgoingLongwave = 0; totals.sensibleHeat = 0; totals.evaporation = 0; }
     for (let i = iFrom; i < iTo; i++) {
-      const surfaceFlux = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], insolation(i), q && dQ ? q[bottom + i] : null);
+      const surfaceFlux = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], insolation(i), q && dQ ? q[bottom + i] : null, q && dQ ? q : null);
       for (let k = 0; k < K; k++) {
         const massPerArea = pi[i] * dSigma[k] / g;
         dTheta[k * C + i] += netFlux[k] / (cp * massPerArea) / exnerLayer[k * C + i];
