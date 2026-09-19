@@ -795,7 +795,7 @@ chooses the count (cores minus two by default).
 
 ---
 
-### M7 — Moisture — in progress
+### M7 — Moisture — done (first tuning)
 
 The moist gray-radiation aquaplanet of Frierson, Held & Zurita-Gotor
 (2006), built on the dry model without changing its results when the
@@ -850,6 +850,19 @@ tendency, then condensation, Betts–Miller, dry adjustment and the
 filler as adjustments. One day at N=4 from the dry equilibrium closes
 the water budget to 3% (the residual is the last-stage evaporation
 estimate in the diagnostics, not a loss).
+
+First moist climate (`moist2`, N=16, 120 days from the dry equilibrium
+profile with 70% humidity, 8 workers, 14.5 min): latent heat 90–100
+W/m², sensible 19–22, rain 3.1–3.4 mm/day, precipitable water rising
+15 → 22 kg/m²; the tropical 850–500 hPa lapse rate is 6.3 K/km (dry
+model 8.4) — the moist adiabat — and mid-latitudes 4.9. Eddies are far
+stronger than in the dry model: EKE(250) 222/227/290/469 at days
+30/60/90/120 against 63/89/117/157, the winter jet 56 m/s against 35,
+and the winter subpolar trough appears by day 120. Global Ts 283–285 K
+over these 120 days with the budget still +6 W/m² in the atmosphere's
+favour, so the slab has not settled; the tropics are cool (292 K) and
+the poles moist (18 kg/m²) for Earth, which the next tuning pass
+should address (reference humidity, relaxation time, coupling).
 
 ## 7. Module layout in this repo
 
