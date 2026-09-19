@@ -35,7 +35,17 @@ const PALETTES = {
   },
 };
 
-const DEFAULTS = { overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 4, projection: 'sphere', palettes: { sequential: 'viridis', diverging: 'blue-gray-red' }, panel: 'open' };
+const DEFAULTS = { overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 4, heightStep: 60, projection: 'sphere', palettes: { sequential: 'viridis', diverging: 'blue-gray-red' }, panel: 'open' };
+
+/*
+ * The contour row draws isobars of surface pressure at the surface and
+ * height contours of the pressure surface at any other level.
+ */
+const ISOLINES = {
+  surface: { label: 'Isobars', unit: 'hPa', setting: 'isobarStep', steps: [2, 4, 5, 10, 25], field: (frame) => Float32Array.from(frame.ps, (p) => p / 100) },
+  level: { label: 'Height lines', unit: 'm', setting: 'heightStep', steps: [20, 30, 60, 120, 240], field: (frame) => frame.height },
+};
+const isolinesFor = (level) => (level === 'surface' ? ISOLINES.surface : ISOLINES.level);
 
 function loadSettings() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('climate.settings') || '{}'), palettes: { ...DEFAULTS.palettes, ...JSON.parse(localStorage.getItem('climate.settings') || '{}').palettes } }; } catch { return { ...DEFAULTS }; }
@@ -154,15 +164,21 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
   function paintIsobars() {
     isobars.setVisible(settings.isobars === 'on');
     if (settings.isobars !== 'on') return;
+    const isolines = isolinesFor(settings.level);
     isobars.setColor(settings.overlay === 'none' ? 0xffffff : 0x000000);
-    isobars.update(Float32Array.from(latest.ps, (p) => p / 100), Number(settings.isobarStep));
+    isobars.update(isolines.field(latest), Number(settings[isolines.setting]));
   }
 
   function render() {
     for (const group of panel.querySelectorAll('.options[data-setting]')) {
       for (const button of group.querySelectorAll('button[data-value]')) button.classList.toggle('selected', button.dataset.value === String(settings[group.dataset.setting]));
     }
-    document.getElementById('isobarStep').value = String(settings.isobarStep);
+    const isolines = isolinesFor(settings.level);
+    document.getElementById('isolineLabel').textContent = isolines.label;
+    document.getElementById('isolineUnit').textContent = isolines.unit;
+    const stepSelect = document.getElementById('isolineStep');
+    stepSelect.replaceChildren(...isolines.steps.map((step) => { const option = document.createElement('option'); option.value = String(step); option.textContent = String(step); return option; }));
+    stepSelect.value = String(settings[isolines.setting]);
     const paletteSelect = document.getElementById('palette');
     const overlay = OVERLAYS[settings.overlay];
     paletteSelect.style.display = overlay.kind ? '' : 'none';
@@ -209,7 +225,7 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
       if (button) update({ [group.dataset.setting]: button.dataset.value });
     });
   }
-  document.getElementById('isobarStep').addEventListener('change', (event) => update({ isobarStep: Number(event.target.value) }));
+  document.getElementById('isolineStep').addEventListener('change', (event) => update({ [isolinesFor(settings.level).setting]: Number(event.target.value) }));
   document.getElementById('palette').addEventListener('change', (event) => {
     const kind = OVERLAYS[settings.overlay].kind;
     update({ palettes: { ...settings.palettes, [kind]: event.target.value } });

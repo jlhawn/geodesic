@@ -50,10 +50,10 @@
     </div>
     <span class="label">Overlay</span>
     <div class="options" data-setting="overlay"><button data-value="wind">Wind</button><button data-value="temp">Temp</button><button data-value="mslp">MSLP</button><button data-value="none">None</button></div>
-    <span class="label">Isobars</span>
+    <span class="label" id="isolineLabel">Isobars</span>
     <div class="options" data-setting="isobars">
       <button data-value="on">On</button><button data-value="off">Off</button>
-      <span class="unit">every</span><select id="isobarStep"><option>2</option><option>4</option><option>5</option><option>10</option><option>25</option></select><span class="unit">hPa</span>
+      <span class="unit">every</span><select id="isolineStep"></select><span class="unit" id="isolineUnit">hPa</span>
     </div>
     <span class="label">Projection</span>
     <div class="options" data-setting="projection"><button data-value="sphere">Sphere</button><button data-value="map">Equal Earth</button></div>
