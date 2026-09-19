@@ -66,7 +66,7 @@
     import runClimate from './js/climate.module.js';
     const params = new URLSearchParams(location.search);
     const snapshot = params.get('snapshot');
-    const from = snapshot ?? params.get('from') ?? 'runs/moist2_state_day120.json';
+    const from = snapshot ?? params.get('from') ?? 'runs/moist64_state_day175.json';
     const workers = Number(params.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 2));
     runClimate({ N: params.get('N') ? Number(params.get('N')) : (from === 'none' ? 64 : null), from: from === 'none' ? null : from, workers, paused: snapshot !== null || params.has('paused') });
   </script>
