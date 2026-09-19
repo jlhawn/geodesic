@@ -774,7 +774,8 @@ js/
   parallel.worker.js        M6: one worker's block of every phase
   threads.module.js         M6: worker_threads / Web Worker primitives behind the engine
   model.worker.js           browser worker: steps the model, fills shared buffers
-  climate.module.js         live model page (climate.html): fields, legend, wind layers
+  climate.module.js         live model page (climate.html): control panel, overlays, wind layers
+  levels.module.js          fields on a pressure surface; season phrase for the model time
   windParticles.module.js   wind traced by particles with fading trails over the globe
   charts.module.js          synoptic charts from saved states (charts.html)
   unifiedViewer.module.js   existing, gains model-overlay mode

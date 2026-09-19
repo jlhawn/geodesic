@@ -155,11 +155,13 @@ export function initUnifiedViewer(container, grid, config = {}) {
     backgroundColor = 0x111111,
     getColor = (cell) => cell.color,
     dynamicColors = false,
+    controls = true,
   } = config;
 
   // --- 1. Geometry Generation ---
   const pData = [], kData = [], iData = [], idxData = [], texDataArray = [], centerData = [];
   const cellVertexStart = [], cellVertexCount = [];
+  const cellsOnVertex = [];
   const colorHelper = new THREE.Color();
   let vertexCounter = 0, cellCounter = 0;
 
@@ -172,6 +174,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
 
     texDataArray.push(cv.x, cv.y, cv.z, 1.0);
     centerData.push(cv.x, cv.y, cv.z);
+    for (const v of verts) if (v.index !== undefined) (cellsOnVertex[v.index] ??= []).push(currentCellID);
 
     const cVal = getColor(cell);
     if (cVal && typeof cVal === 'object' && 'r' in cVal) colorHelper.setRGB(cVal.r, cVal.g, cVal.b);
@@ -317,7 +320,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
   btnToggleMode.onclick = () => toggleMode('sphere');
 
   ui.appendChild(btnToggleMode);
-  container.appendChild(ui);
+  if (controls) container.appendChild(ui);
 
   // --- 5. Animation Loop ---
   const state = { isDragging: false, lastX: 0, lastY: 0, zoom: 150, pan: new THREE.Vector3(0, 0, 0), lastVector: null };
@@ -480,6 +483,69 @@ export function initUnifiedViewer(container, grid, config = {}) {
   }
 
   /*
+   * Contour lines of a cell field on the globe: marching triangles over
+   * the Delaunay triangles (the three cells around each vertex), drawn
+   * through the same projection as the cells. update() takes the field
+   * and the contour interval.
+   */
+  function addContourLayer({ color = 0xffffff, opacity = 0.7 } = {}) {
+    const triangles = cellsOnVertex.filter((cells) => cells && cells.length === 3);
+    const capacity = 6 * triangles.length;
+    const positions = new Float32Array(3 * capacity);
+    const cellIndex = new Float32Array(capacity);
+    const contourGeometry = new THREE.BufferGeometry();
+    const positionAttribute = new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage);
+    const cellAttribute = new THREE.BufferAttribute(cellIndex, 1).setUsage(THREE.DynamicDrawUsage);
+    contourGeometry.setAttribute('position', positionAttribute);
+    contourGeometry.setAttribute('cellIndex', cellAttribute);
+    contourGeometry.setDrawRange(0, 0);
+    const contourMaterial = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+    projectMaterial(contourMaterial, 0.008);
+    const lines = new THREE.LineSegments(contourGeometry, contourMaterial);
+    lines.frustumCulled = false;
+    lines.visible = false;
+    scene.add(lines);
+    const lift = 1.003;
+
+    function update(field, step) {
+      let fmin = Infinity, fmax = -Infinity;
+      for (const value of field) { if (value < fmin) fmin = value; if (value > fmax) fmax = value; }
+      let n = 0;
+      const crossing = (a, b, level, reference) => {
+        const t = (level - field[a]) / (field[b] - field[a]);
+        const x = centerData[3 * a] + t * (centerData[3 * b] - centerData[3 * a]);
+        const y = centerData[3 * a + 1] + t * (centerData[3 * b + 1] - centerData[3 * a + 1]);
+        const z = centerData[3 * a + 2] + t * (centerData[3 * b + 2] - centerData[3 * a + 2]);
+        const norm = Math.hypot(x, y, z) / lift;
+        positions[3 * n] = x / norm; positions[3 * n + 1] = y / norm; positions[3 * n + 2] = z / norm;
+        cellIndex[n] = reference;
+        n++;
+      };
+      for (let level = Math.ceil(fmin / step) * step; level < fmax && n + 2 <= capacity; level += step) {
+        for (const [a, b, c] of triangles) {
+          if (n + 2 > capacity) break;
+          const sa = field[a] - level, sb = field[b] - level, sc = field[c] - level;
+          const before = n;
+          if (sa * sb < 0) crossing(a, b, level, a);
+          if (sb * sc < 0) crossing(b, c, level, a);
+          if (sc * sa < 0) crossing(c, a, level, a);
+          if (n - before !== 2) n = before;
+        }
+      }
+      contourGeometry.setDrawRange(0, n);
+      positionAttribute.needsUpdate = true;
+      cellAttribute.needsUpdate = true;
+    }
+
+    return {
+      update,
+      setColor(value) { contourMaterial.color.set(value); },
+      setVisible(visible) { lines.visible = visible; },
+      dispose() { scene.remove(lines); contourGeometry.dispose(); contourMaterial.dispose(); },
+    };
+  }
+
+  /*
    * A layer of arrows, one per cell, drawn in the cell's tangent plane
    * and projected with the same shader as the cells so they follow the
    * globe in both views. update() takes a vector per cell in the grid's
@@ -539,6 +605,9 @@ export function initUnifiedViewer(container, grid, config = {}) {
   return {
     updateColors: dynamicColors ? updateColors : null,
     addArrowLayer,
+    addContourLayer,
+    setProjection(mode) { viewState.targetBlend = mode === 'map' ? 1.0 : 0.0; },
+    projection: () => (viewState.targetBlend === 1.0 ? 'map' : 'sphere'),
     projectPoint,
     pixelsPerUnit: () => container.clientHeight / (camera.top - camera.bottom),
     viewVersion: () => viewState.version,

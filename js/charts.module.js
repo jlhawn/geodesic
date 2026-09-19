@@ -1,8 +1,8 @@
 import { Grid } from './grid.module.js';
 import { createModel } from './model.module.js';
 import { cellVector } from './dynamics/operators.module.js';
+import { LEVELS, levelFields } from './levels.module.js';
 
-const LEVELS = ['surface', 1000, 850, 700, 500, 250, 70, 10];
 const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796;
 const WIDTH = 1600, MARGIN = 20, TOP = 70, BOTTOM = 90;
 
@@ -45,32 +45,6 @@ const models = new Map();
 function modelFor(N) {
   if (!models.has(N)) models.set(N, createModel(new Grid(N)));
   return models.get(N);
-}
-
-/*
- * Wind speed and geopotential height on a pressure surface, interpolated
- * in ln p between layer midpoints; below the lowest midpoint the height
- * is extrapolated hydrostatically with the lowest layer's temperature.
- */
-function levelFields(model, pi, theta, layerWind, pressure) {
-  const { K, C, sigmaMid, g, R, exnerLayer, geopotential } = model.core.diagnostics;
-  const speed = new Float64Array(C), height = new Float64Array(C);
-  for (let i = 0; i < C; i++) {
-    let k = 0;
-    while (k < K - 2 && pi[i] * sigmaMid[k + 1] < pressure) k++;
-    const pk = pi[i] * sigmaMid[k], pk1 = pi[i] * sigmaMid[k + 1];
-    const t = (Math.log(pressure) - Math.log(pk)) / (Math.log(pk1) - Math.log(pk));
-    const tw = Math.min(1, Math.max(0, t));
-    const wk = layerWind[k], wk1 = layerWind[k + 1];
-    speed[i] = Math.hypot(wk[3 * i] + tw * (wk1[3 * i] - wk[3 * i]), wk[3 * i + 1] + tw * (wk1[3 * i + 1] - wk[3 * i + 1]), wk[3 * i + 2] + tw * (wk1[3 * i + 2] - wk[3 * i + 2]));
-    if (t > 1) {
-      const temperature = theta[(K - 1) * C + i] * exnerLayer[(K - 1) * C + i];
-      height[i] = (geopotential[(K - 1) * C + i] - R * temperature * Math.log(pressure / (pi[i] * sigmaMid[K - 1]))) / g;
-    } else {
-      height[i] = (geopotential[k * C + i] + t * (geopotential[(k + 1) * C + i] - geopotential[k * C + i])) / g;
-    }
-  }
-  return { speed, height };
 }
 
 function contours(mesh, field, step) {
@@ -204,7 +178,7 @@ export function chartFor(state, level) {
     return svgFor(model, grid, `Day ${state.day} — surface pressure and surface wind`, `Isobars of surface pressure (hPa); fill: wind speed in the lowest layer (${(sigmaMid[K - 1] * 1000).toFixed(0)} hPa at 1000 hPa surface pressure). N=${state.N}, ${(7720 / state.N).toFixed(0)} km cells.`, speed, psHpa, 4, 'hPa');
   }
   const p = Number(level);
-  const { speed, height } = levelFields(model, pi, theta, layerWind, p * 100);
+  const { speed, height } = levelFields(model.core, pi, theta, (k) => layerWind[k], p);
   const step = niceStep(Math.max(...height) - Math.min(...height));
   return svgFor(model, grid, `Day ${state.day} — ${p} hPa geopotential height and wind speed`, `Contours: height of the ${p} hPa surface (m); fill: wind speed (m/s) interpolated to ${p} hPa in ln p${p >= 990 ? '; extrapolated hydrostatically where the level is below ground' : ''}. N=${state.N}.`, speed, height, step, 'm');
 }

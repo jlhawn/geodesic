@@ -4,27 +4,27 @@ import { createParallelModel } from './parallel.module.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState } from './physics/regrid.module.js';
+import { levelFields } from './levels.module.js';
 
 let model = null, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
-let vector = null, jetLayer = 0;
+let level = 'surface', layerWinds = [];
 
-function layerWind(k) {
-  const { mesh, core, state } = model;
-  const C = mesh.nCells, E = mesh.nEdges;
-  cellVector(mesh, state[2].subarray(k * E, (k + 1) * E), vector);
-  const speed = new Float32Array(C);
-  for (let i = 0; i < C; i++) speed[i] = Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]);
-  return { speed, vector: Float32Array.from(vector) };
-}
-
+/*
+ * A frame carries the fields of the selected pressure level (or the
+ * lowest layer) plus surface pressure; the cell-center winds of a layer
+ * are reconstructed only when that layer bounds the level somewhere.
+ */
 function postFrame() {
-  const { core, state, time } = model;
-  const [pi, , , surfaceT] = state;
-  const surface = layerWind(core.K - 1), jet = layerWind(jetLayer);
+  const { mesh, core, state, time } = model;
+  const [pi, theta, u, surfaceT] = state;
+  const E = mesh.nEdges;
+  layerWinds.fill(null);
+  const layerWind = (k) => layerWinds[k] ??= cellVector(mesh, u.subarray(k * E, (k + 1) * E), new Float64Array(3 * mesh.nCells));
+  const fields = levelFields(core, pi, theta, layerWind, level);
   const ps = Float32Array.from(pi), ts = Float32Array.from(surfaceT);
   const diagnostics = model.diagnostics();
-  const message = { type: 'frame', frame: frame++, time, day: time / 86400, ps, ts, wind: surface.speed, windVector: surface.vector, jet: jet.speed, jetVector: jet.vector, diagnostics };
-  self.postMessage(message, [ps.buffer, ts.buffer, surface.speed.buffer, surface.vector.buffer, jet.speed.buffer, jet.vector.buffer]);
+  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, ts, ...fields, diagnostics };
+  self.postMessage(message, [ps.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer]);
 }
 
 function loop() {
@@ -41,14 +41,12 @@ const status = (text) => self.postMessage({ type: 'status', text });
  * the emergence driver) when the start message names one, regridded if
  * it was saved at another resolution; otherwise from initializeState.
  */
-async function initialState(model, message) {
-  if (!message.from) return initializeState(model, message.init ?? {});
-  status(`loading ${message.from.replace(/.*\//, '')}…`);
-  const saved = await (await fetch(message.from)).json();
+function initialState(model, saved, N) {
+  if (!saved) return initializeState(model, {});
   const arrays = [saved.pi, saved.theta, saved.u, saved.surfaceT].map((a) => Float64Array.from(a));
   model.time = saved.time;
-  if (saved.N === message.N) return arrays;
-  status(`regridding day ${saved.day} from N=${saved.N} to N=${message.N}…`);
+  if (saved.N === N) return arrays;
+  status(`regridding day ${saved.day} from N=${saved.N} to N=${N}…`);
   return regridState(createModel(new Grid(saved.N)), model, arrays);
 }
 
@@ -60,23 +58,31 @@ self.onmessage = async (event) => {
     running = false;
   } else if (message.type === 'resume') {
     if (model && !running) { running = true; loop(); }
+  } else if (message.type === 'level') {
+    level = message.level;
+    if (model) postFrame();
   }
 };
 
 async function start(message) {
-  const N = message.N ?? 16;
+  let saved = null;
+  if (message.from) {
+    status(`loading ${message.from.replace(/.*\//, '')}…`);
+    saved = await (await fetch(message.from)).json();
+  }
+  const N = message.N ?? saved?.N ?? 16;
   dt = message.dt ?? 450 * 16 / N;
   stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round(24 * 16 / N));
   const workers = message.workers ?? 1;
   status(`building the N=${N} grid${workers > 1 ? ` and ${workers} workers` : ''}…`);
   const grid = new Grid(N);
   model = workers > 1 ? await createParallelModel(grid, message.options ?? {}, workers) : createModel(grid, message.options ?? {});
-  const init = await initialState(model, message);
+  const init = initialState(model, saved, N);
   for (let a = 0; a < 4; a++) model.state[a].set(init[a]);
-  vector = new Float64Array(3 * model.mesh.nCells);
-  jetLayer = model.core.sigmaMid.findIndex((s) => s > 0.25);
+  layerWinds = new Array(model.core.K).fill(null);
+  level = message.level ?? 'surface';
   self.postMessage({ type: 'ready', N, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers });
   postFrame();
-  running = true;
-  loop();
+  running = !message.paused;
+  if (running) loop();
 }

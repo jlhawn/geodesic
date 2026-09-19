@@ -5,54 +5,67 @@
   <meta charset="utf-8">
   <title>Climate model</title>
   <style>
-    body { margin: 0; background: #151515; color: #ddd; font: 14px system-ui, sans-serif; }
+    body { margin: 0; background: #151515; color: #ddd; font: 15px system-ui, sans-serif; }
     #globe { position: absolute; inset: 0; }
-    #panel { position: absolute; top: 12px; left: 12px; z-index: 10; display: flex; gap: 10px; align-items: center; background: rgba(0, 0, 0, 0.55); padding: 8px 12px; border-radius: 6px; }
-    #readout { position: absolute; bottom: 12px; left: 12px; z-index: 10; background: rgba(0, 0, 0, 0.55); padding: 6px 10px; border-radius: 6px; max-width: calc(100% - 320px); }
-    #legend { position: absolute; bottom: 12px; right: 12px; z-index: 10; background: rgba(0, 0, 0, 0.55); padding: 8px 10px; border-radius: 6px; width: 260px; }
-    #legend canvas { display: block; width: 260px; height: 14px; border-radius: 2px; }
-    #legendTicks { display: flex; justify-content: space-between; font-size: 12px; margin-top: 2px; }
-    #legendTitle { margin-bottom: 4px; }
-    #windNote { font-size: 12px; color: #bbb; }
-    select, button { font: inherit; }
+    #menu { position: absolute; left: 12px; bottom: 12px; z-index: 11; background: rgba(0, 0, 0, 0.75); color: #eee; border: 0; border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 17px; cursor: pointer; }
+    #panel { position: absolute; left: 12px; bottom: 52px; z-index: 10; background: rgba(0, 0, 0, 0.78); padding: 10px 16px; border-radius: 8px; display: grid; grid-template-columns: max-content 1fr; column-gap: 12px; row-gap: 3px; align-items: center; max-width: calc(100% - 48px); }
+    #panel.hidden { display: none; }
+    #panel .label { color: #ddd; text-align: left; padding-right: 10px; border-right: 2px solid #666; align-self: stretch; display: flex; align-items: center; }
+    #panel .value { color: #eee; }
+    #panel .options { display: flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; }
+    #panel .options button, #panel .control { background: transparent; color: #bbb; border: 0; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
+    #panel .options button:hover, #panel .control:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+    #panel .options button.selected { background: #4a4a4a; color: #ffe8a0; }
+    #panel .unit { color: #ddd; margin-left: 4px; }
+    #panel select { background: #222; color: #ddd; border: 1px solid #555; border-radius: 4px; font: inherit; font-size: 13px; padding: 1px 4px; margin-left: 8px; }
+    #scale { display: block; width: 300px; height: 14px; border-radius: 2px; }
+    #scaleTicks { display: flex; justify-content: space-between; width: 300px; font-size: 12px; color: #ccc; margin-top: 1px; }
+    #panel .scaleRow { display: flex; align-items: flex-start; gap: 6px; }
+    #status { font-size: 13px; color: #bbb; }
+    #note { font-size: 12px; color: #999; margin-left: 8px; }
   </style>
 </head>
 
 <body>
   <div id="globe"></div>
   <div id="panel">
-    <label>Field <select id="field">
-        <option value="ps">Surface pressure</option>
-        <option value="ts">Surface temperature</option>
-        <option value="wind">Surface wind speed</option>
-        <option value="jet">Wind speed at 250 hPa</option>
-        <option value="none">None</option>
-      </select></label>
-    <label>Wind <select id="windLayer">
-        <option value="particles">Particles</option>
-        <option value="arrows">Arrows</option>
-        <option value="none">Hidden</option>
-      </select></label>
-    <label>at <select id="windLevel">
-        <option value="surface">surface</option>
-        <option value="jet">250 hPa</option>
-      </select></label>
-    <button id="pause">Pause</button>
-    <span id="windNote"></span>
+    <span class="label">Date</span><span class="value" id="date">starting…</span>
+    <span class="label">Data</span><span class="value" id="data"></span>
+    <span class="label">Scale</span>
+    <div class="scaleRow"><div><canvas id="scale" width="256" height="1"></canvas><div id="scaleTicks"><span></span><span></span><span></span></div></div><select id="palette"></select></div>
+    <span class="label">Model</span><span id="status"></span>
+    <span class="label">Control</span>
+    <div class="options">
+      <button class="control" data-control="play" title="play / pause">▶</button>
+      <button class="control" data-control="prev" title="previous saved day">‹</button>
+      <button class="control" data-control="next" title="next saved day">›</button>
+      <span id="note"></span>
+    </div>
+    <span class="label">Animate</span>
+    <div class="options" data-setting="animate"><button data-value="particles">Particles</button><button data-value="arrows">Arrows</button><button data-value="none">None</button></div>
+    <span class="label">Height</span>
+    <div class="options" data-setting="level">
+      <button data-value="surface">Sfc</button><button data-value="1000">1000</button><button data-value="850">850</button><button data-value="700">700</button>
+      <button data-value="500">500</button><button data-value="250">250</button><button data-value="70">70</button><button data-value="10">10</button><span class="unit">hPa</span>
+    </div>
+    <span class="label">Overlay</span>
+    <div class="options" data-setting="overlay"><button data-value="wind">Wind</button><button data-value="temp">Temp</button><button data-value="mslp">MSLP</button><button data-value="none">None</button></div>
+    <span class="label">Isobars</span>
+    <div class="options" data-setting="isobars">
+      <button data-value="on">On</button><button data-value="off">Off</button>
+      <span class="unit">every</span><select id="isobarStep"><option>2</option><option>4</option><option>5</option><option>10</option><option>25</option></select><span class="unit">hPa</span>
+    </div>
+    <span class="label">Projection</span>
+    <div class="options" data-setting="projection"><button data-value="sphere">Sphere</button><button data-value="map">Equal Earth</button></div>
   </div>
-  <div id="readout">starting…</div>
-  <div id="legend">
-    <div id="legendTitle"></div>
-    <canvas width="256" height="1"></canvas>
-    <div id="legendTicks"><span></span><span></span><span></span></div>
-  </div>
+  <button id="menu">climate</button>
   <script type="module">
-    import runClimate, { showSnapshot } from './js/climate.module.js';
+    import runClimate from './js/climate.module.js';
     const params = new URLSearchParams(location.search);
-    const from = params.get('from') ?? 'runs/cascade64_state_day388.json';
+    const snapshot = params.get('snapshot');
+    const from = snapshot ?? params.get('from') ?? 'runs/cascade64_state_day388.json';
     const workers = Number(params.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 2));
-    if (params.get('snapshot')) showSnapshot(params.get('snapshot'));
-    else runClimate(Number(params.get('N') ?? 64), from === 'none' ? null : from, workers);
+    runClimate({ N: params.get('N') ? Number(params.get('N')) : (from === 'none' ? 64 : null), from: from === 'none' ? null : from, workers, paused: snapshot !== null || params.has('paused') });
   </script>
 </body>
 
