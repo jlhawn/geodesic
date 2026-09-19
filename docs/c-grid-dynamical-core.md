@@ -627,23 +627,46 @@ upper-level eddy kinetic energy ≈ 210–240 m²/s², surface pressure
 - The emergence experiment: subpolar surface lows at ±60° appearing in the
   zonal-mean profile within ~60 simulated days at N=32.
 
-**Radiation (Sept 19, 2026).** The column is a two-band gray scheme.
+**Radiation (Sept 19, 2026).** The column is a three-band gray scheme.
 A window band carrying 25% of blackbody emission is transparent, so the
-surface radiates it straight to space; the rest is a gray band whose
-optical depth follows Frierson et al. (2006): τ₀(φ) = τ_e + (τ_p − τ_e)
-sin²φ with τ_e = 7, τ_p = 1.75, distributed as τ₀(0.1 σ + 0.9 σ⁴) so it
-sits near the surface like water vapour (a prescribed stand-in for it —
-fixed in time, no feedback). Shortwave: 2% of the beam is absorbed
-aloft, spread with a Lacis–Hansen ozone column (20 km ± 5 km) through
-which the absorbing part of the beam decays with optical depth 1; the
-surface takes (1 − albedo) of the rest. Every flux still closes exactly
-(`test/physics.test.mjs`). Tuned on a 500-day N=3 run to a 288 K annual
-mean (tropics 300 K, poles 253 K, OLR 239 W/m² against 241 absorbed);
-the single-column equilibrium has a 215 K tropopause near 200 hPa and a
-stratosphere warming to ~259 K at 10 hPa, where the old gray column was
-isothermal at 207 K above 200 hPa. The equilibrium profile is built
-at the area-mean optical depth (sin²φ = 1/3) under the global-mean
-beam S/4.
+surface radiates it straight to space. A vapour band (55%) has the
+optical depth of Frierson et al. (2006): τ₀(φ) = τ_e + (τ_p − τ_e)
+sin²φ with τ_e = 5.3, τ_p = 1.325, distributed as τ₀(0.1 σ + 0.9 σ⁴) so
+it sits near the surface like water vapour (a prescribed stand-in for
+it — fixed in time, no feedback). A well-mixed-gas band (20%, the
+15 µm band's share) has optical depth 5 spread uniformly per unit mass,
+so thin high layers keep an emissivity they can cool with, as CO₂ lets
+the stratosphere do. Shortwave: 3% of the beam is absorbed aloft,
+spread with a Lacis–Hansen ozone column (25 km ± 5 km) through which
+the absorbing part of the beam decays with optical depth 4, so the
+heating peaks near the stratopause; the surface takes (1 − albedo) of
+the rest. Every flux still closes exactly (`test/physics.test.mjs`).
+
+Tuned on 500-day N=3 runs to a 288 K annual mean (τ_e 5 → 287.4 K,
+6 → 289.5 K; tropics ~300 K, poles ~253 K, OLR ≈ 240 W/m² against 241
+absorbed). The single-column equilibrium over a 300 K surface has a
+~205 K tropopause near 70–100 hPa and a stratopause of 265–277 K at
+1–5 hPa, where the original gray column was isothermal at 207 K above
+200 hPa. Without the gas band, ozone heating concentrated at the top
+drove the thinnest layers to 300–400 K, because a mass-proportional
+emissivity gives them no way to radiate. The equilibrium profile is
+built at the area-mean optical depth (sin²φ = 1/3) under the global-mean
+beam S/4 and needs 1200 days of column time to converge.
+
+Effect on the circulation (120-day N=16 spin-ups): the tropospheric
+lapse rate went from 6.2 to 8.9 K/km in the tropics — nearly
+dry-adiabatic, the correct answer for a dry model — and the strongest
+tropospheric wind is a ~75 m/s subtropical jet core near 160 hPa.
+The top-of-model sponge stays, in the role of gravity-wave drag: with
+the gas band cooling the dark winter pole, the polar-night jet at
+σ ≈ 0.001 grows without bound when undamped (250 m/s by day 100) and
+the original σ < 0.005 sponge only slows it (134 m/s at day 120), while
+a sponge over σ < 0.02 (the top four layers, above ~20 hPa) with a
+5-day timescale holds it to 44/59/71/84 m/s at days 30/60/90/120 —
+the range of the real polar-night jet — at no measurable tropospheric
+cost (EKE 152 vs 157–161, jets identical). Radiation sets up the
+pole-to-pole contrast that drives that jet; only a momentum sink
+bounds it, which is why removing the drag was not an option.
 
 ### M4 — Worker and viewer — done
 

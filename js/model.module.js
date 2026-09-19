@@ -35,7 +35,7 @@ export function createModel(gridOrMesh, {
   const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, buffers: buffers ? buffers.core : null, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const radiation = createRadiation(mesh, core, radiationOptions);
-  const surface = createSurface(mesh, core, { topSigma: 0.005, topDragDays: 10, buffers: buffers ? buffers.surface : null, ...surfaceOptions });
+  const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, ...surfaceOptions });
   const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0 };
 
   const stateArray = (name, n) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * n));
