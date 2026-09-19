@@ -62,13 +62,14 @@ function apply(field, offset, { cells, weights }, out, outOffset, count) {
  * normals.
  */
 export function regridState(source, target, state) {
-  const [pi, theta, u, surfaceT] = state;
+  const [pi, theta, u, surfaceT, q = null] = state;
   const K = source.core.K;
   if (K !== target.core.K) throw new Error(`layer counts differ: ${K} vs ${target.core.K}`);
   const sm = source.mesh, tm = target.mesh;
   const atCells = interpolationWeights(sm, tm.xCell);
   const atEdges = interpolationWeights(sm, tm.xEdge);
   const outPi = new Float64Array(tm.nCells), outTheta = new Float64Array(K * tm.nCells), outU = new Float64Array(K * tm.nEdges), outSurfaceT = new Float64Array(tm.nCells);
+  const outQ = q ? new Float64Array(K * tm.nCells) : null;
   apply(pi, 0, atCells, outPi, 0, tm.nCells);
   apply(surfaceT, 0, atCells, outSurfaceT, 0, tm.nCells);
   const vector = new Float64Array(3 * sm.nCells);
@@ -76,6 +77,7 @@ export function regridState(source, target, state) {
   const edgeComponent = new Float64Array(tm.nEdges);
   for (let k = 0; k < K; k++) {
     apply(theta, k * sm.nCells, atCells, outTheta, k * tm.nCells, tm.nCells);
+    if (q) apply(q, k * sm.nCells, atCells, outQ, k * tm.nCells, tm.nCells);
     cellVector(sm, u.subarray(k * sm.nEdges, (k + 1) * sm.nEdges), vector);
     for (let axis = 0; axis < 3; axis++) {
       for (let i = 0; i < sm.nCells; i++) component[i] = vector[3 * i + axis];
@@ -83,5 +85,7 @@ export function regridState(source, target, state) {
       for (let e = 0; e < tm.nEdges; e++) outU[k * tm.nEdges + e] += edgeComponent[e] * tm.nEdge[3 * e + axis];
     }
   }
-  return [outPi, outTheta, outU, outSurfaceT];
+  const out = [outPi, outTheta, outU, outSurfaceT];
+  if (outQ) { for (let x = 0; x < outQ.length; x++) if (outQ[x] < 0) outQ[x] = 0; out.push(outQ); }
+  return out;
 }

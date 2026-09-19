@@ -1,4 +1,4 @@
-import { createModel } from './model.module.js';
+import { createModel, STATE_NAMES, stateLengths } from './model.module.js';
 import { shareMesh } from './mesh.module.js';
 import { parallelism, spawn } from './threads.module.js';
 
@@ -9,13 +9,16 @@ function split(n, index, workers) {
 }
 
 export function workerRanges(index, workers, { K, C, E, V }) {
+  const lengths = stateLengths({ K, C, E });
   return {
     layers: split(K, index, workers),
     cells: split(C, index, workers),
     vertices: split(V, index, workers),
-    arrays: [split(C, index, workers), split(K * C, index, workers), split(K * E, index, workers), split(C, index, workers)],
+    arrays: STATE_NAMES.map((name) => split(lengths[name], index, workers)),
   };
 }
+
+export const TOTALS = ['absorbedSolar', 'outgoingLongwave', 'sensibleHeat', 'evaporation'];
 
 /*
  * The model with its time step computed by worker threads. The mesh and
@@ -28,12 +31,12 @@ export function workerRanges(index, workers, { K, C, E, V }) {
 export async function createParallelModel(grid, options = {}, workers = null) {
   workers ??= Math.max(1, await parallelism() - 2);
   const model = createModel(grid, options);
-  const { K, C, E, V } = model.core.diagnostics;
-  const lengths = { pi: C, theta: K * C, u: K * E, surfaceT: C };
+  const { K, C, E } = model.core.diagnostics;
+  const lengths = stateLengths({ K, C, E });
   const allocate = () => Object.fromEntries(Object.entries(lengths).map(([name, n]) => [name, new SharedArrayBuffer(8 * n)]));
   const trial = allocate();
   const stages = [allocate(), allocate(), allocate(), allocate()];
-  const control = { ints: new SharedArrayBuffer(4 * 8), floats: new SharedArrayBuffer(8 * 4), totals: new SharedArrayBuffer(8 * 3 * workers) };
+  const control = { ints: new SharedArrayBuffer(4 * 8), floats: new SharedArrayBuffer(8 * 4), totals: new SharedArrayBuffer(8 * TOTALS.length * workers) };
   const ctrl = new Int32Array(control.ints);
   const params = new Float64Array(control.floats);
   const totals = new Float64Array(control.totals);
@@ -95,14 +98,14 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     run(PHASE.ADVANCE, { stage: 2, factor: dt });
     tendencyPhases(1, 3);
     run(PHASE.COMBINE, { dt });
-    run(PHASE.ADJUST);
+    run(PHASE.ADJUST, { dt });
     model.time += dt;
   };
 
   const serialDiagnostics = model.diagnostics;
   model.diagnostics = function diagnostics() {
-    const sums = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0 };
-    for (let w = 0; w < workers; w++) { sums.absorbedSolar += totals[3 * w]; sums.outgoingLongwave += totals[3 * w + 1]; sums.sensibleHeat += totals[3 * w + 2]; }
+    const sums = Object.fromEntries(TOTALS.map((name) => [name, 0]));
+    for (let w = 0; w < workers; w++) TOTALS.forEach((name, t) => { sums[name] += totals[TOTALS.length * w + t]; });
     return serialDiagnostics(sums);
   };
 

@@ -1,5 +1,6 @@
 import { cellVector } from '../dynamics/operators.module.js';
 import { SOLAR_CONSTANT } from './radiation.module.js';
+import { saturationHumidity } from './moist.module.js';
 
 const REFERENCE_SURFACE_T = 305.086;
 const AVERAGE_SURFACE_T = 288;
@@ -61,9 +62,29 @@ function geopotentialHeightAt(core, i, pi, pressure) {
  * ring at 10 hPa), and winds in geostrophic balance with the model's own
  * pressure gradient force, tapered to zero inside ±15°.
  */
+/*
+ * Initial humidity: a relative humidity that falls from
+ * surfaceHumidity at the ground as σ², times saturation at the layer's
+ * temperature and pressure.
+ */
+export function initialHumidity(model, pi, theta, { surfaceHumidity = 0.7 } = {}) {
+  const { core } = model;
+  const { K, C, sigmaMid, exnerLayer } = core.diagnostics;
+  core.diagnose(pi, theta);
+  const q = new Float64Array(K * C);
+  for (let k = 0; k < K; k++) {
+    const humidity = surfaceHumidity * sigmaMid[k] * sigmaMid[k];
+    for (let i = 0; i < C; i++) {
+      const idx = k * C + i;
+      q[idx] = humidity * saturationHumidity(theta[idx] * exnerLayer[idx], pi[i] * sigmaMid[k]);
+    }
+  }
+  return q;
+}
+
 export function initializeState(model, {
   p0 = 101325, seedAmplitude = 2, seedWavenumber = 5, seedLatitude = 45, seedWidth = 15,
-  bands = false, geostrophic = true, referencePressure = 50000, taperLatitude = 15, profile = null,
+  bands = false, geostrophic = true, referencePressure = 50000, taperLatitude = 15, profile = null, surfaceHumidity = 0.7,
 } = {}) {
   const { mesh, core } = model;
   const { K, C, E, sigmaMid, cp, exnerLayer, dExnerDpi, geopotential } = core.diagnostics;
@@ -158,5 +179,5 @@ export function initializeState(model, {
     }
   }
 
-  return [pi, theta, u, surfaceT];
+  return [pi, theta, u, surfaceT, initialHumidity(model, pi, theta, { surfaceHumidity })];
 }

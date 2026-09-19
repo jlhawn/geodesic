@@ -1,3 +1,4 @@
+import { LATENT_HEAT, saturationHumidity } from './moist.module.js';
 export const STEFAN_BOLTZMANN = 5.670374419e-8;
 export const SOLAR_CONSTANT = 1362;
 export const AXIAL_TILT = 23.44 * Math.PI / 180;
@@ -47,7 +48,7 @@ export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.3, surfaceHeatCapacity = 2.1e7,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 5,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3,
-  exchangeCoefficient = 1.5e-3, gustiness = 3,
+  exchangeCoefficient = 1.5e-3, gustiness = 3, latentHeat = LATENT_HEAT,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, exnerLayer } = core.diagnostics;
   const levels = core.levels;
@@ -64,7 +65,7 @@ export function createRadiation(mesh, core, {
   const emitted = new Float64Array(K);
   const netFlux = new Float64Array(K);
   const sun = new Float64Array([1, 0, 0]);
-  const budget = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, surfaceFlux: 0 };
+  const budget = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0 };
 
   function setTime(t) {
     sunDirection(t, sun);
@@ -101,7 +102,7 @@ export function createRadiation(mesh, core, {
     return [outgoing, back];
   }
 
-  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i)) {
+  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null) {
     const ozoneHeating = beam * ozoneAbsorption;
     const absorbedSolar = (1 - albedo) * (beam - ozoneHeating);
     const surfaceEmission = STEFAN_BOLTZMANN * surfaceT * surfaceT * surfaceT * surfaceT;
@@ -117,12 +118,15 @@ export function createRadiation(mesh, core, {
     const bottom = K - 1;
     const airTemperature = temperature[bottom];
     const airDensity = pi * sigmaMid[bottom] / (R * airTemperature);
-    const sensible = airDensity * cp * exchangeCoefficient * Math.max(windSpeed, gustiness) * (surfaceT - airTemperature);
+    const exchange = airDensity * exchangeCoefficient * Math.max(windSpeed, gustiness);
+    const sensible = exchange * cp * (surfaceT - airTemperature);
+    const evaporation = qAir === null ? 0 : Math.max(0, exchange * (saturationHumidity(surfaceT, pi) - qAir));
     netFlux[bottom] += sensible;
-    const surfaceFlux = absorbedSolar - surfaceEmission + back - sensible;
+    const surfaceFlux = absorbedSolar - surfaceEmission + back - sensible - latentHeat * evaporation;
     budget.absorbedSolar = absorbedSolar + ozoneHeating;
     budget.outgoingLongwave = outgoing;
     budget.sensibleHeat = sensible;
+    budget.evaporation = evaporation;
     budget.surfaceFlux = surfaceFlux;
     return surfaceFlux;
   }
@@ -130,19 +134,23 @@ export function createRadiation(mesh, core, {
   function apply(state, out, windSpeed, totals, iFrom = 0, iTo = C) {
     const [pi, theta, , surfaceT] = state;
     const [, dTheta, , dSurfaceT] = out;
-    if (totals) { totals.absorbedSolar = 0; totals.outgoingLongwave = 0; totals.sensibleHeat = 0; }
+    const q = state[4] ?? null, dQ = out[4] ?? null;
+    const bottom = (K - 1) * C;
+    if (totals) { totals.absorbedSolar = 0; totals.outgoingLongwave = 0; totals.sensibleHeat = 0; totals.evaporation = 0; }
     for (let i = iFrom; i < iTo; i++) {
-      const surfaceFlux = column(i, pi[i], theta, surfaceT[i], windSpeed[i]);
+      const surfaceFlux = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], insolation(i), q && dQ ? q[bottom + i] : null);
       for (let k = 0; k < K; k++) {
         const massPerArea = pi[i] * dSigma[k] / g;
         dTheta[k * C + i] += netFlux[k] / (cp * massPerArea) / exnerLayer[k * C + i];
       }
+      if (q && dQ) dQ[bottom + i] += budget.evaporation * g / (pi[i] * dSigma[K - 1]);
       dSurfaceT[i] = surfaceFlux / surfaceHeatCapacity;
       if (totals) {
         const a = mesh.areaCell[i];
         totals.absorbedSolar += a * budget.absorbedSolar;
         totals.outgoingLongwave += a * budget.outgoingLongwave;
         totals.sensibleHeat += a * budget.sensibleHeat;
+        totals.evaporation += a * budget.evaporation;
       }
     }
   }

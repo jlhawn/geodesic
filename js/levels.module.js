@@ -1,4 +1,5 @@
 import { DAY, YEAR } from './physics/radiation.module.js';
+import { saturationHumidity } from './physics/moist.module.js';
 
 export const LEVELS = ['surface', 1000, 850, 700, 500, 250, 70, 10];
 
@@ -8,11 +9,12 @@ export const LEVELS = ['surface', 1000, 850, 700, 500, 250, 70, 10];
  * layer. Below the lowest midpoint the wind and temperature are held and
  * the height is extrapolated hydrostatically. layerWind(k) returns the
  * cell-center wind vectors of layer k so that only the layers a level
- * touches are reconstructed.
+ * touches are reconstructed. With q, relative humidity comes too.
  */
-export function levelFields(core, pi, theta, layerWind, level) {
+export function levelFields(core, pi, theta, layerWind, level, q = null) {
   const { K, C, sigmaMid, g, R, exnerLayer, geopotential } = core.diagnostics;
   const speed = new Float32Array(C), vector = new Float32Array(3 * C), temperature = new Float32Array(C), height = new Float32Array(C);
+  const humidity = q ? new Float32Array(C) : null;
   const pressure = level === 'surface' ? Infinity : 100 * level;
   for (let i = 0; i < C; i++) {
     let k = 0;
@@ -28,13 +30,18 @@ export function levelFields(core, pi, theta, layerWind, level) {
     speed[i] = Math.hypot(vx, vy, vz);
     const tk = theta[k * C + i] * exnerLayer[k * C + i], tk1 = theta[(k + 1) * C + i] * exnerLayer[(k + 1) * C + i];
     temperature[i] = tk + tw * (tk1 - tk);
+    if (q) {
+      const qk = q[k * C + i] + tw * (q[(k + 1) * C + i] - q[k * C + i]);
+      const pressureHere = pressure === Infinity ? pi[i] * sigmaMid[K - 1] : Math.min(pressure, pi[i] * sigmaMid[K - 1]);
+      humidity[i] = Math.min(1.5, qk / saturationHumidity(temperature[i], pressureHere));
+    }
     if (t > 1) {
       height[i] = (geopotential[(K - 1) * C + i] - R * tk1 * Math.log(pressure === Infinity ? 1 : pressure / (pi[i] * sigmaMid[K - 1]))) / g;
     } else {
       height[i] = (geopotential[k * C + i] + t * (geopotential[(k + 1) * C + i] - geopotential[k * C + i])) / g;
     }
   }
-  return { speed, vector, temperature, height };
+  return { speed, vector, temperature, height, humidity };
 }
 
 const SEASONS = [[0, 'spring equinox'], [0.25, 'summer solstice'], [0.5, 'autumn equinox'], [0.75, 'winter solstice'], [1, 'spring equinox']];

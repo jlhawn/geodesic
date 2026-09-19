@@ -12,7 +12,7 @@ test('the worker-thread step reproduces the single-thread step bit for bit', asy
   for (let a = 0; a < 4; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
   try {
     for (let n = 0; n < 4; n++) { serial.step(600); parallel.step(600); }
-    for (let a = 0; a < 4; a++) {
+    for (let a = 0; a < serial.state.length; a++) {
       const s = serial.state[a], p = parallel.state[a];
       for (let i = 0; i < s.length; i++) if (s[i] !== p[i]) assert.fail(`array ${a} differs at ${i}: ${s[i]} vs ${p[i]}`);
     }
@@ -42,7 +42,7 @@ test('worker threads speed up an N=16 step', async () => {
   const parallelMs = (performance.now() - t0) / steps;
   console.log(`N=${N}: serial ${serialMs.toFixed(0)} ms/step, ${parallel.workers} workers ${parallelMs.toFixed(0)} ms/step, speedup ${(serialMs / parallelMs).toFixed(1)}×`);
   try {
-    for (let a = 0; a < 4; a++) assert.deepEqual(parallel.state[a], serial.state[a]);
+    for (let a = 0; a < serial.state.length; a++) assert.deepEqual(parallel.state[a], serial.state[a]);
     assert.ok(parallelMs < serialMs);
   } finally {
     await parallel.close();

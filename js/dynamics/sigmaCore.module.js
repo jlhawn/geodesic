@@ -1,6 +1,7 @@
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, laplacianScalar } from './operators.module.js';
 
 export const R_DRY = 287.06;
+export const VIRTUAL_FACTOR = 0.608;
 export const CP_DRY = 1003.5;
 export const P0 = 101325;
 export const GRAVITY = 9.806;
@@ -39,13 +40,16 @@ export function sigmaInterfaces() {
  * Hydrostatic primitive equations in sigma coordinates on the C-grid.
  * State: pi[C] surface pressure, theta[K*C] layer potential temperature,
  * u[K*E] layer normal velocity (layer k occupies [k*C, (k+1)*C) and
- * [k*E, (k+1)*E)). Interface quantities use K+1 slots per column, top
- * first. Steps follow the A-grid column: mass flux and divergence per
- * layer, dpi/dt, pi*sigma-dot telescoping to zero at the ground, Exner
- * ratios from the exact layer integral of sigma^kappa, interface theta
- * interpolated in Exner, geopotential integrated upward with each layer's
- * theta over its own Exner span, then flux-form theta transport and the
- * vector-invariant momentum equation with the RTSK PV flux.
+ * [k*E, (k+1)*E)), and optionally state[4] = q[K*C], specific humidity,
+ * carried with the same flux-form transport as theta. Interface
+ * quantities use K+1 slots per column, top first. Steps follow the
+ * A-grid column: mass flux and divergence per layer, dpi/dt,
+ * pi*sigma-dot telescoping to zero at the ground, Exner ratios from the
+ * exact layer integral of sigma^kappa, interface theta interpolated in
+ * Exner, geopotential integrated upward with each layer's virtual theta
+ * over its own Exner span, then flux-form theta and q transport and the
+ * vector-invariant momentum equation with the RTSK PV flux. The
+ * pressure-gradient force uses virtual theta; with no q it equals theta.
  */
 export function createSigmaCore(mesh, options = {}) {
   const {
@@ -77,6 +81,8 @@ export function createSigmaCore(mesh, options = {}) {
   const exnerLayer = sharedArray('exnerLayer', K * C);
   const dExnerDpi = sharedArray('dExnerDpi', K * C);
   const thetaLower = sharedArray('thetaLower', K * C);
+  const qLower = sharedArray('qLower', K * C);
+  const thetaV = sharedArray('thetaV', K * C);
   const geopotential = sharedArray('geopotential', K * C);
   const piVertex = sharedArray('piVertex', V);
   const piEdge = new Float64Array(E);
@@ -95,8 +101,11 @@ export function createSigmaCore(mesh, options = {}) {
   const curlScratch = new Float64Array(V);
   const lapTheta = new Float64Array(C);
   const lapTheta2 = new Float64Array(C);
+  const qFlux = new Float64Array(E);
+  const divQFlux = new Float64Array(C);
+  const massField = new Float64Array(C);
 
-  function diagnoseColumn(i, pi, theta) {
+  function diagnoseColumn(i, pi, theta, q = null) {
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
       const exLower = Math.pow(pi[i] * sigmaLower[k] / p0, kappa);
@@ -106,24 +115,29 @@ export function createSigmaCore(mesh, options = {}) {
       exnerLayer[idx] = span / ((1 + kappa) * dSigma[k]);
       dExnerDpi[idx] = (kappa / (1 + kappa)) * span / (pi[i] * dSigma[k]);
     }
+    for (let k = 0; k < K; k++) {
+      const idx = k * C + i;
+      thetaV[idx] = q ? theta[idx] * (1 + VIRTUAL_FACTOR * q[idx]) : theta[idx];
+    }
     for (let k = 0; k < K - 1; k++) {
       const idx = k * C + i;
       const t = (exnerLower[idx] - exnerLayer[idx]) / (exnerLayer[idx + C] - exnerLayer[idx]);
       thetaLower[idx] = theta[idx] + t * (theta[idx + C] - theta[idx]);
+      qLower[idx] = q ? q[idx] + t * (q[idx + C] - q[idx]) : 0;
     }
     const bottom = (K - 1) * C + i;
-    geopotential[bottom] = (surfaceGeopotential ? surfaceGeopotential[i] : 0) + cp * theta[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
+    geopotential[bottom] = (surfaceGeopotential ? surfaceGeopotential[i] : 0) + cp * thetaV[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
     for (let k = K - 2; k >= 0; k--) {
       const idx = k * C + i;
       const below = idx + C;
       geopotential[idx] = geopotential[below]
-        + cp * theta[below] * (exnerLayer[below] - exnerLower[idx])
-        + cp * theta[idx] * (exnerLower[idx] - exnerLayer[idx]);
+        + cp * thetaV[below] * (exnerLayer[below] - exnerLower[idx])
+        + cp * thetaV[idx] * (exnerLower[idx] - exnerLayer[idx]);
     }
   }
 
-  function diagnose(pi, theta) {
-    for (let i = 0; i < C; i++) diagnoseColumn(i, pi, theta);
+  function diagnose(pi, theta, q = null) {
+    for (let i = 0; i < C; i++) diagnoseColumn(i, pi, theta, q);
   }
 
   function edgePi(pi) {
@@ -143,6 +157,7 @@ export function createSigmaCore(mesh, options = {}) {
 
   function phaseColumn(state, out, iFrom, iTo) {
     const [pi, theta] = state;
+    const q = state[4] ?? null;
     const [dPi] = out;
     for (let i = iFrom; i < iTo; i++) {
       let sum = 0;
@@ -155,7 +170,7 @@ export function createSigmaCore(mesh, options = {}) {
         piSigmaDot[(k + 1) * C + i] = -cumulative - sigmaLower[k] * dPi[i];
       }
       piSigmaDot[K * C + i] = 0;
-      diagnoseColumn(i, pi, theta);
+      diagnoseColumn(i, pi, theta, q);
     }
   }
 
@@ -168,32 +183,53 @@ export function createSigmaCore(mesh, options = {}) {
     }
   }
 
+  /*
+   * Flux-form transport of a layer scalar by the mass fluxes, with the
+   * ∇⁴ closure. `conservative` applies the closure to the mass-weighted
+   * field so the column's total is preserved exactly under it (used for
+   * water); theta keeps the closure on the field itself.
+   */
+  function transportLayer(k, pi, field, fieldLower, edgeFlux, divField, dField, conservative = false) {
+    const off = k * C;
+    const fk = flux.subarray(k * E, (k + 1) * E);
+    for (let e = 0; e < E; e++) {
+      edgeFlux[e] = fk[e] * 0.5 * (field[off + cellsOnEdge[2 * e]] + field[off + cellsOnEdge[2 * e + 1]]);
+    }
+    divergence(mesh, edgeFlux, divField);
+    for (let i = 0; i < C; i++) {
+      const idx = off + i;
+      const lowerFlow = piSigmaDot[(k + 1) * C + i];
+      const upperFlow = piSigmaDot[k * C + i];
+      const lower = k === K - 1 ? 0 : fieldLower[idx];
+      const upper = k === 0 ? 0 : fieldLower[idx - C];
+      const vertical = (lowerFlow * lower - upperFlow * upper - field[idx] * (lowerFlow - upperFlow)) / (pi[i] * dSigma[k]);
+      dField[idx] = -(divField[i] - field[idx] * divFlux[idx]) / pi[i] - vertical;
+    }
+    if (nu4Theta > 0) {
+      if (conservative) {
+        for (let i = 0; i < C; i++) massField[i] = pi[i] * field[off + i];
+        laplacianScalar(mesh, massField, lapTheta);
+        laplacianScalar(mesh, lapTheta, lapTheta2);
+        for (let i = 0; i < C; i++) dField[off + i] -= nu4Theta * lapTheta2[i] / pi[i];
+      } else {
+        laplacianScalar(mesh, field.subarray(off, off + C), lapTheta);
+        laplacianScalar(mesh, lapTheta, lapTheta2);
+        for (let i = 0; i < C; i++) dField[off + i] -= nu4Theta * lapTheta2[i];
+      }
+    }
+  }
+
   function phaseLayer(state, out, kFrom, kTo) {
     const [pi, theta, u] = state;
     const [, dTheta, dU] = out;
+    const q = state[4] ?? null, dQ = out[4] ?? null;
     edgePi(pi);
     gradient(mesh, pi, gradPi);
     for (let k = kFrom; k < kTo; k++) {
       const off = k * C;
       const fk = flux.subarray(k * E, (k + 1) * E);
-      for (let e = 0; e < E; e++) {
-        thetaFlux[e] = fk[e] * 0.5 * (theta[off + cellsOnEdge[2 * e]] + theta[off + cellsOnEdge[2 * e + 1]]);
-      }
-      divergence(mesh, thetaFlux, divThetaFlux);
-      for (let i = 0; i < C; i++) {
-        const idx = off + i;
-        const lowerFlow = piSigmaDot[(k + 1) * C + i];
-        const upperFlow = piSigmaDot[k * C + i];
-        const lowerTheta = k === K - 1 ? 0 : thetaLower[idx];
-        const upperTheta = k === 0 ? 0 : thetaLower[idx - C];
-        const vertical = (lowerFlow * lowerTheta - upperFlow * upperTheta - theta[idx] * (lowerFlow - upperFlow)) / (pi[i] * dSigma[k]);
-        dTheta[idx] = -(divThetaFlux[i] - theta[idx] * divFlux[idx]) / pi[i] - vertical;
-      }
-      if (nu4Theta > 0) {
-        laplacianScalar(mesh, theta.subarray(off, off + C), lapTheta);
-        laplacianScalar(mesh, lapTheta, lapTheta2);
-        for (let i = 0; i < C; i++) dTheta[off + i] -= nu4Theta * lapTheta2[i];
-      }
+      transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta);
+      if (q && dQ) transportLayer(k, pi, q, qLower, qFlux, divQFlux, dQ, true);
       const uk = u.subarray(k * E, (k + 1) * E);
       const dUk = dU.subarray(k * E, (k + 1) * E);
       curl(mesh, uk, zeta);
@@ -209,7 +245,7 @@ export function createSigmaCore(mesh, options = {}) {
           const other = edgesOnEdge[maxEdgesOnEdge * e + s];
           pv += weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[other] * fk[other] * 0.5 * (qEdge[e] + qEdge[other]);
         }
-        const pgfPi = cp * 0.5 * (theta[off + i] * dExnerDpi[off + i] + theta[off + j] * dExnerDpi[off + j]) * gradPi[e];
+        const pgfPi = cp * 0.5 * (thetaV[off + i] * dExnerDpi[off + i] + thetaV[off + j] * dExnerDpi[off + j]) * gradPi[e];
         const lowerFlow = 0.5 * (piSigmaDot[(k + 1) * C + i] + piSigmaDot[(k + 1) * C + j]);
         const upperFlow = 0.5 * (piSigmaDot[k * C + i] + piSigmaDot[k * C + j]);
         const lowerU = k === K - 1 ? 0 : 0.5 * (uk[e] + u[(k + 1) * E + e]);
@@ -245,7 +281,7 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, diagnose, diagnoseColumn, diagnostics, mass, setForcing, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower } };
+  return { K, levels, sigmaMid, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, diagnose, diagnoseColumn, diagnostics, mass, setForcing, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, thetaV } };
 }
 
 /*

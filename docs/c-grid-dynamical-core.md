@@ -795,6 +795,50 @@ chooses the count (cores minus two by default).
 
 ---
 
+### M7 — Moisture — in progress
+
+The moist gray-radiation aquaplanet of Frierson, Held & Zurita-Gotor
+(2006), built on the dry model without changing its results when the
+sources are off (`moist: false` carries q but never sources it).
+
+- **Tracer.** `q` (specific humidity) is state[4], transported by the
+  same flux-form scheme and mass fluxes as θ, with interface values
+  interpolated in Exner like θ's. The ∇⁴ closure acts on the
+  mass-weighted field π q, so the column's water is preserved exactly
+  under transport (checked to roundoff in `test/moist.test.mjs`); θ's
+  closure is unchanged. Virtual potential temperature θ(1 + 0.608 q)
+  enters the hydrostatic integration and the pressure-gradient force.
+  A filler removes negative q by borrowing from the layer below (any
+  residue at the ground is counted as lost).
+- **Evaporation.** The bulk formula of the sensible-heat flux applied
+  to moisture, E = ρ C |v| (q_sat(T_s) − q_air), in the radiation
+  column; the slab loses L·E and the lowest layer gains E.
+- **Large-scale condensation.** Supersaturation is removed with one
+  implicit step, warming the layer by L Δq / c_p and raining out at
+  once; moist enthalpy c_p T + L q is conserved exactly.
+- **Convection.** The simplified Betts–Miller scheme of Frierson
+  (2007): a parcel from the lowest layer rises dry to its LCL and
+  moist-adiabatically above; the column up to its level of zero
+  buoyancy relaxes over 2 h toward that profile and a reference RH of
+  70%. When the implied rain is positive the reference temperature is
+  shifted so the enthalpy change equals L times the rain; otherwise
+  both references are shifted so nothing is gained or lost. Dry
+  convective adjustment follows, mixing q with θ.
+- **Saturation** by Bolton's formula; the initial humidity is a
+  relative humidity of 0.7 σ² times saturation.
+- **Diagnostics.** Precipitation accumulates per cell (mm) and is
+  reported as a rate; evaporation, latent and sensible heat, and total
+  precipitable water join the budget line. The page overlays RH (at the
+  selected height), precipitation and TPW.
+- **Radiation coupling** (τ from q) is a switch to be added after the
+  moist climate is tuned; τ stays prescribed until then.
+
+Order of operations each step: RK4 dynamics with evaporation as a
+tendency, then condensation, Betts–Miller, dry adjustment and the
+filler as adjustments. One day at N=4 from the dry equilibrium closes
+the water budget to 3% (the residual is the last-stage evaporation
+estimate in the diagnostics, not a loss).
+
 ## 7. Module layout in this repo
 
 ```
@@ -811,6 +855,7 @@ js/
     surface.module.js       ported: drag, sensible heat, slab ocean, convective adjustment
     init.module.js          ported: thermal init, balance, seed, bands, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes
+    moist.module.js         M7: saturation, condensation, Betts–Miller convection, filler
   model.module.js           assembles core + physics, RK4 step, diagnostics
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase

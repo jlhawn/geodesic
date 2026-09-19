@@ -3,15 +3,20 @@ import { createSigmaCore } from './dynamics/sigmaCore.module.js';
 import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
 import { createSurface } from './physics/surface.module.js';
+import { createMoistPhysics } from './physics/moist.module.js';
 
 export const SIDEREAL_DAY = 86164.0905;
+export const STATE_NAMES = ['pi', 'theta', 'u', 'surfaceT', 'q'];
+export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, surfaceT: C, q: K * C });
 
 /*
  * The climate model: the sigma-coordinate core with gray radiation, a
- * slab-ocean surface, bulk surface fluxes, boundary-layer drag, dry
- * convective adjustment, and a 10-day Rayleigh drag in the cap layer
- * above CAM's lid (σ < 0.005), where nothing else bounds the winter
- * jet. State is [pi, theta, u, surfaceT], each on a SharedArrayBuffer.
+ * slab-ocean surface, bulk surface fluxes of heat and moisture,
+ * boundary-layer drag, large-scale condensation, Betts–Miller and dry
+ * convective adjustment, and a 5-day Rayleigh sponge above σ = 0.02 in
+ * the role of gravity-wave drag on the polar-night jet. State is
+ * [pi, theta, u, surfaceT, q], each on a SharedArrayBuffer; with
+ * `moist: false` q is carried but never sourced, so it stays zero.
  *
  * One time-step tendency is four phases; each takes an index range so
  * the same code runs whole on one thread or sliced across workers:
@@ -24,8 +29,8 @@ export const SIDEREAL_DAY = 86164.0905;
  * instance's so a worker computes on the same memory.
  */
 export function createModel(gridOrMesh, {
-  radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {},
-  physics = true, nu4Hours = 3, buffers = null,
+  radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {},
+  physics = true, moist = true, nu4Hours = 3, buffers = null,
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   let spacing = 0;
@@ -36,10 +41,12 @@ export function createModel(gridOrMesh, {
   const { K, C, E, V } = core.diagnostics;
   const radiation = createRadiation(mesh, core, radiationOptions);
   const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, ...surfaceOptions });
-  const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0 };
+  const moistPhysics = createMoistPhysics(mesh, core, { buffers: buffers ? buffers.moist : null, ...moistOptions });
+  const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0 };
 
-  const stateArray = (name, n) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * n));
-  const state = [stateArray('pi', C), stateArray('theta', K * C), stateArray('u', K * E), stateArray('surfaceT', C)];
+  const lengths = stateLengths({ K, C, E });
+  const stateArray = (name) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * lengths[name]));
+  const state = STATE_NAMES.map(stateArray);
 
   const phases = {
     flux(input, kFrom, kTo) { core.phaseFlux(input, kFrom, kTo); },
@@ -54,9 +61,13 @@ export function createModel(gridOrMesh, {
     },
     cell(input, out, iFrom, iTo, sums) {
       out[3].fill(0, iFrom, iTo);
-      if (physics) radiation.apply(input, out, surface.windSpeed, sums, iFrom, iTo);
+      if (physics) radiation.apply(moist ? input : input.slice(0, 4), out, surface.windSpeed, sums, iFrom, iTo);
     },
-    adjust(iFrom, iTo) { if (physics) surface.convectiveAdjustment(state[0], state[1], iFrom, iTo); },
+    adjust(iFrom, iTo, dt) {
+      if (!physics) return;
+      if (moist) moistPhysics.adjust(state, iFrom, iTo, dt);
+      surface.convectiveAdjustment(state[0], state[1], iFrom, iTo, moist ? state[4] : null);
+    },
   };
 
   function tendency(input, out) {
@@ -69,30 +80,44 @@ export function createModel(gridOrMesh, {
 
   let rk4 = null;
   const model = {
-    mesh, core, radiation, surface, state, totals, phases, tendency, physics, time: 0,
-    shared: { core: core.shared, surface: surface.shared, state: { pi: state[0].buffer, theta: state[1].buffer, u: state[2].buffer, surfaceT: state[3].buffer } },
+    mesh, core, radiation, surface, moist: moistPhysics, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
+    shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
   model.step = function step(dt) {
-    rk4 ??= createRK4Arrays([C, K * C, K * E, C]);
+    rk4 ??= createRK4Arrays(STATE_NAMES.map((name) => lengths[name]));
     radiation.setTime(model.time);
     rk4(tendency, state, dt);
-    phases.adjust(0, C);
+    phases.adjust(0, C, dt);
     model.time += dt;
   };
 
+  let lastPrecipTime = 0;
   model.diagnostics = function diagnostics(sums = totals) {
-    const [pi, theta, u, surfaceT] = state;
-    let area = 0, mass = 0, meanSurfaceT = 0, piMin = Infinity, piMax = -Infinity, maxWind = 0;
+    const [pi, theta, u, surfaceT, q] = state;
+    const precipitation = moistPhysics.precipitation;
+    let area = 0, mass = 0, meanSurfaceT = 0, piMin = Infinity, piMax = -Infinity, maxWind = 0, water = 0, rain = 0;
     for (let i = 0; i < C; i++) {
-      area += mesh.areaCell[i];
-      mass += mesh.areaCell[i] * pi[i];
-      meanSurfaceT += mesh.areaCell[i] * surfaceT[i];
+      const a = mesh.areaCell[i];
+      area += a;
+      mass += a * pi[i];
+      meanSurfaceT += a * surfaceT[i];
       piMin = Math.min(piMin, pi[i]);
       piMax = Math.max(piMax, pi[i]);
+      water += a * moistPhysics.columnWater(pi, q, i);
+      rain += a * precipitation[i];
     }
     for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));
-    return { mass: mass / area, meanSurfaceT: meanSurfaceT / area, piMin, piMax, maxWind, absorbedSolar: sums.absorbedSolar / area, outgoingLongwave: sums.outgoingLongwave / area };
+    const interval = model.time - lastPrecipTime;
+    const result = {
+      mass: mass / area, meanSurfaceT: meanSurfaceT / area, piMin, piMax, maxWind,
+      absorbedSolar: sums.absorbedSolar / area, outgoingLongwave: sums.outgoingLongwave / area, sensibleHeat: sums.sensibleHeat / area,
+      evaporation: sums.evaporation / area, latentHeat: moistPhysics.latentHeat * sums.evaporation / area,
+      columnWater: water / area, precipitation: interval > 0 ? rain / area / interval : 0,
+    };
+    precipitation.fill(0);
+    lastPrecipTime = model.time;
+    return result;
   };
 
   return model;

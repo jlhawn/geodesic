@@ -10,9 +10,13 @@ const REFERENCE_SPEED = { surface: 15, 1000: 20, 850: 25, 700: 25, 500: 30, 250:
 const OVERLAYS = {
   wind: { label: 'Wind', unit: 'm/s', kind: 'sequential', field: 'speed', scale: 1, range: (level) => [0, WIND_MAX[level]] },
   temp: { label: 'Temp', unit: 'K', kind: 'sequential', field: 'temperature', scale: 1, range: (level) => TEMP_RANGE[level] },
+  rh: { label: 'RH', unit: '%', kind: 'sequential', field: 'humidity', scale: 100, range: () => [0, 100] },
+  precip: { label: 'Precip', unit: 'mm/day', kind: 'sequential', field: 'precipitation', scale: 1, range: () => [0, 30] },
+  tpw: { label: 'TPW', unit: 'kg/m²', kind: 'sequential', field: 'water', scale: 1, range: () => [0, 60] },
   mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'ps', scale: 0.01, range: () => [960, 1060] },
   none: { label: 'None' },
 };
+const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Total precipitable water', mslp: 'Mean sea level pressure' };
 
 /*
  * Palettes as sRGB stops. The sequential ones are perceptually uniform
@@ -149,7 +153,8 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
     viewer.updateColors(rgb);
     scaleRow.style.visibility = 'visible';
     renderScale(stops, min, max, overlay.unit);
-    document.getElementById('data').textContent = `${overlay.label === 'MSLP' ? 'Mean sea level pressure' : overlay.label === 'Temp' ? 'Temperature' : 'Wind speed'} @ ${overlay.field === 'ps' ? 'Surface' : levelLabel(settings.level)} · wind @ ${levelLabel(settings.level)}`;
+    const columnField = ['ps', 'precipitation', 'water'].includes(overlay.field);
+    document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} @ ${columnField ? 'Surface' : levelLabel(settings.level)} · wind @ ${levelLabel(settings.level)}`;
   }
 
   function paintWind() {
@@ -194,7 +199,7 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
     paintIsobars();
     const d = latest.diagnostics;
     document.getElementById('date').textContent = formatDate(latest.time);
-    status.textContent = `ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa · Ts ${d.meanSurfaceT.toFixed(1)} K · solar ${d.absorbedSolar.toFixed(0)} / OLR ${d.outgoingLongwave.toFixed(0)} W/m² · N=${latest.N ?? ''} ${latest.workers > 1 ? `· ${latest.workers} workers` : ''}`;
+    status.textContent = `ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa · Ts ${d.meanSurfaceT.toFixed(1)} K · solar ${d.absorbedSolar.toFixed(0)} / OLR ${d.outgoingLongwave.toFixed(0)} W/m² · LH ${d.latentHeat.toFixed(0)} SH ${d.sensibleHeat.toFixed(0)} · rain ${(d.precipitation * 86400).toFixed(2)} mm/d · TPW ${d.columnWater.toFixed(1)} · N=${latest.N ?? ''} ${latest.workers > 1 ? `· ${latest.workers} workers` : ''}`;
   }
 
   function update(changes) {

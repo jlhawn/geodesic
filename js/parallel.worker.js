@@ -1,6 +1,7 @@
 import { meshFromShared } from './mesh.module.js';
 import { createModel } from './model.module.js';
-import { PHASE, workerRanges } from './parallel.module.js';
+import { PHASE, TOTALS, workerRanges } from './parallel.module.js';
+import { STATE_NAMES } from './model.module.js';
 import { workerInit } from './threads.module.js';
 
 const { data, post } = await workerInit();
@@ -19,10 +20,10 @@ const ctrl = new Int32Array(control.ints);
 const params = new Float64Array(control.floats);
 const totals = new Float64Array(control.totals);
 const state = model.state;
-const trial = ['pi', 'theta', 'u', 'surfaceT'].map((name) => new Float64Array(buffers.trial[name]));
-const stages = buffers.stages.map((stage) => ['pi', 'theta', 'u', 'surfaceT'].map((name) => new Float64Array(stage[name])));
+const trial = STATE_NAMES.map((name) => new Float64Array(buffers.trial[name]));
+const stages = buffers.stages.map((stage) => STATE_NAMES.map((name) => new Float64Array(stage[name])));
 const ranges = workerRanges(index, workers, { K, C, E, V });
-const sums = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0 };
+const sums = Object.fromEntries(TOTALS.map((name) => [name, 0]));
 
 function run(phase) {
   const input = Atomics.load(ctrl, 3) ? trial : state;
@@ -37,13 +38,11 @@ function run(phase) {
     case PHASE.CELL:
       model.radiation.setTime(params[2]);
       model.phases.cell(input, out, ranges.cells[0], ranges.cells[1], sums);
-      totals[3 * index] = sums.absorbedSolar;
-      totals[3 * index + 1] = sums.outgoingLongwave;
-      totals[3 * index + 2] = sums.sensibleHeat;
+      TOTALS.forEach((name, t) => { totals[TOTALS.length * index + t] = sums[name]; });
       break;
     case PHASE.ADVANCE: {
       const factor = params[1];
-      for (let a = 0; a < 4; a++) {
+      for (let a = 0; a < state.length; a++) {
         const [from, to] = ranges.arrays[a];
         const s = state[a], k = out[a], t = trial[a];
         for (let i = from; i < to; i++) t[i] = s[i] + factor * k[i];
@@ -52,14 +51,14 @@ function run(phase) {
     }
     case PHASE.COMBINE: {
       const w = params[0] / 6;
-      for (let a = 0; a < 4; a++) {
+      for (let a = 0; a < state.length; a++) {
         const [from, to] = ranges.arrays[a];
         const s = state[a], k1 = stages[0][a], k2 = stages[1][a], k3 = stages[2][a], k4 = stages[3][a];
         for (let i = from; i < to; i++) s[i] += w * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
       }
       break;
     }
-    case PHASE.ADJUST: model.phases.adjust(ranges.cells[0], ranges.cells[1]); break;
+    case PHASE.ADJUST: model.phases.adjust(ranges.cells[0], ranges.cells[1], params[0]); break;
     default: break;
   }
 }
