@@ -13,21 +13,23 @@ function blocks(kind, n, size, extra = {}) {
 /*
  * The work units of each phase. Workers claim units through a shared
  * counter, so the split adapts to however fast each core is: a layer at
- * a time for the layer-partitioned phases, blocks of cells, vertices or
- * array elements for the rest.
+ * a time for the layer-partitioned phases, and for the rest blocks of
+ * cells, vertices or array elements sized to give every worker several
+ * units whatever the resolution.
  */
-export function phaseChunks({ K, C, E, V }) {
+export function phaseChunks({ K, C, E, V }, workers = 8) {
   const lengths = stateLengths({ K, C, E });
-  const arrays = STATE_NAMES.flatMap((name, a) => blocks('array', lengths[name], 1 << 16, { a }));
+  const size = (n, floor) => Math.max(floor, Math.ceil(n / (4 * workers)));
+  const arrays = STATE_NAMES.flatMap((name, a) => blocks('array', lengths[name], size(lengths[name], 4096), { a }));
   return {
     [PHASE.FLUX]: blocks('layers', K, 1),
-    [PHASE.COLUMN]: [...blocks('cells', C, 2048), ...blocks('vertices', V, 4096)],
+    [PHASE.COLUMN]: [...blocks('cells', C, size(C, 32)), ...blocks('vertices', V, size(V, 64))],
     [PHASE.LAYER]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
-    [PHASE.PHYSICS]: blocks('cells', C, 1024),
+    [PHASE.PHYSICS]: blocks('cells', C, size(C, 32)),
     [PHASE.ADVANCE]: arrays,
     [PHASE.COMBINE]: arrays,
     [PHASE.CLOSURE]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
-    [PHASE.ADJUST]: blocks('cells', C, 512),
+    [PHASE.ADJUST]: blocks('cells', C, size(C, 16)),
   };
 }
 

@@ -22,7 +22,7 @@ const totals = new Float64Array(control.totals);
 const state = model.state;
 const trial = STATE_NAMES.map((name) => new Float64Array(buffers.trial[name]));
 const stages = buffers.stages.map((stage) => STATE_NAMES.map((name) => new Float64Array(stage[name])));
-const chunks = phaseChunks({ K, C, E, V });
+const chunks = phaseChunks({ K, C, E, V }, workers);
 const sums = Object.fromEntries(TOTALS.map((name) => [name, 0]));
 const partial = Object.fromEntries(TOTALS.map((name) => [name, 0]));
 
