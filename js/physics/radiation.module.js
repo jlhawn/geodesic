@@ -20,19 +20,40 @@ export function sunDirection(t, out = new Float64Array(3)) {
 }
 
 /*
- * Gray longwave column with a slab-ocean surface and a bulk sensible heat
- * flux. Each layer's emissivity follows its mass so a standard atmosphere
- * has the prescribed top-of-atmosphere emissivity; every emission is
- * either absorbed on its way or leaves through the top or reaches the
- * surface, so the layer and surface energy fluxes sum exactly to absorbed
- * solar minus outgoing longwave.
+ * Two-band gray longwave column with a slab-ocean surface and a bulk
+ * sensible heat flux. A window band carrying the fraction `window` of
+ * blackbody emission is transparent: the surface radiates it straight
+ * to space. The rest is a gray band whose optical depth follows
+ * Frierson et al. (2006): tau0(lat) = tauEquator + (tauPole − tauEquator)
+ * sin²lat, distributed in the vertical as tau0 (f·σ + (1 − f)·σ⁴) so it
+ * concentrates near the surface like water vapour. Every gray-band
+ * emission is either absorbed on its way or leaves through the top or
+ * reaches the surface, so the layer and surface energy fluxes sum
+ * exactly to absorbed solar minus outgoing longwave.
+ *
+ * Shortwave: the fraction `ozoneAbsorption` of the incoming beam is
+ * absorbed aloft. The ozone column follows Lacis & Hansen (1974)
+ * (centred at ozoneHeight with width ozoneWidth, heights from σ with the
+ * scale height) and the absorbing part of the beam decays through it
+ * with the optical depth ozoneOpacity, so the heating peaks above the
+ * ozone maximum as it does at the stratopause. The surface absorbs
+ * (1 − albedo) of what remains.
  */
 export function createRadiation(mesh, core, {
-  solarConstant = SOLAR_CONSTANT, albedo = 0.3, surfaceHeatCapacity = 2.1e7, toaEmissivity = 0.78,
-  emissivityReferencePressure = 101325, exchangeCoefficient = 1.5e-3, gustiness = 3,
+  solarConstant = SOLAR_CONSTANT, albedo = 0.3, surfaceHeatCapacity = 2.1e7,
+  window = 0.25, tauEquator = 7, tauPole = 1.75, linearFraction = 0.1,
+  ozoneAbsorption = 0.02, ozoneHeight = 20e3, ozoneWidth = 5e3, ozoneOpacity = 1, scaleHeight = 7e3,
+  exchangeCoefficient = 1.5e-3, gustiness = 3,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, exnerLayer } = core.diagnostics;
-  const decay = Math.log(1 - toaEmissivity) / emissivityReferencePressure;
+  const levels = core.levels;
+  const opaque = 1 - window;
+  const opticalDepth = (lat) => tauEquator + (tauPole - tauEquator) * Math.sin(lat) ** 2;
+  const tauCell = Float64Array.from({ length: C }, (_, i) => opticalDepth(mesh.latCell[i]));
+  const shape = Float64Array.from({ length: K }, (_, k) => linearFraction * (levels[k + 1] - levels[k]) + (1 - linearFraction) * (levels[k + 1] ** 4 - levels[k] ** 4));
+  const ozoneAbove = (sigma) => (sigma <= 0 ? 0 : (1 + Math.exp(-ozoneHeight / ozoneWidth)) / (1 + Math.exp((-scaleHeight * Math.log(sigma) - ozoneHeight) / ozoneWidth)));
+  const beamLeft = (sigma) => Math.exp(-ozoneOpacity * ozoneAbove(sigma));
+  const ozoneFraction = Float64Array.from({ length: K }, (_, k) => (beamLeft(levels[k]) - beamLeft(levels[k + 1])) / (1 - Math.exp(-ozoneOpacity)));
   const emissivity = new Float64Array(K);
   const temperature = new Float64Array(K);
   const emitted = new Float64Array(K);
@@ -49,21 +70,22 @@ export function createRadiation(mesh, core, {
     return solarConstant * Math.max(0, cosZenith);
   }
 
-  function column(i, pi, theta, surfaceT, windSpeed) {
-    const absorbedSolar = (1 - albedo) * insolation(i);
+  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i)) {
+    const ozoneHeating = beam * ozoneAbsorption;
+    const absorbedSolar = (1 - albedo) * (beam - ozoneHeating);
     const surfaceEmission = STEFAN_BOLTZMANN * surfaceT * surfaceT * surfaceT * surfaceT;
     for (let k = 0; k < K; k++) {
-      emissivity[k] = 1 - Math.exp(decay * pi * dSigma[k]);
+      emissivity[k] = 1 - Math.exp(-tau0 * shape[k]);
       const ex = exnerLayer[k * C + i];
       temperature[k] = theta[k * C + i] * ex;
-      emitted[k] = emissivity[k] * STEFAN_BOLTZMANN * temperature[k] ** 4;
+      emitted[k] = opaque * emissivity[k] * STEFAN_BOLTZMANN * temperature[k] ** 4;
     }
-    let carry = surfaceEmission;
+    let carry = opaque * surfaceEmission;
     for (let k = K - 1; k >= 0; k--) {
-      netFlux[k] = emissivity[k] * carry;
+      netFlux[k] = emissivity[k] * carry + ozoneHeating * ozoneFraction[k];
       carry *= 1 - emissivity[k];
     }
-    let outgoing = carry;
+    let outgoing = carry + window * surfaceEmission;
     let back = 0;
     for (let k = 0; k < K; k++) {
       netFlux[k] -= 2 * emitted[k];
@@ -86,7 +108,7 @@ export function createRadiation(mesh, core, {
     const sensible = airDensity * cp * exchangeCoefficient * Math.max(windSpeed, gustiness) * (surfaceT - airTemperature);
     netFlux[bottom] += sensible;
     const surfaceFlux = absorbedSolar - surfaceEmission + back - sensible;
-    budget.absorbedSolar = absorbedSolar;
+    budget.absorbedSolar = absorbedSolar + ozoneHeating;
     budget.outgoingLongwave = outgoing;
     budget.sensibleHeat = sensible;
     budget.surfaceFlux = surfaceFlux;
@@ -113,5 +135,5 @@ export function createRadiation(mesh, core, {
     }
   }
 
-  return { setTime, sun, insolation, column, apply, layerFlux: netFlux, budget, emissivity };
+  return { setTime, sun, insolation, column, apply, layerFlux: netFlux, budget, emissivity, opticalDepth, ozoneFraction };
 }

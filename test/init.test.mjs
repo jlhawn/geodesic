@@ -1,3 +1,4 @@
+import { SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
@@ -21,13 +22,13 @@ test('the radiative-convective equilibrium column is stable, warm at the ground,
   core.diagnoseColumn(0, pi, theta);
   const airT = profile[K - 1] * exnerLayer[(K - 1) * C];
   assert.ok(surfaceT - airT > 0 && surfaceT - airT < 20);
-  radiation.column(0, P0, theta, surfaceT, 3);
+  radiation.column(0, P0, theta, surfaceT, 3, radiation.opticalDepth(Math.asin(Math.sqrt(1 / 3))), SOLAR_CONSTANT / 4);
   let column = 0, scale = 0;
   for (let k = 0; k < K; k++) { column += radiation.layerFlux[k]; scale += Math.abs(radiation.layerFlux[k]); }
-  const longer = equilibriumProfile(model, { surfaceT, days: 1200 });
+  const longer = equilibriumProfile(model, { surfaceT, days: 2400 });
   let drift = 0;
   for (let k = 0; k < K; k++) drift = Math.max(drift, Math.abs(longer[k] - profile[k]) / profile[k]);
-  console.log(`equilibrium column: surface air ${airT.toFixed(1)} K under a ${surfaceT} K surface; column net flux ${column.toFixed(3)} W/m² (scale ${scale.toFixed(0)}); θ at 850/500/200/50 hPa ≈ ${[0.85, 0.5, 0.2, 0.05].map((s) => profile[sigmaMid.findIndex((m) => m > s)].toFixed(0)).join('/')} K; 600→1200 day drift ${drift.toExponential(1)}`);
+  console.log(`equilibrium column: surface air ${airT.toFixed(1)} K under a ${surfaceT} K surface; column net flux ${column.toFixed(3)} W/m² (scale ${scale.toFixed(0)}); θ at 850/500/200/50 hPa ≈ ${[0.85, 0.5, 0.2, 0.05].map((s) => profile[sigmaMid.findIndex((m) => m > s)].toFixed(0)).join('/')} K; 1200→2400 day drift ${drift.toExponential(1)}`);
   assert.ok(Math.abs(column) / scale < 1e-3);
   assert.ok(drift < 1e-3);
   assert.ok(Math.abs(surfaceTemperature(0) - 303) < 1e-12 && Math.abs(surfaceTemperature(Math.PI / 2) - 258) < 1e-12);

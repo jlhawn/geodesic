@@ -601,15 +601,16 @@ for a profile comparison to mean anything. Acceptance:
   above the closure to bound a zonally symmetric flow; the M5 runs
   locate it and test a top-of-model drag.
 
-Status: `js/physics/radiation.module.js` (gray column, insolation with
-tilt, slab ocean, sensible heat flux), `js/physics/surface.module.js`
+Status: `js/physics/radiation.module.js` (two-band gray column, ozone
+shortwave absorption, insolation with tilt, slab ocean, sensible heat
+flux — see the radiation note below), `js/physics/surface.module.js`
 (bulk drag, boundary-layer drag, convective adjustment) and
 `js/physics/init.module.js` are ported and `js/model.module.js`
 assembles them on the `forcing` hook with state `[π, θ, u, T_s]`. The
 reference θ(σ) is not inherited from the old model: `equilibriumProfile`
 integrates a single column of this model's own radiation and convective
 adjustment over a 305 K surface to radiative–convective equilibrium
-(converged to roundoff in 600 days of column time, about a second of
+(converged to roundoff in 1200 days of column time, a few seconds of
 compute; θ ≈ 299/315/371/532 K at 850/500/200/50 hPa, surface air 298 K).
 `test/physics.test.mjs` certifies the column budgets to roundoff;
 `test/init.test.mjs` shows the balanced state ringing at 1.3 hPa (N=8)
@@ -625,6 +626,24 @@ upper-level eddy kinetic energy ≈ 210–240 m²/s², surface pressure
   1.5 days; A-grid delivered 14–19 days).
 - The emergence experiment: subpolar surface lows at ±60° appearing in the
   zonal-mean profile within ~60 simulated days at N=32.
+
+**Radiation (Sept 19, 2026).** The column is a two-band gray scheme.
+A window band carrying 25% of blackbody emission is transparent, so the
+surface radiates it straight to space; the rest is a gray band whose
+optical depth follows Frierson et al. (2006): τ₀(φ) = τ_e + (τ_p − τ_e)
+sin²φ with τ_e = 7, τ_p = 1.75, distributed as τ₀(0.1 σ + 0.9 σ⁴) so it
+sits near the surface like water vapour (a prescribed stand-in for it —
+fixed in time, no feedback). Shortwave: 2% of the beam is absorbed
+aloft, spread with a Lacis–Hansen ozone column (20 km ± 5 km) through
+which the absorbing part of the beam decays with optical depth 1; the
+surface takes (1 − albedo) of the rest. Every flux still closes exactly
+(`test/physics.test.mjs`). Tuned on a 500-day N=3 run to a 288 K annual
+mean (tropics 300 K, poles 253 K, OLR 239 W/m² against 241 absorbed);
+the single-column equilibrium has a 215 K tropopause near 200 hPa and a
+stratosphere warming to ~259 K at 10 hPa, where the old gray column was
+isothermal at 207 K above 200 hPa. The equilibrium profile is built
+at the area-mean optical depth (sin²φ = 1/3) under the global-mean
+beam S/4.
 
 ### M4 — Worker and viewer — done
 

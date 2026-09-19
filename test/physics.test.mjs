@@ -59,7 +59,8 @@ test('radiation column: layer and surface fluxes sum to absorbed solar minus out
   radiation.column(0, P0, theta, 288, 5);
   let transmitted = 1;
   for (let k = 0; k < K; k++) transmitted *= 1 - radiation.emissivity[k];
-  assert.ok(Math.abs((1 - transmitted) - 0.78) < 1e-12);
+  assert.ok(Math.abs(transmitted - Math.exp(-radiation.opticalDepth(mesh.latCell[0]))) < 1e-12);
+  assert.ok(radiation.opticalDepth(0) > radiation.opticalDepth(Math.PI / 2));
 });
 
 test('radiation warms the column where it absorbs and cools the slab where it emits', () => {

@@ -1,4 +1,5 @@
 import { cellVector } from '../dynamics/operators.module.js';
+import { SOLAR_CONSTANT } from './radiation.module.js';
 
 const REFERENCE_SURFACE_T = 305.086;
 const AVERAGE_SURFACE_T = 288;
@@ -10,7 +11,7 @@ const EQUATOR_POLE_CONTRAST = 45;
  * flux, with convective adjustment after every step, integrated until
  * the column stops changing. Computed on column 0 of the given model.
  */
-export function equilibriumProfile(model, { surfaceT = REFERENCE_SURFACE_T, days = 600, dt = 900, windSpeed = 3, p0 = 101325 } = {}) {
+export function equilibriumProfile(model, { surfaceT = REFERENCE_SURFACE_T, days = 1200, dt = 900, windSpeed = 3, p0 = 101325 } = {}) {
   const { core, radiation, surface } = model;
   const { K, C, dSigma, cp, g, sigmaMid, exnerLayer } = core.diagnostics;
   const pi = new Float64Array(C).fill(p0);
@@ -18,9 +19,10 @@ export function equilibriumProfile(model, { surfaceT = REFERENCE_SURFACE_T, days
   core.diagnoseColumn(0, pi, theta);
   for (let k = 0; k < K; k++) theta[k * C] = surfaceT * Math.pow(sigmaMid[k], 0.19) / exnerLayer[k * C];
   const steps = Math.round(days * 86400 / dt);
+  const meanOpticalDepth = radiation.opticalDepth(Math.asin(Math.sqrt(1 / 3)));
   for (let n = 0; n < steps; n++) {
     core.diagnoseColumn(0, pi, theta);
-    radiation.column(0, p0, theta, surfaceT, windSpeed);
+    radiation.column(0, p0, theta, surfaceT, windSpeed, meanOpticalDepth, SOLAR_CONSTANT / 4);
     for (let k = 0; k < K; k++) {
       const massPerArea = p0 * dSigma[k] / g;
       theta[k * C] += dt * radiation.layerFlux[k] / (cp * massPerArea) / exnerLayer[k * C];
