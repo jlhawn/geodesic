@@ -21,18 +21,18 @@ function postFrame() {
   const E = mesh.nEdges;
   layerWinds.fill(null);
   const layerWind = (k) => layerWinds[k] ??= cellVector(mesh, u.subarray(k * E, (k + 1) * E), new Float64Array(3 * mesh.nCells));
-  const q = state[4];
+  const q = state[4], qc = state[5];
   const precipitation = Float32Array.from(model.moist.precipitation);
   const fields = levelFields(core, pi, theta, layerWind, level, q);
   const ps = Float32Array.from(pi), ts = Float32Array.from(surfaceT);
-  const water = new Float32Array(mesh.nCells);
-  for (let i = 0; i < mesh.nCells; i++) water[i] = model.moist.columnWater(pi, q, i);
+  const water = new Float32Array(mesh.nCells), cloud = new Float32Array(mesh.nCells);
+  for (let i = 0; i < mesh.nCells; i++) { water[i] = model.moist.columnWater(pi, q, i); cloud[i] = model.moist.columnWater(pi, qc, i); }
   const diagnostics = model.diagnostics();
   const interval = time - lastFrameTime;
   lastFrameTime = time;
   for (let i = 0; i < mesh.nCells; i++) precipitation[i] = interval > 0 ? precipitation[i] / interval * 86400 : 0;
-  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, ts, ...fields, precipitation, water, diagnostics };
-  self.postMessage(message, [ps.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer]);
+  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, ts, ...fields, precipitation, water, cloud, diagnostics };
+  self.postMessage(message, [ps.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer]);
 }
 
 function loop() {
@@ -53,9 +53,11 @@ function initialState(model, saved, N) {
   if (!saved) return initializeState(model, {});
   const arrays = [saved.pi, saved.theta, saved.u, saved.surfaceT].map((a) => Float64Array.from(a));
   if (saved.q) arrays.push(Float64Array.from(saved.q));
+  if (saved.q && saved.qc) arrays.push(Float64Array.from(saved.qc));
   model.time = saved.time;
   const carried = saved.N === N ? arrays : (status(`regridding day ${saved.day} from N=${saved.N} to N=${N}…`), regridState(createModel(new Grid(saved.N)), model, arrays));
   if (carried.length < 5) carried.push(initialHumidity(model, carried[0], carried[1]));
+  if (carried.length < 6) carried.push(new Float64Array(carried[1].length));
   return carried;
 }
 

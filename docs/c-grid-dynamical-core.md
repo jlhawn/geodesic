@@ -864,6 +864,25 @@ favour, so the slab has not settled; the tropics are cool (292 K) and
 the poles moist (18 kg/m²) for Earth, which the next tuning pass
 should address (reference humidity, relaxation time, coupling).
 
+### M8 — Cloud water — done
+
+Cloud condensate `qc` is state[5], transported like `q` (conservative
+closure, interface values in Exner) and loading the density
+temperature, θ_v = θ(1 + 0.608 q − qc). The saturation adjustment
+replaces instant rain-out: supersaturated vapour condenses into cloud
+water and cloud water evaporates into subsaturated air, each with one
+implicit step, so a layer is afterwards either saturated or cloud-free
+and c_p T + L q is conserved exactly. Kessler autoconversion turns
+cloud water above 0.2 g/kg into rain at 10⁻³ s⁻¹, and all cloud water
+decays over 3 h; both are exact exponential decays per step, and the
+rain falls out at once. Betts–Miller still rains directly. Dry
+adjustment mixes `qc` with `q`. The Betts–Miller reference profile uses
+Bolton's closed-form LCL and a two-substep moist ascent that stops once
+the parcel is 10 K colder than the air (87 → 5 ms per N=16 step).
+Column cloud water (TCW) is a diagnostic and a page overlay; the step
+costs 126 ms serial at N=16 against 98 ms dry. Cloud–radiation
+coupling (albedo and longwave emissivity of cloud) is the next step.
+
 ## 7. Module layout in this repo
 
 ```
@@ -880,7 +899,7 @@ js/
     surface.module.js       ported: drag, sensible heat, slab ocean, convective adjustment
     init.module.js          ported: thermal init, balance, seed, bands, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes
-    moist.module.js         M7: saturation, condensation, Betts–Miller convection, filler
+    moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
   model.module.js           assembles core + physics, RK4 step, diagnostics
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase

@@ -41,7 +41,8 @@ export function sigmaInterfaces() {
  * State: pi[C] surface pressure, theta[K*C] layer potential temperature,
  * u[K*E] layer normal velocity (layer k occupies [k*C, (k+1)*C) and
  * [k*E, (k+1)*E)), and optionally state[4] = q[K*C], specific humidity,
- * carried with the same flux-form transport as theta. Interface
+ * and state[5] = qc[K*C], cloud condensate, both carried with the same
+ * flux-form transport as theta. Interface
  * quantities use K+1 slots per column, top first. Steps follow the
  * A-grid column: mass flux and divergence per layer, dpi/dt,
  * pi*sigma-dot telescoping to zero at the ground, Exner ratios from the
@@ -49,7 +50,8 @@ export function sigmaInterfaces() {
  * Exner, geopotential integrated upward with each layer's virtual theta
  * over its own Exner span, then flux-form theta and q transport and the
  * vector-invariant momentum equation with the RTSK PV flux. The
- * pressure-gradient force uses virtual theta; with no q it equals theta.
+ * pressure-gradient force uses virtual theta (with condensate loading);
+ * with no q it equals theta.
  */
 export function createSigmaCore(mesh, options = {}) {
   const {
@@ -82,6 +84,7 @@ export function createSigmaCore(mesh, options = {}) {
   const dExnerDpi = sharedArray('dExnerDpi', K * C);
   const thetaLower = sharedArray('thetaLower', K * C);
   const qLower = sharedArray('qLower', K * C);
+  const qcLower = sharedArray('qcLower', K * C);
   const thetaV = sharedArray('thetaV', K * C);
   const geopotential = sharedArray('geopotential', K * C);
   const piVertex = sharedArray('piVertex', V);
@@ -103,9 +106,11 @@ export function createSigmaCore(mesh, options = {}) {
   const lapTheta2 = new Float64Array(C);
   const qFlux = new Float64Array(E);
   const divQFlux = new Float64Array(C);
+  const qcFlux = new Float64Array(E);
+  const divQcFlux = new Float64Array(C);
   const massField = new Float64Array(C);
 
-  function diagnoseColumn(i, pi, theta, q = null) {
+  function diagnoseColumn(i, pi, theta, q = null, qc = null) {
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
       const exLower = Math.pow(pi[i] * sigmaLower[k] / p0, kappa);
@@ -117,13 +122,14 @@ export function createSigmaCore(mesh, options = {}) {
     }
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
-      thetaV[idx] = q ? theta[idx] * (1 + VIRTUAL_FACTOR * q[idx]) : theta[idx];
+      thetaV[idx] = q ? theta[idx] * (1 + VIRTUAL_FACTOR * q[idx] - (qc ? qc[idx] : 0)) : theta[idx];
     }
     for (let k = 0; k < K - 1; k++) {
       const idx = k * C + i;
       const t = (exnerLower[idx] - exnerLayer[idx]) / (exnerLayer[idx + C] - exnerLayer[idx]);
       thetaLower[idx] = theta[idx] + t * (theta[idx + C] - theta[idx]);
       qLower[idx] = q ? q[idx] + t * (q[idx + C] - q[idx]) : 0;
+      qcLower[idx] = qc ? qc[idx] + t * (qc[idx + C] - qc[idx]) : 0;
     }
     const bottom = (K - 1) * C + i;
     geopotential[bottom] = (surfaceGeopotential ? surfaceGeopotential[i] : 0) + cp * thetaV[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
@@ -136,8 +142,8 @@ export function createSigmaCore(mesh, options = {}) {
     }
   }
 
-  function diagnose(pi, theta, q = null) {
-    for (let i = 0; i < C; i++) diagnoseColumn(i, pi, theta, q);
+  function diagnose(pi, theta, q = null, qc = null) {
+    for (let i = 0; i < C; i++) diagnoseColumn(i, pi, theta, q, qc);
   }
 
   function edgePi(pi) {
@@ -157,7 +163,7 @@ export function createSigmaCore(mesh, options = {}) {
 
   function phaseColumn(state, out, iFrom, iTo) {
     const [pi, theta] = state;
-    const q = state[4] ?? null;
+    const q = state[4] ?? null, qc = state[5] ?? null;
     const [dPi] = out;
     for (let i = iFrom; i < iTo; i++) {
       let sum = 0;
@@ -170,7 +176,7 @@ export function createSigmaCore(mesh, options = {}) {
         piSigmaDot[(k + 1) * C + i] = -cumulative - sigmaLower[k] * dPi[i];
       }
       piSigmaDot[K * C + i] = 0;
-      diagnoseColumn(i, pi, theta, q);
+      diagnoseColumn(i, pi, theta, q, qc);
     }
   }
 
@@ -222,7 +228,7 @@ export function createSigmaCore(mesh, options = {}) {
   function phaseLayer(state, out, kFrom, kTo) {
     const [pi, theta, u] = state;
     const [, dTheta, dU] = out;
-    const q = state[4] ?? null, dQ = out[4] ?? null;
+    const q = state[4] ?? null, dQ = out[4] ?? null, qc = state[5] ?? null, dQc = out[5] ?? null;
     edgePi(pi);
     gradient(mesh, pi, gradPi);
     for (let k = kFrom; k < kTo; k++) {
@@ -230,6 +236,7 @@ export function createSigmaCore(mesh, options = {}) {
       const fk = flux.subarray(k * E, (k + 1) * E);
       transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta);
       if (q && dQ) transportLayer(k, pi, q, qLower, qFlux, divQFlux, dQ, true);
+      if (qc && dQc) transportLayer(k, pi, qc, qcLower, qcFlux, divQcFlux, dQc, true);
       const uk = u.subarray(k * E, (k + 1) * E);
       const dUk = dU.subarray(k * E, (k + 1) * E);
       curl(mesh, uk, zeta);
@@ -281,7 +288,7 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, diagnose, diagnoseColumn, diagnostics, mass, setForcing, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, thetaV } };
+  return { K, levels, sigmaMid, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, diagnose, diagnoseColumn, diagnostics, mass, setForcing, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV } };
 }
 
 /*

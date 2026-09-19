@@ -179,5 +179,5 @@ export function initializeState(model, {
     }
   }
 
-  return [pi, theta, u, surfaceT, initialHumidity(model, pi, theta, { surfaceHumidity })];
+  return [pi, theta, u, surfaceT, initialHumidity(model, pi, theta, { surfaceHumidity }), new Float64Array(K * C)];
 }

@@ -64,8 +64,8 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness 
    * sweeping until the column is stable. Refreshes the column's Exner
    * ratios for the current π first.
    */
-  function convectiveAdjustColumn(i, pi, theta, q = null) {
-    core.diagnoseColumn(i, pi, theta, q);
+  function convectiveAdjustColumn(i, pi, theta, q = null, qc = null) {
+    core.diagnoseColumn(i, pi, theta, q, qc);
     let mixes = 0, dirty = true, guard = 0;
     while (dirty && guard < K * K) {
       dirty = false;
@@ -78,10 +78,11 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness 
           const mixed = (theta[above] * wAbove + theta[below] * wBelow) / (wAbove + wBelow);
           theta[above] = mixed;
           theta[below] = mixed;
-          if (q) {
-            const mixedQ = (q[above] * dSigma[k] + q[below] * dSigma[k + 1]) / (dSigma[k] + dSigma[k + 1]);
-            q[above] = mixedQ;
-            q[below] = mixedQ;
+          for (const tracer of [q, qc]) {
+            if (!tracer) continue;
+            const mixedQ = (tracer[above] * dSigma[k] + tracer[below] * dSigma[k + 1]) / (dSigma[k] + dSigma[k + 1]);
+            tracer[above] = mixedQ;
+            tracer[below] = mixedQ;
           }
           dirty = true;
           mixes++;
@@ -91,9 +92,9 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness 
     return mixes;
   }
 
-  function convectiveAdjustment(pi, theta, iFrom = 0, iTo = C, q = null) {
+  function convectiveAdjustment(pi, theta, iFrom = 0, iTo = C, q = null, qc = null) {
     let mixes = 0;
-    for (let i = iFrom; i < iTo; i++) mixes += convectiveAdjustColumn(i, pi, theta, q);
+    for (let i = iFrom; i < iTo; i++) mixes += convectiveAdjustColumn(i, pi, theta, q, qc);
     return mixes;
   }
 

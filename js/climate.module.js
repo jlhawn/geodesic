@@ -13,10 +13,11 @@ const OVERLAYS = {
   rh: { label: 'RH', unit: '%', kind: 'sequential', field: 'humidity', scale: 100, range: () => [0, 100] },
   precip: { label: 'Precip', unit: 'mm/day', kind: 'sequential', field: 'precipitation', scale: 1, range: () => [0, 30] },
   tpw: { label: 'TPW', unit: 'kg/m²', kind: 'sequential', field: 'water', scale: 1, range: () => [0, 60] },
+  tcw: { label: 'TCW', unit: 'g/m²', kind: 'sequential', field: 'cloud', scale: 1000, range: () => [0, 500] },
   mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'ps', scale: 0.01, range: () => [960, 1060] },
   none: { label: 'None' },
 };
-const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Total precipitable water', mslp: 'Mean sea level pressure' };
+const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Total precipitable water', tcw: 'Total cloud water', mslp: 'Mean sea level pressure' };
 
 /*
  * Palettes as sRGB stops. The sequential ones are perceptually uniform
@@ -153,7 +154,7 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
     viewer.updateColors(rgb);
     scaleRow.style.visibility = 'visible';
     renderScale(stops, min, max, overlay.unit);
-    const columnField = ['ps', 'precipitation', 'water'].includes(overlay.field);
+    const columnField = ['ps', 'precipitation', 'water', 'cloud'].includes(overlay.field);
     document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} @ ${columnField ? 'Surface' : levelLabel(settings.level)} · wind @ ${levelLabel(settings.level)}`;
   }
 
@@ -199,7 +200,7 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
     paintIsobars();
     const d = latest.diagnostics;
     document.getElementById('date').textContent = formatDate(latest.time);
-    status.textContent = `ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa · Ts ${d.meanSurfaceT.toFixed(1)} K · solar ${d.absorbedSolar.toFixed(0)} / OLR ${d.outgoingLongwave.toFixed(0)} W/m² · LH ${d.latentHeat.toFixed(0)} SH ${d.sensibleHeat.toFixed(0)} · rain ${(d.precipitation * 86400).toFixed(2)} mm/d · TPW ${d.columnWater.toFixed(1)} · N=${latest.N ?? ''} ${latest.workers > 1 ? `· ${latest.workers} workers` : ''}`;
+    status.textContent = `ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa · Ts ${d.meanSurfaceT.toFixed(1)} K · solar ${d.absorbedSolar.toFixed(0)} / OLR ${d.outgoingLongwave.toFixed(0)} W/m² · LH ${d.latentHeat.toFixed(0)} SH ${d.sensibleHeat.toFixed(0)} · rain ${(d.precipitation * 86400).toFixed(2)} mm/d · TPW ${d.columnWater.toFixed(1)} · TCW ${(1000 * d.columnCloud).toFixed(0)} g/m² · N=${latest.N ?? ''} ${latest.workers > 1 ? `· ${latest.workers} workers` : ''}`;
   }
 
   function update(changes) {

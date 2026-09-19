@@ -15,9 +15,28 @@ export function saturationHumidity(T, p) {
 }
 
 /*
+ * Lifting condensation level of a parcel (T, q, p) by Bolton (1980):
+ * the dew point from the vapour pressure, the LCL temperature from his
+ * eq. 15, and the pressure along the dry adiabat. Returns null when the
+ * parcel is already saturated or has no vapour.
+ */
+export function liftingCondensationLevel(T, q, p, kappa) {
+  if (q <= 0) return null;
+  const e = q * p / (EPSILON + (1 - EPSILON) * q);
+  const y = Math.log(e / 611.2);
+  const dewPoint = (273.15 * 17.67 - 29.65 * y) / (17.67 - y);
+  if (dewPoint >= T) return { temperature: T, pressure: p };
+  const temperature = 1 / (1 / (dewPoint - 56) + Math.log(T / dewPoint) / 800) + 56;
+  return { temperature, pressure: p * Math.pow(temperature / T, 1 / kappa) };
+}
+
+/*
  * Moist physics for the sigma core, applied to the state after each
- * step: large-scale condensation of supersaturation (rained out at
- * once, latent heat to the layer), the simplified Betts–Miller
+ * step: saturation adjustment between vapour and cloud condensate
+ * (supersaturation condenses into cloud water, cloud water evaporates
+ * into subsaturated air, latent heat to the layer), Kessler
+ * autoconversion of cloud water above a threshold into rain that falls
+ * out at once, the simplified Betts–Miller
  * convection of Frierson (2007) — a conditionally unstable column
  * relaxes over relaxationTime toward the moist adiabat of its lowest
  * layer and a fixed relative humidity, with the reference temperature
@@ -27,7 +46,10 @@ export function saturationHumidity(T, p) {
  * from the layer below. Precipitation accumulates per cell (kg/m²);
  * the budget sums are area-weighted masses (kg).
  */
-export function createMoistPhysics(mesh, core, { latentHeat = LATENT_HEAT, relaxationTime = 7200, referenceHumidity = 0.7, buffers = null } = {}) {
+export function createMoistPhysics(mesh, core, {
+  latentHeat = LATENT_HEAT, relaxationTime = 7200, referenceHumidity = 0.7,
+  autoconversionThreshold = 2e-4, autoconversionRate = 1e-3, cloudLifetime = 3 * 3600, buffers = null,
+} = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer } = core.diagnostics;
   const precipBuffer = buffers && buffers.precipitation ? buffers.precipitation : new SharedArrayBuffer(8 * C);
   const precipitation = new Float64Array(precipBuffer);
@@ -39,20 +61,47 @@ export function createMoistPhysics(mesh, core, { latentHeat = LATENT_HEAT, relax
     return (R * temperature + latentHeat * qs) / (cp + latentHeat * latentHeat * EPSILON * qs / (R * temperature * temperature));
   }
 
-  function condenseColumn(i, pi, theta, q) {
-    let rain = 0;
+  /*
+   * Saturation adjustment: supersaturated vapour condenses into cloud
+   * water and cloud water evaporates into subsaturated air, each with
+   * one implicit step, so afterwards a layer is either saturated or
+   * cloud-free. Returns the condensate formed (kg/m², negative when
+   * cloud evaporated); nothing rains here.
+   */
+  function condenseColumn(i, pi, theta, q, qc) {
+    let formed = 0;
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
       const ex = exnerLayer[idx];
       const temperature = theta[idx] * ex;
       const pressure = pi[i] * sigmaMid[k];
       const qs = saturationHumidity(temperature, pressure);
-      if (q[idx] <= qs) continue;
       const slope = qs * latentHeat / (R_VAPOR * temperature * temperature);
-      const removed = (q[idx] - qs) / (1 + latentHeat * slope / cp);
-      q[idx] -= removed;
-      theta[idx] += latentHeat * removed / (cp * ex);
-      rain += pi[i] * dSigma[k] / g * removed;
+      let change = (q[idx] - qs) / (1 + latentHeat * slope / cp);
+      if (change < 0) change = Math.max(change, -qc[idx]);
+      if (change === 0) continue;
+      q[idx] -= change;
+      qc[idx] += change;
+      theta[idx] += latentHeat * change / (cp * ex);
+      formed += pi[i] * dSigma[k] / g * change;
+    }
+    return formed;
+  }
+
+  /*
+   * Kessler autoconversion: cloud water above the threshold turns into
+   * rain at autoconversionRate, and all cloud water decays over
+   * cloudLifetime; the rain leaves the column at once.
+   */
+  function autoconvertColumn(i, pi, qc, dt) {
+    let rain = 0;
+    for (let k = 0; k < K; k++) {
+      const idx = k * C + i;
+      if (qc[idx] <= 0) continue;
+      const excess = Math.max(0, qc[idx] - autoconversionThreshold);
+      const converted = Math.min(qc[idx], excess * (1 - Math.exp(-autoconversionRate * dt)) + qc[idx] * (1 - Math.exp(-dt / cloudLifetime)));
+      qc[idx] -= converted;
+      rain += pi[i] * dSigma[k] / g * converted;
     }
     return rain;
   }
@@ -77,20 +126,15 @@ export function createMoistPhysics(mesh, core, { latentHeat = LATENT_HEAT, relax
     const Tp = T[bottom], pb = p[bottom];
     const qp = Math.min(q[bottom * C + i], saturationHumidity(Tp, pb));
     const dryT = (pressure) => Tp * Math.pow(pressure / pb, kappa);
-    if (saturationHumidity(dryT(p[0]), p[0]) > qp) return -1;
-    let lo = Math.log(p[0]), hi = Math.log(pb);
-    for (let n = 0; n < 40; n++) {
-      const mid = 0.5 * (lo + hi), pressure = Math.exp(mid);
-      if (saturationHumidity(dryT(pressure), pressure) > qp) hi = mid; else lo = mid;
-    }
-    const pLcl = Math.exp(0.5 * (lo + hi));
-    let temperature = dryT(pLcl), pressure = pLcl;
+    const lcl = liftingCondensationLevel(Tp, qp, pb, kappa);
+    if (!lcl || lcl.pressure < p[0]) return -1;
+    let temperature = lcl.temperature, pressure = lcl.pressure;
     let top = -1;
     for (let k = bottom; k >= 0; k--) {
-      if (p[k] >= pLcl) {
+      if (p[k] >= lcl.pressure) {
         Tref[k] = dryT(p[k]);
       } else {
-        const steps = 4, dlnp = (Math.log(p[k]) - Math.log(pressure)) / steps;
+        const steps = 2, dlnp = (Math.log(p[k]) - Math.log(pressure)) / steps;
         for (let n = 0; n < steps; n++) {
           const k1 = moistLapse(temperature, pressure);
           const k2 = moistLapse(temperature + 0.5 * dlnp * k1, pressure * Math.exp(0.5 * dlnp));
@@ -99,6 +143,7 @@ export function createMoistPhysics(mesh, core, { latentHeat = LATENT_HEAT, relax
         }
         Tref[k] = temperature;
         if (Tref[k] > T[k]) top = k;
+        else if (T[k] - Tref[k] > 10) break;
       }
     }
     if (top < 0) return -1;
@@ -136,6 +181,7 @@ export function createMoistPhysics(mesh, core, { latentHeat = LATENT_HEAT, relax
   }
 
   function fillColumn(i, pi, q) {
+    if (!q) return;
     for (let k = 0; k < K - 1; k++) {
       const idx = k * C + i;
       if (q[idx] < 0) {
@@ -151,14 +197,16 @@ export function createMoistPhysics(mesh, core, { latentHeat = LATENT_HEAT, relax
   }
 
   function adjust(state, iFrom, iTo, dt) {
-    const [pi, theta, , , q] = state;
+    const [pi, theta, , , q, qc] = state;
     for (let i = iFrom; i < iTo; i++) {
-      core.diagnoseColumn(i, pi, theta, q);
-      const condensed = condenseColumn(i, pi, theta, q);
+      core.diagnoseColumn(i, pi, theta, q, qc);
+      condenseColumn(i, pi, theta, q, qc);
       const convected = convectColumn(i, pi, theta, q, dt);
+      const rained = autoconvertColumn(i, pi, qc, dt);
       fillColumn(i, pi, q);
-      precipitation[i] += condensed + convected;
-      budget.condensation += mesh.areaCell[i] * condensed;
+      fillColumn(i, pi, qc);
+      precipitation[i] += rained + convected;
+      budget.condensation += mesh.areaCell[i] * rained;
       budget.convection += mesh.areaCell[i] * convected;
     }
   }
@@ -169,5 +217,5 @@ export function createMoistPhysics(mesh, core, { latentHeat = LATENT_HEAT, relax
     return water;
   }
 
-  return { adjust, condenseColumn, convectColumn, fillColumn, referenceProfile, columnWater, precipitation, budget, latentHeat, shared: { precipitation: precipBuffer }, reference: { T: Tref, q: qref } };
+  return { adjust, condenseColumn, autoconvertColumn, convectColumn, fillColumn, referenceProfile, columnWater, precipitation, budget, latentHeat, shared: { precipitation: precipBuffer }, reference: { T: Tref, q: qref } };
 }
