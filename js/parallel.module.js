@@ -4,17 +4,29 @@ import { parallelism, spawn } from './threads.module.js';
 
 export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, CELL: 4, ADVANCE: 5, COMBINE: 6, ADJUST: 7, EXIT: 8 };
 
-function split(n, index, workers) {
-  return [Math.floor(n * index / workers), Math.floor(n * (index + 1) / workers)];
+function blocks(kind, n, size, extra = {}) {
+  const chunks = [];
+  for (let from = 0; from < n; from += size) chunks.push({ kind, from, to: Math.min(n, from + size), ...extra });
+  return chunks;
 }
 
-export function workerRanges(index, workers, { K, C, E, V }) {
+/*
+ * The work units of each phase. Workers claim units through a shared
+ * counter, so the split adapts to however fast each core is: a layer at
+ * a time for the layer-partitioned phases, blocks of cells, vertices or
+ * array elements for the rest.
+ */
+export function phaseChunks({ K, C, E, V }) {
   const lengths = stateLengths({ K, C, E });
+  const arrays = STATE_NAMES.flatMap((name, a) => blocks('array', lengths[name], 1 << 16, { a }));
   return {
-    layers: split(K, index, workers),
-    cells: split(C, index, workers),
-    vertices: split(V, index, workers),
-    arrays: STATE_NAMES.map((name) => split(lengths[name], index, workers)),
+    [PHASE.FLUX]: blocks('layers', K, 1),
+    [PHASE.COLUMN]: [...blocks('cells', C, 2048), ...blocks('vertices', V, 4096)],
+    [PHASE.LAYER]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
+    [PHASE.CELL]: blocks('cells', C, 1024),
+    [PHASE.ADVANCE]: arrays,
+    [PHASE.COMBINE]: arrays,
+    [PHASE.ADJUST]: blocks('cells', C, 512),
   };
 }
 
@@ -23,13 +35,15 @@ export const TOTALS = ['absorbedSolar', 'outgoingLongwave', 'sensibleHeat', 'eva
 /*
  * The model with its time step computed by worker threads. The mesh and
  * every array that crosses a phase boundary live once in shared memory;
- * each worker owns a block of layers, a block of cells, a block of
- * vertices and a block of each state array, and the main thread drives
- * the RK4 phases through a shared counter. Sums are done in the same
- * order as on one thread, so the result is bit-identical to createModel.
+ * the main thread drives the RK4 phases through a shared generation
+ * counter and the workers claim each phase's work units from a shared
+ * chunk counter. Every array element is computed by exactly one worker
+ * with the single-thread arithmetic, so the state is bit-identical to
+ * createModel's; only the radiation totals are summed in a different
+ * order.
  */
 export async function createParallelModel(grid, options = {}, workers = null) {
-  workers ??= Math.max(1, await parallelism() - 2);
+  workers ??= Math.max(1, await parallelism());
   const model = createModel(grid, options);
   const { K, C, E } = model.core.diagnostics;
   const lengths = stateLengths({ K, C, E });
@@ -62,12 +76,15 @@ export async function createParallelModel(grid, options = {}, workers = null) {
   await Promise.all(ready);
   for (const thread of threads) thread.unref();
 
+  const phaseTime = new Float64Array(PHASE.EXIT + 1);
   function run(phase, { useTrial = 0, stage = 0, dt = 0, factor = 0 } = {}) {
+    const started = performance.now();
     Atomics.store(ctrl, 3, useTrial);
     Atomics.store(ctrl, 4, stage);
     params[0] = dt;
     params[1] = factor;
     params[2] = model.time;
+    Atomics.store(ctrl, 6, 0);
     Atomics.store(ctrl, 2, 0);
     Atomics.store(ctrl, 1, phase);
     Atomics.add(ctrl, 0, 1);
@@ -80,6 +97,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
       const detail = failures.join('\n') || 'a worker reported an error';
       throw new Error(`phase ${phase} failed:\n${detail}`);
     }
+    phaseTime[phase] += performance.now() - started;
   }
 
   function tendencyPhases(useTrial, stage) {
@@ -110,6 +128,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
   };
 
   model.workers = workers;
+  model.phaseTime = phaseTime;
   model.close = async function close() {
     Atomics.store(ctrl, 1, PHASE.EXIT);
     Atomics.add(ctrl, 0, 1);

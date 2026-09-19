@@ -56,9 +56,9 @@ export function createModel(gridOrMesh, {
       if (physics) surface.lowestWindSpeed(input[2], iFrom, iTo);
     },
     vertex(input, vFrom, vTo) { core.phaseVertex(input, vFrom, vTo); },
-    layer(input, out, kFrom, kTo) {
-      core.phaseLayer(input, out, kFrom, kTo);
-      if (physics) surface.applyLayers(input, out, kFrom, kTo);
+    layer(input, out, kFrom, kTo, part = 'all') {
+      core.phaseLayer(input, out, kFrom, kTo, part);
+      if (physics && part !== 'tracers') surface.applyLayers(input, out, kFrom, kTo);
     },
     cell(input, out, iFrom, iTo, sums) {
       out[3].fill(0, iFrom, iTo);

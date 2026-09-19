@@ -1,6 +1,6 @@
 import { meshFromShared } from './mesh.module.js';
 import { createModel } from './model.module.js';
-import { PHASE, TOTALS, workerRanges } from './parallel.module.js';
+import { PHASE, TOTALS, phaseChunks } from './parallel.module.js';
 import { STATE_NAMES } from './model.module.js';
 import { workerInit } from './threads.module.js';
 
@@ -22,45 +22,53 @@ const totals = new Float64Array(control.totals);
 const state = model.state;
 const trial = STATE_NAMES.map((name) => new Float64Array(buffers.trial[name]));
 const stages = buffers.stages.map((stage) => STATE_NAMES.map((name) => new Float64Array(stage[name])));
-const ranges = workerRanges(index, workers, { K, C, E, V });
+const chunks = phaseChunks({ K, C, E, V });
 const sums = Object.fromEntries(TOTALS.map((name) => [name, 0]));
+const partial = Object.fromEntries(TOTALS.map((name) => [name, 0]));
 
-function run(phase) {
-  const input = Atomics.load(ctrl, 3) ? trial : state;
-  const out = stages[Atomics.load(ctrl, 4)];
+function unit(phase, chunk, input, out) {
+  const { from, to } = chunk;
   switch (phase) {
-    case PHASE.FLUX: model.phases.flux(input, ranges.layers[0], ranges.layers[1]); break;
+    case PHASE.FLUX: model.phases.flux(input, from, to); break;
     case PHASE.COLUMN:
-      model.phases.column(input, out, ranges.cells[0], ranges.cells[1]);
-      model.phases.vertex(input, ranges.vertices[0], ranges.vertices[1]);
+      if (chunk.kind === 'cells') model.phases.column(input, out, from, to);
+      else model.phases.vertex(input, from, to);
       break;
-    case PHASE.LAYER: model.phases.layer(input, out, ranges.layers[0], ranges.layers[1]); break;
+    case PHASE.LAYER: model.phases.layer(input, out, from, to, chunk.kind); break;
     case PHASE.CELL:
-      model.radiation.setTime(params[2]);
-      model.phases.cell(input, out, ranges.cells[0], ranges.cells[1], sums);
-      TOTALS.forEach((name, t) => { totals[TOTALS.length * index + t] = sums[name]; });
+      model.phases.cell(input, out, from, to, partial);
+      for (const name of TOTALS) sums[name] += partial[name];
       break;
     case PHASE.ADVANCE: {
       const factor = params[1];
-      for (let a = 0; a < state.length; a++) {
-        const [from, to] = ranges.arrays[a];
-        const s = state[a], k = out[a], t = trial[a];
-        for (let i = from; i < to; i++) t[i] = s[i] + factor * k[i];
-      }
+      const s = state[chunk.a], k = out[chunk.a], t = trial[chunk.a];
+      for (let i = from; i < to; i++) t[i] = s[i] + factor * k[i];
       break;
     }
     case PHASE.COMBINE: {
       const w = params[0] / 6;
-      for (let a = 0; a < state.length; a++) {
-        const [from, to] = ranges.arrays[a];
-        const s = state[a], k1 = stages[0][a], k2 = stages[1][a], k3 = stages[2][a], k4 = stages[3][a];
-        for (let i = from; i < to; i++) s[i] += w * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
-      }
+      const a = chunk.a;
+      const s = state[a], k1 = stages[0][a], k2 = stages[1][a], k3 = stages[2][a], k4 = stages[3][a];
+      for (let i = from; i < to; i++) s[i] += w * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
       break;
     }
-    case PHASE.ADJUST: model.phases.adjust(ranges.cells[0], ranges.cells[1], params[0]); break;
+    case PHASE.ADJUST: model.phases.adjust(from, to, params[0]); break;
     default: break;
   }
+}
+
+function run(phase) {
+  const input = Atomics.load(ctrl, 3) ? trial : state;
+  const out = stages[Atomics.load(ctrl, 4)];
+  const units = chunks[phase];
+  if (!units) return;
+  if (phase === PHASE.CELL) { model.radiation.setTime(params[2]); for (const name of TOTALS) sums[name] = 0; }
+  for (;;) {
+    const c = Atomics.add(ctrl, 6, 1);
+    if (c >= units.length) break;
+    unit(phase, units[c], input, out);
+  }
+  if (phase === PHASE.CELL) TOTALS.forEach((name, t) => { totals[TOTALS.length * index + t] = sums[name]; });
 }
 
 post({ type: 'ready', index });

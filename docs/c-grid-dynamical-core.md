@@ -772,18 +772,26 @@ sphere), so the parallel engine partitions each phase instead. The
 Every array that crosses a phase boundary — the state, the four RK4
 stages, the trial state and the core's intermediate arrays — lives once
 in `SharedArrayBuffer`s (`createModel(..., { buffers })` adopts them;
-`shareMesh`/`meshFromShared` pass the mesh the same way). Each worker
-owns one block of every partition, and the main thread drives the
-phases through an `Atomics` generation counter, so a step costs 16
-phase barriers plus advance, combine and adjust. Partial sums (radiation
-totals) are combined in the single-thread order, so the worker-thread
-step reproduces `createModel` bit for bit — `test/parallel.test.mjs`
-asserts element-wise equality of all four state arrays after four steps.
+`shareMesh`/`meshFromShared` pass the mesh the same way). The main
+thread drives the phases through an `Atomics` generation counter, so a
+step costs 16 phase barriers plus advance, combine and adjust. Within a
+phase the workers claim work units from a shared chunk counter — a
+layer's momentum tendency or its tracer transport, a block of 512–2048
+cells, a block of vertices, a 64k-element slice of an array — so the
+split adapts to the speed of each core (Apple silicon mixes performance
+and efficiency cores) and no worker waits on a straggler. Every array
+element is computed by exactly one worker with the single-thread
+arithmetic, so the state is bit-identical to `createModel`'s
+(`test/parallel.test.mjs` asserts element-wise equality of every state
+array after four steps); only the radiation totals are summed in a
+different order.
 
-Speedup on 8 workers of a 10-core laptop: N=16 98 → 28 ms/step (3.5×),
-N=32 410 → 89 ms/step (4.6×). Larger N gives a larger fraction because
-the per-phase synchronization cost is fixed. The emergence driver takes
-`WORKERS=<n>` in the environment.
+Measured on the 10-core laptop (8 performance + 2 efficiency cores),
+moist model: N=64 2558 ms/step serial → 365 ms on 10 workers (7.0×),
+against 425 ms (6.0×) with static per-worker partitions. The layer
+phase, 60% of the step, scales to 6.5× and is most likely memory-bound.
+The emergence driver takes `WORKERS=<n>` in the environment; the default
+is every core.
 
 The same two files run in the browser: `threads.module.js` provides
 the spawn/receive primitives from `worker_threads` or Web Workers, and

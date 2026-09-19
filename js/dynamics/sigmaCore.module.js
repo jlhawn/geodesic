@@ -225,18 +225,28 @@ export function createSigmaCore(mesh, options = {}) {
     }
   }
 
-  function phaseLayer(state, out, kFrom, kTo) {
+  /*
+   * The layer phase in two independent parts, so a parallel run can
+   * treat a layer's tracer transport and its momentum tendency as
+   * separate work units: `part` is 'all', 'tracers' or 'momentum'.
+   */
+  function phaseLayer(state, out, kFrom, kTo, part = 'all') {
     const [pi, theta, u] = state;
     const [, dTheta, dU] = out;
     const q = state[4] ?? null, dQ = out[4] ?? null, qc = state[5] ?? null, dQc = out[5] ?? null;
+    if (part !== 'momentum') {
+      for (let k = kFrom; k < kTo; k++) {
+        transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta);
+        if (q && dQ) transportLayer(k, pi, q, qLower, qFlux, divQFlux, dQ, true);
+        if (qc && dQc) transportLayer(k, pi, qc, qcLower, qcFlux, divQcFlux, dQc, true);
+      }
+    }
+    if (part === 'tracers') return;
     edgePi(pi);
     gradient(mesh, pi, gradPi);
     for (let k = kFrom; k < kTo; k++) {
       const off = k * C;
       const fk = flux.subarray(k * E, (k + 1) * E);
-      transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta);
-      if (q && dQ) transportLayer(k, pi, q, qLower, qFlux, divQFlux, dQ, true);
-      if (qc && dQc) transportLayer(k, pi, qc, qcLower, qcFlux, divQcFlux, dQc, true);
       const uk = u.subarray(k * E, (k + 1) * E);
       const dUk = dU.subarray(k * E, (k + 1) * E);
       curl(mesh, uk, zeta);
