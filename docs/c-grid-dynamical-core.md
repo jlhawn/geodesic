@@ -830,8 +830,20 @@ sources are off (`moist: false` carries q but never sources it).
   reported as a rate; evaporation, latent and sensible heat, and total
   precipitable water join the budget line. The page overlays RH (at the
   selected height), precipitation and TPW.
-- **Radiation coupling** (τ from q) is a switch to be added after the
-  moist climate is tuned; τ stays prescribed until then.
+- **Radiation coupling.** By default the vapour band's optical depth
+  follows the model's own humidity: 2 m²/kg times each layer's water
+  mass (`vaporCoupling`; 0 restores the prescribed Frierson profile,
+  which the single-column initial profile still uses). This is the
+  water-vapour feedback the prescribed profile lacked.
+
+Tuning (500-day N=3 runs, annual means). With the dry model's τ_e the
+moist model settles ~6 K colder: evaporation cools the surface and
+moist convection warms the upper troposphere, so the column radiates
+more for the same surface temperature. Prescribed τ_e would have to
+rise to ~12.5 for 288 K (contrast falling to 29 K at this resolution);
+coupling reaches it at ~2.1 m²/kg with a larger contrast (35 K), and
+the N=16 spin-up keeps 43 K at day 30 against the dry model's 52 K
+(tropics cooled by evaporation, poles unchanged). Chosen: coupling 2.
 
 Order of operations each step: RK4 dynamics with evaporation as a
 tendency, then condensation, Betts–Miller, dry adjustment and the
