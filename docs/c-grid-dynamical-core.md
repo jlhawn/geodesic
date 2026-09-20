@@ -1195,6 +1195,48 @@ q; a strongly stable column stays unmixed; momentum mixing brings wind
 down to the surface layer and conserves each edge column's momentum;
 serial and parallel engines stay bit-identical.
 
+First N=16 run (500 days, with the ocean, the M12/M13 defaults):
+the surface winds are Earth's — trades −6 m/s, westerlies +7 to +9 —
+and the aerodynamic stress 0.07–0.19 N/m² is the whole momentum sink.
+The ocean answers: currents to 0.8 m/s, the upper layer pumped to the
+10 m floor under the westerlies and at the equator and to 120 m in
+the subtropics, Ekman transports of 2 m²/s, and an upper-layer heat
+transport of 1–2 PW poleward across the tropics with the mid-latitude
+cells carrying ~1 PW equatorward. Climate: 287.3 K over the last year
+but warming at +10–17 W/m², planetary albedo 0.33 with cloud water
+50–77 g/m² (the mixing moistens the lower troposphere), ice 5 % of the
+area (3–9 % with the seasons), latent heat 110 W/m².
+
+Tuning with the boundary layer and the ocean (800-day N=16 runs, last-
+year means). Removing the ocean's diffusion does not work: with D = 0
+the planet cools to 280.5 K (cloud 60) or 278.5 K (cloud 80) with ice
+on 28–31 % of the area and still cooling, and D = 0.15 with cloud 70
+gives 282.2 K and 19 % ice, also cooling. The wind-driven cells carry
+heat within the tropics and back toward the equator in mid-latitudes;
+nothing dynamic reaches past 50°, which on Earth is the buoyancy-
+driven overturning this two-layer ocean does not have, so the
+diffusion keeps standing in for it. The other change is the cloud: the
+mixed boundary layer keeps the lower troposphere moist and the cloud
+water sits at 60–85 g/m² against 45 before, which with cloud scale
+60–80 gives planetary albedos of 0.39–0.43. The retune therefore keeps
+D at 0.3–0.45 and lowers the cloud scale to 45–55.
+
+| D | cloud | Ts (K) | budget | albedo | ice, annual (range) |
+|---|---|---|---|---|---|
+| 0 | 60 | 280.5 | −3, cooling | 0.40 | 28 % (26–31) |
+| 0 | 80 | 278.5 | −12 | 0.43 | 31 % (29–34) |
+| 0.15 | 70 | 282.2 | −0.5, cooling | 0.39 | 19 % (16–22) |
+| 0.45 | 60 (to day 1000) | 288.1 | +15 | 0.31 | 2 % (0.2–4) |
+| 0.45 | 45 | 289.5 | +22 | 0.29 | 1.8 % (0–5) |
+| **0.3** | **55** | 286.5 | +13 | 0.33 | 7.4 % (5–11) |
+
+Defaults: D = 0.3, cloud scale 55. Its surface climate held at 286.5–
+287 K over days 400–800 with Earth's sea-ice fraction and a 350/280
+m²/s² winter/summer storm-track contrast; the +13 W/m² is going into
+the 400 m ocean, which warms by ~0.25 K a year at that rate, so the
+surface will drift up toward 288 K over decades. The warmer settings
+lose their ice within a few years.
+
 ## 7. Module layout in this repo
 
 ```

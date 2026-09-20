@@ -30,7 +30,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
 export function createOcean(mesh, {
   upperDepth = 50, lowerDepth = 350, reducedGravity = 0.02, abyssReducedGravity = 0.01, abyssTemperature = 275,
   minimumThickness = 10, entrainmentTime = 86400, density = 1025, specificHeat = 3985, interfacialDrag = 2e-4, bottomDrag = 2e-4,
-  closureHours = 12, diffusivity = 0.45, everySteps = 4, buffers = null,
+  closureHours = 12, diffusivity = 0.3, everySteps = 4, buffers = null,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
