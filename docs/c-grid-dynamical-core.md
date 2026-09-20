@@ -1237,6 +1237,12 @@ the 400 m ocean, which warms by ~0.25 K a year at that rate, so the
 surface will drift up toward 288 K over decades. The warmer settings
 lose their ice within a few years.
 
+The page default is the end of a cascade from that run's day-800
+state (N=32 for 50 days, N=64 for 25 days, 53 minutes on 10
+workers): `runs/pbl64_state_day875.json`, 285.3 K, sea ice on 11 % of
+the area at 0.7 m, planetary albedo 0.30, +8 W/m², currents to 2 m/s
+and the upper layer entrained to a 70 m mean at N=64.
+
 ## 7. Module layout in this repo
 
 ```
