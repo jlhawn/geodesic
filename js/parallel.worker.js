@@ -53,7 +53,10 @@ function unit(phase, chunk, input, out) {
       break;
     }
     case PHASE.CLOSURE: model.phases.closure(from, to, params[0], chunk.kind); break;
-    case PHASE.ADJUST: model.phases.adjust(from, to, params[0]); break;
+    case PHASE.ADJUST:
+      if (chunk.kind === 'edges') model.phases.mixMomentum(from, to, params[0]);
+      else model.phases.adjust(from, to, params[0]);
+      break;
     default: break;
   }
 }

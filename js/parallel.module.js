@@ -29,7 +29,7 @@ export function phaseChunks({ K, C, E, V }, workers = 8) {
     [PHASE.ADVANCE]: arrays,
     [PHASE.COMBINE]: arrays,
     [PHASE.CLOSURE]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
-    [PHASE.ADJUST]: blocks('cells', C, size(C, 16)),
+    [PHASE.ADJUST]: [...blocks('cells', C, size(C, 16)), ...blocks('edges', E, size(E, 64))],
   };
 }
 

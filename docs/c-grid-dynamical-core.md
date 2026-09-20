@@ -1159,6 +1159,42 @@ transport should approach the ~1 PW of Earth's wind-driven cells,
 which is what would let the diffusion go.
 
 
+### M14 — A diffusive boundary layer (`js/physics/boundaryLayer.module.js`) — done (tuning)
+
+The last Held–Suarez placeholder was the Rayleigh damping of momentum
+through the lowest 30 % of the column. It set the surface winds at 2–3
+m/s in every run against Earth's 5–8: the circulation fixes how much
+momentum must leave through the ground, and friction spread over that
+much air lets the lowest layer give up its share without blowing. The
+bulk surface fluxes then ran on the 3 m/s gustiness floor rather than
+on the wind, the ocean received an eighth of the atmosphere's momentum
+sink until M13 summed it explicitly, and heat and moisture from the
+surface reached only the lowest 120 m layer until dry convection
+carried them up.
+
+The replacement is the diffusive boundary layer of Troen and Mahrt
+(1986) that the simple moist GCMs use. Per cell, once per step in the
+physics phase, `diagnose` finds the boundary-layer top as the height
+where the bulk Richardson number of the lowest layer's virtual
+potential temperature and wind, with the convective floor 100 u*² in
+the shear, first exceeds 0.5 (interpolated between layers; u* is
+√C_D times the lowest layer's wind with the gustiness floor), and lays
+the K-profile κ u* z (1 − z/h)² over the layer interfaces below it.
+The interface coefficients ρK/Δz live in a shared array. In the adjust
+phase the cell units mix θ, q and qc down each column and new edge
+units mix the normal velocity down each edge, both by implicit Euler on
+the same tridiagonal system, which conserves each column's mass-
+weighted total exactly and is unconditionally stable. Nothing mixes
+above the top, and the search stops at σ = 0.5. The surface fluxes and
+the aerodynamic drag stay explicit sources on the lowest layer, which
+the diffusion spreads upward; the Rayleigh damping is off
+(`pblRate` 0) whenever the boundary layer is on. Tests
+(`test/boundaryLayer.test.mjs`): an unstable sheared column gets a
+1.7 km boundary layer that mixes θ toward uniform and conserves θ and
+q; a strongly stable column stays unmixed; momentum mixing brings wind
+down to the surface layer and conserves each edge column's momentum;
+serial and parallel engines stay bit-identical.
+
 ## 7. Module layout in this repo
 
 ```
@@ -1173,6 +1209,7 @@ js/
   physics/
     radiation.module.js     ported from sim.js RadiationColumn
     surface.module.js       ported: drag, sensible heat, slab ocean, convective adjustment
+    boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
     init.module.js          ported: thermal init, balance, seed, bands, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler

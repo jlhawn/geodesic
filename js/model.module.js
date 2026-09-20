@@ -6,6 +6,7 @@ import { createSurface } from './physics/surface.module.js';
 import { createMoistPhysics } from './physics/moist.module.js';
 import { createSeaIce } from './physics/ice.module.js';
 import { createOcean } from './ocean/reducedGravity.module.js';
+import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 
 export const SIDEREAL_DAY = 86164.0905;
 export const STATE_NAMES = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
@@ -34,12 +35,13 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  *                  layer (main thread only, before physics)
  *   physics(cells) radiation, surface fluxes, evaporation, sea ice
  *   closure(layers) the ∇⁴ closures
- *   adjust(cells)  condensation, convection, filler
+ *   adjust(cells)  boundary-layer mixing, condensation, convection, filler
+ *   mixMomentum(edges) boundary-layer mixing of the normal velocity
  * Arrays read across phases live in `shared`; `buffers` adopts another
  * instance's so a worker computes on the same memory.
  */
 export function createModel(gridOrMesh, {
-  radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {},
+  radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {}, boundaryLayer: boundaryLayerOptions = {},
   physics = true, moist = true, nu4Hours = 3, buffers = null,
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
@@ -50,7 +52,8 @@ export function createModel(gridOrMesh, {
   const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, splitClosure: true, buffers: buffers ? buffers.core : null, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const radiation = createRadiation(mesh, core, radiationOptions);
-  const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, ...surfaceOptions });
+  const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, ...boundaryLayerOptions }) : null;
+  const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, ...(boundaryLayer ? { pblRate: 0 } : {}), buffers: buffers ? buffers.surface : null, ...surfaceOptions });
   const moistPhysics = createMoistPhysics(mesh, core, { buffers: buffers ? buffers.moist : null, ...moistOptions });
   const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, ...oceanOptions }) : null;
   const sharedCapacity = !ocean && buffers && buffers.ocean ? new Float64Array(buffers.ocean.capacity) : null;
@@ -91,13 +94,16 @@ export function createModel(gridOrMesh, {
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
       for (let i = iFrom; i < iTo; i++) seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt);
       if (moist) for (let i = bottom + iFrom; i < bottom + iTo; i++) state[4][i] += dt * forcing[4][i];
+      if (boundaryLayer) boundaryLayer.diagnose(state, iFrom, iTo);
     },
     closure(kFrom, kTo, dt, part = 'all') { core.phaseClosure(state, kFrom, kTo, dt, part); },
     adjust(iFrom, iTo, dt) {
       if (!physics) return;
+      if (boundaryLayer) for (let i = iFrom; i < iTo; i++) boundaryLayer.mixColumn(i, state[0], state[1], moist ? state[4] : null, moist ? state[5] : null, dt);
       if (moist) moistPhysics.adjust(state, iFrom, iTo, dt);
       surface.convectiveAdjustment(state[0], state[1], iFrom, iTo, moist ? state[4] : null, moist ? state[5] : null);
     },
+    mixMomentum(eFrom, eTo, dt) { if (physics && boundaryLayer) boundaryLayer.mixEdges(state[0], state[2], eFrom, eTo, dt); },
   };
 
   function tendency(input, out) {
@@ -111,8 +117,8 @@ export function createModel(gridOrMesh, {
 
   let rk4 = null;
   const model = {
-    mesh, core, radiation, surface, moist: moistPhysics, seaIce, ocean, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
-    shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, ice: seaIce.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
+    mesh, core, radiation, surface, moist: moistPhysics, seaIce, ocean, boundaryLayer, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
+    shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, ice: seaIce.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
   model.step = function step(dt) {
@@ -123,6 +129,7 @@ export function createModel(gridOrMesh, {
     phases.physics(0, C, dt, totals);
     phases.closure(0, K, dt);
     phases.adjust(0, C, dt);
+    phases.mixMomentum(0, E, dt);
     model.time += dt;
   };
 
