@@ -87,12 +87,12 @@ async function start(message) {
     saved = await (await fetch(message.from)).json();
   }
   const N = message.N ?? saved?.N ?? 16;
-  dt = message.dt ?? 1350 * 16 / N;
-  stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round(8 * 16 / N));
-  const workers = message.workers ?? 1;
-  status(`building the N=${N} grid${workers > 1 ? ` and ${workers} workers` : ''}…`);
-  const grid = new Grid(N);
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
+  dt = message.dt ?? 1350 * 16 / N;
+  stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round((gpuWanted ? 24 : 8) * 16 / N));
+  const workers = message.workers ?? 1;
+  status(`building the N=${N} grid${gpuWanted ? ' for the GPU' : workers > 1 ? ` and ${workers} workers` : ''}…`);
+  const grid = new Grid(N);
   model = gpuWanted ? await createGpuModel(grid, message.options ?? {}) : workers > 1 ? await createParallelModel(grid, message.options ?? {}, workers) : createModel(grid, message.options ?? {});
   const init = initialState(model, saved, N);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
