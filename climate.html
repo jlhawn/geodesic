@@ -18,22 +18,30 @@
     #date { font-size: 16px; }
     #rate { font-size: 13px; color: #bbb; }
     #modelButton { font-size: 18px; }
-    #snapshotsButton, #menu { position: absolute; z-index: 11; border: 0; padding: 6px 14px; font: inherit; font-size: 17px; cursor: pointer; }
+    #snapshotsButton { position: absolute; z-index: 11; border: 0; padding: 6px 14px; font: inherit; font-size: 17px; cursor: pointer; }
     #snapshotsButton { right: 12px; top: 12px; }
-    #bottom { position: absolute; left: 12px; bottom: 12px; z-index: 11; display: flex; align-items: flex-end; gap: 12px; max-width: calc(100% - 24px); }
-    #menu { position: static; }
-    #legend { padding: 6px 12px; display: flex; flex-direction: column; gap: 3px; }
-    #legend.hidden { display: none; }
+    #bottom { position: absolute; left: 12px; bottom: 12px; z-index: 11; display: flex; align-items: stretch; max-width: calc(100% - 24px); }
+    #menu { border: 0; background: transparent; color: #ddd; padding: 6px 10px; display: flex; align-items: center; cursor: pointer; border-radius: 8px; }
+    #menu:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+    #menu svg { display: block; }
+    #legend { padding: 6px 12px 6px 4px; display: flex; flex-direction: column; justify-content: center; gap: 3px; }
     #data { font-size: 13px; color: #ddd; }
     #scale { display: block; width: 300px; height: 14px; border-radius: 2px; }
     #scaleTicks { display: flex; justify-content: space-between; width: 300px; font-size: 12px; color: #ccc; margin-top: 1px; }
     .scaleRow { display: flex; align-items: flex-start; gap: 8px; }
     .scaleRow.hidden { display: none; }
-    #panel { position: absolute; left: 12px; bottom: 56px; z-index: 10; padding: 10px 16px; display: grid; grid-template-columns: max-content 1fr; column-gap: 12px; row-gap: 3px; align-items: center; max-width: calc(100% - 48px); }
+    #panel { position: absolute; left: 12px; bottom: 56px; z-index: 10; padding: 8px 14px; display: grid; grid-template-columns: max-content 1fr; column-gap: 12px; row-gap: 4px; align-items: center; max-width: calc(100% - 48px); max-height: calc(100% - 140px); overflow: auto; font-size: 14px; }
     #panel.hidden { display: none; }
     #panel .label { color: #ddd; padding-right: 10px; border-right: 2px solid #666; align-self: stretch; display: flex; align-items: center; }
-    #panel .options { display: flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; }
-    #panel .unit { color: #ddd; margin-left: 4px; }
+    #panel .options { display: flex; flex-wrap: wrap; gap: 3px 8px; align-items: center; }
+    #panel .options.stacked { flex-direction: column; align-items: flex-start; }
+    #panel .unit { color: #ddd; }
+    .segmented { display: inline-flex; flex-wrap: wrap; }
+    .segmented button { background: rgba(255, 255, 255, 0.04); color: #bbb; border: 1px solid #5a5a5a; margin-left: -1px; padding: 2px 9px; font: inherit; cursor: pointer; }
+    .segmented button:first-child { margin-left: 0; border-radius: 5px 0 0 5px; }
+    .segmented button:last-child { border-radius: 0 5px 5px 0; }
+    .segmented button:hover { color: #fff; background: rgba(255, 255, 255, 0.12); }
+    .segmented button.selected { background: #4a4a4a; color: #ffe8a0; border-color: #777; position: relative; }
     #panel .hidden { display: none; }
     #progress { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); width: min(420px, calc(100% - 48px)); z-index: 20; padding: 10px 14px; display: none; }
     #progress.visible { display: block; }
@@ -50,6 +58,9 @@
     .dialog dt { color: #fff; }
     .dialog dd { margin: 0; color: #bbb; }
     .dialog dd b { color: #eee; font-weight: 500; }
+    .tabs { margin-bottom: 12px; }
+    .tab.hidden { display: none; }
+    .actions { margin-bottom: 8px; }
     .list { list-style: none; margin: 0; padding: 0; font-size: 14px; }
     #builtinList { max-height: 240px; overflow: auto; }
     .list li { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #2c2c2c; flex-wrap: wrap; }
@@ -70,32 +81,28 @@
   </div>
   <button id="snapshotsButton" class="box">snapshots</button>
   <div id="panel" class="box hidden">
-    <span class="label">Animate</span>
-    <div class="options" data-setting="animate"><button class="flat" data-value="particles">Particles</button><button class="flat" data-value="arrows">Arrows</button><button class="flat" data-value="none">None</button></div>
+    <span class="label">Wind animation</span>
+    <div class="options" data-setting="animate"><div class="segmented"><button data-value="particles">Particles</button><button data-value="arrows">Vectors</button><button data-value="none">None</button></div></div>
     <span class="label" id="heightLabel">Height</span>
     <div class="options" id="heightOptions" data-setting="level">
-      <button class="flat" data-value="surface">Sfc</button><button class="flat" data-value="1000">1000</button><button class="flat" data-value="850">850</button><button class="flat" data-value="700">700</button>
-      <button class="flat" data-value="500">500</button><button class="flat" data-value="250">250</button><button class="flat" data-value="70">70</button><button class="flat" data-value="10">10</button><span class="unit">hPa</span>
+      <div class="segmented"><button data-value="surface">Surface</button><button data-value="1000">1000</button><button data-value="850">850</button><button data-value="700">700</button><button data-value="500">500</button><button data-value="250">250</button><button data-value="70">70</button><button data-value="10">10</button></div><span class="unit">hPa</span>
     </div>
     <span class="label">Overlay</span>
-    <div class="options" data-setting="overlay">
-      <button class="flat" data-value="wind">Wind</button><button class="flat" data-value="temp">Temp</button><button class="flat" data-value="rh">RH</button><button class="flat" data-value="precip">Precip</button>
-      <button class="flat" data-value="tpw">TPW</button><button class="flat" data-value="tcw">TCW</button><button class="flat" data-value="clouds">Satellite</button><button class="flat" data-value="ice">Ice</button><button class="flat" data-value="albedo">Albedo</button>
-      <button class="flat" data-value="swdown">SW↓</button><button class="flat" data-value="olr">OLR</button><button class="flat" data-value="mslp">MSLP</button><button class="flat" data-value="none">None</button>
+    <div class="options stacked" data-setting="overlay">
+      <div class="segmented"><button data-value="none">None</button><button data-value="wind">Wind speed</button><button data-value="temp">Temperature</button><button data-value="rh">Relative humidity</button><button data-value="mslp">Sea-level pressure</button></div>
+      <div class="segmented"><button data-value="precip">Precipitation</button><button data-value="tpw">Precipitable water</button><button data-value="tcw">Cloud water</button><button data-value="clouds">Satellite</button></div>
+      <div class="segmented"><button data-value="ice">Sea ice</button><button data-value="albedo">Albedo</button><button data-value="swdown">Surface sunlight</button><button data-value="olr">Outgoing longwave</button></div>
     </div>
     <span class="label" id="isolineLabel">Isobars</span>
-    <div class="options" data-setting="isobars">
-      <button class="flat" data-value="on">On</button><button class="flat" data-value="off">Off</button>
-      <span class="unit">every</span><select id="isolineStep"></select><span class="unit" id="isolineUnit">hPa</span>
-    </div>
+    <div class="options" data-setting="isolines"><div class="segmented" id="isolineSegments"></div><span class="unit" id="isolineUnit">hPa</span></div>
     <span class="label">Graticule</span>
-    <div class="options" data-setting="graticule"><button class="flat" data-value="off">Off</button><button class="flat" data-value="10">10°</button><button class="flat" data-value="15">15°</button><button class="flat" data-value="30">30°</button></div>
+    <div class="options" data-setting="graticule"><div class="segmented"><button data-value="off">Off</button><button data-value="10">10°</button><button data-value="15">15°</button><button data-value="30">30°</button></div></div>
     <span class="label">Projection</span>
-    <div class="options" data-setting="projection"><button class="flat" data-value="sphere">Sphere</button><button class="flat" data-value="map">Equal Earth</button></div>
+    <div class="options" data-setting="projection"><div class="segmented"><button data-value="sphere">Orthographic</button><button data-value="map">Equal Earth</button></div></div>
   </div>
-  <div id="bottom">
-    <button id="menu" class="box">options</button>
-    <div id="legend" class="box">
+  <div id="bottom" class="box">
+    <button id="menu" title="options"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    <div id="legend">
       <div id="data"></div>
       <div class="scaleRow"><div><canvas id="scale" width="256" height="1"></canvas><div id="scaleTicks"><span></span><span></span><span></span></div></div><select id="palette"></select></div>
     </div>
@@ -103,9 +110,14 @@
   <div id="modelModal" class="modal hidden"><div class="dialog"><h2>Model <button class="flat close" data-close="modelModal">×</button></h2><dl id="modelDetails"></dl><h3>Views</h3><dl id="viewDetails"></dl></div></div>
   <div id="snapshotModal" class="modal hidden"><div class="dialog">
     <h2>Snapshots <button class="flat close" data-close="snapshotModal">×</button></h2>
-    <div><button class="flat selected" data-snapshot="save" title="pause and save the current state in this browser">Save the current state</button> <button class="flat" data-snapshot="latest" title="restore the most recent local snapshot">Restore latest</button></div>
-    <h3>Built in</h3><p class="empty" id="builtinNote">Saved runs served alongside the page. Downloading copies one into this browser's store.</p><ul class="list" id="builtinList"></ul>
-    <h3>Local</h3><ul class="list" id="localList"></ul><p class="empty" id="localEmpty">No local snapshots yet.</p>
+    <div class="segmented tabs"><button data-tab="local" class="selected">Custom</button><button data-tab="builtin">Built in</button></div>
+    <div class="tab" data-tab="local">
+      <div class="actions"><button class="flat selected" data-snapshot="save" title="pause and save the current state in this browser">Save the current state</button> <button class="flat" data-snapshot="latest" title="restore the most recent custom snapshot">Restore latest</button></div>
+      <ul class="list" id="localList"></ul><p class="empty" id="localEmpty">No custom snapshots yet. Saving pauses the model and keeps its state in this browser.</p>
+    </div>
+    <div class="tab hidden" data-tab="builtin">
+      <p class="empty" id="builtinNote">Saved runs served alongside the page. Downloading copies one into this browser's store, where it appears under Custom.</p><ul class="list" id="builtinList"></ul>
+    </div>
   </div></div>
   <script type="module">
     import runClimate from './js/climate.module.js';

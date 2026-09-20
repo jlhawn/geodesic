@@ -23,7 +23,7 @@ const OVERLAYS = {
   mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'ps', scale: 0.01, range: () => [960, 1060] },
   none: { label: 'None' },
 };
-const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Total precipitable water', tcw: 'Total cloud water', clouds: 'Satellite view: cloud over ocean and ice', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Shortwave reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Mean sea level pressure' };
+const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Precipitable water', tcw: 'Cloud water', clouds: 'Satellite view: cloud over ocean and ice', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Sunlight reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Sea-level pressure' };
 
 /*
  * The cloud view: open water is ocean blue, ice whitens with thickness,
@@ -56,14 +56,14 @@ const PALETTES = {
   },
 };
 
-const DEFAULTS = { overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 4, heightStep: 60, graticule: '15', projection: 'sphere', palettes: { sequential: 'viridis', diverging: 'blue-gray-red' }, panel: 'open' };
+const DEFAULTS = { overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palettes: { sequential: 'viridis', diverging: 'blue-gray-red' }, panel: 'open' };
 
 /*
  * The contour row draws isobars of surface pressure at the surface and
  * height contours of the pressure surface at any other level.
  */
 const ISOLINES = {
-  surface: { label: 'Isobars', unit: 'hPa', setting: 'isobarStep', steps: [2, 4, 5, 10, 25], field: (frame) => Float32Array.from(frame.ps, (p) => p / 100) },
+  surface: { label: 'Isobars', unit: 'hPa', setting: 'isobarStep', steps: [1, 2.5, 5, 10], field: (frame) => Float32Array.from(frame.ps, (p) => p / 100) },
   level: { label: 'Height lines', unit: 'm', setting: 'heightStep', steps: [20, 30, 60, 120, 240], field: (frame) => frame.height },
 };
 const isolinesFor = (level) => (level === 'surface' ? ISOLINES.surface : ISOLINES.level);
@@ -135,23 +135,23 @@ async function builtinSnapshots() {
 const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'none']);
 
 const VIEW_NOTES = [
-  ['Animate', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Arrows draw one vector per cell; None hides the motion.'],
+  ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
   ['Height', 'The pressure level shown by the wind, temperature and humidity views and followed by the animation: Sfc is the lowest layer, about 60 m up; the others are hPa. Column views hide it and use the surface wind.'],
-  ['Wind', 'Speed at the chosen height.'],
-  ['Temp', 'Air temperature at the chosen height.'],
-  ['RH', 'Relative humidity at the chosen height.'],
-  ['Precip', 'Rain rate over the last frame, from convection and from cloud that rained out.'],
-  ['TPW', 'Total precipitable water: all the vapour in the column, as the depth of rain it would make.'],
-  ['TCW', 'Total cloud water: all the condensed water in the column.'],
+  ['Wind speed', 'Speed at the chosen height.'],
+  ['Temperature', 'Air temperature at the chosen height.'],
+  ['Relative humidity', 'At the chosen height.'],
+  ['Sea-level pressure', 'Surface pressure; with no terrain it is the sea-level pressure.'],
+  ['Precipitation', 'Rain rate over the last frame, from convection and from cloud that rained out.'],
+  ['Precipitable water', 'All the vapour in the column, as the depth of rain it would make.'],
+  ['Cloud water', 'All the condensed water in the column.'],
   ['Satellite', 'What a satellite would see: ocean blue, ice whitening with thickness, and cloud as white whose opacity follows the cloud water.'],
-  ['Ice', 'Sea-ice thickness.'],
+  ['Sea ice', 'Sea-ice thickness.'],
   ['Albedo', 'The surface albedo for diffuse light: 0.06 over water, rising to 0.5 over half a metre of ice.'],
-  ['SW↓', 'Shortwave sunlight reaching the surface, direct and diffuse, before the surface reflects its share.'],
-  ['OLR', 'Outgoing longwave at the top of the atmosphere: low over cold cloud tops and the poles, high over clear warm regions.'],
-  ['MSLP', 'Surface pressure; with no terrain it is the sea-level pressure.'],
+  ['Surface sunlight', 'Shortwave reaching the surface, direct and diffuse, before the surface reflects its share.'],
+  ['Outgoing longwave', 'Infrared leaving the top of the atmosphere: low over cold cloud tops and the poles, high over clear warm regions.'],
   ['Isobars / Height lines', 'Contours of surface pressure at the surface, of geopotential height on a pressure level, at the chosen interval.'],
   ['Graticule', 'Parallels and meridians at the chosen spacing; the meridians stop at the outermost parallel.'],
-  ['Projection', 'The globe, or the Equal Earth map; both can be dragged to any orientation.'],
+  ['Projection', 'The orthographic globe, or the Equal Earth map; both can be dragged to any orientation.'],
   ['Snapshots', 'Save the paused state in this browser, restore it later, or download one of the runs saved on the server.'],
 ];
 
@@ -251,18 +251,33 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (select.value !== value) select.value = value;
   }
 
-  function render() {
-    for (const group of panel.querySelectorAll('.options[data-setting]')) {
-      for (const button of group.querySelectorAll('button[data-value]')) button.classList.toggle('selected', button.dataset.value === String(settings[group.dataset.setting]));
+  function fillSegments(group, values, labels) {
+    if ([...group.children].map((button) => button.dataset.value).join('\n') !== values.join('\n')) {
+      group.replaceChildren(...values.map((v, k) => { const button = document.createElement('button'); button.dataset.value = v; button.textContent = labels[k]; return button; }));
     }
+  }
+
+  function isolineChoice() {
     const isolines = isolinesFor(activeLevel());
+    return settings.isobars === 'off' ? 'off' : String(settings[isolines.setting]);
+  }
+
+  function render() {
+    const isolines = isolinesFor(activeLevel());
+    if (!isolines.steps.includes(settings[isolines.setting])) {
+      settings[isolines.setting] = isolines.steps.reduce((a, b) => (Math.abs(b - settings[isolines.setting]) < Math.abs(a - settings[isolines.setting]) ? b : a));
+      saveSettings(settings);
+    }
+    fillSegments(document.getElementById('isolineSegments'), ['off', ...isolines.steps.map(String)], ['Off', ...isolines.steps.map(String)]);
+    for (const group of panel.querySelectorAll('.options[data-setting]')) {
+      const current = group.dataset.setting === 'isolines' ? isolineChoice() : String(settings[group.dataset.setting]);
+      for (const button of group.querySelectorAll('button[data-value]')) button.classList.toggle('selected', button.dataset.value === current);
+    }
     const heights = HEIGHT_OVERLAYS.has(settings.overlay);
     document.getElementById('heightLabel').classList.toggle('hidden', !heights);
     document.getElementById('heightOptions').classList.toggle('hidden', !heights);
     document.getElementById('isolineLabel').textContent = isolines.label;
     document.getElementById('isolineUnit').textContent = isolines.unit;
-    const stepSelect = document.getElementById('isolineStep');
-    fillSelect(stepSelect, isolines.steps.map(String), String(settings[isolines.setting]));
     const paletteSelect = document.getElementById('palette');
     const overlay = OVERLAYS[settings.overlay];
     paletteSelect.style.display = overlay.kind && PALETTES[overlay.kind] ? '' : 'none';
@@ -306,6 +321,10 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
 
   function update(changes) {
     const before = activeLevel();
+    if ('isolines' in changes) {
+      const { isolines, ...rest } = changes;
+      changes = isolines === 'off' ? { ...rest, isobars: 'off' } : { ...rest, isobars: 'on', [isolinesFor(before).setting]: Number(isolines) };
+    }
     Object.assign(settings, changes);
     saveSettings(settings);
     if (activeLevel() !== before) worker.postMessage({ type: 'level', level: activeLevel() });
@@ -348,7 +367,6 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       if (button) update({ [group.dataset.setting]: button.dataset.value });
     });
   }
-  document.getElementById('isolineStep').addEventListener('change', (event) => update({ [isolinesFor(settings.level).setting]: Number(event.target.value) }));
   document.getElementById('palette').addEventListener('change', (event) => {
     const kind = OVERLAYS[settings.overlay].kind;
     update({ palettes: { ...settings.palettes, [kind]: event.target.value } });
@@ -370,7 +388,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   };
   async function refreshSnapshots() {
     const list = await listSnapshots();
-    localList.replaceChildren(...list.map((meta) => item(meta.name, `day ${meta.day.toFixed(0)} · N=${meta.N} · ${(meta.bytes / 1048576).toFixed(0)} MB`, meta.source ? 'from the server' : '', [
+    localList.replaceChildren(...list.map((meta) => item(meta.name, `day ${meta.day.toFixed(0)} · N=${meta.N} · ${(meta.bytes / 1048576).toFixed(0)} MB`, meta.source ? 'built in' : '', [
       ['Restore', () => restoreSnapshot(meta.id)],
       ['Rename', async () => { const name = prompt('Snapshot name', meta.name); if (name && name !== meta.name) { await renameSnapshot(meta.id, name); refreshSnapshots(); } }],
       ['Clone', async () => { const name = prompt('Name for the copy', `${meta.name} (copy)`); if (name) { await cloneSnapshot(meta.id, name); refreshSnapshots(); } }],
@@ -427,6 +445,12 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     });
   }
   const closeModals = () => { for (const modal of document.querySelectorAll('.modal')) modal.classList.add('hidden'); };
+  for (const tab of document.querySelectorAll('.tabs button[data-tab]')) {
+    tab.addEventListener('click', () => {
+      for (const button of tab.parentElement.children) button.classList.toggle('selected', button === tab);
+      for (const section of document.querySelectorAll('.tab[data-tab]')) section.classList.toggle('hidden', section.dataset.tab !== tab.dataset.tab);
+    });
+  }
   document.getElementById('modelButton').addEventListener('click', () => { renderModelDetails(); document.getElementById('modelModal').classList.remove('hidden'); });
   document.getElementById('snapshotsButton').addEventListener('click', () => { refreshSnapshots(); document.getElementById('snapshotModal').classList.remove('hidden'); });
   for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', closeModals);
@@ -441,5 +465,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     render();
   });
   document.getElementById('menu').addEventListener('click', () => update({ panel: settings.panel === 'open' ? 'closed' : 'open' }));
+  const bottom = document.getElementById('bottom');
+  new ResizeObserver(() => { panel.style.bottom = `${bottom.offsetHeight + 20}px`; }).observe(bottom);
   render();
 }
