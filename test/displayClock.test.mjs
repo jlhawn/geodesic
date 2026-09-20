@@ -4,15 +4,22 @@ import { createDisplayClock } from '../js/displayClock.module.js';
 
 const STEP = 2025, INTERVAL = 450, RATE = STEP / INTERVAL, FRAME = 1000 / 120;
 
+function recent(frames, count = 5) {
+  if (frames.length < 2) return { rate: 0, interval: INTERVAL };
+  const from = Math.max(0, frames.length - count);
+  const first = frames[from], last = frames[frames.length - 1];
+  return { rate: (last.time - first.time) / (last.wall - first.wall), interval: (last.wall - first.wall) / (frames.length - 1 - from) };
+}
+
 function run(clock, { seconds, stall = null, jitter = 50 }) {
   let target = 0, next = 0, seed = 1, last = null;
   const random = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
-  const speeds = [], lags = [];
+  const speeds = [], lags = [], frames = [];
   let maxAhead = -Infinity;
   for (let now = 0; now < 1000 * seconds; now += FRAME) {
     const stalled = stall && now > stall[0] && now < stall[1];
-    if (!stalled && now >= next) { target += STEP; next = Math.max(next, now) + INTERVAL + (random() - 0.5) * 2 * jitter; }
-    const time = clock.advance(now, target, { rate: RATE, interval: INTERVAL, running: true });
+    if (!stalled && now >= next) { target += STEP; next = Math.max(next, now) + INTERVAL + (random() - 0.5) * 2 * jitter; frames.push({ wall: now, time: target }); }
+    const time = clock.advance(now, target, { ...recent(frames), running: true });
     if (last !== null && now > 20000) { speeds.push((time - last) / FRAME / RATE); lags.push((target - time) / STEP); }
     maxAhead = Math.max(maxAhead, (time - target) / STEP);
     last = time;
@@ -20,13 +27,15 @@ function run(clock, { seconds, stall = null, jitter = 50 }) {
   return { speeds, lags, maxAhead };
 }
 
-test('the display clock follows jittery model frames at a nearly constant speed, a couple of frames behind', () => {
-  const { speeds, lags } = run(createDisplayClock(), { seconds: 90 });
-  const mean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
-  assert.ok(Math.abs(mean - 1) < 0.02, `mean speed ${mean.toFixed(3)} of nominal`);
-  assert.ok(Math.max(...speeds) < 1.08 && Math.min(...speeds) > 0.92, `speed ripple ${Math.min(...speeds).toFixed(3)}–${Math.max(...speeds).toFixed(3)}`);
-  assert.ok(Math.min(...lags) > 0, 'never runs ahead of the model while frames keep coming');
-  assert.ok(Math.max(...lags) < 4, `lag stays under four frames (max ${Math.max(...lags).toFixed(2)})`);
+test('the display clock follows jittery model frames at the recent average rate, a couple of frames behind', () => {
+  for (const [jitter, ripple] of [[50, 0.12], [20, 0.07]]) {
+    const { speeds, lags } = run(createDisplayClock(), { seconds: 90, jitter });
+    const mean = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+    assert.ok(Math.abs(mean - 1) < 0.02, `mean speed ${mean.toFixed(3)} of nominal at ±${jitter} ms jitter`);
+    assert.ok(Math.max(...speeds) < 1 + ripple && Math.min(...speeds) > 1 - ripple, `speed ripple ${Math.min(...speeds).toFixed(3)}–${Math.max(...speeds).toFixed(3)} at ±${jitter} ms jitter`);
+    assert.ok(Math.min(...lags) > 0, 'never runs ahead of the model while frames keep coming');
+    assert.ok(Math.max(...lags) < 4, `lag stays under four frames (max ${Math.max(...lags).toFixed(2)})`);
+  }
 });
 
 test('a stalled model leaves the display clock at most a few frames ahead, and a jump snaps it', () => {

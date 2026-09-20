@@ -175,14 +175,17 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   }
 
   const display = createDisplayClock();
-  function frameInterval() {
-    return clock.length > 1 ? (clock[clock.length - 1].wall - clock[0].wall) / (clock.length - 1) : 500;
+  function recentFrames(count = 5) {
+    if (clock.length < 2) return { rate: 0, interval: 500 };
+    const from = Math.max(0, clock.length - count);
+    const first = clock[from], last = clock[clock.length - 1];
+    if (last.wall <= first.wall) return { rate: 0, interval: 500 };
+    return { rate: (last.time - first.time) / (last.wall - first.wall), interval: (last.wall - first.wall) / (clock.length - 1 - from) };
   }
   function tick(now) {
     requestAnimationFrame(tick);
     if (!latest) return;
-    const hours = simulatedHoursPerMinute();
-    const time = display.advance(now, latest.time, { rate: hours === null ? 0 : hours * 60, interval: frameInterval(), running });
+    const time = display.advance(now, latest.time, { ...recentFrames(), running });
     if (running) document.getElementById('date').textContent = formatDate(time);
     if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(time), sidereal: 2 * Math.PI * time * (1 / DAY + 1 / YEAR) });
   }
