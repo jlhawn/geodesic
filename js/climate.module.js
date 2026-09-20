@@ -3,6 +3,7 @@ import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
 import { seasonPhrase } from "./levels.module.js";
 import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
+import { createDisplayClock } from "./displayClock.module.js";
 import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot } from "./snapshots.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
@@ -173,38 +174,17 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     return (last.time - first.time) / 3600 / ((last.wall - first.wall) / 60000);
   }
 
-  /*
-   * A display clock that advances every animation frame at the measured
-   * simulation rate, so the sun and stars move smoothly between model
-   * frames. It aims to stay one frame interval behind the latest model
-   * time: it runs faster when it has fallen further behind and slower
-   * as it catches up, never running ahead of the model. A jump of many
-   * frames (a restored snapshot) snaps it; while paused it eases onto
-   * the model time.
-   */
-  const smooth = { time: null, wall: null };
+  const display = createDisplayClock();
   function frameInterval() {
     return clock.length > 1 ? (clock[clock.length - 1].wall - clock[0].wall) / (clock.length - 1) : 500;
   }
   function tick(now) {
     requestAnimationFrame(tick);
     if (!latest) return;
-    const target = latest.time;
-    const dt = smooth.wall === null ? 0 : now - smooth.wall;
-    smooth.wall = now;
-    if (smooth.time === null) smooth.time = target;
     const hours = simulatedHoursPerMinute();
-    const rate = hours === null ? 0 : hours * 60;
-    const lag = frameInterval() * rate;
-    const error = target - smooth.time;
-    if (running && rate > 0) {
-      if (Math.abs(error) > 20 * lag) smooth.time = target;
-      else smooth.time += dt * rate * Math.min(2, Math.max(0, error / lag));
-    } else {
-      smooth.time += error * Math.min(1, dt / 500);
-    }
-    if (running) document.getElementById('date').textContent = formatDate(smooth.time);
-    if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(smooth.time), sidereal: 2 * Math.PI * smooth.time * (1 / DAY + 1 / YEAR) });
+    const time = display.advance(now, latest.time, { rate: hours === null ? 0 : hours * 60, interval: frameInterval(), running });
+    if (running) document.getElementById('date').textContent = formatDate(time);
+    if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(time), sidereal: 2 * Math.PI * time * (1 / DAY + 1 / YEAR) });
   }
   requestAnimationFrame(tick);
 
