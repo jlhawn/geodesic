@@ -244,6 +244,13 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     isobars.update(isolines.field(latest), Number(settings[isolines.setting]));
   }
 
+  function fillSelect(select, values, value) {
+    if ([...select.options].map((option) => option.value).join('\n') !== values.join('\n')) {
+      select.replaceChildren(...values.map((v) => { const option = document.createElement('option'); option.value = v; option.textContent = v; return option; }));
+    }
+    if (select.value !== value) select.value = value;
+  }
+
   function render() {
     for (const group of panel.querySelectorAll('.options[data-setting]')) {
       for (const button of group.querySelectorAll('button[data-value]')) button.classList.toggle('selected', button.dataset.value === String(settings[group.dataset.setting]));
@@ -255,15 +262,11 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     document.getElementById('isolineLabel').textContent = isolines.label;
     document.getElementById('isolineUnit').textContent = isolines.unit;
     const stepSelect = document.getElementById('isolineStep');
-    stepSelect.replaceChildren(...isolines.steps.map((step) => { const option = document.createElement('option'); option.value = String(step); option.textContent = String(step); return option; }));
-    stepSelect.value = String(settings[isolines.setting]);
+    fillSelect(stepSelect, isolines.steps.map(String), String(settings[isolines.setting]));
     const paletteSelect = document.getElementById('palette');
     const overlay = OVERLAYS[settings.overlay];
     paletteSelect.style.display = overlay.kind && PALETTES[overlay.kind] ? '' : 'none';
-    if (overlay.kind && PALETTES[overlay.kind]) {
-      paletteSelect.replaceChildren(...Object.keys(PALETTES[overlay.kind]).map((name) => { const option = document.createElement('option'); option.value = name; option.textContent = name; return option; }));
-      paletteSelect.value = settings.palettes[overlay.kind];
-    }
+    if (overlay.kind && PALETTES[overlay.kind]) fillSelect(paletteSelect, Object.keys(PALETTES[overlay.kind]), settings.palettes[overlay.kind]);
     document.querySelector('[data-control="play"]').textContent = running ? '❚❚' : '▶';
     panel.classList.toggle('hidden', settings.panel !== 'open');
     if (!latest) return;

@@ -533,8 +533,8 @@ export function initUnifiedViewer(container, grid, config = {}) {
         }
       }
       contourGeometry.setDrawRange(0, n);
-      positionAttribute.needsUpdate = true;
-      cellAttribute.needsUpdate = true;
+      positionAttribute.clearUpdateRanges(); positionAttribute.addUpdateRange(0, 3 * n); positionAttribute.needsUpdate = true;
+      cellAttribute.clearUpdateRanges(); cellAttribute.addUpdateRange(0, n); cellAttribute.needsUpdate = true;
     }
 
     return {
@@ -641,11 +641,12 @@ export function initUnifiedViewer(container, grid, config = {}) {
     const centers = Float32Array.from(centerData);
     const positions = new Float32Array(3 * 6 * cellCounter);
     const cellIndex = new Float32Array(6 * cellCounter);
-    for (let c = 0; c < cellCounter; c++) cellIndex.fill(c, 6 * c, 6 * c + 6);
     const arrowGeometry = new THREE.BufferGeometry();
     const positionAttribute = new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage);
+    const cellAttribute = new THREE.BufferAttribute(cellIndex, 1).setUsage(THREE.DynamicDrawUsage);
     arrowGeometry.setAttribute('position', positionAttribute);
-    arrowGeometry.setAttribute('cellIndex', new THREE.BufferAttribute(cellIndex, 1));
+    arrowGeometry.setAttribute('cellIndex', cellAttribute);
+    arrowGeometry.setDrawRange(0, 0);
     const arrowMaterial = new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity });
     projectMaterial(arrowMaterial, 0.01);
     const lines = new THREE.LineSegments(arrowGeometry, arrowMaterial);
@@ -656,7 +657,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
     const lift = 1.004;
 
     function update(vectors, { referenceSpeed = 20, stride = 1 } = {}) {
-      positions.fill(0);
+      let at = 0;
       for (let c = 0; c < cellCounter; c += stride) {
         const cx = centers[3 * c], cy = centers[3 * c + 1], cz = centers[3 * c + 2];
         let dx = vectors[3 * c], dy = vectors[3 * c + 1], dz = vectors[3 * c + 2];
@@ -669,7 +670,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
         const tx = cy * dz - cz * dy, ty = cz * dx - cx * dz, tz = cx * dy - cy * dx;
         const half = 0.5 * length, head = 0.35 * length, along = 0.866 * head, across = 0.5 * head;
         const tipX = lift * cx + half * dx, tipY = lift * cy + half * dy, tipZ = lift * cz + half * dz;
-        let at = 18 * c;
+        cellIndex.fill(c, at / 3, at / 3 + 6);
         positions[at++] = lift * cx - half * dx; positions[at++] = lift * cy - half * dy; positions[at++] = lift * cz - half * dz;
         positions[at++] = tipX; positions[at++] = tipY; positions[at++] = tipZ;
         positions[at++] = tipX; positions[at++] = tipY; positions[at++] = tipZ;
@@ -677,7 +678,9 @@ export function initUnifiedViewer(container, grid, config = {}) {
         positions[at++] = tipX; positions[at++] = tipY; positions[at++] = tipZ;
         positions[at++] = tipX - along * dx - across * tx; positions[at++] = tipY - along * dy - across * ty; positions[at++] = tipZ - along * dz - across * tz;
       }
-      positionAttribute.needsUpdate = true;
+      arrowGeometry.setDrawRange(0, at / 3);
+      positionAttribute.clearUpdateRanges(); positionAttribute.addUpdateRange(0, at); positionAttribute.needsUpdate = true;
+      cellAttribute.clearUpdateRanges(); cellAttribute.addUpdateRange(0, at / 3); cellAttribute.needsUpdate = true;
     }
 
     return {
