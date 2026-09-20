@@ -2,6 +2,7 @@ import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
 import { seasonPhrase } from "./levels.module.js";
+import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot } from "./snapshots.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
@@ -15,7 +16,6 @@ const OVERLAYS = {
   precip: { label: 'Precip', unit: 'mm/day', kind: 'sequential', field: 'precipitation', scale: 1, range: () => [0, 30] },
   tpw: { label: 'TPW', unit: 'kg/m²', kind: 'sequential', field: 'water', scale: 1, range: () => [0, 60] },
   tcw: { label: 'TCW', unit: 'g/m²', kind: 'sequential', field: 'cloud', scale: 1000, range: () => [0, 500] },
-  clouds: { label: 'Satellite', unit: 'g/m²', kind: 'clouds', field: 'cloud', scale: 1000, range: () => [0, 100] },
   ice: { label: 'Ice', unit: 'm', kind: 'sequential', field: 'ice', scale: 1, range: () => [0, 3] },
   albedo: { label: 'Albedo', unit: '', kind: 'sequential', field: 'albedo', scale: 1, range: () => [0, 0.8] },
   swdown: { label: 'SW↓', unit: 'W/m²', kind: 'sequential', field: 'shortwave', scale: 1, range: () => [0, 1200] },
@@ -23,7 +23,7 @@ const OVERLAYS = {
   mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'ps', scale: 0.01, range: () => [960, 1060] },
   none: { label: 'None' },
 };
-const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Precipitable water', tcw: 'Cloud water', clouds: 'Satellite view: cloud over ocean and ice', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Sunlight reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Sea-level pressure' };
+const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Precipitable water', tcw: 'Cloud water', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Sunlight reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Sea-level pressure' };
 
 /*
  * The cloud view: open water is ocean blue, ice whitens with thickness,
@@ -33,7 +33,6 @@ const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative h
  */
 const OCEAN_COLOR = [0.05, 0.22, 0.45], ICE_COLOR = [0.85, 0.90, 0.95], CLOUD_COLOR = [1, 1, 1], CLOUD_OPACITY_SCALE = 40;
 const cloudOpacity = (grams) => 1 - Math.exp(-Math.max(0, grams) / CLOUD_OPACITY_SCALE);
-const CLOUD_STOPS = Array.from({ length: 11 }, (_, k) => { const a = cloudOpacity(10 * k); return OCEAN_COLOR.map((c, j) => c + a * (CLOUD_COLOR[j] - c)); });
 
 /*
  * Palettes as sRGB stops. The sequential ones are perceptually uniform
@@ -56,7 +55,7 @@ const PALETTES = {
   },
 };
 
-const DEFAULTS = { overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palettes: { sequential: 'viridis', diverging: 'blue-gray-red' }, panel: 'open' };
+const DEFAULTS = { view: 'data', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palettes: { sequential: 'viridis', diverging: 'blue-gray-red' }, panel: 'open' };
 
 /*
  * The contour row draws isobars of surface pressure at the surface and
@@ -69,7 +68,13 @@ const ISOLINES = {
 const isolinesFor = (level) => (level === 'surface' ? ISOLINES.surface : ISOLINES.level);
 
 function loadSettings() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('climate.settings') || '{}'), palettes: { ...DEFAULTS.palettes, ...JSON.parse(localStorage.getItem('climate.settings') || '{}').palettes } }; } catch { return { ...DEFAULTS }; }
+  try {
+    const stored = JSON.parse(localStorage.getItem('climate.settings') || '{}');
+    const settings = { ...DEFAULTS, ...stored, palettes: { ...DEFAULTS.palettes, ...stored.palettes } };
+    if (settings.overlay === 'clouds') { settings.overlay = 'none'; settings.view = 'space'; }
+    if (!OVERLAYS[settings.overlay]) settings.overlay = DEFAULTS.overlay;
+    return settings;
+  } catch { return { ...DEFAULTS }; }
 }
 function saveSettings(settings) {
   try { localStorage.setItem('climate.settings', JSON.stringify(settings)); } catch { /* storage unavailable */ }
@@ -135,6 +140,7 @@ async function builtinSnapshots() {
 const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'none']);
 
 const VIEW_NOTES = [
+  ['Mode', 'Data paints the chosen overlay on an evenly lit globe. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day.'],
   ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
   ['Height', 'The pressure level shown by the wind, temperature and humidity views and followed by the animation: Sfc is the lowest layer, about 60 m up; the others are hPa. Column views hide it and use the surface wind.'],
   ['Wind speed', 'Speed at the chosen height.'],
@@ -144,7 +150,6 @@ const VIEW_NOTES = [
   ['Precipitation', 'Rain rate over the last frame, from convection and from cloud that rained out.'],
   ['Precipitable water', 'All the vapour in the column, as the depth of rain it would make.'],
   ['Cloud water', 'All the condensed water in the column.'],
-  ['Satellite', 'What a satellite would see: ocean blue, ice whitening with thickness, and cloud as white whose opacity follows the cloud water.'],
   ['Sea ice', 'Sea-ice thickness.'],
   ['Albedo', 'The surface albedo for diffuse light: 0.06 over water, rising to 0.5 over half a metre of ice.'],
   ['Surface sunlight', 'Shortwave reaching the surface, direct and diffuse, before the surface reflects its share.'],
@@ -158,7 +163,7 @@ const VIEW_NOTES = [
 export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false } = {}) {
   const settings = loadSettings();
   const panel = document.getElementById('panel');
-  const activeLevel = () => (HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
+  const activeLevel = () => (settings.view === 'space' || HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
   let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, rgb = null, running = !paused;
   const clock = [];
   function simulatedHoursPerMinute() {
@@ -181,7 +186,22 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     viewer.setProjection(settings.projection);
   }
 
+  function paintSatellite() {
+    const cloud = latest.cloud, ice = latest.ice;
+    for (let i = 0; i < grid.size; i++) {
+      const frozen = Math.min(1, ice[i] / 0.5), opacity = cloudOpacity(cloud[i] * 1000);
+      for (let j = 0; j < 3; j++) {
+        const base = OCEAN_COLOR[j] + frozen * (ICE_COLOR[j] - OCEAN_COLOR[j]);
+        rgb[3 * i + j] = LINEAR[Math.round(255 * (base + opacity * (CLOUD_COLOR[j] - base)))];
+      }
+    }
+    viewer.updateColors(rgb);
+    document.querySelector('.scaleRow').classList.add('hidden');
+    document.getElementById('data').textContent = `Satellite view · wind @ ${levelLabel(activeLevel())}`;
+  }
+
   function paintOverlay() {
+    if (settings.view === 'space') { paintSatellite(); return; }
     const overlay = OVERLAYS[settings.overlay];
     const scaleRow = document.querySelector('.scaleRow');
     if (!overlay.field) {
@@ -193,21 +213,6 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     }
     const [min, max] = overlay.range(activeLevel());
     const values = latest[overlay.field];
-    if (overlay.kind === 'clouds') {
-      const ice = latest.ice;
-      for (let i = 0; i < grid.size; i++) {
-        const frozen = Math.min(1, ice[i] / 0.5), cloud = cloudOpacity(values[i] * overlay.scale);
-        for (let j = 0; j < 3; j++) {
-          const base = OCEAN_COLOR[j] + frozen * (ICE_COLOR[j] - OCEAN_COLOR[j]);
-          rgb[3 * i + j] = LINEAR[Math.round(255 * (base + cloud * (CLOUD_COLOR[j] - base)))];
-        }
-      }
-      viewer.updateColors(rgb);
-      scaleRow.classList.remove('hidden');
-      renderScale(CLOUD_STOPS, min, max, overlay.unit);
-      document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(activeLevel())}`;
-      return;
-    }
     const stops = PALETTES[overlay.kind][settings.palettes[overlay.kind]] ?? Object.values(PALETTES[overlay.kind])[0];
     for (let i = 0; i < grid.size; i++) {
       color((values[i] * overlay.scale - min) / (max - min), stops, rgb, 3 * i);
@@ -272,9 +277,12 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       const current = group.dataset.setting === 'isolines' ? isolineChoice() : String(settings[group.dataset.setting]);
       for (const button of group.querySelectorAll('button[data-value]')) button.classList.toggle('selected', button.dataset.value === current);
     }
-    const heights = HEIGHT_OVERLAYS.has(settings.overlay);
+    const space = settings.view === 'space';
+    const heights = space || HEIGHT_OVERLAYS.has(settings.overlay);
     document.getElementById('heightLabel').classList.toggle('hidden', !heights);
     document.getElementById('heightOptions').classList.toggle('hidden', !heights);
+    document.getElementById('overlayLabel').classList.toggle('hidden', space);
+    document.getElementById('overlayOptions').classList.toggle('hidden', space);
     document.getElementById('isolineLabel').textContent = isolines.label;
     document.getElementById('isolineUnit').textContent = isolines.unit;
     const paletteSelect = document.getElementById('palette');
@@ -283,6 +291,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (overlay.kind && PALETTES[overlay.kind]) fillSelect(paletteSelect, Object.keys(PALETTES[overlay.kind]), settings.palettes[overlay.kind]);
     document.querySelector('[data-control="play"]').textContent = running ? '❚❚' : '▶';
     panel.classList.toggle('hidden', settings.panel !== 'open');
+    if (viewer) viewer.setSpace({ enabled: space, sun: latest ? sunDirection(latest.time) : null, sidereal: latest ? 2 * Math.PI * latest.time * (1 / DAY + 1 / YEAR) : 0 });
     if (!latest) return;
     paintOverlay();
     paintWind();

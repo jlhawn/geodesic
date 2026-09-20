@@ -239,9 +239,103 @@ export function initUnifiedViewer(container, grid, config = {}) {
   }
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(backgroundColor);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.autoClear = false;
+
+  /*
+   * The view from space: a star sphere and the sun, drawn behind the
+   * globe by a perspective camera so that directions are correct, and
+   * sunlight on the cells with a dark ambient. The stars sit in an
+   * inertial frame that setSpace() turns about the pole by the sidereal
+   * angle; the drag rotation applies on top of both.
+   */
+  const SKY_RADIUS = 100;
+  const skyScene = new THREE.Scene();
+  const skyCamera = new THREE.PerspectiveCamera(60, 1, 1, 10 * SKY_RADIUS);
+  const stars = buildStars();
+  skyScene.add(stars);
+  const sun = buildSun();
+  skyScene.add(sun);
+  const space = { enabled: false, sun: new THREE.Vector3(1, 0, 0), sidereal: new THREE.Quaternion() };
+
+  function buildStars() {
+    const random = mulberry32(7);
+    const gaussian = () => Math.sqrt(-2 * Math.log(1 - random())) * Math.cos(2 * Math.PI * random());
+    const positions = [], colors = [], sizes = [];
+    const put = (x, y, z, brightness, warmth, size) => {
+      positions.push(SKY_RADIUS * x, SKY_RADIUS * y, SKY_RADIUS * z);
+      colors.push(brightness * (1 + 0.25 * warmth), brightness * (1 + 0.05 * warmth), brightness * (1 - 0.3 * warmth));
+      sizes.push(size);
+    };
+    for (let n = 0; n < 5000; n++) {
+      const z = 2 * random() - 1, phi = 2 * Math.PI * random(), r = Math.sqrt(1 - z * z);
+      const brightness = 0.25 + 0.75 * random() ** 3;
+      put(r * Math.cos(phi), r * Math.sin(phi), z, brightness, 2 * random() - 1, 1 + 3 * brightness ** 2);
+    }
+    const tilt = 62 * Math.PI / 180, cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+    for (let n = 0; n < 24000; n++) {
+      const along = 2 * Math.PI * random(), off = 0.14 * gaussian();
+      const x = Math.cos(off) * Math.cos(along), y = Math.cos(off) * Math.sin(along), z = Math.sin(off);
+      put(x, y * cosT - z * sinT, y * sinT + z * cosT, 0.12 + 0.18 * random(), 0.5 * random(), 1 + random());
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+    const starMaterial = new THREE.ShaderMaterial({
+      vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      vertexShader: `
+attribute float size;
+varying vec3 vColor;
+void main() {
+  vColor = color;
+  gl_PointSize = size;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`,
+      fragmentShader: `
+varying vec3 vColor;
+void main() {
+  float r = 2.0 * length(gl_PointCoord - 0.5);
+  float a = smoothstep(1.0, 0.2, r);
+  gl_FragColor = vec4(vColor * a, a);
+}`,
+    });
+    const points = new THREE.Points(geometry, starMaterial);
+    points.frustumCulled = false;
+    return points;
+  }
+
+  function buildSun() {
+    const size = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const context = canvas.getContext('2d');
+    const gradient = context.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    gradient.addColorStop(0.16, 'rgba(255, 252, 240, 1)');
+    gradient.addColorStop(0.24, 'rgba(255, 236, 190, 0.55)');
+    gradient.addColorStop(0.5, 'rgba(255, 220, 160, 0.12)');
+    gradient.addColorStop(1, 'rgba(255, 200, 120, 0)');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, size, size);
+    const texture = new THREE.CanvasTexture(canvas);
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true }));
+    sprite.scale.setScalar(0.14 * SKY_RADIUS);
+    sprite.renderOrder = 1;
+    return sprite;
+  }
+
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6D2B79F5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
   renderer.domElement.style.width = "100%";
   renderer.domElement.style.height = "100%";
   renderer.domElement.style.display = "block";
@@ -301,8 +395,20 @@ export function initUnifiedViewer(container, grid, config = {}) {
     projectedMaterials.push(material);
   }
 
+  const lighting = { uSunDirection: { value: new THREE.Vector3(1, 0, 0) }, uLighting: { value: 0 }, uAmbient: { value: 0.015 } };
   const material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
-  projectMaterial(material);
+  projectMaterial(material, 0.0, {
+    uniforms: lighting,
+    head: `
+uniform vec3 uSunDirection;
+uniform float uLighting;
+uniform float uAmbient;
+`,
+    source: `
+  float daylight = uAmbient + (1.0 - uAmbient) * max(0.0, dot(normalize(position), uSunDirection));
+  vColor.rgb *= mix(1.0, daylight, uLighting);
+`,
+  });
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.frustumCulled = false; 
@@ -366,7 +472,16 @@ export function initUnifiedViewer(container, grid, config = {}) {
     camera.top = frustumSize / 2 + state.pan.y;
     camera.bottom = -frustumSize / 2 + state.pan.y;
     camera.updateProjectionMatrix();
-    
+
+    renderer.setClearColor(space.enabled ? 0x000000 : backgroundColor);
+    renderer.clear();
+    if (space.enabled) {
+      skyCamera.aspect = aspect;
+      skyCamera.updateProjectionMatrix();
+      stars.quaternion.copy(sphereQuaternion).multiply(space.sidereal);
+      sun.position.copy(space.sun).applyQuaternion(sphereQuaternion).multiplyScalar(SKY_RADIUS);
+      renderer.render(skyScene, skyCamera);
+    }
     renderer.render(scene, camera);
     stats.update();
     requestAnimationFrame(render);
@@ -734,6 +849,13 @@ uniform float uReferenceSpeed;
 
   return {
     updateColors: dynamicColors ? updateColors : null,
+    setSpace({ enabled, sun: direction = null, sidereal = 0, ambient = 0.015 } = {}) {
+      space.enabled = enabled;
+      lighting.uLighting.value = enabled ? 1 : 0;
+      lighting.uAmbient.value = ambient;
+      if (direction) { space.sun.set(direction[0], direction[1], direction[2]); lighting.uSunDirection.value.copy(space.sun); }
+      space.sidereal.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -sidereal);
+    },
     addArrowLayer,
     addContourLayer,
     addGraticuleLayer,

@@ -81,16 +81,18 @@
   </div>
   <button id="snapshotsButton" class="box">snapshots</button>
   <div id="panel" class="box hidden">
+    <span class="label">Mode</span>
+    <div class="options" data-setting="view"><div class="segmented"><button data-value="data">Data</button><button data-value="space">Satellite</button></div></div>
     <span class="label">Wind animation</span>
     <div class="options" data-setting="animate"><div class="segmented"><button data-value="particles">Particles</button><button data-value="arrows">Vectors</button><button data-value="none">None</button></div></div>
     <span class="label" id="heightLabel">Height</span>
     <div class="options" id="heightOptions" data-setting="level">
       <div class="segmented"><button data-value="surface">Surface</button><button data-value="1000">1000</button><button data-value="850">850</button><button data-value="700">700</button><button data-value="500">500</button><button data-value="250">250</button><button data-value="70">70</button><button data-value="10">10</button></div><span class="unit">hPa</span>
     </div>
-    <span class="label">Overlay</span>
-    <div class="options stacked" data-setting="overlay">
+    <span class="label" id="overlayLabel">Overlay</span>
+    <div class="options stacked" id="overlayOptions" data-setting="overlay">
       <div class="segmented"><button data-value="none">None</button><button data-value="wind">Wind speed</button><button data-value="temp">Temperature</button><button data-value="rh">Relative humidity</button><button data-value="mslp">Sea-level pressure</button></div>
-      <div class="segmented"><button data-value="precip">Precipitation</button><button data-value="tpw">Precipitable water</button><button data-value="tcw">Cloud water</button><button data-value="clouds">Satellite</button></div>
+      <div class="segmented"><button data-value="precip">Precipitation</button><button data-value="tpw">Precipitable water</button><button data-value="tcw">Cloud water</button></div>
       <div class="segmented"><button data-value="ice">Sea ice</button><button data-value="albedo">Albedo</button><button data-value="swdown">Surface sunlight</button><button data-value="olr">Outgoing longwave</button></div>
     </div>
     <span class="label" id="isolineLabel">Isobars</span>
