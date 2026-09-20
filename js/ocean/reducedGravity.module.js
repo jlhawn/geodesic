@@ -10,8 +10,10 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * Montgomery potential of a resting abyss,
  *   M1 = g'12 h1 + g'23 (h1 + h2),   M2 = g'23 (h1 + h2),
  * so the fastest wave is internal (√(g'h), 2–3 m/s) and the ocean takes
- * everySteps atmosphere steps at once. Momentum: wind stress on the
- * upper layer (zero under ice), interfacial and bottom drag as linear
+ * everySteps atmosphere steps at once. Momentum: the surface stress on
+ * the upper layer is the whole momentum the atmosphere loses to the
+ * surface, aerodynamic drag and boundary-layer damping together (zero
+ * under ice), interfacial and bottom drag as linear
  * stresses ρ r Δu, and a ∇⁴ closure of e-folding time closureHours at
  * the grid scale, long enough for the ocean's longer step. Heat: each layer carries h·T in flux
  * form with centred edge temperatures; the upper layer diffuses with
@@ -27,8 +29,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  */
 export function createOcean(mesh, {
   upperDepth = 50, lowerDepth = 350, reducedGravity = 0.02, abyssReducedGravity = 0.01, abyssTemperature = 275,
-  minimumThickness = 10, entrainmentTime = 86400, density = 1025, specificHeat = 3985,
-  airDensity = 1.2, dragCoefficient = 1.5e-3, gustiness = 3, interfacialDrag = 2e-4, bottomDrag = 2e-4,
+  minimumThickness = 10, entrainmentTime = 86400, density = 1025, specificHeat = 3985, interfacialDrag = 2e-4, bottomDrag = 2e-4,
   closureHours = 12, diffusivity = 0.45, everySteps = 4, buffers = null,
 } = {}) {
   const {
@@ -124,11 +125,8 @@ export function createOcean(mesh, {
     }
   }
 
-  function setWind(uBottom, windSpeed, ice) {
-    for (let e = 0; e < E; e++) {
-      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
-      stress[e] = ice[a] > 0 || ice[b] > 0 ? 0 : airDensity * dragCoefficient * Math.max(0.5 * (windSpeed[a] + windSpeed[b]), gustiness) * uBottom[e];
-    }
+  function setStress(total, ice) {
+    for (let e = 0; e < E; e++) stress[e] = ice[cellsOnEdge[2 * e]] > 0 || ice[cellsOnEdge[2 * e + 1]] > 0 ? 0 : total[e];
   }
 
   function readSurface(surfaceT, ice) {
@@ -139,11 +137,11 @@ export function createOcean(mesh, {
     }
   }
 
-  function advance(surfaceT, ice, oceanFlux, uBottom, windSpeed, dt) {
+  function advance(surfaceT, ice, oceanFlux, totalStress, dt) {
     if (++counter % everySteps !== 0) return false;
     const dtOcean = everySteps * dt;
     readSurface(surfaceT, ice);
-    setWind(uBottom, windSpeed, ice);
+    setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice);
     rk4(tendency, state, dtOcean);
     for (let i = 0; i < C; i++) {
       capacity[i] = rhoCp * h1[i];
@@ -193,5 +191,5 @@ export function createOcean(mesh, {
     return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanThermoclineT: thermocline / area, oceanSpeed: speed };
   }
 
-  return { state, h1, h2, u1, u2, H1, H2, T1, T2, capacity, stress, tendency, advance, initialize, load, serialize, diagnostics, setWind, readSurface, rhoCp, shared: { capacity: capacity.buffer } };
+  return { state, h1, h2, u1, u2, H1, H2, T1, T2, capacity, stress, tendency, advance, initialize, load, serialize, diagnostics, setStress, readSurface, rhoCp, shared: { capacity: capacity.buffer } };
 }

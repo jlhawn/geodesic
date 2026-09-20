@@ -1128,6 +1128,36 @@ hemispheres; wind-driven flow conserves heat to 10⁻¹¹; heat converged
 under ice reaches the ice base with the water at the freezing point;
 the coupled model stays bounded. 168 tests pass.
 
+Cost: at N=64 the ocean step takes 70–110 ms once every four
+atmosphere steps on the main thread, 7–11 % of the 253 ms step.
+
+First spin-up (N=16, 1500 days, the M12 defaults with the slab's
+diffusivity 0.45 kept in the upper layer): the ice is gone by day
+1050 and the planet sits at 292.8 K still warming, poles at 275 K,
+currents 0.1–0.2 m/s, the upper layer pumped from 22 m under the
+westerlies to 87 m in the subtropics, thermocline stable. The Ekman
+cells themselves carry only ~0.1 PW (`scratchpad/trisk/oht.mjs`);
+the warming is the mixed layer: 50 m of water holds its summer heat
+through the polar winter where 5 m froze, and the diffusion tuned for
+the slab now duplicates the transport the currents do explicitly.
+Retuning the ocean's diffusivity with the ocean on (0, 0.1, 0.2).
+
+**The wind stress was a third to an eighth of what the atmosphere
+loses.** The zonal-mean surface winds are 2–3 m/s in every run against
+Earth's 5–8, so the aerodynamic stress ρ_a C_D |U| U is 0.01–0.05
+N/m². But the atmosphere's total momentum sink at the surface is
+Earth-like, 0.1–0.27 N/m² in the zonal mean (`scratchpad/trisk/
+stress.mjs`), because the Held–Suarez Rayleigh damping through the
+lowest 30 % of the column — boundary-layer friction by another name —
+takes three to eight times more momentum than the aerodynamic drag on
+the thin lowest layer, and the ocean never saw it. The ocean now
+receives the whole sink, `surface.stress`: the aerodynamic stress plus
+Σ_k r_k u_k Δm_k over the damped layers, which is the momentum-
+conserving coupling. The Ekman transport rises by the same factor
+(the N=4 test's currents 0.026 → 0.146 m/s), and the ocean's heat
+transport should approach the ~1 PW of Earth's wind-driven cells,
+which is what would let the diffusion go.
+
 
 ## 7. Module layout in this repo
 

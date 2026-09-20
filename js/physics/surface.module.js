@@ -54,6 +54,25 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness 
     }
   }
 
+  const aeroFactor = new Float64Array(C);
+  const rayleighRate = Float64Array.from(sigmaMid, (s) => (s > pblTop ? pblRate * (s - pblTop) / (1 - pblTop) : 0));
+
+  function stress(state, out = new Float64Array(E)) {
+    const [pi, theta, u] = state;
+    for (let i = 0; i < C; i++) {
+      const idx = bottom * C + i;
+      const airDensity = pi[i] * sigmaMid[bottom] / (R * theta[idx] * exnerLayer[idx]);
+      aeroFactor[i] = dragCoefficient * airDensity * Math.max(windSpeed[i], gustiness);
+    }
+    for (let e = 0; e < E; e++) {
+      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], p = 0.5 * (pi[a] + pi[b]);
+      let sum = 0.5 * (aeroFactor[a] + aeroFactor[b]) * u[bottom * E + e];
+      for (let k = 0; k < K; k++) if (rayleighRate[k] > 0) sum += rayleighRate[k] * u[k * E + e] * p * dSigma[k] / g;
+      out[e] = sum;
+    }
+    return out;
+  }
+
   function apply(state, out) {
     applyLayers(state, out, 0, K);
   }
@@ -98,5 +117,5 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness 
     return mixes;
   }
 
-  return { lowestWindSpeed, apply, applyLayers, convectiveAdjustment, convectiveAdjustColumn, windSpeed, shared: { windSpeed: windBuffer } };
+  return { lowestWindSpeed, apply, applyLayers, stress, convectiveAdjustment, convectiveAdjustColumn, windSpeed, shared: { windSpeed: windBuffer } };
 }

@@ -36,8 +36,8 @@ test('the ocean at rest under no wind stays at rest, bit for bit', () => {
   const ocean = createOcean(mesh, { everySteps: 1 });
   const surfaceT = new Float64Array(C).fill(290), ice = new Float64Array(C), flux = new Float64Array(C);
   ocean.initialize(surfaceT, ice);
-  const calm = new Float64Array(E), still = new Float64Array(C);
-  for (let n = 0; n < 20; n++) ocean.advance(surfaceT, ice, flux, calm, still, 3600);
+  const calm = new Float64Array(E);
+  for (let n = 0; n < 20; n++) ocean.advance(surfaceT, ice, flux, calm, 3600);
   assert.ok(ocean.u1.every((x) => x === 0) && ocean.u2.every((x) => x === 0));
   assert.ok(ocean.h1.every((x) => x === 50) && ocean.h2.every((x) => x === 350));
   assert.ok(surfaceT.every((x) => x === 290) && flux.every((x) => x === 0));
@@ -49,8 +49,8 @@ test('westerlies drive an equatorward Ekman transport of τ/(ρf) in both hemisp
   ocean.initialize(surfaceT, ice);
   const speed = 10;
   const wind = zonalWindOnEdges((lat) => speed * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 45) / 10) ** 2)));
-  const windSpeed = new Float64Array(C).fill(speed);
-  for (let n = 0; n < 24 * 12; n++) ocean.advance(surfaceT, ice, flux, wind, windSpeed, 3600);
+  const stressField = Float64Array.from(wind, (w) => RHO_AIR * DRAG * speed * w);
+  for (let n = 0; n < 24 * 12; n++) ocean.advance(surfaceT, ice, flux, stressField, 3600);
   const transport = northwardTransport(ocean);
   let north = 0, south = 0, an = 0, as = 0;
   for (let i = 0; i < C; i++) {
@@ -72,10 +72,10 @@ test('wind-driven flow moves heat around but conserves it', () => {
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C), flux = new Float64Array(C);
   ocean.initialize(surfaceT, ice);
   const wind = zonalWindOnEdges((lat) => 8 * Math.cos(3 * lat));
-  const windSpeed = new Float64Array(C).fill(8);
+  const stressField = Float64Array.from(wind, (w) => RHO_AIR * DRAG * 8 * w);
   const heat = () => { let h = 0; for (let i = 0; i < C; i++) h += mesh.areaCell[i] * (ocean.H1[i] + ocean.H2[i]); return h; };
   const before = heat(), sstBefore = Float64Array.from(surfaceT);
-  for (let n = 0; n < 24 * 5; n++) ocean.advance(surfaceT, ice, flux, wind, windSpeed, 3600);
+  for (let n = 0; n < 24 * 5; n++) ocean.advance(surfaceT, ice, flux, stressField, 3600);
   assert.ok(Math.abs(heat() - before) < 1e-11 * before, `heat ${before} → ${heat()}`);
   let moved = 0;
   for (let i = 0; i < C; i++) moved = Math.max(moved, Math.abs(surfaceT[i] - sstBefore[i]));
@@ -87,7 +87,7 @@ test('heat converged under ice goes to the ice base as a flux and the water stay
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => Math.abs(lat) > 1.2 ? 260 : 295);
   const ice = Float64Array.from(mesh.latCell, (lat) => (Math.abs(lat) > 1.2 ? 1 : 0)), flux = new Float64Array(C);
   ocean.initialize(surfaceT, ice);
-  for (let n = 0; n < 6; n++) ocean.advance(surfaceT, ice, flux, new Float64Array(E), new Float64Array(C), 3600);
+  for (let n = 0; n < 6; n++) ocean.advance(surfaceT, ice, flux, new Float64Array(E), 3600);
   let edgeFlux = 0, interior = 0;
   for (let i = 0; i < C; i++) {
     if (ice[i] > 0) {

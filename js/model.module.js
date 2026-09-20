@@ -60,7 +60,7 @@ export function createModel(gridOrMesh, {
     ...iceOptions,
   });
   const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
-  const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C);
+  const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), stressScratch = new Float64Array(E);
 
   const lengths = stateLengths({ K, C, E });
   const stateArray = (name) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * lengths[name]));
@@ -77,7 +77,7 @@ export function createModel(gridOrMesh, {
     },
     ocean(dt) {
       if (!physics) return;
-      if (ocean) ocean.advance(state[3], state[6], seaIce.oceanFlux, state[2].subarray((K - 1) * E, K * E), surface.windSpeed, dt);
+      if (ocean) ocean.advance(state[3], state[6], seaIce.oceanFlux, () => surface.stress(state, stressScratch), dt);
       else seaIce.prepare(state[3], state[6]);
     },
     physics(iFrom, iTo, dt, sums) {
