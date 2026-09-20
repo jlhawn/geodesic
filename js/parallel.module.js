@@ -59,7 +59,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
   const totals = new Float64Array(control.totals);
   const meshShared = shareMesh(model.mesh);
   const buffers = { ...model.shared, trial, stages };
-  const workerOptions = { ...options, nu4Hours: options.nu4Hours, physics: options.physics ?? true };
+  const workerOptions = { ...options, nu4Hours: options.nu4Hours, physics: options.physics ?? true, ocean: false };
   delete workerOptions.buffers;
 
   const threads = [];
@@ -118,7 +118,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     run(PHASE.ADVANCE, { stage: 2, factor: dt });
     tendencyPhases(1, 3);
     run(PHASE.COMBINE, { dt });
-    model.phases.ocean();
+    model.phases.ocean(dt);
     run(PHASE.PHYSICS, { dt });
     run(PHASE.CLOSURE, { dt });
     run(PHASE.ADJUST, { dt });

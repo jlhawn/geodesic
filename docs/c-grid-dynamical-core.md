@@ -1028,7 +1028,7 @@ coupling 0.55 throughout):
 | 100 | 0.6 | 291.0 | +13 | 0.25 | 9 % (3–16) | summer cap melts away, warming |
 | 120 | 0.6 | 289.9 | +11 | 0.26 | 10 % (4–16) | same |
 | 115 | 0.45 | 289.6 | +6 | 0.28 | 11 % (7–18) | equilibrated ~290 |
-| 115 | 0.45, 100 m slab | 289.4 | +9 | 0.28 | 10 % (6–16) | summer storm track unchanged |
+| 115 | 0.45, slab ×2 (10 m) | 289.4 | +9 | 0.28 | 10 % (6–16) | summer storm track unchanged |
 | **120** | **0.45** | 289.5 | +7, within 2 by day 500 | 0.28 | 11 % (6–18) | the defaults; 500 days, 12 min on 10 workers |
 
 The diffusive ocean removed the runaway: at every setting above the
@@ -1039,12 +1039,14 @@ the c = 60 climate is the thin tropical cloud (6–20 g/m² under
 Betts–Miller convection that rains without detraining condensate,
 against 100–250 g/m² in the storm tracks), so the planetary albedo is
 the lever and the cloud scale is what sets it. Doubling D melts the
-summer cap and re-arms the ice–albedo feedback. The mixed-layer depth
-does not change the seasonal cycle of the storm tracks: the summer
-hemisphere's eddy kinetic energy at 250 hPa is a third to a half of
-the winter's at both 50 and 100 m, which is Earth's northern-hemisphere
-seasonality; the southern hemisphere's year-round storm track needs
-a permanently cold polar continent that an aquaplanet does not have.
+summer cap and re-arms the ice–albedo feedback. Doubling the slab's
+heat capacity does not change the seasonal cycle of the storm tracks:
+the summer hemisphere's eddy kinetic energy at 250 hPa is a third to a
+half of the winter's either way, which is Earth's northern-hemisphere
+seasonality. Note that the slab's 2.1×10⁷ J/m²/K is only 5 m of
+seawater (ρc_p = 4.1×10⁶ J/m³/K), a tenth of a real mixed layer, so
+that test compared 5 m with 10 m; a 50 m layer (2.1×10⁸ J/m²/K) has a
+600-day adjustment time and is the M13 ocean's upper layer.
 Chosen defaults: c = 120, D = 0.45. Their climate at day 500 (northern
 midsummer): tropics 299–300 K, summer subtropics 304 K, the winter
 hemisphere iced to 55° with 3.5 m at the pole, the summer hemisphere
@@ -1053,7 +1055,7 @@ tropical cloud 4–40 g/m². Eddy kinetic energy at 250 hPa runs 500–680
 m²/s² in the winter hemisphere and 210–290 in the summer one.
 
 
-### M12 — Convective detrainment — done (tuning)
+### M12 — Convective detrainment — done
 
 Betts–Miller convection produced rain and nothing else, so the deep
 tropics of the M11 climate carried 5–20 g/m² of cloud against 100–250
@@ -1069,8 +1071,63 @@ condensate, and vapour, cloud and rain sum to what was there
 physics: saturation adjustment evaporates it into subsaturated air and
 autoconversion rains it out over its 3-hour lifetime, so a persistent
 anvil needs the outflow layers near saturation, which the reference
-profile's 70 % relative humidity does not guarantee. The cloud scale is
-retuned at N=16 with detrainment on.
+profile's 70 % relative humidity does not guarantee.
+
+Tuning (500-day N=16 runs, slab ocean, means of the last year): a
+quarter of the condensate freezes the planet at every cloud scale
+tried (60/80/100 → planetary albedo 0.44/0.48/0.51, 277/269/264 K and
+falling, ice 24–42 %), because with no cloud fraction the anvil
+overcasts its whole 965 km cell and a quarter of 5 mm/d with a 3-hour
+lifetime is a 150 g/m² tropical overcast. A tenth, the all-sky
+equivalent of a quarter under 40 % cloud cover, with cloud scale 40/50/
+60 gives 293.8/290.9/288.5 K, albedo 0.27/0.30/0.32, ice 7/9/11 %.
+Defaults: detrainment 0.1, cloud scale 60 (down from the 120 that the
+cloud-free tropics had demanded).
+
+### M13 — A shallow dynamic ocean (`js/ocean/reducedGravity.module.js`) — done (spinning up)
+
+Designed against a panel of three (z-level free-surface, reduced-
+gravity isopycnal, diagnostic Ekman): the z-level ocean's free-surface
+wave (77 m/s at 600 m) sits near the explicit stability limit at the
+atmosphere's step and needs seven new engine phases; the diagnostic
+scheme has no momentum and is a dead end. The reduced-gravity model
+has prognostic momentum, no barotropic mode, and fits the existing
+main-thread ocean hook.
+
+Two active layers over a motionless abyss: an upper layer (initially
+50 m, the mixed layer whose temperature is the SST) and a thermocline
+layer (350 m), with reduced gravities 0.02 and 0.01 m/s² at the two
+interfaces. Each layer is the TRiSK shallow-water layer of M1 in the
+vector-invariant form, driven by the Montgomery potential of a resting
+abyss, M₁ = g′₁₂ h₁ + g′₂₃ (h₁ + h₂) and M₂ = g′₂₃ (h₁ + h₂), so the
+fastest wave is internal (√(g′h) ≈ 2–3 m/s) and the ocean takes four
+atmosphere steps at once with the RK4 of `integrators.module.js`.
+Momentum forcing: wind stress ρ_a C_D max(|U|, gust) u on the upper
+layer from the atmosphere's lowest-layer wind (zero under ice),
+interfacial and bottom drag as linear stresses ρ r Δu (r = 2×10⁻⁴
+m/s), and a ∇⁴ closure with its own 12-hour grid-scale e-folding —
+the atmosphere's 3-hour coefficient at the ocean's 4× step is past
+the RK4 stability limit at coarse resolution and was the first bug.
+Heat: each layer carries h·T in flux form with centred edge
+temperatures; the upper layer keeps the M11 diffusion (D R² ∇²T);
+a layer thinner than 10 m entrains from below over a day, the
+thermocline layer from an abyss at 275 K (the one exchange the ocean's
+heat budget does not close). Coupling, in `phases.ocean` on the main
+thread: the ocean reads the SST from `surfaceT` over open water (the
+freezing point under ice), steps, writes the SST back, publishes the
+upper layer's heat capacity ρc_p h₁ per cell (a shared array that
+replaces the slab's constant in the sea-ice cell update, so the
+slab's 5 m becomes a real 50 m), and hands the heat converged under
+ice to `oceanFlux` for the ice base over the steps until the next
+ocean step. Workers never step the ocean; they read only the shared
+capacity, so the parallel engine stays bit-identical. Snapshots carry
+{h₁, h₂, u₁, u₂, T₂} and regrid across resolutions. Tests
+(`test/ocean.test.mjs`): rest stays at rest bit for bit; westerlies at
+45° give an equatorward transport within 9 % of τ/ρf in both
+hemispheres; wind-driven flow conserves heat to 10⁻¹¹; heat converged
+under ice reaches the ice base with the water at the freezing point;
+the coupled model stays bounded. 168 tests pass.
+
 
 ## 7. Module layout in this repo
 
@@ -1090,6 +1147,8 @@ js/
     regrid.module.js        barycentric interpolation of a state between meshes
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
     ice.module.js           M9/M11: slab ocean with zero-layer sea ice, diffusive heat transport, zenith albedo
+  ocean/
+    reducedGravity.module.js M13: two-layer reduced-gravity ocean, wind-driven, coupled through the sea-ice cell update
   model.module.js           assembles core + physics, RK4 step, diagnostics
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase

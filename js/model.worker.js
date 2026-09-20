@@ -3,7 +3,7 @@ import { createModel } from './model.module.js';
 import { createParallelModel } from './parallel.module.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
-import { regridState } from './physics/regrid.module.js';
+import { regridState, regridOcean } from './physics/regrid.module.js';
 import { levelFields } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 
@@ -93,6 +93,10 @@ async function start(message) {
   model = workers > 1 ? await createParallelModel(grid, message.options ?? {}, workers) : createModel(grid, message.options ?? {});
   const init = initialState(model, saved, N);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  if (model.ocean) {
+    if (saved && saved.ocean) model.ocean.load(saved.N === N ? saved.ocean : regridOcean(createModel(new Grid(saved.N)), model, saved.ocean), model.state[3], model.state[6]);
+    else model.ocean.initialize(model.state[3], model.state[6]);
+  }
   layerWinds = new Array(model.core.K).fill(null);
   level = message.level ?? 'surface';
   lastFrameTime = model.time;

@@ -27,7 +27,9 @@ export const MELTING_POINT = 273.15;
  * the direct beam with the zenith-angle albedo of Briegleb et al.
  * (1986), 0.02 under a high sun and 0.3 near the horizon, and diffuse
  * light (`albedo` without a zenith cosine) with diffuseWaterAlbedo,
- * unless oceanAlbedo fixes both.
+ * unless oceanAlbedo fixes both. With `heatCapacity` given, that per-cell
+ * array (a dynamic ocean's upper layer) replaces slabHeatCapacity in the
+ * cell update.
  */
 export function openWaterAlbedo(mu) {
   return 0.026 / (Math.pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1);
@@ -36,7 +38,7 @@ export function openWaterAlbedo(mu) {
 export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.5, fullAlbedoThickness = 0.5,
-  oceanHeatFlux = 0, oceanDiffusivity = 0.45, buffers = null,
+  oceanHeatFlux = 0, oceanDiffusivity = 0.45, heatCapacity = null, buffers = null,
 } = {}) {
   const C = mesh.nCells;
   const latent = iceDensity * latentHeatFusion;
@@ -64,10 +66,11 @@ export function createSeaIce(mesh, {
 
   function update(surfaceT, ice, flux, i, dt) {
     const ocean = oceanFlux[i];
+    const capacity = heatCapacity ? heatCapacity[i] : slabHeatCapacity;
     if (ice[i] <= 0) {
-      surfaceT[i] += dt * (flux[i] + ocean) / slabHeatCapacity;
+      surfaceT[i] += dt * (flux[i] + ocean) / capacity;
       if (surfaceT[i] < FREEZING_POINT) {
-        ice[i] = (FREEZING_POINT - surfaceT[i]) * slabHeatCapacity / latent;
+        ice[i] = (FREEZING_POINT - surfaceT[i]) * capacity / latent;
         surfaceT[i] = FREEZING_POINT;
         budget.frozen += mesh.areaCell[i] * ice[i];
       }
@@ -83,7 +86,7 @@ export function createSeaIce(mesh, {
     }
     if (thickness <= 0) {
       budget.melted += mesh.areaCell[i] * ice[i];
-      surfaceT[i] = FREEZING_POINT + (-thickness * latent + skinHeatCapacity * (surfaceT[i] - FREEZING_POINT)) / slabHeatCapacity;
+      surfaceT[i] = FREEZING_POINT + (-thickness * latent + skinHeatCapacity * (surfaceT[i] - FREEZING_POINT)) / capacity;
       ice[i] = 0;
     } else {
       budget.frozen += mesh.areaCell[i] * (thickness - ice[i]);

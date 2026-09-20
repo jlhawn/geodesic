@@ -52,7 +52,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
 export function createMoistPhysics(mesh, core, {
   latentHeat = LATENT_HEAT, relaxationTime = 7200, referenceHumidity = 0.7,
   autoconversionThreshold = 2e-4, autoconversionRate = 1e-3, cloudLifetime = 3 * 3600,
-  detrainment = 0.25, anvilDepth = 150e2, buffers = null,
+  detrainment = 0.1, anvilDepth = 150e2, buffers = null,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer } = core.diagnostics;
   const precipBuffer = buffers && buffers.precipitation ? buffers.precipitation : new SharedArrayBuffer(8 * C);

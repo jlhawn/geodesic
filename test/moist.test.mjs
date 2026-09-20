@@ -91,9 +91,10 @@ test('Betts–Miller convection warms and dries an unstable moist column, conser
 });
 
 test('deep convection detrains a quarter of its condensate into an anvil at the top of the column', () => {
+  const { core: core25, moist } = createModel(new Grid(3), { moist: { detrainment: 0.25 } });
   const [pi, theta, q, qc] = column(302, 0.9, 7e-3);
   const waterBefore = moist.columnWater(pi, q, 0);
-  core.diagnoseColumn(0, pi, theta, q, qc);
+  core25.diagnoseColumn(0, pi, theta, q, qc);
   const top = moist.referenceProfile(0, pi, theta, q);
   const total = moist.convectColumn(0, pi, Float64Array.from(theta), Float64Array.from(q), 450);
   const rain = moist.convectColumn(0, pi, theta, q, 450, qc);

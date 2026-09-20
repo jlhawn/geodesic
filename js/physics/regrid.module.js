@@ -61,6 +61,31 @@ function apply(field, offset, { cells, weights }, out, outOffset, count) {
  * interpolated to the target edge midpoints and projected onto the edge
  * normals.
  */
+export function regridCellField(source, target, field, weights = interpolationWeights(source.mesh, target.mesh.xCell)) {
+  const out = new Float64Array(target.mesh.nCells);
+  apply(field, 0, weights, out, 0, target.mesh.nCells);
+  return out;
+}
+
+export function regridEdgeField(source, target, u, weights = interpolationWeights(source.mesh, target.mesh.xEdge)) {
+  const sm = source.mesh, tm = target.mesh;
+  const out = new Float64Array(tm.nEdges);
+  const vector = cellVector(sm, u), component = new Float64Array(sm.nCells), edgeComponent = new Float64Array(tm.nEdges);
+  for (let axis = 0; axis < 3; axis++) {
+    for (let i = 0; i < sm.nCells; i++) component[i] = vector[3 * i + axis];
+    apply(component, 0, weights, edgeComponent, 0, tm.nEdges);
+    for (let e = 0; e < tm.nEdges; e++) out[e] += edgeComponent[e] * tm.nEdge[3 * e + axis];
+  }
+  return out;
+}
+
+export function regridOcean(source, target, ocean) {
+  if (source.mesh.nCells === target.mesh.nCells) return Object.fromEntries(Object.entries(ocean).map(([k, v]) => [k, Float64Array.from(v)]));
+  const atCells = interpolationWeights(source.mesh, target.mesh.xCell), atEdges = interpolationWeights(source.mesh, target.mesh.xEdge);
+  const cell = (v) => regridCellField(source, target, Float64Array.from(v), atCells), edge = (v) => regridEdgeField(source, target, Float64Array.from(v), atEdges);
+  return { h1: cell(ocean.h1), h2: cell(ocean.h2), u1: edge(ocean.u1), u2: edge(ocean.u2), T2: cell(ocean.T2) };
+}
+
 export function regridState(source, target, state) {
   const [pi, theta, u, surfaceT, q = null, qc = null, ice = null] = state;
   const K = source.core.K;
