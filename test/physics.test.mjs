@@ -141,6 +141,26 @@ test('cloud water reflects sunlight and closes the window: lower OLR, higher ref
   assert.ok(cloudy.closure < EPS && clear.closure < EPS);
 });
 
+test('the surface sees the direct beam in clear sky and diffuse light under thick cloud', () => {
+  const radiation = createRadiation(mesh, core);
+  const [pi, theta, u, surfaceT] = sampleState(3);
+  const q = new Float64Array(K * C), qc = new Float64Array(K * C);
+  core.diagnose(pi, theta, q, qc);
+  radiation.setTime(0);
+  let day = -1;
+  for (let i = 0; i < C; i++) if (radiation.insolation(i) > 300) { day = i; break; }
+  const absorbed = (direct, diffuse) => {
+    radiation.column(day, pi[day], theta, surfaceT[day], 5, radiation.opticalDepth(mesh.latCell[day]), radiation.insolation(day), q[(K - 1) * C + day], q, qc, direct, diffuse);
+    return radiation.budget.absorbedSolar;
+  };
+  const clearBright = absorbed(0.3, 0.06), clearDark = absorbed(0.06, 0.06);
+  assert.ok(clearBright / clearDark < 0.85, `clear sky: bright direct albedo absorbs ${clearBright / clearDark} of the dark`);
+  for (let k = 12; k < 16; k++) qc[k * C + day] = 5e-4;
+  const cloudyBright = absorbed(0.3, 0.06), cloudyDark = absorbed(0.06, 0.06);
+  assert.ok(cloudyBright / cloudyDark > 0.97, `thick cloud: bright direct albedo absorbs ${cloudyBright / cloudyDark} of the dark`);
+  assert.ok(cloudyDark < 0.5 * clearDark, 'the cloud reflects most of the beam');
+});
+
 function evaluate(radiation, i, pi, theta, surfaceT, q, qc) {
   const flux = radiation.column(i, pi[i], theta, surfaceT[i], 5, radiation.opticalDepth(mesh.latCell[i]), radiation.insolation(i), q[(K - 1) * C + i], q, qc, 0.07);
   let layers = 0, scale = 0;

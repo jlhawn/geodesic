@@ -84,6 +84,7 @@ test('open water is dark under a high sun and bright near the horizon', () => {
   for (let mu = 0.05; mu < 0.8; mu += 0.05) assert.ok(openWaterAlbedo(mu) > openWaterAlbedo(mu + 0.05));
   assert.ok(openWaterAlbedo(1) < openWaterAlbedo(0.5));
   assert.ok(seaIce.albedo(0, 0.1) > seaIce.albedo(0, 0.9));
+  assert.ok(Math.abs(seaIce.albedo(0) - 0.06) < 1e-12, 'diffuse light sees the diffuse albedo');
   assert.equal(seaIce.albedo(1, 0.1), seaIce.albedo(1, 0.9));
 });
 

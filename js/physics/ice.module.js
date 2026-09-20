@@ -25,8 +25,9 @@ export const MELTING_POINT = 273.15;
  * Under ice the convergence melts the base. surfaceT is the skin
  * temperature the atmosphere sees in both states. Open water reflects
  * the direct beam with the zenith-angle albedo of Briegleb et al.
- * (1986), 0.02 under a high sun and 0.3 near the horizon, unless
- * oceanAlbedo fixes it.
+ * (1986), 0.02 under a high sun and 0.3 near the horizon, and diffuse
+ * light (`albedo` without a zenith cosine) with diffuseWaterAlbedo,
+ * unless oceanAlbedo fixes both.
  */
 export function openWaterAlbedo(mu) {
   return 0.026 / (Math.pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1);
@@ -34,7 +35,7 @@ export function openWaterAlbedo(mu) {
 
 export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
-  iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, iceAlbedo = 0.5, fullAlbedoThickness = 0.5,
+  iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.5, fullAlbedoThickness = 0.5,
   oceanHeatFlux = 0, oceanDiffusivity = 0.3, buffers = null,
 } = {}) {
   const C = mesh.nCells;
@@ -46,8 +47,8 @@ export function createSeaIce(mesh, {
   const slabT = new Float64Array(C), laplacian = new Float64Array(C);
   const diffusion = oceanDiffusivity * mesh.radius * mesh.radius;
 
-  function albedo(thickness, mu = 0.5) {
-    const water = oceanAlbedo ?? openWaterAlbedo(mu);
+  function albedo(thickness, mu = null) {
+    const water = oceanAlbedo ?? (mu === null ? diffuseWaterAlbedo : openWaterAlbedo(mu));
     return thickness > 0 ? water + (iceAlbedo - water) * Math.min(1, thickness / fullAlbedoThickness) : water;
   }
 

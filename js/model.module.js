@@ -53,7 +53,7 @@ export function createModel(gridOrMesh, {
   const moistPhysics = createMoistPhysics(mesh, core, { buffers: buffers ? buffers.moist : null, ...moistOptions });
   const seaIce = createSeaIce(mesh, { buffers: buffers ? buffers.ice : null, ...iceOptions });
   const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
-  const surfaceAlbedo = new Float64Array(C);
+  const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C);
 
   const lengths = stateLengths({ K, C, E });
   const stateArray = (name) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * lengths[name]));
@@ -75,8 +75,8 @@ export function createModel(gridOrMesh, {
       const bottom = (K - 1) * C;
       forcing[3].fill(0, iFrom, iTo);
       for (let k = 0; k < K; k++) { forcing[1].fill(0, k * C + iFrom, k * C + iTo); forcing[4].fill(0, k * C + iFrom, k * C + iTo); }
-      for (let i = iFrom; i < iTo; i++) surfaceAlbedo[i] = seaIce.albedo(state[6][i], radiation.cosZenith(i));
-      radiation.apply(moist ? state : state.slice(0, 4), forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo);
+      for (let i = iFrom; i < iTo; i++) { surfaceAlbedo[i] = seaIce.albedo(state[6][i], radiation.cosZenith(i)); diffuseAlbedo[i] = seaIce.albedo(state[6][i]); }
+      radiation.apply(moist ? state : state.slice(0, 4), forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo);
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
       for (let i = iFrom; i < iTo; i++) seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt);
       if (moist) for (let i = bottom + iFrom; i < bottom + iTo; i++) state[4][i] += dt * forcing[4][i];

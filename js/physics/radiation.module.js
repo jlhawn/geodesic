@@ -44,10 +44,12 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * including the window, which is transparent only where there is no
  * cloud. In the shortwave the column's cloud optical depth
  * cloudScattering × path reflects the beam by the two-stream
- * reflectance τ / (τ + 2μ); what passes is absorbed by the surface with
- * its own albedo, with the multiple reflections between surface and
- * cloud summed. The surface albedo is given per cell (open water or
- * sea ice); `albedo` is the default when none is given.
+ * reflectance τ / (τ + 2μ). What reaches the surface is direct beam,
+ * exp(−τ/μ) of it less the clear-sky `skylight` fraction, and diffuse
+ * light, the rest; the surface reflects each with its own albedo, and
+ * the multiple reflections between surface and cloud base (diffuse,
+ * at the mean cosine DIFFUSE_MU) are summed. The two albedos are given
+ * per cell (open water or sea ice); `albedo` is the default for both.
  *
  * Shortwave: the fraction `ozoneAbsorption` of the incoming beam is
  * absorbed aloft. The ozone column follows Lacis & Hansen (1974)
@@ -56,11 +58,13 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * with the optical depth ozoneOpacity, so the heating peaks above the
  * ozone maximum as it does at the stratopause.
  */
+const DIFFUSE_MU = 0.6;
+
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 60,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 5,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3,
-  exchangeCoefficient = 1.5e-3, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55,
+  exchangeCoefficient = 1.5e-3, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, exnerLayer } = core.diagnostics;
   const levels = core.levels;
@@ -121,7 +125,7 @@ export function createRadiation(mesh, core, {
     return [outgoing, back];
   }
 
-  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null, qc = null, surfaceAlbedo = albedo) {
+  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo) {
     const ozoneHeating = beam * ozoneAbsorption;
     const surfaceEmission = STEFAN_BOLTZMANN * surfaceT * surfaceT * surfaceT * surfaceT;
     const coupled = vaporCoupling > 0 && q !== null;
@@ -142,7 +146,11 @@ export function createRadiation(mesh, core, {
     const cloudDepth = cloudScattering * cloudPath;
     const reflectance = mu > 0 && cloudDepth > 0 ? cloudDepth / (cloudDepth + 2 * mu) : 0;
     const incident = beam - ozoneHeating;
-    const absorbedSolar = (1 - surfaceAlbedo) * (1 - reflectance) * incident / (1 - surfaceAlbedo * reflectance);
+    const direct = (1 - skylight) * (cloudDepth > 0 && mu > 0 ? Math.exp(-cloudDepth / mu) : 1);
+    const diffuse = 1 - reflectance - direct;
+    const returned = cloudDepth > 0 ? cloudDepth / (cloudDepth + 2 * DIFFUSE_MU) : 0;
+    const upward = surfaceAlbedo * direct + diffuseAlbedo * diffuse;
+    const absorbedSolar = incident * ((1 - surfaceAlbedo) * direct + (1 - diffuseAlbedo) * (diffuse + returned * upward / (1 - diffuseAlbedo * returned)));
     const [outVapor, backVapor] = band(vaporFraction, vaporEmissivity, surfaceEmission);
     const [outGas, backGas] = band(gasFraction, mixedEmissivity, surfaceEmission);
     const [outWindow, backWindow] = band(window, cloudEmissivity, surfaceEmission);
@@ -172,14 +180,14 @@ export function createRadiation(mesh, core, {
    * lowest layer for the cells in range; the net surface flux of each
    * cell is left in `surfaceFlux` for the surface model to apply.
    */
-  function apply(state, out, windSpeed, totals, iFrom = 0, iTo = C, surfaceAlbedo = null) {
+  function apply(state, out, windSpeed, totals, iFrom = 0, iTo = C, surfaceAlbedo = null, diffuseAlbedo = null) {
     const [pi, theta, , surfaceT] = state;
     const [, dTheta] = out;
     const q = state[4] ?? null, dQ = out[4] ?? null, qc = state[5] ?? null;
     const bottom = (K - 1) * C;
     if (totals) for (const name of ['absorbedSolar', 'outgoingLongwave', 'sensibleHeat', 'evaporation', 'insolation', 'reflectedSolar']) totals[name] = 0;
     for (let i = iFrom; i < iTo; i++) {
-      surfaceFlux[i] = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], insolation(i), q && dQ ? q[bottom + i] : null, q && dQ ? q : null, q && dQ ? qc : null, surfaceAlbedo ? surfaceAlbedo[i] : albedo);
+      surfaceFlux[i] = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], insolation(i), q && dQ ? q[bottom + i] : null, q && dQ ? q : null, q && dQ ? qc : null, surfaceAlbedo ? surfaceAlbedo[i] : albedo, diffuseAlbedo ? diffuseAlbedo[i] : surfaceAlbedo ? surfaceAlbedo[i] : albedo);
       for (let k = 0; k < K; k++) {
         const massPerArea = pi[i] * dSigma[k] / g;
         dTheta[k * C + i] += netFlux[k] / (cp * massPerArea) / exnerLayer[k * C + i];

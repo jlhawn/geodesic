@@ -996,11 +996,19 @@ aimed at the two feedbacks that ran away in M10:
   (`phases.ocean`), which keeps the workers' cell updates free of
   neighbour reads and the parallel step bit-identical to the serial
   one. The prescribed profile stays available but defaults to zero.
-- **Zenith-angle albedo of open water.** Briegleb et al. (1986):
-  0.02 under a high sun, 0.07 at 60° zenith, 0.3 near the horizon.
-  Radiation exposes `cosZenith(i)` and the physics phase evaluates the
-  per-cell albedo with it. The albedo contrast between water and ice
-  at the latitudes where ice forms is roughly halved.
+- **Direct and diffuse light at the surface.** Open water reflects the
+  direct beam with the zenith-angle albedo of Briegleb et al. (1986),
+  0.02 under a high sun, 0.07 at 60° zenith, 0.3 near the horizon, and
+  diffuse light with 0.06. Radiation splits what reaches the surface:
+  the direct beam is exp(−τ/μ) of the incident less a clear-sky
+  skylight fraction of 0.15 (Rayleigh scattering the model does not
+  otherwise have); the rest of what the cloud passes is diffuse; the
+  multiple reflections between surface and cloud base are diffuse at a
+  mean cosine of 0.6. Under thick cloud the surface therefore sees the
+  diffuse albedo whatever the sun's height, so a low sun over open
+  water near the ice edge is bright only in clear sky. Radiation
+  exposes `cosZenith(i)` and the physics phase evaluates both albedos
+  per cell.
 - **Ice albedo 0.5**, the value of bare summer sea ice, instead of 0.6.
 - **Tuning at N=16 only.** 400 days cost 9 minutes on 10 workers;
   `scratchpad/trisk/annual.sh <log>` prints the annual means and
