@@ -224,7 +224,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const reference = REFERENCE_SPEED[activeLevel()];
     arrows.setVisible(settings.animate === 'arrows');
     particles.setVisible(settings.animate === 'particles');
-    if (settings.animate === 'arrows') arrows.update(latest.vector, { referenceSpeed: reference, stride: Math.ceil(grid.size / 4000) });
+    if (settings.animate === 'arrows') arrows.update(latest.vector, { referenceSpeed: reference });
     if (settings.animate === 'particles') particles.setField(latest.vector, reference);
     const note = settings.animate === 'particles' ? `trails brighten toward ${reference} m/s` : settings.animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
     if (note) document.getElementById('data').textContent += ` · ${note}`;

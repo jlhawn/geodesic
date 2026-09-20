@@ -49,9 +49,11 @@ const vertexLogic = `
   float row = floor(cellIndex / uTexSize.x);
   vec2 uv = (vec2(col, row) + 0.5) / uTexSize; 
   vec3 cellCenter = texture2D(uCenterTexture, uv).xyz;
+  vec3 sourcePos = position;
+  // [vertex source]
 
   // 2. Apply Rotation
-  vec4 rotatedPos = uModelRotation * vec4(position, 1.0);
+  vec4 rotatedPos = uModelRotation * vec4(sourcePos, 1.0);
   vec4 rotatedCenter = uModelRotation * vec4(cellCenter, 1.0);
   
   // 3. SPHERE POSITION
@@ -160,7 +162,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
 
   // --- 1. Geometry Generation ---
   const pData = [], kData = [], iData = [], idxData = [], texDataArray = [], centerData = [];
-  const cellVertexStart = [], cellVertexCount = [];
+  const cellVertexStart = [], cellVertexCount = [], cellRadius = [];
   const cellsOnVertex = [];
   const colorHelper = new THREE.Color();
   let vertexCounter = 0, cellCounter = 0;
@@ -174,6 +176,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
 
     texDataArray.push(cv.x, cv.y, cv.z, 1.0);
     centerData.push(cv.x, cv.y, cv.z);
+    cellRadius.push(verts.reduce((sum, v) => sum + Math.hypot(v.x - cv.x, v.y - cv.y, v.z - cv.z), 0) / Math.max(1, verts.length));
     for (const v of verts) if (v.index !== undefined) (cellsOnVertex[v.index] ??= []).push(currentCellID);
 
     const cVal = getColor(cell);
@@ -273,16 +276,27 @@ export function initUnifiedViewer(container, grid, config = {}) {
   };
 
   const projectedMaterials = [];
-  function projectMaterial(material, mapLift = 0.0) {
+  /*
+   * Projects a material's vertices through the globe rotation and the
+   * Equal Earth morph. `head` declares extra attributes and uniforms,
+   * and `source` may reassign sourcePos from them before projection;
+   * `uniforms` are shared objects whose values the caller can change.
+   * Three keys its program cache by the onBeforeCompile source text,
+   * which is the same for every material here, so the key must carry
+   * the variant.
+   */
+  function projectMaterial(material, mapLift = 0.0, { head = '', source = '', uniforms = {} } = {}) {
+    material.customProgramCacheKey = () => `projected:${head}${source}`;
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uModelRotation = { value: rotationMatrix };
       shader.uniforms.uCenterTexture = { value: centerTexture };
       shader.uniforms.uTexSize = { value: new THREE.Vector2(width, height) };
       shader.uniforms.uBlend = { value: viewState.blend };
       shader.uniforms.uMapLift = { value: mapLift };
+      Object.assign(shader.uniforms, uniforms);
       material.userData.shader = shader;
-      shader.vertexShader = vertexHead + shader.vertexShader;
-      shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', vertexLogic);
+      shader.vertexShader = vertexHead + head + shader.vertexShader;
+      shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', vertexLogic.replace('// [vertex source]', source));
     };
     projectedMaterials.push(material);
   }
@@ -394,6 +408,23 @@ export function initUnifiedViewer(container, grid, config = {}) {
     viewState.version++;
   }, { passive: false });
 
+  function panBy(dx, dy) {
+    if (container.clientHeight <= 0) return;
+    const pxToWorld = (camera.top - camera.bottom) / container.clientHeight;
+    state.pan.x -= dx * pxToWorld;
+    state.pan.y += dy * pxToWorld;
+    viewState.version++;
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+    const step = e.shiftKey ? 120 : 30;
+    const move = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+    if (!move) return;
+    e.preventDefault();
+    panBy(move[0], move[1]);
+  });
+
   canvas.addEventListener('mousedown', (e) => {
     state.isDragging = true;
     state.lastX = e.clientX;
@@ -413,12 +444,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
     viewState.version++;
 
     if (e.buttons === 2) {
-       if (container.clientHeight > 0) {
-        const worldHeight = (camera.top - camera.bottom);
-        const pxToWorld = worldHeight / container.clientHeight;
-        state.pan.x -= dx * pxToWorld;
-        state.pan.y += dy * pxToWorld;
-      }
+      panBy(dx, dy);
     }
     else if (e.buttons === 1 && (e.altKey || e.metaKey)) {
        // Roll Axis: In View Space, Roll is Z.
@@ -632,61 +658,77 @@ export function initUnifiedViewer(container, grid, config = {}) {
 
   /*
    * A layer of arrows, one per cell, drawn in the cell's tangent plane
-   * and projected with the same shader as the cells so they follow the
-   * globe in both views. update() takes a vector per cell in the grid's
-   * coordinates (3 components per cell) and scales the arrow with the
-   * speed up to referenceSpeed, at which it spans about a cell.
+   * by the vertex shader from a wind texture: the geometry is static
+   * (six vertices per cell with a role) and update() only refreshes the
+   * texture. Each arrow is centred on its cell and spans up to 80% of
+   * the cell's diameter at referenceSpeed.
    */
   function addArrowLayer({ color = 0xffffff, opacity = 0.8 } = {}) {
-    const centers = Float32Array.from(centerData);
     const positions = new Float32Array(3 * 6 * cellCounter);
     const cellIndex = new Float32Array(6 * cellCounter);
+    const role = new Float32Array(6 * cellCounter);
+    const radius = new Float32Array(6 * cellCounter);
+    for (let c = 0; c < cellCounter; c++) {
+      for (let k = 0; k < 6; k++) {
+        positions.set(centerData.slice(3 * c, 3 * c + 3), 18 * c + 3 * k);
+        cellIndex[6 * c + k] = c;
+        role[6 * c + k] = k;
+        radius[6 * c + k] = cellRadius[c];
+      }
+    }
     const arrowGeometry = new THREE.BufferGeometry();
-    const positionAttribute = new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage);
-    const cellAttribute = new THREE.BufferAttribute(cellIndex, 1).setUsage(THREE.DynamicDrawUsage);
-    arrowGeometry.setAttribute('position', positionAttribute);
-    arrowGeometry.setAttribute('cellIndex', cellAttribute);
-    arrowGeometry.setDrawRange(0, 0);
+    arrowGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    arrowGeometry.setAttribute('cellIndex', new THREE.BufferAttribute(cellIndex, 1));
+    arrowGeometry.setAttribute('role', new THREE.BufferAttribute(role, 1));
+    arrowGeometry.setAttribute('cellRadius', new THREE.BufferAttribute(radius, 1));
+    const windBuffer = new Float32Array(width * height * 4);
+    const windTexture = new THREE.DataTexture(windBuffer, width, height, THREE.RGBAFormat, THREE.FloatType);
+    windTexture.minFilter = THREE.NearestFilter;
+    windTexture.magFilter = THREE.NearestFilter;
+    const uniforms = { uWindTexture: { value: windTexture }, uReferenceSpeed: { value: 20 } };
     const arrowMaterial = new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity });
-    projectMaterial(arrowMaterial, 0.01);
+    projectMaterial(arrowMaterial, 0.01, {
+      uniforms,
+      head: `
+attribute float role;
+attribute float cellRadius;
+uniform sampler2D uWindTexture;
+uniform float uReferenceSpeed;
+`,
+      source: `
+  vec3 wind = texture2D(uWindTexture, uv).xyz;
+  vec3 tangentWind = wind - dot(wind, cellCenter) * cellCenter;
+  float speed = length(tangentWind);
+  vec3 dir = speed > 1e-6 ? tangentWind / speed : vec3(0.0);
+  vec3 side = cross(cellCenter, dir);
+  float len = 1.6 * cellRadius * min(1.0, speed / uReferenceSpeed);
+  float head = 0.35 * len;
+  vec3 tip = 1.004 * cellCenter + 0.5 * len * dir;
+  sourcePos = tip;
+  if (role < 0.5) sourcePos = 1.004 * cellCenter - 0.5 * len * dir;
+  else if (role > 2.5 && role < 3.5) sourcePos = tip - 0.866 * head * dir + 0.5 * head * side;
+  else if (role > 4.5) sourcePos = tip - 0.866 * head * dir - 0.5 * head * side;
+`,
+    });
     const lines = new THREE.LineSegments(arrowGeometry, arrowMaterial);
     lines.frustumCulled = false;
     lines.visible = false;
     scene.add(lines);
-    const cellSpan = 0.8 * Math.sqrt(4 * Math.PI / cellCounter);
-    const lift = 1.004;
 
-    function update(vectors, { referenceSpeed = 20, stride = 1 } = {}) {
-      let at = 0;
-      for (let c = 0; c < cellCounter; c += stride) {
-        const cx = centers[3 * c], cy = centers[3 * c + 1], cz = centers[3 * c + 2];
-        let dx = vectors[3 * c], dy = vectors[3 * c + 1], dz = vectors[3 * c + 2];
-        const radial = dx * cx + dy * cy + dz * cz;
-        dx -= radial * cx; dy -= radial * cy; dz -= radial * cz;
-        const speed = Math.hypot(dx, dy, dz);
-        if (!(speed > 1e-6)) continue;
-        const length = cellSpan * Math.min(1, speed / referenceSpeed);
-        dx /= speed; dy /= speed; dz /= speed;
-        const tx = cy * dz - cz * dy, ty = cz * dx - cx * dz, tz = cx * dy - cy * dx;
-        const half = 0.5 * length, head = 0.35 * length, along = 0.866 * head, across = 0.5 * head;
-        const tipX = lift * cx + half * dx, tipY = lift * cy + half * dy, tipZ = lift * cz + half * dz;
-        cellIndex.fill(c, at / 3, at / 3 + 6);
-        positions[at++] = lift * cx - half * dx; positions[at++] = lift * cy - half * dy; positions[at++] = lift * cz - half * dz;
-        positions[at++] = tipX; positions[at++] = tipY; positions[at++] = tipZ;
-        positions[at++] = tipX; positions[at++] = tipY; positions[at++] = tipZ;
-        positions[at++] = tipX - along * dx + across * tx; positions[at++] = tipY - along * dy + across * ty; positions[at++] = tipZ - along * dz + across * tz;
-        positions[at++] = tipX; positions[at++] = tipY; positions[at++] = tipZ;
-        positions[at++] = tipX - along * dx - across * tx; positions[at++] = tipY - along * dy - across * ty; positions[at++] = tipZ - along * dz - across * tz;
+    function update(vectors, { referenceSpeed = 20 } = {}) {
+      for (let c = 0; c < cellCounter; c++) {
+        windBuffer[4 * c] = vectors[3 * c];
+        windBuffer[4 * c + 1] = vectors[3 * c + 1];
+        windBuffer[4 * c + 2] = vectors[3 * c + 2];
       }
-      arrowGeometry.setDrawRange(0, at / 3);
-      positionAttribute.clearUpdateRanges(); positionAttribute.addUpdateRange(0, at); positionAttribute.needsUpdate = true;
-      cellAttribute.clearUpdateRanges(); cellAttribute.addUpdateRange(0, at / 3); cellAttribute.needsUpdate = true;
+      windTexture.needsUpdate = true;
+      uniforms.uReferenceSpeed.value = referenceSpeed;
     }
 
     return {
       update,
       setVisible(visible) { lines.visible = visible; },
-      dispose() { scene.remove(lines); arrowGeometry.dispose(); arrowMaterial.dispose(); },
+      dispose() { scene.remove(lines); arrowGeometry.dispose(); arrowMaterial.dispose(); windTexture.dispose(); },
     };
   }
 
