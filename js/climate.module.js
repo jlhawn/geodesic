@@ -2,6 +2,7 @@ import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
 import { seasonPhrase } from "./levels.module.js";
+import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot } from "./snapshots.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
 const TEMP_RANGE = { surface: [240, 310], 1000: [240, 310], 850: [230, 300], 700: [220, 290], 500: [210, 280], 250: [190, 250], 70: [180, 240], 10: [200, 280] };
@@ -275,6 +276,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       setup(message.N);
       document.getElementById('date').textContent = `model ready: ${message.cells} cells × ${message.layers} layers, dt ${message.dt} s, ${message.workers > 1 ? `${message.workers} workers` : 'one thread'}`;
     }
+    if (message.type === 'snapshotData') storeSnapshot(message);
     if (message.type === 'frame') {
       document.getElementById('progress').classList.remove('visible');
       latest = { ...message, N: ready.N, workers: ready.workers };
@@ -297,6 +299,45 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const kind = OVERLAYS[settings.overlay].kind;
     update({ palettes: { ...settings.palettes, [kind]: event.target.value } });
   });
+  const snapshotSelect = document.getElementById('snapshotSelect');
+  async function refreshSnapshots() {
+    const list = await listSnapshots();
+    snapshotSelect.replaceChildren(...list.map((meta) => { const option = document.createElement('option'); option.value = String(meta.id); option.textContent = `${meta.name} · day ${meta.day.toFixed(0)} · N=${meta.N} · ${(meta.bytes / 1048576).toFixed(0)} MB`; return option; }));
+    for (const button of document.querySelectorAll('[data-snapshot]')) if (button.dataset.snapshot !== 'save') button.disabled = list.length === 0;
+    return list;
+  }
+  async function storeSnapshot(message) {
+    const bytes = Object.values(message.arrays).reduce((n, b) => n + b.byteLength, 0) + (message.ocean ? Object.values(message.ocean).reduce((n, b) => n + b.byteLength, 0) : 0);
+    const name = `Day ${Math.floor(message.day)} · ${new Date().toLocaleString()}`;
+    const id = await saveSnapshot({ name, created: Date.now(), N: message.N, K: message.K, day: message.day, time: message.time, bytes }, { arrays: message.arrays, ocean: message.ocean });
+    await refreshSnapshots();
+    snapshotSelect.value = String(id);
+    document.getElementById('date').textContent = `saved "${name}"`;
+  }
+  async function restoreSnapshot(id) {
+    const { meta, data } = await getSnapshot(id);
+    if (!meta) return;
+    running = false;
+    clock.length = 0;
+    render();
+    const transfer = [...Object.values(data.arrays), ...(data.ocean ? Object.values(data.ocean) : [])];
+    worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, arrays: data.arrays, ocean: data.ocean } }, transfer);
+  }
+  refreshSnapshots();
+  for (const button of document.querySelectorAll('[data-snapshot]')) {
+    button.addEventListener('click', async () => {
+      const action = button.dataset.snapshot;
+      const id = Number(snapshotSelect.value);
+      if (action === 'save') { running = false; clock.length = 0; render(); worker.postMessage({ type: 'pause' }); worker.postMessage({ type: 'snapshot' }); return; }
+      if (action === 'latest') { const list = await refreshSnapshots(); if (list.length) await restoreSnapshot(list[0].id); return; }
+      if (!id) return;
+      if (action === 'restore') await restoreSnapshot(id);
+      else if (action === 'rename') { const { meta } = await getSnapshot(id); const name = prompt('Snapshot name', meta.name); if (name && name !== meta.name) { await renameSnapshot(id, name); await refreshSnapshots(); snapshotSelect.value = String(id); } }
+      else if (action === 'clone') { const { meta } = await getSnapshot(id); const name = prompt('Name for the copy', `${meta.name} (copy)`); if (name) { const copy = await cloneSnapshot(id, name); await refreshSnapshots(); snapshotSelect.value = String(copy); } }
+      else if (action === 'delete') { const { meta } = await getSnapshot(id); if (confirm(`Delete "${meta.name}"?`)) { await deleteSnapshot(id); await refreshSnapshots(); } }
+    });
+  }
+
   document.querySelector('[data-control="play"]').addEventListener('click', () => {
     running = !running;
     clock.length = 0;

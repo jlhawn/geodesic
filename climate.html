@@ -68,6 +68,11 @@
     </div>
     <span class="label">Graticule</span>
     <div class="options" data-setting="graticule"><button data-value="off">Off</button><button data-value="10">10°</button><button data-value="15">15°</button><button data-value="30">30°</button></div>
+    <span class="label">Snapshots</span>
+    <div class="options">
+      <button data-snapshot="save" title="pause and save the current state in this browser">Save</button><button data-snapshot="latest" title="restore the most recent snapshot">Restore latest</button>
+      <select id="snapshotSelect"></select><button data-snapshot="restore">Restore</button><button data-snapshot="rename">Rename</button><button data-snapshot="clone">Clone</button><button data-snapshot="delete">Delete</button>
+    </div>
     <span class="label">Projection</span>
     <div class="options" data-setting="projection"><button data-value="sphere">Sphere</button><button data-value="map">Equal Earth</button></div>
   </div>

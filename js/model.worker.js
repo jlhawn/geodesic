@@ -105,15 +105,66 @@ self.onmessage = async (event) => {
   } else if (message.type === 'level') {
     level = message.level;
     if (model) postFrame();
+  } else if (message.type === 'snapshot') {
+    if (model) await snapshot();
+  } else if (message.type === 'restore') {
+    try { await restore(message.snapshot); } catch (error) { status(`error: ${error && error.stack ? error.stack : error}`); }
   }
 };
 
+let lastStart = null, currentN = null;
+
+/*
+ * Pauses, refreshes the mirrors from the device if the engine keeps
+ * them there, and hands the page a copy of the state and the ocean as
+ * transferable buffers.
+ */
+async function snapshot() {
+  running = false;
+  if (model.sync) await model.sync();
+  const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
+  const arrays = Object.fromEntries(names.map((name, a) => [name, Float64Array.from(model.state[a]).buffer]));
+  let ocean = null;
+  if (model.ocean) {
+    const o = await model.ocean.serialize();
+    ocean = Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Float64Array.from(v).buffer]));
+  }
+  const transfer = [...Object.values(arrays), ...(ocean ? Object.values(ocean) : [])];
+  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, arrays, ocean }, transfer);
+  postFrame();
+}
+
+/*
+ * Restores a snapshot: into the running model when the resolution
+ * matches, otherwise by starting over with the snapshot as the saved
+ * state. The model stays paused afterwards.
+ */
+async function restore(snapshot) {
+  const saved = { N: snapshot.N, K: snapshot.K, day: snapshot.day, time: snapshot.time };
+  for (const [name, buffer] of Object.entries(snapshot.arrays)) saved[name] = new Float64Array(buffer);
+  if (snapshot.ocean) saved.ocean = Object.fromEntries(Object.entries(snapshot.ocean).map(([k, buffer]) => [k, new Float64Array(buffer)]));
+  running = false;
+  if (!model || saved.N !== currentN) { await start({ ...lastStart, saved, paused: true }); return; }
+  status('restoring the snapshot…', 0.8);
+  const init = initialState(model, saved, currentN);
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  if (model.load) model.load();
+  if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
+  model.time = saved.time;
+  lastFrameTime = model.time;
+  layerWinds.fill(null);
+  self.postMessage({ type: 'ready', N: currentN, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers: lastStart?.workers ?? 1 });
+  await postFrame();
+}
+
 async function start(message) {
-  let saved = null;
-  if (message.from) {
+  lastStart = message;
+  let saved = message.saved ?? null;
+  if (!saved && message.from) {
     saved = await fetchWithProgress(message.from, 0, 0.5);
   }
   const N = message.N ?? saved?.N ?? 16;
+  currentN = N;
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   dt = message.dt ?? 1350 * 16 / N;
   stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round((gpuWanted ? 24 : 8) * 16 / N));
