@@ -775,7 +775,7 @@ uniform float uAmbient;
    * A layer of arrows, one per cell, drawn in the cell's tangent plane
    * by the vertex shader from a wind texture: the geometry is static
    * (six vertices per cell with a role) and update() only refreshes the
-   * texture. Each arrow is centred on its cell and spans up to 80% of
+   * texture. Each arrow is centred on its cell and spans up to half of
    * the cell's diameter at referenceSpeed.
    */
   function addArrowLayer({ color = 0xffffff, opacity = 0.8 } = {}) {
@@ -816,7 +816,7 @@ uniform float uReferenceSpeed;
   float speed = length(tangentWind);
   vec3 dir = speed > 1e-6 ? tangentWind / speed : vec3(0.0);
   vec3 side = cross(cellCenter, dir);
-  float len = 1.6 * cellRadius * min(1.0, speed / uReferenceSpeed);
+  float len = cellRadius * min(1.0, speed / uReferenceSpeed);
   float head = 0.35 * len;
   vec3 tip = 1.004 * cellCenter + 0.5 * len * dir;
   sourcePos = tip;
