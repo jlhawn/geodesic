@@ -534,7 +534,7 @@ uniform float uAmbient;
   window.addEventListener('keydown', (e) => {
     if (e.altKey || e.ctrlKey || e.metaKey || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
     const step = e.shiftKey ? 120 : 30;
-    const move = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+    const move = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
     if (!move) return;
     e.preventDefault();
     panBy(move[0], move[1]);
