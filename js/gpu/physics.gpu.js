@@ -131,6 +131,7 @@ export const PHYSICS_KERNELS = {
     IN[S_TH + idx] += dt * netFlux[k] / (CP * mass) / D[D_EXM + idx];
   }
   IN[S_Q + bottom] += dt * evap * GRAV / (pi * LV[L_DS + K - 1]);
+  PH[PH_SWDN + i] = incident * (direct + diffuse + returned * upward / (1.0 - adif * returned));
   PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbed + ozoneHeating; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = incident - absorbed; PH[PH_ADIF + i] = adif;
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = ts; var h = ice;

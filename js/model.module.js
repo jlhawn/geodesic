@@ -51,7 +51,7 @@ export function createModel(gridOrMesh, {
   const nu4 = Math.pow(spacing / Math.PI, 4) / (nu4Hours * 3600);
   const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, splitClosure: true, buffers: buffers ? buffers.core : null, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
-  const radiation = createRadiation(mesh, core, radiationOptions);
+  const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, ...radiationOptions });
   const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, ...boundaryLayerOptions }) : null;
   const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, ...(boundaryLayer ? { pblRate: 0 } : {}), buffers: buffers ? buffers.surface : null, ...surfaceOptions });
   const moistPhysics = createMoistPhysics(mesh, core, { buffers: buffers ? buffers.moist : null, ...moistOptions });
@@ -118,7 +118,7 @@ export function createModel(gridOrMesh, {
   let rk4 = null;
   const model = {
     mesh, core, radiation, surface, moist: moistPhysics, seaIce, ocean, boundaryLayer, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
-    shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, ice: seaIce.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
+    shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
   model.step = function step(dt) {

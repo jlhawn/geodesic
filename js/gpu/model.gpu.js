@@ -84,6 +84,7 @@ export async function createGpuModel(gridOrMesh, {
       sums.absorbedSolar += a * ph.ABS[i]; sums.outgoingLongwave += a * ph.OLR[i]; sums.sensibleHeat += a * ph.SH[i];
       sums.evaporation += a * ph.EVAP[i]; sums.insolation += a * ph.INS[i]; sums.reflectedSolar += a * ph.REFL[i];
     }
+    radiationCpu.outgoing.set(ph.OLR.subarray(0, C)); radiationCpu.surfaceShortwave.set(ph.SWDN.subarray(0, C));
     for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));
     const interval = model.time - lastPrecipTime;
     gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH.RAIN, new Float32Array(C));

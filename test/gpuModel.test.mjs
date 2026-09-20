@@ -39,6 +39,10 @@ test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailab
   assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} K at ${ts.at}`);
   assert.ok(ice.maxDiff < 1e-3, `ice max ${ice.maxDiff} m`);
   assert.ok(u.maxDiff < 1e-2, `wind max ${u.maxDiff} m/s`);
+  const { gpu } = await pair(6, 1, 900);
+  const physics = await gpu.downloadPhysics();
+  const olr = stats(model.radiation.outgoing, physics.OLR.subarray(0, model.mesh.nCells)), sw = stats(model.radiation.surfaceShortwave, physics.SWDN.subarray(0, model.mesh.nCells));
+  assert.ok(olr.rmsRel < 1e-5 && sw.rmsRel < 1e-5, `per-cell OLR rms ${olr.rmsRel}, surface shortwave rms ${sw.rmsRel}`);
 });
 
 test('twelve full GPU steps track the CPU model and its energy budget', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

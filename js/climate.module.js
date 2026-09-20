@@ -17,10 +17,12 @@ const OVERLAYS = {
   clouds: { label: 'Clouds', unit: 'g/m²', kind: 'clouds', field: 'cloud', scale: 1000, range: () => [0, 100] },
   ice: { label: 'Ice', unit: 'm', kind: 'sequential', field: 'ice', scale: 1, range: () => [0, 3] },
   albedo: { label: 'Albedo', unit: '', kind: 'sequential', field: 'albedo', scale: 1, range: () => [0, 0.8] },
+  swdown: { label: 'SW↓', unit: 'W/m²', kind: 'sequential', field: 'shortwave', scale: 1, range: () => [0, 1200] },
+  olr: { label: 'OLR', unit: 'W/m²', kind: 'sequential', field: 'longwave', scale: 1, range: () => [100, 320] },
   mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'ps', scale: 0.01, range: () => [960, 1060] },
   none: { label: 'None' },
 };
-const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Total precipitable water', tcw: 'Total cloud water', clouds: 'Cloud cover over the surface', ice: 'Sea ice thickness', albedo: 'Surface albedo', mslp: 'Mean sea level pressure' };
+const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Total precipitable water', tcw: 'Total cloud water', clouds: 'Cloud cover over the surface', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Shortwave reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Mean sea level pressure' };
 
 /*
  * The cloud view: open water is ocean blue, ice whitens with thickness,
@@ -190,8 +192,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     viewer.updateColors(rgb);
     scaleRow.style.visibility = 'visible';
     renderScale(stops, min, max, overlay.unit);
-    const columnField = ['ps', 'precipitation', 'water', 'cloud', 'ice', 'albedo'].includes(overlay.field);
-    document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} @ ${columnField ? 'Surface' : levelLabel(settings.level)} · wind @ ${levelLabel(settings.level)}`;
+    const columnField = ['ps', 'precipitation', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave'].includes(overlay.field);
+    document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]}${columnField ? '' : ` @ ${levelLabel(settings.level)}`} · wind @ ${levelLabel(settings.level)}`;
   }
 
   function paintWind() {

@@ -26,6 +26,7 @@ async function postFrame() {
   const layerWind = (k) => layerWinds[k] ??= cellVector(mesh, u.subarray(k * E, (k + 1) * E), new Float64Array(3 * mesh.nCells));
   const q = state[4], qc = state[5];
   const ice = Float32Array.from(state[6]), albedo = Float32Array.from(state[6], (h) => model.seaIce.albedo(h));
+  const shortwave = Float32Array.from(model.radiation.surfaceShortwave), longwave = Float32Array.from(model.radiation.outgoing);
   const precipitation = Float32Array.from(model.moist.precipitation);
   const fields = levelFields(core, pi, theta, layerWind, level, q);
   const ps = Float32Array.from(pi), ts = Float32Array.from(surfaceT);
@@ -34,8 +35,8 @@ async function postFrame() {
   const interval = time - lastFrameTime;
   lastFrameTime = time;
   for (let i = 0; i < mesh.nCells; i++) precipitation[i] = interval > 0 ? precipitation[i] / interval * 86400 : 0;
-  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, ts, ...fields, precipitation, water, cloud, ice, albedo, diagnostics, engine: model.engine ?? 'cpu' };
-  self.postMessage(message, [ps.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer]);
+  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, ts, ...fields, precipitation, water, cloud, ice, albedo, shortwave, longwave, diagnostics, engine: model.engine ?? 'cpu' };
+  self.postMessage(message, [ps.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer, shortwave.buffer, longwave.buffer]);
 }
 
 async function loop() {
