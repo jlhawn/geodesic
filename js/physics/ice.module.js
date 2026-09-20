@@ -36,7 +36,7 @@ export function openWaterAlbedo(mu) {
 export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.5, fullAlbedoThickness = 0.5,
-  oceanHeatFlux = 0, oceanDiffusivity = 0.3, buffers = null,
+  oceanHeatFlux = 0, oceanDiffusivity = 0.45, buffers = null,
 } = {}) {
   const C = mesh.nCells;
   const latent = iceDensity * latentHeatFusion;

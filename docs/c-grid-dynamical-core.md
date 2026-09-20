@@ -975,7 +975,7 @@ albedo contrast at the latitudes that matter (zenith-angle-dependent
 open-water albedo, ice nearer 0.5), and (c) tuning at N=16, where the
 climate is the model's own. Tuning runs at N=8 are not representative.
 
-### M11 — A stable ice edge: ocean diffusion and zenith albedo — done (tuning)
+### M11 — A stable ice edge: ocean diffusion and zenith albedo — done
 
 Three changes to `js/physics/ice.module.js` and one to radiation,
 aimed at the two feedbacks that ran away in M10:
@@ -1011,8 +1011,47 @@ aimed at the two feedbacks that ran away in M10:
   per cell.
 - **Ice albedo 0.5**, the value of bare summer sea ice, instead of 0.6.
 - **Tuning at N=16 only.** 400 days cost 9 minutes on 10 workers;
-  `scratchpad/trisk/annual.sh <log>` prints the annual means and
-  `zonal.mjs <state.json>` the 10° bands of temperature, ice and cloud.
+  `scratchpad/trisk/annual.sh <log>` prints the annual means,
+  `zonal.mjs <state.json>` the 10° bands of temperature, ice and cloud,
+  and `eke.mjs <state.json>` the eddy kinetic energy by band and
+  hemisphere; the run log carries the per-hemisphere eddy energy.
+
+Tuning at N=16 (400–500-day runs, means of the last year; cloud
+optical scale c in m²/kg, ocean diffusivity D in W/m²/K, vapour
+coupling 0.55 throughout):
+
+| c | D | Ts (K) | solar − OLR | albedo | ice, annual (range) | note |
+|---|---|---|---|---|---|---|
+| 60 | 0.3 | 290.2 | +12 | 0.26 | 13 % (6–19) | still warming toward ~296; no runaway either way |
+| 100 | 0.3 | 286.9 | +5.5 | 0.30 | 17 % (10–20) | |
+| 150 | 0.3 | 284.0 | +3 | 0.32 | 20 % (13–24) | |
+| 100 | 0.6 | 291.0 | +13 | 0.25 | 9 % (3–16) | summer cap melts away, warming |
+| 120 | 0.6 | 289.9 | +11 | 0.26 | 10 % (4–16) | same |
+| 115 | 0.45 | 289.6 | +6 | 0.28 | 11 % (7–18) | equilibrated ~290 |
+| 115 | 0.45, 100 m slab | 289.4 | +9 | 0.28 | 10 % (6–16) | summer storm track unchanged |
+| **120** | **0.45** | 289.5 | +7, within 2 by day 500 | 0.28 | 11 % (6–18) | the defaults; 500 days, 12 min on 10 workers |
+
+The diffusive ocean removed the runaway: at every setting above the
+ice edge finds a seasonal equilibrium, with 2–3 m of ice surviving the
+summer at the pole when D ≤ 0.45. The direct/diffuse split of the
+surface reflection changed the climate by under 0.2 K; the warmth of
+the c = 60 climate is the thin tropical cloud (6–20 g/m² under
+Betts–Miller convection that rains without detraining condensate,
+against 100–250 g/m² in the storm tracks), so the planetary albedo is
+the lever and the cloud scale is what sets it. Doubling D melts the
+summer cap and re-arms the ice–albedo feedback. The mixed-layer depth
+does not change the seasonal cycle of the storm tracks: the summer
+hemisphere's eddy kinetic energy at 250 hPa is a third to a half of
+the winter's at both 50 and 100 m, which is Earth's northern-hemisphere
+seasonality; the southern hemisphere's year-round storm track needs
+a permanently cold polar continent that an aquaplanet does not have.
+Chosen defaults: c = 120, D = 0.45. Their climate at day 500 (northern
+midsummer): tropics 299–300 K, summer subtropics 304 K, the winter
+hemisphere iced to 55° with 3.5 m at the pole, the summer hemisphere
+ice-free with its pole at 280 K, storm-track cloud 130–270 g/m² and
+tropical cloud 4–40 g/m². Eddy kinetic energy at 250 hPa runs 500–680
+m²/s² in the winter hemisphere and 210–290 in the summer one.
+
 
 ## 7. Module layout in this repo
 
