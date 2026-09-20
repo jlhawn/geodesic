@@ -15,7 +15,7 @@ const OVERLAYS = {
   precip: { label: 'Precip', unit: 'mm/day', kind: 'sequential', field: 'precipitation', scale: 1, range: () => [0, 30] },
   tpw: { label: 'TPW', unit: 'kg/m²', kind: 'sequential', field: 'water', scale: 1, range: () => [0, 60] },
   tcw: { label: 'TCW', unit: 'g/m²', kind: 'sequential', field: 'cloud', scale: 1000, range: () => [0, 500] },
-  clouds: { label: 'Clouds', unit: 'g/m²', kind: 'clouds', field: 'cloud', scale: 1000, range: () => [0, 100] },
+  clouds: { label: 'Satellite', unit: 'g/m²', kind: 'clouds', field: 'cloud', scale: 1000, range: () => [0, 100] },
   ice: { label: 'Ice', unit: 'm', kind: 'sequential', field: 'ice', scale: 1, range: () => [0, 3] },
   albedo: { label: 'Albedo', unit: '', kind: 'sequential', field: 'albedo', scale: 1, range: () => [0, 0.8] },
   swdown: { label: 'SW↓', unit: 'W/m²', kind: 'sequential', field: 'shortwave', scale: 1, range: () => [0, 1200] },
@@ -23,7 +23,7 @@ const OVERLAYS = {
   mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'ps', scale: 0.01, range: () => [960, 1060] },
   none: { label: 'None' },
 };
-const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Total precipitable water', tcw: 'Total cloud water', clouds: 'Cloud cover over the surface', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Shortwave reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Mean sea level pressure' };
+const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Total precipitable water', tcw: 'Total cloud water', clouds: 'Satellite view: cloud over ocean and ice', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Shortwave reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Mean sea level pressure' };
 
 /*
  * The cloud view: open water is ocean blue, ice whitens with thickness,
@@ -120,23 +120,46 @@ function formatDate(time) {
  * controls: files of the same tag listed by the server's directory
  * index, ordered by day.
  */
-async function siblingStates(from) {
-  const match = from.match(/^(.*\/)?([^/]+)_state_day(\d+)\.json$/);
-  if (!match) return null;
-  const [, directory = '', tag, day] = match;
-  const html = await (await fetch(directory || './')).text();
-  const days = [...html.matchAll(new RegExp(`href="${tag}_state_day(\\d+)\\.json"`, 'g'))].map((m) => Number(m[1])).sort((a, b) => a - b);
-  const at = days.indexOf(Number(day));
-  const url = (d) => `${directory}${tag}_state_day${String(d).padStart(3, '0')}.json`;
-  return { prev: at > 0 ? url(days[at - 1]) : null, next: at >= 0 && at < days.length - 1 ? url(days[at + 1]) : null };
+/*
+ * The saved runs the server lists in its runs/ directory index, as
+ * built-in snapshots the page can download into its own store.
+ */
+async function builtinSnapshots() {
+  try {
+    const html = await (await fetch('runs/')).text();
+    const files = [...new Set([...html.matchAll(/href="([^"]+_state_day\d+\.json)"/g)].map((m) => m[1]))].sort();
+    return files.map((file) => ({ file, url: new URL(`runs/${file}`, location.href).href, name: file.replace(/\.json$/, '') }));
+  } catch { return []; }
 }
+
+const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'none']);
+
+const VIEW_NOTES = [
+  ['Animate', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Arrows draw one vector per cell; None hides the motion.'],
+  ['Height', 'The pressure level shown by the wind, temperature and humidity views and followed by the animation: Sfc is the lowest layer, about 60 m up; the others are hPa. Column views hide it and use the surface wind.'],
+  ['Wind', 'Speed at the chosen height.'],
+  ['Temp', 'Air temperature at the chosen height.'],
+  ['RH', 'Relative humidity at the chosen height.'],
+  ['Precip', 'Rain rate over the last frame, from convection and from cloud that rained out.'],
+  ['TPW', 'Total precipitable water: all the vapour in the column, as the depth of rain it would make.'],
+  ['TCW', 'Total cloud water: all the condensed water in the column.'],
+  ['Satellite', 'What a satellite would see: ocean blue, ice whitening with thickness, and cloud as white whose opacity follows the cloud water.'],
+  ['Ice', 'Sea-ice thickness.'],
+  ['Albedo', 'The surface albedo for diffuse light: 0.06 over water, rising to 0.5 over half a metre of ice.'],
+  ['SW↓', 'Shortwave sunlight reaching the surface, direct and diffuse, before the surface reflects its share.'],
+  ['OLR', 'Outgoing longwave at the top of the atmosphere: low over cold cloud tops and the poles, high over clear warm regions.'],
+  ['MSLP', 'Surface pressure; with no terrain it is the sea-level pressure.'],
+  ['Isobars / Height lines', 'Contours of surface pressure at the surface, of geopotential height on a pressure level, at the chosen interval.'],
+  ['Graticule', 'Parallels and meridians at the chosen spacing; the meridians stop at the outermost parallel.'],
+  ['Projection', 'The globe, or the Equal Earth map; both can be dragged to any orientation.'],
+  ['Snapshots', 'Save the paused state in this browser, restore it later, or download one of the runs saved on the server.'],
+];
 
 export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false } = {}) {
   const settings = loadSettings();
   const panel = document.getElementById('panel');
-  const note = document.getElementById('note');
-  const status = document.getElementById('status');
-  let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, rgb = null, running = !paused, siblings = null;
+  const activeLevel = () => (HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
+  let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, rgb = null, running = !paused;
   const clock = [];
   function simulatedHoursPerMinute() {
     if (clock.length < 2) return null;
@@ -164,11 +187,11 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (!overlay.field) {
       rgb.fill(LINEAR[40]);
       viewer.updateColors(rgb);
-      scaleRow.style.visibility = 'hidden';
-      document.getElementById('data').textContent = `Wind @ ${levelLabel(settings.level)} · no overlay`;
+      scaleRow.classList.add('hidden');
+      document.getElementById('data').textContent = `Wind @ ${levelLabel(activeLevel())} · no overlay`;
       return;
     }
-    const [min, max] = overlay.range(settings.level);
+    const [min, max] = overlay.range(activeLevel());
     const values = latest[overlay.field];
     if (overlay.kind === 'clouds') {
       const ice = latest.ice;
@@ -180,9 +203,9 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
         }
       }
       viewer.updateColors(rgb);
-      scaleRow.style.visibility = 'visible';
+      scaleRow.classList.remove('hidden');
       renderScale(CLOUD_STOPS, min, max, overlay.unit);
-      document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(settings.level)}`;
+      document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(activeLevel())}`;
       return;
     }
     const stops = PALETTES[overlay.kind][settings.palettes[overlay.kind]] ?? Object.values(PALETTES[overlay.kind])[0];
@@ -191,19 +214,20 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       rgb[3 * i] = LINEAR[rgb[3 * i]]; rgb[3 * i + 1] = LINEAR[rgb[3 * i + 1]]; rgb[3 * i + 2] = LINEAR[rgb[3 * i + 2]];
     }
     viewer.updateColors(rgb);
-    scaleRow.style.visibility = 'visible';
+    scaleRow.classList.remove('hidden');
     renderScale(stops, min, max, overlay.unit);
     const columnField = ['ps', 'precipitation', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave'].includes(overlay.field);
-    document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]}${columnField ? '' : ` @ ${levelLabel(settings.level)}`} · wind @ ${levelLabel(settings.level)}`;
+    document.getElementById('data').textContent = columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(activeLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(activeLevel())}`;
   }
 
   function paintWind() {
-    const reference = REFERENCE_SPEED[settings.level];
+    const reference = REFERENCE_SPEED[activeLevel()];
     arrows.setVisible(settings.animate === 'arrows');
     particles.setVisible(settings.animate === 'particles');
     if (settings.animate === 'arrows') arrows.update(latest.vector, { referenceSpeed: reference, stride: Math.ceil(grid.size / 4000) });
     if (settings.animate === 'particles') particles.setField(latest.vector, reference);
-    note.textContent = settings.animate === 'particles' ? `trails brighten toward ${reference} m/s` : settings.animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
+    const note = settings.animate === 'particles' ? `trails brighten toward ${reference} m/s` : settings.animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
+    if (note) document.getElementById('data').textContent += ` · ${note}`;
   }
 
   function paintGraticule() {
@@ -215,7 +239,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   function paintIsobars() {
     isobars.setVisible(settings.isobars === 'on');
     if (settings.isobars !== 'on') return;
-    const isolines = isolinesFor(settings.level);
+    const isolines = isolinesFor(activeLevel());
     isobars.setColor(settings.overlay === 'none' ? 0xffffff : 0x000000);
     isobars.update(isolines.field(latest), Number(settings[isolines.setting]));
   }
@@ -224,7 +248,10 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     for (const group of panel.querySelectorAll('.options[data-setting]')) {
       for (const button of group.querySelectorAll('button[data-value]')) button.classList.toggle('selected', button.dataset.value === String(settings[group.dataset.setting]));
     }
-    const isolines = isolinesFor(settings.level);
+    const isolines = isolinesFor(activeLevel());
+    const heights = HEIGHT_OVERLAYS.has(settings.overlay);
+    document.getElementById('heightLabel').classList.toggle('hidden', !heights);
+    document.getElementById('heightOptions').classList.toggle('hidden', !heights);
     document.getElementById('isolineLabel').textContent = isolines.label;
     document.getElementById('isolineUnit').textContent = isolines.unit;
     const stepSelect = document.getElementById('isolineStep');
@@ -248,13 +275,37 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     document.getElementById('date').textContent = formatDate(latest.time);
     const rate = simulatedHoursPerMinute();
     document.getElementById('rate').textContent = !running ? 'paused' : rate === null ? 'measuring…' : `${rate.toFixed(1)} simulated hours per minute`;
-    status.textContent = `ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa · Ts ${d.meanSurfaceT.toFixed(1)} K · solar ${d.absorbedSolar.toFixed(0)} / OLR ${d.outgoingLongwave.toFixed(0)} W/m² · LH ${d.latentHeat.toFixed(0)} SH ${d.sensibleHeat.toFixed(0)} · rain ${(d.precipitation * 86400).toFixed(2)} mm/d · TPW ${d.columnWater.toFixed(1)} · TCW ${(1000 * d.columnCloud).toFixed(0)} g/m² · ice ${(100 * d.iceFraction).toFixed(0)}% · albedo ${d.planetaryAlbedo.toFixed(2)} · N=${latest.N ?? ''} ${latest.engine === 'gpu' ? '· GPU' : latest.workers > 1 ? `· ${latest.workers} workers` : ''}`;
+    if (!document.getElementById('modelModal').classList.contains('hidden')) renderModelDetails();
+  }
+
+  function renderModelDetails() {
+    if (!latest) return;
+    const d = latest.diagnostics;
+    const rows = [
+      ['Surface pressure', `<b>${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa</b> — the lowest and highest on the globe right now.`],
+      ['Surface temperature', `<b>${d.meanSurfaceT.toFixed(1)} K</b> — area-weighted global mean of the skin temperature.`],
+      ['Absorbed solar', `<b>${d.absorbedSolar.toFixed(0)} W/m²</b> — global mean sunlight absorbed by atmosphere and surface.`],
+      ['Outgoing longwave', `<b>${d.outgoingLongwave.toFixed(0)} W/m²</b> — infrared leaving the top; absorbed solar minus this is the planet's energy imbalance, <b>${(d.absorbedSolar - d.outgoingLongwave).toFixed(0)} W/m²</b>.`],
+      ['Latent heat', `<b>${d.latentHeat.toFixed(0)} W/m²</b> — heat leaving the surface as evaporation.`],
+      ['Sensible heat', `<b>${d.sensibleHeat.toFixed(0)} W/m²</b> — heat conducted from the surface into the air.`],
+      ['Precipitation', `<b>${(d.precipitation * 86400).toFixed(2)} mm/day</b> — global mean rain rate over the last frame.`],
+      ['Precipitable water', `<b>${d.columnWater.toFixed(1)} kg/m²</b> — all the vapour in a column, global mean; the same number in mm of rain.`],
+      ['Cloud water', `<b>${(1000 * d.columnCloud).toFixed(0)} g/m²</b> — condensed water in a column, global mean.`],
+      ['Sea ice', `<b>${(100 * d.iceFraction).toFixed(0)}%</b> of the area${d.iceThickness ? `, <b>${d.iceThickness.toFixed(2)} m</b> thick on average` : ''}.`],
+      ['Planetary albedo', `<b>${d.planetaryAlbedo.toFixed(2)}</b> — the fraction of sunlight reflected back to space by clouds, ice and water.`],
+      ['Resolution', `<b>N=${latest.N}</b> — icosahedral grid, cells about <b>${(7720 / latest.N).toFixed(0)} km</b> across, ${ready ? `${ready.cells.toLocaleString()} cells × ${ready.layers} layers` : ''}.`],
+      ['Time step', ready ? `<b>${ready.dt} s</b> per step.` : ''],
+      ['Engine', latest.engine === 'gpu' ? '<b>GPU</b> — every kernel runs on the graphics processor through WebGPU in single precision.' : `<b>${latest.workers > 1 ? `${latest.workers} worker threads` : 'one thread'}</b> — the CPU engine in double precision.`],
+    ];
+    if (d.oceanUpperDepth !== undefined) rows.push(['Ocean', `upper layer <b>${d.oceanUpperDepth.toFixed(0)} m</b> deep on average, currents to <b>${d.oceanSpeed.toFixed(2)} m/s</b>, thermocline <b>${d.oceanThermoclineT.toFixed(1)} K</b>.`]);
+    document.getElementById('modelDetails').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   }
 
   function update(changes) {
+    const before = activeLevel();
     Object.assign(settings, changes);
     saveSettings(settings);
-    if ('level' in changes) worker.postMessage({ type: 'level', level: settings.level });
+    if (activeLevel() !== before) worker.postMessage({ type: 'level', level: activeLevel() });
     if ('projection' in changes && viewer) viewer.setProjection(settings.projection);
     render();
   }
@@ -286,7 +337,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     }
   };
   worker.onerror = (error) => { document.getElementById('date').textContent = `worker error: ${error.message}`; };
-  worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null, workers: crossOriginIsolated ? workers : 1, engine, paused, level: settings.level });
+  worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null, workers: crossOriginIsolated ? workers : 1, engine, paused, level: activeLevel() });
 
   for (const group of panel.querySelectorAll('.options[data-setting]')) {
     group.addEventListener('click', (event) => {
@@ -299,19 +350,60 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const kind = OVERLAYS[settings.overlay].kind;
     update({ palettes: { ...settings.palettes, [kind]: event.target.value } });
   });
-  const snapshotSelect = document.getElementById('snapshotSelect');
+  const localList = document.getElementById('localList'), builtinList = document.getElementById('builtinList');
+  const item = (name, meta, tag, buttons) => {
+    const li = document.createElement('li');
+    const label = document.createElement('span'); label.className = 'name'; label.textContent = name; li.append(label);
+    if (tag) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = tag; li.append(t); }
+    const m = document.createElement('span'); m.className = 'meta'; m.textContent = meta; li.append(m);
+    for (const [text, handler] of buttons) { const b = document.createElement('button'); b.className = 'flat'; b.textContent = text; b.addEventListener('click', handler); li.append(b); }
+    return li;
+  };
+  const toSnapshot = (saved, url = null) => {
+    const arrays = Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].filter((k) => saved[k]).map((k) => [k, Float64Array.from(saved[k]).buffer]));
+    const ocean = saved.ocean ? Object.fromEntries(Object.entries(saved.ocean).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
+    const bytes = Object.values(arrays).reduce((n, b) => n + b.byteLength, 0) + (ocean ? Object.values(ocean).reduce((n, b) => n + b.byteLength, 0) : 0);
+    return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, bytes, source: url }, data: { arrays, ocean } };
+  };
   async function refreshSnapshots() {
     const list = await listSnapshots();
-    snapshotSelect.replaceChildren(...list.map((meta) => { const option = document.createElement('option'); option.value = String(meta.id); option.textContent = `${meta.name} · day ${meta.day.toFixed(0)} · N=${meta.N} · ${(meta.bytes / 1048576).toFixed(0)} MB`; return option; }));
-    for (const button of document.querySelectorAll('[data-snapshot]')) if (button.dataset.snapshot !== 'save') button.disabled = list.length === 0;
+    localList.replaceChildren(...list.map((meta) => item(meta.name, `day ${meta.day.toFixed(0)} · N=${meta.N} · ${(meta.bytes / 1048576).toFixed(0)} MB`, meta.source ? 'from the server' : '', [
+      ['Restore', () => restoreSnapshot(meta.id)],
+      ['Rename', async () => { const name = prompt('Snapshot name', meta.name); if (name && name !== meta.name) { await renameSnapshot(meta.id, name); refreshSnapshots(); } }],
+      ['Clone', async () => { const name = prompt('Name for the copy', `${meta.name} (copy)`); if (name) { await cloneSnapshot(meta.id, name); refreshSnapshots(); } }],
+      ['Delete', async () => { if (confirm(`Delete "${meta.name}"?`)) { await deleteSnapshot(meta.id); refreshSnapshots(); } }],
+    ])));
+    document.getElementById('localEmpty').style.display = list.length ? 'none' : '';
+    for (const button of document.querySelectorAll('[data-snapshot="latest"]')) button.disabled = list.length === 0;
+    const defaultUrl = from ? new URL(from, location.href).href : null;
+    const builtin = (await builtinSnapshots()).sort((a, b) => (b.url === defaultUrl) - (a.url === defaultUrl));
+    builtinList.replaceChildren(...builtin.map((entry) => {
+      const local = list.find((meta) => meta.source === entry.url);
+      const day = entry.file.match(/_state_day(\d+)/)?.[1];
+      return item(entry.name, `${day ? `day ${Number(day)}` : ''}${entry.url === defaultUrl ? ' · the page default' : ''}`, local ? 'downloaded' : '', [
+        [local ? 'Restore' : 'Download and restore', async () => { const id = local ? local.id : await download(entry); if (id) restoreSnapshot(id); }],
+        ...(local ? [] : [['Download', async () => { await download(entry); }]]),
+      ]);
+    }));
+    document.getElementById('builtinNote').style.display = builtin.length ? '' : 'none';
     return list;
   }
+  async function download(entry) {
+    try {
+      document.getElementById('date').textContent = `downloading ${entry.name}…`;
+      const saved = await (await fetch(entry.url)).json();
+      const { meta, data } = toSnapshot(saved, entry.url);
+      const id = await saveSnapshot({ name: entry.name, created: Date.now(), ...meta }, data);
+      await refreshSnapshots();
+      render();
+      return id;
+    } catch (error) { document.getElementById('date').textContent = `download failed: ${error.message}`; return null; }
+  }
   async function storeSnapshot(message) {
-    const bytes = Object.values(message.arrays).reduce((n, b) => n + b.byteLength, 0) + (message.ocean ? Object.values(message.ocean).reduce((n, b) => n + b.byteLength, 0) : 0);
+    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? Object.fromEntries(Object.entries(message.ocean).map(([k, b]) => [k, new Float64Array(b)])) : null });
     const name = `Day ${Math.floor(message.day)} · ${new Date().toLocaleString()}`;
-    const id = await saveSnapshot({ name, created: Date.now(), N: message.N, K: message.K, day: message.day, time: message.time, bytes }, { arrays: message.arrays, ocean: message.ocean });
+    await saveSnapshot({ name, created: Date.now(), ...meta }, data);
     await refreshSnapshots();
-    snapshotSelect.value = String(id);
     document.getElementById('date').textContent = `saved "${name}"`;
   }
   async function restoreSnapshot(id) {
@@ -319,24 +411,25 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (!meta) return;
     running = false;
     clock.length = 0;
+    closeModals();
     render();
     const transfer = [...Object.values(data.arrays), ...(data.ocean ? Object.values(data.ocean) : [])];
     worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, arrays: data.arrays, ocean: data.ocean } }, transfer);
   }
-  refreshSnapshots();
   for (const button of document.querySelectorAll('[data-snapshot]')) {
     button.addEventListener('click', async () => {
       const action = button.dataset.snapshot;
-      const id = Number(snapshotSelect.value);
-      if (action === 'save') { running = false; clock.length = 0; render(); worker.postMessage({ type: 'pause' }); worker.postMessage({ type: 'snapshot' }); return; }
-      if (action === 'latest') { const list = await refreshSnapshots(); if (list.length) await restoreSnapshot(list[0].id); return; }
-      if (!id) return;
-      if (action === 'restore') await restoreSnapshot(id);
-      else if (action === 'rename') { const { meta } = await getSnapshot(id); const name = prompt('Snapshot name', meta.name); if (name && name !== meta.name) { await renameSnapshot(id, name); await refreshSnapshots(); snapshotSelect.value = String(id); } }
-      else if (action === 'clone') { const { meta } = await getSnapshot(id); const name = prompt('Name for the copy', `${meta.name} (copy)`); if (name) { const copy = await cloneSnapshot(id, name); await refreshSnapshots(); snapshotSelect.value = String(copy); } }
-      else if (action === 'delete') { const { meta } = await getSnapshot(id); if (confirm(`Delete "${meta.name}"?`)) { await deleteSnapshot(id); await refreshSnapshots(); } }
+      if (action === 'save') { running = false; clock.length = 0; render(); worker.postMessage({ type: 'pause' }); worker.postMessage({ type: 'snapshot' }); }
+      if (action === 'latest') { const list = await listSnapshots(); if (list.length) await restoreSnapshot(list[0].id); }
     });
   }
+  const closeModals = () => { for (const modal of document.querySelectorAll('.modal')) modal.classList.add('hidden'); };
+  document.getElementById('modelButton').addEventListener('click', () => { renderModelDetails(); document.getElementById('modelModal').classList.remove('hidden'); });
+  document.getElementById('snapshotsButton').addEventListener('click', () => { refreshSnapshots(); document.getElementById('snapshotModal').classList.remove('hidden'); });
+  for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', closeModals);
+  for (const modal of document.querySelectorAll('.modal')) modal.addEventListener('click', (event) => { if (event.target === modal) closeModals(); });
+  window.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeModals(); });
+  document.getElementById('viewDetails').innerHTML = VIEW_NOTES.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
 
   document.querySelector('[data-control="play"]').addEventListener('click', () => {
     running = !running;
@@ -344,16 +437,6 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     worker.postMessage({ type: running ? 'resume' : 'pause' });
     render();
   });
-  const step = async (direction) => {
-    siblings ??= from ? await siblingStates(from) : {};
-    const target = siblings[direction];
-    if (!target) { note.textContent = `no ${direction === 'prev' ? 'earlier' : 'later'} saved day`; return; }
-    const params = new URLSearchParams(location.search);
-    params.set('snapshot', target);
-    location.search = params.toString();
-  };
-  document.querySelector('[data-control="prev"]').addEventListener('click', () => step('prev'));
-  document.querySelector('[data-control="next"]').addEventListener('click', () => step('next'));
   document.getElementById('menu').addEventListener('click', () => update({ panel: settings.panel === 'open' ? 'closed' : 'open' }));
   render();
 }

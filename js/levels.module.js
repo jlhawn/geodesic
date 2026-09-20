@@ -58,6 +58,6 @@ export function seasonPhrase(time) {
     if (!best || Math.abs(offset) < Math.abs(best.offset)) best = { offset, name };
   }
   const n = Math.round(Math.abs(best.offset));
-  if (n === 0) return `the ${best.name}`;
-  return `${n} day${n === 1 ? '' : 's'} ${best.offset > 0 ? 'past' : 'before'} the ${best.name}`;
+  if (n === 0) return `the Northern ${best.name}`;
+  return `${n} day${n === 1 ? '' : 's'} ${best.offset > 0 ? 'past' : 'before'} the Northern ${best.name}`;
 }

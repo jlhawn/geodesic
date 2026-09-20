@@ -7,76 +7,106 @@
   <style>
     body { margin: 0; background: #151515; color: #ddd; font: 15px system-ui, sans-serif; }
     #globe { position: absolute; inset: 0; }
-    #menu { position: absolute; left: 12px; bottom: 12px; z-index: 11; background: rgba(0, 0, 0, 0.75); color: #eee; border: 0; border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 17px; cursor: pointer; }
-    #panel { position: absolute; left: 12px; bottom: 52px; z-index: 10; background: rgba(0, 0, 0, 0.78); padding: 10px 16px; border-radius: 8px; display: grid; grid-template-columns: max-content 1fr; column-gap: 12px; row-gap: 3px; align-items: center; max-width: calc(100% - 48px); }
+    .box { background: rgba(0, 0, 0, 0.72); color: #eee; border-radius: 8px; }
+    button.flat { background: transparent; color: #bbb; border: 0; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
+    button.flat:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+    button.flat.selected { background: #4a4a4a; color: #ffe8a0; }
+    button.flat:disabled { color: #666; cursor: default; background: transparent; }
+    select { background: #222; color: #ddd; border: 1px solid #555; border-radius: 4px; font: inherit; font-size: 13px; padding: 1px 4px; }
+    #clock { position: absolute; left: 12px; top: 12px; z-index: 11; display: flex; align-items: center; gap: 10px; padding: 8px 12px; max-width: calc(100% - 200px); }
+    #clock .control { font-size: 22px; padding: 2px 10px; }
+    #date { font-size: 16px; }
+    #rate { font-size: 13px; color: #bbb; }
+    #modelButton { font-size: 18px; }
+    #snapshotsButton, #menu { position: absolute; z-index: 11; border: 0; padding: 6px 14px; font: inherit; font-size: 17px; cursor: pointer; }
+    #snapshotsButton { right: 12px; top: 12px; }
+    #bottom { position: absolute; left: 12px; bottom: 12px; z-index: 11; display: flex; align-items: flex-end; gap: 12px; max-width: calc(100% - 24px); }
+    #menu { position: static; }
+    #legend { padding: 6px 12px; display: flex; flex-direction: column; gap: 3px; }
+    #legend.hidden { display: none; }
+    #data { font-size: 13px; color: #ddd; }
+    #scale { display: block; width: 300px; height: 14px; border-radius: 2px; }
+    #scaleTicks { display: flex; justify-content: space-between; width: 300px; font-size: 12px; color: #ccc; margin-top: 1px; }
+    .scaleRow { display: flex; align-items: flex-start; gap: 8px; }
+    .scaleRow.hidden { display: none; }
+    #panel { position: absolute; left: 12px; bottom: 56px; z-index: 10; padding: 10px 16px; display: grid; grid-template-columns: max-content 1fr; column-gap: 12px; row-gap: 3px; align-items: center; max-width: calc(100% - 48px); }
     #panel.hidden { display: none; }
-    #progress { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); width: min(420px, calc(100% - 48px)); z-index: 20; background: rgba(0, 0, 0, 0.78); padding: 10px 14px; border-radius: 8px; display: none; }
+    #panel .label { color: #ddd; padding-right: 10px; border-right: 2px solid #666; align-self: stretch; display: flex; align-items: center; }
+    #panel .options { display: flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; }
+    #panel .unit { color: #ddd; margin-left: 4px; }
+    #panel .hidden { display: none; }
+    #progress { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); width: min(420px, calc(100% - 48px)); z-index: 20; padding: 10px 14px; display: none; }
     #progress.visible { display: block; }
     #progressTrack { height: 6px; background: #333; border-radius: 3px; overflow: hidden; }
     #progressBar { height: 100%; width: 0; background: #7fb2e5; transition: width 0.2s; }
     #progressText { display: block; color: #ddd; font-size: 12px; margin-top: 6px; text-align: center; }
-    #panel .label { color: #ddd; text-align: left; padding-right: 10px; border-right: 2px solid #666; align-self: stretch; display: flex; align-items: center; }
-    #panel .value { color: #eee; }
-    #panel .options { display: flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; }
-    #panel .options button, #panel .control { background: transparent; color: #bbb; border: 0; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
-    #panel .options button:hover, #panel .control:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
-    #panel .options button.selected { background: #4a4a4a; color: #ffe8a0; }
-    #panel .unit { color: #ddd; margin-left: 4px; }
-    #panel select { background: #222; color: #ddd; border: 1px solid #555; border-radius: 4px; font: inherit; font-size: 13px; padding: 1px 4px; margin-left: 8px; }
-    #scale { display: block; width: 300px; height: 14px; border-radius: 2px; }
-    #scaleTicks { display: flex; justify-content: space-between; width: 300px; font-size: 12px; color: #ccc; margin-top: 1px; }
-    #panel .scaleRow { display: flex; align-items: flex-start; gap: 6px; }
-    #status { font-size: 13px; color: #bbb; }
-    #note { font-size: 12px; color: #999; margin-left: 8px; }
+    .modal { position: absolute; inset: 0; z-index: 30; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; }
+    .modal.hidden { display: none; }
+    .dialog { background: #1c1c1c; color: #ddd; border-radius: 10px; padding: 18px 22px; width: min(720px, calc(100% - 48px)); max-height: calc(100% - 48px); overflow: auto; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6); }
+    .dialog h2 { margin: 0 0 10px; font-size: 18px; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+    .dialog h3 { margin: 16px 0 6px; font-size: 15px; color: #ffe8a0; }
+    .dialog .close { font-size: 20px; }
+    .dialog dl { display: grid; grid-template-columns: max-content 1fr; column-gap: 14px; row-gap: 5px; margin: 0; font-size: 14px; }
+    .dialog dt { color: #fff; }
+    .dialog dd { margin: 0; color: #bbb; }
+    .dialog dd b { color: #eee; font-weight: 500; }
+    .list { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+    #builtinList { max-height: 240px; overflow: auto; }
+    .list li { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid #2c2c2c; flex-wrap: wrap; }
+    .list .name { flex: 1 1 200px; color: #eee; }
+    .list .meta { color: #999; font-size: 12px; }
+    .list .tag { color: #7fb2e5; font-size: 12px; }
+    .empty { color: #888; font-size: 13px; }
   </style>
 </head>
 
 <body>
   <div id="globe"></div>
-  <div id="progress"><div id="progressTrack"><div id="progressBar"></div></div><span id="progressText">starting…</span></div>
-  <div id="panel">
-    <span class="label">Date</span><span class="value" id="date">starting…</span>
-    <span class="label">Rate</span><span class="value" id="rate">measuring…</span>
-    <span class="label">Data</span><span class="value" id="data"></span>
-    <span class="label">Scale</span>
-    <div class="scaleRow"><div><canvas id="scale" width="256" height="1"></canvas><div id="scaleTicks"><span></span><span></span><span></span></div></div><select id="palette"></select></div>
-    <span class="label">Model</span><span id="status"></span>
-    <span class="label">Control</span>
-    <div class="options">
-      <button class="control" data-control="play" title="play / pause">▶</button>
-      <button class="control" data-control="prev" title="previous saved day">‹</button>
-      <button class="control" data-control="next" title="next saved day">›</button>
-      <span id="note"></span>
-    </div>
+  <div id="progress" class="box"><div id="progressTrack"><div id="progressBar"></div></div><span id="progressText">starting…</span></div>
+  <div id="clock" class="box">
+    <button class="flat control" data-control="play" title="play / pause">▶</button>
+    <div><div id="date">starting…</div><div id="rate">measuring…</div></div>
+    <button id="modelButton" class="flat" title="about the model and its views">ⓘ</button>
+  </div>
+  <button id="snapshotsButton" class="box">snapshots</button>
+  <div id="panel" class="box hidden">
     <span class="label">Animate</span>
-    <div class="options" data-setting="animate"><button data-value="particles">Particles</button><button data-value="arrows">Arrows</button><button data-value="none">None</button></div>
-    <span class="label">Height</span>
-    <div class="options" data-setting="level">
-      <button data-value="surface">Sfc</button><button data-value="1000">1000</button><button data-value="850">850</button><button data-value="700">700</button>
-      <button data-value="500">500</button><button data-value="250">250</button><button data-value="70">70</button><button data-value="10">10</button><span class="unit">hPa</span>
+    <div class="options" data-setting="animate"><button class="flat" data-value="particles">Particles</button><button class="flat" data-value="arrows">Arrows</button><button class="flat" data-value="none">None</button></div>
+    <span class="label" id="heightLabel">Height</span>
+    <div class="options" id="heightOptions" data-setting="level">
+      <button class="flat" data-value="surface">Sfc</button><button class="flat" data-value="1000">1000</button><button class="flat" data-value="850">850</button><button class="flat" data-value="700">700</button>
+      <button class="flat" data-value="500">500</button><button class="flat" data-value="250">250</button><button class="flat" data-value="70">70</button><button class="flat" data-value="10">10</button><span class="unit">hPa</span>
     </div>
     <span class="label">Overlay</span>
     <div class="options" data-setting="overlay">
-      <button data-value="wind">Wind</button><button data-value="temp">Temp</button><button data-value="rh">RH</button><button data-value="precip">Precip</button>
-      <button data-value="tpw">TPW</button><button data-value="tcw">TCW</button><button data-value="clouds">Clouds</button><button data-value="ice">Ice</button><button data-value="albedo">Albedo</button><button data-value="swdown">SW↓</button><button data-value="olr">OLR</button>
-      <button data-value="mslp">MSLP</button><button data-value="none">None</button>
+      <button class="flat" data-value="wind">Wind</button><button class="flat" data-value="temp">Temp</button><button class="flat" data-value="rh">RH</button><button class="flat" data-value="precip">Precip</button>
+      <button class="flat" data-value="tpw">TPW</button><button class="flat" data-value="tcw">TCW</button><button class="flat" data-value="clouds">Satellite</button><button class="flat" data-value="ice">Ice</button><button class="flat" data-value="albedo">Albedo</button>
+      <button class="flat" data-value="swdown">SW↓</button><button class="flat" data-value="olr">OLR</button><button class="flat" data-value="mslp">MSLP</button><button class="flat" data-value="none">None</button>
     </div>
     <span class="label" id="isolineLabel">Isobars</span>
     <div class="options" data-setting="isobars">
-      <button data-value="on">On</button><button data-value="off">Off</button>
+      <button class="flat" data-value="on">On</button><button class="flat" data-value="off">Off</button>
       <span class="unit">every</span><select id="isolineStep"></select><span class="unit" id="isolineUnit">hPa</span>
     </div>
     <span class="label">Graticule</span>
-    <div class="options" data-setting="graticule"><button data-value="off">Off</button><button data-value="10">10°</button><button data-value="15">15°</button><button data-value="30">30°</button></div>
-    <span class="label">Snapshots</span>
-    <div class="options">
-      <button data-snapshot="save" title="pause and save the current state in this browser">Save</button><button data-snapshot="latest" title="restore the most recent snapshot">Restore latest</button>
-      <select id="snapshotSelect"></select><button data-snapshot="restore">Restore</button><button data-snapshot="rename">Rename</button><button data-snapshot="clone">Clone</button><button data-snapshot="delete">Delete</button>
-    </div>
+    <div class="options" data-setting="graticule"><button class="flat" data-value="off">Off</button><button class="flat" data-value="10">10°</button><button class="flat" data-value="15">15°</button><button class="flat" data-value="30">30°</button></div>
     <span class="label">Projection</span>
-    <div class="options" data-setting="projection"><button data-value="sphere">Sphere</button><button data-value="map">Equal Earth</button></div>
+    <div class="options" data-setting="projection"><button class="flat" data-value="sphere">Sphere</button><button class="flat" data-value="map">Equal Earth</button></div>
   </div>
-  <button id="menu">climate</button>
+  <div id="bottom">
+    <button id="menu" class="box">options</button>
+    <div id="legend" class="box">
+      <div id="data"></div>
+      <div class="scaleRow"><div><canvas id="scale" width="256" height="1"></canvas><div id="scaleTicks"><span></span><span></span><span></span></div></div><select id="palette"></select></div>
+    </div>
+  </div>
+  <div id="modelModal" class="modal hidden"><div class="dialog"><h2>Model <button class="flat close" data-close="modelModal">×</button></h2><dl id="modelDetails"></dl><h3>Views</h3><dl id="viewDetails"></dl></div></div>
+  <div id="snapshotModal" class="modal hidden"><div class="dialog">
+    <h2>Snapshots <button class="flat close" data-close="snapshotModal">×</button></h2>
+    <div><button class="flat selected" data-snapshot="save" title="pause and save the current state in this browser">Save the current state</button> <button class="flat" data-snapshot="latest" title="restore the most recent local snapshot">Restore latest</button></div>
+    <h3>Built in</h3><p class="empty" id="builtinNote">Saved runs served alongside the page. Downloading copies one into this browser's store.</p><ul class="list" id="builtinList"></ul>
+    <h3>Local</h3><ul class="list" id="localList"></ul><p class="empty" id="localEmpty">No local snapshots yet.</p>
+  </div></div>
   <script type="module">
     import runClimate from './js/climate.module.js';
     const params = new URLSearchParams(location.search);
