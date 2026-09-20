@@ -805,7 +805,12 @@ three tracer transports into one sweep gained nothing and was dropped.
 The time step is now 900·16/N s (2× the original; RK4's gravity-wave
 limit is ~3×, where a 3-day N=16 run differs by 0.1 hPa RMS and 0.36 m/s
 from the original step), so N=64 runs a simulated day in 1.65 min of
-wall time, 1.07 min at 3× (`DT_FACTOR=3` for the driver).
+wall time, 1.07 min at 3× (`DT_FACTOR=3` for the driver). The 3× step
+(337.5 s at N=64, 1350 s at N=16) became the default for the page and
+the drivers after M14: 100 days at N=16 from the tuned state track the
+2× run within 0.2 K and the same ice cover, and 5 days at N=64 from
+the page snapshot run clean at 1.24 min per simulated day, 19 simulated
+hours per minute on 10 workers.
 
 The same two files run in the browser: `threads.module.js` provides
 the spawn/receive primitives from `worker_threads` or Web Workers, and

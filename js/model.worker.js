@@ -85,8 +85,8 @@ async function start(message) {
     saved = await (await fetch(message.from)).json();
   }
   const N = message.N ?? saved?.N ?? 16;
-  dt = message.dt ?? 900 * 16 / N;
-  stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round(12 * 16 / N));
+  dt = message.dt ?? 1350 * 16 / N;
+  stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round(8 * 16 / N));
   const workers = message.workers ?? 1;
   status(`building the N=${N} grid${workers > 1 ? ` and ${workers} workers` : ''}…`);
   const grid = new Grid(N);
