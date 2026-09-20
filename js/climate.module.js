@@ -175,8 +175,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     rgb = new Uint8Array(3 * grid.size);
     viewer = initUnifiedViewer(document.getElementById('globe'), grid, { backgroundColor: 0x151515, dynamicColors: true, controls: false, getColor: () => ({ r: 0.25, g: 0.25, b: 0.25 }) });
     arrows = viewer.addArrowLayer({ opacity: 0.5 });
-    isobars = viewer.addContourLayer({ opacity: 0.5 });
-    graticule = viewer.addGraticuleLayer({ opacity: 0.5 });
+    isobars = viewer.addContourLayer({ opacity: 0.25 });
+    graticule = viewer.addGraticuleLayer({ opacity: 0.25 });
     particles = createWindParticles(document.getElementById('globe'), viewer, grid);
     viewer.setProjection(settings.projection);
   }
