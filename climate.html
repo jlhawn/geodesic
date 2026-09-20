@@ -10,6 +10,11 @@
     #menu { position: absolute; left: 12px; bottom: 12px; z-index: 11; background: rgba(0, 0, 0, 0.75); color: #eee; border: 0; border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 17px; cursor: pointer; }
     #panel { position: absolute; left: 12px; bottom: 52px; z-index: 10; background: rgba(0, 0, 0, 0.78); padding: 10px 16px; border-radius: 8px; display: grid; grid-template-columns: max-content 1fr; column-gap: 12px; row-gap: 3px; align-items: center; max-width: calc(100% - 48px); }
     #panel.hidden { display: none; }
+    #progress { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); width: min(420px, calc(100% - 48px)); z-index: 20; background: rgba(0, 0, 0, 0.78); padding: 10px 14px; border-radius: 8px; display: none; }
+    #progress.visible { display: block; }
+    #progressTrack { height: 6px; background: #333; border-radius: 3px; overflow: hidden; }
+    #progressBar { height: 100%; width: 0; background: #7fb2e5; transition: width 0.2s; }
+    #progressText { display: block; color: #ddd; font-size: 12px; margin-top: 6px; text-align: center; }
     #panel .label { color: #ddd; text-align: left; padding-right: 10px; border-right: 2px solid #666; align-self: stretch; display: flex; align-items: center; }
     #panel .value { color: #eee; }
     #panel .options { display: flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; }
@@ -28,6 +33,7 @@
 
 <body>
   <div id="globe"></div>
+  <div id="progress"><div id="progressTrack"><div id="progressBar"></div></div><span id="progressText">starting…</span></div>
   <div id="panel">
     <span class="label">Date</span><span class="value" id="date">starting…</span>
     <span class="label">Rate</span><span class="value" id="rate">measuring…</span>

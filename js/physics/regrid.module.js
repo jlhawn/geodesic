@@ -20,19 +20,31 @@ function barycentric(a, b, c, p) {
  * triangle (three cells around a source vertex) that contains it, found
  * among the triangles touching its nearest source cell.
  */
-export function interpolationWeights(source, points) {
-  const { nCells, xCell, nEdgesOnCell, verticesOnCell, cellsOnVertex, maxEdges } = source;
+export function interpolationWeights(source, points, progress = null) {
+  const { nCells, xCell, nEdgesOnCell, verticesOnCell, cellsOnVertex, cellsOnCell, maxEdges } = source;
   const count = points.length / 3;
   const cells = new Int32Array(3 * count), weights = new Float64Array(3 * count);
   const vector = (i) => [xCell[3 * i], xCell[3 * i + 1], xCell[3 * i + 2]];
-  for (let n = 0; n < count; n++) {
-    const p = [points[3 * n], points[3 * n + 1], points[3 * n + 2]];
-    let nearest = 0, best = -Infinity;
-    for (let i = 0; i < nCells; i++) {
-      const dot = p[0] * xCell[3 * i] + p[1] * xCell[3 * i + 1] + p[2] * xCell[3 * i + 2];
-      if (dot > best) { best = dot; nearest = i; }
+  const dotWith = (p, i) => p[0] * xCell[3 * i] + p[1] * xCell[3 * i + 1] + p[2] * xCell[3 * i + 2];
+  const bruteForce = (p) => { let nearest = 0, best = -Infinity; for (let i = 0; i < nCells; i++) { const d = dotWith(p, i); if (d > best) { best = d; nearest = i; } } return nearest; };
+  const walk = (p, start) => {
+    let here = start, best = dotWith(p, here);
+    for (;;) {
+      let next = here;
+      for (let k = 0; k < nEdgesOnCell[here]; k++) { const j = cellsOnCell[maxEdges * here + k]; const d = dotWith(p, j); if (d > best) { best = d; next = j; } }
+      if (next === here) return here;
+      here = next;
     }
+  };
+  const every = Math.max(1, Math.floor(count / 50));
+  let previous = 0;
+  for (let n = 0; n < count; n++) {
+    if (progress && n % every === 0) progress(n / count);
+    const p = [points[3 * n], points[3 * n + 1], points[3 * n + 2]];
+    let nearest = walk(p, previous);
     let chosen = null, chosenScore = -Infinity;
+    for (let attempt = 0; attempt < 2 && !chosen; attempt++) {
+      if (attempt === 1) nearest = bruteForce(p);
     for (let k = 0; k < nEdgesOnCell[nearest]; k++) {
       const v = verticesOnCell[maxEdges * nearest + k];
       const tri = [cellsOnVertex[3 * v], cellsOnVertex[3 * v + 1], cellsOnVertex[3 * v + 2]];
@@ -41,6 +53,8 @@ export function interpolationWeights(source, points) {
       const score = Math.min(...w);
       if (score > chosenScore) { chosenScore = score; chosen = { tri, w }; }
     }
+    }
+    previous = nearest;
     const w = chosen.w.map((x) => Math.max(0, x));
     const sum = w[0] + w[1] + w[2];
     for (let m = 0; m < 3; m++) { cells[3 * n + m] = chosen.tri[m]; weights[3 * n + m] = w[m] / sum; }
@@ -79,20 +93,22 @@ export function regridEdgeField(source, target, u, weights = interpolationWeight
   return out;
 }
 
-export function regridOcean(source, target, ocean) {
+export function regridOcean(source, target, ocean, progress = null) {
   if (source.mesh.nCells === target.mesh.nCells) return Object.fromEntries(Object.entries(ocean).map(([k, v]) => [k, Float64Array.from(v)]));
+  if (progress) progress(0, 'the ocean');
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), atEdges = interpolationWeights(source.mesh, target.mesh.xEdge);
   const cell = (v) => regridCellField(source, target, Float64Array.from(v), atCells), edge = (v) => regridEdgeField(source, target, Float64Array.from(v), atEdges);
   return { h1: cell(ocean.h1), h2: cell(ocean.h2), u1: edge(ocean.u1), u2: edge(ocean.u2), T2: cell(ocean.T2) };
 }
 
-export function regridState(source, target, state) {
+export function regridState(source, target, state, progress = null) {
   const [pi, theta, u, surfaceT, q = null, qc = null, ice = null] = state;
   const K = source.core.K;
   if (K !== target.core.K) throw new Error(`layer counts differ: ${K} vs ${target.core.K}`);
   const sm = source.mesh, tm = target.mesh;
-  const atCells = interpolationWeights(sm, tm.xCell);
-  const atEdges = interpolationWeights(sm, tm.xEdge);
+  const report = (fraction, text) => { if (progress) progress(fraction, text); };
+  const atCells = interpolationWeights(sm, tm.xCell, (f) => report(0.1 * f, `locating the cells, ${Math.round(100 * f)}%`));
+  const atEdges = interpolationWeights(sm, tm.xEdge, (f) => report(0.1 + 0.2 * f, `locating the edges, ${Math.round(100 * f)}%`));
   const outPi = new Float64Array(tm.nCells), outTheta = new Float64Array(K * tm.nCells), outU = new Float64Array(K * tm.nEdges), outSurfaceT = new Float64Array(tm.nCells);
   const outQ = q ? new Float64Array(K * tm.nCells) : null;
   const outQc = qc ? new Float64Array(K * tm.nCells) : null;
@@ -104,6 +120,7 @@ export function regridState(source, target, state) {
   const component = new Float64Array(sm.nCells);
   const edgeComponent = new Float64Array(tm.nEdges);
   for (let k = 0; k < K; k++) {
+    report(0.3 + 0.7 * k / K, `layer ${k + 1} of ${K}`);
     apply(theta, k * sm.nCells, atCells, outTheta, k * tm.nCells, tm.nCells);
     if (q) apply(q, k * sm.nCells, atCells, outQ, k * tm.nCells, tm.nCells);
     if (qc) apply(qc, k * sm.nCells, atCells, outQc, k * tm.nCells, tm.nCells);

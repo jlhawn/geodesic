@@ -261,13 +261,22 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   let ready = null;
   worker.onmessage = (event) => {
     const message = event.data;
-    if (message.type === 'status') document.getElementById('date').textContent = message.text;
+    if (message.type === 'status') {
+      document.getElementById('date').textContent = message.text;
+      const progress = document.getElementById('progress');
+      if (message.fraction !== null && message.fraction !== undefined) {
+        progress.classList.add('visible');
+        document.getElementById('progressBar').style.width = `${Math.round(100 * message.fraction)}%`;
+        document.getElementById('progressText').textContent = message.text;
+      }
+    }
     if (message.type === 'ready') {
       ready = message;
       setup(message.N);
       document.getElementById('date').textContent = `model ready: ${message.cells} cells × ${message.layers} layers, dt ${message.dt} s, ${message.workers > 1 ? `${message.workers} workers` : 'one thread'}`;
     }
     if (message.type === 'frame') {
+      document.getElementById('progress').classList.remove('visible');
       latest = { ...message, N: ready.N, workers: ready.workers };
       clock.push({ wall: performance.now(), time: message.time });
       while (clock.length > 2 && clock[clock.length - 1].wall - clock[0].wall > 30000) clock.shift();

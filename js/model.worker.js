@@ -46,7 +46,34 @@ async function loop() {
   setTimeout(loop, 0);
 }
 
-const status = (text) => self.postMessage({ type: 'status', text });
+const status = (text, fraction = null) => self.postMessage({ type: 'status', text, fraction });
+
+/*
+ * Fetches a JSON file while reporting the bytes received against the
+ * Content-Length, which is most of the wait for a large snapshot.
+ */
+async function fetchWithProgress(url, from, to) {
+  const response = await fetch(url);
+  const total = Number(response.headers.get('content-length')) || 0;
+  const name = url.replace(/.*\//, '');
+  if (!response.body || !total) { status(`loading ${name}…`, from); return response.json(); }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let received = 0, reported = -1;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    const percent = Math.floor(100 * received / total);
+    if (percent !== reported) { reported = percent; status(`loading ${name}: ${(received / 1048576).toFixed(0)} of ${(total / 1048576).toFixed(0)} MB`, from + (to - from) * received / total); }
+  }
+  const bytes = new Uint8Array(received);
+  let at = 0;
+  for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.length; }
+  status(`parsing ${name}…`, to);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
 
 /*
  * The initial state comes from a saved run (a *_state_*.json written by
@@ -60,7 +87,7 @@ function initialState(model, saved, N) {
   if (saved.q && saved.qc) arrays.push(Float64Array.from(saved.qc));
   if (saved.q && saved.qc && saved.ice) arrays.push(Float64Array.from(saved.ice));
   model.time = saved.time;
-  const carried = saved.N === N ? arrays : (status(`regridding day ${saved.day} from N=${saved.N} to N=${N}…`), regridState(createModel(new Grid(saved.N)), model, arrays));
+  const carried = saved.N === N ? arrays : regridState(createModel(new Grid(saved.N)), model, arrays, (fraction, text) => status(`regridding day ${saved.day} from N=${saved.N} to N=${N}: ${text}…`, 0.8 + 0.12 * fraction));
   if (carried.length < 5) carried.push(initialHumidity(model, carried[0], carried[1]));
   if (carried.length < 6) carried.push(new Float64Array(carried[1].length));
   if (carried.length < 7) carried.push(Float64Array.from(carried[3], (t) => (t < 271.35 ? 0.5 : 0)));
@@ -84,22 +111,24 @@ self.onmessage = async (event) => {
 async function start(message) {
   let saved = null;
   if (message.from) {
-    status(`loading ${message.from.replace(/.*\//, '')}…`);
-    saved = await (await fetch(message.from)).json();
+    saved = await fetchWithProgress(message.from, 0, 0.5);
   }
   const N = message.N ?? saved?.N ?? 16;
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   dt = message.dt ?? 1350 * 16 / N;
   stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round((gpuWanted ? 24 : 8) * 16 / N));
   const workers = message.workers ?? 1;
-  status(`building the N=${N} grid${gpuWanted ? ' for the GPU' : workers > 1 ? ` and ${workers} workers` : ''}…`);
+  status(`building the N=${N} grid…`, 0.55);
   const grid = new Grid(N);
+  status(gpuWanted ? 'compiling the GPU model…' : workers > 1 ? `starting ${workers} workers…` : 'building the model…', 0.65);
   model = gpuWanted ? await createGpuModel(grid, message.options ?? {}) : workers > 1 ? await createParallelModel(grid, message.options ?? {}, workers) : createModel(grid, message.options ?? {});
+  status(saved ? 'placing the saved state…' : 'building the initial state…', 0.8);
   const init = initialState(model, saved, N);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  status('uploading the state…', 0.92);
   if (model.load) model.load();
   if (model.ocean) {
-    if (saved && saved.ocean) model.ocean.load(saved.N === N ? saved.ocean : regridOcean(createModel(new Grid(saved.N)), model, saved.ocean), model.state[3], model.state[6]);
+    if (saved && saved.ocean) model.ocean.load(saved.N === N ? saved.ocean : regridOcean(createModel(new Grid(saved.N)), model, saved.ocean, (fraction, text) => status(`regridding ${text}…`, 0.93)), model.state[3], model.state[6]);
     else model.ocean.initialize(model.state[3], model.state[6]);
   }
   layerWinds = new Array(model.core.K).fill(null);
