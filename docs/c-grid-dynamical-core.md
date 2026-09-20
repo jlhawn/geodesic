@@ -1053,6 +1053,25 @@ tropical cloud 4–40 g/m². Eddy kinetic energy at 250 hPa runs 500–680
 m²/s² in the winter hemisphere and 210–290 in the summer one.
 
 
+### M12 — Convective detrainment — done (tuning)
+
+Betts–Miller convection produced rain and nothing else, so the deep
+tropics of the M11 climate carried 5–20 g/m² of cloud against 100–250
+in the storm tracks, and the cloud optical scale had to be raised to
+120 m²/kg to reach an Earth-like planetary albedo from the extratropics
+alone. `convectColumn` now keeps the fraction `detrainment` (0.25) of
+the condensate it produces in the column as cloud water, spread by mass
+through the anvil — the layers from the level of zero buoyancy down
+through `anvilDepth` (150 hPa) of pressure — and rains the rest. The
+column's enthalpy change still equals the latent heat of all the
+condensate, and vapour, cloud and rain sum to what was there
+(`test/moist.test.mjs`). The anvil then lives under the existing cloud
+physics: saturation adjustment evaporates it into subsaturated air and
+autoconversion rains it out over its 3-hour lifetime, so a persistent
+anvil needs the outflow layers near saturation, which the reference
+profile's 70 % relative humidity does not guarantee. The cloud scale is
+retuned at N=16 with detrainment on.
+
 ## 7. Module layout in this repo
 
 ```

@@ -41,14 +41,18 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * relaxes over relaxationTime toward the moist adiabat of its lowest
  * layer and a fixed relative humidity, with the reference temperature
  * shifted so the column's enthalpy change equals the latent heat of
- * the rain it produces, or with no rain when the column would have to
- * moisten — and a filler that removes negative humidity by borrowing
- * from the layer below. Precipitation accumulates per cell (kg/m²);
- * the budget sums are area-weighted masses (kg).
+ * the condensate it produces, or with no rain when the column would
+ * have to moisten — of which the fraction `detrainment` stays in the
+ * column as cloud water spread through the anvil, the top `anvilDepth`
+ * of pressure below the level of zero buoyancy, and the rest falls as
+ * rain — and a filler that removes negative humidity by borrowing from
+ * the layer below. Precipitation accumulates per cell (kg/m²); the
+ * budget sums are area-weighted masses (kg).
  */
 export function createMoistPhysics(mesh, core, {
   latentHeat = LATENT_HEAT, relaxationTime = 7200, referenceHumidity = 0.7,
-  autoconversionThreshold = 2e-4, autoconversionRate = 1e-3, cloudLifetime = 3 * 3600, buffers = null,
+  autoconversionThreshold = 2e-4, autoconversionRate = 1e-3, cloudLifetime = 3 * 3600,
+  detrainment = 0.25, anvilDepth = 150e2, buffers = null,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer } = core.diagnostics;
   const precipBuffer = buffers && buffers.precipitation ? buffers.precipitation : new SharedArrayBuffer(8 * C);
@@ -151,7 +155,7 @@ export function createMoistPhysics(mesh, core, {
     return top;
   }
 
-  function convectColumn(i, pi, theta, q, dt) {
+  function convectColumn(i, pi, theta, q, dt, qc = null) {
     const bottom = K - 1;
     const top = referenceProfile(i, pi, theta, q);
     if (top < 0 || top === bottom) return 0;
@@ -177,7 +181,12 @@ export function createMoistPhysics(mesh, core, {
       theta[idx] += (Tref[k] - T[k]) * rate / exnerLayer[idx];
       q[idx] += (qref[k] - q[idx]) * rate;
     }
-    return rain;
+    if (qc === null || rain <= 0 || detrainment <= 0) return rain;
+    let anvilMass = 0, anvilBottom = top;
+    for (let k = top; k <= bottom && (k === top || anvilMass < anvilDepth); k++) { anvilMass += dp[k]; anvilBottom = k; }
+    const detrained = detrainment * rain;
+    for (let k = top; k <= anvilBottom; k++) qc[k * C + i] += detrained * g / anvilMass;
+    return rain - detrained;
   }
 
   function fillColumn(i, pi, q) {
@@ -201,7 +210,7 @@ export function createMoistPhysics(mesh, core, {
     for (let i = iFrom; i < iTo; i++) {
       core.diagnoseColumn(i, pi, theta, q, qc);
       condenseColumn(i, pi, theta, q, qc);
-      const convected = convectColumn(i, pi, theta, q, dt);
+      const convected = convectColumn(i, pi, theta, q, dt, qc);
       const rained = autoconvertColumn(i, pi, qc, dt);
       fillColumn(i, pi, q);
       fillColumn(i, pi, qc);
