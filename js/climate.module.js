@@ -42,7 +42,7 @@ const PALETTES = {
   },
 };
 
-const DEFAULTS = { overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 4, heightStep: 60, projection: 'sphere', palettes: { sequential: 'viridis', diverging: 'blue-gray-red' }, panel: 'open' };
+const DEFAULTS = { overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 4, heightStep: 60, graticule: '15', projection: 'sphere', palettes: { sequential: 'viridis', diverging: 'blue-gray-red' }, panel: 'open' };
 
 /*
  * The contour row draws isobars of surface pressure at the surface and
@@ -122,7 +122,7 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
   const panel = document.getElementById('panel');
   const note = document.getElementById('note');
   const status = document.getElementById('status');
-  let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, rgb = null, running = !paused, siblings = null;
+  let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, rgb = null, running = !paused, siblings = null;
   const clock = [];
   function simulatedHoursPerMinute() {
     if (clock.length < 2) return null;
@@ -139,6 +139,7 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
     viewer = initUnifiedViewer(document.getElementById('globe'), grid, { backgroundColor: 0x151515, dynamicColors: true, controls: false, getColor: () => ({ r: 0.25, g: 0.25, b: 0.25 }) });
     arrows = viewer.addArrowLayer();
     isobars = viewer.addContourLayer();
+    graticule = viewer.addGraticuleLayer();
     particles = createWindParticles(document.getElementById('globe'), viewer, grid);
     viewer.setProjection(settings.projection);
   }
@@ -176,6 +177,12 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
     note.textContent = settings.animate === 'particles' ? `trails brighten toward ${reference} m/s` : settings.animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
   }
 
+  function paintGraticule() {
+    if (!graticule) return;
+    graticule.setVisible(settings.graticule !== 'off');
+    if (settings.graticule !== 'off') graticule.update(Number(settings.graticule));
+  }
+
   function paintIsobars() {
     isobars.setVisible(settings.isobars === 'on');
     if (settings.isobars !== 'on') return;
@@ -207,6 +214,7 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
     paintOverlay();
     paintWind();
     paintIsobars();
+    paintGraticule();
     const d = latest.diagnostics;
     document.getElementById('date').textContent = formatDate(latest.time);
     const rate = simulatedHoursPerMinute();

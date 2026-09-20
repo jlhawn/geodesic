@@ -546,6 +546,91 @@ export function initUnifiedViewer(container, grid, config = {}) {
   }
 
   /*
+   * A graticule: parallels and meridians every `step` degrees as line
+   * segments on the sphere, projected with the cell shader. Each segment
+   * references a cell of similar longitude so both of its ends unwrap
+   * against the same centre and nothing tears at the map seam; the
+   * meridians run only between the outermost parallels.
+   */
+  function addGraticuleLayer({ color = 0xffffff, opacity = 0.4 } = {}) {
+    const capacity = 2 * (36 * 180 + 72 * 180);
+    const positions = new Float32Array(3 * capacity);
+    const cellIndex = new Float32Array(capacity);
+    const graticuleGeometry = new THREE.BufferGeometry();
+    const positionAttribute = new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage);
+    const cellAttribute = new THREE.BufferAttribute(cellIndex, 1).setUsage(THREE.DynamicDrawUsage);
+    graticuleGeometry.setAttribute('position', positionAttribute);
+    graticuleGeometry.setAttribute('cellIndex', cellAttribute);
+    graticuleGeometry.setDrawRange(0, 0);
+    const graticuleMaterial = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+    projectMaterial(graticuleMaterial, 0.006);
+    const lines = new THREE.LineSegments(graticuleGeometry, graticuleMaterial);
+    lines.frustumCulled = false;
+    lines.visible = false;
+    scene.add(lines);
+    const lift = 1.002;
+    const buckets = new Map();
+    const bucketOf = (lat, lon) => `${Math.floor((lat + Math.PI / 2) / (Math.PI / 36))},${(Math.floor((lon + Math.PI) / (Math.PI / 36)) + 72) % 72}`;
+    for (let i = 0; i < centerData.length / 3; i++) {
+      const x = centerData[3 * i], y = centerData[3 * i + 1], z = centerData[3 * i + 2];
+      const key = bucketOf(Math.atan2(z, Math.hypot(x, y)), Math.atan2(y, x));
+      (buckets.get(key) ?? buckets.set(key, []).get(key)).push(i);
+    }
+    const referenceFor = (lat, lon) => {
+      const px = Math.cos(lat) * Math.cos(lon), py = Math.cos(lat) * Math.sin(lon), pz = Math.sin(lat);
+      const latBand = Math.floor((lat + Math.PI / 2) / (Math.PI / 36)), lonBand = Math.floor((lon + Math.PI) / (Math.PI / 36));
+      let best = 0, bestDot = -2;
+      for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+        const candidates = buckets.get(`${latBand + a},${(lonBand + b + 72) % 72}`);
+        if (!candidates) continue;
+        for (const i of candidates) {
+          const dot = px * centerData[3 * i] + py * centerData[3 * i + 1] + pz * centerData[3 * i + 2];
+          if (dot > bestDot) { bestDot = dot; best = i; }
+        }
+      }
+      return best;
+    };
+    let built = 0;
+
+    function update(step) {
+      if (step === built) return;
+      built = step;
+      let n = 0;
+      const put = (lat, lon, reference) => {
+        positions[3 * n] = lift * Math.cos(lat) * Math.cos(lon);
+        positions[3 * n + 1] = lift * Math.cos(lat) * Math.sin(lon);
+        positions[3 * n + 2] = lift * Math.sin(lat);
+        cellIndex[n] = reference;
+        n++;
+      };
+      const segment = (lat0, lon0, lat1, lon1) => {
+        if (n + 2 > capacity) return;
+        const reference = referenceFor(0.5 * (lat0 + lat1), 0.5 * (lon0 + lon1));
+        put(lat0, lon0, reference);
+        put(lat1, lon1, reference);
+      };
+      const rad = Math.PI / 180, piece = 2 * rad;
+      const outermost = step * Math.floor(89 / step);
+      for (let lat = -outermost; lat <= outermost + 1e-9; lat += step) {
+        for (let lon = -180; lon < 180; lon += 2) segment(lat * rad, lon * rad, lat * rad, (lon + 2) * rad);
+      }
+      for (let lon = -180; lon < 180; lon += step) {
+        for (let lat = -outermost; lat < outermost - 1e-9; lat += 2) segment(lat * rad, lon * rad, Math.min(lat + 2, outermost) * rad, lon * rad);
+      }
+      graticuleGeometry.setDrawRange(0, n);
+      positionAttribute.needsUpdate = true;
+      cellAttribute.needsUpdate = true;
+    }
+
+    return {
+      update,
+      setColor(value) { graticuleMaterial.color.set(value); },
+      setVisible(visible) { lines.visible = visible; },
+      dispose() { scene.remove(lines); graticuleGeometry.dispose(); graticuleMaterial.dispose(); },
+    };
+  }
+
+  /*
    * A layer of arrows, one per cell, drawn in the cell's tangent plane
    * and projected with the same shader as the cells so they follow the
    * globe in both views. update() takes a vector per cell in the grid's
@@ -606,6 +691,7 @@ export function initUnifiedViewer(container, grid, config = {}) {
     updateColors: dynamicColors ? updateColors : null,
     addArrowLayer,
     addContourLayer,
+    addGraticuleLayer,
     setProjection(mode) { viewState.targetBlend = mode === 'map' ? 1.0 : 0.0; },
     projection: () => (viewState.targetBlend === 1.0 ? 'map' : 'sphere'),
     projectPoint,
