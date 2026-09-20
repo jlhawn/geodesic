@@ -173,6 +173,41 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     return (last.time - first.time) / 3600 / ((last.wall - first.wall) / 60000);
   }
 
+  /*
+   * A display clock that advances every animation frame at the measured
+   * simulation rate, so the sun and stars move smoothly between model
+   * frames. It aims to stay one frame interval behind the latest model
+   * time: it runs faster when it has fallen further behind and slower
+   * as it catches up, never running ahead of the model. A jump of many
+   * frames (a restored snapshot) snaps it; while paused it eases onto
+   * the model time.
+   */
+  const smooth = { time: null, wall: null };
+  function frameInterval() {
+    return clock.length > 1 ? (clock[clock.length - 1].wall - clock[0].wall) / (clock.length - 1) : 500;
+  }
+  function tick(now) {
+    requestAnimationFrame(tick);
+    if (!latest) return;
+    const target = latest.time;
+    const dt = smooth.wall === null ? 0 : now - smooth.wall;
+    smooth.wall = now;
+    if (smooth.time === null) smooth.time = target;
+    const hours = simulatedHoursPerMinute();
+    const rate = hours === null ? 0 : hours * 60;
+    const lag = frameInterval() * rate;
+    const error = target - smooth.time;
+    if (running && rate > 0) {
+      if (Math.abs(error) > 20 * lag) smooth.time = target;
+      else smooth.time += dt * rate * Math.min(2, Math.max(0, error / lag));
+    } else {
+      smooth.time += error * Math.min(1, dt / 500);
+    }
+    if (running) document.getElementById('date').textContent = formatDate(smooth.time);
+    if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(smooth.time), sidereal: 2 * Math.PI * smooth.time * (1 / DAY + 1 / YEAR) });
+  }
+  requestAnimationFrame(tick);
+
   const worker = new Worker(new URL('./model.worker.js', import.meta.url), { type: 'module' });
 
   function setup(cells) {
@@ -291,7 +326,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (overlay.kind && PALETTES[overlay.kind]) fillSelect(paletteSelect, Object.keys(PALETTES[overlay.kind]), settings.palettes[overlay.kind]);
     document.querySelector('[data-control="play"]').textContent = running ? '❚❚' : '▶';
     panel.classList.toggle('hidden', settings.panel !== 'open');
-    if (viewer) viewer.setSpace({ enabled: space, sun: latest ? sunDirection(latest.time) : null, sidereal: latest ? 2 * Math.PI * latest.time * (1 / DAY + 1 / YEAR) : 0 });
+    if (viewer) viewer.setSpace({ enabled: space });
     if (!latest) return;
     paintOverlay();
     paintWind();
