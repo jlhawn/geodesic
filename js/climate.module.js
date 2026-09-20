@@ -123,6 +123,13 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
   const note = document.getElementById('note');
   const status = document.getElementById('status');
   let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, rgb = null, running = !paused, siblings = null;
+  const clock = [];
+  function simulatedHoursPerMinute() {
+    if (clock.length < 2) return null;
+    const first = clock[0], last = clock[clock.length - 1];
+    if (last.wall - first.wall < 2000) return null;
+    return (last.time - first.time) / 3600 / ((last.wall - first.wall) / 60000);
+  }
 
   const worker = new Worker(new URL('./model.worker.js', import.meta.url), { type: 'module' });
 
@@ -202,6 +209,8 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
     paintIsobars();
     const d = latest.diagnostics;
     document.getElementById('date').textContent = formatDate(latest.time);
+    const rate = simulatedHoursPerMinute();
+    document.getElementById('rate').textContent = !running ? 'paused' : rate === null ? 'measuring…' : `${rate.toFixed(1)} simulated hours per minute`;
     status.textContent = `ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa · Ts ${d.meanSurfaceT.toFixed(1)} K · solar ${d.absorbedSolar.toFixed(0)} / OLR ${d.outgoingLongwave.toFixed(0)} W/m² · LH ${d.latentHeat.toFixed(0)} SH ${d.sensibleHeat.toFixed(0)} · rain ${(d.precipitation * 86400).toFixed(2)} mm/d · TPW ${d.columnWater.toFixed(1)} · TCW ${(1000 * d.columnCloud).toFixed(0)} g/m² · ice ${(100 * d.iceFraction).toFixed(0)}% · albedo ${d.planetaryAlbedo.toFixed(2)} · N=${latest.N ?? ''} ${latest.workers > 1 ? `· ${latest.workers} workers` : ''}`;
   }
 
@@ -222,7 +231,12 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
       setup(message.N);
       document.getElementById('date').textContent = `model ready: ${message.cells} cells × ${message.layers} layers, dt ${message.dt} s, ${message.workers > 1 ? `${message.workers} workers` : 'one thread'}`;
     }
-    if (message.type === 'frame') { latest = { ...message, N: ready.N, workers: ready.workers }; render(); }
+    if (message.type === 'frame') {
+      latest = { ...message, N: ready.N, workers: ready.workers };
+      clock.push({ wall: performance.now(), time: message.time });
+      while (clock.length > 2 && clock[clock.length - 1].wall - clock[0].wall > 30000) clock.shift();
+      render();
+    }
   };
   worker.onerror = (error) => { document.getElementById('date').textContent = `worker error: ${error.message}`; };
   worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null, workers: crossOriginIsolated ? workers : 1, paused, level: settings.level });
@@ -240,6 +254,7 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
   });
   document.querySelector('[data-control="play"]').addEventListener('click', () => {
     running = !running;
+    clock.length = 0;
     worker.postMessage({ type: running ? 'resume' : 'pause' });
     render();
   });
