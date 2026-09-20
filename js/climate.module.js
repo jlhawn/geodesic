@@ -117,7 +117,7 @@ async function siblingStates(from) {
   return { prev: at > 0 ? url(days[at - 1]) : null, next: at >= 0 && at < days.length - 1 ? url(days[at + 1]) : null };
 }
 
-export default function runClimate({ N = null, from = null, workers = 1, paused = false } = {}) {
+export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false } = {}) {
   const settings = loadSettings();
   const panel = document.getElementById('panel');
   const note = document.getElementById('note');
@@ -219,7 +219,7 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
     document.getElementById('date').textContent = formatDate(latest.time);
     const rate = simulatedHoursPerMinute();
     document.getElementById('rate').textContent = !running ? 'paused' : rate === null ? 'measuring…' : `${rate.toFixed(1)} simulated hours per minute`;
-    status.textContent = `ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa · Ts ${d.meanSurfaceT.toFixed(1)} K · solar ${d.absorbedSolar.toFixed(0)} / OLR ${d.outgoingLongwave.toFixed(0)} W/m² · LH ${d.latentHeat.toFixed(0)} SH ${d.sensibleHeat.toFixed(0)} · rain ${(d.precipitation * 86400).toFixed(2)} mm/d · TPW ${d.columnWater.toFixed(1)} · TCW ${(1000 * d.columnCloud).toFixed(0)} g/m² · ice ${(100 * d.iceFraction).toFixed(0)}% · albedo ${d.planetaryAlbedo.toFixed(2)} · N=${latest.N ?? ''} ${latest.workers > 1 ? `· ${latest.workers} workers` : ''}`;
+    status.textContent = `ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa · Ts ${d.meanSurfaceT.toFixed(1)} K · solar ${d.absorbedSolar.toFixed(0)} / OLR ${d.outgoingLongwave.toFixed(0)} W/m² · LH ${d.latentHeat.toFixed(0)} SH ${d.sensibleHeat.toFixed(0)} · rain ${(d.precipitation * 86400).toFixed(2)} mm/d · TPW ${d.columnWater.toFixed(1)} · TCW ${(1000 * d.columnCloud).toFixed(0)} g/m² · ice ${(100 * d.iceFraction).toFixed(0)}% · albedo ${d.planetaryAlbedo.toFixed(2)} · N=${latest.N ?? ''} ${latest.engine === 'gpu' ? '· GPU' : latest.workers > 1 ? `· ${latest.workers} workers` : ''}`;
   }
 
   function update(changes) {
@@ -247,7 +247,7 @@ export default function runClimate({ N = null, from = null, workers = 1, paused 
     }
   };
   worker.onerror = (error) => { document.getElementById('date').textContent = `worker error: ${error.message}`; };
-  worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null, workers: crossOriginIsolated ? workers : 1, paused, level: settings.level });
+  worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null, workers: crossOriginIsolated ? workers : 1, engine, paused, level: settings.level });
 
   for (const group of panel.querySelectorAll('.options[data-setting]')) {
     group.addEventListener('click', (event) => {

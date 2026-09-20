@@ -330,7 +330,7 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, setForcing, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV } };
+  return { K, levels, sigmaMid, nu4, nu4Theta, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, setForcing, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV } };
 }
 
 /*

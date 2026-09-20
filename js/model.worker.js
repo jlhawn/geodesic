@@ -1,6 +1,7 @@
 import { Grid } from './grid.module.js';
 import { createModel } from './model.module.js';
 import { createParallelModel } from './parallel.module.js';
+import { createGpuModel } from './gpu/model.gpu.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean } from './physics/regrid.module.js';
@@ -15,7 +16,9 @@ let level = 'surface', layerWinds = [], lastFrameTime = 0;
  * lowest layer) plus surface pressure; the cell-center winds of a layer
  * are reconstructed only when that layer bounds the level somewhere.
  */
-function postFrame() {
+async function postFrame() {
+  if (model.sync) await model.sync();
+  const diagnostics = await model.diagnostics();
   const { mesh, core, state, time } = model;
   const [pi, theta, u, surfaceT] = state;
   const E = mesh.nEdges;
@@ -28,18 +31,17 @@ function postFrame() {
   const ps = Float32Array.from(pi), ts = Float32Array.from(surfaceT);
   const water = new Float32Array(mesh.nCells), cloud = new Float32Array(mesh.nCells);
   for (let i = 0; i < mesh.nCells; i++) { water[i] = model.moist.columnWater(pi, q, i); cloud[i] = model.moist.columnWater(pi, qc, i); }
-  const diagnostics = model.diagnostics();
   const interval = time - lastFrameTime;
   lastFrameTime = time;
   for (let i = 0; i < mesh.nCells; i++) precipitation[i] = interval > 0 ? precipitation[i] / interval * 86400 : 0;
-  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, ts, ...fields, precipitation, water, cloud, ice, albedo, diagnostics };
+  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, ts, ...fields, precipitation, water, cloud, ice, albedo, diagnostics, engine: model.engine ?? 'cpu' };
   self.postMessage(message, [ps.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer]);
 }
 
-function loop() {
+async function loop() {
   if (!running) return;
-  for (let n = 0; n < stepsPerFrame; n++) model.step(dt);
-  postFrame();
+  for (let n = 0; n < stepsPerFrame; n++) await model.step(dt);
+  await postFrame();
   setTimeout(loop, 0);
 }
 
@@ -90,9 +92,11 @@ async function start(message) {
   const workers = message.workers ?? 1;
   status(`building the N=${N} grid${workers > 1 ? ` and ${workers} workers` : ''}…`);
   const grid = new Grid(N);
-  model = workers > 1 ? await createParallelModel(grid, message.options ?? {}, workers) : createModel(grid, message.options ?? {});
+  const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
+  model = gpuWanted ? await createGpuModel(grid, message.options ?? {}) : workers > 1 ? await createParallelModel(grid, message.options ?? {}, workers) : createModel(grid, message.options ?? {});
   const init = initialState(model, saved, N);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  if (model.load) model.load();
   if (model.ocean) {
     if (saved && saved.ocean) model.ocean.load(saved.N === N ? saved.ocean : regridOcean(createModel(new Grid(saved.N)), model, saved.ocean), model.state[3], model.state[6]);
     else model.ocean.initialize(model.state[3], model.state[6]);

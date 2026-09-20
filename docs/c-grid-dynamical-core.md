@@ -1248,6 +1248,73 @@ workers): `runs/pbl64_state_day875.json`, 285.3 K, sea ice on 11 % of
 the area at 0.7 m, planetary albedo 0.30, +8 W/m², currents to 2 m/s
 and the upper layer entrained to a 70 m mean at N=64.
 
+### M15 — The model on the GPU (`js/gpu/`) — done
+
+The whole step runs on the GPU through WebGPU: in Node through Google's
+Dawn (the `webgpu` package, a dev dependency, so the GPU kernels sit in
+the same test suite as the CPU engine and never need a browser to be
+checked), in the page through `navigator.gpu`. Everything on the device
+is single precision.
+
+- `core.gpu.js` packs the mesh into one integer and one float buffer,
+  the level constants into a third, the state into one f32 buffer with
+  the CPU layout inside it (the RK4 stages, the trial state and the
+  tendency share it), the diagnostics into one scratch buffer and the
+  physics arrays into another; every kernel binds the same eight
+  buffers so a bind group is a choice of input and output. A tendency
+  is eight dispatches — edge mass fluxes, layer divergences, the column
+  (dπ/dt, πσ̇, the Exner and geopotential diagnosis, the drag rate),
+  kite-weighted π on vertices, PV on vertices and on edges, the cell
+  tendencies (kinetic energy, θ/q/qc transport) and the momentum
+  tendency — then a fused advance; the ∇⁴ closures are two Laplacian
+  passes per field, and dispatches beyond 65535 workgroups go through a
+  second dimension.
+- `physics.gpu.js` is the column physics one thread per column: the
+  three-band radiation with clouds and the direct/diffuse surface
+  reflection, the bulk fluxes, the sea ice, the boundary-layer
+  diagnosis, and the adjustment (boundary-layer mixing by the
+  tridiagonal solve, saturation adjustment, Betts–Miller with
+  detrainment, autoconversion, the filler, the dry adjustment), with
+  momentum mixing one thread per edge. `ocean.gpu.js` is the two-layer
+  ocean with its own state, stages and a ten-buffer binding that adds
+  the atmosphere's state and diagnostics for the coupling kernels.
+- `model.gpu.js` presents the CPU model's interface: double-precision
+  mirrors refreshed by `sync`, an asynchronous `step`, `diagnostics`
+  from the per-cell energy terms read back and summed on the CPU, and
+  the ocean's initialize/load/serialize. The run driver takes
+  `ENGINE=gpu`; the page takes `?engine=gpu`, the default when WebGPU
+  is available, and says so on the status line.
+
+Precision. The σ-coordinate column is the one place single precision
+bit: the Exner span of a bottom layer is the difference of two numbers
+near 1, and that cost 1e-5 relative in the layer Exner, 2.4 J/kg in the
+geopotential and 3.6×10⁻⁶ m/s² in the pressure gradient. Two exact
+factorings remove it: all σ-dependence of the Exner integrals is
+precomputed in double precision as level constants (the layer Exner,
+its π-derivative and the interface interpolation weights become one
+well-conditioned power per column times a constant), and the
+geopotential is carried as a deviation from a reference column built
+from the initial mean θ profile, so gradients come from small numbers.
+What remains, ~1e-7 m/s² in the momentum tendency at the top of the
+atmosphere, is the f32 rounding of θ itself near 2000 K.
+
+Verification (`test/gpu.test.mjs`, `test/gpuModel.test.mjs`): the
+tendency matches the CPU core to 3×10⁻⁶ in dπ/dt and 4×10⁻⁵ in dθ/dt; a
+rest state stays at rest; twenty dynamics steps agree to a surface-
+pressure RMS of 0.008 Pa and 4×10⁻⁴ m/s in wind; one full step with
+physics agrees to 1.8×10⁻⁷ in θ and 3×10⁻⁵ K in surface temperature;
+twelve steps give the same mean temperature, absorbed solar and OLR to
+the last printed digit; eight coupled steps with the ocean agree to
+10⁻⁴ K and 10⁻⁶ m/s. A 100-day N=16 run from the tuned state tracks
+the CPU run's climate (temperature within 0.2 K, the same ice cover,
+fluxes within weather noise).
+
+Cost at N=64: dynamics and closures 38 ms per step, the whole step 71
+ms, against 291 ms on ten CPU cores — 79 simulated hours per minute at
+the 3× step in Node, 40 in the pane's browser while sharing the GPU.
+The gain is smaller at N=16 (1.4 against 1.9 minutes per 100 days),
+where the grid is too small to fill the GPU.
+
 ## 7. Module layout in this repo
 
 ```
@@ -1269,6 +1336,12 @@ js/
     ice.module.js           M9/M11: slab ocean with zero-layer sea ice, diffusive heat transport, zenith albedo
   ocean/
     reducedGravity.module.js M13: two-layer reduced-gravity ocean, wind-driven, coupled through the sea-ice cell update
+  gpu/
+    device.module.js         M15: WebGPU device (Dawn in Node, navigator.gpu in the page) and buffer helpers
+    core.gpu.js              M15: layouts, dynamics kernels, RK4 and closures, full-step orchestration
+    physics.gpu.js           M15: column physics and adjustment kernels
+    ocean.gpu.js             M15: the two-layer ocean's kernels and driver
+    model.gpu.js             M15: the GPU model behind the CPU model's interface
   model.module.js           assembles core + physics, RK4 step, diagnostics
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase
