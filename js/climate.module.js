@@ -14,12 +14,23 @@ const OVERLAYS = {
   precip: { label: 'Precip', unit: 'mm/day', kind: 'sequential', field: 'precipitation', scale: 1, range: () => [0, 30] },
   tpw: { label: 'TPW', unit: 'kg/m²', kind: 'sequential', field: 'water', scale: 1, range: () => [0, 60] },
   tcw: { label: 'TCW', unit: 'g/m²', kind: 'sequential', field: 'cloud', scale: 1000, range: () => [0, 500] },
+  clouds: { label: 'Clouds', unit: 'g/m²', kind: 'clouds', field: 'cloud', scale: 1000, range: () => [0, 100] },
   ice: { label: 'Ice', unit: 'm', kind: 'sequential', field: 'ice', scale: 1, range: () => [0, 3] },
   albedo: { label: 'Albedo', unit: '', kind: 'sequential', field: 'albedo', scale: 1, range: () => [0, 0.8] },
   mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'ps', scale: 0.01, range: () => [960, 1060] },
   none: { label: 'None' },
 };
-const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Total precipitable water', tcw: 'Total cloud water', ice: 'Sea ice thickness', albedo: 'Surface albedo', mslp: 'Mean sea level pressure' };
+const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Total precipitable water', tcw: 'Total cloud water', clouds: 'Cloud cover over the surface', ice: 'Sea ice thickness', albedo: 'Surface albedo', mslp: 'Mean sea level pressure' };
+
+/*
+ * The cloud view: open water is ocean blue, ice whitens with thickness,
+ * and cloud is white composited on top with an opacity that rises with
+ * the column's cloud water, 1 − exp(−TCW / CLOUD_OPACITY_SCALE), so
+ * clear sky is transparent and 40 g/m² is two-thirds opaque.
+ */
+const OCEAN_COLOR = [0.05, 0.22, 0.45], ICE_COLOR = [0.85, 0.90, 0.95], CLOUD_COLOR = [1, 1, 1], CLOUD_OPACITY_SCALE = 40;
+const cloudOpacity = (grams) => 1 - Math.exp(-Math.max(0, grams) / CLOUD_OPACITY_SCALE);
+const CLOUD_STOPS = Array.from({ length: 11 }, (_, k) => { const a = cloudOpacity(10 * k); return OCEAN_COLOR.map((c, j) => c + a * (CLOUD_COLOR[j] - c)); });
 
 /*
  * Palettes as sRGB stops. The sequential ones are perceptually uniform
@@ -154,9 +165,24 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       document.getElementById('data').textContent = `Wind @ ${levelLabel(settings.level)} · no overlay`;
       return;
     }
-    const stops = PALETTES[overlay.kind][settings.palettes[overlay.kind]] ?? Object.values(PALETTES[overlay.kind])[0];
     const [min, max] = overlay.range(settings.level);
     const values = latest[overlay.field];
+    if (overlay.kind === 'clouds') {
+      const ice = latest.ice;
+      for (let i = 0; i < grid.size; i++) {
+        const frozen = Math.min(1, ice[i] / 0.5), cloud = cloudOpacity(values[i] * overlay.scale);
+        for (let j = 0; j < 3; j++) {
+          const base = OCEAN_COLOR[j] + frozen * (ICE_COLOR[j] - OCEAN_COLOR[j]);
+          rgb[3 * i + j] = LINEAR[Math.round(255 * (base + cloud * (CLOUD_COLOR[j] - base)))];
+        }
+      }
+      viewer.updateColors(rgb);
+      scaleRow.style.visibility = 'visible';
+      renderScale(CLOUD_STOPS, min, max, overlay.unit);
+      document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(settings.level)}`;
+      return;
+    }
+    const stops = PALETTES[overlay.kind][settings.palettes[overlay.kind]] ?? Object.values(PALETTES[overlay.kind])[0];
     for (let i = 0; i < grid.size; i++) {
       color((values[i] * overlay.scale - min) / (max - min), stops, rgb, 3 * i);
       rgb[3 * i] = LINEAR[rgb[3 * i]]; rgb[3 * i + 1] = LINEAR[rgb[3 * i + 1]]; rgb[3 * i + 2] = LINEAR[rgb[3 * i + 2]];
@@ -203,8 +229,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     stepSelect.value = String(settings[isolines.setting]);
     const paletteSelect = document.getElementById('palette');
     const overlay = OVERLAYS[settings.overlay];
-    paletteSelect.style.display = overlay.kind ? '' : 'none';
-    if (overlay.kind) {
+    paletteSelect.style.display = overlay.kind && PALETTES[overlay.kind] ? '' : 'none';
+    if (overlay.kind && PALETTES[overlay.kind]) {
       paletteSelect.replaceChildren(...Object.keys(PALETTES[overlay.kind]).map((name) => { const option = document.createElement('option'); option.value = name; option.textContent = name; return option; }));
       paletteSelect.value = settings.palettes[overlay.kind];
     }
