@@ -118,6 +118,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     run(PHASE.ADVANCE, { stage: 2, factor: dt });
     tendencyPhases(1, 3);
     run(PHASE.COMBINE, { dt });
+    model.phases.ocean();
     run(PHASE.PHYSICS, { dt });
     run(PHASE.CLOSURE, { dt });
     run(PHASE.ADJUST, { dt });

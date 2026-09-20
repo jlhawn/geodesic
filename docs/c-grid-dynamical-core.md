@@ -853,10 +853,11 @@ sources are off (`moist: false` carries q but never sources it).
   precipitable water join the budget line. The page overlays RH (at the
   selected height), precipitation and TPW.
 - **Radiation coupling.** By default the vapour band's optical depth
-  follows the model's own humidity: 2 m²/kg times each layer's water
-  mass (`vaporCoupling`; 0 restores the prescribed Frierson profile,
-  which the single-column initial profile still uses). This is the
-  water-vapour feedback the prescribed profile lacked.
+  follows the model's own humidity: `vaporCoupling` m²/kg times each
+  layer's water mass (0.55 with clouds in radiation; 0 restores the
+  prescribed Frierson profile, which the single-column initial profile
+  still uses). This is the water-vapour feedback the prescribed profile
+  lacked.
 
 Tuning (500-day N=3 runs, annual means). With the dry model's τ_e the
 moist model settles ~6 K colder: evaporation cools the surface and
@@ -905,7 +906,7 @@ Column cloud water (TCW) is a diagnostic and a page overlay; the step
 costs 126 ms serial at N=16 against 98 ms dry. Cloud–radiation
 coupling (albedo and longwave emissivity of cloud) is the next step.
 
-### M9 — Sea ice and surface albedo — done (untuned)
+### M9 — Sea ice and surface albedo — done
 
 `js/physics/ice.module.js` is a zero-layer thermodynamic sea-ice model
 in the manner of Semtner (1976) on the slab ocean, with ice thickness
@@ -923,25 +924,87 @@ surface flux through every transition (`test/ice.test.mjs`).
 `surfaceT` is the skin temperature the atmosphere sees in both states.
 Albedo is 0.07 for open water, rising linearly to 0.6 at 0.5 m of ice.
 The initial state carries 0.5 m of ice wherever the initial surface is
-below freezing (poleward of ~60°).
+below freezing (poleward of ~60°). A prescribed ocean heat transport
+(`oceanHeatFlux`, Q₀ = 20 W/m²) converges Q₀(3 sin²φ − 1) into the
+mixed layer — zero in the global mean, cooling the tropics, warming
+the poles by up to 2 Q₀ — and melts ice from below where it is
+covered. It stands in for the poleward heat carried by ocean currents,
+without which the ice–albedo feedback runs the ice edge to ~45°.
 
-### M10 — Clouds in radiation — done (untuned)
+### M10 — Clouds in radiation — done
 
 Each layer's cloud water path gives it a gray emissivity
 1 − exp(−130 m²/kg × path) that joins every longwave band: the vapour
 and gas bands as 1 − (1 − ε_gas)(1 − ε_cloud), and the window, which is
 now an exchange band of its own that is transparent only where there is
-no cloud. In the shortwave the column's cloud optical depth (22.5 m²/kg
-× path, i.e. 150 m²/kg scaled by 1 − g with g = 0.85) reflects the beam
+no cloud. In the shortwave the column's cloud optical depth
+(`cloudScattering` = 60 m²/kg × path) reflects the beam
 with the two-stream reflectance τ/(τ + 2μ); what passes is absorbed by
 the surface with its per-cell albedo, with the multiple reflections
 between surface and cloud summed. The fixed planetary albedo of 0.3 is
 gone: it is now produced by clouds and ice, and diagnosed. Radiation's
 closure still holds exactly (with the latent heat of evaporation
 counted as leaving the surface). The cloud–albedo, cloud–longwave and
-ice–albedo feedbacks are all live from here, so the climate needs a
-tuning pass over the cloud optical scale, the autoconversion threshold
-and the vapour coupling.
+ice–albedo feedbacks are all live from here.
+
+Tuning. 400-day N=8 runs (annual means) put the three knobs — the
+cloud optical scale, the vapour coupling and the ocean heat transport
+— at 60 m²/kg, 0.55 and Q₀ = 20 W/m²: 288.4 K, planetary albedo
+0.304, ice on 21 % of the area, tropics 302 K, poles 256 K. **That
+climate does not survive at N=16.** With eddies resolved the same
+settings freeze: ice 25 % at day 100, 43 % and 274.5 K at day 400 and
+still cooling, with 100 % ice cover to 30°S and a 100–170 g/m² cloud
+band sitting on both ice edges. Cold air off the ice evaporates hard
+over the open water, the cloud band reflects the sunlight at the edge,
+the mixed layer under it freezes and the edge advances; the prescribed
+ocean transport crosses zero at 35° and delivers nothing there. N=8
+has no cold-air outbreaks, so it never sees this. The opposite knob
+setting (scale 30, coupling 1.0) runs the other way at N=16: the ice is
+gone by day 300 and the planet is at 298 K and warming at day 400.
+Started from the warm moist day-100 state the defaults still freeze,
+one hemisphere at a time (the south 100 % iced to 20°S at 2 m while the
+north is ice-free at 301 K).
+
+The instability is the ice–albedo feedback at Earth-unlike strength:
+with ice on a fifth of the sphere and an albedo contrast of 0.53 a 10 K
+warming frees ~25 W/m², eight times Earth's. Tuning cannot fix that;
+it needs (a) ocean heat transport that responds to the ice edge
+(diffusion of the mixed-layer temperature, the standard slab-aquaplanet
+device, ~0.3 W/m²/K in energy-balance units ≈ 2 PW), (b) a smaller
+albedo contrast at the latitudes that matter (zenith-angle-dependent
+open-water albedo, ice nearer 0.5), and (c) tuning at N=16, where the
+climate is the model's own. Tuning runs at N=8 are not representative.
+
+### M11 — A stable ice edge: ocean diffusion and zenith albedo — done (tuning)
+
+Three changes to `js/physics/ice.module.js` and one to radiation,
+aimed at the two feedbacks that ran away in M10:
+
+- **Diffusive ocean heat transport.** Once per step, before the
+  physics phase, `seaIce.prepare` forms the mixed-layer temperature
+  (the surface temperature over open water, the freezing point under
+  ice), takes its mesh Laplacian and stores the convergence
+  `oceanDiffusivity` R² ∇²T plus the fixed Q-flux in a shared
+  `oceanFlux` array that the cell update then consumes. Heat flows
+  down the gradient, so an advancing ice edge pulls heat toward itself
+  from the water beside it and an ice interior at uniform freezing
+  point receives nothing. The coefficient is the energy-balance
+  diffusivity in W/m²/K; 0.3 carries about 2 PW poleward at 35°, the
+  real ocean's share. The Laplacian is the divergence of edge fluxes, so
+  the convergence sums to zero over the sphere to roundoff
+  (`test/ice.test.mjs`). It runs on the main thread in both engines
+  (`phases.ocean`), which keeps the workers' cell updates free of
+  neighbour reads and the parallel step bit-identical to the serial
+  one. The prescribed profile stays available but defaults to zero.
+- **Zenith-angle albedo of open water.** Briegleb et al. (1986):
+  0.02 under a high sun, 0.07 at 60° zenith, 0.3 near the horizon.
+  Radiation exposes `cosZenith(i)` and the physics phase evaluates the
+  per-cell albedo with it. The albedo contrast between water and ice
+  at the latitudes where ice forms is roughly halved.
+- **Ice albedo 0.5**, the value of bare summer sea ice, instead of 0.6.
+- **Tuning at N=16 only.** 400 days cost 9 minutes on 10 workers;
+  `scratchpad/trisk/annual.sh <log>` prints the annual means and
+  `zonal.mjs <state.json>` the 10° bands of temperature, ice and cloud.
 
 ## 7. Module layout in this repo
 
@@ -960,7 +1023,7 @@ js/
     init.module.js          ported: thermal init, balance, seed, bands, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
-    ice.module.js           M9: slab ocean with zero-layer sea ice and surface albedo
+    ice.module.js           M9/M11: slab ocean with zero-layer sea ice, diffusive heat transport, zenith albedo
   model.module.js           assembles core + physics, RK4 step, diagnostics
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase

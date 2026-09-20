@@ -2,11 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createSeaIce, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
+import { createSeaIce, openWaterAlbedo, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 
 const model = createModel(new Grid(2));
-const seaIce = createSeaIce(model.mesh);
+const seaIce = createSeaIce(model.mesh, { oceanHeatFlux: 0, oceanDiffusivity: 0 });
 
 test('the surface energy changes by exactly the surface flux through freezing, growth, melting and thaw', () => {
   const surfaceT = new Float64Array([FREEZING_POINT + 2]), ice = new Float64Array([0]);
@@ -33,6 +33,58 @@ test('a cold skin over thick ice conducts heat up from the base and grows the ic
   seaIce.update(surfaceT, ice, flux, 0, 900);
   assert.ok(ice[0] > 1, 'ice grew');
   assert.ok(surfaceT[0] > FREEZING_POINT - 20, 'the skin warmed');
+});
+
+test('the ocean heat convergence has zero global mean and warms the poles at the tropics\' expense', () => {
+  const withFlux = createSeaIce(model.mesh, { oceanHeatFlux: 25 });
+  let sum = 0, area = 0, pole = 0, equator = 0;
+  for (let i = 0; i < model.mesh.nCells; i++) {
+    sum += model.mesh.areaCell[i] * withFlux.convergence[i]; area += model.mesh.areaCell[i];
+    if (Math.abs(model.mesh.latCell[i]) > 1.3) pole = withFlux.convergence[i];
+    if (Math.abs(model.mesh.latCell[i]) < 0.2) equator = withFlux.convergence[i];
+  }
+  assert.ok(Math.abs(sum / area) < 0.5, `global mean ${sum / area} W/m²`);
+  assert.ok(pole > 30 && equator < -20);
+});
+
+test('mixed-layer diffusion conserves energy and carries heat from open water into the ice edge', () => {
+  const m = createModel(new Grid(4));
+  const { mesh } = m;
+  const withDiffusion = createSeaIce(mesh, { oceanHeatFlux: 0, oceanDiffusivity: 0.3 });
+  const surfaceT = new Float64Array(mesh.nCells), ice = new Float64Array(mesh.nCells);
+  for (let i = 0; i < mesh.nCells; i++) {
+    const polar = Math.abs(mesh.latCell[i]) > Math.PI / 3;
+    surfaceT[i] = polar ? FREEZING_POINT - 10 : 300 - 25 * Math.sin(mesh.latCell[i]) ** 2;
+    ice[i] = polar ? 1 : 0;
+  }
+  withDiffusion.prepare(surfaceT, ice);
+  let total = 0, magnitude = 0, edgeIce = 0, interiorIce = 0, edgeWater = 0;
+  for (let i = 0; i < mesh.nCells; i++) {
+    const a = mesh.areaCell[i], f = withDiffusion.oceanFlux[i];
+    total += a * f; magnitude += a * Math.abs(f);
+    let openNeighbour = false, icyNeighbour = false;
+    for (let k = 0; k < mesh.nEdgesOnCell[i]; k++) {
+      const j = mesh.cellsOnCell[mesh.maxEdges * i + k];
+      if (ice[j] > 0) icyNeighbour = true; else openNeighbour = true;
+    }
+    if (ice[i] > 0 && openNeighbour) edgeIce = Math.max(edgeIce, f);
+    if (ice[i] > 0 && !openNeighbour) interiorIce = Math.max(interiorIce, Math.abs(f));
+    if (ice[i] === 0 && icyNeighbour) edgeWater = Math.min(edgeWater, f);
+  }
+  assert.ok(Math.abs(total) < 1e-9 * magnitude, `net convergence ${total / magnitude} of the gross`);
+  assert.ok(edgeIce > 10, `ice at the edge receives ${edgeIce} W/m²`);
+  assert.ok(interiorIce < 1e-9, `ice interior receives ${interiorIce} W/m²`);
+  assert.ok(edgeWater < -10, `open water at the edge loses ${edgeWater} W/m²`);
+});
+
+test('open water is dark under a high sun and bright near the horizon', () => {
+  assert.ok(openWaterAlbedo(1) < 0.03);
+  assert.ok(Math.abs(openWaterAlbedo(0.5) - 0.07) < 0.01);
+  assert.ok(openWaterAlbedo(0.1) > 0.25 && openWaterAlbedo(0.1) < 0.4);
+  for (let mu = 0.05; mu < 0.8; mu += 0.05) assert.ok(openWaterAlbedo(mu) > openWaterAlbedo(mu + 0.05));
+  assert.ok(openWaterAlbedo(1) < openWaterAlbedo(0.5));
+  assert.ok(seaIce.albedo(0, 0.1) > seaIce.albedo(0, 0.9));
+  assert.equal(seaIce.albedo(1, 0.1), seaIce.albedo(1, 0.9));
 });
 
 test('albedo rises from open water to thick ice', () => {

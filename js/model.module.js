@@ -29,7 +29,9 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  *   vertex(verts)  kite-weighted π
  *   layer(layers)  θ and momentum tendencies, drag
  * After the RK4 step, once per step and applied to the state directly:
- *   physics(cells) radiation, surface fluxes and evaporation
+ *   ocean()        the ocean heat convergence from the whole mixed
+ *                  layer (main thread only, before physics)
+ *   physics(cells) radiation, surface fluxes, evaporation, sea ice
  *   closure(layers) the ∇⁴ closures
  *   adjust(cells)  condensation, convection, filler
  * Arrays read across phases live in `shared`; `buffers` adopts another
@@ -49,7 +51,7 @@ export function createModel(gridOrMesh, {
   const radiation = createRadiation(mesh, core, radiationOptions);
   const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, ...surfaceOptions });
   const moistPhysics = createMoistPhysics(mesh, core, { buffers: buffers ? buffers.moist : null, ...moistOptions });
-  const seaIce = createSeaIce(mesh, iceOptions);
+  const seaIce = createSeaIce(mesh, { buffers: buffers ? buffers.ice : null, ...iceOptions });
   const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C);
 
@@ -66,13 +68,14 @@ export function createModel(gridOrMesh, {
       core.phaseLayer(input, out, kFrom, kTo, part);
       if (physics && part !== 'tracers') surface.applyLayers(input, out, kFrom, kTo);
     },
+    ocean() { if (physics) seaIce.prepare(state[3], state[6]); },
     physics(iFrom, iTo, dt, sums) {
       if (!physics) return;
       surface.lowestWindSpeed(state[2], iFrom, iTo);
       const bottom = (K - 1) * C;
       forcing[3].fill(0, iFrom, iTo);
       for (let k = 0; k < K; k++) { forcing[1].fill(0, k * C + iFrom, k * C + iTo); forcing[4].fill(0, k * C + iFrom, k * C + iTo); }
-      for (let i = iFrom; i < iTo; i++) surfaceAlbedo[i] = seaIce.albedo(state[6][i]);
+      for (let i = iFrom; i < iTo; i++) surfaceAlbedo[i] = seaIce.albedo(state[6][i], radiation.cosZenith(i));
       radiation.apply(moist ? state : state.slice(0, 4), forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo);
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
       for (let i = iFrom; i < iTo; i++) seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt);
@@ -98,13 +101,14 @@ export function createModel(gridOrMesh, {
   let rk4 = null;
   const model = {
     mesh, core, radiation, surface, moist: moistPhysics, seaIce, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
-    shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
+    shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, ice: seaIce.shared, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
   model.step = function step(dt) {
     rk4 ??= createRK4Arrays(STATE_NAMES.map((name) => lengths[name]));
     radiation.setTime(model.time);
     rk4(tendency, state, dt);
+    phases.ocean();
     phases.physics(0, C, dt, totals);
     phases.closure(0, K, dt);
     phases.adjust(0, C, dt);

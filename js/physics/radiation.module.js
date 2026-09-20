@@ -57,10 +57,10 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * ozone maximum as it does at the stratopause.
  */
 export function createRadiation(mesh, core, {
-  solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 22.5,
+  solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 60,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 5,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3,
-  exchangeCoefficient = 1.5e-3, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 2,
+  exchangeCoefficient = 1.5e-3, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, exnerLayer } = core.diagnostics;
   const levels = core.levels;
@@ -87,9 +87,12 @@ export function createRadiation(mesh, core, {
     sunDirection(t, sun);
   }
 
+  function cosZenith(i) {
+    return Math.max(0, mesh.xCell[3 * i] * sun[0] + mesh.xCell[3 * i + 1] * sun[1] + mesh.xCell[3 * i + 2] * sun[2]);
+  }
+
   function insolation(i) {
-    const cosZenith = mesh.xCell[3 * i] * sun[0] + mesh.xCell[3 * i + 1] * sun[1] + mesh.xCell[3 * i + 2] * sun[2];
-    return solarConstant * Math.max(0, cosZenith);
+    return solarConstant * cosZenith(i);
   }
 
   function band(fraction, eps, surfaceEmission) {
@@ -194,5 +197,5 @@ export function createRadiation(mesh, core, {
     }
   }
 
-  return { setTime, sun, insolation, column, apply, layerFlux: netFlux, surfaceFlux, budget, emissivity, opticalDepth, ozoneFraction };
+  return { setTime, sun, cosZenith, insolation, column, apply, layerFlux: netFlux, surfaceFlux, budget, emissivity, opticalDepth, ozoneFraction };
 }
