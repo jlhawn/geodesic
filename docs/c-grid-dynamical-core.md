@@ -1398,8 +1398,10 @@ scattering 35 and gas optical depth 7 (from 55 and 5), land albedo 0.2
 and snow albedo 0.55: annual mean 288.6 K, planetary albedo 0.30, sea
 ice 1% (0.1–3% over the year), land 286 K with snow on a fifth of it,
 and the warm start drifts by +0.3 K a year toward an equilibrium at or
-just above it. The tuned N=16 state cascades to N=32 and N=64 on the
-GPU for the page's default.
+just above it. The tuned N=16 state cascaded to N=32 for 50 days and
+N=64 for 25 days on the GPU; `runs/cont64_state_day1440.json` is the
+page's default, and the GPU engine runs it at 72 simulated hours per
+minute, the aquaplanet's pace.
 
 ### M17 — Terrain — done
 
