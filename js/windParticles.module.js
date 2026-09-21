@@ -2,15 +2,18 @@
  * Wind shown by particles: each frame every particle moves with the
  * field at its own position and is drawn as a dot that fades in from
  * nothing to `opacity` over its first `fadeIn` seconds and, once told
- * to go, fades back out over `fadeOut` seconds while still drifting. The screen is kept evenly covered: it is divided
- * into bins, a bin with too few particles receives new ones at random
- * points inside it, and a bin with too many loses one, so the flow
- * neither piles particles up where it converges nor empties them where
- * it diverges. Particles out of view for a second are dropped,
- * and with an admission mask (the sea, for currents) particles exist
- * only on admitted cells.
+ * to go, fades back out over `fadeOut` seconds while still drifting.
+ * The screen is kept evenly covered: it is divided into bins of `bin`
+ * pixels, each of `fine`-pixel cells. A bin with too few particles
+ * receives new ones in its emptiest cells, a bin with too many loses
+ * one from its most crowded cell, and any cell holding `crowding`
+ * times its share loses one outright, so the flow neither piles
+ * particles up where it converges nor empties them where it diverges,
+ * and a clump or a convergence line is thinned where it stands.
+ * Particles out of view for a second are dropped, and with an admission
+ * mask (the sea, for currents) particles exist only on admitted cells.
  */
-export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.25, size = 1.25, opacity = 0.5, fadeIn = 0.5, fadeOut = 0.5, bin = 32, slack = 0.4, maximum = 200000 } = {}) {
+export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.25, size = 1.25, opacity = 0.5, fadeIn = 0.5, fadeOut = 0.5, bin = 32, fine = 8, slack = 0.4, crowding = 4, maximum = 200000 } = {}) {
   const C = grid.size;
   const centers = new Float32Array(3 * C);
   const neighborCount = new Uint8Array(C);
@@ -34,7 +37,9 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
   const born = new Float64Array(maximum), dying = new Float64Array(maximum);
   const active = new Int32Array(maximum), slotOf = new Int32Array(maximum), free = new Int32Array(maximum);
   let count = 0, freeCount = 0;
-  let cols = 0, rows = 0, counts = null, seed = null, seen = null, coverage = null;
+  let cols = 0, rows = 0, counts = null, seed = null, coverage = null;
+  let fcols = 0, frows = 0, fineCounts = null, fineSeen = null;
+  const per = Math.round(bin / fine), crowd = Math.max(3, Math.ceil(crowding * density * fine * fine));
   let field = null, reference = referenceSpeed, mask = null, visible = true, lastCell = 0;
   let frames = 0, coverageVersion = -1, coverageFrame = -1;
 
@@ -44,7 +49,9 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
     canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     cols = Math.ceil(width / bin); rows = Math.ceil(height / bin);
-    counts = new Int32Array(cols * rows); seen = new Int32Array(cols * rows); seed = new Int32Array(cols * rows).fill(-1); coverage = new Float32Array(cols * rows);
+    counts = new Int32Array(cols * rows); seed = new Int32Array(cols * rows).fill(-1); coverage = new Float32Array(cols * rows);
+    fcols = cols * per; frows = rows * per;
+    fineCounts = new Int32Array(fcols * frows); fineSeen = new Int32Array(fcols * frows);
     coverageVersion = -1;
   }
   function reset() {
@@ -135,7 +142,7 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
     if (version !== coverageVersion && (coverageVersion === -1 || frames - coverageFrame >= 6)) { measureCoverage(); coverageVersion = version; coverageFrame = frames; }
     const step = pixelsPerFrame / (reference * viewer.pixelsPerUnit());
     const paths = Array.from({ length: buckets }, () => new Path2D());
-    counts.fill(0); seen.fill(-1);
+    counts.fill(0); fineCounts.fill(0);
     retiring.length = 0;
     for (let a = 0; a < count; a++) {
       const n = active[a];
@@ -151,22 +158,34 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
       if (screen[2] <= 0 || screen[0] < 0 || screen[0] >= width || screen[1] < 0 || screen[1] >= height) { if (++hidden[n] > 60) retiring.push(n); continue; }
       hidden[n] = 0;
       const b = (screen[1] / bin | 0) * cols + (screen[0] / bin | 0);
-      if (!dying[n]) { counts[b]++; seen[b] = n; seed[b] = cellOf[n]; }
+      if (!dying[n]) { counts[b]++; seed[b] = cellOf[n]; const f = (screen[1] / fine | 0) * fcols + (screen[0] / fine | 0); fineCounts[f]++; fineSeen[f] = n; }
       const bucket = Math.min(buckets - 1, Math.floor(buckets * fading * Math.min(1, (now - born[n]) / (1000 * fadeIn))));
       paths[bucket].rect(screen[0] - size / 2, screen[1] - size / 2, size, size);
     }
     for (const n of retiring) remove(n);
 
+    for (let f = 0; f < fineCounts.length; f++) if (fineCounts[f] >= crowd) retire(fineSeen[f]);
+
     let budget = 2000;
-    const area = bin * bin;
+    const area = bin * bin, cells = [];
     for (let b = 0; b < counts.length && budget > 0; b++) {
       const target = density * area * coverage[b];
       if (target < 0.5) continue;
-      if (counts[b] > target * (1 + slack)) { if (seen[b] >= 0) retire(seen[b]); continue; }
-      if (counts[b] >= target * (1 - slack)) continue;
       const c = b % cols, r = (b - c) / cols;
-      for (let wanted = Math.min(4, Math.ceil(target - counts[b])); wanted > 0 && budget > 0; wanted--) {
-        const px = (c + Math.random()) * bin, py = (r + Math.random()) * bin;
+      if (counts[b] > target * (1 + slack)) {
+        let densest = -1, most = 0;
+        for (let j = 0; j < per; j++) for (let i = 0; i < per; i++) { const f = (r * per + j) * fcols + c * per + i; if (fineCounts[f] > most) { most = fineCounts[f]; densest = f; } }
+        if (densest >= 0) retire(fineSeen[densest]);
+        continue;
+      }
+      if (counts[b] >= target * (1 - slack)) continue;
+      cells.length = 0;
+      let fewest = Infinity;
+      for (let j = 0; j < per; j++) for (let i = 0; i < per; i++) { const f = (r * per + j) * fcols + c * per + i; if (fineCounts[f] < fewest) { fewest = fineCounts[f]; cells.length = 0; } if (fineCounts[f] === fewest) cells.push(f); }
+      for (let wanted = Math.min(4, Math.ceil(target - counts[b])); wanted > 0 && budget > 0 && cells.length; wanted--) {
+        const pick = Math.floor(Math.random() * cells.length), f = cells[pick];
+        cells[pick] = cells[cells.length - 1]; cells.length--;
+        const px = ((f % fcols) + Math.random()) * fine, py = (((f - f % fcols) / fcols) + Math.random()) * fine;
         if (px >= width || py >= height || !viewer.unprojectPoint(px, py, point)) continue;
         const cell = locate(point[0], point[1], point[2], seed[b] >= 0 ? seed[b] : lastCell);
         lastCell = cell; seed[b] = cell;
