@@ -272,14 +272,14 @@ const KERNELS = {
 };
 
 export const PHYSICS_DEFAULTS = {
-  solarConstant: 1362, cloudAbsorption: 130, cloudScattering: 55, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
-  gasFraction: 0.2, gasOpticalDepth: 5, ozoneAbsorption: 0.03, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
+  solarConstant: 1362, cloudAbsorption: 130, cloudScattering: 35, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
+  gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
   exchangeCoefficient: 1.5e-3, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0.15,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5,
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.5, fullAlbedoThickness: 0.5,
   relaxationTime: 7200, referenceHumidity: 0.7, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, detrainment: 0.1, anvilDepth: 150e2,
   richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5,
-  landed: false, landHeatCapacity: 1e6, bucketCapacity: 150, wetnessThreshold: 0.75, landAlbedo: 0.25, snowAlbedo: 0.7, fullSnow: 20,
+  landed: false, landHeatCapacity: 1e6, bucketCapacity: 150, wetnessThreshold: 0.75, landAlbedo: 0.2, snowAlbedo: 0.55, fullSnow: 20,
 };
 
 export async function createGpuCore(mesh, {

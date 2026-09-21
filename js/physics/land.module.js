@@ -12,7 +12,7 @@ import { MELTING_POINT } from './ice.module.js';
  * step's precipitation in the adjustment phase, when it is known.
  */
 export function createLandSurface(mesh, geography, {
-  heatCapacity = 1e6, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.25, snowAlbedo = 0.7, fullSnow = 20,
+  heatCapacity = 1e6, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.2, snowAlbedo = 0.55, fullSnow = 20,
   latentHeatFusion = 3.34e5, buffers = null,
 } = {}) {
   const C = mesh.nCells;

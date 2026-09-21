@@ -36,7 +36,7 @@ export async function createGpuModel(gridOrMesh, {
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     landed: !!geography, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
-    landAlbedo: landOptions.albedo ?? 0.25, snowAlbedo: landOptions.snowAlbedo ?? 0.7, fullSnow: landOptions.fullSnow ?? 20,
+    landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
   };
   const gpu = await createGpuCore(mesh, { nu4, nu4Theta: nu4, physics, topSigma: surface.topSigma ?? 0.02, topDragDays: surface.topDragDays ?? 5, surfaceGeopotential: phis });
   const seaIce = createSeaIce(mesh, { oceanDiffusivity: 0, oceanHeatFlux: 0, ...ice });

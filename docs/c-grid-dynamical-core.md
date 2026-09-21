@@ -1336,8 +1336,9 @@ what it cannot hold into runoff, and a snow cover in water equivalent
 that precipitation builds when the lowest air is below 0 °C and the
 surface energy melts, holding the skin at the melting point while it
 does. Evaporation draws on the snow first, then the soil. Land albedo is
-0.25 for both the direct and diffuse beams, rising to 0.7 over 20 kg/m²
-of snow; the drag and exchange coefficients are 3e-3 over land against
+0.2 for both the direct and diffuse beams, rising to 0.55 over 20 kg/m²
+of snow (the tuning below settled both; 0.25 and 0.7 held a snowy,
+cold climate); the drag and exchange coefficients are 3e-3 over land against
 1.5e-3 over water, as per-cell arrays that the surface drag, the
 boundary layer's friction velocity and the radiation column's bulk
 exchange all read. The ocean carries no flux, stress or diffusion
@@ -1362,10 +1363,40 @@ adds Soil water, Snow and Elevation overlays; `?land=off` keeps the
 aquaplanet and `?topography=<url>` takes another raster.
 
 The first 400-day N=16 run with continents (from the aquaplanet
-`pbl16b` state) is stable but colder: planetary albedo 0.37 against
-the aquaplanet's 0.30 and Ts falling from 285 to 281 K into the
-northern winter with 6% sea ice. The climate wants re-tuning with land;
-the land and snow albedos and the cloud scattering are the knobs.
+`pbl16b` state) was stable but cold: planetary albedo 0.37 against the
+aquaplanet's 0.30, Ts falling from 285 to 281 K into the northern
+winter, snow on half the land. Four sweeps of 365-day N=16 runs with
+terrain re-tuned it. Two starts bracket each configuration's
+equilibrium: the cold `terr16` state (280.8 K) and the warm aquaplanet
+state placed on the continents (286.7 K); the drift is Ts at the same
+season a year later, since the top-of-atmosphere imbalance stays near
++15 W/m² regardless while the ocean's upper layer deepens (section
+M18's note). Land albedo 0.2 and snow albedo 0.55 held in every run
+after the first pair.
+
+| run | cloud scattering | gas optical depth | start | annual Ts | albedo | drift K/yr | land T | snow on land |
+|---|---|---|---|---|---|---|---|---|
+| terr16 (0.25 / 0.7) | 55 | 5 | cold | 280.8 | 0.391 | | 263 | 53% |
+| c45 (0.25 / 0.7) | 45 | 5 | cold | 279.7 | 0.378 | | 271 | 47% |
+| a20s55 | 55 | 5 | cold | 280.5 | 0.360 | | 273 | 42% |
+| c40a20s55 | 40 | 5 | cold | 282.3 | 0.334 | +1.5 | 276 | 37% |
+| w_c40a20s55 | 40 | 5 | warm | 287.4 | 0.314 | −1.8 | 284 | 24% |
+| w_c40g6 | 40 | 6 | warm | 287.7 | 0.310 | −1.0 | 285 | 23% |
+| w_c40g7 | 40 | 7 | warm | 287.9 | 0.309 | −0.7 | 285 | 22% |
+| w_c35 | 35 | 5 | warm | 287.9 | 0.302 | −0.8 | 285 | 23% |
+| **w_c35g7** | **35** | **7** | warm | **288.6** | **0.296** | **+0.3** | 286 | 21% |
+| w_c35g8 | 35 | 8 | warm | 288.7 | 0.299 | +0.3 | 286 | 21% |
+| k_c35g7 | 35 | 7 | cold | 283.4 | 0.317 | +2.1 | | |
+
+With an Earth-like albedo already reached at cloud scattering 40, the
+remaining cold bias was longwave, and the well-mixed gas band's optical
+depth — the model's CO₂ knob — closed it. The defaults are now cloud
+scattering 35 and gas optical depth 7 (from 55 and 5), land albedo 0.2
+and snow albedo 0.55: annual mean 288.6 K, planetary albedo 0.30, sea
+ice 1% (0.1–3% over the year), land 286 K with snow on a fifth of it,
+and the warm start drifts by +0.3 K a year toward an equilibrium at or
+just above it. The tuned N=16 state cascades to N=32 and N=64 on the
+GPU for the page's default.
 
 ### M17 — Terrain — done
 
