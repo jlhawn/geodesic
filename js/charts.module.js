@@ -2,6 +2,8 @@ import { Grid } from './grid.module.js';
 import { createModel } from './model.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { LEVELS, levelFields } from './levels.module.js';
+import { readState, stateName } from './stateFile.module.js';
+import { DEFAULT_RUN } from './defaultRun.module.js';
 
 const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796;
 const WIDTH = 1600, MARGIN = 20, TOP = 70, BOTTOM = 90;
@@ -186,8 +188,8 @@ export function chartFor(state, level) {
 async function listStates(directory) {
   const response = await fetch(directory);
   const html = await response.text();
-  const names = [...html.matchAll(/href="([^"]+_state_day\d+\.json)"/g)].map((m) => decodeURIComponent(m[1]));
-  return names.sort();
+  const names = [...html.matchAll(/href="([^"]+_state_day\d+\.json(?:\.gz)?)"/g)].map((m) => decodeURIComponent(m[1])).sort();
+  return [...new Map(names.map((name) => [stateName(name), name])).values()];
 }
 
 export default async function runCharts(directory = 'runs/') {
@@ -205,11 +207,12 @@ export default async function runCharts(directory = 'runs/') {
   }
   let names = [];
   try { names = await listStates(directory); } catch (error) { status.textContent = `could not list ${directory}: ${error.message}`; return; }
+  if (!names.length && DEFAULT_RUN.startsWith(directory)) names = [DEFAULT_RUN.slice(directory.length)];
   if (!names.length) { status.textContent = `no *_state_day*.json files in ${directory}`; return; }
   for (const name of names) {
     const option = document.createElement('option');
     option.value = name;
-    option.textContent = name.replace('_state_day', ' · day ').replace('.json', '');
+    option.textContent = stateName(name).replace('_state_day', ' · day ');
     stateSelect.appendChild(option);
   }
   const params = new URLSearchParams(location.search);
@@ -220,7 +223,7 @@ export default async function runCharts(directory = 'runs/') {
   async function render() {
     const name = stateSelect.value, level = levelSelect.value;
     status.textContent = `loading ${name}…`;
-    if (!states.has(name)) states.set(name, fetch(directory + name).then((r) => r.json()));
+    if (!states.has(name)) states.set(name, fetch(directory + name).then(readState));
     const state = await states.get(name);
     status.textContent = `rendering ${level === 'surface' ? 'surface' : level + ' hPa'}…`;
     await new Promise((resolve) => setTimeout(resolve, 0));

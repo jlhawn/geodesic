@@ -9,6 +9,7 @@ import { topographyFromInt16, rebalanceSurfacePressure } from './geography.modul
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
+import { decodeState, readState } from './stateFile.module.js';
 
 let model = null, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
 let level = 'surface', layerWinds = [], lastFrameTime = 0;
@@ -76,7 +77,7 @@ async function fetchWithProgress(url, from, to) {
   const response = await fetch(url);
   const total = Number(response.headers.get('content-length')) || 0;
   const name = url.replace(/.*\//, '');
-  if (!response.body || !total) { status(`loading ${name}…`, from); return response.json(); }
+  if (!response.body || !total) { status(`loading ${name}…`, from); return readState(response); }
   const reader = response.body.getReader();
   const chunks = [];
   let received = 0, reported = -1;
@@ -92,7 +93,7 @@ async function fetchWithProgress(url, from, to) {
   let at = 0;
   for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.length; }
   status(`parsing ${name}…`, to);
-  return JSON.parse(new TextDecoder().decode(bytes));
+  return decodeState(bytes);
 }
 
 /*

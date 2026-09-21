@@ -1,4 +1,5 @@
 .DS_Store
 
-runs/
+runs/*
+!runs/fresh64_state_day2190.json.gz
 node_modules/

@@ -1,6 +1,7 @@
 import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
+import { readState, stateName } from './stateFile.module.js';
 import { seasonPhrase } from "./levels.module.js";
 import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
@@ -138,14 +139,18 @@ function formatDate(time) {
  */
 /*
  * The saved runs the server lists in its runs/ directory index, as
- * built-in snapshots the page can download into its own store.
+ * built-in snapshots the page can download into its own store; a
+ * server without directory listings still offers the page default.
  */
-async function builtinSnapshots() {
+async function builtinSnapshots(fallback = null) {
+  const entry = (file) => ({ file, url: new URL(file, location.href).href, name: stateName(file.replace(/.*\//, '')) });
   try {
     const html = await (await fetch('runs/')).text();
-    const files = [...new Set([...html.matchAll(/href="([^"]+_state_day\d+\.json)"/g)].map((m) => m[1]))].sort();
-    return files.map((file) => ({ file, url: new URL(`runs/${file}`, location.href).href, name: file.replace(/\.json$/, '') }));
-  } catch { return []; }
+    const files = [...new Set([...html.matchAll(/href="([^"]+_state_day\d+\.json(?:\.gz)?)"/g)].map((m) => decodeURIComponent(m[1])))].sort();
+    const newest = new Map(files.map((file) => [stateName(file), file]));
+    if (newest.size) return [...newest.values()].map((file) => entry(`runs/${file}`));
+  } catch {}
+  return fallback ? [entry(fallback)] : [];
 }
 
 const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'none']);
@@ -474,7 +479,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     document.getElementById('localEmpty').style.display = list.length ? 'none' : '';
     for (const button of document.querySelectorAll('[data-snapshot="latest"]')) button.disabled = list.length === 0;
     const defaultUrl = from ? new URL(from, location.href).href : null;
-    const builtin = (await builtinSnapshots()).sort((a, b) => (b.url === defaultUrl) - (a.url === defaultUrl));
+    const builtin = (await builtinSnapshots(from)).sort((a, b) => (b.url === defaultUrl) - (a.url === defaultUrl));
     builtinList.replaceChildren(...builtin.map((entry) => {
       const local = list.find((meta) => meta.source === entry.url);
       const day = entry.file.match(/_state_day(\d+)/)?.[1];
@@ -489,7 +494,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   async function download(entry) {
     try {
       document.getElementById('date').textContent = `downloading ${entry.name}…`;
-      const saved = await (await fetch(entry.url)).json();
+      const saved = await readState(await fetch(entry.url));
       const { meta, data } = toSnapshot(saved, entry.url);
       const id = await saveSnapshot({ name: entry.name, created: Date.now(), ...meta }, data);
       await refreshSnapshots();
