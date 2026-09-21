@@ -1,7 +1,7 @@
 import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
-import { fetchState, stateName } from './stateFile.module.js';
+import { fetchState, stateName, decodeState } from './stateFile.module.js';
 import { seasonPhrase } from "./levels.module.js";
 import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
@@ -198,7 +198,7 @@ const VIEW_NOTES = [
   ['Isobars / Height lines', 'Contours of surface pressure at the surface, of geopotential height on a pressure level, at the chosen interval.'],
   ['Graticule', 'Parallels and meridians at the chosen spacing; the meridians stop at the outermost parallel.'],
   ['Projection', 'The orthographic globe, or the Equal Earth map; both can be dragged to any orientation.'],
-  ['Snapshots', 'Save the paused state in this browser, restore it later, or download one of the runs saved on the server.'],
+  ['Snapshots', 'Save the paused state in this browser, restore it later, download one of the runs saved on the server, or import and export snapshot files to share them.'],
 ];
 
 export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true, settings: overrides = {}, view = null } = {}) {
@@ -247,6 +247,11 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     particles = createWindParticles(document.getElementById('globe'), viewer, grid);
     viewer.setProjection(settings.projection);
     if (view) viewer.setView(view);
+  }
+  function teardown() {
+    if (particles) particles.dispose();
+    if (viewer) viewer.dispose();
+    particles = viewer = arrows = isobars = graticule = coast = null;
   }
 
   function paintSatellite() {
@@ -443,8 +448,10 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       }
     }
     if (message.type === 'ready') {
+      const rebuild = !viewer || !ready || ready.cells !== message.cells;
       ready = message;
-      setup(message.N);
+      if (rebuild) { teardown(); setup(message.N); latest = null; }
+      animatedSource = null;
       hasLand = !!message.land;
       geographyFields = hasLand ? { land: message.land, landFraction: message.landFraction, elevation: message.elevation } : {};
       if (hasLand) coast.set(message.coast, message.coastCells);
@@ -492,6 +499,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       ['Restore', () => restoreSnapshot(meta.id)],
       ['Rename', async () => { const name = prompt('Snapshot name', meta.name); if (name && name !== meta.name) { await renameSnapshot(meta.id, name); refreshSnapshots(); } }],
       ['Clone', async () => { const name = prompt('Name for the copy', `${meta.name} (copy)`); if (name) { await cloneSnapshot(meta.id, name); refreshSnapshots(); } }],
+      ['Export', () => exportSnapshot(meta)],
       ['Delete', async () => { if (confirm(`Delete "${meta.name}"?`)) { await deleteSnapshot(meta.id); refreshSnapshots(); } }],
     ])));
     document.getElementById('localEmpty').style.display = list.length ? 'none' : '';
@@ -537,9 +545,41 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const transfer = [...Object.values(data.arrays), ...(data.ocean ? Object.values(data.ocean) : []), ...(data.land ? Object.values(data.land) : [])];
     worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
   }
+  const slug = (name) => name.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'snapshot';
+  async function exportSnapshot(meta) {
+    const { data } = await getSnapshot(meta.id);
+    if (!data) return;
+    document.getElementById('date').textContent = `exporting "${meta.name}"…`;
+    const saved = { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain };
+    for (const [key, buffer] of Object.entries(data.arrays)) saved[key] = Array.from(new Float64Array(buffer));
+    if (data.ocean) saved.ocean = Object.fromEntries(Object.entries(data.ocean).map(([k, b]) => [k, Array.from(new Float64Array(b))]));
+    if (data.land) saved.land = Object.fromEntries(Object.entries(data.land).map(([k, b]) => [k, Array.from(new Float64Array(b))]));
+    const gz = await new Response(new Blob([JSON.stringify(saved)]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(gz);
+    link.download = `${slug(meta.name)}_state_day${Math.round(meta.day)}.json.gz`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    document.getElementById('date').textContent = `exported ${link.download} (${(gz.size / 1048576).toFixed(0)} MB)`;
+  }
+  async function importSnapshots(files) {
+    for (const file of files) {
+      try {
+        document.getElementById('date').textContent = `importing ${file.name}…`;
+        const saved = await decodeState(new Uint8Array(await file.arrayBuffer()));
+        if (!saved || !saved.N || !saved.pi) throw new Error('not a saved state');
+        const { meta, data } = toSnapshot(saved);
+        await saveSnapshot({ name: stateName(file.name), created: Date.now(), ...meta }, data);
+        document.getElementById('date').textContent = `imported ${file.name}`;
+      } catch (error) { document.getElementById('date').textContent = `import failed: ${error.message}`; }
+    }
+    await refreshSnapshots();
+  }
+  document.getElementById('snapshotFile').addEventListener('change', async (event) => { const files = [...event.target.files]; event.target.value = ''; await importSnapshots(files); });
   for (const button of document.querySelectorAll('[data-snapshot]')) {
     button.addEventListener('click', async () => {
       const action = button.dataset.snapshot;
+      if (action === 'import') document.getElementById('snapshotFile').click();
       if (action === 'save') { running = false; clock.length = 0; render(); worker.postMessage({ type: 'pause' }); worker.postMessage({ type: 'snapshot' }); }
       if (action === 'latest') { const list = await listSnapshots(); if (list.length) await restoreSnapshot(list[0].id); }
     });

@@ -119,8 +119,8 @@
     <h2>Snapshots <button class="flat close" data-close="snapshotModal">×</button></h2>
     <div class="segmented tabs"><button data-tab="local" class="selected">Custom</button><button data-tab="builtin">Built in</button></div>
     <div class="tab" data-tab="local">
-      <div class="actions"><button class="flat selected" data-snapshot="save" title="pause and save the current state in this browser">Save the current state</button> <button class="flat" data-snapshot="latest" title="restore the most recent custom snapshot">Restore latest</button></div>
-      <ul class="list" id="localList"></ul><p class="empty" id="localEmpty">No custom snapshots yet. Saving pauses the model and keeps its state in this browser.</p>
+      <div class="actions"><button class="flat selected" data-snapshot="save" title="pause and save the current state in this browser">Save the current state</button> <button class="flat" data-snapshot="latest" title="restore the most recent custom snapshot">Restore latest</button> <button class="flat" data-snapshot="import" title="add snapshot files exported from this page or saved by a run">Import files…</button><input type="file" id="snapshotFile" accept=".json,.gz,application/json,application/gzip" multiple hidden></div>
+      <ul class="list" id="localList"></ul><p class="empty" id="localEmpty">No custom snapshots yet. Saving pauses the model and keeps its state in this browser; Export writes one to a file you can share, and Import reads such files back.</p>
     </div>
     <div class="tab hidden" data-tab="builtin">
       <p class="empty" id="builtinNote">Saved runs served alongside the page. Downloading copies one into this browser's store, where it appears under Custom.</p><ul class="list" id="builtinList"></ul>

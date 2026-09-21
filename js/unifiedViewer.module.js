@@ -367,6 +367,9 @@ void main() {
     targetBlend: 0.0,
     version: 0,
   };
+  let disposed = false;
+  const aborter = new AbortController();
+  const on = (target, type, handler, options = {}) => target.addEventListener(type, handler, { ...options, signal: aborter.signal });
 
   const projectedMaterials = [];
   /*
@@ -443,6 +446,7 @@ uniform float uAmbient;
   const state = { isDragging: false, lastX: 0, lastY: 0, zoom: 150, pan: new THREE.Vector3(0, 0, 0), lastVector: null };
 
   function render() {
+    if (disposed) return;
     requestAnimationFrame(render);
     if (container.clientHeight === 0) return;
 
@@ -509,9 +513,9 @@ uniform float uAmbient;
   }
 
   const canvas = renderer.domElement;
-  canvas.addEventListener('contextmenu', e => e.preventDefault());
+  on(canvas, 'contextmenu', (e) => e.preventDefault());
 
-  canvas.addEventListener('wheel', (e) => {
+  on(canvas, 'wheel', (e) => {
     e.preventDefault();
     const zoomSpeed = 0.001;
     state.zoom += -e.deltaY * zoomSpeed * state.zoom; 
@@ -527,7 +531,7 @@ uniform float uAmbient;
     viewState.version++;
   }
 
-  window.addEventListener('keydown', (e) => {
+  on(window, 'keydown', (e) => {
     if (e.altKey || e.ctrlKey || e.metaKey || ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
     const step = e.shiftKey ? 120 : 30;
     const move = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] }[e.key];
@@ -536,7 +540,7 @@ uniform float uAmbient;
     panBy(move[0], move[1]);
   });
 
-  canvas.addEventListener('mousedown', (e) => {
+  on(canvas, 'mousedown', (e) => {
     state.isDragging = true;
     state.lastX = e.clientX;
     state.lastY = e.clientY;
@@ -548,7 +552,7 @@ uniform float uAmbient;
     }
   });
 
-  window.addEventListener('mousemove', (e) => {
+  on(window, 'mousemove', (e) => {
     if (!state.isDragging) return;
     const dx = e.clientX - state.lastX;
     const dy = e.clientY - state.lastY;
@@ -585,7 +589,7 @@ uniform float uAmbient;
     state.lastY = e.clientY;
   });
 
-  window.addEventListener('mouseup', () => {
+  on(window, 'mouseup', () => {
     state.isDragging = false;
     canvas.style.cursor = 'default';
   });
@@ -911,11 +915,15 @@ uniform float uReferenceSpeed;
     pixelsPerUnit: () => container.clientHeight / (camera.top - camera.bottom),
     viewVersion: () => viewState.version,
     dispose: () => {
+      disposed = true;
+      aborter.abort();
       resizeObserver.disconnect();
       renderer.dispose();
       geometry.dispose();
       material.dispose();
       centerTexture.dispose();
+      renderer.domElement.remove();
+      ui.remove();
     }
   };
 }
