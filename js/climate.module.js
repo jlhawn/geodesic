@@ -179,6 +179,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const settings = loadSettings();
   const panel = document.getElementById('panel');
   const activeLevel = () => (settings.view === 'space' || HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
+  const shownLevel = () => latest?.level ?? activeLevel();
   let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, rgb = null, running = !paused;
   let geographyFields = {}, hasLand = false;
   const clock = [];
@@ -236,7 +237,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     }
     viewer.updateColors(rgb);
     document.querySelector('.scaleRow').classList.add('hidden');
-    document.getElementById('data').textContent = `Satellite view · wind @ ${levelLabel(activeLevel())}`;
+    document.getElementById('data').textContent = `Satellite view · wind @ ${levelLabel(shownLevel())}`;
   }
 
   function paintOverlay() {
@@ -247,10 +248,10 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       rgb.fill(LINEAR[40]);
       viewer.updateColors(rgb);
       scaleRow.classList.add('hidden');
-      document.getElementById('data').textContent = `Wind @ ${levelLabel(activeLevel())} · no overlay`;
+      document.getElementById('data').textContent = `Wind @ ${levelLabel(shownLevel())} · no overlay`;
       return;
     }
-    const [min, max] = overlay.range(activeLevel());
+    const [min, max] = overlay.range(shownLevel());
     const values = latest[overlay.field];
     if (overlay.kind === 'clouds') {
       for (let i = 0; i < grid.size; i++) {
@@ -260,7 +261,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       viewer.updateColors(rgb);
       scaleRow.classList.remove('hidden');
       renderScale(COVER_STOPS, min, max, overlay.unit);
-      document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(activeLevel())}`;
+      document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}`;
       return;
     }
     const stops = PALETTES[overlay.kind][settings.palettes[overlay.kind]] ?? Object.values(PALETTES[overlay.kind])[0];
@@ -273,11 +274,11 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     scaleRow.classList.remove('hidden');
     renderScale(stops, min, max, overlay.unit);
     const columnField = ['ps', 'mslp', 'precipitation', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave', 'soil', 'snow', 'elevation'].includes(overlay.field);
-    document.getElementById('data').textContent = columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(activeLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(activeLevel())}`;
+    document.getElementById('data').textContent = columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(shownLevel())}`;
   }
 
   function paintWind() {
-    const reference = REFERENCE_SPEED[activeLevel()];
+    const reference = REFERENCE_SPEED[shownLevel()];
     arrows.setVisible(settings.animate === 'arrows');
     particles.setVisible(settings.animate === 'particles');
     if (settings.animate === 'arrows') arrows.update(latest.vector, { referenceSpeed: reference });
@@ -295,7 +296,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   function paintIsobars() {
     isobars.setVisible(settings.isobars === 'on');
     if (settings.isobars !== 'on') return;
-    const isolines = isolinesFor(activeLevel());
+    const isolines = isolinesFor(shownLevel());
     isobars.update(isolines.field(latest), Number(settings[isolines.setting]));
   }
 
