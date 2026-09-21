@@ -4,16 +4,18 @@
  * nothing to `opacity` over its first `fadeIn` seconds and, once told
  * to go, fades back out over `fadeOut` seconds while still drifting.
  * The screen is kept evenly covered: it is divided into bins of `bin`
- * pixels, each of `fine`-pixel cells. A bin with too few particles
- * receives new ones in its emptiest cells, a bin with too many loses
- * one from its most crowded cell, and any cell holding `crowding`
+ * pixels, each of `fine`-pixel cells. A bin below `sparse` times its
+ * share is topped up to that floor in its emptiest cells, a bin above
+ * `crowded` times its share loses one from its most crowded cell, and any cell holding `crowding`
  * times its share loses one outright, so the flow neither piles
  * particles up where it converges nor empties them where it diverges,
- * and a clump or a convergence line is thinned where it stands.
+ * while between the floor and the ceiling the density is free to show
+ * the convergence, and a clump or a convergence line is thinned where
+ * it stands.
  * Particles out of view for a second are dropped, and with an admission
  * mask (the sea, for currents) particles exist only on admitted cells.
  */
-export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.25, size = 1.25, opacity = 0.5, fadeIn = 0.5, fadeOut = 0.5, bin = 32, fine = 8, slack = 0.4, crowding = 4, maximum = 200000 } = {}) {
+export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.25, size = 1.25, opacity = 0.5, fadeIn = 0.5, fadeOut = 0.5, bin = 32, fine = 8, sparse = 0.3, crowded = 1.4, crowding = 4, maximum = 200000 } = {}) {
   const C = grid.size;
   const centers = new Float32Array(3 * C);
   const neighborCount = new Uint8Array(C);
@@ -172,17 +174,17 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
       const target = density * area * coverage[b];
       if (target < 0.5) continue;
       const c = b % cols, r = (b - c) / cols;
-      if (counts[b] > target * (1 + slack)) {
+      if (counts[b] > target * crowded) {
         let densest = -1, most = 0;
         for (let j = 0; j < per; j++) for (let i = 0; i < per; i++) { const f = (r * per + j) * fcols + c * per + i; if (fineCounts[f] > most) { most = fineCounts[f]; densest = f; } }
         if (densest >= 0) retire(fineSeen[densest]);
         continue;
       }
-      if (counts[b] >= target * (1 - slack)) continue;
+      if (counts[b] >= target * sparse) continue;
       cells.length = 0;
       let fewest = Infinity;
       for (let j = 0; j < per; j++) for (let i = 0; i < per; i++) { const f = (r * per + j) * fcols + c * per + i; if (fineCounts[f] < fewest) { fewest = fineCounts[f]; cells.length = 0; } if (fineCounts[f] === fewest) cells.push(f); }
-      for (let wanted = Math.min(4, Math.ceil(target - counts[b])); wanted > 0 && budget > 0 && cells.length; wanted--) {
+      for (let wanted = Math.min(4, Math.ceil(target * sparse - counts[b])); wanted > 0 && budget > 0 && cells.length; wanted--) {
         const pick = Math.floor(Math.random() * cells.length), f = cells[pick];
         cells[pick] = cells[cells.length - 1]; cells.length--;
         const px = ((f % fcols) + Math.random()) * fine, py = (((f - f % fcols) / fcols) + Math.random()) * fine;
