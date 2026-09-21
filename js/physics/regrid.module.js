@@ -1,5 +1,4 @@
 import { cellVector } from '../dynamics/operators.module.js';
-import { EARTH_RADIUS } from '../mesh.module.js';
 
 /*
  * Barycentric weights of p in the plane through unit vectors a, b, c:
@@ -89,7 +88,25 @@ function nearestAdmitted(mesh, start, mask, rings) {
   return -1;
 }
 
-const ringsWithin = (mesh, reach) => Math.ceil(reach / (EARTH_RADIUS * Math.sqrt(4 * Math.PI / mesh.nCells)));
+/*
+ * What a coarse tile of the wrong kind says about a cell the finer mesh
+ * resolves as the other kind. Sea ice stands for a cold coast: a snow
+ * cover that saturates the snow albedo and grows with the ice, on
+ * frozen ground holding a full bucket; open water at freezing skin
+ * temperatures still means a thin cover. Snow-covered land stands for
+ * first-year ice, thicker under a deeper pack, and a skin below the
+ * seawater freezing point for new thin ice.
+ */
+const FREEZING = 273.15, SEAWATER_FREEZING = 271.35, FULL_SNOW = 20, DEEP_SNOW = 100, SNOW_PER_ICE = 160, THIN_ICE = 0.1, FIRST_YEAR_ICE = 0.5;
+export function landFromSea(ice, surfaceT, bucketCapacity = 150) {
+  const frozen = ice > 0 || surfaceT < FREEZING;
+  const snow = ice > 0 ? Math.min(DEEP_SNOW, FULL_SNOW + SNOW_PER_ICE * ice) : frozen ? FULL_SNOW : 0;
+  return { snow, soil: frozen ? bucketCapacity : 0.5 * bucketCapacity };
+}
+export function seaFromLand(snow, surfaceT) {
+  if (snow > 0) return THIN_ICE + (FIRST_YEAR_ICE - THIN_ICE) * Math.min(1, snow / DEEP_SNOW);
+  return surfaceT < SEAWATER_FREEZING ? THIN_ICE : 0;
+}
 
 function apply(field, offset, { cells, weights }, out, outOffset, count) {
   for (let n = 0; n < count; n++) {
@@ -103,8 +120,7 @@ function apply(field, offset, { cells, weights }, out, outOffset, count) {
  * point whose whole triangle is excluded takes the nearest admitted
  * cell's value.
  */
-function applyMasked(mesh, field, { cells, weights, tiles }, mask, out, count, reach = 1e6) {
-  const rings = ringsWithin(mesh, reach);
+function applyMasked(mesh, field, { cells, weights, tiles }, mask, out, count, rings = 2) {
   for (let n = 0; n < count; n++) {
     let sum = 0, value = 0, plain = 0;
     for (let m = 0; m < 3; m++) {
@@ -121,22 +137,19 @@ function applyMasked(mesh, field, { cells, weights, tiles }, mask, out, count, r
 }
 
 /*
- * Every target point takes the value of the source tile it lies in, or
- * of the nearest admitted tile within `reach` when a mask is given, and
- * `fill` when there is none that close. Ice, snow and soil are carried
- * this way so that an ice edge or a snow line stays where the coarser
- * run had it instead of being smeared across the neighbours, so that
- * sea values never leak onto land or land values into the sea, and so
- * that land the finer mesh resolves for the first time starts with the
- * state of the coast next to it.
+ * Every target point takes the value of the source tile it lies in, so
+ * that an ice edge or a snow line stays where the coarser run had it
+ * instead of being smeared across the neighbours. With a mask, a point
+ * whose tile is of the wrong kind takes an admitted tile among that
+ * tile's immediate neighbours, the coast it belongs to, and otherwise
+ * `guess(tile)`, an inference from what its own tile does hold.
  */
-export function sampleTiles(source, target, field, mask = null, weights = interpolationWeights(source.mesh, target.mesh.xCell), { reach = 1e6, fill = 0 } = {}) {
+export function sampleTiles(source, target, field, mask = null, weights = interpolationWeights(source.mesh, target.mesh.xCell), guess = () => 0) {
   const { tiles } = weights;
-  const rings = ringsWithin(source.mesh, reach);
   const out = new Float64Array(target.mesh.nCells);
   for (let n = 0; n < out.length; n++) {
-    const tile = mask ? nearestAdmitted(source.mesh, tiles[n], mask, rings) : tiles[n];
-    out[n] = tile >= 0 ? field[tile] : fill;
+    const tile = mask ? nearestAdmitted(source.mesh, tiles[n], mask, 1) : tiles[n];
+    out[n] = tile >= 0 ? field[tile] : guess(tiles[n]);
   }
   return out;
 }
@@ -179,15 +192,16 @@ export function regridOcean(source, target, ocean, progress = null) {
   return { h1: cell(ocean.h1), h2: cell(ocean.h2), u1: edge(ocean.u1), u2: edge(ocean.u2), T2: cell(ocean.T2) };
 }
 
-export function regridLand(source, target, land, progress = null) {
+export function regridLand(source, target, land, progress = null, { ice = null, surfaceT = null } = {}) {
   if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow) };
   if (progress) progress(0, 'the land');
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), onLand = landMask(source);
-  const halfBucket = 0.5 * (target.land && target.land.bucketCapacity ? target.land.bucketCapacity : 150);
-  return { soil: sampleTiles(source, target, Float64Array.from(land.soil), onLand, atCells, { fill: halfBucket }), snow: sampleTiles(source, target, Float64Array.from(land.snow), onLand, atCells) };
+  const bucket = target.land && target.land.bucketCapacity ? target.land.bucketCapacity : 150;
+  const guess = (tile) => landFromSea(ice ? ice[tile] : 0, surfaceT ? surfaceT[tile] : FREEZING + 1, bucket);
+  return { soil: sampleTiles(source, target, Float64Array.from(land.soil), onLand, atCells, (tile) => guess(tile).soil), snow: sampleTiles(source, target, Float64Array.from(land.snow), onLand, atCells, (tile) => guess(tile).snow) };
 }
 
-export function regridState(source, target, state, progress = null) {
+export function regridState(source, target, state, progress = null, { land = null } = {}) {
   const [pi, theta, u, surfaceT, q = null, qc = null, ice = null] = state;
   const K = source.core.K;
   if (K !== target.core.K) throw new Error(`layer counts differ: ${K} vs ${target.core.K}`);
@@ -198,7 +212,7 @@ export function regridState(source, target, state, progress = null) {
   const outPi = new Float64Array(tm.nCells), outTheta = new Float64Array(K * tm.nCells), outU = new Float64Array(K * tm.nEdges), outSurfaceT = new Float64Array(tm.nCells);
   const outQ = q ? new Float64Array(K * tm.nCells) : null;
   const outQc = qc ? new Float64Array(K * tm.nCells) : null;
-  const outIce = ice ? sampleTiles(source, target, ice, seaMask(source), atCells) : null;
+  const outIce = ice ? sampleTiles(source, target, ice, seaMask(source), atCells, (tile) => seaFromLand(land ? land.snow[tile] : 0, surfaceT[tile])) : null;
   apply(pi, 0, atCells, outPi, 0, tm.nCells);
   apply(surfaceT, 0, atCells, outSurfaceT, 0, tm.nCells);
   const vector = new Float64Array(3 * sm.nCells);

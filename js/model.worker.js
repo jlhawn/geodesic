@@ -102,7 +102,7 @@ function initialState(model, saved, N) {
   if (saved.q && saved.qc && saved.ice) arrays.push(Float64Array.from(saved.ice));
   model.time = saved.time;
   const source = saved.N !== N || saved.terrain ? sourceFor(saved) : null;
-  const carried = saved.N === N ? arrays : regridState(source, model, arrays, (fraction, text) => status(`regridding day ${saved.day} from N=${saved.N} to N=${N}: ${text}…`, 0.8 + 0.12 * fraction));
+  const carried = saved.N === N ? arrays : regridState(source, model, arrays, (fraction, text) => status(`regridding day ${saved.day} from N=${saved.N} to N=${N}: ${text}…`, 0.8 + 0.12 * fraction), { land: saved.land ?? null });
   const fromPhi = saved.terrain ? (saved.N === N ? source.surfaceGeopotential : regridCellField(source, model, source.surfaceGeopotential)) : null;
   if (fromPhi || model.surfaceGeopotential) {
     model.core.diagnose(carried[0], carried[1], null, null);
@@ -134,7 +134,7 @@ function sourceFor(saved) {
  */
 function placeLand(model, saved, N) {
   if (!model.land) return;
-  if (saved && saved.land) model.land.load(saved.N === N ? { soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow) } : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94)));
+  if (saved && saved.land) model.land.load(saved.N === N ? { soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow) } : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94), { ice: saved.ice ?? null, surfaceT: saved.surfaceT ?? null }));
   else model.land.initialize();
 }
 

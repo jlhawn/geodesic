@@ -56,19 +56,24 @@ test('a state regridded to a finer mesh keeps its mass, its profile, and its sol
   assert.ok(fTheta.every((t) => t > 250 && t < 600) && fSurfaceT.every((t) => t > 250 && t < 300));
 });
 
-test('tile sampling keeps a step field exact and, masked, never draws on excluded cells', async () => {
-  const { sampleTiles, regridCellField } = await import('../js/physics/regrid.module.js');
+test('tile sampling keeps a step field exact and, masked, takes a neighbour or the guess', async () => {
+  const { sampleTiles, regridCellField, landFromSea, seaFromLand } = await import('../js/physics/regrid.module.js');
   const sm = coarse.mesh;
   const step = Float64Array.from({ length: sm.nCells }, (_, i) => (sm.latCell[i] > 0 ? 1 : 0));
   const tiles = sampleTiles(coarse, fine, step);
   assert.ok(tiles.every((v) => v === 0 || v === 1), 'a tile-sampled step field has no intermediate values');
   const south = Uint8Array.from(step, (v) => 1 - v);
   const poisoned = Float64Array.from(step, (v, i) => (south[i] ? 10 + sm.latCell[i] : -100));
-  const masked = sampleTiles(coarse, fine, poisoned, south, undefined, { reach: 3e6, fill: -1 });
-  assert.ok(masked.every((v) => v > 0 || v === -1), 'masked sampling takes admitted tiles or the fill');
-  assert.ok(masked.some((v) => v === -1), 'points far from every admitted tile take the fill');
-  const near = fine.mesh.latCell.map((lat, n) => (lat > 0 && lat < 0.2 ? masked[n] : 5));
-  assert.ok(near.every((v) => v > 0), 'excluded points near the boundary take the nearest admitted tile');
+  const masked = sampleTiles(coarse, fine, poisoned, south, undefined, () => -1);
+  assert.ok(masked.every((v) => v > 0 || v === -1), 'masked sampling takes admitted tiles or the guess');
+  assert.ok(masked.some((v) => v === -1), 'points with no admitted neighbour take the guess');
+  for (let n = 0; n < masked.length; n++) if (fine.mesh.latCell[n] > 0 && fine.mesh.latCell[n] < 0.03) assert.ok(masked[n] > 0, 'points just across the boundary take the adjacent admitted tile');
   const interpolated = regridCellField(coarse, fine, poisoned, undefined, south);
-  for (let n = 0; n < interpolated.length; n++) if (fine.mesh.latCell[n] < 0.15) assert.ok(interpolated[n] > 0, "masked interpolation draws only on admitted cells within reach");
+  for (let n = 0; n < interpolated.length; n++) if (fine.mesh.latCell[n] < 0.15) assert.ok(interpolated[n] > 0, 'masked interpolation draws only on admitted cells within reach');
+  assert.deepEqual(landFromSea(0, 290), { snow: 0, soil: 75 }, 'warm open sea implies bare land with a half-full bucket');
+  assert.deepEqual(landFromSea(0.5, 260), { snow: 100, soil: 150 }, 'thick sea ice implies a deep snow cover on frozen, saturated ground');
+  assert.ok(landFromSea(0.01, 265).snow >= 20, 'any sea ice implies enough snow for the full snow albedo');
+  assert.equal(seaFromLand(0, 290), 0, 'bare warm land implies open water');
+  assert.equal(seaFromLand(100, 265), 0.5, 'a deep snow pack implies first-year ice');
+  assert.equal(seaFromLand(0, 270), 0.1, 'bare land below the seawater freezing point implies new thin ice');
 });
