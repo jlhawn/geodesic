@@ -1116,8 +1116,9 @@ the RK4 stability limit at coarse resolution and was the first bug.
 Heat: each layer carries h·T in flux form with centred edge
 temperatures; the upper layer keeps the M11 diffusion (D R² ∇²T);
 a layer thinner than 10 m entrains from below over an hour (a day at
-first; with coastlines the upper layer of an enclosed sea at N=64 thinned
-to nothing within a day's relaxation and the skin temperature over it
+first; with coastlines the upper layer of the Alboran Sea at N=64,
+fed only through the Gibraltar cell, was drained by the wind faster
+than a day's relaxation refilled it and the skin temperature over it
 ran away), the thermocline layer from an abyss at 275 K (the one
 exchange the ocean's heat budget does not close); the heat capacity the
 surface sees is ρcp times at least a metre. Coupling, in `phases.ocean` on the main
