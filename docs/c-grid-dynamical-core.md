@@ -1468,7 +1468,7 @@ js/
     surface.module.js       ported: drag, sensible heat, slab ocean, convective adjustment
     boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
     init.module.js          ported: thermal init, balance, seed, bands, geostrophic winds
-    regrid.module.js        barycentric interpolation of a state between meshes
+    regrid.module.js        barycentric interpolation of a state between meshes; ice, snow and soil by source tile
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
     ice.module.js           M9/M11: slab ocean with zero-layer sea ice, diffusive heat transport, zenith albedo
   ocean/

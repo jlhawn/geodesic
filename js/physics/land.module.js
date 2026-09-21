@@ -73,6 +73,7 @@ export function createLandSurface(mesh, geography, {
     soil, snow, runoff, land, budget, heatCapacity, bucketCapacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water,
     serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow) }; },
     load(saved) { soil.set(saved.soil); snow.set(saved.snow); runoff.fill(0); },
+    bucketCapacity,
     shared: { soil: soil.buffer, snow: snow.buffer, runoff: runoff.buffer },
   };
 }

@@ -101,7 +101,7 @@ function initialState(model, saved, N) {
   if (saved.q && saved.qc) arrays.push(Float64Array.from(saved.qc));
   if (saved.q && saved.qc && saved.ice) arrays.push(Float64Array.from(saved.ice));
   model.time = saved.time;
-  const source = saved.N === N && !saved.terrain ? null : createModel(new Grid(saved.N), { physics: false, ...(saved.terrain ? { topography: currentTopography } : {}) });
+  const source = saved.N !== N || saved.terrain ? sourceFor(saved) : null;
   const carried = saved.N === N ? arrays : regridState(source, model, arrays, (fraction, text) => status(`regridding day ${saved.day} from N=${saved.N} to N=${N}: ${text}…`, 0.8 + 0.12 * fraction));
   const fromPhi = saved.terrain ? (saved.N === N ? source.surfaceGeopotential : regridCellField(source, model, source.surfaceGeopotential)) : null;
   if (fromPhi || model.surfaceGeopotential) {
@@ -116,12 +116,25 @@ function initialState(model, saved, N) {
 }
 
 /*
+ * A physics-free model on the saved run's mesh, with the current
+ * topography so its land mask can steer the regrid; kept for the ocean
+ * and land that follow the state.
+ */
+let sourceModel = null;
+function sourceFor(saved) {
+  if (!sourceModel || sourceModel.N !== saved.N || sourceModel.topography !== currentTopography) {
+    sourceModel = { N: saved.N, topography: currentTopography, model: createModel(new Grid(saved.N), { physics: false, ...(currentTopography ? { topography: currentTopography } : {}) }) };
+  }
+  return sourceModel.model;
+}
+
+/*
  * The land state comes with a saved run when it has one, regridded if
  * needed; otherwise the buckets start half full and bare.
  */
 function placeLand(model, saved, N) {
   if (!model.land) return;
-  if (saved && saved.land) model.land.load(saved.N === N ? { soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow) } : regridLand(createModel(new Grid(saved.N)), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94)));
+  if (saved && saved.land) model.land.load(saved.N === N ? { soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow) } : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94)));
   else model.land.initialize();
 }
 
@@ -255,7 +268,7 @@ async function start(message) {
   status('uploading the state…', 0.92);
   if (model.load) model.load();
   if (model.ocean) {
-    if (saved && saved.ocean) model.ocean.load(saved.N === N ? saved.ocean : regridOcean(createModel(new Grid(saved.N)), model, saved.ocean, (fraction, text) => status(`regridding ${text}…`, 0.93)), model.state[3], model.state[6]);
+    if (saved && saved.ocean) model.ocean.load(saved.N === N ? saved.ocean : regridOcean(sourceFor(saved), model, saved.ocean, (fraction, text) => status(`regridding ${text}…`, 0.93)), model.state[3], model.state[6]);
     else model.ocean.initialize(model.state[3], model.state[6]);
   }
   placeLand(model, saved, N);

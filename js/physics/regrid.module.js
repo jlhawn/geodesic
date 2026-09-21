@@ -1,4 +1,5 @@
 import { cellVector } from '../dynamics/operators.module.js';
+import { EARTH_RADIUS } from '../mesh.module.js';
 
 /*
  * Barycentric weights of p in the plane through unit vectors a, b, c:
@@ -23,7 +24,7 @@ function barycentric(a, b, c, p) {
 export function interpolationWeights(source, points, progress = null) {
   const { nCells, xCell, nEdgesOnCell, verticesOnCell, cellsOnVertex, cellsOnCell, maxEdges } = source;
   const count = points.length / 3;
-  const cells = new Int32Array(3 * count), weights = new Float64Array(3 * count);
+  const cells = new Int32Array(3 * count), weights = new Float64Array(3 * count), tiles = new Int32Array(count);
   const vector = (i) => [xCell[3 * i], xCell[3 * i + 1], xCell[3 * i + 2]];
   const dotWith = (p, i) => p[0] * xCell[3 * i] + p[1] * xCell[3 * i + 1] + p[2] * xCell[3 * i + 2];
   const bruteForce = (p) => { let nearest = 0, best = -Infinity; for (let i = 0; i < nCells; i++) { const d = dotWith(p, i); if (d > best) { best = d; nearest = i; } } return nearest; };
@@ -55,12 +56,40 @@ export function interpolationWeights(source, points, progress = null) {
     }
     }
     previous = nearest;
+    tiles[n] = nearest;
     const w = chosen.w.map((x) => Math.max(0, x));
     const sum = w[0] + w[1] + w[2];
     for (let m = 0; m < 3; m++) { cells[3 * n + m] = chosen.tri[m]; weights[3 * n + m] = w[m] / sum; }
   }
-  return { cells, weights };
+  return { cells, weights, tiles };
 }
+
+/*
+ * The source cell nearest to `start` that the mask admits, searched ring
+ * by ring through the neighbours; -1 when none lies within `rings`.
+ */
+function nearestAdmitted(mesh, start, mask, rings) {
+  if (mask[start]) return start;
+  const { cellsOnCell, nEdgesOnCell, maxEdges } = mesh;
+  let frontier = [start];
+  const seen = new Set(frontier);
+  for (let ring = 0; ring < rings && frontier.length; ring++) {
+    const next = [];
+    for (const i of frontier) {
+      for (let k = 0; k < nEdgesOnCell[i]; k++) {
+        const j = cellsOnCell[maxEdges * i + k];
+        if (seen.has(j)) continue;
+        if (mask[j]) return j;
+        seen.add(j);
+        next.push(j);
+      }
+    }
+    frontier = next;
+  }
+  return -1;
+}
+
+const ringsWithin = (mesh, reach) => Math.ceil(reach / (EARTH_RADIUS * Math.sqrt(4 * Math.PI / mesh.nCells)));
 
 function apply(field, offset, { cells, weights }, out, outOffset, count) {
   for (let n = 0; n < count; n++) {
@@ -69,15 +98,63 @@ function apply(field, offset, { cells, weights }, out, outOffset, count) {
 }
 
 /*
+ * Interpolation that only draws on source cells the mask admits: the
+ * weights of the others are dropped and the rest renormalized, and a
+ * point whose whole triangle is excluded takes the nearest admitted
+ * cell's value.
+ */
+function applyMasked(mesh, field, { cells, weights, tiles }, mask, out, count, reach = 1e6) {
+  const rings = ringsWithin(mesh, reach);
+  for (let n = 0; n < count; n++) {
+    let sum = 0, value = 0, plain = 0;
+    for (let m = 0; m < 3; m++) {
+      const j = cells[3 * n + m];
+      plain += weights[3 * n + m] * field[j];
+      if (!mask[j]) continue;
+      sum += weights[3 * n + m];
+      value += weights[3 * n + m] * field[j];
+    }
+    if (sum > 0) { out[n] = value / sum; continue; }
+    const near = nearestAdmitted(mesh, tiles[n], mask, rings);
+    out[n] = near >= 0 ? field[near] : plain;
+  }
+}
+
+/*
+ * Every target point takes the value of the source tile it lies in, or
+ * of the nearest admitted tile within `reach` when a mask is given, and
+ * `fill` when there is none that close. Ice, snow and soil are carried
+ * this way so that an ice edge or a snow line stays where the coarser
+ * run had it instead of being smeared across the neighbours, so that
+ * sea values never leak onto land or land values into the sea, and so
+ * that land the finer mesh resolves for the first time starts with the
+ * state of the coast next to it.
+ */
+export function sampleTiles(source, target, field, mask = null, weights = interpolationWeights(source.mesh, target.mesh.xCell), { reach = 1e6, fill = 0 } = {}) {
+  const { tiles } = weights;
+  const rings = ringsWithin(source.mesh, reach);
+  const out = new Float64Array(target.mesh.nCells);
+  for (let n = 0; n < out.length; n++) {
+    const tile = mask ? nearestAdmitted(source.mesh, tiles[n], mask, rings) : tiles[n];
+    out[n] = tile >= 0 ? field[tile] : fill;
+  }
+  return out;
+}
+
+const seaMask = (model) => (model.geography ? Uint8Array.from(model.geography.land, (l) => 1 - l) : null);
+const landMask = (model) => (model.geography ? model.geography.land : null);
+
+/*
  * Carries a state [pi, theta, u, surfaceT] from one model to another with
  * the same sigma levels: scalars are interpolated to the target cell
  * centers, and the cell-center wind vectors of each layer are
  * interpolated to the target edge midpoints and projected onto the edge
  * normals.
  */
-export function regridCellField(source, target, field, weights = interpolationWeights(source.mesh, target.mesh.xCell)) {
+export function regridCellField(source, target, field, weights = interpolationWeights(source.mesh, target.mesh.xCell), mask = null) {
   const out = new Float64Array(target.mesh.nCells);
-  apply(field, 0, weights, out, 0, target.mesh.nCells);
+  if (mask) applyMasked(source.mesh, field, weights, mask, out, target.mesh.nCells);
+  else apply(field, 0, weights, out, 0, target.mesh.nCells);
   return out;
 }
 
@@ -97,15 +174,17 @@ export function regridOcean(source, target, ocean, progress = null) {
   if (source.mesh.nCells === target.mesh.nCells) return Object.fromEntries(Object.entries(ocean).map(([k, v]) => [k, Float64Array.from(v)]));
   if (progress) progress(0, 'the ocean');
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), atEdges = interpolationWeights(source.mesh, target.mesh.xEdge);
-  const cell = (v) => regridCellField(source, target, Float64Array.from(v), atCells), edge = (v) => regridEdgeField(source, target, Float64Array.from(v), atEdges);
+  const sea = seaMask(source);
+  const cell = (v) => regridCellField(source, target, Float64Array.from(v), atCells, sea), edge = (v) => regridEdgeField(source, target, Float64Array.from(v), atEdges);
   return { h1: cell(ocean.h1), h2: cell(ocean.h2), u1: edge(ocean.u1), u2: edge(ocean.u2), T2: cell(ocean.T2) };
 }
 
 export function regridLand(source, target, land, progress = null) {
   if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow) };
   if (progress) progress(0, 'the land');
-  const atCells = interpolationWeights(source.mesh, target.mesh.xCell);
-  return { soil: regridCellField(source, target, Float64Array.from(land.soil), atCells), snow: regridCellField(source, target, Float64Array.from(land.snow), atCells) };
+  const atCells = interpolationWeights(source.mesh, target.mesh.xCell), onLand = landMask(source);
+  const halfBucket = 0.5 * (target.land && target.land.bucketCapacity ? target.land.bucketCapacity : 150);
+  return { soil: sampleTiles(source, target, Float64Array.from(land.soil), onLand, atCells, { fill: halfBucket }), snow: sampleTiles(source, target, Float64Array.from(land.snow), onLand, atCells) };
 }
 
 export function regridState(source, target, state, progress = null) {
@@ -119,8 +198,7 @@ export function regridState(source, target, state, progress = null) {
   const outPi = new Float64Array(tm.nCells), outTheta = new Float64Array(K * tm.nCells), outU = new Float64Array(K * tm.nEdges), outSurfaceT = new Float64Array(tm.nCells);
   const outQ = q ? new Float64Array(K * tm.nCells) : null;
   const outQc = qc ? new Float64Array(K * tm.nCells) : null;
-  const outIce = ice ? new Float64Array(tm.nCells) : null;
-  if (ice) apply(ice, 0, atCells, outIce, 0, tm.nCells);
+  const outIce = ice ? sampleTiles(source, target, ice, seaMask(source), atCells) : null;
   apply(pi, 0, atCells, outPi, 0, tm.nCells);
   apply(surfaceT, 0, atCells, outSurfaceT, 0, tm.nCells);
   const vector = new Float64Array(3 * sm.nCells);

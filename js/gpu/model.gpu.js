@@ -141,7 +141,7 @@ export async function createGpuModel(gridOrMesh, {
   } : null;
 
   model.land = landCpu ? {
-    soil: landCpu.soil, snow: landCpu.snow, runoff: landCpu.runoff, land: geography.land, budget: landCpu.budget, albedo: landCpu.albedo, wetness: landCpu.wetness, water: landCpu.water,
+    soil: landCpu.soil, snow: landCpu.snow, runoff: landCpu.runoff, land: geography.land, budget: landCpu.budget, albedo: landCpu.albedo, wetness: landCpu.wetness, water: landCpu.water, bucketCapacity: landCpu.bucketCapacity,
     initialize() { landCpu.initialize(); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow }); },
     load(saved) { landCpu.load(saved); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow }); },
     async serialize() { refreshLand(await gpu.downloadPhysics()); return landCpu.serialize(); },
