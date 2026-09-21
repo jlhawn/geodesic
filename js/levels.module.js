@@ -17,12 +17,6 @@ export function levelFields(core, pi, theta, layerWind, level, q = null) {
   const humidity = q ? new Float32Array(C) : null;
   const pressure = level === 'surface' ? Infinity : 100 * level;
   for (let i = 0; i < C; i++) {
-    if (pressure > pi[i]) {
-      speed[i] = NaN; temperature[i] = NaN; if (humidity) humidity[i] = NaN;
-      const k = K - 1, tk1 = theta[k * C + i] * exnerLayer[k * C + i];
-      height[i] = (geopotential[k * C + i] - R * tk1 * Math.log(pressure / (pi[i] * sigmaMid[k]))) / g;
-      continue;
-    }
     let k = 0;
     while (k < K - 2 && pi[i] * sigmaMid[k + 1] < pressure) k++;
     const pk = pi[i] * sigmaMid[k], pk1 = pi[i] * sigmaMid[k + 1];
@@ -36,6 +30,7 @@ export function levelFields(core, pi, theta, layerWind, level, q = null) {
     speed[i] = Math.hypot(vx, vy, vz);
     const tk = theta[k * C + i] * exnerLayer[k * C + i], tk1 = theta[(k + 1) * C + i] * exnerLayer[(k + 1) * C + i];
     temperature[i] = tk + tw * (tk1 - tk);
+    if (t > 1) temperature[i] = tk1 + 0.0065 * R * tk1 / g * Math.log(pressure / (pi[i] * sigmaMid[K - 1]));
     if (q) {
       const qk = q[k * C + i] + tw * (q[(k + 1) * C + i] - q[k * C + i]);
       const pressureHere = pressure === Infinity ? pi[i] * sigmaMid[K - 1] : Math.min(pressure, pi[i] * sigmaMid[K - 1]);

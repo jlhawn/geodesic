@@ -151,7 +151,7 @@ const VIEW_NOTES = [
   ['Wind speed', 'Speed at the chosen height.'],
   ['Temperature', 'Air temperature at the chosen height.'],
   ['Relative humidity', 'At the chosen height.'],
-  ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Level views are grey where the level is underground.'],
+  ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Where a pressure level lies below the ground, the level views extrapolate: winds and humidity from the lowest layer, temperature down a standard lapse rate, height hydrostatically.'],
   ['Soil water', 'The land bucket: up to 150 kg/m² of soil water; evaporation slows as it dries and rain beyond its capacity runs off.'],
   ['Snow', 'Snow on land in water equivalent; it falls when the lowest air is below freezing and melts into the bucket.'],
   ['Elevation', 'The mean elevation of each cell from ETOPO 2022; negative under the sea.'],

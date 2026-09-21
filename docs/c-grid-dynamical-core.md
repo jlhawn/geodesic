@@ -1439,10 +1439,11 @@ over five days, with the GPU within 2e-4 m/s of it:
 Surface pressure is no longer sea-level pressure. Frames carry
 `mslp`, π reduced to sea level through a column at the lowest layer's
 temperature plus half a standard lapse rate over the terrain height,
-and the page's pressure overlay and isobars use it. The level fields
-mask cells where the pressure level lies below the surface (NaN, drawn
-grey, winds zero), keeping the hydrostatic extrapolation only for the
-height. A state placed on a different terrain is rebalanced: π scales
+and the page's pressure overlay and isobars use it. Where a pressure
+level lies below the surface the level fields extrapolate, as charts
+and reanalyses do: winds and humidity from the lowest layer, the
+temperature down a standard 6.5 K/km lapse rate, and the height
+hydrostatically; at 1000 hPa that is most of the land. A state placed on a different terrain is rebalanced: π scales
 by exp(−Δφ_s / (R T_bottom)), where Δφ_s is the target minus the source
 terrain regridded to the target mesh, so a flat state loads onto
 mountains without a shock; saved states and snapshots carry a
