@@ -164,6 +164,10 @@ pressure gradient at rest stays at rest; GPU agrees with CPU.
 
 **Risks.** A 1.5-layer ocean cannot carry a deep overturning; the
 plan's convection is a parameterization of what it cannot resolve.
+The upper layer also deepens steadily today, about 10 m a year, because
+thin-layer entrainment adds thermocline water that never returns; M18
+should add a diapycnal restoring of the mean depth so the surface heat
+capacity stops creeping up.
 Runoff routing at 120 km puts rivers into the wrong coastal cell; the
 freshening pattern is what matters.
 
