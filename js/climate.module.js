@@ -168,7 +168,7 @@ async function builtinSnapshots(fallback = null) {
 
 const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'none']);
 const OCEAN_OVERLAYS = new Set(['sst', 'current', 'layer', 'thermocline']);
-const CURRENT_REFERENCE = 0.5;
+const CURRENT_REFERENCE = 0.2;
 
 const VIEW_NOTES = [
   ['Mode', 'Data paints the chosen overlay on an evenly lit globe. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day.'],
