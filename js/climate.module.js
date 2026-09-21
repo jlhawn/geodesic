@@ -54,21 +54,17 @@ const COVER_STOPS = Array.from({ length: 11 }, (_, k) => { const a = cloudOpacit
  * neutral gray so the white wind trails read on top.
  */
 const PALETTES = {
-  sequential: {
-    viridis: [[0.267, 0.005, 0.329], [0.283, 0.141, 0.458], [0.254, 0.265, 0.530], [0.207, 0.372, 0.553], [0.164, 0.471, 0.558], [0.128, 0.567, 0.551], [0.135, 0.659, 0.518], [0.267, 0.749, 0.441], [0.478, 0.821, 0.318], [0.741, 0.873, 0.150], [0.993, 0.906, 0.144]],
-    cividis: [[0.000, 0.135, 0.304], [0.127, 0.196, 0.416], [0.256, 0.263, 0.437], [0.367, 0.336, 0.446], [0.472, 0.409, 0.458], [0.578, 0.484, 0.463], [0.690, 0.562, 0.450], [0.807, 0.645, 0.411], [0.926, 0.734, 0.339], [0.994, 0.831, 0.243]],
-    inferno: [[0.001, 0.000, 0.014], [0.087, 0.036, 0.209], [0.258, 0.039, 0.406], [0.416, 0.090, 0.433], [0.578, 0.148, 0.404], [0.735, 0.216, 0.330], [0.865, 0.317, 0.226], [0.954, 0.462, 0.109], [0.988, 0.645, 0.040], [0.965, 0.844, 0.146], [0.988, 0.998, 0.645]],
-    magma: [[0.001, 0.000, 0.014], [0.098, 0.062, 0.259], [0.269, 0.060, 0.478], [0.446, 0.122, 0.507], [0.617, 0.183, 0.499], [0.792, 0.253, 0.446], [0.933, 0.372, 0.375], [0.987, 0.541, 0.383], [0.996, 0.719, 0.518], [0.987, 0.898, 0.729]],
-    dusk: [[0.16, 0.10, 0.45], [0.15, 0.35, 0.65], [0.15, 0.60, 0.45], [0.55, 0.70, 0.20], [0.85, 0.30, 0.15]],
-  },
-  diverging: {
-    'blue-gray-red': [[0.13, 0.30, 0.75], [0.35, 0.42, 0.62], [0.50, 0.50, 0.50], [0.68, 0.38, 0.32], [0.80, 0.20, 0.15]],
-    'purple-gray-orange': [[0.33, 0.15, 0.53], [0.50, 0.45, 0.67], [0.50, 0.50, 0.50], [0.88, 0.51, 0.08], [0.70, 0.35, 0.02]],
-    'teal-gray-brown': [[0.00, 0.40, 0.37], [0.35, 0.64, 0.60], [0.50, 0.50, 0.50], [0.75, 0.55, 0.30], [0.55, 0.32, 0.04]],
-  },
+  viridis: [[0.267, 0.005, 0.329], [0.283, 0.141, 0.458], [0.254, 0.265, 0.530], [0.207, 0.372, 0.553], [0.164, 0.471, 0.558], [0.128, 0.567, 0.551], [0.135, 0.659, 0.518], [0.267, 0.749, 0.441], [0.478, 0.821, 0.318], [0.741, 0.873, 0.150], [0.993, 0.906, 0.144]],
+  cividis: [[0.000, 0.135, 0.304], [0.127, 0.196, 0.416], [0.256, 0.263, 0.437], [0.367, 0.336, 0.446], [0.472, 0.409, 0.458], [0.578, 0.484, 0.463], [0.690, 0.562, 0.450], [0.807, 0.645, 0.411], [0.926, 0.734, 0.339], [0.994, 0.831, 0.243]],
+  inferno: [[0.001, 0.000, 0.014], [0.087, 0.036, 0.209], [0.258, 0.039, 0.406], [0.416, 0.090, 0.433], [0.578, 0.148, 0.404], [0.735, 0.216, 0.330], [0.865, 0.317, 0.226], [0.954, 0.462, 0.109], [0.988, 0.645, 0.040], [0.965, 0.844, 0.146], [0.988, 0.998, 0.645]],
+  magma: [[0.001, 0.000, 0.014], [0.098, 0.062, 0.259], [0.269, 0.060, 0.478], [0.446, 0.122, 0.507], [0.617, 0.183, 0.499], [0.792, 0.253, 0.446], [0.933, 0.372, 0.375], [0.987, 0.541, 0.383], [0.996, 0.719, 0.518], [0.987, 0.898, 0.729]],
+  dusk: [[0.16, 0.10, 0.45], [0.15, 0.35, 0.65], [0.15, 0.60, 0.45], [0.55, 0.70, 0.20], [0.85, 0.30, 0.15]],
+  'blue-gray-red': [[0.13, 0.30, 0.75], [0.35, 0.42, 0.62], [0.50, 0.50, 0.50], [0.68, 0.38, 0.32], [0.80, 0.20, 0.15]],
+  'purple-gray-orange': [[0.33, 0.15, 0.53], [0.50, 0.45, 0.67], [0.50, 0.50, 0.50], [0.88, 0.51, 0.08], [0.70, 0.35, 0.02]],
+  'teal-gray-brown': [[0.00, 0.40, 0.37], [0.35, 0.64, 0.60], [0.50, 0.50, 0.50], [0.75, 0.55, 0.30], [0.55, 0.32, 0.04]],
 };
 
-const DEFAULTS = { view: 'data', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palettes: { sequential: 'viridis', diverging: 'blue-gray-red' }, panel: 'open' };
+const DEFAULTS = { view: 'data', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: 'open' };
 
 /*
  * The contour row draws isobars of surface pressure at the surface and
@@ -83,7 +79,9 @@ const isolinesFor = (level) => (level === 'surface' ? ISOLINES.surface : ISOLINE
 function loadSettings() {
   try {
     const stored = JSON.parse(localStorage.getItem('climate.settings') || '{}');
-    const settings = { ...DEFAULTS, ...stored, palettes: { ...DEFAULTS.palettes, ...stored.palettes } };
+    const { palettes: oldPalettes, ...rest } = stored;
+    const settings = { ...DEFAULTS, ...rest };
+    if (!PALETTES[settings.palette]) settings.palette = (oldPalettes && PALETTES[oldPalettes.sequential]) ? oldPalettes.sequential : DEFAULTS.palette;
     if (settings.overlay === 'clouds') { settings.overlay = 'none'; settings.view = 'space'; }
     if (!OVERLAYS[settings.overlay]) settings.overlay = DEFAULTS.overlay;
     return settings;
@@ -274,7 +272,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}`;
       return;
     }
-    const stops = PALETTES[overlay.kind][settings.palettes[overlay.kind]] ?? Object.values(PALETTES[overlay.kind])[0];
+    const stops = PALETTES[settings.palette] ?? PALETTES.viridis;
     for (let i = 0; i < grid.size; i++) {
       if (Number.isNaN(values[i])) { rgb[3 * i] = rgb[3 * i + 1] = rgb[3 * i + 2] = LINEAR[70]; continue; }
       color((values[i] * overlay.scale - min) / (max - min), stops, rgb, 3 * i);
@@ -353,8 +351,9 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     document.getElementById('isolineUnit').textContent = isolines.unit;
     const paletteSelect = document.getElementById('palette');
     const overlay = OVERLAYS[settings.overlay];
-    paletteSelect.style.display = overlay.kind && PALETTES[overlay.kind] ? '' : 'none';
-    if (overlay.kind && PALETTES[overlay.kind]) fillSelect(paletteSelect, Object.keys(PALETTES[overlay.kind]), settings.palettes[overlay.kind]);
+    const palettes = !!overlay.kind && overlay.kind !== 'clouds';
+    paletteSelect.style.display = palettes ? '' : 'none';
+    if (palettes) fillSelect(paletteSelect, Object.keys(PALETTES), settings.palette);
     document.querySelector('[data-control="play"]').textContent = running ? '❚❚' : '▶';
     panel.classList.toggle('hidden', settings.panel !== 'open');
     if (viewer) viewer.setSpace({ enabled: space });
@@ -446,10 +445,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       if (button) update({ [group.dataset.setting]: button.dataset.value });
     });
   }
-  document.getElementById('palette').addEventListener('change', (event) => {
-    const kind = OVERLAYS[settings.overlay].kind;
-    update({ palettes: { ...settings.palettes, [kind]: event.target.value } });
-  });
+  document.getElementById('palette').addEventListener('change', (event) => update({ palette: event.target.value }));
   const localList = document.getElementById('localList'), builtinList = document.getElementById('builtinList');
   const item = (name, meta, tag, buttons) => {
     const li = document.createElement('li');
