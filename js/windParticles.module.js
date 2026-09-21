@@ -1,8 +1,7 @@
 /*
  * Wind shown by particles: each frame every particle moves with the
- * field at its own position and is drawn as a dot, at `minimumOpacity`
- * when the two opacity options agree and otherwise rising with the wind
- * speed toward `maximumOpacity` at the reference speed. The screen is kept evenly covered: it is divided
+ * field at its own position and is drawn as a dot that fades in from
+ * nothing to `opacity` over its first `fadeIn` seconds. The screen is kept evenly covered: it is divided
  * into bins, a bin with too few particles receives new ones at random
  * points inside it, and a bin with too many loses one, so the flow
  * neither piles particles up where it converges nor empties them where
@@ -10,7 +9,7 @@
  * and with an admission mask (the sea, for currents) particles exist
  * only on admitted cells.
  */
-export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.25, size = 1.25, minimumOpacity = 0.5, maximumOpacity = 0.5, bin = 32, slack = 0.4, maximum = 200000 } = {}) {
+export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.25, size = 1.25, opacity = 0.5, fadeIn = 0.5, bin = 32, slack = 0.4, maximum = 200000 } = {}) {
   const C = grid.size;
   const centers = new Float32Array(3 * C);
   const neighborCount = new Uint8Array(C);
@@ -31,6 +30,7 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
   const position = new Float32Array(3 * maximum);
   const cellOf = new Int32Array(maximum);
   const hidden = new Uint16Array(maximum);
+  const born = new Float64Array(maximum);
   const active = new Int32Array(maximum), slotOf = new Int32Array(maximum), free = new Int32Array(maximum);
   let count = 0, freeCount = 0;
   let cols = 0, rows = 0, counts = null, seed = null, seen = null, coverage = null;
@@ -89,7 +89,7 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
     if (freeCount === 0) return;
     const n = free[--freeCount];
     position[3 * n] = x; position[3 * n + 1] = y; position[3 * n + 2] = z;
-    cellOf[n] = cell; hidden[n] = 0;
+    cellOf[n] = cell; hidden[n] = 0; born[n] = now;
     slotOf[n] = count; active[count++] = n;
   }
   function remove(n) {
@@ -119,8 +119,8 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
 
   const screen = [0, 0, 0];
   const buckets = 8;
-  const opacity = Array.from({ length: buckets }, (_, b) => (minimumOpacity + (maximumOpacity - minimumOpacity) * b / (buckets - 1)).toFixed(3));
-  let running = true;
+  const alpha = Array.from({ length: buckets }, (_, b) => (opacity * (b + 1) / buckets).toFixed(3));
+  let running = true, now = 0;
   const retiring = [];
 
   function frame() {
@@ -128,6 +128,7 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
     requestAnimationFrame(frame);
     if (!field || !visible || width === 0) return;
     frames++;
+    now = performance.now();
     const version = viewer.viewVersion();
     if (version !== coverageVersion && (coverageVersion === -1 || frames - coverageFrame >= 6)) { measureCoverage(); coverageVersion = version; coverageFrame = frames; }
     const step = pixelsPerFrame / (reference * viewer.pixelsPerUnit());
@@ -138,7 +139,6 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
       const n = active[a];
       const v = sample(n);
       if (mask && !mask[cellOf[n]]) { retiring.push(n); continue; }
-      const speed = Math.hypot(v[0], v[1], v[2]);
       let x = position[3 * n] + step * v[0], y = position[3 * n + 1] + step * v[1], z = position[3 * n + 2] + step * v[2];
       const norm = Math.hypot(x, y, z);
       x /= norm; y /= norm; z /= norm;
@@ -148,7 +148,7 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
       hidden[n] = 0;
       const b = (screen[1] / bin | 0) * cols + (screen[0] / bin | 0);
       counts[b]++; seen[b] = n; seed[b] = cellOf[n];
-      const bucket = Math.round((buckets - 1) * Math.min(1, speed / reference));
+      const bucket = Math.min(buckets - 1, Math.floor(buckets * (now - born[n]) / (1000 * fadeIn)));
       paths[bucket].rect(screen[0] - size / 2, screen[1] - size / 2, size, size);
     }
     for (const n of retiring) remove(n);
@@ -174,7 +174,7 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
 
     context.clearRect(0, 0, width, height);
     for (let b = 0; b < buckets; b++) {
-      context.fillStyle = `rgba(255, 255, 255, ${opacity[b]})`;
+      context.fillStyle = `rgba(255, 255, 255, ${alpha[b]})`;
       context.fill(paths[b]);
     }
   }
