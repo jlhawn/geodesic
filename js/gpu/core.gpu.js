@@ -31,7 +31,7 @@ export function layoutFor(mesh, K) {
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC]]);
-  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C]]);
+  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['RUNOFF', C]]);
   return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH };
 }
 
@@ -118,7 +118,7 @@ const KERNELS = {
   let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
   let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
   let mass = pi * LV[L_DS + K - 1] / GRAV;
-  D[D_DRAG + i] = CDRAG * rho * max(D[D_WIND + i], GUST) / mass;
+  D[D_DRAG + i] = PH[PH_DRAG + i] * rho * max(D[D_WIND + i], GUST) / mass;
 }`,
   vertexPi: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let v = i32(id.x); if (v >= V) { return; }
@@ -279,6 +279,7 @@ export const PHYSICS_DEFAULTS = {
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.5, fullAlbedoThickness: 0.5,
   relaxationTime: 7200, referenceHumidity: 0.7, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, detrainment: 0.1, anvilDepth: 150e2,
   richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5,
+  landed: false, landHeatCapacity: 1e6, bucketCapacity: 150, wetnessThreshold: 0.75, landAlbedo: 0.25, snowAlbedo: 0.7, fullSnow: 20,
 };
 
 export async function createGpuCore(mesh, {
@@ -476,15 +477,27 @@ export async function createGpuCore(mesh, {
     await device.queue.onSubmittedWorkDone();
   }
 
-  function uploadPhysics({ capacity = null, oceanFlux = null } = {}) {
+  const retained = { land: null, drag: null, soil: null, snow: null };
+  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow } = {}) {
+    for (const [name, value] of Object.entries({ land, drag, soil, snow })) if (value !== undefined) retained[name] = value;
     const ph = new Float32Array(L.PH.total);
     for (let i = 0; i < C; i++) {
       const lat = mesh.latCell[i];
       ph[L.PH.TAU + i] = phys.tauEquator + (phys.tauPole - phys.tauEquator) * Math.sin(lat) ** 2;
       ph[L.PH.CAP + i] = capacity ? capacity[i] : phys.slabHeatCapacity;
       ph[L.PH.OFLUX + i] = oceanFlux ? oceanFlux[i] : 0;
+      ph[L.PH.LAND + i] = retained.land ? retained.land[i] : 0;
+      ph[L.PH.DRAG + i] = retained.drag ? retained.drag[i] : dragCoefficient;
+      ph[L.PH.SOIL + i] = retained.soil ? retained.soil[i] : 0;
+      ph[L.PH.SNOW + i] = retained.snow ? retained.snow[i] : 0;
     }
     device.queue.writeBuffer(buffers.PH, 0, ph);
+  }
+  function uploadLand({ soil, snow }) {
+    retained.soil = soil; retained.snow = snow;
+    device.queue.writeBuffer(buffers.PH, 4 * L.PH.SOIL, Float32Array.from(soil));
+    device.queue.writeBuffer(buffers.PH, 4 * L.PH.SNOW, Float32Array.from(snow));
+    device.queue.writeBuffer(buffers.PH, 4 * L.PH.RUNOFF, new Float32Array(C));
   }
   async function downloadPhysics() {
     const ph = await readBuffer(device, buffers.PH, 4 * L.PH.total);
@@ -523,5 +536,5 @@ export async function createGpuCore(mesh, {
   }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
-  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, tendency, upload, download, downloadDiagnostics, uploadPhysics, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
+  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, tendency, upload, download, downloadDiagnostics, uploadPhysics, uploadLand, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
 }

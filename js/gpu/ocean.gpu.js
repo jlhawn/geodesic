@@ -25,7 +25,7 @@ export const OCEAN_DEFAULTS = {
 function oceanKernels(o) {
   const head = `
 const OH1: i32 = ${o.OS.OH1}; const OH2: i32 = ${o.OS.OH2}; const OU1: i32 = ${o.OS.OU1}; const OU2: i32 = ${o.OS.OU2}; const OQ1: i32 = ${o.OS.OQ1}; const OQ2: i32 = ${o.OS.OQ2}; const OL: i32 = ${o.OS.total};
-const O_FLUX: i32 = ${o.OD.FLUX}; const O_QV: i32 = ${o.OD.QV}; const O_QE: i32 = ${o.OD.QE}; const O_PHI: i32 = ${o.OD.PHI}; const O_STRESS: i32 = ${o.OD.STRESS}; const O_ICED: i32 = ${o.OD.ICED};
+const O_FLUX: i32 = ${o.OD.FLUX}; const O_QV: i32 = ${o.OD.QV}; const O_QE: i32 = ${o.OD.QE}; const O_PHI: i32 = ${o.OD.PHI}; const O_STRESS: i32 = ${o.OD.STRESS}; const O_ICED: i32 = ${o.OD.ICED}; const O_EMASK: i32 = ${o.OD.EMASK}; const O_CMASK: i32 = ${o.OD.CMASK};
 const O_DIVS: i32 = ${o.OD.DIVS}; const O_CURLS: i32 = ${o.OD.CURLS}; const O_LAPA: i32 = ${o.OD.LAPA}; const O_LAPB: i32 = ${o.OD.LAPB}; const O_T2: i32 = ${o.OD.T2};
 const G12: f32 = ${o.reducedGravity}; const G23: f32 = ${o.abyssReducedGravity}; const TABYSS: f32 = ${o.abyssTemperature}; const HMIN: f32 = ${o.minimumThickness}; const TENTRAIN: f32 = ${o.entrainmentTime};
 const RHO: f32 = ${o.density}; const RHOCP: f32 = ${o.density * o.specificHeat}; const RINT: f32 = ${o.interfacialDrag}; const RBOT: f32 = ${o.bottomDrag}; const NU4O: f32 = ${o.nu4}; const DIFFUSION: f32 = ${o.diffusion};
@@ -57,7 +57,7 @@ fn qOff(l: i32) -> i32 { return select(OQ2, OQ1, l == 0); }
     oStress: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let e = ${idx}; if (e >= E) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
-  if (OD[O_ICED + a] > 0.5 || OD[O_ICED + b] > 0.5) { OD[O_STRESS + e] = 0.0; return; }
+  if (OD[O_EMASK + e] < 0.5 || OD[O_ICED + a] > 0.5 || OD[O_ICED + b] > 0.5) { OD[O_STRESS + e] = 0.0; return; }
   let bottom = (K - 1) * C;
   let rhoA = S[S_PI + a] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + a] * D[D_EXM + bottom + a]);
   let rhoB = S[S_PI + b] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + b] * D[D_EXM + bottom + b]);
@@ -69,7 +69,7 @@ fn qOff(l: i32) -> i32 { return select(OQ2, OQ1, l == 0); }
   let l = n / E; let e = n % E;
   let h = hOff(l);
   let hEdge = 0.5 * (IN[h + MI[COE + 2 * e]] + IN[h + MI[COE + 2 * e + 1]]);
-  OD[O_FLUX + n] = hEdge * IN[uOff(l) + e];
+  OD[O_FLUX + n] = select(0.0, hEdge * IN[uOff(l) + e], OD[O_EMASK + e] > 0.5);
 }`,
     oVertex: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = ${idx}; if (n >= 2 * V) { return; }
@@ -97,7 +97,7 @@ fn qOff(l: i32) -> i32 { return select(OQ2, OQ1, l == 0); }
     let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + l * E + e] * MF[F_DV + e];
     let Tj = IN[qOff(l) + j] / IN[hOff(l) + j];
     div += f; heat += f * 0.5 * (T + Tj);
-    lap += MF[F_DV + e] * (Tj - T) / MF[F_DC + e];
+    if (OD[O_EMASK + e] > 0.5) { lap += MF[F_DV + e] * (Tj - T) / MF[F_DC + e]; }
     let u = IN[uOff(l) + e];
     kinetic += 0.25 * MF[F_DC + e] * MF[F_DV + e] * u * u;
   }
@@ -160,7 +160,7 @@ fn qOff(l: i32) -> i32 { return select(OQ2, OQ1, l == 0); }
   if (l == 0) { du += (OD[O_STRESS + e] / RHO - RINT * uDiff) / hEdge; }
   else { du += (RINT * uDiff - RBOT * IN[OU2 + e]) / hEdge; }
   du -= NU4O * OD[O_LAPB + n];
-  OUT[uOff(l) + e] = du;
+  OUT[uOff(l) + e] = select(0.0, du, OD[O_EMASK + e] > 0.5);
 }`,
     oAdvance: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = ${idx}; if (n >= OL) { return; }
@@ -172,6 +172,7 @@ fn qOff(l: i32) -> i32 { return select(OQ2, OQ1, l == 0); }
 }`,
     oWrite: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = ${idx}; if (i >= C) { return; }
+  if (OD[O_CMASK + i] < 0.5) { PH[PH_OFLUX + i] = 0.0; return; }
   let h1 = IN[OH1 + i]; let h2 = IN[OH2 + i];
   PH[PH_CAP + i] = RHOCP * h1;
   OD[O_T2 + i] = IN[OQ2 + i] / h2;
@@ -193,7 +194,7 @@ export function createGpuOcean(core, options = {}) {
   const diffusion = o.diffusivity * mesh.radius * mesh.radius / (o.density * o.specificHeat);
   const seq = (names) => { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; };
   const OS = seq([['OH1', C], ['OH2', C], ['OU1', E], ['OU2', E], ['OQ1', C], ['OQ2', C]]);
-  const OD = seq([['FLUX', 2 * E], ['QV', 2 * V], ['QE', 2 * E], ['PHI', 2 * C], ['STRESS', E], ['ICED', C], ['DIVS', 2 * C], ['CURLS', 2 * V], ['LAPA', 2 * E], ['LAPB', 2 * E], ['T2', C]]);
+  const OD = seq([['FLUX', 2 * E], ['QV', 2 * V], ['QE', 2 * E], ['PHI', 2 * C], ['STRESS', E], ['ICED', C], ['DIVS', 2 * C], ['CURLS', 2 * V], ['LAPA', 2 * E], ['LAPB', 2 * E], ['T2', C], ['EMASK', E], ['CMASK', C]]);
   const kernels = oceanKernels({ ...o, OS, OD, nu4, diffusion });
   const ob = {
     S: emptyBuffer(device, 4 * OS.total), T: emptyBuffer(device, 4 * OS.total),
@@ -301,6 +302,8 @@ export function createGpuOcean(core, options = {}) {
     device.queue.writeBuffer(ob.S, 0, packed);
     device.queue.writeBuffer(ob.T, 0, packed);
     device.queue.writeBuffer(ob.D, 0, new Float32Array(Math.max(OD.total, OS.total)));
+    device.queue.writeBuffer(ob.D, 4 * OD.EMASK, Float32Array.from(o.geography ? o.geography.edgeOcean : new Uint8Array(E).fill(1)));
+    device.queue.writeBuffer(ob.D, 4 * OD.CMASK, Float32Array.from(o.geography ? o.geography.land : new Uint8Array(C), (l) => (o.geography ? 1 - l : 1)));
     core.uploadPhysics({ capacity: Float64Array.from(h1, (h) => o.density * o.specificHeat * h) });
     counter = 0;
   }

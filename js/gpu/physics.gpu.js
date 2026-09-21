@@ -22,6 +22,7 @@ const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${
 const RELAX: f32 = ${o.relaxationTime}; const RH_REF: f32 = ${o.referenceHumidity}; const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime};
 const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth};
 const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const KTOP: i32 = ${o.kTop};
+const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 `;
 }
 
@@ -84,8 +85,12 @@ export const PHYSICS_KERNELS = {
   let sun = vec3<f32>(P[2], P[3], P[4]);
   let mu = max(0.0, MF[F_XC + 3 * i] * sun.x + MF[F_XC + 3 * i + 1] * sun.y + MF[F_XC + 3 * i + 2] * sun.z);
   let beam = S0 * mu;
-  let adif = surfaceAlbedo(ice, ALB_DIF_WATER);
-  let adir = surfaceAlbedo(ice, openWaterAlbedo(mu));
+  let onLand = PH[PH_LAND + i] > 0.5;
+  let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i];
+  let landAlbedo = ALB_LAND + min(1.0, snow0 / FULLSNOW) * (ALB_SNOW - ALB_LAND);
+  let adif = select(surfaceAlbedo(ice, ALB_DIF_WATER), landAlbedo, onLand);
+  let adir = select(surfaceAlbedo(ice, openWaterAlbedo(mu)), landAlbedo, onLand);
+  let wetness = select(1.0, select(min(1.0, soil0 / (WETT * BUCKET)), 1.0, snow0 > 0.0), onLand);
   let ozoneHeating = beam * OZONE_ABS;
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
   var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
@@ -119,9 +124,9 @@ export const PHYSICS_KERNELS = {
   let outgoing = v.x + g.x + w.x; let back = v.y + g.y + w.y;
   let airT = temperature[K - 1];
   let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-  let exchange = rho * CEX * max(ws, GUST);
+  let exchange = rho * select(CEX, PH[PH_DRAG + i], LANDED) * max(ws, GUST);
   let sensible = exchange * CP * (ts - airT);
-  let evap = max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
+  let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
   netFlux[K - 1] += sensible;
   let net = absorbed - surfaceEmission + back - sensible - LHEAT * evap;
   let dt = P[0];
@@ -135,7 +140,21 @@ export const PHYSICS_KERNELS = {
   PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbed + ozoneHeating; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = incident - absorbed; PH[PH_ADIF + i] = adif;
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = ts; var h = ice;
-  if (h <= 0.0) {
+  if (onLand) {
+    var soil = soil0; var snow = snow0;
+    T += dt * net / LANDC;
+    let fromSnow = min(snow, evap * dt);
+    snow -= fromSnow;
+    soil = max(0.0, soil - (evap * dt - fromSnow));
+    if (snow > 0.0 && T > MELTING) {
+      let energy = (T - MELTING) * LANDC;
+      let melt = min(snow, energy / LFUS);
+      snow -= melt; soil += melt;
+      T = MELTING + (energy - melt * LFUS) / LANDC;
+    }
+    if (soil > BUCKET) { PH[PH_RUNOFF + i] += soil - BUCKET; soil = BUCKET; }
+    PH[PH_SOIL + i] = soil; PH[PH_SNOW + i] = snow;
+  } else if (h <= 0.0) {
     T += dt * (net + ocean) / capacity;
     if (T < FREEZING) { h = (FREEZING - T) * capacity / LATENT_ICE; T = FREEZING; }
   } else {
@@ -153,7 +172,7 @@ export const PHYSICS_KERNELS = {
   let pi = IN[S_PI + i]; let base = (K - 1) * C + i;
   let bottomWind = cellWind(i, K - 1);
   let speed = length(bottomWind);
-  let friction = sqrt(CDRAG) * max(speed, GUST);
+  let friction = sqrt(PH[PH_DRAG + i]) * max(speed, GUST);
   let zb = (D[D_GEO + base] + LV[L_GABS + K - 1]) / GRAV;
   var found = false; var riPrev = 0.0; var zPrev = zb; var depth = zb;
   for (var k = K - 2; k >= KTOP; k--) {
@@ -296,6 +315,15 @@ export const PHYSICS_KERNELS = {
     if (IN[off + bottom * C + i] < 0.0) { IN[off + bottom * C + i] = 0.0; }
   }
   PH[PH_RAIN + i] += rained + convected; PH[PH_COND + i] += rained; PH[PH_CONV + i] += convected;
+  if (PH[PH_LAND + i] > 0.5) {
+    let airT = IN[S_TH + bottom * C + i] * D[D_EXM + bottom * C + i];
+    if (airT < MELTING) { PH[PH_SNOW + i] += rained + convected; }
+    else {
+      var soil = PH[PH_SOIL + i] + rained + convected;
+      if (soil > BUCKET) { PH[PH_RUNOFF + i] += soil - BUCKET; soil = BUCKET; }
+      PH[PH_SOIL + i] = soil;
+    }
+  }
   // dry convective adjustment
   var dirty = true; var guard = 0;
   while (dirty && guard < K * K) {
