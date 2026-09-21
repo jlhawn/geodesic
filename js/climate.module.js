@@ -322,7 +322,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (animate === 'particles' && source !== animatedSource) particles.reset();
     animatedSource = source;
     if (animate === 'particles') particles.setField(field, reference);
-    const note = animate === 'particles' ? `trails brighten toward ${reference} m/s` : animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
+    const note = animate === 'particles' ? `particles brighten toward ${reference} m/s` : animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
     if (note) document.getElementById('data').textContent += ` · ${note}`;
   }
 

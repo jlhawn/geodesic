@@ -1486,7 +1486,7 @@ js/
   model.worker.js           browser worker: steps the model, fills shared buffers
   climate.module.js         live model page (climate.html): control panel, overlays, wind layers
   levels.module.js          fields on a pressure surface; season phrase for the model time
-  windParticles.module.js   wind traced by particles with fading trails over the globe
+  windParticles.module.js   wind shown by particles advected by the field, their opacity rising with speed
   charts.module.js          synoptic charts from saved states (charts.html)
   unifiedViewer.module.js   existing, gains model-overlay mode
 test/

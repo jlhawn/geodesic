@@ -1,11 +1,11 @@
 /*
- * Wind traced by particles: each particle rides the wind field over the
- * sphere and leaves a fading trail on a canvas laid over the globe, the
- * way earth.nullschool.net draws wind. Trails are brighter for faster
- * wind. The trails live in screen space, so they are cleared whenever
- * the view moves; the particles themselves stay on the globe.
+ * Wind shown by particles: each frame every particle moves with the
+ * field at its own position and is drawn as a dot whose opacity rises
+ * with the wind speed, from `minimumOpacity` at rest to full at the
+ * reference speed. Particles live a few seconds and respawn at random
+ * so the field stays evenly seeded where the flow converges.
  */
-export function createWindParticles(container, viewer, grid, { density = 0.006, fade = 0.993, referenceSpeed = 15, pixelsPerFrame = 0.1875 } = {}) {
+export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.5, size = 2, minimumOpacity = 0.25 } = {}) {
   const C = grid.size;
   const centers = new Float32Array(3 * C);
   const neighborCount = new Uint8Array(C);
@@ -23,7 +23,7 @@ export function createWindParticles(container, viewer, grid, { density = 0.006, 
   container.appendChild(canvas);
   const context = canvas.getContext('2d');
   let width = 0, height = 0, dpr = 1, count = 0;
-  const capacity = 100000;
+  const capacity = 400000;
   const position = new Float32Array(3 * capacity);
   const cellOf = new Int32Array(capacity);
   const age = new Uint16Array(capacity);
@@ -80,59 +80,42 @@ export function createWindParticles(container, viewer, grid, { density = 0.006, 
     return wind;
   }
 
-  const from = [0, 0, 0], to = [0, 0, 0];
+  const screen = [0, 0, 0];
   const buckets = 8;
-  const paths = Array.from({ length: buckets }, () => new Path2D());
-  let lastVersion = -1, running = true, frames = 0;
-  // Fading by a fraction of a percent per frame leaves a permanent haze
-  // because 8-bit alpha rounds back to itself; fading every twelfth frame
-  // by the compounded factor takes the same time to fade but reaches near
-  // zero.
-  const fadeEvery = 12, fadeStep = fade ** fadeEvery;
+  const opacity = Array.from({ length: buckets }, (_, b) => (minimumOpacity + (1 - minimumOpacity) * b / (buckets - 1)).toFixed(3));
+  let running = true;
 
   function frame() {
     if (!running) return;
     requestAnimationFrame(frame);
     if (!field || width === 0) return;
-    if (viewer.viewVersion() !== lastVersion) { lastVersion = viewer.viewVersion(); context.clearRect(0, 0, width, height); }
-    if (++frames % fadeEvery === 0) {
-      context.globalCompositeOperation = 'destination-in';
-      context.fillStyle = `rgba(0, 0, 0, ${fadeStep})`;
-      context.fillRect(0, 0, width, height);
-      context.globalCompositeOperation = 'source-over';
-    }
-
     const step = pixelsPerFrame / (reference * viewer.pixelsPerUnit());
-    for (let b = 0; b < buckets; b++) paths[b] = new Path2D();
+    const paths = Array.from({ length: buckets }, () => new Path2D());
     for (let n = 0; n < count; n++) {
       if (++age[n] >= lifetime[n]) { spawn(n); continue; }
       const v = sample(n);
       const speed = Math.hypot(v[0], v[1], v[2]);
-      const x = position[3 * n], y = position[3 * n + 1], z = position[3 * n + 2];
-      viewer.projectPoint(x, y, z, from);
-      let nx = x + step * v[0], ny = y + step * v[1], nz = z + step * v[2];
-      const norm = Math.hypot(nx, ny, nz);
-      nx /= norm; ny /= norm; nz /= norm;
-      position[3 * n] = nx; position[3 * n + 1] = ny; position[3 * n + 2] = nz;
-      viewer.projectPoint(nx, ny, nz, to);
-      if (from[2] <= 0 || to[2] <= 0) continue;
-      if (Math.abs(to[0] - from[0]) + Math.abs(to[1] - from[1]) > 40) continue;
-      const bucket = Math.min(buckets - 1, Math.floor(buckets * Math.min(0.999, speed / reference)));
-      paths[bucket].moveTo(from[0], from[1]);
-      paths[bucket].lineTo(to[0], to[1]);
+      let x = position[3 * n] + step * v[0], y = position[3 * n + 1] + step * v[1], z = position[3 * n + 2] + step * v[2];
+      const norm = Math.hypot(x, y, z);
+      x /= norm; y /= norm; z /= norm;
+      position[3 * n] = x; position[3 * n + 1] = y; position[3 * n + 2] = z;
+      viewer.projectPoint(x, y, z, screen);
+      if (screen[2] <= 0) continue;
+      const bucket = Math.round((buckets - 1) * Math.min(1, speed / reference));
+      paths[bucket].rect(screen[0] - size / 2, screen[1] - size / 2, size, size);
     }
-    context.lineWidth = 1.2;
+    context.clearRect(0, 0, width, height);
     for (let b = 0; b < buckets; b++) {
-      context.strokeStyle = `rgba(255, 255, 255, ${(0.2 + 0.8 * (b + 0.5) / buckets).toFixed(3)})`;
-      context.stroke(paths[b]);
+      context.fillStyle = `rgba(255, 255, 255, ${opacity[b]})`;
+      context.fill(paths[b]);
     }
   }
   requestAnimationFrame(frame);
 
   return {
     setField(vectors, speed = referenceSpeed) { field = vectors; reference = speed; },
-    reset,
     setVisible(visible) { canvas.style.display = visible ? 'block' : 'none'; if (!visible) context.clearRect(0, 0, width, height); },
+    reset,
     dispose() { running = false; resizeObserver.disconnect(); canvas.remove(); },
   };
 }
