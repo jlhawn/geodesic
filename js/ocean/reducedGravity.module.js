@@ -187,6 +187,7 @@ export function createOcean(mesh, {
 
   function load(saved, surfaceT, ice) {
     h1.set(saved.h1); h2.set(saved.h2); u1.set(saved.u1); u2.set(saved.u2); T2.set(saved.T2);
+    for (let e = 0; e < E; e++) if (!edgeOcean[e]) { u1[e] = 0; u2[e] = 0; }
     readSurface(surfaceT, ice);
     for (let i = 0; i < C; i++) { H2[i] = h2[i] * T2[i]; capacity[i] = rhoCp * Math.max(h1[i], 1); }
     counter = 0;

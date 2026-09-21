@@ -37,7 +37,7 @@ async function postFrame() {
     for (let i = 0; i < mesh.nCells; i++) {
       const sea = !onLand || !onLand[i];
       sst[i] = sea ? oceanFields.T1[i] : NaN; layerDepth[i] = sea ? oceanFields.h1[i] : NaN; thermocline[i] = sea ? oceanFields.T2[i] : NaN;
-      currentVector[3 * i] = vector[3 * i]; currentVector[3 * i + 1] = vector[3 * i + 1]; currentVector[3 * i + 2] = vector[3 * i + 2];
+      if (sea) { currentVector[3 * i] = vector[3 * i]; currentVector[3 * i + 1] = vector[3 * i + 1]; currentVector[3 * i + 2] = vector[3 * i + 2]; }
       current[i] = sea ? Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]) : NaN;
     }
   }

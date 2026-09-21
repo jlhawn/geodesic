@@ -294,6 +294,7 @@ export function createGpuOcean(core, options = {}) {
   function upload({ h1, h2, u1, u2, T2 }, surfaceT, ice) {
     const packed = new Float32Array(OS.total);
     packed.set(h1, OS.OH1); packed.set(h2, OS.OH2); packed.set(u1, OS.OU1); packed.set(u2, OS.OU2);
+    if (o.geography) for (let e = 0; e < E; e++) if (!o.geography.edgeOcean[e]) { packed[OS.OU1 + e] = 0; packed[OS.OU2 + e] = 0; }
     for (let i = 0; i < C; i++) {
       const t1 = ice[i] > 0 ? FREEZING : surfaceT[i];
       packed[OS.OQ1 + i] = h1[i] * t1;
