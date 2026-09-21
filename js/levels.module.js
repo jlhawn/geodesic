@@ -30,7 +30,6 @@ export function levelFields(core, pi, theta, layerWind, level, q = null) {
     speed[i] = Math.hypot(vx, vy, vz);
     const tk = theta[k * C + i] * exnerLayer[k * C + i], tk1 = theta[(k + 1) * C + i] * exnerLayer[(k + 1) * C + i];
     temperature[i] = tk + tw * (tk1 - tk);
-    if (t > 1) temperature[i] = tk1 + 0.0065 * R * tk1 / g * Math.log(pressure / (pi[i] * sigmaMid[K - 1]));
     if (q) {
       const qk = q[k * C + i] + tw * (q[(k + 1) * C + i] - q[k * C + i]);
       const pressureHere = pressure === Infinity ? pi[i] * sigmaMid[K - 1] : Math.min(pressure, pi[i] * sigmaMid[K - 1]);

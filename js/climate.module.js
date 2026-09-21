@@ -157,7 +157,7 @@ const VIEW_NOTES = [
   ['Relative humidity', 'At the chosen height.'],
   ['Surface pressure', 'The pressure at the ground itself, about 1000 hPa at the coast and 550 hPa on the Tibetan plateau; the weather signal is the small variation on top of the elevation.'],
   ['Cloud cover', 'Cloud as white over grey with the opacity the Satellite view uses, from the column\'s cloud water.'],
-  ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Where a pressure level lies below the ground, the level views extrapolate: winds and humidity from the lowest layer, temperature down a standard lapse rate, height hydrostatically.'],
+  ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Where a pressure level lies below the ground, wind, temperature and humidity show the lowest layer of that column, and only the height is extrapolated hydrostatically so its contours stay a pressure field.'],
   ['Soil water', 'The land bucket: up to 150 kg/m² of soil water; evaporation slows as it dries and rain beyond its capacity runs off.'],
   ['Snow', 'Snow on land in water equivalent; it falls when the lowest air is below freezing and melts into the bucket.'],
   ['Elevation', 'The mean elevation of each cell from ETOPO 2022; negative under the sea.'],
