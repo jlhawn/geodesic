@@ -1,4 +1,4 @@
-# Roadmap: milestones 16–19
+# WebGCM roadmap: milestones 16–19
 
 Four milestones, in this order. Each one builds on the previous: the
 land mask gives terrain its footprint and salinity its runoff and

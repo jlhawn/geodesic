@@ -1,4 +1,4 @@
-# C-Grid Dynamical Core on the ISEA Icosahedral Mesh
+# WebGCM: C-Grid Dynamical Core on the ISEA Icosahedral Mesh
 
 Design document for replacing the climate model's A-grid horizontal
 dynamical core with a C-grid (TRiSK) formulation built on
