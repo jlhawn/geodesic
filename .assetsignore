@@ -1,0 +1,7 @@
+.git
+node_modules
+test
+scripts
+package.json
+package-lock.json
+httpd.py
