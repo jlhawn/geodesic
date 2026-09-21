@@ -1,8 +1,8 @@
 /*
  * Wind shown by particles: each frame every particle moves with the
- * field at its own position and is drawn as a dot whose opacity rises
- * with the wind speed, from `minimumOpacity` at rest to full at the
- * reference speed. The screen is kept evenly covered: it is divided
+ * field at its own position and is drawn as a dot, at `minimumOpacity`
+ * when the two opacity options agree and otherwise rising with the wind
+ * speed toward `maximumOpacity` at the reference speed. The screen is kept evenly covered: it is divided
  * into bins, a bin with too few particles receives new ones at random
  * points inside it, and a bin with too many loses one, so the flow
  * neither piles particles up where it converges nor empties them where
@@ -10,7 +10,7 @@
  * and with an admission mask (the sea, for currents) particles exist
  * only on admitted cells.
  */
-export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.25, size = 1.25, minimumOpacity = 0.25, bin = 32, slack = 0.4, maximum = 200000 } = {}) {
+export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.25, size = 1.25, minimumOpacity = 0.5, maximumOpacity = 0.5, bin = 32, slack = 0.4, maximum = 200000 } = {}) {
   const C = grid.size;
   const centers = new Float32Array(3 * C);
   const neighborCount = new Uint8Array(C);
@@ -119,7 +119,7 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
 
   const screen = [0, 0, 0];
   const buckets = 8;
-  const opacity = Array.from({ length: buckets }, (_, b) => (minimumOpacity + (1 - minimumOpacity) * b / (buckets - 1)).toFixed(3));
+  const opacity = Array.from({ length: buckets }, (_, b) => (minimumOpacity + (maximumOpacity - minimumOpacity) * b / (buckets - 1)).toFixed(3));
   let running = true;
   const retiring = [];
 
