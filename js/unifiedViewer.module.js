@@ -1,5 +1,4 @@
 import * as THREE from "./three.module.js";
-import { Stats } from "./stats.module.js";
 
 // ----------------------------------------------------------------------------
 // SHADER DEFINITIONS
@@ -414,8 +413,6 @@ uniform float uAmbient;
   mesh.frustumCulled = false; 
   scene.add(mesh);
   
-  const stats = new Stats();
-  document.body.appendChild(stats.dom);
 
   // Create GUI / Buttons
   const toggleMode = function() {
@@ -484,7 +481,6 @@ uniform float uAmbient;
       renderer.render(skyScene, skyCamera);
     }
     renderer.render(scene, camera);
-    stats.update();
   }
   requestAnimationFrame(render);
 
