@@ -207,7 +207,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const panel = document.getElementById('panel');
   const activeLevel = () => (settings.view !== 'space' && HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
   const shownLevel = () => latest?.level ?? activeLevel();
-  let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, rgb = null, running = !paused, animatedSource = null;
+  let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, rgb = null, running = !paused, animatedSource = null, seaCells = null;
   let geographyFields = {}, hasLand = false;
   const clock = [];
   function simulatedHoursPerMinute() {
@@ -321,7 +321,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const source = ocean ? 'current' : `wind ${shownLevel()}`;
     if (animate === 'particles' && source !== animatedSource) particles.reset();
     animatedSource = source;
-    if (animate === 'particles') particles.setField(field, reference);
+    if (animate === 'particles') particles.setField(field, reference, ocean ? seaCells : null);
     const note = animate === 'particles' ? `particles brighten toward ${reference} m/s` : animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
     if (note) document.getElementById('data').textContent += ` · ${note}`;
   }
@@ -454,6 +454,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       animatedSource = null;
       hasLand = !!message.land;
       geographyFields = hasLand ? { land: message.land, landFraction: message.landFraction, elevation: message.elevation } : {};
+      seaCells = hasLand ? Uint8Array.from(message.land, (l) => 1 - l) : null;
       if (hasLand) coast.set(message.coast, message.coastCells);
       document.getElementById('date').textContent = `model ready: ${message.cells} cells × ${message.layers} layers, dt ${message.dt} s, ${message.workers > 1 ? `${message.workers} workers` : 'one thread'}`;
     }

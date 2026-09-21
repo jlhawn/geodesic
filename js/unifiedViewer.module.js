@@ -912,6 +912,18 @@ uniform float uReferenceSpeed;
       viewState.version++;
     },
     projectPoint,
+    unprojectPoint(px, py, out) {
+      raycaster.setFromCamera({ x: (px / container.clientWidth) * 2 - 1, y: -(py / container.clientHeight) * 2 + 1 }, camera);
+      let hit = null;
+      if (viewState.targetBlend < 0.5) { if (raycaster.ray.intersectSphere(sphereOrigin, intersectPoint)) hit = intersectPoint.normalize(); }
+      else if (raycaster.ray.intersectPlane(planeZ0, intersectPoint)) hit = inverseEqualEarthToVector(intersectPoint.x, intersectPoint.y);
+      if (!hit) return null;
+      const e = rotationMatrix.elements;
+      out[0] = e[0] * hit.x + e[1] * hit.y + e[2] * hit.z;
+      out[1] = e[4] * hit.x + e[5] * hit.y + e[6] * hit.z;
+      out[2] = e[8] * hit.x + e[9] * hit.y + e[10] * hit.z;
+      return out;
+    },
     pixelsPerUnit: () => container.clientHeight / (camera.top - camera.bottom),
     viewVersion: () => viewState.version,
     dispose: () => {
