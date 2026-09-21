@@ -64,7 +64,7 @@ export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 55,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 5,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3,
-  exchangeCoefficient = 1.5e-3, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
+  exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, exnerLayer } = core.diagnostics;
   const levels = core.levels;
@@ -83,6 +83,8 @@ export function createRadiation(mesh, core, {
   const outgoingBuffer = buffers && buffers.outgoing ? buffers.outgoing : new SharedArrayBuffer(8 * C);
   const shortwaveBuffer = buffers && buffers.surfaceShortwave ? buffers.surfaceShortwave : new SharedArrayBuffer(8 * C);
   const outgoing = new Float64Array(outgoingBuffer), surfaceShortwave = new Float64Array(shortwaveBuffer);
+  const evaporationBuffer = buffers && buffers.evaporation ? buffers.evaporation : new SharedArrayBuffer(8 * C);
+  const evaporation = new Float64Array(evaporationBuffer);
   const gasEmissivity = Float64Array.from({ length: K }, (_, k) => 1 - Math.exp(-gasOpticalDepth * (levels[k + 1] - levels[k])));
   const temperature = new Float64Array(K);
   const emitted = new Float64Array(K);
@@ -128,7 +130,7 @@ export function createRadiation(mesh, core, {
     return [outgoing, back];
   }
 
-  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo) {
+  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo, wetness = 1, exchangeCoefficientAt = exchangeCoefficient) {
     const ozoneHeating = beam * ozoneAbsorption;
     const surfaceEmission = STEFAN_BOLTZMANN * surfaceT * surfaceT * surfaceT * surfaceT;
     const coupled = vaporCoupling > 0 && q !== null;
@@ -162,9 +164,9 @@ export function createRadiation(mesh, core, {
     const bottom = K - 1;
     const airTemperature = temperature[bottom];
     const airDensity = pi * sigmaMid[bottom] / (R * airTemperature);
-    const exchange = airDensity * exchangeCoefficient * Math.max(windSpeed, gustiness);
+    const exchange = airDensity * exchangeCoefficientAt * Math.max(windSpeed, gustiness);
     const sensible = exchange * cp * (surfaceT - airTemperature);
-    const evaporation = qAir === null ? 0 : Math.max(0, exchange * (saturationHumidity(surfaceT, pi) - qAir));
+    const evaporation = qAir === null ? 0 : wetness * Math.max(0, exchange * (saturationHumidity(surfaceT, pi) - qAir));
     netFlux[bottom] += sensible;
     const net = absorbedSolar - surfaceEmission + back - sensible - latentHeat * evaporation;
     budget.absorbedSolar = absorbedSolar + ozoneHeating;
@@ -184,15 +186,16 @@ export function createRadiation(mesh, core, {
    * lowest layer for the cells in range; the net surface flux of each
    * cell is left in `surfaceFlux` for the surface model to apply.
    */
-  function apply(state, out, windSpeed, totals, iFrom = 0, iTo = C, surfaceAlbedo = null, diffuseAlbedo = null) {
+  function apply(state, out, windSpeed, totals, iFrom = 0, iTo = C, surfaceAlbedo = null, diffuseAlbedo = null, wetness = null) {
     const [pi, theta, , surfaceT] = state;
     const [, dTheta] = out;
     const q = state[4] ?? null, dQ = out[4] ?? null, qc = state[5] ?? null;
     const bottom = (K - 1) * C;
     if (totals) for (const name of ['absorbedSolar', 'outgoingLongwave', 'sensibleHeat', 'evaporation', 'insolation', 'reflectedSolar']) totals[name] = 0;
     for (let i = iFrom; i < iTo; i++) {
-      surfaceFlux[i] = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], insolation(i), q && dQ ? q[bottom + i] : null, q && dQ ? q : null, q && dQ ? qc : null, surfaceAlbedo ? surfaceAlbedo[i] : albedo, diffuseAlbedo ? diffuseAlbedo[i] : surfaceAlbedo ? surfaceAlbedo[i] : albedo);
+      surfaceFlux[i] = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], insolation(i), q && dQ ? q[bottom + i] : null, q && dQ ? q : null, q && dQ ? qc : null, surfaceAlbedo ? surfaceAlbedo[i] : albedo, diffuseAlbedo ? diffuseAlbedo[i] : surfaceAlbedo ? surfaceAlbedo[i] : albedo, wetness ? wetness[i] : 1, exchangeCoefficients ? exchangeCoefficients[i] : exchangeCoefficient);
       outgoing[i] = budget.outgoingLongwave;
+      evaporation[i] = budget.evaporation;
       surfaceShortwave[i] = budget.surfaceShortwave;
       for (let k = 0; k < K; k++) {
         const massPerArea = pi[i] * dSigma[k] / g;
@@ -211,5 +214,5 @@ export function createRadiation(mesh, core, {
     }
   }
 
-  return { setTime, sun, cosZenith, insolation, column, apply, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer } };
+  return { setTime, sun, cosZenith, insolation, column, apply, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, evaporation, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer } };
 }

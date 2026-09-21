@@ -18,7 +18,7 @@ import { cellVector } from '../dynamics/operators.module.js';
  * sources on the lowest layer, which the diffusion then spreads upward.
  */
 export function createBoundaryLayer(mesh, core, {
-  dragCoefficient = 1.5e-3, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, buffers = null,
+  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, buffers = null,
 } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, exnerLayer, geopotential } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
@@ -42,7 +42,7 @@ export function createBoundaryLayer(mesh, core, {
     cellVector(mesh, u.subarray(bottom * E, K * E), bottomVector, iFrom, iTo);
     for (let i = iFrom; i < iTo; i++) {
       speed[i] = Math.hypot(bottomVector[3 * i], bottomVector[3 * i + 1], bottomVector[3 * i + 2]);
-      friction[i] = Math.sqrt(dragCoefficient) * Math.max(speed[i], gustiness);
+      friction[i] = Math.sqrt(dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness);
       found[i] = 0;
       riPrev[i] = 0;
       zPrev[i] = geopotential[bottom * C + i] / g;

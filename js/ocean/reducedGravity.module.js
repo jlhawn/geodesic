@@ -1,4 +1,4 @@
-import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, laplacianScalar } from '../dynamics/operators.module.js';
+import { divergence, gradient, curl, kineticEnergy, laplacianVelocity } from '../dynamics/operators.module.js';
 import { createRK4Arrays } from '../dynamics/integrators.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
@@ -29,7 +29,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  */
 export function createOcean(mesh, {
   upperDepth = 50, lowerDepth = 350, reducedGravity = 0.02, abyssReducedGravity = 0.01, abyssTemperature = 275,
-  minimumThickness = 10, entrainmentTime = 86400, density = 1025, specificHeat = 3985, interfacialDrag = 2e-4, bottomDrag = 2e-4,
+  minimumThickness = 10, entrainmentTime = 86400, density = 1025, specificHeat = 3985, interfacialDrag = 2e-4, bottomDrag = 2e-4, geography = null,
   closureHours = 12, diffusivity = 0.3, everySteps = 4, buffers = null,
 } = {}) {
   const {
@@ -56,6 +56,20 @@ export function createOcean(mesh, {
   const gradPhi = new Float64Array(E), lap = new Float64Array(E), lap2 = new Float64Array(E), divScratch = new Float64Array(C), curlScratch = new Float64Array(V);
   const rk4 = createRK4Arrays(state.map((a) => a.length));
   let counter = 0;
+  const edgeOcean = geography ? geography.edgeOcean : new Uint8Array(E).fill(1);
+  const cellOcean = geography ? Uint8Array.from(geography.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
+  const { maxEdges, nEdgesOnCell, edgesOnCell, cellsOnCell } = mesh;
+
+  function maskedLaplacian(field, out) {
+    for (let i = 0; i < C; i++) {
+      let sum = 0;
+      for (let m = 0; m < nEdgesOnCell[i]; m++) {
+        const e = edgesOnCell[maxEdges * i + m];
+        if (edgeOcean[e]) sum += dvEdge[e] * (field[cellsOnCell[maxEdges * i + m]] - field[i]) / dcEdge[e];
+      }
+      out[i] = sum / areaCell[i];
+    }
+  }
 
   function thicknessOnVertices(h, out) {
     for (let v = 0; v < V; v++) {
@@ -68,7 +82,7 @@ export function createOcean(mesh, {
   function layer(h, u, H, M, dh, du, dH, upper) {
     for (let e = 0; e < E; e++) {
       hEdge[e] = 0.5 * (h[cellsOnEdge[2 * e]] + h[cellsOnEdge[2 * e + 1]]);
-      flux[e] = hEdge[e] * u[e];
+      flux[e] = edgeOcean[e] ? hEdge[e] * u[e] : 0;
     }
     divergence(mesh, flux, dh);
     for (let i = 0; i < C; i++) { dh[i] = -dh[i]; T[i] = H[i] / h[i]; }
@@ -76,7 +90,7 @@ export function createOcean(mesh, {
     divergence(mesh, heatFlux, dH);
     for (let i = 0; i < C; i++) dH[i] = -dH[i];
     if (upper && diffusion > 0) {
-      laplacianScalar(mesh, T, lapT);
+      maskedLaplacian(T, lapT);
       for (let i = 0; i < C; i++) dH[i] += diffusion * lapT[i];
     }
     curl(mesh, u, zeta);
@@ -101,6 +115,7 @@ export function createOcean(mesh, {
       laplacianVelocity(mesh, lap, lap2, divScratch, curlScratch);
       for (let e = 0; e < E; e++) du[e] -= nu4 * lap2[e];
     }
+    if (geography) for (let e = 0; e < E; e++) if (!edgeOcean[e]) du[e] = 0;
   }
 
   function tendency(input, out) {
@@ -126,7 +141,7 @@ export function createOcean(mesh, {
   }
 
   function setStress(total, ice) {
-    for (let e = 0; e < E; e++) stress[e] = ice[cellsOnEdge[2 * e]] > 0 || ice[cellsOnEdge[2 * e + 1]] > 0 ? 0 : total[e];
+    for (let e = 0; e < E; e++) stress[e] = !edgeOcean[e] || ice[cellsOnEdge[2 * e]] > 0 || ice[cellsOnEdge[2 * e + 1]] > 0 ? 0 : total[e];
   }
 
   function readSurface(surfaceT, ice) {
@@ -184,6 +199,7 @@ export function createOcean(mesh, {
   function diagnostics() {
     let area = 0, depth = 0, heat = 0, thermocline = 0, speed = 0;
     for (let i = 0; i < C; i++) {
+      if (!cellOcean[i]) continue;
       const a = areaCell[i];
       area += a; depth += a * h1[i]; heat += a * rhoCp * (H1[i] + H2[i]); thermocline += a * T2[i];
     }
@@ -191,5 +207,5 @@ export function createOcean(mesh, {
     return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanThermoclineT: thermocline / area, oceanSpeed: speed };
   }
 
-  return { state, h1, h2, u1, u2, H1, H2, T1, T2, capacity, stress, tendency, advance, initialize, load, serialize, diagnostics, setStress, readSurface, rhoCp, shared: { capacity: capacity.buffer } };
+  return { state, h1, h2, u1, u2, H1, H2, T1, T2, capacity, stress, tendency, advance, initialize, load, serialize, diagnostics, setStress, readSurface, rhoCp, edgeOcean, cellOcean, shared: { capacity: capacity.buffer } };
 }

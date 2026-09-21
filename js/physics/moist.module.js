@@ -57,6 +57,8 @@ export function createMoistPhysics(mesh, core, {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer } = core.diagnostics;
   const precipBuffer = buffers && buffers.precipitation ? buffers.precipitation : new SharedArrayBuffer(8 * C);
   const precipitation = new Float64Array(precipBuffer);
+  const rainBuffer = buffers && buffers.rain ? buffers.rain : new SharedArrayBuffer(8 * C);
+  const rain = new Float64Array(rainBuffer);
   const T = new Float64Array(K), p = new Float64Array(K), dp = new Float64Array(K), Tref = new Float64Array(K), qref = new Float64Array(K);
   const budget = { condensation: 0, convection: 0, lost: 0 };
 
@@ -215,6 +217,7 @@ export function createMoistPhysics(mesh, core, {
       fillColumn(i, pi, q);
       fillColumn(i, pi, qc);
       precipitation[i] += rained + convected;
+      rain[i] = rained + convected;
       budget.condensation += mesh.areaCell[i] * rained;
       budget.convection += mesh.areaCell[i] * convected;
     }
@@ -226,5 +229,5 @@ export function createMoistPhysics(mesh, core, {
     return water;
   }
 
-  return { adjust, condenseColumn, autoconvertColumn, convectColumn, fillColumn, referenceProfile, columnWater, precipitation, budget, latentHeat, shared: { precipitation: precipBuffer }, reference: { T: Tref, q: qref } };
+  return { adjust, condenseColumn, autoconvertColumn, convectColumn, fillColumn, referenceProfile, columnWater, precipitation, rain, budget, latentHeat, shared: { precipitation: precipBuffer, rain: rainBuffer }, reference: { T: Tref, q: qref } };
 }

@@ -9,7 +9,7 @@ import { cellVector } from '../dynamics/operators.module.js';
  * optional Rayleigh drag above topSigma, ramping to 1/topDragDays at the
  * model top, absorbs what reaches the lid.
  */
-export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness = 3, pblTop = 0.7, pblRate = 1 / 86400, topSigma = 0.05, topDragDays = 0, buffers = null } = {}) {
+export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, pblTop = 0.7, pblRate = 1 / 86400, topSigma = 0.05, topDragDays = 0, buffers = null } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, exnerLayer } = core.diagnostics;
   const { cellsOnEdge } = mesh;
   const bottom = K - 1;
@@ -33,7 +33,7 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness 
         const airTemperature = theta[idx] * exnerLayer[idx];
         const airDensity = pi[i] * sigmaMid[bottom] / (R * airTemperature);
         const massPerArea = pi[i] * dSigma[bottom] / g;
-        dragRate[i] = dragCoefficient * airDensity * Math.max(windSpeed[i], gustiness) / massPerArea;
+        dragRate[i] = (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * airDensity * Math.max(windSpeed[i], gustiness) / massPerArea;
       }
       for (let e = 0; e < E; e++) {
         const rate = 0.5 * (dragRate[cellsOnEdge[2 * e]] + dragRate[cellsOnEdge[2 * e + 1]]);
@@ -62,7 +62,7 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, gustiness 
     for (let i = 0; i < C; i++) {
       const idx = bottom * C + i;
       const airDensity = pi[i] * sigmaMid[bottom] / (R * theta[idx] * exnerLayer[idx]);
-      aeroFactor[i] = dragCoefficient * airDensity * Math.max(windSpeed[i], gustiness);
+      aeroFactor[i] = (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * airDensity * Math.max(windSpeed[i], gustiness);
     }
     for (let e = 0; e < E; e++) {
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], p = 0.5 * (pi[a] + pi[b]);
