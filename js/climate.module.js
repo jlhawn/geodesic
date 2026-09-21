@@ -97,7 +97,7 @@ function applyOverrides(settings, overrides) {
     if (!(key in overrides)) continue;
     const value = overrides[key];
     if (typeof DEFAULTS[key] === 'number') { if (Number(value) > 0) settings[key] = Number(value); continue; }
-    const known = key === 'palette' ? PALETTES[value] : key === 'overlay' ? OVERLAYS[value] : key === 'panel' ? ['open', 'closed'].includes(value) : document.querySelector(`[data-setting="${key}"] [data-value="${CSS.escape(value)}"]`);
+    const known = key === 'palette' ? PALETTES[value] : key === 'overlay' ? OVERLAYS[value] : key === 'panel' ? ['open', 'closed'].includes(value) : key === 'isobars' ? ['on', 'off'].includes(value) : document.querySelector(`[data-setting="${key}"] [data-value="${CSS.escape(value)}"]`);
     if (known) settings[key] = value;
   }
 }
