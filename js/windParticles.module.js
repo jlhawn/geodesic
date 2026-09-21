@@ -53,6 +53,10 @@ export function createWindParticles(container, viewer, grid, { density = 0.006, 
     age[n] = 0;
     lifetime[n] = 60 + Math.floor(Math.random() * 180);
   }
+  function reset() {
+    context.clearRect(0, 0, width, height);
+    for (let n = 0; n < count; n++) { spawn(n); age[n] = Math.floor(Math.random() * lifetime[n]); }
+  }
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(container);
   resize();
@@ -127,6 +131,7 @@ export function createWindParticles(container, viewer, grid, { density = 0.006, 
 
   return {
     setField(vectors, speed = referenceSpeed) { field = vectors; reference = speed; },
+    reset,
     setVisible(visible) { canvas.style.display = visible ? 'block' : 'none'; if (!visible) context.clearRect(0, 0, width, height); },
     dispose() { running = false; resizeObserver.disconnect(); canvas.remove(); },
   };

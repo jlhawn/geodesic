@@ -207,7 +207,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const panel = document.getElementById('panel');
   const activeLevel = () => (settings.view !== 'space' && HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
   const shownLevel = () => latest?.level ?? activeLevel();
-  let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, rgb = null, running = !paused;
+  let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, rgb = null, running = !paused, animatedSource = null;
   let geographyFields = {}, hasLand = false;
   const clock = [];
   function simulatedHoursPerMinute() {
@@ -313,6 +313,9 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     arrows.setVisible(animate === 'arrows');
     particles.setVisible(animate === 'particles');
     if (animate === 'arrows') arrows.update(field, { referenceSpeed: reference });
+    const source = ocean ? 'current' : `wind ${shownLevel()}`;
+    if (animate === 'particles' && source !== animatedSource) particles.reset();
+    animatedSource = source;
     if (animate === 'particles') particles.setField(field, reference);
     const note = animate === 'particles' ? `trails brighten toward ${reference} m/s` : animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
     if (note) document.getElementById('data').textContent += ` · ${note}`;
