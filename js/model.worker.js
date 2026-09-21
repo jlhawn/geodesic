@@ -5,7 +5,8 @@ import { createGpuModel } from './gpu/model.gpu.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand } from './physics/regrid.module.js';
-import { topographyFromInt16 } from './geography.module.js';
+import { topographyFromInt16, rebalanceSurfacePressure } from './geography.module.js';
+import { regridCellField } from './physics/regrid.module.js';
 import { levelFields } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 
@@ -33,13 +34,18 @@ async function postFrame() {
   const precipitation = Float32Array.from(model.moist.precipitation);
   const fields = levelFields(core, pi, theta, layerWind, level, q);
   const ps = Float32Array.from(pi), ts = Float32Array.from(surfaceT);
+  const mslp = Float32Array.from(pi);
+  if (model.surfaceGeopotential) {
+    const phis = model.surfaceGeopotential, { R, g, exnerLayer } = core.diagnostics, bottom = (core.K - 1) * mesh.nCells;
+    for (let i = 0; i < mesh.nCells; i++) mslp[i] = pi[i] * Math.exp(phis[i] / (R * (theta[bottom + i] * exnerLayer[bottom + i] + 0.00325 * phis[i] / g)));
+  }
   const water = new Float32Array(mesh.nCells), cloud = new Float32Array(mesh.nCells);
   for (let i = 0; i < mesh.nCells; i++) { water[i] = model.moist.columnWater(pi, q, i); cloud[i] = model.moist.columnWater(pi, qc, i); }
   const interval = time - lastFrameTime;
   lastFrameTime = time;
   for (let i = 0; i < mesh.nCells; i++) precipitation[i] = interval > 0 ? precipitation[i] / interval * 86400 : 0;
-  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, ts, ...fields, precipitation, water, cloud, ice, albedo, shortwave, longwave, soil, snow, diagnostics, engine: model.engine ?? 'cpu' };
-  self.postMessage(message, [ps.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer, shortwave.buffer, longwave.buffer, soil.buffer, snow.buffer]);
+  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, mslp, ts, ...fields, precipitation, water, cloud, ice, albedo, shortwave, longwave, soil, snow, diagnostics, engine: model.engine ?? 'cpu' };
+  self.postMessage(message, [ps.buffer, mslp.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer, shortwave.buffer, longwave.buffer, soil.buffer, snow.buffer]);
 }
 
 async function loop() {
@@ -90,7 +96,13 @@ function initialState(model, saved, N) {
   if (saved.q && saved.qc) arrays.push(Float64Array.from(saved.qc));
   if (saved.q && saved.qc && saved.ice) arrays.push(Float64Array.from(saved.ice));
   model.time = saved.time;
-  const carried = saved.N === N ? arrays : regridState(createModel(new Grid(saved.N)), model, arrays, (fraction, text) => status(`regridding day ${saved.day} from N=${saved.N} to N=${N}: ${text}…`, 0.8 + 0.12 * fraction));
+  const source = saved.N === N && !saved.terrain ? null : createModel(new Grid(saved.N), { physics: false, ...(saved.terrain ? { topography: currentTopography } : {}) });
+  const carried = saved.N === N ? arrays : regridState(source, model, arrays, (fraction, text) => status(`regridding day ${saved.day} from N=${saved.N} to N=${N}: ${text}…`, 0.8 + 0.12 * fraction));
+  const fromPhi = saved.terrain ? (saved.N === N ? source.surfaceGeopotential : regridCellField(source, model, source.surfaceGeopotential)) : null;
+  if (fromPhi || model.surfaceGeopotential) {
+    model.core.diagnose(carried[0], carried[1], null, null);
+    rebalanceSurfacePressure(model.core, carried[0], carried[1], fromPhi, model.surfaceGeopotential);
+  }
   if (carried.length < 5) carried.push(initialHumidity(model, carried[0], carried[1]));
   if (carried.length < 6) carried.push(new Float64Array(carried[1].length));
   if (carried.length < 7) carried.push(Float64Array.from(carried[3], (t) => (t < 271.35 ? 0.5 : 0)));
@@ -108,6 +120,7 @@ function placeLand(model, saved, N) {
   else model.land.initialize();
 }
 
+let currentTopography = null;
 const topographies = new Map();
 async function loadTopography(url) {
   if (topographies.has(url)) return topographies.get(url);
@@ -139,7 +152,7 @@ function geographyMessage(model) {
     const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
     coastCells[n] = geography.land[a] ? a : b;
   }
-  return { land: Uint8Array.from(geography.land), landFraction: Float32Array.from(geography.landFraction), elevation: Float32Array.from(geography.elevation), coast, coastCells };
+  return { land: Uint8Array.from(geography.land), landFraction: Float32Array.from(geography.landFraction), elevation: Float32Array.from(geography.elevation), coast, coastCells, terrain: !!model.surfaceGeopotential };
 }
 
 self.onmessage = async (event) => {
@@ -182,7 +195,7 @@ async function snapshot() {
     land = { soil: Float64Array.from(l.soil).buffer, snow: Float64Array.from(l.snow).buffer };
   }
   const transfer = [...Object.values(arrays), ...(ocean ? Object.values(ocean) : []), ...(land ? Object.values(land) : [])];
-  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, arrays, ocean, land }, transfer);
+  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, arrays, ocean, land }, transfer);
   postFrame();
 }
 
@@ -192,7 +205,7 @@ async function snapshot() {
  * state. The model stays paused afterwards.
  */
 async function restore(snapshot) {
-  const saved = { N: snapshot.N, K: snapshot.K, day: snapshot.day, time: snapshot.time };
+  const saved = { N: snapshot.N, K: snapshot.K, day: snapshot.day, time: snapshot.time, terrain: !!snapshot.terrain };
   for (const [name, buffer] of Object.entries(snapshot.arrays)) saved[name] = new Float64Array(buffer);
   if (snapshot.ocean) saved.ocean = Object.fromEntries(Object.entries(snapshot.ocean).map(([k, buffer]) => [k, new Float64Array(buffer)]));
   if (snapshot.land) saved.land = Object.fromEntries(Object.entries(snapshot.land).map(([k, buffer]) => [k, new Float64Array(buffer)]));
@@ -222,6 +235,8 @@ async function start(message) {
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   const options = { ...(message.options ?? {}) };
   if (message.land !== false) { status('loading the topography…', 0.52); options.topography = await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href); }
+  currentTopography = options.topography ?? null;
+  options.terrain = message.terrain !== false;
   dt = message.dt ?? 1350 * 16 / N;
   stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round((gpuWanted ? 24 : 8) * 16 / N));
   const workers = message.workers ?? 1;

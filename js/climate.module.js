@@ -21,7 +21,7 @@ const OVERLAYS = {
   albedo: { label: 'Albedo', unit: '', kind: 'sequential', field: 'albedo', scale: 1, range: () => [0, 0.8] },
   swdown: { label: 'SW↓', unit: 'W/m²', kind: 'sequential', field: 'shortwave', scale: 1, range: () => [0, 1200] },
   olr: { label: 'OLR', unit: 'W/m²', kind: 'sequential', field: 'longwave', scale: 1, range: () => [100, 320] },
-  mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'ps', scale: 0.01, range: () => [960, 1060] },
+  mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'mslp', scale: 0.01, range: () => [960, 1060] },
   soil: { label: 'Soil water', unit: 'kg/m²', kind: 'sequential', field: 'soil', scale: 1, range: () => [0, 150] },
   snow: { label: 'Snow', unit: 'kg/m²', kind: 'sequential', field: 'snow', scale: 1, range: () => [0, 100] },
   elevation: { label: 'Elevation', unit: 'm', kind: 'diverging', field: 'elevation', scale: 1, range: () => [-4000, 4000] },
@@ -67,7 +67,7 @@ const DEFAULTS = { view: 'data', overlay: 'wind', level: 'surface', animate: 'pa
  * height contours of the pressure surface at any other level.
  */
 const ISOLINES = {
-  surface: { label: 'Isobars', unit: 'hPa', setting: 'isobarStep', steps: [1, 2.5, 5, 10], field: (frame) => Float32Array.from(frame.ps, (p) => p / 100) },
+  surface: { label: 'Isobars', unit: 'hPa', setting: 'isobarStep', steps: [1, 2.5, 5, 10], field: (frame) => Float32Array.from(frame.mslp ?? frame.ps, (p) => p / 100) },
   level: { label: 'Height lines', unit: 'm', setting: 'heightStep', steps: [20, 30, 60, 120, 240], field: (frame) => frame.height },
 };
 const isolinesFor = (level) => (level === 'surface' ? ISOLINES.surface : ISOLINES.level);
@@ -151,7 +151,7 @@ const VIEW_NOTES = [
   ['Wind speed', 'Speed at the chosen height.'],
   ['Temperature', 'Air temperature at the chosen height.'],
   ['Relative humidity', 'At the chosen height.'],
-  ['Sea-level pressure', 'Surface pressure; with no terrain it is the sea-level pressure.'],
+  ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Level views are grey where the level is underground.'],
   ['Soil water', 'The land bucket: up to 150 kg/m² of soil water; evaporation slows as it dries and rain beyond its capacity runs off.'],
   ['Snow', 'Snow on land in water equivalent; it falls when the lowest air is below freezing and melts into the bucket.'],
   ['Elevation', 'The mean elevation of each cell from ETOPO 2022; negative under the sea.'],
@@ -169,7 +169,7 @@ const VIEW_NOTES = [
   ['Snapshots', 'Save the paused state in this browser, restore it later, or download one of the runs saved on the server.'],
 ];
 
-export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null } = {}) {
+export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true } = {}) {
   const settings = loadSettings();
   const panel = document.getElementById('panel');
   const activeLevel = () => (settings.view === 'space' || HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
@@ -248,13 +248,14 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const values = latest[overlay.field];
     const stops = PALETTES[overlay.kind][settings.palettes[overlay.kind]] ?? Object.values(PALETTES[overlay.kind])[0];
     for (let i = 0; i < grid.size; i++) {
+      if (Number.isNaN(values[i])) { rgb[3 * i] = rgb[3 * i + 1] = rgb[3 * i + 2] = LINEAR[70]; continue; }
       color((values[i] * overlay.scale - min) / (max - min), stops, rgb, 3 * i);
       rgb[3 * i] = LINEAR[rgb[3 * i]]; rgb[3 * i + 1] = LINEAR[rgb[3 * i + 1]]; rgb[3 * i + 2] = LINEAR[rgb[3 * i + 2]];
     }
     viewer.updateColors(rgb);
     scaleRow.classList.remove('hidden');
     renderScale(stops, min, max, overlay.unit);
-    const columnField = ['ps', 'precipitation', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave', 'soil', 'snow', 'elevation'].includes(overlay.field);
+    const columnField = ['ps', 'mslp', 'precipitation', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave', 'soil', 'snow', 'elevation'].includes(overlay.field);
     document.getElementById('data').textContent = columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(activeLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(activeLevel())}`;
   }
 
@@ -404,7 +405,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     }
   };
   worker.onerror = (error) => { document.getElementById('date').textContent = `worker error: ${error.message}`; };
-  worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null, workers: crossOriginIsolated ? workers : 1, engine, paused, level: activeLevel(), land, topography: topography ? new URL(topography, location.href).href : null });
+  worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null, workers: crossOriginIsolated ? workers : 1, engine, paused, level: activeLevel(), land, terrain, topography: topography ? new URL(topography, location.href).href : null });
 
   for (const group of panel.querySelectorAll('.options[data-setting]')) {
     group.addEventListener('click', (event) => {
@@ -431,7 +432,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const land = saved.land ? Object.fromEntries(Object.entries(saved.land).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
     const size = (o) => (o ? Object.values(o).reduce((n, b) => n + b.byteLength, 0) : 0);
     const bytes = size(arrays) + size(ocean) + size(land);
-    return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, bytes, source: url }, data: { arrays, ocean, land } };
+    return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, bytes, source: url }, data: { arrays, ocean, land } };
   };
   async function refreshSnapshots() {
     const list = await listSnapshots();
@@ -468,7 +469,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     } catch (error) { document.getElementById('date').textContent = `download failed: ${error.message}`; return null; }
   }
   async function storeSnapshot(message) {
-    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? Object.fromEntries(Object.entries(message.ocean).map(([k, b]) => [k, new Float64Array(b)])) : null, land: message.land ? Object.fromEntries(Object.entries(message.land).map(([k, b]) => [k, new Float64Array(b)])) : null });
+    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? Object.fromEntries(Object.entries(message.ocean).map(([k, b]) => [k, new Float64Array(b)])) : null, land: message.land ? Object.fromEntries(Object.entries(message.land).map(([k, b]) => [k, new Float64Array(b)])) : null });
     const name = `Day ${Math.floor(message.day)} · ${new Date().toLocaleString()}`;
     await saveSnapshot({ name, created: Date.now(), ...meta }, data);
     await refreshSnapshots();
@@ -482,7 +483,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     closeModals();
     render();
     const transfer = [...Object.values(data.arrays), ...(data.ocean ? Object.values(data.ocean) : []), ...(data.land ? Object.values(data.land) : [])];
-    worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
+    worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
   }
   for (const button of document.querySelectorAll('[data-snapshot]')) {
     button.addEventListener('click', async () => {

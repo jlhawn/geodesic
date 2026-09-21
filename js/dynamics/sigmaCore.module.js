@@ -97,7 +97,7 @@ export function createSigmaCore(mesh, options = {}) {
   const kinetic = new Float64Array(C);
   const phi = new Float64Array(C);
   const gradPhi = new Float64Array(E);
-  const gradPi = new Float64Array(E);
+  const lnPi = new Float64Array(C), gradLnPi = new Float64Array(E);
   const lap = new Float64Array(E);
   const lap2 = new Float64Array(E);
   const divScratch = new Float64Array(C);
@@ -197,9 +197,14 @@ export function createSigmaCore(mesh, options = {}) {
    * preserved exactly under it (used for water); theta keeps the closure
    * on the field itself.
    */
-  function scalarClosure(k, pi, field, target, coefficient, conservative) {
+  function scalarClosure(k, pi, field, target, coefficient, conservative, exner = null) {
     const off = k * C;
-    if (conservative) {
+    if (exner) {
+      for (let i = 0; i < C; i++) massField[i] = field[off + i] * exner[off + i];
+      laplacianScalar(mesh, massField, lapTheta);
+      laplacianScalar(mesh, lapTheta, lapTheta2);
+      for (let i = 0; i < C; i++) target[off + i] -= coefficient * lapTheta2[i] / exner[off + i];
+    } else if (conservative) {
       for (let i = 0; i < C; i++) massField[i] = pi[i] * field[off + i];
       laplacianScalar(mesh, massField, lapTheta);
       laplacianScalar(mesh, lapTheta, lapTheta2);
@@ -239,7 +244,7 @@ export function createSigmaCore(mesh, options = {}) {
       const vertical = (lowerFlow * lower - upperFlow * upper - field[idx] * (lowerFlow - upperFlow)) / (pi[i] * dSigma[k]);
       dField[idx] = -(divField[i] - field[idx] * divFlux[idx]) / pi[i] - vertical;
     }
-    if (nu4Theta > 0 && !splitClosure) scalarClosure(k, pi, field, dField, nu4Theta, conservative);
+    if (nu4Theta > 0 && !splitClosure) scalarClosure(k, pi, field, dField, nu4Theta, conservative, conservative ? null : exnerLayer);
   }
 
   /*
@@ -252,7 +257,7 @@ export function createSigmaCore(mesh, options = {}) {
     const q = state[4] ?? null, qc = state[5] ?? null;
     for (let k = kFrom; k < kTo; k++) {
       if (part !== 'momentum' && nu4Theta > 0) {
-        scalarClosure(k, pi, theta, theta, dt * nu4Theta, false);
+        scalarClosure(k, pi, theta, theta, dt * nu4Theta, false, exnerLayer);
         if (q) scalarClosure(k, pi, q, q, dt * nu4Theta, true);
         if (qc) scalarClosure(k, pi, qc, qc, dt * nu4Theta, true);
       }
@@ -278,7 +283,8 @@ export function createSigmaCore(mesh, options = {}) {
     }
     if (part === 'tracers') return;
     edgePi(pi);
-    gradient(mesh, pi, gradPi);
+    for (let i = 0; i < C; i++) lnPi[i] = Math.log(pi[i]);
+    gradient(mesh, lnPi, gradLnPi);
     for (let k = kFrom; k < kTo; k++) {
       const off = k * C;
       const fk = flux.subarray(k * E, (k + 1) * E);
@@ -298,7 +304,7 @@ export function createSigmaCore(mesh, options = {}) {
           const slot = maxEdgesOnEdge * e + s, other = edgesOnEdge[slot];
           pv += pvWeights[slot] * fk[other] * (qHere + 0.5 * qEdge[other]);
         }
-        const pgfPi = cp * 0.5 * (thetaV[off + i] * dExnerDpi[off + i] + thetaV[off + j] * dExnerDpi[off + j]) * gradPi[e];
+        const pgfPi = R * 0.5 * (thetaV[off + i] * exnerLayer[off + i] + thetaV[off + j] * exnerLayer[off + j]) * gradLnPi[e];
         const lowerFlow = 0.5 * (piSigmaDot[(k + 1) * C + i] + piSigmaDot[(k + 1) * C + j]);
         const upperFlow = 0.5 * (piSigmaDot[k * C + i] + piSigmaDot[k * C + j]);
         const lowerU = k === K - 1 ? 0 : 0.5 * (uk[e] + u[(k + 1) * E + e]);

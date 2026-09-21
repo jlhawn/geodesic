@@ -130,7 +130,7 @@
     const from = snapshot ?? params.get('from') ?? 'runs/pbl64_state_day875.json';
     const workers = Number(params.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 2));
     const engine = params.get('engine') ?? (navigator.gpu ? 'gpu' : 'cpu');
-    runClimate({ N: params.get('N') ? Number(params.get('N')) : (from === 'none' ? 64 : null), from: from === 'none' ? null : from, workers, engine, paused: snapshot !== null || params.has('paused'), land: params.get('land') !== 'off', topography: params.get('topography') });
+    runClimate({ N: params.get('N') ? Number(params.get('N')) : (from === 'none' ? 64 : null), from: from === 'none' ? null : from, workers, engine, paused: snapshot !== null || params.has('paused'), land: params.get('land') !== 'off', terrain: params.get('terrain') !== 'off', topography: params.get('topography') });
   </script>
 </body>
 

@@ -17,6 +17,12 @@ export function levelFields(core, pi, theta, layerWind, level, q = null) {
   const humidity = q ? new Float32Array(C) : null;
   const pressure = level === 'surface' ? Infinity : 100 * level;
   for (let i = 0; i < C; i++) {
+    if (pressure > pi[i]) {
+      speed[i] = NaN; temperature[i] = NaN; if (humidity) humidity[i] = NaN;
+      const k = K - 1, tk1 = theta[k * C + i] * exnerLayer[k * C + i];
+      height[i] = (geopotential[k * C + i] - R * tk1 * Math.log(pressure / (pi[i] * sigmaMid[k]))) / g;
+      continue;
+    }
     let k = 0;
     while (k < K - 2 && pi[i] * sigmaMid[k + 1] < pressure) k++;
     const pk = pi[i] * sigmaMid[k], pk1 = pi[i] * sigmaMid[k + 1];

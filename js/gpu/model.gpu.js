@@ -8,7 +8,7 @@ import { LATENT_HEAT } from '../physics/moist.module.js';
 import { SIDEREAL_DAY } from '../model.module.js';
 import { createGpuCore } from './core.gpu.js';
 import { createGpuOcean } from './ocean.gpu.js';
-import { createGeography } from '../geography.module.js';
+import { createGeography, surfaceGeopotential } from '../geography.module.js';
 import { createLandSurface } from '../physics/land.module.js';
 
 /*
@@ -21,23 +21,24 @@ import { createLandSurface } from '../physics/land.module.js';
  */
 export async function createGpuModel(gridOrMesh, {
   radius, nu4Hours = 3, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
-  topography = null, geography: geographyOptions = {}, land: landOptions = {},
+  topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true,
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
+  const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
   const dragCoefficients = geography ? Float64Array.from(geography.land, (l) => (l ? landOptions.dragCoefficient ?? 3e-3 : surface.dragCoefficient ?? 1.5e-3)) : null;
   let spacing = 0;
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;
   const nu4 = Math.pow(spacing / Math.PI, 4) / (nu4Hours * 3600);
-  const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, splitClosure: true });
+  const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, splitClosure: true, surfaceGeopotential: phis });
   const { K, C, E } = core.diagnostics;
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     landed: !!geography, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.25, snowAlbedo: landOptions.snowAlbedo ?? 0.7, fullSnow: landOptions.fullSnow ?? 20,
   };
-  const gpu = await createGpuCore(mesh, { nu4, nu4Theta: nu4, physics, topSigma: surface.topSigma ?? 0.02, topDragDays: surface.topDragDays ?? 5 });
+  const gpu = await createGpuCore(mesh, { nu4, nu4Theta: nu4, physics, topSigma: surface.topSigma ?? 0.02, topDragDays: surface.topDragDays ?? 5, surfaceGeopotential: phis });
   const seaIce = createSeaIce(mesh, { oceanDiffusivity: 0, oceanHeatFlux: 0, ...ice });
   const radiationCpu = createRadiation(mesh, core, radiation);
   const surfaceCpu = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, pblRate: 0, ...surface });
@@ -50,7 +51,7 @@ export async function createGpuModel(gridOrMesh, {
   const precipitation = new Float64Array(C);
   let dirty = true, lastPrecipTime = 0;
 
-  const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu' };
+  const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu' };
   model.moist = { precipitation, columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget };
 
   function pushState() {

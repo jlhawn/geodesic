@@ -7,7 +7,7 @@ import { createMoistPhysics } from './physics/moist.module.js';
 import { createSeaIce } from './physics/ice.module.js';
 import { createOcean } from './ocean/reducedGravity.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
-import { createGeography } from './geography.module.js';
+import { createGeography, surfaceGeopotential } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
 
 export const SIDEREAL_DAY = 86164.0905;
@@ -44,17 +44,18 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  */
 export function createModel(gridOrMesh, {
   radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {}, boundaryLayer: boundaryLayerOptions = {},
-  topography = null, geography: geographyOptions = {}, land: landOptions = {},
+  topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true,
   physics = true, moist = true, nu4Hours = 3, buffers = null,
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
+  const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
   const dragCoefficients = geography ? Float64Array.from(geography.land, (l) => (l ? landOptions.dragCoefficient ?? 3e-3 : surfaceOptions.dragCoefficient ?? 1.5e-3)) : null;
   let spacing = 0;
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;
   const nu4 = Math.pow(spacing / Math.PI, 4) / (nu4Hours * 3600);
-  const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, splitClosure: true, buffers: buffers ? buffers.core : null, ...coreOptions });
+  const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, exchangeCoefficients: dragCoefficients, ...radiationOptions });
   const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, ...boundaryLayerOptions }) : null;
@@ -134,7 +135,7 @@ export function createModel(gridOrMesh, {
 
   let rk4 = null;
   const model = {
-    mesh, core, radiation, surface, moist: moistPhysics, seaIce, ocean, boundaryLayer, geography, land, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
+    mesh, core, radiation, surface, moist: moistPhysics, seaIce, ocean, boundaryLayer, geography, land, surfaceGeopotential: phis, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
     shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 

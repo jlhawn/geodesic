@@ -27,10 +27,10 @@ export function layoutFor(mesh, K) {
   const KC = K * C, KE = K * E, KV = K * V;
   const seq = (names) => { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; };
   const MI = seq([['COE', 2 * E], ['VOE', 2 * E], ['EOC', MAX_EDGES * C], ['ESC', MAX_EDGES * C], ['COC', MAX_EDGES * C], ['NEC', C], ['COV', 3 * V], ['EOV', 3 * V], ['ESV', 3 * V], ['EOE', MAX_EDGES_ON_EDGE * E], ['NEE', E]]);
-  const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C]]);
+  const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E]]);
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
-  const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC]]);
+  const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C]]);
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['RUNOFF', C]]);
   return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH };
 }
@@ -113,6 +113,7 @@ const KERNELS = {
     D[D_PSD + (k + 1) * C + i] = -cumulative - LV[L_SL + k] * dPi;
   }
   D[D_PSD + K * C + i] = 0.0;
+  D[D_LNPI + i] = log(pi);
   diagnoseColumn(i);
   let bottom = (K - 1) * C + i;
   let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
@@ -187,8 +188,7 @@ const KERNELS = {
   }
   let dc = MF[F_DC + e];
   let gradPhi = (D[D_PHI + off + j] - D[D_PHI + off + i]) / dc;
-  let gradPi = (IN[S_PI + j] - IN[S_PI + i]) / dc;
-  let pgfPi = CP * 0.5 * (D[D_THV + off + i] * D[D_DEX + off + i] + D[D_THV + off + j] * D[D_DEX + off + j]) * gradPi;
+  let pgfPi = RGAS * 0.5 * (D[D_THV + off + i] * D[D_EXM + off + i] + D[D_THV + off + j] * D[D_EXM + off + j]) * (D[D_LNPI + j] - D[D_LNPI + i]) / dc;
   let lowerFlow = 0.5 * (D[D_PSD + (k + 1) * C + i] + D[D_PSD + (k + 1) * C + j]);
   let upperFlow = 0.5 * (D[D_PSD + k * C + i] + D[D_PSD + k * C + j]);
   let u = IN[S_U + n];
@@ -196,7 +196,7 @@ const KERNELS = {
   var upperU = 0.0; if (k > 0) { upperU = 0.5 * (u + IN[S_U + n - E]); }
   let piEdge = 0.5 * (IN[S_PI + i] + IN[S_PI + j]);
   let vertical = (lowerFlow * lowerU - upperFlow * upperU - u * (lowerFlow - upperFlow)) / (piEdge * LV[L_DS + k]);
-  var du = pv / dc - gradPhi - pgfPi - vertical;
+  var du = pv / dc - gradPhi - MF[F_GPHIS + e] - pgfPi - vertical;
   if (k == K - 1) { du -= 0.5 * (D[D_DRAG + i] + D[D_DRAG + j]) * u; }
   du -= LV[L_TOP + k] * u;
   OUT[S_U + n] = du;
@@ -214,12 +214,12 @@ const KERNELS = {
   let field = n / (K * C); let idx = n % (K * C); let k = idx / C; let i = idx % C;
   var off = S_TH; var weightPi = 0.0;
   if (field == 1) { off = S_Q; weightPi = 1.0; } else if (field == 2) { off = S_QC; weightPi = 1.0; }
-  let wi = select(1.0, IN[S_PI + i], weightPi > 0.5);
+  let wi = select(D[D_EXM + idx], IN[S_PI + i], weightPi > 0.5);
   let here = IN[off + idx] * wi;
   var sum = 0.0;
   for (var m = 0; m < MI[NEC + i]; m++) {
     let e = MI[EOC + MAXE * i + m]; let j = MI[COC + MAXE * i + m];
-    let wj = select(1.0, IN[S_PI + j], weightPi > 0.5);
+    let wj = select(D[D_EXM + k * C + j], IN[S_PI + j], weightPi > 0.5);
     sum += MF[F_DV + e] * (IN[off + k * C + j] * wj - here) / MF[F_DC + e];
   }
   D[D_LAP1 + n] = sum / MF[F_AREA + i];
@@ -234,7 +234,7 @@ const KERNELS = {
     sum += MF[F_DV + e] * (D[D_LAP1 + field * K * C + k * C + j] - here) / MF[F_DC + e];
   }
   let lap2 = sum / MF[F_AREA + i];
-  if (field == 0) { IN[S_TH + idx] -= P[0] * lap2; }
+  if (field == 0) { IN[S_TH + idx] -= P[0] * lap2 / D[D_EXM + idx]; }
   else if (field == 1) { IN[S_Q + idx] -= P[0] * lap2 / IN[S_PI + i]; }
   else { IN[S_QC + idx] -= P[0] * lap2 / IN[S_PI + i]; }
 }`,
@@ -284,7 +284,7 @@ export const PHYSICS_DEFAULTS = {
 
 export async function createGpuCore(mesh, {
   levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0,
-  dragCoefficient = 1.5e-3, gustiness = 3, topSigma = 0.02, topDragDays = 5, referenceTheta = null, physics: physicsOptions = {},
+  dragCoefficient = 1.5e-3, gustiness = 3, topSigma = 0.02, topDragDays = 5, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
 } = {}) {
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
   const { device } = await getDevice();
@@ -313,6 +313,7 @@ export async function createGpuCore(mesh, {
   put(mf, L.MF.AREA, mesh.areaCell); put(mf, L.MF.ATRI, mesh.areaTriangle); put(mf, L.MF.DC, mesh.dcEdge); put(mf, L.MF.DV, mesh.dvEdge); put(mf, L.MF.FV, mesh.fVertex);
   put(mf, L.MF.KAV, mesh.kiteAreasOnVertex); put(mf, L.MF.PVW, Float64Array.from(mesh.weightsOnEdge, (w, slot) => w * mesh.dvEdge[mesh.edgesOnEdge[slot]]));
   put(mf, L.MF.NEDGE, mesh.nEdge); put(mf, L.MF.LAT, mesh.latCell); put(mf, L.MF.XC, mesh.xCell);
+  if (surfaceGeopotential) put(mf, L.MF.GPHIS, Float64Array.from({ length: E }, (_, e) => (surfaceGeopotential[mesh.cellsOnEdge[2 * e + 1]] - surfaceGeopotential[mesh.cellsOnEdge[2 * e]]) / mesh.dcEdge[e]));
   const lv = new Float32Array(L.LV.total);
   put(lv, L.LV.SL, sigmaLower); put(lv, L.LV.SU, sigmaUpper); put(lv, L.LV.DS, dSigma); put(lv, L.LV.SM, sigmaMid); put(lv, L.LV.TOP, topRate);
   const cl = Float64Array.from(sigmaLower, (s) => Math.pow(s, kappa));

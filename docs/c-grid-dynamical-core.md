@@ -1315,6 +1315,102 @@ the 3× step in Node, 40 in the pane's browser while sharing the GPU.
 The gain is smaller at N=16 (1.4 against 1.9 minutes per 100 days),
 where the grid is too small to fill the GPU.
 
+### M16 — Land surface (`js/geography.module.js`, `js/physics/land.module.js`) — done
+
+Continents come from `data/topography_0p25.bin`: ETOPO1 ice-surface
+elevation (the top of the Antarctic and Greenland ice sheets) from
+NOAA CoastWatch's ERDDAP, subsampled to 5 arc-minutes and block-averaged
+to a 0.25° grid of int16 metres, 2 MB, 29.2% land by area;
+`scripts/topography.mjs` regenerates it and `test/topography.test.mjs`
+checks it. `createGeography` assigns every raster point to its nearest
+cell by walking the neighbour graph from the previous point's cell and
+takes each cell's mean elevation and land fraction; a cell is land when
+more than half of its points are above sea level. Edges between two
+ocean cells are the ocean's, edges between land and ocean are the
+coast, which the page draws through a segment layer.
+
+Land cells carry a skin of heat capacity 1e6 J/m²/K in place of the
+ocean's upper layer, a Manabe bucket of 150 kg/m² of soil water whose
+wetness β = min(1, soil/(0.75·150)) scales evaporation and which spills
+what it cannot hold into runoff, and a snow cover in water equivalent
+that precipitation builds when the lowest air is below 0 °C and the
+surface energy melts, holding the skin at the melting point while it
+does. Evaporation draws on the snow first, then the soil. Land albedo is
+0.25 for both the direct and diffuse beams, rising to 0.7 over 20 kg/m²
+of snow; the drag and exchange coefficients are 3e-3 over land against
+1.5e-3 over water, as per-cell arrays that the surface drag, the
+boundary layer's friction velocity and the radiation column's bulk
+exchange all read. The ocean carries no flux, stress or diffusion
+through edges that touch land, and its diagnostics average over ocean
+cells. The land update sits in the physics phase; the deposit of the
+step's rain as snow or soil water sits in the adjustment phase, where
+the moist physics leaves each column's rain (`moist.rain`).
+
+On the GPU the physics buffer carries the land mask, per-cell drag,
+soil, snow and runoff; the physics kernel branches on the mask, the
+adjustment kernel deposits rain, and the ocean kernels carry edge and
+cell masks. Eight steps over a synthetic continent agree with the CPU
+engine to 2e-4 K in surface temperature and 1e-4 kg/m² in soil and
+snow. The parallel engine reproduces the serial model bit for bit.
+
+Snapshots, saved states and the regrid carry `land: {soil, snow}`;
+states without it start with half-full buckets and no snow, and sea
+ice is zeroed on land when an aquaplanet state is placed on continents.
+The page draws coastlines in Data mode, colours land in Satellite mode
+from soil water (dry tan to wet green) with snow whitening it, and
+adds Soil water, Snow and Elevation overlays; `?land=off` keeps the
+aquaplanet and `?topography=<url>` takes another raster.
+
+The first 400-day N=16 run with continents (from the aquaplanet
+`pbl16b` state) is stable but colder: planetary albedo 0.37 against
+the aquaplanet's 0.30 and Ts falling from 285 to 281 K into the
+northern winter with 6% sea ice. The climate wants re-tuning with land;
+the land and snow albedos and the cloud scattering are the knobs.
+
+### M17 — Terrain — done
+
+The surface geopotential is the land elevation clamped at sea level,
+relaxed twice toward the neighbour mean with ocean cells fixed at zero
+so that coasts slope down to the sea over two cells, times g. The CPU
+core already integrated the geopotential from it; the GPU core keeps
+its geopotential as the deviation from a reference column and adds the
+per-edge gradient of φ_s in the momentum kernel from a mesh-float
+buffer filled in double precision.
+
+The gate was the classic test: an isothermal atmosphere at rest over a
+3 km Gaussian mountain at N=16 must stay at rest. Two changes to the
+core were needed, and with them it stays at rest exactly, 0.000 m/s
+over five days, with the GPU within 2e-4 m/s of it:
+
+1. The pressure-gradient force's second term is R T̄ ∇ln π with T̄ the
+   edge mean of the layer temperature θ_v Π_layer, in place of
+   cp θ_v (∂Π/∂π) ∇π. The discretely isothermal state has
+   θ_k = T0 / Π_layer,k, for which the geopotential of every σ layer is
+   φ_s plus a column-independent constant, so its horizontal gradient
+   is exactly ∇φ_s, and the ln π form of the second term is exactly
+   −∇φ_s; the earlier form left the second-order cancellation error of
+   Δπ/π across an edge, tens of Pa/m of it over a mountain.
+2. The ∇⁴ closure diffuses the temperature θ Π_layer rather than θ.
+   Along a σ surface over terrain θ varies as π^−κ, 25 K across a 3 km
+   mountain even in an isothermal atmosphere, and diffusing that
+   variation was the entire spurious wind: 3.1 m/s after five days with
+   the θ closure, exactly zero without it. Diffusing the temperature
+   leaves the isothermal state alone and differs from diffusing θ by
+   about a percent of the closure elsewhere, where π varies by a few
+   percent.
+
+Surface pressure is no longer sea-level pressure. Frames carry
+`mslp`, π reduced to sea level through a column at the lowest layer's
+temperature plus half a standard lapse rate over the terrain height,
+and the page's pressure overlay and isobars use it. The level fields
+mask cells where the pressure level lies below the surface (NaN, drawn
+grey, winds zero), keeping the hydrostatic extrapolation only for the
+height. A state placed on a different terrain is rebalanced: π scales
+by exp(−Δφ_s / (R T_bottom)), where Δφ_s is the target minus the source
+terrain regridded to the target mesh, so a flat state loads onto
+mountains without a shock; saved states and snapshots carry a
+`terrain` flag. `?terrain=off` keeps flat continents.
+
 ## 7. Module layout in this repo
 
 ```
@@ -1326,7 +1422,9 @@ js/
     operators.module.js     NEW  M0: div, grad, curl, KE, uPerp, ∇², reconstruct
     shallowWater.module.js  NEW  M1: single-layer test core
     sigmaCore.module.js     NEW  M2: K-layer hydrostatic core (steps 1–8 on arrays)
+  geography.module.js       M16: land mask, land fraction, elevation and coast from a raster; M17: smoothed surface geopotential
   physics/
+    land.module.js          M16: bucket, snow, land albedo and wetness
     radiation.module.js     ported from sim.js RadiationColumn
     surface.module.js       ported: drag, sensible heat, slab ocean, convective adjustment
     boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
