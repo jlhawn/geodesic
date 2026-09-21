@@ -101,6 +101,13 @@ export function regridOcean(source, target, ocean, progress = null) {
   return { h1: cell(ocean.h1), h2: cell(ocean.h2), u1: edge(ocean.u1), u2: edge(ocean.u2), T2: cell(ocean.T2) };
 }
 
+export function regridLand(source, target, land, progress = null) {
+  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow) };
+  if (progress) progress(0, 'the land');
+  const atCells = interpolationWeights(source.mesh, target.mesh.xCell);
+  return { soil: regridCellField(source, target, Float64Array.from(land.soil), atCells), snow: regridCellField(source, target, Float64Array.from(land.snow), atCells) };
+}
+
 export function regridState(source, target, state, progress = null) {
   const [pi, theta, u, surfaceT, q = null, qc = null, ice = null] = state;
   const K = source.core.K;

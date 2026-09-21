@@ -446,6 +446,7 @@ uniform float uAmbient;
   const state = { isDragging: false, lastX: 0, lastY: 0, zoom: 150, pan: new THREE.Vector3(0, 0, 0), lastVector: null };
 
   function render() {
+    requestAnimationFrame(render);
     if (container.clientHeight === 0) return;
 
     if (viewState.targetBlend === 1.0) {
@@ -484,7 +485,6 @@ uniform float uAmbient;
     }
     renderer.render(scene, camera);
     stats.update();
-    requestAnimationFrame(render);
   }
   requestAnimationFrame(render);
 
@@ -772,6 +772,40 @@ uniform float uAmbient;
   }
 
   /*
+   * A layer of line segments given as unit-sphere positions, two per
+   * segment, each segment with a reference cell for the projection's
+   * seam handling; set() replaces them all.
+   */
+  function addSegmentLayer({ color = 0xffffff, opacity = 0.6 } = {}) {
+    const segmentGeometry = new THREE.BufferGeometry();
+    segmentGeometry.setDrawRange(0, 0);
+    const segmentMaterial = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+    projectMaterial(segmentMaterial, 0.007);
+    const lines = new THREE.LineSegments(segmentGeometry, segmentMaterial);
+    lines.frustumCulled = false;
+    lines.visible = false;
+    scene.add(lines);
+    const lift = 1.0025;
+
+    function set(positions, cells) {
+      const n = positions.length / 3;
+      const lifted = Float32Array.from(positions, (v) => lift * v);
+      const cellIndex = new Float32Array(n);
+      for (let k = 0; k < n; k++) cellIndex[k] = cells[k >> 1];
+      segmentGeometry.setAttribute('position', new THREE.BufferAttribute(lifted, 3));
+      segmentGeometry.setAttribute('cellIndex', new THREE.BufferAttribute(cellIndex, 1));
+      segmentGeometry.setDrawRange(0, n);
+    }
+
+    return {
+      set,
+      setColor(value) { segmentMaterial.color.set(value); },
+      setVisible(visible) { lines.visible = visible; },
+      dispose() { scene.remove(lines); segmentGeometry.dispose(); segmentMaterial.dispose(); },
+    };
+  }
+
+  /*
    * A layer of arrows, one per cell, drawn in the cell's tangent plane
    * by the vertex shader from a wind texture: the geometry is static
    * (six vertices per cell with a role) and update() only refreshes the
@@ -859,6 +893,7 @@ uniform float uReferenceSpeed;
     addArrowLayer,
     addContourLayer,
     addGraticuleLayer,
+    addSegmentLayer,
     setProjection(mode) { viewState.targetBlend = mode === 'map' ? 1.0 : 0.0; },
     projection: () => (viewState.targetBlend === 1.0 ? 'map' : 'sphere'),
     projectPoint,

@@ -95,6 +95,7 @@
       <div class="segmented"><button data-value="none">None</button><button data-value="wind">Wind speed</button><button data-value="temp">Temperature</button><button data-value="rh">Relative humidity</button><button data-value="mslp">Sea-level pressure</button></div>
       <div class="segmented"><button data-value="precip">Precipitation</button><button data-value="tpw">Precipitable water</button><button data-value="tcw">Cloud water</button></div>
       <div class="segmented"><button data-value="ice">Sea ice</button><button data-value="albedo">Albedo</button><button data-value="swdown">Surface sunlight</button><button data-value="olr">Outgoing longwave</button></div>
+      <div class="segmented"><button data-value="soil">Soil water</button><button data-value="snow">Snow</button><button data-value="elevation">Elevation</button></div>
     </div>
     <span class="label" id="isolineLabel">Isobars</span>
     <div class="options" data-setting="isolines"><div class="segmented" id="isolineSegments"></div><span class="unit" id="isolineUnit">hPa</span></div>
@@ -129,7 +130,7 @@
     const from = snapshot ?? params.get('from') ?? 'runs/pbl64_state_day875.json';
     const workers = Number(params.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 2));
     const engine = params.get('engine') ?? (navigator.gpu ? 'gpu' : 'cpu');
-    runClimate({ N: params.get('N') ? Number(params.get('N')) : (from === 'none' ? 64 : null), from: from === 'none' ? null : from, workers, engine, paused: snapshot !== null || params.has('paused') });
+    runClimate({ N: params.get('N') ? Number(params.get('N')) : (from === 'none' ? 64 : null), from: from === 'none' ? null : from, workers, engine, paused: snapshot !== null || params.has('paused'), land: params.get('land') !== 'off', topography: params.get('topography') });
   </script>
 </body>
 

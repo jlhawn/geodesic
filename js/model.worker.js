@@ -4,7 +4,8 @@ import { createParallelModel } from './parallel.module.js';
 import { createGpuModel } from './gpu/model.gpu.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
-import { regridState, regridOcean } from './physics/regrid.module.js';
+import { regridState, regridOcean, regridLand } from './physics/regrid.module.js';
+import { topographyFromInt16 } from './geography.module.js';
 import { levelFields } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 
@@ -25,7 +26,9 @@ async function postFrame() {
   layerWinds.fill(null);
   const layerWind = (k) => layerWinds[k] ??= cellVector(mesh, u.subarray(k * E, (k + 1) * E), new Float64Array(3 * mesh.nCells));
   const q = state[4], qc = state[5];
-  const ice = Float32Array.from(state[6]), albedo = Float32Array.from(state[6], (h) => model.seaIce.albedo(h));
+  const onLand = model.geography ? model.geography.land : null;
+  const ice = Float32Array.from(state[6]), albedo = Float32Array.from(state[6], (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h)));
+  const soil = model.land ? Float32Array.from(model.land.soil) : new Float32Array(0), snow = model.land ? Float32Array.from(model.land.snow) : new Float32Array(0);
   const shortwave = Float32Array.from(model.radiation.surfaceShortwave), longwave = Float32Array.from(model.radiation.outgoing);
   const precipitation = Float32Array.from(model.moist.precipitation);
   const fields = levelFields(core, pi, theta, layerWind, level, q);
@@ -35,8 +38,8 @@ async function postFrame() {
   const interval = time - lastFrameTime;
   lastFrameTime = time;
   for (let i = 0; i < mesh.nCells; i++) precipitation[i] = interval > 0 ? precipitation[i] / interval * 86400 : 0;
-  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, ts, ...fields, precipitation, water, cloud, ice, albedo, shortwave, longwave, diagnostics, engine: model.engine ?? 'cpu' };
-  self.postMessage(message, [ps.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer, shortwave.buffer, longwave.buffer]);
+  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, ts, ...fields, precipitation, water, cloud, ice, albedo, shortwave, longwave, soil, snow, diagnostics, engine: model.engine ?? 'cpu' };
+  self.postMessage(message, [ps.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer, shortwave.buffer, longwave.buffer, soil.buffer, snow.buffer]);
 }
 
 async function loop() {
@@ -91,7 +94,52 @@ function initialState(model, saved, N) {
   if (carried.length < 5) carried.push(initialHumidity(model, carried[0], carried[1]));
   if (carried.length < 6) carried.push(new Float64Array(carried[1].length));
   if (carried.length < 7) carried.push(Float64Array.from(carried[3], (t) => (t < 271.35 ? 0.5 : 0)));
+  if (model.geography) for (let i = 0; i < carried[6].length; i++) if (model.geography.land[i]) carried[6][i] = 0;
   return carried;
+}
+
+/*
+ * The land state comes with a saved run when it has one, regridded if
+ * needed; otherwise the buckets start half full and bare.
+ */
+function placeLand(model, saved, N) {
+  if (!model.land) return;
+  if (saved && saved.land) model.land.load(saved.N === N ? { soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow) } : regridLand(createModel(new Grid(saved.N)), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94)));
+  else model.land.initialize();
+}
+
+const topographies = new Map();
+async function loadTopography(url) {
+  if (topographies.has(url)) return topographies.get(url);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`topography ${url}: ${response.status}`);
+  const topography = topographyFromInt16(await response.arrayBuffer());
+  topographies.set(url, topography);
+  return topography;
+}
+
+/*
+ * The geography the page draws once: the land mask, the land fraction
+ * and elevation of every cell, and the coast as segments between the
+ * vertices of each edge that separates land from ocean, each with its
+ * land cell for the projection.
+ */
+function geographyMessage(model) {
+  const { geography, mesh } = model;
+  if (!geography) return { land: null };
+  const { coastEdges } = geography;
+  const coast = new Float32Array(6 * coastEdges.length), coastCells = new Int32Array(coastEdges.length);
+  for (let n = 0; n < coastEdges.length; n++) {
+    const e = coastEdges[n];
+    for (let side = 0; side < 2; side++) {
+      const v = mesh.verticesOnEdge[2 * e + side];
+      const r = Math.hypot(mesh.xVertex[3 * v], mesh.xVertex[3 * v + 1], mesh.xVertex[3 * v + 2]);
+      for (let axis = 0; axis < 3; axis++) coast[6 * n + 3 * side + axis] = mesh.xVertex[3 * v + axis] / r;
+    }
+    const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+    coastCells[n] = geography.land[a] ? a : b;
+  }
+  return { land: Uint8Array.from(geography.land), landFraction: Float32Array.from(geography.landFraction), elevation: Float32Array.from(geography.elevation), coast, coastCells };
 }
 
 self.onmessage = async (event) => {
@@ -124,13 +172,17 @@ async function snapshot() {
   if (model.sync) await model.sync();
   const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
   const arrays = Object.fromEntries(names.map((name, a) => [name, Float64Array.from(model.state[a]).buffer]));
-  let ocean = null;
+  let ocean = null, land = null;
   if (model.ocean) {
     const o = await model.ocean.serialize();
     ocean = Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Float64Array.from(v).buffer]));
   }
-  const transfer = [...Object.values(arrays), ...(ocean ? Object.values(ocean) : [])];
-  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, arrays, ocean }, transfer);
+  if (model.land) {
+    const l = await model.land.serialize();
+    land = { soil: Float64Array.from(l.soil).buffer, snow: Float64Array.from(l.snow).buffer };
+  }
+  const transfer = [...Object.values(arrays), ...(ocean ? Object.values(ocean) : []), ...(land ? Object.values(land) : [])];
+  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, arrays, ocean, land }, transfer);
   postFrame();
 }
 
@@ -143,6 +195,7 @@ async function restore(snapshot) {
   const saved = { N: snapshot.N, K: snapshot.K, day: snapshot.day, time: snapshot.time };
   for (const [name, buffer] of Object.entries(snapshot.arrays)) saved[name] = new Float64Array(buffer);
   if (snapshot.ocean) saved.ocean = Object.fromEntries(Object.entries(snapshot.ocean).map(([k, buffer]) => [k, new Float64Array(buffer)]));
+  if (snapshot.land) saved.land = Object.fromEntries(Object.entries(snapshot.land).map(([k, buffer]) => [k, new Float64Array(buffer)]));
   running = false;
   if (!model || saved.N !== currentN) { await start({ ...lastStart, saved, paused: true }); return; }
   status('restoring the snapshot…', 0.8);
@@ -150,10 +203,11 @@ async function restore(snapshot) {
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   if (model.load) model.load();
   if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
+  placeLand(model, saved, currentN);
   model.time = saved.time;
   lastFrameTime = model.time;
   layerWinds.fill(null);
-  self.postMessage({ type: 'ready', N: currentN, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers: lastStart?.workers ?? 1 });
+  self.postMessage({ type: 'ready', N: currentN, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, ...geographyMessage(model) });
   await postFrame();
 }
 
@@ -166,13 +220,15 @@ async function start(message) {
   const N = message.N ?? saved?.N ?? 16;
   currentN = N;
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
+  const options = { ...(message.options ?? {}) };
+  if (message.land !== false) { status('loading the topography…', 0.52); options.topography = await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href); }
   dt = message.dt ?? 1350 * 16 / N;
   stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round((gpuWanted ? 24 : 8) * 16 / N));
   const workers = message.workers ?? 1;
   status(`building the N=${N} grid…`, 0.55);
   const grid = new Grid(N);
   status(gpuWanted ? 'compiling the GPU model…' : workers > 1 ? `starting ${workers} workers…` : 'building the model…', 0.65);
-  model = gpuWanted ? await createGpuModel(grid, message.options ?? {}) : workers > 1 ? await createParallelModel(grid, message.options ?? {}, workers) : createModel(grid, message.options ?? {});
+  model = gpuWanted ? await createGpuModel(grid, options) : workers > 1 ? await createParallelModel(grid, options, workers) : createModel(grid, options);
   status(saved ? 'placing the saved state…' : 'building the initial state…', 0.8);
   const init = initialState(model, saved, N);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
@@ -182,10 +238,11 @@ async function start(message) {
     if (saved && saved.ocean) model.ocean.load(saved.N === N ? saved.ocean : regridOcean(createModel(new Grid(saved.N)), model, saved.ocean, (fraction, text) => status(`regridding ${text}…`, 0.93)), model.state[3], model.state[6]);
     else model.ocean.initialize(model.state[3], model.state[6]);
   }
+  placeLand(model, saved, N);
   layerWinds = new Array(model.core.K).fill(null);
   level = message.level ?? 'surface';
   lastFrameTime = model.time;
-  self.postMessage({ type: 'ready', N, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers });
+  self.postMessage({ type: 'ready', N, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers, ...geographyMessage(model) });
   postFrame();
   running = !message.paused;
   if (running) loop();
