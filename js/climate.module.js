@@ -90,9 +90,11 @@ function loadSettings() {
 }
 /*
  * Settings named in the page's query string override the stored ones;
- * a value is accepted when the panel offers it.
+ * a value is accepted when the panel offers it, and naming something
+ * only the data view shows implies that view.
  */
 function applyOverrides(settings, overrides) {
+  if (!('view' in overrides) && ['overlay', 'level', 'animate', 'isobars', 'isobarStep', 'heightStep'].some((key) => key in overrides)) settings.view = 'data';
   for (const key of Object.keys(DEFAULTS)) {
     if (!(key in overrides)) continue;
     const value = overrides[key];
