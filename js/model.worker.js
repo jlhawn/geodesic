@@ -9,7 +9,7 @@ import { topographyFromInt16, rebalanceSurfacePressure } from './geography.modul
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
-import { decodeState, readState } from './stateFile.module.js';
+import { fetchState, stateName } from './stateFile.module.js';
 
 let model = null, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
 let level = 'surface', layerWinds = [], lastFrameTime = 0;
@@ -70,30 +70,19 @@ async function loop() {
 const status = (text, fraction = null) => self.postMessage({ type: 'status', text, fraction });
 
 /*
- * Fetches a JSON file while reporting the bytes received against the
- * Content-Length, which is most of the wait for a large snapshot.
+ * Fetches a saved state while reporting the bytes received against the
+ * total, which is most of the wait for a large snapshot.
  */
 async function fetchWithProgress(url, from, to) {
-  const response = await fetch(url);
-  const total = Number(response.headers.get('content-length')) || 0;
-  const name = url.replace(/.*\//, '');
-  if (!response.body || !total) { status(`loading ${name}…`, from); return readState(response); }
-  const reader = response.body.getReader();
-  const chunks = [];
-  let received = 0, reported = -1;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    received += value.length;
+  const name = stateName(url.replace(/.*\//, '').replace(/[?#].*/, ''));
+  let reported = -1;
+  status(`loading ${name}…`, from);
+  return fetchState(url, (received, total) => {
+    if (!total) return;
+    if (received >= total) { status(`parsing ${name}…`, to); return; }
     const percent = Math.floor(100 * received / total);
     if (percent !== reported) { reported = percent; status(`loading ${name}: ${(received / 1048576).toFixed(0)} of ${(total / 1048576).toFixed(0)} MB`, from + (to - from) * received / total); }
-  }
-  const bytes = new Uint8Array(received);
-  let at = 0;
-  for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.length; }
-  status(`parsing ${name}…`, to);
-  return decodeState(bytes);
+  });
 }
 
 /*

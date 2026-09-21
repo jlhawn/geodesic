@@ -8,6 +8,6 @@ Live at https://jlhawn.github.io/geodesic/
 - **[Geodesic grid](https://jlhawn.github.io/geodesic/grid.html)** — the original geodesic polyhedron viewer (Three.js).
 - **[Synoptic charts](https://jlhawn.github.io/geodesic/charts.html)** — pressure-level charts drawn from saved model states.
 
-To run locally, serve the repository with `python3 httpd.py` (it sends the cross-origin isolation headers the multi-threaded CPU engine needs) and open http://localhost:8000/. `npm test` runs the test suite.
+To run locally, serve the repository with `python3 httpd.py` and open http://localhost:8000/. The model needs the page cross-origin isolated (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`), which that server and the `_headers` file for Cloudflare or Netlify Pages both provide. `npm test` runs the test suite.
 
-![Screenshot of the geodesic grid](./screenshot.png)
+![The simulated Earth from space](screenshots/satellite.jpg)

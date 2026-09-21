@@ -1,5 +1,6 @@
 .DS_Store
 
 runs/*
-!runs/fresh64_state_day2190.json.gz
+!runs/fresh64_state_day2190.parts.json
+!runs/fresh64_state_day2190.json.gz.*
 node_modules/

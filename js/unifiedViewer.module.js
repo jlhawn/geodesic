@@ -896,6 +896,21 @@ uniform float uReferenceSpeed;
     addSegmentLayer,
     setProjection(mode) { viewState.targetBlend = mode === 'map' ? 1.0 : 0.0; },
     projection: () => (viewState.targetBlend === 1.0 ? 'map' : 'sphere'),
+    view() {
+      const front = new THREE.Vector3(0, 0, 1).applyQuaternion(sphereQuaternion.clone().invert());
+      return { lat: THREE.MathUtils.radToDeg(Math.atan2(front.z, Math.hypot(front.x, front.y))), lon: THREE.MathUtils.radToDeg(Math.atan2(front.y, front.x)), zoom: state.zoom };
+    },
+    setView({ lat = null, lon = null, zoom = null } = {}) {
+      if (lat !== null || lon !== null) {
+        const current = this.view();
+        const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(lat ?? current.lat));
+        const spin = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -THREE.MathUtils.degToRad(lon ?? current.lon));
+        sphereQuaternion.setFromEuler(initialEuler).multiply(tilt).multiply(spin).normalize();
+        rotationMatrix.makeRotationFromQuaternion(sphereQuaternion);
+      }
+      if (zoom !== null) state.zoom = Math.max(10, Math.min(zoom, 10000));
+      viewState.version++;
+    },
     projectPoint,
     pixelsPerUnit: () => container.clientHeight / (camera.top - camera.bottom),
     viewVersion: () => viewState.version,

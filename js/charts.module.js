@@ -2,7 +2,7 @@ import { Grid } from './grid.module.js';
 import { createModel } from './model.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { LEVELS, levelFields } from './levels.module.js';
-import { readState, stateName } from './stateFile.module.js';
+import { fetchState, stateName } from './stateFile.module.js';
 import { DEFAULT_RUN } from './defaultRun.module.js';
 
 const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796;
@@ -188,7 +188,7 @@ export function chartFor(state, level) {
 async function listStates(directory) {
   const response = await fetch(directory);
   const html = await response.text();
-  const names = [...html.matchAll(/href="([^"]+_state_day\d+\.json(?:\.gz)?)"/g)].map((m) => decodeURIComponent(m[1])).sort();
+  const names = [...html.matchAll(/href="([^"]+_state_day\d+(?:\.json(?:\.gz)?|\.parts\.json))"/g)].map((m) => decodeURIComponent(m[1])).sort();
   return [...new Map(names.map((name) => [stateName(name), name])).values()];
 }
 
@@ -223,7 +223,7 @@ export default async function runCharts(directory = 'runs/') {
   async function render() {
     const name = stateSelect.value, level = levelSelect.value;
     status.textContent = `loading ${name}…`;
-    if (!states.has(name)) states.set(name, fetch(directory + name).then(readState));
+    if (!states.has(name)) states.set(name, fetchState(new URL(directory + name, location.href).href));
     const state = await states.get(name);
     status.textContent = `rendering ${level === 'surface' ? 'surface' : level + ' hPa'}…`;
     await new Promise((resolve) => setTimeout(resolve, 0));

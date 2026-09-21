@@ -1,0 +1,25 @@
+{
+ "name": "fresh64_state_day2190",
+ "parts": [
+  {
+   "file": "fresh64_state_day2190.json.gz.000",
+   "bytes": 10485760
+  },
+  {
+   "file": "fresh64_state_day2190.json.gz.001",
+   "bytes": 10485760
+  },
+  {
+   "file": "fresh64_state_day2190.json.gz.002",
+   "bytes": 10485760
+  },
+  {
+   "file": "fresh64_state_day2190.json.gz.003",
+   "bytes": 10485760
+  },
+  {
+   "file": "fresh64_state_day2190.json.gz.004",
+   "bytes": 8202775
+  }
+ ]
+}

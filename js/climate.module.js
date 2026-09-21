@@ -1,7 +1,7 @@
 import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
-import { readState, stateName } from './stateFile.module.js';
+import { fetchState, stateName } from './stateFile.module.js';
 import { seasonPhrase } from "./levels.module.js";
 import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
@@ -88,6 +88,19 @@ function loadSettings() {
     return settings;
   } catch { return { ...DEFAULTS }; }
 }
+/*
+ * Settings named in the page's query string override the stored ones;
+ * a value is accepted when the panel offers it.
+ */
+function applyOverrides(settings, overrides) {
+  for (const key of Object.keys(DEFAULTS)) {
+    if (!(key in overrides)) continue;
+    const value = overrides[key];
+    if (typeof DEFAULTS[key] === 'number') { if (Number(value) > 0) settings[key] = Number(value); continue; }
+    const known = key === 'palette' ? PALETTES[value] : key === 'overlay' ? OVERLAYS[value] : key === 'panel' ? ['open', 'closed'].includes(value) : document.querySelector(`[data-setting="${key}"] [data-value="${CSS.escape(value)}"]`);
+    if (known) settings[key] = value;
+  }
+}
 function saveSettings(settings) {
   try { localStorage.setItem('climate.settings', JSON.stringify(settings)); } catch { /* storage unavailable */ }
 }
@@ -146,7 +159,7 @@ async function builtinSnapshots(fallback = null) {
   const entry = (file) => ({ file, url: new URL(file, location.href).href, name: stateName(file.replace(/.*\//, '')) });
   try {
     const html = await (await fetch('runs/')).text();
-    const files = [...new Set([...html.matchAll(/href="([^"]+_state_day\d+\.json(?:\.gz)?)"/g)].map((m) => decodeURIComponent(m[1])))].sort();
+    const files = [...new Set([...html.matchAll(/href="([^"]+_state_day\d+(?:\.json(?:\.gz)?|\.parts\.json))"/g)].map((m) => decodeURIComponent(m[1])))].sort();
     const newest = new Map(files.map((file) => [stateName(file), file]));
     if (newest.size) return [...newest.values()].map((file) => entry(`runs/${file}`));
   } catch {}
@@ -188,8 +201,9 @@ const VIEW_NOTES = [
   ['Snapshots', 'Save the paused state in this browser, restore it later, or download one of the runs saved on the server.'],
 ];
 
-export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true } = {}) {
+export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true, settings: overrides = {}, view = null } = {}) {
   const settings = loadSettings();
+  applyOverrides(settings, overrides);
   const panel = document.getElementById('panel');
   const activeLevel = () => (settings.view !== 'space' && HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
   const shownLevel = () => latest?.level ?? activeLevel();
@@ -232,6 +246,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     coast = viewer.addSegmentLayer({ opacity: 0.6 });
     particles = createWindParticles(document.getElementById('globe'), viewer, grid);
     viewer.setProjection(settings.projection);
+    if (view) viewer.setView(view);
   }
 
   function paintSatellite() {
@@ -494,7 +509,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   async function download(entry) {
     try {
       document.getElementById('date').textContent = `downloading ${entry.name}…`;
-      const saved = await readState(await fetch(entry.url));
+      const saved = await fetchState(entry.url);
       const { meta, data } = toSnapshot(saved, entry.url);
       const id = await saveSnapshot({ name: entry.name, created: Date.now(), ...meta }, data);
       await refreshSnapshots();

@@ -684,7 +684,7 @@ viewer is not ported.
 Runs from the balanced initialization with the full physics, tilt on
 from the spring equinox, N=16 unless noted; `emergence.mjs` logs the
 zonal means every 5 days and writes surface snapshots every 10 days for
-`climate.html?snapshot=`. The trough metric is the zonal-mean surface
+`climate.html?snapshot=`. Any panel setting can be named in the query string (`?view=space`, `?overlay=wind&level=250&animate=arrows`, `?projection=map&isobars=on`, `?palette=`, `?panel=closed`), and `?lat=&lon=&zoom=` set the globe's orientation, so a link opens an exact view. The trough metric is the zonal-mean surface
 pressure at 35° minus that at 65° in each hemisphere; it starts at
 −34 hPa because the balanced initialization has polar highs.
 

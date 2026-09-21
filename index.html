@@ -9,23 +9,32 @@
   <style>
     :root { color-scheme: dark; }
     body { margin: 0; background: #151515; color: #ddd; font: 16px/1.5 system-ui, sans-serif; }
-    main { max-width: 900px; margin: 0 auto; padding: 48px 24px 64px; }
+    main { max-width: 960px; margin: 0 auto; padding: 48px 24px 64px; }
     h1 { font-size: 30px; font-weight: 600; margin: 0 0 4px; color: #fff; }
-    .tagline { color: #999; margin: 0 0 36px; }
+    .tagline { color: #999; margin: 0 0 32px; }
     a { color: #ffe8a0; }
-    .card { display: block; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 24px 28px; color: inherit; text-decoration: none; transition: background 0.15s, border-color 0.15s; }
+    .card { display: block; overflow: hidden; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; color: inherit; text-decoration: none; transition: background 0.15s, border-color 0.15s; }
     .card:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(255, 232, 160, 0.5); }
+    .card img { display: block; width: 100%; height: auto; }
+    .card .body { padding: 22px 26px 24px; }
     .card h2 { margin: 0 0 8px; font-size: 20px; font-weight: 600; color: #fff; }
     .card p { margin: 0; color: #ccc; }
     .card .go { display: inline-block; margin-top: 14px; color: #ffe8a0; font-weight: 500; }
-    .hero { padding: 36px 40px; margin-bottom: 20px; background: linear-gradient(160deg, rgba(60, 90, 140, 0.35), rgba(255, 255, 255, 0.04)); }
+    .hero { margin-bottom: 16px; }
+    .hero .body { padding: 28px 36px 32px; }
     .hero h2 { font-size: 28px; }
     .hero p { font-size: 17px; color: #ddd; }
     .hero .note { margin-top: 12px; font-size: 14px; color: #999; }
     .hero .go { font-size: 18px; margin-top: 18px; }
-    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+    .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 0 0 36px; }
+    .strip a { display: block; color: #999; text-decoration: none; font-size: 13px; line-height: 1.4; }
+    .strip a:hover { color: #ddd; }
+    .strip img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 8px; margin-bottom: 6px; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+    .row img { aspect-ratio: 16 / 10; object-fit: cover; }
+    .row img.chart { object-fit: contain; background: #fff; }
     footer { margin-top: 40px; color: #888; font-size: 14px; }
-    @media (max-width: 600px) { main { padding: 32px 16px 48px; } .hero { padding: 24px 20px; } .card { padding: 20px; } }
+    @media (max-width: 600px) { main { padding: 32px 16px 48px; } .hero .body, .card .body { padding: 20px; } }
   </style>
 </head>
 
@@ -34,23 +43,37 @@
     <h1>Geodesic</h1>
     <p class="tagline">A planet on a hexagonal grid, simulated in your browser.</p>
 
-    <a class="card hero" href="climate.html">
-      <h2>Climate model</h2>
-      <p>A global climate model running live: a hydrostatic atmosphere with 27 levels on a geodesic C-grid, moist convection and clouds, a wind-driven two-layer ocean, sea ice, snow and soil on real continents with terrain. Every kernel runs on the graphics card through WebGPU. It picks up from a six-year spin-up at 64 subdivisions, about 41,000 cells 110 km across, where you can colour the globe by wind, temperature, pressure, rain, clouds, ice or ocean currents, follow the wind with particles, watch the planet from space, and save snapshots.</p>
-      <p class="note">Best in a browser with WebGPU (Chrome, Edge or Safari 26). Without it the model falls back to a slower CPU engine. The starting state is a 50 MB download.</p>
-      <span class="go">Open the climate model →</span>
+    <a class="card hero" href="climate.html?view=space&lat=15&lon=-95&zoom=180">
+      <img src="screenshots/satellite.jpg" width="1280" height="720" alt="The simulated Earth seen from space, with clouds, sea ice and the day–night terminator">
+      <div class="body">
+        <h2>Climate model</h2>
+        <p>A global climate model running live: a hydrostatic atmosphere with 27 levels on a geodesic C-grid, moist convection and clouds, a wind-driven two-layer ocean, sea ice, snow and soil on real continents with terrain. Every kernel runs on the graphics card through WebGPU. It picks up from a six-year spin-up at 64 subdivisions, about 41,000 cells 110 km across, where you can colour the globe by wind, temperature, pressure, rain, clouds, ice or ocean currents, follow the wind with particles, watch the planet from space, and save snapshots.</p>
+        <p class="note">Best in a browser with WebGPU (Chrome, Edge or Safari 26). Without it the model falls back to a slower CPU engine. The starting state is a 50 MB download.</p>
+        <span class="go">Open the climate model →</span>
+      </div>
     </a>
+    <div class="strip">
+      <a href="climate.html?overlay=wind&level=250&animate=arrows&graticule=15&projection=sphere&lat=50&lon=-30&zoom=900"><img src="screenshots/jet.jpg" width="960" height="600" alt="Wind speed at 250 hPa on the globe, with the jet streams as bright bands">Jet streams: wind speed at 250 hPa, with wind vectors and the graticule</a>
+      <a href="climate.html?overlay=mslp&isobars=on&isobarStep=5&animate=none&graticule=off&projection=map"><img src="screenshots/pressure.jpg" width="960" height="600" alt="Sea-level pressure with isobars on an Equal Earth map">Sea-level pressure with isobars on the Equal Earth projection</a>
+      <a href="climate.html?overlay=sst&animate=particles&graticule=off&projection=sphere&lat=0&lon=-30&zoom=200"><img src="screenshots/ocean.jpg" width="960" height="600" alt="Sea surface temperature on the globe with animated ocean current particles">Sea surface temperature with the ocean current animation</a>
+    </div>
 
     <div class="row">
       <a class="card" href="grid.html">
-        <h2>Geodesic grid</h2>
-        <p>Where the project began: an icosahedron subdivided into 100,002 hexagonal cells, twelve of them pentagons, shaded by procedural terrain and rendered with Three.js. Drag to rotate, scroll to zoom.</p>
-        <span class="go">View the grid →</span>
+        <img src="screenshots/grid.jpg" width="960" height="600" alt="A geodesic polyhedron shaded by procedural terrain">
+        <div class="body">
+          <h2>Geodesic grid</h2>
+          <p>Where the project began: an icosahedron subdivided into 100,002 hexagonal cells, twelve of them pentagons, shaded by procedural terrain and rendered with Three.js. Drag to rotate, scroll to zoom.</p>
+          <span class="go">View the grid →</span>
+        </div>
       </a>
-      <a class="card" href="charts.html">
-        <h2>Synoptic charts</h2>
-        <p>Weather-map plots drawn from saved model states: geopotential height contours and wind speed at standard pressure levels on an Equal Earth projection, downloadable as SVG or PNG.</p>
-        <span class="go">Draw a chart →</span>
+      <a class="card" href="charts.html?level=500">
+        <img class="chart" src="screenshots/chart.jpg" width="1200" height="689" alt="A 500 hPa chart with geopotential height contours over wind speed">
+        <div class="body">
+          <h2>Synoptic charts</h2>
+          <p>Weather-map plots drawn from saved model states: geopotential height contours and wind speed at standard pressure levels on an Equal Earth projection, downloadable as SVG or PNG.</p>
+          <span class="go">Draw a chart →</span>
+        </div>
       </a>
     </div>
 
