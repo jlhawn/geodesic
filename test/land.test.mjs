@@ -78,3 +78,13 @@ test('snow accumulates below freezing, raises the albedo, holds the surface at t
   assert.ok(surfaceT[i] > MELTING_POINT);
   assert.ok(Math.abs(land.albedo(i) - 0.25) < 1e-12);
 });
+
+test('loading a land state leaves sea cells dry and bare whatever the file holds', () => {
+  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)));
+  const land = createLandSurface(mesh, geography, { bucketCapacity: 150 });
+  land.load({ soil: new Float64Array(mesh.nCells).fill(120), snow: new Float64Array(mesh.nCells).fill(40) });
+  for (let i = 0; i < mesh.nCells; i++) {
+    if (geography.land[i]) { assert.equal(land.soil[i], 120); assert.equal(land.snow[i], 40); }
+    else { assert.equal(land.soil[i], 0); assert.equal(land.snow[i], 0); }
+  }
+});

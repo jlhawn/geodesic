@@ -198,7 +198,9 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), onLand = landMask(source);
   const bucket = target.land && target.land.bucketCapacity ? target.land.bucketCapacity : 150;
   const guess = (tile) => landFromSea(ice ? ice[tile] : 0, surfaceT ? surfaceT[tile] : FREEZING + 1, bucket);
-  return { soil: sampleTiles(source, target, Float64Array.from(land.soil), onLand, atCells, (tile) => guess(tile).soil), snow: sampleTiles(source, target, Float64Array.from(land.snow), onLand, atCells, (tile) => guess(tile).snow) };
+  const soil = sampleTiles(source, target, Float64Array.from(land.soil), onLand, atCells, (tile) => guess(tile).soil), snow = sampleTiles(source, target, Float64Array.from(land.snow), onLand, atCells, (tile) => guess(tile).snow);
+  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; }
+  return { soil, snow };
 }
 
 export function regridState(source, target, state, progress = null, { land = null } = {}) {
