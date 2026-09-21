@@ -178,7 +178,7 @@ const VIEW_NOTES = [
 export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true } = {}) {
   const settings = loadSettings();
   const panel = document.getElementById('panel');
-  const activeLevel = () => (settings.view === 'space' || HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
+  const activeLevel = () => (settings.view !== 'space' && HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
   const shownLevel = () => latest?.level ?? activeLevel();
   let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, rgb = null, running = !paused;
   let geographyFields = {}, hasLand = false;
@@ -237,7 +237,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     }
     viewer.updateColors(rgb);
     document.querySelector('.scaleRow').classList.add('hidden');
-    document.getElementById('data').textContent = `Satellite view · wind @ ${levelLabel(shownLevel())}`;
+    document.getElementById('data').textContent = 'Satellite view';
   }
 
   function paintOverlay() {
@@ -279,11 +279,12 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
 
   function paintWind() {
     const reference = REFERENCE_SPEED[shownLevel()];
-    arrows.setVisible(settings.animate === 'arrows');
-    particles.setVisible(settings.animate === 'particles');
-    if (settings.animate === 'arrows') arrows.update(latest.vector, { referenceSpeed: reference });
-    if (settings.animate === 'particles') particles.setField(latest.vector, reference);
-    const note = settings.animate === 'particles' ? `trails brighten toward ${reference} m/s` : settings.animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
+    const animate = settings.view === 'space' ? 'none' : settings.animate;
+    arrows.setVisible(animate === 'arrows');
+    particles.setVisible(animate === 'particles');
+    if (animate === 'arrows') arrows.update(latest.vector, { referenceSpeed: reference });
+    if (animate === 'particles') particles.setField(latest.vector, reference);
+    const note = animate === 'particles' ? `trails brighten toward ${reference} m/s` : animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
     if (note) document.getElementById('data').textContent += ` · ${note}`;
   }
 
@@ -294,8 +295,9 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   }
 
   function paintIsobars() {
-    isobars.setVisible(settings.isobars === 'on');
-    if (settings.isobars !== 'on') return;
+    const on = settings.isobars === 'on' && settings.view !== 'space';
+    isobars.setVisible(on);
+    if (!on) return;
     const isolines = isolinesFor(shownLevel());
     isobars.update(isolines.field(latest), Number(settings[isolines.setting]));
   }
@@ -330,11 +332,10 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       for (const button of group.querySelectorAll('button[data-value]')) button.classList.toggle('selected', button.dataset.value === current);
     }
     const space = settings.view === 'space';
-    const heights = space || HEIGHT_OVERLAYS.has(settings.overlay);
+    const heights = !space && HEIGHT_OVERLAYS.has(settings.overlay);
     document.getElementById('heightLabel').classList.toggle('hidden', !heights);
     document.getElementById('heightOptions').classList.toggle('hidden', !heights);
-    document.getElementById('overlayLabel').classList.toggle('hidden', space);
-    document.getElementById('overlayOptions').classList.toggle('hidden', space);
+    for (const id of ['overlayLabel', 'overlayOptions', 'animateLabel', 'animateOptions', 'isolineLabel', 'isolineOptions']) document.getElementById(id).classList.toggle('hidden', space);
     document.getElementById('isolineLabel').textContent = isolines.label;
     document.getElementById('isolineUnit').textContent = isolines.unit;
     const paletteSelect = document.getElementById('palette');
