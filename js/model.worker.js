@@ -101,7 +101,11 @@ async function fetchWithProgress(url, from, to) {
  * it was saved at another resolution; otherwise from initializeState.
  */
 function initialState(model, saved, N) {
-  if (!saved) return initializeState(model, {});
+  if (!saved) {
+    const fresh = initializeState(model, { geostrophic: !model.surfaceGeopotential });
+    if (model.geography) for (let i = 0; i < fresh[6].length; i++) if (model.geography.land[i]) fresh[6][i] = 0;
+    return fresh;
+  }
   const arrays = [saved.pi, saved.theta, saved.u, saved.surfaceT].map((a) => Float64Array.from(a));
   if (saved.q) arrays.push(Float64Array.from(saved.q));
   if (saved.q && saved.qc) arrays.push(Float64Array.from(saved.qc));

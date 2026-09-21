@@ -88,7 +88,7 @@ export function initializeState(model, {
   bands = false, geostrophic = true, referencePressure = 50000, taperLatitude = 15, profile = null, surfaceHumidity = 0.7,
 } = {}) {
   const { mesh, core } = model;
-  const { K, C, E, sigmaMid, cp, exnerLayer, dExnerDpi, geopotential } = core.diagnostics;
+  const { K, C, E, sigmaMid, cp, R, exnerLayer, dExnerDpi, geopotential } = core.diagnostics;
   const reference = profile ?? equilibriumProfile(model, { p0 });
   const { nCells, latCell, lonCell, areaCell, cellsOnEdge, dcEdge, nEdge, xCell, fCell } = mesh;
   const deg = Math.PI / 180;
@@ -113,15 +113,21 @@ export function initializeState(model, {
   core.diagnoseColumn(warmest, pi, theta);
   const targetHeight = geopotentialHeightAt(core, warmest, pi[warmest], referencePressure);
   for (let i = 0; i < C; i++) {
-    let lo = 0.7 * p0, hi = 1.3 * p0;
+    let lo = 0.3 * p0, hi = 1.3 * p0;
     for (let iteration = 0; iteration < 48; iteration++) {
       pi[i] = 0.5 * (lo + hi);
       core.diagnoseColumn(i, pi, theta);
       if (geopotentialHeightAt(core, i, pi[i], referencePressure) > targetHeight) hi = pi[i]; else lo = pi[i];
     }
   }
+  const phis = model.surfaceGeopotential ?? null;
+  const bottom = (K - 1) * C;
   let area = 0, piSum = 0;
-  for (let i = 0; i < C; i++) { area += areaCell[i]; piSum += areaCell[i] * pi[i]; }
+  for (let i = 0; i < C; i++) {
+    core.diagnoseColumn(i, pi, theta);
+    const seaLevel = phis ? pi[i] * Math.exp(phis[i] / (R * theta[bottom + i] * exnerLayer[bottom + i])) : pi[i];
+    area += areaCell[i]; piSum += areaCell[i] * seaLevel;
+  }
   const scale = p0 / (piSum / area);
   for (let i = 0; i < C; i++) pi[i] *= scale;
 
