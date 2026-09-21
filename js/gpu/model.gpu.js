@@ -49,10 +49,12 @@ export async function createGpuModel(gridOrMesh, {
   const lengths = [C, K * C, K * E, C, K * C, K * C, C];
   const state = lengths.map((n) => new Float64Array(n));
   const precipitation = new Float64Array(C);
+  let lastOcean = null;
   let dirty = true, lastPrecipTime = 0;
 
   const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu' };
   model.moist = { precipitation, columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget };
+  model.oceanFields = () => lastOcean;
 
   function pushState() {
     gpu.upload(state);
@@ -122,6 +124,7 @@ export async function createGpuModel(gridOrMesh, {
     };
     if (gpuOcean) {
       const o = await gpuOcean.download();
+      lastOcean = o;
       let depth = 0, heat = 0, thermocline = 0, speed = 0;
       let oceanArea = 0;
       for (let i = 0; i < C; i++) { if (geography && geography.land[i]) continue; const a = mesh.areaCell[i]; oceanArea += a; depth += a * o.h1[i]; heat += a * gpuOcean.options.density * gpuOcean.options.specificHeat * (o.h1[i] * o.T1[i] + o.h2[i] * o.T2[i]); thermocline += a * o.T2[i]; }

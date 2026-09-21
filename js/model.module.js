@@ -139,6 +139,8 @@ export function createModel(gridOrMesh, {
     shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
+  model.oceanFields = () => (ocean ? { h1: ocean.h1, T1: ocean.T1, T2: ocean.T2, u1: ocean.u1 } : null);
+
   model.step = function step(dt) {
     rk4 ??= createRK4Arrays(STATE_NAMES.map((name) => lengths[name]));
     radiation.setTime(model.time);

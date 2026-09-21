@@ -27,9 +27,13 @@ const OVERLAYS = {
   soil: { label: 'Soil water', unit: 'kg/m²', kind: 'sequential', field: 'soil', scale: 1, range: () => [0, 150] },
   snow: { label: 'Snow', unit: 'kg/m²', kind: 'sequential', field: 'snow', scale: 1, range: () => [0, 100] },
   elevation: { label: 'Elevation', unit: 'm', kind: 'diverging', field: 'elevation', scale: 1, range: () => [-4000, 4000] },
+  sst: { label: 'Sea surface temperature', unit: 'K', kind: 'sequential', field: 'sst', scale: 1, range: () => [270, 305] },
+  current: { label: 'Current speed', unit: 'm/s', kind: 'sequential', field: 'current', scale: 1, range: () => [0, 1] },
+  layer: { label: 'Upper layer depth', unit: 'm', kind: 'sequential', field: 'layerDepth', scale: 1, range: () => [10, 150] },
+  thermocline: { label: 'Thermocline temperature', unit: 'K', kind: 'sequential', field: 'thermocline', scale: 1, range: () => [275, 290] },
   none: { label: 'None' },
 };
-const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Precipitable water', tcw: 'Cloud water', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Sunlight reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Sea-level pressure', ps: 'Surface pressure', cloudcover: 'Cloud cover', soil: 'Soil water', snow: 'Snow', elevation: 'Elevation' };
+const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Precipitable water', tcw: 'Cloud water', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Sunlight reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Sea-level pressure', ps: 'Surface pressure', cloudcover: 'Cloud cover', soil: 'Soil water', snow: 'Snow', elevation: 'Elevation', sst: 'Sea surface temperature', current: 'Current speed', layer: 'Upper ocean layer depth', thermocline: 'Thermocline temperature' };
 
 /*
  * The cloud view: open water is ocean blue, ice whitens with thickness,
@@ -147,6 +151,8 @@ async function builtinSnapshots() {
 }
 
 const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'none']);
+const OCEAN_OVERLAYS = new Set(['sst', 'current', 'layer', 'thermocline']);
+const CURRENT_REFERENCE = 0.5;
 
 const VIEW_NOTES = [
   ['Mode', 'Data paints the chosen overlay on an evenly lit globe. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day.'],
@@ -157,6 +163,10 @@ const VIEW_NOTES = [
   ['Relative humidity', 'At the chosen height.'],
   ['Surface pressure', 'The pressure at the ground itself, about 1000 hPa at the coast and 550 hPa on the Tibetan plateau; the weather signal is the small variation on top of the elevation.'],
   ['Cloud cover', 'Cloud as white over grey with the opacity the Satellite view uses, from the column\'s cloud water.'],
+  ['Sea surface temperature', 'The temperature of the ocean\'s wind-driven upper layer, the freezing point under ice; grey over land.'],
+  ['Current speed', 'The upper layer\'s current, up to a metre a second in the boundary currents. With any ocean view selected, Particles and Vectors trace the current instead of the wind.'],
+  ['Upper layer depth', 'The thickness of the wind-driven layer: deep where the wind piles water into the subtropical gyres, thin where it upwells along the equator and eastern coasts.'],
+  ['Thermocline temperature', 'The layer below the upper one, which entrains into it where the upper layer thins.'],
   ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Where a pressure level lies below the ground, wind, temperature and humidity show the lowest layer of that column, and only the height is extrapolated hydrostatically so its contours stay a pressure field.'],
   ['Soil water', 'The land bucket: up to 150 kg/m² of soil water; evaporation slows as it dries and rain beyond its capacity runs off.'],
   ['Snow', 'Snow on land in water equivalent; it falls when the lowest air is below freezing and melts into the bucket.'],
@@ -274,16 +284,18 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     scaleRow.classList.remove('hidden');
     renderScale(stops, min, max, overlay.unit);
     const columnField = ['ps', 'mslp', 'precipitation', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave', 'soil', 'snow', 'elevation'].includes(overlay.field);
-    document.getElementById('data').textContent = columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(shownLevel())}`;
+    document.getElementById('data').textContent = OCEAN_OVERLAYS.has(settings.overlay) ? `${OVERLAY_NAMES[settings.overlay]} · surface current` : columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(shownLevel())}`;
   }
 
   function paintWind() {
-    const reference = REFERENCE_SPEED[shownLevel()];
+    const ocean = settings.view !== 'space' && OCEAN_OVERLAYS.has(settings.overlay) && latest.currentVector && latest.currentVector.length > 0;
+    const reference = ocean ? CURRENT_REFERENCE : REFERENCE_SPEED[shownLevel()];
+    const field = ocean ? latest.currentVector : latest.vector;
     const animate = settings.view === 'space' ? 'none' : settings.animate;
     arrows.setVisible(animate === 'arrows');
     particles.setVisible(animate === 'particles');
-    if (animate === 'arrows') arrows.update(latest.vector, { referenceSpeed: reference });
-    if (animate === 'particles') particles.setField(latest.vector, reference);
+    if (animate === 'arrows') arrows.update(field, { referenceSpeed: reference });
+    if (animate === 'particles') particles.setField(field, reference);
     const note = animate === 'particles' ? `trails brighten toward ${reference} m/s` : animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
     if (note) document.getElementById('data').textContent += ` · ${note}`;
   }
@@ -336,6 +348,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     document.getElementById('heightLabel').classList.toggle('hidden', !heights);
     document.getElementById('heightOptions').classList.toggle('hidden', !heights);
     for (const id of ['overlayLabel', 'overlayOptions', 'animateLabel', 'animateOptions', 'isolineLabel', 'isolineOptions']) document.getElementById(id).classList.toggle('hidden', space);
+    document.getElementById('animateLabel').textContent = OCEAN_OVERLAYS.has(settings.overlay) ? 'Current animation' : 'Wind animation';
     document.getElementById('isolineLabel').textContent = isolines.label;
     document.getElementById('isolineUnit').textContent = isolines.unit;
     const paletteSelect = document.getElementById('palette');

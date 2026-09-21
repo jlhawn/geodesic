@@ -30,6 +30,17 @@ async function postFrame() {
   const onLand = model.geography ? model.geography.land : null;
   const ice = Float32Array.from(state[6]), albedo = Float32Array.from(state[6], (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h)));
   const soil = model.land ? Float32Array.from(model.land.soil) : new Float32Array(0), snow = model.land ? Float32Array.from(model.land.snow) : new Float32Array(0);
+  const oceanFields = model.oceanFields ? model.oceanFields() : null;
+  const sst = new Float32Array(oceanFields ? mesh.nCells : 0), current = new Float32Array(sst.length), currentVector = new Float32Array(3 * sst.length), layerDepth = new Float32Array(sst.length), thermocline = new Float32Array(sst.length);
+  if (oceanFields) {
+    const vector = cellVector(mesh, oceanFields.u1, new Float64Array(3 * mesh.nCells));
+    for (let i = 0; i < mesh.nCells; i++) {
+      const sea = !onLand || !onLand[i];
+      sst[i] = sea ? oceanFields.T1[i] : NaN; layerDepth[i] = sea ? oceanFields.h1[i] : NaN; thermocline[i] = sea ? oceanFields.T2[i] : NaN;
+      currentVector[3 * i] = vector[3 * i]; currentVector[3 * i + 1] = vector[3 * i + 1]; currentVector[3 * i + 2] = vector[3 * i + 2];
+      current[i] = sea ? Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]) : NaN;
+    }
+  }
   const shortwave = Float32Array.from(model.radiation.surfaceShortwave), longwave = Float32Array.from(model.radiation.outgoing);
   const precipitation = Float32Array.from(model.moist.precipitation);
   const fields = levelFields(core, pi, theta, layerWind, level, q);
@@ -44,8 +55,8 @@ async function postFrame() {
   const interval = time - lastFrameTime;
   lastFrameTime = time;
   for (let i = 0; i < mesh.nCells; i++) precipitation[i] = interval > 0 ? precipitation[i] / interval * 86400 : 0;
-  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, mslp, ts, ...fields, precipitation, water, cloud, ice, albedo, shortwave, longwave, soil, snow, diagnostics, engine: model.engine ?? 'cpu' };
-  self.postMessage(message, [ps.buffer, mslp.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer, shortwave.buffer, longwave.buffer, soil.buffer, snow.buffer]);
+  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, mslp, ts, ...fields, precipitation, water, cloud, ice, albedo, shortwave, longwave, soil, snow, sst, current, currentVector, layerDepth, thermocline, diagnostics, engine: model.engine ?? 'cpu' };
+  self.postMessage(message, [ps.buffer, mslp.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer, shortwave.buffer, longwave.buffer, soil.buffer, snow.buffer, sst.buffer, current.buffer, currentVector.buffer, layerDepth.buffer, thermocline.buffer]);
 }
 
 async function loop() {
