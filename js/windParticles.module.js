@@ -10,7 +10,7 @@
  * and with an admission mask (the sea, for currents) particles exist
  * only on admitted cells.
  */
-export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.5, size = 2, minimumOpacity = 0.25, bin = 32, slack = 0.4, maximum = 200000 } = {}) {
+export function createWindParticles(container, viewer, grid, { density = 0.02, referenceSpeed = 15, pixelsPerFrame = 0.25, size = 1.25, minimumOpacity = 0.25, bin = 32, slack = 0.4, maximum = 200000 } = {}) {
   const C = grid.size;
   const centers = new Float32Array(3 * C);
   const neighborCount = new Uint8Array(C);
