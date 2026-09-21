@@ -22,12 +22,14 @@ const OVERLAYS = {
   swdown: { label: 'SW↓', unit: 'W/m²', kind: 'sequential', field: 'shortwave', scale: 1, range: () => [0, 1200] },
   olr: { label: 'OLR', unit: 'W/m²', kind: 'sequential', field: 'longwave', scale: 1, range: () => [100, 320] },
   mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'mslp', scale: 0.01, range: () => [960, 1060] },
+  ps: { label: 'Surface pressure', unit: 'hPa', kind: 'sequential', field: 'ps', scale: 0.01, range: () => [500, 1050] },
+  cloudcover: { label: 'Cloud cover', unit: 'g/m²', kind: 'clouds', field: 'cloud', scale: 1000, range: () => [0, 100] },
   soil: { label: 'Soil water', unit: 'kg/m²', kind: 'sequential', field: 'soil', scale: 1, range: () => [0, 150] },
   snow: { label: 'Snow', unit: 'kg/m²', kind: 'sequential', field: 'snow', scale: 1, range: () => [0, 100] },
   elevation: { label: 'Elevation', unit: 'm', kind: 'diverging', field: 'elevation', scale: 1, range: () => [-4000, 4000] },
   none: { label: 'None' },
 };
-const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Precipitable water', tcw: 'Cloud water', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Sunlight reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Sea-level pressure', soil: 'Soil water', snow: 'Snow', elevation: 'Elevation' };
+const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Precipitable water', tcw: 'Cloud water', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Sunlight reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Sea-level pressure', ps: 'Surface pressure', cloudcover: 'Cloud cover', soil: 'Soil water', snow: 'Snow', elevation: 'Elevation' };
 
 /*
  * The cloud view: open water is ocean blue, ice whitens with thickness,
@@ -37,7 +39,9 @@ const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative h
  */
 const OCEAN_COLOR = [0.05, 0.22, 0.45], ICE_COLOR = [0.85, 0.90, 0.95], CLOUD_COLOR = [1, 1, 1], CLOUD_OPACITY_SCALE = 40;
 const DRY_LAND = [0.45, 0.36, 0.22], WET_LAND = [0.16, 0.30, 0.12], SNOW_COLOR = [0.9, 0.92, 0.95];
+const COVER_BASE = [0.22, 0.22, 0.22];
 const cloudOpacity = (grams) => 1 - Math.exp(-Math.max(0, grams) / CLOUD_OPACITY_SCALE);
+const COVER_STOPS = Array.from({ length: 11 }, (_, k) => { const a = cloudOpacity(10 * k); return COVER_BASE.map((c) => c + a * (1 - c)); });
 
 /*
  * Palettes as sRGB stops. The sequential ones are perceptually uniform
@@ -151,6 +155,8 @@ const VIEW_NOTES = [
   ['Wind speed', 'Speed at the chosen height.'],
   ['Temperature', 'Air temperature at the chosen height.'],
   ['Relative humidity', 'At the chosen height.'],
+  ['Surface pressure', 'The pressure at the ground itself, about 1000 hPa at the coast and 550 hPa on the Tibetan plateau; the weather signal is the small variation on top of the elevation.'],
+  ['Cloud cover', 'Cloud as white over grey with the opacity the Satellite view uses, from the column\'s cloud water.'],
   ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Where a pressure level lies below the ground, the level views extrapolate: winds and humidity from the lowest layer, temperature down a standard lapse rate, height hydrostatically.'],
   ['Soil water', 'The land bucket: up to 150 kg/m² of soil water; evaporation slows as it dries and rain beyond its capacity runs off.'],
   ['Snow', 'Snow on land in water equivalent; it falls when the lowest air is below freezing and melts into the bucket.'],
@@ -246,6 +252,17 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     }
     const [min, max] = overlay.range(activeLevel());
     const values = latest[overlay.field];
+    if (overlay.kind === 'clouds') {
+      for (let i = 0; i < grid.size; i++) {
+        const opacity = cloudOpacity(values[i] * overlay.scale);
+        for (let j = 0; j < 3; j++) rgb[3 * i + j] = LINEAR[Math.round(255 * (COVER_BASE[j] + opacity * (1 - COVER_BASE[j])))];
+      }
+      viewer.updateColors(rgb);
+      scaleRow.classList.remove('hidden');
+      renderScale(COVER_STOPS, min, max, overlay.unit);
+      document.getElementById('data').textContent = `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(activeLevel())}`;
+      return;
+    }
     const stops = PALETTES[overlay.kind][settings.palettes[overlay.kind]] ?? Object.values(PALETTES[overlay.kind])[0];
     for (let i = 0; i < grid.size; i++) {
       if (Number.isNaN(values[i])) { rgb[3 * i] = rgb[3 * i + 1] = rgb[3 * i + 2] = LINEAR[70]; continue; }
