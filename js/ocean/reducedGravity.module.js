@@ -29,7 +29,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  */
 export function createOcean(mesh, {
   upperDepth = 50, lowerDepth = 350, reducedGravity = 0.02, abyssReducedGravity = 0.01, abyssTemperature = 275,
-  minimumThickness = 10, entrainmentTime = 86400, density = 1025, specificHeat = 3985, interfacialDrag = 2e-4, bottomDrag = 2e-4, geography = null,
+  minimumThickness = 10, entrainmentTime = 3600, density = 1025, specificHeat = 3985, interfacialDrag = 2e-4, bottomDrag = 2e-4, geography = null,
   closureHours = 12, diffusivity = 0.3, everySteps = 4, buffers = null,
 } = {}) {
   const {
@@ -159,7 +159,7 @@ export function createOcean(mesh, {
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice);
     rk4(tendency, state, dtOcean);
     for (let i = 0; i < C; i++) {
-      capacity[i] = rhoCp * h1[i];
+      capacity[i] = rhoCp * Math.max(h1[i], 1);
       T2[i] = H2[i] / h2[i];
       if (iced[i]) {
         oceanFlux[i] = rhoCp * (H1[i] - h1[i] * FREEZING_POINT) / dtOcean;
@@ -180,7 +180,7 @@ export function createOcean(mesh, {
     for (let i = 0; i < C; i++) {
       T2[i] = Math.max(FREEZING_POINT, abyssTemperature + 0.5 * (T1[i] - abyssTemperature));
       H2[i] = h2[i] * T2[i];
-      capacity[i] = rhoCp * h1[i];
+      capacity[i] = rhoCp * Math.max(h1[i], 1);
     }
     counter = 0;
   }
@@ -188,7 +188,7 @@ export function createOcean(mesh, {
   function load(saved, surfaceT, ice) {
     h1.set(saved.h1); h2.set(saved.h2); u1.set(saved.u1); u2.set(saved.u2); T2.set(saved.T2);
     readSurface(surfaceT, ice);
-    for (let i = 0; i < C; i++) { H2[i] = h2[i] * T2[i]; capacity[i] = rhoCp * h1[i]; }
+    for (let i = 0; i < C; i++) { H2[i] = h2[i] * T2[i]; capacity[i] = rhoCp * Math.max(h1[i], 1); }
     counter = 0;
   }
 

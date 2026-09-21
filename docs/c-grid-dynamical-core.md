@@ -1115,9 +1115,12 @@ the atmosphere's 3-hour coefficient at the ocean's 4× step is past
 the RK4 stability limit at coarse resolution and was the first bug.
 Heat: each layer carries h·T in flux form with centred edge
 temperatures; the upper layer keeps the M11 diffusion (D R² ∇²T);
-a layer thinner than 10 m entrains from below over a day, the
-thermocline layer from an abyss at 275 K (the one exchange the ocean's
-heat budget does not close). Coupling, in `phases.ocean` on the main
+a layer thinner than 10 m entrains from below over an hour (a day at
+first; with coastlines the upper layer of an enclosed sea at N=64 thinned
+to nothing within a day's relaxation and the skin temperature over it
+ran away), the thermocline layer from an abyss at 275 K (the one
+exchange the ocean's heat budget does not close); the heat capacity the
+surface sees is ρcp times at least a metre. Coupling, in `phases.ocean` on the main
 thread: the ocean reads the SST from `surfaceT` over open water (the
 freezing point under ice), steps, writes the SST back, publishes the
 upper layer's heat capacity ρc_p h₁ per cell (a shared array that

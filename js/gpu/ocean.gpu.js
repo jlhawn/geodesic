@@ -18,7 +18,7 @@ const FREEZING = 271.35;
 
 export const OCEAN_DEFAULTS = {
   upperDepth: 50, lowerDepth: 350, reducedGravity: 0.02, abyssReducedGravity: 0.01, abyssTemperature: 275,
-  minimumThickness: 10, entrainmentTime: 86400, density: 1025, specificHeat: 3985, interfacialDrag: 2e-4, bottomDrag: 2e-4,
+  minimumThickness: 10, entrainmentTime: 3600, density: 1025, specificHeat: 3985, interfacialDrag: 2e-4, bottomDrag: 2e-4,
   closureHours: 12, diffusivity: 0.3, everySteps: 4, dragCoefficient: 1.5e-3, gustiness: 3,
 };
 
@@ -174,7 +174,7 @@ fn qOff(l: i32) -> i32 { return select(OQ2, OQ1, l == 0); }
   let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { PH[PH_OFLUX + i] = 0.0; return; }
   let h1 = IN[OH1 + i]; let h2 = IN[OH2 + i];
-  PH[PH_CAP + i] = RHOCP * h1;
+  PH[PH_CAP + i] = RHOCP * max(h1, 1.0);
   OD[O_T2 + i] = IN[OQ2 + i] / h2;
   if (OD[O_ICED + i] > 0.5) {
     PH[PH_OFLUX + i] = RHOCP * (IN[OQ1 + i] - h1 * TF) / P[0];
