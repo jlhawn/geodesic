@@ -227,8 +227,31 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (last.wall <= first.wall) return { rate: 0, interval: 500 };
     return { rate: (last.time - first.time) / (last.wall - first.wall), interval: (last.wall - first.wall) / (clock.length - 1 - from) };
   }
+  /*
+   * The address bar always holds a link to the current view: every
+   * setting, the globe's orientation and whether the model is paused,
+   * rewritten in place a moment after the last change. The page reads
+   * the query string only when it starts.
+   */
+  let urlVersion = -1, urlRunning = null, urlTimer = 0;
+  function reflectUrl() {
+    const url = new URL(location.href);
+    for (const key of Object.keys(DEFAULTS)) url.searchParams.set(key, String(settings[key]));
+    if (viewer) {
+      const orientation = viewer.view();
+      const tenth = (x) => String(Math.round(10 * x) / 10 || 0);
+      url.searchParams.set('lat', tenth(orientation.lat));
+      url.searchParams.set('lon', tenth(orientation.lon));
+      url.searchParams.set('zoom', String(Math.round(orientation.zoom)));
+    }
+    if (running) url.searchParams.delete('paused'); else url.searchParams.set('paused', '');
+    history.replaceState(null, '', url);
+  }
+  function scheduleUrl() { clearTimeout(urlTimer); urlTimer = setTimeout(reflectUrl, 300); }
+
   function tick(now) {
     requestAnimationFrame(tick);
+    if (viewer && (viewer.viewVersion() !== urlVersion || running !== urlRunning)) { urlVersion = viewer.viewVersion(); urlRunning = running; scheduleUrl(); }
     if (!latest) return;
     const time = display.advance(now, latest.time, { ...recentFrames(), running });
     if (running) document.getElementById('date').textContent = formatDate(time);
@@ -432,6 +455,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     }
     Object.assign(settings, changes);
     saveSettings(settings);
+    scheduleUrl();
     if (activeLevel() !== before) worker.postMessage({ type: 'level', level: activeLevel() });
     if ('projection' in changes && viewer) viewer.setProjection(settings.projection);
     render();
@@ -544,6 +568,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     running = false;
     clock.length = 0;
     closeModals();
+    scheduleUrl();
     render();
     const transfer = [...Object.values(data.arrays), ...(data.ocean ? Object.values(data.ocean) : []), ...(data.land ? Object.values(data.land) : [])];
     worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
@@ -605,6 +630,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     running = !running;
     clock.length = 0;
     worker.postMessage({ type: running ? 'resume' : 'pause' });
+    scheduleUrl();
     render();
   });
   document.getElementById('menu').addEventListener('click', () => update({ panel: settings.panel === 'open' ? 'closed' : 'open' }));
