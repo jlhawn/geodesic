@@ -37,11 +37,38 @@ export const LAYER_DENSITIES = [1024.0, 1025.5, 1026.5, 1027.2, 1027.7];
 export const LAYER_BOTTOMS = [250, 600, 1200, 2500];
 const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5;
 
+/*
+ * The model's bathymetry: the cell-mean ETOPO depth of every sea cell,
+ * at least `minimumDepth`, and never shallower than `neighbourRatio`
+ * times its deepest sea neighbour, so that no shelf break or trench
+ * wall drops by more than that ratio across one edge. A cell 110 km
+ * across cannot hold a real shelf, and a ten-to-one step in depth
+ * between two cells makes the free surface swing wildly at the coast.
+ */
+export function bathymetryFrom(mesh, geography, { minimumDepth = 50, neighbourRatio = 0.5, flatDepth = 4000 } = {}) {
+  const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
+  const D = new Float64Array(C);
+  for (let i = 0; i < C; i++) D[i] = geography ? (geography.land[i] ? 0 : Math.max(minimumDepth, -geography.elevation[i])) : flatDepth;
+  if (!geography) return D;
+  for (let sweep = 0; sweep < 50; sweep++) {
+    let changed = false;
+    for (let i = 0; i < C; i++) {
+      if (geography.land[i]) continue;
+      let deepest = 0;
+      for (let m = 0; m < nEdgesOnCell[i]; m++) { const j = cellsOnCell[maxEdges * i + m]; if (!geography.land[j]) deepest = Math.max(deepest, D[j]); }
+      const floor = neighbourRatio * deepest;
+      if (D[i] < floor) { D[i] = floor; changed = true; }
+    }
+    if (!changed) break;
+  }
+  return D;
+}
+
 export function createOcean(mesh, {
   densities = LAYER_DENSITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2)),
   density = 1025, specificHeat = 3985, thermalExpansion = 2e-4, halineContraction = 7.6e-4, referenceT = 283.15, referenceS = 35, gravity = 9.81,
-  minimumThickness = 10, shallowestMixedDepth = 20, maximumMixedDepth = 1000, stirring = 0.8, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
+  minimumThickness = 20, shallowestMixedDepth = 20, maximumMixedDepth = 1000, stirring = 0.8, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 2e-4, closureHours = 12, diffusivity = 0.3, everySteps = 4,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {
@@ -61,8 +88,7 @@ export function createOcean(mesh, {
 
   const edgeOcean = geography ? geography.edgeOcean : new Uint8Array(E).fill(1);
   const cellOcean = geography ? Uint8Array.from(geography.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
-  const D = new Float64Array(C);
-  for (let i = 0; i < C; i++) D[i] = !cellOcean[i] ? 0 : bathymetry ? bathymetry[i] : geography ? Math.max(minimumDepth, -geography.elevation[i]) : flatDepth;
+  const D = bathymetry ? Float64Array.from(bathymetry, (d, i) => (cellOcean[i] ? d : 0)) : bathymetryFrom(mesh, geography, { minimumDepth, flatDepth });
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
   const substepLimit = 0.35 * minSpacing / Math.sqrt(g * Math.max(deepest, 1));
@@ -83,7 +109,7 @@ export function createOcean(mesh, {
   const stages = [0, 1, 2, 3].map(() => state.map((a) => new Float64Array(a.length)));
   const trial = state.map((a) => new Float64Array(a.length));
   const tauCell = new Float64Array(3 * C);
-  let counter = 0, limited = 0, relaxRate = 1 / 3600;
+  let counter = 0, limited = 0, relaxRate = 1 / 3600, initialised = false;
 
   const eos = (t, s) => rho0 * (1 - thermalExpansion * (t - referenceT) + halineContraction * (s - referenceS));
   const at = (k, i) => k * C + i;
@@ -316,6 +342,7 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) { sumH += hEdge[ae(k, e)]; transport += hEdge[ae(k, e)] * u[ae(k, e)]; }
       const shift = (avgU[e] - transport) / Math.max(sumH, EPS);
       for (let k = 0; k < L; k++) { const n = ae(k, e); u[n] += shift; if (Math.abs(u[n]) > SPEED_LIMIT) { u[n] = Math.sign(u[n]) * SPEED_LIMIT; limited++; } }
+      for (let k = 1; k < L; k++) if (hEdge[ae(k, e)] < THIN) u[ae(k, e)] = u[ae(k - 1, e)];
     }
   }
 
@@ -414,6 +441,7 @@ export function createOcean(mesh, {
 
   function advance(surfaceT, ice, oceanFlux, totalStress, dt) {
     if (++counter % everySteps !== 0) return false;
+    if (!initialised) initialize(surfaceT, ice);
     const dtOcean = everySteps * dt;
     relaxRate = Math.min(1 / 3600, 1 / dtOcean);
     readSurface(surfaceT, ice);
@@ -468,6 +496,7 @@ export function createOcean(mesh, {
     surfaceDensity(h, Q, W);
     stericSurface();
     counter = 0;
+    initialised = true;
   }
 
   /*
@@ -544,6 +573,7 @@ export function createOcean(mesh, {
     for (let i = 0; i < C; i++) { previousIce[i] = ice[i]; iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = Q[i] / Math.max(EPS, h[i]); S0[i] = W[i] / Math.max(EPS, h[i]); previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
     fresh.fill(0);
     counter = 0;
+    initialised = true;
   }
 
   function serialize() {
@@ -577,5 +607,7 @@ export function createOcean(mesh, {
     return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanThermoclineT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited };
   }
 
+  initialize(new Float64Array(C).fill(288), new Float64Array(C));
+  initialised = false;
   return { state, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, rhoCp, edgeOcean, cellOcean, densities: rho, shared: { capacity: capacity.buffer } };
 }

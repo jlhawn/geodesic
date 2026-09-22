@@ -1,5 +1,5 @@
 import { emptyBuffer, readBuffer } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_BOTTOMS } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_BOTTOMS, bathymetryFrom } from '../ocean/layered.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
 /*
@@ -30,7 +30,7 @@ const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5;
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, thermalExpansion: 2e-4, halineContraction: 7.6e-4, referenceT: 283.15, referenceS: 35, gravity: 9.81,
-  minimumThickness: 10, shallowestMixedDepth: 20, maximumMixedDepth: 1000, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
+  minimumThickness: 20, shallowestMixedDepth: 20, maximumMixedDepth: 1000, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
   interfacialDrag: 2e-4, bottomDrag: 2e-4, closureHours: 12, diffusivity: 0.3, everySteps: 4,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -300,6 +300,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   for (var k = 0; k < L; k++) { let he = OD[O_HEDGE + k * E + e]; sumH += he; transport += he * IN[uOff(k) + e]; }
   let shift = (OD[B_BAVG + C + e] - transport) / max(sumH, EPSO);
   for (var k = 0; k < L; k++) { let n = uOff(k) + e; IN[n] = clamp(IN[n] + shift, -SPEEDLIM, SPEEDLIM); }
+  for (var k = 1; k < L; k++) { if (OD[O_HEDGE + k * E + e] < THINO) { IN[uOff(k) + e] = IN[uOff(k - 1) + e]; } }
 }`,
     oReadSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
   let iced = OD[O_SURFICE + i] > 0.0;
@@ -410,7 +411,8 @@ export function createLayeredOcean(core, options = {}) {
   const edgeOcean = geography ? geography.edgeOcean : new Uint8Array(E).fill(1);
   const cellOcean = geography ? Uint8Array.from(geography.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
   const D = new Float64Array(C);
-  for (let i = 0; i < C; i++) D[i] = !cellOcean[i] ? 0 : o.bathymetry ? o.bathymetry[i] : geography ? Math.max(o.minimumDepth, -geography.elevation[i]) : o.flatDepth;
+  const smoothed = o.bathymetry ? null : bathymetryFrom(mesh, geography, { minimumDepth: o.minimumDepth, flatDepth: o.flatDepth });
+  for (let i = 0; i < C; i++) D[i] = !cellOcean[i] ? 0 : o.bathymetry ? o.bathymetry[i] : smoothed[i];
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
   const substepLimit = 0.35 * minSpacing / Math.sqrt(o.gravity * Math.max(deepest, 1));
