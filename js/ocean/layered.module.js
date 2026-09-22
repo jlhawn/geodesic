@@ -206,8 +206,8 @@ export function createOcean(mesh, {
       divergence(mesh, flux, divScratch);
       for (let i = 0; i < C; i++) {
         dh[oc + i] = -divScratch[i];
-        const hh = Math.max(EPS, hIn[oc + i]);
-        T[i] = QIn[oc + i] / hh; S[i] = WIn[oc + i] / hh;
+        const hv = hIn[oc + i];
+        if (hv > 1e-6) { T[i] = QIn[oc + i] / hv; S[i] = WIn[oc + i] / hv; } else { T[i] = labelT[k]; S[i] = referenceS; }
       }
       for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * T[cellsOnEdge[2 * e + (flux[e] > 0 ? 0 : 1)]];
       divergence(mesh, tracerFlux, divScratch);
@@ -342,7 +342,7 @@ export function createOcean(mesh, {
       let sum = 0;
       for (let k = 0; k < L; k++) {
         const n = at(k, i);
-        if (h[n] < EPS) { const t = h[n] > 1e-9 ? Q[n] / h[n] : labelT[k], s = h[n] > 1e-9 ? W[n] / h[n] : referenceS; h[n] = EPS; Q[n] = EPS * t; W[n] = EPS * s; }
+        if (h[n] < EPS) { const t = k === 0 && h[n] > 1e-9 ? Q[n] / h[n] : labelT[k], s = k === 0 && h[n] > 1e-9 ? W[n] / h[n] : referenceS; h[n] = EPS; Q[n] = EPS * t; W[n] = EPS * s; }
         sum += h[n];
       }
       const scale = (D[i] + avgEta[i]) / sum;

@@ -134,13 +134,13 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
 }`,
     oCellTendency: `${K}  let n = ${idx}; if (n >= L * C) { return; }
   let k = n / C; let i = n % C;
-  let hh = max(EPSO, IN[hOff(k) + i]); let Ti = IN[qOff(k) + i] / hh; let Si = IN[wOff(k) + i] / hh;
+  let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k], IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(REF_S, IN[wOff(k) + i] / hv, hv > 1e-6);
   var divH = 0.0; var divQ = 0.0; var divW = 0.0; var lapQ = 0.0; var lapW = 0.0;
   for (var m = 0; m < MI[NEC + i]; m++) {
     let e = MI[EOC + MAXE * i + m]; let j = MI[COC + MAXE * i + m];
     let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
     divH += f;
-    let hhj = max(EPSO, IN[hOff(k) + j]); let Tj = IN[qOff(k) + j] / hhj; let Sj = IN[wOff(k) + j] / hhj;
+    let hvj = IN[hOff(k) + j]; let Tj = select(LABEL_T[k], IN[qOff(k) + j] / hvj, hvj > 1e-6); let Sj = select(REF_S, IN[wOff(k) + j] / hvj, hvj > 1e-6);
     divQ += f * select(Tj, Ti, f > 0.0); divW += f * select(Sj, Si, f > 0.0);
     if (k == 0 && OD[O_EMASK + e] > 0.5) { lapQ += MF[F_DV + e] * (Tj - Ti) / MF[F_DC + e]; lapW += MF[F_DV + e] * (Sj - Si) / MF[F_DC + e]; }
   }
@@ -295,7 +295,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     var hv = IN[hOff(k) + i];
     if (hv < EPSO) {
       var t = LABEL_T[k]; var s = REF_S;
-      if (hv > 1e-9) { t = IN[qOff(k) + i] / hv; s = IN[wOff(k) + i] / hv; }
+      if (k == 0 && hv > 1e-9) { t = IN[qOff(k) + i] / hv; s = IN[wOff(k) + i] / hv; }
       hv = EPSO;
       IN[hOff(k) + i] = EPSO; IN[qOff(k) + i] = EPSO * t; IN[wOff(k) + i] = EPSO * s;
     }
