@@ -1491,7 +1491,11 @@ is at most min(D_a, D_b) + η. The mixed layer's mass and tracer flux
 through an edge uses at most the thickness of the cell the water leaves,
 so a deep convective column beside a thin mixed layer cannot drain its
 neighbour below zero within a step (the centred thickness stays in the
-momentum equation). Heat and salt ride the mass flux with the donor
+momentum equation, and the Coriolis term uses the unlimited flux h_e u:
+with the limited flux and a potential vorticity built on the centred
+thickness, a 20 m mixed layer beside a 200 m one felt a fifth of the
+Coriolis force and ran down the sea-level gradient at the Falkland
+Plateau edge unbalanced, to the 5 m/s clamp). Heat and salt ride the mass flux with the donor
 cell's temperature and salinity: a centred edge value let a step that
 moves a large share of a thin cell's water leave the remainder at a
 temperature outside anything in the neighbourhood (370 K off Chile on
@@ -1523,7 +1527,7 @@ m = 0.8 exp(−h₀/100 m), so the wind's stirring fades below the depth it
 can reach, and Δb the buoyancy step to that layer, at least 10⁻⁴ m/s²;
 detrains any depth beyond 200 m and, when it is at least as dense as
 the water beneath it (within 0.005 kg/m³, convectively neutral),
-everything below the 50 m floor — the swallow and the return each step
+everything below the 50 m floor (also the minimum thickness) — the swallow and the return each step
 still mix the column, but a kilometre-deep mixed layer beside 40 m ones
 opened a 5.7 m sea-level hole within an hour off Cape Farewell, and
 500–900 m ones that had exhausted the 1027.2 layer and sat, stably, on
@@ -1545,7 +1549,7 @@ the last ocean step is stabilising (below −10⁻⁹ m²/s³) and it is deeper
 than the Monin–Obukhov depth 2 m u*³/(−B), it detrains the excess over a
 day into the first interior layer at least as dense as itself that
 already holds water in the column, or the deepest such layer, or not at
-all on a shelf that has only mixed layer; and it is kept at least 20 m
+all on a shelf that has only mixed layer; and it is kept at least 50 m
 thick by entraining from below. The shallowest depth detrainment leaves
 is 50 m: with 20 m the tropical mixed layer sat on that floor (every
 warming step collapses the Monin–Obukhov depth) and the SST fell 2 K a

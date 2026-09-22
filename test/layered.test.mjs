@@ -224,15 +224,15 @@ test('load() from the old two-layer format seeds the climatology and honours h1 
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => 275 + 25 * Math.cos(lat) ** 2), ice = new Float64Array(C);
 
   // The climatology's own mixed layer is ~60 m deep everywhere (mixedDepth),
-  // so a shallowing request to 40 m only ever gives mass to the interior
+  // so a shallowing request to 55 m only ever gives mass to the interior
   // (unbounded above) and is honoured exactly, unlike a deepening request
   // (see below).
   const u1 = Float64Array.from({ length: E }, (_, e) => 0.02 * Math.sin(e));
-  const saved = { h1: new Float64Array(C).fill(40), h2: new Float64Array(C).fill(900), u1, u2: new Float64Array(E), T2: new Float64Array(C).fill(280) };
+  const saved = { h1: new Float64Array(C).fill(55), h2: new Float64Array(C).fill(900), u1, u2: new Float64Array(E), T2: new Float64Array(C).fill(280) };
   ocean.load(saved, surfaceT, ice);
   for (let i = 0; i < C; i++) {
     if (!ocean.cellOcean[i]) continue;
-    assert.ok(Math.abs(ocean.h[i] - 40) < 1e-6, `mixed layer depth ${ocean.h[i]} at cell ${i} should honour the requested 40 m`);
+    assert.ok(Math.abs(ocean.h[i] - 55) < 1e-6, `mixed layer depth ${ocean.h[i]} at cell ${i} should honour the requested 55 m`);
   }
   for (let e = 0; e < E; e++) {
     if (ocean.edgeOcean[e]) assert.equal(ocean.u[e], u1[e]);

@@ -78,7 +78,7 @@ export function createOcean(mesh, {
   densities = LAYER_DENSITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2)),
   density = 1025, specificHeat = 3985, thermalExpansion = 2e-4, halineContraction = 7.6e-4, referenceT = 283.15, referenceS = 35, gravity = 9.81,
-  minimumThickness = 20, shallowestMixedDepth = 50, maximumMixedDepth = 200, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
+  minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 200, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, diffusivity = 0.3, everySteps = 4,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {
@@ -110,7 +110,7 @@ export function createOcean(mesh, {
   const capacity = new Float64Array(buffers && buffers.capacity ? buffers.capacity : new SharedArrayBuffer(8 * C)).fill(rhoCp * mixedDepth);
   const stress = new Float64Array(E), fresh = new Float64Array(C);
   const iced = new Uint8Array(C);
-  const hEdge = new Float64Array(L * E), flux = new Float64Array(E), tracerFlux = new Float64Array(E);
+  const hEdge = new Float64Array(L * E), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E);
   const T = new Float64Array(C), S = new Float64Array(C), lapT = new Float64Array(C);
   const zeta = new Float64Array(V), qEdge = new Float64Array(E);
   const K = new Float64Array(C), phi = new Float64Array(C), gradPhi = new Float64Array(E), gradEta = new Float64Array(E), gradRho = new Float64Array(E);
@@ -200,6 +200,7 @@ export function createOcean(mesh, {
       const oc = k * C, oe = k * E;
       for (let e = 0; e < E; e++) {
         let he = hEdge[oe + e];
+        fluxPV[e] = edgeOcean[e] ? he * uIn[oe + e] : 0;
         if (k === 0) he = Math.min(he, Math.max(0, hIn[cellsOnEdge[2 * e + (uIn[e] > 0 ? 0 : 1)]]));
         flux[e] = edgeOcean[e] ? he * uIn[oe + e] : 0;
       }
@@ -238,7 +239,7 @@ export function createOcean(mesh, {
         let sum = 0;
         for (let s = 0; s < nEdgesOnEdge[e]; s++) {
           const other = edgesOnEdge[maxEdgesOnEdge * e + s];
-          sum += weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[other] * flux[other] * 0.5 * (qEdge[e] + qEdge[other]);
+          sum += weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[other] * fluxPV[other] * 0.5 * (qEdge[e] + qEdge[other]);
         }
         du[oe + e] = sum / dcEdge[e] - gradPhi[e];
       }

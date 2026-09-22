@@ -30,7 +30,7 @@ const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, thermalExpansion: 2e-4, halineContraction: 7.6e-4, referenceT: 283.15, referenceS: 35, gravity: 9.81,
-  minimumThickness: 20, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
+  minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
   interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, diffusivity: 0.3, everySteps: 4,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -200,7 +200,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   let qHere = 0.5 * OD[O_QE + n];
   var pv = 0.0;
-  for (var s = 0; s < MI[NEE + e]; s++) { let slot = MAXEE * e + s; let other = MI[EOE + slot]; pv += MF[F_PVW + slot] * OD[O_FLUX + k * E + other] * (qHere + 0.5 * OD[O_QE + k * E + other]); }
+  for (var s = 0; s < MI[NEE + e]; s++) { let slot = MAXEE * e + s; let other = MI[EOE + slot]; let fo = select(0.0, OD[O_HEDGE + k * E + other] * IN[uOff(k) + other], OD[O_EMASK + other] > 0.5); pv += MF[F_PVW + slot] * fo * (qHere + 0.5 * OD[O_QE + k * E + other]); }
   let dc = MF[F_DC + e];
   let gradPhi = (OD[O_PHI + k * C + b] - OD[O_PHI + k * C + a]) / dc;
   var du = pv / dc - gradPhi;
