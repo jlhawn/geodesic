@@ -62,7 +62,11 @@ test('one and twenty GPU ocean steps track the CPU layered ocean at N=8', { skip
 
   const fields = ['h', 'u', 'T', 'S', 'eta'];
   const results = {};
-  for (const f of fields) results[f] = stats(cpuState[f], gpuState[f]);
+  // Tracers are compared only where the layer holds water: a token layer's
+  // temperature is its label on one engine and the water it last held on the
+  // other whenever their thicknesses straddle the token threshold.
+  const wet = Array.from(cpuState.h, (v) => v > 1);
+  for (const f of fields) results[f] = f === 'T' || f === 'S' ? stats(cpuState[f].filter((_, x) => wet[x]), gpuState[f].filter((_, x) => wet[x])) : stats(cpuState[f], gpuState[f]);
   console.log('one ocean step at N=8:', Object.entries(results).map(([f, r]) => `${f} rms ${r.rmsRel.toExponential(2)} max ${r.maxDiff.toExponential(2)}`).join(', '));
   for (const f of fields) assert.ok(results[f].rmsRel < 2e-3, `${f} rms relative diff ${results[f].rmsRel} at index ${results[f].at}`);
 

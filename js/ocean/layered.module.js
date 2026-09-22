@@ -78,7 +78,7 @@ export function createOcean(mesh, {
   densities = LAYER_DENSITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2)),
   density = 1025, specificHeat = 3985, thermalExpansion = 2e-4, halineContraction = 7.6e-4, referenceT = 283.15, referenceS = 35, gravity = 9.81,
-  minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 200, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
+  minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 200, convectiveRate = 100 / 86400, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, diffusivity = 0.3, everySteps = 4,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {
@@ -340,12 +340,18 @@ export function createOcean(mesh, {
     }
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
-      let sum = 0;
+      let sum = 0, dQ = 0, dW = 0;
       for (let k = 0; k < L; k++) {
         const n = at(k, i);
-        if (h[n] < EPS) { const t = k === 0 && h[n] > 1e-9 ? Q[n] / h[n] : labelT[k], s = k === 0 && h[n] > 1e-9 ? W[n] / h[n] : referenceS; h[n] = EPS; Q[n] = EPS * t; W[n] = EPS * s; }
+        if (h[n] < EPS) {
+          const held = h[n] > 1e-9, tHeld = held ? Q[n] / h[n] : labelT[k], sHeld = held ? W[n] / h[n] : referenceS;
+          const t = k === 0 ? tHeld : labelT[k], s = k === 0 ? sHeld : referenceS;
+          dQ += EPS * Math.max(-30, Math.min(30, tHeld - t)); dW += EPS * Math.max(-5, Math.min(5, sHeld - s));
+          h[n] = EPS; Q[n] = EPS * t; W[n] = EPS * s;
+        }
         sum += h[n];
       }
+      Q[i] += dQ; W[i] += dW;
       const scale = (D[i] + avgEta[i]) / sum;
       for (let k = 0; k < L; k++) { const n = at(k, i); h[n] *= scale; Q[n] *= scale; W[n] *= scale; }
       eta[i] = avgEta[i];
@@ -382,16 +388,17 @@ export function createOcean(mesh, {
       if (!cellOcean[i]) continue;
       const tau = Math.hypot(tauCell[3 * i], tauCell[3 * i + 1], tauCell[3 * i + 2]);
       const ustar3 = Math.pow(tau / rho0, 1.5), stir = stirring * Math.exp(-h[i] / stirringDepth);
-      let rm = eos(Q[i] / h[i], W[i] / h[i]);
-      for (let k = 1; k < L && h[i] < maximumMixedDepth; k++) {
+      let rm = eos(Q[i] / h[i], W[i] / h[i]), budget = convectiveRate * dt;
+      for (let k = 1; k < L && h[i] < maximumMixedDepth && budget > 0; k++) {
         if (h[at(k, i)] <= EPS || rho[k] > rm) continue;
-        move(i, k, 0, Math.min(h[at(k, i)] - EPS, maximumMixedDepth - h[i]));
+        const take = Math.min(h[at(k, i)] - EPS, maximumMixedDepth - h[i], budget);
+        move(i, k, 0, take); budget -= take;
         rm = eos(Q[i] / h[i], W[i] / h[i]);
       }
       let below = -1;
       for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) { below = k; break; }
       if (below > 0 && h[i] < maximumMixedDepth) {
-        const db = Math.max(1e-4, g * (rho[below] - rm) / rho0);
+        const db = Math.max(1e-3, g * (rho[below] - rm) / rho0);
         const entrain = Math.min(2 * stir * ustar3 / (h[i] * db) * dt, h[at(below, i)] - EPS);
         if (entrain > 0) { move(i, below, 0, entrain); rm = eos(Q[i] / h[i], W[i] / h[i]); }
       }
@@ -508,7 +515,7 @@ export function createOcean(mesh, {
         }
         hk = Math.max(EPS, hk);
         cumulative += hk;
-        h[at(k, i)] = hk; Q[at(k, i)] = hk * labelT[k]; W[at(k, i)] = hk * referenceS;
+        h[at(k, i)] = hk; Q[at(k, i)] = hk * Math.min(labelT[k], Math.max(FREEZING_POINT, T0[i])); W[at(k, i)] = hk * referenceS;
       }
       const scale = D[i] / cumulative;
       for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }

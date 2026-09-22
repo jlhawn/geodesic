@@ -30,7 +30,7 @@ const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, thermalExpansion: 2e-4, halineContraction: 7.6e-4, referenceT: 283.15, referenceS: 35, gravity: 9.81,
-  minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
+  minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, convectiveRate: 100 / 86400, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
   interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, diffusivity: 0.3, everySteps: 4,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -56,7 +56,7 @@ ${constLine('RHO0', o.density)} ${constLine('RHOCP', o.density * o.specificHeat)
 ${constLine('THERMAL_EXP', o.thermalExpansion)} ${constLine('HALINE_CONTRACT', o.halineContraction)}
 ${constLine('REF_T', o.referenceT)} ${constLine('REF_S', o.referenceS)} ${constLine('OGRAV', o.gravity)}
 ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)} ${constLine('DENSTOL', DENSITY_TOLERANCE)}
-${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)}
+${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
 ${constLine('FREEZE', FREEZING_POINT)} ${constLine('CDO', o.dragCoefficient)} ${constLine('GUSTO', o.gustiness)}
@@ -290,17 +290,20 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
 }`,
     oRescale: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
-  var sum = 0.0;
+  var sum = 0.0; var dQ = 0.0; var dW = 0.0;
   for (var k = 0; k < L; k++) {
     var hv = IN[hOff(k) + i];
     if (hv < EPSO) {
-      var t = LABEL_T[k]; var s = REF_S;
-      if (k == 0 && hv > 1e-9) { t = IN[qOff(k) + i] / hv; s = IN[wOff(k) + i] / hv; }
+      let held = hv > 1e-9;
+      let tHeld = select(LABEL_T[k], IN[qOff(k) + i] / hv, held); let sHeld = select(REF_S, IN[wOff(k) + i] / hv, held);
+      let t = select(LABEL_T[k], tHeld, k == 0); let s = select(REF_S, sHeld, k == 0);
+      dQ += EPSO * clamp(tHeld - t, -30.0, 30.0); dW += EPSO * clamp(sHeld - s, -5.0, 5.0);
       hv = EPSO;
       IN[hOff(k) + i] = EPSO; IN[qOff(k) + i] = EPSO * t; IN[wOff(k) + i] = EPSO * s;
     }
     sum += hv;
   }
+  IN[qOff(0) + i] += dQ; IN[wOff(0) + i] += dW;
   let scale = (OD[O_BATH + i] + OD[B_BAVG + i]) / sum;
   for (var k = 0; k < L; k++) { IN[hOff(k) + i] *= scale; IN[qOff(k) + i] *= scale; IN[wOff(k) + i] *= scale; }
   OD[O_ETA + i] = OD[B_BAVG + i];
@@ -341,16 +344,18 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   let tau = length(wv);
   let ustar3 = pow(tau / RHO0, 1.5); let stir = STIRRING * exp(-IN[hOff(0) + i] / STIRDEPTH);
   var rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i], IN[wOff(0) + i] / IN[hOff(0) + i]);
+  var budget = CONVRATE * P[6];
   for (var k = 1; k < L; k++) {
-    if (IN[hOff(0) + i] >= MAXMIXED) { break; }
+    if (IN[hOff(0) + i] >= MAXMIXED || budget <= 0.0) { break; }
     if (IN[hOff(k) + i] <= EPSO || RHO[k] > rm) { continue; }
-    moveLayer(i, k, 0, min(IN[hOff(k) + i] - EPSO, MAXMIXED - IN[hOff(0) + i]));
+    let take = min(min(IN[hOff(k) + i] - EPSO, MAXMIXED - IN[hOff(0) + i]), budget);
+    moveLayer(i, k, 0, take); budget -= take;
     rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i], IN[wOff(0) + i] / IN[hOff(0) + i]);
   }
   var below = -1;
   for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { below = k; break; } }
   if (below > 0 && IN[hOff(0) + i] < MAXMIXED) {
-    let db = max(1e-4, OGRAV * (RHO[below] - rm) / RHO0);
+    let db = max(1e-3, OGRAV * (RHO[below] - rm) / RHO0);
     let entrain = min(2.0 * stir * ustar3 / (IN[hOff(0) + i] * db) * P[6], IN[hOff(below) + i] - EPSO);
     if (entrain > 0.0) { moveLayer(i, below, 0, entrain); rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i], IN[wOff(0) + i] / IN[hOff(0) + i]); }
   }
@@ -754,7 +759,7 @@ export function createLayeredOcean(core, options = {}) {
         }
         hk = Math.max(EPS, hk);
         cumulative += hk;
-        h[at(k, i)] = hk; Q[at(k, i)] = hk * labelT[k]; W[at(k, i)] = hk * o.referenceS;
+        h[at(k, i)] = hk; Q[at(k, i)] = hk * Math.min(labelT[k], Math.max(FREEZING_POINT, T0[i])); W[at(k, i)] = hk * o.referenceS;
       }
       const scale = D[i] / cumulative;
       for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }

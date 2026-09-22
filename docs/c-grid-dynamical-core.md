@@ -1521,10 +1521,14 @@ run so far).
 
 **Mixed layer.** After each step, per column: the mixed layer swallows
 any interior layer lighter than itself (convection), taking only as much
-as keeps it within 200 m; entrains the first layer below at the
+as keeps it within 200 m and at most 100 m a day — unlimited swallowing
+with the neutral return below mixed 150 m of 272.4 K deep water into the
+polar mixed layer every 22-minute step, a heat supply no winter cooling
+could beat, and the sea ice was gone by day 90; entrains the first layer below at the
 Kraus–Turner wind-stirring rate w = 2 m u*³/(h₀ Δb) with
 m = 0.8 exp(−h₀/100 m), so the wind's stirring fades below the depth it
-can reach, and Δb the buoyancy step to that layer, at least 10⁻⁴ m/s²;
+can reach, and Δb the buoyancy step to that layer, at least 10⁻³ m/s²
+(a 0.1 kg/m³ step; the KT rate is unbounded as Δb → 0);
 detrains any depth beyond 200 m and, when it is at least as dense as
 the water beneath it (within 0.005 kg/m³, convectively neutral),
 everything below the 50 m floor (also the minimum thickness) — the swallow and the return each step
@@ -1563,6 +1567,11 @@ point is still the fixed 271.35 K of M9.
 
 **Start.** From rest: the mixed layer 60 m deep with the atmosphere's
 initial surface temperature and a salinity 34.5 + 1.5 exp(−((|φ|−25°)/15°)²);
+each interior layer starts at its label temperature or the surface
+temperature (at least the freezing point) where that is colder, so the
+polar column is near freezing throughout and convection does not bring
+up the 272.4 K label water (the real Southern Ocean keeps its warm deep
+water under a halocline the model does not yet have);
 interior layer bases at 250, 600, 1200 and 2500 m in the subtropics,
 scaled by 0.7 + 0.6 cos²φ toward the poles; every layer lighter than the
 local surface water outcropped; the deepest layer filling to the bottom;
