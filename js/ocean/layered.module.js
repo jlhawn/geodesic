@@ -24,7 +24,9 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  *
  * The mixed layer exchanges mass with the interior after each step: it
  * swallows any interior layer lighter than itself (convection, within
- * `maximumMixedDepth`), entrains the layer below at the Kraus–Turner
+ * `maximumMixedDepth`, and keeps at most that depth: the excess returns
+ * to the interior each step, so the column keeps mixing while the
+ * mixed layer itself stays a surface layer), entrains the layer below at the Kraus–Turner
  * wind-stirring rate, the stirring fading with depth over
  * `stirringDepth`, and detrains when it is deeper than the maximum,
  * when it is as dense as the water beneath it (convectively neutral),
@@ -75,7 +77,7 @@ export function createOcean(mesh, {
   densities = LAYER_DENSITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2)),
   density = 1025, specificHeat = 3985, thermalExpansion = 2e-4, halineContraction = 7.6e-4, referenceT = 283.15, referenceS = 35, gravity = 9.81,
-  minimumThickness = 20, shallowestMixedDepth = 50, maximumMixedDepth = 1000, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
+  minimumThickness = 20, shallowestMixedDepth = 50, maximumMixedDepth = 200, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 2e-4, closureHours = 12, diffusivity = 0.3, everySteps = 4,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {

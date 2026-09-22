@@ -1517,15 +1517,17 @@ run so far).
 
 **Mixed layer.** After each step, per column: the mixed layer swallows
 any interior layer lighter than itself (convection), taking only as much
-as keeps it within 1000 m; entrains the first layer below at the
+as keeps it within 200 m; entrains the first layer below at the
 Kraus–Turner wind-stirring rate w = 2 m u*³/(h₀ Δb) with
 m = 0.8 exp(−h₀/100 m), so the wind's stirring fades below the depth it
 can reach, and Δb the buoyancy step to that layer, at least 10⁻⁴ m/s²;
-detrains any depth beyond 1000 m and, when it is at least as dense as
+detrains any depth beyond 200 m and, when it is at least as dense as
 the water beneath it (within 0.005 kg/m³, convectively neutral),
 everything below the 50 m floor — the swallow and the return each step
 still mix the column, but a kilometre-deep mixed layer beside 40 m ones
-opened a 5.7 m sea-level hole within an hour off Cape Farewell;
+opened a 5.7 m sea-level hole within an hour off Cape Farewell, and
+500–900 m ones that had exhausted the 1027.2 layer and sat, stably, on
+the 1027.7 layer ran the Drake Passage at 5 m/s;
 detrained water is split between the two interior layers whose
 densities bracket its own, in the proportion that conserves the
 column's mass (Bleck's rule), because putting 900 m of 1027.24 water
