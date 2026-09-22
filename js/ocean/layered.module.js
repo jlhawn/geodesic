@@ -70,7 +70,7 @@ export function createOcean(mesh, {
   const h = new Float64Array(L * C), u = new Float64Array(L * E), Q = new Float64Array(L * C), W = new Float64Array(L * C);
   const state = [h, u, Q, W];
   const eta = new Float64Array(C);
-  const T0 = new Float64Array(C), S0 = new Float64Array(C), rhoMl = new Float64Array(C), previousT0 = new Float64Array(C), previousIce = new Float64Array(C);
+  const T0 = new Float64Array(C), S0 = new Float64Array(C), rhoMl = new Float64Array(C), previousT0 = new Float64Array(C), surfaceIn = new Float64Array(C), previousIce = new Float64Array(C);
   const capacity = new Float64Array(buffers && buffers.capacity ? buffers.capacity : new SharedArrayBuffer(8 * C)).fill(rhoCp * mixedDepth);
   const stress = new Float64Array(E), fresh = new Float64Array(C);
   const iced = new Uint8Array(C);
@@ -346,7 +346,7 @@ export function createOcean(mesh, {
         const entrain = Math.min(2 * stirring * ustar3 / (h[i] * db) * dt, h[at(below, i)] - EPS);
         if (entrain > 0) move(i, below, 0, entrain);
       }
-      const buoyancy = g * thermalExpansion * (previousT0[i] - Q[i] / h[i]) * h[i] / dt;
+      const buoyancy = g * thermalExpansion * (previousT0[i] - surfaceIn[i]) * h[i] / dt;
       if (buoyancy < -1e-9) {
         const monin = Math.max(shallowestMixedDepth, 2 * stirring * ustar3 / -buoyancy);
         if (h[i] > monin) {
@@ -371,8 +371,8 @@ export function createOcean(mesh, {
   function readSurface(surfaceT, ice) {
     for (let i = 0; i < C; i++) {
       iced[i] = ice[i] > 0 ? 1 : 0;
-      previousT0[i] = Q[i] / Math.max(EPS, h[i]);
       T0[i] = iced[i] ? FREEZING_POINT : surfaceT[i];
+      surfaceIn[i] = T0[i];
       Q[i] = h[i] * T0[i];
     }
   }
@@ -408,6 +408,7 @@ export function createOcean(mesh, {
         surfaceT[i] = T0[i];
         oceanFlux[i] = 0;
       }
+      previousT0[i] = T0[i];
     }
   }
 
@@ -426,12 +427,18 @@ export function createOcean(mesh, {
 
   /*
    * The climatological start: a mixed layer over interior layers whose
-   * bases sit at their subtropical depths, shallower toward the poles,
-   * with every layer lighter than the local surface water outcropped and
-   * the deepest layer filling down to the bottom.
+   * bases sit at their subtropical depths, shallower toward the poles
+   * and rising to the surface over one layer's density step as the
+   * surface water approaches each layer's density, with the deepest
+   * layer filling to the bottom.
+   * The free surface starts at its steric height, so the pressure below
+   * the thermocline is level and the ocean does not begin with a
+   * barotropic shock.
    */
   function initialize(surfaceT, ice) {
     u.fill(0); eta.fill(0); fresh.fill(0);
+    const rhoRef = rho[L - 1];
+    let area = 0, meanEta = 0;
     for (let i = 0; i < C; i++) {
       previousIce[i] = ice[i];
       iced[i] = ice[i] > 0 ? 1 : 0;
@@ -445,17 +452,33 @@ export function createOcean(mesh, {
       let cumulative = Math.min(mixedDepth, D[i]);
       h[i] = cumulative; Q[i] = cumulative * T0[i]; W[i] = cumulative * s0;
       for (let k = 1; k < L; k++) {
-        const base = k === L - 1 ? D[i] : Math.min(D[i], bottoms[k - 1] * stretch);
-        let hk = rho[k] <= rm && k < L - 1 ? 0 : Math.max(0, base - cumulative);
+        let hk;
         if (k === L - 1) hk = Math.max(0, D[i] - cumulative);
+        else {
+          const taper = Math.max(0, Math.min(1, (rho[k] - rm) / (rho[k + 1] - rho[k])));
+          hk = Math.max(0, Math.min(D[i], bottoms[k - 1] * stretch * taper) - cumulative);
+        }
         hk = Math.max(EPS, hk);
         cumulative += hk;
         h[at(k, i)] = hk; Q[at(k, i)] = hk * labelT[k]; W[at(k, i)] = hk * referenceS;
       }
       const scale = D[i] / cumulative;
       for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }
+      let steric = (rm - rhoRef) * h[i];
+      for (let k = 1; k < L; k++) steric += (rho[k] - rhoRef) * h[at(k, i)];
+      eta[i] = -steric / rho0;
+      area += areaCell[i]; meanEta += areaCell[i] * eta[i];
       previousT0[i] = T0[i];
       capacity[i] = rhoCp * Math.max(h[i], 1);
+    }
+    meanEta = area > 0 ? meanEta / area : 0;
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i]) { eta[i] = 0; continue; }
+      eta[i] -= meanEta;
+      let deepest = 0;
+      for (let k = L - 1; k >= 1; k--) if (h[at(k, i)] > THIN - eta[i]) { deepest = k; break; }
+      const n = at(deepest, i), t = Q[n] / h[n], sal = W[n] / h[n];
+      h[n] += eta[i]; Q[n] = h[n] * t; W[n] = h[n] * sal;
     }
     counter = 0;
   }
