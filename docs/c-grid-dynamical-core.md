@@ -1521,13 +1521,17 @@ as keeps it within 1000 m; entrains the first layer below at the
 Kraus–Turner wind-stirring rate w = 2 m u*³/(h₀ Δb) with
 m = 0.8 exp(−h₀/100 m), so the wind's stirring fades below the depth it
 can reach, and Δb the buoyancy step to that layer, at least 10⁻⁴ m/s²;
-hands to the first interior layer at least as dense as itself (or the
-deepest) any depth beyond 1000 m and, when it is denser than the water
-beneath it by more than 0.02 kg/m³, everything below its 20 m floor —
-brine-laden water of the density of a deep layer belongs to that layer,
-where it spreads under its own pressure, rather than in a mixed layer
-that would push the interior out from under itself and swell to the
-bottom in the column rescale;
+detrains any depth beyond 1000 m and, when it is at least as dense as
+the water beneath it (within 0.005 kg/m³, convectively neutral),
+everything below the 50 m floor — the swallow and the return each step
+still mix the column, but a kilometre-deep mixed layer beside 40 m ones
+opened a 5.7 m sea-level hole within an hour off Cape Farewell;
+detrained water is split between the two interior layers whose
+densities bracket its own, in the proportion that conserves the
+column's mass (Bleck's rule), because putting 900 m of 1027.24 water
+into the 1027.7 layer created a 0.5 m sea-level step and 2.5 m/s
+currents around it; water lighter than the first interior layer goes
+there whole (the tropical and summer mixed layers, a known slow drift);
 when the surface buoyancy flux implied by its temperature change since
 the last ocean step is stabilising (below −10⁻⁹ m²/s³) and it is deeper
 than the Monin–Obukhov depth 2 m u*³/(−B), it detrains the excess over a
@@ -1535,7 +1539,9 @@ day into the first interior layer at least as dense as itself that
 already holds water in the column, or the deepest such layer, or not at
 all on a shelf that has only mixed layer; and it is kept at least 20 m
 thick by entraining from below. The shallowest depth detrainment leaves
-is 20 m.
+is 50 m: with 20 m the tropical mixed layer sat on that floor (every
+warming step collapses the Monin–Obukhov depth) and the SST fell 2 K a
+month.
 
 **Salinity.** Evaporation minus rain is accumulated per cell over the
 atmosphere steps between ocean steps, and land runoff is spread over the

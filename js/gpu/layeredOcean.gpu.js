@@ -25,12 +25,12 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * layer, salt, surface write-back) are WGSL.
  */
 const WORKGROUP = 64;
-const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.02;
+const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005;
 
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, thermalExpansion: 2e-4, halineContraction: 7.6e-4, referenceT: 283.15, referenceS: 35, gravity: 9.81,
-  minimumThickness: 20, shallowestMixedDepth: 20, stirringDepth: 100, maximumMixedDepth: 1000, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
+  minimumThickness: 20, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 1000, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
   interfacialDrag: 2e-4, bottomDrag: 2e-4, closureHours: 12, diffusivity: 0.3, everySteps: 4,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -75,6 +75,16 @@ fn uOff(k: i32) -> i32 { return OU + k * E; }
 fn qOff(k: i32) -> i32 { return OQ + k * C; }
 fn wOff(k: i32) -> i32 { return OW + k * C; }
 fn eos(t: f32, s: f32) -> f32 { return RHO0 * (1.0 - THERMAL_EXP * (t - REF_T) + HALINE_CONTRACT * (s - REF_S)); }
+fn detrain(i: i32, amount: f32, rm: f32) {
+  if (amount <= 0.0) { return; }
+  var k = 0;
+  for (var j = 1; j < L; j++) { if (RHO[j] <= rm) { k = j; } }
+  if (k == 0) { moveLayer(i, 0, 1, amount); return; }
+  if (k == L - 1) { moveLayer(i, 0, k, amount); return; }
+  let f = (RHO[k + 1] - rm) / (RHO[k + 1] - RHO[k]);
+  moveLayer(i, 0, k, f * amount);
+  moveLayer(i, 0, k + 1, (1.0 - f) * amount);
+}
 fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   let ha = hOff(srcK) + i; let hb = hOff(dstK) + i;
   let qa = qOff(srcK) + i; let qb = qOff(dstK) + i;
@@ -350,20 +360,13 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   }
   below = -1;
   for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { below = k; break; } }
-  var dense = L - 1;
-  for (var k = 1; k < L; k++) { if (RHO[k] >= rm) { dense = k; break; } }
   var excess = max(0.0, IN[hOff(0) + i] - MAXMIXED);
-  if (below > 0 && rm > RHO[below] + DENSTOL) { excess = max(excess, IN[hOff(0) + i] - MINTHICK); }
-  if (excess > 0.0) { moveLayer(i, 0, dense, excess); }
+  if (below > 0 && rm >= RHO[below] - DENSTOL) { excess = max(excess, IN[hOff(0) + i] - SHALLOWMIXED); }
+  detrain(i, excess, rm);
   let buoyancy = OGRAV * THERMAL_EXP * (OD[O_PREVT0 + i] - OD[O_SURFACEIN + i]) * IN[hOff(0) + i] / P[6];
   if (buoyancy < -1e-9) {
     let monin = max(SHALLOWMIXED, 2.0 * stir * ustar3 / -buoyancy);
-    if (IN[hOff(0) + i] > monin) {
-      var destK = -1;
-      for (var k = 1; k < L; k++) { if (RHO[k] >= rm && IN[hOff(k) + i] > THINO) { destK = k; break; } }
-      if (destK < 0) { for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { destK = k; } } }
-      if (destK > 0) { moveLayer(i, 0, destK, (IN[hOff(0) + i] - monin) * min(1.0, P[6] / DETRAINT)); }
-    }
+    if (IN[hOff(0) + i] > monin) { detrain(i, (IN[hOff(0) + i] - monin) * min(1.0, P[6] / DETRAINT), rm); }
   }
   if (IN[hOff(0) + i] < MINTHICK) {
     for (var k = 1; k < L; k++) {

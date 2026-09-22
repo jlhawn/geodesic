@@ -26,11 +26,14 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * swallows any interior layer lighter than itself (convection, within
  * `maximumMixedDepth`), entrains the layer below at the Kraus–Turner
  * wind-stirring rate, the stirring fading with depth over
- * `stirringDepth`, hands water denser than the layer beneath it, and
- * any depth beyond the maximum, to the first interior layer at least as
- * dense as itself, and detrains into the layer of its own density when
- * surface warming makes it deeper than the Monin–Obukhov depth. Tracers
- * are carried by the flux with the donor cell's value. Surface freshwater (evaporation
+ * `stirringDepth`, and detrains when it is deeper than the maximum,
+ * when it is as dense as the water beneath it (convectively neutral),
+ * or when surface warming makes it deeper than the Monin–Obukhov depth.
+ * Detrained water is split between the two interior layers bracketing
+ * its density so the column's mass is unchanged: relabelling water
+ * into a single layer of another density put a fictitious pressure
+ * anomaly under it. Tracers are carried by the flux with the donor
+ * cell's value. Surface freshwater (evaporation
  * minus rain, runoff spread over the sea) and ice growth or melt act on
  * its salinity as virtual salt fluxes. As before, the mixed layer's
  * temperature is the sea surface temperature the atmosphere sees, its
@@ -39,7 +42,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  */
 export const LAYER_DENSITIES = [1024.0, 1025.5, 1026.5, 1027.2, 1027.7];
 export const LAYER_BOTTOMS = [250, 600, 1200, 2500];
-const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.02;
+const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005;
 
 /*
  * The model's bathymetry: the cell-mean ETOPO depth of every sea cell,
@@ -72,7 +75,7 @@ export function createOcean(mesh, {
   densities = LAYER_DENSITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2)),
   density = 1025, specificHeat = 3985, thermalExpansion = 2e-4, halineContraction = 7.6e-4, referenceT = 283.15, referenceS = 35, gravity = 9.81,
-  minimumThickness = 20, shallowestMixedDepth = 20, maximumMixedDepth = 1000, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
+  minimumThickness = 20, shallowestMixedDepth = 50, maximumMixedDepth = 1000, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 2e-4, closureHours = 12, diffusivity = 0.3, everySteps = 4,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {
@@ -362,6 +365,17 @@ export function createOcean(mesh, {
     h[b] += amount; Q[b] += dQ; W[b] += dW;
   }
 
+  function detrain(i, amount, rm) {
+    if (amount <= 0) return;
+    let k = 0;
+    for (let j = 1; j < L; j++) if (rho[j] <= rm) k = j;
+    if (k === 0) { move(i, 0, 1, amount); return; }
+    if (k === L - 1) { move(i, 0, k, amount); return; }
+    const f = (rho[k + 1] - rm) / (rho[k + 1] - rho[k]);
+    move(i, 0, k, f * amount);
+    move(i, 0, k + 1, (1 - f) * amount);
+  }
+
   function mixedLayer(dt) {
     cellVector(mesh, stress, tauCell);
     for (let i = 0; i < C; i++) {
@@ -383,22 +397,13 @@ export function createOcean(mesh, {
       }
       below = -1;
       for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) { below = k; break; }
-      {
-        let target = L - 1;
-        for (let k = 1; k < L; k++) if (rho[k] >= rm) { target = k; break; }
-        let excess = Math.max(0, h[i] - maximumMixedDepth);
-        if (below > 0 && rm > rho[below] + DENSITY_TOLERANCE) excess = Math.max(excess, h[i] - minimumThickness);
-        if (excess > 0) move(i, 0, target, excess);
-      }
+      let excess = Math.max(0, h[i] - maximumMixedDepth);
+      if (below > 0 && rm >= rho[below] - DENSITY_TOLERANCE) excess = Math.max(excess, h[i] - shallowestMixedDepth);
+      detrain(i, excess, rm);
       const buoyancy = g * thermalExpansion * (previousT0[i] - surfaceIn[i]) * h[i] / dt;
       if (buoyancy < -1e-9) {
         const monin = Math.max(shallowestMixedDepth, 2 * stir * ustar3 / -buoyancy);
-        if (h[i] > monin) {
-          let target = -1;
-          for (let k = 1; k < L; k++) if (rho[k] >= rm && h[at(k, i)] > THIN) { target = k; break; }
-          if (target < 0) for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) target = k;
-          if (target > 0) move(i, 0, target, (h[i] - monin) * Math.min(1, dt / detrainmentTime));
-        }
+        if (h[i] > monin) detrain(i, (h[i] - monin) * Math.min(1, dt / detrainmentTime), rm);
       }
       if (h[i] < minimumThickness) {
         for (let k = 1; k < L && h[i] < minimumThickness; k++) {
