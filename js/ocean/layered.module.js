@@ -437,8 +437,6 @@ export function createOcean(mesh, {
    */
   function initialize(surfaceT, ice) {
     u.fill(0); eta.fill(0); fresh.fill(0);
-    const rhoRef = rho[L - 1];
-    let area = 0, meanEta = 0;
     for (let i = 0; i < C; i++) {
       previousIce[i] = ice[i];
       iced[i] = ice[i] > 0 ? 1 : 0;
@@ -464,23 +462,65 @@ export function createOcean(mesh, {
       }
       const scale = D[i] / cumulative;
       for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }
-      let steric = (rm - rhoRef) * h[i];
-      for (let k = 1; k < L; k++) steric += (rho[k] - rhoRef) * h[at(k, i)];
-      eta[i] = -steric / rho0;
-      area += areaCell[i]; meanEta += areaCell[i] * eta[i];
       previousT0[i] = T0[i];
       capacity[i] = rhoCp * Math.max(h[i], 1);
     }
-    meanEta = area > 0 ? meanEta / area : 0;
+    surfaceDensity(h, Q, W);
+    stericSurface();
+    counter = 0;
+  }
+
+  /*
+   * The free surface that levels the pressure at `referenceDepth` in every
+   * column deep enough to reach it, so the deep ocean starts without a
+   * barotropic pressure gradient; shallower columns take the free surface
+   * of the deep water around them, found by relaxation, as a shelf's sea
+   * level follows the ocean beside it. The ocean-mean height is zero, and
+   * the height goes into the deepest layer that holds water.
+   */
+  function stericSurface(referenceDepth = 3500) {
+    const rhoRef = rho[L - 1];
+    const deep = new Uint8Array(C);
+    for (let i = 0; i < C; i++) {
+      eta[i] = 0;
+      if (!cellOcean[i] || D[i] < referenceDepth) continue;
+      deep[i] = 1;
+      let budget = referenceDepth, anomaly = 0;
+      for (let k = 0; k < L && budget > 0; k++) {
+        const part = Math.min(h[at(k, i)], budget);
+        anomaly += ((k === 0 ? rhoMl[i] : rho[k]) - rhoRef) * part;
+        budget -= part;
+      }
+      eta[i] = -anomaly / rho0;
+    }
+    const next = new Float64Array(C);
+    for (let sweep = 0; sweep < 2000; sweep++) {
+      let moved = 0;
+      for (let i = 0; i < C; i++) {
+        if (!cellOcean[i] || deep[i]) { next[i] = eta[i]; continue; }
+        let sum = 0, weight = 0;
+        for (let m = 0; m < nEdgesOnCell[i]; m++) {
+          const j = cellsOnCell[maxEdges * i + m];
+          if (!cellOcean[j]) continue;
+          sum += eta[j]; weight++;
+        }
+        next[i] = weight ? sum / weight : eta[i];
+        moved = Math.max(moved, Math.abs(next[i] - eta[i]));
+      }
+      eta.set(next);
+      if (moved < 1e-7) break;
+    }
+    let area = 0, mean = 0;
+    for (let i = 0; i < C; i++) if (cellOcean[i]) { area += areaCell[i]; mean += areaCell[i] * eta[i]; }
+    mean = area > 0 ? mean / area : 0;
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) { eta[i] = 0; continue; }
-      eta[i] -= meanEta;
+      eta[i] -= mean;
       let deepest = 0;
       for (let k = L - 1; k >= 1; k--) if (h[at(k, i)] > THIN - eta[i]) { deepest = k; break; }
       const n = at(deepest, i), t = Q[n] / h[n], sal = W[n] / h[n];
       h[n] += eta[i]; Q[n] = h[n] * t; W[n] = h[n] * sal;
     }
-    counter = 0;
   }
 
   function load(saved, surfaceT, ice) {
