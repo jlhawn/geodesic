@@ -25,7 +25,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * layer, salt, surface write-back) are WGSL.
  */
 const WORKGROUP = 64;
-const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5;
+const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.02;
 
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
@@ -55,7 +55,7 @@ ${labelLine}
 ${constLine('RHO0', o.density)} ${constLine('RHOCP', o.density * o.specificHeat)}
 ${constLine('THERMAL_EXP', o.thermalExpansion)} ${constLine('HALINE_CONTRACT', o.halineContraction)}
 ${constLine('REF_T', o.referenceT)} ${constLine('REF_S', o.referenceS)} ${constLine('OGRAV', o.gravity)}
-${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)}
+${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)} ${constLine('DENSTOL', DENSITY_TOLERANCE)}
 ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
@@ -135,7 +135,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
     divH += f;
     let hhj = max(EPSO, IN[hOff(k) + j]); let Tj = IN[qOff(k) + j] / hhj; let Sj = IN[wOff(k) + j] / hhj;
-    divQ += f * 0.5 * (Ti + Tj); divW += f * 0.5 * (Si + Sj);
+    divQ += f * select(Tj, Ti, f > 0.0); divW += f * select(Sj, Si, f > 0.0);
     if (k == 0 && OD[O_EMASK + e] > 0.5) { lapQ += MF[F_DV + e] * (Tj - Ti) / MF[F_DC + e]; lapW += MF[F_DV + e] * (Sj - Si) / MF[F_DC + e]; }
   }
   let area = MF[F_AREA + i];
@@ -346,8 +346,15 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   if (below > 0 && IN[hOff(0) + i] < MAXMIXED) {
     let db = max(1e-4, OGRAV * (RHO[below] - rm) / RHO0);
     let entrain = min(2.0 * stir * ustar3 / (IN[hOff(0) + i] * db) * P[6], IN[hOff(below) + i] - EPSO);
-    if (entrain > 0.0) { moveLayer(i, below, 0, entrain); }
+    if (entrain > 0.0) { moveLayer(i, below, 0, entrain); rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i], IN[wOff(0) + i] / IN[hOff(0) + i]); }
   }
+  below = -1;
+  for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { below = k; break; } }
+  var dense = L - 1;
+  for (var k = 1; k < L; k++) { if (RHO[k] >= rm) { dense = k; break; } }
+  var excess = max(0.0, IN[hOff(0) + i] - MAXMIXED);
+  if (below > 0 && rm > RHO[below] + DENSTOL) { excess = max(excess, IN[hOff(0) + i] - MINTHICK); }
+  if (excess > 0.0) { moveLayer(i, 0, dense, excess); }
   let buoyancy = OGRAV * THERMAL_EXP * (OD[O_PREVT0 + i] - OD[O_SURFACEIN + i]) * IN[hOff(0) + i] / P[6];
   if (buoyancy < -1e-9) {
     let monin = max(SHALLOWMIXED, 2.0 * stir * ustar3 / -buoyancy);

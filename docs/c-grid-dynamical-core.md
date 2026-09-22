@@ -1491,7 +1491,11 @@ is at most min(D_a, D_b) + η. The mixed layer's mass and tracer flux
 through an edge uses at most the thickness of the cell the water leaves,
 so a deep convective column beside a thin mixed layer cannot drain its
 neighbour below zero within a step (the centred thickness stays in the
-momentum equation). The edge potential vorticity is
+momentum equation). Heat and salt ride the mass flux with the donor
+cell's temperature and salinity: a centred edge value let a step that
+moves a large share of a thin cell's water leave the remainder at a
+temperature outside anything in the neighbourhood (370 K off Chile on
+day 34 of the first N=64 run). The edge potential vorticity is
 (ζ̄ + f̄)/max(h_e, 20 m) with the same edge thickness, which keeps the PV
 term bounded where a layer thins to nothing. A layer thinner than 5 m at
 an edge follows the velocity of the layer above, relaxing at the lesser
@@ -1517,6 +1521,13 @@ as keeps it within 1000 m; entrains the first layer below at the
 Kraus–Turner wind-stirring rate w = 2 m u*³/(h₀ Δb) with
 m = 0.8 exp(−h₀/100 m), so the wind's stirring fades below the depth it
 can reach, and Δb the buoyancy step to that layer, at least 10⁻⁴ m/s²;
+hands to the first interior layer at least as dense as itself (or the
+deepest) any depth beyond 1000 m and, when it is denser than the water
+beneath it by more than 0.02 kg/m³, everything below its 20 m floor —
+brine-laden water of the density of a deep layer belongs to that layer,
+where it spreads under its own pressure, rather than in a mixed layer
+that would push the interior out from under itself and swell to the
+bottom in the column rescale;
 when the surface buoyancy flux implied by its temperature change since
 the last ocean step is stabilising (below −10⁻⁹ m²/s³) and it is deeper
 than the Monin–Obukhov depth 2 m u*³/(−B), it detrains the excess over a

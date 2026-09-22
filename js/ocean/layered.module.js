@@ -23,11 +23,14 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * averaged transport.
  *
  * The mixed layer exchanges mass with the interior after each step: it
- * swallows any interior layer lighter than itself (convection), entrains
- * the layer below at the Kraus–Turner wind-stirring rate, the stirring
- * fading with depth over `stirringDepth`, and detrains
- * into the layer of its own density when surface warming makes it
- * deeper than the Monin–Obukhov depth. Surface freshwater (evaporation
+ * swallows any interior layer lighter than itself (convection, within
+ * `maximumMixedDepth`), entrains the layer below at the Kraus–Turner
+ * wind-stirring rate, the stirring fading with depth over
+ * `stirringDepth`, hands water denser than the layer beneath it, and
+ * any depth beyond the maximum, to the first interior layer at least as
+ * dense as itself, and detrains into the layer of its own density when
+ * surface warming makes it deeper than the Monin–Obukhov depth. Tracers
+ * are carried by the flux with the donor cell's value. Surface freshwater (evaporation
  * minus rain, runoff spread over the sea) and ice growth or melt act on
  * its salinity as virtual salt fluxes. As before, the mixed layer's
  * temperature is the sea surface temperature the atmosphere sees, its
@@ -36,7 +39,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  */
 export const LAYER_DENSITIES = [1024.0, 1025.5, 1026.5, 1027.2, 1027.7];
 export const LAYER_BOTTOMS = [250, 600, 1200, 2500];
-const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5;
+const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.02;
 
 /*
  * The model's bathymetry: the cell-mean ETOPO depth of every sea cell,
@@ -200,10 +203,10 @@ export function createOcean(mesh, {
         const hh = Math.max(EPS, hIn[oc + i]);
         T[i] = QIn[oc + i] / hh; S[i] = WIn[oc + i] / hh;
       }
-      for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * 0.5 * (T[cellsOnEdge[2 * e]] + T[cellsOnEdge[2 * e + 1]]);
+      for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * T[cellsOnEdge[2 * e + (flux[e] > 0 ? 0 : 1)]];
       divergence(mesh, tracerFlux, divScratch);
       for (let i = 0; i < C; i++) dQ[oc + i] = -divScratch[i];
-      for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * 0.5 * (S[cellsOnEdge[2 * e]] + S[cellsOnEdge[2 * e + 1]]);
+      for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * S[cellsOnEdge[2 * e + (flux[e] > 0 ? 0 : 1)]];
       divergence(mesh, tracerFlux, divScratch);
       for (let i = 0; i < C; i++) dW[oc + i] = -divScratch[i];
       if (k === 0 && diffusion > 0) {
@@ -376,7 +379,16 @@ export function createOcean(mesh, {
       if (below > 0 && h[i] < maximumMixedDepth) {
         const db = Math.max(1e-4, g * (rho[below] - rm) / rho0);
         const entrain = Math.min(2 * stir * ustar3 / (h[i] * db) * dt, h[at(below, i)] - EPS);
-        if (entrain > 0) move(i, below, 0, entrain);
+        if (entrain > 0) { move(i, below, 0, entrain); rm = eos(Q[i] / h[i], W[i] / h[i]); }
+      }
+      below = -1;
+      for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) { below = k; break; }
+      {
+        let target = L - 1;
+        for (let k = 1; k < L; k++) if (rho[k] >= rm) { target = k; break; }
+        let excess = Math.max(0, h[i] - maximumMixedDepth);
+        if (below > 0 && rm > rho[below] + DENSITY_TOLERANCE) excess = Math.max(excess, h[i] - minimumThickness);
+        if (excess > 0) move(i, 0, target, excess);
       }
       const buoyancy = g * thermalExpansion * (previousT0[i] - surfaceIn[i]) * h[i] / dt;
       if (buoyancy < -1e-9) {
