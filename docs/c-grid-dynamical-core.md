@@ -1560,6 +1560,16 @@ Coriolis in the sub-steps, and a token-layer relaxation faster than the
 step at N=8. Cost on one CPU thread: 93 ms per model step at N=16
 against about 30 before, the ocean now the larger part.
 
+**GPU.** `js/gpu/layeredOcean.gpu.js` runs the same step on WebGPU: the
+baroclinic RK4 over all layers, the barotropic sub-steps batched into one
+submission, the mixed-layer exchanges, salt and the surface write-back,
+with initialisation, loading and serialisation kept in double precision
+on the CPU side. One ocean step at N=64 takes 16 ms on the GPU against
+389 ms on a CPU thread, and `test/layeredGpu.test.mjs` holds the two
+engines to single precision over one and twenty steps. Its freshwater
+kernel takes the rain accumulator's increment since its last call, so
+the precipitation diagnostic keeps working.
+
 **Open.** Runoff is not yet spread on the GPU; the equation of state is
 linear; the freezing point ignores salinity; the Kraus–Turner constants,
 bottom drag and the 50 m minimum depth are first guesses; the barotropic
@@ -1589,6 +1599,7 @@ js/
   ocean/
     reducedGravity.module.js M13: two-layer reduced-gravity ocean (kept for reference)
     layered.module.js       M18: six-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
+    (js/gpu/layeredOcean.gpu.js is its WebGPU port)
   gpu/
     device.module.js         M15: WebGPU device (Dawn in Node, navigator.gpu in the page) and buffer helpers
     core.gpu.js              M15: layouts, dynamics kernels, RK4 and closures, full-step orchestration

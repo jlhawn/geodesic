@@ -59,28 +59,3 @@ test('twelve full GPU steps track the CPU model and its energy budget', { skip: 
   assert.ok(Math.abs(d.outgoingLongwave - olr) < 0.5, `OLR ${d.outgoingLongwave} vs ${olr}`);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
 });
-
-test('eight GPU steps with the ocean track the CPU model', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { createGpuOcean } = await import('../js/gpu/ocean.gpu.js');
-  const model = createModel(new Grid(6));
-  const init = initializeState(model, {});
-  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
-  model.ocean.initialize(model.state[3], model.state[6]);
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model) });
-  gpu.upload(model.state);
-  const ocean = createGpuOcean(gpu, {});
-  ocean.initialize(model.state[3], model.state[6]);
-  gpu.hooks.beforePhysics = (dt) => ocean.step(dt);
-  for (let n = 0; n < 8; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }
-  const state = await gpu.download(), o = await ocean.download();
-  const ts = stats(model.state[3], state[3]), ice = stats(model.state[6], state[6]), theta = stats(model.state[1], state[1]);
-  const h1 = stats(model.ocean.h1, o.h1), u1 = stats(model.ocean.u1, o.u1), t2 = stats(model.ocean.T2, o.T2);
-  let uMax = 0; for (const x of model.ocean.u1) uMax = Math.max(uMax, Math.abs(x));
-  console.log(`eight steps with the ocean at N=6: Ts max ${ts.maxDiff.toExponential(1)} K, ice max ${ice.maxDiff.toExponential(1)} m, θ rms ${theta.rmsRel.toExponential(1)}, h1 max ${h1.maxDiff.toExponential(1)} m, u1 max ${u1.maxDiff.toExponential(1)} of ${uMax.toExponential(1)} m/s, T2 max ${t2.maxDiff.toExponential(1)} K`);
-  assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff}`);
-  assert.ok(ice.maxDiff < 1e-3, `ice max ${ice.maxDiff}`);
-  assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
-  assert.ok(h1.maxDiff < 1e-3, `h1 max ${h1.maxDiff}`);
-  assert.ok(u1.maxDiff < 1e-3 * Math.max(uMax, 1e-3) + 1e-6, `u1 max ${u1.maxDiff}`);
-  assert.ok(t2.maxDiff < 1e-3, `T2 max ${t2.maxDiff}`);
-});
