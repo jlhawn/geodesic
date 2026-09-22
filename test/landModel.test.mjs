@@ -38,11 +38,11 @@ test('with a continent the ocean flows only through ocean edges, land carries no
   const imbalance = land.water() - waterBefore - (rainOnLand - evaporationFromLand);
   assert.ok(Math.abs(imbalance) < 1e-9 * waterBefore, `land water balance off by ${(imbalance / waterBefore).toExponential(2)} of the store (rain ${(rainOnLand / waterBefore).toExponential(2)}, evaporation ${(evaporationFromLand / waterBefore).toExponential(2)})`);
   for (let i = 0; i < mesh.nCells; i++) if (geography.land[i]) assert.equal(model.state[6][i], 0);
-  for (let e = 0; e < mesh.nEdges; e++) if (!geography.edgeOcean[e]) { assert.equal(ocean.u1[e], 0); assert.equal(ocean.u2[e], 0); }
+  for (let k = 0; k < ocean.layers; k++) for (let e = 0; e < mesh.nEdges; e++) if (!geography.edgeOcean[e]) assert.equal(ocean.u[k * mesh.nEdges + e], 0);
   let moved = 0;
-  for (let e = 0; e < mesh.nEdges; e++) if (geography.edgeOcean[e] && Math.abs(ocean.u1[e]) > 0) moved++;
+  for (let e = 0; e < mesh.nEdges; e++) if (geography.edgeOcean[e] && Math.abs(ocean.u[e]) > 0) moved++;
   assert.ok(moved > 0, 'the ocean moves somewhere');
-  for (let i = 0; i < mesh.nCells; i++) if (geography.land[i]) assert.equal(ocean.h1[i], 50);
+  for (let i = 0; i < mesh.nCells; i++) if (geography.land[i]) assert.equal(ocean.h[i], 0);
 });
 
 test('the parallel engine reproduces the serial model over a continent', async () => {
