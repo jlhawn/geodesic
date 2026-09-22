@@ -30,11 +30,13 @@ const OVERLAYS = {
   elevation: { label: 'Elevation', unit: 'm', kind: 'diverging', field: 'elevation', scale: 1, range: () => [-4000, 4000] },
   sst: { label: 'Sea surface temperature', unit: 'K', kind: 'sequential', field: 'sst', scale: 1, range: () => [270, 305] },
   current: { label: 'Current speed', unit: 'm/s', kind: 'sequential', field: 'current', scale: 1, range: () => [0, 1] },
-  layer: { label: 'Upper layer depth', unit: 'm', kind: 'sequential', field: 'layerDepth', scale: 1, range: () => [10, 150] },
-  thermocline: { label: 'Thermocline temperature', unit: 'K', kind: 'sequential', field: 'thermocline', scale: 1, range: () => [275, 290] },
+  layer: { label: 'Mixed layer depth', unit: 'm', kind: 'sequential', field: 'layerDepth', scale: 1, range: () => [10, 300] },
+  thermocline: { label: 'Thermocline depth', unit: 'm', kind: 'sequential', field: 'thermocline', scale: 1, range: () => [0, 1200] },
+  sss: { label: 'Sea surface salinity', unit: 'psu', kind: 'sequential', field: 'sss', scale: 1, range: () => [32, 38] },
+  ssh: { label: 'Sea surface height', unit: 'm', kind: 'sequential', field: 'ssh', scale: 1, range: () => [-1.5, 1.5] },
   none: { label: 'None' },
 };
-const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Precipitable water', tcw: 'Cloud water', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Sunlight reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Sea-level pressure', ps: 'Surface pressure', cloudcover: 'Cloud cover', soil: 'Soil water', snow: 'Snow', elevation: 'Elevation', sst: 'Sea surface temperature', current: 'Current speed', layer: 'Upper ocean layer depth', thermocline: 'Thermocline temperature' };
+const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Precipitable water', tcw: 'Cloud water', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Sunlight reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Sea-level pressure', ps: 'Surface pressure', cloudcover: 'Cloud cover', soil: 'Soil water', snow: 'Snow', elevation: 'Elevation', sst: 'Sea surface temperature', current: 'Current speed', layer: 'Mixed layer depth', thermocline: 'Thermocline depth', sss: 'Sea surface salinity', ssh: 'Sea surface height' };
 
 /*
  * The cloud view: open water is ocean blue, ice whitens with thickness,
@@ -169,7 +171,7 @@ async function builtinSnapshots(fallback = null) {
 }
 
 const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'none']);
-const OCEAN_OVERLAYS = new Set(['sst', 'current', 'layer', 'thermocline']);
+const OCEAN_OVERLAYS = new Set(['sst', 'current', 'layer', 'thermocline', 'sss', 'ssh']);
 const CURRENT_REFERENCE = 0.2;
 
 const VIEW_NOTES = [
@@ -183,7 +185,9 @@ const VIEW_NOTES = [
   ['Cloud cover', 'Cloud as white over grey with the opacity the Satellite view uses, from the column\'s cloud water.'],
   ['Sea surface temperature', 'The temperature of the ocean\'s wind-driven upper layer, the freezing point under ice; grey over land.'],
   ['Current speed', 'The upper layer\'s current, up to a metre a second in the boundary currents. With any ocean view selected, Particles and Vectors trace the current instead of the wind.'],
-  ['Upper layer depth', 'The thickness of the wind-driven layer: deep where the wind piles water into the subtropical gyres, thin where it upwells along the equator and eastern coasts.'],
+  ['Mixed layer depth', 'The thickness of the surface mixed layer: deep where winter cooling and wind stirring reach down, shallow under summer warming and along upwelling coasts.'],
+  ['Thermocline depth', 'The depth of the base of the second interior layer, deep in the subtropical gyres where the wind piles warm water up and shallow at the equator and toward the poles.'],
+  ['Sea surface height', 'The free surface: high over the subtropical gyres and low around the poles, with the currents flowing along its contours.'],
   ['Thermocline temperature', 'The layer below the upper one, which entrains into it where the upper layer thins.'],
   ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Where a pressure level lies below the ground, wind, temperature and humidity show the lowest layer of that column, and only the height is extrapolated hydrostatically so its contours stay a pressure field.'],
   ['Soil water', 'The land bucket: up to 150 kg/m² of soil water; evaporation slows as it dries and rain beyond its capacity runs off.'],
@@ -442,7 +446,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       ['Time step', ready ? `<b>${ready.dt} s</b> per step.` : ''],
       ['Engine', latest.engine === 'gpu' ? '<b>GPU</b> — every kernel runs on the graphics processor through WebGPU in single precision.' : `<b>${latest.workers > 1 ? `${latest.workers} worker threads` : 'one thread'}</b> — the CPU engine in double precision.`],
     ];
-    if (d.oceanUpperDepth !== undefined) rows.push(['Ocean', `upper layer <b>${d.oceanUpperDepth.toFixed(0)} m</b> deep on average, currents to <b>${d.oceanSpeed.toFixed(2)} m/s</b>, thermocline <b>${d.oceanThermoclineT.toFixed(1)} K</b>.`]);
+    if (d.oceanUpperDepth !== undefined) rows.push(['Ocean', `mixed layer <b>${d.oceanUpperDepth.toFixed(0)} m</b> deep on average, currents to <b>${d.oceanSpeed.toFixed(2)} m/s</b>${d.oceanTransport !== undefined ? `, the strongest transport <b>${d.oceanTransport.toFixed(0)} Sv</b>` : ''}${d.oceanThermoclineDepth !== undefined ? `, thermocline <b>${d.oceanThermoclineDepth.toFixed(0)} m</b>` : ''}.`]);
     if (d.landFraction !== undefined) rows.push(['Land', `<b>${(100 * d.landFraction).toFixed(0)}%</b> of the area${ready && ready.terrain ? ' with terrain' : ', flat'}; surface <b>${d.landMeanT.toFixed(1)} K</b>, soil water <b>${d.soilWater.toFixed(0)} kg/m²</b>, snow on <b>${(100 * d.snowFraction).toFixed(0)}%</b> of it.`]);
     document.getElementById('modelDetails').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   }

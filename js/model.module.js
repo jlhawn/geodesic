@@ -5,7 +5,7 @@ import { createRadiation } from './physics/radiation.module.js';
 import { createSurface } from './physics/surface.module.js';
 import { createMoistPhysics } from './physics/moist.module.js';
 import { createSeaIce } from './physics/ice.module.js';
-import { createOcean } from './ocean/reducedGravity.module.js';
+import { createOcean } from './ocean/layered.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 import { createGeography, surfaceGeopotential } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
@@ -72,6 +72,7 @@ export function createModel(gridOrMesh, {
   });
   const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), stressScratch = new Float64Array(E);
+  let lastRunoff = 0;
 
   const lengths = stateLengths({ K, C, E });
   const stateArray = (name) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * lengths[name]));
@@ -88,7 +89,12 @@ export function createModel(gridOrMesh, {
     },
     ocean(dt) {
       if (!physics) return;
-      if (ocean) ocean.advance(state[3], state[6], seaIce.oceanFlux, () => surface.stress(state, stressScratch), dt);
+      if (ocean) {
+        const runoff = land ? land.budget.runoff : 0;
+        ocean.accumulate(radiation.evaporation, moist ? moistPhysics.rain : null, dt, runoff - lastRunoff);
+        lastRunoff = runoff;
+        ocean.advance(state[3], state[6], seaIce.oceanFlux, () => surface.stress(state, stressScratch), dt);
+      }
       else seaIce.prepare(state[3], state[6]);
     },
     physics(iFrom, iTo, dt, sums) {
@@ -139,7 +145,7 @@ export function createModel(gridOrMesh, {
     shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
-  model.oceanFields = () => (ocean ? { h1: ocean.h1, T1: ocean.T1, T2: ocean.T2, u1: ocean.u1 } : null);
+  model.oceanFields = () => (ocean ? ocean.fields() : null);
 
   model.step = function step(dt) {
     rk4 ??= createRK4Arrays(STATE_NAMES.map((name) => lengths[name]));
