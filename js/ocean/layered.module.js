@@ -31,11 +31,12 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * `stirringDepth`, and detrains when it is deeper than the maximum,
  * when it is as dense as the water beneath it (convectively neutral),
  * or when surface warming makes it deeper than the Monin–Obukhov depth.
- * Detrained water is split between the two interior layers bracketing
- * its density so the column's mass is unchanged: relabelling water
- * into a single layer of another density put a fictitious pressure
- * anomaly under it. Tracers are carried by the flux with the donor
- * cell's value. Surface freshwater (evaporation
+ * Detrained water goes to the interior layer whose density is nearest
+ * its own, so water swallowed from a layer returns to that layer; a
+ * mass-conserving split between the two bracketing layers instead
+ * ratcheted a fraction of every swallow-and-return cycle into the
+ * denser class. Tracers are carried by the flux with the donor cell's
+ * value. Surface freshwater (evaporation
  * minus rain, runoff spread over the sea) and ice growth or melt act on
  * its salinity as virtual salt fluxes. As before, the mixed layer's
  * temperature is the sea surface temperature the atmosphere sees, its
@@ -369,13 +370,9 @@ export function createOcean(mesh, {
 
   function detrain(i, amount, rm) {
     if (amount <= 0) return;
-    let k = 0;
-    for (let j = 1; j < L; j++) if (rho[j] <= rm) k = j;
-    if (k === 0) { move(i, 0, 1, amount); return; }
-    if (k === L - 1) { move(i, 0, k, amount); return; }
-    const f = (rho[k + 1] - rm) / (rho[k + 1] - rho[k]);
-    move(i, 0, k, f * amount);
-    move(i, 0, k + 1, (1 - f) * amount);
+    let k = 1;
+    for (let j = 2; j < L; j++) if (Math.abs(rho[j] - rm) < Math.abs(rho[k] - rm)) k = j;
+    move(i, 0, k, amount);
   }
 
   function mixedLayer(dt) {

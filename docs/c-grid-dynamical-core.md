@@ -1528,12 +1528,18 @@ still mix the column, but a kilometre-deep mixed layer beside 40 m ones
 opened a 5.7 m sea-level hole within an hour off Cape Farewell, and
 500–900 m ones that had exhausted the 1027.2 layer and sat, stably, on
 the 1027.7 layer ran the Drake Passage at 5 m/s;
-detrained water is split between the two interior layers whose
-densities bracket its own, in the proportion that conserves the
-column's mass (Bleck's rule), because putting 900 m of 1027.24 water
-into the 1027.7 layer created a 0.5 m sea-level step and 2.5 m/s
-currents around it; water lighter than the first interior layer goes
-there whole (the tropical and summer mixed layers, a known slow drift);
+detrained water goes to the interior layer whose density is nearest
+its own, so water swallowed from a layer returns to that layer (the
+first rule, the first layer at least as dense, put 900 m of 1027.24
+water into the 1027.7 layer and made a 0.5 m sea-level step with
+2.5 m/s currents around it; Bleck's mass-conserving split between the
+two bracketing layers had no step at the bottom but ratcheted a tenth
+of a metre of every swallow-and-return cycle into the denser class,
+and in 90 days 2400 m of the 1027.2 layer had become 1027.7 water in
+some Southern Ocean columns and not their neighbours, with 5 m/s
+mid-depth flows between); water lighter than the first interior layer
+goes there whole (the tropical and summer mixed layers, a known slow
+drift);
 when the surface buoyancy flux implied by its temperature change since
 the last ocean step is stabilising (below −10⁻⁹ m²/s³) and it is deeper
 than the Monin–Obukhov depth 2 m u*³/(−B), it detrains the excess over a

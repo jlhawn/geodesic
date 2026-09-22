@@ -77,13 +77,9 @@ fn wOff(k: i32) -> i32 { return OW + k * C; }
 fn eos(t: f32, s: f32) -> f32 { return RHO0 * (1.0 - THERMAL_EXP * (t - REF_T) + HALINE_CONTRACT * (s - REF_S)); }
 fn detrain(i: i32, amount: f32, rm: f32) {
   if (amount <= 0.0) { return; }
-  var k = 0;
-  for (var j = 1; j < L; j++) { if (RHO[j] <= rm) { k = j; } }
-  if (k == 0) { moveLayer(i, 0, 1, amount); return; }
-  if (k == L - 1) { moveLayer(i, 0, k, amount); return; }
-  let f = (RHO[k + 1] - rm) / (RHO[k + 1] - RHO[k]);
-  moveLayer(i, 0, k, f * amount);
-  moveLayer(i, 0, k + 1, (1.0 - f) * amount);
+  var k = 1;
+  for (var j = 2; j < L; j++) { if (abs(RHO[j] - rm) < abs(RHO[k] - rm)) { k = j; } }
+  moveLayer(i, 0, k, amount);
 }
 fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   let ha = hOff(srcK) + i; let hb = hOff(dstK) + i;
