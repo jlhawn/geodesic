@@ -9,7 +9,7 @@ finished physics rather than a moving target.
 |---|-----------|------------------|------------|
 | M16 (done) | Land surface | Real continents as a land mask with soil water, snow, land albedo and roughness; the ocean stops at coasts; coastlines and land colours in the page | — |
 | M17 (done) | Terrain | Surface elevation in the dynamical core on both engines; sea-level pressure reduction; pressure levels that meet the ground | M16 |
-| M18 | Ocean salinity | Prognostic salinity in both ocean layers with a linear equation of state; freshwater from rain, evaporation, runoff and sea ice; density-driven convection | M16 |
+| M18 | Layered ocean with salinity — done | A six-layer hybrid isopycnal ocean on the real bathymetry with a split free surface, a bulk mixed layer, prognostic salinity with a linear equation of state, freshwater from rain, evaporation, runoff and sea ice, and convection | M16 |
 | M19 | N=128 performance | One simulated day per minute at N=128 on the GPU engine | M16–M18 |
 
 Estimates are deliberately relative: M17 is the hardest, comparable to

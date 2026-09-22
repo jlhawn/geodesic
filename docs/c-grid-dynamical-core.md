@@ -1450,6 +1450,121 @@ terrain regridded to the target mesh, so a flat state loads onto
 mountains without a shock; saved states and snapshots carry a
 `terrain` flag. `?terrain=off` keeps flat continents.
 
+### M18 — A layered ocean (`js/ocean/layered.module.js`) — done (spinning up)
+
+The two-layer ocean of M13 could hold an Ekman layer and a gyre but had
+nothing below to return the flow, so it grew no western boundary current
+and its upper layer deepened ten metres a year. It is replaced by a
+six-layer hybrid isopycnal ocean in the MICOM design: a bulk mixed layer
+with its own temperature and salinity over interior layers of fixed
+reference density σ = 24.0, 25.5, 26.5, 27.2 and 27.7 (`LAYER_DENSITIES`,
+as ρ in kg/m³), on the real bathymetry `D` (the cell-mean ETOPO depth,
+at least 50 m, zero on land). Every layer is a TRiSK shallow-water layer
+in the vector-invariant form carrying thickness, edge velocity, heat h·T
+and salt h·S; the linear equation of state is
+ρ = ρ₀[1 − α(T − 283.15) + β(S − 35)] with α = 2×10⁻⁴ K⁻¹ and
+β = 7.6×10⁻⁴ psu⁻¹.
+
+**Pressure force.** The pressure in interior layer k at height z is
+P_{k−1} + ρ_k g (z_{k−1} − z), with P_{k−1} the pressure at the top of
+the layer and z_{k−1} = η − H_{k−1} that top; its horizontal gradient is
+the gradient of the cell potential
+
+    Φ_k = g η + (g/ρ₀) [ (ρ_ml − ρ_k) h₀ + Σ_{j=1}^{k−1} (ρ_j − ρ_k) h_j ],
+
+exact on the mesh whatever the bathymetry, and telescoping through a
+layer of token thickness so the layers it separates feel the density
+step across it. In a column where layer k lies below the bottom the
+potential is the bottom pressure minus ρ_k g D, which is the Montgomery
+potential MICOM assigns to a massless layer. The mixed layer's own
+density varies, so its force is g∇η plus the depth mean of its density
+gradient, −(g/ρ₀)(h₀/2)∇ρ_ml, applied at the edges.
+
+**Edge thicknesses.** The mixed layer, present everywhere, takes the
+centred thickness at an edge; an interior layer takes the smaller of the
+two cells', so it never flows into a cell where it has no water, whether
+it has outcropped there or the bottom lies above it (the fictitious
+potential of a layer below the bottom would otherwise fling water off
+every shelf). A column flows through an edge only within the water that
+exists on both sides: the thicknesses at an edge are scaled so their sum
+is at most min(D_a, D_b) + η. The edge potential vorticity is
+(ζ̄ + f̄)/max(h_e, 20 m) with the same edge thickness, which keeps the PV
+term bounded where a layer thins to nothing. A layer thinner than 5 m at
+an edge follows the velocity of the layer above, relaxing at the lesser
+of 1/hour and 1/step.
+
+**Free surface.** η = Σ h − D moves at √(gD) ≈ 240 m/s, far too fast for
+the ocean's step (four atmosphere steps, 1350 s at N=64), so the depth
+mean is split off. Each ocean step: η is frozen at its starting value
+through one RK4 step of the layers; the barotropic transport U = Σ h_e u
+and η take RK4 sub-steps forced by the depth integral of the slow
+tendencies (every layer tendency with its g∇η removed, minus the
+Coriolis force on U), with U ← −g H_e ∇η + f×U + slow and η ← −∇·U,
+H_e the same edge thickness sum, at a wave Courant number of 0.35 on the
+shortest edge over the deepest cell (eleven sub-steps at N=64); the
+layers are then rescaled to the sub-step-averaged η and shifted so
+their transport equals the averaged U. Velocities are finally clamped
+to 5 m/s and the count of clamps reported (`oceanLimited`, zero in every
+run so far).
+
+**Mixed layer.** After each step, per column: the mixed layer swallows
+any interior layer lighter than itself (convection, up to 1000 m);
+entrains the first layer below at the Kraus–Turner wind-stirring rate
+w = 2 m u*³/(h₀ Δb) with m = 0.8 and Δb the buoyancy step to that layer;
+when the surface buoyancy flux implied by its temperature change since
+the last ocean step is stabilising (below −10⁻⁹ m²/s³) and it is deeper
+than the Monin–Obukhov depth 2 m u*³/(−B), it detrains the excess over a
+day into the first interior layer at least as dense as itself that
+already holds water in the column, or the deepest such layer, or not at
+all on a shelf that has only mixed layer; and it is kept at least 10 m
+thick by entraining from below. The shallowest depth detrainment leaves
+is 20 m.
+
+**Salinity.** Evaporation minus rain is accumulated per cell over the
+atmosphere steps between ocean steps, and land runoff is spread over the
+sea, all applied as virtual salt fluxes to the mixed layer; ice growth
+rejects brine and melt freshens with an ice salinity of 5. The freezing
+point is still the fixed 271.35 K of M9.
+
+**Start.** From rest: the mixed layer 60 m deep with the atmosphere's
+initial surface temperature and a salinity 34.5 + 1.5 exp(−((|φ|−25°)/15°)²);
+interior layer bases at 250, 600, 1200 and 2500 m in the subtropics,
+scaled by 0.7 + 0.6 cos²φ toward the poles; every layer lighter than the
+local surface water outcropped; the deepest layer filling to the bottom;
+interior layers labelled with the temperature of their density at 35 psu.
+A saved two-layer state loads as this climatology with its upper-layer
+depth and velocity kept.
+
+**Interfaces.** `advance(surfaceT, ice, oceanFlux, stress, dt)` as in M13
+plus `accumulate(evaporation, rain, dt, runoff)` each atmosphere step;
+`fields()` gives the frame its mixed-layer depth, SST, SSS, surface
+velocity, thermocline depth (the base of the σ = 25.5 layer) and η;
+`serialize()` is {h, u, T, S, eta} flattened layer-major, and
+`regridOcean` carries each layer's cell fields by masked interpolation
+over sea tiles and its velocities by vector interpolation. Diagnostics
+add the thermocline depth, mean salinity, the largest |η| and the
+strongest depth-integrated transport through an edge in Sverdrups. The
+page shows Mixed layer depth, Thermocline depth, Salinity and Sea
+surface height under the ocean overlays.
+
+**Checks.** A flat uniform column over a bumpy bottom on the real
+coastline stays at rest to 10⁻⁶ m/s; a 1 m surface bump spreads as a
+gravity wave; heat and salt are conserved to the last digit without
+surface fluxes; in a closed basin 80° wide under a subtropical wind the
+northward return flow sits in the two westernmost bands after 40 days
+with a weak southward interior, the Stommel picture. Instabilities met
+and removed on the way: PV at a vertex divided by a vanishing
+thickness, a 2000 m column pouring into a 30 m shelf cell, layers pushed
+onto a shelf by the potential of a layer below the bottom, forward-Euler
+Coriolis in the sub-steps, and a token-layer relaxation faster than the
+step at N=8. Cost on one CPU thread: 93 ms per model step at N=16
+against about 30 before, the ocean now the larger part.
+
+**Open.** Runoff is not yet spread on the GPU; the equation of state is
+linear; the freezing point ignores salinity; the Kraus–Turner constants,
+bottom drag and the 50 m minimum depth are first guesses; the barotropic
+mode has no explicit filter beyond the sub-step average.
+
 ## 7. Module layout in this repo
 
 ```
@@ -1472,7 +1587,8 @@ js/
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
     ice.module.js           M9/M11: slab ocean with zero-layer sea ice, diffusive heat transport, zenith albedo
   ocean/
-    reducedGravity.module.js M13: two-layer reduced-gravity ocean, wind-driven, coupled through the sea-ice cell update
+    reducedGravity.module.js M13: two-layer reduced-gravity ocean (kept for reference)
+    layered.module.js       M18: six-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
   gpu/
     device.module.js         M15: WebGPU device (Dawn in Node, navigator.gpu in the page) and buffer helpers
     core.gpu.js              M15: layouts, dynamics kernels, RK4 and closures, full-step orchestration
