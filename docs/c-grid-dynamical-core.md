@@ -1595,10 +1595,18 @@ engines to single precision over one and twenty steps. Its freshwater
 kernel takes the rain accumulator's increment since its last call, so
 the precipitation diagnostic keeps working.
 
+**Drag.** Interfacial drag is the linear stress r Δu with r = 2×10⁻⁴
+m/s; bottom drag is quadratic, C_D |u| u with C_D = 3×10⁻³, applied to
+the deepest layer with water at the edge. A linear bottom drag of
+2×10⁻⁴ m/s let a 28 m bottom layer slide down the flank of a seamount
+at 4.5 m/s (60 times weaker than the quadratic law at that speed); the
+quadratic law holds such layers near the gravity-current speed
+√(g′h) ≈ 0.4 m/s.
+
 **Open.** Runoff is not yet spread on the GPU; the equation of state is
-linear; the freezing point ignores salinity; the Kraus–Turner constants,
-bottom drag and the 50 m minimum depth are first guesses; the barotropic
-mode has no explicit filter beyond the sub-step average.
+linear; the freezing point ignores salinity; the Kraus–Turner constants
+and the 50 m minimum depth are first guesses; the barotropic mode has
+no explicit filter beyond the sub-step average.
 
 ## 7. Module layout in this repo
 

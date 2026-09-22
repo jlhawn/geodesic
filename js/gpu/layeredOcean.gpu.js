@@ -31,7 +31,7 @@ export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, thermalExpansion: 2e-4, halineContraction: 7.6e-4, referenceT: 283.15, referenceS: 35, gravity: 9.81,
   minimumThickness: 20, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
-  interfacialDrag: 2e-4, bottomDrag: 2e-4, closureHours: 12, diffusivity: 0.3, everySteps: 4,
+  interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, diffusivity: 0.3, everySteps: 4,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
 const defaultSalinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2));
@@ -216,7 +216,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   if (k < L - 1) { force -= RINT * (IN[uOff(k) + e] - IN[uOff(k + 1) + e]); }
   var bottom = k == L - 1;
   if (!bottom) { bottom = true; for (var j = k + 1; j < L; j++) { if (OD[O_HEDGE + j * E + e] >= THINO) { bottom = false; break; } } }
-  if (bottom) { force -= RBOT * IN[uOff(k) + e]; }
+  if (bottom) { force -= RBOT * abs(IN[uOff(k) + e]) * IN[uOff(k) + e]; }
   du += force / he;
   if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
   if (k > 0 && OD[O_HEDGE + n] < THINO) { du = (IN[uOff(k - 1) + e] - IN[uOff(k) + e]) * P[2]; }

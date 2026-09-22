@@ -78,7 +78,7 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2)),
   density = 1025, specificHeat = 3985, thermalExpansion = 2e-4, halineContraction = 7.6e-4, referenceT = 283.15, referenceS = 35, gravity = 9.81,
   minimumThickness = 20, shallowestMixedDepth = 50, maximumMixedDepth = 200, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
-  interfacialDrag = 2e-4, bottomDrag = 2e-4, closureHours = 12, diffusivity = 0.3, everySteps = 4,
+  interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, diffusivity = 0.3, everySteps = 4,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {
   const {
@@ -250,7 +250,7 @@ export function createOcean(mesh, {
         if (k < L - 1) force -= interfacialDrag * (uIn[oe + e] - uIn[ae(k + 1, e)]);
         let bottom = k === L - 1;
         if (!bottom) { bottom = true; for (let j = k + 1; j < L; j++) if (hEdge[ae(j, e)] >= THIN) { bottom = false; break; } }
-        if (bottom) force -= bottomDrag * uIn[oe + e];
+        if (bottom) force -= bottomDrag * Math.abs(uIn[oe + e]) * uIn[oe + e];
         du[oe + e] += force / he;
       }
       if (nu4 > 0) {
