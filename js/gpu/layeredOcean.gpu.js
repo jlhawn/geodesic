@@ -30,7 +30,7 @@ const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5;
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, thermalExpansion: 2e-4, halineContraction: 7.6e-4, referenceT: 283.15, referenceS: 35, gravity: 9.81,
-  minimumThickness: 20, shallowestMixedDepth: 20, maximumMixedDepth: 1000, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
+  minimumThickness: 20, shallowestMixedDepth: 20, stirringDepth: 100, maximumMixedDepth: 1000, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
   interfacialDrag: 2e-4, bottomDrag: 2e-4, closureHours: 12, diffusivity: 0.3, everySteps: 4,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -57,7 +57,7 @@ ${constLine('THERMAL_EXP', o.thermalExpansion)} ${constLine('HALINE_CONTRACT', o
 ${constLine('REF_T', o.referenceT)} ${constLine('REF_S', o.referenceS)} ${constLine('OGRAV', o.gravity)}
 ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)}
 ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)}
-${constLine('STIRRING', o.stirring)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('ICEDENS', o.iceDensity)}
+${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
 ${constLine('FREEZE', FREEZING_POINT)} ${constLine('CDO', o.dragCoefficient)} ${constLine('GUSTO', o.gustiness)}
 @group(0) @binding(0) var<storage, read_write> MI: array<i32>;
@@ -119,7 +119,12 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
 }`,
     oFlux: `${K}  let n = ${idx}; if (n >= L * E) { return; }
   let k = n / E; let e = n % E;
-  OD[O_FLUX + n] = select(0.0, OD[O_HEDGE + n] * IN[uOff(k) + e], OD[O_EMASK + e] > 0.5);
+  var he = OD[O_HEDGE + n];
+  if (k == 0) {
+    let donor = MI[COE + 2 * e + select(1, 0, IN[uOff(0) + e] > 0.0)];
+    he = min(he, max(0.0, IN[hOff(0) + donor]));
+  }
+  OD[O_FLUX + n] = select(0.0, he * IN[uOff(k) + e], OD[O_EMASK + e] > 0.5);
 }`,
     oCellTendency: `${K}  let n = ${idx}; if (n >= L * C) { return; }
   let k = n / C; let i = n % C;
@@ -328,24 +333,24 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   }
   wv = wv / MF[F_AREA + i];
   let tau = length(wv);
-  let ustar3 = pow(tau / RHO0, 1.5);
+  let ustar3 = pow(tau / RHO0, 1.5); let stir = STIRRING * exp(-IN[hOff(0) + i] / STIRDEPTH);
   var rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i], IN[wOff(0) + i] / IN[hOff(0) + i]);
   for (var k = 1; k < L; k++) {
     if (IN[hOff(0) + i] >= MAXMIXED) { break; }
     if (IN[hOff(k) + i] <= EPSO || RHO[k] > rm) { continue; }
-    moveLayer(i, k, 0, IN[hOff(k) + i] - EPSO);
+    moveLayer(i, k, 0, min(IN[hOff(k) + i] - EPSO, MAXMIXED - IN[hOff(0) + i]));
     rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i], IN[wOff(0) + i] / IN[hOff(0) + i]);
   }
   var below = -1;
   for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { below = k; break; } }
   if (below > 0 && IN[hOff(0) + i] < MAXMIXED) {
-    let db = max(1e-5, OGRAV * (RHO[below] - rm) / RHO0);
-    let entrain = min(2.0 * STIRRING * ustar3 / (IN[hOff(0) + i] * db) * P[6], IN[hOff(below) + i] - EPSO);
+    let db = max(1e-4, OGRAV * (RHO[below] - rm) / RHO0);
+    let entrain = min(2.0 * stir * ustar3 / (IN[hOff(0) + i] * db) * P[6], IN[hOff(below) + i] - EPSO);
     if (entrain > 0.0) { moveLayer(i, below, 0, entrain); }
   }
   let buoyancy = OGRAV * THERMAL_EXP * (OD[O_PREVT0 + i] - OD[O_SURFACEIN + i]) * IN[hOff(0) + i] / P[6];
   if (buoyancy < -1e-9) {
-    let monin = max(SHALLOWMIXED, 2.0 * STIRRING * ustar3 / -buoyancy);
+    let monin = max(SHALLOWMIXED, 2.0 * stir * ustar3 / -buoyancy);
     if (IN[hOff(0) + i] > monin) {
       var destK = -1;
       for (var k = 1; k < L; k++) { if (RHO[k] >= rm && IN[hOff(k) + i] > THINO) { destK = k; break; } }

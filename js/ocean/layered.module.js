@@ -24,7 +24,8 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  *
  * The mixed layer exchanges mass with the interior after each step: it
  * swallows any interior layer lighter than itself (convection), entrains
- * the layer below at the Kraus–Turner wind-stirring rate, and detrains
+ * the layer below at the Kraus–Turner wind-stirring rate, the stirring
+ * fading with depth over `stirringDepth`, and detrains
  * into the layer of its own density when surface warming makes it
  * deeper than the Monin–Obukhov depth. Surface freshwater (evaporation
  * minus rain, runoff spread over the sea) and ice growth or melt act on
@@ -68,7 +69,7 @@ export function createOcean(mesh, {
   densities = LAYER_DENSITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2)),
   density = 1025, specificHeat = 3985, thermalExpansion = 2e-4, halineContraction = 7.6e-4, referenceT = 283.15, referenceS = 35, gravity = 9.81,
-  minimumThickness = 20, shallowestMixedDepth = 20, maximumMixedDepth = 1000, stirring = 0.8, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
+  minimumThickness = 20, shallowestMixedDepth = 20, maximumMixedDepth = 1000, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 2e-4, closureHours = 12, diffusivity = 0.3, everySteps = 4,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {
@@ -188,7 +189,11 @@ export function createOcean(mesh, {
     edgeThicknesses(hIn);
     for (let k = 0; k < L; k++) {
       const oc = k * C, oe = k * E;
-      for (let e = 0; e < E; e++) flux[e] = edgeOcean[e] ? hEdge[oe + e] * uIn[oe + e] : 0;
+      for (let e = 0; e < E; e++) {
+        let he = hEdge[oe + e];
+        if (k === 0) he = Math.min(he, Math.max(0, hIn[cellsOnEdge[2 * e + (uIn[e] > 0 ? 0 : 1)]]));
+        flux[e] = edgeOcean[e] ? he * uIn[oe + e] : 0;
+      }
       divergence(mesh, flux, divScratch);
       for (let i = 0; i < C; i++) {
         dh[oc + i] = -divScratch[i];
@@ -359,23 +364,23 @@ export function createOcean(mesh, {
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
       const tau = Math.hypot(tauCell[3 * i], tauCell[3 * i + 1], tauCell[3 * i + 2]);
-      const ustar3 = Math.pow(tau / rho0, 1.5);
+      const ustar3 = Math.pow(tau / rho0, 1.5), stir = stirring * Math.exp(-h[i] / stirringDepth);
       let rm = eos(Q[i] / h[i], W[i] / h[i]);
       for (let k = 1; k < L && h[i] < maximumMixedDepth; k++) {
         if (h[at(k, i)] <= EPS || rho[k] > rm) continue;
-        move(i, k, 0, h[at(k, i)] - EPS);
+        move(i, k, 0, Math.min(h[at(k, i)] - EPS, maximumMixedDepth - h[i]));
         rm = eos(Q[i] / h[i], W[i] / h[i]);
       }
       let below = -1;
       for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) { below = k; break; }
       if (below > 0 && h[i] < maximumMixedDepth) {
-        const db = Math.max(1e-5, g * (rho[below] - rm) / rho0);
-        const entrain = Math.min(2 * stirring * ustar3 / (h[i] * db) * dt, h[at(below, i)] - EPS);
+        const db = Math.max(1e-4, g * (rho[below] - rm) / rho0);
+        const entrain = Math.min(2 * stir * ustar3 / (h[i] * db) * dt, h[at(below, i)] - EPS);
         if (entrain > 0) move(i, below, 0, entrain);
       }
       const buoyancy = g * thermalExpansion * (previousT0[i] - surfaceIn[i]) * h[i] / dt;
       if (buoyancy < -1e-9) {
-        const monin = Math.max(shallowestMixedDepth, 2 * stirring * ustar3 / -buoyancy);
+        const monin = Math.max(shallowestMixedDepth, 2 * stir * ustar3 / -buoyancy);
         if (h[i] > monin) {
           let target = -1;
           for (let k = 1; k < L; k++) if (rho[k] >= rm && h[at(k, i)] > THIN) { target = k; break; }

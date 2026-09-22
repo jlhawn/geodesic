@@ -1487,7 +1487,11 @@ it has outcropped there or the bottom lies above it (the fictitious
 potential of a layer below the bottom would otherwise fling water off
 every shelf). A column flows through an edge only within the water that
 exists on both sides: the thicknesses at an edge are scaled so their sum
-is at most min(D_a, D_b) + η. The edge potential vorticity is
+is at most min(D_a, D_b) + η. The mixed layer's mass and tracer flux
+through an edge uses at most the thickness of the cell the water leaves,
+so a deep convective column beside a thin mixed layer cannot drain its
+neighbour below zero within a step (the centred thickness stays in the
+momentum equation). The edge potential vorticity is
 (ζ̄ + f̄)/max(h_e, 20 m) with the same edge thickness, which keeps the PV
 term bounded where a layer thins to nothing. A layer thinner than 5 m at
 an edge follows the velocity of the layer above, relaxing at the lesser
@@ -1508,15 +1512,17 @@ to 5 m/s and the count of clamps reported (`oceanLimited`, zero in every
 run so far).
 
 **Mixed layer.** After each step, per column: the mixed layer swallows
-any interior layer lighter than itself (convection, up to 1000 m);
-entrains the first layer below at the Kraus–Turner wind-stirring rate
-w = 2 m u*³/(h₀ Δb) with m = 0.8 and Δb the buoyancy step to that layer;
+any interior layer lighter than itself (convection), taking only as much
+as keeps it within 1000 m; entrains the first layer below at the
+Kraus–Turner wind-stirring rate w = 2 m u*³/(h₀ Δb) with
+m = 0.8 exp(−h₀/100 m), so the wind's stirring fades below the depth it
+can reach, and Δb the buoyancy step to that layer, at least 10⁻⁴ m/s²;
 when the surface buoyancy flux implied by its temperature change since
 the last ocean step is stabilising (below −10⁻⁹ m²/s³) and it is deeper
 than the Monin–Obukhov depth 2 m u*³/(−B), it detrains the excess over a
 day into the first interior layer at least as dense as itself that
 already holds water in the column, or the deepest such layer, or not at
-all on a shelf that has only mixed layer; and it is kept at least 10 m
+all on a shelf that has only mixed layer; and it is kept at least 20 m
 thick by entraining from below. The shallowest depth detrainment leaves
 is 20 m.
 
