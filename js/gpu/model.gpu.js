@@ -7,7 +7,7 @@ import { createMoistPhysics } from '../physics/moist.module.js';
 import { LATENT_HEAT } from '../physics/moist.module.js';
 import { SIDEREAL_DAY } from '../model.module.js';
 import { createGpuCore } from './core.gpu.js';
-import { createGpuOcean } from './ocean.gpu.js';
+import { createLayeredOcean } from './layeredOcean.gpu.js';
 import { createGeography, surfaceGeopotential } from '../geography.module.js';
 import { createLandSurface } from '../physics/land.module.js';
 
@@ -43,9 +43,14 @@ export async function createGpuModel(gridOrMesh, {
   const radiationCpu = createRadiation(mesh, core, radiation);
   const surfaceCpu = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, pblRate: 0, ...surface });
   const moistCpu = createMoistPhysics(mesh, core, moist);
-  const gpuOcean = oceanOptions === false ? null : createGpuOcean(gpu, { ...oceanOptions, geography });
+  const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { ...oceanOptions, geography });
   const landCpu = geography ? createLandSurface(mesh, geography, landOptions) : null;
-  if (gpuOcean) gpu.hooks.beforePhysics = (dt) => gpuOcean.step(dt);
+  let oceanCounter = 0;
+  if (gpuOcean) gpu.hooks.beforePhysics = async (dt) => {
+    gpuOcean.accumulateFreshwater(dt);
+    if (++oceanCounter % gpuOcean.everySteps !== 0) return;
+    await gpuOcean.advanceCoupled(gpuOcean.everySteps * dt);
+  };
   const lengths = [C, K * C, K * E, C, K * C, K * C, C];
   const state = lengths.map((n) => new Float64Array(n));
   const precipitation = new Float64Array(C);
@@ -55,6 +60,7 @@ export async function createGpuModel(gridOrMesh, {
   const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu' };
   model.moist = { precipitation, columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget };
   model.oceanFields = () => lastOcean;
+  model.oceanEngine = gpuOcean;
 
   function pushState() {
     gpu.upload(state);
@@ -125,19 +131,15 @@ export async function createGpuModel(gridOrMesh, {
     if (gpuOcean) {
       const o = await gpuOcean.download();
       lastOcean = o;
-      let depth = 0, heat = 0, thermocline = 0, speed = 0;
-      let oceanArea = 0;
-      for (let i = 0; i < C; i++) { if (geography && geography.land[i]) continue; const a = mesh.areaCell[i]; oceanArea += a; depth += a * o.h1[i]; heat += a * gpuOcean.options.density * gpuOcean.options.specificHeat * (o.h1[i] * o.T1[i] + o.h2[i] * o.T2[i]); thermocline += a * o.T2[i]; }
-      for (const x of o.u1) speed = Math.max(speed, Math.abs(x));
-      Object.assign(result, { oceanUpperDepth: depth / oceanArea, oceanHeat: heat / oceanArea, oceanThermoclineT: thermocline / oceanArea, oceanSpeed: speed });
+      Object.assign(result, gpuOcean.diagnosticsFrom(o));
     }
     return result;
   };
 
   model.ocean = gpuOcean ? {
     initialize(surfaceT, iceField) { gpuOcean.initialize(surfaceT, iceField); },
-    load(saved, surfaceT, iceField) { gpuOcean.upload({ h1: saved.h1, h2: saved.h2, u1: saved.u1, u2: saved.u2, T2: saved.T2 }, surfaceT, iceField); },
-    async serialize() { const o = await gpuOcean.download(); return { h1: Array.from(o.h1), h2: Array.from(o.h2), u1: Array.from(o.u1), u2: Array.from(o.u2), T2: Array.from(o.T2) }; },
+    load(saved, surfaceT, iceField) { gpuOcean.upload(saved, surfaceT, iceField); },
+    async serialize() { return gpuOcean.serialize(); },
   } : null;
 
   model.land = landCpu ? {
