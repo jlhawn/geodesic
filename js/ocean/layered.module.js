@@ -60,8 +60,8 @@ const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 
  * from another resolution keeps its interface depths from the top down
  * and is cut or extended at the bottom, a sea cell with no usable water
  * (new coast, or a stencil with no sea source) takes the climatology
- * column, the mixed layer keeps its floor, and a column that already
- * fits is left exactly as it is.
+ * column (built on first need), the mixed layer keeps its floor, and a
+ * column that already fits is left exactly as it is.
  */
 export function fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, referenceS, minimumThickness }) {
   const at = (k, i) => k * C + i;
@@ -71,8 +71,9 @@ export function fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, 
     for (let k = 0; k < L && valid; k++) { const n = at(k, i); if (!(h[n] >= 0) || !Number.isFinite(Q[n]) || !Number.isFinite(W[n])) valid = false; else sum += h[n]; }
     if (valid && Math.abs(sum - D[i] - eta[i]) < 1e-6) continue;
     if (!valid || sum < 1) {
+      const clim = typeof climatology === 'function' ? (climatology = climatology()) : climatology;
       let s = 0;
-      for (let k = 0; k < L; k++) { const n = at(k, i); h[n] = climatology.h[n]; Q[n] = climatology.Q[n]; W[n] = climatology.W[n]; s += h[n]; }
+      for (let k = 0; k < L; k++) { const n = at(k, i); h[n] = clim.h[n]; Q[n] = clim.Q[n]; W[n] = clim.W[n]; s += h[n]; }
       eta[i] = s - D[i];
       continue;
     }
@@ -647,10 +648,15 @@ export function createOcean(mesh, {
       }
       return;
     }
-    initialize(surfaceT, ice);
-    const climatology = { h: Float64Array.from(h), Q: Float64Array.from(Q), W: Float64Array.from(W) };
     h.set(saved.h); u.set(saved.u); eta.set(saved.eta);
     for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
+    const climatology = () => {
+      const kept = { h: Float64Array.from(h), u: Float64Array.from(u), Q: Float64Array.from(Q), W: Float64Array.from(W), eta: Float64Array.from(eta) };
+      initialize(surfaceT, ice);
+      const built = { h: Float64Array.from(h), Q: Float64Array.from(Q), W: Float64Array.from(W) };
+      h.set(kept.h); u.set(kept.u); Q.set(kept.Q); W.set(kept.W); eta.set(kept.eta);
+      return built;
+    };
     fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, referenceS, minimumThickness });
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
     for (let i = 0; i < C; i++) { previousIce[i] = ice[i]; iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = Q[i] / Math.max(EPS, h[i]); S0[i] = W[i] / Math.max(EPS, h[i]); previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }

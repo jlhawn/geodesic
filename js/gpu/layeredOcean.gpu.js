@@ -825,7 +825,7 @@ export function createLayeredOcean(core, options = {}) {
       device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(arrays.previousT0));
       return;
     }
-    const climatology = initializeArrays(surfaceT, ice);
+    const climatology = () => initializeArrays(surfaceT, ice);
     const h = Float64Array.from(saved.h), u = Float64Array.from(saved.u), eta = Float64Array.from(saved.eta);
     const Q = new Float64Array(L * C), W = new Float64Array(L * C);
     for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
