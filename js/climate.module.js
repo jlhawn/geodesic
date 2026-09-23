@@ -16,9 +16,9 @@ const OVERLAYS = {
   wind: { label: 'Wind speed', short: 'WIND', unit: 'm/s', kind: 'sequential', field: 'speed', scale: 1, range: (level) => [0, WIND_MAX[level]] },
   temp: { label: 'Temperature', short: 'TEMP', unit: '°C', kind: 'sequential', field: 'temperature', scale: 1, offset: CELSIUS, range: (level) => TEMP_RANGE[level] },
   rh: { label: 'Relative humidity', short: 'RH', unit: '%', kind: 'sequential', field: 'humidity', scale: 100, range: () => [0, 100] },
-  mi: { label: 'Misery index', short: 'MI', unit: '°C', kind: 'sequential', derive: (frame) => deriveField(frame, miseryIndex), scale: 1, range: () => [-40, 45] },
-  wbt: { label: 'Wet-bulb temperature', short: 'WBT', unit: '°C', kind: 'sequential', derive: (frame) => deriveField(frame, wetBulb), scale: 1, range: () => [-40, 35] },
-  dp: { label: 'Dew point', short: 'DP', unit: '°C', kind: 'sequential', derive: (frame) => deriveField(frame, dewPoint), scale: 1, range: () => [-40, 30] },
+  mi: { label: 'Misery index', short: 'MI', unit: '°C', kind: 'sequential', derive: (frame) => deriveField(frame, miseryIndex), point: miseryIndex, scale: 1, range: () => [-40, 45] },
+  wbt: { label: 'Wet-bulb temperature', short: 'WBT', unit: '°C', kind: 'sequential', derive: (frame) => deriveField(frame, wetBulb), point: wetBulb, scale: 1, range: () => [-40, 35] },
+  dp: { label: 'Dew point', short: 'DP', unit: '°C', kind: 'sequential', derive: (frame) => deriveField(frame, dewPoint), point: dewPoint, scale: 1, range: () => [-40, 30] },
   rain: { label: 'Recent rain', short: 'RAIN', unit: 'mm', kind: 'sequential', field: 'rain', scale: 1, range: () => [0, 20] },
   tpw: { label: 'Total precipitable water', short: 'TPW', unit: 'kg/m²', kind: 'sequential', field: 'water', scale: 1, range: () => [0, 60] },
   tcw: { label: 'Total cloud water', short: 'TCW', unit: 'g/m²', kind: 'sequential', field: 'cloud', scale: 1000, range: () => [0, 500] },
@@ -26,7 +26,7 @@ const OVERLAYS = {
   albedo: { label: 'Surface albedo', short: 'ALB', unit: '', kind: 'sequential', field: 'albedo', scale: 1, range: () => [0, 0.8] },
   swdown: { label: 'Surface sunlight', short: 'SSI', unit: 'W/m²', kind: 'sequential', field: 'shortwave', scale: 1, range: () => [0, 1200] },
   olr: { label: 'Outgoing longwave radiation', short: 'OLR', unit: 'W/m²', kind: 'sequential', field: 'longwave', scale: 1, range: () => [100, 320] },
-  ice: { label: 'Sea ice thickness', short: 'ICE', unit: 'm', kind: 'sequential', field: 'ice', scale: 1, range: () => [0, 3] },
+  ice: { label: 'Sea ice thickness', short: 'ICE', unit: 'm', kind: 'sequential', field: 'ice', scale: 1, decimals: 2, range: () => [0, 3] },
   mslp: { label: 'Sea-level pressure', short: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'mslp', scale: 0.01, range: () => [960, 1060] },
   ps: { label: 'Surface pressure', short: 'PS', unit: 'hPa', kind: 'sequential', field: 'ps', scale: 0.01, range: () => [500, 1050] },
   soil: { label: 'Soil water', short: 'SOIL', unit: 'kg/m²', kind: 'sequential', field: 'soil', scale: 1, range: () => [0, 150] },
@@ -37,7 +37,7 @@ const OVERLAYS = {
   layer: { label: 'Mixed layer depth', short: 'MLD', unit: 'm', kind: 'sequential', field: 'layerDepth', scale: 1, range: () => [10, 300] },
   thermocline: { label: 'Thermocline depth', short: 'THD', unit: 'm', kind: 'sequential', field: 'thermocline', scale: 1, range: () => [0, 1200] },
   sss: { label: 'Sea surface salinity', short: 'SSS', unit: 'psu', kind: 'sequential', field: 'sss', scale: 1, range: () => [32, 38] },
-  ssh: { label: 'Sea surface height', short: 'SSH', unit: 'm', kind: 'sequential', field: 'ssh', scale: 1, range: () => [-1.5, 1.5] },
+  ssh: { label: 'Sea surface height', short: 'SSH', unit: 'm', kind: 'sequential', field: 'ssh', scale: 1, decimals: 2, range: () => [-1.5, 1.5] },
   none: { label: 'None', short: 'None' },
 };
 const MODE_OVERLAYS = {
@@ -283,7 +283,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const panel = document.getElementById('panel');
   const activeLevel = () => (settings.view === 'atmosphere' && HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
   const shownLevel = () => latest?.level ?? activeLevel();
-  let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, rgb = null, running = !paused, animatedSource = null, seaCells = null;
+  let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, highlight = null, rgb = null, running = !paused, animatedSource = null, seaCells = null;
+  let cells = null, centres = null, selected = -1, hoverTip = null;
   let geographyFields = {}, hasLand = false;
   const clock = [];
   function simulatedHoursPerMinute() {
@@ -335,14 +336,19 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
 
   const worker = new Worker(new URL('./model.worker.js', import.meta.url), { type: 'module' });
 
-  function setup(cells) {
-    grid = new Grid(cells);
+  function setup(size) {
+    grid = new Grid(size);
     rgb = new Uint8Array(3 * grid.size);
     viewer = initUnifiedViewer(document.getElementById('globe'), grid, { backgroundColor: 0x151515, dynamicColors: true, controls: false, getColor: () => ({ r: 0.25, g: 0.25, b: 0.25 }) });
     arrows = viewer.addArrowLayer({ opacity: 0.5 });
     isobars = viewer.addContourLayer({ opacity: 0.25 });
     graticule = viewer.addGraticuleLayer({ opacity: 0.25 });
     coast = viewer.addSegmentLayer({ opacity: 0.6 });
+    highlight = viewer.addSegmentLayer({ color: 0xffe8a0, opacity: 1 });
+    cells = [...grid];
+    centres = new Float32Array(3 * cells.length);
+    for (const cell of cells) { const c = cell.centerVertex, r = Math.hypot(c.x, c.y, c.z); centres[3 * cell.index] = c.x / r; centres[3 * cell.index + 1] = c.y / r; centres[3 * cell.index + 2] = c.z / r; }
+    selected = -1;
     particles = createWindParticles(document.getElementById('globe'), viewer, grid);
     viewer.setProjection(settings.projection);
     if (view) viewer.setView(view);
@@ -350,7 +356,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   function teardown() {
     if (particles) particles.dispose();
     if (viewer) viewer.dispose();
-    particles = viewer = arrows = isobars = graticule = coast = null;
+    particles = viewer = arrows = isobars = graticule = coast = highlight = null;
+    cells = centres = null; selected = -1;
   }
 
   function paintSatellite() {
@@ -470,7 +477,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       overlayBox.replaceChildren(...MODE_OVERLAYS[mode].map((row) => {
         const segment = document.createElement('div');
         segment.className = 'segmented';
-        for (const key of row) { const button = document.createElement('button'); button.dataset.value = key; button.textContent = OVERLAYS[key].short; button.title = OVERLAYS[key].label; segment.append(button); }
+        for (const key of row) { const button = document.createElement('button'); button.dataset.value = key; button.textContent = OVERLAYS[key].short; button.dataset.tip = OVERLAYS[key].label; segment.append(button); }
         return segment;
       }));
     }
@@ -500,6 +507,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     paintWind();
     paintIsobars();
     paintGraticule();
+    refreshTip();
     if (coast) coast.setVisible(hasLand && settings.view !== 'space');
     const d = latest.diagnostics;
     document.getElementById('date').textContent = formatDate(latest.time);
@@ -562,6 +570,76 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     for (let i = 0; i < rate.length; i++) rain.total[i] = rain.total[i] * keep + rate[i] * days;
     rain.time = message.time;
     return rain.total;
+  }
+
+  /*
+   * The tip box in the bottom-right corner shows the full name of the
+   * panel button under the pointer, or, when a cell has been clicked,
+   * that cell's value of the current overlay and its position; the
+   * highlighted cell's boundary follows the globe.
+   */
+  const DECIMALS = { '°C': 1, '%': 0, 'm/s': 2, mm: 1, 'kg/m²': 1, 'g/m²': 0, 'W/m²': 0, hPa: 1, m: 0, psu: 2, '': 2 };
+  function valueAt(overlay, i) {
+    if (overlay.point) return overlay.point(latest.temperature[i] + CELSIUS, latest.humidity[i], latest.speed[i]);
+    if (!overlay.field) return null;
+    const field = latest[overlay.field];
+    return field && field.length > i ? field[i] * overlay.scale + (overlay.offset || 0) : NaN;
+  }
+  function positionText(i) {
+    const lat = Math.asin(Math.max(-1, Math.min(1, centres[3 * i + 2]))) * 180 / Math.PI, lon = Math.atan2(centres[3 * i + 1], centres[3 * i]) * 180 / Math.PI;
+    const place = latest && latest.land ? (latest.land[i] ? 'land' : 'sea') : null;
+    return `${Math.abs(lat).toFixed(1)}°${lat < 0 ? 'S' : 'N'} ${Math.abs(lon).toFixed(1)}°${lon < 0 ? 'W' : 'E'}${place ? ` · ${place}` : ''}`;
+  }
+  function readoutHtml() {
+    if (selected < 0 || !latest) return null;
+    const overlay = settings.view === 'space' ? null : OVERLAYS[settings.overlay];
+    const value = overlay ? valueAt(overlay, selected) : null;
+    const text = value === null ? 'no overlay' : Number.isNaN(value) ? `${overlay.label}: —` : `${overlay.label}: ${value.toFixed(overlay.decimals ?? DECIMALS[overlay.unit] ?? 1)} ${overlay.unit}`.trim();
+    return `<div class="value">${text}</div><div>${positionText(selected)}</div>`;
+  }
+  function refreshTip() {
+    const tip = document.getElementById('tip');
+    const html = hoverTip !== null ? `<div class="value">${hoverTip}</div>` : readoutHtml();
+    tip.classList.toggle('hidden', html === null);
+    if (html !== null && tip.innerHTML !== html) tip.innerHTML = html;
+  }
+  function select(i) {
+    selected = i;
+    if (!highlight) return;
+    if (i < 0) { highlight.setVisible(false); refreshTip(); return; }
+    const verts = cells[i].vertices || [], positions = new Float32Array(6 * verts.length), which = new Int32Array(verts.length);
+    for (let k = 0; k < verts.length; k++) {
+      const a = verts[k], b = verts[(k + 1) % verts.length], ra = Math.hypot(a.x, a.y, a.z), rb = Math.hypot(b.x, b.y, b.z);
+      positions.set([a.x / ra, a.y / ra, a.z / ra, b.x / rb, b.y / rb, b.z / rb], 6 * k);
+      which[k] = i;
+    }
+    highlight.set(positions, which);
+    highlight.setVisible(true);
+    refreshTip();
+  }
+  function nearestCell(point) {
+    let best = -1, bestDot = -Infinity;
+    for (let i = 0; i < cells.length; i++) {
+      const d = point[0] * centres[3 * i] + point[1] * centres[3 * i + 1] + point[2] * centres[3 * i + 2];
+      if (d > bestDot) { bestDot = d; best = i; }
+    }
+    return best;
+  }
+  {
+    const globe = document.getElementById('globe');
+    let press = null;
+    globe.addEventListener('mousedown', (event) => { if (event.button === 0) press = { x: event.clientX, y: event.clientY, at: performance.now() }; });
+    globe.addEventListener('mouseup', (event) => {
+      if (!press || event.button !== 0) return;
+      const moved = Math.hypot(event.clientX - press.x, event.clientY - press.y), held = performance.now() - press.at;
+      press = null;
+      if (moved > 4 || held > 500 || !viewer || !cells) return;
+      const rect = globe.getBoundingClientRect(), point = viewer.unprojectPoint(event.clientX - rect.left, event.clientY - rect.top, [0, 0, 0]);
+      select(point ? nearestCell(point) : -1);
+    });
+    window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && selected >= 0) select(-1); });
+    panel.addEventListener('mouseover', (event) => { const button = event.target.closest('button[data-tip]'); if (button) { hoverTip = button.dataset.tip; refreshTip(); } });
+    panel.addEventListener('mouseout', (event) => { const button = event.target.closest('button[data-tip]'); if (button && hoverTip !== null) { hoverTip = null; refreshTip(); } });
   }
 
   let ready = null;
