@@ -145,6 +145,7 @@ export const PHYSICS_KERNELS = {
     T += dt * net / LANDC;
     let fromSnow = min(snow, evap * dt);
     snow -= fromSnow;
+    T -= LFUS * fromSnow / LANDC;
     soil = max(0.0, soil - (evap * dt - fromSnow));
     if (snow > 0.0 && T > MELTING) {
       let energy = (T - MELTING) * LANDC;
@@ -317,7 +318,10 @@ export const PHYSICS_KERNELS = {
   PH[PH_RAIN + i] += rained + convected; PH[PH_COND + i] += rained; PH[PH_CONV + i] += convected;
   if (PH[PH_LAND + i] > 0.5) {
     let airT = IN[S_TH + bottom * C + i] * D[D_EXM + bottom * C + i];
-    if (airT < MELTING) { PH[PH_SNOW + i] += rained + convected; }
+    if (airT < MELTING) {
+      PH[PH_SNOW + i] += rained + convected;
+      IN[S_TH + bottom * C + i] += LFUS * (rained + convected) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
+    }
     else {
       var soil = PH[PH_SOIL + i] + rained + convected;
       if (soil > BUCKET) { PH[PH_RUNOFF + i] += soil - BUCKET; soil = BUCKET; }
@@ -359,7 +363,27 @@ export const PHYSICS_KERNELS = {
     lower[j] = select(0.0, dt * 0.5 * (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b]) / mass, k < K - 1);
     rhs[j] = IN[S_U + k * E + e];
   }
+  var before: array<f32, K>;
+  for (var j = 0; j < n; j++) { before[j] = rhs[j]; }
   thomas(n, &upper, &lower, &rhs);
   for (var j = 0; j < n; j++) { IN[S_U + (KTOP + j) * E + e] = rhs[j]; }
+  var share: array<f32, K>;
+  var loss = 0.0; var total = 0.0;
+  for (var j = 0; j < n; j++) {
+    let mass = columnMass * LV[L_DS + KTOP + j] / GRAV; let change = rhs[j] - before[j];
+    loss += mass * (before[j] * before[j] - rhs[j] * rhs[j]);
+    share[j] = mass * change * change;
+  }
+  for (var j = 0; j < n - 1; j++) {
+    let k = KTOP + j; let shear = rhs[j] - rhs[j + 1];
+    let part = dt * 0.5 * (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b]) * shear * shear;
+    share[j] += part; share[j + 1] += part;
+  }
+  for (var j = 0; j < n; j++) { total += share[j]; }
+  if (total <= 0.0) { return; }
+  for (var j = 0; j < n; j++) {
+    let k = KTOP + j;
+    D[D_DISS + k * E + e] += loss * share[j] / (total * columnMass * LV[L_DS + k] / GRAV);
+  }
 }`,
 };

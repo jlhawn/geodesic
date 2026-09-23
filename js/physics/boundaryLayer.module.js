@@ -118,12 +118,31 @@ export function createBoundaryLayer(mesh, core, {
     if (qc) solve(qc, i, C, coefficient, C, dt, pi[i]);
   }
 
-  const edgeCoefficient = new Float64Array(K);
-  function mixEdges(pi, u, eFrom, eTo, dt) {
+  const edgeCoefficient = new Float64Array(K), before = new Float64Array(K), share = new Float64Array(K);
+  /*
+   * The implicit mixing removes kinetic energy at each interface's shear
+   * and in each layer's own increment; `dissipation` receives each
+   * layer's loss of u² in those proportions, scaled so that the column's
+   * mass-weighted loss is exact.
+   */
+  function mixEdges(pi, u, eFrom, eTo, dt, dissipation = null) {
     for (let e = eFrom; e < eTo; e++) {
-      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
-      for (let k = kTop; k < K; k++) edgeCoefficient[k] = 0.5 * (mixing[k * C + a] + mixing[k * C + b]);
-      solve(u, e, E, edgeCoefficient, 1, dt, 0.5 * (pi[a] + pi[b]));
+      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], columnMass = 0.5 * (pi[a] + pi[b]);
+      for (let k = kTop; k < K; k++) { edgeCoefficient[k] = 0.5 * (mixing[k * C + a] + mixing[k * C + b]); before[k] = u[k * E + e]; }
+      if (!solve(u, e, E, edgeCoefficient, 1, dt, columnMass) || !dissipation) continue;
+      let loss = 0, total = 0;
+      for (let k = kTop; k < K; k++) {
+        const m = columnMass * dSigma[k] / g, now = u[k * E + e], change = now - before[k];
+        loss += m * (before[k] * before[k] - now * now);
+        share[k] = m * change * change;
+      }
+      for (let k = kTop; k < bottom; k++) {
+        const shear = u[k * E + e] - u[(k + 1) * E + e], part = dt * edgeCoefficient[k] * shear * shear;
+        share[k] += part; share[k + 1] += part;
+      }
+      for (let k = kTop; k < K; k++) total += share[k];
+      if (total <= 0) continue;
+      for (let k = kTop; k < K; k++) dissipation[k * E + e] += loss * share[k] / (total * columnMass * dSigma[k] / g);
     }
   }
 

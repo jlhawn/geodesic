@@ -4,7 +4,7 @@ import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
 import { createSurface } from './physics/surface.module.js';
 import { createMoistPhysics } from './physics/moist.module.js';
-import { createSeaIce } from './physics/ice.module.js';
+import { createSeaIce, MELTING_POINT } from './physics/ice.module.js';
 import { createOcean } from './ocean/layered.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 import { createGeography, surfaceGeopotential } from './geography.module.js';
@@ -39,6 +39,8 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  *   closure(layers) the ∇⁴ closures
  *   adjust(cells)  boundary-layer mixing, condensation, convection, filler
  *   mixMomentum(edges) boundary-layer mixing of the normal velocity
+ *   dissipate(cells) the kinetic energy the closure and the mixing
+ *                  removed, returned as heat
  * Arrays read across phases live in `shared`; `buffers` adopts another
  * instance's so a worker computes on the same memory.
  */
@@ -86,6 +88,7 @@ export function createModel(gridOrMesh, {
     layer(input, out, kFrom, kTo, part = 'all') {
       core.phaseLayer(input, out, kFrom, kTo, part);
       if (physics && part !== 'tracers') surface.applyLayers(input, out, kFrom, kTo);
+      if (physics && part !== 'momentum') surface.heatLayers(input, out, kFrom, kTo);
     },
     ocean(dt) {
       if (!physics || !ocean) return;
@@ -119,12 +122,29 @@ export function createModel(gridOrMesh, {
       if (boundaryLayer) for (let i = iFrom; i < iTo; i++) boundaryLayer.mixColumn(i, state[0], state[1], moist ? state[4] : null, moist ? state[5] : null, dt);
       if (moist) moistPhysics.adjust(state, iFrom, iTo, dt);
       if (moist && land) {
-        const bottom = (K - 1) * C, exner = core.diagnostics.exnerLayer;
-        for (let i = iFrom; i < iTo; i++) if (landMask[i]) land.deposit(i, moistPhysics.rain[i], state[1][bottom + i] * exner[bottom + i]);
+        const bottom = (K - 1) * C, { exnerLayer: exner, cp, g, dSigma } = core.diagnostics;
+        for (let i = iFrom; i < iTo; i++) {
+          if (!landMask[i]) continue;
+          const airTemperature = state[1][bottom + i] * exner[bottom + i], amount = moistPhysics.rain[i];
+          land.deposit(i, amount, airTemperature);
+          if (airTemperature < MELTING_POINT) state[1][bottom + i] += land.latentHeatFusion * amount * g / (cp * state[0][i] * dSigma[K - 1] * exner[bottom + i]);
+        }
       }
       surface.convectiveAdjustment(state[0], state[1], iFrom, iTo, moist ? state[4] : null, moist ? state[5] : null);
     },
-    mixMomentum(eFrom, eTo, dt) { if (physics && boundaryLayer) boundaryLayer.mixEdges(state[0], state[2], eFrom, eTo, dt); },
+    mixMomentum(eFrom, eTo, dt) { if (physics && boundaryLayer) boundaryLayer.mixEdges(state[0], state[2], eFrom, eTo, dt, core.arrays.dissipation); },
+    dissipate(iFrom, iTo) {
+      if (!physics) return;
+      const theta = state[1], lost = core.arrays.dissipation, { exnerLayer, cp } = core.diagnostics;
+      const { nEdgesOnCell, edgesOnCell, maxEdges, dcEdge, dvEdge, areaCell } = mesh;
+      for (let k = 0; k < K; k++) {
+        for (let i = iFrom; i < iTo; i++) {
+          let sum = 0;
+          for (let m = 0; m < nEdgesOnCell[i]; m++) { const e = edgesOnCell[maxEdges * i + m]; sum += dcEdge[e] * dvEdge[e] * lost[k * E + e]; }
+          theta[k * C + i] += 0.25 * sum / areaCell[i] / (cp * exnerLayer[k * C + i]);
+        }
+      }
+    },
   };
 
   function tendency(input, out) {
@@ -153,6 +173,7 @@ export function createModel(gridOrMesh, {
     phases.closure(0, K, dt);
     phases.adjust(0, C, dt);
     phases.mixMomentum(0, E, dt);
+    phases.dissipate(0, C);
     model.time += dt;
   };
 

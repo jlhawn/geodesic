@@ -1645,12 +1645,23 @@ h ← h + h·(η̄ − (Σh − D))/Σh, rather than multiplying each column by
 year that also carried heat in at each layer's temperature. The
 correction keeps the drift near 2×10⁻⁷ m per step with no bias, and
 `test/layeredGpu.test.mjs` holds the volume over 400 wind-driven steps.
-With that fixed, the whole-model energy budget closes: from the day-930
-state, one day of the time-mean top-of-atmosphere surplus of 12.9 W/m²
-went 12.35 into the ocean, 2.1 disappeared in the atmosphere (kinetic
-energy removed by drag and the ∇⁴ closure is not returned as heat) and
-0.5 at the surface (snow falls without releasing its heat of fusion,
-which melting then pays). The ocean uptake is spin-up: the volume-mean
+The atmosphere returns the kinetic energy it dissipates as heat, in the
+cells whose edges lost it: the surface and top drags inside the RK4
+tendency, and the ∇⁴ momentum closure and the boundary-layer momentum
+mixing through a per-edge record of each layer's loss of u² that a
+cell phase gathers at the end of the step (the mixing's loss is shared
+between layers in proportion to the shear dissipation at each interface
+and each layer's own increment, so the heating is never negative). At
+day 930 that is 2.66 W/m²: 1.57 from the drags, 0.57 from the closure
+and 0.52 from the mixing. Snowfall releases its heat of fusion into the
+lowest layer and sublimation takes it from the ground. From the day-930
+state the whole-model budget then closes to −0.2 W/m² over a day, of a
+time-mean top-of-atmosphere surplus of 13.0 W/m², 12.8 of it into the
+ocean; what remains is the adiabatic dynamics gaining 0.29 W/m², the
+temperature closure losing 0.21 (it is area-weighted rather than
+mass-weighted over terrain) and the boundary layer's mixing of θ rather
+than enthalpy gaining 0.11. Before these, 2.57 W/m² simply vanished.
+The ocean uptake is spin-up: the volume-mean
 ocean temperature is 1.0 °C against Earth's 3.5 °C, the two deepest
 layers sit at −0.7 and −1.8 °C, and because the interior layers push
 on the flow only through their label densities their temperature and

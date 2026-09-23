@@ -76,6 +76,8 @@ export function createSigmaCore(mesh, options = {}) {
     return new Float64Array(buffer);
   };
   const flux = sharedArray('flux', K * E);
+  const dissipation = sharedArray('dissipation', K * E);
+  const uBefore = new Float64Array(E);
   const divFlux = sharedArray('divFlux', K * C);
   const piSigmaDot = sharedArray('piSigmaDot', (K + 1) * C);
   const exnerLower = sharedArray('exnerLower', K * C);
@@ -260,7 +262,13 @@ export function createSigmaCore(mesh, options = {}) {
         if (q) scalarClosure(k, pi, q, q, dt * nu4Theta, true);
         if (qc) scalarClosure(k, pi, qc, qc, dt * nu4Theta, true);
       }
-      if (part !== 'tracers' && nu4 > 0) momentumClosure(k, u, u, dt * nu4);
+      if (part === 'tracers') continue;
+      const off = k * E;
+      if (nu4 > 0) {
+        for (let e = 0; e < E; e++) uBefore[e] = u[off + e];
+        momentumClosure(k, u, u, dt * nu4);
+        for (let e = 0; e < E; e++) dissipation[off + e] = uBefore[e] * uBefore[e] - u[off + e] * u[off + e];
+      } else dissipation.fill(0, off, off + E);
     }
   }
 
@@ -330,5 +338,5 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, nu4, nu4Theta, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV } };
+  return { K, levels, sigmaMid, nu4, nu4Theta, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
 }

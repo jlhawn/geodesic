@@ -111,6 +111,66 @@ test('surface drag only removes kinetic energy', () => {
   }
 });
 
+function cellKineticWeights(m, pi, u, k, dSigma, g) {
+  let sum = 0;
+  for (let e = 0; e < m.nEdges; e++) {
+    const a = m.cellsOnEdge[2 * e], b = m.cellsOnEdge[2 * e + 1];
+    sum += 0.25 * m.dcEdge[e] * m.dvEdge[e] * (pi[a] + pi[b]) * dSigma[k] / g * u[e] * u[e];
+  }
+  return sum;
+}
+
+test('the heat the drags return equals the kinetic energy they remove', () => {
+  const surface = createSurface(mesh, core, { topDragDays: 5, topSigma: 0.05 });
+  const state = sampleState(13);
+  const [pi, theta, u] = state;
+  core.diagnose(pi, theta);
+  const { exnerLayer, dSigma, g } = core.diagnostics;
+  surface.lowestWindSpeed(u);
+  const out = [new Float64Array(C), new Float64Array(K * C), new Float64Array(K * E), new Float64Array(C)];
+  surface.applyLayers(state, out);
+  let kineticRate = 0;
+  for (let k = 0; k < K; k++) for (let e = 0; e < E; e++) {
+    const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+    kineticRate += 0.5 * mesh.dcEdge[e] * mesh.dvEdge[e] * (pi[a] + pi[b]) * dSigma[k] / g * u[k * E + e] * out[2][k * E + e];
+  }
+  surface.heatLayers(state, out);
+  let heatRate = 0;
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) heatRate += mesh.areaCell[i] * pi[i] * dSigma[k] / g * CP_DRY * out[1][k * C + i] * exnerLayer[k * C + i];
+  assert.ok(kineticRate < 0);
+  assert.ok(Math.abs(heatRate + kineticRate) < 1e-10 * -kineticRate, `heat ${heatRate} W against kinetic ${kineticRate} W`);
+});
+
+test('the closure and the boundary-layer mixing return the kinetic energy they remove as heat', () => {
+  const model = createModel(new Grid(4), { ocean: false });
+  const init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  const { state, mesh: m, core: c } = model;
+  const { K: layers, C: cells, E: edges, dSigma, g, cp } = c.diagnostics;
+  const rnd = random(5);
+  for (let x = 0; x < state[2].length; x++) state[2][x] += 15 * (rnd() - 0.5);
+  model.surface.lowestWindSpeed(state[2]);
+  model.phases.physics(0, cells, 900, model.totals);
+  state[0].fill(P0);
+  c.diagnose(state[0], state[1], state[4], state[5]);
+  const energy = () => {
+    let sum = 0;
+    for (let k = 0; k < layers; k++) {
+      sum += cellKineticWeights(m, state[0], state[2].subarray(k * edges, (k + 1) * edges), k, dSigma, g);
+      for (let i = 0; i < cells; i++) sum += m.areaCell[i] * state[0][i] * dSigma[k] / g * cp * state[1][k * cells + i] * c.diagnostics.exnerLayer[k * cells + i];
+    }
+    return sum;
+  };
+  const kinetic = () => { let sum = 0; for (let k = 0; k < layers; k++) sum += cellKineticWeights(m, state[0], state[2].subarray(k * edges, (k + 1) * edges), k, dSigma, g); return sum; };
+  const before = energy(), kineticBefore = kinetic();
+  model.phases.closure(0, layers, 900);
+  model.phases.mixMomentum(0, edges, 900);
+  const lost = kineticBefore - kinetic();
+  model.phases.dissipate(0, cells);
+  assert.ok(lost > 0);
+  assert.ok(Math.abs(energy() - before) < 1e-9 * lost, `energy changed by ${energy() - before} J against ${lost} J of kinetic energy removed`);
+});
+
 test('the assembled model steps a uniform atmosphere without blowing up', () => {
   const model = createModel(new Grid(4));
   const init = initializeState(model, { seedAmplitude: 0, geostrophic: false });

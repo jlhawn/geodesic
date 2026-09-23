@@ -2,7 +2,7 @@ import { createModel, STATE_NAMES, stateLengths } from './model.module.js';
 import { shareMesh } from './mesh.module.js';
 import { parallelism, spawn } from './threads.module.js';
 
-export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, PHYSICS: 4, ADVANCE: 5, COMBINE: 6, CLOSURE: 7, ADJUST: 8, EXIT: 9 };
+export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, PHYSICS: 4, ADVANCE: 5, COMBINE: 6, CLOSURE: 7, ADJUST: 8, DISSIPATE: 9, EXIT: 10 };
 
 function blocks(kind, n, size, extra = {}) {
   const chunks = [];
@@ -30,6 +30,7 @@ export function phaseChunks({ K, C, E, V }, workers = 8) {
     [PHASE.COMBINE]: arrays,
     [PHASE.CLOSURE]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
     [PHASE.ADJUST]: [...blocks('cells', C, size(C, 16)), ...blocks('edges', E, size(E, 64))],
+    [PHASE.DISSIPATE]: blocks('cells', C, size(C, 32)),
   };
 }
 
@@ -122,6 +123,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     run(PHASE.PHYSICS, { dt });
     run(PHASE.CLOSURE, { dt });
     run(PHASE.ADJUST, { dt });
+    run(PHASE.DISSIPATE, { dt });
     model.time += dt;
   };
 

@@ -30,7 +30,7 @@ export function layoutFor(mesh, K) {
   const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E]]);
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
-  const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C]]);
+  const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE]]);
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['RUNOFF', C]]);
   return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH };
 }
@@ -163,15 +163,18 @@ const KERNELS = {
   let n = i32(id.x); if (n >= K * C) { return; }
   let k = n / C; let i = n % C; let idx = n;
   let pi = IN[S_PI + i];
-  var kinetic = 0.0;
+  var kinetic = 0.0; var dragPower = 0.0;
+  let bottomLayer = k == K - 1;
   for (var m = 0; m < MI[NEC + i]; m++) {
     let e = MI[EOC + MAXE * i + m];
     let u = IN[S_U + k * E + e];
     kinetic += 0.25 * MF[F_DC + e] * MF[F_DV + e] * u * u;
+    let rate = LV[L_TOP + k] + select(0.0, 0.5 * (D[D_DRAG + MI[COE + 2 * e]] + D[D_DRAG + MI[COE + 2 * e + 1]]), bottomLayer);
+    dragPower += 0.5 * MF[F_DC + e] * MF[F_DV + e] * rate * u * u;
   }
   D[D_PHI + idx] = D[D_GEO + idx] + kinetic / MF[F_AREA + i];
   let flux0 = k * E;
-  OUT[S_TH + idx] = transport(k, i, idx, S_TH, D_THL, pi, flux0);
+  OUT[S_TH + idx] = transport(k, i, idx, S_TH, D_THL, pi, flux0) + dragPower / MF[F_AREA + i] / (CP * D[D_EXM + idx]);
   OUT[S_Q + idx] = transport(k, i, idx, S_Q, D_QL, pi, flux0);
   OUT[S_QC + idx] = transport(k, i, idx, S_QC, D_QCL, pi, flux0);
 }`,
@@ -267,7 +270,22 @@ const KERNELS = {
   let k = n / E; let e = n % E;
   let lap = (D[D_DIVS + k * C + MI[COE + 2 * e + 1]] - D[D_DIVS + k * C + MI[COE + 2 * e]]) / MF[F_DC + e]
     - (D[D_CURLS + k * V + MI[VOE + 2 * e + 1]] - D[D_CURLS + k * V + MI[VOE + 2 * e]]) / MF[F_DV + e];
-  if (P[1] > 0.5) { IN[S_U + n] -= P[0] * lap; } else { D[D_LAPA + n] = lap; }
+  if (P[1] > 0.5) {
+    let before = IN[S_U + n]; let after = before - P[0] * lap;
+    IN[S_U + n] = after;
+    D[D_DISS + n] = before * before - after * after;
+  } else { D[D_LAPA + n] = lap; }
+}`,
+  dissipationHeat: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let n = i32(id.x); if (n >= K * C) { return; }
+  let k = n / C; let i = n % C;
+  var sum = 0.0;
+  for (var m = 0; m < MI[NEC + i]; m++) { let e = MI[EOC + MAXE * i + m]; sum += MF[F_DC + e] * MF[F_DV + e] * D[D_DISS + k * E + e]; }
+  IN[S_TH + n] += 0.25 * sum / MF[F_AREA + i] / (CP * D[D_EXM + n]);
+}`,
+  dissipationClear: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let n = i32(id.x); if (n >= K * E) { return; }
+  D[D_DISS + n] = 0.0;
 }`,
 };
 
@@ -472,6 +490,8 @@ export async function createGpuCore(mesh, {
       dispatch(pass, 'pblDiagnose', g, C);
       dispatch(pass, 'adjust', g, C);
       dispatch(pass, 'mixMomentum', g, E);
+      dispatch(pass, 'dissipationHeat', g, L.KC);
+      dispatch(pass, 'dissipationClear', g, L.KE);
       pass.end();
       device.queue.submit([encoder.finish()]);
     }

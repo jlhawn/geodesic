@@ -57,6 +57,7 @@ function unit(phase, chunk, input, out) {
       if (chunk.kind === 'edges') model.phases.mixMomentum(from, to, params[0]);
       else model.phases.adjust(from, to, params[0]);
       break;
+    case PHASE.DISSIPATE: model.phases.dissipate(from, to); break;
     default: break;
   }
 }

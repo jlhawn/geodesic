@@ -42,6 +42,7 @@ export function createLandSurface(mesh, geography, {
     surfaceT[i] += dt * flux[i] / heatCapacity;
     const fromSnow = Math.min(snow[i], evaporation * dt);
     snow[i] -= fromSnow;
+    surfaceT[i] -= latentHeatFusion * fromSnow / heatCapacity;
     soil[i] = Math.max(0, soil[i] - (evaporation * dt - fromSnow));
     if (snow[i] > 0 && surfaceT[i] > MELTING_POINT) {
       const energy = (surfaceT[i] - MELTING_POINT) * heatCapacity;
@@ -70,7 +71,7 @@ export function createLandSurface(mesh, geography, {
   }
 
   return {
-    soil, snow, runoff, land, budget, heatCapacity, bucketCapacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water,
+    soil, snow, runoff, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water,
     serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow) }; },
     load(saved) { for (let i = 0; i < C; i++) { soil[i] = land[i] ? saved.soil[i] : 0; snow[i] = land[i] ? saved.snow[i] : 0; } runoff.fill(0); },
     bucketCapacity,
