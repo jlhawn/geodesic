@@ -56,7 +56,7 @@ export function sigmaInterfaces() {
 export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
-    nu4 = 0, nu4Theta = 0, forcing = null, surfaceGeopotential = null, buffers = null, splitClosure = false,
+    nu4 = 0, nu4Theta = 0, surfaceGeopotential = null, buffers = null, splitClosure = false,
   } = options;
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -64,7 +64,6 @@ export function createSigmaCore(mesh, options = {}) {
   } = mesh;
   const K = levels.length - 1;
   const kappa = R / cp;
-  let applyForcing = forcing;
   const sigmaUpper = levels.subarray(0, K);
   const sigmaLower = levels.subarray(1, K + 1);
   const dSigma = Float64Array.from(sigmaLower, (s, k) => s - sigmaUpper[k]);
@@ -321,11 +320,6 @@ export function createSigmaCore(mesh, options = {}) {
     phaseColumn(state, out, 0, C);
     phaseVertex(state, 0, V);
     phaseLayer(state, out, 0, K);
-    if (applyForcing) applyForcing(state, out, diagnostics);
-  }
-
-  function setForcing(fn) {
-    applyForcing = fn;
   }
 
   const diagnostics = { K, C, E, V, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, kappa, cp, R, g, p0, exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, diagnose, diagnoseColumn };
@@ -336,39 +330,5 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, nu4, nu4Theta, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, setForcing, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV } };
-}
-
-/*
- * Held & Suarez 1994 forcing: Newtonian relaxation of temperature toward
- * the prescribed radiative-equilibrium profile and Rayleigh friction in
- * the boundary layer, as tendencies added to theta and u.
- */
-export function createHeldSuarez(mesh, core, {
-  kf = 1 / 86400, ka = 1 / (40 * 86400), ks = 1 / (4 * 86400), sigmaB = 0.7,
-  deltaTy = 60, deltaThetaZ = 10, tMin = 200, tMax = 315, pRef = 1e5,
-} = {}) {
-  const { K, C, E, sigmaMid, kappa, cp, exnerLayer } = core.diagnostics;
-  const cosLat = Float64Array.from(mesh.latCell, Math.cos);
-  const sinLat = Float64Array.from(mesh.latCell, Math.sin);
-  const cosLatEdge = Float64Array.from(mesh.latEdge, Math.cos);
-  return function forcing(state, out) {
-    const [pi, theta, u] = state;
-    const [, dTheta, dU] = out;
-    for (let k = 0; k < K; k++) {
-      const s = sigmaMid[k];
-      const weight = Math.max(0, (s - sigmaB) / (1 - sigmaB));
-      for (let i = 0; i < C; i++) {
-        const idx = k * C + i;
-        const p = pi[i] * s;
-        const c2 = cosLat[i] * cosLat[i];
-        const tEq = Math.max(tMin, (tMax - deltaTy * sinLat[i] * sinLat[i] - deltaThetaZ * Math.log(p / pRef) * c2) * Math.pow(p / pRef, kappa));
-        const kT = ka + (ks - ka) * weight * c2 * c2;
-        dTheta[idx] -= kT * (theta[idx] - tEq / exnerLayer[idx]);
-      }
-      if (weight > 0) {
-        for (let e = 0; e < E; e++) dU[k * E + e] -= kf * weight * u[k * E + e];
-      }
-    }
-  };
+  return { K, levels, sigmaMid, nu4, nu4Theta, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV } };
 }

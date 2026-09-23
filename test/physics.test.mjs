@@ -96,7 +96,7 @@ test('convective adjustment leaves a stable column and conserves enthalpy', () =
   }
 });
 
-test('surface and boundary-layer drag only remove kinetic energy', () => {
+test('surface drag only removes kinetic energy', () => {
   const surface = createSurface(mesh, core);
   const state = sampleState(11);
   const [pi, theta, u] = state;
@@ -107,7 +107,7 @@ test('surface and boundary-layer drag only remove kinetic energy', () => {
   for (let k = 0; k < K; k++) {
     let work = 0;
     for (let e = 0; e < E; e++) work += mesh.dcEdge[e] * mesh.dvEdge[e] * u[k * E + e] * out[2][k * E + e];
-    if (core.sigmaMid[k] > 0.7 || k === K - 1) assert.ok(work < 0); else assert.equal(work, 0);
+    if (k === K - 1) assert.ok(work < 0); else assert.equal(work, 0);
   }
 });
 

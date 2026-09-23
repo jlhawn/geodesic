@@ -189,7 +189,7 @@ export function regridOcean(source, target, ocean, progress = null) {
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), atEdges = interpolationWeights(source.mesh, target.mesh.xEdge);
   const sea = seaMask(source);
   const cell = (v) => regridCellField(source, target, Float64Array.from(v), atCells, sea), edge = (v) => regridEdgeField(source, target, Float64Array.from(v), atEdges);
-  if (!ocean.h) return { h1: cell(ocean.h1), h2: cell(ocean.h2), u1: edge(ocean.u1), u2: edge(ocean.u2), T2: cell(ocean.T2) };
+  if (!ocean.h) return {};
   const sc = source.mesh.nCells, se = source.mesh.nEdges, tc = target.mesh.nCells, te = target.mesh.nEdges, layers = ocean.h.length / sc;
   const perLayer = (field, per, count, regridOne) => { const out = new Float64Array(layers * count); for (let k = 0; k < layers; k++) out.set(regridOne(field.slice(k * per, (k + 1) * per)), k * count); return out; };
   return { h: perLayer(ocean.h, sc, tc, cell), T: perLayer(ocean.T, sc, tc, cell), S: perLayer(ocean.S, sc, tc, cell), u: perLayer(ocean.u, se, te, edge), eta: cell(ocean.eta) };

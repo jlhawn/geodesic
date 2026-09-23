@@ -1089,7 +1089,7 @@ equivalent of a quarter under 40 % cloud cover, with cloud scale 40/50/
 Defaults: detrainment 0.1, cloud scale 60 (down from the 120 that the
 cloud-free tropics had demanded).
 
-### M13 — A shallow dynamic ocean (`js/ocean/reducedGravity.module.js`) — done (spinning up)
+### M13 — A shallow dynamic ocean — done, replaced by M18 (its module `js/ocean/reducedGravity.module.js` and the GPU port `js/gpu/ocean.gpu.js` were deleted once the layered ocean ran on both engines)
 
 Designed against a panel of three (z-level free-surface, reduced-
 gravity isopycnal, diagnostic Ekman): the z-level ocean's free-surface
@@ -1279,9 +1279,9 @@ is single precision.
   diagnosis, and the adjustment (boundary-layer mixing by the
   tridiagonal solve, saturation adjustment, Betts–Miller with
   detrainment, autoconversion, the filler, the dry adjustment), with
-  momentum mixing one thread per edge. `ocean.gpu.js` is the two-layer
-  ocean with its own state, stages and a ten-buffer binding that adds
-  the atmosphere's state and diagnostics for the coupling kernels.
+  momentum mixing one thread per edge. `layeredOcean.gpu.js` is the
+  ocean with its own state, stages and a binding that adds the
+  atmosphere's state and diagnostics for the coupling kernels.
 - `model.gpu.js` presents the CPU model's interface: double-precision
   mirrors refreshed by `sync`, an asynchronous `step`, `diagnostics`
   from the per-cell energy terms read back and summed on the CPU, and
@@ -1658,21 +1658,19 @@ js/
   physics/
     land.module.js          M16: bucket, snow, land albedo and wetness
     radiation.module.js     ported from sim.js RadiationColumn
-    surface.module.js       ported: drag, sensible heat, slab ocean, convective adjustment
+    surface.module.js       ported: surface and top drag, ocean wind stress, convective adjustment
     boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
-    init.module.js          ported: thermal init, balance, seed, bands, geostrophic winds
+    init.module.js          ported: thermal init, balance, seed, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes; ice, snow and soil by source tile
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
-    ice.module.js           M9/M11: slab ocean with zero-layer sea ice, diffusive heat transport, zenith albedo
+    ice.module.js           M9/M11: zero-layer sea ice over the mixed layer, zenith albedo
   ocean/
-    reducedGravity.module.js M13: two-layer reduced-gravity ocean (kept for reference)
     layered.module.js       M18: six-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
     (js/gpu/layeredOcean.gpu.js is its WebGPU port)
   gpu/
     device.module.js         M15: WebGPU device (Dawn in Node, navigator.gpu in the page) and buffer helpers
     core.gpu.js              M15: layouts, dynamics kernels, RK4 and closures, full-step orchestration
     physics.gpu.js           M15: column physics and adjustment kernels
-    ocean.gpu.js             M15: the two-layer ocean's kernels and driver
     model.gpu.js             M15: the GPU model behind the CPU model's interface
   model.module.js           assembles core + physics, RK4 step, diagnostics
   parallel.module.js        M6: the same model stepped on worker threads

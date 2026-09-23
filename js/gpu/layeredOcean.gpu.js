@@ -1,5 +1,5 @@
 import { emptyBuffer, readBuffer } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_BOTTOMS, bathymetryFrom, fitColumns } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_BOTTOMS, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, bathymetryFrom, fitColumns } from '../ocean/layered.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
 /*
@@ -7,16 +7,15 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * layer over interior isopycnal layers, each a TRiSK shallow-water layer
  * carrying thickness, edge velocity, heat h·T and salt h·S. The RK4
  * baroclinic state (h, u, h·T, h·S for all L layers) lives in its own
- * ping-pong buffer set (S/T/K1-K4), exactly the shape of the two-layer
- * ocean.gpu.js generalized to L layers; everything else the step needs
+ * ping-pong buffer set (S/T/K1-K4); everything else the step needs
  * (edge thicknesses, PV, the interior potential, the ∇⁴ closure scratch,
  * the barotropic sub-stepping state, the surface staging) lives in one
  * big scratch/static buffer (OD) bound alongside it. The barotropic mode
  * takes its own small RK4 with fixed-offset stage blocks inside OD,
  * looped on the host the M times a step needs; every other multi-stage
  * loop (the baroclinic RK4, the ∇⁴ closure's two Laplacian passes) mirrors
- * the dispatch-ordering-is-execution-ordering pattern the sigma core and
- * the two-layer ocean already rely on within one compute pass.
+ * the dispatch-ordering-is-execution-ordering pattern the sigma core
+ * relies on within one compute pass.
  *
  * Initialization, loading and serialization run once per model build and
  * are cheap relative to a step, so they stay in JavaScript at double
@@ -25,7 +24,6 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * layer, salt, surface write-back) are WGSL.
  */
 const WORKGROUP = 64;
-const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005;
 
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
@@ -793,34 +791,9 @@ export function createLayeredOcean(core, options = {}) {
     uploadArrays(arrays, surfaceT, ice);
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(arrays.previousT0));
   }
-  function loadArraysFromOldFormat(surfaceT, ice, saved) {
-    const arrays = initializeArrays(surfaceT, ice);
-    if (saved.h1 && saved.u1) {
-      const { h } = arrays;
-      const at = (k, i) => k * C + i;
-      for (let i = 0; i < C; i++) {
-        if (!cellOcean[i]) continue;
-        const wanted = Math.max(o.minimumThickness, Math.min(saved.h1[i], D[i] - EPS * (L - 1)));
-        let below = -1;
-        for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) { below = k; break; }
-        if (below > 0) {
-          const delta = Math.max(-(h[i] - o.minimumThickness), Math.min(wanted - h[i], h[at(below, i)] - EPS));
-          if (delta !== 0) {
-            const from = delta > 0 ? below : 0, to = delta > 0 ? 0 : below, amt = Math.abs(delta);
-            const ff = amt / h[at(from, i)];
-            const dQ = arrays.Q[at(from, i)] * ff, dW = arrays.W[at(from, i)] * ff;
-            h[at(from, i)] -= amt; arrays.Q[at(from, i)] -= dQ; arrays.W[at(from, i)] -= dW;
-            h[at(to, i)] += amt; arrays.Q[at(to, i)] += dQ; arrays.W[at(to, i)] += dW;
-          }
-        }
-      }
-      for (let e = 0; e < E; e++) arrays.u[e] = edgeOcean[e] ? saved.u1[e] : 0;
-    }
-    return arrays;
-  }
   function upload(saved, surfaceT, ice) {
     if (!saved || !saved.h || saved.h.length !== L * C) {
-      const arrays = loadArraysFromOldFormat(surfaceT, ice, saved || {});
+      const arrays = initializeArrays(surfaceT, ice);
       uploadArrays(arrays, surfaceT, ice);
       device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(arrays.previousT0));
       return;
@@ -849,7 +822,7 @@ export function createLayeredOcean(core, options = {}) {
     const h1 = h.subarray(0, C), T1 = T.subarray(0, C), S1 = S.subarray(0, C), u1 = u.subarray(0, E);
     const thermoclineDepth = new Float64Array(C);
     for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? h[i] + h[C + i] + h[2 * C + i] : NaN;
-    return { h, u, T, S, eta, h1, T1, S1, u1, T2: thermoclineDepth, thermoclineDepth, layers: L };
+    return { h, u, T, S, eta, h1, T1, S1, u1, thermoclineDepth, layers: L };
   }
   function serializeFrom(d) {
     return { h: Array.from(d.h), u: Array.from(d.u), T: Array.from(d.T), S: Array.from(d.S), eta: Array.from(d.eta) };

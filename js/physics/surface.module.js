@@ -1,15 +1,14 @@
 import { cellVector } from '../dynamics/operators.module.js';
 
 /*
- * Boundary-layer momentum sinks and the dry convective adjustment. Bulk
- * aerodynamic drag acts on the lowest layer with a gustiness floor on the
- * wind speed; Rayleigh drag ramps from zero at pblTop to pblRate at the
- * ground. Both are applied to edge velocities with the rate averaged from
- * the two adjacent cells, so they only ever remove kinetic energy. An
- * optional Rayleigh drag above topSigma, ramping to 1/topDragDays at the
- * model top, absorbs what reaches the lid.
+ * Surface drag and the dry convective adjustment. Bulk aerodynamic drag
+ * acts on the lowest layer with a gustiness floor on the wind speed,
+ * applied to edge velocities with the rate averaged from the two adjacent
+ * cells, so it only ever removes kinetic energy. An optional Rayleigh drag
+ * above topSigma, ramping to 1/topDragDays at the model top, absorbs what
+ * reaches the lid.
  */
-export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, pblTop = 0.7, pblRate = 1 / 86400, topSigma = 0.05, topDragDays = 0, buffers = null } = {}) {
+export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, topSigma = 0.05, topDragDays = 0, buffers = null } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, exnerLayer } = core.diagnostics;
   const { cellsOnEdge } = mesh;
   const bottom = K - 1;
@@ -40,11 +39,6 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, dragCoeffi
         dU[bottom * E + e] -= rate * u[bottom * E + e];
       }
     }
-    for (let k = kFrom; k < kTo; k++) {
-      if (sigmaMid[k] <= pblTop) continue;
-      const rate = pblRate * (sigmaMid[k] - pblTop) / (1 - pblTop);
-      for (let e = 0; e < E; e++) dU[k * E + e] -= rate * u[k * E + e];
-    }
     if (topDragDays > 0) {
       for (let k = kFrom; k < kTo; k++) {
         if (sigmaMid[k] >= topSigma) continue;
@@ -55,7 +49,6 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, dragCoeffi
   }
 
   const aeroFactor = new Float64Array(C);
-  const rayleighRate = Float64Array.from(sigmaMid, (s) => (s > pblTop ? pblRate * (s - pblTop) / (1 - pblTop) : 0));
 
   function stress(state, out = new Float64Array(E)) {
     const [pi, theta, u] = state;
@@ -65,10 +58,7 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, dragCoeffi
       aeroFactor[i] = (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * airDensity * Math.max(windSpeed[i], gustiness);
     }
     for (let e = 0; e < E; e++) {
-      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], p = 0.5 * (pi[a] + pi[b]);
-      let sum = 0.5 * (aeroFactor[a] + aeroFactor[b]) * u[bottom * E + e];
-      for (let k = 0; k < K; k++) if (rayleighRate[k] > 0) sum += rayleighRate[k] * u[k * E + e] * p * dSigma[k] / g;
-      out[e] = sum;
+      out[e] = 0.5 * (aeroFactor[cellsOnEdge[2 * e]] + aeroFactor[cellsOnEdge[2 * e + 1]]) * u[bottom * E + e];
     }
     return out;
   }

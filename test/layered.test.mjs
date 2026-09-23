@@ -218,44 +218,16 @@ test('surface warming shallows the mixed layer by detrainment; surface cooling d
   assert.equal(ocean.diagnostics().oceanLimited, 0);
 });
 
-test('load() from the old two-layer format seeds the climatology and honours h1 within [minimumThickness, D] and u1 on ocean edges', () => {
+test('load() of a saved ocean without layers starts from the climatology', () => {
   const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.abs(lon) < 40 * DEG && lat > 12 * DEG && lat < 48 * DEG ? -4000 : 500)));
   const ocean = createOcean(mesh, { everySteps: 1, geography });
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => 275 + 25 * Math.cos(lat) ** 2), ice = new Float64Array(C);
-
-  // The climatology's own mixed layer is ~60 m deep everywhere (mixedDepth),
-  // so a shallowing request to 55 m only ever gives mass to the interior
-  // (unbounded above) and is honoured exactly, unlike a deepening request
-  // (see below).
-  const u1 = Float64Array.from({ length: E }, (_, e) => 0.02 * Math.sin(e));
-  const saved = { h1: new Float64Array(C).fill(55), h2: new Float64Array(C).fill(900), u1, u2: new Float64Array(E), T2: new Float64Array(C).fill(280) };
-  ocean.load(saved, surfaceT, ice);
-  for (let i = 0; i < C; i++) {
-    if (!ocean.cellOcean[i]) continue;
-    assert.ok(Math.abs(ocean.h[i] - 55) < 1e-6, `mixed layer depth ${ocean.h[i]} at cell ${i} should honour the requested 55 m`);
-  }
-  for (let e = 0; e < E; e++) {
-    if (ocean.edgeOcean[e]) assert.equal(ocean.u[e], u1[e]);
-    else assert.equal(ocean.u[e], 0);
-  }
-
-  // Extreme requests still land within [minimumThickness, D]: the loader
-  // only exchanges mass with the single interior layer directly below the
-  // mixed layer, so a huge h1 request is capped by that layer's own
-  // thickness long before it reaches the seafloor.
-  const extreme = { h1: new Float64Array(C).fill(1e6), h2: new Float64Array(C).fill(1), u1: new Float64Array(E).fill(0.3), u2: new Float64Array(E), T2: new Float64Array(C) };
-  ocean.load(extreme, surfaceT, ice);
-  for (let i = 0; i < C; i++) {
-    if (!ocean.cellOcean[i]) continue;
-    assert.ok(ocean.h[i] >= 10 - 1e-9 && ocean.h[i] <= ocean.D[i] + 1e-9, `mixed layer depth ${ocean.h[i]} at cell ${i} should stay within [minimumThickness, D=${ocean.D[i]}]`);
-  }
-
-  const shallow = { h1: new Float64Array(C).fill(0.001), h2: new Float64Array(C).fill(900), u1: new Float64Array(E).fill(-0.1), u2: new Float64Array(E), T2: new Float64Array(C) };
-  ocean.load(shallow, surfaceT, ice);
-  for (let i = 0; i < C; i++) {
-    if (!ocean.cellOcean[i]) continue;
-    assert.ok(ocean.h[i] >= 10 - 1e-9, `mixed layer depth ${ocean.h[i]} at cell ${i} should not go below minimumThickness`);
-  }
+  ocean.initialize(surfaceT, ice);
+  const climatology = Float64Array.from(ocean.h);
+  ocean.u.fill(0.3);
+  ocean.load({ h1: new Float64Array(C).fill(55), u1: new Float64Array(E).fill(0.02) }, surfaceT, ice);
+  for (let n = 0; n < climatology.length; n++) assert.equal(ocean.h[n], climatology[n]);
+  for (let n = 0; n < ocean.u.length; n++) assert.equal(ocean.u[n], 0);
 });
 
 test('load(serialize()) reproduces h, u and eta exactly', () => {

@@ -33,8 +33,8 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  *   vertex(verts)  kite-weighted π
  *   layer(layers)  θ and momentum tendencies, drag
  * After the RK4 step, once per step and applied to the state directly:
- *   ocean()        the ocean heat convergence from the whole mixed
- *                  layer (main thread only, before physics)
+ *   ocean()        the dynamic ocean step (main thread only, before
+ *                  physics)
  *   physics(cells) radiation, surface fluxes, evaporation, sea ice
  *   closure(layers) the ∇⁴ closures
  *   adjust(cells)  boundary-layer mixing, condensation, convection, filler
@@ -59,7 +59,7 @@ export function createModel(gridOrMesh, {
   const { K, C, E, V } = core.diagnostics;
   const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, exchangeCoefficients: dragCoefficients, ...radiationOptions });
   const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, ...boundaryLayerOptions }) : null;
-  const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, ...(boundaryLayer ? { pblRate: 0 } : {}), buffers: buffers ? buffers.surface : null, dragCoefficients, ...surfaceOptions });
+  const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, dragCoefficients, ...surfaceOptions });
   const moistPhysics = createMoistPhysics(mesh, core, { buffers: buffers ? buffers.moist : null, ...moistOptions });
   const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, geography, ...oceanOptions }) : null;
   const land = physics && geography ? createLandSurface(mesh, geography, { buffers: buffers ? buffers.land : null, ...landOptions }) : null;
@@ -67,7 +67,7 @@ export function createModel(gridOrMesh, {
   const sharedCapacity = !ocean && buffers && buffers.ocean ? new Float64Array(buffers.ocean.capacity) : null;
   const seaIce = createSeaIce(mesh, {
     buffers: buffers ? buffers.ice : null,
-    ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity, oceanDiffusivity: 0, oceanHeatFlux: 0 } : {}),
+    ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity } : {}),
     ...iceOptions,
   });
   const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
@@ -88,14 +88,11 @@ export function createModel(gridOrMesh, {
       if (physics && part !== 'tracers') surface.applyLayers(input, out, kFrom, kTo);
     },
     ocean(dt) {
-      if (!physics) return;
-      if (ocean) {
-        const runoff = land ? land.budget.runoff : 0;
-        ocean.accumulate(radiation.evaporation, moist ? moistPhysics.rain : null, dt, runoff - lastRunoff);
-        lastRunoff = runoff;
-        ocean.advance(state[3], state[6], seaIce.oceanFlux, () => surface.stress(state, stressScratch), dt);
-      }
-      else seaIce.prepare(state[3], state[6]);
+      if (!physics || !ocean) return;
+      const runoff = land ? land.budget.runoff : 0;
+      ocean.accumulate(radiation.evaporation, moist ? moistPhysics.rain : null, dt, runoff - lastRunoff);
+      lastRunoff = runoff;
+      ocean.advance(state[3], state[6], seaIce.oceanFlux, () => surface.stress(state, stressScratch), dt);
     },
     physics(iFrom, iTo, dt, sums) {
       if (!physics) return;

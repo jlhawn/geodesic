@@ -18,7 +18,7 @@ function stats(cpu, gpu) {
   return { maxDiff, at, rms: Math.sqrt(sumSq / cpu.length), rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
 async function pair(N, steps, dt) {
-  const model = createModel(new Grid(N), { ocean: false, ice: { oceanDiffusivity: 0, oceanHeatFlux: 0 } });
+  const model = createModel(new Grid(N), { ocean: false });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model) });

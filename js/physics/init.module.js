@@ -58,10 +58,8 @@ function geopotentialHeightAt(core, i, pi, pressure) {
  * Initial state: the equilibrium profile shifted by each column's
  * surface-temperature offset (tapered by σ), a
  * wavenumber-5 θ seed at ±45°, surface pressure set by bisection so the
- * 500 hPa surface is level, optionally the hand-drawn subtropical-high /
- * subpolar-low pressure bands (off: they are not balanced by anything and
- * ring at 10 hPa), and winds in geostrophic balance with the model's own
- * pressure gradient force, tapered to zero inside ±15°.
+ * 500 hPa surface is level, and winds in geostrophic balance with the
+ * model's own pressure gradient force, tapered to zero inside ±15°.
  */
 /*
  * Initial humidity: a relative humidity that falls from
@@ -85,7 +83,7 @@ export function initialHumidity(model, pi, theta, { surfaceHumidity = 0.7 } = {}
 
 export function initializeState(model, {
   p0 = 101325, seedAmplitude = 2, seedWavenumber = 5, seedLatitude = 45, seedWidth = 15,
-  bands = false, geostrophic = true, referencePressure = 50000, taperLatitude = 15, profile = null, surfaceHumidity = 0.7,
+  geostrophic = true, referencePressure = 50000, taperLatitude = 15, profile = null, surfaceHumidity = 0.7,
 } = {}) {
   const { mesh, core } = model;
   const { K, C, E, sigmaMid, cp, R, exnerLayer, dExnerDpi, geopotential } = core.diagnostics;
@@ -130,28 +128,6 @@ export function initializeState(model, {
   }
   const scale = p0 / (piSum / area);
   for (let i = 0; i < C; i++) pi[i] *= scale;
-
-  if (bands) {
-    const shape = (lat, center, width) => Math.exp(-(((lat - center) / width) ** 2));
-    const taper = (lat) => {
-      const a = Math.abs(lat);
-      if (a <= 68) return 1;
-      if (a >= 80) return 0;
-      return Math.cos((a - 68) / 12 * Math.PI / 2) ** 2;
-    };
-    const added = new Float64Array(C);
-    let addedSum = 0;
-    for (let i = 0; i < C; i++) {
-      const lat = latCell[i] / deg;
-      const wobble = 5 * Math.sin(4 * lonCell[i]);
-      let dp = 600 * (shape(lat, 30 + wobble, 12) + shape(lat, -30 - wobble, 12));
-      dp += -2200 * (shape(lat, 60 - wobble, 12) + shape(lat, -60 + wobble, 12));
-      added[i] = dp * taper(lat);
-      addedSum += added[i] * areaCell[i];
-    }
-    const mean = addedSum / area;
-    for (let i = 0; i < C; i++) pi[i] += added[i] - mean;
-  }
 
   if (geostrophic) {
     core.diagnose(pi, theta);

@@ -1,8 +1,8 @@
 import { buildMesh } from '../mesh.module.js';
 import { createSigmaCore, sigmaInterfaces } from '../dynamics/sigmaCore.module.js';
 import { createSeaIce } from '../physics/ice.module.js';
-import { createRadiation } from '../physics/radiation.module.js';
 import { createSurface } from '../physics/surface.module.js';
+import { createRadiation } from '../physics/radiation.module.js';
 import { createMoistPhysics } from '../physics/moist.module.js';
 import { LATENT_HEAT } from '../physics/moist.module.js';
 import { SIDEREAL_DAY } from '../model.module.js';
@@ -31,7 +31,7 @@ export async function createGpuModel(gridOrMesh, {
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;
   const nu4 = Math.pow(spacing / Math.PI, 4) / (nu4Hours * 3600);
-  const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, splitClosure: true, surfaceGeopotential: phis });
+  const core = createSigmaCore(mesh, { surfaceGeopotential: phis });
   const { K, C, E } = core.diagnostics;
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
@@ -39,9 +39,9 @@ export async function createGpuModel(gridOrMesh, {
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
   };
   const gpu = await createGpuCore(mesh, { nu4, nu4Theta: nu4, physics, topSigma: surface.topSigma ?? 0.02, topDragDays: surface.topDragDays ?? 5, surfaceGeopotential: phis });
-  const seaIce = createSeaIce(mesh, { oceanDiffusivity: 0, oceanHeatFlux: 0, ...ice });
+  const seaIce = createSeaIce(mesh, ice);
   const radiationCpu = createRadiation(mesh, core, radiation);
-  const surfaceCpu = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, pblRate: 0, ...surface });
+  const surfaceCpu = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, ...surface });
   const moistCpu = createMoistPhysics(mesh, core, moist);
   const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { ...oceanOptions, geography });
   const landCpu = geography ? createLandSurface(mesh, geography, landOptions) : null;

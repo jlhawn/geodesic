@@ -45,7 +45,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  */
 export const LAYER_DENSITIES = [1024.0, 1025.5, 1026.5, 1027.2, 1027.7];
 export const LAYER_BOTTOMS = [250, 600, 1200, 2500];
-const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005;
+export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005;
 
 /*
  * The model's bathymetry: the cell-mean ETOPO depth of every sea cell,
@@ -636,16 +636,6 @@ export function createOcean(mesh, {
   function load(saved, surfaceT, ice) {
     if (!saved.h || saved.h.length !== L * C) {
       initialize(surfaceT, ice);
-      if (saved.h1 && saved.u1) {
-        for (let i = 0; i < C; i++) {
-          if (!cellOcean[i]) continue;
-          const wanted = Math.max(minimumThickness, Math.min(saved.h1[i], D[i] - EPS * (L - 1)));
-          let below = -1;
-          for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) { below = k; break; }
-          if (below > 0) { const delta = Math.max(-(h[i] - minimumThickness), Math.min(wanted - h[i], h[at(below, i)] - EPS)); if (delta > 0) move(i, below, 0, delta); else if (delta < 0) move(i, 0, below, -delta); }
-        }
-        for (let e = 0; e < E; e++) u[e] = edgeOcean[e] ? saved.u1[e] : 0;
-      }
       return;
     }
     h.set(saved.h); u.set(saved.u); eta.set(saved.eta);
@@ -674,7 +664,7 @@ export function createOcean(mesh, {
   const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;
   function fields() {
     for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? h[i] + h[at(1, i)] + h[at(2, i)] : NaN;
-    return { h1: h.subarray(0, C), T1: T0, S1: S0, u1: u.subarray(0, E), T2: thermoclineDepth, eta, thermoclineDepth };
+    return { h1: h.subarray(0, C), T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth };
   }
 
   function diagnostics() {
