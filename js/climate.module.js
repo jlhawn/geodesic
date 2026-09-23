@@ -115,7 +115,7 @@ const PALETTES = {
   'teal-gray-brown': [[0.00, 0.40, 0.37], [0.35, 0.64, 0.60], [0.50, 0.50, 0.50], [0.75, 0.55, 0.30], [0.55, 0.32, 0.04]],
 };
 
-const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: 'open' };
+const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: 'open', sun: 1, ambient: 0.015 };
 
 /*
  * The contour row draws isobars of surface pressure at the surface and
@@ -152,7 +152,7 @@ function applyOverrides(settings, overrides) {
   for (const key of Object.keys(DEFAULTS)) {
     if (!(key in overrides)) continue;
     let value = overrides[key];
-    if (typeof DEFAULTS[key] === 'number') { if (Number(value) > 0) settings[key] = Number(value); continue; }
+    if (typeof DEFAULTS[key] === 'number') { if (Number(value) >= 0 && (Number(value) > 0 || key === 'sun' || key === 'ambient')) settings[key] = Number(value); continue; }
     if (key === 'overlay') value = OVERLAY_ALIASES[value] ?? value;
     const known = key === 'palette' ? PALETTES[value] : key === 'overlay' ? OVERLAYS[value] : key === 'view' ? ['space', 'atmosphere', 'ocean', 'data'].includes(value) : key === 'panel' ? ['open', 'closed'].includes(value) : key === 'isobars' ? ['on', 'off'].includes(value) : document.querySelector(`[data-setting="${key}"] [data-value="${CSS.escape(value)}"]`);
     if (known) settings[key] = value;
@@ -242,6 +242,7 @@ const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'mi', 'wbt', 'dp', 'none'
 const CURRENT_REFERENCE = 0.2;
 
 const VIEW_NOTES = [
+  ['Lighting', 'In the Satellite view, the strength of the sunlight and of the ambient light that keeps the night side from going black.'],
   ['Mode', 'Atmosphere and Ocean paint the chosen overlay on an evenly lit globe, each with its own overlays: the wind or the current is what the animation follows, and only Atmosphere offers isobars and height lines. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day.'],
   ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
   ['Height', 'The pressure level shown by the wind, temperature and humidity views and followed by the animation: Sfc is the lowest layer, about 60 m up; the others are hPa. Column views hide it and use the surface wind.'],
@@ -331,7 +332,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (!latest) return;
     const time = display.advance(now, latest.time, { ...recentFrames(), running });
     if (running) document.getElementById('date').textContent = formatDate(time);
-    if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(time), sidereal: 2 * Math.PI * time * (1 / DAY + 1 / YEAR) });
+    if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(time), sidereal: 2 * Math.PI * time * (1 / DAY + 1 / YEAR), ambient: settings.ambient, intensity: settings.sun });
   }
   requestAnimationFrame(tick);
 
@@ -491,6 +492,9 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     document.getElementById('heightLabel').classList.toggle('hidden', !heights);
     document.getElementById('heightOptions').classList.toggle('hidden', !heights);
     for (const id of ['overlayLabel', 'overlayOptions', 'animateLabel', 'animateOptions']) document.getElementById(id).classList.toggle('hidden', space);
+    for (const id of ['lightLabel', 'lightOptions']) document.getElementById(id).classList.toggle('hidden', !space);
+    document.getElementById('sunSlider').value = String(settings.sun);
+    document.getElementById('ambientSlider').value = String(settings.ambient);
     for (const id of ['isolineLabel', 'isolineOptions']) document.getElementById(id).classList.toggle('hidden', settings.view !== 'atmosphere');
     document.getElementById('animateLabel').textContent = settings.view === 'ocean' ? 'Current animation' : 'Wind animation';
     document.getElementById('isolineLabel').textContent = isolines.label;
@@ -502,7 +506,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (palettes) fillSelect(paletteSelect, Object.keys(PALETTES), settings.palette);
     document.querySelector('[data-control="play"]').textContent = running ? '❚❚' : '▶';
     panel.classList.toggle('hidden', settings.panel !== 'open');
-    if (viewer) viewer.setSpace({ enabled: space });
+    if (viewer) viewer.setSpace({ enabled: space, ambient: settings.ambient, intensity: settings.sun });
     if (!latest) return;
     paintOverlay();
     paintWind();
@@ -639,8 +643,10 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       select(point ? nearestCell(point) : -1);
     });
     window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && selected >= 0) select(-1); });
-    panel.addEventListener('mouseover', (event) => { const button = event.target.closest('button[data-tip]'); if (button) { hoverTip = button.dataset.tip; refreshTip(); } });
-    panel.addEventListener('mouseout', (event) => { const button = event.target.closest('button[data-tip]'); if (button && hoverTip !== null) { hoverTip = null; refreshTip(); } });
+    panel.addEventListener('mouseover', (event) => { const tipped = event.target.closest('[data-tip]'); if (tipped) { hoverTip = tipped.dataset.tip; refreshTip(); } });
+    panel.addEventListener('mouseout', (event) => { const tipped = event.target.closest('[data-tip]'); if (tipped && hoverTip !== null) { hoverTip = null; refreshTip(); } });
+    document.getElementById('sunSlider').addEventListener('input', (event) => update({ sun: Number(event.target.value) }));
+    document.getElementById('ambientSlider').addEventListener('input', (event) => update({ ambient: Number(event.target.value) }));
   }
 
   let ready = null;

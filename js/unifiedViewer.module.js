@@ -397,7 +397,7 @@ void main() {
     projectedMaterials.push(material);
   }
 
-  const lighting = { uSunDirection: { value: new THREE.Vector3(1, 0, 0) }, uLighting: { value: 0 }, uAmbient: { value: 0.015 } };
+  const lighting = { uSunDirection: { value: new THREE.Vector3(1, 0, 0) }, uLighting: { value: 0 }, uAmbient: { value: 0.015 }, uSun: { value: 1 } };
   const material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
   projectMaterial(material, 0.0, {
     uniforms: lighting,
@@ -405,9 +405,10 @@ void main() {
 uniform vec3 uSunDirection;
 uniform float uLighting;
 uniform float uAmbient;
+uniform float uSun;
 `,
     source: `
-  float daylight = uAmbient + (1.0 - uAmbient) * max(0.0, dot(normalize(position), uSunDirection));
+  float daylight = uAmbient + uSun * max(0.0, dot(normalize(position), uSunDirection));
   vColor.rgb *= mix(1.0, daylight, uLighting);
 `,
   });
@@ -889,10 +890,11 @@ uniform float uReferenceSpeed;
 
   return {
     updateColors: dynamicColors ? updateColors : null,
-    setSpace({ enabled, sun: direction = null, sidereal = 0, ambient = 0.015 } = {}) {
+    setSpace({ enabled, sun: direction = null, sidereal = 0, ambient = 0.015, intensity = 1 } = {}) {
       space.enabled = enabled;
       lighting.uLighting.value = enabled ? 1 : 0;
       lighting.uAmbient.value = ambient;
+      lighting.uSun.value = intensity;
       if (direction) { space.sun.set(direction[0], direction[1], direction[2]); lighting.uSunDirection.value.copy(space.sun); }
       space.sidereal.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -sidereal);
     },
