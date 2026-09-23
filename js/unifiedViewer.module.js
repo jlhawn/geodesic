@@ -221,7 +221,22 @@ export function initUnifiedViewer(container, grid, config = {}) {
   const colorAttribute = new THREE.BufferAttribute(new Uint8Array(kData), 3, true);
   if (!dynamicColors) colorAttribute.onUpload(disposeArray);
   geometry.setAttribute('color', colorAttribute);
+  const surfaceAttribute = new THREE.BufferAttribute(new Float32Array(4 * vertexCounter), 4);
+  geometry.setAttribute('surface', surfaceAttribute);
+  const slopeAttribute = new THREE.BufferAttribute(Float32Array.from(pData, (v, k) => v / Math.hypot(pData[k - (k % 3)], pData[k - (k % 3) + 1], pData[k - (k % 3) + 2])), 3);
+  geometry.setAttribute('slope', slopeAttribute);
   geometry.computeBoundingSphere();
+
+  function fillPerCell(attribute, values, size) {
+    const array = attribute.array;
+    for (let c = 0; c < cellCounter; c++) {
+      let v = size * cellVertexStart[c];
+      for (let k = 0; k < cellVertexCount[c]; k++) for (let j = 0; j < size; j++) array[v++] = values[size * c + j];
+    }
+    attribute.needsUpdate = true;
+  }
+  const updateSurface = (values) => fillPerCell(surfaceAttribute, values, 4);
+  const updateSlopes = (normals) => fillPerCell(slopeAttribute, normals, 3);
 
   function updateColors(rgb) {
     const array = colorAttribute.array;
@@ -406,10 +421,25 @@ uniform vec3 uSunDirection;
 uniform float uLighting;
 uniform float uAmbient;
 uniform float uSun;
+attribute vec4 surface;
+attribute vec3 slope;
 `,
     source: `
-  float daylight = uAmbient + uSun * max(0.0, dot(normalize(position), uSunDirection));
-  vColor.rgb *= mix(1.0, daylight, uLighting);
+  vec3 n = normalize(position);
+  float mu = dot(n, uSunDirection);
+  float groundLight = max(0.0, dot(normalize(slope), uSunDirection)) * (1.0 - 0.7 * surface.z);
+  float diffuse = mix(groundLight, max(0.0, mu), surface.y);
+  mat3 spin = mat3(uModelRotation);
+  vec3 nView = spin * n;
+  vec3 halfway = normalize(spin * uSunDirection + vec3(0.0, 0.0, 1.0));
+  float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.05, mu);
+  float twilight = exp(-mu * mu / 0.018) * (0.5 + 0.5 * surface.y);
+  float limb = pow(1.0 - max(0.0, nView.z), 3.0) * (1.0 - uBlend) * smoothstep(-0.25, 0.15, mu);
+  vec3 lit = vColor.rgb * (uAmbient + uSun * diffuse)
+    + uSun * glint * vec3(1.0, 0.95, 0.8) * 0.9
+    + uSun * twilight * vec3(0.55, 0.26, 0.09) * 0.4
+    + uSun * limb * vec3(0.30, 0.55, 1.0) * 0.5;
+  vColor.rgb = mix(vColor.rgb, lit, uLighting);
 `,
   });
 
@@ -890,6 +920,7 @@ uniform float uReferenceSpeed;
 
   return {
     updateColors: dynamicColors ? updateColors : null,
+    updateSurface, updateSlopes,
     setSpace({ enabled, sun: direction = null, sidereal = 0, ambient = 0.015, intensity = 1 } = {}) {
       space.enabled = enabled;
       lighting.uLighting.value = enabled ? 1 : 0;

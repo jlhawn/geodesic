@@ -240,9 +240,11 @@ async function builtinSnapshots(fallback = null) {
 
 const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'mi', 'wbt', 'dp', 'none']);
 const CURRENT_REFERENCE = 0.2;
+// The light sliders run on a square law, position = √(value / max), for fine control near dark.
+const LIGHT_MAX = { sun: 2, ambient: 0.5 };
 
 const VIEW_NOTES = [
-  ['Lighting', 'In the Satellite view, the strength of the sunlight and of the ambient light that keeps the night side from going black.'],
+  ['Lighting', 'In the Satellite view, the strength of the sunlight and of the ambient light that keeps the night side from going black; both sliders follow a square law, so the left half covers the faint end finely.'],
   ['Mode', 'Atmosphere and Ocean paint the chosen overlay on an evenly lit globe, each with its own overlays: the wind or the current is what the animation follows, and only Atmosphere offers isobars and height lines. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day.'],
   ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
   ['Height', 'The pressure level shown by the wind, temperature and humidity views and followed by the animation: Sfc is the lowest layer, about 60 m up; the others are hPa. Column views hide it and use the surface wind.'],
@@ -285,7 +287,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const activeLevel = () => (settings.view === 'atmosphere' && HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
   const shownLevel = () => latest?.level ?? activeLevel();
   let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, highlight = null, rgb = null, running = !paused, animatedSource = null, seaCells = null;
-  let cells = null, centres = null, selected = -1, hoverTip = null;
+  let cells = null, centres = null, selected = -1, hoverTip = null, neighbours = null, surface = null;
   let geographyFields = {}, hasLand = false;
   const clock = [];
   function simulatedHoursPerMinute() {
@@ -351,6 +353,9 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     centres = new Float32Array(3 * cells.length);
     for (const cell of cells) { const c = cell.centerVertex, r = Math.hypot(c.x, c.y, c.z); centres[3 * cell.index] = c.x / r; centres[3 * cell.index + 1] = c.y / r; centres[3 * cell.index + 2] = c.z / r; }
     selected = -1;
+    neighbours = new Int32Array(6 * cells.length).fill(-1);
+    for (const cell of cells) (cell.neighbors || []).forEach((other, k) => { if (k < 6) neighbours[6 * cell.index + k] = other.index; });
+    surface = new Float32Array(4 * cells.length);
     particles = createWindParticles(document.getElementById('globe'), viewer, grid);
     viewer.setProjection(settings.projection);
     if (view) viewer.setView(view);
@@ -362,10 +367,63 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     cells = centres = null; selected = -1;
   }
 
+  /*
+   * Terrain shading for the satellite view: each cell's normal is tilted
+   * against the elevation gradient fitted over its neighbours, with the
+   * slope exaggerated forty-fold so that a kilometre over a hundred
+   * kilometres reads as a hillside, which lengthens into shadow as the sun
+   * sets.
+   */
+  const SLOPE_EXAGGERATION = 40, EARTH_RADIUS = 6.371e6, CLOUD_TOP = 8000;
+  function uploadSlopes() {
+    if (!viewer || !cells || !latest || !latest.elevation) return;
+    const slopes = new Float32Array(3 * cells.length), height = (i) => Math.max(0, latest.elevation[i]);
+    for (let i = 0; i < cells.length; i++) {
+      const cx = centres[3 * i], cy = centres[3 * i + 1], cz = centres[3 * i + 2];
+      let gx = 0, gy = 0, gz = 0, count = 0;
+      for (let k = 0; k < 6; k++) {
+        const j = neighbours[6 * i + k];
+        if (j < 0) continue;
+        const dx = centres[3 * j] - cx, dy = centres[3 * j + 1] - cy, dz = centres[3 * j + 2] - cz, d2 = dx * dx + dy * dy + dz * dz;
+        const rise = (height(j) - height(i)) / d2;
+        gx += rise * dx; gy += rise * dy; gz += rise * dz; count++;
+      }
+      const scale = count ? SLOPE_EXAGGERATION * 2 / count / EARTH_RADIUS : 0;
+      let nx = cx - scale * gx, ny = cy - scale * gy, nz = cz - scale * gz;
+      const r = Math.hypot(nx, ny, nz) || 1;
+      slopes[3 * i] = nx / r; slopes[3 * i + 1] = ny / r; slopes[3 * i + 2] = nz / r;
+    }
+    viewer.updateSlopes(slopes);
+  }
+
+  /*
+   * Cloud shadows: near the terminator a cloud top CLOUD_TOP high throws
+   * its shadow a distance CLOUD_TOP / tan(sun elevation) toward the dark
+   * side, so a cell is shaded by the cloud in the neighbouring cell that
+   * lies sunward, in proportion to how far that shadow reaches into it.
+   */
+  function cloudShadow(i, opacityOf, sun) {
+    const cx = centres[3 * i], cy = centres[3 * i + 1], cz = centres[3 * i + 2];
+    const sinE = sun[0] * cx + sun[1] * cy + sun[2] * cz;
+    if (sinE <= 0.001) return 0;
+    const tx = sun[0] - sinE * cx, ty = sun[1] - sinE * cy, tz = sun[2] - sinE * cz, tan = sinE / (Math.hypot(tx, ty, tz) || 1e-9);
+    const reach = CLOUD_TOP / tan / (7720e3 / latest.N);
+    if (reach < 0.05) return 0;
+    let best = -1, bestDot = 0;
+    for (let k = 0; k < 6; k++) {
+      const j = neighbours[6 * i + k];
+      if (j < 0) continue;
+      const dot = (centres[3 * j] - cx) * tx + (centres[3 * j + 1] - cy) * ty + (centres[3 * j + 2] - cz) * tz;
+      if (dot > bestDot) { bestDot = dot; best = j; }
+    }
+    return best < 0 ? 0 : Math.min(1, reach) * opacityOf(best);
+  }
+
   function paintSatellite() {
     const cloud = latest.cloud, ice = latest.ice, land = latest.land, soil = latest.soil, snow = latest.snow;
+    const sun = sunDirection(latest.time), opacityOf = (i) => cloudOpacity(cloud[i] * 1000);
     for (let i = 0; i < grid.size; i++) {
-      const opacity = cloudOpacity(cloud[i] * 1000);
+      const opacity = opacityOf(i);
       const onLand = land && land[i];
       const frozen = onLand ? Math.min(1, snow[i] / 20) : Math.min(1, ice[i] / 0.5);
       const wet = onLand ? Math.min(1, soil[i] / 150) : 0;
@@ -375,8 +433,13 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
         const base = ground + frozen * (white - ground);
         rgb[3 * i + j] = LINEAR[Math.round(255 * (base + opacity * (CLOUD_COLOR[j] - base)))];
       }
+      surface[4 * i] = onLand ? 0.06 : 1 - 0.85 * frozen;
+      surface[4 * i + 1] = opacity;
+      surface[4 * i + 2] = cloudShadow(i, opacityOf, sun);
+      surface[4 * i + 3] = 0;
     }
     viewer.updateColors(rgb);
+    viewer.updateSurface(surface);
     document.querySelector('.scaleRow').classList.add('hidden');
     document.getElementById('data').textContent = 'Satellite view';
   }
@@ -493,8 +556,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     document.getElementById('heightOptions').classList.toggle('hidden', !heights);
     for (const id of ['overlayLabel', 'overlayOptions', 'animateLabel', 'animateOptions']) document.getElementById(id).classList.toggle('hidden', space);
     for (const id of ['lightLabel', 'lightOptions']) document.getElementById(id).classList.toggle('hidden', !space);
-    document.getElementById('sunSlider').value = String(settings.sun);
-    document.getElementById('ambientSlider').value = String(settings.ambient);
+    document.getElementById('sunSlider').value = String(Math.sqrt(settings.sun / LIGHT_MAX.sun));
+    document.getElementById('ambientSlider').value = String(Math.sqrt(settings.ambient / LIGHT_MAX.ambient));
     for (const id of ['isolineLabel', 'isolineOptions']) document.getElementById(id).classList.toggle('hidden', settings.view !== 'atmosphere');
     document.getElementById('animateLabel').textContent = settings.view === 'ocean' ? 'Current animation' : 'Wind animation';
     document.getElementById('isolineLabel').textContent = isolines.label;
@@ -645,11 +708,11 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && selected >= 0) select(-1); });
     panel.addEventListener('mouseover', (event) => { const tipped = event.target.closest('[data-tip]'); if (tipped) { hoverTip = tipped.dataset.tip; refreshTip(); } });
     panel.addEventListener('mouseout', (event) => { const tipped = event.target.closest('[data-tip]'); if (tipped && hoverTip !== null) { hoverTip = null; refreshTip(); } });
-    document.getElementById('sunSlider').addEventListener('input', (event) => update({ sun: Number(event.target.value) }));
-    document.getElementById('ambientSlider').addEventListener('input', (event) => update({ ambient: Number(event.target.value) }));
+    document.getElementById('sunSlider').addEventListener('input', (event) => update({ sun: Math.round(1e3 * LIGHT_MAX.sun * Number(event.target.value) ** 2) / 1e3 }));
+    document.getElementById('ambientSlider').addEventListener('input', (event) => update({ ambient: Math.round(1e4 * LIGHT_MAX.ambient * Number(event.target.value) ** 2) / 1e4 }));
   }
 
-  let ready = null;
+  let ready = null, slopesUploaded = false;
   worker.onmessage = (event) => {
     const message = event.data;
     if (message.type === 'status') {
@@ -671,12 +734,14 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       geographyFields = hasLand ? { land: message.land, landFraction: message.landFraction, elevation: message.elevation } : {};
       seaCells = hasLand ? Uint8Array.from(message.land, (l) => 1 - l) : null;
       if (hasLand) coast.set(message.coast, message.coastCells);
+      slopesUploaded = false;
       document.getElementById('date').textContent = `model ready: ${message.cells} cells × ${message.layers} layers, dt ${message.dt} s, ${message.workers > 1 ? `${message.workers} workers` : 'one thread'}`;
     }
     if (message.type === 'snapshotData') storeSnapshot(message);
     if (message.type === 'frame') {
       document.getElementById('progress').classList.remove('visible');
       latest = { ...message, ...geographyFields, N: ready.N, workers: ready.workers, rain: accumulateRain(message) };
+      if (!slopesUploaded) { uploadSlopes(); slopesUploaded = true; }
       clock.push({ wall: performance.now(), time: message.time });
       while (clock.length > 2 && clock[clock.length - 1].wall - clock[0].wall > 30000) clock.shift();
       render();
