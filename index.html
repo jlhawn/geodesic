@@ -43,19 +43,19 @@
     <h1>WebGCM</h1>
     <p class="tagline">A global climate model that runs in your browser.</p>
 
-    <a class="card hero" href="climate.html?view=space&lat=15&lon=-95&zoom=180">
+    <a class="card hero" href="climate.html?view=space&lat=15&lon=-95&zoom=230&graticule=off&sun=1&ambient=0.004">
       <img src="screenshots/satellite.jpg" width="1280" height="720" alt="The simulated Earth seen from space, with clouds, sea ice and the day–night terminator">
       <div class="body">
         <h2>Climate model</h2>
-        <p>A global climate model running live: a hydrostatic atmosphere with 27 levels on a geodesic C-grid, moist convection and clouds, a wind-driven two-layer ocean, sea ice, snow and soil on real continents with terrain. Every kernel runs on the graphics card through WebGPU. It picks up from a six-year spin-up at 64 subdivisions, about 41,000 cells 110 km across, where you can colour the globe by wind, temperature, pressure, rain, clouds, ice or ocean currents, follow the wind with particles, watch the planet from space, and save snapshots.</p>
+        <p>A global climate model running live: a hydrostatic atmosphere with 27 levels on a geodesic C-grid, moist convection and clouds, a six-layer ocean with a mixed layer over isopycnal layers, sea ice, snow and soil on real continents with terrain. Every kernel runs on the graphics card through WebGPU. It picks up from a two-and-a-half-year spin-up at 64 subdivisions, about 41,000 cells 110 km across, where you can colour the globe by wind, temperature, pressure, rain, clouds, ice or ocean currents, follow the wind with particles, watch the planet from space, and save snapshots.</p>
         <p class="note">Best in a browser with WebGPU (Chrome, Edge or Safari 26). Without it the model falls back to a slower CPU engine. The starting state is a 50 MB download.</p>
         <span class="go">Open the climate model →</span>
       </div>
     </a>
     <div class="strip">
-      <a href="climate.html?overlay=wind&level=250&animate=arrows&isobars=off&graticule=15&projection=sphere&lat=50&lon=-30&zoom=900"><img src="screenshots/jet.jpg" width="960" height="600" alt="Wind speed at 250 hPa on the globe, with the jet streams as bright bands">Jet streams: wind speed at 250 hPa, with wind vectors and the graticule</a>
-      <a href="climate.html?overlay=mslp&isobars=on&isobarStep=1&animate=none&graticule=off&projection=sphere&lat=-58&lon=-85&zoom=700"><img src="screenshots/pressure.jpg" width="960" height="600" alt="A deep low with 1 hPa isobars over the Drake Passage">Sea-level pressure with 1 hPa isobars over the Drake Passage</a>
-      <a href="climate.html?overlay=sst&animate=particles&isobars=off&graticule=off&projection=sphere&lat=22&lon=-72&zoom=600"><img src="screenshots/ocean.jpg" width="960" height="600" alt="Sea surface temperature around the Caribbean with the current particles streaked over a second of motion">Sea surface temperature with the current animation over the Caribbean and the Gulf Stream, a second of motion in one frame</a>
+      <a href="climate.html?view=atmosphere&overlay=wind&level=250&animate=arrows&isobars=off&graticule=15&projection=sphere&lat=50&lon=-30&zoom=900"><img src="screenshots/jet.jpg" width="960" height="600" alt="Wind speed at 250 hPa on the globe, with the jet streams as bright bands">Jet streams: wind speed at 250 hPa, with wind vectors and the graticule</a>
+      <a href="climate.html?view=atmosphere&overlay=mslp&isobars=on&isobarStep=1&animate=none&graticule=off&projection=sphere&lat=-58&lon=-85&zoom=700"><img src="screenshots/pressure.jpg" width="960" height="600" alt="A deep low with 1 hPa isobars over the Drake Passage">Sea-level pressure with 1 hPa isobars over the Drake Passage</a>
+      <a href="climate.html?view=ocean&overlay=sst&animate=particles&isobars=off&graticule=off&projection=sphere&lat=22&lon=-72&zoom=600"><img src="screenshots/ocean.jpg" width="960" height="600" alt="Sea surface temperature around the Caribbean with the current particles">Sea surface temperature with the current animation over the Caribbean and the Gulf Stream</a>
     </div>
 
     <div class="row">

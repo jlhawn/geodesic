@@ -4,7 +4,7 @@ A global climate model that runs in the browser. The repository keeps the name o
 
 Live at https://gcm.echorelay.net/
 
-- **[Climate model](https://gcm.echorelay.net/climate.html)** — a hydrostatic atmosphere on a geodesic C-grid with moist physics, a two-layer ocean, sea ice, snow and real continents with terrain, integrated on the GPU through WebGPU. Design notes in [docs/c-grid-dynamical-core.md](docs/c-grid-dynamical-core.md), plans in [docs/roadmap.md](docs/roadmap.md).
+- **[Climate model](https://gcm.echorelay.net/climate.html)** — a hydrostatic atmosphere on a geodesic C-grid with moist physics, a six-layer ocean, sea ice, snow and real continents with terrain, integrated on the GPU through WebGPU. Design notes in [docs/c-grid-dynamical-core.md](docs/c-grid-dynamical-core.md), plans in [docs/roadmap.md](docs/roadmap.md).
 - **[Geodesic grid](https://gcm.echorelay.net/grid.html)** — the original geodesic polyhedron viewer (Three.js).
 - **[Synoptic charts](https://gcm.echorelay.net/charts.html)** — pressure-level charts drawn from saved model states.
 
