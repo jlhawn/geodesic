@@ -8,12 +8,13 @@ import { createDisplayClock } from "./displayClock.module.js";
 import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot } from "./snapshots.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
-const TEMP_RANGE = { surface: [240, 310], 1000: [240, 310], 850: [230, 300], 700: [220, 290], 500: [210, 280], 250: [190, 250], 70: [180, 240], 10: [200, 280] };
+const TEMP_RANGE = { surface: [-35, 35], 1000: [-35, 35], 850: [-45, 25], 700: [-55, 15], 500: [-65, 5], 250: [-85, -25], 70: [-95, -35], 10: [-75, 5] };
+const CELSIUS = -273.15;
 const REFERENCE_SPEED = { surface: 15, 1000: 20, 850: 25, 700: 25, 500: 30, 250: 40, 70: 50, 10: 60 };
 
 const OVERLAYS = {
   wind: { label: 'Wind', unit: 'm/s', kind: 'sequential', field: 'speed', scale: 1, range: (level) => [0, WIND_MAX[level]] },
-  temp: { label: 'Temp', unit: 'K', kind: 'sequential', field: 'temperature', scale: 1, range: (level) => TEMP_RANGE[level] },
+  temp: { label: 'Temp', unit: '°C', kind: 'sequential', field: 'temperature', scale: 1, offset: CELSIUS, range: (level) => TEMP_RANGE[level] },
   rh: { label: 'RH', unit: '%', kind: 'sequential', field: 'humidity', scale: 100, range: () => [0, 100] },
   precip: { label: 'Precip', unit: 'mm/day', kind: 'sequential', field: 'precipitation', scale: 1, range: () => [0, 30] },
   tpw: { label: 'TPW', unit: 'kg/m²', kind: 'sequential', field: 'water', scale: 1, range: () => [0, 60] },
@@ -28,7 +29,7 @@ const OVERLAYS = {
   soil: { label: 'Soil water', unit: 'kg/m²', kind: 'sequential', field: 'soil', scale: 1, range: () => [0, 150] },
   snow: { label: 'Snow', unit: 'kg/m²', kind: 'sequential', field: 'snow', scale: 1, range: () => [0, 100] },
   elevation: { label: 'Elevation', unit: 'm', kind: 'diverging', field: 'elevation', scale: 1, range: () => [-4000, 4000] },
-  sst: { label: 'Sea surface temperature', unit: 'K', kind: 'sequential', field: 'sst', scale: 1, range: () => [270, 305] },
+  sst: { label: 'Sea surface temperature', unit: '°C', kind: 'sequential', field: 'sst', scale: 1, offset: CELSIUS, range: () => [-2, 32] },
   current: { label: 'Current speed', unit: 'm/s', kind: 'sequential', field: 'current', scale: 1, range: () => [0, 1] },
   layer: { label: 'Mixed layer depth', unit: 'm', kind: 'sequential', field: 'layerDepth', scale: 1, range: () => [10, 300] },
   thermocline: { label: 'Thermocline depth', unit: 'm', kind: 'sequential', field: 'thermocline', scale: 1, range: () => [0, 1200] },
@@ -329,7 +330,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const stops = PALETTES[settings.palette] ?? PALETTES.viridis;
     for (let i = 0; i < grid.size; i++) {
       if (Number.isNaN(values[i])) { rgb[3 * i] = rgb[3 * i + 1] = rgb[3 * i + 2] = LINEAR[70]; continue; }
-      color((values[i] * overlay.scale - min) / (max - min), stops, rgb, 3 * i);
+      color((values[i] * overlay.scale + (overlay.offset || 0) - min) / (max - min), stops, rgb, 3 * i);
       rgb[3 * i] = LINEAR[rgb[3 * i]]; rgb[3 * i + 1] = LINEAR[rgb[3 * i + 1]]; rgb[3 * i + 2] = LINEAR[rgb[3 * i + 2]];
     }
     viewer.updateColors(rgb);
@@ -432,7 +433,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const d = latest.diagnostics;
     const rows = [
       ['Surface pressure', `<b>${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa</b> — the lowest and highest on the globe right now.`],
-      ['Surface temperature', `<b>${d.meanSurfaceT.toFixed(1)} K</b> — area-weighted global mean of the skin temperature.`],
+      ['Surface temperature', `<b>${(d.meanSurfaceT + CELSIUS).toFixed(1)} °C</b> — area-weighted global mean of the skin temperature.`],
       ['Absorbed solar', `<b>${d.absorbedSolar.toFixed(0)} W/m²</b> — global mean sunlight absorbed by atmosphere and surface.`],
       ['Outgoing longwave', `<b>${d.outgoingLongwave.toFixed(0)} W/m²</b> — infrared leaving the top; absorbed solar minus this is the planet's energy imbalance, <b>${(d.absorbedSolar - d.outgoingLongwave).toFixed(0)} W/m²</b>.`],
       ['Latent heat', `<b>${d.latentHeat.toFixed(0)} W/m²</b> — heat leaving the surface as evaporation.`],
@@ -447,7 +448,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       ['Engine', latest.engine === 'gpu' ? '<b>GPU</b> — every kernel runs on the graphics processor through WebGPU in single precision.' : `<b>${latest.workers > 1 ? `${latest.workers} worker threads` : 'one thread'}</b> — the CPU engine in double precision.`],
     ];
     if (d.oceanUpperDepth !== undefined) rows.push(['Ocean', `mixed layer <b>${d.oceanUpperDepth.toFixed(0)} m</b> deep on average, currents to <b>${d.oceanSpeed.toFixed(2)} m/s</b>${d.oceanTransport !== undefined ? `, the strongest transport <b>${d.oceanTransport.toFixed(0)} Sv</b>` : ''}${d.oceanThermoclineDepth !== undefined ? `, thermocline <b>${d.oceanThermoclineDepth.toFixed(0)} m</b>` : ''}.`]);
-    if (d.landFraction !== undefined) rows.push(['Land', `<b>${(100 * d.landFraction).toFixed(0)}%</b> of the area${ready && ready.terrain ? ' with terrain' : ', flat'}; surface <b>${d.landMeanT.toFixed(1)} K</b>, soil water <b>${d.soilWater.toFixed(0)} kg/m²</b>, snow on <b>${(100 * d.snowFraction).toFixed(0)}%</b> of it.`]);
+    if (d.landFraction !== undefined) rows.push(['Land', `<b>${(100 * d.landFraction).toFixed(0)}%</b> of the area${ready && ready.terrain ? ' with terrain' : ', flat'}; surface <b>${(d.landMeanT + CELSIUS).toFixed(1)} °C</b>, soil water <b>${d.soilWater.toFixed(0)} kg/m²</b>, snow on <b>${(100 * d.snowFraction).toFixed(0)}%</b> of it.`]);
     document.getElementById('modelDetails').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   }
 
