@@ -425,20 +425,26 @@ attribute vec4 surface;
 attribute vec3 slope;
 `,
     source: `
+  // Direct sun reddened by Rayleigh scattering over its air mass (white at the zenith), sky light that
+  // reaches a few degrees past the terminator, and the sunlit air seen at a slant toward the limb.
   vec3 n = normalize(position);
   float mu = dot(n, uSunDirection);
+  float airMass = 1.0 / (max(mu, 0.0) + 0.025);
+  vec3 sunColour = exp(-vec3(0.06, 0.12, 0.29) * (airMass - 1.0));
   float groundLight = max(0.0, dot(normalize(slope), uSunDirection)) * (1.0 - 0.7 * surface.z);
   float diffuse = mix(groundLight, max(0.0, mu), surface.y);
+  vec3 skyColour = mix(vec3(1.0, 0.45, 0.15), vec3(0.5, 0.7, 1.0), smoothstep(0.0, 0.35, mu));
+  float skyLight = 0.2 * smoothstep(-0.12, 0.1, mu);
   mat3 spin = mat3(uModelRotation);
   vec3 nView = spin * n;
   vec3 halfway = normalize(spin * uSunDirection + vec3(0.0, 0.0, 1.0));
   float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.05, mu);
-  float twilight = exp(-mu * mu / 0.0045) * (0.5 + 0.5 * surface.y);
-  float limb = pow(1.0 - max(0.0, nView.z), 3.0) * (1.0 - uBlend) * smoothstep(-0.25, 0.15, mu);
-  vec3 lit = vColor.rgb * (uAmbient + uSun * diffuse)
-    + uSun * glint * vec3(1.0, 0.95, 0.8) * 0.9
-    + uSun * twilight * vec3(0.55, 0.26, 0.09) * 0.4
-    + uSun * limb * vec3(0.30, 0.55, 1.0) * 0.5;
+  float airLit = smoothstep(-0.16, 0.05, mu);
+  float slant = pow(1.0 - max(0.0, nView.z), 2.0) * (1.0 - uBlend);
+  vec3 glow = 0.45 * slant * airLit * mix(vec3(1.0, 0.5, 0.2), vec3(0.45, 0.65, 1.0), smoothstep(0.0, 0.25, mu));
+  vec3 lit = vColor.rgb * (uAmbient + uSun * (diffuse * sunColour + skyLight * skyColour))
+    + uSun * glint * sunColour * 0.9
+    + uSun * glow;
   vColor.rgb = mix(vColor.rgb, lit, uLighting);
 `,
   });
