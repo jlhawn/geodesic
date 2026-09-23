@@ -1638,6 +1638,25 @@ at 4.5 m/s (60 times weaker than the quadratic law at that speed); the
 quadratic law holds such layers near the gravity-current speed
 √(g′h) ≈ 0.4 m/s.
 
+**Volume and energy.** The GPU rescale adds a small correction,
+h ← h + h·(η̄ − (Σh − D))/Σh, rather than multiplying each column by
+(D + η̄)/Σh: in single precision that product was biased upward by about
+5×10⁻⁵ m per column per ocean step, a mean sea-level rise of 1.2 m a
+year that also carried heat in at each layer's temperature. The
+correction keeps the drift near 2×10⁻⁷ m per step with no bias, and
+`test/layeredGpu.test.mjs` holds the volume over 400 wind-driven steps.
+With that fixed, the whole-model energy budget closes: from the day-930
+state, one day of the time-mean top-of-atmosphere surplus of 12.9 W/m²
+went 12.35 into the ocean, 2.1 disappeared in the atmosphere (kinetic
+energy removed by drag and the ∇⁴ closure is not returned as heat) and
+0.5 at the surface (snow falls without releasing its heat of fusion,
+which melting then pays). The ocean uptake is spin-up: the volume-mean
+ocean temperature is 1.0 °C against Earth's 3.5 °C, the two deepest
+layers sit at −0.7 and −1.8 °C, and because the interior layers push
+on the flow only through their label densities their temperature and
+salinity are passive, so the heat they absorb has no dynamical brake
+and the interior takes decades to centuries to come into balance.
+
 **Open.** Runoff is not yet spread on the GPU; the equation of state is
 linear; the freezing point ignores salinity; the Kraus–Turner constants
 and the 50 m minimum depth are first guesses; the barotropic mode has
