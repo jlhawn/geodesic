@@ -41,7 +41,7 @@ const OVERLAYS = {
   none: { label: 'None', short: 'None' },
 };
 const MODE_OVERLAYS = {
-  atmosphere: [['none'], ['wind', 'temp', 'rh'], ['mi', 'wbt', 'dp'], ['rain', 'tpw', 'tcw', 'cloudcover'], ['albedo', 'swdown', 'olr']],
+  atmosphere: [['none'], ['wind', 'temp', 'rh'], ['mi', 'wbt', 'dp'], ['rain', 'tpw', 'tcw', 'cloudcover'], ['albedo', 'swdown', 'olr'], ['mslp', 'ps', 'elevation'], ['ice', 'snow', 'soil']],
   ocean: [['none'], ['sst', 'current', 'layer', 'thermocline', 'sss', 'ssh']],
 };
 const MODE_DEFAULT_OVERLAY = { atmosphere: 'wind', ocean: 'sst' };
