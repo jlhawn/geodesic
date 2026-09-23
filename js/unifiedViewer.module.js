@@ -433,7 +433,7 @@ attribute vec3 slope;
   vec3 nView = spin * n;
   vec3 halfway = normalize(spin * uSunDirection + vec3(0.0, 0.0, 1.0));
   float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.05, mu);
-  float twilight = exp(-mu * mu / 0.018) * (0.5 + 0.5 * surface.y);
+  float twilight = exp(-mu * mu / 0.0045) * (0.5 + 0.5 * surface.y);
   float limb = pow(1.0 - max(0.0, nView.z), 3.0) * (1.0 - uBlend) * smoothstep(-0.25, 0.15, mu);
   vec3 lit = vColor.rgb * (uAmbient + uSun * diffuse)
     + uSun * glint * vec3(1.0, 0.95, 0.8) * 0.9

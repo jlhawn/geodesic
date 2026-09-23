@@ -370,11 +370,11 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   /*
    * Terrain shading for the satellite view: each cell's normal is tilted
    * against the elevation gradient fitted over its neighbours, with the
-   * slope exaggerated forty-fold so that a kilometre over a hundred
+   * slope exaggerated twenty-fold so that a kilometre over a hundred
    * kilometres reads as a hillside, which lengthens into shadow as the sun
    * sets.
    */
-  const SLOPE_EXAGGERATION = 40, EARTH_RADIUS = 6.371e6, CLOUD_TOP = 8000;
+  const SLOPE_EXAGGERATION = 20, EARTH_RADIUS = 6.371e6, CLOUD_TOP = 8000;
   function uploadSlopes() {
     if (!viewer || !cells || !latest || !latest.elevation) return;
     const slopes = new Float32Array(3 * cells.length), height = (i) => Math.max(0, latest.elevation[i]);
