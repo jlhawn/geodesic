@@ -1,5 +1,5 @@
 import { emptyBuffer, readBuffer } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_BOTTOMS, bathymetryFrom } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_BOTTOMS, bathymetryFrom, fitColumns } from '../ocean/layered.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
 /*
@@ -825,9 +825,11 @@ export function createLayeredOcean(core, options = {}) {
       device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(arrays.previousT0));
       return;
     }
+    const climatology = initializeArrays(surfaceT, ice);
     const h = Float64Array.from(saved.h), u = Float64Array.from(saved.u), eta = Float64Array.from(saved.eta);
     const Q = new Float64Array(L * C), W = new Float64Array(L * C);
     for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
+    fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, referenceS: o.referenceS, minimumThickness: o.minimumThickness });
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) for (let k = 0; k < L; k++) u[k * E + e] = 0;
     uploadArrays({ h, u, Q, W, eta }, surfaceT, ice);
     const previousT0 = new Float64Array(C);
@@ -885,7 +887,7 @@ export function createLayeredOcean(core, options = {}) {
   async function diagnostics() { return diagnosticsFrom(await download()); }
 
   return {
-    layers: L, everySteps: o.everySteps, options: o,
+    layers: L, everySteps: o.everySteps, options: o, D, cellOcean,
     initialize, upload, download, serialize, serializeFrom, diagnostics, diagnosticsFrom,
     advance, advanceCoupled, accumulateFreshwater,
     setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, mixedLayer, salt, writeSurface, step,

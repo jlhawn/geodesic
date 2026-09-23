@@ -55,6 +55,57 @@ const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 
  * across cannot hold a real shelf, and a ten-to-one step in depth
  * between two cells makes the free surface swing wildly at the coast.
  */
+/*
+ * Fits loaded columns to this mesh's bathymetry: a column carried over
+ * from another resolution keeps its interface depths from the top down
+ * and is cut or extended at the bottom, a sea cell with no usable water
+ * (new coast, or a stencil with no sea source) takes the climatology
+ * column, the mixed layer keeps its floor, and a column that already
+ * fits is left exactly as it is.
+ */
+export function fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, referenceS, minimumThickness }) {
+  const at = (k, i) => k * C + i;
+  for (let i = 0; i < C; i++) {
+    if (!cellOcean[i]) { for (let k = 0; k < L; k++) { h[at(k, i)] = 0; Q[at(k, i)] = 0; W[at(k, i)] = 0; } eta[i] = 0; continue; }
+    let sum = 0, valid = Number.isFinite(eta[i]);
+    for (let k = 0; k < L && valid; k++) { const n = at(k, i); if (!(h[n] >= 0) || !Number.isFinite(Q[n]) || !Number.isFinite(W[n])) valid = false; else sum += h[n]; }
+    if (valid && Math.abs(sum - D[i] - eta[i]) < 1e-6) continue;
+    if (!valid || sum < 1) {
+      let s = 0;
+      for (let k = 0; k < L; k++) { const n = at(k, i); h[n] = climatology.h[n]; Q[n] = climatology.Q[n]; W[n] = climatology.W[n]; s += h[n]; }
+      eta[i] = s - D[i];
+      continue;
+    }
+    eta[i] = Math.max(-5, Math.min(5, eta[i]));
+    let remaining = D[i] + eta[i];
+    for (let k = 0; k < L; k++) {
+      const n = at(k, i), take = Math.min(h[n], Math.max(remaining, 0));
+      if (take < EPS - 1e-6) { h[n] = EPS; Q[n] = EPS * labelT[k]; W[n] = EPS * referenceS; }
+      else { const f = take / h[n]; Q[n] *= f; W[n] *= f; h[n] = take; }
+      remaining -= h[n];
+    }
+    if (Math.abs(remaining) < 1e-9) remaining = 0;
+    if (remaining > 0) {
+      let deepest = 0;
+      for (let k = L - 1; k > 0; k--) if (h[at(k, i)] > THIN) { deepest = k; break; }
+      const n = at(deepest, i), f = (h[n] + remaining) / h[n];
+      Q[n] *= f; W[n] *= f; h[n] += remaining;
+    } else {
+      for (let k = L - 1; k >= 0 && remaining < 0; k--) {
+        const n = at(k, i), cut = Math.min(h[n] - EPS, -remaining);
+        if (cut > 0) { const f = (h[n] - cut) / h[n]; Q[n] *= f; W[n] *= f; h[n] -= cut; remaining += cut; }
+      }
+    }
+    for (let k = 1; k < L && h[i] < minimumThickness; k++) {
+      const n = at(k, i), available = h[n] - EPS;
+      if (available <= 0) continue;
+      const amount = Math.min(available, minimumThickness - h[i]), f = amount / h[n];
+      Q[i] += Q[n] * f; W[i] += W[n] * f; h[i] += amount;
+      Q[n] -= Q[n] * f; W[n] -= W[n] * f; h[n] -= amount;
+    }
+  }
+}
+
 export function bathymetryFrom(mesh, geography, { minimumDepth = 50, neighbourRatio = 0.5, flatDepth = 4000 } = {}) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
   const D = new Float64Array(C);
@@ -596,8 +647,11 @@ export function createOcean(mesh, {
       }
       return;
     }
+    initialize(surfaceT, ice);
+    const climatology = { h: Float64Array.from(h), Q: Float64Array.from(Q), W: Float64Array.from(W) };
     h.set(saved.h); u.set(saved.u); eta.set(saved.eta);
     for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
+    fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, referenceS, minimumThickness });
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
     for (let i = 0; i < C; i++) { previousIce[i] = ice[i]; iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = Q[i] / Math.max(EPS, h[i]); S0[i] = W[i] / Math.max(EPS, h[i]); previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
     fresh.fill(0);

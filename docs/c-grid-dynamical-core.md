@@ -1614,6 +1614,22 @@ engines to single precision over one and twenty steps. Its freshwater
 kernel takes the rain accumulator's increment since its last call, so
 the precipitation diagnostic keeps working.
 
+**Loading across resolutions.** A saved ocean carried to another mesh
+is fitted column by column (`fitColumns`): the interpolated layers keep
+their interface depths from the top down and are cut or extended at the
+bottom to the new bathymetry plus the interpolated sea level (held
+within ±5 m); a sea cell that arrives without usable water (a coast the
+finer grid resolves, a stencil with no sea source) takes the climatology
+column; the mixed layer keeps its floor; a column that already fits is
+left exactly as it is. Without this a cell off Sydney held 4038 m of
+water over a 900 m bottom and new sea cells had a 0 K surface, and the
+first N=128 step from the N=64 state went non-finite. Basins the finer
+grid connects through a strait the coarser one closed (the Red Sea at
+Bab-el-Mandeb, the Gulf at Hormuz, the Gulf of Finland) arrive with
+their own sea levels and surge through the new strait at the clamp for
+about two days, then settle (2.3 m/s at Bab-el-Mandeb after 2.5 days
+from the day-930 state).
+
 **Drag.** Interfacial drag is the linear stress r Δu with r = 2×10⁻⁴
 m/s; bottom drag is quadratic, C_D |u| u with C_D = 3×10⁻³, applied to
 the deepest layer with water at the edge. A linear bottom drag of

@@ -75,7 +75,7 @@ test('one and twenty GPU ocean steps track the CPU layered ocean at N=8', { skip
   await gpuOcean.upload(gpuState, roundTripSurface, ice);
   const afterRoundTrip = await gpuOcean.serialize();
   for (const f of fields) {
-    const r = stats(gpuState[f], afterRoundTrip[f]);
+    const r = f === 'T' || f === 'S' ? stats(gpuState[f].filter((_, x) => wet[x]), afterRoundTrip[f].filter((_, x) => wet[x])) : stats(gpuState[f], afterRoundTrip[f]);
     assert.ok(r.rmsRel < 1e-4, `round trip ${f} relative diff ${r.rmsRel}`);
   }
   // Restore the pre-round-trip state so the 20-step run below continues from the real trajectory.
