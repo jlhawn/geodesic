@@ -13,31 +13,78 @@ const CELSIUS = -273.15;
 const REFERENCE_SPEED = { surface: 15, 1000: 20, 850: 25, 700: 25, 500: 30, 250: 40, 70: 50, 10: 60 };
 
 const OVERLAYS = {
-  wind: { label: 'Wind', unit: 'm/s', kind: 'sequential', field: 'speed', scale: 1, range: (level) => [0, WIND_MAX[level]] },
-  temp: { label: 'Temp', unit: '°C', kind: 'sequential', field: 'temperature', scale: 1, offset: CELSIUS, range: (level) => TEMP_RANGE[level] },
-  rh: { label: 'RH', unit: '%', kind: 'sequential', field: 'humidity', scale: 100, range: () => [0, 100] },
-  precip: { label: 'Precip', unit: 'mm/day', kind: 'sequential', field: 'precipitation', scale: 1, range: () => [0, 30] },
-  tpw: { label: 'TPW', unit: 'kg/m²', kind: 'sequential', field: 'water', scale: 1, range: () => [0, 60] },
-  tcw: { label: 'TCW', unit: 'g/m²', kind: 'sequential', field: 'cloud', scale: 1000, range: () => [0, 500] },
-  ice: { label: 'Ice', unit: 'm', kind: 'sequential', field: 'ice', scale: 1, range: () => [0, 3] },
-  albedo: { label: 'Albedo', unit: '', kind: 'sequential', field: 'albedo', scale: 1, range: () => [0, 0.8] },
-  swdown: { label: 'SW↓', unit: 'W/m²', kind: 'sequential', field: 'shortwave', scale: 1, range: () => [0, 1200] },
-  olr: { label: 'OLR', unit: 'W/m²', kind: 'sequential', field: 'longwave', scale: 1, range: () => [100, 320] },
-  mslp: { label: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'mslp', scale: 0.01, range: () => [960, 1060] },
-  ps: { label: 'Surface pressure', unit: 'hPa', kind: 'sequential', field: 'ps', scale: 0.01, range: () => [500, 1050] },
-  cloudcover: { label: 'Cloud cover', unit: 'g/m²', kind: 'clouds', field: 'cloud', scale: 1000, range: () => [0, 100] },
-  soil: { label: 'Soil water', unit: 'kg/m²', kind: 'sequential', field: 'soil', scale: 1, range: () => [0, 150] },
-  snow: { label: 'Snow', unit: 'kg/m²', kind: 'sequential', field: 'snow', scale: 1, range: () => [0, 100] },
-  elevation: { label: 'Elevation', unit: 'm', kind: 'diverging', field: 'elevation', scale: 1, range: () => [-4000, 4000] },
-  sst: { label: 'Sea surface temperature', unit: '°C', kind: 'sequential', field: 'sst', scale: 1, offset: CELSIUS, range: () => [-2, 32] },
-  current: { label: 'Current speed', unit: 'm/s', kind: 'sequential', field: 'current', scale: 1, range: () => [0, 1] },
-  layer: { label: 'Mixed layer depth', unit: 'm', kind: 'sequential', field: 'layerDepth', scale: 1, range: () => [10, 300] },
-  thermocline: { label: 'Thermocline depth', unit: 'm', kind: 'sequential', field: 'thermocline', scale: 1, range: () => [0, 1200] },
-  sss: { label: 'Sea surface salinity', unit: 'psu', kind: 'sequential', field: 'sss', scale: 1, range: () => [32, 38] },
-  ssh: { label: 'Sea surface height', unit: 'm', kind: 'sequential', field: 'ssh', scale: 1, range: () => [-1.5, 1.5] },
-  none: { label: 'None' },
+  wind: { label: 'Wind speed', short: 'WIND', unit: 'm/s', kind: 'sequential', field: 'speed', scale: 1, range: (level) => [0, WIND_MAX[level]] },
+  temp: { label: 'Temperature', short: 'TEMP', unit: '°C', kind: 'sequential', field: 'temperature', scale: 1, offset: CELSIUS, range: (level) => TEMP_RANGE[level] },
+  rh: { label: 'Relative humidity', short: 'RH', unit: '%', kind: 'sequential', field: 'humidity', scale: 100, range: () => [0, 100] },
+  mi: { label: 'Misery index', short: 'MI', unit: '°C', kind: 'sequential', derive: (frame) => deriveField(frame, miseryIndex), scale: 1, range: () => [-40, 45] },
+  wbt: { label: 'Wet-bulb temperature', short: 'WBT', unit: '°C', kind: 'sequential', derive: (frame) => deriveField(frame, wetBulb), scale: 1, range: () => [-40, 35] },
+  dp: { label: 'Dew point', short: 'DP', unit: '°C', kind: 'sequential', derive: (frame) => deriveField(frame, dewPoint), scale: 1, range: () => [-40, 30] },
+  rain: { label: 'Recent rain', short: 'RAIN', unit: 'mm', kind: 'sequential', field: 'rain', scale: 1, range: () => [0, 20] },
+  tpw: { label: 'Total precipitable water', short: 'TPW', unit: 'kg/m²', kind: 'sequential', field: 'water', scale: 1, range: () => [0, 60] },
+  tcw: { label: 'Total cloud water', short: 'TCW', unit: 'g/m²', kind: 'sequential', field: 'cloud', scale: 1000, range: () => [0, 500] },
+  cloudcover: { label: 'Cloud cover', short: 'CC', unit: 'g/m²', kind: 'clouds', field: 'cloud', scale: 1000, range: () => [0, 100] },
+  albedo: { label: 'Surface albedo', short: 'ALB', unit: '', kind: 'sequential', field: 'albedo', scale: 1, range: () => [0, 0.8] },
+  swdown: { label: 'Surface sunlight', short: 'SSI', unit: 'W/m²', kind: 'sequential', field: 'shortwave', scale: 1, range: () => [0, 1200] },
+  olr: { label: 'Outgoing longwave radiation', short: 'OLR', unit: 'W/m²', kind: 'sequential', field: 'longwave', scale: 1, range: () => [100, 320] },
+  ice: { label: 'Sea ice thickness', short: 'ICE', unit: 'm', kind: 'sequential', field: 'ice', scale: 1, range: () => [0, 3] },
+  mslp: { label: 'Sea-level pressure', short: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'mslp', scale: 0.01, range: () => [960, 1060] },
+  ps: { label: 'Surface pressure', short: 'PS', unit: 'hPa', kind: 'sequential', field: 'ps', scale: 0.01, range: () => [500, 1050] },
+  soil: { label: 'Soil water', short: 'SOIL', unit: 'kg/m²', kind: 'sequential', field: 'soil', scale: 1, range: () => [0, 150] },
+  snow: { label: 'Snow', short: 'SNOW', unit: 'kg/m²', kind: 'sequential', field: 'snow', scale: 1, range: () => [0, 100] },
+  elevation: { label: 'Elevation', short: 'ELEV', unit: 'm', kind: 'diverging', field: 'elevation', scale: 1, range: () => [-4000, 4000] },
+  sst: { label: 'Sea surface temperature', short: 'SST', unit: '°C', kind: 'sequential', field: 'sst', scale: 1, offset: CELSIUS, range: () => [-2, 32] },
+  current: { label: 'Current speed', short: 'CUR', unit: 'm/s', kind: 'sequential', field: 'current', scale: 1, range: () => [0, 1] },
+  layer: { label: 'Mixed layer depth', short: 'MLD', unit: 'm', kind: 'sequential', field: 'layerDepth', scale: 1, range: () => [10, 300] },
+  thermocline: { label: 'Thermocline depth', short: 'THD', unit: 'm', kind: 'sequential', field: 'thermocline', scale: 1, range: () => [0, 1200] },
+  sss: { label: 'Sea surface salinity', short: 'SSS', unit: 'psu', kind: 'sequential', field: 'sss', scale: 1, range: () => [32, 38] },
+  ssh: { label: 'Sea surface height', short: 'SSH', unit: 'm', kind: 'sequential', field: 'ssh', scale: 1, range: () => [-1.5, 1.5] },
+  none: { label: 'None', short: 'None' },
 };
-const OVERLAY_NAMES = { wind: 'Wind speed', temp: 'Temperature', rh: 'Relative humidity', precip: 'Precipitation', tpw: 'Precipitable water', tcw: 'Cloud water', ice: 'Sea ice thickness', albedo: 'Surface albedo', swdown: 'Sunlight reaching the surface', olr: 'Outgoing longwave at the top', mslp: 'Sea-level pressure', ps: 'Surface pressure', cloudcover: 'Cloud cover', soil: 'Soil water', snow: 'Snow', elevation: 'Elevation', sst: 'Sea surface temperature', current: 'Current speed', layer: 'Mixed layer depth', thermocline: 'Thermocline depth', sss: 'Sea surface salinity', ssh: 'Sea surface height' };
+const MODE_OVERLAYS = {
+  atmosphere: [['none'], ['wind', 'temp', 'rh'], ['mi', 'wbt', 'dp'], ['rain', 'tpw', 'tcw', 'cloudcover'], ['albedo', 'swdown', 'olr']],
+  ocean: [['none'], ['sst', 'current', 'layer', 'thermocline', 'sss', 'ssh']],
+};
+const MODE_DEFAULT_OVERLAY = { atmosphere: 'wind', ocean: 'sst' };
+
+/*
+ * Fields derived on the page from the frame's temperature, relative
+ * humidity and wind at the chosen height. Dew point by the Magnus
+ * formula; wet-bulb by Stull's fit; the misery index is the NWS heat
+ * index above 26.7 °C, the wind chill below 10 °C, and the air
+ * temperature between.
+ */
+function dewPoint(t, rh) {
+  const r = Math.max(1e-3, Math.min(1, rh)), a = 17.625, b = 243.04, g = Math.log(r) + a * t / (b + t);
+  return b * g / (a - g);
+}
+function wetBulb(t, rh) {
+  const p = 100 * Math.max(0.05, Math.min(0.99, rh));
+  return t * Math.atan(0.151977 * Math.sqrt(p + 8.313659)) + Math.atan(t + p) - Math.atan(p - 1.676331) + 0.00391838 * Math.pow(p, 1.5) * Math.atan(0.023101 * p) - 4.686035;
+}
+function heatIndex(t, rh) {
+  const T = t * 9 / 5 + 32, R = 100 * Math.max(0, Math.min(1, rh));
+  let hi = -42.379 + 2.04901523 * T + 10.14333127 * R - 0.22475541 * T * R - 6.83783e-3 * T * T - 5.481717e-2 * R * R + 1.22874e-3 * T * T * R + 8.5282e-4 * T * R * R - 1.99e-6 * T * T * R * R;
+  if (R < 13 && T <= 112) hi -= ((13 - R) / 4) * Math.sqrt((17 - Math.abs(T - 95)) / 17);
+  else if (R > 85 && T <= 87) hi += ((R - 85) / 10) * ((87 - T) / 5);
+  return (hi - 32) * 5 / 9;
+}
+function windChill(t, v) {
+  const k = 3.6 * v;
+  if (k < 4.8) return t;
+  const p = Math.pow(k, 0.16);
+  return 13.12 + 0.6215 * t - 11.37 * p + 0.3965 * t * p;
+}
+function miseryIndex(t, rh, v) {
+  if (t >= 26.7) return Math.max(t, heatIndex(t, rh));
+  if (t <= 10) return Math.min(t, windChill(t, v));
+  return t;
+}
+function deriveField(frame, fn) {
+  const T = frame.temperature, H = frame.humidity, V = frame.speed, out = new Float32Array(T.length);
+  for (let i = 0; i < T.length; i++) out[i] = fn(T[i] + CELSIUS, H[i], V[i]);
+  return out;
+}
+const OVERLAY_NAMES = Object.fromEntries(Object.entries(OVERLAYS).map(([key, overlay]) => [key, overlay.label]));
 
 /*
  * The cloud view: open water is ocean blue, ice whitens with thickness,
@@ -68,7 +115,7 @@ const PALETTES = {
   'teal-gray-brown': [[0.00, 0.40, 0.37], [0.35, 0.64, 0.60], [0.50, 0.50, 0.50], [0.75, 0.55, 0.30], [0.55, 0.32, 0.04]],
 };
 
-const DEFAULTS = { view: 'data', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: 'open' };
+const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: 'open' };
 
 /*
  * The contour row draws isobars of surface pressure at the surface and
@@ -87,7 +134,7 @@ function loadSettings() {
     const settings = { ...DEFAULTS, ...rest };
     if (!PALETTES[settings.palette]) settings.palette = (oldPalettes && PALETTES[oldPalettes.sequential]) ? oldPalettes.sequential : DEFAULTS.palette;
     if (settings.overlay === 'clouds') { settings.overlay = 'none'; settings.view = 'space'; }
-    if (!OVERLAYS[settings.overlay]) settings.overlay = DEFAULTS.overlay;
+    reconcile(settings);
     return settings;
   } catch { return { ...DEFAULTS }; }
 }
@@ -97,14 +144,34 @@ function loadSettings() {
  * only the data view shows implies that view.
  */
 function applyOverrides(settings, overrides) {
-  if (!('view' in overrides) && ['overlay', 'level', 'animate', 'isobars', 'isobarStep', 'heightStep'].some((key) => key in overrides)) settings.view = 'data';
+  if (!('view' in overrides)) {
+    if ('overlay' in overrides) settings.view = modeOf(OVERLAY_ALIASES[overrides.overlay] ?? overrides.overlay);
+    else if (['level', 'isobars', 'isobarStep', 'heightStep'].some((key) => key in overrides)) settings.view = 'atmosphere';
+    else if ('animate' in overrides && settings.view === 'space') settings.view = modeOf(settings.overlay);
+  }
   for (const key of Object.keys(DEFAULTS)) {
     if (!(key in overrides)) continue;
-    const value = overrides[key];
+    let value = overrides[key];
     if (typeof DEFAULTS[key] === 'number') { if (Number(value) > 0) settings[key] = Number(value); continue; }
-    const known = key === 'palette' ? PALETTES[value] : key === 'overlay' ? OVERLAYS[value] : key === 'panel' ? ['open', 'closed'].includes(value) : key === 'isobars' ? ['on', 'off'].includes(value) : document.querySelector(`[data-setting="${key}"] [data-value="${CSS.escape(value)}"]`);
+    if (key === 'overlay') value = OVERLAY_ALIASES[value] ?? value;
+    const known = key === 'palette' ? PALETTES[value] : key === 'overlay' ? OVERLAYS[value] : key === 'view' ? ['space', 'atmosphere', 'ocean', 'data'].includes(value) : key === 'panel' ? ['open', 'closed'].includes(value) : key === 'isobars' ? ['on', 'off'].includes(value) : document.querySelector(`[data-setting="${key}"] [data-value="${CSS.escape(value)}"]`);
     if (known) settings[key] = value;
   }
+  reconcile(settings);
+}
+/*
+ * Every mode shows only its own overlays: an overlay names its mode,
+ * the old data view is whichever mode its overlay belongs to, and a
+ * mode switch that leaves an overlay behind takes the mode's default.
+ */
+const OVERLAY_ALIASES = { precip: 'rain', p3h: 'rain' };
+const OCEAN_OVERLAYS = new Set(MODE_OVERLAYS.ocean.flat().filter((key) => key !== 'none'));
+function modeOf(overlay) { return OCEAN_OVERLAYS.has(overlay) ? 'ocean' : 'atmosphere'; }
+function reconcile(settings) {
+  settings.overlay = OVERLAY_ALIASES[settings.overlay] ?? settings.overlay;
+  if (!OVERLAYS[settings.overlay]) settings.overlay = DEFAULTS.overlay;
+  if (!['space', 'atmosphere', 'ocean'].includes(settings.view)) settings.view = modeOf(settings.overlay);
+  if (settings.view !== 'space' && !MODE_OVERLAYS[settings.view].flat().includes(settings.overlay)) settings.overlay = MODE_DEFAULT_OVERLAY[settings.view];
 }
 function saveSettings(settings) {
   try { localStorage.setItem('climate.settings', JSON.stringify(settings)); } catch { /* storage unavailable */ }
@@ -171,12 +238,11 @@ async function builtinSnapshots(fallback = null) {
   return fallback ? [entry(fallback)] : [];
 }
 
-const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'none']);
-const OCEAN_OVERLAYS = new Set(['sst', 'current', 'layer', 'thermocline', 'sss', 'ssh']);
+const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'mi', 'wbt', 'dp', 'none']);
 const CURRENT_REFERENCE = 0.2;
 
 const VIEW_NOTES = [
-  ['Mode', 'Data paints the chosen overlay on an evenly lit globe. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day.'],
+  ['Mode', 'Atmosphere and Ocean paint the chosen overlay on an evenly lit globe, each with its own overlays: the wind or the current is what the animation follows, and only Atmosphere offers isobars and height lines. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day.'],
   ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
   ['Height', 'The pressure level shown by the wind, temperature and humidity views and followed by the animation: Sfc is the lowest layer, about 60 m up; the others are hPa. Column views hide it and use the surface wind.'],
   ['Wind speed', 'Speed at the chosen height.'],
@@ -194,8 +260,11 @@ const VIEW_NOTES = [
   ['Soil water', 'The land bucket: up to 150 kg/m² of soil water; evaporation slows as it dries and rain beyond its capacity runs off.'],
   ['Snow', 'Snow on land in water equivalent; it falls when the lowest air is below freezing and melts into the bucket.'],
   ['Elevation', 'The mean elevation of each cell from ETOPO 2022; negative under the sea.'],
-  ['Coastlines', 'The mesh edges between land and ocean cells, drawn in Data mode.'],
-  ['Precipitation', 'Rain rate over the last frame, from convection and from cloud that rained out.'],
+  ['Coastlines', 'The mesh edges between land and ocean cells, drawn in the Atmosphere and Ocean modes.'],
+  ['Misery index', 'How the air feels: the heat index where it is warmer than 26.7 °C, the wind chill where it is colder than 10 °C, the air temperature between.'],
+  ['Wet-bulb temperature', 'The coolest a wet surface can get by evaporation at the chosen height; above about 35 °C the body can no longer shed heat.'],
+  ['Dew point', 'The temperature the air would have to cool to for its vapour to condense; close to the air temperature means humid air.'],
+  ['Recent rain', 'Rain from convection and from cloud that rained out, as an exponentially weighted accumulation with a three-hour memory: steady rain settles at its three-hour total and a shower fades over the hours after it.'],
   ['Precipitable water', 'All the vapour in the column, as the depth of rain it would make.'],
   ['Cloud water', 'All the condensed water in the column.'],
   ['Sea ice', 'Sea-ice thickness.'],
@@ -212,7 +281,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const settings = loadSettings();
   applyOverrides(settings, overrides);
   const panel = document.getElementById('panel');
-  const activeLevel = () => (settings.view !== 'space' && HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
+  const activeLevel = () => (settings.view === 'atmosphere' && HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
   const shownLevel = () => latest?.level ?? activeLevel();
   let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, rgb = null, running = !paused, animatedSource = null, seaCells = null;
   let geographyFields = {}, hasLand = false;
@@ -307,15 +376,15 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (settings.view === 'space') { paintSatellite(); return; }
     const overlay = OVERLAYS[settings.overlay];
     const scaleRow = document.querySelector('.scaleRow');
-    if (!overlay.field) {
+    if (!overlay.field && !overlay.derive) {
       rgb.fill(LINEAR[40]);
       viewer.updateColors(rgb);
       scaleRow.classList.add('hidden');
-      document.getElementById('data').textContent = `Wind @ ${levelLabel(shownLevel())} · no overlay`;
+      document.getElementById('data').textContent = settings.view === 'ocean' ? 'Surface current · no overlay' : `Wind @ ${levelLabel(shownLevel())} · no overlay`;
       return;
     }
     const [min, max] = overlay.range(shownLevel());
-    const values = latest[overlay.field];
+    const values = overlay.derive ? overlay.derive(latest) : latest[overlay.field];
     if (overlay.kind === 'clouds') {
       for (let i = 0; i < grid.size; i++) {
         const opacity = cloudOpacity(values[i] * overlay.scale);
@@ -336,12 +405,12 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     viewer.updateColors(rgb);
     scaleRow.classList.remove('hidden');
     renderScale(stops, min, max, overlay.unit);
-    const columnField = ['ps', 'mslp', 'precipitation', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave', 'soil', 'snow', 'elevation'].includes(overlay.field);
-    document.getElementById('data').textContent = OCEAN_OVERLAYS.has(settings.overlay) ? `${OVERLAY_NAMES[settings.overlay]} · surface current` : columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(shownLevel())}`;
+    const columnField = ['ps', 'mslp', 'rain', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave', 'soil', 'snow', 'elevation'].includes(overlay.field);
+    document.getElementById('data').textContent = settings.view === 'ocean' ? `${OVERLAY_NAMES[settings.overlay]} · surface current` : columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(shownLevel())}`;
   }
 
   function paintWind() {
-    const ocean = settings.view !== 'space' && OCEAN_OVERLAYS.has(settings.overlay) && latest.currentVector && latest.currentVector.length > 0;
+    const ocean = settings.view === 'ocean' && latest.currentVector && latest.currentVector.length > 0;
     const reference = ocean ? CURRENT_REFERENCE : REFERENCE_SPEED[shownLevel()];
     const field = ocean ? latest.currentVector : latest.vector;
     const animate = settings.view === 'space' ? 'none' : settings.animate;
@@ -395,16 +464,27 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       saveSettings(settings);
     }
     fillSegments(document.getElementById('isolineSegments'), ['off', ...isolines.steps.map(String)], ['Off', ...isolines.steps.map(String)]);
+    const mode = settings.view === 'ocean' ? 'ocean' : 'atmosphere', overlayBox = document.getElementById('overlayOptions');
+    if (overlayBox.dataset.mode !== mode) {
+      overlayBox.dataset.mode = mode;
+      overlayBox.replaceChildren(...MODE_OVERLAYS[mode].map((row) => {
+        const segment = document.createElement('div');
+        segment.className = 'segmented';
+        for (const key of row) { const button = document.createElement('button'); button.dataset.value = key; button.textContent = OVERLAYS[key].short; button.title = OVERLAYS[key].label; segment.append(button); }
+        return segment;
+      }));
+    }
     for (const group of panel.querySelectorAll('.options[data-setting]')) {
       const current = group.dataset.setting === 'isolines' ? isolineChoice() : String(settings[group.dataset.setting]);
       for (const button of group.querySelectorAll('button[data-value]')) button.classList.toggle('selected', button.dataset.value === current);
     }
     const space = settings.view === 'space';
-    const heights = !space && HEIGHT_OVERLAYS.has(settings.overlay);
+    const heights = settings.view === 'atmosphere' && HEIGHT_OVERLAYS.has(settings.overlay);
     document.getElementById('heightLabel').classList.toggle('hidden', !heights);
     document.getElementById('heightOptions').classList.toggle('hidden', !heights);
-    for (const id of ['overlayLabel', 'overlayOptions', 'animateLabel', 'animateOptions', 'isolineLabel', 'isolineOptions']) document.getElementById(id).classList.toggle('hidden', space);
-    document.getElementById('animateLabel').textContent = OCEAN_OVERLAYS.has(settings.overlay) ? 'Current animation' : 'Wind animation';
+    for (const id of ['overlayLabel', 'overlayOptions', 'animateLabel', 'animateOptions']) document.getElementById(id).classList.toggle('hidden', space);
+    for (const id of ['isolineLabel', 'isolineOptions']) document.getElementById(id).classList.toggle('hidden', settings.view !== 'atmosphere');
+    document.getElementById('animateLabel').textContent = settings.view === 'ocean' ? 'Current animation' : 'Wind animation';
     document.getElementById('isolineLabel').textContent = isolines.label;
     document.getElementById('isolineUnit').textContent = isolines.unit;
     const paletteSelect = document.getElementById('palette');
@@ -459,11 +539,29 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       changes = isolines === 'off' ? { ...rest, isobars: 'off' } : { ...rest, isobars: 'on', [isolinesFor(before).setting]: Number(isolines) };
     }
     Object.assign(settings, changes);
+    reconcile(settings);
     saveSettings(settings);
     scheduleUrl();
     if (activeLevel() !== before) worker.postMessage({ type: 'level', level: activeLevel() });
     if ('projection' in changes && viewer) viewer.setProjection(settings.projection);
     render();
+  }
+
+  /*
+   * The rain field is an exponentially weighted accumulation of each
+   * frame's rain with a three-hour memory, S ← S·e^(−Δt/3h) + rate·Δt,
+   * which for steady rain settles at the three-hour total and needs no
+   * history; a frame from an earlier time than the last one starts over.
+   */
+  const RAIN_MEMORY = 3 * 3600;
+  const rain = { time: null, total: null };
+  function accumulateRain(message) {
+    const rate = message.precipitation;
+    if (rain.total === null || rain.total.length !== rate.length || message.time < rain.time) { rain.total = new Float32Array(rate.length); rain.time = message.time; }
+    const span = message.time - rain.time, keep = Math.exp(-span / RAIN_MEMORY), days = span / 86400;
+    for (let i = 0; i < rate.length; i++) rain.total[i] = rain.total[i] * keep + rate[i] * days;
+    rain.time = message.time;
+    return rain.total;
   }
 
   let ready = null;
@@ -479,6 +577,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       }
     }
     if (message.type === 'ready') {
+      rain.total = null;
       const rebuild = !viewer || !ready || ready.cells !== message.cells;
       ready = message;
       if (rebuild) { teardown(); setup(message.N); latest = null; }
@@ -492,7 +591,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (message.type === 'snapshotData') storeSnapshot(message);
     if (message.type === 'frame') {
       document.getElementById('progress').classList.remove('visible');
-      latest = { ...message, ...geographyFields, N: ready.N, workers: ready.workers };
+      latest = { ...message, ...geographyFields, N: ready.N, workers: ready.workers, rain: accumulateRain(message) };
       clock.push({ wall: performance.now(), time: message.time });
       while (clock.length > 2 && clock[clock.length - 1].wall - clock[0].wall > 30000) clock.shift();
       render();

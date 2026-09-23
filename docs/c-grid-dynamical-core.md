@@ -1361,7 +1361,7 @@ snow. The parallel engine reproduces the serial model bit for bit.
 Snapshots, saved states and the regrid carry `land: {soil, snow}`;
 states without it start with half-full buckets and no snow, and sea
 ice is zeroed on land when an aquaplanet state is placed on continents.
-The page draws coastlines in Data mode, colours land in Satellite mode
+The page draws coastlines in the Atmosphere and Ocean modes, colours land in Satellite mode
 from soil water (dry tan to wet green) with snow whitening it, and
 adds Soil water, Snow and Elevation overlays; `?land=off` keeps the
 aquaplanet and `?topography=<url>` takes another raster.
