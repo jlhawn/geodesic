@@ -115,7 +115,7 @@ const PALETTES = {
   'teal-gray-brown': [[0.00, 0.40, 0.37], [0.35, 0.64, 0.60], [0.50, 0.50, 0.50], [0.75, 0.55, 0.30], [0.55, 0.32, 0.04]],
 };
 
-const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: 'open', sun: 1, ambient: 0.015 };
+const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: 'open', sun: 1, ambient: 0.004 };
 
 /*
  * The contour row draws isobars of surface pressure at the surface and
@@ -276,7 +276,7 @@ const VIEW_NOTES = [
   ['Outgoing longwave', 'Infrared leaving the top of the atmosphere: low over cold cloud tops and the poles, high over clear warm regions.'],
   ['Isobars / Height lines', 'Contours of surface pressure at the surface, of geopotential height on a pressure level, at the chosen interval.'],
   ['Graticule', 'Parallels and meridians at the chosen spacing; the meridians stop at the outermost parallel.'],
-  ['Projection', 'The orthographic globe, or the Equal Earth map; both can be dragged to any orientation.'],
+  ['Projection', 'The globe, orthographic in the Atmosphere and Ocean modes and seen through a perspective camera that flies in as you zoom in the Satellite mode, or the Equal Earth map; both can be dragged to any orientation.'],
   ['Snapshots', 'Save the paused state in this browser, restore it later, download one of the runs saved on the server, or import and export snapshot files to share them.'],
 ];
 
@@ -556,6 +556,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     document.getElementById('heightOptions').classList.toggle('hidden', !heights);
     for (const id of ['overlayLabel', 'overlayOptions', 'animateLabel', 'animateOptions']) document.getElementById(id).classList.toggle('hidden', space);
     for (const id of ['lightLabel', 'lightOptions']) document.getElementById(id).classList.toggle('hidden', !space);
+    document.querySelector('[data-setting="projection"] [data-value="sphere"]').textContent = space ? 'Perspective' : 'Orthographic';
     document.getElementById('sunSlider').value = String(Math.sqrt(settings.sun / LIGHT_MAX.sun));
     document.getElementById('ambientSlider').value = String(Math.sqrt(settings.ambient / LIGHT_MAX.ambient));
     for (const id of ['isolineLabel', 'isolineOptions']) document.getElementById(id).classList.toggle('hidden', settings.view !== 'atmosphere');

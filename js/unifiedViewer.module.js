@@ -355,9 +355,19 @@ void main() {
   renderer.domElement.style.display = "block";
   container.appendChild(renderer.domElement);
 
-  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
-  camera.position.set(0, 0, 10);
-  camera.lookAt(0, 0, 0);
+  /*
+   * Two cameras on the view axis. The orthographic one shows 500 / zoom
+   * globe radii of height; the perspective one sits above the front of
+   * the globe (or the map) at the height that shows the same span there,
+   * so the zoom keeps its meaning and the camera flies in as it grows.
+   */
+  const FIELD_OF_VIEW = 40;
+  const TAN_HALF = Math.tan(THREE.MathUtils.degToRad(FIELD_OF_VIEW / 2));
+  const orthographic = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
+  orthographic.position.set(0, 0, 10);
+  orthographic.lookAt(0, 0, 0);
+  const perspective = new THREE.PerspectiveCamera(FIELD_OF_VIEW, 1, 0.02, 200);
+  let camera = orthographic;
 
   // --- 4. Material & Rotation ---
   
@@ -412,12 +422,13 @@ void main() {
     projectedMaterials.push(material);
   }
 
-  const lighting = { uSunDirection: { value: new THREE.Vector3(1, 0, 0) }, uLighting: { value: 0 }, uAmbient: { value: 0.015 }, uSun: { value: 1 } };
+  const lighting = { uSunDirection: { value: new THREE.Vector3(1, 0, 0) }, uCameraPosition: { value: new THREE.Vector3(0, 0, 1e5) }, uLighting: { value: 0 }, uAmbient: { value: 0.004 }, uSun: { value: 1 } };
   const material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
   projectMaterial(material, 0.0, {
     uniforms: lighting,
     head: `
 uniform vec3 uSunDirection;
+uniform vec3 uCameraPosition;
 uniform float uLighting;
 uniform float uAmbient;
 uniform float uSun;
@@ -437,10 +448,11 @@ attribute vec3 slope;
   float skyLight = 0.2 * smoothstep(-0.12, 0.1, mu);
   mat3 spin = mat3(uModelRotation);
   vec3 nView = spin * n;
-  vec3 halfway = normalize(spin * uSunDirection + vec3(0.0, 0.0, 1.0));
+  vec3 toCamera = normalize(uCameraPosition - nView);
+  vec3 halfway = normalize(spin * uSunDirection + toCamera);
   float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.05, mu);
   float airLit = smoothstep(-0.16, 0.05, mu);
-  float slant = pow(1.0 - max(0.0, nView.z), 2.0) * (1.0 - uBlend);
+  float slant = pow(1.0 - max(0.0, dot(nView, toCamera)), 2.0) * (1.0 - uBlend);
   vec3 glow = 0.45 * slant * airLit * mix(vec3(1.0, 0.5, 0.2), vec3(0.45, 0.65, 1.0), smoothstep(0.0, 0.25, mu));
   vec3 lit = vColor.rgb * (uAmbient + uSun * (diffuse * sunColour + skyLight * skyColour))
     + uSun * glint * sunColour * 0.9
@@ -480,7 +492,9 @@ attribute vec3 slope;
   if (controls) container.appendChild(ui);
 
   // --- 5. Animation Loop ---
-  const state = { isDragging: false, lastX: 0, lastY: 0, zoom: 150, pan: new THREE.Vector3(0, 0, 0), lastVector: null };
+  const state = { isDragging: false, lastX: 0, lastY: 0, zoom: 150, pan: new THREE.Vector3(0, 0, 0), lastVector: null, perspective: false };
+  const viewHeight = () => 500 / state.zoom;
+  const cameraDistance = () => 1 - viewState.blend + viewHeight() / (2 * TAN_HALF);
 
   function render() {
     if (disposed) return;
@@ -504,18 +518,27 @@ attribute vec3 slope;
     }
 
     const aspect = container.clientWidth / container.clientHeight;
-    const frustumSize = 500 / state.zoom; 
-    
-    camera.left = -frustumSize * aspect / 2 + state.pan.x;
-    camera.right = frustumSize * aspect / 2 + state.pan.x;
-    camera.top = frustumSize / 2 + state.pan.y;
-    camera.bottom = -frustumSize / 2 + state.pan.y;
+    if (state.perspective) {
+      camera = perspective;
+      camera.aspect = aspect;
+      camera.position.set(state.pan.x, state.pan.y, cameraDistance());
+      lighting.uCameraPosition.value.copy(camera.position);
+    } else {
+      camera = orthographic;
+      const frustumSize = viewHeight();
+      camera.left = -frustumSize * aspect / 2 + state.pan.x;
+      camera.right = frustumSize * aspect / 2 + state.pan.x;
+      camera.top = frustumSize / 2 + state.pan.y;
+      camera.bottom = -frustumSize / 2 + state.pan.y;
+      lighting.uCameraPosition.value.set(0, 0, 1e5);
+    }
     camera.updateProjectionMatrix();
 
     renderer.setClearColor(space.enabled ? 0x000000 : backgroundColor);
     renderer.clear();
     if (space.enabled) {
       skyCamera.aspect = aspect;
+      skyCamera.fov = state.perspective ? FIELD_OF_VIEW : 60;
       skyCamera.updateProjectionMatrix();
       stars.quaternion.copy(sphereQuaternion).multiply(space.sidereal);
       sun.position.copy(space.sun).applyQuaternion(sphereQuaternion).multiplyScalar(SKY_RADIUS);
@@ -562,7 +585,7 @@ attribute vec3 slope;
 
   function panBy(dx, dy) {
     if (container.clientHeight <= 0) return;
-    const pxToWorld = (camera.top - camera.bottom) / container.clientHeight;
+    const pxToWorld = viewHeight() / container.clientHeight;
     state.pan.x -= dx * pxToWorld;
     state.pan.y += dy * pxToWorld;
     viewState.version++;
@@ -654,9 +677,18 @@ attribute vec3 slope;
       fx += (mapPoint[0] - rx) * blend;
       fy += (mapPoint[1] - ry) * blend;
     }
-    out[0] = (fx - camera.left) / (camera.right - camera.left) * container.clientWidth;
-    out[1] = (camera.top - fy) / (camera.top - camera.bottom) * container.clientHeight;
-    out[2] = blend > 0.5 ? 1 : rz;
+    if (state.perspective) {
+      const distance = cameraDistance();
+      const half = (distance - rz * (1 - blend)) * TAN_HALF;
+      const aspect = container.clientWidth / container.clientHeight;
+      out[0] = ((fx - state.pan.x) / (half * aspect) + 1) / 2 * container.clientWidth;
+      out[1] = (1 - (fy - state.pan.y) / half) / 2 * container.clientHeight;
+      out[2] = blend > 0.5 ? 1 : rx * state.pan.x + ry * state.pan.y + rz * distance - 1;
+    } else {
+      out[0] = (fx - camera.left) / (camera.right - camera.left) * container.clientWidth;
+      out[1] = (camera.top - fy) / (camera.top - camera.bottom) * container.clientHeight;
+      out[2] = blend > 0.5 ? 1 : rz;
+    }
     return out;
   }
 
@@ -927,8 +959,9 @@ uniform float uReferenceSpeed;
   return {
     updateColors: dynamicColors ? updateColors : null,
     updateSurface, updateSlopes,
-    setSpace({ enabled, sun: direction = null, sidereal = 0, ambient = 0.015, intensity = 1 } = {}) {
+    setSpace({ enabled, sun: direction = null, sidereal = 0, ambient = 0.004, intensity = 1, perspective = enabled } = {}) {
       space.enabled = enabled;
+      if (state.perspective !== perspective) { state.perspective = perspective; viewState.version++; }
       lighting.uLighting.value = enabled ? 1 : 0;
       lighting.uAmbient.value = ambient;
       lighting.uSun.value = intensity;
@@ -979,7 +1012,7 @@ uniform float uReferenceSpeed;
       out[2] = e[8] * hit.x + e[9] * hit.y + e[10] * hit.z;
       return out;
     },
-    pixelsPerUnit: () => container.clientHeight / (camera.top - camera.bottom),
+    pixelsPerUnit: () => container.clientHeight / viewHeight(),
     viewVersion: () => viewState.version,
     dispose: () => {
       disposed = true;
