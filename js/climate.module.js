@@ -318,6 +318,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       url.searchParams.set('lat', tenth(orientation.lat));
       url.searchParams.set('lon', tenth(orientation.lon));
       url.searchParams.set('zoom', String(Math.round(orientation.zoom)));
+      if (Math.abs(orientation.roll) >= 0.05) url.searchParams.set('roll', tenth(orientation.roll)); else url.searchParams.delete('roll');
     }
     if (running) url.searchParams.delete('paused'); else url.searchParams.set('paused', '');
     history.replaceState(null, '', url);

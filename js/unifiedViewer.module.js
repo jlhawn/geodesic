@@ -881,6 +881,12 @@ uniform float uReferenceSpeed;
     };
   }
 
+  function canonicalQuaternion(lat, lon) {
+    const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(lat));
+    const spin = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -THREE.MathUtils.degToRad(lon));
+    return new THREE.Quaternion().setFromEuler(initialEuler).multiply(tilt).multiply(spin).normalize();
+  }
+
   return {
     updateColors: dynamicColors ? updateColors : null,
     setSpace({ enabled, sun: direction = null, sidereal = 0, ambient = 0.015 } = {}) {
@@ -896,16 +902,26 @@ uniform float uReferenceSpeed;
     addSegmentLayer,
     setProjection(mode) { viewState.targetBlend = mode === 'map' ? 1.0 : 0.0; },
     projection: () => (viewState.targetBlend === 1.0 ? 'map' : 'sphere'),
+    /*
+     * The view is the point facing the camera and the roll about the
+     * line of sight: the orientation with that point in front and north
+     * up is the canonical one, and whatever rotation about the view axis
+     * separates the actual orientation from it is the roll.
+     */
     view() {
       const front = new THREE.Vector3(0, 0, 1).applyQuaternion(sphereQuaternion.clone().invert());
-      return { lat: THREE.MathUtils.radToDeg(Math.atan2(front.z, Math.hypot(front.x, front.y))), lon: THREE.MathUtils.radToDeg(Math.atan2(front.y, front.x)), zoom: state.zoom };
+      const lat = THREE.MathUtils.radToDeg(Math.atan2(front.z, Math.hypot(front.x, front.y))), lon = THREE.MathUtils.radToDeg(Math.atan2(front.y, front.x));
+      const residual = sphereQuaternion.clone().multiply(canonicalQuaternion(lat, lon).invert());
+      let roll = THREE.MathUtils.radToDeg(2 * Math.atan2(residual.z, residual.w));
+      if (roll > 180) roll -= 360; else if (roll <= -180) roll += 360;
+      return { lat, lon, zoom: state.zoom, roll };
     },
-    setView({ lat = null, lon = null, zoom = null } = {}) {
-      if (lat !== null || lon !== null) {
+    setView({ lat = null, lon = null, zoom = null, roll = null } = {}) {
+      if (lat !== null || lon !== null || roll !== null) {
         const current = this.view();
-        const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(lat ?? current.lat));
-        const spin = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -THREE.MathUtils.degToRad(lon ?? current.lon));
-        sphereQuaternion.setFromEuler(initialEuler).multiply(tilt).multiply(spin).normalize();
+        sphereQuaternion.copy(canonicalQuaternion(lat ?? current.lat, lon ?? current.lon));
+        const turn = roll ?? current.roll;
+        if (turn) sphereQuaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), THREE.MathUtils.degToRad(turn))).normalize();
         rotationMatrix.makeRotationFromQuaternion(sphereQuaternion);
       }
       if (zoom !== null) state.zoom = Math.max(10, Math.min(zoom, 10000));

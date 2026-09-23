@@ -132,7 +132,7 @@
     const workers = Number(params.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 2));
     const engine = params.get('engine') ?? (navigator.gpu ? 'gpu' : 'cpu');
     const number = (key) => (params.has(key) && Number.isFinite(Number(params.get(key))) ? Number(params.get(key)) : null);
-    const view = ['lat', 'lon', 'zoom'].some((key) => params.has(key)) ? { lat: number('lat'), lon: number('lon'), zoom: number('zoom') } : null;
+    const view = ['lat', 'lon', 'zoom', 'roll'].some((key) => params.has(key)) ? { lat: number('lat'), lon: number('lon'), zoom: number('zoom'), roll: number('roll') } : null;
     runClimate({ N: params.get('N') ? Number(params.get('N')) : (from === 'none' ? 64 : null), from: from === 'none' ? null : from, workers, engine, paused: snapshot !== null || params.has('paused'), land: params.get('land') !== 'off', terrain: params.get('terrain') !== 'off', topography: params.get('topography'), settings: Object.fromEntries(params), view });
   </script>
 </body>
