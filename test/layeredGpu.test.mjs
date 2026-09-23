@@ -110,3 +110,25 @@ test('one and twenty GPU ocean steps track the CPU layered ocean at N=8', { skip
     assert.ok(Math.abs(c - g) < 0.05 * Math.max(Math.abs(c), 1) + 1e-3, `${key} diff too large: cpu=${c} gpu=${g}`);
   }
 });
+
+test('the GPU ocean keeps its water volume over 400 wind-driven steps at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: OCEAN_OPTIONS });
+  const gpuOcean = gpuModel.oceanEngine, mesh = cpuModel.mesh, C = mesh.nCells;
+  gpuOcean.initialize(surfaceT0, ice);
+  async function meanColumn() {
+    const { h } = await gpuOcean.download();
+    let volume = 0, area = 0;
+    for (let i = 0; i < C; i++) {
+      if (!gpuOcean.cellOcean[i]) continue;
+      let column = 0;
+      for (let k = 0; k < gpuOcean.layers; k++) column += h[k * C + i];
+      volume += mesh.areaCell[i] * column; area += mesh.areaCell[i];
+    }
+    return volume / area;
+  }
+  const before = await meanColumn();
+  for (let n = 0; n < 400; n++) await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, 1350);
+  const drift = (await meanColumn()) - before;
+  assert.ok(Math.abs(drift) < 2e-3, `mean water column changed by ${drift} m over 400 steps`);
+});

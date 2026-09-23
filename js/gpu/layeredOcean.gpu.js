@@ -304,8 +304,8 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     sum += hv;
   }
   IN[qOff(0) + i] += dQ; IN[wOff(0) + i] += dW;
-  let scale = (OD[O_BATH + i] + OD[B_BAVG + i]) / sum;
-  for (var k = 0; k < L; k++) { IN[hOff(k) + i] *= scale; IN[qOff(k) + i] *= scale; IN[wOff(k) + i] *= scale; }
+  let excess = (OD[B_BAVG + i] - (sum - OD[O_BATH + i])) / sum;
+  for (var k = 0; k < L; k++) { IN[hOff(k) + i] += IN[hOff(k) + i] * excess; IN[qOff(k) + i] += IN[qOff(k) + i] * excess; IN[wOff(k) + i] += IN[wOff(k) + i] * excess; }
   OD[O_ETA + i] = OD[B_BAVG + i];
 }`,
     oVelocityShiftClamp: `${K}  let e = ${idx}; if (e >= E) { return; }
