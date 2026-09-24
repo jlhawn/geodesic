@@ -180,30 +180,38 @@ const KERNELS = {
   OUT[S_QC + idx] = -(divC / area - fC * divergence) / pi - vertical(k, i, idx, fC, D_QCL, pi);
 }`,
   momentum: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= K * E) { return; }
-  let k = n / E; let e = n % E;
+  let e = i32(id.x); if (e >= E) { return; }
   let i = MI[COE + 2 * e]; let j = MI[COE + 2 * e + 1];
-  let flux0 = k * E; let off = k * C;
-  let qHere = 0.5 * D[D_QE + n];
-  var pv = 0.0;
-  for (var s = 0; s < MAXEE; s++) {
-    let slot = MAXEE * e + s; let other = MI[EOE + slot];
-    pv += MF[F_PVW + slot] * D[D_FLUX + flux0 + other] * (qHere + 0.5 * D[D_QE + flux0 + other]);
-  }
   let dc = MF[F_DC + e];
-  let gradPhi = (D[D_PHI + off + j] - D[D_PHI + off + i]) / dc;
-  let pgfPi = RGAS * 0.5 * (D[D_THV + off + i] * D[D_EXM + off + i] + D[D_THV + off + j] * D[D_EXM + off + j]) * (D[D_LNPI + j] - D[D_LNPI + i]) / dc;
-  let lowerFlow = 0.5 * (D[D_PSD + (k + 1) * C + i] + D[D_PSD + (k + 1) * C + j]);
-  let upperFlow = 0.5 * (D[D_PSD + k * C + i] + D[D_PSD + k * C + j]);
-  let u = IN[S_U + n];
-  var lowerU = 0.0; if (k < K - 1) { lowerU = 0.5 * (u + IN[S_U + n + E]); }
-  var upperU = 0.0; if (k > 0) { upperU = 0.5 * (u + IN[S_U + n - E]); }
+  var others: array<i32, MAXEE>; var weights: array<f32, MAXEE>;
+  for (var s = 0; s < MAXEE; s++) { others[s] = MI[EOE + MAXEE * e + s]; weights[s] = MF[F_PVW + MAXEE * e + s]; }
   let piEdge = 0.5 * (IN[S_PI + i] + IN[S_PI + j]);
-  let vertical = (lowerFlow * lowerU - upperFlow * upperU - u * (lowerFlow - upperFlow)) / (piEdge * LV[L_DS + k]);
-  var du = pv / dc - gradPhi - MF[F_GPHIS + e] - pgfPi - vertical;
-  if (k == K - 1) { du -= 0.5 * (D[D_DRAG + i] + D[D_DRAG + j]) * u; }
-  du -= LV[L_TOP + k] * u;
-  OUT[S_U + n] = du;
+  let lnPiStep = D[D_LNPI + j] - D[D_LNPI + i];
+  let gphis = MF[F_GPHIS + e];
+  var upperFlow = 0.5 * (D[D_PSD + i] + D[D_PSD + j]);
+  var uAbove = 0.0;
+  var u = IN[S_U + e];
+  for (var k = 0; k < K; k++) {
+    let n = k * E + e; let flux0 = k * E; let off = k * C;
+    let qHere = 0.5 * D[D_QE + n];
+    var pv = 0.0;
+    for (var s = 0; s < MAXEE; s++) {
+      let other = others[s];
+      pv += weights[s] * D[D_FLUX + flux0 + other] * (qHere + 0.5 * D[D_QE + flux0 + other]);
+    }
+    let gradPhi = (D[D_PHI + off + j] - D[D_PHI + off + i]) / dc;
+    let pgfPi = RGAS * 0.5 * (D[D_THV + off + i] * D[D_EXM + off + i] + D[D_THV + off + j] * D[D_EXM + off + j]) * lnPiStep / dc;
+    let lowerFlow = 0.5 * (D[D_PSD + (k + 1) * C + i] + D[D_PSD + (k + 1) * C + j]);
+    var uBelow = 0.0; var lowerU = 0.0; var upperU = 0.0;
+    if (k < K - 1) { uBelow = IN[S_U + n + E]; lowerU = 0.5 * (u + uBelow); }
+    if (k > 0) { upperU = 0.5 * (u + uAbove); }
+    let vertical = (lowerFlow * lowerU - upperFlow * upperU - u * (lowerFlow - upperFlow)) / (piEdge * LV[L_DS + k]);
+    var du = pv / dc - gradPhi - gphis - pgfPi - vertical;
+    if (k == K - 1) { du -= 0.5 * (D[D_DRAG + i] + D[D_DRAG + j]) * u; }
+    du -= LV[L_TOP + k] * u;
+    OUT[S_U + n] = du;
+    uAbove = u; u = uBelow; upperFlow = lowerFlow;
+  }
 }`,
   advance: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = i32(id.x); if (n >= ${'S_TOTAL'}) { return; }
@@ -410,7 +418,7 @@ export async function createGpuCore(mesh, {
     dispatch(pass, 'pvVertex', g, L.KV);
     dispatch(pass, 'pvEdge', g, L.KE);
     dispatch(pass, 'cellTendency', g, L.KC);
-    dispatch(pass, 'momentum', g, L.KE);
+    dispatch(pass, 'momentum', g, E);
   }
 
   const params = new Float32Array(8);
