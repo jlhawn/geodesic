@@ -74,6 +74,18 @@ export function interiorWater(rho, t, s, lat) {
 export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005, RESTORE_TOLERANCE = 0.01;
 
 /*
+ * The ∇⁴ closure coefficient. At closureSpacing and coarser, the
+ * grid-scale wave decays in closureHours; on finer meshes the
+ * coefficient falls only as the cube of the spacing, as MPAS-Ocean
+ * scales its biharmonic viscosity, so that fronts and jets a few cells
+ * across stay damped on fine meshes.
+ */
+export const CLOSURE_SPACING = 120e3;
+export function closureCoefficient(spacing, closureHours, closureSpacing = CLOSURE_SPACING) {
+  return closureHours > 0 ? Math.pow(spacing / Math.PI, 4) / (closureHours * 3600) * Math.max(1, closureSpacing / spacing) : 0;
+}
+
+/*
  * The model's bathymetry: the cell-mean ETOPO depth of every sea cell,
  * at least `minimumDepth`, and never shallower than `neighbourRatio`
  * times its deepest sea neighbour, so that no shelf break or trench
@@ -199,7 +211,7 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 200, convectiveRate = 100 / 86400, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceSalinity = 5, iceDensity = 917,
-  interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, diffusivity = 0.3, everySteps = 4,
+  interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, diffusivity = 0.3, everySteps = 4,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {
   const {
@@ -216,7 +228,7 @@ export function createOcean(mesh, {
   let spacing = 0, minSpacing = Infinity;
   for (let e = 0; e < E; e++) { spacing += dcEdge[e]; minSpacing = Math.min(minSpacing, dcEdge[e]); }
   spacing /= E;
-  const nu4 = closureHours > 0 ? Math.pow(spacing / Math.PI, 4) / (closureHours * 3600) : 0;
+  const nu4 = closureCoefficient(spacing, closureHours, closureSpacing);
 
   const edgeOcean = geography ? geography.edgeOcean : new Uint8Array(E).fill(1);
   const cellOcean = geography ? Uint8Array.from(geography.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
