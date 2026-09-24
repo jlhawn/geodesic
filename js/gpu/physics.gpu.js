@@ -33,9 +33,9 @@ fn openWaterAlbedo(mu: f32) -> f32 { return 0.026 / (pow(mu, 1.7) + 0.065) + 0.1
 fn surfaceAlbedo(h: f32, water: f32) -> f32 { return select(water, water + (ALB_ICE - water) * min(1.0, h / FULLALB), h > 0.0); }
 fn cellWind(i: i32, k: i32) -> vec3<f32> {
   var w = vec3<f32>(0.0, 0.0, 0.0);
-  for (var m = 0; m < MI[NEC + i]; m++) {
+  for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m];
-    let s = 0.5 * MF[F_DC + e] * MF[F_DV + e] * IN[S_U + k * E + e];
+    let s = abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + e] * MF[F_DV + e] * IN[S_U + k * E + e];
     w += s * vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
   }
   return w / MF[F_AREA + i];

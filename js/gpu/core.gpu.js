@@ -93,7 +93,7 @@ const KERNELS = {
   let n = i32(id.x); if (n >= K * C) { return; }
   let k = n / C; let i = n % C;
   var sum = 0.0;
-  for (var m = 0; m < MI[NEC + i]; m++) {
+  for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m];
     sum += f32(MI[ESC + MAXE * i + m]) * D[D_FLUX + k * E + e] * MF[F_DV + e];
   }
@@ -143,40 +143,40 @@ const KERNELS = {
   let k = n / E; let e = n % E;
   D[D_QE + n] = 0.5 * (D[D_QV + k * V + MI[VOE + 2 * e]] + D[D_QV + k * V + MI[VOE + 2 * e + 1]]);
 }`,
-  cellTendency: `fn transport(k: i32, i: i32, idx: i32, fieldOff: i32, lowerOff: i32, pi: f32, flux0: i32) -> f32 {
-  var div = 0.0;
-  let f = IN[fieldOff + idx];
-  for (var m = 0; m < MI[NEC + i]; m++) {
-    let e = MI[EOC + MAXE * i + m];
-    let j = MI[COC + MAXE * i + m];
-    div += f32(MI[ESC + MAXE * i + m]) * D[D_FLUX + flux0 + e] * 0.5 * (f + IN[fieldOff + k * C + j]) * MF[F_DV + e];
-  }
-  div = div / MF[F_AREA + i];
+  cellTendency: `fn vertical(k: i32, i: i32, idx: i32, f: f32, lowerOff: i32, pi: f32) -> f32 {
   let lowerFlow = D[D_PSD + (k + 1) * C + i];
   let upperFlow = D[D_PSD + k * C + i];
   var lower = 0.0; if (k < K - 1) { lower = D[lowerOff + idx]; }
   var upper = 0.0; if (k > 0) { upper = D[lowerOff + idx - C]; }
-  let vertical = (lowerFlow * lower - upperFlow * upper - f * (lowerFlow - upperFlow)) / (pi * LV[L_DS + k]);
-  return -(div - f * D[D_DIV + idx]) / pi - vertical;
+  return (lowerFlow * lower - upperFlow * upper - f * (lowerFlow - upperFlow)) / (pi * LV[L_DS + k]);
 }
 @compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = i32(id.x); if (n >= K * C) { return; }
   let k = n / C; let i = n % C; let idx = n;
   let pi = IN[S_PI + i];
-  var kinetic = 0.0; var dragPower = 0.0;
-  let bottomLayer = k == K - 1;
-  for (var m = 0; m < MI[NEC + i]; m++) {
-    let e = MI[EOC + MAXE * i + m];
-    let u = IN[S_U + k * E + e];
-    kinetic += 0.25 * MF[F_DC + e] * MF[F_DV + e] * u * u;
-    let rate = LV[L_TOP + k] + select(0.0, 0.5 * (D[D_DRAG + MI[COE + 2 * e]] + D[D_DRAG + MI[COE + 2 * e + 1]]), bottomLayer);
-    dragPower += 0.5 * MF[F_DC + e] * MF[F_DV + e] * rate * u * u;
+  let fT = IN[S_TH + idx]; let fQ = IN[S_Q + idx]; let fC = IN[S_QC + idx];
+  let row = k * C; let flux0 = k * E;
+  let top = LV[L_TOP + k]; let bottomLayer = k == K - 1;
+  var kinetic = 0.0; var dragPower = 0.0; var divT = 0.0; var divQ = 0.0; var divC = 0.0;
+  for (var m = 0; m < MAXE; m++) {
+    let slot = MAXE * i + m;
+    let e = MI[EOC + slot]; let j = MI[COC + slot]; let sign = f32(MI[ESC + slot]);
+    let dc = MF[F_DC + e]; let dv = MF[F_DV + e] * abs(sign);
+    let u = IN[S_U + flux0 + e];
+    kinetic += 0.25 * dc * dv * u * u;
+    let rate = top + select(0.0, 0.5 * (D[D_DRAG + i] + D[D_DRAG + j]), bottomLayer);
+    dragPower += 0.5 * dc * dv * rate * u * u;
+    let carried = sign * D[D_FLUX + flux0 + e] * 0.5;
+    divT += carried * (fT + IN[S_TH + row + j]) * dv;
+    divQ += carried * (fQ + IN[S_Q + row + j]) * dv;
+    divC += carried * (fC + IN[S_QC + row + j]) * dv;
   }
-  D[D_PHI + idx] = D[D_GEO + idx] + kinetic / MF[F_AREA + i];
-  let flux0 = k * E;
-  OUT[S_TH + idx] = transport(k, i, idx, S_TH, D_THL, pi, flux0) + dragPower / MF[F_AREA + i] / (CP * D[D_EXM + idx]);
-  OUT[S_Q + idx] = transport(k, i, idx, S_Q, D_QL, pi, flux0);
-  OUT[S_QC + idx] = transport(k, i, idx, S_QC, D_QCL, pi, flux0);
+  let area = MF[F_AREA + i];
+  D[D_PHI + idx] = D[D_GEO + idx] + kinetic / area;
+  let divergence = D[D_DIV + idx];
+  OUT[S_TH + idx] = -(divT / area - fT * divergence) / pi - vertical(k, i, idx, fT, D_THL, pi) + dragPower / area / (CP * D[D_EXM + idx]);
+  OUT[S_Q + idx] = -(divQ / area - fQ * divergence) / pi - vertical(k, i, idx, fQ, D_QL, pi);
+  OUT[S_QC + idx] = -(divC / area - fC * divergence) / pi - vertical(k, i, idx, fC, D_QCL, pi);
 }`,
   momentum: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = i32(id.x); if (n >= K * E) { return; }
@@ -185,7 +185,7 @@ const KERNELS = {
   let flux0 = k * E; let off = k * C;
   let qHere = 0.5 * D[D_QE + n];
   var pv = 0.0;
-  for (var s = 0; s < MI[NEE + e]; s++) {
+  for (var s = 0; s < MAXEE; s++) {
     let slot = MAXEE * e + s; let other = MI[EOE + slot];
     pv += MF[F_PVW + slot] * D[D_FLUX + flux0 + other] * (qHere + 0.5 * D[D_QE + flux0 + other]);
   }
@@ -220,7 +220,7 @@ const KERNELS = {
   let wi = select(D[D_EXM + idx], IN[S_PI + i], weightPi > 0.5);
   let here = IN[off + idx] * wi;
   var sum = 0.0;
-  for (var m = 0; m < MI[NEC + i]; m++) {
+  for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m]; let j = MI[COC + MAXE * i + m];
     let wj = select(D[D_EXM + k * C + j], IN[S_PI + j], weightPi > 0.5);
     sum += MF[F_DV + e] * (IN[off + k * C + j] * wj - here) / MF[F_DC + e];
@@ -232,7 +232,7 @@ const KERNELS = {
   let field = n / (K * C); let idx = n % (K * C); let k = idx / C; let i = idx % C;
   let here = D[D_LAP1 + n];
   var sum = 0.0;
-  for (var m = 0; m < MI[NEC + i]; m++) {
+  for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m]; let j = MI[COC + MAXE * i + m];
     sum += MF[F_DV + e] * (D[D_LAP1 + field * K * C + k * C + j] - here) / MF[F_DC + e];
   }
@@ -247,7 +247,7 @@ const KERNELS = {
   if (n < K * C) {
     let k = n / C; let i = n % C;
     var sum = 0.0;
-    for (var m = 0; m < MI[NEC + i]; m++) {
+    for (var m = 0; m < MAXE; m++) {
       let e = MI[EOC + MAXE * i + m];
       let u = select(IN[S_U + k * E + e], D[D_LAPA + k * E + e], fromLap);
       sum += f32(MI[ESC + MAXE * i + m]) * u * MF[F_DV + e];
@@ -280,7 +280,7 @@ const KERNELS = {
   let n = i32(id.x); if (n >= K * C) { return; }
   let k = n / C; let i = n % C;
   var sum = 0.0;
-  for (var m = 0; m < MI[NEC + i]; m++) { let e = MI[EOC + MAXE * i + m]; sum += MF[F_DC + e] * MF[F_DV + e] * D[D_DISS + k * E + e]; }
+  for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; sum += abs(f32(MI[ESC + MAXE * i + m])) * MF[F_DC + e] * MF[F_DV + e] * D[D_DISS + k * E + e]; }
   IN[S_TH + n] += 0.25 * sum / MF[F_AREA + i] / (CP * D[D_EXM + n]);
 }`,
   dissipationClear: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -324,12 +324,25 @@ export async function createGpuCore(mesh, {
 
   const mi = new Int32Array(L.MI.total);
   const put = (arr, off, src) => arr.set(src, off);
-  put(mi, L.MI.COE, mesh.cellsOnEdge); put(mi, L.MI.VOE, mesh.verticesOnEdge); put(mi, L.MI.EOC, mesh.edgesOnCell); put(mi, L.MI.ESC, mesh.edgeSignOnCell);
-  put(mi, L.MI.COC, mesh.cellsOnCell); put(mi, L.MI.NEC, mesh.nEdgesOnCell); put(mi, L.MI.COV, mesh.cellsOnVertex); put(mi, L.MI.EOV, mesh.edgesOnVertex);
-  put(mi, L.MI.ESV, mesh.edgeSignOnVertex); put(mi, L.MI.EOE, mesh.edgesOnEdge); put(mi, L.MI.NEE, mesh.nEdgesOnEdge);
+  const padded = (source, fill) => Int32Array.from({ length: MAX_EDGES * C }, (_, slot) => {
+    const i = Math.floor(slot / MAX_EDGES), m = slot % MAX_EDGES;
+    return m < mesh.nEdgesOnCell[i] ? source[mesh.maxEdges * i + m] : fill(i);
+  });
+  put(mi, L.MI.COE, mesh.cellsOnEdge); put(mi, L.MI.VOE, mesh.verticesOnEdge);
+  put(mi, L.MI.EOC, padded(mesh.edgesOnCell, (i) => mesh.edgesOnCell[mesh.maxEdges * i])); put(mi, L.MI.ESC, padded(mesh.edgeSignOnCell, () => 0));
+  put(mi, L.MI.COC, padded(mesh.cellsOnCell, (i) => i)); put(mi, L.MI.NEC, mesh.nEdgesOnCell); put(mi, L.MI.COV, mesh.cellsOnVertex); put(mi, L.MI.EOV, mesh.edgesOnVertex);
+  put(mi, L.MI.ESV, mesh.edgeSignOnVertex); put(mi, L.MI.NEE, mesh.nEdgesOnEdge);
+  const edgesOnEdge = Int32Array.from({ length: MAX_EDGES_ON_EDGE * E }, (_, slot) => (slot % MAX_EDGES_ON_EDGE < mesh.nEdgesOnEdge[Math.floor(slot / MAX_EDGES_ON_EDGE)] ? mesh.edgesOnEdge[mesh.maxEdgesOnEdge * Math.floor(slot / MAX_EDGES_ON_EDGE) + slot % MAX_EDGES_ON_EDGE] : Math.floor(slot / MAX_EDGES_ON_EDGE)));
+  put(mi, L.MI.EOE, edgesOnEdge);
   const mf = new Float32Array(L.MF.total);
   put(mf, L.MF.AREA, mesh.areaCell); put(mf, L.MF.ATRI, mesh.areaTriangle); put(mf, L.MF.DC, mesh.dcEdge); put(mf, L.MF.DV, mesh.dvEdge); put(mf, L.MF.FV, mesh.fVertex);
-  put(mf, L.MF.KAV, mesh.kiteAreasOnVertex); put(mf, L.MF.PVW, Float64Array.from(mesh.weightsOnEdge, (w, slot) => w * mesh.dvEdge[mesh.edgesOnEdge[slot]]));
+  put(mf, L.MF.KAV, mesh.kiteAreasOnVertex);
+  put(mf, L.MF.PVW, Float64Array.from({ length: MAX_EDGES_ON_EDGE * E }, (_, slot) => {
+    const e = Math.floor(slot / MAX_EDGES_ON_EDGE), s = slot % MAX_EDGES_ON_EDGE;
+    if (s >= mesh.nEdgesOnEdge[e]) return 0;
+    const source = mesh.maxEdgesOnEdge * e + s;
+    return mesh.weightsOnEdge[source] * mesh.dvEdge[mesh.edgesOnEdge[source]];
+  }));
   put(mf, L.MF.NEDGE, mesh.nEdge); put(mf, L.MF.LAT, mesh.latCell); put(mf, L.MF.XC, mesh.xCell);
   if (surfaceGeopotential) put(mf, L.MF.GPHIS, Float64Array.from({ length: E }, (_, e) => (surfaceGeopotential[mesh.cellsOnEdge[2 * e + 1]] - surfaceGeopotential[mesh.cellsOnEdge[2 * e]]) / mesh.dcEdge[e]));
   const lv = new Float32Array(L.LV.total);

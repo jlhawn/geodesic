@@ -129,7 +129,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   let k = n / C; let i = n % C;
   let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k], IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k], IN[wOff(k) + i] / hv, hv > 1e-6);
   var divH = 0.0; var divQ = 0.0; var divW = 0.0; var lapQ = 0.0; var lapW = 0.0;
-  for (var m = 0; m < MI[NEC + i]; m++) {
+  for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m]; let j = MI[COC + MAXE * i + m];
     let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
     divH += f;
@@ -157,7 +157,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     oKineticPhi: `${K}  let n = ${idx}; if (n >= L * C) { return; }
   let k = n / C; let i = n % C;
   var kinetic = 0.0;
-  for (var m = 0; m < MI[NEC + i]; m++) { let e = MI[EOC + MAXE * i + m]; let u = IN[uOff(k) + e]; kinetic += 0.25 * MF[F_DC + e] * MF[F_DV + e] * u * u; }
+  for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; let u = IN[uOff(k) + e]; kinetic += abs(f32(MI[ESC + MAXE * i + m])) * 0.25 * MF[F_DC + e] * MF[F_DV + e] * u * u; }
   kinetic = kinetic / MF[F_AREA + i];
   var phi = kinetic + OGRAV * OD[O_ETA + i];
   if (k > 0) {
@@ -172,7 +172,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   if (n < L * C) {
     let k = n / C; let i = n % C;
     var sum = 0.0;
-    for (var m = 0; m < MI[NEC + i]; m++) { let e = MI[EOC + MAXE * i + m]; let u = select(IN[uOff(k) + e], OD[O_LAPA + k * E + e], fromLap); sum += f32(MI[ESC + MAXE * i + m]) * u * MF[F_DV + e]; }
+    for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; let u = select(IN[uOff(k) + e], OD[O_LAPA + k * E + e], fromLap); sum += f32(MI[ESC + MAXE * i + m]) * u * MF[F_DV + e]; }
     OD[O_DIVS + n] = sum / MF[F_AREA + i];
   }
   if (n < L * V) {
@@ -193,7 +193,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   let qHere = 0.5 * OD[O_QE + n];
   var pv = 0.0;
-  for (var s = 0; s < MI[NEE + e]; s++) { let slot = MAXEE * e + s; let other = MI[EOE + slot]; let fo = select(0.0, OD[O_HEDGE + k * E + other] * IN[uOff(k) + other], OD[O_EMASK + other] > 0.5); pv += MF[F_PVW + slot] * fo * (qHere + 0.5 * OD[O_QE + k * E + other]); }
+  for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; let other = MI[EOE + slot]; let fo = select(0.0, OD[O_HEDGE + k * E + other] * IN[uOff(k) + other], OD[O_EMASK + other] > 0.5); pv += MF[F_PVW + slot] * fo * (qHere + 0.5 * OD[O_QE + k * E + other]); }
   let dc = MF[F_DC + e];
   let gradPhi = (OD[O_PHI + k * C + b] - OD[O_PHI + k * C + a]) / dc;
   var du = pv / dc - gradPhi;
@@ -233,7 +233,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     oBarotropicCoriolis: `${K}  let e = ${idx}; if (e >= E) { return; }
   if (OD[O_EMASK + e] < 0.5) { return; }
   var sum = 0.0;
-  for (var s = 0; s < MI[NEE + e]; s++) { let slot = MAXEE * e + s; let other = MI[EOE + slot]; sum += MF[F_PVW + slot] * OD[B_BCUR + C + other] * 0.5 * (OD[O_FEDGE + e] + OD[O_FEDGE + other]); }
+  for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; let other = MI[EOE + slot]; sum += MF[F_PVW + slot] * OD[B_BCUR + C + other] * 0.5 * (OD[O_FEDGE + e] + OD[O_FEDGE + other]); }
   OD[O_SLOW + e] -= sum / MF[F_DC + e];
 }`,
     /*
@@ -253,7 +253,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   if (n < C) {
     let i = n;
     var sum = 0.0;
-    for (var m = 0; m < MI[NEC + i]; m++) { let e = MI[EOC + MAXE * i + m]; sum += f32(MI[ESC + MAXE * i + m]) * OD[${inBase} + C + e] * MF[F_DV + e]; }
+    for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; sum += f32(MI[ESC + MAXE * i + m]) * OD[${inBase} + C + e] * MF[F_DV + e]; }
     OD[${outBase} + i] = select(0.0, -(sum / MF[F_AREA + i]), OD[O_CMASK + i] > 0.5);
   }
   if (n < E) {
@@ -262,7 +262,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
       let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
       let gradEtaB = (OD[${inBase} + b] - OD[${inBase} + a]) / MF[F_DC + e];
       var cor = 0.0;
-      for (var s = 0; s < MI[NEE + e]; s++) { let slot = MAXEE * e + s; let other = MI[EOE + slot]; cor += MF[F_PVW + slot] * OD[${inBase} + C + other] * 0.5 * (OD[O_FEDGE + e] + OD[O_FEDGE + other]); }
+      for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; let other = MI[EOE + slot]; cor += MF[F_PVW + slot] * OD[${inBase} + C + other] * 0.5 * (OD[O_FEDGE + e] + OD[O_FEDGE + other]); }
       OD[${outBase} + C + e] = -OGRAV * OD[O_DEPTHEDGE + e] * gradEtaB + cor / MF[F_DC + e] + OD[O_SLOW + e];
     }
   }
@@ -328,9 +328,9 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     oMixedLayer: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
   var wv = vec3<f32>(0.0, 0.0, 0.0);
-  for (var m = 0; m < MI[NEC + i]; m++) {
+  for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m];
-    let s = 0.5 * MF[F_DC + e] * MF[F_DV + e] * OD[O_STRESS + e];
+    let s = abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + e] * MF[F_DV + e] * OD[O_STRESS + e];
     wv += s * vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
   }
   wv = wv / MF[F_AREA + i];
