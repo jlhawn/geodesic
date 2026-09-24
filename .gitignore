@@ -1,6 +1,6 @@
 .DS_Store
 
 runs/*
-!runs/ocean64_state_day930.parts.json
-!runs/ocean64_state_day930.json.gz.*
+!runs/spin128c_day0678.parts.json
+!runs/spin128c_day0678.bin.gz.*
 node_modules/
