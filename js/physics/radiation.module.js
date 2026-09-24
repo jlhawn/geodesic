@@ -106,28 +106,17 @@ export function createRadiation(mesh, core, {
 
   function band(fraction, eps, surfaceEmission) {
     for (let k = 0; k < K; k++) emitted[k] = fraction * eps[k] * STEFAN_BOLTZMANN * temperature[k] ** 4;
-    let carry = fraction * surfaceEmission;
-    for (let k = K - 1; k >= 0; k--) {
-      netFlux[k] += eps[k] * carry;
-      carry *= 1 - eps[k];
-    }
-    let outgoing = carry, back = 0;
+    let down = 0;
     for (let k = 0; k < K; k++) {
-      netFlux[k] -= 2 * emitted[k];
-      let down = emitted[k];
-      for (let j = k + 1; j < K; j++) {
-        netFlux[j] += eps[j] * down;
-        down *= 1 - eps[j];
-      }
-      back += down;
-      let up = emitted[k];
-      for (let j = k - 1; j >= 0; j--) {
-        netFlux[j] += eps[j] * up;
-        up *= 1 - eps[j];
-      }
-      outgoing += up;
+      netFlux[k] += eps[k] * down - 2 * emitted[k];
+      down = down * (1 - eps[k]) + emitted[k];
     }
-    return [outgoing, back];
+    let up = fraction * surfaceEmission;
+    for (let k = K - 1; k >= 0; k--) {
+      netFlux[k] += eps[k] * up;
+      up = up * (1 - eps[k]) + emitted[k];
+    }
+    return [up, down];
   }
 
   function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo, wetness = 1, exchangeCoefficientAt = exchangeCoefficient) {

@@ -41,21 +41,21 @@ fn cellWind(i: i32, k: i32) -> vec3<f32> {
   return w / MF[F_AREA + i];
 }
 fn band(fraction: f32, eps: ptr<function, array<f32, K>>, temperature: ptr<function, array<f32, K>>, netFlux: ptr<function, array<f32, K>>, surfaceEmission: f32) -> vec2<f32> {
-  var emitted: array<f32, K>;
-  for (var k = 0; k < K; k++) { let t = (*temperature)[k]; emitted[k] = fraction * (*eps)[k] * STEFAN * t * t * t * t; }
-  var carry = fraction * surfaceEmission;
-  for (var k = K - 1; k >= 0; k--) { (*netFlux)[k] += (*eps)[k] * carry; carry *= 1.0 - (*eps)[k]; }
-  var outgoing = carry; var back = 0.0;
+  var down = 0.0;
   for (var k = 0; k < K; k++) {
-    (*netFlux)[k] -= 2.0 * emitted[k];
-    var down = emitted[k];
-    for (var j = k + 1; j < K; j++) { (*netFlux)[j] += (*eps)[j] * down; down *= 1.0 - (*eps)[j]; }
-    back += down;
-    var up = emitted[k];
-    for (var j = k - 1; j >= 0; j--) { (*netFlux)[j] += (*eps)[j] * up; up *= 1.0 - (*eps)[j]; }
-    outgoing += up;
+    let t = (*temperature)[k]; let e = (*eps)[k];
+    let emitted = fraction * e * STEFAN * t * t * t * t;
+    (*netFlux)[k] += e * down - 2.0 * emitted;
+    down = down * (1.0 - e) + emitted;
   }
-  return vec2<f32>(outgoing, back);
+  var up = fraction * surfaceEmission;
+  for (var k = K - 1; k >= 0; k--) {
+    let t = (*temperature)[k]; let e = (*eps)[k];
+    let emitted = fraction * e * STEFAN * t * t * t * t;
+    (*netFlux)[k] += e * up;
+    up = up * (1.0 - e) + emitted;
+  }
+  return vec2<f32>(up, down);
 }
 fn moistLapse(temperature: f32, pressure: f32) -> f32 {
   let qs = qsat(temperature, pressure);
