@@ -231,68 +231,96 @@ const KERNELS = {
   IN[n] += P[0] * (OUT[n] + 2.0 * D[n] + 2.0 * MF[n] + LV[n]);
 }`,
   lapScalar1: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= 3 * K * C) { return; }
-  let field = n / (K * C); let idx = n % (K * C); let k = idx / C; let i = idx % C;
-  var off = S_TH; var weightPi = 0.0;
-  if (field == 1) { off = S_Q; weightPi = 1.0; } else if (field == 2) { off = S_QC; weightPi = 1.0; }
-  let wi = select(D[D_EXM + idx], IN[S_PI + i], weightPi > 0.5);
-  let here = IN[off + idx] * wi;
-  var sum = 0.0;
+  let i = i32(id.x); if (i >= C) { return; }
+  let area = MF[F_AREA + i]; let piHere = IN[S_PI + i];
+  var neighbours: array<i32, MAXE>; var dvs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var piThere: array<f32, MAXE>;
   for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m]; let j = MI[COC + MAXE * i + m];
-    let wj = select(D[D_EXM + k * C + j], IN[S_PI + j], weightPi > 0.5);
-    sum += MF[F_DV + e] * (IN[off + k * C + j] * wj - here) / MF[F_DC + e];
+    neighbours[m] = j; dvs[m] = MF[F_DV + e]; dcs[m] = MF[F_DC + e]; piThere[m] = IN[S_PI + j];
   }
-  D[D_LAP1 + n] = sum / MF[F_AREA + i];
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let row = k * C;
+    let hereT = IN[S_TH + idx] * D[D_EXM + idx]; let hereQ = IN[S_Q + idx] * piHere; let hereC = IN[S_QC + idx] * piHere;
+    var sumT = 0.0; var sumQ = 0.0; var sumC = 0.0;
+    for (var m = 0; m < MAXE; m++) {
+      let j = neighbours[m]; let dv = dvs[m]; let dc = dcs[m];
+      sumT += dv * (IN[S_TH + row + j] * D[D_EXM + row + j] - hereT) / dc;
+      sumQ += dv * (IN[S_Q + row + j] * piThere[m] - hereQ) / dc;
+      sumC += dv * (IN[S_QC + row + j] * piThere[m] - hereC) / dc;
+    }
+    D[D_LAP1 + idx] = sumT / area; D[D_LAP1 + K * C + idx] = sumQ / area; D[D_LAP1 + 2 * K * C + idx] = sumC / area;
+  }
 }`,
   lapScalar2: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= 3 * K * C) { return; }
-  let field = n / (K * C); let idx = n % (K * C); let k = idx / C; let i = idx % C;
-  let here = D[D_LAP1 + n];
-  var sum = 0.0;
+  let i = i32(id.x); if (i >= C) { return; }
+  let area = MF[F_AREA + i]; let piHere = IN[S_PI + i];
+  var neighbours: array<i32, MAXE>; var dvs: array<f32, MAXE>; var dcs: array<f32, MAXE>;
   for (var m = 0; m < MAXE; m++) {
-    let e = MI[EOC + MAXE * i + m]; let j = MI[COC + MAXE * i + m];
-    sum += MF[F_DV + e] * (D[D_LAP1 + field * K * C + k * C + j] - here) / MF[F_DC + e];
+    let e = MI[EOC + MAXE * i + m];
+    neighbours[m] = MI[COC + MAXE * i + m]; dvs[m] = MF[F_DV + e]; dcs[m] = MF[F_DC + e];
   }
-  let lap2 = sum / MF[F_AREA + i];
-  if (field == 0) { IN[S_TH + idx] -= P[0] * lap2 / D[D_EXM + idx]; }
-  else if (field == 1) { IN[S_Q + idx] -= P[0] * lap2 / IN[S_PI + i]; }
-  else { IN[S_QC + idx] -= P[0] * lap2 / IN[S_PI + i]; }
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let row = k * C;
+    for (var field = 0; field < 3; field++) {
+      let base = field * K * C;
+      let here = D[D_LAP1 + base + idx];
+      var sum = 0.0;
+      for (var m = 0; m < MAXE; m++) { sum += dvs[m] * (D[D_LAP1 + base + row + neighbours[m]] - here) / dcs[m]; }
+      let lap2 = sum / area;
+      if (field == 0) { IN[S_TH + idx] -= P[0] * lap2 / D[D_EXM + idx]; }
+      else if (field == 1) { IN[S_Q + idx] -= P[0] * lap2 / piHere; }
+      else { IN[S_QC + idx] -= P[0] * lap2 / piHere; }
+    }
+  }
 }`,
   divCurl: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = i32(id.x);
   let fromLap = P[1] > 0.5;
-  if (n < K * C) {
-    let k = n / C; let i = n % C;
-    var sum = 0.0;
-    for (var m = 0; m < MAXE; m++) {
-      let e = MI[EOC + MAXE * i + m];
-      let u = select(IN[S_U + k * E + e], D[D_LAPA + k * E + e], fromLap);
-      sum += f32(MI[ESC + MAXE * i + m]) * u * MF[F_DV + e];
+  if (n < C) {
+    let i = n;
+    let area = MF[F_AREA + i];
+    var edges: array<i32, MAXE>; var weights: array<f32, MAXE>;
+    for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; edges[m] = e; weights[m] = f32(MI[ESC + MAXE * i + m]); }
+    for (var k = 0; k < K; k++) {
+      var sum = 0.0;
+      for (var m = 0; m < MAXE; m++) {
+        let e = edges[m];
+        let u = select(IN[S_U + k * E + e], D[D_LAPA + k * E + e], fromLap);
+        sum += weights[m] * u * MF[F_DV + e];
+      }
+      D[D_DIVS + k * C + i] = sum / area;
     }
-    D[D_DIVS + n] = sum / MF[F_AREA + i];
-  }
-  if (n < K * V) {
-    let k = n / V; let v = n % V;
-    var sum = 0.0;
-    for (var m = 0; m < 3; m++) {
-      let e = MI[EOV + 3 * v + m];
-      let u = select(IN[S_U + k * E + e], D[D_LAPA + k * E + e], fromLap);
-      sum += f32(MI[ESV + 3 * v + m]) * u * MF[F_DC + e];
+  } else if (n < C + V) {
+    let v = n - C;
+    let area = MF[F_ATRI + v];
+    var edges: array<i32, 3>; var weights: array<f32, 3>;
+    for (var m = 0; m < 3; m++) { let e = MI[EOV + 3 * v + m]; edges[m] = e; weights[m] = f32(MI[ESV + 3 * v + m]); }
+    for (var k = 0; k < K; k++) {
+      var sum = 0.0;
+      for (var m = 0; m < 3; m++) {
+        let e = edges[m];
+        let u = select(IN[S_U + k * E + e], D[D_LAPA + k * E + e], fromLap);
+        sum += weights[m] * u * MF[F_DC + e];
+      }
+      D[D_CURLS + k * V + v] = sum / area;
     }
-    D[D_CURLS + n] = sum / MF[F_ATRI + v];
   }
 }`,
   lapVelocity: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= K * E) { return; }
-  let k = n / E; let e = n % E;
-  let lap = (D[D_DIVS + k * C + MI[COE + 2 * e + 1]] - D[D_DIVS + k * C + MI[COE + 2 * e]]) / MF[F_DC + e]
-    - (D[D_CURLS + k * V + MI[VOE + 2 * e + 1]] - D[D_CURLS + k * V + MI[VOE + 2 * e]]) / MF[F_DV + e];
-  if (P[1] > 0.5) {
-    let before = IN[S_U + n]; let after = before - P[0] * lap;
-    IN[S_U + n] = after;
-    D[D_DISS + n] = before * before - after * after;
-  } else { D[D_LAPA + n] = lap; }
+  let e = i32(id.x); if (e >= E) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1]; let va = MI[VOE + 2 * e]; let vb = MI[VOE + 2 * e + 1];
+  let dc = MF[F_DC + e]; let dv = MF[F_DV + e];
+  let second = P[1] > 0.5;
+  for (var k = 0; k < K; k++) {
+    let n = k * E + e;
+    let lap = (D[D_DIVS + k * C + b] - D[D_DIVS + k * C + a]) / dc
+      - (D[D_CURLS + k * V + vb] - D[D_CURLS + k * V + va]) / dv;
+    if (second) {
+      let before = IN[S_U + n]; let after = before - P[0] * lap;
+      IN[S_U + n] = after;
+      D[D_DISS + n] = before * before - after * after;
+    } else { D[D_LAPA + n] = lap; }
+  }
 }`,
   dissipationHeat: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = i32(id.x); if (n >= K * C) { return; }
@@ -474,8 +502,8 @@ export async function createGpuCore(mesh, {
       setParams([dt * nu4Theta, 0]);
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginComputePass();
-      dispatch(pass, 'lapScalar1', g, 3 * L.KC);
-      dispatch(pass, 'lapScalar2', g, 3 * L.KC);
+      dispatch(pass, 'lapScalar1', g, C);
+      dispatch(pass, 'lapScalar2', g, C);
       pass.end();
       device.queue.submit([encoder.finish()]);
     }
@@ -483,8 +511,8 @@ export async function createGpuCore(mesh, {
       for (const second of [0, 1]) {
         setParams([dt * nu4, second]);
         const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-        dispatch(pass, 'divCurl', g, Math.max(L.KC, L.KV));
-        dispatch(pass, 'lapVelocity', g, L.KE);
+        dispatch(pass, 'divCurl', g, C + V);
+        dispatch(pass, 'lapVelocity', g, E);
         pass.end();
         device.queue.submit([encoder.finish()]);
       }
