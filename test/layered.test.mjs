@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { createOcean } from '../js/ocean/layered.module.js';
+import { createOcean, LAYER_DENSITIES } from '../js/ocean/layered.module.js';
+import { seawaterDensity, labelTemperature, thermalExpansion } from '../js/ocean/seawater.module.js';
+import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
 
 const RHO_AIR = 1.2, DRAG = 1.5e-3, RHO = 1025, DEG = Math.PI / 180;
@@ -187,11 +189,11 @@ test('wind-driven advection over 100 steps conserves total heat and salt', () =>
   // the first test above); under this wind the free surface swings by tens
   // of centimetres, and the per-cell rescale to the sub-stepped barotropic
   // eta at the end of step() is not perfectly heat/salt-conservative, giving
-  // a measured drift around 2-9e-10 relative after 100 steps. 1e-9 keeps a
-  // comfortable margin above that measured drift while still catching a
-  // real conservation break (which is orders of magnitude larger).
-  assert.ok(Math.abs(after.heat - before.heat) < 1e-9 * Math.abs(before.heat), `heat ${before.heat} -> ${after.heat}`);
-  assert.ok(Math.abs(after.salt - before.salt) < 1e-9 * Math.abs(before.salt), `salt ${before.salt} -> ${after.salt}`);
+  // a measured drift around 1.2e-9 relative after 100 steps with the
+  // 26-to-3 °C classes. 2e-9 keeps a margin above that measured drift while
+  // still catching a real conservation break (orders of magnitude larger).
+  assert.ok(Math.abs(after.heat - before.heat) < 2e-9 * Math.abs(before.heat), `heat ${before.heat} -> ${after.heat}`);
+  assert.ok(Math.abs(after.salt - before.salt) < 2e-9 * Math.abs(before.salt), `salt ${before.salt} -> ${after.salt}`);
   assert.equal(ocean.diagnostics().oceanLimited, 0);
 });
 
@@ -271,4 +273,54 @@ test('load() fits carried-over columns to the bathymetry and fills sea cells tha
     assert.ok(ocean.T0[i] > 250 && ocean.T0[i] < 320, `SST at cell ${i} is physical (${ocean.T0[i]})`);
   }
   assert.ok(Math.abs(ocean.T0[empty] - 290) < 1e-6, 'an empty sea cell takes the climatology surface temperature');
+});
+
+test('the equation of state recovers each class label and expands little near freezing', () => {
+  for (const r of LAYER_DENSITIES) assert.ok(Math.abs(seawaterDensity(labelTemperature(r), 35) - r) < 1e-9, `label ${r}`);
+  assert.ok(thermalExpansion(273.15, 35) < 7e-5 && thermalExpansion(298.15, 35) > 2.9e-4);
+  assert.ok(seawaterDensity(FREEZING_POINT, 34.5) < LAYER_DENSITIES[LAYER_DENSITIES.length - 1], 'polar surface water floats on the deepest class');
+});
+
+test('every initial column is statically stable, polar columns under ice included', () => {
+  const ocean = createOcean(mesh, { everySteps: 1 });
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => Math.max(FREEZING_POINT, 302 - 35 * Math.sin(lat) ** 2));
+  const ice = Float64Array.from(surfaceT, (t) => (t <= FREEZING_POINT ? 1 : 0));
+  ocean.initialize(surfaceT, ice);
+  const L = ocean.layers;
+  for (let i = 0; i < C; i++) {
+    let above = seawaterDensity(ocean.Q[i] / ocean.h[i], ocean.W[i] / ocean.h[i]);
+    for (let k = 1; k < L; k++) {
+      const n = k * C + i;
+      if (ocean.h[n] <= 5) continue;
+      const r = seawaterDensity(ocean.Q[n] / ocean.h[n], ocean.W[n] / ocean.h[n]);
+      assert.ok(Math.abs(r - ocean.densities[k]) < 1e-9, `layer ${k} of cell ${i} starts at ${r} against its label ${ocean.densities[k]}`);
+      assert.ok(r >= above - 1e-9, `cell ${i} at ${(mesh.latCell[i] / DEG).toFixed(0)}°: layer ${k} (${r.toFixed(3)}) lies under denser water (${above.toFixed(3)})`);
+      above = r;
+    }
+  }
+});
+
+test('interior layers relax back to their label densities without losing heat or salt', () => {
+  const ocean = createOcean(mesh, { everySteps: 1 });
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C), flux = new Float64Array(C);
+  ocean.initialize(surfaceT, ice);
+  const L = ocean.layers;
+  const error = () => {
+    let sum = 0, count = 0;
+    for (let i = 0; i < C; i++) for (let k = 2; k < L - 1; k++) {
+      const n = k * C + i;
+      if (ocean.h[n] <= 20) continue;
+      sum += Math.abs(seawaterDensity(ocean.Q[n] / ocean.h[n], ocean.W[n] / ocean.h[n]) - ocean.densities[k]); count++;
+    }
+    return sum / count;
+  };
+  for (let i = 0; i < C; i++) for (let k = 2; k < L - 1; k++) {
+    const n = k * C + i;
+    if (ocean.h[n] > 20) ocean.Q[n] += ocean.h[n] * ((i + k) % 2 ? 0.3 : -0.3);
+  }
+  const before = totalHeatSalt(ocean, mesh), start = error();
+  for (let n = 0; n < 400; n++) ocean.advance(surfaceT, ice, flux, new Float64Array(E), 1350);
+  const after = totalHeatSalt(ocean, mesh), end = error();
+  assert.ok(Math.abs(after.heat - before.heat) < 1e-8 * before.heat && Math.abs(after.salt - before.salt) < 1e-8 * before.salt, `heat ${before.heat} -> ${after.heat}, salt ${before.salt} -> ${after.salt}`);
+  assert.ok(start > 0.04 && end < 0.5 * start, `mean distance from the labels ${start} -> ${end} kg/m³`);
 });

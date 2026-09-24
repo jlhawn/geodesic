@@ -92,6 +92,8 @@ test('one and twenty GPU ocean steps track the CPU layered ocean at N=8', { skip
   }
 
   const gpuFinal = await gpuOcean.download();
+  const mixedDepth = stats(cpuOcean.serialize().h.slice(0, cpuModel.mesh.nCells), gpuFinal.h.slice(0, cpuModel.mesh.nCells));
+  assert.ok(mixedDepth.rmsRel < 3e-3, `mixed-layer depth rms relative diff ${mixedDepth.rmsRel} after 21 steps`);
   for (const f of ['h', 'u', 'T', 'S', 'eta']) {
     for (const v of gpuFinal[f]) assert.ok(Number.isFinite(v), `${f} has a non-finite value after 20 steps`);
   }
@@ -99,7 +101,7 @@ test('one and twenty GPU ocean steps track the CPU layered ocean at N=8', { skip
   const cpuDiag = cpuOcean.diagnostics();
   const gpuDiag = await gpuOcean.diagnostics();
   console.log('diagnostics after 21 total steps:', 'cpu=', cpuDiag, 'gpu=', gpuDiag);
-  for (const key of ['oceanUpperDepth', 'oceanHeat', 'oceanThermoclineT', 'oceanThermoclineDepth', 'oceanSalinity']) {
+  for (const key of ['oceanUpperDepth', 'oceanHeat', 'oceanInteriorT', 'oceanThermoclineDepth', 'oceanSalinity']) {
     const c = cpuDiag[key], g = gpuDiag[key];
     const rel = Math.abs(c - g) / Math.max(Math.abs(c), 1e-6);
     assert.ok(rel < 0.05, `${key} relative diff ${rel}: cpu=${c} gpu=${g}`);

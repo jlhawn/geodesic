@@ -1,10 +1,12 @@
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../dynamics/operators.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
+import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature } from './seawater.module.js';
 
 /*
  * A layered ocean on the C-grid: a bulk mixed layer with its own
  * temperature and salinity over interior layers of fixed density, the
- * hybrid isopycnal design of MICOM, on the real bathymetry. Each layer
+ * hybrid isopycnal design of MICOM, on the real bathymetry, with the
+ * density of seawater/seawater.module.js. Each layer
  * is a TRiSK shallow-water layer in the vector-invariant form, carrying
  * thickness, edge velocity, heat h·T and salt h·S. The pressure force
  * in an interior layer k is the gradient of a cell potential,
@@ -35,17 +37,24 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * its own, so water swallowed from a layer returns to that layer; a
  * mass-conserving split between the two bracketing layers instead
  * ratcheted a fraction of every swallow-and-return cycle into the
- * denser class. Tracers are carried by the flux with the donor cell's
- * value. Surface freshwater (evaporation
- * minus rain, runoff spread over the sea) and ice growth or melt act on
- * its salinity as virtual salt fluxes. As before, the mixed layer's
- * temperature is the sea surface temperature the atmosphere sees, its
+ * denser class. After the exchanges each interior layer more than
+ * RESTORE_TOLERANCE from its label density mixes in water from the
+ * nearest layer that lies clearly on the other side of the label, a
+ * fraction dt/restoreTime of the full correction per step, so its
+ * temperature and salinity stay those of its class; the curvature of the
+ * equation of state makes a mixture denser than the linear estimate, and
+ * the gradual, dead-banded correction keeps that from overshooting.
+ * Tracers are carried by the flux with the donor cell's value. Surface
+ * freshwater (evaporation minus rain, runoff spread over the sea) and ice
+ * growth or melt act on its salinity as virtual salt fluxes. The mixed
+ * layer's temperature is the sea surface temperature the atmosphere sees, its
  * heat capacity is published per cell, and the heat converged under ice
  * is handed to the ice base.
  */
-export const LAYER_DENSITIES = [1024.0, 1025.5, 1026.5, 1027.2, 1027.7];
-export const LAYER_BOTTOMS = [250, 600, 1200, 2500];
-export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005;
+export const LAYER_DENSITIES = [1022.0, 1023.0, 1024.0, 1025.0, 1026.0, 1026.6, 1026.95];
+export const LAYER_BOTTOMS = [90, 170, 300, 500, 700, 1100];
+export const THERMOCLINE_DENSITY = 1023.5;
+export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005, RESTORE_TOLERANCE = 0.01;
 
 /*
  * The model's bathymetry: the cell-mean ETOPO depth of every sea cell,
@@ -129,8 +138,8 @@ export function bathymetryFrom(mesh, geography, { minimumDepth = 50, neighbourRa
 export function createOcean(mesh, {
   densities = LAYER_DENSITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2)),
-  density = 1025, specificHeat = 3985, thermalExpansion = 2e-4, halineContraction = 7.6e-4, referenceT = 283.15, referenceS = 35, gravity = 9.81,
-  minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 200, convectiveRate = 100 / 86400, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, iceSalinity = 5, iceDensity = 917,
+  density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
+  minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 200, convectiveRate = 100 / 86400, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, diffusivity = 0.3, everySteps = 4,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {
@@ -141,7 +150,8 @@ export function createOcean(mesh, {
   } = mesh;
   const L = densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = [rho0, ...densities];
-  const labelT = rho.map((r) => Math.max(FREEZING_POINT, referenceT - (r / rho0 - 1) / thermalExpansion));
+  const labelT = rho.map((r) => Math.max(FREEZING_POINT, labelTemperature(r, referenceS)));
+  const thermoclineLayers = rho.filter((r, k) => k > 0 && r < THERMOCLINE_DENSITY).length;
   const diffusion = diffusivity * radius * radius / rhoCp;
   let spacing = 0, minSpacing = Infinity;
   for (let e = 0; e < E; e++) { spacing += dcEdge[e]; minSpacing = Math.min(minSpacing, dcEdge[e]); }
@@ -173,7 +183,7 @@ export function createOcean(mesh, {
   const tauCell = new Float64Array(3 * C);
   let counter = 0, limited = 0, relaxRate = 1 / 3600, initialised = false;
 
-  const eos = (t, s) => rho0 * (1 - thermalExpansion * (t - referenceT) + halineContraction * (s - referenceS));
+  const eos = seawaterDensity;
   const at = (k, i) => k * C + i;
   const ae = (k, e) => k * E + e;
 
@@ -459,7 +469,7 @@ export function createOcean(mesh, {
       let excess = Math.max(0, h[i] - maximumMixedDepth);
       if (below > 0 && rm >= rho[below] - DENSITY_TOLERANCE) excess = Math.max(excess, h[i] - shallowestMixedDepth);
       detrain(i, excess, rm);
-      const buoyancy = g * thermalExpansion * (previousT0[i] - surfaceIn[i]) * h[i] / dt;
+      const buoyancy = g * expansionOf(surfaceIn[i], W[i] / h[i]) * (previousT0[i] - surfaceIn[i]) * h[i] / dt;
       if (buoyancy < -1e-9) {
         const monin = Math.max(shallowestMixedDepth, 2 * stir * ustar3 / -buoyancy);
         if (h[i] > monin) detrain(i, (h[i] - monin) * Math.min(1, dt / detrainmentTime), rm);
@@ -469,6 +479,26 @@ export function createOcean(mesh, {
           const available = h[at(k, i)] - EPS;
           if (available > 0) move(i, k, 0, Math.min(available, minimumThickness - h[i]));
         }
+      }
+      restoreDensities(i, Math.min(1, dt / restoreTime));
+    }
+  }
+
+  function restoreDensities(i, fraction) {
+    for (let k = 1; k < L; k++) {
+      const n = at(k, i), target = rho[k];
+      if (h[n] <= THIN) continue;
+      const r = eos(Q[n] / h[n], W[n] / h[n]);
+      if (Math.abs(r - target) <= RESTORE_TOLERANCE) continue;
+      const step = r < target ? 1 : -1;
+      for (let j = k + step; j >= 1 && j < L; j += step) {
+        const d = at(j, i);
+        if (h[d] <= THIN) continue;
+        const rd = eos(Q[d] / h[d], W[d] / h[d]);
+        if (step * (rd - target) <= RESTORE_TOLERANCE) continue;
+        const amount = Math.min(fraction * h[n] * (target - r) / (rd - target), h[d] - EPS);
+        if (amount > 0) move(i, j, k, amount);
+        break;
       }
     }
   }
@@ -567,7 +597,7 @@ export function createOcean(mesh, {
         }
         hk = Math.max(EPS, hk);
         cumulative += hk;
-        h[at(k, i)] = hk; Q[at(k, i)] = hk * Math.min(labelT[k], Math.max(FREEZING_POINT, T0[i])); W[at(k, i)] = hk * referenceS;
+        h[at(k, i)] = hk; Q[at(k, i)] = hk * labelT[k]; W[at(k, i)] = hk * referenceS;
       }
       const scale = D[i] / cumulative;
       for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }
@@ -662,8 +692,13 @@ export function createOcean(mesh, {
   }
 
   const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;
+  function thermocline(i) {
+    let depth = 0;
+    for (let k = 0; k <= thermoclineLayers; k++) depth += h[at(k, i)];
+    return depth;
+  }
   function fields() {
-    for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? h[i] + h[at(1, i)] + h[at(2, i)] : NaN;
+    for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN;
     return { h1: h.subarray(0, C), T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth };
   }
 
@@ -673,9 +708,9 @@ export function createOcean(mesh, {
       if (!cellOcean[i]) continue;
       const a = areaCell[i];
       area += a; depth += a * h[i]; salinity += a * (W[i] / h[i]); ssh = Math.max(ssh, Math.abs(eta[i]));
-      thermo += a * (h[i] + h[at(1, i)] + h[at(2, i)]);
+      thermo += a * thermocline(i);
       for (let k = 0; k < L; k++) heat += a * rhoCp * Q[at(k, i)];
-      interiorT += Q[at(1, i)] * a; interiorH += h[at(1, i)] * a;
+      for (let k = 1; k < L; k++) { interiorT += Q[at(k, i)] * a; interiorH += h[at(k, i)] * a; }
     }
     for (let e = 0; e < E; e++) {
       speed = Math.max(speed, Math.abs(u[e]));
@@ -683,7 +718,7 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) t += hEdge[ae(k, e)] * u[ae(k, e)];
       transport = Math.max(transport, Math.abs(t) * dvEdge[e]);
     }
-    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanThermoclineT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited };
+    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited };
   }
 
   initialize(new Float64Array(C).fill(288), new Float64Array(C));

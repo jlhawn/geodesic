@@ -1,5 +1,6 @@
 import { emptyBuffer, readBuffer } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_BOTTOMS, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, bathymetryFrom, fitColumns } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, bathymetryFrom, fitColumns } from '../ocean/layered.module.js';
+import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
 /*
@@ -27,8 +28,8 @@ const WORKGROUP = 64;
 
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
-  density: 1025, specificHeat: 3985, thermalExpansion: 2e-4, halineContraction: 7.6e-4, referenceT: 283.15, referenceS: 35, gravity: 9.81,
-  minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, convectiveRate: 100 / 86400, stirring: 0.8, detrainmentTime: 86400, iceSalinity: 5, iceDensity: 917,
+  density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
+  minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, convectiveRate: 100 / 86400, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceDensity: 917,
   interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, diffusivity: 0.3, everySteps: 4,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -40,7 +41,7 @@ function oceanKernels(o) {
   const { L, C, E, V, OS, OD, B } = o;
   const constLine = (name, value) => `const ${name}: f32 = ${Number(value).toExponential(10)};`;
   const rhoLine = `const RHO: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => v.toFixed(6)).join(', ')});`;
-  const labelLine = `const LABEL_T: array<f32, ${L}> = array<f32, ${L}>(${o.labelT.map((v) => v.toFixed(6)).join(', ')});`;
+  const labelLine = `const LABEL_T: array<f32, ${L}> = array<f32, ${L}>(${o.labelT.map((v) => v.toFixed(6)).join(', ')});\nconst RHOA: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => (v - SEAWATER.rho0).toFixed(6)).join(', ')});`;
   const offsetLines = Object.entries(OD).filter(([k]) => k !== 'total').map(([k, v]) => `const O_${k}: i32 = ${v};`).join('\n');
   const bLines = Object.entries(B).filter(([k]) => k !== 'total').map(([k, v]) => `const B_${k}: i32 = ${v};`).join('\n');
   const head = `
@@ -51,9 +52,8 @@ ${bLines}
 ${rhoLine}
 ${labelLine}
 ${constLine('RHO0', o.density)} ${constLine('RHOCP', o.density * o.specificHeat)}
-${constLine('THERMAL_EXP', o.thermalExpansion)} ${constLine('HALINE_CONTRACT', o.halineContraction)}
-${constLine('REF_T', o.referenceT)} ${constLine('REF_S', o.referenceS)} ${constLine('OGRAV', o.gravity)}
-${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)} ${constLine('DENSTOL', DENSITY_TOLERANCE)}
+${constLine('REF_S', o.referenceS)} ${constLine('OGRAV', o.gravity)}
+${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)} ${constLine('DENSTOL', DENSITY_TOLERANCE)} ${constLine('RESTTOL', RESTORE_TOLERANCE)} ${constLine('RESTORET', o.restoreTime)}
 ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
@@ -72,7 +72,7 @@ fn hOff(k: i32) -> i32 { return OH + k * C; }
 fn uOff(k: i32) -> i32 { return OU + k * E; }
 fn qOff(k: i32) -> i32 { return OQ + k * C; }
 fn wOff(k: i32) -> i32 { return OW + k * C; }
-fn eos(t: f32, s: f32) -> f32 { return RHO0 * (1.0 - THERMAL_EXP * (t - REF_T) + HALINE_CONTRACT * (s - REF_S)); }
+${SEAWATER_WGSL}
 fn detrain(i: i32, amount: f32, rm: f32) {
   if (amount <= 0.0) { return; }
   var k = 1;
@@ -93,11 +93,6 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   const K = `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n`;
   return {
     head,
-    oFreeSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
-  var sum = 0.0;
-  for (var k = 0; k < L; k++) { sum += IN[hOff(k) + i]; }
-  OD[O_ETA + i] = select(0.0, sum - OD[O_BATH + i], OD[O_CMASK + i] > 0.5);
-}`,
     oGradEta: `${K}  let e = ${idx}; if (e >= E) { return; }
   OD[O_GRADETA + e] = (OD[O_ETA + MI[COE + 2 * e + 1]] - OD[O_ETA + MI[COE + 2 * e]]) / MF[F_DC + e];
 }`,
@@ -362,7 +357,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   var excess = max(0.0, IN[hOff(0) + i] - MAXMIXED);
   if (below > 0 && rm >= RHO[below] - DENSTOL) { excess = max(excess, IN[hOff(0) + i] - SHALLOWMIXED); }
   detrain(i, excess, rm);
-  let buoyancy = OGRAV * THERMAL_EXP * (OD[O_PREVT0 + i] - OD[O_SURFACEIN + i]) * IN[hOff(0) + i] / P[6];
+  let buoyancy = OGRAV * alphaT(OD[O_SURFACEIN + i], IN[wOff(0) + i] / IN[hOff(0) + i]) * (OD[O_PREVT0 + i] - OD[O_SURFACEIN + i]) * IN[hOff(0) + i] / P[6];
   if (buoyancy < -1e-9) {
     let monin = max(SHALLOWMIXED, 2.0 * stir * ustar3 / -buoyancy);
     if (IN[hOff(0) + i] > monin) { detrain(i, (IN[hOff(0) + i] - monin) * min(1.0, P[6] / DETRAINT), rm); }
@@ -372,6 +367,29 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
       if (IN[hOff(0) + i] >= MINTHICK) { break; }
       let available = IN[hOff(k) + i] - EPSO;
       if (available > 0.0) { moveLayer(i, k, 0, min(available, MINTHICK - IN[hOff(0) + i])); }
+    }
+  }
+  let fraction = min(1.0, P[6] / RESTORET);
+  for (var k = 1; k < L; k++) {
+    let hk = IN[hOff(k) + i];
+    if (hk <= THINO) { continue; }
+    let r = eosAnomaly(IN[qOff(k) + i] / hk, IN[wOff(k) + i] / hk);
+    let label = RHOA[k];
+    if (abs(r - label) <= RESTTOL) { continue; }
+    let stepK = select(-1, 1, r < label);
+    var j = k + stepK;
+    loop {
+      if (j < 1 || j >= L) { break; }
+      let hj = IN[hOff(j) + i];
+      if (hj > THINO) {
+        let rd = eosAnomaly(IN[qOff(j) + i] / hj, IN[wOff(j) + i] / hj);
+        if (f32(stepK) * (rd - label) > RESTTOL) {
+          let amount = min(fraction * hk * (label - r) / (rd - label), hj - EPSO);
+          if (amount > 0.0) { moveLayer(i, j, k, amount); }
+          break;
+        }
+      }
+      j += stepK;
     }
   }
 }`,
@@ -416,7 +434,8 @@ export function createLayeredOcean(core, options = {}) {
   const C = core.C, E = core.E, V = core.V;
   const L = o.densities.length + 1;
   const rho = [o.density, ...o.densities];
-  const labelT = rho.map((r) => Math.max(FREEZING_POINT, o.referenceT - (r / o.density - 1) / o.thermalExpansion));
+  const labelT = rho.map((r) => Math.max(FREEZING_POINT, labelTemperature(r, o.referenceS)));
+  const thermoclineLayers = rho.filter((r, k) => k > 0 && r < THERMOCLINE_DENSITY).length;
   const nu4 = o.closureHours > 0 ? Math.pow(meshSpacing / Math.PI, 4) / (o.closureHours * 3600) : 0;
   const diffusion = o.diffusivity * mesh.radius * mesh.radius / (o.density * o.specificHeat);
   let minSpacing = Infinity;
@@ -554,7 +573,6 @@ export function createLayeredOcean(core, options = {}) {
     relaxRate = Math.min(1 / 3600, 1 / dt);
     {
       const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-      dispatch(pass, 'oFreeSurface', group(ob.S, ob.T), C);
       dispatch(pass, 'oGradEta', group(ob.S, ob.T), E);
       pass.end();
       device.queue.submit([encoder.finish()]);
@@ -677,7 +695,7 @@ export function createLayeredOcean(core, options = {}) {
    * push the result to the GPU, rather than duplicating that logic in
    * WGSL.
    */
-  const eos = (t, s) => o.density * (1 - o.thermalExpansion * (t - o.referenceT) + o.halineContraction * (s - o.referenceS));
+  const eos = seawaterDensity;
   /*
    * The free surface that levels the pressure at `referenceDepth` in
    * every column deep enough to reach it, so the deep ocean starts
@@ -757,7 +775,7 @@ export function createLayeredOcean(core, options = {}) {
         }
         hk = Math.max(EPS, hk);
         cumulative += hk;
-        h[at(k, i)] = hk; Q[at(k, i)] = hk * Math.min(labelT[k], Math.max(FREEZING_POINT, T0[i])); W[at(k, i)] = hk * o.referenceS;
+        h[at(k, i)] = hk; Q[at(k, i)] = hk * labelT[k]; W[at(k, i)] = hk * o.referenceS;
       }
       const scale = D[i] / cumulative;
       for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }
@@ -821,7 +839,12 @@ export function createLayeredOcean(core, options = {}) {
     const eta = Float64Array.from(od.subarray(OD.ETA, OD.ETA + C));
     const h1 = h.subarray(0, C), T1 = T.subarray(0, C), S1 = S.subarray(0, C), u1 = u.subarray(0, E);
     const thermoclineDepth = new Float64Array(C);
-    for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? h[i] + h[C + i] + h[2 * C + i] : NaN;
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i]) { thermoclineDepth[i] = NaN; continue; }
+      let depth = 0;
+      for (let k = 0; k <= thermoclineLayers; k++) depth += h[k * C + i];
+      thermoclineDepth[i] = depth;
+    }
     return { h, u, T, S, eta, h1, T1, S1, u1, thermoclineDepth, layers: L };
   }
   function serializeFrom(d) {
@@ -837,9 +860,9 @@ export function createLayeredOcean(core, options = {}) {
       if (!cellOcean[i]) continue;
       const a = mesh.areaCell[i];
       area += a; depth += a * d.h[i]; salinity += a * d.S[i]; ssh = Math.max(ssh, Math.abs(d.eta[i]));
-      thermo += a * (d.h[i] + d.h[at(1, i)] + d.h[at(2, i)]);
+      thermo += a * d.thermoclineDepth[i];
       for (let k = 0; k < L; k++) heat += a * rhoCp * (d.h[at(k, i)] * d.T[at(k, i)]);
-      interiorT += d.h[at(1, i)] * d.T[at(1, i)] * a; interiorH += d.h[at(1, i)] * a;
+      for (let k = 1; k < L; k++) { interiorT += d.h[at(k, i)] * d.T[at(k, i)] * a; interiorH += d.h[at(k, i)] * a; }
     }
     for (let e = 0; e < E; e++) {
       speed = Math.max(speed, Math.abs(d.u[e]));
@@ -855,7 +878,7 @@ export function createLayeredOcean(core, options = {}) {
       for (let k = 0; k < L; k++) t += hEdgeK[k] * f * d.u[ae(k, e)];
       transport = Math.max(transport, Math.abs(t) * mesh.dvEdge[e]);
     }
-    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanThermoclineT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited };
+    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited };
   }
   async function diagnostics() { return diagnosticsFrom(await download()); }
 
