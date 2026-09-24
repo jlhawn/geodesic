@@ -196,7 +196,7 @@ async function builtinSnapshots(fallback = null) {
   const entry = (file) => ({ file, url: new URL(file, location.href).href, name: stateName(file.replace(/.*\//, '')) });
   try {
     const html = await (await fetch('runs/')).text();
-    const files = [...new Set([...html.matchAll(/href="([^"]+_state_day\d+(?:\.json(?:\.gz)?|\.parts\.json))"/g)].map((m) => decodeURIComponent(m[1])))].sort();
+    const files = [...new Set([...html.matchAll(/href="([^"]+(?:_state_day\d+(?:\.json(?:\.gz)?|\.parts\.json)|_day\d+\.bin(?:\.gz)?))"/g)].map((m) => decodeURIComponent(m[1])))].sort();
     const newest = new Map(files.map((file) => [stateName(file), file]));
     if (newest.size) return [...newest.values()].map((file) => entry(`runs/${file}`));
   } catch {}
