@@ -1,6 +1,6 @@
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../dynamics/operators.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
-import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature } from './seawater.module.js';
+import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 
 /*
  * A layered ocean on the C-grid: a bulk mixed layer with its own
@@ -45,7 +45,7 @@ import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature } fr
  * equation of state makes a mixture denser than the linear estimate, and
  * the gradual, dead-banded correction keeps that from overshooting.
  * Tracers are carried by the flux with the donor cell's value. Surface
- * freshwater (evaporation minus rain, and runoff at the nearest sea cell) and ice
+ * freshwater (evaporation minus rain, and runoff where it flows down to the sea) and ice
  * growth or melt act on its salinity as virtual salt fluxes. The mixed
  * layer's temperature is the sea surface temperature the atmosphere sees, its
  * heat capacity is published per cell, and the heat converged under ice
@@ -55,6 +55,22 @@ export const LAYER_DENSITIES = [1022.0, 1023.0, 1024.0, 1025.0, 1026.0, 1026.6, 
 export const LAYER_BOTTOMS = [90, 170, 300, 500, 700, 1100];
 export const LAYER_SALINITIES = [35, 35, 35, 35, 34.9, 34.85, 34.8];
 export const THERMOCLINE_DENSITY = 1023.5;
+export const POLAR_INTERIOR_T = 273.65;
+
+/*
+ * The starting water of an interior class at a latitude: its class
+ * temperature and salinity equatorward of 50°, blending over 20° of
+ * latitude toward 0.5 °C at the salinity that keeps its density, as the
+ * polar oceans hold cold, fresh water on the same density surfaces as
+ * the warm, salty subtropical thermocline.
+ */
+export function interiorWater(rho, t, s, lat) {
+  const x = Math.max(0, Math.min(1, (Math.abs(lat) * 180 / Math.PI - 50) / 20));
+  const weight = x * x * (3 - 2 * x);
+  if (weight === 0 || t <= POLAR_INTERIOR_T) return [t, s];
+  const tp = t - (t - POLAR_INTERIOR_T) * weight;
+  return [tp, salinityForDensity(rho, tp)];
+}
 export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005, RESTORE_TOLERANCE = 0.01;
 
 /*
@@ -118,26 +134,43 @@ export function fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, 
 }
 
 /*
- * The sea cell each cell's runoff reaches: the nearest by steps across
- * the mesh, found outward from the coast, a stand-in for river routing
- * at this resolution. Sea cells are their own outlet; -1 without a
- * geography.
+ * The sea cell each cell's runoff reaches, following the terrain: water
+ * leaves a land cell for the lowest of its neighbours that is lower
+ * than it; when none is, for the lowest lower cell two steps away, then
+ * three, and so on, so a pit does not hold it; the path ends at the sea.
+ * Sea cells are their own outlet; -1 without a geography.
  */
 export function runoffOutlets(mesh, geography) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
   const outlet = new Int32Array(C).fill(-1);
   if (!geography) return outlet;
-  const queue = new Int32Array(C);
-  let head = 0, tail = 0;
-  for (let i = 0; i < C; i++) if (!geography.land[i]) { outlet[i] = i; queue[tail++] = i; }
-  while (head < tail) {
-    const i = queue[head++];
-    for (let m = 0; m < nEdgesOnCell[i]; m++) {
-      const j = cellsOnCell[maxEdges * i + m];
-      if (outlet[j] >= 0) continue;
-      outlet[j] = outlet[i];
-      queue[tail++] = j;
+  const { land, elevation } = geography;
+  const next = new Int32Array(C).fill(-1);
+  const seen = new Int32Array(C).fill(-1);
+  let ring = [], following = [];
+  for (let i = 0; i < C; i++) {
+    if (!land[i]) { next[i] = i; continue; }
+    ring = [i]; seen[i] = i;
+    while (ring.length && next[i] < 0) {
+      following = [];
+      let lowest = elevation[i], choice = -1;
+      for (const c of ring) {
+        for (let m = 0; m < nEdgesOnCell[c]; m++) {
+          const j = cellsOnCell[maxEdges * c + m];
+          if (seen[j] === i) continue;
+          seen[j] = i;
+          following.push(j);
+          if (elevation[j] < lowest) { lowest = elevation[j]; choice = j; }
+        }
+      }
+      if (choice >= 0) next[i] = choice;
+      ring = following;
     }
+  }
+  for (let i = 0; i < C; i++) {
+    let c = i;
+    while (land[c] && next[c] >= 0 && next[c] !== c) c = next[c];
+    outlet[i] = land[c] ? -1 : c;
   }
   return outlet;
 }
@@ -623,7 +656,8 @@ export function createOcean(mesh, {
         }
         hk = Math.max(EPS, hk);
         cumulative += hk;
-        h[at(k, i)] = hk; Q[at(k, i)] = hk * labelT[k]; W[at(k, i)] = hk * labelS[k];
+        const [tk, sk] = hk > EPS ? interiorWater(rho[k], labelT[k], labelS[k], lat) : [labelT[k], labelS[k]];
+        h[at(k, i)] = hk; Q[at(k, i)] = hk * tk; W[at(k, i)] = hk * sk;
       }
       const scale = D[i] / cumulative;
       for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }

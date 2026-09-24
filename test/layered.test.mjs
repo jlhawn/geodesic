@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { createOcean, LAYER_DENSITIES } from '../js/ocean/layered.module.js';
+import { createOcean, LAYER_DENSITIES, runoffOutlets } from '../js/ocean/layered.module.js';
 import { seawaterDensity, labelTemperature, thermalExpansion } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
@@ -342,4 +342,21 @@ test('runoff reaches the coastal sea beside the land it ran off, freshening it b
     assert.ok(coastal, `sea cell ${i} receives runoff but touches no land`);
   }
   assert.ok(ranOff > 0 && Math.abs(delivered - ranOff) < 1e-9 * ranOff, `delivered ${delivered} of ${ranOff}`);
+});
+
+test('runoff flows down the terrain to the coast the land slopes toward', () => {
+  const west = -40 * DEG, east = 40 * DEG;
+  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (lon > west && lon < east && Math.abs(lat) < 50 * DEG ? 100 + 2000 * (lon - west) / (east - west) : -4000)));
+  const outlet = runoffOutlets(mesh, geography);
+  let land = 0, westward = 0;
+  for (let i = 0; i < C; i++) {
+    if (!geography.land[i]) { assert.equal(outlet[i], i); continue; }
+    land++;
+    assert.ok(outlet[i] >= 0 && !geography.land[outlet[i]], `land cell ${i} has no sea outlet`);
+    if (mesh.lonCell[i] < 0 || mesh.lonCell[i] > east - 10 * DEG || Math.abs(mesh.latCell[i]) > 30 * DEG) continue;
+    const lon = Math.atan2(mesh.xCell[3 * outlet[i] + 1], mesh.xCell[3 * outlet[i]]);
+    assert.ok(lon < mesh.lonCell[i], `cell ${i} on the eastern slope drains uphill to lon ${(lon / DEG).toFixed(0)}`);
+    if (lon < west + 5 * DEG) westward++;
+  }
+  assert.ok(land > 50 && westward > 5, `${westward} high cells reach the western coast`);
 });

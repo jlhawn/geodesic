@@ -34,6 +34,15 @@ export function labelTemperature(rho, s = s0) {
   return t0 + (discriminant > 0 ? (-B + Math.sqrt(discriminant)) / (2 * A) : -B / (2 * A));
 }
 
+/*
+ * The salinity at which water of temperature t has density rho.
+ */
+export function salinityForDensity(rho, t) {
+  const ta = t - t0;
+  const B = b0 - nu * ta, R = rho - rho0 + a0 * (1 + 0.5 * lambda1 * ta) * ta;
+  return s0 + (B - Math.sqrt(B * B - 2 * b0 * lambda2 * R)) / (b0 * lambda2);
+}
+
 export const SEAWATER_WGSL = `
 fn eosAnomaly(t: f32, s: f32) -> f32 {
   let ta = t - ${t0}; let sa = s - ${s0.toFixed(1)};

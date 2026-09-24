@@ -1569,10 +1569,13 @@ warming step collapses the Monin–Obukhov depth) and the SST fell 2 K a
 month.
 
 **Salinity.** Evaporation minus rain is accumulated per cell over the
-atmosphere steps between ocean steps, and each land cell's runoff goes to
-its nearest sea cell (a breadth-first walk outward from the coast, a
-stand-in for river routing), all applied as virtual salt fluxes to the
-mixed layer; ice growth
+atmosphere steps between ocean steps, and each land cell's runoff flows
+down the terrain to the sea: to the lowest of its neighbours that is
+lower than it, or, from a pit, to the lowest lower cell two steps away,
+then three, and so on (`runoffOutlets`, built once per model; at N=32
+the largest outlets are the Ob, the Amazon, the Río de la Plata, the
+Congo and the Nile), all applied as virtual salt fluxes to the mixed
+layer; ice growth
 rejects brine and melt freshens with an ice salinity of 5. The freezing
 point is still the fixed 271.35 K of M9.
 
@@ -1581,7 +1584,11 @@ initial surface temperature and a salinity 34 + 2 exp(−((|φ|−25°)/20°)²)
 each interior layer starts at its class salinity (35 psu through the
 1025.0 class, then 34.9, 34.85 and 34.8, `LAYER_SALINITIES`) and the
 temperature that gives its label density there (the deepest class at
-about 0.8 °C), so its density is its label; interior layer bases at 90, 170, 300, 500, 700 and
+about 0.8 °C), blending poleward of 50° over 20° of latitude toward
+0.5 °C at the salinity that keeps the density (the 1026.6 class at
+34.33 psu, the deepest at 34.78), as polar oceans hold cold, fresh water
+on the density surfaces of the warm subtropical thermocline; so its
+density is its label; interior layer bases at 90, 170, 300, 500, 700 and
 1100 m in the subtropics, scaled by 0.7 + 0.6 cos²φ toward the poles;
 every layer lighter than the local surface water outcropped; the deepest
 layer filling to the bottom. Polar surface water at the freezing point
