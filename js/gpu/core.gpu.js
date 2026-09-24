@@ -57,25 +57,26 @@ ${constants.physics}
 fn diagnoseColumn(i: i32) {
   let pi = IN[S_PI + i];
   let exner0 = pow(pi / P0, KAPPA);
-  for (var k = 0; k < K; k++) {
+  var thBelow = 0.0; var qBelow = 0.0; var qcBelow = 0.0; var thvBelow = 0.0; var geoBelow = 0.0;
+  for (var k = K - 1; k >= 0; k--) {
     let idx = k * C + i;
+    let th = IN[S_TH + idx]; let q = IN[S_Q + idx]; let qc = IN[S_QC + idx];
     D[D_EXL + idx] = exner0 * LV[L_CL + k];
     D[D_EXM + idx] = exner0 * LV[L_CM + k];
     D[D_DEX + idx] = exner0 / pi * LV[L_CD + k];
-    D[D_THV + idx] = IN[S_TH + idx] * (1.0 + VIRT * IN[S_Q + idx] - IN[S_QC + idx]);
-  }
-  for (var k = 0; k < K - 1; k++) {
-    let idx = k * C + i;
-    let t = LV[L_CT + k];
-    D[D_THL + idx] = IN[S_TH + idx] + t * (IN[S_TH + idx + C] - IN[S_TH + idx]);
-    D[D_QL + idx] = IN[S_Q + idx] + t * (IN[S_Q + idx + C] - IN[S_Q + idx]);
-    D[D_QCL + idx] = IN[S_QC + idx] + t * (IN[S_QC + idx + C] - IN[S_QC + idx]);
-  }
-  let bottom = (K - 1) * C + i;
-  D[D_GEO + bottom] = CP * exner0 * D[D_THV + bottom] * LV[L_CB + K - 1] - LV[L_GR + K - 1];
-  for (var k = K - 2; k >= 0; k--) {
-    let idx = k * C + i; let below = idx + C;
-    D[D_GEO + idx] = D[D_GEO + below] + CP * exner0 * (D[D_THV + below] * LV[L_CA + k] + D[D_THV + idx] * LV[L_CB + k]) - LV[L_GR + k];
+    let thv = th * (1.0 + VIRT * q - qc);
+    D[D_THV + idx] = thv;
+    var geo = 0.0;
+    if (k == K - 1) { geo = CP * exner0 * thv * LV[L_CB + K - 1] - LV[L_GR + K - 1]; }
+    else {
+      let t = LV[L_CT + k];
+      D[D_THL + idx] = th + t * (thBelow - th);
+      D[D_QL + idx] = q + t * (qBelow - q);
+      D[D_QCL + idx] = qc + t * (qcBelow - qc);
+      geo = geoBelow + CP * exner0 * (thvBelow * LV[L_CA + k] + thv * LV[L_CB + k]) - LV[L_GR + k];
+    }
+    D[D_GEO + idx] = geo;
+    thBelow = th; qBelow = q; qcBelow = qc; thvBelow = thv; geoBelow = geo;
   }
 }
 ${PHYSICS_FUNCTIONS}
