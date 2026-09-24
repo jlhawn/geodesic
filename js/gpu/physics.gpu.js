@@ -329,21 +329,30 @@ export const PHYSICS_KERNELS = {
     }
   }
   // dry convective adjustment
-  var dirty = true; var guard = 0;
-  while (dirty && guard < K * K) {
-    dirty = false; guard++;
-    for (var k = K - 2; k >= 0; k--) {
-      let above = k * C + i; let below = above + C;
-      if (IN[S_TH + below] > IN[S_TH + above] * (1.0 + 1e-9)) {
-        let wAbove = D[D_EXM + above] * LV[L_DS + k]; let wBelow = D[D_EXM + below] * LV[L_DS + k + 1];
-        let mixed = (IN[S_TH + above] * wAbove + IN[S_TH + below] * wBelow) / (wAbove + wBelow);
-        IN[S_TH + above] = mixed; IN[S_TH + below] = mixed;
-        let mq = (IN[S_Q + above] * LV[L_DS + k] + IN[S_Q + below] * LV[L_DS + k + 1]) / (LV[L_DS + k] + LV[L_DS + k + 1]);
-        IN[S_Q + above] = mq; IN[S_Q + below] = mq;
-        let mc = (IN[S_QC + above] * LV[L_DS + k] + IN[S_QC + below] * LV[L_DS + k + 1]) / (LV[L_DS + k] + LV[L_DS + k + 1]);
-        IN[S_QC + above] = mc; IN[S_QC + below] = mc;
-        dirty = true;
+  var blockTop: array<i32, K>; var blockHeat: array<f32, K>; var blockWeight: array<f32, K>; var blockMass: array<f32, K>; var blockQ: array<f32, K>; var blockQc: array<f32, K>;
+  var nb = 0; var merges = 0;
+  for (var k = K - 1; k >= 0; k--) {
+    let idx = k * C + i; let w = D[D_EXM + idx] * LV[L_DS + k];
+    blockTop[nb] = k; blockHeat[nb] = IN[S_TH + idx] * w; blockWeight[nb] = w; blockMass[nb] = LV[L_DS + k];
+    blockQ[nb] = IN[S_Q + idx] * LV[L_DS + k]; blockQc[nb] = IN[S_QC + idx] * LV[L_DS + k];
+    nb++;
+    loop {
+      if (nb < 2) { break; }
+      if (!(blockHeat[nb - 2] / blockWeight[nb - 2] > (blockHeat[nb - 1] / blockWeight[nb - 1]) * (1.0 + 1e-6))) { break; }
+      blockHeat[nb - 2] += blockHeat[nb - 1]; blockWeight[nb - 2] += blockWeight[nb - 1]; blockMass[nb - 2] += blockMass[nb - 1];
+      blockQ[nb - 2] += blockQ[nb - 1]; blockQc[nb - 2] += blockQc[nb - 1]; blockTop[nb - 2] = blockTop[nb - 1];
+      nb--; merges++;
+    }
+  }
+  if (merges > 0) {
+    var lowest = K - 1;
+    for (var b = 0; b < nb; b++) {
+      let top = blockTop[b];
+      if (top < lowest) {
+        let mixed = blockHeat[b] / blockWeight[b]; let mq = blockQ[b] / blockMass[b]; let mc = blockQc[b] / blockMass[b];
+        for (var k = top; k <= lowest; k++) { let idx = k * C + i; IN[S_TH + idx] = mixed; IN[S_Q + idx] = mq; IN[S_QC + idx] = mc; }
       }
+      lowest = top - 1;
     }
   }
 }`,

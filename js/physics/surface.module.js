@@ -96,30 +96,43 @@ export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, dragCoeffi
    * sweeping until the column is stable. Refreshes the column's Exner
    * ratios for the current π first.
    */
+  /*
+   * Dry convective adjustment in one pass up the column: each layer
+   * starts a block, and a block cooler in θ than the block beneath it
+   * (by more than one part in 10⁶) merges into it, θ averaged with the
+   * Exner-and-mass weights that conserve enthalpy and q, qc with the
+   * mass weights, until the stack is stable; merged blocks are written
+   * back. This is the state repeated pairwise mixing converges to.
+   */
+  const blockTop = new Int32Array(K), blockHeat = new Float64Array(K), blockWeight = new Float64Array(K), blockMass = new Float64Array(K), blockQ = new Float64Array(K), blockQc = new Float64Array(K);
   function convectiveAdjustColumn(i, pi, theta, q = null, qc = null) {
     core.diagnoseColumn(i, pi, theta, q, qc);
-    let mixes = 0, dirty = true, guard = 0;
-    while (dirty && guard < K * K) {
-      dirty = false;
-      guard++;
-      for (let k = K - 2; k >= 0; k--) {
-        const above = k * C + i, below = above + C;
-        if (theta[below] > theta[above] * (1 + 1e-9)) {
-          const wAbove = exnerLayer[above] * dSigma[k];
-          const wBelow = exnerLayer[below] * dSigma[k + 1];
-          const mixed = (theta[above] * wAbove + theta[below] * wBelow) / (wAbove + wBelow);
-          theta[above] = mixed;
-          theta[below] = mixed;
-          for (const tracer of [q, qc]) {
-            if (!tracer) continue;
-            const mixedQ = (tracer[above] * dSigma[k] + tracer[below] * dSigma[k + 1]) / (dSigma[k] + dSigma[k + 1]);
-            tracer[above] = mixedQ;
-            tracer[below] = mixedQ;
-          }
-          dirty = true;
-          mixes++;
+    let n = 0, mixes = 0;
+    for (let k = K - 1; k >= 0; k--) {
+      const idx = k * C + i, w = exnerLayer[idx] * dSigma[k];
+      blockTop[n] = k; blockHeat[n] = theta[idx] * w; blockWeight[n] = w; blockMass[n] = dSigma[k];
+      blockQ[n] = q ? q[idx] * dSigma[k] : 0; blockQc[n] = qc ? qc[idx] * dSigma[k] : 0;
+      n++;
+      while (n > 1 && blockHeat[n - 2] / blockWeight[n - 2] > (blockHeat[n - 1] / blockWeight[n - 1]) * (1 + 1e-6)) {
+        blockHeat[n - 2] += blockHeat[n - 1]; blockWeight[n - 2] += blockWeight[n - 1]; blockMass[n - 2] += blockMass[n - 1];
+        blockQ[n - 2] += blockQ[n - 1]; blockQc[n - 2] += blockQc[n - 1]; blockTop[n - 2] = blockTop[n - 1];
+        n--; mixes++;
+      }
+    }
+    if (!mixes) return 0;
+    let lowest = K - 1;
+    for (let b = 0; b < n; b++) {
+      const top = blockTop[b];
+      if (top < lowest) {
+        const mixed = blockHeat[b] / blockWeight[b], mixedQ = blockQ[b] / blockMass[b], mixedQc = blockQc[b] / blockMass[b];
+        for (let k = top; k <= lowest; k++) {
+          const idx = k * C + i;
+          theta[idx] = mixed;
+          if (q) q[idx] = mixedQ;
+          if (qc) qc[idx] = mixedQc;
         }
       }
+      lowest = top - 1;
     }
     return mixes;
   }

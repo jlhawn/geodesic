@@ -20,7 +20,8 @@ export async function getDevice() {
   const wanted = ['maxStorageBuffersPerShaderStage', 'maxStorageBufferBindingSize', 'maxBufferSize', 'maxComputeWorkgroupsPerDimension'];
   const requiredLimits = {};
   for (const name of wanted) if (adapter.limits[name] !== undefined) requiredLimits[name] = adapter.limits[name];
-  const device = await adapter.requestDevice({ requiredLimits });
+  const requiredFeatures = adapter.features.has('timestamp-query') ? ['timestamp-query'] : [];
+  const device = await adapter.requestDevice({ requiredLimits, requiredFeatures });
   cached = { gpu, adapter, device };
   return cached;
 }
