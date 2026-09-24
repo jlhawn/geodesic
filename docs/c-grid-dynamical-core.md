@@ -1455,15 +1455,24 @@ mountains without a shock; saved states and snapshots carry a
 The two-layer ocean of M13 could hold an Ekman layer and a gyre but had
 nothing below to return the flow, so it grew no western boundary current
 and its upper layer deepened ten metres a year. It is replaced by a
-six-layer hybrid isopycnal ocean in the MICOM design: a bulk mixed layer
-with its own temperature and salinity over interior layers of fixed
-reference density σ = 24.0, 25.5, 26.5, 27.2 and 27.7 (`LAYER_DENSITIES`,
-as ρ in kg/m³), on the real bathymetry `D` (the cell-mean ETOPO depth,
+hybrid isopycnal ocean in the MICOM design: a bulk mixed layer with its
+own temperature and salinity over seven interior layers of fixed
+reference density 1022.0, 1023.0, 1024.0, 1025.0, 1026.0, 1026.6 and
+1026.95 kg/m³ (`LAYER_DENSITIES`; 26.3, 23.1, 19.4, 15.2, 10.0, 5.9 and
+2.65 °C at 35 psu), on the real bathymetry `D` (the cell-mean ETOPO depth,
 at least 50 m, zero on land). Every layer is a TRiSK shallow-water layer
 in the vector-invariant form carrying thickness, edge velocity, heat h·T
-and salt h·S; the linear equation of state is
-ρ = ρ₀[1 − α(T − 283.15) + β(S − 35)] with α = 2×10⁻⁴ K⁻¹ and
-β = 7.6×10⁻⁴ psu⁻¹.
+and salt h·S. Density is the simplified equation of state of Roquet et
+al. (2015) with NEMO's nn_eos = 1 coefficients at the surface
+(`js/ocean/seawater.module.js`):
+ρ = 1026 − a₀(1 + ½λ₁Tₐ)Tₐ + b₀(1 − ½λ₂Sₐ)Sₐ − νTₐSₐ, Tₐ = T − 10 °C,
+Sₐ = S − 35, a₀ = 0.1655, b₀ = 0.76554, λ₁ = 0.05952, λ₂ = 7.4914×10⁻⁴,
+ν = 2.4341×10⁻³. The first version had six layers (σ = 24.0 to 27.7) and
+a linear equation of state with α = 2×10⁻⁴ K⁻¹ everywhere; under it,
+water at the freezing point was denser than warmer deep water, so polar
+columns were only stable if the interior started at the freezing point,
+the deep ocean sat at −0.7 and −1.8 °C, and every class warmer than
+15 °C was missing from the tropical thermocline.
 
 **Pressure force.** The pressure in interior layer k at height z is
 P_{k−1} + ρ_k g (z_{k−1} − z), with P_{k−1} the pressure at the top of
@@ -1567,22 +1576,20 @@ point is still the fixed 271.35 K of M9.
 
 **Start.** From rest: the mixed layer 60 m deep with the atmosphere's
 initial surface temperature and a salinity 34.5 + 1.5 exp(−((|φ|−25°)/15°)²);
-each interior layer starts at its label temperature or the surface
-temperature (at least the freezing point) where that is colder, so the
-polar column is near freezing throughout and convection does not bring
-up the 272.4 K label water (the real Southern Ocean keeps its warm deep
-water under a halocline the model does not yet have);
-interior layer bases at 250, 600, 1200 and 2500 m in the subtropics,
-scaled by 0.7 + 0.6 cos²φ toward the poles; every layer lighter than the
-local surface water outcropped; the deepest layer filling to the bottom;
-interior layers labelled with the temperature of their density at 35 psu.
-A saved two-layer state loads as this climatology with its upper-layer
-depth and velocity kept.
+each interior layer starts at its label temperature and 35 psu, so its
+density is its label; interior layer bases at 90, 170, 300, 500, 700 and
+1100 m in the subtropics, scaled by 0.7 + 0.6 cos²φ toward the poles;
+every layer lighter than the local surface water outcropped; the deepest
+layer filling to the bottom. Polar surface water at the freezing point
+and 34.5 psu (1026.87) floats on the deepest class (1026.95); brine that
+raises it past about 34.6 psu sinks into it, as bottom water forms. A
+saved ocean with a different number of layers loads as this climatology.
 
 **Interfaces.** `advance(surfaceT, ice, oceanFlux, stress, dt)` as in M13
 plus `accumulate(evaporation, rain, dt, runoff)` each atmosphere step;
 `fields()` gives the frame its mixed-layer depth, SST, SSS, surface
-velocity, thermocline depth (the base of the σ = 25.5 layer) and η;
+velocity, thermocline depth (the boundary between the 23.1 and 19.4 °C
+classes, close to the 20 °C isotherm) and η;
 `serialize()` is {h, u, T, S, eta} flattened layer-major, and
 `regridOcean` carries each layer's cell fields by masked interpolation
 over sea tiles and its velocities by vector interpolation. Diagnostics
@@ -1668,8 +1675,27 @@ on the flow only through their label densities their temperature and
 salinity are passive, so the heat they absorb has no dynamical brake
 and the interior takes decades to centuries to come into balance.
 
-**Open.** Runoff is not yet spread on the GPU; the equation of state is
-linear; the freezing point ignores salinity; the Kraus–Turner constants
+**Density-consistent interior.** After the mixed-layer exchanges, an
+interior layer more than 0.01 kg/m³ from its label mixes in water from
+the nearest layer lying clearly (by more than 0.01) on the other side of
+the label, a fraction dt/2 days of the full correction per step. The move
+is the same conservative transfer of mass, heat and salt as detrainment;
+the correction is gradual and dead-banded because the curvature of the
+equation of state makes a mixture denser than the linear estimate, and
+correcting in full every step overshot and pulled water back the other
+way. Two cases have no donor and are left alone: the shallowest water
+under the mixed layer when too dense, and the deepest class when too
+light. The second matters: deep water formed like NADW (1026.88) and
+AABW (1026.93) is lighter than the 1026.95 label, so the deepest class
+can hold water up to about 0.17 kg/m³ light (about 2 K warm), bounded by
+the water detrained into it; referencing every class to the surface also
+merges NADW- and AABW-like water into that one class. The GPU ocean
+carries its free surface from the barotropic solve rather than
+re-summing the layers each step: in single precision the sum rounded
+about 4×10⁻⁶ m low in the same way every step, a steady loss of volume.
+
+**Open.** Runoff is not yet spread on the GPU; the freezing point
+ignores salinity; the deepest class has no restoring when light; the Kraus–Turner constants
 and the 50 m minimum depth are first guesses; the barotropic mode has
 no explicit filter beyond the sub-step average.
 
@@ -1695,7 +1721,8 @@ js/
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
     ice.module.js           M9/M11: zero-layer sea ice over the mixed layer, zenith albedo
   ocean/
-    layered.module.js       M18: six-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
+    layered.module.js       M18: eight-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
+    seawater.module.js      M18: the Roquet et al. (2015) simplified equation of state, shared with the GPU
     (js/gpu/layeredOcean.gpu.js is its WebGPU port)
   gpu/
     device.module.js         M15: WebGPU device (Dawn in Node, navigator.gpu in the page) and buffer helpers
