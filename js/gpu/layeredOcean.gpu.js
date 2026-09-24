@@ -1,4 +1,4 @@
-import { emptyBuffer, readBuffer } from './device.module.js';
+import { emptyBuffer, readRanges } from './device.module.js';
 import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, bathymetryFrom, fitColumns, runoffOutlets, interiorWater } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
@@ -710,7 +710,6 @@ export function createLayeredOcean(core, options = {}) {
     mixedLayer(dt);
     salt(dt);
     writeSurface(dt);
-    await device.queue.onSubmittedWorkDone();
   }
 
   /*
@@ -857,14 +856,15 @@ export function createLayeredOcean(core, options = {}) {
   }
 
   async function download() {
-    const s = await readBuffer(device, ob.S, 4 * OS.total);
-    const od = await readBuffer(device, ob.OD, 4 * OD.total);
+    const stateRead = readRanges(device, ob.S, [{ offset: 0, length: OS.total }]), etaRead = readRanges(device, ob.OD, [{ offset: OD.ETA, length: C }]);
+    const [s] = await stateRead;
+    const [etaRange] = await etaRead;
     const h = Float64Array.from(s.subarray(OS.OH, OS.OH + L * C));
     const u = Float64Array.from(s.subarray(OS.OU, OS.OU + L * E));
     const Qraw = s.subarray(OS.OQ, OS.OQ + L * C), Wraw = s.subarray(OS.OW, OS.OW + L * C);
     const T = new Float64Array(L * C), S = new Float64Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); T[n] = Qraw[n] / hh; S[n] = Wraw[n] / hh; }
-    const eta = Float64Array.from(od.subarray(OD.ETA, OD.ETA + C));
+    const eta = Float64Array.from(etaRange);
     const h1 = h.subarray(0, C), T1 = T.subarray(0, C), S1 = S.subarray(0, C), u1 = u.subarray(0, E);
     const thermoclineDepth = new Float64Array(C);
     for (let i = 0; i < C; i++) {
@@ -880,6 +880,7 @@ export function createLayeredOcean(core, options = {}) {
   }
   async function serialize() { return serializeFrom(await download()); }
 
+  const hEdgeK = new Float64Array(L);
   function diagnosticsFrom(d) {
     let area = 0, depth = 0, heat = 0, thermo = 0, salinity = 0, ssh = 0, speed = 0, transport = 0, interiorT = 0, interiorH = 0, limited = 0;
     const rhoCp = o.density * o.specificHeat;
@@ -898,7 +899,6 @@ export function createLayeredOcean(core, options = {}) {
       const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
       const sill = Math.max(EPS, Math.min(D[a], D[b]) + 0.5 * (d.eta[a] + d.eta[b]));
       let sum = 0, t = 0;
-      const hEdgeK = new Float64Array(L);
       hEdgeK[0] = 0.5 * (d.h[a] + d.h[b]);
       for (let k = 1; k < L; k++) hEdgeK[k] = Math.min(d.h[at(k, a)], d.h[at(k, b)]);
       for (let k = 0; k < L; k++) sum += hEdgeK[k];

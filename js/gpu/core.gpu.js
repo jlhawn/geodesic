@@ -1,4 +1,4 @@
-import { getDevice, storageBuffer, emptyBuffer, readBuffer } from './device.module.js';
+import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges } from './device.module.js';
 import { sigmaInterfaces, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { sunDirection } from '../physics/radiation.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.gpu.js';
@@ -554,7 +554,6 @@ export async function createGpuCore(mesh, {
       pass.end();
       device.queue.submit([encoder.finish()]);
     }
-    await device.queue.onSubmittedWorkDone();
   }
 
   const retained = { land: null, drag: null, soil: null, snow: null };
@@ -579,9 +578,8 @@ export async function createGpuCore(mesh, {
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.SNOW, Float32Array.from(snow));
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.RUNOFF, new Float32Array(C));
   }
-  async function downloadPhysics() {
-    const ph = await readBuffer(device, buffers.PH, 4 * L.PH.total);
-    return Object.fromEntries(Object.entries(L.PH).filter(([k]) => k !== 'total').map(([k, off]) => [k, ph.subarray(off)]));
+  function downloadPhysics() {
+    return readRanges(device, buffers.PH, [{ offset: 0, length: L.PH.total }]).then(([ph]) => Object.fromEntries(Object.entries(L.PH).filter(([k]) => k !== 'total').map(([k, off]) => [k, ph.subarray(off)])));
   }
 
   async function tendency(IN = buffers.S, OUT = buffers.K1) {
@@ -603,10 +601,9 @@ export async function createGpuCore(mesh, {
     for (const b of [buffers.K1, buffers.K2, buffers.K3, buffers.K4]) device.queue.writeBuffer(b, 0, zero);
     device.queue.writeBuffer(buffers.D, 0, new Float32Array(L.D.total));
   }
-  async function download(buffer = buffers.S) {
-    const packed = await readBuffer(device, buffer, 4 * L.S.total);
+  function download(buffer = buffers.S) {
     const lengths = [C, L.KC, L.KE, C, L.KC, L.KC, C];
-    return names.map((name, a) => Float64Array.from(packed.subarray(L.S[name], L.S[name] + lengths[a])));
+    return readRanges(device, buffer, [{ offset: 0, length: L.S.total }]).then(([packed]) => names.map((name, a) => Float64Array.from(packed.subarray(L.S[name], L.S[name] + lengths[a]))));
   }
   async function downloadDiagnostics() {
     const d = await readBuffer(device, buffers.D, 4 * L.D.total);
@@ -614,7 +611,13 @@ export async function createGpuCore(mesh, {
     for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) out.GEO[k * C + i] += gabs[k];
     return out;
   }
+  function downloadDiagnosis() {
+    return readRanges(device, buffers.D, [{ offset: L.D.EXM, length: L.KC }, { offset: L.D.GEO, length: L.KC }]).then(([exnerLayer, geopotential]) => {
+      for (let k = 0; k < K; k++) if (gabs[k]) for (let i = 0; i < C; i++) geopotential[k * C + i] += gabs[k];
+      return { exnerLayer, geopotential };
+    });
+  }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
-  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, tendency, upload, download, downloadDiagnostics, uploadPhysics, uploadLand, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
+  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, tendency, upload, download, downloadDiagnostics, downloadDiagnosis, uploadPhysics, uploadLand, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
 }

@@ -50,6 +50,26 @@ export async function readBuffer(device, buffer, byteLength, Type = Float32Array
 }
 
 /*
+ * Several ranges of one buffer, given in floats, read back through one
+ * staging buffer and one map.
+ */
+export function readRanges(device, buffer, ranges) {
+  const total = ranges.reduce((sum, r) => sum + r.length, 0);
+  const staging = device.createBuffer({ size: 4 * total, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const encoder = device.createCommandEncoder();
+  let at = 0;
+  for (const r of ranges) { encoder.copyBufferToBuffer(buffer, 4 * r.offset, staging, 4 * at, 4 * r.length); at += r.length; }
+  device.queue.submit([encoder.finish()]);
+  return staging.mapAsync(GPUMapMode.READ).then(() => {
+    const all = new Float32Array(staging.getMappedRange().slice(0));
+    staging.unmap();
+    staging.destroy();
+    let from = 0;
+    return ranges.map((r) => { const view = all.subarray(from, from + r.length); from += r.length; return view; });
+  });
+}
+
+/*
  * A compute pipeline with bind groups cached per buffer set: `run`
  * records one dispatch of `count` invocations at workgroup size 64.
  */

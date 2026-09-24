@@ -19,10 +19,17 @@ let level = 'surface', layerWinds = [], lastFrameTime = 0;
  * lowest layer) plus surface pressure; the cell-center winds of a layer
  * are reconstructed only when that layer bounds the level somewhere.
  */
+function captureFrame() {
+  if (model.beginDiagnostics) return model.beginDiagnostics();
+  return model.diagnostics().then((diagnostics) => ({ diagnostics, time: model.time }));
+}
+
 async function postFrame() {
-  if (model.sync) await model.sync();
-  const diagnostics = await model.diagnostics();
-  const { mesh, core, state, time } = model;
+  buildFrame(await captureFrame());
+}
+
+function buildFrame({ diagnostics, time }) {
+  const { mesh, core, state } = model;
   const [pi, theta, u, surfaceT] = state;
   const E = mesh.nEdges;
   layerWinds.fill(null);
@@ -61,10 +68,22 @@ async function postFrame() {
   self.postMessage(message, [ps.buffer, mslp.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer, shortwave.buffer, longwave.buffer, soil.buffer, snow.buffer, sst.buffer, current.buffer, currentVector.buffer, layerDepth.buffer, thermocline.buffer, sss.buffer, ssh.buffer]);
 }
 
+/*
+ * On the GPU a step only queues work: the frame's read-backs are queued,
+ * the next batch of steps behind them, and the frame is built once the
+ * copies land, while the GPU steps. The CPU engine steps its arrays in
+ * place, so it builds the frame first.
+ */
 async function loop() {
   if (!running) return;
-  for (let n = 0; n < stepsPerFrame; n++) await model.step(dt);
-  await postFrame();
+  if (model.beginDiagnostics) {
+    const capturing = model.beginDiagnostics();
+    for (let n = 0; n < stepsPerFrame; n++) await model.step(dt);
+    buildFrame(await capturing);
+  } else {
+    for (let n = 0; n < stepsPerFrame; n++) await model.step(dt);
+    await postFrame();
+  }
   setTimeout(loop, 0);
 }
 
