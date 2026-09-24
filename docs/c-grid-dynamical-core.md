@@ -1569,20 +1569,27 @@ warming step collapses the Monin–Obukhov depth) and the SST fell 2 K a
 month.
 
 **Salinity.** Evaporation minus rain is accumulated per cell over the
-atmosphere steps between ocean steps, and land runoff is spread over the
-sea, all applied as virtual salt fluxes to the mixed layer; ice growth
+atmosphere steps between ocean steps, and each land cell's runoff goes to
+its nearest sea cell (a breadth-first walk outward from the coast, a
+stand-in for river routing), all applied as virtual salt fluxes to the
+mixed layer; ice growth
 rejects brine and melt freshens with an ice salinity of 5. The freezing
 point is still the fixed 271.35 K of M9.
 
 **Start.** From rest: the mixed layer 60 m deep with the atmosphere's
-initial surface temperature and a salinity 34.5 + 1.5 exp(−((|φ|−25°)/15°)²);
-each interior layer starts at its label temperature and 35 psu, so its
-density is its label; interior layer bases at 90, 170, 300, 500, 700 and
+initial surface temperature and a salinity 34 + 2 exp(−((|φ|−25°)/20°)²);
+each interior layer starts at its class salinity (35 psu through the
+1025.0 class, then 34.9, 34.85 and 34.8, `LAYER_SALINITIES`) and the
+temperature that gives its label density there (the deepest class at
+about 0.8 °C), so its density is its label; interior layer bases at 90, 170, 300, 500, 700 and
 1100 m in the subtropics, scaled by 0.7 + 0.6 cos²φ toward the poles;
 every layer lighter than the local surface water outcropped; the deepest
 layer filling to the bottom. Polar surface water at the freezing point
-and 34.5 psu (1026.87) floats on the deepest class (1026.95); brine that
-raises it past about 34.6 psu sinks into it, as bottom water forms. A
+and 34 psu (1026.47) floats on the deepest class (1026.95); brine that
+raises it past about 34.6 psu sinks into it, as bottom water forms. With
+35 psu in every class and at the poles, a first spin-up year lost all its
+sea ice: polar mixed layers denser than the deepest class convected
+2.4 °C water up all winter. A
 saved ocean with a different number of layers loads as this climatology.
 
 **Interfaces.** `advance(surfaceT, ice, oceanFlux, stress, dt)` as in M13
@@ -1694,8 +1701,7 @@ carries its free surface from the barotropic solve rather than
 re-summing the layers each step: in single precision the sum rounded
 about 4×10⁻⁶ m low in the same way every step, a steady loss of volume.
 
-**Open.** Runoff is not yet spread on the GPU; the freezing point
-ignores salinity; the deepest class has no restoring when light; the Kraus–Turner constants
+**Open.** The freezing point ignores salinity; the deepest class has no restoring when light; the Kraus–Turner constants
 and the 50 m minimum depth are first guesses; the barotropic mode has
 no explicit filter beyond the sub-step average.
 
