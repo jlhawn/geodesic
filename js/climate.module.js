@@ -1,7 +1,7 @@
 import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
-import { fetchState, stateName, decodeState } from './stateFile.module.js';
+import { fetchState, stateName, decodeState, listedStates, stateDay } from './stateFile.module.js';
 import { seasonPhrase } from "./levels.module.js";
 import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
@@ -196,7 +196,7 @@ async function builtinSnapshots(fallback = null) {
   const entry = (file) => ({ file, url: new URL(file, location.href).href, name: stateName(file.replace(/.*\//, '')) });
   try {
     const html = await (await fetch('runs/')).text();
-    const files = [...new Set([...html.matchAll(/href="([^"]+(?:_state_day\d+(?:\.json(?:\.gz)?|\.parts\.json)|_day\d+\.bin(?:\.gz)?))"/g)].map((m) => decodeURIComponent(m[1])))].sort();
+    const files = listedStates(html);
     const newest = new Map(files.map((file) => [stateName(file), file]));
     if (newest.size) return [...newest.values()].map((file) => entry(`runs/${file}`));
   } catch {}
@@ -785,8 +785,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const builtin = (await builtinSnapshots(from)).sort((a, b) => (b.url === defaultUrl) - (a.url === defaultUrl));
     builtinList.replaceChildren(...builtin.map((entry) => {
       const local = list.find((meta) => meta.source === entry.url);
-      const day = entry.file.match(/_state_day(\d+)/)?.[1];
-      return item(entry.name, `${day ? `day ${Number(day)}` : ''}${entry.url === defaultUrl ? ' · the page default' : ''}`, local ? 'downloaded' : '', [
+      const day = stateDay(entry.file);
+      return item(entry.name, `${day !== null ? `day ${day}` : ''}${entry.url === defaultUrl ? ' · the page default' : ''}`, local ? 'downloaded' : '', [
         [local ? 'Restore' : 'Download and restore', async () => { const id = local ? local.id : await download(entry); if (id) restoreSnapshot(id); }],
         ...(local ? [] : [['Download', async () => { await download(entry); }]]),
       ]);

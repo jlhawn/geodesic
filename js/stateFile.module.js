@@ -3,9 +3,10 @@
  * listed by a <name>.parts.json manifest so each piece stays under the
  * file-size caps of static hosts, or the same state in binary: 'GCMS', a
  * little-endian u32 header length, the JSON header { N, K, day, time,
- * terrain, arrays: [{ name, length, offset, type }] }, zero padding to a
- * multiple of 4, then each array at its byte offset from the end of the
- * padding, as float32 unless its type is 'f64'. Array names are the JSON
+ * terrain, arrays: [{ name, length, offset, type }] } (which may end in
+ * spaces counted in that length), zero padding to a multiple of 4, then
+ * each array at its byte offset from the end of the padding, as float32
+ * unless its type is 'f64'. Array names are the JSON
  * state's keys, with 'ocean.' and 'land.' prefixes for the nested ones.
  * Gzip and the binary format are recognised by their magic bytes rather
  * than the file name, since a server may already have inflated a .gz
@@ -13,6 +14,18 @@
  */
 export function stateName(file) {
   return file.replace(/(?:\.json(?:\.gz)?|\.parts\.json|\.bin(?:\.gz)?)$/, '');
+}
+
+/*
+ * The saved states a directory index links to: the JSON, gzipped and
+ * parts forms of <name>_state_day<N>, and binary <name>_day<N>.bin.
+ */
+export function listedStates(html) {
+  return [...new Set([...html.matchAll(/href="([^"]+(?:_state_day\d+(?:\.json(?:\.gz)?|\.parts\.json)|_day\d+\.bin(?:\.gz)?))"/g)].map((m) => decodeURIComponent(m[1])))].sort();
+}
+export function stateDay(file) {
+  const match = file.match(/_(?:state_)?day(\d+)/);
+  return match ? Number(match[1]) : null;
 }
 
 const MAGIC = 'GCMS';
@@ -41,7 +54,8 @@ function decodeBinary(bytes) {
 
 /*
  * The binary form of a state: its top-level arrays and those under
- * `ocean` and `land`, as float32 or, listed in `f64`, float64.
+ * `ocean` and `land`, as float32 or, listed in `f64`, float64, with the
+ * header padded with spaces so the arrays start 8-byte aligned.
  */
 export function encodeState(state, { f64 = [] } = {}) {
   const named = [];

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { gzipSync } from 'node:zlib';
-import { decodeState, encodeState, fetchState, stateName } from '../js/stateFile.module.js';
+import { decodeState, encodeState, fetchState, stateName, listedStates, stateDay } from '../js/stateFile.module.js';
 
 const state = { N: 4, day: 12, pi: [1e5, 99999.5], theta: [[300, 301], [302, 303]] };
 const text = JSON.stringify(state);
@@ -91,4 +91,13 @@ test("a binary state in the spin-up driver's layout, at a misaligned offset, or 
   assertClose(fromShifted.theta, binarySample().theta, 'shifted theta');
 
   await assert.rejects(decodeState(encoded.subarray(0, encoded.length - 4)), /runs past the end/);
+});
+
+test('a directory index lists JSON, parts and binary states, and their days', () => {
+  const html = ['layered64_state_day910.json', 'ocean64_state_day930.parts.json', 'ocean64_state_day930.json.gz.000', 'spin128c_day0678.bin', 'spin128c_day0650.bin.gz', 'layered64_day030.json', 'spin128c.log']
+    .map((file) => `<li><a href="${encodeURIComponent(file)}">${file}</a></li>`).join('\n');
+  assert.deepEqual(listedStates(html), ['layered64_state_day910.json', 'ocean64_state_day930.parts.json', 'spin128c_day0650.bin.gz', 'spin128c_day0678.bin']);
+  assert.equal(stateDay('runs/spin128c_day0678.bin'), 678);
+  assert.equal(stateDay('runs/layered64_state_day910.json'), 910);
+  assert.equal(stateDay('runs/notes.txt'), null);
 });

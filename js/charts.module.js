@@ -2,7 +2,7 @@ import { Grid } from './grid.module.js';
 import { createModel } from './model.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { LEVELS, levelFields } from './levels.module.js';
-import { fetchState, stateName } from './stateFile.module.js';
+import { fetchState, stateName, listedStates } from './stateFile.module.js';
 import { DEFAULT_RUN } from './defaultRun.module.js';
 
 const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796;
@@ -188,8 +188,7 @@ export function chartFor(state, level) {
 async function listStates(directory) {
   const response = await fetch(directory);
   const html = await response.text();
-  const names = [...html.matchAll(/href="([^"]+_state_day\d+(?:\.json(?:\.gz)?|\.parts\.json))"/g)].map((m) => decodeURIComponent(m[1])).sort();
-  return [...new Map(names.map((name) => [stateName(name), name])).values()];
+  return [...new Map(listedStates(html).map((name) => [stateName(name), name])).values()];
 }
 
 export default async function runCharts(directory = 'runs/') {
@@ -208,11 +207,11 @@ export default async function runCharts(directory = 'runs/') {
   let names = [];
   try { names = await listStates(directory); } catch (error) { status.textContent = `could not list ${directory}: ${error.message}`; return; }
   if (!names.length && DEFAULT_RUN.startsWith(directory)) names = [DEFAULT_RUN.slice(directory.length)];
-  if (!names.length) { status.textContent = `no *_state_day*.json files in ${directory}`; return; }
+  if (!names.length) { status.textContent = `no saved states in ${directory}`; return; }
   for (const name of names) {
     const option = document.createElement('option');
     option.value = name;
-    option.textContent = stateName(name).replace('_state_day', ' · day ');
+    option.textContent = stateName(name).replace(/_(?:state_)?day0*(\d+)$/, ' · day $1');
     stateSelect.appendChild(option);
   }
   const params = new URLSearchParams(location.search);
