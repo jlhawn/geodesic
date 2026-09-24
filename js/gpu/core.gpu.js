@@ -144,40 +144,49 @@ const KERNELS = {
   let k = n / E; let e = n % E;
   D[D_QE + n] = 0.5 * (D[D_QV + k * V + MI[VOE + 2 * e]] + D[D_QV + k * V + MI[VOE + 2 * e + 1]]);
 }`,
-  cellTendency: `fn vertical(k: i32, i: i32, idx: i32, f: f32, lowerOff: i32, pi: f32) -> f32 {
-  let lowerFlow = D[D_PSD + (k + 1) * C + i];
-  let upperFlow = D[D_PSD + k * C + i];
-  var lower = 0.0; if (k < K - 1) { lower = D[lowerOff + idx]; }
-  var upper = 0.0; if (k > 0) { upper = D[lowerOff + idx - C]; }
-  return (lowerFlow * lower - upperFlow * upper - f * (lowerFlow - upperFlow)) / (pi * LV[L_DS + k]);
-}
-@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= K * C) { return; }
-  let k = n / C; let i = n % C; let idx = n;
-  let pi = IN[S_PI + i];
-  let fT = IN[S_TH + idx]; let fQ = IN[S_Q + idx]; let fC = IN[S_QC + idx];
-  let row = k * C; let flux0 = k * E;
-  let top = LV[L_TOP + k]; let bottomLayer = k == K - 1;
-  var kinetic = 0.0; var dragPower = 0.0; var divT = 0.0; var divQ = 0.0; var divC = 0.0;
+  cellTendency: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let pi = IN[S_PI + i]; let area = MF[F_AREA + i]; let dragHere = D[D_DRAG + i];
+  var edges: array<i32, MAXE>; var neighbours: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>; var dragThere: array<f32, MAXE>;
   for (var m = 0; m < MAXE; m++) {
     let slot = MAXE * i + m;
     let e = MI[EOC + slot]; let j = MI[COC + slot]; let sign = f32(MI[ESC + slot]);
-    let dc = MF[F_DC + e]; let dv = MF[F_DV + e] * abs(sign);
-    let u = IN[S_U + flux0 + e];
-    kinetic += 0.25 * dc * dv * u * u;
-    let rate = top + select(0.0, 0.5 * (D[D_DRAG + i] + D[D_DRAG + j]), bottomLayer);
-    dragPower += 0.5 * dc * dv * rate * u * u;
-    let carried = sign * D[D_FLUX + flux0 + e] * 0.5;
-    divT += carried * (fT + IN[S_TH + row + j]) * dv;
-    divQ += carried * (fQ + IN[S_Q + row + j]) * dv;
-    divC += carried * (fC + IN[S_QC + row + j]) * dv;
+    edges[m] = e; neighbours[m] = j; signs[m] = sign;
+    dcs[m] = MF[F_DC + e]; dvs[m] = MF[F_DV + e] * abs(sign); dragThere[m] = D[D_DRAG + j];
   }
-  let area = MF[F_AREA + i];
-  D[D_PHI + idx] = D[D_GEO + idx] + kinetic / area;
-  let divergence = D[D_DIV + idx];
-  OUT[S_TH + idx] = -(divT / area - fT * divergence) / pi - vertical(k, i, idx, fT, D_THL, pi) + dragPower / area / (CP * D[D_EXM + idx]);
-  OUT[S_Q + idx] = -(divQ / area - fQ * divergence) / pi - vertical(k, i, idx, fQ, D_QL, pi);
-  OUT[S_QC + idx] = -(divC / area - fC * divergence) / pi - vertical(k, i, idx, fC, D_QCL, pi);
+  var upperFlow = D[D_PSD + i];
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let row = k * C; let flux0 = k * E;
+    let fT = IN[S_TH + idx]; let fQ = IN[S_Q + idx]; let fC = IN[S_QC + idx];
+    let top = LV[L_TOP + k]; let bottomLayer = k == K - 1;
+    var kinetic = 0.0; var dragPower = 0.0; var divT = 0.0; var divQ = 0.0; var divC = 0.0;
+    for (var m = 0; m < MAXE; m++) {
+      let e = edges[m]; let j = neighbours[m];
+      let dc = dcs[m]; let dv = dvs[m];
+      let u = IN[S_U + flux0 + e];
+      kinetic += 0.25 * dc * dv * u * u;
+      let rate = top + select(0.0, 0.5 * (dragHere + dragThere[m]), bottomLayer);
+      dragPower += 0.5 * dc * dv * rate * u * u;
+      let carried = signs[m] * D[D_FLUX + flux0 + e] * 0.5;
+      divT += carried * (fT + IN[S_TH + row + j]) * dv;
+      divQ += carried * (fQ + IN[S_Q + row + j]) * dv;
+      divC += carried * (fC + IN[S_QC + row + j]) * dv;
+    }
+    D[D_PHI + idx] = D[D_GEO + idx] + kinetic / area;
+    let divergence = D[D_DIV + idx];
+    let lowerFlow = D[D_PSD + (k + 1) * C + i];
+    let layerMass = pi * LV[L_DS + k];
+    var lowerT = 0.0; var lowerQ = 0.0; var lowerC = 0.0; var upperT = 0.0; var upperQ = 0.0; var upperC = 0.0;
+    if (k < K - 1) { lowerT = D[D_THL + idx]; lowerQ = D[D_QL + idx]; lowerC = D[D_QCL + idx]; }
+    if (k > 0) { upperT = D[D_THL + idx - C]; upperQ = D[D_QL + idx - C]; upperC = D[D_QCL + idx - C]; }
+    let verticalT = (lowerFlow * lowerT - upperFlow * upperT - fT * (lowerFlow - upperFlow)) / layerMass;
+    let verticalQ = (lowerFlow * lowerQ - upperFlow * upperQ - fQ * (lowerFlow - upperFlow)) / layerMass;
+    let verticalC = (lowerFlow * lowerC - upperFlow * upperC - fC * (lowerFlow - upperFlow)) / layerMass;
+    OUT[S_TH + idx] = -(divT / area - fT * divergence) / pi - verticalT + dragPower / area / (CP * D[D_EXM + idx]);
+    OUT[S_Q + idx] = -(divQ / area - fQ * divergence) / pi - verticalQ;
+    OUT[S_QC + idx] = -(divC / area - fC * divergence) / pi - verticalC;
+    upperFlow = lowerFlow;
+  }
 }`,
   momentum: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let e = i32(id.x); if (e >= E) { return; }
@@ -417,7 +426,7 @@ export async function createGpuCore(mesh, {
     dispatch(pass, 'vertexPi', g, V);
     dispatch(pass, 'pvVertex', g, L.KV);
     dispatch(pass, 'pvEdge', g, L.KE);
-    dispatch(pass, 'cellTendency', g, L.KC);
+    dispatch(pass, 'cellTendency', g, C);
     dispatch(pass, 'momentum', g, E);
   }
 
