@@ -1,7 +1,7 @@
 import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
-import { fetchState, stateName, decodeState, listedStates, stateDay } from './stateFile.module.js';
+import { fetchState, stateName, decodeState, encodeState, listedStates, stateDay } from './stateFile.module.js';
 import { seasonPhrase } from "./levels.module.js";
 import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
@@ -829,13 +829,14 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (!data) return;
     document.getElementById('date').textContent = `exporting "${meta.name}"…`;
     const saved = { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain };
-    for (const [key, buffer] of Object.entries(data.arrays)) saved[key] = Array.from(new Float64Array(buffer));
-    if (data.ocean) saved.ocean = Object.fromEntries(Object.entries(data.ocean).map(([k, b]) => [k, Array.from(new Float64Array(b))]));
-    if (data.land) saved.land = Object.fromEntries(Object.entries(data.land).map(([k, b]) => [k, Array.from(new Float64Array(b))]));
-    const gz = await new Response(new Blob([JSON.stringify(saved)]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
+    for (const [key, buffer] of Object.entries(data.arrays)) saved[key] = new Float64Array(buffer);
+    if (data.ocean) saved.ocean = Object.fromEntries(Object.entries(data.ocean).map(([k, b]) => [k, new Float64Array(b)]));
+    if (data.land) saved.land = Object.fromEntries(Object.entries(data.land).map(([k, b]) => [k, new Float64Array(b)]));
+    const names = [...Object.keys(data.arrays), ...Object.keys(data.ocean ?? {}).map((k) => `ocean.${k}`), ...Object.keys(data.land ?? {}).map((k) => `land.${k}`)];
+    const gz = await new Response(new Blob([encodeState(saved, { f64: names })]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
     const link = document.createElement('a');
     link.href = URL.createObjectURL(gz);
-    link.download = `${slug(meta.name)}_state_day${Math.round(meta.day)}.json.gz`;
+    link.download = `${slug(meta.name)}_day${Math.round(meta.day)}.bin.gz`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 60000);
     document.getElementById('date').textContent = `exported ${link.download} (${(gz.size / 1048576).toFixed(0)} MB)`;
