@@ -324,3 +324,22 @@ test('interior layers relax back to their label densities without losing heat or
   assert.ok(Math.abs(after.heat - before.heat) < 1e-8 * before.heat && Math.abs(after.salt - before.salt) < 1e-8 * before.salt, `heat ${before.heat} -> ${after.heat}, salt ${before.salt} -> ${after.salt}`);
   assert.ok(start > 0.04 && end < 0.5 * start, `mean distance from the labels ${start} -> ${end} kg/m³`);
 });
+
+test('runoff reaches the coastal sea beside the land it ran off, freshening it by exactly that water', () => {
+  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.abs(lon) < 40 * DEG && lat > 12 * DEG && lat < 48 * DEG ? -4000 : 500)));
+  const ocean = createOcean(mesh, { everySteps: 1, geography });
+  const runoff = Float64Array.from(geography.land, (l) => (l ? 2 : 0));
+  ocean.fresh.fill(0);
+  ocean.accumulate(null, null, 0, runoff);
+  let delivered = 0, ranOff = 0;
+  for (let i = 0; i < C; i++) {
+    ranOff += mesh.areaCell[i] * runoff[i];
+    delivered -= mesh.areaCell[i] * ocean.fresh[i];
+    if (ocean.fresh[i] === 0) continue;
+    assert.ok(ocean.cellOcean[i], `cell ${i} receives runoff but is land`);
+    let coastal = false;
+    for (let m = 0; m < mesh.nEdgesOnCell[i]; m++) if (geography.land[mesh.cellsOnCell[mesh.maxEdges * i + m]]) coastal = true;
+    assert.ok(coastal, `sea cell ${i} receives runoff but touches no land`);
+  }
+  assert.ok(ranOff > 0 && Math.abs(delivered - ranOff) < 1e-9 * ranOff, `delivered ${delivered} of ${ranOff}`);
+});

@@ -45,7 +45,7 @@ import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature } fr
  * equation of state makes a mixture denser than the linear estimate, and
  * the gradual, dead-banded correction keeps that from overshooting.
  * Tracers are carried by the flux with the donor cell's value. Surface
- * freshwater (evaporation minus rain, runoff spread over the sea) and ice
+ * freshwater (evaporation minus rain, and runoff at the nearest sea cell) and ice
  * growth or melt act on its salinity as virtual salt fluxes. The mixed
  * layer's temperature is the sea surface temperature the atmosphere sees, its
  * heat capacity is published per cell, and the heat converged under ice
@@ -53,6 +53,7 @@ import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature } fr
  */
 export const LAYER_DENSITIES = [1022.0, 1023.0, 1024.0, 1025.0, 1026.0, 1026.6, 1026.95];
 export const LAYER_BOTTOMS = [90, 170, 300, 500, 700, 1100];
+export const LAYER_SALINITIES = [35, 35, 35, 35, 34.9, 34.85, 34.8];
 export const THERMOCLINE_DENSITY = 1023.5;
 export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005, RESTORE_TOLERANCE = 0.01;
 
@@ -72,7 +73,7 @@ export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLER
  * column (built on first need), the mixed layer keeps its floor, and a
  * column that already fits is left exactly as it is.
  */
-export function fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, referenceS, minimumThickness }) {
+export function fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, labelS, minimumThickness }) {
   const at = (k, i) => k * C + i;
   for (let i = 0; i < C; i++) {
     if (!cellOcean[i]) { for (let k = 0; k < L; k++) { h[at(k, i)] = 0; Q[at(k, i)] = 0; W[at(k, i)] = 0; } eta[i] = 0; continue; }
@@ -90,7 +91,7 @@ export function fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, 
     let remaining = D[i] + eta[i];
     for (let k = 0; k < L; k++) {
       const n = at(k, i), take = Math.min(h[n], Math.max(remaining, 0));
-      if (take < EPS - 1e-6) { h[n] = EPS; Q[n] = EPS * labelT[k]; W[n] = EPS * referenceS; }
+      if (take < EPS - 1e-6) { h[n] = EPS; Q[n] = EPS * labelT[k]; W[n] = EPS * labelS[k]; }
       else { const f = take / h[n]; Q[n] *= f; W[n] *= f; h[n] = take; }
       remaining -= h[n];
     }
@@ -116,6 +117,31 @@ export function fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, 
   }
 }
 
+/*
+ * The sea cell each cell's runoff reaches: the nearest by steps across
+ * the mesh, found outward from the coast, a stand-in for river routing
+ * at this resolution. Sea cells are their own outlet; -1 without a
+ * geography.
+ */
+export function runoffOutlets(mesh, geography) {
+  const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
+  const outlet = new Int32Array(C).fill(-1);
+  if (!geography) return outlet;
+  const queue = new Int32Array(C);
+  let head = 0, tail = 0;
+  for (let i = 0; i < C; i++) if (!geography.land[i]) { outlet[i] = i; queue[tail++] = i; }
+  while (head < tail) {
+    const i = queue[head++];
+    for (let m = 0; m < nEdgesOnCell[i]; m++) {
+      const j = cellsOnCell[maxEdges * i + m];
+      if (outlet[j] >= 0) continue;
+      outlet[j] = outlet[i];
+      queue[tail++] = j;
+    }
+  }
+  return outlet;
+}
+
 export function bathymetryFrom(mesh, geography, { minimumDepth = 50, neighbourRatio = 0.5, flatDepth = 4000 } = {}) {
   const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
   const D = new Float64Array(C);
@@ -136,8 +162,8 @@ export function bathymetryFrom(mesh, geography, { minimumDepth = 50, neighbourRa
 }
 
 export function createOcean(mesh, {
-  densities = LAYER_DENSITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
-  salinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2)),
+  densities = LAYER_DENSITIES, salinities = LAYER_SALINITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
+  salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 200, convectiveRate = 100 / 86400, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, diffusivity = 0.3, everySteps = 4,
@@ -150,7 +176,8 @@ export function createOcean(mesh, {
   } = mesh;
   const L = densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = [rho0, ...densities];
-  const labelT = rho.map((r) => Math.max(FREEZING_POINT, labelTemperature(r, referenceS)));
+  const labelS = [referenceS, ...salinities];
+  const labelT = rho.map((r, k) => Math.max(FREEZING_POINT, labelTemperature(r, labelS[k])));
   const thermoclineLayers = rho.filter((r, k) => k > 0 && r < THERMOCLINE_DENSITY).length;
   const diffusion = diffusivity * radius * radius / rhoCp;
   let spacing = 0, minSpacing = Infinity;
@@ -160,6 +187,7 @@ export function createOcean(mesh, {
 
   const edgeOcean = geography ? geography.edgeOcean : new Uint8Array(E).fill(1);
   const cellOcean = geography ? Uint8Array.from(geography.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
+  const outlet = runoffOutlets(mesh, geography);
   const D = bathymetry ? Float64Array.from(bathymetry, (d, i) => (cellOcean[i] ? d : 0)) : bathymetryFrom(mesh, geography, { minimumDepth, flatDepth });
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
@@ -270,7 +298,7 @@ export function createOcean(mesh, {
       for (let i = 0; i < C; i++) {
         dh[oc + i] = -divScratch[i];
         const hv = hIn[oc + i];
-        if (hv > 1e-6) { T[i] = QIn[oc + i] / hv; S[i] = WIn[oc + i] / hv; } else { T[i] = labelT[k]; S[i] = referenceS; }
+        if (hv > 1e-6) { T[i] = QIn[oc + i] / hv; S[i] = WIn[oc + i] / hv; } else { T[i] = labelT[k]; S[i] = labelS[k]; }
       }
       for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * T[cellsOnEdge[2 * e + (flux[e] > 0 ? 0 : 1)]];
       divergence(mesh, tracerFlux, divScratch);
@@ -406,8 +434,8 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) {
         const n = at(k, i);
         if (h[n] < EPS) {
-          const held = h[n] > 1e-9, tHeld = held ? Q[n] / h[n] : labelT[k], sHeld = held ? W[n] / h[n] : referenceS;
-          const t = k === 0 ? tHeld : labelT[k], s = k === 0 ? sHeld : referenceS;
+          const held = h[n] > 1e-9, tHeld = held ? Q[n] / h[n] : labelT[k], sHeld = held ? W[n] / h[n] : labelS[k];
+          const t = k === 0 ? tHeld : labelT[k], s = k === 0 ? sHeld : labelS[k];
           dQ += EPS * Math.max(-30, Math.min(30, tHeld - t)); dW += EPS * Math.max(-5, Math.min(5, sHeld - s));
           h[n] = EPS; Q[n] = EPS * t; W[n] = EPS * s;
         }
@@ -514,11 +542,9 @@ export function createOcean(mesh, {
       Q[i] = h[i] * T0[i];
     }
   }
-  function accumulate(evaporation, rain, dt, runoffTotal = 0) {
-    let area = 0;
-    for (let i = 0; i < C; i++) if (cellOcean[i]) area += areaCell[i];
-    const spread = area > 0 ? runoffTotal / area : 0;
-    for (let i = 0; i < C; i++) if (cellOcean[i]) fresh[i] += (evaporation ? evaporation[i] * dt : 0) - (rain ? rain[i] : 0) - spread;
+  function accumulate(evaporation, rain, dt, runoff = null) {
+    for (let i = 0; i < C; i++) if (cellOcean[i]) fresh[i] += (evaporation ? evaporation[i] * dt : 0) - (rain ? rain[i] : 0);
+    if (runoff) for (let j = 0; j < C; j++) if (!cellOcean[j] && runoff[j] > 0 && outlet[j] >= 0) fresh[outlet[j]] -= runoff[j] * areaCell[j] / areaCell[outlet[j]];
   }
   function salt(dt, ice) {
     for (let i = 0; i < C; i++) {
@@ -597,7 +623,7 @@ export function createOcean(mesh, {
         }
         hk = Math.max(EPS, hk);
         cumulative += hk;
-        h[at(k, i)] = hk; Q[at(k, i)] = hk * labelT[k]; W[at(k, i)] = hk * referenceS;
+        h[at(k, i)] = hk; Q[at(k, i)] = hk * labelT[k]; W[at(k, i)] = hk * labelS[k];
       }
       const scale = D[i] / cumulative;
       for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }
@@ -677,7 +703,7 @@ export function createOcean(mesh, {
       h.set(kept.h); u.set(kept.u); Q.set(kept.Q); W.set(kept.W); eta.set(kept.eta);
       return built;
     };
-    fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, referenceS, minimumThickness });
+    fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, labelS, minimumThickness });
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
     for (let i = 0; i < C; i++) { previousIce[i] = ice[i]; iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = Q[i] / Math.max(EPS, h[i]); S0[i] = W[i] / Math.max(EPS, h[i]); previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
     fresh.fill(0);

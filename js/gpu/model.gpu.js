@@ -91,10 +91,12 @@ export async function createGpuModel(gridOrMesh, {
     landCpu.snow.set(ph.SNOW.subarray(0, C));
     for (let i = 0; i < C; i++) { landCpu.runoff[i] += ph.RUNOFF[i]; landCpu.budget.runoff += mesh.areaCell[i] * ph.RUNOFF[i]; }
     gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH.RUNOFF, new Float32Array(C));
+    if (gpuOcean) gpuOcean.forgetAccumulated('runoff');
   }
 
   model.diagnostics = async function diagnostics() {
     await sync();
+    if (gpuOcean) gpuOcean.accumulateFreshwater(0);
     const ph = await gpu.downloadPhysics();
     refreshLand(ph);
     const [pi, , u, surfaceT, q, qc, iceField] = state;
@@ -118,6 +120,7 @@ export async function createGpuModel(gridOrMesh, {
     for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));
     const interval = model.time - lastPrecipTime;
     gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH.RAIN, new Float32Array(C));
+    if (gpuOcean) gpuOcean.forgetAccumulated('rain');
     lastPrecipTime = model.time;
     const result = {
       mass: mass / area, meanSurfaceT: meanSurfaceT / area, piMin, piMax, maxWind,
@@ -146,7 +149,7 @@ export async function createGpuModel(gridOrMesh, {
     soil: landCpu.soil, snow: landCpu.snow, runoff: landCpu.runoff, land: geography.land, budget: landCpu.budget, albedo: landCpu.albedo, wetness: landCpu.wetness, water: landCpu.water, bucketCapacity: landCpu.bucketCapacity,
     initialize() { landCpu.initialize(); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow }); },
     load(saved) { landCpu.load(saved); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow }); },
-    async serialize() { refreshLand(await gpu.downloadPhysics()); return landCpu.serialize(); },
+    async serialize() { if (gpuOcean) gpuOcean.accumulateFreshwater(0); refreshLand(await gpu.downloadPhysics()); return landCpu.serialize(); },
   } : null;
 
   return model;

@@ -1,5 +1,5 @@
 import { emptyBuffer, readBuffer } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, bathymetryFrom, fitColumns } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, bathymetryFrom, fitColumns, runoffOutlets } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
@@ -27,13 +27,13 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
 const WORKGROUP = 64;
 
 export const OCEAN_DEFAULTS = {
-  densities: LAYER_DENSITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
+  densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, convectiveRate: 100 / 86400, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceDensity: 917,
   interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, diffusivity: 0.3, everySteps: 4,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
-const defaultSalinityProfile = (lat) => 34.5 + 1.5 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 15) ** 2));
+const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
 
 function seq(names) { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; }
 
@@ -41,7 +41,7 @@ function oceanKernels(o) {
   const { L, C, E, V, OS, OD, B } = o;
   const constLine = (name, value) => `const ${name}: f32 = ${Number(value).toExponential(10)};`;
   const rhoLine = `const RHO: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => v.toFixed(6)).join(', ')});`;
-  const labelLine = `const LABEL_T: array<f32, ${L}> = array<f32, ${L}>(${o.labelT.map((v) => v.toFixed(6)).join(', ')});\nconst RHOA: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => (v - SEAWATER.rho0).toFixed(6)).join(', ')});`;
+  const labelLine = `const LABEL_T: array<f32, ${L}> = array<f32, ${L}>(${o.labelT.map((v) => v.toFixed(6)).join(', ')});\nconst LABEL_S: array<f32, ${L}> = array<f32, ${L}>(${o.labelS.map((v) => v.toFixed(6)).join(', ')});\nconst RHOA: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => (v - SEAWATER.rho0).toFixed(6)).join(', ')});`;
   const offsetLines = Object.entries(OD).filter(([k]) => k !== 'total').map(([k, v]) => `const O_${k}: i32 = ${v};`).join('\n');
   const bLines = Object.entries(B).filter(([k]) => k !== 'total').map(([k, v]) => `const B_${k}: i32 = ${v};`).join('\n');
   const head = `
@@ -52,7 +52,7 @@ ${bLines}
 ${rhoLine}
 ${labelLine}
 ${constLine('RHO0', o.density)} ${constLine('RHOCP', o.density * o.specificHeat)}
-${constLine('REF_S', o.referenceS)} ${constLine('OGRAV', o.gravity)}
+${constLine('OGRAV', o.gravity)}
 ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)} ${constLine('DENSTOL', DENSITY_TOLERANCE)} ${constLine('RESTTOL', RESTORE_TOLERANCE)} ${constLine('RESTORET', o.restoreTime)}
 ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('ICEDENS', o.iceDensity)}
@@ -127,13 +127,13 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
 }`,
     oCellTendency: `${K}  let n = ${idx}; if (n >= L * C) { return; }
   let k = n / C; let i = n % C;
-  let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k], IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(REF_S, IN[wOff(k) + i] / hv, hv > 1e-6);
+  let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k], IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k], IN[wOff(k) + i] / hv, hv > 1e-6);
   var divH = 0.0; var divQ = 0.0; var divW = 0.0; var lapQ = 0.0; var lapW = 0.0;
   for (var m = 0; m < MI[NEC + i]; m++) {
     let e = MI[EOC + MAXE * i + m]; let j = MI[COC + MAXE * i + m];
     let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
     divH += f;
-    let hvj = IN[hOff(k) + j]; let Tj = select(LABEL_T[k], IN[qOff(k) + j] / hvj, hvj > 1e-6); let Sj = select(REF_S, IN[wOff(k) + j] / hvj, hvj > 1e-6);
+    let hvj = IN[hOff(k) + j]; let Tj = select(LABEL_T[k], IN[qOff(k) + j] / hvj, hvj > 1e-6); let Sj = select(LABEL_S[k], IN[wOff(k) + j] / hvj, hvj > 1e-6);
     divQ += f * select(Tj, Ti, f > 0.0); divW += f * select(Sj, Si, f > 0.0);
     if (k == 0 && OD[O_EMASK + e] > 0.5) { lapQ += MF[F_DV + e] * (Tj - Ti) / MF[F_DC + e]; lapW += MF[F_DV + e] * (Sj - Si) / MF[F_DC + e]; }
   }
@@ -288,8 +288,8 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     var hv = IN[hOff(k) + i];
     if (hv < EPSO) {
       let held = hv > 1e-9;
-      let tHeld = select(LABEL_T[k], IN[qOff(k) + i] / hv, held); let sHeld = select(REF_S, IN[wOff(k) + i] / hv, held);
-      let t = select(LABEL_T[k], tHeld, k == 0); let s = select(REF_S, sHeld, k == 0);
+      let tHeld = select(LABEL_T[k], IN[qOff(k) + i] / hv, held); let sHeld = select(LABEL_S[k], IN[wOff(k) + i] / hv, held);
+      let t = select(LABEL_T[k], tHeld, k == 0); let s = select(LABEL_S[k], sHeld, k == 0);
       dQ += EPSO * clamp(tHeld - t, -30.0, 30.0); dW += EPSO * clamp(sHeld - s, -5.0, 5.0);
       hv = EPSO;
       IN[hOff(k) + i] = EPSO; IN[qOff(k) + i] = EPSO * t; IN[wOff(k) + i] = EPSO * s;
@@ -422,7 +422,16 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     oAccumulateFresh: `${K}  let i = ${idx}; if (i >= C) { return; }
   let rain = PH[PH_RAIN + i]; let seen = OD[O_RAINSEEN + i];
   let delta = select(rain, rain - seen, rain >= seen);
-  if (OD[O_CMASK + i] > 0.5) { OD[O_FRESH + i] += PH[PH_EVAP + i] * P[6] - delta; }
+  if (OD[O_CMASK + i] > 0.5) {
+    var fresh = PH[PH_EVAP + i] * P[6] - delta;
+    for (var p = i32(OD[O_DRAINSTART + i]); p < i32(OD[O_DRAINSTART + i + 1]); p++) {
+      let j = i32(OD[O_DRAINCELL + p]);
+      let runoff = PH[PH_RUNOFF + j]; let ran = OD[O_RUNOFFSEEN + j];
+      fresh -= select(runoff, runoff - ran, runoff >= ran) * OD[O_DRAINW + p];
+      OD[O_RUNOFFSEEN + j] = runoff;
+    }
+    OD[O_FRESH + i] += fresh;
+  }
   OD[O_RAINSEEN + i] = rain;
 }`,
   };
@@ -434,7 +443,8 @@ export function createLayeredOcean(core, options = {}) {
   const C = core.C, E = core.E, V = core.V;
   const L = o.densities.length + 1;
   const rho = [o.density, ...o.densities];
-  const labelT = rho.map((r) => Math.max(FREEZING_POINT, labelTemperature(r, o.referenceS)));
+  const labelS = [o.referenceS, ...o.salinities];
+  const labelT = rho.map((r, k) => Math.max(FREEZING_POINT, labelTemperature(r, labelS[k])));
   const thermoclineLayers = rho.filter((r, k) => k > 0 && r < THERMOCLINE_DENSITY).length;
   const nu4 = o.closureHours > 0 ? Math.pow(meshSpacing / Math.PI, 4) / (o.closureHours * 3600) : 0;
   const diffusion = o.diffusivity * mesh.radius * mesh.radius / (o.density * o.specificHeat);
@@ -452,6 +462,17 @@ export function createLayeredOcean(core, options = {}) {
   const salinityProfile = o.salinityProfile || defaultSalinityProfile;
 
   const OS = seq([['OH', L * C], ['OU', L * E], ['OQ', L * C], ['OW', L * C]]);
+  const outlet = runoffOutlets(mesh, geography);
+  const drainStart = new Float32Array(C + 1), drainCells = [], drainWeights = [];
+  {
+    const byOutlet = Array.from({ length: C }, () => []);
+    for (let j = 0; j < C; j++) if (!cellOcean[j] && outlet[j] >= 0) byOutlet[outlet[j]].push(j);
+    for (let i = 0; i < C; i++) {
+      drainStart[i] = drainCells.length;
+      for (const j of byOutlet[i]) { drainCells.push(j); drainWeights.push(mesh.areaCell[j] / mesh.areaCell[i]); }
+    }
+    drainStart[C] = drainCells.length;
+  }
   const OD = seq([
     ['FLUX', L * E], ['HEDGE', L * E], ['AVORT', L * V], ['QE', L * E], ['PHI', L * C],
     ['LAPA', L * E], ['LAPB', L * E], ['DIVS', L * C], ['CURLS', L * V],
@@ -459,6 +480,7 @@ export function createLayeredOcean(core, options = {}) {
     ['ETA', C], ['FRESH', C], ['PREVT0', C], ['PREVICE', C], ['ICED', C], ['STRESS', E],
     ['SURFT', C], ['SURFICE', C], ['SURFACEIN', C], ['T0', C], ['S0', C], ['RAINSEEN', C],
     ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
+    ['RUNOFFSEEN', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array (see oceanKernels' barotropic tendency/combine kernels), so their
@@ -470,7 +492,7 @@ export function createLayeredOcean(core, options = {}) {
   B.total = bTotal;
   const ODTOTAL = OD.total + bTotal;
 
-  const kernels = oceanKernels({ ...o, L, C, E, V, OS, OD, B, rho, labelT, nu4, diffusion });
+  const kernels = oceanKernels({ ...o, L, C, E, V, OS, OD, B, rho, labelT, labelS, nu4, diffusion });
   const ob = {
     S: emptyBuffer(device, 4 * OS.total), T: emptyBuffer(device, 4 * OS.total),
     K1: emptyBuffer(device, 4 * OS.total), K2: emptyBuffer(device, 4 * OS.total), K3: emptyBuffer(device, 4 * OS.total), K4: emptyBuffer(device, 4 * OS.total),
@@ -659,6 +681,9 @@ export function createLayeredOcean(core, options = {}) {
     pass.end();
     device.queue.submit([encoder.finish()]);
   }
+  function forgetAccumulated(which) {
+    device.queue.writeBuffer(ob.OD, 4 * (which === 'rain' ? OD.RAINSEEN : OD.RUNOFFSEEN), new Float32Array(C));
+  }
 
   /*
    * A single testable/coupled ocean step at double-precision-matched
@@ -775,7 +800,7 @@ export function createLayeredOcean(core, options = {}) {
         }
         hk = Math.max(EPS, hk);
         cumulative += hk;
-        h[at(k, i)] = hk; Q[at(k, i)] = hk * labelT[k]; W[at(k, i)] = hk * o.referenceS;
+        h[at(k, i)] = hk; Q[at(k, i)] = hk * labelT[k]; W[at(k, i)] = hk * labelS[k];
       }
       const scale = D[i] / cumulative;
       for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }
@@ -799,6 +824,8 @@ export function createLayeredOcean(core, options = {}) {
     device.queue.writeBuffer(ob.OD, 4 * OD.CMASK, Float32Array.from(cellOcean));
     device.queue.writeBuffer(ob.OD, 4 * OD.BATH, Float32Array.from(D));
     device.queue.writeBuffer(ob.OD, 4 * OD.FEDGE, Float32Array.from(mesh.fEdge));
+    device.queue.writeBuffer(ob.OD, 4 * OD.DRAINSTART, drainStart);
+    if (drainCells.length) { device.queue.writeBuffer(ob.OD, 4 * OD.DRAINCELL, Float32Array.from(drainCells)); device.queue.writeBuffer(ob.OD, 4 * OD.DRAINW, Float32Array.from(drainWeights)); }
     const previousIce = Float64Array.from(ice);
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVICE, Float32Array.from(previousIce));
     const capacity = Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
@@ -820,7 +847,7 @@ export function createLayeredOcean(core, options = {}) {
     const h = Float64Array.from(saved.h), u = Float64Array.from(saved.u), eta = Float64Array.from(saved.eta);
     const Q = new Float64Array(L * C), W = new Float64Array(L * C);
     for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
-    fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, referenceS: o.referenceS, minimumThickness: o.minimumThickness });
+    fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, labelS, minimumThickness: o.minimumThickness });
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) for (let k = 0; k < L; k++) u[k * E + e] = 0;
     uploadArrays({ h, u, Q, W, eta }, surfaceT, ice);
     const previousT0 = new Float64Array(C);
@@ -885,7 +912,7 @@ export function createLayeredOcean(core, options = {}) {
   return {
     layers: L, everySteps: o.everySteps, options: o, D, cellOcean,
     initialize, upload, download, serialize, serializeFrom, diagnostics, diagnosticsFrom,
-    advance, advanceCoupled, accumulateFreshwater,
+    advance, advanceCoupled, accumulateFreshwater, forgetAccumulated,
     setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, mixedLayer, salt, writeSurface, step,
     buffers: ob, layout: { OS, OD, B },
   };

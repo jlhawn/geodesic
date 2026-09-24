@@ -74,7 +74,7 @@ export function createModel(gridOrMesh, {
   });
   const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), stressScratch = new Float64Array(E);
-  let lastRunoff = 0;
+  const runoffSeen = land ? new Float64Array(C) : null, runoffStep = land ? new Float64Array(C) : null;
 
   const lengths = stateLengths({ K, C, E });
   const stateArray = (name) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * lengths[name]));
@@ -92,9 +92,8 @@ export function createModel(gridOrMesh, {
     },
     ocean(dt) {
       if (!physics || !ocean) return;
-      const runoff = land ? land.budget.runoff : 0;
-      ocean.accumulate(radiation.evaporation, moist ? moistPhysics.rain : null, dt, runoff - lastRunoff);
-      lastRunoff = runoff;
+      if (land) for (let i = 0; i < C; i++) { const total = land.runoff[i]; runoffStep[i] = total >= runoffSeen[i] ? total - runoffSeen[i] : total; runoffSeen[i] = total; }
+      ocean.accumulate(radiation.evaporation, moist ? moistPhysics.rain : null, dt, runoffStep);
       ocean.advance(state[3], state[6], seaIce.oceanFlux, () => surface.stress(state, stressScratch), dt);
     },
     physics(iFrom, iTo, dt, sums) {
