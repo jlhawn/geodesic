@@ -93,3 +93,55 @@ export function createKernel(device, code, label = 'kernel') {
   }
   return { run, pipeline };
 }
+
+export const REDUCTION_WORKGROUP = 64;
+export const reductionGroups = (count) => Math.ceil(count / REDUCTION_WORKGROUP);
+
+/*
+ * A reduction over `count` items in one dispatch: each invocation
+ * evaluates one expression per quantity for its item after `setup`,
+ * each workgroup combines them by sum, min or max in shared memory, and
+ * invocation 0 writes the partials to OUT[base + q·groups + workgroup],
+ * with workgroups past 65535 in the dispatch's second dimension.
+ * finishReduction combines the partials on the host in double precision.
+ */
+export function reductionKernel(quantities, { count, base, setup = '' }) {
+  const W = REDUCTION_WORKGROUP, groups = reductionGroups(count);
+  const identity = (kind) => (kind === 'min' ? '3.0e38' : kind === 'max' ? '-3.0e38' : '0.0');
+  const combine = (kind, a, b) => (kind === 'sum' ? `${a} + ${b}` : `${kind}(${a}, ${b})`);
+  const cell = (q) => `acc[${q * W} + slot]`;
+  return `var<workgroup> acc: array<f32, ${quantities.length * W}>;
+@compute @workgroup_size(${W}) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+  let slot = i32(li);
+  let wgIndex = i32(wg.x) + i32(wg.y) * 65535;
+  let i = wgIndex * ${W} + slot;
+${quantities.map(([, kind], q) => `  ${cell(q)} = ${identity(kind)};`).join('\n')}
+  if (i < ${count}) {
+${setup}
+${quantities.map(([, , expr], q) => `    ${cell(q)} = ${expr};`).join('\n')}
+  }
+  workgroupBarrier();
+  for (var s = ${W / 2}; s > 0; s = s / 2) {
+    if (slot < s) {
+${quantities.map(([, kind], q) => `      ${cell(q)} = ${combine(kind, cell(q), `acc[${q * W} + slot + s]`)};`).join('\n')}
+    }
+    workgroupBarrier();
+  }
+  if (slot == 0 && wgIndex < ${groups}) {
+${quantities.map((_, q) => `    OUT[${base} + ${q * groups} + wgIndex] = acc[${q * W}];`).join('\n')}
+  }
+}`;
+}
+
+export function finishReduction(quantities, partials, count) {
+  const groups = reductionGroups(count), out = {};
+  quantities.forEach(([name, kind], q) => {
+    let value = kind === 'min' ? Infinity : kind === 'max' ? -Infinity : 0;
+    for (let w = 0; w < groups; w++) {
+      const x = partials[q * groups + w];
+      value = kind === 'sum' ? value + x : kind === 'min' ? Math.min(value, x) : Math.max(value, x);
+    }
+    out[name] = value;
+  });
+  return out;
+}

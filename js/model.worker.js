@@ -7,84 +7,164 @@ import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand } from './physics/regrid.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure } from './geography.module.js';
 import { regridCellField } from './physics/regrid.module.js';
-import { levelFields } from './levels.module.js';
+import { levelFields, dewPoint, wetBulb, miseryIndex } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName } from './stateFile.module.js';
+import { LEVEL_FIELDS, OCEAN_FIELDS, RAIN_MEMORY } from './frames.module.js';
 
-let model = null, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
-let level = 'surface', layerWinds = [], lastFrameTime = 0;
+const FREEZING = 273.15;
+let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
+let subscription = { level: 'surface', fields: [], diagnostics: false }, layerWinds = [];
+const rain = { total: null, time: 0 };
+
+function restartRain() { rain.total = null; rain.time = model.time; if (model.restartPrecipitation) model.restartPrecipitation(); }
 
 /*
- * A frame carries the fields of the selected pressure level (or the
- * lowest layer) plus surface pressure; the cell-center winds of a layer
- * are reconstructed only when that layer bounds the level somewhere.
+ * A frame for the CPU engines, from the model's own arrays: the rain
+ * folds into its three-hour memory every frame, and only the subscribed
+ * fields and diagnostics are built. The cell-center winds of a layer are
+ * reconstructed only when that layer bounds the level somewhere.
  */
-function captureFrame() {
-  if (model.beginDiagnostics) return model.beginDiagnostics();
-  return model.diagnostics().then((diagnostics) => ({ diagnostics, time: model.time }));
-}
-
-async function postFrame() {
-  buildFrame(await captureFrame());
-}
-
-function buildFrame({ diagnostics, time }) {
+async function cpuFrame({ level, fields, diagnostics: summarize }) {
   const { mesh, core, state } = model;
-  const [pi, theta, u, surfaceT] = state;
-  const E = mesh.nEdges;
-  layerWinds.fill(null);
-  const layerWind = (k) => layerWinds[k] ??= cellVector(mesh, u.subarray(k * E, (k + 1) * E), new Float64Array(3 * mesh.nCells));
-  const q = state[4], qc = state[5];
+  const C = mesh.nCells, E = mesh.nEdges, [pi, theta, u, , q, qc, iceField] = state;
+  const time = model.time, interval = time - rain.time;
+  if (!rain.total || interval < 0) rain.total = new Float32Array(C);
+  const keep = Math.exp(-Math.max(0, interval) / RAIN_MEMORY), fallen = model.moist.precipitation;
+  for (let i = 0; i < C; i++) rain.total[i] = rain.total[i] * keep + fallen[i];
+  rain.time = time;
+  let diagnostics = null;
+  if (summarize) {
+    diagnostics = await model.diagnostics();
+    if (interval <= 0) {
+      let area = 0, recent = 0;
+      for (let i = 0; i < C; i++) { area += mesh.areaCell[i]; recent += mesh.areaCell[i] * rain.total[i]; }
+      diagnostics.precipitation = recent / area / RAIN_MEMORY;
+    }
+  } else {
+    model.restartPrecipitation();
+  }
+  const want = new Set(fields), out = {};
   const onLand = model.geography ? model.geography.land : null;
-  const ice = Float32Array.from(state[6]), albedo = Float32Array.from(state[6], (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h)));
-  const soil = model.land ? Float32Array.from(model.land.soil) : new Float32Array(0), snow = model.land ? Float32Array.from(model.land.snow) : new Float32Array(0);
-  const oceanFields = model.oceanFields ? model.oceanFields() : null;
-  const sst = new Float32Array(oceanFields ? mesh.nCells : 0), current = new Float32Array(sst.length), currentVector = new Float32Array(3 * sst.length), layerDepth = new Float32Array(sst.length), thermocline = new Float32Array(sst.length), sss = new Float32Array(sst.length), ssh = new Float32Array(sst.length);
-  if (oceanFields) {
-    const vector = cellVector(mesh, oceanFields.u1, new Float64Array(3 * mesh.nCells));
-    for (let i = 0; i < mesh.nCells; i++) {
-      const sea = !onLand || !onLand[i];
-      sst[i] = sea ? oceanFields.T1[i] : NaN; layerDepth[i] = sea ? oceanFields.h1[i] : NaN; thermocline[i] = sea ? oceanFields.thermoclineDepth[i] : NaN;
-      sss[i] = sea && oceanFields.S1 ? oceanFields.S1[i] : NaN; ssh[i] = sea && oceanFields.eta ? oceanFields.eta[i] : NaN;
-      if (sea) { currentVector[3 * i] = vector[3 * i]; currentVector[3 * i + 1] = vector[3 * i + 1]; currentVector[3 * i + 2] = vector[3 * i + 2]; }
-      current[i] = sea ? Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]) : NaN;
+  const sea = (source) => Float32Array.from({ length: C }, (_, i) => (onLand && onLand[i] ? NaN : source[i]));
+  if (fields.some((name) => LEVEL_FIELDS.has(name))) {
+    layerWinds.fill(null);
+    const layerWind = (k) => layerWinds[k] ??= cellVector(mesh, u.subarray(k * E, (k + 1) * E), new Float64Array(3 * C));
+    const f = levelFields(core, pi, theta, layerWind, level, q);
+    for (const [name, values] of Object.entries({ temperature: f.temperature, height: f.height, humidity: f.humidity, speed: f.speed, wind: f.vector })) if (want.has(name)) out[name] = values;
+    const comfort = (fn) => Float32Array.from(f.temperature, (t, i) => fn(t - FREEZING, f.humidity[i], f.speed[i]) + FREEZING);
+    if (want.has('dewPoint')) out.dewPoint = comfort(dewPoint);
+    if (want.has('wetBulb')) out.wetBulb = comfort(wetBulb);
+    if (want.has('misery')) out.misery = comfort(miseryIndex);
+  }
+  if (want.has('ps')) out.ps = Float32Array.from(pi);
+  if (want.has('mslp')) {
+    out.mslp = Float32Array.from(pi);
+    if (model.surfaceGeopotential) {
+      const phis = model.surfaceGeopotential, { R, g, exnerLayer } = core.diagnostics, bottom = (core.K - 1) * C;
+      for (let i = 0; i < C; i++) out.mslp[i] = pi[i] * Math.exp(phis[i] / (R * (theta[bottom + i] * exnerLayer[bottom + i] + 0.00325 * phis[i] / g)));
     }
   }
-  const shortwave = Float32Array.from(model.radiation.surfaceShortwave), longwave = Float32Array.from(model.radiation.outgoing);
-  const precipitation = Float32Array.from(model.moist.precipitation);
-  const fields = levelFields(core, pi, theta, layerWind, level, q);
-  const ps = Float32Array.from(pi), ts = Float32Array.from(surfaceT);
-  const mslp = Float32Array.from(pi);
-  if (model.surfaceGeopotential) {
-    const phis = model.surfaceGeopotential, { R, g, exnerLayer } = core.diagnostics, bottom = (core.K - 1) * mesh.nCells;
-    for (let i = 0; i < mesh.nCells; i++) mslp[i] = pi[i] * Math.exp(phis[i] / (R * (theta[bottom + i] * exnerLayer[bottom + i] + 0.00325 * phis[i] / g)));
+  if (want.has('water')) out.water = Float32Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, q, i));
+  if (want.has('cloud')) out.cloud = Float32Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, qc, i));
+  if (want.has('rain')) out.rain = Float32Array.from(rain.total);
+  if (want.has('ice')) out.ice = Float32Array.from(iceField);
+  if (want.has('albedo')) out.albedo = Float32Array.from(iceField, (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h)));
+  if (want.has('shortwave')) out.shortwave = Float32Array.from(model.radiation.surfaceShortwave);
+  if (want.has('longwave')) out.longwave = Float32Array.from(model.radiation.outgoing);
+  if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil);
+  if (model.land && want.has('snow')) out.snow = Float32Array.from(model.land.snow);
+  const ocean = model.oceanFields && fields.some((name) => OCEAN_FIELDS.has(name)) ? model.oceanFields() : null;
+  if (ocean) {
+    for (const [name, values] of Object.entries({ sst: ocean.T1, sss: ocean.S1, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta })) if (want.has(name)) out[name] = sea(values);
+    if (want.has('current') || want.has('currents')) {
+      const vector = cellVector(mesh, ocean.u1, new Float64Array(3 * C));
+      if (onLand) for (let i = 0; i < C; i++) if (onLand[i]) vector.fill(0, 3 * i, 3 * i + 3);
+      if (want.has('currents')) out.currents = Float32Array.from(vector);
+      if (want.has('current')) out.current = sea(Float32Array.from({ length: C }, (_, i) => Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2])));
+    }
   }
-  const water = new Float32Array(mesh.nCells), cloud = new Float32Array(mesh.nCells);
-  for (let i = 0; i < mesh.nCells; i++) { water[i] = model.moist.columnWater(pi, q, i); cloud[i] = model.moist.columnWater(pi, qc, i); }
-  const interval = time - lastFrameTime;
-  lastFrameTime = time;
-  for (let i = 0; i < mesh.nCells; i++) precipitation[i] = interval > 0 ? precipitation[i] / interval * 86400 : 0;
-  const message = { type: 'frame', frame: frame++, time, day: time / 86400, level, ps, mslp, ts, ...fields, precipitation, water, cloud, ice, albedo, shortwave, longwave, soil, snow, sst, current, currentVector, layerDepth, thermocline, sss, ssh, diagnostics, engine: model.engine ?? 'cpu' };
-  self.postMessage(message, [ps.buffer, mslp.buffer, ts.buffer, fields.speed.buffer, fields.vector.buffer, fields.temperature.buffer, fields.height.buffer, fields.humidity.buffer, precipitation.buffer, water.buffer, cloud.buffer, ice.buffer, albedo.buffer, shortwave.buffer, longwave.buffer, soil.buffer, snow.buffer, sst.buffer, current.buffer, currentVector.buffer, layerDepth.buffer, thermocline.buffer, sss.buffer, ssh.buffer]);
+  return { time, level, fields: out, diagnostics };
+}
+
+const captureFrame = () => (model.beginFrame ? model.beginFrame(subscription) : cpuFrame(subscription));
+
+function postFrame({ time, level, fields, diagnostics }) {
+  const transfer = [...new Set(Object.values(fields).map((values) => values.buffer))];
+  self.postMessage({ type: 'frame', frame: frame++, time, day: time / 86400, level, engine: model.engine ?? 'cpu', pause: model.beginFrame ? pace.pause : 0, fields, diagnostics }, transfer);
+}
+
+async function sendFrame() { postFrame(await captureFrame()); }
+
+/*
+ * A frame outside the loop, reporting any failure on the status line.
+ * While a batch of steps is still finishing after a pause, it waits for
+ * that batch's own frame, so that the page's last frame carries the
+ * latest subscription. halt() pauses and resolves once no batch is
+ * stepping, before anything reads or replaces the model's state.
+ */
+let stepping = false, resend = false, batchDone = Promise.resolve();
+async function halt() { running = false; resend = false; await batchDone; }
+const report = (error) => status(`error: ${error && error.stack ? error.stack : error}`);
+function refresh() {
+  if (stepping) { resend = true; return; }
+  sendFrame().catch(report);
 }
 
 /*
- * On the GPU a step only queues work: the frame's read-backs are queued,
- * the next batch of steps behind them, and the frame is built once the
- * copies land, while the GPU steps. The CPU engine steps its arrays in
- * place, so it builds the frame first.
+ * The GPU draws the page's globe too, and it takes queued work in order,
+ * so the worker lets the device finish each step before queuing the
+ * next, then stays idle for a pause of whole milliseconds. The page
+ * reports once a second how many of its frames came late for a 60 Hz
+ * display: two or more lengthen the pause, five calm seconds in a row
+ * shorten it by a millisecond, and without reports (the page hidden)
+ * there is no pause.
+ */
+const PAUSE_MAX = 12;
+const pace = { pause: 0, calm: 0, heard: -Infinity };
+function adjustPace({ late }) {
+  pace.heard = performance.now();
+  if (late >= 2) { pace.pause = Math.min(PAUSE_MAX, pace.pause + 1 + (pace.pause >> 1)); pace.calm = 0; }
+  else if (late > 0) pace.calm = 0;
+  else if (++pace.calm >= 5) { pace.pause = Math.max(0, pace.pause - 1); pace.calm = 0; }
+}
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function yieldToPage() {
+  await model.settle();
+  if (pace.pause > 0 && performance.now() - pace.heard < 3000) await sleep(pace.pause);
+}
+
+/*
+ * On the GPU a step only queues work: the frame's kernels and read-backs
+ * are queued ahead of the batch of steps and the frame is posted after
+ * it. The CPU engines step their arrays in place, so they build the
+ * frame after the steps.
  */
 async function loop() {
   if (!running) return;
-  if (model.beginDiagnostics) {
-    const capturing = model.beginDiagnostics();
-    for (let n = 0; n < stepsPerFrame; n++) await model.step(dt);
-    buildFrame(await capturing);
-  } else {
-    for (let n = 0; n < stepsPerFrame; n++) await model.step(dt);
-    await postFrame();
+  stepping = true;
+  let finish;
+  batchDone = new Promise((resolve) => { finish = resolve; });
+  try {
+    if (model.beginFrame) {
+      const capturing = model.beginFrame(subscription);
+      capturing.catch(() => {}); // when a step fails first, its error is the one reported
+      for (let n = 0; n < stepsPerFrame; n++) { await model.step(dt); await yieldToPage(); }
+      postFrame(await capturing);
+    } else {
+      for (let n = 0; n < stepsPerFrame; n++) await model.step(dt);
+      await sendFrame();
+    }
+  } catch (error) {
+    running = false;
+    report(error);
+  } finally {
+    stepping = false;
+    finish();
   }
-  setTimeout(loop, 0);
+  if (running) setTimeout(loop, 0);
+  else if (resend) refresh();
+  resend = false;
 }
 
 const status = (text, fraction = null) => self.postMessage({ type: 'status', text, fraction });
@@ -200,12 +280,14 @@ self.onmessage = async (event) => {
   } else if (message.type === 'pause') {
     running = false;
   } else if (message.type === 'resume') {
-    if (model && !running) { running = true; loop(); }
-  } else if (message.type === 'level') {
-    level = message.level;
-    if (model) postFrame();
+    if (model && !running) { running = true; if (!stepping) loop(); }
+  } else if (message.type === 'pace') {
+    adjustPace(message);
+  } else if (message.type === 'subscribe') {
+    subscription = { level: 'surface', fields: [], diagnostics: false, ...message.subscription };
+    if (serving && !running) refresh();
   } else if (message.type === 'snapshot') {
-    if (model) await snapshot();
+    if (serving) await snapshot();
   } else if (message.type === 'restore') {
     try { await restore(message.snapshot); } catch (error) { status(`error: ${error && error.stack ? error.stack : error}`); }
   }
@@ -219,7 +301,7 @@ let lastStart = null, currentN = null;
  * transferable buffers.
  */
 async function snapshot() {
-  running = false;
+  await halt();
   if (model.sync) await model.sync();
   const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
   const arrays = Object.fromEntries(names.map((name, a) => [name, Float64Array.from(model.state[a]).buffer]));
@@ -234,7 +316,7 @@ async function snapshot() {
   }
   const transfer = [...Object.values(arrays), ...(ocean ? Object.values(ocean) : []), ...(land ? Object.values(land) : [])];
   self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, arrays, ocean, land }, transfer);
-  postFrame();
+  refresh();
 }
 
 /*
@@ -247,8 +329,9 @@ async function restore(snapshot) {
   for (const [name, buffer] of Object.entries(snapshot.arrays)) saved[name] = new Float64Array(buffer);
   if (snapshot.ocean) saved.ocean = Object.fromEntries(Object.entries(snapshot.ocean).map(([k, buffer]) => [k, new Float64Array(buffer)]));
   if (snapshot.land) saved.land = Object.fromEntries(Object.entries(snapshot.land).map(([k, buffer]) => [k, new Float64Array(buffer)]));
-  running = false;
+  await halt();
   if (!model || saved.N !== currentN) { await start({ ...lastStart, saved, paused: true }); return; }
+  serving = false;
   status('restoring the snapshot…', 0.8);
   const init = initialState(model, saved, currentN);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
@@ -256,14 +339,15 @@ async function restore(snapshot) {
   if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
   placeLand(model, saved, currentN);
   model.time = saved.time;
-  lastFrameTime = model.time;
-  layerWinds.fill(null);
-  self.postMessage({ type: 'ready', N: currentN, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, ...geographyMessage(model) });
-  await postFrame();
+  restartRain();
+  serving = true;
+  self.postMessage({ type: 'ready', N: currentN, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, ocean: !!model.ocean, ...geographyMessage(model) });
+  await sendFrame();
 }
 
 async function start(message) {
   lastStart = message;
+  serving = false;
   let saved = message.saved ?? null;
   if (!saved && message.from) {
     saved = await fetchWithProgress(message.from, 0, 0.5);
@@ -293,10 +377,11 @@ async function start(message) {
   }
   placeLand(model, saved, N);
   layerWinds = new Array(model.core.K).fill(null);
-  level = message.level ?? 'surface';
-  lastFrameTime = model.time;
-  self.postMessage({ type: 'ready', N, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers, ...geographyMessage(model) });
-  postFrame();
+  if (message.subscription) subscription = { ...subscription, ...message.subscription };
+  restartRain();
+  serving = true;
+  self.postMessage({ type: 'ready', N, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers, ocean: !!model.ocean, ...geographyMessage(model) });
+  refresh();
   running = !message.paused;
   if (running) loop();
 }

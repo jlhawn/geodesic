@@ -1,4 +1,4 @@
-import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges } from './device.module.js';
+import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf } from './device.module.js';
 import { sigmaInterfaces, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { sunDirection } from '../physics/radiation.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.gpu.js';
@@ -27,17 +27,18 @@ export function layoutFor(mesh, K) {
   const KC = K * C, KE = K * E, KV = K * V;
   const seq = (names) => { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; };
   const MI = seq([['COE', 2 * E], ['VOE', 2 * E], ['EOC', MAX_EDGES * C], ['ESC', MAX_EDGES * C], ['COC', MAX_EDGES * C], ['NEC', C], ['COV', 3 * V], ['EOV', 3 * V], ['ESV', 3 * V], ['EOE', MAX_EDGES_ON_EDGE * E], ['NEE', E]]);
-  const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E]]);
+  const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E], ['PHIS', C]]);
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE]]);
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['RUNOFF', C]]);
-  return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH };
+  const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
+  return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH, FR };
 }
 
 function prelude(L, constants) {
   const { C, E, V, K } = L;
-  const consts = Object.entries({ ...L.MI, ...Object.fromEntries(Object.entries(L.MF).map(([k, v]) => ['F_' + k, v])), ...Object.fromEntries(Object.entries(L.LV).map(([k, v]) => ['L_' + k, v])), ...Object.fromEntries(Object.entries(L.S).map(([k, v]) => ['S_' + k, v])), ...Object.fromEntries(Object.entries(L.D).map(([k, v]) => ['D_' + k, v])), ...Object.fromEntries(Object.entries(L.PH).map(([k, v]) => ['PH_' + k, v])) })
+  const consts = Object.entries({ ...L.MI, ...Object.fromEntries(Object.entries(L.MF).map(([k, v]) => ['F_' + k, v])), ...Object.fromEntries(Object.entries(L.LV).map(([k, v]) => ['L_' + k, v])), ...Object.fromEntries(Object.entries(L.S).map(([k, v]) => ['S_' + k, v])), ...Object.fromEntries(Object.entries(L.D).map(([k, v]) => ['D_' + k, v])), ...Object.fromEntries(Object.entries(L.PH).map(([k, v]) => ['PH_' + k, v])), ...Object.fromEntries(Object.entries(L.FR).map(([k, v]) => ['FR_' + k, v])), GROUPS: groupsOf(C) })
     .filter(([k]) => k !== 'total').map(([k, v]) => `const ${k}: i32 = ${v};`).join('\n');
   return `
 const C: i32 = ${C}; const E: i32 = ${E}; const V: i32 = ${V}; const K: i32 = ${K};
@@ -82,6 +83,126 @@ fn diagnoseColumn(i: i32) {
 ${PHYSICS_FUNCTIONS}
 `;
 }
+
+/*
+ * The global sums behind the model's diagnostics, one partial per
+ * workgroup: [name, how the partials combine, the cell's term].
+ */
+const REDUCED = [
+  ['area', 'sum', 'a'], ['mass', 'sum', 'a * pi'], ['surfaceT', 'sum', 'a * IN[S_TS + i]'],
+  ['piMin', 'min', 'pi'], ['piMax', 'max', 'pi'], ['maxWind', 'max', 'wind'],
+  ['water', 'sum', 'a * water'], ['cloud', 'sum', 'a * cloud'],
+  ['rain', 'sum', 'a * PH[PH_RAIN + i]'], ['recentRain', 'sum', 'a * OUT[FR_RAIN + i]'],
+  ['iceArea', 'sum', 'select(0.0, a, IN[S_ICE + i] > 0.0)'], ['iceVolume', 'sum', 'a * max(0.0, IN[S_ICE + i])'], ['albedo', 'sum', 'a * PH[PH_ADIF + i]'],
+  ['absorbedSolar', 'sum', 'a * PH[PH_ABS + i]'], ['outgoingLongwave', 'sum', 'a * PH[PH_OLR + i]'], ['sensibleHeat', 'sum', 'a * PH[PH_SH + i]'],
+  ['evaporation', 'sum', 'a * PH[PH_EVAP + i]'], ['insolation', 'sum', 'a * PH[PH_INS + i]'], ['reflectedSolar', 'sum', 'a * PH[PH_REFL + i]'],
+  ['landArea', 'sum', 'land * a'], ['landT', 'sum', 'land * a * IN[S_TS + i]'], ['snowArea', 'sum', 'select(0.0, land * a, PH[PH_SNOW + i] > 1.0)'],
+  ['soil', 'sum', 'land * a * PH[PH_SOIL + i]'],
+];
+const REDUCED_SETUP = `    let a = MF[F_AREA + i]; let pi = IN[S_PI + i];
+    let land = select(0.0, 1.0, PH[PH_LAND + i] > 0.5);
+    var water = 0.0; var cloud = 0.0; var wind = 0.0;
+    for (var k = 0; k < K; k++) {
+      let d = pi * LV[L_DS + k] / GRAV;
+      water += d * IN[S_Q + k * C + i]; cloud += d * IN[S_QC + k * C + i];
+      for (var m = 0; m < MAXE; m++) { wind = max(wind, abs(IN[S_U + k * E + MI[EOC + MAXE * i + m]])); }
+    }`;
+
+/*
+ * What the page draws, computed where the state lives. frameFields
+ * interpolates in ln p to the pressure P[0] (0 for the lowest layer) as
+ * levels.module.js does, with the column's geopotential integrated in
+ * registers, derives the comfort measures there as levels.module.js
+ * does, and adds the column water, cloud and sea-level pressure.
+ * frameRain folds the step accumulators into the three-hour rain,
+ * S ← S·P[1] + rain, and the running runoff, which moves to RDONE for
+ * the host to count when the diagnostics are taken (P[2] = 1).
+ */
+const COMFORT_WGSL = `
+fn dewPointC(t: f32, rh: f32) -> f32 {
+  let g = log(clamp(rh, 1e-3, 1.0)) + 17.625 * t / (243.04 + t);
+  return 243.04 * g / (17.625 - g);
+}
+fn wetBulbC(t: f32, rh: f32) -> f32 {
+  let p = 100.0 * clamp(rh, 0.05, 0.99);
+  return t * atan(0.151977 * sqrt(p + 8.313659)) + atan(t + p) - atan(p - 1.676331) + 0.00391838 * pow(p, 1.5) * atan(0.023101 * p) - 4.686035;
+}
+fn heatIndexC(t: f32, rh: f32) -> f32 {
+  let f = t * 9.0 / 5.0 + 32.0; let r = 100.0 * clamp(rh, 0.0, 1.0);
+  var hi = -42.379 + 2.04901523 * f + 10.14333127 * r - 0.22475541 * f * r - 6.83783e-3 * f * f - 5.481717e-2 * r * r + 1.22874e-3 * f * f * r + 8.5282e-4 * f * r * r - 1.99e-6 * f * f * r * r;
+  if (r < 13.0 && f <= 112.0) { hi -= ((13.0 - r) / 4.0) * sqrt(max(0.0, (17.0 - abs(f - 95.0)) / 17.0)); }
+  else if (r > 85.0 && f <= 87.0) { hi += ((r - 85.0) / 10.0) * ((87.0 - f) / 5.0); }
+  return (hi - 32.0) * 5.0 / 9.0;
+}
+fn windChillC(t: f32, v: f32) -> f32 {
+  let k = 3.6 * v;
+  if (k < 4.8) { return t; }
+  let p = pow(k, 0.16);
+  return 13.12 + 0.6215 * t - 11.37 * p + 0.3965 * t * p;
+}
+fn miseryC(t: f32, rh: f32, v: f32) -> f32 {
+  if (t >= 26.7) { return max(t, heatIndexC(t, rh)); }
+  if (t <= 10.0) { return min(t, windChillC(t, v)); }
+  return t;
+}
+`;
+
+const FRAME_KERNELS = {
+  frameFields: `${COMFORT_WGSL}
+@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let pi = IN[S_PI + i];
+  let exner0 = pow(pi / P0, KAPPA);
+  let pressure = P[0];
+  var k = K - 2;
+  if (pressure > 0.0) { k = 0; while (k < K - 2 && pi * LV[L_SM + k + 1] < pressure) { k++; } }
+  var geo = 0.0; var thvBelow = 0.0; var geoK = 0.0; var geoK1 = 0.0;
+  for (var j = K - 1; j >= k; j--) {
+    let n = j * C + i;
+    let thv = IN[S_TH + n] * (1.0 + VIRT * IN[S_Q + n] - IN[S_QC + n]);
+    if (j == K - 1) { geo = CP * exner0 * thv * LV[L_CB + j] - LV[L_GR + j]; }
+    else { geo = geo + CP * exner0 * (thvBelow * LV[L_CA + j] + thv * LV[L_CB + j]) - LV[L_GR + j]; }
+    if (j == k + 1) { geoK1 = geo + LV[L_GABS + j]; }
+    if (j == k) { geoK = geo + LV[L_GABS + j]; }
+    thvBelow = thv;
+  }
+  let pk = pi * LV[L_SM + k]; let pk1 = pi * LV[L_SM + k + 1];
+  var t = 1.0;
+  if (pressure > 0.0) { t = (log(pressure) - log(pk)) / (log(pk1) - log(pk)); }
+  let tw = clamp(t, 0.0, 1.0);
+  let wind = cellWind(i, k) + tw * (cellWind(i, k + 1) - cellWind(i, k));
+  let n = k * C + i; let n1 = n + C;
+  let tk = IN[S_TH + n] * exner0 * LV[L_CM + k]; let tk1 = IN[S_TH + n1] * exner0 * LV[L_CM + k + 1];
+  let temperature = tk + tw * (tk1 - tk);
+  let lowest = pi * LV[L_SM + K - 1];
+  var here = lowest;
+  if (pressure > 0.0) { here = min(pressure, lowest); }
+  let q = IN[S_Q + n] + tw * (IN[S_Q + n1] - IN[S_Q + n]);
+  let phis = MF[F_PHIS + i];
+  var height = (geoK + t * (geoK1 - geoK) + phis) / GRAV;
+  if (t > 1.0) { height = (geoK1 + phis - RGAS * tk1 * log(pressure / lowest)) / GRAV; }
+  let rh = min(1.5, q / qsat(temperature, here)); let speed = length(wind); let celsius = temperature - 273.15;
+  OUT[FR_T + i] = temperature; OUT[FR_Z + i] = height; OUT[FR_RH + i] = rh;
+  OUT[FR_SPD + i] = speed;
+  OUT[FR_DP + i] = dewPointC(celsius, rh) + 273.15; OUT[FR_WB + i] = wetBulbC(celsius, rh) + 273.15; OUT[FR_MI + i] = miseryC(celsius, rh, speed) + 273.15;
+  OUT[FR_WIND + 3 * i] = wind.x; OUT[FR_WIND + 3 * i + 1] = wind.y; OUT[FR_WIND + 3 * i + 2] = wind.z;
+  var water = 0.0; var cloud = 0.0;
+  for (var j = 0; j < K; j++) {
+    let d = pi * LV[L_DS + j] / GRAV;
+    water += d * IN[S_Q + j * C + i]; cloud += d * IN[S_QC + j * C + i];
+  }
+  OUT[FR_TPW + i] = water; OUT[FR_TCW + i] = cloud;
+  let tb = IN[S_TH + (K - 1) * C + i] * exner0 * LV[L_CM + K - 1];
+  OUT[FR_MSLP + i] = pi * exp(phis / (RGAS * (tb + 0.00325 * phis / GRAV)));
+}`,
+  frameRain: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  OUT[FR_RAIN + i] = OUT[FR_RAIN + i] * P[1] + PH[PH_RAIN + i];
+  let tally = OUT[FR_RUNOFF + i] + PH[PH_RUNOFF + i];
+  if (P[2] > 0.5) { OUT[FR_RDONE + i] = tally; OUT[FR_RUNOFF + i] = 0.0; } else { OUT[FR_RUNOFF + i] = tally; }
+  PH[PH_RAIN + i] = 0.0; PH[PH_RUNOFF + i] = 0.0;
+}`,
+};
 
 const KERNELS = {
   flux: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -390,6 +511,7 @@ export async function createGpuCore(mesh, {
     return mesh.weightsOnEdge[source] * mesh.dvEdge[mesh.edgesOnEdge[source]];
   }));
   put(mf, L.MF.NEDGE, mesh.nEdge); put(mf, L.MF.LAT, mesh.latCell); put(mf, L.MF.XC, mesh.xCell);
+  if (surfaceGeopotential) put(mf, L.MF.PHIS, surfaceGeopotential);
   if (surfaceGeopotential) put(mf, L.MF.GPHIS, Float64Array.from({ length: E }, (_, e) => (surfaceGeopotential[mesh.cellsOnEdge[2 * e + 1]] - surfaceGeopotential[mesh.cellsOnEdge[2 * e]]) / mesh.dcEdge[e]));
   const lv = new Float32Array(L.LV.total);
   put(lv, L.LV.SL, sigmaLower); put(lv, L.LV.SU, sigmaUpper); put(lv, L.LV.DS, dSigma); put(lv, L.LV.SM, sigmaMid); put(lv, L.LV.TOP, topRate);
@@ -413,6 +535,7 @@ export async function createGpuCore(mesh, {
     S: emptyBuffer(device, 4 * L.S.total), T: emptyBuffer(device, 4 * L.S.total),
     K1: emptyBuffer(device, 4 * L.S.total), K2: emptyBuffer(device, 4 * L.S.total), K3: emptyBuffer(device, 4 * L.S.total), K4: emptyBuffer(device, 4 * L.S.total),
     D: emptyBuffer(device, 4 * L.D.total), P: storageBuffer(device, new Float32Array(8)), PH: emptyBuffer(device, 4 * L.PH.total),
+    FR: emptyBuffer(device, 4 * L.FR.total), FP: storageBuffer(device, new Float32Array(8)),
   };
   for (const [name, b] of Object.entries(buffers)) b.label = name;
 
@@ -424,14 +547,14 @@ export async function createGpuCore(mesh, {
   for (let e = 0; e < E; e++) meshSpacing += mesh.dcEdge[e];
   meshSpacing /= E;
   const kernels = {};
-  for (const [name, body] of Object.entries({ ...KERNELS, ...PHYSICS_KERNELS })) {
+  for (const [name, body] of Object.entries({ ...KERNELS, ...PHYSICS_KERNELS, ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) })) {
     const code = head + body.replaceAll('S_TOTAL', String(L.S.total)).replaceAll('i32(id.x)', '(i32(id.x) + i32(id.y) * 4194240)');
     const module = device.createShaderModule({ code, label: name });
     kernels[name] = device.createComputePipeline({ label: name, layout: pipelineLayout, compute: { module, entryPoint: 'main' } });
   }
   const groups = new Map();
   function group(IN, OUT, D = buffers.D, P = buffers.P, MF = buffers.MF, LV = buffers.LV) {
-    const key = [IN.label, OUT.label, D.label, MF.label, LV.label].join('|');
+    const key = [IN.label, OUT.label, D.label, P.label, MF.label, LV.label].join('|');
     let g = groups.get(key);
     if (!g) {
       g = device.createBindGroup({ layout, entries: [buffers.MI, MF, LV, IN, OUT, D, P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
@@ -611,13 +734,46 @@ export async function createGpuCore(mesh, {
     for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) out.GEO[k * C + i] += gabs[k];
     return out;
   }
-  function downloadDiagnosis() {
-    return readRanges(device, buffers.D, [{ offset: L.D.EXM, length: L.KC }, { offset: L.D.GEO, length: L.KC }]).then(([exnerLayer, geopotential]) => {
-      for (let k = 0; k < K; k++) if (gabs[k]) for (let i = 0; i < C; i++) geopotential[k * C + i] += gabs[k];
-      return { exnerLayer, geopotential };
+
+  /*
+   * Queues the frame kernels and the read-backs of exactly the named
+   * fields, plus the diagnostics' partial sums and each cell's runoff
+   * since the last diagnostics when asked; the promise resolves to
+   * { fields, sums, runoff } once the copies land.
+   */
+  const FIELDS = {
+    temperature: ['FR', 'T', 1], height: ['FR', 'Z', 1], humidity: ['FR', 'RH', 1], speed: ['FR', 'SPD', 1], wind: ['FR', 'WIND', 3],
+    dewPoint: ['FR', 'DP', 1], wetBulb: ['FR', 'WB', 1], misery: ['FR', 'MI', 1],
+    water: ['FR', 'TPW', 1], cloud: ['FR', 'TCW', 1], mslp: ['FR', 'MSLP', 1], rain: ['FR', 'RAIN', 1], ps: ['S', 'PI', 1], ice: ['S', 'ICE', 1],
+    albedo: ['PH', 'ADIF', 1], shortwave: ['PH', 'SWDN', 1], longwave: ['PH', 'OLR', 1], soil: ['PH', 'SOIL', 1], snow: ['PH', 'SNOW', 1],
+  };
+  const frameParams = new Float32Array(8);
+  function frame({ pressure = 0, keep = 1, fields = [], diagnostics = false } = {}) {
+    const wanted = fields.filter((name) => name in FIELDS);
+    frameParams.set([pressure, keep, diagnostics ? 1 : 0]);
+    device.queue.writeBuffer(buffers.FP, 0, frameParams);
+    const g = group(buffers.S, buffers.FR, buffers.D, buffers.FP);
+    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+    if (wanted.some((name) => FIELDS[name][0] === 'FR' && name !== 'rain')) dispatch(pass, 'frameFields', g, C);
+    if (diagnostics) dispatch(pass, 'frameReduce', g, C);
+    dispatch(pass, 'frameRain', g, C);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    const reads = {};
+    for (const name of wanted) { const [buffer, part, n] = FIELDS[name]; (reads[buffer] ??= []).push({ name, offset: L[buffer][part], length: n * C }); }
+    if (diagnostics) (reads.FR ??= []).push({ name: 'sums', offset: L.FR.PART, length: REDUCED.length * groupsOf(C) }, { name: 'runoff', offset: L.FR.RDONE, length: C });
+    return Promise.all(Object.entries(reads).map(([buffer, ranges]) => readRanges(device, buffers[buffer], ranges).then((views) => views.map((view, n) => [ranges[n].name, view])))).then((lists) => {
+      const out = { fields: {}, sums: null, runoff: null };
+      for (const [name, view] of lists.flat()) {
+        if (name === 'sums') out.sums = finishReduction(REDUCED, view, C);
+        else if (name === 'runoff') out.runoff = view;
+        else out.fields[name] = view;
+      }
+      return out;
     });
   }
+  function clearFrame() { device.queue.writeBuffer(buffers.FR, 0, new Float32Array(L.FR.total)); }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
-  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, tendency, upload, download, downloadDiagnostics, downloadDiagnosis, uploadPhysics, uploadLand, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
+  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, tendency, upload, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
 }

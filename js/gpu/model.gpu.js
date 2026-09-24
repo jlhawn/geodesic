@@ -9,16 +9,18 @@ import { SIDEREAL_DAY } from '../model.module.js';
 import { createGpuCore } from './core.gpu.js';
 import { createLayeredOcean } from './layeredOcean.gpu.js';
 import { createGeography, surfaceGeopotential } from '../geography.module.js';
+import { readRanges } from './device.module.js';
+import { RAIN_MEMORY } from '../frames.module.js';
 import { createLandSurface } from '../physics/land.module.js';
 
 /*
  * The whole model on the GPU behind the CPU model's interface: `state`
- * holds double-precision mirrors that `sync` refreshes from the device,
- * `step` only queues work (every read-back waits for it), `diagnostics`
- * reads the per-cell energy terms back and sums them on the CPU, and
- * `ocean` carries the same initialize/load/serialize contract. `sync`
- * also copies the GPU's layer Exner function and geopotential into a CPU
- * sigma core on the same mesh, whose level interpolation serves the page.
+ * holds double-precision mirrors that only `sync` refreshes from the
+ * device (the land's soil and snow only `land.serialize`, its runoff
+ * when the diagnostics are taken), `step` only
+ * queues work, `beginFrame` computes the page's fields and the
+ * diagnostics on the device, and `ocean` carries the same
+ * initialize/load/serialize contract.
  */
 export async function createGpuModel(gridOrMesh, {
   radius, nu4Hours = 3, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
@@ -54,19 +56,18 @@ export async function createGpuModel(gridOrMesh, {
   };
   const lengths = [C, K * C, K * E, C, K * C, K * C, C];
   const state = lengths.map((n) => new Float64Array(n));
-  const precipitation = new Float64Array(C);
-  let lastOcean = null;
-  let dirty = true, lastPrecipTime = 0;
+  let dirty = true, lastFrameTime = 0;
 
   const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu' };
-  model.moist = { precipitation, columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget };
-  model.oceanFields = () => lastOcean;
+  model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget };
   model.oceanEngine = gpuOcean;
 
   function pushState() {
     gpu.upload(state);
     gpu.uploadPhysics({ land: geography ? geography.land : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null });
+    gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6]);
+    lastFrameTime = model.time;
     dirty = false;
   }
   model.load = function load() { pushState(); };
@@ -75,9 +76,6 @@ export async function createGpuModel(gridOrMesh, {
     if (!dirty) return;
     const arrays = await gpu.download();
     arrays.forEach((a, i) => state[i].set(a));
-    const { exnerLayer, geopotential } = await gpu.downloadDiagnosis();
-    core.diagnostics.exnerLayer.set(exnerLayer);
-    core.diagnostics.geopotential.set(geopotential);
     dirty = false;
   }
   model.sync = sync;
@@ -87,83 +85,46 @@ export async function createGpuModel(gridOrMesh, {
     model.time += dt;
     dirty = true;
   };
-
-  function restartRunoff() {
-    if (!landCpu) return;
-    gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH.RUNOFF, new Float32Array(C));
-    if (gpuOcean) gpuOcean.forgetAccumulated('runoff');
-  }
-  function refreshLand(ph) {
-    if (!landCpu) return;
-    landCpu.soil.set(ph.SOIL.subarray(0, C));
-    landCpu.snow.set(ph.SNOW.subarray(0, C));
-    for (let i = 0; i < C; i++) { landCpu.runoff[i] += ph.RUNOFF[i]; landCpu.budget.runoff += mesh.areaCell[i] * ph.RUNOFF[i]; }
-  }
+  model.settle = () => gpu.device.queue.onSubmittedWorkDone();
 
   /*
-   * The diagnostics in two halves: the copies of everything they read are
-   * queued now, with the rain and runoff accumulators restarting behind
-   * them, and the returned promise refreshes the mirrors and sums once the
-   * copies land, so a caller can queue more steps in between.
+   * One frame of output: the named fields (see frames.module.js) at the
+   * pressure level, and the diagnostics when asked, all computed on the
+   * device and read back alone. The work is queued before this returns,
+   * so a caller can queue steps behind it; the promise resolves once the
+   * copies land. Every frame also advances the three-hour rain and the
+   * runoff tally.
    */
-  model.beginDiagnostics = function beginDiagnostics() {
+  model.beginFrame = function beginFrame({ level = 'surface', fields = [], diagnostics: summarize = false } = {}) {
     if (gpuOcean) gpuOcean.accumulateFreshwater(0);
-    const stateRead = dirty ? gpu.download() : null, diagnosisRead = dirty ? gpu.downloadDiagnosis() : null;
-    const physicsRead = gpu.downloadPhysics();
-    const oceanRead = gpuOcean ? gpuOcean.download() : null;
-    restartRunoff();
-    gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH.RAIN, new Float32Array(C));
-    if (gpuOcean) gpuOcean.forgetAccumulated('rain');
-    const time = model.time, interval = time - lastPrecipTime;
-    lastPrecipTime = time;
-    dirty = false;
-    return (async () => {
-      if (stateRead) {
-        const arrays = await stateRead;
-        arrays.forEach((a, i) => state[i].set(a));
-        const { exnerLayer, geopotential } = await diagnosisRead;
-        core.diagnostics.exnerLayer.set(exnerLayer);
-        core.diagnostics.geopotential.set(geopotential);
+    const time = model.time, interval = time - lastFrameTime;
+    lastFrameTime = time;
+    const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), fields, diagnostics: summarize });
+    if (gpuOcean) { gpuOcean.forgetAccumulated('rain'); gpuOcean.forgetAccumulated('runoff'); }
+    const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize }) : null;
+    return Promise.all([atmosphere, ocean]).then(([a, o]) => {
+      const out = { time, level, fields: { ...a.fields, ...(o ? o.fields : {}) }, diagnostics: null };
+      if (!a.sums) return out;
+      const s = a.sums, area = s.area;
+      if (landCpu) {
+        let total = 0;
+        for (let i = 0; i < C; i++) { landCpu.runoff[i] += a.runoff[i]; total += mesh.areaCell[i] * a.runoff[i]; }
+        landCpu.budget.runoff += total;
       }
-      const ph = await physicsRead;
-      refreshLand(ph);
-      const [pi, , u, surfaceT, q, qc, iceField] = state;
-      let area = 0, mass = 0, meanSurfaceT = 0, piMin = Infinity, piMax = -Infinity, maxWind = 0, water = 0, cloud = 0, rain = 0, iceArea = 0, iceVolume = 0, albedoSum = 0;
-      let landArea = 0, landT = 0, snowArea = 0, soilSum = 0;
-      const sums = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
-      for (let i = 0; i < C; i++) {
-        const a = mesh.areaCell[i];
-        area += a; mass += a * pi[i]; meanSurfaceT += a * surfaceT[i];
-        if (landCpu && geography.land[i]) { landArea += a; landT += a * surfaceT[i]; soilSum += a * landCpu.soil[i]; if (landCpu.snow[i] > 1) snowArea += a; }
-        piMin = Math.min(piMin, pi[i]); piMax = Math.max(piMax, pi[i]);
-        water += a * model.moist.columnWater(pi, q, i); cloud += a * model.moist.columnWater(pi, qc, i);
-        precipitation[i] = ph.RAIN[i];
-        rain += a * ph.RAIN[i];
-        if (iceField[i] > 0) { iceArea += a; iceVolume += a * iceField[i]; }
-        albedoSum += a * ph.ADIF[i];
-        sums.absorbedSolar += a * ph.ABS[i]; sums.outgoingLongwave += a * ph.OLR[i]; sums.sensibleHeat += a * ph.SH[i];
-        sums.evaporation += a * ph.EVAP[i]; sums.insolation += a * ph.INS[i]; sums.reflectedSolar += a * ph.REFL[i];
-      }
-      radiationCpu.outgoing.set(ph.OLR.subarray(0, C)); radiationCpu.surfaceShortwave.set(ph.SWDN.subarray(0, C));
-      for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));
-      const result = {
-        mass: mass / area, meanSurfaceT: meanSurfaceT / area, piMin, piMax, maxWind,
-        absorbedSolar: sums.absorbedSolar / area, outgoingLongwave: sums.outgoingLongwave / area, sensibleHeat: sums.sensibleHeat / area,
-        evaporation: sums.evaporation / area, latentHeat: LATENT_HEAT * sums.evaporation / area,
-        columnWater: water / area, columnCloud: cloud / area, precipitation: interval > 0 ? rain / area / interval : 0,
-        iceFraction: iceArea / area, iceThickness: iceArea > 0 ? iceVolume / iceArea : 0, surfaceAlbedo: albedoSum / area,
-        planetaryAlbedo: sums.insolation > 0 ? sums.reflectedSolar / sums.insolation : 0,
-        ...(landCpu ? { landFraction: landArea / area, landMeanT: landArea > 0 ? landT / landArea : 0, snowFraction: landArea > 0 ? snowArea / landArea : 0, soilWater: landArea > 0 ? soilSum / landArea : 0, runoff: landCpu.budget.runoff / area } : {}),
+      out.diagnostics = {
+        mass: s.mass / area, meanSurfaceT: s.surfaceT / area, piMin: s.piMin, piMax: s.piMax, maxWind: s.maxWind,
+        absorbedSolar: s.absorbedSolar / area, outgoingLongwave: s.outgoingLongwave / area, sensibleHeat: s.sensibleHeat / area,
+        evaporation: s.evaporation / area, latentHeat: LATENT_HEAT * s.evaporation / area,
+        columnWater: s.water / area, columnCloud: s.cloud / area, precipitation: interval > 0 ? s.rain / area / interval : s.recentRain / area / RAIN_MEMORY,
+        iceFraction: s.iceArea / area, iceThickness: s.iceArea > 0 ? s.iceVolume / s.iceArea : 0, surfaceAlbedo: s.albedo / area,
+        planetaryAlbedo: s.insolation > 0 ? s.reflectedSolar / s.insolation : 0,
+        ...(landCpu ? { landFraction: s.landArea / area, landMeanT: s.landArea > 0 ? s.landT / s.landArea : 0, snowFraction: s.landArea > 0 ? s.snowArea / s.landArea : 0, soilWater: s.landArea > 0 ? s.soil / s.landArea : 0, runoff: landCpu.budget.runoff / area } : {}),
+        ...(o && o.diagnostics ? o.diagnostics : {}),
       };
-      if (oceanRead) {
-        const o = await oceanRead;
-        lastOcean = o;
-        Object.assign(result, gpuOcean.diagnosticsFrom(o));
-      }
-      return { diagnostics: result, time };
-    })();
+      return out;
+    });
   };
-  model.diagnostics = async function diagnostics() { return (await model.beginDiagnostics()).diagnostics; };
+  model.diagnostics = async function diagnostics() { return (await model.beginFrame({ diagnostics: true })).diagnostics; };
 
   model.ocean = gpuOcean ? {
     initialize(surfaceT, iceField) { gpuOcean.initialize(surfaceT, iceField); },
@@ -175,7 +136,11 @@ export async function createGpuModel(gridOrMesh, {
     soil: landCpu.soil, snow: landCpu.snow, runoff: landCpu.runoff, land: geography.land, budget: landCpu.budget, albedo: landCpu.albedo, wetness: landCpu.wetness, water: landCpu.water, bucketCapacity: landCpu.bucketCapacity,
     initialize() { landCpu.initialize(); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow }); },
     load(saved) { landCpu.load(saved); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow }); },
-    async serialize() { if (gpuOcean) gpuOcean.accumulateFreshwater(0); const read = gpu.downloadPhysics(); restartRunoff(); refreshLand(await read); return landCpu.serialize(); },
+    async serialize() {
+      const [soil, snow] = await readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.SOIL, length: C }, { offset: gpu.layout.PH.SNOW, length: C }]);
+      landCpu.soil.set(soil); landCpu.snow.set(snow);
+      return landCpu.serialize();
+    },
   } : null;
 
   return model;

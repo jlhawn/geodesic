@@ -1,4 +1,4 @@
-import { emptyBuffer, readRanges } from './device.module.js';
+import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups } from './device.module.js';
 import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, bathymetryFrom, fitColumns, runoffOutlets, interiorWater } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
@@ -437,6 +437,40 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   };
 }
 
+/*
+ * The global sums behind the ocean diagnostics: [name, how the
+ * workgroup partials combine, the cell's term]. Edge terms are taken by
+ * the edge's first cell.
+ */
+const OCEAN_REDUCED = [
+  ['area', 'sum', 'wet * a'], ['depth', 'sum', 'wet * a * h0'], ['salinity', 'sum', 'wet * a * IN[wOff(0) + i] / max(EPSO, h0)'],
+  ['thermocline', 'sum', 'wet * a * thermo'], ['heat', 'sum', 'wet * a * RHOCP * heat'],
+  ['interiorT', 'sum', 'wet * a * interiorQ'], ['interiorH', 'sum', 'wet * a * interiorH'],
+  ['ssh', 'max', 'wet * abs(OD[O_ETA + i])'], ['speed', 'max', 'speed'], ['limited', 'sum', 'limited'], ['transport', 'max', 'transport'],
+];
+const oceanReducedSetup = (thermoclineLayers) => `    let a = MF[F_AREA + i];
+    let wet = select(0.0, 1.0, OD[O_CMASK + i] > 0.5);
+    let h0 = IN[hOff(0) + i];
+    var thermo = 0.0; var heat = 0.0; var interiorQ = 0.0; var interiorH = 0.0;
+    for (var k = 0; k < L; k++) {
+      heat += IN[qOff(k) + i];
+      if (k <= ${thermoclineLayers}) { thermo += IN[hOff(k) + i]; }
+      if (k > 0) { interiorQ += IN[qOff(k) + i]; interiorH += IN[hOff(k) + i]; }
+    }
+    var speed = 0.0; var limited = 0.0; var transport = 0.0;
+    for (var m = 0; m < MAXE; m++) {
+      let e = MI[EOC + MAXE * i + m];
+      if (MI[ESC + MAXE * i + m] == 0 || MI[COE + 2 * e] != i) { continue; }
+      let u0 = IN[uOff(0) + e];
+      speed = max(speed, abs(u0));
+      limited += select(0.0, 1.0, abs(abs(u0) - SPEEDLIM) < 1e-4);
+      let ca = MI[COE + 2 * e]; let cb = MI[COE + 2 * e + 1];
+      let sill = max(EPSO, min(OD[O_BATH + ca], OD[O_BATH + cb]) + 0.5 * (OD[O_ETA + ca] + OD[O_ETA + cb]));
+      var sum = 0.5 * (IN[hOff(0) + ca] + IN[hOff(0) + cb]); var flow = sum * u0;
+      for (var k = 1; k < L; k++) { let hk = min(IN[hOff(k) + ca], IN[hOff(k) + cb]); sum += hk; flow += hk * IN[uOff(k) + e]; }
+      transport = max(transport, abs(select(1.0, sill / sum, sum > sill) * flow) * MF[F_DV + e]);
+    }`;
+
 export function createLayeredOcean(core, options = {}) {
   const o = { ...OCEAN_DEFAULTS, ...options };
   const { device, buffers, mesh, meshSpacing } = core;
@@ -493,10 +527,31 @@ export function createLayeredOcean(core, options = {}) {
   const ODTOTAL = OD.total + bTotal;
 
   const kernels = oceanKernels({ ...o, L, C, E, V, OS, OD, B, rho, labelT, labelS, nu4, diffusion });
+  const OF = seq([['SST', C], ['SSS', C], ['H1', C], ['THD', C], ['ETA', C], ['CUR', 3 * C], ['CSPD', C], ['PART', OCEAN_REDUCED.length * reductionGroups(C)]]);
+  kernels.oFrame = `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let h0 = max(EPSO, IN[hOff(0) + i]);
+  OUT[${OF.SST} + i] = IN[qOff(0) + i] / h0;
+  OUT[${OF.SSS} + i] = IN[wOff(0) + i] / h0;
+  OUT[${OF.H1} + i] = IN[hOff(0) + i];
+  var thermo = 0.0;
+  for (var k = 0; k <= ${thermoclineLayers}; k++) { thermo += IN[hOff(k) + i]; }
+  OUT[${OF.THD} + i] = thermo;
+  OUT[${OF.ETA} + i] = OD[O_ETA + i];
+  var w = vec3<f32>(0.0, 0.0, 0.0);
+  for (var m = 0; m < MAXE; m++) {
+    let e = MI[EOC + MAXE * i + m];
+    w += abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + e] * MF[F_DV + e] * IN[uOff(0) + e] * vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
+  }
+  w = w / MF[F_AREA + i];
+  OUT[${OF.CUR} + 3 * i] = w.x; OUT[${OF.CUR} + 3 * i + 1] = w.y; OUT[${OF.CUR} + 3 * i + 2] = w.z;
+  OUT[${OF.CSPD} + i] = length(w);
+}`;
+  kernels.oReduce = reductionKernel(OCEAN_REDUCED, { count: C, base: OF.PART, setup: oceanReducedSetup(thermoclineLayers) });
   const ob = {
     S: emptyBuffer(device, 4 * OS.total), T: emptyBuffer(device, 4 * OS.total),
     K1: emptyBuffer(device, 4 * OS.total), K2: emptyBuffer(device, 4 * OS.total), K3: emptyBuffer(device, 4 * OS.total), K4: emptyBuffer(device, 4 * OS.total),
-    OD: emptyBuffer(device, 4 * ODTOTAL),
+    OD: emptyBuffer(device, 4 * ODTOTAL), OF: emptyBuffer(device, 4 * OF.total),
   };
   for (const [name, b] of Object.entries(ob)) b.label = 'layeredOcean' + name;
   const bindLayout = device.createBindGroupLayout({ entries: Array.from({ length: 10 }, (_, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } })) });
@@ -880,39 +935,45 @@ export function createLayeredOcean(core, options = {}) {
   }
   async function serialize() { return serializeFrom(await download()); }
 
-  const hEdgeK = new Float64Array(L);
-  function diagnosticsFrom(d) {
-    let area = 0, depth = 0, heat = 0, thermo = 0, salinity = 0, ssh = 0, speed = 0, transport = 0, interiorT = 0, interiorH = 0, limited = 0;
-    const rhoCp = o.density * o.specificHeat;
-    const at = (k, i) => k * C + i, ae = (k, e) => k * E + e;
-    for (let i = 0; i < C; i++) {
-      if (!cellOcean[i]) continue;
-      const a = mesh.areaCell[i];
-      area += a; depth += a * d.h[i]; salinity += a * d.S[i]; ssh = Math.max(ssh, Math.abs(d.eta[i]));
-      thermo += a * d.thermoclineDepth[i];
-      for (let k = 0; k < L; k++) heat += a * rhoCp * (d.h[at(k, i)] * d.T[at(k, i)]);
-      for (let k = 1; k < L; k++) { interiorT += d.h[at(k, i)] * d.T[at(k, i)] * a; interiorH += d.h[at(k, i)] * a; }
-    }
-    for (let e = 0; e < E; e++) {
-      speed = Math.max(speed, Math.abs(d.u[e]));
-      if (Math.abs(Math.abs(d.u[e]) - SPEED_LIMIT) < 1e-4) limited++;
-      const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
-      const sill = Math.max(EPS, Math.min(D[a], D[b]) + 0.5 * (d.eta[a] + d.eta[b]));
-      let sum = 0, t = 0;
-      hEdgeK[0] = 0.5 * (d.h[a] + d.h[b]);
-      for (let k = 1; k < L; k++) hEdgeK[k] = Math.min(d.h[at(k, a)], d.h[at(k, b)]);
-      for (let k = 0; k < L; k++) sum += hEdgeK[k];
-      const f = sum > sill ? sill / sum : 1;
-      for (let k = 0; k < L; k++) t += hEdgeK[k] * f * d.u[ae(k, e)];
-      transport = Math.max(transport, Math.abs(t) * mesh.dvEdge[e]);
-    }
-    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited };
+  function diagnosticsFrom(sums) {
+    const { area, depth, heat, interiorT, interiorH, speed, thermocline, salinity, ssh, transport, limited } = sums;
+    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermocline / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited };
   }
-  async function diagnostics() { return diagnosticsFrom(await download()); }
+
+  /*
+   * Queues the surface fields the page asked for and, when asked, the
+   * diagnostics reduction, and reads back only those; fields over land
+   * are NaN and current vectors zero there.
+   */
+  const FIELDS = { sst: ['SST', 1], sss: ['SSS', 1], layerDepth: ['H1', 1], thermocline: ['THD', 1], ssh: ['ETA', 1], currents: ['CUR', 3], current: ['CSPD', 1] };
+  function frame({ fields = [], diagnostics: summarize = false } = {}) {
+    const wanted = fields.filter((name) => name in FIELDS);
+    if (!wanted.length && !summarize) return Promise.resolve({ fields: {}, diagnostics: null });
+    const g = group(ob.S, ob.OF);
+    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+    if (wanted.length) dispatch(pass, 'oFrame', g, C);
+    if (summarize) dispatch(pass, 'oReduce', g, C);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    const ranges = wanted.map((name) => ({ name, offset: OF[FIELDS[name][0]], length: FIELDS[name][1] * C }));
+    if (summarize) ranges.push({ name: null, offset: OF.PART, length: OCEAN_REDUCED.length * reductionGroups(C) });
+    return readRanges(device, ob.OF, ranges).then((views) => {
+      const out = { fields: {}, diagnostics: null };
+      views.forEach((view, n) => {
+        const name = ranges[n].name;
+        if (!name) { out.diagnostics = diagnosticsFrom(finishReduction(OCEAN_REDUCED, view, C)); return; }
+        const width = FIELDS[name][1];
+        for (let i = 0; i < C; i++) if (!cellOcean[i]) for (let c = 0; c < width; c++) view[width * i + c] = width === 1 ? NaN : 0;
+        out.fields[name] = view;
+      });
+      return out;
+    });
+  }
+  async function diagnostics() { return (await frame({ diagnostics: true })).diagnostics; }
 
   return {
     layers: L, everySteps: o.everySteps, options: o, D, cellOcean,
-    initialize, upload, download, serialize, serializeFrom, diagnostics, diagnosticsFrom,
+    initialize, upload, download, serialize, serializeFrom, diagnostics, frame,
     advance, advanceCoupled, accumulateFreshwater, forgetAccumulated,
     setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, mixedLayer, salt, writeSurface, step,
     buffers: ob, layout: { OS, OD, B },

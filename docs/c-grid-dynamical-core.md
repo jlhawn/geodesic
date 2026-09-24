@@ -1712,6 +1712,39 @@ about 4×10⁻⁶ m low in the same way every step, a steady loss of volume.
 and the 50 m minimum depth are first guesses; the barotropic mode has
 no explicit filter beyond the sub-step average.
 
+### The page as a client of the model worker
+
+The page subscribes to exactly what it draws — the level, the fields of
+the current overlay, animation and contours, and the global diagnostics
+only while the Model dialog is open (`js/frames.module.js`) — and every
+frame the worker posts carries exactly that. On the GPU engine the
+frame is computed where the state lives: `frameFields` interpolates the
+level fields (with the surface geopotential in the heights), the comfort
+measures, the column water, cloud and sea-level pressure; `frameRain`
+keeps the three-hour rain memory and the runoff tally; the diagnostics
+are a workgroup reduction finished in double precision on the host
+(`reductionKernel`). Only the subscribed ranges are copied back — a few
+arrays of one value per cell instead of the whole state, about 140 MB
+per frame at N=128. `test/frameGpu.test.mjs` checks every field and
+diagnostic against double-precision sums over the downloaded state.
+
+The page colours an overlay on the GPU: it uploads one float per cell to
+a texture on the centre texture's layout and sets a colour map (palette
+stops, cloud cover or flat); the vertex shader maps the value and
+linearizes it. A frame costs the page 0.02 ms and 160 KB at N=64
+(0.14 ms and 640 KB at N=128) against 0.9 ms and 720 KB (3.7 ms and
+2.9 MB) for colouring every vertex on the main thread.
+
+The worker waits for the device after every GPU step before queuing the
+next. The browser draws the globe on the same GPU, and without the wait
+a frame that asked for nothing let the worker queue steps far faster
+than the device ran them: 3.8 frames per second with nothing drawn and
+44 with the wind shown, against a steady 60 with the wait, at 8% of the
+throughput (N=64, 345 simulated hours per minute; N=128, 42). The page
+reports its late frames once a second, and the worker adds an idle
+pause after each step while there are any; on the development machine
+it stays at zero.
+
 ## 7. Module layout in this repo
 
 ```
@@ -1746,12 +1779,14 @@ js/
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase
   threads.module.js         M6: worker_threads / Web Worker primitives behind the engine
-  model.worker.js           browser worker: steps the model, fills shared buffers
+  model.worker.js           browser worker: steps the model and serves the page's subscription
+  frames.module.js          the page–worker protocol and the catalogue of fields a frame can carry
   climate.module.js         live model page (climate.html): control panel, overlays, wind layers
-  levels.module.js          fields on a pressure surface; season phrase for the model time
+  levels.module.js          fields on a pressure surface, comfort measures; season phrase for the model time
+  stats.module.js           the optional frame-rate panel (mrdoob's stats.js)
   windParticles.module.js   wind shown by particles advected by the field, their opacity rising with speed
   charts.module.js          synoptic charts from saved states (charts.html)
-  unifiedViewer.module.js   existing, gains model-overlay mode
+  unifiedViewer.module.js   existing, gains model-overlay mode; colours per-cell values on the GPU
 test/
   mesh.test.mjs, operators.test.mjs, trisk.test.mjs, sw_tc2.mjs, sw_tc6.mjs,
   sw_galewsky.mjs, rest_state.mjs, held_suarez.mjs, baseline_compare.mjs

@@ -155,7 +155,6 @@ export function initUnifiedViewer(container, grid, config = {}) {
   const {
     backgroundColor = 0x111111,
     getColor = (cell) => cell.color,
-    dynamicColors = false,
     controls = true,
   } = config;
 
@@ -212,17 +211,36 @@ export function initUnifiedViewer(container, grid, config = {}) {
   centerTexture.magFilter = THREE.NearestFilter;
   centerTexture.needsUpdate = true;
 
+  /*
+   * Per-cell data the page updates every frame, on the centre texture's
+   * layout so that a vertex finds its cell's texel from cellIndex: colours
+   * as linear RGB bytes, the lighting surface terms, and one value per
+   * cell that the vertex shader colours through the colour map.
+   */
+  const cellTexture = (array, format, type) => {
+    const texture = new THREE.DataTexture(array, width, height, format, type);
+    texture.minFilter = THREE.NearestFilter;
+    texture.magFilter = THREE.NearestFilter;
+    texture.needsUpdate = true;
+    return texture;
+  };
+  const cellColors = cellTexture(new Uint8Array(4 * width * height), THREE.RGBAFormat, THREE.UnsignedByteType);
+  const cellSurface = cellTexture(new Float32Array(4 * width * height), THREE.RGBAFormat, THREE.FloatType);
+  const cellValues = cellTexture(new Float32Array(width * height), THREE.RedFormat, THREE.FloatType);
+  const MISSING = 1e30, MAX_STOPS = 16;
+  const colorMap = {
+    uColorMode: { value: 0 }, uCellColors: { value: cellColors }, uCellSurface: { value: cellSurface }, uCellValues: { value: cellValues },
+    uStops: { value: Array.from({ length: MAX_STOPS }, () => new THREE.Vector3()) }, uStopCount: { value: 2 }, uValueMap: { value: new THREE.Vector2(1, 0) },
+    uMissing: { value: new THREE.Vector3() }, uFlat: { value: new THREE.Vector3() }, uCoverBase: { value: new THREE.Vector3() },
+  };
+
   // --- 3. Scene & Buffers ---
   function disposeArray() { this.array = null; }
   const geometry = new THREE.BufferGeometry();
   geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(iData), 1).onUpload(disposeArray));
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pData), 3).onUpload(disposeArray));
   geometry.setAttribute('cellIndex', new THREE.BufferAttribute(new Float32Array(idxData), 1).onUpload(disposeArray));
-  const colorAttribute = new THREE.BufferAttribute(new Uint8Array(kData), 3, true);
-  if (!dynamicColors) colorAttribute.onUpload(disposeArray);
-  geometry.setAttribute('color', colorAttribute);
-  const surfaceAttribute = new THREE.BufferAttribute(new Float32Array(4 * vertexCounter), 4);
-  geometry.setAttribute('surface', surfaceAttribute);
+  geometry.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(kData), 3, true).onUpload(disposeArray));
   const slopeAttribute = new THREE.BufferAttribute(Float32Array.from(pData, (v, k) => v / Math.hypot(pData[k - (k % 3)], pData[k - (k % 3) + 1], pData[k - (k % 3) + 2])), 3);
   geometry.setAttribute('slope', slopeAttribute);
   geometry.computeBoundingSphere();
@@ -235,21 +253,45 @@ export function initUnifiedViewer(container, grid, config = {}) {
     }
     attribute.needsUpdate = true;
   }
-  const updateSurface = (values) => fillPerCell(surfaceAttribute, values, 4);
   const updateSlopes = (normals) => fillPerCell(slopeAttribute, normals, 3);
 
   function updateColors(rgb) {
-    const array = colorAttribute.array;
+    const array = cellColors.image.data;
     for (let c = 0; c < cellCounter; c++) {
-      const r = rgb[3 * c], g = rgb[3 * c + 1], b = rgb[3 * c + 2];
-      let v = 3 * cellVertexStart[c];
-      for (let k = 0; k < cellVertexCount[c]; k++) {
-        array[v++] = r;
-        array[v++] = g;
-        array[v++] = b;
-      }
+      array[4 * c] = rgb[3 * c]; array[4 * c + 1] = rgb[3 * c + 1]; array[4 * c + 2] = rgb[3 * c + 2];
     }
-    colorAttribute.needsUpdate = true;
+    cellColors.needsUpdate = true;
+    colorMap.uColorMode.value = 1;
+  }
+  function updateSurface(values) {
+    cellSurface.image.data.set(values.subarray(0, 4 * cellCounter));
+    cellSurface.needsUpdate = true;
+  }
+  function updateValues(values) {
+    const array = cellValues.image.data;
+    for (let c = 0; c < cellCounter; c++) { const v = values[c]; array[c] = v === v ? v : MISSING; }
+    cellValues.needsUpdate = true;
+  }
+
+  /*
+   * How the shader colours the cell values: 'palette' maps
+   * t = value·a + b onto sRGB stops interpolated as the page's legend
+   * does, with missing values (NaN) in the linear colour `missing`;
+   * 'cover' composites white over the sRGB `base` with opacity
+   * 1 − exp(−value·a); 'flat' paints every cell the linear `color`.
+   * updateColors switches back to per-cell colours.
+   */
+  function setColorMap({ kind, stops = null, a = 1, b = 0, missing = null, color = null, base = null }) {
+    colorMap.uColorMode.value = { palette: 2, cover: 3, flat: 4 }[kind];
+    if (stops) {
+      if (stops.length > MAX_STOPS) throw new Error(`at most ${MAX_STOPS} palette stops`);
+      stops.forEach((stop, k) => colorMap.uStops.value[k].set(stop[0], stop[1], stop[2]));
+      colorMap.uStopCount.value = stops.length;
+    }
+    colorMap.uValueMap.value.set(a, b);
+    if (missing) colorMap.uMissing.value.set(missing[0], missing[1], missing[2]);
+    if (color) colorMap.uFlat.value.set(color[0], color[1], color[2]);
+    if (base) colorMap.uCoverBase.value.set(base[0], base[1], base[2]);
   }
 
   const scene = new THREE.Scene();
@@ -425,17 +467,41 @@ void main() {
   const lighting = { uSunDirection: { value: new THREE.Vector3(1, 0, 0) }, uCameraPosition: { value: new THREE.Vector3(0, 0, 1e5) }, uLighting: { value: 0 }, uAmbient: { value: 0.004 }, uSun: { value: 1 } };
   const material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
   projectMaterial(material, 0.0, {
-    uniforms: lighting,
+    uniforms: { ...lighting, ...colorMap },
     head: `
 uniform vec3 uSunDirection;
 uniform vec3 uCameraPosition;
 uniform float uLighting;
 uniform float uAmbient;
 uniform float uSun;
-attribute vec4 surface;
+uniform float uColorMode;
+uniform sampler2D uCellColors;
+uniform sampler2D uCellSurface;
+uniform sampler2D uCellValues;
+uniform vec3 uStops[${MAX_STOPS}];
+uniform float uStopCount;
+uniform vec2 uValueMap;
+uniform vec3 uMissing;
+uniform vec3 uFlat;
+uniform vec3 uCoverBase;
 attribute vec3 slope;
+vec3 srgbToLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
+vec3 paletteColor(float t) {
+  float x = clamp(t, 0.0, 1.0) * (uStopCount - 1.0);
+  int k = int(min(uStopCount - 2.0, floor(x)));
+  return mix(uStops[k], uStops[k + 1], x - float(k));
+}
 `,
     source: `
+  vec4 surface = texture2D(uCellSurface, uv);
+  if (uColorMode > 0.5) {
+    float value = texture2D(uCellValues, uv).r;
+    if (uColorMode < 1.5) vColor.rgb = texture2D(uCellColors, uv).rgb;
+    else if (uColorMode > 3.5) vColor.rgb = uFlat;
+    else if (value > 1.0e29) vColor.rgb = uMissing;
+    else if (uColorMode < 2.5) vColor.rgb = srgbToLinear(paletteColor(value * uValueMap.x + uValueMap.y));
+    else vColor.rgb = srgbToLinear(uCoverBase + (1.0 - exp(-max(0.0, value) * uValueMap.x)) * (1.0 - uCoverBase));
+  }
   // Direct sun reddened by Rayleigh scattering over its air mass (white at the zenith), sky light that
   // reaches a few degrees past the terminator, and the sunlit air seen at a slant toward the limb.
   vec3 n = normalize(position);
@@ -957,8 +1023,7 @@ uniform float uReferenceSpeed;
   }
 
   return {
-    updateColors: dynamicColors ? updateColors : null,
-    updateSurface, updateSlopes,
+    updateColors, updateSurface, updateSlopes, updateValues, setColorMap,
     setSpace({ enabled, sun: direction = null, sidereal = 0, ambient = 0.004, intensity = 1, perspective = enabled } = {}) {
       space.enabled = enabled;
       if (state.perspective !== perspective) { state.perspective = perspective; viewState.version++; }
@@ -1022,6 +1087,7 @@ uniform float uReferenceSpeed;
       geometry.dispose();
       material.dispose();
       centerTexture.dispose();
+      cellColors.dispose(); cellSurface.dispose(); cellValues.dispose();
       renderer.domElement.remove();
       ui.remove();
     }

@@ -208,9 +208,12 @@ export function createModel(gridOrMesh, {
       ...(ocean ? ocean.diagnostics() : {}),
       ...(land ? { landFraction: landArea / area, landMeanT: landArea > 0 ? landT / landArea : 0, snowFraction: landArea > 0 ? snowArea / landArea : 0, soilWater: landArea > 0 ? soilSum / landArea : 0, runoff: land.budget.runoff / area } : {}),
     };
-    precipitation.fill(0);
-    lastPrecipTime = model.time;
+    model.restartPrecipitation();
     return result;
+  };
+  model.restartPrecipitation = function restartPrecipitation() {
+    moistPhysics.precipitation.fill(0);
+    lastPrecipTime = model.time;
   };
 
   return model;
