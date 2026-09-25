@@ -3,9 +3,11 @@
 
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>WebGCM</title>
   <style>
-    body { margin: 0; background: #151515; color: #ddd; font: 15px system-ui, sans-serif; }
+    html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+    body { margin: 0; background: #151515; color: #ddd; font: 15px system-ui, sans-serif; touch-action: manipulation; }
     #globe { position: absolute; inset: 0; }
     .box { background: rgba(0, 0, 0, 0.72); color: #eee; border-radius: 8px; }
     button.flat { background: transparent; color: #bbb; border: 0; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
@@ -34,11 +36,11 @@
     #scaleTicks { display: flex; justify-content: space-between; width: 300px; font-size: 12px; color: #ccc; margin-top: 1px; }
     .scaleRow { display: flex; align-items: flex-start; gap: 8px; }
     .scaleRow.hidden { display: none; }
-    #panel { position: absolute; left: 12px; bottom: 56px; z-index: 10; padding: 8px 14px; display: grid; grid-template-columns: max-content 1fr; column-gap: 0; row-gap: 0; align-items: center; max-width: calc(100% - 48px); max-height: calc(100% - 140px); overflow: auto; font-size: 14px; }
+    #panel { position: absolute; left: 12px; bottom: calc(var(--legend-height, 36px) + 20px); z-index: 10; padding: 8px 14px; display: grid; grid-template-columns: max-content 1fr; column-gap: 0; row-gap: 0; align-items: center; max-width: calc(100% - 48px); max-height: calc(100% - 140px); overflow: auto; font-size: 14px; }
     #panel.hidden { display: none; }
     #panel .label { color: #ddd; padding: 5px 10px 5px 0; border-right: 2px solid #666; border-top: 1px solid #3c3c3c; align-self: stretch; display: flex; align-items: center; }
     #panel .options { display: flex; flex-wrap: wrap; gap: 3px 8px; align-items: center; padding: 5px 0 5px 12px; border-top: 1px solid #3c3c3c; }
-    #panel > .label:first-child, #panel > .label:first-child + .options { border-top: 0; }
+    #panel > #sheetHandle + .label, #panel > #sheetHandle + .label + .options { border-top: 0; }
     #panel .options.stacked { flex-direction: column; align-items: flex-start; }
     #panel .unit { color: #ddd; }
     #panel .slider { display: flex; align-items: center; gap: 6px; color: #ddd; }
@@ -75,6 +77,46 @@
     .list .meta { color: #999; font-size: 12px; }
     .list .tag { color: #7fb2e5; font-size: 12px; }
     .empty { color: #888; font-size: 13px; }
+    #sheetHandle, #snapshotsIcon, .overlayNote, #overlayOptions .name, #overlayOptions .unit { display: none; }
+    #snapshotsIcon svg { display: block; }
+    #date .season::before { content: ' · '; }
+
+    /* Small screens (the page sets html.phone): the settings panel is a bottom sheet above a full-width legend. */
+    .phone #clock { left: calc(8px + env(safe-area-inset-left)); right: calc(8px + env(safe-area-inset-right)); top: calc(4px + env(safe-area-inset-top)); max-width: none; gap: 4px; padding: 6px 6px 6px 4px; }
+    .phone #clock > div { flex: 1; min-width: 0; }
+    .phone #clock .control { padding: 2px 8px; }
+    .phone #date { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .phone #date .season { display: block; overflow: hidden; text-overflow: ellipsis; font: 12px system-ui, sans-serif; color: #bbb; }
+    .phone #date .season::before { content: none; }
+    .phone #snapshotsButton { display: none; }
+    .phone #snapshotsIcon { display: flex; padding: 4px 6px; }
+    .phone #progress { top: calc(64px + env(safe-area-inset-top)); }
+    .phone #bottom { left: 0; right: 0; bottom: 0; max-width: none; border-radius: 12px 12px 0 0; padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+    .phone #legend { flex: 1; min-width: 0; padding: 8px 14px 8px 2px; }
+    .phone .scaleRow > div { flex: 1; min-width: 0; }
+    .phone #scale, .phone #scaleTicks { width: 100%; }
+    .phone #tip { left: 8px; right: 8px; bottom: calc(var(--legend-height, 60px) + 8px); max-width: none; }
+    .phone.panel-open #tip { display: none; }
+    .phone #panel { left: 0; right: 0; bottom: var(--legend-height, 60px); max-width: none; max-height: 55dvh; grid-template-columns: 1fr; padding: 0 calc(14px + env(safe-area-inset-right)) 8px calc(14px + env(safe-area-inset-left)); border-radius: 14px 14px 0 0; background: rgb(26, 26, 26); overscroll-behavior: contain; font-size: 15px; }
+    .phone #sheetHandle { display: flex; justify-content: center; align-items: center; height: 26px; position: sticky; top: 0; z-index: 1; background: rgb(26, 26, 26); touch-action: none; cursor: pointer; }
+    .phone #sheetHandle::before { content: ''; width: 40px; height: 5px; border-radius: 3px; background: #666; }
+    .phone #panel .label { border-right: 0; border-top: 1px solid #333; padding: 10px 0 4px; font-size: 13px; color: #999; }
+    .phone #panel #sheetHandle + .label { border-top: 0; padding-top: 2px; }
+    .phone #panel .options { border-top: 0; padding: 2px 0 10px; }
+    .phone #panel .options.stacked { align-items: stretch; gap: 8px; }
+    .phone .segmented button { padding: 6px 11px; font-size: 15px; }
+    .phone #heightOptions .segmented button { padding: 6px 8px; }
+    .phone #heightOptions .unit { display: none; }
+    .phone #heightLabel::after { content: '\00a0· hPa'; }
+    .phone #overlayOptions .segmented { flex-direction: column; flex-wrap: nowrap; border: 1px solid #4a4a4a; border-radius: 8px; overflow: hidden; }
+    .phone #overlayOptions .segmented button { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0; border: 0; border-top: 1px solid #333; border-radius: 0; padding: 10px 12px; text-align: left; }
+    .phone #overlayOptions .segmented button:first-child { border-top: 0; }
+    .phone #overlayOptions .short { display: none; }
+    .phone #overlayOptions .name, .phone #overlayOptions .unit { display: inline; }
+    .phone #overlayOptions .unit { color: #999; font-size: 13px; }
+    .phone .overlayNote { display: block; padding: 0 12px 10px; background: #4a4a4a; color: #ccc; font-size: 13px; line-height: 1.4; }
+    .phone .modal { align-items: stretch; }
+    .phone .dialog { width: 100%; max-height: none; border-radius: 0; box-sizing: border-box; padding: calc(12px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); }
   </style>
 </head>
 
@@ -85,9 +127,11 @@
     <button class="flat control" data-control="play" title="play / pause">▶</button>
     <div><div id="date">starting…</div><div id="rate">measuring…</div></div>
     <button id="modelButton" class="flat" title="about the model and its views">ⓘ</button>
+    <button id="snapshotsIcon" class="flat" title="snapshots"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></button>
   </div>
   <button id="snapshotsButton" class="box">snapshots</button>
   <div id="panel" class="box hidden">
+    <div id="sheetHandle" title="close"></div>
     <span class="label">Mode</span>
     <div class="options" data-setting="view"><div class="segmented"><button data-value="space">Satellite</button><button data-value="atmosphere">Atmosphere</button><button data-value="ocean">Ocean</button></div></div>
     <span class="label" id="animateLabel">Wind animation</span>
@@ -106,6 +150,8 @@
     <div class="options" data-setting="graticule"><div class="segmented"><button data-value="off">Off</button><button data-value="10">10°</button><button data-value="15">15°</button><button data-value="30">30°</button></div></div>
     <span class="label">Projection</span>
     <div class="options" data-setting="projection"><div class="segmented"><button data-value="sphere">Orthographic</button><button data-value="map">Equal Earth</button></div></div>
+    <span class="label hidden" id="paletteLabel">Palette</span>
+    <div class="options hidden" id="paletteOptions"></div>
     <span class="label">Frame rate</span>
     <div class="options" data-setting="stats"><div class="segmented"><button data-value="off">Off</button><button data-value="on">On</button></div></div>
   </div>

@@ -80,7 +80,13 @@ const PALETTES = {
   'teal-gray-brown': [[0.00, 0.40, 0.37], [0.35, 0.64, 0.60], [0.50, 0.50, 0.50], [0.75, 0.55, 0.30], [0.55, 0.32, 0.04]],
 };
 
-const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: 'open', sun: 1, ambient: 0.004, stats: 'off' };
+/*
+ * Small screens get the phone layout (html.phone in climate.html's
+ * stylesheet): the settings panel becomes a bottom sheet, closed at first.
+ */
+const PHONE = matchMedia('(max-width: 600px), (max-height: 500px) and (pointer: coarse)');
+
+const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: PHONE.matches ? 'closed' : 'open', sun: 1, ambient: 0.004, stats: 'off' };
 
 /*
  * The contour row draws isobars of surface pressure at the surface and
@@ -176,10 +182,10 @@ function renderScale(stops, min, max, unit) {
 
 function levelLabel(level) { return level === 'surface' ? 'Surface' : `${level} hPa`; }
 
-function formatDate(time) {
+function formatTime(time) {
   const day = Math.floor(time / 86400), seconds = time - 86400 * day;
   const hh = String(Math.floor(seconds / 3600)).padStart(2, '0'), mm = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
-  return `Day ${day} ${hh}:${mm} · ${seasonPhrase(time)}`;
+  return `Day ${day} ${hh}:${mm}`;
 }
 
 /*
@@ -222,6 +228,7 @@ const VIEW_NOTES = [
   ['Current speed', 'The upper layer\'s current, up to a metre a second in the boundary currents. With any ocean view selected, Particles and Vectors trace the current instead of the wind.'],
   ['Mixed layer depth', 'The thickness of the surface mixed layer: deep where winter cooling and wind stirring reach down, shallow under summer warming and along upwelling coasts.'],
   ['Thermocline depth', 'The depth of the boundary between the 23 °C and the 19 °C water classes, close to the 20 °C isotherm: deep in the western tropical Pacific and the subtropical gyres where the wind piles warm water up, shallow in the east and toward the poles, where it outcrops.'],
+  ['Sea surface salinity', 'The salinity of the ocean\'s upper layer: saltier where evaporation outpaces rain, as under the subtropical highs, and fresher under heavy rain and where rivers reach the sea.'],
   ['Sea surface height', 'The free surface: high over the subtropical gyres and low around the poles, with the currents flowing along its contours.'],
   ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Where a pressure level lies below the ground, wind, temperature and humidity show the lowest layer of that column, and only the height is extrapolated hydrostatically so its contours stay a pressure field.'],
   ['Soil water', 'The land bucket: up to 150 kg/m² of soil water; evaporation slows as it dries and rain beyond its capacity runs off.'],
@@ -232,23 +239,46 @@ const VIEW_NOTES = [
   ['Wet-bulb temperature', 'The coolest a wet surface can get by evaporation at the chosen height; above about 35 °C the body can no longer shed heat.'],
   ['Dew point', 'The temperature the air would have to cool to for its vapour to condense; close to the air temperature means humid air.'],
   ['Recent rain', 'Rain from convection and from cloud that rained out, as an exponentially weighted accumulation with a three-hour memory: steady rain settles at its three-hour total and a shower fades over the hours after it.'],
-  ['Precipitable water', 'All the vapour in the column, as the depth of rain it would make.'],
-  ['Cloud water', 'All the condensed water in the column.'],
-  ['Sea ice', 'Sea-ice thickness.'],
-  ['Albedo', 'The surface albedo for diffuse light: 0.06 over water, rising to 0.5 over half a metre of ice.'],
+  ['Total precipitable water', 'All the vapour in the column, as the depth of rain it would make.'],
+  ['Total cloud water', 'All the condensed water in the column.'],
+  ['Sea ice thickness', 'Sea-ice thickness.'],
+  ['Surface albedo', 'The surface albedo for diffuse light: 0.06 over water, rising to 0.5 over half a metre of ice.'],
   ['Surface sunlight', 'Shortwave reaching the surface, direct and diffuse, before the surface reflects its share.'],
-  ['Outgoing longwave', 'Infrared leaving the top of the atmosphere: low over cold cloud tops and the poles, high over clear warm regions.'],
+  ['Outgoing longwave radiation', 'Infrared leaving the top of the atmosphere: low over cold cloud tops and the poles, high over clear warm regions.'],
   ['Isobars / Height lines', 'Contours of surface pressure at the surface, of geopotential height on a pressure level, at the chosen interval.'],
   ['Graticule', 'Parallels and meridians at the chosen spacing; the meridians stop at the outermost parallel.'],
   ['Projection', 'The globe, orthographic in the Atmosphere and Ocean modes and seen through a perspective camera that flies in as you zoom in the Satellite mode, or the Equal Earth map; both can be dragged to any orientation.'],
   ['Frame rate', 'How often the page redraws, in frames per second, in the top-right corner; click it to switch to the milliseconds between frames and, where the browser reports it, the memory in use.'],
   ['Snapshots', 'Save the paused state in this browser, restore it later, download one of the runs saved on the server, or import and export snapshot files to share them.'],
 ];
+const NOTES = new Map(VIEW_NOTES);
 
 export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true, settings: overrides = {}, view = null } = {}) {
   const settings = loadSettings();
   applyOverrides(settings, overrides);
   const panel = document.getElementById('panel');
+  const overlayNote = document.createElement('div');
+  overlayNote.className = 'overlayNote';
+  /*
+   * The date line holds the model time and the season phrase in two
+   * spans, which the phone layout stacks; a status message replaces them
+   * as plain text until the next date.
+   */
+  const dateLine = document.getElementById('date'), dateTime = document.createElement('span'), dateSeason = document.createElement('span');
+  dateSeason.className = 'season';
+  function showDate(time) {
+    if (dateTime.parentNode !== dateLine) dateLine.replaceChildren(dateTime, dateSeason);
+    const text = formatTime(time), phrase = seasonPhrase(time);
+    if (dateTime.textContent !== text) dateTime.textContent = text;
+    if (dateSeason.textContent !== phrase) dateSeason.textContent = phrase;
+  }
+  // While the phone's settings sheet is open, the globe centres in the gap between the top bar and the sheet.
+  function frameGlobe() {
+    if (!viewer) return;
+    if (!PHONE.matches || settings.panel !== 'open') { viewer.setInsets(); return; }
+    const area = document.getElementById('globe').getBoundingClientRect();
+    viewer.setInsets({ top: document.getElementById('clock').getBoundingClientRect().bottom - area.top, bottom: area.bottom - panel.getBoundingClientRect().top });
+  }
   const activeLevel = () => (settings.view === 'atmosphere' && HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
   const shownLevel = () => latest?.level ?? activeLevel();
   let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, highlight = null, rgb = null, running = !paused, animatedSource = null, seaCells = null;
@@ -315,7 +345,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (viewer && (viewer.viewVersion() !== urlVersion || running !== urlRunning)) { urlVersion = viewer.viewVersion(); urlRunning = running; scheduleUrl(); }
     if (!latest) return;
     const time = display.advance(now, latest.time, { ...recentFrames(), running });
-    if (running) document.getElementById('date').textContent = formatDate(time);
+    if (running) showDate(time);
     if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(time), sidereal: 2 * Math.PI * time * (1 / DAY + 1 / YEAR), ambient: settings.ambient, intensity: settings.sun });
   }
   requestAnimationFrame(tick);
@@ -523,7 +553,13 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       overlayBox.replaceChildren(...MODE_OVERLAYS[mode].map((row) => {
         const segment = document.createElement('div');
         segment.className = 'segmented';
-        for (const key of row) { const button = document.createElement('button'); button.dataset.value = key; button.textContent = OVERLAYS[key].short; button.dataset.tip = OVERLAYS[key].label; segment.append(button); }
+        for (const key of row) {
+          const button = document.createElement('button'), { short, label, unit = '' } = OVERLAYS[key];
+          button.dataset.value = key;
+          button.dataset.tip = label;
+          button.append(...[['short', short], ['name', label], ['unit', unit]].map(([className, text]) => { const span = document.createElement('span'); span.className = className; span.textContent = text; return span; }));
+          segment.append(button);
+        }
         return segment;
       }));
     }
@@ -531,6 +567,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       const current = group.dataset.setting === 'isolines' ? isolineChoice() : String(settings[group.dataset.setting]);
       for (const button of group.querySelectorAll('button[data-value]')) button.classList.toggle('selected', button.dataset.value === current);
     }
+    const chosen = overlayBox.querySelector('button.selected'), note = NOTES.get(OVERLAYS[settings.overlay].label);
+    if (chosen && note) { overlayNote.textContent = note; chosen.after(overlayNote); } else overlayNote.remove();
     const space = settings.view === 'space';
     const heights = settings.view === 'atmosphere' && HEIGHT_OVERLAYS.has(settings.overlay);
     document.getElementById('heightLabel').classList.toggle('hidden', !heights);
@@ -549,11 +587,14 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const palettes = !!overlay.kind && overlay.kind !== 'clouds';
     paletteSelect.style.display = palettes ? '' : 'none';
     if (palettes) fillSelect(paletteSelect, Object.keys(PALETTES), settings.palette);
+    for (const id of ['paletteLabel', 'paletteOptions']) document.getElementById(id).classList.toggle('hidden', !PHONE.matches || !palettes);
     document.querySelector('[data-control="play"]').textContent = running ? '❚❚' : '▶';
     panel.classList.toggle('hidden', settings.panel !== 'open');
+    document.documentElement.classList.toggle('panel-open', settings.panel === 'open');
+    frameGlobe();
     if (settings.stats === 'on' && !stats) {
       stats = new Stats();
-      stats.dom.style.cssText = 'position:absolute;right:12px;top:56px;cursor:pointer;opacity:0.9;z-index:11';
+      stats.dom.style.cssText = 'position:absolute;right:12px;top:calc(56px + env(safe-area-inset-top));cursor:pointer;opacity:0.9;z-index:11';
       document.body.appendChild(stats.dom);
     }
     if (stats) stats.dom.style.display = settings.stats === 'on' ? '' : 'none';
@@ -565,7 +606,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     paintGraticule();
     refreshTip();
     if (coast) coast.setVisible(hasLand && settings.view !== 'space');
-    document.getElementById('date').textContent = formatDate(latest.time);
+    showDate(latest.time);
     const rate = simulatedHoursPerMinute();
     document.getElementById('rate').textContent = !running ? 'paused' : rate === null ? 'measuring…' : `${rate.toFixed(1)} simulated hours per minute`;
     if (!document.getElementById('modelModal').classList.contains('hidden')) renderModelDetails();
@@ -694,7 +735,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     /*
      * A tap selects the cell under it: one pointer, pressed and lifted
      * within half a second without moving more than `slack` pixels. A
-     * second finger landing turns the press into a gesture.
+     * second finger landing turns the press into a gesture. On a phone a
+     * tap closes the open settings sheet instead.
      */
     let press = null;
     const down = new Set();
@@ -709,11 +751,16 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       const moved = Math.hypot(event.clientX - press.x, event.clientY - press.y), held = performance.now() - press.at, { slack } = press;
       press = null;
       if (moved > slack || held > 500 || !viewer || !cells) return;
+      if (PHONE.matches && settings.panel === 'open') { update({ panel: 'closed' }); return; }
       const rect = globe.getBoundingClientRect(), point = viewer.unprojectPoint(event.clientX - rect.left, event.clientY - rect.top, [0, 0, 0]);
       select(point ? nearestCell(point) : -1);
     });
+    const handle = document.getElementById('sheetHandle');
+    let grabbed = null;
+    handle.addEventListener('pointerdown', (event) => { grabbed = event.clientY; handle.setPointerCapture(event.pointerId); });
+    handle.addEventListener('pointerup', (event) => { if (grabbed !== null && event.clientY >= grabbed) update({ panel: 'closed' }); grabbed = null; });
     window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && selected >= 0) select(-1); });
-    panel.addEventListener('mouseover', (event) => { const tipped = event.target.closest('[data-tip]'); if (tipped) { hoverTip = tipped.dataset.tip; refreshTip(); } });
+    panel.addEventListener('mouseover', (event) => { const tipped = !PHONE.matches && event.target.closest('[data-tip]'); if (tipped) { hoverTip = tipped.dataset.tip; refreshTip(); } });
     panel.addEventListener('mouseout', (event) => { const tipped = event.target.closest('[data-tip]'); if (tipped && hoverTip !== null) { hoverTip = null; refreshTip(); } });
     document.getElementById('sunSlider').addEventListener('input', (event) => update({ sun: Math.round(1e3 * LIGHT_MAX.sun * Number(event.target.value) ** 2) / 1e3 }));
     document.getElementById('ambientSlider').addEventListener('input', (event) => update({ ambient: Math.round(1e4 * LIGHT_MAX.ambient * Number(event.target.value) ** 2) / 1e4 }));
@@ -882,7 +929,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     });
   }
   document.getElementById('modelButton').addEventListener('click', () => { document.getElementById('modelModal').classList.remove('hidden'); renderModelDetails(); subscribe(); });
-  document.getElementById('snapshotsButton').addEventListener('click', () => { refreshSnapshots(); document.getElementById('snapshotModal').classList.remove('hidden'); });
+  for (const id of ['snapshotsButton', 'snapshotsIcon']) document.getElementById(id).addEventListener('click', () => { refreshSnapshots(); document.getElementById('snapshotModal').classList.remove('hidden'); });
   for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', closeModals);
   for (const modal of document.querySelectorAll('.modal')) modal.addEventListener('click', (event) => { if (event.target === modal) closeModals(); });
   window.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeModals(); });
@@ -897,6 +944,13 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   });
   document.getElementById('menu').addEventListener('click', () => update({ panel: settings.panel === 'open' ? 'closed' : 'open' }));
   const bottom = document.getElementById('bottom');
-  new ResizeObserver(() => { panel.style.bottom = `${bottom.offsetHeight + 20}px`; }).observe(bottom);
+  new ResizeObserver(() => document.documentElement.style.setProperty('--legend-height', `${bottom.offsetHeight}px`)).observe(bottom);
+  new ResizeObserver(frameGlobe).observe(panel);
+  function arrange() {
+    document.documentElement.classList.toggle('phone', PHONE.matches);
+    (PHONE.matches ? document.getElementById('paletteOptions') : document.querySelector('.scaleRow')).append(document.getElementById('palette'));
+  }
+  PHONE.addEventListener('change', () => { arrange(); render(); });
+  arrange();
   render();
 }

@@ -563,6 +563,20 @@ vec3 paletteColor(float t) {
   const viewHeight = () => 500 / state.zoom;
   const cameraDistance = () => 1 - viewState.blend + viewHeight() / (2 * TAN_HALF);
 
+  /*
+   * setInsets() centres the view in the part of the canvas that page
+   * elements leave uncovered: the picture moves up by `inset.shift`
+   * pixels, easing towards the target, through a translation of the
+   * projection itself, so the zoom and the pan keep their meaning and
+   * the raycaster (which reads the projection) stays exact.
+   */
+  const inset = { target: 0, shift: 0, matrix: new THREE.Matrix4() };
+  function applyInset(target) {
+    if (!inset.shift) return;
+    target.projectionMatrix.premultiply(inset.matrix.makeTranslation(0, 2 * inset.shift / container.clientHeight, 0));
+    target.projectionMatrixInverse.copy(target.projectionMatrix).invert();
+  }
+
   function render() {
     if (disposed) return;
     requestAnimationFrame(render);
@@ -583,6 +597,10 @@ vec3 paletteColor(float t) {
     for (const projected of projectedMaterials) {
       if (projected.userData.shader) projected.userData.shader.uniforms.uBlend.value = viewState.blend;
     }
+    if (inset.shift !== inset.target) {
+      inset.shift = Math.abs(inset.target - inset.shift) > 0.5 ? inset.shift + 0.25 * (inset.target - inset.shift) : inset.target;
+      viewState.version++;
+    }
 
     const aspect = container.clientWidth / container.clientHeight;
     if (state.perspective) {
@@ -600,6 +618,7 @@ vec3 paletteColor(float t) {
       lighting.uCameraPosition.value.set(0, 0, 1e5);
     }
     camera.updateProjectionMatrix();
+    applyInset(camera);
 
     renderer.setClearColor(space.enabled ? 0x000000 : backgroundColor);
     renderer.clear();
@@ -607,6 +626,7 @@ vec3 paletteColor(float t) {
       skyCamera.aspect = aspect;
       skyCamera.fov = state.perspective ? FIELD_OF_VIEW : 60;
       skyCamera.updateProjectionMatrix();
+      applyInset(skyCamera);
       stars.quaternion.copy(sphereQuaternion).multiply(space.sidereal);
       sun.position.copy(space.sun).applyQuaternion(sphereQuaternion).multiplyScalar(SKY_RADIUS);
       renderer.render(skyScene, skyCamera);
@@ -692,9 +712,9 @@ vec3 paletteColor(float t) {
 
   /*
    * Zooms by `factor` while the point under (clientX, clientY) stays put:
-   * a screen offset from the centre spans viewHeight() / clientHeight
-   * world units per pixel in the orthographic view and at the front of
-   * the globe in perspective.
+   * a screen offset from the view's centre spans viewHeight() /
+   * clientHeight world units per pixel in the orthographic view and at
+   * the front of the globe in perspective.
    */
   function zoomAbout(factor, clientX, clientY) {
     if (container.clientHeight <= 0) return;
@@ -702,7 +722,7 @@ vec3 paletteColor(float t) {
     state.zoom = Math.max(10, Math.min(state.zoom * factor, 10000));
     const shrink = (before - viewHeight()) / container.clientHeight, rect = container.getBoundingClientRect();
     state.pan.x += (clientX - rect.left - rect.width / 2) * shrink;
-    state.pan.y -= (clientY - rect.top - rect.height / 2) * shrink;
+    state.pan.y -= (clientY - rect.top - rect.height / 2 + inset.shift) * shrink;
   }
 
   /*
@@ -812,11 +832,11 @@ vec3 paletteColor(float t) {
       const half = (distance - rz * (1 - blend)) * TAN_HALF;
       const aspect = container.clientWidth / container.clientHeight;
       out[0] = ((fx - state.pan.x) / (half * aspect) + 1) / 2 * container.clientWidth;
-      out[1] = (1 - (fy - state.pan.y) / half) / 2 * container.clientHeight;
+      out[1] = (1 - (fy - state.pan.y) / half) / 2 * container.clientHeight - inset.shift;
       out[2] = blend > 0.5 ? 1 : rx * state.pan.x + ry * state.pan.y + rz * distance - 1;
     } else {
       out[0] = (fx - camera.left) / (camera.right - camera.left) * container.clientWidth;
-      out[1] = (camera.top - fy) / (camera.top - camera.bottom) * container.clientHeight;
+      out[1] = (camera.top - fy) / (camera.top - camera.bottom) * container.clientHeight - inset.shift;
       out[2] = blend > 0.5 ? 1 : rz;
     }
     return out;
@@ -1142,6 +1162,7 @@ uniform float uReferenceSpeed;
       return out;
     },
     pixelsPerUnit: () => container.clientHeight / viewHeight(),
+    setInsets({ top = 0, bottom = 0 } = {}) { inset.target = (bottom - top) / 2; },
     viewVersion: () => viewState.version,
     dispose: () => {
       disposed = true;
