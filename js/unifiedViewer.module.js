@@ -848,69 +848,87 @@ vec3 paletteColor(float t) {
   }
 
   /*
-   * Contour lines of a cell field on the globe: marching triangles over
-   * the Delaunay triangles (the three cells around each vertex), drawn
-   * through the same projection as the cells. update() takes the field
-   * and the contour interval.
+   * Contour lines of a cell field on the globe, drawn on the GPU: the
+   * Delaunay triangles (the three cells around each vertex) carry the
+   * field linearly between cell centres, and the fragment shader draws a
+   * line wherever it crosses a multiple of the interval, `width` pixels
+   * wide whatever the zoom. Where lines come closer than a couple of
+   * pixels it fades to their mean coverage. Each corner is projected
+   * against its triangle's first cell so nothing tears at the map seam.
+   * Triangles with a missing corner, or flat on a level, draw nothing.
+   * update() takes the field and the contour interval.
    */
-  function addContourLayer({ color = 0xffffff, opacity = 0.7 } = {}) {
-    const corners = Int32Array.from(cellsOnVertex.filter((cells) => cells && cells.length === 3).flat());
-    const centres = Float64Array.from(centerData);
-    const capacity = 2 * corners.length;
-    const positions = new Float32Array(3 * capacity);
-    const cellIndex = new Float32Array(capacity);
+  function addContourLayer({ color = 0xffffff, opacity = 0.7, width: lineWidth = 1 } = {}) {
+    const values = cellTexture(new Float32Array(width * height), THREE.RedFormat, THREE.FloatType);
+    const uniforms = { uContourValues: { value: values }, uContourStep: { value: 1 }, uContourWidth: { value: lineWidth } };
+    const contourMaterial = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide });
+    projectMaterial(contourMaterial, 0.008, {
+      head: `
+uniform sampler2D uContourValues;
+uniform float uContourStep;
+attribute float valueCell;
+varying float vContour;
+varying float vContourMissing;
+`,
+      source: `
+  float contourValue = texture2D(uContourValues, (vec2(mod(valueCell, uTexSize.x), floor(valueCell / uTexSize.x)) + 0.5) / uTexSize).r;
+  vContourMissing = contourValue > 1.0e29 ? 1.0 : 0.0;
+  vContour = contourValue / uContourStep;
+`,
+      uniforms,
+    });
+    const project = contourMaterial.onBeforeCompile;
+    contourMaterial.onBeforeCompile = (shader) => {
+      project(shader);
+      shader.fragmentShader = `
+uniform float uContourWidth;
+varying float vContour;
+varying float vContourMissing;
+` + shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+  float spacing = length(vec2(dFdx(vContour), dFdy(vContour)));
+  if (vContourMissing > 0.0 || spacing < 1.0e-5) discard;
+  float line = clamp(0.5 * uContourWidth + 0.5 - abs(fract(vContour - 0.5) - 0.5) / spacing, 0.0, 1.0);
+  diffuseColor.a *= mix(line, min(1.0, uContourWidth * spacing), smoothstep(0.5, 1.0, spacing));
+  if (diffuseColor.a < 0.002) discard;`);
+    };
     const contourGeometry = new THREE.BufferGeometry();
-    const positionAttribute = new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage);
-    const cellAttribute = new THREE.BufferAttribute(cellIndex, 1).setUsage(THREE.DynamicDrawUsage);
-    contourGeometry.setAttribute('position', positionAttribute);
-    contourGeometry.setAttribute('cellIndex', cellAttribute);
-    contourGeometry.setDrawRange(0, 0);
-    const contourMaterial = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
-    projectMaterial(contourMaterial, 0.008);
-    const lines = new THREE.LineSegments(contourGeometry, contourMaterial);
-    lines.frustumCulled = false;
-    lines.visible = false;
-    scene.add(lines);
-    const lift = 1.003;
+    const mesh = new THREE.Mesh(contourGeometry, contourMaterial);
+    mesh.frustumCulled = false;
+    mesh.visible = false;
+    scene.add(mesh);
+    let shown = false, ready = false;
 
-    /*
-     * One pass over the triangles, each visiting only the contour levels
-     * between its lowest and highest corner.
-     */
+    function build() {
+      const corners = cellsOnVertex.filter((cells) => cells && cells.length === 3).flat();
+      const positions = new Float32Array(3 * corners.length), reference = new Float32Array(corners.length), own = new Float32Array(corners.length);
+      const lift = 1.003;
+      corners.forEach((cell, k) => {
+        const x = centerData[3 * cell], y = centerData[3 * cell + 1], z = centerData[3 * cell + 2], scale = lift / Math.hypot(x, y, z);
+        positions[3 * k] = x * scale; positions[3 * k + 1] = y * scale; positions[3 * k + 2] = z * scale;
+        reference[k] = corners[k - (k % 3)];
+        own[k] = cell;
+      });
+      contourGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).onUpload(disposeArray));
+      contourGeometry.setAttribute('cellIndex', new THREE.BufferAttribute(reference, 1).onUpload(disposeArray));
+      contourGeometry.setAttribute('valueCell', new THREE.BufferAttribute(own, 1).onUpload(disposeArray));
+      contourGeometry.computeBoundingSphere();
+      ready = true;
+    }
+
     function update(field, step) {
-      let n = 0;
-      const crossing = (a, b, level, reference) => {
-        const t = (level - field[a]) / (field[b] - field[a]);
-        const x = centres[3 * a] + t * (centres[3 * b] - centres[3 * a]);
-        const y = centres[3 * a + 1] + t * (centres[3 * b + 1] - centres[3 * a + 1]);
-        const z = centres[3 * a + 2] + t * (centres[3 * b + 2] - centres[3 * a + 2]);
-        const norm = Math.hypot(x, y, z) / lift;
-        positions[3 * n] = x / norm; positions[3 * n + 1] = y / norm; positions[3 * n + 2] = z / norm;
-        cellIndex[n] = reference;
-        n++;
-      };
-      for (let corner = 0; corner < corners.length && n + 2 <= capacity; corner += 3) {
-        const a = corners[corner], b = corners[corner + 1], c = corners[corner + 2];
-        const fa = field[a], fb = field[b], fc = field[c], high = Math.max(fa, fb, fc);
-        for (let k = Math.ceil(Math.min(fa, fb, fc) / step); k * step < high && n + 2 <= capacity; k++) {
-          const level = k * step, sa = fa - level, sb = fb - level, sc = fc - level;
-          const before = n;
-          if (sa * sb < 0) crossing(a, b, level, a);
-          if (sb * sc < 0) crossing(b, c, level, a);
-          if (sc * sa < 0) crossing(c, a, level, a);
-          if (n - before !== 2) n = before;
-        }
-      }
-      contourGeometry.setDrawRange(0, n);
-      positionAttribute.clearUpdateRanges(); positionAttribute.addUpdateRange(0, 3 * n); positionAttribute.needsUpdate = true;
-      cellAttribute.clearUpdateRanges(); cellAttribute.addUpdateRange(0, n); cellAttribute.needsUpdate = true;
+      if (!ready) build();
+      const array = values.image.data;
+      for (let c = 0; c < cellCounter; c++) { const v = field[c]; array[c] = v === v ? v : MISSING; }
+      values.needsUpdate = true;
+      uniforms.uContourStep.value = step;
+      mesh.visible = shown;
     }
 
     return {
       update,
       setColor(value) { contourMaterial.color.set(value); },
-      setVisible(visible) { lines.visible = visible; },
-      dispose() { scene.remove(lines); contourGeometry.dispose(); contourMaterial.dispose(); },
+      setVisible(visible) { shown = visible; mesh.visible = shown && ready; },
+      dispose() { scene.remove(mesh); contourGeometry.dispose(); contourMaterial.dispose(); values.dispose(); },
     };
   }
 
