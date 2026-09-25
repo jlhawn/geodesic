@@ -809,6 +809,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       document.getElementById('date').textContent = `model ready: ${message.cells} cells × ${message.layers} layers, dt ${message.dt} s, ${message.workers > 1 ? `${message.workers} workers` : 'one thread'}`;
     }
     if (message.type === 'snapshotData') storeSnapshot(message);
+    if (message.type === 'profile') showProfile(message);
     if (message.type === 'frame') {
       document.getElementById('progress').classList.remove('visible');
       latest = { ...message.fields, ...geographyFields, time: message.time, level: message.level, diagnostics: message.diagnostics, engine: message.engine, pause: message.pause, N: ready.N, workers: ready.workers };
@@ -947,6 +948,47 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     });
   }
   document.getElementById('modelButton').addEventListener('click', () => { document.getElementById('modelModal').classList.remove('hidden'); renderModelDetails(); subscribe(); });
+  /*
+   * The GPU profile (js/gpu/profile.module.js) as text to read in the
+   * dialog and copy, with what the page knows about the browser and the
+   * display.
+   */
+  const profileButton = document.getElementById('profileButton'), profileCopy = document.getElementById('profileCopy'), profileOut = document.getElementById('profileOut');
+  let profileText = '', rateBefore = null;
+  profileButton.addEventListener('click', () => {
+    rateBefore = running ? simulatedHoursPerMinute() : null;
+    profileButton.disabled = true;
+    profileOut.textContent = 'profiling…';
+    profileOut.classList.remove('hidden');
+    worker.postMessage({ type: 'profile' });
+  });
+  profileCopy.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(profileText); profileCopy.textContent = 'Copied'; } catch { profileCopy.textContent = 'Copy failed'; }
+    setTimeout(() => { profileCopy.textContent = 'Copy'; }, 1500);
+  });
+  function showProfile({ result: r, error }) {
+    profileButton.disabled = false;
+    if (error) { profileOut.textContent = `The profile failed: ${error}`; return; }
+    const ms = (x) => `${x.toFixed(2)} ms`;
+    const lines = [
+      `WebGCM GPU profile: N=${r.N}, ${r.steps} steps of ${r.dt} s, ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+      `Device: ${r.device}`,
+      `Browser: ${navigator.userAgent}`,
+      `Screen: ${innerWidth}×${innerHeight} CSS px at ${devicePixelRatio}×, a frame every ${pacing.interval.toFixed(1)} ms`,
+      `Running before: ${rateBefore === null ? 'paused or still measuring' : `${rateBefore.toFixed(0)} simulated hours per minute`}, pause ${r.pause} ms, ${r.queueDepth} steps in flight`,
+      `Step, one at a time: ${ms(r.stepMedian)} median (${ms(r.stepMin)} to ${ms(r.stepMax)})`,
+      r.gpuMs === null ? 'GPU timestamps: not offered by this browser' : `GPU time per step, from timestamps: ${ms(r.gpuMs)}`,
+      `Empty round trip to the GPU: ${ms(r.roundTrip)}`,
+      `One frame, computed and read back: ${ms(r.frame)}`,
+    ];
+    if (r.kernels) {
+      lines.push('Kernels by GPU time, ms per step (passes per step):');
+      for (const k of r.kernels.slice(0, 24)) lines.push(`${k.ms.toFixed(3).padStart(9)}  ${k.name} (${+k.passes.toFixed(2)})`);
+    }
+    profileText = lines.join('\n');
+    profileOut.textContent = profileText;
+    profileCopy.disabled = false;
+  }
   for (const id of ['snapshotsButton', 'snapshotsIcon']) document.getElementById(id).addEventListener('click', () => { refreshSnapshots(); document.getElementById('snapshotModal').classList.remove('hidden'); });
   for (const button of document.querySelectorAll('[data-close]')) button.addEventListener('click', closeModals);
   for (const modal of document.querySelectorAll('.modal')) modal.addEventListener('click', (event) => { if (event.target === modal) closeModals(); });

@@ -12,6 +12,7 @@ import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName } from './stateFile.module.js';
 import { LEVEL_FIELDS, OCEAN_FIELDS, RAIN_MEMORY } from './frames.module.js';
 import { createPacer } from './pace.module.js';
+import { profileGpu } from './gpu/profile.module.js';
 
 const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
@@ -104,8 +105,8 @@ async function sendFrame() { postFrame(await captureFrame()); }
  * latest subscription. halt() pauses and resolves once no batch is
  * stepping, before anything reads or replaces the model's state.
  */
-let stepping = false, resend = false, batchDone = Promise.resolve();
-async function halt() { running = false; resend = false; await batchDone; }
+let stepping = false, resend = false, batchDone = Promise.resolve(), profiling = null;
+async function halt() { running = false; resend = false; if (profiling) profiling.resume = false; await batchDone; }
 const report = (error) => status(`error: ${error && error.stack ? error.stack : error}`);
 function refresh() {
   if (stepping) { resend = true; return; }
@@ -280,9 +281,11 @@ self.onmessage = async (event) => {
   if (message.type === 'start') {
     try { await start(message); } catch (error) { status(`error: ${error && error.stack ? error.stack : error}`); }
   } else if (message.type === 'pause') {
-    running = false;
+    if (profiling) profiling.resume = false;
+    else running = false;
   } else if (message.type === 'resume') {
-    if (model && !running) { running = true; if (!stepping) loop(); }
+    if (profiling) profiling.resume = true;
+    else if (model && !running) { running = true; if (!stepping) loop(); }
   } else if (message.type === 'pace') {
     adjustPace(message);
   } else if (message.type === 'subscribe') {
@@ -292,8 +295,43 @@ self.onmessage = async (event) => {
     if (serving) await snapshot();
   } else if (message.type === 'restore') {
     try { await restore(message.snapshot); } catch (error) { status(`error: ${error && error.stack ? error.stack : error}`); }
+  } else if (message.type === 'profile') {
+    if (serving) await profile();
   }
 };
+
+/*
+ * A GPU profile for the page (js/gpu/profile.module.js), with the time
+ * one frame of the current subscription takes to compute and read back.
+ * It counts as a batch, so halt() waits for it; pause and resume requests
+ * that arrive meanwhile take effect when it ends.
+ */
+async function profile() {
+  if (!model.beginFrame) { self.postMessage({ type: 'profile', error: 'the profile needs the GPU engine' }); return; }
+  if (profiling) return;
+  const resume = running;
+  await halt();
+  profiling = { resume };
+  let finish;
+  batchDone = new Promise((resolve) => { finish = resolve; });
+  stepping = true;
+  try {
+    const result = await profileGpu(model, { steps: 16, dt });
+    const start = performance.now();
+    const captured = await model.beginFrame(subscription);
+    result.frame = performance.now() - start;
+    postFrame(captured);
+    self.postMessage({ type: 'profile', result: { ...result, N: currentN, dt, queueDepth: QUEUE_DEPTH, pause: pace.pause } });
+  } catch (error) {
+    self.postMessage({ type: 'profile', error: String(error && error.stack ? error.stack : error) });
+  } finally {
+    stepping = false;
+    finish();
+  }
+  const again = profiling.resume;
+  profiling = null;
+  if (again) { running = true; loop(); } else if (resend) { resend = false; refresh(); }
+}
 
 let lastStart = null, currentN = null;
 

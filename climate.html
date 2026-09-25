@@ -77,6 +77,8 @@
     .list .meta { color: #999; font-size: 12px; }
     .list .tag { color: #7fb2e5; font-size: 12px; }
     .empty { color: #888; font-size: 13px; }
+    #profileOut { font: 12px ui-monospace, Menlo, Consolas, monospace; color: #ccc; white-space: pre-wrap; margin: 6px 0 0; }
+    #profileOut.hidden { display: none; }
     #sheetHandle, #snapshotsIcon, .overlayNote, #overlayOptions .name, #overlayOptions .unit { display: none; }
     #snapshotsIcon svg { display: block; }
     #date .season::before { content: ' · '; }
@@ -163,7 +165,7 @@
       <div class="scaleRow"><div><canvas id="scale" width="256" height="1"></canvas><div id="scaleTicks"><span></span><span></span><span></span></div></div><select id="palette"></select></div>
     </div>
   </div>
-  <div id="modelModal" class="modal hidden"><div class="dialog"><h2>Model <button class="flat close" data-close="modelModal">×</button></h2><dl id="modelDetails"></dl><h3>Views</h3><dl id="viewDetails"></dl></div></div>
+  <div id="modelModal" class="modal hidden"><div class="dialog"><h2>Model <button class="flat close" data-close="modelModal">×</button></h2><dl id="modelDetails"></dl><h3>GPU profile</h3><p class="empty">Times 16 steps one at a time, and where the browser allows, each GPU kernel; the text below can be copied to share.</p><div class="actions"><button class="flat" id="profileButton">Profile the GPU</button> <button class="flat" id="profileCopy" disabled>Copy</button></div><pre id="profileOut" class="hidden"></pre><h3>Views</h3><dl id="viewDetails"></dl></div></div>
   <div id="snapshotModal" class="modal hidden"><div class="dialog">
     <h2>Snapshots <button class="flat close" data-close="snapshotModal">×</button></h2>
     <div class="segmented tabs"><button data-tab="local" class="selected">Custom</button><button data-tab="builtin">Built in</button></div>
