@@ -5,7 +5,9 @@ import { getDevice } from './device.module.js';
  * `steps` steps one at a time, each timed from its submission until the
  * device has finished it. Where the device offers 'timestamp-query', GPU
  * timestamps around every compute pass are charged to the kernels the
- * pass dispatched. Also measures an empty round trip to the device. The
+ * pass dispatched; a pass whose two timestamps are equal (browsers may
+ * round them, Chrome to 0.1 ms) counts as unresolved rather than as
+ * time. Also measures an empty round trip to the device. The
  * model advances by those steps, so the caller stops its own loop first.
  */
 const MAX_PASSES = 2048;
@@ -70,10 +72,11 @@ export async function profileGpu(model, { steps = 16, dt }) {
     const totals = new Map();
     let total = 0;
     passes.forEach(({ kernels: names }, i) => {
-      const ms = stamps[2 * i + 1] > stamps[2 * i] ? Number(stamps[2 * i + 1] - stamps[2 * i]) / 1e6 : 0;
+      const resolved = stamps[2 * i + 1] > stamps[2 * i], ms = resolved ? Number(stamps[2 * i + 1] - stamps[2 * i]) / 1e6 : 0;
       const label = [...new Set(names)].join(' + ') || 'no kernel';
-      const entry = totals.get(label) ?? totals.set(label, { name: label, ms: 0, passes: 0 }).get(label);
+      const entry = totals.get(label) ?? totals.set(label, { name: label, ms: 0, passes: 0, unresolved: 0 }).get(label);
       entry.ms += ms / steps; entry.passes += 1 / steps; total += ms;
+      if (!resolved) entry.unresolved += 1 / steps;
     });
     kernels = [...totals.values()].sort((a, b) => b.ms - a.ms);
     gpuMs = total / steps;

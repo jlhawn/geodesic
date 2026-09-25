@@ -16,6 +16,7 @@ export function pickDevice({ gpu, cpu }, workers) {
     return { N: ladder[at], rate: rates[at] };
   };
   if (gpu && !gpu.error) return { engine: 'gpu', ...pick(GPU_LADDER, gpu, 1), measured: `${gpu.ms.toFixed(1)} ms a step at N=${gpu.N} on the GPU` };
+  if (!cpu || cpu.error) return null;
   const speedup = workers > 1 ? Math.min(0.7 * workers, 7) : 1;
   return { engine: 'cpu', ...pick(CPU_LADDER, cpu, speedup), measured: `${cpu.ms.toFixed(0)} ms a step at N=${cpu.N} on one CPU thread${gpu ? `; the GPU failed: ${gpu.error}` : ''}` };
 }

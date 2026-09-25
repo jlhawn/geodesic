@@ -103,14 +103,42 @@ async function sendFrame() { postFrame(await captureFrame()); }
  * While a batch of steps is still finishing after a pause, it waits for
  * that batch's own frame, so that the page's last frame carries the
  * latest subscription. halt() pauses and resolves once no batch is
- * stepping, before anything reads or replaces the model's state.
+ * stepping.
  */
-let stepping = false, resend = false, batchDone = Promise.resolve(), profiling = null;
-async function halt() { running = false; resend = false; if (profiling) profiling.resume = false; await batchDone; }
+let stepping = false, resend = false, batchDone = Promise.resolve();
+async function halt() { running = false; resend = false; await batchDone; }
 const report = (error) => status(`error: ${error && error.stack ? error.stack : error}`);
 function refresh() {
   if (stepping) { resend = true; return; }
   sendFrame().catch(report);
+}
+
+/*
+ * Work on the model outside the loop (a snapshot, a restore, a profile)
+ * holds it, one holder at a time: the loop stops first, pause and resume
+ * requests that arrive meanwhile are kept in `held.resume` and take effect
+ * when the holder is done, and a frame asked for meanwhile follows then.
+ * `resume` is whether the loop runs again afterwards unless told otherwise.
+ */
+let held = null;
+async function hold(work, { resume = false } = {}) {
+  while (held) await held.done;
+  let release;
+  held = { resume, done: new Promise((resolve) => { release = resolve; }) };
+  let finish;
+  try {
+    await halt();
+    batchDone = new Promise((resolve) => { finish = resolve; });
+    stepping = true;
+    await work();
+  } finally {
+    stepping = false;
+    if (finish) finish();
+    const again = held.resume;
+    held = null;
+    release();
+    if (again && model) { running = true; loop(); } else if (resend) { resend = false; refresh(); }
+  }
 }
 
 /*
@@ -281,10 +309,10 @@ self.onmessage = async (event) => {
   if (message.type === 'start') {
     try { await start(message); } catch (error) { status(`error: ${error && error.stack ? error.stack : error}`); }
   } else if (message.type === 'pause') {
-    if (profiling) profiling.resume = false;
+    if (held) held.resume = false;
     else running = false;
   } else if (message.type === 'resume') {
-    if (profiling) profiling.resume = true;
+    if (held) held.resume = true;
     else if (model && !running) { running = true; if (!stepping) loop(); }
   } else if (message.type === 'pace') {
     adjustPace(message);
@@ -292,13 +320,14 @@ self.onmessage = async (event) => {
     subscription = { level: 'surface', fields: [], diagnostics: false, ...message.subscription };
     if (serving && !running) refresh();
   } else if (message.type === 'snapshot') {
-    if (serving) await snapshot();
+    if (serving) await hold(snapshot).catch(report);
   } else if (message.type === 'restore') {
-    try { await restore(message.snapshot); } catch (error) { status(`error: ${error && error.stack ? error.stack : error}`); }
+    await hold(() => restore(message.snapshot)).catch(report);
   } else if (message.type === 'profile') {
-    if (serving) await profile();
+    if (serving) await hold(profile, { resume: running }).catch((error) => self.postMessage({ type: 'profile', error: String(error && error.stack ? error.stack : error) }));
+    else self.postMessage({ type: 'profile', error: 'the model is not ready yet' });
   } else if (message.type === 'probe') {
-    await probe(message);
+    try { await probe(message); } catch (error) { self.postMessage({ type: 'probe', error: String(error && error.stack ? error.stack : error) }); }
   }
 };
 
@@ -359,45 +388,26 @@ async function probe(message) {
 /*
  * A GPU profile for the page (js/gpu/profile.module.js), with the time
  * one frame of the current subscription takes to compute and read back.
- * It counts as a batch, so halt() waits for it; pause and resume requests
- * that arrive meanwhile take effect when it ends.
+ * It runs while holding the model.
  */
 async function profile() {
   if (!model.beginFrame) { self.postMessage({ type: 'profile', error: 'the profile needs the GPU engine' }); return; }
-  if (profiling) return;
-  const resume = running;
-  await halt();
-  profiling = { resume };
-  let finish;
-  batchDone = new Promise((resolve) => { finish = resolve; });
-  stepping = true;
-  try {
-    const result = await profileGpu(model, { steps: 16, dt });
-    const start = performance.now();
-    const captured = await model.beginFrame(subscription);
-    result.frame = performance.now() - start;
-    postFrame(captured);
-    self.postMessage({ type: 'profile', result: { ...result, N: currentN, dt, queueDepth: QUEUE_DEPTH, pause: pace.pause } });
-  } catch (error) {
-    self.postMessage({ type: 'profile', error: String(error && error.stack ? error.stack : error) });
-  } finally {
-    stepping = false;
-    finish();
-  }
-  const again = profiling.resume;
-  profiling = null;
-  if (again) { running = true; loop(); } else if (resend) { resend = false; refresh(); }
+  const result = await profileGpu(model, { steps: 16, dt });
+  const start = performance.now();
+  const captured = await model.beginFrame(subscription);
+  result.frame = performance.now() - start;
+  postFrame(captured);
+  self.postMessage({ type: 'profile', result: { ...result, N: currentN, dt, queueDepth: QUEUE_DEPTH, pause: pace.pause } });
 }
 
 let lastStart = null, currentN = null;
 
 /*
- * Pauses, refreshes the mirrors from the device if the engine keeps
- * them there, and hands the page a copy of the state and the ocean as
- * transferable buffers.
+ * While holding the model: refreshes the mirrors from the device if the
+ * engine keeps them there, and hands the page a copy of the state and the
+ * ocean as transferable buffers.
  */
 async function snapshot() {
-  await halt();
   if (model.sync) await model.sync();
   const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
   const arrays = Object.fromEntries(names.map((name, a) => [name, Float64Array.from(model.state[a]).buffer]));
@@ -416,16 +426,16 @@ async function snapshot() {
 }
 
 /*
- * Restores a snapshot: into the running model when the resolution
- * matches, otherwise by starting over with the snapshot as the saved
- * state. The model stays paused afterwards.
+ * Restores a snapshot while holding the model: into the running model
+ * when the resolution matches, otherwise by starting over with the
+ * snapshot as the saved state. The model stays paused afterwards unless
+ * the page asked meanwhile for it to run.
  */
 async function restore(snapshot) {
   const saved = { N: snapshot.N, K: snapshot.K, day: snapshot.day, time: snapshot.time, terrain: !!snapshot.terrain };
   for (const [name, buffer] of Object.entries(snapshot.arrays)) saved[name] = new Float64Array(buffer);
   if (snapshot.ocean) saved.ocean = Object.fromEntries(Object.entries(snapshot.ocean).map(([k, buffer]) => [k, new Float64Array(buffer)]));
   if (snapshot.land) saved.land = Object.fromEntries(Object.entries(snapshot.land).map(([k, buffer]) => [k, new Float64Array(buffer)]));
-  await halt();
   if (!model || saved.N !== currentN) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);

@@ -28,3 +28,8 @@ test('without the GPU, the CPU runs what its workers can carry', () => {
 test('hours a minute from the step time', () => {
   assert.ok(Math.abs(hoursPerMinute(64, 14.5) - 388) < 1);
 });
+
+test('with neither test usable there is no choice', () => {
+  assert.equal(pickDevice({ gpu: { N: 64, error: 'lost' }, cpu: null }, 4), null);
+  assert.equal(pickDevice({ gpu: null, cpu: { N: 16, error: 'failed' } }, 4), null);
+});

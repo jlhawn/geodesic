@@ -815,7 +815,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     }
     if (message.type === 'snapshotData') storeSnapshot(message);
     if (message.type === 'profile') showProfile(message);
-    if (message.type === 'probe' && probed) { probed(message.result); probed = null; }
+    if (message.type === 'probe' && probed) { probed(message); probed = null; }
     if (message.type === 'frame') {
       document.getElementById('progress').classList.remove('visible');
       latest = { ...message.fields, ...geographyFields, time: message.time, level: message.level, diagnostics: message.diagnostics, engine: message.engine, pause: message.pause, N: ready.N, workers: ready.workers };
@@ -829,6 +829,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   subscribed = JSON.stringify(subscription());
   const topographyUrl = topography ? new URL(topography, location.href).href : null, threads = crossOriginIsolated ? workers : 1;
   const begin = (choice = {}) => worker.postMessage({ type: 'start', N: choice.N ?? N, from: from ? new URL(from, location.href).href : null, workers: threads, engine: choice.engine ?? engine, paused, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl });
+  const PROBE_TIMEOUT = 120000;
   let deviceChoice = null, probed = null;
   async function deviceKey() {
     let adapter = '';
@@ -841,8 +842,14 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       const stored = JSON.parse(localStorage.getItem('climate.device') || 'null');
       if (stored && stored.key === key && stored.version === PROBE_VERSION) return (deviceChoice = stored);
     } catch { /* storage unavailable */ }
-    const result = await new Promise((resolve) => { probed = resolve; worker.postMessage({ type: 'probe', engine, land, terrain, topography: topographyUrl }); });
-    deviceChoice = { ...pickDevice(result, threads), key, version: PROBE_VERSION, at: Date.now() };
+    const reply = await new Promise((resolve, reject) => {
+      probed = resolve;
+      setTimeout(() => reject(new Error('the device test did not answer')), PROBE_TIMEOUT);
+      worker.postMessage({ type: 'probe', engine, land, terrain, topography: topographyUrl });
+    });
+    const choice = reply.result && pickDevice(reply.result, threads);
+    if (!choice) throw new Error(reply.error ?? 'the device test found nothing to run on');
+    deviceChoice = { ...choice, key, version: PROBE_VERSION, at: Date.now() };
     try { localStorage.setItem('climate.device', JSON.stringify(deviceChoice)); } catch { /* storage unavailable */ }
     return deviceChoice;
   }
@@ -989,6 +996,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   profileButton.addEventListener('click', () => {
     rateBefore = running ? simulatedHoursPerMinute() : null;
     profileButton.disabled = true;
+    profileCopy.disabled = true;
+    profileText = '';
     profileOut.textContent = 'profiling…';
     profileOut.classList.remove('hidden');
     worker.postMessage({ type: 'profile' });
@@ -1011,10 +1020,11 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       r.gpuMs === null ? 'GPU timestamps: not offered by this browser' : `GPU time per step, from timestamps: ${ms(r.gpuMs)}`,
       `Empty round trip to the GPU: ${ms(r.roundTrip)}`,
       `One frame, computed and read back: ${ms(r.frame)}`,
+      'These steps ran one at a time with the loop stopped; the loop keeps two in flight, so it runs faster than they suggest.',
     ];
     if (r.kernels) {
       lines.push('Kernels by GPU time, ms per step (passes per step):');
-      for (const k of r.kernels.slice(0, 24)) lines.push(`${k.ms.toFixed(3).padStart(9)}  ${k.name} (${+k.passes.toFixed(2)})`);
+      for (const k of r.kernels.slice(0, 24)) lines.push(`${k.ms.toFixed(3).padStart(9)}  ${k.name} (${+k.passes.toFixed(2)}${k.unresolved ? `, ${+k.unresolved.toFixed(2)} too short for the timer` : ''})`);
     }
     profileText = lines.join('\n');
     profileOut.textContent = profileText;
