@@ -14,27 +14,40 @@
     .tagline { color: #999; margin: 0 0 32px; }
     a { color: #ffe8a0; }
     .card { display: block; overflow: hidden; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; color: inherit; text-decoration: none; transition: background 0.15s, border-color 0.15s; }
-    .card:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(255, 232, 160, 0.5); }
+    a.card:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(255, 232, 160, 0.5); }
     .card img { display: block; width: 100%; height: auto; }
     .card .body { padding: 22px 26px 24px; }
     .card h2 { margin: 0 0 8px; font-size: 20px; font-weight: 600; color: #fff; }
     .card p { margin: 0; color: #ccc; }
     .card .go { display: inline-block; margin-top: 14px; color: #ffe8a0; font-weight: 500; }
-    .hero { margin-bottom: 16px; }
+    .hero { margin-bottom: 36px; }
     .hero .body { padding: 28px 36px 32px; }
     .hero h2 { font-size: 28px; }
     .hero p { font-size: 17px; color: #ddd; }
     .hero .note { margin-top: 12px; font-size: 14px; color: #999; }
     .hero .go { font-size: 18px; margin-top: 18px; }
-    .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 0 0 36px; }
-    .strip a { display: block; color: #999; text-decoration: none; font-size: 13px; line-height: 1.4; }
-    .strip a:hover { color: #ddd; }
-    .strip img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 8px; margin-bottom: 6px; }
+    .frame { position: relative; aspect-ratio: 1920 / 1110; background: #000; overflow: hidden; touch-action: pan-y; }
+    .slide { position: absolute; inset: 0; opacity: 0; transition: opacity 0.7s ease; }
+    .slide.current { opacity: 1; z-index: 1; }
+    .frame img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .controls { display: flex; align-items: center; gap: 8px; padding: 14px 36px 0; }
+    .carousel:not(.ready) .controls { visibility: hidden; }
+    .controls button { flex: none; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 50%; background: rgba(255, 255, 255, 0.06); color: #ddd; cursor: pointer; }
+    .controls button:hover { border-color: rgba(255, 232, 160, 0.5); color: #fff; }
+    .controls button:focus-visible, .caption:focus-visible { outline: 2px solid #ffe8a0; outline-offset: 2px; }
+    .slide:focus-visible { outline: 2px solid #ffe8a0; outline-offset: -4px; }
+    .controls svg { width: 16px; height: 16px; fill: currentColor; }
+    .play .resume, .play.paused .pause { display: none; }
+    .play.paused .resume { display: block; }
+    .caption { flex: 1; min-width: 0; margin-left: 6px; color: #ccc; text-decoration: none; font-size: 15px; line-height: 1.35; }
+    .caption:hover { color: #ffe8a0; }
+    .count { flex: none; color: #888; font-size: 13px; font-variant-numeric: tabular-nums; }
+    @media (prefers-reduced-motion: reduce) { .slide { transition: none; } }
     .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
     .row img { aspect-ratio: 16 / 10; object-fit: cover; }
     .row img.chart { object-fit: contain; background: #fff; }
     footer { margin-top: 40px; color: #888; font-size: 14px; }
-    @media (max-width: 600px) { main { padding: 32px 16px 48px; } .hero .body, .card .body { padding: 20px; } }
+    @media (max-width: 600px) { main { padding: 32px 16px 48px; } .hero .body, .card .body { padding: 20px; } .controls { flex-wrap: wrap; padding: 12px 20px 0; } .caption { order: 1; flex-basis: 100%; margin: 4px 0 0; } .count { margin-left: auto; } }
   </style>
 </head>
 
@@ -43,20 +56,36 @@
     <h1>WebGCM</h1>
     <p class="tagline">A global climate model that runs in your browser.</p>
 
-    <a class="card hero" href="climate.html?view=space&lat=15&lon=-95&zoom=230&graticule=off&sun=1&ambient=0.004">
-      <img src="screenshots/satellite.jpg" width="1280" height="720" alt="The simulated Earth seen from space, with clouds, sea ice and the day–night terminator">
+    <section class="card hero">
+      <div class="carousel" role="region" aria-roledescription="carousel" aria-label="Views of the model">
+        <div class="frame">
+          <a class="slide" href="climate.html?view=space&overlay=current&animate=particles&isobars=off&graticule=off&projection=sphere&lat=8.2&lon=-91.4&zoom=307&level=surface&isobarStep=10&heightStep=30&palette=dusk&panel=closed&sun=1.11&ambient=0.0008&stats=off&roll=0.5" data-caption="Satellite view of the Americas"><img data-src="screenshots/carousel_1.png" width="1920" height="1131" alt="The Americas seen from space, with clouds over the Caribbean and the Amazon and night over the eastern Pacific"></a>
+          <a class="slide" href="climate.html?view=space&overlay=current&animate=particles&isobars=off&graticule=off&projection=sphere&lat=7.6&lon=10.8&zoom=307&level=surface&isobarStep=10&heightStep=30&palette=dusk&panel=closed&sun=1.11&ambient=0.0008&stats=off&roll=4.9" data-caption="Satellite view of Africa and Europe"><img data-src="screenshots/carousel_2.png" width="1920" height="1135" alt="Africa and Europe seen from space, with the Sahara, the Mediterranean and the sunglint off West Africa"></a>
+          <a class="slide" href="climate.html?view=space&overlay=current&animate=particles&isobars=off&graticule=off&projection=sphere&lat=15.6&lon=103.1&zoom=336&level=surface&isobarStep=10&heightStep=30&palette=dusk&panel=closed&sun=1.11&ambient=0.0008&stats=off&roll=3.6" data-caption="Satellite view of East Asia, India and Australia"><img data-src="screenshots/carousel_3.png" width="1920" height="1134" alt="Asia seen from space, from Siberia to the cloud over the Maritime Continent and northern Australia"></a>
+          <a class="slide" href="climate.html?view=atmosphere&overlay=wind&animate=particles&isobars=off&graticule=off&projection=map&lat=0.9&lon=4.6&zoom=136&level=surface&isobarStep=10&heightStep=30&palette=dusk&panel=closed&sun=1.11&ambient=0.0008&stats=off&roll=-0.3" data-caption="Surface wind speed on the Equal Earth projection, with wind particles"><img data-src="screenshots/carousel_4.png" width="1920" height="1108" alt="A world map of surface wind speed, with the storm tracks of both hemispheres in green and red"></a>
+          <a class="slide" href="climate.html?view=atmosphere&overlay=wind&animate=none&isobars=on&graticule=off&projection=sphere&lat=47&lon=27&zoom=580&level=250&isobarStep=10&heightStep=30&palette=dusk&panel=closed&sun=1.11&ambient=0.0008&stats=off" data-caption="The jet stream over Europe, the Middle East and North Africa"><img data-src="screenshots/carousel_5.png" width="1920" height="1097" alt="Wind speed at 250 hPa with height contours, the polar jet over Europe and the subtropical jet over North Africa and the Middle East"></a>
+          <a class="slide" href="climate.html?view=atmosphere&overlay=wind&animate=arrows&isobars=off&graticule=off&projection=sphere&lat=45&lon=125&zoom=1000&level=surface&isobarStep=10&heightStep=30&palette=dusk&panel=closed&sun=1.11&ambient=0.0008&stats=off" data-caption="Wind speed and vectors around a storm over northern China"><img data-src="screenshots/carousel_6.png" width="1920" height="1100" alt="A close view of surface wind speed and wind arrows circling a storm over northeast China"></a>
+          <a class="slide" href="climate.html?view=ocean&overlay=current&animate=particles&isobars=off&graticule=off&projection=sphere&lat=27.4&lon=133.5&zoom=1050&level=surface&isobarStep=10&heightStep=30&palette=dusk&panel=closed&sun=1.11&ambient=0.0008&stats=off" data-caption="The Kuroshio Current: current speed with particles"><img data-src="screenshots/carousel_7.png" width="1920" height="1094" alt="Ocean current speed south of Japan, with the Kuroshio running from Taiwan along the Japanese coast and out into the Pacific"></a>
+          <a class="slide" href="climate.html?view=ocean&overlay=current&animate=particles&isobars=off&graticule=off&projection=sphere&lat=29.2&lon=-73.1&zoom=703&level=surface&isobarStep=5&heightStep=30&palette=dusk&panel=closed&sun=1.11&ambient=0.0008&stats=off&roll=-2.3" data-caption="The Gulf Stream"><img data-src="screenshots/carousel_8.png" width="1920" height="1094" alt="Ocean current speed off North America, with the Gulf Stream leaving the Gulf of Mexico and meandering out into the Atlantic"></a>
+          <a class="slide" href="climate.html?view=atmosphere&overlay=temp&animate=particles&isobars=on&graticule=off&projection=map&lat=0.1&lon=150.4&zoom=140&level=surface&isobarStep=10&heightStep=30&palette=dusk&panel=closed&sun=1.11&ambient=0.0008&stats=off" data-caption="Global surface temperature with sea-level pressure isobars and wind particles"><img data-src="screenshots/carousel_9.png" width="1920" height="1101" alt="A world map of surface temperature centred on the Pacific, with isobars and the wind particles"></a>
+          <a class="slide" href="climate.html?view=atmosphere&overlay=tpw&animate=particles&isobars=off&graticule=off&projection=map&lat=1.8&lon=-0.2&zoom=140&level=surface&isobarStep=10&heightStep=30&palette=viridis&panel=closed&sun=1.11&ambient=0.0008&stats=off" data-caption="Global total precipitable water with surface wind particles"><img data-src="screenshots/carousel_10.png" width="1920" height="1104" alt="A world map of total precipitable water, with the moist tropics in yellow and plumes of moisture reaching into the midlatitudes"></a>
+          <noscript><img src="screenshots/carousel_1.png" width="1920" height="1131" alt="The Americas seen from space"></noscript>
+        </div>
+        <div class="controls">
+          <button type="button" class="prev" aria-label="Previous view"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2.5 5 8l5.5 5.5 1.1-1.1L7.2 8l4.4-4.4z"/></svg></button>
+          <button type="button" class="play" aria-label="Pause the slideshow"><svg class="pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h3v10H4zm5 0h3v10H9z"/></svg><svg class="resume" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.5v11l9-5.5z"/></svg></button>
+          <button type="button" class="next" aria-label="Next view"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 2.5 11 8l-5.5 5.5-1.1-1.1L8.8 8 4.4 3.6z"/></svg></button>
+          <a class="caption" href="climate.html" aria-live="off"></a>
+          <span class="count"></span>
+        </div>
+      </div>
       <div class="body">
         <h2>Climate model</h2>
         <p>A global climate model running live: a hydrostatic atmosphere with 27 levels on a geodesic C-grid, moist convection and clouds, a six-layer ocean with a mixed layer over isopycnal layers, sea ice, snow and soil on real continents with terrain. Every kernel runs on the graphics card through WebGPU. It picks up from a two-and-a-half-year spin-up at 64 subdivisions, about 41,000 cells 110 km across, where you can colour the globe by wind, temperature, pressure, rain, clouds, ice or ocean currents, follow the wind with particles, watch the planet from space, and save snapshots.</p>
         <p class="note">Best in a browser with WebGPU (Chrome, Edge or Safari 26). Without it the model falls back to a slower CPU engine. The starting state is a 50 MB download.</p>
-        <span class="go">Open the climate model →</span>
+        <a class="go" href="climate.html?view=space&lat=15&lon=-95&zoom=230&graticule=off&sun=1&ambient=0.004">Open the climate model →</a>
       </div>
-    </a>
-    <div class="strip">
-      <a href="climate.html?view=atmosphere&overlay=wind&level=250&animate=arrows&isobars=off&graticule=15&projection=sphere&lat=50&lon=-30&zoom=900"><img src="screenshots/jet.jpg" width="960" height="600" alt="Wind speed at 250 hPa on the globe, with the jet streams as bright bands">Jet streams: wind speed at 250 hPa, with wind vectors and the graticule</a>
-      <a href="climate.html?view=atmosphere&overlay=mslp&isobars=on&isobarStep=1&animate=none&graticule=off&projection=sphere&lat=-58&lon=-85&zoom=700"><img src="screenshots/pressure.jpg" width="960" height="600" alt="A deep low with 1 hPa isobars over the Drake Passage">Sea-level pressure with 1 hPa isobars over the Drake Passage</a>
-      <a href="climate.html?view=ocean&overlay=sst&animate=particles&isobars=off&graticule=off&projection=sphere&lat=22&lon=-72&zoom=600"><img src="screenshots/ocean.jpg" width="960" height="600" alt="Sea surface temperature around the Caribbean with the current particles">Sea surface temperature with the current animation over the Caribbean and the Gulf Stream</a>
-    </div>
+    </section>
 
     <div class="row">
       <a class="card" href="grid.html">
@@ -79,6 +108,88 @@
 
     <footer>Source and design notes on <a href="https://github.com/jlhawn/geodesic">GitHub</a>.</footer>
   </main>
+  <script>
+    /*
+     * The carousel shows the slides in a fresh random order, moving on every
+     * INTERVAL ms while playing. Only the shown slide and the one after it
+     * are fetched, and a slide is shown once its image has decoded, so the
+     * frame never fades to an empty picture. Visitors who prefer reduced
+     * motion start paused.
+     */
+    (() => {
+      const INTERVAL = 5000;
+      const carousel = document.querySelector('.carousel'), frame = carousel.querySelector('.frame');
+      const caption = carousel.querySelector('.caption'), count = carousel.querySelector('.count'), play = carousel.querySelector('.play');
+      const slides = [...frame.querySelectorAll('.slide')];
+      for (let i = slides.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [slides[i], slides[j]] = [slides[j], slides[i]];
+      }
+      let index = 0, shown = 0, timer = null, playing = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      const image = (slide) => {
+        const img = slide.querySelector('img');
+        if (!img.getAttribute('src')) img.src = img.dataset.src;
+        return img;
+      };
+      function schedule() {
+        clearTimeout(timer);
+        if (playing && !document.hidden) timer = setTimeout(() => show(index + 1), INTERVAL);
+      }
+      async function show(next) {
+        index = (next + slides.length) % slides.length;
+        const slide = slides[index], ticket = ++shown;
+        clearTimeout(timer);
+        try { await image(slide).decode(); } catch { /* shown as it arrives */ }
+        if (ticket !== shown) return;
+        for (const other of slides) {
+          other.classList.toggle('current', other === slide);
+          other.inert = other !== slide;
+        }
+        caption.textContent = slide.dataset.caption;
+        caption.href = slide.href;
+        count.textContent = `${index + 1} / ${slides.length}`;
+        image(slides[(index + 1) % slides.length]);
+        schedule();
+      }
+      function setPlaying(value) {
+        playing = value;
+        play.classList.toggle('paused', !playing);
+        play.setAttribute('aria-label', playing ? 'Pause the slideshow' : 'Play the slideshow');
+        caption.setAttribute('aria-live', playing ? 'off' : 'polite');
+        schedule();
+      }
+
+      carousel.querySelector('.prev').addEventListener('click', () => show(index - 1));
+      carousel.querySelector('.next').addEventListener('click', () => show(index + 1));
+      play.addEventListener('click', () => setPlaying(!playing));
+      carousel.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowLeft') show(index - 1);
+        else if (event.key === 'ArrowRight') show(index + 1);
+      });
+      let start = null, swiped = false;
+      frame.addEventListener('pointerdown', (event) => {
+        swiped = false;
+        start = event.pointerType === 'mouse' ? null : { x: event.clientX, y: event.clientY };
+      });
+      frame.addEventListener('pointerup', (event) => {
+        if (!start) return;
+        const dx = event.clientX - start.x, dy = event.clientY - start.y;
+        start = null;
+        if (Math.abs(dx) > 40 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+          swiped = true;
+          show(index + (dx < 0 ? 1 : -1));
+        }
+      });
+      frame.addEventListener('pointercancel', () => { start = null; });
+      frame.addEventListener('click', (event) => { if (swiped) event.preventDefault(); }, true);
+      document.addEventListener('visibilitychange', schedule);
+
+      setPlaying(playing);
+      carousel.classList.add('ready');
+      show(0);
+    })();
+  </script>
 </body>
 
 </html>
