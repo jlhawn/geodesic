@@ -1752,15 +1752,52 @@ linearizes it. A frame costs the page 0.02 ms and 160 KB at N=64
 (0.14 ms and 640 KB at N=128) against 0.9 ms and 720 KB (3.7 ms and
 2.9 MB) for colouring every vertex on the main thread.
 
-The worker waits for the device after every GPU step before queuing the
-next. The browser draws the globe on the same GPU, and without the wait
-a frame that asked for nothing let the worker queue steps far faster
-than the device ran them: 3.8 frames per second with nothing drawn and
-44 with the wind shown, against a steady 60 with the wait, at 8% of the
-throughput (N=64, 345 simulated hours per minute; N=128, 42). The page
-reports its late frames once a second, and the worker adds an idle
-pause after each step while there are any; on the development machine
-it stays at zero.
+The browser draws the globe on the same GPU, so the worker must not let
+its queue run ahead of the page's frames. With no wait on the device, a
+frame that asked for nothing let the worker queue steps far faster than
+they ran: 3.8 frames per second with nothing drawn, 44 with the wind
+shown. The worker keeps two steps in flight: after queuing one, it waits
+for the one before to finish. That holds 60 frames per second at the
+throughput of an unbounded queue. In Chrome on the M1 Max that is 391
+simulated hours a minute at N=64 and 46 at N=128. Waiting after every
+step gave 367 and 45.
+
+The page counts frames that come late against the display's own frame
+interval, leaving out delays that its own work explains: frame messages,
+its loop, and the globe's and the particles' drawing. It reports them
+each second, and the pacer (`js/pace.module.js`) tries idle pauses of 2,
+4 and 8 ms between steps, keeping one only while it cuts the late frames
+by a third. On an iPhone 17 Pro the late frames came as often without a
+pause as with one; the earlier controller had pinned 12 ms there at 10%
+of the rate. `?pace=off` stops the reports.
+
+The model dialog's GPU profile (`js/gpu/profile.module.js`) runs 16
+steps one at a time. Where the browser offers `timestamp-query`, it puts
+timestamps around every compute pass and charges each pass to the
+kernels it dispatched. It also measures an empty round trip and one
+frame, and gives the result as text to copy from another device. On the
+M1 Max at N=64 a step takes 12.7 ms: the atmosphere's RK stages 7.4 ms,
+the boundary layer 1.7, the ocean about 2, and a frame 3.6 ms.
+
+When the address names no resolution, engine or saved run, a first visit
+tests the device. It times an N=64 model on the GPU, or one CPU thread
+at N=16 when there is no usable GPU. It then picks the highest of
+N=128, 64 and 32 (for the CPU: 64, 32 and 16) projected to clear 30
+simulated hours a minute (`js/deviceChoice.module.js`). The choice is
+kept for the same browser and GPU, and "Test again" in the model dialog
+repeats the test. The M1 Max measures 14.2 ms a step at N=64 and runs
+N=128.
+
+Below 600 px wide, or on a short touch screen, the page takes a phone
+layout:
+- the settings panel is a bottom sheet, and the globe lifts into the gap
+  above it (`viewer.setInsets`, a translation of the projection);
+- overlays are listed by name with their notes, in place of hover tips;
+- the legend spans the width.
+
+On any touch screen, one finger turns the globe; two pan, pinch to zoom
+about their midpoint, and roll once they twist past about 11° (the
+maths is in `js/gestures.module.js`).
 
 ## 7. Module layout in this repo
 
@@ -1792,11 +1829,15 @@ js/
     core.gpu.js              M15: layouts, dynamics kernels, RK4 and closures, full-step orchestration
     physics.gpu.js           M15: column physics and adjustment kernels
     model.gpu.js             M15: the GPU model behind the CPU model's interface
+    profile.module.js        the model dialog's GPU profile: step times and kernel timestamps
   model.module.js           assembles core + physics, RK4 step, diagnostics
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase
   threads.module.js         M6: worker_threads / Web Worker primitives behind the engine
   model.worker.js           browser worker: steps the model and serves the page's subscription
+  pace.module.js            the pacer: an idle pause between GPU steps only while it cuts the page's late frames
+  deviceChoice.module.js    the engine and resolution a first visit's device test picks
+  gestures.module.js        two-finger pan, pinch and twist from a pair of touch points
   frames.module.js          the page–worker protocol and the catalogue of fields a frame can carry
   climate.module.js         live model page (climate.html): control panel, overlays, wind layers
   levels.module.js          fields on a pressure surface, comfort measures; season phrase for the model time
@@ -1804,6 +1845,11 @@ js/
   windParticles.module.js   wind shown by particles advected by the field, their opacity rising with speed
   charts.module.js          synoptic charts from saved states (charts.html)
   unifiedViewer.module.js   existing, gains model-overlay mode; colours per-cell values on the GPU
+scripts/
+  spinup.mjs, spinup.sh     one spin-up segment on the GPU from the newest snapshot, and a loop of them
+  pairedSpinup.sh           resolutions spun up in step, one at a time, compared every EVERY days
+  compareStates.mjs         saved states side by side as a markdown table
+  splitState.mjs            a saved state gzipped into parts for the page
 test/
   mesh.test.mjs, operators.test.mjs, trisk.test.mjs, sw_tc2.mjs, sw_tc6.mjs,
   sw_galewsky.mjs, rest_state.mjs, held_suarez.mjs, baseline_compare.mjs
