@@ -847,7 +847,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     } catch { /* storage unavailable */ }
     const reply = await new Promise((resolve, reject) => {
       probed = resolve;
-      setTimeout(() => reject(new Error('the device test did not answer')), PROBE_TIMEOUT);
+      setTimeout(() => { probed = null; reject(new Error('the device test did not answer')); }, PROBE_TIMEOUT);
       worker.postMessage({ type: 'probe', engine, land, terrain, topography: topographyUrl });
     });
     const choice = reply.result && pickDevice(reply.result, threads);

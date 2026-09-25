@@ -310,7 +310,12 @@ self.onmessage = async (event) => {
   const message = event.data;
   if (message.type === 'start') {
     await hold(() => start(message), { resume: !message.paused }).catch(report);
-    if (pendingRestore && model) { const saved = pendingRestore; pendingRestore = null; await hold(() => restore(saved)).catch(report); }
+    if (pendingRestore) {
+      const saved = pendingRestore;
+      pendingRestore = null;
+      if (model) await hold(() => restore(saved), { resume: running }).catch(report);
+      else report('the snapshot was not restored: the model failed to start');
+    }
   } else if (message.type === 'pause') {
     if (held) held.resume = false;
     else running = false;
@@ -458,25 +463,26 @@ async function restore(snapshot) {
 
 async function start(message) {
   lastStart = message;
-  serving = false;
   let saved = message.saved ?? null;
   if (!saved && message.from) {
     saved = await fetchWithProgress(message.from, 0, 0.5);
   }
   const N = message.N ?? saved?.N ?? 16;
-  currentN = N;
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   const options = { ...(message.options ?? {}) };
   if (message.land !== false) { status('loading the topography…', 0.52); options.topography = await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href); }
-  currentTopography = options.topography ?? null;
   options.terrain = message.terrain !== false;
-  dt = message.dt ?? 1350 * 16 / N;
-  stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round((gpuWanted ? 24 : 8) * 16 / N));
   const workers = message.workers ?? 1;
   status(`building the N=${N} grid…`, 0.55);
   const grid = new Grid(N);
   status(gpuWanted ? 'compiling the GPU model…' : workers > 1 ? `starting ${workers} workers…` : 'building the model…', 0.65);
-  model = gpuWanted ? await createGpuModel(grid, options) : workers > 1 ? await createParallelModel(grid, options, workers) : createModel(grid, options);
+  const built = gpuWanted ? await createGpuModel(grid, options) : workers > 1 ? await createParallelModel(grid, options, workers) : createModel(grid, options);
+  serving = false;
+  model = built;
+  currentN = N;
+  currentTopography = options.topography ?? null;
+  dt = message.dt ?? 1350 * 16 / N;
+  stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round((gpuWanted ? 24 : 8) * 16 / N));
   status(saved ? 'placing the saved state…' : 'building the initial state…', 0.8);
   const init = initialState(model, saved, N);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
