@@ -11,6 +11,7 @@ import { levelFields, dewPoint, wetBulb, miseryIndex } from './levels.module.js'
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName } from './stateFile.module.js';
 import { LEVEL_FIELDS, OCEAN_FIELDS, RAIN_MEMORY } from './frames.module.js';
+import { createPacer } from './pace.module.js';
 
 const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
@@ -113,25 +114,26 @@ function refresh() {
 
 /*
  * The GPU draws the page's globe too, and it takes queued work in order,
- * so the worker lets the device finish each step before queuing the
- * next, then stays idle for a pause of whole milliseconds. The page
- * reports once a second how many of its frames came late for a 60 Hz
- * display: two or more lengthen the pause, five calm seconds in a row
- * shorten it by a millisecond, and without reports (the page hidden)
- * there is no pause.
+ * so the worker keeps at most QUEUE_DEPTH steps in flight: after queuing
+ * a step it waits for the one before to finish, which keeps the device
+ * busy without letting the queue run ahead of the page's frames. The page
+ * reports once a second how many of its frames came late for want of the
+ * GPU, and the pacer (js/pace.module.js) turns that into an idle pause:
+ * the worker lets the device drain and then waits that long. Without
+ * reports (the page hidden) there is no pause.
  */
-const PAUSE_MAX = 12;
-const pace = { pause: 0, calm: 0, heard: -Infinity };
+const QUEUE_DEPTH = 2;
+const pacer = createPacer(), inFlight = [];
+const pace = { pause: 0, heard: -Infinity };
 function adjustPace({ late }) {
   pace.heard = performance.now();
-  if (late >= 2) { pace.pause = Math.min(PAUSE_MAX, pace.pause + 1 + (pace.pause >> 1)); pace.calm = 0; }
-  else if (late > 0) pace.calm = 0;
-  else if (++pace.calm >= 5) { pace.pause = Math.max(0, pace.pause - 1); pace.calm = 0; }
+  pace.pause = pacer.report(late);
 }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function yieldToPage() {
-  await model.settle();
-  if (pace.pause > 0 && performance.now() - pace.heard < 3000) await sleep(pace.pause);
+  inFlight.push(model.settle());
+  if (pace.pause > 0 && performance.now() - pace.heard < 3000) { await Promise.all(inFlight.splice(0)); await sleep(pace.pause); }
+  else if (inFlight.length >= QUEUE_DEPTH) await inFlight.shift();
 }
 
 /*

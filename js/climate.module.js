@@ -253,7 +253,7 @@ const VIEW_NOTES = [
 ];
 const NOTES = new Map(VIEW_NOTES);
 
-export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true, settings: overrides = {}, view = null } = {}) {
+export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true, settings: overrides = {}, view = null, pace = true } = {}) {
   const settings = loadSettings();
   applyOverrides(settings, overrides);
   const panel = document.getElementById('panel');
@@ -325,22 +325,36 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
 
   let stats = null;
   /*
-   * Frames more than half a 60 Hz period late, counted each second and
-   * sent to the worker, which paces the GPU so that there are none.
+   * Frames that came late for want of the GPU, counted each second and
+   * sent to the worker, whose pacer decides whether a pause between its
+   * steps helps. A frame is late when it comes more than half an interval
+   * after the display's own frame interval (the median of the last
+   * second's), unless the page's own work since the last frame (frame
+   * messages and this loop) accounts for the delay.
    */
-  const LATE_FRAME = 1.5 * 1000 / 60;
-  const pacing = { last: 0, start: 0, late: 0 };
+  const pacing = { last: 0, start: 0, late: 0, busy: 0, interval: 1000 / 60, gaps: [] };
   function measurePace(now) {
-    if (pacing.last && now - pacing.last > LATE_FRAME) pacing.late++;
+    if (pacing.last) {
+      const gap = now - pacing.last;
+      pacing.gaps.push(gap);
+      if (gap > 1.5 * pacing.interval && gap - pacing.busy > 1.5 * pacing.interval) pacing.late++;
+    }
     pacing.last = now;
+    pacing.busy = 0;
     if (now - pacing.start < 1000) return;
-    if (running && pacing.start) worker.postMessage({ type: 'pace', late: pacing.late });
+    if (pacing.gaps.length >= 10) pacing.interval = pacing.gaps.sort((a, b) => a - b)[pacing.gaps.length >> 1];
+    if (running && pacing.start && pace) worker.postMessage({ type: 'pace', late: pacing.late });
     pacing.start = now;
     pacing.late = 0;
+    pacing.gaps.length = 0;
   }
   function tick(now) {
     requestAnimationFrame(tick);
+    const started = performance.now();
     measurePace(now);
+    try { perFrame(now); } finally { pacing.busy += performance.now() - started; }
+  }
+  function perFrame(now) {
     if (stats && settings.stats === 'on') stats.update();
     if (viewer && (viewer.viewVersion() !== urlVersion || running !== urlRunning)) { urlVersion = viewer.viewVersion(); urlRunning = running; scheduleUrl(); }
     if (!latest) return;
@@ -768,6 +782,10 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
 
   let ready = null, slopesUploaded = false;
   worker.onmessage = (event) => {
+    const started = performance.now();
+    try { handleMessage(event); } finally { pacing.busy += performance.now() - started; }
+  };
+  function handleMessage(event) {
     const message = event.data;
     if (message.type === 'status') {
       document.getElementById('date').textContent = message.text;
@@ -799,7 +817,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       while (clock.length > 2 && clock[clock.length - 1].wall - clock[0].wall > 30000) clock.shift();
       render();
     }
-  };
+  }
   worker.onerror = (error) => { document.getElementById('date').textContent = `worker error: ${error.message}`; };
   subscribed = JSON.stringify(subscription());
   worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null, workers: crossOriginIsolated ? workers : 1, engine, paused, subscription: JSON.parse(subscribed), land, terrain, topography: topography ? new URL(topography, location.href).href : null });
