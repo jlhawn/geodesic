@@ -114,13 +114,15 @@ function refresh() {
 }
 
 /*
- * Work on the model outside the loop (a snapshot, a restore, a profile)
- * holds it, one holder at a time: the loop stops first, pause and resume
- * requests that arrive meanwhile are kept in `held.resume` and take effect
- * when the holder is done, and a frame asked for meanwhile follows then.
- * `resume` is whether the loop runs again afterwards unless told otherwise.
+ * Work on the model outside the loop (the start, a snapshot, a restore, a
+ * profile, the device test) holds it, one holder at a time: the loop
+ * stops first, pause and resume requests that arrive meanwhile are kept
+ * in `held.resume` and take effect when the holder is done, and a frame
+ * asked for meanwhile follows then. `resume` is whether the loop runs
+ * afterwards unless told otherwise. A restore that comes before the first
+ * start waits in `pendingRestore` and follows it.
  */
-let held = null;
+let held = null, pendingRestore = null;
 async function hold(work, { resume = false } = {}) {
   while (held) await held.done;
   let release;
@@ -307,7 +309,8 @@ function geographyMessage(model) {
 self.onmessage = async (event) => {
   const message = event.data;
   if (message.type === 'start') {
-    try { await start(message); } catch (error) { status(`error: ${error && error.stack ? error.stack : error}`); }
+    await hold(() => start(message), { resume: !message.paused }).catch(report);
+    if (pendingRestore && model) { const saved = pendingRestore; pendingRestore = null; await hold(() => restore(saved)).catch(report); }
   } else if (message.type === 'pause') {
     if (held) held.resume = false;
     else running = false;
@@ -321,13 +324,15 @@ self.onmessage = async (event) => {
     if (serving && !running) refresh();
   } else if (message.type === 'snapshot') {
     if (serving) await hold(snapshot).catch(report);
+    else report('the model is not ready yet');
   } else if (message.type === 'restore') {
-    await hold(() => restore(message.snapshot)).catch(report);
+    if (lastStart) await hold(() => restore(message.snapshot)).catch(report);
+    else pendingRestore = message.snapshot;
   } else if (message.type === 'profile') {
     if (serving) await hold(profile, { resume: running }).catch((error) => self.postMessage({ type: 'profile', error: String(error && error.stack ? error.stack : error) }));
     else self.postMessage({ type: 'profile', error: 'the model is not ready yet' });
   } else if (message.type === 'probe') {
-    try { await probe(message); } catch (error) { self.postMessage({ type: 'probe', error: String(error && error.stack ? error.stack : error) }); }
+    await hold(() => probe(message)).catch((error) => self.postMessage({ type: 'probe', error: String(error && error.stack ? error.stack : error) }));
   }
 };
 
@@ -488,6 +493,4 @@ async function start(message) {
   serving = true;
   self.postMessage({ type: 'ready', N, cells: model.mesh.nCells, layers: model.core.K, dt, day: model.time / 86400, workers, ocean: !!model.ocean, ...geographyMessage(model) });
   refresh();
-  running = !message.paused;
-  if (running) loop();
 }

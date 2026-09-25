@@ -830,7 +830,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const topographyUrl = topography ? new URL(topography, location.href).href : null, threads = crossOriginIsolated ? workers : 1;
   const begin = (choice = {}) => {
     const run = (choice.N && defaults[choice.N]) || from;
-    worker.postMessage({ type: 'start', N: choice.N ?? N, from: run ? new URL(run, location.href).href : null, workers: threads, engine: choice.engine ?? engine, paused, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl });
+    worker.postMessage({ type: 'start', N: choice.N ?? N, from: run ? new URL(run, location.href).href : null, workers: threads, engine: choice.engine ?? engine, paused: !running, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl });
   };
   const PROBE_TIMEOUT = 120000;
   let deviceChoice = null, probed = null;
