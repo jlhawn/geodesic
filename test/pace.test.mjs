@@ -39,3 +39,9 @@ test('the pause lets go once the contention ends', () => {
 test('one late second now and then does not start a pause', () => {
   assert.ok(run((pause, s) => (s % 7 === 0 ? 2 : s % 3 === 0 ? 1 : 0)).every((p) => p === 0));
 });
+
+test('a late frame every second after the contention ends still lets the pause go', () => {
+  const pauses = run((pause, s) => (s < 60 ? (pause >= 2 ? 0 : 5) : 1), 400);
+  assert.ok(pauses.slice(10, 60).some((p) => p >= 2));
+  assert.equal(pauses.slice(200).filter((p) => p > 0).length, 0);
+});

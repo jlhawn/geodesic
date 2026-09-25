@@ -331,7 +331,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
    * steps helps. A frame is late when it comes more than half an interval
    * after the display's own frame interval (the median of the last
    * second's), unless the page's own work since the last frame (frame
-   * messages and this loop) accounts for the delay.
+   * messages, this loop, and the globe's and the particles' drawing)
+   * accounts for the delay.
    */
   const pacing = { last: 0, start: 0, late: 0, busy: 0, interval: 1000 / 60, gaps: [] };
   function measurePace(now) {
@@ -352,6 +353,8 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   function tick(now) {
     requestAnimationFrame(tick);
     const started = performance.now();
+    if (viewer) pacing.busy += viewer.takeBusyTime();
+    if (particles) pacing.busy += particles.takeBusyTime();
     measurePace(now);
     try { perFrame(now); } finally { pacing.busy += performance.now() - started; }
   }

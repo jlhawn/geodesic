@@ -134,9 +134,14 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
   let running = true, now = 0;
   const retiring = [];
 
+  let busy = 0;
   function frame() {
     if (!running) return;
     requestAnimationFrame(frame);
+    const started = performance.now();
+    try { advance(); } finally { busy += performance.now() - started; }
+  }
+  function advance() {
     if (!field || !visible || width === 0) return;
     frames++;
     now = performance.now();
@@ -210,6 +215,7 @@ export function createWindParticles(container, viewer, grid, { density = 0.02, r
     setVisible(show) { visible = show; canvas.style.display = show ? 'block' : 'none'; if (!show) context.clearRect(0, 0, width, height); },
     reset,
     count: () => count,
+    takeBusyTime() { const ms = busy; busy = 0; return ms; },
     dispose() { running = false; resizeObserver.disconnect(); canvas.remove(); },
   };
 }

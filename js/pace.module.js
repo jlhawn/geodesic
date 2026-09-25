@@ -6,10 +6,10 @@
  * seconds in a row the pacer tries the next level for `trial` reports,
  * and keeps it only if the late frames fell to at most `keep` of their
  * rate at the level below. A level that didn't help is not tried again
- * for `cooldown` reports. After `calm` quiet reports the pacer steps back
- * down a level. A step-down that lateness reverses at once doubles the
- * calm needed before the next, up to `calmMax`, and `calmMax` quiet
- * reports without a pause restore it.
+ * for `cooldown` reports. After `calm` quiet reports (fewer than
+ * `threshold` late frames) the pacer steps back down a level. A step-down
+ * that lateness reverses at once doubles the calm needed before the next,
+ * up to `calmMax`, and `calmMax` quiet reports without a pause restore it.
  */
 export const PAUSE_LEVELS = [0, 2, 4, 8];
 
@@ -45,14 +45,11 @@ export function createPacer({ raise = 2, trial = 3, keep = 2 / 3, cooldown = 60,
         level++;
         lateRun = 0;
       }
-    } else if (late === 0) {
+    } else {
       lateRun = 0;
       quiet++;
       if (level > 0 && quiet >= calmNeeded) { level--; quiet = 0; downAt = reports; }
       else if (level === 0 && quiet >= calmMax) calmNeeded = calm;
-    } else {
-      lateRun = 0;
-      quiet = 0;
     }
     return PAUSE_LEVELS[level];
   }

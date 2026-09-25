@@ -577,9 +577,14 @@ vec3 paletteColor(float t) {
     target.projectionMatrixInverse.copy(target.projectionMatrix).invert();
   }
 
+  let busy = 0;
   function render() {
     if (disposed) return;
     requestAnimationFrame(render);
+    const started = performance.now();
+    try { draw(); } finally { busy += performance.now() - started; }
+  }
+  function draw() {
     if (container.clientHeight === 0) return;
 
     if (viewState.targetBlend === 1.0) {
@@ -1164,6 +1169,7 @@ uniform float uReferenceSpeed;
     pixelsPerUnit: () => container.clientHeight / viewHeight(),
     setInsets({ top = 0, bottom = 0 } = {}) { inset.target = (bottom - top) / 2; },
     viewVersion: () => viewState.version,
+    takeBusyTime() { const ms = busy; busy = 0; return ms; },
     dispose: () => {
       disposed = true;
       aborter.abort();
