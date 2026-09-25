@@ -7,7 +7,7 @@ import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
 import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot } from "./snapshots.module.js";
 import { Stats } from "./stats.module.js";
-import { pickDevice, PROBE_VERSION } from "./deviceChoice.module.js";
+import { pickDevice, isMobileBrowser, PROBE_VERSION, DESKTOP_MAX_N, MOBILE_MAX_N } from "./deviceChoice.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
 const TEMP_RANGE = { surface: [-35, 35], 1000: [-35, 35], 850: [-45, 25], 700: [-55, 15], 500: [-65, 5], 250: [-85, -25], 70: [-95, -35], 10: [-75, 5] };
@@ -828,8 +828,9 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   worker.onerror = (error) => { document.getElementById('date').textContent = `worker error: ${error.message}`; };
   subscribed = JSON.stringify(subscription());
   const topographyUrl = topography ? new URL(topography, location.href).href : null, threads = crossOriginIsolated ? workers : 1;
-  const begin = (choice = {}) => {
-    const run = (choice.N && defaults[choice.N]) || from;
+  const maxN = isMobileBrowser(navigator) ? MOBILE_MAX_N : DESKTOP_MAX_N;
+  const begin = (choice = auto ? { N: maxN } : {}) => {
+    const run = (auto && choice.N && defaults[choice.N]) || from;
     worker.postMessage({ type: 'start', N: choice.N ?? N, from: run ? new URL(run, location.href).href : null, workers: threads, engine: choice.engine ?? engine, paused: !running, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl });
   };
   const PROBE_TIMEOUT = 120000;
@@ -850,7 +851,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       setTimeout(() => { probed = null; reject(new Error('the device test did not answer')); }, PROBE_TIMEOUT);
       worker.postMessage({ type: 'probe', engine, land, terrain, topography: topographyUrl });
     });
-    const choice = reply.result && pickDevice(reply.result, threads);
+    const choice = reply.result && pickDevice(reply.result, threads, { maxN });
     if (!choice) throw new Error(reply.error ?? 'the device test found nothing to run on');
     deviceChoice = { ...choice, key, version: PROBE_VERSION, at: Date.now() };
     try { localStorage.setItem('climate.device', JSON.stringify(deviceChoice)); } catch { /* storage unavailable */ }

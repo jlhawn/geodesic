@@ -1792,8 +1792,12 @@ the boundary layer 1.7, the ocean about 2, and a frame 3.6 ms.
 When the address names no resolution, engine or saved run, a first visit
 tests the device. It times an N=64 model on the GPU, or one CPU thread
 at N=16 when there is no usable GPU. It then picks the highest of
-N=128, 64 and 32 (for the CPU: 64, 32 and 16) projected to clear 30
-simulated hours a minute (`js/deviceChoice.module.js`). The choice is
+N=128, 64 and 32 (for the CPU: 64, 32 and 16), capped at N=128 on
+desktop browsers and N=64 on phones and tablets, that is projected to
+clear 30 simulated hours a minute (`js/deviceChoice.module.js`). The
+chosen resolution starts from its own default run when there is one
+(`js/defaultRun.module.js`): the paired spin-up's day-810 states at
+N=128 and N=64. The choice is
 kept for the same browser and GPU, and "Test again" in the model dialog
 repeats the test. The M1 Max measures 14.2 ms a step at N=64 and runs
 N=128.

@@ -1,0 +1,17 @@
+{
+ "name": "twin64_day0810",
+ "parts": [
+  {
+   "file": "twin64_day0810.bin.gz.000",
+   "bytes": 10485760
+  },
+  {
+   "file": "twin64_day0810.bin.gz.001",
+   "bytes": 10485760
+  },
+  {
+   "file": "twin64_day0810.bin.gz.002",
+   "bytes": 3643658
+  }
+ ]
+}
