@@ -1708,6 +1708,23 @@ carries its free surface from the barotropic solve rather than
 re-summing the layers each step: in single precision the sum rounded
 about 4×10⁻⁶ m low in the same way every step, a steady loss of volume.
 
+**Closure on fine meshes.** The ∇⁴ closure takes 12 hours to damp the
+grid-scale wave at 120 km spacing and coarser (N ≤ 64). Below that, its
+coefficient falls only in proportion to the spacing, so at N=128 the
+grid-scale decay time is 1.5 hours. Both weaker choices ran away in the
+first N=128 spin-ups:
+- plain Δ⁴ scaling let a mixed-layer jet over the Vitória–Trindade
+  seamounts reach the 5 m/s speed limit by day 23;
+- Δ³ scaling let a barotropic meander, 120–180 km long, grow along f/H
+  over the Southeast Indian Ridge from day 220, carrying up to 430 Sv
+  across one edge.
+
+A run with the present strength held to day 692. The barotropic
+sub-steps themselves have no damping and a plain average, which is the
+root cause still open below. The clamped-edge count in the diagnostics
+is the number of edges where any layer sat at the speed limit after the
+last ocean step, in both engines.
+
 **Open.** The freezing point ignores salinity; the deepest class has no restoring when light; the Kraus–Turner constants
 and the 50 m minimum depth are first guesses; the barotropic mode has
 no explicit filter beyond the sub-step average.

@@ -463,7 +463,9 @@ const oceanReducedSetup = (thermoclineLayers) => `    let a = MF[F_AREA + i];
       if (MI[ESC + MAXE * i + m] == 0 || MI[COE + 2 * e] != i) { continue; }
       let u0 = IN[uOff(0) + e];
       speed = max(speed, abs(u0));
-      limited += select(0.0, 1.0, abs(abs(u0) - SPEEDLIM) < 1e-4);
+      var clamped = false;
+      for (var k = 0; k < L; k++) { clamped = clamped || abs(abs(IN[uOff(k) + e]) - SPEEDLIM) < 1e-4; }
+      limited += select(0.0, 1.0, clamped);
       let ca = MI[COE + 2 * e]; let cb = MI[COE + 2 * e + 1];
       let sill = max(EPSO, min(OD[O_BATH + ca], OD[O_BATH + cb]) + 0.5 * (OD[O_ETA + ca] + OD[O_ETA + cb]));
       var sum = 0.5 * (IN[hOff(0) + ca] + IN[hOff(0) + cb]); var flow = sum * u0;

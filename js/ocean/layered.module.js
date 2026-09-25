@@ -76,13 +76,14 @@ export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLER
 /*
  * The ∇⁴ closure coefficient. At closureSpacing and coarser, the
  * grid-scale wave decays in closureHours; on finer meshes the
- * coefficient falls only as the cube of the spacing, as MPAS-Ocean
- * scales its biharmonic viscosity, so that fronts and jets a few cells
- * across stay damped on fine meshes.
+ * coefficient falls only in proportion to the spacing, so the
+ * grid-scale decay time shortens as its cube (1.5 h at N=128). Jets a
+ * few cells across over ridges and seamounts outgrow anything weaker at
+ * N=128 (docs/c-grid-dynamical-core.md, M18).
  */
 export const CLOSURE_SPACING = 120e3;
 export function closureCoefficient(spacing, closureHours, closureSpacing = CLOSURE_SPACING) {
-  return closureHours > 0 ? Math.pow(spacing / Math.PI, 4) / (closureHours * 3600) * Math.max(1, closureSpacing / spacing) : 0;
+  return closureHours > 0 ? Math.pow(spacing / Math.PI, 4) / (closureHours * 3600) * Math.max(1, closureSpacing / spacing) ** 3 : 0;
 }
 
 /*
@@ -492,12 +493,14 @@ export function createOcean(mesh, {
       eta[i] = avgEta[i];
     }
     edgeThicknesses(h);
+    limited = 0;
     for (let e = 0; e < E; e++) {
       if (!edgeOcean[e]) continue;
-      let sumH = 0, transport = 0;
+      let sumH = 0, transport = 0, clamped = false;
       for (let k = 0; k < L; k++) { sumH += hEdge[ae(k, e)]; transport += hEdge[ae(k, e)] * u[ae(k, e)]; }
       const shift = (avgU[e] - transport) / Math.max(sumH, EPS);
-      for (let k = 0; k < L; k++) { const n = ae(k, e); u[n] += shift; if (Math.abs(u[n]) > SPEED_LIMIT) { u[n] = Math.sign(u[n]) * SPEED_LIMIT; limited++; } }
+      for (let k = 0; k < L; k++) { const n = ae(k, e); u[n] += shift; if (Math.abs(u[n]) > SPEED_LIMIT) { u[n] = Math.sign(u[n]) * SPEED_LIMIT; clamped = true; } }
+      if (clamped) limited++;
       for (let k = 1; k < L; k++) if (hEdge[ae(k, e)] < THIN) u[ae(k, e)] = u[ae(k - 1, e)];
     }
   }
