@@ -7,6 +7,7 @@ import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
 import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot } from "./snapshots.module.js";
 import { Stats } from "./stats.module.js";
+import { pickDevice, PROBE_VERSION } from "./deviceChoice.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
 const TEMP_RANGE = { surface: [-35, 35], 1000: [-35, 35], 850: [-45, 25], 700: [-55, 15], 500: [-65, 5], 250: [-85, -25], 70: [-95, -35], 10: [-75, 5] };
@@ -253,7 +254,7 @@ const VIEW_NOTES = [
 ];
 const NOTES = new Map(VIEW_NOTES);
 
-export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true, settings: overrides = {}, view = null, pace = true } = {}) {
+export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true, settings: overrides = {}, view = null, pace = true, auto = false } = {}) {
   const settings = loadSettings();
   applyOverrides(settings, overrides);
   const panel = document.getElementById('panel');
@@ -647,6 +648,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       ['Time step', ready ? `<b>${ready.dt} s</b> per step.` : ''],
       ['Engine', latest.engine === 'gpu' ? '<b>GPU</b> — every kernel runs on the graphics processor through WebGPU in single precision.' : `<b>${latest.workers > 1 ? `${latest.workers} worker threads` : 'one thread'}</b> — the CPU engine in double precision.`],
       ...(latest.engine === 'gpu' ? [['Pacing', latest.pause ? `<b>${latest.pause} ms</b> of idle GPU after each step, so the page can draw every frame.` : '<b>none</b> — the steps run back to back.']] : []),
+      ['Chosen by', deviceChoice ? `the device test: <b>${deviceChoice.engine === 'gpu' ? 'GPU' : 'CPU'} at N=${deviceChoice.N}</b>, projected ${deviceChoice.rate.toFixed(0)} simulated hours a minute from ${deviceChoice.measured}. <button class="flat" data-action="retest">Test again</button>` : 'the page\'s address, which names the resolution, the engine or the saved run.'],
     );
     if (d && d.oceanUpperDepth !== undefined) rows.push(['Ocean', `mixed layer <b>${d.oceanUpperDepth.toFixed(0)} m</b> deep on average, currents to <b>${d.oceanSpeed.toFixed(2)} m/s</b>${d.oceanTransport !== undefined ? `, the strongest transport <b>${d.oceanTransport.toFixed(0)} Sv</b>` : ''}${d.oceanThermoclineDepth !== undefined ? `, thermocline <b>${d.oceanThermoclineDepth.toFixed(0)} m</b>` : ''}.`]);
     if (d && d.landFraction !== undefined) rows.push(['Land', `<b>${(100 * d.landFraction).toFixed(0)}%</b> of the area${ready && ready.terrain ? ' with terrain' : ', flat'}; surface <b>${(d.landMeanT + CELSIUS).toFixed(1)} °C</b>, soil water <b>${d.soilWater.toFixed(0)} kg/m²</b>, snow on <b>${(100 * d.snowFraction).toFixed(0)}%</b> of it.`]);
@@ -810,6 +812,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     }
     if (message.type === 'snapshotData') storeSnapshot(message);
     if (message.type === 'profile') showProfile(message);
+    if (message.type === 'probe' && probed) { probed(message.result); probed = null; }
     if (message.type === 'frame') {
       document.getElementById('progress').classList.remove('visible');
       latest = { ...message.fields, ...geographyFields, time: message.time, level: message.level, diagnostics: message.diagnostics, engine: message.engine, pause: message.pause, N: ready.N, workers: ready.workers };
@@ -821,7 +824,32 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   }
   worker.onerror = (error) => { document.getElementById('date').textContent = `worker error: ${error.message}`; };
   subscribed = JSON.stringify(subscription());
-  worker.postMessage({ type: 'start', N, from: from ? new URL(from, location.href).href : null, workers: crossOriginIsolated ? workers : 1, engine, paused, subscription: JSON.parse(subscribed), land, terrain, topography: topography ? new URL(topography, location.href).href : null });
+  const topographyUrl = topography ? new URL(topography, location.href).href : null, threads = crossOriginIsolated ? workers : 1;
+  const begin = (choice = {}) => worker.postMessage({ type: 'start', N: choice.N ?? N, from: from ? new URL(from, location.href).href : null, workers: threads, engine: choice.engine ?? engine, paused, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl });
+  let deviceChoice = null, probed = null;
+  async function deviceKey() {
+    let adapter = '';
+    try { const found = navigator.gpu && await navigator.gpu.requestAdapter(), info = found && found.info; if (info) adapter = [info.vendor, info.architecture, info.device, info.description].join('/'); } catch { /* no adapter to name */ }
+    return [navigator.userAgent, navigator.hardwareConcurrency, adapter].join('|');
+  }
+  async function chooseDevice() {
+    const key = await deviceKey();
+    try {
+      const stored = JSON.parse(localStorage.getItem('climate.device') || 'null');
+      if (stored && stored.key === key && stored.version === PROBE_VERSION) return (deviceChoice = stored);
+    } catch { /* storage unavailable */ }
+    const result = await new Promise((resolve) => { probed = resolve; worker.postMessage({ type: 'probe', engine, land, terrain, topography: topographyUrl }); });
+    deviceChoice = { ...pickDevice(result, threads), key, version: PROBE_VERSION, at: Date.now() };
+    try { localStorage.setItem('climate.device', JSON.stringify(deviceChoice)); } catch { /* storage unavailable */ }
+    return deviceChoice;
+  }
+  document.getElementById('modelDetails').addEventListener('click', (event) => {
+    if (!event.target.closest('[data-action="retest"]')) return;
+    try { localStorage.removeItem('climate.device'); } catch { /* storage unavailable */ }
+    location.reload();
+  });
+  if (auto) chooseDevice().then(begin, () => begin());
+  else begin();
 
   for (const group of panel.querySelectorAll('.options[data-setting]')) {
     group.addEventListener('click', (event) => {

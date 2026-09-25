@@ -86,6 +86,7 @@ export async function createGpuModel(gridOrMesh, {
     dirty = true;
   };
   model.settle = () => gpu.device.queue.onSubmittedWorkDone();
+  model.destroy = () => { for (const buffer of [...Object.values(gpu.buffers), ...(gpuOcean ? Object.values(gpuOcean.buffers) : [])]) buffer.destroy(); };
 
   /*
    * One frame of output: the named fields (see frames.module.js) at the

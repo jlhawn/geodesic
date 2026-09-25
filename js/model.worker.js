@@ -297,8 +297,64 @@ self.onmessage = async (event) => {
     try { await restore(message.snapshot); } catch (error) { status(`error: ${error && error.stack ? error.stack : error}`); }
   } else if (message.type === 'profile') {
     if (serving) await profile();
+  } else if (message.type === 'probe') {
+    await probe(message);
   }
 };
+
+/*
+ * The device test the page runs before its first start on a device: an
+ * N=64 model on the GPU from the fresh initial state, stepped as the loop
+ * steps it after a short warm-up, reporting milliseconds a step. Without
+ * a GPU, or when that fails, one thread of the CPU engine at N=16 instead.
+ * It runs alone: anything else on the worker's thread slows the steps.
+ */
+const PROBE = { gpuN: 64, cpuN: 16, warmup: 4, steps: 12, cpuSteps: 3 };
+async function probe(message) {
+  const result = { gpu: null, cpu: null };
+  const topography = message.land === false ? null : await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href);
+  const options = { ...(topography ? { topography } : {}), terrain: message.terrain !== false };
+  const prepare = (test, N) => {
+    for (const [a, values] of initialState(test, null, N).entries()) test.state[a].set(values);
+    if (test.load) test.load();
+    if (test.ocean) test.ocean.initialize(test.state[3], test.state[6]);
+    if (test.land) test.land.initialize();
+  };
+  if (message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu) {
+    let test = null;
+    try {
+      status('testing the GPU…', 0.1);
+      test = await createGpuModel(new Grid(PROBE.gpuN), options);
+      prepare(test, PROBE.gpuN);
+      const step = 1350 * 16 / PROBE.gpuN, queued = [];
+      for (let n = 0; n < PROBE.warmup; n++) await test.step(step);
+      await test.settle();
+      const begin = performance.now();
+      for (let n = 0; n < PROBE.steps; n++) {
+        await test.step(step);
+        queued.push(test.settle());
+        if (queued.length >= QUEUE_DEPTH) await queued.shift();
+      }
+      await Promise.all(queued);
+      result.gpu = { N: PROBE.gpuN, ms: (performance.now() - begin) / PROBE.steps };
+    } catch (error) {
+      result.gpu = { N: PROBE.gpuN, error: String(error) };
+    } finally {
+      if (test && test.destroy) test.destroy();
+    }
+  }
+  if (!result.gpu || result.gpu.error) {
+    status('testing the CPU…', 0.3);
+    const test = createModel(new Grid(PROBE.cpuN), options);
+    prepare(test, PROBE.cpuN);
+    const step = 1350 * 16 / PROBE.cpuN;
+    await test.step(step);
+    const begin = performance.now();
+    for (let n = 0; n < PROBE.cpuSteps; n++) await test.step(step);
+    result.cpu = { N: PROBE.cpuN, ms: (performance.now() - begin) / PROBE.cpuSteps };
+  }
+  self.postMessage({ type: 'probe', result });
+}
 
 /*
  * A GPU profile for the page (js/gpu/profile.module.js), with the time
