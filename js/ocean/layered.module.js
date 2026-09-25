@@ -384,8 +384,16 @@ export function createOcean(mesh, {
         const he = Math.max(hEdge[oe + e], minimumThickness);
         let force = 0;
         if (k === 0) force += stress[e] / rho0;
-        if (k > 0) force += interfacialDrag * (uIn[ae(k - 1, e)] - uIn[oe + e]);
-        if (k < L - 1) force -= interfacialDrag * (uIn[oe + e] - uIn[ae(k + 1, e)]);
+        if (k > 0) {
+          let j = k - 1;
+          while (j > 0 && hEdge[ae(j, e)] < THIN) j--;
+          force += interfacialDrag * (uIn[ae(j, e)] - uIn[oe + e]);
+        }
+        if (k < L - 1) {
+          let j = k + 1;
+          while (j < L - 1 && hEdge[ae(j, e)] < THIN) j++;
+          if (hEdge[ae(j, e)] >= THIN) force -= interfacialDrag * (uIn[oe + e] - uIn[ae(j, e)]);
+        }
         let bottom = k === L - 1;
         if (!bottom) { bottom = true; for (let j = k + 1; j < L; j++) if (hEdge[ae(j, e)] >= THIN) { bottom = false; break; } }
         if (bottom) force -= bottomDrag * Math.abs(uIn[oe + e]) * uIn[oe + e];

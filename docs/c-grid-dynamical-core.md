@@ -1725,6 +1725,16 @@ root cause still open below. The clamped-edge count in the diagnostics
 is the number of edges where any layer sat at the speed limit after the
 last ocean step, in both engines.
 
+**Friction across empty classes.** Interfacial drag acts between each
+layer that holds water and the nearest layers holding water above and
+below it; an empty class in between only relaxes to the velocity above.
+With drag only between neighbouring classes, a mixed layer resting on
+the empty tropical classes felt none, since each empty class moved with
+it. In the N=64 spin-up the trades then drove the South Equatorial
+Current to 3.4 m/s by day 540 and jets to the 5 m/s limit in the
+Maritime Continent's seas from day 573. With the drag reaching the water
+below, the same run's fastest current fell to 1.3 m/s, with no clamps.
+
 **Open.** The freezing point ignores salinity; the deepest class has no restoring when light; the Kraus–Turner constants
 and the 50 m minimum depth are first guesses; the barotropic mode has
 no explicit filter beyond the sub-step average.

@@ -201,8 +201,16 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   let he = max(OD[O_HEDGE + n], MINTHICK);
   var force = 0.0;
   if (k == 0) { force += OD[O_STRESS + e] / RHO0; }
-  if (k > 0) { force += RINT * (IN[uOff(k - 1) + e] - IN[uOff(k) + e]); }
-  if (k < L - 1) { force -= RINT * (IN[uOff(k) + e] - IN[uOff(k + 1) + e]); }
+  if (k > 0) {
+    var j = k - 1;
+    loop { if (j == 0 || OD[O_HEDGE + j * E + e] >= THINO) { break; } j -= 1; }
+    force += RINT * (IN[uOff(j) + e] - IN[uOff(k) + e]);
+  }
+  if (k < L - 1) {
+    var j = k + 1;
+    loop { if (j == L - 1 || OD[O_HEDGE + j * E + e] >= THINO) { break; } j += 1; }
+    if (OD[O_HEDGE + j * E + e] >= THINO) { force -= RINT * (IN[uOff(k) + e] - IN[uOff(j) + e]); }
+  }
   var bottom = k == L - 1;
   if (!bottom) { bottom = true; for (var j = k + 1; j < L; j++) { if (OD[O_HEDGE + j * E + e] >= THINO) { bottom = false; break; } } }
   if (bottom) { force -= RBOT * abs(IN[uOff(k) + e]) * IN[uOff(k) + e]; }
