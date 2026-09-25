@@ -691,13 +691,24 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   }
   {
     const globe = document.getElementById('globe');
+    /*
+     * A tap selects the cell under it: one pointer, pressed and lifted
+     * within half a second without moving more than `slack` pixels. A
+     * second finger landing turns the press into a gesture.
+     */
     let press = null;
-    globe.addEventListener('mousedown', (event) => { if (event.button === 0) press = { x: event.clientX, y: event.clientY, at: performance.now() }; });
-    globe.addEventListener('mouseup', (event) => {
-      if (!press || event.button !== 0) return;
-      const moved = Math.hypot(event.clientX - press.x, event.clientY - press.y), held = performance.now() - press.at;
+    const down = new Set();
+    globe.addEventListener('pointerdown', (event) => {
+      down.add(event.pointerId);
+      press = event.button === 0 && down.size === 1 ? { id: event.pointerId, x: event.clientX, y: event.clientY, at: performance.now(), slack: event.pointerType === 'touch' ? 10 : 4 } : null;
+    });
+    globe.addEventListener('pointercancel', (event) => { down.delete(event.pointerId); press = null; });
+    globe.addEventListener('pointerup', (event) => {
+      down.delete(event.pointerId);
+      if (!press || press.id !== event.pointerId) return;
+      const moved = Math.hypot(event.clientX - press.x, event.clientY - press.y), held = performance.now() - press.at, { slack } = press;
       press = null;
-      if (moved > 4 || held > 500 || !viewer || !cells) return;
+      if (moved > slack || held > 500 || !viewer || !cells) return;
       const rect = globe.getBoundingClientRect(), point = viewer.unprojectPoint(event.clientX - rect.left, event.clientY - rect.top, [0, 0, 0]);
       select(point ? nearestCell(point) : -1);
     });

@@ -1,4 +1,5 @@
 import * as THREE from "./three.module.js";
+import { twoFingerMotion } from "./gestures.module.js";
 
 // ----------------------------------------------------------------------------
 // SHADER DEFINITIONS
@@ -666,59 +667,122 @@ vec3 paletteColor(float t) {
     panBy(move[0], move[1]);
   });
 
-  on(canvas, 'mousedown', (e) => {
+  const VIEW_AXIS = new THREE.Vector3(0, 0, 1);
+  function rollBy(angle) {
+    sphereQuaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(VIEW_AXIS, angle)).normalize();
+    rotationMatrix.makeRotationFromQuaternion(sphereQuaternion);
+  }
+
+  /*
+   * Turns the globe so that the point grabbed at state.lastVector
+   * follows the pointer.
+   */
+  function dragGlobeTo(clientX, clientY) {
+    const currentVector = getCursorOnWorld(clientX, clientY);
+    if (currentVector && state.lastVector) {
+      const axis = new THREE.Vector3().crossVectors(state.lastVector, currentVector);
+      const angle = Math.acos(Math.max(-1, Math.min(1, state.lastVector.dot(currentVector))));
+      if (angle > 0.0001) {
+        sphereQuaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(axis.normalize(), angle)).normalize();
+        rotationMatrix.makeRotationFromQuaternion(sphereQuaternion);
+      }
+    }
+    state.lastVector = currentVector;
+  }
+
+  /*
+   * Zooms by `factor` while the point under (clientX, clientY) stays put:
+   * a screen offset from the centre spans viewHeight() / clientHeight
+   * world units per pixel in the orthographic view and at the front of
+   * the globe in perspective.
+   */
+  function zoomAbout(factor, clientX, clientY) {
+    if (container.clientHeight <= 0) return;
+    const before = viewHeight();
+    state.zoom = Math.max(10, Math.min(state.zoom * factor, 10000));
+    const shrink = (before - viewHeight()) / container.clientHeight, rect = container.getBoundingClientRect();
+    state.pan.x += (clientX - rect.left - rect.width / 2) * shrink;
+    state.pan.y -= (clientY - rect.top - rect.height / 2) * shrink;
+  }
+
+  /*
+   * A mouse or pen drags the globe with the main button, rolls it about
+   * the line of sight with alt or meta held, and pans with the right
+   * button. On a touch screen one finger drags the globe; two pan with
+   * their midpoint and zoom with their spread about it, and roll with
+   * their turn once it passes TWIST_START, so that a pinch doesn't wobble.
+   */
+  const TWIST_START = 0.2;
+  const touches = new Map();
+  let pair = null;
+  canvas.style.touchAction = 'none';
+  canvas.style.webkitUserSelect = canvas.style.userSelect = 'none';
+  canvas.style.webkitTapHighlightColor = 'transparent';
+
+  function touchesChanged() {
+    const [first, second] = touches.values();
+    state.lastVector = first && !second ? getCursorOnWorld(first.x, first.y) : null;
+    pair = second ? { a: { ...first }, b: { ...second }, twist: 0, twisting: false } : null;
+  }
+
+  function pairMoved() {
+    const [a, b] = touches.values();
+    const motion = twoFingerMotion(pair.a, pair.b, a, b);
+    panBy(motion.dx, motion.dy);
+    zoomAbout(motion.scale, motion.x, motion.y);
+    if (pair.twisting) rollBy(-motion.turn);
+    else pair.twisting = Math.abs(pair.twist += motion.turn) > TWIST_START;
+    pair.a = { ...a };
+    pair.b = { ...b };
+  }
+
+  on(canvas, 'pointerdown', (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    if (e.pointerType === 'touch') {
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      touchesChanged();
+      return;
+    }
     state.isDragging = true;
     state.lastX = e.clientX;
     state.lastY = e.clientY;
     state.lastVector = getCursorOnWorld(e.clientX, e.clientY);
-    if (e.buttons == 1) {
-      canvas.style.cursor = 'grabbing';
-    } else if (e.buttons == 2) {
-      canvas.style.cursor = 'move';
-    }
+    if (e.buttons === 1) canvas.style.cursor = 'grabbing';
+    else if (e.buttons === 2) canvas.style.cursor = 'move';
   });
 
-  on(window, 'mousemove', (e) => {
+  on(canvas, 'pointermove', (e) => {
+    if (e.pointerType === 'touch') {
+      const touch = touches.get(e.pointerId);
+      if (!touch) return;
+      touch.x = e.clientX;
+      touch.y = e.clientY;
+      if (pair) pairMoved();
+      else dragGlobeTo(e.clientX, e.clientY);
+      viewState.version++;
+      return;
+    }
     if (!state.isDragging) return;
     const dx = e.clientX - state.lastX;
     const dy = e.clientY - state.lastY;
     viewState.version++;
-
-    if (e.buttons === 2) {
-      panBy(dx, dy);
-    }
-    else if (e.buttons === 1 && (e.altKey || e.metaKey)) {
-       // Roll Axis: In View Space, Roll is Z.
-       // We want to rotate around the view vector (Camera Z).
-       const rollAxis = new THREE.Vector3(0, 0, 1); 
-       const angle = (dx + dy) * 0.01;
-       const qRot = new THREE.Quaternion().setFromAxisAngle(rollAxis, angle);
-       sphereQuaternion.premultiply(qRot).normalize();
-       rotationMatrix.makeRotationFromQuaternion(sphereQuaternion);
-    }
-    else if (e.buttons === 1) {
-      const currentVector = getCursorOnWorld(e.clientX, e.clientY);
-      if (currentVector && state.lastVector) {
-        const axis = new THREE.Vector3().crossVectors(state.lastVector, currentVector);
-        const dot = Math.max(-1, Math.min(1, state.lastVector.dot(currentVector)));
-        const angle = Math.acos(dot);
-        if (angle > 0.0001) {
-          axis.normalize();
-          const qRot = new THREE.Quaternion().setFromAxisAngle(axis, angle);
-          sphereQuaternion.premultiply(qRot).normalize();
-          rotationMatrix.makeRotationFromQuaternion(sphereQuaternion);
-        }
-      }
-      state.lastVector = currentVector;
-    }
+    if (e.buttons === 2) panBy(dx, dy);
+    else if (e.buttons === 1 && (e.altKey || e.metaKey)) rollBy((dx + dy) * 0.01);
+    else if (e.buttons === 1) dragGlobeTo(e.clientX, e.clientY);
     state.lastX = e.clientX;
     state.lastY = e.clientY;
   });
 
-  on(window, 'mouseup', () => {
+  function release(e) {
+    if (e.pointerType === 'touch') {
+      if (touches.delete(e.pointerId)) touchesChanged();
+      return;
+    }
     state.isDragging = false;
     canvas.style.cursor = 'default';
-  });
+  }
+  on(canvas, 'pointerup', release);
+  on(canvas, 'pointercancel', release);
   
   const resizeObserver = new ResizeObserver(() => {
     if (container.clientWidth > 0) renderer.setSize(container.clientWidth, container.clientHeight, false);
