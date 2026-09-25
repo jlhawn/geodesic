@@ -21,7 +21,9 @@
     #date { font-size: 15px; }
     #rate { font-size: 12px; color: #bbb; }
     #modelButton { font-size: 18px; }
-    #snapshotsButton { position: absolute; z-index: 11; border: 0; padding: 6px 14px; font: inherit; font-size: 17px; cursor: pointer; }
+    #snapshotsButton { position: absolute; z-index: 11; border: 0; padding: 8px 10px; color: #bbb; cursor: pointer; display: flex; }
+    #snapshotsButton:hover { color: #fff; }
+    #snapshotsButton svg { display: block; }
     #snapshotsButton { right: 12px; top: 12px; }
     #bottom { position: absolute; left: 12px; bottom: 12px; z-index: 11; display: flex; align-items: stretch; max-width: calc(100% - 24px); }
     #menu { border: 0; background: transparent; color: #ddd; padding: 6px 10px; display: flex; align-items: center; cursor: pointer; border-radius: 8px; }
@@ -129,9 +131,9 @@
     <button class="flat control" data-control="play" title="play / pause">▶</button>
     <div><div id="date">starting…</div><div id="rate">measuring…</div></div>
     <button id="modelButton" class="flat" title="about the model and its views">ⓘ</button>
-    <button id="snapshotsIcon" class="flat" title="snapshots"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></button>
+    <button id="snapshotsIcon" class="flat" title="snapshots" aria-label="snapshots"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></button>
   </div>
-  <button id="snapshotsButton" class="box">snapshots</button>
+  <button id="snapshotsButton" class="box" title="snapshots" aria-label="snapshots"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></button>
   <div id="panel" class="box hidden">
     <div id="sheetHandle" title="close"></div>
     <span class="label">Mode</span>

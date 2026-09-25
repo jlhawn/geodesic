@@ -197,9 +197,10 @@ function formatTime(time) {
 /*
  * The saved runs the server lists in its runs/ directory index, as
  * built-in snapshots the page can download into its own store; a
- * server without directory listings still offers the page default.
+ * server without directory listings still offers the runs the page
+ * knows it serves (`known`: the default runs and the one it started from).
  */
-async function builtinSnapshots(fallback = null) {
+async function builtinSnapshots(known = []) {
   const entry = (file) => ({ file, url: new URL(file, location.href).href, name: stateName(file.replace(/.*\//, '')) });
   try {
     const html = await (await fetch('runs/')).text();
@@ -207,7 +208,7 @@ async function builtinSnapshots(fallback = null) {
     const newest = new Map(files.map((file) => [stateName(file), file]));
     if (newest.size) return [...newest.values()].map((file) => entry(`runs/${file}`));
   } catch {}
-  return fallback ? [entry(fallback)] : [];
+  return [...new Set(known)].map(entry);
 }
 
 const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'mi', 'wbt', 'dp', 'none']);
@@ -900,12 +901,15 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     ])));
     document.getElementById('localEmpty').style.display = list.length ? 'none' : '';
     for (const button of document.querySelectorAll('[data-snapshot="latest"]')) button.disabled = list.length === 0;
-    const defaultUrl = from ? new URL(from, location.href).href : null;
-    const builtin = (await builtinSnapshots(from)).sort((a, b) => (b.url === defaultUrl) - (a.url === defaultUrl));
+    const href = (file) => new URL(file, location.href).href;
+    const roles = new Map(Object.entries(defaults).map(([n, file]) => [href(file), Number(n) === MOBILE_MAX_N ? 'the default on phones and tablets' : Number(n) === DESKTOP_MAX_N ? 'the default on desktops' : `the default at N=${n}`]));
+    if (from && !roles.has(href(from))) roles.set(href(from), 'this page\'s run');
+    const own = defaults[maxN] ? href(defaults[maxN]) : null, rank = (entry) => (entry.url === own ? 2 : roles.has(entry.url) ? 1 : 0);
+    const builtin = (await builtinSnapshots([...Object.values(defaults), ...(from ? [from] : [])])).sort((a, b) => rank(b) - rank(a));
     builtinList.replaceChildren(...builtin.map((entry) => {
       const local = list.find((meta) => meta.source === entry.url);
       const day = stateDay(entry.file);
-      return item(entry.name, `${day !== null ? `day ${day}` : ''}${entry.url === defaultUrl ? ' · the page default' : ''}`, local ? 'downloaded' : '', [
+      return item(entry.name, `${day !== null ? `day ${day}` : ''}${roles.has(entry.url) ? ` · ${roles.get(entry.url)}` : ''}`, local ? 'downloaded' : '', [
         [local ? 'Restore' : 'Download and restore', async () => { const id = local ? local.id : await download(entry); if (id) restoreSnapshot(id); }],
         ...(local ? [] : [['Download', async () => { await download(entry); }]]),
       ]);
