@@ -854,8 +854,9 @@ vec3 paletteColor(float t) {
    * and the contour interval.
    */
   function addContourLayer({ color = 0xffffff, opacity = 0.7 } = {}) {
-    const triangles = cellsOnVertex.filter((cells) => cells && cells.length === 3);
-    const capacity = 6 * triangles.length;
+    const corners = Int32Array.from(cellsOnVertex.filter((cells) => cells && cells.length === 3).flat());
+    const centres = Float64Array.from(centerData);
+    const capacity = 2 * corners.length;
     const positions = new Float32Array(3 * capacity);
     const cellIndex = new Float32Array(capacity);
     const contourGeometry = new THREE.BufferGeometry();
@@ -872,24 +873,27 @@ vec3 paletteColor(float t) {
     scene.add(lines);
     const lift = 1.003;
 
+    /*
+     * One pass over the triangles, each visiting only the contour levels
+     * between its lowest and highest corner.
+     */
     function update(field, step) {
-      let fmin = Infinity, fmax = -Infinity;
-      for (const value of field) { if (value < fmin) fmin = value; if (value > fmax) fmax = value; }
       let n = 0;
       const crossing = (a, b, level, reference) => {
         const t = (level - field[a]) / (field[b] - field[a]);
-        const x = centerData[3 * a] + t * (centerData[3 * b] - centerData[3 * a]);
-        const y = centerData[3 * a + 1] + t * (centerData[3 * b + 1] - centerData[3 * a + 1]);
-        const z = centerData[3 * a + 2] + t * (centerData[3 * b + 2] - centerData[3 * a + 2]);
+        const x = centres[3 * a] + t * (centres[3 * b] - centres[3 * a]);
+        const y = centres[3 * a + 1] + t * (centres[3 * b + 1] - centres[3 * a + 1]);
+        const z = centres[3 * a + 2] + t * (centres[3 * b + 2] - centres[3 * a + 2]);
         const norm = Math.hypot(x, y, z) / lift;
         positions[3 * n] = x / norm; positions[3 * n + 1] = y / norm; positions[3 * n + 2] = z / norm;
         cellIndex[n] = reference;
         n++;
       };
-      for (let level = Math.ceil(fmin / step) * step; level < fmax && n + 2 <= capacity; level += step) {
-        for (const [a, b, c] of triangles) {
-          if (n + 2 > capacity) break;
-          const sa = field[a] - level, sb = field[b] - level, sc = field[c] - level;
+      for (let corner = 0; corner < corners.length && n + 2 <= capacity; corner += 3) {
+        const a = corners[corner], b = corners[corner + 1], c = corners[corner + 2];
+        const fa = field[a], fb = field[b], fc = field[c], high = Math.max(fa, fb, fc);
+        for (let k = Math.ceil(Math.min(fa, fb, fc) / step); k * step < high && n + 2 <= capacity; k++) {
+          const level = k * step, sa = fa - level, sb = fb - level, sc = fc - level;
           const before = n;
           if (sa * sb < 0) crossing(a, b, level, a);
           if (sb * sc < 0) crossing(b, c, level, a);
