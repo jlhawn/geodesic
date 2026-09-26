@@ -68,12 +68,46 @@ test('autoconversion rains out cloud water above the threshold and conserves wat
   qc.fill(0);
   qc[(K - 3) * C] = 1e-3;
   qc[(K - 5) * C] = 1e-4;
-  const before = moist.columnWater(pi, qc, 0);
-  const rain = moist.autoconvertColumn(0, pi, qc, 900);
-  assert.ok(rain > 0);
-  assert.ok(Math.abs(before - moist.columnWater(pi, qc, 0) - rain) < 1e-15);
+  core.diagnoseColumn(0, pi, theta, q, qc);
+  const cloudBefore = moist.columnWater(pi, qc, 0), before = cloudBefore + moist.columnWater(pi, q, 0);
+  const rain = moist.autoconvertColumn(0, pi, theta, q, qc, 900);
+  assert.ok(rain >= 0 && moist.columnWater(pi, qc, 0) < cloudBefore);
+  assert.ok(Math.abs(before - moist.columnWater(pi, qc, 0) - moist.columnWater(pi, q, 0) - rain) < 1e-12 * before);
   assert.ok(qc[(K - 3) * C] < 1e-3 && qc[(K - 3) * C] > 1.5e-4, 'the thick cloud converts toward the threshold');
   assert.ok(qc[(K - 5) * C] < 1e-4 && qc[(K - 5) * C] > 0.9e-4, 'the thin cloud only decays slowly');
+});
+
+test('rain evaporates into the dry layers it falls through, conserving water and moist enthalpy, and never oversaturates them', () => {
+  const cloudAt = K - 12, converted = (m) => {
+    const [pi, theta, q, qc] = column(300, 0.3);
+    qc[cloudAt * C] = 2e-3;
+    core.diagnoseColumn(0, pi, theta, q, qc);
+    const water = moist.columnWater(pi, q, 0) + moist.columnWater(pi, qc, 0), enthalpy = moistEnthalpy(pi, theta, q, 0), qBefore = Float64Array.from(q);
+    const rain = m.autoconvertColumn(0, pi, theta, q, qc, 900);
+    return { pi, theta, q, qc, qBefore, rain, water, enthalpy };
+  };
+  const { moist: noEvaporation } = createModel(new Grid(3), { moist: { rainEvaporation: 0 } });
+  const reference = converted(noEvaporation);
+  const r = converted(moist);
+  assert.ok(reference.rain > 1e-3, `the cloud converts ${reference.rain} kg/m²`);
+  assert.ok(r.rain < 0.5 * reference.rain, `rain reaching the ground ${r.rain} of ${reference.rain}`);
+  assert.ok(Math.abs(moist.columnWater(r.pi, r.q, 0) + moist.columnWater(r.pi, r.qc, 0) + r.rain - r.water) < 1e-12 * r.water);
+  assert.ok(Math.abs(moistEnthalpy(r.pi, r.theta, r.q, 0) - r.enthalpy) < 1e-12 * r.enthalpy);
+  for (let k = 0; k < K; k++) {
+    const idx = k * C, T = r.theta[idx] * exnerLayer[idx], qs = saturationHumidity(T, r.pi[0] * sigmaMid[k]);
+    if (k <= cloudAt) assert.equal(r.q[idx], r.qBefore[idx], `no evaporation at or above the cloud (layer ${k})`);
+    assert.ok(r.q[idx] <= qs * (1 + 1e-9), `layer ${k} oversaturated`);
+  }
+});
+
+test('rain falling through saturated air reaches the ground whole', () => {
+  const [pi, theta, q, qc] = column(295, 1);
+  qc[(K - 12) * C] = 2e-3;
+  core.diagnoseColumn(0, pi, theta, q, qc);
+  const before = moist.columnWater(pi, qc, 0), qBefore = Float64Array.from(q);
+  const rain = moist.autoconvertColumn(0, pi, theta, q, qc, 900);
+  assert.ok(Math.abs(before - moist.columnWater(pi, qc, 0) - rain) < 1e-12 * before);
+  assert.deepEqual(q, qBefore);
 });
 
 test('Betts–Miller convection warms and dries an unstable moist column, conserving enthalpy against its rain', () => {

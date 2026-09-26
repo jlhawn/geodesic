@@ -902,8 +902,15 @@ water and cloud water evaporates into subsaturated air, each with one
 implicit step, so a layer is afterwards either saturated or cloud-free
 and c_p T + L q is conserved exactly. Kessler autoconversion turns
 cloud water above 0.2 g/kg into rain at 10⁻³ s⁻¹, and all cloud water
-decays over 3 h; both are exact exponential decays per step, and the
-rain falls out at once. Betts–Miller still rains directly. Dry
+decays over 3 h; both are exact exponential decays per step. The rain
+falls through the layers below within the step and evaporates into
+each subsaturated one, up to `rainEvaporation` (default 1) of what
+would saturate it with its latent cooling counted, so mid-level cloud
+over dry air gives virga rather than surface rain; at N=128 this cuts
+the Sahara's June large-scale rain from 1.44 to 0.13 mm/day, and over
+90 days at N=64 it raises the global cloud water from 59 to 81 g/m²
+and the planetary albedo from 0.279 to 0.303, for 0.2 % of the step's
+GPU time. Betts–Miller still rains directly. Dry
 adjustment mixes `qc` with `q`. The Betts–Miller reference profile uses
 Bolton's closed-form LCL and a two-substep moist ascent that stops once
 the parcel is 10 K colder than the air (87 → 5 ms per N=16 step).

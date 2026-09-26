@@ -36,7 +36,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * (supersaturation condenses into cloud water, cloud water evaporates
  * into subsaturated air, latent heat to the layer), Kessler
  * autoconversion of cloud water above a threshold into rain that falls
- * out at once, the simplified Betts–Miller
+ * through the layers below within the step, evaporating into each
+ * subsaturated one the fraction `rainEvaporation` of what would
+ * saturate it, the simplified Betts–Miller
  * convection of Frierson (2007) — a conditionally unstable column
  * relaxes over relaxationTime toward the moist adiabat of its lowest
  * layer and a fixed relative humidity, with the reference temperature
@@ -52,7 +54,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
 export function createMoistPhysics(mesh, core, {
   latentHeat = LATENT_HEAT, relaxationTime = 7200, referenceHumidity = 0.7,
   autoconversionThreshold = 2e-4, autoconversionRate = 1e-3, cloudLifetime = 3 * 3600,
-  detrainment = 0.1, anvilDepth = 150e2, buffers = null,
+  detrainment = 0.1, anvilDepth = 150e2, rainEvaporation = 1, buffers = null,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer } = core.diagnostics;
   const precipBuffer = buffers && buffers.precipitation ? buffers.precipitation : new SharedArrayBuffer(8 * C);
@@ -97,12 +99,26 @@ export function createMoistPhysics(mesh, core, {
   /*
    * Kessler autoconversion: cloud water above the threshold turns into
    * rain at autoconversionRate, and all cloud water decays over
-   * cloudLifetime; the rain leaves the column at once.
+   * cloudLifetime. The rain falls through the layers below, evaporating
+   * into each subsaturated one up to rainEvaporation of its saturation
+   * deficit (latent cooling included, so the layer never overshoots
+   * saturation); what reaches the ground is returned (kg/m²).
    */
-  function autoconvertColumn(i, pi, qc, dt) {
+  function autoconvertColumn(i, pi, theta, q, qc, dt) {
     let rain = 0;
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
+      if (rain > 0 && rainEvaporation > 0) {
+        const ex = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;
+        const temperature = theta[idx] * ex;
+        const qs = saturationHumidity(temperature, pi[i] * sigmaMid[k]);
+        const slope = qs * latentHeat / (R_VAPOR * temperature * temperature);
+        const deficit = Math.max(0, (qs - q[idx]) / (1 + latentHeat * slope / cp)) * mass;
+        const evaporated = Math.min(rain, rainEvaporation * deficit);
+        rain -= evaporated;
+        q[idx] += evaporated / mass;
+        theta[idx] -= latentHeat * evaporated / (mass * cp * ex);
+      }
       if (qc[idx] <= 0) continue;
       const excess = Math.max(0, qc[idx] - autoconversionThreshold);
       const converted = Math.min(qc[idx], excess * (1 - Math.exp(-autoconversionRate * dt)) + qc[idx] * (1 - Math.exp(-dt / cloudLifetime)));
@@ -213,7 +229,7 @@ export function createMoistPhysics(mesh, core, {
       core.diagnoseColumn(i, pi, theta, q, qc);
       condenseColumn(i, pi, theta, q, qc);
       const convected = convectColumn(i, pi, theta, q, dt, qc);
-      const rained = autoconvertColumn(i, pi, qc, dt);
+      const rained = autoconvertColumn(i, pi, theta, q, qc, dt);
       fillColumn(i, pi, q);
       fillColumn(i, pi, qc);
       precipitation[i] += rained + convected;

@@ -20,7 +20,7 @@ const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling >
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
 const RELAX: f32 = ${o.relaxationTime}; const RH_REF: f32 = ${o.referenceHumidity}; const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime};
-const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth};
+const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth}; const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 `;
@@ -295,16 +295,28 @@ export const PHYSICS_KERNELS = {
       convected = rain;
     }
   }
-  // autoconversion
+  // autoconversion, the rain evaporating into the subsaturated layers it falls through
   var rained = 0.0;
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
+    let mass = pi * LV[L_DS + k] / GRAV;
+    if (rained > 0.0 && RAIN_EVAP > 0.0) {
+      let ex = D[D_EXM + idx];
+      let temperature = IN[S_TH + idx] * ex;
+      let qs = qsat(temperature, pi * LV[L_SM + k]);
+      let slope = qs * LHEAT / (RVAP * temperature * temperature);
+      let deficit = max(0.0, (qs - IN[S_Q + idx]) / (1.0 + LHEAT * slope / CP)) * mass;
+      let evaporated = min(rained, RAIN_EVAP * deficit);
+      rained -= evaporated;
+      IN[S_Q + idx] += evaporated / mass;
+      IN[S_TH + idx] -= LHEAT * evaporated / (mass * CP * ex);
+    }
     let qc = IN[S_QC + idx];
     if (qc <= 0.0) { continue; }
     let excess = max(0.0, qc - AUTO_T);
     let converted = min(qc, excess * (1.0 - exp(-AUTO_R * dt)) + qc * (1.0 - exp(-dt / CLOUD_LIFE)));
     IN[S_QC + idx] = qc - converted;
-    rained += pi * LV[L_DS + k] / GRAV * converted;
+    rained += mass * converted;
   }
   // filler
   for (var f = 0; f < 2; f++) {
