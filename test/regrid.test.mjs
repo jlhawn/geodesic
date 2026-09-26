@@ -77,3 +77,21 @@ test('tile sampling keeps a step field exact and, masked, takes a neighbour or t
   assert.equal(seaFromLand(100, 265), 0.5, 'a deep snow pack implies first-year ice');
   assert.equal(seaFromLand(0, 270), 0.1, 'bare land below the seawater freezing point implies new thin ice');
 });
+
+test('land regridding carries the vegetation cover between resolutions and leaves a state without it without it', async () => {
+  const { regridLand } = await import('../js/physics/regrid.module.js');
+  const { syntheticTopography } = await import('../js/geography.module.js');
+  const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 ? 300 : -4000));
+  const source = createModel(new Grid(6), { topography }), target = createModel(new Grid(10), { topography });
+  const C = source.mesh.nCells, cover = Float64Array.from({ length: C }, (_, i) => (source.mesh.latCell[i] > 0 ? 0.8 : 0.3));
+  const land = { soil: new Float64Array(C).fill(100), snow: new Float64Array(C), vegetation: cover };
+  const out = regridLand(source, target, land);
+  let inland = 0;
+  for (let n = 0; n < target.mesh.nCells; n++) {
+    if (!target.geography.land[n]) { assert.equal(out.vegetation[n], 0); continue; }
+    const lat = target.mesh.latCell[n];
+    if (Math.abs(Math.cos(target.mesh.lonCell[n])) > 0.4 && Math.abs(lat) > 0.1) { inland++; assert.equal(out.vegetation[n], lat > 0 ? 0.8 : 0.3); }
+  }
+  assert.ok(inland > 50);
+  assert.equal(regridLand(source, target, { soil: land.soil, snow: land.snow }).vegetation, undefined);
+});

@@ -36,7 +36,7 @@ if (existing.length) {
   model.time = saved.time;
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
-  model.land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow) });
+  model.land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}) });
   log(`--- ${new Date().toISOString()} continuing from ${file} (day ${saved.day}) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 } else {
   initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => state[a].set(values));
@@ -64,7 +64,7 @@ await model.sync();
 const ocean = await model.ocean.serialize(), land = await model.land.serialize();
 const name = `${TAG}_day${String(day).padStart(4, '0')}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state;
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ N, K: core.K, day, time: model.time, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: { soil: land.soil, snow: land.snow } }));
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ N, K: core.K, day, time: model.time, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots();
 for (const old of kept.slice(0, Math.max(0, kept.length - KEEP))) unlinkSync(`${OUT}/${old}`);

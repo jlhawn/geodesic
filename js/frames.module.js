@@ -31,6 +31,7 @@ export const FIELDS = {
   longwave: 'outgoing longwave radiation, W/m²',
   soil: 'soil water, kg/m²',
   snow: 'snow water, kg/m²',
+  vegetation: 'vegetation cover, 0 (bare ground) to 1 (dense forest)',
   sst: 'sea surface temperature, K',
   sss: 'sea surface salinity, psu',
   layerDepth: 'mixed layer depth, m',

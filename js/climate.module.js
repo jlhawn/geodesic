@@ -31,7 +31,8 @@ const OVERLAYS = {
   ice: { label: 'Sea ice thickness', short: 'ICE', unit: 'm', kind: 'sequential', field: 'ice', scale: 1, decimals: 2, range: () => [0, 3] },
   mslp: { label: 'Sea-level pressure', short: 'MSLP', unit: 'hPa', kind: 'diverging', field: 'mslp', scale: 0.01, range: () => [960, 1060] },
   ps: { label: 'Surface pressure', short: 'PS', unit: 'hPa', kind: 'sequential', field: 'ps', scale: 0.01, range: () => [500, 1050] },
-  soil: { label: 'Soil water', short: 'SOIL', unit: 'kg/m²', kind: 'sequential', field: 'soil', scale: 1, range: () => [0, 150] },
+  soil: { label: 'Soil water', short: 'SOIL', unit: 'kg/m²', kind: 'sequential', field: 'soil', scale: 1, range: () => [0, 500] },
+  veg: { label: 'Vegetation', short: 'VEG', unit: '', kind: 'sequential', field: 'vegetation', scale: 1, decimals: 2, range: () => [0, 1] },
   snow: { label: 'Snow', short: 'SNOW', unit: 'kg/m²', kind: 'sequential', field: 'snow', scale: 1, range: () => [0, 100] },
   elevation: { label: 'Elevation', short: 'ELEV', unit: 'm', kind: 'diverging', field: 'elevation', scale: 1, range: () => [-4000, 4000] },
   sst: { label: 'Sea surface temperature', short: 'SST', unit: '°C', kind: 'sequential', field: 'sst', scale: 1, offset: CELSIUS, range: () => [-2, 32] },
@@ -43,7 +44,7 @@ const OVERLAYS = {
   none: { label: 'None', short: 'None' },
 };
 const MODE_OVERLAYS = {
-  atmosphere: [['none'], ['wind', 'temp', 'rh'], ['mi', 'wbt', 'dp'], ['rain', 'tpw', 'tcw', 'cloudcover'], ['albedo', 'swdown', 'olr'], ['mslp', 'ps', 'elevation'], ['ice', 'snow', 'soil']],
+  atmosphere: [['none'], ['wind', 'temp', 'rh'], ['mi', 'wbt', 'dp'], ['rain', 'tpw', 'tcw', 'cloudcover'], ['albedo', 'swdown', 'olr'], ['mslp', 'ps', 'elevation'], ['ice', 'snow', 'soil', 'veg']],
   ocean: [['none'], ['sst', 'current', 'layer', 'thermocline', 'sss', 'ssh']],
 };
 const MODE_DEFAULT_OVERLAY = { atmosphere: 'wind', ocean: 'sst' };
@@ -233,7 +234,8 @@ const VIEW_NOTES = [
   ['Sea surface salinity', 'The salinity of the ocean\'s upper layer: saltier where evaporation outpaces rain, as under the subtropical highs, and fresher under heavy rain and where rivers reach the sea.'],
   ['Sea surface height', 'The free surface: high over the subtropical gyres and low around the poles, with the currents flowing along its contours.'],
   ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Where a pressure level lies below the ground, wind, temperature and humidity show the lowest layer of that column, and only the height is extrapolated hydrostatically so its contours stay a pressure field.'],
-  ['Soil water', 'The land bucket: up to 150 kg/m² of soil water; evaporation slows as it dries and rain beyond its capacity runs off.'],
+  ['Soil water', 'The land bucket: soil water from 50 kg/m² under bare ground to 500 under dense vegetation; evaporation slows as it dries and rain beyond its capacity runs off.'],
+  ['Vegetation', 'Plant cover from 0, bare ground, to 1, dense forest. It grows where the bucket stays wet and dies back where it stays dry, over about half a year, and fades under lasting snow; denser cover darkens the ground and deepens the bucket.'],
   ['Snow', 'Snow on land in water equivalent; it falls when the lowest air is below freezing and melts into the bucket.'],
   ['Elevation', 'The mean elevation of each cell from ETOPO 2022; negative under the sea.'],
   ['Coastlines', 'The mesh edges between land and ocean cells, drawn in the Atmosphere and Ocean modes.'],
@@ -452,7 +454,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   }
 
   function paintSatellite() {
-    const cloud = latest.cloud, ice = latest.ice, land = latest.land, soil = latest.soil, snow = latest.snow;
+    const cloud = latest.cloud, ice = latest.ice, land = latest.land, soil = latest.soil, snow = latest.snow, vegetation = latest.vegetation;
     if (!cloud || !ice || (land && (!soil || !snow))) return;
     document.querySelector('.scaleRow').classList.add('hidden');
     overlayLabel = 'Satellite view';
@@ -461,7 +463,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       const opacity = opacityOf(i);
       const onLand = land && land[i];
       const frozen = onLand ? Math.min(1, snow[i] / 20) : Math.min(1, ice[i] / 0.5);
-      const wet = onLand ? Math.min(1, soil[i] / 150) : 0;
+      const wet = !onLand ? 0 : vegetation ? vegetation[i] : Math.min(1, soil[i] / 150);
       for (let j = 0; j < 3; j++) {
         const ground = onLand ? DRY_LAND[j] + wet * (WET_LAND[j] - DRY_LAND[j]) : OCEAN_COLOR[j];
         const white = onLand ? SNOW_COLOR[j] : ICE_COLOR[j];
@@ -504,7 +506,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       const stops = PALETTES[settings.palette] ?? PALETTES.viridis;
       viewer.setColorMap({ kind: 'palette', stops, a: overlay.scale / (max - min), b: ((overlay.offset || 0) - min) / (max - min), missing: NO_DATA });
       renderScale(stops, min, max, overlay.unit);
-      const columnField = ['ps', 'mslp', 'rain', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave', 'soil', 'snow', 'elevation'].includes(overlay.field);
+      const columnField = ['ps', 'mslp', 'rain', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave', 'soil', 'snow', 'vegetation', 'elevation'].includes(overlay.field);
       overlayLabel = settings.view === 'ocean' ? `${OVERLAY_NAMES[settings.overlay]} · surface current` : columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(shownLevel())}`;
     }
     scaleRow.classList.remove('hidden');
@@ -681,7 +683,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const modelShown = () => !document.getElementById('modelModal').classList.contains('hidden');
   function subscription() {
     const fields = new Set();
-    if (settings.view === 'space') for (const name of ['cloud', 'ice', 'soil', 'snow']) fields.add(name);
+    if (settings.view === 'space') for (const name of ['cloud', 'ice', 'soil', 'snow', 'vegetation']) fields.add(name);
     else {
       const overlay = OVERLAYS[settings.overlay];
       if (overlay.field && !(overlay.field in geographyFields)) fields.add(overlay.field);

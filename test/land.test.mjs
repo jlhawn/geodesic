@@ -38,7 +38,7 @@ test('an all-ocean raster leaves no land and no coast', () => {
 
 test('the bucket conserves water: rain, evaporation, melt and runoff balance the stores', () => {
   const geography = createGeography(mesh, syntheticTopography(90, 180, () => 100));
-  const land = createLandSurface(mesh, geography, { bucketCapacity: 150 });
+  const land = createLandSurface(mesh, geography, { bucketCapacity: 150, vegetation: false });
   land.initialize();
   const i = 0, area = mesh.areaCell[i];
   const surfaceT = new Float64Array(mesh.nCells).fill(290), flux = new Float64Array(mesh.nCells);
@@ -57,7 +57,7 @@ test('the bucket conserves water: rain, evaporation, melt and runoff balance the
 
 test('snow accumulates below freezing, raises the albedo, holds the surface at the melting point while it melts, and drains into the bucket', () => {
   const geography = createGeography(mesh, syntheticTopography(90, 180, () => 100));
-  const land = createLandSurface(mesh, geography, { heatCapacity: 1e6, albedo: 0.25, snowAlbedo: 0.7, fullSnow: 20 });
+  const land = createLandSurface(mesh, geography, { heatCapacity: 1e6, albedo: 0.25, snowAlbedo: 0.7, fullSnow: 20, vegetation: false });
   land.initialize();
   const i = 3;
   land.deposit(i, 10, MELTING_POINT - 5);
@@ -81,10 +81,76 @@ test('snow accumulates below freezing, raises the albedo, holds the surface at t
 
 test('loading a land state leaves sea cells dry and bare whatever the file holds', () => {
   const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)));
-  const land = createLandSurface(mesh, geography, { bucketCapacity: 150 });
+  const land = createLandSurface(mesh, geography, { bucketCapacity: 150, vegetation: false });
   land.load({ soil: new Float64Array(mesh.nCells).fill(120), snow: new Float64Array(mesh.nCells).fill(40) });
   for (let i = 0; i < mesh.nCells; i++) {
     if (geography.land[i]) { assert.equal(land.soil[i], 120); assert.equal(land.snow[i], 40); }
     else { assert.equal(land.soil[i], 0); assert.equal(land.snow[i], 0); }
   }
+});
+
+const DAY = 86400;
+const flat = () => createGeography(mesh, syntheticTopography(90, 180, () => 100));
+
+test('vegetation grows over a wet bucket and dies back over a dry one on its time scales, taking the albedo and the bucket with it', () => {
+  const land = createLandSurface(mesh, flat(), { growthTime: 100 * DAY, declineTime: 50 * DAY });
+  land.initialize();
+  const i = 0, surfaceT = new Float64Array(mesh.nCells).fill(295), flux = new Float64Array(mesh.nCells);
+  assert.equal(land.vegetation[i], 1);
+  assert.equal(land.capacity(i), 500);
+  assert.ok(Math.abs(land.albedo(i) - 0.13) < 1e-12);
+  land.vegetation[i] = 0.5; land.soil[i] = 0;
+  land.update(i, surfaceT, flux, 0, 50 * DAY);
+  assert.ok(Math.abs(land.vegetation[i] - 0.5 * Math.exp(-1)) < 1e-12, `dry: ${land.vegetation[i]}`);
+  assert.ok(Math.abs(land.albedo(i) - (0.35 + (0.13 - 0.35) * land.vegetation[i])) < 1e-12);
+  assert.ok(Math.abs(land.capacity(i) - (50 + 450 * land.vegetation[i])) < 1e-12);
+  const v0 = land.vegetation[i];
+  land.soil[i] = land.capacity(i);
+  land.update(i, surfaceT, flux, 0, 100 * DAY);
+  assert.ok(Math.abs(land.vegetation[i] - (1 - (1 - v0) * Math.exp(-1))) < 1e-12, `wet: ${land.vegetation[i]}`);
+  land.vegetation[i] = 0; land.soil[i] = 0.35 * land.capacity(i);
+  land.update(i, surfaceT, flux, 0, 1e9 * DAY);
+  assert.ok(Math.abs(land.vegetation[i] - 0.5) < 1e-9, `a bucket 35% full settles at half cover: ${land.vegetation[i]}`);
+});
+
+test('a bucket shrinking with its vegetation spills the excess into runoff and keeps the water', () => {
+  const land = createLandSurface(mesh, flat(), { snowDeclineTime: 10 * DAY });
+  land.initialize();
+  const i = 5, surfaceT = new Float64Array(mesh.nCells).fill(MELTING_POINT - 10), flux = new Float64Array(mesh.nCells);
+  land.deposit(i, 5, MELTING_POINT - 10);
+  assert.equal(land.soil[i], 500);
+  const before = land.water(), runoff = land.runoff[i];
+  land.update(i, surfaceT, flux, 0, 50 * DAY);
+  assert.ok(Math.abs(land.vegetation[i] - Math.exp(-5)) < 1e-12);
+  assert.ok(Math.abs(land.soil[i] - land.capacity(i)) < 1e-9, `soil ${land.soil[i]} against capacity ${land.capacity(i)}`);
+  assert.ok(Math.abs(land.runoff[i] - runoff - (500 - land.soil[i])) < 1e-9, 'what the bucket lost ran off');
+  assert.ok(Math.abs(land.water() - before) < 1e-9 * before);
+  land.soil[i] = 400; land.vegetation[i] = 0.2;
+  land.deposit(i, 0, MELTING_POINT + 5);
+  assert.ok(Math.abs(land.soil[i] - land.capacity(i)) < 1e-9, 'the bucket holds no more than its vegetation allows');
+});
+
+test('under snow the vegetation fades over snowDeclineTime and the snow sets the albedo', () => {
+  const land = createLandSurface(mesh, flat(), { snowDeclineTime: 200 * DAY, snowAlbedo: 0.55, fullSnow: 20 });
+  land.initialize();
+  const i = 2, surfaceT = new Float64Array(mesh.nCells).fill(MELTING_POINT - 10), flux = new Float64Array(mesh.nCells);
+  land.deposit(i, 50, MELTING_POINT - 10);
+  land.update(i, surfaceT, flux, 0, 200 * DAY);
+  assert.ok(Math.abs(land.vegetation[i] - Math.exp(-1)) < 1e-12);
+  assert.ok(Math.abs(land.albedo(i) - 0.55) < 1e-12);
+});
+
+test('a saved land state without vegetation loads green with full buckets where snow-free and bare under snow', () => {
+  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)));
+  const land = createLandSurface(mesh, geography);
+  const snow = Float64Array.from({ length: mesh.nCells }, (_, i) => (mesh.latCell[i] > 1 ? 30 : 0));
+  land.load({ soil: new Float64Array(mesh.nCells).fill(20), snow });
+  for (let i = 0; i < mesh.nCells; i++) {
+    if (!geography.land[i]) { assert.equal(land.vegetation[i], 0); assert.equal(land.soil[i], 0); continue; }
+    if (snow[i] > 0) { assert.equal(land.vegetation[i], 0); assert.equal(land.soil[i], 20); }
+    else { assert.equal(land.vegetation[i], 1); assert.equal(land.soil[i], 500); }
+  }
+  land.load({ soil: new Float64Array(mesh.nCells).fill(20), snow, vegetation: new Float64Array(mesh.nCells).fill(1.5) });
+  for (let i = 0; i < mesh.nCells; i++) assert.equal(land.vegetation[i], geography.land[i] ? 1 : 0);
+  assert.deepEqual(Object.keys(land.serialize()), ['soil', 'snow', 'vegetation']);
 });

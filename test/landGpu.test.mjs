@@ -25,19 +25,24 @@ function prepare(model) {
   model.ocean.initialize(model.state[3], model.state[6]);
   model.land.initialize();
   for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) { model.land.soil[i] = 40; model.land.snow[i] = model.mesh.latCell[i] > 1.0 ? 5 : 0; }
-  model.land.load({ soil: Float64Array.from(model.land.soil), snow: Float64Array.from(model.land.snow) });
+  model.land.load({ soil: Float64Array.from(model.land.soil), snow: Float64Array.from(model.land.snow), vegetation: new Float64Array(model.mesh.nCells).fill(0.5) });
   return model;
 }
 
-test('eight GPU steps over a continent track the CPU model: surface, soil, snow, and the coast-bound ocean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const cpu = prepare(createModel(new Grid(6), { topography }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography }));
+test('eight GPU steps over a continent track the CPU model: surface, soil, snow, vegetation, and the coast-bound ocean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600 };
+  const cpu = prepare(createModel(new Grid(6), { topography, land }));
+  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }));
   for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
   await gpu.sync();
-  const land = await gpu.land.serialize();
+  const saved = await gpu.land.serialize();
   const d = await gpu.diagnostics(), dc = cpu.diagnostics();
   const ts = stats(cpu.state[3], gpu.state[3]), theta = stats(cpu.state[1], gpu.state[1]);
-  const soil = stats(cpu.land.soil, land.soil), snow = stats(cpu.land.snow, land.snow);
+  const soil = stats(cpu.land.soil, saved.soil), snow = stats(cpu.land.snow, saved.snow), vegetation = stats(cpu.land.vegetation, saved.vegetation);
+  let moved = 0;
+  for (let i = 0; i < cpu.mesh.nCells; i++) if (cpu.geography.land[i]) moved = Math.max(moved, Math.abs(cpu.land.vegetation[i] - 0.5));
+  assert.ok(moved > 0.2, `the vegetation moved at most ${moved} from its start`);
+  assert.ok(vegetation.maxDiff < 1e-3, `vegetation max ${vegetation.maxDiff} at ${vegetation.at}`);
   console.log(`eight steps over a continent at N=6: Ts max ${ts.maxDiff.toExponential(1)} K, θ rms ${theta.rmsRel.toExponential(1)}, soil max ${soil.maxDiff.toExponential(1)} kg/m², snow max ${snow.maxDiff.toExponential(1)} kg/m²; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
   assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} at ${ts.at}`);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);

@@ -1746,6 +1746,47 @@ below, the same run's fastest current fell to 1.3 m/s, with no clamps.
 and the 50 m minimum depth are first guesses; the barotropic mode has
 no explicit filter beyond the sub-step average.
 
+### M19 — Emergent vegetation (`js/physics/land.module.js`) — done (first tuning)
+
+The uniform land of M16 (albedo 0.2, a 150 mm bucket everywhere) left
+tropical land in a self-sustaining dry state: in every saved season of
+the day-810 spin-up the Congo held 9–34 of 150 kg/m² at 34–40 °C and
+India was 43–45 °C and dry in June and September, with the monsoon
+rain falling offshore (Bay of Bengal 10–12 mm/day, India 0.7–1.8).
+Over land the Betts–Miller scheme triggered in 30–50% of columns but
+rained in 2–6%, because the whole column above the LCL was 4–6 kg/m²
+short of its 70% reference humidity. Filling the tropical buckets gave
+realistic monsoons at 27–28 °C for a month (Sahel 7.4, India
+4.5 mm/day) before the 150 mm buckets drained back to the dry state;
+filled 500 mm buckets carried the monsoons through the season.
+
+So the land now grows a vegetation cover v from 0 (bare) to 1 (dense
+forest) per cell, and the land's properties follow it rather than a
+map: the bare-ground albedo runs from `bareAlbedo` 0.35 to
+`vegetatedAlbedo` 0.13 and the bucket from `minimumCapacity` 50 to
+`maximumCapacity` 500 kg/m², deeper roots holding water through dry
+seasons. Snow-free, v relaxes toward a goal set by how full the bucket
+is — 0 below `dryWetness` 0.1 of the capacity, 1 above `wetWetness`
+0.6 — over `growthTime` and `declineTime` (180 days each); under snow
+it fades toward 0 over `snowDeclineTime` (720 days), so ice sheets go
+bare while a boreal forest survives its winters. Water above a
+shrinking bucket runs off. Both engines carry v (the GPU in the PH
+buffer's VEG range), snapshots save it under `land.vegetation`,
+regridding samples it by tile, and the page shows it as the VEG
+overlay and uses it for the land colour of the Satellite view.
+
+A fresh land surface starts fully vegetated with full buckets, and a
+saved state without vegetation loads that way where it is free of
+snow, so deserts have to emerge. From a green start at the day-810
+N=64 state, one year gives forest over the Congo (v 0.94, 6.1 mm/day
+over the year), the Amazon (0.99, 7.1), Borneo, Europe, the eastern
+United States and Siberia, savanna in the Sahel (0.49) and India
+(0.75), and bare ground drying out over the Sahara (0.45 and falling),
+Arabia, the Horn of Africa, the Kalahari, central Australia, central
+Asia and the dry northeast of Brazil. From v = 0.5 everywhere the same
+year sends tropical Africa and most of the Amazon to desert: the dry
+state is still an attractor, so the start matters.
+
 ### The page as a client of the model worker
 
 The page subscribes to exactly what it draws — the level, the fields of

@@ -76,6 +76,7 @@ async function cpuFrame({ level, fields, diagnostics: summarize }) {
   if (want.has('longwave')) out.longwave = Float32Array.from(model.radiation.outgoing);
   if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil);
   if (model.land && want.has('snow')) out.snow = Float32Array.from(model.land.snow);
+  if (model.land && want.has('vegetation')) out.vegetation = Float32Array.from(model.land.vegetation);
   const ocean = model.oceanFields && fields.some((name) => OCEAN_FIELDS.has(name)) ? model.oceanFields() : null;
   if (ocean) {
     for (const [name, values] of Object.entries({ sst: ocean.T1, sss: ocean.S1, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta })) if (want.has(name)) out[name] = sea(values);
@@ -263,11 +264,11 @@ function sourceFor(saved) {
 
 /*
  * The land state comes with a saved run when it has one, regridded if
- * needed; otherwise the buckets start half full and bare.
+ * needed; otherwise it starts as `initialize` makes it.
  */
 function placeLand(model, saved, N) {
   if (!model.land) return;
-  if (saved && saved.land) model.land.load(saved.N === N ? { soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow) } : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94), { ice: saved.ice ?? null, surfaceT: saved.surfaceT ?? null }));
+  if (saved && saved.land) model.land.load(saved.N === N ? { soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}) } : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94), { ice: saved.ice ?? null, surfaceT: saved.surfaceT ?? null }));
   else model.land.initialize();
 }
 
@@ -428,7 +429,7 @@ async function snapshot() {
   }
   if (model.land) {
     const l = await model.land.serialize();
-    land = { soil: Float64Array.from(l.soil).buffer, snow: Float64Array.from(l.snow).buffer };
+    land = Object.fromEntries(Object.entries(l).map(([k, v]) => [k, Float64Array.from(v).buffer]));
   }
   const transfer = [...Object.values(arrays), ...(ocean ? Object.values(ocean) : []), ...(land ? Object.values(land) : [])];
   self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, arrays, ocean, land }, transfer);

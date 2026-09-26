@@ -13,10 +13,12 @@ import { readRanges } from './device.module.js';
 import { RAIN_MEMORY } from '../frames.module.js';
 import { createLandSurface } from '../physics/land.module.js';
 
+const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'minimumCapacity', 'maximumCapacity', 'dryWetness', 'wetWetness', 'growthTime', 'declineTime', 'snowDeclineTime'];
+
 /*
  * The whole model on the GPU behind the CPU model's interface: `state`
  * holds double-precision mirrors that only `sync` refreshes from the
- * device (the land's soil and snow only `land.serialize`, its runoff
+ * device (the land's soil, snow and vegetation only `land.serialize`, its runoff
  * when the diagnostics are taken), `step` only
  * queues work, `beginFrame` computes the page's fields and the
  * diagnostics on the device, and `ocean` carries the same
@@ -40,6 +42,7 @@ export async function createGpuModel(gridOrMesh, {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     landed: !!geography, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
+    ...Object.fromEntries(VEGETATION_OPTIONS.filter((key) => landOptions[key] !== undefined).map((key) => [key, landOptions[key]])),
   };
   const gpu = await createGpuCore(mesh, { nu4, nu4Theta: nu4, physics, topSigma: surface.topSigma ?? 0.02, topDragDays: surface.topDragDays ?? 5, surfaceGeopotential: phis });
   const seaIce = createSeaIce(mesh, ice);
@@ -64,7 +67,7 @@ export async function createGpuModel(gridOrMesh, {
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? geography.land : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null });
+    gpu.uploadPhysics({ land: geography ? geography.land : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null });
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6]);
     lastFrameTime = model.time;
@@ -134,12 +137,12 @@ export async function createGpuModel(gridOrMesh, {
   } : null;
 
   model.land = landCpu ? {
-    soil: landCpu.soil, snow: landCpu.snow, runoff: landCpu.runoff, land: geography.land, budget: landCpu.budget, albedo: landCpu.albedo, wetness: landCpu.wetness, water: landCpu.water, bucketCapacity: landCpu.bucketCapacity,
-    initialize() { landCpu.initialize(); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow }); },
-    load(saved) { landCpu.load(saved); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow }); },
+    soil: landCpu.soil, snow: landCpu.snow, runoff: landCpu.runoff, vegetation: landCpu.vegetation, capacity: landCpu.capacity, land: geography.land, budget: landCpu.budget, albedo: landCpu.albedo, wetness: landCpu.wetness, water: landCpu.water, bucketCapacity: landCpu.bucketCapacity,
+    initialize() { landCpu.initialize(); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow, vegetation: landCpu.vegetation }); },
+    load(saved) { landCpu.load(saved); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow, vegetation: landCpu.vegetation }); },
     async serialize() {
-      const [soil, snow] = await readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.SOIL, length: C }, { offset: gpu.layout.PH.SNOW, length: C }]);
-      landCpu.soil.set(soil); landCpu.snow.set(snow);
+      const [soil, snow, vegetation] = await readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.SOIL, length: C }, { offset: gpu.layout.PH.SNOW, length: C }, { offset: gpu.layout.PH.VEG, length: C }]);
+      landCpu.soil.set(soil); landCpu.snow.set(snow); landCpu.vegetation.set(vegetation);
       return landCpu.serialize();
     },
   } : null;
