@@ -15,7 +15,7 @@ export function physicsConstants(o) {
   return `
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
 const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudScattering}; const WINDOW: f32 = ${o.window}; const GAS_FRAC: f32 = ${o.gasFraction};
-const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
+const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6;
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
@@ -115,7 +115,20 @@ export const PHYSICS_KERNELS = {
   }
   let cloudDepth = CLOUD_SCAT * cloudPath;
   let reflectance = select(0.0, cloudDepth / (cloudDepth + 2.0 * mu), mu > 0.0 && cloudDepth > 0.0);
-  let incident = beam - ozoneHeating;
+  var incident = beam - ozoneHeating;
+  var vaporHeating = 0.0;
+  if (VAPOR_ABS > 0.0 && mu > 0.0) {
+    let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
+    var path = 0.0; var taken = 0.0;
+    for (var k = 0; k < K; k++) {
+      path += max(0.0, IN[S_Q + k * C + i]) * pi * LV[L_DS + k] / GRAV * sqrt(LV[L_SM + k]) * 0.1 * magnification;
+      let through = VAPOR_ABS * 2.9 * path / (pow(1.0 + 141.5 * path, 0.635) + 5.925 * path);
+      netFlux[k] += incident * (through - taken);
+      taken = through;
+    }
+    vaporHeating = incident * taken;
+    incident -= vaporHeating;
+  }
   let direct = (1.0 - SKYLIGHT) * select(1.0, exp(-cloudDepth / mu), cloudDepth > 0.0 && mu > 0.0);
   let diffuse = 1.0 - reflectance - direct;
   let returned = select(0.0, cloudDepth / (cloudDepth + 2.0 * DIFFUSE_MU), cloudDepth > 0.0);
@@ -140,7 +153,7 @@ export const PHYSICS_KERNELS = {
   }
   IN[S_Q + bottom] += dt * evap * GRAV / (pi * LV[L_DS + K - 1]);
   PH[PH_SWDN + i] = incident * (direct + diffuse + returned * upward / (1.0 - adif * returned));
-  PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbed + ozoneHeating; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = incident - absorbed; PH[PH_ADIF + i] = adif;
+  PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbed + ozoneHeating + vaporHeating; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = incident - absorbed; PH[PH_ADIF + i] = adif;
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = ts; var h = ice;
   if (onLand) {

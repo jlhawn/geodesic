@@ -1787,6 +1787,35 @@ Asia and the dry northeast of Brazil. From v = 0.5 everywhere the same
 year sends tropical Africa and most of the Amazon to desert: the dry
 state is still an attractor, so the start matters.
 
+### M20 — Water vapour absorbs sunlight (`js/physics/radiation.module.js`) — done (tuning)
+
+With emergent vegetation the tropical land still dried out in the
+second year of a green start: over the Sahel, India and the Congo
+evaporation plus runoff exceeded rain in wet years and dry ones alike,
+so the land never imported ocean moisture (all land converged
++0.1 mm/day against about +0.75 on the Earth). In the dry state a
+1015 hPa high sat over the Sahara where the Earth has a heat low near
+1006–1008 hPa; its northeasterlies closed the Sahel to the monsoon and
+the Somali jet weakened. The Sahara's column was 10–12 K too cold
+(850 hPa 15 °C against about 30) although its surface budget (266
+W/m² absorbed, 91 W/m² sensible) and its boundary layer (4.3 km
+deep by day) were realistic, and the global rain was 3.5 mm/day
+against 2.7 observed. Both point at the shortwave: only ozone absorbed
+the beam aloft (3%), where the Earth's atmosphere takes 70–80 W/m²,
+most of it in water vapour, so the surface received that energy and
+evaporated it.
+
+Water vapour now absorbs the beam by the Lacis & Hansen (1974)
+absorptivity A(y) = 2.9y / ((1 + 141.5y)^0.635 + 5.925y) of the water
+path y (cm) the beam has crossed, pressure-scaled by √σ and lengthened
+by their magnification 35/√(1224μ² + 1); each layer is heated by what
+its own vapour adds to A above it, and what is left goes on to the
+clouds and the surface. A tropical column with 40–50 kg/m² of vapour
+takes 10–20% of an overhead beam, most of it in its lower half; dry air
+takes nothing. `vaporAbsorption` scales A (0 turns it off). Both
+engines carry it line by line, and the absorbed-solar diagnostics
+count it.
+
 ### The page as a client of the model worker
 
 The page subscribes to exactly what it draws — the level, the fields of

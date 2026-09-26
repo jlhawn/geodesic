@@ -56,14 +56,23 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * (centred at ozoneHeight with width ozoneWidth, heights from σ with the
  * scale height) and the absorbing part of the beam decays through it
  * with the optical depth ozoneOpacity, so the heating peaks above the
- * ozone maximum as it does at the stratopause.
+ * ozone maximum as it does at the stratopause. Water vapour absorbs the
+ * beam below it by the Lacis & Hansen (1974) absorptivity of the water
+ * path the beam has crossed — pressure-scaled by √σ and lengthened by
+ * their magnification 35/√(1224μ² + 1) — times `vaporAbsorption`, each
+ * layer taking what its own vapour adds to the path above it; what is
+ * left goes on to the clouds and the surface. Dry air absorbs nothing.
  */
+export function waterVaporAbsorptivity(path) {
+  return 2.9 * path / (Math.pow(1 + 141.5 * path, 0.635) + 5.925 * path);
+}
+
 const DIFFUSE_MU = 0.6;
 
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 35,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
-  ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3,
+  ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, exnerLayer } = core.diagnostics;
@@ -139,7 +148,19 @@ export function createRadiation(mesh, core, {
     const mu = beam / solarConstant;
     const cloudDepth = cloudScattering * cloudPath;
     const reflectance = mu > 0 && cloudDepth > 0 ? cloudDepth / (cloudDepth + 2 * mu) : 0;
-    const incident = beam - ozoneHeating;
+    let incident = beam - ozoneHeating, vaporHeating = 0;
+    if (vaporAbsorption > 0 && q !== null && mu > 0) {
+      const magnification = 35 / Math.sqrt(1224 * mu * mu + 1);
+      let path = 0, taken = 0;
+      for (let k = 0; k < K; k++) {
+        path += Math.max(0, q[k * C + i]) * pi * dSigma[k] / g * Math.sqrt(sigmaMid[k]) * 0.1 * magnification;
+        const through = vaporAbsorption * waterVaporAbsorptivity(path);
+        netFlux[k] += incident * (through - taken);
+        taken = through;
+      }
+      vaporHeating = incident * taken;
+      incident -= vaporHeating;
+    }
     const direct = (1 - skylight) * (cloudDepth > 0 && mu > 0 ? Math.exp(-cloudDepth / mu) : 1);
     const diffuse = 1 - reflectance - direct;
     const returned = cloudDepth > 0 ? cloudDepth / (cloudDepth + 2 * DIFFUSE_MU) : 0;
@@ -158,7 +179,7 @@ export function createRadiation(mesh, core, {
     const evaporation = qAir === null ? 0 : wetness * Math.max(0, exchange * (saturationHumidity(surfaceT, pi) - qAir));
     netFlux[bottom] += sensible;
     const net = absorbedSolar - surfaceEmission + back - sensible - latentHeat * evaporation;
-    budget.absorbedSolar = absorbedSolar + ozoneHeating;
+    budget.absorbedSolar = absorbedSolar + ozoneHeating + vaporHeating;
     budget.outgoingLongwave = outgoing;
     budget.sensibleHeat = sensible;
     budget.evaporation = evaporation;

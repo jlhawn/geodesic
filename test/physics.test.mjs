@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, P0, CP_DRY } from '../js/dynamics/sigmaCore.module.js';
-import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR } from '../js/physics/radiation.module.js';
-import { LATENT_HEAT } from '../js/physics/moist.module.js';
+import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity } from '../js/physics/radiation.module.js';
+import { LATENT_HEAT, saturationHumidity } from '../js/physics/moist.module.js';
 import { createSurface } from '../js/physics/surface.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
@@ -221,11 +221,44 @@ test('the surface sees the direct beam in clear sky and diffuse light under thic
   assert.ok(cloudyDark < 0.5 * clearDark, 'the cloud reflects most of the beam');
 });
 
+test('water vapour absorbs sunlight by the Lacis–Hansen curve: a humid column takes a tenth or more of the beam, most of it low down, and dry air none', () => {
+  assert.equal(waterVaporAbsorptivity(0), 0);
+  assert.ok(Math.abs(waterVaporAbsorptivity(1) - 0.099) < 0.002 && Math.abs(waterVaporAbsorptivity(5) - 0.154) < 0.002);
+  for (let y = 0.01; y < 20; y *= 1.5) assert.ok(waterVaporAbsorptivity(1.5 * y) > waterVaporAbsorptivity(y));
+  const radiation = createRadiation(mesh, core), none = createRadiation(mesh, core, { vaporAbsorption: 0 });
+  const [pi, theta, u, surfaceT] = sampleState(3);
+  const q = new Float64Array(K * C), qc = new Float64Array(K * C);
+  core.diagnose(pi, theta, q, qc);
+  radiation.setTime(0); none.setTime(0);
+  let day = -1;
+  for (let i = 0; i < C; i++) if (radiation.insolation(i) > 1200) { day = i; break; }
+  assert.ok(day >= 0);
+  const dry = evaluate(radiation, day, pi, theta, surfaceT, q, qc), dryNone = evaluate(none, day, pi, theta, surfaceT, q, qc);
+  assert.equal(dry.absorbed, dryNone.absorbed, 'dry air absorbs nothing');
+  let water = 0;
+  for (let k = 0; k < K; k++) {
+    const idx = k * C + day, p = pi[day] * core.sigmaMid[k];
+    q[idx] = 0.8 * saturationHumidity(theta[idx] * core.diagnostics.exnerLayer[idx], p);
+    water += q[idx] * pi[day] * core.diagnostics.dSigma[k] / 9.80665;
+  }
+  const humid = evaluate(radiation, day, pi, theta, surfaceT, q, qc), humidNone = evaluate(none, day, pi, theta, surfaceT, q, qc);
+  const extra = humid.layers.map((f, k) => f - humidNone.layers[k]);
+  const taken = extra.reduce((a, b) => a + b, 0), beam = radiation.insolation(day) * 0.97;
+  assert.ok(water > 20, `column water ${water} kg/m²`);
+  assert.ok(taken > 0.1 * beam && taken < 0.25 * beam, `vapour takes ${taken} of ${beam} W/m²`);
+  assert.ok(humid.surfaceShortwave < humidNone.surfaceShortwave - 0.9 * taken, 'what the vapour takes does not reach the surface');
+  assert.ok(humid.absorbed >= humidNone.absorbed, 'the planet absorbs no less: the vapour takes light the surface would have absorbed or reflected');
+  assert.ok(humid.closure < EPS);
+  assert.ok(extra.every((f) => f >= -1e-9));
+  const lower = extra.slice(K / 2).reduce((a, b) => a + b, 0);
+  assert.ok(lower > 0.5 * taken, `the lower half of the column takes ${lower} of ${taken}`);
+});
+
 function evaluate(radiation, i, pi, theta, surfaceT, q, qc) {
   const flux = radiation.column(i, pi[i], theta, surfaceT[i], 5, radiation.opticalDepth(mesh.latCell[i]), radiation.insolation(i), q[(K - 1) * C + i], q, qc, 0.07);
   let layers = 0, scale = 0;
   for (let k = 0; k < K; k++) { layers += radiation.layerFlux[k]; scale += Math.abs(radiation.layerFlux[k]); }
   const latent = LATENT_HEAT * radiation.budget.evaporation;
   const residual = layers + flux + latent - (radiation.budget.absorbedSolar - radiation.budget.outgoingLongwave);
-  return { reflected: radiation.budget.reflectedSolar, olr: radiation.budget.outgoingLongwave, closure: Math.abs(residual) / (scale + Math.abs(flux) + latent) };
+  return { reflected: radiation.budget.reflectedSolar, olr: radiation.budget.outgoingLongwave, absorbed: radiation.budget.absorbedSolar, surfaceShortwave: radiation.budget.surfaceShortwave, layers: Array.from(radiation.layerFlux), closure: Math.abs(residual) / (scale + Math.abs(flux) + latent) };
 }
