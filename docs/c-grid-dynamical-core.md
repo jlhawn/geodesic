@@ -1603,8 +1603,8 @@ each interior layer starts at its class salinity (35 psu through the
 1025.0 class, then 34.9, 34.85 and 34.8, `LAYER_SALINITIES`) and the
 temperature that gives its label density there (the deepest class at
 about 0.8 °C), blending poleward of 50° over 20° of latitude toward
-0.5 °C at the salinity that keeps the density (the 1026.6 class at
-34.33 psu, the deepest at 34.78), as polar oceans hold cold, fresh water
+−1 °C at the salinity that keeps the density (the 1026.6 class at
+34.21 psu, the deepest at 34.65), as polar oceans hold cold, fresh water
 on the density surfaces of the warm subtropical thermocline; so its
 density is its label; interior layer bases at 90, 170, 300, 500, 700 and
 1100 m in the subtropics, scaled by 0.7 + 0.6 cos²φ toward the poles;
