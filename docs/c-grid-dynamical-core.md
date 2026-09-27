@@ -1786,7 +1786,9 @@ is — 0 below `dryWetness` 0.1 of the capacity, 1 above `wetWetness`
 (365 days) when falling; under snow it fades toward 0 over
 `snowDeclineTime` (720 days), so ice sheets go
 bare while a boreal forest survives its winters. Water above a
-shrinking bucket runs off. Both engines carry v (the GPU in the PH
+shrinking bucket runs off. The ice sheets — Antarctica's land and
+Greenland's interior above 800 m, the topography carrying no ice mask
+— grow nothing and keep an albedo of 0.8 whatever lies on them. Both engines carry v (the GPU in the PH
 buffer's VEG range), snapshots save it under `land.vegetation`,
 regridding samples it by tile, and the page shows it as the VEG
 overlay and uses it for the land colour of the Satellite view.

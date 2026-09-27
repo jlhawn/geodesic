@@ -24,7 +24,7 @@ const RELAX: f32 = ${o.relaxationTime}; const RH_REF: f32 = ${o.referenceHumidit
 const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth}; const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const CAP_MIN: f32 = ${o.minimumCapacity}; const CAP_MAX: f32 = ${o.maximumCapacity};
-const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
+const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 `;
 }
 
@@ -91,11 +91,11 @@ export const PHYSICS_KERNELS = {
   let sun = vec3<f32>(P[2], P[3], P[4]);
   let mu = max(0.0, MF[F_XC + 3 * i] * sun.x + MF[F_XC + 3 * i + 1] * sun.y + MF[F_XC + 3 * i + 2] * sun.z);
   let beam = S0 * mu;
-  let onLand = PH[PH_LAND + i] > 0.5;
+  let onLand = PH[PH_LAND + i] > 0.5; let onIceSheet = PH[PH_LAND + i] > 1.5;
   let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i]; let veg0 = PH[PH_VEG + i];
   let bucket = select(BUCKET, CAP_MIN + (CAP_MAX - CAP_MIN) * veg0, VEGETATED);
   let bareAlbedo = select(ALB_LAND, ALB_BARE + (ALB_VEG - ALB_BARE) * veg0, VEGETATED);
-  let landAlbedo = bareAlbedo + min(1.0, snow0 / FULLSNOW) * (ALB_SNOW - bareAlbedo);
+  let landAlbedo = select(bareAlbedo + min(1.0, snow0 / FULLSNOW) * (ALB_SNOW - bareAlbedo), ALB_ICESHEET, onIceSheet);
   let adif = select(surfaceAlbedo(ice, ALB_DIF_WATER, snow0), landAlbedo, onLand);
   let adir = select(surfaceAlbedo(ice, openWaterAlbedo(mu), snow0), landAlbedo, onLand);
   let wetness = select(1.0, select(min(1.0, soil0 / (WETT * bucket)), 1.0, snow0 > 0.0), onLand);
@@ -181,6 +181,7 @@ export const PHYSICS_KERNELS = {
         let goal = clamp((min(soil, cap) / cap - VEG_DRY) / (VEG_WET - VEG_DRY), 0.0, 1.0);
         veg = veg0 + (goal - veg0) * (1.0 - exp(-dt / select(VEG_DECLINE, VEG_GROW, goal > veg0)));
       }
+      if (onIceSheet) { veg = 0.0; }
       PH[PH_VEG + i] = veg;
       cap = CAP_MIN + (CAP_MAX - CAP_MIN) * veg;
     }

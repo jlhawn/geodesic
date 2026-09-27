@@ -9,7 +9,7 @@ let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
-const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
+const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
 
 function stats(cpu, gpu) {
   let maxDiff = 0, at = -1, sumSq = 0, sumRef = 0;

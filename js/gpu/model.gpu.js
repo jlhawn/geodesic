@@ -67,7 +67,7 @@ export async function createGpuModel(gridOrMesh, {
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? geography.land : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null });
+    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null });
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6]);
     lastFrameTime = model.time;

@@ -150,10 +150,29 @@ test('a saved land state without vegetation loads green with full buckets where 
   land.load({ soil: new Float64Array(mesh.nCells).fill(20), snow });
   for (let i = 0; i < mesh.nCells; i++) {
     if (!geography.land[i]) { assert.equal(land.vegetation[i], 0); assert.equal(land.soil[i], 0); continue; }
-    if (snow[i] > 0) { assert.equal(land.vegetation[i], 0); assert.equal(land.soil[i], 20); }
+    if (snow[i] > 0 || geography.iceSheet[i]) { assert.equal(land.vegetation[i], 0); assert.equal(land.soil[i], 20); }
     else { assert.equal(land.vegetation[i], 1); assert.equal(land.soil[i], 500); }
   }
   land.load({ soil: new Float64Array(mesh.nCells).fill(20), snow, vegetation: new Float64Array(mesh.nCells).fill(1.5) });
-  for (let i = 0; i < mesh.nCells; i++) assert.equal(land.vegetation[i], geography.land[i] ? 1 : 0);
+  for (let i = 0; i < mesh.nCells; i++) assert.equal(land.vegetation[i], geography.land[i] && !geography.iceSheet[i] ? 1 : 0);
   assert.deepEqual(Object.keys(land.serialize()), ['soil', 'snow', 'vegetation']);
+});
+
+test('an ice sheet keeps its albedo under anything and grows nothing', () => {
+  const geography = createGeography(mesh, syntheticTopography(90, 180, (lat, lon) => (lat < -1.1 ? 2000 : Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 500 : -4000)));
+  const sheet = [...geography.iceSheet].map((s, i) => (s ? i : -1)).filter((i) => i >= 0);
+  assert.ok(sheet.length > 0 && sheet.every((i) => geography.land[i] && mesh.latCell[i] < -60 / 57.29578), 'the southern land is an ice sheet');
+  assert.ok([...geography.land].some((l, i) => l && !geography.iceSheet[i]), 'the tropical continent is not');
+  const land = createLandSurface(mesh, geography);
+  land.initialize();
+  const i = sheet[0], surfaceT = new Float64Array(mesh.nCells).fill(280), flux = new Float64Array(mesh.nCells);
+  assert.equal(land.vegetation[i], 0);
+  assert.equal(land.albedo(i), 0.8);
+  land.deposit(i, 40, MELTING_POINT - 5);
+  assert.equal(land.albedo(i), 0.8, 'snow does not darken it toward the snow albedo');
+  land.snow[i] = 0; land.soil[i] = land.capacity(i);
+  land.update(i, surfaceT, flux, 0, 400 * DAY);
+  assert.equal(land.vegetation[i], 0, 'a wet bucket grows nothing on it');
+  land.load({ soil: new Float64Array(mesh.nCells).fill(100), snow: new Float64Array(mesh.nCells) });
+  assert.equal(land.vegetation[i], 0, 'a saved green state loads bare on it');
 });

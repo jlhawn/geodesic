@@ -71,9 +71,16 @@ export function createGeography(mesh, topography, { landThreshold = 0.5 } = {}) 
     edgeOcean[e] = !a && !b ? 1 : 0;
     if (a !== b) coast.push(e);
   }
+  // The topography carries no ice mask: the ice sheets are Antarctica's land and Greenland's interior above 800 m.
+  const iceSheet = new Uint8Array(C);
+  for (let i = 0; i < C; i++) {
+    if (!land[i]) continue;
+    const lat = latCell[i] * 180 / Math.PI, lon = lonCell[i] * 180 / Math.PI;
+    if (lat < -60 || (lat > 60 && lat < 84 && lon > -73 && lon < -12 && elevation[i] > 800)) iceSheet[i] = 1;
+  }
   let landArea = 0, total = 0;
   for (let i = 0; i < C; i++) { total += areaCell[i]; if (land[i]) landArea += areaCell[i]; }
-  return { land, landFraction, elevation, edgeOcean, coastEdges: Int32Array.from(coast), landArea: landArea / total };
+  return { land, landFraction, elevation, iceSheet, edgeOcean, coastEdges: Int32Array.from(coast), landArea: landArea / total };
 }
 
 /*

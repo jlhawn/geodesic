@@ -502,7 +502,7 @@ export const PHYSICS_DEFAULTS = {
   relaxationTime: 7200, referenceHumidity: 0.6, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, detrainment: 0.1, anvilDepth: 150e2, rainEvaporation: 1,
   richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5,
   landed: false, landHeatCapacity: 1e6, bucketCapacity: 150, wetnessThreshold: 0.75, landAlbedo: 0.2, snowAlbedo: 0.55, fullSnow: 20,
-  vegetation: true, bareAlbedo: 0.30, vegetatedAlbedo: 0.13, minimumCapacity: 50, maximumCapacity: 500, dryWetness: 0.1, wetWetness: 0.6,
+  vegetation: true, bareAlbedo: 0.30, vegetatedAlbedo: 0.13, minimumCapacity: 50, maximumCapacity: 500, dryWetness: 0.1, wetWetness: 0.6, iceSheetAlbedo: 0.8,
   growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400,
 };
 

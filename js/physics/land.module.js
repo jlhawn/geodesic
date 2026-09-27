@@ -21,18 +21,20 @@ import { MELTING_POINT } from './ice.module.js';
  * bareAlbedo to vegetatedAlbedo and the bucket from minimumCapacity to
  * maximumCapacity (deeper roots) with v; water above a shrinking bucket
  * runs off. Without it the bucket is bucketCapacity and the albedo
- * `albedo` everywhere.
+ * `albedo` everywhere. A cell of the geography's `iceSheet` grows no
+ * vegetation and keeps iceSheetAlbedo whatever lies on it.
  */
 export function createLandSurface(mesh, geography, {
   heatCapacity = 1e6, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.2, snowAlbedo = 0.55, fullSnow = 20,
   latentHeatFusion = 3.34e5, vegetation: vegetated = true, bareAlbedo = 0.30, vegetatedAlbedo = 0.13, minimumCapacity = 50,
   maximumCapacity = 500, dryWetness = 0.1, wetWetness = 0.6, growthTime = 180 * 86400, declineTime = 365 * 86400,
-  snowDeclineTime = 720 * 86400, buffers = null,
+  snowDeclineTime = 720 * 86400, iceSheetAlbedo = 0.8, buffers = null,
 } = {}) {
   const C = mesh.nCells;
   const shared = (name) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * C));
   const soil = shared('soil'), snow = shared('snow'), runoff = shared('runoff'), vegetation = shared('vegetation');
-  const { land } = geography;
+  const { land, iceSheet = null } = geography;
+  const onIceSheet = (i) => iceSheet !== null && iceSheet[i] > 0;
   const budget = { runoff: 0, melt: 0 };
 
   const capacity = (i) => (vegetated ? minimumCapacity + (maximumCapacity - minimumCapacity) * vegetation[i] : bucketCapacity);
@@ -53,11 +55,13 @@ export function createLandSurface(mesh, geography, {
   }
 
   function surfaceAlbedo(i) {
+    if (onIceSheet(i)) return iceSheetAlbedo;
     const bare = bareGround(i);
     return bare + Math.min(1, snow[i] / fullSnow) * (snowAlbedo - bare);
   }
 
   function grow(i, dt) {
+    if (onIceSheet(i)) { vegetation[i] = 0; return; }
     if (snow[i] > 0) { vegetation[i] *= Math.exp(-dt / snowDeclineTime); return; }
     const cap = capacity(i);
     const goal = Math.min(1, Math.max(0, (Math.min(soil[i], cap) / cap - dryWetness) / (wetWetness - dryWetness)));
@@ -94,7 +98,7 @@ export function createLandSurface(mesh, geography, {
    */
   function initialize() {
     for (let i = 0; i < C; i++) {
-      vegetation[i] = land[i] && vegetated ? 1 : 0;
+      vegetation[i] = land[i] && vegetated && !onIceSheet(i) ? 1 : 0;
       soil[i] = land[i] ? (vegetated ? capacity(i) : 0.5 * bucketCapacity) : 0;
       snow[i] = 0; runoff[i] = 0;
     }
@@ -115,7 +119,7 @@ export function createLandSurface(mesh, geography, {
     for (let i = 0; i < C; i++) {
       soil[i] = land[i] ? saved.soil[i] : 0;
       snow[i] = land[i] || (ice && ice[i] > 0) ? saved.snow[i] : 0;
-      if (!land[i] || !vegetated) vegetation[i] = 0;
+      if (!land[i] || !vegetated || onIceSheet(i)) vegetation[i] = 0;
       else if (saved.vegetation) vegetation[i] = Math.min(1, Math.max(0, saved.vegetation[i]));
       else { vegetation[i] = snow[i] > 0 ? 0 : 1; if (snow[i] <= 0) soil[i] = capacity(i); }
     }
