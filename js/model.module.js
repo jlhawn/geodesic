@@ -4,7 +4,7 @@ import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
 import { createSurface } from './physics/surface.module.js';
 import { createMoistPhysics } from './physics/moist.module.js';
-import { createSeaIce, MELTING_POINT } from './physics/ice.module.js';
+import { createSeaIce, MELTING_POINT, FREEZING_POINT } from './physics/ice.module.js';
 import { createOcean } from './ocean/layered.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 import { createGeography, surfaceGeopotential } from './geography.module.js';
@@ -75,12 +75,14 @@ export function createModel(gridOrMesh, {
   });
   const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), stressScratch = new Float64Array(E);
+  const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C);
   const runoffSeen = land ? new Float64Array(C) : null, runoffStep = land ? new Float64Array(C) : null;
 
   const lengths = stateLengths({ K, C, E });
   const stateArray = (name) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * lengths[name]));
   const state = STATE_NAMES.map(stateArray);
   const forcing = STATE_NAMES.map((name) => new Float64Array(lengths[name]));
+  const fluxState = state.map((array, a) => (a === 3 ? fluxT : array)), dryFluxState = fluxState.slice(0, 4);
 
   const phases = {
     flux(input, kFrom, kTo) { core.phaseFlux(input, kFrom, kTo); },
@@ -104,14 +106,22 @@ export function createModel(gridOrMesh, {
       forcing[3].fill(0, iFrom, iTo);
       for (let k = 0; k < K; k++) { forcing[1].fill(0, k * C + iFrom, k * C + iTo); forcing[4].fill(0, k * C + iFrom, k * C + iTo); }
       for (let i = iFrom; i < iTo; i++) {
-        if (land && landMask[i]) { surfaceAlbedo[i] = diffuseAlbedo[i] = land.albedo(i); wetness[i] = land.wetness(i, dragCoefficients[i] * Math.max(surface.windSpeed[i], gustiness), state[3][i]); }
-        else { surfaceAlbedo[i] = seaIce.albedo(state[6][i], radiation.cosZenith(i), seaIce.snow[i]); diffuseAlbedo[i] = seaIce.albedo(state[6][i], null, seaIce.snow[i]); }
+        fluxT[i] = state[3][i];
+        if (land && landMask[i]) { surfaceAlbedo[i] = diffuseAlbedo[i] = land.albedo(i); wetness[i] = land.wetness(i, dragCoefficients[i] * Math.max(surface.windSpeed[i], gustiness), state[3][i]); continue; }
+        const h = state[6][i], area = seaIce.cover(i, h), mu = radiation.cosZenith(i);
+        surfaceAlbedo[i] = seaIce.albedo(h, mu, seaIce.snow[i], area); diffuseAlbedo[i] = seaIce.albedo(h, null, seaIce.snow[i], area);
+        if (h > 0 && area < 1) {
+          fluxT[i] = area * state[3][i] + (1 - area) * FREEZING_POINT;
+          directContrast[i] = seaIce.albedoContrast(h, mu, seaIce.snow[i]); diffuseContrast[i] = seaIce.albedoContrast(h, null, seaIce.snow[i]);
+        }
       }
-      radiation.apply(moist ? state : state.slice(0, 4), forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null);
+      radiation.apply(moist ? fluxState : dryFluxState, forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null);
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
+      const { surfaceShortwave, surfaceDirect } = radiation;
       for (let i = iFrom; i < iTo; i++) {
-        if (land && landMask[i]) land.update(i, state[3], radiation.surfaceFlux, radiation.evaporation[i], dt);
-        else seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt);
+        if (land && landMask[i]) { land.update(i, state[3], radiation.surfaceFlux, radiation.evaporation[i], dt); continue; }
+        const h = state[6][i], partial = h > 0 && seaIce.cover(i, h) < 1;
+        seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt, partial ? surfaceDirect[i] * directContrast[i] + (surfaceShortwave[i] - surfaceDirect[i]) * diffuseContrast[i] : 0);
       }
       if (moist) for (let i = bottom + iFrom; i < bottom + iTo; i++) state[4][i] += dt * forcing[4][i];
       if (boundaryLayer) boundaryLayer.diagnose(state, iFrom, iTo);
@@ -195,8 +205,9 @@ export function createModel(gridOrMesh, {
       water += a * moistPhysics.columnWater(pi, q, i);
       cloud += a * moistPhysics.columnWater(pi, qc, i);
       rain += a * precipitation[i];
-      if (ice[i] > 0) { iceArea += a; iceVolume += a * ice[i]; }
-      albedoSum += a * (land && landMask[i] ? land.albedo(i) : seaIce.albedo(ice[i], null, seaIce.snow[i]));
+      const cover = seaIce.cover(i, ice[i]);
+      if (ice[i] > 0) { iceArea += a * cover; iceVolume += a * cover * ice[i]; }
+      albedoSum += a * (land && landMask[i] ? land.albedo(i) : seaIce.albedo(ice[i], null, seaIce.snow[i], cover));
     }
     for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));
     const interval = model.time - lastPrecipTime;

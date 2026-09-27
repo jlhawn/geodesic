@@ -29,15 +29,17 @@ async function pair(N, steps, dt) {
 }
 
 test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { model, state } = await pair(6, 1, 900);
+  const { model, state, physics: after } = await pair(6, 1, 900);
   const theta = stats(model.state[1], state[1]), q = stats(model.state[4], state[4]), qc = stats(model.state[5], state[5]);
   const ts = stats(model.state[3], state[3]), ice = stats(model.state[6], state[6]), u = stats(model.state[2], state[2]);
-  console.log(`one step at N=6: θ rms ${theta.rmsRel.toExponential(1)} max ${theta.maxDiff.toExponential(1)} K; q rms ${q.rmsRel.toExponential(1)} max ${q.maxDiff.toExponential(1)}; qc max ${qc.maxDiff.toExponential(1)}; Ts max ${ts.maxDiff.toExponential(1)} K; ice max ${ice.maxDiff.toExponential(1)} m; wind max ${u.maxDiff.toExponential(1)} m/s`);
+  const concentration = stats(model.seaIce.concentration, after.CONC.subarray(0, model.mesh.nCells));
+  console.log(`one step at N=6: θ rms ${theta.rmsRel.toExponential(1)} max ${theta.maxDiff.toExponential(1)} K; q rms ${q.rmsRel.toExponential(1)} max ${q.maxDiff.toExponential(1)}; qc max ${qc.maxDiff.toExponential(1)}; Ts max ${ts.maxDiff.toExponential(1)} K; ice max ${ice.maxDiff.toExponential(1)} m; concentration max ${concentration.maxDiff.toExponential(1)}; wind max ${u.maxDiff.toExponential(1)} m/s`);
   assert.ok(theta.rmsRel < 1e-5, `θ rms ${theta.rmsRel}`);
   assert.ok(theta.maxDiff < 0.05, `θ max ${theta.maxDiff} K at ${theta.at}`);
   assert.ok(q.rmsRel < 5e-4, `q rms ${q.rmsRel}`);
   assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} K at ${ts.at}`);
   assert.ok(ice.maxDiff < 1e-3, `ice max ${ice.maxDiff} m`);
+  assert.ok(concentration.maxDiff < 1e-3, `concentration max ${concentration.maxDiff} at ${concentration.at}`);
   assert.ok(u.maxDiff < 1e-2, `wind max ${u.maxDiff} m/s`);
   const { gpu } = await pair(6, 1, 900);
   const physics = await gpu.downloadPhysics();
@@ -63,8 +65,10 @@ test('twelve full GPU steps track the CPU model and its energy budget', { skip: 
     worstSnow = Math.max(worstSnow, Math.abs(model.seaIce.snow[i] - physics.SNOW[i]));
     if (physics.SNOW[i] > 0) snowOnIce++;
   }
-  console.log(`snow on ${snowOnIce} iced sea cells, engines differ by at most ${worstSnow.toExponential(1)} kg/m²`);
+  const ice = stats(model.state[6], state[6]), concentration = stats(model.seaIce.concentration, physics.CONC.subarray(0, C));
+  console.log(`snow on ${snowOnIce} iced sea cells, engines differ by at most ${worstSnow.toExponential(1)} kg/m²; ice by ${ice.maxDiff.toExponential(1)} m, concentration by ${concentration.maxDiff.toExponential(1)}; ice fraction ${d.iceFraction.toFixed(4)}`);
   assert.ok(worstSnow < 1e-3, `snow on the surface differs between engines by ${worstSnow}`);
+  assert.ok(ice.maxDiff < 1e-3 && concentration.maxDiff < 1e-3, `ice ${ice.maxDiff} m at ${ice.at}, concentration ${concentration.maxDiff} at ${concentration.at}`);
 });
 
 test('snow-ice formation matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -90,4 +94,31 @@ test('snow-ice formation matches between the engines', { skip: !gpuAvailable && 
   console.log(`snow-ice on ${flooded} of ${loaded} loaded cells; engines differ by ${worstSnow.toExponential(1)} kg/m² of snow and ${worstIce.toExponential(1)} m of ice`);
   assert.ok(flooded > 0, 'the heavy load floods somewhere');
   assert.ok(worstSnow < 1e-2 && worstIce < 1e-4, `snow ${worstSnow}, ice ${worstIce}`);
+});
+
+test('partly covered ice matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const model = createModel(new Grid(6), { ocean: false });
+  const init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  const C = model.mesh.nCells;
+  let seeded = 0;
+  for (let i = 0; i < C; i++) if (model.state[6][i] > 0) { model.seaIce.concentration[i] = 0.5; model.seaIce.snow[i] = 10 * (i % 3); seeded++; }
+  assert.ok(seeded > 0);
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model) });
+  gpu.upload(model.state);
+  gpu.uploadPhysics();
+  gpu.uploadLand({ soil: new Float64Array(C), snow: model.seaIce.snow, vegetation: new Float64Array(C) });
+  gpu.uploadIce(model.seaIce.concentration);
+  for (let n = 0; n < 4; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }
+  const state = await gpu.download(), physics = await gpu.downloadPhysics();
+  let worstArea = 0, worstIce = 0, worstT = 0, closed = 0, opened = 0;
+  for (let i = 0; i < C; i++) if (init[6][i] > 0) {
+    worstArea = Math.max(worstArea, Math.abs(model.seaIce.concentration[i] - physics.CONC[i]));
+    worstIce = Math.max(worstIce, Math.abs(model.state[6][i] - state[6][i]));
+    worstT = Math.max(worstT, Math.abs(model.state[3][i] - state[3][i]));
+    if (model.seaIce.concentration[i] > 0.5) closed++; else if (model.seaIce.concentration[i] < 0.5) opened++;
+  }
+  console.log(`four steps from half cover on ${seeded} cells (${closed} closing, ${opened} opening): engines differ by ${worstArea.toExponential(1)} in concentration, ${worstIce.toExponential(1)} m of ice, ${worstT.toExponential(1)} K of skin`);
+  assert.ok(closed + opened > 0, 'the concentration moved');
+  assert.ok(worstArea < 1e-3 && worstIce < 1e-3 && worstT < 0.02, `concentration ${worstArea}, ice ${worstIce}, skin ${worstT}`);
 });

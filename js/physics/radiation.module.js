@@ -88,7 +88,7 @@ export function createRadiation(mesh, core, {
   const cloudEmissivity = new Float64Array(K);
   const vaporEmissivity = new Float64Array(K);
   const mixedEmissivity = new Float64Array(K);
-  const surfaceFlux = new Float64Array(C);
+  const surfaceFlux = new Float64Array(C), surfaceDirect = new Float64Array(C);
   const outgoingBuffer = buffers && buffers.outgoing ? buffers.outgoing : new SharedArrayBuffer(8 * C);
   const shortwaveBuffer = buffers && buffers.surfaceShortwave ? buffers.surfaceShortwave : new SharedArrayBuffer(8 * C);
   const outgoing = new Float64Array(outgoingBuffer), surfaceShortwave = new Float64Array(shortwaveBuffer);
@@ -187,6 +187,7 @@ export function createRadiation(mesh, core, {
     budget.insolation = beam;
     budget.reflectedSolar = incident - absorbedSolar;
     budget.surfaceShortwave = incident * (direct + diffuse + returned * upward / (1 - diffuseAlbedo * returned));
+    budget.surfaceDirect = incident * direct;
     budget.cloudReflectance = reflectance;
     return net;
   }
@@ -194,7 +195,9 @@ export function createRadiation(mesh, core, {
   /*
    * Heating tendencies of the layers and the evaporation tendency of the
    * lowest layer for the cells in range; the net surface flux of each
-   * cell is left in `surfaceFlux` for the surface model to apply.
+   * cell is left in `surfaceFlux` for the surface model to apply, with
+   * the sunlight reaching the surface in `surfaceShortwave`, of which
+   * `surfaceDirect` is the direct beam.
    */
   function apply(state, out, windSpeed, totals, iFrom = 0, iTo = C, surfaceAlbedo = null, diffuseAlbedo = null, wetness = null) {
     const [pi, theta, , surfaceT] = state;
@@ -207,6 +210,7 @@ export function createRadiation(mesh, core, {
       outgoing[i] = budget.outgoingLongwave;
       evaporation[i] = budget.evaporation;
       surfaceShortwave[i] = budget.surfaceShortwave;
+      surfaceDirect[i] = budget.surfaceDirect;
       for (let k = 0; k < K; k++) {
         const massPerArea = pi[i] * dSigma[k] / g;
         dTheta[k * C + i] += netFlux[k] / (cp * massPerArea) / exnerLayer[k * C + i];
@@ -224,5 +228,5 @@ export function createRadiation(mesh, core, {
     }
   }
 
-  return { setTime, sun, cosZenith, insolation, column, apply, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, evaporation, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer } };
+  return { setTime, sun, cosZenith, insolation, column, apply, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer } };
 }

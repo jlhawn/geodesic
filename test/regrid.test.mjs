@@ -95,3 +95,26 @@ test('land regridding carries the vegetation cover between resolutions and leave
   assert.ok(inland > 50);
   assert.equal(regridLand(source, target, { soil: land.soil, snow: land.snow }).vegetation, undefined);
 });
+
+test('sea-ice concentration regrids with its ice, from the same tiles, and ice inferred from land covers its cell', async () => {
+  const { regridConcentration } = await import('../js/physics/regrid.module.js');
+  const { syntheticTopography } = await import('../js/geography.module.js');
+  const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
+  const source = createModel(new Grid(6), { topography }), target = createModel(new Grid(10), { topography });
+  const { K } = source.core, C = source.mesh.nCells, E = source.mesh.nEdges;
+  const sea = (i) => !source.geography.land[i];
+  const ice = Float64Array.from({ length: C }, (_, i) => (sea(i) && Math.abs(source.mesh.latCell[i]) > 1.1 ? 1 + (i % 3) : 0));
+  const concentration = Float64Array.from(ice, (h, i) => (h > 0 ? 0.2 + 0.2 * (i % 4) : 0));
+  const surfaceT = Float64Array.from({ length: C }, (_, i) => (ice[i] > 0 ? 271.35 : 280));
+  const land = { soil: new Float64Array(C), snow: Float64Array.from({ length: C }, (_, i) => (source.mesh.latCell[i] > 1.0 ? 50 : 0)) };
+  const state = [new Float64Array(C).fill(P0), new Float64Array(K * C).fill(280), new Float64Array(K * E), surfaceT, new Float64Array(K * C), new Float64Array(K * C), ice];
+  const outIce = regridState(source, target, state, null, { land })[6];
+  const out = regridConcentration(source, target, concentration, { land, surfaceT });
+  let partial = 0;
+  for (let n = 0; n < target.mesh.nCells; n++) {
+    if (target.geography.land[n]) continue;
+    assert.equal(outIce[n] > 0, out[n] > 0, `cell ${n}: ${outIce[n]} m of ice over ${out[n]}`);
+    if (out[n] > 0 && out[n] < 1) partial++;
+  }
+  assert.ok(partial > 0, 'the partial cover comes along');
+});

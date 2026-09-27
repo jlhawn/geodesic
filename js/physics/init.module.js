@@ -63,7 +63,9 @@ function geopotentialHeightAt(core, i, pi, pressure) {
  * Over the sea the surface is a zonal climatological SST, 28 °C at the
  * equator falling to the freezing point near 70°, with 1.5 m of ice on
  * the Arctic Ocean poleward of 72°N and 0.7 m around Antarctica
- * poleward of 68°S over water at the freezing point, as in March.
+ * poleward of 68°S over water at the freezing point, as in March,
+ * covering its cells completely: the model's sea-ice concentration is
+ * set to match.
  */
 /*
  * Initial humidity: a relative humidity that falls from
@@ -106,6 +108,7 @@ export function initializeState(model, {
     ice[i] = lat > 72 ? 1.5 : lat < -68 ? 0.7 : 0;
     surfaceT[i] = ice[i] > 0 ? FREEZING_POINT : Math.max(FREEZING_POINT + 0.3, 273.15 + 30 * Math.cos(latCell[i]) ** 2 - 2 - 4 * polar);
   }
+  if (model.seaIce) model.seaIce.load(ice);
 
   for (let i = 0; i < C; i++) {
     const offset = surfaceT[i] - REFERENCE_SURFACE_T;

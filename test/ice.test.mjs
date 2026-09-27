@@ -7,19 +7,20 @@ import { initializeState } from '../js/physics/init.module.js';
 
 const model = createModel(new Grid(2));
 const seaIce = createSeaIce(model.mesh);
+const energyOf = (sea, surfaceT, ice, i = 0) => sea.energy(surfaceT[i], ice[i], sea.snow[i], sea.cover(i, ice[i]));
 
 test('the surface energy changes by exactly the surface flux through freezing, growth, melting and thaw', () => {
   const surfaceT = new Float64Array([FREEZING_POINT + 2]), ice = new Float64Array([0]);
   const flux = new Float64Array(1);
   const dt = 900;
-  let energy = seaIce.energy(surfaceT[0], ice[0]);
+  let energy = energyOf(seaIce, surfaceT, ice);
   const scale = seaIce.slabHeatCapacity * 2;
   let froze = false, melted = false;
   for (let n = 0; n < 4 * 96 * 60; n++) {
     flux[0] = n < 96 * 90 ? -150 : 250;
     seaIce.update(surfaceT, ice, flux, 0, dt);
     energy += dt * flux[0];
-    assert.ok(Math.abs(seaIce.energy(surfaceT[0], ice[0]) - energy) < 1e-9 * scale, `step ${n}: energy ${seaIce.energy(surfaceT[0], ice[0])} vs ${energy}`);
+    assert.ok(Math.abs(energyOf(seaIce, surfaceT, ice) - energy) < 1e-9 * scale, `step ${n}: energy ${energyOf(seaIce, surfaceT, ice)} vs ${energy}`);
     if (ice[0] > 0) { froze = true; assert.ok(surfaceT[0] <= MELTING_POINT + 1e-9 && surfaceT[0] < FREEZING_POINT + 20); }
     if (froze && ice[0] === 0) melted = true;
   }
@@ -98,15 +99,15 @@ test('snow on the ice brightens it, insulates it, melts before it, and goes into
   assert.ok(steps < 1000 && iceM[0] > 0.999, `the ice waits for the snow: ${iceM[0]} m left after ${steps} steps`);
 
   const surfaceT = new Float64Array([FREEZING_POINT - 5]), thin = new Float64Array([0.3]);
-  snowy.snow[0] = 0;
-  let energy = snowy.energy(surfaceT[0], thin[0], snowy.snow[0]);
+  snowy.snow[0] = 0; snowy.concentration[0] = 1;
+  let energy = energyOf(snowy, surfaceT, thin);
   const scale = snowy.slabHeatCapacity * 2, dt = 900;
   for (let n = 0; n < 96 * 40; n++) {
     if (n % 96 === 0 && n < 96 * 10) { snowy.deposit(0, 2, MELTING_POINT - 5, thin); energy -= snowy.latentHeatFusion * 2; }
     const w = n < 96 * 10 ? -50 : 300;
     snowy.update(surfaceT, thin, flux(w), 0, dt);
     energy += dt * w;
-    assert.ok(Math.abs(snowy.energy(surfaceT[0], thin[0], snowy.snow[0]) - energy) < 1e-9 * scale, `step ${n}: energy ${snowy.energy(surfaceT[0], thin[0], snowy.snow[0])} vs ${energy}`);
+    assert.ok(Math.abs(energyOf(snowy, surfaceT, thin) - energy) < 1e-9 * scale, `step ${n}: energy ${energyOf(snowy, surfaceT, thin)} vs ${energy}`);
   }
   assert.equal(thin[0], 0, 'the ice melted away');
   assert.equal(snowy.snow[0], 0, 'and took its snow into the water');
@@ -132,4 +133,96 @@ test('snow heavier than the freeboard floods into snow-ice, restoring the freebo
   assert.ok(Math.abs(freeboard * ice[0] - sea.snow[0]) < 1e-9, `the flooded snow brings the ice back to the water line: ${freeboard * ice[0] - sea.snow[0]}`);
   assert.ok(Math.abs(sea.energy(t[0], ice[0], sea.snow[0]) - before) < 1e-6, 'no energy is made or lost in the conversion');
   assert.ok(sea.budget.snowIce > 0 && Math.abs(917 * ice[0] + sea.snow[0] - mass - 917 * (ice[0] - grown - sea.budget.snowIce / model.mesh.areaCell[0] / 917)) < 1e-9, 'mass moves from the snow to the ice');
+});
+
+test('partly covered ice conserves energy exactly through partial melt, lead freezing, thaw and refreezing', () => {
+  const sea = createSeaIce(model.mesh);
+  const surfaceT = new Float64Array([FREEZING_POINT - 5]), ice = new Float64Array([0.6]), flux = new Float64Array(1);
+  sea.concentration[0] = 0.5; sea.snow[0] = 5; sea.oceanFlux[0] = 4;
+  const dt = 900, day = 96, scale = sea.slabHeatCapacity * 2;
+  let energy = energyOf(sea, surfaceT, ice), previous = sea.concentration[0];
+  const seen = { closing: false, opening: false, thawed: false, refrozen: false, partialRefreeze: false };
+  for (let n = 0; n < 200 * day; n++) {
+    const phase = n < 40 * day ? 'winter' : n < 120 * day ? 'summer' : 'autumn';
+    flux[0] = phase === 'summer' ? 160 : phase === 'winter' ? -120 : -200;
+    const contrast = phase === 'summer' ? 120 : 0;
+    if (phase === 'winter' && n % day === 0 && sea.deposit(0, 1.5, MELTING_POINT - 10, ice, surfaceT)) energy -= sea.latentHeatFusion * 1.5;
+    sea.update(surfaceT, ice, flux, 0, dt, contrast);
+    energy += dt * (flux[0] + sea.oceanFlux[0]);
+    assert.ok(Math.abs(energyOf(sea, surfaceT, ice) - energy) < 1e-9 * scale, `step ${n} (${phase}): energy ${energyOf(sea, surfaceT, ice)} vs ${energy}`);
+    const A = sea.concentration[0];
+    assert.ok((ice[0] > 0) === (A > 0) && A <= 1, `step ${n}: ${ice[0]} m of ice over ${A} of the cell`);
+    if (phase === 'winter' && A > previous) seen.closing = true;
+    if (phase === 'summer' && A > 0 && A < previous) seen.opening = true;
+    if (phase === 'summer' && previous > 0 && A === 0) seen.thawed = true;
+    if (phase === 'autumn' && ice[0] > 0) { seen.refrozen = true; if (A < 1) seen.partialRefreeze = true; }
+    previous = A;
+  }
+  assert.deepEqual(seen, { closing: true, opening: true, thawed: true, refrozen: true, partialRefreeze: true });
+  assert.ok(sea.budget.leadFrozen > 0 && sea.budget.lateralMelted > 0, `leads froze ${sea.budget.leadFrozen} and melted ${sea.budget.lateralMelted}`);
+});
+
+test('a half-covered cell in the sun loses its area faster than a full one loses thickness, and is gone sooner', () => {
+  const half = createSeaIce(model.mesh), full = createSeaIce(model.mesh), dt = 900;
+  half.concentration[0] = 0.5; full.concentration[0] = 1;
+  const tHalf = new Float64Array([MELTING_POINT]), hHalf = new Float64Array([1]), tFull = new Float64Array([MELTING_POINT]), hFull = new Float64Array([0.5]);
+  const onIce = 200, contrast = 340 * (0.5 - 0.06);
+  const fluxHalf = new Float64Array([onIce + 0.5 * contrast]), fluxFull = new Float64Array([onIce]);
+  for (let n = 0; n < 96; n++) { half.update(tHalf, hHalf, fluxHalf, 0, dt, contrast); full.update(tFull, hFull, fluxFull, 0, dt, contrast); }
+  const areaLost = 1 - half.concentration[0] / 0.5, thicknessLost = 1 - hFull[0] / 0.5;
+  console.log(`after a day in the sun: the half-covered cell lost ${(100 * areaLost).toFixed(1)}% of its area, the full cell ${(100 * thicknessLost).toFixed(1)}% of its thickness and ${(100 * (1 - full.concentration[0])).toFixed(1)}% of its area`);
+  assert.ok(areaLost > thicknessLost && areaLost > 1 - full.concentration[0], `area ${areaLost} against thickness ${thicknessLost}`);
+  let stepsHalf = 96, stepsFull = 96;
+  while (hHalf[0] > 0 && stepsHalf < 96 * 100) { half.update(tHalf, hHalf, fluxHalf, 0, dt, contrast); stepsHalf++; }
+  while (hFull[0] > 0 && stepsFull < 96 * 100) { full.update(tFull, hFull, fluxFull, 0, dt, contrast); stepsFull++; }
+  console.log(`the half-covered cell melted away after ${(stepsHalf / 96).toFixed(1)} days, the full cell of the same volume after ${(stepsFull / 96).toFixed(1)}`);
+  assert.ok(half.concentration[0] === 0 && full.concentration[0] === 0 && stepsHalf < stepsFull);
+});
+
+test('a lead under a cold sky closes: the area rises toward full cover as the volume grows by what freezes', () => {
+  const sea = createSeaIce(model.mesh), dt = 900;
+  const surfaceT = new Float64Array([FREEZING_POINT - 10]), ice = new Float64Array([1]), flux = new Float64Array([-100]);
+  sea.concentration[0] = 0.4;
+  const volume = () => sea.concentration[0] * ice[0], start = volume(), area = model.mesh.areaCell[0];
+  let previous = sea.concentration[0];
+  for (let n = 0; n < 96 * 60; n++) {
+    sea.update(surfaceT, ice, flux, 0, dt);
+    assert.ok(sea.concentration[0] >= previous, `step ${n}: the lead reopened, ${sea.concentration[0]} after ${previous}`);
+    previous = sea.concentration[0];
+  }
+  const closing = 100 * dt / (sea.latent * sea.leadClosing), expected = 1 - 1 / (1 / 0.6 + closing * 96 * 60);
+  console.log(`sixty days at −100 W/m²: concentration 0.4 → ${sea.concentration[0].toFixed(3)} (${expected.toFixed(3)} for leads that close as their open area squared), volume ${start.toFixed(3)} → ${volume().toFixed(3)} m, ${(sea.budget.leadFrozen / area).toFixed(3)} m of it frozen in the leads`);
+  assert.ok(sea.concentration[0] > 0.85 && Math.abs(sea.concentration[0] - expected) < 0.02, `concentration ${sea.concentration[0]} against ${expected}`);
+  assert.ok(Math.abs(volume() - start - sea.budget.frozen / area) < 1e-9, 'the volume grows by exactly what froze');
+  assert.ok(sea.budget.leadFrozen > 0 && sea.budget.leadFrozen < sea.budget.frozen, 'part of it in the leads, the rest under the ice');
+});
+
+test('a state saved without concentration loads as full cover wherever it has ice', () => {
+  const sea = createSeaIce(model.mesh), C = model.mesh.nCells;
+  const ice = Float64Array.from({ length: C }, (_, i) => (i % 3 === 0 ? 0 : 0.5 + i % 2));
+  sea.load(ice);
+  for (let i = 0; i < C; i++) assert.equal(sea.concentration[i], ice[i] > 0 ? 1 : 0);
+  const saved = Float64Array.from({ length: C }, (_, i) => (i % 4) / 3);
+  sea.load(ice, saved);
+  for (let i = 0; i < C; i++) assert.equal(sea.concentration[i], ice[i] > 0 ? (saved[i] > 0 ? Math.min(1, saved[i]) : 1) : 0);
+  assert.equal(sea.cover(0, 0), 0);
+  sea.concentration[1] = 0;
+  assert.equal(sea.cover(1, 0.5), 1, 'ice without a concentration covers its cell');
+});
+
+test('the albedo blends linearly in the concentration between open water and full cover', () => {
+  const sea = createSeaIce(model.mesh);
+  const before = (h, mu, snow) => {
+    const water = mu === null ? 0.06 : openWaterAlbedo(mu);
+    if (h <= 0) return water;
+    const bare = water + (0.5 - water) * Math.min(1, h / 0.5);
+    return bare + (0.75 - bare) * Math.min(1, snow / 20);
+  };
+  for (const mu of [null, 0.2, 0.9]) for (const [h, snow] of [[0.1, 0], [0.3, 8], [2, 30]]) {
+    assert.equal(sea.albedo(h, mu, snow, 1), before(h, mu, snow), 'full cover is the ice');
+    assert.equal(sea.albedo(h, mu, snow), before(h, mu, snow), 'ice covers its cell unless told otherwise');
+    assert.equal(sea.albedo(h, mu, snow, 0), before(0, mu, snow), 'no cover is open water');
+    assert.equal(sea.albedoContrast(h, mu, snow), before(h, mu, snow) - before(0, mu, snow));
+    for (const A of [0.1, 0.5, 0.85]) assert.ok(Math.abs(sea.albedo(h, mu, snow, A) - (A * before(h, mu, snow) + (1 - A) * before(0, mu, snow))) < 1e-15);
+  }
 });

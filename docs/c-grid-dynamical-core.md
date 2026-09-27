@@ -959,6 +959,34 @@ the poles by up to 2 Q₀ — and melts ice from below where it is
 covered. It stands in for the poleward heat carried by ocean currents,
 without which the ice–albedo feedback runs the ice edge to ~45°.
 
+Ice covers a fraction A of its cell (`concentration`, a per-cell array
+beside the snow, in the state file and on the page), with the thickness
+h over that part, so the volume per cell area is A h; the rest, the
+leads, is water held at the freezing point. The atmosphere sees the
+area-weighted albedo and, in its fluxes, the area-weighted surface
+temperature A T_skin + (1 − A) T_f. The cell's net flux is split between
+the parts by the sunlight the leads absorb beyond the ice — the direct
+and diffuse beams at the surface times the albedo contrast of each —
+so that the ice's flux per unit ice area and the water's per unit water
+area average back to it; the longwave and turbulent fluxes are shared
+per unit area. The ice part grows and melts as above under its share;
+the leads' heat, with the ocean's flux beneath them, melts ice or
+freezes new ice. Melting takes area as Hibler (1979) does, half the
+relative loss of volume from the area; ice frozen in the leads closes
+them as new ice 0.3 m thick (`leadClosing`), and open water that cools
+below freezing forms ice 0.3 m thick over the area its volume covers.
+Ice below 1 % of its cell or 10⁻⁴ m of volume melts away. The snow on
+lost area melts into the water, its latent heat freezing the same mass
+onto the ice, and new area joins at the freezing point without snow;
+the surface energy, A times the ice's terms, still changes by exactly
+the surface and ocean fluxes (`test/ice.test.mjs`). The dynamic ocean
+treats any cell with ice as covered, holding its mixed layer at the
+freezing point. A state saved without a concentration loads fully
+covered wherever it has ice. The spin-up logs each hemisphere's extent,
+the area of the cells at least 15 % covered, the measure behind Earth's
+15 and 6 Mkm² (Arctic) and 18 and 3 Mkm² (Antarctic) of ice at the
+seasonal maximum and minimum.
+
 ### M10 — Clouds in radiation — done
 
 Each layer's cloud water path gives it a gray emissivity
@@ -2002,7 +2030,7 @@ js/
     init.module.js          ported: thermal init, balance, seed, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes; ice, snow and soil by source tile
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
-    ice.module.js           M9/M11: zero-layer sea ice over the mixed layer, zenith albedo
+    ice.module.js           M9/M11: zero-layer sea ice over the mixed layer, its concentration, zenith albedo
   ocean/
     layered.module.js       M18: 24-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
     seawater.module.js      M18: the Roquet et al. (2015) simplified equation of state, shared with the GPU

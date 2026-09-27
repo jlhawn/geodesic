@@ -517,7 +517,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   }
 
   function paintSatellite() {
-    const cloud = latest.cloud, ice = latest.ice, land = latest.land, soil = latest.soil, snow = latest.snow, vegetation = latest.vegetation;
+    const cloud = latest.cloud, ice = latest.ice, cover = latest.concentration, land = latest.land, soil = latest.soil, snow = latest.snow, vegetation = latest.vegetation;
     if (!cloud || !ice || (land && (!soil || !snow))) return;
     document.querySelector('.scaleRow').classList.add('hidden');
     overlayLabel = 'Satellite view';
@@ -525,7 +525,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     for (let i = 0; i < grid.size; i++) {
       const opacity = opacityOf(i);
       const onLand = land && land[i];
-      const frozen = onLand ? Math.min(1, snow[i] / 20) : Math.min(1, ice[i] / 0.5);
+      const frozen = onLand ? Math.min(1, snow[i] / 20) : (cover && cover[i] > 0 ? cover[i] : 1) * Math.min(1, ice[i] / 0.5);
       const wet = !onLand ? 0 : vegetation ? vegetation[i] : Math.min(1, soil[i] / 150);
       for (let j = 0; j < 3; j++) {
         const ground = onLand ? DRY_LAND[j] + wet * (WET_LAND[j] - DRY_LAND[j]) : OCEAN_COLOR[j];
@@ -779,7 +779,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const modelShown = () => !document.getElementById('modelModal').classList.contains('hidden');
   function subscription() {
     const fields = new Set();
-    if (settings.view === 'space') for (const name of ['cloud', 'ice', 'soil', 'snow', 'vegetation']) fields.add(name);
+    if (settings.view === 'space') for (const name of ['cloud', 'ice', 'concentration', 'soil', 'snow', 'vegetation']) fields.add(name);
     else {
       const overlay = OVERLAYS[settings.overlay];
       if (overlay.field && !(overlay.field in geographyFields)) fields.add(overlay.field);
@@ -987,7 +987,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     return li;
   };
   const toSnapshot = (saved, url = null) => {
-    const arrays = Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].filter((k) => saved[k]).map((k) => [k, Float64Array.from(saved[k]).buffer]));
+    const arrays = Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice', 'concentration'].filter((k) => saved[k]).map((k) => [k, Float64Array.from(saved[k]).buffer]));
     const ocean = saved.ocean ? Object.fromEntries(Object.entries(saved.ocean).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
     const land = saved.land ? Object.fromEntries(Object.entries(saved.land).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
     const size = (o) => (o ? Object.values(o).reduce((n, b) => n + b.byteLength, 0) : 0);

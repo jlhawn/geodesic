@@ -4,7 +4,7 @@ import { createParallelModel } from './parallel.module.js';
 import { createGpuModel } from './gpu/model.gpu.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
-import { regridState, regridOcean, regridLand } from './physics/regrid.module.js';
+import { regridState, regridOcean, regridLand, regridConcentration } from './physics/regrid.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure } from './geography.module.js';
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
@@ -80,7 +80,8 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
   if (want.has('cloud')) out.cloud = Float32Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, qc, i));
   if (want.has('rain')) out.rain = Float32Array.from(rain.total);
   if (want.has('ice')) out.ice = Float32Array.from(iceField);
-  if (want.has('albedo')) out.albedo = Float32Array.from(iceField, (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h, null, model.seaIce.snow[i])));
+  if (want.has('concentration')) out.concentration = Float32Array.from(model.seaIce.concentration);
+  if (want.has('albedo')) out.albedo = Float32Array.from(iceField, (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h, null, model.seaIce.snow[i], model.seaIce.cover(i, h))));
   if (want.has('shortwave')) out.shortwave = Float32Array.from(model.radiation.surfaceShortwave);
   if (want.has('longwave')) out.longwave = Float32Array.from(model.radiation.outgoing);
   if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil);
@@ -258,6 +259,16 @@ function initialState(model, saved, N) {
 }
 
 /*
+ * The sea-ice concentration that goes with the placed ice: the saved
+ * run's, regridded if it was saved at another resolution, or full cover
+ * wherever a run saved without one has ice.
+ */
+function placeIce(model, saved, N) {
+  const kept = !saved ? model.seaIce.concentration : !saved.concentration ? null : saved.N === N ? saved.concentration : regridConcentration(sourceFor(saved), model, saved.concentration, { land: saved.land ?? null, surfaceT: saved.surfaceT });
+  model.seaIce.load(model.state[6], kept);
+}
+
+/*
  * A physics-free model on the saved run's mesh, with the current
  * topography so its land mask can steer the regrid; kept for the ocean
  * and land that follow the state.
@@ -364,6 +375,7 @@ async function probe(message) {
   const options = { ...(topography ? { topography } : {}), terrain: message.terrain !== false };
   const prepare = (test, N) => {
     for (const [a, values] of initialState(test, null, N).entries()) test.state[a].set(values);
+    placeIce(test, null, N);
     if (test.load) test.load();
     if (test.ocean) test.ocean.initialize(test.state[3], test.state[6]);
     if (test.land) test.land.initialize();
@@ -430,6 +442,7 @@ async function snapshot() {
   if (model.sync) await model.sync();
   const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
   const arrays = Object.fromEntries(names.map((name, a) => [name, Float64Array.from(model.state[a]).buffer]));
+  arrays.concentration = Float64Array.from(model.seaIce.concentration).buffer;
   let ocean = null, land = null;
   if (model.ocean) {
     const o = await model.ocean.serialize();
@@ -460,6 +473,7 @@ async function restore(snapshot) {
   status('restoring the snapshot…', 0.8);
   const init = initialState(model, saved, currentN);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  placeIce(model, saved, currentN);
   if (model.load) model.load();
   if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
   placeLand(model, saved, currentN);
@@ -495,6 +509,7 @@ async function start(message) {
   status(saved ? 'placing the saved state…' : 'building the initial state…', 0.8);
   const init = initialState(model, saved, N);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  placeIce(model, saved, N);
   status('uploading the state…', 0.92);
   if (model.load) model.load();
   if (model.ocean) {

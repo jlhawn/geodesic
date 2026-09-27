@@ -17,12 +17,12 @@ const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'mini
 
 /*
  * The whole model on the GPU behind the CPU model's interface: `state`
- * holds double-precision mirrors that only `sync` refreshes from the
- * device (the land's soil, snow and vegetation only `land.serialize`, its runoff
- * when the diagnostics are taken), `step` only
- * queues work, `beginFrame` computes the page's fields and the
- * diagnostics on the device, and `ocean` carries the same
- * initialize/load/serialize contract.
+ * and `seaIce.concentration` hold double-precision mirrors that only
+ * `sync` refreshes from the device and `load` sends to it (the land's
+ * soil, snow and vegetation only `land.serialize`, its runoff when the
+ * diagnostics are taken), `step` only queues work, `beginFrame`
+ * computes the page's fields and the diagnostics on the device, and
+ * `ocean` carries the same initialize/load/serialize contract.
  */
 export async function createGpuModel(gridOrMesh, {
   radius, nu4Hours = 3, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
@@ -67,7 +67,7 @@ export async function createGpuModel(gridOrMesh, {
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null });
+    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration });
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6]);
     lastFrameTime = model.time;
@@ -77,8 +77,9 @@ export async function createGpuModel(gridOrMesh, {
 
   async function sync() {
     if (!dirty) return;
-    const arrays = await gpu.download();
+    const [arrays, [concentration]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.CONC, length: C }])]);
     arrays.forEach((a, i) => state[i].set(a));
+    seaIce.concentration.set(concentration);
     dirty = false;
   }
   model.sync = sync;

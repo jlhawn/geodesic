@@ -1,5 +1,7 @@
 export const FREEZING_POINT = 271.35;
 export const MELTING_POINT = 273.15;
+export const MINIMUM_CONCENTRATION = 0.01;
+export const MINIMUM_VOLUME = 1e-4;
 
 /*
  * The slab ocean and its sea ice, a zero-layer thermodynamic model in
@@ -14,8 +16,8 @@ export const MELTING_POINT = 273.15;
  * energy — mixed-layer heat over the freezing point, skin heat, minus
  * the ice's latent heat — changes by exactly the surface flux plus
  * `oceanFlux`, the heat above freezing that the ocean's mixed layer
- * hands to the base of the ice. surfaceT is the skin
- * temperature the atmosphere sees in both states. Open water reflects
+ * hands to the base of the ice. surfaceT is the skin temperature of
+ * the ice, or of the water where there is none. Open water reflects
  * the direct beam with the zenith-angle albedo of Briegleb et al.
  * (1986), 0.02 under a high sun and 0.3 near the horizon, and diffuse
  * light (`albedo` without a zenith cosine) with diffuseWaterAlbedo,
@@ -23,19 +25,42 @@ export const MELTING_POINT = 273.15;
  * array (a dynamic ocean's upper layer) replaces slabHeatCapacity in the
  * cell update.
  *
+ * Ice covers the fraction `concentration` of its cell (A), with the
+ * thickness `ice` over that part, so the volume per cell area is A·h;
+ * the open part, the leads, is water held at the freezing point. The
+ * atmosphere sees the area-weighted albedo and, for its fluxes, the
+ * area-weighted surface temperature. The cell's net flux is split
+ * between the parts by the sunlight the leads absorb beyond the ice
+ * (`contrast` in update), so that the ice's flux per unit ice area and
+ * the water's per unit water area average back to it. The ice part
+ * evolves as above; the heat the leads gain or lose, with the ocean's
+ * flux under them, melts ice or freezes new ice. Melting takes area as
+ * Hibler (1979) does, half the relative loss of volume from the area;
+ * ice frozen in the leads closes them as new ice leadClosing thick. Open
+ * water that cools below freezing forms ice leadClosing thick over the
+ * area its volume covers. Ice below MINIMUM_CONCENTRATION of its cell
+ * or MINIMUM_VOLUME of volume melts away, so water cools a little below
+ * freezing before its first ice forms. When the area shrinks the lost
+ * area's snow melts, its latent heat drawn from the water at freezing,
+ * which freezes the same mass onto the ice, and its skin heat goes to
+ * the ice volume; new area joins at the freezing point without snow.
+ * A cell whose ice carries no concentration is fully covered.
+ *
  * Snow lies on the ice: deposit() adds precipitation that falls on an
- * iced cell from air below the melting point, in water equivalent, to
- * `snow` — the ocean cells of the array the land surface keeps its own
- * snow in, when its buffer is shared. Snow brightens the surface toward
- * iceSnowAlbedo over iceFullSnow kg/m², conducts in series with the ice
- * (snowConductivity over its depth at snowDensity), melts before the ice
- * does, and goes into the water when the ice is gone, its latent heat
- * drawn from the mixed layer. Snow that falls on open water melts at
- * once, cooling the water by that latent heat. The ocean's freshwater
- * counts precipitation when it falls, snow or not. Snow heavier than
- * the ice's freeboard (waterDensity − iceDensity per metre of ice)
- * floods and freezes into snow-ice: the surplus mass leaves `snow` and
- * joins the ice at iceDensity, which conserves both mass and energy.
+ * iced cell from air below the melting point, in water equivalent per
+ * unit ice area, to `snow` — the ocean cells of the array the land
+ * surface keeps its own snow in, when its buffer is shared. Snow
+ * brightens the surface toward iceSnowAlbedo over iceFullSnow kg/m²,
+ * conducts in series with the ice (snowConductivity over its depth at
+ * snowDensity), melts before the ice does, and goes into the water when
+ * the ice is gone, its latent heat drawn from the mixed layer. Snow
+ * that falls on open water melts at once, cooling the water by that
+ * latent heat; what falls on the leads of an iced cell freezes the same
+ * mass of water onto the ice. The ocean's freshwater counts
+ * precipitation when it falls, snow or not. Snow heavier than the ice's
+ * freeboard (waterDensity − iceDensity per metre of ice) floods and
+ * freezes into snow-ice: the surplus mass leaves `snow` and joins the
+ * ice at iceDensity, which conserves both mass and energy.
  */
 export function openWaterAlbedo(mu) {
   return 0.026 / (Math.pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1);
@@ -44,73 +69,125 @@ export function openWaterAlbedo(mu) {
 export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.5, fullAlbedoThickness = 0.5,
-  iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026,
+  iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3,
   heatCapacity = null, buffers = null,
 } = {}) {
   const C = mesh.nCells;
   const latent = iceDensity * latentHeatFusion;
-  const budget = { frozen: 0, melted: 0, snowfall: 0, snowMelted: 0, snowIce: 0 };
+  const budget = { frozen: 0, melted: 0, snowfall: 0, snowMelted: 0, snowIce: 0, leadFrozen: 0, lateralMelted: 0 };
   const oceanFlux = new Float64Array(buffers && buffers.oceanFlux ? buffers.oceanFlux : new SharedArrayBuffer(8 * C));
   const snow = new Float64Array(buffers && buffers.snow ? buffers.snow : new SharedArrayBuffer(8 * C));
+  const concentration = new Float64Array(buffers && buffers.concentration ? buffers.concentration : new SharedArrayBuffer(8 * C));
 
-  function albedo(thickness, mu = null, snowCover = 0) {
-    const water = oceanAlbedo ?? (mu === null ? diffuseWaterAlbedo : openWaterAlbedo(mu));
+  const waterAlbedo = (mu) => oceanAlbedo ?? (mu === null ? diffuseWaterAlbedo : openWaterAlbedo(mu));
+  function coverAlbedo(thickness, water, snowCover) {
     if (thickness <= 0) return water;
     const bare = water + (iceAlbedo - water) * Math.min(1, thickness / fullAlbedoThickness);
     return bare + (iceSnowAlbedo - bare) * Math.min(1, snowCover / iceFullSnow);
   }
 
-  function energy(surfaceT, ice, snowCover = 0) {
-    return ice > 0 ? skinHeatCapacity * (surfaceT - FREEZING_POINT) - latent * ice - latentHeatFusion * snowCover : slabHeatCapacity * (surfaceT - FREEZING_POINT);
+  function albedo(thickness, mu = null, snowCover = 0, fraction = thickness > 0 ? 1 : 0) {
+    const water = waterAlbedo(mu);
+    return fraction * coverAlbedo(thickness, water, snowCover) + (1 - fraction) * water;
+  }
+
+  function albedoContrast(thickness, mu = null, snowCover = 0) {
+    const water = waterAlbedo(mu);
+    return coverAlbedo(thickness, water, snowCover) - water;
+  }
+
+  function cover(i, thickness) {
+    return thickness > 0 ? (concentration[i] > 0 ? concentration[i] : 1) : 0;
+  }
+
+  function load(ice, saved = null) {
+    for (let i = 0; i < C; i++) concentration[i] = ice[i] > 0 ? (saved && saved[i] > 0 ? Math.min(1, saved[i]) : 1) : 0;
+  }
+
+  function energy(surfaceT, ice, snowCover = 0, area = ice > 0 ? 1 : 0) {
+    return ice > 0 ? area * (skinHeatCapacity * (surfaceT - FREEZING_POINT) - latent * ice - latentHeatFusion * snowCover) : slabHeatCapacity * (surfaceT - FREEZING_POINT);
   }
 
   function deposit(i, amount, airTemperature, ice, surfaceT) {
     if (airTemperature >= MELTING_POINT || amount <= 0) return false;
     budget.snowfall += mesh.areaCell[i] * amount;
-    if (ice[i] > 0) snow[i] += amount;
-    else { surfaceT[i] -= latentHeatFusion * amount / (heatCapacity ? heatCapacity[i] : slabHeatCapacity); budget.snowMelted += mesh.areaCell[i] * amount; }
+    if (ice[i] > 0) {
+      const area = cover(i, ice[i]), leads = (1 - area) * amount;
+      snow[i] += amount;
+      ice[i] += leads / (iceDensity * area);
+      budget.snowMelted += mesh.areaCell[i] * leads;
+      budget.frozen += mesh.areaCell[i] * leads / iceDensity;
+    } else { surfaceT[i] -= latentHeatFusion * amount / (heatCapacity ? heatCapacity[i] : slabHeatCapacity); budget.snowMelted += mesh.areaCell[i] * amount; }
     return true;
   }
 
-  function update(surfaceT, ice, flux, i, dt) {
+  function update(surfaceT, ice, flux, i, dt, contrast = 0) {
     const ocean = oceanFlux[i];
     const capacity = heatCapacity ? heatCapacity[i] : slabHeatCapacity;
+    const cellArea = mesh.areaCell[i];
     if (ice[i] <= 0) {
-      if (snow[i] > 0) { surfaceT[i] -= latentHeatFusion * snow[i] / capacity; budget.snowMelted += mesh.areaCell[i] * snow[i]; snow[i] = 0; }
+      concentration[i] = 0;
+      if (snow[i] > 0) { surfaceT[i] -= latentHeatFusion * snow[i] / capacity; budget.snowMelted += cellArea * snow[i]; snow[i] = 0; }
       surfaceT[i] += dt * (flux[i] + ocean) / capacity;
       if (surfaceT[i] < FREEZING_POINT) {
-        ice[i] = (FREEZING_POINT - surfaceT[i]) * capacity / latent;
-        surfaceT[i] = FREEZING_POINT;
-        budget.frozen += mesh.areaCell[i] * ice[i];
+        const volume = (FREEZING_POINT - surfaceT[i]) * capacity / latent, area = Math.min(1, volume / leadClosing);
+        if (area >= MINIMUM_CONCENTRATION && volume >= MINIMUM_VOLUME) {
+          ice[i] = volume / area;
+          concentration[i] = area;
+          surfaceT[i] = FREEZING_POINT;
+          budget.frozen += cellArea * volume;
+        }
       }
       return;
     }
-    const conduction = (FREEZING_POINT - surfaceT[i]) / (Math.max(ice[i], minimumThickness) / conductivity + snow[i] / (snowDensity * snowConductivity));
-    surfaceT[i] += dt * (flux[i] + conduction) / skinHeatCapacity;
-    let thickness = ice[i] + dt * (conduction - ocean) / latent;
-    if (surfaceT[i] > MELTING_POINT) {
-      let excess = (surfaceT[i] - MELTING_POINT) * skinHeatCapacity;
-      surfaceT[i] = MELTING_POINT;
-      const fromSnow = Math.min(snow[i], excess / latentHeatFusion);
-      snow[i] -= fromSnow;
-      budget.snowMelted += mesh.areaCell[i] * fromSnow;
+    const h = ice[i], A = cover(i, h);
+    const iceFlux = flux[i] - (1 - A) * contrast, waterFlux = flux[i] + A * contrast;
+    let T = surfaceT[i], s = snow[i];
+    const conduction = (FREEZING_POINT - T) / (Math.max(h, minimumThickness) / conductivity + s / (snowDensity * snowConductivity));
+    T += dt * (iceFlux + conduction) / skinHeatCapacity;
+    let thickness = h + dt * (conduction - ocean) / latent;
+    if (T > MELTING_POINT) {
+      let excess = (T - MELTING_POINT) * skinHeatCapacity;
+      T = MELTING_POINT;
+      const fromSnow = Math.min(s, excess / latentHeatFusion);
+      s -= fromSnow;
+      budget.snowMelted += cellArea * A * fromSnow;
       excess -= fromSnow * latentHeatFusion;
       thickness -= excess / latent;
     }
-    if (thickness <= 0) {
-      budget.melted += mesh.areaCell[i] * ice[i];
-      budget.snowMelted += mesh.areaCell[i] * snow[i];
-      surfaceT[i] = FREEZING_POINT + (-thickness * latent + skinHeatCapacity * (surfaceT[i] - FREEZING_POINT) - latentHeatFusion * snow[i]) / capacity;
+    const leadHeat = (1 - A) * (waterFlux + ocean) * dt;
+    const grown = A * (thickness - h), leadMelt = Math.max(0, leadHeat / latent), leadIce = Math.max(0, -leadHeat / latent);
+    const melted = Math.max(0, -grown) + leadMelt;
+    budget.leadFrozen += cellArea * leadIce;
+    budget.lateralMelted += cellArea * leadMelt;
+    const energyLeft = A * skinHeatCapacity * (T - FREEZING_POINT) - latent * (A * thickness - leadHeat / latent) - latentHeatFusion * A * s;
+    let volume = A * thickness - leadHeat / latent;
+    const area = Math.min(1, A - melted / (2 * h) + (1 - A) * leadIce / leadClosing);
+    let skin = T, snowOnIce = s;
+    if (area < A) volume += (A - area) * (s / iceDensity - skinHeatCapacity * (T - FREEZING_POINT) / latent);
+    else if (area > A) { skin = FREEZING_POINT + A * (T - FREEZING_POINT) / area; snowOnIce = A * s / area; }
+    if (area < MINIMUM_CONCENTRATION || volume < MINIMUM_VOLUME) {
+      budget.melted += cellArea * A * h;
+      budget.snowMelted += cellArea * A * s;
+      surfaceT[i] = FREEZING_POINT + energyLeft / capacity;
       ice[i] = 0;
       snow[i] = 0;
-    } else {
-      budget.frozen += mesh.areaCell[i] * (thickness - ice[i]);
-      const flooded = Math.max(0, snow[i] - (waterDensity - iceDensity) * thickness) * iceDensity / waterDensity;
-      snow[i] -= flooded;
-      budget.snowIce += mesh.areaCell[i] * flooded;
-      ice[i] = thickness + flooded / iceDensity;
+      concentration[i] = 0;
+      return;
     }
+    if (area < A) budget.snowMelted += cellArea * (A - area) * s;
+    budget.frozen += cellArea * (volume - A * h);
+    const newThickness = volume / area;
+    const flooded = Math.max(0, snowOnIce - (waterDensity - iceDensity) * newThickness) * iceDensity / waterDensity;
+    surfaceT[i] = skin;
+    snow[i] = snowOnIce - flooded;
+    budget.snowIce += cellArea * area * flooded;
+    ice[i] = newThickness + flooded / iceDensity;
+    concentration[i] = area;
   }
 
-  return { albedo, energy, update, deposit, budget, slabHeatCapacity, latent, latentHeatFusion, oceanFlux, snow, shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer } };
+  return {
+    albedo, albedoContrast, cover, load, energy, update, deposit, budget, slabHeatCapacity, latent, latentHeatFusion, leadClosing, oceanFlux, snow, concentration,
+    shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, concentration: concentration.buffer },
+  };
 }

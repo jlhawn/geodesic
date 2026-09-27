@@ -75,7 +75,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   for (let i = 0; i < C; i++) if (model.geography.land[i]) currents.fill(0, 3 * i, 3 * i + 3);
   const current = sea(Float64Array.from({ length: C }, (_, i) => Math.hypot(currents[3 * i], currents[3 * i + 1], currents[3 * i + 2])));
   const checks = {
-    ps: [pi, 0.1], mslp: [mslp, 0.5], water: [water, 1e-3], cloud: [cloud, 1e-6], rain: [physics.RAIN.subarray(0, C), 1e-6], ice: [ice, 1e-6],
+    ps: [pi, 0.1], mslp: [mslp, 0.5], water: [water, 1e-3], cloud: [cloud, 1e-6], rain: [physics.RAIN.subarray(0, C), 1e-6], ice: [ice, 1e-6], concentration: [model.seaIce.concentration, 1e-6],
     albedo: [physics.ADIF.subarray(0, C), 1e-6], shortwave: [physics.SWDN.subarray(0, C), 1e-3], longwave: [physics.OLR.subarray(0, C), 1e-3],
     soil: [physics.SOIL.subarray(0, C), 1e-4], snow: [physics.SNOW.subarray(0, C), 1e-4],
     sst: [sea(ocean.T1), 1e-3], sss: [sea(ocean.S1), 1e-4], layerDepth: [sea(ocean.h1), 1e-3], thermocline: [ocean.thermoclineDepth, 1e-2], ssh: [sea(ocean.eta), 1e-5],
@@ -92,7 +92,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     const a = mesh.areaCell[i];
     area += a; mass += a * pi[i]; ts += a * surfaceT[i]; piMin = Math.min(piMin, pi[i]); piMax = Math.max(piMax, pi[i]);
     w += a * water[i]; c += a * cloud[i]; rain += a * physics.RAIN[i]; olr += a * physics.OLR[i]; absorbed += a * physics.ABS[i];
-    if (ice[i] > 0) { iceArea += a; iceVolume += a * ice[i]; }
+    if (ice[i] > 0) { const cover = model.seaIce.cover(i, ice[i]); iceArea += a * cover; iceVolume += a * cover * ice[i]; }
     if (land[i] > 0.5) { landArea += a; landT += a * surfaceT[i]; soil += a * physics.SOIL[i]; }
   }
   for (const x of u) maxWind = Math.max(maxWind, Math.abs(x));

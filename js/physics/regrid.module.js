@@ -210,6 +210,15 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   return { soil, snow, ...(cover ? { vegetation: cover } : {}), ...(surface ? { surface } : {}) };
 }
 
+/*
+ * The sea-ice concentration that goes with the ice regridState carries:
+ * each target cell takes its value from the same source tile as its
+ * ice, and a cell whose ice is inferred from the land is fully covered.
+ */
+export function regridConcentration(source, target, concentration, { land = null, surfaceT } = {}) {
+  return sampleTiles(source, target, Float64Array.from(concentration), seaMask(source), interpolationWeights(source.mesh, target.mesh.xCell), (tile) => (seaFromLand(land ? land.snow[tile] : 0, surfaceT[tile]) > 0 ? 1 : 0));
+}
+
 export function regridState(source, target, state, progress = null, { land = null } = {}) {
   const [pi, theta, u, surfaceT, q = null, qc = null, ice = null] = state;
   const K = source.core.K;

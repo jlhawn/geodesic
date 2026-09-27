@@ -3,7 +3,8 @@
 // initial state when there is none), step until MINUTES of wall time have
 // passed or DAYS is reached, finishing the simulated day, save a binary
 // snapshot and keep the two newest. Logs one line a day to runs/<TAG>.log,
-// with the sea-ice area of each hemisphere, and at the end of the segment
+// with the sea-ice extent of each hemisphere (the area of the cells at
+// least 15% covered), and at the end of the segment
 // the rain, vegetation and surface temperature of the regions in BOXES,
 // and exits with 2 on NaN.
 //
@@ -44,6 +45,7 @@ if (existing.length) {
   const saved = await decodeState(new Uint8Array(readFileSync(`${OUT}/${file}`)));
   if (saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
   ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
+  model.seaIce.load(state[6], saved.concentration ?? null);
   model.time = saved.time;
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
@@ -62,7 +64,7 @@ const deg = 180 / Math.PI, land = model.geography.land;
 const inBox = Object.fromEntries(Object.entries(BOXES).map(([k, [a, b, c, e]]) => [k, [...Array(C).keys()].filter((i) => land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e)]));
 const PH = model.gpu.layout.PH;
 const readRain = async () => { const [a, b] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.CONV, length: C }, { offset: PH.COND, length: C }]); return Float64Array.from(a, (x, i) => x + b[i]); };
-const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['ice'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.ice[i] > 0) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12]; };
+const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12]; };
 const rain0 = await readRain();
 await model.diagnostics();
 const start = performance.now();
@@ -96,8 +98,8 @@ const sst = (cells) => meanOf(cells, (i) => ocean.T[i] - 273.15), classTop = (ce
 const warmPool = sea(-10, 10, 120, 160), coldTongue = sea(-2, 2, -110, -90), westPacific = sea(-5, 5, 140, 170), eastPacific = sea(-5, 5, -120, -90);
 log(`ocean after ${days} days: warm pool ${sst(warmPool).toFixed(1)} °C, cold tongue ${sst(coldTongue).toFixed(1)} °C (W−E ${(sst(westPacific) - sst(eastPacific)).toFixed(1)} K), ${THERMOCLINE_DENSITY} class top W Pac ${classTop(westPacific).toFixed(0)} m, E Pac ${classTop(eastPacific).toFixed(0)} m`);
 const name = `${TAG}_day${String(day).padStart(4, '0')}.bin`;
-const [pi, theta, u, surfaceT, q, qc, ice] = state;
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ N, K: core.K, day, time: model.time, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: landState }));
+const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce;
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ N, K: core.K, day, time: model.time, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: landState }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots();
 for (const old of kept.slice(0, Math.max(0, kept.length - KEEP))) unlinkSync(`${OUT}/${old}`);
