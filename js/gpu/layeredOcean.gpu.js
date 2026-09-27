@@ -549,7 +549,7 @@ export function createLayeredOcean(core, options = {}) {
   OUT[${OF.ETA} + i] = OD[O_ETA + i];
   let depth = P[4];
   var layer = -1; var top = 0.0;
-  for (var k = 0; k < L; k++) { let hk = IN[hOff(k) + i]; if (layer < 0 && depth < top + hk) { layer = k; } if (layer < 0) { top += hk; } }
+  for (var k = 0; k < L; k++) { let hk = IN[hOff(k) + i]; if (k > 0 && hk <= THINO) { continue; } if (layer < 0 && depth < top + hk) { layer = k; } if (layer < 0) { top += hk; } }
   if (layer < 0) {
     OUT[${OF.SST} + i] = DRY; OUT[${OF.UPW} + i] = DRY;
     OUT[${OF.CUR} + 3 * i] = 0.0; OUT[${OF.CUR} + 3 * i + 1] = 0.0; OUT[${OF.CUR} + 3 * i + 2] = 0.0; OUT[${OF.CSPD} + i] = 0.0;
@@ -565,6 +565,7 @@ export function createLayeredOcean(core, options = {}) {
     for (var k = 0; k < L; k++) {
       if (above >= depth) { break; }
       let he = 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b]);
+      if (k > 0 && he <= THINO) { continue; }
       transport += IN[uOff(k) + e] * min(he, depth - above);
       above += he;
     }

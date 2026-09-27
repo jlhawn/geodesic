@@ -6,7 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { levelFields, verticalVelocity } from '../js/levels.module.js';
-import { createOcean as createLayeredOcean, depthFields } from '../js/ocean/layered.module.js';
+import { createOcean as createLayeredOcean, depthFields, THIN } from '../js/ocean/layered.module.js';
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 + 2500 * Math.exp(-(((lat - 0.3) / 0.3) ** 2)) : -4000));
 
@@ -63,7 +63,7 @@ test('the fields at a depth pick the layer holding it, mask the sea floor, and i
   for (let i = 0; i < C; i++) {
     if (!cellOcean[i]) continue;
     let above = 0, layer = -1;
-    for (let k = 0; k < L; k++) { if (250 < above + h[k * C + i]) { layer = k; break; } above += h[k * C + i]; }
+    for (let k = 0; k < L; k++) { if (k > 0 && h[k * C + i] <= THIN) continue; if (250 < above + h[k * C + i]) { layer = k; break; } above += h[k * C + i]; }
     if (layer < 0) { dry++; assert.ok(Number.isNaN(deep.temperature[i]) && Number.isNaN(deep.upwelling[i]) && deep.current[3 * i] === 0); continue; }
     wet++;
     assert.ok(layer >= 1, `250 m lies below the mixed layer at ${i}`);
@@ -75,4 +75,9 @@ test('the fields at a depth pick the layer holding it, mask the sea floor, and i
   assert.ok(Math.abs(sum) < 1e-6 * magnitude, `the upwelling through 250 m sums to ${sum} against ${magnitude} in magnitude`);
   const abyss = depthFields(mesh, L, { h, u, temperature, cellOcean }, 20000);
   for (let i = 0; i < C; i++) assert.ok(Number.isNaN(abyss.temperature[i]));
+  const i = [...Array(C).keys()].find((c) => cellOcean[c]);
+  const base = h[i];
+  for (let k = 1; k < L - 1; k++) h[k * C + i] = 0.01;
+  const atBase = depthFields(mesh, L, { h, u, temperature, cellOcean }, base);
+  assert.equal(atBase.temperature[i], Math.fround(temperature(L - 1, i)), 'the mixed layer\'s base falls into the deep layer, not a token above it');
 });

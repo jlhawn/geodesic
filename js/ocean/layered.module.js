@@ -59,8 +59,9 @@ export const POLAR_INTERIOR_T = 273.65;
 
 /*
  * The fields at a depth below the surface, per cell: the layer holding
- * that depth (the first whose base lies below it, so an outcropped
- * token layer is passed over), its temperature and its current as a
+ * that depth (the first whose base lies below it, interior layers no
+ * thicker than THIN being tokens and passed over), its temperature and
+ * its current as a
  * cell vector, and the vertical velocity there, upward positive, as the
  * divergence of the transport above the depth with the free surface
  * held: h and u are the L layers' thicknesses and edge velocities,
@@ -72,7 +73,7 @@ export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth) {
   const out = { temperature: new Float32Array(C), current: new Float32Array(3 * C), upwelling: new Float32Array(C) };
   for (let i = 0; i < C; i++) {
     let layer = -1, top = 0;
-    if (cellOcean[i]) for (let k = 0; k < L; k++) { const hk = h[k * C + i]; if (depth < top + hk) { layer = k; break; } top += hk; }
+    if (cellOcean[i]) for (let k = 0; k < L; k++) { const hk = h[k * C + i]; if (k > 0 && hk <= THIN) continue; if (depth < top + hk) { layer = k; break; } top += hk; }
     if (layer < 0) { out.temperature[i] = NaN; out.upwelling[i] = NaN; continue; }
     out.temperature[i] = temperature(layer, i);
     let x = 0, y = 0, z = 0, w = 0;
@@ -84,6 +85,7 @@ export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth) {
       let above = 0, transport = 0;
       for (let k = 0; k < L && above < depth; k++) {
         const he = 0.5 * (h[k * C + a] + h[k * C + b]);
+        if (k > 0 && he <= THIN) continue;
         transport += u[k * E + e] * Math.min(he, depth - above);
         above += he;
       }
