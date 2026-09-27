@@ -67,7 +67,7 @@ export async function createGpuModel(gridOrMesh, {
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null });
+    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null });
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6]);
     lastFrameTime = model.time;
@@ -141,12 +141,12 @@ export async function createGpuModel(gridOrMesh, {
   } : null;
 
   model.land = landCpu ? {
-    soil: landCpu.soil, snow: landCpu.snow, runoff: landCpu.runoff, vegetation: landCpu.vegetation, capacity: landCpu.capacity, land: geography.land, budget: landCpu.budget, albedo: landCpu.albedo, wetness: landCpu.wetness, water: landCpu.water, bucketCapacity: landCpu.bucketCapacity,
-    initialize() { landCpu.initialize(); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow, vegetation: landCpu.vegetation }); },
-    load(saved, ice = state[6]) { landCpu.load(saved, ice); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow, vegetation: landCpu.vegetation }); },
+    soil: landCpu.soil, surface: landCpu.surface, snow: landCpu.snow, runoff: landCpu.runoff, vegetation: landCpu.vegetation, capacity: landCpu.capacity, land: geography.land, budget: landCpu.budget, albedo: landCpu.albedo, wetness: landCpu.wetness, water: landCpu.water, bucketCapacity: landCpu.bucketCapacity,
+    initialize() { landCpu.initialize(); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow, vegetation: landCpu.vegetation, surface: landCpu.surface }); },
+    load(saved, ice = state[6]) { landCpu.load(saved, ice); gpu.uploadLand({ soil: landCpu.soil, snow: landCpu.snow, vegetation: landCpu.vegetation, surface: landCpu.surface }); },
     async serialize() {
-      const [soil, snow, vegetation] = await readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.SOIL, length: C }, { offset: gpu.layout.PH.SNOW, length: C }, { offset: gpu.layout.PH.VEG, length: C }]);
-      landCpu.soil.set(soil); landCpu.snow.set(snow); landCpu.vegetation.set(vegetation);
+      const [soil, snow, vegetation, surface] = await readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.SOIL, length: C }, { offset: gpu.layout.PH.SNOW, length: C }, { offset: gpu.layout.PH.VEG, length: C }, { offset: gpu.layout.PH.SURF, length: C }]);
+      landCpu.soil.set(soil); landCpu.snow.set(snow); landCpu.vegetation.set(vegetation); landCpu.surface.set(surface);
       return landCpu.serialize();
     },
   } : null;

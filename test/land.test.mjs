@@ -128,8 +128,8 @@ test('a bucket shrinking with its vegetation spills the excess into runoff and k
   assert.ok(Math.abs(land.soil[i] - land.capacity(i)) < 1e-9, `soil ${land.soil[i]} against capacity ${land.capacity(i)}`);
   assert.ok(Math.abs(land.runoff[i] - runoff - (500 - land.soil[i])) < 1e-9, 'what the bucket lost ran off');
   assert.ok(Math.abs(land.water() - before) < 1e-9 * before);
-  land.soil[i] = 400; land.vegetation[i] = 0.2;
-  land.deposit(i, 0, MELTING_POINT + 5);
+  land.soil[i] = 400; land.vegetation[i] = 0.2; land.snow[i] = 0;
+  land.update(i, new Float64Array(mesh.nCells).fill(MELTING_POINT + 5), flux, 0, 1);
   assert.ok(Math.abs(land.soil[i] - land.capacity(i)) < 1e-9, 'the bucket holds no more than its vegetation allows');
 });
 
@@ -155,7 +155,7 @@ test('a saved land state without vegetation loads green with full buckets where 
   }
   land.load({ soil: new Float64Array(mesh.nCells).fill(20), snow, vegetation: new Float64Array(mesh.nCells).fill(1.5) });
   for (let i = 0; i < mesh.nCells; i++) assert.equal(land.vegetation[i], geography.land[i] && !geography.iceSheet[i] ? 1 : 0);
-  assert.deepEqual(Object.keys(land.serialize()), ['soil', 'snow', 'vegetation']);
+  assert.deepEqual(Object.keys(land.serialize()), ['soil', 'snow', 'vegetation', 'surface']);
 });
 
 test('an ice sheet keeps its albedo under anything and grows nothing', () => {
@@ -175,4 +175,37 @@ test('an ice sheet keeps its albedo under anything and grows nothing', () => {
   assert.equal(land.vegetation[i], 0, 'a wet bucket grows nothing on it');
   land.load({ soil: new Float64Array(mesh.nCells).fill(100), snow: new Float64Array(mesh.nCells) });
   assert.equal(land.vegetation[i], 0, 'a saved green state loads bare on it');
+});
+
+test('with vegetation the soil has a surface layer that bare ground evaporates and a root zone the cover transpires through stomata', () => {
+  const land = createLandSurface(mesh, flat(), { surfaceCapacity: 15, percolationTime: 86400, stomatalResistance: 70 });
+  land.initialize();
+  const i = 0, surfaceT = new Float64Array(mesh.nCells).fill(295), flux = new Float64Array(mesh.nCells);
+  land.vegetation[i] = 0; land.soil[i] = 20; land.surface[i] = 0;
+  const before = land.water();
+  land.deposit(i, 10, 290);
+  assert.equal(land.surface[i], 10); assert.equal(land.soil[i], 20);
+  land.deposit(i, 30, 290);
+  assert.equal(land.surface[i], 15);
+  const shed = 25 * Math.pow(20 / 50, 4);
+  assert.ok(Math.abs(land.soil[i] - (20 + 25 - shed)) < 1e-12 && Math.abs(land.runoff[i] - shed) < 1e-12, 'the overflow infiltrates, a (soil/capacity)⁴ share running off');
+  assert.ok(Math.abs(land.water() - before - mesh.areaCell[i] * 40) < 1e-9 * mesh.areaCell[i]);
+  assert.ok(Math.abs(land.wetness(i, 0.01, 295) - 1) < 1e-12, 'a wet surface layer evaporates freely from bare ground');
+  land.update(i, surfaceT, flux, 1e-4, 3600);
+  assert.ok(Math.abs(land.surface[i] - (15 - 0.36) * Math.exp(-3600 / 86400)) < 1e-9, 'bare-ground evaporation and seepage come out of the surface layer');
+  land.surface[i] = 0; land.vegetation[i] = 0;
+  assert.equal(land.wetness(i, 0.01, 295), 0, 'dry bare ground evaporates nothing however wet the roots');
+  land.vegetation[i] = 1; land.soil[i] = land.capacity(i);
+  assert.ok(Math.abs(land.wetness(i, 0.01, 295) - 1 / (1 + 70 * 0.01)) < 1e-12, 'a full canopy transpires at the stomatal fraction');
+  assert.ok(land.wetness(i, 0.01, 276) < 0.1, 'and closes its stomata in the cold');
+  land.vegetation[i] = 0.3; land.soil[i] = land.capacity(i);
+  const cold = new Float64Array(mesh.nCells).fill(276), warm = new Float64Array(mesh.nCells).fill(295);
+  land.update(i, cold, flux, 0, 30 * DAY);
+  assert.ok(Math.abs(land.vegetation[i] - 0.3) < 1e-12, 'no growth in the cold');
+  land.update(i, warm, flux, 0, 30 * DAY);
+  assert.ok(land.vegetation[i] > 0.35, 'growth when warm');
+  const grown = land.vegetation[i];
+  land.soil[i] = 0;
+  land.update(i, cold, flux, 0, 30 * DAY);
+  assert.ok(land.vegetation[i] < grown - 0.01, 'decline needs no warmth');
 });

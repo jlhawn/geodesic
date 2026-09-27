@@ -24,7 +24,7 @@ const RELAX: f32 = ${o.relaxationTime}; const RH_REF: f32 = ${o.referenceHumidit
 const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth}; const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const CAP_MIN: f32 = ${o.minimumCapacity}; const CAP_MAX: f32 = ${o.maximumCapacity};
-const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
+const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 `;
 }
 
@@ -92,13 +92,20 @@ export const PHYSICS_KERNELS = {
   let mu = max(0.0, MF[F_XC + 3 * i] * sun.x + MF[F_XC + 3 * i + 1] * sun.y + MF[F_XC + 3 * i + 2] * sun.z);
   let beam = S0 * mu;
   let onLand = PH[PH_LAND + i] > 0.5; let onIceSheet = PH[PH_LAND + i] > 1.5;
-  let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i]; let veg0 = PH[PH_VEG + i];
+  let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i]; let veg0 = PH[PH_VEG + i]; let surf0 = PH[PH_SURF + i];
   let bucket = select(BUCKET, CAP_MIN + (CAP_MAX - CAP_MIN) * veg0, VEGETATED);
   let bareAlbedo = select(ALB_LAND, ALB_BARE + (ALB_VEG - ALB_BARE) * veg0, VEGETATED);
   let landAlbedo = select(bareAlbedo + min(1.0, snow0 / FULLSNOW) * (ALB_SNOW - bareAlbedo), ALB_ICESHEET, onIceSheet);
   let adif = select(surfaceAlbedo(ice, ALB_DIF_WATER, snow0), landAlbedo, onLand);
   let adir = select(surfaceAlbedo(ice, openWaterAlbedo(mu), snow0), landAlbedo, onLand);
-  let wetness = select(1.0, select(min(1.0, soil0 / (WETT * bucket)), 1.0, snow0 > 0.0), onLand);
+  let warmth = clamp((ts - GROWCOLD) / (GROWWARM - GROWCOLD), 0.0, 1.0);
+  let aero = select(CEX, PH[PH_DRAG + i], LANDED) * max(ws, GUST);
+  let roots = min(1.0, soil0 / (WETT * bucket));
+  let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);
+  let canopyWet = veg0 * roots / (1.0 + RSTOM * aero / max(0.05, warmth));
+  let landWet = select(roots, bareWet + canopyWet, VEGETATED);
+  let wetness = select(1.0, select(landWet, 1.0, snow0 > 0.0), onLand);
+  let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= 0.0);
   let ozoneHeating = beam * OZONE_ABS;
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
   var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
@@ -162,12 +169,19 @@ export const PHYSICS_KERNELS = {
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = ts; var h = ice;
   if (onLand) {
-    var soil = soil0; var snow = snow0;
+    var soil = soil0; var snow = snow0; var surf = surf0;
     T += dt * net / LANDC;
-    let fromSnow = min(snow, evap * dt);
-    snow -= fromSnow;
+    var left = evap * dt;
+    let fromSnow = min(snow, left);
+    snow -= fromSnow; left -= fromSnow;
     T -= LFUS * fromSnow / LANDC;
-    soil = max(0.0, soil - (evap * dt - fromSnow));
+    if (VEGETATED) {
+      let fromSurface = min(surf, left * bareShare);
+      surf -= fromSurface; left -= fromSurface;
+      let seep = surf * (1.0 - exp(-dt / PERCT));
+      surf -= seep; soil += seep;
+    }
+    soil = max(0.0, soil - left);
     if (snow > 0.0 && T > MELTING) {
       let energy = (T - MELTING) * LANDC;
       let melt = min(snow, energy / LFUS);
@@ -179,14 +193,14 @@ export const PHYSICS_KERNELS = {
       var veg = veg0 * exp(-dt / VEG_SNOW);
       if (snow <= 0.0) {
         let goal = clamp((min(soil, cap) / cap - VEG_DRY) / (VEG_WET - VEG_DRY), 0.0, 1.0);
-        veg = veg0 + (goal - veg0) * (1.0 - exp(-dt / select(VEG_DECLINE, VEG_GROW, goal > veg0)));
+        veg = veg0 + (goal - veg0) * (1.0 - exp(-dt * select(1.0, warmth, goal > veg0) / select(VEG_DECLINE, VEG_GROW, goal > veg0)));
       }
       if (onIceSheet) { veg = 0.0; }
       PH[PH_VEG + i] = veg;
       cap = CAP_MIN + (CAP_MAX - CAP_MIN) * veg;
     }
     if (soil > cap) { PH[PH_RUNOFF + i] += soil - cap; soil = cap; }
-    PH[PH_SOIL + i] = soil; PH[PH_SNOW + i] = snow;
+    PH[PH_SOIL + i] = soil; PH[PH_SNOW + i] = snow; PH[PH_SURF + i] = surf;
   } else if (h <= 0.0) {
     if (snow0 > 0.0) { T -= LFUS * snow0 / capacity; PH[PH_SNOW + i] = 0.0; }
     T += dt * (net + ocean) / capacity;
@@ -379,8 +393,17 @@ export const PHYSICS_KERNELS = {
       IN[S_TH + bottom * C + i] += LFUS * (rained + convected) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
     }
     else {
-      var soil = PH[PH_SOIL + i] + rained + convected;
       let cap = select(BUCKET, CAP_MIN + (CAP_MAX - CAP_MIN) * PH[PH_VEG + i], VEGETATED);
+      var soil = PH[PH_SOIL + i];
+      if (VEGETATED) {
+        var surf = PH[PH_SURF + i] + rained + convected;
+        if (surf > SURFCAP) {
+          let infiltration = surf - SURFCAP; surf = SURFCAP;
+          let shed = infiltration * pow(min(1.0, soil / cap), 4.0);
+          PH[PH_RUNOFF + i] += shed; soil += infiltration - shed;
+        }
+        PH[PH_SURF + i] = surf;
+      } else { soil += rained + convected; }
       if (soil > cap) { PH[PH_RUNOFF + i] += soil - cap; soil = cap; }
       PH[PH_SOIL + i] = soil;
     }

@@ -1020,9 +1020,10 @@ aimed at the two feedbacks that ran away in M10:
   its own currents the coefficient is the sub-grid eddy residual,
   0.01 W/m²/K (about 2000 m²/s over a 55 m mixed layer); at 0.3 it
   fed the freezing water at the ice edge 160 W/m² from the warmer
-  water beside it and no winter ice could form there. It runs on the main thread in both engines
-  (`phases.ocean`), which keeps the workers' cell updates free of
-  neighbour reads and the parallel step bit-identical to the serial
+  water beside it and no winter ice could form there. In the layered
+  ocean it is part of the mixed layer's tendency, which the workers
+  compute with the other layers' (`parallel.module.js`), each layer by
+  one thread, so the parallel step stays bit-identical to the serial
   one. The prescribed profile stays available but defaults to zero.
 - **Direct and diffuse light at the surface.** Open water reflects the
   direct beam with the zenith-angle albedo of Briegleb et al. (1986),
@@ -1161,7 +1162,13 @@ under ice reaches the ice base with the water at the freezing point;
 the coupled model stays bounded. 168 tests pass.
 
 Cost: at N=64 the ocean step takes 70–110 ms once every four
-atmosphere steps on the main thread, 7–11 % of the 253 ms step.
+atmosphere steps on the main thread, 7–11 % of the 253 ms step. The
+CPU engine's ocean also steps on the main thread but hands each
+tendency evaluation to the workers a layer at a time, momentum and
+tracers apart, from the 2D fields the main thread prepares (the free
+surface and density gradients, the edge thicknesses and the layer
+pressure potentials as column sums); with the ocean on, the parallel
+step is about 3× the serial one at N=32 where it had been 1.6×.
 
 First spin-up (N=16, 1500 days, the M12 defaults with the slab's
 diffusivity 0.45 kept in the upper layer): the ice is gone by day
@@ -1787,7 +1794,17 @@ is — 0 below `dryWetness` 0.1 of the capacity, 1 above `wetWetness`
 (365 days) when falling; under snow it fades toward 0 over
 `snowDeclineTime` (720 days), so ice sheets go
 bare while a boreal forest survives its winters. Water above a
-shrinking bucket runs off. The ice sheets — Antarctica's land and
+shrinking bucket runs off. The soil holds two stores: rain fills a
+15 kg/m² surface layer first, what it cannot hold infiltrates the
+bucket with a share (soil/capacity)⁴ running off, and the surface
+layer seeps into the bucket over a day. Bare ground evaporates from
+the surface layer alone, so a desert dries within a day of rain; the
+cover transpires from the bucket through stomata, at the aerodynamic
+rate times 1/(1 + r_s g_a) with r_s = 70 s/m divided by a warmth
+rising from 0 at 5 °C to 1 at 15 °C, so cold or dry roots close them
+(a well-watered canopy transpires at about 60% of the potential rate
+instead of the bucket's 100%); growth toward its goal needs the same
+warmth, decline does not. The ice sheets — Antarctica's land and
 Greenland's interior above 800 m, the topography carrying no ice mask
 — grow nothing and keep an albedo of 0.8 whatever lies on them. Both engines carry v (the GPU in the PH
 buffer's VEG range), snapshots save it under `land.vegetation`,

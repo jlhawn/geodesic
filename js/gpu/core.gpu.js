@@ -31,7 +31,7 @@ export function layoutFor(mesh, K) {
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE]]);
-  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['RUNOFF', C], ['VEG', C]]);
+  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['RUNOFF', C], ['VEG', C], ['SURF', C]]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH, FR };
 }
@@ -503,7 +503,7 @@ export const PHYSICS_DEFAULTS = {
   richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5,
   landed: false, landHeatCapacity: 1e6, bucketCapacity: 150, wetnessThreshold: 0.75, landAlbedo: 0.2, snowAlbedo: 0.55, fullSnow: 20,
   vegetation: true, bareAlbedo: 0.30, vegetatedAlbedo: 0.13, minimumCapacity: 50, maximumCapacity: 500, dryWetness: 0.1, wetWetness: 0.6, iceSheetAlbedo: 0.8,
-  growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400,
+  growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400, surfaceCapacity: 15, percolationTime: 86400, stomatalResistance: 70, growthColdest: 278.15, growthWarmest: 288.15,
 };
 
 export async function createGpuCore(mesh, {
@@ -732,14 +732,16 @@ export async function createGpuCore(mesh, {
       ph[L.PH.SOIL + i] = retained.soil ? retained.soil[i] : 0;
       ph[L.PH.SNOW + i] = retained.snow ? retained.snow[i] : 0;
       ph[L.PH.VEG + i] = retained.vegetation ? retained.vegetation[i] : 0;
+      ph[L.PH.SURF + i] = retained.surface ? retained.surface[i] : 0;
     }
     device.queue.writeBuffer(buffers.PH, 0, ph);
   }
-  function uploadLand({ soil, snow, vegetation }) {
-    retained.soil = soil; retained.snow = snow; retained.vegetation = vegetation;
+  function uploadLand({ soil, snow, vegetation, surface = null }) {
+    retained.soil = soil; retained.snow = snow; retained.vegetation = vegetation; retained.surface = surface;
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.SOIL, Float32Array.from(soil));
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.SNOW, Float32Array.from(snow));
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.VEG, Float32Array.from(vegetation));
+    device.queue.writeBuffer(buffers.PH, 4 * L.PH.SURF, surface ? Float32Array.from(surface) : new Float32Array(C));
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.RUNOFF, new Float32Array(C));
   }
   function downloadPhysics() {

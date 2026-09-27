@@ -197,15 +197,17 @@ export function regridOcean(source, target, ocean, progress = null) {
 
 export function regridLand(source, target, land, progress = null, { ice = null, surfaceT = null } = {}) {
   const vegetation = land.vegetation ? { vegetation: Float64Array.from(land.vegetation) } : {};
-  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow), ...vegetation };
+  const surfaceKept = land.surface ? { surface: Float64Array.from(land.surface) } : {};
+  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow), ...vegetation, ...surfaceKept };
   if (progress) progress(0, 'the land');
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), onLand = landMask(source);
   const bucket = target.land && target.land.bucketCapacity ? target.land.bucketCapacity : 150;
   const guess = (tile) => landFromSea(ice ? ice[tile] : 0, surfaceT ? surfaceT[tile] : FREEZING + 1, bucket);
   const soil = sampleTiles(source, target, Float64Array.from(land.soil), onLand, atCells, (tile) => guess(tile).soil), snow = sampleTiles(source, target, Float64Array.from(land.snow), onLand, atCells, (tile) => guess(tile).snow);
   const cover = land.vegetation ? sampleTiles(source, target, Float64Array.from(land.vegetation), onLand, atCells, (tile) => (guess(tile).snow > 0 ? 0 : 0.5)) : null;
-  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; }
-  return { soil, snow, ...(cover ? { vegetation: cover } : {}) };
+  const surface = land.surface ? sampleTiles(source, target, Float64Array.from(land.surface), onLand, atCells, () => 0) : null;
+  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; if (surface) surface[n] = 0; }
+  return { soil, snow, ...(cover ? { vegetation: cover } : {}), ...(surface ? { surface } : {}) };
 }
 
 export function regridState(source, target, state, progress = null, { land = null } = {}) {

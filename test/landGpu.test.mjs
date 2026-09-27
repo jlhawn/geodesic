@@ -38,7 +38,8 @@ test('eight GPU steps over a continent track the CPU model: surface, soil, snow,
   const saved = await gpu.land.serialize();
   const d = await gpu.diagnostics(), dc = cpu.diagnostics();
   const ts = stats(cpu.state[3], gpu.state[3]), theta = stats(cpu.state[1], gpu.state[1]);
-  const soil = stats(cpu.land.soil, saved.soil), snow = stats(cpu.land.snow, saved.snow), vegetation = stats(cpu.land.vegetation, saved.vegetation);
+  const soil = stats(cpu.land.soil, saved.soil), snow = stats(cpu.land.snow, saved.snow), vegetation = stats(cpu.land.vegetation, saved.vegetation), surface = stats(cpu.land.surface, saved.surface);
+  assert.ok(surface.maxDiff < 1e-2, `surface layer max ${surface.maxDiff} at ${surface.at}`);
   let moved = 0;
   for (let i = 0; i < cpu.mesh.nCells; i++) if (cpu.geography.land[i]) moved = Math.max(moved, Math.abs(cpu.land.vegetation[i] - 0.5));
   assert.ok(moved > 0.2, `the vegetation moved at most ${moved} from its start`);
