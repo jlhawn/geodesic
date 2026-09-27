@@ -2,7 +2,9 @@
 // continue from the newest runs/<TAG>_dayNNNN.bin (or start from the fresh
 // initial state when there is none), step until MINUTES of wall time have
 // passed or DAYS is reached, finishing the simulated day, save a binary
-// snapshot and keep the two newest. Logs one line a day to runs/<TAG>.log
+// snapshot and keep the two newest. Logs one line a day to runs/<TAG>.log,
+// with the sea-ice area of each hemisphere, and at the end of the segment
+// the rain, vegetation and surface temperature of the regions in BOXES,
 // and exits with 2 on NaN.
 //
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), OUT
@@ -14,6 +16,13 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState } from '../js/stateFile.module.js';
+import { readRanges } from '../js/gpu/device.module.js';
+
+const BOXES = {
+  sahara: [16, 30, -10, 32], arabia: [16, 30, 38, 55], sahel: [8, 16, -15, 35], india: [15, 28, 72, 88], congo: [-5, 5, 12, 30], amazon: [-10, 3, -70, -50],
+  seAsia: [10, 25, 95, 110], borneo: [-4, 7, 108, 119], europe: [45, 55, 0, 30], eastUS: [32, 45, -95, -75], siberia: [55, 65, 60, 120],
+  ausInterior: [-30, -20, 120, 145], kalahari: [-27, -20, 17, 25], gobi: [38, 46, 90, 110], usSouthwest: [30, 37, -117, -106], cerrado: [-20, -10, -55, -42],
+};
 
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = 2;
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
@@ -47,24 +56,40 @@ if (existing.length) {
   log(`--- ${new Date().toISOString()} fresh start at N=${N} (${C} cells, dt ${dt} s, ${perDay} steps a day) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 }
 
+const deg = 180 / Math.PI, land = model.geography.land;
+const inBox = Object.fromEntries(Object.entries(BOXES).map(([k, [a, b, c, e]]) => [k, [...Array(C).keys()].filter((i) => land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e)]));
+const PH = model.gpu.layout.PH;
+const readRain = async () => { const [a, b] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.CONV, length: C }, { offset: PH.COND, length: C }]); return Float64Array.from(a, (x, i) => x + b[i]); };
+const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['ice'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.ice[i] > 0) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12]; };
+const rain0 = await readRain();
 await model.diagnostics();
 const start = performance.now();
-let day = Math.round(model.time / 86400);
+const day0 = Math.round(model.time / 86400);
+let day = day0, iceNorth = 0, iceSouth = 0;
 for (;;) {
   for (let n = 0; n < perDay; n++) { await model.step(dt); if (n % 8 === 7) await model.settle(); }
   day++;
   const d = await model.diagnostics();
+  const [north, south] = await iceArea();
+  iceNorth += north; iceSouth += south;
   const minutes = (performance.now() - start) / 60000;
-  log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}%, ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}`);
+  log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}`);
   if (!Number.isFinite(d.meanSurfaceT) || !Number.isFinite(d.maxWind) || !Number.isFinite(d.oceanSpeed)) { log(`NaN on day ${day}; stopping`); process.exit(2); }
   if (minutes >= MINUTES || day >= DAYS) break;
 }
 
 await model.sync();
-const ocean = await model.ocean.serialize(), land = await model.land.serialize();
+const rain1 = await readRain(), days = day - day0;
+const ocean = await model.ocean.serialize(), landState = await model.land.serialize();
+log(`regions after ${days} days (rain mm/d / vegetation / surface °C): ` + Object.entries(inBox).map(([name, cells]) => {
+  let r = 0, v = 0, t = 0;
+  for (const i of cells) { r += rain1[i] - rain0[i]; v += landState.vegetation ? landState.vegetation[i] : 0; t += state[3][i]; }
+  const n = Math.max(1, cells.length);
+  return `${name} ${(r / n / days).toFixed(1)}/${(v / n).toFixed(2)}/${(t / n - 273.15).toFixed(0)}`;
+}).join(', ') + `; sea ice mean N ${(iceNorth / days).toFixed(1)} S ${(iceSouth / days).toFixed(1)} Mkm²`);
 const name = `${TAG}_day${String(day).padStart(4, '0')}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state;
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ N, K: core.K, day, time: model.time, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land }));
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ N, K: core.K, day, time: model.time, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: landState }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots();
 for (const old of kept.slice(0, Math.max(0, kept.length - KEEP))) unlinkSync(`${OUT}/${old}`);

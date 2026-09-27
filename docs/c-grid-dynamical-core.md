@@ -1958,7 +1958,7 @@ js/
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
     ice.module.js           M9/M11: zero-layer sea ice over the mixed layer, zenith albedo
   ocean/
-    layered.module.js       M18: eight-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
+    layered.module.js       M18: 24-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
     seawater.module.js      M18: the Roquet et al. (2015) simplified equation of state, shared with the GPU
     (js/gpu/layeredOcean.gpu.js is its WebGPU port)
   gpu/

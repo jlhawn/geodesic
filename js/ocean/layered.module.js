@@ -51,10 +51,10 @@ import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature, sal
  * heat capacity is published per cell, and the heat converged under ice
  * is handed to the ice base.
  */
-export const LAYER_DENSITIES = [1022.0, 1023.0, 1024.0, 1025.0, 1026.0, 1026.6, 1026.95];
-export const LAYER_BOTTOMS = [90, 170, 300, 500, 700, 1100];
-export const LAYER_SALINITIES = [35, 35, 35, 35, 34.9, 34.85, 34.8];
-export const THERMOCLINE_DENSITY = 1023.5;
+export const LAYER_DENSITIES = [1022.0, 1022.25, 1022.5, 1022.75, 1023.0, 1023.25, 1023.5, 1023.75, 1024.0, 1024.25, 1024.5, 1024.75, 1025.0, 1025.25, 1025.5, 1025.75, 1026.0, 1026.2, 1026.4, 1026.6, 1026.75, 1026.85, 1026.95];
+export const LAYER_BOTTOMS = [90, 110, 130, 150, 170, 205, 235, 270, 300, 350, 400, 450, 500, 550, 600, 650, 700, 835, 965, 1100, 1600, 2500];
+export const LAYER_SALINITIES = [35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 34.98, 34.95, 34.92, 34.9, 34.88, 34.87, 34.85, 34.83, 34.81, 34.8];
+export const THERMOCLINE_DENSITY = 1024.0;
 export const POLAR_INTERIOR_T = 273.65;
 
 /*
