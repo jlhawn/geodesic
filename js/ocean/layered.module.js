@@ -281,23 +281,29 @@ export function createOcean(mesh, {
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
   const substepLimit = 0.35 * minSpacing / Math.sqrt(g * Math.max(deepest, 1));
 
-  const h = new Float64Array(L * C), u = new Float64Array(L * E), Q = new Float64Array(L * C), W = new Float64Array(L * C);
+  const adopting = !!(buffers && buffers.h);
+  const shared = (name, n) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * n));
+  const h = shared('h', L * C), u = shared('u', L * E), Q = shared('Q', L * C), W = shared('W', L * C);
   const state = [h, u, Q, W];
-  const eta = new Float64Array(C);
-  const T0 = new Float64Array(C), S0 = new Float64Array(C), rhoMl = new Float64Array(C), previousT0 = new Float64Array(C), surfaceIn = new Float64Array(C), previousIce = new Float64Array(C);
-  const capacity = new Float64Array(buffers && buffers.capacity ? buffers.capacity : new SharedArrayBuffer(8 * C)).fill(rhoCp * mixedDepth);
-  const stress = new Float64Array(E), fresh = new Float64Array(C);
+  const eta = shared('eta', C);
+  const T0 = new Float64Array(C), S0 = new Float64Array(C), rhoMl = shared('rhoMl', C), previousT0 = new Float64Array(C), surfaceIn = new Float64Array(C), previousIce = new Float64Array(C);
+  const capacity = shared('capacity', C);
+  if (!adopting) capacity.fill(rhoCp * mixedDepth);
+  const stress = shared('stress', E), fresh = new Float64Array(C);
   const iced = new Uint8Array(C);
-  const hEdge = new Float64Array(L * E), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E);
+  const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E);
   const T = new Float64Array(C), S = new Float64Array(C), lapT = new Float64Array(C);
   const zeta = new Float64Array(V), qEdge = new Float64Array(E);
-  const K = new Float64Array(C), phi = new Float64Array(C), gradPhi = new Float64Array(E), gradEta = new Float64Array(E), gradRho = new Float64Array(E);
+  const K = new Float64Array(C), phi = new Float64Array(C), gradPhi = new Float64Array(E), gradEta = shared('gradEta', E), gradRho = shared('gradRho', E);
   const lap = new Float64Array(E), lap2 = new Float64Array(E), divScratch = new Float64Array(C), curlScratch = new Float64Array(V);
   const slow = new Float64Array(E), U = new Float64Array(E), depthEdge = new Float64Array(E), etaB = new Float64Array(C), avgU = new Float64Array(E), avgEta = new Float64Array(C), divU = new Float64Array(C);
-  const stages = [0, 1, 2, 3].map(() => state.map((a) => new Float64Array(a.length)));
-  const trial = state.map((a) => new Float64Array(a.length));
+  const stages = [0, 1, 2, 3].map((s) => [shared(`stage${s}h`, L * C), shared(`stage${s}u`, L * E), shared(`stage${s}Q`, L * C), shared(`stage${s}W`, L * C)]);
+  const trial = [shared('trialh', L * C), shared('trialu', L * E), shared('trialQ', L * C), shared('trialW', L * C)];
+  const params = shared('params', 4);
+  if (!adopting) params[0] = 1 / 3600;
   const tauCell = new Float64Array(3 * C);
-  let counter = 0, limited = 0, relaxRate = 1 / 3600, initialised = false;
+  let counter = 0, limited = 0, initialised = false, layerRunner = null;
+  const relaxRate = () => params[0];
 
   const eos = seawaterDensity;
   const at = (k, i) => k * C + i;
@@ -367,14 +373,46 @@ export function createOcean(mesh, {
     }
   }
 
-  function tendency(input, out) {
-    const [hIn, uIn, QIn, WIn] = input;
-    const [dh, du, dQ, dW] = out;
+  /*
+   * The 2D fields every layer's tendency reads: the surface density and
+   * the gradients of the free surface and of that density, the edge
+   * thicknesses, and each interior layer's pressure potential
+   * (ρ_ml − ρ_k) h₀ + Σ_{j<k} (ρ_j − ρ_k) h_j as two running sums down
+   * the column.
+   */
+  function prepare(input) {
+    const [hIn, , QIn, WIn] = input;
     surfaceDensity(hIn, QIn, WIn);
     gradient(mesh, eta, gradEta);
     gradient(mesh, rhoMl, gradRho);
     edgeThicknesses(hIn);
-    for (let k = 0; k < L; k++) {
+    for (let i = 0; i < C; i++) {
+      let weighted = 0, total = 0;
+      for (let k = 1; k < L; k++) {
+        pressure[at(k, i)] = (rhoMl[i] - rho[k]) * hIn[i] + weighted - rho[k] * total;
+        weighted += rho[k] * hIn[at(k, i)]; total += hIn[at(k, i)];
+      }
+    }
+  }
+
+  function tendency(input, out) {
+    prepare(input);
+    if (layerRunner) layerRunner(input === trial ? 1 : 0, stages.indexOf(out));
+    else tendencyLayers(input, out, 0, L);
+  }
+
+  /*
+   * The tendencies of layers kFrom to kTo from the prepared 2D fields —
+   * the free surface and its gradient, the surface density gradient and
+   * the edge thicknesses of every layer — reading the input state alone,
+   * so that layers can be computed by any thread in any order; `part`
+   * 'tracers' writes only dh, dQ and dW and 'momentum' only du.
+   */
+  function tendencyLayers(input, out, kFrom, kTo, part = 'all') {
+    const [hIn, uIn, QIn, WIn] = input;
+    const [dh, du, dQ, dW] = out;
+    const relax = relaxRate(), tracers = part !== 'momentum', momentum = part !== 'tracers';
+    for (let k = kFrom; k < kTo; k++) {
       const oc = k * C, oe = k * E;
       for (let e = 0; e < E; e++) {
         let he = hEdge[oe + e];
@@ -382,6 +420,7 @@ export function createOcean(mesh, {
         if (k === 0) he = Math.min(he, Math.max(0, hIn[cellsOnEdge[2 * e + (uIn[e] > 0 ? 0 : 1)]]));
         flux[e] = edgeOcean[e] ? he * uIn[oe + e] : 0;
       }
+      if (tracers) {
       divergence(mesh, flux, divScratch);
       for (let i = 0; i < C; i++) {
         dh[oc + i] = -divScratch[i];
@@ -400,17 +439,16 @@ export function createOcean(mesh, {
         maskedLaplacian(S, lapT);
         for (let i = 0; i < C; i++) dW[i] += diffusion * lapT[i];
       }
+      for (let i = 0; i < C; i++) if (!cellOcean[i]) { dh[oc + i] = 0; dQ[oc + i] = 0; dW[oc + i] = 0; }
+      }
+      if (!momentum) continue;
       curl(mesh, uIn.subarray(oe, oe + E), zeta);
       for (let e = 0; e < E; e++) qEdge[e] = 0.5 * (zeta[verticesOnEdge[2 * e]] + fVertex[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]] + fVertex[verticesOnEdge[2 * e + 1]]) / Math.max(hEdge[oe + e], PV_FLOOR);
       kineticEnergy(mesh, uIn.subarray(oe, oe + E), K);
       if (k === 0) {
         for (let i = 0; i < C; i++) phi[i] = K[i] + g * eta[i];
       } else {
-        for (let i = 0; i < C; i++) {
-          let p = (rhoMl[i] - rho[k]) * hIn[i];
-          for (let j = 1; j < k; j++) p += (rho[j] - rho[k]) * hIn[at(j, i)];
-          phi[i] = K[i] + g * eta[i] + g * p / rho0;
-        }
+        for (let i = 0; i < C; i++) phi[i] = K[i] + g * eta[i] + g * pressure[oc + i] / rho0;
       }
       gradient(mesh, phi, gradPhi);
       for (let e = 0; e < E; e++) {
@@ -446,10 +484,9 @@ export function createOcean(mesh, {
         laplacianVelocity(mesh, lap, lap2, divScratch, curlScratch);
         for (let e = 0; e < E; e++) du[oe + e] -= nu4 * lap2[e];
       }
-      if (k > 0) for (let e = 0; e < E; e++) if (hEdge[oe + e] < THIN) du[oe + e] = (uIn[ae(k - 1, e)] - uIn[oe + e]) * relaxRate;
+      if (k > 0) for (let e = 0; e < E; e++) if (hEdge[oe + e] < THIN) du[oe + e] = (uIn[ae(k - 1, e)] - uIn[oe + e]) * relax;
       for (let e = 0; e < E; e++) if (!edgeOcean[e]) du[oe + e] = 0;
     }
-    for (let i = 0; i < C; i++) if (!cellOcean[i]) for (let k = 0; k < L; k++) { dh[at(k, i)] = 0; dQ[at(k, i)] = 0; dW[at(k, i)] = 0; }
   }
 
   function combine(target, base, stage, dt) {
@@ -678,7 +715,7 @@ export function createOcean(mesh, {
     if (++counter % everySteps !== 0) return false;
     if (!initialised) initialize(surfaceT, ice);
     const dtOcean = everySteps * dt;
-    relaxRate = Math.min(1 / 3600, 1 / dtOcean);
+    params[0] = Math.min(1 / 3600, 1 / dtOcean);
     readSurface(surfaceT, ice);
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice);
     step(dtOcean);
@@ -847,7 +884,9 @@ export function createOcean(mesh, {
     return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited };
   }
 
-  initialize(new Float64Array(C).fill(288), new Float64Array(C));
+  if (!adopting) initialize(new Float64Array(C).fill(288), new Float64Array(C));
   initialised = false;
-  return { state, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, rhoCp, edgeOcean, cellOcean, densities: rho, shared: { capacity: capacity.buffer } };
+  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
+  stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }

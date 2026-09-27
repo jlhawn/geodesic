@@ -18,11 +18,11 @@ const model = createModel(mesh, { ...options, buffers });
 const { K, C, E, V } = model.core.diagnostics;
 const ctrl = new Int32Array(control.ints);
 const params = new Float64Array(control.floats);
-const totals = new Float64Array(control.totals);
+const totals = new Float64Array(control.totals), busy = new Float64Array(control.busy);
 const state = model.state;
 const trial = STATE_NAMES.map((name) => new Float64Array(buffers.trial[name]));
 const stages = buffers.stages.map((stage) => STATE_NAMES.map((name) => new Float64Array(stage[name])));
-const chunks = phaseChunks({ K, C, E, V }, workers);
+const chunks = phaseChunks({ K, C, E, V, L: model.ocean ? model.ocean.layers : 0 }, workers);
 const sums = Object.fromEntries(TOTALS.map((name) => [name, 0]));
 const partial = Object.fromEntries(TOTALS.map((name) => [name, 0]));
 
@@ -58,6 +58,11 @@ function unit(phase, chunk, input, out) {
       else model.phases.adjust(from, to, params[0]);
       break;
     case PHASE.DISSIPATE: model.phases.dissipate(from, to); break;
+    case PHASE.OCEAN: {
+      const ocean = model.ocean;
+      ocean.tendencyLayers(Atomics.load(ctrl, 3) ? ocean.trial : ocean.state, ocean.stages[Atomics.load(ctrl, 4)], from, to, chunk.kind);
+      break;
+    }
     default: break;
   }
 }
@@ -68,11 +73,13 @@ function run(phase) {
   const units = chunks[phase];
   if (!units) return;
   if (phase === PHASE.PHYSICS) { model.radiation.setTime(params[2]); for (const name of TOTALS) sums[name] = 0; }
+  const started = performance.now();
   for (;;) {
     const c = Atomics.add(ctrl, 6, 1);
     if (c >= units.length) break;
     unit(phase, units[c], input, out);
   }
+  busy[(PHASE.EXIT + 1) * index + phase] += performance.now() - started;
   if (phase === PHASE.PHYSICS) TOTALS.forEach((name, t) => { totals[TOTALS.length * index + t] = sums[name]; });
 }
 

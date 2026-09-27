@@ -17,6 +17,8 @@ test('the worker-thread step reproduces the single-thread step bit for bit', asy
       const s = serial.state[a], p = parallel.state[a];
       for (let i = 0; i < s.length; i++) if (s[i] !== p[i]) assert.fail(`array ${a} differs at ${i}: ${s[i]} vs ${p[i]}`);
     }
+    for (let a = 0; a < serial.ocean.state.length; a++) assert.deepEqual(parallel.ocean.state[a], serial.ocean.state[a], `ocean array ${a}`);
+    assert.deepEqual(parallel.ocean.eta, serial.ocean.eta);
     const ds = serial.diagnostics(), dp = parallel.diagnostics();
     assert.equal(ds.mass, dp.mass);
     assert.ok(Math.abs(ds.absorbedSolar - dp.absorbedSolar) < 1e-9 * ds.absorbedSolar);

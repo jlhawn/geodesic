@@ -2,7 +2,7 @@ import { createModel, STATE_NAMES, stateLengths } from './model.module.js';
 import { shareMesh } from './mesh.module.js';
 import { parallelism, spawn } from './threads.module.js';
 
-export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, PHYSICS: 4, ADVANCE: 5, COMBINE: 6, CLOSURE: 7, ADJUST: 8, DISSIPATE: 9, EXIT: 10 };
+export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, PHYSICS: 4, ADVANCE: 5, COMBINE: 6, CLOSURE: 7, ADJUST: 8, DISSIPATE: 9, OCEAN: 10, EXIT: 11 };
 
 function blocks(kind, n, size, extra = {}) {
   const chunks = [];
@@ -15,9 +15,10 @@ function blocks(kind, n, size, extra = {}) {
  * counter, so the split adapts to however fast each core is: a layer at
  * a time for the layer-partitioned phases, and for the rest blocks of
  * cells, vertices or array elements sized to give every worker several
- * units whatever the resolution.
+ * units whatever the resolution; the ocean's tendency goes a layer at a
+ * time over its L layers, momentum and tracers apart.
  */
-export function phaseChunks({ K, C, E, V }, workers = 8) {
+export function phaseChunks({ K, C, E, V, L = 0 }, workers = 8) {
   const lengths = stateLengths({ K, C, E });
   const size = (n, floor) => Math.max(floor, Math.ceil(n / (4 * workers)));
   const arrays = STATE_NAMES.flatMap((name, a) => blocks('array', lengths[name], size(lengths[name], 4096), { a }));
@@ -31,6 +32,7 @@ export function phaseChunks({ K, C, E, V }, workers = 8) {
     [PHASE.CLOSURE]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
     [PHASE.ADJUST]: [...blocks('cells', C, size(C, 16)), ...blocks('edges', E, size(E, 64))],
     [PHASE.DISSIPATE]: blocks('cells', C, size(C, 32)),
+    [PHASE.OCEAN]: [...blocks('momentum', L, 1), ...blocks('tracers', L, 1)],
   };
 }
 
@@ -44,7 +46,8 @@ export const TOTALS = ['absorbedSolar', 'outgoingLongwave', 'sensibleHeat', 'eva
  * chunk counter. Every array element is computed by exactly one worker
  * with the single-thread arithmetic, so the state is bit-identical to
  * createModel's; only the radiation totals are summed in a different
- * order.
+ * order. The ocean steps on the main thread, which hands each of its
+ * tendency evaluations to the workers a layer at a time.
  */
 export async function createParallelModel(grid, options = {}, workers = null) {
   workers ??= Math.max(1, await parallelism());
@@ -54,13 +57,13 @@ export async function createParallelModel(grid, options = {}, workers = null) {
   const allocate = () => Object.fromEntries(Object.entries(lengths).map(([name, n]) => [name, new SharedArrayBuffer(8 * n)]));
   const trial = allocate();
   const stages = [allocate(), allocate(), allocate(), allocate()];
-  const control = { ints: new SharedArrayBuffer(4 * 8), floats: new SharedArrayBuffer(8 * 4), totals: new SharedArrayBuffer(8 * TOTALS.length * workers) };
+  const control = { ints: new SharedArrayBuffer(4 * 8), floats: new SharedArrayBuffer(8 * 4), totals: new SharedArrayBuffer(8 * TOTALS.length * workers), busy: new SharedArrayBuffer(8 * (PHASE.EXIT + 1) * workers) };
   const ctrl = new Int32Array(control.ints);
   const params = new Float64Array(control.floats);
   const totals = new Float64Array(control.totals);
   const meshShared = shareMesh(model.mesh);
   const buffers = { ...model.shared, trial, stages };
-  const workerOptions = { ...options, nu4Hours: options.nu4Hours, physics: options.physics ?? true, ocean: false };
+  const workerOptions = { ...options, nu4Hours: options.nu4Hours, physics: options.physics ?? true };
   delete workerOptions.buffers;
 
   const threads = [];
@@ -103,6 +106,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     }
     phaseTime[phase] += performance.now() - started;
   }
+  if (model.ocean) model.ocean.setLayerRunner((useTrial, stage) => run(PHASE.OCEAN, { useTrial, stage }));
 
   function tendencyPhases(useTrial, stage) {
     run(PHASE.FLUX, { useTrial, stage });
@@ -136,6 +140,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
 
   model.workers = workers;
   model.phaseTime = phaseTime;
+  model.workerBusy = new Float64Array(control.busy);
   model.close = async function close() {
     Atomics.store(ctrl, 1, PHASE.EXIT);
     Atomics.add(ctrl, 0, 1);
