@@ -52,12 +52,15 @@ test('worker threads speed up an N=16 atmosphere step by a fair share of the cor
     for (let a = 0; a < 4; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
     serial.step(450); parallel.step(450);
     const steps = 6;
-    let t0 = performance.now();
-    for (let n = 0; n < steps; n++) serial.step(450);
-    const serialMs = (performance.now() - t0) / steps;
-    t0 = performance.now();
-    for (let n = 0; n < steps; n++) parallel.step(450);
-    const parallelMs = (performance.now() - t0) / steps;
+    let serialMs = Infinity, parallelMs = Infinity;
+    for (let trial = 0; trial < 3; trial++) {
+      let t0 = performance.now();
+      for (let n = 0; n < steps; n++) serial.step(450);
+      serialMs = Math.min(serialMs, (performance.now() - t0) / steps);
+      t0 = performance.now();
+      for (let n = 0; n < steps; n++) parallel.step(450);
+      parallelMs = Math.min(parallelMs, (performance.now() - t0) / steps);
+    }
     const speedup = serialMs / parallelMs;
     console.log(`N=${N}: serial ${serialMs.toFixed(0)} ms/step, ${parallel.workers} workers ${parallelMs.toFixed(0)} ms/step, speedup ${speedup.toFixed(1)}× with ${headroom.toFixed(1)}× of headroom`);
     for (let a = 0; a < serial.state.length; a++) assert.deepEqual(parallel.state[a], serial.state[a]);
