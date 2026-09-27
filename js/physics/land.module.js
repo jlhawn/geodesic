@@ -9,7 +9,8 @@ import { MELTING_POINT } from './ice.module.js';
  * snow while there is any, else on the bucket; snow raises the albedo
  * toward snowAlbedo over fullSnow kg/m². update() applies the surface
  * flux and the evaporation of the physics phase; deposit() adds the
- * step's precipitation in the adjustment phase, when it is known.
+ * step's precipitation in the adjustment phase, when it is known. The
+ * ocean cells of `snow` belong to the sea ice, which keeps its snow there.
  *
  * With `vegetation` each land cell also carries a vegetation cover v
  * between 0 (bare ground) and 1 (dense forest) that the climate grows:
@@ -108,11 +109,12 @@ export function createLandSurface(mesh, geography, {
   /*
    * A saved land state without vegetation starts as initialize() would
    * where it is free of snow (vegetated, bucket full) and bare under snow.
+   * A sea cell keeps the saved snow only where `ice` has ice to hold it.
    */
-  function load(saved) {
+  function load(saved, ice = null) {
     for (let i = 0; i < C; i++) {
       soil[i] = land[i] ? saved.soil[i] : 0;
-      snow[i] = land[i] ? saved.snow[i] : 0;
+      snow[i] = land[i] || (ice && ice[i] > 0) ? saved.snow[i] : 0;
       if (!land[i] || !vegetated) vegetation[i] = 0;
       else if (saved.vegetation) vegetation[i] = Math.min(1, Math.max(0, saved.vegetation[i]));
       else { vegetation[i] = snow[i] > 0 ? 0 : 1; if (snow[i] <= 0) soil[i] = capacity(i); }

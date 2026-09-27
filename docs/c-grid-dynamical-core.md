@@ -935,6 +935,17 @@ point, skin heat, minus the ice's latent heat — changes by exactly the
 surface flux through every transition (`test/ice.test.mjs`).
 `surfaceT` is the skin temperature the atmosphere sees in both states.
 Albedo is 0.07 for open water, rising linearly to 0.6 at 0.5 m of ice.
+Snow lies on the ice: precipitation that falls on an iced cell from air
+below the melting point accumulates in water equivalent in the ocean
+cells of the land surface's snow array (one field of snow on the
+ground, land or ice, in the state file and on the page), brightens the
+surface toward 0.75 over 20 kg/m², conducts in series with the ice
+(0.31 W/m/K over its depth at 300 kg/m³, so a winter snow cover slows
+the growth beneath it), melts before the ice, and goes into the water
+when the ice is gone, its latent heat drawn from the mixed layer. Snow
+that falls on open water melts at once and cools the water by its
+latent heat, so cold water under snowfall freezes over; the ocean's
+freshwater counts the precipitation when it falls.
 The initial state carries 0.5 m of ice wherever the initial surface is
 below freezing (poleward of ~60°). A prescribed ocean heat transport
 (`oceanHeatFlux`, Q₀ = 20 W/m²) converges Q₀(3 sin²φ − 1) into the

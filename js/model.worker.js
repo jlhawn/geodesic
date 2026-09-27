@@ -80,7 +80,7 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
   if (want.has('cloud')) out.cloud = Float32Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, qc, i));
   if (want.has('rain')) out.rain = Float32Array.from(rain.total);
   if (want.has('ice')) out.ice = Float32Array.from(iceField);
-  if (want.has('albedo')) out.albedo = Float32Array.from(iceField, (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h)));
+  if (want.has('albedo')) out.albedo = Float32Array.from(iceField, (h, i) => (onLand && onLand[i] ? model.land.albedo(i) : model.seaIce.albedo(h, null, model.seaIce.snow[i])));
   if (want.has('shortwave')) out.shortwave = Float32Array.from(model.radiation.surfaceShortwave);
   if (want.has('longwave')) out.longwave = Float32Array.from(model.radiation.outgoing);
   if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil);
@@ -276,7 +276,7 @@ function sourceFor(saved) {
  */
 function placeLand(model, saved, N) {
   if (!model.land) return;
-  if (saved && saved.land) model.land.load(saved.N === N ? { soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}) } : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94), { ice: saved.ice ?? null, surfaceT: saved.surfaceT ?? null }));
+  if (saved && saved.land) model.land.load(saved.N === N ? { soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}) } : regridLand(sourceFor(saved), model, saved.land, (fraction, text) => status(`regridding ${text}…`, 0.94), { ice: saved.ice ?? null, surfaceT: saved.surfaceT ?? null }), model.state[6]);
   else model.land.initialize();
 }
 

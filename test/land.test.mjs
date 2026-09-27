@@ -79,14 +79,17 @@ test('snow accumulates below freezing, raises the albedo, holds the surface at t
   assert.ok(Math.abs(land.albedo(i) - 0.25) < 1e-12);
 });
 
-test('loading a land state leaves sea cells dry and bare whatever the file holds', () => {
+test('loading a land state leaves sea cells dry and bare, except the snow on a cell that has ice to hold it', () => {
   const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)));
   const land = createLandSurface(mesh, geography, { bucketCapacity: 150, vegetation: false });
-  land.load({ soil: new Float64Array(mesh.nCells).fill(120), snow: new Float64Array(mesh.nCells).fill(40) });
+  const ice = Float64Array.from({ length: mesh.nCells }, (_, i) => (i % 2 ? 1 : 0));
+  land.load({ soil: new Float64Array(mesh.nCells).fill(120), snow: new Float64Array(mesh.nCells).fill(40) }, ice);
   for (let i = 0; i < mesh.nCells; i++) {
     if (geography.land[i]) { assert.equal(land.soil[i], 120); assert.equal(land.snow[i], 40); }
-    else { assert.equal(land.soil[i], 0); assert.equal(land.snow[i], 0); }
+    else { assert.equal(land.soil[i], 0); assert.equal(land.snow[i], ice[i] > 0 ? 40 : 0); }
   }
+  land.load({ soil: new Float64Array(mesh.nCells).fill(120), snow: new Float64Array(mesh.nCells).fill(40) });
+  for (let i = 0; i < mesh.nCells; i++) if (!geography.land[i]) assert.equal(land.snow[i], 0);
 });
 
 const DAY = 86400;

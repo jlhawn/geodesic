@@ -58,4 +58,11 @@ test('twelve full GPU steps track the CPU model and its energy budget', { skip: 
   assert.ok(Math.abs(d.absorbedSolar - abs) < 0.5, `absorbed solar ${d.absorbedSolar} vs ${abs}`);
   assert.ok(Math.abs(d.outgoingLongwave - olr) < 0.5, `OLR ${d.outgoingLongwave} vs ${olr}`);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
+  let snowOnIce = 0, worstSnow = 0;
+  for (let i = 0; i < C; i++) {
+    worstSnow = Math.max(worstSnow, Math.abs(model.seaIce.snow[i] - physics.SNOW[i]));
+    if (physics.SNOW[i] > 0) snowOnIce++;
+  }
+  console.log(`snow on ${snowOnIce} iced sea cells, engines differ by at most ${worstSnow.toExponential(1)} kg/m²`);
+  assert.ok(worstSnow < 1e-3, `snow on the surface differs between engines by ${worstSnow}`);
 });

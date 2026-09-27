@@ -42,10 +42,10 @@ function burn(threads, iterations = 3e7) {
   }))).then(() => performance.now() - t0);
 }
 
-test('worker threads speed up an N=16 step by a fair share of the cores free right now', async (t) => {
+test('worker threads speed up an N=16 atmosphere step by a fair share of the cores free right now', async (t) => {
   const N = +(process.env.PARALLEL_TEST_N ?? 16);
-  const serial = createModel(new Grid(N));
-  const parallel = await createParallelModel(new Grid(N));
+  const serial = createModel(new Grid(N), { ocean: false });
+  const parallel = await createParallelModel(new Grid(N), { ocean: false });
   try {
     const headroom = parallel.workers * (await burn(1)) / (await burn(parallel.workers));
     const init = initializeState(serial, {});

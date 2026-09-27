@@ -68,7 +68,7 @@ export function createModel(gridOrMesh, {
   const landMask = geography ? geography.land : null;
   const sharedCapacity = !ocean && buffers && buffers.ocean ? new Float64Array(buffers.ocean.capacity) : null;
   const seaIce = createSeaIce(mesh, {
-    buffers: buffers ? buffers.ice : null,
+    buffers: { ...(buffers && buffers.ice ? buffers.ice : {}), ...(land ? { snow: land.shared.snow } : {}) },
     ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity } : {}),
     ...iceOptions,
   });
@@ -104,7 +104,7 @@ export function createModel(gridOrMesh, {
       for (let k = 0; k < K; k++) { forcing[1].fill(0, k * C + iFrom, k * C + iTo); forcing[4].fill(0, k * C + iFrom, k * C + iTo); }
       for (let i = iFrom; i < iTo; i++) {
         if (land && landMask[i]) { surfaceAlbedo[i] = diffuseAlbedo[i] = land.albedo(i); wetness[i] = land.wetness(i); }
-        else { surfaceAlbedo[i] = seaIce.albedo(state[6][i], radiation.cosZenith(i)); diffuseAlbedo[i] = seaIce.albedo(state[6][i]); }
+        else { surfaceAlbedo[i] = seaIce.albedo(state[6][i], radiation.cosZenith(i), seaIce.snow[i]); diffuseAlbedo[i] = seaIce.albedo(state[6][i], null, seaIce.snow[i]); }
       }
       radiation.apply(moist ? state : state.slice(0, 4), forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null);
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
@@ -120,13 +120,14 @@ export function createModel(gridOrMesh, {
       if (!physics) return;
       if (boundaryLayer) for (let i = iFrom; i < iTo; i++) boundaryLayer.mixColumn(i, state[0], state[1], moist ? state[4] : null, moist ? state[5] : null, dt);
       if (moist) moistPhysics.adjust(state, iFrom, iTo, dt);
-      if (moist && land) {
+      if (moist) {
         const bottom = (K - 1) * C, { exnerLayer: exner, cp, g, dSigma } = core.diagnostics;
         for (let i = iFrom; i < iTo; i++) {
-          if (!landMask[i]) continue;
           const airTemperature = state[1][bottom + i] * exner[bottom + i], amount = moistPhysics.rain[i];
-          land.deposit(i, amount, airTemperature);
-          if (airTemperature < MELTING_POINT) state[1][bottom + i] += land.latentHeatFusion * amount * g / (cp * state[0][i] * dSigma[K - 1] * exner[bottom + i]);
+          let frozen;
+          if (land && landMask[i]) { land.deposit(i, amount, airTemperature); frozen = airTemperature < MELTING_POINT; }
+          else frozen = seaIce.deposit(i, amount, airTemperature, state[6], state[3]);
+          if (frozen) state[1][bottom + i] += seaIce.latentHeatFusion * amount * g / (cp * state[0][i] * dSigma[K - 1] * exner[bottom + i]);
         }
       }
       surface.convectiveAdjustment(state[0], state[1], iFrom, iTo, moist ? state[4] : null, moist ? state[5] : null);
@@ -194,7 +195,7 @@ export function createModel(gridOrMesh, {
       cloud += a * moistPhysics.columnWater(pi, qc, i);
       rain += a * precipitation[i];
       if (ice[i] > 0) { iceArea += a; iceVolume += a * ice[i]; }
-      albedoSum += a * (land && landMask[i] ? land.albedo(i) : seaIce.albedo(ice[i]));
+      albedoSum += a * (land && landMask[i] ? land.albedo(i) : seaIce.albedo(ice[i], null, seaIce.snow[i]));
     }
     for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));
     const interval = model.time - lastPrecipTime;

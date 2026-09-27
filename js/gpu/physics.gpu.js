@@ -18,6 +18,7 @@ const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudSc
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6;
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
+const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
 const RELAX: f32 = ${o.relaxationTime}; const RH_REF: f32 = ${o.referenceHumidity}; const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime};
 const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth}; const RAIN_EVAP: f32 = ${o.rainEvaporation};
@@ -31,7 +32,11 @@ export const PHYSICS_FUNCTIONS = `
 fn esat(T: f32) -> f32 { return 611.2 * exp(17.67 * (T - 273.15) / (T - 29.65)); }
 fn qsat(T: f32, p: f32) -> f32 { let es = esat(T); let dry = p - (1.0 - EPSILON) * es; return select(1.0, EPSILON * es / dry, dry > 0.0); }
 fn openWaterAlbedo(mu: f32) -> f32 { return 0.026 / (pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1.0); }
-fn surfaceAlbedo(h: f32, water: f32) -> f32 { return select(water, water + (ALB_ICE - water) * min(1.0, h / FULLALB), h > 0.0); }
+fn surfaceAlbedo(h: f32, water: f32, snow: f32) -> f32 {
+  if (h <= 0.0) { return water; }
+  let bare = water + (ALB_ICE - water) * min(1.0, h / FULLALB);
+  return bare + (ALB_ICESNOW - bare) * min(1.0, snow / FULLSNOW_ICE);
+}
 fn cellWind(i: i32, k: i32) -> vec3<f32> {
   var w = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {
@@ -91,8 +96,8 @@ export const PHYSICS_KERNELS = {
   let bucket = select(BUCKET, CAP_MIN + (CAP_MAX - CAP_MIN) * veg0, VEGETATED);
   let bareAlbedo = select(ALB_LAND, ALB_BARE + (ALB_VEG - ALB_BARE) * veg0, VEGETATED);
   let landAlbedo = bareAlbedo + min(1.0, snow0 / FULLSNOW) * (ALB_SNOW - bareAlbedo);
-  let adif = select(surfaceAlbedo(ice, ALB_DIF_WATER), landAlbedo, onLand);
-  let adir = select(surfaceAlbedo(ice, openWaterAlbedo(mu)), landAlbedo, onLand);
+  let adif = select(surfaceAlbedo(ice, ALB_DIF_WATER, snow0), landAlbedo, onLand);
+  let adir = select(surfaceAlbedo(ice, openWaterAlbedo(mu), snow0), landAlbedo, onLand);
   let wetness = select(1.0, select(min(1.0, soil0 / (WETT * bucket)), 1.0, snow0 > 0.0), onLand);
   let ozoneHeating = beam * OZONE_ABS;
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
@@ -182,14 +187,22 @@ export const PHYSICS_KERNELS = {
     if (soil > cap) { PH[PH_RUNOFF + i] += soil - cap; soil = cap; }
     PH[PH_SOIL + i] = soil; PH[PH_SNOW + i] = snow;
   } else if (h <= 0.0) {
+    if (snow0 > 0.0) { T -= LFUS * snow0 / capacity; PH[PH_SNOW + i] = 0.0; }
     T += dt * (net + ocean) / capacity;
     if (T < FREEZING) { h = (FREEZING - T) * capacity / LATENT_ICE; T = FREEZING; }
   } else {
-    let conduction = COND * (FREEZING - T) / max(h, HMIN);
+    var snow = snow0;
+    let conduction = (FREEZING - T) / (max(h, HMIN) / COND + snow / (RHOSNOW * KSNOW));
     T += dt * (net + conduction) / SKINC;
     var thickness = h + dt * (conduction - ocean) / LATENT_ICE;
-    if (T > MELTING) { let excess = (T - MELTING) * SKINC; T = MELTING; thickness -= excess / LATENT_ICE; }
-    if (thickness <= 0.0) { T = FREEZING + (-thickness * LATENT_ICE + SKINC * (T - FREEZING)) / capacity; h = 0.0; } else { h = thickness; }
+    if (T > MELTING) {
+      var excess = (T - MELTING) * SKINC; T = MELTING;
+      let fromSnow = min(snow, excess / LFUS);
+      snow -= fromSnow; excess -= fromSnow * LFUS;
+      thickness -= excess / LATENT_ICE;
+    }
+    if (thickness <= 0.0) { T = FREEZING + (-thickness * LATENT_ICE + SKINC * (T - FREEZING) - LFUS * snow) / capacity; h = 0.0; snow = 0.0; } else { h = thickness; }
+    PH[PH_SNOW + i] = snow;
   }
   IN[S_TS + i] = T; IN[S_ICE + i] = h;
 }`,
@@ -354,8 +367,12 @@ export const PHYSICS_KERNELS = {
     if (IN[off + bottom * C + i] < 0.0) { IN[off + bottom * C + i] = 0.0; }
   }
   PH[PH_RAIN + i] += rained + convected; PH[PH_COND + i] += rained; PH[PH_CONV + i] += convected;
+  let airT = IN[S_TH + bottom * C + i] * D[D_EXM + bottom * C + i];
+  if (PH[PH_LAND + i] < 0.5 && airT < MELTING && rained + convected > 0.0) {
+    if (IN[S_ICE + i] > 0.0) { PH[PH_SNOW + i] += rained + convected; } else { IN[S_TS + i] -= LFUS * (rained + convected) / PH[PH_CAP + i]; }
+    IN[S_TH + bottom * C + i] += LFUS * (rained + convected) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
+  }
   if (PH[PH_LAND + i] > 0.5) {
-    let airT = IN[S_TH + bottom * C + i] * D[D_EXM + bottom * C + i];
     if (airT < MELTING) {
       PH[PH_SNOW + i] += rained + convected;
       IN[S_TH + bottom * C + i] += LFUS * (rained + convected) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
