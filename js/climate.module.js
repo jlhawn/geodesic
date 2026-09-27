@@ -3,6 +3,8 @@ import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
 import { fetchState, stateName, decodeState, encodeState, listedStates, stateDay } from './stateFile.module.js';
 import { seasonPhrase } from "./levels.module.js";
+import { sigmaInterfaces } from "./dynamics/sigmaCore.module.js";
+import { LAYER_BOTTOMS } from "./ocean/layered.module.js";
 import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
 import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot } from "./snapshots.module.js";
@@ -26,10 +28,33 @@ function atLevel(table, level) {
   const mix = (x, y) => x + t * (y - x);
   return Array.isArray(table[a]) ? table[a].map((x, j) => mix(x, table[b][j])) : mix(table[a], table[b]);
 }
-const levelFromSlider = (t) => Math.round(LEVEL_BOTTOM - (LEVEL_BOTTOM - LEVEL_TOP) * t);
-const sliderFromLevel = (level) => (LEVEL_BOTTOM - level) / (LEVEL_BOTTOM - LEVEL_TOP);
-const depthFromSlider = (t) => Math.max(1, Math.round(DEPTH_BOTTOM * t * t));
-const sliderFromDepth = (depth) => Math.sqrt(depth / DEPTH_BOTTOM);
+/*
+ * The sliders give every model layer the same width: the level slider
+ * runs over the σ interfaces from 1000 hPa up to the 10 hPa one,
+ * interpolating in ln p within a layer, and the depth slider over the
+ * ocean layers' nominal bases — the mixed layer, the interior layers'
+ * subtropical bases, and the bottom.
+ */
+const LEVEL_STOPS = Array.from(sigmaInterfaces(), (sigma) => Math.round(LEVEL_BOTTOM * sigma)).filter((p) => p >= LEVEL_TOP);
+const DEPTH_STOPS = [0, 60, ...LAYER_BOTTOMS, DEPTH_BOTTOM];
+function levelFromSlider(t) {
+  const m = (LEVEL_STOPS.length - 1) * (1 - Math.min(1, Math.max(0, t))), i = Math.min(LEVEL_STOPS.length - 2, Math.floor(m)), fraction = m - i;
+  return Math.round(LEVEL_STOPS[i] * Math.pow(LEVEL_STOPS[i + 1] / LEVEL_STOPS[i], fraction));
+}
+function sliderFromLevel(level) {
+  let i = 0;
+  while (i < LEVEL_STOPS.length - 2 && LEVEL_STOPS[i + 1] < level) i++;
+  return Math.min(1, Math.max(0, 1 - (i + Math.log(level / LEVEL_STOPS[i]) / Math.log(LEVEL_STOPS[i + 1] / LEVEL_STOPS[i])) / (LEVEL_STOPS.length - 1)));
+}
+function depthFromSlider(t) {
+  const m = (DEPTH_STOPS.length - 1) * Math.min(1, Math.max(0, t)), i = Math.min(DEPTH_STOPS.length - 2, Math.floor(m)), fraction = m - i;
+  return Math.max(1, Math.round(DEPTH_STOPS[i] + fraction * (DEPTH_STOPS[i + 1] - DEPTH_STOPS[i])));
+}
+function sliderFromDepth(depth) {
+  let i = 0;
+  while (i < DEPTH_STOPS.length - 2 && DEPTH_STOPS[i + 1] < depth) i++;
+  return Math.min(1, Math.max(0, (i + (depth - DEPTH_STOPS[i]) / (DEPTH_STOPS[i + 1] - DEPTH_STOPS[i])) / (DEPTH_STOPS.length - 1)));
+}
 const validLevel = (value) => (value === 'surface' ? 'surface' : Number(value) >= LEVEL_TOP && Number(value) <= LEVEL_BOTTOM ? Number(value) : null);
 const validDepth = (value) => (value === 'surface' ? 'surface' : Number(value) >= 1 && Number(value) <= DEPTH_BOTTOM ? Number(value) : null);
 const TEMP_RANGE = { surface: [-35, 35], 1000: [-35, 35], 850: [-45, 25], 700: [-55, 15], 500: [-65, 5], 250: [-85, -25], 70: [-95, -35], 10: [-75, 5] };
@@ -252,8 +277,8 @@ const VIEW_NOTES = [
   ['Lighting', 'In the Satellite view, the strength of the sunlight and of the ambient light that keeps the night side from going black; both sliders follow a square law, so the left half covers the faint end finely.'],
   ['Mode', 'Atmosphere and Ocean paint the chosen overlay on an evenly lit globe, each with its own overlays: the wind or the current is what the animation follows, and only Atmosphere offers isobars and height lines. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day.'],
   ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
-  ['Height', 'The pressure level shown by the wind, temperature, humidity and vertical-motion views and followed by the animation: the left end is the lowest layer, about 60 m up, and the slider climbs in pressure to 10 hPa. Where the ground rises above the level the map shows its relief in grey and the particles stop. Column views hide it and use the surface wind.'],
-  ['Depth', 'The depth shown by the sea temperature, current and upwelling views and followed by the animation: the left end is the mixed layer and the slider descends to 5500 m, each cell showing the isopycnal layer that holds that depth. Where the sea floor rises above the depth the map shows its relief in grey, as it shows the land. Column views hide it and use the surface current.'],
+  ['Height', 'The pressure level shown by the wind, temperature, humidity and vertical-motion views and followed by the animation: Surface is the lowest layer, about 60 m up, and the slider climbs from 1000 to 10 hPa giving each of the model\'s layers the same width, so the thin layers near the ground get as much room as the deep ones aloft. Where the ground rises above the level the map shows its relief in grey and the particles stop. Column views hide it and use the surface wind.'],
+  ['Depth', 'The depth shown by the sea temperature, current and upwelling views and followed by the animation: Surface is the mixed layer, and the slider descends to 5500 m giving each of the ocean\'s eight layers the same width, each cell showing the isopycnal layer that holds the depth. Where the sea floor rises above the depth the map shows its relief in grey, as it shows the land. Column views hide it and use the surface current.'],
   ['Vertical motion', 'The air\'s vertical velocity at the chosen height, upward positive: rising air in warm fronts, storms and the tropical rain belt, sinking air under the subtropical highs. Diagnosed from the convergence of the flow, so it is noisier than the wind.'],
   ['Wind speed', 'Speed at the chosen height.'],
   ['Temperature', 'Air temperature at the chosen height.'],
