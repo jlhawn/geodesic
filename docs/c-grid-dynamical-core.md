@@ -964,28 +964,31 @@ beside the snow, in the state file and on the page), with the thickness
 h over that part, so the volume per cell area is A h; the rest, the
 leads, is water held at the freezing point. The atmosphere sees the
 area-weighted albedo and, in its fluxes, the area-weighted surface
-temperature A T_skin + (1 − A) T_f. The cell's net flux is split between
-the parts by the sunlight the leads absorb beyond the ice — the direct
-and diffuse beams at the surface times the albedo contrast of each —
-so that the ice's flux per unit ice area and the water's per unit water
-area average back to it; the longwave and turbulent fluxes are shared
-per unit area. The ice part grows and melts as above under its share;
-the leads' heat, with the ocean's flux beneath them, melts ice or
-freezes new ice. Melting takes area as Hibler (1979) does, half the
-relative loss of volume from the area; ice frozen in the leads closes
-them as new ice 0.3 m thick (`leadClosing`), and open water that cools
-below freezing forms ice 0.3 m thick over the area its volume covers.
-Ice below 1 % of its cell or 10⁻⁴ m of volume melts away. The snow on
-lost area melts into the water, its latent heat freezing the same mass
-onto the ice, and new area joins at the freezing point without snow;
-the surface energy, A times the ice's terms, still changes by exactly
-the surface and ocean fluxes (`test/ice.test.mjs`). The dynamic ocean
-treats any cell with ice as covered, holding its mixed layer at the
-freezing point. A state saved without a concentration loads fully
-covered wherever it has ice. The spin-up logs each hemisphere's extent,
-the area of the cells at least 15 % covered, the measure behind Earth's
-15 and 6 Mkm² (Arctic) and 18 and 3 Mkm² (Antarctic) of ice at the
-seasonal maximum and minimum.
+temperature A T_skin + (1 − A) T_f. The cell's net flux is split
+between the parts by the sunlight the leads absorb beyond the ice — the
+direct and diffuse beams at the surface times the albedo contrast of
+each — and by the longwave and turbulent heat the leads at the freezing
+point lose beyond the colder ice, linearised as λ (T_f − T_skin) with
+λ = 10 W/m²/K (`leadExchange`): the ice gains λ (1 − A)(T_f − T_skin)
+per unit ice area and the water loses λ A (T_f − T_skin) per unit water
+area, so the two still average back to the cell's flux. The ice part
+grows and melts as above under its share; the leads' heat, with the
+ocean's flux beneath them, melts ice or freezes new ice. Melting takes
+area as Hibler (1979) does, half the relative loss of volume from the
+area; ice frozen in the leads closes them as new ice 0.3 m thick
+(`leadClosing`), and open water that cools below freezing forms ice
+0.3 m thick over the area its volume covers. Ice below 1 % of its cell
+or 10⁻⁴ m of volume melts away. The snow on lost area melts into the
+water, its latent heat freezing the same mass onto the ice, and new
+area joins at the freezing point without snow; the surface energy, A
+times the ice's terms, still changes by exactly the surface and ocean
+fluxes (`test/ice.test.mjs`). The dynamic ocean treats any cell with
+ice as covered, holding its mixed layer at the freezing point. A state
+saved without a concentration loads fully covered wherever it has ice.
+The spin-up logs each hemisphere's extent, the area of the cells at
+least 15 % covered, the measure behind Earth's 15 and 6 Mkm² (Arctic)
+and 18 and 3 Mkm² (Antarctic) of ice at the seasonal maximum and
+minimum.
 
 ### M10 — Clouds in radiation — done
 

@@ -31,8 +31,10 @@ export const MINIMUM_VOLUME = 1e-4;
  * atmosphere sees the area-weighted albedo and, for its fluxes, the
  * area-weighted surface temperature. The cell's net flux is split
  * between the parts by the sunlight the leads absorb beyond the ice
- * (`contrast` in update), so that the ice's flux per unit ice area and
- * the water's per unit water area average back to it. The ice part
+ * (`contrast` in update) and by the heat the leads at the freezing
+ * point lose beyond the ice, leadExchange per kelvin of the ice skin's
+ * difference from freezing, so that the ice's flux per unit ice area
+ * and the water's per unit water area average back to it. The ice part
  * evolves as above; the heat the leads gain or lose, with the ocean's
  * flux under them, melts ice or freezes new ice. Melting takes area as
  * Hibler (1979) does, half the relative loss of volume from the area;
@@ -69,7 +71,7 @@ export function openWaterAlbedo(mu) {
 export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.5, fullAlbedoThickness = 0.5,
-  iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3,
+  iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10,
   heatCapacity = null, buffers = null,
 } = {}) {
   const C = mesh.nCells;
@@ -141,8 +143,9 @@ export function createSeaIce(mesh, {
       return;
     }
     const h = ice[i], A = cover(i, h);
-    const iceFlux = flux[i] - (1 - A) * contrast, waterFlux = flux[i] + A * contrast;
     let T = surfaceT[i], s = snow[i];
+    const split = contrast - leadExchange * (FREEZING_POINT - T);
+    const iceFlux = flux[i] - (1 - A) * split, waterFlux = flux[i] + A * split;
     const conduction = (FREEZING_POINT - T) / (Math.max(h, minimumThickness) / conductivity + s / (snowDensity * snowConductivity));
     T += dt * (iceFlux + conduction) / skinHeatCapacity;
     let thickness = h + dt * (conduction - ocean) / latent;
@@ -187,7 +190,7 @@ export function createSeaIce(mesh, {
   }
 
   return {
-    albedo, albedoContrast, cover, load, energy, update, deposit, budget, slabHeatCapacity, latent, latentHeatFusion, leadClosing, oceanFlux, snow, concentration,
+    albedo, albedoContrast, cover, load, energy, update, deposit, budget, slabHeatCapacity, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, concentration,
     shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, concentration: concentration.buffer },
   };
 }

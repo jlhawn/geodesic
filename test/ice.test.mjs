@@ -180,7 +180,7 @@ test('a half-covered cell in the sun loses its area faster than a full one loses
 });
 
 test('a lead under a cold sky closes: the area rises toward full cover as the volume grows by what freezes', () => {
-  const sea = createSeaIce(model.mesh), dt = 900;
+  const sea = createSeaIce(model.mesh, { leadExchange: 0 }), dt = 900;
   const surfaceT = new Float64Array([FREEZING_POINT - 10]), ice = new Float64Array([1]), flux = new Float64Array([-100]);
   sea.concentration[0] = 0.4;
   const volume = () => sea.concentration[0] * ice[0], start = volume(), area = model.mesh.areaCell[0];
@@ -225,4 +225,24 @@ test('the albedo blends linearly in the concentration between open water and ful
     assert.equal(sea.albedoContrast(h, mu, snow), before(h, mu, snow) - before(0, mu, snow));
     for (const A of [0.1, 0.5, 0.85]) assert.ok(Math.abs(sea.albedo(h, mu, snow, A) - (A * before(h, mu, snow) + (1 - A) * before(0, mu, snow))) < 1e-15);
   }
+});
+
+test('the leads at the freezing point lose the heat the colder ice would otherwise lose, and freeze', () => {
+  const run = (leadExchange) => {
+    const sea = createSeaIce(model.mesh, { leadExchange });
+    sea.concentration[0] = 0.5;
+    const surfaceT = new Float64Array([FREEZING_POINT - 20]), ice = new Float64Array([1]), flux = new Float64Array([0]);
+    const before = energyOf(sea, surfaceT, ice), volume = 0.5;
+    for (let n = 0; n < 96; n++) sea.update(surfaceT, ice, flux, 0, 900);
+    const area = model.mesh.areaCell[0];
+    return { sea, skin: surfaceT[0], grown: sea.concentration[0] * ice[0] - volume, leads: sea.budget.leadFrozen / area, energy: energyOf(sea, surfaceT, ice) - before };
+  };
+  const split = run(10), shared = run(0);
+  console.log(`a day at zero net flux, half covered, skin 20 K below freezing: with the split the concentration rose to ${split.sea.concentration[0].toFixed(4)} with ${split.leads.toExponential(2)} m frozen in the leads and ${(split.grown - split.leads).toExponential(2)} m under the ice (skin ${(split.skin - FREEZING_POINT).toFixed(2)} K); without it ${shared.sea.concentration[0]} and ${shared.grown.toExponential(2)} m under the ice (skin ${(shared.skin - FREEZING_POINT).toFixed(2)} K)`);
+  assert.ok(split.sea.concentration[0] > 0.5 && split.leads > 0, 'the leads freeze and close');
+  assert.equal(shared.sea.concentration[0], 0.5);
+  assert.equal(shared.leads, 0, 'without the split the leads share the cell\'s zero flux');
+  assert.ok(Math.abs(split.grown - split.leads - (split.sea.budget.frozen / model.mesh.areaCell[0] - split.leads)) < 1e-12, 'the volume grows by what froze');
+  assert.ok(split.skin > shared.skin && split.grown - split.leads < shared.grown, 'the ice, relieved of the leads\' loss, warms and grows less at its base');
+  for (const { energy } of [split, shared]) assert.ok(Math.abs(energy) < 1e-9 * 2 * split.sea.slabHeatCapacity, `energy moved by ${energy} J/m² at zero flux`);
 });
