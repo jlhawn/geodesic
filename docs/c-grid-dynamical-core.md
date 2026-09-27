@@ -1015,7 +1015,11 @@ aimed at the two feedbacks that ran away in M10:
   diffusivity in W/m²/K; 0.3 carries about 2 PW poleward at 35°, the
   real ocean's share. The Laplacian is the divergence of edge fluxes, so
   the convergence sums to zero over the sphere to roundoff
-  (`test/ice.test.mjs`). It runs on the main thread in both engines
+  (`test/ice.test.mjs`). With the layered ocean carrying the heat in
+  its own currents the coefficient is the sub-grid eddy residual,
+  0.01 W/m²/K (about 2000 m²/s over a 55 m mixed layer); at 0.3 it
+  fed the freezing water at the ice edge 160 W/m² from the warmer
+  water beside it and no winter ice could form there. It runs on the main thread in both engines
   (`phases.ocean`), which keeps the workers' cell updates free of
   neighbour reads and the parallel step bit-identical to the serial
   one. The prescribed profile stays available but defaults to zero.

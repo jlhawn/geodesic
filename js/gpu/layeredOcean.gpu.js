@@ -30,7 +30,7 @@ export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, convectiveRate: 100 / 86400, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceDensity: 917,
-  interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, diffusivity: 0.3, everySteps: 4,
+  interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, diffusivity: 0.01, everySteps: 4,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
