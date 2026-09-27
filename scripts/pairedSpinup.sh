@@ -1,15 +1,16 @@
 #!/bin/bash
 # Spins several resolutions up in step, one at a time so that each has the
 # GPU to itself: every round, each resolution runs scripts/spinup.mjs (from
-# its newest runs/<PREFIX><N>_dayNNNN.bin, or fresh) to the next multiple
-# of EVERY simulated days, keeping its two newest snapshots, and then
+# its newest runs/<PREFIX><N>_dayNNNN.bin, or fresh) to the next of the
+# PER_YEAR snapshot days of the 365-day model year (quarters: days 91, 183,
+# 274, 365, 456, ...), keeping its two newest snapshots, and then
 # scripts/compareStates.mjs appends the round's states side by side to
 # <OUT>/<PREFIX>_compare.md. Stops at <OUT>/STOP_<PREFIX>. A resolution
 # that hits NaN drops out and the others go on; any other failure is
 # retried three times from the last snapshot.
-#   NS="64 128" EVERY=90 PREFIX=twin scripts/pairedSpinup.sh
+#   NS="64 128" PER_YEAR=4 PREFIX=twin scripts/pairedSpinup.sh
 cd "$(dirname "$0")/.."
-NS=${NS:-"64 128"} EVERY=${EVERY:-90} PREFIX=${PREFIX:-twin}
+NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-4} PREFIX=${PREFIX:-twin}
 export OUT=${OUT:-$PWD/runs}
 LOG=$OUT/$PREFIX.log
 alive=$NS
@@ -18,11 +19,11 @@ newest() { ls "$OUT" | grep -E "^$PREFIX$1_day[0-9]+\.bin$" | sort | tail -1; }
 dayOf() { local file; file=$(newest "$1"); [ -n "$file" ] && echo "$file" | sed -E 's/.*_day0*([0-9]+)\.bin$/\1/' || echo 0; }
 note() { echo "$(date '+%Y-%m-%d %H:%M') $*" >> "$LOG"; }
 
-note "paired spin-up of N=$NS every $EVERY days, commit $(git rev-parse --short HEAD)"
+note "paired spin-up of N=$NS, $PER_YEAR snapshots a year, commit $(git rev-parse --short HEAD)"
 while [ ! -f "$OUT/STOP_$PREFIX" ] && [ -n "$alive" ]; do
   lowest=
   for n in $alive; do day=$(dayOf "$n"); [ -z "$lowest" ] || [ "$day" -lt "$lowest" ] && lowest=$day; done
-  target=$(( (lowest / EVERY + 1) * EVERY ))
+  target=$(awk -v d="$lowest" -v q="$PER_YEAR" 'BEGIN { for (k = 1; ; k++) { t = int(k * 365 / q + 0.5); if (t > d) { print t; exit } } }')
   for n in $alive; do
     [ -f "$OUT/STOP_$PREFIX" ] && break
     failures=0
@@ -40,7 +41,7 @@ while [ ! -f "$OUT/STOP_$PREFIX" ] && [ -n "$alive" ]; do
   states=
   for n in $NS; do file=$OUT/$PREFIX${n}_day$(printf %04d "$target").bin; [ -f "$file" ] && states="$states $file"; done
   if [ -n "$states" ]; then
-    node scripts/compareStates.mjs $states --window "$EVERY" >> "$OUT/${PREFIX}_compare.md" 2>> "$LOG"
+    node scripts/compareStates.mjs $states --window "$((target - lowest))" >> "$OUT/${PREFIX}_compare.md" 2>> "$LOG"
     note "day $target done:$(for f in $states; do printf ' %s' "$(basename "$f")"; done)"
   fi
 done
