@@ -1,4 +1,5 @@
 import { cellVector } from '../dynamics/operators.module.js';
+import { saturationHumidity } from './moist.module.js';
 
 /*
  * A diffusive planetary boundary layer in the manner of Troen and Mahrt
@@ -8,7 +9,13 @@ import { cellVector } from '../dynamics/operators.module.js';
  * temperature and wind, with the convective floor 100 u*², first exceeds
  * richardsonCritical, and lays the K-profile κ u* z (1 − z/h)² over the
  * layer interfaces below it (u* from the bulk drag on the lowest layer's
- * wind, with the gustiness floor). The interface coefficients ρK/Δz are
+ * wind, with the gustiness floor). Where the surface is warmer than the
+ * lowest layer the profile's velocity scale is the unstable one of
+ * Holtslag and Boville (1993), u* (1 − 15 ζ)^¼ with ζ = 0.1 h / L from
+ * the bulk surface buoyancy flux (virtual, with the saturation humidity
+ * of a sea surface; dry over `land`) and floored at −2, so a convective
+ * marine boundary layer mixes momentum down to the surface; stable
+ * columns keep the neutral profile. The interface coefficients ρK/Δz are
  * kept in a shared array so the cell units of the adjust phase can mix
  * θ, q and qc down each column and the edge units can mix the normal
  * velocity down each edge, both by implicit Euler on the same
@@ -18,9 +25,9 @@ import { cellVector } from '../dynamics/operators.module.js';
  * sources on the lowest layer, which the diffusion then spreads upward.
  */
 export function createBoundaryLayer(mesh, core, {
-  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, buffers = null,
+  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, buffers = null,
 } = {}) {
-  const { K, C, E, dSigma, sigmaMid, R, g, exnerLayer, geopotential } = core.diagnostics;
+  const { K, C, E, dSigma, sigmaMid, R, g, kappa, exnerLayer, geopotential } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
   const { cellsOnEdge } = mesh;
   const bottom = K - 1;
@@ -37,7 +44,7 @@ export function createBoundaryLayer(mesh, core, {
   const upper = new Float64Array(K), lower = new Float64Array(K), gain = new Float64Array(K), rhs = new Float64Array(K), mass = new Float64Array(K);
 
   function diagnose(state, iFrom = 0, iTo = C) {
-    const [pi, theta, u, , q = null, qc = null] = state;
+    const [pi, theta, u, surfaceT, q = null, qc = null] = state;
     for (let i = iFrom; i < iTo; i++) core.diagnoseColumn(i, pi, theta, q, qc);
     cellVector(mesh, u.subarray(bottom * E, K * E), bottomVector, iFrom, iTo);
     for (let i = iFrom; i < iTo; i++) {
@@ -71,12 +78,19 @@ export function createBoundaryLayer(mesh, core, {
       const zb = geopotential[bottom * C + i] / g, h = depth[i] - zb;
       for (let k = kTop; k < K; k++) mixing[k * C + i] = 0;
       if (h <= 0) continue;
+      let scale = friction[i];
+      if (stability) {
+        const base = bottom * C + i;
+        const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]) : 0;
+        const buoyancy = g / theta[base] * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
+        if (buoyancy > 0) scale = friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
+      }
       for (let k = kTop; k < bottom; k++) {
         const idx = k * C + i, below = idx + C;
         const zAbove = geopotential[idx] / g, zBelow = geopotential[below] / g;
         const z = 0.5 * (zAbove + zBelow) - zb;
         if (z >= h) continue;
-        const diffusivity = vonKarman * friction[i] * z * (1 - z / h) ** 2;
+        const diffusivity = vonKarman * scale * z * (1 - z / h) ** 2;
         const rhoAbove = pi[i] * sigmaMid[k] / (R * theta[idx] * exnerLayer[idx]);
         const rhoBelow = pi[i] * sigmaMid[k + 1] / (R * theta[below] * exnerLayer[below]);
         mixing[idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);

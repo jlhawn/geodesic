@@ -1223,6 +1223,13 @@ potential temperature and wind, with the convective floor 100 u*² in
 the shear, first exceeds 0.5 (interpolated between layers; u* is
 √C_D times the lowest layer's wind with the gustiness floor), and lays
 the K-profile κ u* z (1 − z/h)² over the layer interfaces below it.
+Where the surface is warmer than the lowest layer, u* in that profile
+becomes the unstable velocity scale of Holtslag and Boville (1993),
+u* (1 − 15 ζ)^¼ with ζ = 0.1 h/L from the bulk surface buoyancy flux
+(virtual, with a sea surface's saturation humidity; dry over land;
+floored at −2), so a convective marine boundary layer mixes momentum
+down to the surface instead of leaving the lowest layer to the drag;
+stable columns keep the neutral profile.
 The interface coefficients ρK/Δz live in a shared array. In the adjust
 phase the cell units mix θ, q and qc down each column and new edge
 units mix the normal velocity down each edge, both by implicit Euler on

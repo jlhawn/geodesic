@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { createParallelModel } from '../js/parallel.module.js';
+import { createBoundaryLayer } from '../js/physics/boundaryLayer.module.js';
 import { initializeState } from '../js/physics/init.module.js';
+import { saturationHumidity } from '../js/physics/moist.module.js';
 
 const model = createModel(new Grid(3));
 const { core, mesh, boundaryLayer } = model;
@@ -84,4 +86,24 @@ test('serial and parallel engines stay bit-identical with the boundary layer', a
     for (let n = 0; n < 6; n++) { serial.step(900); parallel.step(900); }
     for (let a = 0; a < serial.state.length; a++) for (let x = 0; x < serial.state[a].length; x++) assert.equal(parallel.state[a][x], serial.state[a][x], `state ${a}[${x}]`);
   } finally { await parallel.close(); }
+});
+
+test('a warm or moist sea surface deepens the momentum mixing; a cool one keeps the neutral profile', () => {
+  const { exnerLayer, sigmaMid, kappa } = core.diagnostics;
+  const neutralLayer = createBoundaryLayer(mesh, core, { stability: false });
+  const sum = (layer) => { let s = 0; for (let k = layer.kTop; k < K - 1; k++) s += layer.mixing[k * C]; return s; };
+  const compare = (offset, humidity) => {
+    const state = column(300, -1e-3, 8, 1000);
+    const base = (K - 1) * C;
+    for (let i = 0; i < C; i++) {
+      state[3][i] = state[1][base + i] * exnerLayer[base + i] * Math.pow(sigmaMid[K - 1], -kappa) + offset;
+      state[4][base + i] = humidity * saturationHumidity(state[3][i], state[0][i]);
+    }
+    boundaryLayer.diagnose(state); neutralLayer.diagnose(state);
+    return sum(boundaryLayer) / sum(neutralLayer);
+  };
+  const warm = compare(3, 1), cool = compare(-3, 1), moist = compare(0, 0.7);
+  assert.ok(warm > 1.3 && warm < 2.4, `warm surface: ${warm} times the neutral mixing`);
+  assert.ok(moist > 1.2 && moist < 2.4, `moist surface: ${moist} times the neutral mixing`);
+  assert.ok(Math.abs(cool - 1) < 1e-12, `cool surface: ${cool} times the neutral mixing`);
 });
