@@ -22,7 +22,7 @@ const BOXES = {
   sahara: [16, 30, -10, 32], arabia: [16, 30, 38, 55], sahel: [8, 16, -15, 35], india: [15, 28, 72, 88], congo: [-5, 5, 12, 30], amazon: [-10, 3, -70, -50],
   seAsia: [10, 25, 95, 110], borneo: [-4, 7, 108, 119], europe: [45, 55, 0, 30], eastUS: [32, 45, -95, -75], siberia: [55, 65, 60, 120],
   ausInterior: [-30, -20, 120, 145], kalahari: [-27, -20, 17, 25], gobi: [38, 46, 90, 110], usSouthwest: [30, 37, -117, -106], cerrado: [-20, -10, -55, -42],
-  ausNorth: [-18, -11, 125, 145], ausEast: [-37, -25, 148, 154], ausSoutheast: [-43, -34, 140, 150], ausWest: [-30, -20, 114, 120],
+  ausNorth: [-18, -11, 125, 145], ausEast: [-37, -25, 148, 154], ausSoutheast: [-43, -34, 140, 150], ausWest: [-30, -20, 114, 120], newGuinea: [-11, -1, 130, 151],
 };
 
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = 2;
