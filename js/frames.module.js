@@ -22,7 +22,7 @@ export const FIELDS = {
   dewPoint: 'dew point at the level, K',
   wetBulb: 'wet-bulb temperature at the level, K',
   misery: 'heat index above 26.7 °C, wind chill below 10 °C, air temperature between, at the level, K',
-  vertical: 'vertical velocity at the level, m/s, positive upward',
+  vertical: 'vertical velocity at the level, m/s, positive upward, averaged with the neighbouring cells and over a two-hour memory',
   ps: 'surface pressure, Pa',
   mslp: 'sea-level pressure, Pa',
   water: 'precipitable water, kg/m²',
@@ -50,3 +50,4 @@ export const OCEAN_FIELDS = new Set(['sst', 'sss', 'layerDepth', 'thermocline', 
 export const DEPTH_FIELDS = new Set(['sst', 'current', 'currents', 'upwelling']);
 
 export const RAIN_MEMORY = 3 * 3600;
+export const VERTICAL_MEMORY = 2 * 3600;

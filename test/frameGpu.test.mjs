@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
-import { levelFields, verticalVelocity, dewPoint, wetBulb, miseryIndex } from '../js/levels.module.js';
+import { levelFields, verticalVelocity, smoothCells, dewPoint, wetBulb, miseryIndex } from '../js/levels.module.js';
+import { VERTICAL_MEMORY } from '../js/frames.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS } from '../js/frames.module.js';
@@ -53,7 +54,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     const layerWind = (k) => cellVector(mesh, u.subarray(k * E, (k + 1) * E));
     const reference = levelFields(core, pi, theta, layerWind, level, q);
     const comfort = (fn) => Float64Array.from(reference.temperature, (t, i) => fn(t - 273.15, reference.humidity[i], reference.speed[i]) + 273.15);
-    const vertical = verticalVelocity(mesh, core, pi, u, level, reference.temperature);
+    const vertical = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, level, reference.temperature));
     const checks = {
       temperature: [reference.temperature, 2e-3], height: [reference.height, 0.1], humidity: [reference.humidity, 5e-5], speed: [reference.speed, 5e-4], wind: [reference.vector, 5e-4],
       dewPoint: [comfort(dewPoint), 5e-3], wetBulb: [comfort(wetBulb), 5e-3], misery: [comfort(miseryIndex), 5e-3], vertical: [vertical, 2e-3],
@@ -139,4 +140,17 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   assert.equal(unsubscribed.diagnostics, null);
   const paused = await model.beginFrame({ diagnostics: true });
   assert.ok(paused.diagnostics.precipitation > 0, 'a frame with no time elapsed reports the recent rain rate');
+
+  const held = await model.beginFrame({ level: 250, fields: ['vertical'] });
+  const again = await model.beginFrame({ level: 250, fields: ['vertical'] });
+  assert.deepEqual(again.fields.vertical, held.fields.vertical, 'no time elapsed, the memory holds');
+  const dt = 900;
+  await model.step(dt);
+  const later = await model.beginFrame({ level: 250, fields: ['vertical'] });
+  await model.sync();
+  core.diagnose(pi, theta, q, qc);
+  const fresh = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, 250, levelFields(core, pi, theta, (k) => cellVector(mesh, u.subarray(k * E, (k + 1) * E)), 250, q).temperature));
+  const keep = Math.exp(-dt / VERTICAL_MEMORY);
+  const blend = Float64Array.from(fresh, (w, i) => keep * held.fields.vertical[i] + (1 - keep) * w);
+  { const { max, at } = worst(blend, later.fields.vertical); assert.ok(max < 2e-3, `the two-hour memory blends the new frame in: ${max} at ${at}`); }
 });

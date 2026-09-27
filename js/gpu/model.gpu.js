@@ -10,7 +10,7 @@ import { createGpuCore } from './core.gpu.js';
 import { createLayeredOcean } from './layeredOcean.gpu.js';
 import { createGeography, surfaceGeopotential } from '../geography.module.js';
 import { readRanges } from './device.module.js';
-import { RAIN_MEMORY } from '../frames.module.js';
+import { RAIN_MEMORY, VERTICAL_MEMORY } from '../frames.module.js';
 import { createLandSurface } from '../physics/land.module.js';
 
 const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'minimumCapacity', 'maximumCapacity', 'dryWetness', 'wetWetness', 'growthTime', 'declineTime', 'snowDeclineTime'];
@@ -99,11 +99,15 @@ export async function createGpuModel(gridOrMesh, {
    * copies land. Every frame also advances the three-hour rain and the
    * runoff tally.
    */
+  let verticalLevel = null;
   model.beginFrame = function beginFrame({ level = 'surface', depth = 'surface', fields = [], diagnostics: summarize = false } = {}) {
     if (gpuOcean) gpuOcean.accumulateFreshwater(0);
     const time = model.time, interval = time - lastFrameTime;
     lastFrameTime = time;
-    const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), fields, diagnostics: summarize });
+    const vertical = fields.includes('vertical');
+    const keepVertical = vertical && verticalLevel === level ? Math.exp(-Math.max(0, interval) / VERTICAL_MEMORY) : 0;
+    verticalLevel = vertical ? level : null;
+    const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), keepVertical, fields, diagnostics: summarize });
     if (gpuOcean) { gpuOcean.forgetAccumulated('rain'); gpuOcean.forgetAccumulated('runoff'); }
     const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize, depth: depth === 'surface' ? 0 : Number(depth) }) : null;
     return Promise.all([atmosphere, ocean]).then(([a, o]) => {

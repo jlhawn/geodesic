@@ -5,7 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { levelFields, verticalVelocity } from '../js/levels.module.js';
+import { levelFields, verticalVelocity, smoothCells } from '../js/levels.module.js';
 import { createOcean as createLayeredOcean, depthFields, THIN } from '../js/ocean/layered.module.js';
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 + 2500 * Math.exp(-(((lat - 0.3) / 0.3) ** 2)) : -4000));
@@ -34,6 +34,12 @@ test('the vertical velocity at a level rests on the same πσ̇ the core diagnos
   for (let i = 0; i < C; i++) { rms += w[i] * w[i]; top = Math.max(top, Math.abs(w[i])); }
   rms = Math.sqrt(rms / C);
   assert.ok(rms > 1e-5 && top < 5, `500 hPa vertical velocity rms ${rms} m/s, largest ${top}`);
+  const smoothed = smoothCells(mesh, w);
+  let rmsSmooth = 0;
+  for (let i = 0; i < C; i++) rmsSmooth += smoothed[i] * smoothed[i];
+  assert.ok(Math.sqrt(rmsSmooth / C) < rms, 'averaging with the neighbours takes energy out of the field');
+  const flat = smoothCells(mesh, new Float32Array(C).fill(0.25));
+  for (let i = 0; i < C; i++) assert.ok(Math.abs(flat[i] - 0.25) < 1e-6);
   const lowest = verticalVelocity(mesh, core, pi, u, 'surface', levelFields(core, pi, theta, layerWind, 'surface', q).temperature);
   const underground = verticalVelocity(mesh, core, pi, u, 1000, levelFields(core, pi, theta, layerWind, 1000, q).temperature);
   for (let i = 0; i < C; i++) if (pi[i] < 1000e2) assert.ok(Math.abs(underground[i] - lowest[i]) < 1e-12, `a level under the ground shows the lowest layer at ${i}`);

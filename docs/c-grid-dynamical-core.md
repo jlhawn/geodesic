@@ -1854,7 +1854,9 @@ vertical velocity through it as the divergence of the transport above
 vertical velocity at the level is πσ̇ from the layers' mass-flux
 divergences plus σ dπ/dt, converted with the level's density
 (`verticalVelocity` in `js/levels.module.js`), and it agrees with the
-core's own πσ̇ to rounding. Both engines compute them where the state
+core's own πσ̇ to rounding; shown averaged with the neighbouring cells
+and over a two-hour memory, as forecasters look at ω, so that the
+gravity waves and the cell-by-cell convection do not speckle it. Both engines compute them where the state
 lives, the GPU only when subscribed. The level and the depth are
 a Surface button beside a slider that gives every model layer the
 same width: the level runs over the σ interfaces from 1000 to 10 hPa,

@@ -7,10 +7,10 @@ import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand } from './physics/regrid.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure } from './geography.module.js';
 import { regridCellField } from './physics/regrid.module.js';
-import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity } from './levels.module.js';
+import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName } from './stateFile.module.js';
-import { LEVEL_FIELDS, OCEAN_FIELDS, RAIN_MEMORY } from './frames.module.js';
+import { LEVEL_FIELDS, OCEAN_FIELDS, RAIN_MEMORY, VERTICAL_MEMORY } from './frames.module.js';
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 
@@ -18,6 +18,7 @@ const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
 let subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false }, layerWinds = [];
 const rain = { total: null, time: 0 };
+const vertical = { values: null, level: null, time: 0 };
 
 function restartRain() { rain.total = null; rain.time = model.time; if (model.restartPrecipitation) model.restartPrecipitation(); }
 
@@ -58,7 +59,14 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
     if (want.has('dewPoint')) out.dewPoint = comfort(dewPoint);
     if (want.has('wetBulb')) out.wetBulb = comfort(wetBulb);
     if (want.has('misery')) out.misery = comfort(miseryIndex);
-    if (want.has('vertical')) out.vertical = verticalVelocity(mesh, core, pi, u, level, f.temperature);
+    if (want.has('vertical')) {
+      const smoothed = smoothCells(mesh, verticalVelocity(mesh, core, pi, u, level, f.temperature));
+      const keep = vertical.values && vertical.level === level ? Math.exp(-Math.max(0, time - vertical.time) / VERTICAL_MEMORY) : 0;
+      if (!vertical.values || vertical.values.length !== C) vertical.values = new Float32Array(C);
+      for (let i = 0; i < C; i++) vertical.values[i] = keep * vertical.values[i] + (1 - keep) * smoothed[i];
+      vertical.level = level; vertical.time = time;
+      out.vertical = Float32Array.from(vertical.values);
+    } else vertical.level = null;
   }
   if (want.has('ps')) out.ps = Float32Array.from(pi);
   if (want.has('mslp')) {

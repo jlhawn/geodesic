@@ -93,6 +93,19 @@ export function verticalVelocity(mesh, core, pi, u, level, temperature, out = ne
 }
 
 /*
+ * Each cell's value averaged, with equal weights, with its neighbours'.
+ */
+export function smoothCells(mesh, values, out = new Float32Array(mesh.nCells)) {
+  const { maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
+  for (let i = 0; i < mesh.nCells; i++) {
+    let sum = values[i];
+    for (let m = 0; m < nEdgesOnCell[i]; m++) sum += values[cellsOnCell[maxEdges * i + m]];
+    out[i] = sum / (nEdgesOnCell[i] + 1);
+  }
+  return out;
+}
+
+/*
  * Comfort measures from temperature (°C), relative humidity (a fraction)
  * and wind (m/s). Dew point by the Magnus formula; wet-bulb by Stull's
  * fit; the misery index is the NWS heat index above 26.7 °C, the wind
