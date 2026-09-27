@@ -24,8 +24,8 @@ import { MELTING_POINT } from './ice.module.js';
  */
 export function createLandSurface(mesh, geography, {
   heatCapacity = 1e6, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.2, snowAlbedo = 0.55, fullSnow = 20,
-  latentHeatFusion = 3.34e5, vegetation: vegetated = true, bareAlbedo = 0.35, vegetatedAlbedo = 0.13, minimumCapacity = 50,
-  maximumCapacity = 500, dryWetness = 0.1, wetWetness = 0.6, growthTime = 180 * 86400, declineTime = 180 * 86400,
+  latentHeatFusion = 3.34e5, vegetation: vegetated = true, bareAlbedo = 0.30, vegetatedAlbedo = 0.13, minimumCapacity = 50,
+  maximumCapacity = 500, dryWetness = 0.1, wetWetness = 0.6, growthTime = 180 * 86400, declineTime = 365 * 86400,
   snowDeclineTime = 720 * 86400, buffers = null,
 } = {}) {
   const C = mesh.nCells;

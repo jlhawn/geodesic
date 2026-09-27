@@ -52,7 +52,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * budget sums are area-weighted masses (kg).
  */
 export function createMoistPhysics(mesh, core, {
-  latentHeat = LATENT_HEAT, relaxationTime = 7200, referenceHumidity = 0.7,
+  latentHeat = LATENT_HEAT, relaxationTime = 7200, referenceHumidity = 0.6,
   autoconversionThreshold = 2e-4, autoconversionRate = 1e-3, cloudLifetime = 3 * 3600,
   detrainment = 0.1, anvilDepth = 150e2, rainEvaporation = 1, buffers = null,
 } = {}) {

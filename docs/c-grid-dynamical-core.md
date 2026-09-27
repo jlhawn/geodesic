@@ -847,7 +847,7 @@ sources are off (`moist: false` carries q but never sources it).
   (2007): a parcel from the lowest layer rises dry to its LCL and
   moist-adiabatically above; the column up to its level of zero
   buoyancy relaxes over 2 h toward that profile and a reference RH of
-  70%. When the implied rain is positive the reference temperature is
+  60%. When the implied rain is positive the reference temperature is
   shifted so the enthalpy change equals L times the rain; otherwise
   both references are shifted so nothing is gained or lost. Dry
   convective adjustment follows, mixing q with θ.
@@ -950,7 +950,7 @@ Each layer's cloud water path gives it a gray emissivity
 and gas bands as 1 − (1 − ε_gas)(1 − ε_cloud), and the window, which is
 now an exchange band of its own that is transparent only where there is
 no cloud. In the shortwave the column's cloud optical depth
-(`cloudScattering` = 60 m²/kg × path) reflects the beam
+(`cloudScattering` = 55 m²/kg × path) reflects the beam
 with the two-stream reflectance τ/(τ + 2μ); what passes is absorbed by
 the surface with its per-cell albedo, with the multiple reflections
 between surface and cloud summed. The fixed planetary albedo of 0.3 is
@@ -1349,8 +1349,8 @@ surface energy melts, holding the skin at the melting point while it
 does. Evaporation draws on the snow first, then the soil. Land albedo is
 0.2 for both the direct and diffuse beams, rising to 0.55 over 20 kg/m²
 of snow (the tuning below settled both; 0.25 and 0.7 held a snowy,
-cold climate); the drag and exchange coefficients are 3e-3 over land against
-1.5e-3 over water, as per-cell arrays that the surface drag, the
+cold climate); the drag and exchange coefficients are 1.5e-3 over land
+and water alike, as per-cell arrays that the surface drag, the
 boundary layer's friction velocity and the radiation column's bulk
 exchange all read. The ocean carries no flux, stress or diffusion
 through edges that touch land, and its diagnostics average over ocean
@@ -1762,13 +1762,14 @@ filled 500 mm buckets carried the monsoons through the season.
 
 So the land now grows a vegetation cover v from 0 (bare) to 1 (dense
 forest) per cell, and the land's properties follow it rather than a
-map: the bare-ground albedo runs from `bareAlbedo` 0.35 to
+map: the bare-ground albedo runs from `bareAlbedo` 0.30 to
 `vegetatedAlbedo` 0.13 and the bucket from `minimumCapacity` 50 to
 `maximumCapacity` 500 kg/m², deeper roots holding water through dry
 seasons. Snow-free, v relaxes toward a goal set by how full the bucket
 is — 0 below `dryWetness` 0.1 of the capacity, 1 above `wetWetness`
-0.6 — over `growthTime` and `declineTime` (180 days each); under snow
-it fades toward 0 over `snowDeclineTime` (720 days), so ice sheets go
+0.6 — over `growthTime` (180 days) when rising and `declineTime`
+(365 days) when falling; under snow it fades toward 0 over
+`snowDeclineTime` (720 days), so ice sheets go
 bare while a boreal forest survives its winters. Water above a
 shrinking bucket runs off. Both engines carry v (the GPU in the PH
 buffer's VEG range), snapshots save it under `land.vegetation`,
@@ -1815,6 +1816,30 @@ takes 10–20% of an overhead beam, most of it in its lower half; dry air
 takes nothing. `vaporAbsorption` scales A (0 turns it off). Both
 engines carry it line by line, and the absorbed-solar diagnostics
 count it.
+
+Tuned on two-year N=64 runs from a green start (`runs/twin64_day0810.bin`,
+early June). Vapour absorption alone brought the global rain from 3.5
+to 2.7–2.9 mm/day and warmed the Saharan column by 6 K at 850 hPa, but
+the second year still dried the Sahel (0.3 mm/day) and the Congo (3.4),
+and with the surface receiving less sunlight the planetary albedo fell
+from 0.34 to 0.28 and the surface warmed. The defaults are therefore
+`cloudScattering` 55 (planetary albedo 0.30), a convective reference
+humidity of 0.6 (the Congo's lever: 2.9 → 5.7 mm/day on its own),
+`declineTime` 365 days with `bareAlbedo` 0.30 (one bad season no
+longer tips a region into the bare state), and a land drag and
+exchange coefficient of 1.5e-3, as over water (India's lever: 1.3 →
+3.5 mm/day). Together the second year holds the Congo at 5.1 mm/day
+(v 0.95), India 3.4 (0.82), the Sahel 1.4 (0.39) and the Amazon 4.3
+(0.93) with the Sahara at 0.3 (0.25); global rain 2.66 mm/day,
+planetary albedo 0.30, global surface temperature 14.6 °C and still
+rising about 1 K/yr from the green start, though the June net
+top-of-atmosphere flux (+3.6 W/m²) is nearer balance than the previous
+calibration's (+5.0). The Sahara at 850 hPa is 21 °C against the
+previous 15 (observed about 30), and over July–August a heat low of
+1008 hPa sits on it where the dry state had a 1015 hPa high, so the
+Sahel's surface wind is a southwesterly monsoon inflow (u +1.3, v
++1.5 m/s) where it was northeasterly (−3, −2), and India's trough is
+1004 hPa under southwesterlies.
 
 ### The page as a client of the model worker
 

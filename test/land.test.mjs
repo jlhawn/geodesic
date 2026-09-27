@@ -102,7 +102,7 @@ test('vegetation grows over a wet bucket and dies back over a dry one on its tim
   land.vegetation[i] = 0.5; land.soil[i] = 0;
   land.update(i, surfaceT, flux, 0, 50 * DAY);
   assert.ok(Math.abs(land.vegetation[i] - 0.5 * Math.exp(-1)) < 1e-12, `dry: ${land.vegetation[i]}`);
-  assert.ok(Math.abs(land.albedo(i) - (0.35 + (0.13 - 0.35) * land.vegetation[i])) < 1e-12);
+  assert.ok(Math.abs(land.albedo(i) - (0.30 + (0.13 - 0.30) * land.vegetation[i])) < 1e-12);
   assert.ok(Math.abs(land.capacity(i) - (50 + 450 * land.vegetation[i])) < 1e-12);
   const v0 = land.vegetation[i];
   land.soil[i] = land.capacity(i);
