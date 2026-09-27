@@ -1855,7 +1855,15 @@ vertical velocity at the level is πσ̇ from the layers' mass-flux
 divergences plus σ dπ/dt, converted with the level's density
 (`verticalVelocity` in `js/levels.module.js`), and it agrees with the
 core's own πσ̇ to rounding. Both engines compute them where the state
-lives, the GPU only when subscribed. On the GPU engine the
+lives, the GPU only when subscribed. The level and the depth are
+sliders: the level climbs in ln p from the lowest layer to 10 hPa and
+the depth descends quadratically to 5500 m, any value is accepted in
+the address, and the colour ranges interpolate between the standard
+levels. Where the ground rises above the level (its surface pressure
+below the level's) the page masks the field and keeps the particles
+out, and the viewer draws every masked cell — under the ground, below
+the sea floor, or land in Ocean mode — as the grey relief of its
+elevation, so the terrain shows through the slice. On the GPU engine the
 frame is computed where the state lives: `frameFields` interpolates the
 level fields (with the surface geopotential in the heights), the comfort
 measures, the column water, cloud and sea-level pressure; `frameRain`

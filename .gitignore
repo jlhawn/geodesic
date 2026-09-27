@@ -6,3 +6,4 @@ runs/*
 !runs/twin64_day0810.parts.json
 !runs/twin64_day0810.bin.gz.*
 node_modules/
+node_modules

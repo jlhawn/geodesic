@@ -228,9 +228,10 @@ export function initUnifiedViewer(container, grid, config = {}) {
   const cellColors = cellTexture(new Uint8Array(4 * width * height), THREE.RGBAFormat, THREE.UnsignedByteType);
   const cellSurface = cellTexture(new Float32Array(4 * width * height), THREE.RGBAFormat, THREE.FloatType);
   const cellValues = cellTexture(new Float32Array(width * height), THREE.RedFormat, THREE.FloatType);
+  const cellTerrain = cellTexture(new Float32Array(width * height), THREE.RedFormat, THREE.FloatType);
   const MISSING = 1e30, MAX_STOPS = 16;
   const colorMap = {
-    uColorMode: { value: 0 }, uCellColors: { value: cellColors }, uCellSurface: { value: cellSurface }, uCellValues: { value: cellValues },
+    uColorMode: { value: 0 }, uCellColors: { value: cellColors }, uCellSurface: { value: cellSurface }, uCellValues: { value: cellValues }, uCellTerrain: { value: cellTerrain }, uTerrain: { value: 0 },
     uStops: { value: Array.from({ length: MAX_STOPS }, () => new THREE.Vector3()) }, uStopCount: { value: 2 }, uValueMap: { value: new THREE.Vector2(1, 0) },
     uMissing: { value: new THREE.Vector3() }, uFlat: { value: new THREE.Vector3() }, uCoverBase: { value: new THREE.Vector3() },
   };
@@ -273,17 +274,25 @@ export function initUnifiedViewer(container, grid, config = {}) {
     for (let c = 0; c < cellCounter; c++) { const v = values[c]; array[c] = v === v ? v : MISSING; }
     cellValues.needsUpdate = true;
   }
+  function updateTerrain(elevation) {
+    const array = cellTerrain.image.data;
+    for (let c = 0; c < cellCounter; c++) array[c] = elevation ? elevation[c] : 0;
+    cellTerrain.needsUpdate = true;
+  }
 
   /*
    * How the shader colours the cell values: 'palette' maps
    * t = value·a + b onto sRGB stops interpolated as the page's legend
-   * does, with missing values (NaN) in the linear colour `missing`;
+   * does, with missing values (NaN) in the linear colour `missing`, or
+   * with `terrain` as the grey relief of the elevation updateTerrain
+   * gave, dark for the sea floor and light for the land;
    * 'cover' composites white over the sRGB `base` with opacity
    * 1 − exp(−value·a); 'flat' paints every cell the linear `color`.
    * updateColors switches back to per-cell colours.
    */
-  function setColorMap({ kind, stops = null, a = 1, b = 0, missing = null, color = null, base = null }) {
+  function setColorMap({ kind, stops = null, a = 1, b = 0, missing = null, color = null, base = null, terrain = false }) {
     colorMap.uColorMode.value = { palette: 2, cover: 3, flat: 4 }[kind];
+    colorMap.uTerrain.value = terrain ? 1 : 0;
     if (stops) {
       if (stops.length > MAX_STOPS) throw new Error(`at most ${MAX_STOPS} palette stops`);
       stops.forEach((stop, k) => colorMap.uStops.value[k].set(stop[0], stop[1], stop[2]));
@@ -485,7 +494,13 @@ uniform vec2 uValueMap;
 uniform vec3 uMissing;
 uniform vec3 uFlat;
 uniform vec3 uCoverBase;
+uniform sampler2D uCellTerrain;
+uniform float uTerrain;
 attribute vec3 slope;
+vec3 terrainGrey(float z) {
+  float g = z < 0.0 ? 0.03 + 0.12 * clamp((z + 6000.0) / 6000.0, 0.0, 1.0) : 0.22 + 0.6 * clamp(z / 5000.0, 0.0, 1.0);
+  return vec3(g);
+}
 vec3 srgbToLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
 vec3 paletteColor(float t) {
   float x = clamp(t, 0.0, 1.0) * (uStopCount - 1.0);
@@ -499,7 +514,7 @@ vec3 paletteColor(float t) {
     float value = texture2D(uCellValues, uv).r;
     if (uColorMode < 1.5) vColor.rgb = texture2D(uCellColors, uv).rgb;
     else if (uColorMode > 3.5) vColor.rgb = uFlat;
-    else if (value > 1.0e29) vColor.rgb = uMissing;
+    else if (value > 1.0e29) vColor.rgb = uTerrain > 0.5 ? terrainGrey(texture2D(uCellTerrain, uv).r) : uMissing;
     else if (uColorMode < 2.5) vColor.rgb = srgbToLinear(paletteColor(value * uValueMap.x + uValueMap.y));
     else vColor.rgb = srgbToLinear(uCoverBase + (1.0 - exp(-max(0.0, value) * uValueMap.x)) * (1.0 - uCoverBase));
   }
@@ -1134,7 +1149,7 @@ uniform float uReferenceSpeed;
   }
 
   return {
-    updateColors, updateSurface, updateSlopes, updateValues, setColorMap,
+    updateColors, updateSurface, updateSlopes, updateValues, updateTerrain, setColorMap,
     setSpace({ enabled, sun: direction = null, sidereal = 0, ambient = 0.004, intensity = 1, perspective = enabled } = {}) {
       space.enabled = enabled;
       if (state.perspective !== perspective) { state.perspective = perspective; viewState.version++; }
