@@ -946,8 +946,9 @@ when the ice is gone, its latent heat drawn from the mixed layer. Snow
 that falls on open water melts at once and cools the water by its
 latent heat, so cold water under snowfall freezes over; the ocean's
 freshwater counts the precipitation when it falls.
-The initial state carries 0.5 m of ice wherever the initial surface is
-below freezing (poleward of ~60°). A prescribed ocean heat transport
+The initial state carries 1.5 m of ice on the Arctic Ocean poleward
+of 72°N and 0.7 m around Antarctica poleward of 68°S, over a zonal
+climatological SST that reaches the freezing point near 70°. A prescribed ocean heat transport
 (`oceanHeatFlux`, Q₀ = 20 W/m²) converges Q₀(3 sin²φ − 1) into the
 mixed layer — zero in the global mean, cooling the tropics, warming
 the poles by up to 2 Q₀ — and melts ice from below where it is

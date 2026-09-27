@@ -60,6 +60,10 @@ function geopotentialHeightAt(core, i, pi, pressure) {
  * wavenumber-5 θ seed at ±45°, surface pressure set by bisection so the
  * 500 hPa surface is level, and winds in geostrophic balance with the
  * model's own pressure gradient force, tapered to zero inside ±15°.
+ * Over the sea the surface is a zonal climatological SST, 28 °C at the
+ * equator falling to the freezing point near 70°, with 1.5 m of ice on
+ * the Arctic Ocean poleward of 72°N and 0.7 m around Antarctica
+ * poleward of 68°S over water at the freezing point, as in March.
  */
 /*
  * Initial humidity: a relative humidity that falls from
@@ -94,6 +98,14 @@ export function initializeState(model, {
   const theta = new Float64Array(K * C);
   const u = new Float64Array(K * E);
   const surfaceT = Float64Array.from(latCell, surfaceTemperature);
+  const land = model.geography ? model.geography.land : null;
+  const ice = new Float64Array(C);
+  for (let i = 0; i < C; i++) {
+    if (land && land[i]) continue;
+    const lat = latCell[i] / deg, polar = Math.max(0, Math.min(1, (Math.abs(lat) - 50) / 20));
+    ice[i] = lat > 72 ? 1.5 : lat < -68 ? 0.7 : 0;
+    surfaceT[i] = ice[i] > 0 ? FREEZING_POINT : Math.max(FREEZING_POINT + 0.3, 273.15 + 30 * Math.cos(latCell[i]) ** 2 - 2 - 4 * polar);
+  }
 
   for (let i = 0; i < C; i++) {
     const offset = surfaceT[i] - REFERENCE_SURFACE_T;
@@ -162,6 +174,5 @@ export function initializeState(model, {
     }
   }
 
-  const ice = Float64Array.from(surfaceT, (t) => (t < FREEZING_POINT ? 0.5 : 0));
   return [pi, theta, u, surfaceT, initialHumidity(model, pi, theta, { surfaceHumidity }), new Float64Array(K * C), ice];
 }
