@@ -66,3 +66,28 @@ test('twelve full GPU steps track the CPU model and its energy budget', { skip: 
   console.log(`snow on ${snowOnIce} iced sea cells, engines differ by at most ${worstSnow.toExponential(1)} kg/m²`);
   assert.ok(worstSnow < 1e-3, `snow on the surface differs between engines by ${worstSnow}`);
 });
+
+test('snow-ice formation matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const model = createModel(new Grid(6), { ocean: false });
+  const init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  const C = model.mesh.nCells;
+  let loaded = 0;
+  for (let i = 0; i < C; i++) if (model.state[6][i] > 0) { model.seaIce.snow[i] = 100 + 200 * (i % 3); loaded++; }
+  assert.ok(loaded > 0);
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model) });
+  gpu.upload(model.state);
+  gpu.uploadPhysics();
+  gpu.uploadLand({ soil: new Float64Array(C), snow: model.seaIce.snow, vegetation: new Float64Array(C) });
+  const time = model.time; model.step(900); await gpu.stepModel(900, time);
+  const state = await gpu.download(), physics = await gpu.downloadPhysics();
+  let flooded = 0, worstSnow = 0, worstIce = 0;
+  for (let i = 0; i < C; i++) if (model.state[6][i] > 0) {
+    worstSnow = Math.max(worstSnow, Math.abs(model.seaIce.snow[i] - physics.SNOW[i]));
+    worstIce = Math.max(worstIce, Math.abs(model.state[6][i] - state[6][i]));
+    if (model.seaIce.snow[i] < 100) flooded++;
+  }
+  console.log(`snow-ice on ${flooded} of ${loaded} loaded cells; engines differ by ${worstSnow.toExponential(1)} kg/m² of snow and ${worstIce.toExponential(1)} m of ice`);
+  assert.ok(flooded > 0, 'the heavy load floods somewhere');
+  assert.ok(worstSnow < 1e-2 && worstIce < 1e-4, `snow ${worstSnow}, ice ${worstIce}`);
+});

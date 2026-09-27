@@ -32,7 +32,10 @@ export const MELTING_POINT = 273.15;
  * does, and goes into the water when the ice is gone, its latent heat
  * drawn from the mixed layer. Snow that falls on open water melts at
  * once, cooling the water by that latent heat. The ocean's freshwater
- * counts precipitation when it falls, snow or not.
+ * counts precipitation when it falls, snow or not. Snow heavier than
+ * the ice's freeboard (waterDensity − iceDensity per metre of ice)
+ * floods and freezes into snow-ice: the surplus mass leaves `snow` and
+ * joins the ice at iceDensity, which conserves both mass and energy.
  */
 export function openWaterAlbedo(mu) {
   return 0.026 / (Math.pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1);
@@ -41,12 +44,12 @@ export function openWaterAlbedo(mu) {
 export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
   iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.5, fullAlbedoThickness = 0.5,
-  iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300,
+  iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026,
   heatCapacity = null, buffers = null,
 } = {}) {
   const C = mesh.nCells;
   const latent = iceDensity * latentHeatFusion;
-  const budget = { frozen: 0, melted: 0, snowfall: 0, snowMelted: 0 };
+  const budget = { frozen: 0, melted: 0, snowfall: 0, snowMelted: 0, snowIce: 0 };
   const oceanFlux = new Float64Array(buffers && buffers.oceanFlux ? buffers.oceanFlux : new SharedArrayBuffer(8 * C));
   const snow = new Float64Array(buffers && buffers.snow ? buffers.snow : new SharedArrayBuffer(8 * C));
 
@@ -102,7 +105,10 @@ export function createSeaIce(mesh, {
       snow[i] = 0;
     } else {
       budget.frozen += mesh.areaCell[i] * (thickness - ice[i]);
-      ice[i] = thickness;
+      const flooded = Math.max(0, snow[i] - (waterDensity - iceDensity) * thickness) * iceDensity / waterDensity;
+      snow[i] -= flooded;
+      budget.snowIce += mesh.areaCell[i] * flooded;
+      ice[i] = thickness + flooded / iceDensity;
     }
   }
 

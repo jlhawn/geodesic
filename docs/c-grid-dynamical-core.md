@@ -945,7 +945,11 @@ the growth beneath it), melts before the ice, and goes into the water
 when the ice is gone, its latent heat drawn from the mixed layer. Snow
 that falls on open water melts at once and cools the water by its
 latent heat, so cold water under snowfall freezes over; the ocean's
-freshwater counts the precipitation when it falls.
+freshwater counts the precipitation when it falls. Snow heavier than
+the ice's freeboard (109 kg/m² per metre of ice at 1026 and 917 kg/m³)
+floods and freezes into snow-ice: the surplus leaves the snow and joins
+the ice at ice density, conserving mass and energy, so a deep Antarctic
+snow load thickens the pack instead of insulating it indefinitely.
 The initial state carries 1.5 m of ice on the Arctic Ocean poleward
 of 72°N and 0.7 m around Antarctica poleward of 68°S, over a zonal
 climatological SST that reaches the freezing point near 70°. A prescribed ocean heat transport

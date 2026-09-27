@@ -18,7 +18,7 @@ const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudSc
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6;
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
-const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity};
+const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
 const RELAX: f32 = ${o.relaxationTime}; const RH_REF: f32 = ${o.referenceHumidity}; const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime};
 const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth}; const RAIN_EVAP: f32 = ${o.rainEvaporation};
@@ -216,7 +216,10 @@ export const PHYSICS_KERNELS = {
       snow -= fromSnow; excess -= fromSnow * LFUS;
       thickness -= excess / LATENT_ICE;
     }
-    if (thickness <= 0.0) { T = FREEZING + (-thickness * LATENT_ICE + SKINC * (T - FREEZING) - LFUS * snow) / capacity; h = 0.0; snow = 0.0; } else { h = thickness; }
+    if (thickness <= 0.0) { T = FREEZING + (-thickness * LATENT_ICE + SKINC * (T - FREEZING) - LFUS * snow) / capacity; h = 0.0; snow = 0.0; } else {
+      let flooded = max(0.0, snow - (RHOWATER - RHOICE) * thickness) * RHOICE / RHOWATER;
+      snow -= flooded; h = thickness + flooded / RHOICE;
+    }
     PH[PH_SNOW + i] = snow;
   }
   IN[S_TS + i] = T; IN[S_ICE + i] = h;

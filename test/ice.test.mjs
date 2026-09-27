@@ -117,3 +117,19 @@ test('snow on the ice brightens it, insulates it, melts before it, and goes into
   assert.ok(iceA[0] === 0 && iceC[0] === 0);
   assert.ok(Math.abs((tC[0] - tA[0]) - 10 * snowy.latentHeatFusion / snowy.slabHeatCapacity) < 1e-9, `the snow's latent heat came out of the water: ${tC[0] - tA[0]} K`);
 });
+
+test('snow heavier than the freeboard floods into snow-ice, restoring the freeboard and conserving energy', () => {
+  const sea = createSeaIce(model.mesh), flux = new Float64Array([0]), freeboard = 1026 - 917;
+  const ice = new Float64Array([0.5]), t = new Float64Array([FREEZING_POINT - 10]);
+  sea.snow[0] = 20;
+  sea.update(t, ice, flux, 0, 900);
+  assert.equal(sea.snow[0], 20, 'light snow rides above the water line');
+  assert.equal(sea.budget.snowIce, 0);
+  sea.snow[0] = 200;
+  const before = sea.energy(t[0], ice[0], sea.snow[0]), mass = 917 * ice[0] + sea.snow[0], grown = ice[0];
+  sea.update(t, ice, flux, 0, 900);
+  assert.ok(sea.snow[0] < 200 && sea.snow[0] > 0 && ice[0] > grown + 0.05, `snow ${sea.snow[0]} kg/m² on ${ice[0]} m of ice`);
+  assert.ok(Math.abs(freeboard * ice[0] - sea.snow[0]) < 1e-9, `the flooded snow brings the ice back to the water line: ${freeboard * ice[0] - sea.snow[0]}`);
+  assert.ok(Math.abs(sea.energy(t[0], ice[0], sea.snow[0]) - before) < 1e-6, 'no energy is made or lost in the conversion');
+  assert.ok(sea.budget.snowIce > 0 && Math.abs(917 * ice[0] + sea.snow[0] - mass - 917 * (ice[0] - grown - sea.budget.snowIce / model.mesh.areaCell[0] / 917)) < 1e-9, 'mass moves from the snow to the ice');
+});
