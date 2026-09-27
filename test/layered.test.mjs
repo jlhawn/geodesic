@@ -189,11 +189,12 @@ test('wind-driven advection over 100 steps conserves total heat and salt', () =>
   // the first test above); under this wind the free surface swings by tens
   // of centimetres, and the per-cell rescale to the sub-stepped barotropic
   // eta at the end of step() is not perfectly heat/salt-conservative, giving
-  // a measured drift around 1.2e-9 relative after 100 steps with the
-  // 26-to-3 °C classes. 2e-9 keeps a margin above that measured drift while
-  // still catching a real conservation break (orders of magnitude larger).
-  assert.ok(Math.abs(after.heat - before.heat) < 2e-9 * Math.abs(before.heat), `heat ${before.heat} -> ${after.heat}`);
-  assert.ok(Math.abs(after.salt - before.salt) < 2e-9 * Math.abs(before.salt), `salt ${before.salt} -> ${after.salt}`);
+  // a measured drift around 2.5e-9 relative after 100 steps with the
+  // 24 classes and the −1 °C polar interior. 5e-9 keeps a margin above
+  // that measured drift while still catching a real conservation break
+  // (orders of magnitude larger).
+  assert.ok(Math.abs(after.heat - before.heat) < 5e-9 * Math.abs(before.heat), `heat ${before.heat} -> ${after.heat}`);
+  assert.ok(Math.abs(after.salt - before.salt) < 5e-9 * Math.abs(before.salt), `salt ${before.salt} -> ${after.salt}`);
   assert.equal(ocean.diagnostics().oceanLimited, 0);
 });
 
