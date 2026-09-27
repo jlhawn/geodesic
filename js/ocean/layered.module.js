@@ -60,21 +60,21 @@ export const POLAR_INTERIOR_T = 273.65;
 /*
  * The fields at a depth below the surface, per cell: the layer holding
  * that depth (the first whose base lies below it, interior layers no
- * thicker than THIN being tokens and passed over), its temperature and
- * its current as a
- * cell vector, and the vertical velocity there, upward positive, as the
- * divergence of the transport above the depth with the free surface
- * held: h and u are the L layers' thicknesses and edge velocities,
- * temperature(k, i) the layer temperature. Cells that are land or whose
- * water column ends above the depth are NaN, their current zero.
+ * thicker than THIN being tokens and passed over), its temperature, its
+ * current as a cell vector and as a speed, and the vertical velocity
+ * there, upward positive, as the divergence of the transport above the
+ * depth with the free surface held: h and u are the L layers'
+ * thicknesses and edge velocities, temperature(k, i) the layer
+ * temperature. Cells that are land or whose water column ends above the
+ * depth are NaN, their current vector zero.
  */
 export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth) {
   const { nCells: C, nEdges: E, maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, cellsOnEdge, dcEdge, dvEdge, nEdge, areaCell } = mesh;
-  const out = { temperature: new Float32Array(C), current: new Float32Array(3 * C), upwelling: new Float32Array(C) };
+  const out = { temperature: new Float32Array(C), current: new Float32Array(3 * C), speed: new Float32Array(C), upwelling: new Float32Array(C) };
   for (let i = 0; i < C; i++) {
     let layer = -1, top = 0;
     if (cellOcean[i]) for (let k = 0; k < L; k++) { const hk = h[k * C + i]; if (k > 0 && hk <= THIN) continue; if (depth < top + hk) { layer = k; break; } top += hk; }
-    if (layer < 0) { out.temperature[i] = NaN; out.upwelling[i] = NaN; continue; }
+    if (layer < 0) { out.temperature[i] = NaN; out.speed[i] = NaN; out.upwelling[i] = NaN; continue; }
     out.temperature[i] = temperature(layer, i);
     let x = 0, y = 0, z = 0, w = 0;
     for (let m = 0; m < nEdgesOnCell[i]; m++) {
@@ -92,6 +92,7 @@ export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth) {
       w += s * dvEdge[e] * transport;
     }
     out.current[3 * i] = x / areaCell[i]; out.current[3 * i + 1] = y / areaCell[i]; out.current[3 * i + 2] = z / areaCell[i];
+    out.speed[i] = Math.hypot(x, y, z) / areaCell[i];
     out.upwelling[i] = w / areaCell[i];
   }
   return out;

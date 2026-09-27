@@ -80,12 +80,11 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
   if (model.land && want.has('vegetation')) out.vegetation = Float32Array.from(model.land.vegetation);
   const ocean = model.oceanFields && fields.some((name) => OCEAN_FIELDS.has(name)) ? model.oceanFields(depth === 'surface' ? 0 : Number(depth)) : null;
   if (ocean) {
-    for (const [name, values] of Object.entries({ sst: ocean.temperature, sss: ocean.S1, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta, upwelling: ocean.upwelling })) if (want.has(name)) out[name] = sea(values);
-    if (want.has('current') || want.has('currents')) {
+    for (const [name, values] of Object.entries({ sst: ocean.temperature, sss: ocean.S1, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta, current: ocean.speed, upwelling: ocean.upwelling })) if (want.has(name)) out[name] = sea(values);
+    if (want.has('currents')) {
       const vector = ocean.current;
       if (onLand) for (let i = 0; i < C; i++) if (onLand[i]) vector.fill(0, 3 * i, 3 * i + 3);
-      if (want.has('currents')) out.currents = Float32Array.from(vector);
-      if (want.has('current')) out.current = sea(Float32Array.from({ length: C }, (_, i) => Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2])));
+      out.currents = Float32Array.from(vector);
     }
   }
   return { time, level, depth, fields: out, diagnostics };

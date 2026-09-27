@@ -64,7 +64,7 @@ test('the fields at a depth pick the layer holding it, mask the sea floor, and i
     if (!cellOcean[i]) continue;
     let above = 0, layer = -1;
     for (let k = 0; k < L; k++) { if (k > 0 && h[k * C + i] <= THIN) continue; if (250 < above + h[k * C + i]) { layer = k; break; } above += h[k * C + i]; }
-    if (layer < 0) { dry++; assert.ok(Number.isNaN(deep.temperature[i]) && Number.isNaN(deep.upwelling[i]) && deep.current[3 * i] === 0); continue; }
+    if (layer < 0) { dry++; assert.ok(Number.isNaN(deep.temperature[i]) && Number.isNaN(deep.speed[i]) && Number.isNaN(deep.upwelling[i]) && deep.current[3 * i] === 0); continue; }
     wet++;
     assert.ok(layer >= 1, `250 m lies below the mixed layer at ${i}`);
     assert.equal(deep.temperature[i], Math.fround(temperature(layer, i)));
@@ -74,7 +74,7 @@ test('the fields at a depth pick the layer holding it, mask the sea floor, and i
   assert.ok(magnitude > 0);
   assert.ok(Math.abs(sum) < 1e-6 * magnitude, `the upwelling through 250 m sums to ${sum} against ${magnitude} in magnitude`);
   const abyss = depthFields(mesh, L, { h, u, temperature, cellOcean }, 20000);
-  for (let i = 0; i < C; i++) assert.ok(Number.isNaN(abyss.temperature[i]));
+  for (let i = 0; i < C; i++) assert.ok(Number.isNaN(abyss.temperature[i]) && Number.isNaN(abyss.speed[i]));
   const i = [...Array(C).keys()].find((c) => cellOcean[c]);
   const base = h[i];
   for (let k = 1; k < L - 1; k++) h[k * C + i] = 0.01;

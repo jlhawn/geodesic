@@ -552,7 +552,7 @@ export function createLayeredOcean(core, options = {}) {
   for (var k = 0; k < L; k++) { let hk = IN[hOff(k) + i]; if (k > 0 && hk <= THINO) { continue; } if (layer < 0 && depth < top + hk) { layer = k; } if (layer < 0) { top += hk; } }
   if (layer < 0) {
     OUT[${OF.SST} + i] = DRY; OUT[${OF.UPW} + i] = DRY;
-    OUT[${OF.CUR} + 3 * i] = 0.0; OUT[${OF.CUR} + 3 * i + 1] = 0.0; OUT[${OF.CUR} + 3 * i + 2] = 0.0; OUT[${OF.CSPD} + i] = 0.0;
+    OUT[${OF.CUR} + 3 * i] = 0.0; OUT[${OF.CUR} + 3 * i + 1] = 0.0; OUT[${OF.CUR} + 3 * i + 2] = 0.0; OUT[${OF.CSPD} + i] = DRY;
     return;
   }
   OUT[${OF.SST} + i] = IN[qOff(layer) + i] / max(EPSO, IN[hOff(layer) + i]);

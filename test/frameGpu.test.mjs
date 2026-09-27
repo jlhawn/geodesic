@@ -118,7 +118,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     const at = await model.beginFrame({ depth, fields: ['sst', 'current', 'currents', 'upwelling'] });
     assert.equal(at.depth, depth);
     const expected = depthFields(mesh, L, { h: column.h, u: column.u, temperature: (k, i) => column.T[k * C + i], cellOcean }, depth);
-    const speed = Float64Array.from({ length: C }, (_, i) => (Number.isNaN(expected.temperature[i]) ? NaN : Math.hypot(expected.current[3 * i], expected.current[3 * i + 1], expected.current[3 * i + 2])));
+    const speed = expected.speed;
     let magnitude = 0;
     for (let i = 0; i < C; i++) if (!Number.isNaN(expected.upwelling[i])) magnitude = Math.max(magnitude, Math.abs(expected.upwelling[i]));
     assert.ok(magnitude > 0);
@@ -128,9 +128,9 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     }
   }
 
-  const floor = await model.beginFrame({ depth: 4500, fields: ['sst', 'currents', 'upwelling'] });
+  const floor = await model.beginFrame({ depth: 4500, fields: ['sst', 'current', 'currents', 'upwelling'] });
   for (let i = 0; i < C; i++) {
-    assert.ok(Number.isNaN(floor.fields.sst[i]) && Number.isNaN(floor.fields.upwelling[i]), `the sea floor lies above 4500 m at ${i}`);
+    assert.ok(Number.isNaN(floor.fields.sst[i]) && Number.isNaN(floor.fields.current[i]) && Number.isNaN(floor.fields.upwelling[i]), `the sea floor lies above 4500 m at ${i}`);
     for (let c = 0; c < 3; c++) assert.equal(floor.fields.currents[3 * i + c], 0);
   }
 
