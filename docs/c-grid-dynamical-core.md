@@ -1856,8 +1856,9 @@ divergences plus σ dπ/dt, converted with the level's density
 (`verticalVelocity` in `js/levels.module.js`), and it agrees with the
 core's own πσ̇ to rounding. Both engines compute them where the state
 lives, the GPU only when subscribed. The level and the depth are
-sliders: the level climbs in ln p from the lowest layer to 10 hPa and
-the depth descends quadratically to 5500 m, any value is accepted in
+a Surface button beside a slider: the level runs linearly in pressure
+from 1000 to 10 hPa and the depth descends quadratically from 1 to
+5500 m, any value is accepted in
 the address, and the colour ranges interpolate between the standard
 levels. Where the ground rises above the level (its surface pressure
 below the level's) the page masks the field and keeps the particles

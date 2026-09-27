@@ -26,8 +26,8 @@ function atLevel(table, level) {
   const mix = (x, y) => x + t * (y - x);
   return Array.isArray(table[a]) ? table[a].map((x, j) => mix(x, table[b][j])) : mix(table[a], table[b]);
 }
-const levelFromSlider = (t) => Math.max(LEVEL_TOP, Math.round(LEVEL_BOTTOM * Math.pow(LEVEL_TOP / LEVEL_BOTTOM, t)));
-const sliderFromLevel = (level) => Math.log(LEVEL_BOTTOM / level) / Math.log(LEVEL_BOTTOM / LEVEL_TOP);
+const levelFromSlider = (t) => Math.round(LEVEL_BOTTOM - (LEVEL_BOTTOM - LEVEL_TOP) * t);
+const sliderFromLevel = (level) => (LEVEL_BOTTOM - level) / (LEVEL_BOTTOM - LEVEL_TOP);
 const depthFromSlider = (t) => Math.max(1, Math.round(DEPTH_BOTTOM * t * t));
 const sliderFromDepth = (depth) => Math.sqrt(depth / DEPTH_BOTTOM);
 const validLevel = (value) => (value === 'surface' ? 'surface' : Number(value) >= LEVEL_TOP && Number(value) <= LEVEL_BOTTOM ? Number(value) : null);
