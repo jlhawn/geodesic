@@ -37,7 +37,7 @@ const OVERLAYS = {
   veg: { label: 'Vegetation', short: 'VEG', unit: '', kind: 'sequential', field: 'vegetation', scale: 1, decimals: 2, range: () => [0, 1] },
   snow: { label: 'Snow', short: 'SNOW', unit: 'kg/m²', kind: 'sequential', field: 'snow', scale: 1, range: () => [0, 100] },
   elevation: { label: 'Elevation', short: 'ELEV', unit: 'm', kind: 'diverging', field: 'elevation', scale: 1, range: () => [-4000, 4000] },
-  sst: { label: 'Sea temperature', short: 'SST', unit: '°C', kind: 'sequential', field: 'sst', scale: 1, offset: CELSIUS, range: () => [-2, 32] },
+  sst: { label: 'Sea temperature', short: 'TEMP', unit: '°C', kind: 'sequential', field: 'sst', scale: 1, offset: CELSIUS, range: () => [-2, 32] },
   current: { label: 'Current speed', short: 'CUR', unit: 'm/s', kind: 'sequential', field: 'current', scale: 1, range: (depth) => [0, depth === 'surface' ? 1 : 0.5] },
   upwelling: { label: 'Upwelling', short: 'UPW', unit: 'm/day', kind: 'diverging', field: 'upwelling', scale: 86400, decimals: 1, range: () => [-5, 5] },
   layer: { label: 'Mixed layer depth', short: 'MLD', unit: 'm', kind: 'sequential', field: 'layerDepth', scale: 1, range: () => [10, 300] },
