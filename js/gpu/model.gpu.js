@@ -99,15 +99,15 @@ export async function createGpuModel(gridOrMesh, {
    * copies land. Every frame also advances the three-hour rain and the
    * runoff tally.
    */
-  model.beginFrame = function beginFrame({ level = 'surface', fields = [], diagnostics: summarize = false } = {}) {
+  model.beginFrame = function beginFrame({ level = 'surface', depth = 'surface', fields = [], diagnostics: summarize = false } = {}) {
     if (gpuOcean) gpuOcean.accumulateFreshwater(0);
     const time = model.time, interval = time - lastFrameTime;
     lastFrameTime = time;
     const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), fields, diagnostics: summarize });
     if (gpuOcean) { gpuOcean.forgetAccumulated('rain'); gpuOcean.forgetAccumulated('runoff'); }
-    const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize }) : null;
+    const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize, depth: depth === 'surface' ? 0 : Number(depth) }) : null;
     return Promise.all([atmosphere, ocean]).then(([a, o]) => {
-      const out = { time, level, fields: { ...a.fields, ...(o ? o.fields : {}) }, diagnostics: null };
+      const out = { time, level, depth, fields: { ...a.fields, ...(o ? o.fields : {}) }, diagnostics: null };
       if (!a.sums) return out;
       const s = a.sums, area = s.area;
       if (landCpu) {

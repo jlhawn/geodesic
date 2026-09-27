@@ -45,6 +45,54 @@ export function levelFields(core, pi, theta, layerWind, level, q = null) {
 }
 
 /*
+ * The vertical velocity at the level (m/s, upward positive) from the
+ * state alone, as the core diagnoses its vertical motion: each layer's
+ * mass-flux divergence ∇·(π v), with π on an edge the mean of its two
+ * cells, gives dπ/dt and πσ̇ telescoping from zero at the top; ω = πσ̇
+ * at the level plus σ (∂π/∂t + v·∇π), and w = −ω/(ρg) with the level's
+ * temperature. A level under the ground shows the lowest layer.
+ * piSigmaDot, when given, receives the (K + 1) × C interface values.
+ */
+export function verticalVelocity(mesh, core, pi, u, level, temperature, out = new Float32Array(mesh.nCells), piSigmaDot = null) {
+  const { K, C, E, sigmaMid, sigmaLower, sigmaUpper, dSigma, R, g } = core.diagnostics;
+  const { maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, cellsOnEdge, dvEdge, areaCell } = mesh;
+  const pressure = level === 'surface' ? Infinity : 100 * level;
+  const massDivergence = new Float64Array(K), divergence = new Float64Array(K);
+  for (let i = 0; i < C; i++) {
+    massDivergence.fill(0); divergence.fill(0);
+    for (let m = 0; m < nEdgesOnCell[i]; m++) {
+      const e = edgesOnCell[maxEdges * i + m], f = edgeSignOnCell[maxEdges * i + m] * dvEdge[e];
+      const piEdge = 0.5 * (pi[cellsOnEdge[2 * e]] + pi[cellsOnEdge[2 * e + 1]]);
+      for (let k = 0; k < K; k++) { const flow = f * u[k * E + e]; massDivergence[k] += piEdge * flow; divergence[k] += flow; }
+    }
+    let dPi = 0;
+    for (let k = 0; k < K; k++) { massDivergence[k] /= areaCell[i]; divergence[k] /= areaCell[i]; dPi -= massDivergence[k] * dSigma[k]; }
+    const lowest = pi[i] * sigmaMid[K - 1], here = pressure === Infinity ? lowest : Math.min(pressure, lowest), sigma = here / pi[i];
+    let k = 0;
+    while (k < K - 2 && pi[i] * sigmaMid[k + 1] < pressure) k++;
+    const t = pressure === Infinity ? 1 : (Math.log(pressure) - Math.log(pi[i] * sigmaMid[k])) / (Math.log(pi[i] * sigmaMid[k + 1]) - Math.log(pi[i] * sigmaMid[k]));
+    const tw = Math.min(1, Math.max(0, t));
+    const advection = (j) => massDivergence[j] - pi[i] * divergence[j];
+    const piAdvection = advection(k) + tw * (advection(k + 1) - advection(k));
+    let layer = 0;
+    while (layer < K - 1 && sigmaLower[layer] < sigma) layer++;
+    const s = Math.min(1, Math.max(0, (sigma - sigmaUpper[layer]) / dSigma[layer]));
+    let cumulative = 0, upper = 0, flow = 0;
+    if (piSigmaDot) piSigmaDot[i] = 0;
+    for (let j = 0; j < K; j++) {
+      cumulative += massDivergence[j] * dSigma[j];
+      const lower = j === K - 1 ? 0 : -cumulative - sigmaLower[j] * dPi;
+      if (piSigmaDot) piSigmaDot[(j + 1) * C + i] = lower;
+      if (j === layer) flow = upper + s * (lower - upper);
+      upper = lower;
+    }
+    const omega = flow + sigma * (dPi + piAdvection);
+    out[i] = -omega * R * temperature[i] / (here * g);
+  }
+  return out;
+}
+
+/*
  * Comfort measures from temperature (°C), relative humidity (a fraction)
  * and wind (m/s). Dew point by the Magnus formula; wet-bulb by Stull's
  * fit; the misery index is the NWS heat index above 26.7 °C, the wind

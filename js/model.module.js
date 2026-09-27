@@ -161,7 +161,7 @@ export function createModel(gridOrMesh, {
     shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
-  model.oceanFields = () => (ocean ? ocean.fields() : null);
+  model.oceanFields = (depth = 0) => (ocean ? ocean.fields(depth) : null);
 
   model.step = function step(dt) {
     rk4 ??= createRK4Arrays(STATE_NAMES.map((name) => lengths[name]));

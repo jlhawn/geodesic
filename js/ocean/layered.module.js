@@ -58,6 +58,44 @@ export const THERMOCLINE_DENSITY = 1023.5;
 export const POLAR_INTERIOR_T = 273.65;
 
 /*
+ * The fields at a depth below the surface, per cell: the layer holding
+ * that depth (the first whose base lies below it, so an outcropped
+ * token layer is passed over), its temperature and its current as a
+ * cell vector, and the vertical velocity there, upward positive, as the
+ * divergence of the transport above the depth with the free surface
+ * held: h and u are the L layers' thicknesses and edge velocities,
+ * temperature(k, i) the layer temperature. Cells that are land or whose
+ * water column ends above the depth are NaN, their current zero.
+ */
+export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth) {
+  const { nCells: C, nEdges: E, maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, cellsOnEdge, dcEdge, dvEdge, nEdge, areaCell } = mesh;
+  const out = { temperature: new Float32Array(C), current: new Float32Array(3 * C), upwelling: new Float32Array(C) };
+  for (let i = 0; i < C; i++) {
+    let layer = -1, top = 0;
+    if (cellOcean[i]) for (let k = 0; k < L; k++) { const hk = h[k * C + i]; if (depth < top + hk) { layer = k; break; } top += hk; }
+    if (layer < 0) { out.temperature[i] = NaN; out.upwelling[i] = NaN; continue; }
+    out.temperature[i] = temperature(layer, i);
+    let x = 0, y = 0, z = 0, w = 0;
+    for (let m = 0; m < nEdgesOnCell[i]; m++) {
+      const e = edgesOnCell[maxEdges * i + m], s = edgeSignOnCell[maxEdges * i + m];
+      const f = 0.5 * dcEdge[e] * dvEdge[e] * u[layer * E + e];
+      x += f * nEdge[3 * e]; y += f * nEdge[3 * e + 1]; z += f * nEdge[3 * e + 2];
+      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+      let above = 0, transport = 0;
+      for (let k = 0; k < L && above < depth; k++) {
+        const he = 0.5 * (h[k * C + a] + h[k * C + b]);
+        transport += u[k * E + e] * Math.min(he, depth - above);
+        above += he;
+      }
+      w += s * dvEdge[e] * transport;
+    }
+    out.current[3 * i] = x / areaCell[i]; out.current[3 * i + 1] = y / areaCell[i]; out.current[3 * i + 2] = z / areaCell[i];
+    out.upwelling[i] = w / areaCell[i];
+  }
+  return out;
+}
+
+/*
  * The starting water of an interior class at a latitude: its class
  * temperature and salinity equatorward of 50°, blending over 20° of
  * latitude toward 0.5 °C at the salinity that keeps its density, as the
@@ -780,9 +818,10 @@ export function createOcean(mesh, {
     for (let k = 0; k <= thermoclineLayers; k++) depth += h[at(k, i)];
     return depth;
   }
-  function fields() {
+  function fields(depth = 0) {
     for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN;
-    return { h1: h.subarray(0, C), T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth };
+    const layerT = (k, i) => (k === 0 ? T0[i] : Q[at(k, i)] / h[at(k, i)]);
+    return { h1: h.subarray(0, C), T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth) };
   }
 
   function diagnostics() {

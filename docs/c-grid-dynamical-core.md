@@ -1843,10 +1843,19 @@ Sahel's surface wind is a southwesterly monsoon inflow (u +1.3, v
 
 ### The page as a client of the model worker
 
-The page subscribes to exactly what it draws — the level, the fields of
-the current overlay, animation and contours, and the global diagnostics
-only while the Model dialog is open (`js/frames.module.js`) — and every
-frame the worker posts carries exactly that. On the GPU engine the
+The page subscribes to exactly what it draws — the level, the depth,
+the fields of the current overlay, animation and contours, and the
+global diagnostics only while the Model dialog is open
+(`js/frames.module.js`) — and every frame the worker posts carries
+exactly that. The depth chooses, per cell, the isopycnal layer holding
+it for the ocean's temperature, current and animation, and the
+vertical velocity through it as the divergence of the transport above
+(`depthFields` in `js/ocean/layered.module.js`); the atmosphere's
+vertical velocity at the level is πσ̇ from the layers' mass-flux
+divergences plus σ dπ/dt, converted with the level's density
+(`verticalVelocity` in `js/levels.module.js`), and it agrees with the
+core's own πσ̇ to rounding. Both engines compute them where the state
+lives, the GPU only when subscribed. On the GPU engine the
 frame is computed where the state lives: `frameFields` interpolates the
 level fields (with the surface geopotential in the heights), the comfort
 measures, the column water, cloud and sea-level pressure; `frameRain`

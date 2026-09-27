@@ -32,7 +32,7 @@ export function layoutFor(mesh, K) {
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE]]);
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['RUNOFF', C], ['VEG', C]]);
-  const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
+  const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH, FR };
 }
 
@@ -113,7 +113,9 @@ const REDUCED_SETUP = `    let a = MF[F_AREA + i]; let pi = IN[S_PI + i];
  * interpolates in ln p to the pressure P[0] (0 for the lowest layer) as
  * levels.module.js does, with the column's geopotential integrated in
  * registers, derives the comfort measures there as levels.module.js
- * does, and adds the column water, cloud and sea-level pressure.
+ * does, adds the column water, cloud and sea-level pressure, and when
+ * P[3] asks for it the vertical velocity at the level as
+ * levels.module.js derives it from the layers' mass-flux divergences.
  * frameRain folds the step accumulators into the three-hour rain,
  * S ← S·P[1] + rain, and the running runoff, which moves to RDONE for
  * the host to count when the diagnostics are taken (P[2] = 1).
@@ -194,6 +196,33 @@ const FRAME_KERNELS = {
   OUT[FR_TPW + i] = water; OUT[FR_TCW + i] = cloud;
   let tb = IN[S_TH + (K - 1) * C + i] * exner0 * LV[L_CM + K - 1];
   OUT[FR_MSLP + i] = pi * exp(phis / (RGAS * (tb + 0.00325 * phis / GRAV)));
+  if (P[3] > 0.5) {
+    var massDivergence: array<f32, K>; var divergence: array<f32, K>;
+    for (var j = 0; j < K; j++) { massDivergence[j] = 0.0; divergence[j] = 0.0; }
+    for (var m = 0; m < MAXE; m++) {
+      let e = MI[EOC + MAXE * i + m]; let f = f32(MI[ESC + MAXE * i + m]) * MF[F_DV + e];
+      let piEdge = 0.5 * (IN[S_PI + MI[COE + 2 * e]] + IN[S_PI + MI[COE + 2 * e + 1]]);
+      for (var j = 0; j < K; j++) { let flow = f * IN[S_U + j * E + e]; massDivergence[j] += piEdge * flow; divergence[j] += flow; }
+    }
+    var dPi = 0.0;
+    for (var j = 0; j < K; j++) { massDivergence[j] /= MF[F_AREA + i]; divergence[j] /= MF[F_AREA + i]; dPi -= massDivergence[j] * LV[L_DS + j]; }
+    let sigma = here / pi;
+    let advectionK = massDivergence[k] - pi * divergence[k]; let advectionK1 = massDivergence[k + 1] - pi * divergence[k + 1];
+    let piAdvection = advectionK + tw * (advectionK1 - advectionK);
+    var layer = 0;
+    while (layer < K - 1 && LV[L_SL + layer] < sigma) { layer++; }
+    let s = clamp((sigma - LV[L_SU + layer]) / LV[L_DS + layer], 0.0, 1.0);
+    var cumulative = 0.0; var upper = 0.0; var flow = 0.0;
+    for (var j = 0; j < K; j++) {
+      cumulative += massDivergence[j] * LV[L_DS + j];
+      var lower = -cumulative - LV[L_SL + j] * dPi;
+      if (j == K - 1) { lower = 0.0; }
+      if (j == layer) { flow = upper + s * (lower - upper); }
+      upper = lower;
+    }
+    let omega = flow + sigma * (dPi + piAdvection);
+    OUT[FR_W + i] = -omega * RGAS * temperature / (here * GRAV);
+  }
 }`,
   frameRain: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
@@ -747,14 +776,14 @@ export async function createGpuCore(mesh, {
    */
   const FIELDS = {
     temperature: ['FR', 'T', 1], height: ['FR', 'Z', 1], humidity: ['FR', 'RH', 1], speed: ['FR', 'SPD', 1], wind: ['FR', 'WIND', 3],
-    dewPoint: ['FR', 'DP', 1], wetBulb: ['FR', 'WB', 1], misery: ['FR', 'MI', 1],
+    dewPoint: ['FR', 'DP', 1], wetBulb: ['FR', 'WB', 1], misery: ['FR', 'MI', 1], vertical: ['FR', 'W', 1],
     water: ['FR', 'TPW', 1], cloud: ['FR', 'TCW', 1], mslp: ['FR', 'MSLP', 1], rain: ['FR', 'RAIN', 1], ps: ['S', 'PI', 1], ice: ['S', 'ICE', 1],
     albedo: ['PH', 'ADIF', 1], shortwave: ['PH', 'SWDN', 1], longwave: ['PH', 'OLR', 1], soil: ['PH', 'SOIL', 1], snow: ['PH', 'SNOW', 1], vegetation: ['PH', 'VEG', 1],
   };
   const frameParams = new Float32Array(8);
   function frame({ pressure = 0, keep = 1, fields = [], diagnostics = false } = {}) {
     const wanted = fields.filter((name) => name in FIELDS);
-    frameParams.set([pressure, keep, diagnostics ? 1 : 0]);
+    frameParams.set([pressure, keep, diagnostics ? 1 : 0, wanted.includes('vertical') ? 1 : 0]);
     device.queue.writeBuffer(buffers.FP, 0, frameParams);
     const g = group(buffers.S, buffers.FR, buffers.D, buffers.FP);
     const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();

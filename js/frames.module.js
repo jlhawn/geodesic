@@ -1,11 +1,13 @@
 /*
  * The page and the model worker talk as client and server. The page
  * subscribes to what it draws,
- *   { type: 'subscribe', subscription: { level, fields, diagnostics } },
- * with level 'surface' (the lowest layer) or a pressure in hPa, fields
- * a list of names from FIELDS, and diagnostics true while it shows the
- * global summary. Every frame the worker posts carries exactly that:
- *   { type: 'frame', frame, time, day, level, engine, pause, fields: { name: Float32Array }, diagnostics }
+ *   { type: 'subscribe', subscription: { level, depth, fields, diagnostics } },
+ * with level 'surface' (the lowest layer) or a pressure in hPa, depth
+ * 'surface' (the mixed layer) or a depth in metres for the ocean
+ * fields that vary with depth, fields a list of names from FIELDS, and
+ * diagnostics true while it shows the global summary. Every frame the
+ * worker posts carries exactly that:
+ *   { type: 'frame', frame, time, day, level, depth, engine, pause, fields: { name: Float32Array }, diagnostics }
  * with diagnostics null unless subscribed and pause the worker's idle
  * time after each GPU step in ms. A frame built before the latest
  * subscription arrived may lack a field the page now wants. The page
@@ -20,6 +22,7 @@ export const FIELDS = {
   dewPoint: 'dew point at the level, K',
   wetBulb: 'wet-bulb temperature at the level, K',
   misery: 'heat index above 26.7 °C, wind chill below 10 °C, air temperature between, at the level, K',
+  vertical: 'vertical velocity at the level, m/s, positive upward',
   ps: 'surface pressure, Pa',
   mslp: 'sea-level pressure, Pa',
   water: 'precipitable water, kg/m²',
@@ -32,16 +35,18 @@ export const FIELDS = {
   soil: 'soil water, kg/m²',
   snow: 'snow water, kg/m²',
   vegetation: 'vegetation cover, 0 (bare ground) to 1 (dense forest)',
-  sst: 'sea surface temperature, K',
+  sst: 'sea temperature at the depth, K',
   sss: 'sea surface salinity, psu',
   layerDepth: 'mixed layer depth, m',
   thermocline: 'thermocline depth, m',
   ssh: 'sea surface height, m',
-  current: 'surface current speed, m/s',
-  currents: 'surface current, m/s, three components per cell',
+  current: 'current speed at the depth, m/s',
+  currents: 'current at the depth, m/s, three components per cell',
+  upwelling: 'vertical velocity at the depth, m/s, positive upward',
 };
 
-export const LEVEL_FIELDS = new Set(['temperature', 'height', 'humidity', 'speed', 'wind', 'dewPoint', 'wetBulb', 'misery']);
-export const OCEAN_FIELDS = new Set(['sst', 'sss', 'layerDepth', 'thermocline', 'ssh', 'current', 'currents']);
+export const LEVEL_FIELDS = new Set(['temperature', 'height', 'humidity', 'speed', 'wind', 'dewPoint', 'wetBulb', 'misery', 'vertical']);
+export const OCEAN_FIELDS = new Set(['sst', 'sss', 'layerDepth', 'thermocline', 'ssh', 'current', 'currents', 'upwelling']);
+export const DEPTH_FIELDS = new Set(['sst', 'current', 'currents', 'upwelling']);
 
 export const RAIN_MEMORY = 3 * 3600;

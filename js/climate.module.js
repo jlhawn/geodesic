@@ -10,6 +10,7 @@ import { Stats } from "./stats.module.js";
 import { pickDevice, isMobileBrowser, PROBE_VERSION, DESKTOP_MAX_N, MOBILE_MAX_N } from "./deviceChoice.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
+const VERTICAL_MAX = { surface: 3, 1000: 3, 850: 10, 700: 10, 500: 10, 250: 10, 70: 3, 10: 1 };
 const TEMP_RANGE = { surface: [-35, 35], 1000: [-35, 35], 850: [-45, 25], 700: [-55, 15], 500: [-65, 5], 250: [-85, -25], 70: [-95, -35], 10: [-75, 5] };
 const CELSIUS = -273.15;
 const REFERENCE_SPEED = { surface: 15, 1000: 20, 850: 25, 700: 25, 500: 30, 250: 40, 70: 50, 10: 60 };
@@ -18,6 +19,7 @@ const OVERLAYS = {
   wind: { label: 'Wind speed', short: 'WIND', unit: 'm/s', kind: 'sequential', field: 'speed', scale: 1, range: (level) => [0, WIND_MAX[level]] },
   temp: { label: 'Temperature', short: 'TEMP', unit: '°C', kind: 'sequential', field: 'temperature', scale: 1, offset: CELSIUS, range: (level) => TEMP_RANGE[level] },
   rh: { label: 'Relative humidity', short: 'RH', unit: '%', kind: 'sequential', field: 'humidity', scale: 100, range: () => [0, 100] },
+  vertical: { label: 'Vertical motion', short: 'W', unit: 'cm/s', kind: 'diverging', field: 'vertical', scale: 100, decimals: 1, range: (level) => [-VERTICAL_MAX[level], VERTICAL_MAX[level]] },
   mi: { label: 'Misery index', short: 'MI', unit: '°C', kind: 'sequential', field: 'misery', scale: 1, offset: CELSIUS, range: () => [-40, 45] },
   wbt: { label: 'Wet-bulb temperature', short: 'WBT', unit: '°C', kind: 'sequential', field: 'wetBulb', scale: 1, offset: CELSIUS, range: () => [-40, 35] },
   dp: { label: 'Dew point', short: 'DP', unit: '°C', kind: 'sequential', field: 'dewPoint', scale: 1, offset: CELSIUS, range: () => [-40, 30] },
@@ -35,8 +37,9 @@ const OVERLAYS = {
   veg: { label: 'Vegetation', short: 'VEG', unit: '', kind: 'sequential', field: 'vegetation', scale: 1, decimals: 2, range: () => [0, 1] },
   snow: { label: 'Snow', short: 'SNOW', unit: 'kg/m²', kind: 'sequential', field: 'snow', scale: 1, range: () => [0, 100] },
   elevation: { label: 'Elevation', short: 'ELEV', unit: 'm', kind: 'diverging', field: 'elevation', scale: 1, range: () => [-4000, 4000] },
-  sst: { label: 'Sea surface temperature', short: 'SST', unit: '°C', kind: 'sequential', field: 'sst', scale: 1, offset: CELSIUS, range: () => [-2, 32] },
-  current: { label: 'Current speed', short: 'CUR', unit: 'm/s', kind: 'sequential', field: 'current', scale: 1, range: () => [0, 1] },
+  sst: { label: 'Sea temperature', short: 'SST', unit: '°C', kind: 'sequential', field: 'sst', scale: 1, offset: CELSIUS, range: () => [-2, 32] },
+  current: { label: 'Current speed', short: 'CUR', unit: 'm/s', kind: 'sequential', field: 'current', scale: 1, range: (depth) => [0, depth === 'surface' ? 1 : 0.5] },
+  upwelling: { label: 'Upwelling', short: 'UPW', unit: 'm/day', kind: 'diverging', field: 'upwelling', scale: 86400, decimals: 1, range: () => [-5, 5] },
   layer: { label: 'Mixed layer depth', short: 'MLD', unit: 'm', kind: 'sequential', field: 'layerDepth', scale: 1, range: () => [10, 300] },
   thermocline: { label: 'Thermocline depth', short: 'THD', unit: 'm', kind: 'sequential', field: 'thermocline', scale: 1, range: () => [0, 400] },
   sss: { label: 'Sea surface salinity', short: 'SSS', unit: 'psu', kind: 'sequential', field: 'sss', scale: 1, range: () => [32, 38] },
@@ -44,8 +47,8 @@ const OVERLAYS = {
   none: { label: 'None', short: 'None' },
 };
 const MODE_OVERLAYS = {
-  atmosphere: [['none'], ['wind', 'temp', 'rh'], ['mi', 'wbt', 'dp'], ['rain', 'tpw', 'tcw', 'cloudcover'], ['albedo', 'swdown', 'olr'], ['mslp', 'ps', 'elevation'], ['ice', 'snow', 'soil', 'veg']],
-  ocean: [['none'], ['sst', 'current', 'layer', 'thermocline', 'sss', 'ssh']],
+  atmosphere: [['none'], ['wind', 'temp', 'rh', 'vertical'], ['mi', 'wbt', 'dp'], ['rain', 'tpw', 'tcw', 'cloudcover'], ['albedo', 'swdown', 'olr'], ['mslp', 'ps', 'elevation'], ['ice', 'snow', 'soil', 'veg']],
+  ocean: [['none'], ['sst', 'current', 'upwelling'], ['layer', 'thermocline', 'sss', 'ssh']],
 };
 const MODE_DEFAULT_OVERLAY = { atmosphere: 'wind', ocean: 'sst' };
 
@@ -88,7 +91,7 @@ const PALETTES = {
  */
 const PHONE = matchMedia('(max-width: 600px), (max-height: 500px) and (pointer: coarse)');
 
-const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: PHONE.matches ? 'closed' : 'open', sun: 1, ambient: 0.004, stats: 'off' };
+const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', depth: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: PHONE.matches ? 'closed' : 'open', sun: 1, ambient: 0.004, stats: 'off' };
 
 /*
  * The contour row draws isobars of surface pressure at the surface and
@@ -120,6 +123,7 @@ function applyOverrides(settings, overrides) {
   if (!('view' in overrides)) {
     if ('overlay' in overrides) settings.view = modeOf(OVERLAY_ALIASES[overrides.overlay] ?? overrides.overlay);
     else if (['level', 'isobars', 'isobarStep', 'heightStep'].some((key) => key in overrides)) settings.view = 'atmosphere';
+    else if ('depth' in overrides) settings.view = 'ocean';
     else if ('animate' in overrides && settings.view === 'space') settings.view = modeOf(settings.overlay);
   }
   for (const key of Object.keys(DEFAULTS)) {
@@ -212,7 +216,8 @@ async function builtinSnapshots(known = []) {
   return [...new Set(known)].map(entry);
 }
 
-const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'mi', 'wbt', 'dp', 'none']);
+const HEIGHT_OVERLAYS = new Set(['wind', 'temp', 'rh', 'vertical', 'mi', 'wbt', 'dp', 'none']);
+const DEPTH_OVERLAYS = new Set(['sst', 'current', 'upwelling', 'none']);
 const CURRENT_REFERENCE = 0.2;
 // The light sliders run on a square law, position = √(value / max), for fine control near dark.
 const LIGHT_MAX = { sun: 2, ambient: 0.5 };
@@ -222,13 +227,16 @@ const VIEW_NOTES = [
   ['Mode', 'Atmosphere and Ocean paint the chosen overlay on an evenly lit globe, each with its own overlays: the wind or the current is what the animation follows, and only Atmosphere offers isobars and height lines. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day.'],
   ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
   ['Height', 'The pressure level shown by the wind, temperature and humidity views and followed by the animation: Sfc is the lowest layer, about 60 m up; the others are hPa. Column views hide it and use the surface wind.'],
+  ['Depth', 'The depth shown by the sea temperature, current and upwelling views and followed by the animation: Surface is the mixed layer, the others are metres down, each cell showing the isopycnal layer that holds that depth; grey where the sea floor is above it. Column views hide it and use the surface current.'],
+  ['Vertical motion', 'The air\'s vertical velocity at the chosen height, upward positive: rising air in warm fronts, storms and the tropical rain belt, sinking air under the subtropical highs. Diagnosed from the convergence of the flow, so it is noisier than the wind.'],
   ['Wind speed', 'Speed at the chosen height.'],
   ['Temperature', 'Air temperature at the chosen height.'],
   ['Relative humidity', 'At the chosen height.'],
   ['Surface pressure', 'The pressure at the ground itself, about 1000 hPa at the coast and 550 hPa on the Tibetan plateau; the weather signal is the small variation on top of the elevation.'],
   ['Cloud cover', 'Cloud as white over grey with the opacity the Satellite view uses, from the column\'s cloud water.'],
-  ['Sea surface temperature', 'The temperature of the ocean\'s wind-driven upper layer, the freezing point under ice; grey over land.'],
-  ['Current speed', 'The upper layer\'s current, up to a metre a second in the boundary currents. With any ocean view selected, Particles and Vectors trace the current instead of the wind.'],
+  ['Sea temperature', 'The temperature of the ocean at the chosen depth: at the surface the wind-driven mixed layer, the freezing point under ice; grey over land.'],
+  ['Current speed', 'The current at the chosen depth, up to a metre a second in the surface boundary currents and weaker below. With any ocean view selected, Particles and Vectors trace the current instead of the wind.'],
+  ['Upwelling', 'The water\'s vertical velocity through the chosen depth, upward positive, from the convergence of the flow above it: up along the equator and the eastern boundaries where the wind drives the surface water away, down under the subtropical gyres.'],
   ['Mixed layer depth', 'The thickness of the surface mixed layer: deep where winter cooling and wind stirring reach down, shallow under summer warming and along upwelling coasts.'],
   ['Thermocline depth', 'The depth of the boundary between the 23 °C and the 19 °C water classes, close to the 20 °C isotherm: deep in the western tropical Pacific and the subtropical gyres where the wind piles warm water up, shallow in the east and toward the poles, where it outcrops.'],
   ['Sea surface salinity', 'The salinity of the ocean\'s upper layer: saltier where evaporation outpaces rain, as under the subtropical highs, and fresher under heavy rain and where rivers reach the sea.'],
@@ -285,6 +293,9 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   }
   const activeLevel = () => (settings.view === 'atmosphere' && HEIGHT_OVERLAYS.has(settings.overlay) ? settings.level : 'surface');
   const shownLevel = () => latest?.level ?? activeLevel();
+  const activeDepth = () => (settings.view === 'ocean' && DEPTH_OVERLAYS.has(settings.overlay) ? settings.depth : 'surface');
+  const shownDepth = () => latest?.depth ?? activeDepth();
+  const depthLabel = (depth) => (depth === 'surface' ? 'Surface' : `${depth} m`);
   let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, highlight = null, rgb = null, running = !paused, animatedSource = null, seaCells = null;
   let cells = null, centres = null, selected = -1, hoverTip = null, neighbours = null, surface = null;
   let geographyFields = {}, hasLand = false;
@@ -492,12 +503,12 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (!overlay.field) {
       viewer.setColorMap({ kind: 'flat', color: NO_OVERLAY });
       scaleRow.classList.add('hidden');
-      overlayLabel = settings.view === 'ocean' ? 'Surface current · no overlay' : `Wind @ ${levelLabel(shownLevel())} · no overlay`;
+      overlayLabel = settings.view === 'ocean' ? `Current @ ${depthLabel(shownDepth())} · no overlay` : `Wind @ ${levelLabel(shownLevel())} · no overlay`;
       return;
     }
     const values = latest[overlay.field];
     if (!values) return;
-    const [min, max] = overlay.range(shownLevel());
+    const [min, max] = overlay.range(settings.view === 'ocean' ? shownDepth() : shownLevel());
     if (overlay.kind === 'clouds') {
       viewer.setColorMap({ kind: 'cover', a: overlay.scale / CLOUD_OPACITY_SCALE, base: COVER_BASE });
       renderScale(COVER_STOPS, min, max, overlay.unit);
@@ -507,7 +518,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       viewer.setColorMap({ kind: 'palette', stops, a: overlay.scale / (max - min), b: ((overlay.offset || 0) - min) / (max - min), missing: NO_DATA });
       renderScale(stops, min, max, overlay.unit);
       const columnField = ['ps', 'mslp', 'rain', 'water', 'cloud', 'ice', 'albedo', 'shortwave', 'longwave', 'soil', 'snow', 'vegetation', 'elevation'].includes(overlay.field);
-      overlayLabel = settings.view === 'ocean' ? `${OVERLAY_NAMES[settings.overlay]} · surface current` : columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(shownLevel())}`;
+      overlayLabel = settings.view === 'ocean' ? (DEPTH_OVERLAYS.has(settings.overlay) ? `${OVERLAY_NAMES[settings.overlay]} @ ${depthLabel(shownDepth())}` : `${OVERLAY_NAMES[settings.overlay]} · current @ ${depthLabel(shownDepth())}`) : columnField ? `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}` : `${OVERLAY_NAMES[settings.overlay]} @ ${levelLabel(shownLevel())}`;
     }
     scaleRow.classList.remove('hidden');
     if (values !== uploaded) { viewer.updateValues(values); uploaded = values; }
@@ -521,7 +532,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     arrows.setVisible(animate === 'arrows');
     particles.setVisible(animate === 'particles');
     if (animate === 'arrows' && field) arrows.update(field, { referenceSpeed: reference });
-    const source = ocean ? 'current' : `wind ${shownLevel()}`;
+    const source = ocean ? `current ${shownDepth()}` : `wind ${shownLevel()}`;
     if (animate === 'particles' && field && source !== animatedSource) { particles.reset(); animatedSource = source; }
     if (animate === 'particles' && field) particles.setField(field, reference, ocean ? seaCells : null);
     const note = animate === 'particles' ? `full pace at ${reference} m/s` : animate === 'arrows' ? `full arrow at ${reference} m/s` : '';
@@ -594,6 +605,9 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     const heights = settings.view === 'atmosphere' && HEIGHT_OVERLAYS.has(settings.overlay);
     document.getElementById('heightLabel').classList.toggle('hidden', !heights);
     document.getElementById('heightOptions').classList.toggle('hidden', !heights);
+    const depths = settings.view === 'ocean' && DEPTH_OVERLAYS.has(settings.overlay);
+    document.getElementById('depthLabel').classList.toggle('hidden', !depths);
+    document.getElementById('depthOptions').classList.toggle('hidden', !depths);
     for (const id of ['overlayLabel', 'overlayOptions', 'animateLabel', 'animateOptions']) document.getElementById(id).classList.toggle('hidden', space);
     for (const id of ['lightLabel', 'lightOptions']) document.getElementById(id).classList.toggle('hidden', !space);
     document.querySelector('[data-setting="projection"] [data-value="sphere"]').textContent = space ? 'Perspective' : 'Orthographic';
@@ -690,7 +704,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
       if (settings.animate !== 'none') fields.add(settings.view === 'ocean' && (!ready || ready.ocean) ? 'currents' : 'wind');
       if (settings.isobars === 'on') fields.add(isolinesFor(activeLevel()).subscribe);
     }
-    return { level: activeLevel(), fields: [...fields].sort(), diagnostics: modelShown() };
+    return { level: activeLevel(), depth: activeDepth(), fields: [...fields].sort(), diagnostics: modelShown() };
   }
   let subscribed = '';
   function subscribe() {
@@ -821,7 +835,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (message.type === 'probe' && probed) { probed(message); probed = null; }
     if (message.type === 'frame') {
       document.getElementById('progress').classList.remove('visible');
-      latest = { ...message.fields, ...geographyFields, time: message.time, level: message.level, diagnostics: message.diagnostics, engine: message.engine, pause: message.pause, N: ready.N, workers: ready.workers };
+      latest = { ...message.fields, ...geographyFields, time: message.time, level: message.level, depth: message.depth, diagnostics: message.diagnostics, engine: message.engine, pause: message.pause, N: ready.N, workers: ready.workers };
       if (!slopesUploaded) { uploadSlopes(); slopesUploaded = true; }
       clock.push({ wall: performance.now(), time: message.time });
       while (clock.length > 2 && clock[clock.length - 1].wall - clock[0].wall > 30000) clock.shift();

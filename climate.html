@@ -112,6 +112,9 @@
     .phone #heightOptions .segmented button { padding: 6px 8px; }
     .phone #heightOptions .unit { display: none; }
     .phone #heightLabel::after { content: '\00a0· hPa'; }
+    .phone #depthOptions .segmented button { padding: 6px 8px; }
+    .phone #depthOptions .unit { display: none; }
+    .phone #depthLabel::after { content: '\00a0· m'; }
     .phone #overlayOptions .segmented { flex-direction: column; flex-wrap: nowrap; border: 1px solid #4a4a4a; border-radius: 8px; overflow: hidden; }
     .phone #overlayOptions .segmented button { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0; border: 0; border-top: 1px solid #333; border-radius: 0; padding: 10px 12px; text-align: left; }
     .phone #overlayOptions .segmented button:first-child { border-top: 0; }
@@ -143,6 +146,10 @@
     <span class="label" id="heightLabel">Height</span>
     <div class="options" id="heightOptions" data-setting="level">
       <div class="segmented"><button data-value="surface">Surface</button><button data-value="1000">1000</button><button data-value="850">850</button><button data-value="700">700</button><button data-value="500">500</button><button data-value="250">250</button><button data-value="70">70</button><button data-value="10">10</button></div><span class="unit">hPa</span>
+    </div>
+    <span class="label" id="depthLabel">Depth</span>
+    <div class="options" id="depthOptions" data-setting="depth">
+      <div class="segmented"><button data-value="surface">Surface</button><button data-value="100">100</button><button data-value="200">200</button><button data-value="300">300</button><button data-value="500">500</button><button data-value="1000">1000</button><button data-value="2000">2000</button></div><span class="unit">m</span>
     </div>
     <span class="label" id="overlayLabel">Overlay</span>
     <div class="options stacked" id="overlayOptions" data-setting="overlay"></div>

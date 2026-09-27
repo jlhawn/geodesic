@@ -45,7 +45,7 @@ function oceanKernels(o) {
   const offsetLines = Object.entries(OD).filter(([k]) => k !== 'total').map(([k, v]) => `const O_${k}: i32 = ${v};`).join('\n');
   const bLines = Object.entries(B).filter(([k]) => k !== 'total').map(([k, v]) => `const B_${k}: i32 = ${v};`).join('\n');
   const head = `
-const L: i32 = ${L};
+const L: i32 = ${L}; const DRY: f32 = -1.0e30;
 const OH: i32 = ${OS.OH}; const OU: i32 = ${OS.OU}; const OQ: i32 = ${OS.OQ}; const OW: i32 = ${OS.OW}; const OSTOTAL: i32 = ${OS.total};
 ${offsetLines}
 ${bLines}
@@ -537,25 +537,43 @@ export function createLayeredOcean(core, options = {}) {
   const ODTOTAL = OD.total + bTotal;
 
   const kernels = oceanKernels({ ...o, L, C, E, V, OS, OD, B, rho, labelT, labelS, nu4, diffusion });
-  const OF = seq([['SST', C], ['SSS', C], ['H1', C], ['THD', C], ['ETA', C], ['CUR', 3 * C], ['CSPD', C], ['PART', OCEAN_REDUCED.length * reductionGroups(C)]]);
+  const OF = seq([['SST', C], ['SSS', C], ['H1', C], ['THD', C], ['ETA', C], ['CUR', 3 * C], ['CSPD', C], ['UPW', C], ['PART', OCEAN_REDUCED.length * reductionGroups(C)]]);
   kernels.oFrame = `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let h0 = max(EPSO, IN[hOff(0) + i]);
-  OUT[${OF.SST} + i] = IN[qOff(0) + i] / h0;
   OUT[${OF.SSS} + i] = IN[wOff(0) + i] / h0;
   OUT[${OF.H1} + i] = IN[hOff(0) + i];
   var thermo = 0.0;
   for (var k = 0; k <= ${thermoclineLayers}; k++) { thermo += IN[hOff(k) + i]; }
   OUT[${OF.THD} + i] = thermo;
   OUT[${OF.ETA} + i] = OD[O_ETA + i];
-  var w = vec3<f32>(0.0, 0.0, 0.0);
+  let depth = P[4];
+  var layer = -1; var top = 0.0;
+  for (var k = 0; k < L; k++) { let hk = IN[hOff(k) + i]; if (layer < 0 && depth < top + hk) { layer = k; } if (layer < 0) { top += hk; } }
+  if (layer < 0) {
+    OUT[${OF.SST} + i] = DRY; OUT[${OF.UPW} + i] = DRY;
+    OUT[${OF.CUR} + 3 * i] = 0.0; OUT[${OF.CUR} + 3 * i + 1] = 0.0; OUT[${OF.CUR} + 3 * i + 2] = 0.0; OUT[${OF.CSPD} + i] = 0.0;
+    return;
+  }
+  OUT[${OF.SST} + i] = IN[qOff(layer) + i] / max(EPSO, IN[hOff(layer) + i]);
+  var w = vec3<f32>(0.0, 0.0, 0.0); var upwelling = 0.0;
   for (var m = 0; m < MAXE; m++) {
-    let e = MI[EOC + MAXE * i + m];
-    w += abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + e] * MF[F_DV + e] * IN[uOff(0) + e] * vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
+    let e = MI[EOC + MAXE * i + m]; let s = f32(MI[ESC + MAXE * i + m]);
+    w += abs(s) * 0.5 * MF[F_DC + e] * MF[F_DV + e] * IN[uOff(layer) + e] * vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
+    let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+    var above = 0.0; var transport = 0.0;
+    for (var k = 0; k < L; k++) {
+      if (above >= depth) { break; }
+      let he = 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b]);
+      transport += IN[uOff(k) + e] * min(he, depth - above);
+      above += he;
+    }
+    upwelling += s * MF[F_DV + e] * transport;
   }
   w = w / MF[F_AREA + i];
   OUT[${OF.CUR} + 3 * i] = w.x; OUT[${OF.CUR} + 3 * i + 1] = w.y; OUT[${OF.CUR} + 3 * i + 2] = w.z;
   OUT[${OF.CSPD} + i] = length(w);
+  OUT[${OF.UPW} + i] = upwelling / MF[F_AREA + i];
 }`;
   kernels.oReduce = reductionKernel(OCEAN_REDUCED, { count: C, base: OF.PART, setup: oceanReducedSetup(thermoclineLayers) });
   const ob = {
@@ -951,15 +969,17 @@ export function createLayeredOcean(core, options = {}) {
   }
 
   /*
-   * Queues the surface fields the page asked for and, when asked, the
+   * Queues the fields the page asked for, those that vary with depth at
+   * `depth` metres (0 for the mixed layer), and, when asked, the
    * diagnostics reduction, and reads back only those; fields over land
-   * are NaN and current vectors zero there.
+   * or below the sea floor are NaN and current vectors zero there.
    */
-  const FIELDS = { sst: ['SST', 1], sss: ['SSS', 1], layerDepth: ['H1', 1], thermocline: ['THD', 1], ssh: ['ETA', 1], currents: ['CUR', 3], current: ['CSPD', 1] };
-  function frame({ fields = [], diagnostics: summarize = false } = {}) {
+  const FIELDS = { sst: ['SST', 1], sss: ['SSS', 1], layerDepth: ['H1', 1], thermocline: ['THD', 1], ssh: ['ETA', 1], currents: ['CUR', 3], current: ['CSPD', 1], upwelling: ['UPW', 1] };
+  function frame({ fields = [], diagnostics: summarize = false, depth = 0 } = {}) {
     const wanted = fields.filter((name) => name in FIELDS);
     if (!wanted.length && !summarize) return Promise.resolve({ fields: {}, diagnostics: null });
     const g = group(ob.S, ob.OF);
+    setParams([0, 0, 0, 0, depth]);
     const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
     if (wanted.length) dispatch(pass, 'oFrame', g, C);
     if (summarize) dispatch(pass, 'oReduce', g, C);
@@ -973,7 +993,7 @@ export function createLayeredOcean(core, options = {}) {
         const name = ranges[n].name;
         if (!name) { out.diagnostics = diagnosticsFrom(finishReduction(OCEAN_REDUCED, view, C)); return; }
         const width = FIELDS[name][1];
-        for (let i = 0; i < C; i++) if (!cellOcean[i]) for (let c = 0; c < width; c++) view[width * i + c] = width === 1 ? NaN : 0;
+        for (let i = 0; i < C; i++) if (!cellOcean[i] || (width === 1 && view[i] <= -1e30)) for (let c = 0; c < width; c++) view[width * i + c] = width === 1 ? NaN : 0;
         out.fields[name] = view;
       });
       return out;

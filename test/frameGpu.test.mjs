@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
-import { levelFields, dewPoint, wetBulb, miseryIndex } from '../js/levels.module.js';
+import { levelFields, verticalVelocity, dewPoint, wetBulb, miseryIndex } from '../js/levels.module.js';
+import { depthFields } from '../js/ocean/layered.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS } from '../js/frames.module.js';
 
@@ -52,9 +53,10 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     const layerWind = (k) => cellVector(mesh, u.subarray(k * E, (k + 1) * E));
     const reference = levelFields(core, pi, theta, layerWind, level, q);
     const comfort = (fn) => Float64Array.from(reference.temperature, (t, i) => fn(t - 273.15, reference.humidity[i], reference.speed[i]) + 273.15);
+    const vertical = verticalVelocity(mesh, core, pi, u, level, reference.temperature);
     const checks = {
       temperature: [reference.temperature, 2e-3], height: [reference.height, 0.1], humidity: [reference.humidity, 5e-5], speed: [reference.speed, 5e-4], wind: [reference.vector, 5e-4],
-      dewPoint: [comfort(dewPoint), 5e-3], wetBulb: [comfort(wetBulb), 5e-3], misery: [comfort(miseryIndex), 5e-3],
+      dewPoint: [comfort(dewPoint), 5e-3], wetBulb: [comfort(wetBulb), 5e-3], misery: [comfort(miseryIndex), 5e-3], vertical: [vertical, 2e-3],
     };
     for (const [name, [values, tolerance]] of Object.entries(checks)) {
       const { max, at } = worst(values, frame.fields[name]);
@@ -109,6 +111,28 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   for (let i = 0; i < C; i++) if (!model.geography.land[i]) { const a = mesh.areaCell[i]; oceanArea += a; depth += a * ocean.h1[i]; ssh = Math.max(ssh, Math.abs(ocean.eta[i])); }
   close('oceanUpperDepth', depth / oceanArea, d.oceanUpperDepth); close('oceanSSH', ssh, d.oceanSSH);
   console.log(`GPU frame at N=6: Ts ${d.meanSurfaceT.toFixed(3)} K, OLR ${d.outgoingLongwave.toFixed(2)} W/m², precipitation ${(86400 * d.precipitation).toFixed(3)} mm/day, ocean h1 ${d.oceanUpperDepth.toFixed(2)} m`);
+
+  const column = await model.oceanEngine.serialize();
+  const L = model.oceanEngine.layers, cellOcean = model.oceanEngine.cellOcean;
+  for (const depth of [137, 903]) {
+    const at = await model.beginFrame({ depth, fields: ['sst', 'current', 'currents', 'upwelling'] });
+    assert.equal(at.depth, depth);
+    const expected = depthFields(mesh, L, { h: column.h, u: column.u, temperature: (k, i) => column.T[k * C + i], cellOcean }, depth);
+    const speed = Float64Array.from({ length: C }, (_, i) => (Number.isNaN(expected.temperature[i]) ? NaN : Math.hypot(expected.current[3 * i], expected.current[3 * i + 1], expected.current[3 * i + 2])));
+    let magnitude = 0;
+    for (let i = 0; i < C; i++) if (!Number.isNaN(expected.upwelling[i])) magnitude = Math.max(magnitude, Math.abs(expected.upwelling[i]));
+    assert.ok(magnitude > 0);
+    for (const [name, [values, tolerance]] of Object.entries({ sst: [expected.temperature, 1e-3], current: [speed, 1e-5], currents: [expected.current, 1e-5], upwelling: [expected.upwelling, 1e-3 * magnitude] })) {
+      const { max, at: worstAt } = worst(values, at.fields[name], { skipNaN: true });
+      assert.ok(max < tolerance, `${name} at ${depth} m: ${max} at ${worstAt} (${values[worstAt]} against ${at.fields[name][worstAt]})`);
+    }
+  }
+
+  const floor = await model.beginFrame({ depth: 4500, fields: ['sst', 'currents', 'upwelling'] });
+  for (let i = 0; i < C; i++) {
+    assert.ok(Number.isNaN(floor.fields.sst[i]) && Number.isNaN(floor.fields.upwelling[i]), `the sea floor lies above 4500 m at ${i}`);
+    for (let c = 0; c < 3; c++) assert.equal(floor.fields.currents[3 * i + c], 0);
+  }
 
   const unsubscribed = await model.beginFrame({ level: 'surface', fields: ['sst'] });
   assert.deepEqual(Object.keys(unsubscribed.fields), ['sst']);

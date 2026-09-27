@@ -7,7 +7,7 @@ import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand } from './physics/regrid.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure } from './geography.module.js';
 import { regridCellField } from './physics/regrid.module.js';
-import { levelFields, dewPoint, wetBulb, miseryIndex } from './levels.module.js';
+import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName } from './stateFile.module.js';
 import { LEVEL_FIELDS, OCEAN_FIELDS, RAIN_MEMORY } from './frames.module.js';
@@ -16,7 +16,7 @@ import { profileGpu } from './gpu/profile.module.js';
 
 const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
-let subscription = { level: 'surface', fields: [], diagnostics: false }, layerWinds = [];
+let subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false }, layerWinds = [];
 const rain = { total: null, time: 0 };
 
 function restartRain() { rain.total = null; rain.time = model.time; if (model.restartPrecipitation) model.restartPrecipitation(); }
@@ -27,7 +27,7 @@ function restartRain() { rain.total = null; rain.time = model.time; if (model.re
  * fields and diagnostics are built. The cell-center winds of a layer are
  * reconstructed only when that layer bounds the level somewhere.
  */
-async function cpuFrame({ level, fields, diagnostics: summarize }) {
+async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
   const { mesh, core, state } = model;
   const C = mesh.nCells, E = mesh.nEdges, [pi, theta, u, , q, qc, iceField] = state;
   const time = model.time, interval = time - rain.time;
@@ -58,6 +58,7 @@ async function cpuFrame({ level, fields, diagnostics: summarize }) {
     if (want.has('dewPoint')) out.dewPoint = comfort(dewPoint);
     if (want.has('wetBulb')) out.wetBulb = comfort(wetBulb);
     if (want.has('misery')) out.misery = comfort(miseryIndex);
+    if (want.has('vertical')) out.vertical = verticalVelocity(mesh, core, pi, u, level, f.temperature);
   }
   if (want.has('ps')) out.ps = Float32Array.from(pi);
   if (want.has('mslp')) {
@@ -77,24 +78,24 @@ async function cpuFrame({ level, fields, diagnostics: summarize }) {
   if (model.land && want.has('soil')) out.soil = Float32Array.from(model.land.soil);
   if (model.land && want.has('snow')) out.snow = Float32Array.from(model.land.snow);
   if (model.land && want.has('vegetation')) out.vegetation = Float32Array.from(model.land.vegetation);
-  const ocean = model.oceanFields && fields.some((name) => OCEAN_FIELDS.has(name)) ? model.oceanFields() : null;
+  const ocean = model.oceanFields && fields.some((name) => OCEAN_FIELDS.has(name)) ? model.oceanFields(depth === 'surface' ? 0 : Number(depth)) : null;
   if (ocean) {
-    for (const [name, values] of Object.entries({ sst: ocean.T1, sss: ocean.S1, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta })) if (want.has(name)) out[name] = sea(values);
+    for (const [name, values] of Object.entries({ sst: ocean.temperature, sss: ocean.S1, layerDepth: ocean.h1, thermocline: ocean.thermoclineDepth, ssh: ocean.eta, upwelling: ocean.upwelling })) if (want.has(name)) out[name] = sea(values);
     if (want.has('current') || want.has('currents')) {
-      const vector = cellVector(mesh, ocean.u1, new Float64Array(3 * C));
+      const vector = ocean.current;
       if (onLand) for (let i = 0; i < C; i++) if (onLand[i]) vector.fill(0, 3 * i, 3 * i + 3);
       if (want.has('currents')) out.currents = Float32Array.from(vector);
       if (want.has('current')) out.current = sea(Float32Array.from({ length: C }, (_, i) => Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2])));
     }
   }
-  return { time, level, fields: out, diagnostics };
+  return { time, level, depth, fields: out, diagnostics };
 }
 
 const captureFrame = () => (model.beginFrame ? model.beginFrame(subscription) : cpuFrame(subscription));
 
-function postFrame({ time, level, fields, diagnostics }) {
+function postFrame({ time, level, depth, fields, diagnostics }) {
   const transfer = [...new Set(Object.values(fields).map((values) => values.buffer))];
-  self.postMessage({ type: 'frame', frame: frame++, time, day: time / 86400, level, engine: model.engine ?? 'cpu', pause: model.beginFrame ? pace.pause : 0, fields, diagnostics }, transfer);
+  self.postMessage({ type: 'frame', frame: frame++, time, day: time / 86400, level, depth, engine: model.engine ?? 'cpu', pause: model.beginFrame ? pace.pause : 0, fields, diagnostics }, transfer);
 }
 
 async function sendFrame() { postFrame(await captureFrame()); }
@@ -326,7 +327,7 @@ self.onmessage = async (event) => {
   } else if (message.type === 'pace') {
     adjustPace(message);
   } else if (message.type === 'subscribe') {
-    subscription = { level: 'surface', fields: [], diagnostics: false, ...message.subscription };
+    subscription = { level: 'surface', depth: 'surface', fields: [], diagnostics: false, ...message.subscription };
     if (serving && !running) refresh();
   } else if (message.type === 'snapshot') {
     if (serving) await hold(snapshot).catch(report);
