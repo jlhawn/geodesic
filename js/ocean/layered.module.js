@@ -100,13 +100,14 @@ export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth) {
 
 /*
  * The starting water of an interior class at a latitude: its class
- * temperature and salinity equatorward of 50°, blending over 20° of
- * latitude toward 0.5 °C at the salinity that keeps its density, as the
- * polar oceans hold cold, fresh water on the same density surfaces as
- * the warm, salty subtropical thermocline.
+ * temperature and salinity equatorward of 45°, blending over 15° of
+ * latitude toward POLAR_INTERIOR_T at the salinity that keeps its
+ * density, as the polar oceans hold cold, fresh water on the same
+ * density surfaces as the warm, salty subtropical thermocline; the
+ * blend is complete at 60°, where the winter ice edges lie.
  */
 export function interiorWater(rho, t, s, lat) {
-  const x = Math.max(0, Math.min(1, (Math.abs(lat) * 180 / Math.PI - 50) / 20));
+  const x = Math.max(0, Math.min(1, (Math.abs(lat) * 180 / Math.PI - 45) / 15));
   const weight = x * x * (3 - 2 * x);
   if (weight === 0 || t <= POLAR_INTERIOR_T) return [t, s];
   const tp = t - (t - POLAR_INTERIOR_T) * weight;

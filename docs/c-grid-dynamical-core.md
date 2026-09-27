@@ -1606,7 +1606,7 @@ initial surface temperature and a salinity 34 + 2 exp(−((|φ|−25°)/20°)²)
 each interior layer starts at its class salinity (35 psu through the
 1025.0 class, then 34.9, 34.85 and 34.8, `LAYER_SALINITIES`) and the
 temperature that gives its label density there (the deepest class at
-about 0.8 °C), blending poleward of 50° over 20° of latitude toward
+about 0.8 °C), blending poleward of 45° over 15° of latitude toward
 −1 °C at the salinity that keeps the density (the 1026.6 class at
 34.21 psu, the deepest at 34.65), as polar oceans hold cold, fresh water
 on the density surfaces of the warm subtropical thermocline; so its
