@@ -206,10 +206,10 @@ function renderScale(stops, min, max, unit) {
     image.data.set([rgb[0], rgb[1], rgb[2], 255], 4 * x);
   }
   context.putImageData(image, 0, 0);
-  const ticks = document.querySelectorAll('#scaleTicks span');
-  ticks[0].textContent = `≤ ${min} ${unit}`;
-  ticks[1].textContent = `${(min + max) / 2}`;
-  ticks[2].textContent = `≥ ${max} ${unit}`;
+  const ticks = document.querySelectorAll('#scaleTicks span'), tick = (value) => String(Math.round(100 * value) / 100);
+  ticks[0].textContent = `≤ ${tick(min)} ${unit}`;
+  ticks[1].textContent = tick((min + max) / 2);
+  ticks[2].textContent = `≥ ${tick(max)} ${unit}`;
 }
 
 function levelLabel(level) { return level === 'surface' ? 'Surface' : `${level} hPa`; }
