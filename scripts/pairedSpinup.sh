@@ -3,14 +3,14 @@
 # GPU to itself: every round, each resolution runs scripts/spinup.mjs (from
 # its newest runs/<PREFIX><N>_dayNNNN.bin, or fresh) to the next of the
 # PER_YEAR snapshot days of the 365-day model year (quarters: days 91, 183,
-# 274, 365, 456, ...), keeping its two newest snapshots, and then
+# 274, 365, 456, ...), keeping its KEEP (default 4) newest snapshots, and then
 # scripts/compareStates.mjs appends the round's states side by side to
 # <OUT>/<PREFIX>_compare.md. Stops at <OUT>/STOP_<PREFIX>. A resolution
 # that hits NaN drops out and the others go on; any other failure is
 # retried three times from the last snapshot.
 #   NS="64 128" PER_YEAR=4 PREFIX=twin scripts/pairedSpinup.sh
 cd "$(dirname "$0")/.."
-NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-4} PREFIX=${PREFIX:-twin}
+NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-4} PREFIX=${PREFIX:-twin} KEEP=${KEEP:-4}
 export OUT=${OUT:-$PWD/runs}
 LOG=$OUT/$PREFIX.log
 alive=$NS
@@ -28,7 +28,7 @@ while [ ! -f "$OUT/STOP_$PREFIX" ] && [ -n "$alive" ]; do
     [ -f "$OUT/STOP_$PREFIX" ] && break
     failures=0
     while [ "$(dayOf "$n")" -lt "$target" ]; do
-      N=$n TAG=$PREFIX$n DAYS=$target MINUTES=100000 node scripts/spinup.mjs > "$OUT/$PREFIX$n.segment.out" 2>&1
+      N=$n TAG=$PREFIX$n DAYS=$target MINUTES=100000 KEEP=$KEEP node scripts/spinup.mjs > "$OUT/$PREFIX$n.segment.out" 2>&1
       status=$?
       [ $status -eq 0 ] && continue
       if [ $status -eq 2 ]; then note "N=$n stopped on NaN before day $target"; alive=$(echo " $alive " | sed "s/ $n / /;s/^ *//;s/ *$//"); break; fi
