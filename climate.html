@@ -53,6 +53,10 @@
     .segmented button:last-child { border-radius: 0 5px 5px 0; }
     .segmented button:hover { color: #fff; background: rgba(255, 255, 255, 0.12); }
     .segmented button.selected { background: #4a4a4a; color: #ffe8a0; border-color: #777; position: relative; }
+    .segmented .range { display: inline-flex; align-items: center; gap: 8px; background: rgba(255, 255, 255, 0.04); color: #bbb; border: 1px solid #5a5a5a; margin-left: -1px; padding: 2px 9px; border-radius: 0 5px 5px 0; cursor: pointer; }
+    .segmented .range.selected { background: #4a4a4a; color: #ffe8a0; border-color: #777; }
+    .segmented .range input { width: 110px; accent-color: #ffe8a0; }
+    .segmented .range .unit { color: inherit; min-width: 4.4em; }
     #panel .hidden { display: none; }
     #progress { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); width: min(420px, calc(100% - 48px)); z-index: 20; padding: 10px 14px; display: none; }
     #progress.visible { display: block; }
@@ -109,6 +113,7 @@
     .phone #panel .options { border-top: 0; padding: 2px 0 10px; }
     .phone #panel .options.stacked { align-items: stretch; gap: 8px; }
     .phone .segmented button { padding: 6px 11px; font-size: 15px; }
+    .phone .segmented .range { padding: 6px 11px; font-size: 15px; }
     .phone #overlayOptions .segmented { flex-direction: column; flex-wrap: nowrap; border: 1px solid #4a4a4a; border-radius: 8px; overflow: hidden; }
     .phone #overlayOptions .segmented button { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0; border: 0; border-top: 1px solid #333; border-radius: 0; padding: 10px 12px; text-align: left; }
     .phone #overlayOptions .segmented button:first-child { border-top: 0; }
@@ -138,9 +143,9 @@
     <span class="label" id="animateLabel">Wind animation</span>
     <div class="options" id="animateOptions" data-setting="animate"><div class="segmented"><button data-value="particles">Particles</button><button data-value="arrows">Vectors</button><button data-value="none">None</button></div></div>
     <span class="label" id="heightLabel">Height</span>
-    <div class="options" id="heightOptions"><label class="slider" data-tip="From the lowest layer up to 10 hPa; where the ground rises above the level, the map shows its relief"><input type="range" id="levelSlider" min="0" max="1" step="0.005"></label><span class="unit" id="levelReadout">Surface</span></div>
+    <div class="options" id="heightOptions"><div class="segmented"><button id="levelSurface" data-tip="The lowest layer, about 60 m up">Surface</button><label class="range" id="levelRange" data-tip="A pressure level from 1000 up to 10 hPa; where the ground rises above it, the map shows its relief"><input type="range" id="levelSlider" min="0" max="1" step="0.005"><span class="unit" id="levelReadout"></span></label></div></div>
     <span class="label" id="depthLabel">Depth</span>
-    <div class="options" id="depthOptions"><label class="slider" data-tip="From the mixed layer down to 5500 m; where the sea floor rises above the depth, the map shows its relief"><input type="range" id="depthSlider" min="0" max="1" step="0.005"></label><span class="unit" id="depthReadout">Surface</span></div>
+    <div class="options" id="depthOptions"><div class="segmented"><button id="depthSurface" data-tip="The mixed layer">Surface</button><label class="range" id="depthRange" data-tip="A depth from 1 down to 5500 m; where the sea floor rises above it, the map shows its relief"><input type="range" id="depthSlider" min="0" max="1" step="0.005"><span class="unit" id="depthReadout"></span></label></div></div>
     <span class="label" id="overlayLabel">Overlay</span>
     <div class="options stacked" id="overlayOptions" data-setting="overlay"></div>
     <span class="label" id="lightLabel">Lighting</span>

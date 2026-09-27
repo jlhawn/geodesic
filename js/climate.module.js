@@ -26,10 +26,10 @@ function atLevel(table, level) {
   const mix = (x, y) => x + t * (y - x);
   return Array.isArray(table[a]) ? table[a].map((x, j) => mix(x, table[b][j])) : mix(table[a], table[b]);
 }
-const levelFromSlider = (t) => (t <= 0 ? 'surface' : Math.max(LEVEL_TOP, Math.round(LEVEL_BOTTOM * Math.pow(LEVEL_TOP / LEVEL_BOTTOM, t))));
-const sliderFromLevel = (level) => (level === 'surface' ? 0 : Math.log(LEVEL_BOTTOM / level) / Math.log(LEVEL_BOTTOM / LEVEL_TOP));
-const depthFromSlider = (t) => (t <= 0 ? 'surface' : Math.max(1, Math.round(DEPTH_BOTTOM * t * t)));
-const sliderFromDepth = (depth) => (depth === 'surface' ? 0 : Math.sqrt(depth / DEPTH_BOTTOM));
+const levelFromSlider = (t) => Math.max(LEVEL_TOP, Math.round(LEVEL_BOTTOM * Math.pow(LEVEL_TOP / LEVEL_BOTTOM, t)));
+const sliderFromLevel = (level) => Math.log(LEVEL_BOTTOM / level) / Math.log(LEVEL_BOTTOM / LEVEL_TOP);
+const depthFromSlider = (t) => Math.max(1, Math.round(DEPTH_BOTTOM * t * t));
+const sliderFromDepth = (depth) => Math.sqrt(depth / DEPTH_BOTTOM);
 const validLevel = (value) => (value === 'surface' ? 'surface' : Number(value) >= LEVEL_TOP && Number(value) <= LEVEL_BOTTOM ? Number(value) : null);
 const validDepth = (value) => (value === 'surface' ? 'surface' : Number(value) >= 1 && Number(value) <= DEPTH_BOTTOM ? Number(value) : null);
 const TEMP_RANGE = { surface: [-35, 35], 1000: [-35, 35], 850: [-45, 25], 700: [-55, 15], 500: [-65, 5], 250: [-85, -25], 70: [-95, -35], 10: [-75, 5] };
@@ -322,6 +322,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const activeDepth = () => (settings.view === 'ocean' && DEPTH_OVERLAYS.has(settings.overlay) ? settings.depth : 'surface');
   const shownDepth = () => latest?.depth ?? activeDepth();
   const depthLabel = (depth) => (depth === 'surface' ? 'Surface' : `${depth} m`);
+  const recent = { level: 850, depth: 200 };
   let latest = null, grid = null, viewer = null, particles = null, arrows = null, isobars = null, graticule = null, coast = null, highlight = null, rgb = null, running = !paused, animatedSource = null, seaCells = null;
   let cells = null, centres = null, selected = -1, hoverTip = null, neighbours = null, surface = null;
   let geographyFields = {}, hasLand = false;
@@ -657,10 +658,16 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     for (const id of ['overlayLabel', 'overlayOptions', 'animateLabel', 'animateOptions']) document.getElementById(id).classList.toggle('hidden', space);
     for (const id of ['lightLabel', 'lightOptions']) document.getElementById(id).classList.toggle('hidden', !space);
     document.querySelector('[data-setting="projection"] [data-value="sphere"]').textContent = space ? 'Perspective' : 'Orthographic';
-    document.getElementById('levelSlider').value = String(sliderFromLevel(settings.level));
-    document.getElementById('levelReadout').textContent = levelLabel(settings.level);
-    document.getElementById('depthSlider').value = String(sliderFromDepth(settings.depth));
-    document.getElementById('depthReadout').textContent = depthLabel(settings.depth);
+    if (settings.level !== 'surface') recent.level = settings.level;
+    if (settings.depth !== 'surface') recent.depth = settings.depth;
+    document.getElementById('levelSlider').value = String(sliderFromLevel(recent.level));
+    document.getElementById('levelReadout').textContent = levelLabel(recent.level);
+    document.getElementById('levelSurface').classList.toggle('selected', settings.level === 'surface');
+    document.getElementById('levelRange').classList.toggle('selected', settings.level !== 'surface');
+    document.getElementById('depthSlider').value = String(sliderFromDepth(recent.depth));
+    document.getElementById('depthReadout').textContent = depthLabel(recent.depth);
+    document.getElementById('depthSurface').classList.toggle('selected', settings.depth === 'surface');
+    document.getElementById('depthRange').classList.toggle('selected', settings.depth !== 'surface');
     document.getElementById('sunSlider').value = String(Math.sqrt(settings.sun / LIGHT_MAX.sun));
     document.getElementById('ambientSlider').value = String(Math.sqrt(settings.ambient / LIGHT_MAX.ambient));
     for (const id of ['isolineLabel', 'isolineOptions']) document.getElementById(id).classList.toggle('hidden', settings.view !== 'atmosphere');
@@ -849,7 +856,9 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     window.addEventListener('keydown', (event) => { if (event.key === 'Escape' && selected >= 0) select(-1); });
     panel.addEventListener('mouseover', (event) => { const tipped = !PHONE.matches && event.target.closest('[data-tip]'); if (tipped) { hoverTip = tipped.dataset.tip; refreshTip(); } });
     panel.addEventListener('mouseout', (event) => { const tipped = event.target.closest('[data-tip]'); if (tipped && hoverTip !== null) { hoverTip = null; refreshTip(); } });
+    document.getElementById('levelSurface').addEventListener('click', () => update({ level: 'surface' }));
     document.getElementById('levelSlider').addEventListener('input', (event) => update({ level: levelFromSlider(Number(event.target.value)) }));
+    document.getElementById('depthSurface').addEventListener('click', () => update({ depth: 'surface' }));
     document.getElementById('depthSlider').addEventListener('input', (event) => update({ depth: depthFromSlider(Number(event.target.value)) }));
     document.getElementById('sunSlider').addEventListener('input', (event) => update({ sun: Math.round(1e3 * LIGHT_MAX.sun * Number(event.target.value) ** 2) / 1e3 }));
     document.getElementById('ambientSlider').addEventListener('input', (event) => update({ ambient: Math.round(1e4 * LIGHT_MAX.ambient * Number(event.target.value) ** 2) / 1e4 }));
