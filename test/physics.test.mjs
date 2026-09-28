@@ -254,6 +254,42 @@ test('water vapour absorbs sunlight by the Lacis–Hansen curve: a humid column 
   assert.ok(lower > 0.5 * taken, `the lower half of the column takes ${lower} of ${taken}`);
 });
 
+test('a stable column over warm open sea carries a stratocumulus deck that reflects the noon sun and lowers the OLR; land, cold sea and stratus: false carry none', () => {
+  const radiation = createRadiation(mesh, core), off = createRadiation(mesh, core, { stratus: false });
+  radiation.setTime(0); off.setTime(0);
+  let noon = 0;
+  for (let i = 0; i < C; i++) if (radiation.insolation(i) > radiation.insolation(noon)) noon = i;
+  const pi = new Float64Array(C).fill(P0), q = new Float64Array(K * C), qc = new Float64Array(K * C), unstable = new Float64Array(K * C);
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) unstable[k * C + i] = 297 + 16 * (1 - core.sigmaMid[k]) + 600 * Math.max(0, 0.6 - core.sigmaMid[k]) ** 2;
+  core.diagnose(pi, unstable, q, qc);
+  const { exnerLayer } = core.diagnostics;
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) q[k * C + i] = 0.7 * saturationHumidity(unstable[k * C + i] * exnerLayer[k * C + i], P0 * core.sigmaMid[k]);
+  const stable = Float64Array.from(unstable);
+  stable[radiation.stabilityLayer * C + noon] += 15;
+  const stability = (theta) => theta[radiation.stabilityLayer * C + noon] - theta[(K - 1) * C + noon];
+  assert.ok(Math.abs(stability(stable) - 20) < 1 && Math.abs(stability(unstable) - 5) < 1, `LTS ${stability(stable)} and ${stability(unstable)} K`);
+  const run = (r, theta, surfaceT, openSea) => {
+    const flux = r.column(noon, P0, theta, surfaceT, 5, r.opticalDepth(mesh.latCell[noon]), r.insolation(noon), q[(K - 1) * C + noon], q, qc, 0.07, 0.06, 1, 1.5e-3, openSea);
+    let layers = 0, scale = 0;
+    for (let k = 0; k < K; k++) { layers += r.layerFlux[k]; scale += Math.abs(r.layerFlux[k]); }
+    const latent = LATENT_HEAT * r.budget.evaporation;
+    const closure = Math.abs(layers + flux + latent - (r.budget.absorbedSolar - r.budget.outgoingLongwave)) / (scale + Math.abs(flux) + latent);
+    return { ...r.budget, flux, closure, layers: Array.from(r.layerFlux) };
+  };
+  const deck = run(radiation, stable, 298, 1), clear = run(radiation, unstable, 298, 1);
+  console.log(`LTS ${stability(stable).toFixed(1)} K against ${stability(unstable).toFixed(1)} K over a 298 K sea: deck ${deck.stratus.toFixed(4)} kg/m² against ${clear.stratus}; noon absorbed solar ${deck.absorbedSolar.toFixed(0)} against ${clear.absorbedSolar.toFixed(0)} W/m², OLR ${deck.outgoingLongwave.toFixed(1)} against ${clear.outgoingLongwave.toFixed(1)}`);
+  assert.ok(deck.stratus - clear.stratus >= 0.04, `deck ${deck.stratus} against ${clear.stratus} kg/m²`);
+  assert.ok(deck.absorbedSolar < clear.absorbedSolar - 60, `absorbed solar ${deck.absorbedSolar} against ${clear.absorbedSolar}`);
+  assert.ok(deck.outgoingLongwave < clear.outgoingLongwave, `OLR ${deck.outgoingLongwave} against ${clear.outgoingLongwave}`);
+  assert.ok(deck.closure < EPS);
+  assert.ok(Math.abs(run(radiation, stable, 298, 0.5).stratus - 0.5 * deck.stratus) < 1e-15, 'half the cell under ice carries half the deck');
+  assert.equal(run(radiation, stable, 298, 0).stratus, 0, 'land and full ice carry none');
+  assert.equal(run(radiation, stable, 275, 1).stratus, 0, 'a sea colder than 5 °C carries none');
+  const before = run(radiation, stable, 298, 0);
+  assert.deepEqual(run(off, stable, 298, 1), before, 'stratus: false is the column without a deck');
+  assert.deepEqual(run(off, unstable, 298, 1), run(radiation, unstable, 298, 0));
+});
+
 function evaluate(radiation, i, pi, theta, surfaceT, q, qc) {
   const flux = radiation.column(i, pi[i], theta, surfaceT[i], 5, radiation.opticalDepth(mesh.latCell[i]), radiation.insolation(i), q[(K - 1) * C + i], q, qc, 0.07);
   let layers = 0, scale = 0;

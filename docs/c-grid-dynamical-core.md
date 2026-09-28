@@ -1006,6 +1006,26 @@ closure still holds exactly (with the latent heat of evaporation
 counted as leaving the surface). The cloud–albedo, cloud–longwave and
 ice–albedo feedbacks are all live from here.
 
+Marine stratocumulus is diagnosed, not condensed. Over the ice-free
+part of each sea cell the column carries a deck of `stratusWater` ×
+f = 0.08 kg/m² × f of cloud water (optical depth 4.4 at f = 1) in the
+layer nearest σ = `stratusSigma` = 0.92, the top of a 1 km marine
+boundary layer, where it scatters and emits exactly as condensed water
+does but never enters qc. f is the Klein & Hartmann (1993) fit
+0.057 LTS − 0.556, clamped to [0, 1], of the lower-tropospheric
+stability LTS = θ(σ ≈ 0.7) − θ(lowest layer), times a ramp from 0 over
+a 5 °C sea to 1 over 10 °C (the fit is for subtropical and
+mid-latitude decks; polar fog is another regime and would only add
+longwave warming over the ice), times 1 − A for the ice concentration
+A; land carries none, nor does the model with `moist: false`. Without it the eastern subtropical oceans, where
+Earth keeps its decks, were nearly cloud-free on a year-two state
+(planetary albedo 0.11–0.14 against Earth's ~0.38), absorbed about
+100 W/m² too much sunlight and stayed too warm for a Pacific cold
+tongue or coastal upwelling. `stratus: false` removes the deck, and
+both engines are then bit-identical to the model without it; the
+column test is in `test/physics.test.mjs` and the engines' parity with
+the deck engaged under an imposed inversion in `test/gpuModel.test.mjs`.
+
 Tuning. 400-day N=8 runs (annual means) put the three knobs — the
 cloud optical scale, the vapour coupling and the ocean heat transport
 — at 60 m²/kg, 0.55 and Q₀ = 20 W/m²: 288.4 K, planetary albedo

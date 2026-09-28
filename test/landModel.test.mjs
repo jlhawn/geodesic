@@ -59,3 +59,17 @@ test('the parallel engine reproduces the serial model over a continent', async (
   assert.ok(maxT < 1e-9 && maxSoil < 1e-9 && maxTheta < 1e-9, `serial vs parallel: Ts ${maxT} soil ${maxSoil} theta ${maxTheta}`);
   await parallel.close();
 });
+
+test('under a capping inversion the stratocumulus deck forms over the warm sea and never over land', () => {
+  const model = prepare(createModel(new Grid(6), { topography }));
+  const { mesh, geography, core } = model, C = mesh.nCells;
+  for (let k = 0; k < core.K; k++) if (core.sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += 10;
+  model.step(900);
+  let sea = 0, decked = 0;
+  for (let i = 0; i < C; i++) {
+    if (geography.land[i]) { assert.equal(model.radiation.stratus[i], 0); continue; }
+    sea++;
+    if (model.radiation.stratus[i] > 0) decked++;
+  }
+  assert.ok(decked > 0.1 * sea, `stratus on ${decked} of ${sea} sea cells`);
+});

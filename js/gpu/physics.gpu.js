@@ -3,9 +3,10 @@ import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physics/ice.module.js'
 /*
  * The column physics of the model as WGSL, one thread per column (or per
  * edge for momentum mixing), sharing the core's bindings and layouts:
- * the three-band gray radiation with clouds and the zenith/diffuse
- * surface reflection, bulk surface fluxes, the zero-layer sea ice and
- * its concentration, the boundary-layer diagnosis, and the adjustment
+ * the three-band gray radiation with clouds, the diagnostic
+ * stratocumulus deck and the zenith/diffuse surface reflection, bulk
+ * surface fluxes, the zero-layer sea ice and its concentration, the
+ * boundary-layer diagnosis, and the adjustment
  * phase — boundary-layer mixing by the implicit tridiagonal solve,
  * saturation adjustment, Betts–Miller convection with anvil
  * detrainment, autoconversion, the filler and the dry convective
@@ -18,6 +19,7 @@ export function physicsConstants(o) {
   return `
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
 const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudScattering}; const WINDOW: f32 = ${o.window}; const GAS_FRAC: f32 = ${o.gasFraction};
+const STRATUS: bool = ${!!o.stratus}; const STRATUS_WATER: f32 = ${o.stratusWater}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6;
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
@@ -120,12 +122,18 @@ export const PHYSICS_KERNELS = {
   var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
   var cloudPath = 0.0;
   let tau0 = PH[PH_TAU + i];
+  var deck = 0.0;
+  if (STRATUS && !onLand) {
+    let stability = IN[S_TH + STABILITY_K * C + i] - IN[S_TH + bottom];
+    deck = STRATUS_WATER * clamp(0.057 * stability - 0.556, 0.0, 1.0) * clamp((ts - 278.15) / 5.0, 0.0, 1.0) * (1.0 - cover);
+  }
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
     var eps = 1.0 - exp(-tau0 * LV[L_SHAPE + k]);
     if (COUPLED) { eps = 1.0 - exp(-VCOUP * max(0.0, IN[S_Q + idx]) * mass); }
-    let water = max(0.0, IN[S_QC + idx]) * mass;
+    var water = max(0.0, IN[S_QC + idx]) * mass;
+    if (STRATUS && k == STRATUS_K && deck > 0.0) { water += deck; }
     cloudPath += water;
     cloudE[k] = select(0.0, 1.0 - exp(-CLOUD_ABS * water), water > 0.0);
     let clear = 1.0 - cloudE[k];

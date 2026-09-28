@@ -51,6 +51,17 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * at the mean cosine DIFFUSE_MU) are summed. The two albedos are given
  * per cell (open water or sea ice); `albedo` is the default for both.
  *
+ * Marine stratocumulus: over the part of a cell that is ice-free sea
+ * (`openSea`, the per-cell fraction the caller passes; no deck without it)
+ * the column carries a diagnostic deck of cloud water stratusWater × f
+ * in the layer nearest σ = stratusSigma, radiating like the condensed
+ * water beside it but never added to qc. f follows Klein & Hartmann
+ * (1993), 0.057 LTS − 0.556 clamped to [0, 1], with the lower-
+ * tropospheric stability LTS the potential temperature of the layer
+ * nearest σ = 0.7 less the lowest layer's, times a ramp from 0 at a
+ * 5 °C surface to 1 at 10 °C that keeps the deck off polar seas, times
+ * `openSea`. `stratus: false` removes it.
+ *
  * Shortwave: the fraction `ozoneAbsorption` of the incoming beam is
  * absorbed aloft. The ozone column follows Lacis & Hansen (1974)
  * (centred at ozoneHeight with width ozoneWidth, heights from σ with the
@@ -68,9 +79,20 @@ export function waterVaporAbsorptivity(path) {
 }
 
 const DIFFUSE_MU = 0.6;
+export const STABILITY_SIGMA = 0.7;
+
+export function nearestLayer(sigmaMid, sigma) {
+  let best = 0;
+  for (let k = 1; k < sigmaMid.length; k++) if (Math.abs(sigmaMid[k] - sigma) < Math.abs(sigmaMid[best] - sigma)) best = k;
+  return best;
+}
+
+export function stratusFraction(stability, surfaceT) {
+  return Math.min(1, Math.max(0, 0.057 * stability - 0.556)) * Math.min(1, Math.max(0, (surfaceT - 278.15) / 5));
+}
 
 export function createRadiation(mesh, core, {
-  solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 55,
+  solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 55, stratus = true, stratusWater = 0.08, stratusSigma = 0.92,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
@@ -94,12 +116,15 @@ export function createRadiation(mesh, core, {
   const outgoing = new Float64Array(outgoingBuffer), surfaceShortwave = new Float64Array(shortwaveBuffer);
   const evaporationBuffer = buffers && buffers.evaporation ? buffers.evaporation : new SharedArrayBuffer(8 * C);
   const evaporation = new Float64Array(evaporationBuffer);
+  const stratusBuffer = buffers && buffers.stratus ? buffers.stratus : new SharedArrayBuffer(8 * C);
+  const stratusPath = new Float64Array(stratusBuffer);
+  const stratusLayer = nearestLayer(sigmaMid, stratusSigma), stabilityLayer = nearestLayer(sigmaMid, STABILITY_SIGMA);
   const gasEmissivity = Float64Array.from({ length: K }, (_, k) => 1 - Math.exp(-gasOpticalDepth * (levels[k + 1] - levels[k])));
   const temperature = new Float64Array(K);
   const emitted = new Float64Array(K);
   const netFlux = new Float64Array(K);
   const sun = new Float64Array([1, 0, 0]);
-  const budget = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0 };
+  const budget = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, stratus: 0 };
 
   function setTime(t) {
     sunDirection(t, sun);
@@ -128,15 +153,17 @@ export function createRadiation(mesh, core, {
     return [up, down];
   }
 
-  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo, wetness = 1, exchangeCoefficientAt = exchangeCoefficient) {
+  function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo, wetness = 1, exchangeCoefficientAt = exchangeCoefficient, openSea = 0) {
     const ozoneHeating = beam * ozoneAbsorption;
     const surfaceEmission = STEFAN_BOLTZMANN * surfaceT * surfaceT * surfaceT * surfaceT;
     const coupled = vaporCoupling > 0 && q !== null;
+    const deck = stratus && openSea > 0 ? stratusWater * stratusFraction(theta[stabilityLayer * C + i] - theta[(K - 1) * C + i], surfaceT) * openSea : 0;
     let cloudPath = 0;
     for (let k = 0; k < K; k++) {
       const mass = pi * dSigma[k] / g;
       emissivity[k] = 1 - Math.exp(coupled ? -vaporCoupling * Math.max(0, q[k * C + i]) * mass : -tau0 * shape[k]);
-      const water = qc ? Math.max(0, qc[k * C + i]) * mass : 0;
+      let water = qc ? Math.max(0, qc[k * C + i]) * mass : 0;
+      if (deck > 0 && k === stratusLayer) water += deck;
       cloudPath += water;
       cloudEmissivity[k] = water > 0 ? 1 - Math.exp(-cloudAbsorption * water) : 0;
       const clear = 1 - cloudEmissivity[k];
@@ -189,6 +216,7 @@ export function createRadiation(mesh, core, {
     budget.surfaceShortwave = incident * (direct + diffuse + returned * upward / (1 - diffuseAlbedo * returned));
     budget.surfaceDirect = incident * direct;
     budget.cloudReflectance = reflectance;
+    budget.stratus = deck;
     return net;
   }
 
@@ -197,17 +225,19 @@ export function createRadiation(mesh, core, {
    * lowest layer for the cells in range; the net surface flux of each
    * cell is left in `surfaceFlux` for the surface model to apply, with
    * the sunlight reaching the surface in `surfaceShortwave`, of which
-   * `surfaceDirect` is the direct beam.
+   * `surfaceDirect` is the direct beam, and the stratocumulus deck's
+   * water path in `stratus`.
    */
-  function apply(state, out, windSpeed, totals, iFrom = 0, iTo = C, surfaceAlbedo = null, diffuseAlbedo = null, wetness = null) {
+  function apply(state, out, windSpeed, totals, iFrom = 0, iTo = C, surfaceAlbedo = null, diffuseAlbedo = null, wetness = null, openSea = null) {
     const [pi, theta, , surfaceT] = state;
     const [, dTheta] = out;
     const q = state[4] ?? null, dQ = out[4] ?? null, qc = state[5] ?? null;
     const bottom = (K - 1) * C;
     if (totals) for (const name of ['absorbedSolar', 'outgoingLongwave', 'sensibleHeat', 'evaporation', 'insolation', 'reflectedSolar']) totals[name] = 0;
     for (let i = iFrom; i < iTo; i++) {
-      surfaceFlux[i] = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], insolation(i), q && dQ ? q[bottom + i] : null, q && dQ ? q : null, q && dQ ? qc : null, surfaceAlbedo ? surfaceAlbedo[i] : albedo, diffuseAlbedo ? diffuseAlbedo[i] : surfaceAlbedo ? surfaceAlbedo[i] : albedo, wetness ? wetness[i] : 1, exchangeCoefficients ? exchangeCoefficients[i] : exchangeCoefficient);
+      surfaceFlux[i] = column(i, pi[i], theta, surfaceT[i], windSpeed[i], tauCell[i], insolation(i), q && dQ ? q[bottom + i] : null, q && dQ ? q : null, q && dQ ? qc : null, surfaceAlbedo ? surfaceAlbedo[i] : albedo, diffuseAlbedo ? diffuseAlbedo[i] : surfaceAlbedo ? surfaceAlbedo[i] : albedo, wetness ? wetness[i] : 1, exchangeCoefficients ? exchangeCoefficients[i] : exchangeCoefficient, openSea ? openSea[i] : 0);
       outgoing[i] = budget.outgoingLongwave;
+      stratusPath[i] = budget.stratus;
       evaporation[i] = budget.evaporation;
       surfaceShortwave[i] = budget.surfaceShortwave;
       surfaceDirect[i] = budget.surfaceDirect;
@@ -228,5 +258,5 @@ export function createRadiation(mesh, core, {
     }
   }
 
-  return { setTime, sun, cosZenith, insolation, column, apply, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer } };
+  return { setTime, sun, cosZenith, insolation, column, apply, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer } };
 }

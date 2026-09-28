@@ -1,6 +1,6 @@
 import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf } from './device.module.js';
 import { sigmaInterfaces, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
-import { sunDirection } from '../physics/radiation.module.js';
+import { sunDirection, nearestLayer, STABILITY_SIGMA } from '../physics/radiation.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.gpu.js';
 
 const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64;
@@ -495,7 +495,7 @@ const KERNELS = {
 };
 
 export const PHYSICS_DEFAULTS = {
-  solarConstant: 1362, cloudAbsorption: 130, cloudScattering: 55, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
+  solarConstant: 1362, cloudAbsorption: 130, cloudScattering: 55, stratus: true, stratusWater: 0.08, stratusSigma: 0.92, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
   exchangeCoefficient: 1.5e-3, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0.15,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10,
@@ -581,7 +581,7 @@ export async function createGpuCore(mesh, {
 
   const layout = device.createBindGroupLayout({ entries: Array.from({ length: 8 }, (_, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } })) });
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] });
-  const head = prelude(L, { kappa, cp, p0, g, R, dragCoefficient, gustiness, physics: physicsConstants({ ...phys, kTop }) });
+  const head = prelude(L, { kappa, cp, p0, g, R, dragCoefficient, gustiness, physics: physicsConstants({ ...phys, kTop, stratusLayer: nearestLayer(sigmaMid, phys.stratusSigma), stabilityLayer: nearestLayer(sigmaMid, STABILITY_SIGMA) }) });
   const preludeConstants = head.slice(0, head.indexOf('@group(0) @binding(0)'));
   let meshSpacing = 0;
   for (let e = 0; e < E; e++) meshSpacing += mesh.dcEdge[e];

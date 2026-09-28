@@ -74,7 +74,7 @@ export function createModel(gridOrMesh, {
     ...iceOptions,
   });
   const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
-  const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), stressScratch = new Float64Array(E);
+  const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), openSea = new Float64Array(C), stressScratch = new Float64Array(E);
   const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C);
   const runoffSeen = land ? new Float64Array(C) : null, runoffStep = land ? new Float64Array(C) : null;
 
@@ -110,12 +110,13 @@ export function createModel(gridOrMesh, {
         if (land && landMask[i]) { surfaceAlbedo[i] = diffuseAlbedo[i] = land.albedo(i); wetness[i] = land.wetness(i, dragCoefficients[i] * Math.max(surface.windSpeed[i], gustiness), state[3][i]); continue; }
         const h = state[6][i], area = seaIce.cover(i, h), mu = radiation.cosZenith(i);
         surfaceAlbedo[i] = seaIce.albedo(h, mu, seaIce.snow[i], area); diffuseAlbedo[i] = seaIce.albedo(h, null, seaIce.snow[i], area);
+        openSea[i] = 1 - area;
         if (h > 0 && area < 1) {
           fluxT[i] = area * state[3][i] + (1 - area) * FREEZING_POINT;
           directContrast[i] = seaIce.albedoContrast(h, mu, seaIce.snow[i]); diffuseContrast[i] = seaIce.albedoContrast(h, null, seaIce.snow[i]);
         }
       }
-      radiation.apply(moist ? fluxState : dryFluxState, forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null);
+      radiation.apply(moist ? fluxState : dryFluxState, forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null, moist ? openSea : null);
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
       const { surfaceShortwave, surfaceDirect } = radiation;
       for (let i = iFrom; i < iTo; i++) {

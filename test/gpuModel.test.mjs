@@ -17,10 +17,12 @@ function stats(cpu, gpu) {
   for (let x = 0; x < cpu.length; x++) { const d = Math.abs(cpu[x] - gpu[x]); if (d > maxDiff) { maxDiff = d; at = x; } sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
   return { maxDiff, at, rms: Math.sqrt(sumSq / cpu.length), rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
-async function pair(N, steps, dt) {
+async function pair(N, steps, dt, inversion = 0) {
   const model = createModel(new Grid(N), { ocean: false });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  const { K, sigmaMid } = model.core, C = model.mesh.nCells;
+  for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += inversion;
   const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model) });
   gpu.upload(model.state);
   gpu.uploadPhysics();
@@ -29,7 +31,7 @@ async function pair(N, steps, dt) {
 }
 
 test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { model, state, physics: after } = await pair(6, 1, 900);
+  const { model, state, physics: after } = await pair(6, 1, 900, 10);
   const theta = stats(model.state[1], state[1]), q = stats(model.state[4], state[4]), qc = stats(model.state[5], state[5]);
   const ts = stats(model.state[3], state[3]), ice = stats(model.state[6], state[6]), u = stats(model.state[2], state[2]);
   const concentration = stats(model.seaIce.concentration, after.CONC.subarray(0, model.mesh.nCells));
@@ -41,9 +43,12 @@ test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailab
   assert.ok(ice.maxDiff < 1e-3, `ice max ${ice.maxDiff} m`);
   assert.ok(concentration.maxDiff < 1e-3, `concentration max ${concentration.maxDiff} at ${concentration.at}`);
   assert.ok(u.maxDiff < 1e-2, `wind max ${u.maxDiff} m/s`);
-  const { gpu } = await pair(6, 1, 900);
+  const { gpu } = await pair(6, 1, 900, 10);
   const physics = await gpu.downloadPhysics();
   const olr = stats(model.radiation.outgoing, physics.OLR.subarray(0, model.mesh.nCells)), sw = stats(model.radiation.surfaceShortwave, physics.SWDN.subarray(0, model.mesh.nCells));
+  const decked = model.radiation.stratus.filter((w) => w > 0).length / model.mesh.nCells;
+  console.log(`one step at N=6 under a 10 K inversion: stratus on ${(100 * decked).toFixed(1)} % of sea cells; per-cell OLR rms ${olr.rmsRel.toExponential(1)}, surface shortwave rms ${sw.rmsRel.toExponential(1)}`);
+  assert.ok(decked > 0.1, `stratus on ${decked} of the sea cells`);
   assert.ok(olr.rmsRel < 1e-5 && sw.rmsRel < 1e-5, `per-cell OLR rms ${olr.rmsRel}, surface shortwave rms ${sw.rmsRel}`);
 });
 
