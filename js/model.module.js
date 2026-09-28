@@ -97,7 +97,7 @@ export function createModel(gridOrMesh, {
       if (!physics || !ocean) return;
       if (land) for (let i = 0; i < C; i++) { const total = land.runoff[i]; runoffStep[i] = total >= runoffSeen[i] ? total - runoffSeen[i] : total; runoffSeen[i] = total; }
       ocean.accumulate(radiation.evaporation, moist ? moistPhysics.rain : null, dt, runoffStep);
-      ocean.advance(state[3], state[6], seaIce.oceanFlux, () => surface.stress(state, stressScratch), dt);
+      ocean.advance(state[3], state[6], seaIce.oceanFlux, () => surface.stress(state, stressScratch), dt, seaIce.concentration);
     },
     physics(iFrom, iTo, dt, sums) {
       if (!physics) return;

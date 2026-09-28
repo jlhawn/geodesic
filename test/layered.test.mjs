@@ -361,3 +361,20 @@ test('runoff flows down the terrain to the coast the land slopes toward', () => 
   }
   assert.ok(land > 50 && westward > 5, `${westward} high cells reach the western coast`);
 });
+
+test('wind stress reaches the water under sea ice, scaled by the cover and the transmission factor', () => {
+  const ocean = createOcean(mesh, { iceStressTransmission: 0.8, everySteps: 1 });
+  const C = mesh.nCells, E = mesh.nEdges;
+  const surfaceT = new Float64Array(C).fill(FREEZING_POINT + 2), ice = new Float64Array(C), flux = new Float64Array(C);
+  const total = new Float64Array(E).fill(0.1);
+  ocean.advance(surfaceT, ice, flux, total, 1350);
+  const open = Float64Array.from(ocean.stress);
+  ice.fill(1); surfaceT.fill(FREEZING_POINT);
+  ocean.advance(surfaceT, ice, flux, total, 1350);
+  const full = Float64Array.from(ocean.stress);
+  ocean.advance(surfaceT, ice, flux, total, 1350, new Float64Array(C).fill(0.5));
+  const half = Float64Array.from(ocean.stress);
+  let checked = 0;
+  for (let e = 0; e < E; e++) if (open[e] !== 0) { checked++; assert.ok(Math.abs(full[e] - 0.8 * open[e]) < 1e-12 && Math.abs(half[e] - 0.9 * open[e]) < 1e-12, `edge ${e}: open ${open[e]} full ${full[e]} half ${half[e]}`); }
+  assert.ok(checked > 0);
+});

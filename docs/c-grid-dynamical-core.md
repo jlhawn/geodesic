@@ -1696,7 +1696,7 @@ sea ice: polar mixed layers denser than the deepest class convected
 2.4 °C water up all winter. A
 saved ocean with a different number of layers loads as this climatology.
 
-**Interfaces.** `advance(surfaceT, ice, oceanFlux, stress, dt)` as in M13
+**Interfaces.** `advance(surfaceT, ice, oceanFlux, stress, dt, concentration)` as in M13, the wind stress reaching the water under ice scaled by 1 − A(1 − `iceStressTransmission`) with the transmission 0.8, since drifting floes pass most of the air's stress to the ocean and the Antarctic Divergence upwells its deep water under a pack that covers it most of the year,
 plus `accumulate(evaporation, rain, dt, runoff)` each atmosphere step;
 `fields()` gives the frame its mixed-layer depth, SST, SSS, surface
 velocity, thermocline depth (the boundary between the 23.1 and 19.4 °C

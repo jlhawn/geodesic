@@ -29,7 +29,7 @@ const WORKGROUP = 64;
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
-  minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, convectiveRate: 100 / 86400, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceDensity: 917,
+  minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, convectiveRate: 100 / 86400, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
   interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, diffusivity: 0.01, everySteps: 4,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -55,7 +55,7 @@ ${constLine('RHO0', o.density)} ${constLine('RHOCP', o.density * o.specificHeat)
 ${constLine('OGRAV', o.gravity)}
 ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)} ${constLine('DENSTOL', DENSITY_TOLERANCE)} ${constLine('RESTTOL', RESTORE_TOLERANCE)} ${constLine('RESTORET', o.restoreTime)}
 ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
-${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('ICEDENS', o.iceDensity)}
+${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
 ${constLine('FREEZE', FREEZING_POINT)} ${constLine('CDO', o.dragCoefficient)} ${constLine('GUSTO', o.gustiness)}
 @group(0) @binding(0) var<storage, read_write> MI: array<i32>;
@@ -326,12 +326,15 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
 }`,
     oStressFromAtmosphere: `${K}  let e = ${idx}; if (e >= E) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
-  if (OD[O_EMASK + e] < 0.5 || OD[O_ICED + a] > 0.5 || OD[O_ICED + b] > 0.5) { OD[O_STRESS + e] = 0.0; return; }
+  if (OD[O_EMASK + e] < 0.5) { OD[O_STRESS + e] = 0.0; return; }
+  let coverA = select(0.0, select(1.0, PH[PH_CONC + a], PH[PH_CONC + a] > 0.0), OD[O_ICED + a] > 0.5);
+  let coverB = select(0.0, select(1.0, PH[PH_CONC + b], PH[PH_CONC + b] > 0.0), OD[O_ICED + b] > 0.5);
+  let through = 1.0 - 0.5 * (coverA + coverB) * (1.0 - TRANSMIT);
   let bottom = (K - 1) * C;
   let rhoA = S[S_PI + a] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + a] * D[D_EXM + bottom + a]);
   let rhoB = S[S_PI + b] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + b] * D[D_EXM + bottom + b]);
   let fa = CDO * rhoA * max(D[D_WIND + a], GUSTO); let fb = CDO * rhoB * max(D[D_WIND + b], GUSTO);
-  OD[O_STRESS + e] = 0.5 * (fa + fb) * S[S_U + (K - 1) * E + e];
+  OD[O_STRESS + e] = through * 0.5 * (fa + fb) * S[S_U + (K - 1) * E + e];
 }`,
     oMixedLayer: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
@@ -732,9 +735,9 @@ export function createLayeredOcean(core, options = {}) {
     pass.end();
     device.queue.submit([encoder.finish()]);
   }
-  function setStress(total, ice) {
-    const masked = new Float32Array(E);
-    for (let e = 0; e < E; e++) masked[e] = !edgeOcean[e] || ice[mesh.cellsOnEdge[2 * e]] > 0 || ice[mesh.cellsOnEdge[2 * e + 1]] > 0 ? 0 : total[e];
+  function setStress(total, ice, concentration = null) {
+    const masked = new Float32Array(E), cover = (i) => (ice[i] > 0 ? (concentration && concentration[i] > 0 ? concentration[i] : 1) : 0);
+    for (let e = 0; e < E; e++) masked[e] = edgeOcean[e] ? total[e] * (1 - 0.5 * (cover(mesh.cellsOnEdge[2 * e]) + cover(mesh.cellsOnEdge[2 * e + 1])) * (1 - o.iceStressTransmission)) : 0;
     device.queue.writeBuffer(ob.OD, 4 * OD.STRESS, masked);
   }
   function mixedLayer(dt) {
@@ -777,9 +780,9 @@ export function createLayeredOcean(core, options = {}) {
    * counter so it only pays for the atmosphere-state read and the step
    * on the steps that need it).
    */
-  async function advance(surfaceT, ice, totalStress, dt) {
+  async function advance(surfaceT, ice, totalStress, dt, concentration = null) {
     readSurface(surfaceT, ice);
-    setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice);
+    setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
     step(dt);
     mixedLayer(dt);
     salt(dt);
