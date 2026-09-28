@@ -10,9 +10,11 @@
 //
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}'),
-// RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}').
+// RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}'),
+// RECORD (a directory to write each day's ocean and sea-ice forcing into as
+// forcing-DDDD.bin, see js/forcing.module.js).
 // scripts/spinup.sh runs segments back to back.
-import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16, createGeography } from '../js/geography.module.js';
 import { buildMesh } from '../js/mesh.module.js';
@@ -22,6 +24,8 @@ import { decodeState, encodeState } from '../js/stateFile.module.js';
 import { savedSubsidence, regridLand } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
+import { createForcingRecorder } from '../js/gpu/forcing.gpu.js';
+import { forcingName } from '../js/forcing.module.js';
 
 const BOXES = {
   sahara: [16, 30, -10, 32], arabia: [16, 30, 38, 55], sahel: [8, 16, -15, 35], india: [15, 28, 72, 88], congo: [-5, 5, 12, 30], amazon: [-10, 3, -70, -50],
@@ -79,13 +83,21 @@ const readRain = async () => { const [a, b] = await readRanges(model.gpu.device,
 const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12]; };
 const rain0 = await readRain();
 await model.diagnostics();
+const RECORD = process.env.RECORD;
+if (RECORD) mkdirSync(RECORD, { recursive: true });
+const recorder = RECORD ? await createForcingRecorder(model) : null;
 const start = performance.now();
 const day0 = Math.round(model.time / 86400);
 let day = day0, iceNorth = 0, iceSouth = 0;
 for (;;) {
-  for (let n = 0; n < perDay; n++) { await model.step(dt); if (n % 8 === 7) await model.settle(); }
+  for (let n = 0; n < perDay; n++) { await model.step(dt); recorder?.step(); if (n % 8 === 7) await model.settle(); }
   day++;
   const d = await model.diagnostics();
+  if (recorder) {
+    const file = `${RECORD}/${forcingName(day)}`;
+    writeFileSync(`${file}.partial`, await recorder.day(day));
+    renameSync(`${file}.partial`, file);
+  }
   const [north, south] = await iceArea();
   iceNorth += north; iceSouth += south;
   const minutes = (performance.now() - start) / 60000;
