@@ -93,11 +93,7 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * dynamics stage interpolated to h, the surface fluxes this column's
  * bulk sensible heat and evaporation, and the longwave the DYCOMS-II
  * form (dycomsLongwave) driven by the mixed layer's own liquid water.
- * Where that first layer's θ_v exceeds the cloud top's by less than
- * `minimumJump` (1 K) the layer counts as uncapped and carries no deck:
- * under so weak a jump the Nicholls–Turton efficiency grows as 1/Δθ_v
- * and one step would carry h through the layer it entrains from. The
- * deck covers the mixed layer's cover times `openSea`, with its water
+ * The deck covers the mixed layer's cover times `openSea`, with its water
  * path (at most stratusWaterMax) in the same layer and the same
  * two-column blend; the EIS is still diagnosed. The mixed layer's cover,
  * water path and entrainment rate are kept per cell in mlmCover,
@@ -195,7 +191,7 @@ export function createRadiation(mesh, core, {
   const mlmWaterBuffer = buffers && buffers.mlmWater ? buffers.mlmWater : new SharedArrayBuffer(8 * C);
   const mlmEntrainmentBuffer = buffers && buffers.mlmEntrainment ? buffers.mlmEntrainment : new SharedArrayBuffer(8 * C);
   const mlmCover = new Float64Array(mlmCoverBuffer), mlmWater = new Float64Array(mlmWaterBuffer), mlmEntrainment = new Float64Array(mlmEntrainmentBuffer);
-  const shadow = mixedLayerDeck ? createMixedLayer({ cp, R, g, latentHeat, referencePressure: p0, cloudLevels: 8, minimumJump: 1, ...mixedLayerOptions }) : null;
+  const shadow = mixedLayerDeck ? createMixedLayer({ cp, R, g, latentHeat, referencePressure: p0, cloudLevels: 8, ...mixedLayerOptions }) : null;
   const shadowLongwave = dycomsLongwave();
   if (stratusIndex !== 'eis' && stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${stratusIndex}`);
   const entraining = stratusIndex === 'ectei';

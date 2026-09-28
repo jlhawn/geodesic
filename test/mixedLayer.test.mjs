@@ -142,6 +142,20 @@ test('the cover is 1 while the layer is coupled and falls to the trade-cumulus 0
   assert.ok(uncapped.virtualJump < 0 && uncapped.cover === 0 && uncapped.entrainment === 0);
 });
 
+test('under a weakening inversion the efficiency stops at 1 and the entrainment at 20 mm/s, in either closure', () => {
+  const mlm = createMixedLayer(CONSTANTS), buoyant = createMixedLayer({ ...CONSTANTS, closure: 'buoyancy' });
+  const weak = mlm.diagnose(INITIAL, rf01(mlm, { thetaLAbove: 295 }));
+  const weaker = mlm.diagnose(INITIAL, rf01(mlm, { thetaLAbove: 292 }));
+  const runaway = buoyant.diagnose(INITIAL, rf01(buoyant, { thetaLAbove: 292 }));
+  const unbounded = createMixedLayer({ ...CONSTANTS, maximumEfficiency: Infinity, maximumEntrainment: Infinity }).diagnose(INITIAL, rf01(mlm, { thetaLAbove: 292 }));
+  console.log(`RF01 layer under θ_l+ 295 K: Δθ_v ${weak.virtualJump.toFixed(2)} K, A ${weak.efficiency}, w_e ${(1000 * weak.entrainment).toFixed(2)} mm/s; under 292 K: Δθ_v ${weaker.virtualJump.toFixed(2)} K, w_e ${(1000 * weaker.entrainment).toFixed(1)} mm/s (unbounded A ${unbounded.efficiency.toFixed(2)}, w_e ${(1000 * unbounded.entrainment).toFixed(0)} mm/s); buoyancy closure ${(1000 * runaway.entrainment).toFixed(1)} mm/s`);
+  assert.ok(weak.virtualJump > 1 && weak.efficiency === 1);
+  assert.ok(Math.abs(weak.entrainment - weak.radiativeDivergence / (weak.density * CONSTANTS.cp * weak.virtualJump)) < 1e-15 && weak.entrainment < 0.02);
+  assert.ok(weaker.virtualJump > 0 && weaker.efficiency === 1 && weaker.entrainment === 0.02 && weaker.cover > 0);
+  assert.ok(unbounded.efficiency > 3 && unbounded.entrainment > 0.1);
+  assert.equal(runaway.entrainment, 0.02);
+});
+
 test('with the sea-surface temperature instead of fluxes the bulk formulas give about the case\'s 15 W/m² sensible and 115 W/m² latent heat', () => {
   const mlm = createMixedLayer(CONSTANTS);
   const d = mlm.diagnose(INITIAL, rf01(mlm, { sensibleHeat: undefined, evaporation: undefined, seaSurfaceTemperature: 292.5, transferVelocity: 0.0011 * Math.hypot(6, 4.25) }));

@@ -34,9 +34,7 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * troposphere at h and the cloud-top air; with no radiative cooling it
  * does not entrain. Closure 'buoyancy' is BW97's
  * w_e Δθ_v = 2.5 A ⟨w'θ_v'⟩, the layer-mean buoyancy flux, whose profile
- * is linear in w_e (below); where entrainment would supply as much
- * buoyancy as it costs (the runaway of cloud-top entrainment
- * instability) w_e is infinite. Both carry the evaporative enhancement
+ * is linear in w_e (below). Both carry the evaporative enhancement
  * of Nicholls & Turton (1986), A = a_1 [1 + a_2 χ* (1 − Δθ_vs/Δθ_v)]:
  * χ* is the fraction of free-tropospheric air that evaporates the
  * cloud-top liquid of a mixture and Δθ_vs the jump a saturated parcel
@@ -46,6 +44,17 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * efficiency of a dry convective layer; a_2 = evaporativeEnhancement =
  * 25, Caldwell & Bretherton's (2009) fit to DYCOMS-II (Nicholls &
  * Turton had 60).
+ *
+ * Limiter: rules of this kind, driven by the net forcing, become
+ * singular under strong buoyancy reversal as Δθ_v → 0 (Stevens 2002,
+ * his Eq. 22) — the enhancement grows as 1/Δθ_v and w_e as 1/Δθ_v², or
+ * without bound once entrainment in the buoyancy closure supplies as
+ * much buoyancy as it costs. A is therefore at most `maximumEfficiency`
+ * = 1, the larger of the two efficiencies Stevens (2002) runs his
+ * minimal model w_e = A ΔF/Δb with, and w_e at most `maximumEntrainment`
+ * = 20 mm/s, several times the 3.8–5.9 mm/s of the RF01 simulations
+ * (Stevens et al. 2005). Δθ_v enters both denominators no smaller than
+ * `minimumJump` = 0.1 K, a numerical floor.
  *
  * Buoyancy flux: the θ_l and q_t fluxes are linear in z between the
  * surface fluxes and the entrainment fluxes −w_e Δ at h, less the
@@ -61,8 +70,8 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * (`decouplingOnset`) and cloud cover is 1 there; it falls linearly to
  * the trade-cumulus cover `decoupledCover` (0.3) at Turton & Nicholls'
  * (1987) threshold 0.4 (`decoupledRatio`). Cover is 0 without cloud.
- * A layer whose virtual jump is at most `minimumJump` (0 by default) is
- * uncapped: it neither entrains nor carries cover.
+ * A layer with no virtual jump (Δθ_v ≤ 0) is uncapped: it neither
+ * entrains nor carries cover.
  *
  * Drizzle (off by default): the cloud-base rate of Comstock et al.
  * (2004), 0.37 (LWP/N)^1.75 mm/day with LWP in g/m² and the droplet
@@ -89,7 +98,8 @@ export function dycomsLongwave({ F0 = 70, F1 = 22, kappa = 85 } = {}) {
 export function createMixedLayer({
   cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHeat = LATENT_HEAT, referencePressure = 1e5,
   closure = 'radiative', entrainmentEfficiency = 0.2, evaporativeEnhancement = 25,
-  decouplingOnset = 0.15, decoupledRatio = 0.4, decoupledCover = 0.3, minimumJump = 0,
+  maximumEfficiency = 1, maximumEntrainment = 0.02, minimumJump = 0.1,
+  decouplingOnset = 0.15, decoupledRatio = 0.4, decoupledCover = 0.3,
   drizzle = false, dropletNumber = 100, cloudLevels = 20,
 } = {}) {
   if (closure !== 'radiative' && closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${closure}`);
@@ -183,7 +193,7 @@ export function createMixedLayer({
     const thetaAbove = value(forcing.thetaLAbove, h), qtAbove = value(forcing.qtAbove, h);
     const jumpTheta = thetaAbove - thetaL, jumpQ = qtAbove - qt;
     const above = saturate(thetaAbove, qtAbove, piH, {});
-    const jumpVirtual = virtualTheta(above, piH) - thetaVTop, capped = jumpVirtual > minimumJump;
+    const jumpVirtual = virtualTheta(above, piH) - thetaVTop, capped = jumpVirtual > 0, jump = Math.max(minimumJump, jumpVirtual);
 
     let sensible, evaporation;
     if (forcing.seaSurfaceTemperature !== undefined) {
@@ -206,7 +216,7 @@ export function createMixedLayer({
       const saturatedJump = topA * jumpTheta + topB * jumpQ;
       const demand = topSlope * piH * jumpTheta - jumpQ;
       chi = demand > 0 ? Math.min(1, qlTop * (1 + topGamma) / demand) : 1;
-      efficiency = entrainmentEfficiency * (1 + evaporativeEnhancement * Math.max(0, chi * (1 - saturatedJump / jumpVirtual)));
+      efficiency = Math.min(maximumEfficiency, entrainmentEfficiency * (1 + evaporativeEnhancement * Math.max(0, chi * (1 - saturatedJump / jump))));
     }
 
     const heat0 = sensible / (density * cp), water0 = evaporation / density;
@@ -233,10 +243,10 @@ export function createMixedLayer({
 
     let entrainment = 0;
     if (capped) {
-      if (closure === 'radiative') entrainment = Math.max(0, efficiency * divergence / (density * cp * jumpVirtual));
+      if (closure === 'radiative') entrainment = Math.min(maximumEntrainment, Math.max(0, efficiency * divergence / (density * cp * jump)));
       else {
-        const denominator = h * jumpVirtual - 2.5 * efficiency * I1;
-        entrainment = denominator > 0 ? Math.max(0, 2.5 * efficiency * I0 / denominator) : Infinity;
+        const denominator = h * jump - 2.5 * efficiency * I1;
+        entrainment = denominator > 0 ? Math.min(maximumEntrainment, Math.max(0, 2.5 * efficiency * I0 / denominator)) : maximumEntrainment;
       }
     }
 
