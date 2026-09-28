@@ -854,7 +854,7 @@ export function createLayeredOcean(core, options = {}) {
     stericSurface(h, Q, W, eta);
     return { h, u, Q, W, eta, T0, previousT0 };
   }
-  function uploadArrays({ h, u, Q, W, eta }, surfaceT, ice) {
+  function uploadArrays({ h, u, Q, W, eta }, surfaceT, ice, restart = null) {
     const packed = new Float32Array(OS.total);
     packed.set(h, OS.OH); packed.set(u, OS.OU); packed.set(Q, OS.OQ); packed.set(W, OS.OW);
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) packed[OS.OU + e] = 0;
@@ -871,17 +871,32 @@ export function createLayeredOcean(core, options = {}) {
     device.queue.writeBuffer(ob.OD, 4 * OD.FEDGE, Float32Array.from(mesh.fEdge));
     device.queue.writeBuffer(ob.OD, 4 * OD.DRAINSTART, drainStart);
     if (drainCells.length) { device.queue.writeBuffer(ob.OD, 4 * OD.DRAINCELL, Float32Array.from(drainCells)); device.queue.writeBuffer(ob.OD, 4 * OD.DRAINW, Float32Array.from(drainWeights)); }
-    const previousIce = Float64Array.from(ice);
-    device.queue.writeBuffer(ob.OD, 4 * OD.PREVICE, Float32Array.from(previousIce));
-    const capacity = Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
-    core.uploadPhysics({ capacity });
+    device.queue.writeBuffer(ob.OD, 4 * OD.PREVICE, Float32Array.from(restart ? restart.previousIce : ice));
+    if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.FRESH, Float32Array.from(restart.fresh));
+    const capacity = restart ? restart.capacity : Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
+    core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null });
   }
   function initialize(surfaceT, ice) {
     const arrays = initializeArrays(surfaceT, ice);
     uploadArrays(arrays, surfaceT, ice);
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(arrays.previousT0));
   }
+  const RESTART = [['Q', L * C], ['W', L * C], ['previousT0', C], ['previousIce', C], ['fresh', C], ['flux', C], ['capacity', C]];
+  function restartable(saved) {
+    if (!saved || !saved.h || saved.h.length !== L * C || !RESTART.every(([name, length]) => saved[name] && saved[name].length === length)) return false;
+    for (let i = 0; i < C; i++) {
+      let sum = 0;
+      for (let k = 0; k < L; k++) sum += saved.h[k * C + i];
+      if (cellOcean[i] ? !(Math.abs(sum - D[i] - saved.eta[i]) < 1) : sum !== 0) return false;
+    }
+    return true;
+  }
   function upload(saved, surfaceT, ice) {
+    if (restartable(saved)) {
+      uploadArrays(saved, surfaceT, ice, saved);
+      device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(saved.previousT0));
+      return;
+    }
     if (!saved || !saved.h || saved.h.length !== L * C) {
       const arrays = initializeArrays(surfaceT, ice);
       uploadArrays(arrays, surfaceT, ice);
@@ -924,6 +939,25 @@ export function createLayeredOcean(core, options = {}) {
     return { h: Array.from(d.h), u: Array.from(d.u), T: Array.from(d.T), S: Array.from(d.S), eta: Array.from(d.eta) };
   }
   async function serialize() { return serializeFrom(await download()); }
+  /*
+   * What upload needs beside serialize()'s fields to put the device back
+   * exactly as it stands between two ocean steps: the heat and salt
+   * contents as stored, the mixed layer's last temperature and the ice it
+   * last saw, the freshwater not yet taken, and the heat flux and
+   * capacity the surface update is using. A saved ocean that carries all
+   * of them at this mesh's sizes, its columns within a metre of this
+   * bathymetry and dry on land, is uploaded as it is, without fitting
+   * its columns.
+   */
+  async function restartArrays() {
+    const PHL = core.layout.PH;
+    const [[Q, W], [previousT0, previousIce, fresh], [flux, capacity]] = await Promise.all([
+      readRanges(device, ob.S, [{ offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]),
+      readRanges(device, ob.OD, [{ offset: OD.PREVT0, length: C }, { offset: OD.PREVICE, length: C }, { offset: OD.FRESH, length: C }]),
+      readRanges(device, buffers.PH, [{ offset: PHL.OFLUX, length: C }, { offset: PHL.CAP, length: C }]),
+    ]);
+    return Object.fromEntries(Object.entries({ Q, W, previousT0, previousIce, fresh, flux, capacity }).map(([name, values]) => [name, Float32Array.from(values)]));
+  }
 
   function diagnosticsFrom(sums) {
     const { area, depth, heat, interiorT, interiorH, speed, thermocline, salinity, ssh, transport, limited } = sums;
@@ -965,7 +999,7 @@ export function createLayeredOcean(core, options = {}) {
 
   return {
     layers: L, everySteps: o.everySteps, options: o, D, cellOcean,
-    initialize, upload, download, serialize, serializeFrom, diagnostics, frame,
+    initialize, upload, download, serialize, serializeFrom, restartArrays, diagnostics, frame,
     advance, advanceCoupled, accumulateFreshwater, forgetAccumulated,
     setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, mixedLayer, salt, writeSurface, step,
     buffers: ob, layout: { OS, OD, B },

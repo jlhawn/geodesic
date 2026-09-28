@@ -1926,8 +1926,10 @@ concentration, and the time advanced by the years run, so that with a
 365-day cycle recorded from STATE's day the season still matches the
 atmosphere. It logs the ocean line of spinup.mjs, the 60–70S mean
 temperature over 0–60, 60–200, 200–500 and 500–1000 m, the SST and
-ice extent against the recorded last day, and the wall time, and
-continues from the newest year file when restarted. A coupled run
+ice extent against the recorded last day, the global mean SST with its
+drift since STATE and over the last ten years, the ocean's interior
+temperature, fastest current, largest transport and clamped count, and
+the wall time, and exits with 2 on NaN. A coupled run
 starts from it as a snapshot: copied into the coupled run's OUT as
 `<tag>_dayDDDD.bin` (DDDD its `day`), `scripts/spinup.mjs` continues
 from it with the carried atmosphere, which then adjusts to the new
@@ -1935,6 +1937,141 @@ surface; LAND_FROM is not needed, since the land is already in the
 file. At N=64, with the N=128 spin-up sharing the GPU, a looped day took
 3.1–4.2 s against 9 s for a coupled day under the same load (4.5 s
 alone); nearly all of it is the ocean step itself.
+
+**Asynchronous coupling.** The deep ocean needs centuries and the
+atmosphere does not, so `scripts/asyncSpinup.sh` alternates the two
+kinds of run at one resolution N. Each of CYCLES cycles (9) is a
+coupled phase of COUPLED_YEARS (10) model years, run as
+`scripts/spinup.mjs` segments that end on the PER_YEAR (4) snapshot
+days of the model year as `pairedSpinup.sh` places them, recording the
+forcing over its last RECORD_YEARS (1) years, and then an ocean-only
+phase of OCEAN_YEARS (100) years looping that record. A second
+invocation with the other N runs the other resolution. With the coupled
+run starting at day D₀ (its newest `<PREFIX><N>_dayDDDD.bin` in OUT, or
+a fresh start at 0), cycle c's coupled phase ends at
+E_c = D₀ + 365·c·COUPLED_YEARS and records days E_c − 365·RECORD_YEARS + 1
+to E_c into `<PREFIX><N>_cCC_forcing/`. The ocean-only phase
+(`oceanSpinup.mjs`, TAG `<PREFIX><N>_cCC`) starts from the snapshot at
+E_c, whose season matches the record's first day, and its last year's
+file hands the ocean back: the next coupled segment continues from the
+snapshot at E_c with `OCEAN_FROM` set to it, which replaces the ocean,
+sea ice and sea surface (surface temperature, ice, concentration and
+the snow on the ice over the sea cells) and keeps the atmosphere, the
+land cells, the running-mean subsidence, the day and the time of the
+coupled snapshot (`js/oceanHandOff.module.js`). The coupled calendar
+therefore never counts the ocean-only years: the coupled run resumes at
+the day it stopped, and its days stay consistent with the season, since
+the ocean-only phase covers whole years of the same cycle. The
+ocean-only files' own `day` runs on from E_c by the days they ran and
+is outside that calendar. The snapshots carry `oceanYears`, the years
+their ocean has spent alone in all, and `oceanFrom`, the file whose
+ocean they took; a segment whose snapshot already names its OCEAN_FROM
+continues without replacing it again.
+
+The script keeps no state of its own beyond `<PREFIX><N>_cycles.txt`
+(the start day D₀, the cycles done and a convergence stop) and reads
+where it stands from the files in OUT, so it can be started again at
+any point. After each ocean-only phase it writes a summary line to
+`<PREFIX><N>_cycles.log`, from the last year's lines of the phase's log:
+the cycle, the coupled and ocean-only years done, the ocean line (warm
+pool, cold tongue, the 1024 class top in the west and east Pacific),
+the Southern Ocean's 60–70S column by depth band, the global SST and
+its drift over the phase and over its last ten years, and the ice
+extent against the record. It then deletes the record (unless
+KEEP_FORCING=1) and all but the last of the phase's files. With
+CONVERGED set to a drift in K, an ocean-only phase whose global SST
+moved less than that over its last ten years is the last: no further
+cycle starts. FINAL_YEARS (0) coupled years can follow the last
+ocean-only phase, handed over as before. The other variables are
+KEEP (4 coupled snapshots) and OCEAN_KEEP (2 year files per phase),
+SNAPSHOT_DAYS, RESTORE (the ocean-only restoring, 30 W/m²/K), OCEAN
+and RADIATION for both phases, OCEAN_ONLY for the ocean-only phase's
+ocean options alone (for example '{"everySteps":8}'), BATCH and
+LAND_FROM passed to spinup.mjs, and YEAR_DAYS (365), which only the
+tests shorten.
+
+On the M1 Max at N=64 a coupled day takes 4.9 s and a looped
+ocean-only day 1.57 s with the ocean stepping every fourth atmosphere
+step (1350 s). Stepping it every eighth (OCEAN '{"everySteps":8}',
+2700 s) makes them 4.05 and 0.85 s; over 30 coupled days from the
+paired run's day 2190 the two cadences stayed as close as a run
+restarted once stays to its uninterrupted twin (daily global Ts within
+0.3 K against 0.22 K, ASR within 5 W/m² against 5.9), with currents up
+to 0.88 m/s and one clamped edge on two days in both, and over three
+looped five-day years alone they ended within 0.01 K in the SST and
+0.01 K in the Southern Ocean column. A default cycle of 10 coupled and
+100 ocean-only years then takes 21 hours at N=64, 13.6 with
+OCEAN_ONLY='{"everySteps":8}', so the nine cycles take 7.8 or 5.1 days.
+
+**Interruptions.** Both spin-up scripts turn the first SIGTERM or
+SIGINT into a stop after the ocean step in progress (a later one is
+logged and ignored, since the driver forwards the signal its process
+group may already have had): they save where they stand and exit 0 with
+a `stopped by SIGTERM` line, well inside the 30 s a preempted cloud
+machine gets: on the M1 Max the stop takes 0.3 s at N=64 and 2 s at
+N=128, most of it writing the checkpoint (60 and 242 MB). Inside a day
+`spinup.mjs` saves `<TAG>_dayDDDD_stepSSSS.bin` (DDDD days and SSSS
+steps done) with the forcing recorder's part of the day when RECORD is
+set, so that the day's forcing file still covers the whole day, and
+`oceanSpinup.mjs` saves `<TAG>_yearYYYY_dayDDD_stepSSSS.bin`; the next
+run continues from these as from any snapshot. The ocean-only phase
+also saves `<TAG>_yearYYYY_dayDDD.bin` every SNAPSHOT_DAYS (30) days of
+the year. Only the newest of these in-day or in-year files is kept, and
+KEEP counts only whole days or whole years; the shell drivers' day
+patterns see only whole days. Every ocean-only file and in-day
+checkpoint also carries the ocean's restart arrays
+(`restartArrays` in `js/gpu/layeredOcean.gpu.js`: the heat and salt
+contents as stored, the mixed layer's previous temperature and ice,
+the freshwater not yet taken and the heat flux and capacity the surface
+update is using), which the ocean's upload restores as they are rather
+than rebuilding them from temperature and salinity and fitting the
+columns to the bathymetry, which puts the ice skin 0.08 K and the open
+water 3×10⁻⁴ K off the uninterrupted run within two N=6 days. With them
+an ocean-only run stopped inside a day or at any
+checkpoint and continued ends byte for byte where the uninterrupted run
+does (`test/asyncSpinup.test.mjs`). A coupled run continues from the
+exact step, but not bit for bit: the atmosphere's step-to-step
+diagnostics (the surface wind the next step's drag uses among them)
+start again from zero, and a recorded day spanning an interruption
+differs from the uninterrupted one by about 0.5% in its mean fluxes.
+
+`SYNC_CMD` is a shell command both scripts run through `/bin/sh` after
+every snapshot, recorded forcing day and log update, with the file's
+path as `$1`, one at a time and in their own process group so that the
+stop signal does not cut an upload short (three tries 5 s apart); the
+scripts wait for the queue before they exit. asyncSpinup.sh runs
+`RESTORE_CMD` once before anything else and does not start if it fails,
+and it supervises its phases itself: a node process that exits with an
+error is started again from its last file after RETRY_WAIT (30) s, up
+to five failures in a row, while NaN (exit 2) stops it. It stops at
+`STOP_<PREFIX>` or `STOP_<PREFIX><N>` in OUT before its next segment or
+phase, and on SIGTERM or SIGINT, which it passes on to the running
+phase, once that has saved. On a preemptible machine with an
+S3-compatible bucket, rclone configured from the environment (no config
+file; Cloudflare R2 here):
+
+```
+export RCLONE_CONFIG_STORE_TYPE=s3 RCLONE_CONFIG_STORE_PROVIDER=Cloudflare \
+  RCLONE_CONFIG_STORE_ENDPOINT=https://<account>.r2.cloudflarestorage.com \
+  RCLONE_CONFIG_STORE_ACCESS_KEY_ID=<key> RCLONE_CONFIG_STORE_SECRET_ACCESS_KEY=<secret>
+export OUT=$HOME/runs/async64
+export RESTORE_CMD='rclone copy store:gcm-runs/async64 "$OUT"'
+export SYNC_CMD='rclone sync "$OUT" store:gcm-runs/async64 --exclude "*.partial" --exclude "*.lock/**"'
+until N=64 scripts/asyncSpinup.sh || [ $? -eq 2 ]; do sleep 60; done >> "$OUT.driver.out" 2>&1
+```
+
+This SYNC_CMD ignores `$1` and mirrors OUT, deletions included, so the
+bucket holds what the pruning leaves (at N=64 a coupled snapshot is
+49 MB, an ocean-only file 58 MB and a recorded year 0.8 GB) and a new
+machine's RESTORE_CMD fetches only that; a mirror must never run
+against an OUT that was not restored, which the driver's order
+guarantees. `rclone copyto "$1" "store:gcm-runs/async64/${1#$OUT/}"`
+copies each file as it is saved instead, forcing days into their
+directory, but never deletes. The last line, run from the
+machine's boot script (a cloud startup script or `@reboot` in cron),
+restarts the driver after a failure and ends once it finishes, is
+stopped or meets NaN (exit 2); each boot after a preemption starts it
+again.
 
 **Density-consistent interior.** After the mixed-layer exchanges, an
 interior layer more than 0.01 kg/m³ from its label mixes in water from
@@ -2230,6 +2367,7 @@ js/
     profile.module.js        the model dialog's GPU profile: step times and kernel timestamps
   model.module.js           assembles core + physics, RK4 step, diagnostics
   forcing.module.js         M18: one recorded day of the ocean's surface forcing, encoded and decoded
+  oceanHandOff.module.js    M18: a coupled state with the ocean, sea ice and sea surface of another
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase
   threads.module.js         M6: worker_threads / Web Worker primitives behind the engine
@@ -2248,6 +2386,8 @@ scripts/
   spinup.mjs, spinup.sh     one spin-up segment on the GPU from the newest snapshot, and a loop of them
   pairedSpinup.sh           resolutions spun up in step, one at a time, compared every EVERY days
   oceanSpinup.mjs           the ocean and sea ice spun up alone under a recorded year of forcing
+  asyncSpinup.sh            coupled and ocean-only phases in turn at one resolution, supervised
+  runControl.mjs            the spin-ups' stop on SIGTERM and their SYNC_CMD queue
   compareStates.mjs         saved states side by side as a markdown table
   splitState.mjs            a saved state gzipped into parts for the page
 test/

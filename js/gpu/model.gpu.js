@@ -159,7 +159,7 @@ export async function createGpuModel(gridOrMesh, {
   model.ocean = gpuOcean ? {
     initialize(surfaceT, iceField) { gpuOcean.initialize(surfaceT, iceField); },
     load(saved, surfaceT, iceField) { gpuOcean.upload(saved, surfaceT, iceField); },
-    async serialize() { return gpuOcean.serialize(); },
+    async serialize({ restart = false } = {}) { return restart ? { ...(await gpuOcean.serialize()), ...(await gpuOcean.restartArrays()) } : gpuOcean.serialize(); },
   } : null;
 
   model.land = landCpu ? {

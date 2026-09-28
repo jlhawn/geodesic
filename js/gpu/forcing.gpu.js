@@ -16,6 +16,11 @@ import { encodeForcing } from '../forcing.module.js';
  * running totals rather than the sums: rain from PH CONV + COND, runoff
  * from model.land.runoff, which the model's diagnostics frame advances,
  * so `day` belongs after the day's model.diagnostics().
+ * `checkpoint` returns the part of a day summed so far (after a
+ * model.diagnostics() for the runoff), and a recorder created with it as
+ * `from`, on a model loaded from the state saved at that step, carries
+ * the day on; either must fall on an ocean step, since the new recorder
+ * counts its ocean steps afresh.
  *
  * createForcedOcean steps the ocean and sea ice alone under a recorded
  * day. Each `step` is one atmosphere step of the physics kernel's
@@ -65,7 +70,7 @@ ${body}
   };
 }
 
-export async function createForcingRecorder(model) {
+export async function createForcingRecorder(model, from = null) {
   const { gpu, mesh, oceanEngine: ocean } = model;
   const { device } = gpu;
   const C = mesh.nCells, E = mesh.nEdges, PH = gpu.layout.PH;
@@ -92,9 +97,16 @@ export async function createForcingRecorder(model) {
   if (PH[PH_LAND + i] < 0.5 && amount > 0.0 && IN[S_TH + bottom] * D[D_EXM + bottom] < MELTING) { OUT[A_snowfall + i] += amount; }`, 'A_', A, acc);
 
   const readRain = async () => { const [conv, cond] = await readRanges(device, gpu.buffers.PH, [{ offset: PH.CONV, length: C }, { offset: PH.COND, length: C }]); return Float64Array.from(conv, (x, i) => x + cond[i]); };
-  let rainBefore = await readRain(), runoffBefore = model.land ? Float64Array.from(model.land.runoff) : null, timeBefore = model.time;
-  device.queue.writeBuffer(acc, 4 * A.seen, Float32Array.from(rainBefore));
-  let counted = 0, steps = 0, oceanSteps = 0;
+  const rainNow = await readRain(), runoffNow = model.land ? Float64Array.from(model.land.runoff) : null;
+  let rainBefore = from ? Float64Array.from(rainNow, (x, i) => x - from.rain[i]) : rainNow;
+  let runoffBefore = runoffNow && from ? Float64Array.from(runoffNow, (x, i) => x - from.runoff[i]) : runoffNow;
+  let timeBefore = model.time - (from ? from.seconds : 0);
+  if (from) {
+    if (from.sums.length !== A.total) throw new Error(`the recorder checkpoint holds ${from.sums.length} sums, not ${A.total}`);
+    device.queue.writeBuffer(acc, 0, Float32Array.from(from.sums));
+  }
+  device.queue.writeBuffer(acc, 4 * A.seen, Float32Array.from(rainNow));
+  let counted = 0, steps = from ? from.steps : 0, oceanSteps = from ? from.oceanSteps : 0;
 
   return {
     step() {
@@ -102,6 +114,14 @@ export async function createForcingRecorder(model) {
       steps++;
       if (oceanStep) oceanSteps++;
       run([oceanStep ? 1 : 0], Math.max(C, E));
+    },
+    async checkpoint() {
+      const [[sums], rain] = await Promise.all([readRanges(device, acc, [{ offset: 0, length: A.total }]), readRain()]);
+      return {
+        sums: Float32Array.from(sums), steps, oceanSteps, seconds: model.time - timeBefore,
+        rain: Float64Array.from(rain, (x, i) => x - rainBefore[i]),
+        runoff: model.land ? Float64Array.from(model.land.runoff, (x, i) => x - runoffBefore[i]) : new Float64Array(C),
+      };
     },
     async day(day) {
       const [views, rain] = await Promise.all([readRanges(device, acc, [...SUMMED.map((name) => ({ offset: A[name], length: C })), { offset: A.stress, length: E }]), readRain()]);
