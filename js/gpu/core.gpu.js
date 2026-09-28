@@ -495,7 +495,7 @@ const KERNELS = {
 };
 
 export const PHYSICS_DEFAULTS = {
-  solarConstant: 1362, cloudAbsorption: 130, cloudScattering: 55, stratus: true, stratusWater: 0.004, stratusSigma: 0.92, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
+  solarConstant: 1362, cloudAbsorption: 130, cloudScattering: 55, stratus: true, stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
   exchangeCoefficient: 1.5e-3, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0.15,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10,
@@ -702,6 +702,7 @@ export async function createGpuCore(mesh, {
     {
       const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
       dispatch(pass, 'physics', g, C);
+      dispatch(pass, 'pblDiagnose', g, C);
       pass.end();
       device.queue.submit([encoder.finish()]);
     }
@@ -709,7 +710,6 @@ export async function createGpuCore(mesh, {
     setParams([dt, 0, sun[0], sun[1], sun[2]]);
     {
       const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-      dispatch(pass, 'pblDiagnose', g, C);
       dispatch(pass, 'adjust', g, C);
       dispatch(pass, 'mixMomentum', g, E);
       dispatch(pass, 'dissipationHeat', g, L.KC);

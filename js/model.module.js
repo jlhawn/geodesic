@@ -116,7 +116,7 @@ export function createModel(gridOrMesh, {
           directContrast[i] = seaIce.albedoContrast(h, mu, seaIce.snow[i]); diffuseContrast[i] = seaIce.albedoContrast(h, null, seaIce.snow[i]);
         }
       }
-      radiation.apply(moist ? fluxState : dryFluxState, forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null, moist ? openSea : null);
+      radiation.apply(moist ? fluxState : dryFluxState, forcing, surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null, moist ? openSea : null, boundaryLayer ? boundaryLayer.depth : null);
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
       const { surfaceShortwave, surfaceDirect } = radiation;
       for (let i = iFrom; i < iTo; i++) {

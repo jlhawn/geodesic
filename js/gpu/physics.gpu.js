@@ -19,7 +19,7 @@ export function physicsConstants(o) {
   return `
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
 const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudScattering}; const WINDOW: f32 = ${o.window}; const GAS_FRAC: f32 = ${o.gasFraction};
-const STRATUS: bool = ${!!o.stratus}; const STRATUS_WATER: f32 = ${o.stratusWater}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
+const STRATUS: bool = ${!!o.stratus}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6;
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
@@ -68,6 +68,28 @@ fn band(fraction: f32, eps: ptr<function, array<f32, K>>, temperature: ptr<funct
     up = up * (1.0 - e) + emitted;
   }
   return vec2<f32>(up, down);
+}
+fn deckWater(T: f32, q: f32, p: f32, mixedDepth: f32) -> f32 {
+  if (q <= 0.0) { return 0.0; }
+  let e = q * p / (EPSILON + (1.0 - EPSILON) * q);
+  let y = log(e / 611.2);
+  let dewPoint = (273.15 * 17.67 - 29.65 * y) / (17.67 - y);
+  var lclT = T; var lclP = p;
+  if (dewPoint < T) { lclT = 1.0 / (1.0 / (dewPoint - 56.0) + log(T / dewPoint) / 800.0) + 56.0; lclP = p * pow(lclT / T, 1.0 / KAPPA); }
+  let thickness = mixedDepth - max(0.0, CP * (T - lclT) / GRAV);
+  if (thickness <= 0.0) { return 0.0; }
+  let qs = qsat(lclT, lclP);
+  let moist = GRAV / CP * (1.0 + LHEAT * qs / (RGAS * lclT)) / (1.0 + LHEAT * LHEAT * qs / (CP * RVAP * lclT * lclT));
+  let lapse = lclP / (RGAS * lclT) * qs * (LHEAT * moist / (RVAP * lclT * lclT) - GRAV / (RGAS * lclT));
+  return min(STRATUS_MAX, STRATUS_SCALE * 0.5 * lapse * thickness * thickness);
+}
+fn shortwave(cloudDepth: f32, mu: f32, adir: f32, adif: f32) -> vec4<f32> {
+  let reflectance = select(0.0, cloudDepth / (cloudDepth + 2.0 * mu), mu > 0.0 && cloudDepth > 0.0);
+  let direct = (1.0 - SKYLIGHT) * select(1.0, exp(-cloudDepth / mu), cloudDepth > 0.0 && mu > 0.0);
+  let diffuse = 1.0 - reflectance - direct;
+  let returned = select(0.0, cloudDepth / (cloudDepth + 2.0 * DIFFUSE_MU), cloudDepth > 0.0);
+  let reflections = returned * (adir * direct + adif * diffuse) / (1.0 - adif * returned);
+  return vec4<f32>((1.0 - adir) * direct + (1.0 - adif) * (diffuse + reflections), direct + diffuse + reflections, direct, reflectance);
 }
 fn moistLapse(temperature: f32, pressure: f32) -> f32 {
   let qs = qsat(temperature, pressure);
@@ -122,28 +144,29 @@ export const PHYSICS_KERNELS = {
   var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
   var cloudPath = 0.0;
   let tau0 = PH[PH_TAU + i];
-  var deck = 0.0;
-  if (STRATUS && !onLand) {
+  var deck = 0.0; var fraction = 0.0;
+  let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
+  if (STRATUS && !onLand && mixedDepth > 0.0) {
     let stability = IN[S_TH + STABILITY_K * C + i] - IN[S_TH + bottom];
-    deck = STRATUS_WATER * clamp(0.057 * stability - 0.556, 0.0, 1.0) * clamp((ts - 278.15) / 5.0, 0.0, 1.0) * (1.0 - cover);
+    fraction = clamp(0.057 * stability - 0.556, 0.0, 1.0) * clamp((ts - 278.15) / 5.0, 0.0, 1.0) * (1.0 - cover);
+    if (fraction > 0.0) { deck = deckWater(IN[S_TH + bottom] * D[D_EXM + bottom], IN[S_Q + bottom], pi * LV[L_SM + K - 1], mixedDepth); }
+    if (deck <= 0.0) { fraction = 0.0; }
   }
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
     var eps = 1.0 - exp(-tau0 * LV[L_SHAPE + k]);
     if (COUPLED) { eps = 1.0 - exp(-VCOUP * max(0.0, IN[S_Q + idx]) * mass); }
-    var water = max(0.0, IN[S_QC + idx]) * mass;
-    if (STRATUS && k == STRATUS_K && deck > 0.0) { water += deck; }
+    let water = max(0.0, IN[S_QC + idx]) * mass;
     cloudPath += water;
     cloudE[k] = select(0.0, 1.0 - exp(-CLOUD_ABS * water), water > 0.0);
+    if (STRATUS && k == STRATUS_K && deck > 0.0) { cloudE[k] = fraction * (1.0 - exp(-CLOUD_ABS * (water + deck))) + (1.0 - fraction) * cloudE[k]; }
     let clear = 1.0 - cloudE[k];
     vaporE[k] = 1.0 - (1.0 - eps) * clear;
     mixedE[k] = 1.0 - (1.0 - LV[L_GASE + k]) * clear;
     temperature[k] = IN[S_TH + idx] * D[D_EXM + idx];
     netFlux[k] = ozoneHeating * LV[L_OZ + k];
   }
-  let cloudDepth = CLOUD_SCAT * cloudPath;
-  let reflectance = select(0.0, cloudDepth / (cloudDepth + 2.0 * mu), mu > 0.0 && cloudDepth > 0.0);
   var incident = beam - ozoneHeating;
   var vaporHeating = 0.0;
   if (VAPOR_ABS > 0.0 && mu > 0.0) {
@@ -158,11 +181,9 @@ export const PHYSICS_KERNELS = {
     vaporHeating = incident * taken;
     incident -= vaporHeating;
   }
-  let direct = (1.0 - SKYLIGHT) * select(1.0, exp(-cloudDepth / mu), cloudDepth > 0.0 && mu > 0.0);
-  let diffuse = 1.0 - reflectance - direct;
-  let returned = select(0.0, cloudDepth / (cloudDepth + 2.0 * DIFFUSE_MU), cloudDepth > 0.0);
-  let upward = adir * direct + adif * diffuse;
-  let absorbed = incident * ((1.0 - adir) * direct + (1.0 - adif) * (diffuse + returned * upward / (1.0 - adif * returned)));
+  var sw = shortwave(CLOUD_SCAT * cloudPath, mu, adir, adif);
+  if (deck > 0.0) { sw = fraction * shortwave(CLOUD_SCAT * (cloudPath + deck), mu, adir, adif) + (1.0 - fraction) * sw; }
+  let absorbed = incident * sw.x;
   let v = band(VAPOR_FRAC, &vaporE, &temperature, &netFlux, surfaceEmission);
   let g = band(GAS_FRAC, &mixedE, &temperature, &netFlux, surfaceEmission);
   let w = band(WINDOW, &cloudE, &temperature, &netFlux, surfaceEmission);
@@ -181,9 +202,9 @@ export const PHYSICS_KERNELS = {
     IN[S_TH + idx] += dt * netFlux[k] / (CP * mass) / D[D_EXM + idx];
   }
   IN[S_Q + bottom] += dt * evap * GRAV / (pi * LV[L_DS + K - 1]);
-  let swdn = incident * (direct + diffuse + returned * upward / (1.0 - adif * returned));
+  let swdn = incident * sw.y;
   PH[PH_SWDN + i] = swdn;
-  let directDown = incident * direct;
+  let directDown = incident * sw.z;
   let contrast = directDown * (iceDir - waterDir) + (swdn - directDown) * (iceDif - ALB_DIF_WATER);
   PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbed + ozoneHeating + vaporHeating; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = incident - absorbed; PH[PH_ADIF + i] = adif;
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];

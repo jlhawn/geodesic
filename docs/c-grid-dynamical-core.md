@@ -1007,29 +1007,44 @@ counted as leaving the surface). The cloud–albedo, cloud–longwave and
 ice–albedo feedbacks are all live from here.
 
 Marine stratocumulus is diagnosed, not condensed. Over the ice-free
-part of each sea cell the column carries a deck of `stratusWater` ×
-f of cloud water in the
-layer nearest σ = `stratusSigma` = 0.92, the top of a 1 km marine
-boundary layer, where it scatters and emits exactly as condensed water
-does but never enters qc. f is the Klein & Hartmann (1993) fit
-0.057 LTS − 0.556, clamped to [0, 1], of the lower-tropospheric
-stability LTS = θ(σ ≈ 0.7) − θ(lowest layer), times a ramp from 0 over
-a 5 °C sea to 1 over 10 °C (the fit is for subtropical and
-mid-latitude decks; polar fog is another regime and would only add
-longwave warming over the ice), times 1 − A for the ice concentration
-A; land carries none, nor does the model with `moist: false`. Without it the eastern subtropical oceans, where
-Earth keeps its decks, were nearly cloud-free on a year-two state
-(planetary albedo 0.11–0.14 against Earth's ~0.38), absorbed about
-100 W/m² too much sunlight and stayed too warm for a Pacific cold
-tongue or coastal upwelling. The default deck is thin, `stratusWater`
-0.004 kg/m² (optical depth 0.2 at f = 1), because on a flat stability
-field the fit engages over every warm sea alike and a full deck would
-lift the planetary albedo to 0.5; the water can be raised once the
-eastern oceans carry an inversion for it to answer to. `stratus: false`
-removes the deck, and both engines are then bit-identical to the model
-without it; the
-column test is in `test/physics.test.mjs` and the engines' parity with
-the deck engaged under an imposed inversion in `test/gpuModel.test.mjs`.
+part of each sea cell a deck covers the fraction f of the column. f is
+the Klein & Hartmann (1993) fit 0.057 LTS − 0.556, clamped to [0, 1],
+of the lower-tropospheric stability LTS = θ(σ ≈ 0.7) − θ(lowest layer),
+times a ramp from 0 over a 5 °C sea to 1 over 10 °C (the fit is for
+subtropical and mid-latitude decks; polar fog is another regime and
+would only add longwave warming over the ice), times 1 − A for the ice
+concentration A; land carries none, nor does the model with
+`moist: false`. The deck fills the boundary layer above its
+condensation level: its base is the lifting condensation level of the
+lowest layer's air (Bolton's, as the convection finds it, reached along
+the dry adiabat), its top the boundary-layer top the previous step
+diagnosed, and for that thickness Δz it holds `stratusScale` × ½ Γ_l Δz²
+of water, at most `stratusWaterMax` = 0.15 kg/m². Γ_l is the adiabatic
+liquid-water lapse rate at cloud base, the density times the vapour a
+saturated parcel condenses per metre of moist-adiabatic ascent:
+2.4 × 10⁻⁶ kg/m³ per metre at 290 K and 950 hPa, 110 g/m² for a 300 m
+deck at the adiabatic limit. The water sits in the layer nearest
+σ = `stratusSigma` = 0.92, the top of a 1 km marine boundary layer,
+where it scatters and emits as condensed water does but never enters
+qc. The deck and the rest of the cell are independent columns: the
+shortwave is computed with and without the deck's water and the two
+weighted by f, and the deck layer's longwave emissivity is the
+f-weighted mean of its emissivity with and without it. Without the
+deck the eastern subtropical oceans, where Earth keeps its decks, were
+nearly cloud-free on a year-two state (planetary albedo 0.11–0.14
+against Earth's ~0.38), absorbed about 100 W/m² too much sunlight and
+stayed too warm for a Pacific cold tongue or coastal upwelling. The
+default `stratusScale` is 0.15, far below adiabatic, because on a flat
+stability field the fit engages over every warm sea alike; it can be
+raised once the eastern oceans carry an inversion for it to answer to.
+A run's first step, before any boundary layer has been diagnosed,
+carries no deck. `stratus: false` removes it, and both engines are
+then bit-identical to the model without it, as they are wherever f or
+the deck's water is zero; the column tests are in
+`test/physics.test.mjs` and the engines' parity with the deck engaged
+under an imposed inversion in `test/gpuModel.test.mjs`. Both engines
+diagnose the boundary layer before the ∇⁴ closure, so the deck rests
+on the same depth in each.
 
 Tuning. 400-day N=8 runs (annual means) put the three knobs — the
 cloud optical scale, the vapour coupling and the ocean heat transport
