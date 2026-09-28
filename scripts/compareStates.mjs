@@ -12,7 +12,7 @@ import { basename, dirname, join } from 'node:path';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
-import { decodeState } from '../js/stateFile.module.js';
+import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { THERMOCLINE_DENSITY, LAYER_DENSITIES } from '../js/ocean/layered.module.js';
 
@@ -24,7 +24,10 @@ if (!files.length) { console.error('usage: node scripts/compareStates.mjs <state
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 const meshes = new Map();
-const modelFor = (N) => meshes.get(N) ?? meshes.set(N, createModel(new Grid(N), { physics: false, topography })).get(N);
+const modelFor = (saved) => {
+  const levels = savedLevels(saved), key = `${saved.N} ${levels.join(' ')}`;
+  return meshes.get(key) ?? meshes.set(key, createModel(new Grid(saved.N), { physics: false, topography, levels })).get(key);
+};
 
 /*
  * Means (maxima for the ocean's extremes) of the daily lines that
@@ -52,7 +55,7 @@ function logWindow(file, day) {
 
 async function measure(file) {
   const saved = await decodeState(new Uint8Array(readFileSync(file)));
-  const model = modelFor(saved.N);
+  const model = modelFor(saved);
   const { mesh, core } = model, { K, C, E } = core.diagnostics, land = model.geography.land;
   const deg = 180 / Math.PI, lat = Float64Array.from(mesh.latCell, (x) => x * deg), lon = Float64Array.from(mesh.lonCell, (x) => x * deg);
   const inLon = (i, west, east) => (west <= east ? lon[i] >= west && lon[i] <= east : lon[i] >= west || lon[i] <= east);

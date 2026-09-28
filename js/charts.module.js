@@ -2,7 +2,7 @@ import { Grid } from './grid.module.js';
 import { createModel } from './model.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { LEVELS, levelFields } from './levels.module.js';
-import { fetchState, stateName, listedStates } from './stateFile.module.js';
+import { fetchState, stateName, listedStates, savedLevels } from './stateFile.module.js';
 import { DEFAULT_RUN } from './defaultRun.module.js';
 
 const A1 = 1.340264, A2 = -0.081106, A3 = 0.000893, A4 = 0.003796;
@@ -44,9 +44,10 @@ function niceStep(range, target = 14) {
 }
 
 const models = new Map();
-function modelFor(N) {
-  if (!models.has(N)) models.set(N, createModel(new Grid(N)));
-  return models.get(N);
+function modelFor(state) {
+  const levels = savedLevels(state), key = `${state.N} ${levels.join(' ')}`;
+  if (!models.has(key)) models.set(key, createModel(new Grid(state.N), { levels }));
+  return models.get(key);
 }
 
 function contours(mesh, field, step) {
@@ -167,7 +168,7 @@ function svgFor(model, grid, title, subtitle, fill, contourField, contourStep, u
  * the wind interpolated to that pressure.
  */
 export function chartFor(state, level) {
-  const model = modelFor(state.N);
+  const model = modelFor(state);
   const grid = [...new Grid(state.N)];
   const { K, C, E, sigmaMid } = model.core.diagnostics;
   const pi = Float64Array.from(state.pi), theta = Float64Array.from(state.theta), u = Float64Array.from(state.u);

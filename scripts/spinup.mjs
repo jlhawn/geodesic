@@ -15,7 +15,15 @@
 // forcing-DDDD.bin, see js/forcing.module.js), BATCH (1: the steps are queued
 // one at a time, waiting every eighth; more: that many steps go to the
 // GPU in one submission, byte-identical, for drivers where submitting
-// costs more than it does on Metal).
+// costs more than it does on Metal), LEVELS (cam26: the sigma grid of a
+// fresh start, one of SIGMA_GRIDS in js/dynamics/sigmaCore.module.js; a
+// run continues on its snapshot's grid). A fresh start can take from saved
+// states: FROM, a state at the same N, gives the ocean, the land, the
+// sea-surface temperature of its mixed layer and the land-surface
+// temperature, while the atmosphere and the sea ice start fresh on the
+// run's grid and the clock at day 0; ICE_FROM=1 takes FROM's sea ice
+// (thickness, concentration, snow, skin temperature) too; LAND_FROM, a state at
+// any N, then gives the land.
 // scripts/spinup.sh runs segments back to back.
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
@@ -23,7 +31,8 @@ import { topographyFromInt16, createGeography } from '../js/geography.module.js'
 import { buildMesh } from '../js/mesh.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
-import { decodeState, encodeState } from '../js/stateFile.module.js';
+import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
+import { sigmaInterfaces, sigmaGridName } from '../js/dynamics/sigmaCore.module.js';
 import { savedSubsidence, regridLand } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
@@ -47,14 +56,16 @@ const snapshots = () => readdirSync(OUT).filter((f) => f.startsWith(`${TAG}_day`
 
 const t0 = performance.now();
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = await createGpuModel(new Grid(N), { topography, ocean: OCEAN, radiation: RADIATION });
+const existing = snapshots(), file = existing[existing.length - 1];
+const saved = file ? await decodeState(new Uint8Array(readFileSync(`${OUT}/${file}`))) : null;
+if (saved && saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
+const levels = saved ? savedLevels(saved) : sigmaInterfaces(process.env.LEVELS ?? 'cam26');
+const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} layers)`;
+if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
+const model = await createGpuModel(new Grid(N), { topography, ocean: OCEAN, radiation: RADIATION, levels });
 const { mesh, core, state } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
-const existing = snapshots();
-if (existing.length) {
-  const file = existing[existing.length - 1];
-  const saved = await decodeState(new Uint8Array(readFileSync(`${OUT}/${file}`)));
-  if (saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
+if (saved) {
   ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
   model.seaIce.load(state[6], saved.concentration ?? null);
   model.radiation.mlmSubsidence.set(savedSubsidence(saved, model));
@@ -62,13 +73,31 @@ if (existing.length) {
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
   model.land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}) });
-  log(`--- ${new Date().toISOString()} continuing from ${file} (day ${saved.day}) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
+  log(`--- ${new Date().toISOString()} continuing from ${file} (day ${saved.day}) on ${grid} after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 } else {
   initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => state[a].set(values));
   for (let i = 0; i < C; i++) if (model.geography.land[i]) state[6][i] = 0;
+  const from = process.env.FROM ? await decodeState(new Uint8Array(readFileSync(process.env.FROM))) : null, iceFrom = !!from && process.env.ICE_FROM === '1';
+  if (from) {
+    if (from.N !== N) throw new Error(`FROM ${process.env.FROM} is N=${from.N}, not ${N}`);
+    const land = model.geography.land;
+    for (let i = 0; i < C; i++) {
+      if (land[i]) { state[3][i] = from.surfaceT[i]; continue; }
+      if (iceFrom) state[6][i] = from.ice[i];
+      if (iceFrom && state[6][i] > 0) state[3][i] = from.surfaceT[i];
+      else if (!(state[6][i] > 0) && from.ocean.h[i] > 1) state[3][i] = from.ocean.T[i];
+    }
+    if (iceFrom) model.seaIce.load(state[6], from.concentration ?? null);
+  }
   model.load();
-  model.ocean.initialize(state[3], state[6]);
-  model.land.initialize();
+  if (from) {
+    model.ocean.load(from.ocean, state[3], state[6]);
+    model.land.load({ soil: Float64Array.from(from.land.soil), snow: Float64Array.from(from.land.snow), ...(from.land.vegetation ? { vegetation: Float64Array.from(from.land.vegetation) } : {}), ...(from.land.surface ? { surface: Float64Array.from(from.land.surface) } : {}) }, iceFrom ? state[6] : null);
+    log(`seeded from ${process.env.FROM} (N=${from.N}, day ${from.day}, ${sigmaGridName(savedLevels(from)) ?? 'a saved grid'}): the ocean, the land (soil, snow, ${from.land.vegetation ? 'vegetation, ' : ''}${from.land.surface ? 'surface water, ' : ''}surface temperature) and the sea-surface temperature of its mixed layer, ${iceFrom ? 'and its sea ice (thickness, concentration, snow, skin temperature)' : 'with fresh sea ice'}; a fresh atmosphere on ${grid}; the clock at day 0`);
+  } else {
+    model.ocean.initialize(state[3], state[6]);
+    model.land.initialize();
+  }
   if (process.env.LAND_FROM) {
     const seed = await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM)));
     const sourceMesh = seed.N === N ? mesh : buildMesh(new Grid(seed.N));
@@ -76,7 +105,7 @@ if (existing.length) {
     model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6]);
     log(`land seeded from ${process.env.LAND_FROM} (N=${seed.N}, day ${seed.day})`);
   }
-  log(`--- ${new Date().toISOString()} fresh start at N=${N} (${C} cells, dt ${dt} s, ${perDay} steps a day) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
+  log(`--- ${new Date().toISOString()} fresh start at N=${N} on ${grid} (${C} cells, dt ${dt} s, ${perDay} steps a day) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 }
 
 const deg = 180 / Math.PI, land = model.geography.land;
@@ -127,7 +156,7 @@ const warmPool = sea(-10, 10, 120, 160), coldTongue = sea(-2, 2, -110, -90), wes
 log(`ocean after ${days} days: warm pool ${sst(warmPool).toFixed(1)} °C, cold tongue ${sst(coldTongue).toFixed(1)} °C (W−E ${(sst(westPacific) - sst(eastPacific)).toFixed(1)} K), ${THERMOCLINE_DENSITY} class top W Pac ${classTop(westPacific).toFixed(0)} m, E Pac ${classTop(eastPacific).toFixed(0)} m`);
 const name = `${TAG}_day${String(day).padStart(4, '0')}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence } = model.radiation;
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ N, K: core.K, day, time: model.time, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: landState }));
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ N, K: core.K, day, time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: landState }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots();
 for (const old of kept.slice(0, Math.max(0, kept.length - KEEP))) unlinkSync(`${OUT}/${old}`);

@@ -24,7 +24,7 @@ import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appen
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
-import { decodeState, encodeState } from '../js/stateFile.module.js';
+import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedSubsidence } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
@@ -52,7 +52,7 @@ if (saved.N !== N) throw new Error(`${from} is N=${saved.N}`);
 const firstYear = existing.length ? yearOf(existing[existing.length - 1]) : 0;
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = await createGpuModel(new Grid(N), { topography, ocean: OCEAN, radiation: RADIATION });
+const model = await createGpuModel(new Grid(N), { topography, ocean: OCEAN, radiation: RADIATION, levels: savedLevels(saved) });
 const { mesh, core, state, gpu } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), oceanDt = model.oceanEngine.everySteps * dt;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
@@ -118,7 +118,7 @@ while (year < YEARS) {
   const name = `${TAG}_year${String(year).padStart(4, '0')}.bin`;
   const landState = await model.land.serialize();
   writeFileSync(`${OUT}/${name}.partial`, encodeState({
-    N, K: core.K, day: Math.round(model.time / 86400), time: model.time, terrain: !!model.surfaceGeopotential, oceanYears: year,
+    N, K: core.K, day: Math.round(model.time / 86400), time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels, oceanYears: year,
     pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence,
     ocean: { h: o.h, u: o.u, T: o.T, S: o.S, eta: o.eta }, land: landState,
   }));

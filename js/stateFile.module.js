@@ -1,3 +1,5 @@
+import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
+
 /*
  * A saved state is a JSON file, or that file gzipped and cut into parts
  * listed by a <name>.parts.json manifest so each piece stays under the
@@ -10,7 +12,8 @@
  * state's keys, with 'ocean.' and 'land.' prefixes for the nested ones.
  * Gzip and the binary format are recognised by their magic bytes rather
  * than the file name, since a server may already have inflated a .gz
- * file on the way.
+ * file on the way. The array 'levels' holds the interface σ values of the
+ * atmosphere's grid, top to ground; a state without it is on 'cam26'.
  */
 export function stateName(file) {
   return file.replace(/(?:\.json(?:\.gz)?|\.parts\.json|\.bin(?:\.gz)?)$/, '');
@@ -53,9 +56,20 @@ function decodeBinary(bytes) {
 }
 
 /*
+ * The sigma interfaces a saved state's atmosphere is on: those of the
+ * named grid they match, else the saved values themselves.
+ */
+export function savedLevels(saved) {
+  if (!saved || !saved.levels) return sigmaInterfaces('cam26');
+  const name = sigmaGridName(saved.levels);
+  return name ? sigmaInterfaces(name) : Float64Array.from(saved.levels);
+}
+
+/*
  * The binary form of a state: its top-level arrays and those under
- * `ocean` and `land`, as float32 or, listed in `f64`, float64, with the
- * header padded with spaces so the arrays start 8-byte aligned.
+ * `ocean` and `land`, as float32 or, listed in `f64` or named 'levels',
+ * float64, with the header padded with spaces so the arrays start 8-byte
+ * aligned.
  */
 export function encodeState(state, { f64 = [] } = {}) {
   const named = [];
@@ -65,7 +79,7 @@ export function encodeState(state, { f64 = [] } = {}) {
   }
   let offset = 0;
   const arrays = named.map(([name, values]) => {
-    const type = f64.includes(name) ? 'f64' : 'f32', size = type === 'f64' ? 8 : 4;
+    const type = f64.includes(name) || name === 'levels' ? 'f64' : 'f32', size = type === 'f64' ? 8 : 4;
     offset = Math.ceil(offset / size) * size;
     const entry = { name, length: values.length, offset, type };
     offset += size * values.length;
