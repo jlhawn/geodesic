@@ -438,7 +438,7 @@ function brightest(r) {
 }
 
 test('the mixed-layer deck on a stable column over a warm sea carries the water path and cover of the mixed-layer model, advanced one step, in the same two-column blend', () => {
-  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true }), off = createRadiation(mesh, core, { stratus: false });
+  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9 }), off = createRadiation(mesh, core, { stratus: false });
   shadow.setTime(0); off.setTime(0);
   const noon = brightest(shadow), column = mixedLayerColumn(), { pi, theta, q, qc, depth } = column;
   const run = (r, openSea, dt = 900, air = theta) => mixedLayerRun(r, noon, column, openSea, dt, air);
@@ -467,7 +467,7 @@ test('the mixed-layer deck on a stable column over a warm sea carries the water 
 });
 
 test('the mixed-layer deck needs subsidence and a capping inversion: a column under ascent or under a 1 K jump has none, and falls back to no deck', () => {
-  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true });
+  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9 });
   shadow.setTime(0);
   const noon = brightest(shadow), empty = { mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, stratus: 0, stratusFraction: 0 };
   const pick = (b) => ({ mlmCover: b.mlmCover, mlmWater: b.mlmWater, mlmEntrainment: b.mlmEntrainment, stratus: b.stratus, stratusFraction: b.stratusFraction });
@@ -485,6 +485,25 @@ test('the mixed-layer deck needs subsidence and a capping inversion: a column un
   assert.deepEqual(pick(mixedLayerRun(shadow, noon, column, 1, 900, weak)), empty, 'a 1 K jump carries none');
   core.diagnose(column.pi, strong, column.q, column.qc);
   assert.ok(mixedLayerRun(shadow, noon, column, 1, 900, strong).mlmCover > 0, 'a 3 K jump carries the deck');
+  core.diagnostics.piSigmaDot.fill(0);
+});
+
+test('the regime test reads the subsidence averaged over subsidenceMemory: a column that starts sinking gains its deck only once the running mean passes the floor', () => {
+  const instant = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9 }), memory = createRadiation(mesh, core, { mixedLayerDeck: true });
+  instant.setTime(0); memory.setTime(0);
+  const noon = brightest(memory), column = mixedLayerColumn(0.4), dt = 3600, keep = Math.exp(-dt / (3 * DAY));
+  mixedLayerRun(instant, noon, column, 1, dt);
+  const sinking = instant.mlmSubsidence[noon];
+  let first = -1;
+  for (let n = 1; n <= 24; n++) {
+    const deck = mixedLayerRun(memory, noon, column, 1, dt);
+    const expected = sinking * (1 - keep ** n);
+    assert.ok(Math.abs(memory.mlmSubsidence[noon] - expected) < 1e-12 * Math.abs(sinking), `step ${n}: ${memory.mlmSubsidence[noon]} against ${expected}`);
+    assert.equal(deck.mlmCover > 0, expected <= -3e-4, `step ${n}`);
+    if (first < 0 && deck.mlmCover > 0) first = n;
+  }
+  console.log(`under a steady ${(1000 * sinking).toFixed(2)} mm/s the 3-day mean passes −0.3 mm/s and the deck appears after ${first} hourly steps`);
+  assert.ok(first > 1 && first < 24);
   core.diagnostics.piSigmaDot.fill(0);
 });
 
