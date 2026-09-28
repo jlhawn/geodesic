@@ -10,7 +10,9 @@ import { encodeForcing } from '../forcing.module.js';
  * handed the ocean and sea ice, and `day` turns the sums into one day's
  * forcing file. It counts the model's steps from its own creation to
  * know which were ocean steps, so it must be created before the model's
- * first step and see every step after. Rain and runoff come from the
+ * first step and see every step after; `step` records through the
+ * model's core, so inside model.stepBatch it belongs in the per-step
+ * callback, where it lands after its step. Rain and runoff come from the
  * running totals rather than the sums: rain from PH CONV + COND, runoff
  * from model.land.runoff, which the model's diagnostics frame advances,
  * so `day` belongs after the day's model.diagnostics().
@@ -53,14 +55,13 @@ ${body}
   const params = storageBuffer(device, new Float32Array(8));
   const group = device.createBindGroup({ layout, entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, out, buffers.D, params, buffers.PH, ocean.buffers.OD].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   return function run(values, count) {
-    device.queue.writeBuffer(params, 0, Float32Array.from({ length: 8 }, (_, k) => values[k] ?? 0));
-    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, group);
-    const groups = Math.ceil(count / WORKGROUP);
-    pass.dispatchWorkgroups(Math.min(groups, 65535), Math.ceil(groups / 65535));
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    gpu.writeParams(Float32Array.from({ length: 8 }, (_, k) => values[k] ?? 0), params);
+    gpu.compute((pass) => {
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, group);
+      const groups = Math.ceil(count / WORKGROUP);
+      pass.dispatchWorkgroups(Math.min(groups, 65535), Math.ceil(groups / 65535));
+    });
   };
 }
 

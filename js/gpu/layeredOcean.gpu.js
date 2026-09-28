@@ -612,80 +612,67 @@ export function createLayeredOcean(core, options = {}) {
     pass.dispatchWorkgroups(Math.min(n, 65535), Math.ceil(n / 65535));
   }
   const params = new Float32Array(8);
-  const setParams = (values) => { params.fill(0); params.set(values); device.queue.writeBuffer(buffers.P, 0, params); };
+  const setParams = (values) => { params.fill(0); params.set(values); core.writeParams(params); };
+  const { compute } = core;
 
   function tendency(IN, OUT) {
     const g = group(IN, OUT);
     setParams([0, 0]);
-    let encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    dispatch(pass, 'oSurfaceDensity', g, C);
-    dispatch(pass, 'oGradRho', g, E);
-    dispatch(pass, 'oEdgeThicknessRaw', g, L * E);
-    dispatch(pass, 'oEdgeThicknessSill', g, E);
-    dispatch(pass, 'oFlux', g, L * E);
-    dispatch(pass, 'oCellTendency', g, L * C);
-    dispatch(pass, 'oVertexVort', g, L * V);
-    dispatch(pass, 'oEdgePV', g, L * E);
-    dispatch(pass, 'oKineticPhi', g, L * C);
-    dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
-    dispatch(pass, 'oLapVelocity', g, L * E);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    compute((pass) => {
+      dispatch(pass, 'oSurfaceDensity', g, C);
+      dispatch(pass, 'oGradRho', g, E);
+      dispatch(pass, 'oEdgeThicknessRaw', g, L * E);
+      dispatch(pass, 'oEdgeThicknessSill', g, E);
+      dispatch(pass, 'oFlux', g, L * E);
+      dispatch(pass, 'oCellTendency', g, L * C);
+      dispatch(pass, 'oVertexVort', g, L * V);
+      dispatch(pass, 'oEdgePV', g, L * E);
+      dispatch(pass, 'oKineticPhi', g, L * C);
+      dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
+      dispatch(pass, 'oLapVelocity', g, L * E);
+    });
     setParams([0, 1, relaxRate]);
-    encoder = device.createCommandEncoder(); pass = encoder.beginComputePass();
-    dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
-    dispatch(pass, 'oLapVelocity', g, L * E);
-    dispatch(pass, 'oMomentum', g, L * E);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    compute((pass) => {
+      dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
+      dispatch(pass, 'oLapVelocity', g, L * E);
+      dispatch(pass, 'oMomentum', g, L * E);
+    });
   }
   function advanceState(next, stage, factor) {
     setParams([factor]);
-    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    dispatch(pass, 'oAdvance', group(ob.S, next, stage), OS.total);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    compute((pass) => dispatch(pass, 'oAdvance', group(ob.S, next, stage), OS.total));
   }
 
   let relaxRate = 1 / 3600;
   function barotropicStep(dt, k1) {
     const g1 = group(ob.S, k1);
-    {
-      const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+    compute((pass) => {
       dispatch(pass, 'oBarotropicSetup', g1, Math.max(C, E));
       dispatch(pass, 'oBarotropicCoriolis', g1, E);
-      pass.end();
-      device.queue.submit([encoder.finish()]);
-    }
-    device.queue.writeBuffer(ob.OD, 4 * B.BAVG, new Float32Array(C + E));
+    });
+    core.clearBuffer(ob.OD, 4 * B.BAVG, 4 * (C + E));
     const M = Math.max(1, Math.ceil(dt / substepLimit)), dtb = dt / M;
     const gAny = group(ob.S, ob.K1);
     // P0=dtb/2 (stage1,2 trial factor), P1=dtb (stage3 trial factor), P2=dtb/6 (final combine), P3=1/M (average accumulation).
     setParams([dtb / 2, dtb, dtb / 6, 1 / M]);
-    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    for (let m = 0; m < M; m++) {
-      dispatch(pass, 'oBarotropicTendency1', gAny, Math.max(C, E));
-      dispatch(pass, 'oBarotropicCombine1', gAny, C + E);
-      dispatch(pass, 'oBarotropicTendency2', gAny, Math.max(C, E));
-      dispatch(pass, 'oBarotropicCombine2', gAny, C + E);
-      dispatch(pass, 'oBarotropicTendency3', gAny, Math.max(C, E));
-      dispatch(pass, 'oBarotropicCombine3', gAny, C + E);
-      dispatch(pass, 'oBarotropicTendency4', gAny, Math.max(C, E));
-      dispatch(pass, 'oBarotropicFinalCombine', gAny, C + E);
-      dispatch(pass, 'oBarotropicAccumulate', gAny, C + E);
-    }
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    compute((pass) => {
+      for (let m = 0; m < M; m++) {
+        dispatch(pass, 'oBarotropicTendency1', gAny, Math.max(C, E));
+        dispatch(pass, 'oBarotropicCombine1', gAny, C + E);
+        dispatch(pass, 'oBarotropicTendency2', gAny, Math.max(C, E));
+        dispatch(pass, 'oBarotropicCombine2', gAny, C + E);
+        dispatch(pass, 'oBarotropicTendency3', gAny, Math.max(C, E));
+        dispatch(pass, 'oBarotropicCombine3', gAny, C + E);
+        dispatch(pass, 'oBarotropicTendency4', gAny, Math.max(C, E));
+        dispatch(pass, 'oBarotropicFinalCombine', gAny, C + E);
+        dispatch(pass, 'oBarotropicAccumulate', gAny, C + E);
+      }
+    });
   }
 
   function step(dt) {
     relaxRate = Math.min(1 / 3600, 1 / dt);
-    {
-      const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-      dispatch(pass, 'oGradEta', group(ob.S, ob.T), E);
-      pass.end();
-      device.queue.submit([encoder.finish()]);
-    }
+    compute((pass) => dispatch(pass, 'oGradEta', group(ob.S, ob.T), E));
     tendency(ob.S, ob.K1);
     barotropicStep(dt, ob.K1);
     advanceState(ob.T, ob.K1, dt / 2);
@@ -693,47 +680,30 @@ export function createLayeredOcean(core, options = {}) {
     tendency(ob.T, ob.K3); advanceState(ob.T, ob.K3, dt);
     tendency(ob.T, ob.K4);
     setParams([dt / 6]);
-    {
-      const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-      dispatch(pass, 'oCombine', group(ob.S, ob.K1, ob.K2, ob.K3, ob.K4), OS.total);
-      pass.end();
-      device.queue.submit([encoder.finish()]);
-    }
-    {
-      const g = group(ob.S, ob.T);
-      const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+    compute((pass) => dispatch(pass, 'oCombine', group(ob.S, ob.K1, ob.K2, ob.K3, ob.K4), OS.total));
+    const g = group(ob.S, ob.T);
+    compute((pass) => {
       dispatch(pass, 'oRescale', g, C);
       dispatch(pass, 'oEdgeThicknessRaw', g, L * E);
       dispatch(pass, 'oEdgeThicknessSill', g, E);
       dispatch(pass, 'oVelocityShiftClamp', g, E);
-      pass.end();
-      device.queue.submit([encoder.finish()]);
-    }
+    });
   }
 
   function readSurface(surfaceT, ice) {
     device.queue.writeBuffer(ob.OD, 4 * OD.SURFT, Float32Array.from(surfaceT));
     device.queue.writeBuffer(ob.OD, 4 * OD.SURFICE, Float32Array.from(ice));
-    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    dispatch(pass, 'oReadSurface', group(ob.S, ob.T), C);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    compute((pass) => dispatch(pass, 'oReadSurface', group(ob.S, ob.T), C));
   }
   function readSurfaceFromAtmosphere() {
-    const encoder = device.createCommandEncoder();
-    encoder.copyBufferToBuffer(buffers.S, 4 * core.layout.S.TS, ob.OD, 4 * OD.SURFT, 4 * C);
-    encoder.copyBufferToBuffer(buffers.S, 4 * core.layout.S.ICE, ob.OD, 4 * OD.SURFICE, 4 * C);
-    device.queue.submit([encoder.finish()]);
-    const pass2 = device.createCommandEncoder(), p2 = pass2.beginComputePass();
-    dispatch(p2, 'oReadSurface', group(ob.S, ob.T), C);
-    p2.end();
-    device.queue.submit([pass2.finish()]);
+    core.encode((encoder) => {
+      encoder.copyBufferToBuffer(buffers.S, 4 * core.layout.S.TS, ob.OD, 4 * OD.SURFT, 4 * C);
+      encoder.copyBufferToBuffer(buffers.S, 4 * core.layout.S.ICE, ob.OD, 4 * OD.SURFICE, 4 * C);
+    });
+    compute((pass) => dispatch(pass, 'oReadSurface', group(ob.S, ob.T), C));
   }
   function stressFromAtmosphere() {
-    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    dispatch(pass, 'oStressFromAtmosphere', group(ob.S, ob.T), E);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    compute((pass) => dispatch(pass, 'oStressFromAtmosphere', group(ob.S, ob.T), E));
   }
   function setStress(total, ice, concentration = null) {
     const masked = new Float32Array(E), cover = (i) => (ice[i] > 0 ? (concentration && concentration[i] > 0 ? concentration[i] : 1) : 0);
@@ -742,31 +712,19 @@ export function createLayeredOcean(core, options = {}) {
   }
   function mixedLayer(dt) {
     setParams([0, 0, relaxRate, 0, 0, 0, dt]);
-    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    dispatch(pass, 'oMixedLayer', group(ob.S, ob.T), C);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    compute((pass) => dispatch(pass, 'oMixedLayer', group(ob.S, ob.T), C));
   }
   function salt(dt) {
     setParams([0, 0, 0, 0, 0, 0, dt]);
-    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    dispatch(pass, 'oSalt', group(ob.S, ob.T), C);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    compute((pass) => dispatch(pass, 'oSalt', group(ob.S, ob.T), C));
   }
   function writeSurface(dt) {
     setParams([0, 0, 0, 0, 0, 0, dt]);
-    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    dispatch(pass, 'oWriteSurface', group(ob.S, ob.T), C);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    compute((pass) => dispatch(pass, 'oWriteSurface', group(ob.S, ob.T), C));
   }
   function accumulateFreshwater(dt) {
     setParams([0, 0, 0, 0, 0, 0, dt]);
-    const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    dispatch(pass, 'oAccumulateFresh', group(ob.S, ob.T), C);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    compute((pass) => dispatch(pass, 'oAccumulateFresh', group(ob.S, ob.T), C));
   }
   function forgetAccumulated(which) {
     device.queue.writeBuffer(ob.OD, 4 * (which === 'rain' ? OD.RAINSEEN : OD.RUNOFFSEEN), new Float32Array(C));

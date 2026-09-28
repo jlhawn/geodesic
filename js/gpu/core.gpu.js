@@ -3,7 +3,7 @@ import { sigmaInterfaces, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../
 import { sunDirection, nearestLayer, STABILITY_SIGMA } from '../physics/radiation.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.gpu.js';
 
-const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64;
+const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384;
 
 /*
  * The hydrostatic sigma-coordinate core of sigmaCore.module.js on the
@@ -576,7 +576,7 @@ export async function createGpuCore(mesh, {
     S: emptyBuffer(device, 4 * L.S.total), T: emptyBuffer(device, 4 * L.S.total),
     K1: emptyBuffer(device, 4 * L.S.total), K2: emptyBuffer(device, 4 * L.S.total), K3: emptyBuffer(device, 4 * L.S.total), K4: emptyBuffer(device, 4 * L.S.total),
     D: emptyBuffer(device, 4 * L.D.total), P: storageBuffer(device, new Float32Array(8)), PH: emptyBuffer(device, 4 * L.PH.total),
-    FR: emptyBuffer(device, 4 * L.FR.total), FP: storageBuffer(device, new Float32Array(8)),
+    FR: emptyBuffer(device, 4 * L.FR.total), FP: storageBuffer(device, new Float32Array(8)), PR: emptyBuffer(device, 32 * RING_SLOTS),
   };
   for (const [name, b] of Object.entries(buffers)) b.label = name;
 
@@ -622,40 +622,81 @@ export async function createGpuCore(mesh, {
     dispatch(pass, 'momentum', g, E);
   }
 
-  const params = new Float32Array(8);
-  function setParams(values) { params.set(values); device.queue.writeBuffer(buffers.P, 0, params); }
+  /*
+   * Step work is recorded through `encode`/`compute`, and the eight
+   * parameters of P (or of another kernel's parameter buffer) through
+   * `writeParams`: the core's, the ocean's and the forcing recorder's.
+   * Outside a batch each record is its own submission after a queue
+   * write of the parameters. Inside `batched` every record goes into one
+   * encoder, and each parameter set is staged in a host array and copied
+   * into its buffer by a copy command at its place in that encoder. The
+   * staged sets reach the ring buffer PR in one queue write just before
+   * the encoder is submitted, so the dispatches see exactly the
+   * parameters they would have seen stepping one at a time. A full ring
+   * submits what it holds and starts again at its first slot, which the
+   * queue orders after the work already submitted.
+   */
+  const staged = new Float32Array(8 * RING_SLOTS);
+  let batch = null;
+  function encode(record) {
+    const encoder = batch ? batch.encoder : device.createCommandEncoder();
+    record(encoder);
+    if (!batch) device.queue.submit([encoder.finish()]);
+  }
+  function compute(record) {
+    encode((encoder) => { const pass = encoder.beginComputePass(); record(pass); pass.end(); });
+  }
+  function flush(more) {
+    if (batch.slots) device.queue.writeBuffer(buffers.PR, 0, staged.subarray(0, 8 * batch.slots));
+    device.queue.submit([batch.encoder.finish()]);
+    batch.submissions++;
+    batch.slots = 0;
+    batch.encoder = more ? device.createCommandEncoder() : null;
+  }
+  function writeParams(values, target = buffers.P) {
+    if (!batch) { device.queue.writeBuffer(target, 0, values); return; }
+    if (batch.slots === RING_SLOTS) flush(true);
+    staged.set(values, 8 * batch.slots);
+    batch.encoder.copyBufferToBuffer(buffers.PR, 32 * batch.slots, target, 0, 32);
+    batch.slots++;
+  }
+  function clearBuffer(buffer, offset, size) {
+    if (batch) batch.encoder.clearBuffer(buffer, offset, size);
+    else device.queue.writeBuffer(buffer, offset, new Uint8Array(size));
+  }
+  async function batched(run) {
+    if (batch) throw new Error('a batch is already being recorded');
+    batch = { encoder: device.createCommandEncoder(), slots: 0, submissions: 0 };
+    try {
+      await run();
+      flush(false);
+      return batch.submissions;
+    } finally {
+      batch = null;
+    }
+  }
 
-  function encodeStep(dt) {
-    const commands = [];
+  const params = new Float32Array(8);
+  function setParams(values) { params.set(values); writeParams(params); }
+
+  function rungeKutta(dt) {
     const stage = (IN, OUT, factor, next) => {
-      const encoder = device.createCommandEncoder();
-      const pass = encoder.beginComputePass();
-      tendencyPasses(pass, IN, OUT);
-      if (next) dispatch(pass, 'advance', group(buffers.S, next, OUT), L.S.total);
-      pass.end();
-      commands.push({ command: encoder.finish(), factor });
+      setParams([factor]);
+      compute((pass) => {
+        tendencyPasses(pass, IN, OUT);
+        if (next) dispatch(pass, 'advance', group(buffers.S, next, OUT), L.S.total);
+      });
     };
     stage(buffers.S, buffers.K1, dt / 2, buffers.T);
     stage(buffers.T, buffers.K2, dt / 2, buffers.T);
     stage(buffers.T, buffers.K3, dt, buffers.T);
     stage(buffers.T, buffers.K4, 0, null);
-    return commands;
+    setParams([dt / 6]);
+    compute((pass) => dispatch(pass, 'combine', group(buffers.S, buffers.K1, buffers.K2, buffers.P, buffers.K3, buffers.K4), L.S.total));
   }
 
   async function step(dt) {
-    const commands = encodeStep(dt);
-    for (const { command, factor } of commands) {
-      setParams([factor]);
-      device.queue.submit([command]);
-    }
-    {
-      setParams([dt / 6]);
-      const encoder = device.createCommandEncoder();
-      const pass = encoder.beginComputePass();
-      dispatch(pass, 'combine', group(buffers.S, buffers.K1, buffers.K2, buffers.P, buffers.K3, buffers.K4), L.S.total);
-      pass.end();
-      device.queue.submit([encoder.finish()]);
-    }
+    rungeKutta(dt);
     closurePasses(dt);
     await device.queue.onSubmittedWorkDone();
   }
@@ -664,21 +705,18 @@ export async function createGpuCore(mesh, {
     const g = group(buffers.S, buffers.K1);
     if (nu4Theta > 0) {
       setParams([dt * nu4Theta, 0]);
-      const encoder = device.createCommandEncoder();
-      const pass = encoder.beginComputePass();
-      dispatch(pass, 'lapScalar1', g, C);
-      dispatch(pass, 'lapScalar2', g, C);
-      pass.end();
-      device.queue.submit([encoder.finish()]);
+      compute((pass) => {
+        dispatch(pass, 'lapScalar1', g, C);
+        dispatch(pass, 'lapScalar2', g, C);
+      });
     }
     if (nu4 > 0) {
       for (const second of [0, 1]) {
         setParams([dt * nu4, second]);
-        const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-        dispatch(pass, 'divCurl', g, C + V);
-        dispatch(pass, 'lapVelocity', g, E);
-        pass.end();
-        device.queue.submit([encoder.finish()]);
+        compute((pass) => {
+          dispatch(pass, 'divCurl', g, C + V);
+          dispatch(pass, 'lapVelocity', g, E);
+        });
       }
     }
   }
@@ -687,37 +725,23 @@ export async function createGpuCore(mesh, {
   const hooks = { beforePhysics: null };
   async function stepModel(dt, time) {
     const sun = sunDirection(time);
-    const commands = encodeStep(dt);
-    for (const { command, factor } of commands) { setParams([factor]); device.queue.submit([command]); }
-    setParams([dt / 6]);
-    {
-      const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-      dispatch(pass, 'combine', group(buffers.S, buffers.K1, buffers.K2, buffers.P, buffers.K3, buffers.K4), L.S.total);
-      pass.end();
-      device.queue.submit([encoder.finish()]);
-    }
+    rungeKutta(dt);
     stepCount++;
     if (hooks.beforePhysics) await hooks.beforePhysics(dt, stepCount);
     const g = group(buffers.S, buffers.K1);
     setParams([dt, 0, sun[0], sun[1], sun[2]]);
-    {
-      const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+    compute((pass) => {
       dispatch(pass, 'physics', g, C);
       dispatch(pass, 'pblDiagnose', g, C);
-      pass.end();
-      device.queue.submit([encoder.finish()]);
-    }
+    });
     closurePasses(dt);
     setParams([dt, 0, sun[0], sun[1], sun[2]]);
-    {
-      const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+    compute((pass) => {
       dispatch(pass, 'adjust', g, C);
       dispatch(pass, 'mixMomentum', g, E);
       dispatch(pass, 'dissipationHeat', g, L.KC);
       dispatch(pass, 'dissipationClear', g, L.KE);
-      pass.end();
-      device.queue.submit([encoder.finish()]);
-    }
+    });
   }
 
   const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, concentration: null, mlmSubsidence: null };
@@ -828,5 +852,5 @@ export async function createGpuCore(mesh, {
   function clearFrame() { device.queue.writeBuffer(buffers.FR, 0, new Float32Array(L.FR.total)); }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
-  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, tendency, upload, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
+  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, upload, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
 }

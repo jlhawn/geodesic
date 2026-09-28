@@ -1484,6 +1484,33 @@ the 3× step in Node, 40 in the pane's browser while sharing the GPU.
 The gain is smaller at N=16 (1.4 against 1.9 minutes per 100 days),
 where the grid is too small to fill the GPU.
 
+Batched stepping. `model.stepBatch(count, dt)` records `count` steps
+into one command encoder, submits it once and waits once. The eight
+parameters every kernel reads change 15 times a step: the RK factors,
+the sun's direction at each step's model time, the closure factors, the
+ocean's. Each set is staged on the host and copied into the parameter
+buffer by a copy command at its place in the encoder, and the staged
+sets reach a ring buffer in one queue write just before the
+submission. The ring holds 16384 sets, about 1090 steps; a longer batch
+submits each time it fills. The device ends bit for bit where the same
+steps taken one at a time leave it (`test/stepBatch.test.mjs`, at N=6
+with land and the ocean, with batches that start off the ocean's
+every-fourth-step cadence), and a day of `scripts/spinup.mjs` from a
+saved N=64 state writes the same snapshot byte for byte either way.
+The spin-up takes a day per batch (`BATCH`; 1 steps one at a time,
+waiting every eighth step). With `RECORD` the forcing recorder's
+per-step kernel is recorded into the batch after its step through
+stepBatch's per-step callback, and writes the same day file byte for
+byte. At N=64 batching gained nothing measurable.
+The step is bound by the GPU: 32 ms of kernel time in pass
+timestamps, against 0.3 ms to record it and 0.02 ms for an empty round
+trip. Stepping one at a time already kept the device busy. (An N=128
+spin-up shared the GPU during these measurements.) The page still steps
+one at a time. Its worker keeps two steps in flight so that the globe's
+frames never wait behind the model's work, and the pacer's pauses act
+between steps (see the page as a client of the model worker). A batch
+is a long queue by design, and it would buy the page no time.
+
 ### M16 — Land surface (`js/geography.module.js`, `js/physics/land.module.js`) — done
 
 Continents come from `data/topography_0p25.bin`: ETOPO1 ice-surface

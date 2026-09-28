@@ -62,7 +62,7 @@ export async function createGpuModel(gridOrMesh, {
   const state = lengths.map((n) => new Float64Array(n));
   let dirty = true, lastFrameTime = 0;
 
-  const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu' };
+  const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
   model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget };
   model.oceanEngine = gpuOcean;
 
@@ -90,6 +90,25 @@ export async function createGpuModel(gridOrMesh, {
     await gpu.stepModel(dt, model.time);
     model.time += dt;
     dirty = true;
+  };
+  /*
+   * `count` steps recorded exactly as `step` queues them, submitted
+   * together (see `batched` in core.gpu.js) and waited for once; resolves
+   * to the number of submissions. `afterStep` runs after each step's
+   * recording, and whatever it records through the core lands after that
+   * step in the same submission. The mirrors stay lazy, as after `step`.
+   */
+  model.stepBatch = async function stepBatch(count, dt, afterStep = null) {
+    const submissions = await gpu.batched(async () => {
+      for (let n = 0; n < count; n++) {
+        await gpu.stepModel(dt, model.time);
+        model.time += dt;
+        if (afterStep) afterStep();
+      }
+    });
+    dirty = true;
+    await gpu.device.queue.onSubmittedWorkDone();
+    return submissions;
   };
   model.settle = () => gpu.device.queue.onSubmittedWorkDone();
   model.destroy = () => { for (const buffer of [...Object.values(gpu.buffers), ...(gpuOcean ? Object.values(gpuOcean.buffers) : [])]) buffer.destroy(); };
