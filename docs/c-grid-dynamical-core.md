@@ -1021,8 +1021,11 @@ A; land carries none, nor does the model with `moist: false`. Without it the eas
 Earth keeps its decks, were nearly cloud-free on a year-two state
 (planetary albedo 0.11–0.14 against Earth's ~0.38), absorbed about
 100 W/m² too much sunlight and stayed too warm for a Pacific cold
-tongue or coastal upwelling. `stratus: false` removes the deck, and
-both engines are then bit-identical to the model without it; the
+tongue or coastal upwelling. The deck is off by default (`stratus:
+true` switches it on in both engines) until the eastern oceans carry
+an inversion for it to answer to, since on a flat stability field it
+engages over every warm sea alike; with it off both engines are
+bit-identical to the model without it; the
 column test is in `test/physics.test.mjs` and the engines' parity with
 the deck engaged under an imposed inversion in `test/gpuModel.test.mjs`.
 

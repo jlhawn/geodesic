@@ -61,7 +61,7 @@ test('the parallel engine reproduces the serial model over a continent', async (
 });
 
 test('under a capping inversion the stratocumulus deck forms over the warm sea and never over land', () => {
-  const model = prepare(createModel(new Grid(6), { topography }));
+  const model = prepare(createModel(new Grid(6), { topography, radiation: { stratus: true } }));
   const { mesh, geography, core } = model, C = mesh.nCells;
   for (let k = 0; k < core.K; k++) if (core.sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += 10;
   model.step(900);
