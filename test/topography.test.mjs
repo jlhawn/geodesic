@@ -78,3 +78,25 @@ test('the Panama isthmus is closed at N=64, where the land fraction alone would 
   assert.equal(connected(createGeography(mesh, topography, { landBridges: {} })), true, 'without the bridge the coarse mask opens Panama');
   assert.equal(connected(createGeography(mesh, topography)), false, 'the default bridge closes it');
 });
+
+test('Hormuz and Bab-el-Mandeb stay open at N=64 through the default sea straits', async () => {
+  const { Grid } = await import('../js/grid.module.js');
+  const { buildMesh } = await import('../js/mesh.module.js');
+  const { createGeography, topographyFromInt16 } = await import('../js/geography.module.js');
+  const mesh = buildMesh(new Grid(64)), topography = topographyFromInt16(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+  const deg = 180 / Math.PI, C = mesh.nCells, lat = (i) => mesh.latCell[i] * deg, lon = (i) => mesh.lonCell[i] * deg;
+  const connected = (geo, a, b, box) => {
+    const inBox = (i) => lat(i) >= box[0] && lat(i) <= box[1] && lon(i) >= box[2] && lon(i) <= box[3];
+    const nearestSea = (la, lo) => { let best = -1, d = 1e9; for (let i = 0; i < C; i++) { if (geo.land[i]) continue; const dd = (lat(i) - la) ** 2 + (lon(i) - lo) ** 2; if (dd < d) { d = dd; best = i; } } return best; };
+    const seen = new Uint8Array(C), queue = [nearestSea(...a)], target = nearestSea(...b);
+    while (queue.length) { const i = queue.pop(); if (i === target) return true; for (let m = 0; m < mesh.nEdgesOnCell[i]; m++) { const j = mesh.cellsOnCell[mesh.maxEdges * i + m]; if (j < 0 || seen[j] || geo.land[j] || !inBox(j)) continue; seen[j] = 1; queue.push(j); } }
+    return false;
+  };
+  const straits = [[[26.5, 52.0], [25.0, 57.5], [22, 31, 46, 62]], [[15.0, 41.5], [12.0, 45.5], [10, 30, 32, 52]]];
+  const bare = createGeography(mesh, topography, { seaStraits: {} }), forced = createGeography(mesh, topography);
+  for (const [a, b, box] of straits) {
+    assert.equal(connected(bare, a, b, box), false, 'the coarse mask alone closes the strait');
+    assert.equal(connected(forced, a, b, box), true, 'the default strait keeps it open');
+  }
+  for (let i = 0; i < C; i++) if (!forced.land[i] && bare.land[i]) assert.ok(forced.elevation[i] <= -50, `a forced strait cell is at least 50 m deep, got ${forced.elevation[i]}`);
+});

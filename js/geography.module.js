@@ -9,7 +9,12 @@
  * exceeds landThreshold, and along the polylines of landBridges (the
  * Panama isthmus by default) regardless, since a coarse mesh would
  * otherwise open a seaway where a narrow isthmus falls below the
- * threshold. edgeOcean marks the edges between two ocean
+ * threshold; the cells along the polylines of seaStraits are sea at
+ * least their sill deep (Hormuz, Bab-el-Mandeb and Gibraltar by
+ * default), so the marginal seas behind them stay connected. The
+ * NARROW_STRAITS (Bosporus, the Danish straits) are defined but not
+ * applied: a cell of 75–150 km opening a strait a few km wide would
+ * exchange water far too freely. edgeOcean marks the edges between two ocean
  * cells, the only ones the ocean flows through; coastEdges lists the
  * edges between land and ocean.
  */
@@ -30,7 +35,18 @@ export const LAND_BRIDGES = {
   panama: [[9.8, -84.5], [9.0, -82.5], [8.8, -80.5], [9.2, -79.2], [8.5, -77.8], [7.5, -77.0]],
 };
 
-export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES } = {}) {
+export const SEA_STRAITS = {
+  hormuz: { sill: 90, points: [[26.6, 53.5], [26.4, 55.5], [26.2, 56.6], [25.5, 57.2]] },
+  babElMandeb: { sill: 150, points: [[14.0, 42.0], [13.0, 43.0], [12.6, 43.6], [12.3, 44.5]] },
+  gibraltar: { sill: 300, points: [[36.1, -6.5], [35.95, -5.6], [36.0, -4.8]] },
+};
+
+export const NARROW_STRAITS = {
+  bosporus: { sill: 50, points: [[41.6, 29.0], [41.1, 29.1], [40.6, 28.0], [40.2, 26.5], [39.9, 25.8]] },
+  danish: { sill: 50, points: [[55.5, 12.7], [56.1, 12.3], [56.8, 11.5], [57.6, 10.5]] },
+};
+
+export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS } = {}) {
   const { nCells: C, nEdges: E, xCell, cellsOnCell, nEdgesOnCell, cellsOnEdge, areaCell, latCell, lonCell } = mesh;
   const { rows, cols, data } = topography;
   const count = new Int32Array(C), landCount = new Int32Array(C), sum = new Float64Array(C);
@@ -80,6 +96,18 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
         const la = (la0 + (la1 - la0) * n / steps) * Math.PI / 180, lo = (lo0 + (lo1 - lo0) * n / steps) * Math.PI / 180;
         const i = nearest(Math.cos(la) * Math.cos(lo), Math.cos(la) * Math.sin(lo), Math.sin(la), start);
         start = i; land[i] = 1; elevation[i] = Math.max(elevation[i], 1);
+      }
+    }
+  }
+  for (const { sill, points } of Object.values(seaStraits)) {
+    let start = 0;
+    for (let p = 0; p + 1 < points.length; p++) {
+      const [la0, lo0] = points[p], [la1, lo1] = points[p + 1];
+      const steps = Math.max(1, Math.ceil(Math.hypot(la1 - la0, (lo1 - lo0) * Math.cos(la0 * Math.PI / 180)) / 0.2));
+      for (let n = 0; n <= steps; n++) {
+        const la = (la0 + (la1 - la0) * n / steps) * Math.PI / 180, lo = (lo0 + (lo1 - lo0) * n / steps) * Math.PI / 180;
+        const i = nearest(Math.cos(la) * Math.cos(lo), Math.cos(la) * Math.sin(lo), Math.sin(la), start);
+        start = i; land[i] = 0; elevation[i] = Math.min(elevation[i], -sill);
       }
     }
   }

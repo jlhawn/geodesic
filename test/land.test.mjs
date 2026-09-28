@@ -9,7 +9,7 @@ import { MELTING_POINT } from '../js/physics/ice.module.js';
 const mesh = createModel(new Grid(8), { physics: false }).mesh;
 
 test('a hemisphere continent covers half the area, its coast rings the meridian, and edges are classified consistently', () => {
-  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)));
+  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)), { landBridges: {}, seaStraits: {} });
   assert.ok(Math.abs(geography.landArea - 0.5) < 0.03, `land area ${geography.landArea.toFixed(3)}`);
   for (let i = 0; i < mesh.nCells; i++) {
     const inland = Math.abs(Math.cos(mesh.lonCell[i])) > 0.2 && Math.abs(mesh.latCell[i]) < 1.4;
@@ -30,14 +30,14 @@ test('a hemisphere continent covers half the area, its coast rings the meridian,
 });
 
 test('an all-ocean raster leaves no land and no coast', () => {
-  const geography = createGeography(mesh, syntheticTopography(90, 180, () => -3000), { landBridges: {} });
+  const geography = createGeography(mesh, syntheticTopography(90, 180, () => -3000), { landBridges: {}, seaStraits: {} });
   assert.equal(geography.landArea, 0);
   assert.equal(geography.coastEdges.length, 0);
   assert.ok(geography.edgeOcean.every((v) => v === 1));
 });
 
 test('the bucket conserves water: rain, evaporation, melt and runoff balance the stores', () => {
-  const geography = createGeography(mesh, syntheticTopography(90, 180, () => 100));
+  const geography = createGeography(mesh, syntheticTopography(90, 180, () => 100), { landBridges: {}, seaStraits: {} });
   const land = createLandSurface(mesh, geography, { bucketCapacity: 150, vegetation: false });
   land.initialize();
   const i = 0, area = mesh.areaCell[i];
@@ -56,7 +56,7 @@ test('the bucket conserves water: rain, evaporation, melt and runoff balance the
 });
 
 test('snow accumulates below freezing, raises the albedo, holds the surface at the melting point while it melts, and drains into the bucket', () => {
-  const geography = createGeography(mesh, syntheticTopography(90, 180, () => 100));
+  const geography = createGeography(mesh, syntheticTopography(90, 180, () => 100), { landBridges: {}, seaStraits: {} });
   const land = createLandSurface(mesh, geography, { heatCapacity: 1e6, albedo: 0.25, snowAlbedo: 0.7, fullSnow: 20, vegetation: false });
   land.initialize();
   const i = 3;
@@ -80,7 +80,7 @@ test('snow accumulates below freezing, raises the albedo, holds the surface at t
 });
 
 test('loading a land state leaves sea cells dry and bare, except the snow on a cell that has ice to hold it', () => {
-  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)));
+  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)), { landBridges: {}, seaStraits: {} });
   const land = createLandSurface(mesh, geography, { bucketCapacity: 150, vegetation: false });
   const ice = Float64Array.from({ length: mesh.nCells }, (_, i) => (i % 2 ? 1 : 0));
   land.load({ soil: new Float64Array(mesh.nCells).fill(120), snow: new Float64Array(mesh.nCells).fill(40) }, ice);
@@ -93,7 +93,7 @@ test('loading a land state leaves sea cells dry and bare, except the snow on a c
 });
 
 const DAY = 86400;
-const flat = () => createGeography(mesh, syntheticTopography(90, 180, () => 100));
+const flat = () => createGeography(mesh, syntheticTopography(90, 180, () => 100), { landBridges: {}, seaStraits: {} });
 
 test('vegetation grows over a wet bucket and dies back over a dry one on its time scales, taking the albedo and the bucket with it', () => {
   const land = createLandSurface(mesh, flat(), { growthTime: 100 * DAY, declineTime: 50 * DAY });
@@ -145,7 +145,7 @@ test('under snow the vegetation fades over snowDeclineTime and the snow sets the
 });
 
 test('a saved land state without vegetation loads green with full buckets where snow-free and bare under snow', () => {
-  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)));
+  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)), { landBridges: {}, seaStraits: {} });
   const land = createLandSurface(mesh, geography);
   const snow = Float64Array.from({ length: mesh.nCells }, (_, i) => (mesh.latCell[i] > 1 ? 30 : 0));
   land.load({ soil: new Float64Array(mesh.nCells).fill(20), snow });
@@ -160,7 +160,7 @@ test('a saved land state without vegetation loads green with full buckets where 
 });
 
 test('an ice sheet keeps its albedo under anything and grows nothing', () => {
-  const geography = createGeography(mesh, syntheticTopography(90, 180, (lat, lon) => (lat < -1.1 ? 2000 : Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 500 : -4000)));
+  const geography = createGeography(mesh, syntheticTopography(90, 180, (lat, lon) => (lat < -1.1 ? 2000 : Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 500 : -4000)), { landBridges: {}, seaStraits: {} });
   const sheet = [...geography.iceSheet].map((s, i) => (s ? i : -1)).filter((i) => i >= 0);
   assert.ok(sheet.length > 0 && sheet.every((i) => geography.land[i] && mesh.latCell[i] < -60 / 57.29578), 'the southern land is an ice sheet');
   assert.ok([...geography.land].some((l, i) => l && !geography.iceSheet[i]), 'the tropical continent is not');
