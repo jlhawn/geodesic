@@ -157,9 +157,10 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   { const { max, at } = worst(blend, later.fields.vertical); assert.ok(max < 2e-3, `the two-hour memory blends the new frame in: ${max} at ${at}`); }
 });
 
-test('the stratocumulus deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the EIS deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (stratus) => {
-    const cpu = createModel(new Grid(6), { ocean: false, radiation: { stratus } }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation: { stratus } });
+    const radiation = { stratus, mixedLayerDeck: false };
+    const cpu = createModel(new Grid(6), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation });
     const C = cpu.mesh.nCells, { K, sigmaMid } = cpu.core;
     const init = initializeState(cpu, {});
     for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
@@ -181,8 +182,7 @@ test('the stratocumulus deck shows in the cloud field, the same in both engines'
 });
 
 test('the mixed-layer deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const radiation = { mixedLayerDeck: true };
-  const cpu = createModel(new Grid(6), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation });
+  const cpu = createModel(new Grid(6), { ocean: false }), gpu = await createGpuModel(new Grid(6), { ocean: false });
   const C = cpu.mesh.nCells, { K, sigmaMid } = cpu.core;
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) cpu.state[a].set(init[a]);

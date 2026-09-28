@@ -257,7 +257,7 @@ test('water vapour absorbs sunlight by the Lacis–Hansen curve: a humid column 
 });
 
 function deckColumns(options = {}) {
-  const radiation = createRadiation(mesh, core, { stratus: true, ...options }), off = createRadiation(mesh, core, { stratus: false });
+  const radiation = createRadiation(mesh, core, { stratus: true, mixedLayerDeck: false, ...options }), off = createRadiation(mesh, core, { stratus: false });
   radiation.setTime(0); off.setTime(0);
   let noon = 0;
   for (let i = 0; i < C; i++) if (radiation.insolation(i) > radiation.insolation(noon)) noon = i;
@@ -349,7 +349,7 @@ test('the deck is as thick as the boundary layer above its condensation level, w
   assert.equal(under.stratus, 0);
   assert.equal(under.stratusFraction, 0);
   assert.deepEqual(under, run(off, stable, 298, 1, base - 20), 'a boundary layer below its condensation level leaves the column bit-identical');
-  assert.equal(run(createRadiation(mesh, core, { stratusScale: 10 }), stable, 298, 1, 1200).stratus, 0.15, 'the deck water stops at stratusWaterMax');
+  assert.equal(run(createRadiation(mesh, core, { stratusScale: 10, mixedLayerDeck: false }), stable, 298, 1, 1200).stratus, 0.15, 'the deck water stops at stratusWaterMax');
 });
 
 test('the deck follows the estimated inversion strength, which tells a capping inversion from a free troposphere warmed with the sea', () => {
@@ -381,7 +381,7 @@ test('the deck follows the estimated inversion strength, which tells a capping i
 
 test('with stratusIndex: \'ectei\' the deck follows the entrainment index: a dry layer above thins it, a layer as humid as the lowest leaves it as EIS has it, and the default is EIS', () => {
   const { radiation, q, bottom, top, withStability, run, inversion } = deckColumns();
-  const entraining = createRadiation(mesh, core, { stratusIndex: 'ectei' }), explicit = createRadiation(mesh, core, { stratusIndex: 'eis' });
+  const entraining = createRadiation(mesh, core, { stratusIndex: 'ectei', mixedLayerDeck: false }), explicit = createRadiation(mesh, core, { stratusIndex: 'eis', mixedLayerDeck: false });
   entraining.setTime(0); explicit.setTime(0);
   const { exnerLayer } = core.diagnostics;
   const theta = withStability(24);
@@ -491,19 +491,19 @@ test('the mixed-layer deck needs subsidence and a capping inversion: a column un
 test('the regime test reads the subsidence averaged over subsidenceMemory: a column that starts sinking gains its deck only once the running mean passes the floor', () => {
   const instant = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9 }), memory = createRadiation(mesh, core, { mixedLayerDeck: true });
   instant.setTime(0); memory.setTime(0);
-  const noon = brightest(memory), column = mixedLayerColumn(0.4), dt = 3600, keep = Math.exp(-dt / (3 * DAY));
+  const noon = brightest(memory), column = mixedLayerColumn(0.4), dt = 3600, keep = Math.exp(-dt / (10 * DAY));
   mixedLayerRun(instant, noon, column, 1, dt);
   const sinking = instant.mlmSubsidence[noon];
   let first = -1;
-  for (let n = 1; n <= 24; n++) {
+  for (let n = 1; n <= 48; n++) {
     const deck = mixedLayerRun(memory, noon, column, 1, dt);
     const expected = sinking * (1 - keep ** n);
     assert.ok(Math.abs(memory.mlmSubsidence[noon] - expected) < 1e-12 * Math.abs(sinking), `step ${n}: ${memory.mlmSubsidence[noon]} against ${expected}`);
     assert.equal(deck.mlmCover > 0, expected <= -3e-4, `step ${n}`);
     if (first < 0 && deck.mlmCover > 0) first = n;
   }
-  console.log(`under a steady ${(1000 * sinking).toFixed(2)} mm/s the 3-day mean passes −0.3 mm/s and the deck appears after ${first} hourly steps`);
-  assert.ok(first > 1 && first < 24);
+  console.log(`under a steady ${(1000 * sinking).toFixed(2)} mm/s the 10-day mean passes −0.3 mm/s and the deck appears after ${first} hourly steps`);
+  assert.ok(first > 1 && first < 48);
   core.diagnostics.piSigmaDot.fill(0);
 });
 
@@ -516,11 +516,11 @@ function modelDigest(radiation) {
   return { digest: hash.digest('hex').slice(0, 32), radiation: model.radiation };
 }
 
-test('with mixedLayerDeck: false the model is bit-identical to the engine before the mixed-layer deck; with it the deck follows the mixed-layer model', () => {
+test('with mixedLayerDeck: false the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
   const before = '1a7a2bd66c1edabedde1875fd6868c4a';
-  assert.equal(modelDigest().digest, before);
   assert.equal(modelDigest({ mixedLayerDeck: false }).digest, before);
-  const fresh = modelDigest({ mixedLayerDeck: true });
+  const fresh = modelDigest();
+  assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
   assert.notEqual(fresh.digest, before);
   assert.ok(fresh.radiation.stratusFraction.every((f) => f === 0) && fresh.radiation.mlmCover.every((f) => f === 0), 'twelve steps from rest build no 2 K inversion, and no empirical deck stands in');
   const shadow = modelDigest({ mixedLayerDeck: true, stratusSubsidence: 0, minimumInversion: 0 });

@@ -61,7 +61,7 @@ test('the parallel engine reproduces the serial model over a continent', async (
 });
 
 test('under a capping inversion the stratocumulus deck forms over the warm sea and never over land', () => {
-  const model = prepare(createModel(new Grid(6), { topography, radiation: { stratus: true } }));
+  const model = prepare(createModel(new Grid(6), { topography, radiation: { stratus: true, mixedLayerDeck: false } }));
   const { mesh, geography, core } = model, C = mesh.nCells;
   for (let k = 0; k < core.K; k++) if (core.sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += 10;
   model.step(900);
@@ -76,4 +76,15 @@ test('under a capping inversion the stratocumulus deck forms over the warm sea a
     }
   }
   assert.ok(decked > 0.1 * sea, `stratus on ${decked} of ${sea} sea cells`);
+  const mixed = prepare(createModel(new Grid(6), { topography }));
+  mixed.radiation.mlmSubsidence.fill(-1e-3);
+  for (let k = 0; k < core.K; k++) if (core.sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) mixed.state[1][k * C + i] += 10;
+  mixed.step(900);
+  mixed.step(900);
+  let moved = 0;
+  for (let i = 0; i < C; i++) {
+    if (geography.land[i]) { assert.ok(mixed.radiation.stratus[i] === 0 && mixed.radiation.mlmCover[i] === 0 && mixed.radiation.mlmSubsidence[i] === -1e-3, `land cell ${i}`); continue; }
+    if (mixed.radiation.mlmSubsidence[i] !== -1e-3) moved++;
+  }
+  assert.ok(moved > 0.5 * sea, `the mixed-layer deck's mean moved on ${moved} of ${sea} sea cells and on no land`);
 });

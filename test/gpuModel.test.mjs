@@ -43,14 +43,14 @@ test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailab
   assert.ok(ice.maxDiff < 1e-3, `ice max ${ice.maxDiff} m`);
   assert.ok(concentration.maxDiff < 1e-3, `concentration max ${concentration.maxDiff} at ${concentration.at}`);
   assert.ok(u.maxDiff < 1e-2, `wind max ${u.maxDiff} m/s`);
-  const second = await pair(6, 2, 900, 10), C = second.model.mesh.nCells, { stratus, stratusFraction } = second.model.radiation;
+  const second = await pair(6, 2, 900, 10, true, { mixedLayerDeck: false }), C = second.model.mesh.nCells, { stratus, stratusFraction } = second.model.radiation;
   const olr = stats(second.model.radiation.outgoing, second.physics.OLR.subarray(0, C)), sw = stats(second.model.radiation.surfaceShortwave, second.physics.SWDN.subarray(0, C));
   let decked = 0, water = 0, cover = 0;
   for (let i = 0; i < C; i++) { if (stratus[i] > 0) { decked++; water += stratus[i]; } cover += stratusFraction[i]; }
-  console.log(`two steps at N=6 under a 10 K inversion (the deck rests on the first step's boundary layer): stratus on ${(100 * decked / C).toFixed(1)} % of sea cells, ${(1000 * water / Math.max(1, decked)).toFixed(1)} g/m² where it forms, mean cover ${(cover / C).toFixed(3)} and mean water ${(1000 * water / C).toFixed(1)} g/m² over the sea; per-cell OLR rms ${olr.rmsRel.toExponential(1)}, surface shortwave rms ${sw.rmsRel.toExponential(1)}`);
+  console.log(`two steps at N=6 under a 10 K inversion (the EIS deck rests on the first step's boundary layer): stratus on ${(100 * decked / C).toFixed(1)} % of sea cells, ${(1000 * water / Math.max(1, decked)).toFixed(1)} g/m² where it forms, mean cover ${(cover / C).toFixed(3)} and mean water ${(1000 * water / C).toFixed(1)} g/m² over the sea; per-cell OLR rms ${olr.rmsRel.toExponential(1)}, surface shortwave rms ${sw.rmsRel.toExponential(1)}`);
   assert.ok(decked > 0.1 * C, `stratus on ${decked} of ${C} sea cells`);
   assert.ok(olr.rmsRel < 1e-5 && sw.rmsRel < 1e-5, `per-cell OLR rms ${olr.rmsRel}, surface shortwave rms ${sw.rmsRel}`);
-  const third = await pair(6, 2, 900, 10, true, { stratusIndex: 'ectei' }), entrained = third.model.radiation;
+  const third = await pair(6, 2, 900, 10, true, { stratusIndex: 'ectei', mixedLayerDeck: false }), entrained = third.model.radiation;
   const olrE = stats(entrained.outgoing, third.physics.OLR.subarray(0, C)), swE = stats(entrained.surfaceShortwave, third.physics.SWDN.subarray(0, C)), coverE = stats(entrained.stratusFraction, third.physics.DECKF.subarray(0, C));
   let coverSum = 0, waterSum = 0;
   for (let i = 0; i < C; i++) { coverSum += entrained.stratusFraction[i]; waterSum += entrained.stratus[i]; }

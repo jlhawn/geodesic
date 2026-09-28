@@ -1006,10 +1006,28 @@ closure still holds exactly (with the latent heat of evaporation
 counted as leaving the surface). The cloud–albedo, cloud–longwave and
 ice–albedo feedbacks are all live from here.
 
-Marine stratocumulus is diagnosed, not condensed. Over the ice-free
-part of each sea cell a deck covers the fraction f of the column. Its
-predictor is the estimated inversion strength of Wood & Bretherton
-(2006), EIS = LTS − Γ_θ (z_700 − z_LCL): the lower-tropospheric
+Marine stratocumulus is diagnosed, not condensed. By default
+(`mixedLayerDeck`) each ice-free sea column starts the bulk mixed-layer
+model of `js/physics/mixedLayer.module.js` (Lilly 1968; Bretherton &
+Wyant 1997; Stevens 2002) from its own state — h the boundary-layer
+top, θ_l and q_t the boundary layer's means, the first layer above h as
+the free troposphere, the subsidence −πσ̇/(ρg) at h, the column's bulk
+surface fluxes and the DYCOMS-II longwave on the model's own liquid
+water — advances it one physics step, and takes its cover (1 when
+coupled, down to 0.3 as the buoyancy-integral ratio decouples it) times
+1 − A and its water path, at most `stratusWaterMax`, as the deck's. It
+runs only in the stratocumulus regime, under a capping jump
+Δθ_v ≥ 2 K and a mean subsidence of at least 0.3 mm/s at h; elsewhere
+the column has no deck. The gate reads a ten-day running mean of the
+subsidence (`subsidenceMemory`), because the large-scale subsidence
+that defines the regime is a small residual of the ±10 mm/s synoptic
+swings in any one step's πσ̇ (the DYCOMS-II divergence is itself a
+monthly mean); the mean is saved with the state as `mlmSubsidence`
+and starts at 0 in a state saved without it. With
+`mixedLayerDeck: false` the deck comes instead from an empirical fit:
+over the ice-free part of each sea cell it covers the fraction f of
+the column, whose predictor is the estimated inversion strength of
+Wood & Bretherton (2006), EIS = LTS − Γ_θ (z_700 − z_LCL): the lower-tropospheric
 stability LTS = θ(σ ≈ 0.7) − θ(lowest layer) less the rise in θ along
 a moist adiabat from the lifting condensation level z_LCL to the
 height z_700 of the σ ≈ 0.7 layer (both above the lowest layer), with

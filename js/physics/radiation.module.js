@@ -54,7 +54,9 @@ export function sunDirection(t, out = new Float64Array(3)) {
  *
  * Marine stratocumulus: over the part of a cell that is ice-free sea
  * (`openSea`, the per-cell fraction the caller passes; no deck without it)
- * a diagnostic deck covers the fraction f of the column. f is
+ * a diagnostic deck covers the fraction f of the column. By default f
+ * and the deck's water come from the mixed-layer model (below); with
+ * mixedLayerDeck: false from an empirical fit, in which f is
  * 0.19 + 0.08 (EIS − 1) clamped to [0, 1] — 0.2 at the warm pool's EIS
  * of about 1 K, 0.67 at the south-east Pacific deck's 7 K, the 6–8 %
  * per K of Wood & Bretherton (2006) — times a ramp from 0 at a 5 °C
@@ -84,23 +86,26 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * mean of its emissivity with and without it. `stratus: false` removes
  * the deck.
  *
- * With mixedLayerDeck the deck's cover and water path come instead from
- * the mixed-layer model (mixedLayer.module.js, options `mixedLayer`),
- * started afresh in each column and advanced one physics step: h is the
- * boundary-layer top above the surface, θ_l and q_t the dσ-weighted
- * means of the layers whose midpoints lie below it, the free troposphere
- * the first layer above it, the subsidence −πσ̇/(ρ g) of the last
- * dynamics stage interpolated to h, the surface fluxes this column's
- * bulk sensible heat and evaporation, and the longwave the DYCOMS-II
- * form (dycomsLongwave) driven by the mixed layer's own liquid water.
+ * The mixed-layer deck (mixedLayerDeck, the default) takes its cover and
+ * water path from the mixed-layer model (mixedLayer.module.js, options
+ * `mixedLayer`), started afresh in each column and advanced one physics
+ * step: h is the boundary-layer top above the surface, θ_l and q_t
+ * the dσ-weighted means of the layers whose midpoints lie below it, the
+ * free troposphere the first layer above it, the subsidence −πσ̇/(ρ g)
+ * of the last dynamics stage interpolated to h, the surface fluxes this
+ * column's bulk sensible heat and evaporation, and the longwave the
+ * DYCOMS-II form (dycomsLongwave) driven by the mixed layer's own liquid
+ * water.
  * A stratocumulus-topped layer needs large-scale subsidence under a
  * capping inversion, so the model runs only where w̄_s ≤
  * −stratusSubsidence (0.3 mm/s; DYCOMS-II has 3 mm/s at 840 m) and
  * Δθ_v ≥ minimumInversion (2 K, a capping inversion rather than the top
  * of a subcloud layer under cumulus); elsewhere the column has no deck.
  * w̄_s is the running mean of w_s(h), w̄_s ← w̄_s e + w_s (1 − e) with
- * e = exp(−dt/subsidenceMemory) (3 days), because the w_s of a single
- * dynamics stage is dominated by transients; it is kept per cell in
+ * e = exp(−dt/subsidenceMemory) (10 days), because the large-scale
+ * subsidence that defines the regime is a small residual of the
+ * ±10 mm/s synoptic swings in the w_s of a single dynamics stage (the
+ * DYCOMS-II divergence is itself a monthly mean); it is kept per cell in
  * mlmSubsidence, starts at 0, and is saved with the state (the key
  * `mlmSubsidence`; a state saved without it starts from 0). The model's
  * own dh/dt keeps the instantaneous w_s.
@@ -168,7 +173,7 @@ export function adiabaticWaterLapse(T, p, cp, R, g, latentHeat = LATENT_HEAT) {
 
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 55, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
-  mixedLayerDeck = false, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = 3e-4, minimumInversion = 2, subsidenceMemory = 3 * DAY,
+  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = 3e-4, minimumInversion = 2, subsidenceMemory = 10 * DAY,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
