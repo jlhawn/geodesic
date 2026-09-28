@@ -124,7 +124,7 @@ export async function createGpuModel(gridOrMesh, {
       }
       out.diagnostics = {
         mass: s.mass / area, meanSurfaceT: s.surfaceT / area, piMin: s.piMin, piMax: s.piMax, maxWind: s.maxWind,
-        absorbedSolar: s.absorbedSolar / area, outgoingLongwave: s.outgoingLongwave / area, sensibleHeat: s.sensibleHeat / area,
+        absorbedSolar: s.absorbedSolar / area, atmosphereSolar: s.atmosphereSolar / area, outgoingLongwave: s.outgoingLongwave / area, sensibleHeat: s.sensibleHeat / area,
         evaporation: s.evaporation / area, latentHeat: LATENT_HEAT * s.evaporation / area,
         columnWater: s.water / area, columnCloud: s.cloud / area, precipitation: interval > 0 ? s.rain / area / interval : s.recentRain / area / RAIN_MEMORY,
         iceFraction: s.iceArea / area, iceThickness: s.iceArea > 0 ? s.iceVolume / s.iceArea : 0, surfaceAlbedo: s.albedo / area,

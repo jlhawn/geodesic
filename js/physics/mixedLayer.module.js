@@ -84,8 +84,10 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * under that closure and decouples the layer by day. The radiative
  * closure keeps the longwave ΔF: the longwave cooling that drives
  * entrainment sits in the cloud's top few tens of metres, where little
- * of the sunlight is absorbed. Without solar the model is the nocturnal
- * one.
+ * of the sunlight is absorbed. With forcing.absorbedSolar, a function of
+ * W, S = absorbedSolar(W) instead; the coupled deck of
+ * radiation.module.js passes the column's own absorption this way.
+ * Without either the model is the nocturnal one.
  *
  * Drizzle (off by default): the cloud-base rate of Comstock et al.
  * (2004), 0.37 (LWP/N)^1.75 mm/day with LWP in g/m² and the droplet
@@ -98,7 +100,8 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * air; thetaLAbove and qtAbove, numbers or functions of height;
  * divergence D (w_s = −D z) or subsidence(z); radiation(below, above),
  * the net upward longwave flux (W/m²) at a level with liquid water paths
- * (kg/m²) below and above it; and optionally solar (above).
+ * (kg/m²) below and above it; and optionally solar or absorbedSolar
+ * (above).
  *
  * `dycomsLongwave` is the idealised longwave of the DYCOMS-II RF01 case
  * (Stevens et al. 2005): the net upward flux F0 e^(−κ W_above) +
@@ -230,7 +233,7 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
     const radiation = forcing.radiation;
     const fluxSurface = radiation(0, lwp), fluxTop = radiation(lwp, 0);
     const divergence = fluxTop - fluxSurface;
-    const absorbed = (forcing.solar ?? 0) * Math.min(maximumShortwaveAbsorption, shortwaveAbsorption * lwp);
+    const absorbed = forcing.absorbedSolar ? forcing.absorbedSolar(lwp) : (forcing.solar ?? 0) * Math.min(maximumShortwaveAbsorption, shortwaveAbsorption * lwp);
     const netDivergence = divergence - absorbed;
     const rain = drizzle && lwp > 0 ? 0.37 * Math.pow(1000 * lwp / dropletNumber, 1.75) / 86400 : 0;
     const drizzleHeat = Lc / piB;

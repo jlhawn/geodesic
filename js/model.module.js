@@ -73,7 +73,7 @@ export function createModel(gridOrMesh, {
     ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity } : {}),
     ...iceOptions,
   });
-  const totals = { absorbedSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
+  const totals = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), openSea = new Float64Array(C), stressScratch = new Float64Array(E);
   const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C);
   const runoffSeen = land ? new Float64Array(C) : null, runoffStep = land ? new Float64Array(C) : null;
@@ -215,7 +215,7 @@ export function createModel(gridOrMesh, {
     const interval = model.time - lastPrecipTime;
     const result = {
       mass: mass / area, meanSurfaceT: meanSurfaceT / area, piMin, piMax, maxWind,
-      absorbedSolar: sums.absorbedSolar / area, outgoingLongwave: sums.outgoingLongwave / area, sensibleHeat: sums.sensibleHeat / area,
+      absorbedSolar: sums.absorbedSolar / area, atmosphereSolar: sums.atmosphereSolar / area, outgoingLongwave: sums.outgoingLongwave / area, sensibleHeat: sums.sensibleHeat / area,
       evaporation: sums.evaporation / area, latentHeat: moistPhysics.latentHeat * sums.evaporation / area,
       columnWater: water / area, columnCloud: cloud / area, precipitation: interval > 0 ? rain / area / interval : 0,
       iceFraction: iceArea / area, iceThickness: iceArea > 0 ? iceVolume / iceArea : 0, surfaceAlbedo: albedoSum / area,

@@ -256,6 +256,40 @@ test('water vapour absorbs sunlight by the Lacis–Hansen curve: a humid column 
   assert.ok(lower > 0.5 * taken, `the lower half of the column takes ${lower} of ${taken}`);
 });
 
+test('cloud water absorbs 1 − exp(−0.4 m²/kg × W) of the sunlight that meets it — 3.9 % at 100 g/m², 15 % at 400 g/m² — heating the cloudy layers in proportion to their water, and incident = reflected + atmosphere + surface', () => {
+  const radiation = createRadiation(mesh, core), scattering = createRadiation(mesh, core, { cloudSolarAbsorption: 0 });
+  radiation.setTime(0); scattering.setTime(0);
+  const noon = brightest(radiation), beam = radiation.insolation(noon), incident = beam * 0.97;
+  const pi = new Float64Array(C).fill(P0), theta = sampleState(3)[1], q = new Float64Array(K * C), qc = new Float64Array(K * C);
+  core.diagnose(pi, theta, q, qc);
+  const { dSigma, g } = core.diagnostics, shares = new Map([[20, 0.2], [21, 0.3], [22, 0.5]]);
+  const overcast = (path) => {
+    qc.fill(0);
+    for (const [k, share] of shares) qc[k * C + noon] = share * path / (P0 * dSigma[k] / g);
+    const run = (r, sun) => {
+      const surface = r.column(noon, P0, theta, 290, 5, r.opticalDepth(mesh.latCell[noon]), sun, 0, q, qc, 0.07);
+      return { surface, layers: Array.from(r.layerFlux), ...r.budget };
+    };
+    const day = run(radiation, beam), night = run(radiation, 0), scattered = run(scattering, beam);
+    const heating = day.layers.map((f, k) => f - scattered.layers[k]);
+    const atmosphere = day.layers.reduce((a, f, k) => a + f - night.layers[k], 0), surface = day.surface - night.surface;
+    return { ...day, heating, absorbed: heating.reduce((a, b) => a + b, 0), closure: Math.abs(beam - day.reflectedSolar - atmosphere - surface) / beam, scattered };
+  };
+  const thin = overcast(0.1), thick = overcast(0.4);
+  console.log(`at noon (${beam.toFixed(0)} W/m²) a dry column's cloud absorbs ${(100 * thin.absorbed / incident).toFixed(2)} % of the ${incident.toFixed(0)} W/m² reaching it at 100 g/m² and ${(100 * thick.absorbed / incident).toFixed(2)} % at 400 g/m²; reflected ${thin.reflectedSolar.toFixed(1)} against ${thin.scattered.reflectedSolar.toFixed(1)} W/m² when it only scatters; closure ${thin.closure.toExponential(1)}, ${thick.closure.toExponential(1)}`);
+  assert.ok(Math.abs(thin.absorbed / incident - 0.039) < 0.002, `100 g/m² absorbs ${thin.absorbed / incident}`);
+  assert.ok(Math.abs(thick.absorbed / incident - 0.15) < 0.005, `400 g/m² absorbs ${thick.absorbed / incident}`);
+  for (const c of [thin, thick]) {
+    assert.ok(Math.abs(c.cloudSolar - c.absorbed) < 1e-9 * c.absorbed && Math.abs(c.atmosphereSolar - c.scattered.atmosphereSolar - c.absorbed) < 1e-9 * c.absorbed);
+    c.heating.forEach((h, k) => {
+      if (shares.has(k)) assert.ok(Math.abs(h - shares.get(k) * c.absorbed) < 1e-9 * c.absorbed, `layer ${k} takes ${h / c.absorbed} of the cloud's absorption`);
+      else assert.equal(h, 0, `layer ${k} holds no cloud and takes none`);
+    });
+    assert.ok(c.reflectedSolar < c.scattered.reflectedSolar && c.surfaceShortwave < c.scattered.surfaceShortwave);
+    assert.ok(c.closure < 1e-9, `closure ${c.closure}`);
+  }
+});
+
 function deckColumns(options = {}) {
   const radiation = createRadiation(mesh, core, { stratus: true, mixedLayerDeck: false, ...options }), off = createRadiation(mesh, core, { stratus: false });
   radiation.setTime(0); off.setTime(0);
@@ -330,6 +364,24 @@ test('the deck is two independent columns: its shortwave is the cover-weighted m
     assert.ok(Math.abs(full[name] - overcast[name]) <= 1e-9 * Math.max(1, Math.abs(overcast[name])), `${name} ${full[name]} against the condensed deck's ${overcast[name]}`);
   }
   full.layers.forEach((f, k) => assert.ok(Math.abs(f - overcast.layers[k]) <= 1e-9 * Math.max(1, Math.abs(f)), `layer ${k}: ${f} against ${overcast.layers[k]}`));
+});
+
+test('the deck\'s own water absorbs in the deck layer in the same two-column blend: half the cover absorbs half as much', () => {
+  const { radiation, withStability, run } = deckColumns();
+  const scattering = createRadiation(mesh, core, { stratus: true, mixedLayerDeck: false, cloudSolarAbsorption: 0 });
+  scattering.setTime(0);
+  const layer = radiation.stratusLayer, stable = withStability(30);
+  const absorbed = (openSea) => {
+    const lit = run(radiation, stable, 298, openSea), dark = run(scattering, stable, 298, openSea);
+    const heating = lit.layers.map((f, k) => f - dark.layers[k]);
+    heating.forEach((h, k) => { if (k !== layer) assert.equal(h, 0, `layer ${k}`); });
+    return { ...lit, deckLayer: heating[layer] };
+  };
+  const full = absorbed(1), half = absorbed(0.5);
+  console.log(`a ${(1000 * full.stratus).toFixed(1)} g/m² deck at noon absorbs ${full.deckLayer.toFixed(2)} W/m² in its layer under full cover, ${half.deckLayer.toFixed(2)} under half`);
+  assert.ok(full.stratusFraction === 1 && half.stratusFraction === 0.5 && half.stratus === full.stratus);
+  assert.ok(full.deckLayer > 0 && Math.abs(half.deckLayer - 0.5 * full.deckLayer) < 1e-12 * full.deckLayer, `half ${half.deckLayer} against full ${full.deckLayer}`);
+  assert.ok(Math.abs(full.cloudSolar - full.deckLayer) < 1e-12 * full.deckLayer && full.closure < EPS && half.closure < EPS);
 });
 
 test('the deck is as thick as the boundary layer above its condensation level, with the adiabatic water of that thickness scaled down', () => {
@@ -516,9 +568,10 @@ function modelDigest(radiation) {
   return { digest: hash.digest('hex').slice(0, 32), radiation: model.radiation };
 }
 
-test('with mixedLayerDeck: false the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
+test('with mixedLayerDeck: false and cloudSolarAbsorption: 0 the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
   const before = '1a7a2bd66c1edabedde1875fd6868c4a';
-  assert.equal(modelDigest({ mixedLayerDeck: false }).digest, before);
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0 }).digest, before);
+  assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
   assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
   assert.notEqual(fresh.digest, before);
@@ -534,17 +587,23 @@ test('with mixedLayerDeck: false the model is bit-identical to the engine before
   assert.ok(covered > 0, 'some cells carry a mixed-layer deck');
 });
 
-test('with stratusSolar: false the mixed-layer deck is bit-identical to the deck before it absorbed sunlight; with sunlight the column that carries it changes', () => {
+test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with cloudSolarAbsorption: 0 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
   const forced = { stratusSubsidence: 0, minimumInversion: 0 };
-  assert.equal(modelDigest({ stratusSolar: false }).digest, 'acc030865b5b4b5ebefec6d4f9afbfc8');
-  assert.equal(modelDigest({ ...forced, stratusSolar: false }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
+  assert.equal(modelDigest({ stratusSolar: false, cloudSolarAbsorption: 0 }).digest, 'acc030865b5b4b5ebefec6d4f9afbfc8');
+  assert.equal(modelDigest({ ...forced, stratusSolar: false, cloudSolarAbsorption: 0 }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
+  assert.equal(modelDigest({ ...forced, cloudSolarAbsorption: 0 }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
   assert.notEqual(modelDigest(forced).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
   const shadow = createRadiation(mesh, core, { subsidenceMemory: 1e-9 }), dark = createRadiation(mesh, core, { subsidenceMemory: 1e-9, stratusSolar: false });
-  shadow.setTime(0); dark.setTime(0);
-  const noon = brightest(shadow), column = mixedLayerColumn(), lit = mixedLayerRun(shadow, noon, column), unlit = mixedLayerRun(dark, noon, column);
-  console.log(`at noon the mixed layer of the stable column holds ${(1000 * lit.mlmWater).toFixed(2)} g/m² after its step with sunlight in its cloud, ${(1000 * unlit.mlmWater).toFixed(2)} without, entraining ${(1000 * lit.mlmEntrainment).toFixed(3)} and ${(1000 * unlit.mlmEntrainment).toFixed(3)} mm/s`);
+  const scattering = createRadiation(mesh, core, { subsidenceMemory: 1e-9, cloudSolarAbsorption: 0 });
+  shadow.setTime(0); dark.setTime(0); scattering.setTime(0);
+  const noon = brightest(shadow), column = mixedLayerColumn(), lit = mixedLayerRun(shadow, noon, column), unlit = mixedLayerRun(dark, noon, column), half = mixedLayerRun(shadow, noon, column, 0.5);
+  console.log(`at noon the mixed layer of the stable column holds ${(1000 * lit.mlmWater).toFixed(2)} g/m² after its step with the ${lit.mlmSolar.toFixed(2)} W/m² its deck's layer absorbs, ${(1000 * unlit.mlmWater).toFixed(2)} without, entraining ${(1000 * lit.mlmEntrainment).toFixed(3)} and ${(1000 * unlit.mlmEntrainment).toFixed(3)} mm/s`);
+  assert.ok(lit.mlmCover === 1 && lit.mlmSolar > 0 && lit.mlmSolar === lit.cloudSolar, `the mixed layer feels ${lit.mlmSolar} W/m², the column absorbs ${lit.cloudSolar}`);
+  assert.ok(half.mlmSolar === lit.mlmSolar && Math.abs(half.cloudSolar - 0.5 * lit.cloudSolar) < 1e-12 * lit.cloudSolar, 'the mixed layer feels the power per unit deck area');
+  assert.ok(unlit.mlmSolar === 0 && unlit.cloudSolar > 0, 'with stratusSolar: false the column still absorbs');
+  assert.deepEqual([scattering.budget.mlmSolar, mixedLayerRun(scattering, noon, column).mlmWater], [0, unlit.mlmWater]);
   assert.ok(lit.mlmWater < unlit.mlmWater && lit.mlmWater > 0.9 * unlit.mlmWater, `water ${lit.mlmWater} against ${unlit.mlmWater}`);
-  assert.ok(lit.closure < EPS);
+  assert.ok(lit.closure < EPS && unlit.closure < EPS);
   core.diagnostics.piSigmaDot.fill(0);
 });
 

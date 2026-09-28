@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
+import { sunDirection } from '../js/physics/radiation.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -59,17 +60,103 @@ test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailab
   assert.ok(olrE.rmsRel < 1e-5 && swE.rmsRel < 1e-5, `per-cell OLR rms ${olrE.rmsRel}, surface shortwave rms ${swE.rmsRel} under ECTEI`);
 });
 
+/*
+ * One physics kernel alone against the CPU physics phase, both from the
+ * same single-precision state (two steps after a 10 K inversion was
+ * imposed): the heating of every layer, (θ' − θ)Π/dt, over a step long
+ * enough that the rounding of θ is far below the tolerance.
+ */
+function heatingState() {
+  const model = createModel(new Grid(6), { ocean: false, radiation: { stratus: true, mixedLayerDeck: false } });
+  const init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  const { K, sigmaMid } = model.core, C = model.mesh.nCells;
+  for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += 10;
+  for (let n = 0; n < 2; n++) model.step(900);
+  for (const a of model.state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  return model;
+}
+async function physicsHeating(base, options, dt = 864000) {
+  const physics = { stratus: true, mixedLayerDeck: false, ...options };
+  const model = createModel(base.mesh, { ocean: false, radiation: physics });
+  model.state.forEach((a, n) => a.set(base.state[n]));
+  model.seaIce.concentration.set(base.seaIce.concentration);
+  model.seaIce.snow.set(base.seaIce.snow);
+  model.boundaryLayer.depth.set(base.boundaryLayer.depth);
+  model.time = base.time;
+  const { K } = model.core, C = model.mesh.nCells;
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model), physics });
+  const { device, buffers, kernels, layout } = gpu;
+  gpu.upload(model.state);
+  gpu.uploadPhysics({ snow: model.seaIce.snow, concentration: model.seaIce.concentration });
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
+  await gpu.tendency();
+  const sun = sunDirection(model.time);
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, sun[0], sun[1], sun[2], 0, 0, 0]));
+  const group = device.createBindGroup({ layout: kernels.physics.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+  const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+  pass.setPipeline(kernels.physics);
+  pass.setBindGroup(0, group);
+  pass.dispatchWorkgroups(Math.ceil(C / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  const [, after] = await gpu.download(), ph = await gpu.downloadPhysics();
+  const before = Float64Array.from(model.state[1]), [pi, , , , , qc] = model.state;
+  model.core.diagnose(pi, model.state[1], model.state[4], qc);
+  const { exnerLayer, dSigma, g, cp } = model.core.diagnostics, exner = Float64Array.from(exnerLayer);
+  model.radiation.setTime(model.time);
+  model.phases.physics(0, C, dt, null);
+  const heating = (theta) => Float64Array.from(theta, (t, x) => (t - before[x]) * exner[x] / dt * 86400);
+  const cloudy = [];
+  for (let i = 0; i < C; i++) {
+    let water = 0;
+    for (let k = 0; k < K; k++) water += qc[k * C + i] * pi[i] * dSigma[k] / g;
+    if (model.radiation.insolation(i) > 0 && (water > 1e-3 || model.radiation.stratus[i] > 0)) cloudy.push(i);
+  }
+  const power = (rate, i) => { let sum = 0; for (let k = 0; k < K; k++) sum += rate[k * C + i] / 86400 * cp * pi[i] * dSigma[k] / g; return sum; };
+  return { K, C, cloudy, cpu: heating(model.state[1]), gpu: heating(after), power, area: model.mesh.areaCell, cpuDeck: Float64Array.from(model.radiation.stratusFraction), gpuDeck: ph.DECKF.subarray(0, C) };
+}
+
+test('the heating of each layer of the sunlit cloudy columns, and the part of it the cloud water absorbs, agree between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const base = heatingState();
+  const lit = await physicsHeating(base, {}), scattering = await physicsHeating(base, { cloudSolarAbsorption: 0 });
+  const { K, C, cloudy } = lit;
+  let worst = 0, surface = 0, worstCloud = 0, at = null, cpuMean = 0, gpuMean = 0, area = 0, strongest = 0, decks = 0;
+  for (const i of cloudy) {
+    if (lit.cpuDeck[i] > 0) decks++;
+    for (let k = 0; k < K; k++) {
+      const x = k * C + i, d = Math.abs(lit.cpu[x] - lit.gpu[x]);
+      if (k === K - 1) surface = Math.max(surface, d / Math.abs(lit.cpu[x]));
+      else if (d > worst) { worst = d; at = [i, k, lit.cpu[x]]; }
+      worstCloud = Math.max(worstCloud, Math.abs((lit.cpu[x] - scattering.cpu[x]) - (lit.gpu[x] - scattering.gpu[x])));
+    }
+  }
+  for (let i = 0; i < C; i++) {
+    const cpuCloud = lit.power(lit.cpu, i) - scattering.power(scattering.cpu, i), gpuCloud = lit.power(lit.gpu, i) - scattering.power(scattering.gpu, i);
+    cpuMean += lit.area[i] * cpuCloud; gpuMean += lit.area[i] * gpuCloud; area += lit.area[i];
+    strongest = Math.max(strongest, cpuCloud);
+  }
+  console.log(`physics alone at N=6 on ${cloudy.length} sunlit cloudy columns (${decks} with a deck): layer heating differs between the engines by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(2)} K/day), in the lowest layer, which takes the sensible heat, by ${surface.toExponential(1)} of it; the cloud water's own heating by ${worstCloud.toExponential(1)} K/day. The cloud water absorbs a global mean ${(cpuMean / area).toFixed(3)} W/m² (GPU ${(gpuMean / area).toFixed(3)}), at most ${strongest.toFixed(1)} W/m² in a column`);
+  assert.ok(cloudy.length > 0.1 * C && decks > 0, `${cloudy.length} cloudy columns, ${decks} with a deck`);
+  for (let i = 0; i < C; i++) assert.ok(Math.abs(lit.cpuDeck[i] - lit.gpuDeck[i]) < 1e-5, `deck cover of cell ${i}`);
+  assert.ok(worst < 1e-4, `layer heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
+  assert.ok(surface < 1e-5, `the lowest layer's heating differs by ${surface} of it`);
+  assert.ok(worstCloud < 1e-4, `the cloud water's heating differs by ${worstCloud} K/day`);
+  assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `global cloud absorption ${cpuMean / area} against ${gpuMean / area} W/m²`);
+});
+
 test('twelve full GPU steps track the CPU model and its energy budget', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { model, state, physics } = await pair(6, 12, 900);
   const d = model.diagnostics();
   const C = model.mesh.nCells;
-  let area = 0, ts = 0, abs = 0, olr = 0, rain = 0;
-  for (let i = 0; i < C; i++) { const a = model.mesh.areaCell[i]; area += a; ts += a * state[3][i]; abs += a * physics.ABS[i]; olr += a * physics.OLR[i]; rain += a * physics.RAIN[i]; }
-  ts /= area; abs /= area; olr /= area; rain /= area;
+  let area = 0, ts = 0, abs = 0, atmosphere = 0, olr = 0, rain = 0;
+  for (let i = 0; i < C; i++) { const a = model.mesh.areaCell[i]; area += a; ts += a * state[3][i]; abs += a * physics.ABS[i]; atmosphere += a * physics.ATMSW[i]; olr += a * physics.OLR[i]; rain += a * physics.RAIN[i]; }
+  ts /= area; abs /= area; atmosphere /= area; olr /= area; rain /= area;
   const theta = stats(model.state[1], state[1]), tsStat = stats(model.state[3], state[3]);
-  console.log(`twelve steps at N=6: mean Ts ${d.meanSurfaceT.toFixed(3)} vs ${ts.toFixed(3)} K; solar ${d.absorbedSolar.toFixed(2)} vs ${abs.toFixed(2)}; OLR ${d.outgoingLongwave.toFixed(2)} vs ${olr.toFixed(2)} W/m²; θ rms ${theta.rmsRel.toExponential(1)}, Ts max ${tsStat.maxDiff.toExponential(1)} K`);
+  console.log(`twelve steps at N=6: mean Ts ${d.meanSurfaceT.toFixed(3)} vs ${ts.toFixed(3)} K; solar ${d.absorbedSolar.toFixed(2)} vs ${abs.toFixed(2)}, in the atmosphere ${d.atmosphereSolar.toFixed(2)} vs ${atmosphere.toFixed(2)}; OLR ${d.outgoingLongwave.toFixed(2)} vs ${olr.toFixed(2)} W/m²; θ rms ${theta.rmsRel.toExponential(1)}, Ts max ${tsStat.maxDiff.toExponential(1)} K`);
   assert.ok(Math.abs(d.meanSurfaceT - ts) < 0.02, `mean Ts ${d.meanSurfaceT} vs ${ts}`);
   assert.ok(Math.abs(d.absorbedSolar - abs) < 0.5, `absorbed solar ${d.absorbedSolar} vs ${abs}`);
+  assert.ok(d.atmosphereSolar > 0 && Math.abs(d.atmosphereSolar - atmosphere) < 0.5, `absorbed in the atmosphere ${d.atmosphereSolar} vs ${atmosphere}`);
   assert.ok(Math.abs(d.outgoingLongwave - olr) < 0.5, `OLR ${d.outgoingLongwave} vs ${olr}`);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
   let snowOnIce = 0, worstSnow = 0;

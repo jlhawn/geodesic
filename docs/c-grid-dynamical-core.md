@@ -1000,7 +1000,13 @@ no cloud. In the shortwave the column's cloud optical depth
 (`cloudScattering` = 55 m²/kg × path) reflects the beam
 with the two-stream reflectance τ/(τ + 2μ); what passes is absorbed by
 the surface with its per-cell albedo, with the multiple reflections
-between surface and cloud summed. The fixed planetary albedo of 0.3 is
+between surface and cloud summed. Cloud water also absorbs: a cloud of
+water path W passes on only exp(−`cloudSolarAbsorption` × W) of what it
+reflects or transmits, of the beam from above and of the light the
+surface returns through it, and the rest heats its layers in proportion
+to their water. The default 0.4 m²/kg absorbs 3.9 % at 100 g/m² and
+15 % at 400 g/m² (Stephens 1978); 0 gives back the purely scattering
+cloud bit for bit in both engines. The fixed planetary albedo of 0.3 is
 gone: it is now produced by clouds and ice, and diagnosed. Radiation's
 closure still holds exactly (with the latent heat of evaporation
 counted as leaving the surface). The cloud–albedo, cloud–longwave and
@@ -1023,15 +1029,17 @@ subsidence (`subsidenceMemory`), because the large-scale subsidence
 that defines the regime is a small residual of the ±10 mm/s synoptic
 swings in any one step's πσ̇ (the DYCOMS-II divergence is itself a
 monthly mean); the mean is saved with the state as `mlmSubsidence`
-and starts at 0 in a state saved without it. By day the mixed layer's
-cloud absorbs 4 % of the sunlight reaching the deck layer per
-100 g/m² of water, at most 15 % (Stephens 1978; `stratusSolar`), which
-heats the layer and weakens its buoyancy flux, so a deck thins and
-decouples by day (RF01 under a July sun at 30°N: 0.56–0.59 of its
-night-time water by mid-afternoon). Since the model restarts from the
-column every step, the deck feels one physics step of it, about 1.5 %
-less water after 900 s under a high sun, and the column's radiation
-treats the deck as before. With
+and starts at 0 in a state saved without it. By day the mixed layer is
+heated by exactly the sunlight the column's radiation absorbs in the
+deck's layer, per unit deck area (the overcast column's absorption
+there less the clear column's; `stratusSolar`, false leaving the mixed
+layer unlit while the column still absorbs), which weakens its
+buoyancy flux, so a deck thins and decouples by day (RF01 run
+standalone under a July sun at 30°N, absorbing 4 % per 100 g/m² by the
+mixed-layer model's own formula: 0.56–0.59 of its night-time water by
+mid-afternoon). Since the model restarts from the column every step,
+the deck feels one physics step of it, about 1.2 % less water after
+900 s under a high sun. With
 `mixedLayerDeck: false` the deck comes instead from an empirical fit:
 over the ice-free part of each sea cell it covers the fraction f of
 the column, whose predictor is the estimated inversion strength of

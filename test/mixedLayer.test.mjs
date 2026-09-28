@@ -167,7 +167,7 @@ test('with the sea-surface temperature instead of fluxes the bulk formulas give 
   assert.throws(() => createMixedLayer({ closure: 'lilly' }));
 });
 
-test('under the July sun of 30°N the RF01 deck thins by day to 0.3–0.8 of its night-time water and recovers by night, decoupling by day; without sunlight it is the nocturnal run', () => {
+test('standalone, absorbing the sun by its own shortwaveAbsorption formula rather than the coupled column\'s absorbedSolar, the RF01 deck under the July sun of 30°N thins by day to 0.3–0.8 of its night-time water and recovers by night, decoupling by day; without sunlight it is the nocturnal run', () => {
   const mlm = createMixedLayer(CONSTANTS), forcing = rf01(mlm);
   const place = [Math.cos(Math.PI / 6), 0, Math.sin(Math.PI / 6)], sun = new Float64Array(3), midnight = 116 * DAY + DAY / 2;
   const insolation = (t) => { sunDirection(t, sun); return 1362 * Math.max(0, place[0] * sun[0] + place[1] * sun[1] + place[2] * sun[2]); };
