@@ -229,7 +229,7 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
  * column's own inversion: the second step, the first with a diagnosed
  * boundary layer, carries the deck.
  */
-async function mixedLayerPair(steps, { seed = -1e-3, ...options } = {}) {
+async function mixedLayerPair(steps, { seed = -1e-3, height = 0, ...options } = {}) {
   const physics = { mixedLayerDeck: true, ...options };
   const model = createModel(new Grid(6), { ocean: false, radiation: physics });
   const init = initializeState(model, {});
@@ -240,9 +240,10 @@ async function mixedLayerPair(steps, { seed = -1e-3, ...options } = {}) {
     else { theta[k * C + i] = theta[(K - 1) * C + i]; q[k * C + i] = q[(K - 1) * C + i]; }
   }
   model.radiation.mlmSubsidence.fill(seed);
+  model.radiation.mlmHeight.fill(height);
   const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model), physics });
   gpu.upload(model.state);
-  gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence });
+  gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }
   const after = await gpu.downloadPhysics(), r = model.radiation;
   const cell = (name) => after[name].subarray(0, C);
@@ -258,6 +259,8 @@ async function mixedLayerPair(steps, { seed = -1e-3, ...options } = {}) {
     C, decked, gpuDecked, partial, water: water / Math.max(1, decked),
     cover: stats(r.mlmCover, cell('MLMCOVER')), mlmWater: stats(r.mlmWater, cell('MLMWATER')), entrainment: stats(r.mlmEntrainment, cell('MLMENT')),
     subsidence: stats(r.mlmSubsidence, cell('MLMSUB')), olr: stats(r.outgoing, cell('OLR')), sw: stats(r.surfaceShortwave, cell('SWDN')),
+    height: stats(r.mlmHeight, cell('MLMH')), gate: stats(r.mlmGate, cell('MLMGATE')), top: stats(r.mlmTop, cell('MLMTOP')), state: await gpu.download(), model,
+    heights: Float64Array.from(r.mlmHeight), tops: Float64Array.from(r.mlmTop), depth: Float64Array.from(model.boundaryLayer.depth),
     fraction: stats(r.stratusFraction, cell('DECKF')), deck: stats(r.stratus, cell('DECK')), mean: r.mlmSubsidence,
     sunlit, sunlitWater: stats(pick(r.mlmWater), pick(cell('MLMWATER'))), sunlitDeck: stats(pick(r.stratus), pick(cell('DECK'))), waterPath: Float64Array.from(r.mlmWater),
   };
@@ -293,21 +296,60 @@ test('the running mean of the subsidence at the boundary-layer top builds the sa
   assert.ok(run.subsidence.rmsRel < 1e-3, `mean subsidence rms ${run.subsidence.rmsRel}, max ${run.subsidence.maxDiff} at ${run.subsidence.at}`);
 });
 
-test('the GPU model sends the running-mean subsidence to the device on load and reads it back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('over six steps the carried inversion height, the gate and the deck they give match between the engines, and the boundary layer mixes to the deck\'s height in both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = await mixedLayerPair(6);
+  const { C, model } = run, { geopotential, g } = model.core.diagnostics, K = model.core.K;
+  let carried = 0, above = 0, active = 0;
+  for (let i = 0; i < C; i++) {
+    if (!(run.tops[i] > 0)) continue;
+    active++;
+    const depth = run.depth[i] - geopotential[(K - 1) * C + i] / g, h = run.heights[i];
+    if (h > depth + 1) carried++;
+    if (run.tops[i] > run.depth[i]) above++;
+  }
+  const theta = stats(model.state[1], run.state[1]), q = stats(model.state[4], run.state[4]);
+  console.log(`six steps: the deck runs on ${active} of ${C} cells (GPU ${run.gpuDecked} with cover), its carried height stands above the boundary-layer top on ${carried} of them and hands the boundary layer a deeper profile on ${above}; engines differ in height by rms ${run.height.rmsRel.toExponential(1)} (max ${run.height.maxDiff.toExponential(1)} m), in mlmTop by max ${run.top.maxDiff.toExponential(1)} m, in the gate by max ${run.gate.maxDiff.toExponential(1)}, in cover by max ${run.cover.maxDiff.toExponential(1)}, in water by rms ${run.mlmWater.rmsRel.toExponential(1)} (max ${run.mlmWater.maxDiff.toExponential(1)} kg/m²); θ rms ${theta.rmsRel.toExponential(1)}, q rms ${q.rmsRel.toExponential(1)}`);
+  assert.ok(active > 0.5 * C && carried > 0.5 * active && above > 0.5 * active, `active ${active}, carried ${carried}, deeper profile ${above}`);
+  assert.ok(run.decked === run.gpuDecked, `deck on ${run.decked} cells, ${run.gpuDecked} on the GPU`);
+  assert.ok(run.height.rmsRel < 1e-5 && run.top.rmsRel < 1e-5, `height rms ${run.height.rmsRel}, max ${run.height.maxDiff} at ${run.height.at}`);
+  assert.ok(run.gate.maxDiff < 1e-6, `gate ${run.gate.maxDiff} at ${run.gate.at}`);
+  assert.ok(run.cover.maxDiff < 1e-3 && run.fraction.maxDiff < 1e-3, `cover ${run.cover.maxDiff} at ${run.cover.at}`);
+  assert.ok(run.mlmWater.rmsRel < 1e-4 && run.mlmWater.maxDiff < 5e-5 && run.deck.maxDiff < 5e-5, `water rms ${run.mlmWater.rmsRel}, max ${run.mlmWater.maxDiff} at ${run.mlmWater.at}`);
+  assert.ok(run.entrainment.rmsRel < 1e-4, `entrainment rms ${run.entrainment.rmsRel}`);
+  assert.ok(theta.rmsRel < 1e-5 && q.rmsRel < 5e-4, `θ rms ${theta.rmsRel}, q rms ${q.rmsRel}`);
+  const capped = await mixedLayerPair(2, { height: 5000 });
+  const ceiling = (i) => { let k = K - 1; while (model.core.sigmaMid[k] >= 0.85) k--; return geopotential[k * C + i] / g - 1; };
+  let held = 0;
+  for (let i = 0; i < C; i++) if (capped.tops[i] > 0) {
+    assert.ok(Math.abs(capped.heights[i] - ceiling(i)) < 100, `cell ${i}: a 5000 m height held at ${capped.heights[i]} by the ceiling near ${ceiling(i)}`);
+    held++;
+  }
+  console.log(`seeded at 5000 m, the ${held} decks start 1 m under the midpoint of the first layer above the 10 K inversion and end their step within 100 m of it; engines differ in height by rms ${capped.height.rmsRel.toExponential(1)}, in water by rms ${capped.mlmWater.rmsRel.toExponential(1)}`);
+  assert.ok(held > 0.5 * C && capped.height.rmsRel < 1e-5 && capped.mlmWater.rmsRel < 1e-4 && capped.cover.maxDiff < 1e-3, `held ${held}, height rms ${capped.height.rmsRel}, water rms ${capped.mlmWater.rmsRel}, cover ${capped.cover.maxDiff}`);
+});
+
+test('the GPU model sends the deck\'s running-mean subsidence, carried height and gate to the device on load and reads them back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const model = await createGpuModel(new Grid(6), { ocean: false, radiation: { mixedLayerDeck: true } });
   const C = model.mesh.nCells, init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const loaded = Float64Array.from({ length: C }, (_, i) => -2e-3 * ((i % 7) + 1) / 7);
+  const heights = Float64Array.from({ length: C }, (_, i) => (i % 3 ? 400 + 37 * (i % 11) : 0)), gates = Float64Array.from({ length: C }, (_, i) => (i % 5) / 4);
   model.radiation.mlmSubsidence.set(loaded);
+  model.radiation.mlmHeight.set(heights);
+  model.radiation.mlmGate.set(gates);
   model.load();
   const device = await model.gpu.downloadPhysics();
-  for (let i = 0; i < C; i++) assert.equal(device.MLMSUB[i], Math.fround(loaded[i]), `cell ${i} on the device`);
+  for (let i = 0; i < C; i++) {
+    assert.equal(device.MLMSUB[i], Math.fround(loaded[i]), `cell ${i} on the device`);
+    assert.ok(device.MLMH[i] === Math.fround(heights[i]) && device.MLMGATE[i] === Math.fround(gates[i]), `cell ${i}: height and gate on the device`);
+  }
   await model.step(900); await model.step(900);
   await model.sync();
   const after = await model.gpu.downloadPhysics(), mean = model.radiation.mlmSubsidence;
   let moved = 0;
   for (let i = 0; i < C; i++) {
+    assert.ok(model.radiation.mlmHeight[i] === after.MLMH[i] && model.radiation.mlmGate[i] === after.MLMGATE[i], `cell ${i}: height and gate mirrored`);
     assert.equal(mean[i], after.MLMSUB[i], `cell ${i} mirrored`);
     assert.ok(Math.abs(mean[i] - loaded[i]) < 1e-4, `cell ${i}: ${mean[i]} from ${loaded[i]}`);
     if (mean[i] !== Math.fround(loaded[i])) moved++;

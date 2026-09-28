@@ -23,9 +23,19 @@ import { saturationHumidity } from './moist.module.js';
  * total exactly. Nothing mixes above the boundary-layer top; the search
  * stops at searchTop in σ. The surface fluxes and drag remain explicit
  * sources on the lowest layer, which the diffusion then spreads upward.
+ *
+ * A stratocumulus deck mixes its layer from cloud top, which the bulk
+ * Richardson number of the surface-driven search does not see. With
+ * `deckTop`, per cell the inversion height of the mixed-layer deck in the
+ * height coordinate of `depth` where the deck ran this step and 0 where
+ * it did not (radiation.module.js's mlmTop), the K-profile of such a
+ * cell is laid over max(depth, deckTop) instead of depth — the same
+ * profile, shape and velocity scale, for the deeper layer — so the
+ * deck's layer is mixed through to its inversion. `depth` itself stays
+ * the Richardson depth: the deck starts from it and relaxes toward it.
  */
 export function createBoundaryLayer(mesh, core, {
-  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, buffers = null,
+  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, buffers = null,
 } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, kappa, exnerLayer, geopotential } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
@@ -75,7 +85,7 @@ export function createBoundaryLayer(mesh, core, {
       }
     }
     for (let i = iFrom; i < iTo; i++) {
-      const zb = geopotential[bottom * C + i] / g, h = depth[i] - zb;
+      const zb = geopotential[bottom * C + i] / g, h = (deckTop && deckTop[i] > 0 ? Math.max(depth[i], deckTop[i]) : depth[i]) - zb;
       for (let k = kTop; k < K; k++) mixing[k * C + i] = 0;
       if (h <= 0) continue;
       let scale = friction[i];

@@ -460,6 +460,8 @@ test('with stratusIndex: \'ectei\' the deck follows the entrainment index: a dry
   assert.throws(() => createRadiation(mesh, core, { stratusIndex: 'lts' }));
 });
 
+const REDIAGNOSED = { prognosticHeight: false, gateMemory: 0 };
+
 function mixedLayerColumn(sinking = 0.4) {
   const pi = new Float64Array(C).fill(P0), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
   for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) {
@@ -490,7 +492,7 @@ function brightest(r) {
 }
 
 test('the mixed-layer deck on a stable column over a warm sea carries the water path and cover of the mixed-layer model, advanced one step, in the same two-column blend', () => {
-  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9 }), off = createRadiation(mesh, core, { stratus: false });
+  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9, ...REDIAGNOSED }), off = createRadiation(mesh, core, { stratus: false });
   shadow.setTime(0); off.setTime(0);
   const noon = brightest(shadow), column = mixedLayerColumn(), { pi, theta, q, qc, depth } = column;
   const run = (r, openSea, dt = 900, air = theta) => mixedLayerRun(r, noon, column, openSea, dt, air);
@@ -519,7 +521,7 @@ test('the mixed-layer deck on a stable column over a warm sea carries the water 
 });
 
 test('the mixed-layer deck needs subsidence and a capping inversion: a column under ascent or under a 1 K jump has none, and falls back to no deck', () => {
-  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9 });
+  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9, ...REDIAGNOSED });
   shadow.setTime(0);
   const noon = brightest(shadow), empty = { mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, stratus: 0, stratusFraction: 0 };
   const pick = (b) => ({ mlmCover: b.mlmCover, mlmWater: b.mlmWater, mlmEntrainment: b.mlmEntrainment, stratus: b.stratus, stratusFraction: b.stratusFraction });
@@ -541,7 +543,7 @@ test('the mixed-layer deck needs subsidence and a capping inversion: a column un
 });
 
 test('the regime test reads the subsidence averaged over subsidenceMemory: a column that starts sinking gains its deck only once the running mean passes the floor', () => {
-  const instant = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9 }), memory = createRadiation(mesh, core, { mixedLayerDeck: true });
+  const instant = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9, ...REDIAGNOSED }), memory = createRadiation(mesh, core, { mixedLayerDeck: true, ...REDIAGNOSED });
   instant.setTime(0); memory.setTime(0);
   const noon = brightest(memory), column = mixedLayerColumn(0.4), dt = 3600, keep = Math.exp(-dt / (10 * DAY));
   mixedLayerRun(instant, noon, column, 1, dt);
@@ -556,6 +558,76 @@ test('the regime test reads the subsidence averaged over subsidenceMemory: a col
   }
   console.log(`under a steady ${(1000 * sinking).toFixed(2)} mm/s the 10-day mean passes −0.3 mm/s and the deck appears after ${first} hourly steps`);
   assert.ok(first > 1 && first < 48);
+  core.diagnostics.piSigmaDot.fill(0);
+});
+
+function boundaryLayerTop(column, i) {
+  const { g, cp, geopotential, exnerLower, exnerLayer } = core.diagnostics, bottom = (K - 1) * C + i, thetaV = core.arrays.thetaV;
+  const surface = geopotential[bottom] - cp * thetaV[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
+  return { height: column.mixedDepth(i) + (geopotential[bottom] - surface) / g, offset: surface / g };
+}
+
+test('the deck carries its inversion height: from the boundary-layer top it deepens step after step by its own dh/dt, while the re-diagnosed deck starts from that top each step; mlmTop hands the height to the boundary layer', () => {
+  const carried = createRadiation(mesh, core, { subsidenceMemory: 1e-9 }), rediagnosed = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED });
+  carried.setTime(0); rediagnosed.setTime(0);
+  const noon = brightest(carried), column = mixedLayerColumn(0.4), top = boundaryLayerTop(column, noon), dt = 900;
+  let previous = top.height, fixed = null;
+  for (let n = 1; n <= 16; n++) {
+    const deck = mixedLayerRun(carried, noon, column, 1, dt), again = mixedLayerRun(rediagnosed, noon, column, 1, dt);
+    const h = carried.mlmHeight[noon];
+    assert.ok(deck.mlmCover === 1 && again.mlmCover === 1, `step ${n}`);
+    assert.ok(h > previous && h - previous < dt * 0.02, `step ${n}: ${previous} → ${h}`);
+    assert.ok(Math.abs(deck.mlmTop - (h + top.offset)) < 1e-9 * h && again.mlmTop === 0, `step ${n}: mlmTop ${deck.mlmTop}`);
+    fixed ??= rediagnosed.mlmHeight[noon];
+    assert.equal(rediagnosed.mlmHeight[noon], fixed, `step ${n}: the re-diagnosed deck starts from the boundary-layer top`);
+    previous = h;
+  }
+  console.log(`over 4 h of a steady sinking column the carried inversion climbs from the boundary-layer top at ${top.height.toFixed(1)} m to ${previous.toFixed(1)} m; the re-diagnosed deck ends each step at ${fixed.toFixed(1)} m`);
+  assert.ok(previous > fixed + 10, `carried ${previous}, re-diagnosed ${fixed}`);
+  carried.mlmHeight[noon] = 0.5 * top.height;
+  mixedLayerRun(carried, noon, column, 1, dt);
+  assert.ok(carried.mlmHeight[noon] >= top.height, `a carried height below the boundary-layer top starts from the top: ${carried.mlmHeight[noon]}`);
+  core.diagnostics.piSigmaDot.fill(0);
+});
+
+test('the gates switch the deck through their running mean: a standing deck outlives failing gates by ln 2 × gateMemory and a new one waits about as long, deepening meanwhile no further than the inversion ceiling, and without its deck the carried height relaxes toward the boundary-layer top over heightMemory', () => {
+  const r = createRadiation(mesh, core, { subsidenceMemory: 1e-9 });
+  r.setTime(0);
+  const noon = brightest(r), dt = 3600, fresh = 1 - Math.exp(-dt / DAY), relaxed = Math.exp(-dt / DAY);
+  let gate = 0.5, column = mixedLayerColumn(0.4);
+  const top = boundaryLayerTop(column, noon);
+  for (let n = 1; n <= 48; n++) {
+    const deck = mixedLayerRun(r, noon, column, 1, dt);
+    gate += (1 - gate) * fresh;
+    assert.ok(Math.abs(r.mlmGate[noon] - gate) < 1e-12 && deck.mlmCover > 0 && deck.mlmTop > 0, `sinking step ${n}: gate ${r.mlmGate[noon]} against ${gate}`);
+  }
+  const standing = r.mlmHeight[noon];
+  column = mixedLayerColumn(-0.4);
+  let lastOn = 0, switchedOff = 0;
+  for (let n = 1; n <= 48; n++) {
+    const before = r.mlmHeight[noon], deck = mixedLayerRun(r, noon, column, 1, dt);
+    gate -= gate * fresh;
+    assert.ok(Math.abs(r.mlmGate[noon] - gate) < 1e-12, `rising step ${n}`);
+    assert.equal(deck.mlmTop > 0, gate > 0.5, `rising step ${n}: gate ${gate}`);
+    if (gate > 0.5) { lastOn = n; switchedOff = r.mlmHeight[noon]; continue; }
+    const expected = top.height + (before - top.height) * relaxed;
+    assert.ok(Math.abs(r.mlmHeight[noon] - expected) < 1e-9 * expected && deck.stratusFraction === 0, `rising step ${n}: height ${r.mlmHeight[noon]} against ${expected}`);
+  }
+  const fallen = r.mlmHeight[noon];
+  column = mixedLayerColumn(0.4);
+  let formed = 0;
+  for (let n = 1; n <= 48 && !formed; n++) {
+    const deck = mixedLayerRun(r, noon, column, 1, dt);
+    gate += (1 - gate) * fresh;
+    assert.equal(deck.mlmTop > 0, gate > 0.5, `sinking again, step ${n}`);
+    if (deck.mlmTop > 0) formed = n;
+  }
+  console.log(`hourly steps: after 48 h of sinking the carried inversion stands at ${standing.toFixed(0)} m over a ${top.height.toFixed(0)} m boundary layer; under ascent the deck stays ${lastOn} h, ending at ${switchedOff.toFixed(0)} m, and the height relaxes to ${fallen.toFixed(0)} m by 48 h; sinking again, the deck returns after ${formed} h`);
+  assert.ok(lastOn >= 12 && lastOn <= 24 && formed >= 12 && formed <= 36, `stayed ${lastOn} h, returned after ${formed} h`);
+  const settled = top.height + (switchedOff - top.height) * Math.exp(-(48 - lastOn) * dt / DAY);
+  const freeTroposphere = core.diagnostics.geopotential[(K - 4) * C + noon] / core.diagnostics.g - top.offset;
+  assert.ok(switchedOff > standing && switchedOff <= freeTroposphere - 1 + 1e-9, `under ascent the deck deepens to ${switchedOff} m, no further than 1 m under the midpoint of the first free-tropospheric layer at ${freeTroposphere} m`);
+  assert.ok(standing > top.height + 20 && Math.abs(fallen - settled) < 1e-9 * settled, `standing ${standing}, fallen ${fallen} against ${settled}`);
   core.diagnostics.piSigmaDot.fill(0);
 });
 
@@ -590,11 +662,12 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
   const forced = { stratusSubsidence: 0, minimumInversion: 0 }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55 };
   assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, 'acc030865b5b4b5ebefec6d4f9afbfc8');
-  assert.equal(modelDigest({ ...forced, stratusSolar: false, ...scatteringOnly }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
-  assert.equal(modelDigest({ ...forced, ...scatteringOnly }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
-  assert.notEqual(modelDigest(forced).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
-  const shadow = createRadiation(mesh, core, { subsidenceMemory: 1e-9 }), dark = createRadiation(mesh, core, { subsidenceMemory: 1e-9, stratusSolar: false });
-  const scattering = createRadiation(mesh, core, { subsidenceMemory: 1e-9, cloudSolarAbsorption: 0 });
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
+  assert.notEqual(modelDigest({ ...forced, ...REDIAGNOSED }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
+  assert.notEqual(modelDigest({ ...forced, ...scatteringOnly }).digest, 'f9b51ced150d8f4e0dfcca0045df345c', 'the carried height and the gate\'s memory change the deck');
+  const shadow = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED }), dark = createRadiation(mesh, core, { subsidenceMemory: 1e-9, stratusSolar: false, ...REDIAGNOSED });
+  const scattering = createRadiation(mesh, core, { subsidenceMemory: 1e-9, cloudSolarAbsorption: 0, ...REDIAGNOSED });
   shadow.setTime(0); dark.setTime(0); scattering.setTime(0);
   const noon = brightest(shadow), column = mixedLayerColumn(), lit = mixedLayerRun(shadow, noon, column), unlit = mixedLayerRun(dark, noon, column), half = mixedLayerRun(shadow, noon, column, 0.5);
   console.log(`at noon the mixed layer of the stable column holds ${(1000 * lit.mlmWater).toFixed(2)} g/m² after its step with the ${lit.mlmSolar.toFixed(2)} W/m² its deck's layer absorbs, ${(1000 * unlit.mlmWater).toFixed(2)} without, entraining ${(1000 * lit.mlmEntrainment).toFixed(3)} and ${(1000 * unlit.mlmEntrainment).toFixed(3)} mm/s`);

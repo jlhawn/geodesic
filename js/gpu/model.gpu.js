@@ -17,8 +17,9 @@ const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'root
 
 /*
  * The whole model on the GPU behind the CPU model's interface: `state`,
- * `seaIce.concentration` and the deck's running-mean subsidence
- * `radiation.mlmSubsidence` hold double-precision mirrors that only
+ * `seaIce.concentration` and the deck's carried state — the running-mean
+ * subsidence, inversion height and gate `radiation.mlmSubsidence`,
+ * `mlmHeight` and `mlmGate` — hold double-precision mirrors that only
  * `sync` refreshes from the device and `load` sends to it (the land's
  * soil, snow and vegetation only `land.serialize`, its runoff when the
  * diagnostics are taken), `step` only queues work, `beginFrame`
@@ -68,7 +69,7 @@ export async function createGpuModel(gridOrMesh, {
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence });
+    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate });
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6]);
     lastFrameTime = model.time;
@@ -78,10 +79,12 @@ export async function createGpuModel(gridOrMesh, {
 
   async function sync() {
     if (!dirty) return;
-    const [arrays, [concentration, mean]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.CONC, length: C }, { offset: gpu.layout.PH.MLMSUB, length: C }])]);
+    const [arrays, [concentration, mean, height, gate]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
     arrays.forEach((a, i) => state[i].set(a));
     seaIce.concentration.set(concentration);
     radiationCpu.mlmSubsidence.set(mean);
+    radiationCpu.mlmHeight.set(height);
+    radiationCpu.mlmGate.set(gate);
     dirty = false;
   }
   model.sync = sync;

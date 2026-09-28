@@ -25,7 +25,7 @@ import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState } from '../js/stateFile.module.js';
-import { savedSubsidence } from '../js/physics/regrid.module.js';
+import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -57,7 +57,7 @@ const { mesh, core, state, gpu } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), oceanDt = model.oceanEngine.everySteps * dt;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
 model.seaIce.load(state[6], saved.concentration ?? null);
-model.radiation.mlmSubsidence.set(savedSubsidence(saved, model));
+for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
 model.time = saved.time;
 model.load();
 model.ocean.load(saved.ocean, state[3], state[6]);
@@ -119,7 +119,7 @@ while (year < YEARS) {
   const landState = await model.land.serialize();
   writeFileSync(`${OUT}/${name}.partial`, encodeState({
     N, K: core.K, day: Math.round(model.time / 86400), time: model.time, terrain: !!model.surfaceGeopotential, oceanYears: year,
-    pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence,
+    pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight, mlmGate: model.radiation.mlmGate,
     ocean: { h: o.h, u: o.u, T: o.T, S: o.S, eta: o.eta }, land: landState,
   }));
   renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);

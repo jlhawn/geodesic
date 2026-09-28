@@ -201,3 +201,32 @@ test('standalone, absorbing the sun by its own shortwaveAbsorption formula rathe
   assert.ok(lit.every((d) => d.liquidWaterPath > 0.01 && d.cover > 0), 'the deck thins but never vanishes');
   assert.ok(within(0, 21, 24).every((d, n, all) => n === 0 || d.liquidWaterPath >= all[n - 1].liquidWaterPath), 'the deck thickens again after sunset');
 });
+
+test('carried from step to step and held above a 500 m boundary layer by `bound`, a cloudy RF01 layer climbs toward the RF01 balance near 850 m in about two days, where one restarted at the boundary-layer top every step stays at 500 m; `relax` brings a height back to the floor over heightMemory', () => {
+  const FLOOR = 500, STEP = 60, start = { h: FLOOR, thetaL: 287.5, qt: 9.5e-3 };
+  for (const closure of ['radiative', 'buoyancy']) {
+    const mlm = createMixedLayer({ ...CONSTANTS, closure }), forcing = rf01(mlm);
+    assert.ok(mlm.diagnose(start, forcing).liquidWaterPath > 0.02, 'the layer is cloudy at 500 m');
+    let carried = { ...start }, restarted = { ...start };
+    const hourly = [];
+    for (let n = 1; n <= 48 * 3600 / STEP; n++) {
+      const next = mlm.step(carried, forcing, STEP);
+      assert.ok(next.h >= carried.h - 1e-9 || carried.h === FLOOR, `${closure}: the height only climbs above the floor`);
+      carried = { ...next, h: mlm.bound(next.h, FLOOR) };
+      const again = mlm.step(restarted, forcing, STEP);
+      restarted = { ...again, h: FLOOR };
+      if ((n * STEP) % (6 * 3600) === 0) hourly.push(carried.h);
+    }
+    console.log(`${closure} closure from a cloudy 500 m layer, every 6 h: ${hourly.map((h) => h.toFixed(0)).join(', ')} m; restarted at the floor: ${restarted.h} m`);
+    assert.ok(hourly[1] > 560 && hourly[1] < 650, `${closure}: ${hourly[1]} m after 12 h`);
+    assert.ok(hourly[7] > 800 && hourly[7] < 900, `${closure}: ${hourly[7]} m after 48 h`);
+    assert.equal(restarted.h, FLOOR);
+  }
+  const mlm = createMixedLayer(CONSTANTS);
+  assert.equal(mlm.bound(4000, FLOOR), 3000);
+  assert.equal(mlm.bound(400, FLOOR), FLOOR);
+  assert.equal(mlm.bound(2000, 3500), 3500, 'the boundary layer wins over the cap');
+  assert.ok(Math.abs(mlm.relax(900, FLOOR, DAY) - (FLOOR + 400 / Math.E)) < 1e-9);
+  assert.equal(mlm.relax(0, FLOOR, DAY), 0, 'an unset height stays unset');
+  assert.equal(createMixedLayer({ ...CONSTANTS, heightMemory: 0 }).relax(900, FLOOR, 1), FLOOR);
+});

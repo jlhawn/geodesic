@@ -103,6 +103,15 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * (kg/m²) below and above it; and optionally solar or absorbedSolar
  * (above).
  *
+ * Carried height: a caller that keeps h from one step to the next (the
+ * coupled deck of radiation.module.js) holds it with
+ * `bound(h, floor, ceiling)` to [floor, min(ceiling, maximumHeight)]
+ * (3000 m) — floor, the depth of the surface-driven boundary layer the
+ * layer must at least span, winning over both caps — and, while the
+ * layer does not run, lets it fall back with `relax(h, floor, dt)`,
+ * h ← floor + (h − floor) e^(−dt/heightMemory) (1 day; 0 resets it to
+ * floor). A height of 0 is unset and stays so.
+ *
  * `dycomsLongwave` is the idealised longwave of the DYCOMS-II RF01 case
  * (Stevens et al. 2005): the net upward flux F0 e^(−κ W_above) +
  * F1 e^(−κ W_below) of a level with liquid paths W below and above it.
@@ -120,12 +129,14 @@ export const MIXED_LAYER_DEFAULTS = {
   maximumEfficiency: 1, maximumEntrainment: 0.02, minimumJump: 0.1,
   decouplingOnset: 0.15, decoupledRatio: 0.4, decoupledCover: 0.3,
   drizzle: false, dropletNumber: 100, cloudLevels: 20, shortwaveAbsorption: 0.4, maximumShortwaveAbsorption: 0.15,
+  heightMemory: 86400, maximumHeight: 3000,
 };
 
 export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHeat = LATENT_HEAT, referencePressure = 1e5, ...options } = {}) {
   const {
     closure, entrainmentEfficiency, evaporativeEnhancement, maximumEfficiency, maximumEntrainment, minimumJump,
     decouplingOnset, decoupledRatio, decoupledCover, drizzle, dropletNumber, cloudLevels, shortwaveAbsorption, maximumShortwaveAbsorption,
+    heightMemory, maximumHeight,
   } = { ...MIXED_LAYER_DEFAULTS, ...options };
   if (closure !== 'radiative' && closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${closure}`);
   const kappa = R / cp, delta = 1 / EPSILON - 1, Lc = latentHeat / cp;
@@ -310,5 +321,14 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
     return { h, thetaL: heat / h, qt: water / h };
   }
 
-  return { diagnose, step };
+  function bound(h, floor, ceiling = maximumHeight) {
+    return Math.max(floor, Math.min(maximumHeight, ceiling, h));
+  }
+
+  function relax(h, floor, dt) {
+    if (!(h > 0)) return h;
+    return heightMemory > 0 ? floor + (h - floor) * Math.exp(-dt / heightMemory) : floor;
+  }
+
+  return { diagnose, step, bound, relax, maximumHeight };
 }

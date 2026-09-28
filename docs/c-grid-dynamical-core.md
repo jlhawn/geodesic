@@ -1019,21 +1019,40 @@ ice–albedo feedbacks are all live from here.
 Marine stratocumulus is diagnosed, not condensed. By default
 (`mixedLayerDeck`) each ice-free sea column starts the bulk mixed-layer
 model of `js/physics/mixedLayer.module.js` (Lilly 1968; Bretherton &
-Wyant 1997; Stevens 2002) from its own state — h the boundary-layer
-top, θ_l and q_t the boundary layer's means, the first layer above h as
-the free troposphere, the subsidence −πσ̇/(ρg) at h, the column's bulk
-surface fluxes and the DYCOMS-II longwave on the model's own liquid
-water — advances it one physics step, and takes its cover (1 when
-coupled, down to 0.3 as the buoyancy-integral ratio decouples it) times
-1 − A and its water path, at most `stratusWaterMax`, as the deck's. It
-runs only in the stratocumulus regime, under a capping jump
-Δθ_v ≥ 2 K and a mean subsidence of at least 0.3 mm/s at h; elsewhere
-the column has no deck. The gate reads a ten-day running mean of the
-subsidence (`subsidenceMemory`), because the large-scale subsidence
-that defines the regime is a small residual of the ±10 mm/s synoptic
-swings in any one step's πσ̇ (the DYCOMS-II divergence is itself a
-monthly mean); the mean is saved with the state as `mlmSubsidence`
-and starts at 0 in a state saved without it. By day the mixed layer is
+Wyant 1997; Stevens 2002) from its own state — h the deck's inversion
+height carried from the last step (`prognosticHeight`), θ_l and q_t
+the means of the layers below it, the first layer above h as the free
+troposphere, the subsidence −πσ̇/(ρg) at h, the column's bulk surface
+fluxes and the DYCOMS-II longwave on the model's own liquid water —
+advances it one physics step, keeps the new h, and takes its cover (1
+when coupled, down to 0.3 as the buoyancy-integral ratio decouples it)
+times 1 − A and its water path, at most `stratusWaterMax`, as the
+deck's. The carried h never falls below the boundary-layer scheme's
+Richardson depth, never rises above 3 km nor past the midpoint of the
+layer above the lowest interface (above that depth) where θ_v jumps by
+2 K — on the 26-layer grid the free troposphere's own stratification
+across one of the thick layers above a kilometre passes the 2 K test,
+and an unbounded deck deepens into it — and relaxes back to the
+Richardson depth over a day (`mixedLayer.heightMemory`) while no deck
+runs; unset (0) it starts from that depth. Where the deck runs, the
+boundary layer's K-profile spans max(Richardson depth, h), so the
+column is mixed through the deck's layer. The deck runs only in the
+stratocumulus regime, under a capping jump Δθ_v ≥ 2 K and a mean
+subsidence of at least 0.3 mm/s at h. The subsidence test reads a
+ten-day running mean (`subsidenceMemory`), because the large-scale
+subsidence that defines the regime is a small residual of the
+±10 mm/s synoptic swings in any one step's πσ̇ (the DYCOMS-II
+divergence is itself a monthly mean), and the deck follows a one-day
+running mean G of the two tests' pass (`gateMemory`), running while
+G > 0.5: a standing deck outlives failing tests by 17 h and a new one
+waits as long, where the instantaneous Δθ_v test, hovering about 2 K,
+would switch it in most columns from one step to the next. The three
+running quantities are saved with the state as `mlmSubsidence`,
+`mlmHeight` and `mlmGate`, and a state saved without them starts from
+0, 0 (unset) and 0.5 (undecided); `prognosticHeight: false` with
+`gateMemory: 0` gives back the deck restarted each step from the
+Richardson depth behind the instantaneous tests, bit for bit in both
+engines. By day the mixed layer is
 heated by exactly the sunlight the column's radiation absorbs in the
 deck's layer, per unit deck area (the overcast column's absorption
 there less the clear column's; `stratusSolar`, false leaving the mixed
@@ -1041,7 +1060,7 @@ layer unlit while the column still absorbs), which weakens its
 buoyancy flux, so a deck thins and decouples by day (RF01 run
 standalone under a July sun at 30°N, absorbing 4 % per 100 g/m² by the
 mixed-layer model's own formula: 0.56–0.59 of its night-time water by
-mid-afternoon). Since the model restarts from the column every step,
+mid-afternoon). Since θ_l and q_t restart from the column every step,
 the deck feels one physics step of it, about 1.2 % less water after
 900 s under a high sun. With
 `mixedLayerDeck: false` the deck comes instead from an empirical fit:

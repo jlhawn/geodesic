@@ -142,3 +142,52 @@ test('the mixed-layer deck\'s running-mean subsidence comes back from a saved st
   assert.ok(legacy.length === C && legacy.every((x) => x === 0), 'a state saved without it starts from 0');
   assert.ok(savedSubsidence(null, target).every((x) => x === 0), 'a fresh start starts from 0');
 });
+
+test('the deck\'s carried height and gate survive a saved state: a model\'s fields come back through the binary file as saved, interpolated over the sea at another resolution with their starting values over land, and a state saved without them starts from an unset height and an undecided gate, never NaN', async () => {
+  const { savedDeckField, DECK_FIELDS } = await import('../js/physics/regrid.module.js');
+  const { syntheticTopography } = await import('../js/geography.module.js');
+  const { encodeState, decodeState } = await import('../js/stateFile.module.js');
+  const { initializeState } = await import('../js/physics/init.module.js');
+  assert.deepEqual(DECK_FIELDS, { mlmSubsidence: 0, mlmHeight: 0, mlmGate: 0.5 });
+  const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
+  const source = createModel(new Grid(6), { topography, ocean: false, radiation: { stratusSubsidence: 0, minimumInversion: 0 } }), target = createModel(new Grid(10), { topography, ocean: false });
+  const C = source.mesh.nCells, sea = (model, i) => !model.geography.land[i];
+  assert.ok(source.radiation.mlmHeight.every((h) => h === 0) && source.radiation.mlmGate.every((x) => x === 0.5), 'a fresh model starts unset and undecided');
+  initializeState(source, {}).forEach((values, a) => source.state[a].set(values));
+  for (let n = 0; n < 4; n++) source.step(900);
+  const { mlmSubsidence, mlmHeight, mlmGate } = source.radiation;
+  let carried = 0;
+  for (let i = 0; i < C; i++) if (mlmHeight[i] > 0) carried++;
+  assert.ok(carried > 0.1 * C, `the deck carries a height on ${carried} of ${C} cells`);
+  const [pi, theta, u, surfaceT, q, qc, ice] = source.state;
+  const bytes = encodeState({ N: 6, K: source.core.K, day: 1, time: 3600, pi, theta, u, surfaceT, q, qc, ice, mlmSubsidence, mlmHeight, mlmGate });
+  const saved = await decodeState(bytes);
+  const restored = createModel(new Grid(6), { topography, ocean: false });
+  for (const name of Object.keys(DECK_FIELDS)) restored.radiation[name].set(savedDeckField(saved, name, restored));
+  for (let i = 0; i < C; i++) {
+    assert.equal(restored.radiation.mlmHeight[i], Math.fround(mlmHeight[i]), `height of cell ${i}`);
+    assert.equal(restored.radiation.mlmGate[i], Math.fround(mlmGate[i]), `gate of cell ${i}`);
+  }
+  const exact = await decodeState(encodeState({ N: 6, mlmHeight, mlmGate }, { f64: ['mlmHeight', 'mlmGate'] }));
+  assert.deepEqual(savedDeckField(exact, 'mlmHeight', source), Float64Array.from(mlmHeight));
+  assert.deepEqual(savedDeckField(exact, 'mlmGate', source), Float64Array.from(mlmGate));
+  for (const name of ['mlmHeight', 'mlmGate']) {
+    const moved = savedDeckField(saved, name, target, source);
+    assert.equal(moved.length, target.mesh.nCells);
+    for (let n = 0; n < moved.length; n++) {
+      assert.ok(Number.isFinite(moved[n]), `${name} of target cell ${n}`);
+      if (!sea(target, n)) assert.equal(moved[n], DECK_FIELDS[name], `${name} of land cell ${n}`);
+      else if (name === 'mlmGate') assert.ok(moved[n] >= 0 && moved[n] <= 1, `gate of sea cell ${n}: ${moved[n]}`);
+      else assert.ok(moved[n] >= 0 && moved[n] <= 3000, `height of sea cell ${n}: ${moved[n]}`);
+    }
+  }
+  const legacy = await decodeState(encodeState({ N: 6, K: source.core.K, day: 1, time: 3600, pi, mlmSubsidence }));
+  assert.ok(savedDeckField(legacy, 'mlmHeight', source).every((h) => h === 0), 'a state saved without a height starts unset');
+  assert.ok(savedDeckField(legacy, 'mlmGate', source).every((x) => x === 0.5), 'a state saved without a gate starts undecided');
+  assert.ok(savedDeckField(null, 'mlmGate', target).every((x) => x === 0.5) && savedDeckField(null, 'mlmHeight', target).every((h) => h === 0), 'so does a fresh start');
+  const resumed = createModel(new Grid(6), { topography, ocean: false, radiation: { stratusSubsidence: 0, minimumInversion: 0 } });
+  [pi, theta, u, surfaceT, q, qc, ice].forEach((values, a) => resumed.state[a].set(values));
+  for (const name of Object.keys(DECK_FIELDS)) resumed.radiation[name].set(savedDeckField(legacy, name, resumed));
+  resumed.step(900); resumed.step(900);
+  assert.ok([...resumed.radiation.mlmHeight, ...resumed.radiation.mlmGate, ...resumed.radiation.mlmCover].every(Number.isFinite), 'a legacy state steps without NaN');
+});
