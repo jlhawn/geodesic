@@ -348,6 +348,58 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
 }
 `;
 
+/*
+ * The sea-cell branch of the physics kernel's surface update, shared as
+ * text so that a kernel with a prescribed net flux steps the same ice;
+ * it expects h, T, net, contrast, ocean, capacity, cover, snow0, dt and i.
+ */
+export const SEA_SURFACE_WGSL = `if (h <= 0.0) {
+    if (snow0 > 0.0) { T -= LFUS * snow0 / capacity; PH[PH_SNOW + i] = 0.0; }
+    T += dt * (net + ocean) / capacity;
+    var fresh = 0.0;
+    if (T < FREEZING) {
+      let volume = (FREEZING - T) * capacity / LATENT_ICE; let area = min(1.0, volume / LEADC);
+      if (area >= MIN_CONC && volume >= MIN_VOLUME) { h = volume / area; T = FREEZING; fresh = area; }
+    }
+    PH[PH_CONC + i] = fresh;
+  } else {
+    var snow = snow0;
+    let split = contrast - LEADX * (FREEZING - T);
+    let iceFlux = net - (1.0 - cover) * split; let waterFlux = net + cover * split;
+    let conduction = (FREEZING - T) / (max(h, HMIN) / COND + snow / (RHOSNOW * KSNOW));
+    T += dt * (iceFlux + conduction) / SKINC;
+    var thickness = h + dt * (conduction - ocean) / LATENT_ICE;
+    if (T > MELTING) {
+      var excess = (T - MELTING) * SKINC; T = MELTING;
+      let fromSnow = min(snow, excess / LFUS);
+      snow -= fromSnow; excess -= fromSnow * LFUS;
+      thickness -= excess / LATENT_ICE;
+    }
+    let leadHeat = (1.0 - cover) * (waterFlux + ocean) * dt;
+    let melted = max(0.0, -(cover * (thickness - h))) + max(0.0, leadHeat / LATENT_ICE);
+    let leadIce = max(0.0, -leadHeat / LATENT_ICE);
+    let remaining = cover * SKINC * (T - FREEZING) - LATENT_ICE * (cover * thickness - leadHeat / LATENT_ICE) - LFUS * cover * snow;
+    var volume = cover * thickness - leadHeat / LATENT_ICE;
+    let area = min(1.0, cover - melted / (2.0 * h) + (1.0 - cover) * leadIce / LEADC);
+    if (area < cover) { volume += (cover - area) * (snow / RHOICE - SKINC * (T - FREEZING) / LATENT_ICE); }
+    else if (area > cover) { T = FREEZING + cover * (T - FREEZING) / area; snow = cover * snow / area; }
+    if (area < MIN_CONC || volume < MIN_VOLUME) { T = FREEZING + remaining / capacity; h = 0.0; snow = 0.0; PH[PH_CONC + i] = 0.0; } else {
+      let spread = volume / area;
+      let flooded = max(0.0, snow - (RHOWATER - RHOICE) * spread) * RHOICE / RHOWATER;
+      snow -= flooded; h = spread + flooded / RHOICE; PH[PH_CONC + i] = area;
+    }
+    PH[PH_SNOW + i] = snow;
+  }`;
+
+/*
+ * Snow of `amount` kg/m² falling on sea cell i, on its ice or into its water.
+ */
+export const snowOnSea = (amount) => `if (IN[S_ICE + i] > 0.0) {
+      let conc = PH[PH_CONC + i]; let cover = select(conc, 1.0, conc <= 0.0);
+      PH[PH_SNOW + i] += ${amount};
+      IN[S_ICE + i] += (1.0 - cover) * (${amount}) / (RHOICE * cover);
+    } else { IN[S_TS + i] -= LFUS * (${amount}) / PH[PH_CAP + i]; }`;
+
 export const PHYSICS_KERNELS = {
   physics: `${MIXED_LAYER_WGSL}@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
@@ -536,43 +588,7 @@ export const PHYSICS_KERNELS = {
     }
     if (soil > cap) { PH[PH_RUNOFF + i] += soil - cap; soil = cap; }
     PH[PH_SOIL + i] = soil; PH[PH_SNOW + i] = snow; PH[PH_SURF + i] = surf;
-  } else if (h <= 0.0) {
-    if (snow0 > 0.0) { T -= LFUS * snow0 / capacity; PH[PH_SNOW + i] = 0.0; }
-    T += dt * (net + ocean) / capacity;
-    var fresh = 0.0;
-    if (T < FREEZING) {
-      let volume = (FREEZING - T) * capacity / LATENT_ICE; let area = min(1.0, volume / LEADC);
-      if (area >= MIN_CONC && volume >= MIN_VOLUME) { h = volume / area; T = FREEZING; fresh = area; }
-    }
-    PH[PH_CONC + i] = fresh;
-  } else {
-    var snow = snow0;
-    let split = contrast - LEADX * (FREEZING - T);
-    let iceFlux = net - (1.0 - cover) * split; let waterFlux = net + cover * split;
-    let conduction = (FREEZING - T) / (max(h, HMIN) / COND + snow / (RHOSNOW * KSNOW));
-    T += dt * (iceFlux + conduction) / SKINC;
-    var thickness = h + dt * (conduction - ocean) / LATENT_ICE;
-    if (T > MELTING) {
-      var excess = (T - MELTING) * SKINC; T = MELTING;
-      let fromSnow = min(snow, excess / LFUS);
-      snow -= fromSnow; excess -= fromSnow * LFUS;
-      thickness -= excess / LATENT_ICE;
-    }
-    let leadHeat = (1.0 - cover) * (waterFlux + ocean) * dt;
-    let melted = max(0.0, -(cover * (thickness - h))) + max(0.0, leadHeat / LATENT_ICE);
-    let leadIce = max(0.0, -leadHeat / LATENT_ICE);
-    let remaining = cover * SKINC * (T - FREEZING) - LATENT_ICE * (cover * thickness - leadHeat / LATENT_ICE) - LFUS * cover * snow;
-    var volume = cover * thickness - leadHeat / LATENT_ICE;
-    let area = min(1.0, cover - melted / (2.0 * h) + (1.0 - cover) * leadIce / LEADC);
-    if (area < cover) { volume += (cover - area) * (snow / RHOICE - SKINC * (T - FREEZING) / LATENT_ICE); }
-    else if (area > cover) { T = FREEZING + cover * (T - FREEZING) / area; snow = cover * snow / area; }
-    if (area < MIN_CONC || volume < MIN_VOLUME) { T = FREEZING + remaining / capacity; h = 0.0; snow = 0.0; PH[PH_CONC + i] = 0.0; } else {
-      let spread = volume / area;
-      let flooded = max(0.0, snow - (RHOWATER - RHOICE) * spread) * RHOICE / RHOWATER;
-      snow -= flooded; h = spread + flooded / RHOICE; PH[PH_CONC + i] = area;
-    }
-    PH[PH_SNOW + i] = snow;
-  }
+  } else ${SEA_SURFACE_WGSL}
   IN[S_TS + i] = T; IN[S_ICE + i] = h;
 }`,
   pblDiagnose: `@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -744,11 +760,7 @@ export const PHYSICS_KERNELS = {
   PH[PH_RAIN + i] += rained + convected; PH[PH_COND + i] += rained; PH[PH_CONV + i] += convected;
   let airT = IN[S_TH + bottom * C + i] * D[D_EXM + bottom * C + i];
   if (PH[PH_LAND + i] < 0.5 && airT < MELTING && rained + convected > 0.0) {
-    if (IN[S_ICE + i] > 0.0) {
-      let conc = PH[PH_CONC + i]; let cover = select(conc, 1.0, conc <= 0.0);
-      PH[PH_SNOW + i] += rained + convected;
-      IN[S_ICE + i] += (1.0 - cover) * (rained + convected) / (RHOICE * cover);
-    } else { IN[S_TS + i] -= LFUS * (rained + convected) / PH[PH_CAP + i]; }
+    ${snowOnSea('rained + convected')}
     IN[S_TH + bottom * C + i] += LFUS * (rained + convected) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
   }
   if (PH[PH_LAND + i] > 0.5) {
