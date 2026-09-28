@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, P0, CP_DRY, R_DRY } from '../js/dynamics/sigmaCore.module.js';
@@ -404,6 +405,81 @@ test('with stratusIndex: \'ectei\' the deck follows the entrainment index: a dry
     assert.equal(c.sameIndex, c.eisIndex);
   }
   assert.throws(() => createRadiation(mesh, core, { stratusIndex: 'lts' }));
+});
+
+function mixedLayerColumn() {
+  const pi = new Float64Array(C).fill(P0), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) {
+    const sigma = core.sigmaMid[k], mixed = sigma > 0.9;
+    theta[k * C + i] = mixed ? 289 : 298 + 60 * (0.9 - sigma);
+    q[k * C + i] = mixed ? 9e-3 : 1.5e-3 * Math.min(1, sigma / 0.8) ** 3;
+  }
+  core.diagnose(pi, theta, q, qc);
+  const { g, geopotential } = core.diagnostics;
+  const depth = Float64Array.from({ length: C }, (_, i) => geopotential[(K - 3) * C + i] / g + 100);
+  return { pi, theta, q, qc, depth, mixedDepth: (i) => depth[i] - geopotential[(K - 1) * C + i] / g };
+}
+
+test('the mixed-layer deck on a stable column over a warm sea carries the water path and cover of the mixed-layer model, advanced one step, in the same two-column blend', () => {
+  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true }), off = createRadiation(mesh, core, { stratus: false });
+  shadow.setTime(0); off.setTime(0);
+  let noon = 0;
+  for (let i = 0; i < C; i++) if (shadow.insolation(i) > shadow.insolation(noon)) noon = i;
+  const { pi, theta, q, qc, depth, mixedDepth } = mixedLayerColumn();
+  const bottom = (K - 1) * C + noon;
+  const run = (r, openSea, dt = 900, air = theta) => {
+    const flux = r.column(noon, P0, air, 292, 5, r.opticalDepth(mesh.latCell[noon]), r.insolation(noon), q[bottom], q, qc, 0.07, 0.06, 1, 1.5e-3, openSea, mixedDepth(noon), dt);
+    let layers = 0, scale = 0;
+    for (let k = 0; k < K; k++) { layers += r.layerFlux[k]; scale += Math.abs(r.layerFlux[k]); }
+    const latent = LATENT_HEAT * r.budget.evaporation;
+    return { ...r.budget, closure: Math.abs(layers + flux + latent - (r.budget.absorbedSolar - r.budget.outgoingLongwave)) / (scale + Math.abs(flux) + latent) };
+  };
+  const deck = run(shadow, 1), clear = run(off, 1), start = run(shadow, 1, 0), half = run(shadow, 0.5);
+  console.log(`289 K mixed layer under a 298 K free troposphere, 100 m above its third layer, over a 292 K sea: the mixed-layer model holds ${(1000 * deck.mlmWater).toFixed(1)} g/m² (${(1000 * start.mlmWater).toFixed(1)} before its step) on ${deck.mlmCover} of the cell, entraining ${(1000 * deck.mlmEntrainment).toFixed(2)} mm/s; noon absorbed solar ${deck.absorbedSolar.toFixed(0)} against ${clear.absorbedSolar.toFixed(0)} W/m²`);
+  assert.ok(deck.mlmWater > 0.03 && deck.mlmWater < 0.15 && deck.mlmCover === 1, `water ${deck.mlmWater}, cover ${deck.mlmCover}`);
+  assert.ok(deck.mlmEntrainment > 1e-3 && deck.mlmEntrainment < 1e-2, `entrainment ${deck.mlmEntrainment}`);
+  assert.ok(deck.stratus === deck.mlmWater && deck.stratusFraction === deck.mlmCover, 'the deck is the mixed-layer model\'s');
+  assert.ok(deck.mlmWater !== start.mlmWater && Math.abs(deck.mlmWater - start.mlmWater) < 0.05 * start.mlmWater, 'one step adjusts the water path');
+  assert.ok(half.stratusFraction === 0.5 * deck.stratusFraction && half.stratus === deck.stratus, 'half the cell under ice halves the cover');
+  assert.ok(deck.absorbedSolar < clear.absorbedSolar - 300, `absorbed solar ${deck.absorbedSolar} against ${clear.absorbedSolar}`);
+  assert.ok(deck.closure < EPS && Number.isFinite(deck.stabilityIndex));
+  const flat = Float64Array.from(theta);
+  for (let k = 0; k < K; k++) if (core.sigmaMid[k] > 0.8) flat[k * C + noon] = 289;
+  core.diagnose(pi, flat, q, qc);
+  const uncapped = run(shadow, 1, 900, flat);
+  assert.ok(uncapped.stratus === 0 && uncapped.stratusFraction === 0 && uncapped.mlmCover === 0, 'a layer without an inversion carries no deck');
+  core.diagnose(pi, theta, q, qc);
+  const out = [new Float64Array(C), new Float64Array(K * C), new Float64Array(K * E), new Float64Array(C), new Float64Array(K * C)];
+  shadow.apply([pi, theta, new Float64Array(K * E), new Float64Array(C).fill(292), q, qc], out, new Float64Array(C).fill(5), null, 0, C, null, null, null, new Float64Array(C).fill(1), depth, 900);
+  for (let i = 0; i < C; i++) {
+    assert.ok(shadow.mlmCover[i] === 1 && shadow.mlmWater[i] > 0.03 && shadow.mlmEntrainment[i] > 1e-3, `cell ${i}`);
+    assert.ok(shadow.stratus[i] === Math.min(0.15, shadow.mlmWater[i]) && shadow.stratusFraction[i] === shadow.mlmCover[i]);
+  }
+});
+
+function modelDigest(radiation) {
+  const model = createModel(new Grid(4), radiation ? { radiation } : {});
+  initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
+  for (let n = 0; n < 12; n++) model.step(900);
+  const hash = createHash('sha256');
+  for (const a of [...model.state, model.radiation.stratus, model.radiation.stratusFraction, model.radiation.surfaceFlux, model.radiation.outgoing]) hash.update(new Uint8Array(a.buffer, a.byteOffset, a.byteLength));
+  return { digest: hash.digest('hex').slice(0, 32), radiation: model.radiation };
+}
+
+test('with mixedLayerDeck: false the model is bit-identical to the engine before the mixed-layer deck; with it the deck follows the mixed-layer model', () => {
+  const before = '1a7a2bd66c1edabedde1875fd6868c4a';
+  assert.equal(modelDigest().digest, before);
+  assert.equal(modelDigest({ mixedLayerDeck: false }).digest, before);
+  const shadow = modelDigest({ mixedLayerDeck: true });
+  assert.notEqual(shadow.digest, before);
+  const { mlmCover, mlmWater, mlmEntrainment, stratusFraction } = shadow.radiation;
+  let covered = 0;
+  for (let i = 0; i < mlmCover.length; i++) {
+    assert.ok(mlmCover[i] >= 0 && mlmCover[i] <= 1 && mlmWater[i] >= 0 && mlmEntrainment[i] >= 0 && Number.isFinite(mlmWater[i] + mlmEntrainment[i]));
+    assert.ok(stratusFraction[i] <= mlmCover[i]);
+    if (stratusFraction[i] > 0) covered++;
+  }
+  assert.ok(covered > 0, 'some cells carry a mixed-layer deck');
 });
 
 function evaluate(radiation, i, pi, theta, surfaceT, q, qc) {

@@ -60,8 +60,9 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * integral). The layer is coupled below BW97's threshold 0.15
  * (`decouplingOnset`) and cloud cover is 1 there; it falls linearly to
  * the trade-cumulus cover `decoupledCover` (0.3) at Turton & Nicholls'
- * (1987) threshold 0.4 (`decoupledRatio`). Cover is 0 without cloud or
- * without an inversion (Δθ_v ≤ 0).
+ * (1987) threshold 0.4 (`decoupledRatio`). Cover is 0 without cloud.
+ * A layer whose virtual jump is at most `minimumJump` (0 by default) is
+ * uncapped: it neither entrains nor carries cover.
  *
  * Drizzle (off by default): the cloud-base rate of Comstock et al.
  * (2004), 0.37 (LWP/N)^1.75 mm/day with LWP in g/m² and the droplet
@@ -88,7 +89,7 @@ export function dycomsLongwave({ F0 = 70, F1 = 22, kappa = 85 } = {}) {
 export function createMixedLayer({
   cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHeat = LATENT_HEAT, referencePressure = 1e5,
   closure = 'radiative', entrainmentEfficiency = 0.2, evaporativeEnhancement = 25,
-  decouplingOnset = 0.15, decoupledRatio = 0.4, decoupledCover = 0.3,
+  decouplingOnset = 0.15, decoupledRatio = 0.4, decoupledCover = 0.3, minimumJump = 0,
   drizzle = false, dropletNumber = 100, cloudLevels = 20,
 } = {}) {
   if (closure !== 'radiative' && closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${closure}`);
@@ -182,7 +183,7 @@ export function createMixedLayer({
     const thetaAbove = value(forcing.thetaLAbove, h), qtAbove = value(forcing.qtAbove, h);
     const jumpTheta = thetaAbove - thetaL, jumpQ = qtAbove - qt;
     const above = saturate(thetaAbove, qtAbove, piH, {});
-    const jumpVirtual = virtualTheta(above, piH) - thetaVTop;
+    const jumpVirtual = virtualTheta(above, piH) - thetaVTop, capped = jumpVirtual > minimumJump;
 
     let sensible, evaporation;
     if (forcing.seaSurfaceTemperature !== undefined) {
@@ -201,7 +202,7 @@ export function createMixedLayer({
     const drizzleHeat = Lc / piB;
 
     let chi = 0, efficiency = entrainmentEfficiency;
-    if (cloudy && qlTop > 0 && jumpVirtual > 0) {
+    if (cloudy && qlTop > 0 && capped) {
       const saturatedJump = topA * jumpTheta + topB * jumpQ;
       const demand = topSlope * piH * jumpTheta - jumpQ;
       chi = demand > 0 ? Math.min(1, qlTop * (1 + topGamma) / demand) : 1;
@@ -231,7 +232,7 @@ export function createMixedLayer({
     }
 
     let entrainment = 0;
-    if (jumpVirtual > 0) {
+    if (capped) {
       if (closure === 'radiative') entrainment = Math.max(0, efficiency * divergence / (density * cp * jumpVirtual));
       else {
         const denominator = h * jumpVirtual - 2.5 * efficiency * I1;
@@ -248,7 +249,7 @@ export function createMixedLayer({
     const rest = integral - negative;
     const ratio = negative < 0 ? (rest > 0 ? -negative / rest : Infinity) : 0;
     const decoupled = ratio <= decouplingOnset ? 1 : ratio >= decoupledRatio ? decoupledCover : 1 - (1 - decoupledCover) * (ratio - decouplingOnset) / (decoupledRatio - decouplingOnset);
-    const cover = cloudy && lwp > 0 && jumpVirtual > 0 ? decoupled : 0;
+    const cover = cloudy && lwp > 0 && capped ? decoupled : 0;
 
     const thetaSource = entrainment * thetaAbove + subsidence * thetaL + heat0 - divergence / (density * cp) + drizzleHeat * rain / density;
     const waterSource = entrainment * qtAbove + subsidence * qt + water0 - rain / density;
