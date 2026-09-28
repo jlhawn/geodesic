@@ -1975,9 +1975,10 @@ E_c, whose season matches the record's first day, and its last year's
 file hands the ocean back: the next coupled segment continues from the
 snapshot at E_c with `OCEAN_FROM` set to it, which replaces the ocean,
 sea ice and sea surface (surface temperature, ice, concentration and
-the snow on the ice over the sea cells) and keeps the atmosphere, the
-land cells, the running-mean subsidence, the day and the time of the
-coupled snapshot (`js/oceanHandOff.module.js`). The coupled calendar
+the snow on the ice over the sea cells) and keeps the atmosphere with
+the deck's carried state (its running-mean subsidence, inversion height
+and gate), the land cells, the day and the time of the coupled snapshot
+(`js/oceanHandOff.module.js`). The coupled calendar
 therefore never counts the ocean-only years: the coupled run resumes at
 the day it stopped, and its days stay consistent with the season, since
 the ocean-only phase covers whole years of the same cycle. The

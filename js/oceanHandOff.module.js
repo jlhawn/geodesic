@@ -5,10 +5,11 @@
  * ocean-only spin-up (scripts/oceanSpinup.mjs) started from an earlier
  * state of the same coupled run. Over the sea (where `land` is 0) the
  * surface temperature, ice, concentration and the snow on the ice come
- * from `ocean`, as do all the ocean's layers; the atmosphere, the land
- * cells, the running-mean subsidence, the day and the time stay those of
- * `coupled`. `oceanYears`, the model years the ocean has spent alone,
- * adds up the two.
+ * from `ocean`, as do all the ocean's layers; the atmosphere with the
+ * mixed-layer deck's carried state (mlmSubsidence, mlmHeight, mlmGate),
+ * the land cells, the day and the time stay those of `coupled`.
+ * `oceanYears`, the model years the ocean has spent alone, adds up the
+ * two.
  */
 export function withOceanOf(coupled, ocean, land) {
   if (coupled.N !== ocean.N) throw new Error(`the ocean comes from N=${ocean.N}, the coupled state is N=${coupled.N}`);

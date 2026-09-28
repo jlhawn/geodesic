@@ -72,8 +72,8 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 test('the hand-off takes the sea surface, ice and ocean and keeps the atmosphere, the land and the clock', () => {
   const C = 5, land = Uint8Array.from([1, 0, 0, 1, 0]);
   const cells = (base) => Float32Array.from({ length: C }, (_, i) => base + i);
-  const coupled = { N: 1, day: 730, time: 730 * 86400, oceanYears: 100, pi: cells(1e5), surfaceT: cells(280), ice: cells(0), concentration: cells(0.1), mlmSubsidence: cells(0.01), ocean: { h: cells(1), T: cells(275) }, land: { soil: cells(10), snow: cells(1) } };
-  const alone = { N: 1, day: 37230, time: 37230 * 86400, oceanYears: 100, pi: cells(9e4), surfaceT: cells(270), ice: cells(2), concentration: cells(0.5), mlmSubsidence: cells(0.02), ocean: { h: cells(5), T: cells(271), Q: cells(7) }, land: { soil: cells(20), snow: cells(3) } };
+  const coupled = { N: 1, day: 730, time: 730 * 86400, oceanYears: 100, pi: cells(1e5), surfaceT: cells(280), ice: cells(0), concentration: cells(0.1), mlmSubsidence: cells(0.01), mlmHeight: cells(800), mlmGate: cells(0.2), ocean: { h: cells(1), T: cells(275) }, land: { soil: cells(10), snow: cells(1) } };
+  const alone = { N: 1, day: 37230, time: 37230 * 86400, oceanYears: 100, pi: cells(9e4), surfaceT: cells(270), ice: cells(2), concentration: cells(0.5), mlmSubsidence: cells(0.02), mlmHeight: cells(900), mlmGate: cells(0.7), ocean: { h: cells(5), T: cells(271), Q: cells(7) }, land: { soil: cells(20), snow: cells(3) } };
   const merged = withOceanOf(coupled, alone, land);
   for (let i = 0; i < C; i++) {
     const from = land[i] ? coupled : alone;
@@ -85,7 +85,7 @@ test('the hand-off takes the sea surface, ice and ocean and keeps the atmosphere
   assert.equal(merged.ocean.h, alone.ocean.h);
   assert.equal(merged.ocean.Q, alone.ocean.Q);
   assert.equal(merged.pi, coupled.pi);
-  assert.equal(merged.mlmSubsidence, coupled.mlmSubsidence);
+  for (const field of ['mlmSubsidence', 'mlmHeight', 'mlmGate']) assert.equal(merged[field], coupled[field], field);
   assert.equal(merged.land.soil, coupled.land.soil);
   assert.deepEqual([merged.day, merged.time, merged.oceanYears], [730, 730 * 86400, 200]);
   assert.throws(() => withOceanOf(coupled, { ...alone, N: 2 }, land), /N=2/);
@@ -100,6 +100,7 @@ test('an ocean-only run stopped inside a day and continued ends byte for byte wh
   const inside = await load(join(parts, 'alone_year0000_day001_step0004.bin'));
   assert.deepEqual([inside.oceanYears, inside.oceanDays, inside.oceanStep, inside.day], [0, 1, 4, 3]);
   assert.ok(inside.ocean.Q && inside.ocean.flux, 'the in-day file carries the restart arrays');
+  for (const field of ['mlmSubsidence', 'mlmHeight', 'mlmGate']) assert.ok(inside[field], `the in-day file carries ${field}`);
   assert.equal(run('oceanSpinup.mjs', { ...env, OUT: parts, STOP_AFTER_STEPS: String(PER_DAY + 16) }), 0);
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')).sort(), ['alone_year0001.bin', 'alone_year0001_day000_step0020.bin']);
   assert.equal(run('oceanSpinup.mjs', { ...env, OUT: parts }), 0);
@@ -136,6 +137,7 @@ test('a coupled segment stopped inside a day carries the recorded day across the
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')).sort(), ['c_day0000.bin', 'c_day0001_step0012.bin']);
   const inside = await load(join(parts, 'c_day0001_step0012.bin'));
   assert.deepEqual([inside.day, inside.step, inside.forcingSteps, inside.forcingOceanSteps, inside.forcingSeconds], [1, 12, 12, 3, 12 * 3600]);
+  for (const field of ['mlmSubsidence', 'mlmHeight', 'mlmGate']) assert.ok(inside[field], `the in-day checkpoint carries ${field}`);
   assert.match(text(join(parts, 'c.log')), /stopped by STOP_AFTER_STEPS=36 at day 1 and 12 of 24 steps/);
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, RECORD: join(parts, 'forcing') }), 0);
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')).sort(), ['c_day0000.bin', 'c_day0003.bin']);
