@@ -2543,6 +2543,21 @@ core (which does more work per cell through the adjoint gather lists).
    against exact solutions before any column physics is attached — is the
    mitigation: if M1 passes TC2/TC6/Galewsky, the mesh and operators are
    right, and any later regression is in M2/M3.
+8. **The layered ocean has no mesoscale-eddy parameterization.** Its
+   cells are 112 km at N=64 and 56 km at N=128, while the ocean's eddies
+   are 10–30 km across (eddy-permitting begins near 25 km), so the
+   eddy transport that flattens isopycnals across the Antarctic
+   Circumpolar Current and sets the Southern Ocean overturning — the path
+   by which warm deep water reaches the surface under the pack ice — is
+   missing; only the scale-selective ∇⁴ closure and a small diffusivity
+   act on the layers. The standard remedy is Gent–McWilliams (1990):
+   in an isopycnal model it is a diffusion of layer thickness (interface
+   height) along each layer with κ ≈ 500–1000 m²/s, tapered where the
+   layer outcrops or thins, with along-layer tracer diffusion (Redi)
+   implicit in the coordinate and a lateral diffusion for the mixed
+   layer; it costs one extra flux per edge per layer. Add it before the
+   next multi-century spin-up and judge it by the Southern Ocean column
+   (60–70S, 200–500 m, Earth +1 °C) and the Antarctic pack volume.
 
 ---
 
