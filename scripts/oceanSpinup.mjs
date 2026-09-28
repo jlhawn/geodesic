@@ -41,7 +41,7 @@ import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState } from '../js/stateFile.module.js';
-import { savedSubsidence } from '../js/physics/regrid.module.js';
+import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -87,7 +87,7 @@ if (stepBefore % everySteps) throw new Error(`${from} stopped at step ${stepBefo
 const baseDay = saved.day - doneBefore, baseTime = saved.time - doneBefore * 86400 - stepBefore * dt;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
 model.seaIce.load(state[6], saved.concentration ?? null);
-model.radiation.mlmSubsidence.set(savedSubsidence(saved, model));
+for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
 model.time = saved.time;
 model.load();
 model.ocean.load(saved.ocean, state[3], state[6]);
@@ -128,7 +128,7 @@ async function save(done, step, read = null) {
   writeFileSync(`${OUT}/${name}.partial`, encodeState({
     N, K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: !!model.surfaceGeopotential,
     oceanYears: Math.floor(done / DAYS_PER_YEAR), oceanDays: done, ...(step ? { oceanStep: step } : {}),
-    pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence,
+    pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight, mlmGate: model.radiation.mlmGate,
     ocean: o, land: landState, sstByYear: Float64Array.from(history, (x) => x ?? NaN),
   }, { f64: ['sstByYear'] }));
   renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);

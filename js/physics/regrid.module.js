@@ -1,4 +1,5 @@
 import { cellVector } from '../dynamics/operators.module.js';
+import { UNDECIDED } from './radiation.module.js';
 
 /*
  * Barycentric weights of p in the plane through unit vectors a, b, c:
@@ -220,25 +221,38 @@ export function regridConcentration(source, target, concentration, { land = null
 }
 
 /*
- * The running-mean subsidence of the mixed-layer deck: interpolated from
- * the source's sea cells, and 0 over the target's land, which never
+ * The mixed-layer deck's carried per-cell state and the value each field
+ * starts from in a state saved without it: the running-mean subsidence
+ * (0), the inversion height (0, unset) and the running-mean gate (0.5,
+ * undecided). See radiation.module.js.
+ */
+export const DECK_FIELDS = { mlmSubsidence: 0, mlmHeight: 0, mlmGate: UNDECIDED };
+
+/*
+ * One of the deck's fields regridded: interpolated from the source's sea
+ * cells, and its starting value over the target's land, which never
  * updates it.
  */
-export function regridSubsidence(source, target, subsidence) {
-  const out = regridCellField(source, target, Float64Array.from(subsidence), interpolationWeights(source.mesh, target.mesh.xCell), seaMask(source));
-  if (target.geography) for (let n = 0; n < out.length; n++) if (target.geography.land[n]) out[n] = 0;
+export function regridDeckField(source, target, values, name = 'mlmSubsidence') {
+  const out = regridCellField(source, target, Float64Array.from(values), interpolationWeights(source.mesh, target.mesh.xCell), seaMask(source));
+  if (target.geography) for (let n = 0; n < out.length; n++) if (target.geography.land[n]) out[n] = DECK_FIELDS[name];
   return out;
 }
 
+export const regridSubsidence = (source, target, subsidence) => regridDeckField(source, target, subsidence, 'mlmSubsidence');
+
 /*
- * The deck's running-mean subsidence for a model on `target`'s mesh from
- * a saved state: the saved field, regridded from `source` when the
- * resolutions differ, or 0 everywhere for a state saved without one.
+ * One of the deck's fields for a model on `target`'s mesh from a saved
+ * state: the saved field, regridded from `source` when the resolutions
+ * differ, or its starting value everywhere for a state saved without it.
  */
-export function savedSubsidence(saved, target, source = null) {
-  if (!saved || !saved.mlmSubsidence) return new Float64Array(target.mesh.nCells);
-  return saved.mlmSubsidence.length === target.mesh.nCells ? Float64Array.from(saved.mlmSubsidence) : regridSubsidence(source, target, saved.mlmSubsidence);
+export function savedDeckField(saved, name, target, source = null) {
+  const values = saved ? saved[name] : null;
+  if (!values) return new Float64Array(target.mesh.nCells).fill(DECK_FIELDS[name]);
+  return values.length === target.mesh.nCells ? Float64Array.from(values) : regridDeckField(source, target, values, name);
 }
+
+export const savedSubsidence = (saved, target, source = null) => savedDeckField(saved, 'mlmSubsidence', target, source);
 
 export function regridState(source, target, state, progress = null, { land = null } = {}) {
   const [pi, theta, u, surfaceT, q = null, qc = null, ice = null] = state;
