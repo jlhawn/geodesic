@@ -7,11 +7,11 @@
  * cell's elevation is the mean of its points and its land fraction the
  * share of them above sea level. A cell is land when that fraction
  * exceeds landThreshold, and along the polylines of landBridges (the
- * Panama isthmus by default) regardless, since a coarse mesh would
- * otherwise open a seaway where a narrow isthmus falls below the
- * threshold; the cells along the polylines of seaStraits are sea at
- * least their sill deep (Hormuz, Bab-el-Mandeb and Gibraltar by
- * default), so the marginal seas behind them stay connected. The
+ * Panama isthmus by default) when the mask would otherwise let a sea
+ * path cross them; and the cells along the polylines of seaStraits
+ * (Hormuz, Bab-el-Mandeb and Gibraltar by default) are sea at least
+ * their sill deep when the mask would otherwise close them. A mesh
+ * that resolves a bridge or strait on its own is left untouched. The
  * NARROW_STRAITS (Bosporus, the Danish straits) are defined but not
  * applied: a cell of 75–150 km opening a strait a few km wide would
  * exchange water far too freely. edgeOcean marks the edges between two ocean
@@ -87,29 +87,44 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
     elevation[i] = sum[i] / count[i];
     land[i] = landFraction[i] > landThreshold ? 1 : 0;
   }
-  for (const points of Object.values(landBridges)) {
+  const trace = (points, visit) => {
     let start = 0;
     for (let p = 0; p + 1 < points.length; p++) {
       const [la0, lo0] = points[p], [la1, lo1] = points[p + 1];
       const steps = Math.max(1, Math.ceil(Math.hypot(la1 - la0, (lo1 - lo0) * Math.cos(la0 * Math.PI / 180)) / 0.2));
       for (let n = 0; n <= steps; n++) {
         const la = (la0 + (la1 - la0) * n / steps) * Math.PI / 180, lo = (lo0 + (lo1 - lo0) * n / steps) * Math.PI / 180;
-        const i = nearest(Math.cos(la) * Math.cos(lo), Math.cos(la) * Math.sin(lo), Math.sin(la), start);
-        start = i; land[i] = 1; elevation[i] = Math.max(elevation[i], 1);
+        start = nearest(Math.cos(la) * Math.cos(lo), Math.cos(la) * Math.sin(lo), Math.sin(la), start);
+        visit(start);
       }
     }
+  };
+  const deg = 180 / Math.PI;
+  const seaPath = (points) => {
+    const lats = points.map((q) => q[0]), lons = points.map((q) => q[1]);
+    const box = [Math.min(...lats) - 4, Math.max(...lats) + 4, Math.min(...lons) - 4, Math.max(...lons) + 4];
+    const inBox = (i) => latCell[i] * deg >= box[0] && latCell[i] * deg <= box[1] && lonCell[i] * deg >= box[2] && lonCell[i] * deg <= box[3];
+    const cells = []; trace(points, (i) => cells.push(i));
+    const ends = [cells[0], cells[cells.length - 1]].map((c) => {
+      if (!land[c]) return c;
+      for (let m = 0; m < nEdgesOnCell[c]; m++) { const j = cellsOnCell[mesh.maxEdges * c + m]; if (!land[j]) return j; }
+      return -1;
+    });
+    if (ends[0] < 0 || ends[1] < 0) return false;
+    const seen = new Uint8Array(C), queue = [ends[0]]; seen[ends[0]] = 1;
+    while (queue.length) {
+      const i = queue.pop(); if (i === ends[1]) return true;
+      for (let m = 0; m < nEdgesOnCell[i]; m++) { const j = cellsOnCell[mesh.maxEdges * i + m]; if (j < 0 || seen[j] || land[j] || !inBox(j)) continue; seen[j] = 1; queue.push(j); }
+    }
+    return false;
+  };
+  for (const points of Object.values(landBridges)) {
+    if (!seaPath(points)) continue;
+    trace(points, (i) => { land[i] = 1; elevation[i] = Math.max(elevation[i], 1); });
   }
   for (const { sill, points } of Object.values(seaStraits)) {
-    let start = 0;
-    for (let p = 0; p + 1 < points.length; p++) {
-      const [la0, lo0] = points[p], [la1, lo1] = points[p + 1];
-      const steps = Math.max(1, Math.ceil(Math.hypot(la1 - la0, (lo1 - lo0) * Math.cos(la0 * Math.PI / 180)) / 0.2));
-      for (let n = 0; n <= steps; n++) {
-        const la = (la0 + (la1 - la0) * n / steps) * Math.PI / 180, lo = (lo0 + (lo1 - lo0) * n / steps) * Math.PI / 180;
-        const i = nearest(Math.cos(la) * Math.cos(lo), Math.cos(la) * Math.sin(lo), Math.sin(la), start);
-        start = i; land[i] = 0; elevation[i] = Math.min(elevation[i], -sill);
-      }
-    }
+    if (seaPath(points)) continue;
+    trace(points, (i) => { land[i] = 0; elevation[i] = Math.min(elevation[i], -sill); });
   }
   const edgeOcean = new Uint8Array(E);
   const coast = [];
