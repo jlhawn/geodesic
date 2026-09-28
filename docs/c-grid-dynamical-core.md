@@ -1854,6 +1854,61 @@ on the flow only through their label densities their temperature and
 salinity are passive, so the heat they absorb has no dynamical brake
 and the interior takes decades to centuries to come into balance.
 
+**Ocean-only spin-up.** Those decades are cheaper without the
+atmosphere. `RECORD=<dir>` on `scripts/spinup.mjs` writes one file a
+model day, `forcing-DDDD.bin` (`js/forcing.module.js`; 2.3 MB at N=64,
+so 0.8 GB a year), of the daily means of what the ocean and sea ice
+received: the stress on every edge as the ocean steps used it (the
+ocean's own stress buffer, after the ice's transmission), the net
+surface heat flux with its absorbed and downward shortwave and the
+sensible heat, evaporation, precipitation, the snow falling on the sea,
+each land cell's runoff, and the surface temperature, SST (freezing
+under ice), ice thickness and concentration. A kernel sums them after
+every step (`createForcingRecorder`, `js/gpu/forcing.gpu.js`); rain is
+the change of the running CONV + COND totals and runoff the change of
+the land's runoff tally over the day.
+
+`scripts/oceanSpinup.mjs` loads a coupled snapshot (STATE) into the GPU
+model and loops the first DAYS_PER_YEAR (365) recorded days over it for
+YEARS years, never stepping the atmosphere (`createForcedOcean`). At
+every atmosphere step of dt = 1350·16/N s a kernel runs the physics
+kernel's own sea-cell surface update, spliced in as the same WGSL text
+(`SEA_SURFACE_WGSL`, and `snowOnSea` for the snowfall), with the
+recorded net flux in place of the computed one; the lead/ice split
+takes the recorded downward shortwave times the ice's diffuse albedo
+contrast. Every fourth step takes the recorded freshwater through the
+ocean's accumulation and runoff routing and steps the ocean as
+`advanceCoupled` does, with the recorded stress copied into its stress
+buffer. Surface temperature, ice and concentration stay in the
+atmosphere's buffers, as in the coupled model. A prescribed flux does
+not answer the surface temperature, so the open water is restored to
+the day's recorded SST by −RESTORE·(SST − SST_rec), RESTORE = 30 W/m²/K
+by default (about 95 days on a 60 m mixed layer); a partly iced cell's
+leads take it per unit lead area, and the ice itself only the recorded
+flux. Replaying two recorded days at N=6 from the same state ends
+within 0.02 K of the coupled run's SST everywhere
+(`test/oceanSpinup.test.mjs`). A daily mean has no diurnal cycle, so
+the mixed layer's Monin–Obukhov detrainment, which answers the day's
+warming, differs: after those two days the mixed layer is up to 10 m
+off and a few thin interior layers the coupled run filled stay empty.
+
+At each year's end the driver saves `<TAG>_yearYYYY.bin`, a full state:
+the atmosphere and land of STATE as loaded (the land keeping the snow
+on the sea ice), the spun-up ocean, surface temperature, ice and
+concentration, and the time advanced by the years run, so that with a
+365-day cycle recorded from STATE's day the season still matches the
+atmosphere. It logs the ocean line of spinup.mjs, the 60–70S mean
+temperature over 0–60, 60–200, 200–500 and 500–1000 m, the SST and
+ice extent against the recorded last day, and the wall time, and
+continues from the newest year file when restarted. A coupled run
+starts from it as a snapshot: copied into the coupled run's OUT as
+`<tag>_dayDDDD.bin` (DDDD its `day`), `scripts/spinup.mjs` continues
+from it with the carried atmosphere, which then adjusts to the new
+surface; LAND_FROM is not needed, since the land is already in the
+file. At N=64, with the N=128 spin-up sharing the GPU, a looped day took
+3.1–4.2 s against 9 s for a coupled day under the same load (4.5 s
+alone); nearly all of it is the ocean step itself.
+
 **Density-consistent interior.** After the mixed-layer exchanges, an
 interior layer more than 0.01 kg/m³ from its label mixes in water from
 the nearest layer lying clearly (by more than 0.01) on the other side of
@@ -2143,9 +2198,11 @@ js/
     device.module.js         M15: WebGPU device (Dawn in Node, navigator.gpu in the page) and buffer helpers
     core.gpu.js              M15: layouts, dynamics kernels, RK4 and closures, full-step orchestration
     physics.gpu.js           M15: column physics and adjustment kernels
+    forcing.gpu.js           M18: the forcing recorder and the ocean and sea ice stepped alone under it
     model.gpu.js             M15: the GPU model behind the CPU model's interface
     profile.module.js        the model dialog's GPU profile: step times and kernel timestamps
   model.module.js           assembles core + physics, RK4 step, diagnostics
+  forcing.module.js         M18: one recorded day of the ocean's surface forcing, encoded and decoded
   parallel.module.js        M6: the same model stepped on worker threads
   parallel.worker.js        M6: one worker's block of every phase
   threads.module.js         M6: worker_threads / Web Worker primitives behind the engine
@@ -2163,6 +2220,7 @@ js/
 scripts/
   spinup.mjs, spinup.sh     one spin-up segment on the GPU from the newest snapshot, and a loop of them
   pairedSpinup.sh           resolutions spun up in step, one at a time, compared every EVERY days
+  oceanSpinup.mjs           the ocean and sea ice spun up alone under a recorded year of forcing
   compareStates.mjs         saved states side by side as a markdown table
   splitState.mjs            a saved state gzipped into parts for the page
 test/
