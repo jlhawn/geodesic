@@ -35,11 +35,15 @@
 // STOP_AFTER_STEPS (for tests: stop as on SIGTERM once this many steps
 // have run). A fresh start can take from saved states: FROM, a state at
 // the same N, gives the ocean, the land, the sea-surface temperature of
-// its mixed layer and the land-surface temperature, while the atmosphere
-// (with the mixed-layer deck's carried state) and the sea ice start fresh
-// on the run's grid and the clock at day 0; ICE_FROM=1 takes FROM's sea
-// ice (thickness, concentration, snow, skin temperature) too; LAND_FROM, a
-// state at any N, then gives the land.
+// its mixed layer and the land-surface temperature and, with
+// ATMOSPHERE=carry (the default), its atmosphere (pi, theta, u, q, qc and
+// the surface temperature, which fresh sea ice takes as its skin) and the
+// mixed-layer deck's carried state, remapped onto the run's sigma grid
+// when FROM is on another (remapLevels in js/physics/regrid.module.js);
+// ATMOSPHERE=fresh starts the atmosphere and the deck from the initial
+// state on the run's grid. The sea ice starts fresh and the clock at day
+// 0; ICE_FROM=1 takes FROM's sea ice (thickness, concentration, snow, skin
+// temperature) too; LAND_FROM, a state at any N, then gives the land.
 // scripts/spinup.sh runs segments back to back, scripts/asyncSpinup.sh
 // alternates them with ocean-only spin-ups.
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs';
@@ -51,7 +55,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
 import { sigmaInterfaces, sigmaGridName } from '../js/dynamics/sigmaCore.module.js';
-import { savedDeckField, DECK_FIELDS, regridLand } from '../js/physics/regrid.module.js';
+import { savedDeckField, DECK_FIELDS, regridLand, remapLevels } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { createForcingRecorder } from '../js/gpu/forcing.gpu.js';
@@ -71,6 +75,8 @@ const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
 const RADIATION = JSON.parse(process.env.RADIATION ?? '{}');
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
+const ATMOSPHERE = process.env.ATMOSPHERE ?? 'carry';
+if (ATMOSPHERE !== 'carry' && ATMOSPHERE !== 'fresh') throw new Error(`ATMOSPHERE is carry or fresh, not ${ATMOSPHERE}`);
 const log = (line) => { console.log(line); appendFileSync(`${OUT}/${TAG}.log`, line + '\n'); };
 const stop = stopOnSignal(log), hook = syncAfterSave(process.env.SYNC_CMD, log);
 const positionOf = (file) => { const [, day, step] = file.match(/_day(\d+)(?:_step(\d+))?\.bin$/); return Number(day) * 1e6 + Number(step ?? 0); };
@@ -117,8 +123,17 @@ if (saved) {
   initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => state[a].set(values));
   for (let i = 0; i < C; i++) if (model.geography.land[i]) state[6][i] = 0;
   const from = process.env.FROM ? await decodeState(new Uint8Array(readFileSync(process.env.FROM))) : null, iceFrom = !!from && process.env.ICE_FROM === '1';
+  const fromLevels = from ? savedLevels(from) : null, fromGrid = from ? sigmaGridName(fromLevels) ?? 'a saved grid' : null;
+  let atmosphere = `a fresh atmosphere on ${grid}`;
   if (from) {
     if (from.N !== N) throw new Error(`FROM ${process.env.FROM} is N=${from.N}, not ${N}`);
+    if (ATMOSPHERE === 'carry') {
+      const { pi, theta, u, q, qc } = remapLevels(fromLevels, levels, from, mesh);
+      [pi, theta, u, from.surfaceT, q, qc].forEach((values, a) => { if (values) state[a].set(values); });
+      for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(from, field, model));
+      const same = fromLevels.length === levels.length && fromLevels.every((sigma, k) => sigma === levels[k]);
+      atmosphere = `its atmosphere${same ? '' : ` remapped from ${fromGrid}`} on ${grid} and its deck`;
+    }
     const land = model.geography.land;
     for (let i = 0; i < C; i++) {
       if (land[i]) { state[3][i] = from.surfaceT[i]; continue; }
@@ -132,7 +147,7 @@ if (saved) {
   if (from) {
     model.ocean.load(from.ocean, state[3], state[6]);
     model.land.load({ soil: Float64Array.from(from.land.soil), snow: Float64Array.from(from.land.snow), ...(from.land.vegetation ? { vegetation: Float64Array.from(from.land.vegetation) } : {}), ...(from.land.surface ? { surface: Float64Array.from(from.land.surface) } : {}) }, iceFrom ? state[6] : null);
-    log(`seeded from ${process.env.FROM} (N=${from.N}, day ${from.day}, ${sigmaGridName(savedLevels(from)) ?? 'a saved grid'}): the ocean, the land (soil, snow, ${from.land.vegetation ? 'vegetation, ' : ''}${from.land.surface ? 'surface water, ' : ''}surface temperature) and the sea-surface temperature of its mixed layer, ${iceFrom ? 'and its sea ice (thickness, concentration, snow, skin temperature)' : 'with fresh sea ice'}; a fresh atmosphere on ${grid}; the clock at day 0`);
+    log(`seeded from ${process.env.FROM} (N=${from.N}, day ${from.day}, ${fromGrid}): the ocean, the land (soil, snow, ${from.land.vegetation ? 'vegetation, ' : ''}${from.land.surface ? 'surface water, ' : ''}surface temperature) and the sea-surface temperature of its mixed layer, ${iceFrom ? 'and its sea ice (thickness, concentration, snow, skin temperature)' : 'with fresh sea ice'}; ${atmosphere}; the clock at day 0`);
   } else {
     model.ocean.initialize(state[3], state[6]);
     model.land.initialize();

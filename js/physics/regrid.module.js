@@ -291,3 +291,45 @@ export function regridState(source, target, state, progress = null, { land = nul
   }
   return out;
 }
+
+/*
+ * A state carried onto another sigma grid over the same columns,
+ * conservatively in σ. Each source layer holds its value uniformly
+ * between its interfaces, and each target layer takes the σ-thickness-
+ * weighted mean of the source layers it overlaps, so the column integral
+ * Σ dσ·value of theta, q, qc in every cell and of u on every edge is
+ * kept. A target layer inside a single source layer takes that layer's
+ * value as it is: where the grids share both interfaces of a layer it
+ * copies through bit for bit. pi, the surface pressure, is per column
+ * and carries over unchanged; q and qc are clipped at zero as the model
+ * clips them. Interfaces run top (0) to ground (1) as sigmaInterfaces
+ * gives them; identical grids return copies.
+ */
+export function remapLevels(sourceLevels, targetLevels, { pi, theta, q = null, qc = null, u }, mesh) {
+  const S = sourceLevels.length - 1, K = targetLevels.length - 1, C = mesh.nCells, E = mesh.nEdges;
+  const copy = (field) => (field ? Float64Array.from(field) : null);
+  if (S === K && sourceLevels.every((sigma, k) => sigma === targetLevels[k])) return { pi: copy(pi), theta: copy(theta), q: copy(q), qc: copy(qc), u: copy(u) };
+  if (sourceLevels[0] !== targetLevels[0] || sourceLevels[S] !== targetLevels[K]) throw new Error(`the grids span σ ${sourceLevels[0]}–${sourceLevels[S]} and ${targetLevels[0]}–${targetLevels[K]}`);
+  const overlaps = [];
+  for (let t = 0; t < K; t++) {
+    const row = [];
+    let total = 0;
+    for (let j = 0; j < S; j++) {
+      const width = Math.min(targetLevels[t + 1], sourceLevels[j + 1]) - Math.max(targetLevels[t], sourceLevels[j]);
+      if (width > 0) { row.push([j, width]); total += width; }
+    }
+    overlaps.push(row.map(([j, width]) => [j, width / total]));
+  }
+  const remap = (field, count, clip) => {
+    if (!field) return null;
+    const out = new Float64Array(K * count);
+    overlaps.forEach((row, t) => {
+      const target = out.subarray(t * count, (t + 1) * count);
+      if (row.length === 1) { const j = row[0][0]; for (let n = 0; n < count; n++) target[n] = field[j * count + n]; return; }
+      for (const [j, weight] of row) for (let n = 0; n < count; n++) target[n] += weight * field[j * count + n];
+    });
+    if (clip) for (let x = 0; x < out.length; x++) if (out[x] < 0) out[x] = 0;
+    return out;
+  };
+  return { pi: copy(pi), theta: remap(theta, C, false), q: remap(q, C, true), qc: remap(qc, C, true), u: remap(u, E, false) };
+}

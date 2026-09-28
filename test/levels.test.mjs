@@ -9,7 +9,8 @@ import { createModel } from '../js/model.module.js';
 import { createParallelModel } from '../js/parallel.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography, topographyFromInt16 } from '../js/geography.module.js';
-import { regridState, savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
+import { regridState, savedDeckField, remapLevels, DECK_FIELDS } from '../js/physics/regrid.module.js';
+import { buildMesh } from '../js/mesh.module.js';
 import { sigmaInterfaces, sigmaGridName, standardHeight, standardSigma, SIGMA_GRIDS } from '../js/dynamics/sigmaCore.module.js';
 import { encodeState, decodeState, savedLevels } from '../js/stateFile.module.js';
 
@@ -129,6 +130,60 @@ test('a bl34 state regrids across resolutions onto bl34 and not onto cam26', () 
   assert.throws(() => regridState(coarse, other, [pi, theta, new Float64Array(K * E), new Float64Array(C)]), /layer counts differ: 34 vs 27/);
 });
 
+test('remapLevels carries a state between sigma grids conservatively: each column keeps Σ dσ·value of theta, q, qc and u, a layer inside one source layer takes its value exactly, so the layers above the 2.4 km interface copy through, pi is untouched, q and qc are clipped at zero, and a grid onto itself is the identity', () => {
+  const mesh = buildMesh(new Grid(2)), C = mesh.nCells, E = mesh.nEdges;
+  let seed = 7;
+  const draw = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const layered = (levels, count, f) => Float64Array.from({ length: (levels.length - 1) * count }, (_, x) => f(levels[Math.floor(x / count) + 1], draw()));
+  const stateOn = (levels) => ({
+    pi: Float64Array.from({ length: C }, () => 9e4 + 1e4 * draw()),
+    theta: layered(levels, C, (sigma, r) => 250 + 100 * (1 - sigma) + 5 * r),
+    q: layered(levels, C, (sigma, r) => 0.02 * sigma ** 3 * r),
+    qc: layered(levels, C, (sigma, r) => (r > 0.7 ? 1e-4 * r : 0)),
+    u: layered(levels, E, (sigma, r) => 40 * (r - 0.5)),
+  });
+  const fields = [['theta', C], ['q', C], ['qc', C], ['u', E]];
+  for (const [from, to, names] of [[cam, bl, 'cam26 → bl34'], [bl, cam, 'bl34 → cam26']]) {
+    const state = stateOn(from), out = remapLevels(from, to, state, mesh), K = to.length - 1;
+    assert.deepEqual(out.pi, state.pi);
+    assert.notEqual(out.pi, state.pi);
+    let worst = 0, copied = 0, mixed = 0;
+    for (const [name, count] of fields) {
+      assert.equal(out[name].length, K * count, `${names}: ${name} on the target grid`);
+      for (let n = 0; n < count; n++) {
+        let before = 0, after = 0, scale = 0;
+        for (let k = 0; k < from.length - 1; k++) { const w = (from[k + 1] - from[k]) * state[name][k * count + n]; before += w; scale += Math.abs(w); }
+        for (let k = 0; k < K; k++) after += (to[k + 1] - to[k]) * out[name][k * count + n];
+        worst = Math.max(worst, Math.abs(after - before) / Math.max(scale, 1e-300));
+      }
+      for (let t = 0; t < K; t++) {
+        const inside = [...Array(from.length - 1).keys()].filter((j) => Math.min(to[t + 1], from[j + 1]) > Math.max(to[t], from[j]));
+        for (let n = 0; n < count; n++) {
+          const value = out[name][t * count + n], sources = inside.map((j) => state[name][j * count + n]);
+          if (inside.length === 1) { assert.equal(value, sources[0], `${names}: ${name} layer ${t} at ${n} copies layer ${inside[0]}`); copied++; continue; }
+          assert.ok(value >= Math.min(...sources) - 1e-12 * Math.abs(value) && value <= Math.max(...sources) + 1e-12 * Math.abs(value), `${names}: ${name} layer ${t} at ${n} is a mean of layers ${inside}`);
+          mixed++;
+        }
+      }
+      for (let x = 0; x < 22 * count; x++) assert.equal(out[name][x], state[name][x], `${names}: ${name} above 2.4 km at ${x}`);
+    }
+    console.log(`${names}: column Σ dσ·value kept to ${worst.toExponential(1)} of Σ dσ·|value|; ${copied} values copied from one layer, ${mixed} means of several`);
+    assert.ok(worst < 1e-12, `${names}: a column integral moved by ${worst} of its magnitude`);
+  }
+
+  for (const levels of [cam, bl]) {
+    const state = stateOn(levels), same = remapLevels(levels, Float64Array.from(levels), state, mesh);
+    for (const name of ['pi', 'theta', 'q', 'qc', 'u']) { assert.deepEqual(same[name], state[name]); assert.notEqual(same[name], state[name]); }
+  }
+  const drying = stateOn(cam);
+  drying.q.fill(-1e-6);
+  drying.qc.fill(-1e-9);
+  const clipped = remapLevels(cam, bl, drying, mesh);
+  assert.ok(clipped.q.every((q) => q === 0) && clipped.qc.every((qc) => qc === 0), 'q and qc are clipped at zero');
+  assert.equal(remapLevels(cam, bl, { pi: drying.pi, theta: drying.theta, u: drying.u }, mesh).q, null, 'a state without q remaps without it');
+  assert.throws(() => remapLevels(cam, bl.subarray(1), drying, mesh), /the grids span σ 0–1 and 0\.00219.*–1/);
+});
+
 test('the worker-thread engine on bl34 reproduces the single-thread step bit for bit', async () => {
   const serial = createModel(new Grid(6), { levels: bl });
   const parallel = await createParallelModel(new Grid(6), { levels: bl }, 2);
@@ -162,7 +217,7 @@ test('the full model on bl34 steps alike on the CPU and the GPU, over a continen
   gpu.destroy();
 });
 
-test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land with a fresh atmosphere at day 0, with fresh sea ice unless ICE_FROM, checkpoints it inside a day on bl34 and resumes it there alone, and refuses a state at another N', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
+test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0, carrying its atmosphere and deck (remapped onto bl34, or as they are onto cam26) unless ATMOSPHERE=fresh, with fresh sea ice unless ICE_FROM, checkpoints it inside a day on bl34 and resumes it there alone, and refuses a state at another N', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
   const root = new URL('..', import.meta.url).pathname, N = 6, dir = mkdtempSync(join(tmpdir(), 'levels-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const source = await createGpuModel(new Grid(N), { topography: topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer) });
@@ -175,15 +230,18 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land with a f
   const ocean = await source.ocean.serialize(), soil = await source.land.serialize();
   const [pi, theta, u, surfaceT, q, qc] = state, ice = Float64Array.from(state[6], (h) => (h > 0 ? 0.25 : 0)), concentration = Float64Array.from(ice, (h) => (h > 0 ? 0.6 : 0));
   for (let i = 0; i < C; i++) if (!land[i] && !(ice[i] > 0)) ocean.T[i] += 2;
+  for (let i = 0; i < C; i++) pi[i] *= 1.005;
+  for (let x = 0; x < theta.length; x++) { theta[x] += 4; q[x] *= 0.6; }
+  const mlmHeight = Float64Array.from(land, (l) => (l ? DECK_FIELDS.mlmHeight : 700)), mlmGate = Float64Array.from(land, (l) => (l ? DECK_FIELDS.mlmGate : 0.9));
   const vegetation = Float64Array.from(soil.vegetation, (v) => (v > 0 ? 0.8 : 0));
   const from = join(dir, 'src_day0100.bin');
-  writeFileSync(from, encodeState({ N, K: source.core.K, day: 100, time: 100 * 86400, terrain: true, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence: source.radiation.mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: { ...soil, vegetation } }));
+  writeFileSync(from, encodeState({ N, K: source.core.K, day: 100, time: 100 * 86400, terrain: true, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence: source.radiation.mlmSubsidence, mlmHeight, mlmGate, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: { ...soil, vegetation } }));
   source.destroy();
   const run = (env) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), OUT: dir, FROM: from, DAYS: '1', MINUTES: '100', ...env }, encoding: 'utf8', stdio: 'pipe' });
   const read = async (name) => decodeState(new Uint8Array(readFileSync(join(dir, name))));
 
   const log = run({ TAG: 'fine', LEVELS: 'bl34' });
-  assert.match(log, /seeded from .*src_day0100\.bin \(N=6, day 100, cam26\).*with fresh sea ice; a fresh atmosphere on bl34 \(34 layers\); the clock at day 0/);
+  assert.match(log, /seeded from .*src_day0100\.bin \(N=6, day 100, cam26\).*with fresh sea ice; its atmosphere remapped from cam26 on bl34 \(34 layers\) and its deck; the clock at day 0/);
   const fine = await read('fine_day0001.bin');
   assert.equal(fine.day, 1);
   assert.equal(fine.time, 86400);
@@ -211,7 +269,28 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land with a f
   assert.equal(resumed.K, 34);
   assert.deepEqual(savedLevels(resumed), bl);
 
-  assert.match(run({ TAG: 'iced', ICE_FROM: '1' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); a fresh atmosphere on cam26 \(27 layers\)/);
+  const origin = await read('src_day0100.bin'), areas = mesh.areaCell;
+  const areaMean = (values) => { let sum = 0, area = 0; for (let i = 0; i < C; i++) { sum += areas[i] * values[i]; area += areas[i]; } return sum / area; };
+  const massMean = (saved, name) => {
+    const levels = savedLevels(saved);
+    let sum = 0, mass = 0;
+    for (let i = 0; i < C; i++) { const m = areas[i] * saved.pi[i]; mass += m; for (let k = 0; k < levels.length - 1; k++) sum += m * (levels[k + 1] - levels[k]) * saved[name][k * C + i]; }
+    return sum / mass;
+  };
+  const seaMean = (values) => { let sum = 0, n = 0; for (let i = 0; i < C; i++) if (!land[i]) { sum += values[i]; n++; } return sum / n; };
+  assert.match(run({ TAG: 'carried', LEVELS: 'bl34', STOP_AFTER_STEPS: '4' }), /its atmosphere remapped from cam26 on bl34 \(34 layers\) and its deck; the clock at day 0/);
+  assert.match(run({ TAG: 'freshair', LEVELS: 'bl34', STOP_AFTER_STEPS: '4', ATMOSPHERE: 'fresh' }), /with fresh sea ice; a fresh atmosphere on bl34 \(34 layers\); the clock at day 0/);
+  assert.throws(() => run({ TAG: 'warm', ATMOSPHERE: 'warm' }), /ATMOSPHERE is carry or fresh, not warm/);
+  const carried = await read('carried_day0000_step0004.bin'), freshAir = await read('freshair_day0000_step0004.bin');
+  const differences = [carried, freshAir].map((x) => ({ pi: areaMean(x.pi) - areaMean(origin.pi), theta: massMean(x, 'theta') - massMean(origin, 'theta'), water: massMean(x, 'q') / massMean(origin, 'q'), gate: seaMean(x.mlmGate) }));
+  console.log(`four hours on bl34 from the perturbed cam26 state (ps +0.5%, θ +4 K, q ×0.6, sea gate 0.9), carried vs fresh: mean ps ${differences.map((d) => d.pi.toFixed(1)).join(' vs ')} Pa from FROM's, mass-mean θ ${differences.map((d) => d.theta.toFixed(3)).join(' vs ')} K from FROM's, water ${differences.map((d) => d.water.toFixed(3)).join(' vs ')} of FROM's, sea gate ${differences.map((d) => d.gate.toFixed(2)).join(' vs ')}`);
+  const [kept, started] = differences;
+  assert.ok(Math.abs(kept.pi) < 50 && Math.abs(started.pi) > 300, `mean surface pressure ${kept.pi} and ${started.pi} Pa from FROM's`);
+  assert.ok(Math.abs(kept.theta) < 0.5 && started.theta < -2, `mass-mean θ ${kept.theta} and ${started.theta} K from FROM's`);
+  assert.ok(kept.water < 1.4 && started.water - kept.water > 0.4, `water ${kept.water} and ${started.water} of FROM's`);
+  assert.ok(kept.gate > 0.7 && started.gate < 0.65, `sea gate ${kept.gate} and ${started.gate}`);
+
+  assert.match(run({ TAG: 'iced', ICE_FROM: '1' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); its atmosphere on cam26 \(27 layers\) and its deck; the clock at day 0/);
   const iced = await read('iced_day0001.bin');
   assert.equal(iced.K, 27);
   let covered = 0, thickest = 0;
