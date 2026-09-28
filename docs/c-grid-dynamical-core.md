@@ -1008,7 +1008,7 @@ ice–albedo feedbacks are all live from here.
 
 Marine stratocumulus is diagnosed, not condensed. Over the ice-free
 part of each sea cell the column carries a deck of `stratusWater` ×
-f = 0.08 kg/m² × f of cloud water (optical depth 4.4 at f = 1) in the
+f of cloud water in the
 layer nearest σ = `stratusSigma` = 0.92, the top of a 1 km marine
 boundary layer, where it scatters and emits exactly as condensed water
 does but never enters qc. f is the Klein & Hartmann (1993) fit
@@ -1021,11 +1021,13 @@ A; land carries none, nor does the model with `moist: false`. Without it the eas
 Earth keeps its decks, were nearly cloud-free on a year-two state
 (planetary albedo 0.11–0.14 against Earth's ~0.38), absorbed about
 100 W/m² too much sunlight and stayed too warm for a Pacific cold
-tongue or coastal upwelling. The deck is off by default (`stratus:
-true` switches it on in both engines) until the eastern oceans carry
-an inversion for it to answer to, since on a flat stability field it
-engages over every warm sea alike; with it off both engines are
-bit-identical to the model without it; the
+tongue or coastal upwelling. The default deck is thin, `stratusWater`
+0.004 kg/m² (optical depth 0.2 at f = 1), because on a flat stability
+field the fit engages over every warm sea alike and a full deck would
+lift the planetary albedo to 0.5; the water can be raised once the
+eastern oceans carry an inversion for it to answer to. `stratus: false`
+removes the deck, and both engines are then bit-identical to the model
+without it; the
 column test is in `test/physics.test.mjs` and the engines' parity with
 the deck engaged under an imposed inversion in `test/gpuModel.test.mjs`.
 

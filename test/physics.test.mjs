@@ -255,7 +255,7 @@ test('water vapour absorbs sunlight by the Lacis–Hansen curve: a humid column 
 });
 
 test('a stable column over warm open sea carries a stratocumulus deck that reflects the noon sun and lowers the OLR; land, cold sea and stratus: false carry none', () => {
-  const radiation = createRadiation(mesh, core, { stratus: true }), off = createRadiation(mesh, core, { stratus: false });
+  const radiation = createRadiation(mesh, core, { stratus: true, stratusWater: 0.08 }), off = createRadiation(mesh, core, { stratus: false });
   radiation.setTime(0); off.setTime(0);
   let noon = 0;
   for (let i = 0; i < C; i++) if (radiation.insolation(i) > radiation.insolation(noon)) noon = i;
