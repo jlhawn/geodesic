@@ -61,3 +61,20 @@ test('known land and ocean cells have the right sign and magnitude', () => {
   assert.ok(cellAt(0, -160) < -3000); // central Pacific abyssal plain
   assert.ok(cellAt(-75, 90) > 2000); // East Antarctica: ice surface, not bedrock
 });
+
+test('the Panama isthmus is closed at N=64, where the land fraction alone would open a seaway', async () => {
+  const { Grid } = await import('../js/grid.module.js');
+  const { buildMesh } = await import('../js/mesh.module.js');
+  const { createGeography, topographyFromInt16 } = await import('../js/geography.module.js');
+  const mesh = buildMesh(new Grid(64)), topography = topographyFromInt16(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+  const deg = 180 / Math.PI, C = mesh.nCells, lat = (i) => mesh.latCell[i] * deg, lon = (i) => mesh.lonCell[i] * deg;
+  const inBox = (i) => lat(i) >= 0 && lat(i) <= 15 && lon(i) >= -92 && lon(i) <= -70;
+  const nearest = (la, lo) => { let best = -1, d = 1e9; for (let i = 0; i < C; i++) { const dd = (lat(i) - la) ** 2 + (lon(i) - lo) ** 2; if (dd < d) { d = dd; best = i; } } return best; };
+  const connected = (geo) => {
+    const seen = new Uint8Array(C), queue = [nearest(7.5, -80.5)], target = nearest(10.5, -79.5);
+    while (queue.length) { const i = queue.pop(); if (i === target) return true; for (let m = 0; m < mesh.nEdgesOnCell[i]; m++) { const j = mesh.cellsOnCell[mesh.maxEdges * i + m]; if (j < 0 || seen[j] || geo.land[j] || !inBox(j)) continue; seen[j] = 1; queue.push(j); } }
+    return false;
+  };
+  assert.equal(connected(createGeography(mesh, topography, { landBridges: {} })), true, 'without the bridge the coarse mask opens Panama');
+  assert.equal(connected(createGeography(mesh, topography)), false, 'the default bridge closes it');
+});

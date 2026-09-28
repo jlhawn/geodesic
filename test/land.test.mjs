@@ -30,7 +30,7 @@ test('a hemisphere continent covers half the area, its coast rings the meridian,
 });
 
 test('an all-ocean raster leaves no land and no coast', () => {
-  const geography = createGeography(mesh, syntheticTopography(90, 180, () => -3000));
+  const geography = createGeography(mesh, syntheticTopography(90, 180, () => -3000), { landBridges: {} });
   assert.equal(geography.landArea, 0);
   assert.equal(geography.coastEdges.length, 0);
   assert.ok(geography.edgeOcean.every((v) => v === 1));

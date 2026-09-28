@@ -6,7 +6,10 @@
  * walking the cell neighbour graph from the previous point's cell; a
  * cell's elevation is the mean of its points and its land fraction the
  * share of them above sea level. A cell is land when that fraction
- * exceeds landThreshold. edgeOcean marks the edges between two ocean
+ * exceeds landThreshold, and along the polylines of landBridges (the
+ * Panama isthmus by default) regardless, since a coarse mesh would
+ * otherwise open a seaway where a narrow isthmus falls below the
+ * threshold. edgeOcean marks the edges between two ocean
  * cells, the only ones the ocean flows through; coastEdges lists the
  * edges between land and ocean.
  */
@@ -23,7 +26,11 @@ export function syntheticTopography(rows, cols, elevationAt) {
   return { rows, cols, data };
 }
 
-export function createGeography(mesh, topography, { landThreshold = 0.5 } = {}) {
+export const LAND_BRIDGES = {
+  panama: [[9.8, -84.5], [9.0, -82.5], [8.8, -80.5], [9.2, -79.2], [8.5, -77.8], [7.5, -77.0]],
+};
+
+export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES } = {}) {
   const { nCells: C, nEdges: E, xCell, cellsOnCell, nEdgesOnCell, cellsOnEdge, areaCell, latCell, lonCell } = mesh;
   const { rows, cols, data } = topography;
   const count = new Int32Array(C), landCount = new Int32Array(C), sum = new Float64Array(C);
@@ -63,6 +70,18 @@ export function createGeography(mesh, topography, { landThreshold = 0.5 } = {}) 
     landFraction[i] = landCount[i] / count[i];
     elevation[i] = sum[i] / count[i];
     land[i] = landFraction[i] > landThreshold ? 1 : 0;
+  }
+  for (const points of Object.values(landBridges)) {
+    let start = 0;
+    for (let p = 0; p + 1 < points.length; p++) {
+      const [la0, lo0] = points[p], [la1, lo1] = points[p + 1];
+      const steps = Math.max(1, Math.ceil(Math.hypot(la1 - la0, (lo1 - lo0) * Math.cos(la0 * Math.PI / 180)) / 0.2));
+      for (let n = 0; n <= steps; n++) {
+        const la = (la0 + (la1 - la0) * n / steps) * Math.PI / 180, lo = (lo0 + (lo1 - lo0) * n / steps) * Math.PI / 180;
+        const i = nearest(Math.cos(la) * Math.cos(lo), Math.cos(la) * Math.sin(lo), Math.sin(la), start);
+        start = i; land[i] = 1; elevation[i] = Math.max(elevation[i], 1);
+      }
+    }
   }
   const edgeOcean = new Uint8Array(E);
   const coast = [];
