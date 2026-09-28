@@ -2094,6 +2094,66 @@ restarts the driver after a failure and ends once it finishes, is
 stopped or meets NaN (exit 2); each boot after a preemption starts it
 again.
 
+**Verda spot instances.** `scripts/verdaRelaunch.sh` keeps one spot
+instance alive from an always-on machine with the `verda` CLI (1.8)
+logged in. Every POLL (120) s it lists the instances and looks at the
+one called NAME: a running one is left alone and its OS volume
+remembered in STATE_FILE (`$HOME/.verda-relaunch-NAME`); one starting
+or stopping is waited for; an offline one is started; and when there is
+none, or it was discontinued, it creates a spot instance again with
+`verda --agent vm create --kind gpu --instance-type INSTANCE_TYPE
+--location LOCATION --is-spot --os <OS volume or image>
+--os-volume-size OS_VOLUME_SIZE --os-volume-on-spot-discontinue
+keep_detached --ssh-key SSH_KEY --hostname NAME --startup-script
+STARTUP_SCRIPT --wait -o json`, on OS_VOLUME when it is set and
+otherwise on the remembered OS volume, once `verda volume list` shows it
+detached, and on the image OS only while no volume is known. A remembered volume that is no longer
+listed stops it from creating anything until OS_VOLUME is set or the
+state file removed. Every action and every change of the instance's
+status goes to LOG (`$HOME/verda-relaunch-NAME.log`) with a timestamp,
+and it stops at STOP_FILE (`$HOME/STOP_verda-relaunch-NAME`). The OS
+volume carries the repository, node_modules and the run, so after an
+eviction the new instance boots the same disk, and the startup script
+only restarts the driver, which continues from the newest files (a
+second driver on the same OUT finds the lock and exits).
+`test/verdaRelaunch.test.mjs` drives the loop through a stand-in for the
+CLI that answers with the
+documented JSON fields (`id`, `hostname`, `status`, `os_volume_id` or
+`volumes[].is_os_volume`); it has not yet run against the service.
+
+Once: `verda auth login`; register the key with
+`verda --agent ssh-key add --name gcm --public-key "$(cat ~/.ssh/id_ed25519.pub)" -o json`
+and keep its `id`; write the startup script and register it with
+`verda --agent startup-script add --name gcm-async --file startup.sh -o json`,
+keeping that `id` too:
+
+```
+#!/bin/bash
+export REPO=/root/geodesic OUT=/root/runs/async64 N=64 PATH=/usr/local/bin:$PATH
+[ -d "$REPO" ] || exit 0
+mkdir -p "$OUT" && cd "$REPO" && nohup sh -c 'until scripts/asyncSpinup.sh || [ $? -eq 2 ]; do sleep 60; done' >> "$OUT.driver.out" 2>&1 &
+```
+
+(the paths are wherever the repository and the run live on the OS
+volume, and PATH must reach node; Verda runs the script as root when
+it creates the instance.)
+
+Pick INSTANCE_TYPE and LOCATION from `verda --agent vm availability --spot -o json`
+and the image from `verda --agent images -o json`, then start the relauncher:
+
+```
+NAME=gcm64 INSTANCE_TYPE=<type> LOCATION=FIN-01 OS=<image> SSH_KEY=<key id> \
+  STARTUP_SCRIPT=<script id> nohup scripts/verdaRelaunch.sh > /dev/null 2>&1 &
+```
+
+The first instance comes from the image and the startup script finds no
+repository there; log in (`verda ssh gcm64`), install node, clone the
+repository to REPO, `npm install`, put the starting state in OUT and run
+the startup script by hand. From then on the relauncher knows the OS
+volume. Should the state file be lost, the
+detached OS volume's ID is in `verda --agent volume list --status detached -o json`
+(it must be in LOCATION); pass it as OS_VOLUME.
+
 **Density-consistent interior.** After the mixed-layer exchanges, an
 interior layer more than 0.01 kg/m³ from its label mixes in water from
 the nearest layer lying clearly (by more than 0.01) on the other side of
@@ -2409,6 +2469,8 @@ scripts/
   oceanSpinup.mjs           the ocean and sea ice spun up alone under a recorded year of forcing
   asyncSpinup.sh            coupled and ocean-only phases in turn at one resolution, supervised
   runControl.mjs            the spin-ups' stop on SIGTERM and their SYNC_CMD queue
+  verdaRelaunch.sh          a Verda spot instance recreated on its OS volume after each eviction
+  verdaInstances.mjs        the verda CLI's JSON as verdaRelaunch.sh reads it
   compareStates.mjs         saved states side by side as a markdown table
   splitState.mjs            a saved state gzipped into parts for the page
 test/
