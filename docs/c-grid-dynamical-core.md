@@ -2058,8 +2058,9 @@ differs from the uninterrupted one by about 0.5% in its mean fluxes.
 `SYNC_CMD` is a shell command both scripts run through `/bin/sh` after
 every snapshot, recorded forcing day and log update, with the file's
 path as `$1`, one at a time and in their own process group so that the
-stop signal does not cut an upload short (three tries 5 s apart); the
-scripts wait for the queue before they exit. asyncSpinup.sh runs
+stop signal does not cut an upload short (three tries 5 s apart; a file
+pruned before its turn is skipped); the scripts wait for the queue
+before they exit. asyncSpinup.sh runs
 `RESTORE_CMD` once before anything else and does not start if it fails,
 and it supervises its phases itself: a node process that exits with an
 error is started again from its last file after RETRY_WAIT (30) s, up

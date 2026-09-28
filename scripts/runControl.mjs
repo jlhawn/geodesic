@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 /*
  * What a spin-up script needs to survive a preemptible machine.
@@ -12,9 +13,10 @@ import { spawn } from 'node:child_process';
  * syncAfterSave runs `command` (SYNC_CMD) through /bin/sh after each file
  * it is handed, with the file's path as $1, one at a time in the order
  * handed, each in its own process group so that a signal meant for the
- * spin-up does not cut an upload short. A failing command is tried
- * three times, 5 s apart, and then logged; `drain` resolves once the
- * queue is empty.
+ * spin-up does not cut an upload short. A file pruned before its turn is
+ * skipped, since a newer one follows it in the queue. A failing command
+ * is tried three times, 5 s apart, and then logged; `drain` resolves once
+ * the queue is empty.
  */
 export function stopOnSignal(log) {
   const control = { requested: null };
@@ -42,6 +44,7 @@ export function syncAfterSave(command, log) {
   let queue = Promise.resolve();
   async function sync(path) {
     for (let attempt = 1; ; attempt++) {
+      if (!existsSync(path)) return;
       const { code, errors } = await runOnce(command, path);
       if (code === 0) return;
       if (attempt === 3) { log(`SYNC_CMD failed on ${path} (exit ${code}) three times: ${errors.trim().replace(/\s+/g, ' ')}`); return; }

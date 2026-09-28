@@ -204,6 +204,7 @@ test('SYNC_CMD receives every file the phases save, and RESTORE_CMD lets another
   const held = spawnSync('find', [bucket, '-type', 'f'], { encoding: 'utf8' }).stdout.split('\n').filter(Boolean).map((f) => f.slice(bucket.length + 1)).sort();
   for (const name of ['async6_day0002.bin', 'async6_c01_forcing/forcing-0001.bin', 'async6_c01_forcing/forcing-0002.bin', 'async6_c01_year0000_day001.bin', 'async6_c01_year0002.bin', 'async6.log', 'async6_c01.log', 'async6_cycles.log', 'async6_cycles.txt']) assert.ok(held.includes(name), `${name} reached the bucket: ${held.join(', ')}`);
   assert.equal(driver({ ...env, OUT: second, CYCLES: '2', RESTORE_CMD: 'cp -R "$BUCKET/." "$OUT/"' }), 0);
+  for (const log of ['async6.log', 'async6_c01.log', 'async6_c02.log']) assert.doesNotMatch(text(join(second, log)), /SYNC_CMD failed/, log);
   assert.equal(text(join(second, 'async6_cycles.txt')), 'start=0\ndone=1\ndone=2\n');
   const handed = await load(join(second, 'async6_day0004.bin'));
   assert.deepEqual([handed.oceanFrom, handed.oceanYears], ['async6_c01_year0002.bin', 2]);
