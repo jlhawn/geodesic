@@ -17,6 +17,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState } from '../js/stateFile.module.js';
+import { savedSubsidence } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 
@@ -46,6 +47,7 @@ if (existing.length) {
   if (saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
   ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
   model.seaIce.load(state[6], saved.concentration ?? null);
+  model.radiation.mlmSubsidence.set(savedSubsidence(saved, model));
   model.time = saved.time;
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
@@ -98,8 +100,8 @@ const sst = (cells) => meanOf(cells, (i) => ocean.T[i] - 273.15), classTop = (ce
 const warmPool = sea(-10, 10, 120, 160), coldTongue = sea(-2, 2, -110, -90), westPacific = sea(-5, 5, 140, 170), eastPacific = sea(-5, 5, -120, -90);
 log(`ocean after ${days} days: warm pool ${sst(warmPool).toFixed(1)} °C, cold tongue ${sst(coldTongue).toFixed(1)} °C (W−E ${(sst(westPacific) - sst(eastPacific)).toFixed(1)} K), ${THERMOCLINE_DENSITY} class top W Pac ${classTop(westPacific).toFixed(0)} m, E Pac ${classTop(eastPacific).toFixed(0)} m`);
 const name = `${TAG}_day${String(day).padStart(4, '0')}.bin`;
-const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce;
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ N, K: core.K, day, time: model.time, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: landState }));
+const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence } = model.radiation;
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ N, K: core.K, day, time: model.time, terrain: !!model.surfaceGeopotential, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: landState }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots();
 for (const old of kept.slice(0, Math.max(0, kept.length - KEEP))) unlinkSync(`${OUT}/${old}`);

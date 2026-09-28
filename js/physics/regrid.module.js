@@ -219,6 +219,27 @@ export function regridConcentration(source, target, concentration, { land = null
   return sampleTiles(source, target, Float64Array.from(concentration), seaMask(source), interpolationWeights(source.mesh, target.mesh.xCell), (tile) => (seaFromLand(land ? land.snow[tile] : 0, surfaceT[tile]) > 0 ? 1 : 0));
 }
 
+/*
+ * The running-mean subsidence of the mixed-layer deck: interpolated from
+ * the source's sea cells, and 0 over the target's land, which never
+ * updates it.
+ */
+export function regridSubsidence(source, target, subsidence) {
+  const out = regridCellField(source, target, Float64Array.from(subsidence), interpolationWeights(source.mesh, target.mesh.xCell), seaMask(source));
+  if (target.geography) for (let n = 0; n < out.length; n++) if (target.geography.land[n]) out[n] = 0;
+  return out;
+}
+
+/*
+ * The deck's running-mean subsidence for a model on `target`'s mesh from
+ * a saved state: the saved field, regridded from `source` when the
+ * resolutions differ, or 0 everywhere for a state saved without one.
+ */
+export function savedSubsidence(saved, target, source = null) {
+  if (!saved || !saved.mlmSubsidence) return new Float64Array(target.mesh.nCells);
+  return saved.mlmSubsidence.length === target.mesh.nCells ? Float64Array.from(saved.mlmSubsidence) : regridSubsidence(source, target, saved.mlmSubsidence);
+}
+
 export function regridState(source, target, state, progress = null, { land = null } = {}) {
   const [pi, theta, u, surfaceT, q = null, qc = null, ice = null] = state;
   const K = source.core.K;

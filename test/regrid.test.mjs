@@ -118,3 +118,27 @@ test('sea-ice concentration regrids with its ice, from the same tiles, and ice i
   }
   assert.ok(partial > 0, 'the partial cover comes along');
 });
+
+test('the mixed-layer deck\'s running-mean subsidence comes back from a saved state: kept at the same resolution, interpolated over the sea at another, 0 over land and for a state saved without it', async () => {
+  const { savedSubsidence } = await import('../js/physics/regrid.module.js');
+  const { syntheticTopography } = await import('../js/geography.module.js');
+  const { encodeState, decodeState } = await import('../js/stateFile.module.js');
+  const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
+  const source = createModel(new Grid(6), { topography }), target = createModel(new Grid(10), { topography });
+  const C = source.mesh.nCells, sea = (model, i) => !model.geography.land[i];
+  const mean = Float64Array.from({ length: C }, (_, i) => (sea(source, i) ? -1e-3 * (1 + Math.sin(source.mesh.latCell[i])) : 0));
+  const saved = await decodeState(encodeState({ N: 6, K: source.core.K, day: 1, time: 86400, mlmSubsidence: mean }));
+  const kept = savedSubsidence(saved, source);
+  for (let i = 0; i < C; i++) assert.equal(kept[i], Math.fround(mean[i]), `cell ${i}`);
+  const moved = savedSubsidence(saved, target, source);
+  let seaCells = 0;
+  for (let n = 0; n < target.mesh.nCells; n++) {
+    if (!sea(target, n)) { assert.equal(moved[n], 0, `land cell ${n}`); continue; }
+    seaCells++;
+    assert.ok(moved[n] < 0 && moved[n] >= -2e-3 - 1e-9, `sea cell ${n}: ${moved[n]}`);
+  }
+  assert.ok(seaCells > 0);
+  const legacy = savedSubsidence(await decodeState(encodeState({ N: 6, K: source.core.K, day: 1, time: 86400, pi: new Float64Array(C) })), source);
+  assert.ok(legacy.length === C && legacy.every((x) => x === 0), 'a state saved without it starts from 0');
+  assert.ok(savedSubsidence(null, target).every((x) => x === 0), 'a fresh start starts from 0');
+});

@@ -4,7 +4,7 @@ import { createParallelModel } from './parallel.module.js';
 import { createGpuModel } from './gpu/model.gpu.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
-import { regridState, regridOcean, regridLand, regridConcentration } from './physics/regrid.module.js';
+import { regridState, regridOcean, regridLand, regridConcentration, savedSubsidence } from './physics/regrid.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure } from './geography.module.js';
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
@@ -269,6 +269,15 @@ function placeIce(model, saved, N) {
 }
 
 /*
+ * The mixed-layer deck's running-mean subsidence: the saved run's,
+ * regridded if it was saved at another resolution, or 0 for a fresh
+ * start or a run saved without one.
+ */
+function placeSubsidence(model, saved, N) {
+  model.radiation.mlmSubsidence.set(savedSubsidence(saved, model, saved && saved.mlmSubsidence && saved.N !== N ? sourceFor(saved) : null));
+}
+
+/*
  * A physics-free model on the saved run's mesh, with the current
  * topography so its land mask can steer the regrid; kept for the ocean
  * and land that follow the state.
@@ -376,6 +385,7 @@ async function probe(message) {
   const prepare = (test, N) => {
     for (const [a, values] of initialState(test, null, N).entries()) test.state[a].set(values);
     placeIce(test, null, N);
+    placeSubsidence(test, null, N);
     if (test.load) test.load();
     if (test.ocean) test.ocean.initialize(test.state[3], test.state[6]);
     if (test.land) test.land.initialize();
@@ -443,6 +453,7 @@ async function snapshot() {
   const names = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
   const arrays = Object.fromEntries(names.map((name, a) => [name, Float64Array.from(model.state[a]).buffer]));
   arrays.concentration = Float64Array.from(model.seaIce.concentration).buffer;
+  arrays.mlmSubsidence = Float64Array.from(model.radiation.mlmSubsidence).buffer;
   let ocean = null, land = null;
   if (model.ocean) {
     const o = await model.ocean.serialize();
@@ -474,6 +485,7 @@ async function restore(snapshot) {
   const init = initialState(model, saved, currentN);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   placeIce(model, saved, currentN);
+  placeSubsidence(model, saved, currentN);
   if (model.load) model.load();
   if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
   placeLand(model, saved, currentN);
@@ -510,6 +522,7 @@ async function start(message) {
   const init = initialState(model, saved, N);
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   placeIce(model, saved, N);
+  placeSubsidence(model, saved, N);
   status('uploading the state…', 0.92);
   if (model.load) model.load();
   if (model.ocean) {

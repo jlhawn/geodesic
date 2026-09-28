@@ -195,3 +195,25 @@ test('the running mean of the subsidence at the boundary-layer top builds the sa
   assert.ok(moved > 0.5 * run.C, `the mean moved on ${moved} cells`);
   assert.ok(run.subsidence.rmsRel < 1e-3, `mean subsidence rms ${run.subsidence.rmsRel}, max ${run.subsidence.maxDiff} at ${run.subsidence.at}`);
 });
+
+test('the GPU model sends the running-mean subsidence to the device on load and reads it back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
+  const model = await createGpuModel(new Grid(6), { ocean: false, radiation: { mixedLayerDeck: true } });
+  const C = model.mesh.nCells, init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  const loaded = Float64Array.from({ length: C }, (_, i) => -2e-3 * ((i % 7) + 1) / 7);
+  model.radiation.mlmSubsidence.set(loaded);
+  model.load();
+  const device = await model.gpu.downloadPhysics();
+  for (let i = 0; i < C; i++) assert.equal(device.MLMSUB[i], Math.fround(loaded[i]), `cell ${i} on the device`);
+  await model.step(900); await model.step(900);
+  await model.sync();
+  const after = await model.gpu.downloadPhysics(), mean = model.radiation.mlmSubsidence;
+  let moved = 0;
+  for (let i = 0; i < C; i++) {
+    assert.equal(mean[i], after.MLMSUB[i], `cell ${i} mirrored`);
+    assert.ok(Math.abs(mean[i] - loaded[i]) < 1e-4, `cell ${i}: ${mean[i]} from ${loaded[i]}`);
+    if (mean[i] !== Math.fround(loaded[i])) moved++;
+  }
+  assert.ok(moved > C / 2, `the mean moved on ${moved} cells`);
+});

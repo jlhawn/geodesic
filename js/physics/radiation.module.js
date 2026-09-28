@@ -101,8 +101,9 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * w̄_s is the running mean of w_s(h), w̄_s ← w̄_s e + w_s (1 − e) with
  * e = exp(−dt/subsidenceMemory) (3 days), because the w_s of a single
  * dynamics stage is dominated by transients; it is kept per cell in
- * mlmSubsidence, starts at 0 and is not part of the saved state. The
- * model's own dh/dt keeps the instantaneous w_s.
+ * mlmSubsidence, starts at 0, and is saved with the state (the key
+ * `mlmSubsidence`; a state saved without it starts from 0). The model's
+ * own dh/dt keeps the instantaneous w_s.
  * The deck covers the mixed layer's cover times `openSea`, with its water
  * path (at most stratusWaterMax) in the same layer and the same
  * two-column blend; the EIS is still diagnosed. The mixed layer's cover,

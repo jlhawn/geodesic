@@ -193,8 +193,8 @@ test('the mixed-layer deck shows in the cloud field, the same in both engines', 
   }
   for (let a = 0; a < init.length; a++) gpu.state[a].set(cpu.state[a]);
   cpu.radiation.mlmSubsidence.fill(-1e-3);
+  gpu.radiation.mlmSubsidence.fill(-1e-3);
   gpu.load();
-  gpu.gpu.uploadPhysics({ mlmSubsidence: cpu.radiation.mlmSubsidence });
   for (let n = 0; n < 2; n++) { cpu.step(900); await gpu.step(900); }
   const frame = await gpu.beginFrame({ fields: ['cloud'] });
   const reference = Float64Array.from({ length: C }, (_, i) => cpu.cloudWater(i));
