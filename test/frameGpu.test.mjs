@@ -8,6 +8,7 @@ import { VERTICAL_MEMORY } from '../js/frames.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS } from '../js/frames.module.js';
+import { createModel } from '../js/model.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -69,7 +70,8 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   const { R, g, exnerLayer } = core.diagnostics, phis = model.surfaceGeopotential, bottom = (core.K - 1) * C;
   const mslp = Float64Array.from(pi, (p, i) => p * Math.exp(phis[i] / (R * (theta[bottom + i] * exnerLayer[bottom + i] + 0.00325 * phis[i] / g))));
   const water = Float64Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, q, i));
-  const cloud = Float64Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, qc, i));
+  const condensed = Float64Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, qc, i));
+  const cloud = Float64Array.from(condensed, (w, i) => w + physics.DECKF[i] * physics.DECK[i]);
   const sea = (source) => Float64Array.from({ length: C }, (_, i) => (model.geography.land[i] ? NaN : source[i]));
   const currents = cellVector(mesh, ocean.u1);
   for (let i = 0; i < C; i++) if (model.geography.land[i]) currents.fill(0, 3 * i, 3 * i + 3);
@@ -91,7 +93,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   for (let i = 0; i < C; i++) {
     const a = mesh.areaCell[i];
     area += a; mass += a * pi[i]; ts += a * surfaceT[i]; piMin = Math.min(piMin, pi[i]); piMax = Math.max(piMax, pi[i]);
-    w += a * water[i]; c += a * cloud[i]; rain += a * physics.RAIN[i]; olr += a * physics.OLR[i]; absorbed += a * physics.ABS[i];
+    w += a * water[i]; c += a * condensed[i]; rain += a * physics.RAIN[i]; olr += a * physics.OLR[i]; absorbed += a * physics.ABS[i];
     if (ice[i] > 0) { const cover = model.seaIce.cover(i, ice[i]); iceArea += a * cover; iceVolume += a * cover * ice[i]; }
     if (land[i] > 0.5) { landArea += a; landT += a * surfaceT[i]; soil += a * physics.SOIL[i]; }
   }
@@ -153,4 +155,27 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   const keep = Math.exp(-dt / VERTICAL_MEMORY);
   const blend = Float64Array.from(fresh, (w, i) => keep * held.fields.vertical[i] + (1 - keep) * w);
   { const { max, at } = worst(blend, later.fields.vertical); assert.ok(max < 2e-3, `the two-hour memory blends the new frame in: ${max} at ${at}`); }
+});
+
+test('the stratocumulus deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = async (stratus) => {
+    const cpu = createModel(new Grid(6), { ocean: false, radiation: { stratus } }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation: { stratus } });
+    const C = cpu.mesh.nCells, { K, sigmaMid } = cpu.core;
+    const init = initializeState(cpu, {});
+    for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
+    for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) { cpu.state[1][k * C + i] += 10; gpu.state[1][k * C + i] += 10; }
+    gpu.load();
+    for (let n = 0; n < 2; n++) { cpu.step(900); await gpu.step(900); }
+    const frame = await gpu.beginFrame({ fields: ['cloud'] });
+    return { cpu: Float64Array.from({ length: C }, (_, i) => cpu.cloudWater(i)), gpu: frame.fields.cloud, deck: Float64Array.from({ length: C }, (_, i) => cpu.radiation.stratusFraction[i] * cpu.radiation.stratus[i]) };
+  };
+  const on = await run(true), off = await run(false);
+  let at = 0;
+  for (let i = 0; i < on.deck.length; i++) if (on.deck[i] > on.deck[at]) at = i;
+  const engines = worst(on.cpu, on.gpu);
+  console.log(`under a 10 K inversion the thickest deck adds ${(1000 * on.deck[at]).toFixed(1)} g/m² to cell ${at}'s cloud: ${(1000 * on.cpu[at]).toFixed(1)} against ${(1000 * off.cpu[at]).toFixed(1)} g/m² without it; the engines' cloud fields differ by at most ${engines.max.toExponential(1)} kg/m²`);
+  assert.ok(on.deck[at] > 1e-3, `deck ${on.deck[at]} kg/m²`);
+  assert.ok(on.cpu[at] > off.cpu[at] + 0.5 * on.deck[at] && on.gpu[at] > off.gpu[at] + 0.5 * on.deck[at], `cloud ${on.cpu[at]} (GPU ${on.gpu[at]}) against ${off.cpu[at]} (GPU ${off.gpu[at]}) without the deck`);
+  assert.ok(engines.max < 1e-4, `cloud differs between the engines by ${engines.max} at ${engines.at}`);
+  assert.ok(worst(off.cpu, off.gpu).max < 1e-4);
 });

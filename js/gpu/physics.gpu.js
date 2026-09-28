@@ -152,6 +152,7 @@ export const PHYSICS_KERNELS = {
     if (fraction > 0.0) { deck = deckWater(IN[S_TH + bottom] * D[D_EXM + bottom], IN[S_Q + bottom], pi * LV[L_SM + K - 1], mixedDepth); }
     if (deck <= 0.0) { fraction = 0.0; }
   }
+  PH[PH_DECK + i] = deck; PH[PH_DECKF + i] = fraction;
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;

@@ -30,7 +30,7 @@ function restartRain() { rain.total = null; rain.time = model.time; if (model.re
  */
 async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
   const { mesh, core, state } = model;
-  const C = mesh.nCells, E = mesh.nEdges, [pi, theta, u, , q, qc, iceField] = state;
+  const C = mesh.nCells, E = mesh.nEdges, [pi, theta, u, , q, , iceField] = state;
   const time = model.time, interval = time - rain.time;
   if (!rain.total || interval < 0) rain.total = new Float32Array(C);
   const keep = Math.exp(-Math.max(0, interval) / RAIN_MEMORY), fallen = model.moist.precipitation;
@@ -77,7 +77,7 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
     }
   }
   if (want.has('water')) out.water = Float32Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, q, i));
-  if (want.has('cloud')) out.cloud = Float32Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, qc, i));
+  if (want.has('cloud')) out.cloud = Float32Array.from({ length: C }, (_, i) => model.cloudWater(i));
   if (want.has('rain')) out.rain = Float32Array.from(rain.total);
   if (want.has('ice')) out.ice = Float32Array.from(iceField);
   if (want.has('concentration')) out.concentration = Float32Array.from(model.seaIce.concentration);

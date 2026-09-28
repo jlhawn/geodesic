@@ -1029,8 +1029,11 @@ where it scatters and emits as condensed water does but never enters
 qc. The deck and the rest of the cell are independent columns: the
 shortwave is computed with and without the deck's water and the two
 weighted by f, and the deck layer's longwave emissivity is the
-f-weighted mean of its emissivity with and without it. Without the
-deck the eastern subtropical oceans, where Earth keeps its decks, were
+f-weighted mean of its emissivity with and without it. The page shows
+the deck too: the `cloud` frame field, which the satellite view and the
+cloud overlays draw, adds f times the deck's water to the column's
+condensate, so a patchy deck shows as a fainter sheet. Without the deck
+the eastern subtropical oceans, where Earth keeps its decks, were
 nearly cloud-free on a year-two state (planetary albedo 0.11–0.14
 against Earth's ~0.38), absorbed about 100 W/m² too much sunlight and
 stayed too warm for a Pacific cold tongue or coastal upwelling. The
