@@ -447,7 +447,7 @@ test('the mixed-layer deck on a stable column over a warm sea carries the water 
   assert.ok(deck.mlmWater > 0.03 && deck.mlmWater < 0.15 && deck.mlmCover === 1, `water ${deck.mlmWater}, cover ${deck.mlmCover}`);
   assert.ok(deck.mlmEntrainment > 1e-3 && deck.mlmEntrainment < 1e-2, `entrainment ${deck.mlmEntrainment}`);
   assert.ok(deck.stratus === deck.mlmWater && deck.stratusFraction === deck.mlmCover, 'the deck is the mixed-layer model\'s');
-  assert.ok(deck.mlmWater !== start.mlmWater && Math.abs(deck.mlmWater - start.mlmWater) < 0.05 * start.mlmWater, 'one step adjusts the water path');
+  assert.ok(deck.mlmWater !== start.mlmWater && Math.abs(deck.mlmWater - start.mlmWater) < 0.1 * start.mlmWater, 'one step adjusts the water path');
   assert.ok(half.stratusFraction === 0.5 * deck.stratusFraction && half.stratus === deck.stratus, 'half the cell under ice halves the cover');
   assert.ok(deck.absorbedSolar < clear.absorbedSolar - 300, `absorbed solar ${deck.absorbedSolar} against ${clear.absorbedSolar}`);
   assert.ok(deck.closure < EPS && Number.isFinite(deck.stabilityIndex));
@@ -532,6 +532,20 @@ test('with mixedLayerDeck: false the model is bit-identical to the engine before
     if (stratusFraction[i] > 0) covered++;
   }
   assert.ok(covered > 0, 'some cells carry a mixed-layer deck');
+});
+
+test('with stratusSolar: false the mixed-layer deck is bit-identical to the deck before it absorbed sunlight; with sunlight the column that carries it changes', () => {
+  const forced = { stratusSubsidence: 0, minimumInversion: 0 };
+  assert.equal(modelDigest({ stratusSolar: false }).digest, 'acc030865b5b4b5ebefec6d4f9afbfc8');
+  assert.equal(modelDigest({ ...forced, stratusSolar: false }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
+  assert.notEqual(modelDigest(forced).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
+  const shadow = createRadiation(mesh, core, { subsidenceMemory: 1e-9 }), dark = createRadiation(mesh, core, { subsidenceMemory: 1e-9, stratusSolar: false });
+  shadow.setTime(0); dark.setTime(0);
+  const noon = brightest(shadow), column = mixedLayerColumn(), lit = mixedLayerRun(shadow, noon, column), unlit = mixedLayerRun(dark, noon, column);
+  console.log(`at noon the mixed layer of the stable column holds ${(1000 * lit.mlmWater).toFixed(2)} g/m² after its step with sunlight in its cloud, ${(1000 * unlit.mlmWater).toFixed(2)} without, entraining ${(1000 * lit.mlmEntrainment).toFixed(3)} and ${(1000 * unlit.mlmEntrainment).toFixed(3)} mm/s`);
+  assert.ok(lit.mlmWater < unlit.mlmWater && lit.mlmWater > 0.9 * unlit.mlmWater, `water ${lit.mlmWater} against ${unlit.mlmWater}`);
+  assert.ok(lit.closure < EPS);
+  core.diagnostics.piSigmaDot.fill(0);
 });
 
 function evaluate(radiation, i, pi, theta, surfaceT, q, qc) {

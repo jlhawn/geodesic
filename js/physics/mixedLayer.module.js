@@ -73,6 +73,20 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * A layer with no virtual jump (Δθ_v ≤ 0) is uncapped: it neither
  * entrains nor carries cover.
  *
+ * Shortwave: with forcing.solar, the shortwave flux (W/m²) incident at
+ * the cloud top, the cloud absorbs S = solar × min(0.15, 0.4 W) for a
+ * liquid water path W in kg/m² — about 4 % per 100 g/m², at most 15 %
+ * (Stephens 1978; `shortwaveAbsorption`, `maximumShortwaveAbsorption`) —
+ * spread through the cloud in proportion to its water. The layer then
+ * sees the net forcing ΔF − S in its heat budget, as the heating
+ * S/(ρ c_p h) in dθ_l/dt, and in the buoyancy-flux profile that the
+ * buoyancy closure and the BIR integrate, so sunlight slows entrainment
+ * under that closure and decouples the layer by day. The radiative
+ * closure keeps the longwave ΔF: the longwave cooling that drives
+ * entrainment sits in the cloud's top few tens of metres, where little
+ * of the sunlight is absorbed. Without solar the model is the nocturnal
+ * one.
+ *
  * Drizzle (off by default): the cloud-base rate of Comstock et al.
  * (2004), 0.37 (LWP/N)^1.75 mm/day with LWP in g/m² and the droplet
  * number N in cm⁻³, leaves the layer at the surface; in the flux
@@ -82,9 +96,9 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * (W/m²) and evaporation (kg/m²/s), or seaSurfaceTemperature and
  * transferVelocity (C_T V, m/s) for bulk fluxes from the layer's surface
  * air; thetaLAbove and qtAbove, numbers or functions of height;
- * divergence D (w_s = −D z) or subsidence(z); and radiation(below,
- * above), the net upward longwave flux (W/m²) at a level with liquid
- * water paths (kg/m²) below and above it.
+ * divergence D (w_s = −D z) or subsidence(z); radiation(below, above),
+ * the net upward longwave flux (W/m²) at a level with liquid water paths
+ * (kg/m²) below and above it; and optionally solar (above).
  *
  * `dycomsLongwave` is the idealised longwave of the DYCOMS-II RF01 case
  * (Stevens et al. 2005): the net upward flux F0 e^(−κ W_above) +
@@ -102,13 +116,13 @@ export const MIXED_LAYER_DEFAULTS = {
   closure: 'radiative', entrainmentEfficiency: 0.2, evaporativeEnhancement: 25,
   maximumEfficiency: 1, maximumEntrainment: 0.02, minimumJump: 0.1,
   decouplingOnset: 0.15, decoupledRatio: 0.4, decoupledCover: 0.3,
-  drizzle: false, dropletNumber: 100, cloudLevels: 20,
+  drizzle: false, dropletNumber: 100, cloudLevels: 20, shortwaveAbsorption: 0.4, maximumShortwaveAbsorption: 0.15,
 };
 
 export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHeat = LATENT_HEAT, referencePressure = 1e5, ...options } = {}) {
   const {
     closure, entrainmentEfficiency, evaporativeEnhancement, maximumEfficiency, maximumEntrainment, minimumJump,
-    decouplingOnset, decoupledRatio, decoupledCover, drizzle, dropletNumber, cloudLevels,
+    decouplingOnset, decoupledRatio, decoupledCover, drizzle, dropletNumber, cloudLevels, shortwaveAbsorption, maximumShortwaveAbsorption,
   } = { ...MIXED_LAYER_DEFAULTS, ...options };
   if (closure !== 'radiative' && closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${closure}`);
   const kappa = R / cp, delta = 1 / EPSILON - 1, Lc = latentHeat / cp;
@@ -216,6 +230,8 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
     const radiation = forcing.radiation;
     const fluxSurface = radiation(0, lwp), fluxTop = radiation(lwp, 0);
     const divergence = fluxTop - fluxSurface;
+    const absorbed = (forcing.solar ?? 0) * Math.min(maximumShortwaveAbsorption, shortwaveAbsorption * lwp);
+    const netDivergence = divergence - absorbed;
     const rain = drizzle && lwp > 0 ? 0.37 * Math.pow(1000 * lwp / dropletNumber, 1.75) / 86400 : 0;
     const drizzleHeat = Lc / piB;
 
@@ -228,7 +244,7 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
     }
 
     const heat0 = sensible / (density * cp), water0 = evaporation / density;
-    const heatRate = (heat0 - divergence / (density * cp) + drizzleHeat * rain / density) / h;
+    const heatRate = (heat0 - netDivergence / (density * cp) + drizzleHeat * rain / density) / h;
     const waterRate = (water0 - rain / density) / h;
     const aDry = 1 + delta * qt, bDry = delta * thetaL, top = Math.min(zb, h);
     const dryFlux0 = (z) => aDry * (heat0 - z * heatRate) + bDry * (water0 - z * waterRate);
@@ -236,7 +252,8 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
     let I0 = 0.5 * top * (dryFlux0(0) + dryFlux0(top)), I1 = 0.5 * top * (dryFlux1(0) + dryFlux1(top));
     const cloudFlux0 = (j) => {
       const z = zNode[j], precipitation = rain * (h - z) / (h - zb);
-      const heat = heat0 - z * heatRate - (radiation(pathNode[j], lwp - pathNode[j]) - fluxSurface) / (density * cp) - drizzleHeat * (precipitation - rain) / density;
+      const sunBelow = absorbed > 0 ? absorbed * pathNode[j] / lwp : 0;
+      const heat = heat0 - z * heatRate - (radiation(pathNode[j], lwp - pathNode[j]) - fluxSurface - sunBelow) / (density * cp) - drizzleHeat * (precipitation - rain) / density;
       const water = water0 - z * waterRate + (precipitation - rain) / density;
       return aNode[j] * heat + bNode[j] * water;
     };
@@ -269,7 +286,7 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
     const decoupled = ratio <= decouplingOnset ? 1 : ratio >= decoupledRatio ? decoupledCover : 1 - (1 - decoupledCover) * (ratio - decouplingOnset) / (decoupledRatio - decouplingOnset);
     const cover = cloudy && lwp > 0 && capped ? decoupled : 0;
 
-    const thetaSource = entrainment * thetaAbove + subsidence * thetaL + heat0 - divergence / (density * cp) + drizzleHeat * rain / density;
+    const thetaSource = entrainment * thetaAbove + subsidence * thetaL + heat0 - netDivergence / (density * cp) + drizzleHeat * rain / density;
     const waterSource = entrainment * qtAbove + subsidence * qt + water0 - rain / density;
     return {
       h, thetaL, qt, cloudBase: Math.min(zb, h), liquidWaterPath: lwp, topLiquid: qlTop, cover, cloudy,
@@ -277,7 +294,7 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
       entrainment, subsidence, efficiency, mixingFraction: chi,
       thetaLAbove: thetaAbove, qtAbove, thetaLJump: jumpTheta, qtJump: jumpQ, virtualJump: jumpVirtual,
       sensibleHeat: sensible, evaporation, drizzle: rain, drizzleHeating: drizzleHeat * rain,
-      radiativeDivergence: divergence, buoyancyIntegral: integral, buoyancyIntegralRatio: ratio,
+      radiativeDivergence: divergence, absorbedShortwave: absorbed, buoyancyIntegral: integral, buoyancyIntegralRatio: ratio,
       convectiveVelocity: Math.cbrt(Math.max(0, 2.5 * g / thetaVDry * integral)),
       heatSource: thetaSource, waterSource,
     };

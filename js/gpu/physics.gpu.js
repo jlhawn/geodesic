@@ -36,7 +36,7 @@ const RELAX: f32 = ${o.relaxationTime}; const RH_REF: f32 = ${o.referenceHumidit
 const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth}; const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const CAP_MIN: f32 = ${o.minimumCapacity}; const CAP_MAX: f32 = ${o.maximumCapacity};
-const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
+const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SWABS: f32 = ${m.shortwaveAbsorption}; const MLM_SWMAX: f32 = ${m.maximumShortwaveAbsorption}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
 const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
@@ -176,7 +176,7 @@ fn mlmCloudBase(thetaL: f32, qt: f32, piS: f32) -> f32 {
   return x;
 }
 fn mlmRadiation(below: f32, above: f32) -> f32 { return DYC_F0 * exp(-DYC_K * above) + DYC_F1 * exp(-DYC_K * below); }
-fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove: f32, qtAbove: f32) -> MlmOut {
+fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove: f32, qtAbove: f32, solar: f32) -> MlmOut {
   var zNode: array<f32, MLM_NODES>; var qlNode: array<f32, MLM_NODES>; var rhoNode: array<f32, MLM_NODES>;
   var aNode: array<f32, MLM_NODES>; var bNode: array<f32, MLM_NODES>; var pathNode: array<f32, MLM_NODES>;
   let h = s.h; let thetaL = s.thetaL; let qt = s.qt;
@@ -220,6 +220,8 @@ fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove
   let capped = jumpVirtual > 0.0; let jump = max(MLM_MINJUMP, jumpVirtual);
   let fluxSurface = mlmRadiation(0.0, lwp); let fluxTop = mlmRadiation(lwp, 0.0);
   let divergence = fluxTop - fluxSurface;
+  let absorbed = solar * min(MLM_SWMAX, MLM_SWABS * lwp);
+  let netDivergence = divergence - absorbed;
   var efficiency = MLM_A1;
   if (cloudy && qlTop > 0.0 && capped) {
     let saturatedJump = topA * jumpTheta + topB * jumpQ;
@@ -229,7 +231,7 @@ fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove
     efficiency = min(MLM_AMAX, MLM_A1 * (1.0 + MLM_A2 * max(0.0, chi * (1.0 - saturatedJump / jump))));
   }
   let heat0 = sensible / (density * CP); let water0 = evaporation / density;
-  let heatRate = (heat0 - divergence / (density * CP)) / h;
+  let heatRate = (heat0 - netDivergence / (density * CP)) / h;
   let waterRate = water0 / h;
   let aDry = 1.0 + MLM_DELTA * qt; let bDry = MLM_DELTA * thetaL; let top = min(zb, h);
   let dryJump = aDry * jumpTheta + bDry * jumpQ;
@@ -240,7 +242,9 @@ fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove
     var before0 = 0.0; var before1 = 0.0;
     for (var j = 0; j <= MLM_LEVELS; j++) {
       let z = zNode[j];
-      let flux0 = aNode[j] * (heat0 - z * heatRate - (mlmRadiation(pathNode[j], lwp - pathNode[j]) - fluxSurface) / (density * CP)) + bNode[j] * (water0 - z * waterRate);
+      var sunBelow = 0.0;
+      if (absorbed > 0.0) { sunBelow = absorbed * pathNode[j] / lwp; }
+      let flux0 = aNode[j] * (heat0 - z * heatRate - (mlmRadiation(pathNode[j], lwp - pathNode[j]) - fluxSurface - sunBelow) / (density * CP)) + bNode[j] * (water0 - z * waterRate);
       let flux1 = -(z / h) * (aNode[j] * jumpTheta + bNode[j] * jumpQ);
       if (j > 0) { I0 += 0.5 * dz * (before0 + flux0); I1 += 0.5 * dz * (before1 + flux1); }
       before0 = flux0; before1 = flux1;
@@ -273,13 +277,13 @@ fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove
     }
   }
   let cover = select(0.0, decoupled, cloudy && lwp > 0.0 && capped);
-  return MlmOut(lwp, cover, entrainment, jumpVirtual, entrainment * jumpTheta + heat0 - divergence / (density * CP), entrainment * jumpQ + water0);
+  return MlmOut(lwp, cover, entrainment, jumpVirtual, entrainment * jumpTheta + heat0 - netDivergence / (density * CP), entrainment * jumpQ + water0);
 }
 fn mlmInterface(i: i32, m: i32) -> f32 {
   let idx = m * C + i;
   return (D[D_GEO + idx] + LV[L_GABS + m] + CP * D[D_THV + idx] * (D[D_EXM + idx] - D[D_EXL + idx - C])) / GRAV;
 }
-fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, dt: f32) -> MlmDeck {
+fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, dt: f32, solar: f32) -> MlmDeck {
   let none = MlmDeck(false, 0.0, 0.0, 0.0);
   let bottom = (K - 1) * C + i;
   let h = mixedDepth + (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
@@ -313,12 +317,12 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
   let thetaAbove = IN[S_TH + above] - LHEAT * aboveCloud / (CP * D[D_EXM + above]);
   let qtAbove = max(0.0, IN[S_Q + above]) + aboveCloud;
   let start = MlmState(h, heat / weight, water / weight);
-  let now = mlmDiagnose(start, pi, sensible, evaporation, thetaAbove, qtAbove);
+  let now = mlmDiagnose(start, pi, sensible, evaporation, thetaAbove, qtAbove, solar);
   if (!(now.jump >= MLM_MININV)) { return none; }
   var next = now;
   if (dt > 0.0) {
     let deepened = h + dt * (now.entrainment + subsidence);
-    next = mlmDiagnose(MlmState(deepened, start.thetaL + dt * now.heat / deepened, start.qt + dt * now.water / deepened), pi, sensible, evaporation, thetaAbove, qtAbove);
+    next = mlmDiagnose(MlmState(deepened, start.thetaL + dt * now.heat / deepened, start.qt + dt * now.water / deepened), pi, sensible, evaporation, thetaAbove, qtAbove, solar);
   }
   if (!(mlmFinite(next.lwp) && mlmFinite(next.cover) && mlmFinite(now.entrainment))) { return none; }
   return MlmDeck(true, next.cover, next.lwp, now.entrainment);
@@ -368,7 +372,19 @@ export const PHYSICS_KERNELS = {
     let exchange = rho * select(CEX, PH[PH_DRAG + i], LANDED) * max(ws, GUST);
     let sensible = exchange * CP * (ts - airT);
     let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
-    let mixed = mlmColumn(i, pi, mixedDepth, sensible, evap, P[0]);
+    var deckSun = 0.0;
+    if (STRATUS_SOLAR) {
+      let sunlit = beam - ozoneHeating;
+      var above = 0.0;
+      if (VAPOR_ABS > 0.0 && mu > 0.0 && STRATUS_K > 0) {
+        let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
+        var path = 0.0;
+        for (var k = 0; k < STRATUS_K; k++) { path += max(0.0, IN[S_Q + k * C + i]) * pi * LV[L_DS + k] / GRAV * sqrt(LV[L_SM + k]) * 0.1 * magnification; }
+        above = VAPOR_ABS * 2.9 * path / (pow(1.0 + 141.5 * path, 0.635) + 5.925 * path);
+      }
+      deckSun = sunlit - sunlit * above;
+    }
+    let mixed = mlmColumn(i, pi, mixedDepth, sensible, evap, P[0], deckSun);
     if (mixed.ok) {
       mlmCover = mixed.cover; mlmWater = mixed.water; mlmEntrainment = mixed.entrainment;
       fraction = mixed.cover * (1.0 - cover);

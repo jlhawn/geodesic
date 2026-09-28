@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
-import { adiabaticWaterLapse } from '../js/physics/radiation.module.js';
+import { adiabaticWaterLapse, sunDirection, DAY } from '../js/physics/radiation.module.js';
 
 const CONSTANTS = { cp: 1015, R: 287, latentHeat: 2.47e6 };
 const G = 9.806;
@@ -165,4 +165,39 @@ test('with the sea-surface temperature instead of fluxes the bulk formulas give 
   assert.ok(d.sensibleHeat > 10 && d.sensibleHeat < 25, `sensible ${d.sensibleHeat}`);
   assert.ok(latent > 100 && latent < 130, `latent ${latent}`);
   assert.throws(() => createMixedLayer({ closure: 'lilly' }));
+});
+
+test('under the July sun of 30°N the RF01 deck thins by day to 0.3–0.8 of its night-time water and recovers by night, decoupling by day; without sunlight it is the nocturnal run', () => {
+  const mlm = createMixedLayer(CONSTANTS), forcing = rf01(mlm);
+  const place = [Math.cos(Math.PI / 6), 0, Math.sin(Math.PI / 6)], sun = new Float64Array(3), midnight = 116 * DAY + DAY / 2;
+  const insolation = (t) => { sunDirection(t, sun); return 1362 * Math.max(0, place[0] * sun[0] + place[1] * sun[1] + place[2] * sun[2]); };
+  const series = (solar) => {
+    let state = { ...INITIAL };
+    const samples = [];
+    for (let n = 0; n <= 48 * 3600 / DT; n++) {
+      if (solar) forcing.solar = solar(midnight + n * DT);
+      const d = mlm.diagnose(state, forcing);
+      if ((n * DT) % 1800 === 0) samples.push({ hour: n * DT / 3600, ...d });
+      state = mlm.step(state, forcing, DT, d);
+    }
+    delete forcing.solar;
+    return samples;
+  };
+  const nocturnal = series(null);
+  assert.deepEqual(series(() => 0), nocturnal, 'with no sunlight the run is the nocturnal one');
+  const lit = series(insolation);
+  const within = (day, from, to) => lit.filter((d) => d.hour >= 24 * day + from && d.hour <= 24 * day + to);
+  const lines = [];
+  for (const day of [0, 1]) {
+    const night = within(day, 0, 8), afternoon = within(day, 12, 20);
+    const peak = Math.max(...night.map((d) => d.liquidWaterPath)), low = Math.min(...afternoon.map((d) => d.liquidWaterPath));
+    const dayBir = Math.max(...within(day, 8, 16).map((d) => d.buoyancyIntegralRatio)), nightBir = Math.max(...[...within(day, 0, 4), ...within(day, 20, 24)].map((d) => d.buoyancyIntegralRatio));
+    const noon = within(day, 12, 12)[0];
+    lines.push(`day ${day + 1}: night maximum ${(1000 * peak).toFixed(1)} g/m², afternoon minimum ${(1000 * low).toFixed(1)} (${(low / peak).toFixed(2)} of it); at noon ${noon.absorbedShortwave.toFixed(1)} W/m² absorbed, w_e ${(1000 * noon.entrainment).toFixed(2)} mm/s; BIR up to ${dayBir.toFixed(3)} by day, ${nightBir.toFixed(3)} by night`);
+    assert.ok(low / peak > 0.3 && low / peak < 0.8, `day ${day + 1}: afternoon ${low} against night ${peak}`);
+    assert.ok(dayBir > nightBir + 0.005, `day ${day + 1}: BIR ${dayBir} by day, ${nightBir} by night`);
+  }
+  console.log(`RF01 under the sun of 30°N on 15 July, 48 h from midnight:\n  ${lines.join('\n  ')}`);
+  assert.ok(lit.every((d) => d.liquidWaterPath > 0.01 && d.cover > 0), 'the deck thins but never vanishes');
+  assert.ok(within(0, 21, 24).every((d, n, all) => n === 0 || d.liquidWaterPath >= all[n - 1].liquidWaterPath), 'the deck thickens again after sunset');
 });

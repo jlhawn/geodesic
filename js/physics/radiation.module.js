@@ -109,6 +109,12 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * mlmSubsidence, starts at 0, and is saved with the state (the key
  * `mlmSubsidence`; a state saved without it starts from 0). The model's
  * own dh/dt keeps the instantaneous w_s.
+ * With stratusSolar (the default) the mixed layer also absorbs sunlight
+ * in its cloud: its forcing `solar` is the shortwave reaching the deck
+ * layer from above, the beam less the ozone's share and the water
+ * vapour's absorption in the layers above, as this column attenuates it
+ * on its way to the surface. That is the mixed layer's own budget only;
+ * the deck's effect on the column's radiation is the same either way.
  * The deck covers the mixed layer's cover times `openSea`, with its water
  * path (at most stratusWaterMax) in the same layer and the same
  * two-column blend; the EIS is still diagnosed. The mixed layer's cover,
@@ -173,7 +179,7 @@ export function adiabaticWaterLapse(T, p, cp, R, g, latentHeat = LATENT_HEAT) {
 
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 55, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
-  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = 3e-4, minimumInversion = 2, subsidenceMemory = 10 * DAY,
+  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = 3e-4, minimumInversion = 2, subsidenceMemory = 10 * DAY, stratusSolar = true,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
@@ -216,6 +222,7 @@ export function createRadiation(mesh, core, {
   const stratusLayer = nearestLayer(sigmaMid, stratusSigma), stabilityLayer = nearestLayer(sigmaMid, STABILITY_SIGMA);
   const gasEmissivity = Float64Array.from({ length: K }, (_, k) => 1 - Math.exp(-gasOpticalDepth * (levels[k + 1] - levels[k])));
   const temperature = new Float64Array(K);
+  const vaporTaken = new Float64Array(K);
   const emitted = new Float64Array(K);
   const netFlux = new Float64Array(K);
   const sun = new Float64Array([1, 0, 0]);
@@ -255,7 +262,7 @@ export function createRadiation(mesh, core, {
     return Math.min(stratusWaterMax, stratusScale * 0.5 * adiabaticWaterLapse(lcl.temperature, lcl.pressure, cp, R, g, latentHeat) * thickness * thickness);
   }
 
-  function shadowDeck(i, pi, theta, q, qc, mixedDepth, sensible, evaporation, dt) {
+  function shadowDeck(i, pi, theta, q, qc, mixedDepth, sensible, evaporation, dt, solar) {
     const bottom = (K - 1) * C + i;
     const surface = geopotential[bottom] - cp * thetaV[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
     const h = mixedDepth + (geopotential[bottom] - surface) / g;
@@ -278,7 +285,7 @@ export function createRadiation(mesh, core, {
     mlmSubsidence[i] = mlmSubsidence[i] * keep + subsidence * (1 - keep);
     if (mlmSubsidence[i] > -stratusSubsidence) return false;
     const forcing = {
-      surfacePressure: pi, sensibleHeat: sensible, evaporation, radiation: shadowLongwave, subsidence: () => subsidence,
+      surfacePressure: pi, sensibleHeat: sensible, evaporation, radiation: shadowLongwave, subsidence: () => subsidence, solar,
       thetaLAbove: theta[above] - latentHeat * aboveCloud / (cp * exnerLayer[above]), qtAbove: Math.max(0, q[above]) + aboveCloud,
     };
     const start = { h, thetaL: heat / weight, qt: water / weight };
@@ -315,6 +322,15 @@ export function createRadiation(mesh, core, {
     const exchange = airDensity * exchangeCoefficientAt * Math.max(windSpeed, gustiness);
     const sensible = exchange * cp * (surfaceT - airTemperature);
     const evaporation = qAir === null ? 0 : wetness * Math.max(0, exchange * (saturationHumidity(surfaceT, pi) - qAir));
+    const mu = beam / solarConstant, lit = vaporAbsorption > 0 && q !== null && mu > 0;
+    if (lit) {
+      const magnification = 35 / Math.sqrt(1224 * mu * mu + 1);
+      let path = 0;
+      for (let k = 0; k < K; k++) {
+        path += Math.max(0, q[k * C + i]) * pi * dSigma[k] / g * Math.sqrt(sigmaMid[k]) * 0.1 * magnification;
+        vaporTaken[k] = vaporAbsorption * waterVaporAbsorptivity(path);
+      }
+    }
     let fraction = 0, deck = 0, index = NaN;
     budget.mlmCover = 0; budget.mlmWater = 0; budget.mlmEntrainment = 0;
     if (stratus && openSea > 0 && qAir !== null && mixedDepth > 0) {
@@ -329,7 +345,8 @@ export function createRadiation(mesh, core, {
           if (fraction > 0) deck = deckWater(lcl, base, mixedDepth);
         }
       }
-      if (shadow && q && shadowDeck(i, pi, theta, q, qc, mixedDepth, sensible, evaporation, dt)) {
+      const sunlit = beam - ozoneHeating, above = lit && stratusLayer > 0 ? vaporTaken[stratusLayer - 1] : 0;
+      if (shadow && q && shadowDeck(i, pi, theta, q, qc, mixedDepth, sensible, evaporation, dt, stratusSolar ? sunlit - sunlit * above : 0)) {
         fraction = budget.mlmCover * openSea;
         if (fraction > 0) deck = Math.min(stratusWaterMax, budget.mlmWater);
       }
@@ -349,14 +366,11 @@ export function createRadiation(mesh, core, {
       temperature[k] = theta[k * C + i] * exnerLayer[k * C + i];
       netFlux[k] = ozoneHeating * ozoneFraction[k];
     }
-    const mu = beam / solarConstant;
     let incident = beam - ozoneHeating, vaporHeating = 0;
-    if (vaporAbsorption > 0 && q !== null && mu > 0) {
-      const magnification = 35 / Math.sqrt(1224 * mu * mu + 1);
-      let path = 0, taken = 0;
+    if (lit) {
+      let taken = 0;
       for (let k = 0; k < K; k++) {
-        path += Math.max(0, q[k * C + i]) * pi * dSigma[k] / g * Math.sqrt(sigmaMid[k]) * 0.1 * magnification;
-        const through = vaporAbsorption * waterVaporAbsorptivity(path);
+        const through = vaporTaken[k];
         netFlux[k] += incident * (through - taken);
         taken = through;
       }

@@ -1023,7 +1023,15 @@ subsidence (`subsidenceMemory`), because the large-scale subsidence
 that defines the regime is a small residual of the ±10 mm/s synoptic
 swings in any one step's πσ̇ (the DYCOMS-II divergence is itself a
 monthly mean); the mean is saved with the state as `mlmSubsidence`
-and starts at 0 in a state saved without it. With
+and starts at 0 in a state saved without it. By day the mixed layer's
+cloud absorbs 4 % of the sunlight reaching the deck layer per
+100 g/m² of water, at most 15 % (Stephens 1978; `stratusSolar`), which
+heats the layer and weakens its buoyancy flux, so a deck thins and
+decouples by day (RF01 under a July sun at 30°N: 0.56–0.59 of its
+night-time water by mid-afternoon). Since the model restarts from the
+column every step, the deck feels one physics step of it, about 1.5 %
+less water after 900 s under a high sun, and the column's radiation
+treats the deck as before. With
 `mixedLayerDeck: false` the deck comes instead from an empirical fit:
 over the ice-free part of each sea cell it covers the fraction f of
 the column, whose predictor is the estimated inversion strength of

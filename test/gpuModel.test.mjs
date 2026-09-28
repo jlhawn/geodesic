@@ -159,6 +159,9 @@ async function mixedLayerPair(steps, { seed = -1e-3, ...options } = {}) {
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }
   const after = await gpu.downloadPhysics(), r = model.radiation;
   const cell = (name) => after[name].subarray(0, C);
+  const sunlit = [];
+  for (let i = 0; i < C; i++) if (r.mlmCover[i] > 0 && r.insolation(i) > 200) sunlit.push(i);
+  const pick = (values) => Float64Array.from(sunlit, (i) => values[i]);
   let decked = 0, gpuDecked = 0, partial = 0, water = 0;
   for (let i = 0; i < C; i++) {
     if (r.mlmCover[i] > 0) { decked++; water += r.mlmWater[i]; if (r.mlmCover[i] < 1) partial++; }
@@ -169,6 +172,7 @@ async function mixedLayerPair(steps, { seed = -1e-3, ...options } = {}) {
     cover: stats(r.mlmCover, cell('MLMCOVER')), mlmWater: stats(r.mlmWater, cell('MLMWATER')), entrainment: stats(r.mlmEntrainment, cell('MLMENT')),
     subsidence: stats(r.mlmSubsidence, cell('MLMSUB')), olr: stats(r.outgoing, cell('OLR')), sw: stats(r.surfaceShortwave, cell('SWDN')),
     fraction: stats(r.stratusFraction, cell('DECKF')), deck: stats(r.stratus, cell('DECK')), mean: r.mlmSubsidence,
+    sunlit, sunlitWater: stats(pick(r.mlmWater), pick(cell('MLMWATER'))), sunlitDeck: stats(pick(r.stratus), pick(cell('DECK'))), waterPath: Float64Array.from(r.mlmWater),
   };
 }
 
@@ -180,6 +184,12 @@ test('the mixed-layer deck matches between the engines: cover, water path, entra
   assert.ok(on.mlmWater.rmsRel < 1e-4 && on.mlmWater.maxDiff < 5e-5 && on.deck.maxDiff < 5e-5, `water rms ${on.mlmWater.rmsRel}, max ${on.mlmWater.maxDiff} at ${on.mlmWater.at}`);
   assert.ok(on.entrainment.rmsRel < 1e-4, `entrainment rms ${on.entrainment.rmsRel}`);
   assert.ok(on.olr.rmsRel < 1e-5 && on.sw.rmsRel < 1e-5, `per-cell OLR rms ${on.olr.rmsRel}, surface shortwave rms ${on.sw.rmsRel}`);
+  const dark = await mixedLayerPair(2, { stratusSolar: false });
+  let thinned = 0;
+  for (const i of on.sunlit) thinned += (dark.waterPath[i] - on.waterPath[i]) / dark.waterPath[i];
+  console.log(`under the sun (${on.sunlit.length} decked cells lit by more than 200 W/m²) the cloud's absorption thins the step's water by ${(100 * thinned / on.sunlit.length).toFixed(1)} % on average; there the engines' water differs by rms ${on.sunlitWater.rmsRel.toExponential(1)}, at most ${on.sunlitWater.maxDiff.toExponential(1)} kg/m², the deck's by at most ${on.sunlitDeck.maxDiff.toExponential(1)} kg/m²`);
+  assert.ok(on.sunlit.length > 50 && thinned > 0.005 * on.sunlit.length, `${on.sunlit.length} lit decks thinned by ${thinned / on.sunlit.length}`);
+  assert.ok(on.sunlitWater.rmsRel < 1e-4 && on.sunlitWater.maxDiff < 5e-5 && on.sunlitDeck.maxDiff < 5e-5, `lit water rms ${on.sunlitWater.rmsRel}, max ${on.sunlitWater.maxDiff}; deck ${on.sunlitDeck.maxDiff}`);
   const split = await mixedLayerPair(2, { mixedLayer: { closure: 'buoyancy', decouplingOnset: 0, decoupledRatio: 0.02 } });
   console.log(`the buoyancy closure with decoupling from a buoyancy integral ratio of 0 to 0.02: ${split.partial} of ${split.decked} decks decoupled; cover differs by at most ${split.cover.maxDiff.toExponential(1)}, water by rms ${split.mlmWater.rmsRel.toExponential(1)}; OLR rms ${split.olr.rmsRel.toExponential(1)}, surface shortwave rms ${split.sw.rmsRel.toExponential(1)}`);
   assert.ok(split.partial > 0.2 * split.decked && split.gpuDecked === split.decked, `${split.partial} of ${split.decked} decoupled`);
