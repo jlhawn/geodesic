@@ -28,7 +28,7 @@ const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'root
  */
 export async function createGpuModel(gridOrMesh, {
   radius, nu4Hours = 3, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
-  topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true,
+  topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true, levels = sigmaInterfaces(),
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
@@ -38,7 +38,7 @@ export async function createGpuModel(gridOrMesh, {
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;
   const nu4 = Math.pow(spacing / Math.PI, 4) / (nu4Hours * 3600);
-  const core = createSigmaCore(mesh, { surfaceGeopotential: phis });
+  const core = createSigmaCore(mesh, { levels, surfaceGeopotential: phis });
   const { K, C, E } = core.diagnostics;
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
@@ -46,7 +46,7 @@ export async function createGpuModel(gridOrMesh, {
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
     ...Object.fromEntries(VEGETATION_OPTIONS.filter((key) => landOptions[key] !== undefined).map((key) => [key, landOptions[key]])),
   };
-  const gpu = await createGpuCore(mesh, { nu4, nu4Theta: nu4, physics, topSigma: surface.topSigma ?? 0.02, topDragDays: surface.topDragDays ?? 5, surfaceGeopotential: phis });
+  const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, physics, topSigma: surface.topSigma ?? 0.02, topDragDays: surface.topDragDays ?? 5, surfaceGeopotential: phis });
   const seaIce = createSeaIce(mesh, ice);
   const radiationCpu = createRadiation(mesh, core, radiation);
   const surfaceCpu = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, ...surface });

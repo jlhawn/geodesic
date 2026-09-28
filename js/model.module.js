@@ -1,5 +1,5 @@
 import { buildMesh } from './mesh.module.js';
-import { createSigmaCore } from './dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces } from './dynamics/sigmaCore.module.js';
 import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
 import { createSurface } from './physics/surface.module.js';
@@ -47,7 +47,7 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
 export function createModel(gridOrMesh, {
   radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {}, boundaryLayer: boundaryLayerOptions = {},
   topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true,
-  physics = true, moist = true, nu4Hours = 3, buffers = null,
+  physics = true, moist = true, nu4Hours = 3, buffers = null, levels = sigmaInterfaces(),
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
@@ -57,7 +57,7 @@ export function createModel(gridOrMesh, {
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;
   const nu4 = Math.pow(spacing / Math.PI, 4) / (nu4Hours * 3600);
-  const core = createSigmaCore(mesh, { nu4, nu4Theta: nu4, splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, ...coreOptions });
+  const core = createSigmaCore(mesh, { levels, nu4, nu4Theta: nu4, splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, exchangeCoefficients: dragCoefficients, ...radiationOptions });
   const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, land: geography ? geography.land : null, deckTop: radiation.mlmTop, ...boundaryLayerOptions }) : null;

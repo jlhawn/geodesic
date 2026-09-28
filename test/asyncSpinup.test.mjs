@@ -72,8 +72,8 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 test('the hand-off takes the sea surface, ice and ocean and keeps the atmosphere, the land and the clock', () => {
   const C = 5, land = Uint8Array.from([1, 0, 0, 1, 0]);
   const cells = (base) => Float32Array.from({ length: C }, (_, i) => base + i);
-  const coupled = { N: 1, day: 730, time: 730 * 86400, oceanYears: 100, pi: cells(1e5), surfaceT: cells(280), ice: cells(0), concentration: cells(0.1), mlmSubsidence: cells(0.01), mlmHeight: cells(800), mlmGate: cells(0.2), ocean: { h: cells(1), T: cells(275) }, land: { soil: cells(10), snow: cells(1) } };
-  const alone = { N: 1, day: 37230, time: 37230 * 86400, oceanYears: 100, pi: cells(9e4), surfaceT: cells(270), ice: cells(2), concentration: cells(0.5), mlmSubsidence: cells(0.02), mlmHeight: cells(900), mlmGate: cells(0.7), ocean: { h: cells(5), T: cells(271), Q: cells(7) }, land: { soil: cells(20), snow: cells(3) } };
+  const coupled = { N: 1, day: 730, time: 730 * 86400, oceanYears: 100, levels: Float64Array.from([0, 0.5, 1]), pi: cells(1e5), surfaceT: cells(280), ice: cells(0), concentration: cells(0.1), mlmSubsidence: cells(0.01), mlmHeight: cells(800), mlmGate: cells(0.2), ocean: { h: cells(1), T: cells(275) }, land: { soil: cells(10), snow: cells(1) } };
+  const alone = { N: 1, day: 37230, time: 37230 * 86400, oceanYears: 100, levels: Float64Array.from([0, 0.4, 1]), pi: cells(9e4), surfaceT: cells(270), ice: cells(2), concentration: cells(0.5), mlmSubsidence: cells(0.02), mlmHeight: cells(900), mlmGate: cells(0.7), ocean: { h: cells(5), T: cells(271), Q: cells(7) }, land: { soil: cells(20), snow: cells(3) } };
   const merged = withOceanOf(coupled, alone, land);
   for (let i = 0; i < C; i++) {
     const from = land[i] ? coupled : alone;
@@ -85,7 +85,7 @@ test('the hand-off takes the sea surface, ice and ocean and keeps the atmosphere
   assert.equal(merged.ocean.h, alone.ocean.h);
   assert.equal(merged.ocean.Q, alone.ocean.Q);
   assert.equal(merged.pi, coupled.pi);
-  for (const field of ['mlmSubsidence', 'mlmHeight', 'mlmGate']) assert.equal(merged[field], coupled[field], field);
+  for (const field of ['levels', 'mlmSubsidence', 'mlmHeight', 'mlmGate']) assert.equal(merged[field], coupled[field], field);
   assert.equal(merged.land.soil, coupled.land.soil);
   assert.deepEqual([merged.day, merged.time, merged.oceanYears], [730, 730 * 86400, 200]);
   assert.throws(() => withOceanOf(coupled, { ...alone, N: 2 }, land), /N=2/);

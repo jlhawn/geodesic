@@ -23,17 +23,55 @@ const CAM_L26_HYBI = [
   0.896215300000001, 0.953476100000003, 0.9851122, 1,
 ];
 
+const BOUNDARY_LAYER_HEIGHTS = [1698, 1213, 882, 649, 482, 359, 265, 192, 133, 83, 40];
+
 /*
- * Interface sigma values, top (0) to ground (1): the CAM 26-level hybrid
- * grid that Jablonowski & Williamson 2006 ran on, read as sigma with
- * p_s = p0 (hyai + hybi from HOMME's cami-26.ascii), plus the cap above
- * CAM's 2.19 hPa lid that a sigma coordinate needs. 27 layers.
+ * σ at a height (m) in the troposphere of the standard atmosphere, and
+ * the height at a σ.
  */
-export function sigmaInterfaces() {
+const STANDARD = { T0: 288.15, lapse: 0.0065, g: 9.80665, R: 287.053 };
+export function standardSigma(z) {
+  return Math.pow(1 - STANDARD.lapse * z / STANDARD.T0, STANDARD.g / (STANDARD.R * STANDARD.lapse));
+}
+export function standardHeight(sigma) {
+  return STANDARD.T0 / STANDARD.lapse * (1 - Math.pow(sigma, STANDARD.R * STANDARD.lapse / STANDARD.g));
+}
+
+export const SIGMA_GRIDS = ['cam26', 'bl34'];
+
+/*
+ * Interface sigma values, top (0) to ground (1), of the grid by that
+ * name. 'cam26' is the CAM 26-level hybrid grid that Jablonowski &
+ * Williamson 2006 ran on, read as sigma with p_s = p0 (hyai + hybi from
+ * HOMME's cami-26.ascii), plus the cap above CAM's 2.19 hPa lid that a
+ * sigma coordinate needs: 27 layers, the lowest three within about 850 m
+ * of the ground. 'bl34' is cam26 down to its σ 0.7444 interface (2.4 km)
+ * and below that the interfaces at BOUNDARY_LAYER_HEIGHTS in the
+ * standard atmosphere: a 40 m lowest layer, each layer 7 % to 49 %
+ * thicker than the one below it up into the first cam26 layer, ten
+ * layers below 1.25 km, 34 in all.
+ */
+export function sigmaInterfaces(name = 'cam26') {
   const levels = [0];
   for (let k = 0; k < CAM_L26_HYAI.length; k++) levels.push(CAM_L26_HYAI[k] + CAM_L26_HYBI[k]);
   levels[levels.length - 1] = 1;
-  return Float64Array.from(levels);
+  if (name === 'cam26') return Float64Array.from(levels);
+  if (name === 'bl34') {
+    const refined = BOUNDARY_LAYER_HEIGHTS.map(standardSigma);
+    return Float64Array.from([...levels.filter((sigma) => sigma < refined[0]), ...refined, 1]);
+  }
+  throw new Error(`no sigma grid is named ${name}; the grids are ${SIGMA_GRIDS.join(', ')}`);
+}
+
+/*
+ * The name of the grid with these interfaces, to within single-precision
+ * rounding, or null.
+ */
+export function sigmaGridName(levels) {
+  return SIGMA_GRIDS.find((name) => {
+    const grid = sigmaInterfaces(name);
+    return grid.length === levels.length && grid.every((sigma, k) => Math.abs(sigma - levels[k]) <= 1e-6);
+  }) ?? null;
 }
 
 /*

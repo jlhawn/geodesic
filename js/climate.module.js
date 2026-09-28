@@ -30,12 +30,13 @@ function atLevel(table, level) {
 }
 /*
  * The sliders give every model layer the same width: the level slider
- * runs over the σ interfaces from 1000 hPa up to the 10 hPa one,
- * interpolating in ln p within a layer, and the depth slider over the
- * ocean layers' nominal bases — the mixed layer, the interior layers'
- * subtropical bases, and the bottom.
+ * runs over the running model's σ interfaces from 1000 hPa up to the
+ * 10 hPa one, interpolating in ln p within a layer, and the depth slider
+ * over the ocean layers' nominal bases — the mixed layer, the interior
+ * layers' subtropical bases, and the bottom.
  */
-const LEVEL_STOPS = Array.from(sigmaInterfaces(), (sigma) => Math.round(LEVEL_BOTTOM * sigma)).filter((p) => p >= LEVEL_TOP);
+const levelStops = (levels) => Array.from(levels, (sigma) => Math.round(LEVEL_BOTTOM * sigma)).filter((p) => p >= LEVEL_TOP);
+let LEVEL_STOPS = levelStops(sigmaInterfaces());
 const DEPTH_STOPS = [0, 60, ...LAYER_BOTTOMS, DEPTH_BOTTOM];
 function levelFromSlider(t) {
   const m = (LEVEL_STOPS.length - 1) * (1 - Math.min(1, Math.max(0, t))), i = Math.min(LEVEL_STOPS.length - 2, Math.floor(m)), fraction = m - i;
@@ -277,7 +278,7 @@ const VIEW_NOTES = [
   ['Lighting', 'In the Satellite view, the strength of the sunlight and of the ambient light that keeps the night side from going black; both sliders follow a square law, so the left half covers the faint end finely.'],
   ['Mode', 'Atmosphere and Ocean paint the chosen overlay on an evenly lit globe, each with its own overlays: the wind or the current is what the animation follows, and only Atmosphere offers isobars and height lines. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day.'],
   ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
-  ['Height', 'The pressure level shown by the wind, temperature, humidity and vertical-motion views and followed by the animation: Surface is the lowest layer, about 60 m up, and the slider climbs from 1000 to 10 hPa giving each of the model\'s layers the same width, so the thin layers near the ground get as much room as the deep ones aloft. Where the ground rises above the level the map shows its relief in grey and the particles stop. Column views hide it and use the surface wind.'],
+  ['Height', 'The pressure level shown by the wind, temperature, humidity and vertical-motion views and followed by the animation: Surface is the lowest layer, 20 to 60 m up depending on the model\'s layers, and the slider climbs from 1000 to 10 hPa giving each of the model\'s layers the same width, so the thin layers near the ground get as much room as the deep ones aloft. Where the ground rises above the level the map shows its relief in grey and the particles stop. Column views hide it and use the surface wind.'],
   ['Depth', 'The depth shown by the sea temperature, current and upwelling views and followed by the animation: Surface is the mixed layer, and the slider descends to 5500 m giving each of the ocean\'s 24 layers the same width, each cell showing the isopycnal layer that holds the depth. Where the sea floor rises above the depth the map shows its relief in grey, as it shows the land. Column views hide it and use the surface current.'],
   ['Vertical motion', 'The air\'s vertical velocity at the chosen height, upward positive: rising air in warm fronts, storms and the tropical rain belt, sinking air under the subtropical highs. Diagnosed from the convergence of the flow, then averaged with the neighbouring cells and over a two-hour memory, so gravity waves and single convecting cells do not speckle it.'],
   ['Wind speed', 'Speed at the chosen height.'],
@@ -908,6 +909,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     if (message.type === 'ready') {
       const rebuild = !viewer || !ready || ready.cells !== message.cells;
       ready = message;
+      if (message.levels) LEVEL_STOPS = levelStops(message.levels);
       if (rebuild) { teardown(); setup(message.N); latest = null; }
       animatedSource = null;
       hasLand = !!message.land;
@@ -987,7 +989,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
     return li;
   };
   const toSnapshot = (saved, url = null) => {
-    const arrays = Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice', 'concentration', 'mlmSubsidence', 'mlmHeight', 'mlmGate'].filter((k) => saved[k]).map((k) => [k, Float64Array.from(saved[k]).buffer]));
+    const arrays = Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice', 'concentration', 'mlmSubsidence', 'mlmHeight', 'mlmGate', 'levels'].filter((k) => saved[k]).map((k) => [k, Float64Array.from(saved[k]).buffer]));
     const ocean = saved.ocean ? Object.fromEntries(Object.entries(saved.ocean).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
     const land = saved.land ? Object.fromEntries(Object.entries(saved.land).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
     const size = (o) => (o ? Object.values(o).reduce((n, b) => n + b.byteLength, 0) : 0);

@@ -561,6 +561,13 @@ three arrays (`createRK4Arrays`).
   30 hPa boundary layers was tried on the way: the sets agree on the
   JW06 wave to 3 hPa at day 10, and that one was stable without the θ
   closure, but the CAM grid is the standard and is what stays.
+  `sigmaInterfaces('bl34')` is the same grid above its 2.4 km
+  interface (σ 0.7444) with the five layers below it replaced by
+  twelve: interfaces at 40, 83, 133, 192, 265, 359, 482,
+  649, 882, 1213 and 1698 m in the standard atmosphere, each layer up
+  to 1.5 times as thick as the one below, 34 layers in all. A saved
+  state records its interfaces (`levels`), and every loader builds the
+  model on them; a state without them is on cam26.
 - **A required closure on θ.** Without any θ dissipation the A-grid
   set's thin top layers (Δσ ≈ 0.0008 above ~2 hPa) went unstable from
   day 3 in the steady run — θ departures of hundreds of kelvin with no surface

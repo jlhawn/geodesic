@@ -40,7 +40,7 @@ import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appen
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
-import { decodeState, encodeState } from '../js/stateFile.module.js';
+import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
@@ -78,7 +78,7 @@ const saved = await decodeState(new Uint8Array(readFileSync(from)));
 if (saved.N !== N) throw new Error(`${from} is N=${saved.N}`);
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = await createGpuModel(new Grid(N), { topography, ocean: OCEAN, radiation: RADIATION });
+const model = await createGpuModel(new Grid(N), { topography, ocean: OCEAN, radiation: RADIATION, levels: savedLevels(saved) });
 const { mesh, core, state, gpu } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), everySteps = model.oceanEngine.everySteps, oceanDt = everySteps * dt;
 const doneBefore = existing.length ? saved.oceanDays ?? (saved.oceanYears ?? 0) * DAYS_PER_YEAR : 0;
@@ -126,7 +126,7 @@ async function save(done, step, read = null) {
   const { o, surfaceT, ice, concentration } = read ?? await readSurface();
   const name = nameAt(done, step), landState = await model.land.serialize();
   writeFileSync(`${OUT}/${name}.partial`, encodeState({
-    N, K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: !!model.surfaceGeopotential,
+    N, K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: !!model.surfaceGeopotential, levels: core.levels,
     oceanYears: Math.floor(done / DAYS_PER_YEAR), oceanDays: done, ...(step ? { oceanStep: step } : {}),
     pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight, mlmGate: model.radiation.mlmGate,
     ocean: o, land: landState, sstByYear: Float64Array.from(history, (x) => x ?? NaN),
