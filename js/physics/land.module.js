@@ -18,9 +18,10 @@ import { MELTING_POINT } from './ice.module.js';
  * below dryWetness of the capacity, 1 above wetWetness), over
  * growthTime when rising and declineTime when falling, and under snow it
  * decays toward 0 over snowDeclineTime. The bare-ground albedo runs from
- * bareAlbedo to vegetatedAlbedo and the bucket from minimumCapacity to
- * maximumCapacity (deeper roots) with v; water above a shrinking bucket
- * runs off. Without it the bucket is bucketCapacity and the albedo
+ * bareAlbedo to vegetatedAlbedo with v, while the bucket holds a fixed
+ * rootZoneCapacity whatever the cover, because a soil keeps its water
+ * capacity when its plants die and a browned region can therefore
+ * regreen when the rain returns. Without it the bucket is bucketCapacity and the albedo
  * `albedo` everywhere. A cell of the geography's `iceSheet` grows no
  * vegetation and keeps iceSheetAlbedo whatever lies on it.
  *
@@ -40,8 +41,7 @@ import { MELTING_POINT } from './ice.module.js';
  */
 export function createLandSurface(mesh, geography, {
   heatCapacity = 1e6, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.2, snowAlbedo = 0.55, fullSnow = 20,
-  latentHeatFusion = 3.34e5, vegetation: vegetated = true, bareAlbedo = 0.30, vegetatedAlbedo = 0.13, minimumCapacity = 50,
-  maximumCapacity = 500, dryWetness = 0.1, wetWetness = 0.6, growthTime = 180 * 86400, declineTime = 365 * 86400,
+  latentHeatFusion = 3.34e5, vegetation: vegetated = true, bareAlbedo = 0.30, vegetatedAlbedo = 0.13, rootZoneCapacity = 300, dryWetness = 0.1, wetWetness = 0.6, growthTime = 180 * 86400, declineTime = 365 * 86400,
   snowDeclineTime = 720 * 86400, iceSheetAlbedo = 0.8, surfaceCapacity = 15, percolationTime = 86400, stomatalResistance = 70,
   growthColdest = 278.15, growthWarmest = 288.15, buffers = null,
 } = {}) {
@@ -54,7 +54,7 @@ export function createLandSurface(mesh, geography, {
   const onIceSheet = (i) => iceSheet !== null && iceSheet[i] > 0;
   const budget = { runoff: 0, melt: 0 };
 
-  const capacity = (i) => (vegetated ? minimumCapacity + (maximumCapacity - minimumCapacity) * vegetation[i] : bucketCapacity);
+  const capacity = () => (vegetated ? rootZoneCapacity : bucketCapacity);
   const bareGround = (i) => (vegetated ? bareAlbedo + (vegetatedAlbedo - bareAlbedo) * vegetation[i] : albedo);
 
   function overflow(i) {

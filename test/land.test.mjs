@@ -100,13 +100,13 @@ test('vegetation grows over a wet bucket and dies back over a dry one on its tim
   land.initialize();
   const i = 0, surfaceT = new Float64Array(mesh.nCells).fill(295), flux = new Float64Array(mesh.nCells);
   assert.equal(land.vegetation[i], 1);
-  assert.equal(land.capacity(i), 500);
+  assert.equal(land.capacity(i), 300);
   assert.ok(Math.abs(land.albedo(i) - 0.13) < 1e-12);
   land.vegetation[i] = 0.5; land.soil[i] = 0;
   land.update(i, surfaceT, flux, 0, 50 * DAY);
   assert.ok(Math.abs(land.vegetation[i] - 0.5 * Math.exp(-1)) < 1e-12, `dry: ${land.vegetation[i]}`);
   assert.ok(Math.abs(land.albedo(i) - (0.30 + (0.13 - 0.30) * land.vegetation[i])) < 1e-12);
-  assert.ok(Math.abs(land.capacity(i) - (50 + 450 * land.vegetation[i])) < 1e-12);
+  assert.equal(land.capacity(i), 300, 'the bucket does not follow the cover');
   const v0 = land.vegetation[i];
   land.soil[i] = land.capacity(i);
   land.update(i, surfaceT, flux, 0, 100 * DAY);
@@ -116,21 +116,21 @@ test('vegetation grows over a wet bucket and dies back over a dry one on its tim
   assert.ok(Math.abs(land.vegetation[i] - 0.5) < 1e-9, `a bucket 35% full settles at half cover: ${land.vegetation[i]}`);
 });
 
-test('a bucket shrinking with its vegetation spills the excess into runoff and keeps the water', () => {
+test('a browning cell keeps its bucket, and water above the root zone runs off', () => {
   const land = createLandSurface(mesh, flat(), { snowDeclineTime: 10 * DAY });
   land.initialize();
   const i = 5, surfaceT = new Float64Array(mesh.nCells).fill(MELTING_POINT - 10), flux = new Float64Array(mesh.nCells);
   land.deposit(i, 5, MELTING_POINT - 10);
-  assert.equal(land.soil[i], 500);
+  assert.equal(land.soil[i], 300);
   const before = land.water(), runoff = land.runoff[i];
   land.update(i, surfaceT, flux, 0, 50 * DAY);
   assert.ok(Math.abs(land.vegetation[i] - Math.exp(-5)) < 1e-12);
   assert.ok(Math.abs(land.soil[i] - land.capacity(i)) < 1e-9, `soil ${land.soil[i]} against capacity ${land.capacity(i)}`);
-  assert.ok(Math.abs(land.runoff[i] - runoff - (500 - land.soil[i])) < 1e-9, 'what the bucket lost ran off');
+  assert.ok(Math.abs(land.runoff[i] - runoff) < 1e-9, 'browning sheds no water');
   assert.ok(Math.abs(land.water() - before) < 1e-9 * before);
   land.soil[i] = 400; land.vegetation[i] = 0.2; land.snow[i] = 0;
   land.update(i, new Float64Array(mesh.nCells).fill(MELTING_POINT + 5), flux, 0, 1);
-  assert.ok(Math.abs(land.soil[i] - land.capacity(i)) < 1e-9, 'the bucket holds no more than its vegetation allows');
+  assert.ok(Math.abs(land.soil[i] - land.capacity(i)) < 1e-9 && Math.abs(land.runoff[i] - runoff - 100) < 1e-9, 'water above the root zone runs off');
 });
 
 test('under snow the vegetation fades over snowDeclineTime and the snow sets the albedo', () => {
@@ -151,7 +151,7 @@ test('a saved land state without vegetation loads green with full buckets where 
   for (let i = 0; i < mesh.nCells; i++) {
     if (!geography.land[i]) { assert.equal(land.vegetation[i], 0); assert.equal(land.soil[i], 0); continue; }
     if (snow[i] > 0 || geography.iceSheet[i]) { assert.equal(land.vegetation[i], 0); assert.equal(land.soil[i], 20); }
-    else { assert.equal(land.vegetation[i], 1); assert.equal(land.soil[i], 500); }
+    else { assert.equal(land.vegetation[i], 1); assert.equal(land.soil[i], 300); }
   }
   land.load({ soil: new Float64Array(mesh.nCells).fill(20), snow, vegetation: new Float64Array(mesh.nCells).fill(1.5) });
   for (let i = 0; i < mesh.nCells; i++) assert.equal(land.vegetation[i], geography.land[i] && !geography.iceSheet[i] ? 1 : 0);
@@ -187,7 +187,7 @@ test('with vegetation the soil has a surface layer that bare ground evaporates a
   assert.equal(land.surface[i], 10); assert.equal(land.soil[i], 20);
   land.deposit(i, 30, 290);
   assert.equal(land.surface[i], 15);
-  const shed = 25 * Math.pow(20 / 50, 4);
+  const shed = 25 * Math.pow(20 / 300, 4);
   assert.ok(Math.abs(land.soil[i] - (20 + 25 - shed)) < 1e-12 && Math.abs(land.runoff[i] - shed) < 1e-12, 'the overflow infiltrates, a (soil/capacity)⁴ share running off');
   assert.ok(Math.abs(land.water() - before - mesh.areaCell[i] * 40) < 1e-9 * mesh.areaCell[i]);
   assert.ok(Math.abs(land.wetness(i, 0.01, 295) - 1) < 1e-12, 'a wet surface layer evaporates freely from bare ground');

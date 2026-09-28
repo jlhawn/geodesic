@@ -1921,9 +1921,13 @@ filled 500 mm buckets carried the monsoons through the season.
 So the land now grows a vegetation cover v from 0 (bare) to 1 (dense
 forest) per cell, and the land's properties follow it rather than a
 map: the bare-ground albedo runs from `bareAlbedo` 0.30 to
-`vegetatedAlbedo` 0.13 and the bucket from `minimumCapacity` 50 to
-`maximumCapacity` 500 kg/m², deeper roots holding water through dry
-seasons. Snow-free, v relaxes toward a goal set by how full the bucket
+`vegetatedAlbedo` 0.13, while the bucket holds a fixed
+`rootZoneCapacity` of 300 kg/m² whatever the cover: a soil keeps its
+water capacity when its plants die, so a region that browns in a run
+of dry years can regreen when the rain returns instead of shrinking
+its own bucket and locking the desert in (the Sahel did exactly that
+over three spin-up years when the capacity followed the cover).
+Snow-free, v relaxes toward a goal set by how full the bucket
 is — 0 below `dryWetness` 0.1 of the capacity, 1 above `wetWetness`
 0.6 — over `growthTime` (180 days) when rising and `declineTime`
 (365 days) when falling; under snow it fades toward 0 over
