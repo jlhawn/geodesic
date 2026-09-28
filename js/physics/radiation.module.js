@@ -186,7 +186,7 @@ export function adiabaticWaterLapse(T, p, cp, R, g, latentHeat = LATENT_HEAT) {
 }
 
 export function createRadiation(mesh, core, {
-  solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 55, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
+  solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 95, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = 3e-4, minimumInversion = 2, subsidenceMemory = 10 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,

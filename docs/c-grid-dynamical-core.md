@@ -997,7 +997,7 @@ Each layer's cloud water path gives it a gray emissivity
 and gas bands as 1 − (1 − ε_gas)(1 − ε_cloud), and the window, which is
 now an exchange band of its own that is transparent only where there is
 no cloud. In the shortwave the column's cloud optical depth
-(`cloudScattering` = 55 m²/kg × path) reflects the beam
+(`cloudScattering` = 95 m²/kg × path) reflects the beam
 with the two-stream reflectance τ/(τ + 2μ); what passes is absorbed by
 the surface with its per-cell albedo, with the multiple reflections
 between surface and cloud summed. Cloud water also absorbs: a cloud of
@@ -1005,8 +1005,12 @@ water path W passes on only exp(−`cloudSolarAbsorption` × W) of what it
 reflects or transmits, of the beam from above and of the light the
 surface returns through it, and the rest heats its layers in proportion
 to their water. The default 0.4 m²/kg absorbs 3.9 % at 100 g/m² and
-15 % at 400 g/m² (Stephens 1978); 0 gives back the purely scattering
-cloud bit for bit in both engines. The fixed planetary albedo of 0.3 is
+15 % at 400 g/m² (Stephens 1978), and the scattering was re-balanced
+from 55 to 95 m²/kg so that the planetary albedo is unchanged by the
+absorption (two-day mean absorbed solar from `five64_day1734` within
+0.3 W/m² of the purely scattering clouds'); `cloudSolarAbsorption` 0
+with `cloudScattering` 55 gives back the purely scattering engine bit
+for bit in both engines. The fixed planetary albedo of 0.3 is
 gone: it is now produced by clouds and ice, and diagnosed. Radiation's
 closure still holds exactly (with the latent heat of evaporation
 counted as leaving the surface). The cloud–albedo, cloud–longwave and
@@ -1989,7 +1993,8 @@ to 2.7–2.9 mm/day and warmed the Saharan column by 6 K at 850 hPa, but
 the second year still dried the Sahel (0.3 mm/day) and the Congo (3.4),
 and with the surface receiving less sunlight the planetary albedo fell
 from 0.34 to 0.28 and the surface warmed. The defaults are therefore
-`cloudScattering` 55 (planetary albedo 0.30), a convective reference
+`cloudScattering` 55 (planetary albedo 0.30; 95 once cloud water
+absorbs, M10), a convective reference
 humidity of 0.6 (the Congo's lever: 2.9 → 5.7 mm/day on its own),
 `declineTime` 365 days with `bareAlbedo` 0.30 (one bad season no
 longer tips a region into the bare state), and a land drag and

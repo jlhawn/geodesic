@@ -568,9 +568,9 @@ function modelDigest(radiation) {
   return { digest: hash.digest('hex').slice(0, 32), radiation: model.radiation };
 }
 
-test('with mixedLayerDeck: false and cloudSolarAbsorption: 0 the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
+test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
   const before = '1a7a2bd66c1edabedde1875fd6868c4a';
-  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0 }).digest, before);
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55 }).digest, before);
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
   assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
@@ -587,11 +587,11 @@ test('with mixedLayerDeck: false and cloudSolarAbsorption: 0 the model is bit-id
   assert.ok(covered > 0, 'some cells carry a mixed-layer deck');
 });
 
-test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with cloudSolarAbsorption: 0 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
-  const forced = { stratusSubsidence: 0, minimumInversion: 0 };
-  assert.equal(modelDigest({ stratusSolar: false, cloudSolarAbsorption: 0 }).digest, 'acc030865b5b4b5ebefec6d4f9afbfc8');
-  assert.equal(modelDigest({ ...forced, stratusSolar: false, cloudSolarAbsorption: 0 }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
-  assert.equal(modelDigest({ ...forced, cloudSolarAbsorption: 0 }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
+test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
+  const forced = { stratusSubsidence: 0, minimumInversion: 0 }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55 };
+  assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, 'acc030865b5b4b5ebefec6d4f9afbfc8');
+  assert.equal(modelDigest({ ...forced, stratusSolar: false, ...scatteringOnly }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
+  assert.equal(modelDigest({ ...forced, ...scatteringOnly }).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
   assert.notEqual(modelDigest(forced).digest, 'f9b51ced150d8f4e0dfcca0045df345c');
   const shadow = createRadiation(mesh, core, { subsidenceMemory: 1e-9 }), dark = createRadiation(mesh, core, { subsidenceMemory: 1e-9, stratusSolar: false });
   const scattering = createRadiation(mesh, core, { subsidenceMemory: 1e-9, cloudSolarAbsorption: 0 });
