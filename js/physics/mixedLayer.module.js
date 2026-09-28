@@ -91,17 +91,25 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * F1 e^(−κ W_below) of a level with liquid paths W below and above it.
  * Its free-tropospheric term vanishes at the inversion and is left out.
  */
-export function dycomsLongwave({ F0 = 70, F1 = 22, kappa = 85 } = {}) {
+export const DYCOMS_LONGWAVE = { F0: 70, F1: 22, kappa: 85 };
+
+export function dycomsLongwave(options = {}) {
+  const { F0, F1, kappa } = { ...DYCOMS_LONGWAVE, ...options };
   return (below, above) => F0 * Math.exp(-kappa * above) + F1 * Math.exp(-kappa * below);
 }
 
-export function createMixedLayer({
-  cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHeat = LATENT_HEAT, referencePressure = 1e5,
-  closure = 'radiative', entrainmentEfficiency = 0.2, evaporativeEnhancement = 25,
-  maximumEfficiency = 1, maximumEntrainment = 0.02, minimumJump = 0.1,
-  decouplingOnset = 0.15, decoupledRatio = 0.4, decoupledCover = 0.3,
-  drizzle = false, dropletNumber = 100, cloudLevels = 20,
-} = {}) {
+export const MIXED_LAYER_DEFAULTS = {
+  closure: 'radiative', entrainmentEfficiency: 0.2, evaporativeEnhancement: 25,
+  maximumEfficiency: 1, maximumEntrainment: 0.02, minimumJump: 0.1,
+  decouplingOnset: 0.15, decoupledRatio: 0.4, decoupledCover: 0.3,
+  drizzle: false, dropletNumber: 100, cloudLevels: 20,
+};
+
+export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHeat = LATENT_HEAT, referencePressure = 1e5, ...options } = {}) {
+  const {
+    closure, entrainmentEfficiency, evaporativeEnhancement, maximumEfficiency, maximumEntrainment, minimumJump,
+    decouplingOnset, decoupledRatio, decoupledCover, drizzle, dropletNumber, cloudLevels,
+  } = { ...MIXED_LAYER_DEFAULTS, ...options };
   if (closure !== 'radiative' && closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${closure}`);
   const kappa = R / cp, delta = 1 / EPSILON - 1, Lc = latentHeat / cp;
   const n = cloudLevels;

@@ -179,3 +179,29 @@ test('the stratocumulus deck shows in the cloud field, the same in both engines'
   assert.ok(engines.max < 1e-4, `cloud differs between the engines by ${engines.max} at ${engines.at}`);
   assert.ok(worst(off.cpu, off.gpu).max < 1e-4);
 });
+
+test('the mixed-layer deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const radiation = { mixedLayerDeck: true };
+  const cpu = createModel(new Grid(6), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation });
+  const C = cpu.mesh.nCells, { K, sigmaMid } = cpu.core;
+  const init = initializeState(cpu, {});
+  for (let a = 0; a < init.length; a++) cpu.state[a].set(init[a]);
+  const theta = cpu.state[1], q = cpu.state[4];
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) {
+    if (sigmaMid[k] < 0.85) theta[k * C + i] += 10;
+    else { theta[k * C + i] = theta[(K - 1) * C + i]; q[k * C + i] = q[(K - 1) * C + i]; }
+  }
+  for (let a = 0; a < init.length; a++) gpu.state[a].set(cpu.state[a]);
+  cpu.radiation.mlmSubsidence.fill(-1e-3);
+  gpu.load();
+  gpu.gpu.uploadPhysics({ mlmSubsidence: cpu.radiation.mlmSubsidence });
+  for (let n = 0; n < 2; n++) { cpu.step(900); await gpu.step(900); }
+  const frame = await gpu.beginFrame({ fields: ['cloud'] });
+  const reference = Float64Array.from({ length: C }, (_, i) => cpu.cloudWater(i));
+  let decked = 0, added = 0;
+  for (let i = 0; i < C; i++) if (cpu.radiation.mlmCover[i] > 0) { decked++; added += cpu.radiation.stratusFraction[i] * cpu.radiation.stratus[i]; }
+  const engines = worst(reference, frame.fields.cloud);
+  console.log(`the mixed-layer deck on ${decked} of ${C} cells adds ${(1000 * added / Math.max(1, decked)).toFixed(1)} g/m² to their cloud; the engines' cloud fields differ by at most ${engines.max.toExponential(1)} kg/m²`);
+  assert.ok(decked > C / 2 && added / decked > 0.05, `deck on ${decked} cells adding ${added / decked} kg/m²`);
+  assert.ok(engines.max < 1e-4, `cloud differs between the engines by ${engines.max} at ${engines.at}`);
+});

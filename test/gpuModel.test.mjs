@@ -134,3 +134,64 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
   assert.ok(closed + opened > 0, 'the concentration moved');
   assert.ok(worstArea < 1e-3 && worstIce < 1e-3 && worstT < 0.02, `concentration ${worstArea}, ice ${worstIce}, skin ${worstT}`);
 });
+
+/*
+ * Every column mixed from the surface to σ 0.85 (the lowest layer's θ
+ * and q throughout) under a 10 K inversion, with the running-mean
+ * subsidence seeded to `seed` in both engines so the gate reads each
+ * column's own inversion: the second step, the first with a diagnosed
+ * boundary layer, carries the deck.
+ */
+async function mixedLayerPair(steps, { seed = -1e-3, ...options } = {}) {
+  const physics = { mixedLayerDeck: true, ...options };
+  const model = createModel(new Grid(6), { ocean: false, radiation: physics });
+  const init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  const { K, sigmaMid } = model.core, C = model.mesh.nCells, theta = model.state[1], q = model.state[4];
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) {
+    if (sigmaMid[k] < 0.85) theta[k * C + i] += 10;
+    else { theta[k * C + i] = theta[(K - 1) * C + i]; q[k * C + i] = q[(K - 1) * C + i]; }
+  }
+  model.radiation.mlmSubsidence.fill(seed);
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model), physics });
+  gpu.upload(model.state);
+  gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence });
+  for (let n = 0; n < steps; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }
+  const after = await gpu.downloadPhysics(), r = model.radiation;
+  const cell = (name) => after[name].subarray(0, C);
+  let decked = 0, gpuDecked = 0, partial = 0, water = 0;
+  for (let i = 0; i < C; i++) {
+    if (r.mlmCover[i] > 0) { decked++; water += r.mlmWater[i]; if (r.mlmCover[i] < 1) partial++; }
+    if (after.MLMCOVER[i] > 0) gpuDecked++;
+  }
+  return {
+    C, decked, gpuDecked, partial, water: water / Math.max(1, decked),
+    cover: stats(r.mlmCover, cell('MLMCOVER')), mlmWater: stats(r.mlmWater, cell('MLMWATER')), entrainment: stats(r.mlmEntrainment, cell('MLMENT')),
+    subsidence: stats(r.mlmSubsidence, cell('MLMSUB')), olr: stats(r.outgoing, cell('OLR')), sw: stats(r.surfaceShortwave, cell('SWDN')),
+    fraction: stats(r.stratusFraction, cell('DECKF')), deck: stats(r.stratus, cell('DECK')), mean: r.mlmSubsidence,
+  };
+}
+
+test('the mixed-layer deck matches between the engines: cover, water path, entrainment and the radiation they drive', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const on = await mixedLayerPair(2);
+  console.log(`mixed-layer deck at N=6 under a 10 K inversion on a layer mixed to σ 0.85: on ${on.decked} of ${on.C} sea cells (GPU ${on.gpuDecked}), ${(1000 * on.water).toFixed(1)} g/m² where it forms; engines differ in cover by at most ${on.cover.maxDiff.toExponential(1)}, in water by ${on.mlmWater.maxDiff.toExponential(1)} kg/m² (rms ${on.mlmWater.rmsRel.toExponential(1)}), in entrainment by rms ${on.entrainment.rmsRel.toExponential(1)}; per-cell OLR rms ${on.olr.rmsRel.toExponential(1)}, surface shortwave rms ${on.sw.rmsRel.toExponential(1)}`);
+  assert.ok(on.decked > 0.5 * on.C && on.gpuDecked === on.decked, `deck on ${on.decked} cells, ${on.gpuDecked} on the GPU`);
+  assert.ok(on.cover.maxDiff < 1e-3 && on.fraction.maxDiff < 1e-3, `cover ${on.cover.maxDiff} at ${on.cover.at}`);
+  assert.ok(on.mlmWater.rmsRel < 1e-4 && on.mlmWater.maxDiff < 5e-5 && on.deck.maxDiff < 5e-5, `water rms ${on.mlmWater.rmsRel}, max ${on.mlmWater.maxDiff} at ${on.mlmWater.at}`);
+  assert.ok(on.entrainment.rmsRel < 1e-4, `entrainment rms ${on.entrainment.rmsRel}`);
+  assert.ok(on.olr.rmsRel < 1e-5 && on.sw.rmsRel < 1e-5, `per-cell OLR rms ${on.olr.rmsRel}, surface shortwave rms ${on.sw.rmsRel}`);
+  const split = await mixedLayerPair(2, { mixedLayer: { closure: 'buoyancy', decouplingOnset: 0, decoupledRatio: 0.02 } });
+  console.log(`the buoyancy closure with decoupling from a buoyancy integral ratio of 0 to 0.02: ${split.partial} of ${split.decked} decks decoupled; cover differs by at most ${split.cover.maxDiff.toExponential(1)}, water by rms ${split.mlmWater.rmsRel.toExponential(1)}; OLR rms ${split.olr.rmsRel.toExponential(1)}, surface shortwave rms ${split.sw.rmsRel.toExponential(1)}`);
+  assert.ok(split.partial > 0.2 * split.decked && split.gpuDecked === split.decked, `${split.partial} of ${split.decked} decoupled`);
+  assert.ok(split.cover.maxDiff < 1e-3 && split.mlmWater.rmsRel < 1e-4, `cover ${split.cover.maxDiff}, water rms ${split.mlmWater.rmsRel}`);
+  assert.ok(split.olr.rmsRel < 3e-5 && split.sw.rmsRel < 3e-5, `per-cell OLR rms ${split.olr.rmsRel}, surface shortwave rms ${split.sw.rmsRel}`);
+});
+
+test('the running mean of the subsidence at the boundary-layer top builds the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = await mixedLayerPair(4, { seed: 0 });
+  let moved = 0;
+  for (let i = 0; i < run.C; i++) if (run.mean[i] !== 0) moved++;
+  console.log(`four steps from a zero mean: the mean moved on ${moved} of ${run.C} cells; engines differ by rms ${run.subsidence.rmsRel.toExponential(1)}, at most ${run.subsidence.maxDiff.toExponential(1)} m/s`);
+  assert.ok(moved > 0.5 * run.C, `the mean moved on ${moved} cells`);
+  assert.ok(run.subsidence.rmsRel < 1e-3, `mean subsidence rms ${run.subsidence.rmsRel}, max ${run.subsidence.maxDiff} at ${run.subsidence.at}`);
+});

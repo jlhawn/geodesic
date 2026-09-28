@@ -134,6 +134,7 @@ export function waterVaporAbsorptivity(path) {
 
 const DIFFUSE_MU = 0.6;
 export const STABILITY_SIGMA = 0.7;
+export const DECK_CLOUD_LEVELS = 8;
 
 export function nearestLayer(sigmaMid, sigma) {
   let best = 0;
@@ -202,7 +203,7 @@ export function createRadiation(mesh, core, {
   const mlmEntrainmentBuffer = buffers && buffers.mlmEntrainment ? buffers.mlmEntrainment : new SharedArrayBuffer(8 * C);
   const mlmSubsidenceBuffer = buffers && buffers.mlmSubsidence ? buffers.mlmSubsidence : new SharedArrayBuffer(8 * C);
   const mlmCover = new Float64Array(mlmCoverBuffer), mlmWater = new Float64Array(mlmWaterBuffer), mlmEntrainment = new Float64Array(mlmEntrainmentBuffer), mlmSubsidence = new Float64Array(mlmSubsidenceBuffer);
-  const shadow = mixedLayerDeck ? createMixedLayer({ cp, R, g, latentHeat, referencePressure: p0, cloudLevels: 8, ...mixedLayerOptions }) : null;
+  const shadow = mixedLayerDeck ? createMixedLayer({ cp, R, g, latentHeat, referencePressure: p0, cloudLevels: DECK_CLOUD_LEVELS, ...mixedLayerOptions }) : null;
   const shadowLongwave = dycomsLongwave();
   if (stratusIndex !== 'eis' && stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${stratusIndex}`);
   const entraining = stratusIndex === 'ectei';
