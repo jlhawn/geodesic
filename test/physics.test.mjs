@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, P0, CP_DRY, R_DRY } from '../js/dynamics/sigmaCore.module.js';
-import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse } from '../js/physics/radiation.module.js';
+import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex } from '../js/physics/radiation.module.js';
 import { LATENT_HEAT, saturationHumidity, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { createSurface } from '../js/physics/surface.module.js';
 import { createModel } from '../js/model.module.js';
@@ -267,23 +267,35 @@ function deckColumns(options = {}) {
   const bottom = (K - 1) * C + noon, top = radiation.stabilityLayer * C + noon;
   const withStability = (lts) => { const theta = Float64Array.from(unstable); theta[top] = theta[bottom] + lts; return theta; };
   const run = (r, theta, surfaceT, openSea, depth = 1200, cloud = qc) => {
+    core.diagnose(pi, theta, q, cloud);
     const flux = r.column(noon, P0, theta, surfaceT, 5, r.opticalDepth(mesh.latCell[noon]), r.insolation(noon), q[bottom], q, cloud, 0.07, 0.06, 1, 1.5e-3, openSea, depth);
     let layers = 0, scale = 0;
     for (let k = 0; k < K; k++) { layers += r.layerFlux[k]; scale += Math.abs(r.layerFlux[k]); }
     const latent = LATENT_HEAT * r.budget.evaporation;
     const closure = Math.abs(layers + flux + latent - (r.budget.absorbedSolar - r.budget.outgoingLongwave)) / (scale + Math.abs(flux) + latent);
-    return { ...r.budget, flux, closure, layers: Array.from(r.layerFlux) };
+    const { stabilityIndex, ...budget } = r.budget;
+    return { ...budget, flux, closure, layers: Array.from(r.layerFlux) };
   };
-  return { radiation, off, noon, q, qc, unstable, bottom, withStability, run, airTemperature: unstable[bottom] * exnerLayer[bottom] };
+  const inversion = (theta) => {
+    core.diagnose(pi, theta, q, qc);
+    const { g, kappa, geopotential } = core.diagnostics;
+    const lowerT = theta[bottom] * exnerLayer[bottom], upperT = theta[top] * exnerLayer[top];
+    const lcl = liftingCondensationLevel(lowerT, q[bottom], P0 * core.sigmaMid[K - 1], kappa);
+    const T = 0.5 * (lowerT + upperT), qs = saturationHumidity(T, 85000), vaporR = R_DRY / 0.622;
+    const moist = g / CP_DRY * (1 + LATENT_HEAT * qs / (R_DRY * T)) / (1 + LATENT_HEAT * LATENT_HEAT * qs / (CP_DRY * vaporR * T * T));
+    return theta[top] - theta[bottom] - (g / CP_DRY - moist) * ((geopotential[top] - geopotential[bottom]) / g - Math.max(0, CP_DRY * (lowerT - lcl.temperature) / g));
+  };
+  const cover = (theta) => Math.min(1, Math.max(0, 0.19 + 0.08 * (inversion(theta) - 1)));
+  return { radiation, off, noon, q, qc, unstable, bottom, top, withStability, run, inversion, cover, airTemperature: unstable[bottom] * exnerLayer[bottom] };
 }
 
 test('a stable column over warm open sea carries a stratocumulus deck that reflects the noon sun and lowers the OLR; land, cold sea and stratus: false carry none', () => {
-  const { radiation, off, unstable, withStability, run } = deckColumns();
+  const { radiation, off, unstable, withStability, run, inversion, cover } = deckColumns();
   const stable = withStability(20);
   const deck = run(radiation, stable, 298, 1), clear = run(radiation, unstable, 298, 1);
-  console.log(`LTS 20 K against ${(unstable[radiation.stabilityLayer * C] - unstable[(K - 1) * C]).toFixed(1)} K over a 298 K sea under a 1200 m boundary layer: deck ${deck.stratus.toFixed(4)} kg/m² on ${deck.stratusFraction.toFixed(3)} of the cell; noon absorbed solar ${deck.absorbedSolar.toFixed(0)} against ${clear.absorbedSolar.toFixed(0)} W/m², OLR ${deck.outgoingLongwave.toFixed(1)} against ${clear.outgoingLongwave.toFixed(1)}`);
+  console.log(`LTS 20 K (EIS ${inversion(stable).toFixed(1)} K) against ${(unstable[radiation.stabilityLayer * C] - unstable[(K - 1) * C]).toFixed(1)} K (EIS ${inversion(unstable).toFixed(1)} K) over a 298 K sea under a 1200 m boundary layer: deck ${deck.stratus.toFixed(4)} kg/m² on ${deck.stratusFraction.toFixed(3)} of the cell; noon absorbed solar ${deck.absorbedSolar.toFixed(0)} against ${clear.absorbedSolar.toFixed(0)} W/m², OLR ${deck.outgoingLongwave.toFixed(1)} against ${clear.outgoingLongwave.toFixed(1)}`);
   assert.ok(deck.stratus > 0.02 && clear.stratus === 0 && clear.stratusFraction === 0, `deck ${deck.stratus} against ${clear.stratus} kg/m²`);
-  assert.ok(Math.abs(deck.stratusFraction - (0.057 * 20 - 0.556)) < 1e-9, `cover ${deck.stratusFraction}`);
+  assert.ok(deck.stratusFraction > 0 && Math.abs(deck.stratusFraction - cover(stable)) < 1e-9, `cover ${deck.stratusFraction}`);
   assert.ok(deck.absorbedSolar < clear.absorbedSolar - 60, `absorbed solar ${deck.absorbedSolar} against ${clear.absorbedSolar}`);
   assert.ok(deck.outgoingLongwave < clear.outgoingLongwave, `OLR ${deck.outgoingLongwave} against ${clear.outgoingLongwave}`);
   assert.ok(deck.closure < EPS);
@@ -299,15 +311,16 @@ test('a stable column over warm open sea carries a stratocumulus deck that refle
 
 test('the deck is two independent columns: its shortwave is the cover-weighted mean of the overcast and clear columns, the overcast one is the column with the deck water condensed in its layer, and the column closes', () => {
   const { radiation, off, noon, qc, withStability, run } = deckColumns();
-  const half = run(radiation, withStability(1.056 / 0.057), 298, 1), full = run(radiation, withStability(30), 298, 1), none = run(radiation, withStability(30), 298, 0);
-  assert.ok(Math.abs(half.stratusFraction - 0.5) < 1e-12 && full.stratusFraction === 1 && none.stratusFraction === 0, `covers ${half.stratusFraction}, ${full.stratusFraction}, ${none.stratusFraction}`);
-  assert.ok(half.stratus > 0 && half.stratus === full.stratus);
+  const part = run(radiation, withStability(18), 298, 1), full = run(radiation, withStability(30), 298, 1), none = run(radiation, withStability(30), 298, 0);
+  const f = part.stratusFraction;
+  assert.ok(f > 0.2 && f < 0.8 && full.stratusFraction === 1 && none.stratusFraction === 0, `covers ${f}, ${full.stratusFraction}, ${none.stratusFraction}`);
+  assert.ok(part.stratus > 0 && part.stratus === full.stratus);
   for (const name of ['reflectedSolar', 'absorbedSolar', 'surfaceShortwave', 'surfaceDirect', 'cloudReflectance']) {
-    const mean = 0.5 * (full[name] + none[name]);
-    assert.ok(Math.abs(half[name] - mean) < 1e-9, `${name} ${half[name]} against the mean ${mean}`);
+    const mean = f * full[name] + (1 - f) * none[name];
+    assert.ok(Math.abs(part[name] - mean) < 1e-9, `${name} ${part[name]} against the mean ${mean}`);
   }
-  console.log(`half cover of a ${half.stratus.toFixed(4)} kg/m² deck at noon reflects ${half.reflectedSolar.toFixed(2)} W/m², the mean of ${full.reflectedSolar.toFixed(2)} overcast and ${none.reflectedSolar.toFixed(2)} clear; closure ${half.closure.toExponential(1)}`);
-  assert.ok(half.closure < EPS && full.closure < EPS, `closure ${half.closure}, ${full.closure}`);
+  console.log(`${f.toFixed(3)} cover of a ${part.stratus.toFixed(4)} kg/m² deck at noon reflects ${part.reflectedSolar.toFixed(2)} W/m², the weighted mean of ${full.reflectedSolar.toFixed(2)} overcast and ${none.reflectedSolar.toFixed(2)} clear; closure ${part.closure.toExponential(1)}`);
+  assert.ok(part.closure < EPS && full.closure < EPS, `closure ${part.closure}, ${full.closure}`);
   const condensed = Float64Array.from(qc), layer = radiation.stratusLayer;
   condensed[layer * C + noon] = full.stratus / (P0 * core.diagnostics.dSigma[layer] / core.diagnostics.g);
   const overcast = run(off, withStability(30), 298, 1, 1200, condensed);
@@ -335,6 +348,62 @@ test('the deck is as thick as the boundary layer above its condensation level, w
   assert.equal(under.stratusFraction, 0);
   assert.deepEqual(under, run(off, stable, 298, 1, base - 20), 'a boundary layer below its condensation level leaves the column bit-identical');
   assert.equal(run(createRadiation(mesh, core, { stratusScale: 10 }), stable, 298, 1, 1200).stratus, 0.15, 'the deck water stops at stratusWaterMax');
+});
+
+test('the deck follows the estimated inversion strength, which tells a capping inversion from a free troposphere warmed with the sea', () => {
+  const { radiation, q, unstable, bottom, top, withStability, run, inversion } = deckColumns();
+  const { g, kappa, exnerLayer, geopotential } = core.diagnostics;
+  const humid = (theta) => { q[bottom] = 0.8 * saturationHumidity(theta[bottom] * exnerLayer[bottom], P0 * core.sigmaMid[K - 1]); return theta; };
+  const stable = humid(withStability(18));
+  const expected = inversion(stable);
+  const lowerT = stable[bottom] * exnerLayer[bottom], lcl = liftingCondensationLevel(lowerT, q[bottom], P0 * core.sigmaMid[K - 1], kappa);
+  const depth = (geopotential[top] - geopotential[bottom]) / g - CP_DRY * (lowerT - lcl.temperature) / g;
+  const eis = inversionStrength(stable[top] - stable[bottom], lowerT, stable[top] * exnerLayer[top], depth, CP_DRY, R_DRY, g);
+  const deck = run(radiation, stable, 298, 1);
+  assert.ok(Math.abs(eis - expected) < 1e-9 && Math.abs(radiation.budget.stabilityIndex - expected) < 1e-9, `EIS ${eis} (column ${radiation.budget.stabilityIndex}) against ${expected}`);
+  assert.ok(eis > 3 && eis < 7, `EIS ${eis} K at LTS 18 K`);
+  assert.ok(Math.abs(deck.stratusFraction - (0.19 + 0.08 * (expected - 1))) < 1e-9, `cover ${deck.stratusFraction}`);
+  const column = (shift, surfaceT) => {
+    const theta = Float64Array.from(unstable, (t) => t + shift);
+    theta[top] = theta[bottom] + 16;
+    humid(theta);
+    return { theta, inversion: inversion(theta), ...run(radiation, theta, surfaceT, 1) };
+  };
+  const warm = column(4, 302), cool = column(-6, 292);
+  console.log(`LTS 18 K over a 298 K sea at 80 % humidity: EIS ${eis.toFixed(2)} K, cover ${deck.stratusFraction.toFixed(3)}; LTS 16 K over a 302 K sea: EIS ${warm.inversion.toFixed(2)} K, cover ${warm.stratusFraction.toFixed(3)}; over a 292 K sea: EIS ${cool.inversion.toFixed(2)} K, cover ${cool.stratusFraction.toFixed(3)}`);
+  assert.ok(Math.abs(warm.theta[top] - warm.theta[bottom] - (cool.theta[top] - cool.theta[bottom])) < 1e-9);
+  assert.ok(cool.inversion > warm.inversion + 2, `EIS ${cool.inversion} over the cool sea against ${warm.inversion} over the warm one`);
+  assert.ok(cool.stratusFraction > warm.stratusFraction && warm.stratusFraction > 0, `cover ${cool.stratusFraction} against ${warm.stratusFraction}`);
+  for (const c of [warm, cool]) assert.ok(Math.abs(c.stratusFraction - (0.19 + 0.08 * (c.inversion - 1))) < 1e-9);
+});
+
+test('with stratusIndex: \'ectei\' the deck follows the entrainment index: a dry layer above thins it, a layer as humid as the lowest leaves it as EIS has it, and the default is EIS', () => {
+  const { radiation, q, bottom, top, withStability, run, inversion } = deckColumns();
+  const entraining = createRadiation(mesh, core, { stratusIndex: 'ectei' }), explicit = createRadiation(mesh, core, { stratusIndex: 'eis' });
+  entraining.setTime(0); explicit.setTime(0);
+  const { exnerLayer } = core.diagnostics;
+  const theta = withStability(24);
+  q[bottom] = 0.8 * saturationHumidity(theta[bottom] * exnerLayer[bottom], P0 * core.sigmaMid[K - 1]);
+  const covers = (upperQ) => {
+    q[top] = upperQ;
+    const eis = run(radiation, theta, 298, 1), eisIndex = radiation.budget.stabilityIndex;
+    const ectei = run(entraining, theta, 298, 1), ecteiIndex = entraining.budget.stabilityIndex;
+    const same = run(explicit, theta, 298, 1), sameIndex = explicit.budget.stabilityIndex;
+    return { eis, ectei, same, eisIndex, ecteiIndex, sameIndex, expected: inversion(theta) };
+  };
+  const dry = covers(0.2 * q[bottom]), moist = covers(q[bottom]);
+  const gap = 0.23 * LATENT_HEAT / CP_DRY * 0.8 * q[bottom];
+  console.log(`LTS 24 K over a 298 K sea, 80 % humid below: EIS ${dry.eisIndex.toFixed(2)} K covers ${dry.eis.stratusFraction.toFixed(3)}; under a 700 hPa layer at 0.2 of the lowest humidity ECTEI ${dry.ecteiIndex.toFixed(2)} K covers ${dry.ectei.stratusFraction.toFixed(3)}; as humid as the lowest ECTEI ${moist.ecteiIndex.toFixed(2)} K against EIS ${moist.eisIndex.toFixed(2)} K`);
+  assert.ok(Math.abs(dry.eisIndex - dry.expected) < 1e-9, `EIS ${dry.eisIndex} against ${dry.expected}`);
+  assert.ok(Math.abs(dry.ecteiIndex - (dry.expected - gap)) < 1e-9 && Math.abs(entrainmentIndex(dry.expected, q[bottom], 0.2 * q[bottom], CP_DRY) - (dry.expected - gap)) < 1e-9, `ECTEI ${dry.ecteiIndex} against ${dry.expected - gap}`);
+  assert.ok(Math.abs(dry.ectei.stratusFraction - (0.19 + 0.08 * (dry.ecteiIndex - 1))) < 1e-9, `cover ${dry.ectei.stratusFraction}`);
+  assert.ok(dry.ectei.stratusFraction > 0 && dry.ectei.stratusFraction < dry.eis.stratusFraction - 0.2, `cover ${dry.ectei.stratusFraction} under ECTEI against ${dry.eis.stratusFraction} under EIS`);
+  assert.ok(Math.abs(moist.ecteiIndex - moist.eisIndex) < 1e-9 && Math.abs(moist.ectei.stratusFraction - moist.eis.stratusFraction) < 1e-9, `ECTEI ${moist.ecteiIndex} against EIS ${moist.eisIndex}`);
+  for (const c of [dry, moist]) {
+    assert.deepEqual(c.same, c.eis, 'stratusIndex: \'eis\' is the default');
+    assert.equal(c.sameIndex, c.eisIndex);
+  }
+  assert.throws(() => createRadiation(mesh, core, { stratusIndex: 'lts' }));
 });
 
 function evaluate(radiation, i, pi, theta, surfaceT, q, qc) {

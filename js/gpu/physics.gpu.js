@@ -16,10 +16,11 @@ import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physics/ice.module.js'
  * re-diagnoses the column first.
  */
 export function physicsConstants(o) {
+  if (o.stratusIndex !== 'eis' && o.stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${o.stratusIndex}`);
   return `
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
 const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudScattering}; const WINDOW: f32 = ${o.window}; const GAS_FRAC: f32 = ${o.gasFraction};
-const STRATUS: bool = ${!!o.stratus}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
+const STRATUS: bool = ${!!o.stratus}; const ECTEI: bool = ${o.stratusIndex === 'ectei'}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6;
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
@@ -69,18 +70,24 @@ fn band(fraction: f32, eps: ptr<function, array<f32, K>>, temperature: ptr<funct
   }
   return vec2<f32>(up, down);
 }
-fn deckWater(T: f32, q: f32, p: f32, mixedDepth: f32) -> f32 {
-  if (q <= 0.0) { return 0.0; }
+fn condensationLevel(T: f32, q: f32, p: f32) -> vec2<f32> {
   let e = q * p / (EPSILON + (1.0 - EPSILON) * q);
   let y = log(e / 611.2);
   let dewPoint = (273.15 * 17.67 - 29.65 * y) / (17.67 - y);
-  var lclT = T; var lclP = p;
-  if (dewPoint < T) { lclT = 1.0 / (1.0 / (dewPoint - 56.0) + log(T / dewPoint) / 800.0) + 56.0; lclP = p * pow(lclT / T, 1.0 / KAPPA); }
-  let thickness = mixedDepth - max(0.0, CP * (T - lclT) / GRAV);
+  if (dewPoint >= T) { return vec2<f32>(T, p); }
+  let lclT = 1.0 / (1.0 / (dewPoint - 56.0) + log(T / dewPoint) / 800.0) + 56.0;
+  return vec2<f32>(lclT, p * pow(lclT / T, 1.0 / KAPPA));
+}
+fn moistAdiabat(T: f32, qs: f32) -> f32 { return GRAV / CP * (1.0 + LHEAT * qs / (RGAS * T)) / (1.0 + LHEAT * LHEAT * qs / (CP * RVAP * T * T)); }
+fn inversionStrength(stability: f32, lowerT: f32, upperT: f32, depth: f32) -> f32 {
+  let T = 0.5 * (lowerT + upperT);
+  return stability - (GRAV / CP - moistAdiabat(T, qsat(T, 85000.0))) * depth;
+}
+fn entrainmentIndex(inversion: f32, lowerQ: f32, upperQ: f32) -> f32 { return inversion - 0.23 * LHEAT / CP * (lowerQ - upperQ); }
+fn deckWater(lclT: f32, lclP: f32, thickness: f32) -> f32 {
   if (thickness <= 0.0) { return 0.0; }
   let qs = qsat(lclT, lclP);
-  let moist = GRAV / CP * (1.0 + LHEAT * qs / (RGAS * lclT)) / (1.0 + LHEAT * LHEAT * qs / (CP * RVAP * lclT * lclT));
-  let lapse = lclP / (RGAS * lclT) * qs * (LHEAT * moist / (RVAP * lclT * lclT) - GRAV / (RGAS * lclT));
+  let lapse = lclP / (RGAS * lclT) * qs * (LHEAT * moistAdiabat(lclT, qs) / (RVAP * lclT * lclT) - GRAV / (RGAS * lclT));
   return min(STRATUS_MAX, STRATUS_SCALE * 0.5 * lapse * thickness * thickness);
 }
 fn shortwave(cloudDepth: f32, mu: f32, adir: f32, adif: f32) -> vec4<f32> {
@@ -146,10 +153,15 @@ export const PHYSICS_KERNELS = {
   let tau0 = PH[PH_TAU + i];
   var deck = 0.0; var fraction = 0.0;
   let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
-  if (STRATUS && !onLand && mixedDepth > 0.0) {
-    let stability = IN[S_TH + STABILITY_K * C + i] - IN[S_TH + bottom];
-    fraction = clamp(0.057 * stability - 0.556, 0.0, 1.0) * clamp((ts - 278.15) / 5.0, 0.0, 1.0) * (1.0 - cover);
-    if (fraction > 0.0) { deck = deckWater(IN[S_TH + bottom] * D[D_EXM + bottom], IN[S_Q + bottom], pi * LV[L_SM + K - 1], mixedDepth); }
+  if (STRATUS && !onLand && mixedDepth > 0.0 && IN[S_Q + bottom] > 0.0) {
+    let upper = STABILITY_K * C + i; let lowerT = IN[S_TH + bottom] * D[D_EXM + bottom];
+    let lcl = condensationLevel(lowerT, IN[S_Q + bottom], pi * LV[L_SM + K - 1]);
+    let base = max(0.0, CP * (lowerT - lcl.x) / GRAV);
+    let height = (D[D_GEO + upper] - D[D_GEO + bottom] + LV[L_GABS + STABILITY_K] - LV[L_GABS + K - 1]) / GRAV;
+    let inversion = inversionStrength(IN[S_TH + upper] - IN[S_TH + bottom], lowerT, IN[S_TH + upper] * D[D_EXM + upper], height - base);
+    let index = select(inversion, entrainmentIndex(inversion, IN[S_Q + bottom], IN[S_Q + upper]), ECTEI);
+    fraction = clamp(0.19 + 0.08 * (index - 1.0), 0.0, 1.0) * clamp((ts - 278.15) / 5.0, 0.0, 1.0) * (1.0 - cover);
+    if (fraction > 0.0) { deck = deckWater(lcl.x, lcl.y, mixedDepth - base); }
     if (deck <= 0.0) { fraction = 0.0; }
   }
   PH[PH_DECK + i] = deck; PH[PH_DECKF + i] = fraction;

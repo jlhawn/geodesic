@@ -68,9 +68,12 @@ test('under a capping inversion the stratocumulus deck forms over the warm sea a
   model.step(900);
   let sea = 0, decked = 0;
   for (let i = 0; i < C; i++) {
-    if (geography.land[i]) { assert.equal(model.radiation.stratus[i], 0); assert.equal(model.radiation.stratusFraction[i], 0); continue; }
+    if (geography.land[i]) { assert.equal(model.radiation.stratus[i], 0); assert.equal(model.radiation.stratusFraction[i], 0); assert.ok(Number.isNaN(model.radiation.stabilityIndex[i])); continue; }
     sea++;
-    if (model.radiation.stratus[i] > 0) decked++;
+    if (model.radiation.stratus[i] > 0) {
+      decked++;
+      assert.ok(model.radiation.stratusFraction[i] <= 0.19 + 0.08 * (model.radiation.stabilityIndex[i] - 1) + 1e-12, `cover ${model.radiation.stratusFraction[i]} at EIS ${model.radiation.stabilityIndex[i]}`);
+    }
   }
   assert.ok(decked > 0.1 * sea, `stratus on ${decked} of ${sea} sea cells`);
 });

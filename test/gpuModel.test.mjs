@@ -17,13 +17,13 @@ function stats(cpu, gpu) {
   for (let x = 0; x < cpu.length; x++) { const d = Math.abs(cpu[x] - gpu[x]); if (d > maxDiff) { maxDiff = d; at = x; } sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
   return { maxDiff, at, rms: Math.sqrt(sumSq / cpu.length), rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
-async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0) {
-  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus } });
+async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, options = {}) {
+  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus, ...options } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
   for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += inversion;
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model), physics: { stratus } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model), physics: { stratus, ...options } });
   gpu.upload(model.state);
   gpu.uploadPhysics();
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(dt); await gpu.stepModel(dt, time); }
@@ -50,6 +50,13 @@ test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailab
   console.log(`two steps at N=6 under a 10 K inversion (the deck rests on the first step's boundary layer): stratus on ${(100 * decked / C).toFixed(1)} % of sea cells, ${(1000 * water / Math.max(1, decked)).toFixed(1)} g/m² where it forms, mean cover ${(cover / C).toFixed(3)} and mean water ${(1000 * water / C).toFixed(1)} g/m² over the sea; per-cell OLR rms ${olr.rmsRel.toExponential(1)}, surface shortwave rms ${sw.rmsRel.toExponential(1)}`);
   assert.ok(decked > 0.1 * C, `stratus on ${decked} of ${C} sea cells`);
   assert.ok(olr.rmsRel < 1e-5 && sw.rmsRel < 1e-5, `per-cell OLR rms ${olr.rmsRel}, surface shortwave rms ${sw.rmsRel}`);
+  const third = await pair(6, 2, 900, 10, true, { stratusIndex: 'ectei' }), entrained = third.model.radiation;
+  const olrE = stats(entrained.outgoing, third.physics.OLR.subarray(0, C)), swE = stats(entrained.surfaceShortwave, third.physics.SWDN.subarray(0, C)), coverE = stats(entrained.stratusFraction, third.physics.DECKF.subarray(0, C));
+  let coverSum = 0, waterSum = 0;
+  for (let i = 0; i < C; i++) { coverSum += entrained.stratusFraction[i]; waterSum += entrained.stratus[i]; }
+  console.log(`the same under ECTEI: mean cover ${(coverSum / C).toFixed(3)} and mean water ${(1000 * waterSum / C).toFixed(1)} g/m²; per-cell cover max difference ${coverE.maxDiff.toExponential(1)}, OLR rms ${olrE.rmsRel.toExponential(1)}, surface shortwave rms ${swE.rmsRel.toExponential(1)}`);
+  assert.ok(coverSum > 0 && coverSum < cover, `mean cover ${coverSum / C} under ECTEI against ${cover / C}`);
+  assert.ok(olrE.rmsRel < 1e-5 && swE.rmsRel < 1e-5, `per-cell OLR rms ${olrE.rmsRel}, surface shortwave rms ${swE.rmsRel} under ECTEI`);
 });
 
 test('twelve full GPU steps track the CPU model and its energy budget', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

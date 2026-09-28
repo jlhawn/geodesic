@@ -1007,16 +1007,28 @@ counted as leaving the surface). The cloud–albedo, cloud–longwave and
 ice–albedo feedbacks are all live from here.
 
 Marine stratocumulus is diagnosed, not condensed. Over the ice-free
-part of each sea cell a deck covers the fraction f of the column. f is
-the Klein & Hartmann (1993) fit 0.057 LTS − 0.556, clamped to [0, 1],
-of the lower-tropospheric stability LTS = θ(σ ≈ 0.7) − θ(lowest layer),
-times a ramp from 0 over a 5 °C sea to 1 over 10 °C (the fit is for
-subtropical and mid-latitude decks; polar fog is another regime and
-would only add longwave warming over the ice), times 1 − A for the ice
-concentration A; land carries none, nor does the model with
-`moist: false`. The deck fills the boundary layer above its
-condensation level: its base is the lifting condensation level of the
-lowest layer's air (Bolton's, as the convection finds it, reached along
+part of each sea cell a deck covers the fraction f of the column. Its
+predictor is the estimated inversion strength of Wood & Bretherton
+(2006), EIS = LTS − Γ_θ (z_700 − z_LCL): the lower-tropospheric
+stability LTS = θ(σ ≈ 0.7) − θ(lowest layer) less the rise in θ along
+a moist adiabat from the lifting condensation level z_LCL to the
+height z_700 of the σ ≈ 0.7 layer (both above the lowest layer), with
+Γ_θ = g/c_p − Γ_m the moist adiabat's potential-temperature gradient
+at 850 hPa and the two layers' mean temperature. f is
+0.19 + 0.08 (EIS − 1), clamped to [0, 1] — 0.2 over the warm pool's
+EIS of about 1 K, 0.67 over the south-east Pacific deck's 7 K, their
+6–8 % per K — times a ramp from 0 over a 5 °C sea to 1 over 10 °C
+(the fit is for subtropical and mid-latitude decks; polar fog is
+another regime and would only add longwave warming over the ice),
+times 1 − A for the ice concentration A; land carries none, nor does
+the model with `moist: false`. With `stratusIndex: 'ectei'` the fit
+takes instead the estimated cloud-top entrainment index of Kawai,
+Koshiro & Webb (2017),
+ECTEI = EIS − 0.23 (L/c_p)(q(lowest layer) − q(σ ≈ 0.7)), which
+lowers the cover where the air the deck entrains is dry. The deck
+fills the boundary layer above its condensation level: its base is
+the lifting condensation level of the lowest layer's air (Bolton's,
+as the convection finds it, reached along
 the dry adiabat), its top the boundary-layer top the previous step
 diagnosed, and for that thickness Δz it holds `stratusScale` × ½ Γ_l Δz²
 of water, at most `stratusWaterMax` = 0.15 kg/m². Γ_l is the adiabatic
