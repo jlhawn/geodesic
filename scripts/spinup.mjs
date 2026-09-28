@@ -14,11 +14,12 @@
 // scripts/spinup.sh runs segments back to back.
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { topographyFromInt16, createGeography } from '../js/geography.module.js';
+import { buildMesh } from '../js/mesh.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState } from '../js/stateFile.module.js';
-import { savedSubsidence } from '../js/physics/regrid.module.js';
+import { savedSubsidence, regridLand } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 
@@ -61,6 +62,13 @@ if (existing.length) {
   model.load();
   model.ocean.initialize(state[3], state[6]);
   model.land.initialize();
+  if (process.env.LAND_FROM) {
+    const seed = await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM)));
+    const sourceMesh = seed.N === N ? mesh : buildMesh(new Grid(seed.N));
+    const source = { mesh: sourceMesh, geography: seed.N === N ? model.geography : createGeography(sourceMesh, topography) };
+    model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6]);
+    log(`land seeded from ${process.env.LAND_FROM} (N=${seed.N}, day ${seed.day})`);
+  }
   log(`--- ${new Date().toISOString()} fresh start at N=${N} (${C} cells, dt ${dt} s, ${perDay} steps a day) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 }
 

@@ -1950,9 +1950,12 @@ buffer's VEG range), snapshots save it under `land.vegetation`,
 regridding samples it by tile, and the page shows it as the VEG
 overlay and uses it for the land colour of the Satellite view.
 
-A fresh land surface starts fully vegetated with full buckets, and a
-saved state without vegetation loads that way where it is free of
-snow, so deserts have to emerge. From a green start at the day-810
+A fresh land surface starts at half cover with half-full buckets, so
+forests and deserts both have to emerge and neither transient is
+large; `LAND_FROM=<state.bin>` on `scripts/spinup.mjs` seeds the
+land from a saved state instead, regridded if its N differs. A saved
+state without vegetation loads fully vegetated with full buckets where
+it is free of snow. From a green start at the day-810
 N=64 state, one year gives forest over the Congo (v 0.94, 6.1 mm/day
 over the year), the Amazon (0.99, 7.1), Borneo, Europe, the eastern
 United States and Siberia, savanna in the Sahel (0.49) and India

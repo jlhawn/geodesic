@@ -99,9 +99,10 @@ test('vegetation grows over a wet bucket and dies back over a dry one on its tim
   const land = createLandSurface(mesh, flat(), { growthTime: 100 * DAY, declineTime: 50 * DAY });
   land.initialize();
   const i = 0, surfaceT = new Float64Array(mesh.nCells).fill(295), flux = new Float64Array(mesh.nCells);
-  assert.equal(land.vegetation[i], 1);
+  assert.equal(land.vegetation[i], 0.5);
   assert.equal(land.capacity(i), 300);
-  assert.ok(Math.abs(land.albedo(i) - 0.13) < 1e-12);
+  assert.equal(land.soil[i], 150);
+  assert.ok(Math.abs(land.albedo(i) - 0.215) < 1e-12);
   land.vegetation[i] = 0.5; land.soil[i] = 0;
   land.update(i, surfaceT, flux, 0, 50 * DAY);
   assert.ok(Math.abs(land.vegetation[i] - 0.5 * Math.exp(-1)) < 1e-12, `dry: ${land.vegetation[i]}`);
@@ -121,11 +122,11 @@ test('a browning cell keeps its bucket, and water above the root zone runs off',
   land.initialize();
   const i = 5, surfaceT = new Float64Array(mesh.nCells).fill(MELTING_POINT - 10), flux = new Float64Array(mesh.nCells);
   land.deposit(i, 5, MELTING_POINT - 10);
-  assert.equal(land.soil[i], 300);
+  assert.equal(land.soil[i], 150);
   const before = land.water(), runoff = land.runoff[i];
   land.update(i, surfaceT, flux, 0, 50 * DAY);
-  assert.ok(Math.abs(land.vegetation[i] - Math.exp(-5)) < 1e-12);
-  assert.ok(Math.abs(land.soil[i] - land.capacity(i)) < 1e-9, `soil ${land.soil[i]} against capacity ${land.capacity(i)}`);
+  assert.ok(Math.abs(land.vegetation[i] - 0.5 * Math.exp(-5)) < 1e-12);
+  assert.equal(land.soil[i], 150, 'the bucket keeps its water while the cover browns');
   assert.ok(Math.abs(land.runoff[i] - runoff) < 1e-9, 'browning sheds no water');
   assert.ok(Math.abs(land.water() - before) < 1e-9 * before);
   land.soil[i] = 400; land.vegetation[i] = 0.2; land.snow[i] = 0;
@@ -139,7 +140,7 @@ test('under snow the vegetation fades over snowDeclineTime and the snow sets the
   const i = 2, surfaceT = new Float64Array(mesh.nCells).fill(MELTING_POINT - 10), flux = new Float64Array(mesh.nCells);
   land.deposit(i, 50, MELTING_POINT - 10);
   land.update(i, surfaceT, flux, 0, 200 * DAY);
-  assert.ok(Math.abs(land.vegetation[i] - Math.exp(-1)) < 1e-12);
+  assert.ok(Math.abs(land.vegetation[i] - 0.5 * Math.exp(-1)) < 1e-12);
   assert.ok(Math.abs(land.albedo(i) - 0.55) < 1e-12);
 });
 

@@ -141,8 +141,8 @@ export function createLandSurface(mesh, geography, {
    */
   function initialize() {
     for (let i = 0; i < C; i++) {
-      vegetation[i] = land[i] && vegetated && !onIceSheet(i) ? 1 : 0;
-      soil[i] = land[i] ? (vegetated ? capacity(i) : 0.5 * bucketCapacity) : 0;
+      vegetation[i] = land[i] && vegetated && !onIceSheet(i) ? 0.5 : 0;
+      soil[i] = land[i] ? 0.5 * capacity(i) : 0;
       snow[i] = 0; runoff[i] = 0; surface[i] = 0;
     }
   }
