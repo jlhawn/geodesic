@@ -12,9 +12,10 @@
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}'),
 // RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}'),
 // RECORD (a directory to write each day's ocean and sea-ice forcing into as
-// forcing-DDDD.bin, see js/forcing.module.js), BATCH (a day's steps: the
-// steps submitted to the GPU together; 1 queues them one at a time,
-// waiting every eighth).
+// forcing-DDDD.bin, see js/forcing.module.js), BATCH (1: the steps are queued
+// one at a time, waiting every eighth; more: that many steps go to the
+// GPU in one submission, byte-identical, for drivers where submitting
+// costs more than it does on Metal).
 // scripts/spinup.sh runs segments back to back.
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
@@ -48,7 +49,7 @@ const t0 = performance.now();
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 const model = await createGpuModel(new Grid(N), { topography, ocean: OCEAN, radiation: RADIATION });
 const { mesh, core, state } = model;
-const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? perDay)));
+const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 const existing = snapshots();
 if (existing.length) {
   const file = existing[existing.length - 1];
