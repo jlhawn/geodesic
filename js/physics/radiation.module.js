@@ -93,6 +93,11 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * dynamics stage interpolated to h, the surface fluxes this column's
  * bulk sensible heat and evaporation, and the longwave the DYCOMS-II
  * form (dycomsLongwave) driven by the mixed layer's own liquid water.
+ * A stratocumulus-topped layer needs large-scale subsidence under a
+ * capping inversion, so the model runs only where w_s(h) ≤
+ * −stratusSubsidence (0.3 mm/s; DYCOMS-II has 3 mm/s at 840 m) and
+ * Δθ_v ≥ minimumInversion (2 K, a capping inversion rather than the top
+ * of a subcloud layer under cumulus); elsewhere the column has no deck.
  * The deck covers the mixed layer's cover times `openSea`, with its water
  * path (at most stratusWaterMax) in the same layer and the same
  * two-column blend; the EIS is still diagnosed. The mixed layer's cover,
@@ -156,7 +161,7 @@ export function adiabaticWaterLapse(T, p, cp, R, g, latentHeat = LATENT_HEAT) {
 
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 55, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
-  mixedLayerDeck = false, mixedLayer: mixedLayerOptions = {},
+  mixedLayerDeck = false, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = 3e-4, minimumInversion = 2,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
@@ -257,12 +262,14 @@ export function createRadiation(mesh, core, {
     const flow = lowerFlow + (piSigmaDot[m * C + i] - lowerFlow) * (h - lowerHeight) / (upperHeight - lowerHeight);
     const density = pi * sigmaMid[m] / (R * thetaV[m * C + i] * exnerLayer[m * C + i]);
     const subsidence = -flow / (density * g);
+    if (subsidence > -stratusSubsidence) return false;
     const forcing = {
       surfacePressure: pi, sensibleHeat: sensible, evaporation, radiation: shadowLongwave, subsidence: () => subsidence,
       thetaLAbove: theta[above] - latentHeat * aboveCloud / (cp * exnerLayer[above]), qtAbove: Math.max(0, q[above]) + aboveCloud,
     };
     const start = { h, thetaL: heat / weight, qt: water / weight };
     const now = shadow.diagnose(start, forcing);
+    if (!(now.virtualJump >= minimumInversion)) return false;
     const next = dt > 0 ? shadow.diagnose(shadow.step(start, forcing, dt, now), forcing) : now;
     if (!(Number.isFinite(next.liquidWaterPath) && Number.isFinite(next.cover) && Number.isFinite(now.entrainment))) return false;
     budget.mlmCover = next.cover;

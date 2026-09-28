@@ -9,6 +9,7 @@ import { LATENT_HEAT, saturationHumidity, liftingCondensationLevel } from '../js
 import { createSurface } from '../js/physics/surface.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
+import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
 
 const N = +(process.env.PHYSICS_TEST_N ?? 6);
 const grid = new Grid(N);
@@ -407,7 +408,7 @@ test('with stratusIndex: \'ectei\' the deck follows the entrainment index: a dry
   assert.throws(() => createRadiation(mesh, core, { stratusIndex: 'lts' }));
 });
 
-function mixedLayerColumn() {
+function mixedLayerColumn(sinking = 0.4) {
   const pi = new Float64Array(C).fill(P0), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
   for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) {
     const sigma = core.sigmaMid[k], mixed = sigma > 0.9;
@@ -415,25 +416,32 @@ function mixedLayerColumn() {
     q[k * C + i] = mixed ? 9e-3 : 1.5e-3 * Math.min(1, sigma / 0.8) ** 3;
   }
   core.diagnose(pi, theta, q, qc);
-  const { g, geopotential } = core.diagnostics;
+  const { g, geopotential, piSigmaDot } = core.diagnostics;
+  for (let k = 1; k < K; k++) piSigmaDot.fill(sinking * (1 - core.levels[k]), k * C, (k + 1) * C);
   const depth = Float64Array.from({ length: C }, (_, i) => geopotential[(K - 3) * C + i] / g + 100);
   return { pi, theta, q, qc, depth, mixedDepth: (i) => depth[i] - geopotential[(K - 1) * C + i] / g };
+}
+
+function mixedLayerRun(r, noon, column, openSea = 1, dt = 900, air = column.theta) {
+  const { q, qc, mixedDepth } = column, bottom = (K - 1) * C + noon;
+  const flux = r.column(noon, P0, air, 292, 5, r.opticalDepth(mesh.latCell[noon]), r.insolation(noon), q[bottom], q, qc, 0.07, 0.06, 1, 1.5e-3, openSea, mixedDepth(noon), dt);
+  let layers = 0, scale = 0;
+  for (let k = 0; k < K; k++) { layers += r.layerFlux[k]; scale += Math.abs(r.layerFlux[k]); }
+  const latent = LATENT_HEAT * r.budget.evaporation;
+  return { ...r.budget, closure: Math.abs(layers + flux + latent - (r.budget.absorbedSolar - r.budget.outgoingLongwave)) / (scale + Math.abs(flux) + latent) };
+}
+
+function brightest(r) {
+  let noon = 0;
+  for (let i = 0; i < C; i++) if (r.insolation(i) > r.insolation(noon)) noon = i;
+  return noon;
 }
 
 test('the mixed-layer deck on a stable column over a warm sea carries the water path and cover of the mixed-layer model, advanced one step, in the same two-column blend', () => {
   const shadow = createRadiation(mesh, core, { mixedLayerDeck: true }), off = createRadiation(mesh, core, { stratus: false });
   shadow.setTime(0); off.setTime(0);
-  let noon = 0;
-  for (let i = 0; i < C; i++) if (shadow.insolation(i) > shadow.insolation(noon)) noon = i;
-  const { pi, theta, q, qc, depth, mixedDepth } = mixedLayerColumn();
-  const bottom = (K - 1) * C + noon;
-  const run = (r, openSea, dt = 900, air = theta) => {
-    const flux = r.column(noon, P0, air, 292, 5, r.opticalDepth(mesh.latCell[noon]), r.insolation(noon), q[bottom], q, qc, 0.07, 0.06, 1, 1.5e-3, openSea, mixedDepth(noon), dt);
-    let layers = 0, scale = 0;
-    for (let k = 0; k < K; k++) { layers += r.layerFlux[k]; scale += Math.abs(r.layerFlux[k]); }
-    const latent = LATENT_HEAT * r.budget.evaporation;
-    return { ...r.budget, closure: Math.abs(layers + flux + latent - (r.budget.absorbedSolar - r.budget.outgoingLongwave)) / (scale + Math.abs(flux) + latent) };
-  };
+  const noon = brightest(shadow), column = mixedLayerColumn(), { pi, theta, q, qc, depth } = column;
+  const run = (r, openSea, dt = 900, air = theta) => mixedLayerRun(r, noon, column, openSea, dt, air);
   const deck = run(shadow, 1), clear = run(off, 1), start = run(shadow, 1, 0), half = run(shadow, 0.5);
   console.log(`289 K mixed layer under a 298 K free troposphere, 100 m above its third layer, over a 292 K sea: the mixed-layer model holds ${(1000 * deck.mlmWater).toFixed(1)} g/m² (${(1000 * start.mlmWater).toFixed(1)} before its step) on ${deck.mlmCover} of the cell, entraining ${(1000 * deck.mlmEntrainment).toFixed(2)} mm/s; noon absorbed solar ${deck.absorbedSolar.toFixed(0)} against ${clear.absorbedSolar.toFixed(0)} W/m²`);
   assert.ok(deck.mlmWater > 0.03 && deck.mlmWater < 0.15 && deck.mlmCover === 1, `water ${deck.mlmWater}, cover ${deck.mlmCover}`);
@@ -455,6 +463,29 @@ test('the mixed-layer deck on a stable column over a warm sea carries the water 
     assert.ok(shadow.mlmCover[i] === 1 && shadow.mlmWater[i] > 0.03 && shadow.mlmEntrainment[i] > 1e-3, `cell ${i}`);
     assert.ok(shadow.stratus[i] === Math.min(0.15, shadow.mlmWater[i]) && shadow.stratusFraction[i] === shadow.mlmCover[i]);
   }
+  core.diagnostics.piSigmaDot.fill(0);
+});
+
+test('the mixed-layer deck needs subsidence and a capping inversion: a column under ascent or under a 1 K jump has none, and falls back to no deck', () => {
+  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true });
+  shadow.setTime(0);
+  const noon = brightest(shadow), empty = { mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, stratus: 0, stratusFraction: 0 };
+  const pick = (b) => ({ mlmCover: b.mlmCover, mlmWater: b.mlmWater, mlmEntrainment: b.mlmEntrainment, stratus: b.stratus, stratusFraction: b.stratusFraction });
+  const sinking = mixedLayerColumn(0.4);
+  assert.ok(mixedLayerRun(shadow, noon, sinking).mlmCover === 1, 'a sinking, capped column carries the deck');
+  const rising = mixedLayerColumn(-0.4);
+  assert.deepEqual(pick(mixedLayerRun(shadow, noon, rising)), empty, 'a rising column carries none');
+  const column = mixedLayerColumn(0.4), above = (K - 4) * C + noon;
+  const mlm = createMixedLayer({ cp: CP_DRY, R: R_DRY, g: core.diagnostics.g, latentHeat: LATENT_HEAT, referencePressure: P0, cloudLevels: 8 });
+  const jump = (thetaAbove) => mlm.diagnose({ h: column.depth[noon], thetaL: 289, qt: 9e-3 }, { surfacePressure: P0, sensibleHeat: 0, evaporation: 0, thetaLAbove: thetaAbove, qtAbove: column.q[above], subsidence: () => 0, radiation: dycomsLongwave() }).virtualJump;
+  const slope = jump(301) - jump(300), withJump = (target) => { const theta = Float64Array.from(column.theta); theta[above] = 300 + (target - jump(300)) / slope; return theta; };
+  const weak = withJump(1), strong = withJump(3);
+  console.log(`first layer above h at ${weak[above].toFixed(2)} K gives Δθ_v ${jump(weak[above]).toFixed(2)} K, at ${strong[above].toFixed(2)} K ${jump(strong[above]).toFixed(2)} K`);
+  core.diagnose(column.pi, weak, column.q, column.qc);
+  assert.deepEqual(pick(mixedLayerRun(shadow, noon, column, 1, 900, weak)), empty, 'a 1 K jump carries none');
+  core.diagnose(column.pi, strong, column.q, column.qc);
+  assert.ok(mixedLayerRun(shadow, noon, column, 1, 900, strong).mlmCover > 0, 'a 3 K jump carries the deck');
+  core.diagnostics.piSigmaDot.fill(0);
 });
 
 function modelDigest(radiation) {
@@ -470,8 +501,10 @@ test('with mixedLayerDeck: false the model is bit-identical to the engine before
   const before = '1a7a2bd66c1edabedde1875fd6868c4a';
   assert.equal(modelDigest().digest, before);
   assert.equal(modelDigest({ mixedLayerDeck: false }).digest, before);
-  const shadow = modelDigest({ mixedLayerDeck: true });
-  assert.notEqual(shadow.digest, before);
+  const fresh = modelDigest({ mixedLayerDeck: true });
+  assert.notEqual(fresh.digest, before);
+  assert.ok(fresh.radiation.stratusFraction.every((f) => f === 0) && fresh.radiation.mlmCover.every((f) => f === 0), 'twelve steps from rest build no 2 K inversion, and no empirical deck stands in');
+  const shadow = modelDigest({ mixedLayerDeck: true, stratusSubsidence: 0, minimumInversion: 0 });
   const { mlmCover, mlmWater, mlmEntrainment, stratusFraction } = shadow.radiation;
   let covered = 0;
   for (let i = 0; i < mlmCover.length; i++) {

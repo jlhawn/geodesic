@@ -61,6 +61,7 @@ test('DYCOMS-II RF01 after 4 h: inversion 800–900 m, LWP 40–110 g/m², cloud
     assert.ok(final.cloudBase > 500 && final.cloudBase < 700, `${closure}: z_b ${final.cloudBase}`);
     assert.ok(final.entrainment > 2e-3 && final.entrainment < 6e-3, `${closure}: w_e ${final.entrainment}`);
     for (const d of hourly) assert.ok(d.cover === 1 && d.buoyancyIntegralRatio < 0.15, `${closure}: the layer stays coupled`);
+    for (const d of hourly) assert.ok(d.subsidence <= -3e-4 && d.virtualJump >= 2, `${closure}: RF01 sits under the subsidence and inversion the shadow deck requires`);
   }
   const plain = createMixedLayer({ ...CONSTANTS, evaporativeEnhancement: 0 });
   console.log(`without the evaporative enhancement (A = 0.2): ${row(run(plain, rf01(plain)).final, 4)}`);
