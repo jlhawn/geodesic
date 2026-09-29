@@ -50,6 +50,41 @@ import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature, sal
  * layer's temperature is the sea surface temperature the atmosphere sees, its
  * heat capacity is published per cell, and the heat converged under ice
  * is handed to the ice base.
+ *
+ * Mesoscale eddies, 10–30 km across and unresolved on these meshes, flatten
+ * the interfaces between the interior classes (Gent and McWilliams 1990,
+ * in the interface-height form of MICOM and HYCOM). After the dynamics of
+ * each step, the water above interior interface k+½, at depth
+ * z = Σ_{j≤k} h_j below the free surface, crosses edge e from cell a to b at
+ *   G_{k+½} = −κ τ (z_b − z_a) dv_e/dc_e,
+ * and class k carries G_{k+½} − G_{k−½}, so every interface diffuses and the
+ * column sum is unchanged; the base of the mixed layer and the sea floor
+ * carry none, so the mixed layer is left to its own exchanges. Heat and salt
+ * go with the donor cell's water and the velocities are left as they are.
+ * κ is `eddyDiffusivity` wherever the mesh is much coarser than the first
+ * baroclinic deformation radius L_d = c/√(f² + 2βc), c = EDDY_WAVE_SPEED,
+ * and falls as 1/(1 + (L_d/dc)²) where it begins to resolve it (Hallberg
+ * 2013), which is only near the equator at 112 or 56 km. The taper τ is
+ * the product of linear ramps: over the top `eddyTaperDepth` metres, on the
+ * shallower cell's depth, so the scheme does not act in or just under the
+ * mixed layer; over EDDY_BOTTOM_TAPER metres above the edge's sill and of
+ * the interior water below the interface that both columns hold (the
+ * classes that can carry the return flow across the edge), so an interface
+ * that meets the bottom on either side carries nothing; and over THIN
+ * metres of interior water above the interface in the fuller column, so
+ * interfaces that are really the mixed-layer base carry nothing, while a
+ * class that has outcropped on one side can still spread under the mixed
+ * layer from the other. A class with less than THIN metres on both sides
+ * carries that fraction of its flux, and the rest is spread over the
+ * classes present on both sides in proportion to their thickness there, so
+ * a token class keeps exactly its token and the interfaces on either side
+ * of it move together; an edge whose two columns share less than THIN
+ * metres of interior water carries nothing. A class that would send more
+ * than 1/nEdges of its water above the token thickness out of a cell
+ * through one edge in the step is held to that and the difference spread
+ * in the same way, for up to three rounds, after which any excess scales
+ * the edge's fluxes together; κ is held below a quarter of the explicit
+ * diffusion limit 1/(dt·max Σ dv/(dc·A)).
  */
 export const LAYER_DENSITIES = [1022.0, 1022.25, 1022.5, 1022.75, 1023.0, 1023.25, 1023.5, 1023.75, 1024.0, 1024.25, 1024.5, 1024.75, 1025.0, 1025.25, 1025.5, 1025.75, 1026.0, 1026.2, 1026.4, 1026.6, 1026.75, 1026.85, 1026.95];
 export const LAYER_BOTTOMS = [90, 110, 130, 150, 170, 205, 235, 270, 300, 350, 400, 450, 500, 550, 600, 650, 700, 835, 965, 1100, 1600, 2500];
@@ -126,6 +161,29 @@ export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLER
 export const CLOSURE_SPACING = 120e3;
 export function closureCoefficient(spacing, closureHours, closureSpacing = CLOSURE_SPACING) {
   return closureHours > 0 ? Math.pow(spacing / Math.PI, 4) / (closureHours * 3600) * Math.max(1, closureSpacing / spacing) ** 3 : 0;
+}
+
+export const EDDY_WAVE_SPEED = 2, EDDY_BOTTOM_TAPER = 100, EDDY_SLACK = 1e-6;
+export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
+  const { nEdges: E, latEdge, dcEdge, radius, omega } = mesh;
+  const out = new Float64Array(E);
+  if (!(kappa > 0)) return out;
+  for (let e = 0; e < E; e++) {
+    const f = 2 * omega * Math.sin(latEdge[e]), beta = 2 * omega * Math.cos(latEdge[e]) / radius;
+    const deformation = waveSpeed / Math.sqrt(f * f + 2 * beta * waveSpeed);
+    out[e] = kappa / (1 + (deformation / dcEdge[e]) ** 2);
+  }
+  return out;
+}
+export function eddyDiffusionLimit(mesh) {
+  const { nCells: C, maxEdges, nEdgesOnCell, edgesOnCell, dvEdge, dcEdge, areaCell } = mesh;
+  let rate = 0;
+  for (let i = 0; i < C; i++) {
+    let sum = 0;
+    for (let m = 0; m < nEdgesOnCell[i]; m++) { const e = edgesOnCell[maxEdges * i + m]; sum += dvEdge[e] / dcEdge[e]; }
+    rate = Math.max(rate, sum / areaCell[i]);
+  }
+  return 0.25 / rate;
 }
 
 /*
@@ -255,6 +313,7 @@ export function createOcean(mesh, {
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 200, convectiveRate = 100 / 86400, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, diffusivity = 0.01, everySteps = 4,
+  eddyDiffusivity = 1000, eddyTaperDepth = 200,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {
   const {
@@ -272,6 +331,8 @@ export function createOcean(mesh, {
   for (let e = 0; e < E; e++) { spacing += dcEdge[e]; minSpacing = Math.min(minSpacing, dcEdge[e]); }
   spacing /= E;
   const nu4 = closureCoefficient(spacing, closureHours, closureSpacing);
+  const eddyKappa = eddyDiffusivities(mesh, eddyDiffusivity), eddyLimit = eddyDiffusivity > 0 ? eddyDiffusionLimit(mesh) : 0;
+  let eddy = null;
 
   const edgeOcean = geography ? geography.edgeOcean : new Uint8Array(E).fill(1);
   const cellOcean = geography ? Uint8Array.from(geography.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
@@ -579,6 +640,7 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) { const n = at(k, i); h[n] *= scale; Q[n] *= scale; W[n] *= scale; }
       eta[i] = avgEta[i];
     }
+    if (eddyLimit > 0) eddyTransport(dt);
     edgeThicknesses(h);
     limited = 0;
     for (let e = 0; e < E; e++) {
@@ -589,6 +651,70 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) { const n = ae(k, e); u[n] += shift; if (Math.abs(u[n]) > SPEED_LIMIT) { u[n] = Math.sign(u[n]) * SPEED_LIMIT; clamped = true; } }
       if (clamped) limited++;
       for (let k = 1; k < L; k++) if (hEdge[ae(k, e)] < THIN) u[ae(k, e)] = u[ae(k - 1, e)];
+    }
+  }
+
+  function eddyTransport(dt) {
+    if (!eddy) eddy = { volume: new Float64Array(L * C), heat: new Float64Array(L * C), salt: new Float64Array(L * C), flux: new Float64Array(L), share: new Float64Array(L) };
+    const { volume, heat, flux: classFlux, share } = eddy, salinity = eddy.salt;
+    const kappaLimit = eddyLimit / dt, ramp = (x, width) => Math.max(0, Math.min(1, x / width));
+    const allowance = (k, i) => (Math.max(0, h[at(k, i)] - EPS) + EDDY_SLACK) * areaCell[i] / (nEdgesOnCell[i] * dt);
+    volume.fill(0); heat.fill(0); salinity.fill(0);
+    for (let e = 0; e < E; e++) {
+      const kappa = Math.min(eddyKappa[e], kappaLimit);
+      if (!edgeOcean[e] || !(kappa > 0)) continue;
+      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+      let shared = 0;
+      for (let k = 1; k < L; k++) shared += Math.max(0, Math.min(h[at(k, a)], h[at(k, b)]) - EPS);
+      const sill = Math.min(D[a], D[b]) + 0.5 * (eta[a] + eta[b]), coefficient = kappa * dvEdge[e] / dcEdge[e];
+      let za = h[a], zb = h[b], aboveA = 0, aboveB = 0, sharedAbove = 0, upper = 0;
+      for (let k = 1; k < L; k++) {
+        const ha = h[at(k, a)], hb = h[at(k, b)], common = Math.max(0, Math.min(ha, hb) - EPS);
+        za += ha; zb += hb;
+        aboveA += Math.max(0, ha - EPS); aboveB += Math.max(0, hb - EPS); sharedAbove += common;
+        let lower = 0;
+        if (k < L - 1) {
+          const top = ramp(Math.min(za, zb), eddyTaperDepth);
+          const bottom = ramp(Math.min(sill - Math.max(za, zb), shared - sharedAbove), EDDY_BOTTOM_TAPER);
+          const ceiling = ramp(Math.max(aboveA, aboveB), THIN);
+          lower = -coefficient * top * bottom * ceiling * (zb - za);
+        }
+        const weight = ramp(Math.max(ha, hb) - EPS, THIN);
+        classFlux[k] = weight * (lower - upper);
+        share[k] = weight * common;
+        upper = lower;
+      }
+      let residual = 0, carriers = 0;
+      for (let round = 0; ; round++) {
+        residual = 0; carriers = 0;
+        for (let k = 1; k < L; k++) { residual += classFlux[k]; carriers += share[k]; }
+        if (round === 3 || !(carriers > THIN)) break;
+        let held = false;
+        for (let k = 1; k < L; k++) {
+          const f = classFlux[k] - residual * share[k] / carriers, allowed = allowance(k, f > 0 ? a : b);
+          if (Math.abs(f) > allowed) { classFlux[k] = f > 0 ? allowed : -allowed; share[k] = 0; held = true; }
+        }
+        if (!held) break;
+      }
+      if (!(carriers > THIN)) continue;
+      let scale = 1;
+      for (let k = 1; k < L; k++) {
+        const f = classFlux[k] - residual * share[k] / carriers, allowed = allowance(k, f > 0 ? a : b);
+        classFlux[k] = f;
+        if (Math.abs(f) > allowed) scale = Math.min(scale, allowed / Math.abs(f));
+      }
+      for (let k = 1; k < L; k++) {
+        const f = scale * classFlux[k];
+        if (f === 0) continue;
+        const d = at(k, f > 0 ? a : b), na = at(k, a), nb = at(k, b), fq = f * Q[d] / h[d], fw = f * W[d] / h[d];
+        volume[na] -= f; volume[nb] += f;
+        heat[na] -= fq; heat[nb] += fq;
+        salinity[na] -= fw; salinity[nb] += fw;
+      }
+    }
+    for (let n = C; n < L * C; n++) {
+      const factor = dt / areaCell[n % C];
+      h[n] += factor * volume[n]; Q[n] += factor * heat[n]; W[n] += factor * salinity[n];
     }
   }
 
@@ -889,5 +1015,5 @@ export function createOcean(mesh, {
   initialised = false;
   const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }

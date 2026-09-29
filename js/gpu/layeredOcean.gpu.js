@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, CLOSURE_SPACING, closureCoefficient, bathymetryFrom, fitColumns, runoffOutlets, interiorWater } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
@@ -21,8 +21,8 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * Initialization, loading and serialization run once per model build and
  * are cheap relative to a step, so they stay in JavaScript at double
  * precision, exactly porting the CPU functions over plain arrays before
- * uploading; only the per-step dynamics (tendency, barotropic, mixed
- * layer, salt, surface write-back) are WGSL.
+ * uploading; only the per-step dynamics (tendency, barotropic, eddy
+ * transport, mixed layer, salt, surface write-back) are WGSL.
  */
 const WORKGROUP = 64;
 
@@ -31,6 +31,7 @@ export const OCEAN_DEFAULTS = {
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, convectiveRate: 100 / 86400, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
   interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, diffusivity: 0.01, everySteps: 4,
+  eddyDiffusivity: 1000, eddyTaperDepth: 200,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
@@ -219,6 +220,86 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   if (k > 0 && OD[O_HEDGE + n] < THINO) { du = (IN[uOff(k - 1) + e] - IN[uOff(k) + e]) * P[2]; }
   if (OD[O_EMASK + e] < 0.5) { du = 0.0; }
   OUT[uOff(k) + e] = du;
+}`,
+    /*
+     * The eddy transport of ocean/layered.module.js, one edge a thread,
+     * leaving each class's volume, heat and salt fluxes in the FLUX, LAPA and
+     * LAPB scratch, which the tendency alone uses and refills; P[0] is the
+     * step and P[1] the stability limit on κ.
+     */
+    oEddyFlux: `${constLine('EDDYTOP', o.eddyTaperDepth)} ${constLine('EDDYBOTTOM', EDDY_BOTTOM_TAPER)} ${constLine('EDDYSLACK', EDDY_SLACK)}
+fn eddyAllowance(k: i32, i: i32) -> f32 {
+  return (max(0.0, IN[hOff(k) + i] - EPSO) + EDDYSLACK) * MF[F_AREA + i] / (f32(MI[NEC + i]) * P[0]);
+}
+${K}  let e = ${idx}; if (e >= E) { return; }
+  for (var k = 0; k < L; k++) { OD[O_FLUX + k * E + e] = 0.0; OD[O_LAPA + k * E + e] = 0.0; OD[O_LAPB + k * E + e] = 0.0; }
+  let kappa = min(OD[O_EDDYK + e], P[1]);
+  if (OD[O_EMASK + e] < 0.5 || !(kappa > 0.0)) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  var overlap = 0.0;
+  for (var k = 1; k < L; k++) { overlap += max(0.0, min(IN[hOff(k) + a], IN[hOff(k) + b]) - EPSO); }
+  let sill = min(OD[O_BATH + a], OD[O_BATH + b]) + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]);
+  let coefficient = kappa * MF[F_DV + e] / MF[F_DC + e];
+  var za = IN[hOff(0) + a]; var zb = IN[hOff(0) + b];
+  var aboveA = 0.0; var aboveB = 0.0; var overlapAbove = 0.0; var upper = 0.0;
+  var flux: array<f32, ${L}>; var share: array<f32, ${L}>;
+  for (var k = 1; k < L; k++) {
+    let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b]; let both = max(0.0, min(ha, hb) - EPSO);
+    za += ha; zb += hb;
+    aboveA += max(0.0, ha - EPSO); aboveB += max(0.0, hb - EPSO); overlapAbove += both;
+    var lower = 0.0;
+    if (k < L - 1) {
+      let top = clamp(min(za, zb) / EDDYTOP, 0.0, 1.0);
+      let bottom = clamp(min(sill - max(za, zb), overlap - overlapAbove) / EDDYBOTTOM, 0.0, 1.0);
+      let ceiling = clamp(max(aboveA, aboveB) / THINO, 0.0, 1.0);
+      lower = -coefficient * top * bottom * ceiling * (zb - za);
+    }
+    let weight = clamp((max(ha, hb) - EPSO) / THINO, 0.0, 1.0);
+    flux[k] = weight * (lower - upper);
+    share[k] = weight * both;
+    upper = lower;
+  }
+  var residual = 0.0; var carriers = 0.0;
+  for (var round = 0; ; round++) {
+    residual = 0.0; carriers = 0.0;
+    for (var k = 1; k < L; k++) { residual += flux[k]; carriers += share[k]; }
+    if (round == 3 || !(carriers > THINO)) { break; }
+    var held = false;
+    for (var k = 1; k < L; k++) {
+      let f = flux[k] - residual * share[k] / carriers;
+      let allowed = eddyAllowance(k, select(b, a, f > 0.0));
+      if (abs(f) > allowed) { flux[k] = select(-allowed, allowed, f > 0.0); share[k] = 0.0; held = true; }
+    }
+    if (!held) { break; }
+  }
+  if (!(carriers > THINO)) { return; }
+  var scale = 1.0;
+  for (var k = 1; k < L; k++) {
+    let f = flux[k] - residual * share[k] / carriers;
+    flux[k] = f;
+    let allowed = eddyAllowance(k, select(b, a, f > 0.0));
+    if (abs(f) > allowed) { scale = min(scale, allowed / abs(f)); }
+  }
+  for (var k = 1; k < L; k++) {
+    let f = scale * flux[k];
+    if (f == 0.0) { continue; }
+    let d = select(b, a, f > 0.0);
+    let hd = IN[hOff(k) + d];
+    OD[O_FLUX + k * E + e] = f;
+    OD[O_LAPA + k * E + e] = f * IN[qOff(k) + d] / hd;
+    OD[O_LAPB + k * E + e] = f * IN[wOff(k) + d] / hd;
+  }
+}`,
+    oEddyApply: `${K}  let n = ${idx}; if (n >= L * C) { return; }
+  let k = n / C; let i = n % C;
+  if (k == 0 || OD[O_CMASK + i] < 0.5) { return; }
+  var volume = 0.0; var heat = 0.0; var salt = 0.0;
+  for (var m = 0; m < MI[NEC + i]; m++) {
+    let e = MI[EOC + MAXE * i + m]; let s = f32(MI[ESC + MAXE * i + m]);
+    volume += s * OD[O_FLUX + k * E + e]; heat += s * OD[O_LAPA + k * E + e]; salt += s * OD[O_LAPB + k * E + e];
+  }
+  let factor = P[0] / MF[F_AREA + i];
+  IN[hOff(k) + i] -= factor * volume; IN[qOff(k) + i] -= factor * heat; IN[wOff(k) + i] -= factor * salt;
 }`,
     oAdvance: `${K}  let n = ${idx}; if (n >= OSTOTAL) { return; }
   OUT[n] = IN[n] + P[0] * OD[n];
@@ -494,6 +575,7 @@ export function createLayeredOcean(core, options = {}) {
   const labelT = rho.map((r, k) => Math.max(FREEZING_POINT, labelTemperature(r, labelS[k])));
   const thermoclineLayers = rho.filter((r, k) => k > 0 && r < THERMOCLINE_DENSITY).length;
   const nu4 = closureCoefficient(meshSpacing, o.closureHours, o.closureSpacing);
+  const eddyKappa = eddyDiffusivities(mesh, o.eddyDiffusivity), eddyLimit = o.eddyDiffusivity > 0 ? eddyDiffusionLimit(mesh) : 0;
   const diffusion = o.diffusivity * mesh.radius * mesh.radius / (o.density * o.specificHeat);
   let minSpacing = Infinity;
   for (let e = 0; e < E; e++) minSpacing = Math.min(minSpacing, mesh.dcEdge[e]);
@@ -528,6 +610,7 @@ export function createLayeredOcean(core, options = {}) {
     ['SURFT', C], ['SURFICE', C], ['SURFACEIN', C], ['T0', C], ['S0', C], ['RAINSEEN', C],
     ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
     ['RUNOFFSEEN', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
+    ['EDDYK', E],
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array (see oceanKernels' barotropic tendency/combine kernels), so their
@@ -682,12 +765,24 @@ export function createLayeredOcean(core, options = {}) {
     setParams([dt / 6]);
     compute((pass) => dispatch(pass, 'oCombine', group(ob.S, ob.K1, ob.K2, ob.K3, ob.K4), OS.total));
     const g = group(ob.S, ob.T);
+    if (eddyLimit > 0) setParams([dt, eddyLimit / dt]);
     compute((pass) => {
       dispatch(pass, 'oRescale', g, C);
+      if (eddyLimit > 0) eddyPasses(pass, g);
       dispatch(pass, 'oEdgeThicknessRaw', g, L * E);
       dispatch(pass, 'oEdgeThicknessSill', g, E);
       dispatch(pass, 'oVelocityShiftClamp', g, E);
     });
+  }
+
+  function eddyPasses(pass, g) {
+    dispatch(pass, 'oEddyFlux', g, E);
+    dispatch(pass, 'oEddyApply', g, L * C);
+  }
+  function eddyTransport(dt) {
+    if (!(eddyLimit > 0)) return;
+    setParams([dt, eddyLimit / dt]);
+    compute((pass) => eddyPasses(pass, group(ob.S, ob.T)));
   }
 
   function readSurface(surfaceT, ice) {
@@ -869,6 +964,7 @@ export function createLayeredOcean(core, options = {}) {
     device.queue.writeBuffer(ob.OD, 4 * OD.CMASK, Float32Array.from(cellOcean));
     device.queue.writeBuffer(ob.OD, 4 * OD.BATH, Float32Array.from(D));
     device.queue.writeBuffer(ob.OD, 4 * OD.FEDGE, Float32Array.from(mesh.fEdge));
+    device.queue.writeBuffer(ob.OD, 4 * OD.EDDYK, Float32Array.from(eddyKappa));
     device.queue.writeBuffer(ob.OD, 4 * OD.DRAINSTART, drainStart);
     if (drainCells.length) { device.queue.writeBuffer(ob.OD, 4 * OD.DRAINCELL, Float32Array.from(drainCells)); device.queue.writeBuffer(ob.OD, 4 * OD.DRAINW, Float32Array.from(drainWeights)); }
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVICE, Float32Array.from(restart ? restart.previousIce : ice));
@@ -1001,7 +1097,7 @@ export function createLayeredOcean(core, options = {}) {
     layers: L, everySteps: o.everySteps, options: o, D, cellOcean,
     initialize, upload, download, serialize, serializeFrom, restartArrays, diagnostics, frame,
     advance, advanceCoupled, accumulateFreshwater, forgetAccumulated,
-    setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, mixedLayer, salt, writeSurface, step,
+    setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, mixedLayer, salt, writeSurface, step, eddyTransport,
     buffers: ob, layout: { OS, OD, B },
   };
 }

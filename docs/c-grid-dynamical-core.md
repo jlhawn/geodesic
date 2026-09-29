@@ -2212,6 +2212,45 @@ Current to 3.4 m/s by day 540 and jets to the 5 m/s limit in the
 Maritime Continent's seas from day 573. With the drag reaching the water
 below, the same run's fastest current fell to 1.3 m/s, with no clamps.
 
+**Eddy transport.** The layers carry the eddy-induced transport of Gent
+and McWilliams (1990) in the interface-height form of MICOM and HYCOM,
+one explicit step after the dynamics of every ocean step and before the
+mixed-layer exchanges (`eddyTransport`; the `oEddyFlux` and `oEddyApply`
+kernels). The water above each interior interface crosses an edge at
+−κτ Δz dv/dc, Δz the change across the edge of the interface's depth
+below the free surface, and each class carries the difference of the
+fluxes at its top and its base, so the interfaces diffuse while every
+class keeps its volume, heat and salt and every column its sum; the
+mixed-layer base and the floor carry none, heat and salt go with the
+donor cell's water, and the velocities are untouched. κ is
+`eddyDiffusivity` (1000 m²/s) times 1/(1 + (L_d/dc)²), L_d = c/√(f² + 2βc)
+with c = 2 m/s (Hallberg 2013's resolution function): 983 m²/s at 60°S,
+902 at 20°S and 253 at the equator at N=64, and 935, 699 and 78 at N=128,
+where κΔt/dc² is 9×10⁻⁵ and 2×10⁻⁴. The taper τ is linear over the top
+200 m (`eddyTaperDepth`, on the shallower cell), over 100 m above the sill
+and of the water below the interface that both columns hold, and over
+5 m of interior water above it in the fuller column, so an outcropped
+class can still spread under the mixed layer from the side where it
+exists. A class thinner than 5 m on both sides carries that fraction of
+its flux and the rest goes to the classes both columns hold, by
+thickness, so a token class keeps its token exactly. A class is held to
+1/nEdges of its water above the token per edge and step, the difference
+spread the same way; on the day-2281 N=64 state one step holds a class at
+1.7% of the edges, 0.02% of the flux, and no edge needs the last-resort
+scaling of its whole column. With `eddyDiffusivity: 0` both engines are
+byte-identical to the ocean without it. On the GPU it adds 1.2 ms to the
+24 ms ocean step at N=64 and 4 ms to 96 ms at N=128. From that state
+(June), 60 coupled days with κ = 1000 and with κ = 0 at N=64: the rms
+slope of the 1026.6 and 1026.85 interfaces over 35–70S fell from 0.57 and
+0.48 m/km to 0.48 and 0.38 by day 30 and 0.43 and 0.36 by day 60 against
+0.58 and 0.52 without it, the grid-scale roughness going first (a 240 km
+wave decays in 17 days, the 2000 km tilt across the ACC in about three
+years, and the 45S–65S depth differences were 2–5 m smaller); the 60–70S
+column stayed within 0.03 K of the run without it at every depth, and
+nothing else moved outside the two runs' day-to-day spread (clamped
+edges on 4 days against 3, currents ≤ 0.8 m/s against 1.0, Drake
+Passage 61 Sv against 51–66).
+
 **Open.** The freezing point ignores salinity; the deepest class has no restoring when light; the Kraus–Turner constants
 and the 50 m minimum depth are first guesses; the barotropic mode has
 no explicit filter beyond the sub-step average.
@@ -2543,21 +2582,19 @@ core (which does more work per cell through the adjoint gather lists).
    against exact solutions before any column physics is attached — is the
    mitigation: if M1 passes TC2/TC6/Galewsky, the mesh and operators are
    right, and any later regression is in M2/M3.
-8. **The layered ocean has no mesoscale-eddy parameterization.** Its
+8. **The layered ocean's eddies are parameterized, not resolved.** Its
    cells are 112 km at N=64 and 56 km at N=128, while the ocean's eddies
    are 10–30 km across (eddy-permitting begins near 25 km), so the
    eddy transport that flattens isopycnals across the Antarctic
    Circumpolar Current and sets the Southern Ocean overturning — the path
-   by which warm deep water reaches the surface under the pack ice — is
-   missing; only the scale-selective ∇⁴ closure and a small diffusivity
-   act on the layers. The standard remedy is Gent–McWilliams (1990):
-   in an isopycnal model it is a diffusion of layer thickness (interface
-   height) along each layer with κ ≈ 500–1000 m²/s, tapered where the
-   layer outcrops or thins, with along-layer tracer diffusion (Redi)
-   implicit in the coordinate and a lateral diffusion for the mixed
-   layer; it costs one extra flux per edge per layer. Add it before the
-   next multi-century spin-up and judge it by the Southern Ocean column
-   (60–70S, 200–500 m, Earth +1 °C) and the Antarctic pack volume.
+   by which warm deep water reaches the surface under the pack ice —
+   comes from the Gent–McWilliams transport of M18 (**Eddy transport**),
+   with along-layer (Redi) mixing implicit in the coordinate. Sixty days
+   show the interfaces smoothing but cannot show the overturning: judge
+   it over the next multi-century spin-up by the Southern Ocean column
+   (60–70S, 200–500 m, Earth +1 °C) and the Antarctic pack volume. κ,
+   nearly uniform poleward of 20°, is the parameter to revisit, for
+   example with the Eady growth-rate dependence of Visbeck et al. (1997).
 
 ---
 

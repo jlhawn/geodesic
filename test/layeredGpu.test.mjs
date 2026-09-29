@@ -134,3 +134,43 @@ test('the GPU ocean keeps its water volume over 400 wind-driven steps at N=8', {
   const drift = (await meanColumn()) - before;
   assert.ok(Math.abs(drift) < 2e-3, `mean water column changed by ${drift} m over 400 steps`);
 });
+
+test('the GPU eddy transport tracks the CPU\'s at N=8, alone and through twenty-one ocean steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const strong = { ...OCEAN_OPTIONS, eddyDiffusivity: 1e6 };
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350;
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: strong });
+  const gpuOcean = gpuModel.oceanEngine;
+  const cpuOcean = (options) => { const ocean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options }); ocean.initialize(surfaceT0, ice); return ocean; };
+  const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
+
+  const alone = cpuOcean(strong);
+  await gpuOcean.upload(alone.serialize(), Float64Array.from(surfaceT0), ice);
+  const start = Float64Array.from(alone.h), gpuStart = (await gpuOcean.download()).h;
+  for (let n = 0; n < 20; n++) { alone.eddyTransport(dt); gpuOcean.eddyTransport(dt); }
+  const cpuAlone = alone.serialize(), gpuAlone = await gpuOcean.download();
+  const cpuChange = Float64Array.from(cpuAlone.h, (v, x) => v - start[x]), gpuChange = Float64Array.from(gpuAlone.h, (v, x) => v - gpuStart[x]);
+  const wetAlone = Array.from(cpuAlone.h, (v) => v > 1);
+  const change = rms(cpuChange, gpuChange), largest = cpuChange.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  console.log(`twenty eddy transports alone at N=8: layers move by up to ${largest.toFixed(1)} m, the GPU's change differing by ${change.toExponential(2)} rms relative, T ${rms(cpuAlone.T, gpuAlone.T, wetAlone).toExponential(2)}, S ${rms(cpuAlone.S, gpuAlone.S, wetAlone).toExponential(2)}`);
+  assert.ok(largest > 5 && change < 1e-3, `the eddy transport moved layers by up to ${largest} m, the engines' changes differing by ${change}`);
+  for (const f of ['T', 'S']) assert.ok(rms(cpuAlone[f], gpuAlone[f], wetAlone) < 2e-3, f);
+
+  const cpu = cpuOcean(strong), still = cpuOcean({ ...OCEAN_OPTIONS, eddyDiffusivity: 0 }), flux = new Float64Array(C);
+  gpuOcean.initialize(surfaceT0, ice);
+  for (let n = 0; n < 21; n++) {
+    cpu.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+    still.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+    await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, dt);
+  }
+  const cpuState = cpu.serialize(), stillState = still.serialize(), gpuState = await gpuOcean.serialize();
+  const wet = Array.from(cpuState.h, (v) => v > 1);
+  const lines = [];
+  for (const f of ['h', 'u', 'T', 'S', 'eta']) {
+    const mask = f === 'T' || f === 'S' ? wet : null, gap = rms(cpuState[f], gpuState[f], mask), effect = rms(cpuState[f], stillState[f], mask);
+    lines.push(`${f} ${gap.toExponential(2)} against ${effect.toExponential(2)}`);
+    assert.ok(gap < 2e-3, `${f} rms relative diff ${gap} after 21 steps`);
+    assert.ok(effect > 5 * gap, `${f}: the eddy transport changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
+  }
+  console.log(`21 ocean steps with eddyDiffusivity 1e6 at N=8, the engines' rms relative difference against the eddy transport's effect: ${lines.join(', ')}`);
+});
