@@ -1732,8 +1732,21 @@ cell's temperature and salinity: a centred edge value let a step that
 moves a large share of a thin cell's water leave the remainder at a
 temperature outside anything in the neighbourhood (370 K off Chile on
 day 34 of the first N=64 run). The edge potential vorticity is
-(ζ̄ + f̄)/max(h_e, 20 m) with the same edge thickness, which keeps the PV
-term bounded where a layer thins to nothing. A layer thinner than 5 m at
+(ζ̄ + f̄)/max(h, 20 m) with h the same edge thickness, except that an
+interior layer's is at least `vorticityCentring` = ½ of its two cells'
+mean thickness ½(h_a + h_b); the floor keeps the term bounded where a
+layer thins to nothing. On the smaller thickness alone, a layer left a
+few metres thick under a deep mixed layer beside the full layer next
+door assembles a Coriolis force from its thick neighbours' fluxes many
+times what its pressure gradient balances: a 12 m remnant under a
+600 m mixed layer at 45°S ran to 1.3 m/s in five days at N=32 (0.13 m/s
+with the centring), and the year-6 N=64 state had 36 interior edges
+faster than 1 m/s, up to 4.4 m/s in a 9.5 m layer at 53°N. The full
+centred thickness (`vorticityCentring: 1`) does as well there but moves
+the western boundary current of the 80° test basin at N=16 two cells
+off the wall; half of it leaves unchanged every edge whose thinner side
+holds at least a third of the thicker's water. `vorticityCentring: 0` builds it
+on the edge thickness alone. A layer thinner than 5 m at
 an edge follows the velocity of the layer above, relaxing at the lesser
 of 1/hour and 1/step.
 
@@ -1751,45 +1764,87 @@ their transport equals the averaged U. Velocities are finally clamped
 to 5 m/s and the count of clamps reported (`oceanLimited`, zero in every
 run so far).
 
-**Mixed layer.** After each step, per column: the mixed layer swallows
-any interior layer lighter than itself (convection), taking only as much
-as keeps it within 200 m and at most 100 m a day — unlimited swallowing
-with the neutral return below mixed 150 m of 272.4 K deep water into the
-polar mixed layer every 22-minute step, a heat supply no winter cooling
-could beat, and the sea ice was gone by day 90; entrains the first layer below at the
-Kraus–Turner wind-stirring rate w = 2 m u*³/(h₀ Δb) with
-m = 0.8 exp(−h₀/100 m), so the wind's stirring fades below the depth it
-can reach, and Δb the buoyancy step to that layer, at least 10⁻³ m/s²
-(a 0.1 kg/m³ step; the KT rate is unbounded as Δb → 0);
-detrains any depth beyond 200 m and, when it is at least as dense as
-the water beneath it (within 0.005 kg/m³, convectively neutral),
-everything below the 50 m floor (also the minimum thickness) — the swallow and the return each step
-still mix the column, but a kilometre-deep mixed layer beside 40 m ones
-opened a 5.7 m sea-level hole within an hour off Cape Farewell, and
-500–900 m ones that had exhausted the 1027.2 layer and sat, stably, on
-the 1027.7 layer ran the Drake Passage at 5 m/s;
-detrained water goes to the interior layer whose density is nearest
-its own, so water swallowed from a layer returns to that layer (the
-first rule, the first layer at least as dense, put 900 m of 1027.24
-water into the 1027.7 layer and made a 0.5 m sea-level step with
-2.5 m/s currents around it; Bleck's mass-conserving split between the
-two bracketing layers had no step at the bottom but ratcheted a tenth
-of a metre of every swallow-and-return cycle into the denser class,
-and in 90 days 2400 m of the 1027.2 layer had become 1027.7 water in
-some Southern Ocean columns and not their neighbours, with 5 m/s
-mid-depth flows between); water lighter than the first interior layer
+**Mixed layer.** After each step, per column, driven by the surface
+buoyancy loss of the step, B = g(α ΔT h + β ΔW)/Δt, with ΔT the surface
+update's cooling of the mixed layer at the thickness h its capacity
+used and ΔW the salt (psu·m) that evaporation, rain, runoff and ice
+growth add, remembered over `buoyancyMemory` = 1 day as
+B̄ ← B̄ + (B − B̄) Δt/day, so a day's sunshine does not undo a winter's
+convection. Each interior class stands for water spanning half-way to
+its neighbours' labels, from ρ_k − δ⁻ to ρ_k + δ⁺. The mixed layer
+(1) swallows a class it is denser than all of (ρ_ml ≥ ρ_k + δ⁺, static
+instability), at up to `convectiveRate` = 100 m a day;
+(2) erodes the first class beneath it while it is within that class's
+span and B̄ > 0, at the rate of convection into stratified water,
+dh₀/dt = B̄/(h₀ N²) with N² = g (ρ_k + δ⁺ − ρ_ml)/(ρ₀ h_k), the class's
+remaining span of density over its thickness — `convectiveErosion:
+false` swallows every class no denser than the mixed layer instead;
+(3) entrains the first layer below at the Kraus–Turner wind-stirring
+rate w = 2 m u*³/(h₀ Δb) with m = 0.8 exp(−h₀/100 m), so the wind's
+stirring fades below the depth it can reach, and Δb the buoyancy step
+to that layer, at least 10⁻³ m/s² (a 0.1 kg/m³ step; the KT rate is
+unbounded as Δb → 0); all three within `maximumMixedDepth` = 600 m (the
+Southern Ocean's mode-water mixed layers reach 500–700 m; the deepest
+class, one label for everything below about 1600 m, would otherwise let
+a polar mixed layer that reaches its density erode it to the bottom at
+its thickness's weak N², and the subpolar North Atlantic's 1000–2000 m
+Labrador Sea convection is cut to the cap) and,
+when `mixedNeighbourRatio` is set, within that multiple of the mean
+mixed-layer depth of its sea neighbours. Otherwise it holds its depth,
+convectively neutral or not. It detrains at once anything beyond
+600 m, and, over a day and never above 50 m (`shallowestMixedDepth`,
+also the minimum thickness, refilled from below), anything beyond its
+neighbours' reach and anything beyond the Monin–Obukhov depth
+2 m u*³/(−B̄) while B̄ < −10⁻⁹ m²/s³, which is how a winter's mixed layer
+retreats in spring and leaves its water behind as mode water.
+Detrained water goes to the interior layer whose density is nearest its
+own, so water swallowed from a layer returns to that layer (the first
+rule, the first layer at least as dense, put 900 m of 1027.24 water into
+the 1027.7 layer and made a 0.5 m sea-level step with 2.5 m/s currents
+around it; Bleck's mass-conserving split between the two bracketing
+layers ratcheted a tenth of a metre of every swallow-and-return cycle
+into the denser class); water lighter than the first interior layer
 goes there whole (the tropical and summer mixed layers, a known slow
-drift);
-when the surface buoyancy flux implied by its temperature change since
-the last ocean step is stabilising (below −10⁻⁹ m²/s³) and it is deeper
-than the Monin–Obukhov depth 2 m u*³/(−B), it detrains the excess over a
-day into the first interior layer at least as dense as itself that
-already holds water in the column, or the deepest such layer, or not at
-all on a shelf that has only mixed layer; and it is kept at least 50 m
-thick by entraining from below. The shallowest depth detrainment leaves
-is 50 m: with 20 m the tropical mixed layer sat on that floor (every
-warming step collapses the Monin–Obukhov depth) and the SST fell 2 K a
-month.
+drift). Every warming day pulls the tropical mixed layer to the 50 m
+floor; with a 20 m floor the SST fell 2 K a month. `mixedNeighbourRatio` (off by default) caps the depth at that
+multiple of the neighbours' mean and detrains the excess over a day; at
+3 it moved the Southern Ocean's depths by less than 10 m in a 60-day
+N=64 test, the pressure force and the centring of the potential
+vorticity keeping even an isolated 600 m column balanced.
+
+Earth's winter mixed layer is 100–400 m deep in the Southern Ocean,
+500–700 m in the mode-water regions of the south-east Pacific and
+Indian sectors, 300–1000 m in the subpolar North Atlantic, 100–150 m in
+the subtropics and 20–60 m in the tropics (de Boyer Montégut et al.
+2004). Earlier rules held it far shallower: the mixed layer returned
+everything below 50 m to the interior whenever it was as dense as the
+water beneath it (`neutralSnap`), kept at most 200 m, and swallowed any
+class no denser than itself at 100 m a day. Those rules were added when
+a kilometre-deep mixed layer beside 40 m ones opened a 5.7 m sea-level
+hole off Cape Farewell and 500–900 m ones ran the Drake Passage at
+5 m/s, but both happened while the mixed layer's Coriolis term used its
+donor-limited flux, so that where a thin mixed layer fed a deep one it
+felt a fraction of its Coriolis force (the fault behind the Falkland
+Plateau jet that the centred flux h_e u removed); the pressure force,
+(g/ρ₀)(h₀/2)∇ρ_ml, is the exact layer mean for any thickness, and a
+600 m mixed layer beside 50 m ones moves the free surface by its steric
+deficit (7 cm) and the water by 2 cm/s at N=16. The snap pinned the
+June Southern Ocean of year 6 at exactly 50 m in 70 % of its cells,
+over water within 0.03 kg/m³ of their own density down to a median
+480 m; the snap and return each step churned that water through the
+mixed layer. Letting a neutral layer hold, but still swallowing
+whole classes, turned the pinned layer into zonal stripes of 600 and
+100 m, one per class outcrop, as each 700–1000 m class at 50–55°S went
+whole where the surface water just passed its label; eroding the class
+at B̄/(h₀N²) instead gives, 60 days on from that June at N=64, 180 m
+(90–360 m, 10th–90th percentile) at 40–65°S, smooth on the large scale
+and deepest, to the 600 m cap, in the south-east Pacific west of Chile
+where Subantarctic Mode Water forms, 100–150 m under the Antarctic ice
+and 50 m in the northern summer; a tenth of the Southern
+Ocean's columns still differ by more than 25 m from all their
+neighbours, most of them in those deepest regions, where the depth
+turns on how near the surface water is to the density of the whole
+class beneath it.
 
 **Salinity.** Evaporation minus rain is accumulated per cell over the
 atmosphere steps between ocean steps, and each land cell's runoff flows
@@ -1944,11 +1999,11 @@ the day's recorded SST by −RESTORE·(SST − SST_rec), RESTORE = 30 W/m²/K
 by default (about 95 days on a 60 m mixed layer); a partly iced cell's
 leads take it per unit lead area, and the ice itself only the recorded
 flux. Replaying two recorded days at N=6 from the same state ends
-within 0.02 K of the coupled run's SST everywhere
+within 0.2 K of the coupled run's SST everywhere
 (`test/oceanSpinup.test.mjs`). A daily mean has no diurnal cycle, so
-the mixed layer's Monin–Obukhov detrainment, which answers the day's
-warming, differs: after those two days the mixed layer is up to 10 m
-off and a few thin interior layers the coupled run filled stay empty.
+the mixed layer's buoyancy loss, and the exchanges it drives, differ:
+after those two days the mixed layer is up to 6 m off and a few thin
+interior layers the coupled run filled stay empty.
 
 At each year's end the driver saves `<TAG>_yearYYYY.bin`, a full state:
 the atmosphere and land of STATE as loaded (the land keeping the snow

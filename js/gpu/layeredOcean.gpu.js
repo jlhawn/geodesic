@@ -29,7 +29,7 @@ const WORKGROUP = 64;
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
-  minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 200, convectiveRate: 100 / 86400, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
+  minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
   interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, diffusivity: 0.01, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200,
   dragCoefficient: 1.5e-3, gustiness: 3,
@@ -42,6 +42,8 @@ function oceanKernels(o) {
   const { L, C, E, V, OS, OD, B } = o;
   const constLine = (name, value) => `const ${name}: f32 = ${Number(value).toExponential(10)};`;
   const rhoLine = `const RHO: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => v.toFixed(6)).join(', ')});`;
+  const spread = (sign) => o.rho.map((r, k) => r + sign * 0.5 * (sign < 0 ? (k > 1 ? r - o.rho[k - 1] : o.rho[k + 1] - r) : (k < L - 1 ? o.rho[k + 1] - r : r - o.rho[k - 1])));
+  const classLine = `const LIGHTEST: array<f32, ${L}> = array<f32, ${L}>(${spread(-1).map((v) => v.toFixed(6)).join(', ')});\nconst DENSEST: array<f32, ${L}> = array<f32, ${L}>(${spread(1).map((v) => v.toFixed(6)).join(', ')});`;
   const labelLine = `const LABEL_T: array<f32, ${L}> = array<f32, ${L}>(${o.labelT.map((v) => v.toFixed(6)).join(', ')});\nconst LABEL_S: array<f32, ${L}> = array<f32, ${L}>(${o.labelS.map((v) => v.toFixed(6)).join(', ')});\nconst RHOA: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => (v - SEAWATER.rho0).toFixed(6)).join(', ')});`;
   const offsetLines = Object.entries(OD).filter(([k]) => k !== 'total').map(([k, v]) => `const O_${k}: i32 = ${v};`).join('\n');
   const bLines = Object.entries(B).filter(([k]) => k !== 'total').map(([k, v]) => `const B_${k}: i32 = ${v};`).join('\n');
@@ -51,11 +53,13 @@ const OH: i32 = ${OS.OH}; const OU: i32 = ${OS.OU}; const OQ: i32 = ${OS.OQ}; co
 ${offsetLines}
 ${bLines}
 ${rhoLine}
+${classLine}
 ${labelLine}
 ${constLine('RHO0', o.density)} ${constLine('RHOCP', o.density * o.specificHeat)}
 ${constLine('OGRAV', o.gravity)}
 ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)} ${constLine('DENSTOL', DENSITY_TOLERANCE)} ${constLine('RESTTOL', RESTORE_TOLERANCE)} ${constLine('RESTORET', o.restoreTime)}
 ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
+${constLine('NEUTRALSNAP', o.neutralSnap ? 1 : 0)} ${constLine('EROSION', o.convectiveErosion ? 1 : 0)} ${constLine('BUOYMEM', o.buoyancyMemory)} ${constLine('NBRRATIO', o.mixedNeighbourRatio)} ${constLine('CENTRING', o.vorticityCentring)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
 ${constLine('FREEZE', FREEZING_POINT)} ${constLine('CDO', o.dragCoefficient)} ${constLine('GUSTO', o.gustiness)}
@@ -153,7 +157,9 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     oEdgePV: `${K}  let n = ${idx}; if (n >= L * E) { return; }
   let k = n / E; let e = n % E;
   let v1 = MI[VOE + 2 * e]; let v2 = MI[VOE + 2 * e + 1];
-  OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(OD[O_HEDGE + n], PVFLOOR);
+  var hq = OD[O_HEDGE + n];
+  if (k > 0) { hq = max(hq, CENTRING * 0.5 * (IN[hOff(k) + MI[COE + 2 * e]] + IN[hOff(k) + MI[COE + 2 * e + 1]])); }
+  OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, PVFLOOR);
 }`,
     oKineticPhi: `${K}  let n = ${idx}; if (n >= L * C) { return; }
   let k = n / C; let i = n % C;
@@ -417,6 +423,15 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
   let fa = CDO * rhoA * max(D[D_WIND + a], GUSTO); let fb = CDO * rhoB * max(D[D_WIND + b], GUSTO);
   OD[O_STRESS + e] = through * 0.5 * (fa + fb) * S[S_U + (K - 1) * E + e];
 }`,
+    oMixedReach: `${K}  let i = ${idx}; if (i >= C) { return; }
+  var sum = 0.0; var count = 0.0;
+  for (var m = 0; m < MAXE; m++) {
+    if (MI[ESC + MAXE * i + m] == 0) { continue; }
+    let j = MI[COC + MAXE * i + m];
+    if (OD[O_CMASK + j] > 0.5) { sum += IN[hOff(0) + j]; count += 1.0; }
+  }
+  OD[O_REACH + i] = select(1.0e30, NBRRATIO * sum / max(count, 1.0), NBRRATIO > 0.0 && count > 0.0);
+}`,
     oMixedLayer: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
   var wv = vec3<f32>(0.0, 0.0, 0.0);
@@ -428,30 +443,45 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
   wv = wv / MF[F_AREA + i];
   let tau = length(wv);
   let ustar3 = pow(tau / RHO0, 1.5); let stir = STIRRING * exp(-IN[hOff(0) + i] / STIRDEPTH);
+  let reach = OD[O_REACH + i];
+  let deepest = min(MAXMIXED, reach);
+  let s0 = IN[wOff(0) + i] / IN[hOff(0) + i];
+  let salted = s0 * OD[O_FRESH + i] / 1000.0 + (s0 - ICESAL) * (OD[O_SURFICE + i] - OD[O_PREVICE + i]) * ICEDENS / 1000.0;
+  let buoyancy = OGRAV * (alphaT(OD[O_SURFACEIN + i], s0) * (OD[O_PREVT0 + i] - OD[O_SURFACEIN + i]) * PH[PH_CAP + i] / RHOCP + betaS(OD[O_SURFACEIN + i], s0) * salted) / P[6];
+  let loss = OD[O_BUOY + i] + (buoyancy - OD[O_BUOY + i]) * select(1.0, min(1.0, P[6] / BUOYMEM), BUOYMEM > 0.0);
+  OD[O_BUOY + i] = loss;
   var rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i], IN[wOff(0) + i] / IN[hOff(0) + i]);
   var budget = CONVRATE * P[6];
   for (var k = 1; k < L; k++) {
-    if (IN[hOff(0) + i] >= MAXMIXED || budget <= 0.0) { break; }
-    if (IN[hOff(k) + i] <= EPSO || RHO[k] > rm) { continue; }
-    let take = min(min(IN[hOff(k) + i] - EPSO, MAXMIXED - IN[hOff(0) + i]), budget);
-    moveLayer(i, k, 0, take); budget -= take;
-    rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i], IN[wOff(0) + i] / IN[hOff(0) + i]);
+    if (IN[hOff(0) + i] >= deepest || budget <= 0.0) { break; }
+    let hk = IN[hOff(k) + i];
+    if (hk <= EPSO) { continue; }
+    var take = min(min(hk - EPSO, deepest - IN[hOff(0) + i]), budget);
+    let eroding = EROSION > 0.5 && rm < DENSEST[k];
+    if (eroding) {
+      if (rm >= LIGHTEST[k] && loss > 0.0) { take = min(take, loss * P[6] * RHO0 * hk / (OGRAV * IN[hOff(0) + i] * (DENSEST[k] - rm))); } else { take = 0.0; }
+    } else if (EROSION < 0.5 && RHO[k] > rm) { continue; }
+    if (take > 0.0) {
+      moveLayer(i, k, 0, take); budget -= take;
+      rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i], IN[wOff(0) + i] / IN[hOff(0) + i]);
+    }
+    if (eroding) { break; }
   }
   var below = -1;
   for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { below = k; break; } }
-  if (below > 0 && IN[hOff(0) + i] < MAXMIXED) {
+  if (below > 0 && IN[hOff(0) + i] < deepest) {
     let db = max(1e-3, OGRAV * (RHO[below] - rm) / RHO0);
-    let entrain = min(2.0 * stir * ustar3 / (IN[hOff(0) + i] * db) * P[6], IN[hOff(below) + i] - EPSO);
+    let entrain = min(min(2.0 * stir * ustar3 / (IN[hOff(0) + i] * db) * P[6], IN[hOff(below) + i] - EPSO), reach - IN[hOff(0) + i]);
     if (entrain > 0.0) { moveLayer(i, below, 0, entrain); rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i], IN[wOff(0) + i] / IN[hOff(0) + i]); }
   }
   below = -1;
   for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { below = k; break; } }
   var excess = max(0.0, IN[hOff(0) + i] - MAXMIXED);
-  if (below > 0 && rm >= RHO[below] - DENSTOL) { excess = max(excess, IN[hOff(0) + i] - SHALLOWMIXED); }
+  if (NEUTRALSNAP > 0.5 && below > 0 && rm >= RHO[below] - DENSTOL) { excess = max(excess, IN[hOff(0) + i] - SHALLOWMIXED); }
   detrain(i, excess, rm);
-  let buoyancy = OGRAV * alphaT(OD[O_SURFACEIN + i], IN[wOff(0) + i] / IN[hOff(0) + i]) * (OD[O_PREVT0 + i] - OD[O_SURFACEIN + i]) * IN[hOff(0) + i] / P[6];
-  if (buoyancy < -1e-9) {
-    let monin = max(SHALLOWMIXED, 2.0 * stir * ustar3 / -buoyancy);
+  if (IN[hOff(0) + i] > reach) { detrain(i, (IN[hOff(0) + i] - max(reach, SHALLOWMIXED)) * min(1.0, P[6] / DETRAINT), rm); }
+  if (loss < -1e-9) {
+    let monin = max(SHALLOWMIXED, 2.0 * stir * ustar3 / -loss);
     if (IN[hOff(0) + i] > monin) { detrain(i, (IN[hOff(0) + i] - monin) * min(1.0, P[6] / DETRAINT), rm); }
   }
   if (IN[hOff(0) + i] < MINTHICK) {
@@ -605,7 +635,7 @@ export function createLayeredOcean(core, options = {}) {
   const OD = seq([
     ['FLUX', L * E], ['HEDGE', L * E], ['AVORT', L * V], ['QE', L * E], ['PHI', L * C],
     ['LAPA', L * E], ['LAPB', L * E], ['DIVS', L * C], ['CURLS', L * V],
-    ['RHOML', C], ['GRADRHO', E], ['GRADETA', E], ['SLOW', E], ['DEPTHEDGE', E],
+    ['RHOML', C], ['REACH', C], ['BUOY', C], ['GRADRHO', E], ['GRADETA', E], ['SLOW', E], ['DEPTHEDGE', E],
     ['ETA', C], ['FRESH', C], ['PREVT0', C], ['PREVICE', C], ['ICED', C], ['STRESS', E],
     ['SURFT', C], ['SURFICE', C], ['SURFACEIN', C], ['T0', C], ['S0', C], ['RAINSEEN', C],
     ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
@@ -807,7 +837,10 @@ export function createLayeredOcean(core, options = {}) {
   }
   function mixedLayer(dt) {
     setParams([0, 0, relaxRate, 0, 0, 0, dt]);
-    compute((pass) => dispatch(pass, 'oMixedLayer', group(ob.S, ob.T), C));
+    compute((pass) => {
+      dispatch(pass, 'oMixedReach', group(ob.S, ob.T), C);
+      dispatch(pass, 'oMixedLayer', group(ob.S, ob.T), C);
+    });
   }
   function salt(dt) {
     setParams([0, 0, 0, 0, 0, 0, dt]);
@@ -969,6 +1002,7 @@ export function createLayeredOcean(core, options = {}) {
     if (drainCells.length) { device.queue.writeBuffer(ob.OD, 4 * OD.DRAINCELL, Float32Array.from(drainCells)); device.queue.writeBuffer(ob.OD, 4 * OD.DRAINW, Float32Array.from(drainWeights)); }
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVICE, Float32Array.from(restart ? restart.previousIce : ice));
     if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.FRESH, Float32Array.from(restart.fresh));
+    if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.BUOY, Float32Array.from(restart.buoyancy));
     const capacity = restart ? restart.capacity : Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
     core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null });
   }
@@ -977,7 +1011,7 @@ export function createLayeredOcean(core, options = {}) {
     uploadArrays(arrays, surfaceT, ice);
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(arrays.previousT0));
   }
-  const RESTART = [['Q', L * C], ['W', L * C], ['previousT0', C], ['previousIce', C], ['fresh', C], ['flux', C], ['capacity', C]];
+  const RESTART = [['Q', L * C], ['W', L * C], ['previousT0', C], ['previousIce', C], ['fresh', C], ['buoyancy', C], ['flux', C], ['capacity', C]];
   function restartable(saved) {
     if (!saved || !saved.h || saved.h.length !== L * C || !RESTART.every(([name, length]) => saved[name] && saved[name].length === length)) return false;
     for (let i = 0; i < C; i++) {
@@ -1039,7 +1073,8 @@ export function createLayeredOcean(core, options = {}) {
    * What upload needs beside serialize()'s fields to put the device back
    * exactly as it stands between two ocean steps: the heat and salt
    * contents as stored, the mixed layer's last temperature and the ice it
-   * last saw, the freshwater not yet taken, and the heat flux and
+   * last saw, the freshwater not yet taken, its remembered surface
+   * buoyancy loss, and the heat flux and
    * capacity the surface update is using. A saved ocean that carries all
    * of them at this mesh's sizes, its columns within a metre of this
    * bathymetry and dry on land, is uploaded as it is, without fitting
@@ -1047,12 +1082,12 @@ export function createLayeredOcean(core, options = {}) {
    */
   async function restartArrays() {
     const PHL = core.layout.PH;
-    const [[Q, W], [previousT0, previousIce, fresh], [flux, capacity]] = await Promise.all([
+    const [[Q, W], [previousT0, previousIce, fresh, buoyancy], [flux, capacity]] = await Promise.all([
       readRanges(device, ob.S, [{ offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]),
-      readRanges(device, ob.OD, [{ offset: OD.PREVT0, length: C }, { offset: OD.PREVICE, length: C }, { offset: OD.FRESH, length: C }]),
+      readRanges(device, ob.OD, [{ offset: OD.PREVT0, length: C }, { offset: OD.PREVICE, length: C }, { offset: OD.FRESH, length: C }, { offset: OD.BUOY, length: C }]),
       readRanges(device, buffers.PH, [{ offset: PHL.OFLUX, length: C }, { offset: PHL.CAP, length: C }]),
     ]);
-    return Object.fromEntries(Object.entries({ Q, W, previousT0, previousIce, fresh, flux, capacity }).map(([name, values]) => [name, Float32Array.from(values)]));
+    return Object.fromEntries(Object.entries({ Q, W, previousT0, previousIce, fresh, buoyancy, flux, capacity }).map(([name, values]) => [name, Float32Array.from(values)]));
   }
 
   function diagnosticsFrom(sums) {

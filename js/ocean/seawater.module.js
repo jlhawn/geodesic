@@ -22,6 +22,10 @@ export function thermalExpansion(t, s) {
   return (a0 * (1 + lambda1 * (t - t0)) + nu * (s - s0)) / rho0;
 }
 
+export function halineContraction(t, s) {
+  return (b0 * (1 - lambda2 * (s - s0)) - nu * (t - t0)) / rho0;
+}
+
 /*
  * The temperature at which water of salinity s has density rho, on the
  * warm side of the density maximum; a density beyond the maximum gives
@@ -50,4 +54,5 @@ fn eosAnomaly(t: f32, s: f32) -> f32 {
 }
 fn eos(t: f32, s: f32) -> f32 { return ${rho0.toFixed(1)} + eosAnomaly(t, s); }
 fn alphaT(t: f32, s: f32) -> f32 { return (${a0} * (1.0 + ${lambda1} * (t - ${t0})) + ${nu} * (s - ${s0.toFixed(1)})) / ${rho0.toFixed(1)}; }
+fn betaS(t: f32, s: f32) -> f32 { return (${b0} * (1.0 - ${lambda2} * (s - ${s0.toFixed(1)})) - ${nu} * (t - ${t0})) / ${rho0.toFixed(1)}; }
 `;

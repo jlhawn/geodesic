@@ -5,6 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { createOcean as createCpuLayeredOcean } from '../js/ocean/layered.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
+import { labelTemperature } from '../js/ocean/seawater.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -173,4 +174,53 @@ test('the GPU eddy transport tracks the CPU\'s at N=8, alone and through twenty-
     assert.ok(effect > 5 * gap, `${f}: the eddy transport changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
   }
   console.log(`21 ocean steps with eddyDiffusivity 1e6 at N=8, the engines' rms relative difference against the eddy transport's effect: ${lines.join(', ')}`);
+});
+
+test('the GPU mixed layer holds, retreats, convects, keeps to its neighbours and, under the old options, snaps back as the CPU one does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells;
+  const sea = [...Array(C).keys()].filter((i) => cpuModel.geography.land[i] === 0);
+  const neutral = sea.filter((_, n) => n % 5 === 0), stable = sea.filter((_, n) => n % 5 === 1), dense = sea.filter((_, n) => n % 5 === 2);
+  const oldRules = { neutralSnap: true, convectiveErosion: false, buoyancyMemory: 0, maximumMixedDepth: 200, mixedNeighbourRatio: 0, vorticityCentring: 0 };
+  for (const options of [{ ...OCEAN_OPTIONS, mixedNeighbourRatio: 3 }, { ...OCEAN_OPTIONS, ...oldRules }]) {
+    const cpuOcean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options });
+    const surfaceT = Float64Array.from(surfaceT0);
+    cpuOcean.initialize(surfaceT, ice);
+    const { h, Q, W, densities, layers: L } = cpuOcean;
+    for (const [cells, depth, offset] of [[neutral, 300, -0.002], [stable, 600, -0.03], [dense, 50, 0.27]]) {
+      for (const i of cells) {
+        for (let k = 1; k < L && h[i] < depth; k++) {
+          const a = k * C + i, take = Math.min(h[a] - 0.01, depth - h[i]);
+          if (take <= 0) continue;
+          const f = take / h[a];
+          h[i] += take; Q[i] += Q[a] * f; W[i] += W[a] * f; h[a] -= take; Q[a] -= Q[a] * f; W[a] -= W[a] * f;
+        }
+        let below = 1;
+        while (below < L - 1 && h[below * C + i] <= 5) below++;
+        const t = labelTemperature(densities[below] + offset, W[i] / h[i]);
+        Q[i] = h[i] * t; surfaceT[i] = t;
+      }
+    }
+    const saved = cpuOcean.serialize();
+    cpuOcean.load(saved, surfaceT, ice);
+    const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: options });
+    const gpuOcean = gpuModel.oceanEngine;
+    await gpuOcean.upload(saved, Float64Array.from(surfaceT), ice);
+    const warmed = Float64Array.from(surfaceT, (t, i) => (neutral.includes(i) ? t + 0.05 : t));
+    cpuOcean.advance(Float64Array.from(warmed), ice, new Float64Array(C), stress, 1350);
+    await gpuOcean.advance(Float64Array.from(warmed), ice, stress, 1350);
+    const cpu = cpuOcean.serialize(), gpu = await gpuOcean.serialize();
+    let worst = 0, at = -1;
+    for (let i = 0; i < C; i++) { const d = Math.abs(cpu.h[i] - gpu.h[i]); if (d > worst) { worst = d; at = i; } }
+    const depths = (cells) => cells.map((i) => cpu.h[i].toFixed(0)).slice(0, 4).join(', ');
+    console.log(`${options.neutralSnap ? 'old' : 'new'} rules, one step: neutral 300 m layers warmed 0.05 K → ${depths(neutral)} m, stable 600 m → ${depths(stable)} m, dense 50 m → ${depths(dense)} m; GPU mixed-layer depth within ${worst.toExponential(2)} m (cell ${at})`);
+    assert.ok(worst < 0.05, `mixed-layer depth differs by ${worst} m at cell ${at}: cpu ${cpu.h[at]} gpu ${gpu.h[at]}`);
+    const hStats = stats(cpu.h, gpu.h);
+    assert.ok(hStats.rmsRel < 2e-3, `h rms relative diff ${hStats.rmsRel}`);
+    const wet = Array.from(cpu.h, (v) => v > 1);
+    for (const f of ['T', 'S']) {
+      const r = stats(cpu[f].filter((_, x) => wet[x]), gpu[f].filter((_, x) => wet[x]));
+      assert.ok(r.rmsRel < 2e-3, `${f} rms relative diff ${r.rmsRel}`);
+    }
+  }
 });
