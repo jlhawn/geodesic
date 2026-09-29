@@ -10,6 +10,7 @@ import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName, savedLevels } from './stateFile.module.js';
+import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
 import { LEVEL_FIELDS, OCEAN_FIELDS, RAIN_MEMORY, VERTICAL_MEMORY } from './frames.module.js';
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
@@ -512,6 +513,7 @@ async function start(message) {
   if (message.land !== false) { status('loading the topography…', 0.52); options.topography = await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href); }
   options.terrain = message.terrain !== false;
   if (saved) options.levels = savedLevels(saved);
+  else if (message.levels) options.levels = sigmaInterfaces(message.levels);
   const workers = message.workers ?? 1;
   status(`building the N=${N} grid…`, 0.55);
   const grid = new Grid(N);

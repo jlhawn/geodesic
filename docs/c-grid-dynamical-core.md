@@ -572,7 +572,9 @@ three arrays (`createRK4Arrays`).
   conservatively in σ, each layer the σ-weighted mean of the layers it
   overlaps, so cam26 and bl34 exchange their layers above 2.4 km
   unchanged; a spin-up seeded from a state on the other grid carries
-  its atmosphere across with it.
+  its atmosphere across with it. The page starts a run from nothing on
+  a named grid with `climate.html?from=none&levels=bl34`; a run started
+  from a saved state is on that state's grid.
 - **A required closure on θ.** Without any θ dissipation the A-grid
   set's thin top layers (Δσ ≈ 0.0008 above ~2 hPa) went unstable from
   day 3 in the steady run — θ departures of hundreds of kelvin with no surface

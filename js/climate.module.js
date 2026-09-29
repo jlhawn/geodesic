@@ -317,7 +317,7 @@ const VIEW_NOTES = [
 ];
 const NOTES = new Map(VIEW_NOTES);
 
-export default function runClimate({ N = null, from = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true, settings: overrides = {}, view = null, pace = true, auto = false, defaults = {} } = {}) {
+export default function runClimate({ N = null, from = null, levels = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, terrain = true, settings: overrides = {}, view = null, pace = true, auto = false, defaults = {} } = {}) {
   const settings = loadSettings();
   applyOverrides(settings, overrides);
   const panel = document.getElementById('panel');
@@ -938,7 +938,7 @@ export default function runClimate({ N = null, from = null, workers = 1, engine 
   const maxN = isMobileBrowser(navigator) ? MOBILE_MAX_N : DESKTOP_MAX_N;
   const begin = (choice = auto ? { N: maxN } : {}) => {
     const run = (auto && choice.N && defaults[choice.N]) || from;
-    worker.postMessage({ type: 'start', N: choice.N ?? N, from: run ? new URL(run, location.href).href : null, workers: threads, engine: choice.engine ?? engine, paused: !running, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl });
+    worker.postMessage({ type: 'start', N: choice.N ?? N, from: run ? new URL(run, location.href).href : null, levels, workers: threads, engine: choice.engine ?? engine, paused: !running, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl });
   };
   const PROBE_TIMEOUT = 120000;
   let deviceChoice = null, probed = null;
