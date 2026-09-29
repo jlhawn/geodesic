@@ -48,7 +48,9 @@ export const TOTALS = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', '
  * with the single-thread arithmetic, so the state is bit-identical to
  * createModel's; only the radiation totals are summed in a different
  * order. The ocean steps on the main thread, which hands each of its
- * tendency evaluations to the workers a layer at a time.
+ * tendency evaluations to the workers a layer at a time; the workers
+ * adopt its state rather than building their own, so their ocean options
+ * leave out the climatology and the functions, which only the build reads.
  */
 export async function createParallelModel(grid, options = {}, workers = null) {
   workers ??= Math.max(1, await parallelism());
@@ -68,6 +70,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
   const workerOptions = { ...options, nu4Hours: options.nu4Hours, physics: options.physics ?? true };
   delete workerOptions.buffers;
   if (workerOptions.ocean && workerOptions.ocean.climatology) workerOptions.ocean = { ...workerOptions.ocean, climatology: null };
+  if (workerOptions.ocean) workerOptions.ocean = Object.fromEntries(Object.entries(workerOptions.ocean).filter(([, value]) => typeof value !== 'function'));
 
   const threads = [];
   const failures = [];

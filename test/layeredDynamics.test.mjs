@@ -4,8 +4,8 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
-import { createGeography, syntheticTopography } from '../js/geography.module.js';
-import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, totalHeatSalt, northwardMixedTransport } from './helpers/layered.mjs';
+import { syntheticTopography } from '../js/geography.module.js';
+import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, totalHeatSalt, northwardMixedTransport, slowOcean } from './helpers/layered.mjs';
 
 test('the ocean at rest under zero stress on a bumpy bottom stays at rest and conserves heat, salt and surface temperature', () => {
   const bathymetry = new Float64Array(C);
@@ -48,25 +48,24 @@ test('the sum of layer thicknesses minus the bathymetry equals the free surface 
   assert.equal(ocean.diagnostics().oceanLimited, 0);
 });
 
-test('westerlies at 45N and 45S drive an equatorward mixed-layer Ekman transport near tau/(rho f)', () => {
-  const ocean = createOcean(mesh, { everySteps: 1 });
-  const surfaceT = new Float64Array(C).fill(290), ice = new Float64Array(C), flux = new Float64Array(C);
-  ocean.initialize(surfaceT, ice);
+test('westerlies at 45N and 45S drive an equatorward mixed-layer Ekman transport near tau/(rho f)', async () => {
+  const ocean = await slowOcean(mesh, { ocean: { everySteps: 1 }, surfaceT: new Float64Array(C).fill(290) });
+  console.log(`Ekman transport on the ${ocean.engine} ocean`);
   const speed = 10;
   const wind = zonalWindOnEdges(mesh, (lat) => speed * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 45) / 10) ** 2)));
   const stressField = Float64Array.from(wind, (w) => RHO_AIR * DRAG * speed * w);
   const dt = 1350;
   const f = 2 * mesh.omega * Math.sin(45 * DEG);
   const inertialPeriod = 2 * Math.PI / f;
-  for (let n = 0; n < 12 * 64; n++) ocean.advance(surfaceT, ice, flux, stressField, dt);
+  await ocean.advance(stressField, dt, 12 * 64);
   // A suddenly-imposed wind excites a ~17h inertial oscillation in the mixed
   // layer that an instantaneous snapshot aliases against daily sampling;
   // average over two inertial periods to recover the mean Ekman balance.
   const windowSteps = Math.round(2 * inertialPeriod / dt);
   let north = 0, south = 0, samples = 0;
   for (let n = 0; n < windowSteps; n++) {
-    ocean.advance(surfaceT, ice, flux, stressField, dt);
-    const transport = northwardMixedTransport(ocean, mesh);
+    await ocean.advance(stressField, dt);
+    const transport = northwardMixedTransport(await ocean.download(), mesh);
     let nSum = 0, sSum = 0, nArea = 0, sArea = 0;
     for (let i = 0; i < C; i++) {
       const lat = mesh.latCell[i] * 180 / Math.PI;
@@ -78,18 +77,19 @@ test('westerlies at 45N and 45S drive an equatorward mixed-layer Ekman transport
   north /= samples; south /= samples;
   const stress = RHO_AIR * DRAG * speed * speed;
   const ekman = stress / (RHO * f);
+  console.log(`mixed-layer transport averaged over two inertial periods: ${north.toPrecision(4)} m²/s at 45°N, ${south.toPrecision(4)} m²/s at 45°S, against an Ekman ${ekman.toPrecision(4)} m²/s`);
   assert.ok(north < 0 && Math.abs(-north - ekman) < 0.25 * ekman, `NH transport ${north} vs Ekman ${-ekman} m^2/s`);
   assert.ok(south > 0 && Math.abs(south - ekman) < 0.25 * ekman, `SH transport ${south} vs Ekman ${ekman} m^2/s`);
-  assert.equal(ocean.diagnostics().oceanLimited, 0);
+  assert.equal((await ocean.diagnostics()).oceanLimited, 0);
+  await ocean.close();
 });
 
-test('a subtropical wind over a closed 80-degree basin drives a Stommel western boundary current', () => {
+test('a subtropical wind over a closed 80-degree basin drives a Stommel western boundary current', async () => {
   const basin = buildMesh(new Grid(16));
   const { nCells: bC, nEdges: bE } = basin;
-  const geography = createGeography(basin, syntheticTopography(180, 360, (lat, lon) => (Math.abs(lon) < 40 * DEG && lat > 12 * DEG && lat < 48 * DEG ? -4000 : 500)));
-  const ocean = createOcean(basin, { everySteps: 1, geography });
-  const surfaceT = Float64Array.from(basin.latCell, (lat) => 275 + 25 * Math.cos(lat) ** 2), ice = new Float64Array(bC), flux = new Float64Array(bC);
-  ocean.initialize(surfaceT, ice);
+  const topography = syntheticTopography(180, 360, (lat, lon) => (Math.abs(lon) < 40 * DEG && lat > 12 * DEG && lat < 48 * DEG ? -4000 : 500));
+  const ocean = await slowOcean(basin, { ocean: { everySteps: 1 }, topography, surfaceT: Float64Array.from(basin.latCell, (lat) => 275 + 25 * Math.cos(lat) ** 2) });
+  console.log(`Stommel basin on the ${ocean.engine} ocean`);
   const wind = zonalWindOnEdges(basin, (lat) => {
     const l = lat / DEG;
     return l > 15 && l < 45 ? -Math.cos(Math.PI * (l - 15) / 30) : 0;
@@ -102,13 +102,14 @@ test('a subtropical wind over a closed 80-degree basin drives a Stommel western 
   // 100 days gives a comfortable, non-marginal margin on every check below
   // while keeping the whole file's runtime well under the budget.
   const days = 100;
-  for (let n = 0; n < days * 64; n++) ocean.advance(surfaceT, ice, flux, stressField, 1350);
+  await ocean.advance(stressField, 1350, days * 64);
 
+  const { h, u } = await ocean.download();
   const Ubt = new Float64Array(bE);
   for (let e = 0; e < bE; e++) {
     let t = 0;
     const a = basin.cellsOnEdge[2 * e], b = basin.cellsOnEdge[2 * e + 1];
-    for (let k = 0; k < ocean.layers; k++) t += 0.5 * (ocean.h[k * bC + a] + ocean.h[k * bC + b]) * ocean.u[k * bE + e];
+    for (let k = 0; k < ocean.layers; k++) t += 0.5 * (h[k * bC + a] + h[k * bC + b]) * u[k * bE + e];
     Ubt[e] = t;
   }
   const vector = cellVector(basin, Ubt);
@@ -125,17 +126,18 @@ test('a subtropical wind over a closed 80-degree basin drives a Stommel western 
   }
   const west = band(-40, -32);
   const interior = band(-20, 20);
-  assert.ok(west > 0, `western boundary transport ${west} m^2/s should be northward`);
-  assert.ok(interior < 0, `interior transport ${interior} m^2/s should be southward`);
-  assert.ok(west >= 5 * Math.abs(interior), `western transport ${west} should be at least 5x the interior's ${interior}`);
-
   let maxBin = -Infinity, maxCenter = null;
   for (let center = -38; center <= 38; center += 4) {
     const v = band(center - 2, center + 2);
     if (Number.isFinite(v) && v > maxBin) { maxBin = v; maxCenter = center; }
   }
+  console.log(`after ${days} days the western band carries ${west.toPrecision(4)} m²/s north, the interior ${interior.toPrecision(4)} m²/s, the strongest 4-degree band centred at ${maxCenter}°`);
+  assert.ok(west > 0, `western boundary transport ${west} m^2/s should be northward`);
+  assert.ok(interior < 0, `interior transport ${interior} m^2/s should be southward`);
+  assert.ok(west >= 5 * Math.abs(interior), `western transport ${west} should be at least 5x the interior's ${interior}`);
   assert.ok(maxCenter === -38 || maxCenter === -34, `the largest 4-degree band is centred at ${maxCenter}, not one of the westernmost two`);
-  assert.equal(ocean.diagnostics().oceanLimited, 0);
+  assert.equal((await ocean.diagnostics()).oceanLimited, 0);
+  await ocean.close();
 });
 
 test('wind-driven advection over 100 steps conserves total heat and salt', () => {

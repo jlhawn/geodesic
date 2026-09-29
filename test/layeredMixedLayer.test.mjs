@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
 import { seawaterDensity, thermalExpansion } from '../js/ocean/seawater.module.js';
-import { RHO_AIR, DRAG, RHO, DEG, mesh, C, zonalWindOnEdges, uniformOcean, deepen } from './helpers/layered.mjs';
+import { RHO_AIR, DRAG, RHO, DEG, mesh, C, zonalWindOnEdges, UNIFORM, uniformOcean, deepen, slowOcean } from './helpers/layered.mjs';
 
 test('surface warming shallows the mixed layer by detrainment; surface cooling deepens it by entrainment', () => {
   const ocean = createOcean(mesh, { everySteps: 1 });
@@ -93,55 +93,71 @@ test('a mixed layer deeper than mixedNeighbourRatio times its neighbours\' mean 
   }
 });
 
-test('a neutral 600 m mixed layer beside 50 m ones at 60°S moves the free surface a few centimetres and no water faster than 1 m/s over five days at N=16', () => {
+test('a neutral 600 m mixed layer beside 50 m ones at 60°S moves the free surface a few centimetres and no water faster than 1 m/s over five days at N=16', async () => {
   const coarse = buildMesh(new Grid(16));
-  const column = uniformOcean({ mixedNeighbourRatio: 0 }, coarse);
-  const { ocean, surfaceT, ice, flux, calm } = column;
   const offset = (i) => Math.abs(coarse.latCell[i] + 60 * DEG) + Math.abs(coarse.lonCell[i]);
   let centre = 0;
   for (let i = 1; i < coarse.nCells; i++) if (offset(i) < offset(centre)) centre = i;
-  deepen(column, [centre], 600, -0.002);
-  const eta0 = Float64Array.from(ocean.eta), rhoMl = (i) => seawaterDensity(ocean.Q[i] / ocean.h[i], ocean.W[i] / ocean.h[i]);
-  const beside = coarse.cellsOnCell[coarse.maxEdges * centre], contrast = rhoMl(centre) - rhoMl(beside);
-  const upperMass = (i) => {
-    let z = 0, mass = 0;
-    for (let k = 0; k < ocean.layers && z < 1000; k++) { const part = Math.min(ocean.h[k * coarse.nCells + i], 1000 - z); mass += part * (k ? ocean.densities[k] : rhoMl(i)); z += part; }
-    return mass;
-  };
-  const steric = (upperMass(centre) - upperMass(beside)) / RHO;
-  let surface = 0, fastest = 0;
+  const beside = coarse.cellsOnCell[coarse.maxEdges * centre];
+  let eta0, contrast, steric;
+  const ocean = await slowOcean(coarse, {
+    ocean: { ...UNIFORM, mixedNeighbourRatio: 0 },
+    surfaceT: new Float64Array(coarse.nCells).fill(278),
+    start(column) {
+      deepen(column, [centre], 600, -0.002);
+      const { ocean } = column, rhoMl = (i) => seawaterDensity(ocean.Q[i] / ocean.h[i], ocean.W[i] / ocean.h[i]);
+      const upperMass = (i) => {
+        let z = 0, mass = 0;
+        for (let k = 0; k < ocean.layers && z < 1000; k++) { const part = Math.min(ocean.h[k * coarse.nCells + i], 1000 - z); mass += part * (k ? ocean.densities[k] : rhoMl(i)); z += part; }
+        return mass;
+      };
+      eta0 = Float64Array.from(ocean.eta);
+      contrast = rhoMl(centre) - rhoMl(beside);
+      steric = (upperMass(centre) - upperMass(beside)) / RHO;
+    },
+  });
+  console.log(`the neutral 600 m mixed layer at N=16 on the ${ocean.engine} ocean`);
+  const calm = new Float64Array(coarse.nEdges);
+  let surface = 0, fastest = 0, state;
   for (let n = 0; n < 5 * 16; n++) {
-    ocean.advance(surfaceT, ice, flux, calm, 5400);
-    for (let i = 0; i < coarse.nCells; i++) surface = Math.max(surface, Math.abs(ocean.eta[i] - eta0[i]));
-    for (const v of ocean.u) fastest = Math.max(fastest, Math.abs(v));
+    await ocean.advance(calm, 5400);
+    state = await ocean.download();
+    for (let i = 0; i < coarse.nCells; i++) surface = Math.max(surface, Math.abs(state.eta[i] - eta0[i]));
+    for (const v of state.u) fastest = Math.max(fastest, Math.abs(v));
   }
-  console.log(`600 m mixed layer ${contrast.toFixed(2)} kg/m³ denser than its 50 m neighbours at 60°S, N=16: over five days |Δη| ≤ ${(100 * surface).toFixed(1)} cm (at the column ${(100 * (ocean.eta[centre] - eta0[centre])).toFixed(1)} cm, its steric deficit ${(100 * steric).toFixed(1)} cm), |u| ≤ ${fastest.toFixed(3)} m/s; ${ocean.h[centre].toFixed(0)} m deep at the end`);
+  const { eta, h } = state;
+  console.log(`600 m mixed layer ${contrast.toFixed(2)} kg/m³ denser than its 50 m neighbours at 60°S, N=16: over five days |Δη| ≤ ${(100 * surface).toFixed(1)} cm (at the column ${(100 * (eta[centre] - eta0[centre])).toFixed(1)} cm, its steric deficit ${(100 * steric).toFixed(1)} cm), |u| ≤ ${fastest.toFixed(3)} m/s; ${h[centre].toFixed(0)} m deep at the end`);
   assert.ok(contrast > 0.2, `the column is only ${contrast} kg/m³ denser at the surface`);
   assert.ok(surface < 0.1 && surface < 1.5 * steric, `free surface moved ${surface} m against a steric deficit of ${steric} m`);
   assert.ok(fastest < 1, `fastest water ${fastest} m/s`);
-  assert.ok(ocean.h[centre] > 500, `the neutral layer holds (${ocean.h[centre]} m)`);
-  assert.equal(ocean.diagnostics().oceanLimited, 0);
+  assert.ok(h[centre] > 500, `the neutral layer holds (${h[centre]} m)`);
+  assert.equal((await ocean.diagnostics()).oceanLimited, 0);
+  await ocean.close();
 });
 
-test('the layer left a few metres thick under a 600 m mixed layer at 45°S stays in balance at N=32, where potential vorticity on its smaller edge thickness alone runs it past 0.4 m/s', () => {
-  const fine = buildMesh(new Grid(32)), n = fine.nCells;
+test('the layer left a few metres thick under a 600 m mixed layer at 45°S stays in balance at N=32, where potential vorticity on its smaller edge thickness alone runs it past 0.4 m/s', async () => {
+  const fine = buildMesh(new Grid(32)), n = fine.nCells, calm = new Float64Array(fine.nEdges);
   const offset = (i) => Math.abs(fine.latCell[i] + 45 * DEG) + Math.abs(fine.lonCell[i]);
   let centre = 0;
   for (let i = 1; i < n; i++) if (offset(i) < offset(centre)) centre = i;
   const fastest = {};
   for (const vorticityCentring of [0.5, 0]) {
-    const ocean = createOcean(fine, { everySteps: 1, vorticityCentring });
-    const surfaceT = Float64Array.from(fine.latCell, (lat) => Math.max(272, 302 - 32 * Math.sin(lat) ** 2)), ice = new Float64Array(n), flux = new Float64Array(n), calm = new Float64Array(fine.nEdges);
-    ocean.initialize(surfaceT, ice);
-    deepen({ ocean, surfaceT, ice }, [centre], 600, -0.05);
+    const ocean = await slowOcean(fine, {
+      ocean: { everySteps: 1, vorticityCentring },
+      surfaceT: Float64Array.from(fine.latCell, (lat) => Math.max(272, 302 - 32 * Math.sin(lat) ** 2)),
+      start: (column) => deepen(column, [centre], 600, -0.05),
+    });
+    console.log(`the remnant at N=32, vorticityCentring ${vorticityCentring}, on the ${ocean.engine} ocean`);
+    const { h } = await ocean.download();
     let remnant = 1;
-    while (ocean.h[remnant * n + centre] <= 5) remnant++;
-    assert.ok(ocean.h[remnant * n + centre] < 20, `the layer under the mixed layer is ${ocean.h[remnant * n + centre]} m thick`);
+    while (h[remnant * n + centre] <= 5) remnant++;
+    assert.ok(h[remnant * n + centre] < 20, `the layer under the mixed layer is ${h[remnant * n + centre]} m thick`);
     fastest[vorticityCentring] = 0;
     for (let step = 0; step < 2 * 32; step++) {
-      ocean.advance(surfaceT, ice, flux, calm, 2700);
-      for (const v of ocean.u) fastest[vorticityCentring] = Math.max(fastest[vorticityCentring], Math.abs(v));
+      await ocean.advance(calm, 2700);
+      for (const v of (await ocean.download()).u) fastest[vorticityCentring] = Math.max(fastest[vorticityCentring], Math.abs(v));
     }
+    await ocean.close();
   }
   console.log(`a 600 m mixed layer at 45°S over a thin remnant, N=32, two days: fastest water ${fastest[0.5].toFixed(2)} m/s with the potential vorticity's thickness at least half the centred one, ${fastest[0].toFixed(2)} m/s on the edge thickness alone`);
   assert.ok(fastest[0.5] < 0.3, `${fastest[0.5]} m/s`);

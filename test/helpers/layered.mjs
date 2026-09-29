@@ -1,8 +1,10 @@
+import { availableParallelism } from 'node:os';
 import { Grid } from '../../js/grid.module.js';
 import { buildMesh } from '../../js/mesh.module.js';
 import { cellVector } from '../../js/dynamics/operators.module.js';
-import { createOcean } from '../../js/ocean/layered.module.js';
+import { createOcean, EPS } from '../../js/ocean/layered.module.js';
 import { labelTemperature } from '../../js/ocean/seawater.module.js';
+import { createGeography } from '../../js/geography.module.js';
 
 export const RHO_AIR = 1.2, DRAG = 1.5e-3, RHO = 1025, DEG = Math.PI / 180;
 export const mesh = buildMesh(new Grid(8));
@@ -44,8 +46,9 @@ export function northwardMixedTransport(ocean, m) {
 // A flat ocean the same in every column, 34.5 psu water at 278 K over the
 // interior classes denser than it, with a 50 m mixed layer: no pressure
 // gradient anywhere until a column is changed.
+export const UNIFORM = { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5, mixedDepth: 50 };
 export function uniformOcean(options = {}, m = mesh) {
-  const ocean = createOcean(m, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5, mixedDepth: 50, ...options });
+  const ocean = createOcean(m, { ...UNIFORM, ...options });
   const surfaceT = new Float64Array(m.nCells).fill(278), ice = new Float64Array(m.nCells), flux = new Float64Array(m.nCells);
   ocean.initialize(surfaceT, ice);
   return { ocean, surfaceT, ice, flux, calm: new Float64Array(m.nEdges) };
@@ -105,4 +108,82 @@ export function classContents(ocean) {
     for (let i = 0; i < C; i++) { const n = k * C + i; volume += mesh.areaCell[i] * ocean.h[n]; heat += mesh.areaCell[i] * ocean.Q[n]; salt += mesh.areaCell[i] * ocean.W[n]; }
     return { volume, heat, salt };
   });
+}
+
+/*
+ * The ocean of a long run on the fastest engine available: the GPU when the
+ * `webgpu` package loads, else the serial ocean with its layer tendencies on
+ * availableParallelism() − 1 worker threads (createParallelModel's,
+ * bit-identical to the serial ocean), else the serial ocean itself;
+ * OCEAN_TEST_ENGINE=cpu passes over the GPU and =serial takes the serial
+ * ocean. Every engine starts from a CPU ocean's initialize(surfaceT, ice)
+ * followed by start({ ocean, surfaceT, ice }) and feeds each step the
+ * surface temperature the step before wrote. Its methods are async, and the
+ * GPU's arithmetic is single precision.
+ */
+export async function slowOcean(m, { ocean: options = {}, topography = null, surfaceT, ice = new Float64Array(m.nCells), start = null } = {}) {
+  surfaceT = Float64Array.from(surfaceT);
+  const choice = process.env.OCEAN_TEST_ENGINE, workers = availableParallelism() - 1;
+  if (choice !== 'cpu' && choice !== 'serial' && await import('webgpu').then(() => true, () => false)) return gpuOcean(m, options, topography, surfaceT, ice, start);
+  if (choice !== 'serial' && workers >= 2) {
+    const { createParallelModel } = await import('../../js/parallel.module.js');
+    const model = await createParallelModel(m, { topography, ocean: options }, workers);
+    return cpuOcean(model.ocean, surfaceT, ice, start, `parallel CPU (${workers} workers)`, () => model.close());
+  }
+  return cpuOcean(serialOcean(m, options, topography), surfaceT, ice, start, 'serial CPU');
+}
+
+function serialOcean(m, options, topography) {
+  return createOcean(m, { geography: topography ? createGeography(m, topography) : null, ...options });
+}
+
+function cpuOcean(ocean, surfaceT, ice, start, engine, close = async () => {}) {
+  ocean.initialize(surfaceT, ice);
+  if (start) start({ ocean, surfaceT, ice });
+  const flux = new Float64Array(surfaceT.length);
+  return {
+    engine, layers: ocean.layers, cellOcean: ocean.cellOcean, close,
+    async advance(stress, dt, steps = 1) { for (let n = 0; n < steps; n++) ocean.advance(surfaceT, ice, flux, stress, dt); },
+    async download() {
+      const { h, u, Q, W, eta } = ocean;
+      return { h: Float64Array.from(h), u: Float64Array.from(u), T: Float64Array.from(Q, (q, n) => q / Math.max(EPS, h[n])), S: Float64Array.from(W, (w, n) => w / Math.max(EPS, h[n])), eta: Float64Array.from(eta) };
+    },
+    async diagnostics() { return ocean.diagnostics(); },
+  };
+}
+
+async function gpuOcean(m, options, topography, surfaceT, ice, start) {
+  const { createGpuModel } = await import('../../js/gpu/model.gpu.js');
+  const reference = serialOcean(m, options, topography), C = m.nCells;
+  reference.initialize(surfaceT, ice);
+  if (start) start({ ocean: reference, surfaceT, ice });
+  const model = await createGpuModel(m, { topography, ocean: options });
+  const { gpu, oceanEngine: ocean } = model;
+  ocean.upload({ ...reference.serialize(), Q: reference.Q, W: reference.W, previousT0: reference.T0, previousIce: ice, fresh: reference.fresh, buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: reference.capacity }, surfaceT, ice);
+  gpu.uploadSurfaceTemperature(surfaceT);
+  gpu.device.queue.writeBuffer(gpu.buffers.S, 4 * gpu.layout.S.ICE, Float32Array.from(ice));
+  return {
+    engine: 'GPU', layers: ocean.layers, cellOcean: ocean.cellOcean,
+    async close() { model.destroy(); },
+    async advance(stress, dt, steps = 1) {
+      ocean.setStress(stress, ice);
+      for (let done = 0; done < steps; done += 64) {
+        await gpu.batched(async () => {
+          for (let n = done; n < Math.min(steps, done + 64); n++) {
+            ocean.readSurfaceFromAtmosphere();
+            ocean.step(dt);
+            ocean.mixedLayer(dt);
+            ocean.salt(dt);
+            ocean.writeSurface(dt);
+          }
+        });
+        await gpu.device.queue.onSubmittedWorkDone();
+      }
+    },
+    async download() {
+      const { h, u, T, S, eta } = await ocean.download();
+      return { h, u, T, S, eta };
+    },
+    async diagnostics() { return ocean.diagnostics(); },
+  };
 }
