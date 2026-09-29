@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
@@ -949,11 +949,13 @@ export function createLayeredOcean(core, options = {}) {
       h[n] += eta[i]; Q[n] = h[n] * t; W[n] = h[n] * sal;
     }
   }
-  function initializeArrays(surfaceT, ice) {
+  function initializeArrays(surfaceT, ice, atlas = null) {
     const h = new Float64Array(L * C), u = new Float64Array(L * E), Q = new Float64Array(L * C), W = new Float64Array(L * C);
     const eta = new Float64Array(C), T0 = new Float64Array(C), previousT0 = new Float64Array(C);
     const at = (k, i) => k * C + i;
+    const filled = atlas ? atlasColumns(mesh, atlas, { D, cellOcean, ice, rho, labelT, labelS, h, Q, W, T0, shallowestMixedDepth: o.shallowestMixedDepth, maximumMixedDepth: o.maximumMixedDepth }) : null;
     for (let i = 0; i < C; i++) {
+      if (filled && filled[i]) { previousT0[i] = T0[i]; continue; }
       const iced = ice[i] > 0;
       const lat = mesh.latCell[i];
       const s0 = salinityProfile(lat);
@@ -980,7 +982,7 @@ export function createLayeredOcean(core, options = {}) {
       previousT0[i] = T0[i];
     }
     stericSurface(h, Q, W, eta);
-    return { h, u, Q, W, eta, T0, previousT0 };
+    return { h, u, Q, W, eta, T0, previousT0, filled };
   }
   function uploadArrays({ h, u, Q, W, eta }, surfaceT, ice, restart = null) {
     const packed = new Float32Array(OS.total);
@@ -1006,10 +1008,19 @@ export function createLayeredOcean(core, options = {}) {
     const capacity = restart ? restart.capacity : Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
     core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null });
   }
-  function initialize(surfaceT, ice) {
-    const arrays = initializeArrays(surfaceT, ice);
+  function initialize(surfaceT, ice, { climatology: atlas = o.climatology ?? null } = {}) {
+    const arrays = initializeArrays(surfaceT, ice, atlas);
     uploadArrays(arrays, surfaceT, ice);
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(arrays.previousT0));
+    const { filled, T0 } = arrays;
+    if (!filled) return null;
+    let covered = 0, other = 0;
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i]) continue;
+      if (filled[i]) covered++; else other++;
+      if (filled[i] && !(ice[i] > 0)) surfaceT[i] = T0[i];
+    }
+    return { atlas: covered, analytic: other };
   }
   const RESTART = [['Q', L * C], ['W', L * C], ['previousT0', C], ['previousIce', C], ['fresh', C], ['buoyancy', C], ['flux', C], ['capacity', C]];
   function restartable(saved) {
@@ -1028,16 +1039,16 @@ export function createLayeredOcean(core, options = {}) {
       return;
     }
     if (!saved || !saved.h || saved.h.length !== L * C) {
-      const arrays = initializeArrays(surfaceT, ice);
+      const arrays = initializeArrays(surfaceT, ice, o.climatology ?? null);
       uploadArrays(arrays, surfaceT, ice);
       device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(arrays.previousT0));
       return;
     }
-    const climatology = () => initializeArrays(surfaceT, ice);
+    const start = () => initializeArrays(surfaceT, ice, o.climatology ?? null);
     const h = Float64Array.from(saved.h), u = Float64Array.from(saved.u), eta = Float64Array.from(saved.eta);
     const Q = new Float64Array(L * C), W = new Float64Array(L * C);
     for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
-    fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, labelS, minimumThickness: o.minimumThickness });
+    fitColumns({ h, Q, W, eta }, start, { D, cellOcean, L, C, labelT, labelS, minimumThickness: o.minimumThickness });
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) for (let k = 0; k < L; k++) u[k * E + e] = 0;
     uploadArrays({ h, u, Q, W, eta }, surfaceT, ice);
     const previousT0 = new Float64Array(C);

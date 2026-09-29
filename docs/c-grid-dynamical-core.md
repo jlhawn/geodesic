@@ -1879,6 +1879,76 @@ sea ice: polar mixed layers denser than the deepest class convected
 2.4 °C water up all winter. A
 saved ocean with a different number of layers loads as this climatology.
 
+**Start from the World Ocean Atlas.** Fresh starts of `scripts/spinup.mjs`
+and the page take their ocean instead from the World Ocean Atlas 2023
+(NOAA National Centers for Environmental Information, public domain;
+Locarnini et al. 2023, Reagan et al. 2023): the annual-mean objectively
+analysed temperature and salinity of all decades on the 1° grid, at 25 of
+its standard depths (0, 10, 20, 30, 50, 75, 100, 125, 150, 200, 250, 300,
+400, 500, 600, 700, 800, 900, 1000, 1200, 1500, 2000, 3000, 4000 and
+5000 m). `scripts/packWoa.py` writes them from the atlas's NetCDF files
+to `data/woa_annual_1deg.bin` (6.5 MB): a header with the grid, the
+depths, the scales and a provenance line, then potential temperature (the
+atlas's in-situ temperature brought to the surface by the UNESCO
+algorithm of Fofonoff and Millard 1983 at the pressure of Saunders 1981)
+and practical salinity as int16 in steps of 0.001 °C and 0.001, −32768
+where the atlas has no water. `js/ocean/climatology.module.js` reads it
+in Node and the browser; `columnAt(lat, lon)` interpolates each level
+bilinearly between the four surrounding grid points when all four are
+wet, takes the nearest wet one otherwise, ends the column at the first
+level none of them reaches, and over atlas land takes the nearest wet
+column within 5°. Each sea cell's column (`atlasColumns` in
+`js/ocean/layered.module.js`) is sampled down to its bottom, the atlas's
+deepest values carried on below; its potential density, held from
+decreasing with depth, places each interface where it crosses half-way
+between the neighbouring labels, since a class holds the water between
+those midpoints: the lightest class takes all lighter water, the densest
+all denser, a class with no water keeps its token and the densest class
+present reaches the bottom. The mixed layer reaches to where the density
+first exceeds the surface's by 0.03 kg/m³ (the criterion of de Boyer
+Montégut et al. 2004, from the surface), within 50–600 m, and every layer
+takes the atlas's mean temperature and salinity over its depths. So
+averaged, the water lies off its label: at N=32 only 54% of the classes
+holding water are within the 0.01 kg/m³ restoring tolerance (95% within
+0.05); the lightest class is 0.5 light where the tropical water under the
+mixed layer is lighter than every label, the densest up to 1.2 dense in
+the Mediterranean, and the rest a median 0.007 dense from the curvature
+of the equation of state. A class further off than the tolerance
+therefore keeps the atlas temperature and takes the salinity of its
+label, as `interiorWater` does (below the lightest class and above the
+densest, 99% of the classes move by less than 0.11 psu). Under the
+initial ice the mixed layer is at the freezing point and elsewhere never
+colder, and over open water its temperature becomes the atmosphere's
+initial sea surface: `initialize` writes it into the surface temperature
+it is given and returns how many sea cells took the atlas and how many
+the analytic start (at N=64, Lakes Superior and Eyre, more than 5° from
+any atlas water), and the GPU model sends that surface to the device.
+Poleward of 72°N the initial ice lies over the atlas's warm Atlantic
+water in the Barents and Greenland Seas, where the salty mixed layer at
+the freezing point is denser than the class beneath and convects, as the
+Mediterranean's does. The start puts the top of the 1024 class (about
+the 20 °C isotherm) at 173 m at 0°N 160°E and 50 m at 0°N 100°W, where the
+atlas crosses at 172 and 46 m, and outcrops it poleward of 35°; the 1025
+class top lies at 206 and 209 m at 30°S 90°W and 30°N 150°W (the atlas
+210 and 213 m). The 60–70°S column averages −0.6, 0.1, 1.0, 1.0 and
+0.5 °C over 0–60, 60–200, 200–500, 500–1000 and 1000–3000 m against the
+atlas's −0.6, −0.1, 1.2, 1.2 and 0.5 at the same cells, where the
+analytic start has 0.8 °C in its mixed layer and −1 °C at every depth
+below; the interior's mean temperature is 3.5 °C. Three coupled days
+from it at N=64 (the ocean every eighth step) kept currents under
+0.95 m/s with no clamped edge and ended with the warm pool at 28.2 °C,
+the cold tongue at 22.2 °C and the 1024 class top at 163 m in the west
+Pacific and 59 m in the east; from the analytic start, 27.4 and 27.7 °C
+and 304 m on both sides. `spinup.mjs` reads the file for a fresh
+start without FROM, `CLIMATOLOGY=<file>` another, and `CLIMATOLOGY=none` starts
+from the analytic climatology; the page fetches it for `from=none`,
+`?climatology=off` keeps the analytic start and `?climatology=<url>`
+takes another file. The option is `ocean: { climatology }`, a decoded
+climatology (`loadClimatology`), or for the GPU and parallel engines a
+path or URL; null, the default, is the analytic start byte for byte.
+`test/climatology.test.mjs` checks the packing, the interpolation, the
+N=32 columns and these values, and the GPU start against the CPU's.
+
 **Interfaces.** `advance(surfaceT, ice, oceanFlux, stress, dt, concentration)` as in M13, the wind stress reaching the water under ice scaled by 1 − A(1 − `iceStressTransmission`) with the transmission 0.8, since drifting floes pass most of the air's stress to the ocean and the Antarctic Divergence upwells its deep water under a pack that covers it most of the year,
 plus `accumulate(evaporation, rain, dt, runoff)` each atmosphere step;
 `fields()` gives the frame its mixed-layer depth, SST, SSS, surface
@@ -2546,6 +2616,7 @@ js/
   ocean/
     layered.module.js       M18: 24-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
     seawater.module.js      M18: the Roquet et al. (2015) simplified equation of state, shared with the GPU
+    climatology.module.js   M18: the World Ocean Atlas file a fresh ocean starts from, and its columns
     (js/gpu/layeredOcean.gpu.js is its WebGPU port)
   gpu/
     device.module.js         M15: WebGPU device (Dawn in Node, navigator.gpu in the page) and buffer helpers
@@ -2580,6 +2651,7 @@ scripts/
   verdaRelaunch.sh          a Verda spot instance recreated on its OS volume after each eviction
   verdaInstances.mjs        the verda CLI's JSON as verdaRelaunch.sh reads it
   compareStates.mjs         saved states side by side as a markdown table
+  packWoa.py                data/woa_annual_1deg.bin from the World Ocean Atlas 2023 NetCDF files
   splitState.mjs            a saved state gzipped into parts for the page
 test/
   mesh.test.mjs, operators.test.mjs, trisk.test.mjs, sw_tc2.mjs, sw_tc6.mjs,

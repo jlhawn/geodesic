@@ -44,9 +44,14 @@
 // state on the run's grid. The sea ice starts fresh and the clock at day
 // 0; ICE_FROM=1 takes FROM's sea ice (thickness, concentration, snow, skin
 // temperature) too; LAND_FROM, a state at any N, then gives the land.
+// Without FROM, the ocean starts from the climatology CLIMATOLOGY (a file
+// in js/ocean/climatology.module.js's format; data/woa_annual_1deg.bin
+// when it exists, the World Ocean Atlas) and the sea surface from its
+// mixed layer; CLIMATOLOGY=none starts it from the analytic climatology
+// under the atmosphere's initial sea surface.
 // scripts/spinup.sh runs segments back to back, scripts/asyncSpinup.sh
 // alternates them with ocean-only spin-ups.
-import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { basename } from 'node:path';
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16, createGeography } from '../js/geography.module.js';
@@ -61,6 +66,7 @@ import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module
 import { createForcingRecorder } from '../js/gpu/forcing.gpu.js';
 import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
+import { CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 
 const BOXES = {
@@ -91,7 +97,9 @@ if (saved && saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
 const levels = saved ? savedLevels(saved) : sigmaInterfaces(process.env.LEVELS ?? 'cam26');
 const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} layers)`;
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
-const model = await createGpuModel(new Grid(N), { topography, ocean: OCEAN, radiation: RADIATION, levels });
+const fallback = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');
+const climatology = !saved && !process.env.FROM && chosen !== 'none' ? chosen : null;
+const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, levels });
 const { mesh, core, state } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 function loadSaved(saved) {
@@ -149,8 +157,9 @@ if (saved) {
     model.land.load({ soil: Float64Array.from(from.land.soil), snow: Float64Array.from(from.land.snow), ...(from.land.vegetation ? { vegetation: Float64Array.from(from.land.vegetation) } : {}), ...(from.land.surface ? { surface: Float64Array.from(from.land.surface) } : {}) }, iceFrom ? state[6] : null);
     log(`seeded from ${process.env.FROM} (N=${from.N}, day ${from.day}, ${fromGrid}): the ocean, the land (soil, snow, ${from.land.vegetation ? 'vegetation, ' : ''}${from.land.surface ? 'surface water, ' : ''}surface temperature) and the sea-surface temperature of its mixed layer, ${iceFrom ? 'and its sea ice (thickness, concentration, snow, skin temperature)' : 'with fresh sea ice'}; ${atmosphere}; the clock at day 0`);
   } else {
-    model.ocean.initialize(state[3], state[6]);
+    const started = model.ocean.initialize(state[3], state[6]);
     model.land.initialize();
+    log(started ? `ocean and sea surface from ${climatology}: ${started.atlas} sea cells, ${started.analytic} from the analytic climatology where it has no water` : 'ocean from the analytic climatology');
   }
   if (process.env.LAND_FROM) {
     const seed = await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM)));

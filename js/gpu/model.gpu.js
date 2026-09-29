@@ -12,6 +12,7 @@ import { createGeography, surfaceGeopotential } from '../geography.module.js';
 import { readRanges } from './device.module.js';
 import { RAIN_MEMORY, VERTICAL_MEMORY } from '../frames.module.js';
 import { createLandSurface } from '../physics/land.module.js';
+import { loadClimatology } from '../ocean/climatology.module.js';
 
 const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'rootZoneCapacity', 'dryWetness', 'wetWetness', 'growthTime', 'declineTime', 'snowDeclineTime'];
 
@@ -24,7 +25,9 @@ const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'root
  * soil, snow and vegetation only `land.serialize`, its runoff when the
  * diagnostics are taken), `step` only queues work, `beginFrame`
  * computes the page's fields and the diagnostics on the device, and
- * `ocean` carries the same initialize/load/serialize contract.
+ * `ocean` carries the same initialize/load/serialize contract (starting
+ * from a climatology, initialize also sends the device the sea-surface
+ * temperature it sets).
  */
 export async function createGpuModel(gridOrMesh, {
   radius, nu4Hours = 3, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
@@ -51,7 +54,7 @@ export async function createGpuModel(gridOrMesh, {
   const radiationCpu = createRadiation(mesh, core, radiation);
   const surfaceCpu = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, ...surface });
   const moistCpu = createMoistPhysics(mesh, core, moist);
-  const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { ...oceanOptions, geography });
+  const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { ...oceanOptions, climatology: await loadClimatology(oceanOptions.climatology ?? null), geography });
   const landCpu = geography ? createLandSurface(mesh, geography, landOptions) : null;
   let oceanCounter = 0;
   if (gpuOcean) gpu.hooks.beforePhysics = async (dt) => {
@@ -71,7 +74,7 @@ export async function createGpuModel(gridOrMesh, {
     gpu.upload(state);
     gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate });
     gpu.clearFrame();
-    if (gpuOcean) gpuOcean.initialize(state[3], state[6]);
+    if (gpuOcean) gpuOcean.initialize(state[3], state[6], { climatology: null });
     lastFrameTime = model.time;
     dirty = false;
   }
@@ -160,7 +163,11 @@ export async function createGpuModel(gridOrMesh, {
   model.diagnostics = async function diagnostics() { return (await model.beginFrame({ diagnostics: true })).diagnostics; };
 
   model.ocean = gpuOcean ? {
-    initialize(surfaceT, iceField) { gpuOcean.initialize(surfaceT, iceField); },
+    initialize(surfaceT, iceField, options) {
+      const started = gpuOcean.initialize(surfaceT, iceField, options);
+      if (started) gpu.uploadSurfaceTemperature(surfaceT);
+      return started;
+    },
     load(saved, surfaceT, iceField) { gpuOcean.upload(saved, surfaceT, iceField); },
     async serialize({ restart = false } = {}) { return restart ? { ...(await gpuOcean.serialize()), ...(await gpuOcean.restartArrays()) } : gpuOcean.serialize(); },
   } : null;

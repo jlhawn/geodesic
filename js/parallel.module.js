@@ -1,6 +1,7 @@
 import { createModel, STATE_NAMES, stateLengths } from './model.module.js';
 import { shareMesh } from './mesh.module.js';
 import { parallelism, spawn } from './threads.module.js';
+import { loadClimatology } from './ocean/climatology.module.js';
 
 export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, PHYSICS: 4, ADVANCE: 5, COMBINE: 6, CLOSURE: 7, ADJUST: 8, DISSIPATE: 9, OCEAN: 10, EXIT: 11 };
 
@@ -51,6 +52,7 @@ export const TOTALS = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', '
  */
 export async function createParallelModel(grid, options = {}, workers = null) {
   workers ??= Math.max(1, await parallelism());
+  if (options.ocean && options.ocean.climatology) options = { ...options, ocean: { ...options.ocean, climatology: await loadClimatology(options.ocean.climatology) } };
   const model = createModel(grid, options);
   const { K, C, E } = model.core.diagnostics;
   const lengths = stateLengths({ K, C, E });
@@ -65,6 +67,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
   const buffers = { ...model.shared, trial, stages };
   const workerOptions = { ...options, nu4Hours: options.nu4Hours, physics: options.physics ?? true };
   delete workerOptions.buffers;
+  if (workerOptions.ocean && workerOptions.ocean.climatology) workerOptions.ocean = { ...workerOptions.ocean, climatology: null };
 
   const threads = [];
   const failures = [];

@@ -1,6 +1,7 @@
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../dynamics/operators.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 import { seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
+import { profileAt } from './climatology.module.js';
 
 /*
  * A layered ocean on the C-grid: a bulk mixed layer with its own
@@ -183,6 +184,78 @@ export function interiorWater(rho, t, s, lat) {
 export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005, RESTORE_TOLERANCE = 0.01;
 
 /*
+ * Columns from an ocean climatology (./climatology.module.js), sampled at
+ * each sea cell's centre down to its bottom D, the atlas's deepest values
+ * carried on down where the model is deeper. The profile's potential
+ * density, held from decreasing with depth, places the interfaces: class
+ * k holds the water denser than half-way to the label above it and no
+ * denser than half-way to the label below, the lightest class taking all
+ * lighter water and the densest all denser. The mixed layer reaches to
+ * where the density first exceeds the surface's by `mixedExcess`, within
+ * shallowestMixedDepth, maximumMixedDepth and D, and the classes begin
+ * below it. A class with less than EPS of water keeps the EPS token at its
+ * label, the thickest layer giving up the tokens' metres so the column
+ * still sums to D. Every other layer takes the atlas's mean temperature
+ * and salinity over its depths, and a class whose mean lies more than
+ * `tolerance` from its label density keeps that temperature at the
+ * salinity that gives the label's density. The mixed layer is at the
+ * freezing point under ice and no colder in open water. Fills h, Q and W
+ * (layer-major, L = rho.length) and T0 of the cells the atlas covers and
+ * returns which cells those are.
+ */
+export function atlasColumns(mesh, atlas, { D, cellOcean, ice, rho, labelT, labelS, h, Q, W, T0, shallowestMixedDepth = 50, maximumMixedDepth = 600, mixedExcess = 0.03, tolerance = RESTORE_TOLERANCE }) {
+  const C = mesh.nCells, L = rho.length, at = (k, i) => k * C + i;
+  const filled = new Uint8Array(C), top = new Float64Array(L + 1);
+  const z = [], t = [], s = [], sigma = [];
+  const integral = (v, a, b) => {
+    let sum = 0;
+    for (let j = 1; j < z.length; j++) {
+      const lo = Math.max(a, z[j - 1]), hi = Math.min(b, z[j]);
+      if (hi <= lo) continue;
+      const slope = (v[j] - v[j - 1]) / (z[j] - z[j - 1]);
+      sum += (v[j - 1] + slope * (0.5 * (lo + hi) - z[j - 1])) * (hi - lo);
+    }
+    return sum;
+  };
+  const depthOf = (target) => {
+    if (sigma[0] >= target) return 0;
+    for (let j = 1; j < z.length; j++) if (sigma[j] >= target) return z[j - 1] + (target - sigma[j - 1]) / (sigma[j] - sigma[j - 1]) * (z[j] - z[j - 1]);
+    return z[z.length - 1];
+  };
+  for (let i = 0; i < C; i++) {
+    if (!cellOcean[i]) continue;
+    const column = atlas.columnAt(mesh.latCell[i], mesh.lonCell[i]);
+    if (!column) continue;
+    filled[i] = 1;
+    const bottom = D[i];
+    z.length = t.length = s.length = sigma.length = 0;
+    for (let j = 0; j < column.depths.length && column.depths[j] < bottom; j++) { z.push(column.depths[j]); t.push(column.T[j]); s.push(column.S[j]); }
+    const [tb, sb] = profileAt(column, bottom);
+    z.push(bottom); t.push(tb); s.push(sb);
+    for (let j = 0; j < z.length; j++) sigma.push(Math.max(j > 0 ? sigma[j - 1] : -Infinity, seawaterDensity(t[j], s[j])));
+    const mixed = Math.min(bottom, maximumMixedDepth, Math.max(shallowestMixedDepth, depthOf(sigma[0] + mixedExcess)));
+    top[1] = mixed; top[L] = bottom;
+    for (let k = 2; k < L; k++) top[k] = Math.min(bottom, Math.max(mixed, depthOf(0.5 * (rho[k - 1] + rho[k]))));
+    const iced = ice[i] > 0;
+    T0[i] = iced ? FREEZING_POINT : Math.max(FREEZING_POINT, integral(t, 0, mixed) / mixed);
+    h[i] = mixed; Q[i] = mixed * T0[i]; W[i] = integral(s, 0, mixed);
+    let excess = 0, thickest = 0;
+    for (let k = 1; k < L; k++) {
+      const n = at(k, i), hk = top[k + 1] - top[k];
+      if (hk < EPS) { h[n] = EPS; Q[n] = EPS * labelT[k]; W[n] = EPS * labelS[k]; excess += EPS - hk; continue; }
+      const tk = integral(t, top[k], top[k + 1]) / hk;
+      let sk = integral(s, top[k], top[k + 1]) / hk;
+      if (Math.abs(seawaterDensity(tk, sk) - rho[k]) > tolerance) sk = salinityForDensity(rho[k], tk);
+      h[n] = hk; Q[n] = hk * tk; W[n] = hk * sk;
+      if (hk > h[at(thickest, i)]) thickest = k;
+    }
+    const n = at(thickest, i), f = (h[n] - excess) / h[n];
+    h[n] -= excess; Q[n] *= f; W[n] *= f;
+  }
+  return filled;
+}
+
+/*
  * The ∇⁴ closure coefficient. At closureSpacing and coarser, the
  * grid-scale wave decays in closureHours; on finer meshes the
  * coefficient falls only in proportion to the spacing, so the
@@ -346,13 +419,14 @@ export function createOcean(mesh, {
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200,
-  geography = null, bathymetry = null, buffers = null,
+  geography = null, bathymetry = null, buffers = null, climatology = null,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
     cellsOnEdge, verticesOnEdge, areaCell, dcEdge, dvEdge, fVertex, fEdge, radius, latCell,
     maxEdges, nEdgesOnCell, edgesOnCell, cellsOnCell,
   } = mesh;
+  if (climatology && typeof climatology.columnAt !== 'function') throw new Error('the ocean climatology must be decoded (loadClimatology in ./climatology.module.js) before the ocean is built');
   const L = densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = [rho0, ...densities];
   const labelS = [referenceS, ...salinities];
@@ -907,21 +981,44 @@ export function createOcean(mesh, {
   }
 
   /*
-   * The climatological start: a mixed layer over interior layers whose
-   * bases sit at their subtropical depths, shallower toward the poles
-   * and rising to the surface over one layer's density step as the
-   * surface water approaches each layer's density, with the deepest
-   * layer filling to the bottom.
-   * The free surface starts at its steric height, so the pressure below
-   * the thermocline is level and the ocean does not begin with a
-   * barotropic shock.
+   * The start from rest. With a climatology (`climatology`, decoded by
+   * ./climatology.module.js), every sea cell it covers takes its column
+   * (atlasColumns), and `initialize` writes the mixed layer's
+   * temperature into surfaceT over open sea and returns how many sea
+   * cells took the atlas and how many did not. The sea cells it does not
+   * cover, and all of them without one, start from the analytic
+   * climatology: a mixed layer over interior layers whose bases sit at
+   * their subtropical depths, shallower toward the poles and rising to
+   * the surface over one layer's density step as the surface water
+   * approaches each layer's density, with the deepest layer filling to
+   * the bottom. The free surface starts at its steric height, so the
+   * pressure below the thermocline is level and the ocean does not begin
+   * with a barotropic shock.
    */
-  function initialize(surfaceT, ice) {
+  function initialize(surfaceT, ice, { climatology: atlas = climatology } = {}) {
+    const filled = build(surfaceT, ice, atlas);
+    if (!filled) return null;
+    let covered = 0, other = 0;
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i]) continue;
+      if (filled[i]) covered++; else other++;
+      if (filled[i] && !iced[i]) surfaceT[i] = T0[i];
+    }
+    return { atlas: covered, analytic: other };
+  }
+  function build(surfaceT, ice, atlas) {
     u.fill(0); eta.fill(0); fresh.fill(0); buoyancyLoss.fill(0);
+    const filled = atlas ? atlasColumns(mesh, atlas, { D, cellOcean, ice, rho, labelT, labelS, h, Q, W, T0, shallowestMixedDepth, maximumMixedDepth }) : null;
     for (let i = 0; i < C; i++) {
       previousIce[i] = ice[i];
       iced[i] = ice[i] > 0 ? 1 : 0;
       const lat = latCell[i];
+      if (filled && filled[i]) {
+        S0[i] = W[i] / h[i];
+        previousT0[i] = T0[i];
+        capacity[i] = rhoCp * Math.max(h[i], 1);
+        continue;
+      }
       const s0 = salinityProfile(lat);
       T0[i] = iced[i] ? FREEZING_POINT : surfaceT[i];
       S0[i] = s0;
@@ -951,6 +1048,7 @@ export function createOcean(mesh, {
     stericSurface();
     counter = 0;
     initialised = true;
+    return filled;
   }
 
   /*
@@ -1008,19 +1106,19 @@ export function createOcean(mesh, {
 
   function load(saved, surfaceT, ice) {
     if (!saved.h || saved.h.length !== L * C) {
-      initialize(surfaceT, ice);
+      build(surfaceT, ice, climatology);
       return;
     }
     h.set(saved.h); u.set(saved.u); eta.set(saved.eta);
     for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
-    const climatology = () => {
+    const start = () => {
       const kept = { h: Float64Array.from(h), u: Float64Array.from(u), Q: Float64Array.from(Q), W: Float64Array.from(W), eta: Float64Array.from(eta) };
-      initialize(surfaceT, ice);
+      build(surfaceT, ice, climatology);
       const built = { h: Float64Array.from(h), Q: Float64Array.from(Q), W: Float64Array.from(W) };
       h.set(kept.h); u.set(kept.u); Q.set(kept.Q); W.set(kept.W); eta.set(kept.eta);
       return built;
     };
-    fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, labelS, minimumThickness });
+    fitColumns({ h, Q, W, eta }, start, { D, cellOcean, L, C, labelT, labelS, minimumThickness });
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
     for (let i = 0; i < C; i++) { previousIce[i] = ice[i]; iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = Q[i] / Math.max(EPS, h[i]); S0[i] = W[i] / Math.max(EPS, h[i]); previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
     fresh.fill(0); buoyancyLoss.fill(0);
@@ -1065,7 +1163,7 @@ export function createOcean(mesh, {
     return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermo / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited };
   }
 
-  if (!adopting) initialize(new Float64Array(C).fill(288), new Float64Array(C));
+  if (!adopting) build(new Float64Array(C).fill(288), new Float64Array(C), null);
   initialised = false;
   const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });

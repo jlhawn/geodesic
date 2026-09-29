@@ -6,6 +6,7 @@ import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS } from './physics/regrid.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure } from './geography.module.js';
+import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
@@ -316,6 +317,41 @@ async function loadTopography(url) {
 }
 
 /*
+ * The ocean climatology a fresh start takes its ocean and sea surface
+ * from, fetched with the bytes received on the status line. Without a
+ * `url` it is the repository's World Ocean Atlas file, and a start goes on
+ * from the analytic climatology when that cannot be had.
+ */
+const climatologies = new Map();
+async function loadOceanClimatology(url, from, to) {
+  const source = url ?? new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).href;
+  if (climatologies.has(source)) return climatologies.get(source);
+  try {
+    status('loading the ocean climatology…', from);
+    const response = await fetch(source);
+    if (!response.ok) throw new Error(`ocean climatology ${source}: ${response.status}`);
+    const total = Number(response.headers.get('content-length')) || 0, parts = [];
+    let received = 0;
+    for (const reader = response.body.getReader(); ;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value); received += value.length;
+      if (total) status(`loading the ocean climatology: ${(received / 1048576).toFixed(1)} of ${(total / 1048576).toFixed(1)} MB`, from + (to - from) * Math.min(1, received / total));
+    }
+    const bytes = new Uint8Array(received);
+    let at = 0;
+    for (const part of parts) { bytes.set(part, at); at += part.length; }
+    const climatology = decodeClimatology(bytes);
+    climatologies.set(source, climatology);
+    return climatology;
+  } catch (error) {
+    if (url) throw error;
+    console.warn(`starting from the analytic ocean: ${error}`);
+    return null;
+  }
+}
+
+/*
  * The geography the page draws once: the land mask, the land fraction
  * and elevation of every cell, and the coast as segments between the
  * vertices of each edge that separates land from ocean, each with its
@@ -511,6 +547,10 @@ async function start(message) {
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   const options = { ...(message.options ?? {}) };
   if (message.land !== false) { status('loading the topography…', 0.52); options.topography = await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href); }
+  if (!saved && message.land !== false && message.climatology !== false) {
+    const climatology = await loadOceanClimatology(message.climatology ?? null, 0.53, 0.55);
+    if (climatology) options.ocean = { ...(options.ocean ?? {}), climatology };
+  }
   options.terrain = message.terrain !== false;
   if (saved) options.levels = savedLevels(saved);
   else if (message.levels) options.levels = sigmaInterfaces(message.levels);

@@ -801,6 +801,11 @@ export async function createGpuCore(mesh, {
     for (const b of [buffers.K1, buffers.K2, buffers.K3, buffers.K4]) device.queue.writeBuffer(b, 0, zero);
     device.queue.writeBuffer(buffers.D, 0, new Float32Array(L.D.total));
   }
+  function uploadSurfaceTemperature(surfaceT) {
+    const values = Float32Array.from(surfaceT);
+    device.queue.writeBuffer(buffers.S, 4 * L.S.TS, values);
+    device.queue.writeBuffer(buffers.T, 4 * L.S.TS, values);
+  }
   function download(buffer = buffers.S) {
     const lengths = [C, L.KC, L.KE, C, L.KC, L.KC, C];
     return readRanges(device, buffer, [{ offset: 0, length: L.S.total }]).then(([packed]) => names.map((name, a) => Float64Array.from(packed.subarray(L.S[name], L.S[name] + lengths[a]))));
@@ -854,5 +859,5 @@ export async function createGpuCore(mesh, {
   function clearFrame() { device.queue.writeBuffer(buffers.FR, 0, new Float32Array(L.FR.total)); }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
-  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, upload, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
+  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
 }
