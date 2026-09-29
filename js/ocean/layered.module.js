@@ -1,6 +1,6 @@
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../dynamics/operators.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
-import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
+import { seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 
 /*
  * A layered ocean on the C-grid: a bulk mixed layer with its own
@@ -12,9 +12,27 @@ import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature, sal
  * in an interior layer k is the gradient of a cell potential,
  *   Φ_k = g η + (g/ρ₀)[ρ_ml h₀ − ρ_k h₀ + Σ_{j<k} (ρ_j − ρ_k) h_j],
  * which is exact on the mesh whatever the bathymetry; the mixed layer's
- * force is g∇η plus the depth-mean of its own density gradient. A layer
+ * force is g∇η plus (g/ρ₀)(h₀/2)∇ρ_ml, the exact layer mean of the
+ * hydrostatic gradient whatever its thickness. A layer
  * that has outcropped, or lies below the bottom, keeps a token thickness
  * and follows the velocity of the layer above.
+ *
+ * A mixed layer far deeper than its neighbours is therefore no trouble
+ * for the pressure force, nor for the free surface, which follows the
+ * transport of the centred edge thicknesses while the mixed layer's own
+ * mass moves with the donor cell's (the rescaling below carries the
+ * difference through the whole column). What keeps such a column
+ * balanced is the Coriolis term. The mixed layer's takes the centred
+ * flux h_e u: with the donor-limited flux, where a thin mixed layer
+ * feeds a deep one, it feels a fraction of the Coriolis force its
+ * potential vorticity implies and runs down the sea-level gradient. An
+ * interior layer's potential vorticity is built on the smaller of its
+ * two cells' thicknesses, as its flux is, but on no less than
+ * `vorticityCentring` times their mean: the layer under a deep mixed
+ * layer is often a remnant a few metres thick beside the full layer next
+ * door, and on the smaller thickness alone the Coriolis force it
+ * assembles from its thick neighbours' fluxes is many times what its
+ * pressure gradient balances, a jet at metres a second.
  *
  * The free surface η = Σh − D moves at √(gD), too fast for the ocean's
  * step, so the depth-integrated flow is sub-stepped: the baroclinic
@@ -24,15 +42,29 @@ import { seawaterDensity, thermalExpansion as expansionOf, labelTemperature, sal
  * layers are then rescaled to the sub-stepped η and shifted to the
  * averaged transport.
  *
- * The mixed layer exchanges mass with the interior after each step: it
- * swallows any interior layer lighter than itself (convection, within
- * `maximumMixedDepth`, and keeps at most that depth: the excess returns
- * to the interior each step, so the column keeps mixing while the
- * mixed layer itself stays a surface layer), entrains the layer below at the Kraus–Turner
+ * The mixed layer exchanges mass with the interior after each step,
+ * driven by its surface buoyancy loss B, from the step's heat, freshwater
+ * and ice growth, remembered over `buoyancyMemory` so that a day's
+ * sunshine does not undo a winter's convection. Each interior class
+ * stands for water spanning half-way to its neighbours' labels: a mixed
+ * layer denser than all of it swallows it at up to `convectiveRate`; one
+ * within that span erodes it while losing buoyancy at B/(h₀N²), N² the
+ * class's remaining span of density over its thickness, the deepening of
+ * convection into stratified water, so that its depth follows the
+ * season's buoyancy loss, not a whole class at a time where the surface
+ * water crosses a label; and it entrains the layer below at the Kraus–Turner
  * wind-stirring rate, the stirring fading with depth over
- * `stirringDepth`, and detrains when it is deeper than the maximum,
- * when it is as dense as the water beneath it (convectively neutral),
- * or when surface warming makes it deeper than the Monin–Obukhov depth.
+ * `stirringDepth`. It deepens within `maximumMixedDepth` and, when
+ * `mixedNeighbourRatio` is set, within that multiple of the mean depth of
+ * the neighbouring mixed layers. Otherwise it holds its depth,
+ * convectively neutral or not: it detrains at once what lies beyond the
+ * maximum, and, over `detrainmentTime` and never above
+ * `shallowestMixedDepth`, what lies beyond the Monin–Obukhov depth
+ * 2 m u*³/(−B) while it gains buoyancy and what lies beyond its
+ * neighbours' reach. `neutralSnap` returns everything below
+ * `shallowestMixedDepth` whenever the layer is as dense as the water
+ * beneath it, and `convectiveErosion: false` swallows every class no
+ * denser than the mixed layer at `convectiveRate`.
  * Detrained water goes to the interior layer whose density is nearest
  * its own, so water swallowed from a layer returns to that layer; a
  * mass-conserving split between the two bracketing layers instead
@@ -253,7 +285,7 @@ export function createOcean(mesh, {
   densities = LAYER_DENSITIES, salinities = LAYER_SALINITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
-  minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 200, convectiveRate = 100 / 86400, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
+  minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, diffusivity = 0.01, everySteps = 4,
   geography = null, bathymetry = null, buffers = null,
 } = {}) {
@@ -301,7 +333,9 @@ export function createOcean(mesh, {
   const trial = [shared('trialh', L * C), shared('trialu', L * E), shared('trialQ', L * C), shared('trialW', L * C)];
   const params = shared('params', 4);
   if (!adopting) params[0] = 1 / 3600;
-  const tauCell = new Float64Array(3 * C);
+  const tauCell = new Float64Array(3 * C), reach = new Float64Array(C).fill(Infinity), buoyancyLoss = new Float64Array(C);
+  const lightest = rho.map((r, k) => r - 0.5 * (k > 1 ? r - rho[k - 1] : rho[k + 1] - r));
+  const densest = rho.map((r, k) => r + 0.5 * (k < L - 1 ? rho[k + 1] - r : r - rho[k - 1]));
   let counter = 0, limited = 0, initialised = false, layerRunner = null;
   const relaxRate = () => params[0];
 
@@ -443,7 +477,7 @@ export function createOcean(mesh, {
       }
       if (!momentum) continue;
       curl(mesh, uIn.subarray(oe, oe + E), zeta);
-      for (let e = 0; e < E; e++) qEdge[e] = 0.5 * (zeta[verticesOnEdge[2 * e]] + fVertex[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]] + fVertex[verticesOnEdge[2 * e + 1]]) / Math.max(hEdge[oe + e], PV_FLOOR);
+      for (let e = 0; e < E; e++) qEdge[e] = 0.5 * (zeta[verticesOnEdge[2 * e]] + fVertex[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]] + fVertex[verticesOnEdge[2 * e + 1]]) / Math.max(hEdge[oe + e], k > 0 ? vorticityCentring * 0.5 * (hIn[oc + cellsOnEdge[2 * e]] + hIn[oc + cellsOnEdge[2 * e + 1]]) : 0, PV_FLOOR);
       kineticEnergy(mesh, uIn.subarray(oe, oe + E), K);
       if (k === 0) {
         for (let i = 0; i < C; i++) phi[i] = K[i] + g * eta[i];
@@ -607,34 +641,54 @@ export function createOcean(mesh, {
     move(i, 0, k, amount);
   }
 
-  function mixedLayer(dt) {
+  function neighbourReach() {
+    for (let i = 0; i < C; i++) {
+      let sum = 0, count = 0;
+      for (let m = 0; m < nEdgesOnCell[i]; m++) {
+        const j = cellsOnCell[maxEdges * i + m];
+        if (cellOcean[j]) { sum += h[j]; count++; }
+      }
+      reach[i] = count ? mixedNeighbourRatio * sum / count : Infinity;
+    }
+  }
+
+  function mixedLayer(dt, ice) {
     cellVector(mesh, stress, tauCell);
+    if (mixedNeighbourRatio > 0) neighbourReach();
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
       const tau = Math.hypot(tauCell[3 * i], tauCell[3 * i + 1], tauCell[3 * i + 2]);
       const ustar3 = Math.pow(tau / rho0, 1.5), stir = stirring * Math.exp(-h[i] / stirringDepth);
+      const deepest = Math.min(maximumMixedDepth, reach[i]), s0 = W[i] / h[i];
+      const salted = s0 * fresh[i] / 1000 + (s0 - iceSalinity) * (ice[i] - previousIce[i]) * iceDensity / 1000;
+      const buoyancy = g * (expansionOf(surfaceIn[i], s0) * (previousT0[i] - surfaceIn[i]) * capacity[i] / rhoCp + contractionOf(surfaceIn[i], s0) * salted) / dt;
+      buoyancyLoss[i] += (buoyancy - buoyancyLoss[i]) * (buoyancyMemory > 0 ? Math.min(1, dt / buoyancyMemory) : 1);
       let rm = eos(Q[i] / h[i], W[i] / h[i]), budget = convectiveRate * dt;
-      for (let k = 1; k < L && h[i] < maximumMixedDepth && budget > 0; k++) {
-        if (h[at(k, i)] <= EPS || rho[k] > rm) continue;
-        const take = Math.min(h[at(k, i)] - EPS, maximumMixedDepth - h[i], budget);
-        move(i, k, 0, take); budget -= take;
-        rm = eos(Q[i] / h[i], W[i] / h[i]);
+      for (let k = 1; k < L && h[i] < deepest && budget > 0; k++) {
+        const n = at(k, i);
+        if (h[n] <= EPS) continue;
+        let take = Math.min(h[n] - EPS, deepest - h[i], budget);
+        const eroding = convectiveErosion && rm < densest[k];
+        if (eroding) take = rm >= lightest[k] && buoyancyLoss[i] > 0 ? Math.min(take, buoyancyLoss[i] * dt * rho0 * h[n] / (g * h[i] * (densest[k] - rm))) : 0;
+        else if (!convectiveErosion && rho[k] > rm) continue;
+        if (take > 0) { move(i, k, 0, take); budget -= take; rm = eos(Q[i] / h[i], W[i] / h[i]); }
+        if (eroding) break;
       }
       let below = -1;
       for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) { below = k; break; }
-      if (below > 0 && h[i] < maximumMixedDepth) {
+      if (below > 0 && h[i] < deepest) {
         const db = Math.max(1e-3, g * (rho[below] - rm) / rho0);
-        const entrain = Math.min(2 * stir * ustar3 / (h[i] * db) * dt, h[at(below, i)] - EPS);
+        const entrain = Math.min(2 * stir * ustar3 / (h[i] * db) * dt, h[at(below, i)] - EPS, reach[i] - h[i]);
         if (entrain > 0) { move(i, below, 0, entrain); rm = eos(Q[i] / h[i], W[i] / h[i]); }
       }
       below = -1;
       for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) { below = k; break; }
       let excess = Math.max(0, h[i] - maximumMixedDepth);
-      if (below > 0 && rm >= rho[below] - DENSITY_TOLERANCE) excess = Math.max(excess, h[i] - shallowestMixedDepth);
+      if (neutralSnap && below > 0 && rm >= rho[below] - DENSITY_TOLERANCE) excess = Math.max(excess, h[i] - shallowestMixedDepth);
       detrain(i, excess, rm);
-      const buoyancy = g * expansionOf(surfaceIn[i], W[i] / h[i]) * (previousT0[i] - surfaceIn[i]) * h[i] / dt;
-      if (buoyancy < -1e-9) {
-        const monin = Math.max(shallowestMixedDepth, 2 * stir * ustar3 / -buoyancy);
+      if (h[i] > reach[i]) detrain(i, (h[i] - Math.max(reach[i], shallowestMixedDepth)) * Math.min(1, dt / detrainmentTime), rm);
+      if (buoyancyLoss[i] < -1e-9) {
+        const monin = Math.max(shallowestMixedDepth, 2 * stir * ustar3 / -buoyancyLoss[i]);
         if (h[i] > monin) detrain(i, (h[i] - monin) * Math.min(1, dt / detrainmentTime), rm);
       }
       if (h[i] < minimumThickness) {
@@ -720,7 +774,7 @@ export function createOcean(mesh, {
     readSurface(surfaceT, ice);
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
     step(dtOcean);
-    mixedLayer(dtOcean);
+    mixedLayer(dtOcean, ice);
     salt(dtOcean, ice);
     writeSurface(surfaceT, oceanFlux, dtOcean);
     return true;
@@ -737,7 +791,7 @@ export function createOcean(mesh, {
    * barotropic shock.
    */
   function initialize(surfaceT, ice) {
-    u.fill(0); eta.fill(0); fresh.fill(0);
+    u.fill(0); eta.fill(0); fresh.fill(0); buoyancyLoss.fill(0);
     for (let i = 0; i < C; i++) {
       previousIce[i] = ice[i];
       iced[i] = ice[i] > 0 ? 1 : 0;
@@ -843,7 +897,7 @@ export function createOcean(mesh, {
     fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, labelT, labelS, minimumThickness });
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
     for (let i = 0; i < C; i++) { previousIce[i] = ice[i]; iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = Q[i] / Math.max(EPS, h[i]); S0[i] = W[i] / Math.max(EPS, h[i]); previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
-    fresh.fill(0);
+    fresh.fill(0); buoyancyLoss.fill(0);
     counter = 0;
     initialised = true;
   }
