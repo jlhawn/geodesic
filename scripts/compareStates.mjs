@@ -14,7 +14,7 @@ import { createModel } from '../js/model.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { THERMOCLINE_DENSITY, LAYER_DENSITIES } from '../js/ocean/layered.module.js';
+import { THERMOCLINE_DENSITY, LAYER_DENSITIES, savedDensities } from '../js/ocean/layered.module.js';
 
 const args = process.argv.slice(2);
 const at = args.indexOf('--window');
@@ -72,7 +72,7 @@ async function measure(file) {
   };
 
   const h = saved.ocean.h, T = saved.ocean.T;
-  const layers = LAYER_DENSITIES.filter((rho) => rho < THERMOCLINE_DENSITY).length;
+  const layers = (savedDensities(saved.ocean, C) ?? LAYER_DENSITIES).filter((rho) => rho < THERMOCLINE_DENSITY).length;
   const thermocline = (i) => { let d = 0; for (let k = 0; k <= layers; k++) d += h[k * C + i]; return d; };
   const sst = (i) => T[i] - 273.15;
   const roughness = (where) => mean((i) => {

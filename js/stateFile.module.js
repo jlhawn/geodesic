@@ -67,9 +67,9 @@ export function savedLevels(saved) {
 
 /*
  * The binary form of a state: its top-level arrays and those under
- * `ocean` and `land`, as float32 or, listed in `f64` or named 'levels',
- * float64, with the header padded with spaces so the arrays start 8-byte
- * aligned.
+ * `ocean` and `land`, as float32 or, listed in `f64` or named 'levels' or
+ * 'ocean.densities', float64, with the header padded with spaces so the
+ * arrays start 8-byte aligned.
  */
 export function encodeState(state, { f64 = [] } = {}) {
   const named = [];
@@ -79,7 +79,7 @@ export function encodeState(state, { f64 = [] } = {}) {
   }
   let offset = 0;
   const arrays = named.map(([name, values]) => {
-    const type = f64.includes(name) || name === 'levels' ? 'f64' : 'f32', size = type === 'f64' ? 8 : 4;
+    const type = f64.includes(name) || name === 'levels' || name === 'ocean.densities' ? 'f64' : 'f32', size = type === 'f64' ? 8 : 4;
     offset = Math.ceil(offset / size) * size;
     const entry = { name, length: values.length, offset, type };
     offset += size * values.length;

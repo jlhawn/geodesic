@@ -149,15 +149,11 @@ test('wind-driven advection over 100 steps conserves total heat and salt', () =>
   const before = totalHeatSalt(ocean, mesh);
   for (let n = 0; n < 100; n++) ocean.advance(surfaceT, ice, flux, stressField, 1350);
   const after = totalHeatSalt(ocean, mesh);
-  // At rest (eta ~ microns) the module conserves heat to ~1e-14 relative (see
-  // the first test above); under this wind the free surface swings by tens
-  // of centimetres, and the per-cell rescale to the sub-stepped barotropic
-  // eta at the end of step() is not perfectly heat/salt-conservative, giving
-  // a measured drift around 2.5e-9 relative after 100 steps with the
-  // 24 classes and the −1 °C polar interior. 5e-9 keeps a margin above
-  // that measured drift while still catching a real conservation break
-  // (orders of magnitude larger).
-  assert.ok(Math.abs(after.heat - before.heat) < 5e-9 * Math.abs(before.heat), `heat ${before.heat} -> ${after.heat}`);
-  assert.ok(Math.abs(after.salt - before.salt) < 5e-9 * Math.abs(before.salt), `salt ${before.salt} -> ${after.salt}`);
+  // Under this wind the free surface swings by tens of centimetres, and the
+  // per-cell rescale to the sub-stepped barotropic eta at the end of step()
+  // is not exactly heat/salt-conservative (about 1e-10 relative over these
+  // 100 steps).
+  assert.ok(Math.abs(after.heat - before.heat) < 1e-9 * Math.abs(before.heat), `heat ${before.heat} -> ${after.heat}`);
+  assert.ok(Math.abs(after.salt - before.salt) < 1e-9 * Math.abs(before.salt), `salt ${before.salt} -> ${after.salt}`);
   assert.equal(ocean.diagnostics().oceanLimited, 0);
 });

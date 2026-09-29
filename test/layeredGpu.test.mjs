@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createOcean as createCpuLayeredOcean } from '../js/ocean/layered.module.js';
+import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES } from '../js/ocean/layered.module.js';
+import { UNLISTED_OCEANS } from './helpers/layered.mjs';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { labelTemperature } from '../js/ocean/seawater.module.js';
@@ -223,4 +224,29 @@ test('the GPU mixed layer holds, retreats, convects, keeps to its neighbours and
       assert.ok(r.rmsRel < 2e-3, `${f} rms relative diff ${r.rmsRel}`);
     }
   }
+});
+
+test('the GPU ocean takes an 8-layer state that carries no class list, as the page\'s saved runs are, onto the class list as the CPU ocean does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells;
+  const unlisted = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...OCEAN_OPTIONS, ...UNLISTED_OCEANS[0] });
+  unlisted.initialize(Float64Array.from(surfaceT0), ice);
+  for (let n = 0; n < 5; n++) unlisted.advance(Float64Array.from(surfaceT0), ice, new Float64Array(C), stress, 1350);
+  const { densities, ...saved } = unlisted.serialize();
+  const cpuOcean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...OCEAN_OPTIONS });
+  cpuOcean.load(saved, Float64Array.from(surfaceT0), ice);
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: OCEAN_OPTIONS });
+  const gpuOcean = gpuModel.oceanEngine;
+  await gpuOcean.upload(saved, Float64Array.from(surfaceT0), ice);
+  const cpu = cpuOcean.serialize(), gpu = await gpuOcean.serialize();
+  assert.equal(gpuOcean.layers, LAYER_DENSITIES.length + 1);
+  assert.deepEqual(gpu.densities, LAYER_DENSITIES);
+  const wet = Array.from(cpu.h, (v) => v > 1);
+  for (const f of ['h', 'u', 'T', 'S', 'eta']) {
+    const r = f === 'T' || f === 'S' ? stats(cpu[f].filter((_, x) => wet[x]), gpu[f].filter((_, x) => wet[x])) : stats(cpu[f], gpu[f]);
+    assert.ok(r.rmsRel < 1e-6, `${f} rms relative diff ${r.rmsRel}`);
+  }
+  await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, 1350);
+  for (const v of (await gpuOcean.download()).h) assert.ok(Number.isFinite(v));
+  gpuModel.destroy();
 });

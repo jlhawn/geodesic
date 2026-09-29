@@ -1,13 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createOcean, LAYER_DENSITIES, runoffOutlets } from '../js/ocean/layered.module.js';
+import { createOcean, LAYER_DENSITIES, LAYER_SALINITIES, runoffOutlets } from '../js/ocean/layered.module.js';
 import { seawaterDensity, labelTemperature, thermalExpansion } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
 import { DEG, mesh, C, E, totalHeatSalt } from './helpers/layered.mjs';
 
-test('the equation of state recovers each class label and expands little near freezing', () => {
-  for (const r of LAYER_DENSITIES) assert.ok(Math.abs(seawaterDensity(labelTemperature(r), 35) - r) < 1e-9, `label ${r}`);
+test('the equation of state recovers each class label at its label salinity above the freezing point, and expands little near freezing', () => {
+  LAYER_DENSITIES.forEach((r, k) => {
+    const s = LAYER_SALINITIES[k], t = labelTemperature(r, s);
+    assert.ok(Math.abs(seawaterDensity(t, s) - r) < 1e-9 && t > FREEZING_POINT, `label ${r} at ${s}: ${t} K`);
+  });
   assert.ok(thermalExpansion(273.15, 35) < 7e-5 && thermalExpansion(298.15, 35) > 2.9e-4);
   assert.ok(seawaterDensity(FREEZING_POINT, 34.5) < LAYER_DENSITIES[LAYER_DENSITIES.length - 1], 'polar surface water floats on the deepest class');
 });

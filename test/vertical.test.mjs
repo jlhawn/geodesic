@@ -83,7 +83,9 @@ test('the fields at a depth pick the layer holding it, mask the sea floor, and i
   for (let i = 0; i < C; i++) assert.ok(Number.isNaN(abyss.temperature[i]) && Number.isNaN(abyss.speed[i]));
   const i = [...Array(C).keys()].find((c) => cellOcean[c]);
   const base = h[i];
-  for (let k = 1; k < L - 1; k++) h[k * C + i] = 0.01;
+  let deepest = L - 1;
+  while (h[deepest * C + i] <= THIN) deepest--;
+  for (let k = 1; k < deepest; k++) h[k * C + i] = 0.01;
   const atBase = depthFields(mesh, L, { h, u, temperature, cellOcean }, base);
-  assert.equal(atBase.temperature[i], Math.fround(temperature(L - 1, i)), 'the mixed layer\'s base falls into the deep layer, not a token above it');
+  assert.equal(atBase.temperature[i], Math.fround(temperature(deepest, i)), 'the mixed layer\'s base falls into the deepest layer holding water, not a token above it');
 });

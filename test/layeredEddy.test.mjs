@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createOcean, EPS, EDDY_SLACK } from '../js/ocean/layered.module.js';
+import { createOcean, EPS, EDDY_SLACK, LAYER_DENSITIES } from '../js/ocean/layered.module.js';
+import { seawaterDensity } from '../js/ocean/seawater.module.js';
 import { mesh, C, buriedBump, interfaceRange, classContents } from './helpers/layered.mjs';
 
 test('the eddy transport flattens a buried interface bump and keeps every class\'s volume, heat and salt; with eddyDiffusivity 0 it does nothing', () => {
-  const k = 20;
+  const k = LAYER_DENSITIES.indexOf(1026.86) + 1, outcropped = LAYER_DENSITIES.filter((r) => r < seawaterDensity(290, 35)).length;
   const { ocean, reshape } = buriedBump({ eddyDiffusivity: 1e6 });
   reshape(k, 200); reshape(k + 1, -200);
   const before = classContents(ocean), h0 = Float64Array.from(ocean.h), start = interfaceRange(ocean, k);
@@ -18,7 +19,7 @@ test('the eddy transport flattens a buried interface bump and keeps every class\
     assert.ok(drift < 1e-12, `class ${j} ${q} ${before[j][q]} -> ${after[j][q]}`);
   }
   for (let n = 0; n < ocean.h.length; n++) assert.ok(ocean.h[n] >= Math.min(h0[n], EPS) - 1e-12, `layer ${Math.floor(n / C)} of cell ${n % C} thinned to ${ocean.h[n]}`);
-  for (let n = 0; n < 12 * C; n++) assert.equal(ocean.h[n], h0[n], 'the mixed layer and the empty classes under it are untouched');
+  for (let n = 0; n < (outcropped + 1) * C; n++) assert.equal(ocean.h[n], h0[n], 'the mixed layer and the empty classes under it are untouched');
 
   const off = buriedBump({ eddyDiffusivity: 0 });
   off.reshape(k, 200); off.reshape(k + 1, -200);
@@ -28,7 +29,7 @@ test('the eddy transport flattens a buried interface bump and keeps every class\
 });
 
 test('a class with only its token thickness carries no eddy flux, and the interfaces around it flatten together', () => {
-  const k = 19;
+  const k = LAYER_DENSITIES.indexOf(1026.89) + 1;
   const { ocean, reshape } = buriedBump({ eddyDiffusivity: 1e6 });
   for (let i = 0; i < C; i++) {
     const n = k * C + i, below = (k + 1) * C + i, moved = ocean.h[n] - EPS, t = ocean.Q[below] / ocean.h[below], s = ocean.W[below] / ocean.h[below];

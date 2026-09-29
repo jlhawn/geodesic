@@ -2,11 +2,21 @@ import { availableParallelism } from 'node:os';
 import { Grid } from '../../js/grid.module.js';
 import { buildMesh } from '../../js/mesh.module.js';
 import { cellVector } from '../../js/dynamics/operators.module.js';
-import { createOcean, EPS } from '../../js/ocean/layered.module.js';
+import { createOcean, EPS, UNLISTED_LAYER_DENSITIES } from '../../js/ocean/layered.module.js';
 import { labelTemperature } from '../../js/ocean/seawater.module.js';
 import { createGeography } from '../../js/geography.module.js';
 
 export const RHO_AIR = 1.2, DRAG = 1.5e-3, RHO = 1025, DEG = Math.PI / 180;
+
+// The oceans of the states saved without a class list: the page's runs, and 24 layers.
+export const UNLISTED_OCEANS = [
+  { densities: UNLISTED_LAYER_DENSITIES[0], bottoms: [90, 170, 300, 500, 700, 1100], salinities: [35, 35, 35, 35, 34.9, 34.85, 34.8] },
+  {
+    densities: UNLISTED_LAYER_DENSITIES[1],
+    bottoms: [90, 110, 130, 150, 170, 205, 235, 270, 300, 350, 400, 450, 500, 550, 600, 650, 700, 835, 965, 1100, 1600, 2500],
+    salinities: [35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 34.98, 34.95, 34.92, 34.9, 34.88, 34.87, 34.85, 34.83, 34.81, 34.8],
+  },
+];
 export const mesh = buildMesh(new Grid(8));
 export const { nCells: C, nEdges: E } = mesh;
 

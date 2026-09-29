@@ -193,7 +193,7 @@ export function regridOcean(source, target, ocean, progress = null) {
   if (!ocean.h) return {};
   const sc = source.mesh.nCells, se = source.mesh.nEdges, tc = target.mesh.nCells, te = target.mesh.nEdges, layers = ocean.h.length / sc;
   const perLayer = (field, per, count, regridOne) => { const out = new Float64Array(layers * count); for (let k = 0; k < layers; k++) out.set(regridOne(field.slice(k * per, (k + 1) * per)), k * count); return out; };
-  return { h: perLayer(ocean.h, sc, tc, cell), T: perLayer(ocean.T, sc, tc, cell), S: perLayer(ocean.S, sc, tc, cell), u: perLayer(ocean.u, se, te, edge), eta: cell(ocean.eta) };
+  return { h: perLayer(ocean.h, sc, tc, cell), T: perLayer(ocean.T, sc, tc, cell), S: perLayer(ocean.S, sc, tc, cell), u: perLayer(ocean.u, se, te, edge), eta: cell(ocean.eta), ...(ocean.densities ? { densities: Float64Array.from(ocean.densities) } : {}) };
 }
 
 export function regridLand(source, target, land, progress = null, { ice = null, surfaceT = null } = {}) {

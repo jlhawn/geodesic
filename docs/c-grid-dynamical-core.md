@@ -1681,13 +1681,11 @@ The two-layer ocean of M13 could hold an Ekman layer and a gyre but had
 nothing below to return the flow, so it grew no western boundary current
 and its upper layer deepened ten metres a year. It is replaced by a
 hybrid isopycnal ocean in the MICOM design: a bulk mixed layer with its
-own temperature and salinity over seven interior layers of fixed
-reference density 1022.0, 1023.0, 1024.0, 1025.0, 1026.0, 1026.6 and
-1026.95 kg/m³ (`LAYER_DENSITIES`; 26.3, 23.1, 19.4, 15.2, 10.0, 5.9 and
-2.65 °C at 35 psu), on the real bathymetry `D` (the cell-mean ETOPO depth,
-at least 50 m, zero on land). Every layer is a TRiSK shallow-water layer
-in the vector-invariant form carrying thickness, edge velocity, heat h·T
-and salt h·S. Density is the simplified equation of state of Roquet et
+own temperature and salinity over 44 interior classes of fixed
+reference density (`LAYER_DENSITIES`, **Classes** below), on the real
+bathymetry `D` (the cell-mean ETOPO depth, at least 50 m, zero on land).
+Every layer is a TRiSK shallow-water layer in the vector-invariant form
+carrying thickness, edge velocity, heat h·T and salt h·S. Density is the simplified equation of state of Roquet et
 al. (2015) with NEMO's nn_eos = 1 coefficients at the surface
 (`js/ocean/seawater.module.js`):
 ρ = 1026 − a₀(1 + ½λ₁Tₐ)Tₐ + b₀(1 − ½λ₂Sₐ)Sₐ − νTₐSₐ, Tₐ = T − 10 °C,
@@ -1698,6 +1696,32 @@ water at the freezing point was denser than warmer deep water, so polar
 columns were only stable if the interior started at the freezing point,
 the deep ocean sat at −0.7 and −1.8 °C, and every class warmer than
 15 °C was missing from the tropical thermocline.
+
+**Classes.** The classes lie where the World Ocean Atlas 2023 (**Start
+from the World Ocean Atlas**) holds its water in this equation of state,
+1.38×10¹⁸ m³ on its 1° grid, half of it between 1026.72 and 1026.91:
+
+| Classes (kg/m³) | Spacing | Water | Atlas volume per class (10¹⁵ m³) |
+|---|---|---|---|
+| 1020.5, 1021.0, 1021.5 | 0.5 | the warm pool (1020.7) and tropical surface water | 1.6, 1.5, 2.1 |
+| 1022.0–1026.0 | 0.25 | the thermocline, the 20 °C isotherm near the top of 1024.0 | 1.3–44 |
+| 1026.1–1026.6 | 0.1 | mode and intermediate water, Antarctic Intermediate Water at 1026.27 | 30–77 |
+| 1026.65–1026.98 | 0.03 | the Southern Ocean's winter water (−1.8 °C, 34.4 psu: 1026.79) and Labrador Sea water (1026.80) in 1026.80, Circumpolar Deep Water (+1 °C, 34.7: 1026.85) in 1026.86, North Atlantic Deep Water (1026.89) in 1026.89, Antarctic Bottom Water (1026.93) in 1026.92, Weddell shelf water (1026.95) in 1026.95 | 1.0–155 |
+| 1027.05, 1027.15, 1027.3 | 0.07–0.15 | the Arctic's intermediate and deep water (−0.7 °C, 34.93) and brine-enriched shelf water | 2.9, 12, 0.2 |
+| 1027.5, 1027.75, 1028.0 | 0.25 | the Red Sea's deep water (1027.54) and the Mediterranean's intermediate and deep water (1028.03) | 0.15, 0.13, 3.5 |
+
+Between 50 and 70°S the atlas's water spans 1025.7–1026.95, 70% of it in
+1026.83–1026.92; north of 50°N in the Atlantic sector it runs from 1025.8
+through the dense band to the Nordic Seas' 1027.15. The label salinities
+(`LAYER_SALINITIES`) are the tropical atlas's 34.0, 34.5 and 34.85 psu in
+the warm-pool classes, 35 through 1025.0 falling to 34.8 at 1026.95,
+34.82–35.05 in the classes from 1026.98 to 1027.3 and 39.9, 39.0 and
+38.65 in the Red Sea's and Mediterranean's, so that every label
+temperature lies above the freezing point: 28.6 °C at 1020.5, 19.4 °C at
+1024.0, 2.8 °C at 1026.80, −1.7 °C at 1027.3 and 14.1 °C at 1028.0. At
+65°S 0°E the N=64 atlas start holds the −1.4 °C winter water in
+1026.71–1026.77 at 50–83 m and the +0.7 °C deep water in 1026.86 at
+150–440 m, with 1026.80 (−1.0 °C) and 1026.83 (−0.1 °C) between them.
 
 **Pressure force.** The pressure in interior layer k at height z is
 P_{k−1} + ρ_k g (z_{k−1} − z), with P_{k−1} the pressure at the top of
@@ -1762,7 +1786,10 @@ Coriolis force on U), with U ← −g H_e ∇η + f×U + slow and η ← −∇�
 H_e the same edge thickness sum, at a wave Courant number of 0.35 on the
 shortest edge over the deepest cell (eleven sub-steps at N=64); the
 layers are then rescaled to the sub-step-averaged η and shifted so
-their transport equals the averaged U. Velocities are finally clamped
+their transport equals the averaged U. Before the rescale an interior
+class left below its 0.01 m token is made up to it at its label from the
+mixed layer, which gives up that water with its heat and salt, so the
+tokens cost the column nothing. Velocities are finally clamped
 to 5 m/s and the count of clamps reported (`oceanLimited`, zero in every
 run so far).
 
@@ -1861,23 +1888,35 @@ point is still the fixed 271.35 K of M9.
 
 **Start.** From rest: the mixed layer 60 m deep with the atmosphere's
 initial surface temperature and a salinity 34 + 2 exp(−((|φ|−25°)/20°)²);
-each interior layer starts at its class salinity (35 psu through the
-1025.0 class, then 34.9, 34.85 and 34.8, `LAYER_SALINITIES`) and the
-temperature that gives its label density there (the deepest class at
-about 0.8 °C), blending poleward of 45° over 15° of latitude toward
-−1 °C at the salinity that keeps the density (the 1026.6 class at
+each interior layer starts at its label salinity (`LAYER_SALINITIES`,
+**Classes**) and the temperature that gives its label density there (the
+1026.95 class at about 0.8 °C), blending poleward of 45° over 15° of
+latitude toward −1 °C at the salinity that keeps the density (the 1026.6 class at
 34.21 psu, the deepest at 34.65), as polar oceans hold cold, fresh water
 on the density surfaces of the warm subtropical thermocline; so its
-density is its label; interior layer bases at 90, 170, 300, 500, 700 and
-1100 m in the subtropics, scaled by 0.7 + 0.6 cos²φ toward the poles;
-every layer lighter than the local surface water outcropped; the deepest
-layer filling to the bottom. Polar surface water at the freezing point
-and 34 psu (1026.47) floats on the deepest class (1026.95); brine that
-raises it past about 34.6 psu sinks into it, as bottom water forms. With
+density is its label; interior layer bases (`LAYER_BOTTOMS`) in the
+subtropics from 65 m under 1020.5 through 300 m under 1024.0 and 1061 m
+under 1026.6 to 3550 m under 1026.92, scaled by 0.7 + 0.6 cos²φ toward
+the poles; every layer lighter than the local surface water outcropped;
+the 1026.95 class, whose base, like those of the denser classes, lies
+below any sea floor, filling the column to the bottom, the denser classes
+tokens beneath it and the deepest layer holding water giving up their
+metres. The free surface starts level in pressure at 3500 m across the
+open ocean's abyss, the cells at least that deep joined through such
+cells over the largest area (`abyssalCells`), and every other column
+takes the sea level around it by relaxation, so a basin behind a sill
+starts at the ocean's sea level: levelled at 3500 m in their own deep
+cells, the Mediterranean with its 1028.0 water behind Gibraltar would
+start 5 m low and the Arctic behind Fram Strait 2 m low (N=64 and 128).
+Polar surface water at the freezing point and 34 psu (1026.47) floats on
+the 1026.95 class; brine that raises it past about 34.6 psu sinks into
+it, as bottom water forms. With
 35 psu in every class and at the poles, a first spin-up year lost all its
 sea ice: polar mixed layers denser than the deepest class convected
 2.4 °C water up all winter. A
-saved ocean with a different number of layers loads as this climatology.
+saved ocean on other classes is carried onto these (**Loading across
+class lists**), and one whose classes are unknown loads as this
+climatology.
 
 **Start from the World Ocean Atlas.** Fresh starts of `scripts/spinup.mjs`
 and the page take their ocean instead from the World Ocean Atlas 2023
@@ -1908,15 +1947,15 @@ present reaches the bottom. The mixed layer reaches to where the density
 first exceeds the surface's by 0.03 kg/m³ (the criterion of de Boyer
 Montégut et al. 2004, from the surface), within 50–600 m, and every layer
 takes the atlas's mean temperature and salinity over its depths. So
-averaged, the water lies off its label: at N=32 only 54% of the classes
-holding water are within the 0.01 kg/m³ restoring tolerance (95% within
-0.05); the lightest class is 0.5 light where the tropical water under the
-mixed layer is lighter than every label, the densest up to 1.2 dense in
-the Mediterranean, and the rest a median 0.007 dense from the curvature
-of the equation of state. A class further off than the tolerance
-therefore keeps the atlas temperature and takes the salinity of its
-label, as `interiorWater` does (below the lightest class and above the
-densest, 99% of the classes move by less than 0.11 psu). Under the
+averaged, the water lies off its label: at N=32 73% of the classes
+holding water are within the 0.01 kg/m³ restoring tolerance (97% within
+0.05); the lightest class is a median 0.47 light, up to 1.9 in the
+tropical open ocean and 15 in the brackish Baltic, the densest at most
+0.17 dense in the Mediterranean, and the rest a median 0.002 dense from
+the curvature of the equation of state. A class further off than the
+tolerance therefore keeps the atlas temperature and takes the salinity
+of its label, as `interiorWater` does (below the lightest class and above
+the densest, 99% of the classes move by less than 0.15 psu). Under the
 initial ice the mixed layer is at the freezing point and elsewhere never
 colder, and over open water its temperature becomes the atmosphere's
 initial sea surface: `initialize` writes it into the surface temperature
@@ -1928,18 +1967,17 @@ water in the Barents and Greenland Seas, where the salty mixed layer at
 the freezing point is denser than the class beneath and convects, as the
 Mediterranean's does. The start puts the top of the 1024 class (about
 the 20 °C isotherm) at 173 m at 0°N 160°E and 50 m at 0°N 100°W, where the
-atlas crosses at 172 and 46 m, and outcrops it poleward of 35°; the 1025
-class top lies at 206 and 209 m at 30°S 90°W and 30°N 150°W (the atlas
-210 and 213 m). The 60–70°S column averages −0.6, 0.1, 1.0, 1.0 and
+atlas crosses at 171 and 42 m, and outcrops it poleward of 35°; the 1025
+class top lies at 210 and 203 m at 30°S 90°W and 30°N 150°W, where the
+atlas crosses. The 60–70°S column averages −0.5, 0.0, 1.2, 1.1 and
 0.5 °C over 0–60, 60–200, 200–500, 500–1000 and 1000–3000 m against the
-atlas's −0.6, −0.1, 1.2, 1.2 and 0.5 at the same cells, where the
+atlas's −0.5, −0.1, 1.2, 1.2 and 0.5 at the same cells, where the
 analytic start has 0.8 °C in its mixed layer and −1 °C at every depth
-below; the interior's mean temperature is 3.5 °C. Three coupled days
-from it at N=64 (the ocean every eighth step) kept currents under
-0.95 m/s with no clamped edge and ended with the warm pool at 28.2 °C,
-the cold tongue at 22.2 °C and the 1024 class top at 163 m in the west
-Pacific and 59 m in the east; from the analytic start, 27.4 and 27.7 °C
-and 304 m on both sides. `spinup.mjs` reads the file for a fresh
+below; the interior's mean temperature is 3.5 °C. Five coupled days
+from it at N=64 on bl34 (the ocean every eighth step) kept currents under
+1.3 m/s with no clamped edge and ended with the warm pool at 27.9 °C,
+the cold tongue at 21.8 °C and the 1024 class top at 172 m in the west
+Pacific and 63 m in the east. `spinup.mjs` reads the file for a fresh
 start without FROM, `CLIMATOLOGY=<file>` another, and `CLIMATOLOGY=none` starts
 from the analytic climatology; the page fetches it for `from=none`,
 `?climatology=off` keeps the analytic start and `?climatology=<url>`
@@ -1952,9 +1990,10 @@ N=32 columns and these values, and the GPU start against the CPU's.
 **Interfaces.** `advance(surfaceT, ice, oceanFlux, stress, dt, concentration)` as in M13, the wind stress reaching the water under ice scaled by 1 − A(1 − `iceStressTransmission`) with the transmission 0.8, since drifting floes pass most of the air's stress to the ocean and the Antarctic Divergence upwells its deep water under a pack that covers it most of the year,
 plus `accumulate(evaporation, rain, dt, runoff)` each atmosphere step;
 `fields()` gives the frame its mixed-layer depth, SST, SSS, surface
-velocity, thermocline depth (the boundary between the 23.1 and 19.4 °C
-classes, close to the 20 °C isotherm) and η;
-`serialize()` is {h, u, T, S, eta} flattened layer-major, and
+velocity, thermocline depth (the top of the 1024.0 class, labelled
+19.4 °C under the 20.4 °C of 1023.75, close to the 20 °C isotherm) and η;
+`serialize()` is {h, u, T, S, eta} flattened layer-major with the class
+list `densities`, and
 `regridOcean` carries each layer's cell fields by masked interpolation
 over sea tiles and its velocities by vector interpolation. Diagnostics
 add the thermocline depth, mean salinity, the largest |η| and the
@@ -2000,6 +2039,31 @@ Bab-el-Mandeb, the Gulf at Hormuz, the Gulf of Finland) arrive with
 their own sea levels and surge through the new strait at the clamp for
 about two days, then settle (2.3 m/s at Bab-el-Mandeb after 2.5 days
 from the day-930 state).
+
+**Loading across class lists.** A saved ocean carries its class list
+(`densities`, float64 in the binary state); one without it is on the
+seven classes of the page's saved runs or the 23 that followed them,
+told apart by its layer count (`UNLISTED_LAYER_DENSITIES`). One on other
+classes is carried onto these column by column before it is fitted
+(`rebinOcean`, in `load` on both engines, so `spinup.mjs` continuing or
+seeding FROM, `oceanSpinup.mjs`, an ocean handed over by
+`oceanHandOff.module.js` and the page all take it). The mixed layer
+copies through. An old class stands for water spread over its span,
+half-way to its neighbours' labels, the lightest and densest over the
+same width centred on their own water's density since they hold all
+lighter and all denser water; each new class takes the share of that span
+within its own, tilted linearly so that the shares' labels average to
+the water's density. Each share keeps the old class's temperature and
+salinity moved by the least change, counted in 4 K and 0.5 psu, that
+takes the density from the shares' mean label to its own: warmer or
+colder in the thermocline, saltier or fresher in cold water. A class
+left under its token is made up to it from the column's thickest class,
+and each new class moves with the old ones its label span overlaps. Every
+column keeps its water, heat and salt to rounding; from a 24-layer
+ocean at N=8 the median class lies within 10⁻⁴ kg/m³ of its label and the
+worst 0.002 off, from an 8-layer one 0.0015 and 0.03, and the restoring
+takes it from there (`test/layeredState.test.mjs`). An ocean already on
+these classes loads as it did.
 
 **Drag.** Interfacial drag is the linear stress r Δu with r = 2×10⁻⁴
 m/s; bottom drag is quadratic, C_D |u| u with C_D = 3×10⁻³, applied to
@@ -2302,12 +2366,10 @@ the correction is gradual and dead-banded because the curvature of the
 equation of state makes a mixture denser than the linear estimate, and
 correcting in full every step overshot and pulled water back the other
 way. Two cases have no donor and are left alone: the shallowest water
-under the mixed layer when too dense, and the deepest class when too
-light. The second matters: deep water formed like NADW (1026.88) and
-AABW (1026.93) is lighter than the 1026.95 label, so the deepest class
-can hold water up to about 0.17 kg/m³ light (about 2 K warm), bounded by
-the water detrained into it; referencing every class to the surface also
-merges NADW- and AABW-like water into that one class. The GPU ocean
+under the mixed layer when too dense, and the deepest class, the
+Mediterranean's 1028.0, when too light. Deep water formed like NADW
+(1026.89) and AABW (1026.93) has classes of its own among those 0.03
+apart and is restored like the rest. The GPU ocean
 carries its free surface from the barotropic solve rather than
 re-summing the layers each step: in single precision the sum rounded
 about 4×10⁻⁶ m low in the same way every step, a steady loss of volume.
@@ -2614,7 +2676,7 @@ js/
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
     ice.module.js           M9/M11: zero-layer sea ice over the mixed layer, its concentration, zenith albedo
   ocean/
-    layered.module.js       M18: 24-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
+    layered.module.js       M18: 45-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
     seawater.module.js      M18: the Roquet et al. (2015) simplified equation of state, shared with the GPU
     climatology.module.js   M18: the World Ocean Atlas file a fresh ocean starts from, and its columns
     (js/gpu/layeredOcean.gpu.js is its WebGPU port)

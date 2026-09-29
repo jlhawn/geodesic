@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean } from '../js/ocean/layered.module.js';
+import { createOcean, LAYER_BOTTOMS } from '../js/ocean/layered.module.js';
 import { seawaterDensity, thermalExpansion } from '../js/ocean/seawater.module.js';
 import { RHO_AIR, DRAG, RHO, DEG, mesh, C, zonalWindOnEdges, UNIFORM, uniformOcean, deepen, slowOcean } from './helpers/layered.mjs';
 
@@ -57,7 +57,7 @@ test('a deep mixed layer retreats toward shallowestMixedDepth over detrainmentTi
 
 test('a mixed layer within the density range of the class beneath erodes it at B/(h N²) while it loses buoyancy, N² the class\'s remaining density span over its thickness', () => {
   const dt = 1350, g = 9.81, rho0 = 1025;
-  const column = uniformOcean({ buoyancyMemory: 0 });
+  const column = uniformOcean({ buoyancyMemory: 0, convectiveRate: 1e5 / 86400 });
   const { ocean, surfaceT, ice, flux, calm } = column;
   deepen(column, [...Array(C).keys()], 300, -0.002);
   const i = 0, L = ocean.layers;
@@ -93,7 +93,7 @@ test('a mixed layer deeper than mixedNeighbourRatio times its neighbours\' mean 
   }
 });
 
-test('a neutral 600 m mixed layer beside 50 m ones at 60°S moves the free surface a few centimetres and no water faster than 1 m/s over five days at N=16', async () => {
+test('a neutral 600 m mixed layer beside 50 m ones at 60°S moves the free surface by about its steric deficit and no water faster than 1 m/s over five days at N=16', async () => {
   const coarse = buildMesh(new Grid(16));
   const offset = (i) => Math.abs(coarse.latCell[i] + 60 * DEG) + Math.abs(coarse.lonCell[i]);
   let centre = 0;
@@ -101,7 +101,7 @@ test('a neutral 600 m mixed layer beside 50 m ones at 60°S moves the free surfa
   const beside = coarse.cellsOnCell[coarse.maxEdges * centre];
   let eta0, contrast, steric;
   const ocean = await slowOcean(coarse, {
-    ocean: { ...UNIFORM, mixedNeighbourRatio: 0 },
+    ocean: { ...UNIFORM, mixedNeighbourRatio: 0, bottoms: LAYER_BOTTOMS.map((z) => 0.6 * z) },
     surfaceT: new Float64Array(coarse.nCells).fill(278),
     start(column) {
       deepen(column, [centre], 600, -0.002);
@@ -128,7 +128,7 @@ test('a neutral 600 m mixed layer beside 50 m ones at 60°S moves the free surfa
   const { eta, h } = state;
   console.log(`600 m mixed layer ${contrast.toFixed(2)} kg/m³ denser than its 50 m neighbours at 60°S, N=16: over five days |Δη| ≤ ${(100 * surface).toFixed(1)} cm (at the column ${(100 * (eta[centre] - eta0[centre])).toFixed(1)} cm, its steric deficit ${(100 * steric).toFixed(1)} cm), |u| ≤ ${fastest.toFixed(3)} m/s; ${h[centre].toFixed(0)} m deep at the end`);
   assert.ok(contrast > 0.2, `the column is only ${contrast} kg/m³ denser at the surface`);
-  assert.ok(surface < 0.1 && surface < 1.5 * steric, `free surface moved ${surface} m against a steric deficit of ${steric} m`);
+  assert.ok(surface < 0.15 && surface < 1.5 * steric, `free surface moved ${surface} m against a steric deficit of ${steric} m`);
   assert.ok(fastest < 1, `fastest water ${fastest} m/s`);
   assert.ok(h[centre] > 500, `the neutral layer holds (${h[centre]} m)`);
   assert.equal((await ocean.diagnostics()).oceanLimited, 0);

@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
@@ -378,20 +378,21 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
 }`,
     oRescale: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
-  var sum = 0.0; var dQ = 0.0; var dW = 0.0;
-  for (var k = 0; k < L; k++) {
+  var sum = 0.0; var dh = 0.0; var dQ = 0.0; var dW = 0.0;
+  for (var k = 1; k < L; k++) {
     var hv = IN[hOff(k) + i];
     if (hv < EPSO) {
       let held = hv > 1e-9;
-      let tHeld = select(LABEL_T[k], IN[qOff(k) + i] / hv, held); let sHeld = select(LABEL_S[k], IN[wOff(k) + i] / hv, held);
-      let t = select(LABEL_T[k], tHeld, k == 0); let s = select(LABEL_S[k], sHeld, k == 0);
-      dQ += EPSO * clamp(tHeld - t, -30.0, 30.0); dW += EPSO * clamp(sHeld - s, -5.0, 5.0);
+      let t = LABEL_T[k]; let s = LABEL_S[k];
+      let tHeld = select(t, clamp(IN[qOff(k) + i] / hv, t - 30.0, t + 30.0), held); let sHeld = select(s, clamp(IN[wOff(k) + i] / hv, s - 5.0, s + 5.0), held);
+      dh += EPSO - hv; dQ += EPSO * t - hv * tHeld; dW += EPSO * s - hv * sHeld;
       hv = EPSO;
       IN[hOff(k) + i] = EPSO; IN[qOff(k) + i] = EPSO * t; IN[wOff(k) + i] = EPSO * s;
     }
     sum += hv;
   }
-  IN[qOff(0) + i] += dQ; IN[wOff(0) + i] += dW;
+  IN[hOff(0) + i] -= dh; IN[qOff(0) + i] -= dQ; IN[wOff(0) + i] -= dW;
+  sum += IN[hOff(0) + i];
   let excess = (OD[B_BAVG + i] - (sum - OD[O_BATH + i])) / sum;
   for (var k = 0; k < L; k++) { IN[hOff(k) + i] += IN[hOff(k) + i] * excess; IN[qOff(k) + i] += IN[qOff(k) + i] * excess; IN[wOff(k) + i] += IN[wOff(k) + i] * excess; }
   OD[O_ETA + i] = OD[B_BAVG + i];
@@ -895,31 +896,32 @@ export function createLayeredOcean(core, options = {}) {
   const eos = seawaterDensity;
   /*
    * The free surface that levels the pressure at `referenceDepth` in
-   * every column deep enough to reach it, so the deep ocean starts
-   * without a barotropic pressure gradient; shallower columns take the
-   * free surface of the deep water around them, found by relaxation.
-   * Ported over plain double-precision arrays exactly as the CPU module's
-   * initialize()/stericSurface() do, since this runs once per model
-   * build rather than every ocean step.
+   * every column of the open ocean's abyss, so the deep ocean starts
+   * without a barotropic pressure gradient; every other column takes the
+   * free surface of the water around it, found by relaxation from the
+   * abyss's mean. Ported over plain double-precision arrays exactly as
+   * the CPU module's initialize()/stericSurface() do, since this runs
+   * once per model build rather than every ocean step.
    */
   function stericSurface(h, Q, W, eta, referenceDepth = 3500) {
     const at = (k, i) => k * C + i;
     const rhoMl = new Float64Array(C);
     for (let i = 0; i < C; i++) { const h0 = Math.max(EPS, h[i]); rhoMl[i] = eos(Q[i] / h0, W[i] / h0); }
-    const rhoRef = rho[L - 1];
-    const deep = new Uint8Array(C);
+    const deep = abyssalCells(mesh, D, cellOcean, referenceDepth);
+    let deepArea = 0, deepMean = 0;
     for (let i = 0; i < C; i++) {
       eta[i] = 0;
-      if (!cellOcean[i] || D[i] < referenceDepth) continue;
-      deep[i] = 1;
+      if (!deep[i]) continue;
       let budget = referenceDepth, anomaly = 0;
       for (let k = 0; k < L && budget > 0; k++) {
         const part = Math.min(h[at(k, i)], budget);
-        anomaly += ((k === 0 ? rhoMl[i] : rho[k]) - rhoRef) * part;
+        anomaly += ((k === 0 ? rhoMl[i] : rho[k]) - o.density) * part;
         budget -= part;
       }
       eta[i] = -anomaly / o.density;
+      deepArea += mesh.areaCell[i]; deepMean += mesh.areaCell[i] * eta[i];
     }
+    if (deepArea > 0) for (let i = 0; i < C; i++) if (deep[i]) eta[i] -= deepMean / deepArea;
     const next = new Float64Array(C);
     for (let sweep = 0; sweep < 2000; sweep++) {
       let moved = 0;
@@ -977,8 +979,11 @@ export function createLayeredOcean(core, options = {}) {
         const [tk, sk] = hk > EPS ? interiorWater(rho[k], labelT[k], labelS[k], lat) : [labelT[k], labelS[k]];
         h[at(k, i)] = hk; Q[at(k, i)] = hk * tk; W[at(k, i)] = hk * sk;
       }
-      const scale = D[i] / cumulative;
-      for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }
+      const excess = cumulative - D[i];
+      let giver = L - 1;
+      while (giver > 0 && !(h[at(giver, i)] > excess + EPS)) giver--;
+      const n = at(giver, i), f = (h[n] - excess) / h[n];
+      h[n] -= excess; Q[n] *= f; W[n] *= f;
       previousT0[i] = T0[i];
     }
     stericSurface(h, Q, W, eta);
@@ -1033,6 +1038,8 @@ export function createLayeredOcean(core, options = {}) {
     return true;
   }
   function upload(saved, surfaceT, ice) {
+    const classes = savedDensities(saved, C);
+    if (classes && !sameDensities(classes, o.densities)) saved = rebinOcean(saved, classes, o.densities, C, { labelT, labelS });
     if (restartable(saved)) {
       uploadArrays(saved, surfaceT, ice, saved);
       device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(saved.previousT0));
@@ -1077,7 +1084,7 @@ export function createLayeredOcean(core, options = {}) {
     return { h, u, T, S, eta, h1, T1, S1, u1, thermoclineDepth, layers: L };
   }
   function serializeFrom(d) {
-    return { h: Array.from(d.h), u: Array.from(d.u), T: Array.from(d.T), S: Array.from(d.S), eta: Array.from(d.eta) };
+    return { h: Array.from(d.h), u: Array.from(d.u), T: Array.from(d.T), S: Array.from(d.S), eta: Array.from(d.eta), densities: Array.from(o.densities) };
   }
   async function serialize() { return serializeFrom(await download()); }
   /*

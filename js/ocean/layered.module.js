@@ -1,6 +1,6 @@
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../dynamics/operators.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
-import { seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
+import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 import { profileAt } from './climatology.module.js';
 
 /*
@@ -16,7 +16,8 @@ import { profileAt } from './climatology.module.js';
  * force is g∇η plus (g/ρ₀)(h₀/2)∇ρ_ml, the exact layer mean of the
  * hydrostatic gradient whatever its thickness. A layer
  * that has outcropped, or lies below the bottom, keeps a token thickness
- * and follows the velocity of the layer above.
+ * at its label, made up from the mixed layer, which takes the difference
+ * in water, heat and salt, and follows the velocity of the layer above.
  *
  * A mixed layer far deeper than its neighbours is therefore no trouble
  * for the pressure force, nor for the free surface, which follows the
@@ -119,9 +120,49 @@ import { profileAt } from './climatology.module.js';
  * the edge's fluxes together; κ is held below a quarter of the explicit
  * diffusion limit 1/(dt·max Σ dv/(dc·A)).
  */
-export const LAYER_DENSITIES = [1022.0, 1022.25, 1022.5, 1022.75, 1023.0, 1023.25, 1023.5, 1023.75, 1024.0, 1024.25, 1024.5, 1024.75, 1025.0, 1025.25, 1025.5, 1025.75, 1026.0, 1026.2, 1026.4, 1026.6, 1026.75, 1026.85, 1026.95];
-export const LAYER_BOTTOMS = [90, 110, 130, 150, 170, 205, 235, 270, 300, 350, 400, 450, 500, 550, 600, 650, 700, 835, 965, 1100, 1600, 2500];
-export const LAYER_SALINITIES = [35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 34.98, 34.95, 34.92, 34.9, 34.88, 34.87, 34.85, 34.83, 34.81, 34.8];
+/*
+ * The interior classes, placed where the World Ocean Atlas holds its water
+ * in this equation of state: 1020.5–1021.5 for the warm pool, 0.25 apart
+ * through the thermocline, 0.1 apart for the intermediate water to 1026.6,
+ * 0.03 apart from 1026.65 to 1026.98 so that the Southern Ocean's winter
+ * water (1026.79), Circumpolar Deep Water (1026.85), North Atlantic Deep
+ * Water (1026.89) and Antarctic Bottom Water (1026.93) lie in separate
+ * classes, and a few steps for the Arctic's deep and shelf water and the
+ * Red Sea's and Mediterranean's. LAYER_SALINITIES label each class and
+ * LAYER_BOTTOMS give its base in the subtropics for the analytic start;
+ * the classes from 1026.95 lie below any sea floor there, so the 1026.95
+ * class fills the deep columns and the denser ones start as tokens.
+ */
+export const LAYER_DENSITIES = [
+  1020.5, 1021.0, 1021.5,
+  1022.0, 1022.25, 1022.5, 1022.75, 1023.0, 1023.25, 1023.5, 1023.75, 1024.0, 1024.25, 1024.5, 1024.75, 1025.0, 1025.25, 1025.5, 1025.75, 1026.0,
+  1026.1, 1026.2, 1026.3, 1026.4, 1026.5, 1026.6,
+  1026.65, 1026.68, 1026.71, 1026.74, 1026.77, 1026.8, 1026.83, 1026.86, 1026.89, 1026.92, 1026.95, 1026.98,
+  1027.05, 1027.15, 1027.3, 1027.5, 1027.75, 1028.0,
+];
+export const LAYER_BOTTOMS = [
+  65, 74, 83,
+  90, 110, 130, 150, 170, 205, 235, 270, 300, 350, 400, 450, 500, 550, 600, 650, 689,
+  734, 801, 867, 933, 1004, 1061,
+  1092, 1180, 1300, 1420, 1540, 1735, 2005, 2275, 2650, 3550, 12000, 12000,
+  12000, 12000, 12000, 12000, 12000,
+];
+export const LAYER_SALINITIES = [
+  34.0, 34.5, 34.85,
+  35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 34.98, 34.95, 34.92, 34.9,
+  34.89, 34.88, 34.875, 34.87, 34.86, 34.85,
+  34.843, 34.839, 34.835, 34.831, 34.826, 34.82, 34.814, 34.809, 34.806, 34.803, 34.8, 34.82,
+  34.91, 34.94, 35.05, 39.9, 39.0, 38.65,
+];
+/*
+ * The interior classes of saved oceans that carry no list of their own,
+ * told apart by their layer count: the seven of the page's saved runs and
+ * the twenty-three of later ones.
+ */
+export const UNLISTED_LAYER_DENSITIES = [
+  [1022.0, 1023.0, 1024.0, 1025.0, 1026.0, 1026.6, 1026.95],
+  [1022.0, 1022.25, 1022.5, 1022.75, 1023.0, 1023.25, 1023.5, 1023.75, 1024.0, 1024.25, 1024.5, 1024.75, 1025.0, 1025.25, 1025.5, 1025.75, 1026.0, 1026.2, 1026.4, 1026.6, 1026.75, 1026.85, 1026.95],
+];
 export const THERMOCLINE_DENSITY = 1024.0;
 export const POLAR_INTERIOR_T = 272.15;
 
@@ -292,6 +333,35 @@ export function eddyDiffusionLimit(mesh) {
 }
 
 /*
+ * The open ocean's abyss: the sea cells at least `depth` deep that connect
+ * to one another through such cells over the largest area. A deep basin
+ * behind a shallower sill, as the Mediterranean behind Gibraltar or the
+ * Arctic behind Fram Strait, holds water of its own density below the
+ * sill and is left out.
+ */
+export function abyssalCells(mesh, D, cellOcean, depth) {
+  const { nCells: C, maxEdges, nEdgesOnCell, cellsOnCell, areaCell } = mesh;
+  const component = new Int32Array(C).fill(-1), areas = [];
+  for (let start = 0; start < C; start++) {
+    if (!cellOcean[start] || D[start] < depth || component[start] >= 0) continue;
+    const label = areas.length, stack = [start];
+    component[start] = label;
+    let area = 0;
+    while (stack.length) {
+      const i = stack.pop();
+      area += areaCell[i];
+      for (let m = 0; m < nEdgesOnCell[i]; m++) {
+        const j = cellsOnCell[maxEdges * i + m];
+        if (cellOcean[j] && D[j] >= depth && component[j] < 0) { component[j] = label; stack.push(j); }
+      }
+    }
+    areas.push(area);
+  }
+  const largest = areas.indexOf(Math.max(...areas));
+  return Uint8Array.from(component, (label) => (label >= 0 && label === largest ? 1 : 0));
+}
+
+/*
  * The model's bathymetry: the cell-mean ETOPO depth of every sea cell,
  * at least `minimumDepth`, and never shallower than `neighbourRatio`
  * times its deepest sea neighbour, so that no shelf break or trench
@@ -349,6 +419,110 @@ export function fitColumns({ h, Q, W, eta }, climatology, { D, cellOcean, L, C, 
       Q[n] -= Q[n] * f; W[n] -= W[n] * f; h[n] -= amount;
     }
   }
+}
+
+/*
+ * The interior classes a saved ocean is on: the list it carries, else the
+ * one of UNLISTED_LAYER_DENSITIES with its layer count, else null.
+ */
+export function savedDensities(saved, C) {
+  if (saved && saved.densities && saved.densities.length) return Array.from(saved.densities);
+  if (saved && saved.h) return UNLISTED_LAYER_DENSITIES.find((list) => saved.h.length === (list.length + 1) * C) ?? null;
+  return null;
+}
+export function sameDensities(a, b) {
+  return a.length === b.length && a.every((r, k) => Math.abs(r - b[k]) < 1e-3);
+}
+
+/*
+ * A saved ocean (serialize's layer-major h, u, T and S, and eta) carried
+ * from the interior classes `from` onto `to`, column by column, the mixed
+ * layer copied through. An old class stands for water spread over its
+ * span, half-way to its neighbours' labels; the lightest and densest,
+ * which hold all lighter and all denser water, span the same width
+ * centred on their own water's density. Each new class, the lightest and
+ * densest open-ended, takes the share of that span within its own, the
+ * shares tilted linearly across the span (and none below zero) so that
+ * their labels average to the density of the water. Each share keeps the
+ * old class's temperature and salinity moved by the least change, counted
+ * in 4 K and 0.5 psu (their spread along a density surface), that changes
+ * the density by ρ_new − ρ̄, ρ̄ the shares' mean label: it lies near its
+ * new label, warmer or colder in the thermocline and saltier or fresher
+ * in cold water, and the column keeps its water, heat and salt. A class
+ * left with less than the EPS token is made up to it at its label from the
+ * column's thickest class, or from the mixed layer when no class can spare
+ * the water. A new class moves with the old classes whose label spans
+ * overlap its own, weighted by the overlap, or else with the old class of
+ * the nearest label.
+ */
+const SPREAD_T = 4, SPREAD_S = 0.5;
+export function rebinOcean(saved, from, to, C, { labelT, labelS }) {
+  const Lo = from.length + 1, Ln = to.length + 1, E = saved.u.length / Lo;
+  const spans = (labels) => labels.map((r, k) => {
+    const below = k > 0 ? 0.5 * (labels[k - 1] + r) : null, above = k < labels.length - 1 ? 0.5 * (r + labels[k + 1]) : null;
+    return [below ?? 2 * r - above, above ?? 2 * r - below];
+  });
+  const oldSpans = spans(from), newSpans = spans(to), receiving = newSpans.map(([a, b], n) => [n === 0 ? -Infinity : a, n === to.length - 1 ? Infinity : b]);
+  const h = new Float64Array(Ln * C), Q = new Float64Array(Ln * C), W = new Float64Array(Ln * C);
+  const shares = [];
+  for (let i = 0; i < C; i++) {
+    h[i] = saved.h[i]; Q[i] = h[i] > 0 ? h[i] * saved.T[i] : 0; W[i] = h[i] > 0 ? h[i] * saved.S[i] : 0;
+    let column = h[i];
+    for (let j = 1; j < Lo; j++) {
+      const n = j * C + i, hj = saved.h[n], t = saved.T[n], s = saved.S[n];
+      if (!(hj >= 0) || (hj > 0 && !(Number.isFinite(t) && Number.isFinite(s)))) { h[i] = NaN; continue; }
+      if (hj === 0) continue;
+      column += hj;
+      let [a, b] = oldSpans[j - 1];
+      if (j === 1 || j === Lo - 1) { const r = seawaterDensity(t, s), half = 0.5 * (b - a); a = r - half; b = r + half; }
+      shares.length = 0;
+      let total = 0;
+      for (let m = 0; m < to.length; m++) {
+        const f = Math.min(b, receiving[m][1]) - Math.max(a, receiving[m][0]);
+        if (f > 0) { shares.push([m, f]); total += f; }
+      }
+      let centre = 0, spread = 0, mean = 0, kept = 0;
+      for (const share of shares) { share[1] /= total; centre += share[1] * to[share[0]]; }
+      for (const [m, f] of shares) spread += f * (to[m] - centre) ** 2;
+      const tilt = spread > 0 ? (seawaterDensity(t, s) - centre) / spread : 0;
+      for (const share of shares) { share[1] = Math.max(0, share[1] * (1 + tilt * (to[share[0]] - centre))); kept += share[1]; }
+      for (const share of shares) { share[1] /= kept; mean += share[1] * to[share[0]]; }
+      const byT = -expansionOf(t, s) * SEAWATER.rho0, byS = contractionOf(t, s) * SEAWATER.rho0, norm = (byT * SPREAD_T) ** 2 + (byS * SPREAD_S) ** 2;
+      for (const [m, f] of shares) {
+        const k = (m + 1) * C + i, part = f * hj, change = (to[m] - mean) / norm;
+        h[k] += part; Q[k] += part * (t + byT * SPREAD_T ** 2 * change); W[k] += part * (s + byS * SPREAD_S ** 2 * change);
+      }
+    }
+    if (!(column > 0)) continue;
+    let thickest = 1, needed = 0;
+    for (let k = 1; k < Ln; k++) {
+      if (h[k * C + i] > h[thickest * C + i]) thickest = k;
+      needed += Math.max(0, EPS - h[k * C + i]);
+    }
+    const giver = h[thickest * C + i] > needed + EPS ? thickest * C + i : i;
+    for (let k = 1; k < Ln; k++) {
+      const n = k * C + i, need = EPS - h[n];
+      if (!(need > 0)) continue;
+      h[n] += need; Q[n] += need * labelT[k]; W[n] += need * labelS[k];
+      h[giver] -= need; Q[giver] -= need * labelT[k]; W[giver] -= need * labelS[k];
+    }
+  }
+  const u = new Float64Array(Ln * E);
+  for (let e = 0; e < E; e++) u[e] = saved.u[e];
+  for (let m = 0; m < to.length; m++) {
+    const [A, B] = newSpans[m], weights = [];
+    let total = 0, nearest = 0;
+    for (let j = 0; j < from.length; j++) {
+      const w = Math.min(B, oldSpans[j][1]) - Math.max(A, oldSpans[j][0]);
+      if (w > 0) { weights.push([j, w]); total += w; }
+      if (Math.abs(from[j] - to[m]) < Math.abs(from[nearest] - to[m])) nearest = j;
+    }
+    if (!weights.length) weights.push([nearest, total = 1]);
+    const out = (m + 1) * E;
+    for (const [j, w] of weights) for (let e = 0; e < E; e++) u[out + e] += (w / total) * saved.u[(j + 1) * E + e];
+  }
+  const T = Float64Array.from(Q, (q, n) => (h[n] > 0 ? q / h[n] : 0)), S = Float64Array.from(W, (w, n) => (h[n] > 0 ? w / h[n] : 0));
+  return { h, u, T, S, eta: Float64Array.from(saved.eta), densities: Array.from(to) };
 }
 
 /*
@@ -732,18 +906,19 @@ export function createOcean(mesh, {
     }
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
-      let sum = 0, dQ = 0, dW = 0;
-      for (let k = 0; k < L; k++) {
+      let sum = 0, dh = 0, dQ = 0, dW = 0;
+      for (let k = 1; k < L; k++) {
         const n = at(k, i);
         if (h[n] < EPS) {
-          const held = h[n] > 1e-9, tHeld = held ? Q[n] / h[n] : labelT[k], sHeld = held ? W[n] / h[n] : labelS[k];
-          const t = k === 0 ? tHeld : labelT[k], s = k === 0 ? sHeld : labelS[k];
-          dQ += EPS * Math.max(-30, Math.min(30, tHeld - t)); dW += EPS * Math.max(-5, Math.min(5, sHeld - s));
+          const held = h[n] > 1e-9, t = labelT[k], s = labelS[k];
+          const tHeld = held ? Math.max(t - 30, Math.min(t + 30, Q[n] / h[n])) : t, sHeld = held ? Math.max(s - 5, Math.min(s + 5, W[n] / h[n])) : s;
+          dh += EPS - h[n]; dQ += EPS * t - h[n] * tHeld; dW += EPS * s - h[n] * sHeld;
           h[n] = EPS; Q[n] = EPS * t; W[n] = EPS * s;
         }
         sum += h[n];
       }
-      Q[i] += dQ; W[i] += dW;
+      h[i] -= dh; Q[i] -= dQ; W[i] -= dW;
+      sum += h[i];
       const scale = (D[i] + avgEta[i]) / sum;
       for (let k = 0; k < L; k++) { const n = at(k, i); h[n] *= scale; Q[n] *= scale; W[n] *= scale; }
       eta[i] = avgEta[i];
@@ -990,8 +1165,10 @@ export function createOcean(mesh, {
    * climatology: a mixed layer over interior layers whose bases sit at
    * their subtropical depths, shallower toward the poles and rising to
    * the surface over one layer's density step as the surface water
-   * approaches each layer's density, with the deepest layer filling to
-   * the bottom. The free surface starts at its steric height, so the
+   * approaches each layer's density, the first whose base lies below the
+   * sea floor filling to it and the deepest layer holding water giving up
+   * the metres of the tokens beneath. The free surface starts at its
+   * steric height, so the
    * pressure below the thermocline is level and the ocean does not begin
    * with a barotropic shock.
    */
@@ -1039,8 +1216,11 @@ export function createOcean(mesh, {
         const [tk, sk] = hk > EPS ? interiorWater(rho[k], labelT[k], labelS[k], lat) : [labelT[k], labelS[k]];
         h[at(k, i)] = hk; Q[at(k, i)] = hk * tk; W[at(k, i)] = hk * sk;
       }
-      const scale = D[i] / cumulative;
-      for (let k = 0; k < L; k++) { h[at(k, i)] *= scale; Q[at(k, i)] *= scale; W[at(k, i)] *= scale; }
+      const excess = cumulative - D[i];
+      let giver = L - 1;
+      while (giver > 0 && !(h[at(giver, i)] > excess + EPS)) giver--;
+      const n = at(giver, i), f = (h[n] - excess) / h[n];
+      h[n] -= excess; Q[n] *= f; W[n] *= f;
       previousT0[i] = T0[i];
       capacity[i] = rhoCp * Math.max(h[i], 1);
     }
@@ -1053,27 +1233,29 @@ export function createOcean(mesh, {
 
   /*
    * The free surface that levels the pressure at `referenceDepth` in every
-   * column deep enough to reach it, so the deep ocean starts without a
-   * barotropic pressure gradient; shallower columns take the free surface
-   * of the deep water around them, found by relaxation, as a shelf's sea
-   * level follows the ocean beside it. The ocean-mean height is zero, and
-   * the height goes into the deepest layer that holds water.
+   * column of the open ocean's abyss (abyssalCells), so the deep ocean
+   * starts without a barotropic pressure gradient; every other column takes
+   * the free surface of the water around it, found by relaxation from the
+   * abyss's mean, as a shelf's sea level follows the ocean beside it and a
+   * basin behind a sill follows the ocean outside. The ocean-mean height is
+   * zero, and the height goes into the deepest layer that holds water.
    */
   function stericSurface(referenceDepth = 3500) {
-    const rhoRef = rho[L - 1];
-    const deep = new Uint8Array(C);
+    const deep = abyssalCells(mesh, D, cellOcean, referenceDepth);
+    let deepArea = 0, deepMean = 0;
     for (let i = 0; i < C; i++) {
       eta[i] = 0;
-      if (!cellOcean[i] || D[i] < referenceDepth) continue;
-      deep[i] = 1;
+      if (!deep[i]) continue;
       let budget = referenceDepth, anomaly = 0;
       for (let k = 0; k < L && budget > 0; k++) {
         const part = Math.min(h[at(k, i)], budget);
-        anomaly += ((k === 0 ? rhoMl[i] : rho[k]) - rhoRef) * part;
+        anomaly += ((k === 0 ? rhoMl[i] : rho[k]) - rho0) * part;
         budget -= part;
       }
       eta[i] = -anomaly / rho0;
+      deepArea += areaCell[i]; deepMean += areaCell[i] * eta[i];
     }
+    if (deepArea > 0) for (let i = 0; i < C; i++) if (deep[i]) eta[i] -= deepMean / deepArea;
     const next = new Float64Array(C);
     for (let sweep = 0; sweep < 2000; sweep++) {
       let moved = 0;
@@ -1104,7 +1286,13 @@ export function createOcean(mesh, {
     }
   }
 
+  /*
+   * A saved ocean on other classes is carried onto these (rebinOcean)
+   * before its columns are fitted to the bathymetry.
+   */
   function load(saved, surfaceT, ice) {
+    const classes = savedDensities(saved, C);
+    if (classes && !sameDensities(classes, densities)) saved = rebinOcean(saved, classes, densities, C, { labelT, labelS });
     if (!saved.h || saved.h.length !== L * C) {
       build(surfaceT, ice, climatology);
       return;
@@ -1129,7 +1317,7 @@ export function createOcean(mesh, {
   function serialize() {
     const Tall = new Array(L * C), Sall = new Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); Tall[n] = Q[n] / hh; Sall[n] = W[n] / hh; }
-    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta) };
+    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(densities) };
   }
 
   const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;

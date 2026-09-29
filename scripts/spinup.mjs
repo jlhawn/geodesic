@@ -232,10 +232,10 @@ if (step && recorder) {
 await model.sync();
 const rain1 = await readRain(), days = day - day0;
 const ocean = await model.ocean.serialize({ restart: step > 0 }), landState = await model.land.serialize();
-const kT = LAYER_DENSITIES.findIndex((r) => r >= THERMOCLINE_DENSITY);
+const kT = LAYER_DENSITIES.filter((r) => r < THERMOCLINE_DENSITY).length;
 const sea = (a, b, c, e) => [...Array(C).keys()].filter((i) => !land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && (c <= e ? mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e : mesh.lonCell[i] * deg >= c || mesh.lonCell[i] * deg <= e));
 const meanOf = (cells, f) => cells.reduce((s, i) => s + f(i), 0) / Math.max(1, cells.length);
-const sst = (cells) => meanOf(cells, (i) => ocean.T[i] - 273.15), classTop = (cells) => meanOf(cells, (i) => { let d = 0; for (let k = 0; k < kT; k++) d += ocean.h[k * C + i]; return d; });
+const sst = (cells) => meanOf(cells, (i) => ocean.T[i] - 273.15), classTop = (cells) => meanOf(cells, (i) => { let d = 0; for (let k = 0; k <= kT; k++) d += ocean.h[k * C + i]; return d; });
 const warmPool = sea(-10, 10, 120, 160), coldTongue = sea(-2, 2, -110, -90), westPacific = sea(-5, 5, 140, 170), eastPacific = sea(-5, 5, -120, -90);
 if (days > 0 && !step) {
   log(`regions after ${days} days (rain mm/d / vegetation / surface °C): ` + Object.entries(inBox).map(([name, cells]) => {
@@ -249,7 +249,7 @@ if (days > 0 && !step) {
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
 const header = { N, K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, ocean: step ? ocean : { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, ocean: step ? ocean : { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta, densities: ocean.densities }, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));
 for (const old of whole.slice(0, Math.max(0, whole.length - KEEP))) unlinkSync(`${OUT}/${old}`);

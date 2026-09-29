@@ -95,7 +95,7 @@ model.land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.f
 const forced = createForcedOcean(model);
 
 const deg = 180 / Math.PI, land = model.geography.land;
-const kT = LAYER_DENSITIES.findIndex((r) => r >= THERMOCLINE_DENSITY);
+const kT = LAYER_DENSITIES.filter((r) => r < THERMOCLINE_DENSITY).length;
 const sea = (a, b, c, e) => [...Array(C).keys()].filter((i) => !land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && (c <= e ? mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e : mesh.lonCell[i] * deg >= c || mesh.lonCell[i] * deg <= e));
 const meanOf = (cells, f) => cells.reduce((s, i) => s + f(i), 0) / Math.max(1, cells.length);
 const warmPool = sea(-10, 10, 120, 160), coldTongue = sea(-2, 2, -110, -90), westPacific = sea(-5, 5, 140, 170), eastPacific = sea(-5, 5, -120, -90);
@@ -144,7 +144,7 @@ async function yearEnd(done, last, seconds, daysRun) {
   await model.settle();
   const year = done / DAYS_PER_YEAR, read = await readSurface(), { o, surfaceT, ice, concentration } = read;
   const d = await model.oceanEngine.diagnostics();
-  const sst = (cells) => meanOf(cells, (i) => o.T[i] - 273.15), classTop = (cells) => meanOf(cells, (i) => { let depth = 0; for (let k = 0; k < kT; k++) depth += o.h[k * C + i]; return depth; });
+  const sst = (cells) => meanOf(cells, (i) => o.T[i] - 273.15), classTop = (cells) => meanOf(cells, (i) => { let depth = 0; for (let k = 0; k <= kT; k++) depth += o.h[k * C + i]; return depth; });
   log(`ocean after year ${year}: warm pool ${sst(warmPool).toFixed(1)} °C, cold tongue ${sst(coldTongue).toFixed(1)} °C (W−E ${(sst(westPacific) - sst(eastPacific)).toFixed(1)} K), ${THERMOCLINE_DENSITY} class top W Pac ${classTop(westPacific).toFixed(0)} m, E Pac ${classTop(eastPacific).toFixed(0)} m`);
   const column = BANDS.map(([top, bottom]) => {
     let sum = 0, weight = 0;
