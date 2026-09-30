@@ -739,7 +739,7 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
 });
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
-  const forced = { stratusSubsidence: 0, minimumInversion: 0 }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55 };
+  const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55 };
   assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, '8ef9f484eef68d77d195fc1dbeda18a9');
   assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, '44584bfb551ac57b2865a3b16ba7938d');
   assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, '44584bfb551ac57b2865a3b16ba7938d');

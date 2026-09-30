@@ -1071,9 +1071,9 @@ would switch it in most columns from one step to the next. The three
 running quantities are saved with the state as `mlmSubsidence`,
 `mlmHeight` and `mlmGate`, and a state saved without them starts from
 0, 0 (unset) and 0.5 (undecided); `prognosticHeight: false` with
-`gateMemory: 0` gives back the deck restarted each step from the
-Richardson depth behind the instantaneous tests, bit for bit in both
-engines. By day the mixed layer is
+`gateMemory: 0` and `subsidenceSmoothing: 0` gives back the deck
+restarted each step from the Richardson depth behind the instantaneous
+tests, bit for bit in both engines. By day the mixed layer is
 heated by exactly the sunlight the column's radiation absorbs in the
 deck's layer, per unit deck area (the overcast column's absorption
 there less the clear column's; `stratusSolar`, false leaving the mixed

@@ -8,7 +8,7 @@
 // Signs: omega (Pa/s) > 0 and sink (mm/s) > 0 are descent.
 //
 // From the state's own winds (stage 0 of the next step): omega at the
-// model level nearest 700 and 500 hPa, the saved ten-day deck subsidence,
+// model level nearest 700 and 500 hPa, the saved running-mean deck subsidence,
 // the share of omega700's variance at the neighbouring-cell scale (the
 // mean square of cell minus neighbour mean over the variance: white noise
 // 1.167, a wave six cells long 0.065), the Hadley cells' peaks of the
