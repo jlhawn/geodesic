@@ -99,7 +99,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  *   subcloud layers as it falls, the proxy of a downdraft, offered to
  *   each in proportion to its mass (`downdraftSpread` 'mass') or all of
  *   it to each in turn from cloud base down ('fall').
-
+ *
  * Rain: Kessler autoconversion of cloud water above the threshold at
  * autoconversionRate, and of all cloud water over cloudLifetime, except
  * in the lowest two layers (`autoconversionFloor` 'lowest') or in the
