@@ -29,6 +29,7 @@ export function physicsConstants(o) {
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
   if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${o.cloudOverlap}`);
+  if (!(o.overcastInversion?.[1] > o.overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${o.overcastInversion}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
   return `
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};

@@ -329,6 +329,7 @@ export function createRadiation(mesh, core, {
   const shadowLongwave = dycomsLongwave();
   if (stratusIndex !== 'eis' && stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${stratusIndex}`);
   if (cloudOverlap !== 'maximum' && cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${cloudOverlap}`);
+  if (!(overcastInversion?.[1] > overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${overcastInversion}`);
   if (![0, 1, 2].includes(subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${subsidenceSmoothing}`);
   const entraining = stratusIndex === 'ectei';
   const stratusLayer = nearestLayer(sigmaMid, stratusSigma), stabilityLayer = nearestLayer(sigmaMid, STABILITY_SIGMA);

@@ -345,6 +345,7 @@ test('where the column\'s EIS rises through overcastInversion the cover blends i
     if (share === 1) assert.ok(Math.abs(bounded - seen) < 1e-12, 'overcast under a strong inversion: the column covers as the layer\'s visibility');
   }
   assert.deepEqual([...regimes].sort(), ['ramp', 'strong', 'weak']);
+  for (const ramp of [[10, 10], [12, 8], [8]]) assert.throws(() => createRadiation(mesh, core, { overcastInversion: ramp }), /overcastInversion must rise/);
 });
 
 test('the surface sees the direct beam in clear sky and diffuse light under thick cloud', () => {
