@@ -88,7 +88,7 @@ test('with the ∇⁴ closures off, the divergence damping alone and the heat it
  * enough that the rounding of θ is far below the tolerance.
  */
 function heatingState() {
-  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false } });
+  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false }, moist: { shallowScheme: 'bettsMiller' } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
@@ -97,9 +97,10 @@ function heatingState() {
   for (const a of model.state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   return model;
 }
-async function physicsHeating(base, options, dt = 864000) {
+async function physicsHeating(base, options, dt = 864000, cumulus = null) {
   const physics = { stratus: true, mixedLayerDeck: false, ...options };
   const model = createModel(base.mesh, { ocean: false, radiation: physics });
+  if (cumulus) { model.moist.cumulusCover.set(cumulus.cover); model.moist.cumulusWater.set(cumulus.water); }
   model.state.forEach((a, n) => a.set(base.state[n]));
   model.seaIce.concentration.set(base.seaIce.concentration);
   model.seaIce.snow.set(base.seaIce.snow);
@@ -111,6 +112,11 @@ async function physicsHeating(base, options, dt = 864000) {
   gpu.upload(model.state);
   gpu.uploadPhysics({ snow: model.seaIce.snow, concentration: model.seaIce.concentration });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
+  if (cumulus) {
+    const layers = (layout.PH.CUWATER - layout.PH.CUCOVER) / C;
+    device.queue.writeBuffer(buffers.PH, 4 * layout.PH.CUCOVER, Float32Array.from(cumulus.cover.subarray((K - layers) * C)));
+    device.queue.writeBuffer(buffers.PH, 4 * layout.PH.CUWATER, Float32Array.from(cumulus.water.subarray((K - layers) * C)));
+  }
   await gpu.tendency();
   const sun = sunDirection(model.time);
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, sun[0], sun[1], sun[2], 0, 0, 0]));
@@ -164,6 +170,35 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
   assert.ok(surface < 1e-5, `the lowest layer's heating differs by ${surface} of it`);
   assert.ok(worstCloud < 1e-4, `the cloud water's heating differs by ${worstCloud} K/day`);
   assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `global cloud absorption ${cpuMean / area} against ${gpuMean / area} W/m²`);
+});
+
+test('shallow cumulus of partial cover beside and without resolved cloud heats the layers of sunlit columns alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const base = heatingState(), { K, sigmaMid } = base.core, C = base.mesh.nCells;
+  const cover = new Float64Array(K * C), water = new Float64Array(K * C);
+  let seed = 7;
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  let layers = 0;
+  for (let i = 0; i < C; i++) {
+    if (random() < 0.4) continue;
+    for (let k = 0; k < K; k++) {
+      if (!(sigmaMid[k] > 0.8 && sigmaMid[k] < 0.97)) continue;
+      cover[k * C + i] = Math.fround(0.02 + 0.2 * random()); water[k * C + i] = Math.fround(2e-4 + 1e-3 * random());
+      layers++;
+    }
+  }
+  const plain = await physicsHeating(base, {}), cumulus = await physicsHeating(base, {}, 864000, { cover, water });
+  let worst = 0, moved = 0, at = null;
+  for (let i = 0; i < C; i++) {
+    if (!(base.radiation.insolation(i) > 0)) continue;
+    for (let k = 0; k < K - 1; k++) {
+      const x = k * C + i, d = Math.abs(cumulus.cpu[x] - cumulus.gpu[x]);
+      if (d > worst) { worst = d; at = [i, k]; }
+      moved = Math.max(moved, Math.abs(cumulus.cpu[x] - plain.cpu[x]));
+    }
+  }
+  console.log(`${layers} cumulus layers of cover 0.02–0.22: the engines' layer heating differs by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}); the cumulus moves it by up to ${moved.toFixed(2)} K/day`);
+  assert.ok(moved > 0.1, `the cumulus moves the heating by ${moved} K/day`);
+  assert.ok(worst < 2e-4, `layer heating differs by ${worst} K/day`);
 });
 
 function cloudyState() {
