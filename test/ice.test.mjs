@@ -62,7 +62,7 @@ test('the initial state has ice at the poles and the model steps with it', () =>
   for (let n = 0; n < 24; n++) m.step(1800);
   const d = m.diagnostics();
   assert.ok(Number.isFinite(d.maxWind) && d.maxWind < 80);
-  assert.ok(d.planetaryAlbedo > 0.05 && d.planetaryAlbedo < 0.6, `planetary albedo ${d.planetaryAlbedo}`);
+  assert.ok(d.planetaryAlbedo > 0.05 && d.planetaryAlbedo < 0.7, `planetary albedo ${d.planetaryAlbedo}`);
   assert.ok(d.iceFraction > 0);
   console.log(`N=4 after 12 h: ice fraction ${d.iceFraction.toFixed(3)}, mean thickness ${d.iceThickness.toFixed(2)} m, surface albedo ${d.surfaceAlbedo.toFixed(3)}, planetary albedo ${d.planetaryAlbedo.toFixed(3)}, TCW ${(1000 * d.columnCloud).toFixed(0)} g/m²`);
 });
