@@ -177,15 +177,15 @@ test('the GPU eddy transport tracks the CPU\'s at N=8, alone and through twenty-
   console.log(`21 ocean steps with eddyDiffusivity 1e6 at N=8, the engines' rms relative difference against the eddy transport's effect: ${lines.join(', ')}`);
 });
 
-test('under closureFill the GPU closure acts on the class flow carried across token edges as the CPU\'s does, through twenty-one ocean steps at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const filling = { ...OCEAN_OPTIONS, closureFill: true, closureHours: 1 };
+test('under closureFill the GPU closure acts on the class flow carried onto token edges as the CPU\'s does, through twenty-one ocean steps at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const filling = { ...OCEAN_OPTIONS, closureFill: 0.5, closureHours: 1 };
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
   const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350;
   const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: filling });
   const gpuOcean = gpuModel.oceanEngine;
   const cpuOcean = (options) => { const ocean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options }); ocean.initialize(surfaceT0, ice); return ocean; };
   const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
-  const cpu = cpuOcean(filling), pulled = cpuOcean({ ...filling, closureFill: false }), flux = new Float64Array(C);
+  const cpu = cpuOcean(filling), pulled = cpuOcean({ ...filling, closureFill: 0 }), flux = new Float64Array(C);
   gpuOcean.initialize(surfaceT0, ice);
   for (let n = 0; n < 21; n++) {
     cpu.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
@@ -201,7 +201,7 @@ test('under closureFill the GPU closure acts on the class flow carried across to
     assert.ok(gap < 2e-3, `${f} rms relative diff ${gap} after 21 steps`);
     if (f === 'u') assert.ok(effect > 5 * gap, `u: the fill changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
   }
-  console.log(`21 ocean steps with closureFill and closureHours 1 at N=8, the engines' rms relative difference against the fill's effect: ${lines.join(', ')}`);
+  console.log(`21 ocean steps with closureFill 0.5 and closureHours 1 at N=8, the engines' rms relative difference against the fill's effect: ${lines.join(', ')}`);
   gpuModel.destroy();
 });
 

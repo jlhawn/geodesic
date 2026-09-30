@@ -187,7 +187,7 @@ test('interfacial drag moves momentum between the layers at an edge without chan
   assert.ok(worst < 1e-12 * largest, `the drag changes a column's momentum by ${worst} against ${largest} moved`);
 });
 
-test('closureVelocity carries a class\'s own flow across its token edges, and the closure then acts on that flow, not on the flow of the layer above them', () => {
+test('closureVelocity gives the token edges beside a class a weighted share of the class\'s own flow, and the closure then pulls the class less toward the flow of the layer above them', () => {
   const m = buildMesh(new Grid(16)), mE = m.nEdges;
   const rotation = (e, sign) => sign * 0.3 * (-m.xEdge[3 * e + 1] * m.nEdge[3 * e] + m.xEdge[3 * e] * m.nEdge[3 * e + 1]);
   const inside = (i) => Math.sin(3 * m.lonCell[i]) + 0.5 * Math.cos(5 * m.latCell[i]) > 0.2;
@@ -198,14 +198,10 @@ test('closureVelocity carries a class\'s own flow across its token edges, and th
     exact[e] = rotation(e, 1);
     slaved[e] = present ? exact[e] : rotation(e, -1);
   }
-  const status = new Uint8Array(mE), filled = closureVelocity(m, slaved, hEdge, sea, new Float64Array(mE), status);
-  const near = new Uint8Array(mE), error = [0, 0, 0], size = [0, 0, 0], count = [0, 0, 0];
+  const beside = new Uint8Array(mE), near = new Uint8Array(mE);
   for (let e = 0; e < mE; e++) {
-    if (hEdge[e] >= THIN) { assert.equal(filled[e], slaved[e]); continue; }
-    for (let s = 0; s < m.nEdgesOnEdge[e]; s++) { const o = m.edgesOnEdge[m.maxEdgesOnEdge * e + s]; if (hEdge[o] >= THIN) near[o] = 1; }
-    count[status[e]]++;
-    if (status[e] === 0) { assert.equal(filled[e], 0); continue; }
-    error[status[e]] += (filled[e] - exact[e]) ** 2; size[status[e]] += exact[e] ** 2;
+    if (hEdge[e] >= THIN) continue;
+    for (let s = 0; s < m.nEdgesOnEdge[e]; s++) { const o = m.edgesOnEdge[m.maxEdgesOnEdge * e + s]; if (hEdge[o] >= THIN) { beside[e] = 1; near[o] = 1; } }
   }
   const pull = (field) => {
     const lap2 = laplacianVelocity(m, laplacianVelocity(m, field));
@@ -213,8 +209,15 @@ test('closureVelocity carries a class\'s own flow across its token edges, and th
     for (let e = 0; e < mE; e++) if (near[e]) { sum += lap2[e] ** 2; n++; }
     return Math.sqrt(sum / n);
   };
-  const first = Math.sqrt(error[2] / size[2]), second = Math.sqrt(error[1] / size[1]), before = pull(slaved), after = pull(filled), smooth = pull(exact);
-  console.log(`token edges: ${count[2]} filled from the class's own edges, ${(100 * first).toFixed(1)}% rms from its flow, ${count[1]} from those, ${(100 * second).toFixed(1)}%, ${count[0]} beyond; ∇⁴ on the class edges beside them ${after.toExponential(2)} against ${before.toExponential(2)} on the velocity above and ${smooth.toExponential(2)} on the smooth flow`);
-  assert.ok(first < 0.1 && second < 0.35, `filled edges ${first} and ${second} rms from the class's flow`);
-  assert.ok(after < 0.05 * before, `the closure's pull beside the token edges ${after} against ${before}`);
+  const whole = closureVelocity(m, slaved, hEdge, sea, 1, new Float64Array(mE)), half = closureVelocity(m, slaved, hEdge, sea, 0.5, new Float64Array(mE));
+  let error = 0, size = 0, count = 0;
+  for (let e = 0; e < mE; e++) {
+    if (!beside[e]) { assert.equal(whole[e], slaved[e]); assert.equal(half[e], slaved[e]); continue; }
+    assert.ok(Math.abs(half[e] - 0.5 * (whole[e] + slaved[e])) < 1e-12);
+    error += (whole[e] - exact[e]) ** 2; size += exact[e] ** 2; count++;
+  }
+  const before = pull(slaved), halfPull = pull(half), wholePull = pull(whole);
+  console.log(`${count} token edges beside the class: the fit ${(100 * Math.sqrt(error / size)).toFixed(1)}% rms from its flow; the closure on the class edges beside them ${before.toExponential(2)} on the velocity above, ${halfPull.toExponential(2)} with half the fit, ${wholePull.toExponential(2)} with all of it`);
+  assert.ok(count > 100 && Math.sqrt(error / size) < 0.1, `the fit is ${Math.sqrt(error / size)} rms from the class's flow`);
+  assert.ok(wholePull < halfPull && halfPull < 0.75 * before, `the closure's pull ${before}, ${halfPull}, ${wholePull}`);
 });

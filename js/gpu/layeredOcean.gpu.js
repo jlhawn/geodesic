@@ -30,7 +30,7 @@ export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
-  interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: false, diffusivity: 0.01, everySteps: 4,
+  interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, diffusivity: 0.01, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -62,7 +62,7 @@ ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shall
 ${constLine('NEUTRALSNAP', o.neutralSnap ? 1 : 0)} ${constLine('EROSION', o.convectiveErosion ? 1 : 0)} ${constLine('BUOYMEM', o.buoyancyMemory)} ${constLine('NBRRATIO', o.mixedNeighbourRatio)} ${constLine('CENTRING', o.vorticityCentring)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
-${constLine('FREEZE', FREEZING_POINT)} ${constLine('CDO', o.dragCoefficient)} ${constLine('GUSTO', o.gustiness)} ${constLine('CLOSURERIDGE', CLOSURE_RIDGE)} ${constLine('CLOSUREFILL', o.closureFill ? 1 : 0)}
+${constLine('FREEZE', FREEZING_POINT)} ${constLine('CDO', o.dragCoefficient)} ${constLine('GUSTO', o.gustiness)} ${constLine('CLOSURERIDGE', CLOSURE_RIDGE)} ${constLine('CLOSUREFILL', o.closureFill || 0)}
 @group(0) @binding(0) var<storage, read_write> MI: array<i32>;
 @group(0) @binding(1) var<storage, read_write> MF: array<f32>;
 @group(0) @binding(2) var<storage, read_write> LV: array<f32>;
@@ -185,17 +185,15 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   OD[O_PHI + n] = phi;
 }`,
     /*
-     * Under closureFill, the ∇⁴ closure's input, closureVelocity of
-     * ocean/layered.module.js: the first pass leaves each class's own u,
-     * the fit to its own edges on the token sea edges beside them and DRY
-     * on the others in LAPB, the second the fit to those on the rest, or
-     * zero, in LAPA, which the closure's first Laplacian then reads.
+     * The ∇⁴ closure's input under closureFill, closureVelocity of
+     * ocean/layered.module.js, in LAPA, which the closure's first
+     * Laplacian then reads.
      */
-    oClosureFill1: `${K}  let n = ${idx}; if (n >= L * E) { return; }
+    oClosureFill: `${K}  let n = ${idx}; if (n >= L * E) { return; }
   let k = n / E; let e = n % E;
-  let sea = OD[O_EMASK + e] > 0.5;
-  if (k == 0 || (sea && OD[O_HEDGE + n] >= THINO)) { OD[O_LAPB + n] = IN[uOff(k) + e]; return; }
-  if (!sea) { OD[O_LAPB + n] = 0.0; return; }
+  let own = IN[uOff(k) + e];
+  OD[O_LAPA + n] = own;
+  if (k == 0 || OD[O_EMASK + e] < 0.5 || OD[O_HEDGE + n] >= THINO) { return; }
   let nv = vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
   let tv = vec3<f32>(OD[O_TEDGE + 3 * e], OD[O_TEDGE + 3 * e + 1], OD[O_TEDGE + 3 * e + 2]);
   var fit = ClosureFit(0.0, 0.0, 0.0, 0.0, 0.0, false);
@@ -204,25 +202,10 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     if (OD[O_EMASK + o] < 0.5 || OD[O_HEDGE + k * E + o] < THINO) { continue; }
     fit = closureAdd(fit, o, nv, tv, IN[uOff(k) + o]);
   }
-  OD[O_LAPB + n] = select(DRY, closureSolve(fit), fit.found);
-}`,
-    oClosureFill2: `${K}  let n = ${idx}; if (n >= L * E) { return; }
-  let k = n / E; let e = n % E;
-  let here = OD[O_LAPB + n];
-  if (here != DRY) { OD[O_LAPA + n] = here; return; }
-  let nv = vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
-  let tv = vec3<f32>(OD[O_TEDGE + 3 * e], OD[O_TEDGE + 3 * e + 1], OD[O_TEDGE + 3 * e + 2]);
-  var fit = ClosureFit(0.0, 0.0, 0.0, 0.0, 0.0, false);
-  for (var s = 0; s < MI[NEE + e]; s++) {
-    let o = MI[EOE + MAXEE * e + s];
-    let known = OD[O_LAPB + k * E + o];
-    if (OD[O_EMASK + o] < 0.5 || known == DRY) { continue; }
-    fit = closureAdd(fit, o, nv, tv, known);
-  }
-  OD[O_LAPA + n] = select(0.0, closureSolve(fit), fit.found);
+  if (fit.found) { OD[O_LAPA + n] = CLOSUREFILL * closureSolve(fit) + (1.0 - CLOSUREFILL) * own; }
 }`,
     oDivCurl: `${K}  let n = ${idx};
-  let fromLap = P[1] > 0.5 || CLOSUREFILL > 0.5;
+  let fromLap = P[1] > 0.5 || CLOSUREFILL > 0.0;
   if (n < L * C) {
     let k = n / C; let i = n % C;
     var sum = 0.0;
@@ -789,10 +772,7 @@ export function createLayeredOcean(core, options = {}) {
       dispatch(pass, 'oVertexVort', g, L * V);
       dispatch(pass, 'oEdgePV', g, L * E);
       dispatch(pass, 'oKineticPhi', g, L * C);
-      if (o.closureFill) {
-        dispatch(pass, 'oClosureFill1', g, L * E);
-        dispatch(pass, 'oClosureFill2', g, L * E);
-      }
+      if (o.closureFill > 0) dispatch(pass, 'oClosureFill', g, L * E);
       dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
       dispatch(pass, 'oLapVelocity', g, L * E);
     });
