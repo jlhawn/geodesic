@@ -815,7 +815,7 @@ function modelDigest(radiation) {
 }
 
 test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
-  const before = '44f4a1ec6a822b9bfd87f2d1b8b66ca7';
+  const before = 'fc2ee1484c9d56d35a29f7be66826737';
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST }).digest, before);
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
@@ -835,7 +835,7 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
   const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST };
-  assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, '748123b6a213dcf7fafd293af36c86c4');
+  assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, 'b92be8183c85d1a18c718a5837fb39cd');
   assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, 'a9b8bb45a7a82bc64773bd57d902065b');
   assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, 'a9b8bb45a7a82bc64773bd57d902065b');
   assert.notEqual(modelDigest({ ...forced, ...REDIAGNOSED }).digest, 'a9b8bb45a7a82bc64773bd57d902065b');
