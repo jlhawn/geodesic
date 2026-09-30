@@ -206,12 +206,13 @@ test('the full model on bl34 steps alike on the CPU and the GPU, over a continen
   for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
   await gpu.sync();
   const d = await gpu.diagnostics(), dc = cpu.diagnostics();
-  const ts = stats(cpu.state[3], gpu.state[3]), theta = stats(cpu.state[1], gpu.state[1]), q = stats(cpu.state[4], gpu.state[4]), u = stats(cpu.state[2], gpu.state[2]);
-  console.log(`eight steps on bl34 at N=6 over a continent: Ts max ${ts.maxDiff.toExponential(1)} K, θ rms ${theta.rmsRel.toExponential(1)}, q rms ${q.rmsRel.toExponential(1)}, wind max ${u.maxDiff.toExponential(1)} m/s; mean Ts ${dc.meanSurfaceT.toFixed(3)} vs ${d.meanSurfaceT.toFixed(3)} K, OLR ${dc.outgoingLongwave.toFixed(2)} vs ${d.outgoingLongwave.toFixed(2)} W/m², ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)} m`);
+  const columnWater = (model) => Float64Array.from({ length: model.mesh.nCells }, (_, i) => model.moist.columnWater(model.state[0], model.state[4], i));
+  const ts = stats(cpu.state[3], gpu.state[3]), theta = stats(cpu.state[1], gpu.state[1]), q = stats(columnWater(cpu), columnWater(gpu)), u = stats(cpu.state[2], gpu.state[2]);
+  console.log(`eight steps on bl34 at N=6 over a continent: Ts max ${ts.maxDiff.toExponential(1)} K, θ rms ${theta.rmsRel.toExponential(1)}, column water rms ${q.rmsRel.toExponential(1)}, wind max ${u.maxDiff.toExponential(1)} m/s; mean Ts ${dc.meanSurfaceT.toFixed(3)} vs ${d.meanSurfaceT.toFixed(3)} K, OLR ${dc.outgoingLongwave.toFixed(2)} vs ${d.outgoingLongwave.toFixed(2)} W/m², ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)} m`);
   for (const array of [...cpu.state, ...gpu.state]) assert.ok(array.every(Number.isFinite));
   assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} at ${ts.at}`);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
-  assert.ok(q.rmsRel < 2e-3, `q rms ${q.rmsRel}`);
+  assert.ok(q.rmsRel < 2e-4, `column water rms ${q.rmsRel}`);
   assert.ok(u.maxDiff < 0.05, `wind max ${u.maxDiff} at ${u.at}`);
   assert.ok(Math.abs(dc.meanSurfaceT - d.meanSurfaceT) < 0.01 && Math.abs(dc.outgoingLongwave - d.outgoingLongwave) < 0.5 && Math.abs(dc.oceanUpperDepth - d.oceanUpperDepth) < 1e-3);
   gpu.destroy();
