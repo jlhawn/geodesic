@@ -3202,8 +3202,8 @@ The work, in order:
    (median 4.28, 90th percentile 20.1), 2.24 mm/d of water carried out of
    the boundary layer; eight64_day0183 2.94 mm/s, 1.14 mm/d. A floor of
    3·10⁻³ m/s² gave 11.6 mm/s on nine128 (0.070 of the columns at the cap,
-   Δθv 0.2–0.3 K in the tail) and on day 186 at N=64 the same albedo as
-   0.015. Relative humidity below σ 0.9 at 30S–30N, mass-weighted, sea
+   Δθv 0.2–0.3 K in the tail) and at N=64 an albedo of 0.274, 0.291,
+   0.296 on days 184–186 against 0.274, 0.292, 0.297 with 0.015. Relative humidity below σ 0.9 at 30S–30N, mass-weighted, sea
    (all surfaces): nine128_day0183 0.808 (0.747), eight64_day0183 0.738
    (0.685). Three days at N=64 on the GPU from eight64_day0183, day 186:
 
@@ -3216,8 +3216,7 @@ The work, in order:
 
    The layers inside the boundary layer (σ 0.95–1) dry from 0.86–0.88 to
    0.84–0.86 and those at σ 0.88–0.91 moisten by 0.02–0.03, so the mean
-   below σ 0.9 stays at 0.807 for every A in 0.15–0.3; the 0.75 asked is
-   not reached. Ten days at N=64 on the GPU from eight64_day0183 (days
+   below σ 0.9 stays at 0.807 for every A in 0.15–0.3. Ten days at N=64 on the GPU from eight64_day0183 (days
    184–193):
 
    | | off | A 0.2 (default) | A 0.3 |
