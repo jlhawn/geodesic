@@ -60,6 +60,26 @@ test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailab
   assert.ok(olrE.rmsRel < 1e-5 && swE.rmsRel < 1e-5, `per-cell OLR rms ${olrE.rmsRel}, surface shortwave rms ${swE.rmsRel} under ECTEI`);
 });
 
+test('with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = async (divergenceDamping) => {
+    const model = createModel(new Grid(6), { ocean: false, nu4Hours: Infinity, divergenceDamping });
+    const init = initializeState(model, {});
+    for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+    const gpu = await createGpuCore(model.mesh, { nu4: 0, nu4Theta: 0, divergenceDamping, referenceTheta: meanTheta(model) });
+    gpu.upload(model.state);
+    gpu.uploadPhysics();
+    for (let n = 0; n < 4; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }
+    return { model, state: await gpu.download() };
+  };
+  const damped = await run(0.1), free = await run(0);
+  assert.equal(damped.model.core.nu4, 0);
+  const theta = stats(damped.model.state[1], damped.state[1]), u = stats(damped.model.state[2], damped.state[2]);
+  const moved = stats(free.model.state[2], damped.model.state[2]), heated = stats(free.model.state[1], damped.model.state[1]);
+  console.log(`four steps at N=6, c = 0.1 and no ∇⁴: engines differ in θ by rms ${theta.rmsRel.toExponential(1)}, max ${theta.maxDiff.toExponential(1)} K, in wind by at most ${u.maxDiff.toExponential(1)} m/s; the damping moves the wind by up to ${moved.maxDiff.toFixed(3)} m/s and θ by up to ${heated.maxDiff.toExponential(1)} K`);
+  assert.ok(theta.rmsRel < 3e-7 && theta.maxDiff < 2e-3, `θ rms ${theta.rmsRel}, max ${theta.maxDiff} K at ${theta.at}; without the damping's heat on the GPU they differ by 8e-7 and 6e-3 K`);
+  assert.ok(u.maxDiff < 0.02 * moved.maxDiff, `engines differ in wind by ${u.maxDiff} m/s, the damping moved it by ${moved.maxDiff}`);
+});
+
 /*
  * One physics kernel alone against the CPU physics phase, both from the
  * same single-precision state (two steps after a 10 K inversion was
@@ -298,10 +318,12 @@ test('the running mean of the subsidence at the boundary-layer top builds the sa
 
 test('the deck reads the same ring-smoothed πσ̇ in both engines, and the smoothing moves it by far more than the engines differ', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const smoothed = await mixedLayerPair(2, { seed: 0, subsidenceMemory: 1e-9 }), raw = await mixedLayerPair(2, { seed: 0, subsidenceMemory: 1e-9, subsidenceSmoothing: 0 });
-  const moved = stats(raw.mean, smoothed.mean);
-  console.log(`the step's subsidence at h, smoothed twice over the ring against unsmoothed: rms ${moved.rmsRel.toExponential(1)} relative, at most ${(1000 * moved.maxDiff).toFixed(3)} mm/s; the engines differ by rms ${smoothed.subsidence.rmsRel.toExponential(1)} smoothed and ${raw.subsidence.rmsRel.toExponential(1)} unsmoothed`);
-  assert.ok(smoothed.subsidence.rmsRel < 1e-3 && raw.subsidence.rmsRel < 1e-3, `engines differ by ${smoothed.subsidence.rmsRel} smoothed, ${raw.subsidence.rmsRel} unsmoothed`);
+  const once = await mixedLayerPair(2, { seed: 0, subsidenceMemory: 1e-9, subsidenceSmoothing: 1 });
+  const moved = stats(raw.mean, smoothed.mean), movedOnce = stats(raw.mean, once.mean), passes = stats(once.mean, smoothed.mean);
+  console.log(`the step's subsidence at h, smoothed twice over the ring against unsmoothed: rms ${moved.rmsRel.toExponential(1)} relative, at most ${(1000 * moved.maxDiff).toFixed(3)} mm/s; once against unsmoothed rms ${movedOnce.rmsRel.toExponential(1)}, twice against once ${passes.rmsRel.toExponential(1)}; the engines differ by rms ${smoothed.subsidence.rmsRel.toExponential(1)} smoothed twice, ${once.subsidence.rmsRel.toExponential(1)} once and ${raw.subsidence.rmsRel.toExponential(1)} unsmoothed`);
+  assert.ok(smoothed.subsidence.rmsRel < 1e-3 && once.subsidence.rmsRel < 1e-3 && raw.subsidence.rmsRel < 1e-3, `engines differ by ${smoothed.subsidence.rmsRel} smoothed twice, ${once.subsidence.rmsRel} once, ${raw.subsidence.rmsRel} unsmoothed`);
   assert.ok(moved.rmsRel > 30 * smoothed.subsidence.rmsRel, `smoothing moved the subsidence by ${moved.rmsRel}, the engines differ by ${smoothed.subsidence.rmsRel}`);
+  assert.ok(movedOnce.rmsRel > 30 * once.subsidence.rmsRel && passes.rmsRel > 30 * Math.max(once.subsidence.rmsRel, smoothed.subsidence.rmsRel), `one pass moved the subsidence by ${movedOnce.rmsRel}, the second by ${passes.rmsRel}; the engines differ by ${once.subsidence.rmsRel}`);
 });
 
 test('over six steps the carried inversion height, the gate and the deck they give match between the engines, and the boundary layer mixes to the deck\'s height in both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
