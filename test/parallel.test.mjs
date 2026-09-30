@@ -72,3 +72,19 @@ test('worker threads speed up an N=16 atmosphere step by a fair share of the cor
     await parallel.close();
   }
 });
+
+test('the workers sum the convective and large-scale rain into the arrays the diagnostics read, as one thread does', async () => {
+  const serial = createModel(new Grid(8), { ocean: false });
+  const parallel = await createParallelModel(new Grid(8), { ocean: false }, 3);
+  const init = initializeState(serial, {});
+  for (let a = 0; a < init.length; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
+  try {
+    for (let n = 0; n < 24; n++) { serial.step(600); parallel.step(600); }
+    serial.diagnostics(); parallel.diagnostics();
+    assert.ok(serial.moist.convectiveRain.some((x) => x > 0), 'the single-thread model rained convectively');
+    assert.deepEqual(parallel.moist.convectiveRain, serial.moist.convectiveRain);
+    assert.deepEqual(parallel.moist.largeScaleRain, serial.moist.largeScaleRain);
+  } finally {
+    await parallel.close();
+  }
+});
