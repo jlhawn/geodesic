@@ -5,9 +5,11 @@
 // binary snapshot and keep the KEEP newest. Logs one line a day to
 // <TAG>.log, with the sea-ice extent of each hemisphere (the area of the
 // cells at least 15% covered), and at the end of the segment the rain,
-// vegetation and surface temperature of the regions in BOXES, and exits
-// with 2 on NaN. The state saved carries the last day's per-cell
-// convective and large-scale rain.
+// vegetation and surface temperature of the regions in BOXES, the
+// equatorial Pacific's surface temperatures and thermocline, and the
+// convection and equator lines of js/audit.module.js, and exits with 2 on
+// NaN. The state saved carries the last day's per-cell convective and
+// large-scale rain.
 //
 // SIGTERM or SIGINT stops the segment after the ocean step in progress
 // and exits 0: at a day's end it saves <TAG>_dayDDDD.bin as usual, inside
@@ -69,6 +71,7 @@ import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
 import { CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
+import { convectionLine, equatorLine } from '../js/audit.module.js';
 
 const BOXES = {
   sahara: [16, 30, -10, 32], arabia: [16, 30, 38, 55], sahel: [8, 16, -15, 35], india: [15, 28, 72, 88], congo: [-5, 5, 12, 30], amazon: [-10, 3, -70, -50],
@@ -258,6 +261,10 @@ if (days > 0 && !step) {
     return `${name} ${(r / n).toFixed(1)}/${(v / n).toFixed(2)}/${(t / n - 273.15).toFixed(0)}`;
   }).join(', ') + `; sea ice mean N ${(iceNorth / days).toFixed(1)} S ${(iceSouth / days).toFixed(1)} Mkm²`);
   log(`ocean after ${days} days: warm pool ${sst(warmPool).toFixed(1)} °C, cold tongue ${sst(coldTongue).toFixed(1)} °C (W−E ${(sst(westPacific) - sst(eastPacific)).toFixed(1)} K), ${THERMOCLINE_DENSITY} class top W Pac ${classTop(westPacific).toFixed(0)} m, E Pac ${classTop(eastPacific).toFixed(0)} m`);
+  const daily = (sums) => Float64Array.from(sums, (x) => x / splitDays);
+  log(convectionLine(mesh, { land, ice: state[6] }, { convective: daily(split.convective), largeScale: daily(split.largeScale), wet: daily(split.wet) }, days));
+  const [stress] = await readRanges(model.gpu.device, model.oceanEngine.buffers.OD, [{ offset: model.oceanEngine.layout.OD.STRESS, length: mesh.nEdges }]);
+  log(equatorLine(mesh, land, ocean, stress, days));
 }
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation, { convectiveRain, largeScaleRain } = model.moist;
