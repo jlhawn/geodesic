@@ -5,6 +5,7 @@ export const VIRTUAL_FACTOR = 0.608;
 export const CP_DRY = 1003.5;
 export const P0 = 101325;
 export const GRAVITY = 9.806;
+export const DIVERGENCE_DAMPING = 0.03;
 
 const CAM_L26_HYAI = [
   0.00219406700000001, 0.00489520900000001, 0.009882418, 0.01805201,

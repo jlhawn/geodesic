@@ -55,7 +55,7 @@ test('twenty GPU steps track twenty CPU steps', { skip: !gpuAvailable && 'webgpu
   const model = createModel(new Grid(8), { physics: false });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
-  const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model) });
+  const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model) });
   gpu.upload(model.state);
   const dt = 900;
   for (let n = 0; n < 20; n++) { model.step(dt); await gpu.step(dt); }

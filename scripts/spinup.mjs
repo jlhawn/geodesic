@@ -23,8 +23,9 @@
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}'),
 // RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}'),
-// DIVERGENCE_DAMPING (0: the core's divergence damping coefficient c, the
-// tendency c d²/dt ∇δ with d the mean distance between cell centres),
+// DIVERGENCE_DAMPING (the model's DIVERGENCE_DAMPING: the coefficient c of the
+// core's divergence damping, the tendency c d²/dt ∇δ with d the mean
+// distance between cell centres),
 // RECORD (a directory to write each day's ocean and sea-ice forcing into as
 // forcing-DDDD.bin, see js/forcing.module.js), BATCH (1: the steps are queued
 // one at a time, waiting every eighth; more: that many steps go to the
@@ -85,7 +86,7 @@ const BOXES = {
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = Number(process.env.KEEP ?? 2);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
-const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), DIVERGENCE_DAMPING = Number(process.env.DIVERGENCE_DAMPING ?? 0);
+const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
 const ATMOSPHERE = process.env.ATMOSPHERE ?? 'carry';
 if (ATMOSPHERE !== 'carry' && ATMOSPHERE !== 'fresh') throw new Error(`ATMOSPHERE is carry or fresh, not ${ATMOSPHERE}`);
@@ -105,7 +106,7 @@ const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} l
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
 const fallback = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');
 const climatology = !saved && !process.env.FROM && chosen !== 'none' ? chosen : null;
-const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, divergenceDamping: DIVERGENCE_DAMPING, levels });
+const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, ...DAMPING, levels });
 const { mesh, core, state } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 function loadSaved(saved) {

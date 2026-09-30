@@ -1,5 +1,5 @@
 import { buildMesh } from '../mesh.module.js';
-import { createSigmaCore, sigmaInterfaces } from '../dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING } from '../dynamics/sigmaCore.module.js';
 import { createSeaIce } from '../physics/ice.module.js';
 import { createSurface } from '../physics/surface.module.js';
 import { createRadiation } from '../physics/radiation.module.js';
@@ -33,7 +33,7 @@ const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'root
  * temperature it sets).
  */
 export async function createGpuModel(gridOrMesh, {
-  radius, nu4Hours = 3, divergenceDamping = 0, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
+  radius, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
   topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true, levels = sigmaInterfaces(),
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });

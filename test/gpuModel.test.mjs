@@ -24,7 +24,7 @@ async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, option
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
   for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += inversion;
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model), physics: { stratus, ...options } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, ...options } });
   gpu.upload(model.state);
   gpu.uploadPhysics();
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(dt); await gpu.stepModel(dt, time); }
@@ -67,7 +67,7 @@ test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailab
  * enough that the rounding of θ is far below the tolerance.
  */
 function heatingState() {
-  const model = createModel(new Grid(6), { ocean: false, radiation: { stratus: true, mixedLayerDeck: false } });
+  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
@@ -85,7 +85,7 @@ async function physicsHeating(base, options, dt = 864000) {
   model.boundaryLayer.depth.set(base.boundaryLayer.depth);
   model.time = base.time;
   const { K } = model.core, C = model.mesh.nCells;
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model), physics });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics });
   const { device, buffers, kernels, layout } = gpu;
   gpu.upload(model.state);
   gpu.uploadPhysics({ snow: model.seaIce.snow, concentration: model.seaIce.concentration });
@@ -178,7 +178,7 @@ test('snow-ice formation matches between the engines', { skip: !gpuAvailable && 
   let loaded = 0;
   for (let i = 0; i < C; i++) if (model.state[6][i] > 0) { model.seaIce.snow[i] = 100 + 200 * (i % 3); loaded++; }
   assert.ok(loaded > 0);
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model) });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model) });
   gpu.upload(model.state);
   gpu.uploadPhysics();
   gpu.uploadLand({ soil: new Float64Array(C), snow: model.seaIce.snow, vegetation: new Float64Array(C) });
@@ -203,7 +203,7 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
   let seeded = 0;
   for (let i = 0; i < C; i++) if (model.state[6][i] > 0) { model.seaIce.concentration[i] = 0.5; model.seaIce.snow[i] = 10 * (i % 3); seeded++; }
   assert.ok(seeded > 0);
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model) });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model) });
   gpu.upload(model.state);
   gpu.uploadPhysics();
   gpu.uploadLand({ soil: new Float64Array(C), snow: model.seaIce.snow, vegetation: new Float64Array(C) });
@@ -241,7 +241,7 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, ...options } = 
   }
   model.radiation.mlmSubsidence.fill(seed);
   model.radiation.mlmHeight.fill(height);
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, referenceTheta: meanTheta(model), physics });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }

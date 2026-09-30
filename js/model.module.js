@@ -1,5 +1,5 @@
 import { buildMesh } from './mesh.module.js';
-import { createSigmaCore, sigmaInterfaces } from './dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING } from './dynamics/sigmaCore.module.js';
 import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
 import { createSurface } from './physics/surface.module.js';
@@ -36,8 +36,8 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  *   ocean()        the dynamic ocean step (main thread only, before
  *                  physics)
  *   physics(cells) radiation, surface fluxes, evaporation, sea ice
- *   closure(layers) the ∇⁴ closures and the divergence damping (off by
- *                  default, `divergenceDamping`)
+ *   closure(layers) the ∇⁴ closures and the divergence damping
+ *                  (`divergenceDamping`, DIVERGENCE_DAMPING)
  *   adjust(cells)  boundary-layer mixing, condensation, convection, filler
  *   mixMomentum(edges) boundary-layer mixing of the normal velocity
  *   dissipate(cells) the kinetic energy the closure and the mixing
@@ -48,7 +48,7 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
 export function createModel(gridOrMesh, {
   radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {}, boundaryLayer: boundaryLayerOptions = {},
   topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true,
-  physics = true, moist = true, nu4Hours = 3, divergenceDamping = 0, buffers = null, levels = sigmaInterfaces(),
+  physics = true, moist = true, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, buffers = null, levels = sigmaInterfaces(),
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
