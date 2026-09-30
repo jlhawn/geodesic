@@ -106,9 +106,10 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * subsidence w_s = −πσ̇/(ρ g) at h of the last dynamics stage, πσ̇
  * averaged with equal weights over the cell and its neighbours
  * subsidenceSmoothing times over (2; 0 to 2) at the two interfaces
- * bracketing h and interpolated between them, the surface fluxes this column's bulk sensible heat and evaporation,
- * and the longwave the DYCOMS-II form (dycomsLongwave) driven by the
- * mixed layer's own liquid water. The step's h, bounded the same way,
+ * bracketing h and interpolated between them, the surface fluxes this
+ * column's bulk sensible heat and evaporation, and the longwave the
+ * DYCOMS-II form (dycomsLongwave) driven by the mixed layer's own liquid
+ * water. The step's h, bounded the same way,
  * goes back into mlmHeight and the cover and water path are diagnosed
  * there; where the deck does not run, mlmHeight relaxes
  * toward the boundary-layer top with the model's `relax`
