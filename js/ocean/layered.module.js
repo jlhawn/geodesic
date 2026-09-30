@@ -309,6 +309,39 @@ export function closureCoefficient(spacing, closureHours, closureSpacing = CLOSU
   return closureHours > 0 ? Math.pow(spacing / Math.PI, 4) / (closureHours * 3600) * Math.max(1, closureSpacing / spacing) ** 3 : 0;
 }
 
+/*
+ * The velocity an interior class's ∇⁴ closure acts on: its own u, except
+ * on the token sea edges beside the edges where it holds at least THIN
+ * metres, which take `weight` of the normal component of the uniform flow
+ * that best fits, in least squares with the ridge CLOSURE_RIDGE, the
+ * normal velocities of those neighbours (edgesOnEdge) and the rest of
+ * their own. A token edge's own velocity is the layer's above, the mixed
+ * layer's where the class has outcropped, toward which the closure pulls
+ * the class. That pull also holds the class's edges beside its tokens,
+ * and coupled runs with the fit clamp there, so `closureFill` is off by
+ * default (docs/c-grid-dynamical-core.md, M21).
+ */
+export const CLOSURE_RIDGE = 0.1;
+export function closureVelocity(mesh, u, hEdge, edgeOcean, weight, out) {
+  const { nEdges: E, nEdgesOnEdge, edgesOnEdge, maxEdgesOnEdge, nEdge, tEdge } = mesh;
+  for (let e = 0; e < E; e++) {
+    out[e] = u[e];
+    if (!edgeOcean[e] || hEdge[e] >= THIN) continue;
+    const nx = nEdge[3 * e], ny = nEdge[3 * e + 1], nz = nEdge[3 * e + 2], tx = tEdge[3 * e], ty = tEdge[3 * e + 1], tz = tEdge[3 * e + 2];
+    let saa = 0, sab = 0, sbb = 0, sau = 0, sbu = 0, found = false;
+    for (let s = 0; s < nEdgesOnEdge[e]; s++) {
+      const o = edgesOnEdge[maxEdgesOnEdge * e + s];
+      if (!edgeOcean[o] || hEdge[o] < THIN) continue;
+      const a = nEdge[3 * o] * nx + nEdge[3 * o + 1] * ny + nEdge[3 * o + 2] * nz, b = nEdge[3 * o] * tx + nEdge[3 * o + 1] * ty + nEdge[3 * o + 2] * tz;
+      saa += a * a; sab += a * b; sbb += b * b; sau += a * u[o]; sbu += b * u[o]; found = true;
+    }
+    if (!found) continue;
+    const p = saa + CLOSURE_RIDGE, q = sbb + CLOSURE_RIDGE;
+    out[e] = weight * (q * sau - sab * sbu) / (p * q - sab * sab) + (1 - weight) * u[e];
+  }
+  return out;
+}
+
 export const EDDY_WAVE_SPEED = 2, EDDY_BOTTOM_TAPER = 100, EDDY_SLACK = 1e-6;
 export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
   const { nEdges: E, latEdge, dcEdge, radius, omega } = mesh;
@@ -591,7 +624,7 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
-  interfacialDrag = 2e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, diffusivity = 0.01, everySteps = 4,
+  interfacialDrag = 2e-4, shearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200,
   geography = null, bathymetry = null, buffers = null, climatology = null,
 } = {}) {
@@ -636,12 +669,12 @@ export function createOcean(mesh, {
   const T = new Float64Array(C), S = new Float64Array(C), lapT = new Float64Array(C);
   const zeta = new Float64Array(V), qEdge = new Float64Array(E);
   const K = new Float64Array(C), phi = new Float64Array(C), gradPhi = new Float64Array(E), gradEta = shared('gradEta', E), gradRho = shared('gradRho', E);
-  const lap = new Float64Array(E), lap2 = new Float64Array(E), divScratch = new Float64Array(C), curlScratch = new Float64Array(V);
+  const lap = new Float64Array(E), lap2 = new Float64Array(E), divScratch = new Float64Array(C), curlScratch = new Float64Array(V), closureU = new Float64Array(E);
   const slow = new Float64Array(E), U = new Float64Array(E), depthEdge = new Float64Array(E), etaB = new Float64Array(C), avgU = new Float64Array(E), avgEta = new Float64Array(C), divU = new Float64Array(C);
   const stages = [0, 1, 2, 3].map((s) => [shared(`stage${s}h`, L * C), shared(`stage${s}u`, L * E), shared(`stage${s}Q`, L * C), shared(`stage${s}W`, L * C)]);
   const trial = [shared('trialh', L * C), shared('trialu', L * E), shared('trialQ', L * C), shared('trialW', L * C)];
   const params = shared('params', 4);
-  if (!adopting) params[0] = 1 / 3600;
+  if (!adopting) { params[0] = 1 / 3600; params[1] = 3600; }
   const tauCell = new Float64Array(3 * C), reach = new Float64Array(C).fill(Infinity), buoyancyLoss = new Float64Array(C);
   const lightest = rho.map((r, k) => r - 0.5 * (k > 1 ? r - rho[k - 1] : rho[k + 1] - r));
   const densest = rho.map((r, k) => r + 0.5 * (k < L - 1 ? rho[k + 1] - r : r - rho[k - 1]));
@@ -694,6 +727,35 @@ export function createOcean(mesh, {
       }
       out[e] = sum / dcEdge[e];
     }
+  }
+
+  function tangential(uIn, k, e) {
+    let sum = 0;
+    for (let s = 0; s < nEdgesOnEdge[e]; s++) { const o = edgesOnEdge[maxEdgesOnEdge * e + s]; sum += weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[o] * uIn[ae(k, o)]; }
+    return sum / dcEdge[e];
+  }
+  const dragThickness = (k, e) => (k === 0 ? Math.max(hEdge[e], minimumThickness) : Math.max(hEdge[ae(k, e)], THIN));
+  /*
+   * The drag coefficient r (m/s) between layer `up` and the layer `down`
+   * beneath it at edge e, from the edge thicknesses and mixed-layer
+   * density the tendency has prepared: interfacialDrag, or under
+   * shearMixing no less than that, the Pacanowski and Philander (1981)
+   * viscosity ν = shearViscosity/(1 + 5 Ri)² + backgroundViscosity over
+   * the distance Δz between the layers' middles, Ri = Δb Δz/|Δu|² from
+   * their buoyancy step and the difference of their full velocities, the
+   * tangential part reconstructed as the Coriolis term's; r is held to
+   * half of what either layer's drag thickness can take in one step
+   * (params[1] seconds).
+   */
+  function interfaceRate(uIn, e, up, down) {
+    if (!shearMixing) return interfacialDrag;
+    const dz = Math.max(THIN, 0.5 * (hEdge[ae(up, e)] + hEdge[ae(down, e)]));
+    const upper = up === 0 ? 0.5 * (rhoMl[cellsOnEdge[2 * e]] + rhoMl[cellsOnEdge[2 * e + 1]]) : rho[up];
+    const buoyancy = Math.max(0, g * (rho[down] - upper) / rho0);
+    const du = uIn[ae(up, e)] - uIn[ae(down, e)], dv = tangential(uIn, up, e) - tangential(uIn, down, e);
+    const richardson = buoyancy * dz / (du * du + dv * dv + 1e-12);
+    const nu = shearViscosity / (1 + 5 * richardson) ** 2 + backgroundViscosity;
+    return Math.min(Math.max(interfacialDrag, nu / dz), 0.5 * Math.min(dragThickness(up, e), dragThickness(down, e)) / params[1]);
   }
 
   function surfaceDensity(hIn, QIn, WIn) {
@@ -805,25 +867,26 @@ export function createOcean(mesh, {
       if (k === 0) for (let e = 0; e < E; e++) du[e] -= g / rho0 * 0.5 * hEdge[e] * gradRho[e];
       for (let e = 0; e < E; e++) {
         const he = Math.max(hEdge[oe + e], minimumThickness);
-        let force = 0;
+        let force = 0, drag = 0;
         if (k === 0) force += stress[e] / rho0;
         if (k > 0) {
           let j = k - 1;
           while (j > 0 && hEdge[ae(j, e)] < THIN) j--;
-          force += interfacialDrag * (uIn[ae(j, e)] - uIn[oe + e]);
+          drag += interfaceRate(uIn, e, j, k) * (uIn[ae(j, e)] - uIn[oe + e]);
         }
         if (k < L - 1) {
           let j = k + 1;
           while (j < L - 1 && hEdge[ae(j, e)] < THIN) j++;
-          if (hEdge[ae(j, e)] >= THIN) force -= interfacialDrag * (uIn[oe + e] - uIn[ae(j, e)]);
+          if (hEdge[ae(j, e)] >= THIN) drag -= interfaceRate(uIn, e, k, j) * (uIn[oe + e] - uIn[ae(j, e)]);
         }
         let bottom = k === L - 1;
         if (!bottom) { bottom = true; for (let j = k + 1; j < L; j++) if (hEdge[ae(j, e)] >= THIN) { bottom = false; break; } }
         if (bottom) force -= bottomDrag * Math.abs(uIn[oe + e]) * uIn[oe + e];
-        du[oe + e] += force / he;
+        du[oe + e] += force / he + drag / dragThickness(k, e);
       }
       if (nu4 > 0) {
-        laplacianVelocity(mesh, uIn.subarray(oe, oe + E), lap, divScratch, curlScratch);
+        const uk = uIn.subarray(oe, oe + E);
+        laplacianVelocity(mesh, k === 0 || !(closureFill > 0) ? uk : closureVelocity(mesh, uk, hEdge.subarray(oe, oe + E), edgeOcean, closureFill, closureU), lap, divScratch, curlScratch);
         laplacianVelocity(mesh, lap, lap2, divScratch, curlScratch);
         for (let e = 0; e < E; e++) du[oe + e] -= nu4 * lap2[e];
       }
@@ -890,6 +953,7 @@ export function createOcean(mesh, {
 
   function step(dt) {
     const [k1, k2, k3, k4] = stages;
+    params[1] = dt;
     freeSurface();
     tendency(state, k1);
     barotropic(dt);
@@ -1355,5 +1419,5 @@ export function createOcean(mesh, {
   initialised = false;
   const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), setLayerRunner(fn) { layerRunner = fn; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }

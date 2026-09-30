@@ -2,9 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { cellVector } from '../js/dynamics/operators.module.js';
-import { createOcean } from '../js/ocean/layered.module.js';
+import { cellVector, laplacianVelocity } from '../js/dynamics/operators.module.js';
+import { createOcean, closureVelocity, THIN, EPS } from '../js/ocean/layered.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
+import { seawaterDensity } from '../js/ocean/seawater.module.js';
 import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, totalHeatSalt, northwardMixedTransport, slowOcean } from './helpers/layered.mjs';
 
 test('the ocean at rest under zero stress on a bumpy bottom stays at rest and conserves heat, salt and surface temperature', () => {
@@ -156,4 +157,107 @@ test('wind-driven advection over 100 steps conserves total heat and salt', () =>
   assert.ok(Math.abs(after.heat - before.heat) < 1e-9 * Math.abs(before.heat), `heat ${before.heat} -> ${after.heat}`);
   assert.ok(Math.abs(after.salt - before.salt) < 1e-9 * Math.abs(before.salt), `salt ${before.salt} -> ${after.salt}`);
   assert.equal(ocean.diagnostics().oceanLimited, 0);
+});
+
+test('interfacial drag, constant or from the shear, moves momentum between the layers at an edge without changing the column\'s, the classes a few metres thick included', () => {
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C);
+  const build = (options) => {
+    const ocean = createOcean(mesh, { everySteps: 1, ...options });
+    ocean.initialize(Float64Array.from(surfaceT), ice);
+    for (let n = 0; n < ocean.u.length; n++) ocean.u[n] = 0.2 * Math.sin(0.7 * Math.floor(n / E) + 0.37 * (n % E));
+    ocean.tendency(ocean.state, ocean.stages[0]);
+    return ocean;
+  };
+  const still = build({ shearMixing: false, interfacialDrag: 0 }), du0 = still.stages[0][1];
+  for (const options of [{ shearMixing: false, interfacialDrag: 5e-5 }, { shearMixing: true, interfacialDrag: 5e-5 }]) {
+    const dragging = build(options), L = dragging.layers;
+    const hEdge = new Float64Array(dragging.shared.hEdge), du = dragging.stages[0][1];
+    let worst = 0, largest = 0, thin = 0;
+    for (let e = 0; e < E; e++) {
+      if (!dragging.edgeOcean[e]) continue;
+      let net = 0;
+      for (let k = 0; k < L; k++) {
+        const n = k * E + e;
+        if (k > 0 && hEdge[n] < THIN) continue;
+        if (k > 0 && hEdge[n] < 50) thin++;
+        const moved = hEdge[n] * (du[n] - du0[n]);
+        net += moved; largest = Math.max(largest, Math.abs(moved));
+      }
+      worst = Math.max(worst, Math.abs(net));
+    }
+    console.log(`${JSON.stringify(options)}: ${thin} layer edges between ${THIN} and 50 m thick; the largest momentum moved by the drag ${largest.toExponential(2)} m²/s², the largest column imbalance ${worst.toExponential(2)}`);
+    assert.ok(thin > 100, `only ${thin} thin layer edges`);
+    assert.ok(largest > 1e-7 && worst < 1e-12 * largest, `the drag changes a column's momentum by ${worst} against ${largest} moved`);
+  }
+});
+
+test('under shearMixing the drag between the mixed layer and the class beneath follows the Pacanowski–Philander viscosity of their Richardson number from the full velocity difference, no less than interfacialDrag', () => {
+  const ocean = createOcean(mesh, { everySteps: 1, shearMixing: true, interfacialDrag: 0 }), floored = createOcean(mesh, { everySteps: 1, shearMixing: true, interfacialDrag: 5e-5 });
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2);
+  ocean.initialize(Float64Array.from(surfaceT), new Float64Array(C));
+  floored.initialize(Float64Array.from(surfaceT), new Float64Array(C));
+  const L = ocean.layers, rho = ocean.densities, hEdge = new Float64Array(ocean.shared.hEdge), g = 9.81, rho0 = 1025;
+  let lowest = Infinity;
+  const mixed = (i) => seawaterDensity(ocean.Q[i] / ocean.h[i], ocean.W[i] / ocean.h[i]);
+  const errors = [], richardsons = [];
+  for (const speed of [0.05, 0.1, 0.2, 0.4, 0.8]) {
+    ocean.u.fill(0);
+    for (let e = 0; e < E; e++) ocean.u[e] = speed * (-mesh.xEdge[3 * e + 1] * mesh.nEdge[3 * e] + mesh.xEdge[3 * e] * mesh.nEdge[3 * e + 1]);
+    ocean.tendency(ocean.state, ocean.stages[0]);
+    floored.u.set(ocean.u);
+    floored.tendency(floored.state, floored.stages[0]);
+    for (let e = 0; e < E; e++) {
+      if (!ocean.edgeOcean[e] || Math.abs(mesh.latEdge[e]) > 40 * DEG) continue;
+      let k = 1;
+      while (k < L && hEdge[k * E + e] < THIN) k++;
+      if (k === L) continue;
+      const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+      const dz = Math.max(THIN, 0.5 * (hEdge[e] + hEdge[k * E + e])), buoyancy = Math.max(0, g * (rho[k] - 0.5 * (mixed(a) + mixed(b))) / rho0);
+      const shear = speed ** 2 * (mesh.xEdge[3 * e] ** 2 + mesh.xEdge[3 * e + 1] ** 2), richardson = buoyancy * dz / shear;
+      const expected = (1e-2 / (1 + 5 * richardson) ** 2 + 1e-4) / dz, rate = ocean.interfaceRate(e, 0, k);
+      lowest = Math.min(lowest, floored.interfaceRate(e, 0, k) / Math.max(5e-5, rate));
+      if (richardson < 2 && rate < 0.99 * 0.5 * Math.min(Math.max(hEdge[e], 20), Math.max(hEdge[k * E + e], THIN)) / 3600) { errors.push(Math.abs(rate / expected - 1)); richardsons.push(richardson); }
+    }
+  }
+  errors.sort((p, q) => p - q); richardsons.sort((p, q) => p - q);
+  const at = (list, p) => list[Math.floor(p * (list.length - 1))];
+  console.log(`${errors.length} mixed-layer bases at Ri below 2 (${at(richardsons, 0.1).toFixed(2)}–${at(richardsons, 0.9).toFixed(2)}, 10th–90th percentile): the drag coefficient within ${(100 * at(errors, 0.5)).toFixed(1)}% of the Pacanowski–Philander value at the median, ${(100 * at(errors, 0.9)).toFixed(1)}% at the 90th percentile`);
+  assert.ok(errors.length > 100 && at(richardsons, 0.1) < 0.3, `${errors.length} interfaces over Ri ${at(richardsons, 0.1)}–${at(richardsons, 0.9)}`);
+  assert.ok(at(errors, 0.5) < 0.05 && at(errors, 0.9) < 0.2, `median ${at(errors, 0.5)}, 90th percentile ${at(errors, 0.9)}`);
+  assert.ok(Math.abs(lowest - 1) < 1e-12, `with interfacialDrag 5e-5 m/s the coefficient is the larger of that and the viscosity's (${lowest})`);
+});
+
+test('closureVelocity gives the token edges beside a class a weighted share of the class\'s own flow, and the closure then pulls the class less toward the flow of the layer above them', () => {
+  const m = buildMesh(new Grid(16)), mE = m.nEdges;
+  const rotation = (e, sign) => sign * 0.3 * (-m.xEdge[3 * e + 1] * m.nEdge[3 * e] + m.xEdge[3 * e] * m.nEdge[3 * e + 1]);
+  const inside = (i) => Math.sin(3 * m.lonCell[i]) + 0.5 * Math.cos(5 * m.latCell[i]) > 0.2;
+  const hEdge = new Float64Array(mE), sea = new Uint8Array(mE).fill(1), exact = new Float64Array(mE), slaved = new Float64Array(mE);
+  for (let e = 0; e < mE; e++) {
+    const present = inside(m.cellsOnEdge[2 * e]) && inside(m.cellsOnEdge[2 * e + 1]);
+    hEdge[e] = present ? 12 : EPS;
+    exact[e] = rotation(e, 1);
+    slaved[e] = present ? exact[e] : rotation(e, -1);
+  }
+  const beside = new Uint8Array(mE), near = new Uint8Array(mE);
+  for (let e = 0; e < mE; e++) {
+    if (hEdge[e] >= THIN) continue;
+    for (let s = 0; s < m.nEdgesOnEdge[e]; s++) { const o = m.edgesOnEdge[m.maxEdgesOnEdge * e + s]; if (hEdge[o] >= THIN) { beside[e] = 1; near[o] = 1; } }
+  }
+  const pull = (field) => {
+    const lap2 = laplacianVelocity(m, laplacianVelocity(m, field));
+    let sum = 0, n = 0;
+    for (let e = 0; e < mE; e++) if (near[e]) { sum += lap2[e] ** 2; n++; }
+    return Math.sqrt(sum / n);
+  };
+  const whole = closureVelocity(m, slaved, hEdge, sea, 1, new Float64Array(mE)), half = closureVelocity(m, slaved, hEdge, sea, 0.5, new Float64Array(mE));
+  let error = 0, size = 0, count = 0;
+  for (let e = 0; e < mE; e++) {
+    if (!beside[e]) { assert.equal(whole[e], slaved[e]); assert.equal(half[e], slaved[e]); continue; }
+    assert.ok(Math.abs(half[e] - 0.5 * (whole[e] + slaved[e])) < 1e-12);
+    error += (whole[e] - exact[e]) ** 2; size += exact[e] ** 2; count++;
+  }
+  const before = pull(slaved), halfPull = pull(half), wholePull = pull(whole);
+  console.log(`${count} token edges beside the class: the fit ${(100 * Math.sqrt(error / size)).toFixed(1)}% rms from its flow; the closure on the class edges beside them ${before.toExponential(2)} on the velocity above, ${halfPull.toExponential(2)} with half the fit, ${wholePull.toExponential(2)} with all of it`);
+  assert.ok(count > 100 && Math.sqrt(error / size) < 0.1, `the fit is ${Math.sqrt(error / size)} rms from the class's flow`);
+  assert.ok(wholePull < halfPull && halfPull < 0.75 * before, `the closure's pull ${before}, ${halfPull}, ${wholePull}`);
 });
