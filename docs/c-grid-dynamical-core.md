@@ -2933,6 +2933,15 @@ The work, in order:
    random columns to 10⁻⁴ K and 5·10⁻⁸ kg/kg under the defaults, the
    first build's options and the stability veto. `test/physics.test.mjs`
    checks the cover's blend against the overcast column with W / f.
+   `test/gpuModel.test.mjs` compares the engines' layer heating under
+   resolved cloud of partial cover inside and above the boundary layer
+   (1.1·10⁻⁴ K/day against 23 K/day) and the buoyancy-closure deck under
+   the default convection, venting included (cover 7·10⁻⁵); the random
+   columns include gates on the deck's opening ramp. Both engines take
+   the deck's clear-column sunlight from the column blended at the
+   resolved cloud's cover; the GPU first took it from the overcast
+   column, and over a column that had vented the deck's cover parted by
+   3.6·10⁻³.
    `scripts/verticalAudit.mjs` adds, from the moist physics' `trace`,
    the pressure of the maximum of the Pacific ITCZ firing columns'
    convective heating and its mean over the lowest 100 m, the box's
@@ -3018,6 +3027,13 @@ The work, in order:
    | global rain, mm/d (convective share); 15S–15N share | | 2.53 (0.49); 0.79 | 2.70 (0.71); 0.86 |
    | zonal-mean rain peak, mm/d (latitude) | | 4.58 (7.5N) | 5.54 (9.5N) |
 
+   With the GPU deck's sunlight blended at the cover (run `rv128f`, the
+   same five days) the decision's numbers move by little: albedo 0.296,
+   0.312, 0.320, 0.328, 0.331; ASR 239.8 → 227.9 W/m²; SE Pacific rain
+   0.81 mm/d (0.83), firing 0.102 (0.146), low cloud 0.488, deck runs
+   0.186; ITCZ peak 438 hPa (29.0 K/d), lowest 100 m −0.45 K/d,
+   large-scale +15.2 at 437 m and −32.9 at 21 m; global rain 2.69 (0.71).
+
    Ten days at N=64 from the atlas (bl34): the old scheme's albedo peaks
    at 0.397 on day 7 and ends at 0.339, the first build's climbs to
    0.591 and ends at 0.580, the decision's peaks at 0.401 and ends at
@@ -3027,8 +3043,8 @@ The work, in order:
    0.027 brighter); the ITCZ heats aloft and its lowest 100 m by −0.3 K/d;
    the SE Pacific's low cloud (0.49) and deck runs (0.18) pass; the global
    rain passes; the fresh start passes. The SE Pacific's rain
-   (0.81 mm/d) and firing (0.100 a step) fail by as much as under the old
-   scheme: the venting that keeps the boundary layer from saturating
+   (0.81 mm/d) and firing (0.100 a step) fail, by more than under the
+   old scheme (0.57 mm/d; 0.065 a step on day 183): the venting that keeps the boundary layer from saturating
    worldwide vents the SE Pacific wherever the deck's gate is shut, and
    the deck runs on 0.18 of its column-steps because its virtual jump at
    h is 1.7 K against the resolved inversion's 3.3 K. The ITCZ's
