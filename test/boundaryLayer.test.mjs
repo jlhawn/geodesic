@@ -6,6 +6,10 @@ import { createParallelModel } from '../js/parallel.module.js';
 import { createBoundaryLayer } from '../js/physics/boundaryLayer.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
+import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
+
+let gpuAvailable = true;
+try { await import('webgpu'); } catch { gpuAvailable = false; }
 
 const model = createModel(new Grid(3));
 const { core, mesh, boundaryLayer } = model;
@@ -110,7 +114,7 @@ test('a warm or moist sea surface deepens the momentum mixing; a cool one keeps 
 
 test('where a mixed-layer deck runs the K-profile spans its inversion when that lies above the Richardson depth, depth itself stays the Richardson depth, and a zero deckTop changes nothing', () => {
   const state = column(290, 3e-3, 4);
-  const deckTop = new Float64Array(C), plain = createBoundaryLayer(mesh, core, {}), decked = createBoundaryLayer(mesh, core, { deckTop });
+  const deckTop = new Float64Array(C), still = { entrainment: { efficiency: 0, shear: 0 } }, plain = createBoundaryLayer(mesh, core, still), decked = createBoundaryLayer(mesh, core, { deckTop, ...still });
   plain.diagnose(state); decked.diagnose(state);
   assert.deepEqual(decked.mixing, plain.mixing);
   assert.deepEqual(decked.depth, plain.depth);
@@ -151,4 +155,188 @@ test('serial and parallel engines stay bit-identical with the mixed-layer deck c
     for (let a = 0; a < serial.state.length; a++) for (let x = 0; x < serial.state[a].length; x++) assert.equal(parallel.state[a][x], serial.state[a][x], `state ${a}[${x}]`);
     for (const name of ['mlmHeight', 'mlmGate', 'mlmTop', 'mlmCover', 'mlmWater']) assert.deepEqual(parallel.radiation[name], serial.radiation[name], name);
   } finally { await parallel.close(); }
+});
+
+function entrainingColumn(surfaceWarmth = 2) {
+  const state = column(300, -1e-3, 8, 1000);
+  const [pi, theta, , surfaceT, q, qc] = state;
+  const { exnerLayer, sigmaMid, kappa } = core.diagnostics;
+  const base = (K - 1) * C;
+  for (let i = 0; i < C; i++) {
+    for (let k = 0; k < K; k++) qc[k * C + i] = k === K - 3 ? 1e-4 : 0;
+    surfaceT[i] = theta[base + i] * exnerLayer[base + i] * Math.pow(sigmaMid[K - 1], -kappa) + surfaceWarmth;
+  }
+  boundaryLayer.diagnose(state);
+  for (let i = 0; i < C; i++) {
+    const zb = geopotential[base + i] / g, h = boundaryLayer.depth[i] - zb;
+    for (let k = 0; k < K - 1; k++) if (0.5 * (geopotential[k * C + i] + geopotential[(k + 1) * C + i]) / g - zb >= h) q[k * C + i] = 1e-3;
+  }
+  core.diagnose(pi, theta, q, qc);
+  return state;
+}
+
+function expectedEntrainment(state, layer, i, { efficiency = 0.2, shear = 5, cap = 0.05, jumpFloor = 0.015 } = {}) {
+  const [pi, theta, , surfaceT, q] = state;
+  const { exnerLayer, sigmaMid, kappa } = core.diagnostics, { thetaV } = core.arrays;
+  const base = (K - 1) * C + i, zb = geopotential[base] / g, h = layer.depth[i] - zb;
+  const friction = Math.sqrt(1.5e-3) * 3;
+  const buoyancy = g / theta[base] * 1.5e-3 * 3 * (surfaceT[i] * Math.pow(sigmaMid[K - 1], kappa) / exnerLayer[base] - theta[base] + 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]));
+  let above = -1;
+  for (let k = layer.kTop; k < K - 1; k++) if (0.5 * (geopotential[k * C + i] + geopotential[(k + 1) * C + i]) / g - zb >= h) above = k;
+  let weight = 0, sum = 0;
+  for (let k = above + 1; k < K; k++) { weight += dSigma[k]; sum += dSigma[k] * thetaV[k * C + i]; }
+  const jump = g * (thetaV[above * C + i] - sum / weight) / (sum / weight);
+  return { above, buoyancy, jump, velocity: Math.min(cap, (efficiency * buoyancy + shear * friction ** 3 / h) / Math.max(jump, jumpFloor)) };
+}
+
+test('a dry stable layer over a convective boundary layer is entrained at the closure\'s rate across the first interface above h, conserving the column\'s θ, water and momentum', () => {
+  const state = entrainingColumn();
+  const [pi, theta, u, , q, qc] = state;
+  const i = 0;
+  const layer = createBoundaryLayer(mesh, core, {}), still = createBoundaryLayer(mesh, core, { entrainment: { efficiency: 0, shear: 0 } });
+  layer.diagnose(state); still.diagnose(state);
+  const { above, buoyancy, jump, velocity } = expectedEntrainment(state, layer, i);
+  assert.ok(buoyancy > 0 && jump > 0 && above >= layer.kTop, `B0 ${buoyancy}, Δb ${jump}, layer ${above}`);
+  assert.ok(q[above * C + i] === 1e-3 && q[(above + 1) * C + i] > 2e-3, 'the layer above h is the dry one');
+  assert.ok(Math.abs(layer.entrainment[i] - velocity) < 1e-12 * velocity, `w_e ${layer.entrainment[i]} against ${velocity}`);
+  assert.equal(still.entrainment[i], 0);
+  const { exnerLayer, sigmaMid, R } = core.diagnostics, idx = above * C + i;
+  const rho = 0.5 * (pi[i] * sigmaMid[above] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[above + 1] / (R * theta[idx + C] * exnerLayer[idx + C]));
+  assert.ok(Math.abs(layer.mixing[idx] - rho * velocity) < 1e-12 * rho * velocity, 'the interface above h carries ρ w_e');
+  assert.equal(still.mixing[idx], 0, 'which the K-profile alone leaves shut');
+  for (let k = layer.kTop; k < K - 1; k++) if (k !== above) assert.equal(layer.mixing[k * C + i], still.mixing[k * C + i], `interface ${k}`);
+
+  const dt = 900, mass = pi[i] * dSigma[above] / g;
+  const totals = () => [columnTotal(theta, pi, i), columnTotal(q, pi, i), columnTotal(qc, pi, i)];
+  const before = totals(), qAbove = q[idx], thetaAbove = theta[idx];
+  const plainTheta = Float64Array.from(theta), plainQ = Float64Array.from(q), plainQc = Float64Array.from(qc);
+  layer.mixColumn(i, pi, theta, q, qc, dt);
+  const after = totals();
+  for (let n = 0; n < 3; n++) assert.ok(Math.abs(after[n] - before[n]) <= 4e-16 * Math.abs(before[n]) * K, `total ${n}: ${before[n]} → ${after[n]}`);
+  assert.ok(Math.abs(mass * (q[idx] - qAbove) - dt * rho * velocity * (q[idx + C] - q[idx])) < 1e-12 * mass * Math.abs(q[idx] - qAbove), 'the layer above h gains ρ w_e dt of the boundary layer\'s water');
+  assert.ok(Math.abs(mass * (theta[idx] - thetaAbove) - dt * rho * velocity * (theta[idx + C] - theta[idx])) < 1e-9 * mass * Math.abs(theta[idx] - thetaAbove), 'and loses heat at the same rate');
+  still.mixColumn(i, pi, plainTheta, plainQ, plainQc, dt);
+  assert.equal(plainQ[idx], qAbove, 'without entrainment the layer above h keeps its water');
+  let bl = 0, blPlain = 0, blTheta = 0, blThetaPlain = 0;
+  for (let k = above + 1; k < K; k++) { bl += dSigma[k] * q[k * C + i]; blPlain += dSigma[k] * plainQ[k * C + i]; blTheta += dSigma[k] * theta[k * C + i]; blThetaPlain += dSigma[k] * plainTheta[k * C + i]; }
+  assert.ok(bl < blPlain && blTheta > blThetaPlain, 'the boundary layer dries and warms');
+
+  const e = mesh.edgesOnCell[mesh.maxEdges * i], a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+  const momentum = () => { let s = 0; for (let k = 0; k < K; k++) s += 0.5 * (pi[a] + pi[b]) * dSigma[k] / g * u[k * E + e]; return s; };
+  const uAbove = u[above * E + e], m0 = momentum(), lost = new Float64Array(K * E);
+  layer.mixEdges(pi, u, e, e + 1, dt, lost);
+  assert.ok(Math.abs(momentum() - m0) < 1e-13 * Math.abs(m0), `momentum ${m0} → ${momentum()}`);
+  assert.ok(Math.abs(u[above * E + e]) < Math.abs(uAbove), 'the layer above h gives up momentum to the slower boundary layer');
+  console.log(`entraining column: h ${(layer.depth[i] - geopotential[(K - 1) * C + i] / g).toFixed(0)} m, B0 ${buoyancy.toExponential(2)} m²/s³, Δθv ${(jump * 300 / g).toFixed(2)} K, w_e ${(1000 * velocity).toFixed(2)} mm/s; one 900 s step moves ${(1000 * (qAbove - plainQ[idx] + q[idx] - qAbove) * mass).toFixed(1)} g/m² of water above h; column θ, water and momentum change by ${((after[0] - before[0]) / before[0]).toExponential(1)}, ${((after[1] + after[2] - before[1] - before[2]) / (before[1] + before[2])).toExponential(1)}, ${((momentum() - m0) / m0).toExponential(1)}`);
+});
+
+test('no entrainment where the deck\'s gate is above one half, from a stable surface, or where the closure\'s coefficients are zero; the cap and the jump floor bound it', () => {
+  const deckGate = new Float64Array(C).fill(0.3);
+  const layer = createBoundaryLayer(mesh, core, { deckGate });
+  const warm = entrainingColumn(2);
+  layer.diagnose(warm);
+  assert.ok(layer.entrainment[0] > 0);
+  deckGate[0] = 0.5;
+  layer.diagnose(warm);
+  assert.ok(layer.entrainment[0] > 0, 'a gate of one half leaves the top to the boundary layer');
+  deckGate[0] = 0.51;
+  layer.diagnose(warm);
+  assert.equal(layer.entrainment[0], 0, 'above one half the deck owns it');
+  assert.ok(layer.entrainment[1] > 0);
+  const cool = entrainingColumn(-8);
+  layer.diagnose(cool);
+  for (let i = 0; i < C; i++) {
+    assert.ok(expectedEntrainment(cool, layer, i).buoyancy < 0, `cell ${i} is stable at its surface`);
+    assert.equal(layer.entrainment[i], 0, `stable surface, cell ${i}`);
+  }
+  const capped = createBoundaryLayer(mesh, core, { entrainment: { cap: 1e-4 } }), floored = createBoundaryLayer(mesh, core, { entrainment: { jumpFloor: 10 } });
+  const again = entrainingColumn(2), off = createBoundaryLayer(mesh, core, { deckGate, entrainment: { efficiency: 0, shear: 0 } });
+  capped.diagnose(again); floored.diagnose(again); off.diagnose(again);
+  assert.ok(off.entrainment.every((x) => x === 0));
+  const { buoyancy } = expectedEntrainment(again, floored, 1);
+  assert.equal(capped.entrainment[1], 1e-4);
+  assert.ok(Math.abs(floored.entrainment[1] - (0.2 * buoyancy + 5 * (Math.sqrt(1.5e-3) * 3) ** 3 / (floored.depth[1] - geopotential[(K - 1) * C + 1] / g)) / 10) < 1e-12);
+});
+
+async function engines(entrainment) {
+  const { createGpuCore } = await import('../js/gpu/core.gpu.js');
+  const levels = sigmaInterfaces('bl34');
+  const pair = createModel(new Grid(6), { ocean: false, levels, boundaryLayer: { entrainment } });
+  const { core: c, mesh: m, state, radiation, moist, boundaryLayer: layer } = pair;
+  const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
+  const [pi, theta, u, surfaceT, q, qc] = state;
+  const init = initializeState(pair, {});
+  for (let a = 0; a < init.length; a++) state[a].set(init[a]);
+  c.diagnose(pi, theta, q, qc);
+  let seed = 2024;
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  for (let i = 0; i < nC; i++) {
+    const zb = phi[(nK - 1) * nC + i] / grav, surface = 286 + 14 * random(), top = 300 + 1500 * random(), below = -1e-3 + 2e-3 * random(), above = 3e-3 + 5e-3 * random(), jump = 4 * random();
+    const wetBelow = 0.4 + 0.3 * random(), wetAbove = 0.1 + 0.3 * random();
+    for (let k = 0; k < nK; k++) {
+      const x = k * nC + i, z = phi[x] / grav - zb;
+      theta[x] = z < top ? surface + below * z : surface + below * top + jump + above * (z - top);
+      if (sigmaMid[k] < 0.2) theta[x] = Math.max(theta[x], init[1][x]);
+      q[x] = (z < top ? wetBelow : wetAbove) * saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]);
+      qc[x] = z < 3000 && random() < 0.1 ? 2e-4 * random() : 0;
+    }
+    surfaceT[i] = theta[(nK - 1) * nC + i] * exnerLayer[(nK - 1) * nC + i] * Math.pow(sigmaMid[nK - 1], -kappa) - 3 + 6 * random();
+    const gate = random();
+    radiation.mlmGate[i] = gate < 0.2 ? 0.7 : gate < 0.3 ? 0.5 : 0.3 * random();
+    moist.activity[i] = 0;
+  }
+  for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) u[k * nE + e] = k === nK - 1 ? 2 * (random() - 0.5) : 12 * (random() - 0.5);
+  for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  for (const a of [radiation.mlmGate]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  c.diagnose(pi, theta, q, qc);
+  const gpu = await createGpuCore(m, { levels, physics: { entrainment } });
+  const { device, buffers, kernels } = gpu, dt = 900;
+  gpu.upload(state);
+  gpu.uploadPhysics({ mlmGate: radiation.mlmGate, convectiveActivity: moist.activity });
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
+  const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+  for (const [name, count] of [['pblDiagnose', nC], ['adjust', nC], ['mixMomentum', nE]]) {
+    pass.setPipeline(kernels[name]);
+    pass.setBindGroup(0, device.createBindGroup({ layout: kernels[name].getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
+    pass.dispatchWorkgroups(Math.ceil(count / 64));
+  }
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  const after = await gpu.download(), ph = await gpu.downloadPhysics();
+  const before = state.map((a) => Float64Array.from(a));
+  layer.diagnose(state);
+  const cpu = { entrainment: Float64Array.from(layer.entrainment), mixing: Float64Array.from(layer.mixing) };
+  pair.phases.adjust(0, nC, dt);
+  pair.phases.mixMomentum(0, nE, dt);
+  return { K: nK, C: nC, E: nE, kTop: layer.kTop, gate: radiation.mlmGate, before, cpu, state, after, ph };
+}
+
+test('the boundary layer with entrainment matches between the engines on a random set of columns: w_e, the interface coefficients, and θ, q, qc and the wind after the step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const on = await engines({}), off = await engines({ efficiency: 0, shear: 0 });
+  const { K: nK, C: nC, E: nE, kTop } = on;
+  let entraining = 0, gated = 0, stable = 0, worstW = 0, scaleW = 0, worstMix = 0, flips = 0;
+  for (let i = 0; i < nC; i++) {
+    const cpu = on.cpu.entrainment[i], gpu = on.ph.ENTRAIN[i];
+    if (cpu > 0) entraining++; else if (on.gate[i] > 0.5) gated++; else stable++;
+    if ((cpu > 0) !== (gpu > 0)) { flips++; continue; }
+    worstW = Math.max(worstW, Math.abs(cpu - gpu) / Math.max(cpu, 1e-4)); scaleW = Math.max(scaleW, cpu);
+    let largest = 0;
+    for (let k = kTop; k < nK - 1; k++) largest = Math.max(largest, on.cpu.mixing[k * nC + i]);
+    for (let k = kTop; k < nK - 1; k++) { const x = k * nC + i; if (largest > 0) worstMix = Math.max(worstMix, Math.abs(on.cpu.mixing[x] - on.ph.MIX[x]) / largest); }
+  }
+  let theta = 0, q = 0, qc = 0, wind = 0, moved = 0, movedWind = 0;
+  for (let x = 0; x < nK * nC; x++) {
+    theta = Math.max(theta, Math.abs(on.state[1][x] - on.after[1][x])); q = Math.max(q, Math.abs(on.state[4][x] - on.after[4][x])); qc = Math.max(qc, Math.abs(on.state[5][x] - on.after[5][x]));
+    moved = Math.max(moved, Math.abs(on.state[4][x] - off.state[4][x]));
+  }
+  for (let x = 0; x < nK * nE; x++) { wind = Math.max(wind, Math.abs(on.state[2][x] - on.after[2][x])); movedWind = Math.max(movedWind, Math.abs(on.state[2][x] - off.state[2][x])); }
+  let offW = 0;
+  for (let i = 0; i < nC; i++) offW = Math.max(offW, off.ph.ENTRAIN[i], off.cpu.entrainment[i]);
+  console.log(`${nC} random columns: ${entraining} entrain (w_e up to ${(1000 * scaleW).toFixed(1)} mm/s), ${gated} under a deck gate, ${stable} over a stable surface; entrainment on or off differs between the engines on ${flips}; w_e differs by ${worstW.toExponential(1)} relative, the interface coefficients by ${worstMix.toExponential(1)} of each column's largest; after the step θ by ${theta.toExponential(1)} K, q by ${q.toExponential(1)}, qc by ${qc.toExponential(1)}, the wind by ${wind.toExponential(1)} m/s, where entrainment moves q by up to ${moved.toExponential(1)} and the wind by ${movedWind.toFixed(2)} m/s`);
+  assert.ok(entraining > nC / 4 && gated > nC / 10 && stable > nC / 20, `${entraining} entraining, ${gated} gated, ${stable} stable`);
+  assert.equal(offW, 0);
+  assert.ok(flips <= nC / 200, `${flips} columns flip`);
+  assert.ok(worstW < 1e-3 && worstMix < 1e-3, `w_e ${worstW}, coefficients ${worstMix}`);
+  assert.ok(theta < 1e-3 && q < 1e-6 && qc < 1e-7 && wind < 1e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
+  assert.ok(moved > 100 * q && movedWind > 100 * wind, `entrainment moves q by ${moved} and the wind by ${movedWind}`);
 });
