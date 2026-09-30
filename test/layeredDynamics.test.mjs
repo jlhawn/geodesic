@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { createOcean } from '../js/ocean/layered.module.js';
+import { createOcean, THIN } from '../js/ocean/layered.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, totalHeatSalt, northwardMixedTransport, slowOcean } from './helpers/layered.mjs';
 
@@ -156,4 +156,33 @@ test('wind-driven advection over 100 steps conserves total heat and salt', () =>
   assert.ok(Math.abs(after.heat - before.heat) < 1e-9 * Math.abs(before.heat), `heat ${before.heat} -> ${after.heat}`);
   assert.ok(Math.abs(after.salt - before.salt) < 1e-9 * Math.abs(before.salt), `salt ${before.salt} -> ${after.salt}`);
   assert.equal(ocean.diagnostics().oceanLimited, 0);
+});
+
+test('interfacial drag moves momentum between the layers at an edge without changing the column\'s, the classes a few metres thick included', () => {
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C);
+  const build = (interfacialDrag) => {
+    const ocean = createOcean(mesh, { everySteps: 1, interfacialDrag });
+    ocean.initialize(Float64Array.from(surfaceT), ice);
+    for (let n = 0; n < ocean.u.length; n++) ocean.u[n] = 0.2 * Math.sin(0.7 * Math.floor(n / E) + 0.37 * (n % E));
+    ocean.tendency(ocean.state, ocean.stages[0]);
+    return ocean;
+  };
+  const dragging = build(5e-5), still = build(0), L = dragging.layers;
+  const hEdge = new Float64Array(dragging.shared.hEdge), du = dragging.stages[0][1], du0 = still.stages[0][1];
+  let worst = 0, largest = 0, thin = 0;
+  for (let e = 0; e < E; e++) {
+    if (!dragging.edgeOcean[e]) continue;
+    let net = 0;
+    for (let k = 0; k < L; k++) {
+      const n = k * E + e;
+      if (k > 0 && hEdge[n] < THIN) continue;
+      if (k > 0 && hEdge[n] < 50) thin++;
+      const moved = hEdge[n] * (du[n] - du0[n]);
+      net += moved; largest = Math.max(largest, Math.abs(moved));
+    }
+    worst = Math.max(worst, Math.abs(net));
+  }
+  console.log(`${thin} layer edges between ${THIN} and 50 m thick; the largest momentum moved by the drag ${largest.toExponential(2)} m²/s², the largest column imbalance ${worst.toExponential(2)}`);
+  assert.ok(thin > 100, `only ${thin} thin layer edges`);
+  assert.ok(worst < 1e-12 * largest, `the drag changes a column's momentum by ${worst} against ${largest} moved`);
 });

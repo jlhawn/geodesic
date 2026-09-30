@@ -805,22 +805,22 @@ export function createOcean(mesh, {
       if (k === 0) for (let e = 0; e < E; e++) du[e] -= g / rho0 * 0.5 * hEdge[e] * gradRho[e];
       for (let e = 0; e < E; e++) {
         const he = Math.max(hEdge[oe + e], minimumThickness);
-        let force = 0;
+        let force = 0, drag = 0;
         if (k === 0) force += stress[e] / rho0;
         if (k > 0) {
           let j = k - 1;
           while (j > 0 && hEdge[ae(j, e)] < THIN) j--;
-          force += interfacialDrag * (uIn[ae(j, e)] - uIn[oe + e]);
+          drag += interfacialDrag * (uIn[ae(j, e)] - uIn[oe + e]);
         }
         if (k < L - 1) {
           let j = k + 1;
           while (j < L - 1 && hEdge[ae(j, e)] < THIN) j++;
-          if (hEdge[ae(j, e)] >= THIN) force -= interfacialDrag * (uIn[oe + e] - uIn[ae(j, e)]);
+          if (hEdge[ae(j, e)] >= THIN) drag -= interfacialDrag * (uIn[oe + e] - uIn[ae(j, e)]);
         }
         let bottom = k === L - 1;
         if (!bottom) { bottom = true; for (let j = k + 1; j < L; j++) if (hEdge[ae(j, e)] >= THIN) { bottom = false; break; } }
         if (bottom) force -= bottomDrag * Math.abs(uIn[oe + e]) * uIn[oe + e];
-        du[oe + e] += force / he;
+        du[oe + e] += force / he + drag / (k === 0 ? he : Math.max(hEdge[oe + e], THIN));
       }
       if (nu4 > 0) {
         laplacianVelocity(mesh, uIn.subarray(oe, oe + E), lap, divScratch, curlScratch);

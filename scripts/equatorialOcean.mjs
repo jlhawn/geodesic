@@ -195,15 +195,15 @@ for (let k = 0; k < L; k++) {
       const o = edgesOnEdge[maxEdgesOnEdge * e + s], w = weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[o] * fluxPV[o];
       sf += w * 0.5 * (qf[e] + qf[o]); sz += w * 0.5 * (qz[e] + qz[o]);
     }
-    const n = oe + e, he = Math.max(hEdge[n], opt.minimumThickness);
+    const n = oe + e, he = Math.max(hEdge[n], opt.minimumThickness), hd = k === 0 ? he : Math.max(hEdge[n], THIN);
     budget[0][n] = sf / dcEdge[e];
     budget[1][n] = sz / dcEdge[e];
     budget[2][n] = -grad[e];
     budget[3][n] = -g * gradEta[e];
     budget[4][n] = k === 0 ? -g / rho0 * 0.5 * hEdge[e] * gradRho[e] : -gradP[e];
     if (k === 0) budget[5][n] = ocean.stress[e] / rho0 / he;
-    if (k > 0) { let j = k - 1; while (j > 0 && hEdge[ae(j, e)] < THIN) j--; budget[6][n] = opt.interfacialDrag * (u[ae(j, e)] - u[n]) / he; }
-    if (k < L - 1) { let j = k + 1; while (j < L - 1 && hEdge[ae(j, e)] < THIN) j++; if (hEdge[ae(j, e)] >= THIN) budget[7][n] = -opt.interfacialDrag * (u[n] - u[ae(j, e)]) / he; }
+    if (k > 0) { let j = k - 1; while (j > 0 && hEdge[ae(j, e)] < THIN) j--; budget[6][n] = opt.interfacialDrag * (u[ae(j, e)] - u[n]) / hd; }
+    if (k < L - 1) { let j = k + 1; while (j < L - 1 && hEdge[ae(j, e)] < THIN) j++; if (hEdge[ae(j, e)] >= THIN) budget[7][n] = -opt.interfacialDrag * (u[n] - u[ae(j, e)]) / hd; }
     let isBottom = k === L - 1;
     if (!isBottom) { isBottom = true; for (let j = k + 1; j < L; j++) if (hEdge[ae(j, e)] >= THIN) { isBottom = false; break; } }
     if (isBottom) budget[8][n] = -opt.bottomDrag * Math.abs(u[n]) * u[n] / he;
@@ -258,7 +258,7 @@ for (const b of [2, 3, 4, 5, 6]) {
 
 const columns = [];
 const column = (t) => { if (columns[t]) return columns[t]; const out = new Float64Array(E); for (let e = 0; e < E; e++) for (let k = 0; k < L; k++) out[e] += hEdge[ae(k, e)] * budget[t][ae(k, e)]; return (columns[t] = out); };
-say('\nwhole column, depth-integrated h*term (1e-5 m2/s2): interfacial drag sums to zero only where every layer is at least minimumThickness thick');
+say('\nwhole column, depth-integrated h*term (1e-5 m2/s2): interfacial drag sums to zero where the mixed layer is at least minimumThickness thick at the edge');
 header();
 row('  stress', binMean(zonal(column(5))), 2, 1e5);
 row('  -g grad eta + baroclinic PGF', binMean(zonal(Float64Array.from(column(3), (x, e) => x + column(4)[e]))), 2, 1e5);
