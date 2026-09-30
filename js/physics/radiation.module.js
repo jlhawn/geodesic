@@ -128,11 +128,20 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * stratification across one of them passes the 2 K test below, and a
  * deck entraining under such a weak jump would deepen into it. A column
  * with no such interface has no ceiling but maximumHeight.
- * A stratocumulus-topped layer needs large-scale subsidence under a
- * capping inversion, so the gates pass where w̄_s ≤ −stratusSubsidence
- * (0.3 mm/s; DYCOMS-II has 3 mm/s at 840 m) and Δθ_v ≥ minimumInversion
+ * The regime test is the capping inversion: Δθ_v ≥ minimumInversion
  * (2 K, a capping inversion rather than the top of a subcloud layer
- * under cumulus) at the start's h.
+ * under cumulus) at the start's h. A stratocumulus-topped layer also
+ * needs large-scale subsidence (DYCOMS-II has 3 mm/s at 840 m), but the
+ * model resolves it as a residual of a few mm/s: in the SE Pacific and
+ * Peru boxes the running mean w̄_s below sinks at 1.8 and 2.1 mm/s with
+ * a spread over the cells as large, so a floor on the sink turns columns
+ * of the regime away on synoptic swings, while the inversion is the
+ * resolved record of the subsidence that built it. The subsidence test
+ * therefore only vetoes large-scale ascent, under which an inversion at
+ * the boundary-layer top is transient: it passes where
+ * w̄_s ≤ −stratusSubsidence, and stratusSubsidence is −1 mm/s, about
+ * twice the grid-scale residual of w̄_s, so the deck is refused where
+ * the mean rises faster than 1 mm/s.
  * The divergent computational mode of the hexagonal C-grid puts most of
  * the variance of one stage's πσ̇ at the neighbouring-cell scale: on the
  * day-183 N=128 state the sink at h spreads over the SE Pacific's cells
@@ -244,7 +253,7 @@ export function adiabaticWaterLapse(T, p, cp, R, g, latentHeat = LATENT_HEAT) {
 
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 95, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
-  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = 3e-4, minimumInversion = 2, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
+  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 2, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
   prognosticHeight = true, gateMemory = DAY, subsidenceSmoothing = 2,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,

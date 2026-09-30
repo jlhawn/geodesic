@@ -1053,17 +1053,24 @@ Richardson depth over a day (`mixedLayer.heightMemory`) while no deck
 runs; unset (0) it starts from that depth. Where the deck runs, the
 boundary layer's K-profile spans max(Richardson depth, h), so the
 column is mixed through the deck's layer. The deck runs only in the
-stratocumulus regime, under a capping jump Δθ_v ≥ 2 K and a mean
-subsidence of at least 0.3 mm/s at h. One stage's πσ̇ carries the
+stratocumulus regime, and the regime test is the capping jump
+Δθ_v ≥ 2 K at h. The subsidence only vetoes: the deck is refused
+where the running-mean sink at h below is negative by more than
+1 mm/s (`stratusSubsidence` −1 mm/s), large-scale ascent under which
+an inversion at the boundary-layer top is transient. The model resolves
+the deck regions' subsidence as a residual of a few mm/s (1.8 and
+2.1 mm/s in the SE Pacific and Peru boxes, with a spread over the
+cells as large), so a floor on the sink would turn columns of the regime
+away on synoptic swings, while the inversion is the resolved record of
+the subsidence that built it. One stage's πσ̇ carries the
 divergent computational mode of the hexagonal C-grid at the
 neighbouring-cell scale: on the day-183 N=128 state the sink at h
 spreads over the SE Pacific's cells by 30 mm/s about a mean of
 1.5 mm/s, 97 % of its variance at that scale, and the two ring passes
 leave 8.6 mm/s about 1.6 mm/s with 12 % there. The subsidence test
 reads a two-day running mean of the smoothed sink
-(`subsidenceMemory`), because the large-scale subsidence that defines
-the regime is still a small residual of the synoptic swings, and the
-deck follows a one-day
+(`subsidenceMemory`), whose grid-scale residual is about 0.5 mm/s, and
+the deck follows a one-day
 running mean G of the two tests' pass (`gateMemory`), running while
 G > 0.5: a standing deck outlives failing tests by 17 h and a new one
 waits as long, where the instantaneous Δθ_v test, hovering about 2 K,
