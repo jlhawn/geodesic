@@ -62,10 +62,12 @@ test('scripts/verticalAudit.mjs prints every headline number of a saved state wi
   rmSync(dir, { recursive: true, force: true });
   assert.equal(run.status, 0, run.stderr);
   const lines = run.stdout.split('\n').filter((line) => line.includes(' Earth '));
-  assert.equal(lines.length, 26, `${lines.length} rows`);
-  for (const name of ['SE Pacific 10-30S 110-80W: rain', 'Peru 5-20S 90-75W: columns firing a step', "deck's virtual jump above h", 'estimated inversion strength', 'saved 10-day deck sink', 'omega700 (Pa/s)', 'low cloud', 'deck height h', 'resolved inversion', 'Pacific ITCZ 5-12N 160E-100W: omega500', 'zonal-mean rain peak', 'omega700 grid-scale share', 'SH Hadley peak', 'NH Hadley peak']) {
+  assert.equal(lines.length, 36, `${lines.length} rows`);
+  for (const name of ['SE Pacific 10-30S 110-80W: rain', 'Peru 5-20S 90-75W: columns firing a step', "deck's virtual jump above h", 'estimated inversion strength', 'saved running-mean deck sink', 'deck-height sink now, as the dynamics leaves it', 'deck-height sink now, as the deck reads it, 2 ring passes', 'omega700 (Pa/s)', 'low cloud', "deck's start height h", 'deck runs, share of column-steps', 'deck height where it runs', 'resolved inversion (m)', "resolved inversion's thetaV jump", 'Pacific ITCZ 5-12N 160E-100W: omega500', 'zonal-mean rain peak', 'omega700 grid-scale share', 'SH Hadley peak', 'NH Hadley peak']) {
     assert.ok(lines.some((line) => line.includes(name)), `a row for ${name}`);
   }
   for (const line of lines) assert.match(line, /Earth (-?[0-9.]+\.\.-?[0-9.]+|n\/a\.\.n\/a)  -> (matches|too weak by x[0-9.]+|too strong by x[0-9.]+|wrong sign|too noisy to tell|none|n\/a)/);
   assert.match(run.stdout, /SH Hadley peak \(1e9 kg\/s\) +-?[0-9]+\.[0-9]/);
+  assert.match(run.stdout, /replica over [1-9][0-9]* column-steps: running mean \|diff\| 0\.0e\+0 m\/s, gate \|diff\| 0\.0e\+0, run decisions differing 0/);
+  assert.match(run.stdout, /off: subsidence [0-9.]+, off: jump [0-9.]+, off: gate memory [0-9.]+; failing the subsidence test [0-9.]+, the jump test [0-9.]+/);
 });
