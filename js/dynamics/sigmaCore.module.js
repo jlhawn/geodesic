@@ -94,7 +94,7 @@ export function sigmaGridName(levels) {
 export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
-    nu4 = 0, nu4Theta = 0, surfaceGeopotential = null, buffers = null, splitClosure = false,
+    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, surfaceGeopotential = null, buffers = null, splitClosure = false,
   } = options;
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -102,6 +102,7 @@ export function createSigmaCore(mesh, options = {}) {
   } = mesh;
   const K = levels.length - 1;
   const kappa = R / cp;
+  if (divergenceDamping > 0 && !splitClosure) throw new Error('divergence damping needs a core with splitClosure');
   const sigmaUpper = levels.subarray(0, K);
   const sigmaLower = levels.subarray(1, K + 1);
   const dSigma = Float64Array.from(sigmaLower, (s, k) => s - sigmaUpper[k]);
@@ -149,6 +150,11 @@ export function createSigmaCore(mesh, options = {}) {
   const divQcFlux = new Float64Array(C);
   const massField = new Float64Array(C);
   const pvWeights = Float64Array.from(weightsOnEdge, (w, slot) => w * dvEdge[edgesOnEdge[slot]]);
+  let spacing = 0;
+  for (let e = 0; e < E; e++) spacing += dcEdge[e];
+  spacing /= E;
+  const divergenceStep = divergenceDamping * spacing * spacing;
+  const gradDiv = new Float64Array(E);
 
   function diagnoseColumn(i, pi, theta, q = null, qc = null) {
     for (let k = 0; k < K; k++) {
@@ -264,6 +270,19 @@ export function createSigmaCore(mesh, options = {}) {
   }
 
   /*
+   * Divergence damping of one layer over one step: u += c d² ∇(∇·u) with
+   * d the mean distance between cell centres, the tendency ν_d ∇δ with
+   * ν_d = c d²/dt. The gradient of a divergence has no curl on the C-grid,
+   * so the vorticity is untouched.
+   */
+  function divergenceClosure(k, u) {
+    const off = k * E, uk = u.subarray(off, off + E);
+    divergence(mesh, uk, divScratch);
+    gradient(mesh, divScratch, gradDiv);
+    for (let e = 0; e < E; e++) u[off + e] += divergenceStep * gradDiv[e];
+  }
+
+  /*
    * Flux-form transport of a layer scalar by the mass fluxes, with the
    * ∇⁴ closure as part of the tendency unless the closure is split off.
    */
@@ -287,9 +306,10 @@ export function createSigmaCore(mesh, options = {}) {
   }
 
   /*
-   * The ∇⁴ closures applied to the state itself over one time step,
-   * for cores built with splitClosure: the model runs this once per
-   * step after the RK4 dynamics instead of inside every stage.
+   * The ∇⁴ closures, and the divergence damping after the momentum one,
+   * applied to the state itself over one time step, for cores built with
+   * splitClosure: the model runs this once per step after the RK4
+   * dynamics instead of inside every stage.
    */
   function phaseClosure(state, kFrom, kTo, dt, part = 'all') {
     const [pi, theta, u] = state;
@@ -302,9 +322,10 @@ export function createSigmaCore(mesh, options = {}) {
       }
       if (part === 'tracers') continue;
       const off = k * E;
-      if (nu4 > 0) {
+      if (nu4 > 0 || divergenceStep > 0) {
         for (let e = 0; e < E; e++) uBefore[e] = u[off + e];
-        momentumClosure(k, u, u, dt * nu4);
+        if (nu4 > 0) momentumClosure(k, u, u, dt * nu4);
+        if (divergenceStep > 0) divergenceClosure(k, u);
         for (let e = 0; e < E; e++) dissipation[off + e] = uBefore[e] * uBefore[e] - u[off + e] * u[off + e];
       } else dissipation.fill(0, off, off + E);
     }
@@ -376,5 +397,5 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, nu4, nu4Theta, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
+  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
 }

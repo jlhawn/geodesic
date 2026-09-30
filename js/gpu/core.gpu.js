@@ -485,6 +485,19 @@ const KERNELS = {
     } else { D[D_LAPA + n] = lap; }
   }
 }`,
+  divergenceDamp: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let e = i32(id.x); if (e >= E) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  let dc = MF[F_DC + e];
+  let accumulate = P[2] > 0.5;
+  for (var k = 0; k < K; k++) {
+    let n = k * E + e;
+    let before = IN[S_U + n]; let after = before + P[0] * (D[D_DIVS + k * C + b] - D[D_DIVS + k * C + a]) / dc;
+    IN[S_U + n] = after;
+    let lost = before * before - after * after;
+    if (accumulate) { D[D_DISS + n] += lost; } else { D[D_DISS + n] = lost; }
+  }
+}`,
   dissipationHeat: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = i32(id.x); if (n >= K * C) { return; }
   let k = n / C; let i = n % C;
@@ -513,7 +526,7 @@ export const PHYSICS_DEFAULTS = {
 };
 
 export async function createGpuCore(mesh, {
-  levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0,
+  levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0, divergenceDamping = 0,
   dragCoefficient = 1.5e-3, gustiness = 3, topSigma = 0.02, topDragDays = 5, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
 } = {}) {
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
@@ -591,6 +604,7 @@ export async function createGpuCore(mesh, {
   let meshSpacing = 0;
   for (let e = 0; e < E; e++) meshSpacing += mesh.dcEdge[e];
   meshSpacing /= E;
+  const divergenceStep = divergenceDamping * meshSpacing * meshSpacing;
   const kernels = {};
   for (const [name, body] of Object.entries({ ...KERNELS, ...PHYSICS_KERNELS, ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) })) {
     const code = head + body.replaceAll('S_TOTAL', String(L.S.total)).replaceAll('i32(id.x)', '(i32(id.x) + i32(id.y) * 4194240)');
@@ -722,6 +736,13 @@ export async function createGpuCore(mesh, {
           dispatch(pass, 'lapVelocity', g, E);
         });
       }
+    }
+    if (divergenceStep > 0) {
+      setParams([divergenceStep, 0, nu4 > 0 ? 1 : 0]);
+      compute((pass) => {
+        dispatch(pass, 'divCurl', g, C);
+        dispatch(pass, 'divergenceDamp', g, E);
+      });
     }
   }
 

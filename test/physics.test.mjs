@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, P0, CP_DRY, R_DRY } from '../js/dynamics/sigmaCore.module.js';
+import { curl, divergence } from '../js/dynamics/operators.module.js';
 import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex, ringMean } from '../js/physics/radiation.module.js';
 import { smoothCells } from '../js/levels.module.js';
 import { LATENT_HEAT, saturationHumidity, liftingCondensationLevel } from '../js/physics/moist.module.js';
@@ -171,6 +172,53 @@ test('the closure and the boundary-layer mixing return the kinetic energy they r
   const lost = kineticBefore - kinetic();
   model.phases.dissipate(0, cells);
   assert.ok(lost > 0);
+  assert.ok(Math.abs(energy() - before) < 1e-9 * lost, `energy changed by ${energy() - before} J against ${lost} J of kinetic energy removed`);
+});
+
+test('divergence damping takes kinetic energy from the divergent flow alone and the model returns it as heat: mass, vorticity and total energy are unchanged', () => {
+  const model = createModel(new Grid(4), { ocean: false, nu4Hours: Infinity, divergenceDamping: 0.05 });
+  const init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  const { state, mesh: m, core: c } = model;
+  const { K: layers, C: cells, E: edges, V: vertices, dSigma, g, cp } = c.diagnostics;
+  assert.equal(c.nu4, 0);
+  assert.throws(() => createSigmaCore(m, { divergenceDamping: 0.05 }));
+  const rnd = random(7);
+  for (let x = 0; x < state[2].length; x++) state[2][x] += 15 * (rnd() - 0.5);
+  model.surface.lowestWindSpeed(state[2]);
+  model.phases.physics(0, cells, 900, model.totals);
+  state[0].fill(P0);
+  c.diagnose(state[0], state[1], state[4], state[5]);
+  const layerKinetic = (k) => cellKineticWeights(m, state[0], state[2].subarray(k * edges, (k + 1) * edges), k, dSigma, g);
+  const energy = () => {
+    let sum = 0;
+    for (let k = 0; k < layers; k++) {
+      sum += layerKinetic(k);
+      for (let i = 0; i < cells; i++) sum += m.areaCell[i] * state[0][i] * dSigma[k] / g * cp * state[1][k * cells + i] * c.diagnostics.exnerLayer[k * cells + i];
+    }
+    return sum;
+  };
+  const kinetic = () => { let sum = 0; for (let k = 0; k < layers; k++) sum += layerKinetic(k); return sum; };
+  const fields = () => {
+    const vorticity = new Float64Array(layers * vertices), div = new Float64Array(layers * cells);
+    for (let k = 0; k < layers; k++) {
+      curl(m, state[2].subarray(k * edges, (k + 1) * edges), vorticity.subarray(k * vertices, (k + 1) * vertices));
+      divergence(m, state[2].subarray(k * edges, (k + 1) * edges), div.subarray(k * cells, (k + 1) * cells));
+    }
+    return { vorticity, div };
+  };
+  const rms = (x) => Math.sqrt(x.reduce((a, b) => a + b * b, 0) / x.length);
+  const before = energy(), kineticBefore = kinetic(), pi = Float64Array.from(state[0]), start = fields();
+  model.phases.closure(0, layers, 900);
+  const lost = kineticBefore - kinetic(), end = fields();
+  model.phases.dissipate(0, cells);
+  let turned = 0;
+  for (let x = 0; x < start.vorticity.length; x++) turned = Math.max(turned, Math.abs(end.vorticity[x] - start.vorticity[x]));
+  const scale = start.vorticity.reduce((a, b) => Math.max(a, Math.abs(b)), 0);
+  console.log(`one step at c = 0.05: the divergence falls from rms ${rms(start.div).toExponential(2)} to ${rms(end.div).toExponential(2)} /s, ${(100 * lost / kineticBefore).toFixed(2)} % of the kinetic energy goes to heat, the vorticity moves by at most ${(turned / scale).toExponential(1)} of its largest value`);
+  assert.ok(lost > 0 && rms(end.div) < 0.9 * rms(start.div), `kinetic energy lost ${lost}, divergence ${rms(start.div)} → ${rms(end.div)}`);
+  assert.ok(turned < 1e-12 * scale, `vorticity moved by ${turned} against ${scale}`);
+  assert.deepEqual(state[0], pi);
   assert.ok(Math.abs(energy() - before) < 1e-9 * lost, `energy changed by ${energy() - before} J against ${lost} J of kinetic energy removed`);
 });
 
