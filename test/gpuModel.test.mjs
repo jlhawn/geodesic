@@ -358,7 +358,7 @@ test('over six steps the carried inversion height, the gate and the deck they gi
   assert.ok(held > 0.5 * C && capped.height.rmsRel < 1e-5 && capped.mlmWater.rmsRel < 1e-4 && capped.cover.maxDiff < 1e-3, `held ${held}, height rms ${capped.height.rmsRel}, water rms ${capped.mlmWater.rmsRel}, cover ${capped.cover.maxDiff}`);
 });
 
-test('the GPU model sends the deck\'s running-mean subsidence, carried height and gate and the convection\'s activity to the device on load and reads them back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the GPU model sends the deck\'s running-mean subsidence, carried height and gate, the convection\'s activity and the boundary layer\'s depth to the device on load and reads them back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const model = await createGpuModel(new Grid(6), { ocean: false, radiation: { mixedLayerDeck: true } });
   const C = model.mesh.nCells, init = initializeState(model, {});
@@ -370,12 +370,15 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   model.radiation.mlmGate.set(gates);
   const activity = Float64Array.from({ length: C }, (_, i) => (i % 9) / 8);
   model.moist.convectiveActivity.set(activity);
+  const depth = Float64Array.from({ length: C }, (_, i) => 300 + 23 * (i % 13));
+  model.boundaryLayer.depth.set(depth);
   model.load();
   const device = await model.gpu.downloadPhysics();
   for (let i = 0; i < C; i++) {
     assert.equal(device.MLMSUB[i], Math.fround(loaded[i]), `cell ${i} on the device`);
     assert.ok(device.MLMH[i] === Math.fround(heights[i]) && device.MLMGATE[i] === Math.fround(gates[i]), `cell ${i}: height and gate on the device`);
     assert.equal(device.CONVACT[i], Math.fround(activity[i]), `cell ${i}: activity on the device`);
+    assert.equal(device.DEPTH[i], Math.fround(depth[i]), `cell ${i}: boundary-layer depth on the device`);
   }
   await model.step(900); await model.step(900);
   await model.sync();
@@ -384,6 +387,7 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   for (let i = 0; i < C; i++) {
     assert.ok(model.radiation.mlmHeight[i] === after.MLMH[i] && model.radiation.mlmGate[i] === after.MLMGATE[i], `cell ${i}: height and gate mirrored`);
     assert.equal(model.moist.convectiveActivity[i], after.CONVACT[i], `cell ${i}: activity mirrored`);
+    assert.equal(model.boundaryLayer.depth[i], after.DEPTH[i], `cell ${i}: boundary-layer depth mirrored`);
     assert.equal(mean[i], after.MLMSUB[i], `cell ${i} mirrored`);
     assert.ok(Math.abs(mean[i] - loaded[i]) < 1e-4, `cell ${i}: ${mean[i]} from ${loaded[i]}`);
     if (mean[i] !== Math.fround(loaded[i])) moved++;
