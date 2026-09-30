@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { cellVector } from '../js/dynamics/operators.module.js';
-import { createOcean, THIN } from '../js/ocean/layered.module.js';
+import { cellVector, laplacianVelocity } from '../js/dynamics/operators.module.js';
+import { createOcean, closureVelocity, THIN, EPS } from '../js/ocean/layered.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, totalHeatSalt, northwardMixedTransport, slowOcean } from './helpers/layered.mjs';
 
@@ -185,4 +185,36 @@ test('interfacial drag moves momentum between the layers at an edge without chan
   console.log(`${thin} layer edges between ${THIN} and 50 m thick; the largest momentum moved by the drag ${largest.toExponential(2)} m²/s², the largest column imbalance ${worst.toExponential(2)}`);
   assert.ok(thin > 100, `only ${thin} thin layer edges`);
   assert.ok(worst < 1e-12 * largest, `the drag changes a column's momentum by ${worst} against ${largest} moved`);
+});
+
+test('closureVelocity carries a class\'s own flow across its token edges, and the closure then acts on that flow, not on the flow of the layer above them', () => {
+  const m = buildMesh(new Grid(16)), mE = m.nEdges;
+  const rotation = (e, sign) => sign * 0.3 * (-m.xEdge[3 * e + 1] * m.nEdge[3 * e] + m.xEdge[3 * e] * m.nEdge[3 * e + 1]);
+  const inside = (i) => Math.sin(3 * m.lonCell[i]) + 0.5 * Math.cos(5 * m.latCell[i]) > 0.2;
+  const hEdge = new Float64Array(mE), sea = new Uint8Array(mE).fill(1), exact = new Float64Array(mE), slaved = new Float64Array(mE);
+  for (let e = 0; e < mE; e++) {
+    const present = inside(m.cellsOnEdge[2 * e]) && inside(m.cellsOnEdge[2 * e + 1]);
+    hEdge[e] = present ? 12 : EPS;
+    exact[e] = rotation(e, 1);
+    slaved[e] = present ? exact[e] : rotation(e, -1);
+  }
+  const status = new Uint8Array(mE), filled = closureVelocity(m, slaved, hEdge, sea, new Float64Array(mE), status);
+  const near = new Uint8Array(mE), error = [0, 0, 0], size = [0, 0, 0], count = [0, 0, 0];
+  for (let e = 0; e < mE; e++) {
+    if (hEdge[e] >= THIN) { assert.equal(filled[e], slaved[e]); continue; }
+    for (let s = 0; s < m.nEdgesOnEdge[e]; s++) { const o = m.edgesOnEdge[m.maxEdgesOnEdge * e + s]; if (hEdge[o] >= THIN) near[o] = 1; }
+    count[status[e]]++;
+    if (status[e] === 0) { assert.equal(filled[e], 0); continue; }
+    error[status[e]] += (filled[e] - exact[e]) ** 2; size[status[e]] += exact[e] ** 2;
+  }
+  const pull = (field) => {
+    const lap2 = laplacianVelocity(m, laplacianVelocity(m, field));
+    let sum = 0, n = 0;
+    for (let e = 0; e < mE; e++) if (near[e]) { sum += lap2[e] ** 2; n++; }
+    return Math.sqrt(sum / n);
+  };
+  const first = Math.sqrt(error[2] / size[2]), second = Math.sqrt(error[1] / size[1]), before = pull(slaved), after = pull(filled), smooth = pull(exact);
+  console.log(`token edges: ${count[2]} filled from the class's own edges, ${(100 * first).toFixed(1)}% rms from its flow, ${count[1]} from those, ${(100 * second).toFixed(1)}%, ${count[0]} beyond; ∇⁴ on the class edges beside them ${after.toExponential(2)} against ${before.toExponential(2)} on the velocity above and ${smooth.toExponential(2)} on the smooth flow`);
+  assert.ok(first < 0.1 && second < 0.35, `filled edges ${first} and ${second} rms from the class's flow`);
+  assert.ok(after < 0.05 * before, `the closure's pull beside the token edges ${after} against ${before}`);
 });

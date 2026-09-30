@@ -15,13 +15,13 @@ import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { cellVector, gradient, curl, kineticEnergy, laplacianVelocity } from '../js/dynamics/operators.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
-import { THIN, PV_FLOOR, THERMOCLINE_DENSITY, closureCoefficient } from '../js/ocean/layered.module.js';
+import { THIN, PV_FLOOR, THERMOCLINE_DENSITY, closureCoefficient, closureVelocity } from '../js/ocean/layered.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) throw new Error('usage: node scripts/equatorialOcean.mjs <state.bin>');
 const LAT = Number(process.env.LAT ?? 2);
 const OCEAN = { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') };
-const DEFAULTS = { interfacialDrag: 2e-4, bottomDrag: 3e-3, minimumThickness: 50, vorticityCentring: 0.5, closureHours: 12, density: 1025, gravity: 9.81 };
+const DEFAULTS = { interfacialDrag: 2e-4, bottomDrag: 3e-3, minimumThickness: 50, vorticityCentring: 0.5, closureHours: 12, closureFill: false, density: 1025, gravity: 9.81 };
 const opt = { ...DEFAULTS, ...OCEAN };
 const say = (s = '') => console.log(s);
 const f = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '—');
@@ -128,7 +128,7 @@ const classTop = (i, density) => { let z = 0; for (let k = 0; k < L; k++) { if (
 say('\n-- 2. mixed layer and thermocline');
 row('SST (C)', binMean((i) => layerT(0, i)), 2);
 row('mixed-layer depth h0 (m)', binMean((i) => h[i]), 1);
-row('share of cells with h0 <= 50.5 m (%)', binMean((i) => (h[i] <= 50.5 ? 100 : 0)), 0);
+row(`share of cells with h0 <= ${opt.minimumThickness + 0.5} m (%)`, binMean((i) => (h[i] <= opt.minimumThickness + 0.5 ? 100 : 0)), 0);
 row('min h0 in bin (m)', BINS.map((_, b) => { let m = Infinity; for (let i = 0; i < C; i++) if (binOf[i] === b) m = Math.min(m, h[i]); return m; }), 1);
 row('max h0 in bin (m)', BINS.map((_, b) => { let m = -Infinity; for (let i = 0; i < C; i++) if (binOf[i] === b) m = Math.max(m, h[i]); return m; }), 1);
 row('20 C isotherm depth (m)', binMean((i) => isothermDepth(i, 20)), 1);
@@ -170,7 +170,7 @@ const du = stage[1];
 const terms = ['coriolis f', 'rel. vorticity', '-grad K', '-g grad eta', 'baroclinic PGF', 'stress', 'drag above', 'drag below', 'bottom drag', 'nu4 closure', 'thin-layer relax'];
 const budget = terms.map(() => new Float64Array(L * E));
 const zeta = new Float64Array(C > 0 ? mesh.nVertices : 0), qf = new Float64Array(E), qz = new Float64Array(E), fluxPV = new Float64Array(E);
-const Kc = new Float64Array(C), grad = new Float64Array(E), lap = new Float64Array(E), lap2 = new Float64Array(E), divS = new Float64Array(C), curlS = new Float64Array(mesh.nVertices), phi = new Float64Array(C);
+const Kc = new Float64Array(C), grad = new Float64Array(E), lap = new Float64Array(E), lap2 = new Float64Array(E), divS = new Float64Array(C), curlS = new Float64Array(mesh.nVertices), phi = new Float64Array(C), closureU = new Float64Array(E);
 const relax = Math.min(1 / 3600, 1 / dtOcean);
 for (let k = 0; k < L; k++) {
   const oe = k * E, uk = u.subarray(oe, oe + E);
@@ -187,7 +187,7 @@ for (let k = 0; k < L; k++) {
   for (let i = 0; i < C; i++) phi[i] = k === 0 ? 0 : g * pressure[at(k, i)] / rho0;
   const gradP = new Float64Array(E);
   gradient(mesh, phi, gradP);
-  if (nu4 > 0) { laplacianVelocity(mesh, uk, lap, divS, curlS); laplacianVelocity(mesh, lap, lap2, divS, curlS); }
+  if (nu4 > 0) { laplacianVelocity(mesh, k === 0 || !opt.closureFill ? uk : closureVelocity(mesh, uk, hEdge.subarray(oe, oe + E), edgeOcean, closureU), lap, divS, curlS); laplacianVelocity(mesh, lap, lap2, divS, curlS); }
   for (let e = 0; e < E; e++) {
     if (!edgeOcean[e]) continue;
     let sf = 0, sz = 0;
