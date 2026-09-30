@@ -3295,6 +3295,119 @@ the westward pull of their token edges removed without losing the hold,
 for example by filling the patchy 1022.5–1024.75 classes with a weak
 diapycnal exchange between adjacent interior classes.
 
+**Item 6, a shallow cumulus mass flux (Sept 30).** Both engines
+(`cumulusColumn` in `js/physics/moist.module.js`, the adjust kernel of
+`js/gpu/physics.gpu.js`) replace the shallow Betts–Miller vent
+(`shallowScheme` 'massFlux'; 'bettsMiller' keeps the vent) with a bulk
+plume after Bretherton, McCaa and Grenier (2004). Source: the
+mass-weighted s_l = c_p T + g z − L q_c and q_t of the boundary layer, or
+of the lowest `cumulusSourceDepth` 50 hPa where that is deeper, lifted
+unmixed to its Bolton LCL (`cumulusSource` 'lowest': the lowest layer's
+air). Base mass flux ρ_LCL c w exp(−CIN / w²), c = `cumulusClosure`
+0.06, w = max((B₀ h)^⅓, `cumulusFriction` 1 × u*) from the boundary
+layer's surface buoyancy flux and depth (kept per cell in both engines,
+`buoyancyFlux`, `friction`), CIN the negative buoyant energy from the
+source's top to the first saturated layer; zero where B₀ ≤ 0, where the
+LCL lies above `shallowTop` 700 hPa, under the deck's gate (the deep
+branch's ramp from 0.5 to 0.6), below 10⁻⁶ kg/m²/s, and, without
+`cumulusWithDeep`, where the deep branch fires; at most
+`cumulusBoundaryLoss` 0.1 of the source's mass a step. Above the LCL
+the plume entrains at `cumulusEntrainment` 2.5·10⁻³ m⁻¹ and detrains at
+`cumulusDetrainment` 3·10⁻³ m⁻¹, buoyant in virtual temperature with
+condensate loading, and ends in its first non-buoyant cloudy layer or
+the last below 700 hPa, `cumulusOvershoot` 1 of the flux entering that
+layer detraining there. s_l and q_t move in flux form, M (X_u − X_above)
+at each interface, M g Δt/Δp ≤ 1 in every layer, followed by a
+saturation adjustment; no rain unless `cumulusRain` (kg/kg of plume
+condensate). The deep branch acts on tops above 700 hPa only. The
+radiation (`cumulusCloud`, both engines) gives each plume layer the
+cover max(f, M/(ρ `cumulusUpdraft`)), `cumulusUpdraft` 1 m/s, and adds
+that fraction of the plume's condensate. Tests
+(`test/convection.test.mjs`): a trade-wind column (26 °C sea, 1.5 K θv
+inversion at 1.3 km) lifts 0.042 kg/m²/s with no inhibition into the
+1285–1814 m layer, which moistens by 55 g/kg/d, drying the boundary
+layer by 7.9 kg/m²/d, with enthalpy and water to 2·10⁻¹⁶ and nothing
+raining; a stable surface, no flux, a deck and an LCL above the shallow
+top give none, half the flux on the deck's ramp; the Jordan column's
+deep branch is bit-identical under either scheme; on 362 random columns
+(98 plumes) the engines agree on which columns lift and where the plumes
+end, on the base flux to 5·10⁻⁵ of 0.059 kg/m²/s, θ to 1.8·10⁻⁴ K and q
+to 3·10⁻⁷; `test/gpuModel.test.mjs`: the cumulus cover moves the layer
+heating by up to 6.0 K/day and the engines agree to 9.8·10⁻⁵ K/day.
+
+On nine128_day0183 after one CPU step, over ice-free sea in 30S–30N
+where the gate is at most 0.5: mean base flux 0.0077 kg/m²/s, 0.174 of
+the columns above 10⁻³ with a mean of 0.0446 there (Earth 0.02–0.05);
+plume tops at the 950, 900, 850 and 800 hPa interfaces on 0.30, 0.52,
+0.16 and 0.015 of them; SE Pacific 0.0155 (0.32 of its columns). With
+c 0.04, ε 1.5·10⁻³, δ 2·10⁻³ and plumes beside deep convection 0.0239,
+0.77, 0.031; with those parameters kept out of deep columns and a
+buoyant saturated layer required below 700 hPa (CIN to the LFC) 0.0013,
+with 0.043 of the columns above zero and 0.72 never buoyant.
+
+Ten days at N=64 on the GPU from eight64_day0183 (planetary albedo on
+days 184 / 187 / 193, ASR − OLR on day 193), plumes beside deep
+convection: c 0.04, ε 1.5·10⁻³, δ 2·10⁻³ 0.266 / 0.281 / 0.279 (+8.7);
+c 0.02 0.271 / 0.285 / 0.294 (+4.1); c 0.03, overshoot 0.5 0.273 /
+0.287 / 0.295 (+4.1); `cumulusUpdraft` 0.3 0.270 / 0.285 / 0.284
+(+7.1). Kept out of deep columns: the same 0.271 / 0.291 / 0.310
+(−1.1); c 0.03 0.272 / 0.298 / 0.322 (−5.0); c 0.06 0.269 / 0.291 /
+0.303 (+1.0); overshoot 0.5 0.274 / 0.299 / 0.330 (−7.5); overshoot
+0.75 0.271 / 0.293 / 0.315 (−2.9); ε 10⁻³, δ 1.5·10⁻³ 0.263 / 0.289 /
+0.306 (−0.1); ε 2·10⁻³, δ 2.5·10⁻³ 0.280 / 0.296 / 0.323 (−5.4);
+ε 2·10⁻³, δ 3·10⁻³ 0.281 / 0.300 / 0.324 (−5.8); ε 2.5·10⁻³,
+δ 3·10⁻³ at c 0.04 0.290 / 0.311 / 0.331 (−7.4) and at c 0.06 (the
+defaults) 0.285 / 0.304 / 0.313 (−2.5); the lowest layer's air 0.267 /
+0.289 / 0.291 (+4.9).
+
+The defaults (`mfv64`, the same run): albedo 0.285, 0.299, 0.304,
+0.304, 0.312, 0.314, 0.310, 0.310, 0.310, 0.313 on days 184–193
+(package 3 with the Arctic cover, `arc10d64`: 0.287 … 0.338; the log's
+M21 baseline `base10d64`: 0.288 … 0.337); ASR − OLR +3.6, −0.7, −1.5,
+−0.1, −1.8, −2.4, −1.4, −1.0, −1.0, −2.5 W/m² (mean over days 188–193
+−1.7; `base10d64` −11.5); global rain 1.76, 2.19, 2.23, 2.37, 2.41,
+2.45, 2.59, 2.52, 2.51, 2.48 mm/d. Day 186 of the same code (`mfv3`)
+against package 3 (`j0`): humidity below σ 0.9 in 30S–30N (the mean of
+q/q_s by σ thickness and area) 0.712 against 0.737 (eight64_day0183
+0.682; the old scheme's day 186 0.695); cloud water in the layers below
+σ 0.9 20.7 against 30.6 g/m² globally, 13.4 against 37.1 in 30S–30N;
+SE Pacific rain 0.36 against 0.56 mm/d in the day's mean, convective
+rain on 0.09 against 0.51 of its column-days. `scripts/verticalAudit.mjs`
+on day 193 against `arc10d64`'s day 193:
+
+| day 193, N=64 | cumulus mass flux | package 3 + Arctic cover |
+|---|---|---|
+| humidity below σ 0.9, 30S–30N | 0.737 | 0.757 |
+| cloud water below σ 0.9, g/m² (30S–30N) | 23.7 (16.8) | 32.1 (42.7) |
+| SE Pacific rain, mm/d (convective share) | 0.80 (0.96) | 1.48 (0.96) |
+| its columns firing a step (convecting at all) | 0.018 (0.605) | 0.142 (0.229) |
+| its low cloud; deck runs | 0.137; 0.014 | 0.390; 0.219 |
+| its EIS; deck's virtual jump, K | 3.69; 0.76 | 2.07; 1.52 |
+| its resolved inversion, m (θv jump, K) | 1614 (5.11) | 1410 (3.85) |
+| Pacific ITCZ rain, mm/d; ω500, Pa/s | 4.75; −0.032 | 6.96; −0.032 |
+| ITCZ heating peak, hPa (K/d); lowest 100 m, K/d | 438 (20.0); −1.35 | 439 (24.9); −1.39 |
+| ITCZ large-scale heating below 1 km, largest \|K/d\| | 1.28 | 20.03 |
+| global rain, mm/d (convective share) | 2.37 (0.64) | 2.59 (0.75) |
+| zonal-mean rain peak, mm/d (latitude) | 4.95 (0.5S) | 5.63 (1.5S) |
+
+Five days at N=128 on the GPU from nine128_day0183 (`mfv128`): albedo
+0.286, 0.278, 0.274, 0.275, 0.269 (`arc5d128` 0.296, 0.296, 0.299,
+0.296, 0.304); ASR − OLR +5.9, +8.6, +10.3, +9.4, +10.8 W/m² (mean
++9.0; `arc5d128` +0.5); global rain 2.40–2.66 mm/d; cloud water below
+σ 0.9 in 30S–30N 39.6 → 10.6 g/m² (`arc5d128` 39.9 on day 188), globally
+32.7 → 19.5; the northern ice extent 0.072 → 0.093 Mkm² (`arc5d128`
+0.090); the audit of day 188: SE Pacific rain 0.81 mm/d, firing 0.016
+a step, low cloud 0.234, deck runs 0.159; Pacific ITCZ 7.57 mm/d; global
+2.55 mm/d. Three days with c 0.04 end at +8.4 W/m² and with overshoot 0.5
+at +6.9 (both −7.4 and −7.0 on day 193 at N=64). Pace: 0.95 min a model
+day over days 185–188 (57 s, the log's 0.1 min resolution; two other
+N=128 spin-ups shared the GPU at the start), the b4cc733 code's day 185
+run next 1.0 min (60 s). Three days at N=64 from nine64_day0091 lose
+0.178·10³ km³ of northern ice a day on the GPU (9.191 → 8.657) and
+0.177 on the CPU (9.19 → 8.66; package 3 with the Arctic cover 0.173,
+9.19 → 8.67), the 70–90N ice's surface taking 67.1, 74.0, 70.4 W/m² net
+(64.9, 71.7, 69.3).
+
 ## 7. Module layout in this repo
 
 ```
