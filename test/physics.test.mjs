@@ -5,7 +5,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, P0, CP_DRY, R_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { curl, divergence } from '../js/dynamics/operators.module.js';
-import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex, ringMean, VISIBLE_PATH } from '../js/physics/radiation.module.js';
+import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex, ringMean, VISIBLE_PATH, STABILITY_SIGMA } from '../js/physics/radiation.module.js';
 import { smoothCells } from '../js/levels.module.js';
 import { LATENT_HEAT, saturationHumidity, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { createSurface } from '../js/physics/surface.module.js';
@@ -303,7 +303,7 @@ function cloudColumn(seed, options) {
 }
 
 test('with cloudOverlap maximumRandom the layers of a run of adjacent cloudy layers overlap maximally and separate runs randomly: one run covers as its largest layer, two cover 1 − (1 − f1)(1 − f2); maximum takes the largest layer of the column', () => {
-  const column = cloudColumn(3), maximum = createRadiation(mesh, core, { cloudOverlap: 'maximum' });
+  const column = cloudColumn(3, { overcastWater: null }), maximum = createRadiation(mesh, core, { overcastWater: null, cloudOverlap: 'maximum' });
   maximum.setTime(0);
   core.diagnose(column.pi, column.theta, column.q, column.qc);
   const layer = (share) => 0.5 + share / (2 * (1 - 0.8));
@@ -317,6 +317,34 @@ test('with cloudOverlap maximumRandom the layers of a run of adjacent cloudy lay
   column.cloud(K - 5, 0.01); column.cloud(K - 6, 0.01);
   const joined = column.cover();
   assert.ok(Math.abs(joined - Math.max(low, high, layer(0.01) * column.cloud(K - 5, 0.01))) < 1e-12, `filling the gap joins the runs: ${joined}`);
+});
+
+test('where the column\'s EIS rises through overcastInversion the cover blends into that of a half-width bounded by the cloud water: a saturated layer holding more than overcastWater is overcast under a strong inversion, and under a weak one keeps the uniform distribution\'s cover', () => {
+  const column = cloudColumn(5), free = createRadiation(mesh, core, { overcastWater: null });
+  free.setTime(0);
+  const { noon, theta, q, qc, pi } = column, bottom = (K - 1) * C + noon, k = K - 3;
+  let upperK = 0;
+  for (let n = 1; n < K; n++) if (Math.abs(core.sigmaMid[n] - STABILITY_SIGMA) < Math.abs(core.sigmaMid[upperK] - STABILITY_SIGMA)) upperK = n;
+  const upper = upperK * C + noon, lowerTheta = theta[bottom];
+  const regimes = new Set();
+  for (const jump of [5, 10, 15, 20, 25, 30, 40]) {
+    theta[upper] = lowerTheta + jump;
+    core.diagnose(pi, theta, q, qc);
+    q[bottom] = 0.7 * column.saturation(K - 1);
+    const seen = column.cloud(k, 0.02);
+    assert.ok(0.02 * column.saturation(k) > 5e-5, 'the layer holds more cloud water than the bound');
+    const { exnerLayer, geopotential, g, cp, R, kappa } = core.diagnostics, lowerT = theta[bottom] * exnerLayer[bottom];
+    const lcl = liftingCondensationLevel(lowerT, q[bottom], P0 * core.sigmaMid[K - 1], kappa), base = Math.max(0, cp * (lowerT - lcl.temperature) / g);
+    const eis = inversionStrength(theta[upper] - theta[bottom], lowerT, theta[upper] * exnerLayer[upper], (geopotential[upper] - geopotential[bottom]) / g - base, cp, R, g);
+    const share = Math.min(1, Math.max(0, (eis - 8) / 4)), uniform = 0.5 + 0.02 / (2 * (1 - 0.8));
+    const bounded = column.cover(), unbounded = column.cover(free);
+    regimes.add(share === 0 ? 'weak' : share === 1 ? 'strong' : 'ramp');
+    console.log(`EIS ${eis.toFixed(2)} K: stratiform share ${share.toFixed(3)}, cover ${bounded.toFixed(4)} against ${unbounded.toFixed(4)} without the bound`);
+    assert.ok(Math.abs(unbounded - uniform * seen) < 1e-12, `without the bound ${unbounded}`);
+    assert.ok(Math.abs(bounded - ((1 - share) * uniform + share) * seen) < 1e-12, `at EIS ${eis} cover ${bounded}`);
+    if (share === 1) assert.ok(Math.abs(bounded - seen) < 1e-12, 'overcast under a strong inversion: the column covers as the layer\'s visibility');
+  }
+  assert.deepEqual([...regimes].sort(), ['ramp', 'strong', 'weak']);
 });
 
 test('the surface sees the direct beam in clear sky and diffuse light under thick cloud', () => {
