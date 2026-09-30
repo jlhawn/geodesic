@@ -4,7 +4,8 @@
 // verdict:
 //   node scripts/verticalAudit.mjs <state.bin>
 // RADIATION (JSON) passes options to the model's radiation, e.g.
-// '{"subsidenceSmoothing":0}' for a deck that reads the flux unsmoothed.
+// '{"subsidenceSmoothing":0}' for a deck that reads the flux unsmoothed,
+// and MOIST (JSON) to its moist physics.
 // Signs: omega (Pa/s) > 0 and sink (mm/s) > 0 are descent.
 //
 // From the state's own winds (stage 0 of the next step): omega at the
@@ -18,7 +19,12 @@
 // with its per-cell spread (the standard deviation over the box) and
 // grid-scale share. Over a
 // window of STEPS (8) steps: the rain and its convective share, the
-// fraction of columns firing (convective rain above 1 mm/d in a step),
+// fraction of columns firing (convective rain above 1 mm/d in a step)
+// and of those whose temperature convection changes at all, the global
+// rain and the convective share of 15S-15N, the convective heating
+// profile of the Pacific ITCZ's firing columns (the pressure of its
+// maximum, and its mean over the lowest 100 m) and the box's large-scale
+// heating (condensation, autoconversion and rain evaporation) below 1 km,
 // the low cloud (a layer below 680 hPa with more than 1e-5 kg/kg of cloud
 // water, or the deck's cover), the estimated inversion strength, and the
 // mixed-layer deck's height and virtual potential temperature jump above
@@ -49,7 +55,7 @@ import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
-import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
+import { savedDeckField, DECK_FIELDS, savedMoistField } from '../js/physics/regrid.module.js';
 import { divergence } from '../js/dynamics/operators.module.js';
 import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, ringMean } from '../js/physics/radiation.module.js';
@@ -58,19 +64,20 @@ import { BOXES, inLongitudes } from '../js/audit.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/verticalAudit.mjs <state.bin>'); process.exit(1); }
-const STEPS = Number(process.env.STEPS ?? 8), RADIATION = JSON.parse(process.env.RADIATION ?? '{}');
+const STEPS = Number(process.env.STEPS ?? 8), RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}');
 const t0 = performance.now();
 const say = (s = '') => console.log(s);
 
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, radiation: RADIATION });
+const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land } = model;
 const { K, C, E, levels, sigmaMid, sigmaLower, dSigma, R, g, cp, p0, exnerLayer, exnerLower, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
+moist.convectiveActivity.set(savedMoistField(saved, 'convectiveActivity', model));
 land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) }, state[6]);
 model.time = saved.time;
 const [pi, theta, u, , q, qc, ice] = state;
@@ -187,7 +194,7 @@ const stage0 = (performance.now() - t0) / 1000;
 
 // ---------------- the window: rain, firing, low cloud, the deck's start ----------------
 const longwave = dycomsLongwave();
-const acc = Object.fromEntries(['fire', 'low', 'cloudy', 'eis', 'eisN', 'attempt', 'h', 'jump', 'runs', 'offSubsidence', 'offJump', 'offMemory', 'failSubsidence', 'failJump', 'ran', 'ranH'].map((name) => [name, new Float64Array(C)]));
+const acc = Object.fromEntries(['fire', 'convect', 'low', 'cloudy', 'eis', 'eisN', 'attempt', 'h', 'jump', 'runs', 'offSubsidence', 'offJump', 'offMemory', 'failSubsidence', 'failJump', 'ran', 'ranH'].map((name) => [name, new Float64Array(C)]));
 const predicted = { mean: new Float64Array(C).fill(NaN), gate: new Float64Array(C).fill(NaN), runs: new Uint8Array(C) };
 const replica = { mean: 0, gate: 0, decisions: 0, checked: 0 };
 function deckStart() {
@@ -245,11 +252,32 @@ phases.physics = (...args) => {
 };
 model.restartPrecipitation();
 const before = new Float64Array(C);
+moist.trace.convection = new Float64Array(K * C);
+moist.trace.largeScale = new Float64Array(K * C);
+const heating = { convection: new Float64Array(K), largeScale: new Float64Array(K), pressure: new Float64Array(K), height: new Float64Array(K), fired: 0, area: 0 };
 for (let n = 0; n < STEPS; n++) {
   before.set(moist.convectivePrecipitation);
+  moist.trace.convection.fill(0);
+  moist.trace.largeScale.fill(0);
   model.step(dt);
   for (let i = 0; i < C; i++) {
-    if ((moist.convectivePrecipitation[i] - before[i]) * 86400 / dt > 1) acc.fire[i] += 1;
+    const fired = (moist.convectivePrecipitation[i] - before[i]) * 86400 / dt > 1;
+    if (fired) acc.fire[i] += 1;
+    let convected = false;
+    for (let k = 0; k < K; k++) if (moist.trace.convection[k * C + i] !== 0) convected = true;
+    if (convected) acc.convect[i] += 1;
+    if (itcz[i]) {
+      const a = area[i];
+      heating.area += a;
+      if (fired) heating.fired += a;
+      for (let k = 0; k < K; k++) {
+        const idx = k * C + i;
+        heating.largeScale[k] += a * moist.trace.largeScale[idx];
+        heating.pressure[k] += a * pi[i] * sigmaMid[k];
+        heating.height[k] += a * (geopotential[idx] / g - zs[i]);
+        if (fired) heating.convection[k] += a * moist.trace.convection[idx];
+      }
+    }
     let low = false, any = false;
     for (let k = 0; k < K; k++) if (qc[k * C + i] > 1e-5) { any = true; if (pi[i] * sigmaMid[k] > 680e2) low = true; }
     if (any) acc.cloudy[i] += 1;
@@ -257,6 +285,17 @@ for (let n = 0; n < STEPS; n++) {
   }
 }
 const perDay = 86400 / (STEPS * dt);
+const itczProfile = (() => {
+  const perStep = 86400 / dt, conv = Float64Array.from(heating.convection, (x) => x / heating.fired * perStep), large = Float64Array.from(heating.largeScale, (x) => x / heating.area * perStep);
+  const p = Float64Array.from(heating.pressure, (x) => x / heating.area / 100), z = Float64Array.from(heating.height, (x) => x / heating.area);
+  let peak = 0, low = 0, lowMass = 0, most = 0, least = 0;
+  for (let k = 0; k < K; k++) {
+    if (conv[k] > conv[peak]) peak = k;
+    if (z[k] < 100) { low += conv[k] * dSigma[k]; lowMass += dSigma[k]; }
+    if (z[k] < 1000) { if (large[k] > large[most]) most = k; if (large[k] < large[least]) least = k; }
+  }
+  return { peakP: heating.fired > 0 ? p[peak] : NaN, peak: conv[peak], low: low / lowMass, fired: heating.fired / heating.area, most: large[most], mostZ: z[most], least: large[least], leastZ: z[least] };
+})();
 const convective = Float64Array.from(moist.convectivePrecipitation, (x) => x * perDay), rain = Float64Array.from(convective, (x, i) => x + moist.largeScalePrecipitation[i] * perDay);
 const ratio = (sum, count, mask) => { let s = 0, w = 0; for (let i = 0; i < C; i++) if (mask[i] && count[i] > 0) { s += area[i] * sum[i]; w += area[i] * count[i]; } return s / w; };
 for (let i = 0; i < C; i++) core.diagnoseColumn(i, pi, theta, q, qc);
@@ -297,7 +336,7 @@ for (const [name, mask] of [['SE Pacific 10-30S 110-80W', sePacific], ['Peru 5-2
   const total = mean(rain, mask), conv = mean(convective, mask), h = savedHeight(mask), n700 = noise(omega700, mask), nSink = noise(sinkSaved, mask);
   row(`${name}: rain (mm/d)`, total, 2, 0.1, 0.3);
   row(`${name}: convective share of the rain`, conv / total, 2, 0, 0.1);
-  row(`${name}: columns firing a step`, mean(Float64Array.from(acc.fire, (x) => x / STEPS), mask), 3, 0, 0.01);
+  row(`${name}: columns firing a step`, mean(Float64Array.from(acc.fire, (x) => x / STEPS), mask), 3, 0, 0.01, 0, `convecting ${f(mean(Float64Array.from(acc.convect, (x) => x / STEPS), mask), 3)}`);
   row(`${name}: deck's virtual jump above h (K)`, ratio(acc.jump, acc.attempt, mask), 2, 6, 12);
   row(`${name}: estimated inversion strength (K)`, ratio(acc.eis, acc.eisN, mask), 2, 5, 8);
   row(`${name}: saved running-mean deck sink at h=${f(h, 0)} m (mm/s)`, mean(sinkSaved, mask), 2, 3e-3 * h, 5e-3 * h, nSink.u, `spread ${f(spread(sinkSaved, mask), 2)}, grid-scale share ${f(nSink.ratio, 3)}`);
@@ -316,6 +355,11 @@ for (const [name, mask] of [['SE Pacific 10-30S 110-80W', sePacific], ['Peru 5-2
 }
 row('Pacific ITCZ 5-12N 160E-100W: rain (mm/d)', mean(rain, itcz), 2, 6, 9, 0, `convective share ${f(mean(convective, itcz) / mean(rain, itcz), 2)}`);
 row('Pacific ITCZ 5-12N 160E-100W: omega500 (Pa/s)', mean(omega500, itcz), 4, -0.05, -0.10, noise(omega500, itcz).u);
+row('Pacific ITCZ 5-12N 160E-100W: firing columns\' convective heating peak (hPa)', itczProfile.peakP, 0, 400, 500, 0, `${f(itczProfile.peak, 2)} K/d; ${f(itczProfile.low, 2)} K/d over the lowest 100 m; firing ${f(itczProfile.fired, 3)} of the column-steps`);
+row('Pacific ITCZ 5-12N 160E-100W: large-scale heating below 1 km, largest |K/d|', Math.max(itczProfile.most, -itczProfile.least), 2, NaN, NaN, 0, `${f(itczProfile.most, 2)} at ${f(itczProfile.mostZ, 0)} m, ${f(itczProfile.least, 2)} at ${f(itczProfile.leastZ, 0)} m`);
+const tropics = boxMask([-15, 15, -180, 180], everywhere);
+row('global rain (mm/d)', mean(rain, everywhere), 2, 2.6, 2.8, 0, `convective share ${f(mean(convective, everywhere) / mean(rain, everywhere), 2)}`);
+row('convective share of the rain, 15S-15N', mean(convective, tropics) / mean(rain, tropics), 2, NaN, NaN, 0, `15S-15N rain ${f(mean(rain, tropics), 2)} mm/d`);
 row('zonal-mean rain peak (mm/d)', zonalPeak.value, 2, 6, 7, 0, `at ${f(zonalPeak.lat, 1)} deg; Earth near 8N`);
 const grid = noise(omega700, everywhere);
 row('omega700 grid-scale share, global (white noise 1.167)', grid.ratio, 3, 0, 0.065, 0, `SE Pacific ${f(noise(omega700, sePacific).ratio, 3)}`);
