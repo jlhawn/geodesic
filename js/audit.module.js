@@ -55,9 +55,8 @@ export function convectionLine(mesh, { land, ice }, { convective, largeScale, we
  * densities) and the wind stress on its edges (N/m²): the mixed layer's
  * eastward current, the strongest thickness-weighted mean eastward
  * current of the classes to 1026.0 over 180-100W with the class's mean
- * depth, the
- * eastward stress, the mixed-layer depth in the east and the depth of the
- * top of the class `thermocline` west and east.
+ * depth, the eastward stress, the mixed-layer depth in the east and the
+ * depth of the top of the class `thermocline` west and east.
  */
 export function equatorialOcean(mesh, land, ocean, stress, thermocline = 1024) {
   const C = mesh.nCells, E = mesh.nEdges, L = ocean.h.length / C, densities = ocean.densities;
