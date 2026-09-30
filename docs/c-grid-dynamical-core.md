@@ -2783,8 +2783,10 @@ The work, in order:
    fails on 0.82 and 0.50. The regime test is therefore the jump alone
    and the subsidence only vetoes ascent faster than 1 mm/s
    (`stratusSubsidence` −1 mm/s, about twice the mean's grid-scale
-   residual), which on day 188 refuses 6 % of the SE Pacific and 5 % of
-   Peru against 51 % of the warm pool and 44 % of the Pacific ITCZ.
+   residual), which on day 188 of that run refuses 6 % of the SE Pacific
+   and 5 % of Peru against 51 % of the warm pool (10S–10N, 120–170E) and
+   44 % of the east Pacific ITCZ (5–12N, 140–90W), by area of the saved
+   running mean (6, 6, 53 and 42 % in the package gate's own run).
    Five-day N=128 continuations from day 183, audited on day 188 (SE
    Pacific; the saved running mean's box mean, spread and grid-scale
    share):
