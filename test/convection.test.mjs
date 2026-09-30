@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
-import { saturationHumidity, LATENT_HEAT, MOIST_DEFAULTS } from '../js/physics/moist.module.js';
+import { saturationHumidity, LATENT_HEAT, MOIST_DEFAULTS, DECK_CLOSED } from '../js/physics/moist.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -333,7 +333,8 @@ async function parity(options) {
     surfaceT[i] = 300;
     const { geopotential, g } = core.diagnostics;
     model.boundaryLayer.depth[i] = geopotential[(K - 1) * C + i] / g + 200 + 1300 * random();
-    model.radiation.mlmGate[i] = random() < 0.2 ? 0.7 : 0.3;
+    const gate = random();
+    model.radiation.mlmGate[i] = gate < 0.2 ? 0.7 : gate < 0.35 ? 0.5 + (gate - 0.2) / 0.15 * (DECK_CLOSED - 0.5) : 0.3;
     moist.activity[i] = [0, 0.5, 1, random()][Math.floor(random() * 4)];
     for (let k = 0; k < K; k++) if (random() < 0.08) qc[k * C + i] = 1e-3 * random();
   }
@@ -357,12 +358,13 @@ async function parity(options) {
   moist.trace.convection = new Float64Array(K * C);
   model.phases.adjust(0, C, dt);
   const { sigmaMid } = core.diagnostics;
-  let deep = 0, shallow = 0, decked = 0, still = 0, flips = 0, worstTheta = 0, worstQ = 0, worstQc = 0, worstActivity = 0, worstRain = 0, rainScale = 0;
+  let deep = 0, shallow = 0, decked = 0, still = 0, opening = 0, flips = 0, worstTheta = 0, worstQ = 0, worstQc = 0, worstActivity = 0, worstRain = 0, rainScale = 0;
   for (let i = 0; i < C; i++) {
     let top = -1;
     for (let k = K - 1; k >= 0; k--) if (moist.trace.convection[k * C + i] !== 0) top = k;
-    if (model.radiation.mlmGate[i] > 0.5) decked++;
+    if (model.radiation.mlmGate[i] >= DECK_CLOSED) decked++;
     else if (top < 0) still++;
+    else if (model.radiation.mlmGate[i] > 0.5) opening++;
     else if (pi[i] * sigmaMid[top] > MOIST_DEFAULTS.shallowTop) shallow++;
     else deep++;
     if ((moist.convectivePrecipitation[i] > 0) !== (ph.CONV[i] > 0)) flips++;
@@ -376,17 +378,18 @@ async function parity(options) {
       worstQc = Math.max(worstQc, Math.abs(model.state[5][x] - after[5][x]));
     }
   }
-  console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, the activity by ${worstActivity.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)})`);
-  assert.ok(deep > C / 40 && shallow > C / 40 && decked > C / 40 && still > C / 40, `${deep} deep, ${shallow} shallow, ${decked} decked, ${still} still`);
+  console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, the activity by ${worstActivity.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)})`);
+  assert.ok(deep > C / 40 && shallow > C / 40 && decked > C / 40 && still > C / 40 && opening > C / 100, `${deep} deep, ${shallow} shallow, ${decked} decked, ${opening} opening, ${still} still`);
   assert.equal(flips, 0);
   assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
   assert.ok(worstActivity < 1e-5, `activity ${worstActivity}`);
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
 }
 
-test('the triggered convection and the rain it leaves match between the engines on a random set of columns, under either autoconversion floor, either shallow reference and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the triggered convection and the rain it leaves match between the engines on a random set of columns, under either autoconversion floor, either shallow reference with or without shallow rain, and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   await parity({});
   await parity({ autoconversionFloor: 'boundaryLayer' });
   await parity({ shallowReference: 'mixingLine', shallowRain: false, boundaryParcel: true, parcelDepth: 50e2, downdraftEvaporation: 0.25, downdraftSpread: 'fall' });
   await parity({ shallowReference: 'mixingLine', shallowStability: 2 });
+  await parity({ shallowRain: false });
 });
