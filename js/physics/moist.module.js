@@ -5,6 +5,8 @@ export const EPSILON = 0.622;
 export const R_VAPOR = R_DRY / EPSILON;
 export const ACTIVITY_UNDECIDED = 0.5;
 export const CLEAR_AIR = 1e-7;
+const STABILITY_SIGMA = 0.7;
+export const DECK_CLOSED = 0.6;
 
 export function saturationVaporPressure(T) {
   return 611.2 * Math.exp(17.67 * (T - 273.15) / (T - 29.65));
@@ -41,47 +43,63 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * the layer.
  *
  * Convection is the Betts–Miller relaxation of Frierson (2007) behind a
- * trigger. Its parcel is the mass-weighted mean θ and q of the boundary
- * layer, the layers whose lower interfaces lie below `boundaryDepth` (per
- * cell, the boundary layer's Richardson depth in the height of the
- * core's geopotential), or of the layers whose midpoints lie within
- * `parcelDepth` of the surface where that reaches higher. It rises dry to its lifting condensation
- * level, then saturated, its moist static energy diluted toward the
- * air's at the fractional rate `entrainmentRate` per metre, and is
- * buoyant where its virtual temperature exceeds the air's. Its
+ * trigger. Its parcel is the lowest layer's air or, with `boundaryParcel`,
+ * the mass-weighted mean θ and q of the boundary layer, the layers whose
+ * lower interfaces lie below `boundaryDepth` (per cell, the boundary
+ * layer's Richardson depth in the height of the core's geopotential),
+ * or of the layers whose midpoints lie within `parcelDepth` of the
+ * surface where that reaches higher. It rises dry to its lifting
+ * condensation level, then saturated, its moist static energy diluted
+ * toward the air's at the fractional rate `entrainmentRate` per metre,
+ * and is buoyant where its virtual temperature exceeds the air's. Its
  * inhibition is the negative buoyant energy from the top of its source
  * layers to its level of free convection, the first buoyant layer above
  * the condensation level; its CAPE the positive energy above that; the
  * top the highest buoyant layer, stable layers in between ignored, the
- * search ending where the parcel is 10 K colder than the air. A
- * column's pass is the product of two ramps from 0 to 1, one as the
+ * search ending where the parcel is 10 K colder than the air. Tops below
+ * `shallowTop` are shallow, the others deep.
+ *
+ * A column's pass is the product of two ramps from 0 to 1, one as the
  * CAPE rises from half `capeThreshold` to one and a half times it, the
  * other as the inhibition falls from one and a half `inhibitionThreshold`
- * to half of it, and 0 where the mixed-layer deck's gate `deckGate`
- * (radiation.mlmGate) is above one half. The per-cell `activity` relaxes
- * toward the pass over `activityMemory`, and the column convects while
- * it is above one half, or at one half on a pass above one half, so a
- * column convects while its CAPE has stood above the threshold and its
+ * to half of it, and of the deck's opening, 1 where the mixed-layer
+ * deck's gate `deckGate` (radiation.mlmGate) is at most one half,
+ * falling linearly to 0 at DECK_CLOSED. The per-cell `activity` relaxes
+ * toward the pass over `activityMemory`, and the column fires while it
+ * is above one half, or at one half on a pass above one half, so a
+ * column fires while its CAPE has stood above the threshold and its
  * inhibition below it for a while; `activity` is saved with the state
- * (key `convectiveActivity`, one half in a state saved without it). Only the layers from cloud base, the layer holding the
- * condensation level, to the top relax, over relaxationTime; the
+ * (key `convectiveActivity`, one half in a state saved without it). A
+ * shallow top also vents without memory: at the vent, the same product
+ * of ramps with `shallowCape` and `shallowInhibition` in place of the
+ * deep thresholds, times the deck's opening, and 0 where the column's
+ * estimated inversion strength (the radiation's EIS) exceeds
+ * `shallowStability` (null: no bound; `shallowCape` null: no venting).
+ * A firing column relaxes over relaxationTime, a venting one over
+ * relaxationTime divided by its vent. Only the layers from cloud base,
+ * the layer holding the condensation level, to the top relax; the
  * subcloud layers are the boundary layer's.
- *   Deep (the top at or above `shallowTop`): toward the parcel's
- *   temperature and `referenceHumidity` of its saturation, the
- *   temperature shifted so the enthalpy change equals the latent heat of
- *   the water removed, which rains, or, where the layers would have to
- *   moisten, both shifted so that neither heat nor water changes and
- *   nothing rains. The fraction `detrainment` of the rain stays as cloud
- *   water spread through the anvil, the top `anvilDepth` of pressure
- *   below the top, and `downdraftEvaporation` of the rest may evaporate
- *   into the subcloud layers as it falls, the proxy of a downdraft.
- *   Shallow: toward the mixing line of Betts (1986) between the parcel
- *   at its condensation level and the air of the layer above the top,
- *   moist static energy and water mixed linearly in pressure, the water
- *   at most `shallowHumidity` of saturation (the rest of the mixture's
- *   energy in its temperature), shifted so that neither heat nor water
- *   changes: it never rains.
- *
+ *   Toward the parcel (deep tops, and shallow ones with `shallowReference`
+ *   'parcel'): the parcel's temperature and `referenceHumidity` of its
+ *   saturation, the temperature shifted so the enthalpy change equals
+ *   the latent heat of the water removed, which rains, or, where the
+ *   layers would have to moisten, both shifted so that neither heat nor
+ *   water changes and nothing rains.
+ *   Toward the mixing line (shallow tops with 'mixingLine'): the mixing
+ *   line of Betts (1986) between the parcel at its condensation level
+ *   and the air of the layer above the top, moist static energy and
+ *   water mixed linearly in pressure, the water at most
+ *   `shallowHumidity` of saturation (the rest of the mixture's energy in
+ *   its temperature).
+ *   Shallow tops rain as deep ones do with `shallowRain`; without it they
+ *   are shifted so that neither heat nor water changes.
+ *   Of any rain the fraction `detrainment` stays as cloud water spread
+ *   through the anvil, the top `anvilDepth` of pressure below the top,
+ *   and `downdraftEvaporation` of the rest may evaporate into the
+ *   subcloud layers as it falls, the proxy of a downdraft, offered to
+ *   each in proportion to its mass (`downdraftSpread` 'mass') or all of
+ *   it to each in turn from cloud base down ('fall').
+
  * Rain: Kessler autoconversion of cloud water above the threshold at
  * autoconversionRate, and of all cloud water over cloudLifetime, except
  * in the lowest two layers (`autoconversionFloor` 'lowest') or in the
@@ -105,30 +123,37 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * downdraft included, and from the large-scale condensation,
  * autoconversion and rain evaporation.
  *
- * Defaults: relaxationTime 2 h, referenceHumidity 0.6, parcelDepth
- * 50 hPa, entrainmentRate 5e-5 /m, capeThreshold 100 J/kg,
- * inhibitionThreshold 50 J/kg, activityMemory 2 h, shallowTop 700 hPa,
- * shallowHumidity 0.8, detrainment 0.1, anvilDepth 150 hPa,
- * downdraftEvaporation 0.25, autoconversionThreshold 2e-4,
- * autoconversionRate 1e-3 /s, cloudLifetime 3 h, autoconversionFloor
- * 'lowest', rainEvaporation 1.
+ * Defaults: relaxationTime 2 h, referenceHumidity 0.6, the boundary
+ * layer's parcel (boundaryParcel, parcelDepth 50 hPa), entrainmentRate
+ * 5e-5 /m, capeThreshold 100 J/kg, inhibitionThreshold 50 J/kg,
+ * activityMemory 2 h, shallowTop 700 hPa, no venting (shallowCape
+ * null; shallowInhibition 15 J/kg), no shallowStability,
+ * shallowReference 'mixingLine' without shallowRain, shallowHumidity
+ * 0.8, detrainment 0.1, anvilDepth 150 hPa, downdraftEvaporation 0.25
+ * offered in the fall,
+ * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
+ * cloudLifetime 3 h, autoconversionFloor 'lowest', rainEvaporation 1.
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, relaxationTime: 7200, referenceHumidity: 0.6, parcelDepth: 50e2, entrainmentRate: 5e-5,
   capeThreshold: 100, inhibitionThreshold: 50, activityMemory: 2 * 3600, shallowTop: 700e2, detrainment: 0.1, anvilDepth: 150e2,
   downdraftEvaporation: 0.25, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', shallowHumidity: 0.8,
-  boundaryParcel: true, adjustFrom: 'cloudBase', deckVeto: true, evaporationInCloud: false, shallowTrigger: null, downdraftSpread: 'fall', virtualBuoyancy: true,
+  shallowCape: null, shallowInhibition: 15, shallowStability: null, shallowReference: 'mixingLine', shallowRain: false,
+  boundaryParcel: true, adjustFrom: 'cloudBase', deckVeto: true, evaporationInCloud: false, downdraftSpread: 'fall', virtualBuoyancy: true,
 };
 
 export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate = null, buffers = null, ...options } = {}) {
   const {
     latentHeat, relaxationTime, referenceHumidity, parcelDepth, entrainmentRate, capeThreshold, inhibitionThreshold, activityMemory, shallowTop,
     detrainment, anvilDepth, downdraftEvaporation, autoconversionThreshold, autoconversionRate, cloudLifetime, rainEvaporation, autoconversionFloor, shallowHumidity,
-    boundaryParcel, adjustFrom, deckVeto, evaporationInCloud, shallowTrigger, downdraftSpread, virtualBuoyancy,
+    shallowCape, shallowInhibition, shallowStability, shallowReference, shallowRain, boundaryParcel, adjustFrom, deckVeto, evaporationInCloud, downdraftSpread, virtualBuoyancy,
   } = { ...MOIST_DEFAULTS, ...options };
+  if (shallowReference !== 'mixingLine' && shallowReference !== 'parcel') throw new Error(`shallowReference must be 'mixingLine' or 'parcel', not ${shallowReference}`);
   if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest' or 'boundaryLayer', not ${autoconversionFloor}`);
   const { K, C, levels, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
+  let stabilityLayer = 0;
+  for (let k = 1; k < K; k++) if (Math.abs(sigmaMid[k] - STABILITY_SIGMA) < Math.abs(sigmaMid[stabilityLayer] - STABILITY_SIGMA)) stabilityLayer = k;
   const upperInterface = (i, k) => (geopotential[k * C + i] + cp * thetaV[k * C + i] * (exnerLayer[k * C + i] - exnerLower[(k - 1) * C + i])) / g;
   const shared = (name, n) => (buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * n));
   const precipBuffer = shared('precipitation', C), rainBuffer = shared('rain', C), convectiveBuffer = shared('convectivePrecipitation', C);
@@ -299,6 +324,20 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
     return top;
   }
 
+  /*
+   * The estimated inversion strength of column i as the radiation's deck
+   * finds it (radiation.module.js), from the T, p and z that
+   * diagnoseParcel filled.
+   */
+  function inversionStrength(i, theta, q) {
+    const lo = K - 1, hi = stabilityLayer, air = q[lo * C + i];
+    const lcl = air > 0 ? liftingCondensationLevel(T[lo], air, p[lo], kappa) : null;
+    const base = lcl ? Math.max(0, cp * (T[lo] - lcl.temperature) / g) : 0;
+    const mean = 0.5 * (T[lo] + T[hi]), qs = saturationHumidity(mean, 85000);
+    const lapse = g / cp * (1 + latentHeat * qs / (R * mean)) / (1 + latentHeat * latentHeat * qs / (cp * R_VAPOR * mean * mean));
+    return theta[hi * C + i] - theta[lo * C + i] - (g / cp - lapse) * (z[hi] - z[lo] - base);
+  }
+
   function referenceProfile(i, pi, theta, q) {
     const top = diagnoseParcel(i, pi, theta, q);
     if (top >= 0) for (let k = top; k <= parcel.base; k++) qref[k] = referenceHumidity * saturationHumidity(Tref[k], p[k]);
@@ -313,16 +352,19 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
    */
   function convectColumn(i, pi, theta, q, dt, qc = null) {
     falling.base = K; falling.downdraft = 0;
-    const decked = deckVeto && deckGate !== null && deckGate[i] > ACTIVITY_UNDECIDED;
-    const top = decked ? -1 : diagnoseParcel(i, pi, theta, q);
-    const pass = top >= 0 ? ramp(0.5 + (parcel.cape - capeThreshold) / Math.max(1, capeThreshold)) * ramp(0.5 + (inhibitionThreshold - parcel.inhibition) / Math.max(1, inhibitionThreshold)) : 0;
+    const open = deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - ACTIVITY_UNDECIDED)) : 1;
+    const top = open > 0 ? diagnoseParcel(i, pi, theta, q) : -1;
+    const pass = top >= 0 ? open * ramp(0.5 + (parcel.cape - capeThreshold) / Math.max(1, capeThreshold)) * ramp(0.5 + (inhibitionThreshold - parcel.inhibition) / Math.max(1, inhibitionThreshold)) : 0;
     const now = activityMemory > 0 ? activity[i] - (pass - activity[i]) * Math.expm1(-dt / activityMemory) : pass;
     activity[i] = now;
     const shallow = top > 0 && p[top] > shallowTop;
-    const eager = shallowTrigger !== null && top > 0 && p[top] > (shallowTrigger.top ?? shallowTop) && parcel.cape > shallowTrigger.cape && parcel.inhibition < shallowTrigger.inhibition;
-    if (top < 0 || !(eager || now > ACTIVITY_UNDECIDED || (now === ACTIVITY_UNDECIDED && pass > ACTIVITY_UNDECIDED))) return 0;
+    const firing = now > ACTIVITY_UNDECIDED || (now === ACTIVITY_UNDECIDED && pass > ACTIVITY_UNDECIDED);
+    let vent = shallow && shallowCape !== null ? open * ramp(0.5 + (parcel.cape - shallowCape) / Math.max(1, shallowCape)) * ramp(0.5 + (shallowInhibition - parcel.inhibition) / Math.max(1, shallowInhibition)) : 0;
+    if (vent > 0 && shallowStability !== null && inversionStrength(i, theta, q) > shallowStability) vent = 0;
+    if (top < 0 || !(firing || vent > 0)) return 0;
     const base = adjustFrom === 'surface' ? K - 1 : parcel.base;
-    if (shallow) {
+    const mixing = shallow && shallowReference === 'mixingLine', raining = !shallow || shallowRain;
+    if (mixing) {
       const above = top - 1, aboveQ = Math.max(0, q[above * C + i]);
       const aboveEnergy = cp * T[above] + g * z[above] + latentHeat * aboveQ;
       const span = parcel.lclPressure - p[above];
@@ -347,10 +389,10 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
       drying -= (qref[k] - q[k * C + i]) * dp[k];
       depth += dp[k];
     }
-    if (!shallow && heating <= 0) return 0;
-    const rate = dt / relaxationTime;
+    if (!mixing && raining && heating <= 0) return 0;
+    const rate = dt / relaxationTime * (firing ? 1 : vent);
     let rain = 0;
-    if (!shallow && drying > 0) {
+    if (raining && drying > 0) {
       const shift = (latentHeat * drying - heating) / (cp * depth);
       for (let k = top; k <= base; k++) Tref[k] += shift;
       rain = drying / g * rate;
@@ -440,7 +482,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
   }
 
   return {
-    adjust, condenseColumn, autoconvertColumn, convectColumn, fillColumn, referenceProfile, diagnoseParcel, columnWater, readRain,
+    adjust, condenseColumn, autoconvertColumn, convectColumn, fillColumn, referenceProfile, diagnoseParcel, inversionStrength, columnWater, readRain,
     precipitation, rain, convectivePrecipitation, largeScalePrecipitation, convectiveRain, largeScaleRain, activity, convectiveActivity: activity, budget, latentHeat, trace, parcel, falling,
     shared: { precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, convectiveActivity: activityBuffer },
     reference: { T: Tref, q: qref },
