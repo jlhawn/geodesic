@@ -54,7 +54,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * on the way down, which includes the detrained anvil water once it
  * rains out. `readRain` turns the parts' sums into their means over the
  * interval they cover, in mm/d. The budget sums are area-weighted
- * masses (kg).
+ * masses (kg). `trace`, when its arrays (K·C) are set, receives each
+ * layer's temperature change (K) from convection and from the
+ * large-scale condensation, autoconversion and rain evaporation.
  */
 export function createMoistPhysics(mesh, core, {
   latentHeat = LATENT_HEAT, relaxationTime = 7200, referenceHumidity = 0.6,
@@ -73,6 +75,13 @@ export function createMoistPhysics(mesh, core, {
   const convectiveRain = new Float64Array(C), largeScaleRain = new Float64Array(C);
   const T = new Float64Array(K), p = new Float64Array(K), dp = new Float64Array(K), Tref = new Float64Array(K), qref = new Float64Array(K);
   const budget = { condensation: 0, convection: 0, lost: 0 };
+  const trace = { convection: null, largeScale: null };
+  const marked = new Float64Array(K);
+  function mark(i, theta) { for (let k = 0; k < K; k++) marked[k] = theta[k * C + i]; }
+  function charge(into, i, theta) {
+    if (!into) return;
+    for (let k = 0; k < K; k++) { const idx = k * C + i; into[idx] += (theta[idx] - marked[k]) * exnerLayer[idx]; marked[k] = theta[idx]; }
+  }
 
   function moistLapse(temperature, pressure) {
     const qs = saturationHumidity(temperature, pressure);
@@ -237,9 +246,14 @@ export function createMoistPhysics(mesh, core, {
     const [pi, theta, , , q, qc] = state;
     for (let i = iFrom; i < iTo; i++) {
       core.diagnoseColumn(i, pi, theta, q, qc);
+      const traced = trace.convection || trace.largeScale;
+      if (traced) mark(i, theta);
       condenseColumn(i, pi, theta, q, qc);
+      if (traced) charge(trace.largeScale, i, theta);
       const convected = convectColumn(i, pi, theta, q, dt, qc);
+      if (traced) charge(trace.convection, i, theta);
       const rained = autoconvertColumn(i, pi, theta, q, qc, dt);
+      if (traced) charge(trace.largeScale, i, theta);
       fillColumn(i, pi, q);
       fillColumn(i, pi, qc);
       precipitation[i] += rained + convected;
@@ -267,7 +281,7 @@ export function createMoistPhysics(mesh, core, {
 
   return {
     adjust, condenseColumn, autoconvertColumn, convectColumn, fillColumn, referenceProfile, columnWater, readRain,
-    precipitation, rain, convectivePrecipitation, largeScalePrecipitation, convectiveRain, largeScaleRain, budget, latentHeat,
+    precipitation, rain, convectivePrecipitation, largeScalePrecipitation, convectiveRain, largeScaleRain, budget, latentHeat, trace,
     shared: { precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer }, reference: { T: Tref, q: qref },
   };
 }
