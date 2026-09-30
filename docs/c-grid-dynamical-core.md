@@ -2916,8 +2916,7 @@ The work, in order:
    per-cell `convectiveActivity` relaxes toward it over `activityMemory`
    2 h (saved with the state, one half in older ones) and the column
    fires while it is above one half. A shallow top also vents, without
-   memory, at the same product of ramps about `shallowCape` 10 J/kg (5
-   since the Arctic cover below) and
+   memory, at the same product of ramps about `shallowCape` 10 J/kg and
    `shallowInhibition` 15 J/kg times the deck's opening (and not where
    the estimated inversion strength exceeds `shallowStability`, off by
    default), relaxing over the relaxation time divided by its vent. Only
@@ -3100,8 +3099,10 @@ The work, in order:
    `overcastInversion` 8–12 K they blend a layer's cover into that of a
    distribution whose half-width is also at most the layer's cloud water
    and not below `overcastWater` 5·10⁻⁵ kg/kg, so that under a strong
-   inversion a saturated layer holding more is overcast; and shallow tops
-   vent from `shallowCape` 5 J/kg. The bound without the EIS gate
+   inversion a saturated layer holding more is overcast. A shallow CAPE
+   threshold of 5 J/kg was tried with them and dropped: a ten-day N=64
+   run from eight64_day0183 gave the same albedo and balance as the
+   threshold of 10 and twice the SE Pacific firing. The bound without the EIS gate
    overcasts nearly all resolved cloud: 92.7 % of its water lies in
    layers at 99.9 % humidity or more, and the Arctic's water-weighted
    qc/qs (0.077) is below the globe's (0.131); gating it by temperature
