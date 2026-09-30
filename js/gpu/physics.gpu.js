@@ -115,6 +115,12 @@ fn cloudKeep(path: f32) -> f32 {
   if (CLOUD_SW > 0.0) { return exp(-CLOUD_SW * path); }
   return 1.0;
 }
+fn layerCover(idx: i32, k: i32, bottom: i32, pi: f32, water: f32, mixedDepth: f32) -> f32 {
+  if (!PDF_COVER || !(water > 0.0)) { return 1.0; }
+  let inside = (D[D_GEO + idx] + LV[L_GABS + k] - D[D_GEO + bottom] - LV[L_GABS + K - 1]) / GRAV < mixedDepth;
+  let qsl = qsat(IN[S_TH + idx] * D[D_EXM + idx], pi * LV[L_SM + k]); let width = (1.0 - select(RHC, RHC_BL, inside)) * qsl;
+  return clamp((max(0.0, IN[S_Q + idx]) + max(0.0, IN[S_QC + idx]) - qsl + width) / (2.0 * width), COVER_FLOOR, 1.0);
+}
 fn shortwave(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32) -> vec4<f32> {
   let reflectance = select(0.0, cloudDepth / (cloudDepth + 2.0 * mu), mu > 0.0 && cloudDepth > 0.0);
   var direct = (1.0 - SKYLIGHT) * select(1.0, exp(-cloudDepth / mu), cloudDepth > 0.0 && mu > 0.0);
@@ -517,12 +523,14 @@ export const PHYSICS_KERNELS = {
     let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
     var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0);
     if (STRATUS_SOLAR && CLOUD_SW > 0.0) {
-      var path = 0.0; var layer = 0.0;
+      var path = 0.0; var layer = 0.0; var shade = 0.0;
       for (var k = 0; k < K; k++) {
         let water = max(0.0, IN[S_QC + k * C + i]) * (pi * LV[L_DS + k] / GRAV);
         path += water;
         if (k == STRATUS_K) { layer = water; }
+        if (PDF_COVER) { shade = max(shade, layerCover(k * C + i, k, bottom, pi, water, mixedDepth) * (1.0 - exp(-water / VISIBLE_PATH))); }
       }
+      if (!(shade > 0.0)) { shade = 1.0; }
       var lit = beam - ozoneHeating;
       if (VAPOR_ABS > 0.0 && mu > 0.0) {
         let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
@@ -530,7 +538,8 @@ export const PHYSICS_KERNELS = {
         for (var k = 0; k < K; k++) { vapor += max(0.0, IN[S_Q + k * C + i]) * pi * LV[L_DS + k] / GRAV * sqrt(LV[L_SM + k]) * 0.1 * magnification; }
         lit -= lit * (VAPOR_ABS * 2.9 * vapor / (pow(1.0 + 141.5 * vapor, 0.635) + 5.925 * vapor));
       }
-      let sky = shortwave(CLOUD_SCAT * path, cloudKeep(path), mu, adir, adif);
+      var sky = shortwave(CLOUD_SCAT * path / shade, cloudKeep(path / shade), mu, adir, adif);
+      if (PDF_COVER && shade < 1.0) { sky = shade * sky + (1.0 - shade) * shortwave(0.0, 1.0, mu, adir, adif); }
       deckSun = MlmSun(lit, mu, adir, adif, path, layer, select(0.0, lit * sky.w / path, path > 0.0) * layer);
     }
     let mixed = mlmColumn(i, pi, mixedDepth, sensible, evap, P[0], deckSun);
@@ -561,12 +570,7 @@ export const PHYSICS_KERNELS = {
     if (COUPLED) { eps = 1.0 - exp(-VCOUP * max(0.0, IN[S_Q + idx]) * mass); }
     let water = max(0.0, IN[S_QC + idx]) * mass;
     cloudPath += water;
-    var f = 1.0;
-    if (PDF_COVER && water > 0.0) {
-      let inside = (D[D_GEO + idx] + LV[L_GABS + k] - D[D_GEO + bottom] - LV[L_GABS + K - 1]) / GRAV < mixedDepth;
-      let qsl = qsat(IN[S_TH + idx] * D[D_EXM + idx], pi * LV[L_SM + k]); let width = (1.0 - select(RHC, RHC_BL, inside)) * qsl;
-      f = clamp((max(0.0, IN[S_Q + idx]) + max(0.0, IN[S_QC + idx]) - qsl + width) / (2.0 * width), COVER_FLOOR, 1.0);
-    }
+    let f = layerCover(idx, k, bottom, pi, water, mixedDepth);
     if (PDF_COVER) { columnCover = max(columnCover, f * (1.0 - exp(-water / VISIBLE_PATH))); }
     cloudE[k] = select(0.0, f * (1.0 - exp(-CLOUD_ABS * water / f)), water > 0.0);
     if (STRATUS && k == STRATUS_K && deck > 0.0) { cloudE[k] = fraction * (1.0 - exp(-CLOUD_ABS * (water + deck))) + (1.0 - fraction) * cloudE[k]; }
