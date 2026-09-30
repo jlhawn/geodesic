@@ -159,7 +159,7 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
   console.log(`physics alone at N=6 on ${cloudy.length} sunlit cloudy columns (${decks} with a deck): layer heating differs between the engines by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(2)} K/day), in the lowest layer, which takes the sensible heat, by ${surface.toExponential(1)} of it; the cloud water's own heating by ${worstCloud.toExponential(1)} K/day. The cloud water absorbs a global mean ${(cpuMean / area).toFixed(3)} W/m² (GPU ${(gpuMean / area).toFixed(3)}), at most ${strongest.toFixed(1)} W/m² in a column`);
   assert.ok(cloudy.length > 0.1 * C && decks > 0, `${cloudy.length} cloudy columns, ${decks} with a deck`);
   for (let i = 0; i < C; i++) assert.ok(Math.abs(lit.cpuDeck[i] - lit.gpuDeck[i]) < 1e-5, `deck cover of cell ${i}`);
-  assert.ok(worst < 2e-4, `layer heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
+  assert.ok(worst < 1e-4, `layer heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
   assert.ok(surface < 1e-5, `the lowest layer's heating differs by ${surface} of it`);
   assert.ok(worstCloud < 1e-4, `the cloud water's heating differs by ${worstCloud} K/day`);
   assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `global cloud absorption ${cpuMean / area} against ${gpuMean / area} W/m²`);
@@ -395,28 +395,30 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   assert.ok(moved > C / 2, `the mean moved on ${moved} cells`);
 });
 
-test('the convective and large-scale rain accumulate alike in both engines, cell by cell, and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the convective and large-scale rain accumulate alike in both engines, cell by cell but for the odd column whose onset falls a step apart, and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { model, physics } = await pair(6, 24, 900, 0, false, {}, { rainEvaporation: 0 });
   const C = model.mesh.nCells, { convectivePrecipitation: convective, largeScalePrecipitation: largeScale, precipitation, rain } = model.moist;
-  const conv = stats(convective, physics.CONV.subarray(0, C)), ls = stats(largeScale, physics.COND.subarray(0, C)), step = stats(rain, physics.STEPRAIN.subarray(0, C));
-  let fired = 0, rained = 0, apart = 0, area = 0, cpuMean = 0, gpuMean = 0, stepApart = 0;
+  const largest = Math.max(...convective), onset = (i) => Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest;
+  const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !onset(i)), pick = (values) => Float64Array.from(kept, (i) => values[i]);
+  const conv = stats(pick(convective), pick(physics.CONV)), ls = stats(pick(largeScale), pick(physics.COND)), step = stats(pick(rain), pick(physics.STEPRAIN));
+  let fired = 0, rained = 0, apart = 0, area = 0, cpuMean = 0, gpuMean = 0;
   for (let i = 0; i < C; i++) {
     const a = model.mesh.areaCell[i];
-    if (Math.abs(rain[i] - physics.STEPRAIN[i]) > 1e-4) stepApart++;
     if (convective[i] > 0) fired++;
     if (largeScale[i] > 0) rained++;
     apart = Math.max(apart, Math.abs(convective[i] + largeScale[i] - precipitation[i]));
     area += a; cpuMean += a * convective[i]; gpuMean += a * physics.CONV[i];
   }
-  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}), per-cell rms ${conv.rmsRel.toExponential(1)}; large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
+  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain; over the rest per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
   assert.ok(fired > C / 2 && rained > 0, `convective rain on ${fired} cells, large-scale on ${rained}`);
-  assert.ok(Math.abs(gpuMean - cpuMean) < 2e-3 * cpuMean, `mean convective rain ${cpuMean / area} against ${gpuMean / area}`);
-  assert.ok(conv.rmsRel < 3e-2 && ls.rmsRel < 3e-2, `per-cell rms convective ${conv.rmsRel}, large-scale ${ls.rmsRel}`);
-  assert.ok(stepApart < 0.02 * C, `the last step's rain differs by more than 1e-4 kg/m² on ${stepApart} cells, by at most ${step.maxDiff} at ${step.at}`);
+  assert.ok(C - kept.length <= 0.01 * C, `${C - kept.length} cells apart`);
+  assert.ok(Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `mean convective rain ${cpuMean / area} against ${gpuMean / area}`);
+  assert.ok(conv.rmsRel < 1e-3 && ls.rmsRel < 1e-3, `per-cell rms convective ${conv.rmsRel}, large-scale ${ls.rmsRel}`);
+  assert.ok(step.maxDiff < 1e-4, `the last step's rain differs by ${step.maxDiff} at ${step.at}`);
   assert.ok(apart < 1e-12, `convective plus large-scale is the precipitation to ${apart}`);
 });
 
-test('both models read the rain split out at the diagnostics as means in mm/d, clearing its sums, and the GPU model sends the means to the device on load and mirrors them on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both models read the rain split out at the diagnostics as means in mm/d, clearing its sums, alike but for the odd column whose onset falls a step apart, and the GPU model sends the means to the device on load and mirrors them on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const cpu = createModel(new Grid(6), { ocean: false }), gpu = await createGpuModel(new Grid(6), { ocean: false });
   const C = cpu.mesh.nCells, init = initializeState(cpu, {});
@@ -448,8 +450,11 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
     const a = cpu.mesh.areaCell[i];
     area += a; cpuMean += a * cpu.moist.convectiveRain[i]; gpuMean += a * gpu.moist.convectiveRain[i];
   }
-  const convective = stats(cpu.moist.convectiveRain, gpu.moist.convectiveRain), largeScale = stats(cpu.moist.largeScaleRain, gpu.moist.largeScaleRain);
-  console.log(`six hours at N=6: convective rain ${(cpuMean / area).toFixed(3)} mm/d in the mean (GPU ${(gpuMean / area).toFixed(3)}), per-cell rms ${convective.rmsRel.toExponential(1)}; large-scale per-cell rms ${largeScale.rmsRel.toExponential(1)}`);
-  assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 2e-3 * cpuMean, `mean convective rain ${cpuMean / area} against ${gpuMean / area} mm/d`);
-  assert.ok(convective.rmsRel < 3e-2 && largeScale.rmsRel < 3e-2, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScale.rmsRel}`);
+  const largest = Math.max(...cpu.moist.convectiveRain), kept = Array.from({ length: C }, (_, i) => i).filter((i) => !(Math.abs(cpu.moist.convectiveRain[i] - gpu.moist.convectiveRain[i]) > 1e-3 * largest));
+  const pick = (values) => Float64Array.from(kept, (i) => values[i]);
+  const convective = stats(pick(cpu.moist.convectiveRain), pick(gpu.moist.convectiveRain)), largeScale = stats(pick(cpu.moist.largeScaleRain), pick(gpu.moist.largeScaleRain));
+  console.log(`six hours at N=6: convective rain ${(cpuMean / area).toFixed(3)} mm/d in the mean (GPU ${(gpuMean / area).toFixed(3)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain; over the rest per-cell rms ${convective.rmsRel.toExponential(1)}, large-scale per-cell rms ${largeScale.rmsRel.toExponential(1)}`);
+  assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `mean convective rain ${cpuMean / area} against ${gpuMean / area} mm/d`);
+  assert.ok(C - kept.length <= 0.01 * C, `${C - kept.length} cells apart`);
+  assert.ok(convective.rmsRel < 1e-3 && largeScale.rmsRel < 1e-3, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScale.rmsRel}`);
 });

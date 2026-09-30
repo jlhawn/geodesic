@@ -148,7 +148,7 @@ test('a coupled segment stopped inside a day carries the recorded day across the
     for (const name of ['stress', 'netFlux', 'shortwave', 'shortwaveDown', 'evaporation', 'rain']) {
       let off = 0, size = 0;
       for (let i = 0; i < a.fields[name].length; i++) { off += Math.abs(a.fields[name][i] - b.fields[name][i]); size += Math.abs(a.fields[name][i]); }
-      assert.ok(off < 0.1 * size, `day ${day} ${name}: the continued run's mean is ${(100 * off / size).toFixed(1)}% off the uninterrupted one's`);
+      assert.ok(off < 0.03 * size, `day ${day} ${name}: the continued run's mean is ${(100 * off / size).toFixed(1)}% off the uninterrupted one's`);
     }
   }
 });
