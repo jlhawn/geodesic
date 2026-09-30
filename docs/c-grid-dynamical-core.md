@@ -3243,6 +3243,23 @@ The work, in order:
    Three days at N=64 from nine64_day0091, 60–90N ice volume loss per
    day: GPU 0.172 (off 0.168)·10³ km³, CPU 0.173 (off 0.167; volume
    9.19 → 8.67 and 8.69).
+   In the first CPU step from eight64_day0183, over the sea at 30S–30N
+   where the deck is off, the shear term gives 1.62 and the buoyancy term
+   1.33 of the 2.94 mm/s (each uncapped) and is the larger on 0.58 of the
+   entraining columns; from day 193 of the A 0.2 run, 2.23 and 3.46 of
+   5.69 mm/s. In that first step 1113 columns have a buoyancy term below
+   5% of the shear term; their w_e, which drops to zero where B0 changes
+   sign, has a median of 3.8 and a 90th percentile of 11.1 mm/s. The step
+   keeps each column's mass-weighted θ and water and each edge's momentum
+   to 1·10⁻¹⁵ relative; because θ rather than cp T is mixed, the
+   global-mean enthalpy gains 0.18 W/m² with entrainment off and 0.24
+   with it on. Continued from day 193 in one-day segments (`rv4on`,
+   `rv4off`), days 194–199, A 0.2: albedo 0.314, 0.319, 0.317, 0.313,
+   0.314, 0.316, ASR − OLR −4.0, −5.1, −3.6, −2.3, −1.8, −2.2 W/m²; off:
+   0.347, 0.354, 0.351, 0.339, 0.346, 0.350 and −13.9, −16.0, −14.2,
+   −10.6, −11.9, −12.1. The ocean reaches its 5 m/s speed limit at
+   1S 99–100E on days 193 (4 edges) and 194 (3) with entrainment and on
+   days 195 (4) and 196 (3) without it.
 
 **Item 4, diagnosed and tried (Sept 30).** `scripts/equatorialOcean.mjs`
 takes a saved state apart on the CPU by 20° of longitude along the
