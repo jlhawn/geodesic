@@ -88,7 +88,7 @@ test('with the ∇⁴ closures off, the divergence damping alone and the heat it
  * enough that the rounding of θ is far below the tolerance.
  */
 function heatingState() {
-  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false } });
+  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 } } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;

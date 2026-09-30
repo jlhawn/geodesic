@@ -807,7 +807,7 @@ test('the gates switch the deck through their running mean: a standing deck outl
 });
 
 function modelDigest(radiation) {
-  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0 }, divergenceDamping: 0, ...(radiation ? { radiation } : {}) });
+  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0 }, divergenceDamping: 0, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 } }, ...(radiation ? { radiation } : {}) });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   for (let n = 0; n < 12; n++) model.step(900);
   const hash = createHash('sha256');
