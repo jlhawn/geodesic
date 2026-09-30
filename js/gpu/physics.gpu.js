@@ -797,7 +797,7 @@ export const PHYSICS_KERNELS = {
     }
     if (IN[off + bottom * C + i] < 0.0) { IN[off + bottom * C + i] = 0.0; }
   }
-  PH[PH_RAIN + i] += rained + convected; PH[PH_COND + i] += rained; PH[PH_CONV + i] += convected;
+  PH[PH_RAIN + i] += rained + convected; PH[PH_COND + i] += rained; PH[PH_CONV + i] += convected; PH[PH_STEPRAIN + i] = rained + convected;
   let airT = IN[S_TH + bottom * C + i] * D[D_EXM + bottom * C + i];
   if (PH[PH_LAND + i] < 0.5 && airT < MELTING && rained + convected > 0.0) {
     ${snowOnSea('rained + convected')}

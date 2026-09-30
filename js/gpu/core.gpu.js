@@ -31,7 +31,7 @@ export function layoutFor(mesh, K) {
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE]]);
-  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C]]);
+  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C]]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH, FR };
 }
@@ -121,7 +121,10 @@ const REDUCED_SETUP = `    let a = MF[F_AREA + i]; let pi = IN[S_PI + i];
  * its memory, WM ← WM·P[4] + smoothed·(1 − P[4]).
  * frameRain folds the step accumulators into the three-hour rain,
  * S ← S·P[1] + rain, and the running runoff, which moves to RDONE for
- * the host to count when the diagnostics are taken (P[2] = 1).
+ * the host to count when the diagnostics are taken (P[2] = 1); when
+ * P[5] is 86400 over the seconds since the last frame, it turns the
+ * convective and large-scale sums into their means in mm/d, CONVMEAN and
+ * CONDMEAN, and every frame clears the sums with the rain.
  */
 const COMFORT_WGSL = `
 fn dewPointC(t: f32, rh: f32) -> f32 {
@@ -238,7 +241,8 @@ const FRAME_KERNELS = {
   OUT[FR_RAIN + i] = OUT[FR_RAIN + i] * P[1] + PH[PH_RAIN + i];
   let tally = OUT[FR_RUNOFF + i] + PH[PH_RUNOFF + i];
   if (P[2] > 0.5) { OUT[FR_RDONE + i] = tally; OUT[FR_RUNOFF + i] = 0.0; } else { OUT[FR_RUNOFF + i] = tally; }
-  PH[PH_RAIN + i] = 0.0; PH[PH_RUNOFF + i] = 0.0;
+  if (P[5] > 0.0) { PH[PH_CONVMEAN + i] = PH[PH_CONV + i] * P[5]; PH[PH_CONDMEAN + i] = PH[PH_COND + i] * P[5]; }
+  PH[PH_RAIN + i] = 0.0; PH[PH_RUNOFF + i] = 0.0; PH[PH_CONV + i] = 0.0; PH[PH_COND + i] = 0.0;
 }`,
 };
 
@@ -744,9 +748,9 @@ export async function createGpuCore(mesh, {
     });
   }
 
-  const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null };
-  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate } = {}) {
-    for (const [name, value] of Object.entries({ land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate })) if (value !== undefined) retained[name] = value;
+  const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null };
+  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain } = {}) {
+    for (const [name, value] of Object.entries({ land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain })) if (value !== undefined) retained[name] = value;
     const ph = new Float32Array(L.PH.total);
     for (let i = 0; i < C; i++) {
       const lat = mesh.latCell[i];
@@ -763,6 +767,8 @@ export async function createGpuCore(mesh, {
       ph[L.PH.MLMSUB + i] = retained.mlmSubsidence ? retained.mlmSubsidence[i] : 0;
       ph[L.PH.MLMH + i] = retained.mlmHeight ? retained.mlmHeight[i] : 0;
       ph[L.PH.MLMGATE + i] = retained.mlmGate ? retained.mlmGate[i] : UNDECIDED;
+      ph[L.PH.CONVMEAN + i] = retained.convectiveRain ? retained.convectiveRain[i] : 0;
+      ph[L.PH.CONDMEAN + i] = retained.largeScaleRain ? retained.largeScaleRain[i] : 0;
     }
     device.queue.writeBuffer(buffers.PH, 0, ph);
   }
@@ -831,9 +837,9 @@ export async function createGpuCore(mesh, {
     concentration: ['PH', 'CONC', 1],
   };
   const frameParams = new Float32Array(8);
-  function frame({ pressure = 0, keep = 1, keepVertical = 0, fields = [], diagnostics = false } = {}) {
+  function frame({ pressure = 0, keep = 1, keepVertical = 0, fields = [], diagnostics = false, rainScale = 0 } = {}) {
     const wanted = fields.filter((name) => name in FIELDS), vertical = wanted.includes('vertical');
-    frameParams.set([pressure, keep, diagnostics ? 1 : 0, vertical ? 1 : 0, keepVertical]);
+    frameParams.set([pressure, keep, diagnostics ? 1 : 0, vertical ? 1 : 0, keepVertical, rainScale]);
     device.queue.writeBuffer(buffers.FP, 0, frameParams);
     const g = group(buffers.S, buffers.FR, buffers.D, buffers.FP);
     const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();

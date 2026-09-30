@@ -356,3 +356,61 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   }
   assert.ok(moved > C / 2, `the mean moved on ${moved} cells`);
 });
+
+test('the convective and large-scale rain accumulate alike in both engines, cell by cell, and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { model, physics } = await pair(6, 24, 900);
+  const C = model.mesh.nCells, { convectivePrecipitation: convective, largeScalePrecipitation: largeScale, precipitation, rain } = model.moist;
+  const conv = stats(convective, physics.CONV.subarray(0, C)), ls = stats(largeScale, physics.COND.subarray(0, C)), step = stats(rain, physics.STEPRAIN.subarray(0, C));
+  let fired = 0, rained = 0, apart = 0, area = 0, cpuMean = 0, gpuMean = 0;
+  for (let i = 0; i < C; i++) {
+    const a = model.mesh.areaCell[i];
+    if (convective[i] > 0) fired++;
+    if (largeScale[i] > 0) rained++;
+    apart = Math.max(apart, Math.abs(convective[i] + largeScale[i] - precipitation[i]));
+    area += a; cpuMean += a * convective[i]; gpuMean += a * physics.CONV[i];
+  }
+  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}), per-cell rms ${conv.rmsRel.toExponential(1)}; large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
+  assert.ok(fired > C / 2 && rained > 0, `convective rain on ${fired} cells, large-scale on ${rained}`);
+  assert.ok(Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `mean convective rain ${cpuMean / area} against ${gpuMean / area}`);
+  assert.ok(conv.rmsRel < 1e-3 && ls.rmsRel < 1e-3, `per-cell rms convective ${conv.rmsRel}, large-scale ${ls.rmsRel}`);
+  assert.ok(step.maxDiff < 1e-4, `the last step's rain differs by ${step.maxDiff} at ${step.at}`);
+  assert.ok(apart < 1e-12, `convective plus large-scale is the precipitation to ${apart}`);
+});
+
+test('both models read the rain split out at the diagnostics as means in mm/d, clearing its sums, and the GPU model sends the means to the device on load and mirrors them on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
+  const cpu = createModel(new Grid(6), { ocean: false }), gpu = await createGpuModel(new Grid(6), { ocean: false });
+  const C = cpu.mesh.nCells, init = initializeState(cpu, {});
+  for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
+  const loaded = Float64Array.from({ length: C }, (_, i) => 0.5 * (i % 9));
+  gpu.moist.convectiveRain.set(loaded);
+  gpu.moist.largeScaleRain.set(loaded.map((x) => x / 3));
+  gpu.load();
+  let device = await gpu.gpu.downloadPhysics();
+  for (let i = 0; i < C; i++) assert.ok(device.CONVMEAN[i] === Math.fround(loaded[i]) && device.CONDMEAN[i] === Math.fround(loaded[i] / 3), `cell ${i}: the means on the device`);
+  await gpu.diagnostics();
+  device = await gpu.gpu.downloadPhysics();
+  assert.equal(device.CONVMEAN[1], Math.fround(loaded[1]), 'a diagnostics frame with no time elapsed keeps the means');
+  const steps = 24, seconds = steps * 900;
+  for (let n = 0; n < steps; n++) { cpu.step(900); await gpu.step(900); }
+  const sums = Float64Array.from(cpu.moist.convectivePrecipitation);
+  device = await gpu.gpu.downloadPhysics();
+  const gpuSums = Float64Array.from(device.CONV.subarray(0, C)), gpuLarge = Float64Array.from(device.COND.subarray(0, C));
+  cpu.diagnostics();
+  await gpu.diagnostics();
+  await gpu.sync();
+  device = await gpu.gpu.downloadPhysics();
+  let area = 0, cpuMean = 0, gpuMean = 0;
+  for (let i = 0; i < C; i++) {
+    assert.ok(Math.abs(cpu.moist.convectiveRain[i] - 86400 * sums[i] / seconds) < 1e-12, `cell ${i}: the CPU mean is the sum over the interval`);
+    assert.ok(Math.abs(gpu.moist.convectiveRain[i] - 86400 * gpuSums[i] / seconds) <= 1e-6 * gpu.moist.convectiveRain[i] && Math.abs(gpu.moist.largeScaleRain[i] - 86400 * gpuLarge[i] / seconds) <= 1e-6 * gpu.moist.largeScaleRain[i], `cell ${i}: the GPU mean is its sum over the interval`);
+    assert.ok(gpu.moist.convectiveRain[i] === device.CONVMEAN[i] && gpu.moist.largeScaleRain[i] === device.CONDMEAN[i], `cell ${i} mirrored`);
+    assert.ok(cpu.moist.convectivePrecipitation[i] === 0 && cpu.moist.largeScalePrecipitation[i] === 0 && device.CONV[i] === 0 && device.COND[i] === 0, `cell ${i}: the sums start again`);
+    const a = cpu.mesh.areaCell[i];
+    area += a; cpuMean += a * cpu.moist.convectiveRain[i]; gpuMean += a * gpu.moist.convectiveRain[i];
+  }
+  const convective = stats(cpu.moist.convectiveRain, gpu.moist.convectiveRain), largeScale = stats(cpu.moist.largeScaleRain, gpu.moist.largeScaleRain);
+  console.log(`six hours at N=6: convective rain ${(cpuMean / area).toFixed(3)} mm/d in the mean (GPU ${(gpuMean / area).toFixed(3)}), per-cell rms ${convective.rmsRel.toExponential(1)}; large-scale per-cell rms ${largeScale.rmsRel.toExponential(1)}`);
+  assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `mean convective rain ${cpuMean / area} against ${gpuMean / area} mm/d`);
+  assert.ok(convective.rmsRel < 1e-3 && largeScale.rmsRel < 1e-3, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScale.rmsRel}`);
+});

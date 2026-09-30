@@ -190,6 +190,12 @@ export function createModel(gridOrMesh, {
     model.time += dt;
   };
 
+  /*
+   * Global means, the precipitation over the interval since the last
+   * restartPrecipitation, which each call ends; over the same interval
+   * the per-cell convective and large-scale rain go to
+   * moist.convectiveRain and moist.largeScaleRain in mm/d.
+   */
   let lastPrecipTime = 0;
   model.diagnostics = function diagnostics(sums = totals) {
     const [pi, theta, u, surfaceT, q, qc, ice] = state;
@@ -213,6 +219,7 @@ export function createModel(gridOrMesh, {
     }
     for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));
     const interval = model.time - lastPrecipTime;
+    if (interval > 0) moistPhysics.readRain(interval);
     const result = {
       mass: mass / area, meanSurfaceT: meanSurfaceT / area, piMin, piMax, maxWind,
       absorbedSolar: sums.absorbedSolar / area, atmosphereSolar: sums.atmosphereSolar / area, outgoingLongwave: sums.outgoingLongwave / area, sensibleHeat: sums.sensibleHeat / area,
@@ -228,6 +235,8 @@ export function createModel(gridOrMesh, {
   };
   model.restartPrecipitation = function restartPrecipitation() {
     moistPhysics.precipitation.fill(0);
+    moistPhysics.convectivePrecipitation.fill(0);
+    moistPhysics.largeScalePrecipitation.fill(0);
     lastPrecipTime = model.time;
   };
 

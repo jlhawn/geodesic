@@ -20,7 +20,10 @@ const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'root
  * The whole model on the GPU behind the CPU model's interface: `state`,
  * `seaIce.concentration` and the deck's carried state — the running-mean
  * subsidence, inversion height and gate `radiation.mlmSubsidence`,
- * `mlmHeight` and `mlmGate` — hold double-precision mirrors that only
+ * `mlmHeight` and `mlmGate` — and the per-cell convective and
+ * large-scale rain `moist.convectiveRain` and `moist.largeScaleRain`,
+ * the means in mm/d that each diagnostics frame takes over the interval
+ * since the frame before, hold double-precision mirrors that only
  * `sync` refreshes from the device and `load` sends to it (the land's
  * soil, snow and vegetation only `land.serialize`, its runoff when the
  * diagnostics are taken), `step` only queues work, `beginFrame`
@@ -67,12 +70,12 @@ export async function createGpuModel(gridOrMesh, {
   let dirty = true, lastFrameTime = 0;
 
   const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
-  model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget };
+  model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain };
   model.oceanEngine = gpuOcean;
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate });
+    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain });
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6], { climatology: null });
     lastFrameTime = model.time;
@@ -82,12 +85,14 @@ export async function createGpuModel(gridOrMesh, {
 
   async function sync() {
     if (!dirty) return;
-    const [arrays, [concentration, mean, height, gate]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
+    const [arrays, [concentration, mean, height, gate, convective, largeScale]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
     arrays.forEach((a, i) => state[i].set(a));
     seaIce.concentration.set(concentration);
     radiationCpu.mlmSubsidence.set(mean);
     radiationCpu.mlmHeight.set(height);
     radiationCpu.mlmGate.set(gate);
+    model.moist.convectiveRain.set(convective);
+    model.moist.largeScaleRain.set(largeScale);
     dirty = false;
   }
   model.sync = sync;
@@ -135,7 +140,9 @@ export async function createGpuModel(gridOrMesh, {
     const vertical = fields.includes('vertical');
     const keepVertical = vertical && verticalLevel === level ? Math.exp(-Math.max(0, interval) / VERTICAL_MEMORY) : 0;
     verticalLevel = vertical ? level : null;
-    const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), keepVertical, fields, diagnostics: summarize });
+    const rainScale = summarize && interval > 0 ? 86400 / interval : 0;
+    if (rainScale) dirty = true;
+    const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), keepVertical, fields, diagnostics: summarize, rainScale });
     if (gpuOcean) { gpuOcean.forgetAccumulated('rain'); gpuOcean.forgetAccumulated('runoff'); }
     const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize, depth: depth === 'surface' ? 0 : Number(depth) }) : null;
     return Promise.all([atmosphere, ocean]).then(([a, o]) => {
