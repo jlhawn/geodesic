@@ -2113,9 +2113,9 @@ surface heat flux with its absorbed and downward shortwave and the
 sensible heat, evaporation, precipitation, the snow falling on the sea,
 each land cell's runoff, and the surface temperature, SST (freezing
 under ice), ice thickness and concentration. A kernel sums them after
-every step (`createForcingRecorder`, `js/gpu/forcing.gpu.js`); rain is
-the change of the running CONV + COND totals and runoff the change of
-the land's runoff tally over the day.
+every step (`createForcingRecorder`, `js/gpu/forcing.gpu.js`), rain
+among them from each step's own total (PH STEPRAIN); runoff is the
+change of the land's runoff tally over the day.
 
 `scripts/oceanSpinup.mjs` loads a coupled snapshot (STATE) into the GPU
 model and loops the first DAYS_PER_YEAR (365) recorded days over it for
@@ -2692,6 +2692,48 @@ The work, in order:
    rain) the report prints; an equatorial ocean line (surface and
    thermocline-class zonal current, stress, mixed-layer depth,
    thermocline tilt).
+
+   Built. Both engines sum each cell's convective rain (the
+   Betts–Miller rain less its detrained share) and large-scale rain
+   (autoconversion less the rain evaporated on the way down, which
+   counts the detrained anvil water once it rains out), clear the sums
+   with the precipitation, and at each diagnostics turn them into means
+   over the interval in mm/d, `moist.convectiveRain` and
+   `moist.largeScaleRain`: daily means in a spin-up, mirrored from the
+   GPU on sync, saved in states as `convectiveRain` and `largeScaleRain`
+   (zero in older ones) and regridded with them. Each spin-up segment
+   ends with two lines from `js/audit.module.js`: `convection after N
+   days` (the convective share globally and 15S–15N; the SE Pacific
+   box's rain, its convective part and the fraction of its column-days
+   with any convective rain; the Pacific ITCZ box's rain) and `equator
+   after N days` (2S–2N: the mixed layer's zonal current over 160E–100W
+   and 140W–100W, the fastest thickness-weighted eastward current of the
+   classes to 1026.0 over 180–100W and its depth, the zonal stress over
+   160E–100W, the mixed-layer depth over 140W–100W, the 1024 class top at
+   150E–180 and 120W–90W). `node scripts/verticalAudit.mjs <state.bin>`
+   prints the audit's headline numbers from one state on the CPU with
+   their Earth references and verdicts in 84 s at N=128, the window
+   numbers over 8 steps; its low cloud (cloud water below 680 hPa, or
+   the deck's cover) is 0.035 where the 0.08 above counted cloud in any
+   layer. The baselines, day 183 of the paired run:
+
+   | | N=128 | N=64 | Earth |
+   |---|---|---|---|
+   | SE Pacific rain, mm/d | 1.47 | 1.06 | 0.1–0.3 |
+   | its convective share | 1.00 | 1.00 | ≤ 0.1 |
+   | columns firing a step | 0.067 | 0.047 | < 0.01 |
+   | deck's virtual jump, K | 1.49 | 1.90 | 6–12 |
+   | estimated inversion strength, K | 2.96 | 2.72 | 5–8 |
+   | saved ten-day sink, mm/s (at h, m) | 1.17 (683) | 2.52 (857) | 3–5·10⁻³ h |
+   | ω700, Pa/s | 0.050 | 0.056 | 0.03–0.05 |
+   | low cloud | 0.035 | 0.098 | 0.6–0.7 |
+   | deck height / resolved inversion, m | 735 / 1328 | 872 / 1378 | 1000–1500 |
+   | Peru rain, mm/d (firing) | 0.59 (0.015) | 0.81 (0.025) | 0.1–0.3 |
+   | Pacific ITCZ 5–12N rain, mm/d | 2.73 | 4.99 | 6–9 |
+   | its ω500, Pa/s | +0.013 | −0.018 | −0.05 to −0.10 |
+   | zonal-mean rain peak, mm/d (lat) | 4.94 (2.5S) | 5.52 (4.5N) | 6–7 (8N) |
+   | ω700 grid-scale share | 0.665 | 0.548 | < 0.065 |
+   | Hadley peaks, 10⁹ kg/s S / N | −144 / 36 | −152 / 34 | 100–200 / 10–50 |
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
@@ -2758,6 +2800,7 @@ js/
     model.gpu.js             M15: the GPU model behind the CPU model's interface
     profile.module.js        the model dialog's GPU profile: step times and kernel timestamps
   model.module.js           assembles core + physics, RK4 step, diagnostics
+  audit.module.js           M21: the audit's boxes and the spin-up's convection and equator lines
   forcing.module.js         M18: one recorded day of the ocean's surface forcing, encoded and decoded
   oceanHandOff.module.js    M18: a coupled state with the ocean, sea ice and sea surface of another
   parallel.module.js        M6: the same model stepped on worker threads
@@ -2783,6 +2826,7 @@ scripts/
   verdaRelaunch.sh          a Verda spot instance recreated on its OS volume after each eviction
   verdaInstances.mjs        the verda CLI's JSON as verdaRelaunch.sh reads it
   compareStates.mjs         saved states side by side as a markdown table
+  verticalAudit.mjs         M21: the vertical-motion and convection audit's headline numbers from one state, on the CPU
   packWoa.py                data/woa_annual_1deg.bin from the World Ocean Atlas 2023 NetCDF files
   splitState.mjs            a saved state gzipped into parts for the page
 test/
