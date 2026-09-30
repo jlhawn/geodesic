@@ -2872,6 +2872,111 @@ The work, in order:
    cloud base), conservation, CPU–GPU parity, and regression on the
    audited state: SE Pacific rain under 0.3 mm/d, firing under 1 % a
    step, low cloud above 0.4.
+
+   Built, in both engines (`js/physics/moist.module.js`, the adjust
+   kernel of `js/gpu/physics.gpu.js`). The parcel is the mass-weighted
+   mean θ and q of the layers whose lower interfaces lie below the
+   boundary layer's Richardson depth, or of the lowest 50 hPa
+   (`parcelDepth`) where that is deeper; it rises dry to its Bolton LCL,
+   then saturated with its moist static energy relaxed toward the air's
+   at `entrainmentRate` 5·10⁻⁵ m⁻¹, buoyant in virtual temperature. Its
+   inhibition is the negative buoyant energy from the top of its source
+   layers to the first buoyant layer above the LCL, its CAPE the
+   positive energy above that, its top the highest buoyant layer. The
+   pass is the product of two ramps, 0 to 1 as the CAPE rises through
+   `capeThreshold` 100 J/kg ± half of it and as the inhibition falls
+   through `inhibitionThreshold` 50 J/kg ± half, and 0 under a deck gate
+   above one half; the per-cell `convectiveActivity` relaxes toward it
+   over `activityMemory` 2 h (saved with the state, one half in older
+   ones) and the column convects while it is above one half. Only the
+   layers from the LCL's layer to the top relax. Deep tops (at or above
+   `shallowTop` 700 hPa) relax toward the parcel's temperature and 60 %
+   of its saturation as before, the anvil keeps its 10 %, and
+   `downdraftEvaporation` 0.25 of the rest may evaporate into the
+   subcloud layers inside the rain's fall. Shallow tops relax toward
+   Betts' mixing line between the parcel at its LCL and the layer above
+   the top, its water at most `shallowHumidity` 0.8 of saturation, with
+   neither heat nor water changed: they never rain. Autoconversion stays
+   out of the lowest two layers (`autoconversionFloor` 'lowest';
+   'boundaryLayer' keeps it out of every layer wholly inside the
+   boundary layer), and rain evaporates only into cloud-free layers
+   (at most 10⁻⁷ kg/kg of cloud water). At 10⁻⁴ m⁻¹ Jordan's (1958)
+   mean hurricane-season sounding heats most at 518 hPa with its top at
+   318 hPa, at 5·10⁻⁵ m⁻¹ at 440 hPa with its top at 230 hPa. The tests
+   (`test/convection.test.mjs`): a stratocumulus column over a 26 °C sea
+   under a 1.5 K θv inversion at 1.3 km with dry air above never
+   convects; the Jordan sounding convects from cloud base with no change
+   below it and its heating peak at 440 hPa; column enthalpy and water
+   close to 10⁻¹⁶ through the rain, anvil and downdraft, and heat and
+   water to 10⁻¹⁶ in the shallow branch; the deck veto, the activity's
+   switching times, both autoconversion floors, and the engines agree on
+   362 random columns to 10⁻⁴ K and 5·10⁻⁸ kg/kg.
+   `scripts/verticalAudit.mjs` adds, from the moist physics' `trace`,
+   the pressure of the maximum of the Pacific ITCZ firing columns'
+   convective heating and its mean over the lowest 100 m, the box's
+   large-scale heating below 1 km, the global rain, the convective share
+   of 15S–15N and the fraction of columns convection changes at all;
+   `MOIST` passes moist options to it and to `scripts/spinup.mjs`.
+
+   The audited states, 8-step windows before and after (the dilute
+   boundary-layer parcel has no CAPE in a troposphere adjusted to the
+   40 m layer's undilute adiabat, so convection stops at once):
+
+   | | eight128 d183 | eight64 d183 | eight128 d274 | eight64 d365 |
+   |---|---|---|---|---|
+   | SE Pacific rain, mm/d | 1.36 → 0.00 | 0.92 → 0.00 | 0.28 → 0.04 | 1.13 → 0.15 |
+   | its columns firing a step | 0.065 → 0 | 0.042 → 0 | 0.007 → 0 | 0.036 → 0 |
+   | Pacific ITCZ rain, mm/d | 2.69 → 0.42 | 4.86 → 0.57 | 2.55 → 0.41 | 1.89 → 0.28 |
+   | global rain, mm/d | 2.36 → 0.48 | 2.61 → 0.55 | 2.77 → 0.59 | 2.66 → 0.50 |
+   | ITCZ firing columns' heating peak, hPa | 973 → none | 438 → none | 439 → none | 439 → none |
+   | ITCZ large-scale heating below 1 km, max \|K/d\| | 12.3 → 13.9 | 13.1 → 14.1 | 11.2 → 12.5 | 10.7 → 11.9 |
+
+   Five days at N=128 on the GPU from eight128_day0183 (run `m21d128`,
+   audited on day 188), against the same five days under the old scheme
+   (package 2's gate with c = 0.03, column 3 of the deck table above):
+
+   | day 188, N=128 | old convection | M21 convection |
+   |---|---|---|
+   | SE Pacific rain, mm/d (convective share) | 0.57 | 0.70 (0.00) |
+   | its columns firing a step (adjusting at all) | | 0.000 (0.006) |
+   | its low cloud | 0.083 | 0.975 |
+   | its deck runs, share of column-steps | 0.160 | 0.049 |
+   | its resolved inversion, m (θv jump, K); EIS, K | 1158 (3.37); 3.11 | 1186 (6.13); 5.03 |
+   | Pacific ITCZ rain, mm/d (convective share); ω500, Pa/s | | 5.68 (0.78); −0.018 |
+   | ITCZ firing columns' heating peak, hPa (K/d); lowest 100 m, K/d | | 515 (46.4); −71.3 |
+   | ITCZ large-scale heating below 1 km, K/d | | +18.1 at 793 m, −31.8 at 21 m |
+   | global rain, mm/d (convective share); 15S–15N share | | 2.53 (0.49); 0.79 |
+   | zonal-mean rain peak, mm/d (latitude) | | 4.58 (7.5N) |
+   | planetary albedo, daily mean on day 188 | 0.315 (the paired run) | 0.574 |
+   | global cloud water path, g/m² | 78 (day 183) | 177 |
+
+   The acceptance fails. The SE Pacific's convective rain and firing are
+   gone, but its rain is large-scale drizzle from a nearly overcast
+   layer, and that layer covers the planet: the cloud water below
+   σ = 0.9 triples between 30S and 30N and grows four- to fivefold in
+   the midlatitudes within five days, and the albedo rises from 0.31 to
+   0.57 (ASR 234 → 145 W/m²; 0.58 and still −77 W/m² after ten days at
+   N=64). Three-day N=64 ablations from eight64_day0183 (day-185
+   albedo; the old scheme 0.326): the old scheme adjusting from cloud
+   base up only, 0.301; with only the autoconversion floor, 0.329; with
+   only the cloud-free evaporation rule, 0.325; the new scheme with the
+   40 m layer's undilute parcel, no trigger, every top deep and no
+   downdraft, 0.345, with the downdraft 0.362, with the shallow branch
+   and no downdraft 0.473; the boundary-layer dilute parcel with every top deep and no
+   trigger, 0.513; the full scheme 0.550, with the trigger off 0.547,
+   with the boundary-layer floor 0.555, with the boundary layer's mixing
+   carried to the convective top 0.544, with a one-hour cloud lifetime
+   0.527. The old scheme's shallow and deep firing dried the subcloud
+   layer toward 60 % humidity (26–30 g/kg/d in the 15S–15N mean of its
+   layers on day 183) and was the boundary layer's main moisture sink; the boundary-
+   layer parcel, the trigger and the non-precipitating shallow branch
+   each remove part of that sink, the boundary layer saturates at its
+   top, and the grid-mean resolved cloud radiates as overcast. On the
+   other side the ITCZ moves off the equator (zonal peak 7.5N) and its
+   500 hPa motion turns to ascent. Item 5 has to decide how the
+   boundary layer loses its moisture (an entrainment flux at its top or
+   a shallow mass flux out of the subcloud layer) and whether resolved
+   cloud needs a cover fraction, before a new spin-up.
 4. The ocean's wind response, diagnosed on the day-274 state before
    it is changed: stress against 0.05 N/m² on the equator, mixed-layer
    depth against 30–50 m in the east, whether an undercurrent exists
@@ -2903,7 +3008,7 @@ js/
     boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
     init.module.js          ported: thermal init, balance, seed, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes; ice, snow and soil by source tile
-    moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler
+    moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler; M21: its triggered entraining parcel and shallow branch
     ice.module.js           M9/M11: zero-layer sea ice over the mixed layer, its concentration, zenith albedo
   ocean/
     layered.module.js       M18: 45-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
