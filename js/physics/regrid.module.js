@@ -254,6 +254,19 @@ export function savedDeckField(saved, name, target, source = null) {
 
 export const savedSubsidence = (saved, target, source = null) => savedDeckField(saved, 'mlmSubsidence', target, source);
 
+/*
+ * The per-cell means of the convective and large-scale rain (mm/d) a
+ * state carries, see moist.module.js: the saved field, interpolated from
+ * `source` when the resolutions differ, or zero for a state saved
+ * without it.
+ */
+export const RAIN_FIELDS = ['convectiveRain', 'largeScaleRain'];
+export function savedRainField(saved, name, target, source = null) {
+  const values = saved ? saved[name] : null;
+  if (!values) return new Float64Array(target.mesh.nCells);
+  return values.length === target.mesh.nCells ? Float64Array.from(values) : regridCellField(source, target, Float64Array.from(values));
+}
+
 export function regridState(source, target, state, progress = null, { land = null } = {}) {
   const [pi, theta, u, surfaceT, q = null, qc = null, ice = null] = state;
   const K = source.core.K;

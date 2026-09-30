@@ -74,6 +74,30 @@ test('the recorded stress and fluxes are the means of what each step handed the 
   model.destroy();
 });
 
+test('a recorded day\'s rain is the day\'s convective plus large-scale rain, cell by cell, and its mean is the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const model = await freshModel();
+  const { mesh, gpu } = model, C = mesh.nCells;
+  await model.diagnostics();
+  const recorder = await createForcingRecorder(model);
+  const dt = 1350 * 16 / N, perDay = Math.round(86400 / dt);
+  for (let n = 0; n < perDay; n++) { await model.step(dt); recorder.step(); }
+  const d = await model.diagnostics();
+  const day = await decodeForcing(await recorder.day(1));
+  const [convective, largeScale] = await readRanges(gpu.device, gpu.buffers.PH, [{ offset: gpu.layout.PH.CONVMEAN, length: C }, { offset: gpu.layout.PH.CONDMEAN, length: C }]);
+  let area = 0, recorded = 0, split = 0, largest = 0, apart = 0;
+  for (let i = 0; i < C; i++) {
+    const a = mesh.areaCell[i], mean = convective[i] + largeScale[i];
+    area += a; recorded += a * 86400 * day.fields.rain[i]; split += a * mean;
+    largest = Math.max(largest, mean); apart = Math.max(apart, Math.abs(86400 * day.fields.rain[i] - mean));
+  }
+  console.log(`one day at N=6: recorded rain ${(recorded / area).toFixed(4)} mm/d, convective plus large-scale ${(split / area).toFixed(4)}, precipitation ${(86400 * d.precipitation).toFixed(4)}; per cell apart by at most ${apart.toExponential(1)} of ${largest.toFixed(2)} mm/d`);
+  assert.ok(split / area > 0.1, `${split / area} mm/d`);
+  assert.ok(apart <= 1e-4 * largest, `per cell the recorded rain is ${apart} mm/d off the split`);
+  assert.ok(Math.abs(recorded - split) <= 1e-5 * split, `recorded ${recorded / area} against ${split / area} mm/d`);
+  assert.ok(Math.abs(86400 * d.precipitation - split / area) <= 1e-5 * split / area, `precipitation ${86400 * d.precipitation} against ${split / area} mm/d`);
+  model.destroy();
+});
+
 test('two recorded days replayed over the ocean alone keep its SST with the coupled run and load back into the coupled model', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'oceanSpinup-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

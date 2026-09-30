@@ -103,10 +103,13 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * itself where mlmHeight is unset (0) or with prognosticHeight: false;
  * θ_l and q_t the dσ-weighted means of the layers whose midpoints lie
  * below h, the free troposphere the first layer above it, the
- * subsidence −πσ̇/(ρ g) of the last dynamics stage interpolated to h,
- * the surface fluxes this column's bulk sensible heat and evaporation,
- * and the longwave the DYCOMS-II form (dycomsLongwave) driven by the
- * mixed layer's own liquid water. The step's h, bounded the same way,
+ * subsidence w_s = −πσ̇/(ρ g) at h of the last dynamics stage, πσ̇
+ * averaged with equal weights over the cell and its neighbours
+ * subsidenceSmoothing times over (2; 0 to 2) at the two interfaces
+ * bracketing h and interpolated between them, the surface fluxes this
+ * column's bulk sensible heat and evaporation, and the longwave the
+ * DYCOMS-II form (dycomsLongwave) driven by the mixed layer's own liquid
+ * water. The step's h, bounded the same way,
  * goes back into mlmHeight and the cover and water path are diagnosed
  * there; where the deck does not run, mlmHeight relaxes
  * toward the boundary-layer top with the model's `relax`
@@ -126,19 +129,32 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * stratification across one of them passes the 2 K test below, and a
  * deck entraining under such a weak jump would deepen into it. A column
  * with no such interface has no ceiling but maximumHeight.
- * A stratocumulus-topped layer needs large-scale subsidence under a
- * capping inversion, so the gates pass where w̄_s ≤ −stratusSubsidence
- * (0.3 mm/s; DYCOMS-II has 3 mm/s at 840 m) and Δθ_v ≥ minimumInversion
+ * The regime test is the capping inversion: Δθ_v ≥ minimumInversion
  * (2 K, a capping inversion rather than the top of a subcloud layer
- * under cumulus) at the start's h.
- * w̄_s is the running mean of w_s(h), w̄_s ← w̄_s e + w_s (1 − e) with
- * e = exp(−dt/subsidenceMemory) (10 days), because the large-scale
- * subsidence that defines the regime is a small residual of the
- * ±10 mm/s synoptic swings in the w_s of a single dynamics stage (the
- * DYCOMS-II divergence is itself a monthly mean); it is kept per cell in
- * mlmSubsidence, starts at 0, and is saved with the state (the key
- * `mlmSubsidence`; a state saved without it starts from 0). The model's
- * own dh/dt keeps the instantaneous w_s.
+ * under cumulus) at the start's h. A stratocumulus-topped layer also
+ * needs large-scale subsidence (DYCOMS-II has 3 mm/s at 840 m), but the
+ * model resolves it as a residual of a few mm/s: in the SE Pacific and
+ * Peru boxes the running mean w̄_s below sinks at 1.8 and 2.1 mm/s with
+ * a spread over the cells as large, so a floor on the sink turns columns
+ * of the regime away on synoptic swings, while the inversion is the
+ * resolved record of the subsidence that built it. The subsidence test
+ * therefore only vetoes large-scale ascent, under which an inversion at
+ * the boundary-layer top is transient: it passes where
+ * w̄_s ≤ −stratusSubsidence, and stratusSubsidence is −1 mm/s, about
+ * twice the grid-scale residual of w̄_s, so the deck is refused where
+ * the mean rises faster than 1 mm/s.
+ * The divergent computational mode of the hexagonal C-grid puts most of
+ * the variance of one stage's πσ̇ at the neighbouring-cell scale: on the
+ * day-183 N=128 state the sink at h spreads over the SE Pacific's cells
+ * by 30 mm/s about a mean of 1.5, 97 % of it at that scale, and the two
+ * ring passes leave 8.6 mm/s about 1.6, 12 % of it there. w̄_s is the
+ * running mean of w_s, w̄_s ← w̄_s e + w_s (1 − e) with
+ * e = exp(−dt/subsidenceMemory) (2 days), because the large-scale
+ * subsidence that defines the regime is still a small residual of the
+ * synoptic swings in w_s; it is kept per cell in mlmSubsidence, starts
+ * at 0, and is saved with the state (the key `mlmSubsidence`; a state
+ * saved without it starts from 0). The model's own dh/dt keeps the
+ * step's w_s.
  * The deck runs where the gates have mostly passed of late: mlmGate
  * holds the running mean of the pass indicator P (1 or 0),
  * G ← G + (P − G)(1 − exp(−dt/gateMemory)) (1 day), and the deck runs
@@ -194,6 +210,19 @@ export const STABILITY_SIGMA = 0.7;
 export const DECK_CLOUD_LEVELS = 8;
 export const UNDECIDED = 0.5;
 
+/*
+ * values[offset + i] averaged with equal weights over cell i and its
+ * neighbours, `passes` times over: the value smoothCells in
+ * levels.module.js gives cell i after that many passes over the field.
+ */
+export function ringMean(mesh, values, offset, i, passes) {
+  if (passes <= 0) return values[offset + i];
+  const { maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
+  let sum = ringMean(mesh, values, offset, i, passes - 1);
+  for (let m = 0; m < nEdgesOnCell[i]; m++) sum += ringMean(mesh, values, offset, cellsOnCell[maxEdges * i + m], passes - 1);
+  return sum / (nEdgesOnCell[i] + 1);
+}
+
 export function nearestLayer(sigmaMid, sigma) {
   let best = 0;
   for (let k = 1; k < sigmaMid.length; k++) if (Math.abs(sigmaMid[k] - sigma) < Math.abs(sigmaMid[best] - sigma)) best = k;
@@ -225,8 +254,8 @@ export function adiabaticWaterLapse(T, p, cp, R, g, latentHeat = LATENT_HEAT) {
 
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 95, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
-  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = 3e-4, minimumInversion = 2, subsidenceMemory = 10 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
-  prognosticHeight = true, gateMemory = DAY,
+  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 2, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
+  prognosticHeight = true, gateMemory = DAY, subsidenceSmoothing = 2,
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
@@ -270,6 +299,7 @@ export function createRadiation(mesh, core, {
   const shadow = mixedLayerDeck ? createMixedLayer({ cp, R, g, latentHeat, referencePressure: p0, cloudLevels: DECK_CLOUD_LEVELS, ...mixedLayerOptions }) : null;
   const shadowLongwave = dycomsLongwave();
   if (stratusIndex !== 'eis' && stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${stratusIndex}`);
+  if (![0, 1, 2].includes(subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${subsidenceSmoothing}`);
   const entraining = stratusIndex === 'ectei';
   const stratusLayer = nearestLayer(sigmaMid, stratusSigma), stabilityLayer = nearestLayer(sigmaMid, STABILITY_SIGMA);
   const gasEmissivity = Float64Array.from({ length: K }, (_, k) => 1 - Math.exp(-gasOpticalDepth * (levels[k + 1] - levels[k])));
@@ -342,10 +372,11 @@ export function createRadiation(mesh, core, {
     if (k < 1) return rest();
     const above = k * C + i, aboveCloud = qc ? Math.max(0, qc[above]) : 0;
     const interfaceHeight = (m) => (geopotential[m * C + i] + cp * thetaV[m * C + i] * (exnerLayer[m * C + i] - exnerLower[(m - 1) * C + i]) - surface) / g;
-    let lowerHeight = 0, lowerFlow = 0, m = K - 1;
-    for (; m > k && interfaceHeight(m) < h; m--) { lowerHeight = interfaceHeight(m); lowerFlow = piSigmaDot[m * C + i]; }
+    let lowerHeight = 0, lower = K, m = K - 1;
+    for (; m > k && interfaceHeight(m) < h; m--) { lowerHeight = interfaceHeight(m); lower = m; }
     const upperHeight = interfaceHeight(m);
-    const flow = lowerFlow + (piSigmaDot[m * C + i] - lowerFlow) * (h - lowerHeight) / (upperHeight - lowerHeight);
+    const lowerFlow = lower < K ? ringMean(mesh, piSigmaDot, lower * C, i, subsidenceSmoothing) : 0;
+    const flow = lowerFlow + (ringMean(mesh, piSigmaDot, m * C, i, subsidenceSmoothing) - lowerFlow) * (h - lowerHeight) / (upperHeight - lowerHeight);
     const density = pi * sigmaMid[m] / (R * thetaV[m * C + i] * exnerLayer[m * C + i]);
     const subsidence = -flow / (density * g), keep = Math.exp(-dt / subsidenceMemory);
     mlmSubsidence[i] = mlmSubsidence[i] * keep + subsidence * (1 - keep);
@@ -563,5 +594,6 @@ export function createRadiation(mesh, core, {
     }
   }
 
-  return { setTime, sun, cosZenith, insolation, column, apply, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer } };
+  const deckGates = { subsidenceSmoothing, subsidenceMemory, stratusSubsidence, minimumInversion, gateMemory };
+  return { setTime, sun, cosZenith, insolation, column, apply, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer } };
 }

@@ -12,10 +12,10 @@ import { encodeForcing } from '../forcing.module.js';
  * know which were ocean steps, so it must be created before the model's
  * first step and see every step after; `step` records through the
  * model's core, so inside model.stepBatch it belongs in the per-step
- * callback, where it lands after its step. Rain and runoff come from the
- * running totals rather than the sums: rain from PH CONV + COND, runoff
- * from model.land.runoff, which the model's diagnostics frame advances,
- * so `day` belongs after the day's model.diagnostics().
+ * callback, where it lands after its step. Runoff comes from
+ * model.land.runoff, a running total the model's diagnostics frame
+ * advances, rather than from the sums, so `day` belongs after the day's
+ * model.diagnostics().
  * `checkpoint` returns the part of a day summed so far (after a
  * model.diagnostics() for the runoff), and a recorder created with it as
  * `from`, on a model loaded from the state saved at that step, carries
@@ -74,8 +74,9 @@ export async function createForcingRecorder(model, from = null) {
   const { gpu, mesh, oceanEngine: ocean } = model;
   const { device } = gpu;
   const C = mesh.nCells, E = mesh.nEdges, PH = gpu.layout.PH;
-  const SUMMED = ['netFlux', 'shortwave', 'shortwaveDown', 'sensible', 'evaporation', 'surfaceT', 'sst', 'ice', 'concentration', 'snowfall'];
-  const A = seq([...SUMMED.map((name) => [name, C]), ['seen', C], ['stress', E]]);
+  const SUMMED = ['netFlux', 'shortwave', 'shortwaveDown', 'sensible', 'evaporation', 'surfaceT', 'sst', 'ice', 'concentration', 'snowfall', 'rain'];
+  const PER_SECOND = new Set(['snowfall', 'rain']);
+  const A = seq([...SUMMED.map((name) => [name, C]), ['stress', E]]);
   const acc = emptyBuffer(device, 4 * A.total);
   const run = compile(model, 'recordForcing', `
   if (n < E && P[0] > 0.5) { OUT[A_stress + n] += OD[O_STRESS + n]; }
@@ -90,22 +91,19 @@ export async function createForcingRecorder(model, from = null) {
   OUT[A_sst + i] += select(IN[S_TS + i], FREEZING, ice > 0.0);
   OUT[A_ice + i] += ice;
   OUT[A_concentration + i] += select(0.0, select(conc, 1.0, conc <= 0.0), ice > 0.0);
-  let fallen = PH[PH_CONV + i] + PH[PH_COND + i];
-  let amount = select(fallen, fallen - OUT[A_seen + i], fallen >= OUT[A_seen + i]);
-  OUT[A_seen + i] = fallen;
+  let amount = PH[PH_STEPRAIN + i];
+  OUT[A_rain + i] += amount;
   let bottom = (K - 1) * C + i;
   if (PH[PH_LAND + i] < 0.5 && amount > 0.0 && IN[S_TH + bottom] * D[D_EXM + bottom] < MELTING) { OUT[A_snowfall + i] += amount; }`, 'A_', A, acc);
 
-  const readRain = async () => { const [conv, cond] = await readRanges(device, gpu.buffers.PH, [{ offset: PH.CONV, length: C }, { offset: PH.COND, length: C }]); return Float64Array.from(conv, (x, i) => x + cond[i]); };
-  const rainNow = await readRain(), runoffNow = model.land ? Float64Array.from(model.land.runoff) : null;
-  let rainBefore = from ? Float64Array.from(rainNow, (x, i) => x - from.rain[i]) : rainNow;
+  const runoffNow = model.land ? Float64Array.from(model.land.runoff) : null;
   let runoffBefore = runoffNow && from ? Float64Array.from(runoffNow, (x, i) => x - from.runoff[i]) : runoffNow;
   let timeBefore = model.time - (from ? from.seconds : 0);
   if (from) {
     if (from.sums.length !== A.total) throw new Error(`the recorder checkpoint holds ${from.sums.length} sums, not ${A.total}`);
     device.queue.writeBuffer(acc, 0, Float32Array.from(from.sums));
+    device.queue.writeBuffer(acc, 4 * A.rain, Float32Array.from(from.rain));
   }
-  device.queue.writeBuffer(acc, 4 * A.seen, Float32Array.from(rainNow));
   let counted = 0, steps = from ? from.steps : 0, oceanSteps = from ? from.oceanSteps : 0;
 
   return {
@@ -116,24 +114,22 @@ export async function createForcingRecorder(model, from = null) {
       run([oceanStep ? 1 : 0], Math.max(C, E));
     },
     async checkpoint() {
-      const [[sums], rain] = await Promise.all([readRanges(device, acc, [{ offset: 0, length: A.total }]), readRain()]);
+      const [sums] = await readRanges(device, acc, [{ offset: 0, length: A.total }]);
       return {
         sums: Float32Array.from(sums), steps, oceanSteps, seconds: model.time - timeBefore,
-        rain: Float64Array.from(rain, (x, i) => x - rainBefore[i]),
+        rain: Float64Array.from(sums.subarray(A.rain, A.rain + C)),
         runoff: model.land ? Float64Array.from(model.land.runoff, (x, i) => x - runoffBefore[i]) : new Float64Array(C),
       };
     },
     async day(day) {
-      const [views, rain] = await Promise.all([readRanges(device, acc, [...SUMMED.map((name) => ({ offset: A[name], length: C })), { offset: A.stress, length: E }]), readRain()]);
+      const views = await readRanges(device, acc, [...SUMMED.map((name) => ({ offset: A[name], length: C })), { offset: A.stress, length: E }]);
       const seconds = model.time - timeBefore;
-      const fields = Object.fromEntries(SUMMED.map((name, n) => [name, Float32Array.from(views[n], (x) => x / (name === 'snowfall' ? seconds : steps))]));
+      const fields = Object.fromEntries(SUMMED.map((name, n) => [name, Float32Array.from(views[n], (x) => x / (PER_SECOND.has(name) ? seconds : steps))]));
       fields.stress = Float32Array.from(views[SUMMED.length], (x) => x / Math.max(1, oceanSteps));
-      fields.rain = Float32Array.from(rain, (x, i) => (x - rainBefore[i]) / seconds);
       fields.runoff = model.land ? Float32Array.from(model.land.runoff, (x, i) => (x - runoffBefore[i]) / seconds) : new Float32Array(C);
       const bytes = encodeForcing({ N: Math.round(Math.sqrt((C - 2) / 10)), day, time: model.time, seconds, steps, oceanSteps }, fields);
-      device.queue.writeBuffer(acc, 0, new Float32Array(A.seen));
-      device.queue.writeBuffer(acc, 4 * A.stress, new Float32Array(E));
-      rainBefore = rain; runoffBefore = model.land ? Float64Array.from(model.land.runoff) : null; timeBefore = model.time;
+      device.queue.writeBuffer(acc, 0, new Float32Array(A.total));
+      runoffBefore = model.land ? Float64Array.from(model.land.runoff) : null; timeBefore = model.time;
       steps = 0; oceanSteps = 0;
       return bytes;
     },

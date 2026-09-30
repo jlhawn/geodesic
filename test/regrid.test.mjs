@@ -191,3 +191,28 @@ test('the deck\'s carried height and gate survive a saved state: a model\'s fiel
   resumed.step(900); resumed.step(900);
   assert.ok([...resumed.radiation.mlmHeight, ...resumed.radiation.mlmGate, ...resumed.radiation.mlmCover].every(Number.isFinite), 'a legacy state steps without NaN');
 });
+
+test('the per-cell convective and large-scale rain survive a saved state: as saved at the same resolution, interpolated and never negative at another, and zero for a state saved without them', async () => {
+  const { savedRainField, RAIN_FIELDS } = await import('../js/physics/regrid.module.js');
+  const { encodeState, decodeState } = await import('../js/stateFile.module.js');
+  const { initializeState } = await import('../js/physics/init.module.js');
+  assert.deepEqual(RAIN_FIELDS, ['convectiveRain', 'largeScaleRain']);
+  const source = createModel(new Grid(6), { ocean: false }), target = createModel(new Grid(10), { ocean: false });
+  initializeState(source, {}).forEach((values, a) => source.state[a].set(values));
+  for (let n = 0; n < 24; n++) source.step(900);
+  source.diagnostics();
+  const { convectiveRain, largeScaleRain } = source.moist, C = source.mesh.nCells;
+  const area = (model, values) => { let s = 0, a = 0; for (let i = 0; i < model.mesh.nCells; i++) { s += model.mesh.areaCell[i] * values[i]; a += model.mesh.areaCell[i]; } return s / a; };
+  assert.ok(area(source, convectiveRain) > 0.1, `six hours rain ${area(source, convectiveRain)} mm/d convectively`);
+  const saved = await decodeState(encodeState({ N: 6, K: source.core.K, day: 0, time: source.time, pi: source.state[0], convectiveRain, largeScaleRain }));
+  for (const name of RAIN_FIELDS) {
+    const back = savedRainField(saved, name, source), moved = savedRainField(saved, name, target, source);
+    for (let i = 0; i < C; i++) assert.equal(back[i], Math.fround(source.moist[name][i]), `${name} of cell ${i}`);
+    assert.equal(moved.length, target.mesh.nCells);
+    assert.ok(moved.every((x) => x >= 0 && Number.isFinite(x)), `${name} at N=10 is finite and never negative`);
+  }
+  const before = area(source, convectiveRain), after = area(target, savedRainField(saved, 'convectiveRain', target, source));
+  assert.ok(Math.abs(after - before) < 0.2 * before, `convective rain: mean ${before} mm/d at N=6, ${after} at N=10`);
+  const legacy = await decodeState(encodeState({ N: 6, K: source.core.K, day: 0, time: 0, pi: source.state[0] }));
+  assert.ok(RAIN_FIELDS.every((name) => savedRainField(legacy, name, source).every((x) => x === 0) && savedRainField(null, name, target).every((x) => x === 0)), 'a state saved without them, or a fresh start, starts from zero');
+});

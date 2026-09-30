@@ -48,8 +48,13 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * column as cloud water spread through the anvil, the top `anvilDepth`
  * of pressure below the level of zero buoyancy, and the rest falls as
  * rain — and a filler that removes negative humidity by borrowing from
- * the layer below. Precipitation accumulates per cell (kg/m²); the
- * budget sums are area-weighted masses (kg).
+ * the layer below. Precipitation accumulates per cell (kg/m²), and so
+ * do its two parts: convective, the Betts–Miller rain less its detrained
+ * share, and large-scale, the autoconversion rain less what evaporates
+ * on the way down, which includes the detrained anvil water once it
+ * rains out. `readRain` turns the parts' sums into their means over the
+ * interval they cover, in mm/d. The budget sums are area-weighted
+ * masses (kg).
  */
 export function createMoistPhysics(mesh, core, {
   latentHeat = LATENT_HEAT, relaxationTime = 7200, referenceHumidity = 0.6,
@@ -61,6 +66,11 @@ export function createMoistPhysics(mesh, core, {
   const precipitation = new Float64Array(precipBuffer);
   const rainBuffer = buffers && buffers.rain ? buffers.rain : new SharedArrayBuffer(8 * C);
   const rain = new Float64Array(rainBuffer);
+  const convectiveBuffer = buffers && buffers.convectivePrecipitation ? buffers.convectivePrecipitation : new SharedArrayBuffer(8 * C);
+  const convectivePrecipitation = new Float64Array(convectiveBuffer);
+  const largeScaleBuffer = buffers && buffers.largeScalePrecipitation ? buffers.largeScalePrecipitation : new SharedArrayBuffer(8 * C);
+  const largeScalePrecipitation = new Float64Array(largeScaleBuffer);
+  const convectiveRain = new Float64Array(C), largeScaleRain = new Float64Array(C);
   const T = new Float64Array(K), p = new Float64Array(K), dp = new Float64Array(K), Tref = new Float64Array(K), qref = new Float64Array(K);
   const budget = { condensation: 0, convection: 0, lost: 0 };
 
@@ -233,9 +243,19 @@ export function createMoistPhysics(mesh, core, {
       fillColumn(i, pi, q);
       fillColumn(i, pi, qc);
       precipitation[i] += rained + convected;
+      convectivePrecipitation[i] += convected;
+      largeScalePrecipitation[i] += rained;
       rain[i] = rained + convected;
       budget.condensation += mesh.areaCell[i] * rained;
       budget.convection += mesh.areaCell[i] * convected;
+    }
+  }
+
+  function readRain(interval) {
+    const scale = 86400 / interval;
+    for (let i = 0; i < C; i++) {
+      convectiveRain[i] = scale * convectivePrecipitation[i];
+      largeScaleRain[i] = scale * largeScalePrecipitation[i];
     }
   }
 
@@ -245,5 +265,9 @@ export function createMoistPhysics(mesh, core, {
     return water;
   }
 
-  return { adjust, condenseColumn, autoconvertColumn, convectColumn, fillColumn, referenceProfile, columnWater, precipitation, rain, budget, latentHeat, shared: { precipitation: precipBuffer, rain: rainBuffer }, reference: { T: Tref, q: qref } };
+  return {
+    adjust, condenseColumn, autoconvertColumn, convectColumn, fillColumn, referenceProfile, columnWater, readRain,
+    precipitation, rain, convectivePrecipitation, largeScalePrecipitation, convectiveRain, largeScaleRain, budget, latentHeat,
+    shared: { precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer }, reference: { T: Tref, q: qref },
+  };
 }
