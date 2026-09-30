@@ -41,7 +41,7 @@ const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME};
 const RELAX: f32 = ${o.relaxationTime}; const RH_REF: f32 = ${o.referenceHumidity}; const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime};
 const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth}; const RAIN_EVAP: f32 = ${o.rainEvaporation};
-const CLEAR_AIR: f32 = ${CLEAR_AIR}; const PARCEL_DEPTH: f32 = ${o.parcelDepth}; const ENTRAIN: f32 = ${o.entrainmentRate}; const CAPE_MIN: f32 = ${o.capeThreshold}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const ACT_MEM: f32 = ${o.activityMemory}; const SHALLOW_TOP: f32 = ${o.shallowTop}; const DOWNDRAFT: f32 = ${o.downdraftEvaporation};
+const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const PARCEL_DEPTH: f32 = ${o.parcelDepth}; const ENTRAIN: f32 = ${o.entrainmentRate}; const CAPE_MIN: f32 = ${o.capeThreshold}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const ACT_MEM: f32 = ${o.activityMemory}; const SHALLOW_TOP: f32 = ${o.shallowTop}; const DOWNDRAFT: f32 = ${o.downdraftEvaporation}; const SHALLOW_RH: f32 = ${o.shallowHumidity};
 const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
@@ -126,10 +126,10 @@ fn moistLapse(temperature: f32, pressure: f32) -> f32 {
   let qs = qsat(temperature, pressure);
   return (RGAS * temperature + LHEAT * qs) / (CP + LHEAT * LHEAT * EPSILON * qs / (RGAS * temperature * temperature));
 }
-fn saturatedTemperature(energy: f32, pressure: f32, guess: f32) -> f32 {
+fn saturatedTemperature(energy: f32, pressure: f32, guess: f32, humidity: f32) -> f32 {
   var t = guess;
   for (var n = 0; n < 4; n++) {
-    let qs = qsat(t, pressure);
+    let qs = humidity * qsat(t, pressure);
     t -= (CP * t + LHEAT * qs - energy) / (CP + LHEAT * LHEAT * qs / (RVAP * t * t));
   }
   return t;
@@ -778,7 +778,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
             let environment = CP * T[k] + GRAV * z[k] + LHEAT * air;
             energy = environment + (energy - environment) * exp(-ENTRAIN * (z[k] - height));
             height = z[k];
-            temperature = saturatedTemperature(energy - GRAV * z[k], p[k], temperature);
+            temperature = saturatedTemperature(energy - GRAV * z[k], p[k], temperature, 1.0);
             Tref[k] = temperature;
             vapour = qsat(temperature, p[k]);
           }
@@ -807,9 +807,10 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
         let chi = clamp((lclP - p[k]) / span, 0.0, 1.0);
         let energy = energy0 + chi * (aboveEnergy - energy0) - GRAV * z[k];
         let water = qP + chi * (aboveQ - qP);
-        let t = (energy - LHEAT * water) / CP;
-        if (water > qsat(t, p[k])) { Tref[k] = saturatedTemperature(energy, p[k], t); qref[k] = qsat(Tref[k], p[k]); }
-        else { Tref[k] = t; qref[k] = water; }
+        var t = (energy - LHEAT * water) / CP;
+        if (water > SHALLOW_RH * qsat(t, p[k])) { t = saturatedTemperature(energy, p[k], t, SHALLOW_RH); qref[k] = SHALLOW_RH * qsat(t, p[k]); }
+        else { qref[k] = water; }
+        Tref[k] = t;
       }
     } else {
       for (var k = top; k <= base; k++) { qref[k] = RH_REF * qsat(Tref[k], p[k]); }
@@ -871,7 +872,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     }
     let qc = IN[S_QC + idx];
     if (!(qc > 0.0)) { continue; }
-    if (k > 0 && upperInterface(i, k) < floor) { continue; }
+    if (AUTO_BL) { if (k > 0 && upperInterface(i, k) < floor) { continue; } } else if (k >= K - 2) { continue; }
     let excess = max(0.0, qc - AUTO_T);
     let converted = min(qc, excess * (1.0 - exp(-AUTO_R * dt)) + qc * (1.0 - exp(-dt / CLOUD_LIFE)));
     IN[S_QC + idx] = qc - converted;

@@ -77,14 +77,16 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  *   into the subcloud layers as it falls, the proxy of a downdraft.
  *   Shallow: toward the mixing line of Betts (1986) between the parcel
  *   at its condensation level and the air of the layer above the top,
- *   moist static energy and water mixed linearly in pressure and
- *   saturated where the mixture would be, shifted so that neither heat
- *   nor water changes: it never rains.
+ *   moist static energy and water mixed linearly in pressure, the water
+ *   at most `shallowHumidity` of saturation (the rest of the mixture's
+ *   energy in its temperature), shifted so that neither heat nor water
+ *   changes: it never rains.
  *
  * Rain: Kessler autoconversion of cloud water above the threshold at
  * autoconversionRate, and of all cloud water over cloudLifetime, except
- * in layers wholly below the boundary-layer top (the lowest two without
- * a boundary layer). The rain falls through the layers below within the
+ * in the lowest two layers (`autoconversionFloor` 'lowest') or in the
+ * layers wholly below the boundary-layer top ('boundaryLayer'; the
+ * lowest two without a boundary layer). The rain falls through the layers below within the
  * step and evaporates into each cloud-free (at most CLEAR_AIR of cloud
  * water) subsaturated one up to `rainEvaporation` of what would saturate
  * it, latent cooling included,
@@ -106,21 +108,23 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * Defaults: relaxationTime 2 h, referenceHumidity 0.6, parcelDepth
  * 50 hPa, entrainmentRate 5e-5 /m, capeThreshold 100 J/kg,
  * inhibitionThreshold 50 J/kg, activityMemory 2 h, shallowTop 700 hPa,
- * detrainment 0.1, anvilDepth 150 hPa, downdraftEvaporation 0.25,
- * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
- * cloudLifetime 3 h, rainEvaporation 1.
+ * shallowHumidity 0.8, detrainment 0.1, anvilDepth 150 hPa,
+ * downdraftEvaporation 0.25, autoconversionThreshold 2e-4,
+ * autoconversionRate 1e-3 /s, cloudLifetime 3 h, autoconversionFloor
+ * 'lowest', rainEvaporation 1.
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, relaxationTime: 7200, referenceHumidity: 0.6, parcelDepth: 50e2, entrainmentRate: 5e-5,
   capeThreshold: 100, inhibitionThreshold: 50, activityMemory: 2 * 3600, shallowTop: 700e2, detrainment: 0.1, anvilDepth: 150e2,
-  downdraftEvaporation: 0.25, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, rainEvaporation: 1,
+  downdraftEvaporation: 0.25, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', shallowHumidity: 0.8,
 };
 
 export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate = null, buffers = null, ...options } = {}) {
   const {
     latentHeat, relaxationTime, referenceHumidity, parcelDepth, entrainmentRate, capeThreshold, inhibitionThreshold, activityMemory, shallowTop,
-    detrainment, anvilDepth, downdraftEvaporation, autoconversionThreshold, autoconversionRate, cloudLifetime, rainEvaporation,
+    detrainment, anvilDepth, downdraftEvaporation, autoconversionThreshold, autoconversionRate, cloudLifetime, rainEvaporation, autoconversionFloor, shallowHumidity,
   } = { ...MOIST_DEFAULTS, ...options };
+  if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer') throw new Error(`autoconversionFloor must be 'lowest' or 'boundaryLayer', not ${autoconversionFloor}`);
   const { K, C, levels, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
   const upperInterface = (i, k) => (geopotential[k * C + i] + cp * thetaV[k * C + i] * (exnerLayer[k * C + i] - exnerLower[(k - 1) * C + i])) / g;
@@ -147,13 +151,14 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
   }
 
   /*
-   * The temperature at which saturated air at `pressure` holds `energy`
-   * as cp T + L q_s(T, p), by four Newton steps from `guess`.
+   * The temperature at which air at `pressure` and `humidity` of its
+   * saturation holds `energy` as cp T + L h q_s(T, p), by four Newton
+   * steps from `guess`.
    */
-  function saturatedTemperature(energy, pressure, guess) {
+  function saturatedTemperature(energy, pressure, guess, humidity = 1) {
     let t = guess;
     for (let n = 0; n < 4; n++) {
-      const qs = saturationHumidity(t, pressure);
+      const qs = humidity * saturationHumidity(t, pressure);
       t -= (cp * t + latentHeat * qs - energy) / (cp + latentHeat * latentHeat * qs / (R_VAPOR * t * t));
     }
     return t;
@@ -194,7 +199,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
    */
   function autoconvertColumn(i, pi, theta, q, qc, dt, downdraft = 0, base = K) {
     let rain = 0, left = downdraft;
-    const floor = boundaryDepth ? boundaryDepth[i] : null;
+    const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
@@ -319,14 +324,13 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
         const chi = Math.min(1, Math.max(0, (parcel.lclPressure - p[k]) / span));
         const energy = parcel.energy + chi * (aboveEnergy - parcel.energy) - g * z[k];
         const water = parcel.q + chi * (aboveQ - parcel.q);
-        const t = (energy - latentHeat * water) / cp;
-        if (water > saturationHumidity(t, p[k])) {
-          Tref[k] = saturatedTemperature(energy, p[k], t);
-          qref[k] = saturationHumidity(Tref[k], p[k]);
-        } else {
-          Tref[k] = t;
-          qref[k] = water;
-        }
+        let t = (energy - latentHeat * water) / cp;
+        const most = shallowHumidity * saturationHumidity(t, p[k]);
+        if (water > most) {
+          t = saturatedTemperature(energy, p[k], t, shallowHumidity);
+          qref[k] = shallowHumidity * saturationHumidity(t, p[k]);
+        } else qref[k] = water;
+        Tref[k] = t;
       }
     } else {
       for (let k = top; k <= base; k++) qref[k] = referenceHumidity * saturationHumidity(Tref[k], p[k]);

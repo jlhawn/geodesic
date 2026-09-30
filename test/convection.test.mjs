@@ -240,8 +240,16 @@ test('the activity switches a column on only after it has passed for a while, an
   assert.equal(off, expected, `off after ${off} steps once the column stops passing`);
 });
 
-test('autoconversion stays out of the boundary layer, and rain evaporates only into cloud-free layers', () => {
-  const model = build(), { moist } = model, [pi, theta, , , q, qc] = model.state;
+test('autoconversion stays out of the lowest two layers, or with autoconversionFloor: boundaryLayer out of the boundary layer, and rain evaporates only into cloud-free layers', () => {
+  const lowest = build(), [pl, tl, , , ql, qcl] = lowest.state, KL = lowest.core.K, CL = lowest.core.diagnostics.C;
+  jordanColumn(lowest, 0);
+  for (let k = 0; k < KL; k++) qcl[k * CL] = 0;
+  qcl[(KL - 1) * CL] = 2e-3; qcl[(KL - 2) * CL] = 2e-3;
+  assert.equal(lowest.moist.autoconvertColumn(0, pl, tl, ql, qcl, 600), 0, 'cloud in the lowest two layers does not rain');
+  qcl[(KL - 3) * CL] = 2e-3;
+  assert.ok(lowest.moist.autoconvertColumn(0, pl, tl, ql, qcl, 600) > 0 || qcl[(KL - 3) * CL] < 2e-3, 'the third layer converts');
+  assert.throws(() => build({ autoconversionFloor: 'surface' }), /autoconversionFloor/);
+  const model = build({ autoconversionFloor: 'boundaryLayer' }), { moist } = model, [pi, theta, , , q, qc] = model.state;
   const { K, C, geopotential, g } = model.core.diagnostics;
   jordanColumn(model, 0);
   setDepth(model, 0, 1000);
@@ -259,9 +267,9 @@ test('autoconversion stays out of the boundary layer, and rain evaporates only i
   assert.equal(q[cloudBelow * C], qBefore[cloudBelow], 'and not into a cloudy one');
 });
 
-test('the triggered convection and the rain it leaves match between the engines on a random set of columns', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+async function parity(options) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
-  const model = build({}, 6), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
+  const model = build(options, 6), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
   const [pi, theta, , surfaceT, q, qc] = model.state;
   let seed = 12345;
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
@@ -282,7 +290,7 @@ test('the triggered convection and the rain it leaves match between the engines 
   }
   for (const a of model.state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   for (const a of [model.boundaryLayer.depth, model.radiation.mlmGate, moist.activity]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
-  const gpu = await createGpuCore(mesh, { levels, physics: {} });
+  const gpu = await createGpuCore(mesh, { levels, physics: options });
   const { device, buffers, kernels, layout } = gpu;
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate, convectiveActivity: moist.activity });
@@ -318,10 +326,15 @@ test('the triggered convection and the rain it leaves match between the engines 
       worstQc = Math.max(worstQc, Math.abs(model.state[5][x] - after[5][x]));
     }
   }
-  console.log(`${C} random columns: ${deep} rain convectively, ${shallow} convect without rain, ${decked} under a deck, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, the activity by ${worstActivity.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)})`);
+  console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} rain convectively, ${shallow} convect without rain, ${decked} under a deck, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, the activity by ${worstActivity.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)})`);
   assert.ok(deep > C / 40 && shallow > C / 40 && decked > C / 40 && still > C / 40, `${deep} deep, ${shallow} shallow, ${decked} decked, ${still} still`);
   assert.equal(flips, 0);
   assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
   assert.ok(worstActivity < 1e-5, `activity ${worstActivity}`);
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
+}
+
+test('the triggered convection and the rain it leaves match between the engines on a random set of columns, under either autoconversion floor', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  await parity({});
+  await parity({ autoconversionFloor: 'boundaryLayer' });
 });
