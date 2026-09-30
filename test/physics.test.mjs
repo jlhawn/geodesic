@@ -751,7 +751,7 @@ function modelDigest(radiation) {
 }
 
 test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
-  const before = '2c1fe52a35a17a762501cb6b3e31ab46';
+  const before = '6d67508e542a0960a8bbe8e5b230c4ce';
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST }).digest, before);
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
@@ -771,11 +771,11 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
   const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST };
-  assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, '359b2a50159e3dfa0236098bac19547d');
-  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, '9587f5400c7a4b789fa02c0c4e41015c');
-  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, '9587f5400c7a4b789fa02c0c4e41015c');
-  assert.notEqual(modelDigest({ ...forced, ...REDIAGNOSED }).digest, '9587f5400c7a4b789fa02c0c4e41015c');
-  assert.notEqual(modelDigest({ ...forced, ...scatteringOnly }).digest, '9587f5400c7a4b789fa02c0c4e41015c', 'the carried height and the gate\'s memory change the deck');
+  assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, '7aa1a9e8db0f398d8c8b8784b056adbf');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, '914a096cb3bae837f781e76f6015272d');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, '914a096cb3bae837f781e76f6015272d');
+  assert.notEqual(modelDigest({ ...forced, ...REDIAGNOSED }).digest, '914a096cb3bae837f781e76f6015272d');
+  assert.notEqual(modelDigest({ ...forced, ...scatteringOnly }).digest, '914a096cb3bae837f781e76f6015272d', 'the carried height and the gate\'s memory change the deck');
   const shadow = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED }), dark = createRadiation(mesh, core, { subsidenceMemory: 1e-9, stratusSolar: false, ...REDIAGNOSED });
   const scattering = createRadiation(mesh, core, { subsidenceMemory: 1e-9, cloudSolarAbsorption: 0, ...REDIAGNOSED });
   shadow.setTime(0); dark.setTime(0); scattering.setTime(0);

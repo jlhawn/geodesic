@@ -171,6 +171,8 @@ test('the deck\'s carried height and gate survive a saved state: a model\'s fiel
   const exact = await decodeState(encodeState({ N: 6, mlmHeight, mlmGate }, { f64: ['mlmHeight', 'mlmGate'] }));
   assert.deepEqual(savedDeckField(exact, 'mlmHeight', source), Float64Array.from(mlmHeight));
   assert.deepEqual(savedDeckField(exact, 'mlmGate', source), Float64Array.from(mlmGate));
+  let highest = 0;
+  for (let i = 0; i < C; i++) if (sea(source, i)) highest = Math.max(highest, Math.fround(mlmHeight[i]));
   for (const name of ['mlmHeight', 'mlmGate']) {
     const moved = savedDeckField(saved, name, target, source);
     assert.equal(moved.length, target.mesh.nCells);
@@ -178,7 +180,7 @@ test('the deck\'s carried height and gate survive a saved state: a model\'s fiel
       assert.ok(Number.isFinite(moved[n]), `${name} of target cell ${n}`);
       if (!sea(target, n)) assert.equal(moved[n], DECK_FIELDS[name], `${name} of land cell ${n}`);
       else if (name === 'mlmGate') assert.ok(moved[n] >= 0 && moved[n] <= 1, `gate of sea cell ${n}: ${moved[n]}`);
-      else assert.ok(moved[n] >= 0 && moved[n] <= 3000, `height of sea cell ${n}: ${moved[n]}`);
+      else assert.ok(moved[n] >= 0 && moved[n] <= highest * (1 + 1e-12), `height of sea cell ${n}: ${moved[n]} above the highest saved over the sea, ${highest}`);
     }
   }
   const legacy = await decodeState(encodeState({ N: 6, K: source.core.K, day: 1, time: 3600, pi, mlmSubsidence }));

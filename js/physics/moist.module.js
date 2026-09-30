@@ -123,23 +123,22 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * downdraft included, and from the large-scale condensation,
  * autoconversion and rain evaporation.
  *
- * Defaults: relaxationTime 2 h, referenceHumidity 0.6, the boundary
- * layer's parcel (boundaryParcel, parcelDepth 50 hPa), entrainmentRate
+ * Defaults: relaxationTime 2 h, referenceHumidity 0.6, the lowest
+ * layer's parcel (boundaryParcel false, parcelDepth 0), entrainmentRate
  * 5e-5 /m, capeThreshold 100 J/kg, inhibitionThreshold 50 J/kg,
- * activityMemory 2 h, shallowTop 700 hPa, no venting (shallowCape
- * null; shallowInhibition 15 J/kg), no shallowStability,
- * shallowReference 'mixingLine' without shallowRain, shallowHumidity
- * 0.8, detrainment 0.1, anvilDepth 150 hPa, downdraftEvaporation 0.25
- * offered in the fall,
+ * activityMemory 2 h, shallowTop 700 hPa, shallowCape 10 J/kg,
+ * shallowInhibition 15 J/kg, no shallowStability, shallowReference
+ * 'parcel', shallowRain, shallowHumidity 0.8, detrainment 0.1,
+ * anvilDepth 150 hPa, downdraftEvaporation 0.01 spread by mass,
  * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
  * cloudLifetime 3 h, autoconversionFloor 'lowest', rainEvaporation 1.
  */
 export const MOIST_DEFAULTS = {
-  latentHeat: LATENT_HEAT, relaxationTime: 7200, referenceHumidity: 0.6, parcelDepth: 50e2, entrainmentRate: 5e-5,
+  latentHeat: LATENT_HEAT, relaxationTime: 7200, referenceHumidity: 0.6, parcelDepth: 0, entrainmentRate: 5e-5,
   capeThreshold: 100, inhibitionThreshold: 50, activityMemory: 2 * 3600, shallowTop: 700e2, detrainment: 0.1, anvilDepth: 150e2,
-  downdraftEvaporation: 0.25, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', shallowHumidity: 0.8,
-  shallowCape: null, shallowInhibition: 15, shallowStability: null, shallowReference: 'mixingLine', shallowRain: false,
-  boundaryParcel: true, adjustFrom: 'cloudBase', deckVeto: true, evaporationInCloud: false, downdraftSpread: 'fall', virtualBuoyancy: true,
+  downdraftEvaporation: 0.01, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', shallowHumidity: 0.8,
+  shallowCape: 10, shallowInhibition: 15, shallowStability: null, shallowReference: 'parcel', shallowRain: true,
+  boundaryParcel: false, adjustFrom: 'cloudBase', deckVeto: true, evaporationInCloud: false, downdraftSpread: 'mass', virtualBuoyancy: true,
 };
 
 export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate = null, buffers = null, ...options } = {}) {

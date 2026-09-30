@@ -249,9 +249,9 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
  * column's own inversion: the second step, the first with a diagnosed
  * boundary layer, carries the deck.
  */
-async function mixedLayerPair(steps, { seed = -1e-3, height = 0, ...options } = {}) {
+async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = {}, ...options } = {}) {
   const physics = { mixedLayerDeck: true, ...options };
-  const model = createModel(new Grid(6), { ocean: false, radiation: physics });
+  const model = createModel(new Grid(6), { ocean: false, radiation: physics, moist });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells, theta = model.state[1], q = model.state[4];
@@ -261,7 +261,7 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, ...options } = 
   }
   model.radiation.mlmSubsidence.fill(seed);
   model.radiation.mlmHeight.fill(height);
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...moist } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }
@@ -300,8 +300,8 @@ test('the mixed-layer deck matches between the engines: cover, water path, entra
   console.log(`under the sun (${on.sunlit.length} decked cells lit by more than 200 W/m²) the cloud's absorption thins the step's water by ${(100 * thinned / on.sunlit.length).toFixed(1)} % on average; there the engines' water differs by rms ${on.sunlitWater.rmsRel.toExponential(1)}, at most ${on.sunlitWater.maxDiff.toExponential(1)} kg/m², the deck's by at most ${on.sunlitDeck.maxDiff.toExponential(1)} kg/m²`);
   assert.ok(on.sunlit.length > 50 && thinned > 0.005 * on.sunlit.length, `${on.sunlit.length} lit decks thinned by ${thinned / on.sunlit.length}`);
   assert.ok(on.sunlitWater.rmsRel < 1e-4 && on.sunlitWater.maxDiff < 5e-5 && on.sunlitDeck.maxDiff < 5e-5, `lit water rms ${on.sunlitWater.rmsRel}, max ${on.sunlitWater.maxDiff}; deck ${on.sunlitDeck.maxDiff}`);
-  const split = await mixedLayerPair(2, { mixedLayer: { closure: 'buoyancy', decouplingOnset: 0, decoupledRatio: 0.02 } });
-  console.log(`the buoyancy closure with decoupling from a buoyancy integral ratio of 0 to 0.02: ${split.partial} of ${split.decked} decks decoupled; cover differs by at most ${split.cover.maxDiff.toExponential(1)}, water by rms ${split.mlmWater.rmsRel.toExponential(1)}; OLR rms ${split.olr.rmsRel.toExponential(1)}, surface shortwave rms ${split.sw.rmsRel.toExponential(1)}`);
+  const split = await mixedLayerPair(2, { mixedLayer: { closure: 'buoyancy', decouplingOnset: 0, decoupledRatio: 0.02 }, moist: { shallowCape: null } });
+  console.log(`the buoyancy closure with decoupling from a buoyancy integral ratio of 0 to 0.02, without the shallow venting: ${split.partial} of ${split.decked} decks decoupled; cover differs by at most ${split.cover.maxDiff.toExponential(1)}, water by rms ${split.mlmWater.rmsRel.toExponential(1)}; OLR rms ${split.olr.rmsRel.toExponential(1)}, surface shortwave rms ${split.sw.rmsRel.toExponential(1)}`);
   assert.ok(split.partial > 0.2 * split.decked && split.gpuDecked === split.decked, `${split.partial} of ${split.decked} decoupled`);
   assert.ok(split.cover.maxDiff < 1e-3 && split.mlmWater.rmsRel < 1e-4, `cover ${split.cover.maxDiff}, water rms ${split.mlmWater.rmsRel}`);
   assert.ok(split.olr.rmsRel < 3e-5 && split.sw.rmsRel < 3e-5, `per-cell OLR rms ${split.olr.rmsRel}, surface shortwave rms ${split.sw.rmsRel}`);
