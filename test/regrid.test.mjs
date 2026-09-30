@@ -216,3 +216,18 @@ test('the per-cell convective and large-scale rain survive a saved state: as sav
   const legacy = await decodeState(encodeState({ N: 6, K: source.core.K, day: 0, time: 0, pi: source.state[0] }));
   assert.ok(RAIN_FIELDS.every((name) => savedRainField(legacy, name, source).every((x) => x === 0) && savedRainField(null, name, target).every((x) => x === 0)), 'a state saved without them, or a fresh start, starts from zero');
 });
+
+test('the convection\'s activity survives a saved state: as saved at the same resolution, interpolated within [0, 1] at another, and undecided for a state saved without it', async () => {
+  const { savedMoistField, MOIST_FIELDS } = await import('../js/physics/regrid.module.js');
+  const { encodeState, decodeState } = await import('../js/stateFile.module.js');
+  assert.equal(MOIST_FIELDS.convectiveActivity, 0.5);
+  const source = createModel(new Grid(6), { ocean: false }), target = createModel(new Grid(10), { ocean: false }), C = source.mesh.nCells;
+  assert.ok(source.moist.convectiveActivity.every((x) => x === 0.5), 'a fresh model starts undecided');
+  const convectiveActivity = Float64Array.from({ length: C }, (_, i) => (i % 7) / 6);
+  const saved = await decodeState(encodeState({ N: 6, K: source.core.K, day: 0, time: 0, pi: source.state[0], convectiveActivity }));
+  const back = savedMoistField(saved, 'convectiveActivity', source), moved = savedMoistField(saved, 'convectiveActivity', target, source);
+  for (let i = 0; i < C; i++) assert.equal(back[i], Math.fround(convectiveActivity[i]), `activity of cell ${i}`);
+  assert.ok(moved.length === target.mesh.nCells && moved.every((x) => x >= 0 && x <= 1), 'interpolated within [0, 1]');
+  const legacy = await decodeState(encodeState({ N: 6, K: source.core.K, day: 0, time: 0, pi: source.state[0] }));
+  assert.ok(savedMoistField(legacy, 'convectiveActivity', source).every((x) => x === 0.5) && savedMoistField(null, 'convectiveActivity', target).every((x) => x === 0.5), 'a state saved without it, or a fresh start, starts undecided');
+});

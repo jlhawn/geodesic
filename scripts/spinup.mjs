@@ -9,7 +9,7 @@
 // equatorial Pacific's surface temperatures and thermocline, and the
 // convection and equator lines of js/audit.module.js, and exits with 2 on
 // NaN. The state saved carries the last day's per-cell convective and
-// large-scale rain.
+// large-scale rain and the convection's activity.
 //
 // SIGTERM or SIGINT stops the segment after the ocean step in progress
 // and exits 0: at a day's end it saves <TAG>_dayDDDD.bin as usual, inside
@@ -23,6 +23,7 @@
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}'),
 // RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}'),
+// MOIST (JSON options for the moist physics, e.g. '{"entrainmentRate":1e-4}'),
 // DIVERGENCE_DAMPING (the model's DIVERGENCE_DAMPING: the coefficient c of the
 // core's divergence damping, the tendency c d²/dt ∇δ with d the mean
 // distance between cell centres),
@@ -66,7 +67,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
 import { sigmaInterfaces, sigmaGridName } from '../js/dynamics/sigmaCore.module.js';
-import { savedDeckField, DECK_FIELDS, savedRainField, RAIN_FIELDS, regridLand, remapLevels } from '../js/physics/regrid.module.js';
+import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, regridLand, remapLevels } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { createForcingRecorder } from '../js/gpu/forcing.gpu.js';
@@ -86,7 +87,7 @@ const BOXES = {
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = Number(process.env.KEEP ?? 2);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
-const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
+const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
 const ATMOSPHERE = process.env.ATMOSPHERE ?? 'carry';
 if (ATMOSPHERE !== 'carry' && ATMOSPHERE !== 'fresh') throw new Error(`ATMOSPHERE is carry or fresh, not ${ATMOSPHERE}`);
@@ -106,14 +107,14 @@ const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} l
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
 const fallback = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');
 const climatology = !saved && !process.env.FROM && chosen !== 'none' ? chosen : null;
-const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, ...DAMPING, levels });
+const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, ...DAMPING, levels });
 const { mesh, core, state } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 function loadSaved(saved) {
   ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
   model.seaIce.load(state[6], saved.concentration ?? null);
   for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
-  for (const field of RAIN_FIELDS) model.moist[field].set(savedRainField(saved, field, model));
+  for (const field of Object.keys(MOIST_FIELDS)) model.moist[field].set(savedMoistField(saved, field, model));
   model.time = saved.time;
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
@@ -147,7 +148,7 @@ if (saved) {
       const { pi, theta, u, q, qc } = remapLevels(fromLevels, levels, from, mesh);
       [pi, theta, u, from.surfaceT, q, qc].forEach((values, a) => { if (values) state[a].set(values); });
       for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(from, field, model));
-      for (const field of RAIN_FIELDS) model.moist[field].set(savedRainField(from, field, model));
+      for (const field of Object.keys(MOIST_FIELDS)) model.moist[field].set(savedMoistField(from, field, model));
       const same = fromLevels.length === levels.length && fromLevels.every((sigma, k) => sigma === levels[k]);
       atmosphere = `its atmosphere${same ? '' : ` remapped from ${fromGrid}`} on ${grid} and its deck`;
     }
@@ -270,9 +271,9 @@ if (days > 0 && !step) {
   log(equatorLine(mesh, land, ocean, stress, days));
 }
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
-const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation, { convectiveRain, largeScaleRain } = model.moist;
+const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation, { convectiveRain, largeScaleRain, convectiveActivity } = model.moist;
 const header = { N, K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, ocean: step ? ocean : { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta, densities: ocean.densities }, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, convectiveActivity, ocean: step ? ocean : { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta, densities: ocean.densities }, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));
 for (const old of whole.slice(0, Math.max(0, whole.length - KEEP))) unlinkSync(`${OUT}/${old}`);
