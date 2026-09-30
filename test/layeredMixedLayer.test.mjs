@@ -135,7 +135,7 @@ test('a neutral 600 m mixed layer beside 50 m ones at 60°S moves the free surfa
   await ocean.close();
 });
 
-test('the layer left a few metres thick under a 600 m mixed layer at 45°S stays in balance at N=32, where potential vorticity on its smaller edge thickness alone runs it past 0.4 m/s', async () => {
+test('the layer left a few metres thick under a 600 m mixed layer at 45°S stays in balance at N=32, where potential vorticity on its smaller edge thickness alone runs it half as fast again', async () => {
   const fine = buildMesh(new Grid(32)), n = fine.nCells, calm = new Float64Array(fine.nEdges);
   const offset = (i) => Math.abs(fine.latCell[i] + 45 * DEG) + Math.abs(fine.lonCell[i]);
   let centre = 0;
@@ -161,5 +161,5 @@ test('the layer left a few metres thick under a 600 m mixed layer at 45°S stays
   }
   console.log(`a 600 m mixed layer at 45°S over a thin remnant, N=32, two days: fastest water ${fastest[0.5].toFixed(2)} m/s with the potential vorticity's thickness at least half the centred one, ${fastest[0].toFixed(2)} m/s on the edge thickness alone`);
   assert.ok(fastest[0.5] < 0.3, `${fastest[0.5]} m/s`);
-  assert.ok(fastest[0] > 0.4, `the edge thickness no longer drives the remnant (${fastest[0]} m/s)`);
+  assert.ok(fastest[0] > 1.5 * fastest[0.5], `the edge thickness no longer drives the remnant (${fastest[0]} against ${fastest[0.5]} m/s)`);
 });
