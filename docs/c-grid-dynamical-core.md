@@ -1835,7 +1835,14 @@ layers ratcheted a tenth of a metre of every swallow-and-return cycle
 into the denser class); water lighter than the first interior layer
 goes there whole (the tropical and summer mixed layers, a known slow
 drift). Every warming day pulls the tropical mixed layer to the 50 m
-floor; with a 20 m floor the SST fell 2 K a month. `mixedNeighbourRatio` (off by default) caps the depth at that
+floor, where 43–75 % of the equatorial cells east of 120W sit (N=128,
+day 274). With a 20 m floor an earlier set of rules lost 2 K of SST a
+month; with the present ones 60 coupled N=64 days of boreal spring keep
+the equatorial mixed layer at 21–25 m, but warm the 20S–20N sea surface
+by 0.3–0.5 K and, unless the South Equatorial Current is at its
+strongest, the cold tongue by 0.4–1.2 K against the 50 m floor on the
+same days, the thin layer resting on the warm water above an eastern
+thermocline still 70–80 m deep (M21 item 4). `mixedNeighbourRatio` (off by default) caps the depth at that
 multiple of the neighbours' mean and detrains the excess over a day; at
 3 it moved the Southern Ocean's depths by less than 10 m in a 60-day
 N=64 test, the pressure force and the centring of the potential
@@ -2065,9 +2072,27 @@ worst 0.002 off, from an 8-layer one 0.0015 and 0.03, and the restoring
 takes it from there (`test/layeredState.test.mjs`). An ocean already on
 these classes loads as it did.
 
-**Drag.** Interfacial drag is the linear stress r Δu with r = 2×10⁻⁴
-m/s; bottom drag is quadratic, C_D |u| u with C_D = 3×10⁻³, applied to
-the deepest layer with water at the edge. A linear bottom drag of
+**Drag.** Interfacial drag is the linear stress ρ₀ r Δu between each
+layer holding water at an edge and the nearest ones above and below that
+do, with r = `interfacialDrag` = 2×10⁻⁴ m/s. Each layer divides the
+stress by its own edge thickness, no less than THIN for an interior class
+and no less than `minimumThickness` for the mixed layer, which divides its
+wind stress and bottom drag the same way, so the momentum one layer loses
+the other gains wherever the mixed layer is that thick at the edge; a
+divisor of `minimumThickness` on every layer made an eastward column
+source of 0.9–1.3×10⁻⁵ m²/s² on the equator at 180–100W (N=64, day 365),
+a quarter to three quarters of the wind's. Under the option
+`shearMixing`, r is instead the Pacanowski and Philander (1981)
+viscosity ν = ν₀/(1 + 5 Ri)² + ν_b, ν₀ = 10⁻² m²/s (`shearViscosity`)
+and ν_b = 10⁻⁴ m²/s (`backgroundViscosity`), over the distance Δz between
+the two layers' middles at the edge, and no less than `interfacialDrag`;
+Ri = Δb Δz/|Δu|² takes the buoyancy step between them (the mixed layer's
+own density at the edge, the labels of the classes) and the difference
+of their full velocities, the tangential part reconstructed as the
+Coriolis term's, and r is held to half of what the thinner of the two
+can take in one ocean step (M21 item 4). Bottom drag is quadratic,
+C_D |u| u with C_D = 3×10⁻³, applied to the deepest layer with water at
+the edge. A linear bottom drag of
 2×10⁻⁴ m/s let a 28 m bottom layer slide down the flank of a seamount
 at 4.5 m/s (60 times weaker than the quadratic law at that speed); the
 quadratic law holds such layers near the gravity-current speed
@@ -2723,6 +2748,111 @@ The work, in order:
    the tools of item 1, before a new paired spin-up. A mass-flux
    convection scheme stays deferred until the central Pacific ITCZ and
    the Walker cell still fail with all of the above in place.
+
+**Item 4, diagnosed and tried (Sept 30).** `scripts/equatorialOcean.mjs`
+takes a saved state apart on the CPU by 20° of longitude along the
+equator: wind and stress with the implied drag coefficient, mixed-layer
+depth and how often it sits on its floor, the 20 °C isotherm and the
+class tops, the zonal current by class and by depth, a meridional
+section at 140–110W, the momentum budget term by term (the terms sum to
+the ocean's own tendency within 10⁻¹⁹ m/s²) for the mixed layer, the
+water above the 1024 class and the whole column, and the closure's pull
+near the thermocline classes' token edges. On the N=128 day-183 and
+day-274 states and the N=64 day-365 one:
+
+- The stress reaches the ocean intact (the ice factor is 1 on the
+  equator; sampling it once an ocean step rather than averaging the
+  eight atmosphere steps changes it by under 3 %), with an effective
+  10 m drag coefficient of 1.8×10⁻³ against Large and Pond's 1.2×10⁻³,
+  so the drag law is not the cause. The trades are weak: −3.2 to
+  −3.7 m/s at 10 m over 180–120W and −2.1 m/s at 120–100W, the stress
+  falling from −0.048 N/m² at 180–160W to −0.021 at 120–100W (day 183),
+  about 60 % of Earth's, and the meridional stress at 140–110W northerly
+  or nil against Earth's southerly 0.02–0.04 N/m².
+- Above the 1024 class the pressure force balances 0.4–1.6 of the
+  stress: the tilt (20 °C from 172 m to 90 m, sea level down 26 cm from
+  150E to 110W) is in balance with the weak stress it is given. East of
+  120W the stress falls to a third while the sea-level slope goes on, and
+  the mixed layer flows east at 7–22 cm/s.
+- The mixed layer sat on its 50 m floor in 43–75 % of the cells at
+  120–80W, spreading the stress over 50–67 m.
+- The interfacial drag capped the shear under the mixed layer at
+  τ/(ρ₀ r), 0.15 m/s at 0.03 N/m² (measured 4–6 cm/s), and, divided by
+  at least 50 m in every layer, made the eastward column source that
+  **Drag** (M18) describes.
+- The thermocline classes 1022.5–1024.75 hold more than 5 m in only
+  20–60 % of the equatorial cells and have tokens on 55–91 % of the
+  edges. Their ∇⁴ closure reads the tokens' velocity, the westward mixed
+  layer's, and removed −1 to −3.8×10⁻⁷ m/s² per class at N=128 against an
+  eastward pressure force of +1 to +3.4×10⁻⁷ (−0.3 to +0.6×10⁻⁷ away
+  from the tokens, where 1024.00 flows east at 9 cm/s). The eastward flow
+  that exists is 10–17 cm/s, broad (3S–7N) and at 100–200 m.
+
+Changed in both engines, with CPU–GPU parity tests: the drag divisor
+(**Drag**, the only change to the defaults); the option `shearMixing`
+(**Drag**); and the option `closureFill`, the share of the least-squares
+uniform flow through a class's own neighbouring edges that its token
+edges beside it take in the closure's input (`closureVelocity`). The
+floors (`minimumThickness`, `shallowestMixedDepth`) and `interfacialDrag`
+were already options. 60 coupled days at N=64 from `eight64_day0365`
+(March 20 to May 19), 2S–2N at day 60, the second row of a pair a
+second realization (the surface diffusivity 1 % higher); W−E and the
+cold tongue as the spin-up log prints them, clamps as edge-days (days):
+
+| Configuration | u(5 m) 140–100W | u(5 m) 160E–100W | strongest eastward, 160–120W | h₀ 120–100W | 1024 top 120–100W | W−E | cold tongue | clamps |
+|---|---|---|---|---|---|---|---|---|
+| before | −0.05, −0.05 m/s | −0.13, −0.14 | 0.04 m/s at 195 m, 0.06 at 185 | 52 m | 83, 83 m | 1.9, 2.2 K | 25.7, 25.5 °C | 7 (3), 2 (1) |
+| the drag divisor (the defaults now) | −0.13, −0.14 | −0.12, −0.18 | 0.03 at 195, 0.02 at 265 | 51 | 76, 71 | 2.0, 2.4 | 25.4, 25.6 | 2 (2), 0 (0) |
+| 20 m floors, r = 2×10⁻⁴ | −0.04 | −0.11 | 0.02 at 190 | 22 | 80 | 2.0 | 26.3 | 3 (2) |
+| 20 m floors, r = 10⁻⁴ | −0.25 | −0.48 | 0.01 at 285 | 22 | 77 | 1.1 | 26.5 | 6 (4) |
+| 20 m floors, r = 5×10⁻⁵ | −0.77 | −0.97 | 0.03 at 245 | 24 | 60 | 2.0 | 25.4 | 5 (2) |
+| the same, closureHours 48 | −0.74 | −0.88 | 0.06 at 195 | 24 | 67 | 2.1 | 25.7 | 7 (4) |
+| 20 m floors, shearMixing, r ≥ 0 | −0.29 | −0.67 | 0.10 at 235 | 22 | 71 | 0.6 | 26.9 | 4 (4) |
+| 20 m floors, shearMixing, r ≥ 5×10⁻⁵ | −0.18, −0.38 | −0.58, −0.52 | 0.02 at 220, 0.07 at 205 | 22 | 76, 68 | 1.3, 1.6 | 26.6, 26.6 | 17 (6), 18 (6) |
+| 20 m floors, shearMixing, r ≥ 0, closureFill 0.5 | −0.36 | −0.64 | 0.15 at 195 | 21 | 68 | 1.6 | 26.1 | 60 (13) |
+
+The drag divisor alone moves the surface current east of 140W from
+−0.05 to −0.13 m/s, lifts the eastern class top by 7–12 m and keeps W−E
+and the cold tongue, with fewer clamped edges. No configuration makes an
+undercurrent: the strongest eastward flow stays 1–15 cm/s at 185–285 m.
+The weaker the friction the stronger the South Equatorial Current,
+which with a constant 5×10⁻⁵ m/s was −0.24 m/s at
+140–100W at day 30 and −0.77 at day 60, still accelerating, and with
+the Richardson form −0.13 to −0.21 at day 30 and −0.18 to −0.38 at day
+60. The stronger current pulls the patchy thermocline classes west
+through the closure: in the Richardson run at day 60 the closure beside
+the tokens is −0.6 to −5.2×10⁻⁷ m/s² in 1022.0–1025.0 against −0.1 to
+−1.4×10⁻⁷ before, and the whole column loses 1–3×10⁻⁵ m²/s² to it at
+160E–140W, as much as the stress gives; the interfacial drag's column
+sum, 0.3–1.1×10⁻⁵ eastward at 160E–80W before, is now zero. The 20 m
+floor puts the eastern mixed layer at 21–24 m and lifts the eastern
+class top by 3–23 m, but the thin layer rests on warm water above a
+thermocline that is still 70–80 m deep, and the cold tongue warms by
+0.4–1.2 K except in the two runs with the strongest current. The two
+realizations of a configuration differ by up to 0.4 K in W−E and 0.2 m/s
+in the surface current, and 60 days of boreal spring, when Earth's cold
+tongue is weakest, cannot show whether W−E holds through a year. Some
+edges clamp in nearly every run, the one before included; those examined lie in
+the Maritime Continent's seas, where by day 60 the run before had a
+12.7 °C mixed layer at 1S 131E.
+
+Filling the token edges entirely (`closureFill` 1, with a second ring
+filled from the first) removed the closure's pull but also its hold on a
+class's edges beside its tokens, where the Coriolis force, assembled
+from the neighbours' fluxes, is weak: within a week 588 layer edges ran
+above 1.2 m/s and edges clamped at 5 m/s, with column transports of up
+to 165 Sv against 25; filling only the token edges with three or more
+class neighbours did the same. Half the fit held for 60 days with the
+strongest undercurrent of the set, within about 2S–3N, but clamped
+edges on 13 days.
+
+So the defaults keep the 50 m floor and r = 2×10⁻⁴ m/s. Before the
+ocean can take the 20 m floor and the weaker friction, the atmosphere
+must give it Earth's trades in the east (items 2–3) so that the eastern
+thermocline rises under the thin layer, and the thermocline classes need
+the westward pull of their token edges removed without losing the hold,
+for example by filling the patchy 1022.5–1024.75 classes with a weak
+diapycnal exchange between adjacent interior classes.
 
 ## 7. Module layout in this repo
 
