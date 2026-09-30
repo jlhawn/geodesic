@@ -4,6 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { sunDirection } from '../js/physics/radiation.module.js';
+import { saturationHumidity } from '../js/physics/moist.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -163,6 +164,53 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
   assert.ok(surface < 1e-5, `the lowest layer's heating differs by ${surface} of it`);
   assert.ok(worstCloud < 1e-4, `the cloud water's heating differs by ${worstCloud} K/day`);
   assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `global cloud absorption ${cpuMean / area} against ${gpuMean / area} W/m²`);
+});
+
+function cloudyState() {
+  const base = heatingState(), { mesh, core, state } = base;
+  const [pi, theta, , , q, qc] = state, C = mesh.nCells, { K } = core;
+  core.diagnose(pi, theta, q, qc);
+  const { exnerLayer, sigmaMid, geopotential, g } = core.diagnostics, depth = base.boundaryLayer.depth;
+  let mid = 0;
+  for (let k = 0; k < K; k++) if (Math.abs(sigmaMid[k] - 0.5) < Math.abs(sigmaMid[mid] - 0.5)) mid = k;
+  let inside = 0, above = 0;
+  for (let i = 0; i < C; i++) {
+    const layers = [];
+    for (let k = K - 3; k >= 0; k--) {
+      const low = geopotential[k * C + i] / g < depth[i];
+      if (low && layers.length === 0) layers.push(k);
+      if (!low) { layers.push(k); break; }
+    }
+    layers.push(mid);
+    layers.forEach((k, n) => {
+      const x = k * C + i, qs = saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]);
+      q[x] = Math.fround((0.9 + 0.01 * ((i * 7 + n * 3) % 11)) * qs);
+      qc[x] = Math.fround((0.002 + 0.08 * (((i * 5 + n) % 13) / 12)) * qs);
+      if (geopotential[x] / g < depth[i]) inside++; else above++;
+    });
+  }
+  return { base, inside, above };
+}
+
+test('resolved cloud of partial cover, inside the boundary layer and above it, heats the layers of sunlit columns alike in both engines, and the cover and its boundary-layer RHc move that heating', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { base, inside, above } = cloudyState();
+  const pdf = await physicsHeating(base, {}), moved = await physicsHeating(base, { boundaryCriticalHumidity: 0.5 }), overcast = await physicsHeating(base, { cloudCover: 'overcast' });
+  const { K, C } = pdf, lit = [];
+  for (let i = 0; i < C; i++) if (base.radiation.insolation(i) > 0) lit.push(i);
+  let engines = 0, scale = 0, cover = 0, boundary = 0;
+  for (const i of lit) {
+    for (let k = 0; k < K - 1; k++) {
+      const x = k * C + i;
+      engines = Math.max(engines, Math.abs(pdf.cpu[x] - pdf.gpu[x]), Math.abs(moved.cpu[x] - moved.gpu[x]));
+      scale = Math.max(scale, Math.abs(pdf.cpu[x]));
+      cover = Math.max(cover, Math.abs(pdf.cpu[x] - overcast.cpu[x]));
+      boundary = Math.max(boundary, Math.abs(pdf.cpu[x] - moved.cpu[x]));
+    }
+  }
+  console.log(`${lit.length} sunlit columns with ${inside} cloudy layers inside the boundary layer and ${above} above: the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the cover moves it by up to ${cover.toFixed(2)} K/day from overcast, the boundary layer's RHc of 0.5 by ${boundary.toFixed(2)}`);
+  assert.ok(inside > C / 4 && above > C, `${inside} cloudy layers inside, ${above} above`);
+  assert.ok(cover > 1 && boundary > 0.1, `cover ${cover}, boundary-layer RHc ${boundary} K/day`);
+  assert.ok(engines < 1e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
 });
 
 test('twelve full GPU steps track the CPU model and its energy budget', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
