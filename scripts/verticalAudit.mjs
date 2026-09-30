@@ -294,7 +294,7 @@ const itczProfile = (() => {
     if (z[k] < 100) { low += conv[k] * dSigma[k]; lowMass += dSigma[k]; }
     if (z[k] < 1000) { if (large[k] > large[most]) most = k; if (large[k] < large[least]) least = k; }
   }
-  return { peakP: p[peak], peak: conv[peak], low: low / lowMass, fired: heating.fired / heating.area, most: large[most], mostZ: z[most], least: large[least], leastZ: z[least] };
+  return { peakP: heating.fired > 0 ? p[peak] : NaN, peak: conv[peak], low: low / lowMass, fired: heating.fired / heating.area, most: large[most], mostZ: z[most], least: large[least], leastZ: z[least] };
 })();
 const convective = Float64Array.from(moist.convectivePrecipitation, (x) => x * perDay), rain = Float64Array.from(convective, (x, i) => x + moist.largeScalePrecipitation[i] * perDay);
 const ratio = (sum, count, mask) => { let s = 0, w = 0; for (let i = 0; i < C; i++) if (mask[i] && count[i] > 0) { s += area[i] * sum[i]; w += area[i] * count[i]; } return s / w; };
