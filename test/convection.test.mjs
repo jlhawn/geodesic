@@ -337,7 +337,7 @@ test('a stable surface, an active deck or a condensation level above the shallow
   assert.ok(Math.abs(halfOpen.moist.cumulusBaseFlux[0] - 0.5 * open.moist.cumulusBaseFlux[0]) < 1e-12, 'half the base mass flux on the deck gate\'s ramp');
 });
 
-test('the deep branch convects a deep tropical column exactly as it did beside the Betts–Miller shallow branch', () => {
+test('the deep branch convects a deep tropical column exactly as it did beside the Betts–Miller shallow branch, and keeps the plume out of it but with cumulusWithDeep', () => {
   const run = (shallowScheme) => {
     const model = build({ shallowScheme }), { moist } = model, [pi, theta, , , q, qc] = model.state;
     jordanColumn(model, 0);
@@ -350,6 +350,18 @@ test('the deep branch convects a deep tropical column exactly as it did beside t
   assert.ok(massFlux.rain > 0 && massFlux.fired, 'it fires');
   assert.equal(massFlux.rain, bettsMiller.rain);
   assert.deepEqual(massFlux.snap, bettsMiller.snap);
+  const plume = (options) => {
+    const model = build(options);
+    jordanColumn(model, 0);
+    setDepth(model, 0, 500);
+    model.moist.activity[0] = 1;
+    model.boundaryLayer.buoyancyFlux[0] = 4e-4;
+    model.boundaryLayer.friction[0] = 0.25;
+    model.moist.adjust(model.state, 0, 1, 600);
+    return model.moist.cumulusBaseFlux[0];
+  };
+  assert.equal(plume({}), 0, 'no plume where the deep branch fires');
+  assert.ok(plume({ cumulusWithDeep: true }) > 0, 'with cumulusWithDeep a plume beside it');
 });
 
 test('no column convects under an active deck, and its activity decays', () => {
@@ -511,10 +523,10 @@ async function parity(options) {
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
 }
 
-test('the triggered convection, the cumulus mass flux and the rain they leave match between the engines on a random set of columns, with the plume on its defaults, from the lowest layer, raining, overshooting by half or kept out of deep columns, under either autoconversion floor, and with the Betts–Miller shallow branch under either shallow reference with or without shallow rain and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the triggered convection, the cumulus mass flux and the rain they leave match between the engines on a random set of columns, with the plume on its defaults, from the lowest layer, raining, overshooting by half or beside deep convection, under either autoconversion floor, and with the Betts–Miller shallow branch under either shallow reference with or without shallow rain and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   await parity({});
   await parity({ autoconversionFloor: 'boundaryLayer' });
-  await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, cumulusWithDeep: false, virtualBuoyancy: false });
+  await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, cumulusWithDeep: true, virtualBuoyancy: false });
   const bettsMiller = { shallowScheme: 'bettsMiller' };
   await parity(bettsMiller);
   await parity({ ...bettsMiller, shallowReference: 'mixingLine', shallowRain: false, boundaryParcel: true, parcelDepth: 50e2, downdraftEvaporation: 0.25, downdraftSpread: 'fall' });

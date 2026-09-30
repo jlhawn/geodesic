@@ -72,9 +72,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * inhibition below it for a while; `activity` is saved with the state
  * (key `convectiveActivity`, one half in a state saved without it).
  * With `shallowScheme` 'massFlux' only deep tops fire; the shallow
- * cumulus mass flux below takes the shallow ones, and runs after the deep
- * branch in columns where that fires too (without `cumulusWithDeep`, not
- * there). With 'bettsMiller' a shallow top fires on
+ * cumulus mass flux below takes the shallow ones and runs in the columns
+ * where the deep branch does not fire (with `cumulusWithDeep`, after it
+ * in those too). With 'bettsMiller' a shallow top fires on
  * the deep trigger too and also vents without memory: at the vent, the same product
  * of ramps with `shallowCape` and `shallowInhibition` in place of the
  * deep thresholds, times the deck's opening, and 0 where the column's
@@ -180,11 +180,12 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * anvilDepth 150 hPa, downdraftEvaporation 0.01 spread by mass,
  * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
  * cloudLifetime 3 h, autoconversionFloor 'lowest', rainEvaporation 1,
- * shallowScheme 'massFlux', cumulusClosure 0.04, cumulusEntrainment
- * 1.5e-3 /m, cumulusDetrainment 2e-3 /m, cumulusSourceDepth 50 hPa,
+ * shallowScheme 'massFlux', cumulusClosure 0.06, cumulusEntrainment
+ * 2.5e-3 /m, cumulusDetrainment 3e-3 /m, cumulusSourceDepth 50 hPa,
  * cumulusBoundaryLoss 0.1, cumulusFriction 1, cumulusOvershoot 1,
  * cumulusUpdraft 1 m/s, no cumulusRain, cumulusSource 'mean' (or
- * 'lowest': the plume leaves with the lowest layer's air), cumulusWithDeep.
+ * 'lowest': the plume leaves with the lowest layer's air), no
+ * cumulusWithDeep.
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, relaxationTime: 7200, referenceHumidity: 0.6, parcelDepth: 0, entrainmentRate: 5e-5,
@@ -192,8 +193,8 @@ export const MOIST_DEFAULTS = {
   downdraftEvaporation: 0.01, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', shallowHumidity: 0.8,
   shallowCape: 10, shallowInhibition: 15, shallowStability: null, shallowReference: 'parcel', shallowRain: true,
   boundaryParcel: false, adjustFrom: 'cloudBase', deckVeto: true, evaporationInCloud: false, downdraftSpread: 'mass', virtualBuoyancy: true,
-  shallowScheme: 'massFlux', cumulusClosure: 0.04, cumulusEntrainment: 1.5e-3, cumulusDetrainment: 2e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
-  cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusWithDeep: true,
+  shallowScheme: 'massFlux', cumulusClosure: 0.06, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
+  cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusWithDeep: false,
 };
 
 export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate = null, surfaceBuoyancy = null, frictionVelocity = null, buffers = null, ...options } = {}) {
