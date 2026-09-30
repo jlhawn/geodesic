@@ -124,6 +124,21 @@ test('a stratocumulus-topped column under a 1.5 K inversion with dry air above n
   assert.ok(Math.abs(moist.activity[0] - 0.5 * Math.exp(-40 * 600 / MOIST_DEFAULTS.activityMemory)) < 1e-12, `activity ${moist.activity[0]}`);
 });
 
+test('the convection trace alone takes none of the condensation\'s heating', () => {
+  const model = build(), { moist } = model, [pi, theta, , , q, qc] = model.state;
+  const { K, C } = model.core.diagnostics;
+  place(model, 0, 101500, stratocumulus);
+  setDepth(model, 0, 1300);
+  let cloudy = -1;
+  for (let k = 0; k < K; k++) if (qc[k * C] > 0) cloudy = k;
+  q[cloudy * C] += 1e-3;
+  const before = snapshot(model, 0);
+  moist.trace.convection = new Float64Array(K * C);
+  moist.adjust(model.state, 0, 1, 600);
+  assert.ok(theta[cloudy * C] > before.theta[cloudy], 'the supersaturated layer condenses and warms');
+  assert.ok(moist.trace.convection.every((x) => x === 0), 'nothing is charged to convection');
+});
+
 test('a deep tropical column convects from cloud base up, heating most between 400 and 500 hPa and not at all below cloud base', () => {
   const model = build(), { moist } = model, [pi, theta, , , q, qc] = model.state;
   const { K, C, sigmaMid, exnerLayer } = model.core.diagnostics, dt = 600;

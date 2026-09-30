@@ -146,8 +146,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
   const ramp = (x) => Math.min(1, Math.max(0, x));
   function mark(i, theta) { for (let k = 0; k < K; k++) marked[k] = theta[k * C + i]; }
   function charge(into, i, theta) {
-    if (!into) return;
-    for (let k = 0; k < K; k++) { const idx = k * C + i; into[idx] += (theta[idx] - marked[k]) * exnerLayer[idx]; marked[k] = theta[idx]; }
+    for (let k = 0; k < K; k++) { const idx = k * C + i; if (into) into[idx] += (theta[idx] - marked[k]) * exnerLayer[idx]; marked[k] = theta[idx]; }
   }
 
   /*
