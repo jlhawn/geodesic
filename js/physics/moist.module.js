@@ -126,7 +126,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * Defaults: relaxationTime 2 h, referenceHumidity 0.6, the lowest
  * layer's parcel (boundaryParcel false, parcelDepth 0), entrainmentRate
  * 5e-5 /m, capeThreshold 100 J/kg, inhibitionThreshold 50 J/kg,
- * activityMemory 2 h, shallowTop 700 hPa, shallowCape 5 J/kg,
+ * activityMemory 2 h, shallowTop 700 hPa, shallowCape 10 J/kg,
  * shallowInhibition 15 J/kg, no shallowStability, shallowReference
  * 'parcel', shallowRain, shallowHumidity 0.8, detrainment 0.1,
  * anvilDepth 150 hPa, downdraftEvaporation 0.01 spread by mass,
@@ -137,7 +137,7 @@ export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, relaxationTime: 7200, referenceHumidity: 0.6, parcelDepth: 0, entrainmentRate: 5e-5,
   capeThreshold: 100, inhibitionThreshold: 50, activityMemory: 2 * 3600, shallowTop: 700e2, detrainment: 0.1, anvilDepth: 150e2,
   downdraftEvaporation: 0.01, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', shallowHumidity: 0.8,
-  shallowCape: 5, shallowInhibition: 15, shallowStability: null, shallowReference: 'parcel', shallowRain: true,
+  shallowCape: 10, shallowInhibition: 15, shallowStability: null, shallowReference: 'parcel', shallowRain: true,
   boundaryParcel: false, adjustFrom: 'cloudBase', deckVeto: true, evaporationInCloud: false, downdraftSpread: 'mass', virtualBuoyancy: true,
 };
 
