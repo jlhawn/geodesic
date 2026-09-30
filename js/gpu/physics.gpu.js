@@ -42,7 +42,9 @@ const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const
 const RELAX: f32 = ${o.relaxationTime}; const RH_REF: f32 = ${o.referenceHumidity}; const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime};
 const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth}; const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const PARCEL_DEPTH: f32 = ${o.parcelDepth}; const ENTRAIN: f32 = ${o.entrainmentRate}; const CAPE_MIN: f32 = ${o.capeThreshold}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const ACT_MEM: f32 = ${o.activityMemory}; const SHALLOW_TOP: f32 = ${o.shallowTop}; const DOWNDRAFT: f32 = ${o.downdraftEvaporation}; const SHALLOW_RH: f32 = ${o.shallowHumidity};
-const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
+const BL_PARCEL: bool = ${o.boundaryParcel !== false}; const FROM_SURFACE: bool = ${o.adjustFrom === 'surface'}; const DECK_VETO: bool = ${o.deckVeto !== false}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
+const EAGER: bool = ${o.shallowTrigger != null}; const EAGER_CAPE: f32 = ${o.shallowTrigger ? o.shallowTrigger.cape : 0}; const EAGER_CIN: f32 = ${o.shallowTrigger ? o.shallowTrigger.inhibition : 0}; const EAGER_TOP: f32 = ${o.shallowTrigger ? o.shallowTrigger.top ?? o.shallowTop : 0}; const DRAFT_MASS: bool = ${o.downdraftSpread === 'mass'}; const PARCEL_VIRT: f32 = ${o.virtualBuoyancy === false ? 0 : 'VIRT'};
+const BL_WE: f32 = ${o.entrainmentVelocity ?? 0}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
@@ -691,15 +693,20 @@ export const PHYSICS_KERNELS = {
     let buoyancy = GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture);
     if (buoyancy > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN * buoyancy / (friction * friction * friction)), 0.25); }
   }
+  var entrainK = -1;
   for (var k = KTOP; k < K - 1; k++) {
     let idx = k * C + i; let below = idx + C;
     let zAbove = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV; let zBelow = (D[D_GEO + below] + LV[L_GABS + k + 1]) / GRAV;
     let z = 0.5 * (zAbove + zBelow) - zb;
-    if (z >= h) { continue; }
+    if (z >= h) { entrainK = k; continue; }
     let diffusivity = KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h);
     let rhoAbove = pi * LV[L_SM + k] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]);
     let rhoBelow = pi * LV[L_SM + k + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below]);
     PH[PH_MIX + idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
+  }
+  if (BL_WE > 0.0 && entrainK >= KTOP) {
+    let idx = entrainK * C + i; let below = idx + C;
+    PH[PH_MIX + idx] = 0.5 * (pi * LV[L_SM + entrainK] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]) + pi * LV[L_SM + entrainK + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below])) * BL_WE;
   }
 }`,
   adjust: `fn upperInterface(i: i32, k: i32) -> f32 {
@@ -743,10 +750,10 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   var T: array<f32, K>; var p: array<f32, K>; var dp: array<f32, K>; var z: array<f32, K>; var Tref: array<f32, K>; var qref: array<f32, K>;
   for (var k = 0; k < K; k++) { let idx = k * C + i; T[k] = IN[S_TH + idx] * D[D_EXM + idx]; p[k] = pi * LV[L_SM + k]; dp[k] = pi * LV[L_DS + k]; z[k] = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV; }
   var produced = 0.0; var cloudBase = K; var downdraft = 0.0;
-  let decked = PH[PH_MLMGATE + i] > 0.5;
+  let decked = DECK_VETO && PH[PH_MLMGATE + i] > 0.5;
   var top = -1; var base = -1; var cape = 0.0; var inhibition = 0.0; var lclP = 0.0; var thetaP = 0.0; var qP = 0.0; var energy0 = 0.0;
   if (!decked) {
-    let depthTop = PH[PH_DEPTH + i];
+    let depthTop = select(-1e30, PH[PH_DEPTH + i], BL_PARCEL);
     var weight = 0.0; var heat = 0.0; var water = 0.0; var source = bottom;
     for (var k = bottom; k >= 0; k--) {
       if (k < bottom && !(upperInterface(i, k + 1) < depthTop) && !(p[k] >= pi - PARCEL_DEPTH)) { break; }
@@ -783,7 +790,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
             vapour = qsat(temperature, p[k]);
           }
           if (k >= source) { continue; }
-          let work = RGAS * (Tref[k] * (1.0 + VIRT * vapour) - T[k] * (1.0 + VIRT * air)) * dp[k] / p[k];
+          let work = RGAS * (Tref[k] * (1.0 + PARCEL_VIRT * vapour) - T[k] * (1.0 + PARCEL_VIRT * air)) * dp[k] / p[k];
           if (!free && saturated && work > 0.0) { free = true; }
           if (!free) { if (work < 0.0) { inhibition -= work; } }
           else if (work > 0.0) { cape += work; top = k; }
@@ -797,7 +804,10 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   var activity = passed;
   if (ACT_MEM > 0.0) { activity = PH[PH_CONVACT + i] + (passed - PH[PH_CONVACT + i]) * relaxedFraction(dt / ACT_MEM); }
   PH[PH_CONVACT + i] = activity;
-  if (top >= 0 && (activity > 0.5 || (activity == 0.5 && passed > 0.5))) {
+  let eager = EAGER && top > 0 && p[top] > EAGER_TOP && cape > EAGER_CAPE && inhibition < EAGER_CIN;
+  if (top >= 0 && (eager || activity > 0.5 || (activity == 0.5 && passed > 0.5))) {
+    let parcelBase = base;
+    if (FROM_SURFACE) { base = bottom; }
     let shallow = top > 0 && p[top] > SHALLOW_TOP;
     if (shallow) {
       let above = top - 1; let aboveQ = max(0.0, IN[S_Q + above * C + i]);
@@ -841,29 +851,33 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
           for (var k = top; k <= anvilBottom; k++) { IN[S_QC + k * C + i] += detrained * GRAV / anvilMass; }
           rain -= detrained;
         }
-        produced = rain; cloudBase = base; downdraft = DOWNDRAFT * rain;
+        produced = rain; cloudBase = parcelBase; downdraft = DOWNDRAFT * rain;
       }
     }
   }
   // autoconversion, and the rain and the downdraft's share evaporating as they fall
   var rained = 0.0; var left = downdraft;
   let floor = PH[PH_DEPTH + i];
+  var subcloud = 0.0;
+  if (DRAFT_MASS) { for (var k = cloudBase + 1; k < K; k++) { subcloud += LV[L_DS + k]; } }
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
-    let open = rained > 0.0 && !(IN[S_QC + idx] > CLEAR_AIR); let draft = left > 0.0 && k > cloudBase;
+    var offer = left;
+    if (DRAFT_MASS && k > cloudBase) { offer = min(left, downdraft * LV[L_DS + k] / subcloud); }
+    let open = rained > 0.0 && (EVAP_IN_CLOUD || !(IN[S_QC + idx] > CLEAR_AIR)); let draft = offer > 0.0 && k > cloudBase;
     if ((open || draft) && RAIN_EVAP > 0.0) {
       let ex = D[D_EXM + idx];
       let temperature = IN[S_TH + idx] * ex;
       let qs = qsat(temperature, pi * LV[L_SM + k]);
       let slope = qs * LHEAT / (RVAP * temperature * temperature);
       let deficit = max(0.0, (qs - IN[S_Q + idx]) / (1.0 + LHEAT * slope / CP)) * mass;
-      let available = select(0.0, rained, open) + select(0.0, left, draft);
+      let available = select(0.0, rained, open) + select(0.0, offer, draft);
       let evaporated = min(available, RAIN_EVAP * deficit);
       if (evaporated > 0.0) {
         var fromDraft = 0.0; var fromRain = 0.0;
-        if (evaporated >= available) { fromDraft = select(0.0, left, draft); fromRain = select(0.0, rained, open); }
-        else { fromDraft = select(0.0, evaporated * left / available, draft); fromRain = evaporated - fromDraft; }
+        if (evaporated >= available) { fromDraft = select(0.0, offer, draft); fromRain = select(0.0, rained, open); }
+        else { fromDraft = select(0.0, evaporated * offer / available, draft); fromRain = evaporated - fromDraft; }
         left -= fromDraft;
         rained = max(0.0, rained - fromRain);
         IN[S_Q + idx] += (fromRain + fromDraft) / mass;
@@ -872,7 +886,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     }
     let qc = IN[S_QC + idx];
     if (!(qc > 0.0)) { continue; }
-    if (AUTO_BL) { if (k > 0 && upperInterface(i, k) < floor) { continue; } } else if (k >= K - 2) { continue; }
+    if (AUTO_NONE) { } else if (AUTO_BL) { if (k > 0 && upperInterface(i, k) < floor) { continue; } } else if (k >= K - 2) { continue; }
     let excess = max(0.0, qc - AUTO_T);
     let converted = min(qc, excess * (1.0 - exp(-AUTO_R * dt)) + qc * (1.0 - exp(-dt / CLOUD_LIFE)));
     IN[S_QC + idx] = qc - converted;

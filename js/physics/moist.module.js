@@ -117,14 +117,16 @@ export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, relaxationTime: 7200, referenceHumidity: 0.6, parcelDepth: 50e2, entrainmentRate: 5e-5,
   capeThreshold: 100, inhibitionThreshold: 50, activityMemory: 2 * 3600, shallowTop: 700e2, detrainment: 0.1, anvilDepth: 150e2,
   downdraftEvaporation: 0.25, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', shallowHumidity: 0.8,
+  boundaryParcel: true, adjustFrom: 'cloudBase', deckVeto: true, evaporationInCloud: false, shallowTrigger: null, downdraftSpread: 'fall', virtualBuoyancy: true,
 };
 
 export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate = null, buffers = null, ...options } = {}) {
   const {
     latentHeat, relaxationTime, referenceHumidity, parcelDepth, entrainmentRate, capeThreshold, inhibitionThreshold, activityMemory, shallowTop,
     detrainment, anvilDepth, downdraftEvaporation, autoconversionThreshold, autoconversionRate, cloudLifetime, rainEvaporation, autoconversionFloor, shallowHumidity,
+    boundaryParcel, adjustFrom, deckVeto, evaporationInCloud, shallowTrigger, downdraftSpread, virtualBuoyancy,
   } = { ...MOIST_DEFAULTS, ...options };
-  if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer') throw new Error(`autoconversionFloor must be 'lowest' or 'boundaryLayer', not ${autoconversionFloor}`);
+  if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest' or 'boundaryLayer', not ${autoconversionFloor}`);
   const { K, C, levels, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
   const upperInterface = (i, k) => (geopotential[k * C + i] + cp * thetaV[k * C + i] * (exnerLayer[k * C + i] - exnerLower[(k - 1) * C + i])) / g;
@@ -200,20 +202,23 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
     let rain = 0, left = downdraft;
     const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
+    let subcloud = 0;
+    if (downdraftSpread === 'mass') for (let k = base + 1; k < K; k++) subcloud += dSigma[k];
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
-      const open = rain > 0 && !(qc[idx] > CLEAR_AIR), draft = left > 0 && k > base;
+      const offer = downdraftSpread === 'mass' && k > base ? Math.min(left, downdraft * dSigma[k] / subcloud) : left;
+      const open = rain > 0 && (evaporationInCloud || !(qc[idx] > CLEAR_AIR)), draft = offer > 0 && k > base;
       if ((open || draft) && rainEvaporation > 0) {
         const ex = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;
         const temperature = theta[idx] * ex;
         const qs = saturationHumidity(temperature, pi[i] * sigmaMid[k]);
         const slope = qs * latentHeat / (R_VAPOR * temperature * temperature);
         const deficit = Math.max(0, (qs - q[idx]) / (1 + latentHeat * slope / cp)) * mass;
-        const available = (open ? rain : 0) + (draft ? left : 0);
+        const available = (open ? rain : 0) + (draft ? offer : 0);
         const evaporated = Math.min(available, rainEvaporation * deficit);
         if (evaporated > 0) {
           let fromDraft = 0, fromRain = 0;
-          if (evaporated >= available) { fromDraft = draft ? left : 0; fromRain = open ? rain : 0; } else { fromDraft = draft ? evaporated * left / available : 0; fromRain = evaporated - fromDraft; }
+          if (evaporated >= available) { fromDraft = draft ? offer : 0; fromRain = open ? rain : 0; } else { fromDraft = draft ? evaporated * offer / available : 0; fromRain = evaporated - fromDraft; }
           left -= fromDraft;
           rain = Math.max(0, rain - fromRain);
           q[idx] += (fromRain + fromDraft) / mass;
@@ -222,7 +227,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
         }
       }
       if (!(qc[idx] > 0)) continue;
-      if (floor === null ? k >= K - 2 : k > 0 && upperInterface(i, k) < floor) continue;
+      if (autoconversionFloor !== 'none' && (floor === null ? k >= K - 2 : k > 0 && upperInterface(i, k) < floor)) continue;
       const excess = Math.max(0, qc[idx] - autoconversionThreshold);
       const converted = Math.min(qc[idx], excess * (1 - Math.exp(-autoconversionRate * dt)) + qc[idx] * (1 - Math.exp(-dt / cloudLifetime)));
       qc[idx] -= converted;
@@ -249,7 +254,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
       dp[k] = pi[i] * dSigma[k];
       z[k] = geopotential[idx] / g;
     }
-    const depth = boundaryDepth ? boundaryDepth[i] : -Infinity;
+    const depth = boundaryDepth && boundaryParcel ? boundaryDepth[i] : -Infinity;
     let weight = 0, heat = 0, water = 0, source = bottom;
     for (let k = bottom; k >= 0; k--) {
       if (k < bottom && !(upperInterface(i, k + 1) < depth) && !(p[k] >= pi[i] - parcelDepth)) break;
@@ -283,7 +288,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
         vapour = saturationHumidity(temperature, p[k]);
       }
       if (k >= source) continue;
-      const work = R * (Tref[k] * (1 + VIRTUAL_FACTOR * vapour) - T[k] * (1 + VIRTUAL_FACTOR * air)) * dp[k] / p[k];
+      const virtual = virtualBuoyancy ? VIRTUAL_FACTOR : 0;
+      const work = R * (Tref[k] * (1 + virtual * vapour) - T[k] * (1 + virtual * air)) * dp[k] / p[k];
       if (!free && saturated && work > 0) free = true;
       if (!free) { if (work < 0) inhibition -= work; }
       else if (work > 0) { cape += work; top = k; }
@@ -307,14 +313,15 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
    */
   function convectColumn(i, pi, theta, q, dt, qc = null) {
     falling.base = K; falling.downdraft = 0;
-    const decked = deckGate !== null && deckGate[i] > ACTIVITY_UNDECIDED;
+    const decked = deckVeto && deckGate !== null && deckGate[i] > ACTIVITY_UNDECIDED;
     const top = decked ? -1 : diagnoseParcel(i, pi, theta, q);
     const pass = top >= 0 ? ramp(0.5 + (parcel.cape - capeThreshold) / Math.max(1, capeThreshold)) * ramp(0.5 + (inhibitionThreshold - parcel.inhibition) / Math.max(1, inhibitionThreshold)) : 0;
     const now = activityMemory > 0 ? activity[i] - (pass - activity[i]) * Math.expm1(-dt / activityMemory) : pass;
     activity[i] = now;
-    if (top < 0 || !(now > ACTIVITY_UNDECIDED || (now === ACTIVITY_UNDECIDED && pass > ACTIVITY_UNDECIDED))) return 0;
-    const base = parcel.base;
     const shallow = top > 0 && p[top] > shallowTop;
+    const eager = shallowTrigger !== null && top > 0 && p[top] > (shallowTrigger.top ?? shallowTop) && parcel.cape > shallowTrigger.cape && parcel.inhibition < shallowTrigger.inhibition;
+    if (top < 0 || !(eager || now > ACTIVITY_UNDECIDED || (now === ACTIVITY_UNDECIDED && pass > ACTIVITY_UNDECIDED))) return 0;
+    const base = adjustFrom === 'surface' ? K - 1 : parcel.base;
     if (shallow) {
       const above = top - 1, aboveQ = Math.max(0, q[above * C + i]);
       const aboveEnergy = cp * T[above] + g * z[above] + latentHeat * aboveQ;
@@ -364,7 +371,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
       detrained = detrainment * rain;
       for (let k = top; k <= anvilBottom; k++) qc[k * C + i] += detrained * g / anvilMass;
     }
-    falling.base = base;
+    falling.base = parcel.base;
     falling.downdraft = downdraftEvaporation * (rain - detrained);
     return rain - detrained;
   }

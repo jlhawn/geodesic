@@ -35,7 +35,7 @@ import { saturationHumidity } from './moist.module.js';
  * the Richardson depth: the deck starts from it and relaxes toward it.
  */
 export function createBoundaryLayer(mesh, core, {
-  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, buffers = null,
+  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, buffers = null, entrainmentVelocity = 0,
 } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, kappa, exnerLayer, geopotential } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
@@ -95,15 +95,20 @@ export function createBoundaryLayer(mesh, core, {
         const buoyancy = g / theta[base] * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
         if (buoyancy > 0) scale = friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
       }
+      let entrainK = -1;
       for (let k = kTop; k < bottom; k++) {
         const idx = k * C + i, below = idx + C;
         const zAbove = geopotential[idx] / g, zBelow = geopotential[below] / g;
         const z = 0.5 * (zAbove + zBelow) - zb;
-        if (z >= h) continue;
+        if (z >= h) { entrainK = k; continue; }
         const diffusivity = vonKarman * scale * z * (1 - z / h) ** 2;
         const rhoAbove = pi[i] * sigmaMid[k] / (R * theta[idx] * exnerLayer[idx]);
         const rhoBelow = pi[i] * sigmaMid[k + 1] / (R * theta[below] * exnerLayer[below]);
         mixing[idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
+      }
+      if (entrainmentVelocity > 0 && entrainK >= kTop) {
+        const idx = entrainK * C + i, below = idx + C;
+        mixing[idx] = 0.5 * (pi[i] * sigmaMid[entrainK] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[entrainK + 1] / (R * theta[below] * exnerLayer[below])) * entrainmentVelocity;
       }
     }
   }
