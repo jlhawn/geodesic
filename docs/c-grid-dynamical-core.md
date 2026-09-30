@@ -3102,22 +3102,26 @@ The work, in order:
    and not below `overcastWater` 5·10⁻⁵ kg/kg, so that under a strong
    inversion a saturated layer holding more is overcast; and shallow tops
    vent from `shallowCape` 5 J/kg. The bound without the EIS gate
-   overcasts nearly all resolved cloud: 94.7 % of its water lies in
+   overcasts nearly all resolved cloud: 92.7 % of its water lies in
    layers at 99.9 % humidity or more, and the Arctic's water-weighted
-   qc/qs (0.077) is below the globe's (0.132); gating it by temperature
-   instead (layers below 0 °C) reaches the Arctic (0.942) at a larger
-   global cost (0.502). On nine128_day0091 after one step (column cover
-   by area; the ice's absorbed sunlight over the day; the frozen state's
-   planetary albedo at four sun positions):
+   qc/qs (0.077) is below the globe's (0.131); gating it by temperature
+   instead (layers below 0 °C) reaches the Arctic (0.941) at a larger
+   global cost (0.501). On nine128_day0091 after one CPU step at the
+   defaults (column cover by area; the ice's absorbed sunlight over 24
+   hourly sun positions; the frozen state's planetary albedo, 1 − ASR /
+   insolation summed over four sun positions 6 h apart from the step):
 
    | | maximum (package 3) | maximum-random | + bound, no gate | + bound, EIS 8–12 K | overcast |
    |---|---|---|---|---|---|
-   | 70–90N ice columns | 0.692 | 0.777 | 0.958 | 0.946 | 0.961 |
-   | global | 0.450 | 0.469 | 0.597 | 0.479 | 0.696 |
-   | 15S–15N | 0.469 | 0.490 | 0.655 | 0.490 | 0.744 |
-   | SE Pacific (where the deck is off) | 0.334 (0.344) | 0.338 (0.349) | 0.539 (0.554) | 0.338 (0.349) | 0.637 (0.651) |
-   | ice's absorbed sunlight, W/m² | 97.9 | 77.9 | 40.0 | 42.1 | 39.8 |
-   | global albedo, frozen state | 0.347 | 0.358 | 0.431 | 0.364 | 0.443 |
+   | 70–90N ice columns | 0.692 | 0.777 | 0.957 | 0.945 | 0.961 |
+   | global | 0.450 | 0.469 | 0.589 | 0.479 | 0.699 |
+   | 15S–15N | 0.469 | 0.490 | 0.649 | 0.490 | 0.745 |
+   | SE Pacific (where the deck is off) | 0.334 (0.345) | 0.339 (0.350) | 0.524 (0.539) | 0.339 (0.350) | 0.643 (0.657) |
+   | ice's absorbed sunlight, W/m² | 98.0 | 78.1 | 40.1 | 42.3 | 39.8 |
+   | global albedo, frozen state | 0.393 | 0.401 | 0.459 | 0.406 | 0.469 |
+
+   Confining the gate to the layers below σ 0.7 changes the 70–90N ice
+   columns' cover from 0.945 to 0.938 and the global from 0.479 to 0.478.
 
    Three days at N=64 on the CPU from nine64_day0091 (`arc3d64`) lose
    0.173·10³ km³ of northern ice a day (volume 9.19 → 8.67), above the
@@ -3125,17 +3129,18 @@ The work, in order:
    net in the daily means (package 3 91.8, 93.1, 88.6; overcast 53.6,
    58.4, 57.6). The N=64 state's Arctic inversions are weaker: on
    nine64_day0091 the ice columns cover 0.883 (maximum 0.720, overcast
-   0.963) and the ice absorbs 60.9 W/m² (92.7, 49.6); a ramp of 4–8 K
-   would take it to 52.7 at N=64 but the N=128 global cover to 0.490
+   0.963) and the ice absorbs 60.8 W/m² (92.7, 49.5); a ramp of 4–8 K
+   would take it to 52.5 at N=64 but the N=128 global cover to 0.490
    (6–10 K: 55.5, 0.483), and the bound without the gate reaches only
-   51.2. Ten days at N=64 on the GPU from eight64_day0183 (`arc10d64`):
+   51.0. Ten days at N=64 on the GPU from eight64_day0183 (`arc10d64`):
    planetary albedo 0.287, 0.307, 0.318, 0.323, 0.334, 0.340, 0.340,
    0.341, 0.343, 0.338 on days 184–193 (the last physics step's, as the
    log prints it), the first three within 0.005 of package 3's three-day
    run from the same state (`j0`: 0.288, 0.312, 0.319), then above the
-   0.30–0.31 asked; ASR − OLR +1.9 falling to −13.2 W/m²; global rain
-   2.04, 2.30, then 2.31–2.58 mm/d. No ten-day run of package 3 from that state exists to set the
-   later days against. `scripts/verticalAudit.mjs` on day 193, against
+   0.30–0.31 asked; ASR − OLR +1.9 on day 184, −13.2 W/m² at its lowest
+   on day 192 and −11.0 on day 193; global rain 2.04, 2.30, then
+   2.31–2.58 mm/d. No ten-day run of package 3 from that state exists to
+   set the later days against. `scripts/verticalAudit.mjs` on day 193, against
    package 2's ten-day run with c = 0.03 (`dd364`, day 193) and package
    3's three-day run (`j0`, day 186):
 
@@ -3150,8 +3155,10 @@ The work, in order:
    | ITCZ firing columns' heating peak, hPa; lowest 100 m, K/d | 439; −1.39 | 961; +17.7 | 439; +0.17 |
    | global rain, mm/d | 2.59 | 1.94 | 2.37 |
 
-   The lower vent threshold fires the SE Pacific on twice package 3's
-   share of its column-steps. Five days at N=128 on the GPU from
+   The SE Pacific's columns fire on 0.142 of the column-steps on day 193
+   against package 3's 0.079 on day 186; the two differ in day and in all
+   three changes, so the rise is not attributed to the vent threshold.
+   Five days at N=128 on the GPU from
    nine128_day0183 (`arc5d128`): albedo 0.296, 0.296, 0.299, 0.296, 0.304
    on days 184–188 against the spin-up's own 0.301, 0.302, 0.304, 0.303,
    0.310; ASR − OLR +1.8, +1.1, +0.9, +0.8, −2.2 W/m² (mean +0.5; the
@@ -3163,8 +3170,12 @@ The work, in order:
    and maximum overlap the largest; a saturated layer holding 0.02 qs
    reads the uniform cover below EIS 8 K, the linear blend on the ramp
    and cover 1 above 12 K; the GPU parity test of partial cover adds
-   maximum overlap and the unbounded half-width on columns with separate
-   runs (1.5·10⁻⁴ against 24 K/day). The scattering-only overcast
+   maximum overlap, the unbounded half-width, and a bound of 5·10⁻⁴ kg/kg
+   on a −40 to 40 K ramp and over every column, on columns with separate
+   runs (1.5·10⁻⁴ against 24 K/day). At the default 5·10⁻⁵ kg/kg the
+   bounded half-width amplifies the engines' f32 and f64 difference in
+   q + qc − qs: over every column the engines then part by 5.0·10⁻⁴
+   K/day, on the ramp 3.3·10⁻⁴. The scattering-only overcast
    engine's digests are re-pinned for the vent threshold alone.
 4. The ocean's wind response, diagnosed on the day-274 state before
    it is changed: stress against 0.05 N/m² on the equator, mixed-layer
