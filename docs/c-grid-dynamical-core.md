@@ -2874,53 +2874,83 @@ The work, in order:
    step, low cloud above 0.4.
 
    Built, in both engines (`js/physics/moist.module.js`, the adjust
-   kernel of `js/gpu/physics.gpu.js`). The parcel is the mass-weighted
-   mean θ and q of the layers whose lower interfaces lie below the
-   boundary layer's Richardson depth, or of the lowest 50 hPa
-   (`parcelDepth`) where that is deeper; it rises dry to its Bolton LCL,
-   then saturated with its moist static energy relaxed toward the air's
-   at `entrainmentRate` 5·10⁻⁵ m⁻¹, buoyant in virtual temperature. Its
-   inhibition is the negative buoyant energy from the top of its source
-   layers to the first buoyant layer above the LCL, its CAPE the
-   positive energy above that, its top the highest buoyant layer. The
-   pass is the product of two ramps, 0 to 1 as the CAPE rises through
+   kernel of `js/gpu/physics.gpu.js`). The parcel is the lowest layer's
+   air (`boundaryParcel` false, `parcelDepth` 0; with `boundaryParcel` the
+   mass-weighted mean θ and q of the layers below the boundary layer's
+   Richardson depth or of the lowest `parcelDepth`); it rises dry to its
+   Bolton LCL, then saturated with its moist static energy relaxed toward
+   the air's at `entrainmentRate` 5·10⁻⁵ m⁻¹, buoyant in virtual
+   temperature. Its inhibition is the negative buoyant energy from the
+   top of its source layers to the first buoyant layer above the LCL,
+   its CAPE the positive energy above that, its top the highest buoyant
+   layer; tops below `shallowTop` 700 hPa are shallow. The deep pass is
+   the product of two ramps, 0 to 1 as the CAPE rises through
    `capeThreshold` 100 J/kg ± half of it and as the inhibition falls
-   through `inhibitionThreshold` 50 J/kg ± half, and 0 under a deck gate
-   above one half; the per-cell `convectiveActivity` relaxes toward it
-   over `activityMemory` 2 h (saved with the state, one half in older
-   ones) and the column convects while it is above one half. Only the
-   layers from the LCL's layer to the top relax. Deep tops (at or above
-   `shallowTop` 700 hPa) relax toward the parcel's temperature and 60 %
-   of its saturation as before, the anvil keeps its 10 %, and
-   `downdraftEvaporation` 0.25 of the rest may evaporate into the
-   subcloud layers inside the rain's fall. Shallow tops relax toward
-   Betts' mixing line between the parcel at its LCL and the layer above
-   the top, its water at most `shallowHumidity` 0.8 of saturation, with
-   neither heat nor water changed: they never rain. Autoconversion stays
-   out of the lowest two layers (`autoconversionFloor` 'lowest';
+   through `inhibitionThreshold` 50 J/kg ± half, and of the deck's
+   opening, 1 at a mixed-layer gate of one half or less and 0 at 0.6; the
+   per-cell `convectiveActivity` relaxes toward it over `activityMemory`
+   2 h (saved with the state, one half in older ones) and the column
+   fires while it is above one half. A shallow top also vents, without
+   memory, at the same product of ramps about `shallowCape` 10 J/kg and
+   `shallowInhibition` 15 J/kg times the deck's opening (and not where
+   the estimated inversion strength exceeds `shallowStability`, off by
+   default), relaxing over the relaxation time divided by its vent. Only
+   the layers from the LCL's layer to the top relax, toward the parcel's
+   temperature and 60 % of its saturation, shallow tops too
+   (`shallowReference` 'parcel', `shallowRain`; 'mixingLine' without
+   `shallowRain` is the non-raining Betts mixing line of the first
+   build, its water at most `shallowHumidity` 0.8 of saturation); the
+   anvil keeps 10 % of the rain and `downdraftEvaporation` 0.01 of the
+   rest may evaporate into the subcloud layers, offered to each in
+   proportion to its mass (`downdraftSpread` 'mass'). Autoconversion
+   stays out of the lowest two layers (`autoconversionFloor` 'lowest';
    'boundaryLayer' keeps it out of every layer wholly inside the
-   boundary layer), and rain evaporates only into cloud-free layers
-   (at most 10⁻⁷ kg/kg of cloud water). At 10⁻⁴ m⁻¹ Jordan's (1958)
-   mean hurricane-season sounding heats most at 518 hPa with its top at
-   318 hPa, at 5·10⁻⁵ m⁻¹ at 440 hPa with its top at 230 hPa. The tests
-   (`test/convection.test.mjs`): a stratocumulus column over a 26 °C sea
-   under a 1.5 K θv inversion at 1.3 km with dry air above never
-   convects; the Jordan sounding convects from cloud base with no change
-   below it and its heating peak at 440 hPa; column enthalpy and water
+   boundary layer), and rain evaporates only into cloud-free layers (at
+   most 10⁻⁷ kg/kg of cloud water). Jordan's (1958) mean
+   hurricane-season sounding heats most at 440 hPa with its top at
+   195 hPa. The
+   radiation gives resolved cloud a cover (`cloudCover` 'pdf', both
+   engines): a layer covers the part of a uniform total-water
+   distribution of half-width (1 − RHc) qs above saturation, RHc 0.85
+   inside the boundary layer and 0.8 above, with emissivity
+   f (1 − exp(−a W / f)), and the shortwave blends the clear column with
+   the column whose path lies in the column's cover, the layers' largest
+   f times their visibility 1 − exp(−W / 1 g/m²). A Sundqvist cover from
+   the vapour's humidity would be overcast: the radiation sees the state
+   after the dynamics and before the saturation adjustment, and on the
+   defaults' day-186 N=64 state 94 % of the cloud water below σ 0.9 lies
+   in layers at 99 % humidity or more, a water-weighted Sundqvist cover
+   of 0.94. The tests (`test/convection.test.mjs`): a stratocumulus
+   column over a 26 °C sea under a 1.5 K θv inversion at 1.3 km with dry
+   air above never convects; the Jordan sounding convects from cloud
+   base with no change below it and its heating peak at 440 hPa; a trade-
+   cumulus column vents at an activity of 0, at half the rate at its
+   CAPE threshold, and not without the trigger, below half its threshold,
+   above its stability bound or under a deck; column enthalpy and water
    close to 10⁻¹⁶ through the rain, anvil and downdraft, and heat and
-   water to 10⁻¹⁶ in the shallow branch; the deck veto, the activity's
-   switching times, both autoconversion floors, and the engines agree on
-   362 random columns to 10⁻⁴ K and 5·10⁻⁸ kg/kg.
+   water to 10⁻¹⁶ in the mixing-line branch; the activity's switching
+   times, both autoconversion floors, and the engines agree on 362
+   random columns to 10⁻⁴ K and 5·10⁻⁸ kg/kg under the defaults, the
+   first build's options and the stability veto. `test/physics.test.mjs`
+   checks the cover's blend against the overcast column with W / f.
    `scripts/verticalAudit.mjs` adds, from the moist physics' `trace`,
    the pressure of the maximum of the Pacific ITCZ firing columns'
    convective heating and its mean over the lowest 100 m, the box's
    large-scale heating below 1 km, the global rain, the convective share
    of 15S–15N and the fraction of columns convection changes at all;
-   `MOIST` passes moist options to it and to `scripts/spinup.mjs`.
+   `MOIST` passes moist options to it and to `scripts/spinup.mjs`. The
+   GPU model mirrors the boundary layer's depth and spin-up states carry
+   it (`boundaryDepth`): the physics reads the depth of the step before,
+   and a continued run's first step read 0 (no deck, no boundary-layer
+   humidity for the cover); a coupled run stopped inside a day now
+   continues within 2.2 % of the uninterrupted run's daily forcing over
+   two days, where it was within 6.5 %.
 
-   The audited states, 8-step windows before and after (the dilute
-   boundary-layer parcel has no CAPE in a troposphere adjusted to the
-   40 m layer's undilute adiabat, so convection stops at once):
+   As first built, with the boundary layer's dilute parcel, the
+   trigger and a shallow branch that never rained, convection stopped at
+   once on the audited states (8-step windows before and after; the
+   dilute parcel has no CAPE in a troposphere adjusted to the 40 m
+   layer's undilute adiabat):
 
    | | eight128 d183 | eight64 d183 | eight128 d274 | eight64 d365 |
    |---|---|---|---|---|
@@ -2931,52 +2961,85 @@ The work, in order:
    | ITCZ firing columns' heating peak, hPa | 973 → none | 438 → none | 439 → none | 439 → none |
    | ITCZ large-scale heating below 1 km, max \|K/d\| | 12.3 → 13.9 | 13.1 → 14.1 | 11.2 → 12.5 | 10.7 → 11.9 |
 
-   Five days at N=128 on the GPU from eight128_day0183 (run `m21d128`,
-   audited on day 188), against the same five days under the old scheme
-   (package 2's gate with c = 0.03, column 3 of the deck table above):
+   Five days of that build at N=128 from eight128_day0183 (run
+   `m21d128`) failed: the planetary albedo rose from 0.315 to 0.574 (ASR
+   234 → 145 W/m²), the cloud water path from 78 to 177 g/m², and the SE
+   Pacific drizzled 0.70 mm/d from a layer 0.975 overcast. Forty-nine
+   three-day N=64 runs from eight64_day0183, audited on day 186,
+   attributed it: the pre-package scheme gives 0.323 and 15.4 g/m² of
+   cloud water below σ 0.9, the build 0.568 and 57.3 g/m². The
+   boundary-layer parcel, the trigger and the non-raining shallow
+   branch each remove the old scheme's continuous venting of the
+   boundary layer on their own (added one at a time to the old scheme
+   0.466, 0.503, 0.479; removed one at a time from the build 0.525,
+   0.555, 0.564); every other element moves the albedo by less than
+   0.04. Moving water inside the column (a non-raining shallow branch
+   that fires at once, from the surface or not, entrainment across the
+   boundary-layer top at 5–15 mm/s, a mass-spread downdraft) leaves the
+   humidity below σ 0.9 in 30S–30N at 0.80–0.83 against the old scheme's
+   0.70; only raining it out, or the cover, moves the albedo, and the
+   cover alone takes 0.135 off the build and 0.057 off the old scheme.
+   Hence the defaults above: the lowest layer's parcel, shallow tops
+   venting on their own trigger and raining, the deep trigger kept, and
+   the cover. Three days at N=64 (day-186 albedo): the build 0.568, the
+   decision 0.319. Variants, each against a run of the code it was
+   measured with: a shallow CAPE threshold of 5 J/kg 0.313 against 0.327
+   at 10, one of 20 J/kg 0.348 against 0.331; a vent ramp from the
+   threshold to twice it instead of about it 0.330 against 0.319, with
+   no fewer SE Pacific firings after the three days; a stability veto on
+   the vent at an EIS of 1, 2 or 3 K 0.378, 0.365, 0.358 against 0.327
+   (at 2 K it vetoes a third of the venting ocean columns worldwide and
+   only half of the SE Pacific's, whose venting columns have a median EIS
+   of 2.2 K), so it stays an option; shallow tops raining along the
+   mixing line instead of toward the parcel 0.333 against 0.331, with SE
+   Pacific firing 0.105 against 0.059. In the audit window on the
+   decided configuration's day-186 N=64 state a downdraft share of 0.1,
+   0.05, 0.02 or 0.01 changes the ITCZ firing columns' lowest 100 m by
+   −48, −32, −15 or −6 K/d (they rain tens of mm/d into a subcloud layer
+   a few hundred metres deep), 0 by +4.6, hence 0.01.
 
-   | day 188, N=128 | old convection | M21 convection |
-   |---|---|---|
-   | SE Pacific rain, mm/d (convective share) | 0.57 | 0.70 (0.00) |
-   | its columns firing a step (adjusting at all) | | 0.000 (0.006) |
-   | its low cloud | 0.083 | 0.975 |
-   | its deck runs, share of column-steps | 0.160 | 0.049 |
-   | its resolved inversion, m (θv jump, K); EIS, K | 1158 (3.37); 3.11 | 1186 (6.13); 5.03 |
-   | Pacific ITCZ rain, mm/d (convective share); ω500, Pa/s | | 5.68 (0.78); −0.018 |
-   | ITCZ firing columns' heating peak, hPa (K/d); lowest 100 m, K/d | | 515 (46.4); −71.3 |
-   | ITCZ large-scale heating below 1 km, K/d | | +18.1 at 793 m, −31.8 at 21 m |
-   | global rain, mm/d (convective share); 15S–15N share | | 2.53 (0.49); 0.79 |
-   | zonal-mean rain peak, mm/d (latitude) | | 4.58 (7.5N) |
-   | planetary albedo, daily mean on day 188 | 0.315 (the paired run) | 0.574 |
-   | global cloud water path, g/m² | 78 (day 183) | 177 |
+   Five days at N=128 on the GPU from eight128_day0183 (run `r128c`,
+   audited on day 188), against the old scheme (package 2's gate with
+   c = 0.03, run `p2c128`) and the first build (`m21d128`):
 
-   The acceptance fails. The SE Pacific's convective rain and firing are
-   gone, but its rain is large-scale drizzle from a nearly overcast
-   layer, and that layer covers the planet: the cloud water below
-   σ = 0.9 triples between 30S and 30N and grows four- to fivefold in
-   the midlatitudes within five days, and the albedo rises from 0.31 to
-   0.57 (ASR 234 → 145 W/m²; 0.58 and still −77 W/m² after ten days at
-   N=64). Three-day N=64 ablations from eight64_day0183 (day-185
-   albedo; the old scheme 0.326): the old scheme adjusting from cloud
-   base up only, 0.301; with only the autoconversion floor, 0.329; with
-   only the cloud-free evaporation rule, 0.325; the new scheme with the
-   40 m layer's undilute parcel, no trigger, every top deep and no
-   downdraft, 0.345, with the downdraft 0.362, with the shallow branch
-   and no downdraft 0.473; the boundary-layer dilute parcel with every top deep and no
-   trigger, 0.513; the full scheme 0.550, with the trigger off 0.547,
-   with the boundary-layer floor 0.555, with the boundary layer's mixing
-   carried to the convective top 0.544, with a one-hour cloud lifetime
-   0.527. The old scheme's shallow and deep firing dried the subcloud
-   layer toward 60 % humidity (26–30 g/kg/d in the 15S–15N mean of its
-   layers on day 183) and was the boundary layer's main moisture sink; the boundary-
-   layer parcel, the trigger and the non-precipitating shallow branch
-   each remove part of that sink, the boundary layer saturates at its
-   top, and the grid-mean resolved cloud radiates as overcast. On the
-   other side the ITCZ moves off the equator (zonal peak 7.5N) and its
-   500 hPa motion turns to ascent. Item 5 has to decide how the
-   boundary layer loses its moisture (an entrainment flux at its top or
-   a shallow mass flux out of the subcloud layer) and whether resolved
-   cloud needs a cover fraction, before a new spin-up.
+   | day 188, N=128 | old convection | first build | the decision |
+   |---|---|---|---|
+   | planetary albedo, days 184–188 | 0.323, 0.329, 0.337, 0.338, 0.339 | 0.481, 0.526, 0.554, 0.571, 0.574 | 0.296, 0.311, 0.320, 0.328, 0.331 |
+   | ASR, W/m², day 184 → 188 | 230.6 → 225.1 | → 145 | 239.7 → 227.7 |
+   | cloud water path, g/m² (below σ 0.9) | 78 (15.5), day 183 | 177 | 113 (36.8) |
+   | SE Pacific rain, mm/d (convective share) | 0.57 | 0.70 (0.00) | 0.81 (0.81) |
+   | its columns firing a step (adjusting at all) | | 0.000 (0.006) | 0.100 (0.142) |
+   | its low cloud | 0.083 | 0.975 | 0.493 |
+   | its deck runs, share of column-steps | 0.160 | 0.049 | 0.181 |
+   | its resolved inversion, m (θv jump, K); EIS, K | 1158 (3.37); 3.11 | 1186 (6.13); 5.03 | 994 (3.31); 3.59 |
+   | Pacific ITCZ rain, mm/d (convective share); ω500, Pa/s | | 5.68 (0.78); −0.018 | 5.64 (0.80); −0.009 |
+   | ITCZ firing columns' heating peak, hPa (K/d); lowest 100 m, K/d | | 515 (46.4); −71.3 | 438 (29.0); −0.3 |
+   | ITCZ large-scale heating below 1 km, K/d | | +18.1 at 793 m, −31.8 at 21 m | +15.5 at 437 m, −34.0 at 21 m |
+   | global rain, mm/d (convective share); 15S–15N share | | 2.53 (0.49); 0.79 | 2.70 (0.71); 0.86 |
+   | zonal-mean rain peak, mm/d (latitude) | | 4.58 (7.5N) | 5.54 (9.5N) |
+
+   Ten days at N=64 from the atlas (bl34): the old scheme's albedo peaks
+   at 0.397 on day 7 and ends at 0.339, the first build's climbs to
+   0.591 and ends at 0.580, the decision's peaks at 0.401 and ends at
+   0.335. Against the acceptance: the daily albedo stays within
+   0.30–0.34 but for day 184 (0.296), and the ASR falls 12.0 W/m² from
+   day 184 where 10 was asked (the old scheme 5.5, from a first day
+   0.027 brighter); the ITCZ heats aloft and its lowest 100 m by −0.3 K/d;
+   the SE Pacific's low cloud (0.49) and deck runs (0.18) pass; the global
+   rain passes; the fresh start passes. The SE Pacific's rain
+   (0.81 mm/d) and firing (0.100 a step) fail by as much as under the old
+   scheme: the venting that keeps the boundary layer from saturating
+   worldwide vents the SE Pacific wherever the deck's gate is shut, and
+   the deck runs on 0.18 of its column-steps because its virtual jump at
+   h is 1.7 K against the resolved inversion's 3.3 K. The ITCZ's
+   large-scale dipole (15.5 and −34.0 K/d) fails too: splitting it on the
+   decided configuration's day-186 N=64 state, the saturation adjustment
+   condenses 8–20 K/d between 240 and 590 m and
+   evaporates cloud at −8 to −11 K/d between 60 and 170 m, and the rain
+   evaporates at −24 K/d into the lowest layer; neither the rain
+   evaporation (0.1–1 of the deficit), autoconversion (no floor, no
+   lifetime), the adjustment's base nor the boundary layer's mixing of
+   cloud water changes the condensation peak.
 4. The ocean's wind response, diagnosed on the day-274 state before
    it is changed: stress against 0.05 N/m² on the equator, mixed-layer
    depth against 30–50 m in the east, whether an undercurrent exists
