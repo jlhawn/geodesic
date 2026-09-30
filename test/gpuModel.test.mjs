@@ -189,27 +189,35 @@ function cloudyState() {
       if (geopotential[x] / g < depth[i]) inside++; else above++;
     });
   }
-  return { base, inside, above };
+  let separated = 0;
+  for (let i = 0; i < C; i++) {
+    let runs = 0;
+    for (let k = 0; k < K; k++) if (qc[k * C + i] > 0 && !(k > 0 && qc[(k - 1) * C + i] > 0)) runs++;
+    if (runs > 1) separated++;
+  }
+  return { base, inside, above, separated };
 }
 
-test('resolved cloud of partial cover, inside the boundary layer and above it, heats the layers of sunlit columns alike in both engines, and the cover and its boundary-layer RHc move that heating', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { base, inside, above } = cloudyState();
+test('resolved cloud of partial cover, inside the boundary layer and above it and in separate runs of layers, heats the layers of sunlit columns alike in both engines, and the cover, its boundary-layer RHc and the overlap move that heating', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { base, inside, above, separated } = cloudyState();
   const pdf = await physicsHeating(base, {}), moved = await physicsHeating(base, { boundaryCriticalHumidity: 0.5 }), overcast = await physicsHeating(base, { cloudCover: 'overcast' });
+  const maximum = await physicsHeating(base, { cloudOverlap: 'maximum' });
   const { K, C } = pdf, lit = [];
   for (let i = 0; i < C; i++) if (base.radiation.insolation(i) > 0) lit.push(i);
-  let engines = 0, scale = 0, cover = 0, boundary = 0;
+  let engines = 0, scale = 0, cover = 0, boundary = 0, overlap = 0;
   for (const i of lit) {
     for (let k = 0; k < K - 1; k++) {
       const x = k * C + i;
-      engines = Math.max(engines, Math.abs(pdf.cpu[x] - pdf.gpu[x]), Math.abs(moved.cpu[x] - moved.gpu[x]));
+      engines = Math.max(engines, ...[pdf, moved, maximum].map((r) => Math.abs(r.cpu[x] - r.gpu[x])));
       scale = Math.max(scale, Math.abs(pdf.cpu[x]));
       cover = Math.max(cover, Math.abs(pdf.cpu[x] - overcast.cpu[x]));
       boundary = Math.max(boundary, Math.abs(pdf.cpu[x] - moved.cpu[x]));
+      overlap = Math.max(overlap, Math.abs(pdf.cpu[x] - maximum.cpu[x]));
     }
   }
-  console.log(`${lit.length} sunlit columns with ${inside} cloudy layers inside the boundary layer and ${above} above: the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the cover moves it by up to ${cover.toFixed(2)} K/day from overcast, the boundary layer's RHc of 0.5 by ${boundary.toFixed(2)}`);
-  assert.ok(inside > C / 4 && above > C, `${inside} cloudy layers inside, ${above} above`);
-  assert.ok(cover > 1 && boundary > 0.1, `cover ${cover}, boundary-layer RHc ${boundary} K/day`);
+  console.log(`${lit.length} sunlit columns with ${inside} cloudy layers inside the boundary layer and ${above} above, ${separated} columns with separate runs: the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the cover moves it by up to ${cover.toFixed(2)} K/day from overcast, the boundary layer's RHc of 0.5 by ${boundary.toFixed(2)}, maximum overlap by ${overlap.toFixed(2)}`);
+  assert.ok(inside > C / 4 && above > C && separated > C / 2, `${inside} cloudy layers inside, ${above} above, ${separated} columns with separate runs`);
+  assert.ok(cover > 1 && boundary > 0.1 && overlap > 0.1, `cover ${cover}, boundary-layer RHc ${boundary}, overlap ${overlap} K/day`);
   assert.ok(engines < 1e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
 });
 

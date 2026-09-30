@@ -66,12 +66,16 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * `boundaryCriticalHumidity` (0.85) for a layer whose midpoint lies below
  * the boundary-layer top and `criticalHumidity` (0.8) above it, so a
  * just-saturated layer is half covered and one holding (1 − RHc) qs of
- * cloud water overcast. Its emissivity is f (1 − exp(−cloudAbsorption ×
- * path / f)), and the shortwave is the blend, at the column's cover f̄,
- * of the clear column and the column whose cloud path lies in f̄, as the
- * deck below blends its two columns. The layers overlap maximally, each
- * seen through its visibility 1 − exp(−path / VISIBLE_PATH), 1 g/m²: f̄
- * is the largest of the layers' f times their visibility.
+ * cloud water overcast. Its emissivity is
+ * f (1 − exp(−cloudAbsorption × path / f)), and the shortwave is the
+ * blend, at the column's cover f̄, of the clear column and the column
+ * whose cloud path lies in f̄, as the deck below blends its two columns.
+ * Each layer is seen through its visibility 1 − exp(−path /
+ * VISIBLE_PATH), 1 g/m². With `cloudOverlap` 'maximumRandom' (the
+ * default) the layers of each run of adjacent cloudy layers overlap
+ * maximally and the runs randomly: f̄ is 1 − Π(1 − f_run), f_run the
+ * largest of its layers' f times their visibility; 'maximum' overlaps
+ * every layer maximally, f̄ the largest over the column.
  * 'overcast' gives every cloudy layer the whole cell.
  *
  * Marine stratocumulus: over the part of a cell that is ice-free sea
@@ -271,7 +275,7 @@ export function adiabaticWaterLapse(T, p, cp, R, g, latentHeat = LATENT_HEAT) {
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 95, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 2, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
-  prognosticHeight = true, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01,
+  prognosticHeight = true, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, cloudOverlap = 'maximumRandom',
   window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
@@ -317,6 +321,7 @@ export function createRadiation(mesh, core, {
   const shadow = mixedLayerDeck ? createMixedLayer({ cp, R, g, latentHeat, referencePressure: p0, cloudLevels: DECK_CLOUD_LEVELS, ...mixedLayerOptions }) : null;
   const shadowLongwave = dycomsLongwave();
   if (stratusIndex !== 'eis' && stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${stratusIndex}`);
+  if (cloudOverlap !== 'maximum' && cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${cloudOverlap}`);
   if (![0, 1, 2].includes(subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${subsidenceSmoothing}`);
   const entraining = stratusIndex === 'ectei';
   const stratusLayer = nearestLayer(sigmaMid, stratusSigma), stabilityLayer = nearestLayer(sigmaMid, STABILITY_SIGMA);
@@ -327,7 +332,7 @@ export function createRadiation(mesh, core, {
   const emitted = new Float64Array(K);
   const netFlux = new Float64Array(K);
   const sun = new Float64Array([1, 0, 0]);
-  const budget = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0 };
+  const budget = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0 };
   const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 }, decked = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 }, probe = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 };
   const deckLight = { incident: 0, mu: 0, direct: 0, diffuse: 0, path: 0, layer: 0, clear: 0 };
 
@@ -465,7 +470,7 @@ export function createRadiation(mesh, core, {
         vaporTaken[k] = vaporAbsorption * waterVaporAbsorptivity(path);
       }
     }
-    let cloudPath = 0, columnCover = 0;
+    let cloudPath = 0, columnCover = 0, block = 0, clearColumn = 1;
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
       cloudWater[k] = qc ? Math.max(0, qc[idx]) * (pi * dSigma[k] / g) : 0;
@@ -476,8 +481,11 @@ export function createRadiation(mesh, core, {
         const qs = saturationHumidity(theta[idx] * exnerLayer[idx], pi * sigmaMid[k]), width = (1 - (inside ? boundaryCriticalHumidity : criticalHumidity)) * qs;
         layerCover[k] = Math.min(1, Math.max(coverFloor, (Math.max(0, q[idx]) + Math.max(0, qc[idx]) - qs + width) / (2 * width)));
       }
-      if (cloudCover === 'pdf') columnCover = Math.max(columnCover, layerCover[k] * -Math.expm1(-cloudWater[k] / VISIBLE_PATH));
+      const seen = cloudCover === 'pdf' && cloudWater[k] > 0 ? layerCover[k] * -Math.expm1(-cloudWater[k] / VISIBLE_PATH) : 0;
+      if (seen > 0) block = Math.max(block, seen);
+      if (block > 0 && (!(seen > 0) || k === K - 1)) { clearColumn *= 1 - block; columnCover = Math.max(columnCover, block); block = 0; }
     }
+    if (cloudOverlap === 'maximumRandom' && cloudCover === 'pdf') columnCover = 1 - clearColumn;
     if (!(columnCover > 0)) columnCover = 1;
     const sunlit = beam - ozoneHeating, vaporHeating = lit ? sunlit * vaporTaken[K - 1] : 0, incident = sunlit - vaporHeating;
     const inCloud = cloudPath / columnCover;
@@ -570,6 +578,7 @@ export function createRadiation(mesh, core, {
     budget.surfaceShortwave = incident * sky.down;
     budget.surfaceDirect = incident * sky.direct;
     budget.cloudReflectance = sky.reflectance;
+    budget.cloudCover = cloudPath > 0 ? columnCover : 0;
     budget.stratus = deck;
     budget.stratusFraction = fraction;
     budget.stabilityIndex = index;

@@ -28,10 +28,11 @@ export function physicsConstants(o) {
   const m = { ...MIXED_LAYER_DEFAULTS, cloudLevels: DECK_CLOUD_LEVELS, ...o.mixedLayer };
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
+  if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${o.cloudOverlap}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
   return `
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
-const PDF_COVER: bool = ${o.cloudCover === 'pdf'}; const VISIBLE_PATH: f32 = ${VISIBLE_PATH}; const RHC: f32 = ${o.criticalHumidity}; const RHC_BL: f32 = ${o.boundaryCriticalHumidity}; const COVER_FLOOR: f32 = ${o.coverFloor ?? 0.01};
+const PDF_COVER: bool = ${o.cloudCover === 'pdf'}; const VISIBLE_PATH: f32 = ${VISIBLE_PATH}; const RHC: f32 = ${o.criticalHumidity}; const RHC_BL: f32 = ${o.boundaryCriticalHumidity}; const COVER_FLOOR: f32 = ${o.coverFloor ?? 0.01}; const RANDOM_OVERLAP: bool = ${o.cloudOverlap === 'maximumRandom'};
 const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudScattering}; const CLOUD_SW: f32 = ${o.cloudSolarAbsorption}; const WINDOW: f32 = ${o.window}; const GAS_FRAC: f32 = ${o.gasFraction};
 const STRATUS: bool = ${!!o.stratus}; const ECTEI: bool = ${o.stratusIndex === 'ectei'}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
@@ -120,6 +121,14 @@ fn layerCover(idx: i32, k: i32, bottom: i32, pi: f32, water: f32, mixedDepth: f3
   let inside = (D[D_GEO + idx] + LV[L_GABS + k] - D[D_GEO + bottom] - LV[L_GABS + K - 1]) / GRAV < mixedDepth;
   let qsl = qsat(IN[S_TH + idx] * D[D_EXM + idx], pi * LV[L_SM + k]); let width = (1.0 - select(RHC, RHC_BL, inside)) * qsl;
   return clamp((max(0.0, IN[S_Q + idx]) + max(0.0, IN[S_QC + idx]) - qsl + width) / (2.0 * width), COVER_FLOOR, 1.0);
+}
+fn overlap(seen: f32, last: bool, blocks: ptr<function, vec3<f32>>) {
+  if (seen > 0.0) { (*blocks).x = max((*blocks).x, seen); }
+  if ((*blocks).x > 0.0 && (!(seen > 0.0) || last)) { (*blocks).y *= 1.0 - (*blocks).x; (*blocks).z = max((*blocks).z, (*blocks).x); (*blocks).x = 0.0; }
+}
+fn overlapCover(blocks: vec3<f32>) -> f32 {
+  if (!PDF_COVER) { return 0.0; }
+  return select(blocks.z, 1.0 - blocks.y, RANDOM_OVERLAP);
 }
 fn shortwave(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32) -> vec4<f32> {
   let reflectance = select(0.0, cloudDepth / (cloudDepth + 2.0 * mu), mu > 0.0 && cloudDepth > 0.0);
@@ -511,7 +520,7 @@ export const PHYSICS_KERNELS = {
   let ozoneHeating = beam * OZONE_ABS;
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
   var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
-  var cloudPath = 0.0; var columnCover = 0.0;
+  var cloudPath = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0);
   let tau0 = PH[PH_TAU + i];
   var deck = 0.0; var fraction = 0.0; var mlmCover = 0.0; var mlmWater = 0.0; var mlmEntrainment = 0.0; var mlmTop = 0.0;
   let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
@@ -523,13 +532,14 @@ export const PHYSICS_KERNELS = {
     let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
     var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0);
     if (STRATUS_SOLAR && CLOUD_SW > 0.0) {
-      var path = 0.0; var layer = 0.0; var shade = 0.0;
+      var path = 0.0; var layer = 0.0; var shadeBlocks = vec3<f32>(0.0, 1.0, 0.0);
       for (var k = 0; k < K; k++) {
         let water = max(0.0, IN[S_QC + k * C + i]) * (pi * LV[L_DS + k] / GRAV);
         path += water;
         if (k == STRATUS_K) { layer = water; }
-        if (PDF_COVER) { shade = max(shade, layerCover(k * C + i, k, bottom, pi, water, mixedDepth) * (1.0 - exp(-water / VISIBLE_PATH))); }
+        overlap(select(0.0, layerCover(k * C + i, k, bottom, pi, water, mixedDepth) * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), k == K - 1, &shadeBlocks);
       }
+      var shade = overlapCover(shadeBlocks);
       if (!(shade > 0.0)) { shade = 1.0; }
       var lit = beam - ozoneHeating;
       if (VAPOR_ABS > 0.0 && mu > 0.0) {
@@ -571,7 +581,7 @@ export const PHYSICS_KERNELS = {
     let water = max(0.0, IN[S_QC + idx]) * mass;
     cloudPath += water;
     let f = layerCover(idx, k, bottom, pi, water, mixedDepth);
-    if (PDF_COVER) { columnCover = max(columnCover, f * (1.0 - exp(-water / VISIBLE_PATH))); }
+    overlap(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), k == K - 1, &blocks);
     cloudE[k] = select(0.0, f * (1.0 - exp(-CLOUD_ABS * water / f)), water > 0.0);
     if (STRATUS && k == STRATUS_K && deck > 0.0) { cloudE[k] = fraction * (1.0 - exp(-CLOUD_ABS * (water + deck))) + (1.0 - fraction) * cloudE[k]; }
     let clear = 1.0 - cloudE[k];
@@ -594,6 +604,7 @@ export const PHYSICS_KERNELS = {
     vaporHeating = incident * taken;
     incident -= vaporHeating;
   }
+  var columnCover = overlapCover(blocks);
   if (!(columnCover > 0.0)) { columnCover = 1.0; }
   var sw = shortwave(CLOUD_SCAT * cloudPath / columnCover, cloudKeep(cloudPath / columnCover), mu, adir, adif);
   if (PDF_COVER && columnCover < 1.0) { sw = columnCover * sw + (1.0 - columnCover) * shortwave(0.0, 1.0, mu, adir, adif); }
