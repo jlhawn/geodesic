@@ -46,10 +46,13 @@ export function createBoundaryLayer(mesh, core, {
   const n = K - kTop;
   const mixingBuffer = buffers && buffers.mixing ? buffers.mixing : new SharedArrayBuffer(8 * K * C);
   const depthBuffer = buffers && buffers.depth ? buffers.depth : new SharedArrayBuffer(8 * C);
+  const buoyancyBuffer = buffers && buffers.buoyancyFlux ? buffers.buoyancyFlux : new SharedArrayBuffer(8 * C);
+  const frictionBuffer = buffers && buffers.friction ? buffers.friction : new SharedArrayBuffer(8 * C);
   const mixing = new Float64Array(mixingBuffer);
   const depth = new Float64Array(depthBuffer);
+  const buoyancyFlux = new Float64Array(buoyancyBuffer), friction = new Float64Array(frictionBuffer);
   const vector = new Float64Array(3 * C), bottomVector = new Float64Array(3 * C);
-  const speed = new Float64Array(C), friction = new Float64Array(C), riPrev = new Float64Array(C), zPrev = new Float64Array(C);
+  const speed = new Float64Array(C), riPrev = new Float64Array(C), zPrev = new Float64Array(C);
   const found = new Uint8Array(C);
   const upper = new Float64Array(K), lower = new Float64Array(K), gain = new Float64Array(K), rhs = new Float64Array(K), mass = new Float64Array(K);
 
@@ -87,14 +90,13 @@ export function createBoundaryLayer(mesh, core, {
     for (let i = iFrom; i < iTo; i++) {
       const zb = geopotential[bottom * C + i] / g, h = (deckTop && deckTop[i] > 0 ? Math.max(depth[i], deckTop[i]) : depth[i]) - zb;
       for (let k = kTop; k < K; k++) mixing[k * C + i] = 0;
+      const base = bottom * C + i;
+      const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]) : 0;
+      const buoyancy = g / theta[base] * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
+      buoyancyFlux[i] = buoyancy;
       if (h <= 0) continue;
       let scale = friction[i];
-      if (stability) {
-        const base = bottom * C + i;
-        const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]) : 0;
-        const buoyancy = g / theta[base] * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
-        if (buoyancy > 0) scale = friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
-      }
+      if (stability && buoyancy > 0) scale = friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
       let entrainK = -1;
       for (let k = kTop; k < bottom; k++) {
         const idx = k * C + i, below = idx + C;
@@ -175,5 +177,5 @@ export function createBoundaryLayer(mesh, core, {
     }
   }
 
-  return { diagnose, mixColumn, mixEdges, mixing, depth, kTop, shared: { mixing: mixingBuffer, depth: depthBuffer } };
+  return { diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, kTop, shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer } };
 }
