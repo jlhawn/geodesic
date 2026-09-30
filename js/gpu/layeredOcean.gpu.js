@@ -30,7 +30,7 @@ export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
-  interfacialDrag: 2e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, diffusivity: 0.01, everySteps: 4,
+  interfacialDrag: 2e-4, shearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, diffusivity: 0.01, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -61,7 +61,7 @@ ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_
 ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
 ${constLine('NEUTRALSNAP', o.neutralSnap ? 1 : 0)} ${constLine('EROSION', o.convectiveErosion ? 1 : 0)} ${constLine('BUOYMEM', o.buoyancyMemory)} ${constLine('NBRRATIO', o.mixedNeighbourRatio)} ${constLine('CENTRING', o.vorticityCentring)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
-${constLine('RINT', o.interfacialDrag)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
+${constLine('RINT', o.interfacialDrag)} ${constLine('SHEARMIX', o.shearMixing ? 1 : 0)} ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundViscosity)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
 ${constLine('FREEZE', FREEZING_POINT)} ${constLine('CDO', o.dragCoefficient)} ${constLine('GUSTO', o.gustiness)} ${constLine('CLOSURERIDGE', CLOSURE_RIDGE)} ${constLine('CLOSUREFILL', o.closureFill || 0)}
 @group(0) @binding(0) var<storage, read_write> MI: array<i32>;
 @group(0) @binding(1) var<storage, read_write> MF: array<f32>;
@@ -225,7 +225,26 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     - (OD[O_CURLS + k * V + MI[VOE + 2 * e + 1]] - OD[O_CURLS + k * V + MI[VOE + 2 * e]]) / MF[F_DV + e];
   if (P[1] > 0.5) { OD[O_LAPB + n] = lap; } else { OD[O_LAPA + n] = lap; }
 }`,
-    oMomentum: `${K}  let n = ${idx}; if (n >= L * E) { return; }
+    /*
+     * interfaceRate is ocean/layered.module.js's; P[3] is the step.
+     */
+    oMomentum: `fn tangentialU(k: i32, e: i32) -> f32 {
+  var sum = 0.0;
+  for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; sum += MF[F_PVW + slot] * IN[uOff(k) + MI[EOE + slot]]; }
+  return sum / MF[F_DC + e];
+}
+fn dragThickness(k: i32, e: i32) -> f32 { return select(max(OD[O_HEDGE + k * E + e], THINO), max(OD[O_HEDGE + e], MINTHICK), k == 0); }
+fn interfaceRate(e: i32, up: i32, down: i32) -> f32 {
+  if (SHEARMIX < 0.5) { return RINT; }
+  let dz = max(THINO, 0.5 * (OD[O_HEDGE + up * E + e] + OD[O_HEDGE + down * E + e]));
+  let upper = select(RHO[up], 0.5 * (OD[O_RHOML + MI[COE + 2 * e]] + OD[O_RHOML + MI[COE + 2 * e + 1]]), up == 0);
+  let buoyancy = max(0.0, OGRAV * (RHO[down] - upper) / RHO0);
+  let du = IN[uOff(up) + e] - IN[uOff(down) + e]; let dv = tangentialU(up, e) - tangentialU(down, e);
+  let ri = buoyancy * dz / (du * du + dv * dv + 1e-12);
+  let nu = SHEARNU / ((1.0 + 5.0 * ri) * (1.0 + 5.0 * ri)) + BACKNU;
+  return min(max(RINT, nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
+}
+${K}  let n = ${idx}; if (n >= L * E) { return; }
   let k = n / E; let e = n % E;
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   let qHere = 0.5 * OD[O_QE + n];
@@ -241,17 +260,17 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   if (k > 0) {
     var j = k - 1;
     loop { if (j == 0 || OD[O_HEDGE + j * E + e] >= THINO) { break; } j -= 1; }
-    drag += RINT * (IN[uOff(j) + e] - IN[uOff(k) + e]);
+    drag += interfaceRate(e, j, k) * (IN[uOff(j) + e] - IN[uOff(k) + e]);
   }
   if (k < L - 1) {
     var j = k + 1;
     loop { if (j == L - 1 || OD[O_HEDGE + j * E + e] >= THINO) { break; } j += 1; }
-    if (OD[O_HEDGE + j * E + e] >= THINO) { drag -= RINT * (IN[uOff(k) + e] - IN[uOff(j) + e]); }
+    if (OD[O_HEDGE + j * E + e] >= THINO) { drag -= interfaceRate(e, k, j) * (IN[uOff(k) + e] - IN[uOff(j) + e]); }
   }
   var bottom = k == L - 1;
   if (!bottom) { bottom = true; for (var j = k + 1; j < L; j++) { if (OD[O_HEDGE + j * E + e] >= THINO) { bottom = false; break; } } }
   if (bottom) { force -= RBOT * abs(IN[uOff(k) + e]) * IN[uOff(k) + e]; }
-  du += force / he + drag / select(max(OD[O_HEDGE + n], THINO), he, k == 0);
+  du += force / he + drag / dragThickness(k, e);
   if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
   if (k > 0 && OD[O_HEDGE + n] < THINO) { du = (IN[uOff(k - 1) + e] - IN[uOff(k) + e]) * P[2]; }
   if (OD[O_EMASK + e] < 0.5) { du = 0.0; }
@@ -776,7 +795,7 @@ export function createLayeredOcean(core, options = {}) {
       dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
       dispatch(pass, 'oLapVelocity', g, L * E);
     });
-    setParams([0, 1, relaxRate]);
+    setParams([0, 1, relaxRate, stepDt]);
     compute((pass) => {
       dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
       dispatch(pass, 'oLapVelocity', g, L * E);
@@ -788,7 +807,7 @@ export function createLayeredOcean(core, options = {}) {
     compute((pass) => dispatch(pass, 'oAdvance', group(ob.S, next, stage), OS.total));
   }
 
-  let relaxRate = 1 / 3600;
+  let relaxRate = 1 / 3600, stepDt = 3600;
   function barotropicStep(dt, k1) {
     const g1 = group(ob.S, k1);
     compute((pass) => {
@@ -816,7 +835,7 @@ export function createLayeredOcean(core, options = {}) {
   }
 
   function step(dt) {
-    relaxRate = Math.min(1 / 3600, 1 / dt);
+    relaxRate = Math.min(1 / 3600, 1 / dt); stepDt = dt;
     compute((pass) => dispatch(pass, 'oGradEta', group(ob.S, ob.T), E));
     tendency(ob.S, ob.K1);
     barotropicStep(dt, ob.K1);

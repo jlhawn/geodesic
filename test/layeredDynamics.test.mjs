@@ -5,6 +5,7 @@ import { buildMesh } from '../js/mesh.module.js';
 import { cellVector, laplacianVelocity } from '../js/dynamics/operators.module.js';
 import { createOcean, closureVelocity, THIN, EPS } from '../js/ocean/layered.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
+import { seawaterDensity } from '../js/ocean/seawater.module.js';
 import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, totalHeatSalt, northwardMixedTransport, slowOcean } from './helpers/layered.mjs';
 
 test('the ocean at rest under zero stress on a bumpy bottom stays at rest and conserves heat, salt and surface temperature', () => {
@@ -158,33 +159,72 @@ test('wind-driven advection over 100 steps conserves total heat and salt', () =>
   assert.equal(ocean.diagnostics().oceanLimited, 0);
 });
 
-test('interfacial drag moves momentum between the layers at an edge without changing the column\'s, the classes a few metres thick included', () => {
+test('interfacial drag, constant or from the shear, moves momentum between the layers at an edge without changing the column\'s, the classes a few metres thick included', () => {
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C);
-  const build = (interfacialDrag) => {
-    const ocean = createOcean(mesh, { everySteps: 1, interfacialDrag });
+  const build = (options) => {
+    const ocean = createOcean(mesh, { everySteps: 1, ...options });
     ocean.initialize(Float64Array.from(surfaceT), ice);
     for (let n = 0; n < ocean.u.length; n++) ocean.u[n] = 0.2 * Math.sin(0.7 * Math.floor(n / E) + 0.37 * (n % E));
     ocean.tendency(ocean.state, ocean.stages[0]);
     return ocean;
   };
-  const dragging = build(5e-5), still = build(0), L = dragging.layers;
-  const hEdge = new Float64Array(dragging.shared.hEdge), du = dragging.stages[0][1], du0 = still.stages[0][1];
-  let worst = 0, largest = 0, thin = 0;
-  for (let e = 0; e < E; e++) {
-    if (!dragging.edgeOcean[e]) continue;
-    let net = 0;
-    for (let k = 0; k < L; k++) {
-      const n = k * E + e;
-      if (k > 0 && hEdge[n] < THIN) continue;
-      if (k > 0 && hEdge[n] < 50) thin++;
-      const moved = hEdge[n] * (du[n] - du0[n]);
-      net += moved; largest = Math.max(largest, Math.abs(moved));
+  const still = build({ shearMixing: false, interfacialDrag: 0 }), du0 = still.stages[0][1];
+  for (const options of [{ shearMixing: false, interfacialDrag: 5e-5 }, { shearMixing: true, interfacialDrag: 5e-5 }]) {
+    const dragging = build(options), L = dragging.layers;
+    const hEdge = new Float64Array(dragging.shared.hEdge), du = dragging.stages[0][1];
+    let worst = 0, largest = 0, thin = 0;
+    for (let e = 0; e < E; e++) {
+      if (!dragging.edgeOcean[e]) continue;
+      let net = 0;
+      for (let k = 0; k < L; k++) {
+        const n = k * E + e;
+        if (k > 0 && hEdge[n] < THIN) continue;
+        if (k > 0 && hEdge[n] < 50) thin++;
+        const moved = hEdge[n] * (du[n] - du0[n]);
+        net += moved; largest = Math.max(largest, Math.abs(moved));
+      }
+      worst = Math.max(worst, Math.abs(net));
     }
-    worst = Math.max(worst, Math.abs(net));
+    console.log(`${JSON.stringify(options)}: ${thin} layer edges between ${THIN} and 50 m thick; the largest momentum moved by the drag ${largest.toExponential(2)} m²/s², the largest column imbalance ${worst.toExponential(2)}`);
+    assert.ok(thin > 100, `only ${thin} thin layer edges`);
+    assert.ok(largest > 1e-7 && worst < 1e-12 * largest, `the drag changes a column's momentum by ${worst} against ${largest} moved`);
   }
-  console.log(`${thin} layer edges between ${THIN} and 50 m thick; the largest momentum moved by the drag ${largest.toExponential(2)} m²/s², the largest column imbalance ${worst.toExponential(2)}`);
-  assert.ok(thin > 100, `only ${thin} thin layer edges`);
-  assert.ok(worst < 1e-12 * largest, `the drag changes a column's momentum by ${worst} against ${largest} moved`);
+});
+
+test('under shearMixing the drag between the mixed layer and the class beneath follows the Pacanowski–Philander viscosity of their Richardson number from the full velocity difference, no less than interfacialDrag', () => {
+  const ocean = createOcean(mesh, { everySteps: 1, shearMixing: true, interfacialDrag: 0 }), floored = createOcean(mesh, { everySteps: 1, shearMixing: true, interfacialDrag: 5e-5 });
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2);
+  ocean.initialize(Float64Array.from(surfaceT), new Float64Array(C));
+  floored.initialize(Float64Array.from(surfaceT), new Float64Array(C));
+  const L = ocean.layers, rho = ocean.densities, hEdge = new Float64Array(ocean.shared.hEdge), g = 9.81, rho0 = 1025;
+  let lowest = Infinity;
+  const mixed = (i) => seawaterDensity(ocean.Q[i] / ocean.h[i], ocean.W[i] / ocean.h[i]);
+  const errors = [], richardsons = [];
+  for (const speed of [0.05, 0.1, 0.2, 0.4, 0.8]) {
+    ocean.u.fill(0);
+    for (let e = 0; e < E; e++) ocean.u[e] = speed * (-mesh.xEdge[3 * e + 1] * mesh.nEdge[3 * e] + mesh.xEdge[3 * e] * mesh.nEdge[3 * e + 1]);
+    ocean.tendency(ocean.state, ocean.stages[0]);
+    floored.u.set(ocean.u);
+    floored.tendency(floored.state, floored.stages[0]);
+    for (let e = 0; e < E; e++) {
+      if (!ocean.edgeOcean[e] || Math.abs(mesh.latEdge[e]) > 40 * DEG) continue;
+      let k = 1;
+      while (k < L && hEdge[k * E + e] < THIN) k++;
+      if (k === L) continue;
+      const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+      const dz = Math.max(THIN, 0.5 * (hEdge[e] + hEdge[k * E + e])), buoyancy = Math.max(0, g * (rho[k] - 0.5 * (mixed(a) + mixed(b))) / rho0);
+      const shear = speed ** 2 * (mesh.xEdge[3 * e] ** 2 + mesh.xEdge[3 * e + 1] ** 2), richardson = buoyancy * dz / shear;
+      const expected = (1e-2 / (1 + 5 * richardson) ** 2 + 1e-4) / dz, rate = ocean.interfaceRate(e, 0, k);
+      lowest = Math.min(lowest, floored.interfaceRate(e, 0, k) / Math.max(5e-5, rate));
+      if (richardson < 2 && rate < 0.99 * 0.5 * Math.min(Math.max(hEdge[e], 20), Math.max(hEdge[k * E + e], THIN)) / 3600) { errors.push(Math.abs(rate / expected - 1)); richardsons.push(richardson); }
+    }
+  }
+  errors.sort((p, q) => p - q); richardsons.sort((p, q) => p - q);
+  const at = (list, p) => list[Math.floor(p * (list.length - 1))];
+  console.log(`${errors.length} mixed-layer bases at Ri below 2 (${at(richardsons, 0.1).toFixed(2)}–${at(richardsons, 0.9).toFixed(2)}, 10th–90th percentile): the drag coefficient within ${(100 * at(errors, 0.5)).toFixed(1)}% of the Pacanowski–Philander value at the median, ${(100 * at(errors, 0.9)).toFixed(1)}% at the 90th percentile`);
+  assert.ok(errors.length > 100 && at(richardsons, 0.1) < 0.3, `${errors.length} interfaces over Ri ${at(richardsons, 0.1)}–${at(richardsons, 0.9)}`);
+  assert.ok(at(errors, 0.5) < 0.05 && at(errors, 0.9) < 0.2, `median ${at(errors, 0.5)}, 90th percentile ${at(errors, 0.9)}`);
+  assert.ok(Math.abs(lowest - 1) < 1e-12, `with interfacialDrag 5e-5 m/s the coefficient is the larger of that and the viscosity's (${lowest})`);
 });
 
 test('closureVelocity gives the token edges beside a class a weighted share of the class\'s own flow, and the closure then pulls the class less toward the flow of the layer above them', () => {

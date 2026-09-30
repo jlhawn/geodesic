@@ -21,7 +21,7 @@ const FILE = process.argv[2];
 if (!FILE) throw new Error('usage: node scripts/equatorialOcean.mjs <state.bin>');
 const LAT = Number(process.env.LAT ?? 2);
 const OCEAN = { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') };
-const DEFAULTS = { interfacialDrag: 2e-4, bottomDrag: 3e-3, minimumThickness: 50, vorticityCentring: 0.5, closureHours: 12, closureFill: 0, density: 1025, gravity: 9.81 };
+const DEFAULTS = { bottomDrag: 3e-3, minimumThickness: 50, vorticityCentring: 0.5, closureHours: 12, closureFill: 0, density: 1025, gravity: 9.81 };
 const opt = { ...DEFAULTS, ...OCEAN };
 const say = (s = '') => console.log(s);
 const f = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '—');
@@ -165,6 +165,7 @@ row('  its depth (m)', binMean((i) => { let m = -Infinity, zm = NaN; for (let z 
 
 // ---------------- 4. momentum budget by term ----------------
 const stage = ocean.stages[0];
+new Float64Array(ocean.shared.params)[1] = dtOcean;
 ocean.tendency(ocean.state, stage);
 const du = stage[1];
 const terms = ['coriolis f', 'rel. vorticity', '-grad K', '-g grad eta', 'baroclinic PGF', 'stress', 'drag above', 'drag below', 'bottom drag', 'nu4 closure', 'thin-layer relax'];
@@ -202,8 +203,8 @@ for (let k = 0; k < L; k++) {
     budget[3][n] = -g * gradEta[e];
     budget[4][n] = k === 0 ? -g / rho0 * 0.5 * hEdge[e] * gradRho[e] : -gradP[e];
     if (k === 0) budget[5][n] = ocean.stress[e] / rho0 / he;
-    if (k > 0) { let j = k - 1; while (j > 0 && hEdge[ae(j, e)] < THIN) j--; budget[6][n] = opt.interfacialDrag * (u[ae(j, e)] - u[n]) / hd; }
-    if (k < L - 1) { let j = k + 1; while (j < L - 1 && hEdge[ae(j, e)] < THIN) j++; if (hEdge[ae(j, e)] >= THIN) budget[7][n] = -opt.interfacialDrag * (u[n] - u[ae(j, e)]) / hd; }
+    if (k > 0) { let j = k - 1; while (j > 0 && hEdge[ae(j, e)] < THIN) j--; budget[6][n] = ocean.interfaceRate(e, j, k) * (u[ae(j, e)] - u[n]) / hd; }
+    if (k < L - 1) { let j = k + 1; while (j < L - 1 && hEdge[ae(j, e)] < THIN) j++; if (hEdge[ae(j, e)] >= THIN) budget[7][n] = -ocean.interfaceRate(e, k, j) * (u[n] - u[ae(j, e)]) / hd; }
     let isBottom = k === L - 1;
     if (!isBottom) { isBottom = true; for (let j = k + 1; j < L; j++) if (hEdge[ae(j, e)] >= THIN) { isBottom = false; break; } }
     if (isBottom) budget[8][n] = -opt.bottomDrag * Math.abs(u[n]) * u[n] / he;
