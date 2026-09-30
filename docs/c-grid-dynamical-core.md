@@ -2654,6 +2654,76 @@ On any touch screen, one finger turns the globe; two pan, pinch to zoom
 about their midpoint, and roll once they twist past about 11° (the
 maths is in `js/gestures.module.js`).
 
+### M21 — Measurable subsidence and convection — planned (audit of Sept 29 2026)
+
+An audit of the day-183 state of the fresh-atlas paired run (N=128,
+bl34, 44-class ocean) measured what the atmosphere does with vertical
+motion and convection, against reanalysis values for September. The
+mean circulation is right: the southern Hadley cell peaks at
+144·10⁹ kg/s, the Walker cell rises over the warm pool and sinks over
+the east Pacific at Earth's rates, and the SE Pacific box sinks at
+0.050 Pa/s at 700 hPa. Per cell the diagnosed vertical motion is not
+usable: 55–68 % of its variance in the lower troposphere sits at the
+neighbouring-cell scale (0.2 % for π and θ), the lowest-layer
+divergence is white noise, and the deck's ten-day mean subsidence is
+still 85 % grid-scale, so the 30 % of SE Pacific columns that fail
+the 0.3 mm/s gate fail on noise around an adequate 1.2 mm/s mean. The
+noise is the divergent computational branch of the hexagonal C-grid
+that §8 anticipates. Convection is the simplified Betts–Miller
+relaxation: it lifts the 40 m surface layer with no inhibition, no
+entrainment and no downdraft, fires shallow tops in the deck regions
+(SE Pacific 1.47 mm/d against Earth's 0.1–0.3, 7 % of the box firing
+per step, low cloud 0.08 against 0.6–0.7), heats and dries the
+subcloud layer by 34 K/d and 45 g/kg/d in firing ITCZ columns, and
+keeps its convective/large-scale split only as unreported global
+sums. The ITCZ sits on the equator (zonal-mean rain peak 4.9 mm/d at
+2.5S; Earth 6–7 at 8N) and the central Pacific ITCZ is missing, with
+descent at 500 hPa where Earth's strongest rain band rises; the
+equatorial SST is uniform at 26 °C, the eastern thermocline at 90 m,
+and the surface current east of 140W 0.06 m/s against Earth's 0.2.
+
+The work, in order:
+
+1. Diagnostics. Per-cell daily convective and large-scale rain,
+   saved in the state, printed in the spin-up log and mapped in the
+   quarterly report; the audit scripts promoted into `scripts/` as a
+   snapshot tool whose headline numbers (deck-box rain, firing
+   fraction, inversion jump, stability, ten-day sink; ITCZ ascent and
+   rain) the report prints; an equatorial ocean line (surface and
+   thermocline-class zonal current, stress, mixed-layer depth,
+   thermocline tilt).
+2. The deck gate. The vertical mass flux smoothed over neighbouring
+   cells before it is interpolated to the deck height (the page's
+   overlay already does this), the memory shortened from ten days to
+   about two, the inversion jump made the primary regime test, the
+   height bound checked (the SE Pacific deck sits at 730 m under a
+   resolved inversion at 1330 m). Separately, an ablation of weak
+   divergence damping in the core against its eddy cost.
+3. Convection. A boundary-layer-mean parcel with virtual temperature
+   and an entraining ascent; a trigger on dilute CAPE and inhibition
+   with a short memory; adjustment from cloud base up only, with a
+   share of the rain evaporating in the subcloud layer; a shallow,
+   non-precipitating mixing-line branch for tops below about 700 hPa
+   and no firing under an active deck; autoconversion kept out of the
+   lowest layers and evaporation below cloud base, to stop the
+   ±10 K/d condensation–evaporation churn in the lowest 100 m.
+   Sounding tests (a stratocumulus profile must not fire, a deep
+   tropical one must, with peak heating at 400–500 hPa and none below
+   cloud base), conservation, CPU–GPU parity, and regression on the
+   audited state: SE Pacific rain under 0.3 mm/d, firing under 1 % a
+   step, low cloud above 0.4.
+4. The ocean's wind response, diagnosed on the day-274 state before
+   it is changed: stress against 0.05 N/m² on the equator, mixed-layer
+   depth against 30–50 m in the east, whether an undercurrent exists
+   in the thermocline classes, the momentum sinks. Acceptance: a
+   0.2 m/s westward surface current east of 140W, an undercurrent of
+   0.5–1 m/s near 100 m, an eastern thermocline at 40–60 m, and 2 K
+   between the warm pool and the cold tongue held through a year.
+5. One-year N=64 runs from the atlas start, audited at day 183 with
+   the tools of item 1, before a new paired spin-up. A mass-flux
+   convection scheme stays deferred until the central Pacific ITCZ and
+   the Walker cell still fail with all of the above in place.
+
 ## 7. Module layout in this repo
 
 ```
