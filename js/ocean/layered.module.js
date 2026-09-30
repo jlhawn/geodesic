@@ -317,10 +317,9 @@ export function closureCoefficient(spacing, closureHours, closureSpacing = CLOSU
  * normal velocities of those neighbours (edgesOnEdge) and the rest of
  * their own. A token edge's own velocity is the layer's above, the mixed
  * layer's where the class has outcropped, toward which the closure pulls
- * the class. That pull also holds the class's edges beside its tokens:
- * the whole fit there ran them to the speed limit within a week of a
- * coupled N=64 run, and half of it clamped edges on 13 of 60 days, so
- * `closureFill` is off by default (docs/c-grid-dynamical-core.md, M21).
+ * the class. That pull also holds the class's edges beside its tokens,
+ * and coupled runs with the fit clamp there, so `closureFill` is off by
+ * default (docs/c-grid-dynamical-core.md, M21).
  */
 export const CLOSURE_RIDGE = 0.1;
 export function closureVelocity(mesh, u, hEdge, edgeOcean, weight, out) {
