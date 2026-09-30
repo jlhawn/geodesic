@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, P0, CP_DRY, R_DRY } from '../js/dynamics/sigmaCore.module.js';
-import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex } from '../js/physics/radiation.module.js';
+import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex, ringMean } from '../js/physics/radiation.module.js';
+import { smoothCells } from '../js/levels.module.js';
 import { LATENT_HEAT, saturationHumidity, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { createSurface } from '../js/physics/surface.module.js';
 import { createModel } from '../js/model.module.js';
@@ -542,23 +543,53 @@ test('the mixed-layer deck needs subsidence and a capping inversion: a column un
   core.diagnostics.piSigmaDot.fill(0);
 });
 
-test('the regime test reads the subsidence averaged over subsidenceMemory: a column that starts sinking gains its deck only once the running mean passes the floor', () => {
+test('the regime test reads the subsidence averaged over subsidenceMemory: a column that turns from rising to sinking gains its deck once the running mean passes the threshold', () => {
   const instant = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9, ...REDIAGNOSED }), memory = createRadiation(mesh, core, { mixedLayerDeck: true, ...REDIAGNOSED });
   instant.setTime(0); memory.setTime(0);
-  const noon = brightest(memory), column = mixedLayerColumn(0.4), dt = 3600, keep = Math.exp(-dt / (10 * DAY));
+  const { subsidenceMemory, stratusSubsidence } = memory.deckGates;
+  assert.equal(subsidenceMemory, 2 * DAY);
+  const noon = brightest(memory), column = mixedLayerColumn(0.4), dt = 3600, keep = Math.exp(-dt / subsidenceMemory);
   mixedLayerRun(instant, noon, column, 1, dt);
   const sinking = instant.mlmSubsidence[noon];
-  let first = -1;
+  memory.mlmSubsidence[noon] = -sinking;
+  let first = -1, expected = -sinking;
   for (let n = 1; n <= 48; n++) {
     const deck = mixedLayerRun(memory, noon, column, 1, dt);
-    const expected = sinking * (1 - keep ** n);
+    expected = expected * keep + sinking * (1 - keep);
     assert.ok(Math.abs(memory.mlmSubsidence[noon] - expected) < 1e-12 * Math.abs(sinking), `step ${n}: ${memory.mlmSubsidence[noon]} against ${expected}`);
-    assert.equal(deck.mlmCover > 0, expected <= -3e-4, `step ${n}`);
+    assert.equal(deck.mlmCover > 0, expected <= -stratusSubsidence, `step ${n}`);
     if (first < 0 && deck.mlmCover > 0) first = n;
   }
-  console.log(`under a steady ${(1000 * sinking).toFixed(2)} mm/s the 10-day mean passes −0.3 mm/s and the deck appears after ${first} hourly steps`);
+  console.log(`a column that rose at ${(-1000 * sinking).toFixed(2)} mm/s and now sinks as fast: its ${subsidenceMemory / DAY}-day mean passes ${(-1000 * stratusSubsidence).toFixed(2)} mm/s and the deck appears after ${first} hourly steps`);
   assert.ok(first > 1 && first < 48);
   core.diagnostics.piSigmaDot.fill(0);
+});
+
+test('the deck reads πσ̇ averaged over the cell and its neighbours, twice over, at the two interfaces bracketing h: its subsidence is that of the field smoothCells smooths twice, and grid-scale noise in πσ̇ barely reaches it', () => {
+  const rnd = random(11), field = Float64Array.from({ length: C }, () => rnd() - 0.5);
+  for (let passes = 0; passes <= 2; passes++) {
+    let smoothed = Float64Array.from(field);
+    for (let p = 0; p < passes; p++) smoothed = smoothCells(mesh, smoothed, new Float64Array(C));
+    for (let i = 0; i < C; i++) assert.equal(ringMean(mesh, field, 0, i, passes), smoothed[i], `cell ${i}, ${passes} passes`);
+  }
+  assert.throws(() => createRadiation(mesh, core, { subsidenceSmoothing: 3 }));
+  const read = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED }), unsmoothed = createRadiation(mesh, core, { subsidenceMemory: 1e-9, subsidenceSmoothing: 0, ...REDIAGNOSED });
+  read.setTime(0); unsmoothed.setTime(0);
+  const column = mixedLayerColumn(0.4), { piSigmaDot } = core.diagnostics;
+  for (let k = 1; k < K; k++) for (let i = 0; i < C; i++) piSigmaDot[k * C + i] += 0.4 * (rnd() - 0.5);
+  const raw = Float64Array.from(piSigmaDot), presmoothed = Float64Array.from(raw);
+  for (let k = 1; k < K; k++) presmoothed.set(smoothCells(mesh, smoothCells(mesh, raw.subarray(k * C, (k + 1) * C), new Float64Array(C)), new Float64Array(C)), k * C);
+  const w = (r) => Float64Array.from({ length: C }, (_, i) => { mixedLayerRun(r, i, column, 1, 900); return r.mlmSubsidence[i]; });
+  const smoothedRead = w(read), noisy = w(unsmoothed);
+  piSigmaDot.set(presmoothed);
+  const readOfSmoothed = w(unsmoothed);
+  const spread = (x) => { const m = x.reduce((a, b) => a + b, 0) / C; return Math.sqrt(x.reduce((a, b) => a + (b - m) ** 2, 0) / C); };
+  let worst = 0;
+  for (let i = 0; i < C; i++) worst = Math.max(worst, Math.abs(smoothedRead[i] - readOfSmoothed[i]) / Math.abs(readOfSmoothed[i]));
+  console.log(`under ±0.2 Pa/s of cell-to-cell noise on a 0.04 Pa/s sink the deck's subsidence spreads over cells by ${(1000 * spread(noisy)).toFixed(2)} mm/s unsmoothed and ${(1000 * spread(smoothedRead)).toFixed(2)} mm/s as it reads it; against the presmoothed field it agrees to ${worst.toExponential(1)}`);
+  assert.ok(worst < 1e-12, `the deck's reading against the presmoothed field: ${worst}`);
+  assert.ok(spread(smoothedRead) < 0.3 * spread(noisy), `spread ${spread(smoothedRead)} against ${spread(noisy)}`);
+  piSigmaDot.fill(0);
 });
 
 function boundaryLayerTop(column, i) {

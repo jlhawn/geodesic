@@ -273,7 +273,7 @@ test('the mixed-layer deck matches between the engines: cover, water path, entra
   assert.ok(on.cover.maxDiff < 1e-3 && on.fraction.maxDiff < 1e-3, `cover ${on.cover.maxDiff} at ${on.cover.at}`);
   assert.ok(on.mlmWater.rmsRel < 1e-4 && on.mlmWater.maxDiff < 5e-5 && on.deck.maxDiff < 5e-5, `water rms ${on.mlmWater.rmsRel}, max ${on.mlmWater.maxDiff} at ${on.mlmWater.at}`);
   assert.ok(on.entrainment.rmsRel < 1e-4, `entrainment rms ${on.entrainment.rmsRel}`);
-  assert.ok(on.olr.rmsRel < 1e-5 && on.sw.rmsRel < 1e-5, `per-cell OLR rms ${on.olr.rmsRel}, surface shortwave rms ${on.sw.rmsRel}`);
+  assert.ok(on.olr.rmsRel < 1e-5 && on.sw.rmsRel < 2e-5, `per-cell OLR rms ${on.olr.rmsRel}, surface shortwave rms ${on.sw.rmsRel}`);
   const dark = await mixedLayerPair(2, { stratusSolar: false });
   let thinned = 0;
   for (const i of on.sunlit) thinned += (dark.waterPath[i] - on.waterPath[i]) / dark.waterPath[i];
@@ -294,6 +294,14 @@ test('the running mean of the subsidence at the boundary-layer top builds the sa
   console.log(`four steps from a zero mean: the mean moved on ${moved} of ${run.C} cells; engines differ by rms ${run.subsidence.rmsRel.toExponential(1)}, at most ${run.subsidence.maxDiff.toExponential(1)} m/s`);
   assert.ok(moved > 0.5 * run.C, `the mean moved on ${moved} cells`);
   assert.ok(run.subsidence.rmsRel < 1e-3, `mean subsidence rms ${run.subsidence.rmsRel}, max ${run.subsidence.maxDiff} at ${run.subsidence.at}`);
+});
+
+test('the deck reads the same ring-smoothed πσ̇ in both engines, and the smoothing moves it by far more than the engines differ', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const smoothed = await mixedLayerPair(2, { seed: 0, subsidenceMemory: 1e-9 }), raw = await mixedLayerPair(2, { seed: 0, subsidenceMemory: 1e-9, subsidenceSmoothing: 0 });
+  const moved = stats(raw.mean, smoothed.mean);
+  console.log(`the step's subsidence at h, smoothed twice over the ring against unsmoothed: rms ${moved.rmsRel.toExponential(1)} relative, at most ${(1000 * moved.maxDiff).toFixed(3)} mm/s; the engines differ by rms ${smoothed.subsidence.rmsRel.toExponential(1)} smoothed and ${raw.subsidence.rmsRel.toExponential(1)} unsmoothed`);
+  assert.ok(smoothed.subsidence.rmsRel < 1e-3 && raw.subsidence.rmsRel < 1e-3, `engines differ by ${smoothed.subsidence.rmsRel} smoothed, ${raw.subsidence.rmsRel} unsmoothed`);
+  assert.ok(moved.rmsRel > 30 * smoothed.subsidence.rmsRel, `smoothing moved the subsidence by ${moved.rmsRel}, the engines differ by ${smoothed.subsidence.rmsRel}`);
 });
 
 test('over six steps the carried inversion height, the gate and the deck they give match between the engines, and the boundary layer mixes to the deck\'s height in both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

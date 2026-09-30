@@ -27,6 +27,7 @@ export function physicsConstants(o) {
   const m = { ...MIXED_LAYER_DEFAULTS, cloudLevels: DECK_CLOUD_LEVELS, ...o.mixedLayer };
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
+  if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
   return `
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
 const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudScattering}; const CLOUD_SW: f32 = ${o.cloudSolarAbsorption}; const WINDOW: f32 = ${o.window}; const GAS_FRAC: f32 = ${o.gasFraction};
@@ -45,7 +46,7 @@ const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
 const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
-const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight};
+const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight};
 const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 `;
 }
@@ -316,6 +317,20 @@ fn mlmInterface(i: i32, m: i32) -> f32 {
   let idx = m * C + i;
   return (D[D_GEO + idx] + LV[L_GABS + m] + CP * D[D_THV + idx] * (D[D_EXM + idx] - D[D_EXL + idx - C])) / GRAV;
 }
+fn mlmRing(i: i32, m: i32) -> f32 {
+  let n = MI[NEC + i];
+  var sum = D[D_PSD + m * C + i];
+  for (var s = 0; s < MAXE; s++) { if (s < n) { sum += D[D_PSD + m * C + MI[COC + MAXE * i + s]]; } }
+  return sum / f32(n + 1);
+}
+fn mlmFlow(i: i32, m: i32) -> f32 {
+  if (MLM_PASSES == 0) { return D[D_PSD + m * C + i]; }
+  if (MLM_PASSES == 1) { return mlmRing(i, m); }
+  let n = MI[NEC + i];
+  var sum = mlmRing(i, m);
+  for (var s = 0; s < MAXE; s++) { if (s < n) { sum += mlmRing(MI[COC + MAXE * i + s], m); } }
+  return sum / f32(n + 1);
+}
 fn mlmCeiling(i: i32, floor: f32) -> f32 {
   for (var k = K - 2; k >= 1; k--) {
     let upper = (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV;
@@ -343,14 +358,16 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
   }
   if (k < 1) { mlmRest(i, depth, dt); return none; }
   let above = k * C + i; let aboveCloud = max(0.0, IN[S_QC + above]);
-  var lowerHeight = 0.0; var lowerFlow = 0.0; var m = K - 1;
+  var lowerHeight = 0.0; var lower = K; var m = K - 1;
   for (; m > k; m--) {
     let z = mlmInterface(i, m);
     if (!(z < h)) { break; }
-    lowerHeight = z; lowerFlow = D[D_PSD + m * C + i];
+    lowerHeight = z; lower = m;
   }
   let upperHeight = mlmInterface(i, m);
-  let flow = lowerFlow + (D[D_PSD + m * C + i] - lowerFlow) * (h - lowerHeight) / (upperHeight - lowerHeight);
+  var lowerFlow = 0.0;
+  if (lower < K) { lowerFlow = mlmFlow(i, lower); }
+  let flow = lowerFlow + (mlmFlow(i, m) - lowerFlow) * (h - lowerHeight) / (upperHeight - lowerHeight);
   let density = pi * LV[L_SM + m] / (RGAS * D[D_THV + m * C + i] * D[D_EXM + m * C + i]);
   let subsidence = -flow / (density * GRAV);
   let x = dt / MLM_MEMORY;

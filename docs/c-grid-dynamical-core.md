@@ -1036,8 +1036,10 @@ model of `js/physics/mixedLayer.module.js` (Lilly 1968; Bretherton &
 Wyant 1997; Stevens 2002) from its own state — h the deck's inversion
 height carried from the last step (`prognosticHeight`), θ_l and q_t
 the means of the layers below it, the first layer above h as the free
-troposphere, the subsidence −πσ̇/(ρg) at h, the column's bulk surface
-fluxes and the DYCOMS-II longwave on the model's own liquid water —
+troposphere, the subsidence −πσ̇/(ρg) at h (πσ̇ averaged with equal
+weights over the cell and its neighbours, twice over,
+`subsidenceSmoothing`, at the two interfaces bracketing h), the
+column's bulk surface fluxes and the DYCOMS-II longwave on the model's own liquid water —
 advances it one physics step, keeps the new h, and takes its cover (1
 when coupled, down to 0.3 as the buoyancy-integral ratio decouples it)
 times 1 − A and its water path, at most `stratusWaterMax`, as the
@@ -1052,11 +1054,16 @@ runs; unset (0) it starts from that depth. Where the deck runs, the
 boundary layer's K-profile spans max(Richardson depth, h), so the
 column is mixed through the deck's layer. The deck runs only in the
 stratocumulus regime, under a capping jump Δθ_v ≥ 2 K and a mean
-subsidence of at least 0.3 mm/s at h. The subsidence test reads a
-ten-day running mean (`subsidenceMemory`), because the large-scale
-subsidence that defines the regime is a small residual of the
-±10 mm/s synoptic swings in any one step's πσ̇ (the DYCOMS-II
-divergence is itself a monthly mean), and the deck follows a one-day
+subsidence of at least 0.3 mm/s at h. One stage's πσ̇ carries the
+divergent computational mode of the hexagonal C-grid at the
+neighbouring-cell scale: on the day-183 N=128 state the sink at h
+spreads over the SE Pacific's cells by 30 mm/s about a mean of
+1.5 mm/s, 97 % of its variance at that scale, and the two ring passes
+leave 8.6 mm/s about 1.6 mm/s with 12 % there. The subsidence test
+reads a two-day running mean of the smoothed sink
+(`subsidenceMemory`), because the large-scale subsidence that defines
+the regime is still a small residual of the synoptic swings, and the
+deck follows a one-day
 running mean G of the two tests' pass (`gateMemory`), running while
 G > 0.5: a standing deck outlives failing tests by 17 h and a new one
 waits as long, where the instantaneous Δθ_v test, hovering about 2 K,
