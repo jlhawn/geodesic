@@ -2755,6 +2755,108 @@ The work, in order:
    height bound checked (the SE Pacific deck sits at 730 m under a
    resolved inversion at 1330 m). Separately, an ablation of weak
    divergence damping in the core against its eddy cost.
+
+   Built. Both engines average πσ̇ with equal weights over the cell and
+   its neighbours, twice over (`subsidenceSmoothing` 2), at the two
+   interfaces bracketing h, and the running mean remembers two days
+   (`subsidenceMemory`); the smoothed value feeds the mixed layer's
+   dh/dt as well. On the day-183 N=128 state the SE Pacific's
+   deck-height sink keeps its box mean (1.52 → 1.57 mm/s) while its
+   per-cell spread falls from 29.7 to 8.6 mm/s (× 3.45) and the
+   grid-scale share of its variance from 0.97 to 0.12; Peru's spread
+   falls from 17.5 to 6.7 mm/s about 0.93 → 1.12 mm/s, inside the raw
+   box mean's grid-noise uncertainty of 1.2 mm/s (N=64: 13.1 → 5.0 mm/s
+   about 2.86 → 2.48). After five days the saved running mean is
+   3–8 % grid-scale in the two boxes, where the ten-day unsmoothed one
+   was 55–85 % on day 183 and 69–99 % after the same five days.
+   `scripts/verticalAudit.mjs` prints the deck-height sink as the
+   dynamics leaves it and as the deck reads it, replicates the gate from
+   the physics phase's own inputs (exactly, in running mean, gate and
+   decision) and attributes each column-step: the deck runs, or is off
+   on the subsidence, on the jump, or on the gate's memory. On the
+   day-183 state, with its saved ten-day mean, the SE Pacific deck ran
+   on 0.089 of the column-steps and 0.303 failed the 0.3 mm/s floor;
+   after five days of the smoothed two-day mean (run `p2a128`, the floor
+   kept) the mean sink at h is 1.76 mm/s in the SE Pacific and
+   2.12 mm/s in Peru with a spread over the cells as large, the floor
+   still refuses 0.19 and 0.22 of the column-steps, and the jump test
+   fails on 0.82 and 0.50. The regime test is therefore the jump alone
+   and the subsidence only vetoes ascent faster than 1 mm/s
+   (`stratusSubsidence` −1 mm/s, about twice the mean's grid-scale
+   residual), which on day 188 refuses 6 % of the SE Pacific and 5 % of
+   Peru against 51 % of the warm pool and 44 % of the Pacific ITCZ.
+   Five-day N=128 continuations from day 183, audited on day 188 (SE
+   Pacific; the saved running mean's box mean, spread and grid-scale
+   share):
+
+   | day 188, SE Pacific | ten-day, unsmoothed, 0.3 mm/s | package gate | package gate, c = 0.03 |
+   |---|---|---|---|
+   | saved sink, mm/s (spread, grid share) | 1.47 (2.46, 0.99) | 1.76 (1.71, 0.08) | 2.17 (1.57, 0.04) |
+   | deck runs, share of column-steps | 0.056 | 0.074 | 0.160 |
+   | failing the subsidence test | 0.276 | 0.059 | 0.026 |
+   | failing the jump test | 0.810 | 0.811 | 0.641 |
+   | deck's virtual jump at its start, K | 1.42 | 1.42 | 1.78 |
+   | deck height where it runs, m | 790 | 866 | 821 |
+   | resolved inversion, m (θv jump, K) | 1035 (2.75) | 1054 (2.78) | 1158 (3.37) |
+   | low cloud | 0.050 | 0.051 | 0.083 |
+   | rain, mm/d | 0.64 | 0.52 | 0.57 |
+   | Peru: deck runs (low cloud) | 0.272 (0.086) | 0.372 (0.072) | 0.510 (0.137) |
+   | ω700 grid-scale share, global | 0.642 | 0.632 | 0.181 |
+
+   On the day-183 state itself the start height (735 m), the height where
+   the deck runs (714 m under the old gate, 713 m under the new), the
+   resolved inversion (1328 m) and its jump (3.44 K) are the same under
+   both gates: an eight-step window cannot move the one-day gate memory.
+
+   The height. Where the SE Pacific deck is off (0.91 of the
+   column-steps on day 183) its start height is the Richardson depth by
+   construction: it relaxes there over `heightMemory`. Where it runs it
+   stands at 714 m, within 20 m of that floor on 0.54 of the
+   column-steps and at the ceiling on 0.03, never above the resolved
+   inversion: its mixed layer is cloud-free on 0.93 of them (cloud base
+   706 m for h 713 m, 2.1 g/m² of water), so the radiative closure
+   entrains 0.48 mm/s against 1.48 mm/s of subsidence and the layer
+   sinks to the floor; Peru is cloud-free on 0.98. The ceiling
+   (1063 m where the deck runs, lowest single-interface 2 K jump) lies
+   above the midpoint of the resolved inversion's upper layer (1006 m)
+   in some columns,
+   where a smeared inversion splits its jump over two interfaces, but it
+   binds on 3–6 % of the running column-steps, and replacing it by the
+   largest-gradient interface would favour the thin lowest layers. So
+   neither `bound`, the ceiling nor the height memory holds the deck
+   down: the entrainment–subsidence balance of a layer whose condensation
+   level sits at its top does, and the dry subcloud layer is the shallow
+   Betts–Miller firing's (item 3). Nothing in the bound was changed.
+   After five days the running SE Pacific decks are still cloud-free on
+   0.80 of their column-steps (0.90 with the damping) and within 20 m of
+   the floor on 0.44 (0.72), at the ceiling on 0.06 (0.02) and never
+   above the resolved inversion.
+
+   Divergence damping (`divergenceDamping`, c): each step the closure
+   adds c d² ∇(∇·u) to the edge velocities, the tendency ν_d ∇δ with
+   ν_d = c d²/dt and d the mean distance between cell centres, after
+   the ∇⁴ momentum closure in both engines; the kinetic energy it removes
+   is returned as heat with the closure's, it leaves the mass and the
+   vorticity untouched, and the engines agree to 3·10⁻⁴ m/s over twenty
+   N=8 steps. Ten days at N=64 from day 183 (day 193):
+
+   | c | ω700 grid-scale share | global mean KE, J/kg | EKE, J/kg |
+   |---|---|---|---|
+   | 0 | 0.557 | 150.5 | 49.2 |
+   | 0.01 | 0.320 | 149.0 (−1.0 %) | 50.6 (+2.7 %) |
+   | 0.03 | 0.183 | 147.7 (−1.9 %) | 50.4 (+2.4 %) |
+   | 0.05 | 0.143 | 146.5 (−2.7 %) | 49.3 (+0.1 %) |
+
+   (EKE from the cell-reconstructed winds less their 2° zonal means,
+   mass-weighted.) The eddy cost is nil within the runs' spread, so
+   `createModel` and `createGpuModel` default to c = 0.03
+   (`DIVERGENCE_DAMPING`); the SE Pacific's ten-day rain was 1.01, 0.99,
+   1.19 and 1.34 mm/d across the four runs, which item 3 has to watch.
+   At N=128 (the last column of the table above) it takes the global
+   ω700 grid-scale share from 0.63 to 0.18 in five days, the deck-height
+   sink's spread as the dynamics leaves it from 18.5 to 4.6 mm/s, and it
+   sharpens the SE Pacific inversion (3.37 against 2.78 K, EIS 3.11
+   against 2.65 K), so that the deck runs twice as often.
 3. Convection. A boundary-layer-mean parcel with virtual temperature
    and an entraining ascent; a trigger on dilute CAPE and inhibition
    with a short memory; adjustment from cloud base up only, with a
