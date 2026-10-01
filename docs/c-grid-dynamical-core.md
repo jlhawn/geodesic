@@ -3994,8 +3994,10 @@ ten-day and thirty-day tests of M21 balanced, and the pace.
 
 Built (`js/physics/boundaryLayer.module.js`, `pblDiagnose` and the
 adjust kernel of `js/gpu/physics.gpu.js`; `turbulence` 'moist', the
-default, 'dry' the M14/M21 scheme, which reproduces the parent 80b6bb9
-byte for byte over three GPU days at N=64 from eight64_day0183):
+default, 'dry' the M14/M21 scheme, which with the parent's moist
+defaults, `cloudLifetime` 3 h and `plumeCape` 70, reproduces the parent
+80b6bb9 byte for byte over three GPU days at N=64 from
+eight64_day0183; under the defaults below it does not):
 
 - Conserved variables. The implicit solve mixes θ_l = θ − L q_c/(c_p Π),
   q_t = q + q_c and the edges' momentum with one set of interface
@@ -4160,6 +4162,75 @@ What still misses: the N=64 balance (−10.5 against the parent's −7.5)
 and its albedo above 0.32 on four of eight days; the deck boxes' low
 cloud (0.24–0.53 at N=64, 0.25–0.43 at N=128) with the inversion at
 1.7–1.9 km; the Arctic ice loss (0.233); the SE Pacific drizzle.
+
+Review (Oct 1). Rerun from a copy of eight64_day0183, the ten-day N=64
+acceptance run reproduces `m22acc64` byte for byte, its log and its
+day-193 state. Twenty-four CPU steps at N=4 on bl34 give the parent's
+state digest under `turbulence` 'dry' with `cloudLifetime` 3 h and
+`plumeCape` 70, and a different one under 'dry' alone. The full suite
+(45 files, run concurrently) passes with nothing skipped.
+
+One CPU step of every column: on m22acc64_day0193 the boundary-layer
+mix keeps each mixed column's mass-weighted θ_l to 7.4·10⁻¹⁶ and q_t to
+8.4·10⁻¹⁶ relative (40,948 columns), leaves every layer outside the
+coefficients' reach exactly as it was, and keeps each edge's column
+momentum to 1.3·10⁻¹⁵ of Σm|u| (122,880 edges); eight64_day0183 the
+same to 7.6·10⁻¹⁶, 8.6·10⁻¹⁶ and 1.0·10⁻¹⁵, nine128_day0183 (163,772
+columns) to 9.0·10⁻¹⁶, 9.3·10⁻¹⁶ and 1.1·10⁻¹⁵. After the mix, the
+single linearized saturation adjustment of the moist step condenses
+34.05 g/m² per mixed column in the mixed layers against 33.82 when it
+is iterated to convergence (+0.7 %), the driest cloudy layer at 0.961
+humidity.
+
+The cloud-top scale on m22acc64_day0193: in the 11,798 columns with a
+cooling cloudy run, ΔF and V recomputed from the radiation's `longwave`
+(W/m², positive heating) agree with the diagnosis to 1.9·10⁻¹⁴; ΔF is
+3.3, 51.8 and 105.2 W/m² and V 0.32, 0.99 and 1.46 m/s at the 10th,
+50th and 90th percentiles; 1,642 runs whose longwave sum warms get no
+profile. In coupled columns w_e is 0.77, 6.89 and 32.75 mm/s at the
+same percentiles, above 10 mm/s in 0.40 of them and at the 5 cm/s cap
+in 0.030.
+
+The variance cover on the same state, over the 46,520 cloudy layers
+below the mixing top: none non-finite, all within the 0.01 floor and 1,
+0.028 overcast, 369 at the floor and 812 below one half, 0.483
+between 0.5 and 0.6; σ_s 0.027, 0.21 and 1.07 g/kg and Q₁ 0.020, 0.225 and 1.40 at the
+10th, 50th and 90th percentiles; the floor binds on 0.025 and the 30 m
+length on 0.550 of them. nine128_day0183: 283,462 layers, 0.053
+overcast, 0.427 between 0.5 and 0.6, σ_s median 0.32 g/kg.
+
+The regime against the deck's gate, the same step, open sea (27,581
+columns): stable 0.145, surface-driven 0.587, decoupled 0.165,
+coupled 0.103; the gate is open on 0.27, 0.08, 0.30 and 0.12 of
+each, so of the open gates 0.082 are coupled. SE Pacific coupled
+0.039 (gate open on 0.14 of them), Peru 0.080 (0.53), Namibia 0.253
+(0.88), California 0.022 (none). The deck's water is not in q_c, so
+where the deck runs the boundary layer finds no cloud top of its own.
+
+The radiation's variance cover reads the boundary layer's surface
+buoyancy flux of the step before; states did not carry it and the GPU
+model's load zeroed it, so the first step after a load used the 30 m
+length everywhere. Spin-up states now carry it (`boundaryBuoyancy`)
+and the GPU model mirrors it (`boundaryLayer.buoyancyFlux`). The
+in-day restart of `test/asyncSpinup.test.mjs` at N=6 is no closer for
+it: the largest daily-forcing difference is 3.1 % with it and 3.0 %
+without (netFlux, day 3), 2.4 % under `boundaryCover` 'pdf' and 1.5 %
+for the parent, so the test keeps 4 %. `scripts/verticalAudit.mjs` now
+starts its window from the state's depth, mixing top, regime and
+buoyancy flux, moving the saved heights, which the GPU measures from
+the surface, to the CPU's heights above sea level (on
+m22acc64_day0193, 2,254 of the 2,927 cells above 1 km would otherwise
+have their mixing top below their lowest layer); its first window step
+had run with no mixing top. Day 193 of `m22acc64` re-audited: low-cloud
+radiative cover 0.256, 0.367, 0.564, 0.072 (SE Pacific, Peru, Namibia,
+California), in-cloud water 226, 158, 103, 48 g/m², global rain 2.75
+mm/d, the gate replica exact over 6,696 column-steps.
+
+five64_day2281 (27 layers), six64_day1004, seven64_day0639,
+nine64_day0091, m21b64_day0183, eight64_day0183 and nine128_day0183
+load and take two CPU steps with nothing non-finite; five64_day2281
+and nine64_day0091 take 32 GPU steps and save regimes and mixing tops
+with nothing non-finite.
 
 ### M23 — The equatorial ocean — in progress
 
