@@ -175,7 +175,7 @@ function entrainingColumn(surfaceWarmth = 2) {
   return state;
 }
 
-function expectedEntrainment(state, layer, i, { efficiency = 0.2, shear = 5, cap = 0.05, jumpFloor = 0.015 } = {}) {
+function expectedEntrainment(state, layer, i, { efficiency = 0.2, shear = 5, cap = 0.05, jumpFloor = 0.015, shearOnset = 5e-5 } = {}) {
   const [pi, theta, , surfaceT, q] = state;
   const { exnerLayer, sigmaMid, kappa } = core.diagnostics, { thetaV } = core.arrays;
   const base = (K - 1) * C + i, zb = geopotential[base] / g, h = layer.depth[i] - zb;
@@ -186,7 +186,8 @@ function expectedEntrainment(state, layer, i, { efficiency = 0.2, shear = 5, cap
   let weight = 0, sum = 0;
   for (let k = above + 1; k < K; k++) { weight += dSigma[k]; sum += dSigma[k] * thetaV[k * C + i]; }
   const jump = g * (thetaV[above * C + i] - sum / weight) / (sum / weight);
-  return { above, buoyancy, jump, velocity: Math.min(cap, (efficiency * buoyancy + shear * friction ** 3 / h) / Math.max(jump, jumpFloor)) };
+  const onset = shearOnset > 0 ? Math.min(1, buoyancy / shearOnset) : 1;
+  return { above, buoyancy, jump, velocity: Math.min(cap, (efficiency * buoyancy + shear * onset * friction ** 3 / h) / Math.max(jump, jumpFloor)) };
 }
 
 test('a dry stable layer over a convective boundary layer is entrained at the closure\'s rate across the first interface above h, conserving the column\'s θ, water and momentum', () => {
@@ -230,19 +231,27 @@ test('a dry stable layer over a convective boundary layer is entrained at the cl
   console.log(`entraining column: h ${(layer.depth[i] - geopotential[(K - 1) * C + i] / g).toFixed(0)} m, B0 ${buoyancy.toExponential(2)} m²/s³, Δθv ${(jump * 300 / g).toFixed(2)} K, w_e ${(1000 * velocity).toFixed(2)} mm/s; one 900 s step moves ${(1000 * (qAbove - plainQ[idx] + q[idx] - qAbove) * mass).toFixed(1)} g/m² of water above h; column θ, water and momentum change by ${((after[0] - before[0]) / before[0]).toExponential(1)}, ${((after[1] + after[2] - before[1] - before[2]) / (before[1] + before[2])).toExponential(1)}, ${((momentum() - m0) / m0).toExponential(1)}`);
 });
 
-test('no entrainment where the deck\'s gate is above one half, from a stable surface, or where the closure\'s coefficients are zero; the cap and the jump floor bound it', () => {
-  const deckGate = new Float64Array(C).fill(0.3);
-  const layer = createBoundaryLayer(mesh, core, { deckGate });
+test('the deck\'s opening and the stratiform share taper w_e: a half-open gate or a share of one half halves it, a closed gate or an EIS of 12 K stops it; a stable surface, zero coefficients, the cap and the jump floor bound it', () => {
+  const deckGate = new Float64Array(C).fill(0.3), stratiform = new Float64Array(C);
+  const layer = createBoundaryLayer(mesh, core, { deckGate, stratiform });
   const warm = entrainingColumn(2);
   layer.diagnose(warm);
-  assert.ok(layer.entrainment[0] > 0);
-  deckGate[0] = 0.5;
-  layer.diagnose(warm);
-  assert.ok(layer.entrainment[0] > 0, 'a gate of one half leaves the top to the boundary layer');
-  deckGate[0] = 0.51;
-  layer.diagnose(warm);
-  assert.equal(layer.entrainment[0], 0, 'above one half the deck owns it');
-  assert.ok(layer.entrainment[1] > 0);
+  const full = expectedEntrainment(warm, layer, 0).velocity;
+  assert.ok(full > 0 && Math.abs(layer.entrainment[0] - full) < 1e-12 * full);
+  const at = (gate, share) => { deckGate[0] = gate; stratiform[0] = share; layer.diagnose(warm); return layer.entrainment[0]; };
+  assert.equal(at(0.5, 0), full, 'a gate of one half leaves the top to the boundary layer');
+  assert.ok(Math.abs(at(0.55, 0) - 0.5 * full) < 1e-12 * full, 'a half-open deck halves it');
+  assert.equal(at(0.6, 0), 0, 'a closed deck owns the top');
+  assert.equal(at(0.9, 0), 0);
+  assert.ok(Math.abs(at(0.3, 0.5) - 0.5 * full) < 1e-12 * full, 'an EIS of 10 K halves it');
+  assert.equal(at(0.3, 1), 0, 'an EIS of 12 K stops it');
+  assert.ok(Math.abs(at(0.55, 0.5) - 0.25 * full) < 1e-12 * full, 'the two tapers multiply');
+  const idx = expectedEntrainment(warm, layer, 0).above * C;
+  const { exnerLayer, sigmaMid, R } = core.diagnostics, [pi, theta] = warm;
+  const rho = 0.5 * (pi[0] * sigmaMid[idx / C] / (R * theta[idx] * exnerLayer[idx]) + pi[0] * sigmaMid[idx / C + 1] / (R * theta[idx + C] * exnerLayer[idx + C]));
+  at(0.3, 0.75);
+  assert.ok(Math.abs(layer.mixing[idx] - rho * 0.25 * full) < 1e-12 * rho * full, 'the interface carries ρ times the tapered w_e');
+  deckGate[0] = 0.3; stratiform[0] = 0;
   const cool = entrainingColumn(-8);
   layer.diagnose(cool);
   for (let i = 0; i < C; i++) {
@@ -254,8 +263,34 @@ test('no entrainment where the deck\'s gate is above one half, from a stable sur
   capped.diagnose(again); floored.diagnose(again); off.diagnose(again);
   assert.ok(off.entrainment.every((x) => x === 0));
   const { buoyancy } = expectedEntrainment(again, floored, 1);
+  assert.ok(buoyancy > 5e-5, 'the shear term is whole');
   assert.equal(capped.entrainment[1], 1e-4);
   assert.ok(Math.abs(floored.entrainment[1] - (0.2 * buoyancy + 5 * (Math.sqrt(1.5e-3) * 3) ** 3 / (floored.depth[1] - geopotential[(K - 1) * C + 1] / g)) / 10) < 1e-12);
+});
+
+test('the shear term comes in continuously with the surface buoyancy flux: w_e falls to zero as B0 falls to zero, linearly below the onset; without the onset it jumps', () => {
+  const layer = createBoundaryLayer(mesh, core, {}), switched = createBoundaryLayer(mesh, core, { entrainment: { shearOnset: 0 } });
+  const state = entrainingColumn(0), surfaceT = state[3], neutral = surfaceT[0];
+  const flux = (warmth) => { surfaceT[0] = neutral + warmth; layer.diagnose(state); return layer.buoyancyFlux[0]; };
+  let cold = -8, warm = 2;
+  for (let n = 0; n < 60; n++) { const mid = 0.5 * (cold + warm); if (flux(mid) > 0) warm = mid; else cold = mid; }
+  const samples = [];
+  for (const target of [1e-4, 5e-5, 2.5e-5, 1e-5, 1e-6, 1e-8]) {
+    let lo = cold, hi = 2;
+    for (let n = 0; n < 60; n++) { const mid = 0.5 * (lo + hi); if (flux(mid) > target) hi = mid; else lo = mid; }
+    flux(hi); switched.diagnose(state);
+    const expected = expectedEntrainment(state, layer, 0);
+    assert.ok(Math.abs(layer.entrainment[0] - expected.velocity) <= 1e-12 * expected.velocity, `B0 ${expected.buoyancy}: w_e ${layer.entrainment[0]} against ${expected.velocity}`);
+    samples.push([expected.buoyancy, layer.entrainment[0], switched.entrainment[0]]);
+  }
+  const [, wOnset] = samples[1], [b6, w6, s6] = samples[4], [b8, w8, s8] = samples[5];
+  assert.ok(w6 < 0.05 * wOnset && w8 < 1e-3 * wOnset, `w_e ${w6} at B0 ${b6} and ${w8} at ${b8} against ${wOnset} at the onset`);
+  assert.ok(Math.abs(w6 / b6 - w8 / b8) < 1e-3 * (w6 / b6), 'linear in B0 below the onset');
+  assert.ok(s8 > 100 * w8 && s6 > 2 * w6, `without the onset the shear term alone gives ${s8} at B0 ${b8}`);
+  flux(cold);
+  assert.ok(layer.buoyancyFlux[0] <= 0);
+  assert.equal(layer.entrainment[0], 0);
+  console.log(`shear onset: w_e ${samples.map(([b, w, x]) => `${(1000 * w).toFixed(3)} (switched ${(1000 * x).toFixed(3)}) mm/s at B0 ${b.toExponential(1)}`).join(', ')}`);
 });
 
 async function engines(entrainment) {
@@ -282,17 +317,20 @@ async function engines(entrainment) {
     }
     surfaceT[i] = theta[(nK - 1) * nC + i] * exnerLayer[(nK - 1) * nC + i] * Math.pow(sigmaMid[nK - 1], -kappa) - 3 + 6 * random();
     const gate = random();
-    radiation.mlmGate[i] = gate < 0.2 ? 0.7 : gate < 0.3 ? 0.5 : 0.3 * random();
+    radiation.mlmGate[i] = gate < 0.2 ? 0.7 : gate < 0.3 ? 0.5 : gate < 0.45 ? 0.5 + 0.1 * random() : 0.3 * random();
+    const share = random();
+    radiation.stratiform[i] = share < 0.1 ? 1 : share < 0.35 ? random() : 0;
     moist.activity[i] = 0;
   }
   for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) u[k * nE + e] = k === nK - 1 ? 2 * (random() - 0.5) : 12 * (random() - 0.5);
   for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
-  for (const a of [radiation.mlmGate]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  for (const a of [radiation.mlmGate, radiation.stratiform]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   c.diagnose(pi, theta, q, qc);
   const gpu = await createGpuCore(m, { levels, physics: { entrainment } });
   const { device, buffers, kernels } = gpu, dt = 900;
   gpu.upload(state);
   gpu.uploadPhysics({ mlmGate: radiation.mlmGate, convectiveActivity: moist.activity });
+  device.queue.writeBuffer(buffers.PH, 4 * gpu.layout.PH.STRAT, Float32Array.from(radiation.stratiform));
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
   for (const [name, count] of [['pblDiagnose', nC], ['adjust', nC], ['mixMomentum', nE]]) {
@@ -308,16 +346,17 @@ async function engines(entrainment) {
   const cpu = { entrainment: Float64Array.from(layer.entrainment), mixing: Float64Array.from(layer.mixing) };
   pair.phases.adjust(0, nC, dt);
   pair.phases.mixMomentum(0, nE, dt);
-  return { K: nK, C: nC, E: nE, kTop: layer.kTop, gate: radiation.mlmGate, before, cpu, state, after, ph };
+  return { K: nK, C: nC, E: nE, kTop: layer.kTop, gate: radiation.mlmGate, share: radiation.stratiform, before, cpu, state, after, ph };
 }
 
 test('the boundary layer with entrainment matches between the engines on a random set of columns: w_e, the interface coefficients, and θ, q, qc and the wind after the step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const on = await engines({}), off = await engines({ efficiency: 0, shear: 0 });
   const { K: nK, C: nC, E: nE, kTop } = on;
-  let entraining = 0, gated = 0, stable = 0, worstW = 0, scaleW = 0, worstMix = 0, flips = 0;
+  let entraining = 0, gated = 0, stable = 0, worstW = 0, scaleW = 0, worstMix = 0, flips = 0, tapered = 0;
   for (let i = 0; i < nC; i++) {
     const cpu = on.cpu.entrainment[i], gpu = on.ph.ENTRAIN[i];
-    if (cpu > 0) entraining++; else if (on.gate[i] > 0.5) gated++; else stable++;
+    if (cpu > 0) entraining++; else if (on.gate[i] >= 0.6 || on.share[i] >= 1) gated++; else stable++;
+    if (cpu > 0 && (on.gate[i] > 0.5 || on.share[i] > 0)) tapered++;
     if ((cpu > 0) !== (gpu > 0)) { flips++; continue; }
     worstW = Math.max(worstW, Math.abs(cpu - gpu) / Math.max(cpu, 1e-4)); scaleW = Math.max(scaleW, cpu);
     let largest = 0;
@@ -332,8 +371,8 @@ test('the boundary layer with entrainment matches between the engines on a rando
   for (let x = 0; x < nK * nE; x++) { wind = Math.max(wind, Math.abs(on.state[2][x] - on.after[2][x])); movedWind = Math.max(movedWind, Math.abs(on.state[2][x] - off.state[2][x])); }
   let offW = 0;
   for (let i = 0; i < nC; i++) offW = Math.max(offW, off.ph.ENTRAIN[i], off.cpu.entrainment[i]);
-  console.log(`${nC} random columns: ${entraining} entrain (w_e up to ${(1000 * scaleW).toFixed(1)} mm/s), ${gated} under a deck gate, ${stable} over a stable surface; entrainment on or off differs between the engines on ${flips}; w_e differs by ${worstW.toExponential(1)} relative, the interface coefficients by ${worstMix.toExponential(1)} of each column's largest; after the step θ by ${theta.toExponential(1)} K, q by ${q.toExponential(1)}, qc by ${qc.toExponential(1)}, the wind by ${wind.toExponential(1)} m/s, where entrainment moves q by up to ${moved.toExponential(1)} and the wind by ${movedWind.toFixed(2)} m/s`);
-  assert.ok(entraining > nC / 4 && gated > nC / 10 && stable > nC / 20, `${entraining} entraining, ${gated} gated, ${stable} stable`);
+  console.log(`${nC} random columns: ${entraining} entrain (w_e up to ${(1000 * scaleW).toFixed(1)} mm/s, ${tapered} of them tapered by the deck's opening or the stratiform share), ${gated} under a closed deck or a share of one, ${stable} over a stable surface; entrainment on or off differs between the engines on ${flips}; w_e differs by ${worstW.toExponential(1)} relative, the interface coefficients by ${worstMix.toExponential(1)} of each column's largest; after the step θ by ${theta.toExponential(1)} K, q by ${q.toExponential(1)}, qc by ${qc.toExponential(1)}, the wind by ${wind.toExponential(1)} m/s, where entrainment moves q by up to ${moved.toExponential(1)} and the wind by ${movedWind.toFixed(2)} m/s`);
+  assert.ok(entraining > nC / 4 && gated > nC / 10 && stable > nC / 20 && tapered > nC / 10, `${entraining} entraining, ${tapered} tapered, ${gated} gated, ${stable} stable`);
   assert.equal(offW, 0);
   assert.ok(flips <= nC / 200, `${flips} columns flip`);
   assert.ok(worstW < 1e-3 && worstMix < 1e-3, `w_e ${worstW}, coefficients ${worstMix}`);

@@ -3194,8 +3194,9 @@ The work, in order:
    interface above h the coefficient ρ w_e,
    w_e = min(cap, (A B0 + A_s u*³/h) / max(Δb, b_min)), with B0 the bulk
    surface buoyancy flux, Δb = g Δθv/θv between the layer above h and the
-   boundary layer's mass mean, A 0.2 (Tennekes 1973), A_s 5 (Vogelezang
-   and Holtslag 1996), b_min 0.015 m/s² and cap 0.05 m/s (`entrainment`:
+   boundary layer's mass mean, A 0.2 and A_s 5 (the buoyancy and
+   friction-velocity sources of Tennekes 1973 with the constants of
+   Driedonks 1982), b_min 0.015 m/s² and cap 0.05 m/s (`entrainment`:
    `efficiency`, `shear`, `jumpFloor`, `cap`), and zero where B0 ≤ 0 or
    the deck's gate exceeds one half. Over the sea at 30S–30N where the
    deck is off, after one CPU step: nine128_day0183 7.74 mm/s area mean

@@ -61,7 +61,7 @@ const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvers
 const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: bool = ${massFlux && o.cumulusCloud !== false && o.cloudCover === 'pdf'};
 const PLUME: bool = ${plumed}; const PL_SEPARATE: bool = ${o.plumeClosure === 'separate'}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
 const PL_MOMENTUM: bool = ${plumed && !!o.plumeMomentum}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
-const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
+const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
@@ -143,7 +143,7 @@ fn layerCover(idx: i32, k: i32, bottom: i32, pi: f32, water: f32, mixedDepth: f3
   return (1.0 - stratiform) * f + stratiform * clamp((excess + bound) / (2.0 * bound), COVER_FLOOR, 1.0);
 }
 fn stratiformShare(i: i32, bottom: i32, pi: f32) -> f32 {
-  if (!PDF_COVER || !BOUND_WIDTH || !(IN[S_Q + bottom] > 0.0)) { return 0.0; }
+  if (!(IN[S_Q + bottom] > 0.0)) { return 0.0; }
   let upper = STABILITY_K * C + i; let lowerT = IN[S_TH + bottom] * D[D_EXM + bottom];
   let lcl = condensationLevel(lowerT, IN[S_Q + bottom], pi * LV[L_SM + K - 1]);
   let base = max(0.0, CP * (lowerT - lcl.x) / GRAV);
@@ -558,7 +558,9 @@ export const PHYSICS_KERNELS = {
   let tau0 = PH[PH_TAU + i];
   var deck = 0.0; var fraction = 0.0; var mlmCover = 0.0; var mlmWater = 0.0; var mlmEntrainment = 0.0; var mlmTop = 0.0;
   let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
-  let stratiform = stratiformShare(i, bottom, pi);
+  let inversionShare = stratiformShare(i, bottom, pi);
+  PH[PH_STRAT + i] = inversionShare;
+  let stratiform = select(0.0, inversionShare, PDF_COVER && BOUND_WIDTH);
   if (STRATUS && MLM_DECK && !onLand && 1.0 - cover > 0.0 && mixedDepth > 0.0) {
     let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
     let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
@@ -771,12 +773,15 @@ export const PHYSICS_KERNELS = {
     let rhoBelow = pi * LV[L_SM + k + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below]);
     PH[PH_MIX + idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
   }
-  if (BL_ENTRAIN && entrainK >= KTOP && buoyancy > 0.0 && !(PH[PH_MLMGATE + i] > 0.5)) {
+  let taper = clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - 0.5), 0.0, 1.0) * (1.0 - PH[PH_STRAT + i]);
+  if (BL_ENTRAIN && entrainK >= KTOP && buoyancy > 0.0 && taper > 0.0) {
     let idx = entrainK * C + i; let below = idx + C;
     var weight = 0.0; var sum = 0.0;
     for (var k = entrainK + 1; k < K; k++) { weight += LV[L_DS + k]; sum += LV[L_DS + k] * D[D_THV + k * C + i]; }
     let mean = sum / weight; let jump = GRAV * (D[D_THV + idx] - mean) / mean;
-    let velocity = min(BL_WEMAX, (BL_A * buoyancy + BL_AS * friction * friction * friction / h) / max(jump, BL_BMIN));
+    var onset = 1.0;
+    if (BL_ONSET > 0.0) { onset = min(1.0, buoyancy / BL_ONSET); }
+    let velocity = taper * min(BL_WEMAX, (BL_A * buoyancy + BL_AS * onset * friction * friction * friction / h) / max(jump, BL_BMIN));
     PH[PH_ENTRAIN + i] = velocity;
     PH[PH_MIX + idx] = 0.5 * (pi * LV[L_SM + entrainK] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]) + pi * LV[L_SM + entrainK + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below])) * velocity;
   }
