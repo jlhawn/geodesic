@@ -25,10 +25,14 @@ const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'root
  * physics reads before it diagnoses its own) with the moist scheme's
  * mixing top, regime and surface buoyancy flux `boundaryLayer.mixingTop`,
  * `regime` and `buoyancyFlux` (the radiation's variance cover reads the
- * flux of the step before), and the per-cell convective and
+ * flux of the step before), the per-cell convective and
  * large-scale rain `moist.convectiveRain` and `moist.largeScaleRain`,
  * the means in mm/d that each diagnostics frame takes over the interval
- * since the frame before, hold double-precision mirrors that only
+ * since the frame before, and the per-cell absorbed sunlight, outgoing
+ * longwave and planetary albedo `radiation.meanAbsorbedSolar`,
+ * `meanOutgoingLongwave` and `meanPlanetaryAlbedo`, the means each
+ * diagnostics frame takes over the steps since the frame before, hold
+ * double-precision mirrors that only
  * `sync` refreshes from the device and `load` sends to it (the land's
  * soil, snow and vegetation only `land.serialize`, its runoff when the
  * diagnostics are taken), `step` only queues work, `beginFrame`
@@ -72,7 +76,7 @@ export async function createGpuModel(gridOrMesh, {
   };
   const lengths = [C, K * C, K * E, C, K * C, K * C, C];
   const state = lengths.map((n) => new Float64Array(n));
-  let dirty = true, lastFrameTime = 0;
+  let dirty = true, lastFrameTime = 0, lastFrameStep = 0;
 
   const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
   model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain };
@@ -81,17 +85,18 @@ export async function createGpuModel(gridOrMesh, {
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux });
+    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux });
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6], { climatology: null });
     lastFrameTime = model.time;
+    lastFrameStep = gpu.stepCount;
     dirty = false;
   }
   model.load = function load() { pushState(); };
 
   async function sync() {
     if (!dirty) return;
-    const [arrays, [concentration, mean, height, gate, convective, largeScale, depth, mixingTop, regime, buoyancy]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
+    const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, depth, mixingTop, regime, buoyancy]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
     arrays.forEach((a, i) => state[i].set(a));
     seaIce.concentration.set(concentration);
     radiationCpu.mlmSubsidence.set(mean);
@@ -99,6 +104,9 @@ export async function createGpuModel(gridOrMesh, {
     radiationCpu.mlmGate.set(gate);
     model.moist.convectiveRain.set(convective);
     model.moist.largeScaleRain.set(largeScale);
+    radiationCpu.meanAbsorbedSolar.set(absorbed);
+    radiationCpu.meanOutgoingLongwave.set(outgoing);
+    radiationCpu.meanPlanetaryAlbedo.set(albedo);
     model.boundaryLayer.depth.set(depth);
     model.boundaryLayer.mixingTop.set(mixingTop);
     model.boundaryLayer.regime.set(regime);
@@ -140,19 +148,24 @@ export async function createGpuModel(gridOrMesh, {
    * device and read back alone. The work is queued before this returns,
    * so a caller can queue steps behind it; the promise resolves once the
    * copies land. Every frame also advances the three-hour rain and the
-   * runoff tally.
+   * runoff tally. The diagnostics' absorbed sunlight, its part absorbed
+   * in the atmosphere, outgoing longwave and planetary albedo are means
+   * over the steps since the last frame (the albedo their reflected over
+   * their incoming sunlight), the last step's under `instantaneous`, and
+   * the last step's alone when no step came between.
    */
   let verticalLevel = null;
   model.beginFrame = function beginFrame({ level = 'surface', depth = 'surface', fields = [], diagnostics: summarize = false } = {}) {
     if (gpuOcean) gpuOcean.accumulateFreshwater(0);
-    const time = model.time, interval = time - lastFrameTime;
+    const time = model.time, interval = time - lastFrameTime, steps = gpu.stepCount - lastFrameStep;
     lastFrameTime = time;
+    lastFrameStep = gpu.stepCount;
     const vertical = fields.includes('vertical');
     const keepVertical = vertical && verticalLevel === level ? Math.exp(-Math.max(0, interval) / VERTICAL_MEMORY) : 0;
     verticalLevel = vertical ? level : null;
-    const rainScale = summarize && interval > 0 ? 86400 / interval : 0;
-    if (rainScale) dirty = true;
-    const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), keepVertical, fields, diagnostics: summarize, rainScale });
+    const rainScale = summarize && interval > 0 ? 86400 / interval : 0, meanScale = summarize && steps > 0 ? 1 / steps : 0;
+    if (rainScale || meanScale) dirty = true;
+    const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), keepVertical, fields, diagnostics: summarize, rainScale, meanScale });
     if (gpuOcean) { gpuOcean.forgetAccumulated('rain'); gpuOcean.forgetAccumulated('runoff'); }
     const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize, depth: depth === 'surface' ? 0 : Number(depth) }) : null;
     return Promise.all([atmosphere, ocean]).then(([a, o]) => {
@@ -164,13 +177,20 @@ export async function createGpuModel(gridOrMesh, {
         for (let i = 0; i < C; i++) { landCpu.runoff[i] += a.runoff[i]; total += mesh.areaCell[i] * a.runoff[i]; }
         landCpu.budget.runoff += total;
       }
+      const instantaneous = {
+        absorbedSolar: s.absorbedSolar / area, atmosphereSolar: s.atmosphereSolar / area, outgoingLongwave: s.outgoingLongwave / area,
+        planetaryAlbedo: s.insolation > 0 ? s.reflectedSolar / s.insolation : 0,
+      };
       out.diagnostics = {
         mass: s.mass / area, meanSurfaceT: s.surfaceT / area, piMin: s.piMin, piMax: s.piMax, maxWind: s.maxWind,
-        absorbedSolar: s.absorbedSolar / area, atmosphereSolar: s.atmosphereSolar / area, outgoingLongwave: s.outgoingLongwave / area, sensibleHeat: s.sensibleHeat / area,
+        ...(steps > 0 ? {
+          absorbedSolar: s.absorbedSum / area / steps, atmosphereSolar: s.atmosphereSum / area / steps, outgoingLongwave: s.outgoingSum / area / steps,
+          planetaryAlbedo: s.insolationSum > 0 ? s.reflectedSum / s.insolationSum : 0,
+        } : instantaneous),
+        instantaneous, sensibleHeat: s.sensibleHeat / area,
         evaporation: s.evaporation / area, latentHeat: LATENT_HEAT * s.evaporation / area,
         columnWater: s.water / area, columnCloud: s.cloud / area, precipitation: interval > 0 ? s.rain / area / interval : s.recentRain / area / RAIN_MEMORY,
         iceFraction: s.iceArea / area, iceThickness: s.iceArea > 0 ? s.iceVolume / s.iceArea : 0, surfaceAlbedo: s.albedo / area,
-        planetaryAlbedo: s.insolation > 0 ? s.reflectedSolar / s.insolation : 0,
         ...(landCpu ? { landFraction: s.landArea / area, landMeanT: s.landArea > 0 ? s.landT / s.landArea : 0, snowFraction: s.landArea > 0 ? s.snowArea / s.landArea : 0, soilWater: s.landArea > 0 ? s.soil / s.landArea : 0, runoff: landCpu.budget.runoff / area } : {}),
         ...(o && o.diagnostics ? o.diagnostics : {}),
       };
