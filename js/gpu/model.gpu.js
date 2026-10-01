@@ -30,7 +30,9 @@ const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'root
  * the means in mm/d that each diagnostics frame takes over the interval
  * since the frame before, and the per-cell absorbed sunlight, outgoing
  * longwave and planetary albedo `radiation.meanAbsorbedSolar`,
- * `meanOutgoingLongwave` and `meanPlanetaryAlbedo`, the means each
+ * `meanOutgoingLongwave` and `meanPlanetaryAlbedo` (with clearSkyPass
+ * also the cloud effects `meanShortwaveCloudEffect` and
+ * `meanLongwaveCloudEffect`), the means each
  * diagnostics frame takes over the steps since the frame before, hold
  * double-precision mirrors that only
  * `sync` refreshes from the device and `load` sends to it (the land's
@@ -85,7 +87,7 @@ export async function createGpuModel(gridOrMesh, {
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux });
+    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, meanShortwaveCloudEffect: radiationCpu.meanShortwaveCloudEffect, meanLongwaveCloudEffect: radiationCpu.meanLongwaveCloudEffect, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux });
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6], { climatology: null });
     lastFrameTime = model.time;
@@ -96,7 +98,7 @@ export async function createGpuModel(gridOrMesh, {
 
   async function sync() {
     if (!dirty) return;
-    const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, depth, mixingTop, regime, buoyancy]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
+    const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, shortwaveEffect, longwaveEffect, depth, mixingTop, regime, buoyancy]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'SWCREMEAN', 'LWCREMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
     arrays.forEach((a, i) => state[i].set(a));
     seaIce.concentration.set(concentration);
     radiationCpu.mlmSubsidence.set(mean);
@@ -107,6 +109,8 @@ export async function createGpuModel(gridOrMesh, {
     radiationCpu.meanAbsorbedSolar.set(absorbed);
     radiationCpu.meanOutgoingLongwave.set(outgoing);
     radiationCpu.meanPlanetaryAlbedo.set(albedo);
+    radiationCpu.meanShortwaveCloudEffect.set(shortwaveEffect);
+    radiationCpu.meanLongwaveCloudEffect.set(longwaveEffect);
     model.boundaryLayer.depth.set(depth);
     model.boundaryLayer.mixingTop.set(mixingTop);
     model.boundaryLayer.regime.set(regime);
@@ -152,7 +156,9 @@ export async function createGpuModel(gridOrMesh, {
    * in the atmosphere, outgoing longwave and planetary albedo are means
    * over the steps since the last frame (the albedo their reflected over
    * their incoming sunlight), the last step's under `instantaneous`, and
-   * the last step's alone when no step came between.
+   * the last step's alone when no step came between; with clearSkyPass
+   * and a step between, the clear-sky absorbed sunlight and outgoing
+   * longwave and the two cloud effects are means over the same steps.
    */
   let verticalLevel = null;
   model.beginFrame = function beginFrame({ level = 'surface', depth = 'surface', fields = [], diagnostics: summarize = false } = {}) {
@@ -187,6 +193,10 @@ export async function createGpuModel(gridOrMesh, {
           absorbedSolar: s.absorbedSum / area / steps, atmosphereSolar: s.atmosphereSum / area / steps, outgoingLongwave: s.outgoingSum / area / steps,
           planetaryAlbedo: s.insolationSum > 0 ? s.reflectedSum / s.insolationSum : 0,
         } : instantaneous),
+        ...(radiationCpu.clearSkyPass && steps > 0 ? {
+          clearAbsorbedSolar: s.clearAbsorbedSum / area / steps, clearOutgoingLongwave: s.clearOutgoingSum / area / steps,
+          shortwaveCloudEffect: (s.absorbedSum - s.clearAbsorbedSum) / area / steps, longwaveCloudEffect: (s.clearOutgoingSum - s.outgoingSum) / area / steps,
+        } : {}),
         instantaneous, sensibleHeat: s.sensibleHeat / area,
         evaporation: s.evaporation / area, latentHeat: LATENT_HEAT * s.evaporation / area,
         columnWater: s.water / area, columnCloud: s.cloud / area, precipitation: interval > 0 ? s.rain / area / interval : s.recentRain / area / RAIN_MEMORY,

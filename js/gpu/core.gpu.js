@@ -33,7 +33,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0) {
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE]]);
-  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C]]);
+  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C]]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH, FR };
 }
@@ -100,6 +100,7 @@ const REDUCED = [
   ['evaporation', 'sum', 'a * PH[PH_EVAP + i]'], ['insolation', 'sum', 'a * PH[PH_INS + i]'], ['reflectedSolar', 'sum', 'a * PH[PH_REFL + i]'],
   ['absorbedSum', 'sum', 'a * PH[PH_ABSSUM + i]'], ['atmosphereSum', 'sum', 'a * PH[PH_ATMSUM + i]'], ['outgoingSum', 'sum', 'a * PH[PH_OLRSUM + i]'],
   ['insolationSum', 'sum', 'a * PH[PH_INSSUM + i]'], ['reflectedSum', 'sum', 'a * PH[PH_REFLSUM + i]'],
+  ['clearAbsorbedSum', 'sum', 'a * PH[PH_ABSCLRSUM + i]'], ['clearOutgoingSum', 'sum', 'a * PH[PH_OLRCLRSUM + i]'],
   ['landArea', 'sum', 'land * a'], ['landT', 'sum', 'land * a * IN[S_TS + i]'], ['snowArea', 'sum', 'select(0.0, land * a, PH[PH_SNOW + i] > 1.0)'],
   ['soil', 'sum', 'land * a * PH[PH_SOIL + i]'],
 ];
@@ -132,7 +133,9 @@ const REDUCED_SETUP = `    let a = MF[F_AREA + i]; let pi = IN[S_PI + i];
  * P[6] is one over the steps since the last frame, the sums of the
  * radiation over those steps become the means ASRMEAN and OLRMEAN and
  * the albedo ALBMEAN (reflected over incoming summed, 0 where no sun
- * rose), and every frame clears those sums too.
+ * rose), with clearSkyPass the cloud effects SWCREMEAN (absorbed less
+ * clear-sky absorbed) and LWCREMEAN (clear-sky less all-sky outgoing),
+ * and every frame clears those sums too.
  */
 const COMFORT_WGSL = `
 fn dewPointC(t: f32, rh: f32) -> f32 {
@@ -254,8 +257,9 @@ const FRAME_KERNELS = {
   if (P[6] > 0.0) {
     PH[PH_ASRMEAN + i] = PH[PH_ABSSUM + i] * P[6]; PH[PH_OLRMEAN + i] = PH[PH_OLRSUM + i] * P[6];
     PH[PH_ALBMEAN + i] = select(0.0, PH[PH_REFLSUM + i] / PH[PH_INSSUM + i], PH[PH_INSSUM + i] > 0.0);
+    if (CLEAR_SKY) { PH[PH_SWCREMEAN + i] = (PH[PH_ABSSUM + i] - PH[PH_ABSCLRSUM + i]) * P[6]; PH[PH_LWCREMEAN + i] = (PH[PH_OLRCLRSUM + i] - PH[PH_OLRSUM + i]) * P[6]; }
   }
-  PH[PH_ABSSUM + i] = 0.0; PH[PH_ATMSUM + i] = 0.0; PH[PH_OLRSUM + i] = 0.0; PH[PH_INSSUM + i] = 0.0; PH[PH_REFLSUM + i] = 0.0;
+  PH[PH_ABSSUM + i] = 0.0; PH[PH_ATMSUM + i] = 0.0; PH[PH_OLRSUM + i] = 0.0; PH[PH_INSSUM + i] = 0.0; PH[PH_REFLSUM + i] = 0.0; PH[PH_ABSCLRSUM + i] = 0.0; PH[PH_OLRCLRSUM + i] = 0.0;
 }`,
 };
 
@@ -528,7 +532,7 @@ export const PHYSICS_DEFAULTS = {
   solarConstant: 1362, cloudAbsorption: 130, cloudScattering: 95, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
   mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'maximumRandom', prognosticHeight: true, deckRest: 'regime', cumulusCeiling: 2000, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
-  exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0.15,
+  exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0.15, clearSkyPass: false,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10,
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.5, fullAlbedoThickness: 0.5, iceSnowAlbedo: 0.75, iceFullSnow: 20, snowConductivity: 0.31, snowDensity: 300, waterDensity: 1026,
   ...MOIST_DEFAULTS,
@@ -786,9 +790,9 @@ export async function createGpuCore(mesh, {
     });
   }
 
-  const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, meanAbsorbedSolar: null, meanOutgoingLongwave: null, meanPlanetaryAlbedo: null, boundaryDepth: null, mixingTop: null, regime: null, buoyancyFlux: null };
-  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, boundaryDepth, mixingTop, regime, buoyancyFlux } = {}) {
-    for (const [name, value] of Object.entries({ land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, boundaryDepth, mixingTop, regime, buoyancyFlux })) if (value !== undefined) retained[name] = value;
+  const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, meanAbsorbedSolar: null, meanOutgoingLongwave: null, meanPlanetaryAlbedo: null, meanShortwaveCloudEffect: null, meanLongwaveCloudEffect: null, boundaryDepth: null, mixingTop: null, regime: null, buoyancyFlux: null };
+  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux } = {}) {
+    for (const [name, value] of Object.entries({ land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux })) if (value !== undefined) retained[name] = value;
     const ph = new Float32Array(L.PH.total);
     for (let i = 0; i < C; i++) {
       const lat = mesh.latCell[i];
@@ -810,6 +814,8 @@ export async function createGpuCore(mesh, {
       ph[L.PH.ASRMEAN + i] = retained.meanAbsorbedSolar ? retained.meanAbsorbedSolar[i] : 0;
       ph[L.PH.OLRMEAN + i] = retained.meanOutgoingLongwave ? retained.meanOutgoingLongwave[i] : 0;
       ph[L.PH.ALBMEAN + i] = retained.meanPlanetaryAlbedo ? retained.meanPlanetaryAlbedo[i] : 0;
+      ph[L.PH.SWCREMEAN + i] = retained.meanShortwaveCloudEffect ? retained.meanShortwaveCloudEffect[i] : 0;
+      ph[L.PH.LWCREMEAN + i] = retained.meanLongwaveCloudEffect ? retained.meanLongwaveCloudEffect[i] : 0;
       ph[L.PH.DEPTH + i] = retained.boundaryDepth ? retained.boundaryDepth[i] : 0;
       ph[L.PH.MIXTOP + i] = retained.mixingTop ? retained.mixingTop[i] : 0;
       ph[L.PH.REGIME + i] = retained.regime ? retained.regime[i] : 0;

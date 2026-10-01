@@ -54,7 +54,7 @@ const PDF_COVER: bool = ${o.cloudCover === 'pdf'}; const VISIBLE_PATH: f32 = ${V
 const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudScattering}; const CLOUD_SW: f32 = ${o.cloudSolarAbsorption}; const WINDOW: f32 = ${o.window}; const GAS_FRAC: f32 = ${o.gasFraction};
 const STRATUS: bool = ${!!o.stratus}; const ECTEI: bool = ${o.stratusIndex === 'ectei'}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
-const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6;
+const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6; const CLEAR_SKY: bool = ${!!o.clearSkyPass};
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
@@ -618,7 +618,7 @@ export const PHYSICS_KERNELS = {
   let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= 0.0);
   let ozoneHeating = beam * OZONE_ABS;
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
-  var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
+  var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
   var cloudPath = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0);
   let tau0 = PH[PH_TAU + i];
   var deck = 0.0; var fraction = 0.0; var mlmCover = 0.0; var mlmWater = 0.0; var mlmEntrainment = 0.0; var mlmTop = 0.0;
@@ -685,6 +685,7 @@ export const PHYSICS_KERNELS = {
     let mass = pi * LV[L_DS + k] / GRAV;
     var eps = 1.0 - exp(-tau0 * LV[L_SHAPE + k]);
     if (COUPLED) { eps = 1.0 - exp(-VCOUP * max(0.0, IN[S_Q + idx]) * mass); }
+    if (CLEAR_SKY) { clearE[k] = eps; }
     var water = max(0.0, IN[S_QC + idx]) * mass;
     var f = layerCover(idx, k, bottom, pi, water, mixedDepth, stratiform, mixTop);
     let cu = cumulusCloud(k, i);
@@ -764,6 +765,17 @@ export const PHYSICS_KERNELS = {
   let atmosphereSolar = ozoneHeating + vaporHeating + cloudHeating; let absorbedSolar = absorbed + ozoneHeating + vaporHeating + cloudHeating; let reflectedSolar = incident - absorbed - cloudHeating;
   PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbedSolar; PH[PH_ATMSW + i] = atmosphereSolar; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = reflectedSolar; PH[PH_ADIF + i] = adif;
   PH[PH_ABSSUM + i] += absorbedSolar; PH[PH_ATMSUM + i] += atmosphereSolar; PH[PH_OLRSUM + i] += outgoing; PH[PH_INSSUM + i] += beam; PH[PH_REFLSUM + i] += reflectedSolar;
+  if (CLEAR_SKY) {
+    let clearSw = shortwave(0.0, 1.0, mu, adir, adif);
+    var upVapor = VAPOR_FRAC * surfaceEmission; var upGas = GAS_FRAC * surfaceEmission;
+    for (var k = K - 1; k >= 0; k--) {
+      let t = temperature[k]; let ev = clearE[k]; let eg = LV[L_GASE + k];
+      upVapor = upVapor * (1.0 - ev) + VAPOR_FRAC * ev * STEFAN * t * t * t * t;
+      upGas = upGas * (1.0 - eg) + GAS_FRAC * eg * STEFAN * t * t * t * t;
+    }
+    PH[PH_ABSCLRSUM + i] += incident * clearSw.x + ozoneHeating + vaporHeating;
+    PH[PH_OLRCLRSUM + i] += upVapor + upGas + WINDOW * surfaceEmission;
+  }
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = skin; var h = ice;
   if (onLand) {
