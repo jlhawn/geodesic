@@ -628,12 +628,13 @@ async function parity(options, { momentum = false } = {}) {
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
 }
 
-test('the triggered convection, the cumulus mass flux, the convective plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure, from either source, with either CAPE parcel and its downdraft, carrying momentum with the column momentum of each edge exact, with the shallow plume on its defaults, from the lowest layer, raining, overshooting by half or beside deep convection, under either autoconversion floor, and with the Betts–Miller shallow branch under either shallow reference with or without shallow rain and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the triggered convection, the cumulus mass flux, the convective plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume on its defaults, from the lowest layer, raining, overshooting by half or beside deep convection, under either autoconversion floor, and with the Betts–Miller shallow branch under either shallow reference with or without shallow rain and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   await parity({});
   await parity({ convection: 'plume' });
   await parity({ convection: 'plume', plumeClosure: 'maximum', plumeSource: 'lowest', plumeCapeParcel: 'undilute', plumeMassGrowth: 2e-4 });
   await parity({ convection: 'plume', plumeClosure: 'cape', downdraftShare: 0.5, downdraftEntrainment: 0, plumeRainThreshold: 5e-4, autoconversionFloor: 'boundaryLayer' });
   await parity({ convection: 'plume', plumeMomentum: true }, { momentum: true });
+  await parity({ convection: 'plume', plumeMomentum: true, downdraftShare: 0 }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });
   await parity({ convection: 'bettsMiller' });
   await parity({ convection: 'bettsMiller', cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, cumulusWithDeep: true, virtualBuoyancy: false });

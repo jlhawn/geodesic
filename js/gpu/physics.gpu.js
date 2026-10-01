@@ -1104,7 +1104,7 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
       if (k > top && k < source) { keep = exp(-entrained[k] * thick[k]); }
       PH[PH_MOMK + k * C + i] = keep;
       var keepD = 1.0;
-      if (k == start) { keepD = 0.0; } else if (k > start && k <= base) { keepD = exp(-DD_EPS * (upperInterface(i, k) - upperInterface(i, k + 1))); }
+      if (k == start) { keepD = 0.0; } else if (start >= 0 && k > start && k <= base) { keepD = exp(-DD_EPS * (upperInterface(i, k) - upperInterface(i, k + 1))); }
       PH[PH_MOMKD + k * C + i] = keepD;
     }
     PH[PH_MOMS + i] = f32(source);

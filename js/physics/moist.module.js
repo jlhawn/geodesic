@@ -933,7 +933,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
       for (let k = 0; k <= K; k++) { momentumUp[k * C + i] = baseFlux * cumulusFlux[k]; momentumDown[k * C + i] = baseFlux * share * draftFlux[k]; }
       for (let k = 0; k < K; k++) {
         momentumUpKeep[k * C + i] = k > top && k < source ? Math.exp(-plumeEntrained[k] * plumeDepth[k]) : 1;
-        momentumDownKeep[k * C + i] = k === start ? 0 : k > start && k <= base ? Math.exp(-downdraftEntrainment * (upperInterface(i, k) - upperInterface(i, k + 1))) : 1;
+        momentumDownKeep[k * C + i] = start < 0 ? 1 : k === start ? 0 : k > start && k <= base ? Math.exp(-downdraftEntrainment * (upperInterface(i, k) - upperInterface(i, k + 1))) : 1;
       }
       momentumSource[i] = source;
     }
