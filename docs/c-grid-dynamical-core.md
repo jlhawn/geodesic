@@ -4375,8 +4375,9 @@ stratiform lifetime's (−2.2); the global and ITCZ rain the entrainment's
 The heating peak and the zonal rain peak are fitted with R² 0.22 and 0.24.
 
 The candidates: the four best screens (points 17, 34, 16, 40), the
-surface's minimum over the box (qmin: every parameter at an edge of its
-range, predicted −61.7), the minimum of the score composed from each
+surface's minimum over the box (qmin: ten of its eleven parameters at an
+edge of their range, cloudLifetime inside it at 1.579 h; predicted
+−61.7), the minimum of the score composed from each
 term's own fit (cmin, composed 11.1) and the defaults (base), each on ten
 N=64 days from eight64_day0183 (albedo over days 186–193, ASR − OLR over
 188–193, the audit of day 193), five N=128 days from eight128_day0183
@@ -4433,10 +4434,18 @@ cloud 0.32, deck on 0.23 of the column-steps under a 1.95 km inversion,
 rain 1.38 mm/d against 0.1–0.3); the deck water as the radiation takes it
 near the 150 g/m² cap in both boxes; the zonal rain peak at 2.5N; the
 equatorial stress at N=64 of −0.026 N/m² against −0.05 (and −0.034 at
-N=128 from eight128). Every parameter of the winner sits on an edge of
-its range, so the score's minimum may lie outside the box the sweep
-searched, and the 2 K jump is the weak test the deck's own rest was
-moved away from.
+N=128 from eight128). Ten of the winner's eleven parameters sit on an
+edge of their range, where the fit predicted −61.7 against the 122 the
+runs scored, and the 2 K jump is the weak test the deck's own rest was
+moved away from: it opens the deck's gate (mlmGate > 0.5) over 0.208 of
+the globe and 0.112 of 10S–10N on day 186 and over 0.182 and 0.155 on
+day 193, against the old defaults' 0.033 and 0.021, 0.044 and 0.046.
+The deck water the score reads is the radiation's, capped at 150 g/m²;
+the deck's own water path where it runs on day 193 rose from base's 381
+(SE Pacific) and 472 g/m² (Peru) to qmin's 411 and 673, its cloud layer
+from 546 and 638 m to 653 and 778 m. Scored on the deck's own water path
+with the same target and tolerance, the candidates total base 215, p17
+276, p16 283, cmin 288, qmin 291, p34 357 and p40 376.
 
 ### M23 — The equatorial ocean — in progress
 
