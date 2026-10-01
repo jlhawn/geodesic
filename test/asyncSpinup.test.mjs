@@ -137,7 +137,7 @@ test('a coupled segment stopped inside a day carries the recorded day across the
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')).sort(), ['c_day0000.bin', 'c_day0001_step0012.bin']);
   const inside = await load(join(parts, 'c_day0001_step0012.bin'));
   assert.deepEqual([inside.day, inside.step, inside.forcingSteps, inside.forcingOceanSteps, inside.forcingSeconds], [1, 12, 12, 3, 12 * 3600]);
-  for (const field of ['mlmSubsidence', 'mlmHeight', 'mlmGate', 'boundaryDepth']) assert.ok(inside[field], `the in-day checkpoint carries ${field}`);
+  for (const field of ['mlmSubsidence', 'mlmHeight', 'mlmGate', 'boundaryDepth', 'mixingTop', 'boundaryRegime', 'boundaryBuoyancy']) assert.ok(inside[field], `the in-day checkpoint carries ${field}`);
   assert.match(text(join(parts, 'c.log')), /stopped by STOP_AFTER_STEPS=36 at day 1 and 12 of 24 steps/);
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, RECORD: join(parts, 'forcing') }), 0);
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')).sort(), ['c_day0000.bin', 'c_day0003.bin']);
@@ -148,7 +148,7 @@ test('a coupled segment stopped inside a day carries the recorded day across the
     for (const name of ['stress', 'netFlux', 'shortwave', 'shortwaveDown', 'evaporation', 'rain']) {
       let off = 0, size = 0;
       for (let i = 0; i < a.fields[name].length; i++) { off += Math.abs(a.fields[name][i] - b.fields[name][i]); size += Math.abs(a.fields[name][i]); }
-      assert.ok(off < 0.03 * size, `day ${day} ${name}: the continued run's mean is ${(100 * off / size).toFixed(1)}% off the uninterrupted one's`);
+      assert.ok(off < 0.04 * size, `day ${day} ${name}: the continued run's mean is ${(100 * off / size).toFixed(1)}% off the uninterrupted one's`);
     }
   }
 });

@@ -32,7 +32,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0) {
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE]]);
-  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C]]);
+  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C]]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH, FR };
 }
@@ -520,7 +520,8 @@ export const PHYSICS_DEFAULTS = {
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10,
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.5, fullAlbedoThickness: 0.5, iceSnowAlbedo: 0.75, iceFullSnow: 20, snowConductivity: 0.31, snowDensity: 300, waterDensity: 1026,
   ...MOIST_DEFAULTS,
-  richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5, stability: true,
+  richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5, stability: true, turbulence: 'moist', cloudTop: {},
+  boundaryCover: 'variance', varianceFloor: 0.002, varianceScale: 5, mixingLength: 300, stableMixingLength: 30, deckRegime: 'inversion', deckBypass: false,
   landed: false, landHeatCapacity: 1e6, bucketCapacity: 150, wetnessThreshold: 0.75, landAlbedo: 0.2, snowAlbedo: 0.55, fullSnow: 20,
   vegetation: true, bareAlbedo: 0.30, vegetatedAlbedo: 0.13, rootZoneCapacity: 300, dryWetness: 0.1, wetWetness: 0.6, iceSheetAlbedo: 0.8,
   growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400, surfaceCapacity: 15, percolationTime: 86400, stomatalResistance: 70, growthColdest: 278.15, growthWarmest: 288.15,
@@ -773,9 +774,9 @@ export async function createGpuCore(mesh, {
     });
   }
 
-  const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, boundaryDepth: null };
-  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, boundaryDepth } = {}) {
-    for (const [name, value] of Object.entries({ land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, boundaryDepth })) if (value !== undefined) retained[name] = value;
+  const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, boundaryDepth: null, mixingTop: null, regime: null, buoyancyFlux: null };
+  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, boundaryDepth, mixingTop, regime, buoyancyFlux } = {}) {
+    for (const [name, value] of Object.entries({ land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, boundaryDepth, mixingTop, regime, buoyancyFlux })) if (value !== undefined) retained[name] = value;
     const ph = new Float32Array(L.PH.total);
     for (let i = 0; i < C; i++) {
       const lat = mesh.latCell[i];
@@ -795,6 +796,9 @@ export async function createGpuCore(mesh, {
       ph[L.PH.CONVMEAN + i] = retained.convectiveRain ? retained.convectiveRain[i] : 0;
       ph[L.PH.CONDMEAN + i] = retained.largeScaleRain ? retained.largeScaleRain[i] : 0;
       ph[L.PH.DEPTH + i] = retained.boundaryDepth ? retained.boundaryDepth[i] : 0;
+      ph[L.PH.MIXTOP + i] = retained.mixingTop ? retained.mixingTop[i] : 0;
+      ph[L.PH.REGIME + i] = retained.regime ? retained.regime[i] : 0;
+      ph[L.PH.BUOY + i] = retained.buoyancyFlux ? retained.buoyancyFlux[i] : 0;
     }
     device.queue.writeBuffer(buffers.PH, 0, ph);
   }

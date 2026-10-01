@@ -1,5 +1,6 @@
 import { cellVector } from '../dynamics/operators.module.js';
-import { saturationHumidity, DECK_OPEN, DECK_CLOSED } from './moist.module.js';
+import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
+import { saturationHumidity, DECK_OPEN, DECK_CLOSED, LATENT_HEAT, R_VAPOR } from './moist.module.js';
 
 /*
  * A diffusive planetary boundary layer in the manner of Troen and Mahrt
@@ -53,16 +54,81 @@ import { saturationHumidity, DECK_OPEN, DECK_CLOSED } from './moist.module.js';
  * coefficient ρ w_e of that layer's lower interface, so the exchange of
  * θ, q, qc and momentum across h goes through the same conservative
  * implicit solve; `entrainment` keeps each cell's w_e (m/s). The depth
- * stays diagnostic.
+ * stays diagnostic. All of the above is `turbulence` 'dry'.
+ *
+ * `turbulence` 'moist' (the default) is a moist closure after Lock et al.
+ * (2000), simplified for a coarse column. It mixes the liquid-water
+ * potential temperature θ_l = θ − L q_c/(c_p Π) and the total water
+ * q_t = q + q_c (and momentum) with the eddy diffusivity; each layer the
+ * solve touches leaves it with θ = θ_l, q = q_t and no cloud water, and
+ * the saturation adjustment that follows returns the cloud, so a
+ * well-mixed layer forms its stratus at its top. Untouched layers keep
+ * their values exactly. Two profiles add:
+ *  - the surface-driven K-profile above, over h_s: the Richardson depth,
+ *    or where B0 > 0 the top of a surface parcel (the lowest layer's θ_l
+ *    with Holtslag and Boville's excess cloudTop.excess (8.5) B0 θ_v/(g w_m),
+ *    w_m³ = u*³ + 0.6 B0 h, and its q_t) rising with its condensate in
+ *    equilibrium until its θ_v falls short of the layer's by more than
+ *    cloudTop.tolerance (0.5 K, for a layer that straddles the
+ *    inversion), where it has
+ *    condensed and stops no more than cloudTop.cumulusDepth (400 m) above
+ *    the base of the layer where it first saturated and below
+ *    cloudTop.maximumHeight, and lies above the Richardson depth: a
+ *    stratocumulus-capped layer, whose turbulence reaches its inversion
+ *    (Lock et al.'s parcel test); a parcel that rises further is cumulus,
+ *    left to the plume, and its column keeps the Richardson depth;
+ *  - a cloud-top-driven profile where the lowest run of cloudy layers
+ *    (q_c above cloudTop.threshold 10⁻⁶) tops out below
+ *    cloudTop.maximumHeight (3 km) and cools: ΔF, the longwave cooling
+ *    summed over the run's layers (`longwave`, the radiation's per-layer
+ *    longwave heating, W/m²), gives V³ = (g/θ_v) ΔF/(ρ c_p) z_ml and
+ *    K = cloudTop.profile κ V z_ml x² (1 − x)^½, x = (z − z_b)/z_ml, over
+ *    z_b < z < h_c (Lock et al.'s 0.85), h_c the cloud top's upper
+ *    interface and z_ml = h_c − z_b. z_b is where a parcel of the cloud
+ *    top's θ_l less cloudTop.perturbation (0.2 K) and q_t, descending
+ *    with its condensate in equilibrium, stops being negatively buoyant
+ *    in θ_v (the lower interface of the last layer it sinks through; 0
+ *    when it reaches the lowest layer).
+ * Regimes (`regime`, REGIME): stable (no cloud-top layer, B0 ≤ 0);
+ * surface-driven (no cloud-top layer, B0 > 0); decoupled (a cloud-top
+ * layer with z_b above h_s: the subcloud layer mixes from the surface
+ * and the plume carries air into the cloud layer); coupled (z_b at the
+ * surface or at or below h_s: the surface profile reaches h_c as well).
+ * `depth` is h_c in the coupled regime and h_s otherwise; `mixingTop` is
+ * the top of all mixing, h_c wherever there is a cloud-top layer.
+ * Entrainment at the inversion follows the closure:
+ *   w_e = min(cap, (A (w_s³ + V³) + A_s r u*³) / (h max(Δb, bMin)))
+ * across the interface above the mixed layer, Δb = g Δθ_v/θ_v between
+ * the layer above, or the one above that where its θ_v is higher (with
+ * `entrainment.jumpLayers` 2, the default: the layer above is the
+ * inversion's own grid layer and holds part of the jump, as Lock et
+ * al. take it), and the mass mean of the mixed layers below, w_s³ =
+ * B0 h for a surface-driven top (coupled or clear; 0 for a decoupled
+ * cloud top, where h = z_ml), and A Nicholls and Turton's efficiency as
+ * the mixed-layer deck takes it: a_1 [1 + a_2 χ* (1 − Δθ_vs/Δθ_v)] with
+ * a_1 `efficiency` (0.2), a_2 `evaporativeEnhancement` (25), at most
+ * `maximumEfficiency` (1), χ* and Δθ_vs from the cloudy top layer's
+ * state and the jumps in θ_l and q_t, and a_1 alone where the top layer
+ * holds no cloud, which is the dry scheme's form above. A decoupled
+ * column also entrains across its surface-driven top at that form. Nothing is
+ * tapered by the deck unless `entrainment.taper`. The diagnosis keeps
+ * per cell the cloud-top cooling ΔF (`cloudTopCooling`, W/m²), V
+ * (`radiativeVelocity`) and the decoupling height z_b (`decoupling`, in
+ * the coordinate of `depth`; 0 where coupled or without a cloud top).
  */
-export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5 };
+export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5, evaporativeEnhancement: 25, maximumEfficiency: 1, taper: false, jumpLayers: 2 };
+export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, perturbation: 0.2, profile: 0.85, excess: 8.5, tolerance: 0.5, cumulusDepth: 400 };
+export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 
 export function createBoundaryLayer(mesh, core, {
   dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, stratiform = null, buffers = null,
-  entrainment: entrainmentOptions = {},
+  entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT,
 } = {}) {
-  const { efficiency, shear, cap, jumpFloor, shearOnset } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
-  const { K, C, E, dSigma, sigmaMid, R, g, kappa, exnerLayer, geopotential } = core.diagnostics;
+  if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
+  const { efficiency, shear, cap, jumpFloor, shearOnset, evaporativeEnhancement, maximumEfficiency, taper: tapered, jumpLayers } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
+  const { threshold: cloudThreshold, maximumHeight: cloudTopHeight, perturbation, profile, excess: excessCoefficient, tolerance, cumulusDepth } = { ...CLOUD_TOP_DEFAULTS, ...cloudTopOptions };
+  const moistScheme = turbulence === 'moist';
+  const { K, C, E, dSigma, sigmaMid, R, g, cp, kappa, exnerLayer, geopotential } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
   const { cellsOnEdge } = mesh;
   const bottom = K - 1;
@@ -78,6 +144,10 @@ export function createBoundaryLayer(mesh, core, {
   const depth = new Float64Array(depthBuffer);
   const buoyancyFlux = new Float64Array(buoyancyBuffer), friction = new Float64Array(frictionBuffer);
   const entrainmentVelocity = new Float64Array(entrainmentBuffer);
+  const extra = (name) => (buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * C));
+  const regimeBuffer = extra('regime'), mixingTopBuffer = extra('mixingTop'), coolingBuffer = extra('cloudTopCooling'), velocityBuffer = extra('radiativeVelocity'), decouplingBuffer = extra('decoupling');
+  const regime = new Float64Array(regimeBuffer), mixingTop = new Float64Array(mixingTopBuffer), cloudTopCooling = new Float64Array(coolingBuffer), radiativeVelocity = new Float64Array(velocityBuffer), decoupling = new Float64Array(decouplingBuffer);
+  const thetaL = new Float64Array(K), totalWater = new Float64Array(K);
   const entraining = efficiency > 0 || shear > 0;
   const vector = new Float64Array(3 * C), bottomVector = new Float64Array(3 * C);
   const speed = new Float64Array(C), riPrev = new Float64Array(C), zPrev = new Float64Array(C);
@@ -114,6 +184,10 @@ export function createBoundaryLayer(mesh, core, {
           if (k === kTop) depth[i] = z;
         }
       }
+    }
+    if (moistScheme) {
+      for (let i = iFrom; i < iTo; i++) moistColumn(i, pi, theta, surfaceT, q, qc);
+      return;
     }
     for (let i = iFrom; i < iTo; i++) {
       const zb = geopotential[bottom * C + i] / g, h = (deckTop && deckTop[i] > 0 ? Math.max(depth[i], deckTop[i]) : depth[i]) - zb;
@@ -152,6 +226,145 @@ export function createBoundaryLayer(mesh, core, {
     }
   }
 
+  function surfaceBuoyancy(i, pi, theta, surfaceT, q) {
+    const base = bottom * C + i;
+    const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]) : 0;
+    return g / theta[base] * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
+  }
+
+  function density(pi, k, i, theta) {
+    const idx = k * C + i;
+    return pi[i] * sigmaMid[k] / (R * theta[idx] * exnerLayer[idx]);
+  }
+
+  function parcelVirtual(level, total, k, i, pi) {
+    const ex = exnerLayer[k * C + i], liquidT = level * ex, qs = saturationHumidity(liquidT, pi[i] * sigmaMid[k]);
+    if (!(total > qs)) return level * (1 + VIRTUAL_FACTOR * total);
+    const slope = qs * latentHeat / (R_VAPOR * liquidT * liquidT), liquid = (total - qs) / (1 + latentHeat * slope / cp);
+    return (liquidT + latentHeat * liquid / cp) / ex * (1 + VIRTUAL_FACTOR * (total - liquid) - liquid);
+  }
+
+  /*
+   * w_e across interface kE into the mixed layers kE + 1 … lowest (see
+   * the header); `buoyant` is w_s³ + V³, `sheared` r u*³, h the depth the
+   * velocity scales are spread over.
+   */
+  function entrain(i, pi, theta, q, qc, kE, lowest, h, buoyant, sheared) {
+    if (kE < kTop || !(h > 0)) return 0;
+    let weight = 0, sumV = 0, sumL = 0, sumQ = 0;
+    for (let k = kE + 1; k <= lowest; k++) {
+      const idx = k * C + i;
+      weight += dSigma[k]; sumV += dSigma[k] * thetaV[idx];
+      sumL += dSigma[k] * (theta[idx] - latentHeat * qc[idx] / (cp * exnerLayer[idx])); sumQ += dSigma[k] * (q[idx] + qc[idx]);
+    }
+    const above = jumpLayers > 1 && kE > kTop && thetaV[(kE - 1) * C + i] > thetaV[kE * C + i] ? (kE - 1) * C + i : kE * C + i;
+    const mean = sumV / weight, jump = g * (thetaV[above] - mean) / mean;
+    let efficiencyNow = efficiency;
+    const top = (kE + 1) * C + i;
+    if (qc[top] > cloudThreshold && evaporativeEnhancement > 0) {
+      const ex = exnerLayer[top], T = theta[top] * ex, qs = saturationHumidity(T, pi[i] * sigmaMid[kE + 1]), dqs = qs * latentHeat / (R_VAPOR * T * T);
+      const gamma = latentHeat / cp * dqs, c = 1 + VIRTUAL_FACTOR * q[top] - qc[top] + (1 + VIRTUAL_FACTOR) * T * dqs;
+      const jumpL = theta[above] - latentHeat * qc[above] / (cp * exnerLayer[above]) - sumL / weight, jumpQ = q[above] + qc[above] - sumQ / weight;
+      const virtualJump = Math.max(thetaV[above] - mean, jumpFloor * mean / g);
+      const saturatedJump = c / (1 + gamma) * jumpL + (c * latentHeat / (cp * ex * (1 + gamma)) - theta[top]) * jumpQ;
+      const demand = dqs * ex * jumpL - jumpQ;
+      const share = demand > 0 ? Math.min(1, qc[top] * (1 + gamma) / demand) : 1;
+      efficiencyNow = Math.min(maximumEfficiency, efficiency * (1 + evaporativeEnhancement * Math.max(0, share * (1 - saturatedJump / virtualJump))));
+    }
+    let velocity = Math.min(cap, (efficiencyNow * buoyant + shear * sheared) / (h * Math.max(jump, jumpFloor)));
+    if (tapered) {
+      const open = deckGate ? Math.min(1, Math.max(0, (DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN))) : 1;
+      velocity *= open * (stratiform ? 1 - stratiform[i] : 1);
+    }
+    if (!(velocity > 0)) return 0;
+    mixing[kE * C + i] += 0.5 * (density(pi, kE, i, theta) + density(pi, kE + 1, i, theta)) * velocity;
+    return velocity;
+  }
+
+  function moistColumn(i, pi, theta, surfaceT, q, qc) {
+    const base = bottom * C + i, zb = geopotential[base] / g;
+    const interfaceZ = (k) => 0.5 * (geopotential[k * C + i] / g + geopotential[(k + 1) * C + i] / g) - zb;
+    for (let k = kTop; k < K; k++) mixing[k * C + i] = 0;
+    entrainmentVelocity[i] = 0;
+    const buoyancy = surfaceBuoyancy(i, pi, theta, surfaceT, q);
+    buoyancyFlux[i] = buoyancy;
+    let surfaceDepth = depth[i] - zb;
+    if (buoyancy > 0 && q && qc && cumulusDepth > 0) {
+      const mixed = Math.cbrt(friction[i] ** 3 + 0.6 * buoyancy * Math.max(0, surfaceDepth));
+      const level = theta[base] - latentHeat * qc[base] / (cp * exnerLayer[base]) + excessCoefficient * buoyancy * thetaV[base] / (g * mixed), total = q[base] + qc[base];
+      let k = bottom - 1, condensation = -1;
+      for (; k >= kTop; k--) {
+        const ex = exnerLayer[k * C + i];
+        if (condensation < 0 && total > saturationHumidity(level * ex, pi[i] * sigmaMid[k])) condensation = k;
+        if (!(parcelVirtual(level, total, k, i, pi) + tolerance > thetaV[k * C + i])) break;
+      }
+      if (condensation > k && k >= kTop) {
+        const parcelTop = interfaceZ(k), cloudBase = interfaceZ(condensation);
+        if (parcelTop - cloudBase <= cumulusDepth && parcelTop <= cloudTopHeight && parcelTop > surfaceDepth) {
+          surfaceDepth = parcelTop;
+          depth[i] = zb + parcelTop;
+        }
+      }
+    }
+    let top = -1, cooling = 0;
+    if (longwave && q && qc) {
+      for (let k = bottom; k > kTop; k--) {
+        if (interfaceZ(k - 1) > cloudTopHeight) break;
+        if (qc[k * C + i] > cloudThreshold && !(qc[(k - 1) * C + i] > cloudThreshold)) { top = k; break; }
+      }
+      if (top >= 0) {
+        for (let k = top; k <= bottom && qc[k * C + i] > cloudThreshold; k++) cooling -= longwave[k * C + i];
+        if (!(cooling > 0)) { top = -1; cooling = 0; }
+      }
+    }
+    let coupled = false, lowest = bottom, base0 = 0, cloudTopZ = 0;
+    if (top >= 0) {
+      const idx = top * C + i, level = theta[idx] - latentHeat * qc[idx] / (cp * exnerLayer[idx]) - perturbation, total = q[idx] + qc[idx];
+      let k = top + 1;
+      while (k <= bottom && parcelVirtual(level, total, k, i, pi) < thetaV[k * C + i]) k++;
+      lowest = k - 1;
+      base0 = k > bottom ? 0 : interfaceZ(k - 1);
+      coupled = k > bottom || base0 <= surfaceDepth;
+      if (coupled) base0 = 0;
+      cloudTopZ = interfaceZ(top - 1);
+    }
+    let h = coupled ? cloudTopZ : surfaceDepth;
+    depth[i] = zb + h;
+    if (deckTop && deckTop[i] > 0) h = Math.max(h, deckTop[i] - zb);
+    regime[i] = top >= 0 ? (coupled ? REGIME.COUPLED : REGIME.DECOUPLED) : buoyancy > 0 ? REGIME.SURFACE : REGIME.STABLE;
+    mixingTop[i] = zb + Math.max(h, cloudTopZ);
+    cloudTopCooling[i] = cooling;
+    decoupling[i] = top >= 0 && !coupled ? zb + base0 : 0;
+    const layerDepth = cloudTopZ - base0;
+    let velocityCubed = 0;
+    if (top >= 0 && layerDepth > 0) velocityCubed = g / thetaV[top * C + i] * cooling / (density(pi, top, i, theta) * cp) * layerDepth;
+    const velocity = Math.cbrt(velocityCubed);
+    radiativeVelocity[i] = velocity;
+    let scale = friction[i];
+    if (stability && buoyancy > 0 && h > 0) scale = friction[i] * Math.pow(1 - 15 * Math.max(-2, -0.1 * h * vonKarman * buoyancy / friction[i] ** 3), 0.25);
+    for (let k = kTop; k < bottom; k++) {
+      const z = interfaceZ(k);
+      let diffusivity = 0;
+      if (z < h) diffusivity += vonKarman * scale * z * (1 - z / h) ** 2;
+      if (velocity > 0 && z > base0 && z < cloudTopZ) { const x = (z - base0) / layerDepth; diffusivity += profile * vonKarman * velocity * layerDepth * x * x * Math.sqrt(1 - x); }
+      if (diffusivity > 0) mixing[k * C + i] = 0.5 * (density(pi, k, i, theta) + density(pi, k + 1, i, theta)) * diffusivity / (geopotential[k * C + i] / g - geopotential[(k + 1) * C + i] / g);
+    }
+    if (!entraining) return;
+    const onset = shearOnset > 0 ? Math.min(1, buoyancy / shearOnset) : 1;
+    const sheared = buoyancy > 0 ? onset * friction[i] ** 3 : 0;
+    const surfaceInterface = (depthAbove) => { let kE = -1; for (let k = kTop; k < bottom; k++) if (interfaceZ(k) >= depthAbove) kE = k; return kE; };
+    if (top >= 0) {
+      const driven = coupled && buoyancy > 0;
+      entrainmentVelocity[i] = entrain(i, pi, theta, q, qc, top - 1, lowest, coupled ? cloudTopZ : layerDepth, velocityCubed + (driven ? buoyancy * cloudTopZ : 0), driven ? sheared : 0);
+      if (!coupled && buoyancy > 0 && surfaceDepth > 0) {
+        const kE = surfaceInterface(surfaceDepth);
+        if (kE >= lowest) entrain(i, pi, theta, q, qc, kE, bottom, surfaceDepth, buoyancy * surfaceDepth, sheared);
+      }
+    } else if (buoyancy > 0 && h > 0) {
+      entrainmentVelocity[i] = entrain(i, pi, theta, q, qc, surfaceInterface(h), bottom, h, buoyancy * h, sheared);
+    }
+  }
+
   function solve(field, offset, stride, coefficient, coefficientStride, dt, columnMass) {
     let active = false;
     for (let k = kTop; k < bottom; k++) if (coefficient[k * coefficientStride] > 0) { active = true; break; }
@@ -181,6 +394,21 @@ export function createBoundaryLayer(mesh, core, {
 
   function mixColumn(i, pi, theta, q, qc, dt) {
     const coefficient = mixing.subarray(i);
+    if (moistScheme && q && qc) {
+      for (let k = kTop; k < K; k++) {
+        const idx = k * C + i;
+        thetaL[k] = theta[idx] - latentHeat * qc[idx] / (cp * exnerLayer[idx]);
+        totalWater[k] = q[idx] + qc[idx];
+      }
+      if (!solve(thetaL, 0, 1, coefficient, C, dt, pi[i])) return;
+      solve(totalWater, 0, 1, coefficient, C, dt, pi[i]);
+      for (let k = kTop; k < K; k++) {
+        if (!((k > kTop && coefficient[(k - 1) * C] > 0) || (k < bottom && coefficient[k * C] > 0))) continue;
+        const idx = k * C + i;
+        theta[idx] = thetaL[k]; q[idx] = totalWater[k]; qc[idx] = 0;
+      }
+      return;
+    }
     if (!solve(theta, i, C, coefficient, C, dt, pi[i])) return;
     if (q) solve(q, i, C, coefficient, C, dt, pi[i]);
     if (qc) solve(qc, i, C, coefficient, C, dt, pi[i]);
@@ -214,5 +442,8 @@ export function createBoundaryLayer(mesh, core, {
     }
   }
 
-  return { diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, kTop, shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer } };
+  return {
+    diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, regime, mixingTop, cloudTopCooling, radiativeVelocity, decoupling, kTop, turbulence,
+    shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer, regime: regimeBuffer, mixingTop: mixingTopBuffer, cloudTopCooling: coolingBuffer, radiativeVelocity: velocityBuffer, decoupling: decouplingBuffer },
+  };
 }

@@ -61,11 +61,12 @@ export function createModel(gridOrMesh, {
   const core = createSigmaCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, exchangeCoefficients: dragCoefficients, ...radiationOptions });
-  const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, land: geography ? geography.land : null, deckTop: radiation.mlmTop, deckGate: radiation.mlmGate, stratiform: radiation.stratiform, ...boundaryLayerOptions }) : null;
+  const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, land: geography ? geography.land : null, deckTop: radiation.mlmTop, deckGate: radiation.mlmGate, stratiform: radiation.stratiform, longwave: radiation.longwave, ...boundaryLayerOptions }) : null;
+  if (boundaryLayer && boundaryLayer.turbulence === 'moist') radiation.useBoundaryLayer(boundaryLayer.regime, boundaryLayer.mixingTop, boundaryLayer.buoyancyFlux);
   const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, dragCoefficients, ...surfaceOptions });
   const gustiness = surfaceOptions.gustiness ?? 3;
   const moistPhysics = createMoistPhysics(mesh, core, {
-    buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, deckGate: radiation.mlmGate,
+    buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, boundaryRegime: boundaryLayer ? boundaryLayer.regime : null, deckGate: radiation.mlmGate,
     surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null, ...moistOptions,
   });
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);

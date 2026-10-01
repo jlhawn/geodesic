@@ -354,7 +354,7 @@ test('a trade-wind column lifts exactly the shallow cumulus plume and rains noth
 
 test('a drier free troposphere entrains the plume to a lower top, and a dry enough one keeps it shallow', () => {
   const run = (factor) => {
-    const model = plumeColumn({}, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? factor : 1), saturationHumidity(air.T, p)) }; });
+    const model = plumeColumn({ plumeCape: 70 }, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? factor : 1), saturationHumidity(air.T, p)) }; });
     model.moist.adjust(model.state, 0, 1, 600);
     return { top: model.moist.cumulusTop[0], deep: model.moist.deep.deep, cape: model.moist.deep.cape, rain: model.moist.rain[0] };
   };
@@ -368,9 +368,10 @@ test('a drier free troposphere entrains the plume to a lower top, and a dry enou
 test('the deep base flux relaxes the CAPE toward plumeCape over plumeRelaxation, and plumeClosure: maximum gives it at least the shallow closure', () => {
   const flux = (options) => { const model = plumeColumn(options), [pi, theta, , , q, qc] = model.state; model.moist.plumeColumn(0, pi, theta, q, qc, 600); return { ...model.moist.deep }; };
   const hour = flux({}), twoHours = flux({ plumeRelaxation: 7200 }), lower = flux({ plumeCape: 0 });
-  assert.ok(Math.abs(hour.baseFlux - (hour.cape - 70) / (3600 * hour.consumption)) < 1e-12 * hour.baseFlux, `base flux ${hour.baseFlux}`);
+  const cape0 = MOIST_DEFAULTS.plumeCape;
+  assert.ok(Math.abs(hour.baseFlux - (hour.cape - cape0) / (3600 * hour.consumption)) < 1e-12 * hour.baseFlux, `base flux ${hour.baseFlux}`);
   assert.ok(Math.abs(twoHours.baseFlux - 0.5 * hour.baseFlux) < 1e-12 * hour.baseFlux, 'twice the relaxation time, half the flux');
-  assert.ok(Math.abs(lower.baseFlux / hour.baseFlux - hour.cape / (hour.cape - 70)) < 1e-9, 'the flux scales with the CAPE above plumeCape');
+  assert.ok(Math.abs(lower.baseFlux / hour.baseFlux - hour.cape / (hour.cape - cape0)) < 1e-9, 'the flux scales with the CAPE above plumeCape');
   const shallowOnly = flux({ plumeCape: 1e6 }), maximum = flux({ plumeCape: 1e6, plumeClosure: 'maximum' });
   assert.ok(!shallowOnly.deep && maximum.deep && maximum.baseFlux > 0, 'with CAPE below plumeCape the deep plume runs only under plumeClosure: maximum');
 });
@@ -493,10 +494,11 @@ async function parity(options, { momentum = false } = {}) {
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
 }
 
-test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   await parity({});
   await parity({ plumeClosure: 'maximum', plumeSource: 'lowest', plumeCapeParcel: 'undilute', plumeMassGrowth: 2e-4 });
   await parity({ plumeClosure: 'cape', downdraftShare: 0.5, downdraftEntrainment: 0, plumeRainThreshold: 5e-4, autoconversionFloor: 'boundaryLayer', upperCloudLifetime: 1800 });
+  await parity({ plumeConsumption: 'buoyant', cloudLifetime: 7200 });
   await parity({ plumeMomentum: true }, { momentum: true });
   await parity({ plumeMomentum: true, downdraftShare: 0 }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });

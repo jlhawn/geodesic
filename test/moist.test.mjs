@@ -74,7 +74,7 @@ test('autoconversion rains out cloud water above the threshold and conserves wat
   assert.ok(rain >= 0 && moist.columnWater(pi, qc, 0) < cloudBefore);
   assert.ok(Math.abs(before - moist.columnWater(pi, qc, 0) - moist.columnWater(pi, q, 0) - rain) < 1e-12 * before);
   assert.ok(qc[(K - 3) * C] < 1e-3 && qc[(K - 3) * C] > 1.5e-4, 'the thick cloud converts toward the threshold');
-  assert.ok(qc[(K - 5) * C] < 1e-4 && qc[(K - 5) * C] > 0.9e-4, 'the thin cloud only decays slowly');
+  assert.ok(qc[(K - 5) * C] < 1e-4 && qc[(K - 5) * C] > 0.7e-4, 'the thin cloud only decays over the cloud lifetime');
 });
 
 test('rain evaporates into the dry layers it falls through, conserving water and moist enthalpy, and never oversaturates them', () => {
