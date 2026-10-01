@@ -4232,6 +4232,88 @@ load and take two CPU steps with nothing non-finite; five64_day2281
 and nine64_day0091 take 32 GPU steps and save regimes and mixing tops
 with nothing non-finite.
 
+**Tuning (Oct 1).** Run ten (a fresh atlas start on 976b0bc, N=128) rested
+its decks at the inversion ceiling the cumulus lift, near 2.0–2.1 km, with
+cloud layers 800–900 m thick and 400–900 g/m² of water (the radiation takes
+at most 150), lost its Arctic ice by day 150 and drove trades of 0.08–0.11
+N/m². Three changes, each on both engines with parity tests. Measured with
+three-day N=64 GPU runs (`everySteps` 8) from copies of eight64_day0183 and,
+for the Arctic, nine64_day0091, the changes taken in turn on top of each
+other; day 186's albedo and ASR − OLR are the means of eight samples a day
+(`DAY_MEAN` 8 in `scripts/spinup.mjs`; the day line's own value is one step
+at a fixed UTC and moves by up to 0.04 in albedo against the day mean), the
+deck boxes and the global rain and evaporation from `scripts/verticalAudit.mjs`
+on each day-186 state.
+
+- The deck's rest by regime (`deckRest` 'regime', the default; 'inversion'
+  and 'depth' remain). A coupled column rests at its boundary-layer top; a
+  surface-driven or decoupled column whose ceiling's θ_v jump lies above
+  `cumulusCeiling` (2000 m above the surface), or that has no ceiling,
+  shuts its gate (G = 0), runs no deck and rests at the boundary-layer top;
+  every other column rests at the ceiling. With the deck running, its water
+  is not in q_c, so its column reads as surface-driven, and the test falls
+  on the height of the inversion. Screens of the stand-down height, end of
+  day 186 (albedo, ASR − OLR): 1500 m 0.290, −1.1; 2000 m 0.295, −2.4;
+  2500 m 0.307, −6.4; unmodified 0.313, −8.1. At 1500 m the deck runs on
+  0.038, 0.212 and 0.137 of the SE Pacific, Peru and Namibia column-steps.
+- A lifetime for stratiform cloud (`stratiformLifetime` 3 h, the moist
+  physics; null: none). A layer's lifetime moves from `cloudLifetime` (or
+  the upper one) to it by a share that is 0 at and below the top of a
+  plume that ran in the column this step, and elsewhere the larger of the
+  cell's sea-ice cover and, under the moist boundary layer, 1 below the
+  mixing top of a coupled column, 0 below that of any other, and the EIS
+  share above it.
+- The sea's drag coefficient 1.2·10⁻³ at the lowest layer's midpoint
+  (`SEA_DRAG`, about 1.4·10⁻³ at 10 m; land keeps 1.5·10⁻³), the heat and
+  vapour exchange following it; the GPU ocean's stress takes each cell's
+  coefficient as the CPU's does. `SURFACE` (JSON) passes it to the
+  spin-up and the audit.
+
+| day 186, N=64 from eight64_day0183 | unmodified | regime rest | + stratiform lifetime | + sea drag |
+|---|---|---|---|---|
+| albedo, 8 samples (end of day) | 0.294 (0.312) | 0.283 (0.296) | 0.287 (0.298) | 0.279 (0.298) |
+| ASR − OLR, W/m² | −2.0 (−8.0) | +1.3 (−2.8) | +0.8 (−2.8) | +3.2 (−2.9) |
+| global rain; evaporation, mm/d | 2.25; 2.33 | 2.20; 2.28 | 2.21; 2.28 | 2.07; 2.12 |
+| deck runs, SE Pacific / Peru / Namibia | 0.461 / 0.657 / 0.704 | 0.182 / 0.500 / 0.514 | 0.187 / 0.531 / 0.545 | 0.191 / 0.582 / 0.797 |
+| deck height where it runs, m | 1694 / 1345 / 1431 | 1458 / 1299 / 1374 | 1460 / 1339 / 1378 | 1385 / 1236 / 1313 |
+| its cloud layer, m | 505 / 341 / 450 | 296 / 295 / 387 | 310 / 333 / 396 | 261 / 232 / 303 |
+| its water, g/m² (capped; share capped) | 267 / 124 / 225 (82 / 76 / 129; 0.41 / 0.28 / 0.71) | 97 / 107 / 180 (69 / 74 / 108; 0.21 / 0.18 / 0.50) | 107 / 131 / 184 (76 / 77 / 114; 0.26 / 0.24 / 0.55) | 61 / 60 / 113 (51 / 46 / 81; 0.11 / 0.10 / 0.27) |
+| low cloud, radiative | 0.414 / 0.523 / 0.694 | 0.254 / 0.448 / 0.637 | 0.281 / 0.447 / 0.666 | 0.233 / 0.416 / 0.711 |
+| SE Pacific rain, mm/d | 0.70 | 0.58 | 0.58 | 0.48 |
+| 60–90N ice loss from nine64_day0091, 10³ km³/day | 0.233 | 0.225 | 0.175 (9.191 → 8.666) | 0.174 |
+
+The equatorial sea after one CPU step from ten128_day0183, 2S–2N
+160E–100W: stress −0.1102 → −0.0881 N/m² (5S–5N −0.1062 → −0.0849), the
+lowest layer's wind −7.61 m/s in both, the 10 m wind by the log law −7.08
+→ −7.13 m/s. Three N=64 days from run ten's own ten64_day0183, unmodified
+and with all three: albedo 0.333 → 0.313, ASR − OLR −12.1 → −5.6 W/m²,
+global rain 2.83 → 2.63 and evaporation 2.87 → 2.61 mm/d; the SE Pacific
+deck runs on 0.532 → 0.494 of the column-steps (stood down on 0.243) at
+1617 → 1567 m, 546 → 485 m thick with 337 → 273 g/m² (capped on 0.631 →
+0.545); Namibia 0.908 → 0.905 at 1192 → 1112 m, 92 → 47 g/m².
+
+After the three, one CPU step of tf3m_day0186: `moist.adjust` keeps each
+column's c_p T + L q to 1.1·10⁻¹⁵ and its water with the rain to 8.5·10⁻¹⁶
+relative but for 27 columns the filler touches. Parity: the regime rest
+under moist turbulence at `cumulusCeiling` 3000 and 200 m (height rms
+8.7·10⁻⁷, gate 4·10⁻⁸); the stratiform lifetime on 362 random columns with
+random regimes, mixing tops, EIS shares and sea ice (θ to 6.5·10⁻⁵ K, q to
+3.6·10⁻⁸, q_c to 1.3·10⁻⁸; 338 of 1025 cloudy layers keep more cloud under
+3 h than 1 h in both engines); with the sea's drag at zero no stress
+reaches the ocean across any of the 670 sea–sea edges at N=6 on either
+engine. The in-day restart of `test/asyncSpinup.test.mjs` now differs by
+4.6 % (netFlux, day 3; under 4 % with any one change undone), and the test
+keeps 5 %.
+
+What still misses: at 2000 m the SE Pacific deck runs on 0.19 of its
+column-steps and its low cloud is 0.23–0.28: on 0.55 of the steps the
+4 K jump above its boundary layer lies above 2000 m or is missing (the
+resolved inversion, the interface of largest dθ_v/dz, at 1.56–1.71 km);
+on run ten's state the SE Pacific deck is still 485 m thick at 1.57 km with
+273 g/m² of water, a mixed layer moist enough that its cloud base sits near
+1.1 km. The sea drag lowers the global rain and evaporation of the
+eight64 runs from 2.21 and 2.28 to 2.07 and 2.12 mm/d (Earth 2.6–2.8).
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
