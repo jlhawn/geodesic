@@ -80,5 +80,6 @@ for (const c of chosen) {
 const file = `${SWEEP}/candidates.csv`, keys = Object.keys(lines[0]);
 const old = existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').slice(1).filter((l) => !chosen.some((c) => l.startsWith(`${c.name},`))) : [];
 writeFileSync(file, [keys.join(','), ...old, ...lines.map((l) => keys.map((k) => (typeof l[k] === 'number' ? Number(l[k].toPrecision(6)) : l[k])).join(','))].join('\n') + '\n');
-writeFileSync(`${SWEEP}/candidates.scores.json`, JSON.stringify(Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v.scores])), null, 1));
+const scoresFile = `${SWEEP}/candidates.scores.json`, kept = existsSync(scoresFile) ? JSON.parse(readFileSync(scoresFile, 'utf8')) : {};
+writeFileSync(scoresFile, JSON.stringify({ ...kept, ...Object.fromEntries(Object.entries(results).map(([k, v]) => [k, v.scores])) }, null, 1));
 for (const l of lines) console.log(`${l.name}: total ${l.total.toFixed(2)} (day 193 ${l.s193.toFixed(2)}, N=128 ${l.s188.toFixed(2)}, fresh ${l.s30.toFixed(2)}; screen ${l.screenScore.toFixed(2)})`);
