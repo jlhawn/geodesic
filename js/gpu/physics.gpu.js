@@ -30,7 +30,7 @@ export function physicsConstants(o) {
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
   if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${o.cloudOverlap}`);
   if (!(o.overcastInversion?.[1] > o.overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${o.overcastInversion}`);
-  if (o.deckRest !== 'depth' && o.deckRest !== 'inversion') throw new Error(`deckRest must be 'depth' or 'inversion', not ${o.deckRest}`);
+  if (o.deckRest !== 'depth' && o.deckRest !== 'inversion' && o.deckRest !== 'regime') throw new Error(`deckRest must be 'depth', 'inversion' or 'regime', not ${o.deckRest}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
   for (const retired of RETIRED_OPTIONS) if (retired in o) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
   if (o.cumulusSource !== 'mean' && o.cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${o.cumulusSource}`);
@@ -75,7 +75,7 @@ const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
 const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
-const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest === 'inversion'};
+const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling};
 const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 `;
 }
@@ -449,21 +449,26 @@ fn mlmFlow(i: i32, m: i32) -> f32 {
   for (var s = 0; s < MAXE; s++) { if (s < n) { sum += mlmRing(MI[COC + MAXE * i + s], m); } }
   return sum / f32(n + 1);
 }
-fn mlmCeiling(i: i32, floor: f32) -> f32 {
+fn mlmCapping(i: i32, floor: f32) -> i32 {
   for (var k = K - 2; k >= 1; k--) {
-    let upper = (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV;
     if ((D[D_GEO + (k + 1) * C + i] + LV[L_GABS + k + 1]) / GRAV >= MLM_HMAX) { break; }
-    if (upper > floor && D[D_THV + k * C + i] - D[D_THV + (k + 1) * C + i] >= MLM_CEILINV) { return upper - 1.0; }
+    if ((D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV > floor && D[D_THV + k * C + i] - D[D_THV + (k + 1) * C + i] >= MLM_CEILINV) { return k; }
   }
-  return MLM_HMAX;
+  return -1;
 }
 fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, dt: f32, sun: MlmSun) -> MlmDeck {
   let none = MlmDeck(false, 0.0, 0.0, 0.0, 0.0);
   let bottom = (K - 1) * C + i;
   let depth = mixedDepth + (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
+  let regime = PH[PH_REGIME + i];
+  let lifted = MLM_REST_REGIME && (regime == 1.0 || regime == 2.0);
+  var capping = -1;
+  if (MLM_PROGNOSTIC || lifted) { capping = mlmCapping(i, depth); }
   var ceiling = MLM_HMAX;
-  if (MLM_PROGNOSTIC) { ceiling = min(MLM_HMAX, mlmCeiling(i, depth)); }
-  let resting = select(depth, ceiling, MLM_REST_INVERSION && ceiling < MLM_HMAX);
+  if (MLM_PROGNOSTIC && capping >= 0) { ceiling = min(MLM_HMAX, (D[D_GEO + capping * C + i] + LV[L_GABS + capping]) / GRAV - 1.0); }
+  var standDown = lifted;
+  if (lifted && capping >= 0) { standDown = !(mlmInterface(i, capping + 1) <= MLM_CUCEIL); }
+  let resting = select(depth, ceiling, MLM_REST_INVERSION && !(MLM_REST_REGIME && regime == 3.0) && !standDown && ceiling < MLM_HMAX);
   var h = depth;
   if (MLM_PROGNOSTIC) { h = resting; }
   if (MLM_PROGNOSTIC && PH[PH_MLMH + i] > 0.0) { h = max(depth, min(ceiling, PH[PH_MLMH + i])); }
@@ -501,12 +506,13 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
   let start = MlmState(h, heat / weight, water / weight);
   var now = MlmOut(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
   var passed = 0.0;
-  if (sinking) {
+  if (sinking && !standDown) {
     now = mlmDiagnose(start, pi, sensible, evaporation, thetaAbove, qtAbove, sun);
     if (MLM_BL_GATE) { if (PH[PH_REGIME + i] == 3.0) { passed = 1.0; } } else if (now.jump >= MLM_MININV) { passed = 1.0; }
   }
   var gate = passed;
   if (MLM_GATEMEM > 0.0) { gate = PH[PH_MLMGATE + i] + (passed - PH[PH_MLMGATE + i]) * mlmFresh(dt / MLM_GATEMEM); }
+  if (standDown) { gate = 0.0; }
   PH[PH_MLMGATE + i] = gate;
   if (!(gate > MLM_UNDECIDED || (gate == MLM_UNDECIDED && passed > 0.0)) || MLM_BYPASS) { mlmRest(i, resting, dt); return none; }
   if (!sinking) { now = mlmDiagnose(start, pi, sensible, evaporation, thetaAbove, qtAbove, sun); }

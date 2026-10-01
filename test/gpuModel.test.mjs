@@ -536,6 +536,20 @@ test('with deckRest \'inversion\' the carried height starts and rests at the inv
   for (let i = 0; i < C; i++) if (resting.tops[i] > 0 || resting.heights[i] > 300 + 1) assert.ok(resting.heights[i] <= ceiling(i) + 100, `cell ${i}: ${resting.heights[i]} against the ceiling near ${ceiling(i)}`);
 });
 
+test('with deckRest \'regime\' the deck stands down in surface-driven and decoupled columns whose inversion lies above cumulusCeiling, alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const shared = { deckRest: 'regime', turbulence: 'moist' };
+  const high = await mixedLayerPair(4, { ...shared, cumulusCeiling: 3000 }), low = await mixedLayerPair(4, { ...shared, cumulusCeiling: 200 });
+  const regimes = (run) => { const n = [0, 0, 0, 0]; for (const r of run.model.boundaryLayer.regime) n[r]++; return n; };
+  let shut = 0;
+  for (let i = 0; i < low.C; i++) if (low.gpuGate[i] === 0 && low.model.radiation.mlmGate[i] === 0) shut++;
+  console.log(`four moist steps under a 10 K inversion, regimes (stable, surface, decoupled, coupled) ${regimes(high).join(', ')}: with the stand-down above 3 km decks on ${high.decked} of ${high.C} cells (GPU ${high.gpuDecked}), above 200 m on ${low.decked} (GPU ${low.gpuDecked}) with ${shut} gates shut in both; height rms ${high.height.rmsRel.toExponential(1)} and ${low.height.rmsRel.toExponential(1)}, gate max ${high.gate.maxDiff.toExponential(1)} and ${low.gate.maxDiff.toExponential(1)}, water rms ${high.mlmWater.rmsRel.toExponential(1)} and ${low.mlmWater.rmsRel.toExponential(1)}`);
+  assert.ok(high.decked > 0.5 * high.C && low.decked < 0.5 * high.decked && shut > 0.5 * low.C, `decks ${high.decked} and ${low.decked}, ${shut} shut`);
+  for (const run of [high, low]) {
+    assert.ok(run.decked === run.gpuDecked, `deck on ${run.decked}, GPU ${run.gpuDecked}`);
+    assert.ok(run.height.rmsRel < 1e-5 && run.gate.maxDiff < 1e-6 && run.cover.maxDiff < 1e-3 && run.mlmWater.rmsRel < 1e-3, `height ${run.height.rmsRel}, gate ${run.gate.maxDiff}, cover ${run.cover.maxDiff}, water ${run.mlmWater.rmsRel}`);
+  }
+});
+
 test('a ceilingInversion below minimumInversion holds the deck under a weaker jump, alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const shared = { deckRest: 'inversion', minimumInversion: 4, step: 0.92 };
   const strong = await mixedLayerPair(4, shared), weak = await mixedLayerPair(4, { ...shared, ceilingInversion: 2 });

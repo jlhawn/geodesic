@@ -12,6 +12,7 @@ import { createSurface } from '../js/physics/surface.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
+import { REGIME } from '../js/physics/boundaryLayer.module.js';
 
 const N = +(process.env.PHYSICS_TEST_N ?? 6);
 const grid = new Grid(N);
@@ -840,6 +841,47 @@ test('with deckRest \'inversion\' a deck whose boundary layer is a shallow subcl
   assert.ok(r.mlmGate[noon] < 0.5 && Math.abs(r.mlmHeight[noon] - expected) < 1e-9 * expected, `a resting height relaxes toward the ceiling: ${r.mlmHeight[noon]} against ${expected}`);
   assert.throws(() => createRadiation(mesh, core, { deckRest: 'ceiling' }));
   console.log(`a 289 K mixed layer to σ 0.9 under a 298 K free troposphere with its Richardson depth 50 m above the lowest layer (${top.height.toFixed(0)} m): resting at the depth no deck in 48 h; resting at the ceiling (${ceiling.toFixed(0)} m) the deck forms after ${lifted.formed} h at ${lifted.heights[lifted.formed - 1].toFixed(0)} m and stands at ${lifted.heights[47].toFixed(0)} m after 48 h`);
+  core.diagnostics.piSigmaDot.fill(0);
+});
+
+test('with deckRest \'regime\' (the default) a surface-driven or decoupled column whose inversion lies above cumulusCeiling stands its deck down at once, one under a lower inversion and a stable one rest at the ceiling as under \'inversion\', and a coupled one rests at its boundary-layer top', () => {
+  const column = mixedLayerColumn(0.4), { g, geopotential, exnerLayer, exnerLower, cp } = core.diagnostics;
+  for (let i = 0; i < C; i++) column.depth[i] = geopotential[(K - 1) * C + i] / g + 50;
+  const dt = 3600, relaxed = Math.exp(-dt / DAY);
+  const radiation = (options, regime) => {
+    const r = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...options });
+    r.useBoundaryLayer(new Float64Array(C).fill(regime), new Float64Array(C));
+    r.setTime(0);
+    r.mlmGate.fill(0);
+    return r;
+  };
+  const outcome = (options, regime) => {
+    const r = radiation(options, regime), noon = brightest(r), heights = [], gates = [];
+    let formed = 0;
+    for (let n = 1; n <= 48; n++) {
+      const deck = mixedLayerRun(r, noon, column, 1, dt);
+      heights.push(r.mlmHeight[noon]); gates.push(r.mlmGate[noon]);
+      if (!formed && deck.mlmTop > 0) formed = n;
+    }
+    return { formed, heights, gates };
+  };
+  const inversion = outcome({ deckRest: 'inversion' }, REGIME.SURFACE), depth = outcome({ deckRest: 'depth' }, REGIME.SURFACE);
+  assert.ok(inversion.formed > 0 && depth.formed === 0, `under 'inversion' the deck forms after ${inversion.formed} h, under 'depth' never`);
+  for (const regime of [REGIME.STABLE, REGIME.SURFACE, REGIME.DECOUPLED]) assert.deepEqual(outcome({ cumulusCeiling: 3000 }, regime), inversion, `regime ${regime} under an inversion below cumulusCeiling`);
+  assert.deepEqual(outcome({ cumulusCeiling: 100 }, REGIME.STABLE), inversion, 'a stable column never stands down');
+  for (const regime of [REGIME.SURFACE, REGIME.DECOUPLED]) {
+    const down = outcome({ cumulusCeiling: 100 }, regime);
+    assert.ok(down.formed === 0 && down.gates.every((x) => x === 0) && down.heights.every((h) => h === 0), `regime ${regime} under an inversion above cumulusCeiling: no deck, the gate shut, no height`);
+  }
+  assert.deepEqual(outcome({ cumulusCeiling: 100 }, REGIME.COUPLED), depth, 'a coupled column rests at its boundary-layer top');
+  const r = radiation({ cumulusCeiling: 100 }, REGIME.SURFACE), noon = brightest(r), top = boundaryLayerTop(column, noon);
+  r.mlmHeight[noon] = inversion.heights[47];
+  r.mlmGate[noon] = 1;
+  const before = r.mlmHeight[noon], deck = mixedLayerRun(r, noon, column, 1, dt), expected = top.height + (before - top.height) * relaxed;
+  assert.ok(deck.mlmTop === 0 && r.mlmGate[noon] === 0 && Math.abs(r.mlmHeight[noon] - expected) < 1e-9 * expected, `a standing deck stands down in one step, its height relaxing toward the boundary-layer top: ${r.mlmHeight[noon]} against ${expected}`);
+  const bottom = (K - 1) * C + noon, surface = geopotential[bottom] - cp * core.arrays.thetaV[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
+  const jump = (geopotential[(K - 3) * C + noon] + cp * core.arrays.thetaV[(K - 3) * C + noon] * (exnerLayer[(K - 3) * C + noon] - exnerLower[(K - 4) * C + noon]) - surface) / g;
+  console.log(`the same column with its inversion at ${jump.toFixed(0)} m: with cumulusCeiling 3 km a stable, surface-driven or decoupled column forms its deck after ${inversion.formed} h as under 'inversion'; with 100 m a surface-driven or decoupled one has no deck in 48 h and a standing deck at ${before.toFixed(0)} m stands down in one step; a coupled one rests at the boundary-layer top (${top.height.toFixed(0)} m) and forms none, as under 'depth'`);
   core.diagnostics.piSigmaDot.fill(0);
 });
 
