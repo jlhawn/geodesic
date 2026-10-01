@@ -13,14 +13,15 @@
 // 'fill w', closureVelocity's least-squares fit with weight w; 'interior', the
 // fit only on token edges with water denser than the class beneath both of
 // their cells, so a class under the sea floor keeps its tokens; 'interior2',
-// the same with the token edges next to the filled ones fitted from them.
+// the same with the token edges next to the filled ones fitted from them;
+// 'extended', the ocean's closure: interior2 with closureAdjoint.
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { cellVector, laplacianVelocity } from '../js/dynamics/operators.module.js';
-import { THIN, CLOSURE_RIDGE, closureCoefficient, closureVelocity } from '../js/ocean/layered.module.js';
+import { THIN, CLOSURE_RIDGE, closureCoefficient, closureVelocity, closureAdjoint } from '../js/ocean/layered.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) throw new Error('usage: node scripts/closureCoupling.mjs <state.bin>');
@@ -105,9 +106,17 @@ function closureInput(k, uAll, mode) {
   return second;
 }
 const lap = new Float64Array(E), lap2 = new Float64Array(E), divS = new Float64Array(C), curlS = new Float64Array(mesh.nVertices);
+const rings = { deepest: new Float64Array(ocean.shared.deepestEdge), k: 0, valid: new Uint8Array(E), second: new Float64Array(E) };
 function closure(k, uAll, mode, out) {
-  laplacianVelocity(mesh, closureInput(k, uAll, mode), lap, divS, curlS);
-  laplacianVelocity(mesh, lap, lap2, divS, curlS);
+  if (mode.extended) {
+    rings.k = k;
+    laplacianVelocity(mesh, closureVelocity(mesh, uAll.subarray(k * E, (k + 1) * E), hEdge.subarray(k * E, (k + 1) * E), edgeOcean, 1, filled, rings), lap, divS, curlS);
+    laplacianVelocity(mesh, lap, lap2, divS, curlS);
+    closureAdjoint(mesh, lap2, 1, rings);
+  } else {
+    laplacianVelocity(mesh, closureInput(k, uAll, mode), lap, divS, curlS);
+    laplacianVelocity(mesh, lap, lap2, divS, curlS);
+  }
   for (let e = 0; e < E; e++) out[e] = !edgeOcean[e] || hEdge[ae(k, e)] < THIN ? 0 : -nu4 * lap2[e];
   return out;
 }
@@ -128,7 +137,7 @@ for (let e = 0; e < E; e++) {
   const lo = ((lon * deg) % 360 + 360) % 360;
   band[e] = edgeOcean[e] && Math.abs(latEdge[e] * deg) <= LAT && lo >= 180 && lo < 250 ? 1 : 0;
 }
-const MODES = [{ name: 'tokens' }, { name: 'fill 0.25', fill: 0.25 }, { name: 'fill 0.5', fill: 0.5 }, { name: 'fill 1', fill: 1 }, { name: 'interior', fill: 1, interior: true }, { name: 'interior2', fill: 1, interior: true, rings: 2 }];
+const MODES = [{ name: 'tokens' }, { name: 'fill 0.25', fill: 0.25 }, { name: 'fill 0.5', fill: 0.5 }, { name: 'fill 1', fill: 1 }, { name: 'interior', fill: 1, interior: true }, { name: 'interior2', fill: 1, interior: true, rings: 2 }, { name: 'extended', extended: true }];
 const classes = [];
 for (let k = 1; k < L && rho[k] < 1025.6; k++) if (rho[k] >= 1021.4) classes.push(k);
 
