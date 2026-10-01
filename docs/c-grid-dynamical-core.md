@@ -3739,10 +3739,8 @@ albedo and ASR − OLR (plume 0.310, +2.2): `criticalHumidity` 0.85 0.315,
 `upperCloudLifetime` (both engines; the lifetime of cloud water above
 `shallowTop`) 1 h: day 187 0.286, +2.2. Ten days at N=64 with
 `cloudLifetime` 2 h: albedo 0.284 … 0.302, ASR − OLR over days 188–193
-−0.3, −2.4, −2.9, −1.2, +0.6, +2.8 (mean −0.6). The resolved cloud's cover
-exists only where a layer holds cloud water, so a higher critical
-humidity narrows the distribution and raises the cover. No setting brings
-N=128 within 4 W/m²; `convection` defaults to 'bettsMiller'.
+−0.3, −2.4, −2.9, −1.2, +0.6, +2.8 (mean −0.6). At N=128 only the
+plume's defaults were run; `convection` defaults to 'bettsMiller'.
 
 Entrainment (`js/physics/boundaryLayer.module.js`, both engines):
 w_e = o (1 − s) min(cap, (A B0 + A_s r u*³/h) / max(Δb, b_min)), o the
@@ -3758,9 +3756,10 @@ without it); 362 random columns, 78 tapered: engines agree on w_e to
 5.8·10⁻⁴ relative, θ to 1.2·10⁻⁴ K, q to 3.3·10⁻⁸; one N=6 step under 6
 and 9 K inversions: the share on the ramp in 35 and 50 columns, engines to
 7.5·10⁻⁶, w_e to 2.1·10⁻³ mm/s. One CPU step from acc64_day0193, sea
-30S–30N with B0 > 0 (13,205 columns): w_e 3.12 mm/s (3.28 without the
-onset), 1,960 columns below the onset, 630 with a share, 500 on the gate's
-ramp. Three days at N=64: albedo and ASR − OLR on day 186 0.310, +2.2
+30S–30N with B0 > 0 (13,206 columns), area means: w_e 3.26 mm/s, 3.43
+without the onset, 4.16 untapered and 3.36 under the cut at a gate of 0.5
+without the share or the onset; 1,960 columns below the onset, 630 with a
+share, 499 on the gate's ramp. Three days at N=64: albedo and ASR − OLR on day 186 0.310, +2.2
 (plume) and 0.284, +4.6 (Betts–Miller) against 0.310, +2.2 and 0.283, +5.1
 before.
 
@@ -3786,43 +3785,100 @@ depth; the engines agree on the carried height to 1.2·10⁻⁷ (3.2·10⁻⁷ a
 rest) and the gate to 4·10⁻⁸.
 
 Acceptance, the defaults (Betts–Miller deep, shallow plume, the deck at
-the inversion, 4 K):
+the inversion, 4 K), on the reviewed code (the share kept off land, below):
 
 | | value | asked |
 |---|---|---|
-| N=64 albedo days 184–193 | 0.273, 0.299, 0.306, 0.303, 0.306, 0.309, 0.312, 0.320, 0.316, 0.315 | 0.30–0.32 from 186 |
-| N=64 ASR − OLR days 188–193 (mean) | −0.4, −0.8, −1.5, −3.2, −1.7, −1.8 (−1.6) | ±4 |
-| N=64 global rain days 187–193, mm/d | 2.42–2.66 | 2.4–2.8 |
-| SE Pacific rain, mm/d; firing; low cloud; deck runs | 1.15; 0.031; 0.346; 0.356 | < 0.5; < 0.02; 0.4–0.7; ≥ 0.3 |
-| SE Pacific EIS; deck height where it runs; resolved inversion | 4.92 K; 2067 m; 1937 m (5.55 K) | |
-| Peru rain; firing; low cloud; deck runs | 0.00; 0.000; 0.464; 0.467 | |
-| Pacific ITCZ rain, mm/d; ω500, Pa/s | 3.96; −0.023 | 6–9 |
-| ITCZ firing columns' heating peak; lowest 100 m | 438 hPa; −1.15 K/d | 400–500; −10 to +5 |
-| zonal-mean rain peak | 5.15 mm/d at 1.5S | 5–7 at 5–10N |
-| ω700 grid-scale share | 0.228 | < 0.3 |
-| N=128 albedo days 184–188 | 0.247, 0.266, 0.287, 0.305, 0.308 | 0.29–0.32 on 186–188 |
-| N=128 ASR − OLR (mean) | +14.7, +9.6, +3.9, −1.8, −2.4 (+4.8) | ±4 |
-| N=128 day 188: SE Pacific rain; low cloud; deck runs; ITCZ rain | 0.09; 0.290; 0.364; 4.53 | |
-| N=128 equatorial ω500 100E–180 / 160W–80W, Pa/s | −0.028 to −0.062 / +0.026, +0.040, −0.008, +0.012, +0.029 | ascent / descent |
-| 60–90N ice loss, 10³ km³/day | 0.183 (9.191 → 8.641) | ≤ 0.18 |
-| fresh start, days 1–30 albedo | 0.276, 0.299, 0.353, 0.395, 0.421, 0.439 … 0.306 (day 17) … 0.277 | 0.29–0.33 by 30 |
-| fresh start ASR − OLR, day 30 | +13.2 (+10.5 to +16.1 over days 18–30) | ±10 |
+| N=64 albedo days 184–193 | 0.273, 0.299, 0.306, 0.304, 0.305, 0.309, 0.313, 0.318, 0.312, 0.312 | 0.30–0.32 from 186 |
+| N=64 ASR − OLR days 188–193 (mean) | −0.2, −0.8, −1.8, −2.8, −1.1, −0.8 (−1.3) | ±4 |
+| N=64 global rain days 187–193, mm/d | 2.42–2.67 | 2.4–2.8 |
+| SE Pacific rain, mm/d; firing; low cloud; deck runs | 1.29; 0.038; 0.264; 0.296 | < 0.5; < 0.02; 0.4–0.7; ≥ 0.3 |
+| SE Pacific EIS; deck height where it runs; resolved inversion | 4.39 K; 2045 m; 1908 m (5.01 K) | |
+| Peru rain; firing; low cloud; deck runs | 0.00; 0.000; 0.424; 0.429 | |
+| Pacific ITCZ rain, mm/d; ω500, Pa/s | 3.71; −0.015 | 6–9 |
+| ITCZ firing columns' heating peak; lowest 100 m | 438 hPa; −1.07 K/d | 400–500; −10 to +5 |
+| zonal-mean rain peak | 5.64 mm/d at 1.5N | 5–7 at 5–10N |
+| ω700 grid-scale share | 0.235 | < 0.3 |
+| N=128 albedo days 184–188 | 0.247, 0.265, 0.288, 0.305, 0.308 | 0.29–0.32 on 186–188 |
+| N=128 ASR − OLR (mean) | +14.7, +9.8, +3.8, −1.7, −2.4 (+4.8) | ±4 |
+| N=128 day 188: SE Pacific rain; low cloud; deck runs; ITCZ rain | 0.12; 0.287; 0.361; 4.31 | |
+| N=128 equatorial ω500 100E–180 / 160W–80W, Pa/s | −0.027 to −0.062 / +0.026, +0.045, −0.012, +0.010, +0.031 | ascent / descent |
+| 60–90N ice loss, 10³ km³/day | 0.183 (9.191 → 8.643) | ≤ 0.18 |
+| fresh start, days 1–30 albedo | 0.276, 0.298, 0.353, 0.394, 0.420, 0.439 … 0.289 (day 17) … 0.281 | 0.29–0.33 by 30 |
+| fresh start ASR − OLR, day 30 | +14.1 (+7.0 to +17.1 over days 18–30) | ±10 |
 
-Ice loss with 'depth' and 2 K 0.179, under the plume 0.183. The fresh
-start: no NaN, clamped 0 on every day; convection after 30 days: share
-0.75 global, 0.99 15S–15N; SE Pacific 1.59 mm/d (convective 1.54) on 0.32
-of its column-days; Pacific ITCZ 7.62 mm/d; equator after 30 days:
-surface current −0.25 m/s (160E–100W) and −0.73 m/s (140W–100W),
-undercurrent +0.22 m/s at 93 m, stress −0.036 N/m², mixed layer 52 m, 1024
-class top 186 m and 51 m. Ten days at N=64: convection after 10 days 0.67
-global, 0.99 15S–15N, SE Pacific 0.83 mm/d (0.72) on 0.08, Pacific ITCZ
-4.08 mm/d; equator −0.17 and −0.37 m/s, +0.06 m/s at 88 m, −0.020 N/m²,
-51 m, 144 and 90 m. Pace at N=128: days 187 and 188 0.9 and 1.0 min (two
+On 94f7e7b, before the review, the same runs gave: N=64 albedo 0.303 …
+0.320, ASR − OLR mean −1.6; SE Pacific 1.15 mm/d, firing 0.031, low cloud
+0.346, deck runs 0.356 (deck at 2067 m, resolved inversion 1937 m); Peru
+low cloud 0.464, deck runs 0.467; ITCZ 3.96 mm/d; zonal peak 5.15 mm/d at
+1.5S; N=128 mean +4.8; ice loss 0.183 (9.191 → 8.641); fresh start day 30
+0.277 and +13.2. The SE Pacific and ITCZ numbers come from one eight-step
+window of the day-193 state.
+
+Ice loss on 94f7e7b with 'depth' and 2 K 0.179, under the plume 0.183.
+The fresh start: no NaN, clamped 0 on every day; convection after 30
+days: share 0.76 global, 0.99 15S–15N; SE Pacific 1.89 mm/d (convective
+1.87) on 0.36 of its column-days; Pacific ITCZ 8.66 mm/d; equator after
+30 days: surface current −0.23 m/s (160E–100W) and −0.77 m/s
+(140W–100W), undercurrent +0.19 m/s at 93 m, stress −0.040 N/m², mixed
+layer 52 m, 1024 class top 185 m and 51 m. Ten days at N=64: convection
+after 10 days 0.67 global, 0.99 15S–15N, SE Pacific 0.83 mm/d (0.72) on
+0.09, Pacific ITCZ 3.95 mm/d; equator −0.16 and −0.36 m/s, +0.06 m/s at
+88 m, −0.019 N/m², 51 m, 144 and 90 m. Pace on 94f7e7b at N=128: days 187 and 188 0.9 and 1.0 min (two
 N=64 runs sharing the GPU); `profileGpu` over 128 steps from
 eight128_day0183 after 64, alternated twice with the merged parent
 (84d7f40) alone on the GPU: a step's median 86.1 and 86.2 ms against 84.8
 and 84.5 (+1.8 %), the adjust pass 15.97 and 15.99 ms against 14.58 and
 14.59, the physics and boundary-layer passes 7.67 against 7.62.
+
+Review (Sept 30). Rerun from a copy of eight64_day0183, 94f7e7b
+reproduces the ten-day N=64 run byte for byte (state and audit). One CPU
+step of every column of acc64_day0193: the boundary-layer mix keeps each
+column's mass-weighted θ to 7.7·10⁻¹⁶ and water to 8.0·10⁻¹⁶ relative;
+`moist.adjust` keeps c_p T + L q to 5.9·10⁻¹⁶ and water with the rain to
+7.2·10⁻¹⁶ except in 59 columns, each of which gains no more water than the
+negative water it entered with (the filler); the same on the reviewed
+code's day 193 (61 columns), and with `upperCloudLifetime` 1 h or the
+plume. States from twin64_day0810 (27 layers), seven64_day0365 and
+five64_day2190 load and step on the CPU, twin64_day0810 a day on the GPU.
+
+The share's taper acted over land: one CPU step from acc64_day0193, 2,047
+of the 7,868 land columns with B0 > 0 tapered, removing 1.22 of their
+6.73 mm/s area-mean w_e, and 33 columns over ice. Both engines now keep
+`stratiform` at 0 over land and full ice, where no deck forms (land
+parity test in `test/landGpu.test.mjs`: under a 9 K inversion the share
+would be positive on 36 land cells; engines to 6.1·10⁻⁶, w_e to 3.7·10⁻³
+mm/s). On the reviewed code's day 193 (rv3b_day0193), sea 30S–30N with
+B0 > 0 (13,139 columns): w_e 3.22 mm/s against 4.12 untapered; the gate's
+ramp (0.5 < G < 0.6) tapers 469 entraining columns by 0.08 mm/s of the
+area mean, a gate of 0.6 or more stops 1,101 (0.44 mm/s), the share
+tapers 409 (34 with a share of 1) by 0.11 mm/s, the onset 1,703 by 0.17
+mm/s. Mean w_e by B0 with and without the onset: 0.02 and 2.02 mm/s for B0
+up to 10⁻⁶ m²/s³ (29 columns), 0.17 and 2.60 to 5·10⁻⁶, 0.49 and 2.91 to
+10⁻⁵, 1.02 and 2.75 to 2.5·10⁻⁵, 1.96 and 2.48 to 5·10⁻⁵; 2,121 columns
+have B0 ≤ 0.
+
+The deck against package 2's record (eight CPU steps from each day-193
+state; running column-steps): with the inversion rest the SE Pacific deck
+is within 20 m of the floor on 0.014 (acc64) and 0.000 (rv3b) of its
+running steps, against 0.44–0.54 in package 2, and within 20 m of the
+ceiling on 0.186 and 0.175, against 0.03–0.06. It mixes the layer above
+the resolved inversion (the interface of largest dθv/dz) on 0.118 and
+0.172 of them, every one under a jump below 4 K (mean 2.92 and 2.66 K);
+over all open sea on 0.141 and 0.136 (1.98 and 1.90 K). Package 2 and
+t_bm_day0193 under the old rule ('depth', 2 K): never in the SE Pacific,
+0.049 over the sea (1.06 K). The 4 K default sets the ceiling as well as
+the regime test, so the ceiling is the lowest 4 K jump, not package 2's
+2 K. `ceilingInversion` (null: `minimumInversion`) separates them; ten
+days at N=64 with a 2 K ceiling (rvc2b): albedo 0.269, 0.288, 0.295,
+0.296, 0.300, 0.300, 0.303, 0.298, 0.297, 0.298, ASR − OLR over days
+188–193 +1.7, +1.9, +1.2, +2.8, +3.8, +3.8 (mean +2.5); day 193: the deck
+no longer mixes past the resolved inversion, but the SE Pacific deck runs
+on 0.162 (rests within 20 m of the ceiling on 0.447, where the 4 K test
+passes on 0.064), low cloud 0.229, rain 1.03 mm/d, Peru deck runs 0.378.
+The default keeps the 4 K ceiling. A resting height relaxes toward the
+ceiling where the column has one and toward the Richardson depth where
+it has none (0.53 of the SE Pacific column-steps have one on rv3b).
 
 ### M22 — A moist boundary layer — planned
 
