@@ -3483,8 +3483,9 @@ Jordan humidity above 850 hPa × 1, 0.8, 0.6, 0.4 tops the plume at 211,
 flux is (CAPE − CAPE0)/(τF) to 10⁻¹²; on 362 random columns the engines
 agree under each closure, source and CAPE parcel to 1.8·10⁻⁴ K and
 3·10⁻⁷ kg/kg, the base flux to 5.2·10⁻⁵ of 0.133 kg/m²/s, and with momentum
-the winds to 1.7·10⁻⁴ m/s on 245 of 1080 edges, each edge's column momentum
-to 2.2·10⁻¹¹ of layer momenta up to 2·10⁴; 'bettsMiller' reproduces the
+the winds to 1.6·10⁻⁴ m/s on 245 of 1080 edges (1.1·10⁻⁴ with
+`downdraftShare` 0, no downdraft), each edge's column momentum to
+2.2·10⁻¹¹ of layer momenta up to 2·10⁴; 'bettsMiller' reproduces the
 pinned digests. `test/gpuModel.test.mjs` runs the rain accumulation under
 both schemes (24 steps at N=6: plume per-cell rms 8.0·10⁻⁵ convective,
 3.3·10⁻⁴ large-scale, last step's rain to 1.2·10⁻⁴ kg/m²).
@@ -3610,6 +3611,43 @@ the N=128 runs, which took 2.5 to 11.7 min a model day (1.7 min on days
 187–188 of `fin128n`); the uncontended ten-day N=64 runs took 6.6 s a
 model day (`fin64`) against 6.0 for the shallow branch (`pt`, the same
 code under 'bettsMiller').
+
+Review (Sept 30). Without a downdraft the deep plume's downdraft momentum
+mixing factors are 1 in every layer; before that, `plumeMomentum` left NaN
+winds on 204 edges after one CPU step from fin64_day0193. One CPU step of
+`moist.adjust` over every column of fin64_day0193 with `plumeMomentum`:
+20,199 plume columns (5,191 deep; the 2 where the filler lost water left
+out) keep column enthalpy to 8.9·10⁻¹⁶ and water with the rain to
+8.2·10⁻¹⁶; the transport moves 17,943 edges, each edge's column momentum to
+2.9·10⁻¹⁰ kg/m/s against layer momenta up to 4.6·10⁴, the heat matching
+the kinetic energy lost to 1.2·10⁻¹¹; 27 edges gain kinetic energy, which
+no heat pays for. The worker-thread CPU step reproduces the single thread
+bit for bit over two steps from fin64_day0193 with `plumeMomentum`. The
+closure's F on the 4,063 deep columns of the second CPU step from
+fin64_day0193 under `plumeClosure` 'cape': positive in every column, the
+buoyant cloud layers (the CAPE's own) giving a median 0.88 of it (5–95 %
+0.66–1.00), the negatively buoyant cloud layers a median 0.11 (95 % 0.33),
+the layers between the cloud-base layer and the source at most 0.05 (95 %);
+the source layers, which the downdraft cools, are outside F; the base flux
+falls below (CAPE − CAPE0)/(τF) through the boundary-loss or Courant
+limit on 32. No candidate with CAPE above 70 J/kg has F ≤ 0; 10,737 of the
+14,802 plumes topping above σ 0.7 have CAPE at most 70 J/kg and go to the
+shallow plume. Ten days at N=64 from eight64_day0183 rerun (`adv64`)
+reproduce `fin64` byte for byte, its log and its day-193 audit;
+`pt_day0193` is byte-identical to `mfv64_day0193`. Equatorial ω500 on day
+193 by 20° from 120E to 160W: −0.038, −0.039, −0.019, +0.004, −0.013 Pa/s
+(`mfv64` audited under 'bettsMiller': −0.067, −0.065, −0.030, −0.042,
+−0.038), from 40E to 80E −0.124, −0.177 (+0.028, −0.022); SH Hadley −180
+(−131), NH 59 (45) ·10⁹ kg/s. twin64_day0900 and five64_day2281 (27
+layers), six64_day1004, seven64_day0639, eight64_day0183, nine64_day0091
+and m21b64_day0183 load and take two CPU steps under the plume with no
+non-finite value, 23 to 217 deep plumes and 0.14–0.52 mm/d of rain. Pace
+with nothing else on the GPU: two days at N=128 from nine128_day0183
+(`adv128`) at 1.0 and 2.0 min, saved after 2.2 min, against 0.9, 1.9 and
+2.0 for b4cc733 (`adv128b`); `profileGpu` alternated twice, a step's median
+87.4 and 85.1 ms against 84.1 and 84.0 for b4cc733 (+2.6 %) and 85.7 and
+85.9 under 'bettsMiller', the adjust pass 15.90 and 15.53 ms against 14.52
+and 14.72 and 16.24 and 16.27.
 
 ## 7. Module layout in this repo
 
