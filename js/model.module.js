@@ -67,6 +67,7 @@ export function createModel(gridOrMesh, {
   const gustiness = surfaceOptions.gustiness ?? 3;
   const moistPhysics = createMoistPhysics(mesh, core, {
     buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, boundaryRegime: boundaryLayer ? boundaryLayer.regime : null, deckGate: radiation.mlmGate,
+    boundaryTop: boundaryLayer && boundaryLayer.turbulence === 'moist' ? boundaryLayer.mixingTop : null, stratiform: radiation.stratiform,
     surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null, ...moistOptions,
   });
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
@@ -79,6 +80,7 @@ export function createModel(gridOrMesh, {
     ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity } : {}),
     ...iceOptions,
   });
+  moistPhysics.useSeaIce(seaIce.concentration);
   const totals = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), openSea = new Float64Array(C), stressScratch = new Float64Array(E);
   const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C);

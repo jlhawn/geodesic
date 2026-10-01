@@ -603,10 +603,11 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   assert.ok(moved > C / 2, `the mean moved on ${moved} cells`);
 });
 
-test('the convective and large-scale rain accumulate alike in both engines, cell by cell but for the odd column whose onset falls a step apart, and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the convective and large-scale rain accumulate alike in both engines, cell by cell but for the odd column whose onset falls a step apart (a plume shortens the lifetime of the cloud below its top), and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { model, physics } = await pair(6, 24, 900, 0, false, {}, { rainEvaporation: 0 });
   const C = model.mesh.nCells, { convectivePrecipitation: convective, largeScalePrecipitation: largeScale, precipitation, rain } = model.moist;
-  const largest = Math.max(...convective), onset = (i) => Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest;
+  const largest = Math.max(...convective), largestScale = Math.max(...largeScale);
+  const onset = (i) => Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest || Math.abs(largeScale[i] - physics.COND[i]) > 1e-3 * largestScale;
   const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !onset(i)), pick = (values) => Float64Array.from(kept, (i) => values[i]);
   const conv = stats(pick(convective), pick(physics.CONV)), ls = stats(pick(largeScale), pick(physics.COND)), step = stats(pick(rain), pick(physics.STEPRAIN));
   let fired = 0, rained = 0, apart = 0, area = 0, cpuMean = 0, gpuMean = 0;
@@ -617,7 +618,7 @@ test('the convective and large-scale rain accumulate alike in both engines, cell
     apart = Math.max(apart, Math.abs(convective[i] + largeScale[i] - precipitation[i]));
     area += a; cpuMean += a * convective[i]; gpuMean += a * physics.CONV[i];
   }
-  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain; over the rest per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
+  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain of either kind; over the rest per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
   assert.ok(fired > C / 2 && rained > 0, `convective rain on ${fired} cells, large-scale on ${rained}`);
   assert.ok(C - kept.length <= 0.01 * C, `${C - kept.length} cells apart`);
   assert.ok(Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `mean convective rain ${cpuMean / area} against ${gpuMean / area}`);

@@ -59,7 +59,7 @@ const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThicknes
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME};
-const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null};
+const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
 const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
 const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
@@ -985,6 +985,15 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   let idx = k * C + i;
   return (D[D_GEO + idx] + LV[L_GABS + k] + CP * D[D_THV + idx] * (D[D_EXM + idx] - D[D_EXL + idx - C])) / GRAV;
 }
+fn longCloudShare(i: i32, k: i32, pi: f32, iced: f32) -> f32 {
+  if (PH[PH_CUMF + i] > 0.0 && pi * LV[L_SM + k] >= PH[PH_CUTOP + i]) { return 0.0; }
+  var share = 0.0;
+  if (MOIST_BL) {
+    if (!((D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV < PH[PH_MIXTOP + i])) { share = PH[PH_STRAT + i]; }
+    else if (PH[PH_REGIME + i] == 3.0) { share = 1.0; }
+  }
+  return max(share, iced);
+}
 fn saturateColumn(i: i32, pi: f32) {
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
@@ -1380,6 +1389,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   // autoconversion, and the rain evaporating as it falls
   var rained = 0.0; var convective = 0.0;
   let floor = PH[PH_DEPTH + i];
+  let iceConc = PH[PH_CONC + i]; let iced = select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
@@ -1417,7 +1427,9 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     if (!(qc > 0.0)) { continue; }
     if (AUTO_NONE) { } else if (AUTO_BL) { if (k > 0 && upperInterface(i, k) < floor) { continue; } } else if (k >= K - 2) { continue; }
     let excess = max(0.0, qc - AUTO_T);
-    let converted = min(qc, excess * (1.0 - exp(-AUTO_R * dt)) + qc * (1.0 - exp(-dt / select(CLOUD_LIFE, UPPER_LIFE, UPPER_SPLIT && pi * LV[L_SM + k] < SHALLOW_TOP))));
+    var lifetime = select(CLOUD_LIFE, UPPER_LIFE, UPPER_SPLIT && pi * LV[L_SM + k] < SHALLOW_TOP);
+    if (STRAT_SPLIT) { lifetime += longCloudShare(i, k, pi, iced) * (STRAT_LIFE - lifetime); }
+    let converted = min(qc, excess * (1.0 - exp(-AUTO_R * dt)) + qc * (1.0 - exp(-dt / lifetime)));
     IN[S_QC + idx] = qc - converted;
     rained += mass * converted;
   }

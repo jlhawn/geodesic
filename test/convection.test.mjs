@@ -4,6 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { saturationHumidity, LATENT_HEAT, MOIST_DEFAULTS, DECK_CLOSED } from '../js/physics/moist.module.js';
+import { REGIME } from '../js/physics/boundaryLayer.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -304,6 +305,44 @@ test('with upperCloudLifetime cloud water in the layers above the shallow top co
   assert.ok(Math.abs(plainUp - 1e-4 * Math.exp(-dt / MOIST_DEFAULTS.cloudLifetime)) < 1e-18, `upper without the option ${plainUp}`);
 });
 
+test('stratiform cloud converts over stratiformLifetime: below the mixing top of a coupled column, above it by the EIS share, over sea ice by its cover; cloud the plume left and cloud below the top of a surface-driven column over cloudLifetime', () => {
+  const dt = 600, model = build(), plain = build({ stratiformLifetime: null }), { K, C, sigmaMid, geopotential, g } = model.core.diagnostics;
+  for (const m of [model, plain]) jordanColumn(m, 0);
+  let k = K - 3;
+  while (model.state[0][0] * sigmaMid[k] < 900e2) k++;
+  assert.ok(k < K - 2);
+  const z = geopotential[k * C] / g, short = MOIST_DEFAULTS.cloudLifetime, long = MOIST_DEFAULTS.stratiformLifetime;
+  const after = (m, { regime, inside, share = 0, iced = 0, plumeTop = 0 }) => {
+    const [pi, theta, , , q, qc] = m.state;
+    for (let j = 0; j < K; j++) qc[j * C] = 0;
+    qc[k * C] = 1e-4;
+    m.boundaryLayer.regime[0] = regime;
+    m.boundaryLayer.mixingTop[0] = inside ? z + 100 : z - 100;
+    m.radiation.stratiform[0] = share;
+    m.moist.cumulusBaseFlux[0] = plumeTop > 0 ? 0.01 : 0;
+    m.moist.cumulusTop[0] = plumeTop;
+    m.moist.autoconvertColumn(0, pi, theta, q, qc, dt, null, iced);
+    return qc[k * C];
+  };
+  const converts = (lifetime) => 1e-4 * Math.exp(-dt / lifetime);
+  const cases = [
+    ['coupled, below the mixing top', { regime: REGIME.COUPLED, inside: true }, long],
+    ['surface-driven, below the mixing top', { regime: REGIME.SURFACE, inside: true, share: 1 }, short],
+    ['decoupled, below the mixing top', { regime: REGIME.DECOUPLED, inside: true }, short],
+    ['above the mixing top, EIS share 0.5', { regime: REGIME.SURFACE, inside: false, share: 0.5 }, short + 0.5 * (long - short)],
+    ['above the mixing top, EIS share 0', { regime: REGIME.COUPLED, inside: false }, short],
+    ['surface-driven over ice of cover 0.6', { regime: REGIME.SURFACE, inside: true, iced: 0.6 }, short + 0.6 * (long - short)],
+    ['coupled under a plume that topped above the layer', { regime: REGIME.COUPLED, inside: true, iced: 1, plumeTop: 0.5 * model.state[0][0] }, short],
+    ['coupled with a plume that topped below the layer', { regime: REGIME.COUPLED, inside: true, plumeTop: model.state[0][0] }, long],
+  ];
+  for (const [label, column, lifetime] of cases) {
+    const left = after(model, column);
+    assert.ok(Math.abs(left - converts(lifetime)) < 1e-18, `${label}: ${left} against ${converts(lifetime)} over ${lifetime} s`);
+    assert.ok(Math.abs(after(plain, column) - converts(short)) < 1e-18, `${label} without the option`);
+  }
+  console.log(`a layer at ${(model.state[0][0] * sigmaMid[k] / 100).toFixed(0)} hPa keeps ${(100 * converts(long) / 1e-4).toFixed(2)} % of its cloud water over ${dt} s as stratiform cloud, ${(100 * converts(short) / 1e-4).toFixed(2)} % otherwise`);
+});
+
 function plumeColumn(options = {}, profile = null) {
   const model = build(options);
   if (profile) place(model, 0, 101500, profile); else jordanColumn(model, 0);
@@ -402,6 +441,16 @@ async function parity(options, { momentum = false } = {}) {
     for (let k = 0; k < K; k++) if (random() < 0.08) qc[k * C + i] = 1e-3 * random();
   }
   if (momentum) for (let x = 0; x < model.state[2].length; x++) model.state[2][x] = 20 * (random() - 0.5) + 10 * Math.sin(x / mesh.nEdges);
+  let layerSeed = 777;
+  const layerRandom = () => { layerSeed = (layerSeed * 1103515245 + 12345) % 2147483648; return layerSeed / 2147483648; };
+  const { regime, mixingTop } = model.boundaryLayer, { stratiform } = model.radiation, { concentration } = model.seaIce, ice = model.state[6];
+  for (let i = 0; i < C; i++) {
+    const { geopotential, g } = core.diagnostics;
+    regime[i] = Math.floor(4 * layerRandom());
+    mixingTop[i] = Math.fround(geopotential[(K - 1) * C + i] / g + 300 + 2200 * layerRandom());
+    stratiform[i] = Math.fround(layerRandom() < 0.5 ? 0 : layerRandom());
+    if (layerRandom() < 0.15) { ice[i] = 0.5 + layerRandom(); concentration[i] = Math.fround(layerRandom() < 0.3 ? 0 : layerRandom()); }
+  }
   for (const a of model.state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   for (const a of [model.boundaryLayer.depth, model.radiation.mlmGate, buoyancy, friction]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   model.boundaryLayer.buoyancyFlux.set(buoyancy);
@@ -409,7 +458,10 @@ async function parity(options, { momentum = false } = {}) {
   const gpu = await createGpuCore(mesh, { levels, physics: options });
   const { device, buffers, kernels, layout } = gpu;
   gpu.upload(model.state);
-  gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate });
+  gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate, concentration });
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.REGIME, Float32Array.from(regime));
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.MIXTOP, Float32Array.from(mixingTop));
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.STRAT, Float32Array.from(stratiform));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.BUOY, Float32Array.from(buoyancy));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.USTAR, Float32Array.from(friction));
@@ -492,6 +544,7 @@ async function parity(options, { momentum = false } = {}) {
   assert.equal(flips, 0);
   assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
+  return { cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]) };
 }
 
 test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -503,6 +556,19 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ plumeMomentum: true, downdraftShare: 0 }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });
   await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, virtualBuoyancy: false });
+});
+
+test('the stratiform lifetime matches between the engines on random columns of every regime, mixing top, EIS share and sea-ice cover, and keeps cloud the short lifetime would rain out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const long = await parity({}), short = await parity({ stratiformLifetime: null });
+  let cloudy = 0, kept = 0, gpuKept = 0;
+  for (let x = 0; x < long.cloud.length; x++) {
+    if (!(short.cloud[x] > 0)) continue;
+    cloudy++;
+    if (long.cloud[x] > short.cloud[x] * (1 + 1e-6)) kept++;
+    if (long.gpuCloud[x] > short.gpuCloud[x] * (1 + 1e-6)) gpuKept++;
+  }
+  console.log(`after one step the 3 h stratiform lifetime keeps more cloud than the 1 h lifetime alone in ${kept} of ${cloudy} cloudy layers (GPU ${gpuKept})`);
+  assert.ok(kept > cloudy / 10 && kept < cloudy && Math.abs(gpuKept - kept) <= cloudy / 100, `${kept} and ${gpuKept} of ${cloudy}`);
 });
 
 test('the retired Betts–Miller options are refused on both engines', async () => {
