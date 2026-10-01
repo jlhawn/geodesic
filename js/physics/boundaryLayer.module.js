@@ -1,5 +1,5 @@
 import { cellVector } from '../dynamics/operators.module.js';
-import { saturationHumidity, DECK_CLOSED, ACTIVITY_UNDECIDED } from './moist.module.js';
+import { saturationHumidity, DECK_OPEN, DECK_CLOSED } from './moist.module.js';
 
 /*
  * A diffusive planetary boundary layer in the manner of Troen and Mahrt
@@ -137,7 +137,7 @@ export function createBoundaryLayer(mesh, core, {
         const rhoBelow = pi[i] * sigmaMid[k + 1] / (R * theta[below] * exnerLayer[below]);
         mixing[idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
       }
-      const open = deckGate ? Math.min(1, Math.max(0, (DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - ACTIVITY_UNDECIDED))) : 1;
+      const open = deckGate ? Math.min(1, Math.max(0, (DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN))) : 1;
       const taper = open * (stratiform ? 1 - stratiform[i] : 1);
       if (entraining && entrainK >= kTop && buoyancy > 0 && taper > 0) {
         const idx = entrainK * C + i, below = idx + C;

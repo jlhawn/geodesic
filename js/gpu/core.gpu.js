@@ -534,9 +534,9 @@ export async function createGpuCore(mesh, {
   const { device } = await getDevice();
   const K = levels.length - 1;
   let cumulusK0 = K;
-  if (phys.shallowScheme === 'massFlux' || phys.convection === 'plume') while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > phys.shallowTop) cumulusK0--;
+  while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > phys.shallowTop) cumulusK0--;
   phys.cumulusK0 = cumulusK0;
-  const L = layoutFor(mesh, K, K - cumulusK0, phys.convection === 'plume' && phys.plumeMomentum ? K : 0);
+  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0);
   const { C, E, V } = L;
   const kappa = R / cp;
   const sigmaUpper = levels.subarray(0, K), sigmaLower = levels.subarray(1, K + 1);

@@ -17,8 +17,8 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
 /*
  * The climate model: the sigma-coordinate core with gray radiation, a
  * slab-ocean surface, bulk surface fluxes of heat and moisture,
- * boundary-layer drag, large-scale condensation, Betts–Miller and dry
- * convective adjustment, and a 5-day Rayleigh sponge above σ = 0.02 in
+ * boundary-layer drag, large-scale condensation, the convective plume
+ * and dry convective adjustment, and a 5-day Rayleigh sponge above σ = 0.02 in
  * the role of gravity-wave drag on the polar-night jet. State is
  * [pi, theta, u, surfaceT, q, qc, ice] (vapour, cloud condensate, sea
  * ice thickness), each on a SharedArrayBuffer; with `moist: false` q

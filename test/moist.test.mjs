@@ -110,46 +110,13 @@ test('rain falling through saturated air reaches the ground whole', () => {
   assert.deepEqual(q, qBefore);
 });
 
-test('Betts–Miller convection warms and dries an unstable moist column, conserving enthalpy against its rain', () => {
-  const [pi, theta, q, qc] = column(302, 0.9, 7e-3);
-  const dt = 450;
-  const before = moistEnthalpy(pi, theta, q, 0), waterBefore = moist.columnWater(pi, q, 0);
-  core.diagnoseColumn(0, pi, theta, q, qc);
-  const top = moist.referenceProfile(0, pi, theta, q);
-  assert.ok(top >= 0 && top < K - 1, `expected a convecting column, got top ${top}`);
-  const rain = moist.convectColumn(0, pi, theta, q, dt);
-  assert.ok(rain > 0, 'deep convection should rain');
-  const water = moist.columnWater(pi, q, 0);
-  assert.ok(Math.abs(water - (waterBefore - rain)) < 1e-9 * waterBefore, `water ${water} vs ${waterBefore - rain}`);
-  assert.ok(Math.abs(moistEnthalpy(pi, theta, q, 0) - before) < 1e-9 * before);
-});
-
-test('deep convection detrains a quarter of its condensate into an anvil at the top of the column', () => {
-  const { core: core25, moist } = createModel(new Grid(3), { moist: { detrainment: 0.25 } });
-  const [pi, theta, q, qc] = column(302, 0.9, 7e-3);
-  const waterBefore = moist.columnWater(pi, q, 0);
-  core25.diagnoseColumn(0, pi, theta, q, qc);
-  const top = moist.referenceProfile(0, pi, theta, q);
-  const total = moist.convectColumn(0, pi, Float64Array.from(theta), Float64Array.from(q), 450);
-  const rain = moist.convectColumn(0, pi, theta, q, 450, qc);
-  assert.ok(Math.abs(rain - 0.75 * total) < 1e-12 * total, `rain ${rain} of ${total}`);
-  const cloud = moist.columnWater(pi, qc, 0);
-  assert.ok(Math.abs(cloud - 0.25 * total) < 1e-12 * total, `anvil ${cloud} vs ${0.25 * total}`);
-  assert.ok(Math.abs(moist.columnWater(pi, q, 0) + cloud - (waterBefore - rain)) < 1e-9 * waterBefore);
-  const C = core.diagnostics.C;
-  assert.ok(qc[top * C] > 0 && qc[(K - 1) * C] === 0, 'cloud at the level of zero buoyancy, none at the surface');
-  let anvil = 0;
-  for (let k = top; k < K; k++) if (qc[k * C] > 0) anvil++;
-  assert.ok(anvil >= 1 && anvil < K / 2, `anvil spans ${anvil} layers`);
-});
-
-test('Betts–Miller leaves a stable dry column alone', () => {
+test('the plume leaves a stable dry column alone', () => {
   const [pi, theta, q, qc] = column(280, 0.2, 5e-3);
-  const copy = Float64Array.from(theta);
+  const copy = Float64Array.from(theta), qCopy = Float64Array.from(q);
   core.diagnoseColumn(0, pi, theta, q, qc);
-  const rain = moist.convectColumn(0, pi, theta, q, 450);
-  assert.equal(rain, 0);
+  assert.equal(moist.plumeColumn(0, pi, theta, q, qc, 450), 0);
   assert.deepEqual(theta, copy);
+  assert.deepEqual(q, qCopy);
 });
 
 test('transport alone conserves total water', () => {

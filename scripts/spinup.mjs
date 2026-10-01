@@ -24,7 +24,7 @@
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}'),
 // RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}'),
-// MOIST (JSON options for the moist physics, e.g. '{"entrainmentRate":1e-4}'),
+// MOIST (JSON options for the moist physics, e.g. '{"plumeEntrainment":0.15}'),
 // BOUNDARY_LAYER (JSON options for the boundary layer, e.g.
 // '{"entrainment":{"efficiency":0.3}}'),
 // DIVERGENCE_DAMPING (the model's DIVERGENCE_DAMPING: the coefficient c of the
