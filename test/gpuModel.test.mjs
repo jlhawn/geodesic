@@ -120,7 +120,8 @@ async function physicsHeating(base, options, dt = 864000, cumulus = null, mixing
   model.seaIce.concentration.set(base.seaIce.concentration);
   model.seaIce.snow.set(base.seaIce.snow);
   model.boundaryLayer.depth.set(base.boundaryLayer.depth);
-  if (mixingTop) model.boundaryLayer.mixingTop.set(mixingTop);
+  const buoyancy = Float64Array.from({ length: model.mesh.nCells }, (_, i) => (i % 2 ? 1e-4 : -1e-4));
+  if (mixingTop) { model.boundaryLayer.mixingTop.set(mixingTop); model.boundaryLayer.buoyancyFlux.set(buoyancy); }
   model.time = base.time;
   const { K } = model.core, C = model.mesh.nCells;
   const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics });
@@ -128,7 +129,7 @@ async function physicsHeating(base, options, dt = 864000, cumulus = null, mixing
   gpu.upload(model.state);
   gpu.uploadPhysics({ snow: model.seaIce.snow, concentration: model.seaIce.concentration });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
-  if (mixingTop) device.queue.writeBuffer(buffers.PH, 4 * layout.PH.MIXTOP, Float32Array.from(mixingTop));
+  if (mixingTop) { device.queue.writeBuffer(buffers.PH, 4 * layout.PH.MIXTOP, Float32Array.from(mixingTop)); device.queue.writeBuffer(buffers.PH, 4 * layout.PH.BUOY, Float32Array.from(buoyancy)); }
   if (cumulus) {
     const layers = (layout.PH.CUWATER - layout.PH.CUCOVER) / C;
     device.queue.writeBuffer(buffers.PH, 4 * layout.PH.CUCOVER, Float32Array.from(cumulus.cover.subarray((K - layers) * C)));

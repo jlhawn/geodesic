@@ -100,7 +100,9 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * dq_s/dT), and σ_s = max(`varianceFloor` q_sl, `varianceScale` l a_l
  * |∂q_t/∂z − Π (dq_s/dT) ∂θ_l/∂z|), the turbulence's spread of s from
  * its mixing length l = κ z/(1 + κ z/`mixingLength`) (z above the
- * surface; 300 m), `varianceScale` 5 (above Mellor and Yamada's B2^½ of
+ * surface; 300 m, or `stableMixingLength` 30 m over a surface whose
+ * buoyancy flux, the boundary layer's of the step before, is not
+ * positive), `varianceScale` 5 (above Mellor and Yamada's B2^½ of
  * 3.2; see M22) and the mean gradients to the neighbouring layers
  * inside the mixed layer; erf is Abramowitz and Stegun's 7.1.26. Such a
  * layer is half covered at s = 0 and overcast once s exceeds 2–3 σ_s,
@@ -339,7 +341,7 @@ export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 95, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 4, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
   prognosticHeight = true, deckRest = 'inversion', gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'maximumRandom',
-  boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, deckRegime = 'inversion', deckBypass = false,
+  boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, deckRegime = 'inversion', deckBypass = false,
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
@@ -396,7 +398,7 @@ export function createRadiation(mesh, core, {
   if (deckRegime !== 'inversion' && deckRegime !== 'boundaryLayer') throw new Error(`deckRegime must be 'inversion' or 'boundaryLayer', not ${deckRegime}`);
   const longwaveBuffer = buffers && buffers.longwave ? buffers.longwave : new SharedArrayBuffer(8 * K * C);
   const longwave = new Float64Array(longwaveBuffer), beforeBands = new Float64Array(K);
-  let boundaryRegime = null, boundaryTop = null;
+  let boundaryRegime = null, boundaryTop = null, boundaryBuoyancy = null;
   const lowCover = new Float64Array(C), lowWater = new Float64Array(C);
   const ceilingJump = ceilingInversion ?? minimumInversion;
   const entraining = stratusIndex === 'ectei';
@@ -543,7 +545,8 @@ export function createRadiation(mesh, core, {
     }
     if (n > 1) { gradientQ /= n; gradientL /= n; }
     const surface = geopotential[bottom] - cp * thetaV[bottom] * (exnerLower[bottom] - exnerLayer[bottom]), z = (geopotential[idx] - surface) / g;
-    const length = 0.4 * z / (1 + 0.4 * z / mixingLength);
+    const asymptote = boundaryBuoyancy !== null && !(boundaryBuoyancy[i] > 0) ? stableMixingLength : mixingLength;
+    const length = 0.4 * z / (1 + 0.4 * z / asymptote);
     const spread = Math.max(varianceFloor * qs, varianceScale * length * a * Math.abs(gradientQ - ex * slope * gradientL));
     return varianceCover(a * (total - qs), spread);
   }
@@ -773,9 +776,10 @@ export function createRadiation(mesh, core, {
     }
   }
 
-  function useBoundaryLayer(regime, mixingTop) {
+  function useBoundaryLayer(regime, mixingTop, buoyancyFlux = null) {
     boundaryRegime = regime;
     boundaryTop = mixingTop;
+    boundaryBuoyancy = buoyancyFlux;
   }
 
   function useCumulus(cover, water) {
