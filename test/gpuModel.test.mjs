@@ -331,7 +331,7 @@ test('under the moist boundary layer the deck gated by its coupled stratocumulus
 
 test('twelve full GPU steps track the CPU model and its energy budget', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { model, state, physics } = await pair(6, 12, 900);
-  const d = model.diagnostics();
+  const read = model.diagnostics(), d = { ...read, ...read.instantaneous };
   const C = model.mesh.nCells;
   let area = 0, ts = 0, abs = 0, atmosphere = 0, olr = 0, rain = 0;
   for (let i = 0; i < C; i++) { const a = model.mesh.areaCell[i]; area += a; ts += a * state[3][i]; abs += a * physics.ABS[i]; atmosphere += a * physics.ATMSW[i]; olr += a * physics.OLR[i]; rain += a * physics.RAIN[i]; }

@@ -2830,6 +2830,23 @@ The work, in order:
    | zonal-mean rain peak, mm/d (lat) | 4.94 (2.5S) | 5.52 (4.5N) | 6–7 (8N) |
    | ω700 grid-scale share | 0.665 | 0.548 | < 0.065 |
    | Hadley peaks, 10⁹ kg/s S / N | −144 / 36 | −152 / 34 | 100–200 / 10–50 |
+
+   The spin-up's daily ASR, OLR and albedo are day means. Both engines
+   sum each cell's absorbed, atmosphere-absorbed, incoming and reflected
+   sunlight and its outgoing longwave over the steps since the last
+   read-out and clear the sums with the rain's; the diagnostics give the
+   area-weighted sums over the step count and the albedo as the summed
+   reflected over the summed incoming sunlight, the last step's values
+   under `instantaneous`, and the per-cell means
+   (`radiation.meanAbsorbedSolar`, `meanOutgoingLongwave`,
+   `meanPlanetaryAlbedo`) are mirrored from the GPU on sync and saved in
+   states (zero in older ones; `test/dayMeans.test.mjs`). The last step
+   alone sees the sun at the same UTC hour every day: from the N=64
+   day-183 state the global albedo runs 0.220–0.296 through day 184,
+   whose last step reads 0.287 against the day's 0.251 (day 185: 0.312
+   against 0.280), so runs with different cloud geography under that
+   hour differ by up to 0.04 of albedo and 15 W/m² in a single step's
+   values.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to

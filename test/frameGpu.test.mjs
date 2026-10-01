@@ -104,7 +104,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   close('columnWater', w / area, d.columnWater); close('columnCloud', c / area, d.columnCloud, 1e-4);
   close('precipitation', rain / area / model.time, d.precipitation, 1e-4);
   close('iceFraction', iceArea / area, d.iceFraction); close('iceThickness', iceArea > 0 ? iceVolume / iceArea : 0, d.iceThickness);
-  close('outgoingLongwave', olr / area, d.outgoingLongwave); close('absorbedSolar', absorbed / area, d.absorbedSolar);
+  close('outgoingLongwave', olr / area, d.instantaneous.outgoingLongwave); close('absorbedSolar', absorbed / area, d.instantaneous.absorbedSolar);
   close('landMeanT', landT / landArea, d.landMeanT); close('soilWater', soil / landArea, d.soilWater);
   let runoff = 0;
   for (let i = 0; i < C; i++) { runoff += mesh.areaCell[i] * physics.RUNOFF[i]; assert.ok(Math.abs(model.land.runoff[i] - physics.RUNOFF[i]) <= 1e-6 * Math.abs(physics.RUNOFF[i]) + 1e-12, `runoff at ${i}`); }

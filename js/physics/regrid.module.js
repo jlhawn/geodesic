@@ -276,6 +276,20 @@ export function savedMoistField(saved, name, target, source = null) {
   return values.length === target.mesh.nCells ? Float64Array.from(values) : regridCellField(source, target, Float64Array.from(values));
 }
 
+/*
+ * The radiation's per-cell means over the last diagnostics interval (the
+ * absorbed sunlight and outgoing longwave in W/m² and the planetary
+ * albedo, see radiation.module.js), with the value each starts from in a
+ * state saved without it (0), interpolated from `source` when the
+ * resolutions differ.
+ */
+export const RADIATION_FIELDS = { meanAbsorbedSolar: 0, meanOutgoingLongwave: 0, meanPlanetaryAlbedo: 0 };
+export function savedRadiationField(saved, name, target, source = null) {
+  const values = saved ? saved[name] : null;
+  if (!values) return new Float64Array(target.mesh.nCells).fill(RADIATION_FIELDS[name]);
+  return values.length === target.mesh.nCells ? Float64Array.from(values) : regridCellField(source, target, Float64Array.from(values));
+}
+
 export function regridState(source, target, state, progress = null, { land = null } = {}) {
   const [pi, theta, u, surfaceT, q = null, qc = null, ice = null] = state;
   const K = source.core.K;

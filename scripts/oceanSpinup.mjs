@@ -41,7 +41,7 @@ import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
-import { savedDeckField, DECK_FIELDS, MOIST_FIELDS } from '../js/physics/regrid.module.js';
+import { savedDeckField, DECK_FIELDS, MOIST_FIELDS, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -129,7 +129,7 @@ async function save(done, step, read = null) {
     N, K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: !!model.surfaceGeopotential, levels: core.levels,
     oceanYears: Math.floor(done / DAYS_PER_YEAR), oceanDays: done, ...(step ? { oceanStep: step } : {}),
     pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight, mlmGate: model.radiation.mlmGate,
-    ...Object.fromEntries(Object.keys(MOIST_FIELDS).filter((name) => saved[name]).map((name) => [name, saved[name]])),
+    ...Object.fromEntries([...Object.keys(MOIST_FIELDS), ...Object.keys(RADIATION_FIELDS)].filter((name) => saved[name]).map((name) => [name, saved[name]])),
     ocean: o, land: landState, sstByYear: Float64Array.from(history, (x) => x ?? NaN),
   }, { f64: ['sstByYear'] }));
   renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
