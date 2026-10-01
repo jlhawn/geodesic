@@ -2847,6 +2847,35 @@ The work, in order:
    against 0.280), so runs with different cloud geography under that
    hour differ by up to 0.04 of albedo and 15 W/m² in a single step's
    values.
+
+   The cloud-radiative effects. With the radiation's `clearSkyPass`
+   (off by default; on in `scripts/spinup.mjs` and
+   `scripts/verticalAudit.mjs`) each column also finds the clear-sky
+   absorbed sunlight and outgoing longwave of the same column with no
+   resolved cloud, deck or cumulus: the clear two-stream with the ozone
+   and vapour absorption kept, and the vapour and gas bands' upward pass
+   with their clear emissivities plus the open window, which is the
+   column's own OLR with the cloud terms zeroed. Both engines sum them
+   per cell beside the day-mean sums, and the diagnostics give
+   `clearAbsorbedSolar`, `clearOutgoingLongwave`, the shortwave effect
+   `shortwaveCloudEffect` (ASR less clear-sky ASR) and the longwave
+   effect `longwaveCloudEffect` (clear-sky OLR less OLR) as means over
+   the same steps, the per-cell effects in
+   `radiation.meanShortwaveCloudEffect` and `meanLongwaveCloudEffect`
+   (mirrored from the GPU, saved in states). The spin-up's daily line
+   gives them after the albedo (`SWCRE x LWCRE y`); the audit gives
+   them globally (Earth −47 ± 4 and +26 ± 3 W/m², CERES EBAF) and over
+   30S–30N, as the saved day means of the state's last day or else over
+   its window. The pass runs every step: in `js/gpu/profile.module.js`
+   over 128 steps from ten64_day0183 and ten128_day0183, two runs each,
+   the physics pass took 2.24 and 2.23 ms without it and 2.28 and
+   2.28 ms with it at N=64 (+0.04 ms of a 26 ms GPU step, 0.15 %), and
+   9.52 and 9.65 against 9.70 and 9.69 ms at N=128 (+0.11 ms of
+   115 ms, 0.1 %), the step medians unchanged within their run-to-run
+   spread (21.0–21.7 and 90.3–92.0 ms). A column's clear-sky fluxes equal
+   those of the same column without its cloud exactly, and over 48 steps
+   at N=6 the engines' per-cell clear-sky sums agree to rms 1.1·10⁻⁵ and
+   their read-outs to 0.002 W/m² (`test/cloudEffect.test.mjs`).
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
