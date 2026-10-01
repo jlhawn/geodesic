@@ -278,12 +278,13 @@ export function savedMoistField(saved, name, target, source = null) {
 
 /*
  * The radiation's per-cell means over the last diagnostics interval (the
- * absorbed sunlight and outgoing longwave in W/m² and the planetary
- * albedo, see radiation.module.js), with the value each starts from in a
+ * absorbed sunlight and outgoing longwave in W/m², the planetary albedo
+ * and, with the clear-sky pass, the shortwave and longwave cloud effects
+ * in W/m², see radiation.module.js), with the value each starts from in a
  * state saved without it (0), interpolated from `source` when the
  * resolutions differ.
  */
-export const RADIATION_FIELDS = { meanAbsorbedSolar: 0, meanOutgoingLongwave: 0, meanPlanetaryAlbedo: 0 };
+export const RADIATION_FIELDS = { meanAbsorbedSolar: 0, meanOutgoingLongwave: 0, meanPlanetaryAlbedo: 0, meanShortwaveCloudEffect: 0, meanLongwaveCloudEffect: 0 };
 export function savedRadiationField(saved, name, target, source = null) {
   const values = saved ? saved[name] : null;
   if (!values) return new Float64Array(target.mesh.nCells).fill(RADIATION_FIELDS[name]);

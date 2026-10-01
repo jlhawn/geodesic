@@ -162,7 +162,7 @@ test('a state carries the per-cell radiation means, regridded at another resolut
   const model = createModel(new Grid(6), { ocean: false, physics: false }), target = createModel(new Grid(8), { ocean: false, physics: false });
   const C = model.mesh.nCells, albedo = Float64Array.from({ length: C }, (_, i) => 0.2 + 0.01 * (i % 7));
   const saved = await decodeState(encodeState({ N: 6, K: model.core.K, day: 0, time: 0, pi: model.state[0], meanAbsorbedSolar: albedo.map((a) => 400 * (1 - a)), meanOutgoingLongwave: new Float64Array(C).fill(240), meanPlanetaryAlbedo: albedo }));
-  assert.deepEqual(Object.keys(RADIATION_FIELDS), ['meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo']);
+  assert.deepEqual(Object.keys(RADIATION_FIELDS), ['meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect']);
   for (const name of Object.keys(RADIATION_FIELDS)) model.radiation[name].set(savedRadiationField(saved, name, model));
   for (let i = 0; i < C; i++) assert.equal(model.radiation.meanPlanetaryAlbedo[i], Math.fround(albedo[i]), `albedo of cell ${i}`);
   const moved = savedRadiationField(saved, 'meanOutgoingLongwave', target, model);
