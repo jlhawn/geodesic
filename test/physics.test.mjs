@@ -844,7 +844,7 @@ test('with deckRest \'inversion\' a deck whose boundary layer is a shallow subcl
 });
 
 function modelDigest(radiation, moist = {}) {
-  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 } }, ...(radiation ? { radiation } : {}) });
+  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, plumeCape: 70, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 } }, ...(radiation ? { radiation } : {}) });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   for (let n = 0; n < 12; n++) model.step(900);
   const hash = createHash('sha256');

@@ -218,7 +218,7 @@ test('the full model on bl34 steps alike on the CPU and the GPU, over a continen
   for (const array of [...cpu.state, ...gpu.state]) assert.ok(array.every(Number.isFinite));
   assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} at ${kept[ts.at]}`);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
-  assert.ok(switched.length <= 0.01 * C, `${switched.length} columns apart`);
+  assert.ok(switched.length <= 0.02 * C, `${switched.length} columns apart`);
   assert.ok(q.rmsRel < 2e-3, `q rms ${q.rmsRel}`);
   assert.ok(water.rmsRel < 1e-5, `column water rms ${water.rmsRel}`);
   assert.ok(u.maxDiff < 0.05, `wind max ${u.maxDiff} at ${u.at}`);

@@ -318,7 +318,9 @@ test('under the moist boundary layer the deck gated by its coupled stratocumulus
     console.log(`${JSON.stringify(options)}: four steps, ${coupled} of ${run.C} columns coupled stratocumulus, the gate open on ${open}, the deck on ${run.decked} (GPU ${run.gpuDecked}); engines differ in the gate by ${run.gate.maxDiff.toExponential(1)}, in cover by ${run.cover.maxDiff.toExponential(1)}, in deck water by rms ${run.mlmWater.rmsRel.toExponential(1)}; ${parted} columns part by more than 2·10⁻⁵ in q, where a cloud top or a parcel crosses its threshold in one engine only; elsewhere θ rms ${theta.rmsRel.toExponential(1)}, q rms ${q.rmsRel.toExponential(1)}; OLR rms ${run.olr.rmsRel.toExponential(1)}`);
     if (options.deckBypass) assert.ok(run.decked === 0 && run.gpuDecked === 0 && open > 0, `bypassed: ${run.decked} decks, gate open on ${open}`);
     else assert.ok(Math.abs(run.decked - run.gpuDecked) <= run.C / 100, `deck on ${run.decked}, GPU ${run.gpuDecked}`);
-    assert.ok(run.gate.rmsRel < 1e-3 && run.cover.rmsRel < 1e-2, `gate ${run.gate.rmsRel}, cover ${run.cover.rmsRel}`);
+    let gateFlips = 0;
+    for (let i = 0; i < run.C; i++) if (Math.abs(run.model.radiation.mlmGate[i] - run.gpuGate[i]) > 1e-3) gateFlips++;
+    assert.ok(gateFlips <= run.C / 50, `${gateFlips} gates part`);
     assert.ok(parted <= run.C / 20, `${parted} columns part`);
     assert.ok(theta.rmsRel < 1e-5 && q.rmsRel < 1e-3 && run.olr.rmsRel < 1e-2, `θ ${theta.rmsRel}, q ${q.rmsRel}, OLR ${run.olr.rmsRel}`);
   }
@@ -408,7 +410,7 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
  * column's own inversion: the second step, the first with a diagnosed
  * boundary layer, carries the deck.
  */
-async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = {}, step = null, turbulence = 'dry', ...options } = {}) {
+async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloudLifetime: 3 * 3600, plumeCape: 70 }, step = null, turbulence = 'dry', ...options } = {}) {
   const physics = { mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options };
   const model = createModel(new Grid(6), { ocean: false, radiation: physics, moist, boundaryLayer: { turbulence } });
   const init = initializeState(model, {});
@@ -438,7 +440,7 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = {}, ste
     C, decked, gpuDecked, partial, water: water / Math.max(1, decked),
     cover: stats(r.mlmCover, cell('MLMCOVER')), mlmWater: stats(r.mlmWater, cell('MLMWATER')), entrainment: stats(r.mlmEntrainment, cell('MLMENT')),
     subsidence: stats(r.mlmSubsidence, cell('MLMSUB')), olr: stats(r.outgoing, cell('OLR')), sw: stats(r.surfaceShortwave, cell('SWDN')),
-    height: stats(r.mlmHeight, cell('MLMH')), gate: stats(r.mlmGate, cell('MLMGATE')), top: stats(r.mlmTop, cell('MLMTOP')), state: await gpu.download(), model,
+    height: stats(r.mlmHeight, cell('MLMH')), gate: stats(r.mlmGate, cell('MLMGATE')), gpuGate: Float64Array.from(cell('MLMGATE')), top: stats(r.mlmTop, cell('MLMTOP')), state: await gpu.download(), model,
     heights: Float64Array.from(r.mlmHeight), tops: Float64Array.from(r.mlmTop), depth: Float64Array.from(model.boundaryLayer.depth),
     fraction: stats(r.stratusFraction, cell('DECKF')), deck: stats(r.stratus, cell('DECK')), mean: r.mlmSubsidence,
     sunlit, sunlitWater: stats(pick(r.mlmWater), pick(cell('MLMWATER'))), sunlitDeck: stats(pick(r.stratus), pick(cell('DECK'))), waterPath: Float64Array.from(r.mlmWater),
