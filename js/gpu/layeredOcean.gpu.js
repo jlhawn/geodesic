@@ -30,7 +30,7 @@ export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
-  interfacialDrag: 2e-4, shearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, diffusivity: 0.01, everySteps: 4,
+  interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -61,8 +61,8 @@ ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_
 ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
 ${constLine('NEUTRALSNAP', o.neutralSnap ? 1 : 0)} ${constLine('EROSION', o.convectiveErosion ? 1 : 0)} ${constLine('BUOYMEM', o.buoyancyMemory)} ${constLine('NBRRATIO', o.mixedNeighbourRatio)} ${constLine('CENTRING', o.vorticityCentring)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
-${constLine('RINT', o.interfacialDrag)} ${constLine('SHEARMIX', o.shearMixing ? 1 : 0)} ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundViscosity)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
-${constLine('FREEZE', FREEZING_POINT)} ${constLine('CDO', o.dragCoefficient)} ${constLine('GUSTO', o.gustiness)} ${constLine('CLOSURERIDGE', CLOSURE_RIDGE)} ${constLine('CLOSUREFILL', o.closureFill || 0)}
+${constLine('RINT', o.interfacialDrag)} ${constLine('SHEARMIX', o.shearMixing ? 1 : 0)} ${constLine('INTSHEAR', o.interiorShearMixing ? 1 : 0)} ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundViscosity)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
+${constLine('FREEZE', FREEZING_POINT)} ${constLine('CDO', o.dragCoefficient)} ${constLine('GUSTO', o.gustiness)} ${constLine('CLOSURERIDGE', CLOSURE_RIDGE)} ${constLine('CLOSUREFILL', o.closureFill || 0)} ${constLine('CLOSURERINGS', o.closureRings ? 1 : 0)}
 @group(0) @binding(0) var<storage, read_write> MI: array<i32>;
 @group(0) @binding(1) var<storage, read_write> MF: array<f32>;
 @group(0) @binding(2) var<storage, read_write> LV: array<f32>;
@@ -89,6 +89,21 @@ fn closureAdd(fit: ClosureFit, o: i32, nv: vec3<f32>, tv: vec3<f32>, value: f32)
   let no = vec3<f32>(MF[F_NEDGE + 3 * o], MF[F_NEDGE + 3 * o + 1], MF[F_NEDGE + 3 * o + 2]);
   let a = dot(no, nv); let b = dot(no, tv);
   return ClosureFit(fit.saa + a * a, fit.sab + a * b, fit.sbb + b * b, fit.sau + a * value, fit.sbu + b * value, true);
+}
+fn closureWeight(k: i32, e: i32, o: i32, usableBelow: f32) -> f32 {
+  let nv = vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
+  let tv = vec3<f32>(OD[O_TEDGE + 3 * e], OD[O_TEDGE + 3 * e + 1], OD[O_TEDGE + 3 * e + 2]);
+  var saa = 0.0; var sab = 0.0; var sbb = 0.0;
+  for (var s = 0; s < MI[NEE + e]; s++) {
+    let x = MI[EOE + MAXEE * e + s]; let flag = OD[O_FLUX + k * E + x];
+    if (flag < 0.5 || flag > usableBelow) { continue; }
+    let nx = vec3<f32>(MF[F_NEDGE + 3 * x], MF[F_NEDGE + 3 * x + 1], MF[F_NEDGE + 3 * x + 2]);
+    let a = dot(nx, nv); let b = dot(nx, tv);
+    saa += a * a; sab += a * b; sbb += b * b;
+  }
+  let no = vec3<f32>(MF[F_NEDGE + 3 * o], MF[F_NEDGE + 3 * o + 1], MF[F_NEDGE + 3 * o + 2]);
+  let p = saa + CLOSURERIDGE; let q = sbb + CLOSURERIDGE;
+  return (q * dot(no, nv) - sab * dot(no, tv)) / (p * q - sab * sab);
 }
 fn closureSolve(fit: ClosureFit) -> f32 {
   let p = fit.saa + CLOSURERIDGE; let q = fit.sbb + CLOSURERIDGE;
@@ -185,15 +200,32 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   OD[O_PHI + n] = phi;
 }`,
     /*
-     * The ∇⁴ closure's input under closureFill, closureVelocity of
-     * ocean/layered.module.js, in LAPA, which the closure's first
-     * Laplacian then reads.
+     * The ∇⁴ closure's input, closureVelocity of ocean/layered.module.js:
+     * under closureTokens 'beside' in LAPA, which the closure's first
+     * Laplacian then reads; under 'interior' the first ring in LAPB with
+     * FLUX, free once the cell tendency has read it, marking the thick and
+     * fitted edges (1 thick, 2 the first ring), and oClosureRing the second
+     * into LAPA. DEEPEST is the deepest class holding more than THIN metres
+     * in both cells of an edge. After the second Laplacian, closureAdjoint
+     * as two gathers: oClosureBack1 carries the second ring's ∇⁴ to the
+     * first in LAPA, free by then, and oClosureBack2 the first ring's to
+     * the thick edges in LAPB.
      */
+    oDeepestEdge: `${K}  let e = ${idx}; if (e >= E) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  var ka = 0; var kb = 0;
+  for (var k = L - 1; k > 0; k--) { if (ka == 0 && IN[hOff(k) + a] > THINO) { ka = k; } if (kb == 0 && IN[hOff(k) + b] > THINO) { kb = k; } }
+  OD[O_DEEPEST + e] = f32(min(ka, kb));
+}`,
     oClosureFill: `${K}  let n = ${idx}; if (n >= L * E) { return; }
   let k = n / E; let e = n % E;
   let own = IN[uOff(k) + e];
-  OD[O_LAPA + n] = own;
-  if (k == 0 || OD[O_EMASK + e] < 0.5 || OD[O_HEDGE + n] >= THINO) { return; }
+  let dst = select(O_LAPA, O_LAPB, CLOSURERINGS > 0.5);
+  let thick = OD[O_EMASK + e] > 0.5 && OD[O_HEDGE + n] >= THINO;
+  OD[dst + n] = own;
+  if (CLOSURERINGS > 0.5) { OD[O_FLUX + n] = select(0.0, 1.0, thick); }
+  if (k == 0 || OD[O_EMASK + e] < 0.5 || thick) { return; }
+  if (CLOSURERINGS > 0.5 && !(OD[O_DEEPEST + e] > f32(k) + 0.5)) { return; }
   let nv = vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
   let tv = vec3<f32>(OD[O_TEDGE + 3 * e], OD[O_TEDGE + 3 * e + 1], OD[O_TEDGE + 3 * e + 2]);
   var fit = ClosureFit(0.0, 0.0, 0.0, 0.0, 0.0, false);
@@ -202,7 +234,46 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     if (OD[O_EMASK + o] < 0.5 || OD[O_HEDGE + k * E + o] < THINO) { continue; }
     fit = closureAdd(fit, o, nv, tv, IN[uOff(k) + o]);
   }
-  if (fit.found) { OD[O_LAPA + n] = CLOSUREFILL * closureSolve(fit) + (1.0 - CLOSUREFILL) * own; }
+  if (fit.found) {
+    OD[dst + n] = CLOSUREFILL * closureSolve(fit) + (1.0 - CLOSUREFILL) * own;
+    if (CLOSURERINGS > 0.5) { OD[O_FLUX + n] = 2.0; }
+  }
+}`,
+    oClosureRing: `${K}  let n = ${idx}; if (n >= L * E) { return; }
+  let k = n / E; let e = n % E;
+  OD[O_LAPA + n] = OD[O_LAPB + n];
+  if (k == 0 || OD[O_EMASK + e] < 0.5 || OD[O_FLUX + n] > 0.5 || !(OD[O_DEEPEST + e] > f32(k) + 0.5)) { return; }
+  let nv = vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
+  let tv = vec3<f32>(OD[O_TEDGE + 3 * e], OD[O_TEDGE + 3 * e + 1], OD[O_TEDGE + 3 * e + 2]);
+  var fit = ClosureFit(0.0, 0.0, 0.0, 0.0, 0.0, false);
+  for (var s = 0; s < MI[NEE + e]; s++) {
+    let o = MI[EOE + MAXEE * e + s];
+    if (OD[O_EMASK + o] < 0.5 || OD[O_FLUX + k * E + o] < 0.5) { continue; }
+    fit = closureAdd(fit, o, nv, tv, OD[O_LAPB + k * E + o]);
+  }
+  if (fit.found) { OD[O_LAPA + n] = CLOSUREFILL * closureSolve(fit) + (1.0 - CLOSUREFILL) * IN[uOff(k) + e]; }
+}`,
+    oClosureBack1: `${K}  let n = ${idx}; if (n >= L * E) { return; }
+  let k = n / E; let o = n % E;
+  if (k == 0 || abs(OD[O_FLUX + n] - 2.0) > 0.5) { return; }
+  var sum = 0.0;
+  for (var s = 0; s < MI[NEE + o]; s++) {
+    let e = MI[EOE + MAXEE * o + s];
+    if (OD[O_EMASK + e] < 0.5 || OD[O_FLUX + k * E + e] > 0.5 || !(OD[O_DEEPEST + e] > f32(k) + 0.5)) { continue; }
+    sum += closureWeight(k, e, o, 2.5) * OD[O_LAPB + k * E + e] * MF[F_DC + e] * MF[F_DV + e];
+  }
+  OD[O_LAPA + n] = CLOSUREFILL * sum / (MF[F_DC + o] * MF[F_DV + o]);
+}`,
+    oClosureBack2: `${K}  let n = ${idx}; if (n >= L * E) { return; }
+  let k = n / E; let o = n % E;
+  if (k == 0 || abs(OD[O_FLUX + n] - 1.0) > 0.5) { return; }
+  var sum = 0.0;
+  for (var s = 0; s < MI[NEE + o]; s++) {
+    let e = MI[EOE + MAXEE * o + s];
+    if (abs(OD[O_FLUX + k * E + e] - 2.0) > 0.5) { continue; }
+    sum += closureWeight(k, e, o, 1.5) * (OD[O_LAPB + k * E + e] + OD[O_LAPA + k * E + e]) * MF[F_DC + e] * MF[F_DV + e];
+  }
+  OD[O_LAPB + n] += CLOSUREFILL * sum / (MF[F_DC + o] * MF[F_DV + o]);
 }`,
     oDivCurl: `${K}  let n = ${idx};
   let fromLap = P[1] > 0.5 || CLOSUREFILL > 0.0;
@@ -235,14 +306,15 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
 }
 fn dragThickness(k: i32, e: i32) -> f32 { return select(max(OD[O_HEDGE + k * E + e], THINO), max(OD[O_HEDGE + e], MINTHICK), k == 0); }
 fn interfaceRate(e: i32, up: i32, down: i32) -> f32 {
-  if (SHEARMIX < 0.5) { return RINT; }
+  let interior = up > 0 && INTSHEAR > 0.5;
+  if (SHEARMIX < 0.5 && !interior) { return RINT; }
   let dz = max(THINO, 0.5 * (OD[O_HEDGE + up * E + e] + OD[O_HEDGE + down * E + e]));
   let upper = select(RHO[up], 0.5 * (OD[O_RHOML + MI[COE + 2 * e]] + OD[O_RHOML + MI[COE + 2 * e + 1]]), up == 0);
   let buoyancy = max(0.0, OGRAV * (RHO[down] - upper) / RHO0);
   let du = IN[uOff(up) + e] - IN[uOff(down) + e]; let dv = tangentialU(up, e) - tangentialU(down, e);
   let ri = buoyancy * dz / (du * du + dv * dv + 1e-12);
   let nu = SHEARNU / ((1.0 + 5.0 * ri) * (1.0 + 5.0 * ri)) + BACKNU;
-  return min(max(RINT, nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
+  return min(max(select(RINT, 0.0, interior), nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
 }
 ${K}  let n = ${idx}; if (n >= L * E) { return; }
   let k = n / E; let e = n % E;
@@ -647,6 +719,8 @@ const oceanReducedSetup = (thermoclineLayers) => `    let a = MF[F_AREA + i];
 
 export function createLayeredOcean(core, options = {}) {
   const o = { ...OCEAN_DEFAULTS, ...options };
+  if (o.closureTokens !== 'interior' && o.closureTokens !== 'beside') throw new Error(`closureTokens is 'interior' or 'beside', not ${o.closureTokens}`);
+  o.closureRings = o.closureTokens === 'interior' && o.closureFill > 0;
   const { device, buffers, mesh, meshSpacing } = core;
   const C = core.C, E = core.E, V = core.V;
   const L = o.densities.length + 1;
@@ -690,7 +764,7 @@ export function createLayeredOcean(core, options = {}) {
     ['SURFT', C], ['SURFICE', C], ['SURFACEIN', C], ['T0', C], ['S0', C], ['RAINSEEN', C],
     ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
     ['RUNOFFSEEN', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
-    ['EDDYK', E], ['TEDGE', 3 * E],
+    ['EDDYK', E], ['TEDGE', 3 * E], ['DEEPEST', E],
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array (see oceanKernels' barotropic tendency/combine kernels), so their
@@ -791,7 +865,9 @@ export function createLayeredOcean(core, options = {}) {
       dispatch(pass, 'oVertexVort', g, L * V);
       dispatch(pass, 'oEdgePV', g, L * E);
       dispatch(pass, 'oKineticPhi', g, L * C);
+      if (o.closureRings) dispatch(pass, 'oDeepestEdge', g, E);
       if (o.closureFill > 0) dispatch(pass, 'oClosureFill', g, L * E);
+      if (o.closureRings) dispatch(pass, 'oClosureRing', g, L * E);
       dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
       dispatch(pass, 'oLapVelocity', g, L * E);
     });
@@ -799,6 +875,10 @@ export function createLayeredOcean(core, options = {}) {
     compute((pass) => {
       dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
       dispatch(pass, 'oLapVelocity', g, L * E);
+      if (o.closureRings) {
+        dispatch(pass, 'oClosureBack1', g, L * E);
+        dispatch(pass, 'oClosureBack2', g, L * E);
+      }
       dispatch(pass, 'oMomentum', g, L * E);
     });
   }

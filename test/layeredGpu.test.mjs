@@ -178,7 +178,7 @@ test('the GPU eddy transport tracks the CPU\'s at N=8, alone and through twenty-
 });
 
 test('under closureFill the GPU closure acts on the class flow carried onto token edges as the CPU\'s does, through twenty-one ocean steps at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const filling = { ...OCEAN_OPTIONS, closureFill: 0.5, closureHours: 1 };
+  const filling = { ...OCEAN_OPTIONS, closureFill: 0.5, closureTokens: 'beside', closureHours: 1 };
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
   const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350;
   const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: filling });
@@ -202,6 +202,34 @@ test('under closureFill the GPU closure acts on the class flow carried onto toke
     if (f === 'u') assert.ok(effect > 5 * gap, `u: the fill changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
   }
   console.log(`21 ocean steps with closureFill 0.5 and closureHours 1 at N=8, the engines' rms relative difference against the fill's effect: ${lines.join(', ')}`);
+  gpuModel.destroy();
+});
+
+test('the GPU closure fills a class\'s token edges between thicker classes, in two rings, as the CPU\'s does, through twenty-one ocean steps at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const filling = { ...OCEAN_OPTIONS, closureFill: 1, closureTokens: 'interior', closureHours: 1 };
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350;
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: filling });
+  const gpuOcean = gpuModel.oceanEngine;
+  const cpuOcean = (options) => { const ocean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options }); ocean.initialize(surfaceT0, ice); return ocean; };
+  const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
+  const cpu = cpuOcean(filling), pulled = cpuOcean({ ...filling, closureFill: 0 }), flux = new Float64Array(C);
+  gpuOcean.initialize(surfaceT0, ice);
+  for (let n = 0; n < 21; n++) {
+    cpu.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+    pulled.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+    await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, dt);
+  }
+  const cpuState = cpu.serialize(), pulledState = pulled.serialize(), gpuState = await gpuOcean.serialize();
+  const wet = Array.from(cpuState.h, (v) => v > 1);
+  const lines = [];
+  for (const f of ['h', 'u', 'T', 'S', 'eta']) {
+    const mask = f === 'T' || f === 'S' ? wet : null, gap = rms(cpuState[f], gpuState[f], mask), effect = rms(cpuState[f], pulledState[f], mask);
+    lines.push(`${f} ${gap.toExponential(2)} against ${effect.toExponential(2)}`);
+    assert.ok(gap < 2e-3, `${f} rms relative diff ${gap} after 21 steps`);
+    if (f === 'u') assert.ok(effect > 5 * gap, `u: the fill changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
+  }
+  console.log(`21 ocean steps with the interior fill and closureHours 1 at N=8, the engines' rms relative difference against the fill's effect: ${lines.join(', ')}`);
   gpuModel.destroy();
 });
 
@@ -230,6 +258,34 @@ test('under shearMixing the GPU interfacial drag follows the Richardson number a
     if (f === 'u') assert.ok(effect > 5 * gap, `u: the shear mixing changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
   }
   console.log(`21 ocean steps with shearMixing at N=8, the engines' rms relative difference against the mixing's effect over the constant drag: ${lines.join(', ')}`);
+  gpuModel.destroy();
+});
+
+test('under interiorShearMixing the GPU drag between interior classes follows their Richardson number as the CPU\'s does, through twenty-one ocean steps at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const mixing = { ...OCEAN_OPTIONS, interiorShearMixing: true, closureFill: 0 };
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350;
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: mixing });
+  const gpuOcean = gpuModel.oceanEngine;
+  const cpuOcean = (options) => { const ocean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options }); ocean.initialize(surfaceT0, ice); return ocean; };
+  const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
+  const cpu = cpuOcean(mixing), constant = cpuOcean({ ...mixing, interiorShearMixing: false }), flux = new Float64Array(C);
+  gpuOcean.initialize(surfaceT0, ice);
+  for (let n = 0; n < 21; n++) {
+    cpu.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+    constant.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+    await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, dt);
+  }
+  const cpuState = cpu.serialize(), constantState = constant.serialize(), gpuState = await gpuOcean.serialize();
+  const wet = Array.from(cpuState.h, (v) => v > 1);
+  const lines = [];
+  for (const f of ['h', 'u', 'T', 'S', 'eta']) {
+    const mask = f === 'T' || f === 'S' ? wet : null, gap = rms(cpuState[f], gpuState[f], mask), effect = rms(cpuState[f], constantState[f], mask);
+    lines.push(`${f} ${gap.toExponential(2)} against ${effect.toExponential(2)}`);
+    assert.ok(gap < 2e-3, `${f} rms relative diff ${gap} after 21 steps`);
+    if (f === 'u') assert.ok(effect > 5 * gap, `u: the interior mixing changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
+  }
+  console.log(`21 ocean steps with interiorShearMixing at N=8, the engines' rms relative difference against its effect over the constant drag: ${lines.join(', ')}`);
   gpuModel.destroy();
 });
 

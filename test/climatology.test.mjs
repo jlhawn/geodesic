@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { topographyFromInt16, createGeography } from '../js/geography.module.js';
-import { createOcean, EPS, THIN, RESTORE_TOLERANCE } from '../js/ocean/layered.module.js';
+import { createOcean, atlasColumns, EPS, THIN, RESTORE_TOLERANCE, LAYER_DENSITIES, LAYER_SALINITIES } from '../js/ocean/layered.module.js';
 import { decodeClimatology, encodeClimatology, loadClimatology, profileAt, CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
-import { seawaterDensity } from '../js/ocean/seawater.module.js';
+import { seawaterDensity, labelTemperature } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 
 let gpuAvailable = true;
@@ -97,6 +97,30 @@ test('columnAt interpolates bilinearly among four wet points, takes the nearest 
   const [t50, s50] = profileAt(inside, 50), [tDeep] = profileAt(inside, 3000), [tTop] = profileAt(inside, -5);
   assert.ok(Math.abs(t50 - 0.5 * (inside.T[0] + inside.T[1])) < 1e-9 && Math.abs(s50 - 0.5 * (inside.S[0] + inside.S[1])) < 1e-9, 'linear between levels');
   assert.equal(tDeep, inside.T[2]); assert.equal(tTop, inside.T[0]);
+});
+
+test('a sea cell under an atlas column that ends far above its bottom takes the levels below from the nearest column that reaches them, and keeps the plug when none is within reach', () => {
+  const depths = [0, 50, 75, 100, 200, 500, 1000, 1500, 2000], nLon = 6, nLat = 3, T = [], S = [];
+  const below = (z) => Math.exp(-Math.max(0, z - 50) / 150), profileT = (z) => 5 + 24.5 * below(z), profileS = (z) => 34.6 - 0.6 * below(z);
+  depths.forEach((z, j) => {
+    for (let r = 0; r < nLat; r++) for (let c = 0; c < nLon; c++) { const dry = c < 3 && j > 1; T.push(dry ? NaN : profileT(z)); S.push(dry ? NaN : profileS(z)); }
+  });
+  const grid = { nLon, nLat, lon0: 0, dLon: 1, lat0: -1, dLat: 1, depths, T, S, source: 'fixture' };
+  const rho = [1025, ...LAYER_DENSITIES], labelS = [35, ...LAYER_SALINITIES], labelT = rho.map((r, k) => Math.max(FREEZING_POINT, labelTemperature(r, labelS[k]))), L = rho.length;
+  const column = (atlas) => {
+    const h = new Float64Array(L), Q = new Float64Array(L), W = new Float64Array(L), T0 = new Float64Array(1);
+    atlasColumns({ nCells: 1, latCell: [0], lonCell: [1 * DEG] }, atlas, { D: [1200], cellOcean: [1], ice: [0], rho, labelT, labelS, h, Q, W, T0 });
+    const layers = [];
+    let z = 0;
+    for (let k = 0; k < L; k++) { if (k === 0 || h[k] > THIN) layers.push({ rho: k ? rho[k] : 'ML', top: z, bottom: z + h[k] }); z += h[k]; }
+    return layers;
+  };
+  const reached = column(decodeClimatology(encodeClimatology(grid))), plugged = column(decodeClimatology(encodeClimatology(grid), { deepReach: 1 }));
+  const show = (layers) => layers.map((l) => `${l.rho}: ${l.top.toFixed(0)}–${l.bottom.toFixed(0)}`).join(', ');
+  console.log(`a 1200 m cell under a 50 m atlas column 2° from a 2000 m one: ${show(reached)}; with no deep column in reach ${show(plugged)}`);
+  assert.ok(reached.filter((l) => l.rho !== 'ML' && l.rho > 1025 && l.bottom > 100).length >= 3, 'classes denser than 1025 below 100 m');
+  assert.ok(!reached.some((l) => l.rho === 1020.5 && l.bottom > 75), 'no 1020.5 water below 75 m');
+  assert.ok(plugged.some((l) => l.rho === 1020.5 && l.bottom > 1000), 'without a deep column within reach the surface water fills the column');
 });
 
 let built = null;
