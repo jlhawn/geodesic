@@ -2117,7 +2117,7 @@ can take in one ocean step (M21 item 4). Under the option
 `interiorShearMixing` (off) the same viscosity applies between two
 interior classes with no `interfacialDrag` floor, so a quiet interface
 takes ν_b/Δz, 2–4×10⁻⁶ m/s over 25–50 m, where the constant 2×10⁻⁴ m/s
-is a viscosity r Δz of 4×10⁻³ to 10⁻² m²/s through the thermocline
+is a viscosity r Δz of 5×10⁻³ to 10⁻² m²/s through the thermocline
 against Earth's 10⁻⁴ to 10⁻³ below the undercurrent core; the mixed
 layer's base keeps `interfacialDrag`. In 60 coupled N=64 days it let
 thermocline classes run at 1.5–3 m/s beside the coasts near the equator
@@ -2453,8 +2453,10 @@ class has pinched out. The patchy thermocline classes 1022.25–1024.0 hold
 water in 12–43 % of the equatorial cells, and through their tokens the
 closure tied them to the mixed layer at 0.5–3.1×10⁻⁵ s⁻¹ at N=128 (the
 interfacial drag's r/h is 4×10⁻⁶), a source of momentum, since the
-closure on a token edge itself is discarded: over 140–100W its column
-total was 1–5 times the stress, with the mixed layer's sign (M23). By
+closure on a token edge itself is discarded: on the nine128 states of
+days 91–365 its column total was 1.1–5.3 times the stress over
+140–120W and 0.07–1.1 times over 120–100W, with the mixed layer's sign
+(M23). By
 default (`closureFill` 1, `closureTokens` 'interior') a token edge whose
 two cells both hold a class thicker than THIN denser than the class
 takes the least-squares uniform flow of the class's own neighbouring
@@ -2478,7 +2480,12 @@ it takes +15.6/+3.5, −11.5/−7.1 and −26.1/−2.7×10⁻⁵ m²/s² from th
 column, against the slab's flow, where through the tokens it gave
 −7.8/−0.4, +4.8/+2.7 and +11.0/+0.5 with it (stress −7.1/−5.4,
 −3.0/−3.0 and −2.1/−2.1; `scripts/closureCoupling.mjs`, 'extended').
-`closureTokens` 'beside' is M21's fill without the transpose.
+`closureTokens` 'beside' is M21's fill without the transpose. On the
+same states the transposed fill damps each thermocline class's own flow
+near its tokens, 1022.25–1024.5 over 2S–2N 180–100W, at 6.6–95×10⁻⁶
+s⁻¹, where the tokens give −4.4 to +0.2×10⁻⁶ and the first ring alone
+with its transpose −15.8 to +10.6×10⁻⁶; on nine64_day0365 1.0–7.8×10⁻⁶
+(`scripts/closureDrag.mjs`, M23).
 
 **Friction across empty classes.** Interfacial drag acts between each
 layer that holds water and the nearest layers holding water above and
@@ -3395,7 +3402,7 @@ equator, the eastern 1024 class top at 40–60 m, 2 K between the warm
 pool and the cold tongue held through a year, and no speed-limit
 clamps.
 
-**Diagnosis (Oct 1).** On the nine128 states (`scripts/equatorialOcean.mjs`,
+**Diagnosis (Sept 30).** On the nine128 states (`scripts/equatorialOcean.mjs`,
 `scripts/closureCoupling.mjs`, `scripts/waveSpeeds.mjs`), 140–120W / 120–100W,
 2S–2N:
 
@@ -3413,7 +3420,7 @@ clamps.
   closure ties them to the mixed layer at 0.5–3.1×10⁻⁵ s⁻¹ (drag r/h
   4×10⁻⁶). Column closure against stress (10⁻⁵ m²/s²): day 91
   +9.76/+3.61 against −2.95/−3.41, day 183 −7.84/−0.36 against
-  −7.13/−5.44, day 274 +4.80/+2.67 against −3.03/−2.96, day 365
+  −7.13/−5.44, day 274 +4.81/+2.68 against −3.03/−2.96, day 365
   +10.99/+0.51 against −2.09/−2.12. Day 91, 140–120W: 1024.00 at
   +33 cm/s with pressure force −22.05 and closure +21.68×10⁻⁷ m/s²,
   1024.50 at +44 cm/s with −16.31 and +24.26.
@@ -3424,7 +3431,7 @@ clamps.
 - Cell 6777 (1S 100E, N=64) started with 1020.5 from 50 to 1194 m under a
   50 m atlas column; 165 such columns within 25° at N=64.
 
-**Changed (Oct 1).** The atlas fill from the nearest column that reaches
+**Changed (Sept 30).** The atlas fill from the nearest column that reaches
 the bottom (**Start from the World Ocean Atlas**, M18): 165 light columns
 to 13. The interior fill of the closure with its transpose, the default
 (**Closure at token edges**, M18): fastest-mode growth per N=128 step
@@ -3493,6 +3500,40 @@ and day 96 at N=128 under −0.025: u(5 m) 140–100W +0.10, +0.04 and
 161, 169 and 105 m (target 0.5–1 near 100 m); eastern 1024 top 88, 88
 and 102 m (40–60); W−E 0.5 → −0.2, 2.0 → 1.0 and 3.9 → 3.7 K; clamps 0,
 2 (13.6S 144.3E) and 0.
+
+**Review (Sept 30).** The closure with its transpose is a drag on the
+undercurrent classes of the states it starts from. On `nine128_day0091`
+at 140–120W and 120–100W, 2S–2N, the classes 1022.5–1024.0 at +23 to
++77 cm/s take −11.3 to −50.9×10⁻⁷ m/s² from it, against +0.3 to
++21.7 through the tokens, the pressure force −22.1 to +4.1 and the
+interfacial drag −10.9 to +1.2 (`scripts/equatorialOcean.mjs`). As a
+damping rate of each class's own flow over 2S–2N 180–100W
+(`scripts/closureDrag.mjs`, 1022.25–1024.5, 10⁻⁶ s⁻¹):
+
+| State | tokens | default | first ring alone |
+|---|---|---|---|
+| nine128 days 91, 183, 274, 365 | −4.4 to +0.2 | 6.6 to 95 | −15.8 to +10.6 |
+| eqB128_day0096 (5 days, unmodified code) | −2.0 to +0.4 | 7.3 to 60 | −2.9 to +3.4 |
+| eqE128_day0096 (5 days, the change) | −32.7 to −0.9 | 0.2 to 13.3 | −37.8 to +0.5 |
+| nine64_day0365 | −0.8 to +0.4 | 1.0 to 7.8 | −0.1 to +1.9 |
+| eqEnine_day0425 (60 days, the change) | −5.5 to +0.2 | 0.3 to 4.8 | −2.8 to +0.3 |
+
+In the N=128 pair the strongest eastward class fell from 0.47 to 0.36
+m/s on the first day with the change and to 0.46 without it. The 60-day
+N=64 pair from `nine64_day0365`, repeated, matched its saved states bit
+for bit at days 380, 395, 410 and 425. Over 10S–10N the
+grid-scale share of each class's thickness-flux divergence (cell minus
+the mean of its thick neighbours over the variance, white noise 1.17;
+`scripts/divergenceNoise.mjs`)
+after the 5 N=128 days was 0.80, 0.89, 0.41 and 0.28 in the mixed layer,
+1022–1024.75, 1025–1026.5 and the deeper classes away from tokens, 0.98
+and 1.20 beside the fitted tokens and 1.45 and 1.24 beside the tokens
+over the sea floor, against 1.02, 0.84, 0.56, 0.26, 1.07, 1.11, 1.59
+and 1.11 with the unmodified code and 1.26, 1.05, 1.05, 0.92, 1.87,
+1.56, 1.53 and 1.50 after one day of the fill without its transpose; at
+day 60 of the N=64 pair 0.48, 0.77, 0.38, 0.39, 0.75, 0.85, 1.37 and
+1.22 with the change, 0.64, 0.68, 0.37, 0.33, 0.94, 0.95, 1.88 and 1.26
+without it.
 
 ### M24 — Performance — planned
 
