@@ -508,8 +508,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
   }
 
   /*
-   * The convective mass flux of column i over dt under `convection`
-   * 'plume' (see the header). Returns the rain it leaves falling (kg/m²);
+   * The convective mass flux of column i over dt (see the header).
+   * Returns the rain it leaves falling (kg/m²);
    * convectiveFall holds each layer's share of it and convectiveReserve
    * what must still fall past each layer for the downdraft below it.
    */
