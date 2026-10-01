@@ -480,7 +480,7 @@ async function parity(options) {
   const { sigmaMid } = core.diagnostics;
   const massFlux = (options.shallowScheme ?? MOIST_DEFAULTS.shallowScheme) === 'massFlux';
   let deep = 0, shallow = 0, decked = 0, still = 0, opening = 0, flips = 0, worstTheta = 0, worstQ = 0, worstQc = 0, worstActivity = 0, worstRain = 0, rainScale = 0;
-  let plumes = 0, plumeFlips = 0, topsDiffer = 0, worstFlux = 0, fluxScale = 0, worstCover = 0;
+  let plumes = 0, plumeFlips = 0, topsDiffer = 0, worstFlux = 0, fluxScale = 0, worstCover = 0, worstWater = 0, waterScale = 0;
   const K0 = K - (layout.PH.CUWATER - layout.PH.CUCOVER) / C;
   for (let i = 0; i < C; i++) {
     let top = -1;
@@ -496,7 +496,11 @@ async function parity(options) {
       if ((cpu > 0) !== (gpuFlux > 0)) plumeFlips++;
       if (moist.cumulusTop[i] > 0 && Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) > 1) topsDiffer++;
       worstFlux = Math.max(worstFlux, Math.abs(cpu - gpuFlux)); fluxScale = Math.max(fluxScale, cpu);
-      for (let k = K0; k < K; k++) worstCover = Math.max(worstCover, Math.abs(moist.cumulusCover[k * C + i] - ph.CUCOVER[(k - K0) * C + i]));
+      for (let k = K0; k < K; k++) {
+        worstCover = Math.max(worstCover, Math.abs(moist.cumulusCover[k * C + i] - ph.CUCOVER[(k - K0) * C + i]));
+        worstWater = Math.max(worstWater, Math.abs(moist.cumulusWater[k * C + i] - ph.CUWATER[(k - K0) * C + i]));
+        waterScale = Math.max(waterScale, moist.cumulusWater[k * C + i]);
+      }
     }
     if ((moist.convectivePrecipitation[i] > 0) !== (ph.CONV[i] > 0)) flips++;
     worstActivity = Math.max(worstActivity, Math.abs(moist.activity[i] - ph.CONVACT[i]));
@@ -511,11 +515,12 @@ async function parity(options) {
   }
   console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, the activity by ${worstActivity.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)})`);
   if (massFlux) {
-    console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top; base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}`);
+    console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top; base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}, the plume's condensate by ${worstWater.toExponential(1)} kg/kg (largest ${waterScale.toExponential(1)})`);
     assert.ok(deep > C / 40 && plumes > C / 10 && decked > C / 40 && still > C / 40, `${deep} deep, ${plumes} plumes, ${decked} decked, ${still} still`);
     assert.equal(plumeFlips, 0);
     assert.equal(topsDiffer, 0);
     assert.ok(worstFlux < 2e-3 * fluxScale && worstCover < 1e-4, `base mass flux ${worstFlux}, cover ${worstCover}`);
+    assert.ok(waterScale > 0 && worstWater < 1e-3 * waterScale, `plume condensate ${worstWater} against ${waterScale}`);
   } else assert.ok(deep > C / 40 && shallow > C / 40 && decked > C / 40 && still > C / 40 && opening > C / 100, `${deep} deep, ${shallow} shallow, ${decked} decked, ${opening} opening, ${still} still`);
   assert.equal(flips, 0);
   assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
