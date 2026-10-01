@@ -62,7 +62,7 @@ const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const
 const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null};
 const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
-const DECK_VETO: bool = ${o.deckVeto !== false}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
+const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
 const DECK_OPEN: f32 = ${DECK_OPEN}; const DECK_CLOSED: f32 = ${DECK_CLOSED}; const PARCEL_VIRT: f32 = ${o.virtualBuoyancy === false ? 0 : 'VIRT'};
 const CU_FLOOR: f32 = ${CUMULUS_FLOOR}; const CU_K0: i32 = ${o.cumulusK0 ?? 0}; const CU_C: f32 = ${o.cumulusClosure}; const CU_EPS: f32 = ${o.cumulusEntrainment}; const CU_DEL: f32 = ${o.cumulusDetrainment}; const CU_SOURCE: f32 = ${o.cumulusSourceDepth}; const CU_LOSS: f32 = ${o.cumulusBoundaryLoss};
 const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvershoot}; const CU_WU: f32 = ${o.cumulusUpdraft}; const CU_RAIN: bool = ${o.cumulusRain != null}; const CU_RAIN_Q: f32 = ${o.cumulusRain ?? 0}; const CU_LOWEST: bool = ${o.cumulusSource === 'lowest'};
@@ -998,7 +998,7 @@ fn plumeState(energy: f32, water: f32, height: f32, pressure: f32, guess: f32) -
 // the shallow cumulus mass flux of moist.module.js's cumulusColumn; returns its rain
 fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   clearCumulus(i);
-  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO);
+  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0);
   let buoyancy = PH[PH_BUOY + i];
   if (!(open > 0.0) || !(buoyancy > 0.0)) { return 0.0; }
   let bottom = K - 1;
@@ -1107,7 +1107,7 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
     for (var k = 0; k < K; k++) { PH[PH_MOMK + k * C + i] = 1.0; PH[PH_MOMKD + k * C + i] = 1.0; }
   }
   for (var k = 0; k < K; k++) { cuFall[k] = 0.0; cuReserve[k] = 0.0; }
-  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO);
+  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0);
   if (!(open > 0.0)) { return cumulusColumn(i, pi, dt); }
   let bottom = K - 1;
   var T: array<f32, K>; var p: array<f32, K>; var dp: array<f32, K>; var z: array<f32, K>; var envS: array<f32, K>; var envQ: array<f32, K>;

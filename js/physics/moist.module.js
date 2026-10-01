@@ -9,6 +9,7 @@ export const DECK_CLOSED = 0.6;
 export const CUMULUS_FLOOR = 1e-6;
 export const MAXIMUM_SURFACE_PRESSURE = 110000;
 export const DEEP_REFERENCE = 1e5;
+export const COUPLED_REGIME = 3;
 
 export function saturationVaporPressure(T) {
   return 611.2 * Math.exp(17.67 * (T - 273.15) / (T - 29.65));
@@ -48,7 +49,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * deep branch. Both run in proportion to the deck's opening, 1 where
  * the mixed-layer deck's gate `deckGate` (radiation.mlmGate) is at most
  * DECK_OPEN, falling linearly to 0 at DECK_CLOSED (`deckVeto` false:
- * 1 everywhere).
+ * 1 everywhere), and with `coupledVeto` not at all where the moist
+ * boundary layer (`boundaryRegime`) is a coupled stratocumulus-topped
+ * layer, COUPLED_REGIME.
  *
  * The shallow cumulus mass flux, a bulk entraining plume after
  * Bretherton, McCaa and Grenier (2004), simplified. Its source is the
@@ -199,7 +202,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
   autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, upperCloudLifetime: null, rainEvaporation: 1, autoconversionFloor: 'lowest',
-  deckVeto: true, evaporationInCloud: false, virtualBuoyancy: true,
+  deckVeto: true, coupledVeto: false, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.06, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean',
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
@@ -208,11 +211,11 @@ export const MOIST_DEFAULTS = {
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
   'downdraftEvaporation', 'downdraftSpread', 'shallowHumidity', 'shallowCape', 'shallowInhibition', 'shallowStability', 'shallowReference', 'shallowRain', 'boundaryParcel', 'adjustFrom'];
 
-export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate = null, surfaceBuoyancy = null, frictionVelocity = null, buffers = null, ...options } = {}) {
+export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, deckGate = null, surfaceBuoyancy = null, frictionVelocity = null, buffers = null, ...options } = {}) {
   for (const retired of RETIRED_OPTIONS) if (retired in options) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
   const {
     latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, rainEvaporation, autoconversionFloor,
-    deckVeto, evaporationInCloud, virtualBuoyancy,
+    deckVeto, coupledVeto, evaporationInCloud, virtualBuoyancy,
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource,
     plumeClosure, plumeCapeParcel, plumeSource, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
     downdraftShare, downdraftEntrainment, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption,
@@ -410,7 +413,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
     const bottom = K - 1;
     cumulus.top = -1; cumulus.inhibition = 0; cumulus.baseFlux = 0; cumulus.velocity = 0;
     clearCumulus(i);
-    const open = deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1;
+    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1);
     const buoyancy = surfaceBuoyancy ? surfaceBuoyancy[i] : 0;
     if (!(open > 0) || !(buoyancy > 0) || !boundaryDepth) return 0;
     fillEnvironment(i, pi, theta, q, qc);
@@ -526,7 +529,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
       for (let k = 0; k <= K; k++) { momentumUp[k * C + i] = 0; momentumDown[k * C + i] = 0; }
       for (let k = 0; k < K; k++) { momentumUpKeep[k * C + i] = 1; momentumDownKeep[k * C + i] = 1; }
     }
-    const open = deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1;
+    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1);
     if (!(open > 0) || !boundaryDepth) return cumulusColumn(i, pi, theta, q, qc, dt);
     fillEnvironment(i, pi, theta, q, qc);
     const { source, mass, sourceS: meanS, sourceQ: meanQ } = sourceLayers(i, pi, false);

@@ -264,10 +264,10 @@ test('with deckRegime \'boundaryLayer\' the deck runs where the boundary layer i
   for (let i = 1; i < gated.mesh.nCells; i += 2) assert.equal(bypassed.radiation.mlmCover[i], 0);
 });
 
-async function moistEngines(options = {}) {
+async function moistEngines(options = {}, moist = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(6), { ocean: false, levels, boundaryLayer: options });
+  const pair = createModel(new Grid(6), { ocean: false, levels, boundaryLayer: options, moist });
   const { core: c, mesh: m, state, radiation: r, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer: ex, sigmaMid: mid, kappa: kap, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -297,7 +297,7 @@ async function moistEngines(options = {}) {
   for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) u[k * nE + e] = k === nK - 1 ? 2 * (random() - 0.5) : 12 * (random() - 0.5);
   for (const a of [...state, longwave, r.mlmGate, r.stratiform]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   c.diagnose(pi, theta, q, qc);
-  const gpu = await createGpuCore(m, { levels, physics: options });
+  const gpu = await createGpuCore(m, { levels, physics: { ...options, ...moist } });
   const { device, buffers, kernels, layout } = gpu, dt = 900;
   gpu.upload(state);
   gpu.uploadPhysics({ mlmGate: r.mlmGate });
@@ -320,9 +320,13 @@ async function moistEngines(options = {}) {
   return { K: nK, C: nC, E: nE, kTop: layer.kTop, cpu, state, after, ph };
 }
 
-test('the moist boundary layer matches between the engines on a random set of columns in every regime: the regime, V, w_e, the coefficients, the depths and θ, q, qc and the wind after the step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const [label, options] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }]]) {
-    const run = await moistEngines(options), { K: nK, C: nC, E: nE, kTop, cpu, ph } = run;
+test('the moist boundary layer matches between the engines on a random set of columns in every regime: the regime, V, w_e, the coefficients, the depths and θ, q, qc and the wind after the step, with convection vetoed under coupled stratocumulus as well', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const [label, options, moist] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }], ['no convection under coupled stratocumulus', {}, { coupledVeto: true }]]) {
+    const run = await moistEngines(options, moist), { K: nK, C: nC, E: nE, kTop, cpu, ph } = run;
+    let coupledPlumes = 0;
+    for (let i = 0; i < nC; i++) if (cpu.regime[i] === REGIME.COUPLED && ph.CUMF[i] > 0) coupledPlumes++;
+    if (moist) assert.equal(coupledPlumes, 0, 'no plume rises from a coupled stratocumulus-topped layer');
+    else if (label === 'defaults') assert.ok(coupledPlumes > 0, `${coupledPlumes} plumes rise from coupled layers without the veto`);
     const counts = [0, 0, 0, 0];
     let flips = 0, worstV = 0, worstW = 0, worstMix = 0, worstDepth = 0;
     for (let i = 0; i < nC; i++) {

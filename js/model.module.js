@@ -66,7 +66,7 @@ export function createModel(gridOrMesh, {
   const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, dragCoefficients, ...surfaceOptions });
   const gustiness = surfaceOptions.gustiness ?? 3;
   const moistPhysics = createMoistPhysics(mesh, core, {
-    buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, deckGate: radiation.mlmGate,
+    buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, boundaryRegime: boundaryLayer ? boundaryLayer.regime : null, deckGate: radiation.mlmGate,
     surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null, ...moistOptions,
   });
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
