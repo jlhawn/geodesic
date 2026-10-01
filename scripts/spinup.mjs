@@ -8,10 +8,15 @@
 // vegetation and surface temperature of the regions in BOXES, the
 // equatorial Pacific's surface temperatures and thermocline, and the
 // convection and equator lines of js/audit.module.js, and exits with 2 on
-// NaN. The state saved carries the last day's per-cell convective and
-// large-scale rain, absorbed sunlight, outgoing longwave and albedo, and
-// the boundary layer's depth, mixing top, regime and surface buoyancy
-// flux.
+// NaN. The daily line's ASR (with its part absorbed in the atmosphere),
+// OLR and albedo are means over the day's steps, the albedo the day's
+// reflected over its incoming sunlight: the last step alone sees the sun
+// at the same UTC hour every day, over whatever cloud lies under it then,
+// which between runs with different cloud geography moves the albedo by
+// up to 0.04 and the fluxes by up to 15 W/m². The state saved carries the
+// last day's per-cell convective and large-scale rain, absorbed sunlight,
+// outgoing longwave and albedo, and the boundary layer's depth, mixing
+// top, regime and surface buoyancy flux.
 //
 // SIGTERM or SIGINT stops the segment after the ocean step in progress
 // and exits 0: at a day's end it saves <TAG>_dayDDDD.bin as usual, inside
@@ -217,6 +222,7 @@ if (stop.requested) { log(`stopped by ${stop.requested} before the first step; n
 const start = performance.now();
 const day0 = Math.round((model.time - startStep * dt) / 86400);
 let day = day0, step = startStep, taken = 0, iceNorth = 0, iceSouth = 0;
+log(`ASR, atmosphere, OLR and albedo below are day means over the day's ${perDay} steps${startStep ? ` (day ${day0 + 1}'s over its last ${perDay - startStep})` : ''}, the albedo the day's reflected over its incoming sunlight`);
 const halted = () => stop.requested || taken >= STOP_AFTER_STEPS;
 for (;;) {
   if (BATCH === 1) {
