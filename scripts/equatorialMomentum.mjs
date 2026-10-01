@@ -79,6 +79,7 @@ function eastAt(edgeField, out) {
 function northAt(edgeField, out) { eastAt(edgeField, out); for (const i of cells) out[i] = north(vec, i); return out; }
 
 const [pi, theta, u] = state;
+const surfaceT = Float64Array.from(state[3]);
 const u0 = Float64Array.from(u);
 core.phaseFlux(state, 0, K);
 core.phaseColumn(state, [new Float64Array(C)], 0, C);
@@ -191,6 +192,7 @@ console.log('\n-- state');
 console.log(head);
 const slpBins = binMean((i) => slp(i) / 100);
 console.log(row('sea-level pressure (hPa)', slpBins, (x) => f(x, 2)));
+console.log(row('surface temperature (C)', binMean((i) => surfaceT[i] - 273.15), (x) => f(x, 2)));
 console.log(row('surface pressure (hPa)', binMean((i) => pi[i] / 100), (x) => f(x, 2)));
 console.log(row('u lowest layer (m/s)', binMean((i) => uEast[(K - 1) * C + i]), (x) => f(x)));
 console.log(row('v lowest layer (m/s)', binMean((i) => vNorth[(K - 1) * C + i]), (x) => f(x)));
