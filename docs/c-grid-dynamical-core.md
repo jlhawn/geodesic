@@ -2750,7 +2750,7 @@ On any touch screen, one finger turns the globe; two pan, pinch to zoom
 about their midpoint, and roll once they twist past about 11° (the
 maths is in `js/gestures.module.js`).
 
-### M21 — Measurable subsidence and convection — planned (audit of Sept 29 2026)
+### M21 — Measurable subsidence and convection — done (tuning; audit of Sept 29 2026)
 
 An audit of the day-183 state of the fresh-atlas paired run (N=128,
 bl34, 44-class ocean) measured what the atmosphere does with vertical
