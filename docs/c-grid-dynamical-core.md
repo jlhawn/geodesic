@@ -4249,6 +4249,240 @@ load and take two CPU steps with nothing non-finite; five64_day2281
 and nine64_day0091 take 32 GPU steps and save regimes and mixing tops
 with nothing non-finite.
 
+**Tuning (Oct 1).** Run ten (a fresh atlas start on 976b0bc, N=128) rested
+its decks at the inversion ceiling the cumulus lift, near 2.0–2.1 km, with
+cloud layers 800–900 m thick and 400–900 g/m² of water (the radiation takes
+at most 150), lost its Arctic ice by day 150 and drove trades of 0.08–0.11
+N/m². Three changes, each on both engines with parity tests. Measured with
+three-day N=64 GPU runs (`everySteps` 8) from copies of eight64_day0183 and,
+for the Arctic, nine64_day0091, the changes taken in turn on top of each
+other; day 186's albedo and ASR − OLR are the means of eight samples a day
+(eight evenly spaced samples a day; the day line's own value is one step
+at a fixed UTC and moves by up to 0.04 in albedo against the day mean), the
+deck boxes and the global rain and evaporation from `scripts/verticalAudit.mjs`
+on each day-186 state.
+
+- The deck's rest by regime (`deckRest` 'regime', the default; 'inversion'
+  and 'depth' remain). A coupled column rests at its boundary-layer top; a
+  surface-driven or decoupled column whose ceiling's θ_v jump lies above
+  `cumulusCeiling` (2000 m above the surface), or that has no ceiling,
+  shuts its gate (G = 0), runs no deck and rests at the boundary-layer top;
+  every other column rests at the ceiling. With the deck running, its water
+  is not in q_c, so its column reads as surface-driven, and the test falls
+  on the height of the inversion. Screens of the stand-down height, end of
+  day 186 (albedo, ASR − OLR): 1500 m 0.290, −1.1; 2000 m 0.295, −2.4;
+  2500 m 0.307, −6.4; unmodified 0.313, −8.1. At 1500 m the deck runs on
+  0.038, 0.212 and 0.137 of the SE Pacific, Peru and Namibia column-steps.
+- A lifetime for stratiform cloud (`stratiformLifetime` 3 h, the moist
+  physics; null: none). A layer's lifetime moves from `cloudLifetime` (or
+  the upper one) to it by a share that is 0 at and below the top of a
+  plume that ran in the column this step, and elsewhere the larger of the
+  cell's sea-ice cover and, under the moist boundary layer, 1 below the
+  mixing top of a coupled column, 0 below that of any other, and the EIS
+  share above it.
+- The sea's drag coefficient 1.2·10⁻³ at the lowest layer's midpoint
+  (`SEA_DRAG`, about 1.4·10⁻³ at 10 m; land keeps 1.5·10⁻³), the heat and
+  vapour exchange following it; the GPU ocean's stress takes each cell's
+  coefficient as the CPU's does. `SURFACE` (JSON) passes it to the
+  spin-up and the audit.
+
+| day 186, N=64 from eight64_day0183 | unmodified | regime rest | + stratiform lifetime | + sea drag |
+|---|---|---|---|---|
+| albedo, 8 samples (end of day) | 0.294 (0.312) | 0.283 (0.296) | 0.287 (0.298) | 0.279 (0.298) |
+| ASR − OLR, W/m² | −2.0 (−8.0) | +1.3 (−2.8) | +0.8 (−2.8) | +3.2 (−2.9) |
+| global rain; evaporation, mm/d | 2.25; 2.33 | 2.20; 2.28 | 2.21; 2.28 | 2.07; 2.12 |
+| deck runs, SE Pacific / Peru / Namibia | 0.461 / 0.657 / 0.704 | 0.182 / 0.500 / 0.514 | 0.187 / 0.531 / 0.545 | 0.191 / 0.582 / 0.797 |
+| deck height where it runs, m | 1694 / 1345 / 1431 | 1458 / 1299 / 1374 | 1460 / 1339 / 1378 | 1385 / 1236 / 1313 |
+| its cloud layer, m | 505 / 341 / 450 | 296 / 295 / 387 | 310 / 333 / 396 | 261 / 232 / 303 |
+| its water, g/m² (capped; share capped) | 267 / 124 / 225 (82 / 76 / 129; 0.41 / 0.28 / 0.71) | 97 / 107 / 180 (69 / 74 / 108; 0.21 / 0.18 / 0.50) | 107 / 131 / 184 (76 / 77 / 114; 0.26 / 0.24 / 0.55) | 61 / 60 / 113 (51 / 46 / 81; 0.11 / 0.10 / 0.27) |
+| low cloud, radiative | 0.414 / 0.523 / 0.694 | 0.254 / 0.448 / 0.637 | 0.281 / 0.447 / 0.666 | 0.233 / 0.416 / 0.711 |
+| SE Pacific rain, mm/d | 0.70 | 0.58 | 0.58 | 0.48 |
+| 60–90N ice loss from nine64_day0091, 10³ km³/day | 0.233 | 0.225 | 0.175 (9.191 → 8.666) | 0.174 |
+
+The equatorial sea after one CPU step from ten128_day0183, 2S–2N
+160E–100W: stress −0.1102 → −0.0881 N/m² (5S–5N −0.1062 → −0.0849), the
+lowest layer's wind −7.61 m/s in both, the 10 m wind by the log law −7.08
+→ −7.13 m/s. Three N=64 days from run ten's own ten64_day0183, unmodified
+and with all three: albedo 0.333 → 0.313, ASR − OLR −12.1 → −5.6 W/m²,
+global rain 2.83 → 2.63 and evaporation 2.87 → 2.61 mm/d; the SE Pacific
+deck runs on 0.532 → 0.494 of the column-steps (stood down on 0.243) at
+1617 → 1567 m, 546 → 485 m thick with 337 → 273 g/m² (capped on 0.631 →
+0.545); Namibia 0.908 → 0.905 at 1192 → 1112 m, 92 → 47 g/m².
+
+After the three, one CPU step of tf3m_day0186: `moist.adjust` keeps each
+column's c_p T + L q to 1.1·10⁻¹⁵ and its water with the rain to 8.5·10⁻¹⁶
+relative but for 27 columns the filler touches. Parity: the regime rest
+under moist turbulence at `cumulusCeiling` 3000 and 200 m (height rms
+8.7·10⁻⁷, gate 4·10⁻⁸); the stratiform lifetime on 362 random columns with
+random regimes, mixing tops, EIS shares and sea ice (θ to 6.5·10⁻⁵ K, q to
+3.6·10⁻⁸, q_c to 1.3·10⁻⁸; 338 of 1025 cloudy layers keep more cloud under
+3 h than 1 h in both engines); with the sea's drag at zero no stress
+reaches the ocean across any of the 670 sea–sea edges at N=6 on either
+engine. The in-day restart of `test/asyncSpinup.test.mjs` now differs by
+4.6 % (netFlux, day 3; under 4 % with any one change undone), and the test
+keeps 5 %.
+
+What still misses: at 2000 m the SE Pacific deck runs on 0.19 of its
+column-steps and its low cloud is 0.23–0.28: on 0.55 of the steps the
+4 K jump above its boundary layer lies above 2000 m or is missing (the
+resolved inversion, the interface of largest dθ_v/dz, at 1.56–1.71 km);
+on run ten's state the SE Pacific deck is still 485 m thick at 1.57 km with
+273 g/m² of water, a mixed layer moist enough that its cloud base sits near
+1.1 km. The sea drag lowers the global rain and evaporation of the
+eight64 runs from 2.21 and 2.28 to 2.07 and 2.12 mm/d (Earth 2.6–2.8).
+
+**Sweep (Oct 1).** A scored perturbed-parameter sweep over eleven
+parameters on short runs, `scripts/sweep/` (`sweep.mjs` the design and the
+screens, `score.mjs` the score, `fit.py` the response surface,
+`candidates.mjs` the longer tests; the runs' outputs under
+`runs/sweep/`). Every albedo and ASR − OLR is a day mean of eight samples
+(eight evenly spaced samples a day).
+
+The score is Σ wᵢ eᵢ², eᵢ = (xᵢ − targetᵢ)/toleranceᵢ, over: from three
+N=64 days from eight64_day0183, day 186's ASR − OLR (0 ± 3 W/m², weight
+4) and albedo (0.30 ± 0.015, 2); from `scripts/verticalAudit.mjs` on the
+day-186 state, the global rain (2.7 ± 0.2 mm/d, 1), the SE Pacific and
+Peru radiative low cloud (0.6 ± 0.1, 1 each), their deck water as the
+radiation takes it (100 ± 50 g/m², 1 each) and their rain (0.2 ± 0.2
+mm/d, 1 each), the Pacific ITCZ's rain (7.5 ± 1.5 mm/d, 1) and heating
+peak (450 ± 50 hPa, 0.5), the zonal-mean rain peak's latitude (7.5N ±
+2.5, 0.5); the day line's equatorial stress over 160E–100W (−0.05 ±
+0.015 N/m², 1); and from three N=64 days from nine64_day0091 the 60–90N
+sea-ice volume lost per day (0.15 ± 0.03 10³ km³/day, 2). The balance
+weight is 4, not 3: the attribution of run ten's deficit found it about
+90 % OLR (the weaker longwave effect of the lost high cloud), which only
+the ASR − OLR term sees. The global rain is the audit's at the end of day
+186; the day mean of day 186 (1.7–1.9 mm/d) still climbs from the
+eight64 start's 0.7 mm/d on day 184 and is kept beside it.
+
+The design: a maximin Latin hypercube of 40 points (seed 20261001, least
+distance 0.772 in the unit cube) and the defaults as point 0, over the
+variance cover's `varianceScale` (2–10), `mixingLength` (150–600 m) and
+`stableMixingLength` (10–60 m), `stratiformLifetime` (1–6 h),
+`cloudLifetime` (0.5–2 h), `plumeEntrainment` (0.05–0.2), `plumeCape`
+(40–200 J/kg), `minimumInversion` (2–6 K), `criticalHumidity` (0.7–0.9),
+`cumulusCeiling` (1500–2500 m) and the sea's drag (1.0–1.5·10⁻³). The
+screen scores run from 18.3 (point 17) to 148.4, the defaults 49.0. A
+full quadratic in the parameters coded to [−1, 1] (78 coefficients) by
+ridge regression, the penalty 0.79 by leave-one-out: R² 0.991,
+leave-one-out RMSE 21.8 against a spread of 30.6 (Q² 0.49). Along each
+range with the others at the defaults (slope over the half range;
+surface at low / default / high):
+
+| parameter | slope | low / default / high |
+|---|---|---|
+| minimumInversion | +25.7 | 32.3 / 52.5 / 83.8 |
+| sea drag | −20.5 | 72.6 / 52.5 / 36.4 |
+| cumulusCeiling | −14.2 | 71.1 / 52.5 / 42.7 |
+| mixingLength | +14.0 | 41.6 / 52.5 / 64.9 |
+| cloudLifetime | −12.5 | 62.6 / 52.5 / 43.2 |
+| criticalHumidity | +8.4 | 47.8 / 52.5 / 64.5 |
+| varianceScale | +4.6 | 49.8 / 52.5 / 60.5 |
+| plumeCape | +2.1 | 59.4 / 52.5 / 63.7 |
+| plumeEntrainment | −1.8 | 59.1 / 52.5 / 71.9 |
+| stableMixingLength | −1.7 | 59.5 / 52.5 / 63.1 |
+| stratiformLifetime | −1.2 | 54.4 / 52.5 / 53.2 |
+
+By term (linear, change of e over the full range): the deck boxes' low
+cloud is the minimum jump's (SE Pacific −6.1, Peru −8.1); the albedo
+the short lifetime's (+2.6) and the jump's (−1.5); the balance the
+jump's (+2.5) and the short lifetime's (−1.8); the Arctic loss the
+stratiform lifetime's (−2.2); the global and ITCZ rain the entrainment's
+(−1.6, −2.4) and the drag's (+1.3, +1.3); the stress the drag's (−0.5).
+The heating peak and the zonal rain peak are fitted with R² 0.22 and 0.24.
+
+The candidates: the four best screens (points 17, 34, 16, 40), the
+surface's minimum over the box (qmin: ten of its eleven parameters at an
+edge of their range, cloudLifetime inside it at 1.579 h; predicted
+−61.7), the minimum of the score composed from each
+term's own fit (cmin, composed 11.1) and the defaults (base), each on ten
+N=64 days from eight64_day0183 (albedo over days 186–193, ASR − OLR over
+188–193, the audit of day 193), five N=128 days from eight128_day0183
+(186–188) and thirty N=64 days from a fresh atlas start on bl34 (day 30),
+scored by the same terms (the Arctic from the screen, the N=128 runs by
+balance, albedo and stress, the fresh starts by balance and albedo).
+qminr and baser are qmin and base with the drag 10⁻⁴ of itself larger,
+run to measure the scores' noise.
+
+| | qmin | qminr | base | baser | p17 | cmin | p16 | p40 | p34 |
+|---|---|---|---|---|---|---|---|---|---|
+| score: total (day 193 / N=128 / day 30) | 122 (70 / 11 / 41) | 283 (179 / 11 / 93) | 129 (52 / 23 / 54) | 193 (57 / 24 / 112) | 131 (58 / 4 / 68) | 149 (69 / 14 / 66) | 162 (88 / 1 / 72) | 204 (102 / 1 / 101) | 207 (123 / 2 / 81) |
+| screen score | 41.7 | 41.4 | 49.0 | 47.8 | 18.3 | 39.5 | 32.5 | 32.7 | 22.2 |
+| ASR − OLR 188–193, W/m² | −3.5 | −3.3 | +1.5 | +1.3 | +0.2 | −4.4 | −3.6 | −3.9 | −0.8 |
+| albedo 186–193 | 0.315 | 0.314 | 0.288 | 0.289 | 0.300 | 0.310 | 0.314 | 0.322 | 0.301 |
+| global rain, audit day 193 (day means 188–193), mm/d | 2.57 (2.64) | 2.60 (2.64) | 2.42 (2.51) | 2.42 (2.50) | 2.55 (2.58) | 2.74 (2.70) | 2.68 (2.53) | 2.51 (2.48) | 2.55 (2.54) |
+| evaporation, mm/d | 2.61 | 2.64 | 2.48 | 2.49 | 2.51 | 2.67 | 2.60 | 2.47 | 2.49 |
+| low cloud SE Pacific / Peru / Namibia | 0.32 / 0.49 / 0.41 | 0.38 / 0.50 / 0.38 | 0.25 / 0.39 / 0.39 | 0.22 / 0.40 / 0.33 | 0.23 / 0.44 / 0.38 | 0.42 / 0.60 / 0.29 | 0.23 / 0.36 / 0.59 | 0.22 / 0.30 / 0.40 | 0.30 / 0.50 / 0.41 |
+| deck water as radiated, SE Pacific / Peru, g/m² | 143 / 146 | 142 / 143 | 124 / 137 | 138 / 142 | 144 / 145 | 144 / 147 | 146 / 147 | 149 / 147 | 148 / 147 |
+| SE Pacific deck runs; resolved inversion, m | 0.234; 1955 | 0.270; 1952 | 0.014; 1889 | 0.023; 1887 | 0.024; 2002 | 0.276; 1884 | 0.062; 1941 | 0.022; 1911 | 0.118; 1951 |
+| SE Pacific / Peru rain, mm/d | 1.38 / 0.00 | 1.38 / 0.00 | 1.18 / 0.00 | 1.23 / 0.00 | 1.37 / 0.00 | 1.60 / 0.03 | 1.60 / 0.00 | 1.73 / 0.01 | 1.33 / 0.02 |
+| Pacific ITCZ rain, mm/d; heating peak, hPa | 8.26; 438 | 7.90; 438 | 6.81; 438 | 6.52; 439 | 8.41; 438 | 6.52; 438 | 7.62; 439 | 9.93; 438 | 7.10; 438 |
+| zonal rain peak, °N | 2.5 | −30.5 | 10.5 | 10.5 | 7.5 | 3.5 | 11.5 | 10.5 | 37.5 |
+| equatorial stress day 193, N/m² | −0.026 | −0.025 | −0.024 | −0.021 | −0.024 | −0.026 | −0.025 | −0.027 | −0.023 |
+| 60–90N ice loss (screen), 10³ km³/day | 0.219 | 0.219 | 0.174 | 0.174 | 0.171 | 0.159 | 0.197 | 0.152 | 0.180 |
+| N=128: albedo / ASR − OLR 186–188; stress | 0.308 / −4.7; −0.034 | 0.307 / −4.5; −0.034 | 0.270 / +5.6; −0.035 | 0.270 / +5.7; −0.034 | 0.287 / +2.0; −0.036 | 0.304 / −5.2; −0.032 | 0.296 / −0.6; −0.037 | 0.302 / −0.5; −0.036 | 0.289 / +0.8; −0.035 |
+| fresh day 30: albedo / ASR − OLR (mean of days 25–30) | 0.338 / −8.0 (0.336 / −7.2) | 0.354 / −12.3 (0.350 / −10.3) | 0.339 / −9.6 (0.334 / −9.4) | 0.350 / −14.2 (0.348 / −14.0) | 0.349 / −10.3 (0.349 / −10.7) | 0.343 / −10.6 (0.352 / −14.3) | 0.347 / −10.9 (0.354 / −12.5) | 0.364 / −12.1 (0.360 / −11.5) | 0.348 / −11.7 (0.343 / −10.4) |
+
+No run made a NaN or clamped the ocean. The replicates show the noise:
+the ten-day and N=128 terms but one repeat to a few points, while the
+zonal rain peak of a single eight-step audit moved from 2.5N to 30.5S in
+qmin's pair (+113 points), and the fresh start's day 30 fell by 4–5 W/m²
+in both replicates (+40 and +58 points). With the zonal peak left out and
+day 30 replaced by the mean of days 25–30, qmin and qminr score 113 and
+144, base and baser 123 and 188. The four best screens did not keep
+their lead: the three-day screens score a state still recovering from the
+eight64 start (day 184's day-mean albedo 0.25–0.27, rain 0.7–0.8 mm/d),
+and by day 193 their SE Pacific decks ran on 0.02–0.12 of the
+column-steps with 1.3–1.7 mm/d of rain, p16 and p40 had brightened to
+0.314 and 0.322, and p34 took a zonal rain peak at 37.5N. The winner is
+qmin, the lowest score on the candidates' runs and on both readings of
+the replicates, set as the defaults on both engines: `varianceScale` 10,
+`mixingLength` 150 m, `stableMixingLength` 10 m, `minimumInversion` 2 K,
+`criticalHumidity` 0.7, `cumulusCeiling` 2500 m, `cloudLifetime` 1.579 h,
+`stratiformLifetime` 1 h, `plumeEntrainment` 0.05, `plumeCape` 40 J/kg,
+`SEA_DRAG` 1.5·10⁻³. Three N=64 days from eight64_day0183 under the new
+defaults reproduce qmin's screen byte for byte.
+
+What still misses with the winner: the fresh start's deficit (day 30
+−8.0 W/m², albedo 0.338; −12.3 and 0.354 in the replicate); the Arctic
+loss, 0.219 against 0.15 (the stratiform lifetime is now shorter than
+the short one, and its term is the Arctic's); the SE Pacific deck (low
+cloud 0.32, deck on 0.23 of the column-steps under a 1.95 km inversion,
+rain 1.38 mm/d against 0.1–0.3); the deck water as the radiation takes it
+near the 150 g/m² cap in both boxes; the zonal rain peak at 2.5N; the
+equatorial stress at N=64 of −0.026 N/m² against −0.05 (and −0.034 at
+N=128 from eight128). Ten of the winner's eleven parameters sit on an
+edge of their range, where the fit predicted −61.7 against the 122 the
+runs scored, and the 2 K jump is the weak test the deck's own rest was
+moved away from: it opens the deck's gate (mlmGate > 0.5) over 0.208 of
+the globe and 0.112 of 10S–10N on day 186 and over 0.182 and 0.155 on
+day 193, against the old defaults' 0.033 and 0.021, 0.044 and 0.046.
+The deck water the score reads is the radiation's, capped at 150 g/m²;
+the deck's own water path where it runs on day 193 rose from base's 381
+(SE Pacific) and 472 g/m² (Peru) to qmin's 411 and 673, its cloud layer
+from 546 and 638 m to 653 and 778 m. Scored on the deck's own water path
+with the same target and tolerance, the candidates total base 215, p17
+276, p16 283, cmin 288, qmin 291, p34 357 and p40 376.
+
+The winner was not adopted. Its margin over the fixes' defaults (122
+against 129 on the specified score) is inside the replicate noise (one
+replicate scored 283), ten of its eleven values sit on an edge of the
+design, it regresses the Arctic loss to 0.219 from 0.174 by making the
+stratiform lifetime shorter than the convective one, and its 2 K
+inversion test opens the deck's gate over a fifth of the globe. The
+score also could not see the deck's own water path, which the 150 g/m²
+cap hides, and every candidate missed the fresh start's deficit of
+−8 to −14 W/m² at day 30, so the eleven parameters do not reach that
+term. The defaults stay at the fixes' values (variance scale 5, mixing
+lengths 300 and 30 m, cloud lifetime 1 h and stratiform 3 h, minimum
+inversion 4 K, critical humidity 0.8, sea drag 1.2·10⁻³, cumulus
+ceiling 2000 m). The sweep's tools stay: the next score should use the
+deck's uncapped water path and thickness, average the fresh start's
+days 25–30 and several audit windows, constrain the stratiform
+lifetime to at least the convective one, and add the parameters of the
+cloud above the boundary layer, since the fresh start's deficit is
+longwave.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21

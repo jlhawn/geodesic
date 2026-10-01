@@ -163,7 +163,16 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * Rain: Kessler autoconversion of cloud water above the threshold at
  * autoconversionRate, and of all cloud water over cloudLifetime
  * (`upperCloudLifetime` where the layer's pressure is below `shallowTop`,
- * the anvils' layers; null: cloudLifetime throughout), except
+ * the anvils' layers; null: cloudLifetime throughout). Stratiform cloud
+ * under an inversion lives longer: the lifetime moves to
+ * `stratiformLifetime` (3 h; null: no such cloud) by the layer's share
+ * s, 0 in the layers at and below the top of a plume that ran in the
+ * column this step (cumulusTop), whose cloud the plume detrained, and
+ * elsewhere the larger of the cell's sea-ice cover and, with the moist
+ * boundary layer (`boundaryTop`, its mixing top, and `boundaryRegime`),
+ * 1 below the mixing top of a coupled column, 0 below that of a
+ * surface-driven, decoupled or stable one and the radiation's EIS share
+ * (`stratiform`) above it. Every layer converts, except
  * in the lowest two layers (`autoconversionFloor` 'lowest') or in the
  * layers wholly below the boundary-layer top ('boundaryLayer'; the
  * lowest two without a boundary layer). The rain falls through the layers below within the
@@ -184,7 +193,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  *
  * Defaults: inhibitionThreshold 50 J/kg, shallowTop 700 hPa,
  * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
- * cloudLifetime 1 h, no upperCloudLifetime, autoconversionFloor 'lowest', rainEvaporation 1,
+ * cloudLifetime 1 h, no upperCloudLifetime, stratiformLifetime 3 h, autoconversionFloor 'lowest', rainEvaporation 1,
  * cumulusClosure 0.06, cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
  * 3e-3 /m, cumulusSourceDepth 50 hPa, cumulusBoundaryLoss 0.1,
  * cumulusFriction 1, cumulusOvershoot 1, cumulusUpdraft 1 m/s, no
@@ -201,7 +210,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
-  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, rainEvaporation: 1, autoconversionFloor: 'lowest',
+  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest',
   deckVeto: true, coupledVeto: false, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.06, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean',
@@ -211,10 +220,10 @@ export const MOIST_DEFAULTS = {
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
   'downdraftEvaporation', 'downdraftSpread', 'shallowHumidity', 'shallowCape', 'shallowInhibition', 'shallowStability', 'shallowReference', 'shallowRain', 'boundaryParcel', 'adjustFrom'];
 
-export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, deckGate = null, surfaceBuoyancy = null, frictionVelocity = null, buffers = null, ...options } = {}) {
+export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, boundaryTop = null, stratiform = null, deckGate = null, surfaceBuoyancy = null, frictionVelocity = null, buffers = null, ...options } = {}) {
   for (const retired of RETIRED_OPTIONS) if (retired in options) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
   const {
-    latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, rainEvaporation, autoconversionFloor,
+    latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, stratiformLifetime, rainEvaporation, autoconversionFloor,
     deckVeto, coupledVeto, evaporationInCloud, virtualBuoyancy,
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource,
     plumeClosure, plumeCapeParcel, plumeSource, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
@@ -314,7 +323,17 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
    * below cloud base and falling.convective what reached the ground.
    * Returns the autoconversion rain that reaches the ground (kg/m²).
    */
-  function autoconvertColumn(i, pi, theta, q, qc, dt, stream = null) {
+  function longCloudShare(i, k, pi, iced) {
+    if (cumulusBaseFlux[i] > 0 && pi[i] * sigmaMid[k] >= cumulusTop[i]) return 0;
+    let share = 0;
+    if (boundaryTop !== null) {
+      if (!(geopotential[k * C + i] / g < boundaryTop[i])) share = stratiform !== null ? stratiform[i] : 0;
+      else if (boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME) share = 1;
+    }
+    return Math.max(share, iced);
+  }
+
+  function autoconvertColumn(i, pi, theta, q, qc, dt, stream = null, iced = 0) {
     let rain = 0, convective = 0, streamed = 0;
     const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
@@ -355,7 +374,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       if (!(qc[idx] > 0)) continue;
       if (autoconversionFloor !== 'none' && (floor === null ? k >= K - 2 : k > 0 && upperInterface(i, k) < floor)) continue;
       const excess = Math.max(0, qc[idx] - autoconversionThreshold);
-      const lifetime = upperCloudLifetime !== null && pi[i] * sigmaMid[k] < shallowTop ? upperCloudLifetime : cloudLifetime;
+      let lifetime = upperCloudLifetime !== null && pi[i] * sigmaMid[k] < shallowTop ? upperCloudLifetime : cloudLifetime;
+      if (stratiformLifetime !== null) lifetime += longCloudShare(i, k, pi, iced) * (stratiformLifetime - lifetime);
       const converted = Math.min(qc[idx], excess * (1 - Math.exp(-autoconversionRate * dt)) + qc[idx] * (1 - Math.exp(-dt / lifetime)));
       qc[idx] -= converted;
       rain += pi[i] * dSigma[k] / g * converted;
@@ -781,8 +801,11 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     }
   }
 
+  let iceConcentration = null;
+  function useSeaIce(concentration) { iceConcentration = concentration; }
+
   function adjust(state, iFrom, iTo, dt) {
-    const [pi, theta, , , q, qc] = state;
+    const [pi, theta, , , q, qc, ice = null] = state;
     for (let i = iFrom; i < iTo; i++) {
       core.diagnoseColumn(i, pi, theta, q, qc);
       const traced = trace.convection || trace.largeScale;
@@ -792,7 +815,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const produced = plumeColumn(i, pi, theta, q, qc, dt);
       if (traced) charge(trace.convection, i, theta);
       if (cumulusBaseFlux[i] > 0) condenseColumn(i, pi, theta, q, qc);
-      const rained = autoconvertColumn(i, pi, theta, q, qc, dt, deep.deep ? convectiveFall : null);
+      const rained = autoconvertColumn(i, pi, theta, q, qc, dt, deep.deep ? convectiveFall : null, ice && ice[i] > 0 ? (iceConcentration !== null && iceConcentration[i] > 0 ? iceConcentration[i] : 1) : 0);
       const convected = deep.deep ? falling.convective + deep.shallowRain : produced;
       if (traced) {
         charge(trace.largeScale, i, theta);
@@ -830,7 +853,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   }
 
   return {
-    adjust, condenseColumn, autoconvertColumn, cumulusColumn, plumeColumn, transportMomentum, fillColumn, columnWater, readRain,
+    adjust, useSeaIce, condenseColumn, autoconvertColumn, cumulusColumn, plumeColumn, transportMomentum, fillColumn, columnWater, readRain,
     precipitation, rain, convectivePrecipitation, largeScalePrecipitation, convectiveRain, largeScaleRain, budget, latentHeat, trace, falling,
     cumulus, cumulusCover, cumulusWater, cumulusBaseFlux, cumulusTop, cumulusFlux, deep, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained,
     momentum: { up: momentumUp, upKeep: momentumUpKeep, down: momentumDown, downKeep: momentumDownKeep, source: momentumSource },

@@ -7,6 +7,7 @@ import { createBoundaryLayer } from '../js/physics/boundaryLayer.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
+import { SEA_DRAG } from '../js/physics/surface.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -179,8 +180,8 @@ function expectedEntrainment(state, layer, i, { efficiency = 0.2, shear = 5, cap
   const [pi, theta, , surfaceT, q] = state;
   const { exnerLayer, sigmaMid, kappa } = core.diagnostics, { thetaV } = core.arrays;
   const base = (K - 1) * C + i, zb = geopotential[base] / g, h = layer.depth[i] - zb;
-  const friction = Math.sqrt(1.5e-3) * 3;
-  const buoyancy = g / theta[base] * 1.5e-3 * 3 * (surfaceT[i] * Math.pow(sigmaMid[K - 1], kappa) / exnerLayer[base] - theta[base] + 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]));
+  const friction = Math.sqrt(SEA_DRAG) * 3;
+  const buoyancy = g / theta[base] * SEA_DRAG * 3 * (surfaceT[i] * Math.pow(sigmaMid[K - 1], kappa) / exnerLayer[base] - theta[base] + 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]));
   let above = -1;
   for (let k = layer.kTop; k < K - 1; k++) if (0.5 * (geopotential[k * C + i] + geopotential[(k + 1) * C + i]) / g - zb >= h) above = k;
   let weight = 0, sum = 0;
@@ -265,7 +266,7 @@ test('the deck\'s opening and the stratiform share taper w_e: a half-open gate o
   const { buoyancy } = expectedEntrainment(again, floored, 1);
   assert.ok(buoyancy > 5e-5, 'the shear term is whole');
   assert.equal(capped.entrainment[1], 1e-4);
-  assert.ok(Math.abs(floored.entrainment[1] - (0.2 * buoyancy + 5 * (Math.sqrt(1.5e-3) * 3) ** 3 / (floored.depth[1] - geopotential[(K - 1) * C + 1] / g)) / 10) < 1e-12);
+  assert.ok(Math.abs(floored.entrainment[1] - (0.2 * buoyancy + 5 * (Math.sqrt(SEA_DRAG) * 3) ** 3 / (floored.depth[1] - geopotential[(K - 1) * C + 1] / g)) / 10) < 1e-12);
 });
 
 test('the shear term comes in continuously with the surface buoyancy flux: w_e falls to zero as B0 falls to zero, linearly below the onset; without the onset it jumps', () => {

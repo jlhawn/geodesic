@@ -3,6 +3,7 @@ import { sigmaInterfaces, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../
 import { sunDirection, nearestLayer, STABILITY_SIGMA, UNDECIDED } from '../physics/radiation.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.gpu.js';
 import { MOIST_DEFAULTS } from '../physics/moist.module.js';
+import { SEA_DRAG } from '../physics/surface.module.js';
 
 const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384, MAXIMUM_SURFACE_PRESSURE = 110000;
 
@@ -525,9 +526,9 @@ const KERNELS = {
 
 export const PHYSICS_DEFAULTS = {
   solarConstant: 1362, cloudAbsorption: 130, cloudScattering: 95, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
-  mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'maximumRandom', prognosticHeight: true, deckRest: 'inversion', gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
+  mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'maximumRandom', prognosticHeight: true, deckRest: 'regime', cumulusCeiling: 2000, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
-  exchangeCoefficient: 1.5e-3, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0.15,
+  exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0.15,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10,
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.5, fullAlbedoThickness: 0.5, iceSnowAlbedo: 0.75, iceFullSnow: 20, snowConductivity: 0.31, snowDensity: 300, waterDensity: 1026,
   ...MOIST_DEFAULTS,
@@ -540,7 +541,7 @@ export const PHYSICS_DEFAULTS = {
 
 export async function createGpuCore(mesh, {
   levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0, divergenceDamping = 0,
-  dragCoefficient = 1.5e-3, gustiness = 3, topSigma = 0.02, topDragDays = 5, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
+  dragCoefficient = SEA_DRAG, gustiness = 3, topSigma = 0.02, topDragDays = 5, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
 } = {}) {
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
   const { device } = await getDevice();

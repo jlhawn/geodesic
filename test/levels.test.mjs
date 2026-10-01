@@ -287,8 +287,8 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
     return sum / mass;
   };
   const seaMean = (values) => { let sum = 0, n = 0; for (let i = 0; i < C; i++) if (!land[i]) { sum += values[i]; n++; } return sum / n; };
-  assert.match(run({ TAG: 'carried', LEVELS: 'bl34', STOP_AFTER_STEPS: '4' }), /its atmosphere remapped from cam26 on bl34 \(34 layers\) and its deck; the clock at day 0/);
-  assert.match(run({ TAG: 'freshair', LEVELS: 'bl34', STOP_AFTER_STEPS: '4', ATMOSPHERE: 'fresh' }), /with fresh sea ice; a fresh atmosphere on bl34 \(34 layers\); the clock at day 0/);
+  assert.match(run({ TAG: 'carried', LEVELS: 'bl34', STOP_AFTER_STEPS: '4', RADIATION: '{"deckRest":"inversion"}' }), /its atmosphere remapped from cam26 on bl34 \(34 layers\) and its deck; the clock at day 0/);
+  assert.match(run({ TAG: 'freshair', LEVELS: 'bl34', STOP_AFTER_STEPS: '4', ATMOSPHERE: 'fresh', RADIATION: '{"deckRest":"inversion"}' }), /with fresh sea ice; a fresh atmosphere on bl34 \(34 layers\); the clock at day 0/);
   assert.throws(() => run({ TAG: 'warm', ATMOSPHERE: 'warm' }), /ATMOSPHERE is carry or fresh, not warm/);
   const carried = await read('carried_day0000_step0004.bin'), freshAir = await read('freshair_day0000_step0004.bin');
   const differences = [carried, freshAir].map((x) => ({ pi: areaMean(x.pi) - areaMean(origin.pi), theta: massMean(x, 'theta') - massMean(origin, 'theta'), water: massMean(x, 'q') / massMean(origin, 'q'), gate: seaMean(x.mlmGate) }));

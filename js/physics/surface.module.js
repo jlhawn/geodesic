@@ -1,5 +1,8 @@
 import { cellVector } from '../dynamics/operators.module.js';
 
+export const SEA_DRAG = 1.2e-3;
+export const LAND_DRAG = 1.5e-3;
+
 /*
  * Surface drag and the dry convective adjustment. Bulk aerodynamic drag
  * acts on the lowest layer with a gustiness floor on the wind speed,
@@ -9,7 +12,7 @@ import { cellVector } from '../dynamics/operators.module.js';
  * reaches the lid. heatLayers returns the kinetic energy both drags
  * remove as heat in the cells whose edges lost it.
  */
-export function createSurface(mesh, core, { dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, topSigma = 0.05, topDragDays = 0, buffers = null } = {}) {
+export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoefficients = null, gustiness = 3, topSigma = 0.05, topDragDays = 0, buffers = null } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, cp, exnerLayer } = core.diagnostics;
   const { cellsOnEdge, nEdgesOnCell, edgesOnCell, maxEdges, dcEdge, dvEdge, areaCell } = mesh;
   const bottom = K - 1;

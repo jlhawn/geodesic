@@ -30,7 +30,7 @@ export function physicsConstants(o) {
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
   if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${o.cloudOverlap}`);
   if (!(o.overcastInversion?.[1] > o.overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${o.overcastInversion}`);
-  if (o.deckRest !== 'depth' && o.deckRest !== 'inversion') throw new Error(`deckRest must be 'depth' or 'inversion', not ${o.deckRest}`);
+  if (o.deckRest !== 'depth' && o.deckRest !== 'inversion' && o.deckRest !== 'regime') throw new Error(`deckRest must be 'depth', 'inversion' or 'regime', not ${o.deckRest}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
   for (const retired of RETIRED_OPTIONS) if (retired in o) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
   if (o.cumulusSource !== 'mean' && o.cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${o.cumulusSource}`);
@@ -59,7 +59,7 @@ const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThicknes
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME};
-const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null};
+const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
 const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
 const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
@@ -75,7 +75,7 @@ const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
 const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
-const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest === 'inversion'};
+const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling};
 const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 `;
 }
@@ -449,21 +449,26 @@ fn mlmFlow(i: i32, m: i32) -> f32 {
   for (var s = 0; s < MAXE; s++) { if (s < n) { sum += mlmRing(MI[COC + MAXE * i + s], m); } }
   return sum / f32(n + 1);
 }
-fn mlmCeiling(i: i32, floor: f32) -> f32 {
+fn mlmCapping(i: i32, floor: f32) -> i32 {
   for (var k = K - 2; k >= 1; k--) {
-    let upper = (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV;
     if ((D[D_GEO + (k + 1) * C + i] + LV[L_GABS + k + 1]) / GRAV >= MLM_HMAX) { break; }
-    if (upper > floor && D[D_THV + k * C + i] - D[D_THV + (k + 1) * C + i] >= MLM_CEILINV) { return upper - 1.0; }
+    if ((D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV > floor && D[D_THV + k * C + i] - D[D_THV + (k + 1) * C + i] >= MLM_CEILINV) { return k; }
   }
-  return MLM_HMAX;
+  return -1;
 }
 fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, dt: f32, sun: MlmSun) -> MlmDeck {
   let none = MlmDeck(false, 0.0, 0.0, 0.0, 0.0);
   let bottom = (K - 1) * C + i;
   let depth = mixedDepth + (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
+  let regime = PH[PH_REGIME + i];
+  let lifted = MLM_REST_REGIME && (regime == 1.0 || regime == 2.0);
+  var capping = -1;
+  if (MLM_PROGNOSTIC || lifted) { capping = mlmCapping(i, depth); }
   var ceiling = MLM_HMAX;
-  if (MLM_PROGNOSTIC) { ceiling = min(MLM_HMAX, mlmCeiling(i, depth)); }
-  let resting = select(depth, ceiling, MLM_REST_INVERSION && ceiling < MLM_HMAX);
+  if (MLM_PROGNOSTIC && capping >= 0) { ceiling = min(MLM_HMAX, (D[D_GEO + capping * C + i] + LV[L_GABS + capping]) / GRAV - 1.0); }
+  var standDown = lifted;
+  if (lifted && capping >= 0) { standDown = !(mlmInterface(i, capping + 1) <= MLM_CUCEIL); }
+  let resting = select(depth, ceiling, MLM_REST_INVERSION && !(MLM_REST_REGIME && regime == 3.0) && !standDown && ceiling < MLM_HMAX);
   var h = depth;
   if (MLM_PROGNOSTIC) { h = resting; }
   if (MLM_PROGNOSTIC && PH[PH_MLMH + i] > 0.0) { h = max(depth, min(ceiling, PH[PH_MLMH + i])); }
@@ -501,12 +506,13 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
   let start = MlmState(h, heat / weight, water / weight);
   var now = MlmOut(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
   var passed = 0.0;
-  if (sinking) {
+  if (sinking && !standDown) {
     now = mlmDiagnose(start, pi, sensible, evaporation, thetaAbove, qtAbove, sun);
     if (MLM_BL_GATE) { if (PH[PH_REGIME + i] == 3.0) { passed = 1.0; } } else if (now.jump >= MLM_MININV) { passed = 1.0; }
   }
   var gate = passed;
   if (MLM_GATEMEM > 0.0) { gate = PH[PH_MLMGATE + i] + (passed - PH[PH_MLMGATE + i]) * mlmFresh(dt / MLM_GATEMEM); }
+  if (standDown) { gate = 0.0; }
   PH[PH_MLMGATE + i] = gate;
   if (!(gate > MLM_UNDECIDED || (gate == MLM_UNDECIDED && passed > 0.0)) || MLM_BYPASS) { mlmRest(i, resting, dt); return none; }
   if (!sinking) { now = mlmDiagnose(start, pi, sensible, evaporation, thetaAbove, qtAbove, sun); }
@@ -981,6 +987,15 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   let idx = k * C + i;
   return (D[D_GEO + idx] + LV[L_GABS + k] + CP * D[D_THV + idx] * (D[D_EXM + idx] - D[D_EXL + idx - C])) / GRAV;
 }
+fn longCloudShare(i: i32, k: i32, pi: f32, iced: f32) -> f32 {
+  if (PH[PH_CUMF + i] > 0.0 && pi * LV[L_SM + k] >= PH[PH_CUTOP + i]) { return 0.0; }
+  var share = 0.0;
+  if (MOIST_BL) {
+    if (!((D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV < PH[PH_MIXTOP + i])) { share = PH[PH_STRAT + i]; }
+    else if (PH[PH_REGIME + i] == 3.0) { share = 1.0; }
+  }
+  return max(share, iced);
+}
 fn saturateColumn(i: i32, pi: f32) {
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
@@ -1376,6 +1391,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   // autoconversion, and the rain evaporating as it falls
   var rained = 0.0; var convective = 0.0;
   let floor = PH[PH_DEPTH + i];
+  let iceConc = PH[PH_CONC + i]; let iced = select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
@@ -1413,7 +1429,9 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     if (!(qc > 0.0)) { continue; }
     if (AUTO_NONE) { } else if (AUTO_BL) { if (k > 0 && upperInterface(i, k) < floor) { continue; } } else if (k >= K - 2) { continue; }
     let excess = max(0.0, qc - AUTO_T);
-    let converted = min(qc, excess * (1.0 - exp(-AUTO_R * dt)) + qc * (1.0 - exp(-dt / select(CLOUD_LIFE, UPPER_LIFE, UPPER_SPLIT && pi * LV[L_SM + k] < SHALLOW_TOP))));
+    var lifetime = select(CLOUD_LIFE, UPPER_LIFE, UPPER_SPLIT && pi * LV[L_SM + k] < SHALLOW_TOP);
+    if (STRAT_SPLIT) { lifetime += longCloudShare(i, k, pi, iced) * (STRAT_LIFE - lifetime); }
+    let converted = min(qc, excess * (1.0 - exp(-AUTO_R * dt)) + qc * (1.0 - exp(-dt / lifetime)));
     IN[S_QC + idx] = qc - converted;
     rained += mass * converted;
   }

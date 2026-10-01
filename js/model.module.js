@@ -2,7 +2,7 @@ import { buildMesh } from './mesh.module.js';
 import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING } from './dynamics/sigmaCore.module.js';
 import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
-import { createSurface } from './physics/surface.module.js';
+import { createSurface, SEA_DRAG, LAND_DRAG } from './physics/surface.module.js';
 import { createMoistPhysics } from './physics/moist.module.js';
 import { createSeaIce, MELTING_POINT, FREEZING_POINT } from './physics/ice.module.js';
 import { createOcean } from './ocean/layered.module.js';
@@ -53,7 +53,7 @@ export function createModel(gridOrMesh, {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
-  const dragCoefficients = geography ? Float64Array.from(geography.land, (l) => (l ? landOptions.dragCoefficient ?? 1.5e-3 : surfaceOptions.dragCoefficient ?? 1.5e-3)) : null;
+  const dragCoefficients = geography ? Float64Array.from(geography.land, (l) => (l ? landOptions.dragCoefficient ?? LAND_DRAG : surfaceOptions.dragCoefficient ?? SEA_DRAG)) : null;
   let spacing = 0;
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;
@@ -67,6 +67,7 @@ export function createModel(gridOrMesh, {
   const gustiness = surfaceOptions.gustiness ?? 3;
   const moistPhysics = createMoistPhysics(mesh, core, {
     buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, boundaryRegime: boundaryLayer ? boundaryLayer.regime : null, deckGate: radiation.mlmGate,
+    boundaryTop: boundaryLayer && boundaryLayer.turbulence === 'moist' ? boundaryLayer.mixingTop : null, stratiform: radiation.stratiform,
     surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null, ...moistOptions,
   });
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
@@ -79,6 +80,7 @@ export function createModel(gridOrMesh, {
     ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity } : {}),
     ...iceOptions,
   });
+  moistPhysics.useSeaIce(seaIce.concentration);
   const totals = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), openSea = new Float64Array(C), stressScratch = new Float64Array(E);
   const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C);

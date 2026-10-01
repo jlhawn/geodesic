@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
+import { SEA_DRAG } from '../js/physics/surface.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
@@ -218,7 +219,7 @@ console.log('\n-- zonal acceleration, 1e-5 m/s2: boundary-layer mass mean (layer
 console.log(head);
 for (const t of TERMS) console.log(row(t, binMean((i) => blMean(T[t], i))));
 console.log(row('tau_x / BL mass', binMean((i) => tauEast[i] / blMass(i))));
-console.log(row('Cd max(|V|,3) |u| u / h (lowest rho)', binMean((i) => 1.5e-3 * Math.max(speed[i], 3) * uEast[(K - 1) * C + i] / hAbove(i))));
+console.log(row('Cd max(|V|,3) |u| u / h (lowest rho)', binMean((i) => (SURFACE.dragCoefficient ?? SEA_DRAG) * Math.max(speed[i], 3) * uEast[(K - 1) * C + i] / hAbove(i))));
 
 console.log('\n-- zonal SLP gradient between bin centres and the acceleration -(1/rho) dp/dx it implies (1e-5 m/s2)');
 const R_E = mesh.radius ?? 6.371e6;
