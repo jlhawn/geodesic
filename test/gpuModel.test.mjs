@@ -360,7 +360,7 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
  * boundary layer, carries the deck.
  */
 async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = {}, ...options } = {}) {
-  const physics = { mixedLayerDeck: true, ...options };
+  const physics = { mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options };
   const model = createModel(new Grid(6), { ocean: false, radiation: physics, moist });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);

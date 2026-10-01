@@ -256,7 +256,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * cumulusBoundaryLoss 0.1, cumulusFriction 1, cumulusOvershoot 1,
  * cumulusUpdraft 1 m/s, no cumulusRain, cumulusSource 'mean' (or
  * 'lowest': the plume leaves with the lowest layer's air), no
- * cumulusWithDeep; convection 'plume', plumeClosure 'separate',
+ * cumulusWithDeep; convection 'bettsMiller' (the deep branch above),
+ * and for convection 'plume': plumeClosure 'separate',
  * plumeCapeParcel 'plume', plumeSource 'mean', plumeVelocity 1 m/s,
  * plumeAcceleration 1/3, plumeDrag 1, plumeEntrainment 0.1,
  * plumeEntrainmentFloor 1e-4 /m, plumeMassGrowth 0, plumeRainRate 3e-3 /m,
@@ -272,7 +273,7 @@ export const MOIST_DEFAULTS = {
   boundaryParcel: false, adjustFrom: 'cloudBase', deckVeto: true, evaporationInCloud: false, downdraftSpread: 'mass', virtualBuoyancy: true,
   shallowScheme: 'massFlux', cumulusClosure: 0.06, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusWithDeep: false,
-  convection: 'plume', plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
+  convection: 'bettsMiller', plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, plumeCape: 70, plumeRelaxation: 3600, plumeMomentum: false,
 };
 

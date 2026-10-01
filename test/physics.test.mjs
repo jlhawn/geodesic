@@ -606,6 +606,7 @@ test('with stratusIndex: \'ectei\' the deck follows the entrainment index: a dry
 });
 
 const REDIAGNOSED = { prognosticHeight: false, gateMemory: 0 };
+const DEPTH_REST = { deckRest: 'depth', minimumInversion: 2 };
 
 function mixedLayerColumn(sinking = 0.4) {
   const pi = new Float64Array(C).fill(P0), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
@@ -666,7 +667,7 @@ test('the mixed-layer deck on a stable column over a warm sea carries the water 
 });
 
 test('the mixed-layer deck needs subsidence and a capping inversion: a column under ascent or under a 1 K jump has none, and falls back to no deck', () => {
-  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9, ...REDIAGNOSED });
+  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9, ...REDIAGNOSED, ...DEPTH_REST });
   shadow.setTime(0);
   const noon = brightest(shadow), empty = { mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, stratus: 0, stratusFraction: 0 };
   const pick = (b) => ({ mlmCover: b.mlmCover, mlmWater: b.mlmWater, mlmEntrainment: b.mlmEntrainment, stratus: b.stratus, stratusFraction: b.stratusFraction });
@@ -743,7 +744,7 @@ function boundaryLayerTop(column, i) {
 }
 
 test('the deck carries its inversion height: from the boundary-layer top it deepens step after step by its own dh/dt, while the re-diagnosed deck starts from that top each step; mlmTop hands the height to the boundary layer', () => {
-  const carried = createRadiation(mesh, core, { subsidenceMemory: 1e-9 }), rediagnosed = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED });
+  const carried = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...DEPTH_REST }), rediagnosed = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED, ...DEPTH_REST });
   carried.setTime(0); rediagnosed.setTime(0);
   const noon = brightest(carried), column = mixedLayerColumn(0.4), top = boundaryLayerTop(column, noon), dt = 900;
   let previous = top.height, fixed = null;
@@ -766,7 +767,7 @@ test('the deck carries its inversion height: from the boundary-layer top it deep
 });
 
 test('the gates switch the deck through their running mean: a standing deck outlives failing gates by ln 2 × gateMemory and a new one waits about as long, deepening meanwhile no further than the inversion ceiling, and without its deck the carried height relaxes toward the boundary-layer top over heightMemory', () => {
-  const r = createRadiation(mesh, core, { subsidenceMemory: 1e-9 });
+  const r = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...DEPTH_REST });
   r.setTime(0);
   const noon = brightest(r), dt = 3600, fresh = 1 - Math.exp(-dt / DAY), relaxed = Math.exp(-dt / DAY);
   let gate = 0.5, column = mixedLayerColumn(0.4);
