@@ -219,17 +219,20 @@ test('the per-cell convective and large-scale rain survive a saved state: as sav
   assert.ok(RAIN_FIELDS.every((name) => savedRainField(legacy, name, source).every((x) => x === 0) && savedRainField(null, name, target).every((x) => x === 0)), 'a state saved without them, or a fresh start, starts from zero');
 });
 
-test('the convection\'s activity survives a saved state: as saved at the same resolution, interpolated within [0, 1] at another, and undecided for a state saved without it', async () => {
+test('a state saved with the convection\'s activity loads its moist fields as saved and leaves the activity behind', async () => {
   const { savedMoistField, MOIST_FIELDS } = await import('../js/physics/regrid.module.js');
   const { encodeState, decodeState } = await import('../js/stateFile.module.js');
-  assert.equal(MOIST_FIELDS.convectiveActivity, 0.5);
-  const source = createModel(new Grid(6), { ocean: false }), target = createModel(new Grid(10), { ocean: false }), C = source.mesh.nCells;
-  assert.ok(source.moist.convectiveActivity.every((x) => x === 0.5), 'a fresh model starts undecided');
-  const convectiveActivity = Float64Array.from({ length: C }, (_, i) => (i % 7) / 6);
-  const saved = await decodeState(encodeState({ N: 6, K: source.core.K, day: 0, time: 0, pi: source.state[0], convectiveActivity }));
-  const back = savedMoistField(saved, 'convectiveActivity', source), moved = savedMoistField(saved, 'convectiveActivity', target, source);
-  for (let i = 0; i < C; i++) assert.equal(back[i], Math.fround(convectiveActivity[i]), `activity of cell ${i}`);
-  assert.ok(moved.length === target.mesh.nCells && moved.every((x) => x >= 0 && x <= 1), 'interpolated within [0, 1]');
-  const legacy = await decodeState(encodeState({ N: 6, K: source.core.K, day: 0, time: 0, pi: source.state[0] }));
-  assert.ok(savedMoistField(legacy, 'convectiveActivity', source).every((x) => x === 0.5) && savedMoistField(null, 'convectiveActivity', target).every((x) => x === 0.5), 'a state saved without it, or a fresh start, starts undecided');
+  const { initializeState } = await import('../js/physics/init.module.js');
+  assert.deepEqual(Object.keys(MOIST_FIELDS), ['convectiveRain', 'largeScaleRain']);
+  const model = createModel(new Grid(6), { ocean: false }), C = model.mesh.nCells;
+  initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
+  const convectiveRain = Float64Array.from({ length: C }, (_, i) => (i % 5) / 2), convectiveActivity = Float64Array.from({ length: C }, (_, i) => (i % 7) / 6);
+  const saved = await decodeState(encodeState({ N: 6, K: model.core.K, day: 0, time: 0, pi: model.state[0], convectiveRain, convectiveActivity }));
+  assert.ok(saved.convectiveActivity, 'the saved state carries the activity');
+  for (const name of Object.keys(MOIST_FIELDS)) model.moist[name].set(savedMoistField(saved, name, model));
+  for (let i = 0; i < C; i++) assert.equal(model.moist.convectiveRain[i], Math.fround(convectiveRain[i]), `convective rain of cell ${i}`);
+  assert.ok(model.moist.largeScaleRain.every((x) => x === 0), 'large-scale rain saved without it starts from zero');
+  assert.equal(model.moist.convectiveActivity, undefined);
+  model.step(900);
+  assert.ok(model.state.every((a) => a.every(Number.isFinite)), 'the model steps');
 });

@@ -98,17 +98,17 @@ test('with the ∇⁴ closures off, the divergence damping alone and the heat it
 
 /*
  * One physics kernel alone against the CPU physics phase, both from the
- * same single-precision state (two steps after a 10 K inversion was
+ * same single-precision state (one step after a 10 K inversion was
  * imposed): the heating of every layer, (θ' − θ)Π/dt, over a step long
  * enough that the rounding of θ is far below the tolerance.
  */
 function heatingState() {
-  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false }, moist: { convection: 'bettsMiller', shallowScheme: 'bettsMiller' }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 } } });
+  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 } } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
   for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += 10;
-  for (let n = 0; n < 2; n++) model.step(900);
+  model.step(900);
   for (const a of model.state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   return model;
 }
@@ -495,7 +495,7 @@ test('a ceilingInversion below minimumInversion holds the deck under a weaker ju
   }
 });
 
-test('the GPU model sends the deck\'s running-mean subsidence, carried height and gate, the convection\'s activity and the boundary layer\'s depth to the device on load and reads them back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the GPU model sends the deck\'s running-mean subsidence, carried height and gate and the boundary layer\'s depth to the device on load and reads them back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const model = await createGpuModel(new Grid(6), { ocean: false, radiation: { mixedLayerDeck: true } });
   const C = model.mesh.nCells, init = initializeState(model, {});
@@ -505,8 +505,6 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   model.radiation.mlmSubsidence.set(loaded);
   model.radiation.mlmHeight.set(heights);
   model.radiation.mlmGate.set(gates);
-  const activity = Float64Array.from({ length: C }, (_, i) => (i % 9) / 8);
-  model.moist.convectiveActivity.set(activity);
   const depth = Float64Array.from({ length: C }, (_, i) => 300 + 23 * (i % 13));
   model.boundaryLayer.depth.set(depth);
   model.load();
@@ -514,7 +512,6 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   for (let i = 0; i < C; i++) {
     assert.equal(device.MLMSUB[i], Math.fround(loaded[i]), `cell ${i} on the device`);
     assert.ok(device.MLMH[i] === Math.fround(heights[i]) && device.MLMGATE[i] === Math.fround(gates[i]), `cell ${i}: height and gate on the device`);
-    assert.equal(device.CONVACT[i], Math.fround(activity[i]), `cell ${i}: activity on the device`);
     assert.equal(device.DEPTH[i], Math.fround(depth[i]), `cell ${i}: boundary-layer depth on the device`);
   }
   await model.step(900); await model.step(900);
@@ -523,7 +520,6 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   let moved = 0;
   for (let i = 0; i < C; i++) {
     assert.ok(model.radiation.mlmHeight[i] === after.MLMH[i] && model.radiation.mlmGate[i] === after.MLMGATE[i], `cell ${i}: height and gate mirrored`);
-    assert.equal(model.moist.convectiveActivity[i], after.CONVACT[i], `cell ${i}: activity mirrored`);
     assert.equal(model.boundaryLayer.depth[i], after.DEPTH[i], `cell ${i}: boundary-layer depth mirrored`);
     assert.equal(mean[i], after.MLMSUB[i], `cell ${i} mirrored`);
     assert.ok(Math.abs(mean[i] - loaded[i]) < 1e-4, `cell ${i}: ${mean[i]} from ${loaded[i]}`);
@@ -532,8 +528,8 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   assert.ok(moved > C / 2, `the mean moved on ${moved} cells`);
 });
 
-for (const convection of ['bettsMiller', 'plume']) test(`with convection: ${convection} the convective and large-scale rain accumulate alike in both engines, cell by cell but for the odd column whose onset falls a step apart, and add up to the precipitation`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { model, physics } = await pair(6, 24, 900, 0, false, {}, { rainEvaporation: 0, convection }, convection === 'bettsMiller' ? { entrainment: { efficiency: 0, shear: 0 } } : {});
+test('the convective and large-scale rain accumulate alike in both engines, cell by cell but for the odd column whose onset falls a step apart, and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { model, physics } = await pair(6, 24, 900, 0, false, {}, { rainEvaporation: 0 });
   const C = model.mesh.nCells, { convectivePrecipitation: convective, largeScalePrecipitation: largeScale, precipitation, rain } = model.moist;
   const largest = Math.max(...convective), onset = (i) => Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest;
   const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !onset(i)), pick = (values) => Float64Array.from(kept, (i) => values[i]);
@@ -546,12 +542,12 @@ for (const convection of ['bettsMiller', 'plume']) test(`with convection: ${conv
     apart = Math.max(apart, Math.abs(convective[i] + largeScale[i] - precipitation[i]));
     area += a; cpuMean += a * convective[i]; gpuMean += a * physics.CONV[i];
   }
-  console.log(`${convection}, 24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain; over the rest per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
+  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain; over the rest per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
   assert.ok(fired > C / 2 && rained > 0, `convective rain on ${fired} cells, large-scale on ${rained}`);
   assert.ok(C - kept.length <= 0.01 * C, `${C - kept.length} cells apart`);
   assert.ok(Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `mean convective rain ${cpuMean / area} against ${gpuMean / area}`);
   assert.ok(conv.rmsRel < 1e-3 && ls.rmsRel < 1e-3, `per-cell rms convective ${conv.rmsRel}, large-scale ${ls.rmsRel}`);
-  assert.ok(step.maxDiff < (convection === 'plume' ? 3e-4 : 1e-4), `the last step's rain differs by ${step.maxDiff} at ${step.at}`);
+  assert.ok(step.maxDiff < 3e-4, `the last step's rain differs by ${step.maxDiff} at ${step.at}`);
   assert.ok(apart < 1e-12, `convective plus large-scale is the precipitation to ${apart}`);
 });
 
