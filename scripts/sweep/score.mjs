@@ -1,7 +1,8 @@
 // The tuning score of a run and the readers it takes its numbers from:
 // a spin-up log (scripts/spinup.mjs, with DAY_MEAN), a vertical audit
 // (scripts/verticalAudit.mjs) and a state's 60-90N sea-ice volume.
-// Score = Σ w_i e_i², e_i = (x_i − target_i)/tolerance_i.
+// Score = Σ w_i e_i², e_i = (x_i − target_i)/tolerance_i, and 10 for a
+// term the run did not give (a NaN, a missing log line, state or audit row).
 import { readFileSync } from 'node:fs';
 import { Grid } from '../../js/grid.module.js';
 import { buildMesh } from '../../js/mesh.module.js';
@@ -29,7 +30,6 @@ export function score(values, terms = TERMS) {
   let total = 0;
   for (const { key, target, tolerance, weight } of terms) {
     const x = values[key];
-    if (x === undefined) continue;
     const e = Number.isFinite(x) ? (x - target) / tolerance : 10;
     errors[key] = e;
     parts[key] = weight * e * e;

@@ -54,7 +54,7 @@ async function longN64(c) {
   } else {
     const row = readFileSync(`${SWEEP}/results.csv`, 'utf8').trim().split('\n').map((l) => l.split(','));
     const header = row[0], mine = row.find((r) => Number(r[0]) === c.point);
-    screen = Object.fromEntries(header.map((h, k) => [h, Number(mine[k])]));
+    screen = Object.fromEntries(header.map((h, k) => [h, mine[k] === '' ? NaN : Number(mine[k])]));
   }
   return { ten: values, fresh: freshValues, screen };
 }
