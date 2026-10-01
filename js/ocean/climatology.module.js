@@ -10,12 +10,15 @@
  * otherwise taken from the nearest of them that does, the column ending
  * at the first level none of them reaches. A point whose four
  * surrounding grid points are all land takes the nearest column within
- * `reach` degrees whole; null when there is none.
+ * `reach` degrees whole; null when there is none. `columnReaching(lat,
+ * lon, depth)` gives the nearest grid point's column, whole, among those
+ * holding every level down to the deepest standard depth no deeper than
+ * `depth`, within `deepReach` degrees; null when there is none.
  */
 export const CLIMATOLOGY_FILE = 'data/woa_annual_1deg.bin';
 const MAGIC = 'WOA1', KELVIN = 273.15;
 
-export function decodeClimatology(bytes, { reach = 5 } = {}) {
+export function decodeClimatology(bytes, { reach = 5, deepReach = 30 } = {}) {
   const view = ArrayBuffer.isView(bytes) ? new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new DataView(bytes);
   const magic = String.fromCharCode(...[0, 1, 2, 3].map((n) => view.getUint8(n)));
   if (magic !== MAGIC) throw new Error(`not an ocean climatology (${magic})`);
@@ -33,7 +36,7 @@ export function decodeClimatology(bytes, { reach = 5 } = {}) {
     T = new Int16Array(count); S = new Int16Array(count);
     for (let n = 0; n < count; n++) { T[n] = view.getInt16(offset + 2 * n, true); S[n] = view.getInt16(offset + 2 * (count + n), true); }
   }
-  return climatology({ nLon, nLat, nDepth, lon0, dLon, lat0, dLat, tOffset, tScale, sOffset, sScale, missing, depths, T, S, source }, reach);
+  return climatology({ nLon, nLat, nDepth, lon0, dLon, lat0, dLat, tOffset, tScale, sOffset, sScale, missing, depths, T, S, source }, reach, deepReach);
 }
 
 /*
@@ -86,7 +89,7 @@ export function profileAt({ depths, T, S }, z) {
   return [T[j - 1] + f * (T[j] - T[j - 1]), S[j - 1] + f * (S[j] - S[j - 1])];
 }
 
-function climatology(grid, reach) {
+function climatology(grid, reach, deepReach) {
   const { nLon, nLat, nDepth, lon0, dLon, lat0, dLat, tOffset, tScale, sOffset, sScale, missing, depths, T, S } = grid;
   const plane = nLat * nLon, deg = 180 / Math.PI;
   const at = (j, r, c) => j * plane + r * nLon + c;
@@ -94,18 +97,23 @@ function climatology(grid, reach) {
   const valid = (j, r, c) => T[at(j, r, c)] !== missing && S[at(j, r, c)] !== missing;
   const levels = (r, c) => { let j = 0; while (j < nDepth && valid(j, r, c)) j++; return j; };
   const column = (n) => ({ depths: depths.slice(0, n), T: new Float64Array(n), S: new Float64Array(n) });
-  function nearestColumn(latDeg, lonDeg) {
-    const rows = Math.ceil(reach / Math.abs(dLat)), r0 = Math.round((latDeg - lat0) / dLat), c0 = Math.round((lonDeg - lon0) / dLon);
-    const cosLat = Math.max(0.05, Math.cos(latDeg / deg)), cols = Math.min(Math.ceil(nLon / 2), Math.ceil(reach / Math.abs(dLon) / cosLat));
+  let levelCount = null;
+  function nearestColumn(latDeg, lonDeg, need = 1, limit = reach) {
+    if (need > 1 && !levelCount) {
+      levelCount = new Uint8Array(plane);
+      for (let r = 0; r < nLat; r++) for (let c = 0; c < nLon; c++) levelCount[r * nLon + c] = levels(r, c);
+    }
+    const rows = Math.ceil(limit / Math.abs(dLat)), r0 = Math.round((latDeg - lat0) / dLat), c0 = Math.round((lonDeg - lon0) / dLon);
+    const cosLat = Math.max(0.05, Math.cos(latDeg / deg)), cols = Math.min(Math.ceil(nLon / 2), Math.ceil(limit / Math.abs(dLon) / cosLat));
     const x = [Math.cos(latDeg / deg) * Math.cos(lonDeg / deg), Math.cos(latDeg / deg) * Math.sin(lonDeg / deg), Math.sin(latDeg / deg)];
     let best = null, bestDistance = Infinity;
     for (let r = Math.max(0, r0 - rows); r <= Math.min(nLat - 1, r0 + rows); r++) {
       for (let dc = -cols; dc <= cols; dc++) {
         const c = wrap(c0 + dc);
-        if (!valid(0, r, c)) continue;
+        if (need > 1 ? levelCount[r * nLon + c] < need : !valid(0, r, c)) continue;
         const la = (lat0 + r * dLat) / deg, lo = (lon0 + c * dLon) / deg;
         const distance = Math.acos(Math.max(-1, Math.min(1, x[0] * Math.cos(la) * Math.cos(lo) + x[1] * Math.cos(la) * Math.sin(lo) + x[2] * Math.sin(la)))) * deg;
-        if (distance <= reach && distance < bestDistance) { bestDistance = distance; best = [r, c]; }
+        if (distance <= limit && distance < bestDistance) { bestDistance = distance; best = [r, c]; }
       }
     }
     if (!best) return null;
@@ -136,5 +144,10 @@ function climatology(grid, reach) {
     }
     return out;
   }
-  return { ...grid, reach, columnAt };
+  function columnReaching(lat, lon, depth) {
+    let need = 0;
+    while (need < nDepth && depths[need] <= depth) need++;
+    return nearestColumn(lat * deg, lon * deg, Math.max(1, need), deepReach);
+  }
+  return { ...grid, reach, deepReach, columnAt, columnReaching };
 }

@@ -226,8 +226,11 @@ export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLER
 
 /*
  * Columns from an ocean climatology (./climatology.module.js), sampled at
- * each sea cell's centre down to its bottom D, the atlas's deepest values
- * carried on down where the model is deeper. The profile's potential
+ * each sea cell's centre down to its bottom D. Where the atlas column
+ * ends a standard level or more above D, as off coasts that the cell's
+ * mean depth runs past, the levels below it come from the nearest atlas
+ * column that reaches them (`columnReaching`); the atlas's deepest values
+ * are carried on down where the model is deeper still. The profile's potential
  * density, held from decreasing with depth, places the interfaces: class
  * k holds the water denser than half-way to the label above it and no
  * denser than half-way to the label below, the lightest class taking all
@@ -265,8 +268,17 @@ export function atlasColumns(mesh, atlas, { D, cellOcean, ice, rho, labelT, labe
   };
   for (let i = 0; i < C; i++) {
     if (!cellOcean[i]) continue;
-    const column = atlas.columnAt(mesh.latCell[i], mesh.lonCell[i]);
+    let column = atlas.columnAt(mesh.latCell[i], mesh.lonCell[i]);
     if (!column) continue;
+    const reached = column.depths.length;
+    if (atlas.columnReaching && atlas.depths && reached < atlas.depths.length && atlas.depths[reached] <= D[i]) {
+      const deep = atlas.columnReaching(mesh.latCell[i], mesh.lonCell[i], D[i]);
+      if (deep && deep.depths.length > reached) {
+        const T = Float64Array.from(deep.T), S = Float64Array.from(deep.S);
+        T.set(column.T); S.set(column.S);
+        column = { depths: deep.depths, T, S };
+      }
+    }
     filled[i] = 1;
     const bottom = D[i];
     z.length = t.length = s.length = sigma.length = 0;
