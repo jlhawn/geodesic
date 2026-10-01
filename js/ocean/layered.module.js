@@ -335,21 +335,34 @@ export function closureCoefficient(spacing, closureHours, closureSpacing = CLOSU
  * fitted, the class pinched out between thicker ones and not cut off by
  * the sea floor, and then the token edges next to those from the fitted
  * and the thick edges; without it, every token edge beside the class.
+ * `valid` is left 1 on the thick edges, 2 on the first ring and 3 on the
+ * second, for closureAdjoint.
  */
 export const CLOSURE_RIDGE = 0.1;
-function closureFit(mesh, e, usable, values) {
+function closureWeights(mesh, e, usable, visit) {
   const { nEdgesOnEdge, edgesOnEdge, maxEdgesOnEdge, nEdge, tEdge } = mesh;
   const nx = nEdge[3 * e], ny = nEdge[3 * e + 1], nz = nEdge[3 * e + 2], tx = tEdge[3 * e], ty = tEdge[3 * e + 1], tz = tEdge[3 * e + 2];
-  let saa = 0, sab = 0, sbb = 0, sau = 0, sbu = 0, found = false;
+  const along = (o) => [nEdge[3 * o] * nx + nEdge[3 * o + 1] * ny + nEdge[3 * o + 2] * nz, nEdge[3 * o] * tx + nEdge[3 * o + 1] * ty + nEdge[3 * o + 2] * tz];
+  let saa = 0, sab = 0, sbb = 0, found = false;
   for (let s = 0; s < nEdgesOnEdge[e]; s++) {
     const o = edgesOnEdge[maxEdgesOnEdge * e + s];
     if (!usable(o)) continue;
-    const a = nEdge[3 * o] * nx + nEdge[3 * o + 1] * ny + nEdge[3 * o + 2] * nz, b = nEdge[3 * o] * tx + nEdge[3 * o + 1] * ty + nEdge[3 * o + 2] * tz;
-    saa += a * a; sab += a * b; sbb += b * b; sau += a * values[o]; sbu += b * values[o]; found = true;
+    const [a, b] = along(o);
+    saa += a * a; sab += a * b; sbb += b * b; found = true;
   }
-  if (!found) return null;
-  const p = saa + CLOSURE_RIDGE, q = sbb + CLOSURE_RIDGE;
-  return (q * sau - sab * sbu) / (p * q - sab * sab);
+  if (!found) return false;
+  const p = saa + CLOSURE_RIDGE, q = sbb + CLOSURE_RIDGE, det = p * q - sab * sab;
+  for (let s = 0; s < nEdgesOnEdge[e]; s++) {
+    const o = edgesOnEdge[maxEdgesOnEdge * e + s];
+    if (!usable(o)) continue;
+    const [a, b] = along(o);
+    visit(o, (q * a - sab * b) / det);
+  }
+  return true;
+}
+function closureFit(mesh, e, usable, values) {
+  let fit = 0;
+  return closureWeights(mesh, e, usable, (o, c) => { fit += c * values[o]; }) ? fit : null;
 }
 export function closureVelocity(mesh, u, hEdge, edgeOcean, weight, out, rings = null) {
   const E = mesh.nEdges, thick = (o) => edgeOcean[o] && hEdge[o] >= THIN;
@@ -361,18 +374,40 @@ export function closureVelocity(mesh, u, hEdge, edgeOcean, weight, out, rings = 
     const fit = closureFit(mesh, e, thick, u);
     if (fit === null) continue;
     out[e] = weight * fit + (1 - weight) * u[e];
-    if (rings) rings.valid[e] = 1;
+    if (rings) rings.valid[e] = 2;
   }
   if (!rings) return out;
-  const { valid, second } = rings, usable = (o) => edgeOcean[o] && valid[o];
+  const { valid, second } = rings, usable = (o) => valid[o] === 1 || valid[o] === 2;
   second.set(out);
   for (let e = 0; e < E; e++) {
     if (valid[e] || !edgeOcean[e] || !inside(e)) continue;
     const fit = closureFit(mesh, e, usable, out);
-    if (fit !== null) second[e] = weight * fit + (1 - weight) * u[e];
+    if (fit !== null) { second[e] = weight * fit + (1 - weight) * u[e]; valid[e] = 3; }
   }
   out.set(second);
   return out;
+}
+/*
+ * The closure's ∇⁴ of the filled velocity, `closure`, made dissipative:
+ * what it gives the fitted token edges goes back to the edges they were
+ * fitted from, through the transpose of the fit under the edges' inner
+ * product dc·dv, the second ring's to the first and the first's to the
+ * thick edges. Without it the extrapolated tokens give ∇⁴ growing
+ * grid-scale modes along the class's edge. Reads the rings that
+ * closureVelocity left and adds to `closure` on the thick edges.
+ */
+export function closureAdjoint(mesh, closure, weight, rings) {
+  const { nEdges: E, dcEdge, dvEdge } = mesh, { valid, second: carried } = rings;
+  carried.fill(0);
+  for (const ring of [3, 2]) {
+    for (let e = 0; e < E; e++) {
+      if (valid[e] !== ring) continue;
+      const r = weight * (closure[e] + carried[e]) * dcEdge[e] * dvEdge[e];
+      closureWeights(mesh, e, (o) => valid[o] === 1 || valid[o] === ring - 1, (o, c) => { carried[o] += c * r / (dcEdge[o] * dvEdge[o]); });
+    }
+  }
+  for (let e = 0; e < E; e++) if (valid[e] === 1) closure[e] += carried[e];
+  return closure;
 }
 
 export const EDDY_WAVE_SPEED = 2, EDDY_BOTTOM_TAPER = 100, EDDY_SLACK = 1e-6;
@@ -936,6 +971,7 @@ export function createOcean(mesh, {
         if (closureRings) closureRings.k = k;
         laplacianVelocity(mesh, k === 0 || !(closureFill > 0) ? uk : closureVelocity(mesh, uk, hEdge.subarray(oe, oe + E), edgeOcean, closureFill, closureU, closureRings), lap, divScratch, curlScratch);
         laplacianVelocity(mesh, lap, lap2, divScratch, curlScratch);
+        if (closureRings && k > 0) closureAdjoint(mesh, lap2, closureFill, closureRings);
         for (let e = 0; e < E; e++) du[oe + e] -= nu4 * lap2[e];
       }
       if (k > 0) for (let e = 0; e < E; e++) if (hEdge[oe + e] < THIN) du[oe + e] = (uIn[ae(k - 1, e)] - uIn[oe + e]) * relax;

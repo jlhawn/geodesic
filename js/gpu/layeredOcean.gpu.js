@@ -90,6 +90,21 @@ fn closureAdd(fit: ClosureFit, o: i32, nv: vec3<f32>, tv: vec3<f32>, value: f32)
   let a = dot(no, nv); let b = dot(no, tv);
   return ClosureFit(fit.saa + a * a, fit.sab + a * b, fit.sbb + b * b, fit.sau + a * value, fit.sbu + b * value, true);
 }
+fn closureWeight(k: i32, e: i32, o: i32, usableBelow: f32) -> f32 {
+  let nv = vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
+  let tv = vec3<f32>(OD[O_TEDGE + 3 * e], OD[O_TEDGE + 3 * e + 1], OD[O_TEDGE + 3 * e + 2]);
+  var saa = 0.0; var sab = 0.0; var sbb = 0.0;
+  for (var s = 0; s < MI[NEE + e]; s++) {
+    let x = MI[EOE + MAXEE * e + s]; let flag = OD[O_FLUX + k * E + x];
+    if (flag < 0.5 || flag > usableBelow) { continue; }
+    let nx = vec3<f32>(MF[F_NEDGE + 3 * x], MF[F_NEDGE + 3 * x + 1], MF[F_NEDGE + 3 * x + 2]);
+    let a = dot(nx, nv); let b = dot(nx, tv);
+    saa += a * a; sab += a * b; sbb += b * b;
+  }
+  let no = vec3<f32>(MF[F_NEDGE + 3 * o], MF[F_NEDGE + 3 * o + 1], MF[F_NEDGE + 3 * o + 2]);
+  let p = saa + CLOSURERIDGE; let q = sbb + CLOSURERIDGE;
+  return (q * dot(no, nv) - sab * dot(no, tv)) / (p * q - sab * sab);
+}
 fn closureSolve(fit: ClosureFit) -> f32 {
   let p = fit.saa + CLOSURERIDGE; let q = fit.sbb + CLOSURERIDGE;
   return (q * fit.sau - fit.sab * fit.sbu) / (p * q - fit.sab * fit.sab);
@@ -189,8 +204,12 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
      * under closureTokens 'beside' in LAPA, which the closure's first
      * Laplacian then reads; under 'interior' the first ring in LAPB with
      * FLUX, free once the cell tendency has read it, marking the thick and
-     * fitted edges, and oClosureRing the second into LAPA. DEEPEST is the
-     * deepest class holding more than THIN metres in both cells of an edge.
+     * fitted edges (1 thick, 2 the first ring), and oClosureRing the second
+     * into LAPA. DEEPEST is the deepest class holding more than THIN metres
+     * in both cells of an edge. After the second Laplacian, closureAdjoint
+     * as two gathers: oClosureBack1 carries the second ring's ∇⁴ to the
+     * first in LAPA, free by then, and oClosureBack2 the first ring's to
+     * the thick edges in LAPB.
      */
     oDeepestEdge: `${K}  let e = ${idx}; if (e >= E) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
@@ -217,7 +236,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   }
   if (fit.found) {
     OD[dst + n] = CLOSUREFILL * closureSolve(fit) + (1.0 - CLOSUREFILL) * own;
-    if (CLOSURERINGS > 0.5) { OD[O_FLUX + n] = 1.0; }
+    if (CLOSURERINGS > 0.5) { OD[O_FLUX + n] = 2.0; }
   }
 }`,
     oClosureRing: `${K}  let n = ${idx}; if (n >= L * E) { return; }
@@ -233,6 +252,28 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     fit = closureAdd(fit, o, nv, tv, OD[O_LAPB + k * E + o]);
   }
   if (fit.found) { OD[O_LAPA + n] = CLOSUREFILL * closureSolve(fit) + (1.0 - CLOSUREFILL) * IN[uOff(k) + e]; }
+}`,
+    oClosureBack1: `${K}  let n = ${idx}; if (n >= L * E) { return; }
+  let k = n / E; let o = n % E;
+  if (k == 0 || abs(OD[O_FLUX + n] - 2.0) > 0.5) { return; }
+  var sum = 0.0;
+  for (var s = 0; s < MI[NEE + o]; s++) {
+    let e = MI[EOE + MAXEE * o + s];
+    if (OD[O_EMASK + e] < 0.5 || OD[O_FLUX + k * E + e] > 0.5 || !(OD[O_DEEPEST + e] > f32(k) + 0.5)) { continue; }
+    sum += closureWeight(k, e, o, 2.5) * OD[O_LAPB + k * E + e] * MF[F_DC + e] * MF[F_DV + e];
+  }
+  OD[O_LAPA + n] = CLOSUREFILL * sum / (MF[F_DC + o] * MF[F_DV + o]);
+}`,
+    oClosureBack2: `${K}  let n = ${idx}; if (n >= L * E) { return; }
+  let k = n / E; let o = n % E;
+  if (k == 0 || abs(OD[O_FLUX + n] - 1.0) > 0.5) { return; }
+  var sum = 0.0;
+  for (var s = 0; s < MI[NEE + o]; s++) {
+    let e = MI[EOE + MAXEE * o + s];
+    if (abs(OD[O_FLUX + k * E + e] - 2.0) > 0.5) { continue; }
+    sum += closureWeight(k, e, o, 1.5) * (OD[O_LAPB + k * E + e] + OD[O_LAPA + k * E + e]) * MF[F_DC + e] * MF[F_DV + e];
+  }
+  OD[O_LAPB + n] += CLOSUREFILL * sum / (MF[F_DC + o] * MF[F_DV + o]);
 }`,
     oDivCurl: `${K}  let n = ${idx};
   let fromLap = P[1] > 0.5 || CLOSUREFILL > 0.0;
@@ -834,6 +875,10 @@ export function createLayeredOcean(core, options = {}) {
     compute((pass) => {
       dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
       dispatch(pass, 'oLapVelocity', g, L * E);
+      if (o.closureRings) {
+        dispatch(pass, 'oClosureBack1', g, L * E);
+        dispatch(pass, 'oClosureBack2', g, L * E);
+      }
       dispatch(pass, 'oMomentum', g, L * E);
     });
   }

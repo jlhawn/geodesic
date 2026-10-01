@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { cellVector, laplacianVelocity } from '../js/dynamics/operators.module.js';
-import { createOcean, closureVelocity, THIN, EPS } from '../js/ocean/layered.module.js';
+import { createOcean, closureVelocity, closureAdjoint, THIN, EPS } from '../js/ocean/layered.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
 import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, totalHeatSalt, northwardMixedTransport, slowOcean } from './helpers/layered.mjs';
@@ -329,4 +329,28 @@ test('with rings, closureVelocity fits a class\'s token edges where a thicker cl
   console.log(`${count[0]} token edges beside the class fitted ${(100 * one).toFixed(1)}% rms from its flow, ${count[1]} next to them ${(100 * two).toFixed(1)}%; ${floor} over the sea floor left on the velocity above`);
   assert.ok(count[0] > 30 && count[1] > 30 && floor > 30, `${count}, ${floor}`);
   assert.ok(one < 0.1 && two < 0.3, `the fits are ${one} and ${two} rms from the class's flow`);
+});
+
+test('closureAdjoint returns the closure on the fitted token edges to the edges they were fitted from, so the closure of the filled flow does work on the class\'s own edges alone and never adds energy', () => {
+  const m = buildMesh(new Grid(16)), mE = m.nEdges, k = 5;
+  const inside = (i) => Math.sin(3 * m.lonCell[i]) + 0.5 * Math.cos(5 * m.latCell[i]) > 0.2;
+  const hEdge = new Float64Array(mE), sea = new Uint8Array(mE).fill(1), deepest = new Float64Array(mE);
+  for (let e = 0; e < mE; e++) { hEdge[e] = inside(m.cellsOnEdge[2 * e]) && inside(m.cellsOnEdge[2 * e + 1]) ? 12 : EPS; deepest[e] = Math.cos(m.lonCell[m.cellsOnEdge[2 * e]]) > -0.5 ? k + 3 : k - 1; }
+  const rings = { deepest, k, valid: new Uint8Array(mE), second: new Float64Array(mE) }, weight = (e) => m.dcEdge[e] * m.dvEdge[e];
+  let worst = 0, least = Infinity, unextended = Infinity;
+  for (let trial = 0; trial < 5; trial++) {
+    const u = Float64Array.from({ length: mE }, (_, e) => (hEdge[e] >= THIN ? Math.sin(12.9898 * e * (trial + 1)) : 0));
+    const filled = closureVelocity(m, u, hEdge, sea, 1, new Float64Array(mE), rings);
+    const closure = laplacianVelocity(m, laplacianVelocity(m, filled));
+    let whole = 0;
+    for (let e = 0; e < mE; e++) whole += weight(e) * filled[e] * closure[e];
+    let own = 0;
+    for (let e = 0; e < mE; e++) if (rings.valid[e] === 1) own += weight(e) * u[e] * closure[e];
+    closureAdjoint(m, closure, 1, rings);
+    let back = 0;
+    for (let e = 0; e < mE; e++) if (rings.valid[e] === 1) back += weight(e) * u[e] * closure[e];
+    worst = Math.max(worst, Math.abs(back - whole) / whole); least = Math.min(least, whole); unextended = Math.min(unextended, own / whole);
+  }
+  console.log(`the work of the closure on the thick edges with the adjoint matches the filled flow's ∇⁴ energy to ${worst.toExponential(2)}; without it as little as ${unextended.toFixed(2)} of it`);
+  assert.ok(worst < 1e-9 && least > 0);
 });

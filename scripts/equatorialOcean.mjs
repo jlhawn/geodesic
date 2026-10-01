@@ -15,7 +15,7 @@ import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { cellVector, gradient, curl, kineticEnergy, laplacianVelocity } from '../js/dynamics/operators.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
-import { THIN, PV_FLOOR, THERMOCLINE_DENSITY, closureCoefficient, closureVelocity } from '../js/ocean/layered.module.js';
+import { THIN, PV_FLOOR, THERMOCLINE_DENSITY, closureCoefficient, closureVelocity, closureAdjoint } from '../js/ocean/layered.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) throw new Error('usage: node scripts/equatorialOcean.mjs <state.bin>');
@@ -190,7 +190,7 @@ for (let k = 0; k < L; k++) {
   const gradP = new Float64Array(E);
   gradient(mesh, phi, gradP);
   if (rings) rings.k = k;
-  if (nu4 > 0) { laplacianVelocity(mesh, k === 0 || !(opt.closureFill > 0) ? uk : closureVelocity(mesh, uk, hEdge.subarray(oe, oe + E), edgeOcean, opt.closureFill, closureU, rings), lap, divS, curlS); laplacianVelocity(mesh, lap, lap2, divS, curlS); }
+  if (nu4 > 0) { laplacianVelocity(mesh, k === 0 || !(opt.closureFill > 0) ? uk : closureVelocity(mesh, uk, hEdge.subarray(oe, oe + E), edgeOcean, opt.closureFill, closureU, rings), lap, divS, curlS); laplacianVelocity(mesh, lap, lap2, divS, curlS); if (rings && k > 0 && opt.closureFill > 0) closureAdjoint(mesh, lap2, opt.closureFill, rings); }
   for (let e = 0; e < E; e++) {
     if (!edgeOcean[e]) continue;
     let sf = 0, sz = 0;
