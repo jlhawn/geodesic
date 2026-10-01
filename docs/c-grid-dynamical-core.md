@@ -3535,6 +3535,8 @@ day 60 of the N=64 pair 0.48, 0.77, 0.38, 0.39, 0.75, 0.85, 1.37 and
 1.22 with the change, 0.64, 0.68, 0.37, 0.33, 0.94, 0.95, 1.88 and 1.26
 without it.
 
+The default stays at `closureFill` 0 (the token edges carry the layer above's velocity as before): the two-ring fill with its transpose damps the thermocline classes' own flow by 0.2–95·10⁻⁶ /s on the audited states and took the N=128 undercurrent from 0.47 to 0.36 m/s in a day, while the first ring alone with its transpose showed no systematic drag but was not run for stability. The fill and its transpose remain options; the first-ring form is the next step here. The atlas deep fill is on.
+
 ### M24 — Performance — planned
 
 The M21 physics costs about 2.5 % a step for the plume and more for
