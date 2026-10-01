@@ -3976,33 +3976,190 @@ gain the negative cloud water the filler removes (5.1·10⁻⁶ and
 layer is σ 0.93 under a deck of cover 0.41–0.67, cooling 2.7–3.7 K/day.
 The full suite (44 files, run concurrently) passes with nothing skipped.
 
-### M22 — A moist boundary layer — planned
+### M22 — A moist boundary layer — done (first tuning; acceptance partly met)
 
-The boundary-layer scheme is still the dry Troen–Mahrt K-profile of
-M14 with the explicit top entrainment of M21: it mixes temperature
-and vapour separately, feels no cloud-top cooling, and hands the
+The boundary-layer scheme was the dry Troen–Mahrt K-profile of M14
+with the explicit top entrainment of M21: it mixed temperature and
+vapour separately, felt no cloud-top cooling, and handed the
 stratocumulus regime to the mixed-layer deck model through a gate.
-This milestone replaces it with a moist turbulence closure in
-conserved variables (liquid-water potential temperature and total
-water) that takes cloud-top longwave cooling as a source of
-turbulence, entrains at the inversion from its own closure in place
-of the M21 entrainment velocity, and treats the stratocumulus-topped
-layer as one of its regimes, so the deck model's gate becomes a
-diagnostic of the same layer rather than a switch between two
-schemes. With the plume of M21 it is the eddy-diffusivity half of an
-eddy-diffusivity mass-flux pair, which is the form the ECMWF model
-uses. The humidity-based cover fraction of M21 is then replaced by a
-cover from the scheme's own variance. The same work takes the
-boundary-layer momentum budget on the equator: the audited runs hold
-a 5 hPa pressure difference across the Pacific, Earth's size, under
-easterlies of 3 m/s where Earth has 5 or more, so the stress on the
-equator is a quarter to a half of Earth's 0.04–0.06 N/m²; with no
-Coriolis turning there the surface wind runs down the gradient
-against the layer's drag and momentum mixing, and those are this
-scheme's terms. Acceptance: low cloud of 0.5–0.7 over the SE
-Pacific, Peru, Namibia and California boxes with the inversion at
-1–1.5 km, the equatorial stress within Earth's range, the ten-day and
-thirty-day tests of M21 still balanced, and the pace.
+The milestone asked for a moist turbulence closure in conserved
+variables that takes cloud-top longwave cooling as a source of
+turbulence, entrains at the inversion from its own closure, treats the
+stratocumulus-topped layer as one of its regimes, gives the layers it
+mixes a cover from its own variance, and takes the equatorial
+boundary-layer momentum budget. Acceptance: low cloud of 0.5–0.7 over
+the SE Pacific, Peru, Namibia and California boxes with the inversion
+at 1–1.5 km, the equatorial stress toward Earth's 0.04–0.06 N/m², the
+ten-day and thirty-day tests of M21 balanced, and the pace.
+
+Built (`js/physics/boundaryLayer.module.js`, `pblDiagnose` and the
+adjust kernel of `js/gpu/physics.gpu.js`; `turbulence` 'moist', the
+default, 'dry' the M14/M21 scheme, which reproduces the parent 80b6bb9
+byte for byte over three GPU days at N=64 from eight64_day0183):
+
+- Conserved variables. The implicit solve mixes θ_l = θ − L q_c/(c_p Π),
+  q_t = q + q_c and the edges' momentum with one set of interface
+  coefficients; each layer it touches leaves with θ = θ_l, q = q_t and
+  no cloud water, the saturation adjustment that follows returns the
+  cloud, and untouched layers keep their values exactly.
+- Two profiles. The surface-driven K-profile of M14 over h_s, the
+  Richardson depth, or where B0 > 0 the top of a surface parcel (θ_l
+  with Holtslag and Boville's excess 8.5 B0 θ_v/(g w_m), q_t, rising with
+  its condensate in equilibrium, stopping where its θ_v falls short of
+  the layer's by more than 0.5 K) when it has condensed, stops within
+  400 m of the base of its first saturated layer and below 3 km, and
+  lies above the Richardson depth (Lock et al. 2000's parcel test for a
+  stratocumulus-capped layer; a parcel that rises further is cumulus and
+  keeps the Richardson depth). The cloud-top profile, where the lowest
+  run of cloudy layers (q_c > 10⁻⁶) tops out below 3 km and cools:
+  ΔF the longwave cooling summed over the run's layers (the radiation
+  keeps each layer's longwave heating, `longwave`, PH `LWH`),
+  V³ = (g/θ_v) ΔF/(ρ c_p) z_ml, K = 0.85 κ V z_ml x² (1 − x)^½ with
+  x = (z − z_b)/z_ml over z_b < z < h_c, h_c the cloud top's upper
+  interface, z_b where a parcel of the cloud top's θ_l less 0.2 K and
+  q_t stops sinking (0 when it reaches the lowest layer). The two K add.
+- Entrainment across the interface above the mixed layer:
+  w_e = min(5 cm/s, (A (w_s³ + V³) + 5 r u*³)/(h max(Δb, 0.015 m/s²))),
+  w_s³ = B0 h for a surface-driven top, Δb from the θ_v of the layer
+  above or the one above that, whichever is warmer (the inversion's own
+  grid layer holds part of the jump), A Nicholls and Turton's
+  0.2 [1 + 25 χ* (1 − Δθ_vs/Δθ_v)] at most 1 from the cloudy top layer
+  and the jumps in θ_l and q_t as the deck model takes it, 0.2 under a
+  clear top (the M21 form); untapered (`entrainment.taper` restores the
+  M21 taper; `jumpLayers` 1 the one-layer jump). A decoupled column also
+  entrains across its surface-driven top.
+- Regimes, per cell (`regime`, PH `REGIME`, saved as `boundaryRegime`
+  with the mixing top `mixingTop`): stable, surface-driven, decoupled
+  (a cloud-top layer whose z_b lies above h_s: the plume runs into the
+  cloud layer) and coupled (z_b at the surface or within h_s: the
+  surface profile reaches h_c as well, which is then `depth`).
+  `deckRegime` 'boundaryLayer' gates the mixed-layer deck by the coupled
+  regime instead of the 4 K jump, and `deckBypass` leaves those columns
+  to the resolved cloud; `coupledVeto` (moist) stops the plume in
+  coupled columns.
+- Cover (`boundaryCover` 'variance', the radiation, both engines): a
+  cloudy layer below the mixing top covers ½ [1 + erf(Q₁/√2)],
+  Q₁ = a_l (q_t − q_sl(T_l))/σ_s, σ_s = max(0.002 q_sl, 5 l a_l |∂q_t/∂z −
+  Π q_s' ∂θ_l/∂z|), l = κz/(1 + κz/λ) with λ 300 m, or 30 m where the
+  surface buoyancy flux is not positive, the gradients those to the
+  neighbouring mixed layers, erf by Abramowitz and Stegun 7.1.26; on
+  the EIS ramp of M21 it blends into the bounded cover as the PDF does.
+  The layers above keep the uniform PDF.
+
+Tests (`test/moistBoundaryLayer.test.mjs`, 100 m layers to 2 km): a
+stratocumulus column over a 26 °C sea under an 8 K inversion at 1.3 km
+with 60 W/m² of cloud-top cooling is coupled with its cloud top at
+1243 m, V 1.30 m/s, the cloud-top profile adding K on all 11 interfaces
+with its largest at 1030 m; A 0.463 (χ* 0.036, Δθ_v 7.16 K) and w_e
+3.84 mm/s equal the Nicholls–Turton rate to 10⁻¹²; one 300 s step keeps
+θ_l and q_t to −2.7·10⁻¹⁶ and 1.4·10⁻¹⁶ and the edge momentum to
+10⁻¹⁵·K; after 6 h under the cooling θ_l spreads by 0.271 K and q_t by
+0.106 g/kg from the surface to the cloud top, the cloud is 106 m thick
+(top 1240 m) and its variance cover 1.000. A clear convective column
+gives the dry scheme's coefficients to 4·10⁻¹⁶ and its θ after a step to
+5.7·10⁻¹⁴ K (w_e 1.57 mm/s, 1.13 with the two-layer jump). A cloud layer
+over a 1 K stable layer at 500–700 m is decoupled: surface-driven to
+552 m, cloud-top layer 601–1246 m, V 1.05 m/s. The variance cover is
+1.35·10⁻³ at −3σ, 0.5 at zero deficit (5·10⁻¹⁰ off), 0.9772 at 2σ; the
+humidity PDF gives the zero-deficit layer 0.405. On 362 random bl34
+columns (39 stable, 71 surface-driven, 43 decoupled, 209 coupled) the
+engines agree on every regime, V to 2.3·10⁻⁷, w_e to 1.8·10⁻⁴, the
+coefficients to 1.2·10⁻⁴ of each column's largest, the depths to
+1.4·10⁻² m, θ after the step to 1.3·10⁻⁴ K, q to 6.9·10⁻⁸, q_c to
+2.4·10⁻⁸, the wind to 9.6·10⁻⁵ m/s, under the defaults, the one-layer
+jump, the M21 taper, no surface parcel and `coupledVeto` (no plume in a
+coupled column; at most 1 of 362 columns parts where the dry
+adjustment merges a near-neutral lowest layer in one engine only).
+`test/gpuModel.test.mjs`: the variance cover moves the layer heating by
+up to 2.80 K/day from the PDF's and its overcast blend by 4.04, the
+engines by 4.6·10⁻⁴ against 24.4 K/day, the longwave heating by
+2.7·10⁻³ against 135 W/m²; four N=6 steps of the deck under the moist
+layer, jump-gated, regime-gated and bypassed: gates to 4.4·10⁻⁸, deck
+water rms 6·10⁻⁴, 2–4 of 362 columns parting where a cloud top or parcel
+crosses its threshold in one engine. `plumeConsumption` 'buoyant' (F from
+the CAPE's layers only) agrees on 362 random columns to 6.5·10⁻⁵ K.
+
+The deck. Three-day N=64 GPU screens from eight64_day0183 (day 186,
+audited; low cloud the radiative cover below 680 hPa, `lowCover`):
+gating the mixed-layer deck by the coupled regime (no bypass) gives SE
+Pacific 0.147, Peru 0.014, Namibia 0.127; bypassing it 0.196 and 0.112
+(cloud water below 680 hPa present) at albedo 0.362; under the 4 K jump gate 0.369, 0.481, 0.713. The resolved
+boundary layer of the deck boxes is 0.6–0.9 humid at its top under
+1.1–1.9 km inversions with 5–10 % of the columns coupled, so the
+resolved stratus does not stand for the deck; the default keeps the
+mixed-layer deck behind the 4 K jump (`deckRegime` 'inversion').
+
+The plume on the new layer (ten-day N=64 GPU runs from eight64_day0183;
+albedo days 186–193, ASR − OLR mean over days 188–193, 60–90N ice loss
+over three days from nine64_day0091 in 10³ km³/day where run):
+
+| run | albedo 186–193 | ASR − OLR | ice |
+|---|---|---|---|
+| parent (dry, plume, 3 h, CAPE0 70) | 0.330–0.361 | −7.5 | 0.183 |
+| σ_s scale 3.2, λ 300, upper cloud 1 h, F buoyant | 0.302–0.343 | −10.7 | |
+| scale 5, λ 300, upper cloud 1 h | 0.300–0.338 | −9.2 | 0.217 (with the blend) |
+| scale 3.2, λ 300, cloud 1 h, upper 3 h | 0.337–0.369 | −8.4 | |
+| scale 3.2, λ 300, cloud 1 h, upper 2 h | 0.320–0.356 | −8.9 | |
+| scale 5, cloud 1 h, F buoyant | 0.333–0.367 | −7.8 | |
+| scale 3.2, cloud 1 h, upper 2 h, coupled veto | 0.352–0.388 | −19.0 | |
+| scale 5, λ 300, cloud 1 h | 0.292–0.330 | −7.3 | |
+| scale 5, λ 300, cloud 1 h, CAPE0 120 | 0.304–0.334 | −9.1 | 0.247 (0.277 without the blend) |
+| scale 1, λ 150, cloud 3 h, upper 1 h | 0.336–0.362 | −18.5 | 0.177 |
+| scale 1, λ 150, cloud 2 h, upper 1 h | 0.331–0.361 | −17.5 | 0.189 |
+| scale 5, λ 300 / 30 m stable, cloud 3 h, upper 1 h | 0.321–0.348 | −13.8 | 0.189 |
+| scale 5, λ 300 / 30 m stable, cloud 2 h, upper 1 h | 0.310–0.345 | −12.4 | 0.202 |
+| **defaults: scale 5, λ 300 / 30 m stable, cloud 1 h, CAPE0 120** | 0.307–0.340 | −10.5 | 0.233 |
+
+Short cloud lifetimes cool less but thin the Arctic stratus; a short
+upper lifetime lowers the albedo and raises the OLR as much. The coupled
+veto gives the best deck cover (SE Pacific 0.343, Peru 0.442, Namibia
+0.513, California 0.329 on day 193) at −19 W/m².
+
+Acceptance on the defaults (copies of the states, GPU, `everySteps` 8):
+
+| | value | asked |
+|---|---|---|
+| N=64 albedo days 184–193 | 0.287, 0.312, 0.313, 0.319, 0.326, 0.332, 0.340, 0.323, 0.316, 0.307 | 0.30–0.32 from 186 |
+| N=64 ASR − OLR days 188–193 (mean) | −11.1, −13.1, −15.6, −10.5, −7.9, −4.9 (−10.5) | ±4 |
+| N=64 global rain days 187–193, mm/d | 2.33–2.76 | 2.4–2.8 |
+| day 193 low cloud: SE Pacific, Peru, Namibia, California | 0.244, 0.354, 0.525, 0.071 | 0.5–0.7 |
+| their resolved inversion, m | 1885, 1863, 1702, 762 | 1000–1500 |
+| their low-cloud water in cloud, g/m² | 230, 152, 101, 49 | 50–150 |
+| SE Pacific rain, mm/d (10-day log; day-193 window) | 0.53 (2.12) | < 0.3 |
+| Pacific ITCZ rain; heating peak | 8.41 mm/d; 438 hPa | 6–9; 400–500 |
+| zonal-mean rain peak | 7.99 mm/d at 10.5N | 5–7 at 5–10N |
+| N=128 albedo days 184–188 | 0.253, 0.271, 0.286, 0.301, 0.310 | 0.29–0.32 on 186–188 |
+| N=128 ASR − OLR (mean) | +7.5, +3.0, −0.7, −5.1, −7.5 (−0.6) | ±4 |
+| N=128 day 188 low cloud: SE Pacific, Peru, Namibia, California | 0.247, 0.432, 0.430, 0.397 | 0.5–0.7 |
+| N=128 equatorial stress 160E–100W after 5 days, N/m² | −0.039 (parent −0.026) | toward −0.04 |
+| 60–90N ice loss, 10³ km³/day | 0.233 (9.191 → 8.491) | ≤ 0.18 |
+| fresh start day 30: albedo; ASR − OLR | 0.323; −7.7 (days 25–30 −5.2 to −7.7) | 0.29–0.33; ±10 |
+
+The parent on the same runs: N=64 albedo 0.330–0.361 from day 186, mean
+ASR − OLR −7.5, day-193 low cloud 0.280, 0.371, 0.359, 0.197; N=128
+albedo 0.298, 0.314, 0.325 on days 186–188, mean +4.4, stress −0.026.
+N=128 day 188: ITCZ 6.89 mm/d at 438 hPa, global rain 2.95 mm/d, the
+zonal peak 14.6 mm/d at 10.5N (one eight-step window). Fresh start: no
+NaN, clamped 0; equator after 30 days −0.58 m/s at 160E–100W, stress
+−0.050 N/m².
+
+The equator. The budget of Oct 1 named no boundary-layer term, so none
+was changed. On nine128_day0183 after one CPU step the stress over
+160E–100W by 20° is −0.0031, +0.0038, −0.0096, −0.0509, −0.0800,
+−0.0586 N/m² against −0.0031, +0.0038, −0.0096, −0.0506, −0.0789,
+−0.0578 under the dry scheme; w_e there is 6–25 mm/s against 2–11.
+
+Pace (`js/gpu/profile.module.js`, 128 steps from eight128_day0183 after
+64, alternated twice with the parent, nothing else on the GPU): a step's
+median 86.9 and 86.9 ms against 84.5 and 84.6 (+2.8 %); the physics and
+boundary-layer passes 9.36 against 7.65 ms, the adjust pass 15.15
+against 14.6. The five N=128 days took 1.5–1.8 min a day beside two
+N=64 runs.
+
+What still misses: the N=64 balance (−10.5 against the parent's −7.5)
+and its albedo above 0.32 on four of eight days; the deck boxes' low
+cloud (0.24–0.53 at N=64, 0.25–0.43 at N=128) with the inversion at
+1.7–1.9 km; the Arctic ice loss (0.233); the SE Pacific drizzle.
 
 ### M23 — The equatorial ocean — in progress
 
