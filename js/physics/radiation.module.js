@@ -73,8 +73,9 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * blends linearly into the f of a distribution whose half-width is also
  * at most the layer's cloud water but not below `overcastWater`
  * (5·10⁻⁵ kg/kg; null: no bound): there a saturated layer holding more
- * cloud water than that is overcast. Each cell keeps that share of the
- * ramp in `stratiform`, whatever the cover, for the boundary layer. Its emissivity is
+ * cloud water than that is overcast. Each cell with open sea keeps that
+ * share of the ramp in `stratiform`, whatever the cover, for the boundary
+ * layer (0 over land and full ice, where no deck forms). Its emissivity is
  * f (1 − exp(−cloudAbsorption × path / f)), and the shortwave is the
  * blend, at the column's cover f̄, of the clear column and the column
  * whose cloud path lies in f̄, as the deck below blends its two columns.
@@ -503,7 +504,7 @@ export function createRadiation(mesh, core, {
         inversionShare = Math.min(1, Math.max(0, (inversion - overcastInversion[0]) / (overcastInversion[1] - overcastInversion[0])));
       }
     }
-    budget.stratiform = inversionShare;
+    budget.stratiform = openSea > 0 ? inversionShare : 0;
     const stratiform = cloudCover === 'pdf' && overcastWater !== null ? inversionShare : 0;
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;

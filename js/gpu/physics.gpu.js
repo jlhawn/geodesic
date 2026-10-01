@@ -562,7 +562,7 @@ export const PHYSICS_KERNELS = {
   var deck = 0.0; var fraction = 0.0; var mlmCover = 0.0; var mlmWater = 0.0; var mlmEntrainment = 0.0; var mlmTop = 0.0;
   let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
   let inversionShare = stratiformShare(i, bottom, pi);
-  PH[PH_STRAT + i] = inversionShare;
+  PH[PH_STRAT + i] = select(0.0, inversionShare, !onLand && 1.0 - cover > 0.0);
   let stratiform = select(0.0, inversionShare, PDF_COVER && BOUND_WIDTH);
   if (STRATUS && MLM_DECK && !onLand && 1.0 - cover > 0.0 && mixedDepth > 0.0) {
     let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
