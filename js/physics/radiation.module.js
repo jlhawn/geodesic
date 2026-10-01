@@ -106,11 +106,10 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * 3.2; see M22) and the mean gradients to the neighbouring layers
  * inside the mixed layer; erf is Abramowitz and Stegun's 7.1.26. Such a
  * layer is half covered at s = 0 and overcast once s exceeds 2–3 σ_s,
- * which in a well-mixed layer is a few hundredths of a gram per kilogram
- * (floor 0.002 q_sl), and blends on the overcast ramp of the estimated
- * inversion strength into the bounded cover above as the humidity PDF
- * does. The layers above keep the cover above. The
- * longwave heating of each layer (W/m²) is kept in `longwave` for the
+ * and blends on the overcast ramp of the estimated inversion strength
+ * into the bounded cover above as the humidity PDF does. The layers
+ * above keep the cover above. The longwave heating of each layer
+ * (W/m²) is kept in `longwave` for the
  * boundary layer's cloud-top cooling. Per cell, for the audit (this
  * engine only): `lowCover`, the overlapped cover of the layers below
  * LOW_CLOUD_PRESSURE (680 hPa) combined at random with the deck's, and

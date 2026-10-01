@@ -109,8 +109,8 @@ import { saturationHumidity, DECK_OPEN, DECK_CLOSED, LATENT_HEAT, R_VAPOR } from
  * a_1 `efficiency` (0.2), a_2 `evaporativeEnhancement` (25), at most
  * `maximumEfficiency` (1), χ* and Δθ_vs from the cloudy top layer's
  * state and the jumps in θ_l and q_t, and a_1 alone where the top layer
- * holds no cloud, which is the M21 form above. A decoupled column also
- * entrains across its surface-driven top at that form. Nothing is
+ * holds no cloud, which is the dry scheme's form above. A decoupled
+ * column also entrains across its surface-driven top at that form. Nothing is
  * tapered by the deck unless `entrainment.taper`. The diagnosis keeps
  * per cell the cloud-top cooling ΔF (`cloudTopCooling`, W/m²), V
  * (`radiativeVelocity`) and the decoupling height z_b (`decoupling`, in
