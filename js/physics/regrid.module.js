@@ -1,6 +1,5 @@
 import { cellVector } from '../dynamics/operators.module.js';
 import { UNDECIDED } from './radiation.module.js';
-import { ACTIVITY_UNDECIDED } from './moist.module.js';
 
 /*
  * Barycentric weights of p in the plane through unit vectors a, b, c:
@@ -268,10 +267,9 @@ export function savedRainField(saved, name, target, source = null) {
 
 /*
  * The moist physics' carried per-cell state, with the value each field
- * starts from in a state saved without it: the rain means above (0) and
- * the convection's activity (one half, undecided).
+ * starts from in a state saved without it: the rain means above (0).
  */
-export const MOIST_FIELDS = { convectiveRain: 0, largeScaleRain: 0, convectiveActivity: ACTIVITY_UNDECIDED };
+export const MOIST_FIELDS = { convectiveRain: 0, largeScaleRain: 0 };
 export function savedMoistField(saved, name, target, source = null) {
   const values = saved ? saved[name] : null;
   if (!values) return new Float64Array(target.mesh.nCells).fill(MOIST_FIELDS[name]);

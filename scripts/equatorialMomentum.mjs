@@ -17,7 +17,7 @@ import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
-import { savedDeckField, DECK_FIELDS, savedMoistField } from '../js/physics/regrid.module.js';
+import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../js/dynamics/operators.module.js';
 
@@ -32,7 +32,6 @@ const { thetaV } = core.arrays;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
-moist.convectiveActivity.set(savedMoistField(saved, 'convectiveActivity', model));
 land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) }, state[6]);
 model.time = saved.time;
 const dt = 1350 * 16 / saved.N, deg = 180 / Math.PI;

@@ -272,8 +272,8 @@ function placeIce(model, saved, N) {
 
 /*
  * The mixed-layer deck's carried state (running-mean subsidence,
- * inversion height and gate), the last means of the convective and
- * large-scale rain and the convection's activity: the saved run's,
+ * inversion height and gate) and the last means of the convective and
+ * large-scale rain: the saved run's,
  * regridded if it was saved at another resolution, or each field's
  * starting value for a fresh start or a run saved without it.
  */

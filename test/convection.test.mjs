@@ -182,7 +182,6 @@ function tradeWindColumn(options = {}, { buoyancy = 4e-4, gate = 0.3 } = {}) {
   model.boundaryLayer.buoyancyFlux[0] = buoyancy;
   model.boundaryLayer.friction[0] = 0.25;
   model.radiation.mlmGate[0] = gate;
-  model.moist.activity[0] = 0;
   return model;
 }
 
@@ -319,7 +318,7 @@ test('the Jordan sounding lifts a deep plume that rains, heats most between 400 
   const model = plumeColumn(), { moist } = model, [pi, theta, , , q, qc] = model.state;
   const { K, C, sigmaMid, geopotential, g } = model.core.diagnostics, dt = 600;
   moist.trace.convection = new Float64Array(K * C);
-  const before = budget(model, 0), activity = moist.activity[0];
+  const before = budget(model, 0);
   moist.adjust(model.state, 0, 1, dt);
   const after = budget(model, 0), { deep, falling } = moist, rain = moist.rain[0];
   const hPa = (k) => pi[0] * sigmaMid[k] / 100, rate = (k) => moist.trace.convection[k * C] / dt * 86400;
@@ -335,7 +334,6 @@ test('the Jordan sounding lifts a deep plume that rains, heats most between 400 
   for (let k = deep.base + 1; k < K; k++) assert.ok(rate(k) < 0, `subcloud layer ${k} cools by ${rate(k)} K/d`);
   assert.ok(Math.abs(after.enthalpy - before.enthalpy) < 1e-12 * before.enthalpy, `enthalpy ${before.enthalpy} → ${after.enthalpy}`);
   assert.ok(Math.abs(after.water + rain - before.water) < 1e-12 * before.water, `water ${before.water} → ${after.water} + ${rain}`);
-  assert.equal(moist.activity[0], activity, 'the activity is not used');
 });
 
 test('a trade-wind column lifts exactly the shallow cumulus plume and rains nothing', () => {
@@ -400,18 +398,17 @@ async function parity(options, { momentum = false } = {}) {
     model.boundaryLayer.depth[i] = geopotential[(K - 1) * C + i] / g + 200 + 1300 * random();
     const gate = random();
     model.radiation.mlmGate[i] = gate < 0.2 ? 0.7 : gate < 0.35 ? 0.5 + (gate - 0.2) / 0.15 * (DECK_CLOSED - 0.5) : 0.3;
-    moist.activity[i] = [0, 0.5, 1, random()][Math.floor(random() * 4)];
     for (let k = 0; k < K; k++) if (random() < 0.08) qc[k * C + i] = 1e-3 * random();
   }
   if (momentum) for (let x = 0; x < model.state[2].length; x++) model.state[2][x] = 20 * (random() - 0.5) + 10 * Math.sin(x / mesh.nEdges);
   for (const a of model.state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
-  for (const a of [model.boundaryLayer.depth, model.radiation.mlmGate, moist.activity, buoyancy, friction]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  for (const a of [model.boundaryLayer.depth, model.radiation.mlmGate, buoyancy, friction]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   model.boundaryLayer.buoyancyFlux.set(buoyancy);
   model.boundaryLayer.friction.set(friction);
   const gpu = await createGpuCore(mesh, { levels, physics: options });
   const { device, buffers, kernels, layout } = gpu;
   gpu.upload(model.state);
-  gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate, convectiveActivity: moist.activity });
+  gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.BUOY, Float32Array.from(buoyancy));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.USTAR, Float32Array.from(friction));
@@ -429,7 +426,6 @@ async function parity(options, { momentum = false } = {}) {
   pass.end();
   device.queue.submit([encoder.finish()]);
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
-  const activityBefore = Float64Array.from(moist.activity);
   moist.trace.convection = new Float64Array(K * C);
   model.phases.adjust(0, C, dt);
   if (momentum) {
@@ -454,7 +450,7 @@ async function parity(options, { momentum = false } = {}) {
     assert.ok(worstU < 1e-3, `winds differ by ${worstU} m/s`);
   }
   const { sigmaMid } = core.diagnostics;
-  let deep = 0, shallow = 0, decked = 0, still = 0, opening = 0, flips = 0, worstTheta = 0, worstQ = 0, worstQc = 0, worstActivity = 0, worstRain = 0, rainScale = 0;
+  let deep = 0, shallow = 0, decked = 0, still = 0, opening = 0, flips = 0, worstTheta = 0, worstQ = 0, worstQc = 0, worstRain = 0, rainScale = 0;
   let plumes = 0, plumeFlips = 0, topsDiffer = 0, worstFlux = 0, fluxScale = 0, worstCover = 0, worstWater = 0, waterScale = 0;
   const K0 = K - (layout.PH.CUWATER - layout.PH.CUCOVER) / C;
   for (let i = 0; i < C; i++) {
@@ -476,7 +472,6 @@ async function parity(options, { momentum = false } = {}) {
       waterScale = Math.max(waterScale, moist.cumulusWater[k * C + i]);
     }
     if ((moist.convectivePrecipitation[i] > 0) !== (ph.CONV[i] > 0)) flips++;
-    worstActivity = Math.max(worstActivity, Math.abs(moist.activity[i] - ph.CONVACT[i]));
     worstRain = Math.max(worstRain, Math.abs(moist.convectivePrecipitation[i] - ph.CONV[i]), Math.abs(moist.largeScalePrecipitation[i] - ph.COND[i]));
     rainScale = Math.max(rainScale, moist.convectivePrecipitation[i]);
     for (let k = 0; k < K; k++) {
@@ -486,7 +481,7 @@ async function parity(options, { momentum = false } = {}) {
       worstQc = Math.max(worstQc, Math.abs(model.state[5][x] - after[5][x]));
     }
   }
-  console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, the activity by ${worstActivity.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)})`);
+  console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)})`);
   console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top; base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}, the plume's condensate by ${worstWater.toExponential(1)} kg/kg (largest ${waterScale.toExponential(1)})`);
   assert.ok(deep > C / 40 && plumes > C / 10 && decked > C / 40 && still > C / 40, `${deep} deep, ${plumes} plumes, ${decked} decked, ${still} still`);
   assert.equal(plumeFlips, 0);
@@ -495,7 +490,6 @@ async function parity(options, { momentum = false } = {}) {
   assert.ok(waterScale > 0 && worstWater < 1e-3 * waterScale, `plume condensate ${worstWater} against ${waterScale}`);
   assert.equal(flips, 0);
   assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
-  assert.ok(worstActivity < 1e-5, `activity ${worstActivity}`);
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
 }
 

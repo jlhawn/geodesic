@@ -320,7 +320,6 @@ async function engines(entrainment) {
     radiation.mlmGate[i] = gate < 0.2 ? 0.7 : gate < 0.3 ? 0.5 : gate < 0.45 ? 0.5 + 0.1 * random() : 0.3 * random();
     const share = random();
     radiation.stratiform[i] = share < 0.1 ? 1 : share < 0.35 ? random() : 0;
-    moist.activity[i] = 0;
   }
   for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) u[k * nE + e] = k === nK - 1 ? 2 * (random() - 0.5) : 12 * (random() - 0.5);
   for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
@@ -329,7 +328,7 @@ async function engines(entrainment) {
   const gpu = await createGpuCore(m, { levels, physics: { entrainment } });
   const { device, buffers, kernels } = gpu, dt = 900;
   gpu.upload(state);
-  gpu.uploadPhysics({ mlmGate: radiation.mlmGate, convectiveActivity: moist.activity });
+  gpu.uploadPhysics({ mlmGate: radiation.mlmGate });
   device.queue.writeBuffer(buffers.PH, 4 * gpu.layout.PH.STRAT, Float32Array.from(radiation.stratiform));
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();

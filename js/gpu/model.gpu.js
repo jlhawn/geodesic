@@ -20,8 +20,7 @@ const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'root
  * The whole model on the GPU behind the CPU model's interface: `state`,
  * `seaIce.concentration` and the deck's carried state — the running-mean
  * subsidence, inversion height and gate `radiation.mlmSubsidence`,
- * `mlmHeight` and `mlmGate` — the convection's activity
- * `moist.convectiveActivity`, the boundary layer's depth
+ * `mlmHeight` and `mlmGate` — the boundary layer's depth
  * `boundaryLayer.depth` (the height of its top, which the next step's
  * physics reads before it diagnoses its own), and the per-cell convective and
  * large-scale rain `moist.convectiveRain` and `moist.largeScaleRain`,
@@ -73,13 +72,13 @@ export async function createGpuModel(gridOrMesh, {
   let dirty = true, lastFrameTime = 0;
 
   const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
-  model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain, convectiveActivity: moistCpu.convectiveActivity };
+  model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain };
   model.boundaryLayer = { depth: new Float64Array(C) };
   model.oceanEngine = gpuOcean;
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, convectiveActivity: model.moist.convectiveActivity, boundaryDepth: model.boundaryLayer.depth });
+    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, boundaryDepth: model.boundaryLayer.depth });
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6], { climatology: null });
     lastFrameTime = model.time;
@@ -89,7 +88,7 @@ export async function createGpuModel(gridOrMesh, {
 
   async function sync() {
     if (!dirty) return;
-    const [arrays, [concentration, mean, height, gate, convective, largeScale, activity, depth]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'CONVACT', 'DEPTH'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
+    const [arrays, [concentration, mean, height, gate, convective, largeScale, depth]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'DEPTH'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
     arrays.forEach((a, i) => state[i].set(a));
     seaIce.concentration.set(concentration);
     radiationCpu.mlmSubsidence.set(mean);
@@ -97,7 +96,6 @@ export async function createGpuModel(gridOrMesh, {
     radiationCpu.mlmGate.set(gate);
     model.moist.convectiveRain.set(convective);
     model.moist.largeScaleRain.set(largeScale);
-    model.moist.convectiveActivity.set(activity);
     model.boundaryLayer.depth.set(depth);
     dirty = false;
   }
