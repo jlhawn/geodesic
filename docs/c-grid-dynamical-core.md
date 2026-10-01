@@ -3951,13 +3951,30 @@ defaults are those of the plume runs above (N=64 albedo 0.333 on day
 193, ASR − OLR over days 188–193 −1.3; N=128 albedo 0.301 on day 188,
 mean +8.4), which ran before the review's land fix. Digest tests
 re-pinned to 3ca002d1, 3d0c610f and da3ea94c. Parity on 362 random
-columns under seven option sets: θ to 1.8·10⁻⁴ K, q to 3.1·10⁻⁷, base
-mass flux to 5.2·10⁻⁵ kg/m²/s, no column differing in whether it rains.
+columns under seven option sets: θ to 7.6·10⁻⁵ K, q to 3.6·10⁻⁸, q_c to
+1.4·10⁻⁸, base mass flux to 6.5·10⁻⁶ kg/m²/s, cumulus fraction to
+6.1·10⁻⁶, no column differing in whether it rains, whether a plume rises
+or where it tops.
 The radiation-parity fixture is one step after the 10 K inversion: its
 layer-24 heating differs between the engines by 7.9·10⁻⁵, 1.4·10⁻⁴,
 1.6·10⁻⁴ and 1.5·10⁻⁴ K/day after one to four steps under the plume,
 against a tolerance of 10⁻⁴ (9.8·10⁻⁵ after two steps under
 Betts–Miller).
+
+Review (Oct 1). From an archive of 7186bdd, 24 CPU steps at N=4 and 48
+GPU steps at N=6 under `convection` 'plume' give the same state digest as
+the defaults here, with and without `plumeMomentum`. One CPU step of every
+column of rv3b_day0193: the boundary-layer mix keeps each column's
+mass-weighted θ to 8.4·10⁻¹⁶, q to 8.4·10⁻¹⁶ and q_t to 8.5·10⁻¹⁶
+relative, and each edge's column momentum to 1.2·10⁻¹⁵ of Σm|u|;
+θ_l = θ − L q_c/(c_p Π), which it does not mix as one field, moves by up to
+6.3·10⁻⁷ relative. `moist.adjust` keeps c_p T + L q to 9.0·10⁻¹⁶ and water with
+the rain to 8.1·10⁻¹⁶ in every column. nine64_day0091, saved with the
+activity: the same to 9.1·10⁻¹⁶ and 8.4·10⁻¹⁶ but for two columns that
+gain the negative cloud water the filler removes (5.1·10⁻⁶ and
+1.6·10⁻⁶ kg/m²); it loads and takes four GPU steps. The heating-parity
+layer is σ 0.93 under a deck of cover 0.41–0.67, cooling 2.7–3.7 K/day.
+The full suite (44 files, run concurrently) passes with nothing skipped.
 
 ### M22 — A moist boundary layer — planned
 
