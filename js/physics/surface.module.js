@@ -1,6 +1,6 @@
 import { cellVector } from '../dynamics/operators.module.js';
 
-export const SEA_DRAG = 1.2e-3;
+export const SEA_DRAG = 1.5e-3;
 export const LAND_DRAG = 1.5e-3;
 
 /*

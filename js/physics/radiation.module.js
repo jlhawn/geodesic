@@ -66,7 +66,7 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * water q + qc, of half-width (1 − RHc) qs about the mean, holds above
  * saturation, clipped to [coverFloor, 1]: RHc is
  * `boundaryCriticalHumidity` (0.85) for a layer whose midpoint lies below
- * the boundary-layer top and `criticalHumidity` (0.8) above it, so a
+ * the boundary-layer top and `criticalHumidity` (0.7) above it, so a
  * just-saturated layer is half covered and one holding (1 − RHc) qs of
  * cloud water overcast. Cloud under a strong inversion is stratiform and
  * uniform (the EIS cover of Wood & Bretherton reaches 1 near 11 K), so
@@ -101,9 +101,9 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * dq_s/dT), and σ_s = max(`varianceFloor` q_sl, `varianceScale` l a_l
  * |∂q_t/∂z − Π (dq_s/dT) ∂θ_l/∂z|), the turbulence's spread of s from
  * its mixing length l = κ z/(1 + κ z/`mixingLength`) (z above the
- * surface; 300 m, or `stableMixingLength` 30 m over a surface whose
+ * surface; 150 m, or `stableMixingLength` 10 m over a surface whose
  * buoyancy flux, the boundary layer's of the step before, is not
- * positive), `varianceScale` 5 (above Mellor and Yamada's B2^½ of
+ * positive), `varianceScale` 10 (above Mellor and Yamada's B2^½ of
  * 3.2; see M22) and the mean gradients to the neighbouring layers
  * inside the mixed layer; erf is Abramowitz and Stegun's 7.1.26. Such a
  * layer is half covered at s = 0 and overcast once s exceeds 2–3 σ_s,
@@ -179,7 +179,7 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * layer's regime of the step before (`useBoundaryLayer`): a coupled
  * column rests at the boundary-layer top, which is then its cloud top; a
  * surface-driven or decoupled column whose ceiling's θ_v jump lies above
- * `cumulusCeiling` (2000 m, the interface's height above the surface), or
+ * `cumulusCeiling` (2500 m, the interface's height above the surface), or
  * that has no ceiling, is a cumulus layer whose inversion the plumes have
  * lifted: its gate shuts (G = 0), it runs no deck and rests at the
  * boundary-layer top; any other column rests as under 'inversion', as
@@ -208,10 +208,7 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * deck is the resolved cloud at the layer's top under the cover above
  * and the gate only vetoes convection. 'inversion' (the default):
  * The regime test is the capping inversion: Δθ_v ≥ minimumInversion
- * (4 K) at the start's h. Resting at the ceiling under a 2 K test, the
- * deck's gate stood open over 0.28 of the globe and 0.21 of 10S–10N
- * three days on from eight64_day0183, trade cumulus included; under 4 K
- * over 0.15 and 0.07. A stratocumulus-topped layer also
+ * (2 K) at the start's h. A stratocumulus-topped layer also
  * needs large-scale subsidence (DYCOMS-II has 3 mm/s at 840 m), but the
  * model resolves it as a residual of a few mm/s: in the SE Pacific and
  * Peru boxes the running mean w̄_s below sinks at 1.8 and 2.1 mm/s with
@@ -347,9 +344,9 @@ export function adiabaticWaterLapse(T, p, cp, R, g, latentHeat = LATENT_HEAT) {
 
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 95, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
-  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 4, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
-  prognosticHeight = true, deckRest = 'regime', cumulusCeiling = 2000, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'maximumRandom',
-  boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, deckRegime = 'inversion', deckBypass = false,
+  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 2, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
+  prognosticHeight = true, deckRest = 'regime', cumulusCeiling = 2500, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.7, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'maximumRandom',
+  boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 10, mixingLength = 150, stableMixingLength = 10, deckRegime = 'inversion', deckBypass = false,
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,

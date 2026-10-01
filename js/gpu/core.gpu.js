@@ -515,14 +515,14 @@ const KERNELS = {
 
 export const PHYSICS_DEFAULTS = {
   solarConstant: 1362, cloudAbsorption: 130, cloudScattering: 95, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
-  mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'maximumRandom', prognosticHeight: true, deckRest: 'regime', cumulusCeiling: 2000, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
+  mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 2, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.7, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'maximumRandom', prognosticHeight: true, deckRest: 'regime', cumulusCeiling: 2500, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
   exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0.15,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10,
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.5, fullAlbedoThickness: 0.5, iceSnowAlbedo: 0.75, iceFullSnow: 20, snowConductivity: 0.31, snowDensity: 300, waterDensity: 1026,
   ...MOIST_DEFAULTS,
   richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5, stability: true, turbulence: 'moist', cloudTop: {},
-  boundaryCover: 'variance', varianceFloor: 0.002, varianceScale: 5, mixingLength: 300, stableMixingLength: 30, deckRegime: 'inversion', deckBypass: false,
+  boundaryCover: 'variance', varianceFloor: 0.002, varianceScale: 10, mixingLength: 150, stableMixingLength: 10, deckRegime: 'inversion', deckBypass: false,
   landed: false, landHeatCapacity: 1e6, bucketCapacity: 150, wetnessThreshold: 0.75, landAlbedo: 0.2, snowAlbedo: 0.55, fullSnow: 20,
   vegetation: true, bareAlbedo: 0.30, vegetatedAlbedo: 0.13, rootZoneCapacity: 300, dryWetness: 0.1, wetWetness: 0.6, iceSheetAlbedo: 0.8,
   growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400, surfaceCapacity: 15, percolationTime: 86400, stomatalResistance: 70, growthColdest: 278.15, growthWarmest: 288.15,

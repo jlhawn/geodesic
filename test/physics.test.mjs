@@ -255,7 +255,7 @@ test('cloud water reflects sunlight and closes the window: lower OLR, higher ref
 });
 
 test('with cloudCover: pdf a cloudy layer covers the part of a uniform total-water distribution of half-width (1 − RHc) qs above saturation, RHc 0.85 inside the boundary layer and 0.8 above: its shortwave is the cover-weighted blend of the clear column and the column with W / f, its emissivity f (1 − exp(−a W / f)), and the column closes', () => {
-  const pdf = createRadiation(mesh, core), overcast = createRadiation(mesh, core, OVERCAST);
+  const pdf = createRadiation(mesh, core, { criticalHumidity: 0.8 }), overcast = createRadiation(mesh, core, OVERCAST);
   pdf.setTime(0); overcast.setTime(0);
   const noon = brightest(pdf), [pi, theta, , surfaceT] = sampleState(3), q = new Float64Array(K * C), qc = new Float64Array(K * C);
   pi[noon] = P0;
@@ -304,7 +304,7 @@ function cloudColumn(seed, options) {
 }
 
 test('with cloudOverlap maximumRandom the layers of a run of adjacent cloudy layers overlap maximally and separate runs randomly: one run covers as its largest layer, two cover 1 − (1 − f1)(1 − f2); maximum takes the largest layer of the column', () => {
-  const column = cloudColumn(3, { overcastWater: null }), maximum = createRadiation(mesh, core, { overcastWater: null, cloudOverlap: 'maximum' });
+  const column = cloudColumn(3, { overcastWater: null, criticalHumidity: 0.8 }), maximum = createRadiation(mesh, core, { overcastWater: null, criticalHumidity: 0.8, cloudOverlap: 'maximum' });
   maximum.setTime(0);
   core.diagnose(column.pi, column.theta, column.q, column.qc);
   const layer = (share) => 0.5 + share / (2 * (1 - 0.8));
@@ -321,7 +321,7 @@ test('with cloudOverlap maximumRandom the layers of a run of adjacent cloudy lay
 });
 
 test('where the column\'s EIS rises through overcastInversion the cover blends into that of a half-width bounded by the cloud water: a saturated layer holding more than overcastWater is overcast under a strong inversion, and under a weak one keeps the uniform distribution\'s cover', () => {
-  const column = cloudColumn(5), free = createRadiation(mesh, core, { overcastWater: null });
+  const column = cloudColumn(5, { criticalHumidity: 0.8 }), free = createRadiation(mesh, core, { overcastWater: null, criticalHumidity: 0.8 });
   free.setTime(0);
   const { noon, theta, q, qc, pi } = column, bottom = (K - 1) * C + noon, k = K - 3;
   let upperK = 0;
@@ -886,7 +886,7 @@ test('with deckRest \'regime\' (the default) a surface-driven or decoupled colum
 });
 
 function modelDigest(radiation, moist = {}) {
-  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, plumeCape: 70, stratiformLifetime: null, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 }, radiation: { exchangeCoefficient: 1.5e-3, ...radiation } });
+  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, plumeCape: 70, plumeEntrainment: 0.1, stratiformLifetime: null, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 }, radiation: { exchangeCoefficient: 1.5e-3, minimumInversion: 4, criticalHumidity: 0.8, cumulusCeiling: 2000, ...radiation } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   for (let n = 0; n < 12; n++) model.step(900);
   const hash = createHash('sha256');
