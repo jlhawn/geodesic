@@ -160,8 +160,8 @@ test('a deep tropical column convects from cloud base up, heating most between 4
   for (let k = 0; k < top; k++) assert.ok(theta[k * C] === before.theta[k] && q[k * C] === before.q[k], `layer ${k} above the top changed`);
 });
 
-test('deep convection keeps column enthalpy and water exact through its rain, its anvil and its downdraft', () => {
-  const model = build(), { moist } = model, [pi, theta, , , q, qc] = model.state;
+test('with convection: bettsMiller deep convection keeps column enthalpy and water exact through its rain, its anvil and its downdraft', () => {
+  const model = build({ convection: 'bettsMiller' }), { moist } = model, [pi, theta, , , q, qc] = model.state;
   const dt = 600;
   jordanColumn(model, 0);
   setDepth(model, 0, 500);
@@ -194,7 +194,7 @@ function tradeCumulus(z, p) {
 }
 
 test('with the Betts–Miller shallow branch, shallowReference: mixingLine and no shallow rain, shallow convection mixes its cloud layer toward the mixing line and never rains, keeping heat and water exact', () => {
-  const model = build({ shallowScheme: 'bettsMiller', capeThreshold: 10, shallowReference: 'mixingLine', shallowRain: false }), { moist } = model, [pi, theta, , , q, qc] = model.state;
+  const model = build({ convection: 'bettsMiller', shallowScheme: 'bettsMiller', capeThreshold: 10, shallowReference: 'mixingLine', shallowRain: false }), { moist } = model, [pi, theta, , , q, qc] = model.state;
   const { K, C, sigmaMid, exnerLayer, dSigma } = model.core.diagnostics, dt = 600;
   place(model, 0, 101500, tradeCumulus);
   setDepth(model, 0, 600);
@@ -221,7 +221,7 @@ test('with the Betts–Miller shallow branch, shallowReference: mixingLine and n
 test('with the Betts–Miller shallow branch a trade-cumulus column vents at once on its shallow trigger, at a rate ramped by its CAPE, raining with enthalpy and water exact, but not without the trigger, below half its CAPE threshold, above its stability bound or under an active deck', () => {
   const dt = 600;
   const vent = (options = {}, gate = 0.3) => {
-    const model = build({ shallowScheme: 'bettsMiller', ...options }), { moist } = model, [pi, theta, , , q, qc] = model.state;
+    const model = build({ convection: 'bettsMiller', shallowScheme: 'bettsMiller', ...options }), { moist } = model, [pi, theta, , , q, qc] = model.state;
     place(model, 0, 101500, tradeCumulus);
     setDepth(model, 0, 600);
     model.radiation.mlmGate[0] = gate;
@@ -337,9 +337,9 @@ test('a stable surface, an active deck or a condensation level above the shallow
   assert.ok(Math.abs(halfOpen.moist.cumulusBaseFlux[0] - 0.5 * open.moist.cumulusBaseFlux[0]) < 1e-12, 'half the base mass flux on the deck gate\'s ramp');
 });
 
-test('the deep branch convects a deep tropical column exactly as it did beside the Betts–Miller shallow branch, and keeps the plume out of it but with cumulusWithDeep', () => {
+test('with convection: bettsMiller the deep branch convects a deep tropical column exactly as it did beside the Betts–Miller shallow branch, and keeps the plume out of it but with cumulusWithDeep', () => {
   const run = (shallowScheme) => {
-    const model = build({ shallowScheme }), { moist } = model, [pi, theta, , , q, qc] = model.state;
+    const model = build({ convection: 'bettsMiller', shallowScheme }), { moist } = model, [pi, theta, , , q, qc] = model.state;
     jordanColumn(model, 0);
     setDepth(model, 0, 500);
     moist.activity[0] = 1;
@@ -351,7 +351,7 @@ test('the deep branch convects a deep tropical column exactly as it did beside t
   assert.equal(massFlux.rain, bettsMiller.rain);
   assert.deepEqual(massFlux.snap, bettsMiller.snap);
   const plume = (options) => {
-    const model = build(options);
+    const model = build({ convection: 'bettsMiller', ...options });
     jordanColumn(model, 0);
     setDepth(model, 0, 500);
     model.moist.activity[0] = 1;
@@ -528,11 +528,15 @@ async function parity(options) {
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
 }
 
-test('the triggered convection, the cumulus mass flux and the rain they leave match between the engines on a random set of columns, with the plume on its defaults, from the lowest layer, raining, overshooting by half or beside deep convection, under either autoconversion floor, and with the Betts–Miller shallow branch under either shallow reference with or without shallow rain and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the triggered convection, the cumulus mass flux, the convective plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure, from either source, with either CAPE parcel and its downdraft, with the shallow plume on its defaults, from the lowest layer, raining, overshooting by half or beside deep convection, under either autoconversion floor, and with the Betts–Miller shallow branch under either shallow reference with or without shallow rain and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   await parity({});
+  await parity({ convection: 'plume' });
+  await parity({ convection: 'plume', plumeClosure: 'maximum', plumeSource: 'lowest', plumeCapeParcel: 'undilute', plumeMassGrowth: 2e-4 });
+  await parity({ convection: 'plume', plumeClosure: 'cape', downdraftShare: 0.5, downdraftEntrainment: 0, plumeRainThreshold: 5e-4, autoconversionFloor: 'boundaryLayer' });
   await parity({ autoconversionFloor: 'boundaryLayer' });
-  await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, cumulusWithDeep: true, virtualBuoyancy: false });
-  const bettsMiller = { shallowScheme: 'bettsMiller' };
+  await parity({ convection: 'bettsMiller' });
+  await parity({ convection: 'bettsMiller', cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, cumulusWithDeep: true, virtualBuoyancy: false });
+  const bettsMiller = { convection: 'bettsMiller', shallowScheme: 'bettsMiller' };
   await parity(bettsMiller);
   await parity({ ...bettsMiller, shallowReference: 'mixingLine', shallowRain: false, boundaryParcel: true, parcelDepth: 50e2, downdraftEvaporation: 0.25, downdraftSpread: 'fall' });
   await parity({ ...bettsMiller, shallowReference: 'mixingLine', shallowStability: 2 });
