@@ -168,8 +168,8 @@ test('interfacial drag, constant or from the shear, moves momentum between the l
     ocean.tendency(ocean.state, ocean.stages[0]);
     return ocean;
   };
-  const still = build({ shearMixing: false, interfacialDrag: 0 }), du0 = still.stages[0][1];
-  for (const options of [{ shearMixing: false, interfacialDrag: 5e-5 }, { shearMixing: true, interfacialDrag: 5e-5 }]) {
+  const still = build({ shearMixing: false, interiorShearMixing: false, interfacialDrag: 0 }), du0 = still.stages[0][1];
+  for (const options of [{ shearMixing: false, interiorShearMixing: false, interfacialDrag: 5e-5 }, { shearMixing: false, interfacialDrag: 5e-5 }, { shearMixing: true, interfacialDrag: 5e-5 }]) {
     const dragging = build(options), L = dragging.layers;
     const hEdge = new Float64Array(dragging.shared.hEdge), du = dragging.stages[0][1];
     let worst = 0, largest = 0, thin = 0;
@@ -225,6 +225,44 @@ test('under shearMixing the drag between the mixed layer and the class beneath f
   assert.ok(errors.length > 100 && at(richardsons, 0.1) < 0.3, `${errors.length} interfaces over Ri ${at(richardsons, 0.1)}–${at(richardsons, 0.9)}`);
   assert.ok(at(errors, 0.5) < 0.05 && at(errors, 0.9) < 0.2, `median ${at(errors, 0.5)}, 90th percentile ${at(errors, 0.9)}`);
   assert.ok(Math.abs(lowest - 1) < 1e-12, `with interfacialDrag 5e-5 m/s the coefficient is the larger of that and the viscosity's (${lowest})`);
+});
+
+test('under interiorShearMixing the drag between two interior classes follows the Pacanowski–Philander viscosity of their Richardson number down to backgroundViscosity over their spacing, while the mixed layer\'s base keeps interfacialDrag', () => {
+  const ocean = createOcean(mesh, { everySteps: 1 }), constant = createOcean(mesh, { everySteps: 1, interiorShearMixing: false });
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2);
+  for (const o of [ocean, constant]) o.initialize(Float64Array.from(surfaceT), new Float64Array(C));
+  const L = ocean.layers, rho = ocean.densities, hEdge = new Float64Array(ocean.shared.hEdge), g = 9.81, rho0 = 1025;
+  const errors = [], quiet = [];
+  let base = 0, bases = 0, unchanged = 0, pairs = 0;
+  for (const speed of [0, 0.05, 0.2, 0.8]) {
+    for (let n = 0; n < ocean.u.length; n++) { const k = Math.floor(n / E), e = n % E; ocean.u[n] = (k % 2 ? speed : 0) * (-mesh.xEdge[3 * e + 1] * mesh.nEdge[3 * e] + mesh.xEdge[3 * e] * mesh.nEdge[3 * e + 1]); }
+    constant.u.set(ocean.u);
+    ocean.tendency(ocean.state, ocean.stages[0]);
+    constant.tendency(constant.state, constant.stages[0]);
+    for (let e = 0; e < E; e++) {
+      if (!ocean.edgeOcean[e] || Math.abs(mesh.latEdge[e]) > 40 * DEG) continue;
+      const present = [];
+      for (let k = 1; k < L; k++) if (hEdge[k * E + e] >= THIN) present.push(k);
+      if (present.length < 2) continue;
+      base += Math.abs(ocean.interfaceRate(e, 0, present[0]) - 2e-4); bases++;
+      for (let m = 0; m + 1 < present.length; m++) {
+        const up = present[m], down = present[m + 1];
+        pairs++;
+        if (constant.interfaceRate(e, up, down) === 2e-4) unchanged++;
+        const dz = Math.max(THIN, 0.5 * (hEdge[up * E + e] + hEdge[down * E + e])), buoyancy = g * (rho[down] - rho[up]) / rho0;
+        const shear = (up % 2 === down % 2 ? 0 : speed ** 2 * (mesh.xEdge[3 * e] ** 2 + mesh.xEdge[3 * e + 1] ** 2)) + 1e-12;
+        const expected = Math.min((1e-2 / (1 + 5 * buoyancy * dz / shear) ** 2 + 1e-4) / dz, 0.5 * Math.min(hEdge[up * E + e], hEdge[down * E + e]) / 3600), rate = ocean.interfaceRate(e, up, down);
+        if (speed === 0) quiet.push(rate * dz / 1e-4);
+        else if (Math.abs(mesh.latEdge[e]) < 5 * DEG) errors.push(Math.abs(rate / expected - 1));
+      }
+    }
+  }
+  errors.sort((p, q) => p - q); quiet.sort((p, q) => p - q);
+  const at = (list, p) => list[Math.floor(p * (list.length - 1))];
+  console.log(`${quiet.length} interior interfaces at rest: r Δz / backgroundViscosity ${at(quiet, 0).toFixed(3)}–${at(quiet, 1).toFixed(3)}; ${errors.length} sheared ones within 5° of the equator within ${(100 * at(errors, 0.5)).toFixed(1)}% of the Pacanowski–Philander value at the median; ${bases} mixed-layer bases at interfacialDrag`);
+  assert.ok(quiet.length > 1000 && Math.abs(at(quiet, 0) - 1) < 1e-9 && Math.abs(at(quiet, 1) - 1) < 1e-9);
+  assert.ok(errors.length > 100 && at(errors, 0.5) < 0.05, `median ${at(errors, 0.5)}`);
+  assert.ok(bases > 100 && base === 0 && unchanged === pairs, `mixed-layer bases off interfacialDrag by ${base}; ${unchanged} of ${pairs} interior interfaces at interfacialDrag without the option`);
 });
 
 test('closureVelocity gives the token edges beside a class a weighted share of the class\'s own flow, and the closure then pulls the class less toward the flow of the layer above them', () => {

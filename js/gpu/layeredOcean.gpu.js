@@ -30,7 +30,7 @@ export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
-  interfacialDrag: 2e-4, shearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 1, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
+  interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: true, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 1, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200,
   dragCoefficient: 1.5e-3, gustiness: 3,
 };
@@ -61,7 +61,7 @@ ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_
 ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
 ${constLine('NEUTRALSNAP', o.neutralSnap ? 1 : 0)} ${constLine('EROSION', o.convectiveErosion ? 1 : 0)} ${constLine('BUOYMEM', o.buoyancyMemory)} ${constLine('NBRRATIO', o.mixedNeighbourRatio)} ${constLine('CENTRING', o.vorticityCentring)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
-${constLine('RINT', o.interfacialDrag)} ${constLine('SHEARMIX', o.shearMixing ? 1 : 0)} ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundViscosity)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
+${constLine('RINT', o.interfacialDrag)} ${constLine('SHEARMIX', o.shearMixing ? 1 : 0)} ${constLine('INTSHEAR', o.interiorShearMixing ? 1 : 0)} ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundViscosity)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
 ${constLine('FREEZE', FREEZING_POINT)} ${constLine('CDO', o.dragCoefficient)} ${constLine('GUSTO', o.gustiness)} ${constLine('CLOSURERIDGE', CLOSURE_RIDGE)} ${constLine('CLOSUREFILL', o.closureFill || 0)} ${constLine('CLOSURERINGS', o.closureRings ? 1 : 0)}
 @group(0) @binding(0) var<storage, read_write> MI: array<i32>;
 @group(0) @binding(1) var<storage, read_write> MF: array<f32>;
@@ -265,14 +265,15 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
 }
 fn dragThickness(k: i32, e: i32) -> f32 { return select(max(OD[O_HEDGE + k * E + e], THINO), max(OD[O_HEDGE + e], MINTHICK), k == 0); }
 fn interfaceRate(e: i32, up: i32, down: i32) -> f32 {
-  if (SHEARMIX < 0.5) { return RINT; }
+  let interior = up > 0 && INTSHEAR > 0.5;
+  if (SHEARMIX < 0.5 && !interior) { return RINT; }
   let dz = max(THINO, 0.5 * (OD[O_HEDGE + up * E + e] + OD[O_HEDGE + down * E + e]));
   let upper = select(RHO[up], 0.5 * (OD[O_RHOML + MI[COE + 2 * e]] + OD[O_RHOML + MI[COE + 2 * e + 1]]), up == 0);
   let buoyancy = max(0.0, OGRAV * (RHO[down] - upper) / RHO0);
   let du = IN[uOff(up) + e] - IN[uOff(down) + e]; let dv = tangentialU(up, e) - tangentialU(down, e);
   let ri = buoyancy * dz / (du * du + dv * dv + 1e-12);
   let nu = SHEARNU / ((1.0 + 5.0 * ri) * (1.0 + 5.0 * ri)) + BACKNU;
-  return min(max(RINT, nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
+  return min(max(select(RINT, 0.0, interior), nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
 }
 ${K}  let n = ${idx}; if (n >= L * E) { return; }
   let k = n / E; let e = n % E;

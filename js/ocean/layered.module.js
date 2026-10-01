@@ -645,7 +645,7 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
-  interfacialDrag = 2e-4, shearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 1, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
+  interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = true, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 1, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200,
   geography = null, bathymetry = null, buffers = null, climatology = null,
 } = {}) {
@@ -761,24 +761,27 @@ export function createOcean(mesh, {
   /*
    * The drag coefficient r (m/s) between layer `up` and the layer `down`
    * beneath it at edge e, from the edge thicknesses and mixed-layer
-   * density the tendency has prepared: interfacialDrag, or under
-   * shearMixing no less than that, the Pacanowski and Philander (1981)
-   * viscosity ν = shearViscosity/(1 + 5 Ri)² + backgroundViscosity over
-   * the distance Δz between the layers' middles, Ri = Δb Δz/|Δu|² from
-   * their buoyancy step and the difference of their full velocities, the
-   * tangential part reconstructed as the Coriolis term's; r is held to
-   * half of what either layer's drag thickness can take in one step
-   * (params[1] seconds).
+   * density the tendency has prepared: interfacialDrag at the mixed
+   * layer's base; between two interior classes under
+   * `interiorShearMixing`, and at every interface under shearMixing, the
+   * Pacanowski and Philander (1981) viscosity
+   * ν = shearViscosity/(1 + 5 Ri)² + backgroundViscosity over the distance
+   * Δz between the layers' middles, Ri = Δb Δz/|Δu|² from their buoyancy
+   * step and the difference of their full velocities, the tangential part
+   * reconstructed as the Coriolis term's, no less than interfacialDrag at
+   * the mixed layer's base; r is held to half of what either layer's drag
+   * thickness can take in one step (params[1] seconds).
    */
   function interfaceRate(uIn, e, up, down) {
-    if (!shearMixing) return interfacialDrag;
+    const interior = up > 0 && interiorShearMixing;
+    if (!shearMixing && !interior) return interfacialDrag;
     const dz = Math.max(THIN, 0.5 * (hEdge[ae(up, e)] + hEdge[ae(down, e)]));
     const upper = up === 0 ? 0.5 * (rhoMl[cellsOnEdge[2 * e]] + rhoMl[cellsOnEdge[2 * e + 1]]) : rho[up];
     const buoyancy = Math.max(0, g * (rho[down] - upper) / rho0);
     const du = uIn[ae(up, e)] - uIn[ae(down, e)], dv = tangential(uIn, up, e) - tangential(uIn, down, e);
     const richardson = buoyancy * dz / (du * du + dv * dv + 1e-12);
     const nu = shearViscosity / (1 + 5 * richardson) ** 2 + backgroundViscosity;
-    return Math.min(Math.max(interfacialDrag, nu / dz), 0.5 * Math.min(dragThickness(up, e), dragThickness(down, e)) / params[1]);
+    return Math.min(Math.max(interior ? 0 : interfacialDrag, nu / dz), 0.5 * Math.min(dragThickness(up, e), dragThickness(down, e)) / params[1]);
   }
 
   function surfaceDensity(hIn, QIn, WIn) {
