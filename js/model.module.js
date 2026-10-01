@@ -180,6 +180,7 @@ export function createModel(gridOrMesh, {
   let rk4 = null;
   const model = {
     mesh, core, radiation, surface, moist: moistPhysics, seaIce, ocean, boundaryLayer, geography, land, surfaceGeopotential: phis, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
+    radiationSteps: 0,
     shared: { core: core.shared, surface: surface.shared, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
@@ -197,13 +198,21 @@ export function createModel(gridOrMesh, {
     phases.mixMomentum(0, E, dt);
     phases.dissipate(0, C);
     model.time += dt;
+    model.radiationSteps++;
   };
 
   /*
    * Global means, the precipitation over the interval since the last
    * restartPrecipitation, which each call ends; over the same interval
    * the per-cell convective and large-scale rain go to
-   * moist.convectiveRain and moist.largeScaleRain in mm/d.
+   * moist.convectiveRain and moist.largeScaleRain in mm/d. The absorbed
+   * sunlight (and its part absorbed in the atmosphere) and the outgoing
+   * longwave are means over the radiationSteps physics steps of the
+   * interval, the planetary albedo its reflected over its incoming
+   * sunlight, and the per-cell means go to radiation.meanAbsorbedSolar,
+   * meanOutgoingLongwave and meanPlanetaryAlbedo; `instantaneous` holds
+   * the last step's. Without a step in the interval they are the last
+   * step's and the per-cell means stay.
    */
   let lastPrecipTime = 0;
   model.diagnostics = function diagnostics(sums = totals) {
@@ -211,9 +220,13 @@ export function createModel(gridOrMesh, {
     const precipitation = moistPhysics.precipitation;
     let area = 0, mass = 0, meanSurfaceT = 0, piMin = Infinity, piMax = -Infinity, maxWind = 0, water = 0, cloud = 0, rain = 0, iceArea = 0, iceVolume = 0, albedoSum = 0;
     let landArea = 0, landT = 0, snowArea = 0, soilSum = 0;
+    let absorbedSum = 0, atmosphereSum = 0, outgoingSum = 0, insolationSum = 0, reflectedSum = 0;
+    const summed = radiation.summed;
     for (let i = 0; i < C; i++) {
       const a = mesh.areaCell[i];
       area += a;
+      absorbedSum += a * summed.absorbedSolar[i]; atmosphereSum += a * summed.atmosphereSolar[i]; outgoingSum += a * summed.outgoingLongwave[i];
+      insolationSum += a * summed.insolation[i]; reflectedSum += a * summed.reflectedSolar[i];
       if (land && landMask[i]) { landArea += a; landT += a * surfaceT[i]; soilSum += a * land.soil[i]; if (land.snow[i] > 1) snowArea += a; }
       mass += a * pi[i];
       meanSurfaceT += a * surfaceT[i];
@@ -227,15 +240,23 @@ export function createModel(gridOrMesh, {
       albedoSum += a * (land && landMask[i] ? land.albedo(i) : seaIce.albedo(ice[i], null, seaIce.snow[i], cover));
     }
     for (let x = 0; x < u.length; x++) maxWind = Math.max(maxWind, Math.abs(u[x]));
-    const interval = model.time - lastPrecipTime;
+    const interval = model.time - lastPrecipTime, steps = model.radiationSteps;
     if (interval > 0) moistPhysics.readRain(interval);
+    if (steps > 0) radiation.readMeans(steps);
+    const instantaneous = {
+      absorbedSolar: sums.absorbedSolar / area, atmosphereSolar: sums.atmosphereSolar / area, outgoingLongwave: sums.outgoingLongwave / area,
+      planetaryAlbedo: sums.insolation > 0 ? sums.reflectedSolar / sums.insolation : 0,
+    };
     const result = {
       mass: mass / area, meanSurfaceT: meanSurfaceT / area, piMin, piMax, maxWind,
-      absorbedSolar: sums.absorbedSolar / area, atmosphereSolar: sums.atmosphereSolar / area, outgoingLongwave: sums.outgoingLongwave / area, sensibleHeat: sums.sensibleHeat / area,
+      ...(steps > 0 ? {
+        absorbedSolar: absorbedSum / area / steps, atmosphereSolar: atmosphereSum / area / steps, outgoingLongwave: outgoingSum / area / steps,
+        planetaryAlbedo: insolationSum > 0 ? reflectedSum / insolationSum : 0,
+      } : instantaneous),
+      instantaneous, sensibleHeat: sums.sensibleHeat / area,
       evaporation: sums.evaporation / area, latentHeat: moistPhysics.latentHeat * sums.evaporation / area,
       columnWater: water / area, columnCloud: cloud / area, precipitation: interval > 0 ? rain / area / interval : 0,
       iceFraction: iceArea / area, iceThickness: iceArea > 0 ? iceVolume / iceArea : 0, surfaceAlbedo: albedoSum / area,
-      planetaryAlbedo: sums.insolation > 0 ? sums.reflectedSolar / sums.insolation : 0,
       ...(ocean ? ocean.diagnostics() : {}),
       ...(land ? { landFraction: landArea / area, landMeanT: landArea > 0 ? landT / landArea : 0, snowFraction: landArea > 0 ? snowArea / landArea : 0, soilWater: landArea > 0 ? soilSum / landArea : 0, runoff: land.budget.runoff / area } : {}),
     };
@@ -246,6 +267,8 @@ export function createModel(gridOrMesh, {
     moistPhysics.precipitation.fill(0);
     moistPhysics.convectivePrecipitation.fill(0);
     moistPhysics.largeScalePrecipitation.fill(0);
+    radiation.restartSums();
+    model.radiationSteps = 0;
     lastPrecipTime = model.time;
   };
 

@@ -135,6 +135,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     run(PHASE.ADJUST, { dt });
     run(PHASE.DISSIPATE, { dt });
     model.time += dt;
+    model.radiationSteps++;
   };
 
   const serialDiagnostics = model.diagnostics;
