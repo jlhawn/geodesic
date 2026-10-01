@@ -261,3 +261,34 @@ test('closureVelocity gives the token edges beside a class a weighted share of t
   assert.ok(count > 100 && Math.sqrt(error / size) < 0.1, `the fit is ${Math.sqrt(error / size)} rms from the class's flow`);
   assert.ok(wholePull < halfPull && halfPull < 0.75 * before, `the closure's pull ${before}, ${halfPull}, ${wholePull}`);
 });
+
+test('with rings, closureVelocity fits a class\'s token edges where a thicker class lies beneath both cells, in two rings, and leaves the tokens over the sea floor on the velocity above', () => {
+  const m = buildMesh(new Grid(16)), mE = m.nEdges, k = 5;
+  const rotation = (e, sign) => sign * 0.3 * (-m.xEdge[3 * e + 1] * m.nEdge[3 * e] + m.xEdge[3 * e] * m.nEdge[3 * e + 1]);
+  const inside = (i) => Math.sin(3 * m.lonCell[i]) + 0.5 * Math.cos(5 * m.latCell[i]) > 0.2;
+  const east = (e) => Math.cos(m.lonCell[m.cellsOnEdge[2 * e]]) > 0 && Math.cos(m.lonCell[m.cellsOnEdge[2 * e + 1]]) > 0;
+  const hEdge = new Float64Array(mE), sea = new Uint8Array(mE).fill(1), exact = new Float64Array(mE), slaved = new Float64Array(mE), deepest = new Float64Array(mE);
+  for (let e = 0; e < mE; e++) {
+    const present = inside(m.cellsOnEdge[2 * e]) && inside(m.cellsOnEdge[2 * e + 1]);
+    hEdge[e] = present ? 12 : EPS;
+    exact[e] = rotation(e, 1);
+    slaved[e] = present ? exact[e] : rotation(e, -1);
+    deepest[e] = east(e) ? k + 3 : k - 1;
+  }
+  const thick = (e) => hEdge[e] >= THIN, neighbours = (e) => Array.from({ length: m.nEdgesOnEdge[e] }, (_, s) => m.edgesOnEdge[m.maxEdgesOnEdge * e + s]);
+  const first = Uint8Array.from({ length: mE }, (_, e) => (!thick(e) && neighbours(e).some(thick) ? 1 : 0));
+  const second = Uint8Array.from({ length: mE }, (_, e) => (!thick(e) && !first[e] && neighbours(e).some((o) => first[o] && deepest[o] > k) ? 1 : 0));
+  const rings = { deepest, k, valid: new Uint8Array(mE), second: new Float64Array(mE) };
+  const out = closureVelocity(m, slaved, hEdge, sea, 1, new Float64Array(mE), rings);
+  const error = [0, 0], size = [0, 0], count = [0, 0];
+  let floor = 0;
+  for (let e = 0; e < mE; e++) {
+    if (thick(e) || deepest[e] <= k || !(first[e] || second[e])) { assert.equal(out[e], slaved[e]); if (!thick(e) && (first[e] || second[e])) floor++; continue; }
+    const r = first[e] ? 0 : 1;
+    error[r] += (out[e] - exact[e]) ** 2; size[r] += exact[e] ** 2; count[r]++;
+  }
+  const [one, two] = [0, 1].map((r) => Math.sqrt(error[r] / size[r]));
+  console.log(`${count[0]} token edges beside the class fitted ${(100 * one).toFixed(1)}% rms from its flow, ${count[1]} next to them ${(100 * two).toFixed(1)}%; ${floor} over the sea floor left on the velocity above`);
+  assert.ok(count[0] > 30 && count[1] > 30 && floor > 30, `${count}, ${floor}`);
+  assert.ok(one < 0.1 && two < 0.3, `the fits are ${one} and ${two} rms from the class's flow`);
+});

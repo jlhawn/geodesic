@@ -311,34 +311,55 @@ export function closureCoefficient(spacing, closureHours, closureSpacing = CLOSU
 
 /*
  * The velocity an interior class's ∇⁴ closure acts on: its own u, except
- * on the token sea edges beside the edges where it holds at least THIN
- * metres, which take `weight` of the normal component of the uniform flow
- * that best fits, in least squares with the ridge CLOSURE_RIDGE, the
- * normal velocities of those neighbours (edgesOnEdge) and the rest of
- * their own. A token edge's own velocity is the layer's above, the mixed
- * layer's where the class has outcropped, toward which the closure pulls
- * the class. That pull also holds the class's edges beside its tokens,
- * and coupled runs with the fit clamp there, so `closureFill` is off by
- * default (docs/c-grid-dynamical-core.md, M21).
+ * on token sea edges, which take `weight` of the normal component of the
+ * uniform flow that best fits, in least squares with the ridge
+ * CLOSURE_RIDGE, the normal velocities of their neighbours (edgesOnEdge)
+ * where the class holds at least THIN metres, and the rest of their own.
+ * A token edge's own velocity is the layer's above, the mixed layer's
+ * where the class has outcropped, toward which the closure would pull the
+ * class. With `rings` ({ deepest, k, valid, second }, `deepest` per edge
+ * the deepest class holding more than THIN metres in both of its cells),
+ * only the token edges with such a class denser than k beneath them are
+ * fitted, the class pinched out between thicker ones and not cut off by
+ * the sea floor, and then the token edges next to those from the fitted
+ * and the thick edges; without it, every token edge beside the class.
  */
 export const CLOSURE_RIDGE = 0.1;
-export function closureVelocity(mesh, u, hEdge, edgeOcean, weight, out) {
-  const { nEdges: E, nEdgesOnEdge, edgesOnEdge, maxEdgesOnEdge, nEdge, tEdge } = mesh;
+function closureFit(mesh, e, usable, values) {
+  const { nEdgesOnEdge, edgesOnEdge, maxEdgesOnEdge, nEdge, tEdge } = mesh;
+  const nx = nEdge[3 * e], ny = nEdge[3 * e + 1], nz = nEdge[3 * e + 2], tx = tEdge[3 * e], ty = tEdge[3 * e + 1], tz = tEdge[3 * e + 2];
+  let saa = 0, sab = 0, sbb = 0, sau = 0, sbu = 0, found = false;
+  for (let s = 0; s < nEdgesOnEdge[e]; s++) {
+    const o = edgesOnEdge[maxEdgesOnEdge * e + s];
+    if (!usable(o)) continue;
+    const a = nEdge[3 * o] * nx + nEdge[3 * o + 1] * ny + nEdge[3 * o + 2] * nz, b = nEdge[3 * o] * tx + nEdge[3 * o + 1] * ty + nEdge[3 * o + 2] * tz;
+    saa += a * a; sab += a * b; sbb += b * b; sau += a * values[o]; sbu += b * values[o]; found = true;
+  }
+  if (!found) return null;
+  const p = saa + CLOSURE_RIDGE, q = sbb + CLOSURE_RIDGE;
+  return (q * sau - sab * sbu) / (p * q - sab * sab);
+}
+export function closureVelocity(mesh, u, hEdge, edgeOcean, weight, out, rings = null) {
+  const E = mesh.nEdges, thick = (o) => edgeOcean[o] && hEdge[o] >= THIN;
+  const inside = rings ? (e) => rings.deepest[e] > rings.k : () => true;
   for (let e = 0; e < E; e++) {
     out[e] = u[e];
-    if (!edgeOcean[e] || hEdge[e] >= THIN) continue;
-    const nx = nEdge[3 * e], ny = nEdge[3 * e + 1], nz = nEdge[3 * e + 2], tx = tEdge[3 * e], ty = tEdge[3 * e + 1], tz = tEdge[3 * e + 2];
-    let saa = 0, sab = 0, sbb = 0, sau = 0, sbu = 0, found = false;
-    for (let s = 0; s < nEdgesOnEdge[e]; s++) {
-      const o = edgesOnEdge[maxEdgesOnEdge * e + s];
-      if (!edgeOcean[o] || hEdge[o] < THIN) continue;
-      const a = nEdge[3 * o] * nx + nEdge[3 * o + 1] * ny + nEdge[3 * o + 2] * nz, b = nEdge[3 * o] * tx + nEdge[3 * o + 1] * ty + nEdge[3 * o + 2] * tz;
-      saa += a * a; sab += a * b; sbb += b * b; sau += a * u[o]; sbu += b * u[o]; found = true;
-    }
-    if (!found) continue;
-    const p = saa + CLOSURE_RIDGE, q = sbb + CLOSURE_RIDGE;
-    out[e] = weight * (q * sau - sab * sbu) / (p * q - sab * sab) + (1 - weight) * u[e];
+    if (rings) rings.valid[e] = thick(e) ? 1 : 0;
+    if (!edgeOcean[e] || hEdge[e] >= THIN || !inside(e)) continue;
+    const fit = closureFit(mesh, e, thick, u);
+    if (fit === null) continue;
+    out[e] = weight * fit + (1 - weight) * u[e];
+    if (rings) rings.valid[e] = 1;
   }
+  if (!rings) return out;
+  const { valid, second } = rings, usable = (o) => edgeOcean[o] && valid[o];
+  second.set(out);
+  for (let e = 0; e < E; e++) {
+    if (valid[e] || !edgeOcean[e] || !inside(e)) continue;
+    const fit = closureFit(mesh, e, usable, out);
+    if (fit !== null) second[e] = weight * fit + (1 - weight) * u[e];
+  }
+  out.set(second);
   return out;
 }
 
@@ -624,7 +645,7 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
-  interfacialDrag = 2e-4, shearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, diffusivity = 0.01, everySteps = 4,
+  interfacialDrag = 2e-4, shearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 1, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200,
   geography = null, bathymetry = null, buffers = null, climatology = null,
 } = {}) {
@@ -670,6 +691,8 @@ export function createOcean(mesh, {
   const zeta = new Float64Array(V), qEdge = new Float64Array(E);
   const K = new Float64Array(C), phi = new Float64Array(C), gradPhi = new Float64Array(E), gradEta = shared('gradEta', E), gradRho = shared('gradRho', E);
   const lap = new Float64Array(E), lap2 = new Float64Array(E), divScratch = new Float64Array(C), curlScratch = new Float64Array(V), closureU = new Float64Array(E);
+  if (closureTokens !== 'interior' && closureTokens !== 'beside') throw new Error(`closureTokens is 'interior' or 'beside', not ${closureTokens}`);
+  const deepestEdge = shared('deepestEdge', E), closureRings = closureTokens === 'interior' && closureFill > 0 ? { deepest: deepestEdge, k: 0, valid: new Uint8Array(E), second: new Float64Array(E) } : null;
   const slow = new Float64Array(E), U = new Float64Array(E), depthEdge = new Float64Array(E), etaB = new Float64Array(C), avgU = new Float64Array(E), avgEta = new Float64Array(C), divU = new Float64Array(C);
   const stages = [0, 1, 2, 3].map((s) => [shared(`stage${s}h`, L * C), shared(`stage${s}u`, L * E), shared(`stage${s}Q`, L * C), shared(`stage${s}W`, L * C)]);
   const trial = [shared('trialh', L * C), shared('trialu', L * E), shared('trialQ', L * C), shared('trialW', L * C)];
@@ -791,6 +814,15 @@ export function createOcean(mesh, {
     gradient(mesh, eta, gradEta);
     gradient(mesh, rhoMl, gradRho);
     edgeThicknesses(hIn);
+    if (closureRings) {
+      for (let e = 0; e < E; e++) {
+        const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+        let ka = 0, kb = 0;
+        for (let k = L - 1; k > 0 && !ka; k--) if (hIn[at(k, a)] > THIN) ka = k;
+        for (let k = L - 1; k > 0 && !kb; k--) if (hIn[at(k, b)] > THIN) kb = k;
+        deepestEdge[e] = Math.min(ka, kb);
+      }
+    }
     for (let i = 0; i < C; i++) {
       let weighted = 0, total = 0;
       for (let k = 1; k < L; k++) {
@@ -886,7 +918,8 @@ export function createOcean(mesh, {
       }
       if (nu4 > 0) {
         const uk = uIn.subarray(oe, oe + E);
-        laplacianVelocity(mesh, k === 0 || !(closureFill > 0) ? uk : closureVelocity(mesh, uk, hEdge.subarray(oe, oe + E), edgeOcean, closureFill, closureU), lap, divScratch, curlScratch);
+        if (closureRings) closureRings.k = k;
+        laplacianVelocity(mesh, k === 0 || !(closureFill > 0) ? uk : closureVelocity(mesh, uk, hEdge.subarray(oe, oe + E), edgeOcean, closureFill, closureU, closureRings), lap, divScratch, curlScratch);
         laplacianVelocity(mesh, lap, lap2, divScratch, curlScratch);
         for (let e = 0; e < E; e++) du[oe + e] -= nu4 * lap2[e];
       }
@@ -1417,7 +1450,7 @@ export function createOcean(mesh, {
 
   if (!adopting) build(new Float64Array(C).fill(288), new Float64Array(C), null);
   initialised = false;
-  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
+  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
   return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), setLayerRunner(fn) { layerRunner = fn; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }

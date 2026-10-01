@@ -21,7 +21,7 @@ const FILE = process.argv[2];
 if (!FILE) throw new Error('usage: node scripts/equatorialOcean.mjs <state.bin>');
 const LAT = Number(process.env.LAT ?? 2);
 const OCEAN = { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') };
-const DEFAULTS = { bottomDrag: 3e-3, minimumThickness: 50, vorticityCentring: 0.5, closureHours: 12, closureFill: 0, density: 1025, gravity: 9.81 };
+const DEFAULTS = { bottomDrag: 3e-3, minimumThickness: 50, vorticityCentring: 0.5, closureHours: 12, closureFill: 1, closureTokens: 'interior', density: 1025, gravity: 9.81 };
 const opt = { ...DEFAULTS, ...OCEAN };
 const say = (s = '') => console.log(s);
 const f = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '—');
@@ -172,6 +172,7 @@ const terms = ['coriolis f', 'rel. vorticity', '-grad K', '-g grad eta', 'barocl
 const budget = terms.map(() => new Float64Array(L * E));
 const zeta = new Float64Array(C > 0 ? mesh.nVertices : 0), qf = new Float64Array(E), qz = new Float64Array(E), fluxPV = new Float64Array(E);
 const Kc = new Float64Array(C), grad = new Float64Array(E), lap = new Float64Array(E), lap2 = new Float64Array(E), divS = new Float64Array(C), curlS = new Float64Array(mesh.nVertices), phi = new Float64Array(C), closureU = new Float64Array(E);
+const rings = opt.closureTokens === 'interior' ? { deepest: new Float64Array(ocean.shared.deepestEdge), k: 0, valid: new Uint8Array(E), second: new Float64Array(E) } : null;
 const relax = Math.min(1 / 3600, 1 / dtOcean);
 for (let k = 0; k < L; k++) {
   const oe = k * E, uk = u.subarray(oe, oe + E);
@@ -188,7 +189,8 @@ for (let k = 0; k < L; k++) {
   for (let i = 0; i < C; i++) phi[i] = k === 0 ? 0 : g * pressure[at(k, i)] / rho0;
   const gradP = new Float64Array(E);
   gradient(mesh, phi, gradP);
-  if (nu4 > 0) { laplacianVelocity(mesh, k === 0 || !(opt.closureFill > 0) ? uk : closureVelocity(mesh, uk, hEdge.subarray(oe, oe + E), edgeOcean, opt.closureFill, closureU), lap, divS, curlS); laplacianVelocity(mesh, lap, lap2, divS, curlS); }
+  if (rings) rings.k = k;
+  if (nu4 > 0) { laplacianVelocity(mesh, k === 0 || !(opt.closureFill > 0) ? uk : closureVelocity(mesh, uk, hEdge.subarray(oe, oe + E), edgeOcean, opt.closureFill, closureU, rings), lap, divS, curlS); laplacianVelocity(mesh, lap, lap2, divS, curlS); }
   for (let e = 0; e < E; e++) {
     if (!edgeOcean[e]) continue;
     let sf = 0, sz = 0;
