@@ -3,7 +3,7 @@
 Fits a full quadratic (linear, square and pairwise interaction terms) in
 the parameters coded to [-1, 1] over their ranges to the score of every
 row of results.csv, by ridge regression with the penalty chosen by
-leave-one-out error (55 coefficients from 41 runs need one). Writes
+leave-one-out error (78 coefficients from 41 runs need one). Writes
 fit.txt (the coefficients, the leave-one-out error, each parameter's
 sensitivities, each score term's linear sensitivity to each parameter)
 and candidates.json: the four best design points, the surface's minimum
@@ -20,7 +20,7 @@ SWEEP = sys.argv[1] if len(sys.argv) > 1 else 'runs/sweep'
 PARAMETERS = [
     ('varianceScale', 2, 10), ('mixingLength', 150, 600), ('stratiformHours', 1, 6), ('cloudHours', 0.5, 2),
     ('plumeEntrainment', 0.05, 0.2), ('plumeCape', 40, 200), ('minimumInversion', 2, 6), ('criticalHumidity', 0.7, 0.9),
-    ('seaDrag', 1.0e-3, 1.5e-3),
+    ('seaDrag', 1.0e-3, 1.5e-3), ('stableMixingLength', 10, 60), ('cumulusCeiling', 1500, 2500),
 ]
 KEYS = [p[0] for p in PARAMETERS]
 WEIGHTS = {'balance': 4, 'albedo': 2, 'rain': 1, 'sepLow': 1, 'peruLow': 1, 'sepLwp': 1, 'peruLwp': 1, 'sepRain': 1, 'peruRain': 1, 'itczRain': 1, 'itczPeak': 0.5, 'zonalPeak': 0.5, 'stress': 1, 'arctic': 2}

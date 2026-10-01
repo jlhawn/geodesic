@@ -1,8 +1,11 @@
 // The sweep's parameters and the runs it makes: short GPU spin-ups from
 // copies of saved states under the shared GPU lock (GPULOCK), each copy
 // removed once the run has saved its last day, and the CPU audit of a state.
+// A run whose last day is not yet saved starts over from its copy, any
+// other snapshot of its tag removed first so that spinup.mjs cannot
+// continue from it.
 import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, unlinkSync, openSync, closeSync } from 'node:fs';
+import { copyFileSync, existsSync, unlinkSync, openSync, closeSync, readdirSync } from 'node:fs';
 import { readLog, readAudit, arcticVolume } from './score.mjs';
 
 export const ROOT = new URL('../../', import.meta.url).pathname;
@@ -21,6 +24,8 @@ export const PARAMETERS = [
   { key: 'minimumInversion', module: 'radiation', option: 'minimumInversion', base: 4, low: 2, high: 6 },
   { key: 'criticalHumidity', module: 'radiation', option: 'criticalHumidity', base: 0.8, low: 0.7, high: 0.9 },
   { key: 'seaDrag', module: 'surface', option: 'dragCoefficient', base: 1.2e-3, low: 1.0e-3, high: 1.5e-3 },
+  { key: 'stableMixingLength', module: 'radiation', option: 'stableMixingLength', base: 30, low: 10, high: 60 },
+  { key: 'cumulusCeiling', module: 'radiation', option: 'cumulusCeiling', base: 2000, low: 1500, high: 2500 },
 ];
 
 export function optionsOf(point) {
@@ -44,6 +49,7 @@ export async function spinup({ tag, n, from = null, fromDay = 0, days, options, 
   if (existsSync(last)) return { log: `${OUT}/${tag}.log`, state: last, code: 0 };
   const start = from ? dayName(tag, fromDay) : null;
   if (existsSync(`${OUT}/${tag}.log`)) unlinkSync(`${OUT}/${tag}.log`);
+  for (const f of readdirSync(OUT)) if (f.startsWith(`${tag}_day`) && f.endsWith('.bin')) unlinkSync(`${OUT}/${f}`);
   if (from) copyFileSync(from, start);
   const code = await run('bash', [GPULOCK, 'shared', 'node', 'scripts/spinup.mjs'], {
     N: String(n), TAG: tag, OUT, DAYS: String(end), MINUTES: '100000', KEEP: '2', BATCH: '1', DAY_MEAN: '8', OCEAN: '{"everySteps":8}', ...optionsOf(options), ...env,
@@ -61,8 +67,8 @@ let startVolume = null;
 export async function screenValues(tagM, point, eightLog, eightState, arcticState) {
   const log = readLog(eightLog), day = log.days.find((d) => d.day === 186);
   const values = { nan: log.nan || !day ? 1 : 0, clamped: log.days.reduce((s, d) => s + d.clamped, 0) };
-  if (day) Object.assign(values, { balance: day.meanAsr - day.meanOlr, albedo: day.meanAlbedo, instantAlbedo: day.albedo, instantBalance: day.asr - day.olr, stress: log.stress });
   if (existsSync(eightState)) Object.assign(values, readAudit(await audit(eightState, point, `${OUT}/${tagM}.audit`)));
+  if (day) Object.assign(values, { balance: day.meanAsr - day.meanOlr, albedo: day.meanAlbedo, dayRain: day.meanPrecip, instantAlbedo: day.albedo, instantBalance: day.asr - day.olr, stress: log.stress });
   const iceStart = startVolume ??= await arcticVolume(`${STATES}/nine64_day0091.bin`);
   if (existsSync(arcticState)) { const iceEnd = await arcticVolume(arcticState); Object.assign(values, { iceStart, iceEnd, arctic: (iceStart - iceEnd) / 3 }); }
   return values;

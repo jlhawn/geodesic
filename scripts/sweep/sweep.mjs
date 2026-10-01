@@ -4,8 +4,8 @@
 // (scripts/sweep/runs.mjs) to runs/sweep/design.csv (seeded by SEED, kept
 // once written), with the defaults as point 0, and for every point not yet
 // in runs/sweep/results.csv runs the two three-day N=64 screens one after
-// the other on the GPU: TAG sw<NN>m from eight64_day0183 to day 186 and
-// sw<NN>a from nine64_day0091 to day 94. The day-186 state is audited on
+// the other on the GPU: TAG sx<NN>m from eight64_day0183 to day 186 and
+// sx<NN>a from nine64_day0091 to day 94. The day-186 state is audited on
 // the CPU beside the next point's screens, and one row per point goes to
 // results.csv with each parameter, each score term's value, error and
 // part, and the score (scripts/sweep/score.mjs). ONLY (comma-separated
@@ -55,7 +55,7 @@ const design = readFileSync(designFile, 'utf8').trim().split('\n').slice(1).map(
 });
 
 const resultsFile = `${SWEEP}/results.csv`;
-const EXTRA = ['instantAlbedo', 'instantBalance', 'evaporation', 'sepRuns', 'peruRuns', 'namibiaLow', 'sepInversion', 'zonalPeakRain', 'iceStart', 'iceEnd', 'clamped', 'nan'];
+const EXTRA = ['dayRain', 'instantAlbedo', 'instantBalance', 'evaporation', 'sepRuns', 'peruRuns', 'namibiaLow', 'sepInversion', 'zonalPeakRain', 'iceStart', 'iceEnd', 'clamped', 'nan'];
 const header = ['point', ...PARAMETERS.map((p) => p.key), ...TERMS.map((t) => t.key), ...TERMS.map((t) => `e_${t.key}`), ...TERMS.map((t) => `w_${t.key}`), 'score', ...EXTRA];
 if (!existsSync(resultsFile)) writeFileSync(resultsFile, header.join(',') + '\n');
 const done = new Set(readFileSync(resultsFile, 'utf8').trim().split('\n').slice(1).map((l) => Number(l.split(',')[0])));
@@ -69,7 +69,7 @@ function row(point, values) {
 const pending = [];
 for (const point of design) {
   if (done.has(point.point) || (ONLY && !ONLY.includes(point.point))) continue;
-  const id = String(point.point).padStart(2, '0'), tagM = `sw${id}m`, tagA = `sw${id}a`, t0 = Date.now();
+  const id = String(point.point).padStart(2, '0'), tagM = `sx${id}m`, tagA = `sx${id}a`, t0 = Date.now();
   const eight = await spinup({ tag: tagM, n: 64, from: `${STATES}/eight64_day0183.bin`, fromDay: 183, days: 3, options: point });
   const arctic = await spinup({ tag: tagA, n: 64, from: `${STATES}/nine64_day0091.bin`, fromDay: 91, days: 3, options: point });
   console.log(`point ${id}: screens done in ${((Date.now() - t0) / 60000).toFixed(1)} min${eight.code || arctic.code ? ' (NaN)' : ''}`);

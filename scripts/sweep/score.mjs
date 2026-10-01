@@ -10,7 +10,7 @@ import { decodeState } from '../../js/stateFile.module.js';
 export const TERMS = [
   { key: 'balance', label: 'ASR - OLR, day mean (W/m2)', target: 0, tolerance: 3, weight: 4 },
   { key: 'albedo', label: 'albedo, day mean', target: 0.30, tolerance: 0.015, weight: 2 },
-  { key: 'rain', label: 'global rain (mm/d)', target: 2.7, tolerance: 0.2, weight: 1 },
+  { key: 'rain', label: 'global rain, audit (mm/d)', target: 2.7, tolerance: 0.2, weight: 1 },
   { key: 'sepLow', label: 'SE Pacific low cloud, radiative', target: 0.6, tolerance: 0.1, weight: 1 },
   { key: 'peruLow', label: 'Peru low cloud, radiative', target: 0.6, tolerance: 0.1, weight: 1 },
   { key: 'sepLwp', label: 'SE Pacific deck LWP as the radiation takes it (g/m2)', target: 100, tolerance: 50, weight: 1 },
