@@ -12,6 +12,11 @@ stationary point clipped to the box reported beside it, and the minimum
 of the score composed from each term's own fit ('cmin'), which cannot
 fall below zero where the quadratic of the score can, and the defaults
 ('base') for reference.
+
+A results.csv with the second sweep's terms (sweep2.mjs) takes the second
+sweep's parameters and weights, holds both minima at least 10 % of each
+range inside the box, and lists as candidates the four best design
+points, qmin and base.
 """
 import csv, json, sys
 import numpy as np
@@ -24,6 +29,17 @@ PARAMETERS = [
 ]
 KEYS = [p[0] for p in PARAMETERS]
 WEIGHTS = {'balance': 4, 'albedo': 2, 'rain': 1, 'sepLow': 1, 'peruLow': 1, 'sepLwp': 1, 'peruLwp': 1, 'sepRain': 1, 'peruRain': 1, 'itczRain': 1, 'itczPeak': 0.5, 'zonalPeak': 0.5, 'stress': 1, 'arctic': 2}
+BOX = 1
+SECOND = 'fBalance' in open(f'{SWEEP}/results.csv').readline().split(',')
+if SECOND:
+    PARAMETERS = [
+        ('cloudScattering', 55, 110), ('cloudAbsorption', 65, 260), ('upperHours', 1, 8), ('stratiformHours', 2, 8), ('cloudHours', 0.5, 2),
+        ('varianceScale', 2, 10), ('plumeRainRate', 1e-3, 6e-3), ('criticalHumidity', 0.7, 0.9), ('stratusWaterMax', 0.1, 0.3), ('cumulusCeiling', 1500, 2500),
+    ]
+    WEIGHTS = {'fBalance': 4, 'fAlbedo': 3, 'fOlr': 1, 'fSwcre': 2, 'fLwcre': 2, 'fRain': 1, 'balance': 2, 'sepLow': 1, 'peruLow': 1, 'sepDeckWater': 1, 'peruDeckWater': 1,
+               'sepThickness': 0.5, 'peruThickness': 0.5, 'sepRain': 1, 'itczRain': 1, 'itczPeak': 0.5, 'stress': 0.5, 'arctic': 2}
+    BOX = 0.8
+    KEYS = [p[0] for p in PARAMETERS]
 LOW = np.array([p[1] for p in PARAMETERS]); HIGH = np.array([p[2] for p in PARAMETERS])
 D = len(KEYS)
 
@@ -80,16 +96,16 @@ try:
     stationary = np.linalg.solve(2 * Q, -beta[1:1 + D])
 except np.linalg.LinAlgError:
     stationary = np.zeros(D)
-clipped = np.clip(stationary, -1, 1)
+clipped = np.clip(stationary, -BOX, BOX)
 
 rng = np.random.default_rng(1)
-starts = np.vstack([C, rng.uniform(-1, 1, (400, D)), clipped[None, :]])
+starts = np.vstack([np.clip(C, -BOX, BOX), rng.uniform(-BOX, BOX, (400, D)), clipped[None, :]])
 best, bestValue = None, np.inf
 step = 1 / (2 * max(abs(eig).max(), 1e-9))
 for c in starts:
     c = c.copy()
     for _ in range(3000):
-        n = np.clip(c - step * gradient(c), -1, 1)
+        n = np.clip(c - step * gradient(c), -BOX, BOX)
         if np.max(abs(n - c)) < 1e-10:
             break
         c = n
@@ -151,7 +167,7 @@ rmseComposed = np.sqrt(np.mean((looComposed - y) ** 2))
 c = starts.copy()
 for _ in range(20000):
     _, g = composedAll(c)
-    c = np.clip(c - 0.001 * g, -1, 1)
+    c = np.clip(c - 0.001 * g, -BOX, BOX)
 values, _ = composedAll(c)
 cbest, cvalue = c[np.argmin(values)], values.min()
 say(f'cross-check: the score composed from each normalized error fitted as linear plus square terms (ridge by leave-one-out), Σ w (ê)²: leave-one-out RMSE {rmseComposed:.2f}')
@@ -159,7 +175,7 @@ say('its minimum over the box: ' + ', '.join(f'{k} {v:.4g}' for k, v in zip(KEYS
 say('')
 order = np.argsort(y)
 say('runs by score: ' + ', '.join(f'{rows[i]["point"]} {y[i]:.1f}' for i in order))
-say('surface minimum over the box: ' + ', '.join(f'{k} {v:.4g}' for k, v in zip(KEYS, uncoded(best))) + f'; predicted {bestValue:.2f}')
+say(f'surface minimum over the box{"" if BOX == 1 else f" held {(1 - BOX) / 2:.0%} of each range inside"}: ' + ', '.join(f'{k} {v:.4g}' for k, v in zip(KEYS, uncoded(best))) + f'; predicted {bestValue:.2f}')
 say('stationary point clipped to the box: ' + ', '.join(f'{k} {v:.4g}' for k, v in zip(KEYS, uncoded(clipped))) + f'; predicted {predict(clipped)[0]:.2f}')
 open(f'{SWEEP}/fit.txt', 'w').write('\n'.join(out) + '\n')
 print('\n'.join(out))
@@ -167,7 +183,8 @@ print('\n'.join(out))
 candidates = [{'name': f'p{int(rows[i]["point"]):02d}', 'point': int(rows[i]['point']), 'screenScore': y[i], 'predicted': predict(C[i])[0], **{k: float(rows[i][k]) for k in KEYS}} for i in order[:4]]
 minimum = {k: float(f'{v:.4g}') for k, v in zip(KEYS, uncoded(best))}
 candidates.append({'name': 'qmin', 'point': None, 'screenScore': None, 'predicted': float(bestValue), **minimum})
-candidates.append({'name': 'cmin', 'point': None, 'screenScore': None, 'predicted': float(predict(cbest)[0]), 'composed': float(cvalue), **{k: float(f'{v:.4g}') for k, v in zip(KEYS, uncoded(cbest))}})
+if not SECOND:
+    candidates.append({'name': 'cmin', 'point': None, 'screenScore': None, 'predicted': float(predict(cbest)[0]), 'composed': float(cvalue), **{k: float(f'{v:.4g}') for k, v in zip(KEYS, uncoded(cbest))}})
 zero = next(i for i, r in enumerate(rows) if r['point'] == '0')
 candidates.append({'name': 'base', 'point': 0, 'screenScore': y[zero], 'predicted': predict(C[zero])[0], **{k: float(rows[zero][k]) for k in KEYS}})
 json.dump({'surfaceMinimum': minimum, 'composedMinimum': {k: float(f'{v:.4g}') for k, v in zip(KEYS, uncoded(cbest))}, 'composedValue': float(cvalue), 'composedLoo': float(rmseComposed), 'lambda': float(lam), 'loo': float(loo), 'r2': float(r2)}, open(f'{SWEEP}/fit.json', 'w'), indent=1)
