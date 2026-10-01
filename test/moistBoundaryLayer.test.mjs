@@ -317,21 +317,22 @@ async function moistEngines(options = {}, moist = {}) {
   const cpu = Object.fromEntries(['entrainment', 'mixing', 'regime', 'radiativeVelocity', 'mixingTop', 'depth', 'cloudTopCooling'].map((name) => [name, Float64Array.from(layer[name])]));
   pair.phases.adjust(0, nC, dt);
   pair.phases.mixMomentum(0, nE, dt);
-  return { K: nK, C: nC, E: nE, kTop: layer.kTop, cpu, state, after, ph };
+  return { K: nK, C: nC, E: nE, kTop: layer.kTop, cpu, state, after, ph, mesh: m };
 }
 
 test('the moist boundary layer matches between the engines on a random set of columns in every regime: the regime, V, w_e, the coefficients, the depths and θ, q, qc and the wind after the step, with convection vetoed under coupled stratocumulus as well', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   for (const [label, options, moist] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }], ['no convection under coupled stratocumulus', {}, { coupledVeto: true }]]) {
     const run = await moistEngines(options, moist), { K: nK, C: nC, E: nE, kTop, cpu, ph } = run;
     let coupledPlumes = 0;
-    for (let i = 0; i < nC; i++) if (cpu.regime[i] === REGIME.COUPLED && ph.CUMF[i] > 0) coupledPlumes++;
+    for (let i = 0; i < nC; i++) if (ph.REGIME[i] === REGIME.COUPLED && ph.CUMF[i] > 0) coupledPlumes++;
     if (moist) assert.equal(coupledPlumes, 0, 'no plume rises from a coupled stratocumulus-topped layer');
     else if (label === 'defaults') assert.ok(coupledPlumes > 0, `${coupledPlumes} plumes rise from coupled layers without the veto`);
     const counts = [0, 0, 0, 0];
     let flips = 0, worstV = 0, worstW = 0, worstMix = 0, worstDepth = 0;
+    const parted = new Uint8Array(nC);
     for (let i = 0; i < nC; i++) {
       counts[cpu.regime[i]]++;
-      if (cpu.regime[i] !== ph.REGIME[i]) { flips++; continue; }
+      if (cpu.regime[i] !== ph.REGIME[i]) { flips++; parted[i] = 1; continue; }
       worstV = Math.max(worstV, Math.abs(cpu.radiativeVelocity[i] - ph.VRAD[i]) / Math.max(0.1, cpu.radiativeVelocity[i]));
       worstW = Math.max(worstW, Math.abs(cpu.entrainment[i] - ph.ENTRAIN[i]) / Math.max(1e-4, cpu.entrainment[i]));
       worstDepth = Math.max(worstDepth, Math.abs(cpu.depth[i] - ph.DEPTH[i]), Math.abs(cpu.mixingTop[i] - ph.MIXTOP[i]));
@@ -343,11 +344,15 @@ test('the moist boundary layer matches between the engines on a random set of co
     for (let i = 0; i < nC; i++) {
       let columnQ = 0;
       for (let k = 0; k < nK; k++) columnQ = Math.max(columnQ, Math.abs(run.state[4][k * nC + i] - run.after[4][k * nC + i]));
-      if (columnQ > 1e-5) { adjusted++; continue; }
+      if (columnQ > 1e-5) { adjusted++; parted[i] = 1; continue; }
       for (let k = 0; k < nK; k++) { const x = k * nC + i; theta = Math.max(theta, Math.abs(run.state[1][x] - run.after[1][x])); q = Math.max(q, Math.abs(run.state[4][x] - run.after[4][x])); qc = Math.max(qc, Math.abs(run.state[5][x] - run.after[5][x])); }
     }
-    for (let x = 0; x < nK * nE; x++) wind = Math.max(wind, Math.abs(run.state[2][x] - run.after[2][x]));
-    console.log(`${label}: ${nC} columns, stable/surface/decoupled/coupled ${counts.join('/')}; the regime differs on ${flips}; V by ${worstV.toExponential(1)} relative, w_e by ${worstW.toExponential(1)}, the coefficients by ${worstMix.toExponential(1)} of each column's largest, the depths by ${worstDepth.toExponential(1)} m; after the step (but for ${adjusted} columns whose near-neutral lowest layers the dry adjustment merges in one engine only) θ by ${theta.toExponential(1)} K, q by ${q.toExponential(1)}, qc by ${qc.toExponential(1)}, the wind by ${wind.toExponential(1)} m/s`);
+    let besideParted = 0;
+    for (let e = 0; e < nE; e++) {
+      if (parted[run.mesh.cellsOnEdge[2 * e]] || parted[run.mesh.cellsOnEdge[2 * e + 1]]) { besideParted++; continue; }
+      for (let k = 0; k < nK; k++) wind = Math.max(wind, Math.abs(run.state[2][k * nE + e] - run.after[2][k * nE + e]));
+    }
+    console.log(`${label}: ${nC} columns, stable/surface/decoupled/coupled ${counts.join('/')}; the regime differs on ${flips}; V by ${worstV.toExponential(1)} relative, w_e by ${worstW.toExponential(1)}, the coefficients by ${worstMix.toExponential(1)} of each column's largest, the depths by ${worstDepth.toExponential(1)} m; after the step (but for ${adjusted} columns whose near-neutral lowest layers the dry adjustment merges in one engine only) θ by ${theta.toExponential(1)} K, q by ${q.toExponential(1)}, qc by ${qc.toExponential(1)}, the wind by ${wind.toExponential(1)} m/s off the ${besideParted} edges beside a column that differs in regime or parts`);
     assert.ok(counts[REGIME.SURFACE] > nC / 20 && counts[REGIME.DECOUPLED] > nC / 20 && counts[REGIME.COUPLED] > nC / 10 && counts[REGIME.STABLE] > nC / 20, `regimes ${counts}`);
     assert.ok(flips <= nC / 100, `${flips} columns differ in regime`);
     assert.ok(worstV < 1e-4 && worstW < 2e-3 && worstMix < 2e-3 && worstDepth < 0.05, `V ${worstV}, w_e ${worstW}, coefficients ${worstMix}, depths ${worstDepth}`);

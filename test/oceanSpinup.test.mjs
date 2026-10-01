@@ -11,6 +11,8 @@ import { decodeState, encodeState } from '../js/stateFile.module.js';
 import { decodeForcing, forcingName } from '../js/forcing.module.js';
 import { savedSubsidence } from '../js/physics/regrid.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
+import { createModel } from '../js/model.module.js';
+import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -22,8 +24,8 @@ const root = new URL('..', import.meta.url).pathname;
 const topography = topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer);
 const N = 6;
 
-async function freshModel() {
-  const model = await createGpuModel(new Grid(N), { topography });
+async function freshModel(options = {}) {
+  const model = await createGpuModel(new Grid(N), { topography, ...options });
   const { state, mesh } = model;
   initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => state[a].set(values));
   for (let i = 0; i < mesh.nCells; i++) if (model.geography.land[i]) state[6][i] = 0;
@@ -43,6 +45,36 @@ async function loadInto(model, saved) {
   model.ocean.load(saved.ocean, state[3], state[6]);
   model.land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), vegetation: Float64Array.from(saved.land.vegetation) });
 }
+
+test('the ocean takes each cell\'s own drag coefficient: with the sea\'s at zero the stress vanishes on every edge between two sea cells on either engine, and with the default it does not', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const stressOf = async (dragCoefficient) => {
+    const model = await freshModel({ surface: { dragCoefficient } }), { mesh } = model, E = mesh.nEdges, ocean = model.oceanEngine;
+    for (let n = 0; n < ocean.everySteps; n++) await model.step(3600);
+    await model.settle();
+    const [[stress], physics] = await Promise.all([readRanges(model.gpu.device, ocean.buffers.OD, [{ offset: ocean.layout.OD.STRESS, length: E }]), model.gpu.downloadPhysics()]);
+    const cpu = createModel(new Grid(N), { topography, ocean: false, surface: { dragCoefficient } });
+    initializeState(cpu, { geostrophic: !cpu.surfaceGeopotential }).forEach((values, a) => cpu.state[a].set(values));
+    cpu.step(3600);
+    cpu.core.diagnose(cpu.state[0], cpu.state[1], cpu.state[4], cpu.state[5]);
+    cpu.surface.lowestWindSpeed(cpu.state[2]);
+    return { model, stress, drag: physics.DRAG, cpuStress: cpu.surface.stress(cpu.state) };
+  };
+  const off = await stressOf(0), on = await stressOf(SEA_DRAG), { mesh, geography } = off.model, land = geography.land;
+  let sea = 0, seaMoving = 0, cpuSeaMoving = 0, landMoving = 0;
+  for (let e = 0; e < mesh.nEdges; e++) {
+    const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+    if (!land[a] && !land[b]) {
+      sea++;
+      assert.ok(off.stress[e] === 0, `edge ${e} between sea cells on the GPU: ${off.stress[e]}`);
+      assert.ok(off.cpuStress[e] === 0, `edge ${e} between sea cells on the CPU: ${off.cpuStress[e]}`);
+      if (on.stress[e] !== 0) seaMoving++;
+      if (on.cpuStress[e] !== 0) cpuSeaMoving++;
+    } else if (land[a] && land[b] && off.cpuStress[e] !== 0) landMoving++;
+  }
+  for (let i = 0; i < mesh.nCells; i++) assert.equal(on.drag[i], Math.fround(land[i] ? LAND_DRAG : SEA_DRAG), `cell ${i}'s drag coefficient on the device`);
+  console.log(`${sea} edges between sea cells: no stress with the sea's drag at zero on either engine; with ${SEA_DRAG} the GPU ocean feels stress on ${seaMoving} of them and the CPU's on ${cpuSeaMoving}, while ${landMoving} edges between land cells keep their drag on the CPU`);
+  assert.ok(seaMoving > sea / 2 && cpuSeaMoving > sea / 2 && landMoving > 0, `${seaMoving} and ${cpuSeaMoving} of ${sea}, ${landMoving} land edges`);
+});
 
 test('the recorded stress and fluxes are the means of what each step handed the ocean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const model = await freshModel();

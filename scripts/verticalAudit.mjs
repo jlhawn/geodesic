@@ -5,8 +5,8 @@
 //   node scripts/verticalAudit.mjs <state.bin>
 // RADIATION (JSON) passes options to the model's radiation, e.g.
 // '{"subsidenceSmoothing":0}' for a deck that reads the flux unsmoothed,
-// MOIST (JSON) to its moist physics and BOUNDARY_LAYER (JSON) to its
-// boundary layer.
+// MOIST (JSON) to its moist physics, BOUNDARY_LAYER (JSON) to its
+// boundary layer and SURFACE (JSON) to its surface.
 // Signs: omega (Pa/s) > 0 and sink (mm/s) > 0 are descent.
 //
 // From the state's own winds (stage 0 of the next step): omega at the
@@ -38,7 +38,8 @@
 // down ("stood down"); beside the attribution, the
 // share failing each test on its own, and the deck's height after the
 // steps on which it ran, with its cloud layer's thickness at the step's
-// start and its liquid water path, uncapped and as the radiation caps it.
+// start and its liquid water path, uncapped and as the radiation caps it,
+// with the share of its running steps on which the cap binds.
 // After the window, the resolved inversion (the
 // interface of largest dθv/dz between 100 m and 3 km) and its θv jump.
 // "u" is twice the grid-noise standard error of a
@@ -69,13 +70,13 @@ import { REGIME } from '../js/physics/boundaryLayer.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/verticalAudit.mjs <state.bin>'); process.exit(1); }
-const STEPS = Number(process.env.STEPS ?? 8), RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}');
+const STEPS = Number(process.env.STEPS ?? 8), RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
 const t0 = performance.now();
 const say = (s = '') => console.log(s);
 
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER });
+const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land } = model;
 const { K, C, E, levels, sigmaMid, sigmaLower, dSigma, R, g, cp, p0, exnerLayer, exnerLower, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;
@@ -205,7 +206,7 @@ const stage0 = (performance.now() - t0) / 1000;
 
 // ---------------- the window: rain, firing, low cloud, the deck's start ----------------
 const longwave = dycomsLongwave();
-const acc = Object.fromEntries(['fire', 'convect', 'low', 'cloudy', 'eis', 'eisN', 'attempt', 'h', 'jump', 'runs', 'offSubsidence', 'offJump', 'offMemory', 'offStood', 'failSubsidence', 'failJump', 'ran', 'ranH', 'lowCover', 'lowWater', 'ranThick', 'ranCloudy', 'ranPath', 'ranPathSeen', 'evaporation', 'stable', 'surface', 'decoupled', 'coupled', 'cooling', 'velocity', 'entrainment', 'mixingTop'].map((name) => [name, new Float64Array(C)]));
+const acc = Object.fromEntries(['fire', 'convect', 'low', 'cloudy', 'eis', 'eisN', 'attempt', 'h', 'jump', 'runs', 'offSubsidence', 'offJump', 'offMemory', 'offStood', 'failSubsidence', 'failJump', 'ran', 'ranH', 'lowCover', 'lowWater', 'ranThick', 'ranCloudy', 'ranPath', 'ranPathSeen', 'ranCapped', 'evaporation', 'stable', 'surface', 'decoupled', 'coupled', 'cooling', 'velocity', 'entrainment', 'mixingTop'].map((name) => [name, new Float64Array(C)]));
 const predicted = { mean: new Float64Array(C).fill(NaN), gate: new Float64Array(C).fill(NaN), runs: new Uint8Array(C) };
 const replica = { mean: 0, gate: 0, decisions: 0, checked: 0 };
 function deckStart() {
@@ -258,6 +259,7 @@ function deckAfter() {
     if (ran) {
       acc.ran[i] += 1; acc.ranH[i] += radiation.mlmHeight[i];
       acc.ranPath[i] += radiation.mlmWater[i]; acc.ranPathSeen[i] += Math.min(gates.stratusWaterMax, radiation.mlmWater[i]);
+      if (radiation.mlmWater[i] > gates.stratusWaterMax) acc.ranCapped[i] += 1;
     }
   }
 }
@@ -370,7 +372,7 @@ function deckRows(name, mask) {
   row(`${name}: deck runs, share of column-steps`, share(acc.runs), 3, 0.6, 1, 0, `off: subsidence ${f(share(acc.offSubsidence), 3)}, off: jump ${f(share(acc.offJump), 3)}, off: gate memory ${f(share(acc.offMemory), 3)}, stood down ${f(share(acc.offStood), 3)}; failing the subsidence test ${f(share(acc.failSubsidence), 3)}, the jump test ${f(share(acc.failJump), 3)}`);
   row(`${name}: deck height where it runs (m)`, ratio(acc.ranH, acc.ran, mask), 0, 1000, 1500);
   row(`${name}: deck's cloud-layer thickness where it runs (m)`, ratio(acc.ranThick, acc.ranCloudy, mask), 0, 200, 400, 0, `cloudy on ${f(ratio(acc.ranCloudy, acc.runs, mask), 3)} of its running steps, at the step's start`);
-  row(`${name}: deck's liquid water path where it runs (g/m2)`, 1000 * ratio(acc.ranPath, acc.ran, mask), 1, 50, 150, 0, `as the radiation takes it, capped at ${f(1000 * gates.stratusWaterMax, 0)}: ${f(1000 * ratio(acc.ranPathSeen, acc.ran, mask), 1)}`);
+  row(`${name}: deck's liquid water path where it runs (g/m2)`, 1000 * ratio(acc.ranPath, acc.ran, mask), 1, 50, 150, 0, `as the radiation takes it, capped at ${f(1000 * gates.stratusWaterMax, 0)}: ${f(1000 * ratio(acc.ranPathSeen, acc.ran, mask), 1)}, the cap binding on ${f(ratio(acc.ranCapped, acc.ran, mask), 3)} of its running steps`);
 }
 const windowMean = (x, mask) => mean(Float64Array.from(x, (v) => v / STEPS), mask);
 function boundaryRows(name, mask) {

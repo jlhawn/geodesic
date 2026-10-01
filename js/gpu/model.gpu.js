@@ -1,7 +1,7 @@
 import { buildMesh } from '../mesh.module.js';
 import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING } from '../dynamics/sigmaCore.module.js';
 import { createSeaIce } from '../physics/ice.module.js';
-import { createSurface } from '../physics/surface.module.js';
+import { createSurface, SEA_DRAG, LAND_DRAG } from '../physics/surface.module.js';
 import { createRadiation } from '../physics/radiation.module.js';
 import { createMoistPhysics } from '../physics/moist.module.js';
 import { LATENT_HEAT } from '../physics/moist.module.js';
@@ -44,7 +44,7 @@ export async function createGpuModel(gridOrMesh, {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
-  const dragCoefficients = geography ? Float64Array.from(geography.land, (l) => (l ? landOptions.dragCoefficient ?? 1.5e-3 : surface.dragCoefficient ?? 1.5e-3)) : null;
+  const dragCoefficients = geography ? Float64Array.from(geography.land, (l) => (l ? landOptions.dragCoefficient ?? LAND_DRAG : surface.dragCoefficient ?? SEA_DRAG)) : null;
   let spacing = 0;
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;
