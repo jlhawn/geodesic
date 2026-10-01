@@ -393,7 +393,7 @@ test('a trade-wind column lifts exactly the shallow cumulus plume and rains noth
 
 test('a drier free troposphere entrains the plume to a lower top, and a dry enough one keeps it shallow', () => {
   const run = (factor) => {
-    const model = plumeColumn({ plumeCape: 70, plumeEntrainment: 0.1 }, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? factor : 1), saturationHumidity(air.T, p)) }; });
+    const model = plumeColumn({ plumeCape: 70 }, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? factor : 1), saturationHumidity(air.T, p)) }; });
     model.moist.adjust(model.state, 0, 1, 600);
     return { top: model.moist.cumulusTop[0], deep: model.moist.deep.deep, cape: model.moist.deep.cape, rain: model.moist.rain[0] };
   };
@@ -559,7 +559,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
 });
 
 test('the stratiform lifetime matches between the engines on random columns of every regime, mixing top, EIS share and sea-ice cover, and keeps cloud the short lifetime would rain out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const long = await parity({ cloudLifetime: 3600, stratiformLifetime: 3 * 3600 }), short = await parity({ cloudLifetime: 3600, stratiformLifetime: null });
+  const long = await parity({}), short = await parity({ stratiformLifetime: null });
   let cloudy = 0, kept = 0, gpuKept = 0;
   for (let x = 0; x < long.cloud.length; x++) {
     if (!(short.cloud[x] > 0)) continue;

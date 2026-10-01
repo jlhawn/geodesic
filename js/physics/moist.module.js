@@ -164,8 +164,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * autoconversionRate, and of all cloud water over cloudLifetime
  * (`upperCloudLifetime` where the layer's pressure is below `shallowTop`,
  * the anvils' layers; null: cloudLifetime throughout). Stratiform cloud
- * under an inversion has its own lifetime: the lifetime moves to
- * `stratiformLifetime` (1 h; null: no such cloud) by the layer's share
+ * under an inversion lives longer: the lifetime moves to
+ * `stratiformLifetime` (3 h; null: no such cloud) by the layer's share
  * s, 0 in the layers at and below the top of a plume that ran in the
  * column this step (cumulusTop), whose cloud the plume detrained, and
  * elsewhere the larger of the cell's sea-ice cover and, with the moist
@@ -193,29 +193,29 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  *
  * Defaults: inhibitionThreshold 50 J/kg, shallowTop 700 hPa,
  * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
- * cloudLifetime 1.579 h, no upperCloudLifetime, stratiformLifetime 1 h, autoconversionFloor 'lowest', rainEvaporation 1,
+ * cloudLifetime 1 h, no upperCloudLifetime, stratiformLifetime 3 h, autoconversionFloor 'lowest', rainEvaporation 1,
  * cumulusClosure 0.06, cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
  * 3e-3 /m, cumulusSourceDepth 50 hPa, cumulusBoundaryLoss 0.1,
  * cumulusFriction 1, cumulusOvershoot 1, cumulusUpdraft 1 m/s, no
  * cumulusRain, cumulusSource 'mean' (or 'lowest': the plume leaves with
  * the lowest layer's air), plumeClosure 'separate',
  * plumeCapeParcel 'plume', plumeSource 'mean', plumeVelocity 1 m/s,
- * plumeAcceleration 1/3, plumeDrag 1, plumeEntrainment 0.05,
+ * plumeAcceleration 1/3, plumeDrag 1, plumeEntrainment 0.1,
  * plumeEntrainmentFloor 1e-4 /m, plumeMassGrowth 0, plumeConsumption 'all'
  * (or 'buoyant': F counts only the layers whose work the CAPE counts),
  * plumeRainRate 3e-3 /m,
  * plumeRainThreshold 0, plumeRainEvaporation 1e-3 /m, downdraftShare 0.3,
- * downdraftEntrainment 1e-4 /m, plumeCape 40 J/kg, plumeRelaxation 1 h, no
+ * downdraftEntrainment 1e-4 /m, plumeCape 120 J/kg, plumeRelaxation 1 h, no
  * plumeMomentum.
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
-  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 1.579 * 3600, upperCloudLifetime: null, stratiformLifetime: 3600, rainEvaporation: 1, autoconversionFloor: 'lowest',
+  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest',
   deckVeto: true, coupledVeto: false, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.06, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean',
-  plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.05, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
-  plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, plumeCape: 40, plumeRelaxation: 3600, plumeMomentum: false, plumeConsumption: 'all',
+  plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
+  plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: false, plumeConsumption: 'all',
 };
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
   'downdraftEvaporation', 'downdraftSpread', 'shallowHumidity', 'shallowCape', 'shallowInhibition', 'shallowStability', 'shallowReference', 'shallowRain', 'boundaryParcel', 'adjustFrom'];
