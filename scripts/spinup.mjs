@@ -43,7 +43,12 @@
 // SYNC_CMD (a shell command run after every snapshot, forcing file and log
 // update with the file's path as $1, see scripts/runControl.mjs),
 // STOP_AFTER_STEPS (for tests: stop as on SIGTERM once this many steps
-// have run). A fresh start can take from saved states: FROM, a state at
+// have run), DAY_MEAN (with BATCH 1, a number of evenly spaced samples a
+// day, the last at the day's end, whose mean albedo, ASR, OLR and precip
+// each day line adds; each sample is a diagnostics frame, so the day line's
+// own precip and the end-of-segment rain then cover only the last interval,
+// and the frames' rain bookkeeping moves the run at rounding level).
+// A fresh start can take from saved states: FROM, a state at
 // the same N, gives the ocean, the land, the sea-surface temperature of
 // its mixed layer and the land-surface temperature and, with
 // ATMOSPHERE=carry (the default), its atmosphere (pi, theta, u, q, qc and
@@ -91,7 +96,7 @@ const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MIN
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
 const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
-const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
+const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity), DAY_MEAN = Number(process.env.DAY_MEAN ?? 0);
 const ATMOSPHERE = process.env.ATMOSPHERE ?? 'carry';
 if (ATMOSPHERE !== 'carry' && ATMOSPHERE !== 'fresh') throw new Error(`ATMOSPHERE is carry or fresh, not ${ATMOSPHERE}`);
 const log = (line) => { console.log(line); appendFileSync(`${OUT}/${TAG}.log`, line + '\n'); };
@@ -113,6 +118,9 @@ const climatology = !saved && !process.env.FROM && chosen !== 'none' ? chosen : 
 const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, ...DAMPING, levels });
 const { mesh, core, state } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
+if (DAY_MEAN && (BATCH !== 1 || perDay % DAY_MEAN)) throw new Error(`DAY_MEAN needs BATCH 1 and must divide the ${perDay} steps of a day`);
+const sampled = { n: 0, albedo: 0, absorbed: 0, outgoing: 0, precipitation: 0 };
+const sample = (d) => { sampled.n++; sampled.albedo += d.planetaryAlbedo; sampled.absorbed += d.absorbedSolar; sampled.outgoing += d.outgoingLongwave; sampled.precipitation += d.precipitation; };
 function loadSaved(saved) {
   ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
   model.seaIce.load(state[6], saved.concentration ?? null);
@@ -220,6 +228,7 @@ for (;;) {
     while (step < perDay) {
       await model.step(dt); recorder?.step(); step++; taken++;
       if (step % 8 === 0) await model.settle();
+      if (DAY_MEAN && step < perDay && step % (perDay / DAY_MEAN) === 0) sample(await model.diagnostics());
       if (halted() && step % everySteps === 0) break;
     }
   } else {
@@ -234,6 +243,12 @@ for (;;) {
   step = 0;
   day++;
   const d = await model.diagnostics();
+  let dayMean = '';
+  if (DAY_MEAN) {
+    sample(d);
+    dayMean = `; mean of ${sampled.n} samples: albedo ${(sampled.albedo / sampled.n).toFixed(3)}, ASR ${(sampled.absorbed / sampled.n).toFixed(1)} OLR ${(sampled.outgoing / sampled.n).toFixed(1)} W/m², precip ${(86400 * sampled.precipitation / sampled.n).toFixed(2)} mm/d`;
+    Object.keys(sampled).forEach((key) => { sampled[key] = 0; });
+  }
   await readSplit();
   if (recorder) {
     const file = `${RECORD}/${forcingName(day)}`;
@@ -244,7 +259,7 @@ for (;;) {
   const [north, south] = await iceArea();
   iceNorth += north; iceSouth += south;
   const minutes = (performance.now() - start) / 60000;
-  log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}`);
+  log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}${dayMean}`);
   if (!Number.isFinite(d.meanSurfaceT) || !Number.isFinite(d.maxWind) || !Number.isFinite(d.oceanSpeed)) { log(`NaN on day ${day}; stopping`); await hook.drain(); process.exit(2); }
   if (minutes >= MINUTES || day >= DAYS || halted()) break;
 }
