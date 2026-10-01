@@ -774,9 +774,9 @@ export async function createGpuCore(mesh, {
     });
   }
 
-  const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, boundaryDepth: null };
-  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, boundaryDepth } = {}) {
-    for (const [name, value] of Object.entries({ land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, boundaryDepth })) if (value !== undefined) retained[name] = value;
+  const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, boundaryDepth: null, mixingTop: null, regime: null };
+  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, boundaryDepth, mixingTop, regime } = {}) {
+    for (const [name, value] of Object.entries({ land, drag, soil, snow, vegetation, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, boundaryDepth, mixingTop, regime })) if (value !== undefined) retained[name] = value;
     const ph = new Float32Array(L.PH.total);
     for (let i = 0; i < C; i++) {
       const lat = mesh.latCell[i];
@@ -796,6 +796,8 @@ export async function createGpuCore(mesh, {
       ph[L.PH.CONVMEAN + i] = retained.convectiveRain ? retained.convectiveRain[i] : 0;
       ph[L.PH.CONDMEAN + i] = retained.largeScaleRain ? retained.largeScaleRain[i] : 0;
       ph[L.PH.DEPTH + i] = retained.boundaryDepth ? retained.boundaryDepth[i] : 0;
+      ph[L.PH.MIXTOP + i] = retained.mixingTop ? retained.mixingTop[i] : 0;
+      ph[L.PH.REGIME + i] = retained.regime ? retained.regime[i] : 0;
     }
     device.queue.writeBuffer(buffers.PH, 0, ph);
   }

@@ -544,7 +544,7 @@ test('a ceilingInversion below minimumInversion holds the deck under a weaker ju
   }
 });
 
-test('the GPU model sends the deck\'s running-mean subsidence, carried height and gate and the boundary layer\'s depth to the device on load and reads them back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the GPU model sends the deck\'s running-mean subsidence, carried height and gate and the boundary layer\'s depth, mixing top and regime to the device on load and reads them back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const model = await createGpuModel(new Grid(6), { ocean: false, radiation: { mixedLayerDeck: true } });
   const C = model.mesh.nCells, init = initializeState(model, {});
@@ -554,14 +554,17 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   model.radiation.mlmSubsidence.set(loaded);
   model.radiation.mlmHeight.set(heights);
   model.radiation.mlmGate.set(gates);
-  const depth = Float64Array.from({ length: C }, (_, i) => 300 + 23 * (i % 13));
+  const depth = Float64Array.from({ length: C }, (_, i) => 300 + 23 * (i % 13)), top = Float64Array.from(depth, (d, i) => d + 50 * (i % 4)), regimes = Float64Array.from({ length: C }, (_, i) => i % 4);
   model.boundaryLayer.depth.set(depth);
+  model.boundaryLayer.mixingTop.set(top);
+  model.boundaryLayer.regime.set(regimes);
   model.load();
   const device = await model.gpu.downloadPhysics();
   for (let i = 0; i < C; i++) {
     assert.equal(device.MLMSUB[i], Math.fround(loaded[i]), `cell ${i} on the device`);
     assert.ok(device.MLMH[i] === Math.fround(heights[i]) && device.MLMGATE[i] === Math.fround(gates[i]), `cell ${i}: height and gate on the device`);
     assert.equal(device.DEPTH[i], Math.fround(depth[i]), `cell ${i}: boundary-layer depth on the device`);
+    assert.ok(device.MIXTOP[i] === Math.fround(top[i]) && device.REGIME[i] === regimes[i], `cell ${i}: mixing top and regime on the device`);
   }
   await model.step(900); await model.step(900);
   await model.sync();
@@ -570,6 +573,7 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   for (let i = 0; i < C; i++) {
     assert.ok(model.radiation.mlmHeight[i] === after.MLMH[i] && model.radiation.mlmGate[i] === after.MLMGATE[i], `cell ${i}: height and gate mirrored`);
     assert.equal(model.boundaryLayer.depth[i], after.DEPTH[i], `cell ${i}: boundary-layer depth mirrored`);
+    assert.ok(model.boundaryLayer.mixingTop[i] === after.MIXTOP[i] && model.boundaryLayer.regime[i] === after.REGIME[i], `cell ${i}: mixing top and regime mirrored`);
     assert.equal(mean[i], after.MLMSUB[i], `cell ${i} mirrored`);
     assert.ok(Math.abs(mean[i] - loaded[i]) < 1e-4, `cell ${i}: ${mean[i]} from ${loaded[i]}`);
     if (mean[i] !== Math.fround(loaded[i])) moved++;
