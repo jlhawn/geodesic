@@ -169,7 +169,7 @@ test('interfacial drag, constant or from the shear, moves momentum between the l
     return ocean;
   };
   const still = build({ shearMixing: false, interiorShearMixing: false, interfacialDrag: 0 }), du0 = still.stages[0][1];
-  for (const options of [{ shearMixing: false, interiorShearMixing: false, interfacialDrag: 5e-5 }, { shearMixing: false, interfacialDrag: 5e-5 }, { shearMixing: true, interfacialDrag: 5e-5 }]) {
+  for (const options of [{ shearMixing: false, interiorShearMixing: false, interfacialDrag: 5e-5 }, { shearMixing: false, interiorShearMixing: true, interfacialDrag: 5e-5 }, { shearMixing: true, interfacialDrag: 5e-5 }]) {
     const dragging = build(options), L = dragging.layers;
     const hEdge = new Float64Array(dragging.shared.hEdge), du = dragging.stages[0][1];
     let worst = 0, largest = 0, thin = 0;
@@ -228,7 +228,7 @@ test('under shearMixing the drag between the mixed layer and the class beneath f
 });
 
 test('under interiorShearMixing the drag between two interior classes follows the Pacanowski–Philander viscosity of their Richardson number down to backgroundViscosity over their spacing, while the mixed layer\'s base keeps interfacialDrag', () => {
-  const ocean = createOcean(mesh, { everySteps: 1 }), constant = createOcean(mesh, { everySteps: 1, interiorShearMixing: false });
+  const ocean = createOcean(mesh, { everySteps: 1, interiorShearMixing: true }), constant = createOcean(mesh, { everySteps: 1 });
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2);
   for (const o of [ocean, constant]) o.initialize(Float64Array.from(surfaceT), new Float64Array(C));
   const L = ocean.layers, rho = ocean.densities, hEdge = new Float64Array(ocean.shared.hEdge), g = 9.81, rho0 = 1025;
