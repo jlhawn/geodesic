@@ -42,6 +42,11 @@
 // with the share of its running steps on which the cap binds.
 // After the window, the resolved inversion (the
 // interface of largest dθv/dz between 100 m and 3 km) and its θv jump.
+// The cloud-radiative effects, global and over 30S-30N: shortwave (ASR
+// less clear-sky ASR) and longwave (clear-sky OLR less OLR), the day means
+// of the state's last day where the state carries them, else the
+// window's means (the radiation runs its clear-sky pass here unless
+// RADIATION sets clearSkyPass false), with the window's in the note.
 // "u" is twice the grid-noise standard error of a
 // snapshot's box mean; a verdict is "too noisy to tell" when u exceeds
 // half the value.
@@ -54,7 +59,8 @@
 // central and east Pacific ITCZ at 5-12N rising at 0.05-0.10 Pa/s at 500
 // hPa with 6-9 mm/d, the zonal-mean rain peaking at 6-7 mm/d near 8N
 // (GPCP); the winter Hadley cell 100-200e9 kg/s and the summer one
-// 10-50e9 kg/s.
+// 10-50e9 kg/s; the global cloud-radiative effects -47 +- 4 W/m2
+// shortwave and +26 +- 3 W/m2 longwave (CERES EBAF).
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
@@ -76,7 +82,7 @@ const say = (s = '') => console.log(s);
 
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land } = model;
 const { K, C, E, levels, sigmaMid, sigmaLower, dSigma, R, g, cp, p0, exnerLayer, exnerLower, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;
@@ -319,6 +325,7 @@ for (let n = 0; n < STEPS; n++) {
   }
 }
 const perDay = 86400 / (STEPS * dt);
+if (radiation.clearSkyPass) radiation.readMeans(STEPS);
 const itczProfile = (() => {
   const perStep = 86400 / dt, conv = Float64Array.from(heating.convection, (x) => x / heating.fired * perStep), large = Float64Array.from(heating.largeScale, (x) => x / heating.area * perStep);
   const p = Float64Array.from(heating.pressure, (x) => x / heating.area / 100), z = Float64Array.from(heating.height, (x) => x / heating.area);
@@ -417,6 +424,16 @@ row('global rain (mm/d)', mean(rain, everywhere), 2, 2.6, 2.8, 0, `convective sh
 row('global evaporation (mm/d)', windowMean(acc.evaporation, everywhere), 2, 2.6, 2.8);
 row('convective share of the rain, 15S-15N', mean(convective, tropics) / mean(rain, tropics), 2, NaN, NaN, 0, `15S-15N rain ${f(mean(rain, tropics), 2)} mm/d`);
 row('zonal-mean rain peak (mm/d)', zonalPeak.value, 2, 6, 7, 0, `at ${f(zonalPeak.lat, 1)} deg; Earth near 8N`);
+{
+  const cloudBand = boxMask([-30, 30, -180, 180], everywhere), dayMeans = !!saved.meanShortwaveCloudEffect;
+  const field = (name) => (dayMeans ? Float64Array.from(saved[name]) : radiation[name]);
+  const windowNote = (name, mask) => (radiation.clearSkyPass ? `the window's ${STEPS} steps ${f(mean(radiation[name], mask), 1)}` : 'no clear-sky pass in the window');
+  const source = dayMeans ? 'day mean of the state\'s last day' : `mean over the window's ${STEPS} steps`;
+  if (dayMeans || radiation.clearSkyPass) for (const [name, mask, global] of [['global', everywhere, true], ['30S-30N', cloudBand, false]]) {
+    row(`${name} shortwave cloud effect, ${source} (W/m2)`, mean(field('meanShortwaveCloudEffect'), mask), 1, global ? -43 : NaN, global ? -51 : NaN, 0, `${windowNote('meanShortwaveCloudEffect', mask)}${global ? '' : '; Earth -47 +- 4 globally'}`);
+    row(`${name} longwave cloud effect, ${source} (W/m2)`, mean(field('meanLongwaveCloudEffect'), mask), 1, global ? 23 : NaN, global ? 29 : NaN, 0, `${windowNote('meanLongwaveCloudEffect', mask)}${global ? '' : '; Earth +26 +- 3 globally'}`);
+  }
+}
 const grid = noise(omega700, everywhere);
 row('omega700 grid-scale share, global (white noise 1.167)', grid.ratio, 3, 0, 0.065, 0, `SE Pacific ${f(noise(omega700, sePacific).ratio, 3)}`);
 const sh = hadley(-35, 15, -1), nh = hadley(0, 35, 1);

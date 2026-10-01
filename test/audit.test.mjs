@@ -58,11 +58,18 @@ test('scripts/verticalAudit.mjs prints every headline number of a saved state wi
   const [pi, theta, u, surfaceT, q, qc, ice] = model.state, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
   const dir = mkdtempSync(join(tmpdir(), 'verticalAudit-')), file = join(dir, 'audit12_day0000.bin');
   writeFileSync(file, encodeState({ N: 12, K: model.core.K, day: 0, time: 0, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
-  const run = spawnSync(process.execPath, [new URL('../scripts/verticalAudit.mjs', import.meta.url).pathname, file], { env: { ...process.env, STEPS: '2' }, encoding: 'utf8' });
+  const withEffects = join(dir, 'audit12_day0001.bin'), C = model.mesh.nCells;
+  writeFileSync(withEffects, encodeState({ N: 12, K: model.core.K, day: 1, time: 0, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize(), meanShortwaveCloudEffect: new Float64Array(C).fill(-40), meanLongwaveCloudEffect: new Float64Array(C).fill(25) }));
+  const audit = (state) => spawnSync(process.execPath, [new URL('../scripts/verticalAudit.mjs', import.meta.url).pathname, state], { env: { ...process.env, STEPS: '2' }, encoding: 'utf8' });
+  const run = audit(file), saved = audit(withEffects);
   rmSync(dir, { recursive: true, force: true });
   assert.equal(run.status, 0, run.stderr);
+  assert.equal(saved.status, 0, saved.stderr);
   const lines = run.stdout.split('\n').filter((line) => line.includes(' Earth '));
-  assert.equal(lines.length, 77, `${lines.length} rows`);
+  assert.equal(lines.length, 81, `${lines.length} rows`);
+  for (const name of ['global shortwave cloud effect', 'global longwave cloud effect', '30S-30N shortwave cloud effect', '30S-30N longwave cloud effect']) assert.ok(lines.some((line) => line.includes(`${name}, mean over the window's 2 steps (W/m2)`)), `a row for the window's ${name}`);
+  assert.match(saved.stdout, /global shortwave cloud effect, day mean of the state's last day \(W\/m2\) +-40\.0  Earth -43\.0\.\.-51\.0  -> too weak by x1\.08  \[the window's 2 steps -?[0-9.]+\]/);
+  assert.match(saved.stdout, /30S-30N longwave cloud effect, day mean of the state's last day \(W\/m2\) +25\.0  Earth n\/a\.\.n\/a  -> n\/a  \[the window's 2 steps -?[0-9.]+; Earth \+26 \+- 3 globally\]/);
   for (const name of ['SE Pacific 10-30S 110-80W: rain', 'Peru 5-20S 90-75W: columns firing a step', "deck's virtual jump above h", 'estimated inversion strength', 'saved running-mean deck sink', 'deck-height sink now, as the dynamics leaves it', 'deck-height sink now, as the deck reads it, 2 ring passes', 'omega700 (Pa/s)', 'low cloud', "deck's start height h", 'deck runs, share of column-steps', 'deck height where it runs', "deck's cloud-layer thickness where it runs", "deck's liquid water path where it runs", 'global evaporation (mm/d)', 'resolved inversion (m)', "resolved inversion's thetaV jump", 'Pacific ITCZ 5-12N 160E-100W: omega500', 'zonal-mean rain peak', 'omega700 grid-scale share', 'SH Hadley peak', 'NH Hadley peak', 'convective heating peak (hPa)', 'large-scale heating below 1 km', 'global rain (mm/d)', 'convective share of the rain, 15S-15N', 'low-cloud cover, radiative', 'low-cloud water path in cloud', 'coupled stratocumulus share', 'cloud-top cooling', 'Namibia 10-20S 0-10E: rain', 'California 20-30N 130-120W: low-cloud cover']) {
     assert.ok(lines.some((line) => line.includes(name)), `a row for ${name}`);
   }
