@@ -468,6 +468,20 @@ test('over six steps the carried inversion height, the gate and the deck they gi
   assert.ok(held > 0.5 * C && capped.height.rmsRel < 1e-5 && capped.mlmWater.rmsRel < 1e-4 && capped.cover.maxDiff < 1e-3, `held ${held}, height rms ${capped.height.rmsRel}, water rms ${capped.mlmWater.rmsRel}, cover ${capped.cover.maxDiff}`);
 });
 
+test('with deckRest \'inversion\' the carried height starts and rests at the inversion ceiling alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const running = await mixedLayerPair(4, { deckRest: 'inversion' }), resting = await mixedLayerPair(4, { deckRest: 'inversion', seed: 5e-3, height: 300 });
+  const { C, model } = resting, { geopotential, g } = model.core.diagnostics, K = model.core.K;
+  let risen = 0;
+  for (let i = 0; i < C; i++) if (!(resting.tops[i] > 0) && resting.heights[i] > 300 + 1) risen++;
+  console.log(`four steps: unset heights start at the ceiling and the deck runs on ${running.decked} of ${C} cells (GPU ${running.gpuDecked}), height rms ${running.height.rmsRel.toExponential(1)}, gate max ${running.gate.maxDiff.toExponential(1)}, cover max ${running.cover.maxDiff.toExponential(1)}; under ascent ${risen} heights seeded at 300 m rise toward the ceiling while the deck rests, height rms ${resting.height.rmsRel.toExponential(1)}, max ${resting.height.maxDiff.toExponential(1)} m`);
+  assert.ok(running.decked > 0.5 * C && running.decked === running.gpuDecked, `deck on ${running.decked}, GPU ${running.gpuDecked}`);
+  assert.ok(running.height.rmsRel < 1e-5 && running.gate.maxDiff < 1e-6 && running.cover.maxDiff < 1e-3 && running.mlmWater.rmsRel < 1e-4, `height ${running.height.rmsRel}, gate ${running.gate.maxDiff}, cover ${running.cover.maxDiff}, water ${running.mlmWater.rmsRel}`);
+  assert.ok(risen > 0.5 * C, `${risen} resting heights rose`);
+  assert.ok(resting.height.rmsRel < 1e-5 && resting.gate.maxDiff < 1e-6, `height ${resting.height.rmsRel}, gate ${resting.gate.maxDiff}`);
+  const ceiling = (i) => { let k = K - 1; while (model.core.sigmaMid[k] >= 0.85) k--; return geopotential[k * C + i] / g - 1; };
+  for (let i = 0; i < C; i++) if (resting.tops[i] > 0 || resting.heights[i] > 300 + 1) assert.ok(resting.heights[i] <= ceiling(i) + 100, `cell ${i}: ${resting.heights[i]} against the ceiling near ${ceiling(i)}`);
+});
+
 test('the GPU model sends the deck\'s running-mean subsidence, carried height and gate, the convection\'s activity and the boundary layer\'s depth to the device on load and reads them back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const model = await createGpuModel(new Grid(6), { ocean: false, radiation: { mixedLayerDeck: true } });

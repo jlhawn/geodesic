@@ -806,6 +806,42 @@ test('the gates switch the deck through their running mean: a standing deck outl
   core.diagnostics.piSigmaDot.fill(0);
 });
 
+test('with deckRest \'inversion\' a deck whose boundary layer is a shallow subcloud layer under a higher inversion starts and rests at the inversion ceiling, passes its jump test there and forms; with \'depth\' it rests at the Richardson depth, finds no jump and never forms', () => {
+  const column = mixedLayerColumn(0.4), { g, geopotential } = core.diagnostics;
+  for (let i = 0; i < C; i++) column.depth[i] = geopotential[(K - 1) * C + i] / g + 50;
+  const dt = 3600, relaxed = Math.exp(-dt / DAY);
+  const outcome = (deckRest) => {
+    const r = createRadiation(mesh, core, { subsidenceMemory: 1e-9, deckRest });
+    r.setTime(0);
+    r.mlmGate.fill(0);
+    const noon = brightest(r), top = boundaryLayerTop(column, noon);
+    let formed = 0, heights = [];
+    for (let n = 1; n <= 48; n++) {
+      const deck = mixedLayerRun(r, noon, column, 1, dt);
+      heights.push(r.mlmHeight[noon]);
+      if (!formed && deck.mlmTop > 0) formed = n;
+    }
+    return { r, noon, top, formed, heights };
+  };
+  const shallow = outcome('depth'), lifted = outcome('inversion');
+  const freeTroposphere = geopotential[(K - 4) * C + lifted.noon] / g - lifted.top.offset, ceiling = freeTroposphere - 1;
+  assert.equal(shallow.formed, 0, 'resting at the Richardson depth the deck finds no jump');
+  assert.ok(shallow.heights.every((h) => h === 0), 'and never sets a height');
+  assert.ok(lifted.formed >= 12 && lifted.formed <= 24, `resting at the ceiling the deck forms after ${lifted.formed} h`);
+  for (let n = 0; n < lifted.formed - 1; n++) assert.equal(lifted.heights[n], 0, `hour ${n + 1}: an unset height stays unset while the deck waits`);
+  assert.ok(lifted.heights[lifted.formed - 1] > lifted.top.height + 100 && lifted.heights[lifted.formed - 1] <= ceiling + 1e-9, `the deck forms at ${lifted.heights[lifted.formed - 1]} m, the Richardson depth ${lifted.top.height} m, the ceiling ${ceiling} m`);
+  const { r, noon, top } = lifted;
+  r.mlmHeight[noon] = top.height + 10;
+  r.mlmGate[noon] = 0;
+  const before = r.mlmHeight[noon];
+  mixedLayerRun(r, noon, column, 1, dt);
+  const expected = ceiling + (before - ceiling) * relaxed;
+  assert.ok(r.mlmGate[noon] < 0.5 && Math.abs(r.mlmHeight[noon] - expected) < 1e-9 * expected, `a resting height relaxes toward the ceiling: ${r.mlmHeight[noon]} against ${expected}`);
+  assert.throws(() => createRadiation(mesh, core, { deckRest: 'ceiling' }));
+  console.log(`a 289 K mixed layer to σ 0.9 under a 298 K free troposphere with its Richardson depth 50 m above the lowest layer (${top.height.toFixed(0)} m): resting at the depth no deck in 48 h; resting at the ceiling (${ceiling.toFixed(0)} m) the deck forms after ${lifted.formed} h at ${lifted.heights[lifted.formed - 1].toFixed(0)} m and stands at ${lifted.heights[47].toFixed(0)} m after 48 h`);
+  core.diagnostics.piSigmaDot.fill(0);
+});
+
 function modelDigest(radiation, moist = { convection: 'bettsMiller', shallowScheme: 'bettsMiller' }) {
   const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0 }, divergenceDamping: 0, moist, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 } }, ...(radiation ? { radiation } : {}) });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
