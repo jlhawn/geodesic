@@ -359,7 +359,7 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
  * column's own inversion: the second step, the first with a diagnosed
  * boundary layer, carries the deck.
  */
-async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = {}, ...options } = {}) {
+async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = {}, step = null, ...options } = {}) {
   const physics = { mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options };
   const model = createModel(new Grid(6), { ocean: false, radiation: physics, moist });
   const init = initializeState(model, {});
@@ -367,7 +367,7 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = {}, ...
   const { K, sigmaMid } = model.core, C = model.mesh.nCells, theta = model.state[1], q = model.state[4];
   for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) {
     if (sigmaMid[k] < 0.85) theta[k * C + i] += 10;
-    else { theta[k * C + i] = theta[(K - 1) * C + i]; q[k * C + i] = q[(K - 1) * C + i]; }
+    else { theta[k * C + i] = theta[(K - 1) * C + i] + (step && sigmaMid[k] < step ? 3 : 0); q[k * C + i] = q[(K - 1) * C + i]; }
   }
   model.radiation.mlmSubsidence.fill(seed);
   model.radiation.mlmHeight.fill(height);
@@ -480,6 +480,19 @@ test('with deckRest \'inversion\' the carried height starts and rests at the inv
   assert.ok(resting.height.rmsRel < 1e-5 && resting.gate.maxDiff < 1e-6, `height ${resting.height.rmsRel}, gate ${resting.gate.maxDiff}`);
   const ceiling = (i) => { let k = K - 1; while (model.core.sigmaMid[k] >= 0.85) k--; return geopotential[k * C + i] / g - 1; };
   for (let i = 0; i < C; i++) if (resting.tops[i] > 0 || resting.heights[i] > 300 + 1) assert.ok(resting.heights[i] <= ceiling(i) + 100, `cell ${i}: ${resting.heights[i]} against the ceiling near ${ceiling(i)}`);
+});
+
+test('a ceilingInversion below minimumInversion holds the deck under a weaker jump, alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const shared = { deckRest: 'inversion', minimumInversion: 4, step: 0.92 };
+  const strong = await mixedLayerPair(4, shared), weak = await mixedLayerPair(4, { ...shared, ceilingInversion: 2 });
+  let lower = 0;
+  for (let i = 0; i < weak.C; i++) if (weak.heights[i] < strong.heights[i] - 50) lower++;
+  console.log(`four steps under a 3 K step below a 10 K inversion: with a 2 K ceiling the carried height sits lower on ${lower} of ${weak.C} cells (mean ${(weak.heights.reduce((a, b) => a + b) / weak.C).toFixed(0)} m against ${(strong.heights.reduce((a, b) => a + b) / strong.C).toFixed(0)} m), decks on ${weak.decked} and ${strong.decked}; height rms ${weak.height.rmsRel.toExponential(1)} and ${strong.height.rmsRel.toExponential(1)}, gate max ${weak.gate.maxDiff.toExponential(1)} and ${strong.gate.maxDiff.toExponential(1)}`);
+  assert.ok(lower > 0.5 * weak.C, `${lower} heights lower`);
+  for (const run of [weak, strong]) {
+    assert.ok(run.decked === run.gpuDecked, `deck on ${run.decked}, GPU ${run.gpuDecked}`);
+    assert.ok(run.height.rmsRel < 1e-5 && run.gate.maxDiff < 1e-6, `height ${run.height.rmsRel}, gate ${run.gate.maxDiff}`);
+  }
 });
 
 test('the GPU model sends the deck\'s running-mean subsidence, carried height and gate, the convection\'s activity and the boundary layer\'s depth to the device on load and reads them back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
