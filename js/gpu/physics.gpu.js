@@ -181,8 +181,15 @@ fn turbulentCover(i: i32, k: i32, pi: f32, mixTop: f32) -> f32 {
 fn layerCover(idx: i32, k: i32, bottom: i32, pi: f32, water: f32, mixedDepth: f32, stratiform: f32, mixTop: f32) -> f32 {
   if (!PDF_COVER || !(water > 0.0)) { return 1.0; }
   let height = (D[D_GEO + idx] + LV[L_GABS + k] - D[D_GEO + bottom] - LV[L_GABS + K - 1]) / GRAV;
-  if (VARIANCE_COVER && height < mixTop) { return clamp(turbulentCover(idx - k * C, k, pi, mixTop), COVER_FLOOR, 1.0); }
   let inside = height < mixedDepth;
+  if (VARIANCE_COVER && height < mixTop) {
+    let fv = clamp(turbulentCover(idx - k * C, k, pi, mixTop), COVER_FLOOR, 1.0);
+    if (!(stratiform > 0.0)) { return fv; }
+    let qsv = qsat(IN[S_TH + idx] * D[D_EXM + idx], pi * LV[L_SM + k]); let condensateV = max(0.0, IN[S_QC + idx]);
+    let excessV = max(0.0, IN[S_Q + idx]) + condensateV - qsv;
+    let boundV = min((1.0 - RHC_BL) * qsv, max(condensateV, OVERCAST_WATER));
+    return (1.0 - stratiform) * fv + stratiform * clamp((excessV + boundV) / (2.0 * boundV), COVER_FLOOR, 1.0);
+  }
   let qsl = qsat(IN[S_TH + idx] * D[D_EXM + idx], pi * LV[L_SM + k]); let condensate = max(0.0, IN[S_QC + idx]);
   let excess = max(0.0, IN[S_Q + idx]) + condensate - qsl;
   let width = (1.0 - select(RHC, RHC_BL, inside)) * qsl;

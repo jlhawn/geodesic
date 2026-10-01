@@ -105,7 +105,9 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * inside the mixed layer; erf is Abramowitz and Stegun's 7.1.26. Such a
  * layer is half covered at s = 0 and overcast once s exceeds 2–3 σ_s,
  * which in a well-mixed layer is a few hundredths of a gram per kilogram
- * (floor 0.002 q_sl). The layers above keep the cover above. The
+ * (floor 0.002 q_sl), and blends on the overcast ramp of the estimated
+ * inversion strength into the bounded cover above as the humidity PDF
+ * does. The layers above keep the cover above. The
  * longwave heating of each layer (W/m²) is kept in `longwave` for the
  * boundary layer's cloud-top cooling. Per cell, for the audit (this
  * engine only): `lowCover`, the overlapped cover of the layers below
@@ -583,6 +585,11 @@ export function createRadiation(mesh, core, {
       layerCover[k] = 1;
       if (cloudCover === 'pdf' && q !== null && cloudWater[k] > 0 && boundaryCover === 'variance' && (geopotential[idx] - geopotential[bottom * C + i]) / g < mixingDepth) {
         layerCover[k] = Math.min(1, Math.max(coverFloor, turbulentCover(i, k, pi, theta, q, qc, mixingDepth)));
+        if (stratiform > 0) {
+          const qs = saturationHumidity(theta[idx] * exnerLayer[idx], pi * sigmaMid[k]), water = Math.max(0, qc[idx]), excess = Math.max(0, q[idx]) + water - qs;
+          const bound = Math.min((1 - boundaryCriticalHumidity) * qs, Math.max(water, overcastWater));
+          layerCover[k] = (1 - stratiform) * layerCover[k] + stratiform * Math.min(1, Math.max(coverFloor, (excess + bound) / (2 * bound)));
+        }
       } else if (cloudCover === 'pdf' && q !== null && cloudWater[k] > 0) {
         const inside = (geopotential[idx] - geopotential[bottom * C + i]) / g < mixedDepth;
         const qs = saturationHumidity(theta[idx] * exnerLayer[idx], pi * sigmaMid[k]), water = Math.max(0, qc[idx]), excess = Math.max(0, q[idx]) + water - qs;

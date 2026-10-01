@@ -281,22 +281,24 @@ test('the variance cover of the cloudy layers below the moist boundary layer\'s 
   const { base } = cloudyState(), { geopotential, g } = base.core.diagnostics, C = base.mesh.nCells, K = base.core.K, depth = base.boundaryLayer.depth;
   const mixingTop = Float64Array.from(depth, (d, i) => Math.fround(i % 3 === 0 ? 0 : d + (i % 3) * 400));
   const pdf = await physicsHeating(base, {}), variance = await physicsHeating(base, {}, 864000, null, mixingTop), off = await physicsHeating(base, { boundaryCover: 'pdf' }, 864000, null, mixingTop);
-  let engines = 0, scale = 0, moved = 0, unmoved = 0, longwave = 0, longwaveScale = 0, inside = 0;
+  const ramp = await physicsHeating(base, { overcastInversion: [-40, 40], overcastWater: 5e-4 }, 864000, null, mixingTop);
+  let engines = 0, scale = 0, moved = 0, unmoved = 0, longwave = 0, longwaveScale = 0, inside = 0, blended = 0;
   for (let i = 0; i < C; i++) {
     for (let k = 0; k < K; k++) if (base.state[5][k * C + i] > 0 && geopotential[k * C + i] / g < mixingTop[i]) inside++;
     if (!(base.radiation.insolation(i) > 0)) continue;
     for (let k = 0; k < K - 1; k++) {
       const x = k * C + i;
-      engines = Math.max(engines, Math.abs(variance.cpu[x] - variance.gpu[x]));
+      engines = Math.max(engines, Math.abs(variance.cpu[x] - variance.gpu[x]), Math.abs(ramp.cpu[x] - ramp.gpu[x]));
+      blended = Math.max(blended, Math.abs(ramp.cpu[x] - variance.cpu[x]));
       scale = Math.max(scale, Math.abs(variance.cpu[x]));
       moved = Math.max(moved, Math.abs(variance.cpu[x] - pdf.cpu[x]));
       unmoved = Math.max(unmoved, Math.abs(off.cpu[x] - pdf.cpu[x]));
     }
   }
   for (let x = 0; x < K * C; x++) { longwave = Math.max(longwave, Math.abs(variance.cpuLongwave[x] - variance.gpuLongwave[x])); longwaveScale = Math.max(longwaveScale, Math.abs(variance.cpuLongwave[x])); }
-  console.log(`${inside} cloudy layers below the mixing top: the variance cover moves the layer heating by up to ${moved.toFixed(2)} K/day against the humidity PDF; the engines differ by ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the longwave heating each layer keeps differs by ${longwave.toExponential(1)} W/m² against a largest ${longwaveScale.toFixed(1)}`);
+  console.log(`${inside} cloudy layers below the mixing top: the variance cover moves the layer heating by up to ${moved.toFixed(2)} K/day against the humidity PDF, its blend into the overcast bound on an inversion ramp of −40 to 40 K by ${blended.toFixed(2)}; the engines differ by ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the longwave heating each layer keeps differs by ${longwave.toExponential(1)} W/m² against a largest ${longwaveScale.toFixed(1)}`);
   assert.ok(inside > C / 4, `${inside} cloudy layers inside`);
-  assert.ok(moved > 0.1 && unmoved === 0, `variance moves ${moved}, 'pdf' ${unmoved}`);
+  assert.ok(moved > 0.1 && unmoved === 0 && blended > 0.1, `variance moves ${moved}, 'pdf' ${unmoved}, the ramp ${blended}`);
   assert.ok(engines < 5e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}; the cover reads the f32 difference of q_t and q_s, as the bounded half-width does`);
   assert.ok(longwave < 1e-4 * longwaveScale, `longwave differs by ${longwave} W/m²`);
 });
