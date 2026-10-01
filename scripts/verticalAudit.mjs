@@ -62,6 +62,7 @@ import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.modul
 import { DECK_CLOUD_LEVELS, ringMean } from '../js/physics/radiation.module.js';
 import { LATENT_HEAT } from '../js/physics/moist.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
+import { REGIME } from '../js/physics/boundaryLayer.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/verticalAudit.mjs <state.bin>'); process.exit(1); }
@@ -90,7 +91,7 @@ const gates = radiation.deckGates;
 const sea = Uint8Array.from({ length: C }, (_, i) => (!landMask[i] && !(ice[i] > 0) ? 1 : 0));
 const everywhere = new Uint8Array(C).fill(1);
 const boxMask = ([south, north, west, east], base) => Uint8Array.from({ length: C }, (_, i) => (base[i] && lat[i] >= south && lat[i] <= north && inLongitudes(lon[i], west, east) ? 1 : 0));
-const sePacific = boxMask(BOXES.sePacific, sea), peru = boxMask(BOXES.peru, sea), itcz = boxMask(BOXES.itcz, everywhere);
+const sePacific = boxMask(BOXES.sePacific, sea), peru = boxMask(BOXES.peru, sea), itcz = boxMask(BOXES.itcz, everywhere), namibia = boxMask(BOXES.namibia, sea), california = boxMask(BOXES.california, sea);
 
 function mean(x, mask) {
   let s = 0, a = 0;
@@ -154,7 +155,7 @@ function deckGeometry(i, mixedDepth) {
 }
 const deckSink = [0, gates.subsidenceSmoothing].map(() => new Float64Array(C).fill(NaN));
 {
-  const depthBefore = Float64Array.from(bl.depth);
+  const before = ['depth', 'regime', 'mixingTop'].map((name) => Float64Array.from(bl[name]));
   bl.diagnose(state, 0, C);
   for (let i = 0; i < C; i++) {
     const mixedDepth = bl.depth[i] - geopotential[bottom + i] / g;
@@ -162,7 +163,7 @@ const deckSink = [0, gates.subsidenceSmoothing].map(() => new Float64Array(C).fi
     const column = deckGeometry(i, mixedDepth);
     if (column) [0, gates.subsidenceSmoothing].forEach((passes, n) => { deckSink[n][i] = 1000 * column.sink(passes); });
   }
-  bl.depth.set(depthBefore);
+  ['depth', 'regime', 'mixingTop'].forEach((name, n) => bl[name].set(before[n]));
 }
 function omegaAt(P) {
   const om = new Float64Array(C).fill(NaN);
@@ -194,13 +195,13 @@ const stage0 = (performance.now() - t0) / 1000;
 
 // ---------------- the window: rain, firing, low cloud, the deck's start ----------------
 const longwave = dycomsLongwave();
-const acc = Object.fromEntries(['fire', 'convect', 'low', 'cloudy', 'eis', 'eisN', 'attempt', 'h', 'jump', 'runs', 'offSubsidence', 'offJump', 'offMemory', 'failSubsidence', 'failJump', 'ran', 'ranH'].map((name) => [name, new Float64Array(C)]));
+const acc = Object.fromEntries(['fire', 'convect', 'low', 'cloudy', 'eis', 'eisN', 'attempt', 'h', 'jump', 'runs', 'offSubsidence', 'offJump', 'offMemory', 'failSubsidence', 'failJump', 'ran', 'ranH', 'lowCover', 'lowWater', 'stable', 'surface', 'decoupled', 'coupled', 'cooling', 'velocity', 'entrainment', 'mixingTop'].map((name) => [name, new Float64Array(C)]));
 const predicted = { mean: new Float64Array(C).fill(NaN), gate: new Float64Array(C).fill(NaN), runs: new Uint8Array(C) };
 const replica = { mean: 0, gate: 0, decisions: 0, checked: 0 };
 function deckStart() {
   predicted.mean.fill(NaN);
   for (let i = 0; i < C; i++) {
-    if (landMask[i] || !(sePacific[i] || peru[i])) continue;
+    if (landMask[i] || !(sePacific[i] || peru[i] || namibia[i] || california[i])) continue;
     const b = bottom + i, mixedDepth = bl.depth[i] - geopotential[b] / g;
     if (!(1 - seaIce.cover(i, ice[i]) > 0) || !(mixedDepth > 0)) continue;
     const column = deckGeometry(i, mixedDepth);
@@ -220,16 +221,17 @@ function deckStart() {
     const d = shadow.diagnose({ h, thetaL: heat / weight, qt: water / weight }, forcing);
     acc.attempt[i] += 1; acc.h[i] += h; acc.jump[i] += d.virtualJump;
     const keep = Math.exp(-dt / gates.subsidenceMemory), mean = radiation.mlmSubsidence[i] * keep - column.sink(gates.subsidenceSmoothing) * (1 - keep);
-    const sinking = !(mean > -gates.stratusSubsidence), pass = sinking && d.virtualJump >= gates.minimumInversion ? 1 : 0;
+    const regimeTest = gates.deckRegime === 'boundaryLayer' ? bl.regime[i] === REGIME.COUPLED : d.virtualJump >= gates.minimumInversion;
+    const sinking = !(mean > -gates.stratusSubsidence), pass = sinking && regimeTest ? 1 : 0;
     const gate = gates.gateMemory > 0 ? radiation.mlmGate[i] - (pass - radiation.mlmGate[i]) * Math.expm1(-dt / gates.gateMemory) : pass;
-    const runs = gate > 0.5 || (gate === 0.5 && pass === 1);
+    const runs = (gate > 0.5 || (gate === 0.5 && pass === 1)) && !gates.deckBypass;
     predicted.mean[i] = mean; predicted.gate[i] = gate; predicted.runs[i] = runs ? 1 : 0;
     if (runs) acc.runs[i] += 1;
     else if (pass) acc.offMemory[i] += 1;
     else if (!sinking) acc.offSubsidence[i] += 1;
     else acc.offJump[i] += 1;
     if (!sinking) acc.failSubsidence[i] += 1;
-    if (!(d.virtualJump >= gates.minimumInversion)) acc.failJump[i] += 1;
+    if (!regimeTest) acc.failJump[i] += 1;
   }
 }
 function deckAfter() {
@@ -292,6 +294,9 @@ for (let n = 0; n < STEPS; n++) {
     for (let k = 0; k < K; k++) if (qc[k * C + i] > 1e-5) { any = true; if (pi[i] * sigmaMid[k] > 680e2) low = true; }
     if (any) acc.cloudy[i] += 1;
     acc.low[i] += low ? 1 : Math.min(1, radiation.stratusFraction[i]);
+    acc.lowCover[i] += radiation.lowCover[i]; acc.lowWater[i] += radiation.lowWater[i];
+    acc[['stable', 'surface', 'decoupled', 'coupled'][bl.regime[i]]][i] += 1;
+    acc.cooling[i] += bl.cloudTopCooling[i]; acc.velocity[i] += bl.radiativeVelocity[i]; acc.entrainment[i] += bl.entrainment[i]; acc.mixingTop[i] += bl.mixingTop[i] - geopotential[bottom + i] / g;
   }
 }
 const perDay = 86400 / (STEPS * dt);
@@ -342,6 +347,14 @@ function verdict(value, lo, hi, u = 0) {
 }
 const rows = [];
 const row = (name, value, digits, lo, hi, u = 0, note = '') => rows.push([name, value, digits, lo, hi, u, note]);
+const windowMean = (x, mask) => mean(Float64Array.from(x, (v) => v / STEPS), mask);
+function boundaryRows(name, mask) {
+  const cover = windowMean(acc.lowCover, mask);
+  row(`${name}: low-cloud cover, radiative`, cover, 3, 0.6, 0.7, 0, `presence ${f(windowMean(acc.low, mask), 3)}`);
+  row(`${name}: low-cloud water path in cloud (g/m2)`, 1000 * windowMean(acc.lowWater, mask) / cover, 1, 50, 150, 0, `grid mean ${f(1000 * windowMean(acc.lowWater, mask), 1)}`);
+  row(`${name}: boundary-layer regime, coupled stratocumulus share`, windowMean(acc.coupled, mask), 3, NaN, NaN, 0, `decoupled ${f(windowMean(acc.decoupled, mask), 3)}, surface-driven ${f(windowMean(acc.surface, mask), 3)}, stable ${f(windowMean(acc.stable, mask), 3)}`);
+  row(`${name}: cloud-top cooling (W/m2)`, windowMean(acc.cooling, mask), 1, NaN, NaN, 0, `V ${f(windowMean(acc.velocity, mask), 2)} m/s, w_e ${f(1000 * windowMean(acc.entrainment, mask), 2)} mm/s, mixing top ${f(windowMean(acc.mixingTop, mask), 0)} m`);
+}
 for (const [name, mask] of [['SE Pacific 10-30S 110-80W', sePacific], ['Peru 5-20S 90-75W', peru]]) {
   const total = mean(rain, mask), conv = mean(convective, mask), h = savedHeight(mask), n700 = noise(omega700, mask), nSink = noise(sinkSaved, mask);
   row(`${name}: rain (mm/d)`, total, 2, 0.1, 0.3);
@@ -362,6 +375,13 @@ for (const [name, mask] of [['SE Pacific 10-30S 110-80W', sePacific], ['Peru 5-2
   row(`${name}: deck height where it runs (m)`, ratio(acc.ranH, acc.ran, mask), 0, 1000, 1500);
   row(`${name}: resolved inversion (m)`, mean(inversionZ, mask), 0, 1000, 1500);
   row(`${name}: resolved inversion's thetaV jump (K)`, mean(inversionJump, mask), 2, 6, 12);
+  boundaryRows(name, mask);
+}
+for (const [name, mask] of [['Namibia 10-20S 0-10E', namibia], ['California 20-30N 130-120W', california]]) {
+  row(`${name}: rain (mm/d)`, mean(rain, mask), 2, 0.1, 0.3);
+  row(`${name}: resolved inversion (m)`, mean(inversionZ, mask), 0, 1000, 1500);
+  row(`${name}: resolved inversion's thetaV jump (K)`, mean(inversionJump, mask), 2, 6, 12);
+  boundaryRows(name, mask);
 }
 row('Pacific ITCZ 5-12N 160E-100W: rain (mm/d)', mean(rain, itcz), 2, 6, 9, 0, `convective share ${f(mean(convective, itcz) / mean(rain, itcz), 2)}`);
 row('Pacific ITCZ 5-12N 160E-100W: omega500 (Pa/s)', mean(omega500, itcz), 4, -0.05, -0.10, noise(omega500, itcz).u);

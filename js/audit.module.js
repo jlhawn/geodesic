@@ -8,7 +8,7 @@ import { cellVector } from './dynamics/operators.module.js';
  * 160E-100W).
  */
 export const BOXES = {
-  sePacific: [-30, -10, -110, -80], peru: [-20, -5, -90, -75], itcz: [5, 12, 160, -100],
+  sePacific: [-30, -10, -110, -80], peru: [-20, -5, -90, -75], itcz: [5, 12, 160, -100], namibia: [-20, -10, 0, 10], california: [20, 30, -130, -120],
 };
 const DEG = 180 / Math.PI;
 

@@ -106,7 +106,10 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * which in a well-mixed layer is a few hundredths of a gram per kilogram
  * (floor 0.002 q_sl). The layers above keep the cover above. The
  * longwave heating of each layer (W/m²) is kept in `longwave` for the
- * boundary layer's cloud-top cooling.
+ * boundary layer's cloud-top cooling. Per cell, for the audit (this
+ * engine only): `lowCover`, the overlapped cover of the layers below
+ * LOW_CLOUD_PRESSURE (680 hPa) combined at random with the deck's, and
+ * `lowWater`, their cloud water with the deck's share (kg/m²).
  *
  * Marine stratocumulus: over the part of a cell that is ice-free sea
  * (`openSea`, the per-cell fraction the caller passes; no deck without it)
@@ -281,6 +284,7 @@ export function waterVaporAbsorptivity(path) {
 }
 
 const DIFFUSE_MU = 0.6;
+export const LOW_CLOUD_PRESSURE = 680e2;
 export const STABILITY_SIGMA = 0.7;
 export const DECK_CLOUD_LEVELS = 8;
 export const UNDECIDED = 0.5;
@@ -390,6 +394,7 @@ export function createRadiation(mesh, core, {
   const longwaveBuffer = buffers && buffers.longwave ? buffers.longwave : new SharedArrayBuffer(8 * K * C);
   const longwave = new Float64Array(longwaveBuffer), beforeBands = new Float64Array(K);
   let boundaryRegime = null, boundaryTop = null;
+  const lowCover = new Float64Array(C), lowWater = new Float64Array(C);
   const ceilingJump = ceilingInversion ?? minimumInversion;
   const entraining = stratusIndex === 'ectei';
   const stratusLayer = nearestLayer(sigmaMid, stratusSigma), stabilityLayer = nearestLayer(sigmaMid, STABILITY_SIGMA);
@@ -559,7 +564,7 @@ export function createRadiation(mesh, core, {
         vaporTaken[k] = vaporAbsorption * waterVaporAbsorptivity(path);
       }
     }
-    let cloudPath = 0, columnCover = 0, block = 0, clearColumn = 1, inversionShare = 0;
+    let cloudPath = 0, columnCover = 0, block = 0, clearColumn = 1, inversionShare = 0, lowBlock = 0, lowClear = 1, lowMaximum = 0, lowPath = 0;
     if (qAir !== null) {
       const lcl = liftingCondensationLevel(airTemperature, qAir, pi * sigmaMid[bottom], kappa);
       if (lcl) {
@@ -596,6 +601,11 @@ export function createRadiation(mesh, core, {
       const seen = cloudCover === 'pdf' && cloudWater[k] > 0 ? layerCover[k] * -Math.expm1(-cloudWater[k] / VISIBLE_PATH) : 0;
       if (seen > 0) block = Math.max(block, seen);
       if (block > 0 && (!(seen > 0) || k === K - 1)) { clearColumn *= 1 - block; columnCover = Math.max(columnCover, block); block = 0; }
+      if (pi * sigmaMid[k] > LOW_CLOUD_PRESSURE) {
+        lowPath += cloudWater[k];
+        if (seen > 0) lowBlock = Math.max(lowBlock, seen);
+        if (lowBlock > 0 && (!(seen > 0) || k === K - 1)) { lowClear *= 1 - lowBlock; lowMaximum = Math.max(lowMaximum, lowBlock); lowBlock = 0; }
+      }
     }
     if (cloudOverlap === 'maximumRandom' && cloudCover === 'pdf') columnCover = 1 - clearColumn;
     if (!(columnCover > 0)) columnCover = 1;
@@ -693,6 +703,9 @@ export function createRadiation(mesh, core, {
     budget.surfaceDirect = incident * sky.direct;
     budget.cloudReflectance = sky.reflectance;
     budget.cloudCover = cloudPath > 0 ? columnCover : 0;
+    const lowResolved = cloudCover !== 'pdf' ? (lowPath > 0 ? 1 : 0) : cloudOverlap === 'maximumRandom' ? 1 - lowClear : lowMaximum;
+    budget.lowCover = 1 - (1 - lowResolved) * (1 - fraction);
+    budget.lowWater = lowPath + fraction * deck;
     budget.stratus = deck;
     budget.stratusFraction = fraction;
     budget.stabilityIndex = index;
@@ -729,6 +742,8 @@ export function createRadiation(mesh, core, {
       mlmEntrainment[i] = budget.mlmEntrainment;
       mlmTop[i] = budget.mlmTop;
       stratiformShare[i] = budget.stratiform;
+      lowCover[i] = budget.lowCover;
+      lowWater[i] = budget.lowWater;
       evaporation[i] = budget.evaporation;
       surfaceShortwave[i] = budget.surfaceShortwave;
       surfaceDirect[i] = budget.surfaceDirect;
@@ -761,6 +776,6 @@ export function createRadiation(mesh, core, {
     cumulusWater = on ? water : null;
   }
 
-  const deckGates = { subsidenceSmoothing, subsidenceMemory, stratusSubsidence, minimumInversion, ceilingInversion: ceilingJump, gateMemory, deckRest };
-  return { setTime, sun, cosZenith, insolation, column, apply, useCumulus, useBoundaryLayer, longwave, layerCover, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratiform: stratiformShare, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer, stratiform: stratiformBuffer, longwave: longwaveBuffer } };
+  const deckGates = { subsidenceSmoothing, subsidenceMemory, stratusSubsidence, minimumInversion, ceilingInversion: ceilingJump, gateMemory, deckRest, deckRegime, deckBypass };
+  return { setTime, sun, cosZenith, insolation, column, apply, useCumulus, useBoundaryLayer, longwave, layerCover, lowCover, lowWater, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratiform: stratiformShare, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer, stratiform: stratiformBuffer, longwave: longwaveBuffer } };
 }
