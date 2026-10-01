@@ -2,7 +2,7 @@ import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physics/ice.module.js'
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH } from '../physics/radiation.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS } from '../physics/moist.module.js';
-import { ENTRAINMENT_DEFAULTS } from '../physics/boundaryLayer.module.js';
+import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 
 /*
  * The column physics of the model as WGSL, one thread per column (or per
@@ -38,7 +38,16 @@ export function physicsConstants(o) {
   if (o.plumeCapeParcel !== 'plume' && o.plumeCapeParcel !== 'undilute') throw new Error(`plumeCapeParcel must be 'plume' or 'undilute', not ${o.plumeCapeParcel}`);
   if (o.plumeSource !== 'mean' && o.plumeSource !== 'lowest') throw new Error(`plumeSource must be 'mean' or 'lowest', not ${o.plumeSource}`);
   const entrainment = { ...ENTRAINMENT_DEFAULTS, ...o.entrainment };
+  const cloudTop = { ...CLOUD_TOP_DEFAULTS, ...o.cloudTop };
+  if (o.turbulence !== 'moist' && o.turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${o.turbulence}`);
+  if (o.boundaryCover !== 'variance' && o.boundaryCover !== 'pdf') throw new Error(`boundaryCover must be 'variance' or 'pdf', not ${o.boundaryCover}`);
+  if (o.deckRegime !== 'inversion' && o.deckRegime !== 'boundaryLayer') throw new Error(`deckRegime must be 'inversion' or 'boundaryLayer', not ${o.deckRegime}`);
+  const moistTurbulence = o.turbulence === 'moist';
   return `
+const MOIST_BL: bool = ${moistTurbulence}; const CT_THRESH: f32 = ${cloudTop.threshold}; const CT_HMAX: f32 = ${cloudTop.maximumHeight}; const CT_PERT: f32 = ${cloudTop.perturbation}; const CT_PROFILE: f32 = ${cloudTop.profile}; const CT_EXCESS: f32 = ${cloudTop.excess}; const CT_TOLERANCE: f32 = ${cloudTop.tolerance}; const CT_CUMULUS: f32 = ${cloudTop.cumulusDepth};
+const BL_A2: f32 = ${entrainment.evaporativeEnhancement}; const BL_AMAX: f32 = ${entrainment.maximumEfficiency}; const BL_TAPER: bool = ${!!entrainment.taper}; const BL_JUMP2: bool = ${entrainment.jumpLayers > 1};
+const VARIANCE_COVER: bool = ${moistTurbulence && o.boundaryCover === 'variance'}; const VAR_FLOOR: f32 = ${o.varianceFloor}; const VAR_SCALE: f32 = ${o.varianceScale}; const MIX_LENGTH: f32 = ${o.mixingLength};
+const MLM_BL_GATE: bool = ${o.deckRegime === 'boundaryLayer'}; const MLM_BYPASS: bool = ${!!o.deckBypass};
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
 const PDF_COVER: bool = ${o.cloudCover === 'pdf'}; const VISIBLE_PATH: f32 = ${VISIBLE_PATH}; const RHC: f32 = ${o.criticalHumidity}; const RHC_BL: f32 = ${o.boundaryCriticalHumidity}; const COVER_FLOOR: f32 = ${o.coverFloor ?? 0.01}; const BOUND_WIDTH: bool = ${o.overcastWater != null}; const OVERCAST_WATER: f32 = ${o.overcastWater ?? 0}; const OVERCAST_EIS: f32 = ${o.overcastInversion[0]}; const OVERCAST_RAMP: f32 = ${o.overcastInversion[1] - o.overcastInversion[0]}; const RANDOM_OVERLAP: bool = ${o.cloudOverlap === 'maximumRandom'};
 const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudScattering}; const CLOUD_SW: f32 = ${o.cloudSolarAbsorption}; const WINDOW: f32 = ${o.window}; const GAS_FRAC: f32 = ${o.gasFraction};
@@ -129,9 +138,50 @@ fn cloudKeep(path: f32) -> f32 {
   if (CLOUD_SW > 0.0) { return exp(-CLOUD_SW * path); }
   return 1.0;
 }
-fn layerCover(idx: i32, k: i32, bottom: i32, pi: f32, water: f32, mixedDepth: f32, stratiform: f32) -> f32 {
+fn erfApprox(x: f32) -> f32 {
+  let t = 1.0 / (1.0 + 0.3275911 * abs(x));
+  let y = 1.0 - t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * exp(-x * x);
+  return select(y, -y, x < 0.0);
+}
+fn varianceCover(deficit: f32, spread: f32) -> f32 {
+  if (!(spread > 0.0)) { return select(select(0.5, 0.0, deficit < 0.0), 1.0, deficit > 0.0); }
+  return 0.5 * (1.0 + erfApprox(deficit / (1.4142135623730951 * spread)));
+}
+fn turbulentCover(i: i32, k: i32, pi: f32, mixTop: f32) -> f32 {
+  let bottom = (K - 1) * C + i; let idx = k * C + i; let ex = D[D_EXM + idx];
+  let water = max(0.0, IN[S_QC + idx]); let total = max(0.0, IN[S_Q + idx]) + water;
+  let level = IN[S_TH + idx] - LHEAT * water / (CP * ex); let liquidT = level * ex;
+  let qs = qsat(liquidT, pi * LV[L_SM + k]); let slope = qs * LHEAT / (RVAP * liquidT * liquidT);
+  let a = 1.0 / (1.0 + LHEAT / CP * slope);
+  let zk = D[D_GEO + idx] + LV[L_GABS + k]; let zs = D[D_GEO + bottom] + LV[L_GABS + K - 1];
+  var gradientQ = 0.0; var gradientL = 0.0; var n = 0.0;
+  if (k > 0) {
+    let jdx = idx - C; let zj = D[D_GEO + jdx] + LV[L_GABS + k - 1];
+    if (!((zj - zs) / GRAV >= mixTop)) {
+      let jWater = max(0.0, IN[S_QC + jdx]); let dz = (zj - zk) / GRAV;
+      gradientQ += (max(0.0, IN[S_Q + jdx]) + jWater - total) / dz;
+      gradientL += (IN[S_TH + jdx] - LHEAT * jWater / (CP * D[D_EXM + jdx]) - level) / dz;
+      n += 1.0;
+    }
+  }
+  if (k < K - 1) {
+    let jdx = idx + C; let zj = D[D_GEO + jdx] + LV[L_GABS + k + 1];
+    let jWater = max(0.0, IN[S_QC + jdx]); let dz = (zj - zk) / GRAV;
+    gradientQ += (max(0.0, IN[S_Q + jdx]) + jWater - total) / dz;
+    gradientL += (IN[S_TH + jdx] - LHEAT * jWater / (CP * D[D_EXM + jdx]) - level) / dz;
+    n += 1.0;
+  }
+  if (n > 1.0) { gradientQ /= n; gradientL /= n; }
+  let z = zk / GRAV;
+  let length = 0.4 * z / (1.0 + 0.4 * z / MIX_LENGTH);
+  let spread = max(VAR_FLOOR * qs, VAR_SCALE * length * a * abs(gradientQ - ex * slope * gradientL));
+  return varianceCover(a * (total - qs), spread);
+}
+fn layerCover(idx: i32, k: i32, bottom: i32, pi: f32, water: f32, mixedDepth: f32, stratiform: f32, mixTop: f32) -> f32 {
   if (!PDF_COVER || !(water > 0.0)) { return 1.0; }
-  let inside = (D[D_GEO + idx] + LV[L_GABS + k] - D[D_GEO + bottom] - LV[L_GABS + K - 1]) / GRAV < mixedDepth;
+  let height = (D[D_GEO + idx] + LV[L_GABS + k] - D[D_GEO + bottom] - LV[L_GABS + K - 1]) / GRAV;
+  if (VARIANCE_COVER && height < mixTop) { return clamp(turbulentCover(idx - k * C, k, pi, mixTop), COVER_FLOOR, 1.0); }
+  let inside = height < mixedDepth;
   let qsl = qsat(IN[S_TH + idx] * D[D_EXM + idx], pi * LV[L_SM + k]); let condensate = max(0.0, IN[S_QC + idx]);
   let excess = max(0.0, IN[S_Q + idx]) + condensate - qsl;
   let width = (1.0 - select(RHC, RHC_BL, inside)) * qsl;
@@ -444,12 +494,12 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
   var passed = 0.0;
   if (sinking) {
     now = mlmDiagnose(start, pi, sensible, evaporation, thetaAbove, qtAbove, sun);
-    if (now.jump >= MLM_MININV) { passed = 1.0; }
+    if (MLM_BL_GATE) { if (PH[PH_REGIME + i] == 3.0) { passed = 1.0; } } else if (now.jump >= MLM_MININV) { passed = 1.0; }
   }
   var gate = passed;
   if (MLM_GATEMEM > 0.0) { gate = PH[PH_MLMGATE + i] + (passed - PH[PH_MLMGATE + i]) * mlmFresh(dt / MLM_GATEMEM); }
   PH[PH_MLMGATE + i] = gate;
-  if (!(gate > MLM_UNDECIDED || (gate == MLM_UNDECIDED && passed > 0.0))) { mlmRest(i, resting, dt); return none; }
+  if (!(gate > MLM_UNDECIDED || (gate == MLM_UNDECIDED && passed > 0.0)) || MLM_BYPASS) { mlmRest(i, resting, dt); return none; }
   if (!sinking) { now = mlmDiagnose(start, pi, sensible, evaporation, thetaAbove, qtAbove, sun); }
   var next = now; var top = h;
   if (dt > 0.0) {
@@ -558,6 +608,7 @@ export const PHYSICS_KERNELS = {
   let tau0 = PH[PH_TAU + i];
   var deck = 0.0; var fraction = 0.0; var mlmCover = 0.0; var mlmWater = 0.0; var mlmEntrainment = 0.0; var mlmTop = 0.0;
   let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
+  let mixTop = PH[PH_MIXTOP + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
   let inversionShare = stratiformShare(i, bottom, pi);
   PH[PH_STRAT + i] = select(0.0, inversionShare, !onLand && 1.0 - cover > 0.0);
   let stratiform = select(0.0, inversionShare, PDF_COVER && BOUND_WIDTH);
@@ -573,7 +624,7 @@ export const PHYSICS_KERNELS = {
       for (var k = 0; k < K; k++) {
         let mass = pi * LV[L_DS + k] / GRAV;
         var water = max(0.0, IN[S_QC + k * C + i]) * mass;
-        var f = layerCover(k * C + i, k, bottom, pi, water, mixedDepth, stratiform);
+        var f = layerCover(k * C + i, k, bottom, pi, water, mixedDepth, stratiform, mixTop);
         let cu = cumulusCloud(k, i);
         if (cu.y * mass > 0.0) { f = select(cu.x, max(f, cu.x), water > 0.0); water += cu.y * mass; }
         path += water;
@@ -620,7 +671,7 @@ export const PHYSICS_KERNELS = {
     var eps = 1.0 - exp(-tau0 * LV[L_SHAPE + k]);
     if (COUPLED) { eps = 1.0 - exp(-VCOUP * max(0.0, IN[S_Q + idx]) * mass); }
     var water = max(0.0, IN[S_QC + idx]) * mass;
-    var f = layerCover(idx, k, bottom, pi, water, mixedDepth, stratiform);
+    var f = layerCover(idx, k, bottom, pi, water, mixedDepth, stratiform, mixTop);
     let cu = cumulusCloud(k, i);
     if (cu.y * mass > 0.0) { f = select(cu.x, max(f, cu.x), water > 0.0); water += cu.y * mass; }
     cloudPath += water;
@@ -670,9 +721,12 @@ export const PHYSICS_KERNELS = {
     }
   }
   let absorbed = incident * sw.x;
+  var beforeBands: array<f32, K>;
+  if (MOIST_BL) { for (var k = 0; k < K; k++) { beforeBands[k] = netFlux[k]; } }
   let v = band(VAPOR_FRAC, &vaporE, &temperature, &netFlux, surfaceEmission);
   let g = band(GAS_FRAC, &mixedE, &temperature, &netFlux, surfaceEmission);
   let w = band(WINDOW, &cloudE, &temperature, &netFlux, surfaceEmission);
+  if (MOIST_BL) { for (var k = 0; k < K; k++) { PH[PH_LWH + k * C + i] = netFlux[k] - beforeBands[k]; } }
   let outgoing = v.x + g.x + w.x; let back = v.y + g.y + w.y;
   let airT = temperature[K - 1];
   let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
@@ -731,7 +785,132 @@ export const PHYSICS_KERNELS = {
   } else ${SEA_SURFACE_WGSL}
   IN[S_TS + i] = T; IN[S_ICE + i] = h;
 }`,
-  pblDiagnose: `@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  pblDiagnose: `fn blHeight(k: i32, i: i32) -> f32 { return (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV; }
+fn blInterface(k: i32, i: i32, zb: f32) -> f32 { return 0.5 * (blHeight(k, i) + blHeight(k + 1, i)) - zb; }
+fn blDensity(k: i32, i: i32, pi: f32) -> f32 { let idx = k * C + i; return pi * LV[L_SM + k] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]); }
+fn parcelVirtual(level: f32, total: f32, k: i32, i: i32, pi: f32) -> f32 {
+  let ex = D[D_EXM + k * C + i]; let liquidT = level * ex; let qs = qsat(liquidT, pi * LV[L_SM + k]);
+  if (!(total > qs)) { return level * (1.0 + VIRT * total); }
+  let slope = qs * LHEAT / (RVAP * liquidT * liquidT); let liquid = (total - qs) / (1.0 + LHEAT * slope / CP);
+  return (liquidT + LHEAT * liquid / CP) / ex * (1.0 + VIRT * (total - liquid) - liquid);
+}
+fn blSurfaceInterface(i: i32, zb: f32, depthAbove: f32) -> i32 {
+  var kE = -1;
+  for (var k = KTOP; k < K - 1; k++) { if (blInterface(k, i, zb) >= depthAbove) { kE = k; } }
+  return kE;
+}
+fn blEntrain(i: i32, pi: f32, kE: i32, lowest: i32, h: f32, buoyant: f32, sheared: f32) -> f32 {
+  if (kE < KTOP || !(h > 0.0)) { return 0.0; }
+  var weight = 0.0; var sumV = 0.0; var sumL = 0.0; var sumQ = 0.0;
+  for (var k = kE + 1; k <= lowest; k++) {
+    let idx = k * C + i;
+    weight += LV[L_DS + k]; sumV += LV[L_DS + k] * D[D_THV + idx];
+    sumL += LV[L_DS + k] * (IN[S_TH + idx] - LHEAT * IN[S_QC + idx] / (CP * D[D_EXM + idx])); sumQ += LV[L_DS + k] * (IN[S_Q + idx] + IN[S_QC + idx]);
+  }
+  var above = kE * C + i;
+  if (BL_JUMP2 && kE > KTOP && D[D_THV + above - C] > D[D_THV + above]) { above -= C; }
+  let mean = sumV / weight; let jump = GRAV * (D[D_THV + above] - mean) / mean;
+  var efficiency = BL_A;
+  let top = (kE + 1) * C + i;
+  if (IN[S_QC + top] > CT_THRESH && BL_A2 > 0.0) {
+    let ex = D[D_EXM + top]; let T = IN[S_TH + top] * ex; let qs = qsat(T, pi * LV[L_SM + kE + 1]); let dqs = qs * LHEAT / (RVAP * T * T);
+    let gamma = LHEAT / CP * dqs; let c = 1.0 + VIRT * IN[S_Q + top] - IN[S_QC + top] + (1.0 + VIRT) * T * dqs;
+    let jumpL = IN[S_TH + above] - LHEAT * IN[S_QC + above] / (CP * D[D_EXM + above]) - sumL / weight; let jumpQ = IN[S_Q + above] + IN[S_QC + above] - sumQ / weight;
+    let virtualJump = max(D[D_THV + above] - mean, BL_BMIN * mean / GRAV);
+    let saturatedJump = c / (1.0 + gamma) * jumpL + (c * LHEAT / (CP * ex * (1.0 + gamma)) - IN[S_TH + top]) * jumpQ;
+    let demand = dqs * ex * jumpL - jumpQ;
+    var share = 1.0;
+    if (demand > 0.0) { share = min(1.0, IN[S_QC + top] * (1.0 + gamma) / demand); }
+    efficiency = min(BL_AMAX, BL_A * (1.0 + BL_A2 * max(0.0, share * (1.0 - saturatedJump / virtualJump))));
+  }
+  var velocity = min(BL_WEMAX, (efficiency * buoyant + BL_AS * sheared) / (h * max(jump, BL_BMIN)));
+  if (BL_TAPER) { velocity *= clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0) * (1.0 - PH[PH_STRAT + i]); }
+  if (!(velocity > 0.0)) { return 0.0; }
+  PH[PH_MIX + kE * C + i] += 0.5 * (blDensity(kE, i, pi) + blDensity(kE + 1, i, pi)) * velocity;
+  return velocity;
+}
+fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, friction: f32) {
+  let bottom = K - 1;
+  var surfaceDepth = richardsonDepth;
+  if (buoyancy > 0.0 && CT_CUMULUS > 0.0) {
+    let base = bottom * C + i;
+    let mixed = pow(friction * friction * friction + 0.6 * buoyancy * max(0.0, surfaceDepth), 1.0 / 3.0);
+    let level = IN[S_TH + base] - LHEAT * IN[S_QC + base] / (CP * D[D_EXM + base]) + CT_EXCESS * buoyancy * D[D_THV + base] / (GRAV * mixed);
+    let total = IN[S_Q + base] + IN[S_QC + base];
+    var k = bottom - 1; var condensation = -1;
+    loop {
+      if (k < KTOP) { break; }
+      if (condensation < 0 && total > qsat(level * D[D_EXM + k * C + i], pi * LV[L_SM + k])) { condensation = k; }
+      if (!(parcelVirtual(level, total, k, i, pi) + CT_TOLERANCE > D[D_THV + k * C + i])) { break; }
+      k--;
+    }
+    if (condensation > k && k >= KTOP) {
+      let parcelTop = blInterface(k, i, zb); let cloudBase = blInterface(condensation, i, zb);
+      if (parcelTop - cloudBase <= CT_CUMULUS && parcelTop <= CT_HMAX && parcelTop > surfaceDepth) { surfaceDepth = parcelTop; }
+    }
+  }
+  var top = -1; var cooling = 0.0;
+  for (var k = bottom; k > KTOP; k--) {
+    if (blInterface(k - 1, i, zb) > CT_HMAX) { break; }
+    if (IN[S_QC + k * C + i] > CT_THRESH && !(IN[S_QC + (k - 1) * C + i] > CT_THRESH)) { top = k; break; }
+  }
+  if (top >= 0) {
+    for (var k = top; k <= bottom; k++) { if (!(IN[S_QC + k * C + i] > CT_THRESH)) { break; } cooling -= PH[PH_LWH + k * C + i]; }
+    if (!(cooling > 0.0)) { top = -1; cooling = 0.0; }
+  }
+  var coupled = false; var lowest = bottom; var base0 = 0.0; var cloudTopZ = 0.0;
+  if (top >= 0) {
+    let idx = top * C + i;
+    let level = IN[S_TH + idx] - LHEAT * IN[S_QC + idx] / (CP * D[D_EXM + idx]) - CT_PERT; let total = IN[S_Q + idx] + IN[S_QC + idx];
+    var k = top + 1;
+    loop {
+      if (k > bottom) { break; }
+      if (!(parcelVirtual(level, total, k, i, pi) < D[D_THV + k * C + i])) { break; }
+      k++;
+    }
+    lowest = k - 1;
+    if (k <= bottom) { base0 = blInterface(k - 1, i, zb); }
+    coupled = k > bottom || base0 <= surfaceDepth;
+    if (coupled) { base0 = 0.0; }
+    cloudTopZ = blInterface(top - 1, i, zb);
+  }
+  var h = select(surfaceDepth, cloudTopZ, coupled);
+  PH[PH_DEPTH + i] = zb + h;
+  if (MLM_PROGNOSTIC && PH[PH_MLMTOP + i] > 0.0) { h = max(h, PH[PH_MLMTOP + i] - zb); }
+  PH[PH_REGIME + i] = select(select(0.0, 1.0, buoyancy > 0.0), select(2.0, 3.0, coupled), top >= 0);
+  PH[PH_MIXTOP + i] = zb + max(h, cloudTopZ);
+  PH[PH_CTCOOL + i] = cooling;
+  let layerDepth = cloudTopZ - base0;
+  var velocityCubed = 0.0;
+  if (top >= 0 && layerDepth > 0.0) { velocityCubed = GRAV / D[D_THV + top * C + i] * cooling / (blDensity(top, i, pi) * CP) * layerDepth; }
+  var velocity = 0.0;
+  if (velocityCubed > 0.0) { velocity = pow(velocityCubed, 1.0 / 3.0); }
+  PH[PH_VRAD + i] = velocity;
+  var scale = friction;
+  if (STABILITY && buoyancy > 0.0 && h > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN * buoyancy / (friction * friction * friction)), 0.25); }
+  for (var k = KTOP; k < K - 1; k++) {
+    let z = blInterface(k, i, zb);
+    var diffusivity = 0.0;
+    if (z < h) { diffusivity += KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h); }
+    if (velocity > 0.0 && z > base0 && z < cloudTopZ) { let x = (z - base0) / layerDepth; diffusivity += CT_PROFILE * KARMAN * velocity * layerDepth * x * x * sqrt(1.0 - x); }
+    if (diffusivity > 0.0) { PH[PH_MIX + k * C + i] = 0.5 * (blDensity(k, i, pi) + blDensity(k + 1, i, pi)) * diffusivity / (blHeight(k, i) - blHeight(k + 1, i)); }
+  }
+  if (!BL_ENTRAIN) { return; }
+  var onset = 1.0;
+  if (BL_ONSET > 0.0) { onset = min(1.0, buoyancy / BL_ONSET); }
+  let sheared = select(0.0, onset * friction * friction * friction, buoyancy > 0.0);
+  if (top >= 0) {
+    let driven = coupled && buoyancy > 0.0;
+    PH[PH_ENTRAIN + i] = blEntrain(i, pi, top - 1, lowest, select(layerDepth, cloudTopZ, coupled), velocityCubed + select(0.0, buoyancy * cloudTopZ, driven), select(0.0, sheared, driven));
+    if (!coupled && buoyancy > 0.0 && surfaceDepth > 0.0) {
+      let kE = blSurfaceInterface(i, zb, surfaceDepth);
+      if (kE >= lowest) { _ = blEntrain(i, pi, kE, K - 1, surfaceDepth, buoyancy * surfaceDepth, sheared); }
+    }
+  } else if (buoyancy > 0.0 && h > 0.0) {
+    PH[PH_ENTRAIN + i] = blEntrain(i, pi, blSurfaceInterface(i, zb, h), K - 1, h, buoyancy * h, sheared);
+  }
+}
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   diagnoseColumn(i);
   let pi = IN[S_PI + i]; let base = (K - 1) * C + i;
@@ -759,6 +938,7 @@ export const PHYSICS_KERNELS = {
   let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
   let buoyancy = GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture);
   PH[PH_BUOY + i] = buoyancy; PH[PH_USTAR + i] = friction;
+  if (MOIST_BL) { blMoist(i, pi, depth - zb, zb, buoyancy, friction); return; }
   if (h <= 0.0) { return; }
   var scale = friction;
   if (STABILITY && buoyancy > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN * buoyancy / (friction * friction * friction)), 0.25); }
@@ -1135,6 +1315,27 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
   cuShallowRain = shallowRain;
   return fallen;
 }
+fn mixConserved(i: i32, pi: f32, dt: f32) {
+  var upper: array<f32, K>; var lower: array<f32, K>; var level: array<f32, K>; var total: array<f32, K>;
+  let n = K - KTOP;
+  for (var j = 0; j < n; j++) {
+    let k = KTOP + j; let idx = k * C + i;
+    let mass = pi * LV[L_DS + k] / GRAV;
+    upper[j] = select(0.0, dt * PH[PH_MIX + (k - 1) * C + i] / mass, j > 0);
+    lower[j] = select(0.0, dt * PH[PH_MIX + k * C + i] / mass, k < K - 1);
+    level[j] = IN[S_TH + idx] - LHEAT * IN[S_QC + idx] / (CP * D[D_EXM + idx]);
+    total[j] = IN[S_Q + idx] + IN[S_QC + idx];
+  }
+  thomas(n, &upper, &lower, &level);
+  thomas(n, &upper, &lower, &total);
+  for (var j = 0; j < n; j++) {
+    let k = KTOP + j;
+    if ((j > 0 && PH[PH_MIX + (k - 1) * C + i] > 0.0) || (k < K - 1 && PH[PH_MIX + k * C + i] > 0.0)) {
+      let idx = k * C + i;
+      IN[S_TH + idx] = level[j]; IN[S_Q + idx] = total[j]; IN[S_QC + idx] = 0.0;
+    }
+  }
+}
 fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   var upper: array<f32, K>; var lower: array<f32, K>; var rhs: array<f32, K>;
   let n = K - KTOP;
@@ -1153,7 +1354,10 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   let pi = IN[S_PI + i]; let dt = P[0]; let bottom = K - 1;
   var mixes = false;
   for (var k = KTOP; k < K - 1; k++) { if (PH[PH_MIX + k * C + i] > 0.0) { mixes = true; } }
-  if (mixes) { mixField(S_TH, i, pi, dt); mixField(S_Q, i, pi, dt); mixField(S_QC, i, pi, dt); }
+  if (mixes) {
+    if (MOIST_BL) { mixConserved(i, pi, dt); }
+    else { mixField(S_TH, i, pi, dt); mixField(S_Q, i, pi, dt); mixField(S_QC, i, pi, dt); }
+  }
   diagnoseColumn(i);
   saturateColumn(i, pi);
   let produced = plumeColumn(i, pi, dt);
