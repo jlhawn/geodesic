@@ -4447,6 +4447,25 @@ from 546 and 638 m to 653 and 778 m. Scored on the deck's own water path
 with the same target and tolerance, the candidates total base 215, p17
 276, p16 283, cmin 288, qmin 291, p34 357 and p40 376.
 
+The winner was not adopted. Its margin over the fixes' defaults (122
+against 129 on the specified score) is inside the replicate noise (one
+replicate scored 283), ten of its eleven values sit on an edge of the
+design, it regresses the Arctic loss to 0.219 from 0.174 by making the
+stratiform lifetime shorter than the convective one, and its 2 K
+inversion test opens the deck's gate over a fifth of the globe. The
+score also could not see the deck's own water path, which the 150 g/m²
+cap hides, and every candidate missed the fresh start's deficit of
+−8 to −14 W/m² at day 30, so the eleven parameters do not reach that
+term. The defaults stay at the fixes' values (variance scale 5, mixing
+lengths 300 and 30 m, cloud lifetime 1 h and stratiform 3 h, minimum
+inversion 4 K, critical humidity 0.8, sea drag 1.2·10⁻³, cumulus
+ceiling 2000 m). The sweep's tools stay: the next score should use the
+deck's uncapped water path and thickness, average the fresh start's
+days 25–30 and several audit windows, constrain the stratiform
+lifetime to at least the convective one, and add the parameters of the
+cloud above the boundary layer, since the fresh start's deficit is
+longwave.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
