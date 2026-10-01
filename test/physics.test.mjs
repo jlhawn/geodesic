@@ -806,8 +806,8 @@ test('the gates switch the deck through their running mean: a standing deck outl
   core.diagnostics.piSigmaDot.fill(0);
 });
 
-function modelDigest(radiation) {
-  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0 }, divergenceDamping: 0, ...(radiation ? { radiation } : {}) });
+function modelDigest(radiation, moist = { convection: 'bettsMiller', shallowScheme: 'bettsMiller' }) {
+  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0 }, divergenceDamping: 0, moist, ...(radiation ? { radiation } : {}) });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   for (let n = 0; n < 12; n++) model.step(900);
   const hash = createHash('sha256');

@@ -255,6 +255,8 @@ const before = new Float64Array(C);
 moist.trace.convection = new Float64Array(K * C);
 moist.trace.largeScale = new Float64Array(K * C);
 const heating = { convection: new Float64Array(K), largeScale: new Float64Array(K), pressure: new Float64Array(K), height: new Float64Array(K), fired: 0, area: 0 };
+const tropicsMask = boxMask([-15, 15, -180, 180], everywhere), TOP_BINS = 10;
+const plumes = { tops: new Float64Array(TOP_BINS), deep: 0, shallow: 0, area: 0, deepFlux: 0, shallowFlux: 0 };
 for (let n = 0; n < STEPS; n++) {
   before.set(moist.convectivePrecipitation);
   moist.trace.convection.fill(0);
@@ -276,6 +278,14 @@ for (let n = 0; n < STEPS; n++) {
         heating.pressure[k] += a * pi[i] * sigmaMid[k];
         heating.height[k] += a * (geopotential[idx] / g - zs[i]);
         if (fired) heating.convection[k] += a * moist.trace.convection[idx];
+      }
+    }
+    if (tropicsMask[i]) {
+      plumes.area += area[i];
+      if (moist.cumulusBaseFlux[i] > 0) {
+        const top = moist.cumulusTop[i];
+        plumes.tops[Math.min(TOP_BINS - 1, Math.floor(top / 100e2))] += area[i];
+        if (top < pi[i] * moist.deepSigma) { plumes.deep += area[i]; plumes.deepFlux += area[i] * moist.cumulusBaseFlux[i]; } else { plumes.shallow += area[i]; plumes.shallowFlux += area[i] * moist.cumulusBaseFlux[i]; }
       }
     }
     let low = false, any = false;
@@ -373,5 +383,14 @@ const width = Math.max(...rows.map(([name]) => name.length));
 for (const [name, value, digits, lo, hi, u, note] of rows) {
   const range = `${f(lo, digits)}..${f(hi, digits)}`;
   say(`  ${name.padEnd(width)}  ${f(value, digits).padStart(9)}${u ? ` u ${f(u, digits)}` : ''}  Earth ${range}  -> ${verdict(value, lo, hi, u)}${note ? `  [${note}]` : ''}`);
+}
+say(`plumes over 15S-15N (share of the column-steps): deep ${f(plumes.deep / plumes.area, 3)} (mean base flux ${f(plumes.deepFlux / plumes.deep, 4)} kg/m2/s), shallow ${f(plumes.shallow / plumes.area, 3)} (${f(plumes.shallowFlux / plumes.shallow, 4)}); tops by 100 hPa of their top interface: ${Array.from(plumes.tops, (x, b) => `${b * 100}-${b * 100 + 100} ${f(x / plumes.area, 3)}`).join(', ')}`);
+{
+  const bins = [];
+  for (let west = -180; west < 180; west += 20) {
+    const mask = boxMask([-5, 5, west, west + 20], everywhere);
+    bins.push(`${west < 0 ? `${-west}W` : `${west}E`} ${f(mean(omega500, mask), 3)}`);
+  }
+  say(`equatorial (5S-5N) omega500 by 20 degrees of longitude from the west edge (Pa/s, + descent): ${bins.join(', ')}`);
 }
 say(`(${f(stage0, 0)} s to the snapshot, ${f((performance.now() - t0) / 1000, 0)} s in all)`);

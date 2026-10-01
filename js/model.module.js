@@ -64,7 +64,11 @@ export function createModel(gridOrMesh, {
   const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, land: geography ? geography.land : null, deckTop: radiation.mlmTop, ...boundaryLayerOptions }) : null;
   const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, dragCoefficients, ...surfaceOptions });
   const gustiness = surfaceOptions.gustiness ?? 3;
-  const moistPhysics = createMoistPhysics(mesh, core, { buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, deckGate: radiation.mlmGate, ...moistOptions });
+  const moistPhysics = createMoistPhysics(mesh, core, {
+    buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, deckGate: radiation.mlmGate,
+    surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null, ...moistOptions,
+  });
+  if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
   const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, geography, ...oceanOptions }) : null;
   const land = physics && geography ? createLandSurface(mesh, geography, { buffers: buffers ? buffers.land : null, ...landOptions }) : null;
   const landMask = geography ? geography.land : null;
@@ -145,7 +149,10 @@ export function createModel(gridOrMesh, {
       }
       surface.convectiveAdjustment(state[0], state[1], iFrom, iTo, moist ? state[4] : null, moist ? state[5] : null);
     },
-    mixMomentum(eFrom, eTo, dt) { if (physics && boundaryLayer) boundaryLayer.mixEdges(state[0], state[2], eFrom, eTo, dt, core.arrays.dissipation); },
+    mixMomentum(eFrom, eTo, dt) {
+      if (physics && boundaryLayer) boundaryLayer.mixEdges(state[0], state[2], eFrom, eTo, dt, core.arrays.dissipation);
+      if (physics && moist) moistPhysics.transportMomentum(state[0], state[2], eFrom, eTo, dt, core.arrays.dissipation);
+    },
     dissipate(iFrom, iTo) {
       if (!physics) return;
       const theta = state[1], lost = core.arrays.dissipation, { exnerLayer, cp } = core.diagnostics;

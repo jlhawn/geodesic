@@ -1,7 +1,7 @@
 import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physics/ice.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH } from '../physics/radiation.module.js';
-import { CLEAR_AIR, DECK_CLOSED } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE } from '../physics/moist.module.js';
 
 /*
  * The column physics of the model as WGSL, one thread per column (or per
@@ -31,6 +31,13 @@ export function physicsConstants(o) {
   if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${o.cloudOverlap}`);
   if (!(o.overcastInversion?.[1] > o.overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${o.overcastInversion}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
+  if (o.shallowScheme !== 'massFlux' && o.shallowScheme !== 'bettsMiller') throw new Error(`shallowScheme must be 'massFlux' or 'bettsMiller', not ${o.shallowScheme}`);
+  if (o.cumulusSource !== 'mean' && o.cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${o.cumulusSource}`);
+  if (o.convection !== 'plume' && o.convection !== 'bettsMiller') throw new Error(`convection must be 'plume' or 'bettsMiller', not ${o.convection}`);
+  if (o.plumeClosure !== 'maximum' && o.plumeClosure !== 'separate' && o.plumeClosure !== 'cape') throw new Error(`plumeClosure must be 'maximum', 'separate' or 'cape', not ${o.plumeClosure}`);
+  if (o.plumeCapeParcel !== 'plume' && o.plumeCapeParcel !== 'undilute') throw new Error(`plumeCapeParcel must be 'plume' or 'undilute', not ${o.plumeCapeParcel}`);
+  if (o.plumeSource !== 'mean' && o.plumeSource !== 'lowest') throw new Error(`plumeSource must be 'mean' or 'lowest', not ${o.plumeSource}`);
+  const plumed = o.convection === 'plume', massFlux = o.shallowScheme === 'massFlux' || plumed;
   return `
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
 const PDF_COVER: bool = ${o.cloudCover === 'pdf'}; const VISIBLE_PATH: f32 = ${VISIBLE_PATH}; const RHC: f32 = ${o.criticalHumidity}; const RHC_BL: f32 = ${o.boundaryCriticalHumidity}; const COVER_FLOOR: f32 = ${o.coverFloor ?? 0.01}; const BOUND_WIDTH: bool = ${o.overcastWater != null}; const OVERCAST_WATER: f32 = ${o.overcastWater ?? 0}; const OVERCAST_EIS: f32 = ${o.overcastInversion[0]}; const OVERCAST_RAMP: f32 = ${o.overcastInversion[1] - o.overcastInversion[0]}; const RANDOM_OVERLAP: bool = ${o.cloudOverlap === 'maximumRandom'};
@@ -46,7 +53,12 @@ const RELAX: f32 = ${o.relaxationTime}; const RH_REF: f32 = ${o.referenceHumidit
 const DETRAIN: f32 = ${o.detrainment}; const ANVIL: f32 = ${o.anvilDepth}; const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const PARCEL_DEPTH: f32 = ${o.parcelDepth}; const ENTRAIN: f32 = ${o.entrainmentRate}; const CAPE_MIN: f32 = ${o.capeThreshold}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const ACT_MEM: f32 = ${o.activityMemory}; const SHALLOW_TOP: f32 = ${o.shallowTop}; const DOWNDRAFT: f32 = ${o.downdraftEvaporation}; const SHALLOW_RH: f32 = ${o.shallowHumidity};
 const BL_PARCEL: bool = ${o.boundaryParcel !== false}; const FROM_SURFACE: bool = ${o.adjustFrom === 'surface'}; const DECK_VETO: bool = ${o.deckVeto !== false}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
-const DECK_CLOSED: f32 = ${DECK_CLOSED}; const VENT: bool = ${o.shallowCape != null}; const VENT_CAPE: f32 = ${o.shallowCape ?? 0}; const VENT_CIN: f32 = ${o.shallowInhibition}; const VENT_STABLE: bool = ${o.shallowStability != null}; const VENT_EIS: f32 = ${o.shallowStability ?? 0}; const SHALLOW_MIXING: bool = ${o.shallowReference === 'mixingLine'}; const SHALLOW_RAIN: bool = ${!!o.shallowRain}; const DRAFT_MASS: bool = ${o.downdraftSpread === 'mass'}; const PARCEL_VIRT: f32 = ${o.virtualBuoyancy === false ? 0 : 'VIRT'};
+const DECK_CLOSED: f32 = ${DECK_CLOSED}; const VENT: bool = ${!massFlux && o.shallowCape != null}; const VENT_CAPE: f32 = ${o.shallowCape ?? 0}; const VENT_CIN: f32 = ${o.shallowInhibition}; const VENT_STABLE: bool = ${o.shallowStability != null}; const VENT_EIS: f32 = ${o.shallowStability ?? 0}; const SHALLOW_MIXING: bool = ${o.shallowReference === 'mixingLine'}; const SHALLOW_RAIN: bool = ${!!o.shallowRain}; const DRAFT_MASS: bool = ${o.downdraftSpread === 'mass'}; const PARCEL_VIRT: f32 = ${o.virtualBuoyancy === false ? 0 : 'VIRT'};
+const MASS_FLUX: bool = ${massFlux}; const CU_FLOOR: f32 = ${CUMULUS_FLOOR}; const CU_K0: i32 = ${o.cumulusK0 ?? 0}; const CU_C: f32 = ${o.cumulusClosure}; const CU_EPS: f32 = ${o.cumulusEntrainment}; const CU_DEL: f32 = ${o.cumulusDetrainment}; const CU_SOURCE: f32 = ${o.cumulusSourceDepth}; const CU_LOSS: f32 = ${o.cumulusBoundaryLoss};
+const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvershoot}; const CU_WU: f32 = ${o.cumulusUpdraft}; const CU_RAIN: bool = ${o.cumulusRain != null}; const CU_RAIN_Q: f32 = ${o.cumulusRain ?? 0}; const CU_LOWEST: bool = ${o.cumulusSource === 'lowest'}; const CU_WITH_DEEP: bool = ${!!o.cumulusWithDeep};
+const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: bool = ${massFlux && o.cumulusCloud !== false && o.cloudCover === 'pdf'};
+const PLUME: bool = ${plumed}; const PL_SEPARATE: bool = ${o.plumeClosure === 'separate'}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
+const PL_MOMENTUM: bool = ${plumed && !!o.plumeMomentum}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
 const BL_WE: f32 = ${o.entrainmentVelocity ?? 0}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
@@ -503,7 +515,12 @@ export const snowOnSea = (amount) => `if (IN[S_ICE + i] > 0.0) {
     } else { IN[S_TS + i] -= LFUS * (${amount}) / PH[PH_CAP + i]; }`;
 
 export const PHYSICS_KERNELS = {
-  physics: `${MIXED_LAYER_WGSL}@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  physics: `${MIXED_LAYER_WGSL}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+  if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
+  let slot = (k - CU_K0) * C + i;
+  return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
+}
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ice = IN[S_ICE + i]; let bottom = (K - 1) * C + i;
   let wind = cellWind(i, K - 1);
@@ -550,10 +567,14 @@ export const PHYSICS_KERNELS = {
     if (STRATUS_SOLAR && CLOUD_SW > 0.0) {
       var path = 0.0; var layer = 0.0; var shadeBlocks = vec3<f32>(0.0, 1.0, 0.0);
       for (var k = 0; k < K; k++) {
-        let water = max(0.0, IN[S_QC + k * C + i]) * (pi * LV[L_DS + k] / GRAV);
+        let mass = pi * LV[L_DS + k] / GRAV;
+        var water = max(0.0, IN[S_QC + k * C + i]) * mass;
+        var f = layerCover(k * C + i, k, bottom, pi, water, mixedDepth, stratiform);
+        let cu = cumulusCloud(k, i);
+        if (cu.y * mass > 0.0) { f = select(cu.x, max(f, cu.x), water > 0.0); water += cu.y * mass; }
         path += water;
         if (k == STRATUS_K) { layer = water; }
-        overlap(select(0.0, layerCover(k * C + i, k, bottom, pi, water, mixedDepth, stratiform) * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), k == K - 1, &shadeBlocks);
+        overlap(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), k == K - 1, &shadeBlocks);
       }
       var shade = overlapCover(shadeBlocks);
       if (!(shade > 0.0)) { shade = 1.0; }
@@ -594,9 +615,11 @@ export const PHYSICS_KERNELS = {
     let mass = pi * LV[L_DS + k] / GRAV;
     var eps = 1.0 - exp(-tau0 * LV[L_SHAPE + k]);
     if (COUPLED) { eps = 1.0 - exp(-VCOUP * max(0.0, IN[S_Q + idx]) * mass); }
-    let water = max(0.0, IN[S_QC + idx]) * mass;
+    var water = max(0.0, IN[S_QC + idx]) * mass;
+    var f = layerCover(idx, k, bottom, pi, water, mixedDepth, stratiform);
+    let cu = cumulusCloud(k, i);
+    if (cu.y * mass > 0.0) { f = select(cu.x, max(f, cu.x), water > 0.0); water += cu.y * mass; }
     cloudPath += water;
-    let f = layerCover(idx, k, bottom, pi, water, mixedDepth, stratiform);
     overlap(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), k == K - 1, &blocks);
     cloudE[k] = select(0.0, f * (1.0 - exp(-CLOUD_ABS * water / f)), water > 0.0);
     if (STRATUS && k == STRATUS_K && deck > 0.0) { cloudE[k] = fraction * (1.0 - exp(-CLOUD_ABS * (water + deck))) + (1.0 - fraction) * cloudE[k]; }
@@ -635,7 +658,8 @@ export const PHYSICS_KERNELS = {
   var cloudHeating = 0.0;
   if (CLOUD_SW > 0.0 && incident > 0.0 && sw.w > 0.0) {
     for (var k = 0; k < K; k++) {
-      let water = max(0.0, IN[S_QC + k * C + i]) * (pi * LV[L_DS + k] / GRAV);
+      let mass = pi * LV[L_DS + k] / GRAV;
+      let water = max(0.0, IN[S_QC + k * C + i]) * mass + cumulusCloud(k, i).y * mass;
       let share = clearShare * water + deckShare * (water + select(0.0, deck, k == STRATUS_K));
       netFlux[k] += share;
       cloudHeating += share;
@@ -727,13 +751,12 @@ export const PHYSICS_KERNELS = {
   if (MLM_PROGNOSTIC && PH[PH_MLMTOP + i] > 0.0) { top = max(depth, PH[PH_MLMTOP + i]); }
   let h = top - zb;
   for (var k = KTOP; k < K; k++) { PH[PH_MIX + k * C + i] = 0.0; }
+  let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
+  let buoyancy = GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture);
+  PH[PH_BUOY + i] = buoyancy; PH[PH_USTAR + i] = friction;
   if (h <= 0.0) { return; }
   var scale = friction;
-  if (STABILITY) {
-    let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
-    let buoyancy = GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture);
-    if (buoyancy > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN * buoyancy / (friction * friction * friction)), 0.25); }
-  }
+  if (STABILITY && buoyancy > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN * buoyancy / (friction * friction * friction)), 0.25); }
   var entrainK = -1;
   for (var k = KTOP; k < K - 1; k++) {
     let idx = k * C + i; let below = idx + C;
@@ -753,6 +776,351 @@ export const PHYSICS_KERNELS = {
   adjust: `fn upperInterface(i: i32, k: i32) -> f32 {
   let idx = k * C + i;
   return (D[D_GEO + idx] + LV[L_GABS + k] + CP * D[D_THV + idx] * (D[D_EXM + idx] - D[D_EXL + idx - C])) / GRAV;
+}
+fn saturateColumn(i: i32, pi: f32) {
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i;
+    let ex = D[D_EXM + idx];
+    let temperature = IN[S_TH + idx] * ex;
+    let pressure = pi * LV[L_SM + k];
+    let qs = qsat(temperature, pressure);
+    let slope = qs * LHEAT / (RVAP * temperature * temperature);
+    var change = (IN[S_Q + idx] - qs) / (1.0 + LHEAT * slope / CP);
+    if (change < 0.0) { change = max(change, -IN[S_QC + idx]); }
+    if (change == 0.0) { continue; }
+    IN[S_Q + idx] -= change; IN[S_QC + idx] += change; IN[S_TH + idx] += LHEAT * change / (CP * ex);
+  }
+}
+fn clearCumulus(i: i32) {
+  for (var k = CU_K0; k < K; k++) { PH[PH_CUCOVER + (k - CU_K0) * C + i] = 0.0; PH[PH_CUWATER + (k - CU_K0) * C + i] = 0.0; }
+  PH[PH_CUMF + i] = 0.0; PH[PH_CUTOP + i] = 0.0;
+}
+fn plumeState(energy: f32, water: f32, height: f32, pressure: f32, guess: f32) -> vec2<f32> {
+  let dry = (energy - GRAV * height) / CP;
+  if (!(water > qsat(dry, pressure))) { return vec2<f32>(dry, 0.0); }
+  let t = saturatedTemperature(energy - GRAV * height + LHEAT * water, pressure, max(dry, guess), 1.0);
+  return vec2<f32>(t, max(0.0, water - qsat(t, pressure)));
+}
+// the shallow cumulus mass flux of moist.module.js's cumulusColumn; returns its rain
+fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
+  clearCumulus(i);
+  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - 0.5), 0.0, 1.0), DECK_VETO);
+  let buoyancy = PH[PH_BUOY + i];
+  if (!(open > 0.0) || !(buoyancy > 0.0)) { return 0.0; }
+  let bottom = K - 1;
+  var T: array<f32, K>; var p: array<f32, K>; var dp: array<f32, K>; var z: array<f32, K>; var envS: array<f32, K>; var envQ: array<f32, K>;
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let cloud = max(0.0, IN[S_QC + idx]);
+    T[k] = IN[S_TH + idx] * D[D_EXM + idx]; p[k] = pi * LV[L_SM + k]; dp[k] = pi * LV[L_DS + k]; z[k] = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV;
+    envS[k] = CP * T[k] + GRAV * z[k] - LHEAT * cloud; envQ[k] = max(0.0, IN[S_Q + idx]) + cloud;
+  }
+  let depth = PH[PH_DEPTH + i];
+  var mass = 0.0; var energy = 0.0; var water = 0.0; var source = bottom;
+  for (var k = bottom; k >= 0; k--) {
+    if (k < bottom && ((!(upperInterface(i, k + 1) < depth) && !(p[k] >= pi - CU_SOURCE)) || !(p[k] > SHALLOW_TOP))) { break; }
+    mass += dp[k]; energy += dp[k] * envS[k]; water += dp[k] * envQ[k]; source = k;
+  }
+  var sourceS = energy / mass; var sourceQ = water / mass;
+  if (CU_LOWEST) { sourceS = envS[bottom]; sourceQ = envQ[bottom]; }
+  if (!(sourceQ > 0.0)) { return 0.0; }
+  let lcl = condensationLevel((sourceS - GRAV * z[bottom]) / CP, sourceQ, p[bottom]);
+  if (!(lcl.y > SHALLOW_TOP)) { return 0.0; }
+  var plumeS: array<f32, K>; var plumeQ: array<f32, K>; var liquid: array<f32, K>; var growth: array<f32, K>; var fallout: array<f32, K>;
+  var s = sourceS; var w = sourceQ; var inhibition = 0.0; var cloudy = false; var top = -1; var guess = 0.0;
+  plumeS[source] = s; plumeQ[source] = w;
+  for (var k = source - 1; k >= 0; k--) {
+    if (!(p[k] > SHALLOW_TOP)) { if (cloudy) { top = k + 1; } break; }
+    let below = upperInterface(i, k + 1); let above = upperInterface(i, k);
+    let mixes = pi * LV[L_SL + k] <= lcl.y; let epsilon = select(0.0, CU_EPS, mixes);
+    let half = exp(-epsilon * (z[k] - below));
+    let midS = envS[k] + (s - envS[k]) * half; let midQ = envQ[k] + (w - envQ[k]) * half;
+    let mid = plumeState(midS, midQ, z[k], p[k], guess);
+    guess = mid.x; liquid[k] = mid.y;
+    let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
+    let work = RGAS * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - T[k] * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud)) * dp[k] / p[k];
+    if (mid.y > 0.0) { cloudy = true; }
+    if (!cloudy) { if (work < 0.0) { inhibition -= work; } } else if (!(work > 0.0)) { top = k; break; }
+    let full = exp(-epsilon * (above - below));
+    s = envS[k] + (s - envS[k]) * full; w = envQ[k] + (w - envQ[k]) * full;
+    fallout[k] = 0.0;
+    if (CU_RAIN) {
+      let at = plumeState(s, w, above, pi * LV[L_SU + k], guess);
+      let excess = at.y - CU_RAIN_Q;
+      if (excess > 0.0) { w -= excess; s += LHEAT * excess; fallout[k] = excess; }
+    }
+    plumeS[k] = s; plumeQ[k] = w;
+    growth[k] = exp((epsilon - select(0.0, CU_DEL, mixes)) * (above - below));
+  }
+  if (top < 0) { return 0.0; }
+  let lift = buoyancy * max(0.0, depth - z[bottom]);
+  let velocity = max(select(0.0, pow(lift, 1.0 / 3.0), lift > 0.0), CU_FRIC * PH[PH_USTAR + i]);
+  if (!(velocity > 0.0)) { return 0.0; }
+  var base = open * CU_C * lcl.y / (RGAS * lcl.x) * velocity * exp(-inhibition / (velocity * velocity));
+  base = min(base, CU_LOSS * mass / (GRAV * dt));
+  if (!(base > CU_FLOOR)) { return 0.0; }
+  var flux: array<f32, K + 1>;
+  var sourceBelow = 0.0;
+  for (var j = bottom; j > source; j--) { sourceBelow += dp[j]; flux[j] = base * sourceBelow / mass; }
+  flux[source] = base;
+  for (var k = source - 1; k > top; k--) { flux[k] = flux[k + 1] * growth[k]; }
+  flux[top + 1] *= CU_OVER;
+  var scale = 1.0;
+  for (var k = top; k <= bottom; k++) {
+    let courant = max(flux[k], flux[k + 1]) * GRAV * dt / dp[k];
+    if (courant * scale > 1.0) { scale = 1.0 / courant; }
+  }
+  for (var j = top + 1; j <= bottom; j++) { flux[j] *= scale; }
+  var fluxS: array<f32, K + 1>; var fluxQ: array<f32, K + 1>;
+  var belowMass = 0.0; var belowS = 0.0; var belowQ = 0.0;
+  for (var j = bottom; j > top; j--) {
+    var upS = plumeS[j]; var upQ = plumeQ[j];
+    if (j > source) {
+      belowMass += dp[j]; belowS += dp[j] * envS[j]; belowQ += dp[j] * envQ[j];
+      upS = select(belowS / belowMass, sourceS, CU_LOWEST); upQ = select(belowQ / belowMass, sourceQ, CU_LOWEST);
+    }
+    fluxS[j] = flux[j] * (upS - envS[j - 1]); fluxQ[j] = flux[j] * (upQ - envQ[j - 1]);
+  }
+  var rain = 0.0;
+  for (var k = top; k <= bottom; k++) {
+    let idx = k * C + i; let per = GRAV * dt / dp[k];
+    var dS = (fluxS[k + 1] - fluxS[k]) * per; var dQ = (fluxQ[k + 1] - fluxQ[k]) * per;
+    if (CU_RAIN && k > top && k < source && fallout[k] > 0.0) {
+      let fallen = flux[k] * fallout[k] * dt;
+      rain += fallen; dQ -= fallen * GRAV / dp[k]; dS += LHEAT * fallen * GRAV / dp[k];
+    }
+    IN[S_TH + idx] += dS / (CP * D[D_EXM + idx]); IN[S_Q + idx] += dQ;
+  }
+  for (var k = max(top, CU_K0); k < source; k++) {
+    if (!(liquid[k] > 0.0)) { continue; }
+    let slot = (k - CU_K0) * C + i;
+    PH[PH_CUCOVER + slot] = min(1.0, 0.5 * (flux[k] + flux[k + 1]) * RGAS * T[k] / (p[k] * CU_WU));
+    PH[PH_CUWATER + slot] = liquid[k];
+  }
+  PH[PH_CUMF + i] = base * scale; PH[PH_CUTOP + i] = pi * LV[L_SU + top];
+  return rain;
+}
+var<private> cuFall: array<f32, K>;
+var<private> cuReserve: array<f32, K>;
+var<private> cuDeep: bool;
+var<private> cuBase: i32;
+var<private> cuShallowRain: f32;
+// the convective mass flux of moist.module.js's plumeColumn; returns the rain it leaves falling, per layer in cuFall
+fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
+  cuDeep = false; cuBase = K; cuShallowRain = 0.0;
+  if (PL_MOMENTUM) {
+    PH[PH_MOMS + i] = f32(K);
+    for (var k = 0; k <= K; k++) { PH[PH_MOMU + k * C + i] = 0.0; PH[PH_MOMD + k * C + i] = 0.0; }
+    for (var k = 0; k < K; k++) { PH[PH_MOMK + k * C + i] = 1.0; PH[PH_MOMKD + k * C + i] = 1.0; }
+  }
+  for (var k = 0; k < K; k++) { cuFall[k] = 0.0; cuReserve[k] = 0.0; }
+  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - 0.5), 0.0, 1.0), DECK_VETO);
+  if (!(open > 0.0)) { return cumulusColumn(i, pi, dt); }
+  let bottom = K - 1;
+  var T: array<f32, K>; var p: array<f32, K>; var dp: array<f32, K>; var z: array<f32, K>; var envS: array<f32, K>; var envQ: array<f32, K>;
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let cloud = max(0.0, IN[S_QC + idx]);
+    T[k] = IN[S_TH + idx] * D[D_EXM + idx]; p[k] = pi * LV[L_SM + k]; dp[k] = pi * LV[L_DS + k]; z[k] = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV;
+    envS[k] = CP * T[k] + GRAV * z[k] - LHEAT * cloud; envQ[k] = max(0.0, IN[S_Q + idx]) + cloud;
+  }
+  let depthTop = PH[PH_DEPTH + i];
+  var mass = 0.0; var energy = 0.0; var water = 0.0; var source = bottom;
+  for (var k = bottom; k >= 0; k--) {
+    if (k < bottom && ((!(upperInterface(i, k + 1) < depthTop) && !(p[k] >= pi - CU_SOURCE)) || !(p[k] > SHALLOW_TOP))) { break; }
+    mass += dp[k]; energy += dp[k] * envS[k]; water += dp[k] * envQ[k]; source = k;
+  }
+  var sourceS = energy / mass; var sourceQ = water / mass;
+  if (PL_LOWEST) { sourceS = envS[bottom]; sourceQ = envQ[bottom]; }
+  if (!(sourceQ > 0.0)) { return cumulusColumn(i, pi, dt); }
+  let lcl = condensationLevel((sourceS - GRAV * z[bottom]) / CP, sourceQ, p[bottom]);
+  if (!(lcl.y > pi * LV[L_SL + 0])) { return cumulusColumn(i, pi, dt); }
+  var plumeS: array<f32, K>; var plumeQ: array<f32, K>; var liquid: array<f32, K>; var fallout: array<f32, K>; var work: array<f32, K>; var entrained: array<f32, K>; var thick: array<f32, K>;
+  var speed: array<f32, K + 1>;
+  var s = sourceS; var w = sourceQ; var w2 = 0.0; var below = 0.0; var inhibition = 0.0; var cloudy = false; var started = false; var top = -1; var guess = 0.0; var cape = 0.0; var base = -1; var neutral = -1; var neutralB = 0.0; var aboveB = 0.0;
+  plumeS[source] = s; plumeQ[source] = w;
+  for (var k = source - 1; k >= 0; k--) {
+    let lower = upperInterface(i, k + 1);
+    var upper = lower;
+    if (k > 0) { upper = upperInterface(i, k); }
+    let depth = upper - lower;
+    let mixes = pi * LV[L_SL + k] <= lcl.y;
+    if (mixes && !started) { started = true; base = k + 1; w2 = PL_W0 * PL_W0; speed[k + 1] = w2; }
+    var epsilon = 0.0;
+    if (mixes) { epsilon = max(PL_FLOOR, PL_EPS * max(0.0, below) / w2); }
+    let half = exp(-epsilon * (z[k] - lower));
+    let midS = envS[k] + (s - envS[k]) * half; let midQ = envQ[k] + (w - envQ[k]) * half;
+    let mid = plumeState(midS, midQ, z[k], p[k], guess);
+    guess = mid.x; liquid[k] = mid.y;
+    let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
+    let environment = T[k] * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud); let rising = mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y);
+    let wk = RGAS * (rising - environment) * dp[k] / p[k]; let buoyancy = GRAV * (rising - environment) / environment;
+    if (mid.y > 0.0) { cloudy = true; }
+    if (!cloudy && wk < 0.0) { inhibition -= wk; }
+    work[k] = wk; entrained[k] = epsilon; thick[k] = depth;
+    if (PL_UNDILUTE) {
+      let parcel = plumeState(sourceS, sourceQ, z[k], p[k], mid.x);
+      work[k] = RGAS * (parcel.x * (1.0 + PARCEL_VIRT * (sourceQ - parcel.y)) - environment) * dp[k] / p[k];
+    }
+    if (mixes) {
+      if (k == 0) { top = k; if (neutral == k + 1) { aboveB = buoyancy; } break; }
+      let x = 2.0 * PL_DRAG * epsilon * depth;
+      w2 = w2 * exp(-x) + 2.0 * PL_ACC * buoyancy * depth * select(1.0, relaxedFraction(x) / x, x > 0.0);
+      if (!(w2 > 0.0)) { top = k; if (neutral == k + 1) { aboveB = buoyancy; } break; }
+    }
+    speed[k] = select(0.0, w2, mixes);
+    if (buoyancy > 0.0) { neutral = k; neutralB = buoyancy; aboveB = 0.0; } else if (neutral == k + 1) { aboveB = buoyancy; }
+    if (cloudy && work[k] > 0.0) { cape += work[k]; }
+    below = buoyancy;
+    let full = exp(-epsilon * depth);
+    s = envS[k] + (s - envS[k]) * full; w = envQ[k] + (w - envQ[k]) * full;
+    fallout[k] = 0.0;
+    if (mixes) {
+      let at = plumeState(s, w, upper, pi * LV[L_SU + k], guess);
+      let excess = at.y - PL_RAIN_Q;
+      if (excess > 0.0) { let fallen = excess * relaxedFraction(PL_RAIN_RATE * depth); w -= fallen; s += LHEAT * fallen; fallout[k] = fallen; }
+    }
+    plumeS[k] = s; plumeQ[k] = w;
+  }
+  if (top == 0) { top = 1; }
+  if (!cloudy || top < 1 || !(LV[L_SU + top] * DEEP_REFERENCE < SHALLOW_TOP)) { return cumulusColumn(i, pi, dt); }
+  clearCumulus(i);
+  let topHeight = upperInterface(i, top);
+  var neutralHeight = upperInterface(i, top + 1);
+  if (neutral > top && !(aboveB > 0.0)) { neutralHeight = min(neutralHeight, z[neutral] + (z[neutral - 1] - z[neutral]) * neutralB / (neutralB - aboveB)); }
+  var flux: array<f32, K + 1>;
+  var sourceBelow = 0.0;
+  for (var j = bottom; j > source; j--) { sourceBelow += dp[j]; flux[j] = sourceBelow / mass; }
+  flux[source] = 1.0;
+  var kn = source - 1;
+  loop {
+    if (!(kn > top) || upperInterface(i, kn) > neutralHeight) { break; }
+    flux[kn] = flux[kn + 1] * exp((entrained[kn] - max(0.0, entrained[kn] - PL_GROWTH)) * thick[kn]);
+    kn--;
+  }
+  let anchor = flux[kn + 1];
+  for (; kn > top; kn--) { flux[kn] = anchor * (topHeight - upperInterface(i, kn)) / (topHeight - neutralHeight); }
+  var rainAbove = 0.0;
+  for (var k = top + 1; k < source; k++) { rainAbove += flux[k] * fallout[k]; }
+  var dflux: array<f32, K + 1>; var dS: array<f32, K + 1>; var dQ: array<f32, K + 1>; var devap: array<f32, K>;
+  var start = -1; var share = 0.0;
+  if (DD_SHARE > 0.0 && rainAbove > 0.0) {
+    for (var k = top + 1; k < base; k++) { if (start < 0 || envS[k] + LHEAT * envQ[k] < envS[start] + LHEAT * envQ[start]) { start = k; } }
+  }
+  if (start >= 0) {
+    var hd = envS[start] + LHEAT * envQ[start]; var fd = 1.0; var subcloud = 0.0;
+    for (var k = base + 1; k <= bottom; k++) { subcloud += dp[k]; }
+    let td = saturatedTemperature(hd - GRAV * upperInterface(i, start + 1), pi * LV[L_SL + start], T[start], 1.0);
+    let qd = qsat(td, pi * LV[L_SL + start]);
+    dflux[start + 1] = -1.0; dS[start + 1] = hd - LHEAT * qd; dQ[start + 1] = qd;
+    devap[start] = qd - envQ[start];
+    var wd = qd; var left = subcloud; var atBase = 1.0;
+    for (var k = start + 1; k < bottom; k++) {
+      var mixedQ = wd;
+      if (k <= base) {
+        let keep = exp(-DD_EPS * (upperInterface(i, k) - upperInterface(i, k + 1))); let ambient = envS[k] + LHEAT * envQ[k];
+        fd /= keep;
+        hd = ambient + (hd - ambient) * keep;
+        mixedQ = envQ[k] + (wd - envQ[k]) * keep;
+        atBase = fd;
+      } else {
+        left -= dp[k];
+        fd = atBase * left / subcloud;
+      }
+      let pk = pi * LV[L_SL + k];
+      let tk = saturatedTemperature(hd - GRAV * upperInterface(i, k + 1), pk, T[k], 1.0);
+      let qk = qsat(tk, pk);
+      dflux[k + 1] = -fd; dS[k + 1] = hd - LHEAT * qk; dQ[k + 1] = qk;
+      devap[k] = (qk - mixedQ) * fd;
+      wd = qk;
+    }
+    share = DD_SHARE;
+    var produced = 0.0; var taken = 0.0;
+    for (var k = 0; k < bottom; k++) {
+      if (k > top && k < source) { produced += flux[k] * fallout[k]; }
+      taken += devap[k];
+      if (taken > 0.0 && share * taken > produced) { share = produced / taken; }
+    }
+    if (!(share > 0.0)) { share = 0.0; }
+  }
+  var fluxS: array<f32, K + 1>; var fluxQ: array<f32, K + 1>;
+  var belowMass = 0.0; var belowS = 0.0; var belowQ = 0.0;
+  for (var j = bottom; j > top; j--) {
+    var upS = plumeS[j]; var upQ = plumeQ[j];
+    if (j > source) {
+      belowMass += dp[j]; belowS += dp[j] * envS[j]; belowQ += dp[j] * envQ[j];
+      upS = select(belowS / belowMass, sourceS, PL_LOWEST); upQ = select(belowQ / belowMass, sourceQ, PL_LOWEST);
+    }
+    fluxS[j] = flux[j] * (upS - envS[j - 1]) + share * dflux[j] * (dS[j] - envS[j]);
+    fluxQ[j] = flux[j] * (upQ - envQ[j - 1]) + share * dflux[j] * (dQ[j] - envQ[j]);
+  }
+  var consumption = 0.0;
+  for (var k = top; k <= bottom; k++) {
+    let per = GRAV / dp[k];
+    var made = 0.0;
+    if (k > top && k < source) { made = flux[k] * fallout[k]; }
+    let evaporated = share * devap[k];
+    if (k < source && k > top) {
+      let tS = (fluxS[k + 1] - fluxS[k] + LHEAT * (made - evaporated)) * per; let tQ = (fluxQ[k + 1] - fluxQ[k] - made + evaporated) * per;
+      let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
+      consumption += RGAS * (tS / CP * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud) + PARCEL_VIRT * T[k] * tQ) * dp[k] / p[k];
+    }
+  }
+  var relaxed = 0.0;
+  if (consumption > 0.0 && cape > PL_CAPE) { relaxed = (cape - PL_CAPE) / (PL_TAU * consumption); }
+  let gate = clamp(0.5 + (CIN_MAX - inhibition) / max(1.0, CIN_MAX), 0.0, 1.0);
+  let buoyancyFlux = PH[PH_BUOY + i];
+  var shallowBase = 0.0;
+  if (buoyancyFlux > 0.0 && !PL_RELAXED) {
+    let lift = buoyancyFlux * max(0.0, depthTop - z[bottom]);
+    let velocity = max(select(0.0, pow(lift, 1.0 / 3.0), lift > 0.0), CU_FRIC * PH[PH_USTAR + i]);
+    if (velocity > 0.0) { shallowBase = CU_C * lcl.y / (RGAS * lcl.x) * velocity * exp(-inhibition / (velocity * velocity)); }
+  }
+  var baseFlux = min(open * max(shallowBase, gate * relaxed), CU_LOSS * mass / (GRAV * dt));
+  for (var k = top; k <= bottom; k++) {
+    let courant = baseFlux * (max(flux[k], flux[k + 1]) + share * max(-dflux[k], -dflux[k + 1])) * GRAV * dt / dp[k];
+    if (courant > 1.0) { baseFlux /= courant; }
+  }
+  if (!(baseFlux > CU_FLOOR)) {
+    if (PL_RELAXED) { return cumulusColumn(i, pi, dt); }
+    return 0.0;
+  }
+  cuDeep = true; cuBase = base;
+  var fallen = 0.0;
+  for (var k = top; k <= bottom; k++) {
+    let per = GRAV / dp[k];
+    var made = 0.0;
+    if (k > top && k < source) { made = flux[k] * fallout[k]; }
+    let evaporated = share * devap[k];
+    let idx = k * C + i;
+    IN[S_TH + idx] += baseFlux * dt * (fluxS[k + 1] - fluxS[k] + LHEAT * (made - evaporated)) * per / (CP * D[D_EXM + idx]);
+    IN[S_Q + idx] += baseFlux * dt * (fluxQ[k + 1] - fluxQ[k] - made + evaporated) * per;
+    cuFall[k] = (made - evaporated) * baseFlux * dt;
+    fallen += cuFall[k];
+  }
+  for (var k = bottom - 1; k >= 0; k--) { cuReserve[k] = max(0.0, cuReserve[k + 1] - cuFall[k + 1]); }
+  if (PL_MOMENTUM) {
+    for (var k = 0; k <= K; k++) { PH[PH_MOMU + k * C + i] = baseFlux * flux[k]; PH[PH_MOMD + k * C + i] = baseFlux * share * dflux[k]; }
+    for (var k = 0; k < K; k++) {
+      var keep = 1.0;
+      if (k > top && k < source) { keep = exp(-entrained[k] * thick[k]); }
+      PH[PH_MOMK + k * C + i] = keep;
+      var keepD = 1.0;
+      if (k == start) { keepD = 0.0; } else if (start >= 0 && k > start && k <= base) { keepD = exp(-DD_EPS * (upperInterface(i, k) - upperInterface(i, k + 1))); }
+      PH[PH_MOMKD + k * C + i] = keepD;
+    }
+    PH[PH_MOMS + i] = f32(source);
+  }
+  var shallowRain = 0.0;
+  if (PL_SEPARATE) { shallowRain = cumulusColumn(i, pi, dt); }
+  for (var k = max(top, CU_K0); k < source; k++) {
+    if (!(liquid[k] > 0.0)) { continue; }
+    let slot = (k - CU_K0) * C + i;
+    let up = max(PL_W0, sqrt(max(0.0, 0.5 * (speed[k] + speed[k + 1]))));
+    let cover = min(1.0, 0.5 * (flux[k] + flux[k + 1]) * baseFlux * RGAS * T[k] / (p[k] * up));
+    if (cover > PH[PH_CUCOVER + slot]) { PH[PH_CUCOVER + slot] = cover; PH[PH_CUWATER + slot] = liquid[k]; }
+  }
+  PH[PH_CUMF + i] += baseFlux; PH[PH_CUTOP + i] = pi * LV[L_SU + top];
+  cuShallowRain = shallowRain;
+  return fallen;
 }
 fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   var upper: array<f32, K>; var lower: array<f32, K>; var rhs: array<f32, K>;
@@ -774,23 +1142,15 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   for (var k = KTOP; k < K - 1; k++) { if (PH[PH_MIX + k * C + i] > 0.0) { mixes = true; } }
   if (mixes) { mixField(S_TH, i, pi, dt); mixField(S_Q, i, pi, dt); mixField(S_QC, i, pi, dt); }
   diagnoseColumn(i);
-  // saturation adjustment
-  for (var k = 0; k < K; k++) {
-    let idx = k * C + i;
-    let ex = D[D_EXM + idx];
-    let temperature = IN[S_TH + idx] * ex;
-    let pressure = pi * LV[L_SM + k];
-    let qs = qsat(temperature, pressure);
-    let slope = qs * LHEAT / (RVAP * temperature * temperature);
-    var change = (IN[S_Q + idx] - qs) / (1.0 + LHEAT * slope / CP);
-    if (change < 0.0) { change = max(change, -IN[S_QC + idx]); }
-    if (change == 0.0) { continue; }
-    IN[S_Q + idx] -= change; IN[S_QC + idx] += change; IN[S_TH + idx] += LHEAT * change / (CP * ex);
-  }
+  saturateColumn(i, pi);
+  var produced = 0.0; var cloudBase = K; var downdraft = 0.0;
+  if (PLUME) {
+    produced = plumeColumn(i, pi, dt);
+    if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }
+  } else {
   // convection: the triggered, entraining Betts–Miller of moist.module.js
   var T: array<f32, K>; var p: array<f32, K>; var dp: array<f32, K>; var z: array<f32, K>; var Tref: array<f32, K>; var qref: array<f32, K>;
   for (var k = 0; k < K; k++) { let idx = k * C + i; T[k] = IN[S_TH + idx] * D[D_EXM + idx]; p[k] = pi * LV[L_SM + k]; dp[k] = pi * LV[L_DS + k]; z[k] = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV; }
-  var produced = 0.0; var cloudBase = K; var downdraft = 0.0;
   let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - 0.5), 0.0, 1.0), DECK_VETO);
   let decked = !(open > 0.0);
   var top = -1; var base = -1; var cape = 0.0; var inhibition = 0.0; var lclP = 0.0; var thetaP = 0.0; var qP = 0.0; var energy0 = 0.0;
@@ -856,7 +1216,8 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     if (air > 0.0) { let lcl = condensationLevel(T[bottom], air, p[bottom]); lifted = max(0.0, CP * (T[bottom] - lcl.x) / GRAV); }
     if (inversionStrength(IN[S_TH + hi * C + i] - IN[S_TH + bottom * C + i], T[bottom], T[hi], z[hi] - z[bottom] - lifted) > VENT_EIS) { vent = 0.0; }
   }
-  if (top >= 0 && (firing || vent > 0.0)) {
+  let acting = firing && !(MASS_FLUX && shallow);
+  if (top >= 0 && (acting || vent > 0.0)) {
     let parcelBase = base;
     if (FROM_SURFACE) { base = bottom; }
     let mixing = shallow && SHALLOW_MIXING; let raining = !shallow || SHALLOW_RAIN;
@@ -879,7 +1240,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     var heating = 0.0; var drying = 0.0; var depth = 0.0;
     for (var k = top; k <= base; k++) { heating += CP * (Tref[k] - T[k]) * dp[k]; drying -= (qref[k] - IN[S_Q + k * C + i]) * dp[k]; depth += dp[k]; }
     if (mixing || !raining || heating > 0.0) {
-      let rate = dt / RELAX * select(vent, 1.0, firing);
+      let rate = dt / RELAX * select(vent, 1.0, acting);
       var rain = 0.0;
       if (raining && drying > 0.0) {
         let shift = (LHEAT * drying - heating) / (CP * depth);
@@ -906,8 +1267,16 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
       }
     }
   }
+  if (MASS_FLUX) {
+    if (CU_WITH_DEEP || !(top >= 0 && acting)) {
+      produced += cumulusColumn(i, pi, dt);
+      if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }
+    } else { clearCumulus(i); }
+  }
+  }
   // autoconversion, and the rain and the downdraft's share evaporating as they fall
-  var rained = 0.0; var left = downdraft;
+  var rained = 0.0; var left = downdraft; var convective = 0.0; var streamed = 0.0;
+  let streaming = PLUME && cuDeep;
   let floor = PH[PH_DEPTH + i];
   var subcloud = 0.0;
   if (DRAFT_MASS) { for (var k = cloudBase + 1; k < K; k++) { subcloud += LV[L_DS + k]; } }
@@ -935,6 +1304,23 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
         IN[S_TH + idx] -= LHEAT * (fromRain + fromDraft) / (mass * CP * ex);
       }
     }
+    if (streaming) {
+      convective = max(0.0, convective + cuFall[k]);
+      let spare = convective - cuReserve[k];
+      if (spare > 0.0 && k > cuBase && PL_EVAP > 0.0 && RAIN_EVAP > 0.0 && (EVAP_IN_CLOUD || !(IN[S_QC + idx] > CLEAR_AIR))) {
+        let ex = D[D_EXM + idx];
+        let temperature = IN[S_TH + idx] * ex;
+        let qs = qsat(temperature, pi * LV[L_SM + k]);
+        let slope = qs * LHEAT / (RVAP * temperature * temperature);
+        let airborne = convective * relaxedFraction(PL_EVAP * max(0.0, 1.0 - IN[S_Q + idx] / qs) * RGAS * temperature * LV[L_DS + k] / (LV[L_SM + k] * GRAV));
+        let evaporated = min(spare, min(airborne, RAIN_EVAP * max(0.0, (qs - IN[S_Q + idx]) / (1.0 + LHEAT * slope / CP)) * mass));
+        if (evaporated > 0.0) {
+          convective -= evaporated; streamed += evaporated;
+          IN[S_Q + idx] += evaporated / mass;
+          IN[S_TH + idx] -= LHEAT * evaporated / (mass * CP * ex);
+        }
+      }
+    }
     let qc = IN[S_QC + idx];
     if (!(qc > 0.0)) { continue; }
     if (AUTO_NONE) { } else if (AUTO_BL) { if (k > 0 && upperInterface(i, k) < floor) { continue; } } else if (k >= K - 2) { continue; }
@@ -943,7 +1329,8 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     IN[S_QC + idx] = qc - converted;
     rained += mass * converted;
   }
-  let convected = produced - (downdraft - left);
+  var convected = produced - (downdraft - left);
+  if (streaming) { convected = convective + cuShallowRain; }
   // filler
   for (var f = 0; f < 2; f++) {
     let off = select(S_Q, S_QC, f == 1);
@@ -1013,7 +1400,45 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   var mixes = false;
   for (var k = KTOP; k < K - 1; k++) { if (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b] > 0.0) { mixes = true; } }
-  if (!mixes) { return; }
+  if (mixes) { mixEdge(e, a, b); }
+  if (PL_MOMENTUM) { transportEdge(e, a, b); }
+}
+fn transportEdge(e: i32, a: i32, b: i32) {
+  let bottom = K - 1; let dt = P[0];
+  var up: array<f32, K + 1>; var down: array<f32, K + 1>; var flux: array<f32, K + 1>; var before: array<f32, K>;
+  var moving = false;
+  for (var k = 1; k < K; k++) {
+    up[k] = 0.5 * (PH[PH_MOMU + k * C + a] + PH[PH_MOMU + k * C + b]);
+    down[k] = 0.5 * (PH[PH_MOMD + k * C + a] + PH[PH_MOMD + k * C + b]);
+    if (up[k] > 0.0 || down[k] < 0.0) { moving = true; }
+  }
+  if (!moving) { return; }
+  for (var k = 0; k < K; k++) { before[k] = IN[S_U + k * E + e]; }
+  let source = min(i32(PH[PH_MOMS + a]), i32(PH[PH_MOMS + b])); let columnMass = 0.5 * (IN[S_PI + a] + IN[S_PI + b]);
+  var rising = 0.0; var below = 0.0; var weight = 0.0;
+  for (var j = bottom; j >= 1; j--) {
+    if (j >= source) { below += LV[L_DS + j] * before[j]; weight += LV[L_DS + j]; rising = below / weight; }
+    else { rising = before[j] + (rising - before[j]) * 0.5 * (PH[PH_MOMK + j * C + a] + PH[PH_MOMK + j * C + b]); }
+    flux[j] = up[j] * (rising - before[j - 1]);
+  }
+  var sinking = 0.0;
+  for (var j = 1; j < K; j++) {
+    sinking = before[j - 1] + (sinking - before[j - 1]) * 0.5 * (PH[PH_MOMKD + (j - 1) * C + a] + PH[PH_MOMKD + (j - 1) * C + b]);
+    flux[j] += down[j] * (sinking - before[j]);
+  }
+  var share: array<f32, K>;
+  var loss = 0.0; var total = 0.0;
+  for (var k = 0; k < K; k++) {
+    let mass = columnMass * LV[L_DS + k] / GRAV; let now = before[k] + (flux[k + 1] - flux[k]) * dt / mass;
+    IN[S_U + k * E + e] = now;
+    loss += mass * (before[k] * before[k] - now * now);
+    share[k] = mass * (now - before[k]) * (now - before[k]);
+    total += share[k];
+  }
+  if (!(loss > 0.0) || !(total > 0.0)) { return; }
+  for (var k = 0; k < K; k++) { D[D_DISS + k * E + e] += loss * share[k] / (total * columnMass * LV[L_DS + k] / GRAV); }
+}
+fn mixEdge(e: i32, a: i32, b: i32) {
   let columnMass = 0.5 * (IN[S_PI + a] + IN[S_PI + b]); let dt = P[0];
   var upper: array<f32, K>; var lower: array<f32, K>; var rhs: array<f32, K>;
   let n = K - KTOP;

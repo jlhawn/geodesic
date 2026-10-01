@@ -83,7 +83,10 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * maximally and the runs randomly: f̄ is 1 − Π(1 − f_run), f_run the
  * largest of its layers' f times their visibility; 'maximum' overlaps
  * every layer maximally, f̄ the largest over the column.
- * 'overcast' gives every cloudy layer the whole cell.
+ * 'overcast' gives every cloudy layer the whole cell. With `cumulusCloud`
+ * and the moist physics' shallow cumulus (`useCumulus`) a plume layer adds
+ * its cumulus fraction times the plume's condensate to its water and
+ * covers the larger of that fraction and its resolved cloud's f.
  *
  * Marine stratocumulus: over the part of a cell that is ice-free sea
  * (`openSea`, the per-cell fraction the caller passes; no deck without it)
@@ -283,7 +286,7 @@ export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 95, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 2, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
   prognosticHeight = true, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'maximumRandom',
-  window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
+  cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
 } = {}) {
@@ -300,6 +303,7 @@ export function createRadiation(mesh, core, {
   const emissivity = new Float64Array(K);
   const cloudEmissivity = new Float64Array(K);
   const layerCover = new Float64Array(K).fill(1);
+  let cumulusCover = null, cumulusWater = null;
   const clearSky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 };
   const vaporEmissivity = new Float64Array(K);
   const mixedEmissivity = new Float64Array(K);
@@ -502,6 +506,12 @@ export function createRadiation(mesh, core, {
           layerCover[k] = (1 - stratiform) * layerCover[k] + stratiform * Math.min(1, Math.max(coverFloor, (excess + bound) / (2 * bound)));
         }
       }
+      const cumulus = cumulusCover !== null ? cumulusCover[idx] * cumulusWater[idx] * (pi * dSigma[k] / g) : 0;
+      if (cumulus > 0) {
+        layerCover[k] = cloudWater[k] > 0 ? Math.max(layerCover[k], cumulusCover[idx]) : cumulusCover[idx];
+        cloudWater[k] += cumulus;
+        cloudPath += cumulus;
+      }
       const seen = cloudCover === 'pdf' && cloudWater[k] > 0 ? layerCover[k] * -Math.expm1(-cloudWater[k] / VISIBLE_PATH) : 0;
       if (seen > 0) block = Math.max(block, seen);
       if (block > 0 && (!(seen > 0) || k === K - 1)) { clearColumn *= 1 - block; columnCover = Math.max(columnCover, block); block = 0; }
@@ -656,6 +666,12 @@ export function createRadiation(mesh, core, {
     }
   }
 
+  function useCumulus(cover, water) {
+    const on = cumulusCloud && cloudCover === 'pdf' && cover && water;
+    cumulusCover = on ? cover : null;
+    cumulusWater = on ? water : null;
+  }
+
   const deckGates = { subsidenceSmoothing, subsidenceMemory, stratusSubsidence, minimumInversion, gateMemory };
-  return { setTime, sun, cosZenith, insolation, column, apply, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer } };
+  return { setTime, sun, cosZenith, insolation, column, apply, useCumulus, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer } };
 }
