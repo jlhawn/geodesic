@@ -149,7 +149,10 @@ export function createModel(gridOrMesh, {
       }
       surface.convectiveAdjustment(state[0], state[1], iFrom, iTo, moist ? state[4] : null, moist ? state[5] : null);
     },
-    mixMomentum(eFrom, eTo, dt) { if (physics && boundaryLayer) boundaryLayer.mixEdges(state[0], state[2], eFrom, eTo, dt, core.arrays.dissipation); },
+    mixMomentum(eFrom, eTo, dt) {
+      if (physics && boundaryLayer) boundaryLayer.mixEdges(state[0], state[2], eFrom, eTo, dt, core.arrays.dissipation);
+      if (physics && moist) moistPhysics.transportMomentum(state[0], state[2], eFrom, eTo, dt, core.arrays.dissipation);
+    },
     dissipate(iFrom, iTo) {
       if (!physics) return;
       const theta = state[1], lost = core.arrays.dissipation, { exnerLayer, cp } = core.diagnostics;

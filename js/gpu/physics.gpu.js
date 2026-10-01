@@ -58,7 +58,7 @@ const MASS_FLUX: bool = ${massFlux}; const CU_FLOOR: f32 = ${CUMULUS_FLOOR}; con
 const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvershoot}; const CU_WU: f32 = ${o.cumulusUpdraft}; const CU_RAIN: bool = ${o.cumulusRain != null}; const CU_RAIN_Q: f32 = ${o.cumulusRain ?? 0}; const CU_LOWEST: bool = ${o.cumulusSource === 'lowest'}; const CU_WITH_DEEP: bool = ${!!o.cumulusWithDeep};
 const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: bool = ${massFlux && o.cumulusCloud !== false && o.cloudCover === 'pdf'};
 const PLUME: bool = ${plumed}; const PL_SEPARATE: bool = ${o.plumeClosure === 'separate'}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
-const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
+const PL_MOMENTUM: bool = ${plumed && !!o.plumeMomentum}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
 const BL_WE: f32 = ${o.entrainmentVelocity ?? 0}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
@@ -907,6 +907,11 @@ var<private> cuShallowRain: f32;
 // the convective mass flux of moist.module.js's plumeColumn; returns the rain it leaves falling, per layer in cuFall
 fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
   cuDeep = false; cuBase = K; cuShallowRain = 0.0;
+  if (PL_MOMENTUM) {
+    PH[PH_MOMS + i] = f32(K);
+    for (var k = 0; k <= K; k++) { PH[PH_MOMU + k * C + i] = 0.0; PH[PH_MOMD + k * C + i] = 0.0; }
+    for (var k = 0; k < K; k++) { PH[PH_MOMK + k * C + i] = 1.0; PH[PH_MOMKD + k * C + i] = 1.0; }
+  }
   for (var k = 0; k < K; k++) { cuFall[k] = 0.0; cuReserve[k] = 0.0; }
   let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - 0.5), 0.0, 1.0), DECK_VETO);
   if (!(open > 0.0)) { return cumulusColumn(i, pi, dt); }
@@ -1092,6 +1097,18 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
     fallen += cuFall[k];
   }
   for (var k = bottom - 1; k >= 0; k--) { cuReserve[k] = max(0.0, cuReserve[k + 1] - cuFall[k + 1]); }
+  if (PL_MOMENTUM) {
+    for (var k = 0; k <= K; k++) { PH[PH_MOMU + k * C + i] = baseFlux * flux[k]; PH[PH_MOMD + k * C + i] = baseFlux * share * dflux[k]; }
+    for (var k = 0; k < K; k++) {
+      var keep = 1.0;
+      if (k > top && k < source) { keep = exp(-entrained[k] * thick[k]); }
+      PH[PH_MOMK + k * C + i] = keep;
+      var keepD = 1.0;
+      if (k == start) { keepD = 0.0; } else if (k > start && k <= base) { keepD = exp(-DD_EPS * (upperInterface(i, k) - upperInterface(i, k + 1))); }
+      PH[PH_MOMKD + k * C + i] = keepD;
+    }
+    PH[PH_MOMS + i] = f32(source);
+  }
   var shallowRain = 0.0;
   if (PL_SEPARATE) { shallowRain = cumulusColumn(i, pi, dt); }
   for (var k = max(top, CU_K0); k < source; k++) {
@@ -1383,7 +1400,45 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   var mixes = false;
   for (var k = KTOP; k < K - 1; k++) { if (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b] > 0.0) { mixes = true; } }
-  if (!mixes) { return; }
+  if (mixes) { mixEdge(e, a, b); }
+  if (PL_MOMENTUM) { transportEdge(e, a, b); }
+}
+fn transportEdge(e: i32, a: i32, b: i32) {
+  let bottom = K - 1; let dt = P[0];
+  var up: array<f32, K + 1>; var down: array<f32, K + 1>; var flux: array<f32, K + 1>; var before: array<f32, K>;
+  var moving = false;
+  for (var k = 1; k < K; k++) {
+    up[k] = 0.5 * (PH[PH_MOMU + k * C + a] + PH[PH_MOMU + k * C + b]);
+    down[k] = 0.5 * (PH[PH_MOMD + k * C + a] + PH[PH_MOMD + k * C + b]);
+    if (up[k] > 0.0 || down[k] < 0.0) { moving = true; }
+  }
+  if (!moving) { return; }
+  for (var k = 0; k < K; k++) { before[k] = IN[S_U + k * E + e]; }
+  let source = min(i32(PH[PH_MOMS + a]), i32(PH[PH_MOMS + b])); let columnMass = 0.5 * (IN[S_PI + a] + IN[S_PI + b]);
+  var rising = 0.0; var below = 0.0; var weight = 0.0;
+  for (var j = bottom; j >= 1; j--) {
+    if (j >= source) { below += LV[L_DS + j] * before[j]; weight += LV[L_DS + j]; rising = below / weight; }
+    else { rising = before[j] + (rising - before[j]) * 0.5 * (PH[PH_MOMK + j * C + a] + PH[PH_MOMK + j * C + b]); }
+    flux[j] = up[j] * (rising - before[j - 1]);
+  }
+  var sinking = 0.0;
+  for (var j = 1; j < K; j++) {
+    sinking = before[j - 1] + (sinking - before[j - 1]) * 0.5 * (PH[PH_MOMKD + (j - 1) * C + a] + PH[PH_MOMKD + (j - 1) * C + b]);
+    flux[j] += down[j] * (sinking - before[j]);
+  }
+  var share: array<f32, K>;
+  var loss = 0.0; var total = 0.0;
+  for (var k = 0; k < K; k++) {
+    let mass = columnMass * LV[L_DS + k] / GRAV; let now = before[k] + (flux[k + 1] - flux[k]) * dt / mass;
+    IN[S_U + k * E + e] = now;
+    loss += mass * (before[k] * before[k] - now * now);
+    share[k] = mass * (now - before[k]) * (now - before[k]);
+    total += share[k];
+  }
+  if (!(loss > 0.0) || !(total > 0.0)) { return; }
+  for (var k = 0; k < K; k++) { D[D_DISS + k * E + e] += loss * share[k] / (total * columnMass * LV[L_DS + k] / GRAV); }
+}
+fn mixEdge(e: i32, a: i32, b: i32) {
   let columnMass = 0.5 * (IN[S_PI + a] + IN[S_PI + b]); let dt = P[0];
   var upper: array<f32, K>; var lower: array<f32, K>; var rhs: array<f32, K>;
   let n = K - KTOP;

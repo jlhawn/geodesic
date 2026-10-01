@@ -428,7 +428,80 @@ test('autoconversion stays out of the lowest two layers, or with autoconversionF
   assert.equal(q[cloudBelow * C], qBefore[cloudBelow], 'and not into a cloudy one');
 });
 
-async function parity(options) {
+const PLUME = { convection: 'plume' };
+function plumeColumn(options = {}, profile = null) {
+  const model = build({ ...PLUME, ...options });
+  if (profile) place(model, 0, 101500, profile); else jordanColumn(model, 0);
+  setDepth(model, 0, 500);
+  model.boundaryLayer.buoyancyFlux[0] = 4e-4;
+  model.boundaryLayer.friction[0] = 0.25;
+  model.radiation.mlmGate[0] = 0.3;
+  return model;
+}
+
+test('with convection: plume the Jordan sounding lifts a deep plume that rains, heats most between 400 and 500 hPa above its cloud-base layer, cools the subcloud layer through its downdraft, and keeps column enthalpy and water exact', () => {
+  const model = plumeColumn(), { moist } = model, [pi, theta, , , q, qc] = model.state;
+  const { K, C, sigmaMid, geopotential, g } = model.core.diagnostics, dt = 600;
+  moist.trace.convection = new Float64Array(K * C);
+  const before = budget(model, 0), activity = moist.activity[0];
+  moist.adjust(model.state, 0, 1, dt);
+  const after = budget(model, 0), { deep, falling } = moist, rain = moist.rain[0];
+  const hPa = (k) => pi[0] * sigmaMid[k] / 100, rate = (k) => moist.trace.convection[k * C] / dt * 86400;
+  let peak = deep.top;
+  for (let k = deep.top; k < deep.base; k++) if (rate(k) > rate(peak)) peak = k;
+  let lowest = 0, mass = 0;
+  for (let k = 0; k < K; k++) if (geopotential[k * C] / g - geopotential[(K - 1) * C] / g < 100) { lowest += rate(k) * pi[0] * sigmaMid[k]; mass += pi[0] * sigmaMid[k]; }
+  console.log(`Jordan (1958), plume: top ${(moist.cumulusTop[0] / 100).toFixed(0)} hPa, CAPE ${deep.cape.toFixed(0)} J/kg, base flux ${deep.baseFlux.toFixed(4)} kg/m²/s with a downdraft of ${deep.downdraft.toFixed(4)} from ${hPa(deep.start).toFixed(0)} hPa; rain ${(rain * 86400 / dt).toFixed(1)} mm/d after ${(falling.evaporated * 86400 / dt).toFixed(1)} evaporating below cloud base; heating above the cloud-base layer peaks at ${hPa(peak).toFixed(0)} hPa (${rate(peak).toFixed(1)} K/d), ${rate(deep.base).toFixed(1)} K/d in that layer at ${hPa(deep.base).toFixed(0)} hPa, ${(lowest / mass).toFixed(1)} K/d over the lowest 100 m; enthalpy off by ${((after.enthalpy - before.enthalpy) / before.enthalpy).toExponential(1)}, water by ${((after.water + rain - before.water) / before.water).toExponential(1)}`);
+  assert.ok(deep.deep && moist.cumulusTop[0] < 300e2, `top ${moist.cumulusTop[0]}`);
+  assert.ok(rain > 0 && moist.convectivePrecipitation[0] === rain && moist.largeScalePrecipitation[0] === 0, `rain ${rain}`);
+  assert.ok(hPa(peak) > 400 && hPa(peak) < 500, `heating peaks at ${hPa(peak)} hPa`);
+  assert.ok(deep.downdraft > 0 && deep.start > deep.top && deep.start < deep.base, 'a downdraft from between the top and cloud base');
+  for (let k = deep.base + 1; k < K; k++) assert.ok(rate(k) < 0, `subcloud layer ${k} cools by ${rate(k)} K/d`);
+  assert.ok(Math.abs(after.enthalpy - before.enthalpy) < 1e-12 * before.enthalpy, `enthalpy ${before.enthalpy} → ${after.enthalpy}`);
+  assert.ok(Math.abs(after.water + rain - before.water) < 1e-12 * before.water, `water ${before.water} → ${after.water} + ${rain}`);
+  assert.equal(moist.activity[0], activity, 'the activity is not used');
+});
+
+test('with convection: plume a trade-wind column lifts exactly the shallow cumulus plume and rains nothing', () => {
+  const plume = tradeWindColumn(PLUME), shallow = tradeWindColumn(PLUME), dt = 600;
+  const [pi, theta, , , q, qc] = plume.state, [sp, st, , , sq, sqc] = shallow.state;
+  const rain = plume.moist.plumeColumn(0, pi, theta, q, qc, dt), shallowRain = shallow.moist.cumulusColumn(0, sp, st, sq, sqc, dt);
+  assert.ok(!plume.moist.deep.deep && plume.moist.cumulusBaseFlux[0] > 0, 'a shallow plume');
+  assert.equal(rain, 0);
+  assert.equal(shallowRain, 0);
+  assert.deepEqual(snapshot(plume, 0), snapshot(shallow, 0));
+  assert.deepEqual(plume.moist.cumulusCover, shallow.moist.cumulusCover);
+  assert.equal(plume.moist.cumulusBaseFlux[0], shallow.moist.cumulusBaseFlux[0]);
+  assert.equal(plume.moist.cumulusTop[0], shallow.moist.cumulusTop[0]);
+  const full = tradeWindColumn(PLUME);
+  full.moist.adjust(full.state, 0, 1, dt);
+  assert.equal(full.moist.rain[0], 0, 'nothing rains through the adjustment');
+});
+
+test('with convection: plume a drier free troposphere entrains the plume to a lower top, and a dry enough one keeps it shallow', () => {
+  const run = (factor) => {
+    const model = plumeColumn({}, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? factor : 1), saturationHumidity(air.T, p)) }; });
+    model.moist.adjust(model.state, 0, 1, 600);
+    return { top: model.moist.cumulusTop[0], deep: model.moist.deep.deep, cape: model.moist.deep.cape, rain: model.moist.rain[0] };
+  };
+  const moist = run(1), drier = run(0.8), dry = run(0.6), driest = run(0.4);
+  console.log(`free-tropospheric humidity × 1, 0.8, 0.6, 0.4: plume tops ${[moist, drier, dry, driest].map((r) => (r.top / 100).toFixed(0)).join(', ')} hPa, CAPE ${[moist, drier, dry, driest].map((r) => r.cape.toFixed(0)).join(', ')} J/kg`);
+  assert.ok(moist.deep && drier.deep && dry.deep && !driest.deep);
+  assert.ok(moist.top < drier.top && drier.top < dry.top && dry.top < driest.top, 'the top sinks as the air dries');
+  assert.ok(moist.rain > drier.rain && drier.rain > dry.rain && driest.rain === 0);
+});
+
+test('with convection: plume the deep base flux relaxes the CAPE toward plumeCape over plumeRelaxation, and plumeClosure: maximum gives it at least the shallow closure', () => {
+  const flux = (options) => { const model = plumeColumn(options), [pi, theta, , , q, qc] = model.state; model.moist.plumeColumn(0, pi, theta, q, qc, 600); return { ...model.moist.deep }; };
+  const hour = flux({}), twoHours = flux({ plumeRelaxation: 7200 }), lower = flux({ plumeCape: 0 });
+  assert.ok(Math.abs(hour.baseFlux - (hour.cape - 70) / (3600 * hour.consumption)) < 1e-12 * hour.baseFlux, `base flux ${hour.baseFlux}`);
+  assert.ok(Math.abs(twoHours.baseFlux - 0.5 * hour.baseFlux) < 1e-12 * hour.baseFlux, 'twice the relaxation time, half the flux');
+  assert.ok(Math.abs(lower.baseFlux / hour.baseFlux - hour.cape / (hour.cape - 70)) < 1e-9, 'the flux scales with the CAPE above plumeCape');
+  const shallowOnly = flux({ plumeCape: 1e6 }), maximum = flux({ plumeCape: 1e6, plumeClosure: 'maximum' });
+  assert.ok(!shallowOnly.deep && maximum.deep && maximum.baseFlux > 0, 'with CAPE below plumeCape the deep plume runs only under plumeClosure: maximum');
+});
+
+async function parity(options, { momentum = false } = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const model = build(options, 6), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
   const [pi, theta, , surfaceT, q, qc] = model.state;
@@ -454,6 +527,7 @@ async function parity(options) {
     moist.activity[i] = [0, 0.5, 1, random()][Math.floor(random() * 4)];
     for (let k = 0; k < K; k++) if (random() < 0.08) qc[k * C + i] = 1e-3 * random();
   }
+  if (momentum) for (let x = 0; x < model.state[2].length; x++) model.state[2][x] = 20 * (random() - 0.5) + 10 * Math.sin(x / mesh.nEdges);
   for (const a of model.state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   for (const a of [model.boundaryLayer.depth, model.radiation.mlmGate, moist.activity, buoyancy, friction]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   model.boundaryLayer.buoyancyFlux.set(buoyancy);
@@ -471,12 +545,38 @@ async function parity(options) {
   pass.setPipeline(kernels.adjust);
   pass.setBindGroup(0, group);
   pass.dispatchWorkgroups(Math.ceil(C / 64));
+  if (momentum) {
+    pass.setPipeline(kernels.mixMomentum);
+    pass.setBindGroup(0, device.createBindGroup({ layout: kernels.mixMomentum.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
+    pass.dispatchWorkgroups(Math.ceil(mesh.nEdges / 64));
+  }
   pass.end();
   device.queue.submit([encoder.finish()]);
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
   const activityBefore = Float64Array.from(moist.activity);
   moist.trace.convection = new Float64Array(K * C);
   model.phases.adjust(0, C, dt);
+  if (momentum) {
+    const E = mesh.nEdges, { dSigma, g } = core.diagnostics, u = model.state[2], before = Float64Array.from(u);
+    model.phases.mixMomentum(0, E, dt);
+    let moved = 0, worstU = 0, worstColumn = 0, scale = 0;
+    for (let e = 0; e < E; e++) {
+      const columnMass = 0.5 * (pi[mesh.cellsOnEdge[2 * e]] + pi[mesh.cellsOnEdge[2 * e + 1]]);
+      let was = 0, now = 0, changed = false;
+      for (let k = 0; k < K; k++) {
+        const x = k * E + e, m = columnMass * dSigma[k] / g;
+        was += m * before[x]; now += m * u[x]; scale = Math.max(scale, Math.abs(m * before[x]));
+        if (u[x] !== before[x]) changed = true;
+        worstU = Math.max(worstU, Math.abs(u[x] - after[2][x]));
+      }
+      if (changed) moved++;
+      worstColumn = Math.max(worstColumn, Math.abs(now - was));
+    }
+    console.log(`  momentum: the plume moves the wind on ${moved} of ${E} edges; each edge's column momentum changes by at most ${worstColumn.toExponential(1)} kg/m/s against layer momenta up to ${scale.toFixed(0)}; the engines' winds differ by ${worstU.toExponential(1)} m/s`);
+    assert.ok(moved > E / 10, `${moved} edges moved`);
+    assert.ok(worstColumn < 1e-12 * scale, `column momentum changed by ${worstColumn}`);
+    assert.ok(worstU < 1e-3, `winds differ by ${worstU} m/s`);
+  }
   const { sigmaMid } = core.diagnostics;
   const massFlux = (options.shallowScheme ?? MOIST_DEFAULTS.shallowScheme) === 'massFlux';
   let deep = 0, shallow = 0, decked = 0, still = 0, opening = 0, flips = 0, worstTheta = 0, worstQ = 0, worstQc = 0, worstActivity = 0, worstRain = 0, rainScale = 0;
@@ -528,11 +628,12 @@ async function parity(options) {
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
 }
 
-test('the triggered convection, the cumulus mass flux, the convective plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure, from either source, with either CAPE parcel and its downdraft, with the shallow plume on its defaults, from the lowest layer, raining, overshooting by half or beside deep convection, under either autoconversion floor, and with the Betts–Miller shallow branch under either shallow reference with or without shallow rain and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the triggered convection, the cumulus mass flux, the convective plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure, from either source, with either CAPE parcel and its downdraft, carrying momentum with the column momentum of each edge exact, with the shallow plume on its defaults, from the lowest layer, raining, overshooting by half or beside deep convection, under either autoconversion floor, and with the Betts–Miller shallow branch under either shallow reference with or without shallow rain and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   await parity({});
   await parity({ convection: 'plume' });
   await parity({ convection: 'plume', plumeClosure: 'maximum', plumeSource: 'lowest', plumeCapeParcel: 'undilute', plumeMassGrowth: 2e-4 });
   await parity({ convection: 'plume', plumeClosure: 'cape', downdraftShare: 0.5, downdraftEntrainment: 0, plumeRainThreshold: 5e-4, autoconversionFloor: 'boundaryLayer' });
+  await parity({ convection: 'plume', plumeMomentum: true }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });
   await parity({ convection: 'bettsMiller' });
   await parity({ convection: 'bettsMiller', cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, cumulusWithDeep: true, virtualBuoyancy: false });

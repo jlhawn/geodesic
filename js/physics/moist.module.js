@@ -213,6 +213,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * convective. The cumulus cover of each layer at or below the shallow
  * top at the highest surface pressure (`cumulusK0`) is the larger of the
  * shallow plume's and the deep plume's M / (ρ w_u), w_u at least w0.
+ * With `plumeMomentum` each cell keeps the deep plume's mass fluxes and
+ * mixing factors, and `transportMomentum` moves the edges' normal
+ * velocity by them (see there).
  *
  * Rain: Kessler autoconversion of cloud water above the threshold at
  * autoconversionRate, and of all cloud water over cloudLifetime, except
@@ -251,12 +254,13 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * cumulusBoundaryLoss 0.1, cumulusFriction 1, cumulusOvershoot 1,
  * cumulusUpdraft 1 m/s, no cumulusRain, cumulusSource 'mean' (or
  * 'lowest': the plume leaves with the lowest layer's air), no
- * cumulusWithDeep; convection 'bettsMiller', plumeClosure 'separate',
+ * cumulusWithDeep; convection 'plume', plumeClosure 'separate',
  * plumeCapeParcel 'plume', plumeSource 'mean', plumeVelocity 1 m/s,
  * plumeAcceleration 1/3, plumeDrag 1, plumeEntrainment 0.1,
- * plumeEntrainmentFloor 1e-4 /m, plumeMassGrowth 0, plumeRainRate 2e-3 /m,
+ * plumeEntrainmentFloor 1e-4 /m, plumeMassGrowth 0, plumeRainRate 3e-3 /m,
  * plumeRainThreshold 0, plumeRainEvaporation 1e-3 /m, downdraftShare 0.3,
- * downdraftEntrainment 1e-4 /m, plumeCape 70 J/kg, plumeRelaxation 1 h.
+ * downdraftEntrainment 1e-4 /m, plumeCape 70 J/kg, plumeRelaxation 1 h, no
+ * plumeMomentum.
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, relaxationTime: 7200, referenceHumidity: 0.6, parcelDepth: 0, entrainmentRate: 5e-5,
@@ -266,8 +270,8 @@ export const MOIST_DEFAULTS = {
   boundaryParcel: false, adjustFrom: 'cloudBase', deckVeto: true, evaporationInCloud: false, downdraftSpread: 'mass', virtualBuoyancy: true,
   shallowScheme: 'massFlux', cumulusClosure: 0.06, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusWithDeep: false,
-  convection: 'bettsMiller', plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
-  plumeRainRate: 2e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, plumeCape: 70, plumeRelaxation: 3600,
+  convection: 'plume', plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
+  plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, plumeCape: 70, plumeRelaxation: 3600, plumeMomentum: false,
 };
 
 export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate = null, surfaceBuoyancy = null, frictionVelocity = null, buffers = null, ...options } = {}) {
@@ -277,7 +281,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
     shallowCape, shallowInhibition, shallowStability, shallowReference, shallowRain, boundaryParcel, adjustFrom, deckVeto, evaporationInCloud, downdraftSpread, virtualBuoyancy,
     shallowScheme, cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource, cumulusWithDeep,
     convection, plumeClosure, plumeCapeParcel, plumeSource, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
-    downdraftShare, downdraftEntrainment, plumeCape, plumeRelaxation,
+    downdraftShare, downdraftEntrainment, plumeCape, plumeRelaxation, plumeMomentum,
   } = { ...MOIST_DEFAULTS, ...options };
   if (convection !== 'plume' && convection !== 'bettsMiller') throw new Error(`convection must be 'plume' or 'bettsMiller', not ${convection}`);
   const plumed = convection === 'plume';
@@ -301,6 +305,10 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
   const precipBuffer = shared('precipitation', C), rainBuffer = shared('rain', C), convectiveBuffer = shared('convectivePrecipitation', C);
   const largeScaleBuffer = shared('largeScalePrecipitation', C), activityBuffer = shared('convectiveActivity', C);
   const cumulusCoverBuffer = shared('cumulusCover', K * C), cumulusWaterBuffer = shared('cumulusWater', K * C), baseFluxBuffer = shared('cumulusBaseFlux', C), cumulusTopBuffer = shared('cumulusTop', C);
+  const momentumLayers = plumed && plumeMomentum ? K : 0;
+  const momentumBuffers = { up: shared('momentumUp', (momentumLayers + 1) * C), upKeep: shared('momentumUpKeep', momentumLayers * C), down: shared('momentumDown', (momentumLayers + 1) * C), downKeep: shared('momentumDownKeep', momentumLayers * C), source: shared('momentumSource', C) };
+  const momentumUp = new Float64Array(momentumBuffers.up), momentumUpKeep = new Float64Array(momentumBuffers.upKeep), momentumDown = new Float64Array(momentumBuffers.down), momentumDownKeep = new Float64Array(momentumBuffers.downKeep), momentumSource = new Float64Array(momentumBuffers.source);
+  const edgeUp = new Float64Array(K + 1), edgeDown = new Float64Array(K + 1), edgeKeep = new Float64Array(K), edgeDownKeep = new Float64Array(K), edgeFlux = new Float64Array(K + 1), edgeBefore = new Float64Array(K);
   const cumulusCover = new Float64Array(cumulusCoverBuffer), cumulusWater = new Float64Array(cumulusWaterBuffer), cumulusBaseFlux = new Float64Array(baseFluxBuffer), cumulusTop = new Float64Array(cumulusTopBuffer);
   const precipitation = new Float64Array(precipBuffer), rain = new Float64Array(rainBuffer);
   const convectivePrecipitation = new Float64Array(convectiveBuffer), largeScalePrecipitation = new Float64Array(largeScaleBuffer);
@@ -752,7 +760,12 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
   function plumeColumn(i, pi, theta, q, qc, dt) {
     const bottom = K - 1;
     convectiveFall.fill(0); convectiveReserve.fill(0);
-    deep.deep = false; deep.top = -1; deep.cape = 0; deep.consumption = 0; deep.start = -1; deep.downdraft = 0; deep.baseFlux = 0; deep.inhibition = 0;
+    deep.deep = false; deep.top = -1; deep.cape = 0; deep.consumption = 0; deep.start = -1; deep.downdraft = 0; deep.baseFlux = 0; deep.inhibition = 0; deep.shallowRain = 0;
+    if (momentumLayers) {
+      momentumSource[i] = K;
+      for (let k = 0; k <= K; k++) { momentumUp[k * C + i] = 0; momentumDown[k * C + i] = 0; }
+      for (let k = 0; k < K; k++) { momentumUpKeep[k * C + i] = 1; momentumDownKeep[k * C + i] = 1; }
+    }
     const open = deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - ACTIVITY_UNDECIDED)) : 1;
     if (!(open > 0) || !boundaryDepth) return cumulusColumn(i, pi, theta, q, qc, dt);
     fillEnvironment(i, pi, theta, q, qc);
@@ -916,6 +929,14 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
       const speed = Math.max(plumeVelocity, Math.sqrt(Math.max(0, 0.5 * (plumeSpeed[k] + plumeSpeed[k + 1]))));
       deepCover[k] = Math.min(1, 0.5 * (cumulusFlux[k] + cumulusFlux[k + 1]) * baseFlux * R * T[k] / (p[k] * speed));
     }
+    if (momentumLayers) {
+      for (let k = 0; k <= K; k++) { momentumUp[k * C + i] = baseFlux * cumulusFlux[k]; momentumDown[k * C + i] = baseFlux * share * draftFlux[k]; }
+      for (let k = 0; k < K; k++) {
+        momentumUpKeep[k * C + i] = k > top && k < source ? Math.exp(-plumeEntrained[k] * plumeDepth[k]) : 1;
+        momentumDownKeep[k * C + i] = k === start ? 0 : k > start && k <= base ? Math.exp(-downdraftEntrainment * (upperInterface(i, k) - upperInterface(i, k + 1))) : 1;
+      }
+      momentumSource[i] = source;
+    }
     const shallowRain = separate ? cumulusColumn(i, pi, theta, q, qc, dt) : 0;
     for (let k = Math.max(top, cumulusK0); k < source; k++) {
       const idx = k * C + i;
@@ -925,6 +946,60 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
     cumulus.top = top; cumulus.baseFlux = baseFlux + cumulusBaseFlux[i];
     cumulusBaseFlux[i] += baseFlux; cumulusTop[i] = pi[i] * levels[top];
     return fallen;
+  }
+
+  /*
+   * The deep plume's transport of the normal velocity of edges eFrom to
+   * eTo over dt with `plumeMomentum`: on each edge the mean of its two
+   * cells' updraft and downdraft mass fluxes, mixing factors and the
+   * shallower source, the updraft leaving with the mass-weighted velocity
+   * of the layers below each source interface and mixing toward each
+   * layer's velocity above, the downdraft starting with its first layer's
+   * velocity; the same flux form as s_l and q_t with the edge's layer
+   * masses, so each edge's column momentum is exact. The kinetic energy
+   * removed goes to `dissipation` as the boundary layer's does.
+   */
+  function transportMomentum(pi, u, eFrom, eTo, dt, dissipation = null) {
+    if (!momentumLayers) return;
+    const { cellsOnEdge } = mesh, E = mesh.nEdges, bottom = K - 1;
+    for (let e = eFrom; e < eTo; e++) {
+      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+      let moving = false;
+      for (let k = 1; k < K; k++) {
+        edgeUp[k] = 0.5 * (momentumUp[k * C + a] + momentumUp[k * C + b]);
+        edgeDown[k] = 0.5 * (momentumDown[k * C + a] + momentumDown[k * C + b]);
+        if (edgeUp[k] > 0 || edgeDown[k] < 0) moving = true;
+      }
+      if (!moving) continue;
+      for (let k = 0; k < K; k++) {
+        edgeKeep[k] = 0.5 * (momentumUpKeep[k * C + a] + momentumUpKeep[k * C + b]);
+        edgeDownKeep[k] = 0.5 * (momentumDownKeep[k * C + a] + momentumDownKeep[k * C + b]);
+        edgeBefore[k] = u[k * E + e];
+      }
+      const source = Math.min(momentumSource[a], momentumSource[b]), columnMass = 0.5 * (pi[a] + pi[b]);
+      edgeFlux.fill(0);
+      let rising = 0, below = 0, weight = 0;
+      for (let j = bottom; j >= 1; j--) {
+        if (j >= source) { below += dSigma[j] * edgeBefore[j]; weight += dSigma[j]; rising = below / weight; }
+        else rising = edgeBefore[j] + (rising - edgeBefore[j]) * edgeKeep[j];
+        edgeFlux[j] = edgeUp[j] * (rising - edgeBefore[j - 1]);
+      }
+      let sinking = 0;
+      for (let j = 1; j < K; j++) {
+        sinking = edgeBefore[j - 1] + (sinking - edgeBefore[j - 1]) * edgeDownKeep[j - 1];
+        edgeFlux[j] += edgeDown[j] * (sinking - edgeBefore[j]);
+      }
+      let loss = 0, total = 0;
+      for (let k = 0; k < K; k++) {
+        const mass = columnMass * dSigma[k] / g, now = edgeBefore[k] + (edgeFlux[k + 1] - edgeFlux[k]) * dt / mass;
+        u[k * E + e] = now;
+        loss += mass * (edgeBefore[k] * edgeBefore[k] - now * now);
+        edgeUp[k] = mass * (now - edgeBefore[k]) * (now - edgeBefore[k]);
+        total += edgeUp[k];
+      }
+      if (!dissipation || !(loss > 0) || !(total > 0)) continue;
+      for (let k = 0; k < K; k++) dissipation[k * E + e] += loss * edgeUp[k] / (total * columnMass * dSigma[k] / g);
+    }
   }
 
   function fillColumn(i, pi, q) {
@@ -1003,10 +1078,11 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
   }
 
   return {
-    adjust, condenseColumn, autoconvertColumn, convectColumn, cumulusColumn, plumeColumn, fillColumn, referenceProfile, diagnoseParcel, inversionStrength, columnWater, readRain,
+    adjust, condenseColumn, autoconvertColumn, convectColumn, cumulusColumn, plumeColumn, transportMomentum, fillColumn, referenceProfile, diagnoseParcel, inversionStrength, columnWater, readRain,
     precipitation, rain, convectivePrecipitation, largeScalePrecipitation, convectiveRain, largeScaleRain, activity, convectiveActivity: activity, budget, latentHeat, trace, parcel, falling,
     cumulus, cumulusCover, cumulusWater, cumulusBaseFlux, cumulusTop, cumulusFlux, deep, plumeConvection: plumed, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained,
-    shared: { precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, convectiveActivity: activityBuffer, cumulusCover: cumulusCoverBuffer, cumulusWater: cumulusWaterBuffer, cumulusBaseFlux: baseFluxBuffer, cumulusTop: cumulusTopBuffer },
+    momentum: { up: momentumUp, upKeep: momentumUpKeep, down: momentumDown, downKeep: momentumDownKeep, source: momentumSource },
+    shared: { momentumUp: momentumBuffers.up, momentumUpKeep: momentumBuffers.upKeep, momentumDown: momentumBuffers.down, momentumDownKeep: momentumBuffers.downKeep, momentumSource: momentumBuffers.source, precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, convectiveActivity: activityBuffer, cumulusCover: cumulusCoverBuffer, cumulusWater: cumulusWaterBuffer, cumulusBaseFlux: baseFluxBuffer, cumulusTop: cumulusTopBuffer },
     reference: { T: Tref, q: qref },
   };
 }
