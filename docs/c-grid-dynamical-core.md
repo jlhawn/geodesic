@@ -3189,6 +3189,78 @@ The work, in order:
    the tools of item 1, before a new paired spin-up. A mass-flux
    convection scheme stays deferred until the central Pacific ITCZ and
    the Walker cell still fail with all of the above in place.
+6. Boundary-layer entrainment (Sept 30). The K-profile vanishes at h,
+   so outside the deck nothing entrained. Both engines give the first
+   interface above h the coefficient ρ w_e,
+   w_e = min(cap, (A B0 + A_s u*³/h) / max(Δb, b_min)), with B0 the bulk
+   surface buoyancy flux, Δb = g Δθv/θv between the layer above h and the
+   boundary layer's mass mean, A 0.2 (Tennekes 1973), A_s 5 (Vogelezang
+   and Holtslag 1996), b_min 0.015 m/s² and cap 0.05 m/s (`entrainment`:
+   `efficiency`, `shear`, `jumpFloor`, `cap`), and zero where B0 ≤ 0 or
+   the deck's gate exceeds one half. Over the sea at 30S–30N where the
+   deck is off, after one CPU step: nine128_day0183 7.74 mm/s area mean
+   (median 4.28, 90th percentile 20.1), 2.24 mm/d of water carried out of
+   the boundary layer; eight64_day0183 2.94 mm/s, 1.14 mm/d. A floor of
+   3·10⁻³ m/s² gave 11.6 mm/s on nine128 (0.070 of the columns at the cap,
+   Δθv 0.2–0.3 K in the tail) and at N=64 an albedo of 0.274, 0.291,
+   0.296 on days 184–186 against 0.274, 0.292, 0.297 with 0.015.
+   Relative humidity below σ 0.9 at 30S–30N, mass-weighted, sea
+   (all surfaces): nine128_day0183 0.808 (0.747), eight64_day0183 0.738
+   (0.685). Three days at N=64 on the GPU from eight64_day0183, day 186:
+
+   | | off | A 0.15 | A 0.2 | A 0.3 |
+   |---|---|---|---|---|
+   | w_e, mm/s; water out of the layer, mm/d | 0 | 4.49; 1.21 | 5.19; 1.37 | 6.53; 1.67 |
+   | humidity below σ 0.9, sea (all) | 0.809 (0.741) | 0.807 (0.736) | 0.807 (0.736) | 0.807 (0.736) |
+   | cloud water below σ 0.9, sea 30S–30N, g/m² | 46.8 | | 37.5 | 36.8 |
+   | albedo, days 184–186 | 0.293, 0.319, 0.328 | 0.275, 0.293, 0.299 | 0.274, 0.292, 0.297 | 0.272, 0.288, 0.293 |
+
+   The layers inside the boundary layer (σ 0.95–1) dry from 0.86–0.88 to
+   0.84–0.86 and those at σ 0.88–0.91 moisten by 0.02–0.03, so the mean
+   below σ 0.9 stays at 0.807 for every A in 0.15–0.3. Ten days at N=64
+   on the GPU from eight64_day0183 (days 184–193):
+
+   | | off | A 0.2 (default) | A 0.3 |
+   |---|---|---|---|
+   | albedo | 0.293, 0.319, 0.328, 0.331, 0.343, 0.348, 0.349, 0.348, 0.351, 0.348 | 0.274, 0.292, 0.297, 0.300, 0.311, 0.319, 0.322, 0.324, 0.326, 0.319 | 0.272, 0.288, 0.293, 0.297, 0.306, 0.312, 0.315, 0.320, 0.318, 0.315 |
+   | ASR − OLR, W/m², days 188–193 (mean) | −13.6 to −15.7 (−14.9) | −3.7 to −8.5 (−6.8) | −2.2 to −6.6 (−4.8) |
+   | global rain, mm/d | 2.03–2.56 | 2.00–2.59 | 2.00–2.58 |
+   | humidity below σ 0.9, sea (all), day 193 | 0.821 (0.762) | 0.830 (0.765) | |
+
+   `scripts/verticalAudit.mjs` on day 193 (off; A 0.2): SE Pacific rain
+   1.72; 1.44 mm/d, firing 0.176; 0.137, low cloud 0.402; 0.223, deck runs
+   0.232; 0.190, deck's jump 1.59; 1.29 K, EIS 2.13; 2.04 K, resolved
+   inversion's jump 3.78; 4.06 K; Pacific ITCZ rain 6.43; 6.10 mm/d, ω500
+   −0.023; −0.026 Pa/s, heating peak 439 hPa in both (24.8; 24.1 K/d,
+   lowest 100 m −1.53; −1.77 K/d), large-scale +15.4 at 436 m and −23.0
+   at 21 m; +13.4 and −19.4; global rain 2.57; 2.53 mm/d; zonal-mean peak
+   5.46 at 1.5S; 4.91 at 0.5S. The spin-up log's ten-day SE Pacific rain
+   0.93; 0.80 mm/d (`base10d64`, before the Arctic cover, 0.89), Pacific
+   ITCZ 3.95; 4.12 (4.27). Five days at N=128 on the GPU from
+   nine128_day0183 at A 0.2: albedo 0.278, 0.272, 0.272, 0.268, 0.269
+   (`arc5d128` 0.296–0.304), ASR − OLR +7.5, +8.7, +9.1, +9.5, +8.8 W/m²
+   (mean +8.7; `arc5d128` +0.5), northern ice extent 0.072 → 0.097 Mkm²,
+   w_e 6.72 mm/s and humidity below σ 0.9 0.808 (0.744) on day 188.
+   Three days at N=64 from nine64_day0091, 60–90N ice volume loss per
+   day: GPU 0.172 (off 0.168)·10³ km³, CPU 0.173 (off 0.167; volume
+   9.19 → 8.67 and 8.69).
+   In the first CPU step from eight64_day0183, over the sea at 30S–30N
+   where the deck is off, the shear term gives 1.62 and the buoyancy term
+   1.33 of the 2.94 mm/s (each uncapped) and is the larger on 0.58 of the
+   entraining columns; from day 193 of the A 0.2 run, 2.23 and 3.46 of
+   5.69 mm/s. In that first step 1113 columns have a buoyancy term below
+   5% of the shear term; their w_e, which drops to zero where B0 changes
+   sign, has a median of 3.8 and a 90th percentile of 11.1 mm/s. The step
+   keeps each column's mass-weighted θ and water and each edge's momentum
+   to 1·10⁻¹⁵ relative; because θ rather than cp T is mixed, the
+   global-mean enthalpy gains 0.18 W/m² with entrainment off and 0.24
+   with it on. Continued from day 193 in one-day segments (`rv4on`,
+   `rv4off`), days 194–199, A 0.2: albedo 0.314, 0.319, 0.317, 0.313,
+   0.314, 0.316, ASR − OLR −4.0, −5.1, −3.6, −2.3, −1.8, −2.2 W/m²; off:
+   0.347, 0.354, 0.351, 0.339, 0.346, 0.350 and −13.9, −16.0, −14.2,
+   −10.6, −11.9, −12.1. The ocean reaches its 5 m/s speed limit at
+   1S 99–100E on days 193 (4 edges) and 194 (3) with entrainment and on
+   days 195 (4) and 196 (3) without it.
 
 **Item 4, diagnosed and tried (Sept 30).** `scripts/equatorialOcean.mjs`
 takes a saved state apart on the CPU by 20° of longitude along the

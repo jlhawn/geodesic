@@ -19,13 +19,13 @@ function stats(cpu, gpu) {
   for (let x = 0; x < cpu.length; x++) { const d = Math.abs(cpu[x] - gpu[x]); if (d > maxDiff) { maxDiff = d; at = x; } sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
   return { maxDiff, at, rms: Math.sqrt(sumSq / cpu.length), rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
-async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, options = {}, moist = {}) {
-  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus, ...options }, moist });
+async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, options = {}, moist = {}, boundaryLayer = {}) {
+  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus, ...options }, moist, boundaryLayer });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
   for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += inversion;
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, ...options, ...moist } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, ...options, ...moist, ...boundaryLayer } });
   gpu.upload(model.state);
   gpu.uploadPhysics();
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(dt); await gpu.stepModel(dt, time); }
@@ -88,7 +88,7 @@ test('with the ∇⁴ closures off, the divergence damping alone and the heat it
  * enough that the rounding of θ is far below the tolerance.
  */
 function heatingState() {
-  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false }, moist: { convection: 'bettsMiller', shallowScheme: 'bettsMiller' } });
+  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false }, moist: { convection: 'bettsMiller', shallowScheme: 'bettsMiller' }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 } } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
@@ -491,7 +491,7 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
 });
 
 for (const convection of ['bettsMiller', 'plume']) test(`with convection: ${convection} the convective and large-scale rain accumulate alike in both engines, cell by cell but for the odd column whose onset falls a step apart, and add up to the precipitation`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { model, physics } = await pair(6, 24, 900, 0, false, {}, { rainEvaporation: 0, convection });
+  const { model, physics } = await pair(6, 24, 900, 0, false, {}, { rainEvaporation: 0, convection }, convection === 'bettsMiller' ? { entrainment: { efficiency: 0, shear: 0 } } : {});
   const C = model.mesh.nCells, { convectivePrecipitation: convective, largeScalePrecipitation: largeScale, precipitation, rain } = model.moist;
   const largest = Math.max(...convective), onset = (i) => Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest;
   const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !onset(i)), pick = (values) => Float64Array.from(kept, (i) => values[i]);

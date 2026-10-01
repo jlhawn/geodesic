@@ -33,10 +33,27 @@ import { saturationHumidity } from './moist.module.js';
  * profile, shape and velocity scale, for the deeper layer — so the
  * deck's layer is mixed through to its inversion. `depth` itself stays
  * the Richardson depth: the deck starts from it and relaxes toward it.
+ *
+ * The K-profile vanishes at h, so its top entrains nothing; an explicit
+ * entrainment flux closes it (`entrainment`). Where the surface buoyancy
+ * flux B0 (the one above, positive upward) is positive and the deck's
+ * gate `deckGate` (radiation.mlmGate) is at most one half,
+ *   w_e = min(cap, (A B0 + A_s u*³ / h) / max(Δb, bMin)),
+ * Δb = g Δθv / θv between the first layer whose base lies above h and
+ * the mass mean of the layers below it: A 0.2 from Tennekes (1973), A_s 5
+ * from Vogelezang and Holtslag (1996), bMin 0.015 m/s² (a jump of about
+ * 0.5 K) and the cap 0.05 m/s. It enters as the coefficient ρ w_e of
+ * that layer's lower interface, so the exchange of θ, q, qc and momentum
+ * across h goes through the same conservative implicit solve;
+ * `entrainment` keeps each cell's w_e (m/s). The depth stays diagnostic.
  */
+export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015 };
+
 export function createBoundaryLayer(mesh, core, {
-  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, buffers = null, entrainmentVelocity = 0,
+  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, buffers = null,
+  entrainment: entrainmentOptions = {},
 } = {}) {
+  const { efficiency, shear, cap, jumpFloor } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
   const { K, C, E, dSigma, sigmaMid, R, g, kappa, exnerLayer, geopotential } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
   const { cellsOnEdge } = mesh;
@@ -48,9 +65,12 @@ export function createBoundaryLayer(mesh, core, {
   const depthBuffer = buffers && buffers.depth ? buffers.depth : new SharedArrayBuffer(8 * C);
   const buoyancyBuffer = buffers && buffers.buoyancyFlux ? buffers.buoyancyFlux : new SharedArrayBuffer(8 * C);
   const frictionBuffer = buffers && buffers.friction ? buffers.friction : new SharedArrayBuffer(8 * C);
+  const entrainmentBuffer = buffers && buffers.entrainment ? buffers.entrainment : new SharedArrayBuffer(8 * C);
   const mixing = new Float64Array(mixingBuffer);
   const depth = new Float64Array(depthBuffer);
   const buoyancyFlux = new Float64Array(buoyancyBuffer), friction = new Float64Array(frictionBuffer);
+  const entrainmentVelocity = new Float64Array(entrainmentBuffer);
+  const entraining = efficiency > 0 || shear > 0;
   const vector = new Float64Array(3 * C), bottomVector = new Float64Array(3 * C);
   const speed = new Float64Array(C), riPrev = new Float64Array(C), zPrev = new Float64Array(C);
   const found = new Uint8Array(C);
@@ -90,6 +110,7 @@ export function createBoundaryLayer(mesh, core, {
     for (let i = iFrom; i < iTo; i++) {
       const zb = geopotential[bottom * C + i] / g, h = (deckTop && deckTop[i] > 0 ? Math.max(depth[i], deckTop[i]) : depth[i]) - zb;
       for (let k = kTop; k < K; k++) mixing[k * C + i] = 0;
+      entrainmentVelocity[i] = 0;
       const base = bottom * C + i;
       const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]) : 0;
       const buoyancy = g / theta[base] * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
@@ -108,9 +129,14 @@ export function createBoundaryLayer(mesh, core, {
         const rhoBelow = pi[i] * sigmaMid[k + 1] / (R * theta[below] * exnerLayer[below]);
         mixing[idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
       }
-      if (entrainmentVelocity > 0 && entrainK >= kTop) {
+      if (entraining && entrainK >= kTop && buoyancy > 0 && !(deckGate && deckGate[i] > 0.5)) {
         const idx = entrainK * C + i, below = idx + C;
-        mixing[idx] = 0.5 * (pi[i] * sigmaMid[entrainK] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[entrainK + 1] / (R * theta[below] * exnerLayer[below])) * entrainmentVelocity;
+        let weight = 0, sum = 0;
+        for (let k = entrainK + 1; k < K; k++) { weight += dSigma[k]; sum += dSigma[k] * thetaV[k * C + i]; }
+        const mean = sum / weight, jump = g * (thetaV[idx] - mean) / mean;
+        const velocity = Math.min(cap, (efficiency * buoyancy + shear * friction[i] ** 3 / h) / Math.max(jump, jumpFloor));
+        entrainmentVelocity[i] = velocity;
+        mixing[idx] = 0.5 * (pi[i] * sigmaMid[entrainK] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[entrainK + 1] / (R * theta[below] * exnerLayer[below])) * velocity;
       }
     }
   }
@@ -177,5 +203,5 @@ export function createBoundaryLayer(mesh, core, {
     }
   }
 
-  return { diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, kTop, shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer } };
+  return { diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, kTop, shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer } };
 }
