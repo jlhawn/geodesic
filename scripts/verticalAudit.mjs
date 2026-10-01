@@ -86,6 +86,11 @@ const deg = 180 / Math.PI, area = mesh.areaCell, landMask = model.geography.land
 const lat = Float64Array.from(mesh.latCell, (x) => x * deg), lon = Float64Array.from(mesh.lonCell, (x) => x * deg);
 const { maxEdges, nEdgesOnCell, cellsOnCell } = mesh;
 const zs = Float64Array.from({ length: C }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));
+// the GPU engine that saves states measures heights from the surface, this engine from sea level
+if (saved.boundaryDepth) bl.depth.set(Float64Array.from(saved.boundaryDepth, (z, i) => z + zs[i]));
+if (saved.mixingTop) bl.mixingTop.set(Float64Array.from(saved.mixingTop, (z, i) => z + zs[i]));
+if (saved.boundaryRegime) bl.regime.set(saved.boundaryRegime);
+if (saved.boundaryBuoyancy) bl.buoyancyFlux.set(saved.boundaryBuoyancy);
 const gates = radiation.deckGates;
 
 const sea = Uint8Array.from({ length: C }, (_, i) => (!landMask[i] && !(ice[i] > 0) ? 1 : 0));
@@ -155,7 +160,7 @@ function deckGeometry(i, mixedDepth) {
 }
 const deckSink = [0, gates.subsidenceSmoothing].map(() => new Float64Array(C).fill(NaN));
 {
-  const before = ['depth', 'regime', 'mixingTop'].map((name) => Float64Array.from(bl[name]));
+  const before = ['depth', 'regime', 'mixingTop', 'buoyancyFlux'].map((name) => Float64Array.from(bl[name]));
   bl.diagnose(state, 0, C);
   for (let i = 0; i < C; i++) {
     const mixedDepth = bl.depth[i] - geopotential[bottom + i] / g;
@@ -163,7 +168,7 @@ const deckSink = [0, gates.subsidenceSmoothing].map(() => new Float64Array(C).fi
     const column = deckGeometry(i, mixedDepth);
     if (column) [0, gates.subsidenceSmoothing].forEach((passes, n) => { deckSink[n][i] = 1000 * column.sink(passes); });
   }
-  ['depth', 'regime', 'mixingTop'].forEach((name, n) => bl[name].set(before[n]));
+  ['depth', 'regime', 'mixingTop', 'buoyancyFlux'].forEach((name, n) => bl[name].set(before[n]));
 }
 function omegaAt(P) {
   const om = new Float64Array(C).fill(NaN);
