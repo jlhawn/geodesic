@@ -23,8 +23,9 @@ const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'root
  * `mlmHeight` and `mlmGate` — the boundary layer's depth
  * `boundaryLayer.depth` (the height of its top, which the next step's
  * physics reads before it diagnoses its own) with the moist scheme's
- * mixing top and regime `boundaryLayer.mixingTop` and `regime`, and the
- * per-cell convective and
+ * mixing top, regime and surface buoyancy flux `boundaryLayer.mixingTop`,
+ * `regime` and `buoyancyFlux` (the radiation's variance cover reads the
+ * flux of the step before), and the per-cell convective and
  * large-scale rain `moist.convectiveRain` and `moist.largeScaleRain`,
  * the means in mm/d that each diagnostics frame takes over the interval
  * since the frame before, hold double-precision mirrors that only
@@ -75,12 +76,12 @@ export async function createGpuModel(gridOrMesh, {
 
   const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
   model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain };
-  model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C) };
+  model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C), buoyancyFlux: new Float64Array(C) };
   model.oceanEngine = gpuOcean;
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime });
+    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: dragCoefficients, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux });
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6], { climatology: null });
     lastFrameTime = model.time;
@@ -90,7 +91,7 @@ export async function createGpuModel(gridOrMesh, {
 
   async function sync() {
     if (!dirty) return;
-    const [arrays, [concentration, mean, height, gate, convective, largeScale, depth, mixingTop, regime]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'DEPTH', 'MIXTOP', 'REGIME'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
+    const [arrays, [concentration, mean, height, gate, convective, largeScale, depth, mixingTop, regime, buoyancy]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, ['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY'].map((name) => ({ offset: gpu.layout.PH[name], length: C })))]);
     arrays.forEach((a, i) => state[i].set(a));
     seaIce.concentration.set(concentration);
     radiationCpu.mlmSubsidence.set(mean);
@@ -101,6 +102,7 @@ export async function createGpuModel(gridOrMesh, {
     model.boundaryLayer.depth.set(depth);
     model.boundaryLayer.mixingTop.set(mixingTop);
     model.boundaryLayer.regime.set(regime);
+    model.boundaryLayer.buoyancyFlux.set(buoyancy);
     dirty = false;
   }
   model.sync = sync;
