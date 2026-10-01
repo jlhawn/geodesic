@@ -11,6 +11,7 @@
 // part, and the score (scripts/sweep/score.mjs). ONLY (comma-separated
 // point numbers) limits the screens to those points.
 import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readDesign } from './design.mjs';
 import { PARAMETERS, SWEEP, STATES, spinup, screenValues } from './runs.mjs';
 import { TERMS, score } from './score.mjs';
 
@@ -18,41 +19,8 @@ const POINTS = Number(process.env.POINTS ?? 40), SEED = Number(process.env.SEED 
 const ONLY = process.env.ONLY ? process.env.ONLY.split(',').map(Number) : null;
 mkdirSync(SWEEP, { recursive: true });
 
-function mulberry32(a) {
-  return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-}
-
-function latinHypercube(n, d, random) {
-  const columns = Array.from({ length: d }, () => {
-    const order = [...Array(n).keys()];
-    for (let i = n - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
-    return order.map((k) => (k + random()) / n);
-  });
-  return Array.from({ length: n }, (_, i) => columns.map((c) => c[i]));
-}
-
-const minimumDistance = (u) => {
-  let least = Infinity;
-  for (let i = 0; i < u.length; i++) for (let j = i + 1; j < u.length; j++) least = Math.min(least, u[i].reduce((s, x, k) => s + (x - u[j][k]) ** 2, 0));
-  return Math.sqrt(least);
-};
-
 const designFile = `${SWEEP}/design.csv`;
-if (!existsSync(designFile)) {
-  const random = mulberry32(SEED);
-  let best = null, bestDistance = -1;
-  for (let trial = 0; trial < 500; trial++) {
-    const u = latinHypercube(POINTS, PARAMETERS.length, random), distance = minimumDistance(u);
-    if (distance > bestDistance) { best = u; bestDistance = distance; }
-  }
-  const rows = [PARAMETERS.map((p) => p.base), ...best.map((u) => PARAMETERS.map((p, k) => Number((p.low + u[k] * (p.high - p.low)).toPrecision(4))))];
-  writeFileSync(designFile, ['point,' + PARAMETERS.map((p) => p.key).join(','), ...rows.map((r, i) => `${i},${r.join(',')}`)].join('\n') + '\n');
-  console.log(`design: ${POINTS} points, seed ${SEED}, least distance in the unit cube ${bestDistance.toFixed(3)}`);
-}
-const design = readFileSync(designFile, 'utf8').trim().split('\n').slice(1).map((line) => {
-  const [point, ...values] = line.split(',').map(Number);
-  return { point, ...Object.fromEntries(PARAMETERS.map((p, k) => [p.key, values[k]])) };
-});
+const design = readDesign(designFile, PARAMETERS, POINTS, SEED);
 
 const resultsFile = `${SWEEP}/results.csv`;
 const EXTRA = ['dayRain', 'instantAlbedo', 'instantBalance', 'evaporation', 'sepRuns', 'peruRuns', 'namibiaLow', 'sepInversion', 'zonalPeakRain', 'iceStart', 'iceEnd', 'clamped', 'nan'];

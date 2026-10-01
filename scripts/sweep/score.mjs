@@ -3,6 +3,7 @@
 // (scripts/verticalAudit.mjs) and a state's 60-90N sea-ice volume.
 // Score = Σ w_i e_i², e_i = (x_i − target_i)/tolerance_i, and 10 for a
 // term the run did not give (a NaN, a missing log line, state or audit row).
+// TERMS are the first sweep's, TERMS2 the second's (sweep2.mjs).
 import { readFileSync } from 'node:fs';
 import { Grid } from '../../js/grid.module.js';
 import { buildMesh } from '../../js/mesh.module.js';
@@ -22,6 +23,27 @@ export const TERMS = [
   { key: 'itczPeak', label: 'Pacific ITCZ heating peak (hPa)', target: 450, tolerance: 50, weight: 0.5 },
   { key: 'zonalPeak', label: 'zonal-mean rain peak latitude (deg N)', target: 7.5, tolerance: 2.5, weight: 0.5 },
   { key: 'stress', label: 'equatorial stress 2S-2N 160E-100W (N/m2)', target: -0.05, tolerance: 0.015, weight: 1 },
+  { key: 'arctic', label: '60-90N ice loss (1e3 km3/day)', target: 0.15, tolerance: 0.03, weight: 2 },
+];
+
+export const TERMS2 = [
+  { key: 'fBalance', label: 'fresh start: ASR - OLR, days 6-10 (W/m2)', target: 0, tolerance: 3, weight: 4 },
+  { key: 'fAlbedo', label: 'fresh start: albedo, days 6-10', target: 0.30, tolerance: 0.015, weight: 3 },
+  { key: 'fOlr', label: 'fresh start: OLR, days 6-10 (W/m2)', target: 240, tolerance: 4, weight: 1 },
+  { key: 'fSwcre', label: 'fresh start: shortwave cloud effect, days 6-10 (W/m2)', target: -47, tolerance: 4, weight: 2 },
+  { key: 'fLwcre', label: 'fresh start: longwave cloud effect, days 6-10 (W/m2)', target: 27, tolerance: 3, weight: 2 },
+  { key: 'fRain', label: 'fresh start: global rain, days 6-10 (mm/d)', target: 2.7, tolerance: 0.2, weight: 1 },
+  { key: 'balance', label: 'eight64: ASR - OLR, day 186 (W/m2)', target: 0, tolerance: 3, weight: 2 },
+  { key: 'sepLow', label: 'SE Pacific low cloud, radiative', target: 0.6, tolerance: 0.1, weight: 1 },
+  { key: 'peruLow', label: 'Peru low cloud, radiative', target: 0.6, tolerance: 0.1, weight: 1 },
+  { key: 'sepDeckWater', label: "SE Pacific deck's own water path where it runs (g/m2)", target: 100, tolerance: 50, weight: 1 },
+  { key: 'peruDeckWater', label: "Peru deck's own water path where it runs (g/m2)", target: 100, tolerance: 50, weight: 1 },
+  { key: 'sepThickness', label: "SE Pacific deck's cloud-layer thickness (m)", target: 300, tolerance: 150, weight: 0.5 },
+  { key: 'peruThickness', label: "Peru deck's cloud-layer thickness (m)", target: 300, tolerance: 150, weight: 0.5 },
+  { key: 'sepRain', label: 'SE Pacific rain (mm/d)', target: 0.2, tolerance: 0.2, weight: 1 },
+  { key: 'itczRain', label: 'Pacific ITCZ rain (mm/d)', target: 7.5, tolerance: 1.5, weight: 1 },
+  { key: 'itczPeak', label: 'Pacific ITCZ heating peak (hPa)', target: 450, tolerance: 50, weight: 0.5 },
+  { key: 'stress', label: 'equatorial stress 2S-2N 160E-100W (N/m2)', target: -0.05, tolerance: 0.015, weight: 0.5 },
   { key: 'arctic', label: '60-90N ice loss (1e3 km3/day)', target: 0.15, tolerance: 0.03, weight: 2 },
 ];
 
@@ -45,6 +67,8 @@ export function readLog(file) {
     const d = line.match(/^day (\d+) .*ASR ([-\d.]+) \(atmosphere [-\d.]+\) OLR ([-\d.]+) W.*precip ([-\d.]+) mm\/d.*albedo ([-\d.]+),.*clamped (\d+)/);
     if (d) {
       const row = { day: +d[1], asr: +d[2], olr: +d[3], precip: +d[4], albedo: +d[5], clamped: +d[6] };
+      const c = line.match(/SWCRE ([-\d.]+) LWCRE ([-\d.]+)/);
+      if (c) Object.assign(row, { swcre: +c[1], lwcre: +c[2] });
       Object.assign(row, { meanAlbedo: row.albedo, meanAsr: row.asr, meanOlr: row.olr, meanPrecip: row.precip });
       days.push(row);
     }
@@ -82,15 +106,36 @@ export function readAudit(file) {
   for (const [key, [box, metric]] of Object.entries(AUDIT)) out[key] = first(find(box, metric), metric);
   for (const [key, box] of [['sepLwp', 'SE Pacific'], ['peruLwp', 'Peru']]) {
     const line = find(box, "deck's liquid water path where it runs (g/m2)");
-    const m = line && line.match(/capped at 150: ([-\d.]+|n\/a)/);
+    const m = line && line.match(/capped at \d+: ([-\d.]+|n\/a)/);
     out[key] = !m || m[1] === 'n/a' ? 0 : Number(m[1]);
   }
+  for (const [key, box, metric] of [['sepDeckWater', 'SE Pacific', "deck's liquid water path where it runs (g/m2)"], ['peruDeckWater', 'Peru', "deck's liquid water path where it runs (g/m2)"], ['sepThickness', 'SE Pacific', "deck's cloud-layer thickness where it runs (m)"], ['peruThickness', 'Peru', "deck's cloud-layer thickness where it runs (m)"]]) out[key] = first(find(box, metric), metric);
   const zonal = lines.find((l) => l.startsWith('  zonal-mean rain peak (mm/d)'));
   const z = zonal && zonal.match(/\[at ([-\d.]+) deg/);
   out.zonalPeak = z ? Number(z[1]) : NaN;
   out.zonalPeakRain = first(zonal, 'zonal-mean rain peak (mm/d)');
   if (!Number.isFinite(out.itczPeak)) out.itczPeak = 1000;
   for (const key of ['sepRain', 'peruRain']) if (!Number.isFinite(out[key])) out[key] = 0;
+  return out;
+}
+
+// The means over days first..last of a log's day lines (balance ASR - OLR),
+// NaN when a day is missing.
+export function dayMeans(log, first, last) {
+  const days = log.days.filter((d) => d.day >= first && d.day <= last), whole = days.length === last - first + 1 && !log.nan;
+  const mean = (f) => (whole ? days.reduce((s, d) => s + f(d), 0) / days.length : NaN);
+  return { balance: mean((d) => d.asr - d.olr), asr: mean((d) => d.asr), olr: mean((d) => d.olr), albedo: mean((d) => d.albedo), swcre: mean((d) => d.swcre), lwcre: mean((d) => d.lwcre), rain: mean((d) => d.precip) };
+}
+
+// The mean of several audits' readings, each key over the windows that gave
+// it; the deck's own water path and thickness are where it runs, 0 when it
+// ran in none of the windows.
+export function meanAudits(audits) {
+  const out = {};
+  for (const key of new Set(audits.flatMap(Object.keys))) {
+    const xs = audits.map((a) => a[key]).filter(Number.isFinite);
+    out[key] = xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : /DeckWater|Thickness/.test(key) ? 0 : NaN;
+  }
   return out;
 }
 
