@@ -3497,7 +3497,7 @@ day 185 against 78.3 and 66.1. Three days at N=64 from nine64_day0091 lose
 engines (`plumeColumn` and `transportMomentum` in
 `js/physics/moist.module.js`, the adjust and mixMomentum kernels of
 `js/gpu/physics.gpu.js`) take all convection with one bulk plume
-(`convection` 'plume', the default; 'bettsMiller' keeps the Betts–Miller
+(`convection` 'plume', the default until item 8; 'bettsMiller' keeps the Betts–Miller
 relaxation, its trigger and its 2 h activity, bit for bit, for side-by-side
 runs; the activity is carried and saved but unused under 'plume'). The
 plume leaves the shallow plume's source with its mean s_l and q_t
@@ -3721,6 +3721,109 @@ with nothing else on the GPU: two days at N=128 from nine128_day0183
 87.4 and 85.1 ms against 84.1 and 84.0 for b4cc733 (+2.6 %) and 85.7 and
 85.9 under 'bettsMiller', the adjust pass 15.90 and 15.53 ms against 14.52
 and 14.72 and 16.24 and 16.27.
+**Item 8, the integration (Sept 30).** The integrated code carries
+items 6 and 7 and the boundary-layer entrainment of item 6. Runs from
+copies of eight64_day0183 (ten days, N=64), eight128_day0183 (five days,
+N=128) and nine64_day0091 (three days, N=64), GPU, `everySteps` 8.
+
+The deep plume on the integrated code: N=64 albedo 0.296, 0.305, 0.310,
+0.321, 0.332, 0.342, 0.337, 0.334, 0.335, 0.333 on days 184–193, ASR − OLR
+over days 188–193 −0.8, −3.2, −1.7, −0.1, −0.7, −1.0 W/m² (mean −1.3);
+N=128 albedo 0.262, 0.273, 0.287, 0.293, 0.301, ASR − OLR +12.2, +10.1,
++7.7, +6.7, +5.5 (mean +8.4), OLR 239.2 → 232.6. The Betts–Miller deep
+branch with the shallow plume: N=64 0.274 … 0.296, mean +4.8; N=128 0.247,
+0.259, 0.278, 0.283, 0.283, mean +8.7. Three-day N=64 screens, day-186
+albedo and ASR − OLR (plume 0.310, +2.2): `criticalHumidity` 0.85 0.315,
++1.3; 0.9 0.324, −0.4; `plumeEntrainment` 0.15 0.314, +1.4; 0.2 0.317,
++0.4; `plumeCape` 30 0.304, +3.9; `cloudLifetime` 1 h 0.271, +4.8.
+`upperCloudLifetime` (both engines; the lifetime of cloud water above
+`shallowTop`) 1 h: day 187 0.286, +2.2. Ten days at N=64 with
+`cloudLifetime` 2 h: albedo 0.284 … 0.302, ASR − OLR over days 188–193
+−0.3, −2.4, −2.9, −1.2, +0.6, +2.8 (mean −0.6). The resolved cloud's cover
+exists only where a layer holds cloud water, so a higher critical
+humidity narrows the distribution and raises the cover. No setting brings
+N=128 within 4 W/m²; `convection` defaults to 'bettsMiller'.
+
+Entrainment (`js/physics/boundaryLayer.module.js`, both engines):
+w_e = o (1 − s) min(cap, (A B0 + A_s r u*³/h) / max(Δb, b_min)), o the
+deck's opening (1 at a gate of 0.5, 0 at 0.6), s the radiation's
+stratiform share (0 at EIS 8 K, 1 at 12 K; `radiation.stratiform`, PH
+`STRAT`), r = min(1, B0 / `shearOnset`), `shearOnset` 5·10⁻⁵ m²/s³; A 0.2
+and A_s 5 are the constants of Driedonks (1982) for the two sources of
+Tennekes (1973). Tests: a gate of 0.55 or a share of 0.5 halves w_e to
+10⁻¹², 0.6 or a share of 1 gives 0, both together a quarter; w_e is linear
+in B0 below the onset (0.080, 0.040, 0.016, 0.002, 0.000 mm/s at B0 5·10⁻⁵,
+2.5·10⁻⁵, 10⁻⁵, 10⁻⁶, 10⁻⁸ against 0.080, 0.053, 0.037, 0.027, 0.026
+without it); 362 random columns, 78 tapered: engines agree on w_e to
+5.8·10⁻⁴ relative, θ to 1.2·10⁻⁴ K, q to 3.3·10⁻⁸; one N=6 step under 6
+and 9 K inversions: the share on the ramp in 35 and 50 columns, engines to
+7.5·10⁻⁶, w_e to 2.1·10⁻³ mm/s. One CPU step from acc64_day0193, sea
+30S–30N with B0 > 0 (13,205 columns): w_e 3.12 mm/s (3.28 without the
+onset), 1,960 columns below the onset, 630 with a share, 500 on the gate's
+ramp. Three days at N=64: albedo and ASR − OLR on day 186 0.310, +2.2
+(plume) and 0.284, +4.6 (Betts–Miller) against 0.310, +2.2 and 0.283, +5.1
+before.
+
+The deck's height under cumulus. On mfv64_day0193 (eight CPU steps, SE
+Pacific, 4,480 column-steps): Richardson depth 811 m, carried height 818
+m, start height 863 m (within 20 m of the floor on 0.620), ceiling 1861 m
+on 1.000, jump at h 0.75 K (2 K passed on 0.057), resolved inversion 1919
+m (7.14 K), mixed layer cloud-free on 0.535 (cloud base 783 m), gate 0.041,
+deck runs 0.014; Peru: 765, 850, 864 m (0.628), ceiling 1417 m, 1.40 K
+(0.110), 1271 m (5.95 K), cloud-free 0.390, deck runs 0.226. The binding
+rule is the rest: a deck that does not run relaxes to the Richardson depth
+and is tested there. `deckRest` 'inversion' (the default; 'depth' keeps the
+old rest) starts an unset height and relaxes a resting one toward the
+ceiling. Three days at N=64 under the Betts–Miller deep branch, day 186:
+'depth' 0.284, +4.6, gate open over 0.061 of the globe; 'inversion' with
+`minimumInversion` 2 K 0.326, −7.9, 0.278 (10S–10N 0.206); 3 K 0.325,
+−7.9; 4 K 0.306, −2.3, 0.150 (10S–10N 0.069). `minimumInversion` defaults
+to 4 K. Under the plume, 'inversion' with 2 K: SE Pacific low cloud 0.614,
+deck runs 0.634, Peru 0.573, 0.755 on day 186. Tests: a column whose
+Richardson depth is 114 m under a 1200 m inversion forms its deck after
+17 h at 1200 m resting at the ceiling and none in 48 h resting at the
+depth; the engines agree on the carried height to 1.2·10⁻⁷ (3.2·10⁻⁷ at
+rest) and the gate to 4·10⁻⁸.
+
+Acceptance, the defaults (Betts–Miller deep, shallow plume, the deck at
+the inversion, 4 K):
+
+| | value | asked |
+|---|---|---|
+| N=64 albedo days 184–193 | 0.273, 0.299, 0.306, 0.303, 0.306, 0.309, 0.312, 0.320, 0.316, 0.315 | 0.30–0.32 from 186 |
+| N=64 ASR − OLR days 188–193 (mean) | −0.4, −0.8, −1.5, −3.2, −1.7, −1.8 (−1.6) | ±4 |
+| N=64 global rain days 187–193, mm/d | 2.42–2.66 | 2.4–2.8 |
+| SE Pacific rain, mm/d; firing; low cloud; deck runs | 1.15; 0.031; 0.346; 0.356 | < 0.5; < 0.02; 0.4–0.7; ≥ 0.3 |
+| SE Pacific EIS; deck height where it runs; resolved inversion | 4.92 K; 2067 m; 1937 m (5.55 K) | |
+| Peru rain; firing; low cloud; deck runs | 0.00; 0.000; 0.464; 0.467 | |
+| Pacific ITCZ rain, mm/d; ω500, Pa/s | 3.96; −0.023 | 6–9 |
+| ITCZ firing columns' heating peak; lowest 100 m | 438 hPa; −1.15 K/d | 400–500; −10 to +5 |
+| zonal-mean rain peak | 5.15 mm/d at 1.5S | 5–7 at 5–10N |
+| ω700 grid-scale share | 0.228 | < 0.3 |
+| N=128 albedo days 184–188 | 0.247, 0.266, 0.287, 0.305, 0.308 | 0.29–0.32 on 186–188 |
+| N=128 ASR − OLR (mean) | +14.7, +9.6, +3.9, −1.8, −2.4 (+4.8) | ±4 |
+| N=128 day 188: SE Pacific rain; low cloud; deck runs; ITCZ rain | 0.09; 0.290; 0.364; 4.53 | |
+| N=128 equatorial ω500 100E–180 / 160W–80W, Pa/s | −0.028 to −0.062 / +0.026, +0.040, −0.008, +0.012, +0.029 | ascent / descent |
+| 60–90N ice loss, 10³ km³/day | 0.183 (9.191 → 8.641) | ≤ 0.18 |
+| fresh start, days 1–30 albedo | 0.276, 0.299, 0.353, 0.395, 0.421, 0.439 … 0.306 (day 17) … 0.277 | 0.29–0.33 by 30 |
+| fresh start ASR − OLR, day 30 | +13.2 (+10.5 to +16.1 over days 18–30) | ±10 |
+
+Ice loss with 'depth' and 2 K 0.179, under the plume 0.183. The fresh
+start: no NaN, clamped 0 on every day; convection after 30 days: share
+0.75 global, 0.99 15S–15N; SE Pacific 1.59 mm/d (convective 1.54) on 0.32
+of its column-days; Pacific ITCZ 7.62 mm/d; equator after 30 days:
+surface current −0.25 m/s (160E–100W) and −0.73 m/s (140W–100W),
+undercurrent +0.22 m/s at 93 m, stress −0.036 N/m², mixed layer 52 m, 1024
+class top 186 m and 51 m. Ten days at N=64: convection after 10 days 0.67
+global, 0.99 15S–15N, SE Pacific 0.83 mm/d (0.72) on 0.08, Pacific ITCZ
+4.08 mm/d; equator −0.17 and −0.37 m/s, +0.06 m/s at 88 m, −0.020 N/m²,
+51 m, 144 and 90 m. Pace at N=128: days 187 and 188 0.9 and 1.0 min (two
+N=64 runs sharing the GPU); `profileGpu` over 128 steps from
+eight128_day0183 after 64, alternated twice with the merged parent
+(84d7f40) alone on the GPU: a step's median 86.1 and 86.2 ms against 84.8
+and 84.5 (+1.8 %), the adjust pass 15.97 and 15.99 ms against 14.58 and
+14.59, the physics and boundary-layer passes 7.67 against 7.62.
+
 ### M22 — A moist boundary layer — planned
 
 The boundary-layer scheme is still the dry Troen–Mahrt K-profile of
