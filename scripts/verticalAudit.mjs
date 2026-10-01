@@ -18,7 +18,8 @@
 // at the deck's height h as the deck interpolates it, from pi*sigma-dot as
 // the dynamics leaves it and as the deck reads it after its ring means,
 // with its per-cell spread (the standard deviation over the box) and
-// grid-scale share. Over a
+// grid-scale share. SKIP (0) steps are run first and the snapshot taken
+// after them, so windows can start at different hours. Over a
 // window of STEPS (8) steps: the rain and its convective share, the
 // fraction of columns firing (convective rain above 1 mm/d in a step)
 // and of those whose temperature convection changes at all, the global
@@ -76,7 +77,7 @@ import { REGIME } from '../js/physics/boundaryLayer.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/verticalAudit.mjs <state.bin>'); process.exit(1); }
-const STEPS = Number(process.env.STEPS ?? 8), RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
+const STEPS = Number(process.env.STEPS ?? 8), SKIP = Number(process.env.SKIP ?? 0), RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
 const t0 = performance.now();
 const say = (s = '') => console.log(s);
 
@@ -101,6 +102,8 @@ if (saved.boundaryDepth) bl.depth.set(Float64Array.from(saved.boundaryDepth, (z,
 if (saved.mixingTop) bl.mixingTop.set(Float64Array.from(saved.mixingTop, (z, i) => z + zs[i]));
 if (saved.boundaryRegime) bl.regime.set(saved.boundaryRegime);
 if (saved.boundaryBuoyancy) bl.buoyancyFlux.set(saved.boundaryBuoyancy);
+for (let n = 0; n < SKIP; n++) model.step(dt);
+if (SKIP > 0) radiation.restartSums();
 const gates = radiation.deckGates;
 
 const sea = Uint8Array.from({ length: C }, (_, i) => (!landMask[i] && !(ice[i] > 0) ? 1 : 0));
@@ -440,7 +443,7 @@ const sh = hadley(-35, 15, -1), nh = hadley(0, 35, 1);
 row('SH Hadley peak (1e9 kg/s)', sh.value / 1e9, 1, -100, -200, 0, `at ${sh.lat} deg`);
 row('NH Hadley peak (1e9 kg/s)', nh.value / 1e9, 1, 10, 50, 0, `at ${nh.lat} deg`);
 
-say(`vertical audit of ${FILE.split('/').pop()}: day ${saved.day}, N=${saved.N}, K=${K}; CPU, ocean off; ${STEPS} steps of ${dt} s after the stage-0 snapshot`);
+say(`vertical audit of ${FILE.split('/').pop()}: day ${saved.day}, N=${saved.N}, K=${K}; CPU, ocean off; ${SKIP ? `${SKIP} steps, then ` : ''}${STEPS} steps of ${dt} s after the stage-0 snapshot`);
 say(`deck gates: ${gates.subsidenceSmoothing} ring passes, subsidence memory ${f(gates.subsidenceMemory / 86400, 2)} d, sink at least ${f(1000 * gates.stratusSubsidence, 2)} mm/s, jump at least ${f(gates.minimumInversion, 1)} K, gate memory ${f(gates.gateMemory / 86400, 2)} d; replica over ${replica.checked} column-steps: running mean |diff| ${replica.mean.toExponential(1)} m/s, gate |diff| ${replica.gate.toExponential(1)}, run decisions differing ${replica.decisions}`);
 const width = Math.max(...rows.map(([name]) => name.length));
 for (const [name, value, digits, lo, hi, u, note] of rows) {
