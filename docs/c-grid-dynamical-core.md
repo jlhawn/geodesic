@@ -3420,6 +3420,197 @@ day 185 against 78.3 and 66.1. Three days at N=64 from nine64_day0091 lose
 9.19 → 8.67), the 70–90N ice's surface taking 67.1, 74.0, 70.4 W/m² net
 (64.9, 71.7, 69.3).
 
+**Item 7, one mass-flux scheme for all convection (Sept 30).** Both
+engines (`plumeColumn` and `transportMomentum` in
+`js/physics/moist.module.js`, the adjust and mixMomentum kernels of
+`js/gpu/physics.gpu.js`) take all convection with one bulk plume
+(`convection` 'plume', the default; 'bettsMiller' keeps the Betts–Miller
+relaxation, its trigger and its 2 h activity, bit for bit, for side-by-side
+runs; the activity is carried and saved but unused under 'plume'). The
+plume leaves the shallow plume's source with its mean s_l and q_t
+(`plumeSource` 'mean'; 'lowest'), rises unmixed to the LCL and from there
+integrates d(w²)/dz = 2aB − 2bεw² exactly across each layer for constant
+B and ε, from `plumeVelocity` 1 m/s, a = `plumeAcceleration` 1/3,
+b = `plumeDrag` 1, B the virtual buoyancy with condensate loading;
+ε = max(`plumeEntrainmentFloor` 10⁻⁴ m⁻¹, c_ε B/w²), c_ε =
+`plumeEntrainment` 0.1, from the layer below's B and w² at the layer's
+base. The net acceleration is 2B(a − b c_ε): with b = 2 and c_ε = 0.5
+(the values first proposed) no plume accelerates, so b = 1 and c_ε = 0.1.
+Condensate above `plumeRainThreshold` 0 rains at 1 − exp(−c0 Δz) per layer,
+c0 = `plumeRainRate` 3·10⁻³ m⁻¹. The plume ends where w² reaches zero; one
+whose top interface lies above σ 0.7 is deep, any other goes to the
+shallow cumulus mass flux unchanged. Deep mass flux per unit base flux:
+growing by exp((ε − δ)Δz), δ = max(0, ε − `plumeMassGrowth` 0), up to the
+height of neutral buoyancy interpolated linearly in B between layer
+midpoints, then falling linearly to zero at the top. The downdraft starts
+at the layer of least moist static energy between the top and the
+cloud-base layer, `downdraftShare` α = 0.3 of the base flux, saturated by
+evaporating rain, entraining at `downdraftEntrainment` 10⁻⁴ m⁻¹ to the
+cloud-base layer and detraining below it in proportion to mass, α lowered
+where the rain made above a level does not cover what it evaporates to
+there. s_l and q_t move in the shallow plume's flux form, both drafts'
+fluxes at each interface, the rain made and evaporated as layer sources.
+Closure: base flux (CAPE − `plumeCape` 70 J/kg) / (τ F), τ =
+`plumeRelaxation` 1 h, CAPE the positive work of the plume's cloudy layers
+(`plumeCapeParcel` 'plume'; 'undilute': of the source air), F the change
+of the plume's net work over its layers per second and unit base flux from
+the scheme's own tendencies with the plume held fixed, times the deck's
+opening and the inhibition ramp about `inhibitionThreshold`; at most
+`cumulusBoundaryLoss` of the source a step and (M + α|M_d|) gΔt/Δp ≤ 1.
+`plumeClosure` 'separate' (the default) runs the shallow plume beside the
+deep one on its own closure, 'cape' leaves it out of deep columns,
+'maximum' gives the deep plume max(shallow closure, CAPE closure) as first
+specified. The rain left after the downdraft falls from where it formed;
+below the cloud-base layer it evaporates into cloud-free subsaturated
+layers at 1 − exp(−`plumeRainEvaporation` (1 − q/q_s) Δz) of what falls,
+10⁻³ m⁻¹, within `rainEvaporation` of the deficit; what reaches the ground
+is the cell's convective rain. The cumulus cover below the shallow top is
+the larger of the two plumes' M/(ρ w_u), w_u ≥ w0. `plumeMomentum` (off)
+moves each edge's normal velocity by the mean of its cells' deep updraft
+and downdraft in the same flux form, its kinetic-energy loss returned as
+heat. Column enthalpy, water and (with momentum) each edge's momentum
+close to rounding.
+
+Tests (`test/convection.test.mjs`): the Jordan column lifts a deep plume
+to 211 hPa (CAPE 273 J/kg, base flux 0.049 kg/m²/s, downdraft 0.015 from
+518 hPa) that rains 34.7 mm/d after 1.7 mm/d evaporate below cloud base,
+heats most at 440 hPa above the cloud-base layer (22.6 K/d; 30.7 K/d in
+the cloud-base layer at 949 hPa), cools every subcloud layer (−23.4 K/d
+over the lowest 100 m) and keeps enthalpy to 5·10⁻¹⁶ and water to 1·10⁻¹⁶;
+the trade-wind column gets the shallow plume bit for bit and no rain; the
+Jordan humidity above 850 hPa × 1, 0.8, 0.6, 0.4 tops the plume at 211,
+292, 344 hPa and leaves it shallow (CAPE 273, 162, 89, 65 J/kg); the base
+flux is (CAPE − CAPE0)/(τF) to 10⁻¹²; on 362 random columns the engines
+agree under each closure, source and CAPE parcel to 1.8·10⁻⁴ K and
+3·10⁻⁷ kg/kg, the base flux to 5.2·10⁻⁵ of 0.133 kg/m²/s, and with momentum
+the winds to 1.7·10⁻⁴ m/s on 245 of 1080 edges, each edge's column momentum
+to 2.2·10⁻¹¹ of layer momenta up to 2·10⁴; 'bettsMiller' reproduces the
+pinned digests. `test/gpuModel.test.mjs` runs the rain accumulation under
+both schemes (24 steps at N=6: plume per-cell rms 8.0·10⁻⁵ convective,
+3.3·10⁻⁴ large-scale, last step's rain to 1.2·10⁻⁴ kg/m²).
+
+`scripts/verticalAudit.mjs` prints the plume tops over 15S–15N by 100 hPa,
+the deep and shallow shares of the column-steps, and ω500 at 5S–5N by 20°
+of longitude. On the N=128 states after 8 CPU steps (plume / bettsMiller):
+nine128_day0183 global rain 0.52 / 2.13 mm/d, Pacific ITCZ 0.01 / 4.33,
+deep plumes on 0.000 of the tropical column-steps, shallow 0.520;
+eight128_day0183 0.41 / 0.59, ITCZ 0.03 / 0.04 (Betts–Miller's activity
+starts undecided there). The dilute plume finds no CAPE above 70 J/kg in
+an atmosphere the Betts–Miller has held near its 5·10⁻⁵ m⁻¹ parcel, so
+deep convection starts only as the troposphere destabilises: global rain
+0.70, 1.14, 1.71, 2.02 mm/d on days 184–187 at N=64.
+
+Ten-day N=64 GPU runs from eight64_day0183, the day-193 audit (8 steps;
+ITCZ rain, its ω500, the firing columns' heating peak and lowest 100 m,
+global rain, zonal-mean peak, SE Pacific rain and firing); runs marked †
+on the build before the neutral-height interpolation and the continuous
+CAPE consumption; all with c0 2·10⁻³ unless given but the defaults
+(3·10⁻³):
+
+| run | albedo 184 / 193 | ASR − OLR 188–193 | ITCZ mm/d; ω500 | peak hPa; lowest 100 m K/d | global | zonal peak | SE Pacific; firing |
+|---|---|---|---|---|---|---|---|
+| bettsMiller (= `mfv64`) | 0.285 / 0.313 | −1.7 | 4.75; −0.032 | 438; −1.4 | 2.37 | 4.95 (0.5S) | 0.80; 0.018 |
+| † as first built | 0.304 / 0.340 | −3.0 | 5.58; −0.038 | 438; −11.2 | 2.26 | 6.20 (7.5N) | 1.66; 0.063 |
+| † plumeSource 'lowest' | 0.301 / 0.345 | −1.9 | 5.43; −0.035 | 438; −12.9 | 2.19 | 5.07 (1.5N) | 2.13; 0.050 |
+| † plumeClosure 'maximum' | 0.296 / 0.331 | +0.9 | 5.97; −0.038 | 944; −23.6 | 2.17 | 5.20 (2.5S) | 1.39; 0.074 |
+| † plumeMassGrowth 2·10⁻⁴ | 0.303 / 0.355 | −5.0 | 7.52; −0.050 | 438; −4.9 | 2.23 | 5.60 (7.5N) | 1.42; 0.085 |
+| † plumeMassGrowth −1·10⁻⁴ | 0.303 / 0.337 | −3.8 | 8.60; −0.057 | 944; −19.5 | 2.41 | 7.57 (11.5N) | 1.28; 0.032 |
+| † plumeCape 120 | 0.304 / 0.345 | −4.2 | 6.25; −0.039 | 516; −5.8 | 2.30 | 6.17 (10.5N) | 1.97; 0.025 |
+| † plumeCape 30 | 0.301 / 0.349 | −1.6 | 5.67; −0.035 | 438; −15.1 | 2.25 | 5.28 (7.5N) | 1.65; 0.040 |
+| † c_ε 0.05 | 0.302 / 0.345 | −2.6 | 6.10; −0.041 | 438; −14.4 | 2.14 | 5.12 (4.5S) | 0.93; 0.025 |
+| † c_ε 0.2, floor 2·10⁻⁴ | 0.305 / 0.336 | −6.1 | 4.77; −0.019 | 962; −4.6 | 2.41 | 7.49 (6.5N) | 1.00; 0.017 |
+| † τ 2 h | 0.304 / 0.343 | −3.7 | 7.12; −0.053 | 438; −6.7 | 2.28 | 5.94 (11.5N) | 1.10; 0.043 |
+| † α 0.5 | 0.304 / 0.342 | −3.7 | 6.95; −0.049 | 516; −7.9 | 2.37 | 7.10 (6.5N) | 1.34; 0.039 |
+| † no downdraft, no evaporation | 0.302 / 0.345 | −3.1 | 4.90; −0.006 | 787; +0.4 | 2.27 | 6.22 (0.5N) | 1.40; 0.043 |
+| † plumeClosure 'cape' | 0.303 / 0.344 | −3.7 | 5.61; −0.034 | 516; −10.4 | 2.37 | 6.06 (27.5S) | 2.04; 0.029 |
+| as first built | 0.303 / 0.341 | −3.2 | 5.40; −0.037 | 438; −10.1 | 2.34 | 7.50 (8.5N) | 1.61; 0.046 |
+| c0 4·10⁻³, no downdraft entrainment | 0.303 / 0.338 | −3.0 | 6.18; −0.031 | 438; −12.8 | 2.33 | 7.71 (3.5S) | 1.50; 0.075 |
+| c0 5·10⁻³, α 0.2 | 0.303 / 0.338 | −2.9 | 6.83; −0.034 | 438; −10.7 | 2.37 | 6.84 (11.5N) | 2.14; 0.057 |
+| w0 2 m/s | 0.303 / 0.348 | −3.0 | 6.20; −0.039 | 438; −9.9 | 2.18 | 4.83 (8.5N) | 2.27; 0.072 |
+| floor 5·10⁻⁵ | 0.303 / 0.340 | −2.9 | 6.75; −0.043 | 438; −12.7 | 2.33 | 6.78 (3.5S) | 2.12; 0.060 |
+| 'undilute' CAPE | 0.301 / 0.343 | −1.3 | 5.91; −0.041 | 921; −59.1 | 2.25 | 4.84 (8.5N) | 0.48; 0.016 |
+| 'undilute', τ 2 h, α 0.15 | 0.301 / 0.346 | −2.3 | 6.93; −0.046 | 943; −33.8 | 2.33 | 5.86 (1.5N) | 1.59; 0.018 |
+| shallow plume raining above 10⁻³ kg/kg | 0.303 / 0.338 | −3.0 | 5.85; −0.040 | 438; −9.9 | 2.41 | 8.11 (8.5N) | 1.65; 0.055 |
+| **the defaults (`fin64`)** | 0.303 / 0.340 | −2.8 | 7.34; −0.057 | 438; −10.1 | 2.31 | 7.99 (7.5N) | 1.63; 0.036 |
+
+The defaults (`fin64`): planetary albedo 0.303, 0.313, 0.317, 0.325,
+0.340, 0.347, 0.339, 0.339, 0.337, 0.340 on days 184–193 (`mfv64` 0.285 …
+0.313; `base10d64` 0.288 … 0.337); ASR − OLR +1.0, −0.1, −0.2, 0.0, −3.2,
+−4.9, −2.7, −1.9, −1.4, −2.6 W/m² (mean over days 188–193 −2.8;
+`mfv64` −1.7, `base10d64` −11.5); global rain 0.70, 1.14, 1.71, 2.02,
+2.20, 2.29, 2.38, 2.35, 2.22, 2.25 mm/d. The day-193 audit: Pacific ITCZ
+7.34 mm/d (convective share 0.81), ω500 −0.057 Pa/s, firing columns'
+heating peak 438 hPa (8.9 K/d), −10.1 K/d over the lowest 100 m,
+large-scale heating below 1 km at most 1.7 K/d (`mfv64` 1.28); global
+2.31 mm/d (convective 0.42; 15S–15N 0.72); zonal-mean peak 7.99 mm/d at
+7.5N; SE Pacific 1.63 mm/d (convective 0.26), firing 0.036 of the
+column-steps, low cloud 0.108, deck runs 0.005, EIS 1.59 K, resolved
+inversion 1955 m (θv jump 3.82 K) (`mfv64`: 0.80 (0.96), 0.018, 0.137,
+0.014, 3.69 K, 1614 m); Hadley −180 / 59·10⁹ kg/s; deep plumes on 0.205
+of the tropical column-steps (base flux 0.043 kg/m²/s), shallow on 0.449,
+tops 200–300 hPa on 0.125 and 800–1000 hPa on 0.405; equatorial ω500
+from 180W by 20°: +0.004, −0.013, +0.031, +0.013, +0.030, −0.021, +0.022,
++0.021, −0.016, −0.001, −0.003, −0.124, −0.177, −0.046, −0.017, −0.038,
+−0.039, −0.019 Pa/s. The day's own means from the run's log: SE Pacific
+0.48 mm/d (convective 0.16), Pacific ITCZ 3.27 mm/d. Day 193 against
+`mfv64`, 15S–15N: relative humidity 0.72–0.79 at σ 0.84–0.88 against
+0.55–0.63 and 0.72–0.74 at σ 0.31–0.37 against 0.57–0.65; temperature
+1.0–1.8 K lower from σ 0.2 to 0.7; 10S–10N cloud water at σ 0.4–0.68
+22.3 against 1.6 g/m², above σ 0.4 33.4 against 16.9; the frozen state's
+albedo over four sun positions 0.322 against 0.308 (10S–10N 0.285 against
+0.273, 10–30N 0.228 against 0.211, 30–90N 0.379 against 0.349), its cloud
+above σ 0.68 alone 0.242 against 0.204 and below it 0.224 against 0.237;
+convective rain 0.94 against 1.55 mm/d, large-scale 1.31 against 0.92
+(40–60N convective 0.19 against 0.63).
+
+Five days at N=128 on the GPU from eight128_day0183 (`fin128e`; the
+shallow-only branch from the same state, `mf128e`, in brackets): planetary
+albedo 0.267, 0.277, 0.293, 0.298, 0.302 (0.257, 0.275, 0.298, 0.301,
+0.300); ASR − OLR +10.6, +8.9, +5.7, +4.8, +5.0 W/m², mean +7.0 (+11.5,
++6.5, +0.3, −0.2, +0.4, mean +3.7); OLR 239.1 → 232.8 W/m² (241.6 →
+238.0); global rain 0.67, 1.32, 1.92, 2.33, 2.50 mm/d (1.73 … 2.66). The
+day-188 audit (`mf128e` audited under its own scheme): Pacific ITCZ 3.56
+mm/d (5.33), ω500 −0.009 Pa/s (−0.018), firing columns' heating peak 515
+hPa (438), −9.9 K/d over the lowest 100 m (−1.8); global 2.59 mm/d (2.69),
+convective share 0.34 (0.62); zonal-mean peak 7.72 mm/d at 10.5N (5.79
+at 9.5N); SE Pacific 0.05 mm/d (0.03), firing 0.003 (0.000), low cloud
+0.157 (0.157), deck runs 0.003 (0.004), resolved inversion 1704 m (1691);
+Hadley −128 / 58·10⁹ kg/s (−113 / 49); deep plumes on 0.209 of the
+tropical column-steps (base flux 0.042), tops 200–300 hPa on 0.141;
+equatorial ω500 from 180W by 20°: +0.006, +0.046, +0.021, +0.011, +0.005,
++0.003, +0.049, +0.036, +0.033, −0.025, +0.031, +0.030, −0.020, −0.021,
+−0.052, −0.134, −0.089, −0.043 Pa/s (ascent 100E–180, descent
+180–80W). At day 188 against `mf128e`, 15S–15N: relative humidity
+0.69–0.79 at σ 0.84–0.88 (0.55–0.64), 0.68–0.69 at σ 0.27–0.37
+(0.58–0.60), temperature 1.5–2.3 K lower from σ 0.23 to 0.6; convective
+rain 0.93 mm/d (1.69), large-scale 1.57 (0.97). From nine128_day0183
+(`fin128n`, an M21 state out of balance; `mfv128` in brackets): albedo
+0.282, 0.279, 0.287, 0.295, 0.300 (0.286, 0.278, 0.274, 0.275, 0.269);
+ASR − OLR +9.5, +11.8, +11.2, +9.5, +8.5, mean +10.1 (+9.0); global rain
+1.00, 1.88, 2.24, 2.42, 2.41 mm/d; day 188: Pacific ITCZ 8.36 mm/d
+(convective 0.77), ω500 −0.056 Pa/s, heating peak 438 hPa, −12.2 K/d
+over the lowest 100 m; global 2.38 mm/d (convective 0.41); zonal-mean
+peak 7.46 mm/d at 7.5N; SE Pacific 1.15 mm/d (convective 0.03), firing
+0.011, low cloud 0.292, deck runs 0.108, resolved inversion 1554 m;
+equatorial ω500 −0.094 at 180W, +0.028 to +0.062 over 160W–120W, −0.071
+and −0.115 over 140E–180.
+
+Three days at N=64 on the GPU from nine64_day0091 (`fin64i`): 60–90N ice
+9.191 → 8.659·10³ km³, 0.177·10³ km³ a day (package 3 with the Arctic
+cover on the CPU 0.173, the shallow branch on the GPU 0.178).
+
+Pace: `js/gpu/profile.module.js` over 128 steps from nine128_day0183
+after 64, the plume, b4cc733 and this code under 'bettsMiller' (the
+shallow branch) alternated twice with nothing else on the GPU: a step's median 87.0 and 85.2 ms
+against 83.8 and 83.8 for b4cc733 (+2.7 %) and 85.7 and 85.7 for the
+shallow branch; the adjust kernel's pass 16.1 and 15.7 ms against 14.7
+and 14.7 and 16.2 and 16.3, the physics kernel's 7.60 against 7.24 and
+7.60. Two to eight spin-ups from another worktree shared the GPU during
+the N=128 runs, which took 2.5 to 11.7 min a model day (1.7 min on days
+187–188 of `fin128n`); the uncontended ten-day N=64 runs took 6.6 s a
+model day (`fin64`) against 6.0 for the shallow branch (`pt`, the same
+code under 'bettsMiller').
+
 ## 7. Module layout in this repo
 
 ```
@@ -3439,7 +3630,7 @@ js/
     boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
     init.module.js          ported: thermal init, balance, seed, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes; ice, snow and soil by source tile
-    moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler; M21: its triggered entraining parcel and shallow branch
+    moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler; M21: its triggered entraining parcel and shallow branch, the shallow cumulus mass flux and the convective plume
     ice.module.js           M9/M11: zero-layer sea ice over the mixed layer, its concentration, zenith albedo
   ocean/
     layered.module.js       M18: 45-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
