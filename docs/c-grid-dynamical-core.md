@@ -3937,6 +3937,28 @@ The default keeps the 4 K ceiling. A resting height relaxes toward the
 ceiling where the column has one and toward the Richardson depth where
 it has none (0.53 of the SE Pacific column-steps have one on rv3b).
 
+**Betts–Miller retired (Oct 1).** The plume of item 7 is the only
+convection scheme on both engines. Removed: the deep relaxation, its
+parcel, reference profile and trigger, the shallow vent and mixing
+line, the `convection`, `shallowScheme` and `cumulusWithDeep` switches,
+and the per-cell activity (state field `convectiveActivity`, PH
+`CONVACT`). The retired options (`RETIRED_OPTIONS` in
+`js/physics/moist.module.js`) throw on either engine; states saved with
+the activity load without it. The plume path is unchanged bit for bit:
+24 CPU steps at N=4 and 48 GPU steps at N=6 give the parent's digests
+under `convection` 'plume', with and without `plumeMomentum`. The
+defaults are those of the plume runs above (N=64 albedo 0.333 on day
+193, ASR − OLR over days 188–193 −1.3; N=128 albedo 0.301 on day 188,
+mean +8.4), which ran before the review's land fix. Digest tests
+re-pinned to 3ca002d1, 3d0c610f and da3ea94c. Parity on 362 random
+columns under seven option sets: θ to 1.8·10⁻⁴ K, q to 3.1·10⁻⁷, base
+mass flux to 5.2·10⁻⁵ kg/m²/s, no column differing in whether it rains.
+The radiation-parity fixture is one step after the 10 K inversion: its
+layer-24 heating differs between the engines by 7.9·10⁻⁵, 1.4·10⁻⁴,
+1.6·10⁻⁴ and 1.5·10⁻⁴ K/day after one to four steps under the plume,
+against a tolerance of 10⁻⁴ (9.8·10⁻⁵ after two steps under
+Betts–Miller).
+
 ### M22 — A moist boundary layer — planned
 
 The boundary-layer scheme is still the dry Troen–Mahrt K-profile of
