@@ -3334,6 +3334,10 @@ deep branch is bit-identical under either scheme; on 362 random columns
 end, on the base flux to 5·10⁻⁵ of 0.059 kg/m²/s, θ to 1.8·10⁻⁴ K and q
 to 3·10⁻⁷; `test/gpuModel.test.mjs`: the cumulus cover moves the layer
 heating by up to 6.0 K/day and the engines agree to 9.8·10⁻⁵ K/day.
+The moist adjustment of every column after one CPU step from
+eight64_day0183 (8153 plumes) and twin64_day0540 (9930) keeps each
+column's c_p T + L q to 1.1·10⁻¹⁵ and its water with the rain to
+7.7·10⁻¹⁶ of themselves, the winds and surface pressure untouched.
 
 On nine128_day0183 after one CPU step, over ice-free sea in 30S–30N
 where the gate is at most 0.5: mean base flux 0.0077 kg/m²/s, 0.174 of
@@ -3402,7 +3406,15 @@ a step, low cloud 0.234, deck runs 0.159; Pacific ITCZ 7.57 mm/d; global
 at +6.9 (both −7.4 and −7.0 on day 193 at N=64). Pace: 0.95 min a model
 day over days 185–188 (57 s, the log's 0.1 min resolution; two other
 N=128 spin-ups shared the GPU at the start), the b4cc733 code's day 185
-run next 1.0 min (60 s). Three days at N=64 from nine64_day0091 lose
+run next 1.0 min (60 s). `js/gpu/profile.module.js` over 128 steps
+from nine128_day0183 after 64, alternating with the b4cc733 code twice
+with nothing else on the GPU: a step's median 85.8 and 85.7 ms against
+83.9 and 83.6 (+2.5 %, 1.1 s a model day), the adjust kernel's pass
+16.2 against 14.7 ms and the physics kernel's 7.55 against 7.20, of
+which the second saturation adjustment is 0.3 ms; three-day runs back
+to back took 62.5 s a model day on days 185–186 against 59.8 for
+b4cc733, and two-day runs earlier the same evening 77.5 and 74.9 s on
+day 185 against 78.3 and 66.1. Three days at N=64 from nine64_day0091 lose
 0.178·10³ km³ of northern ice a day on the GPU (9.191 → 8.657) and
 0.177 on the CPU (9.19 → 8.66; package 3 with the Arctic cover 0.173,
 9.19 → 8.67), the 70–90N ice's surface taking 67.1, 74.0, 70.4 W/m² net
