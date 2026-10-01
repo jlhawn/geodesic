@@ -493,10 +493,11 @@ async function parity(options, { momentum = false } = {}) {
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
 }
 
-test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   await parity({});
   await parity({ plumeClosure: 'maximum', plumeSource: 'lowest', plumeCapeParcel: 'undilute', plumeMassGrowth: 2e-4 });
   await parity({ plumeClosure: 'cape', downdraftShare: 0.5, downdraftEntrainment: 0, plumeRainThreshold: 5e-4, autoconversionFloor: 'boundaryLayer', upperCloudLifetime: 1800 });
+  await parity({ plumeConsumption: 'buoyant', cloudLifetime: 7200 });
   await parity({ plumeMomentum: true }, { momentum: true });
   await parity({ plumeMomentum: true, downdraftShare: 0 }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });

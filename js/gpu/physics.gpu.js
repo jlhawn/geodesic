@@ -37,6 +37,7 @@ export function physicsConstants(o) {
   if (o.plumeClosure !== 'maximum' && o.plumeClosure !== 'separate' && o.plumeClosure !== 'cape') throw new Error(`plumeClosure must be 'maximum', 'separate' or 'cape', not ${o.plumeClosure}`);
   if (o.plumeCapeParcel !== 'plume' && o.plumeCapeParcel !== 'undilute') throw new Error(`plumeCapeParcel must be 'plume' or 'undilute', not ${o.plumeCapeParcel}`);
   if (o.plumeSource !== 'mean' && o.plumeSource !== 'lowest') throw new Error(`plumeSource must be 'mean' or 'lowest', not ${o.plumeSource}`);
+  if (o.plumeConsumption !== 'all' && o.plumeConsumption !== 'buoyant') throw new Error(`plumeConsumption must be 'all' or 'buoyant', not ${o.plumeConsumption}`);
   const entrainment = { ...ENTRAINMENT_DEFAULTS, ...o.entrainment };
   const cloudTop = { ...CLOUD_TOP_DEFAULTS, ...o.cloudTop };
   if (o.turbulence !== 'moist' && o.turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${o.turbulence}`);
@@ -67,7 +68,7 @@ const CU_FLOOR: f32 = ${CUMULUS_FLOOR}; const CU_K0: i32 = ${o.cumulusK0 ?? 0}; 
 const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvershoot}; const CU_WU: f32 = ${o.cumulusUpdraft}; const CU_RAIN: bool = ${o.cumulusRain != null}; const CU_RAIN_Q: f32 = ${o.cumulusRain ?? 0}; const CU_LOWEST: bool = ${o.cumulusSource === 'lowest'};
 const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: bool = ${o.cumulusCloud !== false && o.cloudCover === 'pdf'};
 const PL_SEPARATE: bool = ${o.plumeClosure === 'separate'}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
-const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
+const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.plumeConsumption === 'buoyant'}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
 const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_CEILINV: f32 = ${o.ceilingInversion ?? o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
@@ -1126,7 +1127,7 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
   if (!(sourceQ > 0.0)) { return cumulusColumn(i, pi, dt); }
   let lcl = condensationLevel((sourceS - GRAV * z[bottom]) / CP, sourceQ, p[bottom]);
   if (!(lcl.y > pi * LV[L_SL + 0])) { return cumulusColumn(i, pi, dt); }
-  var plumeS: array<f32, K>; var plumeQ: array<f32, K>; var liquid: array<f32, K>; var fallout: array<f32, K>; var work: array<f32, K>; var entrained: array<f32, K>; var thick: array<f32, K>;
+  var plumeS: array<f32, K>; var plumeQ: array<f32, K>; var liquid: array<f32, K>; var fallout: array<f32, K>; var work: array<f32, K>; var entrained: array<f32, K>; var thick: array<f32, K>; var counted: array<f32, K>;
   var speed: array<f32, K + 1>;
   var s = sourceS; var w = sourceQ; var w2 = 0.0; var below = 0.0; var inhibition = 0.0; var cloudy = false; var started = false; var top = -1; var guess = 0.0; var cape = 0.0; var base = -1; var neutral = -1; var neutralB = 0.0; var aboveB = 0.0;
   plumeS[source] = s; plumeQ[source] = w;
@@ -1161,7 +1162,7 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
     }
     speed[k] = select(0.0, w2, mixes);
     if (buoyancy > 0.0) { neutral = k; neutralB = buoyancy; aboveB = 0.0; } else if (neutral == k + 1) { aboveB = buoyancy; }
-    if (cloudy && work[k] > 0.0) { cape += work[k]; }
+    if (cloudy && work[k] > 0.0) { cape += work[k]; counted[k] = 1.0; }
     below = buoyancy;
     let full = exp(-epsilon * depth);
     s = envS[k] + (s - envS[k]) * full; w = envQ[k] + (w - envQ[k]) * full;
@@ -1251,7 +1252,7 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
     var made = 0.0;
     if (k > top && k < source) { made = flux[k] * fallout[k]; }
     let evaporated = share * devap[k];
-    if (k < source && k > top) {
+    if (k < source && k > top && (!PL_BUOYANT_F || counted[k] > 0.0)) {
       let tS = (fluxS[k + 1] - fluxS[k] + LHEAT * (made - evaporated)) * per; let tQ = (fluxQ[k + 1] - fluxQ[k] - made + evaporated) * per;
       let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
       consumption += RGAS * (tS / CP * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud) + PARCEL_VIRT * T[k] * tQ) * dp[k] / p[k];
