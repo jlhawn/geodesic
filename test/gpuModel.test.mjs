@@ -61,6 +61,21 @@ test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailab
   assert.ok(olrE.rmsRel < 1e-5 && swE.rmsRel < 1e-5, `per-cell OLR rms ${olrE.rmsRel}, surface shortwave rms ${swE.rmsRel} under ECTEI`);
 });
 
+test('the stratiform share of the estimated inversion strength and the boundary-layer entrainment it tapers match between the engines, with the cover\'s overcast bound or without it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const [inversion, options] of [[6, {}], [9, {}], [9, { overcastWater: null }]]) {
+    const { model, physics } = await pair(6, 1, 900, inversion, true, options);
+    const C = model.mesh.nCells, share = model.radiation.stratiform, we = model.boundaryLayer.entrainment;
+    const strat = stats(share, physics.STRAT.subarray(0, C)), entrain = stats(we, physics.ENTRAIN.subarray(0, C));
+    let ramp = 0, full = 0, entraining = 0, tapered = 0;
+    for (let i = 0; i < C; i++) { if (share[i] > 0 && share[i] < 1) ramp++; if (share[i] >= 1) full++; if (we[i] > 0) { entraining++; if (share[i] > 0) tapered++; } }
+    console.log(`one step at N=6 under a ${inversion} K inversion${options.overcastWater === null ? ' without the overcast bound' : ''}: stratiform share on the ramp in ${ramp} and whole in ${full} of ${C} columns, max engine difference ${strat.maxDiff.toExponential(1)}; ${entraining} columns entrain, ${tapered} of them tapered, w_e max difference ${(1000 * entrain.maxDiff).toExponential(1)} mm/s`);
+    assert.ok(ramp > C / 20, `${ramp} columns on the ramp`);
+    assert.ok(strat.maxDiff < 2e-3, `share differs by ${strat.maxDiff} at ${strat.at}`);
+    assert.ok(entrain.maxDiff < 2e-5, `w_e differs by ${entrain.maxDiff} at ${entrain.at}`);
+    for (let i = 0; i < C; i++) if (share[i] >= 1) assert.equal(we[i], 0, `cell ${i}: an EIS of 12 K or more entrains nothing`);
+  }
+});
+
 test('with the ∇⁴ closures off, the divergence damping alone and the heat it returns match between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (divergenceDamping) => {
     const model = createModel(new Grid(6), { ocean: false, nu4Hours: Infinity, divergenceDamping });
@@ -344,15 +359,15 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
  * column's own inversion: the second step, the first with a diagnosed
  * boundary layer, carries the deck.
  */
-async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = {}, ...options } = {}) {
-  const physics = { mixedLayerDeck: true, ...options };
+async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = {}, step = null, ...options } = {}) {
+  const physics = { mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options };
   const model = createModel(new Grid(6), { ocean: false, radiation: physics, moist });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells, theta = model.state[1], q = model.state[4];
   for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) {
     if (sigmaMid[k] < 0.85) theta[k * C + i] += 10;
-    else { theta[k * C + i] = theta[(K - 1) * C + i]; q[k * C + i] = q[(K - 1) * C + i]; }
+    else { theta[k * C + i] = theta[(K - 1) * C + i] + (step && sigmaMid[k] < step ? 3 : 0); q[k * C + i] = q[(K - 1) * C + i]; }
   }
   model.radiation.mlmSubsidence.fill(seed);
   model.radiation.mlmHeight.fill(height);
@@ -451,6 +466,33 @@ test('over six steps the carried inversion height, the gate and the deck they gi
   }
   console.log(`seeded at 5000 m, the ${held} decks start 1 m under the midpoint of the first layer above the 10 K inversion and end their step within 100 m of it; engines differ in height by rms ${capped.height.rmsRel.toExponential(1)}, in water by rms ${capped.mlmWater.rmsRel.toExponential(1)}`);
   assert.ok(held > 0.5 * C && capped.height.rmsRel < 1e-5 && capped.mlmWater.rmsRel < 1e-4 && capped.cover.maxDiff < 1e-3, `held ${held}, height rms ${capped.height.rmsRel}, water rms ${capped.mlmWater.rmsRel}, cover ${capped.cover.maxDiff}`);
+});
+
+test('with deckRest \'inversion\' the carried height starts and rests at the inversion ceiling alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const running = await mixedLayerPair(4, { deckRest: 'inversion' }), resting = await mixedLayerPair(4, { deckRest: 'inversion', seed: 5e-3, height: 300 });
+  const { C, model } = resting, { geopotential, g } = model.core.diagnostics, K = model.core.K;
+  let risen = 0;
+  for (let i = 0; i < C; i++) if (!(resting.tops[i] > 0) && resting.heights[i] > 300 + 1) risen++;
+  console.log(`four steps: unset heights start at the ceiling and the deck runs on ${running.decked} of ${C} cells (GPU ${running.gpuDecked}), height rms ${running.height.rmsRel.toExponential(1)}, gate max ${running.gate.maxDiff.toExponential(1)}, cover max ${running.cover.maxDiff.toExponential(1)}; under ascent ${risen} heights seeded at 300 m rise toward the ceiling while the deck rests, height rms ${resting.height.rmsRel.toExponential(1)}, max ${resting.height.maxDiff.toExponential(1)} m`);
+  assert.ok(running.decked > 0.5 * C && running.decked === running.gpuDecked, `deck on ${running.decked}, GPU ${running.gpuDecked}`);
+  assert.ok(running.height.rmsRel < 1e-5 && running.gate.maxDiff < 1e-6 && running.cover.maxDiff < 1e-3 && running.mlmWater.rmsRel < 1e-4, `height ${running.height.rmsRel}, gate ${running.gate.maxDiff}, cover ${running.cover.maxDiff}, water ${running.mlmWater.rmsRel}`);
+  assert.ok(risen > 0.5 * C, `${risen} resting heights rose`);
+  assert.ok(resting.height.rmsRel < 1e-5 && resting.gate.maxDiff < 1e-6, `height ${resting.height.rmsRel}, gate ${resting.gate.maxDiff}`);
+  const ceiling = (i) => { let k = K - 1; while (model.core.sigmaMid[k] >= 0.85) k--; return geopotential[k * C + i] / g - 1; };
+  for (let i = 0; i < C; i++) if (resting.tops[i] > 0 || resting.heights[i] > 300 + 1) assert.ok(resting.heights[i] <= ceiling(i) + 100, `cell ${i}: ${resting.heights[i]} against the ceiling near ${ceiling(i)}`);
+});
+
+test('a ceilingInversion below minimumInversion holds the deck under a weaker jump, alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const shared = { deckRest: 'inversion', minimumInversion: 4, step: 0.92 };
+  const strong = await mixedLayerPair(4, shared), weak = await mixedLayerPair(4, { ...shared, ceilingInversion: 2 });
+  let lower = 0;
+  for (let i = 0; i < weak.C; i++) if (weak.heights[i] < strong.heights[i] - 50) lower++;
+  console.log(`four steps under a 3 K step below a 10 K inversion: with a 2 K ceiling the carried height sits lower on ${lower} of ${weak.C} cells (mean ${(weak.heights.reduce((a, b) => a + b) / weak.C).toFixed(0)} m against ${(strong.heights.reduce((a, b) => a + b) / strong.C).toFixed(0)} m), decks on ${weak.decked} and ${strong.decked}; height rms ${weak.height.rmsRel.toExponential(1)} and ${strong.height.rmsRel.toExponential(1)}, gate max ${weak.gate.maxDiff.toExponential(1)} and ${strong.gate.maxDiff.toExponential(1)}`);
+  assert.ok(lower > 0.5 * weak.C, `${lower} heights lower`);
+  for (const run of [weak, strong]) {
+    assert.ok(run.decked === run.gpuDecked, `deck on ${run.decked}, GPU ${run.gpuDecked}`);
+    assert.ok(run.height.rmsRel < 1e-5 && run.gate.maxDiff < 1e-6, `height ${run.height.rmsRel}, gate ${run.gate.maxDiff}`);
+  }
 });
 
 test('the GPU model sends the deck\'s running-mean subsidence, carried height and gate, the convection\'s activity and the boundary layer\'s depth to the device on load and reads them back on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

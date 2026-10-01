@@ -137,9 +137,9 @@ function deckGeometry(i, mixedDepth) {
   for (let k = K - 2; k >= 1; k--) {
     const upper = (geopotential[k * C + i] - surface) / g;
     if ((geopotential[(k + 1) * C + i] - surface) / g >= shadow.maximumHeight) break;
-    if (upper > depth && thetaV[k * C + i] - thetaV[(k + 1) * C + i] >= gates.minimumInversion) { ceiling = upper - 1; break; }
+    if (upper > depth && thetaV[k * C + i] - thetaV[(k + 1) * C + i] >= gates.ceilingInversion) { ceiling = upper - 1; break; }
   }
-  const h = radiation.mlmHeight[i] > 0 ? shadow.bound(radiation.mlmHeight[i], depth, ceiling) : depth;
+  const h = radiation.mlmHeight[i] > 0 ? shadow.bound(radiation.mlmHeight[i], depth, ceiling) : gates.deckRest === 'inversion' && ceiling < shadow.maximumHeight ? ceiling : depth;
   let k = K - 1;
   for (; k >= 0 && geopotential[k * C + i] - surface < g * h; k--);
   if (k < 1) return null;

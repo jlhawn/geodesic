@@ -218,7 +218,9 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * velocity by them (see there).
  *
  * Rain: Kessler autoconversion of cloud water above the threshold at
- * autoconversionRate, and of all cloud water over cloudLifetime, except
+ * autoconversionRate, and of all cloud water over cloudLifetime
+ * (`upperCloudLifetime` where the layer's pressure is below `shallowTop`,
+ * the anvils' layers; null: cloudLifetime throughout), except
  * in the lowest two layers (`autoconversionFloor` 'lowest') or in the
  * layers wholly below the boundary-layer top ('boundaryLayer'; the
  * lowest two without a boundary layer). The rain falls through the layers below within the
@@ -248,13 +250,14 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * 'parcel', shallowRain, shallowHumidity 0.8, detrainment 0.1,
  * anvilDepth 150 hPa, downdraftEvaporation 0.01 spread by mass,
  * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
- * cloudLifetime 3 h, autoconversionFloor 'lowest', rainEvaporation 1,
+ * cloudLifetime 3 h, no upperCloudLifetime, autoconversionFloor 'lowest', rainEvaporation 1,
  * shallowScheme 'massFlux', cumulusClosure 0.06, cumulusEntrainment
  * 2.5e-3 /m, cumulusDetrainment 3e-3 /m, cumulusSourceDepth 50 hPa,
  * cumulusBoundaryLoss 0.1, cumulusFriction 1, cumulusOvershoot 1,
  * cumulusUpdraft 1 m/s, no cumulusRain, cumulusSource 'mean' (or
  * 'lowest': the plume leaves with the lowest layer's air), no
- * cumulusWithDeep; convection 'plume', plumeClosure 'separate',
+ * cumulusWithDeep; convection 'bettsMiller' (the deep branch above),
+ * and for convection 'plume': plumeClosure 'separate',
  * plumeCapeParcel 'plume', plumeSource 'mean', plumeVelocity 1 m/s,
  * plumeAcceleration 1/3, plumeDrag 1, plumeEntrainment 0.1,
  * plumeEntrainmentFloor 1e-4 /m, plumeMassGrowth 0, plumeRainRate 3e-3 /m,
@@ -265,19 +268,19 @@ export function liftingCondensationLevel(T, q, p, kappa) {
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, relaxationTime: 7200, referenceHumidity: 0.6, parcelDepth: 0, entrainmentRate: 5e-5,
   capeThreshold: 100, inhibitionThreshold: 50, activityMemory: 2 * 3600, shallowTop: 700e2, detrainment: 0.1, anvilDepth: 150e2,
-  downdraftEvaporation: 0.01, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', shallowHumidity: 0.8,
+  downdraftEvaporation: 0.01, autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3 * 3600, upperCloudLifetime: null, rainEvaporation: 1, autoconversionFloor: 'lowest', shallowHumidity: 0.8,
   shallowCape: 10, shallowInhibition: 15, shallowStability: null, shallowReference: 'parcel', shallowRain: true,
   boundaryParcel: false, adjustFrom: 'cloudBase', deckVeto: true, evaporationInCloud: false, downdraftSpread: 'mass', virtualBuoyancy: true,
   shallowScheme: 'massFlux', cumulusClosure: 0.06, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusWithDeep: false,
-  convection: 'plume', plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
+  convection: 'bettsMiller', plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, plumeCape: 70, plumeRelaxation: 3600, plumeMomentum: false,
 };
 
 export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate = null, surfaceBuoyancy = null, frictionVelocity = null, buffers = null, ...options } = {}) {
   const {
     latentHeat, relaxationTime, referenceHumidity, parcelDepth, entrainmentRate, capeThreshold, inhibitionThreshold, activityMemory, shallowTop,
-    detrainment, anvilDepth, downdraftEvaporation, autoconversionThreshold, autoconversionRate, cloudLifetime, rainEvaporation, autoconversionFloor, shallowHumidity,
+    detrainment, anvilDepth, downdraftEvaporation, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, rainEvaporation, autoconversionFloor, shallowHumidity,
     shallowCape, shallowInhibition, shallowStability, shallowReference, shallowRain, boundaryParcel, adjustFrom, deckVeto, evaporationInCloud, downdraftSpread, virtualBuoyancy,
     shallowScheme, cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource, cumulusWithDeep,
     convection, plumeClosure, plumeCapeParcel, plumeSource, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
@@ -435,7 +438,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, deckGate 
       if (!(qc[idx] > 0)) continue;
       if (autoconversionFloor !== 'none' && (floor === null ? k >= K - 2 : k > 0 && upperInterface(i, k) < floor)) continue;
       const excess = Math.max(0, qc[idx] - autoconversionThreshold);
-      const converted = Math.min(qc[idx], excess * (1 - Math.exp(-autoconversionRate * dt)) + qc[idx] * (1 - Math.exp(-dt / cloudLifetime)));
+      const lifetime = upperCloudLifetime !== null && pi[i] * sigmaMid[k] < shallowTop ? upperCloudLifetime : cloudLifetime;
+      const converted = Math.min(qc[idx], excess * (1 - Math.exp(-autoconversionRate * dt)) + qc[idx] * (1 - Math.exp(-dt / lifetime)));
       qc[idx] -= converted;
       rain += pi[i] * dSigma[k] / g * converted;
     }

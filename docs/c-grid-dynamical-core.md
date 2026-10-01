@@ -3251,8 +3251,9 @@ The work, in order:
    interface above h the coefficient ρ w_e,
    w_e = min(cap, (A B0 + A_s u*³/h) / max(Δb, b_min)), with B0 the bulk
    surface buoyancy flux, Δb = g Δθv/θv between the layer above h and the
-   boundary layer's mass mean, A 0.2 (Tennekes 1973), A_s 5 (Vogelezang
-   and Holtslag 1996), b_min 0.015 m/s² and cap 0.05 m/s (`entrainment`:
+   boundary layer's mass mean, A 0.2 and A_s 5 (the buoyancy and
+   friction-velocity sources of Tennekes 1973 with the constants of
+   Driedonks 1982), b_min 0.015 m/s² and cap 0.05 m/s (`entrainment`:
    `efficiency`, `shear`, `jumpFloor`, `cap`), and zero where B0 ≤ 0 or
    the deck's gate exceeds one half. Over the sea at 30S–30N where the
    deck is off, after one CPU step: nine128_day0183 7.74 mm/s area mean
@@ -3553,7 +3554,7 @@ day 185 against 78.3 and 66.1. Three days at N=64 from nine64_day0091 lose
 engines (`plumeColumn` and `transportMomentum` in
 `js/physics/moist.module.js`, the adjust and mixMomentum kernels of
 `js/gpu/physics.gpu.js`) take all convection with one bulk plume
-(`convection` 'plume', the default; 'bettsMiller' keeps the Betts–Miller
+(`convection` 'plume', the default until item 8; 'bettsMiller' keeps the Betts–Miller
 relaxation, its trigger and its 2 h activity, bit for bit, for side-by-side
 runs; the activity is carried and saved but unused under 'plume'). The
 plume leaves the shallow plume's source with its mean s_l and q_t
@@ -3777,6 +3778,165 @@ with nothing else on the GPU: two days at N=128 from nine128_day0183
 87.4 and 85.1 ms against 84.1 and 84.0 for b4cc733 (+2.6 %) and 85.7 and
 85.9 under 'bettsMiller', the adjust pass 15.90 and 15.53 ms against 14.52
 and 14.72 and 16.24 and 16.27.
+**Item 8, the integration (Sept 30).** The integrated code carries
+items 6 and 7 and the boundary-layer entrainment of item 6. Runs from
+copies of eight64_day0183 (ten days, N=64), eight128_day0183 (five days,
+N=128) and nine64_day0091 (three days, N=64), GPU, `everySteps` 8.
+
+The deep plume on the integrated code: N=64 albedo 0.296, 0.305, 0.310,
+0.321, 0.332, 0.342, 0.337, 0.334, 0.335, 0.333 on days 184–193, ASR − OLR
+over days 188–193 −0.8, −3.2, −1.7, −0.1, −0.7, −1.0 W/m² (mean −1.3);
+N=128 albedo 0.262, 0.273, 0.287, 0.293, 0.301, ASR − OLR +12.2, +10.1,
++7.7, +6.7, +5.5 (mean +8.4), OLR 239.2 → 232.6. The Betts–Miller deep
+branch with the shallow plume: N=64 0.274 … 0.296, mean +4.8; N=128 0.247,
+0.259, 0.278, 0.283, 0.283, mean +8.7. Three-day N=64 screens, day-186
+albedo and ASR − OLR (plume 0.310, +2.2): `criticalHumidity` 0.85 0.315,
++1.3; 0.9 0.324, −0.4; `plumeEntrainment` 0.15 0.314, +1.4; 0.2 0.317,
++0.4; `plumeCape` 30 0.304, +3.9; `cloudLifetime` 1 h 0.271, +4.8.
+`upperCloudLifetime` (both engines; the lifetime of cloud water above
+`shallowTop`) 1 h: day 187 0.286, +2.2. Ten days at N=64 with
+`cloudLifetime` 2 h: albedo 0.284 … 0.302, ASR − OLR over days 188–193
+−0.3, −2.4, −2.9, −1.2, +0.6, +2.8 (mean −0.6). At N=128 only the
+plume's defaults were run; `convection` defaults to 'bettsMiller'.
+
+Entrainment (`js/physics/boundaryLayer.module.js`, both engines):
+w_e = o (1 − s) min(cap, (A B0 + A_s r u*³/h) / max(Δb, b_min)), o the
+deck's opening (1 at a gate of 0.5, 0 at 0.6), s the radiation's
+stratiform share (0 at EIS 8 K, 1 at 12 K; `radiation.stratiform`, PH
+`STRAT`), r = min(1, B0 / `shearOnset`), `shearOnset` 5·10⁻⁵ m²/s³; A 0.2
+and A_s 5 are the constants of Driedonks (1982) for the two sources of
+Tennekes (1973). Tests: a gate of 0.55 or a share of 0.5 halves w_e to
+10⁻¹², 0.6 or a share of 1 gives 0, both together a quarter; w_e is linear
+in B0 below the onset (0.080, 0.040, 0.016, 0.002, 0.000 mm/s at B0 5·10⁻⁵,
+2.5·10⁻⁵, 10⁻⁵, 10⁻⁶, 10⁻⁸ against 0.080, 0.053, 0.037, 0.027, 0.026
+without it); 362 random columns, 78 tapered: engines agree on w_e to
+5.8·10⁻⁴ relative, θ to 1.2·10⁻⁴ K, q to 3.3·10⁻⁸; one N=6 step under 6
+and 9 K inversions: the share on the ramp in 35 and 50 columns, engines to
+7.5·10⁻⁶, w_e to 2.1·10⁻³ mm/s. One CPU step from acc64_day0193, sea
+30S–30N with B0 > 0 (13,206 columns), area means: w_e 3.26 mm/s, 3.43
+without the onset, 4.16 untapered and 3.36 under the cut at a gate of 0.5
+without the share or the onset; 1,960 columns below the onset, 630 with a
+share, 499 on the gate's ramp. Three days at N=64: albedo and ASR − OLR on day 186 0.310, +2.2
+(plume) and 0.284, +4.6 (Betts–Miller) against 0.310, +2.2 and 0.283, +5.1
+before.
+
+The deck's height under cumulus. On mfv64_day0193 (eight CPU steps, SE
+Pacific, 4,480 column-steps): Richardson depth 811 m, carried height 818
+m, start height 863 m (within 20 m of the floor on 0.620), ceiling 1861 m
+on 1.000, jump at h 0.75 K (2 K passed on 0.057), resolved inversion 1919
+m (7.14 K), mixed layer cloud-free on 0.535 (cloud base 783 m), gate 0.041,
+deck runs 0.014; Peru: 765, 850, 864 m (0.628), ceiling 1417 m, 1.40 K
+(0.110), 1271 m (5.95 K), cloud-free 0.390, deck runs 0.226. The binding
+rule is the rest: a deck that does not run relaxes to the Richardson depth
+and is tested there. `deckRest` 'inversion' (the default; 'depth' keeps the
+old rest) starts an unset height and relaxes a resting one toward the
+ceiling. Three days at N=64 under the Betts–Miller deep branch, day 186:
+'depth' 0.284, +4.6, gate open over 0.061 of the globe; 'inversion' with
+`minimumInversion` 2 K 0.326, −7.9, 0.278 (10S–10N 0.206); 3 K 0.325,
+−7.9; 4 K 0.306, −2.3, 0.150 (10S–10N 0.069). `minimumInversion` defaults
+to 4 K. Under the plume, 'inversion' with 2 K: SE Pacific low cloud 0.614,
+deck runs 0.634, Peru 0.573, 0.755 on day 186. Tests: a column whose
+Richardson depth is 114 m under a 1200 m inversion forms its deck after
+17 h at 1200 m resting at the ceiling and none in 48 h resting at the
+depth; the engines agree on the carried height to 1.2·10⁻⁷ (3.2·10⁻⁷ at
+rest) and the gate to 4·10⁻⁸.
+
+Acceptance, the defaults (Betts–Miller deep, shallow plume, the deck at
+the inversion, 4 K), on the reviewed code (the share kept off land, below):
+
+| | value | asked |
+|---|---|---|
+| N=64 albedo days 184–193 | 0.273, 0.299, 0.306, 0.304, 0.305, 0.309, 0.313, 0.318, 0.312, 0.312 | 0.30–0.32 from 186 |
+| N=64 ASR − OLR days 188–193 (mean) | −0.2, −0.8, −1.8, −2.8, −1.1, −0.8 (−1.3) | ±4 |
+| N=64 global rain days 187–193, mm/d | 2.42–2.67 | 2.4–2.8 |
+| SE Pacific rain, mm/d; firing; low cloud; deck runs | 1.29; 0.038; 0.264; 0.296 | < 0.5; < 0.02; 0.4–0.7; ≥ 0.3 |
+| SE Pacific EIS; deck height where it runs; resolved inversion | 4.39 K; 2045 m; 1908 m (5.01 K) | |
+| Peru rain; firing; low cloud; deck runs | 0.00; 0.000; 0.424; 0.429 | |
+| Pacific ITCZ rain, mm/d; ω500, Pa/s | 3.71; −0.015 | 6–9 |
+| ITCZ firing columns' heating peak; lowest 100 m | 438 hPa; −1.07 K/d | 400–500; −10 to +5 |
+| zonal-mean rain peak | 5.64 mm/d at 1.5N | 5–7 at 5–10N |
+| ω700 grid-scale share | 0.235 | < 0.3 |
+| N=128 albedo days 184–188 | 0.247, 0.265, 0.288, 0.305, 0.308 | 0.29–0.32 on 186–188 |
+| N=128 ASR − OLR (mean) | +14.7, +9.8, +3.8, −1.7, −2.4 (+4.8) | ±4 |
+| N=128 day 188: SE Pacific rain; low cloud; deck runs; ITCZ rain | 0.12; 0.287; 0.361; 4.31 | |
+| N=128 equatorial ω500 100E–180 / 160W–80W, Pa/s | −0.027 to −0.062 / +0.026, +0.045, −0.012, +0.010, +0.031 | ascent / descent |
+| 60–90N ice loss, 10³ km³/day | 0.183 (9.191 → 8.643) | ≤ 0.18 |
+| fresh start, days 1–30 albedo | 0.276, 0.298, 0.353, 0.394, 0.420, 0.439 … 0.289 (day 17) … 0.281 | 0.29–0.33 by 30 |
+| fresh start ASR − OLR, day 30 | +14.1 (+7.0 to +17.1 over days 18–30) | ±10 |
+
+On 94f7e7b, before the review, the same runs gave: N=64 albedo 0.303 …
+0.320, ASR − OLR mean −1.6; SE Pacific 1.15 mm/d, firing 0.031, low cloud
+0.346, deck runs 0.356 (deck at 2067 m, resolved inversion 1937 m); Peru
+low cloud 0.464, deck runs 0.467; ITCZ 3.96 mm/d; zonal peak 5.15 mm/d at
+1.5S; N=128 mean +4.8; ice loss 0.183 (9.191 → 8.641); fresh start day 30
+0.277 and +13.2. The SE Pacific and ITCZ numbers come from one eight-step
+window of the day-193 state.
+
+Ice loss on 94f7e7b with 'depth' and 2 K 0.179, under the plume 0.183.
+The fresh start: no NaN, clamped 0 on every day; convection after 30
+days: share 0.76 global, 0.99 15S–15N; SE Pacific 1.89 mm/d (convective
+1.87) on 0.36 of its column-days; Pacific ITCZ 8.66 mm/d; equator after
+30 days: surface current −0.23 m/s (160E–100W) and −0.77 m/s
+(140W–100W), undercurrent +0.19 m/s at 93 m, stress −0.040 N/m², mixed
+layer 52 m, 1024 class top 185 m and 51 m. Ten days at N=64: convection
+after 10 days 0.67 global, 0.99 15S–15N, SE Pacific 0.83 mm/d (0.72) on
+0.09, Pacific ITCZ 3.95 mm/d; equator −0.16 and −0.36 m/s, +0.06 m/s at
+88 m, −0.019 N/m², 51 m, 144 and 90 m. Pace on 94f7e7b at N=128: days 187 and 188 0.9 and 1.0 min (two
+N=64 runs sharing the GPU); `profileGpu` over 128 steps from
+eight128_day0183 after 64, alternated twice with the merged parent
+(84d7f40) alone on the GPU: a step's median 86.1 and 86.2 ms against 84.8
+and 84.5 (+1.8 %), the adjust pass 15.97 and 15.99 ms against 14.58 and
+14.59, the physics and boundary-layer passes 7.67 against 7.62.
+
+Review (Sept 30). Rerun from a copy of eight64_day0183, 94f7e7b
+reproduces the ten-day N=64 run byte for byte (state and audit). One CPU
+step of every column of acc64_day0193: the boundary-layer mix keeps each
+column's mass-weighted θ to 7.7·10⁻¹⁶ and water to 8.0·10⁻¹⁶ relative;
+`moist.adjust` keeps c_p T + L q to 5.9·10⁻¹⁶ and water with the rain to
+7.2·10⁻¹⁶ except in 59 columns, each of which gains no more water than the
+negative water it entered with (the filler); the same on the reviewed
+code's day 193 (61 columns), and with `upperCloudLifetime` 1 h or the
+plume. States from twin64_day0810 (27 layers), seven64_day0365 and
+five64_day2190 load and step on the CPU, twin64_day0810 a day on the GPU.
+
+The share's taper acted over land: one CPU step from acc64_day0193, 2,047
+of the 7,868 land columns with B0 > 0 tapered, removing 1.22 of their
+6.73 mm/s area-mean w_e, and 33 columns over ice. Both engines now keep
+`stratiform` at 0 over land and full ice, where no deck forms (land
+parity test in `test/landGpu.test.mjs`: under a 9 K inversion the share
+would be positive on 36 land cells; engines to 6.1·10⁻⁶, w_e to 3.7·10⁻³
+mm/s). On the reviewed code's day 193 (rv3b_day0193), sea 30S–30N with
+B0 > 0 (13,139 columns): w_e 3.22 mm/s against 4.12 untapered; the gate's
+ramp (0.5 < G < 0.6) tapers 469 entraining columns by 0.08 mm/s of the
+area mean, a gate of 0.6 or more stops 1,101 (0.44 mm/s), the share
+tapers 409 (34 with a share of 1) by 0.11 mm/s, the onset 1,703 by 0.17
+mm/s. Mean w_e by B0 with and without the onset: 0.02 and 2.02 mm/s for B0
+up to 10⁻⁶ m²/s³ (29 columns), 0.17 and 2.60 to 5·10⁻⁶, 0.49 and 2.91 to
+10⁻⁵, 1.02 and 2.75 to 2.5·10⁻⁵, 1.96 and 2.48 to 5·10⁻⁵; 2,121 columns
+have B0 ≤ 0.
+
+The deck against package 2's record (eight CPU steps from each day-193
+state; running column-steps): with the inversion rest the SE Pacific deck
+is within 20 m of the floor on 0.014 (acc64) and 0.000 (rv3b) of its
+running steps, against 0.44–0.54 in package 2, and within 20 m of the
+ceiling on 0.186 and 0.175, against 0.03–0.06. It mixes the layer above
+the resolved inversion (the interface of largest dθv/dz) on 0.118 and
+0.172 of them, every one under a jump below 4 K (mean 2.92 and 2.66 K);
+over all open sea on 0.141 and 0.136 (1.98 and 1.90 K). Package 2 and
+t_bm_day0193 under the old rule ('depth', 2 K): never in the SE Pacific,
+0.049 over the sea (1.06 K). The 4 K default sets the ceiling as well as
+the regime test, so the ceiling is the lowest 4 K jump, not package 2's
+2 K. `ceilingInversion` (null: `minimumInversion`) separates them; ten
+days at N=64 with a 2 K ceiling (rvc2b): albedo 0.269, 0.288, 0.295,
+0.296, 0.300, 0.300, 0.303, 0.298, 0.297, 0.298, ASR − OLR over days
+188–193 +1.7, +1.9, +1.2, +2.8, +3.8, +3.8 (mean +2.5); day 193: the deck
+no longer mixes past the resolved inversion, but the SE Pacific deck runs
+on 0.162 (rests within 20 m of the ceiling on 0.447, where the 4 K test
+passes on 0.064), low cloud 0.229, rain 1.03 mm/d, Peru deck runs 0.378.
+The default keeps the 4 K ceiling. A resting height relaxes toward the
+ceiling where the column has one and toward the Richardson depth where
+it has none (0.53 of the SE Pacific column-steps have one on rv3b).
+
 ### M22 — A moist boundary layer — planned
 
 The boundary-layer scheme is still the dry Troen–Mahrt K-profile of

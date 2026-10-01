@@ -73,7 +73,9 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * blends linearly into the f of a distribution whose half-width is also
  * at most the layer's cloud water but not below `overcastWater`
  * (5·10⁻⁵ kg/kg; null: no bound): there a saturated layer holding more
- * cloud water than that is overcast. Its emissivity is
+ * cloud water than that is overcast. Each cell with open sea keeps that
+ * share of the ramp in `stratiform`, whatever the cover, for the boundary
+ * layer (0 over land and full ice, where no deck forms). Its emissivity is
  * f (1 − exp(−cloudAbsorption × path / f)), and the shortwave is the
  * blend, at the column's cover f̄, of the clear column and the column
  * whose cloud path lies in f̄, as the deck below blends its two columns.
@@ -142,7 +144,12 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * goes back into mlmHeight and the cover and water path are diagnosed
  * there; where the deck does not run, mlmHeight relaxes
  * toward the boundary-layer top with the model's `relax`
- * (heightMemory, 1 day). Only h is carried: θ_l and q_t are the
+ * (heightMemory, 1 day). With deckRest 'inversion' (the default) that
+ * resting height, and the start of an unset one, is the inversion
+ * ceiling (below) where the column has one: under cumulus the Richardson
+ * depth is the top of the subcloud layer, well below the inversion that
+ * caps the cloud layer, and a deck started there finds no jump; 'depth'
+ * rests it at the boundary-layer top. Only h is carried: θ_l and q_t are the
  * column's again at each step, and the deck acts on the column through
  * its radiation and through the boundary layer's mixing depth, mlmTop —
  * the deck's h in the boundary layer's height coordinate (that of its
@@ -151,16 +158,20 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * The inversion ceiling keeps the deck under the column's own inversion,
  * the lowest interface whose upper layer's midpoint lies above the
  * boundary-layer top (and whose lower one's below maximumHeight) across
- * which θ_v rises by minimumInversion: the ceiling is 1 m below the
+ * which θ_v rises by `ceilingInversion` (null, the default:
+ * minimumInversion, so that a weaker jump below the regime test's does
+ * not hold the deck): the ceiling is 1 m below the
  * midpoint of the layer above that interface, so that layer stays the
  * free troposphere the deck entrains. Above the lowest kilometre the
  * layers are thick enough that the free troposphere's own
- * stratification across one of them passes the 2 K test below, and a
- * deck entraining under such a weak jump would deepen into it. A column
- * with no such interface has no ceiling but maximumHeight.
+ * stratification across one of them passes a 2 K test, and a deck
+ * entraining under such a weak jump would deepen into it. A column with
+ * no such interface has no ceiling but maximumHeight.
  * The regime test is the capping inversion: Δθ_v ≥ minimumInversion
- * (2 K, a capping inversion rather than the top of a subcloud layer
- * under cumulus) at the start's h. A stratocumulus-topped layer also
+ * (4 K) at the start's h. Resting at the ceiling under a 2 K test, the
+ * deck's gate stood open over 0.28 of the globe and 0.21 of 10S–10N
+ * three days on from eight64_day0183, trade cumulus included; under 4 K
+ * over 0.15 and 0.07. A stratocumulus-topped layer also
  * needs large-scale subsidence (DYCOMS-II has 3 mm/s at 840 m), but the
  * model resolves it as a residual of a few mm/s: in the SE Pacific and
  * Peru boxes the running mean w̄_s below sinks at 1.8 and 2.1 mm/s with
@@ -284,8 +295,8 @@ export function adiabaticWaterLapse(T, p, cp, R, g, latentHeat = LATENT_HEAT) {
 
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = 130, cloudScattering = 95, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
-  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 2, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
-  prognosticHeight = true, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'maximumRandom',
+  mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 4, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
+  prognosticHeight = true, deckRest = 'inversion', gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'maximumRandom',
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = 1.5e-3, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
@@ -328,6 +339,8 @@ export function createRadiation(mesh, core, {
   const mlmTopBuffer = buffers && buffers.mlmTop ? buffers.mlmTop : new SharedArrayBuffer(8 * C);
   const mlmCover = new Float64Array(mlmCoverBuffer), mlmWater = new Float64Array(mlmWaterBuffer), mlmEntrainment = new Float64Array(mlmEntrainmentBuffer), mlmSubsidence = new Float64Array(mlmSubsidenceBuffer);
   const mlmHeight = new Float64Array(mlmHeightBuffer), mlmGate = new Float64Array(mlmGateBuffer), mlmTop = new Float64Array(mlmTopBuffer);
+  const stratiformBuffer = buffers && buffers.stratiform ? buffers.stratiform : new SharedArrayBuffer(8 * C);
+  const stratiformShare = new Float64Array(stratiformBuffer);
   if (!(buffers && buffers.mlmGate)) mlmGate.fill(UNDECIDED);
   const shadow = mixedLayerDeck ? createMixedLayer({ cp, R, g, latentHeat, referencePressure: p0, cloudLevels: DECK_CLOUD_LEVELS, ...mixedLayerOptions }) : null;
   const shadowLongwave = dycomsLongwave();
@@ -335,6 +348,8 @@ export function createRadiation(mesh, core, {
   if (cloudOverlap !== 'maximum' && cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${cloudOverlap}`);
   if (!(overcastInversion?.[1] > overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${overcastInversion}`);
   if (![0, 1, 2].includes(subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${subsidenceSmoothing}`);
+  if (deckRest !== 'depth' && deckRest !== 'inversion') throw new Error(`deckRest must be 'depth' or 'inversion', not ${deckRest}`);
+  const ceilingJump = ceilingInversion ?? minimumInversion;
   const entraining = stratusIndex === 'ectei';
   const stratusLayer = nearestLayer(sigmaMid, stratusSigma), stabilityLayer = nearestLayer(sigmaMid, STABILITY_SIGMA);
   const gasEmissivity = Float64Array.from({ length: K }, (_, k) => 1 - Math.exp(-gasOpticalDepth * (levels[k + 1] - levels[k])));
@@ -344,7 +359,7 @@ export function createRadiation(mesh, core, {
   const emitted = new Float64Array(K);
   const netFlux = new Float64Array(K);
   const sun = new Float64Array([1, 0, 0]);
-  const budget = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0 };
+  const budget = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, stratiform: 0 };
   const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 }, decked = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 }, probe = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 };
   const deckLight = { incident: 0, mu: 0, direct: 0, diffuse: 0, path: 0, layer: 0, clear: 0 };
 
@@ -385,7 +400,7 @@ export function createRadiation(mesh, core, {
     for (let k = K - 2; k >= 1; k--) {
       const upper = (geopotential[k * C + i] - surface) / g;
       if ((geopotential[(k + 1) * C + i] - surface) / g >= shadow.maximumHeight) break;
-      if (upper > floor && thetaV[k * C + i] - thetaV[(k + 1) * C + i] >= minimumInversion) return upper - 1;
+      if (upper > floor && thetaV[k * C + i] - thetaV[(k + 1) * C + i] >= ceilingJump) return upper - 1;
     }
     return Infinity;
   }
@@ -395,8 +410,9 @@ export function createRadiation(mesh, core, {
     const surface = geopotential[bottom] - cp * thetaV[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
     const depth = mixedDepth + (geopotential[bottom] - surface) / g;
     const ceiling = prognosticHeight ? inversionCeiling(i, surface, depth) : Infinity;
-    const h = prognosticHeight && mlmHeight[i] > 0 ? shadow.bound(mlmHeight[i], depth, ceiling) : depth;
-    const rest = () => { mlmHeight[i] = shadow.relax(mlmHeight[i], depth, dt); return false; };
+    const resting = deckRest === 'inversion' && ceiling < shadow.maximumHeight ? ceiling : depth;
+    const h = prognosticHeight && mlmHeight[i] > 0 ? shadow.bound(mlmHeight[i], depth, ceiling) : prognosticHeight ? resting : depth;
+    const rest = () => { mlmHeight[i] = shadow.relax(mlmHeight[i], resting, dt); return false; };
     let weight = 0, heat = 0, water = 0, k = K - 1;
     for (; k >= 0 && geopotential[k * C + i] - surface < g * h; k--) {
       const idx = k * C + i, cloud = qc ? Math.max(0, qc[idx]) : 0;
@@ -482,15 +498,17 @@ export function createRadiation(mesh, core, {
         vaporTaken[k] = vaporAbsorption * waterVaporAbsorptivity(path);
       }
     }
-    let cloudPath = 0, columnCover = 0, block = 0, clearColumn = 1, stratiform = 0;
-    if (cloudCover === 'pdf' && overcastWater !== null && qAir !== null) {
+    let cloudPath = 0, columnCover = 0, block = 0, clearColumn = 1, inversionShare = 0;
+    if (qAir !== null) {
       const lcl = liftingCondensationLevel(airTemperature, qAir, pi * sigmaMid[bottom], kappa);
       if (lcl) {
         const lower = bottom * C + i, upper = stabilityLayer * C + i, base = Math.max(0, cp * (airTemperature - lcl.temperature) / g);
         const inversion = inversionStrength(theta[upper] - theta[lower], airTemperature, theta[upper] * exnerLayer[upper], (geopotential[upper] - geopotential[lower]) / g - base, cp, R, g, latentHeat);
-        stratiform = Math.min(1, Math.max(0, (inversion - overcastInversion[0]) / (overcastInversion[1] - overcastInversion[0])));
+        inversionShare = Math.min(1, Math.max(0, (inversion - overcastInversion[0]) / (overcastInversion[1] - overcastInversion[0])));
       }
     }
+    budget.stratiform = openSea > 0 ? inversionShare : 0;
+    const stratiform = cloudCover === 'pdf' && overcastWater !== null ? inversionShare : 0;
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
       cloudWater[k] = qc ? Math.max(0, qc[idx]) * (pi * dSigma[k] / g) : 0;
@@ -645,6 +663,7 @@ export function createRadiation(mesh, core, {
       mlmWater[i] = budget.mlmWater;
       mlmEntrainment[i] = budget.mlmEntrainment;
       mlmTop[i] = budget.mlmTop;
+      stratiformShare[i] = budget.stratiform;
       evaporation[i] = budget.evaporation;
       surfaceShortwave[i] = budget.surfaceShortwave;
       surfaceDirect[i] = budget.surfaceDirect;
@@ -672,6 +691,6 @@ export function createRadiation(mesh, core, {
     cumulusWater = on ? water : null;
   }
 
-  const deckGates = { subsidenceSmoothing, subsidenceMemory, stratusSubsidence, minimumInversion, gateMemory };
-  return { setTime, sun, cosZenith, insolation, column, apply, useCumulus, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer } };
+  const deckGates = { subsidenceSmoothing, subsidenceMemory, stratusSubsidence, minimumInversion, ceilingInversion: ceilingJump, gateMemory, deckRest };
+  return { setTime, sun, cosZenith, insolation, column, apply, useCumulus, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratiform: stratiformShare, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer, stratiform: stratiformBuffer } };
 }

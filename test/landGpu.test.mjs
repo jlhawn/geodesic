@@ -52,3 +52,34 @@ test('eight GPU steps over a continent track the CPU model: surface, soil, snow,
   assert.ok(Math.abs(dc.landMeanT - d.landMeanT) < 0.01 && Math.abs(dc.soilWater - d.soilWater) < 0.01 && Math.abs(dc.oceanUpperDepth - d.oceanUpperDepth) < 1e-3);
   for (let i = 0; i < cpu.mesh.nCells; i++) if (cpu.geography.land[i]) assert.equal(gpu.state[6][i], 0);
 });
+
+test('the stratiform share that tapers the boundary layer\'s entrainment is zero over land in both engines, and the engines agree on it and on the entrainment over the sea', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const inverted = (model) => {
+    const { K, sigmaMid } = model.core, C = model.mesh.nCells;
+    const init = initializeState(model, {});
+    for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+    for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += 9;
+    if (model.geography) for (let i = 0; i < C; i++) if (model.geography.land[i]) model.state[6][i] = 0;
+    if (model.load) model.load();
+    return model;
+  };
+  const cpu = inverted(createModel(new Grid(6), { topography })), gpu = inverted(await createGpuModel(new Grid(6), { topography }));
+  const allSea = inverted(createModel(new Grid(6), {}));
+  cpu.step(900); await gpu.step(900); allSea.step(900);
+  await gpu.sync();
+  const ph = await gpu.gpu.downloadPhysics(), C = cpu.mesh.nCells, land = cpu.geography.land;
+  const share = stats(cpu.radiation.stratiform, ph.STRAT.subarray(0, C)), entrain = stats(cpu.boundaryLayer.entrainment, ph.ENTRAIN.subarray(0, C));
+  let landRamp = 0, seaRamp = 0, landEntraining = 0;
+  for (let i = 0; i < C; i++) {
+    if (land[i]) {
+      assert.equal(cpu.radiation.stratiform[i], 0, `cell ${i}: CPU share over land`);
+      assert.equal(ph.STRAT[i], 0, `cell ${i}: GPU share over land`);
+      if (allSea.radiation.stratiform[i] > 0) landRamp++;
+      if (cpu.boundaryLayer.entrainment[i] > 0) landEntraining++;
+    } else if (cpu.radiation.stratiform[i] > 0) seaRamp++;
+  }
+  console.log(`one step at N=6 over a continent under a 9 K inversion: the share would be positive on ${landRamp} land cells and is on ${seaRamp} sea cells, engines to ${share.maxDiff.toExponential(1)}; ${landEntraining} land cells entrain, w_e engines to ${(1000 * entrain.maxDiff).toExponential(1)} mm/s`);
+  assert.ok(landRamp > 20 && seaRamp > 20, `share on ${landRamp} land and ${seaRamp} sea cells`);
+  assert.ok(share.maxDiff < 2e-3, `share differs by ${share.maxDiff} at ${share.at}`);
+  assert.ok(entrain.maxDiff < 2e-5, `w_e differs by ${entrain.maxDiff} at ${entrain.at}`);
+});

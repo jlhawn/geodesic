@@ -428,6 +428,28 @@ test('autoconversion stays out of the lowest two layers, or with autoconversionF
   assert.equal(q[cloudBelow * C], qBefore[cloudBelow], 'and not into a cloudy one');
 });
 
+test('with upperCloudLifetime cloud water in the layers above the shallow top converts over that lifetime and the cloud below over cloudLifetime', () => {
+  const dt = 600, model = build({ upperCloudLifetime: 1800 }), plain = build(), { K, C, sigmaMid } = model.core.diagnostics;
+  for (const m of [model, plain]) jordanColumn(m, 0);
+  const pressure = (k) => model.state[0][0] * sigmaMid[k];
+  let upper = 0, lower = K - 3;
+  while (pressure(upper) < 400e2) upper++;
+  while (pressure(lower) < 800e2) lower++;
+  assert.ok(pressure(upper) < MOIST_DEFAULTS.shallowTop && pressure(lower) > MOIST_DEFAULTS.shallowTop && lower < K - 2);
+  const after = (m) => {
+    const [pi, theta, , , q, qc] = m.state;
+    for (let k = 0; k < K; k++) qc[k * C] = 0;
+    qc[upper * C] = 1e-4; qc[lower * C] = 1e-4;
+    m.moist.autoconvertColumn(0, pi, theta, q, qc, dt);
+    return [qc[upper * C], qc[lower * C]];
+  };
+  const [up, low] = after(model), [plainUp, plainLow] = after(plain);
+  assert.ok(Math.abs(up - 1e-4 * Math.exp(-dt / 1800)) < 1e-18, `upper ${up}`);
+  assert.ok(Math.abs(low - 1e-4 * Math.exp(-dt / MOIST_DEFAULTS.cloudLifetime)) < 1e-18, `lower ${low}`);
+  assert.equal(low, plainLow);
+  assert.ok(Math.abs(plainUp - 1e-4 * Math.exp(-dt / MOIST_DEFAULTS.cloudLifetime)) < 1e-18, `upper without the option ${plainUp}`);
+});
+
 const PLUME = { convection: 'plume' };
 function plumeColumn(options = {}, profile = null) {
   const model = build({ ...PLUME, ...options });
@@ -628,11 +650,11 @@ async function parity(options, { momentum = false } = {}) {
   assert.ok(worstRain < 1e-4 * rainScale, `rain ${worstRain} against ${rainScale}`);
 }
 
-test('the triggered convection, the cumulus mass flux, the convective plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume on its defaults, from the lowest layer, raining, overshooting by half or beside deep convection, under either autoconversion floor, and with the Betts–Miller shallow branch under either shallow reference with or without shallow rain and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the triggered convection, the cumulus mass flux, the convective plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume on its defaults, from the lowest layer, raining, overshooting by half or beside deep convection, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top, and with the Betts–Miller shallow branch under either shallow reference with or without shallow rain and the shallow stability veto', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   await parity({});
   await parity({ convection: 'plume' });
   await parity({ convection: 'plume', plumeClosure: 'maximum', plumeSource: 'lowest', plumeCapeParcel: 'undilute', plumeMassGrowth: 2e-4 });
-  await parity({ convection: 'plume', plumeClosure: 'cape', downdraftShare: 0.5, downdraftEntrainment: 0, plumeRainThreshold: 5e-4, autoconversionFloor: 'boundaryLayer' });
+  await parity({ convection: 'plume', plumeClosure: 'cape', downdraftShare: 0.5, downdraftEntrainment: 0, plumeRainThreshold: 5e-4, autoconversionFloor: 'boundaryLayer', upperCloudLifetime: 1800 });
   await parity({ convection: 'plume', plumeMomentum: true }, { momentum: true });
   await parity({ convection: 'plume', plumeMomentum: true, downdraftShare: 0 }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });

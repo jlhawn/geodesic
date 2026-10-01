@@ -606,6 +606,7 @@ test('with stratusIndex: \'ectei\' the deck follows the entrainment index: a dry
 });
 
 const REDIAGNOSED = { prognosticHeight: false, gateMemory: 0 };
+const DEPTH_REST = { deckRest: 'depth', minimumInversion: 2 };
 
 function mixedLayerColumn(sinking = 0.4) {
   const pi = new Float64Array(C).fill(P0), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
@@ -666,7 +667,7 @@ test('the mixed-layer deck on a stable column over a warm sea carries the water 
 });
 
 test('the mixed-layer deck needs subsidence and a capping inversion: a column under ascent or under a 1 K jump has none, and falls back to no deck', () => {
-  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9, ...REDIAGNOSED });
+  const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9, ...REDIAGNOSED, ...DEPTH_REST });
   shadow.setTime(0);
   const noon = brightest(shadow), empty = { mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, stratus: 0, stratusFraction: 0 };
   const pick = (b) => ({ mlmCover: b.mlmCover, mlmWater: b.mlmWater, mlmEntrainment: b.mlmEntrainment, stratus: b.stratus, stratusFraction: b.stratusFraction });
@@ -743,7 +744,7 @@ function boundaryLayerTop(column, i) {
 }
 
 test('the deck carries its inversion height: from the boundary-layer top it deepens step after step by its own dh/dt, while the re-diagnosed deck starts from that top each step; mlmTop hands the height to the boundary layer', () => {
-  const carried = createRadiation(mesh, core, { subsidenceMemory: 1e-9 }), rediagnosed = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED });
+  const carried = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...DEPTH_REST }), rediagnosed = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED, ...DEPTH_REST });
   carried.setTime(0); rediagnosed.setTime(0);
   const noon = brightest(carried), column = mixedLayerColumn(0.4), top = boundaryLayerTop(column, noon), dt = 900;
   let previous = top.height, fixed = null;
@@ -766,7 +767,7 @@ test('the deck carries its inversion height: from the boundary-layer top it deep
 });
 
 test('the gates switch the deck through their running mean: a standing deck outlives failing gates by ln 2 × gateMemory and a new one waits about as long, deepening meanwhile no further than the inversion ceiling, and without its deck the carried height relaxes toward the boundary-layer top over heightMemory', () => {
-  const r = createRadiation(mesh, core, { subsidenceMemory: 1e-9 });
+  const r = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...DEPTH_REST });
   r.setTime(0);
   const noon = brightest(r), dt = 3600, fresh = 1 - Math.exp(-dt / DAY), relaxed = Math.exp(-dt / DAY);
   let gate = 0.5, column = mixedLayerColumn(0.4);
@@ -803,6 +804,42 @@ test('the gates switch the deck through their running mean: a standing deck outl
   const freeTroposphere = core.diagnostics.geopotential[(K - 4) * C + noon] / core.diagnostics.g - top.offset;
   assert.ok(switchedOff > standing && switchedOff <= freeTroposphere - 1 + 1e-9, `under ascent the deck deepens to ${switchedOff} m, no further than 1 m under the midpoint of the first free-tropospheric layer at ${freeTroposphere} m`);
   assert.ok(standing > top.height + 20 && Math.abs(fallen - settled) < 1e-9 * settled, `standing ${standing}, fallen ${fallen} against ${settled}`);
+  core.diagnostics.piSigmaDot.fill(0);
+});
+
+test('with deckRest \'inversion\' a deck whose boundary layer is a shallow subcloud layer under a higher inversion starts and rests at the inversion ceiling, passes its jump test there and forms; with \'depth\' it rests at the Richardson depth, finds no jump and never forms', () => {
+  const column = mixedLayerColumn(0.4), { g, geopotential } = core.diagnostics;
+  for (let i = 0; i < C; i++) column.depth[i] = geopotential[(K - 1) * C + i] / g + 50;
+  const dt = 3600, relaxed = Math.exp(-dt / DAY);
+  const outcome = (deckRest) => {
+    const r = createRadiation(mesh, core, { subsidenceMemory: 1e-9, deckRest });
+    r.setTime(0);
+    r.mlmGate.fill(0);
+    const noon = brightest(r), top = boundaryLayerTop(column, noon);
+    let formed = 0, heights = [];
+    for (let n = 1; n <= 48; n++) {
+      const deck = mixedLayerRun(r, noon, column, 1, dt);
+      heights.push(r.mlmHeight[noon]);
+      if (!formed && deck.mlmTop > 0) formed = n;
+    }
+    return { r, noon, top, formed, heights };
+  };
+  const shallow = outcome('depth'), lifted = outcome('inversion');
+  const freeTroposphere = geopotential[(K - 4) * C + lifted.noon] / g - lifted.top.offset, ceiling = freeTroposphere - 1;
+  assert.equal(shallow.formed, 0, 'resting at the Richardson depth the deck finds no jump');
+  assert.ok(shallow.heights.every((h) => h === 0), 'and never sets a height');
+  assert.ok(lifted.formed >= 12 && lifted.formed <= 24, `resting at the ceiling the deck forms after ${lifted.formed} h`);
+  for (let n = 0; n < lifted.formed - 1; n++) assert.equal(lifted.heights[n], 0, `hour ${n + 1}: an unset height stays unset while the deck waits`);
+  assert.ok(lifted.heights[lifted.formed - 1] > lifted.top.height + 100 && lifted.heights[lifted.formed - 1] <= ceiling + 1e-9, `the deck forms at ${lifted.heights[lifted.formed - 1]} m, the Richardson depth ${lifted.top.height} m, the ceiling ${ceiling} m`);
+  const { r, noon, top } = lifted;
+  r.mlmHeight[noon] = top.height + 10;
+  r.mlmGate[noon] = 0;
+  const before = r.mlmHeight[noon];
+  mixedLayerRun(r, noon, column, 1, dt);
+  const expected = ceiling + (before - ceiling) * relaxed;
+  assert.ok(r.mlmGate[noon] < 0.5 && Math.abs(r.mlmHeight[noon] - expected) < 1e-9 * expected, `a resting height relaxes toward the ceiling: ${r.mlmHeight[noon]} against ${expected}`);
+  assert.throws(() => createRadiation(mesh, core, { deckRest: 'ceiling' }));
+  console.log(`a 289 K mixed layer to σ 0.9 under a 298 K free troposphere with its Richardson depth 50 m above the lowest layer (${top.height.toFixed(0)} m): resting at the depth no deck in 48 h; resting at the ceiling (${ceiling.toFixed(0)} m) the deck forms after ${lifted.formed} h at ${lifted.heights[lifted.formed - 1].toFixed(0)} m and stands at ${lifted.heights[47].toFixed(0)} m after 48 h`);
   core.diagnostics.piSigmaDot.fill(0);
 });
 

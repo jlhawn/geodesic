@@ -1,5 +1,5 @@
 import { cellVector } from '../dynamics/operators.module.js';
-import { saturationHumidity } from './moist.module.js';
+import { saturationHumidity, DECK_CLOSED, ACTIVITY_UNDECIDED } from './moist.module.js';
 
 /*
  * A diffusive planetary boundary layer in the manner of Troen and Mahrt
@@ -36,24 +36,32 @@ import { saturationHumidity } from './moist.module.js';
  *
  * The K-profile vanishes at h, so its top entrains nothing; an explicit
  * entrainment flux closes it (`entrainment`). Where the surface buoyancy
- * flux B0 (the one above, positive upward) is positive and the deck's
- * gate `deckGate` (radiation.mlmGate) is at most one half,
- *   w_e = min(cap, (A B0 + A_s u*³ / h) / max(Δb, bMin)),
+ * flux B0 (the one above, positive upward) is positive,
+ *   w_e = o (1 − s) min(cap, (A B0 + A_s r u*³ / h) / max(Δb, bMin)),
  * Δb = g Δθv / θv between the first layer whose base lies above h and
- * the mass mean of the layers below it: A 0.2 from Tennekes (1973), A_s 5
- * from Vogelezang and Holtslag (1996), bMin 0.015 m/s² (a jump of about
- * 0.5 K) and the cap 0.05 m/s. It enters as the coefficient ρ w_e of
- * that layer's lower interface, so the exchange of θ, q, qc and momentum
- * across h goes through the same conservative implicit solve;
- * `entrainment` keeps each cell's w_e (m/s). The depth stays diagnostic.
+ * the mass mean of the layers below it: the buoyancy and friction-velocity
+ * sources of Tennekes's (1973) inversion model with Driedonks's (1982)
+ * constants A 0.2 and A_s 5, bMin 0.015 m/s² (a jump of about 0.5 K) and
+ * the cap 0.05 m/s. r = min(1, B0 / `shearOnset`)
+ * (5·10⁻⁵ m²/s³, about 2 W/m² of virtual heat flux) brings the shear
+ * term in continuously as the surface turns unstable. The stratocumulus
+ * regime belongs to the mixed-layer deck: o is the deck's opening, 1 at a
+ * gate `deckGate` (radiation.mlmGate) of one half or less and 0 at
+ * DECK_CLOSED, as convection takes it, and s the radiation's stratiform
+ * share `stratiform` (radiation.stratiform), 0 below an estimated
+ * inversion strength of 8 K and 1 above 12 K. It enters as the
+ * coefficient ρ w_e of that layer's lower interface, so the exchange of
+ * θ, q, qc and momentum across h goes through the same conservative
+ * implicit solve; `entrainment` keeps each cell's w_e (m/s). The depth
+ * stays diagnostic.
  */
-export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015 };
+export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5 };
 
 export function createBoundaryLayer(mesh, core, {
-  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, buffers = null,
+  dragCoefficient = 1.5e-3, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, stratiform = null, buffers = null,
   entrainment: entrainmentOptions = {},
 } = {}) {
-  const { efficiency, shear, cap, jumpFloor } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
+  const { efficiency, shear, cap, jumpFloor, shearOnset } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
   const { K, C, E, dSigma, sigmaMid, R, g, kappa, exnerLayer, geopotential } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
   const { cellsOnEdge } = mesh;
@@ -129,12 +137,15 @@ export function createBoundaryLayer(mesh, core, {
         const rhoBelow = pi[i] * sigmaMid[k + 1] / (R * theta[below] * exnerLayer[below]);
         mixing[idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
       }
-      if (entraining && entrainK >= kTop && buoyancy > 0 && !(deckGate && deckGate[i] > 0.5)) {
+      const open = deckGate ? Math.min(1, Math.max(0, (DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - ACTIVITY_UNDECIDED))) : 1;
+      const taper = open * (stratiform ? 1 - stratiform[i] : 1);
+      if (entraining && entrainK >= kTop && buoyancy > 0 && taper > 0) {
         const idx = entrainK * C + i, below = idx + C;
         let weight = 0, sum = 0;
         for (let k = entrainK + 1; k < K; k++) { weight += dSigma[k]; sum += dSigma[k] * thetaV[k * C + i]; }
         const mean = sum / weight, jump = g * (thetaV[idx] - mean) / mean;
-        const velocity = Math.min(cap, (efficiency * buoyancy + shear * friction[i] ** 3 / h) / Math.max(jump, jumpFloor));
+        const onset = shearOnset > 0 ? Math.min(1, buoyancy / shearOnset) : 1;
+        const velocity = taper * Math.min(cap, (efficiency * buoyancy + shear * onset * friction[i] ** 3 / h) / Math.max(jump, jumpFloor));
         entrainmentVelocity[i] = velocity;
         mixing[idx] = 0.5 * (pi[i] * sigmaMid[entrainK] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[entrainK + 1] / (R * theta[below] * exnerLayer[below])) * velocity;
       }
