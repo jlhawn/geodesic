@@ -1958,8 +1958,17 @@ bilinearly between the four surrounding grid points when all four are
 wet, takes the nearest wet one otherwise, ends the column at the first
 level none of them reaches, and over atlas land takes the nearest wet
 column within 5°. Each sea cell's column (`atlasColumns` in
-`js/ocean/layered.module.js`) is sampled down to its bottom, the atlas's
-deepest values carried on below; its potential density, held from
+`js/ocean/layered.module.js`) is sampled down to its bottom; where the
+atlas column ends a standard level or more above it, as off coasts that
+the cell's mean depth runs past, the levels below come from the nearest
+atlas grid point that holds them (`columnReaching`, within 30°), and the
+atlas's deepest values are carried on below the deepest level. Held from
+the cell's own last level instead, 165 columns within 25° of the equator
+at N=64 started more than 70 % lighter than 1025 over more than 300 m,
+full-depth plugs of surface water such as 1020.5 from 50 to 1194 m at
+1S 100E, where the ocean reached its speed limit; with the deeper column
+13 remain, 300–430 m columns of the South China, Timor and Coral Seas whose
+stratification the atlas itself holds; its potential density, held from
 decreasing with depth, places each interface where it crosses half-way
 between the neighbouring labels, since a class holds the water between
 those midpoints: the lightest class takes all lighter water, the densest
@@ -2104,7 +2113,15 @@ Ri = Δb Δz/|Δu|² takes the buoyancy step between them (the mixed layer's
 own density at the edge, the labels of the classes) and the difference
 of their full velocities, the tangential part reconstructed as the
 Coriolis term's, and r is held to half of what the thinner of the two
-can take in one ocean step (M21 item 4). Bottom drag is quadratic,
+can take in one ocean step (M21 item 4). Under the option
+`interiorShearMixing` (off) the same viscosity applies between two
+interior classes with no `interfacialDrag` floor, so a quiet interface
+takes ν_b/Δz, 2–4×10⁻⁶ m/s over 25–50 m, where the constant 2×10⁻⁴ m/s
+is a viscosity r Δz of 4×10⁻³ to 10⁻² m²/s through the thermocline
+against Earth's 10⁻⁴ to 10⁻³ below the undercurrent core; the mixed
+layer's base keeps `interfacialDrag`. In 60 coupled N=64 days it let
+thermocline classes run at 1.5–3 m/s beside the coasts near the equator
+(M23). Bottom drag is quadratic,
 C_D |u| u with C_D = 3×10⁻³, applied to the deepest layer with water at
 the edge. A linear bottom drag of
 2×10⁻⁴ m/s let a 28 m bottom layer slide down the flank of a seamount
@@ -2429,6 +2446,39 @@ sub-steps themselves have no damping and a plain average, which is the
 root cause still open below. The clamped-edge count in the diagnostics
 is the number of edges where any layer sat at the speed limit after the
 last ocean step, in both engines.
+
+**Closure at token edges.** A class's ∇⁴ closure reads its token edges,
+which carry the velocity of the layer above, the mixed layer's where the
+class has pinched out. The patchy thermocline classes 1022.25–1024.0 hold
+water in 12–43 % of the equatorial cells, and through their tokens the
+closure tied them to the mixed layer at 0.5–3.1×10⁻⁵ s⁻¹ at N=128 (the
+interfacial drag's r/h is 4×10⁻⁶), a source of momentum, since the
+closure on a token edge itself is discarded: over 140–100W its column
+total was 1–5 times the stress, with the mixed layer's sign (M23). By
+default (`closureFill` 1, `closureTokens` 'interior') a token edge whose
+two cells both hold a class thicker than THIN denser than the class
+takes the least-squares uniform flow of the class's own neighbouring
+edges (`closureVelocity`), and the token edges next to those are fitted
+from the first ring; a class cut off by the sea floor keeps the velocity
+above. What the closure then gives the fitted edges goes back to the
+edges they were fitted from through the transpose of the fit under the
+dc·dv inner product (`closureAdjoint`), so its work on the class is the
+∇⁴ energy of the filled flow. Read on the thick edges alone, the closure
+of the filled flow is not dissipative: on nine128_day0091 one ocean step
+of it grows the fastest mode by 1.12–1.30 in every class from 1022.0 to
+1026.8 (1.18–1.29 filling every token edge beside the class, M21's
+`closureFill`), against 0.99 with the tokens as they are and with the
+transpose (`scripts/closureStability.mjs`), and five N=128 days from that
+state clamped 497–585 edges a day, 1963 layer edges, most of them in
+the thermocline classes on the equator, at the limit after one. On the nine128 states of days 183,
+274 and 365 the closure on the classes 1022.0–1025.5 at 180–110W follows
+the mixed layer at −0.9 to 2.5×10⁻⁶ s⁻¹ (1021.5 on day 274: 19.9)
+against 0.0–47.6×10⁻⁶ through the tokens, and over 140–120W and 120–100W
+it takes +15.6/+3.5, −11.5/−7.1 and −26.1/−2.7×10⁻⁵ m²/s² from the
+column, against the slab's flow, where through the tokens it gave
+−7.8/−0.4, +4.8/+2.7 and +11.0/+0.5 with it (stress −7.1/−5.4,
+−3.0/−3.0 and −2.1/−2.1; `scripts/closureCoupling.mjs`, 'extended').
+`closureTokens` 'beside' is M21's fill without the transpose.
 
 **Friction across empty classes.** Interfacial drag acts between each
 layer that holds water and the nearest layers holding water above and
@@ -3323,7 +3373,7 @@ Pacific, Peru, Namibia and California boxes with the inversion at
 1–1.5 km, the equatorial stress within Earth's range, the ten-day and
 thirty-day tests of M21 still balanced, and the pace.
 
-### M23 — The equatorial ocean — planned
+### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
 drag divisor released an undercurrent that overshoots: in the paired
@@ -3344,6 +3394,105 @@ undercurrent of 0.5–1 m/s near 100 m within two degrees of the
 equator, the eastern 1024 class top at 40–60 m, 2 K between the warm
 pool and the cold tongue held through a year, and no speed-limit
 clamps.
+
+**Diagnosis (Oct 1).** On the nine128 states (`scripts/equatorialOcean.mjs`,
+`scripts/closureCoupling.mjs`, `scripts/waveSpeeds.mjs`), 140–120W / 120–100W,
+2S–2N:
+
+- Mixed-layer budget, day 91 (10⁻⁷ m/s²): stress −5.42/−6.29, −g∇η
+  +8.06/+5.83 (8.2/5.9 cm per 1000 km), baroclinic −0.48/−0.40, drag
+  below +0.01/−1.31, closure −0.14/+0.01; u₀ +0.39/+0.69 m/s. Day 365:
+  stress −3.60/−4.08, −g∇η +5.26/+6.94; u₀ +0.67/+0.19 m/s. Stress over
+  pressure force in the 50–55 m mixed layer 0.67–1.08.
+- The atlas start's tilt: 1024 top 172 m west, 59 m east, sea level 45 cm
+  higher in the west; by day 91 the east 45–67 m deeper (1024 top 117 m at
+  120–100W) and 31 cm. c₁ = 2.5–2.7 m/s, Kelvin crossing 64–70 days,
+  Rossby 190–210.
+- The classes 1022.25–1024.0 hold water in 12–43 % of the equatorial
+  cells, 70–96 % of their edges tokens (0–25 % at the atlas start). The
+  closure ties them to the mixed layer at 0.5–3.1×10⁻⁵ s⁻¹ (drag r/h
+  4×10⁻⁶). Column closure against stress (10⁻⁵ m²/s²): day 91
+  +9.76/+3.61 against −2.95/−3.41, day 183 −7.84/−0.36 against
+  −7.13/−5.44, day 274 +4.80/+2.67 against −3.03/−2.96, day 365
+  +10.99/+0.51 against −2.09/−2.12. Day 91, 140–120W: 1024.00 at
+  +33 cm/s with pressure force −22.05 and closure +21.68×10⁻⁷ m/s²,
+  1024.50 at +44 cm/s with −16.31 and +24.26.
+- 140–100W surface current +0.54, −0.36, +0.27, +0.42 m/s on days 91,
+  183, 274, 365; a 175 m slab spun up by the stress in about 47 days.
+- Day 365 stress: −0.021 to −0.034 N/m² over 180–100W, +0.08 and +0.13
+  over 160E–180 and 140E–160E.
+- Cell 6777 (1S 100E, N=64) started with 1020.5 from 50 to 1194 m under a
+  50 m atlas column; 165 such columns within 25° at N=64.
+
+**Changed (Oct 1).** The atlas fill from the nearest column that reaches
+the bottom (**Start from the World Ocean Atlas**, M18): 165 light columns
+to 13. The interior fill of the closure with its transpose, the default
+(**Closure at token edges**, M18): fastest-mode growth per N=128 step
+1.12–1.30 to 0.99; coupling to the mixed layer 0.0–47.6 to −0.9–2.5×10⁻⁶
+s⁻¹ (19.9 in 1021.5 on day 274). `interiorShearMixing` (**Drag**, M18),
+off.
+
+60 coupled N=64 days from `nine64_day0365` (day 365: u(5 m) −0.03/−0.02
+m/s, strongest eastward 0.02 m/s at 69 m, 1024 top 128/91 m, W−E 0.5 K)
+and `eight64_day0365` (W−E 2.0 K), `{"everySteps":8}`, the unmodified
+code and the change; 2S–2N, u(5 m) 160E–100W / 140W–100W, the strongest
+eastward class over 180–100W with its depth and the band where it holds
+half its peak, τ 160E–100W, h₀ 140–100W, 1024 top 150E–180 / 120–90W,
+warm pool / cold tongue / W−E from the spin-up log, clamps as edge-days
+to that day:
+
+| Run | Day | u(5 m) (m/s) | strongest eastward | τ (N/m²) | h₀ | 1024 top | SST (°C), W−E | clamps |
+|---|---|---|---|---|---|---|---|---|
+| nine, before | 15 | −0.07 / −0.03 | 0.04 at 161 m (1024.75), 2S–8N | −0.022 | 51 m | 122 / 88 m | 25.8 / 25.9, 0.3 K | 0 |
+| nine, after | 15 | −0.06 / −0.02 | 0.04 at 162 m (1024.75), 3S–8N | −0.019 | 51 | 124 / 88 | 25.8 / 25.9, 0.3 | 0 |
+| nine, before | 30 | −0.03 / −0.01 | 0.04 at 68 m (1022.25), 0–2N | −0.024 | 51 | 137 / 84 | 25.6 / 26.0, 0.0 | 0 |
+| nine, after | 30 | −0.00 / −0.02 | 0.04 at 159 m (1024.75), 3S–7N | −0.013 | 51 | 132 / 85 | 25.7 / 26.0, 0.2 | 0 |
+| nine, before | 45 | +0.05 / −0.01 | 0.23 at 74 m (1022), 3S–1N | −0.007 | 50 | 143 / 83 | 25.7 / 26.1, 0.0 | 0 |
+| nine, after | 45 | +0.00 / +0.08 | 0.07 at 132 m (1024.25), 1S–6N | −0.010 | 50 | 131 / 85 | 25.6 / 26.0, −0.0 | 0 |
+| nine, before | 60 | +0.16 / +0.00 | 0.34 at 76 m (1022), 2S–2N | −0.005 | 51 | 133 / 83 | 25.7 / 25.9, 0.2 | 0 |
+| nine, after | 60 | +0.01 / +0.10 | 0.09 at 161 m (1024.75), 3S–3N | −0.013 | 51 | 132 / 88 | 25.4 / 26.1, −0.2 | 0 |
+| eight, before | 15 | +0.00 / +0.11 | 0.08 at 169 m (1024.75), 2S–7N | −0.013 | 50 | 148 / 89 | 26.7 / 25.7, 1.6 | 2 |
+| eight, after | 15 | −0.00 / +0.09 | 0.08 at 169 m (1024.75), 3S–7N | −0.015 | 50 | 148 / 88 | 26.7 / 25.7, 1.5 | 2 |
+| eight, before | 30 | −0.09 / −0.03 | 0.02 at 207 m (1025.25), 6S–8N | −0.019 | 51 | 148 / 89 | 26.6 / 25.9, 1.0 | 2 |
+| eight, after | 30 | −0.02 / +0.04 | 0.04 at 152 m (1024.5), 4S–8N | −0.010 | 50 | 149 / 89 | 26.7 / 26.0, 1.2 | 2 |
+| eight, before | 45 | −0.08 / −0.09 | 0.01 at 186 m (1025), 2–8N | −0.017 | 51 | 150 / 83 | 26.6 / 26.0, 0.9 | 8 |
+| eight, after | 45 | −0.03 / −0.02 | 0.03 at 170 m (1024.75), 0–8N | −0.010 | 51 | 149 / 90 | 26.7 / 26.1, 1.1 | 2 |
+| eight, before | 60 | −0.01 / +0.06 | 0.05 at 95 m (1023), 3S–4N | −0.013 | 51 | 150 / 87 | 26.5 / 26.1, 0.8 | 10 |
+| eight, after | 60 | −0.03 / +0.04 | 0.02 at 169 m (1024.75), 1–8N | −0.013 | 51 | 149 / 88 | 26.6 / 26.1, 1.0 | 2 |
+
+The clamps: 13.6S 144.3E on days 379–380 in both eight runs, 1S 130.7E
+on days 409–411 before; none at 1S 99–100E in any run. The interior fill
+without its transpose, from the same states, day 60: u(5 m) +0.15/+0.20
+and +0.02/+0.09 m/s, strongest eastward 0.19 at 87 m and 0.06 at 88 m,
+clamps 0 and 8. With `interiorShearMixing` as well: +0.02/+0.10 (nine,
+0.21 at 181 m) and −0.09/−0.06 (eight, 0.09 at 186 m), 1024 top east 87
+and 77 m, W−E 0.4 and 0.8 K, and 1.5–3.0 m/s in thermocline classes at
+0–3N 35–42W, 1S 145E, 7.7N 84.6E and 20N 125E; with backgroundViscosity
+10⁻³ m²/s +0.12/+0.10 and +0.11/+0.29, and 1.6–2.3 m/s at 3S–3N
+32–41W, 140E and 118E.
+
+5 coupled N=128 days from `nine128_day0091` (day 91: +0.18/+0.54 m/s,
+0.47 m/s at 108 m in 1023, W−E 3.9 K), the unmodified code / the change:
+
+| Day | u(5 m) 160E–100W / 140W–100W (m/s) | strongest eastward | 1024 top 150E–180 / 120–90W | W−E | clamps |
+|---|---|---|---|---|---|
+| 92 | +0.17 / +0.55, +0.16 / +0.53 | 0.46 at 107 m (1023), 0.36 at 107 m (1023) | 157 / 104, 157 / 104 m | 3.9, 3.9 K | 0, 0 |
+| 93 | +0.17 / +0.56, +0.15 / +0.51 | 0.45 at 106, 0.31 at 106 | 157 / 104, 157 / 103 | 3.8, 3.8 | 0, 0 |
+| 94 | +0.16 / +0.56, +0.13 / +0.49 | 0.43 at 105, 0.28 at 105 | 158 / 103, 158 / 102 | 3.8, 3.8 | 0, 0 |
+| 95 | +0.14 / +0.55, +0.11 / +0.45 | 0.42 at 107 (1022.75), 0.25 at 106 (1022.75) | 158 / 103, 158 / 101 | 3.7, 3.7 | 0, 0 |
+| 96 | +0.13 / +0.52, +0.09 / +0.40 | 0.41 at 107, 0.23 at 105 | 156 / 105, 156 / 102 | 3.7, 3.7 | 0, 0 |
+
+Day 96, the band holding half the peak: 1S–2N (0.53 m/s at 0°) before,
+1S–3N (0.29 at 0°) after; τ −0.024 to −0.026 N/m², h₀ 53–54 m in both.
+The interior fill without its transpose clamped 585, 497, 546, 573 and
+584 edges on days 92–96.
+
+Against the acceptance, day 60 at N=64 under τ −0.005 to −0.013 N/m²
+and day 96 at N=128 under −0.025: u(5 m) 140–100W +0.10, +0.04 and
++0.40 m/s (target −0.2); strongest eastward 0.09, 0.02 and 0.23 m/s at
+161, 169 and 105 m (target 0.5–1 near 100 m); eastern 1024 top 88, 88
+and 102 m (40–60); W−E 0.5 → −0.2, 2.0 → 1.0 and 3.9 → 3.7 K; clamps 0,
+2 (13.6S 144.3E) and 0.
 
 ### M24 — Performance — planned
 
