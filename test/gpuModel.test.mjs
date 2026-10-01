@@ -61,14 +61,14 @@ test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailab
   assert.ok(olrE.rmsRel < 1e-5 && swE.rmsRel < 1e-5, `per-cell OLR rms ${olrE.rmsRel}, surface shortwave rms ${swE.rmsRel} under ECTEI`);
 });
 
-test('the stratiform share of the estimated inversion strength and the boundary-layer entrainment it tapers match between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const inversion of [6, 9]) {
-    const { model, physics } = await pair(6, 1, 900, inversion, true);
+test('the stratiform share of the estimated inversion strength and the boundary-layer entrainment it tapers match between the engines, with the cover\'s overcast bound or without it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const [inversion, options] of [[6, {}], [9, {}], [9, { overcastWater: null }]]) {
+    const { model, physics } = await pair(6, 1, 900, inversion, true, options);
     const C = model.mesh.nCells, share = model.radiation.stratiform, we = model.boundaryLayer.entrainment;
     const strat = stats(share, physics.STRAT.subarray(0, C)), entrain = stats(we, physics.ENTRAIN.subarray(0, C));
     let ramp = 0, full = 0, entraining = 0, tapered = 0;
     for (let i = 0; i < C; i++) { if (share[i] > 0 && share[i] < 1) ramp++; if (share[i] >= 1) full++; if (we[i] > 0) { entraining++; if (share[i] > 0) tapered++; } }
-    console.log(`one step at N=6 under a ${inversion} K inversion: stratiform share on the ramp in ${ramp} and whole in ${full} of ${C} columns, max engine difference ${strat.maxDiff.toExponential(1)}; ${entraining} columns entrain, ${tapered} of them tapered, w_e max difference ${(1000 * entrain.maxDiff).toExponential(1)} mm/s`);
+    console.log(`one step at N=6 under a ${inversion} K inversion${options.overcastWater === null ? ' without the overcast bound' : ''}: stratiform share on the ramp in ${ramp} and whole in ${full} of ${C} columns, max engine difference ${strat.maxDiff.toExponential(1)}; ${entraining} columns entrain, ${tapered} of them tapered, w_e max difference ${(1000 * entrain.maxDiff).toExponential(1)} mm/s`);
     assert.ok(ramp > C / 20, `${ramp} columns on the ramp`);
     assert.ok(strat.maxDiff < 2e-3, `share differs by ${strat.maxDiff} at ${strat.at}`);
     assert.ok(entrain.maxDiff < 2e-5, `w_e differs by ${entrain.maxDiff} at ${entrain.at}`);
