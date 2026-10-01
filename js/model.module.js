@@ -214,7 +214,12 @@ export function createModel(gridOrMesh, {
    * sunlight, and the per-cell means go to radiation.meanAbsorbedSolar,
    * meanOutgoingLongwave and meanPlanetaryAlbedo; `instantaneous` holds
    * the last step's. Without a step in the interval they are the last
-   * step's and the per-cell means stay.
+   * step's and the per-cell means stay. With the radiation's clearSkyPass
+   * and a step in the interval, the clear-sky absorbed sunlight and
+   * outgoing longwave and the cloud effects, shortwave (absorbed less
+   * clear-sky absorbed) and longwave (clear-sky less all-sky outgoing),
+   * are means over the same steps, the per-cell effects in
+   * radiation.meanShortwaveCloudEffect and meanLongwaveCloudEffect.
    */
   let lastPrecipTime = 0;
   model.diagnostics = function diagnostics(sums = totals) {
@@ -222,13 +227,14 @@ export function createModel(gridOrMesh, {
     const precipitation = moistPhysics.precipitation;
     let area = 0, mass = 0, meanSurfaceT = 0, piMin = Infinity, piMax = -Infinity, maxWind = 0, water = 0, cloud = 0, rain = 0, iceArea = 0, iceVolume = 0, albedoSum = 0;
     let landArea = 0, landT = 0, snowArea = 0, soilSum = 0;
-    let absorbedSum = 0, atmosphereSum = 0, outgoingSum = 0, insolationSum = 0, reflectedSum = 0;
+    let absorbedSum = 0, atmosphereSum = 0, outgoingSum = 0, insolationSum = 0, reflectedSum = 0, clearAbsorbedSum = 0, clearOutgoingSum = 0;
     const summed = radiation.summed;
     for (let i = 0; i < C; i++) {
       const a = mesh.areaCell[i];
       area += a;
       absorbedSum += a * summed.absorbedSolar[i]; atmosphereSum += a * summed.atmosphereSolar[i]; outgoingSum += a * summed.outgoingLongwave[i];
       insolationSum += a * summed.insolation[i]; reflectedSum += a * summed.reflectedSolar[i];
+      clearAbsorbedSum += a * summed.clearAbsorbedSolar[i]; clearOutgoingSum += a * summed.clearOutgoingLongwave[i];
       if (land && landMask[i]) { landArea += a; landT += a * surfaceT[i]; soilSum += a * land.soil[i]; if (land.snow[i] > 1) snowArea += a; }
       mass += a * pi[i];
       meanSurfaceT += a * surfaceT[i];
@@ -255,6 +261,10 @@ export function createModel(gridOrMesh, {
         absorbedSolar: absorbedSum / area / steps, atmosphereSolar: atmosphereSum / area / steps, outgoingLongwave: outgoingSum / area / steps,
         planetaryAlbedo: insolationSum > 0 ? reflectedSum / insolationSum : 0,
       } : instantaneous),
+      ...(radiation.clearSkyPass && steps > 0 ? {
+        clearAbsorbedSolar: clearAbsorbedSum / area / steps, clearOutgoingLongwave: clearOutgoingSum / area / steps,
+        shortwaveCloudEffect: (absorbedSum - clearAbsorbedSum) / area / steps, longwaveCloudEffect: (clearOutgoingSum - outgoingSum) / area / steps,
+      } : {}),
       instantaneous, sensibleHeat: sums.sensibleHeat / area,
       evaporation: sums.evaporation / area, latentHeat: moistPhysics.latentHeat * sums.evaporation / area,
       columnWater: water / area, columnCloud: cloud / area, precipitation: interval > 0 ? rain / area / interval : 0,

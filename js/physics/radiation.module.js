@@ -303,6 +303,7 @@ export const DECK_CLOUD_LEVELS = 8;
 export const UNDECIDED = 0.5;
 export const VISIBLE_PATH = 1e-3;
 export const SUMMED = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', 'insolation', 'reflectedSolar'];
+export const CLEAR_SUMMED = ['clearAbsorbedSolar', 'clearOutgoingLongwave'];
 
 /*
  * values[offset + i] averaged with equal weights over cell i and its
@@ -353,7 +354,7 @@ export function createRadiation(mesh, core, {
   boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, deckRegime = 'inversion', deckBypass = false,
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
-  exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, buffers = null,
+  exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, clearSkyPass = false, buffers = null,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential, piSigmaDot, p0 } = core.diagnostics;
   const { thetaV } = core.arrays;
@@ -395,9 +396,10 @@ export function createRadiation(mesh, core, {
   const mlmHeight = new Float64Array(mlmHeightBuffer), mlmGate = new Float64Array(mlmGateBuffer), mlmTop = new Float64Array(mlmTopBuffer);
   const stratiformBuffer = buffers && buffers.stratiform ? buffers.stratiform : new SharedArrayBuffer(8 * C);
   const stratiformShare = new Float64Array(stratiformBuffer);
-  const summedBuffers = Object.fromEntries(SUMMED.map((name) => [name, buffers && buffers.summed && buffers.summed[name] ? buffers.summed[name] : new SharedArrayBuffer(8 * C)]));
-  const summed = Object.fromEntries(SUMMED.map((name) => [name, new Float64Array(summedBuffers[name])]));
+  const summedBuffers = Object.fromEntries([...SUMMED, ...CLEAR_SUMMED].map((name) => [name, buffers && buffers.summed && buffers.summed[name] ? buffers.summed[name] : new SharedArrayBuffer(8 * C)]));
+  const summed = Object.fromEntries([...SUMMED, ...CLEAR_SUMMED].map((name) => [name, new Float64Array(summedBuffers[name])]));
   const meanAbsorbedSolar = new Float64Array(C), meanOutgoingLongwave = new Float64Array(C), meanPlanetaryAlbedo = new Float64Array(C);
+  const meanShortwaveCloudEffect = new Float64Array(C), meanLongwaveCloudEffect = new Float64Array(C);
   if (!(buffers && buffers.mlmGate)) mlmGate.fill(UNDECIDED);
   const shadow = mixedLayerDeck ? createMixedLayer({ cp, R, g, latentHeat, referencePressure: p0, cloudLevels: DECK_CLOUD_LEVELS, ...mixedLayerOptions }) : null;
   const shadowLongwave = dycomsLongwave();
@@ -422,7 +424,7 @@ export function createRadiation(mesh, core, {
   const emitted = new Float64Array(K);
   const netFlux = new Float64Array(K);
   const sun = new Float64Array([1, 0, 0]);
-  const budget = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, stratiform: 0 };
+  const budget = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, clearAbsorbedSolar: 0, clearOutgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, stratiform: 0 };
   const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 }, decked = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 }, probe = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 };
   const deckLight = { incident: 0, mu: 0, direct: 0, diffuse: 0, path: 0, layer: 0, clear: 0 };
 
@@ -451,6 +453,12 @@ export function createRadiation(mesh, core, {
       up = up * (1 - eps[k]) + emitted[k];
     }
     return [up, down];
+  }
+
+  function upward(fraction, eps, surfaceEmission) {
+    let up = fraction * surfaceEmission;
+    for (let k = K - 1; k >= 0; k--) up = up * (1 - eps[k]) + fraction * eps[k] * STEFAN_BOLTZMANN * temperature[k] ** 4;
+    return up;
   }
 
   function deckWater(lcl, base, mixedDepth) {
@@ -714,6 +722,11 @@ export function createRadiation(mesh, core, {
     for (let k = 0; k < K; k++) longwave[k * C + i] = netFlux[k] - beforeBands[k];
     const outgoing = outVapor + outGas + outWindow;
     const back = backVapor + backGas + backWindow;
+    if (clearSkyPass) {
+      shortwave(clearSky, 0, 1, mu, surfaceAlbedo, diffuseAlbedo);
+      budget.clearAbsorbedSolar = incident * clearSky.absorbed + ozoneHeating + vaporHeating;
+      budget.clearOutgoingLongwave = upward(vaporFraction, emissivity, surfaceEmission) + upward(gasFraction, gasEmissivity, surfaceEmission) + window * surfaceEmission;
+    }
     netFlux[bottom] += sensible;
     const net = absorbedSolar - surfaceEmission + back - sensible - latentHeat * evaporation;
     budget.absorbedSolar = absorbedSolar + ozoneHeating + vaporHeating + cloudHeating;
@@ -755,7 +768,13 @@ export function createRadiation(mesh, core, {
    * readMeans(steps) turns the sums of that many steps into the per-cell
    * means meanAbsorbedSolar and meanOutgoingLongwave and the albedo
    * meanPlanetaryAlbedo, reflected over incoming summed (0 where no sun
-   * rose).
+   * rose). With clearSkyPass each column also finds its clear-sky
+   * absorbed sunlight and outgoing longwave, the same column with no
+   * resolved cloud, deck or cumulus (the clear two-stream; the vapour and
+   * gas bands' upward pass without cloud emissivity and the open window),
+   * summed in clearAbsorbedSolar and clearOutgoingLongwave, and readMeans
+   * also gives meanShortwaveCloudEffect (absorbed less clear-sky absorbed)
+   * and meanLongwaveCloudEffect (clear-sky less all-sky outgoing).
    */
   function apply(state, out, windSpeed, totals, iFrom = 0, iTo = C, surfaceAlbedo = null, diffuseAlbedo = null, wetness = null, openSea = null, depth = null, dt = 0) {
     const [pi, theta, , surfaceT] = state;
@@ -789,6 +808,10 @@ export function createRadiation(mesh, core, {
       summed.outgoingLongwave[i] += budget.outgoingLongwave;
       summed.insolation[i] += budget.insolation;
       summed.reflectedSolar[i] += budget.reflectedSolar;
+      if (clearSkyPass) {
+        summed.clearAbsorbedSolar[i] += budget.clearAbsorbedSolar;
+        summed.clearOutgoingLongwave[i] += budget.clearOutgoingLongwave;
+      }
       if (totals) {
         const a = mesh.areaCell[i];
         totals.absorbedSolar += a * budget.absorbedSolar;
@@ -807,11 +830,15 @@ export function createRadiation(mesh, core, {
       meanAbsorbedSolar[i] = summed.absorbedSolar[i] / steps;
       meanOutgoingLongwave[i] = summed.outgoingLongwave[i] / steps;
       meanPlanetaryAlbedo[i] = summed.insolation[i] > 0 ? summed.reflectedSolar[i] / summed.insolation[i] : 0;
+      if (clearSkyPass) {
+        meanShortwaveCloudEffect[i] = (summed.absorbedSolar[i] - summed.clearAbsorbedSolar[i]) / steps;
+        meanLongwaveCloudEffect[i] = (summed.clearOutgoingLongwave[i] - summed.outgoingLongwave[i]) / steps;
+      }
     }
   }
 
   function restartSums() {
-    for (const name of SUMMED) summed[name].fill(0);
+    for (const name of [...SUMMED, ...CLEAR_SUMMED]) summed[name].fill(0);
   }
 
   function useBoundaryLayer(regime, mixingTop, buoyancyFlux = null) {
@@ -827,5 +854,5 @@ export function createRadiation(mesh, core, {
   }
 
   const deckGates = { subsidenceSmoothing, subsidenceMemory, stratusSubsidence, minimumInversion, ceilingInversion: ceilingJump, gateMemory, deckRest, cumulusCeiling, deckRegime, deckBypass, stratusWaterMax };
-  return { setTime, sun, cosZenith, insolation, column, apply, readMeans, restartSums, summed, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, useCumulus, useBoundaryLayer, longwave, layerCover, lowCover, lowWater, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratiform: stratiformShare, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer, stratiform: stratiformBuffer, longwave: longwaveBuffer, summed: summedBuffers } };
+  return { setTime, sun, cosZenith, insolation, column, apply, readMeans, restartSums, summed, clearSkyPass, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, useCumulus, useBoundaryLayer, longwave, layerCover, lowCover, lowWater, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratiform: stratiformShare, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer, stratiform: stratiformBuffer, longwave: longwaveBuffer, summed: summedBuffers } };
 }
