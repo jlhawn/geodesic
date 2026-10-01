@@ -4,7 +4,7 @@ import { createParallelModel } from './parallel.module.js';
 import { createGpuModel } from './gpu/model.gpu.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
-import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS } from './physics/regrid.module.js';
+import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
 import { topographyFromInt16, rebalanceSurfacePressure } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
@@ -272,14 +272,16 @@ function placeIce(model, saved, N) {
 
 /*
  * The mixed-layer deck's carried state (running-mean subsidence,
- * inversion height and gate) and the last means of the convective and
- * large-scale rain: the saved run's,
+ * inversion height and gate), the last means of the convective and
+ * large-scale rain and those of the absorbed sunlight, outgoing longwave
+ * and planetary albedo: the saved run's,
  * regridded if it was saved at another resolution, or each field's
  * starting value for a fresh start or a run saved without it.
  */
 function placeDeck(model, saved, N) {
   for (const name of Object.keys(DECK_FIELDS)) model.radiation[name].set(savedDeckField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
   for (const name of Object.keys(MOIST_FIELDS)) model.moist[name].set(savedMoistField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
+  for (const name of Object.keys(RADIATION_FIELDS)) model.radiation[name].set(savedRadiationField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
 }
 
 /*
@@ -497,6 +499,7 @@ async function snapshot() {
   arrays.concentration = Float64Array.from(model.seaIce.concentration).buffer;
   for (const name of Object.keys(DECK_FIELDS)) arrays[name] = Float64Array.from(model.radiation[name]).buffer;
   for (const name of Object.keys(MOIST_FIELDS)) arrays[name] = Float64Array.from(model.moist[name]).buffer;
+  for (const name of Object.keys(RADIATION_FIELDS)) arrays[name] = Float64Array.from(model.radiation[name]).buffer;
   arrays.levels = Float64Array.from(model.core.levels).buffer;
   let ocean = null, land = null;
   if (model.ocean) {
