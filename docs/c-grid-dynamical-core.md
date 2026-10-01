@@ -3295,6 +3295,81 @@ the westward pull of their token edges removed without losing the hold,
 for example by filling the patchy 1022.5–1024.75 classes with a weak
 diapycnal exchange between adjacent interior classes.
 
+### M22 — A moist boundary layer — planned
+
+The boundary-layer scheme is still the dry Troen–Mahrt K-profile of
+M14 with the explicit top entrainment of M21: it mixes temperature
+and vapour separately, feels no cloud-top cooling, and hands the
+stratocumulus regime to the mixed-layer deck model through a gate.
+This milestone replaces it with a moist turbulence closure in
+conserved variables (liquid-water potential temperature and total
+water) that takes cloud-top longwave cooling as a source of
+turbulence, entrains at the inversion from its own closure in place
+of the M21 entrainment velocity, and treats the stratocumulus-topped
+layer as one of its regimes, so the deck model's gate becomes a
+diagnostic of the same layer rather than a switch between two
+schemes. With the plume of M21 it is the eddy-diffusivity half of an
+eddy-diffusivity mass-flux pair, which is the form the ECMWF model
+uses. The humidity-based cover fraction of M21 is then replaced by a
+cover from the scheme's own variance. The same work takes the
+boundary-layer momentum budget on the equator: the audited runs hold
+a 5 hPa pressure difference across the Pacific, Earth's size, under
+easterlies of 3 m/s where Earth has 5 or more, so the stress on the
+equator is a quarter to a half of Earth's 0.04–0.06 N/m²; with no
+Coriolis turning there the surface wind runs down the gradient
+against the layer's drag and momentum mixing, and those are this
+scheme's terms. Acceptance: low cloud of 0.5–0.7 over the SE
+Pacific, Peru, Namibia and California boxes with the inversion at
+1–1.5 km, the equatorial stress within Earth's range, the ten-day and
+thirty-day tests of M21 still balanced, and the pace.
+
+### M23 — The equatorial ocean — planned
+
+What the atmosphere's changes will not fix on their own. The M21
+drag divisor released an undercurrent that overshoots: in the paired
+run nine it surfaced as a 0.5 m/s eastward jet on the equator in June,
+collapsed to a 0.35 m/s westward current by September and surfaced
+again at the March equinox when the trades fell to zero stress, so the
+cold tongue swung between 3.9 K and 0.3 K instead of settling. The
+diagnosis of M21 item 4 named the sinks: the ∇⁴ closure pulls the
+thermocline classes toward the westward mixed layer at their token
+edges (−0.9 to −3·10⁻⁷ m/s² within two rings of a token edge), the
+50 m floors on the mixed layer hold the eastern equatorial mixed layer
+at 50 m where Earth has 20–40, and the thermocline classes at 0.25
+kg/m³ spacing are patchy on the equator. The ocean also hits its 5 m/s
+speed limit at 1S 99–100E off Sumatra at N=64 in every recent run.
+The shearMixing and closureFill options of M21 exist to try here.
+Acceptance: a 0.2 m/s westward surface current east of 140W, an
+undercurrent of 0.5–1 m/s near 100 m within two degrees of the
+equator, the eastern 1024 class top at 40–60 m, 2 K between the warm
+pool and the cold tongue held through a year, and no speed-limit
+clamps.
+
+### M24 — Performance — planned
+
+The M21 physics costs about 2.5 % a step for the plume and more for
+the 45-class ocean (its momentum kernel's thick-layer search grows
+faster than the layer count), and the machine measured 57–78 s a model
+day at N=128 on the evening of Sept 30 against 54 before. The goal is
+a model day in a minute at N=128 with all of the above in place.
+Profile with `js/gpu/profile.module.js` back to back; the candidates
+are the ocean momentum kernel at L=45, the adjust kernel (16 of an
+86 ms step), the second saturation adjustment after the plume, the ∇⁴
+closure passes and the deck's ring passes, and on the page the frame
+and overlay costs.
+
+### M25 — The long spin-up — planned
+
+The asynchronous schedule of M18 (`scripts/asyncSpinup.sh`: a hundred
+ocean-only years, then ten coupled, repeated toward a thousand years)
+on a rented GPU, once the coupled model holds a year within a few W/m²
+of balance with the physics of M21–M23. The World Ocean Atlas start
+makes the first century a drift from a measured state rather than from
+an analytic one. The Verda spot prices and the measured H100 and A100
+paces of Sept 28 put the schedule near $300–400; the Verda tooling
+(`scripts/verdaRelaunch.sh`, `scripts/verdaInstances.mjs`) is in place.
+The page's default states are then taken from the spun-up ocean.
+
 ## 7. Module layout in this repo
 
 ```
