@@ -111,9 +111,14 @@ fn cloudSat(T: f32, p: f32) -> vec2<f32> {
   let qs = select(1.0, EPSILON * es / dry, dry > 0.0);
   return vec2<f32>(qs, qs * (LHEAT + (1.0 - alpha) * LFUSION) / (RVAP * T * T));
 }
+fn criticalProfile(p: f32, ps: f32) -> f32 { return RHC_TOP + (RHC_SURF - RHC_TOP) * exp(1.0 - pow(ps / p, RHC_EXP)); }
 fn uniformWidth(s: vec2<f32>, p: f32, ps: f32) -> f32 {
-  let rhc = RHC_TOP + (RHC_SURF - RHC_TOP) * exp(1.0 - pow(ps / p, RHC_EXP));
+  let rhc = criticalProfile(p, ps);
   return (1.0 - rhc) * s.x / (1.0 + LHEAT * s.y / CP);
+}
+fn plumeSeen(seen: f32, cu: vec2<f32>, mass: f32) -> f32 {
+  if (!PDF_COVER || !(cu.y * mass > 0.0)) { return seen; }
+  return max(seen, cu.x * (1.0 - exp(-cu.y * mass / (cu.x * VISIBLE_PATH))));
 }
 fn uniformCover(qc: f32, b: f32) -> f32 {
   if (qc >= b) { return 1.0; }
@@ -242,22 +247,32 @@ fn layerCover(idx: i32, k: i32, bottom: i32, pi: f32, water: f32, mixedDepth: f3
   if (VARIANCE_COVER && height < mixTop) {
     let fv = clamp(turbulentCover(idx - k * C, k, pi, mixTop), COVER_FLOOR, 1.0);
     if (!(stratiform > 0.0)) { return fv; }
-    let qsv = qsat(IN[S_TH + idx] * D[D_EXM + idx], pi * LV[L_SM + k]); let condensateV = max(0.0, IN[S_QC + idx]);
-    let excessV = max(0.0, IN[S_Q + idx]) + condensateV - qsv;
-    let boundV = min((1.0 - RHC_BL) * qsv, max(condensateV, OVERCAST_WATER));
-    return (1.0 - stratiform) * fv + stratiform * clamp((excessV + boundV) / (2.0 * boundV), COVER_FLOOR, 1.0);
+    return (1.0 - stratiform) * fv + stratiform * overcastCover(idx, k, pi, RHC_BL);
   }
   let qsl = qsat(IN[S_TH + idx] * D[D_EXM + idx], pi * LV[L_SM + k]); let condensate = max(0.0, IN[S_QC + idx]);
   let excess = max(0.0, IN[S_Q + idx]) + condensate - qsl;
-  let width = (1.0 - select(RHC, RHC_BL, inside)) * qsl;
+  var rhc = select(RHC, RHC_BL, inside);
+  let width = (1.0 - rhc) * qsl;
   var f = clamp((excess + width) / (2.0 * width), COVER_FLOOR, 1.0);
   if (UNIFORM) {
     let pressure = pi * LV[L_SM + k];
     f = clamp(uniformCover(condensate, uniformWidth(cloudSat(IN[S_TH + idx] * D[D_EXM + idx] - LHEAT * condensate / CP, pressure), pressure, pi)), COVER_FLOOR, 1.0);
+    rhc = criticalProfile(pressure, pi);
   }
   if (!(stratiform > 0.0)) { return f; }
-  let bound = min(width, max(condensate, OVERCAST_WATER));
-  return (1.0 - stratiform) * f + stratiform * clamp((excess + bound) / (2.0 * bound), COVER_FLOOR, 1.0);
+  return (1.0 - stratiform) * f + stratiform * overcastCover(idx, k, pi, rhc);
+}
+fn overcastCover(idx: i32, k: i32, pi: f32, rhc: f32) -> f32 {
+  let pressure = pi * LV[L_SM + k]; let condensate = max(0.0, IN[S_QC + idx]); let total = max(0.0, IN[S_Q + idx]) + condensate;
+  if (UNIFORM) {
+    let s = cloudSat(IN[S_TH + idx] * D[D_EXM + idx] - LHEAT * condensate / CP, pressure);
+    let a = 1.0 / (1.0 + LHEAT * s.y / CP);
+    let bound = min(a * (1.0 - rhc) * s.x, max(condensate, OVERCAST_WATER));
+    return clamp((a * (total - s.x) + bound) / (2.0 * bound), COVER_FLOOR, 1.0);
+  }
+  let qs = qsat(IN[S_TH + idx] * D[D_EXM + idx], pressure);
+  let bound = min((1.0 - rhc) * qs, max(condensate, OVERCAST_WATER));
+  return clamp((total - qs + bound) / (2.0 * bound), COVER_FLOOR, 1.0);
 }
 fn stratiformShare(i: i32, bottom: i32, pi: f32) -> f32 {
   if (!(IN[S_Q + bottom] > 0.0)) { return 0.0; }
@@ -748,7 +763,7 @@ export const PHYSICS_KERNELS = {
         let optics = cloudOptics(IN[S_TH + k * C + i] * D[D_EXM + k * C + i], continental);
         depth += optics.x * water;
         if (k == STRATUS_K) { layer = water; unit = optics.x; }
-        let shadeSeen = select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0);
+        let shadeSeen = plumeSeen(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), cu, mass);
         overlap(shadeSeen, k == K - 1, &shadeBlocks);
         if (EXP_OVERLAP) { overlapLayer(shadeSeen, overlapAlpha(i, k), &shadeLayered); }
       }
@@ -802,7 +817,7 @@ export const PHYSICS_KERNELS = {
     let optics = cloudOptics(IN[S_TH + idx] * D[D_EXM + idx], continental);
     cloudDepth += optics.x * water;
     if (k == STRATUS_K) { deckUnit = optics.x; }
-    let seen = select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0);
+    let seen = plumeSeen(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), cu, mass);
     overlap(seen, k == K - 1, &blocks);
     if (EXP_OVERLAP) { overlapLayer(seen, overlapAlpha(i, k), &layered); }
     cloudE[k] = select(0.0, f * (1.0 - exp(-optics.y * water / f)), water > 0.0);

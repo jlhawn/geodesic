@@ -104,7 +104,11 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * blends linearly into the f of a distribution whose half-width is also
  * at most the layer's cloud water but not below `overcastWater`
  * (5·10⁻⁵ kg/kg; null: no bound): there a saturated layer holding more
- * cloud water than that is overcast. Each cell with open sea keeps that
+ * cloud water than that is overcast; under the uniform condensation that
+ * distribution is of the saturation excess a (q_t − q_s(T_l)) at the
+ * cover's saturation, its half-width at most a (1 − RH_c) q_s(T_l), RH_c
+ * the moist physics' profile above the mixing top and
+ * `boundaryCriticalHumidity` below. Each cell with open sea keeps that
  * share of the ramp in `stratiform`, whatever the cover, for the boundary
  * layer (0 over land and full ice, where no deck forms). Its emissivity is
  * f (1 − exp(−κ × path / f)), and the shortwave is the
@@ -125,7 +129,10 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * 'overcast' gives every cloudy layer the whole cell. With `cumulusCloud`
  * and the moist physics' shallow cumulus (`useCumulus`) a plume layer adds
  * its cumulus fraction times the plume's condensate to its water and
- * covers the larger of that fraction and its resolved cloud's f.
+ * covers the larger of that fraction and its resolved cloud's f; it is
+ * seen at least as its plume, the fraction times the visibility of the
+ * plume's own path, so that its in-cloud path is the plume's however
+ * small the fraction.
  *
  * With `boundaryCover` 'variance' (the default; 'pdf' keeps the cover
  * above) a cloudy layer whose midpoint lies below the moist boundary
@@ -726,6 +733,18 @@ export function createRadiation(mesh, core, {
     return varianceCover(a * (total - qs), spread);
   }
 
+  function overcastCover(idx, k, pi, theta, q, qc, rhc) {
+    const water = Math.max(0, qc[idx]), pressure = pi * sigmaMid[k];
+    if (condensing !== null && condensing.uniform) {
+      cloudSaturation(theta[idx] * exnerLayer[idx] - latentHeat * water / cp, pressure, condensing.iceSaturation, condensing.liquidTemperature, condensing.iceTemperature, saturated);
+      const a = 1 / (1 + latentHeat * saturated.slope / cp), bound = Math.min(a * (1 - rhc) * saturated.qs, Math.max(water, overcastWater));
+      return Math.min(1, Math.max(coverFloor, (a * (Math.max(0, q[idx]) + water - saturated.qs) + bound) / (2 * bound)));
+    }
+    const qs = saturationHumidity(theta[idx] * exnerLayer[idx], pressure), excess = Math.max(0, q[idx]) + water - qs;
+    const bound = Math.min((1 - rhc) * qs, Math.max(water, overcastWater));
+    return Math.min(1, Math.max(coverFloor, (excess + bound) / (2 * bound)));
+  }
+
   function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo, wetness = 1, exchangeCoefficientAt = exchangeCoefficient, openSea = 0, mixedDepth = 0, dt = 0, mixingDepth = 0) {
     const ozoneHeating = beam * ozoneAbsorption;
     const surfaceEmission = STEFAN_BOLTZMANN * surfaceT * surfaceT * surfaceT * surfaceT;
@@ -772,25 +791,19 @@ export function createRadiation(mesh, core, {
       layerCover[k] = 1;
       if (cloudCover === 'pdf' && q !== null && cloudWater[k] > 0 && boundaryCover === 'variance' && (geopotential[idx] - geopotential[bottom * C + i]) / g < mixingDepth) {
         layerCover[k] = Math.min(1, Math.max(coverFloor, turbulentCover(i, k, pi, theta, q, qc, mixingDepth)));
-        if (stratiform > 0) {
-          const qs = saturationHumidity(theta[idx] * exnerLayer[idx], pi * sigmaMid[k]), water = Math.max(0, qc[idx]), excess = Math.max(0, q[idx]) + water - qs;
-          const bound = Math.min((1 - boundaryCriticalHumidity) * qs, Math.max(water, overcastWater));
-          layerCover[k] = (1 - stratiform) * layerCover[k] + stratiform * Math.min(1, Math.max(coverFloor, (excess + bound) / (2 * bound)));
-        }
+        if (stratiform > 0) layerCover[k] = (1 - stratiform) * layerCover[k] + stratiform * overcastCover(idx, k, pi, theta, q, qc, boundaryCriticalHumidity);
       } else if (cloudCover === 'pdf' && q !== null && cloudWater[k] > 0) {
         const inside = (geopotential[idx] - geopotential[bottom * C + i]) / g < mixedDepth;
         const qs = saturationHumidity(theta[idx] * exnerLayer[idx], pi * sigmaMid[k]), water = Math.max(0, qc[idx]), excess = Math.max(0, q[idx]) + water - qs;
-        const width = (1 - (inside ? boundaryCriticalHumidity : criticalHumidity)) * qs;
+        let rhc = inside ? boundaryCriticalHumidity : criticalHumidity;
+        const width = (1 - rhc) * qs;
         if (condensing !== null && condensing.uniform) {
           const pressure = pi * sigmaMid[k], liquidT = theta[idx] * exnerLayer[idx] - latentHeat * water / cp;
           cloudSaturation(liquidT, pressure, condensing.iceSaturation, condensing.liquidTemperature, condensing.iceTemperature, saturated);
-          const rhc = criticalHumidityAt(pressure, pi, condensing.surfaceCriticalHumidity, condensing.topCriticalHumidity, condensing.criticalExponent);
+          rhc = criticalHumidityAt(pressure, pi, condensing.surfaceCriticalHumidity, condensing.topCriticalHumidity, condensing.criticalExponent);
           layerCover[k] = Math.min(1, Math.max(coverFloor, uniformCover(water, (1 - rhc) * saturated.qs / (1 + latentHeat * saturated.slope / cp))));
         } else layerCover[k] = Math.min(1, Math.max(coverFloor, (excess + width) / (2 * width)));
-        if (stratiform > 0) {
-          const bound = Math.min(width, Math.max(water, overcastWater));
-          layerCover[k] = (1 - stratiform) * layerCover[k] + stratiform * Math.min(1, Math.max(coverFloor, (excess + bound) / (2 * bound)));
-        }
+        if (stratiform > 0) layerCover[k] = (1 - stratiform) * layerCover[k] + stratiform * overcastCover(idx, k, pi, theta, q, qc, rhc);
       }
       const cumulus = cumulusCover !== null ? cumulusCover[idx] * cumulusWater[idx] * (pi * dSigma[k] / g) * (cloudMask ? cloudMask.cumulus[k] : 1) : 0;
       if (cumulus > 0) {
@@ -799,7 +812,8 @@ export function createRadiation(mesh, core, {
         cloudPath += cumulus;
       }
       cloudDepth += solarDepth[k] * cloudWater[k];
-      const seen = cloudCover === 'pdf' && cloudWater[k] > 0 ? layerCover[k] * -Math.expm1(-cloudWater[k] / VISIBLE_PATH) : 0;
+      let seen = cloudCover === 'pdf' && cloudWater[k] > 0 ? layerCover[k] * -Math.expm1(-cloudWater[k] / VISIBLE_PATH) : 0;
+      if (cumulus > 0 && cloudCover === 'pdf') seen = Math.max(seen, cumulusCover[idx] * -Math.expm1(-cumulus / (cumulusCover[idx] * VISIBLE_PATH)));
       if (seen > 0) block = Math.max(block, seen);
       if (block > 0 && (!(seen > 0) || k === K - 1)) { clearColumn *= 1 - block; columnCover = Math.max(columnCover, block); block = 0; }
       if (exponential) {

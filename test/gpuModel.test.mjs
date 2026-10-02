@@ -224,17 +224,18 @@ test('shallow cumulus of partial cover beside and without resolved cloud heats t
       layers++;
     }
   }
-  const plain = await physicsHeating(base, {}), cumulus = await physicsHeating(base, {}, 864000, { cover, water });
+  const tiny = Float64Array.from(cover, (f, x) => (f > 0 && x % 3 === 0 ? Math.fround(10 ** (-9 + 3 * random())) : f));
+  const plain = await physicsHeating(base, {}), cumulus = await physicsHeating(base, {}, 864000, { cover, water }), sparse = await physicsHeating(base, {}, 864000, { cover: tiny, water });
   let worst = 0, moved = 0, at = null;
   for (let i = 0; i < C; i++) {
     if (!(base.radiation.insolation(i) > 0)) continue;
     for (let k = 0; k < K - 1; k++) {
-      const x = k * C + i, d = Math.abs(cumulus.cpu[x] - cumulus.gpu[x]);
+      const x = k * C + i, d = Math.max(Math.abs(cumulus.cpu[x] - cumulus.gpu[x]), Math.abs(sparse.cpu[x] - sparse.gpu[x]));
       if (d > worst) { worst = d; at = [i, k]; }
       moved = Math.max(moved, Math.abs(cumulus.cpu[x] - plain.cpu[x]));
     }
   }
-  console.log(`${layers} cumulus layers of cover 0.02–0.22: the engines' layer heating differs by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}); the cumulus moves it by up to ${moved.toFixed(2)} K/day`);
+  console.log(`${layers} cumulus layers of cover 0.02–0.22, a third of them 10⁻⁹–10⁻⁶ in a second run: the engines' layer heating differs by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}); the cumulus moves it by up to ${moved.toFixed(2)} K/day`);
   assert.ok(moved > 0.1, `the cumulus moves the heating by ${moved} K/day`);
   assert.ok(worst < 2e-4, `layer heating differs by ${worst} K/day`);
 });
@@ -301,21 +302,23 @@ test('resolved cloud of partial cover under the saturation adjustment, inside th
 test('the uniform condensation\'s cover of each layer\'s condensate, over ice where it is cold, and the exponential-random overlap heat the layers of sunlit columns alike in both engines and move that heating from the saturation adjustment\'s cover and maximum-random overlap', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { base } = cloudyState();
   const uniform = await physicsHeating(base, {}), liquid = await physicsHeating(base, { iceSaturation: false }), random = await physicsHeating(base, { cloudOverlap: 'maximumRandom' }), saturation = await physicsHeating(base, { condensation: 'saturation', iceSaturation: false });
+  const ramp = await physicsHeating(base, { overcastInversion: [-40, 40], overcastWater: 5e-4 }), unbounded = await physicsHeating(base, { overcastWater: null });
   const { K, C } = uniform;
-  let engines = 0, scale = 0, overlap = 0, cover = 0, ice = 0;
+  let engines = 0, scale = 0, overlap = 0, cover = 0, ice = 0, blended = 0;
   for (let i = 0; i < C; i++) {
     if (!(base.radiation.insolation(i) > 0)) continue;
     for (let k = 0; k < K - 1; k++) {
       const x = k * C + i;
-      engines = Math.max(engines, ...[uniform, liquid, random].map((r) => Math.abs(r.cpu[x] - r.gpu[x])));
+      engines = Math.max(engines, ...[uniform, liquid, random, ramp, unbounded].map((r) => Math.abs(r.cpu[x] - r.gpu[x])));
       scale = Math.max(scale, Math.abs(uniform.cpu[x]));
       overlap = Math.max(overlap, Math.abs(uniform.cpu[x] - random.cpu[x]));
       cover = Math.max(cover, Math.abs(random.cpu[x] - saturation.cpu[x]));
       ice = Math.max(ice, Math.abs(uniform.cpu[x] - liquid.cpu[x]));
+      blended = Math.max(blended, Math.abs(ramp.cpu[x] - unbounded.cpu[x]));
     }
   }
-  console.log(`the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the exponential-random overlap moves it by up to ${overlap.toFixed(2)} K/day from maximum-random, the uniform cover by ${cover.toFixed(2)} from the saturation adjustment's, its saturation over ice by ${ice.toFixed(2)}`);
-  assert.ok(overlap > 1e-3 && cover > 0.1 && ice > 0.01, `overlap ${overlap}, cover ${cover}, ice ${ice} K/day`);
+  console.log(`the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the exponential-random overlap moves it by up to ${overlap.toFixed(2)} K/day from maximum-random, the uniform cover by ${cover.toFixed(2)} from the saturation adjustment's, its saturation over ice by ${ice.toFixed(2)}, the stratiform blend at the cover's saturation on an inversion ramp of −40 to 40 K by ${blended.toFixed(2)}`);
+  assert.ok(overlap > 1e-3 && cover > 0.1 && ice > 0.01 && blended > 0.1, `overlap ${overlap}, cover ${cover}, ice ${ice}, blend ${blended} K/day`);
   assert.ok(engines < 1e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
 });
 

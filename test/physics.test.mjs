@@ -935,7 +935,7 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   const defaults = { condensation: MOIST_DEFAULTS.condensation, iceSaturation: MOIST_DEFAULTS.iceSaturation, iceFall: MOIST_DEFAULTS.iceFall };
   const now = modelDigest({}, defaults).digest, random = modelDigest({ cloudOverlap: 'maximumRandom' }, defaults).digest;
   console.log(`12 steps at N=4: ${now} under the defaults, ${random} with maximum-random overlap`);
-  assert.equal(now, 'a8fb22ad6c4dbcfea26917842db74321');
+  assert.equal(now, '9790266388b2da8b1ca3f6d314c3304a');
   assert.notEqual(random, now);
   assert.notEqual(modelDigest({ cloudOverlap: 'maximumRandom' }).digest, random);
 });

@@ -209,3 +209,55 @@ test('on the GPU the falling ice and the uniform condensation keep column water 
   assert.ok(worstH < 1e-6 && worstW < 2e-6, `GPU ${worstH}, ${worstW}`);
   assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
 });
+
+function coverColumn(radiation = {}) {
+  const model = createModel(new Grid(2), { ocean: false, levels, radiation: { boundaryCover: 'pdf', overcastInversion: [-1000, -999], ...radiation } });
+  const k = layerAt(model, 4.5e4), { C, sigmaMid, exnerLayer } = model.core.diagnostics;
+  const s = column(model, (j, T, p) => (j === k ? 1.02 * cloudSaturation(T, p, true, 273.15, 235.15, {}).qs : 0.5 * saturationHumidity(T, p)));
+  model.moist.condenseColumn(0, s.pi, s.theta, s.q, s.qc);
+  model.core.diagnoseColumn(0, s.pi, s.theta, s.q, s.qc);
+  const bottom = (model.core.diagnostics.K - 1) * C;
+  const run = () => model.radiation.column(0, s.pi[0], s.theta, 290, 5, undefined, 0, s.q[bottom], s.q, s.qc, 0.06, 0.06, 1, undefined, 0, 0, 0, 0);
+  return { model, k, s, run, p: s.pi[0] * sigmaMid[k], T: s.theta[k * C] * exnerLayer[k * C] };
+}
+
+test('under a strong inversion the stratiform blend of the uniform condensation takes the saturation excess a (q_t − q_s(T_l)) at the cover\'s saturation over the ice ramp, its half-width at most a (1 − RH_c) q_s(T_l), against hand-computed values; under the saturation adjustment it keeps the liquid saturation at T', () => {
+  const { model, k, s, run, p, T } = coverColumn(), { C } = model.core.diagnostics, x = k * C;
+  run();
+  const water = s.qc[x], total = s.q[x] + water, out = { qs: 0, slope: 0, liquid: 0 };
+  const Tl = T - LATENT_HEAT * water / model.core.diagnostics.cp;
+  cloudSaturation(Tl, p, true, 273.15, 235.15, out);
+  const a = 1 / (1 + LATENT_HEAT * out.slope / model.core.diagnostics.cp), rhc = criticalHumidityAt(p, s.pi[0], 0.975, 0.75, 2);
+  const bound = Math.min(a * (1 - rhc) * out.qs, Math.max(water, 5e-5)), expected = Math.min(1, Math.max(0.01, (a * (total - out.qs) + bound) / (2 * bound)));
+  const qsl = saturationHumidity(T, p), oldBound = Math.min((1 - rhc) * qsl, Math.max(water, 5e-5)), liquidAtT = Math.min(1, Math.max(0.01, (total - qsl + oldBound) / (2 * oldBound)));
+  console.log(`a layer at ${(p / 100).toFixed(0)} hPa and ${T.toFixed(1)} K at 1.02 of the ice-ramp saturation holds ${(1e3 * water).toFixed(4)} g/kg: the full stratiform blend covers ${model.radiation.layerCover[k].toFixed(6)} (hand ${expected.toFixed(6)}), where the liquid saturation at T gave ${liquidAtT.toFixed(6)}`);
+  assert.ok(water > 5e-5 && T > 235.15 && T < 273.15, `${water} kg/kg at ${T} K`);
+  assert.ok(Math.abs(model.radiation.layerCover[k] - expected) < 1e-12, `${model.radiation.layerCover[k]} against ${expected}`);
+  assert.ok(expected > liquidAtT + 0.1, `${expected} against ${liquidAtT}`);
+  const plain = createModel(new Grid(2), { ocean: false, levels, moist: { condensation: 'saturation', iceSaturation: false }, radiation: { boundaryCover: 'pdf', overcastInversion: [-1000, -999] } });
+  plain.state.forEach((a, n) => a.set(model.state[n]));
+  plain.core.diagnoseColumn(0, ...[0, 1, 4, 5].map((n) => plain.state[n]));
+  plain.radiation.column(0, plain.state[0][0], plain.state[1], 290, 5, undefined, 0, plain.state[4][(model.core.diagnostics.K - 1) * C], plain.state[4], plain.state[5], 0.06, 0.06, 1, undefined, 0, 0, 0, 0);
+  const width = (1 - 0.8) * qsl, own = Math.min(1, Math.max(0.01, (total - qsl + width) / (2 * width))), plainBound = Math.min(width, Math.max(water, 5e-5));
+  const plainExpected = Math.min(1, Math.max(0.01, (total - qsl + plainBound) / (2 * plainBound)));
+  assert.ok(own < 1 && Math.abs(plain.radiation.layerCover[k] - plainExpected) < 1e-12, `${plain.radiation.layerCover[k]} against ${plainExpected}`);
+});
+
+test('a layer whose only cloud is plume cumulus is seen as its plume: its in-cloud path in the shortwave is the plume\'s own however small its cover, where the visibility of the grid-mean path made it 10⁵ kg/m² at a cover of 10⁻⁸', () => {
+  const model = createModel(new Grid(2), { ocean: false, levels });
+  const { K, C, sigmaMid, dSigma, g } = model.core.diagnostics;
+  const k = layerAt(model, 9e4), s = column(model, (j, T, p) => 0.5 * saturationHumidity(T, p));
+  const bottom = (K - 1) * C, mass = s.pi[0] * dSigma[k] / g;
+  for (const [f, w] of [[1e-8, 1e-3], [1e-4, 1e-3], [5e-3, 2e-4], [0.1, 1e-3]]) {
+    const cover = new Float64Array(K * C), water = new Float64Array(K * C);
+    cover[k * C] = f; water[k * C] = w;
+    model.radiation.useCumulus(cover, water);
+    model.radiation.column(0, s.pi[0], s.theta, 290, 5, undefined, 600, s.q[bottom], s.q, s.qc, 0.06, 0.06, 1, undefined, 0, 0, 0, 0);
+    const plume = w * mass, grid = f * plume, seen = model.radiation.budget.cloudCover;
+    const expected = f * -Math.expm1(-plume / 1e-3);
+    console.log(`cover ${f}, plume path ${(1e3 * plume).toFixed(1)} g/m²: column cover ${seen.toExponential(4)}, in-cloud path ${(1e3 * grid / seen).toFixed(2)} g/m² (the grid-mean visibility gave ${(grid / (f * -Math.expm1(-grid / 1e-3))).toExponential(2)} kg/m²)`);
+    assert.ok(Math.abs(seen - expected) < 1e-7 * expected, `${seen} against ${expected}`);
+    assert.ok(grid / seen < 1.0001 * plume / -Math.expm1(-plume / 1e-3), `in-cloud ${grid / seen} against the plume's ${plume}`);
+  }
+  assert.ok(sigmaMid[k] > 0.85);
+});

@@ -17,8 +17,8 @@
 // layer's midpoint: low below 680 hPa, middle 680-440 hPa, high above
 // 440 hPa. Effects do not add: the sum of the classes is printed beside
 // the total.
-// Cover: the radiation's own, each layer's cover times its visibility
-// overlapped as the radiation overlaps them (cloudOverlap), of the class's layers
+// Cover: the radiation's own, each layer's cover times its visibility (the
+// cumulus's at least that of its plume's own path) overlapped as the radiation overlaps them (cloudOverlap), of the class's layers
 // alone; the deck's is its fraction; "all" the column's resolved and
 // cumulus cover combined at random with the deck's, as the radiation's two
 // columns are. Water paths are grid means and in-cloud (over the class's
@@ -159,11 +159,12 @@ for (let i = 0; i < C; i++) {
     alpha = k > 0 ? Math.exp(-(core.diagnostics.geopotential[(k - 1) * C + i] - core.diagnostics.geopotential[idx]) / (g * decorrelation)) : 0;
     cloudOptics(T, surfaceOf(i) === 1, optics, layerOptics);
     const resolved = Math.max(0, qc[idx]) * m, cumulus = cuCover[idx] * cuWater[idx] * m, c = runClass[idx];
-    const seenAll = resolved + cumulus > 0 ? layerCover[k] * -Math.expm1(-(resolved + cumulus) / VISIBLE_PATH) : 0;
+    const plume = cumulus > 0 ? cuCover[idx] * -Math.expm1(-cumulus / (cuCover[idx] * VISIBLE_PATH)) : 0;
+    const seenAll = Math.max(plume, resolved + cumulus > 0 ? layerCover[k] * -Math.expm1(-(resolved + cumulus) / VISIBLE_PATH) : 0);
     close(together, seenAll, k === K - 1);
     for (let n = 1; n < CLASSES.length; n++) {
       const w = n === 1 ? cumulus : c === n ? resolved : 0, f = n === 1 ? cuCover[idx] : resolvedCover[k];
-      close(blocks[n], w > 0 ? f * -Math.expm1(-w / VISIBLE_PATH) : 0, k === K - 1);
+      close(blocks[n], n === 1 ? plume : w > 0 ? f * -Math.expm1(-w / VISIBLE_PATH) : 0, k === K - 1);
       if (w > 0) { water[n][band(T)][i] += w; liquidPath[n][i] += layerOptics.liquid * w; visible[n][i] += layerOptics.visible * w; twoStream[n][i] += radiation.solarDepth[k] * w; }
     }
     if (k === radiation.stratusLayer && fraction > 0) { water[0][band(T)][i] += fraction * deck; liquidPath[0][i] += layerOptics.liquid * fraction * deck; visible[0][i] += layerOptics.visible * fraction * deck; twoStream[0][i] += radiation.solarDepth[k] * fraction * deck; }
