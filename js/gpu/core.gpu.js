@@ -1,11 +1,11 @@
 import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf } from './device.module.js';
-import { sigmaInterfaces, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
+import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.gpu.js';
 import { MOIST_DEFAULTS } from '../physics/moist.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
-import { spongeGeometry, spongeRates as layerRates, SPONGE } from '../dynamics/sponge.module.js';
+import { spongeGeometry, spongeRates as layerRates, spongeSigmaFor, SPONGE } from '../dynamics/sponge.module.js';
 import { longwaveTableFor } from '../physics/longwave.module.js';
 import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveColumns, gravityWaveBreaking, gravityWaveLid } from '../physics/gravityWaves.module.js';
 
@@ -595,7 +595,7 @@ const GW_SHARE = array<f32, GW_LID>(GW_LID_SHARES);
     let u0 = w[src]; let present = select(amp, pres[src] / (RGAS * temp[src]), GW_INTERMITTENT);
     for (var side = -1.0; side <= 1.0; side += 2.0) {
       var gone = 0;
-      for (var k = src - 1; k >= 0 && gone < GW_J; k--) {
+      for (var k = src - 1; k >= GW_LID && gone < GW_J; k--) {
         let ahead = side * (u0 - w[k]);
         var reached = max(gone, i32(clamp(floor(-ahead / GW_DC), 0.0, f32(GW_J))));
         loop {
@@ -666,7 +666,7 @@ export async function createGpuCore(mesh, {
   let cumulusK0 = K;
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > phys.shallowTop) cumulusK0--;
   phys.cumulusK0 = cumulusK0;
-  const spongeRates = spongeOption === undefined ? layerRates(Float64Array.from({ length: K }, (_, k) => 0.5 * (levels[k] + levels[k + 1])), SPONGE.sigma, SPONGE.days) : spongeOption;
+  const spongeRates = spongeOption === undefined ? layerRates(Float64Array.from({ length: K }, (_, k) => 0.5 * (levels[k] + levels[k + 1])), spongeSigmaFor(sigmaGridName(levels)), SPONGE.days) : spongeOption;
   const spongeLayers = spongeRates ? spongeRates.findIndex((rate) => !(rate > 0)) : 0, spongeLayerCount = spongeLayers < 0 ? K : spongeLayers;
   if (spongeRates && spongeRates.some((rate, k) => k >= spongeLayerCount && rate > 0)) throw new Error('the sponge is on the top layers only');
   const sponge = spongeLayerCount ? { ...spongeGeometry(mesh), layers: spongeLayerCount } : null;

@@ -17,17 +17,18 @@ import { cellVector } from '../dynamics/operators.module.js';
  * index (K + 1) − (K + 1 − k₀) cos φ of cg_drag read as log-pressure
  * height), never the lowest. The spectrum is antisymmetric about u₀, so
  * a column launches no net momentum. Each wave rises unchanged until the
- * first layer where it meets its critical level (c − u changes sign) or
- * breaks, and leaves all of its momentum there. It breaks where its flux
+ * first layer below the lid layers where it meets its critical level
+ * (c − u changes sign) or breaks, and leaves all of its momentum there. It breaks where its flux
  * exceeds the saturation flux ρ k |c − u|³ / (2N); with
  * `breakingAmplitude` (B_w, m²/s²) the flux tested is that of the wave
  * where it is present, ρ₀ B_w exp(−ln 2 ((c − u₀)/halfWidth)²) with ρ₀ the
  * source layer's density, of which the grid-box mean flux is the
  * intermittent fraction (AD99's ε); with `breakingAmplitude` null it is
- * the grid-box mean flux of the wave itself. What rises out of the top
- * layer is spread over the layers whose midpoints lie above `lidPressure`
- * (at least the top layer) at one acceleration (Garfinkel et al. 2022), so
- * each column's momentum is conserved (Shepherd & Shaw 2004). The layer's
+ * the grid-box mean flux of the wave itself. What rises into the lid
+ * layers, those whose midpoints lie above `lidPressure` (at least the top
+ * layer), is spread over them at one acceleration (as Garfinkel et al.
+ * 2022 spread what leaves the top), so each column's momentum is
+ * conserved (Shepherd & Shaw 2004). The layer's
  * acceleration is g times its deposited flux over its mass per area. N²
  * is (g/θ) ∂θ/∂z between the neighbouring layers, z from the hypsometric
  * equation, floored at `minimumFrequency`². `compute` fills the cells'
@@ -142,7 +143,7 @@ export function createGravityWaveDrag(mesh, core, options = {}) {
     const u0 = wind[top * C + i], present = breakingAmplitude ? density[top] : scale;
     for (let side = -1; side <= 1; side += 2) {
       let gone = 0;
-      for (let k = top - 1; k >= 0 && gone < J; k--) {
+      for (let k = top - 1; k >= lid && gone < J; k--) {
         const ahead = side * (u0 - wind[k * C + i]), saturation = density[k] * wavenumber / (2 * frequency[k]);
         let reached = Math.max(gone, Math.min(J, Math.floor(-ahead / speedStep)));
         while (reached < J) {

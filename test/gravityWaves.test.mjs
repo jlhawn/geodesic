@@ -50,7 +50,7 @@ test('the source flux follows Garfinkel et al. (2022) eq. A3, uniform by default
   assert.equal(gravityWaveSource(mid, 31500, P0, 89.9 * deg, true), mid.length - 2);
 });
 
-test('on bl36 the flux that rises out of the top layer is spread over the layers above 0.85 hPa at one acceleration, and each column keeps its momentum', () => {
+test('on bl36 the flux that rises into the layers above 0.85 hPa is spread over them at one acceleration, whatever their winds, and each column keeps its momentum', () => {
   const model = createModel(new Grid(8), { ocean: false, levels: sigmaInterfaces('bl36'), gravityWaves: { breakingAmplitude: null, flux: 1e-9, equatorialFlux: 1e-9 } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
@@ -73,6 +73,8 @@ test('on bl36 the flux that rises out of the top layer is spread over the layers
   windy.gravityWaves.compute(windy.state);
   let worst = 0, scale = 0;
   for (let i = 0; i < C; i++) {
+    const top = windy.gravityWaves.east[i], next = windy.gravityWaves.east[C + i];
+    assert.ok(Math.abs(top - next) <= 1e-9 * Math.abs(top) + 1e-30, `windy column ${i}: the lid layers are pushed at ${top} and ${next} m/s²`);
     let east = 0, absolute = 0;
     for (let k = 0; k < windy.core.K; k++) { const mass = windy.state[0][i] * dSigma[k] / g; east += mass * windy.gravityWaves.east[k * C + i]; absolute += mass * Math.abs(windy.gravityWaves.east[k * C + i]); }
     worst = Math.max(worst, Math.abs(east)); scale = Math.max(scale, absolute);

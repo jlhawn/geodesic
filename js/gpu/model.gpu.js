@@ -1,8 +1,8 @@
 import { buildMesh } from '../mesh.module.js';
-import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING } from '../dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING } from '../dynamics/sigmaCore.module.js';
 import { createSeaIce } from '../physics/ice.module.js';
 import { createSurface, SEA_DRAG, LAND_DRAG, TOP_DRAG } from '../physics/surface.module.js';
-import { spongeRates, SPONGE } from '../dynamics/sponge.module.js';
+import { spongeRates, spongeSigmaFor, SPONGE } from '../dynamics/sponge.module.js';
 import { createRadiation } from '../physics/radiation.module.js';
 import { createMoistPhysics } from '../physics/moist.module.js';
 import { LATENT_HEAT } from '../physics/moist.module.js';
@@ -64,7 +64,7 @@ export async function createGpuModel(gridOrMesh, {
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
     ...Object.fromEntries(VEGETATION_OPTIONS.filter((key) => landOptions[key] !== undefined).map((key) => [key, landOptions[key]])),
   };
-  const sponge = spongeRates(core.sigmaMid, surface.spongeSigma ?? SPONGE.sigma, surface.spongeDays ?? SPONGE.days);
+  const sponge = spongeRates(core.sigmaMid, surface.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), surface.spongeDays ?? SPONGE.days);
   const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, physics, topSigma: surface.topSigma ?? TOP_DRAG.sigma, topDragDays: surface.topDragDays ?? TOP_DRAG.days, spongeRates: sponge, gravityWaves, surfaceGeopotential: phis });
   const seaIce = createSeaIce(mesh, ice);
   const radiationCpu = createRadiation(mesh, core, radiation);
