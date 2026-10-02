@@ -6,7 +6,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16, syntheticTopography } from '../js/geography.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
-import { REFERENCE_PRESSURE, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
+import { REFERENCE_PRESSURE, RAYLEIGH_BANDS, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION, LAND_AEROSOL, SEA_AEROSOL, SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -30,12 +30,12 @@ test('over a black surface the clear column reflects the two-stream value of its
     const beam = SOLAR_CONSTANT * mu;
     radiation.column(i, pi[i], theta, 290, 5, undefined, beam, null, dry, null, 0, 0);
     const b = radiation.budget, aerosol = land[i] ? LAND_AEROSOL : SEA_AEROSOL;
-    const ozone = 0.03 * beam, visible = 0.5 * beam - ozone;
+    const ozone = 0.03 * beam, visible = VISIBLE_FRACTION * beam - ozone, nearInfrared = NEAR_INFRARED_RAYLEIGH * pi[i] / REFERENCE_PRESSURE;
     const taken = visible * (1 - Math.exp(-0.05 * aerosol * 35 / Math.sqrt(1224 * mu * mu + 1)));
     const depths = RAYLEIGH_BANDS.map(([w, tau]) => [w, tau * pi[i] / REFERENCE_PRESSURE + 0.3 * 0.95 * aerosol]);
     const depth = depths.reduce((s, [w, d]) => s + w * d, 0);
-    const reflected = (visible - taken) * depths.reduce((s, [w, d]) => s + w * d / (d + 2 * mu), 0);
-    const direct = (visible - taken) * depths.reduce((s, [w, d]) => s + w * Math.exp(-d / mu), 0) + 0.5 * beam;
+    const reflected = (visible - taken) * depths.reduce((s, [w, d]) => s + w * d / (d + 2 * mu), 0) + (1 - VISIBLE_FRACTION) * beam * nearInfrared / (nearInfrared + 2 * mu);
+    const direct = (visible - taken) * depths.reduce((s, [w, d]) => s + w * Math.exp(-d / mu), 0) + (1 - VISIBLE_FRACTION) * beam * Math.exp(-nearInfrared / mu);
     const error = Math.max(Math.abs(b.reflectedSolar - reflected) / reflected, Math.abs(b.aerosolSolar - taken) / taken, Math.abs(b.surfaceDirect - direct) / direct);
     worst = Math.max(worst, error);
     assert.ok(error < 1e-12, `cell ${i} (${land[i] ? 'land' : 'sea'}), μ ${mu}: reflected ${b.reflectedSolar} against ${reflected}, aerosol ${b.aerosolSolar} against ${taken}, direct ${b.surfaceDirect} against ${direct}`);
@@ -113,7 +113,7 @@ async function enginePair(radiation, seed) {
 }
 
 test('both engines give a random set of sunlit columns over sea and land, clear and cloudy, the same absorbed, atmospheric, reflected, clear-sky and surface sunlight with the Rayleigh and aerosol scattering, and the same change from turning it off', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const on = await enginePair({ clearSkyPass: true }, 11), off = await enginePair({ clearSkyPass: true, rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, upwardAbsorption: false }, 11);
+  const on = await enginePair({ clearSkyPass: true }, 11), off = await enginePair({ clearSkyPass: true, rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, upwardAbsorption: false }, 11);
   const { C, land } = on;
   let lit = 0, landLit = 0, worst = 0, worstEffect = 0, largest = 0, name = '';
   for (let i = 0; i < C; i++) {
@@ -144,8 +144,8 @@ test('the light the surface reflects loses to vapour what the path it crossed co
     initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
     return model;
   };
-  const plain = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, solarGases: 'lacisHansen' };
-  const on = make(plain), off = make({ ...plain, upwardAbsorption: false }), hazy = make({ rayleighDepth: 0, aerosolAsymmetry: 1, solarGases: 'lacisHansen' }), hazyOff = make({ rayleighDepth: 0, aerosolAsymmetry: 1, upwardAbsorption: false, solarGases: 'lacisHansen' });
+  const plain = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, solarGases: 'lacisHansen' };
+  const on = make(plain), off = make({ ...plain, upwardAbsorption: false }), hazy = make({ rayleighDepth: 0, nearInfraredRayleigh: 0, aerosolAsymmetry: 1, solarGases: 'lacisHansen' }), hazyOff = make({ rayleighDepth: 0, nearInfraredRayleigh: 0, aerosolAsymmetry: 1, upwardAbsorption: false, solarGases: 'lacisHansen' });
   const { core } = on, { K, dSigma, sigmaMid, g } = core.diagnostics, [pi, theta] = on.state, bottom = (K - 1) * C;
   const q = new Float64Array(K * C);
   for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) if (sigmaMid[k] > 0.4) q[k * C + i] = 0.6 * saturationHumidity(theta[k * C + i] * (pi[i] * sigmaMid[k] / 1e5) ** 0.2857, pi[i] * sigmaMid[k]);
@@ -164,7 +164,7 @@ test('the light the surface reflects loses to vapour what the path it crossed co
     assert.ok(error < 1e-12, `cell ${i}, μ ${mu}, albedo ${albedo}: vapour takes ${b.reflectedSolar - a.reflectedSolar} of the reflected light, expected ${expected}`);
     assert.ok(Math.abs(a.absorbedSolar + a.reflectedSolar - beam) < 1e-12 * beam && Math.abs(a.clearAbsorbedSolar - a.absorbedSolar) < 1e-12 * beam && Math.abs(a.atmosphereSolar - b.atmosphereSolar - expected) < 1e-12 * beam, `cell ${i}, μ ${mu}: closes, is its own clear sky, and heats the air by what it takes`);
     const h = run(hazy), hb = run(hazyOff), aerosol = land[i] ? LAND_AEROSOL : SEA_AEROSOL;
-    const reflectedVisible = (0.5 * beam - 0.03 * beam - hb.aerosolSolar) * albedo;
+    const reflectedVisible = (VISIBLE_FRACTION * beam - 0.03 * beam - hb.aerosolSolar) * albedo;
     const aerosolUp = h.aerosolSolar - hb.aerosolSolar;
     worstAerosol = Math.max(worstAerosol, Math.abs(aerosolUp / reflectedVisible - -Math.expm1(-0.05 * aerosol * 5 / 3)) / -Math.expm1(-0.05 * aerosol * 5 / 3));
   }

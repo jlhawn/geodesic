@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
-import { sunDirection, SOLAR_CONSTANT, STEFAN_BOLTZMANN, GREENHOUSE_GASES } from '../js/physics/radiation.module.js';
+import { sunDirection, SOLAR_CONSTANT, STEFAN_BOLTZMANN, GREENHOUSE_GASES, YEAR } from '../js/physics/radiation.module.js';
 import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from '../js/physics/longwave.module.js';
 import { OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
@@ -16,8 +16,8 @@ const { createGpuCore } = gpuAvailable ? await import('../js/gpu/core.gpu.js') :
 
 const SPECTRAL = { longwaveScheme: 'correlated', solarGases: 'clirad' };
 const GRAY_GASES = { longwaveScheme: 'gray', solarGases: 'lacisHansen' };
-const TRANSPARENT = { carbonDioxide: 0, methane: 0, nitrousOxide: 0, ozoneColumn: [0, 0] };
-const PLAIN = { cloudCover: 'overcast', cloudSolarAbsorption: 0, rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0, upwardAbsorption: false, clearSkyPass: true };
+const TRANSPARENT = { carbonDioxide: 0, methane: 0, nitrousOxide: 0, ozone: 'idealized', ozoneColumn: [0, 0] };
+const PLAIN = { cloudCover: 'overcast', cloudSolarAbsorption: 0, rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, skylight: 0, upwardAbsorption: false, clearSkyPass: true };
 const HAND = { liquid: { reflectance: 0.6430392965333067 }, thinLiquid: { emissivity: 0.7768681886822757 }, ice: { reflectance: 0.418058949528354, emissivity: 0.8998461956940361 } };
 const CLOUDS = { liquid: [285, 0.1], thinLiquid: [285, 0.01], ice: [213.15, 0.02] };
 const close = (a, b, tolerance) => Math.abs(a - b) <= tolerance * Math.abs(b);
@@ -140,7 +140,7 @@ async function physicsPair(base, options, dt = 864000) {
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
   await gpu.tendency();
   const sun = sunDirection(model.time);
-  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, sun[0], sun[1], sun[2], 0, 0, 0]));
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, sun[0], sun[1], sun[2], (model.time % YEAR) / YEAR, 0, 0]));
   const group = device.createBindGroup({ layout: kernels.physics.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
   pass.setPipeline(kernels.physics);
@@ -187,7 +187,7 @@ test('with a liquid and an ice layer in every column and every default on but th
 
 function layeredColumns(radiation) {
   const levels = sigmaInterfaces('bl34'), mls = modelColumn(BENCHMARK.atmospheres.MLS, levels);
-  const model = createModel(new Grid(4), { ocean: false, levels, radiation: { mixedLayerDeck: false, stratus: false, clearSkyPass: true, ozoneColumn: [0, 0], ...radiation } });
+  const model = createModel(new Grid(4), { ocean: false, levels, radiation: { mixedLayerDeck: false, stratus: false, clearSkyPass: true, ozone: 'idealized', ozoneColumn: [0, 0], ...radiation } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   const { core } = model, { K } = core.diagnostics, C = model.mesh.nCells, [pi, theta, u, surfaceT, q, qc, ice] = model.state;
   pi.fill(mls.ps); u.fill(0); surfaceT.fill(mls.Ts); ice.fill(0); qc.fill(0);
@@ -234,7 +234,7 @@ function handEffects({ model, layers }, i, covers) {
 
 async function gpuLongwave({ model, levels }, radiation, water) {
   const { core } = model, C = model.mesh.nCells, K = core.diagnostics.K;
-  const physics = { mixedLayerDeck: false, stratus: false, clearSkyPass: true, ozoneColumn: [0, 0], ...radiation };
+  const physics = { mixedLayerDeck: false, stratus: false, clearSkyPass: true, ozone: 'idealized', ozoneColumn: [0, 0], ...radiation };
   const gpu = await createGpuCore(model.mesh, { nu4: core.nu4, nu4Theta: core.nu4Theta, divergenceDamping: core.divergenceDamping, referenceTheta: Float64Array.from({ length: K }, (_, k) => model.state[1][k * C]), levels, physics });
   const { device, buffers, kernels } = gpu, state = model.state.map((a) => Float64Array.from(a));
   state[5].set(water);

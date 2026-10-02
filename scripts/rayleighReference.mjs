@@ -1,20 +1,26 @@
 // A spectral reference for the molecular atmosphere over a black surface in
 // the radiation's visible band, and the grey or few-band depths that follow it:
 //   node scripts/rayleighReference.mjs
-// The band: of a 5778 K Planck spectrum, the share VISIBLE (0.5) at the short
-// end, less the share OZONE (0.03) that ozone takes, removed from the shortest
-// wavelengths (the Hartley-Huggins bands); WAVELENGTHS (40) equal intervals in
-// wavelength, each weighted by its Planck energy, with the Rayleigh depth of
-// Hansen & Travis (1974) at 1013.25 hPa at its midpoint,
+// The band: of a 5778 K Planck spectrum, the share VISIBLE (the radiation's
+// VISIBLE_FRACTION) at the short end, less the share OZONE (0.03) that ozone
+// takes, removed from the shortest wavelengths (the Hartley-Huggins bands);
+// WAVELENGTHS (40, or 400 with NEAR_INFRARED, where 40 put the reference
+// 2.5 % low) equal intervals in wavelength, each weighted by its Planck
+// energy, with the Rayleigh depth of Hansen & Travis (1974) at 1013.25 hPa
+// at its midpoint,
 // tau(l) = 0.008569 l^-4 (1 + 0.0113 l^-2 + 0.00013 l^-4), l in um.
 // Each wavelength is reflected by the model's two-stream tau/(tau + 2 mu); the
 // band-mean reflectance against mu is the reference the model's depths are
-// fitted to. Beside it, the same spectrum by doubling-adding with the
+// fitted to. With NEAR_INFRARED=1 the band is instead the rest of the
+// spectrum, from VISIBLE's edge to the 0.995 share, carrying 1 - VISIBLE of
+// the beam. Beside it, the same spectrum by doubling-adding with the
 // azimuth-averaged Rayleigh phase function (scalar, unpolarised; GAUSS nodes),
 // which shows the two-stream's own error. The global-mean reflected flux of a
 // full atmosphere is (S0/2) x band share x the integral of mu R(mu) over mu,
 // since the sunlit hemisphere's area is uniform in mu at every instant.
-const VISIBLE = Number(process.env.VISIBLE ?? 0.5), OZONE = Number(process.env.OZONE ?? 0.03), N = Number(process.env.WAVELENGTHS ?? 40);
+import { VISIBLE_FRACTION } from '../js/physics/radiation.module.js';
+
+const VISIBLE = Number(process.env.VISIBLE ?? VISIBLE_FRACTION), OZONE = Number(process.env.OZONE ?? 0.03), N = Number(process.env.WAVELENGTHS ?? (process.env.NEAR_INFRARED === '1' ? 400 : 40));
 const S0 = 1362, T_SUN = 5778, GAUSS = Number(process.env.GAUSS ?? 24), GREY = Number(process.env.GREY ?? 0.18);
 const HC_K = 14387.77;
 
@@ -44,7 +50,8 @@ const shareBelow = (l) => {
 };
 const rayleigh = (l) => 0.008569 * l ** -4 * (1 + 0.0113 * l ** -2 + 0.00013 * l ** -4);
 
-const low = wavelengthAt(OZONE), high = wavelengthAt(VISIBLE);
+const NEAR_INFRARED = process.env.NEAR_INFRARED === '1';
+const low = NEAR_INFRARED ? wavelengthAt(VISIBLE) : wavelengthAt(OZONE), high = NEAR_INFRARED ? wavelengthAt(0.995) : wavelengthAt(VISIBLE), SHARE = NEAR_INFRARED ? 1 - VISIBLE : VISIBLE - OZONE;
 const bands = [];
 for (let k = 0; k < N; k++) {
   const a = low + (high - low) * k / N, b = low + (high - low) * (k + 1) / N, l = 0.5 * (a + b);
@@ -115,8 +122,8 @@ const FLUX_MUS = Array.from({ length: 200 }, (_, k) => (k + 0.5) / 200);
 const reference = (mu) => mixture(bands, mu);
 const exactByBand = bands.map((x) => doublingAdding(x.tau, [...MUS, ...FLUX_MUS]));
 const exact = (index) => bands.reduce((s, x, b) => s + x.weight * exactByBand[b][index], 0);
-const flux = (R) => S0 / 2 * (VISIBLE - OZONE) * FLUX_MUS.reduce((s, mu) => s + mu * R(mu), 0) / FLUX_MUS.length;
-const exactFlux = S0 / 2 * (VISIBLE - OZONE) * FLUX_MUS.reduce((s, mu, k) => s + mu * exact(MUS.length + k), 0) / FLUX_MUS.length;
+const flux = (R) => S0 / 2 * SHARE * FLUX_MUS.reduce((s, mu) => s + mu * R(mu), 0) / FLUX_MUS.length;
+const exactFlux = S0 / 2 * SHARE * FLUX_MUS.reduce((s, mu, k) => s + mu * exact(MUS.length + k), 0) / FLUX_MUS.length;
 
 const FIT_MUS = Array.from({ length: 91 }, (_, k) => 0.1 + 0.01 * k);
 const worstRelative = (R) => Math.max(...FIT_MUS.map((mu) => Math.abs(R(mu) / reference(mu) - 1)));
@@ -165,7 +172,7 @@ const greyFlux = 0.5 * (lo + hi);
 const fits = [2, 3].map((n) => ({ n, set: subBands(n) }));
 
 const f3 = (x) => x.toFixed(3), f4 = (x) => x.toFixed(4), pct = (x) => `${(100 * x >= 0 ? '+' : '')}${(100 * x).toFixed(1)}%`;
-console.log(`visible band ${f3(low)}-${f3(high)} um of a ${T_SUN} K Planck spectrum (share ${f3(bandShare)} of the beam: ${VISIBLE} below ${f3(high)} um less ozone's ${OZONE} below ${f3(low)} um), ${N} wavelengths`);
+console.log(NEAR_INFRARED ? `near-infrared band ${f3(low)}-${f3(high)} um of a ${T_SUN} K Planck spectrum (share ${f3(bandShare)} of the beam, above the ${VISIBLE} below ${f3(low)} um), ${N} wavelengths` : `visible band ${f3(low)}-${f3(high)} um of a ${T_SUN} K Planck spectrum (share ${f3(bandShare)} of the beam: ${VISIBLE} below ${f3(high)} um less ozone's ${OZONE} below ${f3(low)} um), ${N} wavelengths`);
 console.log(`Rayleigh depth at 1013.25 hPa: ${f3(rayleigh(high))} at ${f3(high)} um, ${f4(rayleigh(0.55))} at 0.55 um, ${f3(rayleigh(low))} at ${f3(low)} um; band mean (energy-weighted) ${f4(meanTau)}`);
 console.log(`grey depth minimising the largest relative error over mu 0.1-1: ${f4(greyMinimax)} (largest error ${pct(greyFit.f)}); grey depth giving the reference's global-mean flux: ${f4(greyFlux)}`);
 for (const { n, set } of fits) console.log(`${n} sub-bands (weight, depth): ${set.map((x) => `(${f4(x.weight)}, ${f4(x.tau)})`).join(' ')}; largest relative error over mu 0.1-1 ${pct(worstRelative((mu) => mixture(set, mu)))}`);
@@ -176,6 +183,6 @@ MUS.forEach((mu, m) => {
   console.log(`${mu.toFixed(2).padStart(5)}  ${f4(r).padStart(9)}  ${f4(ex).padStart(9)}  ${pct(r / ex - 1).padStart(8)}  ${f4(g).padStart(9)}  ${pct(g / r - 1).padStart(7)}  ${f4(gf).padStart(10)}  ${pct(gf / r - 1).padStart(6)}  ${fits.map(({ set }) => { const v = mixture(set, mu); return `${f4(v)}  ${pct(v / r - 1).padStart(6)}`; }).join('  ')}`);
 });
 console.log('');
-console.log(`global-mean reflected flux of a full atmosphere over a black surface, W/m2 (S0 ${S0}, band share ${VISIBLE - OZONE}):`);
+console.log(`global-mean reflected flux of a full atmosphere over a black surface, W/m2 (S0 ${S0}, band share ${SHARE.toFixed(4)}):`);
 console.log(`  reference (two-stream per wavelength) ${referenceFlux.toFixed(2)}; exact (doubling-adding) ${exactFlux.toFixed(2)}`);
 console.log(`  grey ${GREY}: ${flux((mu) => twoStream(GREY, mu)).toFixed(2)}; grey ${f4(greyMinimax)} (minimax): ${flux((mu) => twoStream(greyMinimax, mu)).toFixed(2)}; ${fits.map(({ n, set }) => `${n} sub-bands: ${flux((mu) => mixture(set, mu)).toFixed(2)}`).join('; ')}`);

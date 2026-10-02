@@ -65,7 +65,8 @@
 // SYNC_CMD (a shell command run after every snapshot, forcing file and log
 // update with the file's path as $1, see scripts/runControl.mjs),
 // STOP_AFTER_STEPS (for tests: stop as on SIGTERM once this many steps
-// have run).
+// have run), STRATOSPHERE (1: a second daily line with the layer-mean
+// temperature of every layer above 200 hPa, global and by zone).
 // A fresh start can take from saved states: FROM, a state at
 // the same N, gives the ocean, the land, the sea-surface temperature of
 // its mixed layer and the land-surface temperature and, with
@@ -92,7 +93,7 @@ import { buildMesh } from '../js/mesh.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
-import { sigmaInterfaces, sigmaGridName } from '../js/dynamics/sigmaCore.module.js';
+import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0 } from '../js/dynamics/sigmaCore.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS, regridLand, remapLevels } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
@@ -115,7 +116,7 @@ const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
 const RADIATION = { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') }, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
-const ATMOSPHERE = process.env.ATMOSPHERE ?? 'carry';
+const ATMOSPHERE = process.env.ATMOSPHERE ?? 'carry', STRATOSPHERE = process.env.STRATOSPHERE === '1';
 if (ATMOSPHERE !== 'carry' && ATMOSPHERE !== 'fresh') throw new Error(`ATMOSPHERE is carry or fresh, not ${ATMOSPHERE}`);
 const log = (line) => { console.log(line); appendFileSync(`${OUT}/${TAG}.log`, line + '\n'); };
 const stop = stopOnSignal(log), hook = syncAfterSave(process.env.SYNC_CMD, log);
@@ -254,6 +255,20 @@ const day0 = Math.round((model.time - startStep * dt) / 86400);
 let day = day0, step = startStep, dayStart = startStep, taken = 0, iceNorth = 0, iceSouth = 0;
 log(`ASR, atmosphere, OLR and albedo below are day means over the day's ${perDay} steps${startStep ? ` (day ${day0 + 1}'s over its last ${perDay - startStep})` : ''}, the albedo the day's reflected over its incoming sunlight${RADIATION.clearSkyPass ? ', and so are SWCRE and LWCRE, the shortwave (ASR less clear-sky ASR) and longwave (clear-sky OLR less OLR) cloud effects' : ''}`);
 const halted = () => stop.requested || taken >= STOP_AFTER_STEPS;
+const ZONES = [['global', -90, 90], ['20S-20N', -20, 20], ['35-55N', 35, 55], ['35-55S', -55, -35], ['70-90N', 70, 90], ['70-90S', -90, -70]];
+function stratosphereLine(day) {
+  const kappa = R_DRY / CP_DRY, K = levels.length - 1, rows = [];
+  for (let k = 0; k < K && 0.5 * (levels[k] + levels[k + 1]) < 0.2; k++) {
+    const shape = (levels[k + 1] ** (1 + kappa) - levels[k] ** (1 + kappa)) / ((1 + kappa) * (levels[k + 1] - levels[k]));
+    const means = ZONES.map(([, a, b]) => {
+      let sum = 0, area = 0;
+      for (let i = 0; i < C; i++) { const lat = mesh.latCell[i] * deg; if (lat < a || lat > b) continue; sum += mesh.areaCell[i] * state[1][k * C + i] * (state[0][i] / P0) ** kappa * shape; area += mesh.areaCell[i]; }
+      return (sum / area).toFixed(1);
+    });
+    rows.push(`${(500 * (levels[k] + levels[k + 1])).toPrecision(3)} hPa ${means.join('/')}`);
+  }
+  return `stratosphere day ${day}, layer-mean temperature (K; ${ZONES.map(([name]) => name).join('/')}), layers at their pressure under 1000 hPa: ${rows.join('; ')}`;
+}
 for (;;) {
   if (BATCH === 1) {
     while (step < perDay) {
@@ -293,6 +308,7 @@ for (;;) {
   iceNorth += north; iceSouth += south;
   const minutes = (performance.now() - start) / 60000;
   log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}`);
+  if (STRATOSPHERE) { await model.sync(); log(stratosphereLine(day)); }
   if (!Number.isFinite(d.meanSurfaceT) || !Number.isFinite(d.maxWind) || !Number.isFinite(d.oceanSpeed)) { log(`NaN on day ${day}; stopping`); await hook.drain(); process.exit(2); }
   if (minutes >= MINUTES || day >= DAYS || halted()) break;
 }

@@ -22,22 +22,32 @@
 // over 980-1100 cm-1 scaling as (p/p_ref)^nO3; methane at 1306 and nitrous
 // oxide at 1285 and 589 cm-1. The lines' structure within each spectral
 // interval is two equal halves at e^(+-spread) (water vapour) and
-// e^(+-spreadC) (CO2) times the envelope. Fluxes are two-stream with the
+// e^(+-spreadC) (CO2) times the envelope, and, for each absorber with a
+// tail share, its line cores (TAILS below; the vapour's below tailH2oTo
+// cm-1, CO2's on an envelope of e-folding lTailCo2). The vapour lines', CO2's
+// and ozone's paths scale with the Voigt pressure of
+// js/physics/longwave.module.js. Fluxes are two-stream with the
 // diffusivity 1.66 from 10 to 3250 cm-1, at STEP (5) cm-1 where the
 // spectral model is scored by band.
 //
 // The fit (Nelder-Mead in the logarithms of the coefficients) minimises the
 // misses of the g-points against RRTMG for the tropical, midlatitude summer
 // and winter and subarctic winter atmospheres (OLR, surface downward flux,
-// net flux at 200 hPa, the cooling-rate profile) and against LBLRTM's forcing
-// for doubled CO2 on the midlatitude summer profile (Iacono et al. 2008),
-// with the spectral model's own misses in the midlatitude summer's sixteen
-// RRTMG bands at the top and the surface and in LBLRTM's doubled-CO2 forcing
-// by band (Mlawer et al. 1997, Table 6), and the change of OLR and surface
-// downward flux without methane or nitrous oxide (Chou et al. 2001, Table 16).
+// net flux at 200 hPa, the cooling-rate profile, with UPPER_WEIGHT on the
+// 3-30 hPa layers and the top layer's relative miss) and against LBLRTM's
+// forcing for doubled CO2 (DOUBLING_WEIGHT) and for methane and nitrous
+// oxide from none to their 1860 amounts (MINOR_WEIGHT) on the midlatitude
+// summer profile (Iacono et al. 2008), with the spectral model's own misses
+// in the midlatitude summer's sixteen RRTMG bands at the top and the surface
+// and in each band's cooling above 200 hPa (BAND_WEIGHT), in LBLRTM's
+// doubled-CO2 forcing by band (Mlawer et al. 1997, Table 6), and the change
+// of OLR and surface downward flux without methane or nitrous oxide (Chou et
+// al. 2001, Table 16).
 //
 // The reduction: the 1 cm-1 sub-intervals are binned into g-points by the
-// midlatitude summer column's optical depth (binKey); each g-point keeps the
+// midlatitude summer column's optical depth (binKey; above THICK in wider
+// bins of THICK_BIN, so that the cores that reach the top layer keep their
+// own g-points up to OPAQUE); each g-point keeps the
 // mean coefficients of its sub-intervals, scaled to keep their mean
 // transmission where the bin's mean optical depth is 1, and the share of the
 // Planck emission they hold, fitted as a quartic in temperature.
@@ -49,8 +59,10 @@ import { LONGWAVE_CONSTANTS, gasPaths, clearLongwave, normalizedPoints } from '.
 const H = 6.62607015e-34, CL = 2.99792458e8, KB = 1.380649e-23, SIGMA = 5.670374419e-8;
 const { pRef, diffusivity } = LONGWAVE_CONSTANTS;
 export const SPECTRAL_MODEL = {
-  kRot: 122.103, lRot: 47.2827, kVr: 4.87534, lVr1: 34.1124, lVr2: 95.9406, kCo2: 310.468, lCo2: 10.2552, lCo2Hi: 10.5568, kLaser: 8.97986e-4,
-  spread: 1.75362, spreadC: 0.96586, roberts: 0.972618, tSelf: 2948.68, tCo2: 0.0307253, kO3: 3394.08, lO3: 5.44702, nO3: 0.168415, kCh4: 410.363, kN2o: 450.778,
+  kRot: 28.1946, lRot: 54.8622, kVr: 4.503, lVr1: 34.1124, lVr2: 95.9406, kCo2: 165.667, lCo2: 8.86948, lCo2Hi: 9.98274, kLaser: 0.00118713,
+  spread: 1.76148, spreadC: 0.511931, roberts: 0.961601, tSelf: 2417.52, tCo2: 0.00462344, kO3: 479.29, lO3: 5.44702, nO3: 0.936731, kCh4: 587.647,
+  kN2o: 735.849, tailCo2: 0.15201, depthCo2: 2.36796, lTailCo2: 16.4622, tailH2o: 0.0122694, depthH2o: 8.18674, dopplerO3: 1012, tailO3: 0.504104,
+  depthO3: 16.8623, dopplerCo2: 727, dopplerH2o: 400, tailH2oTo: 500,
 };
 // The g-points' membership is fixed by this parameter set (a fit's starting
 // point), so that refitting SPECTRAL_MODEL moves the coefficients of fixed
@@ -59,7 +71,17 @@ export const BINNING_MODEL = {
   kRot: 96.53, lRot: 48.03, kVr: 7.937, lVr1: 37.02, lVr2: 65.21, kCo2: 472.6, lCo2: 10.54, lCo2Hi: 10.99, kLaser: 6.691e-4,
   spread: 1.585, spreadC: 1.707, roberts: 0.9778, tSelf: 3219, tCo2: 0.0211, kO3: 2337, lO3: 6.281, nO3: 0.5772, kCh4: 20, kN2o: 20,
 };
+// The line-core tails the g-points' membership is fixed by, for a model that has them.
+export const BINNING_TAILS = { tailH2o: 0.05, depthH2o: 6, tailCo2: 0.05, depthCo2: 6, tailO3: 0.05, depthO3: 6 };
+export const binningModel = (P) => ({ ...BINNING_MODEL, ...Object.fromEntries(Object.entries(BINNING_TAILS).filter(([key]) => P[key.startsWith('tail') ? key : `tail${key.slice(5)}`] > 0)), ...(P.tailH2oTo ? { tailH2oTo: P.tailH2oTo } : {}) });
 const LINEAR = new Set(['tCo2', 'nO3', 'spread', 'spreadC']);
+
+// Each absorber's line cores: the share g0 of every interval where it absorbs
+// holds the high-k tail of a Lorentz line's k-distribution, k(g) = k0 (g0/g)^2
+// from the upper half's k0 at g = g0 down to g0 exp(-depth), in TAIL_NODES
+// nodes of equal width in ln g, each with its mean k.
+const TAILS = [['line', 'tailH2o', 'depthH2o'], ['co2', 'tailCo2', 'depthCo2'], ['o3', 'tailO3', 'depthO3']];
+const TAIL_NODES = Number(process.env.TAIL_NODES ?? 4);
 
 export function planckDensity(nu, T) {
   const m = nu * 100;
@@ -78,7 +100,19 @@ export function subIntervals(P, nu, width) {
   const o3 = nu >= 980 && nu <= 1100 ? P.kO3 * Math.exp(-Math.abs(nu - 1042) / P.lO3) : 0;
   const ch4 = nu >= 1200 && nu <= 1400 ? P.kCh4 * Math.exp(-Math.abs(nu - 1306) / 25) : 0;
   const n2o = (nu >= 1200 && nu <= 1350 ? P.kN2o * Math.exp(-Math.abs(nu - 1285) / 20) : 0) + (nu >= 550 && nu <= 630 ? 0.1 * P.kN2o * Math.exp(-Math.abs(nu - 589) / 15) : 0);
-  return [1, -1].map((sign) => ({ nu, width: width / 2, line: line * Math.exp(sign * P.spread), continuum, co2: co2 * Math.exp(sign * P.spreadC), o3, ch4, n2o }));
+  const bulk = { line: line * Math.cosh(P.spread), co2: co2 * Math.cosh(P.spreadC), o3 };
+  const tails = TAILS.filter(([gas, share]) => P[share] > 0 && bulk[gas] > 0 && !(gas === 'line' && nu > (P.tailH2oTo ?? Infinity)));
+  const kept = 1 - tails.reduce((s, [, share, depth]) => s + P[share] * -Math.expm1(-P[depth]), 0);
+  const out = [1, -1].map((sign) => ({ nu, width: width * kept / 2, line: line * Math.exp(sign * P.spread), continuum, co2: co2 * Math.exp(sign * P.spreadC), o3, ch4, n2o }));
+  const co2Core = P.lTailCo2 > 0 && nu >= 500 && nu <= 850 ? P.kCo2 * Math.exp(-Math.abs(nu - 667.5) / P.lTailCo2) : co2;
+  for (const [gas, share, depth] of tails) {
+    const g0 = P[share], top = gas === 'line' ? line * Math.exp(P.spread) : gas === 'co2' ? co2Core * Math.exp(P.spreadC) : o3;
+    for (let j = 1; j <= TAIL_NODES; j++) {
+      const b = g0 * Math.exp(-P[depth] * (j - 1) / TAIL_NODES), a = g0 * Math.exp(-P[depth] * j / TAIL_NODES);
+      out.push({ nu, width: width * (b - a), ...bulk, continuum, ch4, n2o, [gas]: top * g0 * g0 / (a * b) });
+    }
+  }
+  return out;
 }
 
 export function spectrum(P, step = 1, from = 10, to = 3250) {
@@ -108,6 +142,7 @@ export function spectralFluxes(P, column, intervals) {
 }
 
 const RRTMG = ['TROP', 'MLS', 'MLW', 'SAW'];
+const UPPER_WEIGHT = Number(process.env.UPPER_WEIGHT ?? 30), BAND_WEIGHT = Number(process.env.BAND_WEIGHT ?? 3), MINOR_WEIGHT = Number(process.env.MINOR_WEIGHT ?? 20), DOUBLING_WEIGHT = Number(process.env.DOUBLING_WEIGHT ?? 150), DLR_WEIGHT = Number(process.env.DLR_WEIGHT ?? 3), TROPOSPHERE_WEIGHT = Number(process.env.TROPOSPHERE_WEIGHT ?? 1000);
 const columns = Object.fromEntries(Object.keys(BENCHMARK.atmospheres).map((a) => [a, modelColumn(BENCHMARK.atmospheres[a])]));
 const mls = columns.MLS;
 const scaled = (column, gas, factor) => ({ ...column, [gas]: column[gas].map((x) => x * factor) });
@@ -121,12 +156,13 @@ export function misses(fluxes) {
     const column = columns[a], ref = BENCHMARK.rrtmgLongwave[a].levels, r = fluxes(column);
     const K = column.T.length, top = ref[ref.length - 1], sfc = ref[0];
     const heat = layerHeating(column, r.net), refHeat = referenceHeating(column, ref);
-    let trop = 0, nt = 0, strat = 0, ns = 0;
+    let trop = 0, nt = 0, strat = 0, ns = 0, upper = 0, nu = 0;
     for (let k = 0; k < K; k++) {
       const p = 0.5 * (column.levels[k] + column.levels[k + 1]) * column.ps, d = (heat[k] - refHeat[k]) ** 2;
       if (p > 20000) { trop += d; nt++; } else if (p > 300) { strat += d; ns++; }
+      if (p > 300 && p < 3000) { upper += d; nu++; }
     }
-    out.atmospheres[a] = { olr: r.up[0] - top.up, dlr: r.down[K] - sfc.down, net200: interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000), troposphere: Math.sqrt(trop / nt), stratosphere: Math.sqrt(strat / ns), heat, refHeat };
+    out.atmospheres[a] = { olr: r.up[0] - top.up, dlr: r.down[K] - sfc.down, net200: interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000), troposphere: Math.sqrt(trop / nt), stratosphere: Math.sqrt(strat / ns), upper: Math.sqrt(upper / nu), top: heat[0] / refHeat[0] - 1, heat, refHeat };
   }
   return out;
 }
@@ -137,16 +173,22 @@ export function score(P, verbose = false, keys = null) {
   const total = (c) => (table ? clearLongwave(c, { table }) : spectralFluxes(P, c, intervals));
   const m = misses(total);
   let s = 0;
-  for (const a of RRTMG) { const e = m.atmospheres[a]; s += e.olr ** 2 + e.dlr ** 2 + e.net200 ** 2 + 20 * e.troposphere ** 2 * 22 + 2 * e.stratosphere ** 2 * 10; }
+  for (const a of RRTMG) { const e = m.atmospheres[a]; s += e.olr ** 2 + DLR_WEIGHT * e.dlr ** 2 + e.net200 ** 2 + TROPOSPHERE_WEIGHT * e.troposphere ** 2 + 2 * e.stratosphere ** 2 * 10 + UPPER_WEIGHT * (4 * e.upper ** 2 + e.top ** 2); }
   const K = mls.T.length;
-  let bandLine = '';
+  let bandLine = '', bandCooling = '';
   for (const b of BENCHMARK.rrtmgLongwave.MLS.bands) {
     const sub = intervals.filter((x) => x.nu >= b.from && x.nu < b.to);
     const r = spectralFluxes(P, mls, sub);
     const eO = r.up[0] - b.levels[b.levels.length - 1].up, eD = r.down[K] - b.levels[0].down;
     s += 0.5 * (eO ** 2 + eD ** 2);
     bandLine += ` ${b.from}:${eO.toFixed(1)}/${eD.toFixed(1)}`;
+    const heat = layerHeating(mls, r.net), refHeat = referenceHeating(mls, b.levels);
+    let miss = 0, n = 0;
+    for (let k = 0; k < K && 0.5 * (mls.levels[k] + mls.levels[k + 1]) * mls.ps < 20000; k++) { miss += (heat[k] - refHeat[k]) ** 2; n++; }
+    s += BAND_WEIGHT * miss;
+    bandCooling += ` ${b.from}:${Math.sqrt(miss / n).toFixed(2)}`;
   }
+  if (verbose) console.log(`MLS by RRTMG band, cooling rms above 200 hPa, K/day:${bandCooling}`);
   let doublingLine = '';
   const twice = scaled(mls, 'co2', 2);
   for (const [a, b, tT, tP, tS] of BENCHMARK.mlawerMls.doubling.bands) {
@@ -167,9 +209,16 @@ export function score(P, verbose = false, keys = null) {
   const f1 = total(rtmip(287e-6)), f2 = total(rtmip(574e-6));
   const ref = BENCHMARK.iacono.co2Doubling.longwave;
   const dT = f1.net[0] - f2.net[0], d2 = interfaceAt(mls, f1.net, 20000) - interfaceAt(mls, f2.net, 20000), dS = f2.down[K] - f1.down[K];
-  s += 20 * ((dT - ref.toa) ** 2 + (d2 - ref.p20000) ** 2 + (dS - ref.surface) ** 2);
+  s += DOUBLING_WEIGHT * ((dT - ref.toa) ** 2 + (d2 - ref.p20000) ** 2 + (dS - ref.surface) ** 2);
+  for (const [, share] of TAILS) if (P[share] > 0.5) s += 1e3 * (P[share] - 0.5) ** 2;
+  const overlap = 1 - (P.tailCo2 ?? 0) * -Math.expm1(-(P.depthCo2 ?? 0)) - (P.tailO3 ?? 0) * -Math.expm1(-(P.depthO3 ?? 0));
+  if (overlap < 0.1) s += 1e3 * (0.1 - overlap) ** 2;
+  const n1 = total(withGas(withGas(rtmip(287e-6), 'ch4', 0), 'n2o', 0)), refMinor = BENCHMARK.iacono.minorGases.longwave;
+  const mT = n1.net[0] - f1.net[0], m2 = interfaceAt(mls, n1.net, 20000) - interfaceAt(mls, f1.net, 20000), mS = f1.down[K] - n1.down[K];
+  s += MINOR_WEIGHT * ((mT - refMinor.toa) ** 2 + (m2 - refMinor.p20000) ** 2 + (mS - refMinor.surface) ** 2);
   if (verbose) {
-    for (const a of RRTMG) { const e = m.atmospheres[a]; console.log(`${a.padEnd(4)} OLR ${e.olr.toFixed(2)}  DLR ${e.dlr.toFixed(2)}  net 200 hPa ${e.net200.toFixed(2)}  cooling rms ${e.troposphere.toFixed(3)} (p > 200 hPa) ${e.stratosphere.toFixed(3)} (3-200 hPa) K/day`); }
+    console.log(`CH4 0 -> 806 ppbv and N2O 0 -> 275 ppbv: TOA ${mT.toFixed(2)} (${refMinor.toa}) 200 hPa ${m2.toFixed(2)} (${refMinor.p20000}) surface ${mS.toFixed(2)} (${refMinor.surface})`);
+    for (const a of RRTMG) { const e = m.atmospheres[a]; console.log(`${a.padEnd(4)} OLR ${e.olr.toFixed(2)}  DLR ${e.dlr.toFixed(2)}  net 200 hPa ${e.net200.toFixed(2)}  cooling rms ${e.troposphere.toFixed(3)} (p > 200 hPa) ${e.stratosphere.toFixed(3)} (3-200 hPa) ${e.upper.toFixed(3)} (3-30 hPa) K/day; top layer ${e.heat[0].toFixed(2)} (${e.refHeat[0].toFixed(2)})`); }
     console.log(`MLS by RRTMG band, OLR/DLR misses:${bandLine}`);
     console.log(`doubled CO2 by band, TOA / tropopause / surface (LBLRTM):${doublingLine}`);
     console.log(`doubled CO2 287 -> 574 ppmv: TOA ${dT.toFixed(2)} (${ref.toa}) 200 hPa ${d2.toFixed(2)} (${ref.p20000}) surface ${dS.toFixed(2)} (${ref.surface})`);
@@ -202,12 +251,13 @@ function nelderMead(f, x0, steps, iterations) {
 // sub-interval's g-point: the absorber that dominates it, and the logarithm
 // of its total in bins of BIN_WIDTH, with the opaque (above OPAQUE) and the
 // transparent (below CLEAR) in one g-point per absorber.
-const BIN_WIDTH = Number(process.env.BIN ?? 1.5), OPAQUE = Number(process.env.OPAQUE ?? 1e4), CLEAR = Number(process.env.CLEAR ?? 0.02);
+const BIN_WIDTH = Number(process.env.BIN ?? 1.5), THICK = Number(process.env.THICK ?? 1e4), THICK_WIDTH = Number(process.env.THICK_BIN ?? 4.5), OPAQUE = Number(process.env.OPAQUE ?? 1e9), CLEAR = Number(process.env.CLEAR ?? 0.02);
 function binKey(s, columnPaths) {
   const parts = ['line', 'continuum', 'co2', 'o3', 'ch4', 'n2o'].map((n) => s[n] * columnPaths[n]);
   const total = parts.reduce((a, b) => a + b, 0), kind = ['h2o', 'cont', 'co2', 'o3', 'minor', 'minor'][parts.indexOf(Math.max(...parts))];
   if (total > OPAQUE) return `${kind}:opaque`;
   if (total < CLEAR) return `${kind}:clear`;
+  if (total > THICK) return `${kind}:thick${Math.floor(Math.log(total / THICK) / THICK_WIDTH)}`;
   return `${kind}:${Math.floor(Math.log(total / CLEAR) / BIN_WIDTH)}`;
 }
 
@@ -231,10 +281,11 @@ export function reduce(P, keys = binning(P), step = 1) {
     const weight = members.reduce((a, s) => a + s.width, 0);
     const mean = (f) => members.reduce((a, s) => a + s.width * f(s), 0) / weight;
     const cacheKey = `${key}:${members.length}:${members[0].nu}`;
-    if (!shareCache.has(cacheKey)) shareCache.set(cacheKey, fitQuartic(temperatures, temperatures.map((T) => members.reduce((a, s) => a + planckDensity(s.nu, T) * s.width, 0) / (SIGMA * T ** 4))));
+    if (!shareCache.has(cacheKey)) shareCache.set(cacheKey, members.map((s) => temperatures.map((T) => planckDensity(s.nu, T) / (SIGMA * T ** 4))));
+    const density = shareCache.get(cacheKey), planck = fitQuartic(temperatures, temperatures.map((_, t) => members.reduce((a, s, j) => a + density[j][t] * s.width, 0)));
     const tau = (s) => ['line', 'continuum', 'co2', 'o3', 'ch4', 'n2o'].reduce((a, n) => a + s[n] * columnPaths[n], 0), meanTau = mean(tau);
     const scale = meanTau > 0 ? -Math.log(mean((s) => Math.exp(-tau(s) / meanTau))) : 1;
-    const g = { key, nu: mean((s) => s.nu), planck: shareCache.get(cacheKey) };
+    const g = { key, nu: mean((s) => s.nu), planck };
     for (const n of ['line', 'continuum', 'co2', 'o3', 'ch4', 'n2o']) g[n] = scale * mean((s) => s[n]);
     points.push(g);
   }
@@ -257,9 +308,9 @@ function fitQuartic(x, y) {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   let P = { ...SPECTRAL_MODEL, ...JSON.parse(process.env.P ?? '{}') };
-  const keys = binning(BINNING_MODEL);
+  const keys = binning(binningModel(P));
   if (process.env.FIT) {
-    const names = (process.env.KEYS ?? 'kRot,lRot,kVr,kCo2,lCo2,lCo2Hi,spread,spreadC,kO3,nO3,kCh4,kN2o,tCo2,kLaser,roberts,tSelf').split(',');
+    const names = (process.env.KEYS ?? 'kRot,lRot,kVr,kCo2,lCo2,lCo2Hi,spread,spreadC,kO3,nO3,kCh4,kN2o,tCo2,kLaser,roberts,tSelf,tailCo2,depthCo2,lTailCo2,tailH2o,depthH2o,tailO3,depthO3').split(',');
     const toX = (p) => names.map((k) => (LINEAR.has(k) ? p[k] : Math.log(p[k])));
     const fromX = (x) => ({ ...P, ...Object.fromEntries(names.map((k, i) => [k, LINEAR.has(k) ? x[i] : Math.exp(x[i])])) });
     P = fromX(nelderMead((x) => { const v = score(fromX(x), false, keys); return Number.isFinite(v) ? v : 1e12; }, toX(P), names.map((k) => (LINEAR.has(k) ? 0.05 : 0.2)), Number(process.env.FIT)));

@@ -26,7 +26,8 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, STEFAN_BOLTZMANN } from '../js/physics/radiation.module.js';
+import { DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, STEFAN_BOLTZMANN, YEAR } from '../js/physics/radiation.module.js';
+import { ozoneWeights, ozoneAbove as climatologyAbove } from '../js/physics/ozone.module.js';
 import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from '../js/physics/longwave.module.js';
 import { OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
@@ -64,10 +65,11 @@ surface.lowestWindSpeed(state[2]);
 const [pi, theta, , surfaceT, q, qc, ice] = state;
 const deg = 180 / Math.PI, area = mesh.areaCell, landMask = model.geography.land;
 const lat = Float64Array.from(mesh.latCell, (x) => x * deg), lon = Float64Array.from(mesh.lonCell, (x) => x * deg);
-const R = { ...{ carbonDioxide: GREENHOUSE_GASES.carbonDioxide, methane: GREENHOUSE_GASES.methane, nitrousOxide: GREENHOUSE_GASES.nitrousOxide, ozoneColumn: OZONE_COLUMN, ozoneHeight: 25e3, ozoneWidth: 5e3, scaleHeight: 7e3, decorrelationLength: DECORRELATION_LENGTH, decorrelationSlope: DECORRELATION_SLOPE, gustiness: 3, cumulusCloud: true }, ...RADIATION };
+const R = { ...{ carbonDioxide: GREENHOUSE_GASES.carbonDioxide, methane: GREENHOUSE_GASES.methane, nitrousOxide: GREENHOUSE_GASES.nitrousOxide, ozone: 'afgl', ozoneColumn: OZONE_COLUMN, ozoneHeight: 25e3, ozoneWidth: 5e3, scaleHeight: 7e3, decorrelationLength: DECORRELATION_LENGTH, decorrelationSlope: DECORRELATION_SLOPE, gustiness: 3, cumulusCloud: true }, ...RADIATION };
 const wellMixed = [R.carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air, R.methane * GAS_MOLAR.ch4 / GAS_MOLAR.air, R.nitrousOxide * GAS_MOLAR.n2o / GAS_MOLAR.air];
 const ozoneAbove = (sigma) => (sigma <= 0 ? 0 : (1 + Math.exp(-R.ozoneHeight / R.ozoneWidth)) / (1 + Math.exp((-R.scaleHeight * Math.log(sigma) - R.ozoneHeight) / R.ozoneWidth)));
 const ozoneShare = Float64Array.from({ length: K }, (_, k) => ozoneAbove(levels[k + 1]) - ozoneAbove(levels[k]));
+const layerOzone = new Float64Array(K), weights = new Float64Array(5);
 const points = LONGWAVE_TABLE.points, NG = points.length;
 const paths = Array.from({ length: 6 }, () => new Float64Array(K)), pathRow = new Float64Array(6);
 const T = new Float64Array(K), water = new Float64Array(K), cover = new Float64Array(K), inCloud = new Float64Array(K), effective = new Float64Array(K), outside = new Float64Array(K), gas = new Float64Array(NG * K), planck = new Float64Array(NG * K), surfaceUp = new Float64Array(NG);
@@ -132,6 +134,8 @@ for (let i = 0; i < C; i++) {
   const budget = radiation.budget;
   out.model[i] = budget.outgoingLongwave; out.modelDown[i] = budget.downwardLongwave; out.clear[i] = budget.clearOutgoingLongwave;
   const ozoneCell = R.ozoneColumn[0] + (R.ozoneColumn[1] - R.ozoneColumn[0]) * Math.sin(mesh.latCell[i]) ** 2;
+  if (R.ozone === 'afgl') { ozoneWeights(mesh.latCell[i], (model.time % YEAR) / YEAR, weights); let above = 0; for (let k = 0; k < K; k++) { const below = climatologyAbove(pi[i] * levels[k + 1], weights); layerOzone[k] = below - above; above = below; } }
+  else for (let k = 0; k < K; k++) layerOzone[k] = ozoneCell * ozoneShare[k];
   const z0 = R.decorrelationLength - R.decorrelationSlope * Math.abs(lat[i]);
   const deck = budget.stratus, fraction = budget.stratusFraction;
   if (deck > 0) decks++;
@@ -151,7 +155,7 @@ for (let i = 0; i < C; i++) {
     }
     alpha[k] = k > 0 ? Math.exp(-(geopotential[(k - 1) * C + i] - geopotential[idx]) / (g * z0)) : 0;
     const dry = Math.max(0, 1 - Math.max(0, q[idx]));
-    layerPaths(pathRow, pi[i] * sigmaMid[k], mass, T[k], q[idx], ozoneCell * ozoneShare[k] * OZONE_CM_ATM, wellMixed[0] * dry, wellMixed[1] * dry, wellMixed[2] * dry);
+    layerPaths(pathRow, pi[i] * sigmaMid[k], mass, T[k], q[idx], layerOzone[k] * OZONE_CM_ATM, wellMixed[0] * dry, wellMixed[1] * dry, wellMixed[2] * dry);
     for (let j = 0; j < 6; j++) paths[j][k] = pathRow[j];
   }
   const surfaceEmission = STEFAN_BOLTZMANN * skin ** 4;

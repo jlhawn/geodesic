@@ -21,7 +21,7 @@ const core = createSigmaCore(mesh);
 const { K, C, E } = core.diagnostics;
 const EPS = 1e-12;
 const OVERCAST = { cloudCover: 'overcast' };
-const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
+const UNSCATTERED = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
 const GRAY_GASES = { longwaveScheme: 'gray', solarGases: 'lacisHansen' };
 
 function random(seed) {
@@ -916,7 +916,7 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
   const before = 'b892e42f1b7ea8359ea7af62e3e635ba';
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }).digest, before);
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }, {}, GREY_ICE).digest, '3ca002d1e990a4335a223eb2232c51d0', 'on grey ice with unaged snow, the engine before the ice and snow albedo depended on temperature and age');
-  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED }, {}, GREY_ICE).digest, '41e2f59e2169a6967b452f75740022a0', 'on grey ice under the spectral gases, the gas parent\'s digest');
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED }, {}, GREY_ICE).digest, 'a73d33f305faa4910fbb5b6bc63e08dd', 'on grey ice under the spectral gases, the gas parent\'s digest');
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
   assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
@@ -937,8 +937,8 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   const defaults = { condensation: MOIST_DEFAULTS.condensation, iceSaturation: MOIST_DEFAULTS.iceSaturation, iceFall: MOIST_DEFAULTS.iceFall };
   const now = modelDigest({}, defaults).digest, random = modelDigest({ cloudOverlap: 'maximumRandom' }, defaults).digest;
   console.log(`12 steps at N=4: ${now} under the defaults, ${random} with maximum-random overlap`);
-  assert.equal(now, 'fbd9be1fa786711eac99bc2e37174836');
-  assert.equal(modelDigest({ ...GRAY_GASES }, defaults).digest, '9790266388b2da8b1ca3f6d314c3304a', 'under the gray gases, the cloud parent\'s digest');
+  assert.equal(now, 'a64fbb13d210cbd6b4d13cdfc32a6fd7');
+  assert.equal(modelDigest({ ...GRAY_GASES, visibleFraction: 0.5, rayleighBands: [[0.712, 0.0874], [0.288, 0.5687]], nearInfraredRayleigh: 0 }, defaults).digest, '9790266388b2da8b1ca3f6d314c3304a', 'under the gray gases and the visible split and Rayleigh bands before the gas branch\'s, the cloud parent\'s digest');
   assert.notEqual(random, now);
   assert.notEqual(modelDigest({ cloudOverlap: 'maximumRandom' }).digest, random);
 });

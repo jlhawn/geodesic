@@ -1,6 +1,6 @@
 import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf } from './device.module.js';
 import { sigmaInterfaces, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
-import { sunDirection, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN } from '../physics/radiation.module.js';
+import { sunDirection, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.gpu.js';
 import { MOIST_DEFAULTS } from '../physics/moist.module.js';
@@ -535,8 +535,8 @@ export const PHYSICS_DEFAULTS = {
   mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'exponentialRandom', decorrelationLength: DECORRELATION_LENGTH, decorrelationSlope: DECORRELATION_SLOPE, prognosticHeight: true, deckRest: 'regime', cumulusCeiling: 2000, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
   exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0, clearSkyPass: false,
-  longwaveScheme: 'correlated', solarGases: 'clirad', ...GREENHOUSE_GASES, ozoneColumn: OZONE_COLUMN, ozoneProfile: null, vaporStrength: VAPOR_STRENGTH,
-  rayleighBands: RAYLEIGH_BANDS, rayleighDepth: null, upwardAbsorption: true, visibleFraction: 0.5, landAerosol: LAND_AEROSOL, seaAerosol: SEA_AEROSOL, aerosolAlbedo: 0.95, aerosolAsymmetry: 0.7, aerosolHeight: 2000,
+  longwaveScheme: 'correlated', solarGases: 'clirad', ...GREENHOUSE_GASES, ozone: 'afgl', ozoneColumn: OZONE_COLUMN, ozoneProfile: null, vaporStrength: VAPOR_STRENGTH,
+  rayleighBands: RAYLEIGH_BANDS, rayleighDepth: null, nearInfraredRayleigh: NEAR_INFRARED_RAYLEIGH, upwardAbsorption: true, visibleFraction: VISIBLE_FRACTION, landAerosol: LAND_AEROSOL, seaAerosol: SEA_AEROSOL, aerosolAlbedo: 0.95, aerosolAsymmetry: 0.7, aerosolHeight: 2000,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10,
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.62, meltingIceAlbedo: 0.48, iceMeltingRange: 1, fullAlbedoThickness: 0.5, iceSnowAlbedo: 0.75, iceFullSnow: 20, snowConductivity: 0.31, snowDensity: 300, waterDensity: 1026,
   snowAgeing: true, iceSnowFloor: 0.70, ...SNOW_AGEING,
@@ -784,13 +784,13 @@ export async function createGpuCore(mesh, {
     stepCount++;
     if (hooks.beforePhysics) await hooks.beforePhysics(dt, stepCount);
     const g = group(buffers.S, buffers.K1);
-    setParams([dt, 0, sun[0], sun[1], sun[2]]);
+    setParams([dt, 0, sun[0], sun[1], sun[2], (time % YEAR) / YEAR]);
     compute((pass) => {
       dispatch(pass, 'physics', g, C);
       dispatch(pass, 'pblDiagnose', g, C);
     });
     closurePasses(dt);
-    setParams([dt, 0, sun[0], sun[1], sun[2]]);
+    setParams([dt, 0, sun[0], sun[1], sun[2], (time % YEAR) / YEAR]);
     compute((pass) => {
       dispatch(pass, 'adjust', g, C);
       dispatch(pass, 'mixMomentum', g, E);

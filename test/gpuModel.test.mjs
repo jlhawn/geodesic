@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { sunDirection } from '../js/physics/radiation.module.js';
+import { sunDirection, YEAR } from '../js/physics/radiation.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuCore } = gpuAvailable ? await import('../js/gpu/core.gpu.js') : {};
-const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
+const UNSCATTERED = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
 
 function meanTheta(model) {
   const { K } = model.core, C = model.mesh.nCells, theta = model.state[1];
@@ -138,7 +138,7 @@ async function physicsHeating(base, options, dt = 864000, cumulus = null, mixing
   }
   await gpu.tendency();
   const sun = sunDirection(model.time);
-  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, sun[0], sun[1], sun[2], 0, 0, 0]));
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, sun[0], sun[1], sun[2], (model.time % YEAR) / YEAR, 0, 0]));
   const group = device.createBindGroup({ layout: kernels.physics.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
   pass.setPipeline(kernels.physics);

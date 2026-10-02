@@ -13,7 +13,8 @@
 // winter, subarctic winter) and against the ICRCCM line-by-line fluxes of
 // Feigelson et al. (1991) for the five AFGL atmospheres (CO2 300 ppmv, no
 // methane or nitrous oxide); doubled CO2 and vapour x1.2 on the midlatitude
-// summer profile against LBLRTM (Iacono et al. 2008), with the
+// summer profile against LBLRTM (Iacono et al. 2008), and methane and nitrous
+// oxide from none to their 1860 amounts on the same profile, with the
 // stratosphere-adjusted forcing (fixed dynamical heating); the OLR's slope
 // with surface temperature at fixed relative humidity. Shortwave: the
 // atmosphere's absorption, the surface's downward flux and the heating
@@ -86,6 +87,12 @@ function longwaveTable() {
   const mls = columns.MLS, m = BENCHMARK.mlawerMls;
   const r = runColumn(AFTER, mls);
   console.log(`MLS against LBLRTM (Mlawer et al. 1997, CKD_2.0): OLR ${f(r.olr)} (${m.toaUp}), net at 179 hPa ${f(interfaceAt(mls, r.net, m.tropopause.p))} (${m.tropopause.net}), DLR ${f(r.dlr)} (${m.surface.down})`);
+  console.log('cooling of the layers above 30 hPa, K/day (before / after / RRTMG):');
+  for (const a of ['TROP', 'MLS', 'MLW', 'SAW']) {
+    const column = columns[a], refHeat = referenceHeating(column, BENCHMARK.rrtmgLongwave[a].levels);
+    const heats = [BEFORE, AFTER].map((o) => layerHeating(column, runColumn(o, column).net));
+    console.log(`  ${a.padEnd(4)} ` + Array.from({ length: K }, (_, k) => k).filter((k) => midPressure(column, k) < 3000).map((k) => `${f(midPressure(column, k) / 100, 1)} hPa ${f(heats[0][k], 2)}/${f(heats[1][k], 2)}/${f(refHeat[k], 2)}`).join('; '));
+  }
   for (const a of ['MLS', 'TROP']) {
     const column = columns[a], ref = BENCHMARK.rrtmgLongwave[a].levels, refHeat = referenceHeating(column, ref);
     const heats = [BEFORE, AFTER].map((o) => layerHeating(column, runColumn(o, column).net));
@@ -95,20 +102,28 @@ function longwaveTable() {
 }
 
 // Stratospheric temperatures adjusted (fixed dynamical heating) above the
-// tropopause until each layer's longwave heating is its base value again.
+// tropopause until each layer's longwave heating is its base value again:
+// Newton's method on the layers' heating with the full Jacobian.
 function adjusted(options, base, perturbed, tropopause) {
   const target = runColumn(options, base).lw;
   const column = { ...perturbed, T: Float64Array.from(perturbed.T) };
-  const strat = Array.from({ length: K }, (_, k) => midPressure(column, k) < tropopause);
-  for (let it = 0; it < 60; it++) {
+  const layers = Array.from({ length: K }, (_, k) => k).filter((k) => midPressure(column, k) < tropopause), n = layers.length, dT = 0.25;
+  for (let it = 0; it < 20; it++) {
     const r = runColumn(options, column);
-    const dT = 0.5;
-    const warmer = { ...column, T: column.T.map((t, k) => (strat[k] ? t + dT : t)) };
-    const rw = runColumn(options, warmer);
-    for (let k = 0; k < K; k++) if (strat[k]) {
-      const slope = (rw.lw[k] - r.lw[k]) / dT;
-      if (slope < 0) column.T[k] -= Math.max(-5, Math.min(5, (r.lw[k] - target[k]) / slope)) * 0.7;
+    const rows = layers.map((k) => [...new Array(n).fill(0), target[k] - r.lw[k]]);
+    layers.forEach((kj, j) => {
+      const warmer = { ...column, T: Float64Array.from(column.T) };
+      warmer.T[kj] += dT;
+      const rw = runColumn(options, warmer);
+      layers.forEach((ki, i) => { rows[i][j] = (rw.lw[ki] - r.lw[ki]) / dT; });
+    });
+    for (let c = 0; c < n; c++) {
+      let p = c;
+      for (let i = c + 1; i < n; i++) if (Math.abs(rows[i][c]) > Math.abs(rows[p][c])) p = i;
+      [rows[c], rows[p]] = [rows[p], rows[c]];
+      for (let i = 0; i < n; i++) if (i !== c) { const f = rows[i][c] / rows[c][c]; for (let j = c; j <= n; j++) rows[i][j] -= f * rows[c][j]; }
     }
+    layers.forEach((k, j) => { column.T[k] += Math.max(-10, Math.min(10, rows[j][n] / rows[j][j])); });
   }
   return column;
 }
@@ -125,10 +140,13 @@ function sensitivityTable() {
     const forcing = (a, b) => `TOA ${f(a.olr - b.olr, 2)}  200 hPa ${f(at(a, 20000) - at(b, 20000), 2)}  surface ${f(b.dlr - a.dlr, 2)}`;
     console.log(`  ${name.padEnd(6)} CO2 287 -> 574 ppmv: ${forcing(r1, r2)}   (LBLRTM ${ref.toa} / ${ref.p20000} / ${ref.surface})`);
     console.log(`  ${name.padEnd(6)} vapour x1.2 at 574:  ${forcing(r2, r3)}   (LBLRTM ${vap.toa} / ${vap.p20000} / ${vap.surface})`);
+    const minor = BENCHMARK.iacono.minorGases.longwave, none = runColumn(o, withGas(withGas(one, 'ch4', 0), 'n2o', 0));
+    console.log(`  ${name.padEnd(6)} CH4 0 -> 806 ppbv and N2O 0 -> 275 ppbv at 287 ppmv CO2: ${forcing(none, r1)}   (LBLRTM ${minor.toa} / ${minor.p20000} / ${minor.surface})`);
     if (o === AFTER) {
       const tropopause = 17900, adjustedColumn = adjusted(o, one, two, tropopause), ra = runColumn(o, adjustedColumn);
       const dT = adjustedColumn.T.map((t, k) => t - two.T[k]);
-      console.log(`  ${name.padEnd(6)} stratosphere-adjusted (fixed dynamical heating above 179 hPa): TOA ${f(r1.olr - ra.olr, 2)}  179 hPa ${f(interfaceAt(mls, r1.net, tropopause) - interfaceAt(mls, ra.net, tropopause), 2)} W/m2; stratospheric cooling ${f(Math.min(...dT), 1)} K at most`);
+      const residual = Math.max(...ra.lw.map((x, k) => (midPressure(mls, k) < tropopause ? Math.abs(x - r1.lw[k]) : 0)));
+      console.log(`  ${name.padEnd(6)} stratosphere-adjusted (fixed dynamical heating above 179 hPa): TOA ${f(r1.olr - ra.olr, 2)}  179 hPa ${f(interfaceAt(mls, r1.net, tropopause) - interfaceAt(mls, ra.net, tropopause), 2)} W/m2; stratospheric cooling ${f(Math.min(...dT), 1)} K at most, the top three layers ${dT.slice(0, 3).map((x) => f(x, 1)).join(' / ')} K; largest layer heating left ${residual.toExponential(1)} W/m2`);
     }
     for (const a of ['MLS', 'TROP']) {
       const c = columns[a], slope = (delta) => {
@@ -167,8 +185,8 @@ function shortwaveTable() {
   const mls = columns.MLS, cs = BENCHMARK.chouShortwave, beam = 0.5 * 1365;
   console.log(`  Chou & Suarez (1999) line-by-line, MLS, 60 degrees, no scattering (insolation taken as ${beam}, solar constant 1365):`);
   for (const o of [BEFORE, AFTER]) {
-    const r = runColumn({ ...o, rayleighDepth: 0, skylight: 0, upwardAbsorption: true }, withGas(mls, 'co2', 350e-6), { beam, albedo: 0.2, solarConstant: 1365 });
-    const r0 = runColumn({ ...o, rayleighDepth: 0, skylight: 0 }, withGas(mls, 'co2', 350e-6), { beam, albedo: 0, solarConstant: 1365 });
+    const r = runColumn({ ...o, rayleighDepth: 0, nearInfraredRayleigh: 0, skylight: 0, upwardAbsorption: true }, withGas(mls, 'co2', 350e-6), { beam, albedo: 0.2, solarConstant: 1365 });
+    const r0 = runColumn({ ...o, rayleighDepth: 0, nearInfraredRayleigh: 0, skylight: 0 }, withGas(mls, 'co2', 350e-6), { beam, albedo: 0, solarConstant: 1365 });
     console.log(`    ${o === BEFORE ? 'before' : 'after '} atmosphere ${f(r.budget.atmosphereSolar)} (${cs.noScattering.total[2]}), of the net at the top ${f(100 * r.budget.atmosphereSolar / (beam - r.budget.reflectedSolar))} % (${f(100 * cs.noScattering.total[2] / cs.noScattering.total[0])} %); albedo 0: O2 ${f(r0.budget.oxygenSolar, 2)} (${-cs.surfaceReduction.o2}) CO2 ${f(r0.budget.carbonDioxideSolar, 2)} (${-cs.surfaceReduction.co2}) ozone ${f(r0.budget.ozoneSolar, 2)} (ultraviolet ${cs.noScattering.uv[2]} of the band 1-7 absorption with albedo 0.2) vapour ${f(r0.budget.vaporSolar, 2)}`);
   }
 }

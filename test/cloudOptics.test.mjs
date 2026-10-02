@@ -4,12 +4,12 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
-import { sunDirection, cloudOptics, liquidShare, iceRadius, CLOUD_OPTICS, SOLAR_CONSTANT, STEFAN_BOLTZMANN } from '../js/physics/radiation.module.js';
+import { sunDirection, cloudOptics, liquidShare, iceRadius, CLOUD_OPTICS, SOLAR_CONSTANT, STEFAN_BOLTZMANN, YEAR } from '../js/physics/radiation.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuCore } = gpuAvailable ? await import('../js/gpu/core.gpu.js') : {};
-const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15 };
+const UNSCATTERED = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15 };
 const close = (a, b, tolerance = 1e-9) => Math.abs(a - b) <= tolerance * Math.abs(b);
 
 test('the optics of a kilogram of condensate: liquid above 273.15 K with the droplet radius of sea or land, ice below 235.15 K with its radius from the temperature, an even split halfway, against hand-computed values', () => {
@@ -101,7 +101,7 @@ async function physicsPair(base, options, dt = 864000) {
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.DEPTH, Float32Array.from(model.boundaryLayer.depth));
   await gpu.tendency();
   const sun = sunDirection(model.time);
-  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, sun[0], sun[1], sun[2], 0, 0, 0]));
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, sun[0], sun[1], sun[2], (model.time % YEAR) / YEAR, 0, 0]));
   const group = device.createBindGroup({ layout: kernels.physics.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
   pass.setPipeline(kernels.physics);
