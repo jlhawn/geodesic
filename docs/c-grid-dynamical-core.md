@@ -9563,6 +9563,72 @@ twice: N=64 bl34 25.69 / 26.70, bl36 27.69 / 29.07 ms (+8 %); N=128 bl34
 bl36: 59.7 s of steps, 77.7 s from the end of setup (20 s) to the saved
 file (bl34 55.6 and 74.2 s).
 
+The merge's review (Oct 2). The five conflicted files rebuilt with `git
+merge-tree` from 0063c54 and 4a4eb83: the committed merge differs from
+git's own only in the conflict hunks, each the union of both sides (the
+imports, `longwaveTable` beside the cloud optics, 0063c54's clamped dry
+fraction passing 4a4eb83's `gasTable`, both sets of regrid imports,
+0063c54's digest tests re-pinned, the three on grey ice equal to
+4a4eb83's); `GWS` and `GWF` close the mesh buffers' lists and the kernel
+order is 0063c54's. The suite, six files at a time under the shared lock:
+61 of 63 pass, dayMeans and gpuModel fail as above. dayMeans' column 135
+takes a plume base flux of 4.287·10⁻² on the CPU and 4.504·10⁻² on the
+GPU at step 7 (0063c54: 4.508 and 4.508·10⁻²); the CPU alone, with π, θ,
+u, the surface temperature and q each scaled by 1 ± 5·10⁻⁷ at random,
+gives 4.504·10⁻² in 3 of 7 draws and 4.287·10⁻² in the others, so the
+column sits on a threshold that float32 noise crosses. At 4a4eb83 itself
+dayMeans passes (reflected rms 3.2·10⁻⁵) and gpuModel's sunlit-heating
+test fails at 1.34·10⁻⁴ K/day against that branch's 10⁻⁴. Parity on bl36
+with a loader of the review's own, after 1 / 4 / 16 steps: from
+nine64_day0091 the top eight layers' u 8.5·10⁻⁵ / 2.1·10⁻⁴ / 9.0·10⁻⁴
+m/s rms and θ 1.8·10⁻⁴ / 6.4·10⁻⁴ / 3.0·10⁻³ K, from nine64_day0274
+9.1·10⁻⁵ / 1.1·10⁻³ / 1.3·10⁻³ and 2.6·10⁻⁴ / 1.5·10⁻³ / 3.5·10⁻³; the
+lowest layer's T 1.0·10⁻⁴ / 1.7·10⁻³ / 1.9·10⁻² K, as 0063c54 gives on
+bl34 with the same loader (1.0·10⁻⁴ / 1.9·10⁻³ / 1.9·10⁻²); the wave
+accelerations 4.1·10⁻⁵ / 7.0·10⁻⁴ / 1.8·10⁻³ m/s/day rms apart, each
+cell column's Σ dσ·a 1.3-1.6·10⁻¹⁶ (CPU) and 5.1-6.2·10⁻⁸ (GPU) of its
+deposit, the two lid layers' accelerations equal to 9.4·10⁻¹⁵ m/s/day.
+The orographic waves deposit 0.99972 of the launched stress on
+nine64_day0274 on bl34 and bl36 alike, 5.9·10⁻³ of it in bl36's two top
+layers (bl34's two 7.3·10⁻³). The remap of eight64_day0183 and
+nine64_day0274: column enthalpy 2.5·10⁻¹⁶, q and qc exact, u 3.4·10⁻¹⁶,
+no θ inversion in any column's top seven layers, the 34 shared layers
+bit for bit, the round trip 5.1·10⁻¹⁶. The three bl34 days from
+eight64_day0183 give the numbers above to the last digit; on bl36 three
+one-day segments equal one three-day segment byte for byte.
+
+Thirty July days on the merged tree from nine64_day0091 remapped
+(`STRATOSPHERE=1`), against the second round's review on 4a4eb83 (its
+twin in brackets): day 121, the 5S-5N wind at 0.15 / 0.64 / 1.6 hPa −2 /
++15 / −35 m/s (+8 / +17 / −31 [+5 / +40 / −29]), the 70-90S cap 211.5 /
+226 / 222 K (216 / 232 / 225 [210 / 226 / 221]), the top six layers'
+largest wind 140 m/s and horizontal Courant number 0.45 (152, 0.49
+[185, 0.59]), vertical 0.09; the 0.64 hPa wind gains 2.8 m/s/day over
+days 112-121. The merge leaves bl36's top as 4a4eb83 had it.
+
+The pre-flight's log read again, least-squares trends over days 1-20,
+21-40 and 41-60 (m/s/day): the 5S-5N wind at 0.15 hPa +1.01, −2.56,
+−2.80; 0.64 hPa +0.96, −0.54, −1.46; 1.6 hPa +0.54, +1.77, −0.38; 3.5
+hPa −0.03, +0.71, +0.90. Over the last ten days the 0.15 hPa wind rises on
+one day only (−86 on day 50, −100 on day 60) and the 0.64 hPa wind on
+none (−16, −27). The
+global means above 30 hPa are flat because the tropics and the winter
+cap cool while the summer cap warms: over days 41-60, 20S-20N −0.35 /
+−0.27 / −0.17 K/day at 0.15 / 0.64 / 1.6 hPa (229.0 → 220.1, 255.0 →
+247.3, 261.8 → 257.0 K from day 20 to day 60; −0.42 / −0.37 / −0.24
+over days 51-60), 70-90S −0.22 / −0.35 / −0.37, 70-90N +0.24 / +0.33 /
++0.46. The 60S wind at 0.15 hPa gains 3.8 m/s/day over days 41-60 and
+5.2 over 51-60 (95 → 146 m/s); the top six layers' largest wind 2.25
+m/s/day over days 31-60 and 4.3 over 51-60; the top layer's horizontal
+Courant number 0.39 on day 50, 0.50 on day 60. The July runs from the
+spun-up state hold the top layer's 5S-5N wind between −25 and −2 m/s;
+the fresh start takes it to −100 by day 60. Verdict: bl36's top is not
+shown safe for a multi-year run from a fresh start. Nothing breaks in 60
+days, but on day 60 the top layer's easterly, the tropical top's cooling,
+the winter jet and the Courant number are all still moving, the last two
+faster over the last ten days than over the twenty before, with the
+solstice 31 days off.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
