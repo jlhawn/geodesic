@@ -1,0 +1,715 @@
+// The heating and the rain of the tropical rain bands by process and layer,
+// on the single-thread CPU engine with the ocean off:
+//   node scripts/tropicalHeating.mjs <state.bin>
+// STEPS (one day) steps from the state; RADIATION, MOIST, BOUNDARY_LAYER and
+// SURFACE (JSON) pass options as to scripts/verticalAudit.mjs. Boxes: the
+// Pacific ITCZ (5-12N 160E-100W, all cells, the audit's), the warm pool
+// (10S-10N 120-170E sea), the SPCZ (20-5S 160E-150W sea) and the north
+// Pacific trades (15-25N 170-130W sea).
+//
+// Every phase of every step is measured in each box column as it runs: the
+// dynamics (the RK4 step, the closure, the kinetic energy returned as heat),
+// the radiation (its longwave from the radiation's own per-layer record, the
+// lowest layer's sensible heat from the bulk formula with the radiation's
+// inputs, the shortwave the rest), the boundary layer's mixing (its change of
+// T_l = T - L q_c/c_p; the cloud it evaporates is counted with the
+// condensation), the moist step, the fusion heat of snow and the dry
+// adjustment. The moist step is replayed column by column on copies with
+// instances of the moist physics built as the model builds its own, and the
+// replay must reproduce the model's columns bit for bit: the uniform
+// condensation, the deep plume (with plumeClosure 'cape', which runs the same
+// deep plume without the shallow one: the latent heat of the rain it makes,
+// the evaporation into its downdraft, and the rest, the two drafts' transport
+// of s_l), the shallow plume (the difference), the condensation after the
+// plumes, the rain's fall and evaporation (a copy of autoconvertColumn that
+// also tags the rain by origin: liquid converted below or above 700 hPa, and
+// falling ice), and the adjustment after the ice fall. The sum of the terms
+// closes on each column's temperature change.
+//
+// Printed: the checks; per box the surface rain by source, the profiles in
+// K/day and W/m2 per layer, the apparent heat source Q1 (all physics) and the
+// moisture sink Q2 with their peaks by layer and over 50 hPa bins; the
+// audit's "firing columns' convective heating peak" over the day (the
+// layer of largest mean convective heating, scripts/verticalAudit.mjs's trace,
+// over the ITCZ column-steps raining more than 1 mm/d of convective rain)
+// with its terms; the deep plume's fate in each box (deck veto, no condensation
+// level, plume topping below 700 hPa, CAPE at most plumeCape, closure or
+// inhibition, fired), its CAPE, inhibition, base flux and top, and the level
+// at which it stops being buoyant against the same plume without entrainment;
+// the plume of the same column under saturation adjustment (condensation
+// 'saturation', from the same total water and liquid-water temperature) and
+// the condensate the uniform condensation forms and converts below 700 hPa in
+// the columns where only that plume fires; and the box's temperature and
+// relative humidity against Jordan's (1958) mean West Indies sounding.
+import { readFileSync } from 'node:fs';
+import { Grid } from '../js/grid.module.js';
+import { topographyFromInt16 } from '../js/geography.module.js';
+import { createModel, STATE_NAMES } from '../js/model.module.js';
+import { decodeState, savedLevels } from '../js/stateFile.module.js';
+import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
+import { createMoistPhysics, MOIST_DEFAULTS, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
+import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
+import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
+import { FREEZING_POINT } from '../js/physics/ice.module.js';
+import { BOXES, inLongitudes } from '../js/audit.module.js';
+
+const FILE = process.argv[2];
+if (!FILE) { console.error('usage: node scripts/tropicalHeating.mjs <state.bin>'); process.exit(1); }
+const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
+const t0 = performance.now();
+const say = (s = '') => console.log(s);
+
+const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
+const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
+const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land, surface } = model;
+const { K, C, levels, sigmaMid, sigmaLower, sigmaUpper, dSigma, R, g, cp, p0, kappa, exnerLayer, exnerLower, geopotential } = core.diagnostics;
+const { thetaV } = core.arrays;
+STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
+seaIce.load(state[6], saved.concentration ?? null);
+for (const field of Object.keys(DECK_FIELDS)) radiation[field].set(savedDeckField(saved, field, model));
+land.load(saved.land, state[6]);
+model.time = saved.time;
+const [pi, theta, , surfaceT, q, qc, ice] = state;
+const deg = 180 / Math.PI, area = mesh.areaCell, landMask = model.geography.land, dt = 1350 * 16 / saved.N, bottom = K - 1;
+const STEPS = Number(process.env.STEPS ?? Math.round(86400 / dt));
+const zs = Float64Array.from({ length: C }, (_, i) => (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0));
+if (saved.boundaryDepth) bl.depth.set(Float64Array.from(saved.boundaryDepth, (z, i) => z + zs[i]));
+if (saved.mixingTop) bl.mixingTop.set(Float64Array.from(saved.mixingTop, (z, i) => z + zs[i]));
+if (saved.boundaryRegime) bl.regime.set(saved.boundaryRegime);
+if (saved.boundaryBuoyancy) bl.buoyancyFlux.set(saved.boundaryBuoyancy);
+
+const O = { ...MOIST_DEFAULTS, ...MOIST };
+if (O.plumeClosure === 'maximum') throw new Error('the deep and shallow split needs plumeClosure separate or cape');
+const L = O.latentHeat;
+const lat = Float64Array.from(mesh.latCell, (x) => x * deg), lon = Float64Array.from(mesh.lonCell, (x) => x * deg);
+const sea = (i) => !landMask[i];
+const BOX_LIST = [
+  ['Pacific ITCZ 5-12N 160E-100W', BOXES.itcz, () => true],
+  ['warm pool 10S-10N 120-170E sea', [-10, 10, 120, 170], sea],
+  ['SPCZ 20-5S 160E-150W sea', [-20, -5, 160, -150], sea],
+  ['N Pacific trades 15-25N 170-130W sea', [15, 25, -170, -130], sea],
+];
+const boxOf = new Int8Array(C).fill(-1);
+for (let i = 0; i < C; i++) BOX_LIST.forEach(([, [s, n, w, e], keep], b) => { if (boxOf[i] < 0 && lat[i] >= s && lat[i] <= n && inLongitudes(lon[i], w, e) && keep(i)) boxOf[i] = b; });
+const traced = [];
+for (let i = 0; i < C; i++) if (boxOf[i] >= 0) traced.push(i);
+const NB = BOX_LIST.length;
+
+const twinOptions = (extra) => ({
+  boundaryDepth: bl.depth, boundaryRegime: bl.regime, deckGate: radiation.mlmGate,
+  boundaryTop: bl.turbulence === 'moist' ? bl.mixingTop : null, stratiform: radiation.stratiform,
+  surfaceBuoyancy: bl.buoyancyFlux, frictionVelocity: bl.friction,
+  ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in RADIATION).map((key) => [key, RADIATION[key]])),
+  ...MOIST, ...extra,
+});
+const replica = createMoistPhysics(mesh, core, twinOptions({}));
+const deepOnly = createMoistPhysics(mesh, core, twinOptions({ plumeClosure: 'cape' }));
+const adjusted = createMoistPhysics(mesh, core, twinOptions({ condensation: 'saturation', plumeClosure: 'cape' }));
+for (const twin of [replica, deepOnly, adjusted]) twin.useSeaIce(seaIce.concentration);
+const boundaryTop = bl.turbulence === 'moist' ? bl.mixingTop : null;
+const gustiness = RADIATION.gustiness ?? 3;
+
+const TERMS = ['dynamics', 'closure', 'dissipation', 'shortwave', 'longwave', 'sensible', 'boundaryLayer', 'condensationMixed', 'condensationUniform', 'deepRain', 'deepDowndraftEvaporation', 'deepTransport', 'shallow', 'recondensation', 'largeScaleEvaporation', 'convectiveEvaporation', 'afterFallPositive', 'afterFallNegative', 'snow', 'dryAdjustment'];
+const SHORT = ['dyn', 'clos', 'diss', 'SW', 'LW', 'sens', 'BL', 'condBL', 'condU', 'dRain', 'dDDev', 'dTrans', 'shal', 'recond', 'LSev', 'CVev', 'fall+', 'fall-', 'snow', 'dry'];
+const DYNAMICS = new Set(['dynamics', 'closure']);
+const T_ = Object.fromEntries(TERMS.map((t, n) => [t, n]));
+const NT = TERMS.length;
+const acc = Array.from({ length: NB }, () => ({
+  heat: new Float64Array(NT * K), energy: new Float64Array(NT * K), total: new Float64Array(K), vapour: new Float64Array(K), pressure: new Float64Array(K), height: new Float64Array(K), areaSteps: 0,
+  temperature: new Float64Array(K), humidity: new Float64Array(K),
+  rain: { deep: 0, shallow: 0, liquidLow: 0, liquidHigh: 0, iceMelted: 0, iceGround: 0, model: 0, modelConvective: 0 },
+  plume: { deck: 0, noLcl: 0, notCloudy: 0, shallowTop: new Float64Array(10), weakCape: 0, weakCapeSum: 0, closed: 0, closedCape: 0, closedInhibition: 0, fired: 0, firedCape: 0, firedInhibition: 0, firedFlux: 0, firedTop: new Float64Array(10), limited: 0, candidateCape: new Float64Array(8), consumption: 0, cloudBase: 0, cloudBaseN: 0,
+    dilute: new Float64Array(10), undilute: new Float64Array(10), diluteN: 0, neverBuoyant: 0, pureNeverBuoyant: 0 },
+  counter: { subcloud: 0, cloudLayer: 0, fires: 0, firesOnly: 0, both: 0, actualOnly: 0, flux: 0, fluxActual: 0, low: new Float64Array(4), lowOnly: new Float64Array(4), temperature: new Float64Array(K), humidity: new Float64Array(K), pressure: new Float64Array(K), weight: 0 },
+}));
+const audit = { conv: new Float64Array(K), pressure: new Float64Array(K), fired: 0, area: 0, parts: new Float64Array(5 * K) };
+const checks = { replicaColumns: 0, replicaMismatch: 0, shadowMismatch: 0, probeChecked: 0, probeMismatch: 0, deepFluxMismatch: 0, traceOff: 0, closure: 0, sensibleGlobal: 0, sensibleModel: 0, precipOff: 0 };
+
+const ex = new Float64Array(K);
+function exnerOf(i, out) {
+  let upper = 0;
+  for (let k = 0; k < K; k++) {
+    const lower = Math.pow(pi[i] * sigmaLower[k] / p0, kappa);
+    out[k] = (lower * sigmaLower[k] - upper * sigmaUpper[k]) / ((1 + kappa) * dSigma[k]);
+    upper = lower;
+  }
+}
+const nT = traced.length;
+const stepStart = new Float64Array(nT * K), mark = new Float64Array(nT * K), markQ = new Float64Array(nT * K), markQc = new Float64Array(nT * K), exTrue = new Float64Array(nT * K);
+const stepHeat = new Float64Array(nT * NT * K), stepVapour = new Float64Array(nT * K);
+const slot = new Int32Array(C).fill(-1);
+traced.forEach((i, n) => { slot[i] = n; });
+function snapshot(n, i) {
+  for (let k = 0; k < K; k++) { const idx = k * C + i; mark[n * K + k] = theta[idx]; markQ[n * K + k] = q[idx]; markQc[n * K + k] = qc[idx]; }
+}
+function charge(n, i, term) {
+  for (let k = 0; k < K; k++) {
+    const idx = k * C + i, s = n * K + k;
+    stepHeat[(n * NT + T_[term]) * K + k] += (theta[idx] - mark[s]) * exTrue[s];
+    if (!DYNAMICS.has(term)) stepVapour[s] += q[idx] - markQ[s];
+    mark[s] = theta[idx]; markQ[s] = q[idx]; markQc[s] = qc[idx];
+  }
+}
+const add = (n, term, k, dT) => { stepHeat[(n * NT + T_[term]) * K + k] += dT; };
+
+const physicsPhase = phases.physics, closurePhase = phases.closure, dissipatePhase = phases.dissipate, oceanPhase = phases.ocean;
+const mixColumn = bl.mixColumn, moistAdjust = moist.adjust, dryAdjust = surface.convectiveAdjustment;
+phases.ocean = (...args) => {
+  traced.forEach((i, n) => {
+    exnerOf(i, ex);
+    for (let k = 0; k < K; k++) { const s = n * K + k; exTrue[s] = ex[k]; stepHeat[(n * NT + T_.dynamics) * K + k] += theta[k * C + i] * ex[k] - stepStart[s]; mark[s] = theta[k * C + i]; markQ[s] = q[k * C + i]; markQc[s] = qc[k * C + i]; }
+  });
+  oceanPhase(...args);
+};
+const staleExner = new Float64Array(nT * K), physicsAir = new Float64Array(C), physicsSurface = new Float64Array(C), physicsExner = new Float64Array(C);
+phases.physics = (iFrom, iTo, step, sums) => {
+  for (let i = 0; i < C; i++) { physicsExner[i] = exnerLayer[bottom * C + i]; physicsAir[i] = theta[bottom * C + i] * physicsExner[i]; physicsSurface[i] = surfaceT[i]; }
+  traced.forEach((i, n) => { for (let k = 0; k < K; k++) staleExner[n * K + k] = exnerLayer[k * C + i]; });
+  const iceBefore = Float64Array.from(ice);
+  physicsPhase(iFrom, iTo, step, sums);
+  let sensibleSum = 0;
+  const sensibleOf = (i) => {
+    let skin = physicsSurface[i];
+    if (!landMask[i]) { const h = iceBefore[i], cover = seaIce.cover(i, h); if (h > 0 && cover < 1) skin = cover * physicsSurface[i] + (1 - cover) * FREEZING_POINT; }
+    const density = pi[i] * sigmaMid[bottom] / (R * physicsAir[i]);
+    const drag = landMask[i] ? LAND_DRAG : SURFACE.dragCoefficient ?? SEA_DRAG;
+    return density * drag * Math.max(surface.windSpeed[i], gustiness) * cp * (skin - physicsAir[i]);
+  };
+  for (let i = 0; i < C; i++) sensibleSum += area[i] * sensibleOf(i);
+  checks.sensibleGlobal = sensibleSum; checks.sensibleModel = sums.sensibleHeat;
+  traced.forEach((i, n) => {
+    const ratio = (k) => exTrue[n * K + k] / staleExner[n * K + k];
+    for (let k = 0; k < K; k++) {
+      const s = n * K + k, mass = pi[i] * dSigma[k] / g, total = (theta[k * C + i] - mark[s]) * exTrue[s];
+      const longwave = radiation.longwave[k * C + i] * step / (cp * mass) * ratio(k);
+      const sensible = k === bottom ? sensibleOf(i) * step / (cp * mass) * ratio(k) : 0;
+      add(n, 'longwave', k, longwave); add(n, 'sensible', k, sensible); add(n, 'shortwave', k, total - longwave - sensible);
+      stepVapour[s] += q[k * C + i] - markQ[s];
+      mark[s] = theta[k * C + i]; markQ[s] = q[k * C + i]; markQc[s] = qc[k * C + i];
+    }
+  });
+};
+phases.closure = (...args) => { closurePhase(...args); traced.forEach((i, n) => charge(n, i, 'closure')); };
+phases.dissipate = (...args) => { dissipatePhase(...args); traced.forEach((i, n) => charge(n, i, 'dissipation')); };
+const preMixQc = new Float64Array(nT * K), mixedPhase = new Float64Array(nT * K);
+bl.mixColumn = (i, piArray, thetaArray, qArray, qcArray, step) => {
+  const n = slot[i];
+  if (n >= 0) for (let k = 0; k < K; k++) preMixQc[n * K + k] = qc[k * C + i];
+  mixColumn(i, piArray, thetaArray, qArray, qcArray, step);
+  if (n < 0) return;
+  for (let k = 0; k < K; k++) {
+    const s = n * K + k, idx = k * C + i, dT = (theta[idx] - mark[s]) * exTrue[s], phase = L / cp * (qc[idx] - markQc[s]);
+    add(n, 'boundaryLayer', k, dT - phase); mixedPhase[n * K + k] += phase;
+    stepVapour[s] += q[idx] - markQ[s];
+    mark[s] = theta[idx]; markQ[s] = q[idx]; markQc[s] = qc[idx];
+  }
+};
+surface.convectiveAdjustment = (piArray, thetaArray, iFrom, iTo, qArray, qcArray) => {
+  traced.forEach((i, n) => charge(n, i, 'snow'));
+  dryAdjust(piArray, thetaArray, iFrom, iTo, qArray, qcArray);
+  traced.forEach((i, n) => charge(n, i, 'dryAdjustment'));
+};
+
+const scratch = Array.from({ length: 4 }, () => ({ theta: new Float64Array(K * C), q: new Float64Array(K * C), qc: new Float64Array(K * C) }));
+function copyColumn(i, from, to) { for (let k = 0; k < K; k++) { const idx = k * C + i; to.theta[idx] = from.theta[idx]; to.q[idx] = from.q[idx]; to.qc[idx] = from.qc[idx]; } }
+const live = { theta, q, qc };
+const columnT = new Float64Array(K), columnQ = new Float64Array(K), columnQc = new Float64Array(K);
+function hold(i, s) { for (let k = 0; k < K; k++) { const idx = k * C + i; columnT[k] = s.theta[idx]; columnQ[k] = s.q[idx]; columnQc[k] = s.qc[idx]; } }
+function heated(i, s, n, term) {
+  for (let k = 0; k < K; k++) {
+    const idx = k * C + i, dT = (s.theta[idx] - columnT[k]) * exnerLayer[idx];
+    add(n, term, k, dT);
+    columnT[k] = s.theta[idx]; columnQ[k] = s.q[idx]; columnQc[k] = s.qc[idx];
+  }
+}
+const saturated = { qs: 0, slope: 0, liquid: 1 };
+const saturation = (T, p) => cloudSaturation(T, p, O.iceSaturation, O.liquidTemperature, O.iceTemperature, saturated);
+const halfWidth = (p, ps) => (1 - criticalHumidityAt(p, ps, O.surfaceCriticalHumidity, O.topCriticalHumidity, O.criticalExponent)) * saturated.qs / (1 + L * saturated.slope / cp);
+const upperInterface = (i, k) => (geopotential[k * C + i] + cp * thetaV[k * C + i] * (exnerLayer[k * C + i] - exnerLower[(k - 1) * C + i])) / g;
+function longCloudShare(twin, i, k, iced) {
+  if (twin.cumulusBaseFlux[i] > 0 && pi[i] * sigmaMid[k] >= twin.cumulusTop[i]) return 0;
+  let share = 0;
+  if (boundaryTop !== null) {
+    if (!(geopotential[k * C + i] / g < boundaryTop[i])) share = radiation.stratiform[i];
+    else if (bl.regime[i] === COUPLED_REGIME) share = 1;
+  }
+  return Math.max(share, iced);
+}
+const fall = { evaporated: new Float64Array(K), convective: new Float64Array(K), converted: new Float64Array(K), melted: new Float64Array(K), tags: { low: 0, high: 0, ice: 0 }, ground: 0, rain: 0, streamed: 0, convectiveLeft: 0 };
+const reserve = new Float64Array(K);
+function shadowFall(twin, i, s, stream, iced) {
+  const th = s.theta, qq = s.q, cc = s.qc;
+  fall.evaporated.fill(0); fall.convective.fill(0); fall.converted.fill(0); fall.melted.fill(0);
+  const tags = fall.tags; tags.low = 0; tags.high = 0; tags.ice = 0;
+  let rain = 0, convective = 0, streamed = 0, descending = 0;
+  const floor = O.autoconversionFloor === 'boundaryLayer' && bl.depth ? bl.depth[i] : null;
+  for (let k = 0; k < K; k++) {
+    const idx = k * C + i;
+    if (rain > 0 && (O.evaporationInCloud || !(cc[idx] > CLEAR_AIR)) && O.rainEvaporation > 0) {
+      const exl = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;
+      const temperature = th[idx] * exl;
+      const qs = O.iceSaturation ? saturation(temperature, pi[i] * sigmaMid[k]).qs : saturationHumidity(temperature, pi[i] * sigmaMid[k]);
+      const slope = O.iceSaturation ? saturated.slope : qs * L / (R_VAPOR * temperature * temperature);
+      const deficit = Math.max(0, (qs - qq[idx]) / (1 + L * slope / cp)) * mass;
+      const evaporated = Math.min(rain, O.rainEvaporation * deficit);
+      if (evaporated > 0) {
+        const before = rain;
+        rain = Math.max(0, rain - evaporated);
+        const keep = before > 0 ? rain / before : 0;
+        tags.low *= keep; tags.high *= keep; tags.ice *= keep;
+        fall.evaporated[k] += evaporated;
+        qq[idx] += evaporated / mass;
+        th[idx] -= L * evaporated / (mass * cp * exl);
+      }
+    }
+    if (stream) {
+      convective = Math.max(0, convective + stream[k]);
+      const spare = convective - reserve[k];
+      if (spare > 0 && k > twin.deep.base && O.plumeRainEvaporation > 0 && O.rainEvaporation > 0 && (O.evaporationInCloud || !(cc[idx] > CLEAR_AIR))) {
+        const exl = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;
+        const temperature = th[idx] * exl;
+        const qs = saturationHumidity(temperature, pi[i] * sigmaMid[k]);
+        const slope = qs * L / (R_VAPOR * temperature * temperature);
+        const airborne = -convective * Math.expm1(-O.plumeRainEvaporation * Math.max(0, 1 - qq[idx] / qs) * R * temperature * dSigma[k] / (sigmaMid[k] * g));
+        const evaporated = Math.min(spare, airborne, O.rainEvaporation * Math.max(0, (qs - qq[idx]) / (1 + L * slope / cp)) * mass);
+        if (evaporated > 0) {
+          convective -= evaporated;
+          streamed += evaporated;
+          fall.convective[k] += evaporated;
+          qq[idx] += evaporated / mass;
+          th[idx] -= L * evaporated / (mass * cp * exl);
+        }
+      }
+    }
+    let liquid = cc[idx];
+    if (O.iceFall !== null) {
+      const mass = pi[i] * dSigma[k] / g;
+      if (descending > 0) {
+        const melted = descending * liquidFraction(th[idx] * exnerLayer[idx], O.liquidTemperature, O.iceTemperature);
+        cc[idx] += (descending - melted) / mass;
+        rain += melted;
+        tags.ice += melted;
+        fall.melted[k] += melted;
+        descending = 0;
+      }
+      liquid = cc[idx];
+      if (cc[idx] > 0) {
+        const temperature = th[idx] * exnerLayer[idx], pressure = pi[i] * sigmaMid[k];
+        const share = liquidFraction(temperature, O.liquidTemperature, O.iceTemperature), iceWater = (1 - share) * cc[idx];
+        liquid = share * cc[idx];
+        if (iceWater > 0) {
+          saturation(temperature, pressure);
+          const cover = Math.max(CLEAR_AIR, uniformCover(cc[idx], halfWidth(pressure, pi[i])));
+          const speed = O.iceFall * Math.pow(pressure / (R * temperature) * iceWater / cover, O.iceFallExponent);
+          const courant = speed * dt * sigmaMid[k] * g / (R * temperature * dSigma[k]), leaving = iceWater * courant / (1 + courant);
+          cc[idx] -= leaving;
+          descending = leaving * mass;
+        }
+      }
+    }
+    if (!(cc[idx] > 0)) continue;
+    if (O.autoconversionFloor !== 'none' && (floor === null ? k >= K - 2 : k > 0 && upperInterface(i, k) < floor)) continue;
+    const excess = Math.max(0, liquid - O.autoconversionThreshold);
+    let lifetime = O.upperCloudLifetime !== null && pi[i] * sigmaMid[k] < O.shallowTop ? O.upperCloudLifetime : O.cloudLifetime;
+    if (O.stratiformLifetime !== null) lifetime += longCloudShare(twin, i, k, iced) * (O.stratiformLifetime - lifetime);
+    const converted = Math.min(liquid, excess * (1 - Math.exp(-O.autoconversionRate * dt)) + liquid * (1 - Math.exp(-dt / lifetime)));
+    cc[idx] -= converted;
+    const made = pi[i] * dSigma[k] / g * converted;
+    rain += made;
+    fall.converted[k] += made;
+    if (pi[i] * sigmaMid[k] > 700e2) tags.low += made; else tags.high += made;
+  }
+  fall.ground = descending; fall.rain = rain; fall.streamed = streamed; fall.convectiveLeft = convective;
+  return rain + descending;
+}
+
+// The deep plume's ascent as plumeColumn makes it, with where it stops being
+// buoyant, and the same plume without entrainment.
+const env = { T: new Float64Array(K), p: new Float64Array(K), dp: new Float64Array(K), z: new Float64Array(K), s: new Float64Array(K), q: new Float64Array(K) };
+const plumeAir = { T: 0, liquid: 0 };
+function saturatedTemperature(energy, pressure, guess) {
+  let t = guess;
+  for (let n = 0; n < 4; n++) {
+    const qs = saturationHumidity(t, pressure);
+    t -= (cp * t + L * qs - energy) / (cp + L * L * qs / (R_VAPOR * t * t));
+  }
+  return t;
+}
+function plumeState(energy, water, height, pressure, guess) {
+  const dry = (energy - g * height) / cp;
+  if (!(water > saturationHumidity(dry, pressure))) { plumeAir.T = dry; plumeAir.liquid = 0; return; }
+  const t = saturatedTemperature(energy - g * height + L * water, pressure, Math.max(dry, guess));
+  plumeAir.T = t;
+  plumeAir.liquid = Math.max(0, water - saturationHumidity(t, pressure));
+}
+const ramp = (x) => Math.min(1, Math.max(0, x));
+function ascend(i, s, entraining) {
+  const { T, p, dp, z } = env, envS = env.s, envQ = env.q;
+  const bottomK = K - 1, depthBL = bl.depth[i];
+  let mass = 0, energy = 0, water = 0, source = bottomK;
+  for (let k = bottomK; k >= 0; k--) {
+    if (k < bottomK && ((!(upperInterface(i, k + 1) < depthBL) && !(p[k] >= pi[i] - O.cumulusSourceDepth)) || !(p[k] > O.shallowTop))) break;
+    mass += dp[k]; energy += dp[k] * envS[k]; water += dp[k] * envQ[k]; source = k;
+  }
+  const sourceS = O.plumeSource === 'lowest' ? envS[bottomK] : energy / mass, sourceQ = O.plumeSource === 'lowest' ? envQ[bottomK] : water / mass;
+  const lcl = liftingCondensationLevel((sourceS - g * z[bottomK]) / cp, sourceQ, p[bottomK], kappa);
+  if (!lcl || !(lcl.pressure > pi[i] * levels[1])) return { status: 'noLcl' };
+  const virtual = O.virtualBuoyancy ? VIRTUAL_FACTOR : 0, loading = O.virtualBuoyancy ? 1 : 0;
+  let sp = sourceS, wq = sourceQ, w2 = 0, below = 0, inhibition = 0, cloudy = false, started = false, top = -1, guess = 0, cape = 0, base = -1, unbuoyant = NaN, buoyant = false;
+  for (let k = source - 1; k >= 0; k--) {
+    const lower = upperInterface(i, k + 1), upper = k > 0 ? upperInterface(i, k) : Infinity, depth = upper - lower;
+    const mixes = pi[i] * levels[k + 1] <= lcl.pressure;
+    if (mixes && !started) { started = true; base = k + 1; w2 = O.plumeVelocity * O.plumeVelocity; }
+    const epsilon = !entraining ? 0 : mixes ? Math.max(O.plumeEntrainmentFloor, O.plumeEntrainment * Math.max(0, below) / w2) : 0;
+    const half = Math.exp(-epsilon * (z[k] - lower));
+    const midS = envS[k] + (sp - envS[k]) * half, midQ = envQ[k] + (wq - envQ[k]) * half;
+    plumeState(midS, midQ, z[k], p[k], guess);
+    guess = plumeAir.T;
+    const idx = k * C + i, air = Math.max(0, s.q[idx]), cloud = Math.max(0, s.qc[idx]);
+    const environment = T[k] * (1 + virtual * air - loading * cloud), rising = plumeAir.T * (1 + virtual * (midQ - plumeAir.liquid) - loading * plumeAir.liquid);
+    let work = R * (rising - environment) * dp[k] / p[k];
+    const buoyancy = g * (rising - environment) / environment;
+    if (plumeAir.liquid > 0) cloudy = true;
+    if (!cloudy && work < 0) inhibition -= work;
+    if (cloudy && buoyancy > 0) buoyant = true;
+    else if (buoyant && !Number.isFinite(unbuoyant)) unbuoyant = p[k];
+    if (O.plumeCapeParcel === 'undilute' && entraining) {
+      plumeState(sourceS, sourceQ, z[k], p[k], plumeAir.T);
+      work = R * (plumeAir.T * (1 + virtual * (sourceQ - plumeAir.liquid)) - environment) * dp[k] / p[k];
+    }
+    if (mixes) {
+      if (!(depth < Infinity)) { top = k; break; }
+      const x = 2 * O.plumeDrag * epsilon * depth, decay = Math.exp(-x);
+      w2 = w2 * decay + 2 * O.plumeAcceleration * buoyancy * depth * (x > 0 ? -Math.expm1(-x) / x : 1);
+      if (!(w2 > 0)) { top = k; break; }
+    }
+    if (cloudy && work > 0) cape += work;
+    below = buoyancy;
+    const full = Math.exp(-epsilon * depth);
+    sp = envS[k] + (sp - envS[k]) * full; wq = envQ[k] + (wq - envQ[k]) * full;
+    if (mixes) {
+      plumeState(sp, wq, upper, pi[i] * levels[k], guess);
+      const excess = plumeAir.liquid - O.plumeRainThreshold;
+      if (excess > 0) { const fallen = -excess * Math.expm1(-O.plumeRainRate * depth); wq -= fallen; sp += L * fallen; }
+    }
+  }
+  if (top === 0) top = 1;
+  const deepTop = cloudy && top >= 1 && levels[top] * DEEP_REFERENCE < O.shallowTop;
+  return { status: !cloudy ? 'notCloudy' : deepTop ? 'candidate' : 'shallow', source, top, cape, inhibition, lclPressure: lcl.pressure, base, buoyant, unbuoyant, topPressure: top >= 0 ? pi[i] * levels[top] : NaN };
+}
+function fillEnvironment(i, s) {
+  for (let k = 0; k < K; k++) {
+    const idx = k * C + i, cloud = Math.max(0, s.qc[idx]);
+    env.T[k] = s.theta[idx] * exnerLayer[idx]; env.p[k] = pi[i] * sigmaMid[k]; env.dp[k] = pi[i] * dSigma[k]; env.z[k] = geopotential[idx] / g;
+    env.s[k] = cp * env.T[k] + g * env.z[k] - L * cloud; env.q[k] = Math.max(0, s.q[idx]) + cloud;
+  }
+}
+const openOf = (i) => (O.deckVeto ? ramp((DECK_CLOSED - radiation.mlmGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (O.coupledVeto && bl.regime[i] === COUPLED_REGIME ? 0 : 1);
+const bin100 = (p) => Math.min(9, Math.max(0, Math.floor(p / 100e2)));
+
+const deepHeat = new Float64Array(K), lsCondensed = new Float64Array(K), uniformLayer = new Uint8Array(K);
+moist.trace.convection = new Float64Array(K * C);
+moist.trace.largeScale = new Float64Array(K * C);
+const before = { precipitation: new Float64Array(C), convective: new Float64Array(C) };
+const replayed = Array.from({ length: nT }, () => ({ theta: new Float64Array(K), q: new Float64Array(K), qc: new Float64Array(K), rained: 0, convected: 0 }));
+moist.adjust = (st, iFrom, iTo, step) => {
+  const [sa, sb, sc, sd] = scratch;
+  traced.forEach((i, n) => {
+    const b = boxOf[i], A = acc[b], a = area[i];
+    copyColumn(i, live, sa);
+    copyColumn(i, live, sd);
+    core.diagnoseColumn(i, pi, sa.theta, sa.q, sa.qc);
+    hold(i, sa);
+    replica.condenseColumn(i, pi, sa.theta, sa.q, sa.qc);
+    for (let k = 0; k < K; k++) {
+      const idx = k * C + i, below = boundaryTop !== null && geopotential[idx] / g < boundaryTop[i];
+      lsCondensed[k] = sa.qc[idx] - columnQc[k];
+      uniformLayer[k] = O.condensation === 'uniform' && !below ? 1 : 0;
+      add(n, uniformLayer[k] ? 'condensationUniform' : 'condensationMixed', k, (sa.theta[idx] - columnT[k]) * exnerLayer[idx] + mixedPhase[n * K + k]);
+      mixedPhase[n * K + k] = 0;
+      columnT[k] = sa.theta[idx]; columnQ[k] = sa.q[idx]; columnQc[k] = sa.qc[idx];
+    }
+    copyColumn(i, sa, sb);
+    fillEnvironment(i, sa);
+    const open = openOf(i);
+    const dilute = open > 0 ? ascend(i, sa, true) : { status: 'deck' };
+    const pure = dilute.status !== 'deck' && dilute.status !== 'noLcl' ? ascend(i, sa, false) : null;
+    deepOnly.plumeColumn(i, pi, sb.theta, sb.q, sb.qc, step);
+    for (let k = 0; k < K; k++) deepHeat[k] = deepOnly.deep.deep ? (sb.theta[k * C + i] - sa.theta[k * C + i]) * exnerLayer[k * C + i] : 0;
+    const produced = replica.plumeColumn(i, pi, sa.theta, sa.q, sa.qc, step);
+    const deep = replica.deep.deep;
+    if (deep !== deepOnly.deep.deep || (deep && replica.deep.baseFlux !== deepOnly.deep.baseFlux)) checks.deepFluxMismatch++;
+    if (deep) {
+      const baseFlux = deepOnly.deep.baseFlux;
+      for (let k = 0; k < K; k++) {
+        const mass = pi[i] * dSigma[k] / g, made = k > deepOnly.deep.top && k < dilute.source ? deepOnly.cumulusFlux[k] * deepOnly.plumeRain[k] * baseFlux * step : 0;
+        const evaporated = made - deepOnly.convectiveFall[k];
+        add(n, 'deepRain', k, L * made / (cp * mass));
+        add(n, 'deepDowndraftEvaporation', k, -L * evaporated / (cp * mass));
+        add(n, 'deepTransport', k, deepHeat[k] - L * (made - evaporated) / (cp * mass));
+      }
+    }
+    for (let k = 0; k < K; k++) {
+      const idx = k * C + i, dT = (sa.theta[idx] - columnT[k]) * exnerLayer[idx];
+      add(n, 'shallow', k, dT - deepHeat[k]);
+      columnT[k] = sa.theta[idx]; columnQ[k] = sa.q[idx]; columnQc[k] = sa.qc[idx];
+    }
+    if (replica.cumulusBaseFlux[i] > 0) { replica.condenseColumn(i, pi, sa.theta, sa.q, sa.qc); heated(i, sa, n, 'recondensation'); }
+    const iced = ice && ice[i] > 0 ? (seaIce.concentration[i] > 0 ? seaIce.concentration[i] : 1) : 0;
+    const stream = deep ? replica.convectiveFall : null;
+    reserve.fill(0);
+    if (deep) for (let k = K - 2; k >= 0; k--) reserve[k] = Math.max(0, reserve[k + 1] - replica.convectiveFall[k + 1]);
+    copyColumn(i, sa, sc);
+    const shadowRained = shadowFall(replica, i, sc, stream ? Float64Array.from(stream) : null, iced);
+    const rained = replica.autoconvertColumn(i, pi, sa.theta, sa.q, sa.qc, step, stream, iced);
+    let differs = shadowRained !== rained;
+    for (let k = 0; k < K && !differs; k++) { const idx = k * C + i; if (sc.theta[idx] !== sa.theta[idx] || sc.q[idx] !== sa.q[idx] || sc.qc[idx] !== sa.qc[idx]) differs = true; }
+    if (differs) checks.shadowMismatch++;
+    for (let k = 0; k < K; k++) {
+      const mass = pi[i] * dSigma[k] / g;
+      add(n, 'largeScaleEvaporation', k, -L * fall.evaporated[k] / (cp * mass));
+      add(n, 'convectiveEvaporation', k, -L * fall.convective[k] / (cp * mass));
+    }
+    hold(i, sa);
+    const convected = deep ? replica.falling.convective + replica.deep.shallowRain : produced;
+    if (replica.falling.moved) {
+      replica.condenseColumn(i, pi, sa.theta, sa.q, sa.qc);
+      for (let k = 0; k < K; k++) { const idx = k * C + i, dT = (sa.theta[idx] - columnT[k]) * exnerLayer[idx]; add(n, dT > 0 ? 'afterFallPositive' : 'afterFallNegative', k, dT); }
+    }
+    replica.fillColumn(i, pi, sa.q);
+    replica.fillColumn(i, pi, sa.qc);
+    const out = replayed[n];
+    for (let k = 0; k < K; k++) { const idx = k * C + i; out.theta[k] = sa.theta[idx]; out.q[k] = sa.q[idx]; out.qc[k] = sa.qc[idx]; }
+    out.rained = rained; out.convected = convected;
+    A.rain.deep += a * (deep ? replica.falling.convective : 0);
+    A.rain.shallow += a * (deep ? replica.deep.shallowRain : produced);
+    A.rain.liquidLow += a * fall.tags.low; A.rain.liquidHigh += a * fall.tags.high; A.rain.iceMelted += a * fall.tags.ice; A.rain.iceGround += a * fall.ground;
+
+    const P = A.plume;
+    if (dilute.status === 'deck') P.deck += a;
+    else if (dilute.status === 'noLcl') P.noLcl += a;
+    else if (dilute.status === 'notCloudy') P.notCloudy += a;
+    else if (dilute.status === 'shallow') P.shallowTop[bin100(dilute.topPressure)] += a;
+    if (dilute.lclPressure) { P.cloudBase += a * dilute.lclPressure; P.cloudBaseN += a; }
+    if (dilute.status === 'candidate' || dilute.status === 'shallow') {
+      P.diluteN += a;
+      if (dilute.buoyant) P.dilute[bin100(Number.isFinite(dilute.unbuoyant) ? dilute.unbuoyant : dilute.topPressure)] += a; else P.neverBuoyant += a;
+      if (pure && pure.buoyant) P.undilute[bin100(Number.isFinite(pure.unbuoyant) ? pure.unbuoyant : pure.topPressure)] += a; else P.pureNeverBuoyant += a;
+    }
+    if (dilute.status === 'candidate') {
+      checks.probeChecked++;
+      const d = deepOnly.deep;
+      if (d.top !== dilute.top || d.cape !== dilute.cape || d.inhibition !== dilute.inhibition) checks.probeMismatch++;
+      P.candidateCape[Math.min(7, Math.floor(d.cape / 60))] += a;
+      if (d.deep) {
+        P.fired += a; P.firedCape += a * d.cape; P.firedInhibition += a * d.inhibition; P.firedFlux += a * d.baseFlux; P.firedTop[bin100(dilute.topPressure)] += a; P.consumption += a * d.consumption;
+        const relaxed = d.consumption > 0 && d.cape > O.plumeCape ? (d.cape - O.plumeCape) / (O.plumeRelaxation * d.consumption) : 0;
+        const gate = ramp(0.5 + (O.inhibitionThreshold - d.inhibition) / Math.max(1, O.inhibitionThreshold));
+        if (d.baseFlux < open * gate * relaxed * (1 - 1e-12)) P.limited += a;
+      } else if (d.cape <= O.plumeCape) { P.weakCape += a; P.weakCapeSum += a * d.cape; }
+      else { P.closed += a; P.closedCape += a * d.cape; P.closedInhibition += a * d.inhibition; }
+    }
+
+    const Q = A.counter;
+    adjusted.condenseColumn(i, pi, sd.theta, sd.q, sd.qc);
+    adjusted.plumeColumn(i, pi, sd.theta, sd.q, sd.qc, step);
+    const counterFires = adjusted.deep.deep;
+    const low = [0, 0, 0, 0];
+    for (let k = 0; k < K; k++) {
+      if (!(pi[i] * sigmaMid[k] > 700e2)) continue;
+      const mass = pi[i] * dSigma[k] / g, u = uniformLayer[k] ? 0 : 2;
+      low[u] += (uniformLayer[k] ? lsCondensed[k] : lsCondensed[k] + markQc[n * K + k] - preMixQc[n * K + k]) * mass;
+      low[u + 1] += fall.converted[k];
+    }
+    for (let m = 0; m < 4; m++) Q.low[m] += a * low[m];
+    if (dilute.lclPressure) for (let k = 0; k < K; k++) {
+      if (!uniformLayer[k] || !(lsCondensed[k] > 0)) continue;
+      const pk = pi[i] * sigmaMid[k], water = lsCondensed[k] * pi[i] * dSigma[k] / g;
+      if (pk > dilute.lclPressure) Q.subcloud += a * water; else if (pk > 700e2) Q.cloudLayer += a * water;
+    }
+    if (counterFires) { Q.fires += a; Q.flux += a * adjusted.deep.baseFlux; }
+    if (deep) Q.fluxActual += a * replica.deep.baseFlux;
+    if (counterFires && deep) Q.both += a;
+    if (deep && !counterFires) Q.actualOnly += a;
+    if (counterFires && !deep) {
+      Q.firesOnly += a; Q.weight += a;
+      for (let m = 0; m < 4; m++) Q.lowOnly[m] += a * low[m];
+      for (let k = 0; k < K; k++) {
+        const idx = k * C + i, T = live.theta[idx] * exnerLayer[idx], p = pi[i] * sigmaMid[k];
+        Q.temperature[k] += a * T; Q.humidity[k] += a * Math.max(0, live.q[idx]) / saturationHumidity(T, p); Q.pressure[k] += a * p;
+      }
+    }
+  });
+  traced.forEach((i) => { before.precipitation[i] = moist.precipitation[i]; before.convective[i] = moist.convectivePrecipitation[i]; });
+  moist.trace.convection.fill(0); moist.trace.largeScale.fill(0);
+  moistAdjust(st, iFrom, iTo, step);
+  traced.forEach((i, n) => {
+    const out = replayed[n];
+    checks.replicaColumns++;
+    let differs = false;
+    for (let k = 0; k < K; k++) { const idx = k * C + i; if (out.theta[k] !== theta[idx] || out.q[k] !== q[idx] || out.qc[k] !== qc[idx]) differs = true; }
+    if (differs) checks.replicaMismatch++;
+    const fell = moist.precipitation[i] - before.precipitation[i];
+    if (Math.abs(fell - (out.rained + out.convected)) > 1e-12 * Math.max(1, fell)) checks.precipOff++;
+    const b = boxOf[i], a = area[i];
+    acc[b].rain.model += a * fell; acc[b].rain.modelConvective += a * (moist.convectivePrecipitation[i] - before.convective[i]);
+    let traceSum = 0, partsSum = 0;
+    for (let k = 0; k < K; k++) {
+      const s = (n * NT) * K;
+      const parts = ['deepRain', 'deepDowndraftEvaporation', 'deepTransport', 'shallow', 'convectiveEvaporation'].reduce((x, t) => x + stepHeat[s + T_[t] * K + k], 0);
+      traceSum += Math.abs(moist.trace.convection[k * C + i]); partsSum += Math.abs(moist.trace.convection[k * C + i] - parts);
+    }
+    if (partsSum > 1e-9 * Math.max(1, traceSum)) checks.traceOff++;
+    if (b === 0) {
+      const fired = (moist.convectivePrecipitation[i] - before.convective[i]) * 86400 / step > 1;
+      audit.area += a;
+      if (fired) audit.fired += a;
+      for (let k = 0; k < K; k++) {
+        audit.pressure[k] += a * pi[i] * sigmaMid[k];
+        if (!fired) continue;
+        audit.conv[k] += a * moist.trace.convection[k * C + i];
+        const s = (n * NT) * K;
+        ['deepRain', 'deepDowndraftEvaporation', 'deepTransport', 'shallow', 'convectiveEvaporation'].forEach((t, m) => { audit.parts[m * K + k] += a * stepHeat[s + T_[t] * K + k]; });
+      }
+    }
+    for (let k = 0; k < K; k++) { const s = n * K + k, idx = k * C + i; stepVapour[s] += q[idx] - markQ[s]; mark[s] = theta[idx]; markQ[s] = q[idx]; markQc[s] = qc[idx]; }
+  });
+};
+
+model.restartPrecipitation();
+for (let step = 0; step < STEPS; step++) {
+  stepHeat.fill(0); stepVapour.fill(0);
+  traced.forEach((i, n) => {
+    exnerOf(i, ex);
+    const b = boxOf[i], A = acc[b], a = area[i];
+    for (let k = 0; k < K; k++) {
+      const idx = k * C + i, T = theta[idx] * ex[k], p = pi[i] * sigmaMid[k];
+      stepStart[n * K + k] = T;
+      A.temperature[k] += a * T; A.humidity[k] += a * Math.max(0, q[idx]) / saturationHumidity(T, p);
+    }
+  });
+  model.step(dt);
+  traced.forEach((i, n) => {
+    exnerOf(i, ex);
+    const b = boxOf[i], A = acc[b], a = area[i];
+    A.areaSteps += a;
+    for (let k = 0; k < K; k++) {
+      const idx = k * C + i, s = n * K + k, mass = pi[i] * dSigma[k] / g, total = theta[idx] * ex[k] - stepStart[s];
+      let sum = 0;
+      for (let t = 0; t < NT; t++) {
+        const dT = stepHeat[(n * NT + t) * K + k];
+        sum += dT;
+        A.heat[t * K + k] += a * dT;
+        A.energy[t * K + k] += a * cp * mass * dT;
+      }
+      checks.closure = Math.max(checks.closure, Math.abs(sum - total));
+      A.total[k] += a * total;
+      A.vapour[k] += a * stepVapour[s];
+      A.pressure[k] += a * pi[i] * sigmaMid[k];
+      A.height[k] += a * (geopotential[idx] / g - zs[i]);
+    }
+  });
+  if ((step + 1) % 32 === 0) console.error(`step ${step + 1} of ${STEPS} (${((performance.now() - t0) / 1000).toFixed(0)} s)`);
+}
+
+const f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : 'n/a');
+const globalArea = area.reduce((x, y) => x + y, 0);
+const perDay = 86400 / dt;
+say(`tropical heating of ${FILE.split('/').pop()}: day ${saved.day}, N=${saved.N}, K=${K}; CPU, ocean off; ${STEPS} steps of ${dt} s${Object.keys(MOIST).length ? `; MOIST ${JSON.stringify(MOIST)}` : ''}${Object.keys(RADIATION).length ? `; RADIATION ${JSON.stringify(RADIATION)}` : ''}${Object.keys(BOUNDARY_LAYER).length ? `; BOUNDARY_LAYER ${JSON.stringify(BOUNDARY_LAYER)}` : ''}${Object.keys(SURFACE).length ? `; SURFACE ${JSON.stringify(SURFACE)}` : ''}`);
+say(`checks: the replayed moist step differs from the model's in ${checks.replicaMismatch} of ${checks.replicaColumns} column-steps (precipitation in ${checks.precipOff}); the copy of the rain's fall in ${checks.shadowMismatch}; the deep-only plume's base flux in ${checks.deepFluxMismatch}; the probe's top, CAPE or inhibition in ${checks.probeMismatch} of ${checks.probeChecked} candidates; the convective trace against its terms in ${checks.traceOff}; the terms close on the temperature change to ${checks.closure.toExponential(1)} K a step; last step's global sensible heat ${f(checks.sensibleGlobal / globalArea, 4)} against the model's ${f(checks.sensibleModel / globalArea, 4)} W/m2`);
+const jordan = [[1015, 26.3, 18.9], [1000, 25.4, 18.4], [950, 22.2, 16.6], [900, 19.6, 14.4], [850, 17.3, 12.4], [800, 14.8, 10.5], [750, 12.0, 8.8], [700, 8.9, 7.4], [650, 5.6, 6.0], [600, 1.8, 4.7], [550, -2.3, 3.6], [500, -6.9, 2.6], [450, -11.9, 1.8], [400, -17.3, 1.2], [350, -24.4, 0.66], [300, -32.4, 0.35], [250, -42.1, 0.14], [200, -54.0, 0.04], [175, -60.2, 0.02], [150, -67.2, 0.01], [125, -73.0, 0.005], [100, -73.3, 0.003]];
+function jordanAt(p) {
+  const hPa = p / 100;
+  if (hPa >= jordan[0][0] || hPa < jordan[jordan.length - 1][0]) return null;
+  for (let n = 0; n < jordan.length - 1; n++) {
+    const [p0j, t0j, r0j] = jordan[n], [p1j, t1j, r1j] = jordan[n + 1];
+    if (hPa <= p0j && hPa >= p1j) {
+      const w = Math.log(hPa / p0j) / Math.log(p1j / p0j), T = 273.15 + t0j + w * (t1j - t0j), r = 1e-3 * (r0j + w * (r1j - r0j));
+      return { T, rh: r * p / (0.622 + r) / saturationVaporPressure(T) };
+    }
+  }
+  return null;
+}
+function peakOf(profile, pressure, mass) {
+  let best = 0;
+  for (let k = 1; k < K; k++) if (profile[k] > profile[best]) best = k;
+  const bins = new Map();
+  for (let k = 0; k < K; k++) { const key = Math.floor(pressure[k] / 50e2); const e = bins.get(key) ?? [0, 0]; e[0] += profile[k] * mass[k]; e[1] += mass[k]; bins.set(key, e); }
+  let bestBin = null, bestValue = -Infinity;
+  for (const [key, [s, m]] of bins) if (s / m > bestValue) { bestValue = s / m; bestBin = key; }
+  return { layer: pressure[best] / 100, value: profile[best], bin: `${bestBin * 50}-${bestBin * 50 + 50}`, binValue: bestValue };
+}
+acc.forEach((A, b) => {
+  const [name] = BOX_LIST[b], S = A.areaSteps;
+  const p = Float64Array.from(A.pressure, (x) => x / S), z = Float64Array.from(A.height, (x) => x / S);
+  const mass = Float64Array.from(p, (_, k) => dSigma[k]);
+  const kday = (t, k) => A.heat[t * K + k] / S * perDay, wm2 = (t, k) => A.energy[t * K + k] / S / dt;
+  say(`\n=== ${name} (${f(S / STEPS / 1e12, 2)} Mkm2) ===`);
+  const r = A.rain, mm = (x) => x / S * perDay;
+  const ls = mm(r.liquidLow + r.liquidHigh + r.iceMelted + r.iceGround);
+  say(`surface rain, mm/d: ${f(mm(r.model), 2)} (the model's; convective ${f(mm(r.modelConvective), 2)}, share ${f(r.modelConvective / r.model, 2)}): deep plume ${f(mm(r.deep), 2)}, shallow plume ${f(mm(r.shallow), 2)}, large-scale ${f(ls, 2)} = liquid converted below 700 hPa ${f(mm(r.liquidLow), 2)} + above 700 hPa ${f(mm(r.liquidHigh), 2)} + falling ice melted ${f(mm(r.iceMelted), 2)} + reaching the ground as ice ${f(mm(r.iceGround), 2)}`);
+  const physicsTerms = TERMS.filter((t) => !DYNAMICS.has(t));
+  const Q1 = Float64Array.from({ length: K }, (_, k) => physicsTerms.reduce((s, t) => s + kday(T_[t], k), 0));
+  const QR = Float64Array.from({ length: K }, (_, k) => kday(T_.shortwave, k) + kday(T_.longwave, k));
+  const Q1R = Float64Array.from(Q1, (x, k) => x - QR[k]);
+  const deepAll = Float64Array.from({ length: K }, (_, k) => ['deepRain', 'deepDowndraftEvaporation', 'deepTransport', 'convectiveEvaporation'].reduce((s, t) => s + kday(T_[t], k), 0));
+  const Q2 = Float64Array.from(A.vapour, (x) => -L / cp * x / S * perDay);
+  const physicsVapour = Q2;
+  say('profile, K/day (box means; Q1 all physics, Q1-QR without radiation, Q2 = -(L/cp) the physics\' moistening; dyn the RK4 step, clos the closure, diss the kinetic energy returned as heat; condBL the condensation in the layers below the mixing top (to saturation), condU the uniform condensation in those above it, each with the cloud the boundary layer\'s mixing evaporated there, dRain the latent heat of the deep plume\'s rain, dDDev its downdraft\'s evaporation, dTrans its two drafts\' transport of s_l, shal the shallow plume, recond the condensation after the plumes, LSev and CVev the evaporation of large-scale and deep-plume rain, fall+ and fall- the adjustment after the ice fall, snow its fusion heat, dry the dry adjustment):');
+  say(`  ${'hPa'.padStart(5)} ${'z m'.padStart(6)} ${'Q1'.padStart(6)} ${'Q1-QR'.padStart(6)} ${'Q2'.padStart(6)} ${SHORT.map((s) => s.padStart(6)).join(' ')} ${'total'.padStart(6)}`);
+  for (let k = 0; k < K; k++) {
+    if (p[k] < 70e2) continue;
+    say(`  ${f(p[k] / 100, 0).padStart(5)} ${f(z[k], 0).padStart(6)} ${f(Q1[k], 2).padStart(6)} ${f(Q1R[k], 2).padStart(6)} ${f(Q2[k], 2).padStart(6)} ${TERMS.map((t) => f(kday(T_[t], k), 2).padStart(6)).join(' ')} ${f(A.total[k] / S * perDay, 2).padStart(6)}`);
+  }
+  say('profile, W/m2 per layer:');
+  say(`  ${'hPa'.padStart(5)} ${SHORT.map((s) => s.padStart(6)).join(' ')}`);
+  for (let k = 0; k < K; k++) {
+    if (p[k] < 70e2) continue;
+    say(`  ${f(p[k] / 100, 0).padStart(5)} ${TERMS.map((t) => f(wm2(T_[t], k), 1).padStart(6)).join(' ')}`);
+  }
+  say(`  ${'sum'.padStart(5)} ${TERMS.map((t) => f(Array.from({ length: K }, (_, k) => wm2(T_[t], k)).reduce((x, y) => x + y, 0), 1).padStart(6)).join(' ')}`);
+  for (const [label, profile] of [['Q1', Q1], ['Q1-QR', Q1R], ['deep plume with its rain\'s evaporation', deepAll], ['Q2', physicsVapour]]) {
+    const pk = peakOf(profile, p, mass);
+    say(`${label} peak: layer at ${f(pk.layer, 0)} hPa (${f(pk.value, 2)} K/d); over 50 hPa bins ${pk.bin} hPa (${f(pk.binValue, 2)} K/d)`);
+  }
+  {
+    const P = A.plume, total = S;
+    const tops = Array.from(P.shallowTop, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / total, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ');
+    const firedTops = Array.from(P.firedTop, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / P.fired, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ');
+    const capes = Array.from(P.candidateCape, (x, n) => `${n * 60}-${n === 7 ? 'up' : n * 60 + 60} ${f(x / total, 3)}`).join(', ');
+    say(`deep plume, share of the column-steps: deck veto ${f(P.deck / total, 3)}, no condensation level ${f(P.noLcl / total, 3)}, never cloudy ${f(P.notCloudy / total, 3)}, cloudy but topping below 700 hPa ${f(P.shallowTop.reduce((x, y) => x + y, 0) / total, 3)} (tops by hPa: ${tops}); deep candidates with CAPE at most plumeCape ${O.plumeCape} ${f(P.weakCape / total, 3)} (mean CAPE ${f(P.weakCapeSum / P.weakCape, 0)} J/kg), above it but closed by inhibition or consumption ${f(P.closed / total, 3)} (CAPE ${f(P.closedCape / P.closed, 0)}, inhibition ${f(P.closedInhibition / P.closed, 1)} J/kg), fired ${f(P.fired / total, 3)}`);
+    say(`  candidates' CAPE (J/kg, share of all column-steps): ${capes}`);
+    say(`  fired: mean CAPE ${f(P.firedCape / P.fired, 0)} J/kg, inhibition ${f(P.firedInhibition / P.fired, 1)} J/kg, base flux ${f(P.firedFlux / P.fired, 4)} kg/m2/s (box mean ${f(P.firedFlux / total, 5)}), consumption F ${f(P.consumption / P.fired, 4)} J/kg per s per kg/m2/s, held below its closure by the boundary-loss or Courant limit on ${f(P.limited / P.fired, 3)}; tops by hPa: ${firedTops}`);
+    say(`  mean condensation level ${f(P.cloudBase / P.cloudBaseN / 100, 0)} hPa; where the cloudy plume, once buoyant, first stops being buoyant (or its top), hPa, share of the cloudy plumes: entraining ${Array.from(P.dilute, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / P.diluteN, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ')}, never buoyant ${f(P.neverBuoyant / P.diluteN, 3)}; the same plume without entrainment ${Array.from(P.undilute, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / P.diluteN, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ')}, never buoyant ${f(P.pureNeverBuoyant / P.diluteN, 3)}`);
+  }
+  {
+    const Q = A.counter, total = S;
+    say(`under saturation adjustment of the same column the deep plume fires on ${f(Q.fires / total, 3)} of the column-steps (mean base flux ${f(Q.flux / total, 5)} kg/m2/s over the box, against ${f(Q.fluxActual / total, 5)}): on ${f(Q.both / total, 3)} both fire, on ${f(Q.firesOnly / total, 3)} only it, on ${f(Q.actualOnly / total, 3)} only the model's`);
+    const day = (x, w) => f(x / w * perDay, 2);
+    say(`  below 700 hPa, kg/m2/day over the box: the uniform condensation (layers above the mixing top) condenses net ${day(Q.low[0], total)} and its cloud converts ${day(Q.low[1], total)} to rain; the layers below the mixing top (saturation adjustment, net of the boundary layer's mixing) ${day(Q.low[2], total)} and ${day(Q.low[3], total)}; of the uniform condensation's gross condensate ${f(Q.subcloud / total * perDay, 3)} forms below the plume's condensation level and ${day(Q.cloudLayer, total)} between it and 700 hPa`);
+    say(`  in the columns where only the adjusted plume fires, per unit of their area: uniform ${day(Q.lowOnly[0], Q.firesOnly)} condensed, ${day(Q.lowOnly[1], Q.firesOnly)} converted; below the mixing top ${day(Q.lowOnly[2], Q.firesOnly)} and ${day(Q.lowOnly[3], Q.firesOnly)}`);
+  }
+  say('sounding against Jordan (1958): hPa, box T - Jordan (K), box RH (over water) / Jordan\'s; the columns where only the adjusted plume fires in brackets');
+  const rows = [];
+  for (let k = 0; k < K; k++) {
+    const J = jordanAt(p[k]);
+    if (!J) continue;
+    const T = A.temperature[k] / S, rh = A.humidity[k] / S, Q = A.counter;
+    const sub = Q.weight > 0 ? ` (${f(Q.temperature[k] / Q.weight - J.T, 1)}, ${f(Q.humidity[k] / Q.weight, 2)})` : '';
+    rows.push(`${f(p[k] / 100, 0)} ${f(T - J.T, 1)} ${f(rh, 2)}/${f(J.rh, 2)}${sub}`);
+  }
+  say(`  ${rows.join('; ')}`);
+});
+{
+  const p = Float64Array.from(audit.pressure, (x) => x / audit.area / 100);
+  const conv = Float64Array.from(audit.conv, (x) => x / audit.fired * perDay);
+  let peak = 0;
+  for (let k = 0; k < K; k++) if (conv[k] > conv[peak]) peak = k;
+  const part = (m, k) => audit.parts[m * K + k] / audit.fired * perDay;
+  let upper = 0;
+  for (let k = 0; k < K; k++) if (p[k] >= 400 && p[k] <= 520 && conv[k] > conv[upper]) upper = k;
+  say(`\nthe audit's firing-column convective heating over the day, Pacific ITCZ: firing on ${f(audit.fired / audit.area, 3)} of the column-steps; peak at ${f(p[peak], 0)} hPa, ${f(conv[peak], 2)} K/d = deep rain ${f(part(0, peak), 2)} + downdraft evaporation ${f(part(1, peak), 2)} + deep transport ${f(part(2, peak), 2)} + shallow ${f(part(3, peak), 2)} + rain evaporation below cloud base ${f(part(4, peak), 2)}; largest at 400-520 hPa ${f(p[upper], 0)} hPa, ${f(conv[upper], 2)} K/d = ${f(part(0, upper), 2)} + ${f(part(1, upper), 2)} + ${f(part(2, upper), 2)} + ${f(part(3, upper), 2)} + ${f(part(4, upper), 2)}`);
+  say(`  firing-column profile (hPa K/d): ${Array.from(conv, (x, k) => `${f(p[k], 0)} ${f(x, 1)}`).filter((_, k) => p[k] > 150).join(', ')}`);
+}
+say(`(${f((performance.now() - t0) / 1000, 0)} s)`);
