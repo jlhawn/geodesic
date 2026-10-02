@@ -324,7 +324,7 @@ const subgrids = new Map();
 async function loadSubgrid(N) {
   if (subgrids.has(N)) return subgrids.get(N);
   const response = await fetch(subgridUrl(N)).catch(() => null);
-  const fields = response && response.ok ? decodeSubgrid(await response.arrayBuffer()) : null;
+  const fields = response && response.ok ? await response.arrayBuffer().then(decodeSubgrid).catch(() => null) : null;
   subgrids.set(N, fields);
   return fields;
 }
