@@ -9547,6 +9547,38 @@ second pair's physics group, which neither element touches, also rose
 beside the deep one, which pays for the IFS entrainment's saturation
 calls: no measurable cost; 122–123 ms is 62.8 s per model day at N=128.
 
+**Review of the merge and the regime elements (Oct 2).** The merge's
+seven conflicted files, rebuilt with git merge-tree, are the only files
+where de82fce differs from the automatic merge; every line either side
+added is kept or combined there, and 74d7ecb's default digest under the
+Rayleigh top, which the merge had stopped asserting, reproduces
+(52b46a99). On eight64_day0183 three CPU steps of the full model with
+`convectionType` 'top' and `plumeEntrainmentLaw` 'gregory' equal 3f3d915
+bit for bit, and with 'gregory' alone 115389e. The IFS formulas at every
+cloud layer of Jordan's column and of the same column with its free
+troposphere ×0.6 and ×0.3 equal the code exactly (ε 1.1e-8 to 7.3e-4 /m,
+δ 5.0e-5 to 1.0e-4 /m); the ×0.3 plume is deep with a 203 hPa cloud
+whose w² vanishes inside its 756–826 hPa top layer. On the three-day
+state, a day of moist steps keeps each column's water and c_pT + Lq to
+1.1e-15 / 1.3e-15 on the CPU and 2.3e-7 / 1.4e-7 on the GPU (the
+boundary layer's mixing of θ_l and the dry adjustment are not part of
+it). The full models from that state: 104, 153 and 515 of 40962 columns
+convect as another type on the two engines at steps 1, 4 and 16 (84 at
+step 4 on the previous type and entrainment). The worker-thread engine
+parted from the single thread under load (parallel.test, from f6cae8b):
+the cells' adjust, which reads the subcloud wind since the Bechtold
+closure, shared a phase with the edges' momentum mixing; they are now
+two phases. A day of CPU steps from the three-day state, with a twin
+of each column every eighth step: deep firing 0.71 in the N Pacific
+trades, 0.38 in the S Atlantic trades, 0.19 / 0.24 over the northern /
+southern 35–55° oceans, 0.16 over tropical land; with the cloud's top
+at the height where w² vanishes inside the top layer instead of that
+layer's top interface the fired deep plumes' share would be 0.51, 0.005,
+0.10 and 0.13 (ITCZ 0.42 → 0.33, warm pool 0.57 → 0.51), and the IFS's
+own test parcel (0.4 ε, half the condensate removed), not built, would
+deepen its clouds instead. Nine cells rain more than 150 mm/d, all land,
+with convective shares 0.00–0.11.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
