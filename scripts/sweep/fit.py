@@ -16,7 +16,7 @@ fall below zero where the quadratic of the score can, and the defaults
 A results.csv with the second sweep's terms (sweep2.mjs) takes the second
 sweep's parameters and weights, holds both minima at least 10 % of each
 range inside the box, and lists as candidates the four best design
-points, qmin and base.
+points, qmin and base, none with stratiformHours below cloudHours.
 """
 import csv, json, sys
 import numpy as np
@@ -36,8 +36,8 @@ if SECOND:
         ('cloudScattering', 55, 110), ('cloudAbsorption', 65, 260), ('upperHours', 1, 8), ('stratiformHours', 2, 8), ('cloudHours', 0.5, 2),
         ('varianceScale', 2, 10), ('plumeRainRate', 1e-3, 6e-3), ('criticalHumidity', 0.7, 0.9), ('stratusWaterMax', 0.1, 0.3), ('cumulusCeiling', 1500, 2500),
     ]
-    WEIGHTS = {'fBalance': 4, 'fAlbedo': 3, 'fOlr': 1, 'fSwcre': 2, 'fLwcre': 2, 'fRain': 1, 'balance': 2, 'sepLow': 1, 'peruLow': 1, 'sepDeckWater': 1, 'peruDeckWater': 1,
-               'sepThickness': 0.5, 'peruThickness': 0.5, 'sepRain': 1, 'itczRain': 1, 'itczPeak': 0.5, 'stress': 0.5, 'arctic': 2}
+    WEIGHTS = {'fBalance': 0.4, 'fAlbedo': 0.3, 'fOlr': 0.1, 'fSwcre': 0.2, 'fLwcre': 0.2, 'fRain': 0.1, 'balance': 2, 'albedo': 1, 'olr': 1, 'swcre': 2, 'lwcre': 2,
+               'sepLow': 1, 'peruLow': 1, 'sepDeckWater': 1, 'peruDeckWater': 1, 'sepThickness': 0.5, 'peruThickness': 0.5, 'sepRain': 1, 'itczRain': 1, 'itczPeak': 0.5, 'stress': 0.5, 'arctic': 2}
     BOX = 0.8
     KEYS = [p[0] for p in PARAMETERS]
 LOW = np.array([p[1] for p in PARAMETERS]); HIGH = np.array([p[2] for p in PARAMETERS])
@@ -142,7 +142,7 @@ for t in terms:
 say('')
 weights = WEIGHTS
 G = np.hstack([np.ones((len(C), 1)), C, C ** 2])
-termFits, looTerms = {}, np.zeros((len(C), len(terms)))
+termFits, termLoo, looTerms = {}, {}, np.zeros((len(C), len(terms)))
 for n, t in enumerate(terms):
     e = np.array([float(r[f'e_{t}']) for r in rows])
     lamT, b, _ = min(((l, *ridge(G, e, l)) for l in grid), key=lambda f: f[2])
@@ -150,6 +150,12 @@ for n, t in enumerate(terms):
     H = G @ np.linalg.solve(G.T @ G + P, G.T)
     looTerms[:, n] = e - (e - G @ b) / (1 - np.diag(H))
     termFits[t] = b
+    termLoo[t] = (np.sqrt(np.mean((e - looTerms[:, n]) ** 2)), e.std(), lamT)
+say('each normalized error fitted as linear plus square terms (ridge by leave-one-out): its leave-one-out RMSE in tolerances against its spread over the runs, and the weight')
+for t in terms:
+    rmse, spread, lamT = termLoo[t]
+    say(f'  {t:14s} loo {rmse:6.2f}  spread {spread:6.2f}  weight {weights[t]:g}  ridge {lamT:.3g}')
+say('')
 W = np.array([weights[t] for t in terms])
 B = np.array([termFits[t] for t in terms])
 
@@ -180,7 +186,8 @@ say('stationary point clipped to the box: ' + ', '.join(f'{k} {v:.4g}' for k, v 
 open(f'{SWEEP}/fit.txt', 'w').write('\n'.join(out) + '\n')
 print('\n'.join(out))
 
-candidates = [{'name': f'p{int(rows[i]["point"]):02d}', 'point': int(rows[i]['point']), 'screenScore': y[i], 'predicted': predict(C[i])[0], **{k: float(rows[i][k]) for k in KEYS}} for i in order[:4]]
+best4 = [i for i in order if not (SECOND and rows[i]['point'] == '0')][:4]
+candidates = [{'name': f'p{int(rows[i]["point"]):02d}', 'point': int(rows[i]['point']), 'screenScore': y[i], 'predicted': predict(C[i])[0], **{k: float(rows[i][k]) for k in KEYS}} for i in best4]
 minimum = {k: float(f'{v:.4g}') for k, v in zip(KEYS, uncoded(best))}
 candidates.append({'name': 'qmin', 'point': None, 'screenScore': None, 'predicted': float(bestValue), **minimum})
 if not SECOND:
@@ -188,4 +195,15 @@ if not SECOND:
 zero = next(i for i, r in enumerate(rows) if r['point'] == '0')
 candidates.append({'name': 'base', 'point': 0, 'screenScore': y[zero], 'predicted': predict(C[zero])[0], **{k: float(rows[zero][k]) for k in KEYS}})
 json.dump({'surfaceMinimum': minimum, 'composedMinimum': {k: float(f'{v:.4g}') for k, v in zip(KEYS, uncoded(cbest))}, 'composedValue': float(cvalue), 'composedLoo': float(rmseComposed), 'lambda': float(lam), 'loo': float(loo), 'r2': float(r2)}, open(f'{SWEEP}/fit.json', 'w'), indent=1)
+for c in candidates:
+    cc = coded(np.array([c[k] for k in KEYS]))
+    e = B[:, 0] + B[:, 1:1 + D] @ cc + B[:, 1 + D:] @ cc ** 2
+    c['composed'] = float(composed(cc))
+    largest = np.argsort(-W * e ** 2)[:5]
+    screen = '' if c['screenScore'] is None else f"{c['screenScore']:.1f}"
+    say(f'{c["name"]:5s} screen {screen:>6s}  quadratic {c["predicted"]:7.1f}  composed {c["composed"]:7.1f}; composed largest parts ' + ', '.join(f'{terms[n]} {W[n] * e[n] ** 2:.1f} (e {e[n]:+.2f})' for n in largest))
+open(f'{SWEEP}/fit.txt', 'w').write('\n'.join(out) + '\n')
+print('\n'.join(out[-len(candidates):]))
+if 'stratiformHours' in KEYS and any(c['stratiformHours'] < c['cloudHours'] for c in candidates):
+    sys.exit('a candidate has stratiformHours below cloudHours')
 json.dump(candidates, open(f'{SWEEP}/candidates.json', 'w'), indent=1)
