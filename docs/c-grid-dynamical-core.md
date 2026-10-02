@@ -6514,6 +6514,57 @@ running rain and runoff totals and what it has taken of them
 the segment's first frame); without them the core and ocean state parted
 16 steps after the reload.
 
+**Parity and the gas branch merged (Oct 2).** Branch integrate-c: parity
+(300f8e1) on sweep2 (e695112), then gas-benchmark 5970f4f, both sides
+kept in every hunk. `scripts/radiationBenchmark.mjs` prints 5970f4f's
+output character for character; the gas parent's digest on grey ice is
+a73d33f3 on both trees, the defaults' a64fbb13, the cloud parent's
+97902663 under the gray gases with the earlier visible split and
+Rayleigh bands. Tests: the deck's cloud field (`test/frameGpu.test.mjs`),
+the six-step deck and the regime-gated deck (`test/gpuModel.test.mjs`)
+pass under the spectral gases and moist defaults; the cloud effects
+after 16 steps (`test/cloudEffect.test.mjs`) pass under the defaults,
+compared over the columns whose dry adjustment merged the same layers
+on both engines (0 of 362 part; under the gray optics and saturation
+adjustment column 201 parts at step 14, 1.9 W/m²), as is the iced-cell
+run (1 of 362: column 356, a layer 8·10⁻⁷ of θ under the 10⁻⁶ merge
+tolerance); the trace-cloud join compares the engines' change by the
+join, 1.3·10⁻⁵ K/day against 0.78 moved; the treeline warmth is bounded
+by the run's largest air difference (1.4·10⁻² K). Still failing: the
+cloudy columns' layer heating, 1.3·10⁻⁴ against 10⁻⁴ K/day at cell 196
+layer 24 (the deck's layer, cover 1.6·10⁻⁶ apart), under gray longwave
+alike, where one f32 ulp of θ and q moves the CPU's own heating there by
+1.5·10⁻⁴ (no threshold in it). Closure: on eight64_day0183 and
+nine64_day0091 the CPU closes the shortwave to 4.5·10⁻¹³, the layers'
+shortwave to 4.5·10⁻¹³ and their longwave to 9.1·10⁻¹³ W/m², the GPU
+to 1.8·10⁻⁴ and 2.3·10⁻⁴ W/m²; five64_day2190, seven64_day0365 and
+m21a64_day0365 load and close alike. Parity from nine64_day0091 after
+1, 4 and 16 steps: cells whose net surface flux parts by more than
+1 W/m² 0, 25, 97 (parity branch 0, 24, 107), columns more than 0.1 K
+apart in the lowest ten layers 1, 6, 36 (0, 3, 25; after one step
+column 11539, 23.0N 160.9W, decoupled at 334 m on the CPU, coupled to
+939 m on the GPU). Three one-day segments from eight64_day0183 end day
+186 byte for byte as one three-day segment. Three GPU days (bl34,
+`everySteps` 8), the last day's means, sweep2 in brackets: from
+eight64_day0183 albedo 0.294 (0.298), ASR 240.6 (238.9), OLR 234.2
+(233.2), atmosphere 84.6 (82.7), SWCRE −52.1 (−53.5), LWCRE 26.4 (26.6),
+clear-sky reflectance 0.1405 (0.141), rain 1.68 (1.68), cover 0.54
+(0.54), 60–90S 0.67 (0.68), sea surface 168.3 (168.6) and −44.5
+(−44.3) W/m²; from nine64_day0091 0.305 (0.309), 236.8 (235.2), 235.0
+(234.3), 87.3 (85.4), −54.6 (−56.0), 26.2 (26.4), 0.1443 (0.145), 2.21
+(2.21), 0.55 (0.55), 0.65 (0.65), 147.8 (148.1) and −44.8 (−44.7). The
+Arctic pack 9.191 → 8.272·10³ km³ over days 91–94, 3.3 % a day (3.3);
+from eight64_day0183 1.672 → 1.677 and the southern 12.012 → 12.011.
+The 0–2.2 hPa layer 259.9, 259.7, 259.2 K over days 184–186 and 260.6,
+260.1, 259.5 over days 92–94 in the global mean; the 3.5 hPa layer
+267.3 → 260.2 and 267.3 → 260.2, the tropical 85–101 hPa layers 208.8
+and 211.4 (day 186), 206.6 and 209.3 (day 94). Cost under the exclusive
+lock (128 steps after 16, alternated twice with e695112 built by `git
+archive`): N=64 21.55 and 21.72 → 22.28 and 22.51 ms (+3.5 %), the
+physics pass 3.89 → 4.67 ms; N=128 97.24 and 95.56 → 98.38 and 98.38 ms
+(+2.0 %), the physics pass 16.74–17.22 → 19.74 ms. A day at N=128 from
+eight128_day0183 takes 66 s (72 s with setup; sweep2 64 and 70).
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
