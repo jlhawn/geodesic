@@ -101,8 +101,8 @@ test('both engines sum the clear-sky fluxes per cell alike and read out the day-
     assert.ok(Math.abs(cpu.radiation.meanLongwaveCloudEffect[i] - (cpuSums.clearOutgoingLongwave[i] / STEPS - cpu.radiation.meanOutgoingLongwave[i])) <= 1e-9, `cell ${i}: the CPU's per-cell longwave effect`);
     for (const [name, slot] of Object.entries(EFFECT_SLOTS)) assert.equal(gpu.radiation[name][i], after[slot][i], `cell ${i}: ${name} mirrored`);
   }
-  const parted = new Set([...merged, ...plumed, ...condensed]), near = new Set(parted), { cellsOnCell, nEdgesOnCell } = cpu.mesh;
-  for (const i of parted) for (let j = 0; j < nEdgesOnCell[i]; j++) near.add(cellsOnCell[i * 6 + j]);
+  const parted = new Set([...merged, ...plumed, ...condensed]), near = new Set(parted), { cellsOnCell, nEdgesOnCell, maxEdges } = cpu.mesh;
+  for (const i of parted) for (let j = 0; j < nEdgesOnCell[i]; j++) near.add(cellsOnCell[i * maxEdges + j]);
   const agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !near.has(i));
   const effects = Object.fromEntries(Object.keys(EFFECT_SLOTS).map((name) => [name, stats(agreed.map((i) => cpu.radiation[name][i]), agreed.map((i) => gpu.radiation[name][i]))]));
   console.log(`per-cell cloud effects CPU against GPU over the ${agreed.length} of ${C} columns whose well-mixed bottom block of uniform q tops at the same layer (${merged.size} apart), whose shallow plume tops at the same interface (${plumed.size} apart) and whose layers holding cloud water are the same (${condensed.size} apart) on both engines after every step, nor neighbour one that parted (${near.size - parted.size} more): ${Object.entries(effects).map(([name, s]) => `${name} rms ${s.rmsRel.toExponential(1)} (max ${s.maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
