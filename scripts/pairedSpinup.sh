@@ -7,7 +7,13 @@
 # scripts/compareStates.mjs appends the round's states side by side to
 # <OUT>/<PREFIX>_compare.md. Stops at <OUT>/STOP_<PREFIX>. A resolution
 # that hits NaN drops out and the others go on; any other failure is
-# retried three times from the last snapshot.
+# retried three times from the last snapshot. The environment reaches
+# scripts/spinup.mjs: a fresh start's land holds its trees and topsoil carbon
+# at the placeholders of LAND's "start" (neutral by default) while its record
+# builds, and at the ends of days 365 and 730, in whichever segment holds
+# them, every land cell's trees and carbon jump to the equilibrium of its own
+# record, logged in <OUT>/<PREFIX><N>.log (LAND_JUMPS: 'fresh', the default;
+# 'none'; or model days such as 365,730).
 #   NS="64 128" PER_YEAR=4 PREFIX=twin scripts/pairedSpinup.sh
 cd "$(dirname "$0")/.."
 NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-4} PREFIX=${PREFIX:-twin} KEEP=${KEEP:-4}

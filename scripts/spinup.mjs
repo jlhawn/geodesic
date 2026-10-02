@@ -43,7 +43,15 @@
 // '{"entrainment":{"efficiency":0.3}}'), SURFACE (JSON options for the
 // surface, e.g. '{"dragCoefficient":1.3e-3}', the sea's drag coefficient,
 // which its heat and vapour exchange share), LAND (JSON options for the
-// land surface, e.g. '{"treeMoisture":false}'),
+// land surface, e.g. '{"treeMoisture":false}'; '{"start":"bare"}' or
+// '{"start":"green"}' make a fresh start's land bare or green in place of
+// 'neutral', see START_CODES in js/physics/land.module.js), LAND_JUMPS (the
+// model days at whose end land.jump() sets every land cell's trees and
+// topsoil carbon to the equilibrium of its own record and ends a fresh
+// start's hold, logging the change by land area globally and by 10° band,
+// e.g. '365,730'; 'fresh', the default, jumps as the land's record passes
+// 365 and 730 days when the land started fresh, which a state saved before
+// the record existed never did; 'none' never),
 // DIVERGENCE_DAMPING (the model's DIVERGENCE_DAMPING: the coefficient c of the
 // core's divergence damping, the tendency c d²/dt ∇δ with d the mean
 // distance between cell centres),
@@ -96,6 +104,7 @@ import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
 import { CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
+import { freshJumpDue } from '../js/physics/land.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
 
 const BOXES = {
@@ -111,6 +120,8 @@ const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
 const RADIATION = { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') }, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
 const ATMOSPHERE = process.env.ATMOSPHERE ?? 'carry';
+const LAND_JUMPS = process.env.LAND_JUMPS ?? 'fresh', jumpDays = LAND_JUMPS === 'fresh' || LAND_JUMPS === 'none' ? [] : LAND_JUMPS.split(',').map(Number);
+if (jumpDays.some((d) => !(Number.isInteger(d) && d > 0))) throw new Error(`LAND_JUMPS is 'fresh', 'none' or model days such as 365,730, not ${LAND_JUMPS}`);
 if (ATMOSPHERE !== 'carry' && ATMOSPHERE !== 'fresh') throw new Error(`ATMOSPHERE is carry or fresh, not ${ATMOSPHERE}`);
 const log = (line) => { console.log(line); appendFileSync(`${OUT}/${TAG}.log`, line + '\n'); };
 const stop = stopOnSignal(log), hook = syncAfterSave(process.env.SYNC_CMD, log);
@@ -205,6 +216,8 @@ if (saved) {
     model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6]);
     log(`land seeded from ${process.env.LAND_FROM} (N=${seed.N}, day ${seed.day})`);
   }
+  const { record } = model.land, held = ['', 'the trees at half the cover and the topsoil carbon at', 'no trees and the topsoil carbon at', 'the trees at the cover times their record\'s factor and the topsoil carbon at'][record[1]];
+  log(`land: record ${record[0] < 0 ? 'taken over (exponential means)' : `${(record[0] / 86400).toFixed(0)} days old`}${held ? `, ${['', 'neutral', 'bare', 'green'][record[2]]} start holding ${held} ${Object.values(model.land.placeholders)[record[1] - 1].carbon.toFixed(3)} kg/m²` : ''}; jumps ${LAND_JUMPS === 'fresh' ? (record[2] >= 1 ? 'as the record passes 365 and 730 days' : 'none (the land did not start fresh)') : LAND_JUMPS}`);
   log(`--- ${new Date().toISOString()} fresh start at N=${N} on ${grid} (${C} cells, dt ${dt} s, ${perDay} steps a day) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 }
 const everySteps = model.oceanEngine ? model.oceanEngine.everySteps : 1;
@@ -236,6 +249,10 @@ const day0 = Math.round((model.time - startStep * dt) / 86400);
 let day = day0, step = startStep, dayStart = startStep, taken = 0, iceNorth = 0, iceSouth = 0;
 log(`ASR, atmosphere, OLR and albedo below are day means over the day's ${perDay} steps${startStep ? ` (day ${day0 + 1}'s over its last ${perDay - startStep})` : ''}, the albedo the day's reflected over its incoming sunlight${RADIATION.clearSkyPass ? ', and so are SWCRE and LWCRE, the shortwave (ASR less clear-sky ASR) and longwave (clear-sky OLR less OLR) cloud effects' : ''}`);
 const halted = () => stop.requested || taken >= STOP_AFTER_STEPS;
+const band = (b) => `${Math.abs(b.from)}${b.from > 0 ? 'N' : b.from < 0 ? 'S' : ''}–${Math.abs(b.to)}${b.to > 0 ? 'N' : b.to < 0 ? 'S' : ''}`;
+const change = ([before, after], digits) => `${before.toFixed(digits)} → ${after.toFixed(digits)}`;
+const jumpLine = (day, r) => `land jump at the end of day ${day} (record ${(r.age / 86400).toFixed(2)} days): land means trees ${change(r.global.trees, 3)}, topsoil carbon ${change(r.global.carbon, 2)} kg/m², dry soil albedo ${change(r.global.dry, 3)}, land albedo ${change(r.global.albedo, 3)}; by band (share of the land: trees, carbon, land albedo) ${r.bands.map((b) => `${band(b)} (${b.share.toFixed(3)}: ${change(b.trees, 2)}, ${change(b.carbon, 1)}, ${change(b.albedo, 3)})`).join(', ')}`;
+let landAge = model.land.record[0];
 for (;;) {
   if (BATCH === 1) {
     while (step < perDay) {
@@ -275,6 +292,8 @@ for (;;) {
   const minutes = (performance.now() - start) / 60000;
   log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}`);
   if (!Number.isFinite(d.meanSurfaceT) || !Number.isFinite(d.maxWind) || !Number.isFinite(d.oceanSpeed)) { log(`NaN on day ${day}; stopping`); await hook.drain(); process.exit(2); }
+  if (jumpDays.includes(day) || (LAND_JUMPS === 'fresh' && freshJumpDue(model.land.record, landAge, model.land.record[0]))) log(jumpLine(day, await model.land.jump()));
+  landAge = model.land.record[0];
   if (minutes >= MINUTES || day >= DAYS || halted()) break;
 }
 
