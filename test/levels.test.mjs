@@ -11,7 +11,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography, topographyFromInt16 } from '../js/geography.module.js';
 import { regridState, savedDeckField, remapLevels, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { sigmaInterfaces, sigmaGridName, standardHeight, standardSigma, SIGMA_GRIDS, P0 } from '../js/dynamics/sigmaCore.module.js';
+import { sigmaInterfaces, sigmaGridName, standardHeight, standardSigma, SIGMA_GRIDS, P0, R_DRY, CP_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { encodeState, decodeState, savedLevels } from '../js/stateFile.module.js';
 
 let gpuAvailable = true;
@@ -130,7 +130,7 @@ test('a bl34 state regrids across resolutions onto bl34 and not onto cam26', () 
   assert.throws(() => regridState(coarse, other, [pi, theta, new Float64Array(K * E), new Float64Array(C)]), /layer counts differ: 34 vs 27/);
 });
 
-test('remapLevels carries a state between sigma grids conservatively: each column keeps Σ dσ·value of theta, q, qc and u, a layer inside one source layer takes its value exactly, so the layers above the 2.4 km interface copy through, pi is untouched, q and qc are clipped at zero, and a grid onto itself is the identity', () => {
+test('remapLevels carries a state between sigma grids conservatively: each column keeps Σ dσ·value of q, qc and u and its enthalpy Σ dσ·Π·θ, a layer inside one source layer takes its value (θ its temperature, but where the target grid splits the layer), the layers the grids share copy through bit for bit, pi is untouched, q and qc are clipped at zero, and a grid onto itself is the identity', () => {
   const mesh = buildMesh(new Grid(2)), C = mesh.nCells, E = mesh.nEdges;
   let seed = 7;
   const draw = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -143,31 +143,37 @@ test('remapLevels carries a state between sigma grids conservatively: each colum
     u: layered(levels, E, (sigma, r) => 40 * (r - 0.5)),
   });
   const fields = [['theta', C], ['q', C], ['qc', C], ['u', E]];
+  const kappa = R_DRY / CP_DRY, exner = (levels, k) => (levels[k + 1] ** (1 + kappa) - levels[k] ** (1 + kappa)) / ((1 + kappa) * (levels[k + 1] - levels[k]));
   for (const [from, to, names] of [[cam, bl, 'cam26 → bl34'], [bl, cam, 'bl34 → cam26']]) {
     const state = stateOn(from), out = remapLevels(from, to, state, mesh), K = to.length - 1;
     assert.deepEqual(out.pi, state.pi);
     assert.notEqual(out.pi, state.pi);
-    let worst = 0, copied = 0, mixed = 0;
+    let worst = 0, copied = 0, mixed = 0, split = 0;
     for (const [name, count] of fields) {
       assert.equal(out[name].length, K * count, `${names}: ${name} on the target grid`);
+      const before = (k, n) => state[name][k * count + n] * (name === 'theta' ? exner(from, k) : 1), after = (k, n) => out[name][k * count + n] * (name === 'theta' ? exner(to, k) : 1);
       for (let n = 0; n < count; n++) {
-        let before = 0, after = 0, scale = 0;
-        for (let k = 0; k < from.length - 1; k++) { const w = (from[k + 1] - from[k]) * state[name][k * count + n]; before += w; scale += Math.abs(w); }
-        for (let k = 0; k < K; k++) after += (to[k + 1] - to[k]) * out[name][k * count + n];
-        worst = Math.max(worst, Math.abs(after - before) / Math.max(scale, 1e-300));
+        let sumBefore = 0, sumAfter = 0, scale = 0;
+        for (let k = 0; k < from.length - 1; k++) { const w = (from[k + 1] - from[k]) * before(k, n); sumBefore += w; scale += Math.abs(w); }
+        for (let k = 0; k < K; k++) sumAfter += (to[k + 1] - to[k]) * after(k, n);
+        worst = Math.max(worst, Math.abs(sumAfter - sumBefore) / Math.max(scale, 1e-300));
       }
       for (let t = 0; t < K; t++) {
         const inside = [...Array(from.length - 1).keys()].filter((j) => Math.min(to[t + 1], from[j + 1]) > Math.max(to[t], from[j]));
+        const shared = inside.length === 1 && to[t] === from[inside[0]] && to[t + 1] === from[inside[0] + 1];
+        const splitHere = inside.length === 1 && [...Array(K).keys()].filter((o) => to[o] >= from[inside[0]] && to[o + 1] <= from[inside[0] + 1]).length > 1;
         for (let n = 0; n < count; n++) {
-          const value = out[name][t * count + n], sources = inside.map((j) => state[name][j * count + n]);
-          if (inside.length === 1) { assert.equal(value, sources[0], `${names}: ${name} layer ${t} at ${n} copies layer ${inside[0]}`); copied++; continue; }
+          const value = after(t, n), sources = inside.map((j) => before(j, n));
+          if (shared) { assert.equal(out[name][t * count + n], state[name][inside[0] * count + n], `${names}: ${name} layer ${t} at ${n} copies layer ${inside[0]}`); copied++; continue; }
+          if (name === 'theta' && splitHere) { split++; continue; }
+          if (inside.length === 1) { assert.ok(Math.abs(value - sources[0]) <= 1e-12 * Math.abs(sources[0]), `${names}: ${name} layer ${t} at ${n} takes layer ${inside[0]}`); copied++; continue; }
           assert.ok(value >= Math.min(...sources) - 1e-12 * Math.abs(value) && value <= Math.max(...sources) + 1e-12 * Math.abs(value), `${names}: ${name} layer ${t} at ${n} is a mean of layers ${inside}`);
           mixed++;
         }
       }
       for (let x = 0; x < 22 * count; x++) assert.equal(out[name][x], state[name][x], `${names}: ${name} above 2.4 km at ${x}`);
     }
-    console.log(`${names}: column Σ dσ·value kept to ${worst.toExponential(1)} of Σ dσ·|value|; ${copied} values copied from one layer, ${mixed} means of several`);
+    console.log(`${names}: column Σ dσ·value (θ: Σ dσ·Π·θ) kept to ${worst.toExponential(1)} of Σ dσ·|value|; ${copied} values copied from one layer, ${mixed} means of several, ${split} temperatures of split layers`);
     assert.ok(worst < 1e-12, `${names}: a column integral moved by ${worst} of its magnitude`);
   }
 
@@ -184,7 +190,7 @@ test('remapLevels carries a state between sigma grids conservatively: each colum
   assert.throws(() => remapLevels(cam, bl.subarray(1), drying, mesh), /the grids span σ 0–1 and 0\.00219.*–1/);
 });
 
-test('bl36 is bl34 with its top layer split at 0.3 and 1 hPa, and remapLevels carries a bl34 state onto it and back unchanged', () => {
+test('bl36 is bl34 with its top layer split at 0.3 and 1 hPa, and remapLevels carries a bl34 state onto it, the split layer stably stratified with its enthalpy kept, and back unchanged', () => {
   const top = sigmaInterfaces('bl36');
   assert.equal(top.length - 1, 36);
   assert.equal(sigmaGridName(Float32Array.from(top)), 'bl36');
@@ -193,7 +199,15 @@ test('bl36 is bl34 with its top layer split at 0.3 and 1 hPa, and remapLevels ca
   const mesh = buildMesh(new Grid(2)), C = mesh.nCells, E = mesh.nEdges;
   const state = { pi: new Float64Array(C).fill(1e5), theta: Float64Array.from({ length: 34 * C }, (_, x) => 300 + x % 97), q: new Float64Array(34 * C).fill(1e-3), qc: null, u: Float64Array.from({ length: 34 * E }, (_, x) => (x % 13) - 6) };
   const up = remapLevels(bl, top, state, mesh);
-  for (let k = 0; k < 3; k++) assert.deepEqual(up.theta.subarray(k * C, (k + 1) * C), state.theta.subarray(0, C), `layer ${k} takes the 0-2.2 hPa layer`);
+  const kappa = R_DRY / CP_DRY, exner = (levels, k) => (levels[k + 1] ** (1 + kappa) - levels[k] ** (1 + kappa)) / ((1 + kappa) * (levels[k + 1] - levels[k]));
+  for (let i = 0; i < C; i++) {
+    let enthalpy = 0;
+    for (let k = 0; k < 3; k++) enthalpy += (top[k + 1] - top[k]) * exner(top, k) * up.theta[k * C + i];
+    const before = (bl[1] - bl[0]) * exner(bl, 0) * state.theta[i];
+    assert.ok(Math.abs(enthalpy - before) <= 1e-12 * before, `cell ${i}: the 0-2.2 hPa layer's enthalpy ${before} becomes ${enthalpy}`);
+    assert.ok(up.theta[i] >= up.theta[C + i] * (1 - 1e-12) && up.theta[C + i] >= up.theta[2 * C + i] * (1 - 1e-12), `cell ${i}: θ ${up.theta[i]} / ${up.theta[C + i]} / ${up.theta[2 * C + i]} in the split layers`);
+  }
+  assert.deepEqual(up.theta.subarray(3 * C), state.theta.subarray(C));
   assert.deepEqual(up.u.subarray(3 * E), state.u.subarray(E));
   const back = remapLevels(top, bl, up, mesh);
   for (const name of ['theta', 'u']) for (let x = 0; x < state[name].length; x++) assert.ok(Math.abs(back[name][x] - state[name][x]) <= 1e-12 * Math.abs(state[name][x]), `${name} at ${x}`);
