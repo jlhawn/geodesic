@@ -19,7 +19,8 @@
 // (SWCRE, ASR less clear-sky ASR; LWCRE, clear-sky OLR less OLR) and the
 // clear-sky reflectance (the day's clear-sky reflected over its incoming
 // sunlight), then the day-mean sunlight absorbed at the surface of the sea
-// cells (sea ice included). The
+// cells (sea ice included) and of the sea cells poleward of 60° that hold
+// ice at the day's end, leads included, in each hemisphere. The
 // state saved carries the last day's per-cell convective and large-scale
 // rain, absorbed sunlight, outgoing longwave, albedo and cloud effects,
 // and the boundary layer's depth, mixing top, regime and surface buoyancy
@@ -221,7 +222,7 @@ const readSplit = async () => {
   for (let i = 0; i < C; i++) { split.convective[i] += days * convective[i]; split.largeScale[i] += days * largeScale[i]; if (convective[i] > 0) split.wet[i] += days; }
   split.seconds += seconds;
 };
-const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12]; };
+const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration', 'ice'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12, fields.ice]; };
 await model.diagnostics();
 const RECORD = process.env.RECORD;
 if (RECORD) mkdirSync(RECORD, { recursive: true });
@@ -253,7 +254,8 @@ for (;;) {
   const [absorbedSum, atmosphereSum] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.ABSSUM, length: C }, { offset: PH.ATMSUM, length: C }]);
   let seaSolar = 0, seaArea = 0;
   for (let i = 0; i < C; i++) if (!land[i]) { seaSolar += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); seaArea += mesh.areaCell[i]; }
-  seaSolar /= seaArea * (perDay - dayStart);
+  const stepsToday = perDay - dayStart;
+  seaSolar /= seaArea * stepsToday;
   step = 0; dayStart = 0;
   day++;
   const d = await model.diagnostics();
@@ -264,10 +266,13 @@ for (;;) {
     renameSync(`${file}.partial`, file);
     hook.after(file);
   }
-  const [north, south] = await iceArea();
+  const [north, south, iceNow] = await iceArea();
+  const iceSolar = [0, 0], icedArea = [0, 0];
+  for (let i = 0; i < C; i++) if (!land[i] && iceNow[i] > 0 && Math.abs(mesh.latCell[i] * deg) >= 60) { const s = mesh.latCell[i] > 0 ? 0 : 1; iceSolar[s] += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); icedArea[s] += mesh.areaCell[i]; }
+  const iceSurface = iceSolar.map((x, s) => (icedArea[s] > 0 ? x / (icedArea[s] * stepsToday) : 0));
   iceNorth += north; iceSouth += south;
   const minutes = (performance.now() - start) / 60000;
-  log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} W/m², ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}`);
+  log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}`);
   if (!Number.isFinite(d.meanSurfaceT) || !Number.isFinite(d.maxWind) || !Number.isFinite(d.oceanSpeed)) { log(`NaN on day ${day}; stopping`); await hook.drain(); process.exit(2); }
   if (minutes >= MINUTES || day >= DAYS || halted()) break;
 }
