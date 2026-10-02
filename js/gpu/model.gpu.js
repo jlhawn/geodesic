@@ -54,7 +54,7 @@ export async function createGpuModel(gridOrMesh, {
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
   const mode = exchangeMode(surface, landOptions);
-  const subgrid = geography && orography !== false ? subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / GRAVITY) : null) : null;
+  const subgrid = geography && orography !== false ? subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / GRAVITY) : null, geography.land) : null;
   let spacing = 0;
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;

@@ -183,9 +183,9 @@ export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = 2, 
  * of the principal axis (radians from east towards north, the direction
  * of the steepest mean-square slope) and the slope σ² = K + √(L² + M²).
  * x is east and y north; `count` is the number of raster points a cell
- * holds.
+ * holds. With `land`, a cell the mask makes sea has no subgrid orography.
  */
-export function subgridOrography(mesh, topography, resolved = null) {
+export function subgridOrography(mesh, topography, resolved = null, land = null) {
   const { nCells: C, xCell, cellsOnCell, nEdgesOnCell, maxEdges, verticesOnCell, cellsOnVertex, radius } = mesh;
   const { rows, cols, data } = topography;
   const R = radius ?? 6371220;
@@ -246,7 +246,7 @@ export function subgridOrography(mesh, topography, resolved = null) {
   }
   const deviation = new Float64Array(C), anisotropy = new Float64Array(C), orientation = new Float64Array(C), slope = new Float64Array(C);
   for (let i = 0; i < C; i++) {
-    if (!(weight[i] > 0)) continue;
+    if (!(weight[i] > 0) || (land && !land[i])) continue;
     const mean = sum[i] / weight[i], kk = kSum[i] / weight[i], ll = lSum[i] / weight[i], mm = mSum[i] / weight[i], spread = Math.hypot(ll, mm);
     deviation[i] = Math.sqrt(Math.max(0, square[i] / weight[i] - mean * mean));
     anisotropy[i] = kk + spread > 0 ? Math.sqrt(Math.max(0, (kk - spread) / (kk + spread))) : 1;

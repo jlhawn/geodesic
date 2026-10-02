@@ -144,6 +144,9 @@ test('the drag conserves momentum, hands it to the ground as a stress and return
     }
     assert.ok(Math.abs(momentum - orography.stress[e] * dt) <= 1e-12 * Math.max(1, Math.abs(momentum)), `edge ${e}: the column loses what the ground receives`);
   }
+  const { land } = model.geography;
+  for (let i = 0; i < C; i++) if (!land[i]) assert.ok(orography.fields.deviation[i] === 0 && orography.launch[i] === 0 && orography.beta[(K - 1) * C + i] === 0, `sea cell ${i} has no subgrid orography`);
+  for (let e = 0; e < E; e++) if (!land[mesh.cellsOnEdge[2 * e]] && !land[mesh.cellsOnEdge[2 * e + 1]]) assert.equal(orography.stress[e], 0, `edge ${e} between two sea cells`);
   assert.ok(blocked > 0, 'some flow is blocked');
   assert.ok(energy > 0, 'the drag removes kinetic energy');
   close(heat, energy, 1e-12, 'the energy it removes becomes dissipation heat');

@@ -79,7 +79,7 @@ export function createModel(gridOrMesh, {
   const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, geography, ...oceanOptions }) : null;
   const land = physics && geography ? createLandSurface(mesh, geography, { buffers: buffers ? buffers.land : null, ...landOptions }) : null;
   const landMask = geography ? geography.land : null;
-  const orography = physics && geography && orographyOptions !== false ? createOrographicDrag(mesh, core, subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / core.diagnostics.g) : null), { buffers: buffers ? buffers.orography : null, ...orographyOptions }) : null;
+  const orography = physics && geography && orographyOptions !== false ? createOrographicDrag(mesh, core, subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / core.diagnostics.g) : null, geography.land), { buffers: buffers ? buffers.orography : null, ...orographyOptions }) : null;
   const sharedCapacity = !ocean && buffers && buffers.ocean ? new Float64Array(buffers.ocean.capacity) : null;
   const seaIce = createSeaIce(mesh, {
     buffers: { ...(buffers && buffers.ice ? buffers.ice : {}), ...(land ? { snow: land.shared.snow, snowAlbedo: land.shared.snowAlbedo } : {}) },
