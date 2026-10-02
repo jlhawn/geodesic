@@ -6526,15 +6526,34 @@ pass under the spectral gases and moist defaults; the cloud effects
 after 16 steps (`test/cloudEffect.test.mjs`) pass under the defaults,
 compared over the columns whose dry adjustment merged the same layers
 on both engines (0 of 362 part; under the gray optics and saturation
-adjustment column 201 parts at step 14, 1.9 W/m²), as is the iced-cell
-run (1 of 362: column 356, a layer 8·10⁻⁷ of θ under the 10⁻⁶ merge
-tolerance); the trace-cloud join compares the engines' change by the
-join, 1.3·10⁻⁵ K/day against 0.78 moved; the treeline warmth is bounded
-by the run's largest air difference (1.4·10⁻² K). Still failing: the
-cloudy columns' layer heating, 1.3·10⁻⁴ against 10⁻⁴ K/day at cell 196
-layer 24 (the deck's layer, cover 1.6·10⁻⁶ apart), under gray longwave
-alike, where one f32 ulp of θ and q moves the CPU's own heating there by
-1.5·10⁻⁴ (no threshold in it). Closure: on eight64_day0183 and
+adjustment column 201 parts at step 14, the CPU leaving its layer 22
+8.8·10⁻⁷ of θ under the 10⁻⁶ merge tolerance and the GPU merging it,
+1.9 W/m²), as is the iced-cell run (0 of 362 part here; after the
+parity merge alone column 356, its layer 24 left 9.4·10⁻⁷ under the
+tolerance on the CPU);
+the trace-cloud join compares the engines' change by the join,
+1.3·10⁻⁵ K/day against 0.78 moved (the joined heating itself 2.3·10⁻⁴
+apart against the 2.29·10⁻⁴ it was held to); the treeline warmth,
+4.9·10⁻³ K apart, is bounded by the run's largest lowest-air difference,
+2.3·10⁻² K (column 172, 10.3N, at step 46, snow-free on both engines).
+Still failing: the cloudy columns' layer heating, 1.26·10⁻⁴ against
+10⁻⁴ K/day at cell 196 layer 24 (the deck's layer, cover 1.6·10⁻⁶
+apart), as on 5970f4f itself (1.28·10⁻⁴; 9.1·10⁻⁵ on 1f61d5c, 1.0·10⁻⁴
+on 608c4e5, 1.3·10⁻⁴ from a069a68). The longwave carries 1.32·10⁻⁴ of
+it (−36.48518 against −36.48601 W/m²); under gray longwave the worst is
+1.3·10⁻⁴ at cell 340, with ozone 'idealized' (the test's state then
+differs) 7.1·10⁻⁵; one f32 ulp more in every θ and q moves the CPU's own
+heating there by 4.9·10⁻⁵, and the GPU's Exner function there is
+5.4·10⁻⁸ below the CPU's (no threshold in it). By hand on the
+midlatitude-summer profile (bl34, 76 lit N=4 columns, no aerosol) with
+100 g/m² of liquid at 285 K and 20 g/m² of ice at 220 K: the visible
+light's ozone loss on its way out (at μ 0.99 8.93 W/m² from the light
+the cloud reflects, 0.14 from the surface's) and the near-infrared
+Rayleigh's change of the reflected light (0.556 W/m²) are the engines'
+to 3·10⁻¹⁶ of the beam on the CPU and 1.7·10⁻⁷ on the GPU, overcast and
+under the uniform cover (column cover 1, and 0.749 with 2 g/m² of ice),
+and on the CPU with the empirical deck blended in.
+Closure: on eight64_day0183 and
 nine64_day0091 the CPU closes the shortwave to 4.5·10⁻¹³, the layers'
 shortwave to 4.5·10⁻¹³ and their longwave to 9.1·10⁻¹³ W/m², the GPU
 to 1.8·10⁻⁴ and 2.3·10⁻⁴ W/m²; five64_day2190, seven64_day0365 and
