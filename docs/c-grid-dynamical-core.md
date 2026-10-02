@@ -4566,6 +4566,133 @@ lifetime to at least the convective one, and add the parameters of the
 cloud above the boundary layer, since the fresh start's deficit is
 longwave.
 
+**Cloud optics (Oct 1).** The radiation gave every cloud the gray optics
+τ' = 95 m²/kg × W and κ = 130 m²/kg. `scripts/cloudClasses.mjs` splits the
+day-mean cloud effects of a state by class: one CPU step, then the state
+held and lit at 24 instants of its day, once with all cloud and once
+without each class (the radiation's cloud mask, the deck held at its
+diagnosis at the day's start; holding it moves the global ASR − OLR by
+0.01 W/m²); resolved cloud classed by the top of its run of cloudy layers.
+Before: the gray optics on the day-186 state of the three-day N=64 run
+from eight64_day0183 (the run's day means: SWCRE −56.0, LWCRE 17.6). After:
+the phase optics below on the day-186 state of the same run under them
+(SWCRE −36.0, LWCRE 15.7); on the before state they give −38.2 and 15.6.
+Cover, effects W/m², grid-mean path g/m² warmer than 273 K / 273–235 K /
+colder, in-cloud path, in-cloud visible τ of the water's physical optics
+with its cover shares below 3.6 / 3.6–23 / above 23, and the two-stream's
+in-cloud depth τ':
+
+| global | cover | SW | LW | grid path | in cloud | τ (shares) | τ' |
+|---|---|---|---|---|---|---|---|
+| deck, before | 0.015 | −2.0 | 0.1 | 1.2 / 0.4 / 0.0 | 101 | 12.4 (0.18 / 0.82 / 0.00) | 9.6 |
+| deck, after | 0.015 | −1.3 | 0.1 | 1.1 / 0.3 / 0.0 | 100 | 12.2 | 1.7 |
+| cumulus, before | 0.010 | −2.0 | 0.2 | 3.2 / 1.9 / 0.0 | 501 | 65.5 (0.00 / 0.21 / 0.79) | 47.6 |
+| cumulus, after | 0.010 | −1.9 | 0.2 | 3.3 / 1.9 / 0.0 | 504 | 66.4 | 9.7 |
+| low (top below 680 hPa), before | 0.236 | −28.5 | 3.3 | 11.1 / 20.1 / 0.1 | 132 | 15.6 (0.14 / 0.66 / 0.20) | 12.6 |
+| low, after | 0.237 | −20.5 | 3.5 | 11.5 / 20.3 / 0.0 | 135 | 15.9 | 2.3 |
+| middle (680–440 hPa), before | 0.067 | −5.5 | 1.9 | 3.4 / 11.5 / 0.1 | 224 | 26.2 (0.27 / 0.38 / 0.35) | 21.3 |
+| middle, after | 0.067 | −4.3 | 2.0 | 3.5 / 11.7 / 0.1 | 230 | 27.1 | 4.0 |
+| high (above 440 hPa), before | 0.144 | −13.4 | 10.7 | 5.0 / 26.9 / 2.3 | 236 | 25.4 (0.44 / 0.26 / 0.30) | 22.5 |
+| high, after | 0.135 | −8.0 | 8.6 | 5.2 / 27.3 / 2.0 | 255 | 27.6 (0.43 / 0.25 / 0.32) | 4.3 |
+| all, before (sum of classes) | 0.403 | −57.2 (−51.4) | 17.0 (16.2) | 23.9 / 60.7 / 2.4 | | | |
+| all, after | 0.399 | −38.1 (−36.1) | 15.1 (14.4) | 24.6 / 61.6 / 2.1 | | | |
+| Earth | 0.65–0.68; high 0.2–0.3 | −47 | +26 | | | high: about 0.6 / 0.3 / 0.1 | |
+
+By phase (the ramp below), before: liquid 63.4 and ice 23.5 g/m² globally,
+66.2 and 24.8 over the sea (Earth: liquid over the oceans 50–90, O'Dell et
+al. 2008; ice 20–70, CloudSat). By region, SWCRE / LWCRE / cover before →
+after: 30S–30N −43.7 / 11.0 / 0.223 → −25.2 / 9.2 / 0.221 (high cover 0.104
+→ 0.097, low −16.6 → −10.7); 30–60N −55.7 / 15.9 / 0.392 → −39.8 / 15.0 /
+0.391; 30–60S −110.0 / 25.5 / 0.629 → −80.5 / 23.8 / 0.627 (low −70.0 →
+−53.0 at cover 0.48 and 173 g/m² in cloud); 60–90N −40.1 / 29.2 / 0.741 →
+−29.8 / 25.5 / 0.712; 60–90S −35.2 / 30.0 / 0.825 → −22.9 / 26.1 / 0.812;
+land −39.9 / 15.6 / 0.383 → −29.0 / 14.7 / 0.381; sea −64.2 / 17.6 / 0.411
+→ −41.8 / 15.3 / 0.407. The shortwave excess was low cloud's, half of the
+total and −70 of −110 over 30–60S: its 132 g/m² in cloud had τ' 12.6 under
+the gray optics against 2.3 from its water's own optics (τ 15.6, g 0.86),
+reflecting 0.93 of a beam at μ = 0.5 instead of 0.70. The missing
+longwave is high cloud's: 0.144 of cover against 0.2–0.3 (0.104 in the
+tropics), and the total cover 0.40 (tropics 0.22) against 0.65–0.68. The
+high cloud is thick: 236 g/m² and τ 25 in cloud, 0.30 of its cover above
+τ 23 against ISCCP's deep-convective tenth (Rossow and Schiffer 1999), its
+gray τ' 22.5 that of τ ≈ 160 liquid. The condensate's totals are Earth's;
+the cloud is too little in cover and too thick, and ice colder than
+235 K holds 2.4 g/m².
+
+The optics (radiation header; both engines; `cloudOptics`): liquid share
+linear in the layer's temperature from 0 at 235.15 K to 1 at 273.15 K
+(half at −19 °C; CALIPSO's supercooled half near −20 °C, Hu et al. 2010);
+liquid τ = 3W/(2ρ_w r_e), r_e 11.8 µm over sea and ice sheets and 8.5 µm
+over land (Han et al. 1994), g from Slingo (1989), κ = 1.66 × 0.090361
+m²/g (CAM3); ice r_e = D_e/2 from Ou and Liou (1995) at −60 to −20 °C
+(15.55–73.55 µm), τ and g from Ebert and Curry (1992), κ = 1.66 (0.005 +
+1/r_e) m²/g; the two-stream takes τ' = (1 − g)τ (Coakley and Chýlek 1975,
+upscatter (1 − g)/2). Per kg/m²: liquid τ' 18.0 (sea) and 26.5 m²/kg
+(land), κ 150 m²/kg; ice τ' 35.9 and κ 115 at −60 °C, τ' 7.0 and κ 31 at
+−20 °C. The deck and the cumulus take their layer's optics.
+`cloudScattering` and `cloudAbsorption` now default to null and, set,
+restore the gray optics: with 95 and 130 the GPU's day lines from
+eight64_day0183 repeat the parent's to every printed digit, and the fresh
+start's days 6–10 M21's. Tests (`test/cloudOptics.test.mjs`): the optics
+against hand-computed values; an overcast layer over a black surface at
+μ 0.5 reflects 0.64304 (100 g/m² of liquid at 285 K) and 0.41806 (20 g/m²
+of ice at 213.15 K) with emissivities 0.77687 (10 g/m² of liquid) and
+0.89985, each to 10⁻⁹; physics alone at N=6 with 234 warm, 253 mixed and
+275 cold cloudy layers and 280 empirical decks, the engines' layer heating
+apart by 8.0·10⁻³ against 917 K/day, the surface flux, surface sunlight
+and both effects by 6.8·10⁻³, 7.5·10⁻³, 7.0·10⁻³ and 9.1·10⁻⁴ W/m², the
+phase optics moving the effects by up to 319 and 12.5; 179 sunlit columns
+close to 3.4·10⁻¹⁶ of the beam and their layers to 2.8·10⁻¹⁵.
+`test/cloudEffect.test.mjs`'s 48-step run keeps the gray optics: under
+the phase optics one cell parts by 1.04 W/m² (rms 1.1·10⁻³).
+
+Not built: an ice fall speed. The standard remedy for thick, short-lived
+high cloud is sedimenting ice that sublimates below (Heymsfield and
+Donner 1990), a moist-physics change on both engines. Three N=64 days from
+eight64_day0183 under the phase optics with `upperCloudLifetime` (the
+anvils' layers above 700 hPa) 1 h (the default, as `cloudLifetime`),
+3 h and 6 h: SWCRE −36.0, −42.9, −49.4; LWCRE 15.7, 23.5, 31.3; ASR − OLR
++10.2, +10.7, +11.9 W/m²: the upper cloud now adds more longwave than
+shortwave effect, where under the gray optics it traded them one for one.
+
+Runs on the phase optics (N=64 GPU, `everySteps` 8; day means; the audit on
+each last state):
+
+| | gray | phase |
+|---|---|---|
+| eight64 day 186: albedo; ASR; OLR; ASR − OLR | 0.312; 234.3; 242.1; −7.8 | 0.253; 254.4; 244.2; +10.2 |
+| SWCRE; LWCRE; clear-sky ASR; clear-sky OLR | −56.0; 17.6; 290.3; 259.7 | −36.0; 15.7; 290.4; 259.9 |
+| rain day mean (audit), mm/d | 1.70 (2.04) | 1.78 (2.12) |
+| SE Pacific / Peru / Namibia low cloud | 0.238 / 0.385 / 0.690 | 0.239 / 0.373 / 0.707 |
+| SE Pacific deck water as radiated (its own), g/m²; rain, mm/d | 54.4 (65.0); 0.48 | 50.7 (62.7); 0.49 |
+| Pacific ITCZ rain, mm/d; heating peak, hPa | 5.05; 439 | 5.05; 439 |
+| ten64 day 186: albedo; ASR − OLR; SWCRE; LWCRE | 0.344; −15.8; −66.6; 19.0 | 0.278; +4.4; −44.3; 17.1 |
+| rain day mean (audit); SE Pacific low cloud; its deck water (own) | 2.69 (2.62); 0.527; 104.1 (262.9) | 2.72 (2.67); 0.534; 107.9 (280.6) |
+| SE Pacific rain; ITCZ rain; heating peak | 1.02; 3.74; 788 | 0.99; 3.56; 788 |
+| 60–90N ice loss from nine64_day0091, 10³ km³/day | 0.166 (9.191 → 8.693) | 0.310 (→ 8.261) |
+| its day-94 60–90N SWCRE; LWCRE; cover | −140.3; 26.2; 0.684 | −96.5; 22.8; 0.676 |
+| fresh atlas start days 6–10: albedo; ASR; OLR; ASR − OLR | 0.459; 184.2; 220.5; −36.4 | 0.368; 215.2; 225.3; −10.1 |
+| SWCRE; LWCRE; rain; sea surface sunlight | −104.3; 36.4; 4.53; 108.8 | −73.8; 32.5; 4.56; 143.1 |
+
+No run made a NaN or clamped the ocean but nine64's known day-94 step. Pace
+(`js/gpu/profile.module.js`, 128 steps after 64 from eight64_day0183,
+alternated twice with the parent, nothing else on the GPU): step median
+19.8 and 19.8 ms against 19.9 and 19.9; the physics and boundary-layer
+passes 2.21 against 2.27 ms.
+
+What still misses: the cover (0.40 against 0.65–0.68; high 0.135 against
+0.2–0.3) and the high cloud's thickness; SWCRE −36.0 and LWCRE 15.7 against
+−47 and +26; ASR − OLR +10.2 W/m² on eight64's day 186, with a clear-sky
+OLR of 259.9 against CERES's 265–266; the Arctic loss 0.310 against the
+0.15–0.18 set under the gray clouds, whose June SWCRE over 60–90N was
+−140; the deck boxes, unchanged. A later sweep should vary the cloud's
+amount and spread — `upperCloudLifetime` (or the ice fall speed that would
+replace it), `cloudLifetime`, `stratiformLifetime`, `criticalHumidity`,
+`boundaryCriticalHumidity` — and the droplet radii at most within the
+observed 10–14 µm over sea and 7–10 µm over land; not `cloudScattering`
+or `cloudAbsorption` (set, they turn the optics gray), the phase ramp, the
+ice radius fit or the longwave coefficients.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
