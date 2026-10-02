@@ -9676,6 +9676,46 @@ ten64 (+0.060), met for the warm pool (+0.090); the melting (0.1–0.3 K/day
 per mm/day) not met, an order of magnitude weaker; high cover not lower:
 not met by 0.004–0.035; the 516–600 hPa bias: met.
 
+**The IFS updraught conversion (Oct 2).** `plumeConversion` 'sundqvist'
+(the default; 'zhangMcFarlane' the previous 1 − exp(−3·10⁻³ /m Δz) bit for
+bit on the CPU), element 6 of the specification (IFS Cy43r1 eqs 6.38–6.40
+after Sundqvist 1978; IFS tuning, which the IFS says probably still
+overestimates the updraught condensate): where the plume's condensate l at
+an upper interface exceeds 0.3 g/kg over sea or 0.5 g/kg over land,
+l (1 − exp(−a Δz)) rains, a = c0/(0.75 w)(1 − exp(−(l/l_crit)²)),
+c0 = 1.4·10⁻³ /s (1.3 α + 1 − α) on the model's phase ramp, l_crit
+0.5 g/kg, w the plume's speed there within 1–10 m/s, and below 268.16 K c0
+times and l_crit over 1 + 0.5 √min(268.16 − T, 18). What the plume keeps
+detrains where its mass flux falls. The in-updraught fallout (eqs
+6.41–6.42) is not built. On Jordan's column the rain of each layer equals
+the analytic integral to 1.9·10⁻¹⁶; the detrained condensate (Σ
+max(0, M_k+1 − M_k) times the condensate carried in) is 0.065 of the rain
+made, centred at 346 hPa (0.002 at 378 hPa before; the specification's
+single column on the previous plume expected 0.15–0.35). Three N=64 days
+from eight64_day0183 against the mixed-phase run (ten64_day0183 in
+brackets): detrained condensate per unit of convective rain, ITCZ 0.327 at
+676 hPa, 0.023 of it above 400 hPa (0.187 at 566 hPa), warm pool 0.167 at
+602 hPa (0.260 at 630); convective share, ITCZ 0.903 → 0.711 (0.952 →
+0.833), warm pool 0.897 → 0.681 (0.988 → 0.955); stratiform share (melted
+falling ice and conversion above 700 hPa) ITCZ 0.071 → 0.203 (0.010 →
+0.070), warm pool 0.064 → 0.213 (0.002 → 0.017); Q1R peak bin ITCZ 925 →
+925 hPa, warm pool 775 → 775 hPa; Q1R centroid ITCZ 744.1 → 730.5 (708.5 →
+706.6), warm pool 671.8 → 665.5 (754.1 → 778.0) hPa against spreads of 0.4
+and 0.25; warm-pool high cover 0.363 → 0.361 (0.291 → 0.307), its thin
+share (τ < 3.6) 0.44 (0.90); ITCZ high cover 0.407 → 0.417; trades low cover
+0.282 → 0.318, their convective rain 1.62 → 1.25 mm/d, deep firing 0.759 →
+0.735; SE Pacific convective share (audit) 0.74 → 0.60, California (CPU day)
+0.826 → 0.696; fired ITCZ tops above 300 hPa 0.025 → 0.034; replayed global
+rain 1.989 → 1.967 mm/d; GPU day 186 SWCRE −47.6, LWCRE 23.2 W/m².
+Acceptance on eight64: the detrained share (0.15–0.4) met, its centroid
+above 400 hPa not met (676 and 602 hPa); the convective share (0.55–0.75)
+met; the stratiform share (≥ 0.25) not met (0.20–0.21); the Q1R peak at or
+above 600 hPa not met; the centroid's rise beyond the spread met; the warm
+pool's high cover not up (within its 0.002 spread), its thin share (≥ 0.38)
+met; the trades' low cover (≥ 0.18) met. The detrainment centroid lies low
+because the plumes still stop at 500–700 hPa: what the plume carries
+detrains where its mass flux falls, and it falls there.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
