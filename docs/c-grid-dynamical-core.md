@@ -8975,9 +8975,11 @@ once. Tests: the sunlit cloudy layers' heating may part by 1.5·10⁻⁴
 K/day (1.26·10⁻⁴ at one cell; the CPU's own heating there moves by
 7.7·10⁻⁵ when one input changes by one float32 ulp, 1.3–1.5·10⁻⁴ when
 every input of the column changes by ±1 ulp); the cloud-effect parity
-leaves out the columns whose cloudy layers differ between the engines
-after any step, at most 2 % (4 of 362, 1 merged and 3 condensed; the
-rest 1.2·10⁻² W/m² at most apart). No digest moved; 63 files pass.
+leaves out the columns whose dry adjustment, shallow plume top or
+cloudy layers differ between the engines after any step, at most 2 %
+(4 of 362: 1 merged, 3 plume tops, 3 cloudy-layer patterns; the rest
+at most 1.9·10⁻² W/m² apart in the shortwave, 1.2·10⁻² in the
+longwave). No digest moved; 63 files pass.
 Proofs, nine64_day0274, the second CPU step after loading: each edge
 column's momentum + Δt (τ_s + τ_form) 2.3·10⁻¹¹ of 4.8·10⁵ kg/m/s (Δt
 τ_form up to 3.3·10³), blocking alone 2.3·10⁻¹³, the orographic waves
@@ -8994,7 +8996,7 @@ gives 9ba8c38's state, land and ocean digests after each of nine steps
 from eight64_day0183; N=8 (no file) and N=16 and N=64 with the terrain
 off take the raster with its note and give 9ba8c38's six-step digests,
 the GPU the raster, Lott and Miller's constants and no form layers.
-Parity after 1, 4, 16 steps, lowest layer u (9ba8c38; fe5de7f): from
+Parity after 1, 4, 16 steps, lowest layer u rms (9ba8c38; fe5de7f): from
 nine64_day0091 4.8·10⁻⁵, 1.4·10⁻³, 2.7·10⁻³ m/s (4.9·10⁻⁵, 2.5·10⁻⁴,
 1.5·10⁻²; 1.9·10⁻³, 2.0·10⁻³, 3.7·10⁻³), launched stress 2.4·10⁻⁴,
 1.3·10⁻³, 3.8·10⁻² of its largest (1.0·10⁻⁴, 9.6·10⁻⁴, 1.5·10⁻³;
@@ -9048,6 +9050,46 @@ N=64 25.18 / 25.04 → 25.65 / 26.14 ms (+3.4 %); N=128 105.90 / 106.76
 → 108.13 / 106.60 ms (+0.9 %; physics pass 42.24 / 42.34 → 43.94 /
 43.48, mixing pass 17.65 / 17.74 → 18.65 / 18.22); a day at N=128 54.4
 → 55.0 s of steps, 77.1 → 78.1 s to the saved file.
+
+*Review.* The four conflicted files rebuilt with git merge-tree: in each
+of the 13 code, test and doc files both sides touched, the lines the
+merge adds and removes against 9ba8c38 are fe5de7f's against bd42fa5
+line for line, apart from the signatures of layoutFor, createGpuModel
+and createModel and the layoutFor call, which carry both sides'
+parameters; PH keeps 9ba8c38's 97 slots in order and adds OFLT, TOFD
+and FSTRESS; the GPU dispatches pblDiagnose, gravityWaves, orography,
+then mixMomentum, orographyApply, gravityWaveDrag, dissipationHeat, the
+CPU's order. 63 files, 537 tests pass. With `subgrid` false the GPU too
+gives 9ba8c38's state digests after each of nine steps from
+eight64_day0183, and the note now says the files are turned off. Own
+harnesses, nine64_day0274: the CPU's second step closure 1.421·10¹⁷,
+surface and form drag 8.521·10¹⁷, mountains 3.645·10¹⁷, waves
+5.244·10¹⁴ J, heat 1.359·10¹⁸ J to 2.4·10⁻¹⁴; the GPU's kernels, run
+again after one step, edge momentum against Δt (τ_s + τ_form) to
+4.3·10⁻⁶ of the largest, mountains 1.5·10⁻⁷, heat against the
+dissipation 3.5·10⁻⁴, 11882 land cells with σ_flt and none at sea. The
+CPU's heating at cell 196 layer 24 under ±1 ulp on every input of the
+column, another generator: 1.47·10⁻⁴ (20 draws) to 1.64·10⁻⁴ K/day (200
+draws), so 1.5·10⁻⁴ lies inside that response, not above it. The
+cloud-effect columns 48 and 63 (0.66 W/m²) are first a shallow plume
+top apart: at step 9 it is 399 hPa on the CPU and 339 hPa on the GPU
+(base flux 4.48·10⁻² against 4.06·10⁻²; both 399 at step 7, 339 at step
+8), which cools layer 18 by 0.14 K on one engine and layer 17 by 0.16 K
+on the other; their cloudy layers part at step 11. Column 4 (1.59
+W/m², merged) is a plume top apart at step 13. The test now compares
+the plume top after every step as well; it leaves out the same 4
+columns. From nine64_day0274 after one step the launched stress parts
+by 6.4·10⁻² of its largest at 49.9N 122.1W, where the CPU blocks to
+589.5 m and the GPU not at all; ±10⁻⁶ on the CPU column's winds and
+±10⁻⁷ on its θ switch the blocking in 1 of 40 draws (9ba8c38 2.7·10⁻⁴,
+fe5de7f 9.2·10⁻⁵; after 4 and 16 steps 2.7·10⁻³ and 5.0·10⁻³, 9ba8c38
+2.7·10⁻³ and 8.4·10⁻³, fe5de7f 7.5·10⁻³ and 5.9·10⁻²). The three days
+from eight64_day0183 repeat day 186's line and the land-by-cover report
+above, one segment byte for byte as three. Ten steps from
+eight128_day0183: finite on both engines, largest wind 84.0 then
+77.5–82.3 m/s, the form rate × Δt 6.30 at 29.7S 70.2W on the first step
+and 1.33, then 0.74 at the tenth on the GPU; the CPU's solve never
+raises an edge column's kinetic energy or its largest |u|.
 
 ### M23 — The equatorial ocean — in progress
 
