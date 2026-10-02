@@ -61,7 +61,8 @@ const STRATUS: bool = ${!!o.stratus}; const ECTEI: bool = ${o.stratusIndex === '
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6; const CLEAR_SKY: bool = ${!!o.clearSkyPass};
 const SCATTER: bool = ${rayleigh.some(([, tau]) => tau > 0) || o.landAerosol > 0 || o.seaAerosol > 0}; const UPWARD: bool = ${!!o.upwardAbsorption}; const DIFFUSE_PATH: f32 = ${5 / 3}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
-const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
+const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo}; const ALB_ICEMELT: f32 = ${o.meltingIceAlbedo}; const ICE_MELTRANGE: f32 = ${o.iceMeltingRange};
+const AGEING: bool = ${!!o.snowAgeing}; const ALB_FRESH: f32 = ${o.freshSnowAlbedo}; const SNOW_COLDAGE: f32 = ${o.coldSnowAgeing}; const SNOW_MELTAGE: f32 = ${o.meltingSnowAgeing}; const SNOW_REFRESH: f32 = ${o.refreshSnowfall}; const WETSNOW: f32 = ${o.wetSnowRange}; const AGE_ACT: f32 = ${o.ageingActivation}; const ICE_SNOWFLOOR: f32 = ${o.iceSnowFloor};
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME};
@@ -83,6 +84,7 @@ const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporat
 const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
 const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling};
 const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
+const ALB_OLDSNOW: f32 = ${o.oldSnowAlbedo}; const MASKED: bool = ${!!o.snowMasking && !!o.vegetation}; const ALB_FOREST: f32 = ${o.forestSnowAlbedo}; const CLOSED_CANOPY: f32 = ${o.closedCanopy}; const CANOPY_MEM: f32 = ${o.canopyMemory};
 `;
 }
 
@@ -90,11 +92,20 @@ export const PHYSICS_FUNCTIONS = `
 fn esat(T: f32) -> f32 { return 611.2 * exp(17.67 * (T - 273.15) / (T - 29.65)); }
 fn qsat(T: f32, p: f32) -> f32 { let es = esat(T); let dry = p - (1.0 - EPSILON) * es; return select(1.0, EPSILON * es / dry, dry > 0.0); }
 fn openWaterAlbedo(mu: f32) -> f32 { return 0.026 / (pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1.0); }
-fn surfaceAlbedo(h: f32, water: f32, snow: f32) -> f32 {
+fn surfaceAlbedo(h: f32, water: f32, snow: f32, T: f32, snowAlbedo: f32) -> f32 {
   if (h <= 0.0) { return water; }
-  let bare = water + (ALB_ICE - water) * min(1.0, h / FULLALB);
-  return bare + (ALB_ICESNOW - bare) * min(1.0, snow / FULLSNOW_ICE);
+  let bareIce = ALB_ICE + (ALB_ICEMELT - ALB_ICE) * clamp((T - MELTING + ICE_MELTRANGE) / ICE_MELTRANGE, 0.0, 1.0);
+  let bare = water + (bareIce - water) * min(1.0, h / FULLALB);
+  return bare + (select(ALB_ICESNOW, snowAlbedo, AGEING) - bare) * min(1.0, snow / FULLSNOW_ICE);
 }
+fn agedSnow(albedo: f32, T: f32, dt: f32, floor: f32) -> f32 {
+  let days = dt / 86400.0;
+  if (T >= MELTING - WETSNOW) { return floor + (albedo - floor) * exp(-SNOW_MELTAGE * days); }
+  var pace = 1.0;
+  if (AGE_ACT > 0.0) { pace = min(1.0, exp(AGE_ACT * (T - MELTING) / (MELTING * T))); }
+  return max(floor, albedo - SNOW_COLDAGE * pace * days);
+}
+fn refreshedSnow(albedo: f32, fall: f32) -> f32 { return albedo + min(1.0, fall / SNOW_REFRESH) * (ALB_FRESH - albedo); }
 fn cellWind(i: i32, k: i32) -> vec3<f32> {
   var w = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {
@@ -570,6 +581,7 @@ export const SEA_SURFACE_WGSL = `if (h <= 0.0) {
       if (area >= MIN_CONC && volume >= MIN_VOLUME) { h = volume / area; T = FREEZING; fresh = area; }
     }
     PH[PH_CONC + i] = fresh;
+    PH[PH_SNOWALB + i] = ALB_FRESH;
   } else {
     var snow = snow0;
     let split = contrast - LEADX * (FREEZING - T);
@@ -597,6 +609,7 @@ export const SEA_SURFACE_WGSL = `if (h <= 0.0) {
       snow -= flooded; h = spread + flooded / RHOICE; PH[PH_CONC + i] = area;
     }
     PH[PH_SNOW + i] = snow;
+    PH[PH_SNOWALB + i] = select(ALB_FRESH, agedSnow(PH[PH_SNOWALB + i], T, dt, ICE_SNOWFLOOR), snow > 0.0);
   }`;
 
 /*
@@ -605,6 +618,7 @@ export const SEA_SURFACE_WGSL = `if (h <= 0.0) {
 export const snowOnSea = (amount) => `if (IN[S_ICE + i] > 0.0) {
       let conc = PH[PH_CONC + i]; let cover = select(conc, 1.0, conc <= 0.0);
       PH[PH_SNOW + i] += ${amount};
+      PH[PH_SNOWALB + i] = refreshedSnow(PH[PH_SNOWALB + i], ${amount});
       IN[S_ICE + i] += (1.0 - cover) * (${amount}) / (RHOICE * cover);
     } else { IN[S_TS + i] -= LFUS * (${amount}) / PH[PH_CAP + i]; }`;
 
@@ -628,11 +642,13 @@ export const PHYSICS_KERNELS = {
   let bucket = select(BUCKET, ROOTCAP, VEGETATED);
   let soilAlbedo = select(ALB_BARE, ALB_BARE - (ALB_BARE - ALB_WETSOIL) * clamp((soil0 / ROOTCAP - DARK_FROM) / DARK_SPAN, 0.0, 1.0), DARKENING);
   let bareAlbedo = select(ALB_LAND, soilAlbedo + (ALB_VEG - soilAlbedo) * veg0, VEGETATED);
-  let landAlbedo = select(bareAlbedo + min(1.0, snow0 / FULLSNOW) * (ALB_SNOW - bareAlbedo), ALB_ICESHEET, onIceSheet);
+  let ownSnow = select(ALB_SNOW, PH[PH_SNOWALB + i], AGEING);
+  let coveredSnow = select(ownSnow, ownSnow + (ALB_FOREST - ownSnow) * min(1.0, PH[PH_CANOPY + i] / CLOSED_CANOPY), MASKED);
+  let landAlbedo = select(bareAlbedo + min(1.0, snow0 / FULLSNOW) * (coveredSnow - bareAlbedo), ALB_ICESHEET, onIceSheet);
   let conc0 = PH[PH_CONC + i];
   let cover = select(0.0, select(conc0, 1.0, conc0 <= 0.0), ice > 0.0);
   let waterDir = openWaterAlbedo(mu);
-  let iceDif = surfaceAlbedo(ice, ALB_DIF_WATER, snow0); let iceDir = surfaceAlbedo(ice, waterDir, snow0);
+  let iceDif = surfaceAlbedo(ice, ALB_DIF_WATER, snow0, skin, PH[PH_SNOWALB + i]); let iceDir = surfaceAlbedo(ice, waterDir, snow0, skin, PH[PH_SNOWALB + i]);
   let adif = select(cover * iceDif + (1.0 - cover) * ALB_DIF_WATER, landAlbedo, onLand);
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
   let ts = select(skin, cover * skin + (1.0 - cover) * FREEZING, !onLand && ice > 0.0 && cover < 1.0);
@@ -876,10 +892,13 @@ export const PHYSICS_KERNELS = {
       }
       if (onIceSheet) { veg = 0.0; }
       PH[PH_VEG + i] = veg;
+      let standing = PH[PH_CANOPY + i];
+      PH[PH_CANOPY + i] = select(max(veg, standing + (veg - standing) * (1.0 - exp(-dt / CANOPY_MEM))), 0.0, onIceSheet);
       cap = ROOTCAP;
     }
     if (soil > cap) { PH[PH_RUNOFF + i] += soil - cap; soil = cap; }
     PH[PH_SOIL + i] = soil; PH[PH_SNOW + i] = snow; PH[PH_SURF + i] = surf;
+    PH[PH_SNOWALB + i] = select(ALB_FRESH, agedSnow(PH[PH_SNOWALB + i], T, dt, ALB_OLDSNOW), snow > 0.0);
   } else ${SEA_SURFACE_WGSL}
   IN[S_TS + i] = T; IN[S_ICE + i] = h;
 }`,
@@ -1535,6 +1554,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   if (PH[PH_LAND + i] > 0.5) {
     if (airT < MELTING) {
       PH[PH_SNOW + i] += rained + convected;
+      PH[PH_SNOWALB + i] = refreshedSnow(PH[PH_SNOWALB + i], rained + convected);
       IN[S_TH + bottom * C + i] += LFUS * (rained + convected) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
     }
     else {

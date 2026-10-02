@@ -1,4 +1,4 @@
-import { MELTING_POINT } from './ice.module.js';
+import { MELTING_POINT, SNOW_AGEING, agedSnowAlbedo, refreshedSnowAlbedo } from './ice.module.js';
 
 /*
  * The land surface: a skin of small heat capacity, a bucket of soil
@@ -31,6 +31,21 @@ import { MELTING_POINT } from './ice.module.js';
  * `albedo` everywhere. A cell of the geography's `iceSheet` grows no
  * vegetation and keeps iceSheetAlbedo whatever lies on it.
  *
+ * With snowAgeing (the default) the snow's albedo is per cell, in
+ * `snowAlbedo`: agedSnowAlbedo (ice.module.js) ages it toward
+ * oldSnowAlbedo after each update, a snowfall refreshes it
+ * (refreshedSnowAlbedo), and ground without snow holds freshSnowAlbedo,
+ * so that the next snow starts fresh; without it the snow's albedo is
+ * snowAlbedo. With snowMasking and vegetation, trees standing above the
+ * snow darken it: the albedo of a full snow cover falls linearly from the
+ * snow's own to forestSnowAlbedo as the standing cover rises to
+ * closedCanopy, and stays there above it, the shape of the MODIS
+ * snow-covered albedo against tree cover (Moody et al. 2007). The
+ * standing cover, `canopy`, is the vegetation cover where that is higher
+ * and otherwise relaxes toward it over canopyMemory, so that the trees a
+ * cell carried into the winter keep standing while the cover decays under
+ * the snow, and a cell that stays under snow for years loses them.
+ *
  * With vegetation the soil has two stores. Rain fills a surface layer
  * of surfaceCapacity kg/m² first; what it cannot hold infiltrates the
  * root zone (the bucket), a share (soil/capacity)⁴ of it running off,
@@ -49,11 +64,18 @@ export function createLandSurface(mesh, geography, {
   heatCapacity = 1e6, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.2, snowAlbedo = 0.55, fullSnow = 20,
   latentHeatFusion = 3.34e5, vegetation: vegetated = true, bareAlbedo = 0.30, vegetatedAlbedo = 0.13, rootZoneCapacity = 300, dryWetness = 0.1, wetWetness = 0.6, growthTime = 180 * 86400, declineTime = 365 * 86400,
   snowDeclineTime = 720 * 86400, iceSheetAlbedo = 0.8, surfaceCapacity = 15, percolationTime = 86400, stomatalResistance = 70,
-  growthColdest = 278.15, growthWarmest = 288.15, soilDarkening = true, wetSoilAlbedo = 0.15, darkeningWetness = [0.2, 0.5], buffers = null,
+  growthColdest = 278.15, growthWarmest = 288.15, soilDarkening = true, wetSoilAlbedo = 0.15, darkeningWetness = [0.2, 0.5],
+  snowAgeing = true, oldSnowAlbedo = 0.50, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
+  refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
+  snowMasking = true, forestSnowAlbedo = 0.27, closedCanopy = 0.7, canopyMemory = 365 * 86400, buffers = null,
 } = {}) {
   const C = mesh.nCells;
   const shared = (name) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * C));
   const soil = shared('soil'), snow = shared('snow'), runoff = shared('runoff'), vegetation = shared('vegetation'), surface = shared('surface');
+  const snowAlbedoField = shared('snowAlbedo'), canopy = shared('canopy');
+  if (!(buffers && buffers.snowAlbedo)) snowAlbedoField.fill(freshSnowAlbedo);
+  const ageing = { freshSnowAlbedo, coldSnowAgeing, meltingSnowAgeing, refreshSnowfall, wetSnowRange, ageingActivation };
+  const masked = snowMasking && vegetated;
   const bareShare = new Float64Array(C);
   const warmth = (t) => Math.min(1, Math.max(0, (t - growthColdest) / (growthWarmest - growthColdest)));
   const { land, iceSheet = null } = geography;
@@ -87,19 +109,27 @@ export function createLandSurface(mesh, geography, {
     return total;
   }
 
+  function snowCovered(i) {
+    const own = snowAgeing ? snowAlbedoField[i] : snowAlbedo;
+    return masked ? own + (forestSnowAlbedo - own) * Math.min(1, canopy[i] / closedCanopy) : own;
+  }
+
   function surfaceAlbedo(i) {
     if (onIceSheet(i)) return iceSheetAlbedo;
     const bare = bareGround(i);
-    return bare + Math.min(1, snow[i] / fullSnow) * (snowAlbedo - bare);
+    return bare + Math.min(1, snow[i] / fullSnow) * (snowCovered(i) - bare);
   }
 
   function grow(i, dt, temperature) {
-    if (onIceSheet(i)) { vegetation[i] = 0; return; }
-    if (snow[i] > 0) { vegetation[i] *= Math.exp(-dt / snowDeclineTime); return; }
-    const cap = capacity(i);
-    const goal = Math.min(1, Math.max(0, (Math.min(soil[i], cap) / cap - dryWetness) / (wetWetness - dryWetness)));
-    if (goal > vegetation[i]) vegetation[i] += (goal - vegetation[i]) * (1 - Math.exp(-dt * warmth(temperature) / growthTime));
-    else vegetation[i] += (goal - vegetation[i]) * (1 - Math.exp(-dt / declineTime));
+    if (onIceSheet(i)) { vegetation[i] = 0; canopy[i] = 0; return; }
+    if (snow[i] > 0) vegetation[i] *= Math.exp(-dt / snowDeclineTime);
+    else {
+      const cap = capacity(i);
+      const goal = Math.min(1, Math.max(0, (Math.min(soil[i], cap) / cap - dryWetness) / (wetWetness - dryWetness)));
+      if (goal > vegetation[i]) vegetation[i] += (goal - vegetation[i]) * (1 - Math.exp(-dt * warmth(temperature) / growthTime));
+      else vegetation[i] += (goal - vegetation[i]) * (1 - Math.exp(-dt / declineTime));
+    }
+    canopy[i] = Math.max(vegetation[i], canopy[i] + (vegetation[i] - canopy[i]) * (1 - Math.exp(-dt / canopyMemory)));
   }
 
   function update(i, surfaceT, flux, evaporation, dt) {
@@ -125,11 +155,12 @@ export function createLandSurface(mesh, geography, {
       surfaceT[i] = MELTING_POINT + (energy - melt * latentHeatFusion) / heatCapacity;
     }
     if (vegetated) grow(i, dt, temperature);
+    snowAlbedoField[i] = snow[i] > 0 ? agedSnowAlbedo(snowAlbedoField[i], surfaceT[i], dt, oldSnowAlbedo, ageing) : freshSnowAlbedo;
     overflow(i);
   }
 
   function deposit(i, rain, airTemperature) {
-    if (airTemperature < MELTING_POINT) { snow[i] += rain; return; }
+    if (airTemperature < MELTING_POINT) { snow[i] += rain; snowAlbedoField[i] = refreshedSnowAlbedo(snowAlbedoField[i], rain, ageing); return; }
     if (!vegetated) { soil[i] += rain; overflow(i); return; }
     surface[i] += rain;
     if (surface[i] > surfaceCapacity) {
@@ -151,8 +182,9 @@ export function createLandSurface(mesh, geography, {
   function initialize() {
     for (let i = 0; i < C; i++) {
       vegetation[i] = land[i] && vegetated && !onIceSheet(i) ? 0.5 : 0;
+      canopy[i] = vegetation[i];
       soil[i] = land[i] ? 0.5 * capacity(i) : 0;
-      snow[i] = 0; runoff[i] = 0; surface[i] = 0;
+      snow[i] = 0; runoff[i] = 0; surface[i] = 0; snowAlbedoField[i] = freshSnowAlbedo;
     }
   }
 
@@ -166,22 +198,27 @@ export function createLandSurface(mesh, geography, {
    * A saved land state without vegetation starts as initialize() would
    * where it is free of snow (vegetated, bucket full) and bare under snow.
    * A sea cell keeps the saved snow only where `ice` has ice to hold it.
+   * A state saved without a snow albedo starts its snow fresh
+   * (freshSnowAlbedo), and one without a standing cover stands it at the
+   * vegetation cover.
    */
   function load(saved, ice = null) {
     for (let i = 0; i < C; i++) {
       soil[i] = land[i] ? saved.soil[i] : 0;
       surface[i] = land[i] && saved.surface ? Math.min(surfaceCapacity, saved.surface[i]) : 0;
       snow[i] = land[i] || (ice && ice[i] > 0) ? saved.snow[i] : 0;
+      snowAlbedoField[i] = snow[i] > 0 && saved.snowAlbedo ? saved.snowAlbedo[i] : freshSnowAlbedo;
       if (!land[i] || !vegetated || onIceSheet(i)) vegetation[i] = 0;
       else if (saved.vegetation) vegetation[i] = Math.min(1, Math.max(0, saved.vegetation[i]));
       else { vegetation[i] = snow[i] > 0 ? 0 : 1; if (snow[i] <= 0) soil[i] = capacity(i); }
+      canopy[i] = vegetation[i] > 0 && saved.canopy ? Math.min(1, Math.max(vegetation[i], saved.canopy[i])) : vegetation[i];
     }
     runoff.fill(0);
   }
 
   return {
-    soil, surface, snow, runoff, vegetation, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load,
-    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface) } : {}) }; },
-    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer },
+    soil, surface, snow, runoff, vegetation, snowAlbedo: snowAlbedoField, canopy, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load,
+    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy) } : {}) }; },
+    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer },
   };
 }

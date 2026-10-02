@@ -63,15 +63,49 @@ export const MINIMUM_VOLUME = 1e-4;
  * freeboard (waterDensity − iceDensity per metre of ice) floods and
  * freezes into snow-ice: the surplus mass leaves `snow` and joins the
  * ice at iceDensity, which conserves both mass and energy.
+ *
+ * The bare ice's albedo depends on its skin temperature as CCSM3's sea
+ * ice does (Briegleb et al. 2004): iceAlbedo while cold, falling linearly
+ * over the last iceMeltingRange kelvin below the melting point to
+ * meltingIceAlbedo, which stands for melting ice with its ponds; ice
+ * thinner than fullAlbedoThickness blends toward the water's albedo. With
+ * snowAgeing the snow on the ice has its own albedo in `snowAlbedo` (the
+ * ocean cells of the land's array when its buffer is shared), aged by
+ * agedSnowAlbedo toward iceSnowFloor and refreshed by snowfall
+ * (refreshedSnowAlbedo); without it the snow's albedo is iceSnowAlbedo.
  */
 export function openWaterAlbedo(mu) {
   return 0.026 / (Math.pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1);
 }
 
+/*
+ * The snow-albedo ageing of Douville et al. (1995) as the ECMWF land
+ * scheme carries it (Dutra et al. 2010, appendix eq. A7 and eq. 9): snow
+ * whose surface lies within wetSnowRange kelvin of the melting point
+ * relaxes toward `floor` at meltingSnowAgeing per day; colder snow loses
+ * coldSnowAgeing per day, down to `floor`, scaled with ageingActivation
+ * by exp(ageingActivation (1/T_melt − 1/T)), the temperature dependence of
+ * grain growth in BATS (Dickinson et al. 1993), so that cold dry snow
+ * keeps its brightness. A snowfall of `fall` kg/m² moves the albedo
+ * min(1, fall / refreshSnowfall) of the way to freshSnowAlbedo.
+ */
+export const SNOW_AGEING = { freshSnowAlbedo: 0.85, coldSnowAgeing: 0.008, meltingSnowAgeing: 0.24, refreshSnowfall: 10, wetSnowRange: 2, ageingActivation: 5000 };
+export function agedSnowAlbedo(albedo, temperature, dt, floor, { coldSnowAgeing, meltingSnowAgeing, wetSnowRange, ageingActivation } = SNOW_AGEING) {
+  const days = dt / 86400;
+  if (temperature >= MELTING_POINT - wetSnowRange) return floor + (albedo - floor) * Math.exp(-meltingSnowAgeing * days);
+  const pace = ageingActivation > 0 ? Math.min(1, Math.exp(ageingActivation * (temperature - MELTING_POINT) / (MELTING_POINT * temperature))) : 1;
+  return Math.max(floor, albedo - coldSnowAgeing * pace * days);
+}
+export function refreshedSnowAlbedo(albedo, fall, { freshSnowAlbedo, refreshSnowfall } = SNOW_AGEING) {
+  return albedo + Math.min(1, fall / refreshSnowfall) * (freshSnowAlbedo - albedo);
+}
+
 export function createSeaIce(mesh, {
   slabHeatCapacity = 2.1e7, skinHeatCapacity = 2e5, conductivity = 2.0, minimumThickness = 0.1,
-  iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.5, fullAlbedoThickness = 0.5,
+  iceDensity = 917, latentHeatFusion = 3.34e5, oceanAlbedo = null, diffuseWaterAlbedo = 0.06, iceAlbedo = 0.62, meltingIceAlbedo = 0.48, iceMeltingRange = 1, fullAlbedoThickness = 0.5,
   iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10,
+  snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
+  refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   heatCapacity = null, buffers = null,
 } = {}) {
   const C = mesh.nCells;
@@ -80,22 +114,30 @@ export function createSeaIce(mesh, {
   const oceanFlux = new Float64Array(buffers && buffers.oceanFlux ? buffers.oceanFlux : new SharedArrayBuffer(8 * C));
   const snow = new Float64Array(buffers && buffers.snow ? buffers.snow : new SharedArrayBuffer(8 * C));
   const concentration = new Float64Array(buffers && buffers.concentration ? buffers.concentration : new SharedArrayBuffer(8 * C));
+  const snowAlbedo = new Float64Array(buffers && buffers.snowAlbedo ? buffers.snowAlbedo : new SharedArrayBuffer(8 * C));
+  if (!(buffers && buffers.snowAlbedo)) snowAlbedo.fill(freshSnowAlbedo);
+  const ageing = { freshSnowAlbedo, coldSnowAgeing, meltingSnowAgeing, refreshSnowfall, wetSnowRange, ageingActivation };
 
   const waterAlbedo = (mu) => oceanAlbedo ?? (mu === null ? diffuseWaterAlbedo : openWaterAlbedo(mu));
-  function coverAlbedo(thickness, water, snowCover) {
+  const bareIceAlbedo = (temperature) => iceAlbedo + (meltingIceAlbedo - iceAlbedo) * Math.min(1, Math.max(0, (temperature - MELTING_POINT + iceMeltingRange) / iceMeltingRange));
+  function coverAlbedo(thickness, water, snowCover, temperature, snowy) {
     if (thickness <= 0) return water;
-    const bare = water + (iceAlbedo - water) * Math.min(1, thickness / fullAlbedoThickness);
-    return bare + (iceSnowAlbedo - bare) * Math.min(1, snowCover / iceFullSnow);
+    const bare = water + (bareIceAlbedo(temperature) - water) * Math.min(1, thickness / fullAlbedoThickness);
+    return bare + ((snowAgeing ? snowy : iceSnowAlbedo) - bare) * Math.min(1, snowCover / iceFullSnow);
   }
 
-  function albedo(thickness, mu = null, snowCover = 0, fraction = thickness > 0 ? 1 : 0) {
+  /*
+   * temperature is the ice's skin temperature (cold when not given) and
+   * snowy the albedo of the snow on it (fresh when not given).
+   */
+  function albedo(thickness, mu = null, snowCover = 0, fraction = thickness > 0 ? 1 : 0, temperature = -Infinity, snowy = freshSnowAlbedo) {
     const water = waterAlbedo(mu);
-    return fraction * coverAlbedo(thickness, water, snowCover) + (1 - fraction) * water;
+    return fraction * coverAlbedo(thickness, water, snowCover, temperature, snowy) + (1 - fraction) * water;
   }
 
-  function albedoContrast(thickness, mu = null, snowCover = 0) {
+  function albedoContrast(thickness, mu = null, snowCover = 0, temperature = -Infinity, snowy = freshSnowAlbedo) {
     const water = waterAlbedo(mu);
-    return coverAlbedo(thickness, water, snowCover) - water;
+    return coverAlbedo(thickness, water, snowCover, temperature, snowy) - water;
   }
 
   function cover(i, thickness) {
@@ -117,6 +159,7 @@ export function createSeaIce(mesh, {
       const area = cover(i, ice[i]), leads = (1 - area) * amount;
       snow[i] += amount;
       ice[i] += leads / (iceDensity * area);
+      snowAlbedo[i] = refreshedSnowAlbedo(snowAlbedo[i], amount, ageing);
       budget.snowMelted += mesh.areaCell[i] * leads;
       budget.frozen += mesh.areaCell[i] * leads / iceDensity;
     } else { surfaceT[i] -= latentHeatFusion * amount / (heatCapacity ? heatCapacity[i] : slabHeatCapacity); budget.snowMelted += mesh.areaCell[i] * amount; }
@@ -130,6 +173,7 @@ export function createSeaIce(mesh, {
     if (ice[i] <= 0) {
       concentration[i] = 0;
       if (snow[i] > 0) { surfaceT[i] -= latentHeatFusion * snow[i] / capacity; budget.snowMelted += cellArea * snow[i]; snow[i] = 0; }
+      snowAlbedo[i] = freshSnowAlbedo;
       surfaceT[i] += dt * (flux[i] + ocean) / capacity;
       if (surfaceT[i] < FREEZING_POINT) {
         const volume = (FREEZING_POINT - surfaceT[i]) * capacity / latent, area = Math.min(1, volume / leadClosing);
@@ -175,6 +219,7 @@ export function createSeaIce(mesh, {
       surfaceT[i] = FREEZING_POINT + energyLeft / capacity;
       ice[i] = 0;
       snow[i] = 0;
+      snowAlbedo[i] = freshSnowAlbedo;
       concentration[i] = 0;
       return;
     }
@@ -184,13 +229,14 @@ export function createSeaIce(mesh, {
     const flooded = Math.max(0, snowOnIce - (waterDensity - iceDensity) * newThickness) * iceDensity / waterDensity;
     surfaceT[i] = skin;
     snow[i] = snowOnIce - flooded;
+    snowAlbedo[i] = snow[i] > 0 ? agedSnowAlbedo(snowAlbedo[i], skin, dt, iceSnowFloor, ageing) : freshSnowAlbedo;
     budget.snowIce += cellArea * area * flooded;
     ice[i] = newThickness + flooded / iceDensity;
     concentration[i] = area;
   }
 
   return {
-    albedo, albedoContrast, cover, load, energy, update, deposit, budget, slabHeatCapacity, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, concentration,
-    shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, concentration: concentration.buffer },
+    albedo, albedoContrast, cover, load, energy, update, deposit, budget, slabHeatCapacity, latent, latentHeatFusion, leadClosing, leadExchange, oceanFlux, snow, snowAlbedo, concentration,
+    shared: { oceanFlux: oceanFlux.buffer, snow: snow.buffer, snowAlbedo: snowAlbedo.buffer, concentration: concentration.buffer },
   };
 }
