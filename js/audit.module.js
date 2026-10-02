@@ -71,14 +71,15 @@ export function heatingProfile(Q, p, dp, { top = 100e2, width = 50e2 } = {}) {
 /*
  * The bulk sensible heat (W/m²) the CPU model's radiation step gives cell
  * i from the lowest air temperature airT and the surface temperature
- * surfaceT it read, and the ice thickness before the step: over partly
- * iced sea the skin blends in open water at the freezing point.
+ * surfaceT it read, and the sea-ice cover before the step (the step's ice
+ * update moves the concentration): over partly iced sea the skin blends in
+ * open water at the freezing point.
  */
-export function bulkSensible(model, i, airT, surfaceT, ice, { seaDrag, landDrag, freezing, gustiness = 3 }) {
+export function bulkSensible(model, i, airT, surfaceT, cover, { seaDrag, landDrag, freezing, gustiness = 3 }) {
   const pi = model.state[0], { sigmaMid, K, R, cp } = model.core.diagnostics;
   let skin = surfaceT;
   const land = model.geography.land[i];
-  if (!land) { const cover = model.seaIce.cover(i, ice); if (ice > 0 && cover < 1) skin = cover * surfaceT + (1 - cover) * freezing; }
+  if (!land && cover > 0 && cover < 1) skin = cover * surfaceT + (1 - cover) * freezing;
   const density = pi[i] * sigmaMid[K - 1] / (R * airT);
   return density * (land ? landDrag : seaDrag) * Math.max(model.surface.windSpeed[i], gustiness) * cp * (skin - airT);
 }

@@ -296,10 +296,10 @@ const sensibleOptions = { seaDrag: SURFACE.dragCoefficient ?? SEA_DRAG, landDrag
 const physicsPhase = phases.physics, closurePhase = phases.closure;
 phases.physics = (...args) => {
   deckStart();
-  const air = heated.map((i) => theta[bottom + i] * exnerLayer[bottom + i]), skin = heated.map((i) => state[3][i]), iceBefore = heated.map((i) => ice[i]);
+  const air = heated.map((i) => theta[bottom + i] * exnerLayer[bottom + i]), skin = heated.map((i) => state[3][i]), coverBefore = heated.map((i) => model.seaIce.cover(i, ice[i]));
   heated.forEach((i, n) => { lowestExner[n] = exnerLayer[bottom + i]; });
   physicsPhase(...args);
-  heated.forEach((i, n) => { sensibleHeat[n] = bulkSensible(model, i, air[n], skin[n], iceBefore[n], sensibleOptions); });
+  heated.forEach((i, n) => { sensibleHeat[n] = bulkSensible(model, i, air[n], skin[n], coverBefore[n], sensibleOptions); });
   deckAfter();
   for (let i = 0; i < C; i++) if (Number.isFinite(radiation.stabilityIndex[i])) { acc.eis[i] += radiation.stabilityIndex[i]; acc.eisN[i] += 1; }
 };

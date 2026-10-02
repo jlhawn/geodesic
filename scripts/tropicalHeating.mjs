@@ -172,10 +172,10 @@ const sensibleOptions = { seaDrag: SURFACE.dragCoefficient ?? SEA_DRAG, landDrag
 phases.physics = (iFrom, iTo, step, sums) => {
   for (let i = 0; i < C; i++) { physicsExner[i] = exnerLayer[bottom * C + i]; physicsAir[i] = theta[bottom * C + i] * physicsExner[i]; physicsSurface[i] = surfaceT[i]; }
   traced.forEach((i, n) => { for (let k = 0; k < K; k++) staleExner[n * K + k] = exnerLayer[k * C + i]; });
-  const iceBefore = Float64Array.from(ice);
+  const coverBefore = Float64Array.from({ length: C }, (_, i) => seaIce.cover(i, ice[i]));
   physicsPhase(iFrom, iTo, step, sums);
   let sensibleSum = 0;
-  const sensibleOf = (i) => bulkSensible(model, i, physicsAir[i], physicsSurface[i], iceBefore[i], sensibleOptions);
+  const sensibleOf = (i) => bulkSensible(model, i, physicsAir[i], physicsSurface[i], coverBefore[i], sensibleOptions);
   for (let i = 0; i < C; i++) sensibleSum += area[i] * sensibleOf(i);
   checks.sensibleGlobal = sensibleSum; checks.sensibleModel = sums.sensibleHeat;
   traced.forEach((i, n) => {
