@@ -120,7 +120,7 @@ const acc = Array.from({ length: NB }, () => ({
   temperature: new Float64Array(K), humidity: new Float64Array(K),
   rain: { deep: 0, shallow: 0, liquidLow: 0, liquidHigh: 0, iceMelted: 0, iceGround: 0, model: 0, modelConvective: 0 },
   plume: { deck: 0, noLcl: 0, notCloudy: 0, shallowTop: new Float64Array(10), weakCape: 0, weakCapeSum: 0, closed: 0, closedCape: 0, closedInhibition: 0, fired: 0, firedCape: 0, firedInhibition: 0, firedFlux: 0, firedTop: new Float64Array(10), limited: 0, candidateCape: new Float64Array(8), consumption: 0, cloudBase: 0, cloudBaseN: 0,
-    dilute: new Float64Array(10), undilute: new Float64Array(10), diluteN: 0, neverBuoyant: 0, pureNeverBuoyant: 0 },
+    dilute: new Float64Array(10), undilute: new Float64Array(10), diluteN: 0, neverBuoyant: 0, pureNeverBuoyant: 0, diluteCape: 0, pureCape: 0 },
   counter: { subcloud: 0, cloudLayer: 0, fires: 0, firesOnly: 0, both: 0, actualOnly: 0, flux: 0, fluxActual: 0, low: new Float64Array(4), lowOnly: new Float64Array(4), temperature: new Float64Array(K), humidity: new Float64Array(K), pressure: new Float64Array(K), weight: 0 },
 }));
 const audit = { conv: new Float64Array(K), pressure: new Float64Array(K), fired: 0, area: 0, parts: new Float64Array(5 * K) };
@@ -493,7 +493,7 @@ moist.adjust = (st, iFrom, iTo, step) => {
     else if (dilute.status === 'shallow') P.shallowTop[bin100(dilute.topPressure)] += a;
     if (dilute.lclPressure) { P.cloudBase += a * dilute.lclPressure; P.cloudBaseN += a; }
     if (dilute.status === 'candidate' || dilute.status === 'shallow') {
-      P.diluteN += a;
+      P.diluteN += a; P.diluteCape += a * dilute.cape; P.pureCape += a * (pure ? pure.cape : 0);
       if (dilute.buoyant) P.dilute[bin100(Number.isFinite(dilute.unbuoyant) ? dilute.unbuoyant : dilute.topPressure)] += a; else P.neverBuoyant += a;
       if (pure && pure.buoyant) P.undilute[bin100(Number.isFinite(pure.unbuoyant) ? pure.unbuoyant : pure.topPressure)] += a; else P.pureNeverBuoyant += a;
     }
@@ -632,10 +632,10 @@ function jordanAt(p) {
   return null;
 }
 function peakOf(profile, pressure, mass) {
-  let best = 0;
-  for (let k = 1; k < K; k++) if (profile[k] > profile[best]) best = k;
+  let best = -1;
+  for (let k = 0; k < K; k++) if (pressure[k] >= 100e2 && (best < 0 || profile[k] > profile[best])) best = k;
   const bins = new Map();
-  for (let k = 0; k < K; k++) { const key = Math.floor(pressure[k] / 50e2); const e = bins.get(key) ?? [0, 0]; e[0] += profile[k] * mass[k]; e[1] += mass[k]; bins.set(key, e); }
+  for (let k = 0; k < K; k++) { if (pressure[k] < 100e2) continue; const key = Math.floor(pressure[k] / 50e2); const e = bins.get(key) ?? [0, 0]; e[0] += profile[k] * mass[k]; e[1] += mass[k]; bins.set(key, e); }
   let bestBin = null, bestValue = -Infinity;
   for (const [key, [s, m]] of bins) if (s / m > bestValue) { bestValue = s / m; bestBin = key; }
   return { layer: pressure[best] / 100, value: profile[best], bin: `${bestBin * 50}-${bestBin * 50 + 50}`, binValue: bestValue };
@@ -671,7 +671,7 @@ acc.forEach((A, b) => {
   say(`  ${'sum'.padStart(5)} ${TERMS.map((t) => f(Array.from({ length: K }, (_, k) => wm2(T_[t], k)).reduce((x, y) => x + y, 0), 1).padStart(6)).join(' ')}`);
   for (const [label, profile] of [['Q1', Q1], ['Q1-QR', Q1R], ['deep plume with its rain\'s evaporation', deepAll], ['Q2', physicsVapour]]) {
     const pk = peakOf(profile, p, mass);
-    say(`${label} peak: layer at ${f(pk.layer, 0)} hPa (${f(pk.value, 2)} K/d); over 50 hPa bins ${pk.bin} hPa (${f(pk.binValue, 2)} K/d)`);
+    say(`${label} peak below 100 hPa: layer at ${f(pk.layer, 0)} hPa (${f(pk.value, 2)} K/d); over 50 hPa bins ${pk.bin} hPa (${f(pk.binValue, 2)} K/d)`);
   }
   {
     const P = A.plume, total = S;
@@ -681,7 +681,7 @@ acc.forEach((A, b) => {
     say(`deep plume, share of the column-steps: deck veto ${f(P.deck / total, 3)}, no condensation level ${f(P.noLcl / total, 3)}, never cloudy ${f(P.notCloudy / total, 3)}, cloudy but topping below 700 hPa ${f(P.shallowTop.reduce((x, y) => x + y, 0) / total, 3)} (tops by hPa: ${tops}); deep candidates with CAPE at most plumeCape ${O.plumeCape} ${f(P.weakCape / total, 3)} (mean CAPE ${f(P.weakCapeSum / P.weakCape, 0)} J/kg), above it but closed by inhibition or consumption ${f(P.closed / total, 3)} (CAPE ${f(P.closedCape / P.closed, 0)}, inhibition ${f(P.closedInhibition / P.closed, 1)} J/kg), fired ${f(P.fired / total, 3)}`);
     say(`  candidates' CAPE (J/kg, share of all column-steps): ${capes}`);
     say(`  fired: mean CAPE ${f(P.firedCape / P.fired, 0)} J/kg, inhibition ${f(P.firedInhibition / P.fired, 1)} J/kg, base flux ${f(P.firedFlux / P.fired, 4)} kg/m2/s (box mean ${f(P.firedFlux / total, 5)}), consumption F ${f(P.consumption / P.fired, 4)} J/kg per s per kg/m2/s, held below its closure by the boundary-loss or Courant limit on ${f(P.limited / P.fired, 3)}; tops by hPa: ${firedTops}`);
-    say(`  mean condensation level ${f(P.cloudBase / P.cloudBaseN / 100, 0)} hPa; where the cloudy plume, once buoyant, first stops being buoyant (or its top), hPa, share of the cloudy plumes: entraining ${Array.from(P.dilute, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / P.diluteN, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ')}, never buoyant ${f(P.neverBuoyant / P.diluteN, 3)}; the same plume without entrainment ${Array.from(P.undilute, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / P.diluteN, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ')}, never buoyant ${f(P.pureNeverBuoyant / P.diluteN, 3)}`);
+    say(`  mean condensation level ${f(P.cloudBase / P.cloudBaseN / 100, 0)} hPa; where the cloudy plume, once buoyant, first stops being buoyant (or its top), hPa, share of the cloudy plumes: entraining ${Array.from(P.dilute, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / P.diluteN, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ')}, never buoyant ${f(P.neverBuoyant / P.diluteN, 3)}; the same plume without entrainment ${Array.from(P.undilute, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / P.diluteN, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ')}, never buoyant ${f(P.pureNeverBuoyant / P.diluteN, 3)}; mean CAPE of the cloudy plumes ${f(P.diluteCape / P.diluteN, 0)} J/kg, without entrainment ${f(P.pureCape / P.diluteN, 0)} J/kg (rain-out at plumeRainRate, condensate loading)`);
   }
   {
     const Q = A.counter, total = S;
@@ -711,5 +711,9 @@ acc.forEach((A, b) => {
   for (let k = 0; k < K; k++) if (p[k] >= 400 && p[k] <= 520 && conv[k] > conv[upper]) upper = k;
   say(`\nthe audit's firing-column convective heating over the day, Pacific ITCZ: firing on ${f(audit.fired / audit.area, 3)} of the column-steps; peak at ${f(p[peak], 0)} hPa, ${f(conv[peak], 2)} K/d = deep rain ${f(part(0, peak), 2)} + downdraft evaporation ${f(part(1, peak), 2)} + deep transport ${f(part(2, peak), 2)} + shallow ${f(part(3, peak), 2)} + rain evaporation below cloud base ${f(part(4, peak), 2)}; largest at 400-520 hPa ${f(p[upper], 0)} hPa, ${f(conv[upper], 2)} K/d = ${f(part(0, upper), 2)} + ${f(part(1, upper), 2)} + ${f(part(2, upper), 2)} + ${f(part(3, upper), 2)} + ${f(part(4, upper), 2)}`);
   say(`  firing-column profile (hPa K/d): ${Array.from(conv, (x, k) => `${f(p[k], 0)} ${f(x, 1)}`).filter((_, k) => p[k] > 150).join(', ')}`);
+  const deepOnlyProfile = Float64Array.from({ length: K }, (_, k) => part(0, k) + part(1, k) + part(2, k) + part(4, k));
+  let deepPeak = -1;
+  for (let k = 0; k < K; k++) if (p[k] >= 100 && (deepPeak < 0 || deepOnlyProfile[k] > deepOnlyProfile[deepPeak])) deepPeak = k;
+  say(`  the same columns without the shallow plume (the deep plume and its rain's evaporation): peak at ${f(p[deepPeak], 0)} hPa, ${f(deepOnlyProfile[deepPeak], 2)} K/d; profile ${Array.from(deepOnlyProfile, (x, k) => `${f(p[k], 0)} ${f(x, 1)}`).filter((_, k) => p[k] > 150).join(', ')}`);
 }
 say(`(${f((performance.now() - t0) / 1000, 0)} s)`);
