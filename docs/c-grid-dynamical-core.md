@@ -3497,6 +3497,146 @@ The work, in order:
    the options said); `canopyMemory` 365 days only without the
    treeline. Older states start their season means from the estimate
    and their trees at the cover times f.
+
+   The gases on fixed profiles (Oct 1). `scripts/radiationBenchmark.mjs`
+   runs one CPU column on bl34 for each standard atmosphere with the
+   reference's own temperature, vapour, ozone and well-mixed gases, clear
+   sky, no aerosol, a black surface in the longwave, against: RRTMG's
+   tropical, midlatitude summer and winter and subarctic winter examples
+   (AER's `run_examples_std_atm`; RRTMG is within 1.5 W/m² of LBLRTM,
+   Iacono et al. 2008), the ICRCCM line-by-line fluxes of the five AFGL
+   atmospheres (Feigelson et al. 1991, Table 6: CO₂ 300 ppmv, no CH₄ or
+   N₂O), LBLRTM's doubled-CO₂ and vapour × 1.2 forcings on the
+   midlatitude summer profile (Iacono et al. 2008, RTMIP cases of Collins
+   et al. 2006; Mlawer et al. 1997, Table 6, by band) and the CLIRAD
+   line-by-line shortwave terms (Chou & Suarez 1999, Tables 7-8, 60°, no
+   scattering); profiles and references in `data/radiationBenchmark.json`.
+   Misses, W/m² (per cent), before → after:
+
+   | | reference | before | after |
+   |---|---|---|---|
+   | OLR, TROP / MLS / MLW / SAW (RRTMG) | 287.6 / 281.5 / 230.6 / 199.5 | +5.3 / +3.0 / +9.0 / +12.0 | +0.4 / +0.2 / −0.2 / −0.3 |
+   | surface downward longwave (RRTMG) | 398.1 / 348.5 / 224.0 / 172.4 | −65.4 / −39.8 / −2.0 / −2.4 | −1.0 / −0.7 / +2.2 / +2.2 |
+   | net longwave at 200 hPa (RRTMG) | | +14.5 / +10.7 / +14.0 / +16.3 | +0.3 / +0.2 / +0.1 / +0.2 |
+   | cooling rms below 200 hPa / 3-200 hPa, K/day | | 1.65 / 1.33 / 0.72 / 0.75; 0.82 / 0.86 / 0.45 / 0.34 | 0.28 / 0.24 / 0.12 / 0.09; 0.23 / 0.29 / 0.31 / 0.37 |
+   | OLR, AFGL TR / MS / SS / MW / SW (ICRCCM) | 294.0 / 286.6 / 268.1 / 235.9 / 202.6 | −1.8 / −2.0 / −1.3 / +3.6 / +8.8 | −2.0 / −1.2 / −1.2 / −2.3 / −1.2 |
+   | surface downward longwave (ICRCCM) | 397.8 / 348.9 / 298.2 / 218.8 / 166.7 | −66.6 / −40.1 / −20.4 / +3.0 / +3.1 | −4.4 / −2.0 / +1.7 / +4.0 / +4.5 |
+   | CO₂ 287 → 574 ppmv, TOA / 200 hPa / surface (LBLRTM) | 2.84 / 5.54 / 1.68 | 0 / 0 / 0 | 2.81 / 5.53 / 1.70 |
+   | vapour × 1.2 at 574 ppmv (LBLRTM) | 3.79 / 4.52 / 11.55 | 4.10 / 4.12 / 0.38 | 4.07 / 4.90 / 12.55 |
+   | OLR slope at fixed RH, MLS / TROP, W/m²/K | about 2 (Koll & Cronin 2018, from memory) | 1.93 / 2.12 | 2.27 / 2.06 |
+   | atmosphere's shortwave absorption, μ = 1, albedo 0.2 (RRTMG) | 287.1 / 265.5 / 204.4 / 174.0 | −16.6 / −16.5 / −17.3 / −17.6 % | −0.4 / −0.1 / +0.5 / +0.1 % |
+   | the same, MLS at μ = 0.42 (RRTMG, its spectral albedo, 0.213) | 140.8 | −21.8 % | +0.4 % |
+   | surface downward shortwave, μ = 1 (RRTMG) | 1053.2 / 1074.4 / 1133.6 / 1162.8 | +3.3 / +2.8 / +1.9 / +1.5 % | −0.7 / −0.8 / −0.8 / −0.7 % |
+   | solar heating rms below 200 hPa / 1-200 hPa, K/day | | 0.64 / 0.59 / 0.39 / 0.32; 3.54 / 3.27 / 4.35 / 4.42 | 0.15 / 0.16 / 0.10 / 0.09; 0.47 / 0.48 / 0.42 / 0.39 |
+   | MLS, 60°, no scattering: atmosphere; O₂; CO₂ (CLIRAD line-by-line) | 148.2; 4.29; 3.30 | 126.5; 0; 0 | 160.1; 4.17; 3.32 |
+
+   The changes, on both engines (`test/gasRadiation.test.mjs`):
+   - Longwave (`longwaveScheme` 'correlated'; 'gray' keeps the three-band
+     column): 22 g-points of the simple spectral model of Jeevanjee &
+     Fueglistaler (2020) and Williams et al. (2025), exponential envelopes
+     of the water-vapour rotation and vibration-rotation bands and CO₂'s
+     15 µm band (with its laser and 4.3 µm bands), lines split ±spread
+     about the envelope, the self continuum in the spectral shape of
+     Roberts et al. (1976), ozone's 9.6 µm band, methane and nitrous oxide,
+     line strengths scaled by p/500 hPa, at the diffusivity 1.66;
+     `scripts/longwaveFit.mjs` fits its 19 coefficients through the
+     g-point reduction to the RRTMG fluxes and cooling rates of the four
+     atmospheres, LBLRTM's doubled-CO₂ forcing (total and by band) and the
+     minor gases' effects of Chou et al. (2001, Table 16, computed with
+     their parameterization at CH₄ 1.75 and N₂O 0.28 ppmv), and writes
+     `js/physics/longwaveTable.module.js`; each g-point emits the share of
+     σT⁴ a quartic in T gives, normalised to sum to 1. CO₂ 390 ppmv, CH₄
+     1.80 ppmv, N₂O 0.323 ppmv (`carbonDioxide`, `methane`,
+     `nitrousOxide`; NOAA GML's global annual means for 2010 are 388.8 ppm,
+     1798.9 ppb and 323.2 ppb), ozone as below. The cloud's emissivity
+     joins every g-point.
+   - Shortwave (`solarGases` 'clirad'; 'lacisHansen' keeps the Lacis &
+     Hansen vapour and the fixed ozone share), after CLIRAD-SW (Chou &
+     Suarez 1999): ozone in the eight bands of their Table 3, vapour by the
+     visible band's coefficient and the ten-term near-infrared
+     k-distribution of their Table 2 on the path scaled by (p/300 hPa)^0.8
+     (1 + 0.00135 (T − 240 K)), every vapour coefficient times 1.48
+     (`vaporStrength`, fitted to RRTMG's absorption in the five cases:
+     misses at 1 were −23.6, −21.2, −15.5, −13.7 and −9.8 W/m²; the tables
+     come from HITRAN-96 lines cut off 10 cm⁻¹ out, with no continuum), O₂
+     by their eq. 3.16 over 6.33 % of the beam, CO₂ by a sqrt(u) of its
+     scaled path with a giving their Table 7's 3.30 W/m². The light the
+     surface reflects crosses the ozone column at 5/3 in the visible and
+     the gases' path down plus 5/3 of the column in the near infrared.
+   - Ozone (`ozoneColumn` [0.26, 0.35] cm-atm, equator to pole in
+     sin²lat; the zonal annual totals from memory) in the vertical
+     distribution the old heating used; `ozoneProfile` (CPU, one column)
+     replaces it in the benchmark.
+
+   What still misses: the dry atmospheres' surface downward longwave
+   (+2.2 against RRTMG, +4.0 and +4.5 against ICRCCM; the tropical −4.4
+   against ICRCCM, whose line-by-line codes differ among themselves by up
+   to 8 W/m² there, Feigelson et al. 1991, Table 8); the top layer's
+   cooling (0-2.2 hPa, MLS −3.7 K/day against −10.3 over the same
+   layer, TROP −3.2 against −9.0: the k-distribution with linear pressure
+   scaling is not accurate between 0.01 and 10 hPa, where Doppler
+   broadening matters, Chou et al. 2001, section 4.2); the vapour × 1.2
+   forcing at the surface and at 200 hPa (+8.7 % and +8.4 %); methane's
+   and nitrous oxide's own effects on the OLR (MLS 1.65 and 1.18 W/m²
+   against the 2.22 and 1.83 of Chou's parameterization), the total being
+   in the RRTMG fit; the surface's downward shortwave (−0.8 % at μ = 1
+   while the atmosphere's absorption matches); no methane in the
+   shortwave (in the fitted vapour strength). The stratosphere-adjusted doubled-CO₂ forcing of the MLS
+   column (fixed dynamical heating above 179 hPa) is 4.22 W/m² at the top,
+   5.76 at 179 hPa.
+
+   Measured with the final defaults, before → after. The clear-sky
+   shortwave budget of eight64_day0183 lit over day 186
+   (`scripts/clearSkyBudget.mjs`, global, W/m²): reflected 49.5 → 46.9,
+   ozone 10.2 → 10.7, vapour 47.3 → 56.7, O₂ and CO₂ 0 → 3.5, aerosol 1.4
+   → 1.3 (the atmosphere 58.9 → 72.2; Wild et al. 2019: 73), at the
+   surface 232.1 → 221.3 (214); ten64_day0183: reflected 49.3 → 46.8,
+   atmosphere 58.7 → 72.0, surface 232.5 → 221.6. Three N=64 GPU days,
+   day 186, eight64_day0183 / ten64_day0183: ASR 235.0 → 235.1 / 224.3 →
+   224.9, of it in the atmosphere 66.7 → 80.3 / 67.9 → 81.4, OLR 242.2 →
+   236.9 / 239.4 → 235.4, clear-sky OLR 259.8 → 256.9 / 258.4 → 255.6,
+   clear-sky ASR 291.1 → 293.8 / 291.0 → 293.6, SWCRE −56.1 → −58.7 /
+   −66.7 → −68.7, LWCRE 17.6 → 20.0 / 19.0 → 20.2, clear-sky reflectance
+   0.1451 → 0.1373 / 0.1454 → 0.1378, rain 1.71 → 1.46 / 2.68 → 2.45
+   mm/d, at the sea's surface shortwave 177.8 → 166.6 / 164.2 → 150.3 and
+   net longwave −78.2 → −47.6 / −71.8 → −46.5; the day-186 states' clear
+   sky (`scripts/clearSkyBudget.mjs`) reflects 49.4 → 46.7 / 49.5 → 46.9,
+   absorbs 60.1 → 74.2 / 58.4 → 72.1 in the atmosphere and 231.0 → 219.5 /
+   232.6 → 221.4 at the surface. A fresh atlas start on bl34, means of
+   days 6-10: Ts 11.24 → 12.50 °C, ASR 187.4 → 198.0, of it in the
+   atmosphere 70.1 → 79.6, OLR 221.0 → 209.9, albedo 0.450 → 0.418, SWCRE
+   −105.0 → −96.7, LWCRE 36.4 → 40.8, clear-sky reflectance 0.141 →
+   0.134, rain 4.52 → 4.39 mm/d, at the sea's surface shortwave 109.0 →
+   110.8 and net longwave −75.9 → −63.5. Cost, `js/gpu/profile.module.js`
+   over 128 steps from ten64_day0183 at N=64 under the exclusive lock, two
+   runs each: the physics pass 2.64 and 2.64 → 3.61 and 3.59 ms, the step
+   median 20.79 and 20.79 → 21.75 and 21.81 ms (+4.8 %). The spin-up's
+   daily line adds the sea's net surface longwave.
+
+   On the model's own states (one N=64 CPU step, every column alone, and
+   the same step on the GPU). eight64_day0183 and nine64_day0091 close in
+   every column: absorbed plus reflected is the incoming sunlight to
+   5e-13 W/m², the layers' shortwave heating sums to the atmosphere's
+   absorption and their longwave heating to σTs⁴ less the downward
+   longwave less the OLR to 5e-13 (GPU 5e-4), and dark columns get no
+   shortwave. With 'gray' and 'lacisHansen' the CPU gives every column's
+   fluxes and heating bit for bit as 5dde347 did. CPU against GPU per
+   cell, eight64: clear-sky ASR rms 7.5e-8 and clear-sky OLR 5.8e-7 of
+   the field, the layers' longwave heating 1.3e-5; the all-sky misses
+   (one cell at 171 W/m² in the shortwave on eight64, cloudy cells in the
+   longwave on nine64) are as large with the gray gases. Instantaneous
+   CO₂ 390 → 780 ppmv on eight64: OLR −1.08, clear-sky OLR −1.78,
+   surface downward +1.89 W/m². The state's stratosphere is warm at the
+   top (global means 276, 275 and 264 K at 1.1, 3.6 and 7.5 hPa): the MLS
+   column with those temperatures above 110 hPa gives 1.91 W/m² at the
+   top instead of 2.74, with 5.60 at 200 hPa in both. OLR slope on
+   eight64 with Ts and every layer below 150 hPa ±1 K at fixed relative
+   humidity: 2.17 W/m²/K, clear sky 1.89. In the three days from
+   eight64_day0183 the global mean of the top layer (1.1 hPa) warms
+   275.6 → 290.7 K with the spectral gases (275.6 with the gray ones),
+   the 3.6 and 7.5 hPa layers cool 275.3 → 260.2 and 264.3 → 248.3 K:
+   the top layer's shortwave heating is RRTMG's (MLS overhead 22.9
+   against 23.9 K/day) while its cooling is a third of it.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
@@ -5915,6 +6055,8 @@ js/
   physics/
     land.module.js          M16: bucket, snow, land albedo and wetness
     radiation.module.js     ported from sim.js RadiationColumn
+    longwave.module.js      M21: the longwave gases' g-points (table in longwaveTable.module.js, written by scripts/longwaveFit.mjs)
+    shortwaveGases.module.js M21: ozone, water vapour, O2 and CO2 absorption of sunlight after CLIRAD-SW
     surface.module.js       ported: surface and top drag, ocean wind stress, convective adjustment
     boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
     init.module.js          ported: thermal init, balance, seed, geostrophic winds
@@ -5961,6 +6103,9 @@ scripts/
   verdaInstances.mjs        the verda CLI's JSON as verdaRelaunch.sh reads it
   compareStates.mjs         saved states side by side as a markdown table
   verticalAudit.mjs         M21: the vertical-motion and convection audit's headline numbers from one state, on the CPU
+  radiationBenchmark.mjs    M21: the gas radiation of one CPU column on the standard atmospheres against its references
+  longwaveFit.mjs           M21: the longwave spectral model's fit and its reduction to the g-points
+  standardAtmospheres.mjs   M21: the benchmark's profiles laid onto a model column
   packWoa.py                data/woa_annual_1deg.bin from the World Ocean Atlas 2023 NetCDF files
   splitState.mjs            a saved state gzipped into parts for the page
 test/

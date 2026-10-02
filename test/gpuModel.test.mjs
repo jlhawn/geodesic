@@ -581,7 +581,7 @@ test('with deckRest \'inversion\' the carried height starts and rests at the inv
 });
 
 test('with deckRest \'regime\' the deck stands down in surface-driven and decoupled columns whose inversion lies above cumulusCeiling, alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const shared = { deckRest: 'regime', turbulence: 'moist', moist: { cloudLifetime: 3 * 3600, plumeCape: 70, condensation: 'saturation', iceFall: null } };
+  const shared = { deckRest: 'regime', turbulence: 'moist', longwaveScheme: 'gray', solarGases: 'lacisHansen', moist: { cloudLifetime: 3 * 3600, plumeCape: 70, condensation: 'saturation', iceFall: null } };
   const high = await mixedLayerPair(4, { ...shared, cumulusCeiling: 3000 }), low = await mixedLayerPair(4, { ...shared, cumulusCeiling: 200 });
   const regimes = (run) => { const n = [0, 0, 0, 0]; for (const r of run.model.boundaryLayer.regime) n[r]++; return n; };
   let shut = 0;

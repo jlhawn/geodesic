@@ -7,7 +7,7 @@
 // with the state's vapour, sea ice and snow held fixed, and its sunlight
 // split into what leaves the top (atmos, the same column's reflection over
 // a black surface, and surf, the rest: the surface's reflection as seen
-// from the top), what ozone, vapour and aerosol absorb, and what the
+// from the top), what ozone, vapour, O2 and CO2 (o2co2) and aerosol absorb, and what the
 // surface absorbs (sfcabs). Fluxes are day means over the row's area
 // (W/m2); albedo is the clear-sky reflected over the incoming, surfAlb the
 // sunlight the surface reflects over what reaches it, and the last column
@@ -34,7 +34,7 @@ const { K, C } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
 land.load(saved.land, state[6]);
-const result = clearSkyClasses(model, { day: AT, times: TIMES, ozone: RADIATION.ozoneAbsorption ?? 0.03 });
+const result = clearSkyClasses(model, { day: AT, times: TIMES });
 
 const deg = 180 / Math.PI;
 const rows = new Map();
@@ -52,9 +52,9 @@ for (let i = 0; i < C; i++) {
   if (lat >= -30 && lat <= 30) add('30S-30N', a, s);
 }
 const f = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : 'n/a');
-const line = (key, m, surfAlb, extra = '') => console.log(`${key.padEnd(11)} ${f(m('insolation')).padStart(6)} ${f(m('reflected')).padStart(5)} ${f(m('atmosphere')).padStart(6)} ${f(m('reflected') - m('atmosphere')).padStart(5)} ${f(m('ozone')).padStart(6)} ${f(m('vapour')).padStart(6)} ${f(m('aerosol')).padStart(5)} ${f(m('absorbedSurface')).padStart(6)}  ${f(m('reflected') / m('insolation'), 3)}   ${f(m('atmosphere') / m('insolation'), 3)}       ${f(surfAlb, 3)}    ${f((m('reflected') - m('atmosphere')) / (surfAlb * m('insolation')), 3)}${extra}`);
+const line = (key, m, surfAlb, extra = '') => console.log(`${key.padEnd(11)} ${f(m('insolation')).padStart(6)} ${f(m('reflected')).padStart(5)} ${f(m('atmosphere')).padStart(6)} ${f(m('reflected') - m('atmosphere')).padStart(5)} ${f(m('ozone')).padStart(6)} ${f(m('vapour')).padStart(6)} ${f(m('otherGases')).padStart(5)} ${f(m('aerosol')).padStart(5)} ${f(m('absorbedSurface')).padStart(6)}  ${f(m('reflected') / m('insolation'), 3)}   ${f(m('atmosphere') / m('insolation'), 3)}       ${f(surfAlb, 3)}    ${f((m('reflected') - m('atmosphere')) / (surfAlb * m('insolation')), 3)}${extra}`);
 console.log(`clear-sky shortwave budget of ${FILE.split('/').pop()} (N=${saved.N}, K=${K}) lit over day ${AT} at ${TIMES} instants; RADIATION ${JSON.stringify(RADIATION)}; LAND ${JSON.stringify(LAND)}`);
-console.log('row          insol  refl  atmos  surf  ozone vapour aeros sfcabs  albedo  atmos/insol  surfAlb  surf/(surfAlb*insol)');
+console.log('row          insol  refl  atmos  surf  ozone vapour o2co2 aeros sfcabs  albedo  atmos/insol  surfAlb  surf/(surfAlb*insol)');
 const order = ['global', '30S-30N', ...[...rows.keys()].filter((k) => k.includes('..')).sort((x, y) => parseFloat(x) * (x.includes('S') ? -1 : 1) - parseFloat(y) * (y.includes('S') ? -1 : 1))];
 for (const key of order) {
   const r = rows.get(key);

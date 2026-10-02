@@ -4,6 +4,8 @@ import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.mod
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE } from '../physics/radiation.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS, FUSION_HEAT } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
+import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwave.module.js';
+import { OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR, VAPOR_COEFFICIENTS, VAPOR_WEIGHTS, OXYGEN, CO2_COEFFICIENT, STP_DEPTH, OZONE_CM_ATM, SCALING_PRESSURE, SCALING_EXPONENT } from '../physics/shortwaveGases.module.js';
 
 /*
  * The column physics of the model as WGSL, one thread per column (or per
@@ -50,6 +52,10 @@ export function physicsConstants(o) {
   if (o.boundaryCover !== 'variance' && o.boundaryCover !== 'pdf') throw new Error(`boundaryCover must be 'variance' or 'pdf', not ${o.boundaryCover}`);
   if (o.deckRegime !== 'inversion' && o.deckRegime !== 'boundaryLayer') throw new Error(`deckRegime must be 'inversion' or 'boundaryLayer', not ${o.deckRegime}`);
   const moistTurbulence = o.turbulence === 'moist';
+  if (o.longwaveScheme !== 'correlated' && o.longwaveScheme !== 'gray') throw new Error(`longwaveScheme must be 'correlated' or 'gray', not ${o.longwaveScheme}`);
+  if (o.solarGases !== 'clirad' && o.solarGases !== 'lacisHansen') throw new Error(`solarGases must be 'clirad' or 'lacisHansen', not ${o.solarGases}`);
+  if (o.ozoneProfile) throw new Error('the GPU radiation takes its ozone from ozoneColumn, not an ozoneProfile');
+  const points = LONGWAVE_TABLE.points, f32 = (values) => `array<f32, ${values.length}>(${values.map((v) => v.toPrecision(9)).join(', ')})`;
   const rayleigh = o.rayleighDepth != null ? [[1, o.rayleighDepth]] : o.rayleighBands;
   if (!(rayleigh.length >= 1 && rayleigh.length <= 3 && Math.abs(rayleigh.reduce((sum, [w]) => sum + w, 0) - 1) < 1e-9 && rayleigh.every(([w, tau]) => w > 0 && tau >= 0))) throw new Error(`rayleighBands must be one to three [weight, depth] pairs whose weights sum to 1, not ${JSON.stringify(rayleigh)}`);
   const visibleSum = (term) => rayleigh.map(([w, tau]) => `${w} * ${term(`${tau / REFERENCE_PRESSURE} * light.y + light.z`)}`).join(' + ');
@@ -68,6 +74,17 @@ const CLOUD_SW: f32 = ${o.cloudSolarAbsorption}; const WINDOW: f32 = ${o.window}
 const STRATUS: bool = ${!!o.stratus}; const ECTEI: bool = ${o.stratusIndex === 'ectei'}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6; const CLEAR_SKY: bool = ${!!o.clearSkyPass};
+const LW_CORRELATED: bool = ${o.longwaveScheme === 'correlated'}; const SOLAR_CLIRAD: bool = ${o.solarGases === 'clirad'}; const NG: i32 = ${points.length}; const LW_D: f32 = ${LONGWAVE_CONSTANTS.diffusivity}; const LW_PREF: f32 = ${LONGWAVE_CONSTANTS.pRef};
+const LW_TSELF: f32 = ${LONGWAVE_TABLE.tSelf}; const LW_TCO2: f32 = ${LONGWAVE_TABLE.tCo2}; const LW_NO3: f32 = ${LONGWAVE_TABLE.nO3};
+const CO2_MASS: f32 = ${o.carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air}; const CH4_MASS: f32 = ${o.methane * GAS_MOLAR.ch4 / GAS_MOLAR.air}; const N2O_MASS: f32 = ${o.nitrousOxide * GAS_MOLAR.n2o / GAS_MOLAR.air};
+const LW_K: array<f32, ${6 * points.length}> = ${f32(points.flatMap((row) => row.slice(0, 6)))};
+const LW_PLANCK: array<f32, ${5 * points.length}> = ${f32(points.flatMap((row) => row.slice(6, 11)))};
+const OZ_EQ: f32 = ${o.ozoneColumn[0]}; const OZ_POLE: f32 = ${o.ozoneColumn[1]}; const OZ_KG: f32 = ${OZONE_CM_ATM}; const VIS_O3: f32 = ${(OZONE_SHARES[6] * OZONE_COEFFICIENTS[6] + OZONE_SHARES[7] * OZONE_COEFFICIENTS[7]) / (OZONE_SHARES[6] + OZONE_SHARES[7])};
+const O3_SHARE: array<f32, 8> = ${f32(OZONE_SHARES)}; const O3_COEF: array<f32, 8> = ${f32(OZONE_COEFFICIENTS)};
+const H2O_K: array<f32, 10> = ${f32(VAPOR_COEFFICIENTS)}; const H2O_W: array<f32, 10> = ${f32(VAPOR_WEIGHTS)};
+const VIS_H2O_S: f32 = ${VISIBLE_VAPOR.share}; const VIS_H2O_K: f32 = ${VISIBLE_VAPOR.coefficient}; const VAP_STRENGTH: f32 = ${o.vaporStrength};
+const O2_SHARE: f32 = ${OXYGEN.share}; const O2_K: f32 = ${OXYGEN.coefficient}; const O2_PATH: f32 = ${OXYGEN.mixingRatio * STP_DEPTH}; const CO2_PATH: f32 = ${o.carbonDioxide * STP_DEPTH}; const CO2_SW_K: f32 = ${CO2_COEFFICIENT};
+const SCALE_P: f32 = ${SCALING_PRESSURE}; const SCALE_N: f32 = ${SCALING_EXPONENT};
 const SCATTER: bool = ${rayleigh.some(([, tau]) => tau > 0) || o.landAerosol > 0 || o.seaAerosol > 0}; const UPWARD: bool = ${!!o.upwardAbsorption}; const DIFFUSE_PATH: f32 = ${5 / 3}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo}; const ALB_ICEMELT: f32 = ${o.meltingIceAlbedo}; const ICE_MELTRANGE: f32 = ${o.iceMeltingRange};
 const AGEING: bool = ${!!o.snowAgeing}; const ALB_FRESH: f32 = ${o.freshSnowAlbedo}; const SNOW_COLDAGE: f32 = ${o.coldSnowAgeing}; const SNOW_MELTAGE: f32 = ${o.meltingSnowAgeing}; const SNOW_REFRESH: f32 = ${o.refreshSnowfall}; const WETSNOW: f32 = ${o.wetSnowRange}; const AGE_ACT: f32 = ${o.ageingActivation}; const ICE_SNOWFLOOR: f32 = ${o.iceSnowFloor};
@@ -165,6 +182,62 @@ fn band(fraction: f32, eps: ptr<function, array<f32, K>>, temperature: ptr<funct
     up = up * (1.0 - e) + emitted;
   }
   return vec2<f32>(up, down);
+}
+fn ozoneAbsorb(path: f32) -> f32 {
+  var a = 0.0;
+  for (var b = 0; b < 8; b++) { a += O3_SHARE[b] * relaxedFraction(O3_COEF[b] * path); }
+  return a;
+}
+fn visibleVapour(path: f32) -> f32 { return VIS_H2O_S * relaxedFraction(VIS_H2O_K * VAP_STRENGTH * path); }
+fn nearInfraredGases(vapour: f32, oxygen: f32, co2: f32) -> f32 {
+  var a = 0.0;
+  for (var j = 0; j < 10; j++) { a += H2O_W[j] * relaxedFraction(H2O_K[j] * VAP_STRENGTH * vapour); }
+  return VAPOR_ABS * a + O2_SHARE * relaxedFraction(O2_K * sqrt(oxygen)) + CO2_SW_K * sqrt(co2);
+}
+fn ozoneColumnAt(i: i32) -> f32 { let s = sin(MF[F_LAT + i]); return OZ_EQ + (OZ_POLE - OZ_EQ) * s * s; }
+fn solarGases(i: i32, pi: f32, mu: f32, ozoneTaken: ptr<function, array<f32, K>>, gasTaken: ptr<function, array<f32, K>>) -> vec4<f32> {
+  let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
+  let column = ozoneColumnAt(i);
+  var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
+    let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * (1.0 - q);
+    ozone += column * LV[L_OZS + k] * magnification;
+    vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
+    oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
+    (*ozoneTaken)[k] = ozoneAbsorb(ozone);
+    (*gasTaken)[k] = VAPOR_ABS * visibleVapour(vapour) + nearInfraredGases(vapour, oxygen, co2);
+  }
+  return vec4<f32>(VAPOR_ABS * visibleVapour(vapour), vapour, oxygen, co2);
+}
+fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, array<f32, K>>) -> f32 {
+  var vapour = down.x; var oxygen = down.y; var co2 = down.z;
+  var before = nearInfraredGases(vapour, oxygen, co2); var loss = 0.0;
+  for (var k = K - 1; k >= 0; k--) {
+    let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
+    let scaling = pow(p / SCALE_P, SCALE_N) * DIFFUSE_PATH; let dry = mass * (1.0 - q);
+    vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
+    oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
+    let through = nearInfraredGases(vapour, oxygen, co2);
+    (*upward)[k] = through - before;
+    loss += through - before;
+    before = through;
+  }
+  return loss;
+}
+fn longwavePaths(i: i32, k: i32, pi: f32, T: f32, column: f32) -> array<f32, 6> {
+  let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
+  let scale = p / LW_PREF; let vapour = q * mass; let dry = (1.0 - q) * mass * scale;
+  return array<f32, 6>(vapour * scale, vapour * (q * p / (0.622 + 0.378 * q)) * exp(LW_TSELF * (1.0 / T - 1.0 / 296.0)), CO2_MASS * dry * exp(LW_TCO2 * (T - 250.0)),
+    column * LV[L_OZS + k] * OZ_KG * pow(scale, LW_NO3), CH4_MASS * dry, N2O_MASS * dry);
+}
+fn longwaveDepth(g: i32, row: array<f32, 6>) -> f32 {
+  let r = 6 * g;
+  return LW_D * (LW_K[r] * row[0] + LW_K[r + 1] * row[1] + LW_K[r + 2] * row[2] + LW_K[r + 3] * row[3] + LW_K[r + 4] * row[4] + LW_K[r + 5] * row[5]);
+}
+fn planckShare(g: i32, t: f32) -> f32 {
+  let b = 5 * g;
+  return LW_PLANCK[b] + t * (LW_PLANCK[b + 1] + t * (LW_PLANCK[b + 2] + t * (LW_PLANCK[b + 3] + t * LW_PLANCK[b + 4])));
 }
 fn condensationLevel(T: f32, q: f32, p: f32) -> vec2<f32> {
   let e = q * p / (EPSILON + (1.0 - EPSILON) * q);
@@ -732,7 +805,10 @@ export const PHYSICS_KERNELS = {
   let landWet = select(roots, bareWet + canopyWet, VEGETATED);
   let wetness = select(1.0, select(landWet, 1.0, snow0 > 0.0), onLand);
   let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= 0.0);
-  let ozoneHeating = beam * OZONE_ABS;
+  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+  if (SOLAR_CLIRAD && mu > 0.0) { solar = solarGases(i, pi, mu, &ozoneTaken, &gasTaken); }
+  let ozoneHeating = select(beam * OZONE_ABS, beam * ozoneTaken[K - 1], SOLAR_CLIRAD);
+  let visibleTaken = ozoneHeating + beam * solar.x;
   let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
   var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
@@ -770,14 +846,15 @@ export const PHYSICS_KERNELS = {
       var shade = overlapCover(shadeBlocks, shadeLayered);
       if (!(shade > 0.0)) { shade = 1.0; }
       var lit = beam - ozoneHeating;
-      if (VAPOR_ABS > 0.0 && mu > 0.0) {
+      if (SOLAR_CLIRAD) { lit -= beam * gasTaken[K - 1]; }
+      else if (VAPOR_ABS > 0.0 && mu > 0.0) {
         let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
         var vapor = 0.0;
         for (var k = 0; k < K; k++) { vapor += max(0.0, IN[S_Q + k * C + i]) * pi * LV[L_DS + k] / GRAV * sqrt(LV[L_SM + k]) * 0.1 * magnification; }
         lit -= lit * (VAPOR_ABS * 2.9 * vapor / (pow(1.0 + 141.5 * vapor, 0.635) + 5.925 * vapor));
       }
       var deckLight = vec3<f32>(0.0, 0.0, 0.0);
-      if (SCATTER) { let clear = clearLight(beam, mu, ozoneHeating, lit, pi, aerosol); lit -= clear.x; deckLight = clear.yzw; }
+      if (SCATTER) { let clear = clearLight(beam, mu, visibleTaken, lit, pi, aerosol); lit -= clear.x; deckLight = clear.yzw; }
       var sky = shortwave(select(depth / shade, CLOUD_SCAT * path / shade, GRAY_SW), cloudKeep(path / shade), mu, adir, adif, deckLight);
       if (PDF_COVER && shade < 1.0) { sky = shade * sky + (1.0 - shade) * shortwave(0.0, 1.0, mu, adir, adif, deckLight); }
       deckSun = MlmSun(lit, mu, adir, adif, path, layer, select(0.0, lit * sky.w / path, path > 0.0) * layer, deckLight, depth, unit);
@@ -826,11 +903,16 @@ export const PHYSICS_KERNELS = {
     vaporE[k] = 1.0 - (1.0 - eps) * clear;
     mixedE[k] = 1.0 - (1.0 - LV[L_GASE + k]) * clear;
     temperature[k] = IN[S_TH + idx] * D[D_EXM + idx];
-    netFlux[k] = ozoneHeating * LV[L_OZ + k];
+    netFlux[k] = select(ozoneHeating * LV[L_OZ + k], beam * (ozoneTaken[k] - select(0.0, ozoneTaken[max(k - 1, 0)], k > 0)), SOLAR_CLIRAD);
   }
   var incident = beam - ozoneHeating;
   var vaporHeating = 0.0; var path = 0.0;
-  if (VAPOR_ABS > 0.0 && mu > 0.0) {
+  if (SOLAR_CLIRAD) {
+    var taken = 0.0;
+    for (var k = 0; k < K; k++) { netFlux[k] += beam * (gasTaken[k] - taken); taken = gasTaken[k]; }
+    vaporHeating = beam * taken;
+    incident -= vaporHeating;
+  } else if (VAPOR_ABS > 0.0 && mu > 0.0) {
     let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
     var taken = 0.0;
     for (var k = 0; k < K; k++) {
@@ -844,7 +926,7 @@ export const PHYSICS_KERNELS = {
   }
   var light = vec3<f32>(0.0, 0.0, 0.0); var aerosolHeating = 0.0;
   if (SCATTER || UPWARD) {
-    let clear = clearLight(beam, mu, ozoneHeating, incident, pi, aerosol);
+    let clear = clearLight(beam, mu, visibleTaken, incident, pi, aerosol);
     aerosolHeating = clear.x; light = clear.yzw;
     incident -= aerosolHeating;
     if (aerosolHeating > 0.0) { for (var k = 0; k < K; k++) { netFlux[k] += aerosolHeating * LV[L_AER + k]; } }
@@ -871,15 +953,25 @@ export const PHYSICS_KERNELS = {
       cloudHeating += share;
     }
   }
-  var upwardHeating = 0.0; var upwardAerosol = 0.0; var restLoss = 0.0; var visibleLoss = 0.0;
+  var upwardHeating = 0.0; var upwardAerosol = 0.0; var restLoss = 0.0; var visibleLoss = 0.0; var aerosolLoss = 0.0; var ozoneLoss = 0.0;
   if (UPWARD && mu > 0.0) {
-    visibleLoss = select(0.0, 1.0 - exp(-AER_ABS * aerosol * DIFFUSE_PATH), aerosol > 0.0);
+    aerosolLoss = select(0.0, 1.0 - exp(-AER_ABS * aerosol * DIFFUSE_PATH), aerosol > 0.0);
+    if (SOLAR_CLIRAD) { ozoneLoss = relaxedFraction(VIS_O3 * ozoneColumnAt(i) * DIFFUSE_PATH); }
+    visibleLoss = select(aerosolLoss, 1.0 - (1.0 - aerosolLoss) * (1.0 - ozoneLoss), ozoneLoss > 0.0);
     let sunlit = beam - ozoneHeating;
-    let restAfter = sunlit - max(0.0, VIS_FRAC * beam - ozoneHeating) - vaporHeating;
+    let restAfter = sunlit - max(0.0, VIS_FRAC * beam - visibleTaken) - vaporHeating;
     var esc = escapes(select(cloudDepth / columnCover, CLOUD_SCAT * cloudPath / columnCover, GRAY_SW), cloudKeep(cloudPath / columnCover), mu, adir, adif, light);
     if (PDF_COVER && columnCover < 1.0) { esc = columnCover * esc + (1.0 - columnCover) * escapes(0.0, 1.0, mu, adir, adif, light); }
     if (deck > 0.0) { esc = fraction * escapes(select(cloudDepth + deckUnit * deck, CLOUD_SCAT * (cloudPath + deck), GRAY_SW), cloudKeep(cloudPath + deck), mu, adir, adif, light) + (1.0 - fraction) * esc; }
-    if (VAPOR_ABS > 0.0 && restAfter > 0.0) {
+    if (SOLAR_CLIRAD && restAfter > 0.0) {
+      var upGas: array<f32, K>;
+      restLoss = beam * nearInfraredUpward(i, pi, solar.yzw, &upGas) / restAfter;
+      let scale = select(1.0, 1.0 / restLoss, restLoss > 1.0);
+      restLoss = min(restLoss, 1.0);
+      let rest = incident * esc.y;
+      for (var k = 0; k < K; k++) { netFlux[k] += rest * scale * beam * upGas[k] / restAfter; }
+      upwardHeating = rest * restLoss;
+    } else if (VAPOR_ABS > 0.0 && restAfter > 0.0) {
       let start = 2.9 * path / (pow(1.0 + 141.5 * path, 0.635) + 5.925 * path);
       var up = path;
       for (var k = 0; k < K; k++) { up += max(0.0, IN[S_Q + k * C + i]) * pi * LV[L_DS + k] / GRAV * sqrt(LV[L_SM + k]) * 0.1 * DIFFUSE_PATH; }
@@ -896,18 +988,53 @@ export const PHYSICS_KERNELS = {
       }
       upwardHeating = rest * restLoss;
     }
-    upwardAerosol = incident * esc.x * visibleLoss;
+    upwardAerosol = incident * esc.x * aerosolLoss;
     if (upwardAerosol > 0.0) { for (var k = 0; k < K; k++) { netFlux[k] += upwardAerosol * LV[L_AER + k]; } }
     upwardHeating += upwardAerosol;
+    if (ozoneLoss > 0.0) {
+      let upwardOzone = incident * esc.x * (1.0 - aerosolLoss) * ozoneLoss;
+      for (var k = 0; k < K; k++) { netFlux[k] += upwardOzone * LV[L_OZS + k]; }
+      upwardHeating += upwardOzone;
+    }
   }
   let absorbed = incident * sw.x;
   var beforeBands: array<f32, K>;
   if (MOIST_BL) { for (var k = 0; k < K; k++) { beforeBands[k] = netFlux[k]; } }
-  let v = band(VAPOR_FRAC, &vaporE, &temperature, &netFlux, surfaceEmission);
-  let g = band(GAS_FRAC, &mixedE, &temperature, &netFlux, surfaceEmission);
-  let w = band(WINDOW, &cloudE, &temperature, &netFlux, surfaceEmission);
+  var outgoing = 0.0; var back = 0.0; var clearOutgoing = 0.0;
+  if (LW_CORRELATED) {
+    let column = ozoneColumnAt(i);
+    var downG: array<f32, NG>; var upG: array<f32, NG>; var clearG: array<f32, NG>;
+    for (var k = 0; k < K; k++) {
+      let row = longwavePaths(i, k, pi, temperature[k], column); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
+      var heat = 0.0;
+      for (var g = 0; g < NG; g++) {
+        let e = 1.0 - (1.0 - relaxedFraction(longwaveDepth(g, row))) * clear; let src = planckShare(g, t) * hot;
+        heat += e * (downG[g] - 2.0 * src);
+        downG[g] = downG[g] * (1.0 - e) + e * src;
+      }
+      netFlux[k] += heat;
+    }
+    let surfaceScaled = (ts - 250.0) / 100.0;
+    for (var g = 0; g < NG; g++) { back += downG[g]; upG[g] = planckShare(g, surfaceScaled) * surfaceEmission; clearG[g] = upG[g]; }
+    for (var k = K - 1; k >= 0; k--) {
+      let row = longwavePaths(i, k, pi, temperature[k], column); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
+      var heat = 0.0;
+      for (var g = 0; g < NG; g++) {
+        let gas = relaxedFraction(longwaveDepth(g, row)); let e = 1.0 - (1.0 - gas) * clear; let src = planckShare(g, t) * hot;
+        heat += e * upG[g];
+        upG[g] = upG[g] * (1.0 - e) + e * src;
+        if (CLEAR_SKY) { clearG[g] = clearG[g] * (1.0 - gas) + gas * src; }
+      }
+      netFlux[k] += heat;
+    }
+    for (var g = 0; g < NG; g++) { outgoing += upG[g]; clearOutgoing += clearG[g]; }
+  } else {
+    let v = band(VAPOR_FRAC, &vaporE, &temperature, &netFlux, surfaceEmission);
+    let g = band(GAS_FRAC, &mixedE, &temperature, &netFlux, surfaceEmission);
+    let w = band(WINDOW, &cloudE, &temperature, &netFlux, surfaceEmission);
+    outgoing = v.x + g.x + w.x; back = v.y + g.y + w.y;
+  }
   if (MOIST_BL) { for (var k = 0; k < K; k++) { PH[PH_LWH + k * C + i] = netFlux[k] - beforeBands[k]; } }
-  let outgoing = v.x + g.x + w.x; let back = v.y + g.y + w.y;
   let airT = temperature[K - 1];
   let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
   let exchange = rho * select(CEX, PH[PH_DRAG + i], LANDED) * max(ws, GUST);
@@ -928,19 +1055,19 @@ export const PHYSICS_KERNELS = {
   let contrast = directDown * (iceDir - waterDir) + (swdn - directDown) * (iceDif - ALB_DIF_WATER);
   let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let absorbedSolar = absorbed + ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let reflectedSolar = incident - absorbed - cloudHeating - upwardHeating;
   PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbedSolar; PH[PH_ATMSW + i] = atmosphereSolar; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = reflectedSolar; PH[PH_ADIF + i] = adif;
-  PH[PH_ABSSUM + i] += absorbedSolar; PH[PH_ATMSUM + i] += atmosphereSolar; PH[PH_OLRSUM + i] += outgoing; PH[PH_INSSUM + i] += beam; PH[PH_REFLSUM + i] += reflectedSolar;
+  PH[PH_ABSSUM + i] += absorbedSolar; PH[PH_ATMSUM + i] += atmosphereSolar; PH[PH_OLRSUM + i] += outgoing; PH[PH_INSSUM + i] += beam; PH[PH_REFLSUM + i] += reflectedSolar; PH[PH_LWSFCSUM + i] += back - surfaceEmission;
   if (CLEAR_SKY) {
     let clearSw = shortwave(0.0, 1.0, mu, adir, adif, light);
     var clearUp = 0.0;
-    if (UPWARD && mu > 0.0) { let clearEsc = escapes(0.0, 1.0, mu, adir, adif, light); clearUp = clearEsc.y * restLoss + clearEsc.x * visibleLoss; }
+    if (UPWARD && mu > 0.0) { let clearEsc = escapes(0.0, 1.0, mu, adir, adif, light); clearUp = clearEsc.y * restLoss + clearEsc.x * aerosolLoss + select(0.0, clearEsc.x * (1.0 - aerosolLoss) * ozoneLoss, ozoneLoss > 0.0); }
     var upVapor = VAPOR_FRAC * surfaceEmission; var upGas = GAS_FRAC * surfaceEmission;
-    for (var k = K - 1; k >= 0; k--) {
+    for (var k = K - 1; k >= 0 && !LW_CORRELATED; k--) {
       let t = temperature[k]; let ev = clearE[k]; let eg = LV[L_GASE + k];
       upVapor = upVapor * (1.0 - ev) + VAPOR_FRAC * ev * STEFAN * t * t * t * t;
       upGas = upGas * (1.0 - eg) + GAS_FRAC * eg * STEFAN * t * t * t * t;
     }
     PH[PH_ABSCLRSUM + i] += incident * (clearSw.x + clearUp) + ozoneHeating + vaporHeating + aerosolHeating;
-    PH[PH_OLRCLRSUM + i] += upVapor + upGas + WINDOW * surfaceEmission;
+    PH[PH_OLRCLRSUM + i] += select(upVapor + upGas + WINDOW * surfaceEmission, clearOutgoing, LW_CORRELATED);
   }
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = skin; var h = ice;

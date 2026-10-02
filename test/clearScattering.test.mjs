@@ -17,9 +17,9 @@ function random(seed) {
   return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
 }
 
-test('over a black surface the clear column reflects the two-stream value of its Rayleigh sub-bands and aerosol, the weighted τ/(τ + 2μ) of the visible beam less ozone and aerosol absorption, at three zenith angles over sea and over land', () => {
+test('over a black surface the clear column reflects the two-stream value of its Rayleigh sub-bands and aerosol, the weighted τ/(τ + 2μ) of the visible beam less ozone and aerosol absorption, at three zenith angles over sea and over land (with the fixed ozone share)', () => {
   const grid = new Grid(4), C = createModel(grid, { ocean: false }).mesh.nCells, land = Uint8Array.from({ length: C }, (_, i) => i % 2);
-  const model = createModel(grid, { ocean: false, radiation: { land, clearSkyPass: true } });
+  const model = createModel(grid, { ocean: false, radiation: { land, clearSkyPass: true, solarGases: 'lacisHansen' } });
   const init = initializeState(model, {});
   init.forEach((values, a) => model.state[a].set(values));
   const { radiation, core } = model, { K } = core.diagnostics, [pi, theta] = model.state;
@@ -136,7 +136,7 @@ test('both engines give a random set of sunlit columns over sea and land, clear 
   on.done(); off.done();
 });
 
-test('the light the surface reflects loses to vapour what the path it crossed coming down plus 5/3 of the column\'s absorbs beyond the first, and in the visible what the aerosol absorbs over 5/3 of its depth', async () => {
+test('the light the surface reflects loses to vapour what the path it crossed coming down plus 5/3 of the column\'s absorbs beyond the first, and in the visible what the aerosol absorbs over 5/3 of its depth (Lacis-Hansen vapour)', async () => {
   const { waterVaporAbsorptivity } = await import('../js/physics/radiation.module.js');
   const grid = new Grid(4), C = createModel(grid, { ocean: false }).mesh.nCells, land = Uint8Array.from({ length: C }, (_, i) => i % 2);
   const make = (options) => {
@@ -144,8 +144,8 @@ test('the light the surface reflects loses to vapour what the path it crossed co
     initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
     return model;
   };
-  const plain = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0 };
-  const on = make(plain), off = make({ ...plain, upwardAbsorption: false }), hazy = make({ rayleighDepth: 0, aerosolAsymmetry: 1 }), hazyOff = make({ rayleighDepth: 0, aerosolAsymmetry: 1, upwardAbsorption: false });
+  const plain = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, solarGases: 'lacisHansen' };
+  const on = make(plain), off = make({ ...plain, upwardAbsorption: false }), hazy = make({ rayleighDepth: 0, aerosolAsymmetry: 1, solarGases: 'lacisHansen' }), hazyOff = make({ rayleighDepth: 0, aerosolAsymmetry: 1, upwardAbsorption: false, solarGases: 'lacisHansen' });
   const { core } = on, { K, dSigma, sigmaMid, g } = core.diagnostics, [pi, theta] = on.state, bottom = (K - 1) * C;
   const q = new Float64Array(K * C);
   for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) if (sigmaMid[k] > 0.4) q[k * C + i] = 0.6 * saturationHumidity(theta[k * C + i] * (pi[i] * sigmaMid[k] / 1e5) ** 0.2857, pi[i] * sigmaMid[k]);
