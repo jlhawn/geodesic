@@ -6,6 +6,7 @@ import { MOIST_DEFAULTS } from '../physics/moist.module.js';
 import { SEA_DRAG } from '../physics/surface.module.js';
 import { SNOW_AGEING } from '../physics/ice.module.js';
 import { FOREST_ARIDITY } from '../physics/land.module.js';
+import { orographyConstants, OROGRAPHY_KERNELS } from './orography.gpu.js';
 
 const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384, MAXIMUM_SURFACE_PRESSURE = 110000;
 
@@ -26,7 +27,7 @@ const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384,
  * combine. The ∇⁴ closures follow once per step as in the split CPU
  * core. Every kernel binds the same seven buffers in the same order.
  */
-export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0) {
+export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orographyLayers = 0) {
   const C = mesh.nCells, E = mesh.nEdges, V = mesh.nVertices;
   const KC = K * C, KE = K * E, KV = K * V;
   const seq = (names) => { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; };
@@ -35,7 +36,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0) {
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE]]);
-  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1]]);
+  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E]]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH, FR };
 }
@@ -561,7 +562,7 @@ export async function createGpuCore(mesh, {
   let cumulusK0 = K;
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > phys.shallowTop) cumulusK0--;
   phys.cumulusK0 = cumulusK0;
-  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0);
+  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0, phys.orography ? K : 0);
   const { C, E, V } = L;
   const kappa = R / cp;
   const sigmaUpper = levels.subarray(0, K), sigmaLower = levels.subarray(1, K + 1);
@@ -629,14 +630,14 @@ export async function createGpuCore(mesh, {
 
   const layout = device.createBindGroupLayout({ entries: Array.from({ length: 8 }, (_, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } })) });
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] });
-  const head = prelude(L, { kappa, cp, p0, g, R, dragCoefficient, gustiness, physics: physicsConstants({ ...phys, kTop, stratusLayer: nearestLayer(sigmaMid, phys.stratusSigma), stabilityLayer: nearestLayer(sigmaMid, STABILITY_SIGMA) }) });
+  const head = prelude(L, { kappa, cp, p0, g, R, dragCoefficient, gustiness, physics: physicsConstants({ ...phys, kTop, stratusLayer: nearestLayer(sigmaMid, phys.stratusSigma), stabilityLayer: nearestLayer(sigmaMid, STABILITY_SIGMA) }) + orographyConstants(phys) });
   const preludeConstants = head.slice(0, head.indexOf('@group(0) @binding(0)'));
   let meshSpacing = 0;
   for (let e = 0; e < E; e++) meshSpacing += mesh.dcEdge[e];
   meshSpacing /= E;
   const divergenceStep = divergenceDamping * meshSpacing * meshSpacing;
   const kernels = {};
-  for (const [name, body] of Object.entries({ ...KERNELS, ...PHYSICS_KERNELS, ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) })) {
+  for (const [name, body] of Object.entries({ ...KERNELS, ...PHYSICS_KERNELS, ...(phys.orography ? OROGRAPHY_KERNELS : {}), ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) })) {
     const code = head + body.replaceAll('S_TOTAL', String(L.S.total)).replaceAll('i32(id.x)', '(i32(id.x) + i32(id.y) * 4194240)');
     const module = device.createShaderModule({ code, label: name });
     kernels[name] = device.createComputePipeline({ label: name, layout: pipelineLayout, compute: { module, entryPoint: 'main' } });
@@ -788,20 +789,22 @@ export async function createGpuCore(mesh, {
     compute((pass) => {
       dispatch(pass, 'physics', g, C);
       dispatch(pass, 'pblDiagnose', g, C);
+      if (phys.orography) dispatch(pass, 'orography', g, C);
     });
     closurePasses(dt);
     setParams([dt, 0, sun[0], sun[1], sun[2]]);
     compute((pass) => {
       dispatch(pass, 'adjust', g, C);
       dispatch(pass, 'mixMomentum', g, E);
+      if (phys.orography) dispatch(pass, 'orographyApply', g, E);
       dispatch(pass, 'dissipationHeat', g, L.KC);
       dispatch(pass, 'dissipationClear', g, L.KE);
     });
   }
 
-  const retained = { land: null, drag: null, heat: null, reference: null, soil: null, snow: null, vegetation: null, snowAlbedo: null, canopy: null, seasonLength: null, seasonWarmth: null, rainMean: null, demandMean: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, meanAbsorbedSolar: null, meanOutgoingLongwave: null, meanPlanetaryAlbedo: null, meanShortwaveCloudEffect: null, meanLongwaveCloudEffect: null, boundaryDepth: null, mixingTop: null, regime: null, buoyancyFlux: null };
-  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux } = {}) {
-    for (const [name, value] of Object.entries({ land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux })) if (value !== undefined) retained[name] = value;
+  const retained = { orography: null, land: null, drag: null, heat: null, reference: null, soil: null, snow: null, vegetation: null, snowAlbedo: null, canopy: null, seasonLength: null, seasonWarmth: null, rainMean: null, demandMean: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, meanAbsorbedSolar: null, meanOutgoingLongwave: null, meanPlanetaryAlbedo: null, meanShortwaveCloudEffect: null, meanLongwaveCloudEffect: null, boundaryDepth: null, mixingTop: null, regime: null, buoyancyFlux: null };
+  function uploadPhysics({ capacity = null, oceanFlux = null, orography, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux } = {}) {
+    for (const [name, value] of Object.entries({ orography, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux })) if (value !== undefined) retained[name] = value;
     const ph = new Float32Array(L.PH.total);
     for (let i = 0; i < C; i++) {
       const lat = mesh.latCell[i];
@@ -837,6 +840,7 @@ export async function createGpuCore(mesh, {
       ph[L.PH.MIXTOP + i] = retained.mixingTop ? retained.mixingTop[i] : 0;
       ph[L.PH.REGIME + i] = retained.regime ? retained.regime[i] : 0;
       ph[L.PH.BUOY + i] = retained.buoyancyFlux ? retained.buoyancyFlux[i] : 0;
+      if (retained.orography) { ph[L.PH.OSTD + i] = retained.orography.deviation[i]; ph[L.PH.OANI + i] = retained.orography.anisotropy[i]; ph[L.PH.OORI + i] = retained.orography.orientation[i]; ph[L.PH.OSLP + i] = retained.orography.slope[i]; }
     }
     device.queue.writeBuffer(buffers.PH, 0, ph);
   }

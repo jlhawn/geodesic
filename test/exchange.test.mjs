@@ -141,7 +141,7 @@ test('both engines give every surface the same transfer coefficients and fluxes'
 });
 
 test('snow smooths grass and bare soil but leaves the trees, and the implicit drag applies the stress it stores', () => {
-  const model = prepare(createModel(new Grid(6), { topography }));
+  const model = prepare(createModel(new Grid(6), { topography, orography: false }));
   model.step(900);
   const { land, iceSheet } = model.geography, C = model.mesh.nCells;
   const i = [...Array(C).keys()].find((n) => land[n] && !iceSheet[n]);
