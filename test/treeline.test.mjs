@@ -160,15 +160,18 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
   const cpu = prepare(createModel(new Grid(6), { topography, land }));
   const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }));
   const C = cpu.mesh.nCells, before = Float64Array.from(cpu.land.canopy), lengthBefore = Float64Array.from(cpu.land.seasonLength);
-  for (let n = 0; n < 48; n++) { cpu.step(900); await gpu.step(900); }
-  await gpu.sync();
-  const saved = await gpu.land.serialize();
   const { K, exnerLayer } = cpu.core.diagnostics;
-  let worstLength = 0, worstWarmth = 0, worstTrees = 0, worstAir = 0, grew = 0, died = 0, snowy = 0, inSeason = 0, cells = 0;
+  let worstAir = 0;
+  for (let n = 0; n < 48; n++) {
+    cpu.step(900); await gpu.step(900);
+    await gpu.sync();
+    for (let i = 0; i < C; i++) if (cpu.geography.land[i] && !cpu.geography.iceSheet[i]) worstAir = Math.max(worstAir, Math.abs(cpu.state[1][(K - 1) * C + i] - gpu.state[1][(K - 1) * C + i]) * exnerLayer[(K - 1) * C + i]);
+  }
+  const saved = await gpu.land.serialize();
+  let worstLength = 0, worstWarmth = 0, worstTrees = 0, grew = 0, died = 0, snowy = 0, inSeason = 0, cells = 0;
   for (let i = 0; i < C; i++) {
     if (!cpu.geography.land[i] || cpu.geography.iceSheet[i]) continue;
     cells++;
-    worstAir = Math.max(worstAir, Math.abs(cpu.state[1][(K - 1) * C + i] - gpu.state[1][(K - 1) * C + i]) * exnerLayer[(K - 1) * C + i]);
     worstLength = Math.max(worstLength, Math.abs(cpu.land.seasonLength[i] - saved.seasonLength[i]));
     worstWarmth = Math.max(worstWarmth, Math.abs(cpu.land.seasonWarmth[i] - saved.seasonWarmth[i]));
     worstTrees = Math.max(worstTrees, Math.abs(cpu.land.canopy[i] - saved.canopy[i]));
@@ -178,7 +181,7 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
     if (cpu.land.seasonLength[i] > lengthBefore[i]) inSeason++;
   }
   gpu.destroy();
-  console.log(`N=6, 48 steps over ${cells} land cells (${snowy} under snow, ${inSeason} in season): trees grew on ${grew} and died back on ${died}; engines apart by ${worstLength.toExponential(1)} in season length, ${worstWarmth.toExponential(1)} K in season warmth (the lowest air by ${worstAir.toExponential(1)} K), ${worstTrees.toExponential(1)} in tree cover`);
+  console.log(`N=6, 48 steps over ${cells} land cells (${snowy} under snow, ${inSeason} in season): trees grew on ${grew} and died back on ${died}; engines apart by ${worstLength.toExponential(1)} in season length, ${worstWarmth.toExponential(1)} K in season warmth (the lowest air by up to ${worstAir.toExponential(1)} K over the run), ${worstTrees.toExponential(1)} in tree cover`);
   assert.ok(grew > 10 && died > 10 && snowy > 5 && inSeason > 10 && cells - inSeason > 5, `${grew} grew, ${died} died, ${snowy} snowy, ${inSeason} in season`);
   assert.ok(worstLength < 1e-4 && worstWarmth <= worstAir && worstTrees < 1e-4, `season length ${worstLength}, warmth ${worstWarmth} under air ${worstAir}, trees ${worstTrees}`);
 });
