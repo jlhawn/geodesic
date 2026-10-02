@@ -379,3 +379,63 @@ test('the dry boundary layer with entrainment matches between the engines on a r
   assert.ok(theta < 1e-3 && q < 1e-6 && qc < 1e-7 && wind < 1e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
   assert.ok(moved > 100 * q && movedWind > 100 * wind, `entrainment moves q by ${moved} and the wind by ${movedWind}`);
 });
+
+test('a surface parcel that tops out at the base of a stratocumulus whose descending parcel stops there is coupled to it in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuCore } = await import('../js/gpu/core.gpu.js');
+  const levels = sigmaInterfaces('bl34');
+  const pair = createModel(new Grid(6), { ocean: false, levels });
+  const { core: c, mesh: m, state, radiation, boundaryLayer: layer } = pair;
+  const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
+  const [pi, theta, u, surfaceT, q, qc] = state;
+  const init = initializeState(pair, {});
+  for (let a = 0; a < init.length; a++) state[a].set(init[a]);
+  c.diagnose(pi, theta, q, qc);
+  let seed = 7;
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  for (let i = 0; i < nC; i++) {
+    const zb = phi[(nK - 1) * nC + i] / grav, height = (k) => phi[k * nC + i] / grav - zb;
+    let base = nK - 1;
+    const wanted = 250 + 400 * random();
+    while (base > 0 && height(base) < wanted) base--;
+    const top = base - 1 - Math.floor(2 * random()), surface = 285 + 12 * random(), water = 2e-4 + 2e-4 * random();
+    for (let k = 0; k < nK; k++) {
+      const x = k * nC + i, p = pi[i] * sigmaMid[k];
+      if (k > base) { theta[x] = surface; qc[x] = 0; }
+      else if (k >= top) { theta[x] = surface + 3; qc[x] = water; }
+      else { theta[x] = Math.max(surface + 10 + 4e-3 * (height(k) - height(top)), init[1][x]); qc[x] = 0; }
+      q[x] = k >= top ? saturationHumidity(theta[x] * exnerLayer[x], p) : 0.3 * saturationHumidity(theta[x] * exnerLayer[x], p);
+    }
+    const lifted = (base + 2) * nC + i;
+    for (let k = base + 1; k < nK; k++) q[k * nC + i] = 1.06 * saturationHumidity(theta[lifted] * exnerLayer[lifted], pi[i] * sigmaMid[base + 2]);
+    surfaceT[i] = theta[(nK - 1) * nC + i] * exnerLayer[(nK - 1) * nC + i] * Math.pow(sigmaMid[nK - 1], -kappa) + 1 + 2 * random();
+    for (let k = 0; k < nK; k++) radiation.longwave[k * nC + i] = k === top ? -60 : 0;
+  }
+  u.fill(0);
+  for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  c.diagnose(pi, theta, q, qc);
+  const gpu = await createGpuCore(m, { levels });
+  const { device, buffers, kernels } = gpu;
+  gpu.upload(state);
+  gpu.uploadPhysics();
+  device.queue.writeBuffer(buffers.PH, 4 * gpu.layout.PH.LWH, Float32Array.from(radiation.longwave.subarray(0, nK * nC)));
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([900, 0, 1, 0, 0, 0, 0, 0]));
+  const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+  pass.setPipeline(kernels.pblDiagnose);
+  pass.setBindGroup(0, device.createBindGroup({ layout: kernels.pblDiagnose.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
+  pass.dispatchWorkgroups(Math.ceil(nC / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  const ph = await gpu.downloadPhysics();
+  layer.diagnose(state);
+  let flips = 0, worstDepth = 0;
+  for (let i = 0; i < nC; i++) {
+    if (layer.regime[i] !== ph.REGIME[i]) flips++;
+    worstDepth = Math.max(worstDepth, Math.abs(layer.depth[i] - ph.DEPTH[i]));
+  }
+  const regimes = [0, 0, 0, 0];
+  for (let i = 0; i < nC; i++) regimes[layer.regime[i]]++;
+  console.log(`${nC} columns of a surface layer under a stratocumulus: regimes (stable, surface, decoupled, coupled) ${regimes.join(', ')}; the engines' regimes differ in ${flips}, the depths by up to ${worstDepth.toFixed(2)} m`);
+  assert.ok(regimes[3] > nC / 2, `${regimes[3]} coupled`);
+  assert.equal(flips, 0);
+  assert.ok(worstDepth < 0.5, `depth ${worstDepth}`);
+});

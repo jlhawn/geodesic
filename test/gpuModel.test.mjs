@@ -711,3 +711,44 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
   assert.ok(C - kept.length <= 0.01 * C, `${C - kept.length} cells apart`);
   assert.ok(convective.rmsRel < 1e-3 && largeScale.rmsRel < 1e-3, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScale.rmsRel}`);
 });
+
+test('step by step from one state with partly iced, melting polar cells, the engines agree on the ice, its snow and their albedo, the surface flux, the lowest layers and the boundary layer\'s regime', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
+  const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
+  const { readRanges } = await import('../js/gpu/device.module.js');
+  const N = 6, dt = 1350 * 16 / N, options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true } };
+  const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options);
+  const C = cpu.mesh.nCells, K = cpu.core.K, init = initializeState(cpu, {});
+  const iced = [];
+  for (let i = 0; i < C; i++) if (cpu.mesh.latCell[i] > 70 * Math.PI / 180) { iced.push(i); init[6][i] = 1.2; init[3][i] = 273.1; }
+  for (const a of init) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  const concentration = Float64Array.from({ length: C }, (_, i) => (iced.includes(i) ? Math.fround(0.7) : 0)), snow = Float32Array.from({ length: C }, (_, i) => (iced.includes(i) ? 3 : 0));
+  for (const m of [cpu, gpu]) { for (let a = 0; a < init.length; a++) m.state[a].set(init[a]); m.seaIce.load(m.state[6], concentration); m.time = 91 * 86400 + 12 * 3600; }
+  cpu.seaIce.snow.set(snow);
+  gpu.load();
+  const { device, buffers, layout } = gpu.gpu;
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SNOW, snow);
+  const worst = { h: 0, A: 0, snow: 0, albedo: 0, skin: 0, flux: 0, iceFlux: 0, theta: 0, flips: 0 };
+  let melted = 0;
+  for (let n = 0; n < 8; n++) {
+    cpu.step(dt);
+    await gpu.step(dt);
+    await gpu.sync();
+    const [conc, snowNow, snowAlbedo, flux, regime] = await readRanges(device, buffers.PH, ['CONC', 'SNOW', 'SNOWALB', 'SFLUX', 'REGIME'].map((name) => ({ offset: layout.PH[name], length: C })));
+    for (let i = 0; i < C; i++) {
+      if (cpu.boundaryLayer.regime[i] !== regime[i]) worst.flips++;
+      worst.flux = Math.max(worst.flux, Math.abs(cpu.radiation.surfaceFlux[i] - flux[i]));
+      for (let k = K - 10; k < K; k++) worst.theta = Math.max(worst.theta, Math.abs(cpu.state[1][k * C + i] - gpu.state[1][k * C + i]));
+    }
+    for (const i of iced) {
+      worst.h = Math.max(worst.h, Math.abs(cpu.state[6][i] - gpu.state[6][i])); worst.A = Math.max(worst.A, Math.abs(cpu.seaIce.concentration[i] - conc[i]));
+      worst.snow = Math.max(worst.snow, Math.abs(cpu.seaIce.snow[i] - snowNow[i])); worst.albedo = Math.max(worst.albedo, Math.abs(cpu.seaIce.snowAlbedo[i] - snowAlbedo[i]));
+      worst.skin = Math.max(worst.skin, Math.abs(cpu.state[3][i] - gpu.state[3][i])); worst.iceFlux = Math.max(worst.iceFlux, Math.abs(cpu.radiation.surfaceFlux[i] - flux[i]));
+      if (n === 7 && cpu.state[3][i] >= 273.15 && cpu.seaIce.snow[i] < 3) melted++;
+    }
+  }
+  console.log(`8 steps, ${iced.length} cells iced at 0.7 under 1.2 m and 3 kg/m² of snow (${melted} melting at the end): the engines differ by up to ${worst.h.toExponential(1)} m of ice, ${worst.A.toExponential(1)} of cover, ${worst.snow.toExponential(1)} kg/m² of snow, ${worst.albedo.toExponential(1)} of its albedo, ${worst.skin.toExponential(1)} K at the skin and ${worst.iceFlux.toExponential(1)} W/m² of surface flux there; everywhere ${worst.flux.toExponential(1)} W/m², ${worst.theta.toExponential(1)} K of θ in the lowest ten layers, ${worst.flips} boundary-layer regimes`);
+  assert.ok(melted > 0, 'some cell melts');
+  assert.ok(worst.h < 1e-4 && worst.A < 1e-4 && worst.snow < 1e-3 && worst.albedo < 1e-4 && worst.skin < 0.01 && worst.iceFlux < 0.5, JSON.stringify(worst));
+  assert.ok(worst.flux < 1 && worst.theta < 0.01 && worst.flips === 0, JSON.stringify(worst));
+});

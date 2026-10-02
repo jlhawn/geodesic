@@ -1040,7 +1040,7 @@ fn blEntrain(i: i32, pi: f32, kE: i32, lowest: i32, h: f32, buoyant: f32, sheare
 }
 fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, friction: f32) {
   let bottom = K - 1;
-  var surfaceDepth = richardsonDepth;
+  var surfaceDepth = richardsonDepth; var surfaceLevel = -1;
   if (buoyancy > 0.0 && CT_CUMULUS > 0.0) {
     let base = bottom * C + i;
     let mixed = pow(friction * friction * friction + 0.6 * buoyancy * max(0.0, surfaceDepth), 1.0 / 3.0);
@@ -1055,7 +1055,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     }
     if (condensation > k && k >= KTOP) {
       let parcelTop = blInterface(k, i, zb); let cloudBase = blInterface(condensation, i, zb);
-      if (parcelTop - cloudBase <= CT_CUMULUS && parcelTop <= CT_HMAX && parcelTop > surfaceDepth) { surfaceDepth = parcelTop; }
+      if (parcelTop - cloudBase <= CT_CUMULUS && parcelTop <= CT_HMAX && parcelTop > surfaceDepth) { surfaceDepth = parcelTop; surfaceLevel = k; }
     }
   }
   var top = -1; var cooling = 0.0;
@@ -1079,7 +1079,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     }
     lowest = k - 1;
     if (k <= bottom) { base0 = blInterface(k - 1, i, zb); }
-    coupled = k > bottom || base0 <= surfaceDepth;
+    coupled = k > bottom || select(base0 <= surfaceDepth, k - 1 >= surfaceLevel, surfaceLevel >= 0);
     if (coupled) { base0 = 0.0; }
     cloudTopZ = blInterface(top - 1, i, zb);
   }
@@ -1112,11 +1112,11 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     let driven = coupled && buoyancy > 0.0;
     PH[PH_ENTRAIN + i] = blEntrain(i, pi, top - 1, lowest, select(layerDepth, cloudTopZ, coupled), velocityCubed + select(0.0, buoyancy * cloudTopZ, driven), select(0.0, sheared, driven));
     if (!coupled && buoyancy > 0.0 && surfaceDepth > 0.0) {
-      let kE = blSurfaceInterface(i, zb, surfaceDepth);
+      let kE = select(blSurfaceInterface(i, zb, surfaceDepth), surfaceLevel, surfaceLevel >= 0);
       if (kE >= lowest) { _ = blEntrain(i, pi, kE, K - 1, surfaceDepth, buoyancy * surfaceDepth, sheared); }
     }
   } else if (buoyancy > 0.0 && h > 0.0) {
-    PH[PH_ENTRAIN + i] = blEntrain(i, pi, blSurfaceInterface(i, zb, h), K - 1, h, buoyancy * h, sheared);
+    PH[PH_ENTRAIN + i] = blEntrain(i, pi, select(blSurfaceInterface(i, zb, h), surfaceLevel, surfaceLevel >= 0 && h == surfaceDepth), K - 1, h, buoyancy * h, sheared);
   }
 }
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
