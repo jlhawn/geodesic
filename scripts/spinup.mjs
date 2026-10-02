@@ -168,6 +168,8 @@ function loadSaved(saved) {
   if (saved.boundaryBuoyancy) model.boundaryLayer.buoyancyFlux.set(saved.boundaryBuoyancy);
   if (saved.windSpeed) model.surface.windSpeed.set(saved.windSpeed);
   if (saved.evaporation) model.radiation.evaporation.set(saved.evaporation);
+  if (saved.exchangeHeat && model.exchange && !model.exchange.fixed) model.exchange.heat.set(saved.exchangeHeat);
+  if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchangeWind);
   for (const field of ['cumulusCover', 'cumulusWater']) if (saved[field] && saved[field].length === model.moist[field].length) model.moist[field].set(saved[field]);
   model.time = saved.time;
   model.load();
@@ -378,8 +380,9 @@ if (days > 0 && !step) {
 }
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
+const exchangeFields = model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {};
 const header = { N, K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, cumulusCover, cumulusWater, ocean, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, ocean, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));
 for (const old of whole.slice(0, Math.max(0, whole.length - KEEP))) unlinkSync(`${OUT}/${old}`);

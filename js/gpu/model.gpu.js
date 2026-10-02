@@ -29,7 +29,9 @@ const AGEING_OPTIONS = ['snowAgeing', ...Object.keys(SNOW_AGEING)];
  * mixing top, regime and surface buoyancy flux `boundaryLayer.mixingTop`,
  * `regime` and `buoyancyFlux` (the radiation's variance cover reads the
  * flux of the step before), the lowest layer's wind speed
- * `surface.windSpeed`, the evaporation `radiation.evaporation` and the
+ * `surface.windSpeed`, the evaporation `radiation.evaporation`, the
+ * surface layer's C_H and gusty wind `exchange.heat` and `exchange.wind`
+ * (the land's surface humidity reads both) and the
  * shallow cumulus `moist.cumulusCover` and `moist.cumulusWater` (the
  * layers from `moist.cumulusK0` down) that the next step reads before it
  * diagnoses its own, the per-cell convective and
@@ -98,7 +100,7 @@ export async function createGpuModel(gridOrMesh, {
   const state = lengths.map((n) => new Float64Array(n));
   let dirty = true, lastFrameTime = 0, lastFrameStep = 0;
 
-  const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, subgridOrography: subgrid, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
+  const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, subgridOrography: subgrid, exchange, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
   const cumulusLength = gpu.layout.PH.CUWATER - gpu.layout.PH.CUCOVER;
   model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain, cumulusK0: K - cumulusLength / C, cumulusCover: new Float64Array(cumulusLength), cumulusWater: new Float64Array(cumulusLength) };
   model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C), buoyancyFlux: new Float64Array(C) };
@@ -119,6 +121,11 @@ export async function createGpuModel(gridOrMesh, {
   async function sync() {
     if (!dirty) return;
     const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, shortwaveEffect, longwaveEffect, depth, mixingTop, regime, buoyancy, evaporation, cumulusCover, cumulusWater], [windSpeed]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, [...['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'SWCREMEAN', 'LWCREMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY', 'EVAP'].map((name) => ({ offset: gpu.layout.PH[name], length: C })), ...['CUCOVER', 'CUWATER'].map((name) => ({ offset: gpu.layout.PH[name], length: cumulusLength }))]), readRanges(gpu.device, gpu.buffers.D, [{ offset: gpu.layout.D.WIND, length: C }])]);
+    if (exchange) {
+      const [heat, wind] = await readRanges(gpu.device, gpu.buffers.PH, ['HEATX', 'XWIND'].map((name) => ({ offset: gpu.layout.PH[name], length: C })));
+      if (!exchange.fixed) exchange.heat.set(heat);
+      exchange.wind.set(wind);
+    }
     arrays.forEach((a, i) => state[i].set(a));
     seaIce.concentration.set(concentration);
     radiationCpu.mlmSubsidence.set(mean);
