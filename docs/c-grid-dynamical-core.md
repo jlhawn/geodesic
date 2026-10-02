@@ -9579,6 +9579,67 @@ own test parcel (0.4 ε, half the condensate removed), not built, would
 deepen its clouds instead. Nine cells rain more than 150 mm/d, all land,
 with convective shares 0.00–0.11.
 
+**The type of convection by the IFS's test parcel (Oct 2).**
+`convectionType` 'testParcel' (the default; 'cloudDepth' the previous type
+bit for bit on the CPU): the IFS's first-guess deep updraught (Cy43r1 §6.4,
+eqs 6.18–6.21 with the w² equation 6.10) types the column before the full
+ascent. A test parcel of the deep source's s_l and q_t (the lowest 50 hPa
+with the eq. 6.19 excess) leaves the source's top interface at 1 m/s and
+mixes toward each layer's air at ε = 0.4 · 1.75e-3 /m (q_s(T)/q_s(T_lowest))³,
+below and in its cloud, its w² following the IFS form with that mixing rate,
+and keeps half its condensate at each upper interface. Its cloud runs from
+the lower interface of its first cloudy layer to the height inside a layer
+where its w² vanishes, solved exactly for that layer's buoyancy and mixing
+and placed in ln p. Deeper than 200 hPa, the column runs the deep plume
+alone; otherwise the shallow plume alone, without the deep ascent. One
+departure level only: the IFS repeats the test from higher levels up to
+350 hPa above the ground, and the model's deep plume has one source. On
+Jordan's column the test cloud passes 200 hPa at 756 hPa and its w² vanishes
+at 124 hPa (the plume tops at 211); with the free troposphere ×0.3 and ×0.1
+the test parcel is still deep (w² zero at 215 and 266 hPa) while the plume
+tops at 756 and 659 hPa: the test parcel's entrainment does not depend on
+the environment's humidity. The trade-wind and trade-cumulus columns are
+shallow (test clouds 939–833 and 958–808 hPa). Three N=64 days from
+eight64_day0183 against the regime elements' reference (cxb; the reference's
+replicate spread in brackets): N Pacific trades typed deep on 0.950 of the
+column-steps, deep firing 0.711 → 0.749 (0.004), convective rain 1.62 →
+1.58 mm/d, low cover (cloudRegimes) 0.199 → 0.306; SE Pacific convective
+share (8 audit steps) 0.72 → 0.77, CPU day 0.71 → 0.73, low cloud 0.450 →
+0.446 (0.03); California deep firing 0.594 → 0.608, convective share 0.849
+→ 0.836, radiative low cover 0.387 → 0.413; ITCZ typed deep 0.703, firing
+0.426 → 0.545, convective share 0.871 → 0.881 (0.001), fired tops above 300
+hPa 0.010 → 0.010, Q1R centroid 739.6 → 743.0 hPa; warm pool share 0.797 →
+0.829; replayed global rain 1.972 → 1.979 mm/d; GPU day 186 SWCRE −46.3,
+LWCRE 22.8 W/m². From ten64_day0183: trades firing 0.554 → 0.653, ITCZ share
+0.891 → 0.876. Acceptance: trades firing (≤ 0.15) and convective rain
+(≤ 1.0 mm/d), the SE Pacific and California shares (≤ 0.15) and the ITCZ
+share (0.5–0.8) not met; the low-cloud guards and the warm-pool share met.
+Deep firing over a CPU day from the day-186 state (twin map, ce/rv/mapday.mjs):
+35–55° oceans 0.195 → 0.177 (north) and 0.237 → 0.211 (south), S Atlantic
+trades 0.376 → 0.300, tropical land 0.156 → 0.098.
+
+What the trades' sounding lacks. The test parcel types 0.95 of the trade
+column-steps deep because nothing near 800 hPa stops a weakly entraining
+parcel: the box's T − Jordan is −2.2 K at 850–924 hPa, −1.4 at 705 and +0.6
+at 608 hPa, its humidity falls from 0.95 at 924–946 hPa to 0.66 at 705 and
+0.46 at 608 hPa, a decline spread over 250 hPa with no temperature jump,
+where the observed trade inversion is a 2–5 K jump in θ over 100–300 m near
+850–800 hPa (BOMEX, ATEX). The budget of the 800–900 hPa layer (the 850 and
+893 hPa layers, W/m²): longwave −24.4, shortwave +9.0, dynamics −5.7, the
+boundary layer's mixing −8.0, condensation +4.3, the deep plume's rain
++23.1, its transport +13.0, its downdraft's evaporation −6.8, the shallow
+plume −4.4, recondensation −2.4, rain evaporation −1.6. The deep plume
+heats the layer by 2.5–3.2 K/day and the dynamics cool it (−0.5 K/day, net
+ascent), where the observed trade-cumulus layer is warmed by subsidence and
+cooled and moistened at its top by the shallow cumulus' detrainment. The
+inversion is made by the subsidence above the shallow plume's detrainment
+and cloud-top cooling; here the deep plume's own heating replaces the
+subsidence warming, and the bl34 layers there (789, 850, 893 hPa) are
+40–60 hPa (about 500 m) thick, wider than the observed inversion. The
+element stays on: it is the IFS's procedure, and the wrong-way move of the
+trades' firing (+0.04) comes from the sounding it is given, not from the
+test; 'cloudDepth' gives the previous type.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
