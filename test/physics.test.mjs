@@ -404,7 +404,7 @@ test('water vapour absorbs sunlight by the Lacis–Hansen curve: a humid column 
 });
 
 test('cloud water absorbs 1 − exp(−0.4 m²/kg × W) of the sunlight that meets it — 3.9 % at 100 g/m², 15 % at 400 g/m² — heating the cloudy layers in proportion to their water, and incident = reflected + atmosphere + surface', () => {
-  const radiation = createRadiation(mesh, core, OVERCAST), scattering = createRadiation(mesh, core, { cloudSolarAbsorption: 0, ...OVERCAST });
+  const radiation = createRadiation(mesh, core, { ...OVERCAST, upwardAbsorption: false }), scattering = createRadiation(mesh, core, { cloudSolarAbsorption: 0, ...OVERCAST, upwardAbsorption: false });
   radiation.setTime(0); scattering.setTime(0);
   const noon = brightest(radiation), beam = radiation.insolation(noon), incident = beam * 0.97;
   const pi = new Float64Array(C).fill(P0), theta = sampleState(3)[1], q = new Float64Array(K * C), qc = new Float64Array(K * C);
@@ -514,8 +514,8 @@ test('the deck is two independent columns: its shortwave is the cover-weighted m
 });
 
 test('the deck\'s own water absorbs in the deck layer in the same two-column blend: half the cover absorbs half as much', () => {
-  const { radiation, withStability, run } = deckColumns();
-  const scattering = createRadiation(mesh, core, { stratus: true, mixedLayerDeck: false, cloudSolarAbsorption: 0 });
+  const { radiation, withStability, run } = deckColumns({ upwardAbsorption: false });
+  const scattering = createRadiation(mesh, core, { stratus: true, mixedLayerDeck: false, cloudSolarAbsorption: 0, upwardAbsorption: false });
   scattering.setTime(0);
   const layer = radiation.stratusLayer, stable = withStability(30);
   const absorbed = (openSea) => {

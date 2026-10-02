@@ -457,7 +457,7 @@ row('zonal-mean rain peak (mm/d)', zonalPeak.value, 2, 6, 7, 0, `at ${f(zonalPea
 {
   const classes = clearSkyClasses(model, { day: saved.day, times: CLASS_TIMES, ozone: RADIATION.ozoneAbsorption ?? 0.03 });
   for (const r of classes.classRows) {
-    const range = r.surfaceRange ?? r.toaRange, value = r.surfaceRange ? r.surfaceAlbedo : r.toaAlbedo;
+    const range = r.surfaceRange ?? r.toaRange, value = Math.round(1000 * (r.surfaceRange ? r.surfaceAlbedo : r.toaAlbedo)) / 1000;
     row(`clear sky, ${r.name}: ${r.surfaceRange ? 'surface albedo' : 'albedo at the top'}`, value, 3, range ? range[0] : NaN, range ? range[1] : NaN, 0, `area ${f(r.areaShare, 3)}; ${r.surfaceRange ? `at the top ${f(r.toaAlbedo, 3)}` : `surface ${f(r.surfaceAlbedo, 3)}`}, the atmosphere's own ${f(r.atmosphereShare, 3)}${r.note ? `; ${r.note}` : ''}`);
   }
   for (const r of classes.muRows) row(`clear sky, ${r.name}: direct-beam surface albedo`, r.directAlbedo, 3, Math.min(r.taylor, r.fresnel) - 0.01, Math.max(r.taylor, r.fresnel) + 0.01, 0, `mean mu ${f(r.mu, 3)}, the sea's sunlight ${f(r.insolationShare, 3)}; Taylor ${f(r.taylor, 3)}, Fresnel ${f(r.fresnel, 3)}; at the top ${f(r.toaAlbedo, 3)}`);
