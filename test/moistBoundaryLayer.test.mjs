@@ -267,7 +267,7 @@ test('with deckRegime \'boundaryLayer\' the deck runs where the boundary layer i
 async function moistEngines(options = {}, moist = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(6), { ocean: false, levels, boundaryLayer: options, moist });
+  const pair = createModel(new Grid(6), { ocean: false, levels, boundaryLayer: options, moist, surface: { exchange: 'fixed' } });
   const { core: c, mesh: m, state, radiation: r, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer: ex, sigmaMid: mid, kappa: kap, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -297,7 +297,7 @@ async function moistEngines(options = {}, moist = {}) {
   for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) u[k * nE + e] = k === nK - 1 ? 2 * (random() - 0.5) : 12 * (random() - 0.5);
   for (const a of [...state, longwave, r.mlmGate, r.stratiform]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   c.diagnose(pi, theta, q, qc);
-  const gpu = await createGpuCore(m, { levels, physics: { ...options, ...moist } });
+  const gpu = await createGpuCore(m, { levels, physics: { ...options, ...moist, surfaceExchange: 'fixed' } });
   const { device, buffers, kernels, layout } = gpu, dt = 900;
   gpu.upload(state);
   gpu.uploadPhysics({ mlmGate: r.mlmGate });
