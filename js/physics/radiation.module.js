@@ -125,8 +125,8 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * blend, at the column's cover f̄, of the clear column and the column
  * whose cloud path lies in f̄, as the deck below blends its two columns.
  * Each layer is seen through its visibility 1 − exp(−path /
- * VISIBLE_PATH), 1 g/m². With `cloudOverlap` 'maximumRandom' (the
- * default) the layers of each run of adjacent cloudy layers overlap
+ * VISIBLE_PATH), 1 g/m². With `cloudOverlap` 'maximumRandom' the
+ * layers of each run of adjacent cloudy layers overlap
  * maximally and the runs randomly: f̄ is 1 − Π(1 − f_run), f_run the
  * largest of its layers' f times their visibility; 'maximum' overlaps
  * every layer maximally, f̄ the largest over the column. With
