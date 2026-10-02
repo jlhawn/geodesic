@@ -4,7 +4,9 @@ import { sunDirection, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS,
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.gpu.js';
 import { MOIST_DEFAULTS } from '../physics/moist.module.js';
-import { SEA_DRAG } from '../physics/surface.module.js';
+import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
+import { spongeGeometry, spongeRates as layerRates, SPONGE } from '../dynamics/sponge.module.js';
+import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSource } from '../physics/gravityWaves.module.js';
 
 const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384, MAXIMUM_SURFACE_PRESSURE = 110000;
 
@@ -21,22 +23,26 @@ const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384,
  * energy, flux-form transport of θ, q and qc), and the momentum
  * tendency with the RTSK PV flux, the two pressure-gradient terms, the
  * vertical advection, the aerodynamic drag on the lowest layer and the
- * top sponge — then a fused advance, and after the four stages a fused
- * combine. The ∇⁴ closures follow once per step as in the split CPU
- * core. Every kernel binds the same seven buffers in the same order.
+ * optional Rayleigh drag at the top — then a fused advance, and after the
+ * four stages a fused combine. The ∇⁴ closures, the divergence damping
+ * and the sponge follow once per step as in the split CPU core, and the
+ * gravity-wave drag computed after the physics is applied with the
+ * momentum mixing. Every kernel binds the same seven buffers in the same
+ * order.
  */
-export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0) {
-  const C = mesh.nCells, E = mesh.nEdges, V = mesh.nVertices;
+export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, sponge = null, waves = false) {
+  const C = mesh.nCells, E = mesh.nEdges, V = mesh.nVertices, waveCells = waves ? C : 0, waveEdges = waves ? E : 0;
+  const SPK = sponge ? sponge.layers : 0, SPB = sponge ? sponge.bands : 0, spongeCells = SPK ? C : 0, spongeEdges = SPK ? E : 0;
   const KC = K * C, KE = K * E, KV = K * V;
   const seq = (names) => { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; };
-  const MI = seq([['COE', 2 * E], ['VOE', 2 * E], ['EOC', MAX_EDGES * C], ['ESC', MAX_EDGES * C], ['COC', MAX_EDGES * C], ['NEC', C], ['COV', 3 * V], ['EOV', 3 * V], ['ESV', 3 * V], ['EOE', MAX_EDGES_ON_EDGE * E], ['NEE', E]]);
-  const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E], ['PHIS', C]]);
-  const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K]]);
+  const MI = seq([['COE', 2 * E], ['VOE', 2 * E], ['EOC', MAX_EDGES * C], ['ESC', MAX_EDGES * C], ['COC', MAX_EDGES * C], ['NEC', C], ['COV', 3 * V], ['EOV', 3 * V], ['ESV', 3 * V], ['EOE', MAX_EDGES_ON_EDGE * E], ['NEE', E], ['SBC', spongeCells], ['SBS', SPK ? SPB + 1 : 0], ['SEB', spongeEdges]]);
+  const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E], ['PHIS', C], ['SEW', MAX_EDGES * spongeCells], ['SNW', MAX_EDGES * spongeCells], ['SES', spongeEdges], ['SEE', spongeEdges], ['SEN', spongeEdges], ['GWX', 6 * waveCells], ['GWP', 4 * waveEdges]]);
+  const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K], ['SPG', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
-  const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE]]);
-  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['LWSFCSUM', C]]);
+  const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]);
+  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['LWSFCSUM', C], ['GWE', K * waveCells], ['GWN', K * waveCells]]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
-  return { C, E, V, K, KC, KE, KV, MI, MF, LV, S, D, PH, FR };
+  return { C, E, V, K, KC, KE, KV, SPK, SPB, MI, MF, LV, S, D, PH, FR };
 }
 
 function prelude(L, constants) {
@@ -44,7 +50,7 @@ function prelude(L, constants) {
   const consts = Object.entries({ ...L.MI, ...Object.fromEntries(Object.entries(L.MF).map(([k, v]) => ['F_' + k, v])), ...Object.fromEntries(Object.entries(L.LV).map(([k, v]) => ['L_' + k, v])), ...Object.fromEntries(Object.entries(L.S).map(([k, v]) => ['S_' + k, v])), ...Object.fromEntries(Object.entries(L.D).map(([k, v]) => ['D_' + k, v])), ...Object.fromEntries(Object.entries(L.PH).map(([k, v]) => ['PH_' + k, v])), ...Object.fromEntries(Object.entries(L.FR).map(([k, v]) => ['FR_' + k, v])), GROUPS: groupsOf(C) })
     .filter(([k]) => k !== 'total').map(([k, v]) => `const ${k}: i32 = ${v};`).join('\n');
   return `
-const C: i32 = ${C}; const E: i32 = ${E}; const V: i32 = ${V}; const K: i32 = ${K};
+const C: i32 = ${C}; const E: i32 = ${E}; const V: i32 = ${V}; const K: i32 = ${K}; const SPK: i32 = ${L.SPK}; const SPB: i32 = ${L.SPB};
 const MAXE: i32 = ${MAX_EDGES}; const MAXEE: i32 = ${MAX_EDGES_ON_EDGE};
 const KAPPA: f32 = ${constants.kappa}; const CP: f32 = ${constants.cp}; const P0: f32 = ${constants.p0}; const GRAV: f32 = ${constants.g}; const RGAS: f32 = ${constants.R};
 const VIRT: f32 = ${VIRTUAL_FACTOR}; const CDRAG: f32 = ${constants.dragCoefficient}; const GUST: f32 = ${constants.gustiness};
@@ -516,6 +522,103 @@ const KERNELS = {
     if (accumulate) { D[D_DISS + n] += lost; } else { D[D_DISS + n] = lost; }
   }
 }`,
+  spongeMean: `var<workgroup> partEast: array<f32, ${WORKGROUP}>;
+var<workgroup> partNorth: array<f32, ${WORKGROUP}>;
+@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
+  let w = i32(wg.x) + i32(wg.y) * 65535; let t = i32(lid.x);
+  var east = 0.0; var north = 0.0;
+  if (w < SPK * SPB) {
+    let k = w / SPB; let b = w % SPB;
+    for (var n = MI[SBS + b] + t; n < MI[SBS + b + 1]; n += ${WORKGROUP}) {
+      let i = MI[SBC + n];
+      for (var m = 0; m < MAXE; m++) {
+        let slot = MAXE * i + m; let u = IN[S_U + k * E + MI[EOC + slot]];
+        east += MF[F_SEW + slot] * u; north += MF[F_SNW + slot] * u;
+      }
+    }
+  }
+  partEast[t] = east; partNorth[t] = north;
+  workgroupBarrier();
+  for (var half = ${WORKGROUP / 2}; half > 0; half = half / 2) {
+    if (t < half) { partEast[t] += partEast[t + half]; partNorth[t] += partNorth[t + half]; }
+    workgroupBarrier();
+  }
+  if (t == 0 && w < SPK * SPB) { D[D_SPM + 2 * w] = partEast[0]; D[D_SPM + 2 * w + 1] = partNorth[0]; }
+}`,
+  spongeApply: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let e = i32(id.x); if (e >= E) { return; }
+  let b = MI[SEB + e]; let share = MF[F_SES + e]; let toEast = MF[F_SEE + e]; let toNorth = MF[F_SEN + e];
+  let accumulate = P[2] > 0.5;
+  for (var k = 0; k < SPK; k++) {
+    let base = D_SPM + 2 * (k * SPB + b);
+    let mean = ((1.0 - share) * D[base] + share * D[base + 2]) * toEast + ((1.0 - share) * D[base + 1] + share * D[base + 3]) * toNorth;
+    let n = k * E + e;
+    let before = IN[S_U + n]; let after = mean + (before - mean) / (1.0 + P[0] * LV[L_SPG + k]);
+    IN[S_U + n] = after;
+    let lost = before * before - after * after;
+    if (accumulate) { D[D_DISS + n] += lost; } else { D[D_DISS + n] = lost; }
+  }
+}`,
+  gravityWaves: `const GW_AMP = array<f32, GW_J>(GW_AMPLITUDES);
+@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  for (var k = 0; k < K; k++) { PH[PH_GWE + k * C + i] = 0.0; PH[PH_GWN + k * C + i] = 0.0; }
+  let ex = MF[F_GWX + 6 * i]; let ey = MF[F_GWX + 6 * i + 1];
+  if (ex == 0.0 && ey == 0.0) { return; }
+  let nx = MF[F_GWX + 6 * i + 2]; let ny = MF[F_GWX + 6 * i + 3]; let nz = MF[F_GWX + 6 * i + 4];
+  let pi = IN[S_PI + i]; let area = MF[F_AREA + i];
+  var windE: array<f32, GW_SOURCE_PLUS>; var windN: array<f32, GW_SOURCE_PLUS>; var rho: array<f32, GW_SOURCE_PLUS>; var freq: array<f32, GW_SOURCE_PLUS>;
+  var temp: array<f32, GW_SOURCE_PLUS>; var pres: array<f32, GW_SOURCE_PLUS>; var depE: array<f32, GW_SOURCE_PLUS>; var depN: array<f32, GW_SOURCE_PLUS>;
+  for (var k = 0; k <= GW_SOURCE; k++) {
+    var x = 0.0; var y = 0.0; var z = 0.0;
+    for (var m = 0; m < MAXE; m++) {
+      let slot = MAXE * i + m; let e = MI[EOC + slot];
+      let w = 0.5 * MF[F_DC + e] * MF[F_DV + e] * abs(f32(MI[ESC + slot])) * IN[S_U + k * E + e];
+      x += w * MF[F_NEDGE + 3 * e]; y += w * MF[F_NEDGE + 3 * e + 1]; z += w * MF[F_NEDGE + 3 * e + 2];
+    }
+    windE[k] = (ex * x + ey * y) / area; windN[k] = (nx * x + ny * y + nz * z) / area;
+    pres[k] = LV[L_SM + k] * pi;
+    temp[k] = IN[S_TH + k * C + i] * pow(pres[k] / P0, KAPPA);
+    rho[k] = pres[k] / (RGAS * temp[k]);
+    depE[k] = 0.0; depN[k] = 0.0;
+  }
+  for (var k = 0; k < GW_SOURCE; k++) {
+    let above = max(0, k - 1); let below = k + 1;
+    let depth = RGAS / GRAV * 0.5 * (temp[above] + temp[below]) * log(pres[below] / pres[above]);
+    let n2 = GRAV / IN[S_TH + k * C + i] * (IN[S_TH + above * C + i] - IN[S_TH + below * C + i]) / depth;
+    freq[k] = sqrt(max(n2, GW_N2_FLOOR));
+  }
+  for (var dir = 0; dir < 2; dir++) {
+    let u0 = select(windN[GW_SOURCE], windE[GW_SOURCE], dir == 0);
+    for (var side = -1.0; side <= 1.0; side += 2.0) {
+      for (var j = 0; j < GW_J; j++) {
+        let c = u0 + side * f32(j + 1) * GW_DC; let b = side * GW_AMP[j];
+        var k = GW_SOURCE - 1;
+        for (; k > 0; k--) {
+          let rel = c - select(windN[k], windE[k], dir == 0);
+          if (side * rel <= 0.0) { break; }
+          if (abs(b) >= rho[k] * GW_KH * rel * rel * abs(rel) / (2.0 * freq[k])) { break; }
+        }
+        if (dir == 0) { depE[k] += b; } else { depN[k] += b; }
+      }
+    }
+  }
+  for (var k = 0; k < GW_SOURCE; k++) {
+    let mass = pi * LV[L_DS + k];
+    PH[PH_GWE + k * C + i] = GRAV * depE[k] / mass; PH[PH_GWN + k * C + i] = GRAV * depN[k] / mass;
+  }
+}`,
+  gravityWaveDrag: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let e = i32(id.x); if (e >= E) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  let pa = MF[F_GWP + 4 * e]; let qa = MF[F_GWP + 4 * e + 1]; let pb = MF[F_GWP + 4 * e + 2]; let qb = MF[F_GWP + 4 * e + 3];
+  for (var k = 0; k < GW_SOURCE; k++) {
+    let change = 0.5 * P[0] * (PH[PH_GWE + k * C + a] * pa + PH[PH_GWN + k * C + a] * qa + PH[PH_GWE + k * C + b] * pb + PH[PH_GWN + k * C + b] * qb);
+    let n = k * E + e; let before = IN[S_U + n]; let after = before + change;
+    IN[S_U + n] = after;
+    D[D_DISS + n] += before * before - after * after;
+  }
+}`,
   dissipationHeat: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = i32(id.x); if (n >= K * C) { return; }
   let k = n / C; let i = n % C;
@@ -548,7 +651,7 @@ export const PHYSICS_DEFAULTS = {
 
 export async function createGpuCore(mesh, {
   levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0, divergenceDamping = 0,
-  dragCoefficient = SEA_DRAG, gustiness = 3, topSigma = 0.02, topDragDays = 5, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
+  dragCoefficient = SEA_DRAG, gustiness = 3, topSigma = TOP_DRAG.sigma, topDragDays = TOP_DRAG.days, spongeRates: spongeOption, gravityWaves = {}, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
 } = {}) {
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
   const { device } = await getDevice();
@@ -556,7 +659,12 @@ export async function createGpuCore(mesh, {
   let cumulusK0 = K;
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > phys.shallowTop) cumulusK0--;
   phys.cumulusK0 = cumulusK0;
-  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0);
+  const spongeRates = spongeOption === undefined ? layerRates(Float64Array.from({ length: K }, (_, k) => 0.5 * (levels[k] + levels[k + 1])), SPONGE.sigma, SPONGE.days) : spongeOption;
+  const spongeLayers = spongeRates ? spongeRates.findIndex((rate) => !(rate > 0)) : 0, spongeLayerCount = spongeLayers < 0 ? K : spongeLayers;
+  if (spongeRates && spongeRates.some((rate, k) => k >= spongeLayerCount && rate > 0)) throw new Error('the sponge is on the top layers only');
+  const sponge = spongeLayerCount ? { ...spongeGeometry(mesh), layers: spongeLayerCount } : null;
+  const waves = gravityWaves === false ? null : { ...GRAVITY_WAVES, ...gravityWaves };
+  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0, sponge, !!waves);
   const { C, E, V } = L;
   const kappa = R / cp;
   const sigmaUpper = levels.subarray(0, K), sigmaLower = levels.subarray(1, K + 1);
@@ -583,6 +691,7 @@ export async function createGpuCore(mesh, {
   put(mi, L.MI.EOC, padded(mesh.edgesOnCell, (i) => mesh.edgesOnCell[mesh.maxEdges * i])); put(mi, L.MI.ESC, padded(mesh.edgeSignOnCell, () => 0));
   put(mi, L.MI.COC, padded(mesh.cellsOnCell, (i) => i)); put(mi, L.MI.NEC, mesh.nEdgesOnCell); put(mi, L.MI.COV, mesh.cellsOnVertex); put(mi, L.MI.EOV, mesh.edgesOnVertex);
   put(mi, L.MI.ESV, mesh.edgeSignOnVertex); put(mi, L.MI.NEE, mesh.nEdgesOnEdge);
+  if (sponge) { put(mi, L.MI.SBC, sponge.order); put(mi, L.MI.SBS, sponge.bandStart); put(mi, L.MI.SEB, sponge.edgeBand); }
   const edgesOnEdge = Int32Array.from({ length: MAX_EDGES_ON_EDGE * E }, (_, slot) => (slot % MAX_EDGES_ON_EDGE < mesh.nEdgesOnEdge[Math.floor(slot / MAX_EDGES_ON_EDGE)] ? mesh.edgesOnEdge[mesh.maxEdgesOnEdge * Math.floor(slot / MAX_EDGES_ON_EDGE) + slot % MAX_EDGES_ON_EDGE] : Math.floor(slot / MAX_EDGES_ON_EDGE)));
   put(mi, L.MI.EOE, edgesOnEdge);
   const mf = new Float32Array(L.MF.total);
@@ -596,9 +705,24 @@ export async function createGpuCore(mesh, {
   }));
   put(mf, L.MF.NEDGE, mesh.nEdge); put(mf, L.MF.LAT, mesh.latCell); put(mf, L.MF.XC, mesh.xCell);
   if (surfaceGeopotential) put(mf, L.MF.PHIS, surfaceGeopotential);
+  if (sponge) {
+    const paddedWeight = (weights) => Float64Array.from({ length: MAX_EDGES * C }, (_, slot) => { const i = Math.floor(slot / MAX_EDGES), m = slot % MAX_EDGES; return m < mesh.nEdgesOnCell[i] ? weights[mesh.maxEdges * i + m] : 0; });
+    put(mf, L.MF.SEW, paddedWeight(sponge.eastWeight)); put(mf, L.MF.SNW, paddedWeight(sponge.northWeight));
+    put(mf, L.MF.SES, sponge.edgeShare); put(mf, L.MF.SEE, sponge.edgeEast); put(mf, L.MF.SEN, sponge.edgeNorth);
+  }
+  if (waves) {
+    const onPole = (i) => Math.abs(mesh.latCell[i]) > Math.PI / 2 - 1e-9;
+    const frame = (i) => { const lat = mesh.latCell[i], lon = mesh.lonCell[i]; return onPole(i) ? [0, 0, 0, 0, 0, 0] : [-Math.sin(lon), Math.cos(lon), -Math.sin(lat) * Math.cos(lon), -Math.sin(lat) * Math.sin(lon), Math.cos(lat), 0]; };
+    put(mf, L.MF.GWX, Float64Array.from({ length: 6 * C }, (_, x) => frame(Math.floor(x / 6))[x % 6]));
+    put(mf, L.MF.GWP, Float64Array.from({ length: 4 * E }, (_, x) => {
+      const e = Math.floor(x / 4), s = Math.floor((x % 4) / 2), f = frame(mesh.cellsOnEdge[2 * e + s]), n = mesh.nEdge.subarray(3 * e, 3 * e + 3);
+      return x % 2 === 0 ? f[0] * n[0] + f[1] * n[1] : f[2] * n[0] + f[3] * n[1] + f[4] * n[2];
+    }));
+  }
   if (surfaceGeopotential) put(mf, L.MF.GPHIS, Float64Array.from({ length: E }, (_, e) => (surfaceGeopotential[mesh.cellsOnEdge[2 * e + 1]] - surfaceGeopotential[mesh.cellsOnEdge[2 * e]]) / mesh.dcEdge[e]));
   const lv = new Float32Array(L.LV.total);
   put(lv, L.LV.SL, sigmaLower); put(lv, L.LV.SU, sigmaUpper); put(lv, L.LV.DS, dSigma); put(lv, L.LV.SM, sigmaMid); put(lv, L.LV.TOP, topRate);
+  if (spongeRates) put(lv, L.LV.SPG, spongeRates);
   const cl = Float64Array.from(sigmaLower, (s) => Math.pow(s, kappa));
   const cm = Float64Array.from(sigmaLower, (s, k) => (Math.pow(s, 1 + kappa) - Math.pow(sigmaUpper[k], 1 + kappa)) / ((1 + kappa) * dSigma[k]));
   const cd = Float64Array.from(sigmaLower, (s, k) => (kappa / (1 + kappa)) * (Math.pow(s, 1 + kappa) - Math.pow(sigmaUpper[k], 1 + kappa)) / dSigma[k]);
@@ -632,7 +756,14 @@ export async function createGpuCore(mesh, {
   meshSpacing /= E;
   const divergenceStep = divergenceDamping * meshSpacing * meshSpacing;
   const kernels = {};
-  for (const [name, body] of Object.entries({ ...KERNELS, ...PHYSICS_KERNELS, ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) })) {
+  const waveSource = waves ? gravityWaveSource(sigmaMid, waves.sourcePressure, p0) : 0, waveAmplitudes = waves ? gravityWaveSpectrum(waves) : [0];
+  const waveConstants = (body) => body.replaceAll('GW_AMPLITUDES', Array.from(waveAmplitudes, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SOURCE_PLUS', String(waveSource + 1)).replaceAll('GW_SOURCE', String(waveSource)).replaceAll('GW_J', String(waveAmplitudes.length))
+    .replaceAll('GW_DC', waves ? waves.speedStep.toFixed(6) : '0.0').replaceAll('GW_KH', waves ? (2 * Math.PI / waves.wavelength).toExponential(9) : '0.0').replaceAll('GW_N2_FLOOR', waves ? (waves.minimumFrequency ** 2).toExponential(9) : '0.0');
+  const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
+  if (!waves) { delete kernelBodies.gravityWaves; delete kernelBodies.gravityWaveDrag; }
+  if (!sponge) { delete kernelBodies.spongeMean; delete kernelBodies.spongeApply; }
+  for (const [name, raw] of Object.entries(kernelBodies)) {
+    const body = waveConstants(raw);
     const code = head + body.replaceAll('S_TOTAL', String(L.S.total)).replaceAll('i32(id.x)', '(i32(id.x) + i32(id.y) * 4194240)');
     const module = device.createShaderModule({ code, label: name });
     kernels[name] = device.createComputePipeline({ label: name, layout: pipelineLayout, compute: { module, entryPoint: 'main' } });
@@ -770,6 +901,13 @@ export async function createGpuCore(mesh, {
         dispatch(pass, 'divergenceDamp', g, E);
       });
     }
+    if (sponge) {
+      setParams([dt, 0, nu4 > 0 || divergenceStep > 0 ? 1 : 0]);
+      compute((pass) => {
+        dispatch(pass, 'spongeMean', g, sponge.layers * sponge.bands * WORKGROUP);
+        dispatch(pass, 'spongeApply', g, E);
+      });
+    }
   }
 
   let stepCount = 0;
@@ -784,12 +922,14 @@ export async function createGpuCore(mesh, {
     compute((pass) => {
       dispatch(pass, 'physics', g, C);
       dispatch(pass, 'pblDiagnose', g, C);
+      if (waves) dispatch(pass, 'gravityWaves', g, C);
     });
     closurePasses(dt);
     setParams([dt, 0, sun[0], sun[1], sun[2], (time % YEAR) / YEAR]);
     compute((pass) => {
       dispatch(pass, 'adjust', g, C);
       dispatch(pass, 'mixMomentum', g, E);
+      if (waves) dispatch(pass, 'gravityWaveDrag', g, E);
       dispatch(pass, 'dissipationHeat', g, L.KC);
       dispatch(pass, 'dissipationClear', g, L.KE);
     });

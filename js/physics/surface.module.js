@@ -2,6 +2,7 @@ import { cellVector } from '../dynamics/operators.module.js';
 
 export const SEA_DRAG = 1.2e-3;
 export const LAND_DRAG = 1.5e-3;
+export const TOP_DRAG = { sigma: 0.02, days: 0 };
 
 /*
  * Surface drag and the dry convective adjustment. Bulk aerodynamic drag

@@ -1,4 +1,5 @@
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, laplacianScalar } from './operators.module.js';
+import { spongeGeometry, dampEddies } from './sponge.module.js';
 
 export const R_DRY = 287.06;
 export const VIRTUAL_FACTOR = 0.608;
@@ -99,7 +100,7 @@ export function sigmaGridName(levels) {
 export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
-    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, surfaceGeopotential = null, buffers = null, splitClosure = false,
+    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, surfaceGeopotential = null, buffers = null, splitClosure = false, spongeRates = null,
   } = options;
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -108,6 +109,8 @@ export function createSigmaCore(mesh, options = {}) {
   const K = levels.length - 1;
   const kappa = R / cp;
   if (divergenceDamping > 0 && !splitClosure) throw new Error('divergence damping needs a core with splitClosure');
+  const sponged = spongeRates ? spongeRates.some((rate) => rate > 0) : false;
+  if (sponged && !splitClosure) throw new Error('the sponge needs a core with splitClosure');
   const sigmaUpper = levels.subarray(0, K);
   const sigmaLower = levels.subarray(1, K + 1);
   const dSigma = Float64Array.from(sigmaLower, (s, k) => s - sigmaUpper[k]);
@@ -160,6 +163,7 @@ export function createSigmaCore(mesh, options = {}) {
   spacing /= E;
   const divergenceStep = divergenceDamping * spacing * spacing;
   const gradDiv = new Float64Array(E);
+  const sponge = sponged ? spongeGeometry(mesh) : null, bandMeans = sponge ? new Float64Array(2 * sponge.bands) : null;
 
   function diagnoseColumn(i, pi, theta, q = null, qc = null) {
     for (let k = 0; k < K; k++) {
@@ -311,10 +315,11 @@ export function createSigmaCore(mesh, options = {}) {
   }
 
   /*
-   * The ∇⁴ closures, and the divergence damping after the momentum one,
-   * applied to the state itself over one time step, for cores built with
-   * splitClosure: the model runs this once per step after the RK4
-   * dynamics instead of inside every stage.
+   * The ∇⁴ closures, and the divergence damping and the top sponge
+   * (`spongeRates`, 1/s per layer, see sponge.module.js) after the
+   * momentum one, applied to the state itself over one time step, for
+   * cores built with splitClosure: the model runs this once per step
+   * after the RK4 dynamics instead of inside every stage.
    */
   function phaseClosure(state, kFrom, kTo, dt, part = 'all') {
     const [pi, theta, u] = state;
@@ -327,10 +332,12 @@ export function createSigmaCore(mesh, options = {}) {
       }
       if (part === 'tracers') continue;
       const off = k * E;
-      if (nu4 > 0 || divergenceStep > 0) {
+      const spongeRate = sponge ? spongeRates[k] : 0;
+      if (nu4 > 0 || divergenceStep > 0 || spongeRate > 0) {
         for (let e = 0; e < E; e++) uBefore[e] = u[off + e];
         if (nu4 > 0) momentumClosure(k, u, u, dt * nu4);
         if (divergenceStep > 0) divergenceClosure(k, u);
+        if (spongeRate > 0) dampEddies(mesh, sponge, u.subarray(off, off + E), spongeRate, dt, bandMeans);
         for (let e = 0; e < E; e++) dissipation[off + e] = uBefore[e] * uBefore[e] - u[off + e] * u[off + e];
       } else dissipation.fill(0, off, off + E);
     }
@@ -402,5 +409,5 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
+  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, spongeRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
 }

@@ -180,7 +180,7 @@ test('the closure and the boundary-layer mixing return the kinetic energy they r
 });
 
 test('divergence damping takes kinetic energy from the divergent flow alone and the model returns it as heat: mass, vorticity and total energy are unchanged', () => {
-  const model = createModel(new Grid(4), { ocean: false, nu4Hours: Infinity, divergenceDamping: 0.05 });
+  const model = createModel(new Grid(4), { ocean: false, nu4Hours: Infinity, divergenceDamping: 0.05, surface: { spongeDays: 0 } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { state, mesh: m, core: c } = model;
@@ -897,7 +897,7 @@ function modelDigest(radiation, moist = {}) {
 }
 
 test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
-  const before = '3ca002d1e990a4335a223eb2232c51d0';
+  const before = '8439bbf33fc94ea251de6c6d52d144af';
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }).digest, before);
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
@@ -917,11 +917,11 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
   const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES };
-  assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, '3d0c610f9d4aebf624f3b240b5e2f6c1');
-  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
-  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
-  assert.notEqual(modelDigest({ ...forced, ...REDIAGNOSED }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
-  assert.notEqual(modelDigest({ ...forced, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275', 'the carried height and the gate\'s memory change the deck');
+  assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, 'ada14353bdf207b6e3f6fb4e5a60c56b');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, 'cd1f790efbca80fc42b02a1d93f448c7');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, 'cd1f790efbca80fc42b02a1d93f448c7');
+  assert.notEqual(modelDigest({ ...forced, ...REDIAGNOSED }).digest, 'cd1f790efbca80fc42b02a1d93f448c7');
+  assert.notEqual(modelDigest({ ...forced, ...scatteringOnly }).digest, 'cd1f790efbca80fc42b02a1d93f448c7', 'the carried height and the gate\'s memory change the deck');
   const shadow = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED }), dark = createRadiation(mesh, core, { subsidenceMemory: 1e-9, stratusSolar: false, ...REDIAGNOSED });
   const scattering = createRadiation(mesh, core, { subsidenceMemory: 1e-9, cloudSolarAbsorption: 0, ...REDIAGNOSED });
   shadow.setTime(0); dark.setTime(0); scattering.setTime(0);
