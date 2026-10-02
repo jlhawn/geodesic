@@ -1,4 +1,5 @@
 import { EXCHANGE_DEFAULTS, ROUGHNESS, ANDREAS, KARMAN, FAO_KARMAN } from '../physics/exchange.module.js';
+import { TRACE_SNOW } from '../physics/land.module.js';
 
 /*
  * The surface layer of js/physics/exchange.module.js in WGSL, line by
@@ -74,7 +75,7 @@ fn xAdd(blend: ptr<function, XBlend>, share: f32, z0m: f32, z0h: f32) {
 }
 fn xWetness(aero: f32, roots: f32, bareWet: f32, veg: f32, snow: f32, warmth: f32) -> f32 {
   let canopyWet = veg * roots / (1.0 + RSTOM * aero / max(0.05, warmth));
-  return select(select(roots, bareWet + canopyWet, VEGETATED), 1.0, snow > 0.0);
+  return select(select(roots, bareWet + canopyWet, VEGETATED), 1.0, snow > ${TRACE_SNOW});
 }
 fn surfaceExchange(i: i32, pi: f32, skin: f32, wind: f32, concentration: f32, snow: f32, cover: f32, trees: f32, onLand: bool, onIceSheet: bool, wetness: f32, depth: f32) -> vec3<f32> {
   let b = (K - 1) * C + i;
