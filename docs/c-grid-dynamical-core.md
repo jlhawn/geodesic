@@ -3316,11 +3316,14 @@ The work, in order:
      reaches crown closure 20–21 years after fire with its seed in place
      (Porter et al. 2023, Sci. Rep., a chronosequence); ten years of
      snow-free time closes 90 % of the gap in 23 years where it never
-     snows and about 46 where the ground is bare half the year. Over 90 %
-     of the piñon at a site in the US Southwest died after 15 months of
-     depleted soil water (Breshears et al. 2005, PNAS 102: 15144–15148);
-     three years remove 90 % in 7. The air is sampled every step, where
-     TREELIM gates daily means.
+     snows and about 46 where the ground is bare half the year. The
+     decline time is not sourced: in the 2000–03 drought of the US
+     Southwest piñon mortality reached 90 % at some sites and about 25 %
+     region-wide, after 15 consecutive months of dry soil (Breshears et
+     al. 2005, PNAS 102: 15144–15148), faster than three years, which
+     remove 90 % in 7; the masking needs the time the dead stems stop
+     shading the snow, for which no source was checked. The air is
+     sampled every step, where TREELIM gates daily means.
    - Starts. A state without the season means (every state saved before
      this, and a fresh start) starts them from a sine year with mean
      −31.8 + 0.148 Q̄ − 6.5 K/km × the ground's height (°C) and amplitude
@@ -3333,7 +3336,8 @@ The work, in order:
      ice sheets (the amplitude's second branch over 40–85N). The atlas
      start's land temperature, 288 + 45(1/3 − sin²φ) K with no season and
      no lapse, is 3–7 K colder at 45–75N than that first year and is not
-     used. Land added by regridding takes the estimate. The estimate
+     used. Land added by regridding takes the estimate and its trees the
+     guessed cover (0.5 snow-free) times the estimate's f. The estimate
      against the first years' own season (season mean °C, mean f, days):
 
      | band | estimate | nine64 | eight64 | nine64 / eight64 warmest month |
@@ -3348,16 +3352,29 @@ The work, in order:
      In the model's own climate the season's mean crosses 6.4 °C at about
      73N (nine64) and 74N (eight64) and the warmest month 10 °C at about
      71N and 72.5N, the band means' factor falling through a half between
-     65–70N and 70–75N. Earth's northern treeline lies at about 58–72N,
-     the boreal forest south of it to about 50N (approximate, from
-     memory): the model's Arctic summers put its treeline 3–5° poleward.
+     65–70N and 70–75N. Earth's northern treeline lies at 56N in
+     Labrador (53N in parts), 61N by Hudson Bay, 68N in Alaska, 69N in
+     the Northwest Territories, 70N in Norway and 73N on the Central
+     Siberian Plateau (Wikipedia, "Tree line", its table of Arctic tree
+     lines). The zonal band means lie at the poleward end of that range,
+     and the estimate, being zonal, puts the line at 67.5–70N in
+     Labrador and by Hudson Bay (2.5° bands, mean factor under a half),
+     9–11° poleward of Earth's there, and at 65N in Taimyr and eastern
+     Siberia, where it subtracts the plateaus' height. The model's own
+     first year by sector, from per-cell fits to the four instants, is
+     too noisy to place the line: nine64 and eight64 differ by up to 10°
+     in a sector (Labrador 67.5N and 75N, Hudson Bay 72.5N and 65N).
    - Top-soil wetness (`soilDarkening` 'surface', the default). The bare
      soil darkens linearly with the 15 kg/m² surface layer's fill
      (`darkeningWetness` [0, 1]), from
      `bareAlbedo` 0.30 dry to `wetSoilAlbedo` 0.15 full, whatever the root
-     zone holds: Idso et al. (1975, J. Appl. Meteor.) found a loam's
-     albedo linear in its top layer's water, 0.30 dry to 0.14 wet (a
-     ratio of 0.47; 0.15 / 0.30 is 0.50). The layer seeps into the root
+     zone holds: Idso et al. (1975, J. Appl. Meteor. 14: 109–113) found
+     a loam's albedo linear in its top layer's water, 0.30 dry to 0.14 wet (a
+     ratio of 0.47; 0.15 / 0.30 is 0.50), linear in a layer under 0.2 cm
+     thick (as cited by later studies; the paper itself was not read).
+     The 15 kg/m² store is far deeper than that, so a few millimetres of
+     rain darken the model's soil by a fraction where they would darken
+     the top 0.2 cm fully. The layer seeps into the root
      zone over a day, so a wetted bare soil brightens 0.150, 0.209, 0.244,
      0.265, 0.278 every 12 hours after the rain stops (with the cover
      growing over a full bucket). 'rootZone' keeps the bucket's ramp
@@ -3445,15 +3462,20 @@ The work, in order:
      at 40–60N under f = 1 (0.025 of the globe) reads 0.416 under trees
      of 0.49; its part with a cover under 0.5 (0.012 of the globe, steppe
      and prairie by their moisture) reads 0.471 under trees of 0.41,
-     where snow-covered grassland and cropland read about 0.6–0.75
-     (approximate). A moisture split (the cover's goal already keeps a
+     against MODIS snow-covered grassland and cropland (Moody et al.
+     2007 tabulate them by IGBP class; the values were not checked
+     here). A moisture split (the cover's goal already keeps a
      dry steppe sparse) or fire would be needed.
    - The boreal belt 50–70N reads 0.464 against 0.27–0.45: its cover is
      still the atlas start's 0.5 a year on (0.50), so its trees are at
-     most 0.5, masking 0.71 of the way where Earth's closed boreal forest
-     (tree cover 0.5–0.8) reads 0.27–0.33.
-   - The treeline sits 3–5° poleward of Earth's because the model's
-     70–75N land has a 9.4–10.0 °C warmest month.
+     most 0.5, masking 0.71 of the way, where MODIS snow-covered
+     needleleaf and mixed forest reads 0.27–0.33 (Moody et al. 2007 as
+     tabulated by Dutra et al. 2010).
+   - The zonal treeline (70–75N) sits at the poleward end of Earth's
+     56–73N: the model's 70–75N land has a 9.4–10.0 °C warmest month,
+     and the zonal start estimate cannot hold Labrador's and Hudson
+     Bay's line far south until three years of the model's own seasons
+     replace it.
    - Dense vegetation in September reads 0.165 against 0.12–0.15: the
      cover blends the dry soil (0.30 at a layer 0.18 full) at 1 − v =
      0.25 into the forest, where a forest floor is shaded and littered;
@@ -3468,8 +3490,11 @@ The work, in order:
    `treeDeclineTime` 3 years, `SEASON_ESTIMATE` mean [−31.8, 0.148],
    amplitude [0.069, 19.7, −0.0205], lapse 0.0065 K/m; `soilDarkening`
    'surface', `darkeningWetness` [0, 1] ('rootZone' [0.2, 0.5]),
-   `wetSoilAlbedo` 0.15, `bareAlbedo` 0.30, `surfaceCapacity` 15 kg/m²
-   (now passed to the GPU); `canopyMemory` 365 days only without the
+   `wetSoilAlbedo` 0.15, `bareAlbedo` 0.30, `surfaceCapacity` 15 kg/m²;
+   the GPU takes these and `percolationTime`, `stomatalResistance`,
+   `growthColdest`, `growthWarmest` and `iceSheetAlbedo` from the land's
+   options (it had taken the last five from its own defaults whatever
+   the options said); `canopyMemory` 365 days only without the
    treeline. Older states start their season means from the estimate
    and their trees at the cover times f.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
