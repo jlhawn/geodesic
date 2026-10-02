@@ -6,9 +6,8 @@
 // reaching the top of each column at TIMES (48) instants spread over day
 // DAY (the state's day by default; the day ending DAY days after the
 // equinox). Rows: snow-covered land (at least SNOWY, 10 kg/m2, off the ice
-// sheets) by latitude band and by the standing cover the masking reads
-// (the vegetation cover on code without one), with the cover, the standing
-// cover and the per-cell snow albedo where the land has them, the mean
+// sheets) by latitude band and by the standing cover the masking reads,
+// with the cover, the standing cover and the per-cell snow albedo, the mean
 // pace of the cold snow's ageing, and the share of its snow within
 // 2 K of melting; the land's snow cover by 5-degree band (the share of the
 // land, off the ice sheets, under at least 1 kg/m2) and the snow line, the
@@ -46,7 +45,7 @@ land.load(saved.land, state[6]);
 const [, , , surfaceT, , , ice] = state;
 const fall = Float64Array.from({ length: C }, (_, i) => (surfaceT[i] < MELTING && saved.convectiveRain ? saved.convectiveRain[i] + saved.largeScaleRain[i] : 0));
 const iceSheet = (i) => !!(geography.iceSheet && geography.iceSheet[i]);
-const standing = land.canopy ?? land.vegetation, snowAlbedo = land.snowAlbedo ?? null;
+const standing = land.canopy, snowAlbedo = land.snowAlbedo;
 const pace = (i) => Math.min(1, Math.exp(SNOW_AGEING.ageingActivation * (surfaceT[i] - MELTING) / (MELTING * surfaceT[i])));
 const balance = (fallRate, p, floor) => (fallRate > 0 ? Math.max(floor, SNOW_AGEING.freshSnowAlbedo - SNOW_AGEING.coldSnowAgeing * p / (fallRate / SNOW_AGEING.refreshSnowfall)) : floor);
 const iceAlbedo = (i, mu) => seaIce.albedo(ice[i], mu, seaIce.snow[i], 1, surfaceT[i], seaIce.snowAlbedo ? seaIce.snowAlbedo[i] : undefined);
