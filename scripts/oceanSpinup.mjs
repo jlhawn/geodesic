@@ -91,7 +91,7 @@ for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDe
 model.time = saved.time;
 model.load();
 model.ocean.load(saved.ocean, state[3], state[6]);
-model.land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) });
+model.land.load(saved.land);
 const forced = createForcedOcean(model);
 
 const deg = 180 / Math.PI, land = model.geography.land;

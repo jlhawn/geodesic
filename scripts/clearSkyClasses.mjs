@@ -19,7 +19,7 @@ import { DAY } from '../js/physics/radiation.module.js';
 export const TERMS = ['insolation', 'reflected', 'atmosphere', 'ozone', 'vapour', 'aerosol', 'absorbedSurface', 'down', 'directAlbedo'];
 export const TYPES = ['open sea', 'sea ice', 'land', 'ice sheets'];
 export const MU_BINS = [0, 0.1, 0.2, 0.4, 0.7, 1];
-const SNOWY = 10, DRY_FILL = 0.35, FOREST = 0.5;
+const SNOWY = 10, DRY_FILL = 0.35, SPARSE = 0.2, FOREST = 0.7, WET_SNOW = 2, MELTING_ICE = 1, MELTING = 273.15;
 
 // [name, surface range, top-of-atmosphere range, what the surface model lacks when outside]
 export const REFERENCES = [
@@ -32,14 +32,18 @@ export const REFERENCES = [
   ['partly vegetated (0.2-0.7)', [0.18, 0.25], null, 'the cover blends bare soil into forest; no grass or crop albedo'],
   ['dense vegetation (v > 0.7)', [0.12, 0.15], null, ''],
   ['thin snow on land (< 10 kg/m2)', null, null, ''],
-  ['snow on open land (v < 0.5)', [0.60, 0.85], null, 'one snow albedo 0.55 with no ageing'],
-  ['snow under forest (v >= 0.5)', [0.20, 0.35], null, 'snow albedo 0.55 whatever the cover: no masking by forest'],
-  ['thin sea ice (< 0.5 m, snow < 10 kg/m2)', [0.20, 0.50], null, 'ice albedo ramps from the water\'s at 0 m to 0.5 at 0.5 m'],
-  ['bare sea ice (>= 0.5 m, snow < 10 kg/m2)', [0.50, 0.60], null, 'bare ice 0.5, no ponds'],
-  ['snow-covered sea ice (snow >= 10 kg/m2)', [0.80, 0.85], null, 'snow on ice 0.75 with no ageing'],
+  ['snow on open land, cold (standing < 0.2)', [0.80, 0.85], null, 'the ageing\'s balance with the snowfall'],
+  ['snow on open land, wet (standing < 0.2, T >= -2 C)', [0.50, 0.60], null, 'the ageing toward 0.50'],
+  ['snow among sparse trees (standing 0.2-0.7)', null, null, ''],
+  ['snow under forest (standing >= 0.7)', [0.20, 0.35], null, 'the forest value 0.27 that the masking reaches'],
+  ['thin sea ice (< 0.5 m, snow < 10 kg/m2)', [0.20, 0.50], null, 'ice albedo ramps from the water\'s at 0 m to the bare ice\'s at 0.5 m'],
+  ['bare sea ice, cold (>= 0.5 m, snow < 10 kg/m2, T < -1 C)', [0.60, 0.65], null, 'cold bare ice 0.62'],
+  ['bare sea ice, melting (>= 0.5 m, snow < 10 kg/m2, T >= -1 C)', [0.45, 0.55], null, 'melting bare ice 0.48 in place of its ponds'],
+  ['snow-covered sea ice, cold (snow >= 10 kg/m2, T < -2 C)', [0.80, 0.85], null, 'the ageing\'s balance with the snowfall'],
+  ['snow-covered sea ice, wet (snow >= 10 kg/m2, T >= -2 C)', [0.65, 0.75], null, 'the ageing toward 0.70'],
   ['ice sheets', [0.80, 0.85], null, 'one ice-sheet albedo 0.8'],
 ];
-export const REFERENCE_SOURCES = 'open sea at the top: CERES EBAF clear-sky ocean (approximate); surfaces: textbook ranges (approximate), thin ice from memory';
+export const REFERENCE_SOURCES = 'open sea at the top: CERES EBAF clear-sky ocean (approximate); soil and vegetation: textbook ranges (approximate); snow on land: cold 0.80-0.85 and wet or old 0.50-0.60 (textbook, approximate), under forest the MODIS snow-covered albedo of needleleaf and mixed forest, 0.27-0.33 (Moody et al. 2007 as tabulated by Dutra et al. 2010), widened to 0.20-0.35; sea ice: Perovich et al. (2002, SHEBA) for cold snow 0.80-0.85, melting snow about 0.7, ponded July ice 0.45-0.55 and cold bare ice 0.60-0.65 (from memory), thin ice from memory';
 
 export function taylorAlbedo(mu) { return 0.037 / (1.1 * mu ** 1.4 + 0.15); }
 export function fresnelAlbedo(mu, n = 1.333) {
@@ -56,17 +60,22 @@ export function verdict(value, range) {
   return value < lo ? `low by ${(lo - value).toFixed(3)}` : `high by ${(value - hi).toFixed(3)}`;
 }
 
-export function landClass(land, i, iceSheet) {
+export function landClass(land, i, iceSheet, temperature) {
   if (iceSheet) return 'ice sheets';
-  const v = land.vegetation[i], snow = land.snow[i];
-  if (snow >= SNOWY) return v < FOREST ? 'snow on open land (v < 0.5)' : 'snow under forest (v >= 0.5)';
+  const v = land.vegetation[i], snow = land.snow[i], standing = (land.canopy ?? land.vegetation)[i];
+  if (snow >= SNOWY) {
+    if (standing >= FOREST) return 'snow under forest (standing >= 0.7)';
+    if (standing >= SPARSE) return 'snow among sparse trees (standing 0.2-0.7)';
+    return temperature >= MELTING - WET_SNOW ? 'snow on open land, wet (standing < 0.2, T >= -2 C)' : 'snow on open land, cold (standing < 0.2)';
+  }
   if (snow > 0) return 'thin snow on land (< 10 kg/m2)';
   if (v < 0.2) return land.soil[i] / land.capacity(i) < DRY_FILL ? 'bare dry soil (v < 0.2, fill < 0.35)' : 'bare wet soil (v < 0.2, fill >= 0.35)';
   return v <= 0.7 ? 'partly vegetated (0.2-0.7)' : 'dense vegetation (v > 0.7)';
 }
-export function iceClass(h, snow) {
-  if (snow >= SNOWY) return 'snow-covered sea ice (snow >= 10 kg/m2)';
-  return h < 0.5 ? 'thin sea ice (< 0.5 m, snow < 10 kg/m2)' : 'bare sea ice (>= 0.5 m, snow < 10 kg/m2)';
+export function iceClass(h, snow, temperature) {
+  if (snow >= SNOWY) return temperature >= MELTING - WET_SNOW ? 'snow-covered sea ice, wet (snow >= 10 kg/m2, T >= -2 C)' : 'snow-covered sea ice, cold (snow >= 10 kg/m2, T < -2 C)';
+  if (h < 0.5) return 'thin sea ice (< 0.5 m, snow < 10 kg/m2)';
+  return temperature >= MELTING - MELTING_ICE ? 'bare sea ice, melting (>= 0.5 m, snow < 10 kg/m2, T >= -1 C)' : 'bare sea ice, cold (>= 0.5 m, snow < 10 kg/m2, T < -1 C)';
 }
 export function seaBand(latDegrees) {
   const a = Math.abs(latDegrees);
@@ -100,11 +109,11 @@ export function clearSkyClasses(model, { day, times = 48, ozone = 0.03 }) {
   const parts = (i) => {
     if (geography.land[i]) {
       const iceSheet = !!(geography.iceSheet && geography.iceSheet[i]);
-      return [{ share: 1, name: landClass(land, i, iceSheet), type: iceSheet ? 'ice sheets' : 'land', albedo: () => [land.albedo(i), land.albedo(i)] }];
+      return [{ share: 1, name: landClass(land, i, iceSheet, surfaceT[i]), type: iceSheet ? 'ice sheets' : 'land', albedo: () => [land.albedo(i), land.albedo(i)] }];
     }
-    const h = ice[i], area = seaIce.cover(i, h), snow = seaIce.snow[i], out = [];
+    const h = ice[i], area = seaIce.cover(i, h), snow = seaIce.snow[i], skin = surfaceT[i], snowy = seaIce.snowAlbedo ? seaIce.snowAlbedo[i] : undefined, out = [];
     if (area < 1) out.push({ share: 1 - area, name: seaBand(mesh.latCell[i] * deg), type: 'open sea', water: true, albedo: (mu) => [seaIce.albedo(0, mu), seaIce.albedo(0, null)] });
-    if (area > 0) out.push({ share: area, name: iceClass(h, snow), type: 'sea ice', albedo: (mu) => [seaIce.albedo(h, mu, snow, 1), seaIce.albedo(h, null, snow, 1)] });
+    if (area > 0) out.push({ share: area, name: iceClass(h, snow, skin), type: 'sea ice', albedo: (mu) => [seaIce.albedo(h, mu, snow, 1, skin, snowy), seaIce.albedo(h, null, snow, 1, skin, snowy)] });
     return out;
   };
   const cellParts = Array.from({ length: C }, (_, i) => parts(i));
@@ -119,7 +128,7 @@ export function clearSkyClasses(model, { day, times = 48, ozone = 0.03 }) {
       if (!(beam > 0)) continue;
       let adir, adif;
       if (geography.land[i]) adir = adif = land.albedo(i);
-      else { const h = ice[i], area = seaIce.cover(i, h); adir = seaIce.albedo(h, mu, seaIce.snow[i], area); adif = seaIce.albedo(h, null, seaIce.snow[i], area); }
+      else { const h = ice[i], area = seaIce.cover(i, h), snowy = seaIce.snowAlbedo ? seaIce.snowAlbedo[i] : undefined; adir = seaIce.albedo(h, mu, seaIce.snow[i], area, surfaceT[i], snowy); adif = seaIce.albedo(h, null, seaIce.snow[i], area, surfaceT[i], snowy); }
       const black = run(i, beam, 0, 0), all = run(i, beam, adir, adif), cell = terms(beam, all, black, adir);
       for (const t of TERMS) cells[i][t] += cell[t];
       const list = cellParts[i];
@@ -166,8 +175,8 @@ export function clearSkyClasses(model, { day, times = 48, ozone = 0.03 }) {
 export function classTable(result, f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : 'n/a')) {
   const lines = [];
   const range = (r) => (r ? `${r[0].toFixed(2)}-${r[1].toFixed(2)}` : '');
-  lines.push('class                                      area   surfAlb  ref        verdict          TOA    ref        verdict          atmos');
-  for (const r of result.classRows) lines.push(`${r.name.padEnd(42)} ${f(r.areaShare, 3)}  ${f(r.surfaceAlbedo, 3).padStart(6)}  ${range(r.surfaceRange).padEnd(9)}  ${(r.surfaceRange ? r.surfaceVerdict : '').padEnd(15)}  ${f(r.toaAlbedo, 3)}  ${range(r.toaRange).padEnd(9)}  ${(r.toaRange ? r.toaVerdict : '').padEnd(15)}  ${f(r.atmosphereShare, 3)}${r.note ? `  [${r.note}]` : ''}`);
+  lines.push('class                                                          area   surfAlb  ref        verdict          TOA    ref        verdict          atmos');
+  for (const r of result.classRows) lines.push(`${r.name.padEnd(62)} ${f(r.areaShare, 3)}  ${f(r.surfaceAlbedo, 3).padStart(6)}  ${range(r.surfaceRange).padEnd(9)}  ${(r.surfaceRange ? r.surfaceVerdict : '').padEnd(15)}  ${f(r.toaAlbedo, 3)}  ${range(r.toaRange).padEnd(9)}  ${(r.toaRange ? r.toaVerdict : '').padEnd(15)}  ${f(r.atmosphereShare, 3)}${r.note ? `  [${r.note}]` : ''}`);
   lines.push('open sea by the sun\'s cosine     mean mu  sun share  direct  Taylor  Fresnel  verdict          surfAlb  TOA    atmos');
   for (const r of result.muRows) lines.push(`${r.name.padEnd(32)} ${f(r.mu, 3)}    ${f(r.insolationShare, 3)}      ${f(r.directAlbedo, 3)}   ${f(r.taylor, 3)}   ${f(r.fresnel, 3)}    ${r.directVerdict.padEnd(15)}  ${f(r.surfaceAlbedo, 3)}    ${f(r.toaAlbedo, 3)}  ${f(r.atmosphereShare, 3)}`);
   return lines;

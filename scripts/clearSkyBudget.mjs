@@ -33,7 +33,7 @@ const { mesh, core, state, seaIce, land } = model;
 const { K, C } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);
-land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) }, state[6]);
+land.load(saved.land, state[6]);
 const result = clearSkyClasses(model, { day: AT, times: TIMES, ozone: RADIATION.ozoneAbsorption ?? 0.03 });
 
 const deg = 180 / Math.PI;

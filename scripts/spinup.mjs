@@ -143,7 +143,7 @@ function loadSaved(saved) {
   model.time = saved.time;
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
-  model.land.load({ soil: Float64Array.from(saved.land.soil), snow: Float64Array.from(saved.land.snow), ...(saved.land.vegetation ? { vegetation: Float64Array.from(saved.land.vegetation) } : {}), ...(saved.land.surface ? { surface: Float64Array.from(saved.land.surface) } : {}) });
+  model.land.load(saved.land);
 }
 let startStep = 0, oceanYears = 0, oceanFrom = null;
 if (saved) {
@@ -190,8 +190,8 @@ if (saved) {
   model.load();
   if (from) {
     model.ocean.load(from.ocean, state[3], state[6]);
-    model.land.load({ soil: Float64Array.from(from.land.soil), snow: Float64Array.from(from.land.snow), ...(from.land.vegetation ? { vegetation: Float64Array.from(from.land.vegetation) } : {}), ...(from.land.surface ? { surface: Float64Array.from(from.land.surface) } : {}) }, iceFrom ? state[6] : null);
-    log(`seeded from ${process.env.FROM} (N=${from.N}, day ${from.day}, ${fromGrid}): the ocean, the land (soil, snow, ${from.land.vegetation ? 'vegetation, ' : ''}${from.land.surface ? 'surface water, ' : ''}surface temperature) and the sea-surface temperature of its mixed layer, ${iceFrom ? 'and its sea ice (thickness, concentration, snow, skin temperature)' : 'with fresh sea ice'}; ${atmosphere}; the clock at day 0`);
+    model.land.load(from.land, iceFrom ? state[6] : null);
+    log(`seeded from ${process.env.FROM} (N=${from.N}, day ${from.day}, ${fromGrid}): the ocean, the land (soil, snow, ${from.land.snowAlbedo ? 'snow albedo, ' : ''}${from.land.vegetation ? 'vegetation, ' : ''}${from.land.canopy ? 'standing cover, ' : ''}${from.land.surface ? 'surface water, ' : ''}surface temperature) and the sea-surface temperature of its mixed layer, ${iceFrom ? 'and its sea ice (thickness, concentration, snow, skin temperature)' : 'with fresh sea ice'}; ${atmosphere}; the clock at day 0`);
   } else {
     const started = model.ocean.initialize(state[3], state[6]);
     model.land.initialize();
