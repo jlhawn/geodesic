@@ -214,9 +214,9 @@ test('the worker-thread engine on bl34 reproduces the single-thread step bit for
 });
 
 test('the full model on bl34 steps alike on the CPU and the GPU, over a continent with its ocean, but for the odd column whose convection switches a step apart and its neighbours', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const surface = { convectiveGust: false };
-  const cpu = prepare(createModel(new Grid(6), { topography, levels: bl, surface }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, levels: bl, surface }));
+  const floorWind = { convectiveGust: false };
+  const cpu = prepare(createModel(new Grid(6), { topography, levels: bl, surface: floorWind }));
+  const gpu = prepare(await createGpuModel(new Grid(6), { topography, levels: bl, surface: floorWind }));
   assert.equal(gpu.gpu.K, 34);
   assert.equal(gpu.core.K, 34);
   for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
