@@ -736,6 +736,12 @@ acc.forEach((A, b) => {
     rows.push(`${f(p[k] / 100, 0)} ${f(T - J.T, 1)} ${f(rh, 2)}/${f(J.rh, 2)}${sub}`);
   }
   say(`  ${rows.join('; ')}`);
+  const nearest = (hPa) => { let best = 0; for (let k = 1; k < K; k++) if (Math.abs(p[k] - 100 * hPa) < Math.abs(p[best] - 100 * hPa)) best = k; return best; };
+  const sounding = Object.fromEntries([848, 704, 516, 439].flatMap((hPa) => { const k = nearest(hPa), J = jordanAt(p[k]); return [[`dT${hPa}`, A.temperature[k] / S - J.T], [`rh${hPa}`, A.humidity[k] / S]]; }));
+  const layerMean = (profile, top, bottomP) => { let sum = 0, mass = 0; for (let k = 0; k < K; k++) if (p[k] >= top && p[k] <= bottomP) { sum += profile[k] * dp[k]; mass += dp[k]; } return sum / mass; };
+  const longwave = Float64Array.from({ length: K }, (_, k) => kday(T_.longwave, k)), q1r = heatingProfile(Q1R, p, dp), P = A.plume;
+  const summary = { rain: mm(r.model), convectiveShare: r.modelConvective / r.model, firing: P.fired / S, q1rLayer: q1r.layer / 100, q1rBin: (q1r.bin[0] + q1r.bin[1]) / 200, q1rBinValue: q1r.binValue, q1rCentroid: q1r.centroid / 100, largeScaleBelow700: mm(r.liquidLow), stratiformShare: (r.iceMelted + r.liquidHigh) / r.model, longwave300to500: layerMean(longwave, 300e2, 500e2), dilutedCape: P.diluteCape / P.diluteN, undilutedCape: P.pureCape / P.diluteN, ...sounding };
+  say(`summary ${name}: ${JSON.stringify(Object.fromEntries(Object.entries(summary).map(([key, v]) => [key, Number(v.toPrecision(6))])))}`);
 });
 {
   const p = Float64Array.from(audit.pressure, (x) => x / audit.area / 100);
