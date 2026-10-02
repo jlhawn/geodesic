@@ -9383,10 +9383,15 @@ the model top under elements 2–4 01214faf. Three of the suite's files
 failed on the merge and were settled: the audit's bulk sensible heat took
 max(wind, 3 m/s) where the model now takes the gust wind (82.67 against
 94.21 W/m², exact after 388f6b6); the bl34 continent case parted at one
-land cell whose absorbed sunlight was 646.8 W/m² on the CPU and 546.6 on
-the GPU with the same cloud water and longwave heating, and the CPU
-stepped from the GPU's state parts the same way (a layer's cloud decided
-apart in the shortwave; the case now leaves out such columns, 2 of 362);
+land cell (168, at 947 m) whose absorbed sunlight at step 7 was 646.8
+W/m² on the CPU and 546.6 on the GPU (reflected 636.8 against 736.9, OLR
+184.8 against 159.1), with the same mixing top (6046 m above sea level),
+the cloud water of its cloudy layers 19–21 within 0.9 % and their vapour
+within 0.2 %, but their longwave heating apart (layer 21 −58.9 against
+−69.2, layer 22 −10.2 against +9.2 K/d): the cover of those layers
+decided apart in both bands; cell 189 parted so at step 6 (OLR 185.3
+against 161.4). The case now leaves out such columns (2 of 362 at
+3f3d915, none at dc14743);
 the snow-albedo case's premise failed on the new closure's onsets (16 of
 63 snow cells apart; 3 on the previous convection, on which it now runs).
 The reference on this tree, three N=64 days from eight64_day0183 with two
