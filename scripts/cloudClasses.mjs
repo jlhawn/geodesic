@@ -9,7 +9,9 @@
 // (the radiation's cloud mask), the deck held at the cover and water the
 // pass at the day's start diagnosed. A class's effect is the full pass's flux less the
 // pass without it: shortwave, absorbed sunlight with it less without it;
-// longwave, outgoing longwave without it less with it. The classes:
+// longwave, outgoing longwave without it less with it; a further pass
+// takes every class away at once, which must return the total effects
+// and the clear-sky fluxes (the checks line). The classes:
 // the deck; the plumes' cumulus; and the resolved cloud (q_c) in runs of
 // adjacent cloudy layers, each run classed by the pressure of its top
 // layer's midpoint: low below 680 hPa, middle 680-440 hPa, high above
@@ -165,9 +167,10 @@ for (let i = 0; i < C; i++) {
   allCover[i] = 1 - (1 - columnCover) * (1 - fraction);
 }
 
-const sums = { full: null, without: CLASSES.map(() => null) };
+const sums = { full: null, none: null, without: CLASSES.map(() => null) };
 const add = (into, from) => { if (!into) return Object.fromEntries(Object.entries(from).map(([key, x]) => [key, Float64Array.from(x)])); for (const key of Object.keys(from)) for (let i = 0; i < C; i++) into[key][i] += from[key][i]; return into; };
 const masks = CLASSES.map((_, n) => mask(n));
+const empty = { resolved: zeros, cumulus: zeros, fraction: new Float64Array(C), deck: new Float64Array(C) };
 let checkFull = 0, checkMean = 0;
 for (let n = 0; n < TIMES; n++) {
   radiation.setTime((AT - 1) * DAY + (n + 0.5) * DAY / TIMES);
@@ -179,6 +182,7 @@ for (let n = 0; n < TIMES; n++) {
     checkMean = sum / total;
   }
   sums.full = add(sums.full, full);
+  sums.none = add(sums.none, pass(empty));
   masks.forEach((m, c) => { sums.without[c] = add(sums.without[c], pass(m)); });
 }
 
@@ -189,7 +193,9 @@ const REGIONS = [
 const f = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : 'n/a');
 const mean = (x, inside) => { let s = 0, a = 0; for (let i = 0; i < C; i++) if (inside[i]) { s += area[i] * x(i); a += area[i]; } return s / a; };
 console.log(`cloud classes of ${FILE.split('/').pop()} (N=${saved.N}, K=${K}) after one step, lit over day ${AT} at ${TIMES} instants; RADIATION ${JSON.stringify(RADIATION)}`);
-console.log(`checks: column cover as the radiation's to ${coverCheck.toExponential(1)}; the deck held against the deck re-diagnosed at the first instant: ${checkFull.toExponential(1)} W/m2 in the column most changed, ${checkMean.toExponential(1)} W/m2 in the global ASR - OLR; ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+let clearCheck = 0;
+for (let i = 0; i < C; i++) clearCheck = Math.max(clearCheck, Math.abs(sums.none.absorbed[i] - sums.none.clearAbsorbed[i]), Math.abs(sums.none.outgoing[i] - sums.none.clearOutgoing[i]));
+console.log(`checks: column cover as the radiation's to ${coverCheck.toExponential(1)}; every class taken away, the column's fluxes less its clear-sky fluxes to ${(clearCheck / TIMES).toExponential(1)} W/m2; the deck held against the deck re-diagnosed at the first instant: ${checkFull.toExponential(1)} W/m2 in the column most changed, ${checkMean.toExponential(1)} W/m2 in the global ASR - OLR; ${((performance.now() - t0) / 1000).toFixed(0)} s`);
 for (const [name, test] of REGIONS) {
   const inside = Uint8Array.from({ length: C }, (_, i) => (test(mesh.latCell[i] * deg, i) ? 1 : 0));
   const S = sums.full, sw = mean((i) => (S.absorbed[i] - S.clearAbsorbed[i]) / TIMES, inside), lw = mean((i) => (S.clearOutgoing[i] - S.outgoing[i]) / TIMES, inside);
@@ -211,5 +217,6 @@ for (const [name, test] of REGIONS) {
     console.log(`${cls.padEnd(8)} ${f(cv, 3)} ${f(csw).padStart(6)} ${f(clw).padStart(5)} | ${paths.map((x) => f(x)).join(' / ')} (${f(total)}) | ${f(total / cv, 0).padStart(5)} | ${f(tauMean).padStart(6)}  ${bins.map((b) => f(b / weight, 2)).join(' ')} | ${f(depth)} | ${f(1000 * mean((i) => liquidPath[c][i], inside))} / ${f(total - 1000 * mean((i) => liquidPath[c][i], inside))}`);
   });
   const allPath = sumPaths.reduce((a, b) => a + b, 0);
-  console.log(`sum of classes   SW ${f(sumSw)} LW ${f(sumLw)}; all cloud: grid path ${sumPaths.map((x) => f(x)).join(' / ')} (${f(allPath)}) g/m2, liquid ${f(sumLiquid)} ice ${f(allPath - sumLiquid)} g/m2`);
+  const none = sums.none, allSw = mean((i) => (S.absorbed[i] - none.absorbed[i]) / TIMES, inside), allLw = mean((i) => (none.outgoing[i] - S.outgoing[i]) / TIMES, inside);
+  console.log(`sum of classes   SW ${f(sumSw)} LW ${f(sumLw)}; all classes at once SW ${f(allSw, 3)} LW ${f(allLw, 3)}; all cloud: grid path ${sumPaths.map((x) => f(x)).join(' / ')} (${f(allPath)}) g/m2, liquid ${f(sumLiquid)} ice ${f(allPath - sumLiquid)} g/m2`);
 }
