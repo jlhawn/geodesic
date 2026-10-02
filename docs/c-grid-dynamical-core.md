@@ -8522,6 +8522,73 @@ The review of the mountains' drag (Oct 2), on 3066df7 and the fixes after it:
   0.20 against 0.22 m/s; the orographic stress over land 0.052 N/m² at
   45–55N in both, 0.034 against 0.035 in the land mean).
 
+**The model top and the mountains merged (Oct 2).** Branch integrate-c:
+gas-benchmark 9b7b476, then roughness bd42fa5. The closure (∇⁴,
+divergence damping, sponge) sets the dissipation; the implicit drag
+with the boundary layer's mixing, the plume's transport, the orographic
+drag and the gravity waves add to it, in that order; the mountains'
+stress is its own array. Fixes after the merges: the GPU's prior land
+wetness takes TRACE_SNOW; the spin-up saves `exchangeHeat` and
+`exchangeWind`; four engine-parity tests run with `convectiveGust`
+false. The twelve-step digests re-pinned; with `topDragDays` 5,
+`spongeDays` 0 and `gravityWaves` false they are 32417c2's. Tests pass
+but the cloudy columns' heating (1.26·10⁻⁴ K/day) and the cloud-effect
+parity (one column 0.66 against 0.5 W/m² at step 8; passes with
+`spongeDays` 0). Proofs, nine64_day0274, one CPU step: each edge
+column's momentum + Δt τ 1.9·10⁻¹¹ (implicit drag) and 2.3·10⁻¹³
+(mountains) of 1.6·10³ kg/m/s, each cell column's wave force 6.5·10⁻¹⁹
+of 4.2·10⁻³ Pa, the energy each gives the heat against its own loss
+≤ 2.9·10⁻¹¹ per column; the sponge 3.8·10¹⁵ and 1.1·10¹⁵ J at 1.1
+and 3.6 hPa, its angular momentum change 0.033 and 0.020 of a Rayleigh
+drag's at its rate; heat applied 9.31·10¹⁷ J against closure 1.43·10¹⁷
++ drag 7.45·10¹⁷ + mountains 4.27·10¹⁶ + waves 5.3·10¹⁴ to 9.6·10⁻¹⁵;
+no sea–sea edge touched; the ocean's stress is the implicit drag's
+(0 apart). Each GPU kernel: 2.1·10⁻⁵ (drag), 1.6·10⁻⁵ (mountains),
+4.2·10⁻⁸ (waves) relative, heat against the sinks 6.5·10⁻⁴. With
+`topDragDays` 5, `spongeDays` 0, `gravityWaves` false, `orography`
+false, `convectiveGust` false, `landHumidity` 'air' the CPU gives
+32417c2's state, land and ocean digests after each of nine steps from
+eight64_day0183. Parity from nine64_day0091 after 1, 4, 16 steps: top six
+layers' u 7.4·10⁻⁵, 1.7·10⁻⁴, 3.4·10⁻⁴ m/s rms; lowest layer T 1.0·10⁻⁴,
+4.0·10⁻⁴, 1.9·10⁻³ K, u 4.9·10⁻⁵, 2.5·10⁻⁴, 1.5·10⁻² m/s (gust off
+4.9·10⁻⁵, 5.5·10⁻⁴, 1.6·10⁻³), Ts 9.4·10⁻⁶, 2.6·10⁻⁵, 1.3·10⁻³ K;
+regime flips 0, 2, 27; launched stress 1.0·10⁻⁴, 9.6·10⁻⁴, 1.5·10⁻³ of
+its largest; wave acceleration 2.7·10⁻⁴, 9.0·10⁻⁴, 1.1·10⁻³ m/s/day rms.
+Three one-day segments from eight64_day0183 end day 186 byte for byte as
+one. 16 steps from eight128_day0183: finite, top six layers' largest
+wind 73 m/s, Courant 0.24 / 0.04. five64_day2190 (cam26) loads and steps.
+
+Three GPU days (32417c2 in brackets): eight64 day 186 albedo 0.293
+(0.296), ASR 240.9 (239.8), OLR 233.8 (233.6), SWCRE −52.8 (−53.9),
+LWCRE 26.1 (26.2), rain 1.72 (1.76); ten64 day 186 0.310 (0.312), 235.0
+(234.4), 232.6 (232.5), −58.5 (−59.1), 26.0 (26.1), 2.53 (2.54); nine64
+day 94 0.305 (0.307), 236.8 (235.9), 234.3 (234.1), −57.6 (−58.5), 26.0
+(26.1), 2.36 (2.39). eight64, 8-step samples: evaporation 2.219 (2.270;
+bd42fa5 1.962) mm/d, sensible 12.01 (11.59) W/m²; calm tropical sea
+(|v| < 3 m/s, 0.25 of 20S–20N sea) U 1.92 (3.00) m/s, C_H 1.68 (1.33)
+·10⁻³, LE 45.1 (58.0; bd42fa5 28.0) W/m². Pacific ITCZ, ten64 day 186 + 1
+CPU day: rain 6.51 (6.48), convective 0.24 (0.24), lowest-layer RH 0.81
+(0.81), T −1.3 / −2.8 / +1.0 (−1.3 / −2.8 / +1.1) K against Jordan at
+1008 / 848 / 516 hPa, plume fired 0.167 (0.160), CAPE 169 (170) J/kg,
+peak 973 (973) hPa. nine64 day 94, 70–90S at 1.1 / 3.5 / 7.4 / 14 / 24
+hPa: 222.9 / 237.1 / 229.1 / 222.0 / 213.5 (224.5 / 240.9 / 234.0 /
+226.5 / 216.8) K. Ten days from nine64_day0274, day 284: 70–90N at 1.1 /
+3.5 / 7.4 / 14 / 24 / 37 / 53 hPa 220.7 / 225.2 / 218.9 / 213.1 / 208.1
+/ 205.0 / 203.0 (221.9 / 229.8 / 226.5 / 221.0 / 214.2 / 209.3 / 206.1)
+K; zonal-mean u at 65N, 1.1–37 hPa, 49.7 / 39.9 / 40.3 / 39.8 / 37.8 /
+35.0 (51.0 / 36.1 / 34.9 / 35.1 / 34.8 / 33.2) m/s; at 1.1 hPa 69.7 m/s
+at 35N (40.3), largest wind 86 (76) m/s; 8-step SLP 60–65 / 70–75 /
+80–85N 1002.4 / 997.5 / 1002.2 (1001.5 / 996.2 / 1001.0; bd42fa5
+1001.9 / 998.0 / 1002.1) hPa; orographic / turbulent stress over land,
+N/m², Rockies 0.108 / 0.231 (bd42fa5 0.109 / 0.249), Andes 0.062 /
+0.112 (0.068 / 0.113), Himalaya–Tibet 0.093 / 0.108 (0.114 / 0.150),
+land 0.033 / 0.189 (0.034 / 0.199; 32417c2 turbulent 0.210), land
+45–55N 0.052 / 0.354 (0.052 / 0.351; 0.399). Cost under the exclusive
+lock, 128 steps after 16, twice: N=64 22.54 / 22.65 → 24.18 / 24.32 ms
+(+7.3 %; physics pass 4.71 → 5.96, mixing pass 4.55 → 4.82); N=128
+99.22 / 99.24 → 104.65 / 104.70 ms (+5.5 %; 20.09 → 24.47, 16.43 →
+17.24); a day at N=128 1.1 min of steps on both.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
