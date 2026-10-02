@@ -3536,14 +3536,18 @@ The work, in order:
      | FAO-56 reference | 288 | 490 | 709 | 854 | 1122 | 1132 | 1211 | 1131 |
      | P/PET (reference) | 2.50 | 1.52 | 1.04 | 0.82 | 0.59 | 1.31 | 0.69 | 0.57 |
 
-     The reference lies where Earth's FAO-56 reference evaporation does
-     (about 300–500 mm/yr in the boreal belt, 600–800 in western Europe,
-     1200–1600 in the humid tropics, 2000–3000 in the Sahara; from
-     memory, the CGIAR Global Aridity Index database of Zomer et al.
-     2022 not read): the model's Europe 627, Siberia 452, Congo 1163,
-     Amazon 1339, Sahara 1355 (low, the hot dry skin cutting the net
-     radiation). The bulk potential reads 1855 in Europe and 6739 in the
-     Sahara.
+     The reference by region: Europe 627, Siberia 452, Congo 1163,
+     Amazon 1339, Sahara 1355 (the hot dry skin cutting the net
+     radiation); the bulk potential reads 1855 in Europe and 6739 in the
+     Sahara. No regional values of Earth's reference evaporation were
+     read (Zomer et al. 2022, Sci. Data, doi:10.1038/s41597-022-01493-1,
+     the FAO-56 global database, gives them only as maps). What can be checked is the
+     aridity classes the index draws: by the first year's own P/PET
+     (rain and reference demand of the four ten-day means, per cell off
+     the ice sheets) the land is 4.3 % hyper-arid, 12.9 % arid, 17.6 %
+     semi-arid, 8.0 % dry subhumid and 57.3 % humid, against UNEP's
+     6.6, 10.6, 15.3, 9.0 and 58.5 % (Bastin et al. 2017's 978, 1566,
+     2263 and 1326 Mha of drylands making 41.5 % of the land).
      Rain alone against P/PET and the root zone's fill, the model's
      first year (rain, reference demand, P/PET, mean fill of the four
      states) with the Earth biome of each region of the spin-up's log:
@@ -3596,9 +3600,10 @@ The work, in order:
    - Grass's albedo (`grassland`). The vegetated albedo runs from
      `grassAlbedo` 0.20 to `forestAlbedo` 0.13 with the trees' share of
      the cover (trees above v count as all forest), the ground showing
-     through at 1 − v as before. Grassland and cropland 0.18–0.25,
-     forest 0.12–0.15 (textbook ranges, Oke 1987 Table 1.1, from memory:
-     the table is an image in the copy found). Snow buries grass: a snow
+     through at 1 − v as before. Crops and natural vegetation under 1 m
+     with a full green cover 0.18–0.25 (Oke 1987, Boundary Layer
+     Climates, p. 132); forest 0.12–0.15 is the class table's textbook
+     range (Oke's Table 1.1 is an image in the copy found, not read). Snow buries grass: a snow
      cover's own albedo less `grassSnowDarkening` 0.06 times the grass's
      share of the cell, then masked by the trees as before. MODIS
      broadband (0.3–5.0 µm) white-sky albedo in the presence of snow,
@@ -3625,7 +3630,8 @@ The work, in order:
      (Q̄ the annual mean insolation at the top, W/m²; R² 0.72, rms 0.57
      mm/d over the first year's land) and the rain that demand times
      0.01 + 0.79 × fill + 0.63 × v (`MOISTURE_ESTIMATE`, the same on both
-     engines through the land's load), and its trees start at f m v. The
+     engines through the land's load), and its trees start at f m v (a
+     state with season means and trees keeps those below f m v). The
      index's fit is to the 21 regions of five64's log (last year's rain
      over the estimated demand against the year-six state's fill and
      cover, R² 0.64); the fill alone fits the first year's cells at
@@ -3666,9 +3672,11 @@ The work, in order:
       The IFS holds 0.2 mm per unit leaf area (0.2 mm on bare ground,
       Cy43r1 eq. 8.2), so a forest of leaf area 5 holds about 1 mm and
       grass of 2 about 0.4; the intercepted water evaporates at the
-      potential rate. Forest interception loss is commonly 10–30 % of the
-      rain (from memory): on 2 mm/d over forest 0.2–0.6 mm/d, 6–17 W/m²
-      of LE where it rains, nothing on dry days.
+      potential rate. Forest interception loss is 10–50 % of the gross
+      annual rain (Carlyle-Moses and Gash 2011, Forest Hydrology and
+      Biogeochemistry, Springer, as later papers quote it; the chapter
+      not read): on 2 mm/d over forest 0.2–1.0 mm/d, 6–29 W/m² of LE
+      where it rains, nothing on dry days.
    3. Rooting depth. One bucket of 300 kg/m² under every cover. Maximum
       rooting depth 7.0 ± 1.2 m for trees, 5.1 ± 0.8 for shrubs, 2.6 ±
       0.1 for herbaceous plants, 2.0 ± 0.3 m in boreal forest (Canadell
@@ -3692,7 +3700,8 @@ The work, in order:
    of 0.6 a third under trees on dry soil 0.30 + (0.1767 − 0.30) × 0.6;
    snow of 0.85 on it 0.826 masked 0.2/0.7 of the way to 0.27; the
    estimate at the equator 3.43 mm/d of demand and 2.47 of rain. An
-   older state's trees restart at f m v; saved states keep the means
+   older state's trees restart at f m v, or keep their own where
+   those are lower; saved states keep the means
    through a state file; regridding carries them. The digests are
    unchanged (their model has no land).
 
@@ -3738,8 +3747,10 @@ The work, in order:
 
    Before, the trees were f v (year six: 0.86 under the dense
    vegetation's cover of 0.88, 0.43 under the partly vegetated land's
-   0.43, 0.12 under the bare land's 0.12). By the model's own aridity class, year six after ten days
-   (area share of the globe; cover, trees, grass; share of the land with
+   0.43, 0.12 under the bare land's 0.12). By the aridity class of the
+   state's means, year six after ten days (still the estimate's: ten
+   days move them by 1 %, so the classes and the trees both come from
+   it; the check against the model's own P/PET follows) (area share of the globe; cover, trees, grass; share of the land with
    trees ≥ 0.1 and ≥ 0.4) against Bastin's land with tree cover ≥ 10 %
    and ≥ 40 %: arid (0.019) 0.12, 0.00, 0.12; 0.00, 0.00 against 0.066,
    0.018; semi-arid (0.054) 0.32, 0.07, 0.25; 0.25, 0.00 against 0.247,
@@ -3756,6 +3767,43 @@ The work, in order:
    0.10, 0.19, 0.44; Congo 0.96, 0.89, 0.07, 1.09; Amazon 0.90, 0.86,
    0.04, 1.28; Europe 0.85, 0.83, 0.02, 1.27; Siberia 0.59, 0.59, 0.00,
    1.17; Cerrado 0.58, 0.48, 0.10, 0.91.
+
+   Against the model's own P/PET (the first year's four ten-day means
+   per cell, v from nine64's day 365, f from the season estimate), the
+   trees at f m v by class: hyper-arid and arid 0.000, semi-arid 0.090
+   (trees ≥ 0.1 on 0.38 of it, ≥ 0.4 on none), dry subhumid 0.243 (0.97,
+   0.07), humid 0.65–1 0.420, 1–2 0.573, above 2 0.515: the limits put
+   the class means on Bastin's with the model's own rain and demand, not
+   only with the estimate's. The estimate puts them on the wrong cells:
+   over the land whose season factor is at least 0.5, the estimate's m
+   by the own P/PET class is 0.34 where the own m is 0.00 (own arid,
+   0.18 of that land), 0.52 against 0.18 (semi-arid), 0.62 against 0.47
+   (dry subhumid), 0.71 against 0.77, 0.83 against 1.00 and 0.93 against
+   1.00 (humid 0.65–1, 1–2, above 2); the two agree on which side of m
+   = 0.5 a cell lies on 0.74 of that land, mean |Δm| 0.245.
+
+   Review (Oct 1). The CPU land stepped through three wet years, three
+   dry, two of regrowth and one under snow (6 h steps) matches a float64
+   reference of the moisture means, cover, season means and trees to
+   5·10⁻¹⁴; the GPU over 48 steps at N=6 matches an f32 hand formula of
+   the rain mean to 3.2·10⁻⁷ (relative) and of the trees to 6.0·10⁻⁸
+   over 4315 cell-steps (672 under snow), and the potential its first
+   step implies matches the CPU's to 2.2·10⁻⁵ mm/d. Land surfaces absorb
+   (1 − α) of the shortwave reaching them on both engines (one albedo
+   for the direct and diffuse beams). Under snow the cover decays over
+   720 days while the trees hold, so trees can stand above the cover;
+   the grass is then 0 and the cover reads as forest. A state with
+   season means and trees but no moisture means keeps trees below f m v
+   instead of raising them to it. Three N=64 days from nine64_day0365
+   and five64_day2190 (tags bmr365, bmr2190), the class table with
+   `grassland` false → true on the same states: dense vegetation 0.156
+   → 0.162 and 0.147 → 0.155 (0.12–0.15), partly vegetated 0.218 →
+   0.232 and 0.221 → 0.236 (0.18–0.25), bare dry soil 0.277 → 0.285
+   (year six), snow on open land, cold (standing < 0.2) 0.773 → 0.753
+   and 0.806 → 0.783 against the class's 0.80–0.85: the grass darkens
+   deep snow as much as patchy snow, where Moody's 0.06 is a mean over
+   both. Snow at 40–60N under a cover below 0.5 reads 0.604 and 0.661
+   after three days.
 
    Day means (outcomes), before → after: day 94 albedo 0.326 → 0.328,
    ASR 229.6 → 228.8, OLR 240.6 → 240.5, SWCRE −58.7 → −58.3, clear-sky
@@ -3799,7 +3847,7 @@ The work, in order:
    - The reference evapotranspiration uses the model's own albedo and
      skin in the net radiation, not FAO-56's 0.23 reference surface; the
      hot dry skin lowers it in deserts (Sahara 1355 mm/yr against
-     Earth's 2000–3000).
+     the bulk potential's 6739).
    - Roughness, interception and rooting depth do not yet differ between
      forest and grass (above).
 
@@ -3811,7 +3859,7 @@ The work, in order:
    `REFERENCE_RESISTANCE` 70 s/m; `vegetatedAlbedo` 0.13 only without
    grassland. The spin-up takes land options through `LAND`. Older
    states start their moisture means from the estimate and their trees
-   at f m v.
+   at f m v, or at their own where those are lower.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
