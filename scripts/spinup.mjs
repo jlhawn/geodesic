@@ -42,7 +42,8 @@
 // BOUNDARY_LAYER (JSON options for the boundary layer, e.g.
 // '{"entrainment":{"efficiency":0.3}}'), SURFACE (JSON options for the
 // surface, e.g. '{"dragCoefficient":1.3e-3}', the sea's drag coefficient,
-// which its heat and vapour exchange share),
+// which its heat and vapour exchange share), LAND (JSON options for the
+// land surface, e.g. '{"treeMoisture":false}'),
 // DIVERGENCE_DAMPING (the model's DIVERGENCE_DAMPING: the coefficient c of the
 // core's divergence damping, the tendency c d²/dt ∇δ with d the mean
 // distance between cell centres),
@@ -107,7 +108,7 @@ const BOXES = {
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = Number(process.env.KEEP ?? 2);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
-const RADIATION = { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') }, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
+const RADIATION = { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') }, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
 const ATMOSPHERE = process.env.ATMOSPHERE ?? 'carry';
 if (ATMOSPHERE !== 'carry' && ATMOSPHERE !== 'fresh') throw new Error(`ATMOSPHERE is carry or fresh, not ${ATMOSPHERE}`);
@@ -127,7 +128,7 @@ const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} l
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
 const fallback = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');
 const climatology = !saved && !process.env.FROM && chosen !== 'none' ? chosen : null;
-const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, ...DAMPING, levels });
+const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: LAND, ...DAMPING, levels });
 const { mesh, core, state } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 function loadSaved(saved) {
