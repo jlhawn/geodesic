@@ -170,6 +170,93 @@ export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = 2, 
 }
 
 /*
+ * The subgrid orography of each cell after Baines and Palmer (1990), as
+ * the IFS computes its fields for Lott and Miller's (1997) scheme (IFS
+ * Cy47r3 Part IV §11.3.4): the raster, clamped at sea level, less the
+ * orography the dynamics resolves (`resolved`, per cell in metres,
+ * interpolated linearly to each raster point on the triangle of cell
+ * centres that holds it); every raster point's gradient by central
+ * differences, K = ½(h_x² + h_y²), L = ½(h_x² − h_y²), M = h_x h_y, h
+ * and h² averaged over the points nearest each cell with area weights;
+ * then the standard deviation μ² = ⟨h²⟩ − ⟨h⟩², the anisotropy
+ * γ² = (K − √(L² + M²))/(K + √(L² + M²)), the orientation θ = ½ atan2(M, L)
+ * of the principal axis (radians from east towards north, the direction
+ * of the steepest mean-square slope) and the slope σ² = K + √(L² + M²).
+ * x is east and y north; `count` is the number of raster points a cell
+ * holds. With `land`, a cell the mask makes sea has no subgrid orography.
+ */
+export function subgridOrography(mesh, topography, resolved = null, land = null) {
+  const { nCells: C, xCell, cellsOnCell, nEdgesOnCell, maxEdges, verticesOnCell, cellsOnVertex, radius } = mesh;
+  const { rows, cols, data } = topography;
+  const R = radius ?? 6371220;
+  const residual = new Float64Array(rows * cols), owner = new Int32Array(rows * cols);
+  const nearest = (x, y, z, start) => {
+    let best = start, bestDot = x * xCell[3 * start] + y * xCell[3 * start + 1] + z * xCell[3 * start + 2];
+    for (;;) {
+      let next = best;
+      for (let m = 0; m < nEdgesOnCell[best]; m++) {
+        const j = cellsOnCell[maxEdges * best + m];
+        const dot = x * xCell[3 * j] + y * xCell[3 * j + 1] + z * xCell[3 * j + 2];
+        if (dot > bestDot) { bestDot = dot; next = j; }
+      }
+      if (next === best) return best;
+      best = next;
+    }
+  };
+  const height = (i) => (resolved ? resolved[i] : 0);
+  const at = (x, y, z, i) => {
+    if (!resolved) return 0;
+    let bestWeight = -Infinity, value = height(i);
+    for (let m = 0; m < nEdgesOnCell[i]; m++) {
+      const v = verticesOnCell[maxEdges * i + m];
+      if (v < 0) continue;
+      const a = cellsOnVertex[3 * v], b = cellsOnVertex[3 * v + 1], c = cellsOnVertex[3 * v + 2];
+      const ax = xCell[3 * a], ay = xCell[3 * a + 1], az = xCell[3 * a + 2], bx = xCell[3 * b], by = xCell[3 * b + 1], bz = xCell[3 * b + 2], cx = xCell[3 * c], cy = xCell[3 * c + 1], cz = xCell[3 * c + 2];
+      const det = ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+      const wa = (x * (by * cz - bz * cy) - y * (bx * cz - bz * cx) + z * (bx * cy - by * cx)) / det;
+      const wb = (ax * (y * cz - z * cy) - ay * (x * cz - z * cx) + az * (x * cy - y * cx)) / det;
+      const wc = (ax * (by * z - bz * y) - ay * (bx * z - bz * x) + az * (bx * y - by * x)) / det;
+      const sum = wa + wb + wc, low = Math.min(wa, wb, wc) / sum;
+      if (low > bestWeight) { bestWeight = low; value = (wa * height(a) + wb * height(b) + wc * height(c)) / sum; }
+    }
+    return value;
+  };
+  let cell = 0;
+  for (let r = 0; r < rows; r++) {
+    const lat = Math.PI / 2 - (r + 0.5) * Math.PI / rows, cosLat = Math.cos(lat), sinLat = Math.sin(lat);
+    for (let c = 0; c < cols; c++) {
+      const lon = -Math.PI + (c + 0.5) * 2 * Math.PI / cols, x = cosLat * Math.cos(lon), y = cosLat * Math.sin(lon);
+      cell = nearest(x, y, sinLat, cell);
+      owner[r * cols + c] = cell;
+      residual[r * cols + c] = Math.max(0, data[r * cols + c]) - at(x, y, sinLat, cell);
+    }
+  }
+  const weight = new Float64Array(C), sum = new Float64Array(C), square = new Float64Array(C), kSum = new Float64Array(C), lSum = new Float64Array(C), mSum = new Float64Array(C), count = new Int32Array(C);
+  const dLat = Math.PI / rows, dLon = 2 * Math.PI / cols;
+  for (let r = 0; r < rows; r++) {
+    const lat = Math.PI / 2 - (r + 0.5) * dLat, w = Math.cos(lat), dx = 2 * R * w * dLon;
+    const north = Math.max(0, r - 1), south = Math.min(rows - 1, r + 1), dy = (south - north) * R * dLat;
+    for (let c = 0; c < cols; c++) {
+      const n = r * cols + c, i = owner[n], h = residual[n];
+      const hx = (residual[r * cols + (c + 1) % cols] - residual[r * cols + (c + cols - 1) % cols]) / dx;
+      const hy = (residual[north * cols + c] - residual[south * cols + c]) / dy;
+      weight[i] += w; sum[i] += w * h; square[i] += w * h * h; count[i]++;
+      kSum[i] += w * 0.5 * (hx * hx + hy * hy); lSum[i] += w * 0.5 * (hx * hx - hy * hy); mSum[i] += w * hx * hy;
+    }
+  }
+  const deviation = new Float64Array(C), anisotropy = new Float64Array(C), orientation = new Float64Array(C), slope = new Float64Array(C);
+  for (let i = 0; i < C; i++) {
+    if (!(weight[i] > 0) || (land && !land[i])) continue;
+    const mean = sum[i] / weight[i], kk = kSum[i] / weight[i], ll = lSum[i] / weight[i], mm = mSum[i] / weight[i], spread = Math.hypot(ll, mm);
+    deviation[i] = Math.sqrt(Math.max(0, square[i] / weight[i] - mean * mean));
+    anisotropy[i] = kk + spread > 0 ? Math.sqrt(Math.max(0, (kk - spread) / (kk + spread))) : 1;
+    orientation[i] = 0.5 * Math.atan2(mm, ll);
+    slope[i] = Math.sqrt(kk + spread);
+  }
+  return { deviation, anisotropy, orientation, slope, count };
+}
+
+/*
  * Moves a column's surface pressure between surface geopotentials
  * hydrostatically, so a state saved over one terrain starts balanced
  * over another: π scales by exp(−Δφ / (R T)) with T the lowest layer's

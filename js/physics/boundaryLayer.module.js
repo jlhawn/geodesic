@@ -27,7 +27,9 @@ import { SEA_DRAG } from './surface.module.js';
  * sources on the lowest layer, which the diffusion then spreads upward,
  * save that with implicitDrag the edge solve takes the surface drag
  * ρ C_D max(|v|, gustiness) (`surfaceDrag`, per cell, averaged onto the
- * edge) as the lower boundary of its implicit system, keeps the stress
+ * edge; with `surfaceWind`, per cell, max(surfaceWind, gustiness) in
+ * place of max(|v|, gustiness) here, in u* and in the buoyancy flux)
+ * as the lower boundary of its implicit system, keeps the stress
  * it applies to each edge's lowest layer in `surfaceStress` and counts
  * the kinetic energy it removes into the lowest layer's dissipation. The
  * surface buoyancy flux takes heatCoefficients (C_H) where given, and is
@@ -130,7 +132,7 @@ export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, pertur
 export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 
 export function createBoundaryLayer(mesh, core, {
-  dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, stratiform = null, buffers = null,
+  dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, stratiform = null, buffers = null,
   entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT,
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
@@ -172,6 +174,7 @@ export function createBoundaryLayer(mesh, core, {
     cellVector(mesh, u.subarray(bottom * E, K * E), bottomVector, iFrom, iTo);
     for (let i = iFrom; i < iTo; i++) {
       speed[i] = Math.hypot(bottomVector[3 * i], bottomVector[3 * i + 1], bottomVector[3 * i + 2]);
+      if (surfaceWind) speed[i] = Math.max(surfaceWind[i], gustiness);
       friction[i] = Math.sqrt(dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness);
       found[i] = 0;
       riPrev[i] = 0;
