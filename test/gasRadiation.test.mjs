@@ -4,9 +4,10 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { clearLongwave } from '../js/physics/longwave.module.js';
-import { BENCHMARK, modelColumn, referenceAt, interfaceAt, MOLAR } from '../scripts/standardAtmospheres.mjs';
+import { BENCHMARK, modelColumn, referenceAt, interfaceAt, layerHeating, referenceHeating, MOLAR } from '../scripts/standardAtmospheres.mjs';
 import { runColumn } from '../scripts/radiationBenchmark.mjs';
-import { SOLAR_CONSTANT, GREENHOUSE_GASES, OZONE_COLUMN } from '../js/physics/radiation.module.js';
+import { SOLAR_CONSTANT, GREENHOUSE_GASES } from '../js/physics/radiation.module.js';
+import { ozoneWeights, ozoneAbove } from '../js/physics/ozone.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { ozoneAbsorptivity, visibleVaporAbsorptivity, nearInfraredVaporAbsorptivity, oxygenAbsorptivity, carbonDioxideAbsorptivity, pressureScaling, vaporScaling, OXYGEN, STP_DEPTH } from '../js/physics/shortwaveGases.module.js';
 
@@ -18,18 +19,22 @@ const SPECTRAL = { longwaveScheme: 'correlated', solarGases: 'clirad' };
 const DT = 900;
 
 test('the longwave g-points follow RRTMG over the standard atmospheres and LBLRTM for doubled CO2', () => {
-  const lines = [];
+  const lines = [], upper = [];
   for (const a of ['TROP', 'MLS', 'MLW', 'SAW']) {
     const column = modelColumn(BENCHMARK.atmospheres[a]), ref = BENCHMARK.rrtmgLongwave[a].levels, r = clearLongwave(column), K = column.T.length;
     const olr = r.up[0] - ref[ref.length - 1].up, dlr = r.down[K] - ref[0].down, net = interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000);
     lines.push(`${a} ${olr.toFixed(2)}/${dlr.toFixed(2)}/${net.toFixed(2)}`);
     for (const x of [olr, dlr, net]) assert.ok(Math.abs(x) < 3, `${a}: OLR, DLR and 200 hPa misses ${olr}, ${dlr}, ${net} W/m2`);
+    const heat = layerHeating(column, r.net), refHeat = referenceHeating(column, ref);
+    upper.push(`${a} ${heat[0].toFixed(2)} (${refHeat[0].toFixed(2)})`);
+    assert.ok(Math.abs(heat[0] / refHeat[0] - 1) < 0.2, `${a}: the top layer cools ${heat[0]} against ${refHeat[0]} K/day`);
+    for (let k = 1; 0.5 * (column.levels[k] + column.levels[k + 1]) * column.ps < 3000; k++) assert.ok(Math.abs(heat[k] - refHeat[k]) < 0.3, `${a}: layer ${k} cools ${heat[k]} against ${refHeat[k]} K/day`);
   }
   const mls = modelColumn(BENCHMARK.atmospheres.MLS), K = mls.T.length;
   const withCo2 = (vmr) => ({ ...mls, co2: mls.co2.map((_, k) => vmr * MOLAR.co2 / MOLAR.air * (1 - mls.q[k])), ch4: mls.ch4.map((_, k) => 806e-9 * MOLAR.ch4 / MOLAR.air * (1 - mls.q[k])), n2o: mls.n2o.map((_, k) => 275e-9 * MOLAR.n2o / MOLAR.air * (1 - mls.q[k])) });
   const one = clearLongwave(withCo2(287e-6)), two = clearLongwave(withCo2(574e-6)), ref = BENCHMARK.iacono.co2Doubling.longwave;
   const forcing = { toa: one.net[0] - two.net[0], p20000: interfaceAt(mls, one.net, 20000) - interfaceAt(mls, two.net, 20000), surface: two.down[K] - one.down[K] };
-  console.log(`OLR/DLR/net-200-hPa misses against RRTMG: ${lines.join(', ')} W/m2; doubled CO2 TOA ${forcing.toa.toFixed(2)} 200 hPa ${forcing.p20000.toFixed(2)} surface ${forcing.surface.toFixed(2)} W/m2`);
+  console.log(`top layer's cooling (RRTMG): ${upper.join(', ')} K/day; OLR/DLR/net-200-hPa misses against RRTMG: ${lines.join(', ')} W/m2; doubled CO2 TOA ${forcing.toa.toFixed(2)} 200 hPa ${forcing.p20000.toFixed(2)} surface ${forcing.surface.toFixed(2)} W/m2`);
   for (const level of ['toa', 'p20000', 'surface']) assert.ok(Math.abs(forcing[level] / ref[level] - 1) < 0.1, `doubled CO2 at ${level}: ${forcing[level]} against ${ref[level]}`);
 });
 
@@ -68,7 +73,7 @@ test('without scattering the solar gases take the CLIRAD absorptivities of their
       const idx = k * C + i, p = pi[i] * sigmaMid[k], mass = pi[i] * dSigma[k] / g, dry = mass * (1 - q[idx]);
       vapour += q[idx] * mass * 0.1 * vaporScaling(p, theta[idx] * exnerLayer[idx]); oxygen += OXYGEN.mixingRatio * STP_DEPTH * dry * pressureScaling(p); co2 += GREENHOUSE_GASES.carbonDioxide * STP_DEPTH * dry * pressureScaling(p);
     }
-    const ozone = OZONE_COLUMN[0] + (OZONE_COLUMN[1] - OZONE_COLUMN[0]) * Math.sin(mesh.latCell[i]) ** 2;
+    const ozone = ozoneAbove(pi[i], ozoneWeights(mesh.latCell[i], 0));
     const nir = (f) => nearInfraredVaporAbsorptivity(f * vapour) + oxygenAbsorptivity(f * oxygen) + carbonDioxideAbsorptivity(f * co2);
     const down = beam * (ozoneAbsorptivity(m * ozone) + visibleVaporAbsorptivity(m * vapour) + nir(m));
     const visible = 0.5 * beam - beam * (ozoneAbsorptivity(m * ozone) + visibleVaporAbsorptivity(m * vapour));
@@ -110,6 +115,13 @@ test('both engines carry the spectral gases alike: per-cell sums of absorbed and
   };
   for (let s = 0; s < 4; s++) { cpu.step(DT); await gpu.step(DT); }
   const early = await compare(Object.keys(slots), 1e-5);
+  const K = cpu.core.diagnostics.K, device = await gpu.gpu.downloadPhysics(), top = [];
+  for (let k = 0; 0.5 * (cpu.core.levels[k] + cpu.core.levels[k + 1]) < 0.03; k++) {
+    const s = stats(cpu.radiation.longwave.subarray(k * C, (k + 1) * C), device.LWH.subarray(k * C, (k + 1) * C));
+    assert.ok(s.rmsRel < 1e-4, `layer ${k}'s longwave heating: per-cell rms ${s.rmsRel}`);
+    top.push(s.rmsRel.toExponential(1));
+  }
+  early.push(`the ${top.length} layers above 30 hPa' longwave heating rms ${top.join(', ')}`);
   for (let s = 4; s < 24; s++) { cpu.step(DT); await gpu.step(DT); }
   const later = await compare(['clearAbsorbedSolar', 'clearOutgoingLongwave'], 1e-4);
   console.log(`spectral gases, CPU against GPU per-cell sums at N=6, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);

@@ -5,12 +5,16 @@ import { LONGWAVE_SPECTRAL_MODEL, LONGWAVE_POINTS } from './longwaveTable.module
  * (scripts/longwaveFit.mjs, which fits it to RRTMG over the standard
  * atmospheres and writes the table). A layer's optical depth in g-point g is
  * 1.66 (k_line,g a + k_self,g b + k_CO2,g c + k_O3,g d + k_CH4,g m + k_N2O,g n)
- * with the layer's paths: a the vapour mass times p/p_ref (p_ref 500 hPa),
+ * with the layer's paths: a the vapour mass times p_V/p_ref (p_ref 500 hPa),
  * b the vapour mass times its vapour pressure (Pa) times
- * exp(tSelf (1/T - 1/296)), c the CO2 mass times p/p_ref exp(tCo2 (T - 250)),
- * d the ozone mass times (p/p_ref)^nO3, m and n the methane and nitrous oxide
- * masses times p/p_ref; p is the layer's mid-pressure. The g-point emits the
- * share of sigma T^4 its row's quartic in (T - 250)/100 gives.
+ * exp(tSelf (1/T - 1/296)), c the CO2 mass times p_V/p_ref exp(tCo2 (T - 250)),
+ * d the ozone mass times (p_V/p_ref)^nO3, m and n the methane and nitrous
+ * oxide masses times p/p_ref; p is the layer's mid-pressure and p_V, for the
+ * vapour lines, CO2 and ozone, sqrt(p^2 + p_D^2): the Voigt half-width in its
+ * root-sum-square form as a pressure, p_D (the table's dopplerH2o, dopplerCo2
+ * and dopplerO3) the pressure at which the gas's Lorentz half-width equals
+ * its Doppler half-width at 250 K. The g-point emits the share of sigma T^4
+ * its row's quartic in (T - 250)/100 gives.
  */
 export const LONGWAVE_CONSTANTS = { pRef: 50000, diffusivity: 1.66, gravity: 9.806 };
 
@@ -46,12 +50,16 @@ export function planckShare(row, T) {
  * (kg/m2), q its specific humidity, ozone its ozone mass (kg/m2), and the
  * well-mixed gases' mass mixing ratios.
  */
+export function voigtScale(p, doppler) {
+  return (doppler > 0 ? Math.sqrt(p * p + doppler * doppler) : p) / LONGWAVE_CONSTANTS.pRef;
+}
+
 export function layerPaths(out, p, mass, T, q, ozone, co2, ch4, n2o, model = LONGWAVE_TABLE) {
   const scale = p / LONGWAVE_CONSTANTS.pRef, vapour = Math.max(0, q) * mass;
-  out[0] = vapour * scale;
+  out[0] = vapour * voigtScale(p, model.dopplerH2o ?? 0);
   out[1] = vapour * vaporPressure(Math.max(0, q), p) * Math.exp(model.tSelf * (1 / T - 1 / 296));
-  out[2] = co2 * mass * scale * Math.exp(model.tCo2 * (T - 250));
-  out[3] = ozone * Math.pow(scale, model.nO3);
+  out[2] = co2 * mass * voigtScale(p, model.dopplerCo2 ?? 0) * Math.exp(model.tCo2 * (T - 250));
+  out[3] = ozone * Math.pow(voigtScale(p, model.dopplerO3 ?? 0), model.nO3);
   out[4] = ch4 * mass * scale;
   out[5] = n2o * mass * scale;
   return out;

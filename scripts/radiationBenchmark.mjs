@@ -13,7 +13,8 @@
 // winter, subarctic winter) and against the ICRCCM line-by-line fluxes of
 // Feigelson et al. (1991) for the five AFGL atmospheres (CO2 300 ppmv, no
 // methane or nitrous oxide); doubled CO2 and vapour x1.2 on the midlatitude
-// summer profile against LBLRTM (Iacono et al. 2008), with the
+// summer profile against LBLRTM (Iacono et al. 2008), and methane and nitrous
+// oxide from none to their 1860 amounts on the same profile, with the
 // stratosphere-adjusted forcing (fixed dynamical heating); the OLR's slope
 // with surface temperature at fixed relative humidity. Shortwave: the
 // atmosphere's absorption, the surface's downward flux and the heating
@@ -86,6 +87,12 @@ function longwaveTable() {
   const mls = columns.MLS, m = BENCHMARK.mlawerMls;
   const r = runColumn(AFTER, mls);
   console.log(`MLS against LBLRTM (Mlawer et al. 1997, CKD_2.0): OLR ${f(r.olr)} (${m.toaUp}), net at 179 hPa ${f(interfaceAt(mls, r.net, m.tropopause.p))} (${m.tropopause.net}), DLR ${f(r.dlr)} (${m.surface.down})`);
+  console.log('cooling of the layers above 30 hPa, K/day (before / after / RRTMG):');
+  for (const a of ['TROP', 'MLS', 'MLW', 'SAW']) {
+    const column = columns[a], refHeat = referenceHeating(column, BENCHMARK.rrtmgLongwave[a].levels);
+    const heats = [BEFORE, AFTER].map((o) => layerHeating(column, runColumn(o, column).net));
+    console.log(`  ${a.padEnd(4)} ` + Array.from({ length: K }, (_, k) => k).filter((k) => midPressure(column, k) < 3000).map((k) => `${f(midPressure(column, k) / 100, 1)} hPa ${f(heats[0][k], 2)}/${f(heats[1][k], 2)}/${f(refHeat[k], 2)}`).join('; '));
+  }
   for (const a of ['MLS', 'TROP']) {
     const column = columns[a], ref = BENCHMARK.rrtmgLongwave[a].levels, refHeat = referenceHeating(column, ref);
     const heats = [BEFORE, AFTER].map((o) => layerHeating(column, runColumn(o, column).net));
@@ -125,6 +132,8 @@ function sensitivityTable() {
     const forcing = (a, b) => `TOA ${f(a.olr - b.olr, 2)}  200 hPa ${f(at(a, 20000) - at(b, 20000), 2)}  surface ${f(b.dlr - a.dlr, 2)}`;
     console.log(`  ${name.padEnd(6)} CO2 287 -> 574 ppmv: ${forcing(r1, r2)}   (LBLRTM ${ref.toa} / ${ref.p20000} / ${ref.surface})`);
     console.log(`  ${name.padEnd(6)} vapour x1.2 at 574:  ${forcing(r2, r3)}   (LBLRTM ${vap.toa} / ${vap.p20000} / ${vap.surface})`);
+    const minor = BENCHMARK.iacono.minorGases.longwave, none = runColumn(o, withGas(withGas(one, 'ch4', 0), 'n2o', 0));
+    console.log(`  ${name.padEnd(6)} CH4 0 -> 806 ppbv and N2O 0 -> 275 ppbv at 287 ppmv CO2: ${forcing(none, r1)}   (LBLRTM ${minor.toa} / ${minor.p20000} / ${minor.surface})`);
     if (o === AFTER) {
       const tropopause = 17900, adjustedColumn = adjusted(o, one, two, tropopause), ra = runColumn(o, adjustedColumn);
       const dT = adjustedColumn.T.map((t, k) => t - two.T[k]);

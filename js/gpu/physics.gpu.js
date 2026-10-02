@@ -4,6 +4,8 @@ import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE } from '
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwave.module.js';
+import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
+import { SUMMER_DAY } from '../physics/ozone.module.js';
 import { OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR, VAPOR_COEFFICIENTS, VAPOR_WEIGHTS, OXYGEN, CO2_COEFFICIENT, STP_DEPTH, OZONE_CM_ATM, SCALING_PRESSURE, SCALING_EXPONENT } from '../physics/shortwaveGases.module.js';
 
 /*
@@ -48,7 +50,8 @@ export function physicsConstants(o) {
   const moistTurbulence = o.turbulence === 'moist';
   if (o.longwaveScheme !== 'correlated' && o.longwaveScheme !== 'gray') throw new Error(`longwaveScheme must be 'correlated' or 'gray', not ${o.longwaveScheme}`);
   if (o.solarGases !== 'clirad' && o.solarGases !== 'lacisHansen') throw new Error(`solarGases must be 'clirad' or 'lacisHansen', not ${o.solarGases}`);
-  if (o.ozoneProfile) throw new Error('the GPU radiation takes its ozone from ozoneColumn, not an ozoneProfile');
+  if (o.ozoneProfile) throw new Error('the GPU radiation takes its ozone from its climatology, not an ozoneProfile');
+  if (o.ozone !== 'afgl' && o.ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${o.ozone}`);
   const points = LONGWAVE_TABLE.points, f32 = (values) => `array<f32, ${values.length}>(${values.map((v) => v.toPrecision(9)).join(', ')})`;
   const rayleigh = o.rayleighDepth != null ? [[1, o.rayleighDepth]] : o.rayleighBands;
   if (!(rayleigh.length >= 1 && rayleigh.length <= 3 && Math.abs(rayleigh.reduce((sum, [w]) => sum + w, 0) - 1) < 1e-9 && rayleigh.every(([w, tau]) => w > 0 && tau >= 0))) throw new Error(`rayleighBands must be one to three [weight, depth] pairs whose weights sum to 1, not ${JSON.stringify(rayleigh)}`);
@@ -68,9 +71,13 @@ const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = 
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6; const CLEAR_SKY: bool = ${!!o.clearSkyPass};
 const LW_CORRELATED: bool = ${o.longwaveScheme === 'correlated'}; const SOLAR_CLIRAD: bool = ${o.solarGases === 'clirad'}; const NG: i32 = ${points.length}; const LW_D: f32 = ${LONGWAVE_CONSTANTS.diffusivity}; const LW_PREF: f32 = ${LONGWAVE_CONSTANTS.pRef};
 const LW_TSELF: f32 = ${LONGWAVE_TABLE.tSelf}; const LW_TCO2: f32 = ${LONGWAVE_TABLE.tCo2}; const LW_NO3: f32 = ${LONGWAVE_TABLE.nO3};
+const LW_DH2O: f32 = ${LONGWAVE_TABLE.dopplerH2o ?? 0}; const LW_DCO2: f32 = ${LONGWAVE_TABLE.dopplerCo2 ?? 0}; const LW_DO3: f32 = ${LONGWAVE_TABLE.dopplerO3 ?? 0};
 const CO2_MASS: f32 = ${o.carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air}; const CH4_MASS: f32 = ${o.methane * GAS_MOLAR.ch4 / GAS_MOLAR.air}; const N2O_MASS: f32 = ${o.nitrousOxide * GAS_MOLAR.n2o / GAS_MOLAR.air};
 const LW_K: array<f32, ${6 * points.length}> = ${f32(points.flatMap((row) => row.slice(0, 6)))};
 const LW_PLANCK: array<f32, ${5 * points.length}> = ${f32(points.flatMap((row) => row.slice(6, 11)))};
+const OZ_AFGL: bool = ${o.ozone === 'afgl'}; const OZ_N: i32 = ${OZONE_GRID.points}; const OZ_LOW: f32 = ${OZONE_GRID.lowest}; const OZ_STEP: f32 = ${Math.log(OZONE_GRID.highest / OZONE_GRID.lowest) / (OZONE_GRID.points - 1)}; const OZ_SUMMER: f32 = ${SUMMER_DAY / 365};
+const OZ_TABLE: array<f32, ${5 * OZONE_GRID.points}> = ${f32(OZONE_PROFILES.flat())};
+const OZ_P: array<f32, ${OZONE_GRID.points}> = ${f32(Array.from({ length: OZONE_GRID.points }, (_, j) => OZONE_GRID.lowest * Math.exp(Math.log(OZONE_GRID.highest / OZONE_GRID.lowest) / (OZONE_GRID.points - 1) * j)))};
 const OZ_EQ: f32 = ${o.ozoneColumn[0]}; const OZ_POLE: f32 = ${o.ozoneColumn[1]}; const OZ_KG: f32 = ${OZONE_CM_ATM}; const VIS_O3: f32 = ${(OZONE_SHARES[6] * OZONE_COEFFICIENTS[6] + OZONE_SHARES[7] * OZONE_COEFFICIENTS[7]) / (OZONE_SHARES[6] + OZONE_SHARES[7])};
 const O3_SHARE: array<f32, 8> = ${f32(OZONE_SHARES)}; const O3_COEF: array<f32, 8> = ${f32(OZONE_COEFFICIENTS)};
 const H2O_K: array<f32, 10> = ${f32(VAPOR_COEFFICIENTS)}; const H2O_W: array<f32, 10> = ${f32(VAPOR_WEIGHTS)};
@@ -150,14 +157,34 @@ fn nearInfraredGases(vapour: f32, oxygen: f32, co2: f32) -> f32 {
   return VAPOR_ABS * a + O2_SHARE * relaxedFraction(O2_K * sqrt(oxygen)) + CO2_SW_K * sqrt(co2);
 }
 fn ozoneColumnAt(i: i32) -> f32 { let s = sin(MF[F_LAT + i]); return OZ_EQ + (OZ_POLE - OZ_EQ) * s * s; }
-fn solarGases(i: i32, pi: f32, mu: f32, ozoneTaken: ptr<function, array<f32, K>>, gasTaken: ptr<function, array<f32, K>>) -> vec4<f32> {
+fn ozoneWeightsAt(i: i32) -> array<f32, 5> {
+  let lat = MF[F_LAT + i]; let a = abs(lat) * 57.29577951308232;
+  let summer = 0.5 * (1.0 + cos(6.283185307179586 * (P[5] - OZ_SUMMER)) * select(1.0, -1.0, lat < 0.0));
+  let polar = clamp((a - 45.0) / 15.0, 0.0, 1.0); let middle = clamp((a - 15.0) / 30.0, 0.0, 1.0) * (1.0 - polar);
+  return array<f32, 5>(1.0 - middle - polar, middle * summer, middle * (1.0 - summer), polar * summer, polar * (1.0 - summer));
+}
+fn ozoneAboveAt(p: f32, w: array<f32, 5>) -> f32 {
+  if (!(p > 0.0)) { return 0.0; }
+  let j = min(OZ_N - 2, i32(floor(log(p / OZ_LOW) / OZ_STEP)));
+  var column = 0.0;
+  if (j < 0) { for (var r = 0; r < 5; r++) { column += w[r] * OZ_TABLE[r * OZ_N]; } return column * p / OZ_LOW; }
+  let t = (p - OZ_P[j]) / (OZ_P[j + 1] - OZ_P[j]);
+  for (var r = 0; r < 5; r++) { let b = r * OZ_N + j; column += w[r] * (OZ_TABLE[b] + (OZ_TABLE[b + 1] - OZ_TABLE[b]) * t); }
+  return column;
+}
+fn columnOzone(i: i32, pi: f32, layers: ptr<function, array<f32, K>>) -> f32 {
+  if (!OZ_AFGL) { let column = ozoneColumnAt(i); for (var k = 0; k < K; k++) { (*layers)[k] = column * LV[L_OZS + k]; } return column; }
+  let w = ozoneWeightsAt(i); var above = 0.0;
+  for (var k = 0; k < K; k++) { let below = ozoneAboveAt(pi * LV[L_SL + k], w); (*layers)[k] = below - above; above = below; }
+  return above;
+}
+fn solarGases(i: i32, pi: f32, mu: f32, layerOzone: ptr<function, array<f32, K>>, ozoneTaken: ptr<function, array<f32, K>>, gasTaken: ptr<function, array<f32, K>>) -> vec4<f32> {
   let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
-  let column = ozoneColumnAt(i);
   var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
   for (var k = 0; k < K; k++) {
     let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
     let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * (1.0 - q);
-    ozone += column * LV[L_OZS + k] * magnification;
+    ozone += (*layerOzone)[k] * magnification;
     vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
     oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
     (*ozoneTaken)[k] = ozoneAbsorb(ozone);
@@ -180,11 +207,12 @@ fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, ar
   }
   return loss;
 }
-fn longwavePaths(i: i32, k: i32, pi: f32, T: f32, column: f32) -> array<f32, 6> {
+fn longwavePaths(i: i32, k: i32, pi: f32, T: f32, ozone: f32) -> array<f32, 6> {
   let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
   let scale = p / LW_PREF; let vapour = q * mass; let dry = (1.0 - q) * mass * scale;
-  return array<f32, 6>(vapour * scale, vapour * (q * p / (0.622 + 0.378 * q)) * exp(LW_TSELF * (1.0 / T - 1.0 / 296.0)), CO2_MASS * dry * exp(LW_TCO2 * (T - 250.0)),
-    column * LV[L_OZS + k] * OZ_KG * pow(scale, LW_NO3), CH4_MASS * dry, N2O_MASS * dry);
+  let co2 = (1.0 - q) * mass * sqrt(p * p + LW_DCO2 * LW_DCO2) / LW_PREF;
+  return array<f32, 6>(vapour * sqrt(p * p + LW_DH2O * LW_DH2O) / LW_PREF, vapour * (q * p / (0.622 + 0.378 * q)) * exp(LW_TSELF * (1.0 / T - 1.0 / 296.0)), CO2_MASS * co2 * exp(LW_TCO2 * (T - 250.0)),
+    ozone * OZ_KG * pow(sqrt(p * p + LW_DO3 * LW_DO3) / LW_PREF, LW_NO3), CH4_MASS * dry, N2O_MASS * dry);
 }
 fn longwaveDepth(g: i32, row: array<f32, 6>) -> f32 {
   let r = 6 * g;
@@ -717,8 +745,9 @@ export const PHYSICS_KERNELS = {
   let landWet = select(roots, bareWet + canopyWet, VEGETATED);
   let wetness = select(1.0, select(landWet, 1.0, snow0 > 0.0), onLand);
   let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= 0.0);
-  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-  if (SOLAR_CLIRAD && mu > 0.0) { solar = solarGases(i, pi, mu, &ozoneTaken, &gasTaken); }
+  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0); var layerOzone: array<f32, K>;
+  let ozoneColumn = columnOzone(i, pi, &layerOzone);
+  if (SOLAR_CLIRAD && mu > 0.0) { solar = solarGases(i, pi, mu, &layerOzone, &ozoneTaken, &gasTaken); }
   let ozoneHeating = select(beam * OZONE_ABS, beam * ozoneTaken[K - 1], SOLAR_CLIRAD);
   let visibleTaken = ozoneHeating + beam * solar.x;
   let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
@@ -859,7 +888,7 @@ export const PHYSICS_KERNELS = {
   var upwardHeating = 0.0; var upwardAerosol = 0.0; var restLoss = 0.0; var visibleLoss = 0.0; var aerosolLoss = 0.0; var ozoneLoss = 0.0;
   if (UPWARD && mu > 0.0) {
     aerosolLoss = select(0.0, 1.0 - exp(-AER_ABS * aerosol * DIFFUSE_PATH), aerosol > 0.0);
-    if (SOLAR_CLIRAD) { ozoneLoss = relaxedFraction(VIS_O3 * ozoneColumnAt(i) * DIFFUSE_PATH); }
+    if (SOLAR_CLIRAD) { ozoneLoss = relaxedFraction(VIS_O3 * ozoneColumn * DIFFUSE_PATH); }
     visibleLoss = select(aerosolLoss, 1.0 - (1.0 - aerosolLoss) * (1.0 - ozoneLoss), ozoneLoss > 0.0);
     let sunlit = beam - ozoneHeating;
     let restAfter = sunlit - max(0.0, VIS_FRAC * beam - visibleTaken) - vaporHeating;
@@ -896,7 +925,7 @@ export const PHYSICS_KERNELS = {
     upwardHeating += upwardAerosol;
     if (ozoneLoss > 0.0) {
       let upwardOzone = incident * esc.x * (1.0 - aerosolLoss) * ozoneLoss;
-      for (var k = 0; k < K; k++) { netFlux[k] += upwardOzone * LV[L_OZS + k]; }
+      for (var k = 0; k < K; k++) { netFlux[k] += upwardOzone * layerOzone[k] / ozoneColumn; }
       upwardHeating += upwardOzone;
     }
   }
@@ -905,14 +934,13 @@ export const PHYSICS_KERNELS = {
   if (MOIST_BL) { for (var k = 0; k < K; k++) { beforeBands[k] = netFlux[k]; } }
   var outgoing = 0.0; var back = 0.0; var clearOutgoing = 0.0;
   if (LW_CORRELATED) {
-    let column = ozoneColumnAt(i);
     var downG: array<f32, NG>; var upG: array<f32, NG>; var clearG: array<f32, NG>;
     for (var k = 0; k < K; k++) {
-      let row = longwavePaths(i, k, pi, temperature[k], column); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
+      let row = longwavePaths(i, k, pi, temperature[k], layerOzone[k]); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
       var heat = 0.0;
       for (var g = 0; g < NG; g++) {
         let e = 1.0 - (1.0 - relaxedFraction(longwaveDepth(g, row))) * clear; let src = planckShare(g, t) * hot;
-        heat += e * (downG[g] - 2.0 * src);
+        heat += e * (downG[g] - src);
         downG[g] = downG[g] * (1.0 - e) + e * src;
       }
       netFlux[k] += heat;
@@ -920,11 +948,11 @@ export const PHYSICS_KERNELS = {
     let surfaceScaled = (ts - 250.0) / 100.0;
     for (var g = 0; g < NG; g++) { back += downG[g]; upG[g] = planckShare(g, surfaceScaled) * surfaceEmission; clearG[g] = upG[g]; }
     for (var k = K - 1; k >= 0; k--) {
-      let row = longwavePaths(i, k, pi, temperature[k], column); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
+      let row = longwavePaths(i, k, pi, temperature[k], layerOzone[k]); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
       var heat = 0.0;
       for (var g = 0; g < NG; g++) {
         let gas = relaxedFraction(longwaveDepth(g, row)); let e = 1.0 - (1.0 - gas) * clear; let src = planckShare(g, t) * hot;
-        heat += e * upG[g];
+        heat += e * (upG[g] - src);
         upG[g] = upG[g] * (1.0 - e) + e * src;
         if (CLEAR_SKY) { clearG[g] = clearG[g] * (1.0 - gas) + gas * src; }
       }

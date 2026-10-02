@@ -3,6 +3,7 @@ import { createMixedLayer, dycomsLongwave } from './mixedLayer.module.js';
 import { REGIME } from './boundaryLayer.module.js';
 import { SEA_DRAG } from './surface.module.js';
 import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from './longwave.module.js';
+import { ozoneWeights, ozoneAbove as climatologyAbove } from './ozone.module.js';
 import { ozoneAbsorptivity, visibleVaporAbsorptivity, nearInfraredVaporAbsorptivity, oxygenAbsorptivity, carbonDioxideAbsorptivity, pressureScaling, vaporScaling, OXYGEN, OZONE_CM_ATM, STP_DEPTH, OZONE_SHARES, OZONE_COEFFICIENTS, VAPOR_STRENGTH } from './shortwaveGases.module.js';
 export const STEFAN_BOLTZMANN = 5.670374419e-8;
 export const SOLAR_CONSTANT = 1362;
@@ -285,12 +286,15 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * from the top lengthened by the magnification 35/√(1224μ² + 1) of
  * Lacis & Hansen (1974), each layer taking what its own gas adds; ozone
  * and the visible band's vapour come out of the visible part of the
- * beam, the rest out of the near infrared. The ozone column is
- * ozoneColumn[0] + (ozoneColumn[1] − ozoneColumn[0]) sin²lat (cm-atm; an
- * `ozoneProfile` of per-layer amounts replaces it, for one-column use),
- * distributed in the vertical as the column above σ below. With
- * upwardAbsorption the visible light the surface sends out of the column
- * also crosses the ozone column at 5/3, losing
+ * beam, the rest out of the near infrared. With `ozone` 'afgl' (the
+ * default) each layer's ozone is that of the climatology of
+ * js/physics/ozone.module.js (the AFGL atmospheres by latitude and season)
+ * between its interfaces' pressures; with 'idealized' the column is
+ * ozoneColumn[0] + (ozoneColumn[1] − ozoneColumn[0]) sin²lat (cm-atm)
+ * distributed in the vertical as the column above σ below; an
+ * `ozoneProfile` of per-layer amounts replaces either, for one-column
+ * use. With upwardAbsorption the visible light the surface sends out of
+ * the column also crosses the ozone column at 5/3, losing
  * 1 − exp(−0.0542 Ω 5/3) (the ozone coefficients of the 0.32-0.7 µm bands
  * weighted by their share), and the near-infrared light the gases'
  * absorption of the path down plus 5/3 of the column's beyond the first.
@@ -419,7 +423,7 @@ export function createRadiation(mesh, core, {
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
-  longwaveScheme = 'correlated', solarGases = 'clirad', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
+  longwaveScheme = 'correlated', solarGases = 'clirad', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
   rayleighBands = RAYLEIGH_BANDS, rayleighDepth = null, upwardAbsorption = true, visibleFraction = 0.5, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, land = null, iceSheet = null,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential, piSigmaDot, p0 } = core.diagnostics;
@@ -434,6 +438,7 @@ export function createRadiation(mesh, core, {
   const ozoneFraction = Float64Array.from({ length: K }, (_, k) => (beamLeft(levels[k]) - beamLeft(levels[k + 1])) / (1 - Math.exp(-ozoneOpacity)));
   if (longwaveScheme !== 'correlated' && longwaveScheme !== 'gray') throw new Error(`longwaveScheme must be 'correlated' or 'gray', not ${longwaveScheme}`);
   if (solarGases !== 'clirad' && solarGases !== 'lacisHansen') throw new Error(`solarGases must be 'clirad' or 'lacisHansen', not ${solarGases}`);
+  if (ozone !== 'afgl' && ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${ozone}`);
   if (ozoneProfile && ozoneProfile.length !== K) throw new Error(`ozoneProfile must give one ozone amount per layer, ${K}, not ${ozoneProfile.length}`);
   const ozoneShare = Float64Array.from({ length: K }, (_, k) => ozoneAbove(levels[k + 1]) - ozoneAbove(levels[k]));
   const ozoneCell = Float64Array.from({ length: C }, (_, i) => ozoneColumn[0] + (ozoneColumn[1] - ozoneColumn[0]) * Math.sin(mesh.latCell[i]) ** 2);
@@ -506,13 +511,15 @@ export function createRadiation(mesh, core, {
   const vaporTaken = new Float64Array(K);
   const emitted = new Float64Array(K);
   const netFlux = new Float64Array(K);
-  const sun = new Float64Array([1, 0, 0]);
+  const sun = new Float64Array([1, 0, 0]), ozoneWeight = new Float64Array(5);
+  let yearFraction = 0;
   const budget = { absorbedSolar: 0, atmosphereSolar: 0, aerosolSolar: 0, outgoingLongwave: 0, clearAbsorbedSolar: 0, clearOutgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, stratiform: 0, ozoneSolar: 0, vaporSolar: 0, oxygenSolar: 0, carbonDioxideSolar: 0, upwardGasSolar: 0, downwardLongwave: 0 };
   const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0, visibleEscape: 0, restEscape: 0 }, decked = { ...sky }, probe = { ...sky };
   const deckLight = { incident: 0, mu: 0, direct: 0, diffuse: 0, path: 0, layer: 0, clear: 0 };
 
   function setTime(t) {
     sunDirection(t, sun);
+    yearFraction = (t % YEAR) / YEAR;
   }
 
   function cosZenith(i) {
@@ -731,7 +738,12 @@ export function createRadiation(mesh, core, {
   function column(i, pi, theta, surfaceT, windSpeed, tau0 = tauCell[i], beam = insolation(i), qAir = null, q = null, qc = null, surfaceAlbedo = albedo, diffuseAlbedo = surfaceAlbedo, wetness = 1, exchangeCoefficientAt = exchangeCoefficient, openSea = 0, mixedDepth = 0, dt = 0, mixingDepth = 0) {
     const clirad = solarGases === 'clirad' && q !== null, correlated = longwaveScheme === 'correlated' && q !== null;
     let ozoneColumnAmount = 0;
-    if (clirad || correlated) for (let k = 0; k < K; k++) { layerOzone[k] = ozoneProfile ? ozoneProfile[k] : ozoneCell[i] * ozoneShare[k]; ozoneColumnAmount += layerOzone[k]; }
+    if ((clirad || correlated) && !ozoneProfile && ozone === 'afgl') {
+      ozoneWeights(mesh.latCell[i], yearFraction, ozoneWeight);
+      let above = 0;
+      for (let k = 0; k < K; k++) { const below = climatologyAbove(pi * levels[k + 1], ozoneWeight); layerOzone[k] = below - above; above = below; }
+    }
+    if (clirad || correlated) for (let k = 0; k < K; k++) { if (ozoneProfile || ozone !== 'afgl') layerOzone[k] = ozoneProfile ? ozoneProfile[k] : ozoneCell[i] * ozoneShare[k]; ozoneColumnAmount += layerOzone[k]; }
     const solarPaths = clirad && beam > 0 ? solarGasPaths(i, pi, theta, q, beam / solarConstant) : null;
     const ozoneHeating = clirad ? (solarPaths ? beam * ozoneTaken[K - 1] : 0) : beam * ozoneAbsorption;
     const surfaceEmission = STEFAN_BOLTZMANN * surfaceT * surfaceT * surfaceT * surfaceT;
