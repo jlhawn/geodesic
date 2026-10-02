@@ -28,7 +28,9 @@ import { cellVector } from '../dynamics/operators.module.js';
  * layers, those whose midpoints lie above `lidPressure` (at least the top
  * layer), is spread over them at one acceleration (as Garfinkel et al.
  * 2022 spread what leaves the top), so each column's momentum is
- * conserved (Shepherd & Shaw 2004). The layer's
+ * conserved (Shepherd & Shaw 2004); with `lidTests` the waves are tested
+ * in the lid layers too and only what rises out of the top layer is
+ * spread, as MiMA's cg_drag does. The layer's
  * acceleration is g times its deposited flux over its mass per area. N²
  * is (g/θ) ∂θ/∂z between the neighbouring layers, z from the hypsometric
  * equation, floored at `minimumFrequency`². `compute` fills the cells'
@@ -43,7 +45,7 @@ import { cellVector } from '../dynamics/operators.module.js';
  */
 export const GRAVITY_WAVES = {
   flux: 4.3e-3, equatorialFlux: 4.3e-3, northFlux: 0, southFlux: 0, edge: 15, width: 10, sourcePressure: 31500, sourceDescent: true,
-  halfWidth: 40, maxSpeed: 100, speedStep: 2, wavelength: 300e3, minimumFrequency: 0.005, breakingAmplitude: 0.4, lidPressure: 85,
+  halfWidth: 40, maxSpeed: 100, speedStep: 2, wavelength: 300e3, minimumFrequency: 0.005, breakingAmplitude: 0.4, lidPressure: 85, lidTests: false,
 };
 
 export function gravityWaveSpectrum({ flux = 1, halfWidth, maxSpeed, speedStep }) {
@@ -113,13 +115,13 @@ export function gravityWaveColumns(mesh, sigmaMid, p0, options) {
 
 export function createGravityWaveDrag(mesh, core, options = {}) {
   const o = { ...GRAVITY_WAVES, ...options };
-  const { halfWidth, maxSpeed, speedStep, wavelength, minimumFrequency, breakingAmplitude, lidPressure, buffers = null, diagnose = false } = o;
+  const { halfWidth, maxSpeed, speedStep, wavelength, minimumFrequency, breakingAmplitude, lidPressure, lidTests, buffers = null, diagnose = false } = o;
   const { K, C, E, sigmaMid, dSigma, R, g, kappa, p0 } = core.diagnostics;
   const { cellsOnEdge, nEdge, latCell, lonCell } = mesh;
   const amplitude = gravityWaveSpectrum({ halfWidth, maxSpeed, speedStep }), J = amplitude.length, cumulative = gravityWaveSums(amplitude);
   const breaking = gravityWaveBreaking({ halfWidth, maxSpeed, speedStep, breakingAmplitude });
   const columns = gravityWaveColumns(mesh, sigmaMid, p0, o), source = columns.deepest, wavenumber = 2 * Math.PI / wavelength, floor = minimumFrequency * minimumFrequency;
-  const lid = gravityWaveLid(sigmaMid, lidPressure, p0), lidShare = new Float64Array(lid);
+  const lid = gravityWaveLid(sigmaMid, lidPressure, p0), lidShare = new Float64Array(lid), tested = lidTests ? 0 : lid;
   for (let k = 0, total = dSigma.subarray(0, lid).reduce((s, x) => s + x, 0); k < lid; k++) lidShare[k] = dSigma[k] / total;
   const shared = { east: buffers ? buffers.east : new SharedArrayBuffer(8 * K * C), north: buffers ? buffers.north : new SharedArrayBuffer(8 * K * C) };
   const east = new Float64Array(shared.east), north = new Float64Array(shared.north);
@@ -143,7 +145,7 @@ export function createGravityWaveDrag(mesh, core, options = {}) {
     const u0 = wind[top * C + i], present = breakingAmplitude ? density[top] : scale;
     for (let side = -1; side <= 1; side += 2) {
       let gone = 0;
-      for (let k = top - 1; k >= lid && gone < J; k--) {
+      for (let k = top - 1; k >= tested && gone < J; k--) {
         const ahead = side * (u0 - wind[k * C + i]), saturation = density[k] * wavenumber / (2 * frequency[k]);
         let reached = Math.max(gone, Math.min(J, Math.floor(-ahead / speedStep)));
         while (reached < J) {

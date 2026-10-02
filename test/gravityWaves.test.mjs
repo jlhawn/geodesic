@@ -50,7 +50,7 @@ test('the source flux follows Garfinkel et al. (2022) eq. A3, uniform by default
   assert.equal(gravityWaveSource(mid, 31500, P0, 89.9 * deg, true), mid.length - 2);
 });
 
-test('on bl36 the flux that rises into the layers above 0.85 hPa is spread over them at one acceleration, whatever their winds, and each column keeps its momentum', () => {
+test('on bl36 the flux that rises into the layers above 0.85 hPa is spread over them at one acceleration, whatever their winds, and each column keeps its momentum, with the lid layers tested as well', () => {
   const model = createModel(new Grid(8), { ocean: false, levels: sigmaInterfaces('bl36'), gravityWaves: { breakingAmplitude: null, flux: 1e-9, equatorialFlux: 1e-9 } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
@@ -80,6 +80,17 @@ test('on bl36 the flux that rises into the layers above 0.85 hPa is spread over 
     worst = Math.max(worst, Math.abs(east)); scale = Math.max(scale, absolute);
   }
   assert.ok(worst < 1e-12 * scale, `a column gains ${worst} Pa`);
+  const tested = windyModel(8, { levels: sigmaInterfaces('bl36'), gravityWaves: { lidTests: true } });
+  tested.gravityWaves.compute(tested.state);
+  let apart = 0, testedWorst = 0;
+  for (let i = 0; i < C; i++) {
+    if (Math.abs(tested.gravityWaves.east[i] - tested.gravityWaves.east[C + i]) > 1e-6 * Math.abs(tested.gravityWaves.east[i])) apart++;
+    let east = 0, absolute = 0;
+    for (let k = 0; k < tested.core.K; k++) { const mass = tested.state[0][i] * dSigma[k] / g; east += mass * tested.gravityWaves.east[k * C + i]; absolute += mass * Math.abs(tested.gravityWaves.east[k * C + i]); }
+    testedWorst = Math.max(testedWorst, Math.abs(east) / Math.max(absolute, 1e-300));
+  }
+  assert.ok(apart > 0, 'with lidTests the waves that break in a lid layer push it apart from the other');
+  assert.ok(testedWorst < 1e-12, `with lidTests a column gains ${testedWorst} of its absolute deposit`);
 });
 
 test('each column keeps its momentum: what the drag takes from one layer it gives to another, and the westward waves that rise through a strengthening westerly reach the top layer', () => {
@@ -150,6 +161,7 @@ test('the GPU gravity-wave drag matches the CPU model after a step', { skip: !gp
   await engineAgreement({ breakingAmplitude: null });
   await engineAgreement({ breakingAmplitude: 0.4 });
   await engineAgreement({}, sigmaInterfaces('bl36'));
+  await engineAgreement({ lidTests: true }, sigmaInterfaces('bl36'));
 });
 
 test('the intermittent breaking amplitude makes waves break below the top layer that otherwise reach it', () => {

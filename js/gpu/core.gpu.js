@@ -595,7 +595,7 @@ const GW_SHARE = array<f32, GW_LID>(GW_LID_SHARES);
     let u0 = w[src]; let present = select(amp, pres[src] / (RGAS * temp[src]), GW_INTERMITTENT);
     for (var side = -1.0; side <= 1.0; side += 2.0) {
       var gone = 0;
-      for (var k = src - 1; k >= GW_LID && gone < GW_J; k--) {
+      for (var k = src - 1; k >= GW_TESTED && gone < GW_J; k--) {
         let ahead = side * (u0 - w[k]);
         var reached = max(gone, i32(clamp(floor(-ahead / GW_DC), 0.0, f32(GW_J))));
         loop {
@@ -769,7 +769,7 @@ export async function createGpuCore(mesh, {
   const waveSums = gravityWaveSums(waveAmplitudes), waveBreaking = waves ? gravityWaveBreaking(waves) : [0];
   const waveLid = waves ? gravityWaveLid(sigmaMid, waves.lidPressure, p0) : 1, waveLidTotal = dSigma.subarray(0, waveLid).reduce((sum, x) => sum + x, 0);
   const waveLidShares = Array.from({ length: waveLid }, (_, k) => (dSigma[k] / waveLidTotal).toExponential(9)).join(', ');
-  const waveConstants = (body) => body.replaceAll('GW_LID_SHARES', waveLidShares).replaceAll('GW_LID', String(waveLid)).replaceAll('GW_BREAKING', Array.from(waveBreaking, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_INTERMITTENT', waves && waves.breakingAmplitude ? 'true' : 'false').replaceAll('GW_SUMS', Array.from(waveSums, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SOURCE_PLUS', String(waveSource + 1)).replaceAll('GW_SOURCE', String(waveSource)).replaceAll('GW_J_PLUS', String(waveAmplitudes.length + 1)).replaceAll('GW_J', String(waveAmplitudes.length))
+  const waveConstants = (body) => body.replaceAll('GW_TESTED', waves && waves.lidTests ? '0' : String(waveLid)).replaceAll('GW_LID_SHARES', waveLidShares).replaceAll('GW_LID', String(waveLid)).replaceAll('GW_BREAKING', Array.from(waveBreaking, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_INTERMITTENT', waves && waves.breakingAmplitude ? 'true' : 'false').replaceAll('GW_SUMS', Array.from(waveSums, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SOURCE_PLUS', String(waveSource + 1)).replaceAll('GW_SOURCE', String(waveSource)).replaceAll('GW_J_PLUS', String(waveAmplitudes.length + 1)).replaceAll('GW_J', String(waveAmplitudes.length))
     .replaceAll('GW_DC', waves ? waves.speedStep.toFixed(6) : '0.0').replaceAll('GW_KH', waves ? (2 * Math.PI / waves.wavelength).toExponential(9) : '0.0').replaceAll('GW_N2_FLOOR', waves ? (waves.minimumFrequency ** 2).toExponential(9) : '0.0');
   const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
   if (!waves) { delete kernelBodies.gravityWaves; delete kernelBodies.gravityWaveDrag; }
