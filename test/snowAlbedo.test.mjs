@@ -208,3 +208,15 @@ test('over 48 GPU steps the snow albedo and the standing cover evolve as on the 
   assert.ok(rms < 2e-3 && worst < 2e-2, `snow albedo rms ${rms}, max ${worst}`);
   assert.ok(canopyWorst < 1e-4, `standing cover max ${canopyWorst}`);
 });
+
+test('the GPU, whose land and sea ice share one snow ageing, refuses an ageing option given to one of them alone or differently to each', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const options of [{ land: { snowAgeing: false } }, { ice: { snowAgeing: false } }, { ice: { coldSnowAgeing: 0.01 } }, { land: { refreshSnowfall: 5 }, ice: { refreshSnowfall: 8 } }]) {
+    await assert.rejects(createGpuModel(new Grid(4), { topography, ...options }), /share/, JSON.stringify(options));
+  }
+  const both = await createGpuModel(new Grid(4), { topography, land: { coldSnowAgeing: 0.01 }, ice: { coldSnowAgeing: 0.01 } });
+  assert.equal(both.gpu.physics.coldSnowAgeing, 0.01);
+  both.destroy();
+  const seaOnly = await createGpuModel(new Grid(4), { ice: { snowAgeing: false } });
+  assert.equal(seaOnly.gpu.physics.snowAgeing, false, 'without land the sea ice sets it');
+  seaOnly.destroy();
+});

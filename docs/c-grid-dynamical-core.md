@@ -3229,8 +3229,9 @@ The work, in order:
    0.48, `iceMeltingRange` 1 K, `fullAlbedoThickness` 0.5 m,
    `iceFullSnow` 20 kg/m², `snowAgeing` true, `iceSnowFloor` 0.70
    (`iceSnowAlbedo` 0.75 only without the ageing); the ageing shared by
-   land and ice (`SNOW_AGEING`; on the GPU one set, the land's when both
-   are given and they must agree) `freshSnowAlbedo` 0.85,
+   land and ice (`SNOW_AGEING` and `snowAgeing`; the GPU has one set for
+   both and refuses a model whose land and ice options differ, a default
+   counting as given) `freshSnowAlbedo` 0.85,
    `coldSnowAgeing` 0.008 /day, `meltingSnowAgeing` 0.24 /day,
    `refreshSnowfall` 10 kg/m², `wetSnowRange` 2 K, `ageingActivation`
    5000 K; land `snowAgeing` true, `oldSnowAlbedo` 0.50 (`snowAlbedo`

@@ -59,10 +59,11 @@ export async function createGpuModel(gridOrMesh, {
   const nu4 = Math.pow(spacing / Math.PI, 4) / (nu4Hours * 3600);
   const core = createSigmaCore(mesh, { levels, surfaceGeopotential: phis });
   const { K, C, E } = core.diagnostics;
-  for (const key of AGEING_OPTIONS) if (ice[key] !== undefined && landOptions[key] !== undefined && ice[key] !== landOptions[key]) throw new Error(`the GPU's land and sea ice share ${key}: ${landOptions[key]} on the land, ${ice[key]} on the ice`);
+  const ageingOf = (options, key) => options[key] ?? (key === 'snowAgeing' ? true : SNOW_AGEING[key]);
+  if (geography) for (const key of AGEING_OPTIONS) if (ageingOf(ice, key) !== ageingOf(landOptions, key)) throw new Error(`the GPU's land and sea ice share ${key}: ${ageingOf(landOptions, key)} on the land, ${ageingOf(ice, key)} on the ice`);
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
-    ...Object.fromEntries(AGEING_OPTIONS.filter((key) => landOptions[key] !== undefined).map((key) => [key, landOptions[key]])),
+    ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
     landed: !!geography, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
     ...Object.fromEntries(VEGETATION_OPTIONS.filter((key) => landOptions[key] !== undefined).map((key) => [key, landOptions[key]])),
