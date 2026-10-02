@@ -23,8 +23,9 @@ import { R_DRY, CP_DRY, P0, GRAVITY, createSigmaCore, sigmaGridName } from '../j
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { SIDEREAL_DAY } from '../js/model.module.js';
 import { createSurface, TOP_DRAG } from '../js/physics/surface.module.js';
-import { spongeGeometry, spongeRates, dampEddies, spongeSigmaFor, SPONGE } from '../js/dynamics/sponge.module.js';
+import { spongeGeometry, spongeRates, dampEddies, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../js/dynamics/sponge.module.js';
 import { createGravityWaveDrag } from '../js/physics/gravityWaves.module.js';
+import { verticalVelocity } from '../js/levels.module.js';
 
 const KAPPA = R_DRY / CP_DRY, DEG = 180 / Math.PI;
 
@@ -122,6 +123,152 @@ export function upperWindLine(mesh, levels, state, dt, day) {
   return `upper winds day ${day} (jet N / jet S / 5S-5N / 60S / 60N, m/s@lat; max wind m/s; eddy KE m²/s²; eddy T rms K; divergence rms 1e-6/s; Courant horizontal/vertical): ` + rows.map((r) => `${r.pressure.toPrecision(3)} hPa ${jet(r, false)}/${jet(r, true)}/${bandMean(r, -5, 5)}/${bandMean(r, -62.5, -57.5)}/${bandMean(r, 57.5, 62.5)} ${r.maxWind.toFixed(0)} ${r.eke.toFixed(0)} ${r.tRms.toFixed(1)} ${(1e6 * r.divRms).toFixed(1)} ${r.courant.toFixed(2)}/${r.verticalCourant.toFixed(2)}`).join('; ');
 }
 
+const BUDGET_BANDS = [['5S-5N', -5, 5], ['20S-20N', -20, 20], ['50-70S', -70, -50], ['50-70N', 50, 70], ['70-90S', -90, -70], ['70-90N', 70, 90]];
+
+// The zonal-mean budgets of the top `layers` layers, sampled during a run
+// and read out as day means. Per 2.5-degree band the samples give the
+// zonal wind's forces: the gravity-wave drag the step applied (`waves`,
+// the cells' east accelerations), the sponge's (the CPU operator on the
+// sampled state) and the lid friction's on the zonal mean (`friction`,
+// the same), and the resolved terms of the Eulerian mean in sigma,
+// v (f - (u cos)_phi / (a cos)), the eddy flux convergence
+// -(cos^2 [u'v'])_phi / (a cos^2) and the vertical advection -sdot u_sigma
+// (sdot from the interface mass fluxes over the band-mean pi) and the
+// eddy vertical flux convergence -([pi sdot]'u')_sigma / (pi dsigma), u' at
+// an interface the mean of its two layers'; and the temperature's: the
+// radiative heating the physics step applied (`radiation`, theta before
+// and after it), the vertical term -sdot (T_sigma - kappa T / sigma), the
+// mean meridional advection and the eddy heat flux convergences,
+// meridional and vertical. `line` gives, per band of BUDGET_BANDS and
+// layer, the change of the band's mean since the last line per day
+// (total), the sampled terms' means, and the residual, the total less the
+// gravity waves, the sponge and the lid friction (wind) or the radiation
+// (temperature): what the resolved dynamics, the closures and the kinetic
+// energy returned as heat do.
+export function createTopBudget(mesh, levels, { layers = 6, surface = {} } = {}) {
+  const C = mesh.nCells, E = mesh.nEdges, K = levels.length - 1, L = Math.min(layers, K - 1), a = mesh.radius, omega = mesh.omega;
+  const core = createSigmaCore(mesh, { levels }), { sigmaMid } = core;
+  const rates = spongeRates(sigmaMid, surface.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), surface.spongeDays ?? SPONGE.days);
+  const friction = lidFrictionRates(levels, surface.lidFriction === undefined ? lidFrictionFor(sigmaGridName(levels)) : surface.lidFriction);
+  const geometry = spongeGeometry(mesh), means = new Float64Array(2 * geometry.bands), damped = new Float64Array(E);
+  const bands = 72, width = Math.PI / bands, band = Int32Array.from(mesh.latCell, (lat) => Math.min(bands - 1, Math.floor((lat + Math.PI / 2) / width)));
+  const lat = Float64Array.from({ length: bands }, (_, b) => -Math.PI / 2 + (b + 0.5) * width), cos = lat.map(Math.cos);
+  const area = new Float64Array(bands);
+  for (let i = 0; i < C; i++) area[band[i]] += mesh.areaCell[i];
+  const shape = Float64Array.from({ length: K }, (_, k) => (levels[k + 1] ** (1 + KAPPA) - levels[k] ** (1 + KAPPA)) / ((1 + KAPPA) * (levels[k + 1] - levels[k])));
+  const names = ['waves', 'sponge', 'friction', 'coriolis', 'eddy', 'vertical', 'eddyVertical', 'radiation', 'verticalT', 'meridionalT', 'eddyT', 'eddyVerticalT'];
+  const sums = Object.fromEntries(names.map((n) => [n, new Float64Array(L * bands)])), counts = Object.fromEntries(names.map((n) => [n, 0]));
+  const vector = new Float64Array(3 * C), east = new Float64Array(C), north = new Float64Array(C), unit = new Float32Array(C).fill(1), flows = new Float64Array((K + 1) * C);
+  const bandMean = (values) => { const out = new Float64Array(bands); for (let i = 0; i < C; i++) out[band[i]] += mesh.areaCell[i] * values[i]; return out.map((x, b) => x / area[b]); };
+  const slope = (x, b) => { const lo = Math.max(0, b - 1), hi = Math.min(bands - 1, b + 1); return (x[hi] - x[lo]) / (lat[hi] - lat[lo]); };
+  const temperature = (theta, pi, k) => Float64Array.from({ length: C }, (_, i) => theta[k * C + i] * (pi[i] / P0) ** KAPPA * shape[k]);
+  function winds(u, k) {
+    cellVector(mesh, u.subarray(k * E, (k + 1) * E), vector);
+    for (let i = 0; i < C; i++) {
+      const la = mesh.latCell[i], lo = mesh.lonCell[i], x = vector[3 * i], y = vector[3 * i + 1], z = vector[3 * i + 2];
+      east[i] = -Math.sin(lo) * x + Math.cos(lo) * y;
+      north[i] = -Math.sin(la) * Math.cos(lo) * x - Math.sin(la) * Math.sin(lo) * y + Math.cos(la) * z;
+    }
+  }
+  function zonal(state) {
+    const [pi, theta, u] = state, uBar = [], tBar = [];
+    for (let k = 0; k <= L; k++) { winds(u, k); uBar.push(bandMean(east)); tBar.push(bandMean(temperature(theta, pi, k))); }
+    return { uBar, tBar };
+  }
+  const add = (name, k, values) => { for (let b = 0; b < bands; b++) sums[name][k * bands + b] += values[b]; };
+  let start = null, startTime = 0;
+  return {
+    start(state, time) { start = zonal(state); startTime = time; },
+    waves(eastAcceleration) {
+      for (let k = 0; k < L; k++) add('waves', k, bandMean(eastAcceleration.subarray(k * C, (k + 1) * C)));
+      counts.waves++;
+    },
+    radiation(thetaBefore, thetaAfter, pi, dt) {
+      for (let k = 0; k < L; k++) add('radiation', k, bandMean(Float64Array.from({ length: C }, (_, i) => (thetaAfter[k * C + i] - thetaBefore[k * C + i]) / dt * (pi[i] / P0) ** KAPPA * shape[k])));
+      counts.radiation++;
+    },
+    sample(state) {
+      const [pi, theta, u] = state, piBar = bandMean(pi);
+      verticalVelocity(mesh, core, pi, u, 'surface', unit, new Float32Array(C), flows);
+      const uBar = [], vBar = [], tBar = [], uv = [], vt = [], sdot = [], uCell = [], tCell = [];
+      for (let k = 0; k <= L; k++) {
+        winds(u, k);
+        const T = temperature(theta, pi, k), ub = bandMean(east), vb = bandMean(north), tb = bandMean(T);
+        uCell.push(Float64Array.from(east)); tCell.push(T);
+        const uvRaw = bandMean(Float64Array.from({ length: C }, (_, i) => east[i] * north[i])), vtRaw = bandMean(Float64Array.from({ length: C }, (_, i) => north[i] * T[i]));
+        uBar.push(ub); vBar.push(vb); tBar.push(tb);
+        uv.push(uvRaw.map((x, b) => x - ub[b] * vb[b])); vt.push(vtRaw.map((x, b) => x - vb[b] * tb[b]));
+      }
+      const flowBar = [], eddyFluxU = [new Float64Array(bands)], eddyFluxT = [new Float64Array(bands)];
+      for (let k = 0; k <= L + 1; k++) { flowBar.push(bandMean(flows.subarray(k * C, (k + 1) * C))); sdot.push(flowBar[k].map((x, b) => x / piBar[b])); }
+      for (let k = 1; k <= L; k++) {
+        const face = (x) => Float64Array.from({ length: C }, (_, i) => 0.5 * (x[k - 1][i] + x[k][i])), fu = face(uCell), ft = face(tCell), w = flows.subarray(k * C, (k + 1) * C);
+        const uMean = bandMean(fu), tMean = bandMean(ft);
+        eddyFluxU.push(bandMean(Float64Array.from({ length: C }, (_, i) => w[i] * fu[i])).map((x, b) => x - flowBar[k][b] * uMean[b]));
+        eddyFluxT.push(bandMean(Float64Array.from({ length: C }, (_, i) => w[i] * ft[i])).map((x, b) => x - flowBar[k][b] * tMean[b]));
+      }
+      for (let k = 0; k < L; k++) {
+        const coriolis = new Float64Array(bands), eddy = new Float64Array(bands), vertical = new Float64Array(bands), verticalT = new Float64Array(bands), meridionalT = new Float64Array(bands), eddyT = new Float64Array(bands);
+        const thickness = levels[k + 1] - levels[k];
+        const eddyVertical = eddyFluxU[k].map((upper, b) => -(eddyFluxU[k + 1][b] - upper) / (piBar[b] * thickness)), eddyVerticalT = eddyFluxT[k].map((upper, b) => -(eddyFluxT[k + 1][b] - upper) / (piBar[b] * thickness));
+        const ucos = uBar[k].map((x, b) => x * cos[b]), uvcos = uv[k].map((x, b) => x * cos[b] * cos[b]), vtcos = vt[k].map((x, b) => x * cos[b]);
+        for (let b = 0; b < bands; b++) {
+          const f = 2 * omega * Math.sin(lat[b]), up = sdot[k][b], down = sdot[k + 1][b];
+          const gradient = (x) => {
+            const below = (x[k + 1][b] - x[k][b]) / (sigmaMid[k + 1] - sigmaMid[k]);
+            const above = k > 0 ? (x[k][b] - x[k - 1][b]) / (sigmaMid[k] - sigmaMid[k - 1]) : 0;
+            return 0.5 * (up * above + down * below);
+          };
+          coriolis[b] = vBar[k][b] * (f - slope(ucos, b) / (a * cos[b]));
+          eddy[b] = -slope(uvcos, b) / (a * cos[b] * cos[b]);
+          vertical[b] = -gradient(uBar);
+          verticalT[b] = -gradient(tBar) + KAPPA * tBar[k][b] * 0.5 * (up + down) / sigmaMid[k];
+          meridionalT[b] = -vBar[k][b] * slope(tBar[k], b) / a;
+          eddyT[b] = -slope(vtcos, b) / (a * cos[b]);
+        }
+        add('coriolis', k, coriolis); add('eddy', k, eddy); add('vertical', k, vertical); add('verticalT', k, verticalT); add('meridionalT', k, meridionalT); add('eddyT', k, eddyT); add('eddyVertical', k, eddyVertical); add('eddyVerticalT', k, eddyVerticalT);
+        for (const [name, eddyRate, meanRate] of [['sponge', rates[k], 0], ['friction', 0, friction[k]]]) {
+          if (!(eddyRate > 0 || meanRate > 0)) continue;
+          damped.set(u.subarray(k * E, (k + 1) * E));
+          dampEddies(mesh, geometry, damped, eddyRate, 1, means, meanRate);
+          for (let e = 0; e < E; e++) damped[e] -= u[k * E + e];
+          winds(damped, 0);
+          add(name, k, bandMean(east));
+        }
+      }
+      for (const name of ['sponge', 'friction', 'coriolis', 'eddy', 'vertical', 'eddyVertical', 'verticalT', 'meridionalT', 'eddyT', 'eddyVerticalT']) counts[name]++;
+    },
+    line(day, state, time) {
+      const now = zonal(state), days = (time - startTime) / 86400, perDay = 86400;
+      const over = (values, k, from, to) => {
+        let sum = 0, w = 0;
+        for (let b = 0; b < bands; b++) { const deg = lat[b] * DEG; if (deg > from && deg < to) { sum += area[b] * values[k * bands + b]; w += area[b]; } }
+        return sum / w;
+      };
+      const flat = (rows) => { const out = new Float64Array(L * bands); rows.slice(0, L).forEach((row, k) => out.set(row, k * bands)); return out; };
+      const totalU = flat(now.uBar.map((row, k) => row.map((x, b) => (x - start.uBar[k][b]) / days))), totalT = flat(now.tBar.map((row, k) => row.map((x, b) => (x - start.tBar[k][b]) / days)));
+      const mean = (name) => sums[name].map((x) => (counts[name] ? x / counts[name] : 0) * perDay);
+      const terms = Object.fromEntries(names.map((name) => [name, mean(name)]));
+      const out = { day, layers: Array.from({ length: L }, (_, k) => +(500 * (levels[k] + levels[k + 1])).toPrecision(3)), samples: counts.coriolis, bands: {} };
+      for (const [name, from, to] of BUDGET_BANDS) {
+        const row = (k) => {
+          const g = (x) => over(x, k, from, to), u = g(totalU), t = g(totalT);
+          const r = (x) => Math.round(100 * x) / 100;
+          return {
+            u: r(over(flat(now.uBar), k, from, to)), du: r(u), waves: r(g(terms.waves)), sponge: r(g(terms.sponge)), friction: r(g(terms.friction)), resolved: r(u - g(terms.waves) - g(terms.sponge) - g(terms.friction)),
+            coriolis: r(g(terms.coriolis)), eddy: r(g(terms.eddy)), vertical: r(g(terms.vertical)), eddyVertical: r(g(terms.eddyVertical)),
+            T: r(over(flat(now.tBar), k, from, to)), dT: r(t), radiation: r(g(terms.radiation)), dynamics: r(t - g(terms.radiation)), verticalT: r(g(terms.verticalT)), meridionalT: r(g(terms.meridionalT)), eddyT: r(g(terms.eddyT)), eddyVerticalT: r(g(terms.eddyVerticalT)),
+          };
+        };
+        out.bands[name] = Array.from({ length: L }, (_, k) => row(k));
+      }
+      for (const name of names) { sums[name].fill(0); counts[name] = 0; }
+      start = now; startTime = time;
+      return `top budget day ${day} ${JSON.stringify(out)}`;
+    },
+  };
+}
+
 // The zonal mean of the east component of a treatment's wind tendency.
 function zonalForce(mesh, tendency, layers, band, bands) {
   const C = mesh.nCells, E = mesh.nEdges, vector = new Float64Array(3 * C);
@@ -137,8 +284,8 @@ function zonalForce(mesh, tendency, layers, band, bands) {
   });
 }
 
-// The wind tendency of the top treatment on the CPU engine: the Rayleigh drag
-// and the sponge that SURFACE names and the gravity-wave drag of
+// The wind tendency of the top treatment on the CPU engine: the Rayleigh drag,
+// the sponge and the lid friction that SURFACE names and the gravity-wave drag of
 // GRAVITY_WAVES, each with the model's defaults where they are not named.
 function topTendency(mesh, levels, state, options, waves) {
   const core = createSigmaCore(mesh, { levels });
@@ -147,12 +294,13 @@ function topTendency(mesh, levels, state, options, waves) {
   const K = levels.length - 1, E = mesh.nEdges, out = [new Float64Array(mesh.nCells), new Float64Array(K * mesh.nCells), new Float64Array(K * E)];
   surface.applyTop(state, out);
   const rates = spongeRates(core.sigmaMid, options.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), options.spongeDays ?? SPONGE.days);
-  if (rates.some((r) => r > 0)) {
+  const friction = lidFrictionRates(levels, options.lidFriction === undefined ? lidFrictionFor(sigmaGridName(levels)) : options.lidFriction);
+  if (rates.some((r) => r > 0) || friction.some((r) => r > 0)) {
     const geometry = spongeGeometry(mesh), means = new Float64Array(2 * geometry.bands), layer = new Float64Array(E);
     rates.forEach((rate, k) => {
-      if (!(rate > 0)) return;
+      if (!(rate > 0 || friction[k] > 0)) return;
       layer.set(state[2].subarray(k * E, (k + 1) * E));
-      dampEddies(mesh, geometry, layer, rate, 1, means);
+      dampEddies(mesh, geometry, layer, rate, 1, means, friction[k]);
       for (let e = 0; e < E; e++) out[2][k * E + e] += layer[e] - state[2][k * E + e];
     });
   }

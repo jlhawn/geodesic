@@ -80,7 +80,11 @@
 // STOP_AFTER_STEPS (for tests: stop as on SIGTERM once this many steps
 // have run), STRATOSPHERE (1: two more daily lines, the layer-mean
 // temperature of every layer above 200 hPa, global and by zone, and those
-// layers' winds, see scripts/upperAtmosphere.mjs).
+// layers' winds, see scripts/upperAtmosphere.mjs), TOP_BUDGET (a number of
+// steps a day, dividing the day's, at which the zonal-mean budgets of the top
+// six layers' wind and temperature are sampled, read out daily as the 'top
+// budget' line, see createTopBudget in scripts/upperAtmosphere.mjs; with
+// BATCH 1 only).
 // A fresh start can take from saved states: FROM, a state at
 // the same N, gives the ocean, the land, the sea-surface temperature of
 // its mixed layer and the land-surface temperature and, with
@@ -118,7 +122,7 @@ import { CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { freshJumpDue } from '../js/physics/land.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
-import { upperWindLine } from './upperAtmosphere.mjs';
+import { upperWindLine, createTopBudget } from './upperAtmosphere.mjs';
 
 const BOXES = {
   sahara: [16, 30, -10, 32], arabia: [16, 30, 38, 55], sahel: [8, 16, -15, 35], india: [15, 28, 72, 88], congo: [-5, 5, 12, 30], amazon: [-10, 3, -70, -50],
@@ -278,6 +282,26 @@ const day0 = Math.round((model.time - startStep * dt) / 86400);
 let day = day0, step = startStep, dayStart = startStep, taken = 0, iceNorth = 0, iceSouth = 0;
 log(`ASR, atmosphere, OLR and albedo below are day means over the day's ${perDay} steps${startStep ? ` (day ${day0 + 1}'s over its last ${perDay - startStep})` : ''}, the albedo the day's reflected over its incoming sunlight${RADIATION.clearSkyPass ? ', and so are SWCRE and LWCRE, the shortwave (ASR less clear-sky ASR) and longwave (clear-sky OLR less OLR) cloud effects' : ''}`);
 const halted = () => stop.requested || taken >= STOP_AFTER_STEPS;
+const TOP_BUDGET = Number(process.env.TOP_BUDGET ?? 0), budget = TOP_BUDGET ? createTopBudget(mesh, levels, { surface: SURFACE }) : null;
+let budgetArmed = false;
+if (budget) {
+  if (BATCH !== 1 || perDay % TOP_BUDGET) throw new Error(`TOP_BUDGET needs BATCH 1 and a number of samples dividing the day's ${perDay} steps`);
+  const S = model.gpu.layout.S, top = 6 * C, ocean = model.gpu.hooks.beforePhysics;
+  let before = null;
+  model.gpu.hooks.beforePhysics = async (dt, n) => {
+    if (ocean) await ocean(dt, n);
+    if (budgetArmed) [before] = await readRanges(model.gpu.device, model.gpu.buffers.S, [{ offset: S.TH, length: top }]);
+  };
+  model.gpu.hooks.afterPhysics = async (dt) => {
+    if (!budgetArmed) return;
+    const [after, pi] = await readRanges(model.gpu.device, model.gpu.buffers.S, [{ offset: S.TH, length: top }, { offset: S.PI, length: C }]);
+    const [east] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.GWE, length: top }]);
+    budget.radiation(before, after, pi, dt);
+    budget.waves(east);
+  };
+  await model.sync();
+  budget.start(state, model.time);
+}
 const ZONES = [['global', -90, 90], ['20S-20N', -20, 20], ['35-55N', 35, 55], ['35-55S', -55, -35], ['70-90N', 70, 90], ['70-90S', -90, -70]];
 function stratosphereLine(day) {
   const kappa = R_DRY / CP_DRY, K = levels.length - 1, rows = [];
@@ -299,7 +323,9 @@ let landAge = model.land.record[0];
 for (;;) {
   if (BATCH === 1) {
     while (step < perDay) {
+      budgetArmed = !!budget && (step + 1) % (perDay / TOP_BUDGET) === 0;
       await model.step(dt); recorder?.step(); step++; taken++;
+      if (budgetArmed) { await model.sync(); budget.sample(state); budgetArmed = false; }
       if (step % 8 === 0) await model.settle();
       if (halted() && step % everySteps === 0) break;
     }
@@ -336,6 +362,7 @@ for (;;) {
   const minutes = (performance.now() - start) / 60000;
   log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}`);
   if (STRATOSPHERE) { await model.sync(); log(stratosphereLine(day)); log(upperWindLine(mesh, levels, state, dt, day)); }
+  if (budget) { await model.sync(); log(budget.line(day, state, model.time)); }
   if (!Number.isFinite(d.meanSurfaceT) || !Number.isFinite(d.maxWind) || !Number.isFinite(d.oceanSpeed)) { log(`NaN on day ${day}; stopping`); await hook.drain(); process.exit(2); }
   if (jumpDays.includes(day) || (LAND_JUMPS === 'fresh' && freshJumpDue(model.land.record, landAge, model.land.record[0]))) log(jumpLine(day, await model.land.jump()));
   landAge = model.land.record[0];
