@@ -5908,7 +5908,16 @@ nine64_day0091 (one N=64 step) absorbed plus reflected is the beam to
 shortwave heating the atmosphere's absorption to 3.4·10⁻¹³, their
 longwave heating σT_s⁴ less the downward longwave less the OLR to
 5.1·10⁻¹³ (GPU 5.6·10⁻⁴); CPU against GPU per cell, ASR rms 1.6·10⁻⁷ and
-1.3·10⁻⁶ of the field, OLR 6.8·10⁻⁷ and 7.5·10⁻⁷.
+1.3·10⁻⁶ of the field, OLR 6.8·10⁻⁷ and 7.5·10⁻⁷; five64_day2190,
+seven64_day0365 and m21a64_day0365 load and close alike. On the
+midlatitude-summer profile with 100 g/m² of liquid at 285 K (790 hPa)
+under 20 g/m² of ice at 220 K (195 hPa) in every N=4 column, no ozone,
+the change of the OLR and of the downward longwave is the sum over
+g-points of each layer's phase emissivity acting on the clear-sky fluxes
+through the gas transmittances: LWCRE 129.4 at the top and 63.7 at the
+surface overcast, 128.2 and 39.0 under the uniform cover (the liquid
+layer's 0.521), the CPU to 10⁻¹³ and the GPU to 7·10⁻⁵ W/m²
+(`test/gasCloud.test.mjs`).
 `scripts/radiationBenchmark.mjs` prints the gas branch's table to the
 character. Two deck parity tests (`test/frameGpu.test.mjs`,
 `test/gpuModel.test.mjs`) run the gray gases: under the spectral ones a
@@ -5979,7 +5988,12 @@ troposphere's RH_i 0.57, 0.58, 0.59, 0.59, 0.59, 0.59, 0.59, 0.58, 0.58,
 0.58 (integration 0.55 → 0.49), the warm pool's 0.73, 0.70, 0.71, 0.73,
 0.72, 0.70, 0.68, 0.70, 0.73, 0.73 (0.69 → 0.56); high cover 0.281,
 0.265, 0.266, 0.264, 0.257, 0.255, 0.251, 0.252, 0.250, 0.251 (0.264 →
-0.175); total cover 0.48 → 0.54.
+0.175); total cover 0.48 → 0.54. The clear-sky OLR (OLR + LWCRE) 263.8,
+261.6, 259.8, 259.2, 259.4, 259.7, 259.9, 260.3, 260.5 and 260.7 W/m²
+(integration 263.6 on day 186; CERES EBAF about 266, Loeb et al. 2018),
+where the gases on the four standard atmospheres give RRTMG's clear-sky
+OLR to 0.4 W/m² (M21) and eight64_day0183 itself gives 264.5 at its
+first step.
 
 The Arctic three days from nine64_day0091 (the scratchpad diagnostic,
 means over every step over the cells iced at the start, leads included,
