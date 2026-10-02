@@ -14,7 +14,7 @@ fall below zero where the quadratic of the score can, and the defaults
 ('base') for reference.
 
 A results.csv with the second sweep's terms (sweep2.mjs) takes the second
-sweep's parameters and weights, holds both minima at least 10 % of each
+sweep's parameters that it has columns for and its weights, holds both minima at least 10 % of each
 range inside the box, and lists as candidates the four best design
 points, qmin and base, none with stratiformHours below cloudHours.
 """
@@ -30,12 +30,13 @@ PARAMETERS = [
 KEYS = [p[0] for p in PARAMETERS]
 WEIGHTS = {'balance': 4, 'albedo': 2, 'rain': 1, 'sepLow': 1, 'peruLow': 1, 'sepLwp': 1, 'peruLwp': 1, 'sepRain': 1, 'peruRain': 1, 'itczRain': 1, 'itczPeak': 0.5, 'zonalPeak': 0.5, 'stress': 1, 'arctic': 2}
 BOX = 1
-SECOND = 'fBalance' in open(f'{SWEEP}/results.csv').readline().split(',')
+HEADER = open(f'{SWEEP}/results.csv').readline().strip().split(',')
+SECOND = 'fBalance' in HEADER
 if SECOND:
-    PARAMETERS = [
+    PARAMETERS = [p for p in [
         ('cloudScattering', 55, 110), ('cloudAbsorption', 65, 260), ('upperHours', 1, 8), ('stratiformHours', 2, 8), ('cloudHours', 0.5, 2),
         ('varianceScale', 2, 10), ('plumeRainRate', 1e-3, 6e-3), ('criticalHumidity', 0.7, 0.9), ('stratusWaterMax', 0.1, 0.3), ('cumulusCeiling', 1500, 2500),
-    ]
+    ] if p[0] in HEADER]
     WEIGHTS = {'fBalance': 0.4, 'fAlbedo': 0.3, 'fOlr': 0.1, 'fSwcre': 0.2, 'fLwcre': 0.2, 'fRain': 0.1, 'balance': 2, 'albedo': 1, 'olr': 1, 'swcre': 2, 'lwcre': 2,
                'sepLow': 1, 'peruLow': 1, 'sepDeckWater': 1, 'peruDeckWater': 1, 'sepThickness': 0.5, 'peruThickness': 0.5, 'sepRain': 1, 'itczRain': 1, 'itczPeak': 0.5, 'stress': 0.5, 'arctic': 2}
     BOX = 0.8
