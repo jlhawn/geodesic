@@ -105,20 +105,21 @@ const jet = (row, south) => {
   return `${best.toFixed(0)}@${at.toFixed(0)}`;
 };
 
-const equator = (row) => {
+const bandMean = (row, from, to) => {
   let sum = 0, n = 0;
-  row.uMean.forEach((u, b) => { if (Math.abs(-90 + (b + 0.5) * row.bandWidth) < 5) { sum += u; n++; } });
+  row.uMean.forEach((u, b) => { const lat = -90 + (b + 0.5) * row.bandWidth; if (lat > from && lat < to) { sum += u; n++; } });
   return (sum / n).toFixed(0);
 };
 
 // One line: per layer above 200 hPa, the strongest zonal-mean westerly
 // poleward of 20 degrees in each hemisphere (m/s at the band's latitude,
-// 2.5-degree bands) and the zonal-mean wind within 5 degrees of the
-// equator, the largest edge wind, the eddy kinetic energy, the eddy
-// temperature's rms, the rms divergence and the Courant numbers.
+// 2.5-degree bands), the zonal-mean wind within 5 degrees of the
+// equator and over 57.5-62.5 S and N, the largest edge wind, the eddy
+// kinetic energy, the eddy temperature's rms, the rms divergence and the
+// Courant numbers.
 export function upperWindLine(mesh, levels, state, dt, day) {
   const { rows } = upperAtmosphere(mesh, levels, state, { bandWidth: 2.5, dt });
-  return `upper winds day ${day} (jet N / jet S / 5S-5N, m/s@lat; max wind m/s; eddy KE m²/s²; eddy T rms K; divergence rms 1e-6/s; Courant horizontal/vertical): ` + rows.map((r) => `${r.pressure.toPrecision(3)} hPa ${jet(r, false)}/${jet(r, true)}/${equator(r)} ${r.maxWind.toFixed(0)} ${r.eke.toFixed(0)} ${r.tRms.toFixed(1)} ${(1e6 * r.divRms).toFixed(1)} ${r.courant.toFixed(2)}/${r.verticalCourant.toFixed(2)}`).join('; ');
+  return `upper winds day ${day} (jet N / jet S / 5S-5N / 60S / 60N, m/s@lat; max wind m/s; eddy KE m²/s²; eddy T rms K; divergence rms 1e-6/s; Courant horizontal/vertical): ` + rows.map((r) => `${r.pressure.toPrecision(3)} hPa ${jet(r, false)}/${jet(r, true)}/${bandMean(r, -5, 5)}/${bandMean(r, -62.5, -57.5)}/${bandMean(r, 57.5, 62.5)} ${r.maxWind.toFixed(0)} ${r.eke.toFixed(0)} ${r.tRms.toFixed(1)} ${(1e6 * r.divRms).toFixed(1)} ${r.courant.toFixed(2)}/${r.verticalCourant.toFixed(2)}`).join('; ');
 }
 
 // The zonal mean of the east component of a treatment's wind tendency.
