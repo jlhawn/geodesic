@@ -66,7 +66,7 @@ test('the lid friction damps the zonal mean at its rate, removing the axial angu
   assert.ok(waveLeft < 0.05 * (1 - keep) * rms(mean), `the wave moved by ${waveLeft} m/s rms`);
 });
 
-test('the lid friction profiles averaged over each layer\'s mass reach only the layers above 65 km', () => {
+test('the lid friction profiles averaged over each layer\'s mass reach only the layers above 65 km, and bl36 alone takes one by default', () => {
   for (const name of ['bl36', 'bl34']) {
     const levels = sigmaInterfaces(name);
     for (const [profile, points] of Object.entries(LID_FRICTION)) {
@@ -85,6 +85,12 @@ test('the lid friction profiles averaged over each layer\'s mass reach only the 
   assert.ok(Math.abs(flat[0] * 4 * 86400 - share) < 1e-3, `a uniform four-day rate above 65 km over ${(100 * share).toFixed(1)} % of the top layer's mass: ${flat[0] * 4 * 86400}`);
   assert.equal(lidFrictionFor('bl34'), null);
   assert.equal(lidFrictionFor('cam26'), null);
+  assert.equal(lidFrictionFor('bl36'), 'rind');
+  for (const name of ['bl34', 'bl36']) {
+    const levels = sigmaInterfaces(name), model = createModel(new Grid(4), { ocean: false, levels });
+    assert.deepEqual(Array.from(model.core.spongeMeanRates), Array.from(lidFrictionRates(levels, lidFrictionFor(name))), `the model takes ${name}'s lid friction`);
+  }
+  assert.ok(Math.abs(1 / (lidFrictionRates(bl36, 'rind')[0] * 86400) - 2.71) < 0.01 && Math.abs(1 / (lidFrictionRates(bl36, 'holtonWehrbein')[0] * 86400) - 9.30) < 0.01, 'the 0-0.3 hPa layer\'s decay times');
   assert.throws(() => lidFrictionRates(bl36, 'none of these'));
 });
 

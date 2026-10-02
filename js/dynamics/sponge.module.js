@@ -120,10 +120,11 @@ export function lidFrictionRates(levels, profile, p0 = 101325) {
 }
 
 /*
- * The lid friction of a grid by name: none.
+ * The lid friction of a grid by name: the GISS profile on bl36, whose
+ * 0-0.3 hPa layer it reaches alone; none on the other grids.
  */
-export function lidFrictionFor() {
-  return null;
+export function lidFrictionFor(gridName) {
+  return gridName === 'bl36' ? 'rind' : null;
 }
 
 /*
