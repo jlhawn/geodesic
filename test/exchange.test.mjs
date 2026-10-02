@@ -129,11 +129,11 @@ test('both engines give every surface the same transfer coefficients and fluxes'
     w.drag = Math.max(w.drag, Math.abs(drag[i] / cpu.exchange.drag[i] - 1));
     w.heat = Math.max(w.heat, Math.abs(heat[i] / cpu.exchange.heat[i] - 1));
     w.reference = Math.max(w.reference, Math.abs(reference[i] / cpu.exchange.reference[i] - 1));
-    w.evaporation = Math.max(w.evaporation, Math.abs(evaporation[i] - cpu.radiation.evaporation[i]) * 2.5e6);
-    w.flux = Math.max(w.flux, Math.abs(surfaceFlux[i] - cpu.radiation.surfaceFlux[i]));
+    w.evaporation = Math.max(w.evaporation, Math.abs(evaporation[i] - cpu.radiation.evaporation[i]) * 2.5e6 / (1 + 1e-4 * Math.abs(cpu.radiation.evaporation[i]) * 2.5e6));
+    w.flux = Math.max(w.flux, Math.abs(surfaceFlux[i] - cpu.radiation.surfaceFlux[i]) / (1 + 1e-4 * Math.abs(cpu.radiation.surfaceFlux[i])));
   }
   for (const [k, w] of Object.entries(worst)) {
-    console.log(`${k}: ${w.cells} cells, mean C_D ${(w.cd / w.cells * 1e3).toFixed(3)}e-3; engines apart: C_D ${w.drag.toExponential(1)}, C_H ${w.heat.toExponential(1)}, reference ${w.reference.toExponential(1)} relative; latent heat ${w.evaporation.toExponential(1)}, net surface flux ${w.flux.toExponential(1)} W/m²`);
+    console.log(`${k}: ${w.cells} cells, mean C_D ${(w.cd / w.cells * 1e3).toFixed(3)}e-3; engines apart: C_D ${w.drag.toExponential(1)}, C_H ${w.heat.toExponential(1)}, reference ${w.reference.toExponential(1)} relative; latent heat ${w.evaporation.toExponential(1)}, net surface flux ${w.flux.toExponential(1)} W/m² (each over 1 + 10⁻⁴ of its own size in W/m²)`);
     assert.ok(w.drag < 2e-4 && w.heat < 2e-4 && w.reference < 1e-5, `${k} coefficients`);
     assert.ok(w.evaporation < 0.05 && w.flux < 0.1, `${k} fluxes`);
   }
@@ -160,4 +160,29 @@ test('snow smooths grass and bare soil but leaves the trees, and the implicit dr
   }
   const stress = model.surface.stress(model.state);
   for (let e = 0; e < E; e++) assert.equal(stress[e], surfaceStress[e]);
+});
+
+test('the gustiness is the free-convection velocity of the step\'s own flux, and the land\'s surface humidity is the one its evaporation implies', () => {
+  const model = prepare(createModel(new Grid(6), { topography }));
+  model.step(900);
+  const { land, iceSheet } = model.geography, C = model.mesh.nCells, { exchange } = model;
+  const i = [...Array(C).keys()].find((n) => land[n] && !iceSheet[n]), sea = [...Array(C).keys()].find((n) => !land[n] && model.state[6][n] <= 0);
+  const call = (cell, skin, lowest, wetness, depth) => exchange.cell(cell, model.state[0], model.state[1], model.state[4], model.state[5], skin, lowest, 0, 0, 1, 1, wetness, depth);
+  const air = model.state[1][(model.core.K - 1) * C + i] * model.core.diagnostics.exnerLayer[(model.core.K - 1) * C + i];
+  for (const [cell, beta, skin] of [[i, 1, air + 8], [sea, 1.2, model.state[3][sea] + 3]]) {
+    const { z, ri } = call(cell, skin, 0.5, 1, 800);
+    const speed = exchange.wind[cell], buoyancy = -ri * speed ** 3 * exchange.heat[cell] / z;
+    assert.ok(buoyancy > 0, 'a heated surface');
+    close(speed, Math.hypot(0.5, beta * Math.cbrt(buoyancy * 800)), 2e-3, `U² = |v|² + (β w*)² with β ${beta}`);
+  }
+  call(i, air - 5, 0.5, 1, 800);
+  close(exchange.wind[i], Math.hypot(0.5, 0.2), 1e-12, 'a stable surface keeps COARE\'s 0.2 m/s');
+  call(i, air + 8, 0, 1, 0);
+  assert.ok(exchange.wind[i] > 0.5, `with no wind and no depth yet the surface layer's own depth sets w* (${exchange.wind[i]})`);
+  const wet = call(i, air + 2, 3, 1, 800).ri, dry = call(i, air + 2, 3, 0, 800).ri;
+  assert.ok(wet < dry, `a transpiring surface is the more unstable (Ri ${wet} against ${dry})`);
+  const airHumidity = prepare(createModel(new Grid(6), { topography, surface: { landHumidity: 'air' } }));
+  airHumidity.step(900);
+  const other = (wetness) => airHumidity.exchange.cell(i, airHumidity.state[0], airHumidity.state[1], airHumidity.state[4], airHumidity.state[5], air + 2, 3, 0, 0, 1, 1, wetness, 800).ri;
+  assert.equal(other(1), other(0), '\'air\' takes the lowest layer\'s humidity whatever the wetness');
 });

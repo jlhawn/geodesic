@@ -154,16 +154,16 @@ test('without the scheme the model has no orographic drag', () => {
   assert.equal(model.orography, null);
 });
 
-test('both engines lay the same blocking, wave drag and stress', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both engines lay the same blocking, wave drag, stress and gusty wind', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const levels = sigmaInterfaces('bl34'), dt = 1350;
   const cpu = prepare(createModel(new Grid(16), { topography, levels }));
   const gpu = prepare(await createGpuModel(new Grid(16), { topography, levels }));
   cpu.step(dt); await gpu.step(dt); await gpu.settle();
   const PH = gpu.gpu.layout.PH, C = cpu.mesh.nCells, E = cpu.mesh.nEdges, K = cpu.core.K;
-  const [beta, wave, stress, launch, drag] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [['OBETA', K * C], ['OWAVE', K * C], ['OSTRESS', E], ['OLAUNCH', C], ['DRAG', C]].map(([name, length]) => ({ offset: PH[name], length })));
+  const [beta, wave, stress, launch, wind, drag] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [['OBETA', K * C], ['OWAVE', K * C], ['OSTRESS', E], ['OLAUNCH', C], ['XWIND', C], ['DRAG', C]].map(([name, length]) => ({ offset: PH[name], length })));
   const apart = (a, b) => { let worst = 0, scale = 0; for (let n = 0; n < b.length; n++) { worst = Math.max(worst, Math.abs(a[n] - b[n])); scale = Math.max(scale, Math.abs(b[n])); } return worst / scale; };
   const o = cpu.orography;
-  const report = { beta: apart(beta, o.beta), wave: apart(wave, o.wave), stress: apart(stress, o.stress), launch: apart(launch, o.launch), drag: apart(drag, cpu.exchange.drag) };
+  const report = { beta: apart(beta, o.beta), wave: apart(wave, o.wave), stress: apart(stress, o.stress), launch: apart(launch, o.launch), wind: apart(wind, cpu.exchange.wind), drag: apart(drag, cpu.exchange.drag) };
   console.log(`engines apart, largest difference over largest value: ${Object.entries(report).map(([k, v]) => `${k} ${v.toExponential(1)}`).join(', ')}`);
   for (const [k, v] of Object.entries(report)) assert.ok(v < 1e-3, `${k} ${v}`);
   const off = await createGpuModel(new Grid(4), { topography, orography: false });

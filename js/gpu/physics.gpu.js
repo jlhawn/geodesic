@@ -665,14 +665,15 @@ export const PHYSICS_KERNELS = {
   let adif = select(cover * iceDif + (1.0 - cover) * ALB_DIF_WATER, landAlbedo, onLand);
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
   let ts = select(skin, cover * skin + (1.0 - cover) * FREEZING, !onLand && ice > 0.0 && cover < 1.0);
-  if (ROUGH) {
-    let exchange = surfaceExchange(i, pi, ts, ws, select(0.0, cover, !onLand), snow0, veg0, trees0, onLand, onIceSheet);
-    PH[PH_DRAG + i] = exchange.x; PH[PH_HEATX + i] = exchange.y; PH[PH_REFX + i] = exchange.z;
-  }
   let warmth = clamp((ts - GROWCOLD) / (GROWWARM - GROWCOLD), 0.0, 1.0);
-  let aero = PH[PH_HEATX + i] * max(ws, GUST);
   let roots = min(1.0, soil0 / (WETT * bucket));
   let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);
+  if (ROUGH) {
+    let before = select(0.0, xWetness(PH[PH_HEATX + i] * xWind(i, ws), roots, bareWet, veg0, snow0, warmth), onLand);
+    let exchange = surfaceExchange(i, pi, ts, ws, select(0.0, cover, !onLand), snow0, veg0, trees0, onLand, onIceSheet, before, PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV);
+    PH[PH_DRAG + i] = exchange.x; PH[PH_HEATX + i] = exchange.y; PH[PH_REFX + i] = exchange.z;
+  }
+  let aero = PH[PH_HEATX + i] * xWind(i, ws);
   let canopyWet = veg0 * roots / (1.0 + RSTOM * aero / max(0.05, warmth));
   let landWet = select(roots, bareWet + canopyWet, VEGETATED);
   let wetness = select(1.0, select(landWet, 1.0, snow0 > 0.0), onLand);
@@ -692,7 +693,7 @@ export const PHYSICS_KERNELS = {
   if (STRATUS && MLM_DECK && !onLand && 1.0 - cover > 0.0 && mixedDepth > 0.0) {
     let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
     let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-    let exchange = rho * PH[PH_HEATX + i] * max(ws, GUST);
+    let exchange = rho * PH[PH_HEATX + i] * xWind(i, ws);
     let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
     let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
     var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0, vec3<f32>(0.0, 0.0, 0.0));
@@ -846,11 +847,11 @@ export const PHYSICS_KERNELS = {
   let outgoing = v.x + g.x + w.x; let back = v.y + g.y + w.y;
   let airT = temperature[K - 1];
   let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-  let exchange = rho * PH[PH_HEATX + i] * max(ws, GUST);
+  let exchange = rho * PH[PH_HEATX + i] * xWind(i, ws);
   let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
   let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
   if (ROUGH) { PH[PH_BUOY + i] = GRAV / IN[S_TH + bottom] * (sensible / (rho * CP * D[D_EXM + bottom]) + 0.61 * IN[S_TH + bottom] * evap / rho); }
-  let airQs = qsat(airT, pi); let airSlope = airQs * 4302.645 / ((airT - 29.65) * (airT - 29.65)); let conductance = PH[PH_REFX + i] * max(ws, GUST);
+  let airQs = qsat(airT, pi); let airSlope = airQs * 4302.645 / ((airT - 29.65) * (airT - 29.65)); let conductance = PH[PH_REFX + i] * xWind(i, ws);
   let potential = (airSlope * (absorbed - surfaceEmission + back) + rho * CP * conductance * (airQs - IN[S_Q + bottom])) / (LHEAT * airSlope + CP * (1.0 + REF_RESIST * conductance));
   netFlux[K - 1] += sensible;
   let net = absorbed - surfaceEmission + back - sensible - LHEAT * evap;
@@ -1067,7 +1068,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   let pi = IN[S_PI + i]; let base = (K - 1) * C + i;
   let bottomWind = cellWind(i, K - 1);
   let speed = length(bottomWind);
-  let friction = sqrt(PH[PH_DRAG + i]) * max(speed, GUST);
+  let friction = sqrt(PH[PH_DRAG + i]) * xWind(i, speed);
   let zb = (D[D_GEO + base] + LV[L_GABS + K - 1]) / GRAV;
   var found = false; var riPrev = 0.0; var zPrev = zb; var depth = zb;
   for (var k = K - 2; k >= KTOP; k--) {
@@ -1087,7 +1088,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   for (var k = KTOP; k < K; k++) { PH[PH_MIX + k * C + i] = 0.0; }
   PH[PH_ENTRAIN + i] = 0.0;
   let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
-  if (IMPLICIT_DRAG) { PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * PH[PH_DRAG + i] * max(speed, GUST); }
+  if (IMPLICIT_DRAG) { PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * PH[PH_DRAG + i] * xWind(i, speed); }
   let buoyancy = select(GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture), PH[PH_BUOY + i], ROUGH);
   PH[PH_BUOY + i] = buoyancy; PH[PH_USTAR + i] = friction;
   if (MOIST_BL) { blMoist(i, pi, depth - zb, zb, buoyancy, friction); return; }

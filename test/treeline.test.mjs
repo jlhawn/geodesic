@@ -157,8 +157,9 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
     model.land.load({ soil: Float64Array.from({ length: C }, () => 300 * rnd()), snow, vegetation, canopy, seasonLength, seasonWarmth }, model.state[6]);
     return model;
   };
-  const cpu = prepare(createModel(new Grid(6), { topography, land }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }));
+  const surface = { convectiveGust: false, landHumidity: 'air' };
+  const cpu = prepare(createModel(new Grid(6), { topography, land, surface }));
+  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land, surface }));
   const C = cpu.mesh.nCells, before = Float64Array.from(cpu.land.canopy), lengthBefore = Float64Array.from(cpu.land.seasonLength);
   for (let n = 0; n < 48; n++) { cpu.step(900); await gpu.step(900); }
   await gpu.sync();

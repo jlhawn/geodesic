@@ -38,10 +38,25 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
  * unstable, Holtslag and De Bruin (1988) with a = 1, b = 2/3, c = 5,
  * d = 0.35 when stable, ζ = z/L found from
  * Ri_b = g z (θv − θv_s) / (θ̄v U²) by `iterations` steps (fixed point
- * when unstable, Newton in ln ζ when stable). U is the lowest wind with
- * the gustiness floor, θv_s the surface's virtual potential temperature,
- * with the saturation humidity at the skin over sea and sea ice and dry
- * over land.
+ * when unstable, Newton in ln ζ when stable). θv_s is the surface's
+ * virtual potential temperature, with the saturation humidity at the skin
+ * over sea and sea ice, and over land (landHumidity 'wetness') the
+ * humidity the evaporation implies, q₁ + w max(0, q_s(T_s) − q₁) with w
+ * the land's wetness (`wetness`, 1 under snow), so that Ri_b has the sign
+ * and size of the surface's moist buoyancy flux; 'air' takes q₁.
+ *
+ * U is the lowest wind with a free-convection gustiness (convectiveGust
+ * [β_sea, β_land, floor]): U² = |v|² + u_g², u_g = β w* where the surface
+ * buoyancy flux B₀ = −Ri_b U³ C_H / z is positive, w*³ = B₀ z_i with z_i
+ * the boundary layer's depth of the step before (at least z), and
+ * u_g = floor otherwise, found with the coefficients by gustIterations
+ * fixed-point passes from u_g = floor as COARE iterates its gust with its
+ * fluxes: COARE 3.5 (Fairall et al. 1996, 2003; Edson et al. 2013) with β
+ * 1.2 and its 0.2 m/s over the sea and sea ice, the IFS (Cy47r3 eqs.
+ * 3.19–3.20, Beljaars 1994) with β 1 over land, where z_i is the boundary
+ * layer's depth in place of the IFS's fixed 1000 m and COARE's 0.2 m/s
+ * stands for the floor. `wind` keeps U per cell, the speed every surface
+ * flux and the drag take. convectiveGust false keeps max(|v|, gustiness).
  *
  * `reference` is the FAO-56 reference grass's neutral C_H at the same
  * height (Allen et al. 1998 eq. 4: crop height 0.12 m, d = 2/3 h,
@@ -56,7 +71,7 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
 export const KARMAN = 0.4;
 export const FAO_KARMAN = 0.41;
 export const ROUGHNESS = { forest: [2.0, 2.0], grass: [0.1, 1e-3], bare: [0.013, 1.3e-4], snow: 1.3e-3 };
-export const EXCHANGE_DEFAULTS = { roughness: ROUGHNESS, snowCover: 30, blendingHeight: 10, charnock: [0.0017, -0.005, 19], smoothFlow: 0.11, iterations: 5, referenceCrop: 0.12 };
+export const EXCHANGE_DEFAULTS = { roughness: ROUGHNESS, snowCover: 30, blendingHeight: 10, charnock: [0.0017, -0.005, 19], smoothFlow: 0.11, iterations: 5, referenceCrop: 0.12, convectiveGust: [1.2, 1, 0.2], gustIterations: 4, landHumidity: 'wetness' };
 export const ANDREAS = [[0.135, 1.25, 0, 0], [2.5, 0.149, -0.55, 0], [Infinity, 0.317, -0.565, -0.183]];
 const GRAVITY = 9.81;
 const STABLE = { a: 1, b: 2 / 3, c: 5, d: 0.35 };
@@ -71,6 +86,7 @@ export function exchangeMode(surface = {}, land = {}) {
 
 export function exchangeOptions(surface = {}) {
   const o = { ...EXCHANGE_DEFAULTS, ...Object.fromEntries(Object.keys(EXCHANGE_DEFAULTS).filter((key) => surface[key] !== undefined).map((key) => [key, surface[key]])) };
+  if (o.landHumidity !== 'wetness' && o.landHumidity !== 'air') throw new Error(`landHumidity must be 'wetness' or 'air', not ${o.landHumidity}`);
   return { ...o, roughness: { ...ROUGHNESS, ...o.roughness } };
 }
 
@@ -188,17 +204,20 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
   const thetaV = core.arrays.thetaV;
   const landMask = geography ? geography.land : null, iceSheet = geography ? geography.iceSheet : null;
   const shared = (name) => (buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * C));
-  const dragBuffer = shared('drag');
+  const dragBuffer = shared('drag'), windBuffer = shared('wind');
+  const wind = new Float64Array(windBuffer);
   const drag = new Float64Array(dragBuffer);
   const fixed = mode === 'fixed';
   const heatBuffer = fixed ? dragBuffer : shared('heat'), referenceBuffer = fixed ? dragBuffer : shared('reference');
   const heat = fixed ? drag : new Float64Array(heatBuffer), reference = fixed ? drag : new Float64Array(referenceBuffer);
   const o = exchangeOptions(options);
-  const { roughness: { forest, grass, bare, snow: snowRoughness }, snowCover, iterations } = o;
+  const { roughness: { forest, grass, bare, snow: snowRoughness }, snowCover, iterations, convectiveGust, gustIterations } = o;
+  const gusty = !fixed && !!convectiveGust, wetSurface = o.landHumidity === 'wetness';
   if (!(buffers && buffers.drag)) {
     for (let i = 0; i < C; i++) {
       drag[i] = landMask && landMask[i] ? landDrag : seaDrag;
       if (!fixed) { heat[i] = drag[i]; reference[i] = drag[i]; }
+      wind[i] = gustiness;
     }
   }
   const blend = createBlend(o.blendingHeight), sea = { momentum: 0, heat: 0 }, coefficients = { drag: 0, heat: 0, zeta: 0 }, last = { z: 0, ri: 0, momentum: 0, heat: 0 };
@@ -206,42 +225,54 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
 
   /*
    * Cell i from the state, its skin temperature `skin`, its lowest wind
-   * `wind`, its sea-ice concentration and, on land, its snow (kg/m²),
-   * cover and trees; returns the height, bulk Richardson number and
-   * roughness lengths it used.
+   * `lowest`, its sea-ice concentration, on land its snow (kg/m²), cover,
+   * trees and wetness, and the boundary layer's depth (m) of the step
+   * before; returns the height, bulk Richardson number and roughness
+   * lengths it used.
    */
-  function cell(i, pi, theta, q, qc, skin, wind, concentration = 0, snow = 0, cover = 0, trees = 0) {
+  function cell(i, pi, theta, q, qc, skin, lowest, concentration = 0, snow = 0, cover = 0, trees = 0, wetness = 0, depth = 0) {
     const b = bottom * C + i;
     const z = cp * thetaV[b] * (exnerLower[b] - exnerLayer[b]) / g;
-    const speed = Math.max(wind, gustiness);
-    const viscosity = airViscosity(theta[b] * exnerLayer[b] - 273.15);
     const onLand = landMask && landMask[i];
-    blend.clear();
-    const snowTile = (share) => {
-      const ustar = KARMAN * speed / Math.log((z + snowRoughness) / snowRoughness);
-      blend.add(share, snowRoughness, andreasScalar(snowRoughness, ustar, viscosity));
-    };
-    if (onLand && iceSheet && iceSheet[i]) snowTile(1);
-    else if (onLand) {
-      const t = vegetated ? Math.min(1, trees) : 0, gr = vegetated ? Math.max(0, cover - t) : 1, bareShare = Math.max(0, 1 - t - gr);
-      const covered = Math.min(1, snow / snowCover);
-      blend.add(t, forest[0], forest[1]).add(gr * (1 - covered), grass[0], grass[1]).add(bareShare * (1 - covered), bare[0], bare[1]);
-      snowTile((gr + bareShare) * covered);
-    } else {
-      charnockRoughness(speed, z, viscosity, o, 4, sea);
-      blend.add(1 - concentration, sea.momentum, sea.heat);
-      if (concentration > 0) {
-        const z0 = seaIceRoughness(concentration), ustar = KARMAN * speed / Math.log((z + z0) / z0);
-        blend.add(concentration, z0, andreasScalar(z0, ustar, viscosity));
-      }
-    }
-    blend.finish();
+    const [seaGust, landGust, floor] = gusty ? convectiveGust : [0, 0, 0];
+    const scale = onLand ? landGust : seaGust, mixed = Math.max(depth, z);
+    let speed = gusty ? Math.sqrt(lowest * lowest + floor * floor) : Math.max(lowest, gustiness);
+    const viscosity = airViscosity(theta[b] * exnerLayer[b] - 273.15);
     const exS = exnerLower[b];
     const airV = theta[b] * (1 + VIRTUAL_FACTOR * (q ? q[b] : 0) - (qc ? qc[b] : 0));
-    const surfaceQ = onLand ? (q ? q[b] : 0) : (q ? saturationHumidity(skin, pi[i]) : 0);
+    const surfaceQ = !q ? 0 : !onLand ? saturationHumidity(skin, pi[i]) : wetSurface ? q[b] + wetness * Math.max(0, saturationHumidity(skin, pi[i]) - q[b]) : q[b];
     const surfaceV = skin / exS * (1 + VIRTUAL_FACTOR * surfaceQ);
-    const ri = g * z * (airV - surfaceV) / (0.5 * (airV + surfaceV) * speed * speed);
-    transfer(ri, z, blend.momentum, blend.heat, iterations, coefficients);
+    let ri = 0;
+    for (let pass = 0, passes = gusty ? gustIterations + 1 : 1; pass < passes; pass++) {
+      if (pass > 0) {
+        const buoyancy = -ri * speed * speed * speed * coefficients.heat / z;
+        const gust = buoyancy > 0 ? scale * Math.cbrt(buoyancy * mixed) : floor;
+        speed = Math.sqrt(lowest * lowest + gust * gust);
+      }
+      blend.clear();
+      const snowTile = (share) => {
+        const ustar = KARMAN * speed / Math.log((z + snowRoughness) / snowRoughness);
+        blend.add(share, snowRoughness, andreasScalar(snowRoughness, ustar, viscosity));
+      };
+      if (onLand && iceSheet && iceSheet[i]) snowTile(1);
+      else if (onLand) {
+        const t = vegetated ? Math.min(1, trees) : 0, gr = vegetated ? Math.max(0, cover - t) : 1, bareShare = Math.max(0, 1 - t - gr);
+        const covered = Math.min(1, snow / snowCover);
+        blend.add(t, forest[0], forest[1]).add(gr * (1 - covered), grass[0], grass[1]).add(bareShare * (1 - covered), bare[0], bare[1]);
+        snowTile((gr + bareShare) * covered);
+      } else {
+        charnockRoughness(speed, z, viscosity, o, 4, sea);
+        blend.add(1 - concentration, sea.momentum, sea.heat);
+        if (concentration > 0) {
+          const z0 = seaIceRoughness(concentration), ustar = KARMAN * speed / Math.log((z + z0) / z0);
+          blend.add(concentration, z0, andreasScalar(z0, ustar, viscosity));
+        }
+      }
+      blend.finish();
+      ri = g * z * (airV - surfaceV) / (0.5 * (airV + surfaceV) * speed * speed);
+      transfer(ri, z, blend.momentum, blend.heat, iterations, coefficients);
+    }
+    wind[i] = speed;
     drag[i] = coefficients.drag;
     heat[i] = coefficients.heat;
     reference[i] = referenceCoefficient(z, o.referenceCrop);
@@ -249,5 +280,5 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
     return last;
   }
 
-  return { mode, fixed, drag, heat, reference, cell, options: o, shared: { drag: dragBuffer, heat: heatBuffer, reference: referenceBuffer } };
+  return { mode, fixed, gusty, drag, heat, reference, wind, cell, options: o, shared: { drag: dragBuffer, heat: heatBuffer, reference: referenceBuffer, wind: windBuffer } };
 }
