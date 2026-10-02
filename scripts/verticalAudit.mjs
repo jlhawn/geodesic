@@ -50,7 +50,12 @@
 // RADIATION sets clearSkyPass false), with the window's in the note; the
 // clear-sky albedo, global and over 30S-30N, the clear-sky reflected over
 // the incoming sunlight from the same day means (the insolation of each
-// cell its ASR over one less its albedo) or the window's sums.
+// cell its ASR over one less its albedo) or the window's sums, without a
+// verdict; then, after the window, the clear-sky albedo by surface class
+// (scripts/clearSkyClasses.mjs over the state's last day at CLASS_TIMES,
+// 24, instants), the surface's against its reference or, for open sea by
+// latitude, the top's, and the open sea's direct-beam albedo by the sun's
+// cosine against Taylor et al. (1996) and Fresnel reflection.
 // "u" is twice the grid-noise standard error of a
 // snapshot's box mean; a verdict is "too noisy to tell" when u exceeds
 // half the value.
@@ -64,8 +69,8 @@
 // hPa with 6-9 mm/d, the zonal-mean rain peaking at 6-7 mm/d near 8N
 // (GPCP); the winter Hadley cell 100-200e9 kg/s and the summer one
 // 10-50e9 kg/s; the global cloud-radiative effects -47 +- 4 W/m2
-// shortwave and +26 +- 3 W/m2 longwave and the global clear-sky albedo
-// 0.15 +- 0.01 (CERES EBAF).
+// shortwave and +26 +- 3 W/m2 longwave (CERES EBAF); the surface classes'
+// references in scripts/clearSkyClasses.mjs.
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
@@ -78,10 +83,11 @@ import { DECK_CLOUD_LEVELS, ringMean } from '../js/physics/radiation.module.js';
 import { LATENT_HEAT } from '../js/physics/moist.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
+import { clearSkyClasses } from './clearSkyClasses.mjs';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/verticalAudit.mjs <state.bin>'); process.exit(1); }
-const STEPS = Number(process.env.STEPS ?? 8), SKIP = Number(process.env.SKIP ?? 0), RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
+const CLASS_TIMES = Number(process.env.CLASS_TIMES ?? 24), STEPS = Number(process.env.STEPS ?? 8), SKIP = Number(process.env.SKIP ?? 0), RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
 const t0 = performance.now();
 const say = (s = '') => console.log(s);
 
@@ -445,8 +451,16 @@ row('zonal-mean rain peak (mm/d)', zonalPeak.value, 2, 6, 7, 0, `at ${f(zonalPea
   const windowClear = (mask) => reflectance(radiation.summed.clearAbsorbedSolar, radiation.summed.insolation, mask);
   if ((dayMeans && saved.meanAbsorbedSolar && saved.meanPlanetaryAlbedo) || radiation.clearSkyPass) for (const [name, mask, global] of [['global', everywhere, true], ['30S-30N', cloudBand, false]]) {
     const daily = dayMeans && saved.meanAbsorbedSolar && saved.meanPlanetaryAlbedo;
-    row(`${name} clear-sky albedo, ${daily ? source : `mean over the window's ${STEPS} steps`}`, daily ? savedClear(mask) : windowClear(mask), 3, global ? 0.14 : NaN, global ? 0.16 : NaN, 0, `${radiation.clearSkyPass ? `the window's ${STEPS} steps ${f(windowClear(mask), 3)}` : 'no clear-sky pass in the window'}${global ? '' : '; Earth 0.15 +- 0.01 globally'}`);
+    row(`${name} clear-sky albedo, ${daily ? source : `mean over the window's ${STEPS} steps`}`, daily ? savedClear(mask) : windowClear(mask), 3, NaN, NaN, 0, `${radiation.clearSkyPass ? `the window's ${STEPS} steps ${f(windowClear(mask), 3)}` : 'no clear-sky pass in the window'}; an outcome of the surface classes below, Earth about 0.15 globally`);
   }
+}
+{
+  const classes = clearSkyClasses(model, { day: saved.day, times: CLASS_TIMES, ozone: RADIATION.ozoneAbsorption ?? 0.03 });
+  for (const r of classes.classRows) {
+    const range = r.surfaceRange ?? r.toaRange, value = r.surfaceRange ? r.surfaceAlbedo : r.toaAlbedo;
+    row(`clear sky, ${r.name}: ${r.surfaceRange ? 'surface albedo' : 'albedo at the top'}`, value, 3, range ? range[0] : NaN, range ? range[1] : NaN, 0, `area ${f(r.areaShare, 3)}; ${r.surfaceRange ? `at the top ${f(r.toaAlbedo, 3)}` : `surface ${f(r.surfaceAlbedo, 3)}`}, the atmosphere's own ${f(r.atmosphereShare, 3)}${r.note ? `; ${r.note}` : ''}`);
+  }
+  for (const r of classes.muRows) row(`clear sky, ${r.name}: direct-beam surface albedo`, r.directAlbedo, 3, Math.min(r.taylor, r.fresnel) - 0.01, Math.max(r.taylor, r.fresnel) + 0.01, 0, `mean mu ${f(r.mu, 3)}, the sea's sunlight ${f(r.insolationShare, 3)}; Taylor ${f(r.taylor, 3)}, Fresnel ${f(r.fresnel, 3)}; at the top ${f(r.toaAlbedo, 3)}`);
 }
 const grid = noise(omega700, everywhere);
 row('omega700 grid-scale share, global (white noise 1.167)', grid.ratio, 3, 0, 0.065, 0, `SE Pacific ${f(noise(omega700, sePacific).ratio, 3)}`);
