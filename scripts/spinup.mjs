@@ -52,7 +52,7 @@
 // forcing-DDDD.bin, see js/forcing.module.js), BATCH (1: the steps are queued
 // one at a time, waiting every eighth; more: that many steps go to the
 // GPU in one submission, byte-identical, for drivers where submitting
-// costs more than it does on Metal), LEVELS (cam26: the sigma grid of a
+// costs more than it does on Metal), LEVELS (bl36: the sigma grid of a
 // fresh start, one of SIGMA_GRIDS in js/dynamics/sigmaCore.module.js; a
 // run continues on its snapshot's grid), OCEAN_FROM (a state of the same
 // N whose ocean, sea ice and sea surface replace the snapshot's, see
@@ -128,7 +128,7 @@ const topography = topographyFromInt16(readFileSync(new URL('../data/topography_
 const existing = snapshots(), file = existing[existing.length - 1];
 let saved = file ? await decodeState(new Uint8Array(readFileSync(`${OUT}/${file}`))) : null;
 if (saved && saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
-const levels = saved ? savedLevels(saved) : sigmaInterfaces(process.env.LEVELS ?? 'cam26');
+const levels = saved ? savedLevels(saved) : sigmaInterfaces(process.env.LEVELS ?? 'bl36');
 const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} layers)`;
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
 const fallback = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');

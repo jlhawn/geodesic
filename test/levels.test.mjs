@@ -241,7 +241,7 @@ test('the full model on bl34 steps alike on the CPU and the GPU, over a continen
   gpu.destroy();
 });
 
-test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0, carrying its atmosphere and deck (remapped onto bl34, or as they are onto cam26) unless ATMOSPHERE=fresh, with fresh sea ice unless ICE_FROM, checkpoints it inside a day on bl34 and resumes it there alone, and refuses a state at another N', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
+test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0, carrying its atmosphere and deck (remapped onto bl34, or onto bl36 where LEVELS is unset) unless ATMOSPHERE=fresh, with fresh sea ice unless ICE_FROM, checkpoints it inside a day on bl34 and resumes it there alone, and refuses a state at another N', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
   const root = new URL('..', import.meta.url).pathname, N = 6, dir = mkdtempSync(join(tmpdir(), 'levels-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const source = await createGpuModel(new Grid(N), { topography: topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer) });
@@ -314,9 +314,9 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   assert.ok(kept.water < 1.4 && started.water - kept.water > 0.4, `water ${kept.water} and ${started.water} of FROM's`);
   assert.ok(kept.gate > 0.7 && started.gate < 0.65, `sea gate ${kept.gate} and ${started.gate}`);
 
-  assert.match(run({ TAG: 'iced', ICE_FROM: '1' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); its atmosphere on cam26 \(27 layers\) and its deck; the clock at day 0/);
+  assert.match(run({ TAG: 'iced', ICE_FROM: '1' }), /and its sea ice \(thickness, concentration, snow, skin temperature\); its atmosphere remapped from cam26 on bl36 \(36 layers\) and its deck; the clock at day 0/);
   const iced = await read('iced_day0001.bin');
-  assert.equal(iced.K, 27);
+  assert.equal(iced.K, 36);
   let covered = 0, thickest = 0;
   for (let i = 0; i < C; i++) if (iced.ice[i] > 0) { covered++; thickest = Math.max(thickest, iced.ice[i]); assert.ok(Math.abs(iced.concentration[i] - 0.6) < 0.2, `concentration ${iced.concentration[i]} at ${i}`); }
   assert.ok(covered > 0 && thickest < 0.4, `${covered} iced cells, the thickest ${thickest} m`);
