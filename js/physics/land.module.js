@@ -216,14 +216,27 @@ export function dryHumusAlbedo(carbon, { mineralAlbedo = SOIL_CARBON.mineralAlbe
 /*
  * The carbon a cell holds when its litter (the type-weighted cover) and
  * its fill stand while its lowest air runs through a sine year of `mean`
- * ± `amplitude` °C: the year's mean input over its mean decomposition.
+ * ± `amplitude` °C: the year's mean input over its mean decomposition,
+ * by Simpson's rule over the half year's phase between the crossings of
+ * seasonThreshold and freezing, where the rates jump.
  */
-export function carbonEquilibrium(mean, amplitude, fill, litter, { litterInput = SOIL_CARBON.litterInput, soilTurnover = SOIL_CARBON.soilTurnover, decompositionWilting = SOIL_CARBON.decompositionWilting, seasonThreshold = 0.9, wetnessThreshold = 0.75 } = {}, samples = 73) {
+export function carbonEquilibrium(mean, amplitude, fill, litter, { litterInput = SOIL_CARBON.litterInput, soilTurnover = SOIL_CARBON.soilTurnover, decompositionWilting = SOIL_CARBON.decompositionWilting, seasonThreshold = 0.9, wetnessThreshold = 0.75 } = {}, intervals = 32) {
+  const rates = (celsius) => {
+    const t = MELTING_POINT + celsius;
+    return [litterWarmth(t, seasonThreshold), decompositionWarmth(t) * decompositionMoisture(fill, t < MELTING_POINT, decompositionWilting)];
+  };
   let input = 0, decay = 0;
-  for (let d = 0; d < samples; d++) {
-    const t = MELTING_POINT + mean + amplitude * Math.cos(2 * Math.PI * (d + 0.5) / samples);
-    input += litterWarmth(t, seasonThreshold) / samples;
-    decay += decompositionWarmth(t) * decompositionMoisture(fill, t < MELTING_POINT, decompositionWilting) / samples;
+  if (!(amplitude > 0)) [input, decay] = rates(mean);
+  else {
+    const cuts = [0, Math.PI, ...[seasonThreshold, 0].map((c) => (c - mean) / amplitude).filter((x) => x > -1 && x < 1).map(Math.acos)].sort((a, b) => a - b);
+    for (let p = 1; p < cuts.length; p++) {
+      const h = (cuts[p] - cuts[p - 1]) / (2 * intervals);
+      for (let n = 0; n <= 2 * intervals; n++) {
+        const [r, k] = rates(mean + amplitude * Math.cos(n === 0 ? cuts[p - 1] + 1e-9 : n === 2 * intervals ? cuts[p] - 1e-9 : cuts[p - 1] + n * h));
+        const w = (n === 0 || n === 2 * intervals ? 1 : n % 2 ? 4 : 2) * h / (3 * Math.PI);
+        input += w * r; decay += w * k;
+      }
+    }
   }
   return decay > 0 ? litterInput * litter * Math.min(1, Math.max(0, fill) / wetnessThreshold) * input * soilTurnover / decay : 0;
 }
@@ -340,7 +353,7 @@ export function createLandSurface(mesh, geography, {
     const input = litterInput * litter(i) * Math.min(1, soil[i] / (wetnessThreshold * capacity(i))) * litterWarmth(airTemperature, seasonThreshold);
     const decay = decompositionWarmth(airTemperature) * decompositionMoisture(soil[i] / capacity(i), airTemperature < MELTING_POINT, decompositionWilting) / soilTurnover;
     const x = carbonAcceleration * decay * dt;
-    soilCarbon[i] = Math.max(0, soilCarbon[i] + (input - decay * soilCarbon[i]) * carbonAcceleration * dt * (x > 1e-2 ? (1 - Math.exp(-x)) / x : 1 - x * (0.5 - x / 6)));
+    soilCarbon[i] = Math.max(0, soilCarbon[i] + (input - decay * soilCarbon[i]) * carbonAcceleration * dt * (x > 0 ? -Math.expm1(-x) / x : 1));
   }
 
   function update(i, surfaceT, flux, evaporation, dt, airTemperature = null, potential = null) {

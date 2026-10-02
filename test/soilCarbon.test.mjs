@@ -73,13 +73,19 @@ test('the acceleration moves the store toward the same equilibrium, a sine year\
   slow.run(26, 100); fast.run(26, 1);
   assert.ok(near(slow.land.soilCarbon[slow.i], fast.land.soilCarbon[fast.i], 1e-12), 'A × time is what counts');
   for (const [mean, amplitude, fill, cover] of [[-11, 16, 0.75, 0.4], [10, 11, 0.6, 0.9], [22, 8, 0.12, 0.1]]) {
-    const { land, i, set } = cell({ carbonAcceleration: 1 });
     const expected = carbonEquilibrium(mean, amplitude, fill, cover);
-    set(fill, cover, 0, expected);
-    const surfaceT = new Float64Array(mesh.nCells).fill(290), flux = new Float64Array(mesh.nCells), steps = 365 * 4;
-    let sum = 0;
-    for (let n = 0; n < steps; n++) { land.update(i, surfaceT, flux, 0, YEAR / steps, MELTING_POINT + mean + amplitude * Math.cos(2 * Math.PI * (n + 0.5) / steps)); sum += land.soilCarbon[i] / steps; }
-    assert.ok(Math.abs(sum / expected - 1) < 2e-3, `${mean} ± ${amplitude} °C: stepped ${sum}, equilibrium ${expected}`);
+    assert.ok(near(expected, carbonEquilibrium(mean, amplitude, fill, cover, {}, 1024), 1e-7), 'the quadrature has converged');
+    for (const [acceleration, years] of [[1, 1], [100, 30]]) {
+      const { land, i, set } = cell({ carbonAcceleration: acceleration });
+      set(fill, cover, 0, expected);
+      const surfaceT = new Float64Array(mesh.nCells).fill(290), flux = new Float64Array(mesh.nCells), steps = 365 * 4;
+      let sum = 0;
+      for (let y = 0; y < years; y++) {
+        sum = 0;
+        for (let n = 0; n < steps; n++) { land.update(i, surfaceT, flux, 0, YEAR / steps, MELTING_POINT + mean + amplitude * Math.cos(2 * Math.PI * (n + 0.5) / steps)); sum += land.soilCarbon[i] / steps; }
+      }
+      assert.ok(Math.abs(sum / expected - 1) < (acceleration === 1 ? 1e-3 : 1e-2), `${mean} ± ${amplitude} °C at A = ${acceleration}: stepped ${sum}, equilibrium ${expected}`);
+    }
   }
   const { land, i, set } = cell();
   set(0.55, 0, 0, 2.6);
