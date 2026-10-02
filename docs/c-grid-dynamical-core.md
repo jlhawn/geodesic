@@ -3101,12 +3101,14 @@ The work, in order:
      `scripts/longwaveFit.mjs` fits its 19 coefficients through the
      g-point reduction to the RRTMG fluxes and cooling rates of the four
      atmospheres, LBLRTM's doubled-CO₂ forcing (total and by band) and the
-     minor gases' effects of Chou et al. (2001, Table 16), and writes
+     minor gases' effects of Chou et al. (2001, Table 16, computed with
+     their parameterization at CH₄ 1.75 and N₂O 0.28 ppmv), and writes
      `js/physics/longwaveTable.module.js`; each g-point emits the share of
      σT⁴ a quartic in T gives, normalised to sum to 1. CO₂ 390 ppmv, CH₄
      1.80 ppmv, N₂O 0.323 ppmv (`carbonDioxide`, `methane`,
-     `nitrousOxide`; about the 2010 global means, from memory), ozone as
-     below. The cloud's emissivity joins every g-point.
+     `nitrousOxide`; NOAA GML's global annual means for 2010 are 388.8 ppm,
+     1798.9 ppb and 323.2 ppb), ozone as below. The cloud's emissivity
+     joins every g-point.
    - Shortwave (`solarGases` 'clirad'; 'lacisHansen' keeps the Lacis &
      Hansen vapour and the fixed ozone share), after CLIRAD-SW (Chou &
      Suarez 1999): ozone in the eight bands of their Table 3, vapour by the
@@ -3129,13 +3131,16 @@ The work, in order:
    (+2.2 against RRTMG, +4.0 and +4.5 against ICRCCM; the tropical −4.4
    against ICRCCM, whose line-by-line codes differ among themselves by up
    to 8 W/m² there, Feigelson et al. 1991, Table 8); the top layer's
-   cooling (0-2.2 hPa, MLS −3.7 K/day against −10.3); the vapour × 1.2
+   cooling (0-2.2 hPa, MLS −3.7 K/day against −10.3 over the same
+   layer, TROP −3.2 against −9.0: the k-distribution with linear pressure
+   scaling is not accurate between 0.01 and 10 hPa, where Doppler
+   broadening matters, Chou et al. 2001, section 4.2); the vapour × 1.2
    forcing at the surface and at 200 hPa (+8.7 % and +8.4 %); methane's
    and nitrous oxide's own effects on the OLR (MLS 1.65 and 1.18 W/m²
-   against Chou's 2.22 and 1.83), the total being in the RRTMG fit; the
-   surface's downward shortwave (−0.8 % at μ = 1 while the atmosphere's
-   absorption matches); no methane in the shortwave (in the fitted vapour
-   strength). The stratosphere-adjusted doubled-CO₂ forcing of the MLS
+   against the 2.22 and 1.83 of Chou's parameterization), the total being
+   in the RRTMG fit; the surface's downward shortwave (−0.8 % at μ = 1
+   while the atmosphere's absorption matches); no methane in the
+   shortwave (in the fitted vapour strength). The stratosphere-adjusted doubled-CO₂ forcing of the MLS
    column (fixed dynamical heating above 179 hPa) is 4.22 W/m² at the top,
    5.76 at 179 hPa.
 
@@ -3166,6 +3171,31 @@ The work, in order:
    runs each: the physics pass 2.64 and 2.64 → 3.61 and 3.59 ms, the step
    median 20.79 and 20.79 → 21.75 and 21.81 ms (+4.8 %). The spin-up's
    daily line adds the sea's net surface longwave.
+
+   On the model's own states (one N=64 CPU step, every column alone, and
+   the same step on the GPU). eight64_day0183 and nine64_day0091 close in
+   every column: absorbed plus reflected is the incoming sunlight to
+   5e-13 W/m², the layers' shortwave heating sums to the atmosphere's
+   absorption and their longwave heating to σTs⁴ less the downward
+   longwave less the OLR to 5e-13 (GPU 5e-4), and dark columns get no
+   shortwave. With 'gray' and 'lacisHansen' the CPU gives every column's
+   fluxes and heating bit for bit as 5dde347 did. CPU against GPU per
+   cell, eight64: clear-sky ASR rms 7.5e-8 and clear-sky OLR 5.8e-7 of
+   the field, the layers' longwave heating 1.3e-5; the all-sky misses
+   (one cell at 171 W/m² in the shortwave on eight64, cloudy cells in the
+   longwave on nine64) are as large with the gray gases. Instantaneous
+   CO₂ 390 → 780 ppmv on eight64: OLR −1.08, clear-sky OLR −1.78,
+   surface downward +1.89 W/m². The state's stratosphere is warm at the
+   top (global means 276, 275 and 264 K at 1.1, 3.6 and 7.5 hPa): the MLS
+   column with those temperatures above 110 hPa gives 1.91 W/m² at the
+   top instead of 2.74, with 5.60 at 200 hPa in both. OLR slope on
+   eight64 with Ts and every layer below 150 hPa ±1 K at fixed relative
+   humidity: 2.17 W/m²/K, clear sky 1.89. In the three days from
+   eight64_day0183 the global mean of the top layer (1.1 hPa) warms
+   275.6 → 290.7 K with the spectral gases (275.6 with the gray ones),
+   the 3.6 and 7.5 hPa layers cool 275.3 → 260.2 and 264.3 → 248.3 K:
+   the top layer's shortwave heating is RRTMG's (MLS overhead 22.9
+   against 23.9 K/day) while its cooling is a third of it.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
