@@ -517,21 +517,26 @@ test('the deep plume leaves the lowest 50 hPa with the IFS surface-flux excess, 
     const after = budget(model, 0), rain = moist.rain[0];
     return { model, deep: { ...moist.deep }, state: snapshot(model, 0), enthalpy: (after.enthalpy - before.enthalpy) / before.enthalpy, water: (after.water + rain - before.water) / before.water };
   };
-  const plain = run(null), still = run([0, 0]), forced = run([10, 130]), boundary = run([10, 130], { plumeSourceDepth: 'boundaryLayer' });
-  const { K, C, sigmaMid, dSigma, cp, g, R, geopotential, exnerLayer } = forced.model.core.diagnostics;
+  const plain = run(null), still = run([0, 0]), forced = run([10, 130]), boundary = run([10, 130], { plumeSourceDepth: 'boundaryLayer' }), convective = run([10, 130], { excessVelocity: 'convective' });
+  const night = run([-30, 1e-6 * LATENT_HEAT]), dew = run([5, -5e-6 * LATENT_HEAT]);
+  const { K, C, sigmaMid, dSigma, cp, g, R, geopotential, exnerLayer, exnerLower } = forced.model.core.diagnostics;
   const model = plumeColumn(), [pi, theta, , , q, qc] = model.state;
   let mass = 0, energy = 0, water = 0;
   for (let k = K - 1; k >= 0 && (k === K - 1 || pi[0] * sigmaMid[k] >= pi[0] - MOIST_DEFAULTS.cumulusSourceDepth); k--) {
     const idx = k * C, dp = pi[0] * dSigma[k], T = theta[idx] * exnerLayer[idx];
     mass += dp; energy += dp * (cp * T + geopotential[idx] - LATENT_HEAT * qc[idx]); water += dp * (q[idx] + qc[idx]);
   }
-  const b = (K - 1) * C, density = pi[0] * sigmaMid[K - 1] / (R * theta[b] * exnerLayer[b]);
-  const velocity = Math.max(Math.cbrt(4e-4 * (model.boundaryLayer.depth[0] - geopotential[b] / g)), 0.25), dT = Math.min(3, 1.5 * 10 / (density * cp * velocity)), dq = Math.min(2e-3, 1.5 * 130 / (density * LATENT_HEAT * velocity));
-  console.log(`Jordan, the lowest 50 hPa (${(mass / 100).toFixed(1)} hPa of layers) under 10 W/m² sensible and 130 latent with w* ${velocity.toFixed(3)} m/s: excess ${forced.deep.excessT.toFixed(4)} K and ${(1e3 * forced.deep.excessQ).toFixed(4)} g/kg (by hand ${dT.toFixed(4)}, ${(1e3 * dq).toFixed(4)}); CAPE ${plain.deep.cape.toFixed(1)} J/kg plain, ${forced.deep.cape.toFixed(1)} with the excess, ${boundary.deep.cape.toFixed(1)} from the boundary layer with it; enthalpy ${forced.enthalpy.toExponential(1)}, water ${forced.water.toExponential(1)}`);
+  const b = (K - 1) * C, T1 = theta[b] * exnerLayer[b], density = pi[0] * sigmaMid[K - 1] / (R * T1), z1 = cp * model.core.arrays.thetaV[b] * (exnerLower[b] - exnerLayer[b]) / g;
+  const velocity = 1.2 * Math.cbrt(0.1 ** 3 + 1.5 * g * z1 * 0.4 / T1 * (10 / (density * cp) + 0.61 * T1 * 130 / (density * LATENT_HEAT))), dT = Math.min(3, 1.5 * 10 / (density * cp * velocity)), dq = Math.min(2e-3, 1.5 * 130 / (density * LATENT_HEAT * velocity));
+  const mixed = Math.max(Math.cbrt(4e-4 * (model.boundaryLayer.depth[0] - geopotential[b] / g)), 0.25), mixedT = Math.min(3, 1.5 * 10 / (density * cp * mixed)), mixedQ = Math.min(2e-3, 1.5 * 130 / (density * LATENT_HEAT * mixed));
+  console.log(`Jordan, the lowest 50 hPa (${(mass / 100).toFixed(1)} hPa of layers) under 10 W/m² sensible and 130 latent, w* of eq. 6.20 at the lowest layer's ${z1.toFixed(1)} m ${velocity.toFixed(3)} m/s: excess ${forced.deep.excessT.toFixed(4)} K and ${(1e3 * forced.deep.excessQ).toFixed(4)} g/kg (by hand ${dT.toFixed(4)}, ${(1e3 * dq).toFixed(4)}; with the shallow closure's w* ${mixed.toFixed(3)} m/s ${convective.deep.excessT.toFixed(4)} K and ${(1e3 * convective.deep.excessQ).toFixed(4)} g/kg); CAPE ${plain.deep.cape.toFixed(1)} J/kg plain, ${forced.deep.cape.toFixed(1)} with the excess (${convective.deep.cape.toFixed(1)} with the shallow closure's w*), ${boundary.deep.cape.toFixed(1)} from the boundary layer with it; enthalpy ${forced.enthalpy.toExponential(1)}, water ${forced.water.toExponential(1)}`);
   assert.deepEqual(still.state, plain.state, 'with no surface fluxes the plume leaves with the plain 50 hPa mean');
   assert.equal(still.deep.cape, plain.deep.cape);
   assert.ok(Math.abs(plain.deep.sourceS - energy / mass) < 1e-12 * energy / mass && Math.abs(plain.deep.sourceQ - water / mass) < 1e-15 && plain.deep.sourceMass === mass, 'the source is the lowest 50 hPa');
-  assert.ok(Math.abs(forced.deep.excessT - dT) < 1e-12 * dT && Math.abs(forced.deep.excessQ - dq) < 1e-12 * dq, 'the excess of IFS eq. 6.19');
+  assert.ok(Math.abs(forced.deep.excessT - dT) < 1e-12 * dT && Math.abs(forced.deep.excessQ - dq) < 1e-12 * dq, 'the excess of IFS eqs. 6.19-6.20');
+  assert.ok(Math.abs(convective.deep.excessT - mixedT) < 1e-12 * mixedT && Math.abs(convective.deep.excessQ - mixedQ) < 1e-12 * mixedQ, 'with the shallow closure\'s w*');
+  assert.ok(night.deep.excessT === 0 && night.deep.excessQ === 0, 'no excess under a downward buoyancy flux');
+  assert.ok(dew.deep.excessT > 0 && dew.deep.excessQ === 0, 'no negative part under dew with an upward buoyancy flux');
   assert.ok(Math.abs(forced.deep.sourceS - (energy / mass + cp * dT)) < 1e-12 * energy / mass && Math.abs(forced.deep.sourceQ - (water / mass + dq)) < 1e-15, 'the source with its excess');
   assert.ok(forced.deep.cape > plain.deep.cape, 'the excess raises the CAPE');
   assert.ok(Math.abs(forced.enthalpy) < 1e-15 && Math.abs(forced.water) < 1e-15, 'enthalpy and water');
@@ -714,6 +719,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ iceNucleation: true, iceFall: 3.29 });
   await parity({ capeClosure: 'threshold' });
   await parity({ pcapeBoundary: 'signed' });
+  await parity({ excessVelocity: 'convective' });
   await parity({ plumeSourceDepth: 'boundaryLayer' });
 });
 

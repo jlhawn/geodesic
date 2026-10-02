@@ -59,7 +59,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
+import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -356,11 +356,13 @@ function ascend(i, s, entraining) {
   }
   let sourceS = O.plumeSource === 'lowest' ? envS[bottomK] : energy / mass, sourceQ = O.plumeSource === 'lowest' ? envQ[bottomK] : water / mass;
   if (surface) {
-    const buoyancy = bl.buoyancyFlux[i], density = p[bottomK] / (R * T[bottomK]);
-    const velocity = Math.max(buoyancy > 0 ? Math.cbrt(buoyancy * Math.max(0, depthBL - z[bottomK])) : 0, bl.friction[i]);
+    const buoyancy = bl.buoyancyFlux[i], density = p[bottomK] / (R * T[bottomK]), layer = O.excessVelocity === 'surfaceLayer', b = bottomK * C + i;
+    const velocity = layer ? surfaceLayerVelocity(radiation.sensibleHeat[i], radiation.evaporation[i], density, T[bottomK], cp * thetaV[b] * (exnerLower[b] - exnerLayer[b]) / g, cp, g)
+      : Math.max(buoyancy > 0 ? Math.cbrt(buoyancy * Math.max(0, depthBL - z[bottomK])) : 0, bl.friction[i]);
     if (velocity > 0) {
-      sourceS += cp * Math.min(SOURCE_EXCESS.temperature, SOURCE_EXCESS.coefficient * radiation.sensibleHeat[i] / (density * cp * velocity));
-      sourceQ += Math.min(SOURCE_EXCESS.humidity, SOURCE_EXCESS.coefficient * radiation.evaporation[i] / (density * velocity));
+      const dT = Math.min(SOURCE_EXCESS.temperature, SOURCE_EXCESS.coefficient * radiation.sensibleHeat[i] / (density * cp * velocity));
+      const dq = Math.min(SOURCE_EXCESS.humidity, SOURCE_EXCESS.coefficient * radiation.evaporation[i] / (density * velocity));
+      sourceS += cp * (layer ? Math.max(0, dT) : dT); sourceQ += layer ? Math.max(0, dq) : dq;
     }
   }
   const lcl = liftingCondensationLevel((sourceS - g * z[bottomK]) / cp, sourceQ, p[bottomK], kappa);

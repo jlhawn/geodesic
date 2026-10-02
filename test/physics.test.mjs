@@ -943,15 +943,17 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   assert.equal(modelDigest({ ...GRAY_GASES, visibleFraction: 0.5, rayleighBands: [[0.712, 0.0874], [0.288, 0.5687]], nearInfraredRayleigh: 0 }, defaults).digest, '9790266388b2da8b1ca3f6d314c3304a', 'under the gray gases and the visible split and Rayleigh bands before the gas branch\'s, the cloud parent\'s digest');
   assert.notEqual(random, now);
   assert.notEqual(modelDigest({ cloudOverlap: 'maximumRandom' }).digest, random);
-  const signed = { ...defaults, capeClosure: MOIST_DEFAULTS.capeClosure, pcapeBoundary: 'signed' };
+  const signed = { ...defaults, capeClosure: MOIST_DEFAULTS.capeClosure, pcapeBoundary: 'signed', excessVelocity: 'convective' };
   const bechtold = modelDigest({}, signed).digest, surface = modelDigest({}, { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth }).digest;
   const grant = modelDigest({}, { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure }).digest;
   const positive = modelDigest({}, { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure, pcapeBoundary: MOIST_DEFAULTS.pcapeBoundary }).digest;
-  console.log(`12 steps at N=4 under the Bechtold closure: ${bechtold}; with the deep source from the lowest 50 hPa: ${surface}; with Grant's shallow closure: ${grant}; with PCAPE_bl at least 0: ${positive}`);
+  const layer = modelDigest({}, { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure, pcapeBoundary: MOIST_DEFAULTS.pcapeBoundary, excessVelocity: MOIST_DEFAULTS.excessVelocity }).digest;
+  console.log(`12 steps at N=4 under the Bechtold closure: ${bechtold}; with the deep source from the lowest 50 hPa: ${surface}; with Grant's shallow closure: ${grant}; with PCAPE_bl at least 0: ${positive}; with the excess over the IFS's w*: ${layer}`);
   assert.equal(bechtold, 'c70751a794735951c25c5f48e2376b69');
   assert.equal(surface, '6761a720962d0197bbd7af8653cdee3e');
   assert.equal(grant, 'c5362ea5cf52fe97e9f3fdd6b2fd2eeb');
   assert.equal(positive, grant, 'these twelve steps do not tell the two apart');
+  assert.equal(layer, '6c479c250a74b4fea47256612ab65a98');
 });
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {

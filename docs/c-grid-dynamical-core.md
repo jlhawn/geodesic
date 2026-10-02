@@ -8113,6 +8113,31 @@ convective share 0.823 → 0.826, firing 0.476 → 0.496, Q1R centroid 714.7
 rain 2.049 → 2.041 mm/d, wettest cell 258 → 242 mm/d; GPU day 186 ASR −
 OLR 11.8 → 11.9, SWCRE −45.8 → −44.9, LWCRE 23.8 → 23.1 W/m².
 
+**The source excess over the IFS's own w\* (review, Oct 2).** Element 3
+took eq. 6.19's coefficients with the shallow closure's w* = max((B₀
+h)^⅓, u*); the IFS forms w* at the lowest model level (Cy43r1 eq. 6.20):
+w* = 1.2 (u*³ + 1.5 g z κ/T (J_s/(ρ c_p) + 0.61 T J_q/(ρ L)))^⅓ with u*
+0.1 m/s, and its code (WRF's IFS-derived `module_cu_ntiedtke.F`) gives the
+parcel an excess only under an upward buoyancy flux, each part at least 0.
+`excessVelocity` 'surfaceLayer' (the default; 'convective' is the previous
+excess bit for bit on the CPU) does so on both engines. On Jordan's column
+with 10 and 130 W/m² and the lowest layer at 21.0 m: w* 0.238 against
+0.585 m/s, ΔT 0.0532 against 0.0217 K, Δq 0.278 against 0.113 g/kg, CAPE
+344.4 against 321.2 J/kg (301.5 plain). Three days from eight64_day0183
+against the bounded PCAPE_bl above: ITCZ mean candidate dilute CAPE 39.4 →
+40.4 J/kg, undilute 306 → 342 J/kg, undilute plumes stopping at 700–800
+hPa 0.261 → 0.229, fired tops above 300 hPa 0.072 → 0.070, convective
+share 0.826 → 0.855, firing 0.496 → 0.504, large-scale rain below 700 hPa
+0.291 → 0.228 mm/d, Q1R centroid 718.4 → 717.5 hPa, wettest cell 41 → 32
+mm/d; warm-pool share 0.678 → 0.717; N Pacific trades deep firing 0.757 →
+0.759, convective rain 1.59 → 1.62 mm/d; Amazon convective rain none at
+11–15 LT, maximum 22 LT; replayed day's global rain 2.041 → 2.036 mm/d,
+wettest cell 242 → 221 mm/d; GPU day 186 ASR − OLR 11.9 → 12.4, SWCRE
+−44.9 → −44.4, LWCRE 23.1 → 23.0 W/m². From ten64_day0183 against element
+4: ITCZ share 0.750 → 0.786, warm pool 0.991 → 0.988, zonal-mean rain peak
+7.15 mm/d at 8–10N, Amazon mean fired PCAPE_bl −1556 → +23 Pa and dilute
+CAPE 44 → 81 J/kg.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
