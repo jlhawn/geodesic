@@ -25,6 +25,10 @@ test('the moisture factor ramps with the aridity index P/PET between the forest 
   assert.equal(aridityFactor(3, 3, [0.2, 1.0]), 1);
   assert.equal(aridityFactor(0.1, 3, [0.2, 1.0]), 0);
   assert.equal(aridityFactor(0.5, 0, [0.2, 1.0]), 1, 'no evaporative demand, no moisture limit');
+  const equator = moistureEstimate(0, 0.5, 0.5), q = insolationCycle(0).mean;
+  assert.ok(near(equator.demand, -2.14 + 0.0134 * q) && near(equator.rain, equator.demand * (0.01 + 0.79 * 0.5 + 0.63 * 0.5)), `the estimate at the equator: ${JSON.stringify(equator)}`);
+  assert.ok(Math.abs(equator.demand - 3.43) < 0.01 && Math.abs(equator.rain - 2.47) < 0.01, 'about 1250 mm/yr of demand and P/PET 0.72 half full and half covered');
+  assert.deepEqual(MOISTURE_ESTIMATE, { demand: [-2.14, 0.0134], aridity: [0.01, 0.79, 0.63] });
   const land = createLandSurface(mesh, flat());
   land.initialize();
   const i = 7, surfaceT = new Float64Array(mesh.nCells).fill(290), flux = new Float64Array(mesh.nCells), half = 3 * YEAR * Math.LN2;
@@ -97,7 +101,7 @@ test('a fresh start and an older state take the moisture means from the estimate
   land.initialize();
   for (let i = 0; i < C; i++) {
     if (!geography.land[i]) { assert.equal(land.rainMean[i], 0); assert.equal(land.demandMean[i], 0); continue; }
-    const e = moistureEstimate(mesh.latCell[i], 0.5);
+    const e = moistureEstimate(mesh.latCell[i], 0.5, geography.iceSheet[i] ? 0 : 0.5);
     assert.ok(near(land.rainMean[i], e.rain) && near(land.demandMean[i], e.demand), `cell ${i}`);
     if (!geography.iceSheet[i]) assert.ok(near(land.canopy[i], 0.5 * land.treeFactor(i)), `cell ${i}: trees ${land.canopy[i]}`);
   }
@@ -107,7 +111,7 @@ test('a fresh start and an older state take the moisture means from the estimate
   let gated = 0;
   for (let i = 0; i < C; i++) {
     if (!geography.land[i] || geography.iceSheet[i]) continue;
-    const e = moistureEstimate(mesh.latCell[i], soil[i] / 300);
+    const e = moistureEstimate(mesh.latCell[i], soil[i] / 300, vegetation[i]);
     assert.ok(near(land.rainMean[i], e.rain) && near(land.demandMean[i], e.demand), `cell ${i}: estimated from its own fill`);
     assert.ok(near(land.canopy[i], vegetation[i] * treelineFactor(0.6, 8) * aridityFactor(e.rain, e.demand)), `cell ${i}: an older state's trees restart at the potential`);
     if (aridityFactor(e.rain, e.demand) < 1 && vegetation[i] > 0) gated++;

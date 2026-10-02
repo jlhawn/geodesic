@@ -143,17 +143,19 @@ export function aridityFactor(rain, demand, [dry, wet] = FOREST_ARIDITY) {
 /*
  * The start of the moisture means where a state carries none: the
  * demand a + b Q̄ (mm/d) of the annual mean insolation at the top of the
- * atmosphere (W/m²) and the rain that demand times an aridity index
- * c + d × the bucket's fill, rounded least-squares fits to four ten-day
- * means of the model's first year (nine64 and eight64 at days 91, 183,
- * 274 and 365) per land cell off the ice sheets.
+ * atmosphere (W/m²), a rounded least-squares fit per land cell off the
+ * ice sheets to four ten-day means of the model's first year (nine64
+ * and eight64 at days 91, 183, 274 and 365), and the rain that demand
+ * times an aridity index c + d × the bucket's fill + e × the cover,
+ * fitted to the last year's rain of the 21 regions in five64's log over
+ * the estimated demand against the year-six state's fill and cover.
  */
-export const MOISTURE_ESTIMATE = { demand: [-2.14, 0.0134], aridity: [0.27, 1.69] };
+export const MOISTURE_ESTIMATE = { demand: [-2.14, 0.0134], aridity: [0.01, 0.79, 0.63] };
 
-export function moistureEstimate(lat, fill) {
-  const [d0, d1] = MOISTURE_ESTIMATE.demand, [a0, a1] = MOISTURE_ESTIMATE.aridity;
+export function moistureEstimate(lat, fill, cover = 0.5) {
+  const [d0, d1] = MOISTURE_ESTIMATE.demand, [a0, a1, a2] = MOISTURE_ESTIMATE.aridity;
   const demand = Math.max(0, d0 + d1 * insolationCycle(lat).mean);
-  return { rain: demand * Math.max(0, a0 + a1 * Math.min(1, Math.max(0, fill))), demand };
+  return { rain: demand * Math.max(0, a0 + a1 * Math.min(1, Math.max(0, fill)) + a2 * Math.min(1, Math.max(0, cover))), demand };
 }
 
 export function createLandSurface(mesh, geography, {
@@ -306,7 +308,7 @@ export function createLandSurface(mesh, geography, {
   }
   function estimateMoisture(i) {
     if (!land[i]) { rainMean[i] = 0; demandMean[i] = 0; return; }
-    const e = moistureEstimate(mesh.latCell[i], soil[i] / capacity(i));
+    const e = moistureEstimate(mesh.latCell[i], soil[i] / capacity(i), vegetation[i]);
     rainMean[i] = e.rain; demandMean[i] = e.demand;
   }
   const startingTrees = (i) => (treed ? treeFactor(i) * vegetation[i] : vegetation[i]);

@@ -214,7 +214,7 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   const surface = land.surface ? sampleTiles(source, target, Float64Array.from(land.surface), onLand, atCells, () => 0) : null;
   const snowAlbedo = land.snowAlbedo ? sampleTiles(source, target, Float64Array.from(land.snowAlbedo), onLand, atCells, () => SNOW_AGEING.freshSnowAlbedo) : null;
   const estimate = (tile) => seasonEstimate(source.mesh.latCell[tile]);
-  const moist = (tile) => moistureEstimate(source.mesh.latCell[tile], guess(tile).soil / bucket);
+  const moist = (tile) => moistureEstimate(source.mesh.latCell[tile], guess(tile).soil / bucket, guess(tile).snow > 0 ? 0 : 0.5);
   const trees = (tile) => (guess(tile).snow > 0 ? 0 : 0.5) * (seasoned ? treelineFactor(estimate(tile).length, estimate(tile).warmth) : 1) * (moistened ? aridityFactor(moist(tile).rain, moist(tile).demand) : 1);
   const canopy = land.canopy && cover ? sampleTiles(source, target, Float64Array.from(land.canopy), onLand, atCells, trees) : null;
   const seasonLength = seasoned ? sampleTiles(source, target, Float64Array.from(land.seasonLength), onLand, atCells, (tile) => estimate(tile).length) : null;
