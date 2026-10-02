@@ -1,6 +1,6 @@
 import { buildMesh } from './mesh.module.js';
-import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING } from './dynamics/sigmaCore.module.js';
-import { spongeRates, SPONGE } from './dynamics/sponge.module.js';
+import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING } from './dynamics/sigmaCore.module.js';
+import { spongeRates, spongeSigmaFor, SPONGE } from './dynamics/sponge.module.js';
 import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
 import { createSurface, SEA_DRAG, LAND_DRAG, TOP_DRAG } from './physics/surface.module.js';
@@ -24,7 +24,7 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * boundary-layer drag, large-scale condensation, the convective plume
  * and dry convective adjustment, the top sponge on the zonally asymmetric
  * wind (dynamics/sponge.module.js; `surface` spongeSigma and spongeDays,
- * SPONGE) and the non-orographic gravity-wave drag
+ * SPONGE and spongeSigmaFor the grid) and the non-orographic gravity-wave drag
  * (physics/gravityWaves.module.js; `gravityWaves`, false for none). State is
  * [pi, theta, u, surfaceT, q, qc, ice] (vapour, cloud condensate, sea
  * ice thickness), each on a SharedArrayBuffer; with `moist: false` q
@@ -84,7 +84,7 @@ export function createModel(gridOrMesh, {
   spacing /= mesh.nEdges;
   const nu4 = Math.pow(spacing / Math.PI, 4) / (nu4Hours * 3600);
   const sigmaMid = Float64Array.from({ length: levels.length - 1 }, (_, k) => 0.5 * (levels[k] + levels[k + 1]));
-  const sponge = physics ? spongeRates(sigmaMid, surfaceOptions.spongeSigma ?? SPONGE.sigma, surfaceOptions.spongeDays ?? SPONGE.days) : null;
+  const sponge = physics ? spongeRates(sigmaMid, surfaceOptions.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), surfaceOptions.spongeDays ?? SPONGE.days) : null;
   const core = createSigmaCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, spongeRates: sponge, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const subgridFields = physics && geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, subgrid, core.diagnostics.g) : null;

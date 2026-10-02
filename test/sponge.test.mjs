@@ -5,8 +5,8 @@ import { buildMesh } from '../js/mesh.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { spongeGeometry, spongeRates, dampEddies } from '../js/dynamics/sponge.module.js';
-import { P0 } from '../js/dynamics/sigmaCore.module.js';
+import { spongeGeometry, spongeRates, dampEddies, spongeSigmaFor, SPONGE } from '../js/dynamics/sponge.module.js';
+import { P0, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -56,6 +56,17 @@ test('the sponge falls linearly in σ from its rate at the top to zero at its de
   const rates = spongeRates(Float64Array.from([0.001, 0.005, 0.009, 0.011]), 0.01, 2);
   assert.deepEqual(Array.from(rates, (r) => +(r * 2 * 86400).toFixed(6)), [0.9, 0.5, 0.1, 0]);
   assert.ok(spongeRates(Float64Array.from([0.001]), 0.01, 0).every((r) => r === 0));
+});
+
+test('the sponge begins at 78 Pa on bl36 and at σ 0.005 on the other grids, and the model takes its grid\'s onset', () => {
+  assert.equal(spongeSigmaFor('bl36'), 78 / 101325);
+  for (const name of ['bl34', 'cam26', null]) assert.equal(spongeSigmaFor(name), SPONGE.sigma);
+  for (const name of ['bl34', 'bl36']) {
+    const levels = sigmaInterfaces(name), model = createModel(new Grid(4), { ocean: false, levels });
+    const expected = spongeRates(model.core.sigmaMid, spongeSigmaFor(name), SPONGE.days);
+    assert.deepEqual(Array.from(model.core.spongeRates), Array.from(expected));
+    for (let k = 0; k < model.core.K; k++) if (model.core.sigmaMid[k] * P0 > (name === 'bl36' ? 78 : 0.005 * P0)) assert.equal(model.core.spongeRates[k], 0);
+  }
 });
 
 test('the model returns the kinetic energy the sponge removes as heat', () => {

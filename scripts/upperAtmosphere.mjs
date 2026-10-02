@@ -19,11 +19,11 @@ import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { cellVector, divergence } from '../js/dynamics/operators.module.js';
-import { R_DRY, CP_DRY, P0, GRAVITY, createSigmaCore } from '../js/dynamics/sigmaCore.module.js';
+import { R_DRY, CP_DRY, P0, GRAVITY, createSigmaCore, sigmaGridName } from '../js/dynamics/sigmaCore.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { SIDEREAL_DAY } from '../js/model.module.js';
 import { createSurface, TOP_DRAG } from '../js/physics/surface.module.js';
-import { spongeGeometry, spongeRates, dampEddies, SPONGE } from '../js/dynamics/sponge.module.js';
+import { spongeGeometry, spongeRates, dampEddies, spongeSigmaFor, SPONGE } from '../js/dynamics/sponge.module.js';
 import { createGravityWaveDrag } from '../js/physics/gravityWaves.module.js';
 
 const KAPPA = R_DRY / CP_DRY, DEG = 180 / Math.PI;
@@ -105,13 +105,20 @@ const jet = (row, south) => {
   return `${best.toFixed(0)}@${at.toFixed(0)}`;
 };
 
+const equator = (row) => {
+  let sum = 0, n = 0;
+  row.uMean.forEach((u, b) => { if (Math.abs(-90 + (b + 0.5) * row.bandWidth) < 5) { sum += u; n++; } });
+  return (sum / n).toFixed(0);
+};
+
 // One line: per layer above 200 hPa, the strongest zonal-mean westerly
 // poleward of 20 degrees in each hemisphere (m/s at the band's latitude,
-// 2.5-degree bands), the largest edge wind, the eddy kinetic energy, the
-// eddy temperature's rms, the rms divergence and the Courant numbers.
+// 2.5-degree bands) and the zonal-mean wind within 5 degrees of the
+// equator, the largest edge wind, the eddy kinetic energy, the eddy
+// temperature's rms, the rms divergence and the Courant numbers.
 export function upperWindLine(mesh, levels, state, dt, day) {
   const { rows } = upperAtmosphere(mesh, levels, state, { bandWidth: 2.5, dt });
-  return `upper winds day ${day} (jet N / jet S, m/s@lat; max wind m/s; eddy KE m²/s²; eddy T rms K; divergence rms 1e-6/s; Courant horizontal/vertical): ` + rows.map((r) => `${r.pressure.toPrecision(3)} hPa ${jet(r, false)}/${jet(r, true)} ${r.maxWind.toFixed(0)} ${r.eke.toFixed(0)} ${r.tRms.toFixed(1)} ${(1e6 * r.divRms).toFixed(1)} ${r.courant.toFixed(2)}/${r.verticalCourant.toFixed(2)}`).join('; ');
+  return `upper winds day ${day} (jet N / jet S / 5S-5N, m/s@lat; max wind m/s; eddy KE m²/s²; eddy T rms K; divergence rms 1e-6/s; Courant horizontal/vertical): ` + rows.map((r) => `${r.pressure.toPrecision(3)} hPa ${jet(r, false)}/${jet(r, true)}/${equator(r)} ${r.maxWind.toFixed(0)} ${r.eke.toFixed(0)} ${r.tRms.toFixed(1)} ${(1e6 * r.divRms).toFixed(1)} ${r.courant.toFixed(2)}/${r.verticalCourant.toFixed(2)}`).join('; ');
 }
 
 // The zonal mean of the east component of a treatment's wind tendency.
@@ -138,7 +145,7 @@ function topTendency(mesh, levels, state, options, waves) {
   const surface = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, ...options });
   const K = levels.length - 1, E = mesh.nEdges, out = [new Float64Array(mesh.nCells), new Float64Array(K * mesh.nCells), new Float64Array(K * E)];
   surface.applyTop(state, out);
-  const rates = spongeRates(core.sigmaMid, options.spongeSigma ?? SPONGE.sigma, options.spongeDays ?? SPONGE.days);
+  const rates = spongeRates(core.sigmaMid, options.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), options.spongeDays ?? SPONGE.days);
   if (rates.some((r) => r > 0)) {
     const geometry = spongeGeometry(mesh), means = new Float64Array(2 * geometry.bands), layer = new Float64Array(E);
     rates.forEach((rate, k) => {

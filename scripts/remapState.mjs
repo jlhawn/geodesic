@@ -1,9 +1,8 @@
 // A saved state carried onto another sigma grid:
 //   LEVELS=bl36 node scripts/remapState.mjs <in.bin> <out.bin>
 // The atmosphere (theta, u, q, qc) goes through remapLevels
-// (js/physics/regrid.module.js), each layer the σ-weighted mean of the
-// layers it overlaps; everything else, the clock included, is kept as
-// saved, so a spin-up continues from the result on the new grid.
+// (js/physics/regrid.module.js); everything else, the clock included, is
+// kept as saved, so a spin-up continues from the result on the new grid.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';

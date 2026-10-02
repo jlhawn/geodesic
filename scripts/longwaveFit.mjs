@@ -4,7 +4,9 @@
 //   node scripts/longwaveFit.mjs            report the spectral model and the g-points
 //   FIT=3000 node scripts/longwaveFit.mjs   refit the spectral model (Nelder-Mead iterations)
 //   WRITE=1 node scripts/longwaveFit.mjs    rewrite js/physics/longwaveTable.module.js
-// LEVELS (one of SIGMA_GRIDS, bl34 by default) names the levels the columns are laid on.
+//   LEVELS=bl36 UPPER_WEIGHT=100 FIT=4000 WRITE=1 node scripts/longwaveFit.mjs   the bl36 table
+// LEVELS (one of SIGMA_GRIDS, bl34 by default) names the levels the columns are laid on, the
+// spectral model the report starts from (longwaveTableFor's) and the table WRITE rewrites.
 //
 // The spectral model is that of Jeevanjee & Fueglistaler (2020, JAS 77, 479)
 // and Williams et al. (2025, arXiv 2508.09353): the water vapour lines' mass
@@ -35,7 +37,8 @@
 // misses of the g-points against RRTMG for the tropical, midlatitude summer
 // and winter and subarctic winter atmospheres (OLR, surface downward flux,
 // net flux at 200 hPa, the cooling-rate profile, with UPPER_WEIGHT on the
-// 3-30 hPa layers and the top layer's relative miss) and against LBLRTM's
+// 3-30 hPa layers and the relative miss of every layer above 3 hPa whose mass
+// the reference covers to 90 %: the top layer on bl34, three on bl36) and against LBLRTM's
 // forcing for doubled CO2 (DOUBLING_WEIGHT) and for methane and nitrous
 // oxide from none to their 1860 amounts (MINOR_WEIGHT) on the midlatitude
 // summer profile (Iacono et al. 2008), with the spectral model's own misses
@@ -55,7 +58,7 @@
 import { writeFileSync } from 'node:fs';
 import { GRAVITY, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, referenceHeating, layerHeating, interfaceAt, MOLAR } from './standardAtmospheres.mjs';
-import { LONGWAVE_CONSTANTS, gasPaths, clearLongwave, normalizedPoints } from '../js/physics/longwave.module.js';
+import { LONGWAVE_CONSTANTS, gasPaths, clearLongwave, normalizedPoints, longwaveTableFor, LONGWAVE_TABLE_FILES } from '../js/physics/longwave.module.js';
 
 const H = 6.62607015e-34, CL = 2.99792458e8, KB = 1.380649e-23, SIGMA = 5.670374419e-8;
 const { pRef, diffusivity } = LONGWAVE_CONSTANTS;
@@ -144,7 +147,8 @@ export function spectralFluxes(P, column, intervals) {
 
 const RRTMG = ['TROP', 'MLS', 'MLW', 'SAW'];
 const UPPER_WEIGHT = Number(process.env.UPPER_WEIGHT ?? 30), BAND_WEIGHT = Number(process.env.BAND_WEIGHT ?? 3), MINOR_WEIGHT = Number(process.env.MINOR_WEIGHT ?? 20), DOUBLING_WEIGHT = Number(process.env.DOUBLING_WEIGHT ?? 150), DLR_WEIGHT = Number(process.env.DLR_WEIGHT ?? 3), TROPOSPHERE_WEIGHT = Number(process.env.TROPOSPHERE_WEIGHT ?? 1000);
-const columns = Object.fromEntries(Object.keys(BENCHMARK.atmospheres).map((a) => [a, modelColumn(BENCHMARK.atmospheres[a], sigmaInterfaces(process.env.LEVELS ?? 'bl34'))]));
+const LEVELS = process.env.LEVELS ?? 'bl34';
+const columns = Object.fromEntries(Object.keys(BENCHMARK.atmospheres).map((a) => [a, modelColumn(BENCHMARK.atmospheres[a], sigmaInterfaces(LEVELS))]));
 const mls = columns.MLS;
 const scaled = (column, gas, factor) => ({ ...column, [gas]: column[gas].map((x) => x * factor) });
 const withGas = (column, gas, vmr) => ({ ...column, [gas]: column[gas].map((_, k) => vmr * MOLAR[gas] / MOLAR.air * (1 - column.q[k])) });
@@ -157,13 +161,15 @@ export function misses(fluxes) {
     const column = columns[a], ref = BENCHMARK.rrtmgLongwave[a].levels, r = fluxes(column);
     const K = column.T.length, top = ref[ref.length - 1], sfc = ref[0];
     const heat = layerHeating(column, r.net), refHeat = referenceHeating(column, ref);
-    let trop = 0, nt = 0, strat = 0, ns = 0, upper = 0, nu = 0;
+    let trop = 0, nt = 0, strat = 0, ns = 0, upper = 0, nu = 0, tops = 0;
     for (let k = 0; k < K; k++) {
       const p = 0.5 * (column.levels[k] + column.levels[k + 1]) * column.ps, d = (heat[k] - refHeat[k]) ** 2;
       if (p > 20000) { trop += d; nt++; } else if (p > 300) { strat += d; ns++; }
       if (p > 300 && p < 3000) { upper += d; nu++; }
+      const covered = (column.levels[k + 1] * column.ps - Math.max(column.levels[k] * column.ps, top.p)) / ((column.levels[k + 1] - column.levels[k]) * column.ps);
+      if (p < 300 && covered >= 0.9) tops += (heat[k] / refHeat[k] - 1) ** 2;
     }
-    out.atmospheres[a] = { olr: r.up[0] - top.up, dlr: r.down[K] - sfc.down, net200: interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000), troposphere: Math.sqrt(trop / nt), stratosphere: Math.sqrt(strat / ns), upper: Math.sqrt(upper / nu), top: heat[0] / refHeat[0] - 1, heat, refHeat };
+    out.atmospheres[a] = { olr: r.up[0] - top.up, dlr: r.down[K] - sfc.down, net200: interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000), troposphere: Math.sqrt(trop / nt), stratosphere: Math.sqrt(strat / ns), upper: Math.sqrt(upper / nu), top: heat[0] / refHeat[0] - 1, tops, heat, refHeat };
   }
   return out;
 }
@@ -174,7 +180,7 @@ export function score(P, verbose = false, keys = null) {
   const total = (c) => (table ? clearLongwave(c, { table }) : spectralFluxes(P, c, intervals));
   const m = misses(total);
   let s = 0;
-  for (const a of RRTMG) { const e = m.atmospheres[a]; s += e.olr ** 2 + DLR_WEIGHT * e.dlr ** 2 + e.net200 ** 2 + TROPOSPHERE_WEIGHT * e.troposphere ** 2 + 2 * e.stratosphere ** 2 * 10 + UPPER_WEIGHT * (4 * e.upper ** 2 + e.top ** 2); }
+  for (const a of RRTMG) { const e = m.atmospheres[a]; s += e.olr ** 2 + DLR_WEIGHT * e.dlr ** 2 + e.net200 ** 2 + TROPOSPHERE_WEIGHT * e.troposphere ** 2 + 2 * e.stratosphere ** 2 * 10 + UPPER_WEIGHT * (4 * e.upper ** 2 + e.tops); }
   const K = mls.T.length;
   let bandLine = '', bandCooling = '';
   for (const b of BENCHMARK.rrtmgLongwave.MLS.bands) {
@@ -219,7 +225,11 @@ export function score(P, verbose = false, keys = null) {
   s += MINOR_WEIGHT * ((mT - refMinor.toa) ** 2 + (m2 - refMinor.p20000) ** 2 + (mS - refMinor.surface) ** 2);
   if (verbose) {
     console.log(`CH4 0 -> 806 ppbv and N2O 0 -> 275 ppbv: TOA ${mT.toFixed(2)} (${refMinor.toa}) 200 hPa ${m2.toFixed(2)} (${refMinor.p20000}) surface ${mS.toFixed(2)} (${refMinor.surface})`);
-    for (const a of RRTMG) { const e = m.atmospheres[a]; console.log(`${a.padEnd(4)} OLR ${e.olr.toFixed(2)}  DLR ${e.dlr.toFixed(2)}  net 200 hPa ${e.net200.toFixed(2)}  cooling rms ${e.troposphere.toFixed(3)} (p > 200 hPa) ${e.stratosphere.toFixed(3)} (3-200 hPa) ${e.upper.toFixed(3)} (3-30 hPa) K/day; top layer ${e.heat[0].toFixed(2)} (${e.refHeat[0].toFixed(2)})`); }
+    for (const a of RRTMG) {
+      const e = m.atmospheres[a], c = columns[a], above = [];
+      for (let k = 0; 0.5 * (c.levels[k] + c.levels[k + 1]) * c.ps < 300; k++) above.push(`${e.heat[k].toFixed(2)} (${e.refHeat[k].toFixed(2)})`);
+      console.log(`${a.padEnd(4)} OLR ${e.olr.toFixed(2)}  DLR ${e.dlr.toFixed(2)}  net 200 hPa ${e.net200.toFixed(2)}  cooling rms ${e.troposphere.toFixed(3)} (p > 200 hPa) ${e.stratosphere.toFixed(3)} (3-200 hPa) ${e.upper.toFixed(3)} (3-30 hPa) K/day; layers above 3 hPa ${above.join(' / ')}`);
+    }
     console.log(`MLS by RRTMG band, OLR/DLR misses:${bandLine}`);
     console.log(`doubled CO2 by band, TOA / tropopause / surface (LBLRTM):${doublingLine}`);
     console.log(`doubled CO2 287 -> 574 ppmv: TOA ${dT.toFixed(2)} (${ref.toa}) 200 hPa ${d2.toFixed(2)} (${ref.p20000}) surface ${dS.toFixed(2)} (${ref.surface})`);
@@ -308,7 +318,8 @@ function fitQuartic(x, y) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  let P = { ...SPECTRAL_MODEL, ...JSON.parse(process.env.P ?? '{}') };
+  const { points: _points, ...levelModel } = longwaveTableFor(sigmaInterfaces(LEVELS));
+  let P = { ...SPECTRAL_MODEL, ...levelModel, ...JSON.parse(process.env.P ?? '{}') };
   const keys = binning(binningModel(P));
   if (process.env.FIT) {
     const names = (process.env.KEYS ?? 'kRot,lRot,kVr,kCo2,lCo2,lCo2Hi,spread,spreadC,kO3,nO3,kCh4,kN2o,tCo2,kLaser,roberts,tSelf,tailCo2,depthCo2,lTailCo2,tailH2o,depthH2o,tailO3,depthO3').split(',');
@@ -330,6 +341,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   if (process.env.WRITE) {
     const lines = table.points.map((p) => `  [${p.join(', ')}],`).join('\n');
-    writeFileSync(new URL('../js/physics/longwaveTable.module.js', import.meta.url), `// Generated by scripts/longwaveFit.mjs; each row a g-point: mass absorption coefficients (m2/kg) at\n// p_ref of the water vapour lines, the self continuum (per Pa of vapour pressure), CO2, ozone, methane\n// and nitrous oxide, then the quartic in (T - 250)/100 of its share of sigma T^4.\nexport const LONGWAVE_SPECTRAL_MODEL = ${JSON.stringify(Object.fromEntries(Object.entries(P).map(([k, v]) => [k, +v.toPrecision(6)])))};\nexport const LONGWAVE_POINTS = [\n${lines}\n];\n`);
+    writeFileSync(new URL(`../js/physics/${LONGWAVE_TABLE_FILES[LEVELS] ?? LONGWAVE_TABLE_FILES.bl34}`, import.meta.url), `// Generated by scripts/longwaveFit.mjs; each row a g-point: mass absorption coefficients (m2/kg) at\n// p_ref of the water vapour lines, the self continuum (per Pa of vapour pressure), CO2, ozone, methane\n// and nitrous oxide, then the quartic in (T - 250)/100 of its share of sigma T^4.\nexport const LONGWAVE_SPECTRAL_MODEL = ${JSON.stringify(Object.fromEntries(Object.entries(P).map(([k, v]) => [k, +v.toPrecision(6)])))};\nexport const LONGWAVE_POINTS = [\n${lines}\n];\n`);
   }
 }

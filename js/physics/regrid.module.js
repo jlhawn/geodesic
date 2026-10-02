@@ -2,6 +2,7 @@ import { cellVector } from '../dynamics/operators.module.js';
 import { UNDECIDED } from './radiation.module.js';
 import { SNOW_AGEING } from './ice.module.js';
 import { seasonEstimate, treelineFactor, moistureEstimate, aridityFactor, airCycle, carbonEquilibrium, carbonRecord } from './land.module.js';
+import { R_DRY, CP_DRY } from '../dynamics/sigmaCore.module.js';
 
 /*
  * Barycentric weights of p in the plane through unit vectors a, b, c:
@@ -357,13 +358,19 @@ export function regridState(source, target, state, progress = null, { land = nul
  * conservatively in σ. Each source layer holds its value uniformly
  * between its interfaces, and each target layer takes the σ-thickness-
  * weighted mean of the source layers it overlaps, so the column integral
- * Σ dσ·value of theta, q, qc in every cell and of u on every edge is
- * kept. A target layer inside a single source layer takes that layer's
- * value as it is: where the grids share both interfaces of a layer it
- * copies through bit for bit. pi, the surface pressure, is per column
- * and carries over unchanged; q and qc are clipped at zero as the model
- * clips them. Interfaces run top (0) to ground (1) as sigmaInterfaces
- * gives them; identical grids return copies.
+ * Σ dσ·value of q, qc in every cell and of u on every edge is kept. θ
+ * goes as its temperature θ·Π (Π the core's layer Exner function), so
+ * the column's enthalpy Σ dσ·Π·θ is kept; in a source layer that two or
+ * more target layers split, the temperature is log-linear in σ with the
+ * smaller of its slopes to the neighbouring layers (none at an extremum,
+ * at most the isentropic one), so the split layers keep the column's
+ * stratification. A target layer inside a single source layer that it
+ * does not split takes that layer's value (θ its temperature); where the
+ * grids share both interfaces of a layer it copies through bit for bit.
+ * pi, the surface pressure, is per column and carries over unchanged; q
+ * and qc are clipped at zero as the model clips them. Interfaces run top
+ * (0) to ground (1) as sigmaInterfaces gives them; identical grids return
+ * copies.
  */
 export function remapLevels(sourceLevels, targetLevels, { pi, theta, q = null, qc = null, u }, mesh) {
   const S = sourceLevels.length - 1, K = targetLevels.length - 1, C = mesh.nCells, E = mesh.nEdges;
@@ -391,5 +398,34 @@ export function remapLevels(sourceLevels, targetLevels, { pi, theta, q = null, q
     if (clip) for (let x = 0; x < out.length; x++) if (out[x] < 0) out[x] = 0;
     return out;
   };
-  return { pi: copy(pi), theta: remap(theta, C, false), q: remap(q, C, true), qc: remap(qc, C, true), u: remap(u, E, false) };
+  const kappa = R_DRY / CP_DRY;
+  const exner = (levels, k) => (levels[k + 1] ** (1 + kappa) - levels[k] ** (1 + kappa)) / ((1 + kappa) * (levels[k + 1] - levels[k]));
+  const sourceExner = Float64Array.from({ length: S }, (_, j) => exner(sourceLevels, j)), targetExner = Float64Array.from({ length: K }, (_, t) => exner(targetLevels, t));
+  const sourceMid = Float64Array.from({ length: S }, (_, j) => Math.log(0.5 * (sourceLevels[j] + sourceLevels[j + 1])));
+  const inside = Array.from({ length: S }, () => []);
+  overlaps.forEach((row, t) => { if (row.length === 1) inside[row[0][0]].push(t); });
+  const remapTheta = () => {
+    if (!theta) return null;
+    const temperature = Float64Array.from(theta, (x, n) => x * sourceExner[Math.floor(n / C)]);
+    const out = remap(temperature, C, false);
+    inside.forEach((targets, j) => {
+      if (targets.length < 2) return;
+      const offsets = targets.map((t) => Math.log(0.5 * (targetLevels[t] + targetLevels[t + 1])) - sourceMid[j]);
+      const widths = targets.map((t) => targetLevels[t + 1] - targetLevels[t]), width = widths.reduce((s, w) => s + w, 0);
+      for (let n = 0; n < C; n++) {
+        const here = Math.log(temperature[j * C + n]);
+        const above = j > 0 ? (here - Math.log(temperature[(j - 1) * C + n])) / (sourceMid[j] - sourceMid[j - 1]) : null;
+        const below = j < S - 1 ? (Math.log(temperature[(j + 1) * C + n]) - here) / (sourceMid[j + 1] - sourceMid[j]) : null;
+        const slope = above === null ? below : below === null ? above : above * below > 0 ? Math.sign(above) * Math.min(Math.abs(above), Math.abs(below)) : 0;
+        const shape = offsets.map((d) => Math.exp(Math.min(slope, kappa) * d)), mean = shape.reduce((s, x, m) => s + widths[m] * x, 0) / width;
+        targets.forEach((t, m) => { out[t * C + n] = temperature[j * C + n] * shape[m] / mean; });
+      }
+    });
+    overlaps.forEach((row, t) => {
+      const j = row[0][0], shared = row.length === 1 && targetLevels[t] === sourceLevels[j] && targetLevels[t + 1] === sourceLevels[j + 1];
+      for (let n = 0; n < C; n++) out[t * C + n] = shared ? theta[j * C + n] : out[t * C + n] / targetExner[t];
+    });
+    return out;
+  };
+  return { pi: copy(pi), theta: remapTheta(), q: remap(q, C, true), qc: remap(qc, C, true), u: remap(u, E, false) };
 }

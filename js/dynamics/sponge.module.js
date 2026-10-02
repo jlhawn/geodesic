@@ -58,6 +58,15 @@ export function spongeGeometry(mesh) {
 export const SPONGE = { sigma: 0.005, days: 1 };
 
 /*
+ * The sponge's onset on a grid by name: on bl36 the 78 Pa (over p0) at
+ * which the IFS's begins (IFS CY48r1 Part III, 2.2.11), so that the
+ * 0.3-1 hPa layer keeps its equatorial waves; SPONGE.sigma elsewhere.
+ */
+export function spongeSigmaFor(gridName) {
+  return gridName === 'bl36' ? 78 / 101325 : SPONGE.sigma;
+}
+
+/*
  * The sponge's rate (1/s) in each layer: 1/days at the top, falling
  * linearly in σ to zero at `sigma`.
  */

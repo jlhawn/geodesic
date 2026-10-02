@@ -6,6 +6,7 @@ import { FREEZING_POINT } from './ice.module.js';
 const REFERENCE_SURFACE_T = 305.086;
 const AVERAGE_SURFACE_T = 288;
 const EQUATOR_POLE_CONTRAST = 45;
+const STRATOSPHERE_BLEND = [0.1, 0.3];
 
 /*
  * Radiative–convective equilibrium θ(σ) of a single column over a surface
@@ -58,7 +59,9 @@ function geopotentialHeightAt(core, i, pi, pressure) {
  * Initial state: the equilibrium profile shifted by each column's
  * surface-temperature offset (tapered by σ), a
  * wavenumber-5 θ seed at ±45°, surface pressure set by bisection so the
- * 500 hPa surface is level, and winds in geostrophic balance with the
+ * 500 hPa surface is level, the profile read at each layer's pressure
+ * rather than its σ above σ 0.1 (blended in over σ 0.3-0.1, so that the
+ * stratosphere over high ground is not that of sea level lifted), and winds in geostrophic balance with the
  * model's own pressure gradient force, tapered to zero inside ±15°.
  * Over the sea the surface is a zonal climatological SST, 28 °C at the
  * equator falling to the freezing point near 70°, with 1.5 m of ice on
@@ -143,6 +146,20 @@ export function initializeState(model, {
   }
   const scale = p0 / (piSum / area);
   for (let i = 0; i < C; i++) pi[i] *= scale;
+  const logP = Float64Array.from(sigmaMid, (s) => Math.log(s * p0));
+  const referenceAt = (lnP) => {
+    let k = 0;
+    while (k < K - 2 && logP[k + 1] < lnP) k++;
+    return reference[k] + (reference[k + 1] - reference[k]) * (lnP - logP[k]) / (logP[k + 1] - logP[k]);
+  };
+  for (let k = 0; k < K; k++) {
+    const weight = Math.max(0, Math.min(1, (STRATOSPHERE_BLEND[1] - sigmaMid[k]) / (STRATOSPHERE_BLEND[1] - STRATOSPHERE_BLEND[0])));
+    if (weight === 0) continue;
+    for (let i = 0; i < C; i++) {
+      const n = k * C + i;
+      theta[n] += weight * (referenceAt(Math.log(sigmaMid[k] * pi[i])) - reference[k]);
+    }
+  }
 
   if (geostrophic) {
     core.diagnose(pi, theta);

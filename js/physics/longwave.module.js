@@ -1,4 +1,6 @@
 import { LONGWAVE_SPECTRAL_MODEL, LONGWAVE_POINTS } from './longwaveTable.module.js';
+import { LONGWAVE_SPECTRAL_MODEL as BL36_SPECTRAL_MODEL, LONGWAVE_POINTS as BL36_POINTS } from './longwaveTableBl36.module.js';
+import { sigmaGridName } from '../dynamics/sigmaCore.module.js';
 
 /*
  * The clear-sky longwave gas optics: g-points of a simple spectral model
@@ -32,6 +34,16 @@ export function normalizedPoints(points) {
   return rows;
 }
 export const LONGWAVE_TABLE = { ...LONGWAVE_SPECTRAL_MODEL, points: normalizedPoints(LONGWAVE_POINTS) };
+const BL36_TABLE = { ...BL36_SPECTRAL_MODEL, points: normalizedPoints(BL36_POINTS) };
+export const LONGWAVE_TABLE_FILES = { bl34: 'longwaveTable.module.js', bl36: 'longwaveTableBl36.module.js' };
+
+/*
+ * The table fitted on a grid's own columns: bl36's for bl36, the one fitted
+ * on bl34 for every other grid.
+ */
+export function longwaveTableFor(levels) {
+  return levels && sigmaGridName(levels) === 'bl36' ? BL36_TABLE : LONGWAVE_TABLE;
+}
 export const GAS_MOLAR = { air: 28.964, h2o: 18.015, co2: 44.01, o3: 47.997, ch4: 16.04, n2o: 44.013 };
 const STEFAN = 5.670374419e-8;
 
