@@ -11,9 +11,14 @@ import { cellVector } from '../dynamics/operators.module.js';
  * B_m such that the absolute fluxes of each direction sum to `flux` (Pa).
  * The spectrum is antisymmetric about u₀, so a column launches no net
  * momentum. Each wave rises unchanged until the first layer where it
- * meets its critical level (c − u changes sign) or breaks, where the
- * flux exceeds the saturation flux ρ k |c − u|³ / (2N), and leaves all
- * of its momentum there; what reaches the top layer is left in it
+ * meets its critical level (c − u changes sign) or breaks, and leaves all
+ * of its momentum there. It breaks where its flux exceeds the saturation
+ * flux ρ k |c − u|³ / (2N); with `breakingAmplitude` (B_w, m²/s²) the
+ * flux tested is that of the wave where it is present, ρ₀ B_w
+ * exp(−ln 2 ((c − u₀)/halfWidth)²) with ρ₀ the source layer's density,
+ * of which the grid-box mean `flux` is the intermittent fraction (AD99's
+ * ε); with `breakingAmplitude` null it is the grid-box mean flux of the
+ * wave itself. What reaches the top layer is left in it
  * (Shepherd & Shaw 2004), so each column's momentum is conserved. The
  * layer's acceleration is g times its deposited flux over its mass per
  * area. N² is (g/θ) ∂θ/∂z between the neighbouring layers, z from the
@@ -27,7 +32,7 @@ import { cellVector } from '../dynamics/operators.module.js';
  * `absoluteFlux` (K·C, Pa) holds the absolute flux of the waves of both
  * directions that rise through each layer above the source.
  */
-export const GRAVITY_WAVES = { flux: 4.3e-3, sourcePressure: 31500, halfWidth: 40, maxSpeed: 100, speedStep: 4, wavelength: 300e3, minimumFrequency: 0.005 };
+export const GRAVITY_WAVES = { flux: 4.3e-3, sourcePressure: 31500, halfWidth: 40, maxSpeed: 100, speedStep: 4, wavelength: 300e3, minimumFrequency: 0.005, breakingAmplitude: null };
 
 export function gravityWaveSpectrum({ flux, halfWidth, maxSpeed, speedStep }) {
   const J = Math.floor(maxSpeed / speedStep), shape = Float64Array.from({ length: J }, (_, j) => Math.exp(-Math.LN2 * (((j + 1) * speedStep) / halfWidth) ** 2));
@@ -41,6 +46,11 @@ export function gravityWaveSpectrum({ flux, halfWidth, maxSpeed, speedStep }) {
  * speeds nearest the source wind, since both the critical level and the
  * saturation flux take the slowest waves first.
  */
+export function gravityWaveBreaking({ flux, halfWidth, maxSpeed, speedStep, breakingAmplitude }) {
+  if (!breakingAmplitude) return gravityWaveSpectrum({ flux, halfWidth, maxSpeed, speedStep });
+  return Float64Array.from({ length: Math.floor(maxSpeed / speedStep) }, (_, j) => breakingAmplitude * Math.exp(-Math.LN2 * (((j + 1) * speedStep) / halfWidth) ** 2));
+}
+
 export function gravityWaveSums(amplitude) {
   const sums = new Float64Array(amplitude.length + 1);
   for (let j = 0; j < amplitude.length; j++) sums[j + 1] = sums[j] + amplitude[j];
@@ -54,10 +64,11 @@ export function gravityWaveSource(sigmaMid, sourcePressure, p0) {
 }
 
 export function createGravityWaveDrag(mesh, core, options = {}) {
-  const { flux, sourcePressure, halfWidth, maxSpeed, speedStep, wavelength, minimumFrequency, buffers = null, diagnose = false } = { ...GRAVITY_WAVES, ...options };
+  const { flux, sourcePressure, halfWidth, maxSpeed, speedStep, wavelength, minimumFrequency, breakingAmplitude, buffers = null, diagnose = false } = { ...GRAVITY_WAVES, ...options };
   const { K, C, E, sigmaMid, dSigma, R, g, kappa, p0 } = core.diagnostics;
   const { cellsOnEdge, nEdge, latCell, lonCell } = mesh;
   const amplitude = gravityWaveSpectrum({ flux, halfWidth, maxSpeed, speedStep }), J = amplitude.length, cumulative = gravityWaveSums(amplitude);
+  const breaking = gravityWaveBreaking({ flux, halfWidth, maxSpeed, speedStep, breakingAmplitude });
   const source = gravityWaveSource(sigmaMid, sourcePressure, p0), wavenumber = 2 * Math.PI / wavelength, floor = minimumFrequency * minimumFrequency;
   const shared = { east: buffers ? buffers.east : new SharedArrayBuffer(8 * K * C), north: buffers ? buffers.north : new SharedArrayBuffer(8 * K * C) };
   const east = new Float64Array(shared.east), north = new Float64Array(shared.north);
@@ -78,7 +89,7 @@ export function createGravityWaveDrag(mesh, core, options = {}) {
   function launch(wind, i, out, columnPressure) {
     deposit.fill(0);
     if (absoluteFlux) passing.fill(0);
-    const u0 = wind[source * C + i];
+    const u0 = wind[source * C + i], present = breakingAmplitude ? density[source] : 1;
     for (let side = -1; side <= 1; side += 2) {
       let gone = 0;
       for (let k = source - 1; k > 0 && gone < J; k--) {
@@ -86,7 +97,7 @@ export function createGravityWaveDrag(mesh, core, options = {}) {
         let reached = Math.max(gone, Math.min(J, Math.floor(-ahead / speedStep)));
         while (reached < J) {
           const relative = ahead + (reached + 1) * speedStep;
-          if (amplitude[reached] < saturation * relative * relative * relative) break;
+          if (present * breaking[reached] < saturation * relative * relative * relative) break;
           reached++;
         }
         deposit[k] += side * (cumulative[reached] - cumulative[gone]);

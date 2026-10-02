@@ -72,11 +72,11 @@ test('the model returns the kinetic energy the gravity-wave drag removes as heat
   assert.ok(Math.abs(energy() - before) < 1e-9 * changed, `energy changed by ${energy() - before} J against ${changed} J of kinetic energy moved`);
 });
 
-test('the GPU gravity-wave drag matches the CPU model after a step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const model = windyModel(8);
+async function engineAgreement(waves) {
+  const model = windyModel(8, { gravityWaves: waves });
   const { K } = model.core, C = model.mesh.nCells;
   const meanTheta = Float64Array.from({ length: K }, (_, k) => { let s = 0, a = 0; for (let i = 0; i < C; i++) { s += model.mesh.areaCell[i] * model.state[1][k * C + i]; a += model.mesh.areaCell[i]; } return s / a; });
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta, gravityWaves: {} });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta, gravityWaves: waves });
   gpu.upload(model.state);
   gpu.uploadPhysics();
   const dt = 900, time = model.time;
@@ -91,7 +91,27 @@ test('the GPU gravity-wave drag matches the CPU model after a step', { skip: !gp
   for (let x = 0; x < K * C; x++) rms += (model.gravityWaves.east[x] - physics.GWE[x]) ** 2;
   rms = Math.sqrt(rms / (K * C));
   for (let x = 0; x < u.length; x++) uDiff = Math.max(uDiff, Math.abs(model.state[2][x] - u[x]));
-  console.log(`one step at N=8: the accelerations differ by ${(86400 * worst).toExponential(1)} m/s/day at most (rms ${(86400 * rms).toExponential(1)}) of up to ${(86400 * scale).toFixed(2)}; the wind by ${uDiff.toExponential(1)} m/s`);
+  console.log(`one step at N=8 with ${JSON.stringify(waves)}: the accelerations differ by ${(86400 * worst).toExponential(1)} m/s/day at most (rms ${(86400 * rms).toExponential(1)}) of up to ${(86400 * scale).toFixed(2)}; the wind by ${uDiff.toExponential(1)} m/s`);
   assert.ok(rms < 1e-3 * scale, `rms difference ${rms} against ${scale}`);
   assert.ok(uDiff < 1e-2, `wind differs by ${uDiff} m/s`);
+  return model;
+}
+
+test('the GPU gravity-wave drag matches the CPU model after a step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  await engineAgreement({ breakingAmplitude: null });
+  await engineAgreement({ breakingAmplitude: 0.4 });
+});
+
+test('the intermittent breaking amplitude makes waves break below the top layer that otherwise reach it', () => {
+  const absoluteAt = (waves) => {
+    const model = windyModel(8, { gravityWaves: { ...waves, diagnose: true } }), { gravityWaves, state, mesh } = model;
+    gravityWaves.compute(state);
+    const C = mesh.nCells;
+    let top = 0, source = 0;
+    for (let i = 0; i < C; i++) { top += mesh.areaCell[i] * gravityWaves.absoluteFlux[C + i]; source += mesh.areaCell[i] * gravityWaves.absoluteFlux[(gravityWaves.source - 1) * C + i]; }
+    return { top, source };
+  };
+  const mean = absoluteAt({ breakingAmplitude: null }), present = absoluteAt({ breakingAmplitude: 0.4 });
+  console.log(`N=8: the share of the flux that rises from the source layer into the top layer, ${(present.top / present.source).toFixed(3)} with B_w 0.4 m²/s², ${(mean.top / mean.source).toFixed(3)} with the grid-box mean flux tested`);
+  assert.ok(present.top < 0.9 * mean.top, `top-layer flux ${present.top} against ${mean.top}`);
 });

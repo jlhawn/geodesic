@@ -6,7 +6,7 @@ import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.
 import { MOIST_DEFAULTS } from '../physics/moist.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { spongeGeometry, spongeRates as layerRates, SPONGE } from '../dynamics/sponge.module.js';
-import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveSource } from '../physics/gravityWaves.module.js';
+import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveSource, gravityWaveBreaking } from '../physics/gravityWaves.module.js';
 
 const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384, MAXIMUM_SURFACE_PRESSURE = 110000;
 
@@ -559,7 +559,7 @@ var<workgroup> partNorth: array<f32, ${WORKGROUP}>;
     if (accumulate) { D[D_DISS + n] += lost; } else { D[D_DISS + n] = lost; }
   }
 }`,
-  gravityWaves: `const GW_AMP = array<f32, GW_J>(GW_AMPLITUDES);
+  gravityWaves: `const GW_BRK = array<f32, GW_J>(GW_BREAKING);
 const GW_CUM = array<f32, GW_J_PLUS>(GW_SUMS);
 @compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
@@ -588,7 +588,7 @@ const GW_CUM = array<f32, GW_J_PLUS>(GW_SUMS);
   for (var dir = 0; dir < 2; dir++) {
     var w: array<f32, GW_SOURCE_PLUS>; var dep: array<f32, GW_SOURCE_PLUS>;
     for (var k = 0; k <= GW_SOURCE; k++) { w[k] = select(windN[k], windE[k], dir == 0); dep[k] = 0.0; }
-    let u0 = w[GW_SOURCE];
+    let u0 = w[GW_SOURCE]; let present = select(1.0, pres[GW_SOURCE] / (RGAS * temp[GW_SOURCE]), GW_INTERMITTENT);
     for (var side = -1.0; side <= 1.0; side += 2.0) {
       var gone = 0;
       for (var k = GW_SOURCE - 1; k > 0 && gone < GW_J; k--) {
@@ -597,7 +597,7 @@ const GW_CUM = array<f32, GW_J_PLUS>(GW_SUMS);
         loop {
           if (reached >= GW_J) { break; }
           let rel = ahead + f32(reached + 1) * GW_DC;
-          if (GW_AMP[reached] < sat[k] * rel * rel * rel) { break; }
+          if (present * GW_BRK[reached] < sat[k] * rel * rel * rel) { break; }
           reached++;
         }
         dep[k] += side * (GW_CUM[reached] - GW_CUM[gone]);
@@ -758,8 +758,8 @@ export async function createGpuCore(mesh, {
   const divergenceStep = divergenceDamping * meshSpacing * meshSpacing;
   const kernels = {};
   const waveSource = waves ? gravityWaveSource(sigmaMid, waves.sourcePressure, p0) : 0, waveAmplitudes = waves ? gravityWaveSpectrum(waves) : [0];
-  const waveSums = gravityWaveSums(waveAmplitudes);
-  const waveConstants = (body) => body.replaceAll('GW_AMPLITUDES', Array.from(waveAmplitudes, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SUMS', Array.from(waveSums, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SOURCE_PLUS', String(waveSource + 1)).replaceAll('GW_SOURCE', String(waveSource)).replaceAll('GW_J_PLUS', String(waveAmplitudes.length + 1)).replaceAll('GW_J', String(waveAmplitudes.length))
+  const waveSums = gravityWaveSums(waveAmplitudes), waveBreaking = waves ? gravityWaveBreaking(waves) : [0];
+  const waveConstants = (body) => body.replaceAll('GW_BREAKING', Array.from(waveBreaking, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_INTERMITTENT', waves && waves.breakingAmplitude ? 'true' : 'false').replaceAll('GW_SUMS', Array.from(waveSums, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SOURCE_PLUS', String(waveSource + 1)).replaceAll('GW_SOURCE', String(waveSource)).replaceAll('GW_J_PLUS', String(waveAmplitudes.length + 1)).replaceAll('GW_J', String(waveAmplitudes.length))
     .replaceAll('GW_DC', waves ? waves.speedStep.toFixed(6) : '0.0').replaceAll('GW_KH', waves ? (2 * Math.PI / waves.wavelength).toExponential(9) : '0.0').replaceAll('GW_N2_FLOOR', waves ? (waves.minimumFrequency ** 2).toExponential(9) : '0.0');
   const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
   if (!waves) { delete kernelBodies.gravityWaves; delete kernelBodies.gravityWaveDrag; }
