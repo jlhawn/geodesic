@@ -52,6 +52,10 @@ const EXTRA = ['fAsr', 'fNan', 'fClamped', 'tAlbedo', 'tOlr', 'tSwcre', 'tLwcre'
   'rain', 'evaporation', 'peruRain', 'sepLwp', 'peruLwp', 'sepRuns', 'peruRuns', 'namibiaLow', 'sepInversion', 'zonalPeak', 'iceStart', 'iceEnd'];
 
 if (import.meta.url === `file://${process.argv[1]}`) {
+  const header = ['name', 'of', 'dragScale', ...PARAMETERS2.map((p) => p.key), ...TERMS2C.map((t) => t.key), ...TERMS2C.map((t) => `w_${t.key}`), 'score', 'scoreN64', ...EXTRA];
+  const file = `${SWEEP2}/candidates.csv`;
+  const written = existsSync(file) ? readFileSync(file, 'utf8').split('\n')[0] : header.join(',');
+  if (written !== header.join(',')) throw new Error(`${file} has the columns ${written}, not ${header.join(',')}: move it aside before adding members`);
   const results = {}, audits = [];
   const queue64 = [...members], queue128 = [...members];
   const low = async () => {
@@ -67,8 +71,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   await Promise.all(audits);
 
   const cell = (x) => (typeof x === 'number' ? (Number.isFinite(x) ? Number(x.toPrecision(6)) : '') : x ?? '');
-  const header = ['name', 'of', 'dragScale', ...PARAMETERS2.map((p) => p.key), ...TERMS2C.map((t) => t.key), ...TERMS2C.map((t) => `w_${t.key}`), 'score', 'scoreN64', ...EXTRA];
-  const file = `${SWEEP2}/candidates.csv`;
   const old = existsSync(file) ? readFileSync(file, 'utf8').trim().split('\n').slice(1).filter((l) => !members.some((m) => l.startsWith(`${m.name},`))) : [];
   const lines = members.map((m) => {
     const v = results[m.name], s = score(v, TERMS2C), s64 = score(v, TERMS2);

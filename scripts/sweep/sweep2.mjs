@@ -58,6 +58,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   mkdirSync(SWEEP2, { recursive: true });
   const design = readDesign(`${SWEEP2}/design.csv`, PARAMETERS2, POINTS, SEED);
   if (!existsSync(resultsFile)) writeFileSync(resultsFile, header.join(',') + '\n');
+  const written = readFileSync(resultsFile, 'utf8').split('\n')[0];
+  if (written !== header.join(',')) throw new Error(`${resultsFile} has the columns ${written}, not ${header.join(',')}: move it aside to start a new sweep`);
   const done = new Set(readFileSync(resultsFile, 'utf8').trim().split('\n').slice(1).map((l) => Number(l.split(',')[0])));
   const queue = design.filter((p) => !done.has(p.point) && (!ONLY || ONLY.includes(p.point)));
   const pending = [];
