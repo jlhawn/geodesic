@@ -24,7 +24,15 @@ import { SEA_DRAG } from './surface.module.js';
  * tridiagonal system, which conserves each column's mass-weighted
  * total exactly. Nothing mixes above the boundary-layer top; the search
  * stops at searchTop in σ. The surface fluxes and drag remain explicit
- * sources on the lowest layer, which the diffusion then spreads upward.
+ * sources on the lowest layer, which the diffusion then spreads upward,
+ * save that with implicitDrag the edge solve takes the surface drag
+ * ρ C_D max(|v|, gustiness) (`surfaceDrag`, per cell, averaged onto the
+ * edge) as the lower boundary of its implicit system, keeps the stress
+ * it applies to each edge's lowest layer in `surfaceStress` and counts
+ * the kinetic energy it removes into the lowest layer's dissipation. The
+ * surface buoyancy flux takes heatCoefficients (C_H) where given, and is
+ * `surfaceBuoyancy` per cell where given: the radiation's, from the
+ * sensible and latent fluxes it applied.
  *
  * A stratocumulus deck mixes its layer from cloud top, which the bulk
  * Richardson number of the surface-driven search does not see. With
@@ -122,7 +130,7 @@ export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, pertur
 export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 
 export function createBoundaryLayer(mesh, core, {
-  dragCoefficient = SEA_DRAG, dragCoefficients = null, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, stratiform = null, buffers = null,
+  dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, stratiform = null, buffers = null,
   entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT,
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
@@ -147,6 +155,9 @@ export function createBoundaryLayer(mesh, core, {
   const entrainmentVelocity = new Float64Array(entrainmentBuffer);
   const extra = (name) => (buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * C));
   const regimeBuffer = extra('regime'), mixingTopBuffer = extra('mixingTop'), coolingBuffer = extra('cloudTopCooling'), velocityBuffer = extra('radiativeVelocity'), decouplingBuffer = extra('decoupling');
+  const surfaceDragBuffer = extra('surfaceDrag'), stressBuffer = buffers && buffers.surfaceStress ? buffers.surfaceStress : new SharedArrayBuffer(8 * (E + 1));
+  const surfaceDrag = new Float64Array(surfaceDragBuffer), surfaceStress = new Float64Array(stressBuffer, 0, E), stressReady = new Float64Array(stressBuffer, 8 * E, 1);
+  const heatCoefficient = (i) => (heatCoefficients ? heatCoefficients[i] : dragCoefficients ? dragCoefficients[i] : dragCoefficient);
   const regime = new Float64Array(regimeBuffer), mixingTop = new Float64Array(mixingTopBuffer), cloudTopCooling = new Float64Array(coolingBuffer), radiativeVelocity = new Float64Array(velocityBuffer), decoupling = new Float64Array(decouplingBuffer);
   const thetaL = new Float64Array(K), totalWater = new Float64Array(K);
   const entraining = efficiency > 0 || shear > 0;
@@ -166,6 +177,7 @@ export function createBoundaryLayer(mesh, core, {
       riPrev[i] = 0;
       zPrev[i] = geopotential[bottom * C + i] / g;
       depth[i] = zPrev[i];
+      if (implicitDrag) surfaceDrag[i] = density(pi, bottom, i, theta) * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness);
     }
     for (let k = bottom - 1; k >= kTop; k--) {
       cellVector(mesh, u.subarray(k * E, (k + 1) * E), vector, iFrom, iTo);
@@ -196,7 +208,7 @@ export function createBoundaryLayer(mesh, core, {
       entrainmentVelocity[i] = 0;
       const base = bottom * C + i;
       const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]) : 0;
-      const buoyancy = g / theta[base] * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
+      const buoyancy = givenBuoyancy ? givenBuoyancy[i] : g / theta[base] * heatCoefficient(i) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
       buoyancyFlux[i] = buoyancy;
       if (h <= 0) continue;
       let scale = friction[i];
@@ -228,9 +240,10 @@ export function createBoundaryLayer(mesh, core, {
   }
 
   function surfaceBuoyancy(i, pi, theta, surfaceT, q) {
+    if (givenBuoyancy) return givenBuoyancy[i];
     const base = bottom * C + i;
     const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]) : 0;
-    return g / theta[base] * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
+    return g / theta[base] * heatCoefficient(i) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
   }
 
   function density(pi, k, i, theta) {
@@ -368,13 +381,13 @@ export function createBoundaryLayer(mesh, core, {
 
   function solve(field, offset, stride, coefficient, coefficientStride, dt, columnMass) {
     let active = false;
-    for (let k = kTop; k < bottom; k++) if (coefficient[k * coefficientStride] > 0) { active = true; break; }
+    for (let k = kTop; k < K; k++) if (coefficient[k * coefficientStride] > 0) { active = true; break; }
     if (!active) return false;
     for (let j = 0; j < n; j++) {
       const k = kTop + j;
       mass[j] = columnMass * dSigma[k] / g;
       upper[j] = j > 0 ? dt * coefficient[(k - 1) * coefficientStride] / mass[j] : 0;
-      lower[j] = k < bottom ? dt * coefficient[k * coefficientStride] / mass[j] : 0;
+      lower[j] = dt * coefficient[k * coefficientStride] / mass[j];
       rhs[j] = field[offset + k * stride];
     }
     let denominator = 1 + upper[0] + lower[0];
@@ -426,7 +439,10 @@ export function createBoundaryLayer(mesh, core, {
     for (let e = eFrom; e < eTo; e++) {
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], columnMass = 0.5 * (pi[a] + pi[b]);
       for (let k = kTop; k < K; k++) { edgeCoefficient[k] = 0.5 * (mixing[k * C + a] + mixing[k * C + b]); before[k] = u[k * E + e]; }
-      if (!solve(u, e, E, edgeCoefficient, 1, dt, columnMass) || !dissipation) continue;
+      if (implicitDrag) edgeCoefficient[bottom] = 0.5 * (surfaceDrag[a] + surfaceDrag[b]);
+      const solved = solve(u, e, E, edgeCoefficient, 1, dt, columnMass);
+      if (implicitDrag) { surfaceStress[e] = edgeCoefficient[bottom] * u[bottom * E + e]; stressReady[0] = 1; }
+      if (!solved || !dissipation) continue;
       let loss = 0, total = 0;
       for (let k = kTop; k < K; k++) {
         const m = columnMass * dSigma[k] / g, now = u[k * E + e], change = now - before[k];
@@ -437,6 +453,7 @@ export function createBoundaryLayer(mesh, core, {
         const shear = u[k * E + e] - u[(k + 1) * E + e], part = dt * edgeCoefficient[k] * shear * shear;
         share[k] += part; share[k + 1] += part;
       }
+      if (implicitDrag) share[bottom] += dt * edgeCoefficient[bottom] * u[bottom * E + e] * u[bottom * E + e];
       for (let k = kTop; k < K; k++) total += share[k];
       if (total <= 0) continue;
       for (let k = kTop; k < K; k++) dissipation[k * E + e] += loss * share[k] / (total * columnMass * dSigma[k] / g);
@@ -444,7 +461,7 @@ export function createBoundaryLayer(mesh, core, {
   }
 
   return {
-    diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, regime, mixingTop, cloudTopCooling, radiativeVelocity, decoupling, kTop, turbulence,
-    shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer, regime: regimeBuffer, mixingTop: mixingTopBuffer, cloudTopCooling: coolingBuffer, radiativeVelocity: velocityBuffer, decoupling: decouplingBuffer },
+    diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, regime, mixingTop, cloudTopCooling, radiativeVelocity, decoupling, kTop, turbulence, implicitDrag, surfaceDrag, surfaceStress, stressReady,
+    shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer, regime: regimeBuffer, mixingTop: mixingTopBuffer, cloudTopCooling: coolingBuffer, radiativeVelocity: velocityBuffer, decoupling: decouplingBuffer, surfaceDrag: surfaceDragBuffer, surfaceStress: stressBuffer },
   };
 }
