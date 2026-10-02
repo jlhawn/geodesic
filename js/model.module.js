@@ -129,7 +129,7 @@ export function createModel(gridOrMesh, {
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
       const { surfaceShortwave, surfaceDirect } = radiation;
       for (let i = iFrom; i < iTo; i++) {
-        if (land && landMask[i]) { land.update(i, state[3], radiation.surfaceFlux, radiation.evaporation[i], dt); continue; }
+        if (land && landMask[i]) { land.update(i, state[3], radiation.surfaceFlux, radiation.evaporation[i], dt, state[1][bottom + i] * core.diagnostics.exnerLayer[bottom + i]); continue; }
         const h = state[6][i], partial = h > 0 && seaIce.cover(i, h) < 1;
         seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt, partial ? surfaceDirect[i] * directContrast[i] + (surfaceShortwave[i] - surfaceDirect[i]) * diffuseContrast[i] : 0);
       }

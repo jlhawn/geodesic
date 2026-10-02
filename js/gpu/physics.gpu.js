@@ -1,4 +1,5 @@
-import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physics/ice.module.js';
+import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT } from '../physics/ice.module.js';
+import { DARKENING_WETNESS } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE } from '../physics/radiation.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS } from '../physics/moist.module.js';
@@ -29,6 +30,10 @@ export function physicsConstants(o) {
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
   if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${o.cloudOverlap}`);
+  const darkening = o.soilDarkening === true ? 'surface' : o.soilDarkening;
+  if (darkening !== false && !DARKENING_WETNESS[darkening]) throw new Error(`soilDarkening is 'surface', 'rootZone' or false, not ${o.soilDarkening}`);
+  const wetting = o.darkeningWetness ?? DARKENING_WETNESS[darkening || 'surface'];
+  if (!(o.treelineWarmth[1] > o.treelineWarmth[0])) throw new Error(`treelineWarmth must rise from its first to its second temperature, not ${o.treelineWarmth}`);
   if (!(o.overcastInversion?.[1] > o.overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${o.overcastInversion}`);
   if (o.deckRest !== 'depth' && o.deckRest !== 'inversion' && o.deckRest !== 'regime') throw new Error(`deckRest must be 'depth', 'inversion' or 'regime', not ${o.deckRest}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
@@ -77,7 +82,7 @@ const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: 
 const PL_SEPARATE: bool = ${o.plumeClosure === 'separate'}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
 const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.plumeConsumption === 'buoyant'}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
 const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
-const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const DARKENING: bool = ${!!o.soilDarkening}; const ALB_WETSOIL: f32 = ${o.wetSoilAlbedo}; const DARK_FROM: f32 = ${o.darkeningWetness[0]}; const DARK_SPAN: f32 = ${o.darkeningWetness[1] - o.darkeningWetness[0]}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
+const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const DARKENING: bool = ${darkening !== false}; const DARK_SURFACE: bool = ${darkening === 'surface'}; const ALB_WETSOIL: f32 = ${o.wetSoilAlbedo}; const DARK_FROM: f32 = ${wetting[0]}; const DARK_SPAN: f32 = ${wetting[1] - wetting[0]}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_CEILINV: f32 = ${o.ceilingInversion ?? o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
@@ -85,12 +90,14 @@ const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupl
 const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling};
 const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 const ALB_OLDSNOW: f32 = ${o.oldSnowAlbedo}; const MASKED: bool = ${!!o.snowMasking && !!o.vegetation}; const ALB_FOREST: f32 = ${o.forestSnowAlbedo}; const CLOSED_CANOPY: f32 = ${o.closedCanopy}; const CANOPY_MEM: f32 = ${o.canopyMemory};
+const TREELINE: bool = ${!!o.treeline}; const SEASON_C: f32 = ${o.seasonThreshold}; const SEASON_K: f32 = ${MELTING_POINT + o.seasonThreshold}; const SEASON_SHORTEST: f32 = ${o.minimumSeason / 365}; const SEASON_MEM: f32 = ${o.seasonMemory}; const TREE_LO: f32 = ${o.treelineWarmth[0]}; const TREE_SPAN: f32 = ${o.treelineWarmth[1] - o.treelineWarmth[0]}; const TREE_GROW: f32 = ${o.treeGrowthTime}; const TREE_DECLINE: f32 = ${o.treeDeclineTime};
 `;
 }
 
 export const PHYSICS_FUNCTIONS = `
 fn esat(T: f32) -> f32 { return 611.2 * exp(17.67 * (T - 273.15) / (T - 29.65)); }
 fn qsat(T: f32, p: f32) -> f32 { let es = esat(T); let dry = p - (1.0 - EPSILON) * es; return select(1.0, EPSILON * es / dry, dry > 0.0); }
+fn smallRate(x: f32) -> f32 { return select(1.0 - exp(-x), x * (1.0 - 0.5 * x), x < 1e-3); }
 fn openWaterAlbedo(mu: f32) -> f32 { return 0.026 / (pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1.0); }
 fn surfaceAlbedo(h: f32, water: f32, snow: f32, T: f32, snowAlbedo: f32) -> f32 {
   if (h <= 0.0) { return water; }
@@ -640,7 +647,7 @@ export const PHYSICS_KERNELS = {
   let onLand = PH[PH_LAND + i] > 0.5; let onIceSheet = PH[PH_LAND + i] > 1.5;
   let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i]; let veg0 = PH[PH_VEG + i]; let surf0 = PH[PH_SURF + i];
   let bucket = select(BUCKET, ROOTCAP, VEGETATED);
-  let soilAlbedo = select(ALB_BARE, ALB_BARE - (ALB_BARE - ALB_WETSOIL) * clamp((soil0 / ROOTCAP - DARK_FROM) / DARK_SPAN, 0.0, 1.0), DARKENING);
+  let soilAlbedo = select(ALB_BARE, ALB_BARE - (ALB_BARE - ALB_WETSOIL) * clamp((select(soil0 / ROOTCAP, surf0 / SURFCAP, DARK_SURFACE) - DARK_FROM) / DARK_SPAN, 0.0, 1.0), DARKENING);
   let bareAlbedo = select(ALB_LAND, soilAlbedo + (ALB_VEG - soilAlbedo) * veg0, VEGETATED);
   let ownSnow = select(ALB_SNOW, PH[PH_SNOWALB + i], AGEING);
   let coveredSnow = select(ownSnow, ownSnow + (ALB_FOREST - ownSnow) * min(1.0, PH[PH_CANOPY + i] / CLOSED_CANOPY), MASKED);
@@ -892,8 +899,19 @@ export const PHYSICS_KERNELS = {
       }
       if (onIceSheet) { veg = 0.0; }
       PH[PH_VEG + i] = veg;
+      let air = IN[S_TH + bottom] * D[D_EXM + bottom];
+      let keep = smallRate(dt / SEASON_MEM);
+      let seasonLength = PH[PH_SEASONL + i] + (select(0.0, 1.0, air >= SEASON_K) - PH[PH_SEASONL + i]) * keep;
+      let seasonWarmth = PH[PH_SEASONW + i] + (max(0.0, air - SEASON_K) - PH[PH_SEASONW + i]) * keep;
+      PH[PH_SEASONL + i] = seasonLength; PH[PH_SEASONW + i] = seasonWarmth;
       let standing = PH[PH_CANOPY + i];
-      PH[PH_CANOPY + i] = select(max(veg, standing + (veg - standing) * (1.0 - exp(-dt / CANOPY_MEM))), 0.0, onIceSheet);
+      var trees = max(veg, standing + (veg - standing) * (1.0 - exp(-dt / CANOPY_MEM)));
+      if (TREELINE) {
+        let factor = clamp((SEASON_C + seasonWarmth / max(seasonLength, SEASON_SHORTEST) - TREE_LO) / TREE_SPAN, 0.0, 1.0);
+        let goal = select(factor * veg, min(standing, factor), snow > 0.0);
+        trees = standing + (goal - standing) * smallRate(dt / select(TREE_DECLINE, TREE_GROW, goal > standing));
+      }
+      PH[PH_CANOPY + i] = select(trees, 0.0, onIceSheet);
       cap = ROOTCAP;
     }
     if (soil > cap) { PH[PH_RUNOFF + i] += soil - cap; soil = cap; }

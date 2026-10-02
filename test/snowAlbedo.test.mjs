@@ -52,8 +52,8 @@ test('the land ages its snow after each update, refreshes it with snowfall and s
   assert.equal(land.snowAlbedo[i], 0.85, 'bare ground holds the fresh albedo for the next snow');
 });
 
-test('trees standing above the snow darken it linearly to forestSnowAlbedo at closedCanopy, and the standing cover outlasts the cover\'s decay under snow', () => {
-  const land = createLandSurface(mesh, flat()), open = createLandSurface(mesh, flat(), { snowMasking: false });
+test('trees standing above the snow darken it linearly to forestSnowAlbedo at closedCanopy, and without the treeline the standing cover outlasts the cover\'s decay under snow', () => {
+  const land = createLandSurface(mesh, flat(), { treeline: false }), open = createLandSurface(mesh, flat(), { snowMasking: false });
   land.initialize(); open.initialize();
   const i = 4;
   for (const m of [land, open]) { m.snow[i] = 40; m.snowAlbedo[i] = 0.8; }
@@ -108,11 +108,11 @@ test('bare sea ice is 0.62 cold and darkens to 0.48 over the last kelvin below m
   assert.equal(sea.snowAlbedo[0], 0.85, 'open water too');
 });
 
-test('the land shares its snow albedo with the sea ice, saves it and the standing cover, and an older state loads them fresh and at the cover', async () => {
+test('the land shares its snow albedo with the sea ice, saves it and the standing cover, and an older state loads them fresh and at the cover (without the treeline)', async () => {
   const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)), { landBridges: {}, seaStraits: {} });
   const model = createModel(new Grid(8), { physics: true, topography: syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)), geography: { landBridges: {}, seaStraits: {} } });
   assert.equal(model.seaIce.snowAlbedo.buffer, model.land.snowAlbedo.buffer);
-  const land = createLandSurface(mesh, geography), C = mesh.nCells;
+  const land = createLandSurface(mesh, geography, { treeline: false }), C = mesh.nCells;
   land.initialize();
   const snow = Float64Array.from({ length: C }, (_, i) => (i % 3 === 0 ? 30 : 0)), vegetation = Float64Array.from({ length: C }, (_, i) => (i % 5) / 5);
   const ice = Float64Array.from({ length: C }, (_, i) => (geography.land[i] ? 0 : 1));
@@ -124,7 +124,7 @@ test('the land shares its snow albedo with the sea ice, saves it and the standin
   const snowAlbedo = Float64Array.from({ length: C }, (_, i) => 0.5 + 0.3 * ((i * 7) % 11) / 10), canopy = Float64Array.from({ length: C }, (_, i) => Math.min(1, vegetation[i] + 0.25));
   land.load({ soil: new Float64Array(C).fill(50), snow, vegetation, snowAlbedo, canopy }, ice);
   const saved = await decodeState(encodeState({ N: 8, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
-  const back = createLandSurface(mesh, geography);
+  const back = createLandSurface(mesh, geography, { treeline: false });
   back.load(saved.land, ice);
   for (let i = 0; i < C; i++) {
     const kept = snow[i] > 0 && (geography.land[i] || ice[i] > 0);
@@ -172,7 +172,7 @@ test('both engines give land, ice and the snow on them the same albedo from rand
 });
 
 test('over 48 GPU steps the snow albedo and the standing cover evolve as on the CPU, on land and on the ice', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const options = { land: { coldSnowAgeing: 2, meltingSnowAgeing: 12, canopyMemory: 6 * 3600, snowDeclineTime: 4 * 3600, refreshSnowfall: 0.5, wetSnowRange: 10 }, ice: { coldSnowAgeing: 2, meltingSnowAgeing: 12, refreshSnowfall: 0.5, wetSnowRange: 10 } };
+  const options = { land: { treeline: false, coldSnowAgeing: 2, meltingSnowAgeing: 12, canopyMemory: 6 * 3600, snowDeclineTime: 4 * 3600, refreshSnowfall: 0.5, wetSnowRange: 10 }, ice: { coldSnowAgeing: 2, meltingSnowAgeing: 12, refreshSnowfall: 0.5, wetSnowRange: 10 } };
   const prepare = (model) => {
     const C = model.mesh.nCells, init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
