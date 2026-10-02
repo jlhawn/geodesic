@@ -15,6 +15,7 @@ const CLEAR_SLOTS = { clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'O
 const EFFECT_SLOTS = { meanShortwaveCloudEffect: 'SWCREMEAN', meanLongwaveCloudEffect: 'LWCREMEAN' };
 const DT = 900;
 const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15 };
+const GRAY = { cloudScattering: 95, cloudAbsorption: 130 };
 
 function stats(cpu, gpu) {
   let maxDiff = 0, sumSq = 0, sumRef = 0;
@@ -60,8 +61,8 @@ async function engines(radiation) {
   return { cpu, gpu, C: cpu.mesh.nCells };
 }
 
-test('both engines sum the clear-sky fluxes per cell alike and read out the day-mean cloud effects, mirrored per cell and carried in a saved state', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpu, gpu, C } = await engines({ clearSkyPass: true, ...UNSCATTERED });
+test('both engines sum the clear-sky fluxes per cell alike and read out the day-mean cloud effects, mirrored per cell and carried in a saved state (under the gray optics, whose 48-step trajectories stay together cell by cell)', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpu, gpu, C } = await engines({ clearSkyPass: true, ...UNSCATTERED, ...GRAY });
   for (let s = 0; s < 48; s++) { cpu.step(DT); await gpu.step(DT); }
   const device = await gpu.gpu.downloadPhysics();
   const cpuSums = Object.fromEntries(CLEAR_SUMMED.map((name) => [name, Float64Array.from(cpu.radiation.summed[name])]));

@@ -897,7 +897,7 @@ function modelDigest(radiation, moist = {}) {
 
 test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
   const before = '3ca002d1e990a4335a223eb2232c51d0';
-  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED }).digest, before);
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED }).digest, before);
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
   assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
@@ -915,7 +915,7 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
 });
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
-  const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED };
+  const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED };
   assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, '3d0c610f9d4aebf624f3b240b5e2f6c1');
   assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
   assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
