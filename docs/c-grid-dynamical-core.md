@@ -5859,6 +5859,147 @@ matches the table to every digit; the June rerun, day by day where the
 table's ran in one segment, gives ASR 236.9, ASR − OLR −4.4 and SWCRE
 −51.4 on day 94 and the same loss, 0.314·10³ km³/day (9.191 → 8.249).
 
+**The spectral gases with the cloud and the surface (Oct 1).** Branch
+gas-benchmark (1f61d5c, M21's "The gases on fixed profiles") merged on
+sweep2 (5985713), both sides kept. PH gains LWSFCSUM after SNOWALB,
+CANOPY, SEASONL and SEASONW in one sequence, LV gains OZS; the spin-up's
+daily line carries the sea's net surface longwave and the iced cells'
+sunlight. Where the gases meet cloud the gas branch already went through
+the arrays the phase optics now fill, so on the CPU nothing else changed:
+each g-point combines the layer's cloud emissivity f (1 − exp(−κ W/f)), κ
+by phase, as 1 − (1 − ε_gas)(1 − ε_cloud) (in the longwave every layer's
+cover enters through its emissivity, under either gas scheme); the CLIRAD
+vapour, O₂ and CO₂ take the beam along the whole column's path before the
+cloud's two-stream, cloud or none, as the Lacis–Hansen vapour did; the
+light the surface sends up loses the near infrared the gases' path down
+plus 5/3 of the column absorbs beyond the first, times the all-sky escape
+of the exponential-random, deck-blended streams; the deck's light is what
+the gases and aerosol leave. On the GPU two conflicted lines needed both
+sides: the deck's light and the upward escapes take the visible light the
+gases leave (visibleTaken) and the column's own cloud depth (phase or
+gray). Fixed on both engines: a dry-air share 1 − q below zero (q above 1
+at a 110 Pa layer of `test/cloudOptics.test.mjs`) made the O₂ and CO₂
+square roots and the longwave's well-mixed paths NaN; it is held at 0, the
+same bits wherever q < 1. Digests (CPU, 12 steps at N=4): under the gray
+gases the defaults give the integration's 97902663 and the overcast gray
+cloud on grey ice 3ca002d1; under the spectral gases that cloud gives the
+gas branch's 41e2f59e, the defaults fbd9be1f.
+
+`test/gasCloud.test.mjs`: under transparent spectral gases a 100 g/m²
+liquid layer at 285 K reflects 0.64304 and 10 g/m² emits 0.77687, 20 g/m²
+of ice at 213.15 K 0.41806 and 0.89985, the hand values of
+`test/cloudOptics.test.mjs` (to 10⁻¹² and 10⁻⁹), as under the gray gases
+with an open window; O₂ takes 0.63 % of the beam. In a column at 60 %
+relative humidity below 300 hPa the OLR with the cloud is an independent
+g-point sum with the hand emissivity in the cloud's layer to 10⁻¹², the
+cloud reflects its hand share of the light the gases leave, and the gases
+take the same light with and without it. What the gases change is the
+overlap: LWCRE of the liquid layer at 800 hPa 5.73 spectral, 5.93 gray,
+26.95 for the cloud alone; of the ice at 250 hPa 125.4, 136.4 and 255.6
+W/m²; SWCRE −370.8 against −378.3 and −251.5 against −254.7, the light
+reaching the cloud 576.6 against 588.2 and 601.6 against 609.2 of 681.0
+W/m². With a 100 g/m² layer near 282 K and a 20 g/m² layer near 222 K in
+every N=6 column and the defaults (the empirical deck in place of the
+mixed layer's), the engines' layer heating differs by 1.4·10⁻³ K/day of
+1256, the fluxes at the top and surface and both cloud effects by at most
+10⁻³ W/m², and the gases' change of them alike. On eight64_day0183 and
+nine64_day0091 (one N=64 step) absorbed plus reflected is the beam to
+4.6·10⁻¹³ W/m² on the CPU and 1.6·10⁻⁷ of it on the GPU, the layers'
+shortwave heating the atmosphere's absorption to 3.4·10⁻¹³, their
+longwave heating σT_s⁴ less the downward longwave less the OLR to
+5.1·10⁻¹³ (GPU 5.6·10⁻⁴); CPU against GPU per cell, ASR rms 1.6·10⁻⁷ and
+1.3·10⁻⁶ of the field, OLR 6.8·10⁻⁷ and 7.5·10⁻⁷.
+`scripts/radiationBenchmark.mjs` prints the gas branch's table to the
+character. Two deck parity tests (`test/frameGpu.test.mjs`,
+`test/gpuModel.test.mjs`) run the gray gases: under the spectral ones a
+shallow cumulus fires on the fifth step in one of 362 columns on the CPU
+alone, and two steps part one layer's condensate above the deck by
+2.9·10⁻⁷ kg/kg, where a 10⁻⁷ perturbation of the state moves the CPU's own
+cloud field by 9.3·10⁻³ kg/m² under either scheme. The suite (54 files,
+concurrently) passes.
+
+The clear-sky classes (`scripts/clearSkyBudget.mjs`) on the four N=64
+day-186, 94 and 368 states below, spectral against gray gases on the same
+state (gray: on eight64 the integration's table to the digit): the surface albedos
+and their verdicts do not move; the clear-sky reflection at the top falls
+by 0.004 over open sea at 0–30°, 0.005–0.007 at 30–50°, 0.009–0.011 at
+50–70°, 0.009–0.036 at 70–90°, 0.011–0.012 over partly vegetated land,
+0.010–0.012 over snow under forest, 0.019–0.036 among sparse trees,
+0.022–0.033 over thin sea ice, 0.028–0.039 over bare ice, 0.035 over cold
+snow on open land, 0.055–0.066 over cold snow on sea ice (0.134 on June's
+low sun) and 0.039–0.061 over the ice sheets: the near-infrared vapour
+absorbs on the way down and up. The open sea stays in CERES's clear-sky
+ranges at 0–30°, 30–50° and 50–70° on every state (June's 0–30° moves
+from 0.102, high by 0.002, to 0.098). eight64 day 186, global, W/m²:
+reflected 50.7 → 48.0, ozone 10.2 → 10.8, vapour 48.8 → 58.5, O₂ and CO₂
+0 → 3.5, aerosol 1.4 → 1.3, the surface 229.4 → 218.4.
+
+Runs (GPU, bl34, `everySteps` 8, three days from copies of the states, the
+last day's means; rain from the log and, in brackets, the audit's; cover
+and 60–90S from `scripts/cloudRegimes.mjs` on the last state; integration
+the "Integration (Oct 1)" rows above; Earth as there, the atmosphere's
+absorption about 80 W/m² all-sky, Wild et al. 2019):
+
+| | albedo | ASR; OLR; ASR − OLR | atmosphere SW | SWCRE; LWCRE | clear-sky albedo | rain (audit); convective share | cover; 60–90S | sea surface SW; net LW |
+|---|---|---|---|---|---|---|---|---|
+| eight64 + 3 d | 0.298 | 238.9; 233.2; +5.7 | 82.7 | −53.5; 26.6 | 0.141 | 1.68 (2.12); 0.14 | 0.54; 0.68 | 168.6; −44.3 |
+| integration | 0.296 | 239.7; 240.8; −1.1 | 68.6 | −49.9; 22.8 | 0.149 | 1.83 (2.19); 0.33 | 0.50; 0.68 | 184.0; |
+| gas branch | | 235.1; 236.9; −1.8 | 80.3 | −58.7; 20.0 | 0.137 | 1.46 | | 166.6; −47.6 |
+| ten64 + 3 d | 0.317 | 232.7; 231.9; +0.8 | 83.4 | −59.6; 26.8 | 0.142 | 2.57 (2.54); 0.12 | 0.56; 0.63 | 157.9; −44.2 |
+| integration | 0.318 | 232.4; 240.5; −8.1 | 70.1 | −57.2; 22.1 | 0.150 | 2.83 (2.78); 0.20 | 0.52; 0.64 | 172.7; |
+| nine64 + 3 d (June) | 0.309 | 235.2; 234.3; +0.9 | 85.4 | −56.0; 26.4 | 0.145 | 2.21 (2.32); 0.17 | 0.55; 0.65 | 148.1; −44.7 |
+| integration | 0.304 | 237.1; 241.3; −4.2 | 71.1 | −51.3; 23.3 | 0.153 | 2.42 (2.52); 0.30 | 0.50; 0.66 | |
+| nine64_day0365 + 3 d (March) | 0.324 | 230.3; 220.2; +10.1 | 81.8 | −58.5; 33.5 | 0.152 | 2.28 (2.46); 0.16 | 0.60; 0.70 | 161.6; −48.4 |
+| integration | 0.312 | 234.3; 229.3; +5.0 | 67.5 | −51.6; 28.6 | 0.160 | 2.45 (2.66); 0.35 | 0.55; 0.70 | 181.8; |
+| eight128 + 3 d | 0.282 | 244.6; 236.0; +8.6 | 82.4 | −47.7; 24.8 | 0.141 | 2.06 (2.36); 0.07 | 0.51; 0.62 | 175.2; −48.3 |
+| integration | 0.285 | 243.5; 243.6; −0.1 | 68.8 | −46.2; 20.8 | 0.149 | 2.19 (2.46); 0.22 | 0.47; 0.64 | 188.4; |
+
+The audit on the same five states: the Pacific ITCZ's firing-column
+heating peaks at 975, 974, 975, 977 and 974 hPa (integration 975, 974,
+975, 517, 439; Earth 400–500), its rain 3.23, 6.15, 8.38, 3.43 and 0.91
+mm/d (4.02, 4.89, 6.65, 3.21, 2.74; Earth 6–9); radiative low cloud over
+the SE Pacific 0.33, 0.61, 0.44, 0.30 and 0.34 (0.26, 0.56, 0.37, 0.20,
+0.28), over Peru 0.42, 0.52, 0.31, 0.20 and 0.42 (0.39, 0.38, 0.05,
+0.03, 0.34; Earth 0.6–0.7); global evaporation 2.30–2.71 mm/d. Regimes
+on eight64 day 186: warm pool 0.52, ITCZ 0.50 (integration 0.43, 0.53),
+high cover 0.266 (0.232), upper-tropospheric RH_i 0.59 (0.54).
+
+Ten days from eight64_day0183, days 184–193 (one segment; a GPU rerun of
+the same days through `scripts/spinup.mjs` and a driver summing the sea's
+fluxes agree to the log's digits): ASR − OLR +22.4, +11.8, +5.6, +4.5,
++3.4, +1.9, +1.0, +1.3, +0.4, +0.9 W/m² (integration +14.8 to −7.5); rain
+0.81, 1.03, 1.68, 2.28, 2.54, 2.52, 2.63, 2.61, 2.60, 2.58 mm/d; SWCRE
+−40.6 to −57.1, LWCRE 34.5 to 26.5; the global mean surface temperature
+17.06, 17.02, 16.93, 16.81, 16.70, 16.63, 16.65, 16.65, 16.64, 16.62 °C
+(integration 16.86 to 15.91); the net surface flux over the sea (ice
+included) 51.4, 51.2, 40.2, 33.0, 26.9, 23.2, 21.7, 23.5, 23.4, 23.9 W/m²
+into it, on day 193 shortwave 163.7, net longwave −43.2, sensible −8.5
+and latent −88.1. From day-by-day segments of the same run: the upper
+troposphere's RH_i 0.57, 0.58, 0.59, 0.59, 0.59, 0.59, 0.59, 0.58, 0.58,
+0.58 (integration 0.55 → 0.49), the warm pool's 0.73, 0.70, 0.71, 0.73,
+0.72, 0.70, 0.68, 0.70, 0.73, 0.73 (0.69 → 0.56); high cover 0.281,
+0.265, 0.266, 0.264, 0.257, 0.255, 0.251, 0.252, 0.250, 0.251 (0.264 →
+0.175); total cover 0.48 → 0.54.
+
+The Arctic three days from nine64_day0091 (the scratchpad diagnostic,
+means over every step over the cells iced at the start, leads included,
+positive into the surface; integration in brackets): 60–90N 9.191 → 8.272
+·10³ km³, 0.306·10³ km³/day, 3.3 % of the standing volume a day (0.314,
+3.4 %; PIOMAS 1.2–1.6 %); downwelling sunlight 199.7 (208.7) at a surface
+albedo 0.387 (0.387), absorbed 122.4 (128.0; SHEBA 85); downwelling
+longwave 305.3 (303.0; SHEBA about 280), net longwave −8.3 (−10.7; −40);
+sensible +13.2 (+13.5; near 0), latent −1.7 (−1.8; about −5); net surface
+flux 125.6 (129.0; about 40); the ocean's 4.6 (4.7).
+
+Cost under the exclusive lock (`js/gpu/profile.module.js`, 128 steps after
+16 from eight64_day0183 and eight128_day0183, alternated twice with
+7c6a4a3 built by `git archive`): step median 21.51 and 21.55 against 20.44
+and 20.43 ms at N=64 (+5.2 and +5.5 %), 95.35 and 95.44 against 90.31 and
+90.35 ms at N=128 (+5.6 and +5.6 %); the physics and boundary-layer passes
+3.90 against 2.80 ms and 16.74 against 11.69 ms. A day at N=128 from
+eight128_day0183 takes 64 s of wall time (70 s with the 6 s setup). No run made
+a NaN; nine64's day-94 clamp is the only one.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
