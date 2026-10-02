@@ -484,9 +484,9 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
  * column's own inversion: the second step, the first with a diagnosed
  * boundary layer, carries the deck.
  */
-async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloudLifetime: 3 * 3600, plumeCape: 70 }, step = null, turbulence = 'dry', exchange = 'roughness', ...options } = {}) {
+async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloudLifetime: 3 * 3600, plumeCape: 70 }, step = null, turbulence = 'dry', exchange = 'roughness', surfaceLayer = {}, ...options } = {}) {
   const physics = { mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options };
-  const model = createModel(new Grid(6), { ocean: false, radiation: physics, moist, boundaryLayer: { turbulence }, surface: { exchange } });
+  const model = createModel(new Grid(6), { ocean: false, radiation: physics, moist, boundaryLayer: { turbulence }, surface: { exchange, ...surfaceLayer } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells, theta = model.state[1], q = model.state[4];
@@ -496,7 +496,7 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloud
   }
   model.radiation.mlmSubsidence.fill(seed);
   model.radiation.mlmHeight.fill(height);
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...moist, turbulence, surfaceExchange: exchange } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...moist, turbulence, surfaceExchange: exchange, exchangeOptions: surfaceLayer } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }
@@ -562,7 +562,7 @@ test('the deck reads the same ring-smoothed πσ̇ in both engines, and the smoo
 });
 
 test('over six steps the carried inversion height, the gate and the deck they give match between the engines, and the boundary layer mixes to the deck\'s height in both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const run = await mixedLayerPair(6, { ...UNSCATTERED });
+  const run = await mixedLayerPair(6, { ...UNSCATTERED, surfaceLayer: { convectiveGust: false } });
   const { C, model } = run, { geopotential, g } = model.core.diagnostics, K = model.core.K;
   let carried = 0, above = 0, active = 0;
   for (let i = 0; i < C; i++) {
@@ -700,7 +700,8 @@ test('the convective and large-scale rain accumulate alike in both engines, cell
 
 test('both models read the rain split out at the diagnostics as means in mm/d, clearing its sums, alike but for the odd column whose onset falls a step apart, and the GPU model sends the means to the device on load and mirrors them on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
-  const cpu = createModel(new Grid(6), { ocean: false }), gpu = await createGpuModel(new Grid(6), { ocean: false });
+  const surface = { convectiveGust: false };
+  const cpu = createModel(new Grid(6), { ocean: false, surface }), gpu = await createGpuModel(new Grid(6), { ocean: false, surface });
   const C = cpu.mesh.nCells, init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   const loaded = Float64Array.from({ length: C }, (_, i) => 0.5 * (i % 9));
@@ -743,7 +744,7 @@ test('step by step from one state with partly iced, melting polar cells, the eng
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   const { readRanges } = await import('../js/gpu/device.module.js');
-  const N = 6, dt = 1350 * 16 / N, options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true } };
+  const N = 6, dt = 1350 * 16 / N, options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false } };
   const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options);
   const C = cpu.mesh.nCells, K = cpu.core.K, init = initializeState(cpu, {});
   const iced = [];
