@@ -211,15 +211,15 @@ test('with vegetation the soil has a surface layer that bare ground evaporates a
   assert.ok(land.vegetation[i] < grown - 0.01, 'decline needs no warmth');
 });
 
-test('bare soil darkens with the bucket\'s wetness from 0.30 dry to 0.15 at half full and beyond, the vegetation blending it toward 0.13, and without the darkening stays 0.30', () => {
+test('bare soil darkens with the bucket\'s wetness from 0.30 at a fifth full to 0.15 at half full and beyond, the vegetation blending it toward 0.13, and without the darkening stays 0.30', () => {
   const land = createLandSurface(mesh, flat()), plain = createLandSurface(mesh, flat(), { soilDarkening: false });
   land.initialize(); plain.initialize();
   const i = 3, cap = land.capacity(i), rows = [];
   for (const v of [0, 0.5, 1]) {
     const row = [];
-    for (const w of [0, 0.1, 0.25, 0.5, 0.75, 1]) {
+    for (const w of [0, 0.2, 0.3, 0.4, 0.5, 1]) {
       for (const m of [land, plain]) { m.vegetation[i] = v; m.soil[i] = w * cap; m.snow[i] = 0; }
-      const soil = 0.30 - 0.15 * Math.min(1, w / 0.5);
+      const soil = 0.30 - 0.15 * Math.min(1, Math.max(0, (w - 0.2) / 0.3));
       assert.ok(Math.abs(land.albedo(i) - (soil + (0.13 - soil) * v)) < 1e-12, `v ${v}, w ${w}: ${land.albedo(i)}`);
       assert.ok(Math.abs(plain.albedo(i) - (0.30 + (0.13 - 0.30) * v)) < 1e-12, `without darkening, v ${v}, w ${w}`);
       row.push(land.albedo(i).toFixed(3));
@@ -228,5 +228,5 @@ test('bare soil darkens with the bucket\'s wetness from 0.30 dry to 0.15 at half
   }
   land.vegetation[i] = 0; land.soil[i] = cap; land.snow[i] = 20;
   assert.ok(Math.abs(land.albedo(i) - 0.55) < 1e-12, 'full snow hides the wet soil');
-  console.log(`albedo at bucket fill 0, 0.1, 0.25, 0.5, 0.75, 1 by vegetation cover: ${rows.join('; ')}`);
+  console.log(`albedo at bucket fill 0, 0.2, 0.3, 0.4, 0.5, 1 by vegetation cover: ${rows.join('; ')}`);
 });

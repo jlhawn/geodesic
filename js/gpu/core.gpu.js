@@ -540,7 +540,7 @@ export const PHYSICS_DEFAULTS = {
   richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5, stability: true, turbulence: 'moist', cloudTop: {},
   boundaryCover: 'variance', varianceFloor: 0.002, varianceScale: 5, mixingLength: 300, stableMixingLength: 30, deckRegime: 'inversion', deckBypass: false,
   landed: false, landHeatCapacity: 1e6, bucketCapacity: 150, wetnessThreshold: 0.75, landAlbedo: 0.2, snowAlbedo: 0.55, fullSnow: 20,
-  vegetation: true, bareAlbedo: 0.30, vegetatedAlbedo: 0.13, soilDarkening: true, wetSoilAlbedo: 0.15, darkeningWetness: 0.5, rootZoneCapacity: 300, dryWetness: 0.1, wetWetness: 0.6, iceSheetAlbedo: 0.8,
+  vegetation: true, bareAlbedo: 0.30, vegetatedAlbedo: 0.13, soilDarkening: true, wetSoilAlbedo: 0.15, darkeningWetness: [0.2, 0.5], rootZoneCapacity: 300, dryWetness: 0.1, wetWetness: 0.6, iceSheetAlbedo: 0.8,
   growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400, surfaceCapacity: 15, percolationTime: 86400, stomatalResistance: 70, growthColdest: 278.15, growthWarmest: 288.15,
 };
 

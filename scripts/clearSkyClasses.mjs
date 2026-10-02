@@ -19,7 +19,7 @@ import { DAY } from '../js/physics/radiation.module.js';
 export const TERMS = ['insolation', 'reflected', 'atmosphere', 'ozone', 'vapour', 'aerosol', 'absorbedSurface', 'down', 'directAlbedo'];
 export const TYPES = ['open sea', 'sea ice', 'land', 'ice sheets'];
 export const MU_BINS = [0, 0.1, 0.2, 0.4, 0.7, 1];
-const SNOWY = 10, DRY_FILL = 0.25, FOREST = 0.5;
+const SNOWY = 10, DRY_FILL = 0.35, FOREST = 0.5;
 
 // [name, surface range, top-of-atmosphere range, what the surface model lacks when outside]
 export const REFERENCES = [
@@ -27,8 +27,8 @@ export const REFERENCES = [
   ['open sea 30-50', null, [0.10, 0.13], ''],
   ['open sea 50-70', null, [0.13, 0.20], ''],
   ['open sea 70-90', null, null, ''],
-  ['bare dry soil (v < 0.2, fill < 0.25)', [0.30, 0.40], null, 'one dry soil albedo 0.30, no sand or soil colour'],
-  ['bare wet soil (v < 0.2, fill >= 0.25)', [0.10, 0.20], null, ''],
+  ['bare dry soil (v < 0.2, fill < 0.35)', [0.30, 0.40], null, 'one dry soil albedo 0.30, no sand or soil colour'],
+  ['bare wet soil (v < 0.2, fill >= 0.35)', [0.10, 0.20], null, ''],
   ['partly vegetated (0.2-0.7)', [0.18, 0.25], null, 'the cover blends bare soil into forest; no grass or crop albedo'],
   ['dense vegetation (v > 0.7)', [0.12, 0.15], null, ''],
   ['thin snow on land (< 10 kg/m2)', null, null, ''],
@@ -61,7 +61,7 @@ export function landClass(land, i, iceSheet) {
   const v = land.vegetation[i], snow = land.snow[i];
   if (snow >= SNOWY) return v < FOREST ? 'snow on open land (v < 0.5)' : 'snow under forest (v >= 0.5)';
   if (snow > 0) return 'thin snow on land (< 10 kg/m2)';
-  if (v < 0.2) return land.soil[i] / land.capacity(i) < DRY_FILL ? 'bare dry soil (v < 0.2, fill < 0.25)' : 'bare wet soil (v < 0.2, fill >= 0.25)';
+  if (v < 0.2) return land.soil[i] / land.capacity(i) < DRY_FILL ? 'bare dry soil (v < 0.2, fill < 0.35)' : 'bare wet soil (v < 0.2, fill >= 0.35)';
   return v <= 0.7 ? 'partly vegetated (0.2-0.7)' : 'dense vegetation (v > 0.7)';
 }
 export function iceClass(h, snow) {
