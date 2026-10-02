@@ -3386,8 +3386,9 @@ The work, in order:
    one (solar / longwave, day 213: 8.24 / −8.41 at 1.1 hPa, 5.35 /
    −5.48, 2.95 / −3.03, 1.80 / −1.92, 1.15 / −1.25, 0.70 / −0.80 and
    0.50 / −0.59 K/day down to 53 hPa), and the
-   3-24 hPa layers still cool 0-0.2 K/day: they settle a few K colder
-   still. Against the climatology (the targets of the review, from the US
+   3.5-85 hPa layers still cool 0.03-0.18 K/day in the global mean and
+   the tropical 70-101 hPa layers 0.15-0.30 K/day (days 21-30): they
+   settle colder still. Against the climatology (the targets of the review, from the US
    Standard Atmosphere 1976, CIRA-86 and Seidel et al. 2001, not
    re-checked here): the tropical cold point is 197-198 K at 85-101 hPa
    (190-195 K near 90-100 hPa, warm by 3-7 K); midlatitudes at 53 hPa
@@ -3514,6 +3515,94 @@ The work, in order:
    0.61 kg/m², a layer at the 1.9 km deck top counted on one engine);
    the per-layer longwave heating of a step agrees as before (1e-5 rms),
    and the tolerances are unchanged.
+
+   Review (Oct 2), checked independently of the scripts above.
+   - RRTMG's own layer heating averaged by mass over the model's layers
+     (not the scripts' interpolation of its fluxes): the 0-2.2 hPa layer
+     −8.97 / −10.54 / −8.74 / −7.42 K/day over the part the reference
+     covers (its MLS and SAW columns stop at 6.7 and 10 Pa, 97.0 and
+     95.5 % of the layer's mass, which `referenceHeating` counts as not
+     cooling: −10.25 and −7.13); the model's −9.25 / −10.12 / −9.17 /
+     −7.24 are within 5 % of both; the 3-30 hPa layers within 0.25 K/day
+     of both.
+   - Cool-to-space of the 0-2.2 hPa layer by line-by-line CO₂ 15 µm
+     lines built from band constants (the 626 fundamental and the
+     02201, 10002 and 10001 hot bands and the 636 fundamental, strengths
+     at 296 K 7.97e-18, 6.2e-19, 1.4e-19, 1.9e-19 and 8.3e-20 cm/molecule
+     from memory; rigid rotor, Hönl-London factors, Voigt lines with an
+     air-broadened half-width of 0.07 cm⁻¹/atm at the Curtis-Godson
+     1.1 hPa, the layer's mean temperature, diffusivity 1.66): −4.3 /
+     −4.7 / −4.0 / −3.3 K/day (TROP / MLS / MLW / SAW), −3.2 / −3.5 /
+     −3.0 / −2.5 of it at 630-700 cm⁻¹, and −1.8 / −2.0 / −1.6 / −1.4
+     from the Doppler cores alone. Same sign as RRTMG's CO₂ bands (MLS
+     −5.7 in the centre, −1.6 in the wings) and two thirds of their size,
+     the rest within the bands left out and the exchange with the colder
+     layers below; at 1.1 hPa the Lorentz wings of the Voigt lines carry
+     more than half of the layer's CO₂ cooling.
+   - The spectral model by itself (1 cm⁻¹) misses RRTMG's OLR by +8.5 /
+     +8.1 / +4.8 / +3.0 W/m² (1f61d5c: +2.6 / +2.2 / +0.9 / +0.2), the
+     net flux at 200 hPa by +10.4 / +10.5 / +7.4 / +6.1, the 3-30 hPa
+     cooling by 0.99 / 1.02 / 0.70 / 0.68 K/day rms, cools the top layer
+     −6.3 / −6.9 / −6.3 / −4.9 K/day, and gives methane and nitrous oxide
+     from none 5.82 / 5.34 / 3.35 W/m² (LBLRTM 3.60 / 3.45 / 1.08): the
+     34 g-points meet RRTMG through their reduction (binning by the
+     midlatitude summer column's depth, each g-point's absorbers
+     correlated), which supplies about 7 W/m² of the OLR and 3 K/day of
+     the top layer. Two refits that also score the spectral model's own
+     misses (weights 1 and 0.3 of the g-points', 3000 iterations each)
+     bring its OLR to +2.0 / +2.8 (MLS) and its top layer within 10 %, but
+     move the g-points' top layer to −11.5 / −11.1 K/day (MLS), methane
+     and nitrous oxide to 1.98 / 2.58 W/m² at the top, doubled CO₂ at the
+     surface to 1.33 / 1.44 (1.68) and the ICRCCM subarctic winter's
+     surface downward longwave to +6.3 / +5.2: not adopted.
+   - Closure on eight64_day0183, the CPU every column alone at four
+     times of the day: absorbed plus reflected less incoming at most
+     4.5e-13 W/m², the layers' shortwave less the atmosphere's 3.4e-13,
+     the layers' longwave less σTs⁴ − DLR − OLR 9.1e-13, the dark
+     columns' shortwave 2.8e-14; one GPU step (also nine64_day0091):
+     1.8e-4, longwave 2.0e-4 (2.3e-4) W/m², dark columns 0. CPU against
+     GPU after one step, longwave heating of the 1.1 / 3.5 / 7.4 hPa
+     layers: eight64 rms 1.1e-5 / 1.5e-5 / 1.1e-5 K/day, at most 4.7e-5
+     / 5.9e-5 / 4.4e-5 (1f61d5c 0.8e-5 / 2.8e-5 / 2.3e-5, at most 3.7e-5
+     / 1.1e-4 / 9.4e-5); nine64 rms 2.1e-5 / 4.7e-5 / 6.8e-5, at most
+     7.7e-4 / 1.9e-3 / 3.0e-3 in one column (1f61d5c 1.6e-4 / 3.0e-4 /
+     4.0e-4, at most 7.6e-3 / 1.5e-2 / 2.0e-2). The all-sky per-cell
+     shortwave misses (one cell 168 W/m², rms 4.6, eight64) are
+     1f61d5c's (171, 4.7).
+   - With the gas options at 1f61d5c's values (`visibleFraction` 0.5,
+     its `rayleighBands`, `nearInfraredRayleigh` 0, `ozone` 'idealized',
+     CO₂ 390, CH₄ 1.8, N₂O 0.323 ppmv) and 'gray' with 'lacisHansen', or
+     'gray' with 'clirad' and no upward absorption, every column's
+     budget and layer heating on eight64_day0183 is 1f61d5c's bit for
+     bit on the CPU; on the GPU the OLR and the deck are, and the
+     shortwave fields differ by one or two ulps in 2 % of the cells.
+   - The failing parity tests: the cloudy columns' heating passes with
+     `ozone` 'idealized' and fails with 'afgl' whatever the visible split
+     and near-infrared scattering, its per-layer rms 7.6e-6 against
+     8.1e-6 K/day and its worst cell a deck top in both (6.9e-5 against
+     1.28e-4); the regime-gated deck fails at `visibleFraction` 0.4707 and
+     passes at 0.4708 (and at `nearInfraredRayleigh` 0): one-column
+     threshold flips.
+   - The 30-day logs re-read (`STRATOSPHERE=1` lines): the table above
+     holds. Trends over days 21-30 (least squares): the global layers at
+     3.5-85 hPa −0.11 to −0.18 K/day from eight64_day0183 and −0.03 to
+     −0.14 from nine64_day0091; the tropical 70-101 hPa layers −0.15 to
+     −0.30 K/day in both, so the cold point of 197-198 K is still
+     falling; at the poles the trends follow the season (70-90S +0.4 to
+     +0.6 K/day at 24-85 hPa in September-October), and without the
+     sponge the 70-90S column still cools 0.6-1.2 K/day at day 121.
+   - Sources: NOAA GML's `co2_annmean_gl.txt`, `ch4_annmean_gl.txt` and
+     `n2o_annmean_gl.txt` (read Oct 2) give 388.75 ppm, 1798.93 ppb and
+     323.18 ppb for 2010; the electronic Tables 1a-1e of AFGL-TR-86-0110
+     (github.com/rayference/afgl1986) integrate to ozone columns of 282.0
+     / 334.4 / 378.3 / 347.8 / 375.5 DU, the table's 281.9 / 334.2 /
+     377.9 / 347.6 / 375.8; p_D from the stated half-widths is 395 / 726
+     / 1012 Pa.
+   - Reproduced: the benchmark's numbers above; three days from a copy of
+     eight64_day0183 give the day-186 line of the run above bit for bit
+     and the open sea's classes 0.091 / 0.110 / 0.148; the step medians
+     21.75 / 21.74 → 22.45 / 22.42 ms at N=64 and 92.61 → 95.95 ms at
+     N=128 (49.1 s a model day).
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
