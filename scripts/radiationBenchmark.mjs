@@ -102,20 +102,28 @@ function longwaveTable() {
 }
 
 // Stratospheric temperatures adjusted (fixed dynamical heating) above the
-// tropopause until each layer's longwave heating is its base value again.
+// tropopause until each layer's longwave heating is its base value again:
+// Newton's method on the layers' heating with the full Jacobian.
 function adjusted(options, base, perturbed, tropopause) {
   const target = runColumn(options, base).lw;
   const column = { ...perturbed, T: Float64Array.from(perturbed.T) };
-  const strat = Array.from({ length: K }, (_, k) => midPressure(column, k) < tropopause);
-  for (let it = 0; it < 60; it++) {
+  const layers = Array.from({ length: K }, (_, k) => k).filter((k) => midPressure(column, k) < tropopause), n = layers.length, dT = 0.25;
+  for (let it = 0; it < 20; it++) {
     const r = runColumn(options, column);
-    const dT = 0.5;
-    const warmer = { ...column, T: column.T.map((t, k) => (strat[k] ? t + dT : t)) };
-    const rw = runColumn(options, warmer);
-    for (let k = 0; k < K; k++) if (strat[k]) {
-      const slope = (rw.lw[k] - r.lw[k]) / dT;
-      if (slope < 0) column.T[k] -= Math.max(-5, Math.min(5, (r.lw[k] - target[k]) / slope)) * 0.7;
+    const rows = layers.map((k) => [...new Array(n).fill(0), target[k] - r.lw[k]]);
+    layers.forEach((kj, j) => {
+      const warmer = { ...column, T: Float64Array.from(column.T) };
+      warmer.T[kj] += dT;
+      const rw = runColumn(options, warmer);
+      layers.forEach((ki, i) => { rows[i][j] = (rw.lw[ki] - r.lw[ki]) / dT; });
+    });
+    for (let c = 0; c < n; c++) {
+      let p = c;
+      for (let i = c + 1; i < n; i++) if (Math.abs(rows[i][c]) > Math.abs(rows[p][c])) p = i;
+      [rows[c], rows[p]] = [rows[p], rows[c]];
+      for (let i = 0; i < n; i++) if (i !== c) { const f = rows[i][c] / rows[c][c]; for (let j = c; j <= n; j++) rows[i][j] -= f * rows[c][j]; }
     }
+    layers.forEach((k, j) => { column.T[k] += Math.max(-10, Math.min(10, rows[j][n] / rows[j][j])); });
   }
   return column;
 }
@@ -137,7 +145,8 @@ function sensitivityTable() {
     if (o === AFTER) {
       const tropopause = 17900, adjustedColumn = adjusted(o, one, two, tropopause), ra = runColumn(o, adjustedColumn);
       const dT = adjustedColumn.T.map((t, k) => t - two.T[k]);
-      console.log(`  ${name.padEnd(6)} stratosphere-adjusted (fixed dynamical heating above 179 hPa): TOA ${f(r1.olr - ra.olr, 2)}  179 hPa ${f(interfaceAt(mls, r1.net, tropopause) - interfaceAt(mls, ra.net, tropopause), 2)} W/m2; stratospheric cooling ${f(Math.min(...dT), 1)} K at most`);
+      const residual = Math.max(...ra.lw.map((x, k) => (midPressure(mls, k) < tropopause ? Math.abs(x - r1.lw[k]) : 0)));
+      console.log(`  ${name.padEnd(6)} stratosphere-adjusted (fixed dynamical heating above 179 hPa): TOA ${f(r1.olr - ra.olr, 2)}  179 hPa ${f(interfaceAt(mls, r1.net, tropopause) - interfaceAt(mls, ra.net, tropopause), 2)} W/m2; stratospheric cooling ${f(Math.min(...dT), 1)} K at most, the top three layers ${dT.slice(0, 3).map((x) => f(x, 1)).join(' / ')} K; largest layer heating left ${residual.toExponential(1)} W/m2`);
     }
     for (const a of ['MLS', 'TROP']) {
       const c = columns[a], slope = (delta) => {

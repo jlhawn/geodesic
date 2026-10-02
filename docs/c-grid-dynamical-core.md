@@ -3141,8 +3141,9 @@ The work, in order:
    in the RRTMG fit; the surface's downward shortwave (−0.8 % at μ = 1
    while the atmosphere's absorption matches); no methane in the
    shortwave (in the fitted vapour strength). The stratosphere-adjusted doubled-CO₂ forcing of the MLS
-   column (fixed dynamical heating above 179 hPa) is 4.22 W/m² at the top,
-   5.76 at 179 hPa.
+   column (fixed dynamical heating above 179 hPa, Newton's method to a
+   layer heating left of 1e-14 W/m²) is 4.92 W/m² at the top and at
+   179 hPa, the top layer cooling 9.5 K.
 
    Measured with the final defaults, before → after. The clear-sky
    shortwave budget of eight64_day0183 lit over day 186
@@ -3261,7 +3262,10 @@ The work, in order:
    (3.60 / 3.45 / 1.08); without methane, MLS, OLR / surface 1.65 → 2.37
    / −0.55 → −0.79 (Chou's 2.22 / −0.86), without nitrous oxide 1.18 →
    1.91 / −0.51 → −0.87 (1.83 / −0.58); the stratosphere-adjusted doubled
-   CO₂ 4.22 → 5.07 W/m² at the top (the top layer cools 18.6 K); OLR
+   CO₂ 4.92 → 5.49 W/m² at the top and at 179 hPa (the top layer cools
+   9.5 → 19.3 K, the 3.6 and 7.5 hPa layers 8.6 → 14.7 and 7.6 → 11.4 K;
+   the earlier solver stopped with up to 1.5 W/m² of layer heating left
+   and gave 4.22 → 5.07 at the top); OLR
    slope 2.27 → 2.36 (MLS), 2.06 → 2.14 W/m²/K (TROP). The GPU longwave
    heating of the layers above 30 hPa matches the CPU's to 1e-6 rms
    (`test/gasRadiation.test.mjs`).
@@ -3280,7 +3284,7 @@ The work, in order:
    emission rises within one isothermal layer instead of into the colder
    mesosphere, so the 630-700 cm⁻¹ forcing at the top is −0.74 W/m²
    against LBLRTM's −0.57 (the total 2.63 against 2.84), and the
-   stratosphere-adjusted forcing lets the whole layer cool 18.6 K. Report
+   stratosphere-adjusted forcing lets the whole layer cool 19.3 K. Report
    only: two more interfaces, at about 0.3 and 1 hPa, would put the
    stratopause between layer midpoints and give the band centre a cold
    mesospheric layer to emit from, at 36 layers (+6 % of the column
@@ -3484,7 +3488,8 @@ The work, in order:
    solar heating below RRTMG's at 7-100 hPa (−4 to −25 %); the doubled-CO₂
    forcing at the top −7 % (2.63 against 2.84; its 630-700 cm⁻¹ band
    −0.74 against −0.57, the single top layer), the stratosphere-adjusted
-   one 5.07 W/m² with an 18.6 K cooling of the top layer; methane's and
+   one 5.49 W/m² with a 19.3 K cooling of the top layer (9.5 K with
+   1f61d5c); methane's and
    nitrous oxide's own longwave −11 % at the top and −13 % at 200 hPa
    against LBLRTM, +17 % at the surface, and without either gas the
    subarctic winter's OLR change 1.82 / 1.27 against Chou's 1.00 / 1.10;
