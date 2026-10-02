@@ -53,7 +53,7 @@ test('the land ages its snow after each update, refreshes it with snowfall and s
 });
 
 test('trees standing above the snow darken it linearly to forestSnowAlbedo at closedCanopy, and without the treeline the standing cover outlasts the cover\'s decay under snow', () => {
-  const land = createLandSurface(mesh, flat(), { treeline: false }), open = createLandSurface(mesh, flat(), { snowMasking: false });
+  const land = createLandSurface(mesh, flat(), { treeline: false, grassland: false }), open = createLandSurface(mesh, flat(), { snowMasking: false, grassland: false });
   land.initialize(); open.initialize();
   const i = 4;
   for (const m of [land, open]) { m.snow[i] = 40; m.snowAlbedo[i] = 0.8; }

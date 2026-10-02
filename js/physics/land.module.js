@@ -59,6 +59,18 @@ import { SOLAR_CONSTANT, AXIAL_TILT } from './radiation.module.js';
  * the treeline the canopy is the standing cover: v where that is higher,
  * otherwise relaxing toward it over canopyMemory.
  *
+ * With treeMoisture (the default) water decides between forest and
+ * grass where the season admits trees: each land cell keeps running
+ * means over moistureMemory of its rain and snow (`rainMean`, mm/d, from
+ * deposit) and of the FAO-56 reference evapotranspiration the radiation
+ * gives it (`demandMean`, mm/d, from update), and f is multiplied by
+ * aridityFactor of their ratio, the aridity index P/PET, ramping from 0
+ * at forestAridity[0] to 1 at forestAridity[1]. With grassland (the
+ * default) the cover not under trees is grass: the vegetated albedo runs
+ * from grassAlbedo to forestAlbedo with the trees' share of v, and snow
+ * on the grass takes its own albedo less grassSnowDarkening times the
+ * grass's share of the cell before the trees mask it.
+ *
  * With vegetation the soil has two stores. Rain fills a surface layer
  * of surfaceCapacity kg/m² first; what it cannot hold infiltrates the
  * root zone (the bucket), a share (soil/capacity)⁴ of it running off,
@@ -122,6 +134,28 @@ export function treelineFactor(length, warmth, { seasonThreshold = 0.9, minimumS
   return Math.min(1, Math.max(0, (seasonThreshold + warmth / Math.max(length, minimumSeason / 365) - treeless) / (treed - treeless)));
 }
 
+export const FOREST_ARIDITY = [0.2, 1.0];
+
+export function aridityFactor(rain, demand, [dry, wet] = FOREST_ARIDITY) {
+  return Math.min(1, Math.max(0, (rain / Math.max(demand, 1e-3) - dry) / (wet - dry)));
+}
+
+/*
+ * The start of the moisture means where a state carries none: the
+ * demand a + b Q̄ (mm/d) of the annual mean insolation at the top of the
+ * atmosphere (W/m²) and the rain that demand times an aridity index
+ * c + d × the bucket's fill, rounded least-squares fits to four ten-day
+ * means of the model's first year (nine64 and eight64 at days 91, 183,
+ * 274 and 365) per land cell off the ice sheets.
+ */
+export const MOISTURE_ESTIMATE = { demand: [-2.14, 0.0134], aridity: [0.27, 1.69] };
+
+export function moistureEstimate(lat, fill) {
+  const [d0, d1] = MOISTURE_ESTIMATE.demand, [a0, a1] = MOISTURE_ESTIMATE.aridity;
+  const demand = Math.max(0, d0 + d1 * insolationCycle(lat).mean);
+  return { rain: demand * Math.max(0, a0 + a1 * Math.min(1, Math.max(0, fill))), demand };
+}
+
 export function createLandSurface(mesh, geography, {
   heatCapacity = 1e6, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.2, snowAlbedo = 0.55, fullSnow = 20,
   latentHeatFusion = 3.34e5, vegetation: vegetated = true, bareAlbedo = 0.30, vegetatedAlbedo = 0.13, rootZoneCapacity = 300, dryWetness = 0.1, wetWetness = 0.6, growthTime = 180 * 86400, declineTime = 365 * 86400,
@@ -130,15 +164,17 @@ export function createLandSurface(mesh, geography, {
   snowAgeing = true, oldSnowAlbedo = 0.50, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
   snowMasking = true, forestSnowAlbedo = 0.27, closedCanopy = 0.7, canopyMemory = 365 * 86400,
-  treeline = true, seasonThreshold = 0.9, minimumSeason = 94, treelineWarmth = [6.4, 8.0], seasonMemory = 3 * 365 * 86400, treeGrowthTime = 10 * 365 * 86400, treeDeclineTime = 3 * 365 * 86400, buffers = null,
+  treeline = true, seasonThreshold = 0.9, minimumSeason = 94, treelineWarmth = [6.4, 8.0], seasonMemory = 3 * 365 * 86400, treeGrowthTime = 10 * 365 * 86400, treeDeclineTime = 3 * 365 * 86400,
+  treeMoisture = true, moistureMemory = 3 * 365 * 86400, forestAridity = FOREST_ARIDITY, grassland = true, forestAlbedo = 0.13, grassAlbedo = 0.20, grassSnowDarkening = 0.06, buffers = null,
 } = {}) {
   const C = mesh.nCells;
   const shared = (name) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * C));
   const soil = shared('soil'), snow = shared('snow'), runoff = shared('runoff'), vegetation = shared('vegetation'), surface = shared('surface');
   const snowAlbedoField = shared('snowAlbedo'), canopy = shared('canopy'), seasonLength = shared('seasonLength'), seasonWarmth = shared('seasonWarmth');
+  const rainMean = shared('rainMean'), demandMean = shared('demandMean');
   if (!(buffers && buffers.snowAlbedo)) snowAlbedoField.fill(freshSnowAlbedo);
   const ageing = { freshSnowAlbedo, coldSnowAgeing, meltingSnowAgeing, refreshSnowfall, wetSnowRange, ageingActivation };
-  const masked = snowMasking && vegetated, treed = treeline && vegetated;
+  const masked = snowMasking && vegetated, treed = treeline && vegetated, gated = treed && treeMoisture, grassy = grassland && vegetated;
   const bareShare = new Float64Array(C);
   const warmth = (t) => Math.min(1, Math.max(0, (t - growthColdest) / (growthWarmest - growthColdest)));
   const { land, iceSheet = null } = geography;
@@ -155,8 +191,12 @@ export function createLandSurface(mesh, geography, {
   const [treelessWarmth, treedWarmth] = treelineWarmth;
   if (!(treedWarmth > treelessWarmth)) throw new Error(`treelineWarmth must rise from its first to its second temperature, not ${treelineWarmth}`);
   const seasonKelvin = MELTING_POINT + seasonThreshold;
-  const treeFactor = (i) => treelineFactor(seasonLength[i], seasonWarmth[i], { seasonThreshold, minimumSeason, treelineWarmth });
-  const bareGround = (i) => { if (!vegetated) return albedo; const s = soilAlbedo(i); return s + (vegetatedAlbedo - s) * vegetation[i]; };
+  if (!(forestAridity[1] > forestAridity[0])) throw new Error(`forestAridity must rise from its first to its second index, not ${forestAridity}`);
+  const moistureFactor = (i) => (gated ? aridityFactor(rainMean[i], demandMean[i], forestAridity) : 1);
+  const treeFactor = (i) => treelineFactor(seasonLength[i], seasonWarmth[i], { seasonThreshold, minimumSeason, treelineWarmth }) * moistureFactor(i);
+  const grass = (i) => Math.max(0, vegetation[i] - canopy[i]);
+  const coverAlbedo = (i) => (grassy ? (vegetation[i] > 0 ? grassAlbedo + (forestAlbedo - grassAlbedo) * Math.min(1, canopy[i] / vegetation[i]) : grassAlbedo) : vegetatedAlbedo);
+  const bareGround = (i) => { if (!vegetated) return albedo; const s = soilAlbedo(i); return s + (coverAlbedo(i) - s) * vegetation[i]; };
 
   function overflow(i) {
     const cap = capacity(i);
@@ -180,7 +220,7 @@ export function createLandSurface(mesh, geography, {
   }
 
   function snowCovered(i) {
-    const own = snowAgeing ? snowAlbedoField[i] : snowAlbedo;
+    const own = (snowAgeing ? snowAlbedoField[i] : snowAlbedo) - (grassy ? grassSnowDarkening * grass(i) : 0);
     return masked ? own + (forestSnowAlbedo - own) * Math.min(1, canopy[i] / closedCanopy) : own;
   }
 
@@ -188,6 +228,10 @@ export function createLandSurface(mesh, geography, {
     if (onIceSheet(i)) return iceSheetAlbedo;
     const bare = bareGround(i);
     return bare + Math.min(1, snow[i] / fullSnow) * (snowCovered(i) - bare);
+  }
+
+  function moisture(i, potential, dt) {
+    demandMean[i] += (86400 * potential - demandMean[i]) * (1 - Math.exp(-dt / moistureMemory));
   }
 
   function season(i, airTemperature, dt) {
@@ -210,7 +254,7 @@ export function createLandSurface(mesh, geography, {
     canopy[i] += (goal - canopy[i]) * (1 - Math.exp(-dt / (goal > canopy[i] ? treeGrowthTime : treeDeclineTime)));
   }
 
-  function update(i, surfaceT, flux, evaporation, dt, airTemperature = null) {
+  function update(i, surfaceT, flux, evaporation, dt, airTemperature = null, potential = null) {
     const temperature = surfaceT[i];
     surfaceT[i] += dt * flux[i] / heatCapacity;
     let left = evaporation * dt;
@@ -233,12 +277,14 @@ export function createLandSurface(mesh, geography, {
       surfaceT[i] = MELTING_POINT + (energy - melt * latentHeatFusion) / heatCapacity;
     }
     if (vegetated && airTemperature !== null) season(i, airTemperature, dt);
+    if (vegetated && potential !== null) moisture(i, potential, dt);
     if (vegetated) grow(i, dt, temperature);
     snowAlbedoField[i] = snow[i] > 0 ? agedSnowAlbedo(snowAlbedoField[i], surfaceT[i], dt, oldSnowAlbedo, ageing) : freshSnowAlbedo;
     overflow(i);
   }
 
-  function deposit(i, rain, airTemperature) {
+  function deposit(i, rain, airTemperature, dt = null) {
+    if (vegetated && dt) rainMean[i] += (86400 * rain / dt - rainMean[i]) * (1 - Math.exp(-dt / moistureMemory));
     if (airTemperature < MELTING_POINT) { snow[i] += rain; snowAlbedoField[i] = refreshedSnowAlbedo(snowAlbedoField[i], rain, ageing); return; }
     if (!vegetated) { soil[i] += rain; overflow(i); return; }
     surface[i] += rain;
@@ -258,6 +304,11 @@ export function createLandSurface(mesh, geography, {
     estimated ??= Array.from({ length: C }, (_, n) => (land[n] ? seasonEstimate(mesh.latCell[n], geography.elevation ? geography.elevation[n] : 0, seasonThreshold) : { length: 0, warmth: 0 }));
     seasonLength[i] = estimated[i].length; seasonWarmth[i] = estimated[i].warmth;
   }
+  function estimateMoisture(i) {
+    if (!land[i]) { rainMean[i] = 0; demandMean[i] = 0; return; }
+    const e = moistureEstimate(mesh.latCell[i], soil[i] / capacity(i));
+    rainMean[i] = e.rain; demandMean[i] = e.demand;
+  }
   const startingTrees = (i) => (treed ? treeFactor(i) * vegetation[i] : vegetation[i]);
 
   /*
@@ -269,9 +320,10 @@ export function createLandSurface(mesh, geography, {
   function initialize() {
     for (let i = 0; i < C; i++) {
       vegetation[i] = land[i] && vegetated && !onIceSheet(i) ? 0.5 : 0;
-      estimateSeason(i);
-      canopy[i] = startingTrees(i);
       soil[i] = land[i] ? 0.5 * capacity(i) : 0;
+      estimateSeason(i);
+      estimateMoisture(i);
+      canopy[i] = startingTrees(i);
       snow[i] = 0; runoff[i] = 0; surface[i] = 0; snowAlbedoField[i] = freshSnowAlbedo;
     }
   }
@@ -290,10 +342,13 @@ export function createLandSurface(mesh, geography, {
    * (freshSnowAlbedo). One saved without season means starts them at
    * SEASON_ESTIMATE's and its tree cover, as a fresh start does, at the
    * cover times their treeline factor; without the treeline a state
-   * without a standing cover stands it at the cover.
+   * without a standing cover stands it at the cover. One saved without
+   * the moisture means starts them at moistureEstimate's from its own
+   * bucket's fill and, under the moisture gate, its trees at the cover
+   * times their potential.
    */
   function load(saved, ice = null) {
-    const seasoned = !!(saved.seasonLength && saved.seasonWarmth);
+    const seasoned = !!(saved.seasonLength && saved.seasonWarmth), moistened = !!(saved.rainMean && saved.demandMean);
     for (let i = 0; i < C; i++) {
       soil[i] = land[i] ? saved.soil[i] : 0;
       surface[i] = land[i] && saved.surface ? Math.min(surfaceCapacity, saved.surface[i]) : 0;
@@ -305,16 +360,18 @@ export function createLandSurface(mesh, geography, {
       if (!land[i]) { seasonLength[i] = 0; seasonWarmth[i] = 0; }
       else if (seasoned) { seasonLength[i] = Math.min(1, Math.max(0, saved.seasonLength[i])); seasonWarmth[i] = Math.max(0, saved.seasonWarmth[i]); }
       else estimateSeason(i);
+      if (land[i] && moistened) { rainMean[i] = Math.max(0, saved.rainMean[i]); demandMean[i] = Math.max(0, saved.demandMean[i]); }
+      else estimateMoisture(i);
       if (!treed) canopy[i] = vegetation[i] > 0 && saved.canopy ? Math.min(1, Math.max(vegetation[i], saved.canopy[i])) : vegetation[i];
       else if (!land[i] || !vegetated || onIceSheet(i)) canopy[i] = 0;
-      else canopy[i] = seasoned && saved.canopy ? Math.min(1, Math.max(0, saved.canopy[i])) : startingTrees(i);
+      else canopy[i] = seasoned && (moistened || !gated) && saved.canopy ? Math.min(1, Math.max(0, saved.canopy[i])) : startingTrees(i);
     }
     runoff.fill(0);
   }
 
   return {
-    soil, surface, snow, runoff, vegetation, snowAlbedo: snowAlbedoField, canopy, seasonLength, seasonWarmth, treeFactor, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load,
-    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy), seasonLength: Float64Array.from(seasonLength), seasonWarmth: Float64Array.from(seasonWarmth) } : {}) }; },
-    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer, seasonLength: seasonLength.buffer, seasonWarmth: seasonWarmth.buffer },
+    soil, surface, snow, runoff, vegetation, snowAlbedo: snowAlbedoField, canopy, seasonLength, seasonWarmth, rainMean, demandMean, treeFactor, moistureFactor, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load,
+    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy), seasonLength: Float64Array.from(seasonLength), seasonWarmth: Float64Array.from(seasonWarmth), rainMean: Float64Array.from(rainMean), demandMean: Float64Array.from(demandMean) } : {}) }; },
+    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer, seasonLength: seasonLength.buffer, seasonWarmth: seasonWarmth.buffer, rainMean: rainMean.buffer, demandMean: demandMean.buffer },
   };
 }

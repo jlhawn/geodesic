@@ -7,6 +7,18 @@ export const SOLAR_CONSTANT = 1362;
 export const AXIAL_TILT = 23.44 * Math.PI / 180;
 export const DAY = 86400;
 export const YEAR = 365 * DAY;
+export const REFERENCE_RESISTANCE = 70;
+
+/*
+ * The FAO-56 Penman–Monteith reference evapotranspiration (Allen et al.
+ * 1998) in kg/m²/s from the surface's net radiation (W/m²), the lowest
+ * air's temperature, humidity and density at surface pressure p and the
+ * aerodynamic conductance (m/s), through REFERENCE_RESISTANCE s/m.
+ */
+export function referenceEvaporation(netRadiation, airTemperature, q, p, density, conductance, cp, latentHeat) {
+  const qs = saturationHumidity(airTemperature, p), slope = qs * 4302.645 / ((airTemperature - 29.65) * (airTemperature - 29.65));
+  return (slope * netRadiation + density * cp * conductance * (qs - q)) / (latentHeat * slope + cp * (1 + REFERENCE_RESISTANCE * conductance));
+}
 
 /*
  * Unit vector toward the sun at model time t. t = 0 is the spring equinox
@@ -422,7 +434,7 @@ export function createRadiation(mesh, core, {
   const shortwaveBuffer = buffers && buffers.surfaceShortwave ? buffers.surfaceShortwave : new SharedArrayBuffer(8 * C);
   const outgoing = new Float64Array(outgoingBuffer), surfaceShortwave = new Float64Array(shortwaveBuffer);
   const evaporationBuffer = buffers && buffers.evaporation ? buffers.evaporation : new SharedArrayBuffer(8 * C);
-  const evaporation = new Float64Array(evaporationBuffer);
+  const evaporation = new Float64Array(evaporationBuffer), potentialEvaporation = new Float64Array(C);
   const stratusBuffer = buffers && buffers.stratus ? buffers.stratus : new SharedArrayBuffer(8 * C);
   const stratusPath = new Float64Array(stratusBuffer);
   const coverBuffer = buffers && buffers.stratusFraction ? buffers.stratusFraction : new SharedArrayBuffer(8 * C);
@@ -835,6 +847,7 @@ export function createRadiation(mesh, core, {
     budget.outgoingLongwave = outgoing;
     budget.sensibleHeat = sensible;
     budget.evaporation = evaporation;
+    budget.potentialEvaporation = qAir === null ? 0 : referenceEvaporation(absorbedSolar - surfaceEmission + back, airTemperature, qAir, pi, airDensity, exchangeCoefficientAt * Math.max(windSpeed, gustiness), cp, latentHeat);
     budget.surfaceFlux = net;
     budget.insolation = beam;
     budget.reflectedSolar = incident - absorbedSolar - cloudHeating - upwardHeating;
@@ -896,6 +909,7 @@ export function createRadiation(mesh, core, {
       lowCover[i] = budget.lowCover;
       lowWater[i] = budget.lowWater;
       evaporation[i] = budget.evaporation;
+      potentialEvaporation[i] = budget.potentialEvaporation;
       surfaceShortwave[i] = budget.surfaceShortwave;
       surfaceDirect[i] = budget.surfaceDirect;
       for (let k = 0; k < K; k++) {
@@ -954,5 +968,5 @@ export function createRadiation(mesh, core, {
   }
 
   const deckGates = { subsidenceSmoothing, subsidenceMemory, stratusSubsidence, minimumInversion, ceilingInversion: ceilingJump, gateMemory, deckRest, cumulusCeiling, deckRegime, deckBypass, stratusWaterMax };
-  return { setTime, sun, cosZenith, insolation, column, apply, readMeans, restartSums, summed, clearSkyPass, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, useCumulus, useBoundaryLayer, longwave, layerCover, lowCover, lowWater, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratiform: stratiformShare, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer, stratiform: stratiformBuffer, longwave: longwaveBuffer, summed: summedBuffers } };
+  return { setTime, sun, cosZenith, insolation, column, apply, readMeans, restartSums, summed, clearSkyPass, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, useCumulus, useBoundaryLayer, longwave, layerCover, lowCover, lowWater, deckGates, layerFlux: netFlux, surfaceFlux, outgoing, surfaceShortwave, surfaceDirect, evaporation, potentialEvaporation, stratus: stratusPath, stratusFraction: stratusCover, stabilityIndex, mlmCover, mlmWater, mlmEntrainment, mlmSubsidence, mlmHeight, mlmGate, mlmTop, stratiform: stratiformShare, stratusLayer, stabilityLayer, budget, emissivity, opticalDepth, ozoneFraction, shared: { outgoing: outgoingBuffer, surfaceShortwave: shortwaveBuffer, evaporation: evaporationBuffer, stratus: stratusBuffer, stratusFraction: coverBuffer, stabilityIndex: indexBuffer, mlmCover: mlmCoverBuffer, mlmWater: mlmWaterBuffer, mlmEntrainment: mlmEntrainmentBuffer, mlmSubsidence: mlmSubsidenceBuffer, mlmHeight: mlmHeightBuffer, mlmGate: mlmGateBuffer, mlmTop: mlmTopBuffer, stratiform: stratiformBuffer, longwave: longwaveBuffer, summed: summedBuffers } };
 }
