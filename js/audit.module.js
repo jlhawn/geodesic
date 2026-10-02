@@ -18,6 +18,85 @@ export function inLongitudes(lon, west, east) {
   return offset <= span;
 }
 
+/*
+ * The tropical boxes of scripts/tropicalHeating.mjs and of the audit's
+ * heating rows, [name, box, surface] with surface 'all', 'sea' or 'land';
+ * tropicalBoxOf gives each cell the index of the first box that holds it
+ * (-1 for none), so that a cell in two boxes counts in the first.
+ */
+export const TROPICAL_BOXES = [
+  ['Pacific ITCZ 5-12N 160E-100W', BOXES.itcz, 'all'],
+  ['warm pool 10S-10N 120-170E sea', [-10, 10, 120, 170], 'sea'],
+  ['SPCZ 20-5S 160E-150W sea', [-20, -5, 160, -150], 'sea'],
+  ['N Pacific trades 15-25N 170-130W sea', [15, 25, -170, -130], 'sea'],
+  ['Amazon 10S-2N 70-50W land', [-10, 2, -70, -50], 'land'],
+];
+
+export function tropicalBoxOf(mesh, land, boxes = TROPICAL_BOXES) {
+  const boxOf = new Int8Array(mesh.nCells).fill(-1);
+  for (let i = 0; i < mesh.nCells; i++) {
+    const lat = mesh.latCell[i] * DEG, lon = mesh.lonCell[i] * DEG;
+    boxes.forEach(([, [south, north, west, east], surface], b) => {
+      const kept = surface === 'all' || (surface === 'land') === !!land[i];
+      if (boxOf[i] < 0 && lat >= south && lat <= north && inLongitudes(lon, west, east) && kept) boxOf[i] = b;
+    });
+  }
+  return boxOf;
+}
+
+/*
+ * A box's apparent heat source or moisture sink Q (K/day per layer, top
+ * first) at the layers' mean pressures p and thicknesses dp (Pa), over the
+ * layers below `top`: the layer of largest Q, the `width` (50 hPa) bin of
+ * largest mass-weighted mean Σ Q dp / Σ dp over the layers whose
+ * midpoints fall in it, and the centroid Σ p Q dp / Σ Q dp over the
+ * layers where Q > 0.
+ */
+export function heatingProfile(Q, p, dp, { top = 100e2, width = 50e2 } = {}) {
+  let best = -1, weighted = 0, weight = 0;
+  const bins = new Map();
+  for (let k = 0; k < Q.length; k++) {
+    if (!(p[k] >= top)) continue;
+    if (best < 0 || Q[k] > Q[best]) best = k;
+    const key = Math.floor(p[k] / width), bin = bins.get(key) ?? [0, 0];
+    bin[0] += Q[k] * dp[k]; bin[1] += dp[k];
+    bins.set(key, bin);
+    if (Q[k] > 0) { weighted += p[k] * Q[k] * dp[k]; weight += Q[k] * dp[k]; }
+  }
+  let bin = null, binValue = -Infinity;
+  for (const [key, [sum, mass]] of bins) if (sum / mass > binValue) { binValue = sum / mass; bin = key; }
+  return { layer: best >= 0 ? p[best] : NaN, value: best >= 0 ? Q[best] : NaN, bin: bin === null ? [NaN, NaN] : [bin * width, (bin + 1) * width], binValue, centroid: weight > 0 ? weighted / weight : NaN };
+}
+
+/*
+ * The bulk sensible heat (W/m²) the CPU model's radiation step gives cell
+ * i from the lowest air temperature airT and the surface temperature
+ * surfaceT it read, and the ice thickness before the step: over partly
+ * iced sea the skin blends in open water at the freezing point.
+ */
+export function bulkSensible(model, i, airT, surfaceT, ice, { seaDrag, landDrag, freezing, gustiness = 3 }) {
+  const pi = model.state[0], { sigmaMid, K, R, cp } = model.core.diagnostics;
+  let skin = surfaceT;
+  const land = model.geography.land[i];
+  if (!land) { const cover = model.seaIce.cover(i, ice); if (ice > 0 && cover < 1) skin = cover * surfaceT + (1 - cover) * freezing; }
+  const density = pi[i] * sigmaMid[K - 1] / (R * airT);
+  return density * (land ? landDrag : seaDrag) * Math.max(model.surface.windSpeed[i], gustiness) * cp * (skin - airT);
+}
+
+/*
+ * The layer Exner functions of a column of surface pressure ps, as the
+ * core forms them: the mass-weighted mean of (p/p0)^κ over each layer.
+ */
+export function layerExner(ps, { K, sigmaLower, sigmaUpper, dSigma, kappa, p0 }, out = new Float64Array(K)) {
+  let upper = 0;
+  for (let k = 0; k < K; k++) {
+    const lower = Math.pow(ps * sigmaLower[k] / p0, kappa);
+    out[k] = (lower * sigmaLower[k] - upper * sigmaUpper[k]) / ((1 + kappa) * dSigma[k]);
+    upper = lower;
+  }
+  return out;
+}
+
 export function boxCells(mesh, [south, north, west, east], keep = () => true) {
   const cells = [];
   for (let i = 0; i < mesh.nCells; i++) {
