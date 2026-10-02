@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState, equilibriumProfile, surfaceTemperature } from '../js/physics/init.module.js';
-import { P0 } from '../js/dynamics/sigmaCore.module.js';
+import { readFileSync } from 'node:fs';
+import { P0, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
+import { topographyFromInt16 } from '../js/geography.module.js';
 
 const N = +(process.env.INIT_TEST_N ?? 8);
 const DAYS = +(process.env.INIT_TEST_DAYS ?? 3);
@@ -77,4 +79,17 @@ test(`N=${N}: the balanced initial state rings quietly for ${DAYS} days with the
   let worst = 0;
   for (let i = 0; i < mesh.nCells; i++) worst = Math.max(worst, Math.abs(state[0][i] - pi0[i]));
   assert.ok(worst < 300);
+});
+
+test('over terrain the fresh stratosphere is read at each layer\'s pressure, so 32 dynamics steps from rest on bl36 at N=16 keep the top layer below 80 m/s', () => {
+  const levels = sigmaInterfaces('bl36'), topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
+  const profile = equilibriumProfile(createModel(new Grid(4), { levels, ocean: false }));
+  const model = createModel(new Grid(16), { levels, topography, ocean: false, physics: false });
+  const init = initializeState(model, { profile, geostrophic: false });
+  for (let a = 0; a < 3; a++) model.state[a].set(init[a]);
+  const E = model.mesh.nEdges, dt = 1350;
+  let worst = 0;
+  for (let s = 0; s < 32; s++) { model.step(dt); for (let e = 0; e < E; e++) worst = Math.max(worst, Math.abs(model.state[2][e])); }
+  console.log(`bl36, N=16 on terrain: the 0-0.3 hPa layer's largest wind over 32 steps from rest ${worst.toFixed(1)} m/s`);
+  assert.ok(worst < 80, `the top layer reaches ${worst} m/s`);
 });
