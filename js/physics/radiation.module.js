@@ -312,21 +312,26 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * layer taking what its own vapour adds to the path above it; what is
  * left goes on to the clouds and the surface. Dry air absorbs nothing.
  *
- * Clear air scatters: the part `visibleFraction` (0.5) of the beam, the
- * solar spectrum below 0.7 µm, less what ozone takes, is split into the
+ * Clear air scatters: the part `visibleFraction` (VISIBLE_FRACTION, the
+ * share 0.4707 of CLIRAD-SW's bands 1-8 below 0.7 µm, Chou & Suarez 1999,
+ * Table 3) of the beam, less what ozone takes, is split into the
  * sub-bands `rayleighBands`, [weight, depth] pairs, each with the
  * scattering depth depth × p_s / REFERENCE_PRESSURE + (1 − aerosolAsymmetry)
  * aerosolAlbedo τ_a added to the cloud's in its own two-stream,
  * conservative Rayleigh scattering with asymmetry 0 and the aerosol's
  * forward peak counted as transmitted; the rest of the beam meets the
- * cloud alone. The two default sub-bands, weights 0.712 and 0.288 at
- * depths 0.0874 and 0.5687 for a full atmosphere, follow within 0.1 % over
- * μ 0.1–1 the band-mean reflectance over a black surface that
+ * cloud with the scattering depth nearInfraredRayleigh × p_s /
+ * REFERENCE_PRESSURE added. The two default sub-bands, weights 0.7049 and
+ * 0.2951 at depths 0.0957 and 0.5806 for a full atmosphere, follow within
+ * 0.1 % over μ 0.1–1 the band-mean reflectance over a black surface that
  * scripts/rayleighReference.mjs finds for the molecular atmosphere with
  * the same two-stream at 40 wavelengths (the depths of Hansen & Travis
- * 1974, a 5778 K spectrum from 0.297 to 0.711 µm, the share 0.47 of the
- * beam this band carries); one grey depth misses it by 11 % at both ends.
- * A number for rayleighDepth replaces them by one band of that depth.
+ * 1974, a 5778 K spectrum from 0.297 to 0.683 µm, the share 0.4407 of the
+ * beam this band carries); one grey depth misses it by 10 % at both ends.
+ * The near infrared's NEAR_INFRARED_RAYLEIGH, 0.0114, gives the same
+ * reference's reflection of the rest of the spectrum to 0.1 % (2.0 W/m²
+ * of the 25.2 of the whole spectrum over a black surface). A number for
+ * rayleighDepth replaces the sub-bands by one band of that depth.
  * τ_a, the aerosol's mid-visible depth, is landAerosol (0.12) over land
  * and seaAerosol (0.07) over sea and ice sheets; before the two-stream
  * it absorbs 1 − exp(−(1 − aerosolAlbedo) τ_a m) of that part of the beam,
@@ -366,7 +371,7 @@ export const DECK_CLOUD_LEVELS = 8;
 export const UNDECIDED = 0.5;
 export const VISIBLE_PATH = 1e-3;
 export const REFERENCE_PRESSURE = 101325;
-export const RAYLEIGH_BANDS = [[0.712, 0.0874], [0.288, 0.5687]], LAND_AEROSOL = 0.12, SEA_AEROSOL = 0.07;
+export const RAYLEIGH_BANDS = [[0.7049, 0.0957], [0.2951, 0.5806]], NEAR_INFRARED_RAYLEIGH = 0.0114, VISIBLE_FRACTION = 0.4707, LAND_AEROSOL = 0.12, SEA_AEROSOL = 0.07;
 const DIFFUSE_PATH = 5 / 3;
 export const GREENHOUSE_GASES = { carbonDioxide: 388.75e-6, methane: 1798.93e-9, nitrousOxide: 323.18e-9 };
 export const OZONE_COLUMN = [0.26, 0.35];
@@ -426,7 +431,7 @@ export function createRadiation(mesh, core, {
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
   longwaveScheme = 'correlated', solarGases = 'clirad', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
-  rayleighBands = RAYLEIGH_BANDS, rayleighDepth = null, upwardAbsorption = true, visibleFraction = 0.5, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, land = null, iceSheet = null,
+  rayleighBands = RAYLEIGH_BANDS, rayleighDepth = null, nearInfraredRayleigh = NEAR_INFRARED_RAYLEIGH, upwardAbsorption = true, visibleFraction = VISIBLE_FRACTION, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, land = null, iceSheet = null,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential, piSigmaDot, p0 } = core.diagnostics;
   const { thetaV } = core.arrays;
@@ -451,7 +456,7 @@ export function createRadiation(mesh, core, {
   const gasSplit = { vapour: 0, oxygen: 0, co2: 0 };
   const rayleigh = rayleighDepth !== null ? [[1, rayleighDepth]] : rayleighBands;
   if (!(rayleigh.length >= 1 && rayleigh.length <= 3 && Math.abs(rayleigh.reduce((s, [w]) => s + w, 0) - 1) < 1e-9 && rayleigh.every(([w, tau]) => w > 0 && tau >= 0))) throw new Error(`rayleighBands must be one to three [weight, depth] pairs whose weights sum to 1, not ${JSON.stringify(rayleigh)}`);
-  const scatters = rayleigh.some(([, tau]) => tau > 0) || landAerosol > 0 || seaAerosol > 0;
+  const scatters = rayleigh.some(([, tau]) => tau > 0) || nearInfraredRayleigh > 0 || landAerosol > 0 || seaAerosol > 0;
   const aerosolCell = Float64Array.from({ length: C }, (_, i) => (land && land[i] && !(iceSheet && iceSheet[i]) ? landAerosol : seaAerosol));
   const aerosolFraction = Float64Array.from({ length: K }, (_, k) => levels[k + 1] ** (scaleHeight / aerosolHeight) - levels[k] ** (scaleHeight / aerosolHeight));
   const light = { share: 0, pressure: 0, aerosol: 0 }, visibleLight = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 };
@@ -679,7 +684,7 @@ export function createRadiation(mesh, core, {
   }
 
   function shortwave(out, cloudDepth, keep, mu, surfaceAlbedo, diffuseAlbedo) {
-    stream(out, cloudDepth, keep, mu, surfaceAlbedo, diffuseAlbedo);
+    stream(out, cloudDepth + nearInfraredRayleigh * light.pressure, keep, mu, surfaceAlbedo, diffuseAlbedo);
     const escape = 1 - out.absorbed - out.reflectance - out.cloud;
     if (!scatters) { out.visibleEscape = light.share * escape; out.restEscape = (1 - light.share) * escape; return; }
     const rest = 1 - light.share;

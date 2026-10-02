@@ -84,7 +84,7 @@ const H2O_K: array<f32, 10> = ${f32(VAPOR_COEFFICIENTS)}; const H2O_W: array<f32
 const VIS_H2O_S: f32 = ${VISIBLE_VAPOR.share}; const VIS_H2O_K: f32 = ${VISIBLE_VAPOR.coefficient}; const VAP_STRENGTH: f32 = ${o.vaporStrength};
 const O2_SHARE: f32 = ${OXYGEN.share}; const O2_K: f32 = ${OXYGEN.coefficient}; const O2_PATH: f32 = ${OXYGEN.mixingRatio * STP_DEPTH}; const CO2_PATH: f32 = ${o.carbonDioxide * STP_DEPTH}; const CO2_SW_K: f32 = ${CO2_COEFFICIENT};
 const SCALE_P: f32 = ${SCALING_PRESSURE}; const SCALE_N: f32 = ${SCALING_EXPONENT};
-const SCATTER: bool = ${rayleigh.some(([, tau]) => tau > 0) || o.landAerosol > 0 || o.seaAerosol > 0}; const UPWARD: bool = ${!!o.upwardAbsorption}; const DIFFUSE_PATH: f32 = ${5 / 3}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
+const SCATTER: bool = ${rayleigh.some(([, tau]) => tau > 0) || o.nearInfraredRayleigh > 0 || o.landAerosol > 0 || o.seaAerosol > 0}; const NIR_RAY: f32 = ${o.nearInfraredRayleigh / REFERENCE_PRESSURE}; const UPWARD: bool = ${!!o.upwardAbsorption}; const DIFFUSE_PATH: f32 = ${5 / 3}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
@@ -325,7 +325,7 @@ fn overlapCover(blocks: vec3<f32>) -> f32 {
 }
 fn shortwave(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec4<f32> {
   if (!SCATTER) { return stream(cloudDepth, keep, mu, adir, adif); }
-  return light.x * visibleStreams(cloudDepth, keep, mu, adir, adif, light) + (1.0 - light.x) * stream(cloudDepth, keep, mu, adir, adif);
+  return light.x * visibleStreams(cloudDepth, keep, mu, adir, adif, light) + (1.0 - light.x) * stream(cloudDepth + NIR_RAY * light.y, keep, mu, adir, adif);
 }
 fn streamEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32) -> f32 {
   let s = stream(cloudDepth, keep, mu, adir, adif);
@@ -333,9 +333,8 @@ fn streamEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32) -> f3
   return 1.0 - s.x - keep * reflectance - s.w;
 }
 fn escapes(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec2<f32> {
-  let rest = streamEscape(cloudDepth, keep, mu, adir, adif);
-  if (!SCATTER) { return vec2<f32>(light.x * rest, (1.0 - light.x) * rest); }
-  return vec2<f32>(light.x * visibleEscape(cloudDepth, keep, mu, adir, adif, light), (1.0 - light.x) * rest);
+  if (!SCATTER) { let rest = streamEscape(cloudDepth, keep, mu, adir, adif); return vec2<f32>(light.x * rest, (1.0 - light.x) * rest); }
+  return vec2<f32>(light.x * visibleEscape(cloudDepth, keep, mu, adir, adif, light), (1.0 - light.x) * streamEscape(cloudDepth + NIR_RAY * light.y, keep, mu, adir, adif));
 }
 fn clearLight(beam: f32, mu: f32, ozoneHeating: f32, incident: f32, pi: f32, aerosol: f32) -> vec4<f32> {
   let visible = max(0.0, VIS_FRAC * beam - ozoneHeating);

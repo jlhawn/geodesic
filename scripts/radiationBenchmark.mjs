@@ -176,8 +176,8 @@ function shortwaveTable() {
   const mls = columns.MLS, cs = BENCHMARK.chouShortwave, beam = 0.5 * 1365;
   console.log(`  Chou & Suarez (1999) line-by-line, MLS, 60 degrees, no scattering (insolation taken as ${beam}, solar constant 1365):`);
   for (const o of [BEFORE, AFTER]) {
-    const r = runColumn({ ...o, rayleighDepth: 0, skylight: 0, upwardAbsorption: true }, withGas(mls, 'co2', 350e-6), { beam, albedo: 0.2, solarConstant: 1365 });
-    const r0 = runColumn({ ...o, rayleighDepth: 0, skylight: 0 }, withGas(mls, 'co2', 350e-6), { beam, albedo: 0, solarConstant: 1365 });
+    const r = runColumn({ ...o, rayleighDepth: 0, nearInfraredRayleigh: 0, skylight: 0, upwardAbsorption: true }, withGas(mls, 'co2', 350e-6), { beam, albedo: 0.2, solarConstant: 1365 });
+    const r0 = runColumn({ ...o, rayleighDepth: 0, nearInfraredRayleigh: 0, skylight: 0 }, withGas(mls, 'co2', 350e-6), { beam, albedo: 0, solarConstant: 1365 });
     console.log(`    ${o === BEFORE ? 'before' : 'after '} atmosphere ${f(r.budget.atmosphereSolar)} (${cs.noScattering.total[2]}), of the net at the top ${f(100 * r.budget.atmosphereSolar / (beam - r.budget.reflectedSolar))} % (${f(100 * cs.noScattering.total[2] / cs.noScattering.total[0])} %); albedo 0: O2 ${f(r0.budget.oxygenSolar, 2)} (${-cs.surfaceReduction.o2}) CO2 ${f(r0.budget.carbonDioxideSolar, 2)} (${-cs.surfaceReduction.co2}) ozone ${f(r0.budget.ozoneSolar, 2)} (ultraviolet ${cs.noScattering.uv[2]} of the band 1-7 absorption with albedo 0.2) vapour ${f(r0.budget.vaporSolar, 2)}`);
   }
 }

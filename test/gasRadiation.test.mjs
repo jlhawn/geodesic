@@ -6,7 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { clearLongwave } from '../js/physics/longwave.module.js';
 import { BENCHMARK, modelColumn, referenceAt, interfaceAt, layerHeating, referenceHeating, MOLAR } from '../scripts/standardAtmospheres.mjs';
 import { runColumn } from '../scripts/radiationBenchmark.mjs';
-import { SOLAR_CONSTANT, GREENHOUSE_GASES } from '../js/physics/radiation.module.js';
+import { SOLAR_CONSTANT, GREENHOUSE_GASES, VISIBLE_FRACTION } from '../js/physics/radiation.module.js';
 import { ozoneWeights, ozoneAbove } from '../js/physics/ozone.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { ozoneAbsorptivity, visibleVaporAbsorptivity, nearInfraredVaporAbsorptivity, oxygenAbsorptivity, carbonDioxideAbsorptivity, pressureScaling, vaporScaling, OXYGEN, STP_DEPTH } from '../js/physics/shortwaveGases.module.js';
@@ -58,7 +58,7 @@ test('the solar gases absorb what RRTMG gives within 2 per cent at an overhead s
 });
 
 test('without scattering the solar gases take the CLIRAD absorptivities of their paths down, and of the path down plus 5/3 of the column from the light the surface reflects', () => {
-  const grid = new Grid(4), plain = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, clearSkyPass: true };
+  const grid = new Grid(4), plain = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, clearSkyPass: true };
   const make = (options) => { const m = createModel(grid, { ocean: false, radiation: { ...plain, ...options } }); initializeState(m, {}).forEach((v, a) => m.state[a].set(v)); return m; };
   const on = make({}), off = make({ upwardAbsorption: false });
   const { core, mesh } = on, { K, C, dSigma, sigmaMid, g, exnerLayer } = core.diagnostics, [pi, theta] = on.state, bottom = (K - 1) * C;
@@ -76,7 +76,7 @@ test('without scattering the solar gases take the CLIRAD absorptivities of their
     const ozone = ozoneAbove(pi[i], ozoneWeights(mesh.latCell[i], 0));
     const nir = (f) => nearInfraredVaporAbsorptivity(f * vapour) + oxygenAbsorptivity(f * oxygen) + carbonDioxideAbsorptivity(f * co2);
     const down = beam * (ozoneAbsorptivity(m * ozone) + visibleVaporAbsorptivity(m * vapour) + nir(m));
-    const visible = 0.5 * beam - beam * (ozoneAbsorptivity(m * ozone) + visibleVaporAbsorptivity(m * vapour));
+    const visible = VISIBLE_FRACTION * beam - beam * (ozoneAbsorptivity(m * ozone) + visibleVaporAbsorptivity(m * vapour));
     const up = albedo * beam * (nir(m + 5 / 3) - nir(m)) + albedo * visible * -Math.expm1(-0.054209 * ozone * 5 / 3);
     const run = (model) => { model.radiation.column(i, pi[i], theta, 290, 5, undefined, beam, q[bottom + i], q, null, albedo, albedo); return { ...model.radiation.budget }; };
     const a = run(on), b = run(off);

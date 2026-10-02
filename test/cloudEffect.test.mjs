@@ -14,7 +14,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 const CLEAR_SLOTS = { clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'OLRCLRSUM' };
 const EFFECT_SLOTS = { meanShortwaveCloudEffect: 'SWCREMEAN', meanLongwaveCloudEffect: 'LWCREMEAN' };
 const DT = 900;
-const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
+const UNSCATTERED = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
 const STEPS = 16;
 
 function stats(cpu, gpu) {
@@ -47,10 +47,10 @@ test('the clear-sky pass gives each column the top-of-atmosphere fluxes of the s
     assert.ok(Math.abs(b.clearAbsorbedSolar - clear.absorbedSolar) <= 1e-12 * Math.max(1, clear.absorbedSolar), `cell ${i}: the cloudy column's clear-sky ASR ${b.clearAbsorbedSolar} against ${clear.absorbedSolar}`);
     assert.ok(Math.abs(b.clearOutgoingLongwave - clear.outgoingLongwave) <= 1e-12 * clear.outgoingLongwave, `cell ${i}: the cloudy column's clear-sky OLR ${b.clearOutgoingLongwave} against ${clear.outgoingLongwave}`);
     assert.ok(b.outgoingLongwave < b.clearOutgoingLongwave, `cell ${i}: cloud lowers the OLR`);
-    if (b.insolation > 0) { lit++; assert.ok(b.absorbedSolar < b.clearAbsorbedSolar, `cell ${i}: cloud lowers the ASR`); }
+    if (radiation.cosZenith(i) > 0.01) { lit++; assert.ok(b.absorbedSolar < b.clearAbsorbedSolar, `cell ${i}: cloud lowers the ASR`); }
     checked++;
   }
-  console.log(`${checked} columns (${lit} lit) with cloud in every third layer: clear-sky ASR and OLR equal the cloudless column's to ${worst.toExponential(1)}`);
+  console.log(`${checked} columns (${lit} lit above a grazing sun, μ > 0.01) with cloud in every third layer: clear-sky ASR and OLR equal the cloudless column's to ${worst.toExponential(1)}`);
 });
 
 async function engines(radiation, cloud = 0) {
