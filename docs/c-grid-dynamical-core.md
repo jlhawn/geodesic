@@ -3337,17 +3337,19 @@ The work, in order:
    0.5 → 0.4707, the share of CLIRAD-SW's bands 1-8 (Chou & Suarez 1999,
    Table 3), so that the near infrared the gases absorb from is the
    0.5293 their k-distribution's weights are shares of. The Rayleigh
-   sub-bands refit (`VISIBLE=0.4707 node scripts/rayleighReference.mjs`)
-   to the 0.297-0.683 µm band of a 5778 K spectrum this leaves:
-   [[0.7049, 0.0957], [0.2951, 0.5806]], within 0.1 % of the band's
-   reference reflectance over μ 0.1-1 and 23.21 W/m² over a black surface
-   against its 23.20 (the 0.5 band's 23.54 counted the 0.683-0.711 µm
-   sliver that now falls in the near infrared). The near infrared scatters too
-   (`nearInfraredRayleigh` 0.0114: `NEAR_INFRARED=1` fits one grey depth
-   to the rest of the spectrum, 2.00 W/m² against the reference's 2.00,
-   within 2.2 % over μ 0.1-1; CLIRAD's bands 9-10 give 0.0101 weighted by
-   their shares): the black-surface reflection is 25.2 W/m², the
-   reference's whole spectrum (25.18 two-stream, 24.99 doubling-adding),
+   sub-bands refit (`node scripts/rayleighReference.mjs`, whose VISIBLE
+   is now VISIBLE_FRACTION) to the 0.297-0.683 µm band of a 5778 K
+   spectrum this leaves: [[0.7049, 0.0957], [0.2951, 0.5806]], within
+   0.1 % of the band's reference reflectance over μ 0.1-1 and 23.21 W/m²
+   over a black surface against its 23.20 (the 0.5 band's 23.54 counted
+   the 0.683-0.711 µm sliver that now falls in the near infrared). The
+   near infrared scatters too (`nearInfraredRayleigh` 0.0114:
+   `NEAR_INFRARED=1` at 400 wavelengths, where the 40 of the visible band
+   give 1.95 W/m² and 0.0112, fits one grey depth to the rest of the
+   spectrum, 2.00 W/m² against the reference's 2.00, within 2.2 % over
+   μ 0.1-1; CLIRAD's bands 9-10 give 0.0101 weighted by their shares):
+   the black-surface reflection is 25.2 W/m², the reference's whole
+   spectrum (25.20 two-stream, 25.02 doubling-adding),
    where the 0.5 band alone gave 23.5 and nothing beyond 0.711 µm. On the
    day-186 state of three days from eight64_day0183 the open sea's
    clear-sky albedo at the top by class (`scripts/clearSkyBudget.mjs`)

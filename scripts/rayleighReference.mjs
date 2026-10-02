@@ -1,11 +1,13 @@
 // A spectral reference for the molecular atmosphere over a black surface in
 // the radiation's visible band, and the grey or few-band depths that follow it:
 //   node scripts/rayleighReference.mjs
-// The band: of a 5778 K Planck spectrum, the share VISIBLE (0.5) at the short
-// end, less the share OZONE (0.03) that ozone takes, removed from the shortest
-// wavelengths (the Hartley-Huggins bands); WAVELENGTHS (40) equal intervals in
-// wavelength, each weighted by its Planck energy, with the Rayleigh depth of
-// Hansen & Travis (1974) at 1013.25 hPa at its midpoint,
+// The band: of a 5778 K Planck spectrum, the share VISIBLE (the radiation's
+// VISIBLE_FRACTION) at the short end, less the share OZONE (0.03) that ozone
+// takes, removed from the shortest wavelengths (the Hartley-Huggins bands);
+// WAVELENGTHS (40, or 400 with NEAR_INFRARED, where 40 put the reference
+// 2.5 % low) equal intervals in wavelength, each weighted by its Planck
+// energy, with the Rayleigh depth of Hansen & Travis (1974) at 1013.25 hPa
+// at its midpoint,
 // tau(l) = 0.008569 l^-4 (1 + 0.0113 l^-2 + 0.00013 l^-4), l in um.
 // Each wavelength is reflected by the model's two-stream tau/(tau + 2 mu); the
 // band-mean reflectance against mu is the reference the model's depths are
@@ -16,7 +18,9 @@
 // which shows the two-stream's own error. The global-mean reflected flux of a
 // full atmosphere is (S0/2) x band share x the integral of mu R(mu) over mu,
 // since the sunlit hemisphere's area is uniform in mu at every instant.
-const VISIBLE = Number(process.env.VISIBLE ?? 0.5), OZONE = Number(process.env.OZONE ?? 0.03), N = Number(process.env.WAVELENGTHS ?? 40);
+import { VISIBLE_FRACTION } from '../js/physics/radiation.module.js';
+
+const VISIBLE = Number(process.env.VISIBLE ?? VISIBLE_FRACTION), OZONE = Number(process.env.OZONE ?? 0.03), N = Number(process.env.WAVELENGTHS ?? (process.env.NEAR_INFRARED === '1' ? 400 : 40));
 const S0 = 1362, T_SUN = 5778, GAUSS = Number(process.env.GAUSS ?? 24), GREY = Number(process.env.GREY ?? 0.18);
 const HC_K = 14387.77;
 
