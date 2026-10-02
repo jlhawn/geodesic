@@ -5719,6 +5719,49 @@ matches the table to every digit; the June rerun, day by day where the
 table's ran in one segment, gives ASR 236.9, ASR − OLR −4.4 and SWCRE
 −51.4 on day 94 and the same loss, 0.314·10³ km³/day (9.191 → 8.249).
 
+Parity (Oct 1), from both engines stepped phase by phase from one state
+(nine64_day0091, the slab surface) and every GPU buffer compared across a
+save and load. (1) Where the surface parcel tops out at the interface the
+stratocumulus's descending parcel stops at, the coupling test compares
+two computations of one height: equal on the CPU (coupled, the written
+intent), an ulp apart in f32 on the GPU, which decoupled about half of
+such columns. After one step 13 regimes and 15 columns' lowest ten layers
+(by up to 5.2 K) were apart, after four 58 columns (> 0.1 K) and 82 cells'
+net surface flux (> 1 W/m², 17 of them poleward of 60°); with the
+decision on the parcel top's level index, 0 after one step, 4 and 30 (3
+poleward of 60°) after four. The Arctic test is unchanged by it: 9.191 →
+8.248·10³ km³ over three days, 3.4 % a day, net surface flux 129.0 and
+ocean flux 4.7 W/m², before and after; the southern pack from
+eight64_day0183 gains 0.008·10³ km³/day (12.012 → 12.037; net −20.3,
+ocean 22.4 W/m²) before and after. The CPU reference melts the Arctic
+pack alike over the first day (9.191 → 8.896 against the GPU's 8.895;
+net 120.2 and ocean 4.4 W/m² against 120.2 and 4.5): the 3.4 % a day is
+the scheme's, not the GPU's. (2) A
+reload lost the lowest wind speed (the first step's drag), the
+evaporation (the ocean's next freshwater), the shallow cumulus (the next
+radiation) and the ocean between its steps (Q and W rebuilt as h·T, the
+flux into the ice zero until its next step); every snapshot now carries
+them and the ocean's restart arrays (8 MB more on the 77 MB N=64 file), and three
+one-day segments from eight64_day0183 equal the three-day run bit for bit
+over the next day of steps (`test/asyncSpinup.test.mjs` at N=6); a split
+inside a day still parts through the rain and runoff the ocean takes as
+differences of running totals. (3) Under the saturation adjustment's
+cover, gray optics and maximum-random overlap, 1 − e^(−W/W_vis) is 0 in
+f32 for trace cloud, so the GPU split the overlap blocks the CPU's expm1
+joined (one column covered 0.797 against 0.560, every layer's cover
+equal): 11 cells' absorbed sunlight apart by up to 146 W/m² after one
+step, 1 cell (20 W/m², the deck's fog cover below) with the small-rate form.
+Remaining: the mixed-layer deck's cover falls from 1 to 0.3 as its cloud
+base leaves the surface in a fog whose buoyancy flux is negative
+throughout, so the engines' rounding of saturation decides it; land
+evaporates at the potential rate from the soil under any snow, and the
+CPU's trace cloud water (10⁻⁵⁸–10⁻³⁷ kg/m² of snowfall, below what f32
+holds) sets that off (up to 100 W/m² of net flux in 2–3 cells a step);
+the dry adjustment's 10⁻⁶ tolerance and plume onsets part a few columns a
+step; the ocean flux into the ice is f32 heat content less h·T_f, a
+quantum of about 24 W/m² under a 600 m mixed layer (per-cell |Δ| 10 W/m²
+over the southern pack, means within 2.2).
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
