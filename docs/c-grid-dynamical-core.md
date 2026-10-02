@@ -2926,14 +2926,24 @@ The work, in order:
    eight64_day0183 at N=64 every sunlit column closes to 4.1e-16 of the
    beam on the CPU at four instants and to 2.5e-7 (single precision) on
    the GPU over 64 steps, no dark column carries any shortwave on either,
-   and the scattering leaves the longwave unchanged. The daily line gives the clear-sky
+   and the scattering leaves the longwave unchanged. On nine64_day0091 and
+   nine64_day0365 (Oct 1 review, the final defaults) the columns close
+   alike (CPU 4.1·10⁻¹⁶ and 4.2·10⁻¹⁶, GPU 2.4·10⁻⁷ and 2.4·10⁻⁷ over 64
+   steps), the surface absorbs (1 − albedo) of its direct and diffuse
+   light to 6.5·10⁻¹⁶ of the beam on the CPU and over land to 1.9·10⁻⁷ on
+   the GPU, and the clear-sky OLR is unchanged, but the all-sky OLR of
+   934 and 861 sunlit deck columns moves by up to 0.087 W/m² on both
+   engines: the mixed-layer deck's cover follows the sunlight its layer
+   absorbs, which the scattering above it changes. The daily line gives the clear-sky
    reflectance and the sea's surface sunlight; the audit and the second
    sweep's `clearAlbedo` term (target 0.15, tolerance 0.01, weight 3) read
    the clear-sky albedo.
 
    Acceptance by surface class (Oct 1). The global clear-sky albedo is an
    outcome, reported without a verdict: the planet's mix of surfaces
-   emerges, so each class is checked against its own reference. Four
+   emerges, so each class is checked against its own reference. The
+   second sweep's `clearAlbedo` term in `scripts/sweep/score.mjs` still
+   scores the global value against 0.15. Four
    changes, each on both engines with parity tests.
 
    - The Rayleigh band from the spectrum (`scripts/rayleighReference.mjs`):
