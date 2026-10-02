@@ -94,7 +94,7 @@ test('the vegetated albedo blends forest and grass by their shares of the cover,
   assert.ok(near(plain.albedo(i), 0.30 + (0.13 - 0.30) * 0.6), 'without grassland one vegetated albedo');
 });
 
-test('a fresh start and an older state take the moisture means from the estimate and their trees at the cover times the potential; a saved state keeps them through a state file', async () => {
+test('a fresh start and an older state take the moisture means from the estimate and their trees at most at the cover times the potential; a saved state keeps them through a state file', async () => {
   const topography = syntheticTopography(180, 360, (lat, lon) => (lat < -1.2 ? 2000 : Math.cos(lon) > 0 ? 100 : -4000));
   const geography = createGeography(mesh, topography, { landBridges: {}, seaStraits: {} });
   const land = createLandSurface(mesh, geography), C = mesh.nCells;
@@ -117,6 +117,16 @@ test('a fresh start and an older state take the moisture means from the estimate
     if (aridityFactor(e.rain, e.demand) < 1 && vegetation[i] > 0) gated++;
   }
   assert.ok(gated > 20, `${gated} cells held below the season's potential by their moisture`);
+  const young = Float64Array.from({ length: C }, (_, i) => (i % 3) / 20);
+  land.load({ soil, snow, vegetation, canopy: young, seasonLength, seasonWarmth });
+  let kept = 0;
+  for (let i = 0; i < C; i++) {
+    if (!geography.land[i] || geography.iceSheet[i]) continue;
+    const e = moistureEstimate(mesh.latCell[i], soil[i] / 300, vegetation[i]), potential = vegetation[i] * treelineFactor(0.6, 8) * aridityFactor(e.rain, e.demand);
+    assert.ok(near(land.canopy[i], Math.min(young[i], potential)), `cell ${i}: an older state's trees below the potential stand`);
+    if (young[i] < potential) kept++;
+  }
+  assert.ok(kept > 20, `${kept} cells keep their younger trees`);
   const rainMean = Float64Array.from({ length: C }, (_, i) => (i % 7) / 2), demandMean = Float64Array.from({ length: C }, (_, i) => 1 + (i % 11) / 3), canopy = Float64Array.from({ length: C }, (_, i) => (i % 13) / 13);
   land.load({ soil, snow, vegetation, canopy, seasonLength, seasonWarmth, rainMean, demandMean });
   const saved = await decodeState(encodeState({ N: 8, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));

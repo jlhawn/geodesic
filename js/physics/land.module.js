@@ -346,8 +346,9 @@ export function createLandSurface(mesh, geography, {
    * cover times their treeline factor; without the treeline a state
    * without a standing cover stands it at the cover. One saved without
    * the moisture means starts them at moistureEstimate's from its own
-   * bucket's fill and, under the moisture gate, its trees at the cover
-   * times their potential.
+   * bucket's fill and, under the moisture gate, keeps its trees where
+   * they stand below the cover times their potential and lowers them to
+   * it elsewhere.
    */
   function load(saved, ice = null) {
     const seasoned = !!(saved.seasonLength && saved.seasonWarmth), moistened = !!(saved.rainMean && saved.demandMean);
@@ -366,7 +367,8 @@ export function createLandSurface(mesh, geography, {
       else estimateMoisture(i);
       if (!treed) canopy[i] = vegetation[i] > 0 && saved.canopy ? Math.min(1, Math.max(vegetation[i], saved.canopy[i])) : vegetation[i];
       else if (!land[i] || !vegetated || onIceSheet(i)) canopy[i] = 0;
-      else canopy[i] = seasoned && (moistened || !gated) && saved.canopy ? Math.min(1, Math.max(0, saved.canopy[i])) : startingTrees(i);
+      else if (!seasoned || !saved.canopy) canopy[i] = startingTrees(i);
+      else canopy[i] = moistened || !gated ? Math.min(1, Math.max(0, saved.canopy[i])) : Math.min(1, Math.max(0, saved.canopy[i]), startingTrees(i));
     }
     runoff.fill(0);
   }
