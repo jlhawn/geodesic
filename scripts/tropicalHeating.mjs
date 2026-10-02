@@ -59,7 +59,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
+import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -368,12 +368,22 @@ function ascend(i, s, entraining) {
   const lcl = liftingCondensationLevel((sourceS - g * z[bottomK]) / cp, sourceQ, p[bottomK], kappa);
   if (!lcl || !(lcl.pressure > pi[i] * levels[1])) return { status: 'noLcl' };
   const virtual = O.virtualBuoyancy ? VIRTUAL_FACTOR : 0, loading = O.virtualBuoyancy ? 1 : 0;
-  let sp = sourceS, wq = sourceQ, w2 = 0, below = 0, inhibition = 0, cloudy = false, started = false, top = -1, guess = 0, cape = 0, base = -1, unbuoyant = NaN, buoyant = false;
+  let sp = sourceS, wq = sourceQ, w2 = 0, below = 0, inhibition = 0, cloudy = false, started = false, top = -1, guess = 0, cape = 0, base = -1, unbuoyant = NaN, buoyant = false, baseSaturation = 0;
+  const ifs = O.plumeEntrainmentLaw === 'ifs', liquidT = RADIATION.liquidTemperature ?? O.liquidTemperature, iceT = RADIATION.iceTemperature ?? O.iceTemperature, sat = { qs: 0, slope: 0, liquid: 1 };
   for (let k = source - 1; k >= 0; k--) {
     const lower = upperInterface(i, k + 1), upper = k > 0 ? upperInterface(i, k) : Infinity, depth = upper - lower;
     const mixes = pi[i] * levels[k + 1] <= lcl.pressure;
-    if (mixes && !started) { started = true; base = k + 1; w2 = O.plumeVelocity * O.plumeVelocity; }
-    const epsilon = !entraining ? 0 : mixes ? Math.max(O.plumeEntrainmentFloor, O.plumeEntrainment * Math.max(0, below) / w2) : 0;
+    if (mixes && !started) { started = true; base = k + 1; w2 = O.plumeVelocity * O.plumeVelocity; if (ifs) baseSaturation = cloudSaturation(T[k], p[k], O.iceSaturation, liquidT, iceT, sat).qs; }
+    let epsilon = 0, mixing = 0;
+    if (ifs) {
+      const humidity = Math.min(1, Math.max(0, s.q[k * C + i]) / cloudSaturation(T[k], p[k], O.iceSaturation, liquidT, iceT, sat).qs);
+      const detrained = mixes ? IFS_ENTRAINMENT.detrainment * (IFS_ENTRAINMENT.detrainmentHumidity - humidity) : 0;
+      epsilon = entraining && mixes && below > 0 ? IFS_ENTRAINMENT.entrainment * (IFS_ENTRAINMENT.humidity - humidity) * (sat.qs / baseSaturation) ** IFS_ENTRAINMENT.scaleExponent : 0;
+      mixing = entraining ? IFS_ENTRAINMENT.drag * (epsilon > 0 ? epsilon : detrained) : 0;
+    } else {
+      epsilon = !entraining ? 0 : mixes ? Math.max(O.plumeEntrainmentFloor, O.plumeEntrainment * Math.max(0, below) / w2) : 0;
+      mixing = O.plumeDrag * epsilon;
+    }
     const half = Math.exp(-epsilon * (z[k] - lower));
     const midS = envS[k] + (sp - envS[k]) * half, midQ = envQ[k] + (wq - envQ[k]) * half;
     plumeState(midS, midQ, z[k], p[k], guess);
@@ -392,7 +402,7 @@ function ascend(i, s, entraining) {
     }
     if (mixes) {
       if (!(depth < Infinity)) { top = k; break; }
-      const x = 2 * O.plumeDrag * epsilon * depth, decay = Math.exp(-x);
+      const x = 2 * mixing * depth, decay = Math.exp(-x);
       w2 = w2 * decay + 2 * O.plumeAcceleration * buoyancy * depth * (x > 0 ? -Math.expm1(-x) / x : 1);
       if (!(w2 > 0)) { top = k; break; }
     }

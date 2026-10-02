@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
-import { saturationHumidity, LATENT_HEAT, MOIST_DEFAULTS, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH } from '../js/physics/moist.module.js';
+import { saturationHumidity, cloudSaturation, LATENT_HEAT, MOIST_DEFAULTS, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 
@@ -355,7 +355,7 @@ function plumeColumn(options = {}, profile = null, N = 2) {
 }
 
 test('the Jordan sounding lifts a deep plume that rains, heats most between 400 and 500 hPa above its cloud-base layer, cools the subcloud layer through its downdraft under the threshold closure, and keeps column enthalpy and water exact', () => {
-  const model = plumeColumn({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer' }), { moist } = model, [pi, theta, , , q, qc] = model.state;
+  const model = plumeColumn({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', plumeEntrainmentLaw: 'gregory' }), { moist } = model, [pi, theta, , , q, qc] = model.state;
   const { K, C, sigmaMid, geopotential, g } = model.core.diagnostics, dt = 600;
   moist.trace.convection = new Float64Array(K * C);
   const before = budget(model, 0);
@@ -408,7 +408,7 @@ test('a trade-wind column lifts exactly the shallow cumulus plume and rains noth
 
 test('a drier free troposphere entrains the plume to a lower top, and a dry enough one keeps it shallow', () => {
   const run = (factor) => {
-    const model = plumeColumn({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', plumeCape: 70 }, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? factor : 1), saturationHumidity(air.T, p)) }; });
+    const model = plumeColumn({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', plumeEntrainmentLaw: 'gregory', plumeCape: 70 }, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? factor : 1), saturationHumidity(air.T, p)) }; });
     model.moist.adjust(model.state, 0, 1, 600);
     return { top: model.moist.cumulusTop[0], deep: model.moist.deep.deep, cape: model.moist.deep.cape, rain: model.moist.rain[0] };
   };
@@ -420,7 +420,7 @@ test('a drier free troposphere entrains the plume to a lower top, and a dry enou
 });
 
 test('under the threshold closure the deep base flux relaxes the CAPE toward plumeCape over plumeRelaxation, and plumeClosure: maximum gives it at least the shallow closure', () => {
-  const flux = (options) => { const model = plumeColumn({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', ...options }), [pi, theta, , , q, qc] = model.state; model.moist.plumeColumn(0, pi, theta, q, qc, 600); return { ...model.moist.deep }; };
+  const flux = (options) => { const model = plumeColumn({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', plumeEntrainmentLaw: 'gregory', ...options }), [pi, theta, , , q, qc] = model.state; model.moist.plumeColumn(0, pi, theta, q, qc, 600); return { ...model.moist.deep }; };
   const hour = flux({}), twoHours = flux({ plumeRelaxation: 7200 }), lower = flux({ plumeCape: 0 });
   const cape0 = MOIST_DEFAULTS.plumeCape;
   assert.ok(Math.abs(hour.baseFlux - (hour.cape - cape0) / (3600 * hour.consumption)) < 1e-12 * hour.baseFlux, `base flux ${hour.baseFlux}`);
@@ -598,6 +598,52 @@ function randomColumns(model) {
   return { buoyancy, friction, regime, mixingTop, stratiform, concentration, saved, sensible, evaporation };
 }
 
+test('the IFS entrainment: on Jordan\'s column the plume entrains 1.75e-3 (1.3 − RH)(q_s/q_s,base)³ where the layer below is buoyant, detrains 0.75e-4 (1.6 − RH), and its mass flux grows by exp((ε − δ)Δz) while buoyant and falls by the organised detrainment above, with column enthalpy and water exact; a drier free troposphere entrains more and tops lower', () => {
+  const dt = 600, model = plumeColumn({}), { moist } = model, [pi, theta, , , q, qc] = model.state;
+  const { K, C, sigmaMid } = model.core.diagnostics, O = MOIST_DEFAULTS, sat = { qs: 0, slope: 0, liquid: 1 };
+  const before = budget(model, 0);
+  moist.adjust(model.state, 0, 1, dt);
+  const after = budget(model, 0), rain = moist.rain[0], d = moist.deep;
+  const fresh = plumeColumn({}), [, ft, , , fq] = fresh.state, { exnerLayer } = fresh.core.diagnostics;
+  fresh.core.diagnoseColumn(0, fresh.state[0], ft, fq, fresh.state[5]);
+  fresh.moist.condenseColumn(0, fresh.state[0], ft, fq, fresh.state[5]);
+  fresh.core.diagnoseColumn(0, fresh.state[0], ft, fq, fresh.state[5]);
+  const held = Float64Array.from({ length: K }, (_, k) => ft[k * C] * exnerLayer[k * C]), vapour = Float64Array.from({ length: K }, (_, k) => fq[k * C]);
+  const T = (k) => held[k], pk = (k) => fresh.state[0][0] * sigmaMid[k];
+  fresh.moist.plumeColumn(0, fresh.state[0], ft, fq, fresh.state[5], dt);
+  const f = fresh.moist, fd = f.deep, qsBase = cloudSaturation(T(fd.base - 1), pk(fd.base - 1), O.iceSaturation, O.liquidTemperature, O.iceTemperature, sat).qs;
+  let worstE = 0, worstD = 0, worstM = 0, growing = 0, falling = 0;
+  for (let k = fd.base - 1; k > fd.top; k--) {
+    const qs = cloudSaturation(T(k), pk(k), O.iceSaturation, O.liquidTemperature, O.iceTemperature, sat).qs, rh = Math.min(1, vapour[k] / qs);
+    const eps = f.plumeBuoyancy[k + 1] > 0 ? IFS_ENTRAINMENT.entrainment * (IFS_ENTRAINMENT.humidity - rh) * (qs / qsBase) ** 3 : 0;
+    const expected = k === fd.base - 1 ? f.plumeEntrained[k] : eps;
+    worstE = Math.max(worstE, Math.abs(f.plumeEntrained[k] - expected) / Math.max(1e-12, expected));
+    worstD = Math.max(worstD, Math.abs(f.plumeDetrained[k] - IFS_ENTRAINMENT.detrainment * (IFS_ENTRAINMENT.detrainmentHumidity - rh)));
+  }
+  const { geopotential, g, cp: heat, exnerLower } = fresh.core.diagnostics, thetaV = fresh.core.arrays.thetaV;
+  const upper = (k) => (geopotential[k * C] + heat * thetaV[k * C] * (exnerLayer[k * C] - exnerLower[(k - 1) * C])) / g;
+  for (let k = fd.base - 1; k > fd.top; k--) {
+    const dz = upper(k) - upper(k + 1), M = f.cumulusFlux, ratio = f.plumeBuoyancy[k] > 0 ? Math.exp((f.plumeEntrained[k] - f.plumeDetrained[k]) * dz) : Math.exp(-f.plumeDetrained[k] * dz) * Math.min(1, (IFS_ENTRAINMENT.detrainmentHumidity - f.envHumidity[k]) * Math.sqrt(f.plumeSpeed[k] / f.plumeSpeed[k + 1]));
+    worstM = Math.max(worstM, Math.abs(M[k] - M[k + 1] * ratio) / M[k + 1]);
+    if (M[k] > M[k + 1]) growing++; else falling++;
+  }
+  console.log(`Jordan under the IFS entrainment: mass flux off its recurrence by ${worstM.toExponential(1)}, growing through ${growing} layers and falling through ${falling}; top ${(moist.cumulusTop[0] / 100).toFixed(0)} hPa, cloud base ${(pi[0] * model.core.diagnostics.levels[d.base] / 100).toFixed(0)} hPa, CAPE ${d.cape.toFixed(0)} J/kg, base flux ${d.baseFlux.toFixed(4)} kg/m²/s, rain ${(rain * 86400 / dt).toFixed(1)} mm/d; ε at the first cloud layers ${Array.from({ length: 4 }, (_, n) => (1e4 * f.plumeEntrained[fd.base - 1 - n]).toFixed(2)).join(', ')} 1e-4/m; ε off its formula by ${worstE.toExponential(1)}, δ by ${worstD.toExponential(1)}; enthalpy ${((after.enthalpy - before.enthalpy) / before.enthalpy).toExponential(1)}, water ${((after.water + rain - before.water) / before.water).toExponential(1)}`);
+  assert.equal(O.plumeEntrainmentLaw, 'ifs');
+  assert.ok(d.deep && d.baseFlux > 0, 'a deep plume');
+  assert.ok(worstE < 1e-12 && worstD < 1e-18 && worstM < 1e-9, `ε ${worstE}, δ ${worstD}, M ${worstM}`);
+  assert.ok(growing > 3 && falling > 0, `${growing} growing, ${falling} falling`);
+  assert.ok(Math.abs(after.enthalpy - before.enthalpy) < 1e-15 * before.enthalpy && Math.abs(after.water + rain - before.water) < 1e-15 * before.water, 'enthalpy and water');
+  const run = (factor) => {
+    const m = plumeColumn({}, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? factor : 1), saturationHumidity(air.T, p)) }; });
+    m.moist.adjust(m.state, 0, 1, 600);
+    return { top: m.moist.deep.top >= 0 ? m.moist.cumulusTop[0] : Infinity, entrained: m.moist.plumeEntrained.reduce((a, b) => a + b, 0), deep: m.moist.deep.deep };
+  };
+  const moistAir = run(1), drier = run(0.8), dry = run(0.6);
+  console.log(`free-tropospheric humidity × 1, 0.8, 0.6: tops ${[moistAir, drier, dry].map((r) => (r.top / 100).toFixed(0)).join(', ')} hPa, summed ε ${[moistAir, drier, dry].map((r) => (1e4 * r.entrained).toFixed(1)).join(', ')} 1e-4/m`);
+  assert.ok(moistAir.entrained < drier.entrained && drier.entrained < dry.entrained, 'drier air entrains more');
+  assert.ok(moistAir.top <= drier.top && drier.top <= dry.top, 'and the top sinks');
+});
+
 test('a column convects deep where its plume\'s cloud is deeper than 200 hPa and then as one type only, the deep plume alone, as convectionType top with plumeClosure cape does where both call it deep; elsewhere the shallow plume alone; column enthalpy and water exact', () => {
   const dt = 900, run = (options) => {
     const model = build(options, 6), C = model.mesh.nCells;
@@ -666,7 +712,7 @@ async function parity(options, { momentum = false } = {}) {
   pass.end();
   device.queue.submit([encoder.finish()]);
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
-  const response = new Float64Array(C);
+  const response = new Float64Array(C), warmed = new Float64Array(C), warmedFlux = new Float64Array(C);
   {
     const kept = model.state.map((a) => Float64Array.from(a)), keptSaved = Float64Array.from(saved), keptSnow = Float64Array.from(model.seaIce.snow);
     for (let x = 0; x < saved.length; x++) saved[x] *= 1 + 2 ** -23;
@@ -674,10 +720,15 @@ async function parity(options, { momentum = false } = {}) {
     for (let i = 0; i < C; i++) response[i] = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i];
     model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow);
     for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation]) a.fill(0);
+    for (let x = 0; x < theta.length; x++) theta[x] *= 1 + 2 ** -23;
+    model.phases.adjust(0, C, dt);
+    for (let i = 0; i < C; i++) { warmed[i] = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i]; warmedFlux[i] = moist.cumulusBaseFlux[i]; }
+    model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow);
+    for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation]) a.fill(0);
   }
   moist.trace.convection = new Float64Array(K * C);
   model.phases.adjust(0, C, dt);
-  for (let i = 0; i < C; i++) response[i] = Math.abs(response[i] - moist.convectivePrecipitation[i] - moist.largeScalePrecipitation[i]);
+  for (let i = 0; i < C; i++) { const now = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i]; response[i] = Math.max(Math.abs(response[i] - now), Math.abs(warmed[i] - now)); }
   if (momentum) {
     const E = mesh.nEdges, { dSigma, g } = core.diagnostics, u = model.state[2], before = Float64Array.from(u);
     model.phases.mixMomentum(0, E, dt);
@@ -703,10 +754,11 @@ async function parity(options, { momentum = false } = {}) {
   let deep = 0, shallow = 0, decked = 0, still = 0, opening = 0, flips = 0, worstTheta = 0, worstQ = 0, worstQc = 0, worstRain = 0, rainScale = 0;
   let plumes = 0, plumeFlips = 0, topsDiffer = 0, worstFlux = 0, fluxScale = 0, worstCover = 0, worstWater = 0, waterScale = 0;
   const K0 = K - (layout.PH.CUWATER - layout.PH.CUCOVER) / C;
-  const beside = new Set();
+  const beside = new Set(), switching = new Set();
   for (let i = 0; i < C; i++) {
     const cpu = moist.cumulusBaseFlux[i], gpuFlux = ph.CUMF[i];
     if (moist.cumulusTop[i] > 0 && Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) <= 1 && Math.abs(cpu - gpuFlux) > 1e-2 * Math.max(cpu, gpuFlux)) beside.add(i);
+    if (Math.abs(warmedFlux[i] - cpu) > 1e-3 * cpu) switching.add(i);
     rainScale = Math.max(rainScale, moist.convectivePrecipitation[i]);
   }
   const merged = new Set(), alike = (a, b) => Math.abs(a - b) <= 1e-6 * Math.max(Math.abs(a), Math.abs(b));
@@ -725,7 +777,8 @@ async function parity(options, { momentum = false } = {}) {
     if ((cpu > 0) !== (gpuFlux > 0)) plumeFlips++;
     if (moist.cumulusTop[i] > 0 && Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) > 1) topsDiffer++;
     if (beside.has(i) || merged.has(i)) continue;
-    worstFlux = Math.max(worstFlux, Math.abs(cpu - gpuFlux)); fluxScale = Math.max(fluxScale, cpu);
+    fluxScale = Math.max(fluxScale, cpu);
+    if (!switching.has(i)) worstFlux = Math.max(worstFlux, Math.abs(cpu - gpuFlux));
     for (let k = K0; k < K; k++) {
       worstCover = Math.max(worstCover, Math.abs(moist.cumulusCover[k * C + i] - ph.CUCOVER[(k - K0) * C + i]));
       worstWater = Math.max(worstWater, Math.abs(moist.cumulusWater[k * C + i] - ph.CUWATER[(k - K0) * C + i]));
@@ -743,18 +796,19 @@ async function parity(options, { momentum = false } = {}) {
       worstQc = Math.max(worstQc, Math.abs(model.state[5][x] - after[5][x]));
     }
   }
-  console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)}; twice its response to one f32 ulp of the saved subcloud T_v at most ${allowed.toExponential(1)})`);
-  console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top, ${beside.size} deep in the base flux by more than 1 % (the shallow plume beside it ran on one engine only), ${merged.size} whose dry adjustment merged other layers on the two engines; base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}, the plume's condensate by ${worstWater.toExponential(1)} kg/kg (largest ${waterScale.toExponential(1)})`);
+  console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)}; twice its response to one f32 ulp of the saved subcloud T_v or of θ at most ${allowed.toExponential(1)})`);
+  console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top, ${beside.size} deep in the base flux by more than 1 % (the shallow plume beside it ran on one engine only), ${merged.size} whose dry adjustment merged other layers on the two engines, ${switching.size} whose base flux on the CPU moves by over 1e-3 under one ulp of θ (left out of the flux); base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}, the plume's condensate by ${worstWater.toExponential(1)} kg/kg (largest ${waterScale.toExponential(1)})`);
   assert.ok(deep > C / 40 && plumes > C / 10 && decked > C / 40 && still > C / 40, `${deep} deep, ${plumes} plumes, ${decked} decked, ${still} still`);
   assert.equal(plumeFlips, 0);
   assert.equal(topsDiffer, 0);
   assert.ok(beside.size <= C / 100, `${beside.size} columns' shallow plume beside the deep one ran on one engine only`);
   assert.ok(merged.size <= C / 100, `${merged.size} columns' dry adjustment merged other layers`);
+  assert.ok(switching.size <= 0.02 * C, `${switching.size} columns' base flux switches under one ulp of θ`);
   assert.ok(worstFlux < 2e-3 * fluxScale && worstCover < 1e-4, `base mass flux ${worstFlux}, cover ${worstCover}`);
   assert.ok(waterScale > 0 && worstWater < 1e-3 * waterScale, `plume condensate ${worstWater} against ${waterScale}`);
   assert.equal(flips, 0);
   assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
-  assert.ok(rainOver < 0, `rain ${worstRain} against ${rainScale}, ${rainOver} above 1e-4 of it and twice the response to one ulp of the saved T_v`);
+  assert.ok(rainOver < 0, `rain ${worstRain} against ${rainScale}, ${rainOver} above 1e-4 of it and twice the response to one ulp of the saved T_v or of θ`);
   return { cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]) };
 }
 
@@ -774,6 +828,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ excessVelocity: 'convective' });
   await parity({ plumeSourceDepth: 'boundaryLayer' });
   await parity({ convectionType: 'top' });
+  await parity({ plumeEntrainmentLaw: 'gregory' });
 });
 
 test('the stratiform lifetime matches between the engines on random columns of every regime, mixing top, EIS share and sea-ice cover, and keeps cloud the short lifetime would rain out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
