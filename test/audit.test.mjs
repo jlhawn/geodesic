@@ -107,3 +107,28 @@ test('scripts/verticalAudit.mjs prints every headline number of a saved state wi
   assert.match(run.stdout, /replica over [1-9][0-9]* column-steps: running mean \|diff\| 0\.0e\+0 m\/s, gate \|diff\| 0\.0e\+0, run decisions differing 0/);
   assert.match(run.stdout, /off: subsidence [0-9.]+, off: jump [0-9.]+, off: gate memory [0-9.]+, stood down [0-9.]+; failing the subsidence test [0-9.]+, the jump test [0-9.]+/);
 });
+
+test('scripts/tropicalHeating.mjs replays the moist step exactly, closes the heat and total-water budgets, matches the model\'s sensible heat and prints a summary of every tropical box', async () => {
+  const { createModel } = await import('../js/model.module.js');
+  const { topographyFromInt16 } = await import('../js/geography.module.js');
+  const { initializeState } = await import('../js/physics/init.module.js');
+  const { encodeState } = await import('../js/stateFile.module.js');
+  const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
+  const model = createModel(new Grid(12), { topography, ocean: false });
+  initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
+  model.land.initialize();
+  for (let n = 0; n < 6; n++) model.step(1800);
+  const [pi, theta, u, surfaceT, q, qc, ice] = model.state, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
+  const dir = mkdtempSync(join(tmpdir(), 'tropicalHeating-')), file = join(dir, 'heat12_day0000.bin');
+  writeFileSync(file, encodeState({ N: 12, K: model.core.K, day: 0, time: model.time, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
+  const run = spawnSync(process.execPath, [new URL('../scripts/tropicalHeating.mjs', import.meta.url).pathname, file], { env: { ...process.env, STEPS: '3' }, encoding: 'utf8' });
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(run.status, 0, run.stderr);
+  const [, mismatch, columns, heat, water, sensible, own] = run.stdout.match(/differs from the model's in (\d+) of (\d+) column-steps.*close on the temperature change to ([0-9.e+-]+) K a step and on the change of q_t to ([0-9.e+-]+) kg\/kg a step.*global sensible heat (-?[0-9.]+) against the model's (-?[0-9.]+) W\/m2/);
+  assert.equal(Number(mismatch), 0, `${mismatch} of ${columns} column-steps`);
+  assert.ok(Number(columns) > 0 && Number(heat) < 1e-12 && Number(water) < 1e-16, `heat ${heat} K, water ${water} kg/kg a step`);
+  assert.equal(sensible, own, 'the global sensible heat');
+  const summaries = run.stdout.split('\n').filter((line) => line.startsWith('summary '));
+  assert.deepEqual(summaries.map((line) => line.slice(8, line.indexOf(': {'))), TROPICAL_BOXES.map(([name]) => name));
+  for (const line of summaries) assert.ok('q1rCentroid' in JSON.parse(line.slice(line.indexOf(': {') + 2)), line);
+});
