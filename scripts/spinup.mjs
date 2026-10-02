@@ -50,8 +50,8 @@
 // topsoil carbon to the equilibrium of its own record and ends a fresh
 // start's hold, logging the change by land area globally and by 10° band,
 // e.g. '365,730'; 'fresh', the default, jumps as the land's record passes
-// 365 and 730 days when the land started fresh, which a state saved before
-// the record existed never did; 'none' never),
+// 365 and 730 days when the land started fresh, which a state saved
+// without a record never does; 'none' never),
 // DIVERGENCE_DAMPING (the model's DIVERGENCE_DAMPING: the coefficient c of the
 // core's divergence damping, the tendency c d²/dt ∇δ with d the mean
 // distance between cell centres),

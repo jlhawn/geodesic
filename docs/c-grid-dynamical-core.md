@@ -4172,8 +4172,9 @@ The work, in order:
    An unbiased fresh start (Oct 2). A start from the atlas (no FROM
    state) had put the cover at 0.5 everywhere and filled the slow means
    from the latitude and bucket estimates, whose errors stay for the
-   means' three-year memory (the estimate's moisture factor 0.34 where
-   the land's own climate gives 0.00, 0.83–0.93 where it gives 1.00).
+   means' three-year memory (with the half-full bucket and half cover
+   the estimate's moisture factor is 0.65 on every one of the 10640
+   land cells off the ice sheets at N=64, whatever its climate).
    The two-stage start replaces that on both engines
    (`js/physics/land.module.js`, `js/gpu/physics.gpu.js`, `core.gpu.js`,
    `model.gpu.js`), with hand-computed and parity tests
@@ -4251,7 +4252,8 @@ The work, in order:
      dry soil 0.122) held. The cover runs free in all three, so a bare
      and a green twin keep their own covers through the jumps.
    - Why not a random start. A start drawn per cell from 0–1 has an rms
-     error of 0.29 against any cell's own value; the trees keep 82 % of
+     error of 0.29 (a cell whose own value is 0.5) to 0.58 (0 or 1)
+     against the cell's own value; the trees keep 82 % of
      it after two years where they rise and 51 % where they fall, and
      the noise sits at the grid scale in the albedo and evaporation. The
      placeholders have no error that varies by region, and the jump
@@ -4306,8 +4308,8 @@ The work, in order:
    sheets: trees 0.226 → 0.037, topsoil carbon 1.61 → 3.30 kg/m², dry
    soil albedo 0.258 → 0.243, land albedo 0.300 → 0.316; by band, trees
    and carbon: 70–60N 0.24 → 0.00 and 1.7 → 0.0, 50–40N 0.25 → 0.00 and
-   1.8 → 1.4, 30–20N 0.25 → 0.07 and 1.8 → 6.0, 0–10S 0.26 → 0.06 and
-   1.8 → 5.2, 30–40S 0.25 → 0.13 and 1.8 → 6.5. Repeated at once: trees
+   1.8 → 1.4, 30–20N 0.25 → 0.07 and 1.8 → 6.1, 0–10S 0.26 → 0.07 and
+   1.8 → 5.2, 30–40S 0.25 → 0.13 and 1.8 → 6.6 (runs/jump64.log). Repeated at once: trees
    0.0374 → 0.0374, carbon 3.2947 → 3.2947. The saved day-10 state holds
    the record [864000 s, 0, 1].
 
