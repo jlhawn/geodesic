@@ -141,7 +141,7 @@ test('the model hands the land its lowest air temperature each step', () => {
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
 
 test('over 48 GPU steps the season means and the tree cover evolve as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const land = { seasonMemory: 6 * 3600, treeGrowthTime: 3 * 3600, treeDeclineTime: 2 * 3600, treelineWarmth: [6, 22], growthTime: 4 * 3600, declineTime: 3 * 3600, snowDeclineTime: 4 * 3600 };
+  const land = { soilCarbon: false, seasonMemory: 6 * 3600, treeGrowthTime: 3 * 3600, treeDeclineTime: 2 * 3600, treelineWarmth: [6, 22], growthTime: 4 * 3600, declineTime: 3 * 3600, snowDeclineTime: 4 * 3600 };
   const prepare = (model) => {
     const C = model.mesh.nCells, init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);

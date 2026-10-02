@@ -1,5 +1,5 @@
 import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT } from '../physics/ice.module.js';
-import { DARKENING_WETNESS } from '../physics/land.module.js';
+import { DARKENING_WETNESS, LLOYD_TAYLOR, MIAMI } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE } from '../physics/radiation.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS } from '../physics/moist.module.js';
@@ -94,6 +94,9 @@ const ALB_OLDSNOW: f32 = ${o.oldSnowAlbedo}; const MASKED: bool = ${!!o.snowMask
 const TREELINE: bool = ${!!o.treeline}; const SEASON_C: f32 = ${o.seasonThreshold}; const SEASON_K: f32 = ${MELTING_POINT + o.seasonThreshold}; const SEASON_SHORTEST: f32 = ${o.minimumSeason / 365}; const SEASON_MEM: f32 = ${o.seasonMemory}; const TREE_LO: f32 = ${o.treelineWarmth[0]}; const TREE_SPAN: f32 = ${o.treelineWarmth[1] - o.treelineWarmth[0]}; const TREE_GROW: f32 = ${o.treeGrowthTime}; const TREE_DECLINE: f32 = ${o.treeDeclineTime};
 const REF_RESIST: f32 = ${REFERENCE_RESISTANCE}; const GATED: bool = ${!!o.treeline && !!o.treeMoisture}; const MOIST_MEM: f32 = ${o.moistureMemory}; const ARID_LO: f32 = ${o.forestAridity[0]}; const ARID_SPAN: f32 = ${o.forestAridity[1] - o.forestAridity[0]};
 const GRASSY: bool = ${!!o.grassland && !!o.vegetation}; const ALB_FORESTV: f32 = ${o.forestAlbedo}; const ALB_GRASS: f32 = ${o.grassAlbedo}; const GRASS_SNOW: f32 = ${o.grassSnowDarkening};
+const HUMIC: bool = ${!!o.soilCarbon && !!o.vegetation}; const ALB_MINERAL: f32 = ${o.mineralAlbedo}; const ALB_HUMUS: f32 = ${o.humusAlbedo}; const HUMUS_SCALE: f32 = ${100 / (o.topsoilMass * o.organicScale)}; const WET_DROP: f32 = ${1 - o.wetSoilAlbedo / o.bareAlbedo};
+const LITTER_IN: f32 = ${o.litterInput}; const LITTER_TREE: f32 = ${o.treeLitter}; const LITTER_GRASS: f32 = ${o.grassLitter}; const DECAY_RATE: f32 = ${1 / o.soilTurnover}; const DECAY_WILT: f32 = ${o.decompositionWilting}; const DECAY_OPT: f32 = ${0.5 * (1 + o.decompositionWilting)}; const CARBON_ACC: f32 = ${o.carbonAcceleration};
+const LT_E: f32 = ${LLOYD_TAYLOR.activation}; const LT_REF: f32 = ${1 / LLOYD_TAYLOR.reference}; const LT_T0: f32 = ${LLOYD_TAYLOR.offset}; const MIAMI_A: f32 = ${MIAMI[0]}; const MIAMI_B: f32 = ${MIAMI[1]};
 `;
 }
 
@@ -650,7 +653,8 @@ export const PHYSICS_KERNELS = {
   let onLand = PH[PH_LAND + i] > 0.5; let onIceSheet = PH[PH_LAND + i] > 1.5;
   let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i]; let veg0 = PH[PH_VEG + i]; let surf0 = PH[PH_SURF + i];
   let bucket = select(BUCKET, ROOTCAP, VEGETATED);
-  let soilAlbedo = select(ALB_BARE, ALB_BARE - (ALB_BARE - ALB_WETSOIL) * clamp((select(soil0 / ROOTCAP, surf0 / SURFCAP, DARK_SURFACE) - DARK_FROM) / DARK_SPAN, 0.0, 1.0), DARKENING);
+  let dryAlbedo = select(ALB_BARE, ALB_HUMUS + (ALB_MINERAL - ALB_HUMUS) * exp(-HUMUS_SCALE * max(0.0, PH[PH_SOILC + i])), HUMIC);
+  let soilAlbedo = select(dryAlbedo, dryAlbedo * (1.0 - WET_DROP * clamp((select(soil0 / ROOTCAP, surf0 / SURFCAP, DARK_SURFACE) - DARK_FROM) / DARK_SPAN, 0.0, 1.0)), DARKENING);
   let trees0 = PH[PH_CANOPY + i];
   let coverAlbedo = select(ALB_VEG, select(ALB_GRASS, ALB_GRASS + (ALB_FORESTV - ALB_GRASS) * min(1.0, trees0 / veg0), veg0 > 0.0), GRASSY);
   let bareAlbedo = select(ALB_LAND, soilAlbedo + (coverAlbedo - soilAlbedo) * veg0, VEGETATED);
@@ -922,6 +926,14 @@ export const PHYSICS_KERNELS = {
         trees = standing + (goal - standing) * smallRate(dt / select(TREE_DECLINE, TREE_GROW, goal > standing));
       }
       PH[PH_CANOPY + i] = select(trees, 0.0, onIceSheet);
+      if (HUMIC) {
+        let fill = clamp(soil / ROOTCAP, 0.0, 1.0); let airC = air - MELTING;
+        let input = LITTER_IN * (LITTER_TREE * min(1.0, trees) + LITTER_GRASS * max(0.0, veg - trees)) * min(1.0, soil / (WETT * ROOTCAP)) * select(0.0, 1.0 / (1.0 + exp(MIAMI_A - MIAMI_B * airC)), airC >= SEASON_C);
+        let moistDecay = select(select(select(1.0 - 0.8 * (fill - DECAY_OPT), 0.2 + 0.8 * (fill - DECAY_WILT) / (DECAY_OPT - DECAY_WILT), fill <= DECAY_OPT), 0.2, fill <= DECAY_WILT), 0.2, air < MELTING);
+        let decay = select(0.0, exp(LT_E * (LT_REF - 1.0 / max(air - LT_T0, 1e-3))), air > LT_T0) * moistDecay * DECAY_RATE;
+        let x = CARBON_ACC * decay * dt; let carbon0 = PH[PH_SOILC + i];
+        PH[PH_SOILC + i] = select(max(0.0, carbon0 + (input - decay * carbon0) * CARBON_ACC * dt * select(1.0 - x * (0.5 - x / 6.0), (1.0 - exp(-x)) / x, x > 1e-2)), 0.0, onIceSheet);
+      }
       cap = ROOTCAP;
     }
     if (soil > cap) { PH[PH_RUNOFF + i] += soil - cap; soil = cap; }

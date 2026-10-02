@@ -67,7 +67,7 @@ test('trees grow toward the treeline factor times the moisture factor times the 
 });
 
 test('the vegetated albedo blends forest and grass by their shares of the cover, snow buries grass less 0.06 times its share and trees mask it as before', () => {
-  const land = createLandSurface(mesh, flat());
+  const land = createLandSurface(mesh, flat(), { soilCarbon: false });
   land.initialize();
   const i = 3;
   land.vegetation[i] = 0.6; land.canopy[i] = 0.2; land.surface[i] = 0; land.snow[i] = 0;
@@ -88,7 +88,7 @@ test('the vegetated albedo blends forest and grass by their shares of the cover,
   assert.ok(near(land.albedo(i), 0.85 - 0.06 * 0.6), `snow on grassland: ${land.albedo(i)}`);
   land.canopy[i] = 0.6;
   assert.ok(near(land.albedo(i), 0.85 + (0.27 - 0.85) * 0.6 / 0.7), 'snow under trees alone, as before');
-  const plain = createLandSurface(mesh, flat(), { grassland: false });
+  const plain = createLandSurface(mesh, flat(), { grassland: false, soilCarbon: false });
   plain.initialize();
   plain.vegetation[i] = 0.6; plain.canopy[i] = 0.2; plain.surface[i] = 0; plain.snow[i] = 0;
   assert.ok(near(plain.albedo(i), 0.30 + (0.13 - 0.30) * 0.6), 'without grassland one vegetated albedo');

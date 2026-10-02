@@ -1,7 +1,7 @@
 import { cellVector } from '../dynamics/operators.module.js';
 import { UNDECIDED } from './radiation.module.js';
 import { SNOW_AGEING } from './ice.module.js';
-import { seasonEstimate, treelineFactor, moistureEstimate, aridityFactor } from './land.module.js';
+import { seasonEstimate, treelineFactor, moistureEstimate, aridityFactor, airCycle, carbonEquilibrium } from './land.module.js';
 
 /*
  * Barycentric weights of p in the plane through unit vectors a, b, c:
@@ -204,7 +204,8 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   const ageKept = land.snowAlbedo ? { snowAlbedo: Float64Array.from(land.snowAlbedo) } : {}, canopyKept = land.canopy ? { canopy: Float64Array.from(land.canopy) } : {};
   const seasoned = !!(land.seasonLength && land.seasonWarmth), seasonKept = seasoned ? { seasonLength: Float64Array.from(land.seasonLength), seasonWarmth: Float64Array.from(land.seasonWarmth) } : {};
   const moistened = !!(land.rainMean && land.demandMean), moistureKept = moistened ? { rainMean: Float64Array.from(land.rainMean), demandMean: Float64Array.from(land.demandMean) } : {};
-  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow), ...vegetation, ...surfaceKept, ...ageKept, ...canopyKept, ...seasonKept, ...moistureKept };
+  const carbonKept = land.soilCarbon ? { soilCarbon: Float64Array.from(land.soilCarbon) } : {};
+  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow), ...vegetation, ...surfaceKept, ...ageKept, ...canopyKept, ...seasonKept, ...moistureKept, ...carbonKept };
   if (progress) progress(0, 'the land');
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), onLand = landMask(source);
   const bucket = target.land && target.land.bucketCapacity ? target.land.bucketCapacity : 150;
@@ -221,8 +222,10 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   const seasonWarmth = seasoned ? sampleTiles(source, target, Float64Array.from(land.seasonWarmth), onLand, atCells, (tile) => estimate(tile).warmth) : null;
   const rainMean = moistened ? sampleTiles(source, target, Float64Array.from(land.rainMean), onLand, atCells, (tile) => moist(tile).rain) : null;
   const demandMean = moistened ? sampleTiles(source, target, Float64Array.from(land.demandMean), onLand, atCells, (tile) => moist(tile).demand) : null;
-  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; if (surface) surface[n] = 0; if (canopy) canopy[n] = 0; if (seasoned) { seasonLength[n] = 0; seasonWarmth[n] = 0; } if (moistened) { rainMean[n] = 0; demandMean[n] = 0; } }
-  return { soil, snow, ...(cover ? { vegetation: cover } : {}), ...(surface ? { surface } : {}), ...(snowAlbedo ? { snowAlbedo } : {}), ...(canopy ? { canopy } : {}), ...(seasoned ? { seasonLength, seasonWarmth } : {}), ...(moistened ? { rainMean, demandMean } : {}) };
+  const carbon = (tile) => { const { mean, amplitude } = airCycle(source.mesh.latCell[tile]); return carbonEquilibrium(mean, amplitude, guess(tile).soil / bucket, guess(tile).snow > 0 ? 0 : 0.5); };
+  const soilCarbon = land.soilCarbon ? sampleTiles(source, target, Float64Array.from(land.soilCarbon), onLand, atCells, carbon) : null;
+  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; if (surface) surface[n] = 0; if (canopy) canopy[n] = 0; if (seasoned) { seasonLength[n] = 0; seasonWarmth[n] = 0; } if (moistened) { rainMean[n] = 0; demandMean[n] = 0; } if (soilCarbon) soilCarbon[n] = 0; }
+  return { soil, snow, ...(cover ? { vegetation: cover } : {}), ...(surface ? { surface } : {}), ...(snowAlbedo ? { snowAlbedo } : {}), ...(canopy ? { canopy } : {}), ...(seasoned ? { seasonLength, seasonWarmth } : {}), ...(moistened ? { rainMean, demandMean } : {}), ...(soilCarbon ? { soilCarbon } : {}) };
 }
 
 /*
