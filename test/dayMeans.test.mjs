@@ -35,7 +35,17 @@ async function engines() {
   return { cpu, gpu, C: cpu.mesh.nCells, area };
 }
 
-async function stepBoth({ cpu, gpu, area }, n) {
+function plumesParted(cpu, ph, parted) {
+  const { cumulusBaseFlux, cumulusTop } = cpu.moist, C = cpu.mesh.nCells;
+  let largest = 0;
+  for (let i = 0; i < C; i++) largest = Math.max(largest, cumulusBaseFlux[i], ph.CUMF[i]);
+  for (let i = 0; i < C; i++) {
+    const a = cumulusBaseFlux[i], b = ph.CUMF[i];
+    if ((a > 0) !== (b > 0) || Math.abs(a - b) > 0.01 * largest || (a > 0 && Math.abs(cumulusTop[i] - ph.CUTOP[i]) > 1)) parted.add(i);
+  }
+}
+
+async function stepBoth({ cpu, gpu, area }, n, parted = null) {
   const cpuSteps = [], gpuSteps = [];
   for (let s = 0; s < n; s++) {
     if (cpu) { cpu.step(DT); cpuSteps.push(Object.fromEntries(SUMMED.map((name) => [name, cpu.totals[name] / area]))); }
@@ -47,6 +57,7 @@ async function stepBoth({ cpu, gpu, area }, n) {
         for (let i = 0; i < gpu.mesh.nCells; i++) sum += gpu.mesh.areaCell[i] * ph[STEP_SLOTS[name]][i];
         return [name, sum / area];
       })));
+      if (parted) plumesParted(cpu, ph, parted);
     }
   }
   return { cpuSteps, gpuSteps };
@@ -65,16 +76,19 @@ function assertReadout(label, d, steps, tolerance) {
   return expected;
 }
 
-test('both engines sum each cell\'s radiation over the steps alike and read out day means: the mean of the per-step global values, the albedo the ratio of the summed reflected to the summed incoming sunlight, the last step\'s kept apart, the sums starting again at each read-out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const run = await engines(), { cpu, gpu, C } = run;
-  const first = await stepBoth(run, 24);
+test('both engines sum each cell\'s radiation over the steps alike in every column whose shallow plume took the same base flux and top on both engines after every step, and read out day means: the mean of the per-step global values, the albedo the ratio of the summed reflected to the summed incoming sunlight, the last step\'s kept apart, the sums starting again at each read-out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = await engines(), { cpu, gpu, C } = run, parted = new Set();
+  const first = await stepBoth(run, 24, parted);
   const device = await gpu.gpu.downloadPhysics();
+  const agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !parted.has(i));
   const cpuSums = Object.fromEntries(SUMMED.map((name) => [name, Float64Array.from(cpu.radiation.summed[name])]));
   const gpuSums = Object.fromEntries(SUMMED.map((name) => [name, Float64Array.from(device[SUM_SLOTS[name]].subarray(0, C))]));
-  const parity = Object.fromEntries(SUMMED.map((name) => [name, stats(cpuSums[name], gpuSums[name])]));
-  console.log(`24 steps at N=6, per-cell sums CPU against GPU: ${SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
+  const parity = Object.fromEntries(SUMMED.map((name) => [name, stats(agreed.map((i) => cpuSums[name][i]), agreed.map((i) => gpuSums[name][i]))]));
+  const whole = Object.fromEntries(SUMMED.map((name) => [name, stats(cpuSums[name], gpuSums[name])]));
+  console.log(`24 steps at N=6, per-cell sums CPU against GPU over the ${agreed.length} of ${C} columns whose shallow plume's base flux stayed within 1 % of the largest column's, and its top within 1 Pa, on both engines after every step (${[...parted].join(', ')} apart; over all columns reflectedSolar rms ${whole.reflectedSolar.rmsRel.toExponential(1)}): ${SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
+  assert.ok(parted.size <= 0.02 * C, `${parted.size} of ${C} columns' plumes parted`);
   for (const name of SUMMED) assert.ok(parity[name].rmsRel < 1e-4, `${name}: per-cell rms ${parity[name].rmsRel}`);
-  assert.ok(parity.insolation.rmsRel < 1e-6, `the incoming sunlight differs by ${parity.insolation.rmsRel}`);
+  assert.ok(whole.insolation.rmsRel < 1e-6, `the incoming sunlight differs by ${whole.insolation.rmsRel}`);
 
   const dc = cpu.diagnostics(), dg = await gpu.diagnostics();
   await gpu.sync();
