@@ -3283,6 +3283,195 @@ The work, in order:
    true, `forestSnowAlbedo` 0.27, `closedCanopy` 0.7, `canopyMemory` 365
    days, `iceSheetAlbedo` 0.80; an older state's snow albedo 0.85 and
    standing cover its cover.
+   Treeline and top-soil wetness (Oct 1). Two changes on both engines
+   (`js/physics/land.module.js`, `js/gpu/physics.gpu.js`), each with
+   parity and hand-computed unit tests (`test/treeline.test.mjs`,
+   `test/land.test.mjs`, `test/landGpu.test.mjs`).
+
+   - A tree cover the season admits (`treeline`). The masking's `canopy`
+     is a tree cover. Each land cell keeps two running means of its
+     lowest layer's air temperature over `seasonMemory` (3 years):
+     `seasonLength`, the share of the time at or above `seasonThreshold`
+     0.9 °C, and `seasonWarmth`, the mean excess over it (K). Their ratio
+     plus 0.9 °C is the growing season's mean temperature, taken over at
+     least `minimumSeason` 94 days (a shorter season counts as cooler; no
+     season gives 0.9 °C). The limits are TREELIM's (Paulsen & Körner
+     2014, Alpine Botany 124: 1–12, 376 treelines from satellite images):
+     a season of days whose mean air is at least 0.9 °C, at least 94 days
+     long, at least 6.4 °C on the mean; Körner & Paulsen (2004, J.
+     Biogeogr. 31: 713–732) measured 6.7 ± 0.8 °C in the root zone at 46
+     treelines from 68N to 42S. The treeline factor f rises linearly from
+     0 at 6.4 °C to 1 at 8.0 °C (`treelineWarmth`; the width, twice the
+     2004 sites' spread, is not itself sourced). Köppen's 10 °C warmest
+     month gives the same line: a sine year of −9 °C ± 19 K has a 10 °C
+     warmest month and a 119-day season at 6.9 °C, a maritime 2 °C ± 8 K
+     a 199-day season at 6.6 °C, where growing degree days above 5 °C
+     read 283 and 448 K·d against LPJ's 350 for boreal summergreen and
+     600 for boreal evergreen trees (Sitch et al. 2003, Global Change
+     Biol.), which is why the season's mean and not degree days is used.
+     Snow-free, the tree cover relaxes toward f v over `treeGrowthTime` 10
+     years rising and `treeDeclineTime` 3 years falling; under snow it
+     holds, falling toward f over 3 years only where it stands above f (a
+     failed warmth, or summers that stay under snow). Times: jack pine
+     reaches crown closure 20–21 years after fire with its seed in place
+     (Porter et al. 2023, Sci. Rep., a chronosequence); ten years of
+     snow-free time closes 90 % of the gap in 23 years where it never
+     snows and about 46 where the ground is bare half the year. Over 90 %
+     of the piñon at a site in the US Southwest died after 15 months of
+     depleted soil water (Breshears et al. 2005, PNAS 102: 15144–15148);
+     three years remove 90 % in 7. The air is sampled every step, where
+     TREELIM gates daily means.
+   - Starts. A state without the season means (every state saved before
+     this, and a fresh start) starts them from a sine year with mean
+     −31.8 + 0.148 Q̄ − 6.5 K/km × the ground's height (°C) and amplitude
+     min(0.069 ΔQ, 19.7 − 0.0205 ΔQ) (K), Q̄ and ΔQ the annual mean and
+     annual harmonic of the top-of-atmosphere daily insolation at the
+     cell's latitude (W/m²; `SEASON_ESTIMATE`, `seasonEstimate`), and its
+     trees at the cover times f. The constants are least-squares fits to
+     the model's own first year: the lowest air of nine64 and eight64 at
+     days 91, 183, 274 and 365, harmonically fitted per land cell off the
+     ice sheets (the amplitude's second branch over 40–85N). The atlas
+     start's land temperature, 288 + 45(1/3 − sin²φ) K with no season and
+     no lapse, is 3–7 K colder at 45–75N than that first year and is not
+     used. Land added by regridding takes the estimate. The estimate
+     against the first years' own season (season mean °C, mean f, days):
+
+     | band | estimate | nine64 | eight64 | nine64 / eight64 warmest month |
+     |---|---|---|---|---|
+     | 55–60N | 11.4, 0.99, 196 | 11.2, 0.90, 206 | 10.3, 0.90, 217 | 17.4 / 16.0 |
+     | 60–65N | 9.1, 0.86, 167 | 8.8, 0.69, 160 | 9.2, 0.78, 183 | 13.0 / 13.9 |
+     | 65–70N | 7.6, 0.67, 148 | 8.0, 0.66, 145 | 7.8, 0.58, 163 | 11.8 / 11.6 |
+     | 70–75N | 7.0, 0.44, 142 | 6.5, 0.48, 131 | 6.9, 0.46, 145 | 9.4 / 10.0 |
+     | 75–80N | 5.6, 0.03, 121 | 2.9, 0.01, 75 | 5.5, 0.15, 118 | 3.9 / 7.8 |
+     | 80–85N | 4.2, 0.00, 101 | 1.9, 0.00, 40 | 5.5, 0.34, 110 | 1.9 / 8.0 |
+
+     In the model's own climate the season's mean crosses 6.4 °C at about
+     73N (nine64) and 74N (eight64) and the warmest month 10 °C at about
+     71N and 72.5N, the band means' factor falling through a half between
+     65–70N and 70–75N. Earth's northern treeline lies at about 58–72N,
+     the boreal forest south of it to about 50N (approximate, from
+     memory): the model's Arctic summers put its treeline 3–5° poleward.
+   - Top-soil wetness (`soilDarkening` 'surface', the default). The bare
+     soil darkens linearly with the 15 kg/m² surface layer's fill
+     (`darkeningWetness` [0, 1]), from
+     `bareAlbedo` 0.30 dry to `wetSoilAlbedo` 0.15 full, whatever the root
+     zone holds: Idso et al. (1975, J. Appl. Meteor.) found a loam's
+     albedo linear in its top layer's water, 0.30 dry to 0.14 wet (a
+     ratio of 0.47; 0.15 / 0.30 is 0.50). The layer seeps into the root
+     zone over a day, so a wetted bare soil brightens 0.150, 0.209, 0.244,
+     0.265, 0.278 every 12 hours after the rain stops (with the cover
+     growing over a full bucket). 'rootZone' keeps the bucket's ramp
+     ([0.2, 0.5]); without the vegetated land there is no surface layer
+     and no darkening. The snow-free albedo by the layer's fill and the
+     cover v:
+
+     | fill | 0 | 0.25 | 0.5 | 0.75 | 1 |
+     |---|---|---|---|---|---|
+     | v = 0 | 0.300 | 0.263 | 0.225 | 0.188 | 0.150 |
+     | v = 0.5 | 0.215 | 0.196 | 0.177 | 0.159 | 0.140 |
+     | v = 1 | 0.130 | 0.130 | 0.130 | 0.130 | 0.130 |
+
+   Engines: at N=6 over 48 steps (season memory 6 h, trees 3 h up and 2
+   h down, f over 6–22 °C; 151 land cells, 14 under snow, 113 in season,
+   trees grew on 13 and died back on 128) the season length agrees to
+   4.1·10⁻⁷, the season warmth to 3.1·10⁻³ K under lowest-air
+   differences of 1.4·10⁻² K, the tree cover to 3.8·10⁻⁵; the albedo of
+   173 land cells with a random surface layer to 7.6·10⁻⁸ (it darkens
+   136, by up to 0.132; by the root zone 1.1·10⁻⁷). Hand values: a sine
+   year −4 °C ± 15 K over 0.9 °C, share 0.394075 and excess 2.581744 K;
+   a 146-day season at 7.9 °C, f 0.9375; a 73-day one with 1.5 K of
+   excess, f 0.202793; trees 0.2 → 0.705696 in 10 years at f = 1, 0.6
+   → 0.220728 in 3 at f = 0, 0.8 → 0.610364 in 3 under snow at f = 0.5.
+   States save `seasonLength` and `seasonWarmth` (on the GPU at the end
+   of PH, read back by `land.serialize`, which the page's snapshot uses);
+   land regridding samples them by tile. The digests are unchanged (their
+   model has no land).
+
+   Runs: N=64 GPU, bl34, OCEAN `{"everySteps":8}`, from copies of the
+   states, before (`treeline` false, `soilDarkening` 'rootZone', the
+   previous rule) → after; the five64_day2190 state lit over its own day
+   without running. Snow-covered land (`scripts/snowIceAlbedo.mjs`,
+   sunlight-weighted surface albedo, area share of the globe):
+
+   | row | June solstice + 3 d | September equinox + 3 d | March equinox + 3 d | March equinox + 10 d | five64_day2190 | reference |
+   |---|---|---|---|---|---|---|
+   | 70–90N (tundra) | trace: 0.450 → 0.758 | 0.0018: 0.370 → 0.714 | 0.0056: 0.473 → 0.707 | 0.0056: 0.471 → 0.704 | 0.0056: 0.589 → 0.744 | 0.60–0.80 |
+   | 50–70N (boreal) | | 0.0012: 0.298 → 0.596 | 0.044: 0.424 → 0.470 | 0.044: 0.416 → 0.464 | 0.041: 0.409 → 0.449 | 0.27–0.45 |
+   | 50–60N | | | 0.019: 0.423 → 0.429 | 0.018: 0.411 → 0.417 | 0.016: 0.352 → 0.359 | |
+   | 60–70N | | 0.0012: 0.298 → 0.596 | 0.026: 0.425 → 0.511 | 0.025: 0.421 → 0.505 | 0.024: 0.461 → 0.531 | |
+   | 30–40N | | | 0.005: 0.392 → 0.728 | 0.005: 0.387 → 0.741 | 0.004: 0.366 → 0.785 | |
+   | trees < 0.1 (open; none before) | | 0.0027: 0.698 | 0.011: 0.818 | 0.011: 0.816 | 0.012: 0.839 | 0.80–0.85 cold |
+   | trees 0.1–0.3 | | | 0.006: 0.645 | 0.006: 0.631 | 0.007: 0.684 | |
+   | all land snow | 0.0002: 0.433 → 0.724 | 0.003: 0.333 → 0.648 | 0.066: 0.427 → 0.517 | 0.062: 0.416 → 0.509 | 0.058: 0.405 → 0.503 | |
+
+   The tree cover by band on day 375 (cover, trees, f; share of the
+   land with trees ≥ 0.2): 55–60N 0.51, 0.51, 0.99 (0.99); 60–65N 0.51,
+   0.45, 0.86 (0.88); 65–70N 0.49, 0.34, 0.67 (0.74); 70–75N 0.46,
+   0.21, 0.44 (0.56); 75–80N 0.40, 0.01, 0.03 (0); 80–85N 0.37, 0, 0
+   (0); south of 55N and in the south the trees are within 0.02 of the
+   cover. The 30–40N snow is the high plateau's, whose season's mean is
+   below 6.4 °C at its height. Cold snow
+   on open land (trees < 0.2) reads 0.806 and 0.802 on days 368 and 375
+   (0.80–0.85, matches; 0.013 of the globe), 0.814 on the year-six
+   state. Bare and vegetated land (`scripts/clearSkyBudget.mjs`, surface
+   albedo; with the darkening off in brackets):
+
+   | class | June solstice + 3 d | September equinox + 3 d | five64_day2190 | reference |
+   |---|---|---|---|---|
+   | partly vegetated (v 0.2–0.7) | 0.259: 0.167 → 0.200 (0.205) | 0.191: 0.199 → 0.213 (0.217) | 0.084: 0.193 → 0.222 (0.227) | 0.18–0.25 |
+   | dense vegetation (v > 0.7) | trace: 0.136 → 0.178 | 0.056: 0.137 → 0.165 (0.171) | 0.083: 0.138 → 0.147 (0.149) | 0.12–0.15 |
+   | bare dry soil (v < 0.2, layer < half full) | | | 0.030: 0.274 → 0.278 (0.279) | 0.30–0.40 |
+   | bare wet soil (layer ≥ half full) | | | trace: 0.271 → 0.172 | 0.10–0.20 |
+
+   The partly vegetated land's surface layer is 0.09 full on day 94
+   (its root zone 0.49) and 0.06 on day 186 (0.31); the dense
+   vegetation's 0.18 (0.81); the year-six deserts' 0.017 (0.13).
+   Outcomes, before → after: clear-sky albedo of the state lit over its
+   day 0.146 → 0.153 (day 94), 0.146 → 0.149 (186), 0.153 → 0.160 (368),
+   0.153 → 0.161 (375), 0.153 → 0.159 (year six); day means (spin-up
+   log) day 94 albedo 0.321 → 0.326, ASR 231.1 → 229.5, OLR 240.7 →
+   240.6, SWCRE −59.8 → −58.7, clear-sky reflectance 0.1457 → 0.1535,
+   Ts 16.66 → 16.57 °C; day 186 0.311 → 0.312, 234.8 → 234.2, 242.2 →
+   242.2, −56.1 → −55.5, 0.1458 → 0.1493, 16.71 → 16.65; day 368 0.325
+   → 0.328, 229.8 → 228.8, 233.3 → 233.3, −58.6 → −57.2, 0.1532 →
+   0.1602, 13.78 → 13.69; day 375 0.340 → 0.345, 224.6 → 223.2, 233.4
+   → 233.1, −63.6 → −62.4, 0.1536 → 0.1613, 13.86 → 13.70. Three days
+   took 0.3 wall minutes and ten 0.8 → 1.0 (CPU work alongside).
+
+   What still misses:
+
+   - The rule cannot tell grassland from forest where the season is
+     warm: there f is 1 and the trees are the cover. On day 375 the snow
+     at 40–60N under f = 1 (0.025 of the globe) reads 0.416 under trees
+     of 0.49; its part with a cover under 0.5 (0.012 of the globe, steppe
+     and prairie by their moisture) reads 0.471 under trees of 0.41,
+     where snow-covered grassland and cropland read about 0.6–0.75
+     (approximate). A moisture split (the cover's goal already keeps a
+     dry steppe sparse) or fire would be needed.
+   - The boreal belt 50–70N reads 0.464 against 0.27–0.45: its cover is
+     still the atlas start's 0.5 a year on (0.50), so its trees are at
+     most 0.5, masking 0.71 of the way where Earth's closed boreal forest
+     (tree cover 0.5–0.8) reads 0.27–0.33.
+   - The treeline sits 3–5° poleward of Earth's because the model's
+     70–75N land has a 9.4–10.0 °C warmest month.
+   - Dense vegetation in September reads 0.165 against 0.12–0.15: the
+     cover blends the dry soil (0.30 at a layer 0.18 full) at 1 − v =
+     0.25 into the forest, where a forest floor is shaded and littered;
+     the root zone's darkening had hidden it at 0.137.
+   - Bare dry soil still reads 0.278 against 0.30–0.40 (one soil colour).
+   - Ten days cannot show the rule's own times: the season means move
+     by about 1 % in ten days, the trees by under 1 % of their gap.
+
+   Defaults: land `treeline` true, `seasonThreshold` 0.9 °C,
+   `minimumSeason` 94 days, `treelineWarmth` [6.4, 8.0] °C,
+   `seasonMemory` 3 years, `treeGrowthTime` 10 years (snow-free),
+   `treeDeclineTime` 3 years, `SEASON_ESTIMATE` mean [−31.8, 0.148],
+   amplitude [0.069, 19.7, −0.0205], lapse 0.0065 K/m; `soilDarkening`
+   'surface', `darkeningWetness` [0, 1] ('rootZone' [0.2, 0.5]),
+   `wetSoilAlbedo` 0.15, `bareAlbedo` 0.30, `surfaceCapacity` 15 kg/m²
+   (now passed to the GPU); `canopyMemory` 365 days only without the
+   treeline. Older states start their season means from the estimate
+   and their trees at the cover times f.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
