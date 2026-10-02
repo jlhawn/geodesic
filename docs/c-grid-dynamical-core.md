@@ -5538,6 +5538,154 @@ two alternations: 20.21 and 20.20 ms against 19.88 and 19.74 at N=64
 six64_day1004, seven64_day0639, m21b64_day0183 and ten64_day0183 load and
 take two CPU steps with nothing non-finite.
 
+**Integration (Oct 1).** The surface by class (M21, branch clear-sky) and
+the cloud optics, uniform cover, falling ice and overlap above (branch
+cloud-optics) merged on sweep2 (e07e39a), both sides' physics kept. PH
+gains only the surface's SNOWALB, CANOPY, SEASONL and SEASONW; the GPU's
+upward-absorption escapes take the column's own cloud depth (phase or
+gray, the deck's included), as the CPU's do through the same shortwave
+call. With grey ice, gray optics and the saturation adjustment the CPU
+digests are both parents' (b892e42f, e228ab4c, d8b73e96 and 3ca002d1,
+3d0c610f, da3ea94c); the defaults' twelve-step digest is 97902663. Two
+cover rules fixed on both engines (`test/cloudIce.test.mjs`,
+`test/gpuModel.test.mjs`): a plume layer is seen at least as its plume
+(fraction times the visibility of the plume's own path), so a cumulus of
+cover 10⁻⁸ and a 262 g/m² plume takes 262 g/m² in cloud where it took
+10⁵ kg/m², and one of 0.005 and 52 g/m² takes 52 where it took 227; under
+the uniform condensation the stratiform blend takes a (q_t − q_s(T_l)) at
+the cover's saturation (the ice ramp), its half-width at most
+a (1 − RH_c) q_s(T_l): a layer at 434 hPa and 260 K at 1.02 of the
+ice-ramp saturation is covered 0.639 under the full blend where the
+liquid saturation at T gave the floor 0.01. That second rule had emptied
+60–90S: the day-186 state of the eight64 run below, diagnosed under the
+code before it, covers 0.42 there (global 0.47), under it 0.68 (0.50).
+The full suite (52 files, concurrently) passes. `scripts/sweep/runs.mjs`
+drops `cloudScattering` and `cloudAbsorption` from PARAMETERS2 (their base
+was NaN; set, they turn the optics gray); TERMS2 holds no clear-sky albedo
+term.
+
+Runs (N=64 and N=128 GPU, bl34, `everySteps` 8, from copies of the
+states; the last day's means; cover, audit and classes on the last state;
+"surface" is the clear-sky branch under gray cloud and "cloud" the
+cloud-optics branch, both from their own paragraphs; Earth: albedo about
+0.29, SWCRE −47 ± 4 and LWCRE +26 ± 3 W/m² (CERES EBAF), rain 2.6–2.8
+mm/d, cover 0.65–0.68):
+
+| | albedo | ASR; OLR; ASR − OLR | SWCRE; LWCRE | clear-sky albedo | rain, day (audit); convective share | total cover; 60–90S |
+|---|---|---|---|---|---|---|
+| eight64 + 3 d (day 186) | 0.296 | 239.7; 240.8; −1.1 | −49.9; 22.8 | 0.149 | 1.83 (2.19); 0.33 | 0.50; 0.68 |
+| surface alone | 0.312 | 234.2; 242.2; −8.0 | −55.5; 17.6 | 0.149 | (2.05) | |
+| cloud alone | 0.293 | −0.8 | −49.7; 21.9 | | 1.84 (2.19); 0.33 | 0.47; 0.39 |
+| ten64 + 3 d (day 186) | 0.318 | 232.4; 240.5; −8.1 | −57.2; 22.1 | 0.150 | 2.83 (2.78); 0.20 | 0.52; 0.64 |
+| cloud alone | 0.314 | −7.9 | −56.5; 21.0 | | 2.83 (2.77); 0.20 | 0.49; 0.34 |
+| nine64 + 3 d (day 94, June) | 0.304 | 237.1; 241.3; −4.2 | −51.3; 23.3 | 0.153 | 2.42 (2.52); 0.30 | 0.50; 0.66 |
+| surface alone | 0.326 | 229.5; 240.6; −11.1 | −58.7 | 0.154 | | |
+| nine64_day0365 + 3 d (day 368, March) | 0.312 | 234.3; 229.3; +5.0 | −51.6; 28.6 | 0.160 | 2.45 (2.66); 0.35 | 0.55; 0.70 |
+| surface alone | 0.328 | 228.8; 233.3; −4.5 | −57.2 | 0.160 | | |
+| eight128 + 3 d (day 186) | 0.285 | 243.5; 243.6; −0.1 | −46.2; 20.8 | 0.149 | 2.19 (2.46); 0.22 | 0.47; 0.64 |
+| cloud alone | 0.282 | 0.0 | −45.8; 19.7 | | 2.19 | 0.44 |
+
+The audit (`scripts/verticalAudit.mjs`) on the same states, eight64,
+ten64, June, March and eight128: the Pacific ITCZ's firing-column heating
+peaks at 975, 974, 975, 517 and 439 hPa (Earth 400–500), its rain 4.02,
+4.89, 6.65, 3.21 and 2.74 mm/d (6–9); radiative low cloud over the SE
+Pacific 0.26, 0.56, 0.37, 0.20 and 0.28, over Peru 0.39, 0.38, 0.05, 0.03
+and 0.34 (0.6–0.7); global evaporation 2.13–2.65 mm/d. Regimes
+(`scripts/cloudRegimes.mjs`) on eight64 day 186: warm pool 0.43, ITCZ
+0.53, high cover 0.232 (0.36 of it below τ 3.6), upper-tropospheric RH_i
+0.54; classes (`scripts/cloudClasses.mjs`) there SWCRE −53.7 and LWCRE
+22.7, cumulus cover 0.014 at 335 g/m² in cloud (0.013 in the cloud
+branch), liquid / ice 81.0 / 24.8 g/m². The surface classes
+(`scripts/clearSkyBudget.mjs`) are M21's to 0.01 on every state: the open
+sea matches at every latitude but 0–30° in June (0.102 against
+0.08–0.10), partly vegetated land matches (0.199–0.218), dense vegetation
+reads 0.156–0.166 (0.12–0.15), cold snow on open land 0.71–0.81
+(0.80–0.85; matches in March), wet snow on sea ice 0.81–0.82
+(0.65–0.75), melting bare sea ice 0.481 (0.45–0.55), cold snow on sea ice
+0.83–0.84 and the ice sheets 0.80 (both match).
+
+Ten days from eight64_day0183, days 184–193: ASR − OLR +14.8, +3.0, −1.1,
+−2.6, −3.1, −4.9, −7.1, −7.7, −8.3, −7.5 W/m²; LWCRE 33.2, 23.1, 22.8,
+23.3, 22.6, 21.7, 21.0, 20.6, 20.1, 20.0; SWCRE −43.2 to −52.8 (−51.5 on
+day 193); the upper troposphere's RH_i 0.55, 0.54, 0.54, 0.53, 0.52,
+0.51, 0.50, 0.50, 0.49, 0.49 (warm pool 0.69 → 0.56); high cover 0.264,
+0.235, 0.232, 0.223, 0.208, 0.196, 0.193, 0.185, 0.179, 0.175; rain 0.86
+→ 2.69 mm/d: the cloud branch's drift (−7.2 W/m² by day 193).
+
+The Arctic test against Earth. The three-day loss from nine64_day0091
+(the June solstice) had the target 0.15–0.18·10³ km³/day, set under the
+gray cloud. Earth: PIOMAS v2.1 monthly volumes (Schweiger et al. 2011,
+JGR 116, C00D06; Polar Science Center), 2011–2025 means June 16.81 and
+July 10.07·10³ km³: mid-June to mid-July 0.221·10³ km³/day, 1.6 % of
+the standing volume a day near the end of June, about 1.2 % at the
+solstice (mid-May to mid-June 0.152, 0.8 %); 1979–1988 0.204·10³
+km³/day, 0.8 %. SHEBA, the 20-day block about the solstice (Intrieri et
+al. 2002, JGR 107(C10), 8039, read from their Figures 3 and 5–10):
+downwelling sunlight about 300 W/m², net sunlight 85 (100 in the next
+block), downwelling longwave about 280, net longwave −40 (−15 next),
+sensible heat near 0 and latent about 5 upward, a net surface gain of
+about 40 W/m² (85 next); tower albedo 0.70 and survey-line albedo
+0.5–0.55, the line a mix of melting snow at 0.7, bare ice and new ponds at
+0.3 by 15 June and 0.4 on the mean by the end of July (Perovich et al.
+2002, JGR 107(C10), 8044); cloud cover 0.77; net surface cloud forcing
+−10 W/m² then, −49 in early July. Ocean heat flux into the ice a few
+W/m² through June, 16.8 W/m² for July and 33 at its peak (Perovich and
+Elder 2002, GRL 29). Over the Arctic Ocean clouds warm the surface on the
+annual mean (+10 W/m²) and cool the top of the atmosphere (−12; Kay and
+L'Ecuyer 2013, JGR 118, 7219).
+
+The model over three and ten days from nine64_day0091 (a GPU rerun with
+the run's options; volumes Σ A·h over the sea cells north of 60N, 9.191
+at the start as above; fluxes the means over every step over the cells
+iced at the start, leads included, positive into the surface):
+
+| | 70–80N | 80–90N | 60–90N | 60–90N, ten days |
+|---|---|---|---|---|
+| volume, 10³ km³: start → end | 5.057 → 4.489 | 4.134 → 3.759 | 9.191 → 8.248 | → 5.879 |
+| loss a day, 10³ km³; share of the start | 0.189; 3.7 % | 0.125; 3.0 % | 0.314; 3.4 % | 0.331; 3.6 % |
+| area, 10⁶ km²; mean thickness, m | 3.81 → 3.54; 1.33 → 1.27 | 2.84 → 2.70; 1.46 → 1.39 | 6.65 → 6.24; 1.38 → 1.32 | → 5.10; → 1.15 |
+| snow on the ice, kg/m² | 0.1 | 0.0 | 0.1 | 0.0 |
+| downwelling sunlight; surface albedo; absorbed | 190.5; 0.372; 119.6 | 235.7; 0.404; 140.4 | 208.7; 0.387; 128.0 | 201.4; 0.360; 129.0 |
+| downwelling longwave; net longwave | 306.3; −7.0 | 298.0; −16.1 | 303.0; −10.7 | 303.4; −9.7 |
+| sensible; latent | +17.9; −1.9 | +7.0; −1.6 | +13.5; −1.8 | +21.8; −2.1 |
+| net surface flux; ocean flux into the ice | 128.6; 7.2 | 129.7; 1.0 | 129.0; 4.7 | 138.9; 5.5 |
+| melt they imply, 10³ km³/day | 0.194 | 0.126 | 0.320 | 0.346 |
+
+No ice lies at 60–70N on day 91 (Earth's lies in Hudson and Baffin Bays
+and on the Barents and Bering margins); the iced cells are 0.76 covered,
+and the pack is 6.6·10⁶ km² at 1.38 m where PIOMAS holds about 16·10³
+km³ at the solstice. The surface and ocean fluxes account for the loss
+(0.320 against 0.314). Over the ice itself (the leads' 24 % absorbing
+about 0.93 of their sunlight) the absorbed sunlight is about 107 W/m² at
+an albedo of 0.49 (melting bare ice 0.48 with the thickness ramp), against
+SHEBA's 85 at 0.55–0.70, under downwelling sunlight of 209 against 300
+(the June 60–90N SWCRE is −105 W/m², classes on day 94). The ice's net
+gain is about 108 W/m² against SHEBA's 40: +22 of the difference
+sunlight (no snow left at the solstice, so no melting-snow albedo near
+0.7), +30 longwave (downwelling 303 against about 280), +14 sensible heat
+from air warmer than the melting surface (SHEBA near 0), +3 latent; the
+ocean's 4.7 W/m² is SHEBA's. The model's 3.4 % a day is 2–3 times
+Earth's 1.2–1.6 %: the surface flux makes about 2 of it (4.7 cm of ice a
+day over the pack, against PIOMAS's 0.22·10³ km³ a day over an ice area of
+about 10⁷ km², about 2 cm (the June area from memory), and SHEBA's 1.1 cm
+at 40 W/m², 2.4 at 85), the thin pack about 1.3 (1.38 m against about
+1.8), the ocean none. The test's reference is the fractional loss: 1.2–1.6
+% of the volume a day at the June solstice (PIOMAS v2.1, 2011–2025
+monthly means, the rates mid-May to mid-June and mid-June to mid-July over
+their mean volumes), 0.11–0.15·10³ km³/day for this state's 9.19; the
+melt per area of the pack, about 2 cm of ice a day (PIOMAS) and 1.1–2.4
+cm (SHEBA), is the second check.
+
+Cost under the exclusive lock (`js/gpu/profile.module.js`, 128 steps
+after 16 from eight64_day0183 and eight128_day0183, alternated twice with
+the pre-merge tree 15754a7 built by `git archive`): step median 20.49 and
+20.43 against 19.59 and 19.56 ms at N=64 (+4.6 and +4.4 %), 90.03 and
+90.16 against 86.94 and 86.79 at N=128 (+3.6 and +3.9 %); the physics and
+boundary-layer passes 2.79 against 2.25 ms and 11.70 against 9.55 ms. A
+day at N=128 takes 60 s of wall time (one day from eight128_day0183 after
+6 s of setup). No run made a NaN; nine64's known day-94 clamp is the
+only one.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
