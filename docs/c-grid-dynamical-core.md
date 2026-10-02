@@ -9640,6 +9640,42 @@ element stays on: it is the IFS's procedure, and the wrong-way move of the
 trades' firing (+0.04) comes from the sounding it is given, not from the
 test; 'cloudDepth' gives the previous type.
 
+**Ice in the plumes and the melting of their frozen rain (Oct 2).**
+`plumePhase` 'mixed' (the default; 'liquid' the previous plumes bit for bit
+on the CPU), element 5 of the specification (IFS Cy43r1 §6.6.2 and §6.6.6
+on the model's own linear 235.15–273.15 K ramp): both plumes and the test
+parcel carry s_li = c_p T + g z − L q_l − (L + L_f) q_i, saturated over
+cloudSaturation's mix, q_i = (1 − α(T)) l, T by four Newton steps (within
+1.5·10⁻⁶ K of bisection over 180–900 hPa and 205–290 K). A rain's ice share
+takes L_f more into s_li, falls as its own stream and melts in the first
+layer below it at 273.15 K or warmer (the IFS relaxes toward 0 °C over a
+few layers, eqs 6.47–6.48); its evaporation below cloud base takes L + L_f;
+what reaches the ground frozen is `convectiveSnow`, to which the surface adds
+no fusion heat (and from which it takes L_f where the lowest air is not
+freezing); the downdraft evaporates only the liquid and melted rain. The
+flux form carries s_li, so frozen condensate that detrains returns to the
+environment's L-only convention in the detraining layer, and column
+c_p T + L q stays exact (a 265 K column whose plume snows: L_f times the
+precipitation under either phase, to 2.3·10⁻¹⁶). On Jordan's column the deep
+plume's top rises 211 → 153 hPa and its CAPE 209 → 311 J/kg, its frozen
+rain melting at 610 hPa (275.7 K). Three N=64 days from eight64_day0183
+against the test parcel's run (ten64_day0183 in brackets): fired ITCZ tops
+above 300 hPa 0.010 → 0.025 (0.217 → 0.277), warm pool 0.198 → 0.288
+(0.100 → 0.149); the 0 °C layer's melting (607 hPa) −0.02 K/day in the ITCZ,
+0.013 K/day per mm/day of deep rain (−0.32 and 0.049; warm pool −0.19 and
+0.042), the freezing's heating 0.01–0.14 K/day near 373 hPa: the plume rains
+most of its condensate below the freezing level at 3·10⁻³ /m, so little
+freezes; ITCZ high cover 0.413 → 0.407 (0.382 → 0.347), warm pool 0.367 →
+0.363 (0.301 → 0.291); T − Jordan at 607 / 516 hPa 0.1 / 0.9 → 0.1 / 0.9 K
+(0.3 / 0.5 → 0.0 / 0.4); ITCZ convective share 0.881 → 0.903 (0.876 →
+0.952), Q1R centroid 743.0 → 744.1 hPa (708.7 → 708.5), warm-pool centroid
+688.5 → 671.8 (779.8 → 754.1); trades deep firing 0.749 → 0.759; replayed
+global rain 1.979 → 1.989 mm/d; GPU day 186 SWCRE −46.0, LWCRE 22.5 W/m².
+Acceptance: the tops (≥ 0.6 or +0.08) not met on eight64 (+0.015) nor
+ten64 (+0.060), met for the warm pool (+0.090); the melting (0.1–0.3 K/day
+per mm/day) not met, an order of magnitude weaker; high cover not lower:
+not met by 0.004–0.035; the 516–600 hPa bias: met.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
