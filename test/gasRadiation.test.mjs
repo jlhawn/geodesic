@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { clearLongwave } from '../js/physics/longwave.module.js';
+import { clearLongwave, longwaveTableFor, LONGWAVE_TABLE } from '../js/physics/longwave.module.js';
+import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, interfaceAt, layerHeating, referenceHeating, MOLAR } from '../scripts/standardAtmospheres.mjs';
 import { runColumn } from '../scripts/radiationBenchmark.mjs';
 import { SOLAR_CONSTANT, GREENHOUSE_GASES, VISIBLE_FRACTION } from '../js/physics/radiation.module.js';
@@ -35,6 +36,31 @@ test('the longwave g-points follow RRTMG over the standard atmospheres and LBLRT
   const one = clearLongwave(withCo2(287e-6)), two = clearLongwave(withCo2(574e-6)), ref = BENCHMARK.iacono.co2Doubling.longwave;
   const forcing = { toa: one.net[0] - two.net[0], p20000: interfaceAt(mls, one.net, 20000) - interfaceAt(mls, two.net, 20000), surface: two.down[K] - one.down[K] };
   console.log(`top layer's cooling (RRTMG): ${upper.join(', ')} K/day; OLR/DLR/net-200-hPa misses against RRTMG: ${lines.join(', ')} W/m2; doubled CO2 TOA ${forcing.toa.toFixed(2)} 200 hPa ${forcing.p20000.toFixed(2)} surface ${forcing.surface.toFixed(2)} W/m2`);
+  for (const level of ['toa', 'p20000', 'surface']) assert.ok(Math.abs(forcing[level] / ref[level] - 1) < 0.1, `doubled CO2 at ${level}: ${forcing[level]} against ${ref[level]}`);
+});
+
+test('on bl36 the g-points fitted on bl36 columns follow RRTMG in every layer above 3 hPa the reference covers, the 3-30 hPa layers, the fluxes and doubled CO2', () => {
+  const levels = sigmaInterfaces('bl36'), table = longwaveTableFor(levels), lines = [];
+  assert.notEqual(table, LONGWAVE_TABLE);
+  assert.equal(longwaveTableFor(sigmaInterfaces('bl34')), LONGWAVE_TABLE);
+  assert.equal(longwaveTableFor(sigmaInterfaces('cam26')), LONGWAVE_TABLE);
+  for (const a of ['TROP', 'MLS', 'MLW', 'SAW']) {
+    const column = modelColumn(BENCHMARK.atmospheres[a], levels), ref = BENCHMARK.rrtmgLongwave[a].levels, r = clearLongwave(column, { table }), K = column.T.length;
+    const olr = r.up[0] - ref[ref.length - 1].up, dlr = r.down[K] - ref[0].down, net = interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000);
+    for (const x of [olr, dlr, net]) assert.ok(Math.abs(x) < 3, `${a}: OLR, DLR and 200 hPa misses ${olr}, ${dlr}, ${net} W/m2`);
+    const heat = layerHeating(column, r.net), refHeat = referenceHeating(column, ref), top = ref[ref.length - 1].p, above = [];
+    for (let k = 0; 0.5 * (levels[k] + levels[k + 1]) * column.ps < 3000; k++) {
+      const p = 0.5 * (levels[k] + levels[k + 1]) * column.ps, covered = (levels[k + 1] * column.ps - Math.max(levels[k] * column.ps, top)) / ((levels[k + 1] - levels[k]) * column.ps);
+      if (p < 300) { above.push(`${heat[k].toFixed(2)} (${refHeat[k].toFixed(2)})`); if (covered >= 0.9) assert.ok(Math.abs(heat[k] / refHeat[k] - 1) < 0.15, `${a}: layer ${k} cools ${heat[k]} against ${refHeat[k]} K/day`); }
+      else assert.ok(Math.abs(heat[k] - refHeat[k]) < 0.25, `${a}: layer ${k} cools ${heat[k]} against ${refHeat[k]} K/day`);
+    }
+    lines.push(`${a} ${above.join(' / ')}`);
+  }
+  const mls = modelColumn(BENCHMARK.atmospheres.MLS, levels), K = mls.T.length;
+  const withCo2 = (vmr) => ({ ...mls, co2: mls.co2.map((_, k) => vmr * MOLAR.co2 / MOLAR.air * (1 - mls.q[k])), ch4: mls.ch4.map((_, k) => 806e-9 * MOLAR.ch4 / MOLAR.air * (1 - mls.q[k])), n2o: mls.n2o.map((_, k) => 275e-9 * MOLAR.n2o / MOLAR.air * (1 - mls.q[k])) });
+  const one = clearLongwave(withCo2(287e-6), { table }), two = clearLongwave(withCo2(574e-6), { table }), ref = BENCHMARK.iacono.co2Doubling.longwave;
+  const forcing = { toa: one.net[0] - two.net[0], p20000: interfaceAt(mls, one.net, 20000) - interfaceAt(mls, two.net, 20000), surface: two.down[K] - one.down[K] };
+  console.log(`bl36, the cooling of the layers above 3 hPa (RRTMG): ${lines.join(', ')} K/day; doubled CO2 TOA ${forcing.toa.toFixed(2)} 200 hPa ${forcing.p20000.toFixed(2)} surface ${forcing.surface.toFixed(2)} W/m2`);
   for (const level of ['toa', 'p20000', 'surface']) assert.ok(Math.abs(forcing[level] / ref[level] - 1) < 0.1, `doubled CO2 at ${level}: ${forcing[level]} against ${ref[level]}`);
 });
 
@@ -88,8 +114,9 @@ test('without scattering the solar gases take the CLIRAD absorptivities of their
   console.log(`12 humid clear columns without scattering: the gases take their absorptivities down and up to ${worst.toExponential(1)}`);
 });
 
-async function engines(radiation) {
-  const cpu = createModel(new Grid(6), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation });
+async function engines(radiation, levels = undefined) {
+  const grid = levels ? { levels } : {};
+  const cpu = createModel(new Grid(6), { ocean: false, radiation, ...grid }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation, ...grid });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();
@@ -102,8 +129,8 @@ function stats(cpu, gpu) {
   return { maxDiff, rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
 
-test('both engines carry the spectral gases alike: per-cell sums of absorbed and outgoing radiation, clear and all-sky, at N=6', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpu, gpu, C } = await engines({ ...SPECTRAL, clearSkyPass: true });
+for (const grid of [null, 'bl36']) test(`both engines carry the spectral gases alike${grid ? ` on ${grid}, each with its table` : ''}: per-cell sums of absorbed and outgoing radiation, clear and all-sky, at N=6`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpu, gpu, C } = await engines({ ...SPECTRAL, clearSkyPass: true }, grid ? sigmaInterfaces(grid) : undefined);
   const slots = { absorbedSolar: 'ABSSUM', atmosphereSolar: 'ATMSUM', outgoingLongwave: 'OLRSUM', clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'OLRCLRSUM' };
   const compare = async (names, limit) => {
     const device = await gpu.gpu.downloadPhysics();
@@ -124,6 +151,6 @@ test('both engines carry the spectral gases alike: per-cell sums of absorbed and
   early.push(`the ${top.length} layers above 30 hPa' longwave heating rms ${top.join(', ')}`);
   for (let s = 4; s < 24; s++) { cpu.step(DT); await gpu.step(DT); }
   const later = await compare(['clearAbsorbedSolar', 'clearOutgoingLongwave'], 1e-4);
-  console.log(`spectral gases, CPU against GPU per-cell sums at N=6, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);
+  console.log(`spectral gases${grid ? ` on ${grid}` : ''}, CPU against GPU per-cell sums at N=6, 4 steps: ${early.join(', ')}; 24 steps: ${later.join(', ')}`);
   gpu.destroy();
 });

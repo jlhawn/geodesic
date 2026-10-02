@@ -6,6 +6,7 @@ import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.
 import { MOIST_DEFAULTS } from '../physics/moist.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { spongeGeometry, spongeRates as layerRates, SPONGE } from '../dynamics/sponge.module.js';
+import { longwaveTableFor } from '../physics/longwave.module.js';
 import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveColumns, gravityWaveBreaking, gravityWaveLid } from '../physics/gravityWaves.module.js';
 
 const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384, MAXIMUM_SURFACE_PRESSURE = 110000;
@@ -659,6 +660,7 @@ export async function createGpuCore(mesh, {
   dragCoefficient = SEA_DRAG, gustiness = 3, topSigma = TOP_DRAG.sigma, topDragDays = TOP_DRAG.days, spongeRates: spongeOption, gravityWaves = {}, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
 } = {}) {
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
+  phys.longwaveTable ??= longwaveTableFor(levels);
   const { device } = await getDevice();
   const K = levels.length - 1;
   let cumulusK0 = K;

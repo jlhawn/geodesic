@@ -3,7 +3,7 @@ import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.mod
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE } from '../physics/radiation.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
-import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwave.module.js';
+import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
 import { SUMMER_DAY } from '../physics/ozone.module.js';
 import { OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR, VAPOR_COEFFICIENTS, VAPOR_WEIGHTS, OXYGEN, CO2_COEFFICIENT, STP_DEPTH, OZONE_CM_ATM, SCALING_PRESSURE, SCALING_EXPONENT } from '../physics/shortwaveGases.module.js';
@@ -52,7 +52,7 @@ export function physicsConstants(o) {
   if (o.solarGases !== 'clirad' && o.solarGases !== 'lacisHansen') throw new Error(`solarGases must be 'clirad' or 'lacisHansen', not ${o.solarGases}`);
   if (o.ozoneProfile) throw new Error('the GPU radiation takes its ozone from its climatology, not an ozoneProfile');
   if (o.ozone !== 'afgl' && o.ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${o.ozone}`);
-  const points = LONGWAVE_TABLE.points, f32 = (values) => `array<f32, ${values.length}>(${values.map((v) => v.toPrecision(9)).join(', ')})`;
+  const LONGWAVE_TABLE = o.longwaveTable ?? DEFAULT_LONGWAVE_TABLE, points = LONGWAVE_TABLE.points, f32 = (values) => `array<f32, ${values.length}>(${values.map((v) => v.toPrecision(9)).join(', ')})`;
   const rayleigh = o.rayleighDepth != null ? [[1, o.rayleighDepth]] : o.rayleighBands;
   if (!(rayleigh.length >= 1 && rayleigh.length <= 3 && Math.abs(rayleigh.reduce((sum, [w]) => sum + w, 0) - 1) < 1e-9 && rayleigh.every(([w, tau]) => w > 0 && tau >= 0))) throw new Error(`rayleighBands must be one to three [weight, depth] pairs whose weights sum to 1, not ${JSON.stringify(rayleigh)}`);
   const visibleSum = (term) => rayleigh.map(([w, tau]) => `${w} * ${term(`${tau / REFERENCE_PRESSURE} * light.y + light.z`)}`).join(' + ');
