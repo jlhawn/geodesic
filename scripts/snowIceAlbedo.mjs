@@ -20,7 +20,12 @@
 // (agedSnowAlbedo and refreshedSnowAlbedo in js/physics/ice.module.js),
 // 0.85 - 0.008 p / (fall / 10 kg/m2) and not below the floor (0.5 on land,
 // 0.7 on ice), once with p the row's mean slowing of the ageing in the
-// cold (eq) and once at the plain 0.008 a day (eqPlain).
+// cold (eq) and once at the plain 0.008 a day (eqPlain). The tree cover by
+// 5-degree band poleward of 40 degrees (land off the ice sheets, by area):
+// the cover, the tree cover, the treeline factor, the growing season's
+// length and mean temperature over at least minimumSeason days, the share
+// with a tree cover of at least 0.2, and the treeline, the lowest band
+// whose mean factor is below a half.
 // LAND (JSON) passes options to the land, ICE (JSON) to the sea ice.
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
@@ -76,7 +81,8 @@ const coverBins = [0, 0.1, 0.3, 0.5, 0.7, 1.0001];
 const coverBin = (v) => { const k = coverBins.findIndex((e, j) => v >= e && v < coverBins[j + 1]); return `v ${coverBins[k].toFixed(1)}-${Math.min(1, coverBins[k + 1]).toFixed(1)}`; };
 const snowBin = (s) => (s < 1 ? 'snow < 1' : s < 10 ? 'snow 1-10' : s < 20 ? 'snow 10-20' : 'snow >= 20');
 const tBin = (t) => (t < MELTING - 10 ? 'T < -10' : t < MELTING - 2 ? 'T -10..-2' : t < MELTING - 1 ? 'T -2..-1' : 'T >= -1');
-const snowLine = new Map(), boreal = { area: 0, v: 0, forest: 0, snow: 0 };
+const snowLine = new Map(), boreal = { area: 0, v: 0, forest: 0, snow: 0 }, trees = new Map();
+const threshold = LAND.seasonThreshold ?? 0.9, shortest = (LAND.minimumSeason ?? 94) / 365;
 
 for (let i = 0; i < C; i++) {
   const lat = mesh.latCell[i] * deg;
@@ -84,11 +90,19 @@ for (let i = 0; i < C; i++) {
     if (iceSheet(i)) { add(`ice sheet ${lat >= 0 ? 'N' : 'S'} ${tBin(surfaceT[i]).replace('T -2..-1', 'T >= -2').replace('T >= -1', 'T >= -2')}`, i, reflectedLand[i], { snow: land.snow[i], snowAlbedo: snowAlbedo ? snowAlbedo[i] : NaN, pace: pace(i) }); continue; }
     const b5 = band(lat, [30, 35, 40, 45, 50, 55, 60, 65, 70, 75]);
     if (b5) { if (!snowLine.has(b5)) snowLine.set(b5, { area: 0, covered: 0 }); const s = snowLine.get(b5); s.area += mesh.areaCell[i]; if (land.snow[i] >= 1) s.covered += mesh.areaCell[i]; }
+    const t5 = band(lat, [40, 45, 50, 55, 60, 65, 70, 75, 80, 85]);
+    if (t5 && land.treeFactor) {
+      if (!trees.has(t5)) trees.set(t5, { area: 0, v: 0, trees: 0, factor: 0, length: 0, mean: 0, treed: 0 });
+      const t = trees.get(t5), a = mesh.areaCell[i];
+      t.area += a; t.v += a * land.vegetation[i]; t.trees += a * land.canopy[i]; t.factor += a * land.treeFactor(i); t.length += a * 365 * land.seasonLength[i];
+      t.mean += a * (threshold + land.seasonWarmth[i] / Math.max(land.seasonLength[i], shortest)); t.treed += land.canopy[i] >= 0.2 ? a : 0;
+    }
     if (lat >= 50 && lat < 70) { const a = mesh.areaCell[i]; boreal.area += a; boreal.v += a * land.vegetation[i]; boreal.forest += land.vegetation[i] >= 0.5 ? a : 0; boreal.snow += land.snow[i] > 0 ? a : 0; }
     if (land.snow[i] < SNOWY) continue;
     const extra = { v: land.vegetation[i], standing: standing[i], snowAlbedo: snowAlbedo ? snowAlbedo[i] : NaN, melting: surfaceT[i] >= MELTING - 2 ? 1 : 0, pace: pace(i) };
     const b = band(lat, [0, 30, 40, 50, 60, 70]);
     add(`land snow ${b}`, i, reflectedLand[i], extra);
+    if (lat >= 50 && lat < 70) add('land snow N 50-70', i, reflectedLand[i], extra);
     add(`land snow ${coverBin(standing[i])}`, i, reflectedLand[i], extra);
     add('land snow, all', i, reflectedLand[i], extra);
   } else if (ice[i] > 0) {
@@ -100,7 +114,7 @@ for (let i = 0; i < C; i++) {
 }
 
 const f = (x, d = 3) => (Number.isFinite(x) ? x.toFixed(d) : 'n/a');
-console.log(`snow and ice albedo of ${FILE.split('/').pop()} (N=${saved.N}, day ${saved.day}) lit over day ${AT} at ${TIMES} instants; LAND ${JSON.stringify(LAND)}; ICE ${JSON.stringify(ICE)}; the state ${land.snowAlbedo && saved.land.snowAlbedo ? 'carries' : 'does not carry'} a snow albedo${land.canopy ? `, ${saved.land.canopy ? 'carries' : 'does not carry'} a standing cover` : ''}`);
+console.log(`snow and ice albedo of ${FILE.split('/').pop()} (N=${saved.N}, day ${saved.day}) lit over day ${AT} at ${TIMES} instants; LAND ${JSON.stringify(LAND)}; ICE ${JSON.stringify(ICE)}; the state ${land.snowAlbedo && saved.land.snowAlbedo ? 'carries' : 'does not carry'} a snow albedo${land.canopy ? `, ${saved.land.canopy ? 'carries' : 'does not carry'} a standing cover` : ''}${land.seasonLength ? ` and ${saved.land.seasonLength ? 'carries' : 'does not carry'} season means` : ''}`);
 console.log('row                                        area     sun W/m2  albedo  fall mm/d  means');
 const order = [...rows.keys()].sort();
 for (const key of order) {
@@ -114,5 +128,14 @@ for (const hemi of ['N', 'S']) {
   const bands = [...snowLine.keys()].filter((k) => k.startsWith(hemi)).sort((a, b) => parseFloat(a.slice(2)) - parseFloat(b.slice(2)));
   const line = bands.find((k) => snowLine.get(k).covered / snowLine.get(k).area >= 0.5);
   console.log(`  ${hemi}: ${bands.map((k) => `${k.slice(2)} ${f(snowLine.get(k).covered / snowLine.get(k).area, 2)}`).join(', ')}; snow line ${line ? line.slice(2) : 'none'}`);
+}
+if (trees.size) {
+  console.log('tree cover by band (land off the ice sheets): cover, trees, factor, season days, season mean C, share with trees >= 0.2:');
+  for (const hemi of ['N', 'S']) {
+    const bands = [...trees.keys()].filter((k) => k.startsWith(hemi)).sort((a, b) => parseFloat(a.slice(2)) - parseFloat(b.slice(2)));
+    const line = bands.find((k) => trees.get(k).factor / trees.get(k).area < 0.5);
+    for (const k of bands) { const t = trees.get(k); console.log(`  ${k.padEnd(8)} ${f(t.v / t.area, 2)} ${f(t.trees / t.area, 3)} ${f(t.factor / t.area, 2)} ${f(t.length / t.area, 0)} ${f(t.mean / t.area, 1)} ${f(t.treed / t.area, 2)}`); }
+    console.log(`  ${hemi}: treeline (lowest band with mean factor < 0.5) ${line ? line.slice(2) : 'none'}`);
+  }
 }
 console.log(`boreal belt 50-70N land: mean cover ${f(boreal.v / boreal.area)}, share with cover >= 0.5 ${f(boreal.forest / boreal.area)}, share under snow ${f(boreal.snow / boreal.area)}`);
