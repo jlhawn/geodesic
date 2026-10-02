@@ -40,10 +40,10 @@
 // Q2 = -(L/cp) dq_t/dt of the physics, each with its peak by layer and over
 // 50 hPa bins and its centroid (heatingProfile of js/audit.module.js), and
 // the column integrals of Q1R and Q2 by process in W/m2; over land boxes, the
-// share of the convective rain by local solar hour; the
-// audit's "firing columns' convective heating peak" over the day (the
-// layer of largest mean convective heating, scripts/verticalAudit.mjs's trace,
-// over the ITCZ column-steps raining more than 1 mm/d of convective rain)
+// share of the convective rain by local solar hour; the firing columns'
+// convective heating peak over the day (the layer of largest mean heating in
+// the moist physics' convective trace, without mass weights, over the ITCZ
+// column-steps raining more than 1 mm/d of convective rain)
 // with its terms; the deep plume's fate in each box (deck veto, no condensation
 // level, plume topping below 700 hPa, CAPE at most plumeCape, closure or
 // inhibition, fired), its CAPE, inhibition, base flux and top, and the level
@@ -751,7 +751,7 @@ acc.forEach((A, b) => {
   const part = (m, k) => audit.parts[m * K + k] / audit.fired * perDay;
   let upper = 0;
   for (let k = 0; k < K; k++) if (p[k] >= 400 && p[k] <= 520 && conv[k] > conv[upper]) upper = k;
-  say(`\nthe audit's firing-column convective heating over the day, Pacific ITCZ: firing on ${f(audit.fired / audit.area, 3)} of the column-steps; peak at ${f(p[peak], 0)} hPa, ${f(conv[peak], 2)} K/d = deep rain ${f(part(0, peak), 2)} + downdraft evaporation ${f(part(1, peak), 2)} + deep transport ${f(part(2, peak), 2)} + shallow ${f(part(3, peak), 2)} + rain evaporation below cloud base ${f(part(4, peak), 2)}; largest at 400-520 hPa ${f(p[upper], 0)} hPa, ${f(conv[upper], 2)} K/d = ${f(part(0, upper), 2)} + ${f(part(1, upper), 2)} + ${f(part(2, upper), 2)} + ${f(part(3, upper), 2)} + ${f(part(4, upper), 2)}`);
+  say(`\nthe firing columns' convective heating over the day (the convective trace, no mass weights), Pacific ITCZ: firing on ${f(audit.fired / audit.area, 3)} of the column-steps; peak at ${f(p[peak], 0)} hPa, ${f(conv[peak], 2)} K/d = deep rain ${f(part(0, peak), 2)} + downdraft evaporation ${f(part(1, peak), 2)} + deep transport ${f(part(2, peak), 2)} + shallow ${f(part(3, peak), 2)} + rain evaporation below cloud base ${f(part(4, peak), 2)}; largest at 400-520 hPa ${f(p[upper], 0)} hPa, ${f(conv[upper], 2)} K/d = ${f(part(0, upper), 2)} + ${f(part(1, upper), 2)} + ${f(part(2, upper), 2)} + ${f(part(3, upper), 2)} + ${f(part(4, upper), 2)}`);
   say(`  firing-column profile (hPa K/d): ${Array.from(conv, (x, k) => `${f(p[k], 0)} ${f(x, 1)}`).filter((_, k) => p[k] > 150).join(', ')}`);
   const deepOnlyProfile = Float64Array.from({ length: K }, (_, k) => part(0, k) + part(1, k) + part(2, k) + part(4, k));
   let deepPeak = -1;
