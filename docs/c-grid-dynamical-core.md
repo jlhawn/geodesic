@@ -2911,13 +2911,22 @@ The work, in order:
    0.459, ASR 191.1 and 184.2, OLR 220.2 and 220.5, SWCRE −115.4 and
    −104.3, LWCRE 37.0 and 36.4 W/m², rain 4.56 and 4.53 mm/d, clear-sky
    albedo 0.100 and 0.153, the sea's surface 116.8 and 108.8 W/m². With
-   `rayleighDepth` 0, both aerosol depths 0 and `skylight` 0.15 both
-   engines are the previous ones bit for bit. Over a black surface the
-   clear column reflects τ/(τ + 2μ) of the visible beam less ozone and
-   aerosol absorption to 1e-14 at three zenith angles, every column of a
-   real-geography state closes to 5e-15, and on a random set of sunlit
-   columns the engines differ by 1.1e-5 of the beam
-   (`test/clearScattering.test.mjs`). The daily line gives the clear-sky
+   `rayleighDepth` 0, both aerosol depths 0 and `skylight` 0.15 the CPU
+   engine keeps its previous digests bit for bit and the GPU's day-186
+   line from eight64_day0183 is the previous one to every printed digit.
+   Over a black surface the clear column reflects τ/(τ + 2μ) of the
+   visible beam less ozone and aerosol absorption to 9.1e-15 at three
+   zenith angles; in the 721 sunlit columns of an N=12 real-geography
+   state absorbed plus reflected equals the beam to 4.0e-16 and the
+   layers take the atmosphere's absorption to 4.1e-15; on a random set of
+   sunlit columns the engines' fluxes differ by 1.1e-5 of the beam
+   (`test/clearScattering.test.mjs`), and physics alone at N=6 the
+   scattering changes a layer's heating by up to 0.053 K/day with the
+   engines' change apart by 5.4e-6 K/day (`test/gpuModel.test.mjs`). On
+   eight64_day0183 at N=64 every sunlit column closes to 4.1e-16 of the
+   beam on the CPU at four instants and to 2.5e-7 (single precision) on
+   the GPU over 64 steps, no dark column carries any shortwave on either,
+   and the scattering leaves the longwave unchanged. The daily line gives the clear-sky
    reflectance and the sea's surface sunlight; the audit and the second
    sweep's `clearAlbedo` term (target 0.15, tolerance 0.01, weight 3) read
    the clear-sky albedo.
