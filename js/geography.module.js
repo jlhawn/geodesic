@@ -184,8 +184,11 @@ export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = 2, 
  * of the steepest mean-square slope) and the slope σ² = K + √(L² + M²).
  * x is east and y north; `count` is the number of raster points a cell
  * holds. With `land`, a cell the mask makes sea has no subgrid orography.
+ * With `filtered`, a raster on the same grid of the band-passed variance
+ * (σ_flt² per point, scripts/subgridTerrain.py), `filtered` per cell is
+ * the square root of its area-weighted mean.
  */
-export function subgridOrography(mesh, topography, resolved = null, land = null) {
+export function subgridOrography(mesh, topography, resolved = null, land = null, { filtered: band = null } = {}) {
   const { nCells: C, xCell, cellsOnCell, nEdgesOnCell, maxEdges, verticesOnCell, cellsOnVertex, radius } = mesh;
   const { rows, cols, data } = topography;
   const R = radius ?? 6371220;
@@ -231,7 +234,7 @@ export function subgridOrography(mesh, topography, resolved = null, land = null)
       residual[r * cols + c] = Math.max(0, data[r * cols + c]) - at(x, y, sinLat, cell);
     }
   }
-  const weight = new Float64Array(C), sum = new Float64Array(C), square = new Float64Array(C), kSum = new Float64Array(C), lSum = new Float64Array(C), mSum = new Float64Array(C), count = new Int32Array(C);
+  const weight = new Float64Array(C), sum = new Float64Array(C), square = new Float64Array(C), kSum = new Float64Array(C), lSum = new Float64Array(C), mSum = new Float64Array(C), bandSum = new Float64Array(C), count = new Int32Array(C);
   const dLat = Math.PI / rows, dLon = 2 * Math.PI / cols;
   for (let r = 0; r < rows; r++) {
     const lat = Math.PI / 2 - (r + 0.5) * dLat, w = Math.cos(lat), dx = 2 * R * w * dLon;
@@ -241,19 +244,88 @@ export function subgridOrography(mesh, topography, resolved = null, land = null)
       const hx = (residual[r * cols + (c + 1) % cols] - residual[r * cols + (c + cols - 1) % cols]) / dx;
       const hy = (residual[north * cols + c] - residual[south * cols + c]) / dy;
       weight[i] += w; sum[i] += w * h; square[i] += w * h * h; count[i]++;
+      if (band) bandSum[i] += w * band.data[n];
       kSum[i] += w * 0.5 * (hx * hx + hy * hy); lSum[i] += w * 0.5 * (hx * hx - hy * hy); mSum[i] += w * hx * hy;
     }
   }
-  const deviation = new Float64Array(C), anisotropy = new Float64Array(C), orientation = new Float64Array(C), slope = new Float64Array(C);
+  const deviation = new Float64Array(C), anisotropy = new Float64Array(C), orientation = new Float64Array(C), slope = new Float64Array(C), filtered = band ? new Float64Array(C) : null;
   for (let i = 0; i < C; i++) {
     if (!(weight[i] > 0) || (land && !land[i])) continue;
+    if (band) filtered[i] = Math.sqrt(Math.max(0, bandSum[i] / weight[i]));
     const mean = sum[i] / weight[i], kk = kSum[i] / weight[i], ll = lSum[i] / weight[i], mm = mSum[i] / weight[i], spread = Math.hypot(ll, mm);
     deviation[i] = Math.sqrt(Math.max(0, square[i] / weight[i] - mean * mean));
     anisotropy[i] = kk + spread > 0 ? Math.sqrt(Math.max(0, (kk - spread) / (kk + spread))) : 1;
     orientation[i] = 0.5 * Math.atan2(mm, ll);
     slope[i] = Math.sqrt(kk + spread);
   }
-  return { deviation, anisotropy, orientation, slope, count };
+  return { deviation, anisotropy, orientation, slope, count, ...(band ? { filtered } : {}) };
+}
+
+/*
+ * The per-mesh subgrid orography files data/subgrid_N<N>.bin that
+ * scripts/subgridTerrain.mjs writes from GMTED2010: a 16-byte header
+ * ('SGO1', the cell count, the field count, 0) and per field one uint16
+ * per cell, value = q × scale + offset, in SUBGRID_FIELDS' order.
+ */
+export const SUBGRID_FIELDS = [
+  ['deviation', 0.1, 0],
+  ['anisotropy', 1 / 65535, 0],
+  ['orientation', Math.PI / 65535, -Math.PI / 2],
+  ['slope', 1e-5, 0],
+  ['filtered', 0.05, 0],
+];
+
+export function encodeSubgrid(fields) {
+  const C = fields.deviation.length, out = new ArrayBuffer(16 + 2 * C * SUBGRID_FIELDS.length);
+  const head = new DataView(out);
+  [83, 71, 79, 49].forEach((b, j) => head.setUint8(j, b));
+  head.setUint32(4, C, true); head.setUint32(8, SUBGRID_FIELDS.length, true);
+  SUBGRID_FIELDS.forEach(([name, scale, offset], f) => {
+    const q = new Uint16Array(out, 16 + 2 * C * f, C), values = fields[name];
+    for (let i = 0; i < C; i++) q[i] = Math.min(65535, Math.max(0, Math.round((values[i] - offset) / scale)));
+  });
+  return out;
+}
+
+export function decodeSubgrid(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  const head = new DataView(bytes);
+  if (String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'SGO1') throw new Error('not a subgrid orography file');
+  const C = head.getUint32(4, true), count = head.getUint32(8, true);
+  if (count !== SUBGRID_FIELDS.length || bytes.byteLength !== 16 + 2 * C * count) throw new Error('subgrid orography file of the wrong size');
+  const fields = {};
+  SUBGRID_FIELDS.forEach(([name, scale, offset], f) => {
+    const q = new Uint16Array(bytes, 16 + 2 * C * f, C);
+    fields[name] = Float64Array.from(q, (v) => v * scale + offset);
+  });
+  for (let i = 0; i < C; i++) if (!(fields.deviation[i] > 0)) fields.orientation[i] = 0;
+  return fields;
+}
+
+export const subgridUrl = (N) => new URL(`../data/subgrid_N${N}.bin`, import.meta.url);
+
+/*
+ * The fields for a mesh: `given` when it has the mesh's cell count, else
+ * under node the file for N if there is one, else null (the caller
+ * computes them from the 0.25° raster and says so).
+ */
+export function meshSubgrid(mesh, given = undefined) {
+  if (given === false) return null;
+  if (given) return given.deviation.length === mesh.nCells ? given : null;
+  const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
+  const fs = globalThis.process?.getBuiltinModule?.('node:fs');
+  if (!fs || 10 * N * N + 2 !== mesh.nCells) return null;
+  const url = subgridUrl(N);
+  if (!fs.existsSync(url)) return null;
+  return decodeSubgrid(fs.readFileSync(url));
+}
+
+const fallbackSaid = new Set();
+export function subgridFallbackNote(mesh) {
+  const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
+  if (fallbackSaid.has(N)) return;
+  fallbackSaid.add(N);
+  console.log(`subgrid orography: no data/subgrid_N${N}.bin for this mesh; computed from the 0.25° raster (σ about a third of the 5 km fields'), and no form drag`);
 }
 
 /*
