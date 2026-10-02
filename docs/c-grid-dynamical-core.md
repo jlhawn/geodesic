@@ -5728,8 +5728,9 @@ The work, in order:
      not conserve the column's momentum: on the July day-121 state it
      removes the top layer's axial angular momentum at 1/(2.69 days)
      (2.2·10¹⁷ of 5.1·10²² kg m²/s a second), the layers below untouched,
-     and returns 8.0 mW/m² as heat, each column's heat equal to its
-     kinetic energy lost to 2.2·10⁻¹³; one step's change of the top layer's
+     and returns 8.0 mW/m² as heat (each column's, measured from its θ
+     change, equal to its kinetic energy lost to 2.5·10⁻¹² of the largest
+     column's loss: the review below); one step's change of the top layer's
      wind (up to 0.10 m/s) agrees between the engines to 8.3·10⁻⁶ m/s
      (1.4·10⁻⁶ rms); `test/sponge.test.mjs`: torque 1.0001 of a Rayleigh
      drag on a zonal flow with the wave moved by 1.3·10⁻³ m/s rms, heat to
@@ -5826,6 +5827,91 @@ The work, in order:
      gaining 3.5 m/s/day, the winter vortex at 14 hPa is 4-6 K warmer in
      July (202 / 200 K against 196 / 197), and nothing beyond day 60 of a
      fresh start has been seen.
+
+   The third round's review (Oct 2). Read here: Rind, Suozzo, Lacis,
+   Russell & Hansen (1984, NASA TM-86183), the model description and its
+   Fig. 1.
+   - Confirmed in the source: the drag in layers 19-21 ("approximately
+     65-75km", mean pressures 0.09 / 0.05 / 0.03 mb in Fig. 1, so H = 7 km
+     puts the profile's 65 / 70 / 75 km at 0.094 / 0.047 / 0.023 hPa, on
+     those layers); the winter decay times 2 ± 1, 1 ± ½ and ½ ± ¼ day,
+     "varying with wind speed, and thus latitude"; Holton & Wehrbein's 5
+     to 2 days over the same heights. Not as the source: GISS's drag has
+     the surface drag's form with a stability-dependent coefficient on the
+     whole wind, where `rind` is a linear decay of the zonal mean at those
+     times, the eddies left to the sponge; GISS's final version discards
+     the energy the drag removes (returned as heat, its 70N winter
+     mesosphere ran 10-30 K warmer, at variance with observations), where
+     the model returns it. On the July day-121 states below that heat is
+     0.45-0.82 K/day in the top layer at 70-90S and 1.0-1.5 at 50-70S (two
+     members), where the cap's top layer radiates −7.9 (fresh days 51-60). The rate above 75 km,
+     held at ½ day, is 43 % of the 0-0.3 hPa layer's (its 0-2.4 Pa); the
+     rate is set per σ layer at 1013 hPa, so over the Antarctic plateau
+     (680 hPa, the layer at 0-0.20 hPa) the profile by pressure would give
+     1.82 days for the 2.71.
+   - Profile: 2.709 days on bl36's 0-0.3 hPa layer (an independent
+     10⁶-point mean 2.7085), `holtonWehrbein` 9.30, zero in every other
+     layer of bl36, bl34 and cam26; the sponge 1.24 and 6.00 days at 0.15
+     and 0.65 hPa.
+   - Accounting on nine64_day0091 remapped to bl36 (N=64), from the state
+     changes: the CPU closure and dissipation with the friction alone take
+     14.155 mW/m² of kinetic energy and return 14.155 as heat, each
+     column's heat (cp Π Δθ times its mass) within 2.5·10⁻¹² of the
+     largest column's loss (22.6 J/m²) of its kinetic energy from the
+     winds before and after; with the sponge 16.628 and 5.1·10⁻¹². The top
+     layer's axial angular momentum 3.09·10²² kg m²/s falls by 1.33·10¹⁷
+     a second (2.69 days), the layers below untouched. GPU, one full step
+     with the friction against one without: 14.226 mW/m² both ways, each
+     column to 1.2·10⁻³, the angular momentum −1.335·10¹⁷ a second, every
+     other layer equal. The friction's own change of the wind, 9.3·10⁻²
+     m/s at most, GPU less CPU on the same pre-closure wind 8.3·10⁻⁶ at
+     most (1.2·10⁻⁶ rms).
+   - Engines from the same state (full physics, no ocean), the top eight
+     layers after 1 / 4 / 16 steps: T 1.5·10⁻⁴ / 3.6·10⁻² / 0.37 K apart
+     at most (rms 2.7·10⁻⁵ / 2.7·10⁻³ / 4.9·10⁻²), u 1.6·10⁻³ / 0.15 /
+     0.60 m/s (rms 8.5·10⁻⁵ / 9.9·10⁻⁴ / 2.7·10⁻²), as in the second
+     round; the friction itself moves the top layer's wind by 9.3·10⁻² /
+     0.37 / 1.9 m/s (rms 3.4·10⁻² / 0.14 / 0.56). bl34: the CPU model three
+     steps from nine64_day0091 equals 027d2c6's byte for byte.
+   - Tests: 63 of 63 files, 580 tests. dayMeans' two columns: 324's plume
+     runs on one engine only at steps 17 and 18; 135's keeps its top, its
+     base flux 4.287·10⁻² against 4.504·10⁻² at step 7 with the boundary
+     layer's depth (2575.12 / 2575.07 m) and buoyancy flux agreeing; on the
+     CPU ×(1 + 10⁻⁵) on the column's vapour moves that flux by 1.3·10⁻⁴ of
+     itself and ×(1 + 10⁻⁴) by 5.2 % (to 4.510·10⁻²), a jump. gpuModel: the
+     CPU's ±1 ulp response 2.43·10⁻⁴ K/day again in 20 and 200 draws, the
+     limit 4.0·10⁻⁴ (1.5 × 1e-5 × 26.6).
+   - Logs: ten-day linear trends reproduce the tables above; `top3fb`'s
+     180 daily lines are `igpre64`'s. A July run with the defaults
+     (`top3rvjul`) repeats `top3rijul` line for line, so neither
+     `TOP_BUDGET` nor naming the friction changes the run; a third member
+     (`top3rvjulT`, θ ± 10⁻⁴ K, another draw): day 121 5S-5N +2 / +47 /
+     −32, 60S 54 / 61 / 63, the 70-90S cap 236 / 252 / 245 and 202 K at 14
+     hPa, the summer cap 234 / 262 / 269, the largest wind and Courant
+     number over the run 165 m/s, 0.53, the 0.64 hPa equatorial wind
+     gaining 3.93 m/s/day over the last ten days. Against the members'
+     spread, `rind` against the defaults: in July the 0.64 hPa equatorial
+     westerly (+47 to +55 against +5 / +15), the 60S wind at 0.15 hPa (54
+     to 67 against 97 / 105), the winter cap (+15 to +26 K) and the summer
+     cap at 0.15-0.64 hPa (−10 / −8 K) differ, and 14 hPa by 3-6 K; the
+     July Courant number does not fall (0.47-0.53 against 0.45 / 0.45), the
+     largest wind sitting at 1.6 hPa (130-144 m/s on day 121). In January
+     the 60N wind lies within the twins at 0.15 and 1.6 hPa and 4 m/s
+     above them at 0.64, the Courant number falls (0.40 / 0.41 against
+     0.50 / 0.48), the winter cap rises 4-14 K at 0.15 hPa against a twin
+     spread of 5. The fresh "day 60" runs take the
+     defaults to day 30 and the candidate after; with `rind` from the start
+     30 days exist (`top3rif`: 5S-5N −6 / +8 / +30, 60S 43 / 42 / 35, the
+     cap 229 / 244 / 238, Courant 0.25 at most). On day 60 the 1.6 hPa
+     equatorial westerly is +42 / +42 / +43 in all three (the defaults'
+     +42 to +51 since day 35), below the friction's reach.
+   - The 150-day fresh validation was refused again by the session's
+     permission check and not retried. Verdict: bl36 is not ready for a
+     multi-year run from a fresh start. No run with the friction lasts more
+     than 30 days; the July 0.64 hPa
+     equatorial westerly grows in every member, the friction's July
+     Courant margin is no better than the defaults', and the friction's
+     treatment of the removed energy is the opposite of its source's.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
