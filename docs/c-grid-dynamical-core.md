@@ -9716,6 +9716,31 @@ met; the trades' low cover (≥ 0.18) met. The detrainment centroid lies low
 because the plumes still stop at 500–700 hPa: what the plume carries
 detrains where its mass flux falls, and it falls there.
 
+**The ice fall at 3.29 and homogeneous nucleation, tested on the anvil
+source (Oct 2).** Three N=64 days from eight64_day0183 on the tree with
+elements 5 and 6, the regimes one step on (cloudRegimes.mjs; the reference's
+replicate spread of high cover and its thin share is at most 0.002 / 0.01):
+| day 186 | defaults (fall 2.5) | `iceFall` 3.29 | `iceNucleation` | both |
+|---|---|---|---|---|
+| global high cover; thin share | 0.278; 0.49 | 0.249; 0.46 | 0.267; 0.47 | 0.240; 0.45 |
+| warm pool high cover; thin share | 0.361; 0.44 | 0.333; 0.43 | 0.358; 0.43 | 0.326; 0.42 |
+| ITCZ high cover; thin share | 0.417; 0.30 | 0.377; 0.31 | 0.414; 0.28 | 0.379; 0.31 |
+| RH 150–350 hPa over water / ice: global; warm pool; ITCZ | 0.39/0.59; 0.48/0.70; 0.55/0.80 | 0.39/0.59; 0.49/0.71; 0.54/0.80 | 0.40/0.60; 0.49/0.71; 0.55/0.81 | 0.40/0.60; 0.50/0.73; 0.55/0.80 |
+| upper-tropospheric layer area above ice saturation (of it clear) | 0.01 (0.00) | 0.00 | 0.02 (0.69) | 0.02 (0.77) |
+| GPU day 186 SWCRE; LWCRE | −47.6; 23.2 | −46.4; 20.6 | −47.4; 22.2 | −46.2; 19.6 |
+Against the references in the regime table (ISCCP and CALIPSO: global high
+0.2–0.3 with about 0.6 of it thin, warm pool high 0.55–0.70 with about 0.5
+thin, ITCZ 0.45–0.60), the fall coefficient of 3.29 lowers the high cover
+where it is already short (warm pool −0.028, ITCZ −0.040, global −0.029) and
+thins nothing; nucleation leaves the high cover within 0.011, lets 0.02 of
+the upper-tropospheric layer area stand supersaturated over ice, mostly
+clear, and raises the RH over ice by 0.01. The docs give no observed
+upper-tropospheric humidity to judge either by. Neither change is
+supported by the regime observations; the defaults stay at 2.5 and off. The
+anvil source of element 6 is too low to test them fairly: its detrainment
+centres at 600–680 hPa, below the cirrus levels where the fall speed and
+nucleation act.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
