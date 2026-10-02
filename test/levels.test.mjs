@@ -246,7 +246,7 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   const from = join(dir, 'src_day0100.bin');
   writeFileSync(from, encodeState({ N, K: source.core.K, day: 100, time: 100 * 86400, terrain: true, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence: source.radiation.mlmSubsidence, mlmHeight, mlmGate, ocean: { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta }, land: { ...soil, vegetation } }));
   source.destroy();
-  const run = (env) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), OUT: dir, FROM: from, DAYS: '1', MINUTES: '100', ...env }, encoding: 'utf8', stdio: 'pipe' });
+  const run = (env) => execFileSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), OUT: dir, FROM: from, DAYS: '1', MINUTES: '100', SURFACE: '{"exchange":"fixed"}', ...env }, encoding: 'utf8', stdio: 'pipe' });
   const read = async (name) => decodeState(new Uint8Array(readFileSync(join(dir, name))));
 
   const log = run({ TAG: 'fine', LEVELS: 'bl34' });
