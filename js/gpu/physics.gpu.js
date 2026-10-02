@@ -2,7 +2,7 @@ import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT } from '../physics
 import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE } from '../physics/radiation.module.js';
-import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
@@ -30,6 +30,7 @@ import { exchangeConstants, EXCHANGE_WGSL } from './exchange.gpu.js';
  * between the two changes the rounding.
  */
 export function physicsConstants(o) {
+  if (o.convectionType !== 'cloudDepth' && o.convectionType !== 'top') throw new Error(`convectionType must be 'cloudDepth' or 'top', not ${o.convectionType}`);
   if (o.stratusIndex !== 'eis' && o.stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${o.stratusIndex}`);
   const m = { ...MIXED_LAYER_DEFAULTS, cloudLevels: DECK_CLOUD_LEVELS, ...o.mixedLayer };
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
@@ -116,7 +117,7 @@ const DECK_OPEN: f32 = ${DECK_OPEN}; const DECK_CLOSED: f32 = ${DECK_CLOSED}; co
 const CU_FLOOR: f32 = ${CUMULUS_FLOOR}; const CU_K0: i32 = ${o.cumulusK0 ?? 0}; const CU_C: f32 = ${o.cumulusClosure}; const CU_EPS: f32 = ${o.cumulusEntrainment}; const CU_DEL: f32 = ${o.cumulusDetrainment}; const CU_SOURCE: f32 = ${o.cumulusSourceDepth}; const CU_LOSS: f32 = ${o.cumulusBoundaryLoss};
 const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvershoot}; const CU_WU: f32 = ${o.cumulusUpdraft}; const CU_RAIN: bool = ${o.cumulusRain != null}; const CU_RAIN_Q: f32 = ${o.cumulusRain ?? 0}; const CU_LOWEST: bool = ${o.cumulusSource === 'lowest'};
 const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: bool = ${o.cumulusCloud !== false && o.cloudCover === 'pdf'};
-const PL_SEPARATE: bool = ${o.plumeClosure === 'separate'}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
+const PL_SEPARATE: bool = ${o.plumeClosure === 'separate' && o.convectionType !== 'cloudDepth'}; const PL_BY_DEPTH: bool = ${o.convectionType === 'cloudDepth'}; const DEEP_DEPTH: f32 = ${DEEP_CLOUD_DEPTH}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
 const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.plumeConsumption === 'buoyant'}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
 const PL_SURFACE50: bool = ${o.plumeSourceDepth === 'surface50'}; const EX_COEF: f32 = ${SOURCE_EXCESS.coefficient}; const EX_T: f32 = ${SOURCE_EXCESS.temperature}; const EX_Q: f32 = ${SOURCE_EXCESS.humidity};
 const EX_LAYER: bool = ${o.excessVelocity === 'surfaceLayer'}; const EX_SCALE: f32 = ${SOURCE_EXCESS.scale}; const EX_STAB: f32 = ${SOURCE_EXCESS.layer}; const EX_KARMAN: f32 = ${SOURCE_EXCESS.karman}; const EX_USTAR: f32 = ${SOURCE_EXCESS.friction}; const EX_VIRT: f32 = ${SOURCE_EXCESS.virtual};
@@ -1695,7 +1696,7 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
     plumeS[k] = s; plumeQ[k] = w;
   }
   if (top == 0) { top = 1; }
-  if (!cloudy || top < 1 || !(LV[L_SU + top] * DEEP_REFERENCE < SHALLOW_TOP)) { return cumulusColumn(i, pi, dt); }
+  if (!cloudy || top < 1 || !select((LV[L_SU + top] * DEEP_REFERENCE < SHALLOW_TOP), (pi * (LV[L_SU + base] - LV[L_SU + top]) > DEEP_DEPTH), PL_BY_DEPTH)) { return cumulusColumn(i, pi, dt); }
   clearCumulus(i);
   let topHeight = upperInterface(i, top);
   var neutralHeight = upperInterface(i, top + 1);

@@ -59,7 +59,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
+import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -407,7 +407,7 @@ function ascend(i, s, entraining) {
     }
   }
   if (top === 0) top = 1;
-  const deepTop = cloudy && top >= 1 && levels[top] * DEEP_REFERENCE < O.shallowTop;
+  const deepTop = cloudy && top >= 1 && (O.convectionType === 'cloudDepth' ? pi[i] * (levels[base] - levels[top]) > DEEP_CLOUD_DEPTH : levels[top] * DEEP_REFERENCE < O.shallowTop);
   return { status: !cloudy ? 'notCloudy' : deepTop ? 'candidate' : 'shallow', source, top, cape, inhibition, lclPressure: lcl.pressure, base, buoyant, unbuoyant, topPressure: top >= 0 ? pi[i] * levels[top] : NaN };
 }
 function fillEnvironment(i, s) {
@@ -737,7 +737,7 @@ acc.forEach((A, b) => {
     const tops = Array.from(P.shallowTop, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / total, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ');
     const firedTops = Array.from(P.firedTop, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / P.fired, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ');
     const capes = Array.from(P.candidateCape, (x, n) => `${n * 60}-${n === 7 ? 'up' : n * 60 + 60} ${f(x / total, 3)}`).join(', ');
-    say(`deep plume, share of the column-steps: deck veto ${f(P.deck / total, 3)}, no condensation level ${f(P.noLcl / total, 3)}, never cloudy ${f(P.notCloudy / total, 3)}, cloudy but topping below 700 hPa ${f(P.shallowTop.reduce((x, y) => x + y, 0) / total, 3)} (tops by hPa: ${tops}); ${bechtold ? `deep candidates whose PCAPE the boundary-layer part PCAPE_bl takes up ${f(P.closedByForcing / total, 3)} (mean CAPE ${f(P.closedByForcingSum / P.closedByForcing, 0)} J/kg)` : `deep candidates with CAPE at most plumeCape ${O.plumeCape} ${f(P.weakCape / total, 3)} (mean CAPE ${f(P.weakCapeSum / P.weakCape, 0)} J/kg)`}, otherwise closed by inhibition or consumption ${f(P.closed / total, 3)} (CAPE ${f(P.closedCape / P.closed, 0)}, inhibition ${f(P.closedInhibition / P.closed, 1)} J/kg), fired ${f(P.fired / total, 3)}`);
+    say(`deep plume, share of the column-steps: deck veto ${f(P.deck / total, 3)}, no condensation level ${f(P.noLcl / total, 3)}, never cloudy ${f(P.notCloudy / total, 3)}, ${O.convectionType === 'cloudDepth' ? 'cloudy but its cloud no deeper than 200 hPa' : 'cloudy but topping below 700 hPa'} ${f(P.shallowTop.reduce((x, y) => x + y, 0) / total, 3)} (tops by hPa: ${tops}); ${bechtold ? `deep candidates whose PCAPE the boundary-layer part PCAPE_bl takes up ${f(P.closedByForcing / total, 3)} (mean CAPE ${f(P.closedByForcingSum / P.closedByForcing, 0)} J/kg)` : `deep candidates with CAPE at most plumeCape ${O.plumeCape} ${f(P.weakCape / total, 3)} (mean CAPE ${f(P.weakCapeSum / P.weakCape, 0)} J/kg)`}, otherwise closed by inhibition or consumption ${f(P.closed / total, 3)} (CAPE ${f(P.closedCape / P.closed, 0)}, inhibition ${f(P.closedInhibition / P.closed, 1)} J/kg), fired ${f(P.fired / total, 3)}`);
     say(`  candidates' CAPE (J/kg, share of all column-steps): ${capes}`);
     say(`  fired: mean CAPE ${f(P.firedCape / P.fired, 0)} J/kg, inhibition ${f(P.firedInhibition / P.fired, 1)} J/kg, base flux ${f(P.firedFlux / P.fired, 4)} kg/m2/s (box mean ${f(P.firedFlux / total, 5)}), consumption F ${f(P.consumption / P.fired, 4)} J/kg per s per kg/m2/s, held below its closure by the boundary-loss or Courant limit on ${f(P.limited / P.fired, 3)}; tops by hPa: ${firedTops}`);
     if (bechtold) say(`  fired, the closure of Bechtold et al. (2014): mean PCAPE ${f(P.pcape / P.fired, 1)} Pa, PCAPE_bl ${f(P.pcapeBoundary / P.fired, 1)} Pa, w-bar ${f(P.speed / P.fired, 2)} m/s, tau ${f(P.tau / P.fired / 60, 1)} min (median ${f(weightedMedian(P.taus) / 60, 1)} min)`);
