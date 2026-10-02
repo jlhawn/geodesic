@@ -16,7 +16,7 @@
 // widened by 0.01 on each side.
 import { DAY } from '../js/physics/radiation.module.js';
 
-export const TERMS = ['insolation', 'reflected', 'atmosphere', 'ozone', 'vapour', 'aerosol', 'absorbedSurface', 'down', 'directAlbedo'];
+export const TERMS = ['insolation', 'reflected', 'atmosphere', 'ozone', 'vapour', 'otherGases', 'aerosol', 'absorbedSurface', 'down', 'directAlbedo'];
 export const TYPES = ['open sea', 'sea ice', 'land', 'ice sheets'];
 export const MU_BINS = [0, 0.1, 0.2, 0.4, 0.7, 1];
 const SNOWY = 10, DRY_FILL = 0.35, FOREST = 0.5;
@@ -73,7 +73,7 @@ export function seaBand(latDegrees) {
   return a < 30 ? 'open sea 0-30' : a < 50 ? 'open sea 30-50' : a < 70 ? 'open sea 50-70' : 'open sea 70-90';
 }
 
-export function clearSkyClasses(model, { day, times = 48, ozone = 0.03 }) {
+export function clearSkyClasses(model, { day, times = 48 }) {
   const { mesh, core, state, radiation, seaIce, land, geography } = model;
   const { K, C } = core.diagnostics;
   const [pi, theta, , surfaceT, q, , ice] = state;
@@ -94,8 +94,8 @@ export function clearSkyClasses(model, { day, times = 48, ozone = 0.03 }) {
     return { ...radiation.budget };
   };
   const terms = (beam, all, black, adir) => ({
-    insolation: beam, reflected: all.reflectedSolar, atmosphere: black.reflectedSolar, ozone: beam * ozone, aerosol: all.aerosolSolar,
-    vapour: all.atmosphereSolar - beam * ozone - all.aerosolSolar, absorbedSurface: all.absorbedSolar - all.atmosphereSolar, down: all.surfaceShortwave, directAlbedo: beam * adir,
+    insolation: beam, reflected: all.reflectedSolar, atmosphere: black.reflectedSolar, ozone: all.ozoneSolar, otherGases: all.oxygenSolar + all.carbonDioxideSolar, aerosol: all.aerosolSolar,
+    vapour: all.atmosphereSolar - all.ozoneSolar - all.oxygenSolar - all.carbonDioxideSolar - all.aerosolSolar, absorbedSurface: all.absorbedSolar - all.atmosphereSolar, down: all.surfaceShortwave, directAlbedo: beam * adir,
   });
   const parts = (i) => {
     if (geography.land[i]) {
