@@ -33,8 +33,6 @@ const RANGES = [
   { key: 'cumulusCeiling', module: 'radiation', option: 'cumulusCeiling', low: 1500, high: 2500 },
 ];
 const RANGES2 = [
-  { key: 'cloudScattering', module: 'radiation', option: 'cloudScattering', low: 55, high: 110 },
-  { key: 'cloudAbsorption', module: 'radiation', option: 'cloudAbsorption', low: 65, high: 260 },
   { key: 'upperHours', module: 'moist', option: 'upperCloudLifetime', low: 1, high: 8, scale: 3600, unset: 'cloudLifetime' },
   { key: 'stratiformHours', module: 'moist', option: 'stratiformLifetime', low: 2, high: 8, scale: 3600 },
   { key: 'cloudHours', module: 'moist', option: 'cloudLifetime', low: 0.5, high: 2, scale: 3600 },
