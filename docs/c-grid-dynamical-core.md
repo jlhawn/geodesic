@@ -6646,6 +6646,34 @@ b913e99; over the treeline test's 48 GPU steps the lowest air parts by
 7.7·10⁻² K (2.3·10⁻² under 'random') and the tree cover by 1.2·10⁻⁴
 (2.5·10⁻⁵), above its 10⁻⁴.
 
+**Independent checks of the Q1 metric and the overlap (Oct 2).** The
+longwave's chain against the expectation over every sub-column pattern
+(each an overcast or clear column, weighted by the chain's pair
+transitions), at N=6 on 335 ice-free columns with two adjacent partly
+cloudy layers near 500 hPa, 210 of them under a deck in layer 24, half
+with resolved water in the deck's layer and the one above it: OLR and back
+radiation agree to 2.1·10⁻¹⁵ relative and the layer longwave to 10⁻¹³ W/m²
+on the CPU, to 5·10⁻⁶ relative and 1.1·10⁻³ W/m² on the GPU (1.05·10⁻³
+under 'random'), for z₀ the default, 2000 m, 10⁻⁶ m (random) and 10¹⁵ m
+(maximum); at z₀ 10⁻⁶ m the CPU's OLR and back radiation are bit-identical
+to 'random' in 244 of 362 columns and within 4.1·10⁻¹⁶ in the rest. One
+step from eight64_day0183 on each engine: the CPU's layers close on the
+surface and top fluxes to 5.4·10⁻¹³ W/m², the GPU's to 1.4·10⁻³
+(2.3·10⁻⁴ under 'random'); the engines' OLR differ by at most 2.1·10⁻³
+W/m² and the layer longwave by 8.2·10⁻³ of 121 W/m² under either overlap.
+On the default run's day-186 state (three days from eight64_day0183)
+99.5 % of the columns have two adjacent layers of cover strictly between 0
+and 1, and every 32-cell group has one, so no collapse to one region can
+take back much of the cost; one reused vec2 array for the two regions'
+fluxes made the physics pass slower (43.5 ms at N=128 against 32.0). The
+three-day runs repeat ceb0 (under 'random') and ceb1 line for line, and
+tropicalHeating.mjs repeats their budgets; a separate replay of the ITCZ
+from phase snapshots gives the same Q1 (600–650 hPa, 1.761 K/day), Q1R
+(700–750 hPa, 2.643, centroid 680.4 hPa) and Q2 (700–750 hPa, 2.491) on
+the base, with Q1R's column 144.10 W/m² = L P 138.72 + sensible 3.26 +
+the physics' condensate gain 0.87 + dissipation 0.91 + 0.34, and Q2's
+column L(P − E) to the printed digits.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
