@@ -3234,6 +3234,15 @@ The work, in order:
      goes from bare to ponded (0.48) without SHEBA's month of melting
      snow near 0.7.
    - The ice sheets keep one albedo, 0.80.
+   - Wet soil at the June solstice. Three days from nine64_day0091 (day
+     94, review of Oct 1) partly vegetated land reads 0.167 against
+     0.18–0.25 (0.259 of the globe; 0.205 with `soilDarkening` false),
+     its snow-free buckets 0.49 full on the mean, where the September
+     state's are 0.31 (0.199, inside) and the year-six state's 0.36. The
+     darkening reads the root zone's fill, which stays high for months
+     after rain, where BATS and CLM read the top layer's water (from
+     memory). The open
+     sea 0–30° reads 0.102 at the top on that day against 0.08–0.10.
 
    Defaults: sea ice `iceAlbedo` 0.62 (cold bare ice), `meltingIceAlbedo`
    0.48, `iceMeltingRange` 1 K, `fullAlbedoThickness` 0.5 m,
