@@ -99,7 +99,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * (235.15 K) to `liquidTemperature` (273.15 K), the radiation's; the
  * model's condensate carries no enthalpy, every phase change takes the
  * latent heat L of vaporisation, and the fusion heat of what falls as snow
- * is released at the surface as before. With `condensation` 'uniform' (the
+ * is released at the surface. With `condensation` 'uniform' (the
  * default; 'saturation' adjusts every layer to its own saturation) a layer
  * above the moist boundary layer's mixing top (every layer without it)
  * holds the condensate of a uniform distribution of total water about its
@@ -245,7 +245,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * from the top down within the step: a layer keeps 1/(1 + v Δt/Δz) of the
  * ice it holds with what fell into it and passes the rest to the layer
  * below, which takes its ice share 1 − α as cloud ice and its liquid share
- * α, melted, as rain falling on with the autoconversion's, and what
+ * α as precipitation falling on with the autoconversion's (all of it
+ * above liquidTemperature, none below iceTemperature), and what
  * leaves the lowest layer is large-scale precipitation, snow or rain by
  * the surface's rule. The column is then adjusted again, so that ice
  * falling into subsaturated layers sublimates, moistening and cooling
