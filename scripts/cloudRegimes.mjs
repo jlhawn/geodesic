@@ -21,8 +21,9 @@
 // ice saturation, and the shares of humid layers that hold no condensate:
 // upper troposphere at RHi above 1, lower at RH above 0.9. "cumulus
 // updraught" is the largest layer cumulus fraction of each column, the
-// plumes' active area M/(rho w_u); the high class's condensate colder than
-// 235 K is given apart. The saved day means of
+// plumes' active area M/(rho w_u); the resolved condensate is split into
+// liquid and ice by the optics' phase ramp, and the high class's
+// condensate colder than 235 K is given apart. The saved day means of
 // the cloud effects are printed where the state carries them.
 // RADIATION, MOIST, BOUNDARY_LAYER and SURFACE (JSON) pass options as to
 // scripts/verticalAudit.mjs. Earth's values are printed beside each regime
@@ -94,7 +95,7 @@ for (let i = 0; i < C; i++) {
 const optics = { ...CLOUD_OPTICS, ...Object.fromEntries(Object.keys(CLOUD_OPTICS).filter((key) => key in RADIATION).map((key) => [key, RADIATION[key]])) };
 const layerOptics = { liquid: 0, visible: 0, solar: 0, infrared: 0 };
 const cover = CLASSES.map(() => new Float64Array(C)), allCover = new Float64Array(C), path = CLASSES.map(() => new Float64Array(C)), visible = CLASSES.map(() => new Float64Array(C));
-const coldHigh = new Float64Array(C), updraught = new Float64Array(C), exponentialCover = new Float64Array(C), randomCover = new Float64Array(C);
+const coldHigh = new Float64Array(C), updraught = new Float64Array(C), icePath = new Float64Array(C), liquidPath = new Float64Array(C), exponentialCover = new Float64Array(C), randomCover = new Float64Array(C);
 const exponential = (RADIATION.cloudOverlap ?? 'exponentialRandom') === 'exponentialRandom';
 const humidity = { upper: [new Float64Array(C), new Float64Array(C), new Float64Array(C)], middle: [new Float64Array(C), new Float64Array(C)], lower: [new Float64Array(C), new Float64Array(C)] };
 const issr = new Float64Array(C), upperArea = new Float64Array(C), humidUpper = new Float64Array(C), humidUpperDry = new Float64Array(C), humidLower = new Float64Array(C), humidLowerDry = new Float64Array(C);
@@ -118,6 +119,7 @@ for (let i = 0; i < C; i++) {
     const idx = k * C + i, m = mass(k, i), T = temperature[idx], p = pressure(k, i);
     cloudOptics(T, landMask[i] && !(geography.iceSheet && geography.iceSheet[i]), optics, layerOptics);
     const resolved = Math.max(0, qc[idx]) * m, cumulus = cuCover[idx] * cuWater[idx] * m, c = runClass[idx];
+    liquidPath[i] += layerOptics.liquid * resolved; icePath[i] += (1 - layerOptics.liquid) * resolved;
     const seen = resolved + cumulus > 0 ? layerCover[k] * -Math.expm1(-(resolved + cumulus) / VISIBLE) : 0;
     alpha = k > 0 ? Math.exp(-(core.diagnostics.geopotential[(k - 1) * C + i] - core.diagnostics.geopotential[idx]) / g / decorrelation) : 0;
     close(together, seen, k === K - 1);
@@ -184,5 +186,5 @@ for (const [name, test, earth] of REGIMES) {
     console.log(`  ${CLASSES[n].padEnd(8)} cover ${f(cv, 3)}  grid ${f(grid, 1).padStart(6)} g/m2  in-cloud ${f(cv > 0 ? grid / cv : NaN, 0).padStart(5)} g/m2  tau ${f(cv > 0 ? mean((i) => visible[n][i], inside) / cv : NaN, 1).padStart(5)}  shares <3.6 / 3.6-23 / >23 ${bins.map((b) => f(b / weight)).join(' / ')}`);
   }
   console.log(`  humidity: RH 150-350 hPa ${f(ratio((i) => humidity.upper[0][i], (i) => humidity.upper[2][i], inside))} (over ice ${f(ratio((i) => humidity.upper[1][i], (i) => humidity.upper[2][i], inside))}, layer area above ice saturation ${f(ratio((i) => issr[i], (i) => upperArea[i], inside))}, of it without cloud ${f(ratio((i) => humidUpperDry[i], (i) => humidUpper[i], inside))}); RH 350-700 hPa ${f(ratio((i) => humidity.middle[0][i], (i) => humidity.middle[1][i], inside))}; below 700 hPa ${f(ratio((i) => humidity.lower[0][i], (i) => humidity.lower[1][i], inside))} (layers above 0.9 without cloud ${f(ratio((i) => humidLowerDry[i], (i) => humidLower[i], inside))})`);
-  console.log(`  cumulus updraught ${f(mean((i) => updraught[i], inside), 3)}; high cloud colder than 235 K ${f(1000 * mean((i) => coldHigh[i], inside), 1)} g/m2`);
+  console.log(`  cumulus updraught ${f(mean((i) => updraught[i], inside), 3)}; resolved liquid ${f(1000 * mean((i) => liquidPath[i], inside), 1)} and ice ${f(1000 * mean((i) => icePath[i], inside), 1)} g/m2 by the phase ramp; high cloud colder than 235 K ${f(1000 * mean((i) => coldHigh[i], inside), 1)} g/m2`);
 }
