@@ -2876,6 +2876,51 @@ The work, in order:
    those of the same column without its cloud exactly, and over 48 steps
    at N=6 the engines' per-cell clear-sky sums agree to rms 1.1·10⁻⁵ and
    their read-outs to 0.002 W/m² (`test/cloudEffect.test.mjs`).
+
+   Clear-sky scattering. With the pass on, the three-day N=64 run from
+   eight64_day0183 gave a day-186 clear-sky albedo of 0.094 (CERES EBAF
+   about 0.155, 53 W/m² reflected): the clear column reflected only at the
+   surface. The clear two-stream now has Rayleigh and aerosol scattering in
+   the visible half of the beam (`rayleighDepth`, `landAerosol`,
+   `seaAerosol`; the header of `js/physics/radiation.module.js`), the clear-sky
+   pass with it, and `skylight`, the diffuse fraction that stood in for
+   that scattering, is 0. The budget of the day-186 sun on the day-183
+   state, 48 instants, W/m² of 340.5 incoming (`scripts/clearSkyBudget.mjs`):
+
+   | | before | after | Earth |
+   |---|---|---|---|
+   | atmosphere over a black surface | 0.0 | 23.7 (Rayleigh alone 21.9, aerosol alone 3.1) | Rayleigh 15–20, aerosol 3–5 |
+   | surface, seen from the top | 32.1 | 26.5 | about 30 |
+   | clear-sky reflected | 32.1 | 50.3 | 53 |
+   | ozone / vapour / aerosol absorbed | 10.2 / 46.5 / 0 | 10.2 / 46.5 / 1.1 | |
+   | absorbed at the surface | 251.6 | 232.4 | |
+   | clear-sky albedo, global / 30S–30N | 0.094 / 0.074 | 0.148 / 0.122 | 0.15 ± 0.01 |
+   | clear-sky albedo over open sea / land / sea ice / ice sheets | 0.047 / 0.174 / 0.640 / 0.709 | 0.105 / 0.219 / 0.651 / 0.723 | |
+
+   The surface albedos, insolation-weighted (open sea 0.059, land 0.208,
+   sea ice 0.622, ice sheets 0.800), are unchanged. Three-day N=64 GPU
+   runs, day 186: `rayleighDepth` 0.16, 0.18, 0.20 give 0.143, 0.147 and
+   0.152; aerosol depths 0.12 and 0.08 at 0.18 give 0.148. Defaults:
+   `rayleighDepth` 0.18, `visibleFraction` 0.5, `landAerosol` 0.11,
+   `seaAerosol` 0.06, `aerosolAlbedo` 0.95, `aerosolAsymmetry` 0.7,
+   `aerosolHeight` 2000 m, `skylight` 0. Day 186 before and after: albedo
+   0.279 and 0.312, ASR 245.6 and 234.3, OLR 242.3 and 242.1, SWCRE −62.9
+   and −56.0, LWCRE 17.8 and 17.6 W/m², rain 1.74 and 1.70 mm/d (the audit's
+   2.06 and 2.04), sunlight absorbed at the sea's surface 192.3 and
+   178.9 W/m². A fresh atlas start on bl34, days 6–10: albedo 0.438 and
+   0.459, ASR 191.1 and 184.2, OLR 220.2 and 220.5, SWCRE −115.4 and
+   −104.3, LWCRE 37.0 and 36.4 W/m², rain 4.56 and 4.53 mm/d, clear-sky
+   albedo 0.100 and 0.153, the sea's surface 116.8 and 108.8 W/m². With
+   `rayleighDepth` 0, both aerosol depths 0 and `skylight` 0.15 both
+   engines are the previous ones bit for bit. Over a black surface the
+   clear column reflects τ/(τ + 2μ) of the visible beam less ozone and
+   aerosol absorption to 1e-14 at three zenith angles, every column of a
+   real-geography state closes to 5e-15, and on a random set of sunlit
+   columns the engines differ by 1.1e-5 of the beam
+   (`test/clearScattering.test.mjs`). The daily line gives the clear-sky
+   reflectance and the sea's surface sunlight; the audit and the second
+   sweep's `clearAlbedo` term (target 0.15, tolerance 0.01, weight 3) read
+   the clear-sky albedo.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
