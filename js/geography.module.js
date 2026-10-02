@@ -325,7 +325,7 @@ export function subgridFallbackNote(mesh) {
   const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
   if (fallbackSaid.has(N)) return;
   fallbackSaid.add(N);
-  console.log(`subgrid orography: no data/subgrid_N${N}.bin for this mesh; computed from the 0.25° raster (σ about a third of the 5 km fields'), and no form drag`);
+  console.log(`subgrid orography: no data/subgrid_N${N}.bin for this mesh; computed from the 0.25° raster (σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);
 }
 
 /*

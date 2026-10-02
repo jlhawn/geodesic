@@ -174,6 +174,16 @@ test('the drag conserves momentum, hands it to the ground as a stress and return
   close(heat, energy, 1e-12, 'the energy it removes becomes dissipation heat');
 });
 
+test('the GMTED2010 fields take the IFS’s constants; a mesh without a file takes the 0.25° raster’s fields with Lott and Miller’s', () => {
+  const bundled = createModel(new Grid(16), { topography }).orography, fallback = createModel(new Grid(8), { topography }).orography;
+  for (const key of Object.keys(OROGRAPHY_DEFAULTS)) {
+    assert.equal(bundled.options[key], OROGRAPHY_DEFAULTS[key], `N=16 ${key}`);
+    assert.equal(fallback.options[key], LOTT_MILLER[key], `N=8 ${key}`);
+  }
+  assert.ok(bundled.fields.filtered && !bundled.fields.raster && fallback.fields.raster && !fallback.fields.filtered);
+  assert.equal(createModel(new Grid(8), { topography, orography: { waveDrag: 2 } }).orography.options.waveDrag, 2, 'options still override');
+});
+
 test('without the scheme the model has no orographic drag', () => {
   const model = createModel(new Grid(4), { topography, orography: false });
   assert.equal(model.orography, null);

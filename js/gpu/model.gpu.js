@@ -5,7 +5,7 @@ import { createSurface, SEA_DRAG, LAND_DRAG } from '../physics/surface.module.js
 import { createRadiation } from '../physics/radiation.module.js';
 import { createMoistPhysics } from '../physics/moist.module.js';
 import { LATENT_HEAT } from '../physics/moist.module.js';
-import { SIDEREAL_DAY, orographyFields } from '../model.module.js';
+import { SIDEREAL_DAY, orographyFields, dragConstants } from '../model.module.js';
 import { createGpuCore } from './core.gpu.js';
 import { createLayeredOcean } from './layeredOcean.gpu.js';
 import { createGeography, surfaceGeopotential } from '../geography.module.js';
@@ -55,7 +55,8 @@ export async function createGpuModel(gridOrMesh, {
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
   const mode = exchangeMode(surface, landOptions);
   const subgrid = geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, givenSubgrid, GRAVITY) : null;
-  const { formDrag: formDragOptions = {}, ...orography } = orographyOptions || {};
+  const { formDrag: formDragOptions = {}, ...dragOptions } = orographyOptions || {};
+  const orography = subgrid ? dragConstants(subgrid, dragOptions) : dragOptions;
   const formDrag = subgrid && subgrid.filtered && formDragOptions !== false ? formDragOptions : false;
   let spacing = 0;
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
