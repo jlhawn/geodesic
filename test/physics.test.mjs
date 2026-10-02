@@ -904,7 +904,7 @@ test('with deckRest \'regime\' (the default) a surface-driven or decoupled colum
 
 const GREY_ICE = { iceAlbedo: 0.5, meltingIceAlbedo: 0.5, snowAgeing: false };
 function modelDigest(radiation, moist = {}, ice = {}) {
-  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, capeClosure: 'threshold', plumeCape: 70, stratiformLifetime: null, condensation: 'saturation', iceSaturation: false, iceFall: null, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 }, radiation: { exchangeCoefficient: 1.5e-3, ...radiation }, ice });
+  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', plumeCape: 70, stratiformLifetime: null, condensation: 'saturation', iceSaturation: false, iceFall: null, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 }, radiation: { exchangeCoefficient: 1.5e-3, ...radiation }, ice });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   for (let n = 0; n < 12; n++) model.step(900);
   const hash = createHash('sha256');
@@ -943,9 +943,10 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   assert.equal(modelDigest({ ...GRAY_GASES, visibleFraction: 0.5, rayleighBands: [[0.712, 0.0874], [0.288, 0.5687]], nearInfraredRayleigh: 0 }, defaults).digest, '9790266388b2da8b1ca3f6d314c3304a', 'under the gray gases and the visible split and Rayleigh bands before the gas branch\'s, the cloud parent\'s digest');
   assert.notEqual(random, now);
   assert.notEqual(modelDigest({ cloudOverlap: 'maximumRandom' }).digest, random);
-  const bechtold = modelDigest({}, { ...defaults, capeClosure: MOIST_DEFAULTS.capeClosure }).digest;
-  console.log(`12 steps at N=4 under the Bechtold closure: ${bechtold}`);
+  const bechtold = modelDigest({}, { ...defaults, capeClosure: MOIST_DEFAULTS.capeClosure }).digest, surface = modelDigest({}, { ...defaults, capeClosure: MOIST_DEFAULTS.capeClosure, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth }).digest;
+  console.log(`12 steps at N=4 under the Bechtold closure: ${bechtold}; with the deep source from the lowest 50 hPa: ${surface}`);
   assert.equal(bechtold, 'c70751a794735951c25c5f48e2376b69');
+  assert.equal(surface, '6761a720962d0197bbd7af8653cdee3e');
 });
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {

@@ -59,7 +59,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { createMoistPhysics, MOIST_DEFAULTS, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
+import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -105,7 +105,7 @@ const NB = BOX_LIST.length;
 const twinOptions = (extra) => ({
   boundaryDepth: bl.depth, boundaryRegime: bl.regime, deckGate: radiation.mlmGate,
   boundaryTop: bl.turbulence === 'moist' ? bl.mixingTop : null, stratiform: radiation.stratiform,
-  surfaceBuoyancy: bl.buoyancyFlux, frictionVelocity: bl.friction, land: model.geography.land, buffers: { subcloudVirtual: moist.shared.subcloudVirtual },
+  surfaceBuoyancy: bl.buoyancyFlux, frictionVelocity: bl.friction, land: model.geography.land, surfaceSensible: radiation.sensibleHeat, surfaceEvaporation: radiation.evaporation, buffers: { subcloudVirtual: moist.shared.subcloudVirtual },
   ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in RADIATION).map((key) => [key, RADIATION[key]])),
   ...MOIST, ...extra,
 });
@@ -349,11 +349,20 @@ function ascend(i, s, entraining) {
   const { T, p, dp, z } = env, envS = env.s, envQ = env.q;
   const bottomK = K - 1, depthBL = bl.depth[i];
   let mass = 0, energy = 0, water = 0, source = bottomK;
+  const surface = O.plumeSourceDepth === 'surface50';
   for (let k = bottomK; k >= 0; k--) {
-    if (k < bottomK && ((!(upperInterface(i, k + 1) < depthBL) && !(p[k] >= pi[i] - O.cumulusSourceDepth)) || !(p[k] > O.shallowTop))) break;
+    if (k < bottomK && (((surface || !(upperInterface(i, k + 1) < depthBL)) && !(p[k] >= pi[i] - O.cumulusSourceDepth)) || !(p[k] > O.shallowTop))) break;
     mass += dp[k]; energy += dp[k] * envS[k]; water += dp[k] * envQ[k]; source = k;
   }
-  const sourceS = O.plumeSource === 'lowest' ? envS[bottomK] : energy / mass, sourceQ = O.plumeSource === 'lowest' ? envQ[bottomK] : water / mass;
+  let sourceS = O.plumeSource === 'lowest' ? envS[bottomK] : energy / mass, sourceQ = O.plumeSource === 'lowest' ? envQ[bottomK] : water / mass;
+  if (surface) {
+    const buoyancy = bl.buoyancyFlux[i], density = p[bottomK] / (R * T[bottomK]);
+    const velocity = Math.max(buoyancy > 0 ? Math.cbrt(buoyancy * Math.max(0, depthBL - z[bottomK])) : 0, bl.friction[i]);
+    if (velocity > 0) {
+      sourceS += cp * Math.min(SOURCE_EXCESS.temperature, SOURCE_EXCESS.coefficient * radiation.sensibleHeat[i] / (density * cp * velocity));
+      sourceQ += Math.min(SOURCE_EXCESS.humidity, SOURCE_EXCESS.coefficient * radiation.evaporation[i] / (density * velocity));
+    }
+  }
   const lcl = liftingCondensationLevel((sourceS - g * z[bottomK]) / cp, sourceQ, p[bottomK], kappa);
   if (!lcl || !(lcl.pressure > pi[i] * levels[1])) return { status: 'noLcl' };
   const virtual = O.virtualBuoyancy ? VIRTUAL_FACTOR : 0, loading = O.virtualBuoyancy ? 1 : 0;

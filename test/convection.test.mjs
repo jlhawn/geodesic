@@ -355,7 +355,7 @@ function plumeColumn(options = {}, profile = null, N = 2) {
 }
 
 test('the Jordan sounding lifts a deep plume that rains, heats most between 400 and 500 hPa above its cloud-base layer, cools the subcloud layer through its downdraft under the threshold closure, and keeps column enthalpy and water exact', () => {
-  const model = plumeColumn({ capeClosure: 'threshold' }), { moist } = model, [pi, theta, , , q, qc] = model.state;
+  const model = plumeColumn({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer' }), { moist } = model, [pi, theta, , , q, qc] = model.state;
   const { K, C, sigmaMid, geopotential, g } = model.core.diagnostics, dt = 600;
   moist.trace.convection = new Float64Array(K * C);
   const before = budget(model, 0);
@@ -394,7 +394,7 @@ test('a trade-wind column lifts exactly the shallow cumulus plume and rains noth
 
 test('a drier free troposphere entrains the plume to a lower top, and a dry enough one keeps it shallow', () => {
   const run = (factor) => {
-    const model = plumeColumn({ capeClosure: 'threshold', plumeCape: 70 }, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? factor : 1), saturationHumidity(air.T, p)) }; });
+    const model = plumeColumn({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', plumeCape: 70 }, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? factor : 1), saturationHumidity(air.T, p)) }; });
     model.moist.adjust(model.state, 0, 1, 600);
     return { top: model.moist.cumulusTop[0], deep: model.moist.deep.deep, cape: model.moist.deep.cape, rain: model.moist.rain[0] };
   };
@@ -406,7 +406,7 @@ test('a drier free troposphere entrains the plume to a lower top, and a dry enou
 });
 
 test('under the threshold closure the deep base flux relaxes the CAPE toward plumeCape over plumeRelaxation, and plumeClosure: maximum gives it at least the shallow closure', () => {
-  const flux = (options) => { const model = plumeColumn({ capeClosure: 'threshold', ...options }), [pi, theta, , , q, qc] = model.state; model.moist.plumeColumn(0, pi, theta, q, qc, 600); return { ...model.moist.deep }; };
+  const flux = (options) => { const model = plumeColumn({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', ...options }), [pi, theta, , , q, qc] = model.state; model.moist.plumeColumn(0, pi, theta, q, qc, 600); return { ...model.moist.deep }; };
   const hour = flux({}), twoHours = flux({ plumeRelaxation: 7200 }), lower = flux({ plumeCape: 0 });
   const cape0 = MOIST_DEFAULTS.plumeCape;
   assert.ok(Math.abs(hour.baseFlux - (hour.cape - cape0) / (3600 * hour.consumption)) < 1e-12 * hour.baseFlux, `base flux ${hour.baseFlux}`);
@@ -479,6 +479,35 @@ test('under the Bechtold closure a warming subcloud layer over the sea takes its
   assert.ok(calm.deep && calm.baseFlux > 0 && calm.pcapeBoundary === 0, 'the calm land column fires');
 });
 
+test('the deep plume leaves the lowest 50 hPa with the IFS surface-flux excess, the plain 50 hPa mean when the fluxes vanish, and the shallow plume keeps the mixed layer', () => {
+  const dt = 600, run = (fluxes, options = {}) => {
+    const model = plumeColumn(options), { moist } = model, [pi, theta, , , q, qc] = model.state;
+    if (fluxes) { model.radiation.sensibleHeat[0] = fluxes[0]; model.radiation.evaporation[0] = fluxes[1] / LATENT_HEAT; }
+    const before = budget(model, 0);
+    moist.adjust(model.state, 0, 1, dt);
+    const after = budget(model, 0), rain = moist.rain[0];
+    return { model, deep: { ...moist.deep }, state: snapshot(model, 0), enthalpy: (after.enthalpy - before.enthalpy) / before.enthalpy, water: (after.water + rain - before.water) / before.water };
+  };
+  const plain = run(null), still = run([0, 0]), forced = run([10, 130]), boundary = run([10, 130], { plumeSourceDepth: 'boundaryLayer' });
+  const { K, C, sigmaMid, dSigma, cp, g, R, geopotential, exnerLayer } = forced.model.core.diagnostics;
+  const model = plumeColumn(), [pi, theta, , , q, qc] = model.state;
+  let mass = 0, energy = 0, water = 0;
+  for (let k = K - 1; k >= 0 && (k === K - 1 || pi[0] * sigmaMid[k] >= pi[0] - MOIST_DEFAULTS.cumulusSourceDepth); k--) {
+    const idx = k * C, dp = pi[0] * dSigma[k], T = theta[idx] * exnerLayer[idx];
+    mass += dp; energy += dp * (cp * T + geopotential[idx] - LATENT_HEAT * qc[idx]); water += dp * (q[idx] + qc[idx]);
+  }
+  const b = (K - 1) * C, density = pi[0] * sigmaMid[K - 1] / (R * theta[b] * exnerLayer[b]);
+  const velocity = Math.max(Math.cbrt(4e-4 * (model.boundaryLayer.depth[0] - geopotential[b] / g)), 0.25), dT = Math.min(3, 1.5 * 10 / (density * cp * velocity)), dq = Math.min(2e-3, 1.5 * 130 / (density * LATENT_HEAT * velocity));
+  console.log(`Jordan, the lowest 50 hPa (${(mass / 100).toFixed(1)} hPa of layers) under 10 W/m² sensible and 130 latent with w* ${velocity.toFixed(3)} m/s: excess ${forced.deep.excessT.toFixed(4)} K and ${(1e3 * forced.deep.excessQ).toFixed(4)} g/kg (by hand ${dT.toFixed(4)}, ${(1e3 * dq).toFixed(4)}); CAPE ${plain.deep.cape.toFixed(1)} J/kg plain, ${forced.deep.cape.toFixed(1)} with the excess, ${boundary.deep.cape.toFixed(1)} from the boundary layer with it; enthalpy ${forced.enthalpy.toExponential(1)}, water ${forced.water.toExponential(1)}`);
+  assert.deepEqual(still.state, plain.state, 'with no surface fluxes the plume leaves with the plain 50 hPa mean');
+  assert.equal(still.deep.cape, plain.deep.cape);
+  assert.ok(Math.abs(plain.deep.sourceS - energy / mass) < 1e-12 * energy / mass && Math.abs(plain.deep.sourceQ - water / mass) < 1e-15 && plain.deep.sourceMass === mass, 'the source is the lowest 50 hPa');
+  assert.ok(Math.abs(forced.deep.excessT - dT) < 1e-12 * dT && Math.abs(forced.deep.excessQ - dq) < 1e-12 * dq, 'the excess of IFS eq. 6.19');
+  assert.ok(Math.abs(forced.deep.sourceS - (energy / mass + cp * dT)) < 1e-12 * energy / mass && Math.abs(forced.deep.sourceQ - (water / mass + dq)) < 1e-15, 'the source with its excess');
+  assert.ok(forced.deep.cape > plain.deep.cape, 'the excess raises the CAPE');
+  assert.ok(Math.abs(forced.enthalpy) < 1e-15 && Math.abs(forced.water) < 1e-15, 'enthalpy and water');
+});
+
 async function parity(options, { momentum = false } = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const model = build(options, 6), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
@@ -525,6 +554,8 @@ async function parity(options, { momentum = false } = {}) {
   for (const a of [model.boundaryLayer.depth, model.radiation.mlmGate, buoyancy, friction]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   model.boundaryLayer.buoyancyFlux.set(buoyancy);
   model.boundaryLayer.friction.set(friction);
+  const sensible = Float64Array.from({ length: C }, () => Math.fround(60 * layerRandom() - 10)), evaporation = Float64Array.from({ length: C }, () => Math.fround(6e-5 * layerRandom()));
+  model.radiation.sensibleHeat.set(sensible); model.radiation.evaporation.set(evaporation);
   const gpu = await createGpuCore(mesh, { levels, physics: options });
   const { device, buffers, kernels, layout } = gpu;
   gpu.upload(model.state);
@@ -536,6 +567,8 @@ async function parity(options, { momentum = false } = {}) {
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.BUOY, Float32Array.from(buoyancy));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.USTAR, Float32Array.from(friction));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SUBTV, Float32Array.from(saved));
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SH, Float32Array.from(sensible));
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.EVAP, Float32Array.from(evaporation));
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
   const group = device.createBindGroup({ layout: kernels.adjust.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
@@ -651,6 +684,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ condensation: 'saturation', iceSaturation: false, iceFall: null });
   await parity({ iceNucleation: true, iceFall: 3.29 });
   await parity({ capeClosure: 'threshold' });
+  await parity({ plumeSourceDepth: 'boundaryLayer' });
 });
 
 test('the stratiform lifetime matches between the engines on random columns of every regime, mixing top, EIS share and sea-ice cover, and keeps cloud the short lifetime would rain out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

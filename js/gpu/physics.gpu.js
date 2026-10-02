@@ -2,7 +2,7 @@ import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT } from '../physics
 import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE } from '../physics/radiation.module.js';
-import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
@@ -49,6 +49,7 @@ export function physicsConstants(o) {
   if (o.plumeCapeParcel !== 'plume' && o.plumeCapeParcel !== 'undilute') throw new Error(`plumeCapeParcel must be 'plume' or 'undilute', not ${o.plumeCapeParcel}`);
   if (o.plumeSource !== 'mean' && o.plumeSource !== 'lowest') throw new Error(`plumeSource must be 'mean' or 'lowest', not ${o.plumeSource}`);
   if (o.plumeConsumption !== 'all' && o.plumeConsumption !== 'buoyant') throw new Error(`plumeConsumption must be 'all' or 'buoyant', not ${o.plumeConsumption}`);
+  if (o.plumeSourceDepth !== 'surface50' && o.plumeSourceDepth !== 'boundaryLayer') throw new Error(`plumeSourceDepth must be 'surface50' or 'boundaryLayer', not ${o.plumeSourceDepth}`);
   if (o.capeClosure !== 'bechtold' && o.capeClosure !== 'threshold') throw new Error(`capeClosure must be 'bechtold' or 'threshold', not ${o.capeClosure}`);
   if (o.condensation !== 'uniform' && o.condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${o.condensation}`);
   const entrainment = { ...ENTRAINMENT_DEFAULTS, ...o.entrainment };
@@ -115,6 +116,7 @@ const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvers
 const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: bool = ${o.cumulusCloud !== false && o.cloudCover === 'pdf'};
 const PL_SEPARATE: bool = ${o.plumeClosure === 'separate'}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
 const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.plumeConsumption === 'buoyant'}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
+const PL_SURFACE50: bool = ${o.plumeSourceDepth === 'surface50'}; const EX_COEF: f32 = ${SOURCE_EXCESS.coefficient}; const EX_T: f32 = ${SOURCE_EXCESS.temperature}; const EX_Q: f32 = ${SOURCE_EXCESS.humidity};
 const PL_BECHTOLD: bool = ${o.capeClosure === 'bechtold'}; const BT_SCALE: f32 = ${BECHTOLD.resolution / BECHTOLD.reference}; const BT_SHORT: f32 = ${BECHTOLD.shortest}; const BT_LONG: f32 = ${BECHTOLD.longest}; const BT_WIND: f32 = ${BECHTOLD.boundaryWind}; const BT_TSTAR: f32 = ${BECHTOLD.temperatureScale}; const SUB_K: i32 = ${o.subcloudLayers ?? 0};
 const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const DARKENING: bool = ${darkening !== false}; const DARK_SURFACE: bool = ${darkening === 'surface'}; const ALB_WETSOIL: f32 = ${o.wetSoilAlbedo}; const DARK_FROM: f32 = ${wetting[0]}; const DARK_SPAN: f32 = ${wetting[1] - wetting[0]}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
@@ -1595,11 +1597,19 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
   let depthTop = PH[PH_DEPTH + i];
   var mass = 0.0; var energy = 0.0; var water = 0.0; var source = bottom;
   for (var k = bottom; k >= 0; k--) {
-    if (k < bottom && ((!(upperInterface(i, k + 1) < depthTop) && !(p[k] >= pi - CU_SOURCE)) || !(p[k] > SHALLOW_TOP))) { break; }
+    if (k < bottom && (((PL_SURFACE50 || !(upperInterface(i, k + 1) < depthTop)) && !(p[k] >= pi - CU_SOURCE)) || !(p[k] > SHALLOW_TOP))) { break; }
     mass += dp[k]; energy += dp[k] * envS[k]; water += dp[k] * envQ[k]; source = k;
   }
   var sourceS = energy / mass; var sourceQ = water / mass;
   if (PL_LOWEST) { sourceS = envS[bottom]; sourceQ = envQ[bottom]; }
+  if (PL_SURFACE50) {
+    let lift = PH[PH_BUOY + i] * max(0.0, depthTop - z[bottom]);
+    let velocity = max(select(0.0, pow(lift, 1.0 / 3.0), lift > 0.0), PH[PH_USTAR + i]);
+    if (velocity > 0.0) {
+      let density = p[bottom] / (RGAS * T[bottom]);
+      sourceS += CP * min(EX_T, EX_COEF * PH[PH_SH + i] / (density * CP * velocity)); sourceQ += min(EX_Q, EX_COEF * PH[PH_EVAP + i] / (density * velocity));
+    }
+  }
   if (!(sourceQ > 0.0)) { return cumulusColumn(i, pi, dt); }
   let lcl = condensationLevel((sourceS - GRAV * z[bottom]) / CP, sourceQ, p[bottom]);
   if (!(lcl.y > pi * LV[L_SL + 0])) { return cumulusColumn(i, pi, dt); }
