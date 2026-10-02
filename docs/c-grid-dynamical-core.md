@@ -2930,6 +2930,132 @@ The work, in order:
    reflectance and the sea's surface sunlight; the audit and the second
    sweep's `clearAlbedo` term (target 0.15, tolerance 0.01, weight 3) read
    the clear-sky albedo.
+
+   Acceptance by surface class (Oct 1). The global clear-sky albedo is an
+   outcome, reported without a verdict: the planet's mix of surfaces
+   emerges, so each class is checked against its own reference. Four
+   changes, each on both engines with parity tests.
+
+   - The Rayleigh band from the spectrum (`scripts/rayleighReference.mjs`):
+     the visible band as 0.297–0.711 µm of a 5778 K Planck spectrum (the
+     0.5 of the beam below 0.711 µm less ozone's 0.03 below 0.297 µm), 40
+     wavelengths, τ_R(λ) of Hansen & Travis (1974) at 1013.25 hPa (0.0973
+     at 0.55 µm, band mean 0.229), each through the model's τ/(τ + 2μ);
+     beside it scalar doubling-adding with the azimuth-averaged Rayleigh
+     phase function. The grey 0.18 departs from the reference by −11.8 % at
+     μ = 1 and +10.4 % at μ = 0.1 (minimax grey 0.182: 11.0 %); two
+     sub-bands, weights 0.712 / 0.288 at depths 0.0874 / 0.5687
+     (`rayleighBands`), follow it within 0.1 % over μ 0.1–1 and 0.8 % at
+     0.05. The grazing-sun excess that remains is the two-stream's own:
+     against doubling-adding it is +17.7 % at μ = 0.05, +9.6 % at 0.1,
+     +3.8 % at 0.2 and −0.9 % at 1.
+
+     | μ | 0.05 | 0.1 | 0.2 | 0.5 | 1 |
+     |---|---|---|---|---|---|
+     | spectral two-stream (the reference) | 0.573 | 0.429 | 0.297 | 0.162 | 0.094 |
+     | doubling-adding | 0.487 | 0.392 | 0.286 | 0.162 | 0.095 |
+     | grey 0.18 | 0.643 | 0.474 | 0.310 | 0.153 | 0.083 |
+     | two sub-bands | 0.577 | 0.430 | 0.297 | 0.162 | 0.094 |
+
+     Rayleigh-only reflection of a full atmosphere over a black surface,
+     global mean: 23.5 W/m² by the reference, 23.4 by doubling-adding,
+     22.3 under the grey 0.18, 23.6 under the two sub-bands; on
+     eight64_day0183 lit over day 186 (the terrain's lower pressures) 21.9
+     under the grey depth and 23.1 under the sub-bands.
+   - Aerosol from natural backgrounds, mid-visible: `seaAerosol` 0.07, the
+     remote ocean's 0.06–0.07 at 500 nm (Smirnov et al. 2009, the Maritime
+     Aerosol Network; tropical Pacific mean 0.07, mode 0.06, Smirnov et al.
+     2003); `landAerosol` 0.12, a remote continental background of about
+     0.05 (AERONET's clean and aged-background sites 0.04–0.1, Eck et al.
+     2009) plus the land-mean dust, 0.068 by CALIOP and 0.103 by MODIS
+     (Song et al. 2021; global dust 0.030 ± 0.005, Ridley et al. 2016),
+     spread over all land. Area-weighted they give about 0.085, against the
+     natural 0.09 of MAC-v1 (0.13 in all, 0.037 of it anthropogenic; Kinne
+     et al. 2013). Single-scattering albedo 0.95 and asymmetry 0.7 kept
+     (from memory: dust 0.93–0.97, sea salt near 0.99). Aerosol alone over
+     a black surface: 3.1 → 3.5 W/m².
+   - The surface's reflection absorbed on its way up (`upwardAbsorption`):
+     the vapour's share by the Lacis–Hansen absorptivity of the path down
+     plus 5/3 of the column's, the aerosol's 1 − exp(−(1 − ω) τ_a 5/3)
+     (`test/clearScattering.test.mjs`: to 1.5·10⁻¹⁴ and 1.6·10⁻¹⁵ against
+     the formulas, engines' change apart by 5.1·10⁻⁶ of the beam).
+   - Wet bare soil (`soilDarkening`, land): the bare soil's albedo falls
+     linearly with the bucket's fill from `bareAlbedo` 0.30 at a fill of
+     0.2, below which the cover settles under 0.2, to `wetSoilAlbedo` 0.15
+     at 0.5 (`darkeningWetness` [0.2, 0.5]); the engines agree to 4.4·10⁻⁸
+     (`test/landGpu.test.mjs`). The snow-free albedo by bucket fill and
+     vegetation cover v:
+
+     | fill | 0 | 0.2 | 0.3 | 0.4 | 0.5 | 1 |
+     |---|---|---|---|---|---|---|
+     | v = 0 | 0.300 | 0.300 | 0.250 | 0.200 | 0.150 | 0.150 |
+     | v = 0.5 | 0.215 | 0.215 | 0.190 | 0.165 | 0.140 | 0.140 |
+     | v = 1 | 0.130 | 0.130 | 0.130 | 0.130 | 0.130 | 0.130 |
+
+   The global clear-sky albedo of eight64_day0183 lit over day 186
+   (`scripts/clearSkyBudget.mjs`, 48 instants) moves 0.148 (the grey build)
+   → 0.152 (sub-bands) → 0.152 (aerosol) → 0.149 (upward absorption) →
+   0.145 (wet soil). Three N=64 GPU days from a copy of eight64_day0183
+   with the final defaults, day 186, before → after: albedo 0.312 → 0.310,
+   ASR 234.3 → 234.9, OLR 242.1 → 242.2, SWCRE −56.0 → −56.2, LWCRE 17.6 →
+   17.6 W/m², clear-sky albedo 0.147 → 0.145, rain 1.70 → 1.71 mm/d (the
+   audit's 2.04 → 2.05), the sea's surface sunlight 178.9 → 177.7 W/m²; the
+   60–90N ice lost from nine64_day0091 0.166·10³ km³/day (9.191 → 8.692;
+   0.174 before the scattering). The physics pass's added sub-band and
+   escape streams left the three days at 0.6–0.7 wall minutes, as before.
+   The day-186 state by class (`scripts/clearSkyBudget.mjs` and the audit's
+   `clear sky,` rows, `scripts/clearSkyClasses.mjs`):
+
+   | class | area | surface albedo | at the top | atmosphere's own | reference | verdict |
+   |---|---|---|---|---|---|---|
+   | open sea 0–30° | 0.372 | 0.044 | 0.095 | 0.066 | top 0.08–0.10 | matches |
+   | open sea 30–50° | 0.194 | 0.058 | 0.117 | 0.077 | top 0.10–0.13 | matches |
+   | open sea 50–70° | 0.098 | 0.090 | 0.159 | 0.097 | top 0.13–0.20 | matches |
+   | open sea 70–90° | 0.019 | 0.184 | 0.275 | 0.161 | | |
+   | partly vegetated (v 0.2–0.7) | 0.191 | 0.199 | 0.208 | 0.074 | 0.18–0.25 | matches |
+   | dense vegetation (v > 0.7) | 0.056 | 0.137 | 0.166 | 0.075 | 0.12–0.15 | matches |
+   | thin snow on land (< 10 kg/m²) | 0.009 | 0.186 | 0.241 | 0.119 | | |
+   | snow on open land (v < 0.5) | 0.001 | 0.542 | 0.499 | 0.147 | 0.60–0.85 | low by 0.058 |
+   | snow under forest (v ≥ 0.5) | 0.003 | 0.472 | 0.437 | 0.132 | 0.20–0.35 | high by 0.122 |
+   | thin sea ice (< 0.5 m) | 0.000 | 0.446 | 0.427 | 0.114 | 0.20–0.50 | matches |
+   | bare sea ice | 0.000 | 0.568 | 0.520 | 0.174 | 0.50–0.60 | matches |
+   | snow-covered sea ice (≥ 10 kg/m²) | 0.026 | 0.749 | 0.649 | 0.118 | 0.80–0.85 | low by 0.051 |
+   | ice sheets | 0.030 | 0.800 | 0.715 | 0.132 | 0.80–0.85 | matches |
+
+   | open sea by μ | 0–0.1 | 0.1–0.2 | 0.2–0.4 | 0.4–0.7 | 0.7–1 |
+   |---|---|---|---|---|---|
+   | mean μ; share of the sea's sunlight | 0.067; 0.008 | 0.156; 0.025 | 0.312; 0.103 | 0.566; 0.331 | 0.860; 0.532 |
+   | direct-beam albedo (Briegleb et al. 1986) | 0.343 | 0.246 | 0.136 | 0.059 | 0.027 |
+   | Taylor et al. (1996); Fresnel, flat water | 0.212; 0.660 | 0.160; 0.387 | 0.101; 0.158 | 0.057; 0.045 | 0.036; 0.022 |
+   | surface albedo, direct and diffuse | 0.262 | 0.206 | 0.124 | 0.058 | 0.029 |
+   | at the top | 0.373 | 0.290 | 0.194 | 0.115 | 0.074 |
+
+   Global and by type: clear-sky albedo 0.145 (open sea 0.108 at the top
+   over a surface of 0.053, land 0.201 over 0.187, sea ice 0.646 over
+   0.744, ice sheets 0.715 over 0.800); the atmosphere over a black surface
+   reflects 25.3 W/m², 0.074 of the incoming. The eight64 state has no bare
+   land: of its ice-free land 0.782 carries a cover of 0.2–0.7 and 0.218
+   more, after 186 days from the 0.5 every cell starts with. The year-six
+   state five64_day2190 (0.121 of its ice-free land under 0.2) lit over its
+   own day: bare dry soil (fill < 0.35, 0.029 of the globe) 0.275, low by
+   0.025 against 0.30–0.40; bare wet soil 0.191 (0.10–0.20, matches, a
+   trace of area); partly vegetated 0.193 and dense 0.138 (both match);
+   snow on open land 0.547 and under forest 0.546 (0.025 and 0.033 of the
+   globe); its global clear-sky albedo 0.156 (0.159 without the darkening).
+   Where a class misses, the surface model lacks it: one snow albedo 0.55
+   with no ageing and no masking by forest (snow on open land low by
+   0.05–0.06, under forest high by 0.12–0.20); snow on sea ice 0.75 with
+   no ageing (low by 0.051); one dry soil albedo 0.30, no sand or soil
+   colour, and a cover that blends bare soil into forest with no grass
+   (bare dry soil low by 0.025). References: the open sea at the top,
+   CERES EBAF clear-sky ocean (approximate); the surfaces, textbook ranges
+   (approximate; thin ice from memory); the sea's curves as named.
+   Defaults: `rayleighBands` [[0.712, 0.0874], [0.288, 0.5687]],
+   `rayleighDepth` null, `upwardAbsorption` true, `landAerosol` 0.12,
+   `seaAerosol` 0.07, `aerosolAlbedo` 0.95, `aerosolAsymmetry` 0.7,
+   `visibleFraction` 0.5, `aerosolHeight` 2000 m, `skylight` 0; land
+   `soilDarkening` true, `wetSoilAlbedo` 0.15, `darkeningWetness`
+   [0.2, 0.5], `bareAlbedo` 0.30, `vegetatedAlbedo` 0.13.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
