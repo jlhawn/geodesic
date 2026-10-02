@@ -94,7 +94,7 @@ const ALB_OLDSNOW: f32 = ${o.oldSnowAlbedo}; const MASKED: bool = ${!!o.snowMask
 const TREELINE: bool = ${!!o.treeline}; const SEASON_C: f32 = ${o.seasonThreshold}; const SEASON_K: f32 = ${MELTING_POINT + o.seasonThreshold}; const SEASON_SHORTEST: f32 = ${o.minimumSeason / 365}; const SEASON_MEM: f32 = ${o.seasonMemory}; const TREE_LO: f32 = ${o.treelineWarmth[0]}; const TREE_SPAN: f32 = ${o.treelineWarmth[1] - o.treelineWarmth[0]}; const TREE_GROW: f32 = ${o.treeGrowthTime}; const TREE_DECLINE: f32 = ${o.treeDeclineTime};
 const REF_RESIST: f32 = ${REFERENCE_RESISTANCE}; const GATED: bool = ${!!o.treeline && !!o.treeMoisture}; const MOIST_MEM: f32 = ${o.moistureMemory}; const ARID_LO: f32 = ${o.forestAridity[0]}; const ARID_SPAN: f32 = ${o.forestAridity[1] - o.forestAridity[0]};
 const GRASSY: bool = ${!!o.grassland && !!o.vegetation}; const ALB_FORESTV: f32 = ${o.forestAlbedo}; const ALB_GRASS: f32 = ${o.grassAlbedo}; const GRASS_SNOW: f32 = ${o.grassSnowDarkening};
-const HUMIC: bool = ${!!o.soilCarbon && !!o.vegetation}; const ALB_MINERAL: f32 = ${o.mineralAlbedo}; const ALB_HUMUS: f32 = ${o.humusAlbedo}; const HUMUS_SCALE: f32 = ${100 / (o.topsoilMass * o.organicScale)}; const WET_DROP: f32 = ${1 - o.wetSoilAlbedo / o.bareAlbedo};
+const HUMIC: bool = ${!!o.soilCarbon && !!o.vegetation}; const ALB_MINERAL: f32 = ${o.mineralAlbedo}; const ALB_HUMUS: f32 = ${o.humusAlbedo}; const HUMUS_SCALE: f32 = ${100 / (o.topsoilMass * o.organicScale)};
 const LITTER_IN: f32 = ${o.litterInput}; const LITTER_TREE: f32 = ${o.treeLitter}; const LITTER_GRASS: f32 = ${o.grassLitter}; const DECAY_RATE: f32 = ${1 / o.soilTurnover}; const DECAY_WILT: f32 = ${o.decompositionWilting}; const DECAY_OPT: f32 = ${0.5 * (1 + o.decompositionWilting)}; const CARBON_ACC: f32 = ${o.carbonAcceleration};
 const LT_E: f32 = ${LLOYD_TAYLOR.activation}; const LT_REF: f32 = ${1 / LLOYD_TAYLOR.reference}; const LT_T0: f32 = ${LLOYD_TAYLOR.offset}; const MIAMI_A: f32 = ${MIAMI[0]}; const MIAMI_B: f32 = ${MIAMI[1]};
 `;
@@ -653,8 +653,8 @@ export const PHYSICS_KERNELS = {
   let onLand = PH[PH_LAND + i] > 0.5; let onIceSheet = PH[PH_LAND + i] > 1.5;
   let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i]; let veg0 = PH[PH_VEG + i]; let surf0 = PH[PH_SURF + i];
   let bucket = select(BUCKET, ROOTCAP, VEGETATED);
-  let dryAlbedo = select(ALB_BARE, ALB_HUMUS + (ALB_MINERAL - ALB_HUMUS) * exp(-HUMUS_SCALE * max(0.0, PH[PH_SOILC + i])), HUMIC);
-  let soilAlbedo = select(dryAlbedo, dryAlbedo * (1.0 - WET_DROP * clamp((select(soil0 / ROOTCAP, surf0 / SURFCAP, DARK_SURFACE) - DARK_FROM) / DARK_SPAN, 0.0, 1.0)), DARKENING);
+  let dryAlbedo = select(ALB_BARE, ALB_MINERAL - (ALB_MINERAL - ALB_HUMUS) * (1.0 - exp(-HUMUS_SCALE * max(0.0, PH[PH_SOILC + i]))), HUMIC);
+  let soilAlbedo = select(dryAlbedo, dryAlbedo - (dryAlbedo - ALB_WETSOIL * (dryAlbedo / ALB_BARE)) * clamp((select(soil0 / ROOTCAP, surf0 / SURFCAP, DARK_SURFACE) - DARK_FROM) / DARK_SPAN, 0.0, 1.0), DARKENING);
   let trees0 = PH[PH_CANOPY + i];
   let coverAlbedo = select(ALB_VEG, select(ALB_GRASS, ALB_GRASS + (ALB_FORESTV - ALB_GRASS) * min(1.0, trees0 / veg0), veg0 > 0.0), GRASSY);
   let bareAlbedo = select(ALB_LAND, soilAlbedo + (coverAlbedo - soilAlbedo) * veg0, VEGETATED);

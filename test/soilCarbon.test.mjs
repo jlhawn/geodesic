@@ -87,6 +87,29 @@ test('the acceleration moves the store toward the same equilibrium, a sine year\
   assert.ok(near(land.albedo(i), 0.5 * dryHumusAlbedo(2.6)), `the full surface layer halves the dry albedo: ${land.albedo(i)}`);
 });
 
+test('the albedo stays between the humus and mineral ends, never rises with the carbon, and with no carbon over a 0.30 mineral is the fixed soil\'s to the bit', () => {
+  let s = 5;
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  const { land, i, set } = cell();
+  for (let n = 0; n < 2000; n++) {
+    const fill = rnd(), cover = rnd() < 0.2 ? 0 : rnd(), trees = cover * rnd(), layer = 15 * rnd(), snow = rnd() < 0.3 ? 30 * rnd() : 0;
+    let last = Infinity;
+    for (const carbon of [0, 0.1, 0.5, 1, 2, 4, 8, 16, 40]) {
+      set(fill, cover, trees, carbon); land.surface[i] = layer; land.snow[i] = snow;
+      const dry = land.dryAlbedo(i), albedo = land.albedo(i);
+      assert.ok(dry <= 0.37 && dry >= 0.12 && albedo <= last + 1e-15, `carbon ${carbon}: dry ${dry}, albedo ${albedo} after ${last}`);
+      last = albedo;
+    }
+  }
+  const fixed = cell({ soilCarbon: false }), bare = cell({ mineralAlbedo: 0.30, litterInput: 0 });
+  for (let n = 0; n < 2000; n++) {
+    const fill = rnd(), cover = rnd() < 0.2 ? 0 : rnd(), trees = cover * rnd(), layer = 15 * rnd(), snow = rnd() < 0.3 ? 30 * rnd() : 0;
+    for (const c of [fixed, bare]) { c.set(fill, cover, trees, 0); c.land.surface[c.i] = layer; c.land.snow[c.i] = snow; }
+    assert.equal(bare.land.albedo(bare.i), fixed.land.albedo(fixed.i));
+    if (cover === 0 && snow === 0) assert.equal(fixed.land.albedo(fixed.i), 0.30 - (0.30 - 0.15) * Math.min(1, layer / 15));
+  }
+});
+
 test('a fresh start and an older state start at the equilibrium of their own cover and the estimated year, a saved state keeps its carbon, the ice sheets hold none, and regridding carries it', async () => {
   const topography = syntheticTopography(180, 360, (lat, lon) => (lat < -1.2 ? 2000 : Math.cos(lon) > 0 ? 100 : -4000));
   const geography = createGeography(mesh, topography, { landBridges: {}, seaStraits: {} });

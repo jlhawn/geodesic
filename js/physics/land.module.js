@@ -210,7 +210,7 @@ export function decompositionMoisture(fill, frozen = false, wilting = SOIL_CARBO
 }
 
 export function dryHumusAlbedo(carbon, { mineralAlbedo = SOIL_CARBON.mineralAlbedo, humusAlbedo = SOIL_CARBON.humusAlbedo, organicScale = SOIL_CARBON.organicScale, topsoilMass = SOIL_CARBON.topsoilMass } = {}) {
-  return humusAlbedo + (mineralAlbedo - humusAlbedo) * Math.exp(-100 * Math.max(0, carbon) / (topsoilMass * organicScale));
+  return mineralAlbedo + (mineralAlbedo - humusAlbedo) * Math.expm1(-100 * Math.max(0, carbon) / (topsoilMass * organicScale));
 }
 
 /*
@@ -264,7 +264,10 @@ export function createLandSurface(mesh, geography, {
   if (!(darkeningTo > darkeningFrom && darkeningFrom >= 0)) throw new Error(`darkeningWetness must rise from its first to its second fill, not ${darkeningWetness}`);
   const wetFill = (i) => (darkening === 'surface' ? surface[i] / surfaceCapacity : soil[i] / capacity(i));
   const dryAlbedo = (i) => (humic ? dryHumusAlbedo(soilCarbon[i], humus) : bareAlbedo);
-  const soilAlbedo = (i) => (darkening ? dryAlbedo(i) * (1 - (1 - wetSoilAlbedo / bareAlbedo) * Math.min(1, Math.max(0, (wetFill(i) - darkeningFrom) / (darkeningTo - darkeningFrom)))) : dryAlbedo(i));
+  const soilAlbedo = (i) => {
+    const dry = dryAlbedo(i);
+    return darkening ? dry - (dry - wetSoilAlbedo * (dry / bareAlbedo)) * Math.min(1, Math.max(0, (wetFill(i) - darkeningFrom) / (darkeningTo - darkeningFrom))) : dry;
+  };
   const [treelessWarmth, treedWarmth] = treelineWarmth;
   if (!(treedWarmth > treelessWarmth)) throw new Error(`treelineWarmth must rise from its first to its second temperature, not ${treelineWarmth}`);
   const seasonKelvin = MELTING_POINT + seasonThreshold;
