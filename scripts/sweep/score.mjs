@@ -27,14 +27,17 @@ export const TERMS = [
 ];
 
 export const TERMS2 = [
-  { key: 'fBalance', label: 'fresh start: ASR - OLR, days 6-10 (W/m2)', target: 0, tolerance: 3, weight: 4 },
-  { key: 'fAlbedo', label: 'fresh start: albedo, days 6-10', target: 0.30, tolerance: 0.015, weight: 3 },
-  { key: 'fOlr', label: 'fresh start: OLR, days 6-10 (W/m2)', target: 240, tolerance: 4, weight: 1 },
-  { key: 'fSwcre', label: 'fresh start: shortwave cloud effect, days 6-10 (W/m2)', target: -47, tolerance: 4, weight: 2 },
-  { key: 'fLwcre', label: 'fresh start: longwave cloud effect, days 6-10 (W/m2)', target: 27, tolerance: 3, weight: 2 },
-  { key: 'fRain', label: 'fresh start: global rain, days 6-10 (mm/d)', target: 2.7, tolerance: 0.2, weight: 1 },
-  { key: 'balance', label: 'eight64: ASR - OLR, day 186 (W/m2)', target: 0, tolerance: 3, weight: 2 },
-  { key: 'clearAlbedo', label: 'eight64: clear-sky albedo, day 186', target: 0.15, tolerance: 0.01, weight: 3 },
+  { key: 'fBalance', label: 'fresh start: ASR - OLR, days 6-10 (W/m2)', target: 0, tolerance: 3, weight: 0.4 },
+  { key: 'fAlbedo', label: 'fresh start: albedo, days 6-10', target: 0.30, tolerance: 0.015, weight: 0.3 },
+  { key: 'fOlr', label: 'fresh start: OLR, days 6-10 (W/m2)', target: 240, tolerance: 4, weight: 0.1 },
+  { key: 'fSwcre', label: 'fresh start: shortwave cloud effect, days 6-10 (W/m2)', target: -47, tolerance: 4, weight: 0.2 },
+  { key: 'fLwcre', label: 'fresh start: longwave cloud effect, days 6-10 (W/m2)', target: 27, tolerance: 3, weight: 0.2 },
+  { key: 'fRain', label: 'fresh start: global rain, days 6-10 (mm/d)', target: 2.7, tolerance: 0.2, weight: 0.1 },
+  { key: 'balance', label: 'eight64: ASR - OLR, day mean (W/m2)', target: 0, tolerance: 3, weight: 2 },
+  { key: 'albedo', label: 'eight64: albedo, day mean', target: 0.30, tolerance: 0.015, weight: 1 },
+  { key: 'olr', label: 'eight64: OLR, day mean (W/m2)', target: 240, tolerance: 4, weight: 1 },
+  { key: 'swcre', label: 'eight64: shortwave cloud effect, day mean (W/m2)', target: -47, tolerance: 4, weight: 2 },
+  { key: 'lwcre', label: 'eight64: longwave cloud effect, day mean (W/m2)', target: 27, tolerance: 3, weight: 2 },
   { key: 'sepLow', label: 'SE Pacific low cloud, radiative', target: 0.6, tolerance: 0.1, weight: 1 },
   { key: 'peruLow', label: 'Peru low cloud, radiative', target: 0.6, tolerance: 0.1, weight: 1 },
   { key: 'sepDeckWater', label: "SE Pacific deck's own water path where it runs (g/m2)", target: 100, tolerance: 50, weight: 1 },
@@ -70,7 +73,7 @@ export function clearAlbedo(asr, albedo, swcre) {
 
 export function readLog(file) {
   const days = [];
-  let stress = null, nan = false;
+  let stress = null, nan = false, scattering = false;
   for (const line of readFileSync(file, 'utf8').split('\n')) {
     const d = line.match(/^day (\d+) .*ASR ([-\d.]+) \(atmosphere [-\d.]+\) OLR ([-\d.]+) W.*precip ([-\d.]+) mm\/d.*albedo ([-\d.]+),.*clamped (\d+)/);
     if (d) {
@@ -78,7 +81,7 @@ export function readLog(file) {
       const c = line.match(/SWCRE ([-\d.]+) LWCRE ([-\d.]+)/);
       if (c) Object.assign(row, { swcre: +c[1], lwcre: +c[2], clearAlbedo: clearAlbedo(row.asr, row.albedo, +c[1]) });
       const r = line.match(/clear-sky reflectance ([-\d.]+)/);
-      if (r) row.clearAlbedo = +r[1];
+      if (r) { row.clearAlbedo = +r[1]; scattering = true; }
       Object.assign(row, { meanAlbedo: row.albedo, meanAsr: row.asr, meanOlr: row.olr, meanPrecip: row.precip });
       days.push(row);
     }
@@ -86,7 +89,7 @@ export function readLog(file) {
     if (s) stress = +s[1];
     if (/NaN on day/.test(line)) nan = true;
   }
-  return { days, stress, nan };
+  return { days, stress, nan, scattering };
 }
 
 const AUDIT = {
