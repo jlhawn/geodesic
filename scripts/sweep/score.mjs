@@ -48,7 +48,7 @@ export const TERMS2 = [
   { key: 'itczRain', label: 'Pacific ITCZ rain (mm/d)', target: 7.5, tolerance: 1.5, weight: 1 },
   { key: 'itczPeak', label: 'Pacific ITCZ heating peak (hPa)', target: 450, tolerance: 50, weight: 0.5 },
   { key: 'stress', label: 'equatorial stress 2S-2N 160E-100W (N/m2)', target: -0.05, tolerance: 0.015, weight: 0.5 },
-  { key: 'arctic', label: '60-90N ice loss (1e3 km3/day)', target: 0.15, tolerance: 0.03, weight: 2 },
+  { key: 'arctic', label: '60-90N ice loss from nine64_day0091 (1e3 km3/day; PIOMAS 1.2-1.6 %/day of its 9.19)', target: 0.129, tolerance: 0.018, weight: 2 },
 ];
 
 export function score(values, terms = TERMS) {
