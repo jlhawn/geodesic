@@ -31,6 +31,7 @@ import { exchangeConstants, EXCHANGE_WGSL } from './exchange.gpu.js';
  */
 export function physicsConstants(o) {
   if (o.plumeEntrainmentLaw !== 'ifs' && o.plumeEntrainmentLaw !== 'gregory') throw new Error(`plumeEntrainmentLaw must be 'ifs' or 'gregory', not ${o.plumeEntrainmentLaw}`);
+  if (o.plumePhase !== 'mixed' && o.plumePhase !== 'liquid') throw new Error(`plumePhase must be 'mixed' or 'liquid', not ${o.plumePhase}`);
   if (o.convectionType !== 'testParcel' && o.convectionType !== 'cloudDepth' && o.convectionType !== 'top') throw new Error(`convectionType must be 'testParcel', 'cloudDepth' or 'top', not ${o.convectionType}`);
   if (o.stratusIndex !== 'eis' && o.stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${o.stratusIndex}`);
   const m = { ...MIXED_LAYER_DEFAULTS, cloudLevels: DECK_CLOUD_LEVELS, ...o.mixedLayer };
@@ -118,7 +119,7 @@ const DECK_OPEN: f32 = ${DECK_OPEN}; const DECK_CLOSED: f32 = ${DECK_CLOSED}; co
 const CU_FLOOR: f32 = ${CUMULUS_FLOOR}; const CU_K0: i32 = ${o.cumulusK0 ?? 0}; const CU_C: f32 = ${o.cumulusClosure}; const CU_EPS: f32 = ${o.cumulusEntrainment}; const CU_DEL: f32 = ${o.cumulusDetrainment}; const CU_SOURCE: f32 = ${o.cumulusSourceDepth}; const CU_LOSS: f32 = ${o.cumulusBoundaryLoss};
 const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvershoot}; const CU_WU: f32 = ${o.cumulusUpdraft}; const CU_RAIN: bool = ${o.cumulusRain != null}; const CU_RAIN_Q: f32 = ${o.cumulusRain ?? 0}; const CU_LOWEST: bool = ${o.cumulusSource === 'lowest'};
 const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: bool = ${o.cumulusCloud !== false && o.cloudCover === 'pdf'};
-const PL_SEPARATE: bool = ${o.plumeClosure === 'separate' && o.convectionType === 'top'}; const PL_BY_DEPTH: bool = ${o.convectionType === 'cloudDepth'}; const PL_PARCEL: bool = ${o.convectionType === 'testParcel'}; const TP_EPS: f32 = ${TEST_PARCEL.entrainment}; const TP_REMOVE: f32 = ${TEST_PARCEL.removal}; const PL_IFS: bool = ${o.plumeEntrainmentLaw === 'ifs'}; const IFS_EPS: f32 = ${IFS_ENTRAINMENT.entrainment}; const IFS_RH: f32 = ${IFS_ENTRAINMENT.humidity}; const IFS_DEL: f32 = ${IFS_ENTRAINMENT.detrainment}; const IFS_DRH: f32 = ${IFS_ENTRAINMENT.detrainmentHumidity}; const IFS_DRAG: f32 = ${IFS_ENTRAINMENT.drag}; const DEEP_DEPTH: f32 = ${DEEP_CLOUD_DEPTH}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
+const PL_SEPARATE: bool = ${o.plumeClosure === 'separate' && o.convectionType === 'top'}; const PL_BY_DEPTH: bool = ${o.convectionType === 'cloudDepth'}; const PL_PARCEL: bool = ${o.convectionType === 'testParcel'}; const PL_MIXED: bool = ${o.plumePhase === 'mixed'}; const TP_EPS: f32 = ${TEST_PARCEL.entrainment}; const TP_REMOVE: f32 = ${TEST_PARCEL.removal}; const PL_IFS: bool = ${o.plumeEntrainmentLaw === 'ifs'}; const IFS_EPS: f32 = ${IFS_ENTRAINMENT.entrainment}; const IFS_RH: f32 = ${IFS_ENTRAINMENT.humidity}; const IFS_DEL: f32 = ${IFS_ENTRAINMENT.detrainment}; const IFS_DRH: f32 = ${IFS_ENTRAINMENT.detrainmentHumidity}; const IFS_DRAG: f32 = ${IFS_ENTRAINMENT.drag}; const DEEP_DEPTH: f32 = ${DEEP_CLOUD_DEPTH}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
 const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.plumeConsumption === 'buoyant'}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
 const PL_SURFACE50: bool = ${o.plumeSourceDepth === 'surface50'}; const EX_COEF: f32 = ${SOURCE_EXCESS.coefficient}; const EX_T: f32 = ${SOURCE_EXCESS.temperature}; const EX_Q: f32 = ${SOURCE_EXCESS.humidity};
 const EX_LAYER: bool = ${o.excessVelocity === 'surfaceLayer'}; const EX_SCALE: f32 = ${SOURCE_EXCESS.scale}; const EX_STAB: f32 = ${SOURCE_EXCESS.layer}; const EX_KARMAN: f32 = ${SOURCE_EXCESS.karman}; const EX_USTAR: f32 = ${SOURCE_EXCESS.friction}; const EX_VIRT: f32 = ${SOURCE_EXCESS.virtual};
@@ -1495,14 +1496,37 @@ fn clearCumulus(i: i32) {
   PH[PH_CUMF + i] = 0.0; PH[PH_CUTOP + i] = 0.0;
 }
 fn plumeState(energy: f32, water: f32, height: f32, pressure: f32, guess: f32) -> vec2<f32> {
+  if (PL_MIXED) { return frozenState(energy, water, height, pressure, guess).xy; }
   let dry = (energy - GRAV * height) / CP;
   if (!(water > qsat(dry, pressure))) { return vec2<f32>(dry, 0.0); }
   let t = saturatedTemperature(energy - GRAV * height + LHEAT * water, pressure, max(dry, guess));
   return vec2<f32>(t, max(0.0, water - qsat(t, pressure)));
 }
+fn mixedSat(T: f32, p: f32) -> vec3<f32> {
+  let alpha = clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+  var es = esat(T);
+  if (alpha < 1.0) { es = alpha * es + (1.0 - alpha) * 611.21 * exp(22.587 * (T - 273.16) / (T + 0.7)); }
+  let dry = p - (1.0 - EPSILON) * es;
+  let qs = select(1.0, EPSILON * es / dry, dry > 0.0);
+  return vec3<f32>(qs, qs * (LHEAT + (1.0 - alpha) * LFUSION) / (RVAP * T * T), alpha);
+}
+// moist.module.js's frozenPlumeState: temperature, condensate and its ice
+fn frozenState(energy: f32, water: f32, height: f32, pressure: f32, guess: f32) -> vec3<f32> {
+  let dry = (energy - GRAV * height) / CP;
+  if (!(water > mixedSat(dry, pressure).x)) { return vec3<f32>(dry, 0.0, 0.0); }
+  let goal = energy - GRAV * height + LHEAT * water; let span = 1.0 / (LIQUID_T - ICE_T);
+  var t = max(dry, guess);
+  for (var n = 0; n < 4; n++) {
+    let m = mixedSat(t, pressure); let held = water - m.x; let frozen = 1.0 - m.z;
+    t -= (CP * t + LHEAT * m.x - LFUSION * frozen * held - goal) / (CP + (LHEAT + LFUSION * frozen) * m.y + select(0.0, LFUSION * span * held, m.z > 0.0 && m.z < 1.0));
+  }
+  let m = mixedSat(t, pressure); let l = max(0.0, water - m.x);
+  return vec3<f32>(t, l, (1.0 - m.z) * l);
+}
 // the shallow cumulus mass flux of moist.module.js's cumulusColumn; returns its rain
 fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   clearCumulus(i);
+  cuSnow = 0.0;
   let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0);
   let buoyancy = PH[PH_BUOY + i];
   if (!(open > 0.0) || !(buoyancy > 0.0)) { return 0.0; }
@@ -1524,7 +1548,7 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   if (!(sourceQ > 0.0)) { return 0.0; }
   let lcl = condensationLevel((sourceS - GRAV * z[bottom]) / CP, sourceQ, p[bottom]);
   if (!(lcl.y > SHALLOW_TOP)) { return 0.0; }
-  var plumeS: array<f32, K>; var plumeQ: array<f32, K>; var liquid: array<f32, K>; var growth: array<f32, K>; var fallout: array<f32, K>;
+  var plumeS: array<f32, K>; var plumeQ: array<f32, K>; var liquid: array<f32, K>; var growth: array<f32, K>; var fallout: array<f32, K>; var frozenOut: array<f32, K>;
   var s = sourceS; var w = sourceQ; var inhibition = 0.0; var cloudy = false; var top = -1; var guess = 0.0;
   plumeS[source] = s; plumeQ[source] = w;
   for (var k = source - 1; k >= 0; k--) {
@@ -1541,11 +1565,17 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
     if (!cloudy) { if (work < 0.0) { inhibition -= work; } } else if (!(work > 0.0)) { top = k; break; }
     let full = exp(-epsilon * (above - below));
     s = envS[k] + (s - envS[k]) * full; w = envQ[k] + (w - envQ[k]) * full;
-    fallout[k] = 0.0;
+    fallout[k] = 0.0; frozenOut[k] = 0.0;
     if (CU_RAIN) {
-      let at = plumeState(s, w, above, pi * LV[L_SU + k], guess);
-      let excess = at.y - CU_RAIN_Q;
-      if (excess > 0.0) { w -= excess; s += LHEAT * excess; fallout[k] = excess; }
+      if (PL_MIXED) {
+        let at = frozenState(s, w, above, pi * LV[L_SU + k], guess);
+        let excess = at.y - CU_RAIN_Q;
+        if (excess > 0.0) { w -= excess; s += LHEAT * excess; fallout[k] = excess; frozenOut[k] = excess * at.z / at.y; s += LFUSION * frozenOut[k]; }
+      } else {
+        let liquidAt = plumeState(s, w, above, pi * LV[L_SU + k], guess);
+        let liquidExcess = liquidAt.y - CU_RAIN_Q;
+        if (liquidExcess > 0.0) { w -= liquidExcess; s += LHEAT * liquidExcess; fallout[k] = liquidExcess; }
+      }
     }
     plumeS[k] = s; plumeQ[k] = w;
     growth[k] = exp((epsilon - select(0.0, CU_DEL, mixes)) * (above - below));
@@ -1586,6 +1616,7 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
     if (CU_RAIN && k > top && k < source && fallout[k] > 0.0) {
       let fallen = flux[k] * fallout[k] * dt;
       rain += fallen; dQ -= fallen * GRAV / dp[k]; dS += LHEAT * fallen * GRAV / dp[k];
+      if (PL_MIXED && frozenOut[k] > 0.0) { let frozen = flux[k] * frozenOut[k] * dt; cuSnow += frozen; dS += LFUSION * frozen * GRAV / dp[k]; }
     }
     IN[S_TH + idx] += dS / (CP * D[D_EXM + idx]); IN[S_Q + idx] += dQ;
   }
@@ -1603,15 +1634,17 @@ var<private> cuReserve: array<f32, K>;
 var<private> cuDeep: bool;
 var<private> cuBase: i32;
 var<private> cuShallowRain: f32;
+var<private> cuFrozen: array<f32, K>;
+var<private> cuSnow: f32;
 // the convective mass flux of moist.module.js's plumeColumn; returns the rain it leaves falling, per layer in cuFall
 fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
-  cuDeep = false; cuBase = K; cuShallowRain = 0.0;
+  cuDeep = false; cuBase = K; cuShallowRain = 0.0; cuSnow = 0.0;
   if (PL_MOMENTUM) {
     PH[PH_MOMS + i] = f32(K);
     for (var k = 0; k <= K; k++) { PH[PH_MOMU + k * C + i] = 0.0; PH[PH_MOMD + k * C + i] = 0.0; }
     for (var k = 0; k < K; k++) { PH[PH_MOMK + k * C + i] = 1.0; PH[PH_MOMKD + k * C + i] = 1.0; }
   }
-  for (var k = 0; k < K; k++) { cuFall[k] = 0.0; cuReserve[k] = 0.0; }
+  for (var k = 0; k < K; k++) { cuFall[k] = 0.0; cuReserve[k] = 0.0; cuFrozen[k] = 0.0; }
   let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0);
   if (!(open > 0.0)) { return cumulusColumn(i, pi, dt); }
   let bottom = K - 1;
@@ -1677,14 +1710,14 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
       if (tbase > 0.0 && tbase - pi * LV[L_SU + k] > DEEP_DEPTH) { typed = true; decided = true; break; }
       let full = exp(-epsilon * depth);
       ts = envS[k] + (ts - envS[k]) * full; tq = envQ[k] + (tq - envQ[k]) * full;
-      let at = plumeState(ts, tq, upper, pi * LV[L_SU + k], tguess);
-      tq -= TP_REMOVE * at.y; ts += LHEAT * TP_REMOVE * at.y;
+      if (PL_MIXED) { let at = frozenState(ts, tq, upper, pi * LV[L_SU + k], tguess); tq -= TP_REMOVE * at.y; ts += LHEAT * TP_REMOVE * at.y + LFUSION * TP_REMOVE * at.z; }
+      else { let liquidAt = plumeState(ts, tq, upper, pi * LV[L_SU + k], tguess); tq -= TP_REMOVE * liquidAt.y; ts += LHEAT * TP_REMOVE * liquidAt.y; }
     }
     if (!decided) { typed = tbase > 0.0 && tbase - pi * LV[L_SL + 0] > DEEP_DEPTH; }
     if (!typed) { return cumulusColumn(i, pi, dt); }
   }
   var plumeS: array<f32, K>; var plumeQ: array<f32, K>; var liquid: array<f32, K>; var fallout: array<f32, K>; var work: array<f32, K>; var entrained: array<f32, K>; var thick: array<f32, K>; var counted: array<f32, K>; var envV: array<f32, K>;
-  var speed: array<f32, K + 1>; var humid: array<f32, K>; var detrained: array<f32, K>; var buoyant: array<f32, K>;
+  var speed: array<f32, K + 1>; var humid: array<f32, K>; var detrained: array<f32, K>; var buoyant: array<f32, K>; var frozenOut: array<f32, K>; var melted: array<f32, K>;
   var s = sourceS; var w = sourceQ; var w2 = 0.0; var below = 0.0; var inhibition = 0.0; var cloudy = false; var started = false; var top = -1; var guess = 0.0; var cape = 0.0; var base = -1; var neutral = -1; var neutralB = 0.0; var aboveB = 0.0; var pcape = 0.0; var baseSat = 0.0;
   plumeS[source] = s; plumeQ[source] = w;
   for (var k = source - 1; k >= 0; k--) {
@@ -1732,11 +1765,20 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
     below = buoyancy;
     let full = exp(-epsilon * depth);
     s = envS[k] + (s - envS[k]) * full; w = envQ[k] + (w - envQ[k]) * full;
-    fallout[k] = 0.0;
+    fallout[k] = 0.0; frozenOut[k] = 0.0;
     if (mixes) {
-      let at = plumeState(s, w, upper, pi * LV[L_SU + k], guess);
-      let excess = at.y - PL_RAIN_Q;
-      if (excess > 0.0) { let fallen = excess * relaxedFraction(PL_RAIN_RATE * depth); w -= fallen; s += LHEAT * fallen; fallout[k] = fallen; }
+      if (PL_MIXED) {
+        let at = frozenState(s, w, upper, pi * LV[L_SU + k], guess);
+        let excess = at.y - PL_RAIN_Q;
+        if (excess > 0.0) {
+          let fallen = excess * relaxedFraction(PL_RAIN_RATE * depth); w -= fallen; s += LHEAT * fallen; fallout[k] = fallen;
+          if (at.z > 0.0) { frozenOut[k] = fallen * at.z / at.y; s += LFUSION * frozenOut[k]; }
+        }
+      } else {
+        let liquidAt = plumeState(s, w, upper, pi * LV[L_SU + k], guess);
+        let excess = liquidAt.y - PL_RAIN_Q;
+        if (excess > 0.0) { let fallen = excess * relaxedFraction(PL_RAIN_RATE * depth); w -= fallen; s += LHEAT * fallen; fallout[k] = fallen; }
+      }
     }
     plumeS[k] = s; plumeQ[k] = w;
   }
@@ -1768,6 +1810,15 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
   }
   var rainAbove = 0.0;
   for (var k = top + 1; k < source; k++) { rainAbove += flux[k] * fallout[k]; }
+  if (PL_MIXED) {
+    var flying = 0.0;
+    for (var k = top; k <= bottom; k++) {
+      melted[k] = 0.0;
+      if (flying > 0.0 && T[k] >= LIQUID_T) { melted[k] = flying; flying = 0.0; }
+      cuFrozen[k] = -melted[k];
+      if (k > top && k < source && frozenOut[k] > 0.0) { flying += flux[k] * frozenOut[k]; cuFrozen[k] += flux[k] * frozenOut[k]; }
+    }
+  }
   var dflux: array<f32, K + 1>; var dS: array<f32, K + 1>; var dQ: array<f32, K + 1>; var devap: array<f32, K>;
   var start = -1; var share = 0.0;
   if (DD_SHARE > 0.0 && rainAbove > 0.0) {
@@ -1803,7 +1854,8 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
     share = DD_SHARE;
     var produced = 0.0; var taken = 0.0;
     for (var k = 0; k < bottom; k++) {
-      if (k > top && k < source) { produced += flux[k] * fallout[k]; }
+      if (k > top && k < source) { produced += select(flux[k] * fallout[k], flux[k] * (fallout[k] - frozenOut[k]), PL_MIXED); }
+      if (PL_MIXED && k >= top) { produced += melted[k]; }
       taken += devap[k];
       if (taken > 0.0 && share * taken > produced) { share = produced / taken; }
     }
@@ -1827,7 +1879,8 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
     if (k > top && k < source) { made = flux[k] * fallout[k]; }
     let evaporated = share * devap[k];
     if (k < source && k > top && (!PL_BUOYANT_F || counted[k] > 0.0)) {
-      let tS = (fluxS[k + 1] - fluxS[k] + LHEAT * (made - evaporated)) * per; let tQ = (fluxQ[k + 1] - fluxQ[k] - made + evaporated) * per;
+      var tS = (fluxS[k + 1] - fluxS[k] + LHEAT * (made - evaporated)) * per;
+      if (PL_MIXED) { tS = (fluxS[k + 1] - fluxS[k] + LHEAT * (made - evaporated) + LFUSION * cuFrozen[k]) * per; } let tQ = (fluxQ[k + 1] - fluxQ[k] - made + evaporated) * per;
       let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
       let warming = tS / CP * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud) + PARCEL_VIRT * T[k] * tQ;
       consumption += RGAS * warming * dp[k] / p[k];
@@ -1877,7 +1930,8 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
     if (k > top && k < source) { made = flux[k] * fallout[k]; }
     let evaporated = share * devap[k];
     let idx = k * C + i;
-    IN[S_TH + idx] += baseFlux * dt * (fluxS[k + 1] - fluxS[k] + LHEAT * (made - evaporated)) * per / (CP * D[D_EXM + idx]);
+    if (PL_MIXED) { IN[S_TH + idx] += baseFlux * dt * (fluxS[k + 1] - fluxS[k] + LHEAT * (made - evaporated) + LFUSION * cuFrozen[k]) * per / (CP * D[D_EXM + idx]); cuFrozen[k] *= baseFlux * dt; }
+    else { IN[S_TH + idx] += baseFlux * dt * (fluxS[k + 1] - fluxS[k] + LHEAT * (made - evaporated)) * per / (CP * D[D_EXM + idx]); }
     IN[S_Q + idx] += baseFlux * dt * (fluxQ[k + 1] - fluxQ[k] - made + evaporated) * per;
     cuFall[k] = (made - evaporated) * baseFlux * dt;
     fallen += cuFall[k];
@@ -1896,6 +1950,7 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
     PH[PH_MOMS + i] = f32(source);
   }
   var shallowRain = 0.0;
+  cuSnow = 0.0;
   if (PL_SEPARATE) { shallowRain = cumulusColumn(i, pi, dt); }
   for (var k = max(top, CU_K0); k < source; k++) {
     if (!(liquid[k] > 0.0)) { continue; }
@@ -1956,7 +2011,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   let produced = plumeColumn(i, pi, dt);
   if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }
   // autoconversion, and the rain evaporating as it falls
-  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false;
+  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0;
   let floor = PH[PH_DEPTH + i];
   let iceConc = PH[PH_CONC + i]; let iced = select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
   for (var k = 0; k < K; k++) {
@@ -1978,6 +2033,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     }
     if (cuDeep) {
       convective = max(0.0, convective + cuFall[k]);
+      if (PL_MIXED) { frozen = min(convective, max(0.0, frozen + cuFrozen[k])); }
       let spare = convective - cuReserve[k];
       if (spare > 0.0 && k > cuBase && PL_EVAP > 0.0 && RAIN_EVAP > 0.0 && (EVAP_IN_CLOUD || !(IN[S_QC + idx] > CLEAR_AIR))) {
         let ex = D[D_EXM + idx];
@@ -1987,9 +2043,12 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
         let airborne = convective * relaxedFraction(PL_EVAP * max(0.0, 1.0 - IN[S_Q + idx] / qs) * RGAS * temperature * LV[L_DS + k] / (LV[L_SM + k] * GRAV));
         let evaporated = min(spare, min(airborne, RAIN_EVAP * max(0.0, (qs - IN[S_Q + idx]) / (1.0 + LHEAT * slope / CP)) * mass));
         if (evaporated > 0.0) {
+          var sublimated = 0.0;
+          if (frozen > 0.0) { sublimated = evaporated * frozen / convective; }
           convective -= evaporated;
           IN[S_Q + idx] += evaporated / mass;
-          IN[S_TH + idx] -= LHEAT * evaporated / (mass * CP * ex);
+          if (PL_MIXED) { frozen = max(0.0, frozen - sublimated); IN[S_TH + idx] -= (LHEAT * evaporated + LFUSION * sublimated) / (mass * CP * ex); }
+          else { IN[S_TH + idx] -= LHEAT * evaporated / (mass * CP * ex); }
         }
       }
     }
@@ -2032,6 +2091,8 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   rained += descending;
   if (moved) { saturateColumn(i, pi); }
   let convected = select(produced, convective + cuShallowRain, cuDeep);
+  var snowed = 0.0;
+  if (PL_MIXED) { snowed = select(cuSnow, min(frozen, convective) + cuSnow, cuDeep); }
   // filler
   for (var f = 0; f < 2; f++) {
     let off = select(S_Q, S_QC, f == 1);
@@ -2051,14 +2112,15 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   let airT = IN[S_TH + bottom * C + i] * D[D_EXM + bottom * C + i];
   if (PH[PH_LAND + i] < 0.5 && airT < MELTING && rained + convected > 0.0) {
     ${snowOnSea('rained + convected')}
-    IN[S_TH + bottom * C + i] += LFUS * (rained + convected) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
+    IN[S_TH + bottom * C + i] += LFUS * (rained + convected - snowed) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
   }
+  if (PL_MIXED && snowed > 0.0 && !(airT < MELTING)) { IN[S_TH + bottom * C + i] -= LFUS * snowed * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]); }
   if (PH[PH_LAND + i] > 0.5) {
     if (VEGETATED) { PH[PH_RAINMEAN + i] += ((rained + convected) * 86400.0 / dt - PH[PH_RAINMEAN + i]) * P[6]; }
     if (airT < MELTING) {
       PH[PH_SNOW + i] += rained + convected;
       PH[PH_SNOWALB + i] = refreshedSnow(PH[PH_SNOWALB + i], rained + convected);
-      IN[S_TH + bottom * C + i] += LFUS * (rained + convected) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
+      IN[S_TH + bottom * C + i] += LFUS * (rained + convected - snowed) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
     }
     else {
       let cap = select(BUCKET, ROOTCAP, VEGETATED);

@@ -59,7 +59,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
+import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, FUSION_HEAT, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -92,7 +92,7 @@ if (saved.boundaryRegime) bl.regime.set(saved.boundaryRegime);
 if (saved.boundaryBuoyancy) bl.buoyancyFlux.set(saved.boundaryBuoyancy);
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === moist.subcloudVirtual.length) moist.subcloudVirtual.set(saved.subcloudVirtual);
 
-const O = { ...MOIST_DEFAULTS, ...MOIST }, bechtold = O.capeClosure === 'bechtold';
+const O = { ...MOIST_DEFAULTS, ...MOIST }, bechtold = O.capeClosure === 'bechtold', mixedPlume = O.plumePhase === 'mixed';
 if (O.plumeClosure === 'maximum') throw new Error('the deep and shallow split needs plumeClosure separate or cape');
 const L = O.latentHeat;
 const lon = Float64Array.from(mesh.lonCell, (x) => x * deg);
@@ -116,8 +116,8 @@ for (const twin of [replica, deepOnly, adjusted]) twin.useSeaIce(seaIce.concentr
 const boundaryTop = bl.turbulence === 'moist' ? bl.mixingTop : null;
 const gustiness = RADIATION.gustiness ?? 3;
 
-const TERMS = ['dynamics', 'closure', 'dissipation', 'shortwave', 'longwave', 'sensible', 'boundaryLayer', 'condensationMixed', 'condensationUniform', 'deepRain', 'deepDowndraftEvaporation', 'deepTransport', 'shallow', 'recondensation', 'largeScaleEvaporation', 'convectiveEvaporation', 'afterFallPositive', 'afterFallNegative', 'snow', 'dryAdjustment'];
-const SHORT = ['dyn', 'clos', 'diss', 'SW', 'LW', 'sens', 'BL', 'condBL', 'condU', 'dRain', 'dDDev', 'dTrans', 'shal', 'recond', 'LSev', 'CVev', 'fall+', 'fall-', 'snow', 'dry'];
+const TERMS = ['dynamics', 'closure', 'dissipation', 'shortwave', 'longwave', 'sensible', 'boundaryLayer', 'condensationMixed', 'condensationUniform', 'deepRain', 'deepFreezing', 'deepMelting', 'deepDowndraftEvaporation', 'deepTransport', 'shallow', 'recondensation', 'largeScaleEvaporation', 'convectiveEvaporation', 'afterFallPositive', 'afterFallNegative', 'snow', 'dryAdjustment'];
+const SHORT = ['dyn', 'clos', 'diss', 'SW', 'LW', 'sens', 'BL', 'condBL', 'condU', 'dRain', 'dFrz', 'dMelt', 'dDDev', 'dTrans', 'shal', 'recond', 'LSev', 'CVev', 'fall+', 'fall-', 'snow', 'dry'];
 const DYNAMICS = new Set(['dynamics', 'closure']);
 const T_ = Object.fromEntries(TERMS.map((t, n) => [t, n]));
 const NT = TERMS.length;
@@ -237,11 +237,12 @@ function longCloudShare(twin, i, k, iced) {
   }
   return Math.max(share, iced);
 }
-const fall = { evaporated: new Float64Array(K), convective: new Float64Array(K), converted: new Float64Array(K), melted: new Float64Array(K), tags: { low: 0, high: 0, ice: 0 }, ground: 0, rain: 0, streamed: 0, convectiveLeft: 0 };
+const fall = { evaporated: new Float64Array(K), convective: new Float64Array(K), sublimated: new Float64Array(K), converted: new Float64Array(K), melted: new Float64Array(K), tags: { low: 0, high: 0, ice: 0 }, ground: 0, rain: 0, streamed: 0, convectiveLeft: 0 };
 const reserve = new Float64Array(K);
-function shadowFall(twin, i, s, stream, iced) {
+function shadowFall(twin, i, s, stream, iced, frozenStream = null) {
   const th = s.theta, qq = s.q, cc = s.qc;
-  fall.evaporated.fill(0); fall.convective.fill(0); fall.converted.fill(0); fall.melted.fill(0);
+  fall.evaporated.fill(0); fall.convective.fill(0); fall.converted.fill(0); fall.melted.fill(0); fall.sublimated.fill(0);
+  let frozen = 0;
   const tags = fall.tags; tags.low = 0; tags.high = 0; tags.ice = 0;
   let rain = 0, convective = 0, streamed = 0, descending = 0;
   const floor = O.autoconversionFloor === 'boundaryLayer' && bl.depth ? bl.depth[i] : null;
@@ -266,6 +267,7 @@ function shadowFall(twin, i, s, stream, iced) {
     }
     if (stream) {
       convective = Math.max(0, convective + stream[k]);
+      if (frozenStream) frozen = Math.min(convective, Math.max(0, frozen + frozenStream[k]));
       const spare = convective - reserve[k];
       if (spare > 0 && k > twin.deep.base && O.plumeRainEvaporation > 0 && O.rainEvaporation > 0 && (O.evaporationInCloud || !(cc[idx] > CLEAR_AIR))) {
         const exl = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;
@@ -275,11 +277,16 @@ function shadowFall(twin, i, s, stream, iced) {
         const airborne = -convective * Math.expm1(-O.plumeRainEvaporation * Math.max(0, 1 - qq[idx] / qs) * R * temperature * dSigma[k] / (sigmaMid[k] * g));
         const evaporated = Math.min(spare, airborne, O.rainEvaporation * Math.max(0, (qs - qq[idx]) / (1 + L * slope / cp)) * mass);
         if (evaporated > 0) {
+          const sublimated = frozen > 0 ? evaporated * frozen / convective : 0;
           convective -= evaporated;
           streamed += evaporated;
           fall.convective[k] += evaporated;
           qq[idx] += evaporated / mass;
-          th[idx] -= L * evaporated / (mass * cp * exl);
+          if (frozenStream) {
+            frozen = Math.max(0, frozen - sublimated);
+            fall.sublimated[k] += sublimated;
+            th[idx] -= (L * evaporated + FUSION_HEAT * sublimated) / (mass * cp * exl);
+          } else th[idx] -= L * evaporated / (mass * cp * exl);
         }
       }
     }
@@ -328,7 +335,7 @@ function shadowFall(twin, i, s, stream, iced) {
 // The deep plume's ascent as plumeColumn makes it, with where it stops being
 // buoyant, and the same plume without entrainment.
 const env = { T: new Float64Array(K), p: new Float64Array(K), dp: new Float64Array(K), z: new Float64Array(K), s: new Float64Array(K), q: new Float64Array(K) };
-const plumeAir = { T: 0, liquid: 0 };
+const plumeAir = { T: 0, liquid: 0, ice: 0 };
 function saturatedTemperature(energy, pressure, guess) {
   let t = guess;
   for (let n = 0; n < 4; n++) {
@@ -337,8 +344,23 @@ function saturatedTemperature(energy, pressure, guess) {
   }
   return t;
 }
+const plumeSaturated = { qs: 0, slope: 0, liquid: 1 };
 function plumeState(energy, water, height, pressure, guess) {
   const dry = (energy - g * height) / cp;
+  if (mixedPlume) {
+    const liquidT = RADIATION.liquidTemperature ?? O.liquidTemperature, iceT = RADIATION.iceTemperature ?? O.iceTemperature;
+    plumeAir.ice = 0;
+    if (!(water > cloudSaturation(dry, pressure, true, liquidT, iceT, plumeSaturated).qs)) { plumeAir.T = dry; plumeAir.liquid = 0; return; }
+    const target = energy - g * height + L * water, span = 1 / (liquidT - iceT);
+    let t = Math.max(dry, guess);
+    for (let n = 0; n < 4; n++) {
+      const { qs, slope, liquid } = cloudSaturation(t, pressure, true, liquidT, iceT, plumeSaturated), held = water - qs, frozen = 1 - liquid;
+      t -= (cp * t + L * qs - FUSION_HEAT * frozen * held - target) / (cp + (L + FUSION_HEAT * frozen) * slope + (liquid > 0 && liquid < 1 ? FUSION_HEAT * span * held : 0));
+    }
+    cloudSaturation(t, pressure, true, liquidT, iceT, plumeSaturated);
+    plumeAir.T = t; plumeAir.liquid = Math.max(0, water - plumeSaturated.qs); plumeAir.ice = (1 - plumeSaturated.liquid) * plumeAir.liquid;
+    return;
+  }
   if (!(water > saturationHumidity(dry, pressure))) { plumeAir.T = dry; plumeAir.liquid = 0; return; }
   const t = saturatedTemperature(energy - g * height + L * water, pressure, Math.max(dry, guess));
   plumeAir.T = t;
@@ -413,7 +435,7 @@ function ascend(i, s, entraining) {
     if (mixes) {
       plumeState(sp, wq, upper, pi[i] * levels[k], guess);
       const excess = plumeAir.liquid - O.plumeRainThreshold;
-      if (excess > 0) { const fallen = -excess * Math.expm1(-O.plumeRainRate * depth); wq -= fallen; sp += L * fallen; }
+      if (excess > 0) { const fallen = -excess * Math.expm1(-O.plumeRainRate * depth); wq -= fallen; sp += L * fallen; if (mixedPlume && plumeAir.ice > 0) { const frozen = fallen * plumeAir.ice / plumeAir.liquid; sp += FUSION_HEAT * frozen; } }
     }
   }
   if (top === 0) top = 1;
@@ -479,9 +501,13 @@ moist.adjust = (st, iFrom, iTo, step) => {
       for (let k = 0; k < K; k++) {
         const mass = pi[i] * dSigma[k] / g, made = k > deepOnly.deep.top && k < dilute.source ? deepOnly.cumulusFlux[k] * deepOnly.plumeRain[k] * baseFlux * step : 0;
         const evaporated = made - deepOnly.convectiveFall[k];
+        const freezing = mixedPlume && k > deepOnly.deep.top && k < dilute.source ? FUSION_HEAT * deepOnly.cumulusFlux[k] * deepOnly.plumeFrozen[k] * baseFlux * step : 0;
+        const melting = mixedPlume ? -FUSION_HEAT * deepOnly.convectiveMelted[k] * baseFlux * step : 0;
         add(n, 'deepRain', k, L * made / (cp * mass));
+        add(n, 'deepFreezing', k, freezing / (cp * mass));
+        add(n, 'deepMelting', k, melting / (cp * mass));
         add(n, 'deepDowndraftEvaporation', k, -L * evaporated / (cp * mass));
-        add(n, 'deepTransport', k, deepHeat[k] - L * (made - evaporated) / (cp * mass));
+        add(n, 'deepTransport', k, deepHeat[k] - (L * (made - evaporated) + freezing + melting) / (cp * mass));
       }
     }
     for (let k = 0; k < K; k++) {
@@ -497,15 +523,16 @@ moist.adjust = (st, iFrom, iTo, step) => {
     reserve.fill(0);
     if (deep) for (let k = K - 2; k >= 0; k--) reserve[k] = Math.max(0, reserve[k + 1] - replica.convectiveFall[k + 1]);
     copyColumn(i, sa, sc);
-    const shadowRained = shadowFall(replica, i, sc, stream ? Float64Array.from(stream) : null, iced);
-    const rained = replica.autoconvertColumn(i, pi, sa.theta, sa.q, sa.qc, step, stream, iced);
+    const frozenStream = deep && mixedPlume ? replica.convectiveFrozen : null;
+    const shadowRained = shadowFall(replica, i, sc, stream ? Float64Array.from(stream) : null, iced, frozenStream ? Float64Array.from(frozenStream) : null);
+    const rained = replica.autoconvertColumn(i, pi, sa.theta, sa.q, sa.qc, step, stream, iced, frozenStream);
     let differs = shadowRained !== rained;
     for (let k = 0; k < K && !differs; k++) { const idx = k * C + i; if (sc.theta[idx] !== sa.theta[idx] || sc.q[idx] !== sa.q[idx] || sc.qc[idx] !== sa.qc[idx]) differs = true; }
     if (differs) checks.shadowMismatch++;
     for (let k = 0; k < K; k++) {
       const idx = k * C + i, mass = pi[i] * dSigma[k] / g, now = sa.q[idx] + sa.qc[idx];
       add(n, 'largeScaleEvaporation', k, -L * fall.evaporated[k] / (cp * mass));
-      add(n, 'convectiveEvaporation', k, -L * fall.convective[k] / (cp * mass));
+      add(n, 'convectiveEvaporation', k, -(L * fall.convective[k] + FUSION_HEAT * fall.sublimated[k]) / (cp * mass));
       const evaporated = fall.evaporated[k] / mass, streamed = fall.convective[k] / mass, converted = -fall.converted[k] / mass;
       water(n, 'largeScaleEvaporation', k, evaporated); water(n, 'convectiveEvaporation', k, streamed); water(n, 'conversion', k, converted);
       water(n, 'iceFall', k, now - replayQt[k] - evaporated - streamed - converted); replayQt[k] = now;
@@ -603,7 +630,7 @@ moist.adjust = (st, iFrom, iTo, step) => {
     let traceSum = 0, partsSum = 0;
     for (let k = 0; k < K; k++) {
       const s = (n * NT) * K;
-      const parts = ['deepRain', 'deepDowndraftEvaporation', 'deepTransport', 'shallow', 'convectiveEvaporation'].reduce((x, t) => x + stepHeat[s + T_[t] * K + k], 0);
+      const parts = ['deepRain', 'deepFreezing', 'deepMelting', 'deepDowndraftEvaporation', 'deepTransport', 'shallow', 'convectiveEvaporation'].reduce((x, t) => x + stepHeat[s + T_[t] * K + k], 0);
       traceSum += Math.abs(moist.trace.convection[k * C + i]); partsSum += Math.abs(moist.trace.convection[k * C + i] - parts);
     }
     if (partsSum > 1e-9 * Math.max(1, traceSum)) checks.traceOff++;
@@ -708,7 +735,7 @@ acc.forEach((A, b) => {
   const Q1 = Float64Array.from({ length: K }, (_, k) => physicsTerms.reduce((s, t) => s + kday(T_[t], k), 0));
   const QR = Float64Array.from({ length: K }, (_, k) => kday(T_.shortwave, k) + kday(T_.longwave, k));
   const Q1R = Float64Array.from(Q1, (x, k) => x - QR[k]);
-  const deepAll = Float64Array.from({ length: K }, (_, k) => ['deepRain', 'deepDowndraftEvaporation', 'deepTransport', 'convectiveEvaporation'].reduce((s, t) => s + kday(T_[t], k), 0));
+  const deepAll = Float64Array.from({ length: K }, (_, k) => ['deepRain', 'deepFreezing', 'deepMelting', 'deepDowndraftEvaporation', 'deepTransport', 'convectiveEvaporation'].reduce((s, t) => s + kday(T_[t], k), 0));
   const Q2 = Float64Array.from({ length: K }, (_, k) => -PHYSICS_WATER.reduce((s, t) => s + moistening(W_[t], k), 0));
   say('profile, K/day (box means; Q1 all physics, Q1-QR without radiation, Q2 = -(L/cp) the physics\' change of q_t; dyn the RK4 step, clos the closure, diss the kinetic energy returned as heat; condBL the condensation in the layers below the mixing top (to saturation), condU the uniform condensation in those above it, each with the cloud the boundary layer\'s mixing evaporated there, dRain the latent heat of the deep plume\'s rain, dDDev its downdraft\'s evaporation, dTrans its two drafts\' transport of s_l, shal the shallow plume, recond the condensation after the plumes, LSev and CVev the evaporation of large-scale and deep-plume rain, fall+ and fall- the adjustment after the ice fall, snow its fusion heat, dry the dry adjustment):');
   say(`  ${'hPa'.padStart(5)} ${'z m'.padStart(6)} ${'Q1'.padStart(6)} ${'Q1-QR'.padStart(6)} ${'Q2'.padStart(6)} ${SHORT.map((s) => s.padStart(6)).join(' ')} ${'total'.padStart(6)}`);

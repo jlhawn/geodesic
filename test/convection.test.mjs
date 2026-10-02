@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
-import { saturationHumidity, cloudSaturation, LATENT_HEAT, MOIST_DEFAULTS, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL } from '../js/physics/moist.module.js';
+import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 
@@ -681,6 +681,34 @@ test('a column convects deep where its plume\'s cloud is deeper than 200 hPa and
 });
 
 /*
+ * Plume air of liquid-ice static energy `sl` = c_p T + g z − L q_l −
+ * (L + L_f) q_i and total water `qt` by bisection: T, its condensate l =
+ * q_t − q_s,mix(T) of cloudSaturation's mix and the ice share (1 − α(T)) l.
+ */
+function mixedState(sl, qt, z, pressure, O, cp, g) {
+  const sat = { qs: 0, slope: 0, liquid: 1 };
+  const held = (T) => qt - cloudSaturation(T, pressure, true, O.liquidTemperature, O.iceTemperature, sat).qs;
+  const dry = (sl - g * z) / cp;
+  if (!(held(dry) > 0)) return { T: dry, l: 0, ice: 0 };
+  let lo = dry, hi = dry + 100;
+  for (let n = 0; n < 200; n++) {
+    const T = 0.5 * (lo + hi), l = Math.max(0, held(T)), a = liquidFraction(T, O.liquidTemperature, O.iceTemperature);
+    if (cp * T + g * z - LATENT_HEAT * l - FUSION_HEAT * (1 - a) * l > sl) hi = T; else lo = T;
+  }
+  const T = 0.5 * (lo + hi), l = Math.max(0, held(T));
+  return { T, l, ice: (1 - liquidFraction(T, O.liquidTemperature, O.iceTemperature)) * l };
+}
+
+/*
+ * A cold column over a 265 K surface: 9 K/km to 205 K, 90 % humid in the
+ * lowest 500 m and 85 % above.
+ */
+function coldColumn(z, p) {
+  const T = Math.max(205, 265 - 9e-3 * z);
+  return { T, q: (z < 500 ? 0.9 : 0.85) * saturationHumidity(T, p) };
+}
+
+/*
  * The IFS's first-guess deep updraught by hand (Cy43r1 §6.4, eqs 6.18–6.21)
  * on column 0 as plumeColumn sees it: from the deep source's s_l and q_t at
  * its top interface at 1 m/s, mixing at 0.4 · 1.75e-3 (q_s/q_s,lowest)³,
@@ -696,13 +724,7 @@ function handParcel(model) {
   const T = (k) => theta[k * C] * exnerLayer[k * C], p = (k) => pi[0] * sigmaMid[k], zMid = (k) => geopotential[k * C] / g;
   const zUp = (k) => (geopotential[k * C] + cp * thetaV[k * C] * (exnerLayer[k * C] - exnerLower[(k - 1) * C])) / g;
   const envS = (k) => cp * T(k) + g * zMid(k) - L * Math.max(0, qc[k * C]), envQ = (k) => Math.max(0, q[k * C]) + Math.max(0, qc[k * C]);
-  const state = (sl, qt, z, pressure) => {
-    const dry = (sl - g * z) / cp;
-    if (!(qt > saturationHumidity(dry, pressure))) return { T: dry, l: 0 };
-    let t = dry;
-    for (let n = 0; n < 40; n++) { const qs = saturationHumidity(t, pressure); t -= (cp * t + L * qs - (sl - g * z + L * qt)) / (cp + L * L * qs / (461.5 * t * t)); }
-    return { T: t, l: Math.max(0, qt - saturationHumidity(t, pressure)) };
-  };
+  const state = (sl, qt, z, pressure) => mixedState(sl, qt, z, pressure, O, cp, g);
   const bottom = K - 1;
   let source = bottom;
   while (source > 0 && p(source - 1) >= pi[0] - O.cumulusSourceDepth) source--;
@@ -729,7 +751,7 @@ function handParcel(model) {
     const full = Math.exp(-eps * depth);
     sl = envS(k) + (sl - envS(k)) * full; qt = envQ(k) + (qt - envQ(k)) * full;
     const upper = state(sl, qt, zUp(k), pi[0] * levels[k]);
-    qt -= 0.5 * upper.l; sl += L * 0.5 * upper.l;
+    qt -= 0.5 * upper.l; sl += L * 0.5 * upper.l + FUSION_HEAT * 0.5 * upper.ice;
   }
   return { base, top: pi[0] * levels[1], deep: base > 0 && base - pi[0] * levels[1] > DEEP_CLOUD_DEPTH, deepAt };
 }
@@ -741,6 +763,7 @@ test('the IFS test parcel types the column: from the deep source at 1 m/s, mixin
     ['Jordan, free troposphere × 0.1', plumeColumn({}, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? 0.1 : 1), saturationHumidity(air.T, p)) }; })],
     ['trade wind', tradeWindColumn()],
     ['trade cumulus', plumeColumn({}, tradeCumulus)],
+    ['cold column', plumeColumn({}, coldColumn)],
   ];
   assert.equal(MOIST_DEFAULTS.convectionType, 'testParcel');
   assert.deepEqual(TEST_PARCEL, { entrainment: 0.4, removal: 0.5 });
@@ -759,7 +782,8 @@ test('the IFS test parcel types the column: from the deep source at 1 m/s, mixin
     assert.ok(Math.abs(d.parcelTop - expectedTop) < 1e-6 * expectedTop, `${label}: top ${d.parcelTop} against ${expectedTop}`);
     if (hand.deep) deepSeen++; else shallowSeen++;
     if (!d.parcelDeep) assert.ok(!d.deep, `${label}: shallow by the test parcel, no deep plume`);
-    assert.ok(Math.abs(after.enthalpy - before.enthalpy) < 1e-15 * before.enthalpy && Math.abs(after.water + rain - before.water) < 1e-15 * before.water, `${label}: enthalpy and water`);
+    const frozen = d.deep ? model.moist.convectiveFrozen.reduce((x, y) => x + y, 0) : 0;
+    assert.ok(Math.abs(after.enthalpy - before.enthalpy - FUSION_HEAT * frozen) < 1e-15 * before.enthalpy && Math.abs(after.water + rain - before.water) < 1e-15 * before.water, `${label}: enthalpy (less the fusion heat of the snow still falling) and water`);
   }
   console.log(lines.join('\n'));
   assert.ok(deepSeen >= 1 && shallowSeen >= 1, `${deepSeen} deep and ${shallowSeen} shallow`);
@@ -786,6 +810,59 @@ test('under the test parcel a column whose test cloud is deeper than 200 hPa run
   console.log(`${C} random columns: ${typed} typed deep by the test parcel (${fired} fire the deep plume, ${deeperThanPlume} of them with the plume's own cloud no deeper than 200 hPa), ${shallowTyped} typed shallow, ${shallowRun} run the shallow plume; enthalpy and water within ${worst.toExponential(1)}`);
   assert.ok(typed > 10 && fired > 10 && shallowTyped > 10 && shallowRun > 10, `${typed}, ${fired}, ${shallowTyped}, ${shallowRun}`);
   assert.ok(worst < 1e-15, `enthalpy and water ${worst}`);
+});
+
+test('the mixed-phase plume\'s air holds its liquid-ice static energy: its temperature, condensate and ice as by bisection over the phase ramp, liquid above it and all ice below it', () => {
+  const model = build({}), O = MOIST_DEFAULTS, { moist } = model, liquid = build({ plumePhase: 'liquid' }).moist, { g, cp } = model.core.diagnostics, sat = { qs: 0, slope: 0, liquid: 1 };
+  assert.equal(O.plumePhase, 'mixed');
+  let worstT = 0, worstL = 0, worstI = 0, n = 0, warm = 0;
+  for (const p of [900e2, 700e2, 550e2, 450e2, 350e2, 250e2, 180e2]) for (const T of [205, 230, 240, 250, 260, 268, 272, 275, 290]) for (const l of [0, 2e-4, 1e-3, 4e-3]) {
+    const z = 7400 * Math.log(101500 / p), qs = cloudSaturation(T, p, true, O.liquidTemperature, O.iceTemperature, sat).qs, a = sat.liquid;
+    const sl = cp * T + g * z - LATENT_HEAT * a * l - (LATENT_HEAT + FUSION_HEAT) * (1 - a) * l, qt = qs + l;
+    const hand = mixedState(sl, qt, z, p, O, cp, g), air = moist.plumeAir(sl, qt, z, p, T - 1);
+    worstT = Math.max(worstT, Math.abs(air.T - hand.T)); worstL = Math.max(worstL, Math.abs(air.liquid - hand.l)); worstI = Math.max(worstI, Math.abs(air.ice - hand.ice)); n++;
+    if (T > O.liquidTemperature) { const plain = liquid.plumeAir(sl, qt, z, p, T - 1); assert.ok(Math.abs(plain.T - air.T) < 1e-9 && air.ice === 0, `above the ramp the liquid plume's ${plain.T} against ${air.T}`); warm++; }
+    if (T < O.iceTemperature && l > 0) assert.ok(Math.abs(air.ice - air.liquid) < 1e-15, 'below the ramp all of it is ice');
+  }
+  console.log(`${n} states over 180-900 hPa and 205-290 K: temperature within ${worstT.toExponential(1)} K of the bisection, condensate ${worstL.toExponential(1)}, ice ${worstI.toExponential(1)} kg/kg; ${warm} warm states as the liquid plume's`);
+  assert.ok(worstT < 1e-5 && worstL < 1e-8 && worstI < 1e-8, `T ${worstT}, l ${worstL}, ice ${worstI}`);
+});
+
+test('the mixed-phase deep plume on Jordan\'s column gains the fusion heat of its frozen condensate, rising higher with more CAPE than the liquid plume, and its frozen rain melts in the first layer at 273.15 K or warmer below where it formed; column enthalpy and water exact', () => {
+  const dt = 600, run = (options) => {
+    const model = plumeColumn(options), [pi, theta, , , q, qc] = model.state, { K, C, exnerLayer } = model.core.diagnostics;
+    model.core.diagnoseColumn(0, pi, theta, q, qc);
+    const T = Float64Array.from({ length: K }, (_, k) => theta[k * C] * exnerLayer[k * C]), before = budget(model, 0);
+    const rain = model.moist.plumeColumn(0, pi, theta, q, qc, dt), after = budget(model, 0), m = model.moist, d = m.deep;
+    let made = 0, melted = 0, highest = -1, meltAt = -1;
+    for (let k = d.top + 1; k < d.base; k++) if (m.plumeFrozen[k] > 0) { made += m.cumulusFlux[k] * m.plumeFrozen[k]; if (highest < 0) highest = k; }
+    for (let k = 0; k < K; k++) if (m.convectiveMelted[k] > 0) { melted += m.convectiveMelted[k]; if (meltAt < 0) meltAt = k; }
+    let firstWarm = -1;
+    for (let k = highest + 1; k < K && highest >= 0; k++) if (T[k] >= MOIST_DEFAULTS.liquidTemperature) { firstWarm = k; break; }
+    return { top: m.cumulusTop[0], cape: d.cape, flux: d.baseFlux, rain, made, melted, meltAt, firstWarm, meltP: meltAt >= 0 ? pi[0] * model.core.diagnostics.sigmaMid[meltAt] : NaN, meltT: meltAt >= 0 ? T[meltAt] : NaN, enthalpy: (after.enthalpy - before.enthalpy) / before.enthalpy, water: (after.water + rain - before.water) / before.water };
+  };
+  const mixed = run({}), liquid = run({ plumePhase: 'liquid' });
+  console.log(`Jordan, deep plume: mixed phase top ${(mixed.top / 100).toFixed(0)} hPa, CAPE ${mixed.cape.toFixed(0)} J/kg, base flux ${mixed.flux.toFixed(4)}; liquid top ${(liquid.top / 100).toFixed(0)} hPa, CAPE ${liquid.cape.toFixed(0)} J/kg, base flux ${liquid.flux.toFixed(4)} kg/m²/s; frozen rain per unit base flux ${mixed.made.toExponential(3)}, all melting at ${(mixed.meltP / 100).toFixed(0)} hPa (${mixed.meltT.toFixed(2)} K); enthalpy ${mixed.enthalpy.toExponential(1)}, water ${mixed.water.toExponential(1)}`);
+  assert.ok(mixed.top < liquid.top && mixed.cape > liquid.cape, 'higher, with more CAPE');
+  assert.ok(mixed.made > 0 && Math.abs(mixed.melted - mixed.made) < 1e-15 * mixed.made, `made ${mixed.made}, melted ${mixed.melted}`);
+  assert.ok(mixed.meltAt === mixed.firstWarm, `melts in layer ${mixed.meltAt}, the first warm one below ${mixed.firstWarm}`);
+  for (const r of [mixed, liquid]) assert.ok(Math.abs(r.enthalpy) < 1e-15 && Math.abs(r.water) < 1e-15, `enthalpy ${r.enthalpy}, water ${r.water}`);
+});
+
+test('over a 265 K surface the mixed-phase plume\'s snow reaches the ground frozen and the surface adds no second fusion heat for it: the adjustment changes column enthalpy by L_f times the precipitation under either phase, water exact', () => {
+  const dt = 900, run = (options) => {
+    const model = plumeColumn(options, coldColumn);
+    model.state[3][0] = 268;
+    const before = budget(model, 0);
+    model.phases.adjust(0, 1, dt);
+    const after = budget(model, 0), rain = model.moist.rain[0];
+    return { deep: model.moist.deep.deep, rain, convective: model.moist.convectivePrecipitation[0], snow: model.moist.convectiveSnow[0], enthalpy: (after.enthalpy - before.enthalpy - FUSION_HEAT * rain) / before.enthalpy, water: (after.water + rain - before.water) / before.water };
+  };
+  const mixed = run({}), liquid = run({ plumePhase: 'liquid' });
+  console.log(`cold column: mixed phase ${mixed.rain.toExponential(3)} kg/m² of precipitation, ${mixed.snow.toExponential(3)} of it the deep plume's snow; liquid ${liquid.rain.toExponential(3)}; enthalpy less L_f P ${mixed.enthalpy.toExponential(1)} / ${liquid.enthalpy.toExponential(1)}, water ${mixed.water.toExponential(1)} / ${liquid.water.toExponential(1)}`);
+  assert.ok(mixed.deep && mixed.snow > 0 && mixed.snow <= mixed.convective, `snow ${mixed.snow} of ${mixed.convective}`);
+  assert.equal(liquid.snow, 0);
+  for (const r of [mixed, liquid]) assert.ok(Math.abs(r.enthalpy) < 1e-15 && Math.abs(r.water) < 1e-15, `enthalpy ${r.enthalpy}, water ${r.water}`);
 });
 
 async function parity(options, { momentum = false } = {}) {
@@ -820,7 +897,7 @@ async function parity(options, { momentum = false } = {}) {
   pass.end();
   device.queue.submit([encoder.finish()]);
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
-  const response = new Float64Array(C), warmed = new Float64Array(C), warmedFlux = new Float64Array(C);
+  const response = new Float64Array(C), warmed = new Float64Array(C), warmedFlux = new Float64Array(C), thetaResponse = new Float64Array(K * C);
   {
     const kept = model.state.map((a) => Float64Array.from(a)), keptSaved = Float64Array.from(saved), keptSnow = Float64Array.from(model.seaIce.snow);
     for (let x = 0; x < saved.length; x++) saved[x] *= 1 + 2 ** -23;
@@ -831,12 +908,14 @@ async function parity(options, { momentum = false } = {}) {
     for (let x = 0; x < theta.length; x++) theta[x] *= 1 + 2 ** -23;
     model.phases.adjust(0, C, dt);
     for (let i = 0; i < C; i++) { warmed[i] = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i]; warmedFlux[i] = moist.cumulusBaseFlux[i]; }
+    thetaResponse.set(theta);
     model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow);
     for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation]) a.fill(0);
   }
   moist.trace.convection = new Float64Array(K * C);
   model.phases.adjust(0, C, dt);
   for (let i = 0; i < C; i++) { const now = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i]; response[i] = Math.max(Math.abs(response[i] - now), Math.abs(warmed[i] - now)); }
+  for (let x = 0; x < K * C; x++) thetaResponse[x] = Math.abs(thetaResponse[x] - theta[x] * (1 + 2 ** -23));
   if (momentum) {
     const E = mesh.nEdges, { dSigma, g } = core.diagnostics, u = model.state[2], before = Float64Array.from(u);
     model.phases.mixMomentum(0, E, dt);
@@ -859,7 +938,7 @@ async function parity(options, { momentum = false } = {}) {
     assert.ok(worstU < 1e-3, `winds differ by ${worstU} m/s`);
   }
   const { sigmaMid } = core.diagnostics;
-  let deep = 0, shallow = 0, decked = 0, still = 0, opening = 0, flips = 0, worstTheta = 0, worstQ = 0, worstQc = 0, worstRain = 0, rainScale = 0;
+  let deep = 0, shallow = 0, decked = 0, still = 0, opening = 0, flips = 0, worstTheta = 0, thetaOver = -Infinity, thetaAllowed = 0, worstQ = 0, worstQc = 0, worstRain = 0, rainScale = 0;
   let plumes = 0, plumeFlips = 0, topsDiffer = 0, worstFlux = 0, fluxScale = 0, worstCover = 0, worstWater = 0, waterScale = 0;
   const K0 = K - (layout.PH.CUWATER - layout.PH.CUCOVER) / C;
   const beside = new Set(), switching = new Set();
@@ -900,11 +979,13 @@ async function parity(options, { momentum = false } = {}) {
     for (let k = 0; k < K; k++) {
       const x = k * C + i;
       worstTheta = Math.max(worstTheta, Math.abs(model.state[1][x] - after[1][x]));
+      thetaOver = Math.max(thetaOver, Math.abs(model.state[1][x] - after[1][x]) - (1e-3 + 2 * thetaResponse[x]));
+      thetaAllowed = Math.max(thetaAllowed, 2 * thetaResponse[x]);
       worstQ = Math.max(worstQ, Math.abs(model.state[4][x] - after[4][x]));
       worstQc = Math.max(worstQc, Math.abs(model.state[5][x] - after[5][x]));
     }
   }
-  console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K, q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)}; twice its response to one f32 ulp of the saved subcloud T_v or of θ at most ${allowed.toExponential(1)})`);
+  console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips}; engines differ in θ by ${worstTheta.toExponential(1)} K (twice the CPU's response to one f32 ulp of θ at most ${thetaAllowed.toExponential(1)} K), q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)}; twice its response to one f32 ulp of the saved subcloud T_v or of θ at most ${allowed.toExponential(1)})`);
   console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top, ${beside.size} deep in the base flux by more than 1 % (the shallow plume beside it ran on one engine only), ${merged.size} whose dry adjustment merged other layers on the two engines, ${switching.size} whose base flux on the CPU moves by over 1e-3 under one ulp of θ (left out of the flux); base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}, the plume's condensate by ${worstWater.toExponential(1)} kg/kg (largest ${waterScale.toExponential(1)})`);
   assert.ok(deep > C / 40 && plumes > C / 10 && decked > C / 40 && still > C / 40, `${deep} deep, ${plumes} plumes, ${decked} decked, ${still} still`);
   assert.equal(plumeFlips, 0);
@@ -915,7 +996,7 @@ async function parity(options, { momentum = false } = {}) {
   assert.ok(worstFlux < 2e-3 * fluxScale && worstCover < 1e-4, `base mass flux ${worstFlux}, cover ${worstCover}`);
   assert.ok(waterScale > 0 && worstWater < 1e-3 * waterScale, `plume condensate ${worstWater} against ${waterScale}`);
   assert.equal(flips, 0);
-  assert.ok(worstTheta < 1e-3 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta}, q ${worstQ}, qc ${worstQc}`);
+  assert.ok(thetaOver < 0 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta} (${thetaOver} above 1e-3 K and twice the response to one ulp), q ${worstQ}, qc ${worstQc}`);
   assert.ok(rainOver < 0, `rain ${worstRain} against ${rainScale}, ${rainOver} above 1e-4 of it and twice the response to one ulp of the saved T_v or of θ`);
   return { cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]) };
 }
@@ -937,6 +1018,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ plumeSourceDepth: 'boundaryLayer' });
   await parity({ convectionType: 'top' });
   await parity({ convectionType: 'cloudDepth' });
+  await parity({ plumePhase: 'liquid' });
   await parity({ plumeEntrainmentLaw: 'gregory' });
 });
 

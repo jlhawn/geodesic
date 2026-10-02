@@ -193,7 +193,8 @@ export function createModel(gridOrMesh, {
           let frozen;
           if (land && landMask[i]) { land.deposit(i, amount, airTemperature, dt); frozen = airTemperature < MELTING_POINT; }
           else frozen = seaIce.deposit(i, amount, airTemperature, state[6], state[3]);
-          if (frozen) state[1][bottom + i] += seaIce.latentHeatFusion * amount * g / (cp * state[0][i] * dSigma[K - 1] * exner[bottom + i]);
+          const fusion = (frozen ? amount : 0) - moistPhysics.convectiveSnow[i];
+          if (fusion !== 0) state[1][bottom + i] += seaIce.latentHeatFusion * fusion * g / (cp * state[0][i] * dSigma[K - 1] * exner[bottom + i]);
         }
       }
       surface.convectiveAdjustment(state[0], state[1], iFrom, iTo, moist ? state[4] : null, moist ? state[5] : null);
