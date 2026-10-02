@@ -9,7 +9,7 @@ import { saturationHumidity } from '../js/physics/moist.module.js';
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuCore } = gpuAvailable ? await import('../js/gpu/core.gpu.js') : {};
-const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15 };
+const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
 
 function meanTheta(model) {
   const { K } = model.core, C = model.mesh.nCells, theta = model.state[1];
@@ -115,7 +115,7 @@ function heatingState(radiation = {}) {
 }
 async function physicsHeating(base, options, dt = 864000, cumulus = null, mixingTop = null) {
   const physics = { stratus: true, mixedLayerDeck: false, ...options };
-  const model = createModel(base.mesh, { ocean: false, radiation: physics });
+  const model = createModel(base.mesh, { ocean: false, radiation: physics, ice: physics });
   if (cumulus) { model.moist.cumulusCover.set(cumulus.cover); model.moist.cumulusWater.set(cumulus.water); }
   model.state.forEach((a, n) => a.set(base.state[n]));
   model.seaIce.concentration.set(base.seaIce.concentration);
@@ -192,8 +192,8 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
 });
 
 test('the change the Rayleigh and aerosol scattering makes to the heating of each layer of the sunlit columns agrees between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const base = heatingState(UNSCATTERED);
-  const on = await physicsHeating(base, {}), off = await physicsHeating(base, UNSCATTERED);
+  const base = heatingState(UNSCATTERED), greyIce = { iceAlbedo: 0.5, meltingIceAlbedo: 0.5, snowAgeing: false };
+  const on = await physicsHeating(base, greyIce), off = await physicsHeating(base, { ...UNSCATTERED, ...greyIce });
   const { K, C } = on;
   let worst = 0, largest = 0, at = null, lit = 0;
   for (let i = 0; i < C; i++) {

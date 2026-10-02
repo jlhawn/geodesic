@@ -2926,10 +2926,577 @@ The work, in order:
    eight64_day0183 at N=64 every sunlit column closes to 4.1e-16 of the
    beam on the CPU at four instants and to 2.5e-7 (single precision) on
    the GPU over 64 steps, no dark column carries any shortwave on either,
-   and the scattering leaves the longwave unchanged. The daily line gives the clear-sky
+   and the scattering leaves the longwave unchanged. On nine64_day0091 and
+   nine64_day0365 (Oct 1 review, the final defaults) the columns close
+   alike (CPU 4.1·10⁻¹⁶ and 4.2·10⁻¹⁶, GPU 2.4·10⁻⁷ and 2.4·10⁻⁷ over 64
+   steps), the surface absorbs (1 − albedo) of its direct and diffuse
+   light to 6.5·10⁻¹⁶ of the beam on the CPU and over land to 1.9·10⁻⁷ on
+   the GPU, and the clear-sky OLR is unchanged, but the all-sky OLR of
+   934 and 861 sunlit deck columns moves by up to 0.087 W/m² on both
+   engines: the mixed-layer deck's cover follows the sunlight its layer
+   absorbs, which the scattering above it changes. The daily line gives the clear-sky
    reflectance and the sea's surface sunlight; the audit and the second
    sweep's `clearAlbedo` term (target 0.15, tolerance 0.01, weight 3) read
    the clear-sky albedo.
+
+   Acceptance by surface class (Oct 1). The global clear-sky albedo is an
+   outcome, reported without a verdict: the planet's mix of surfaces
+   emerges, so each class is checked against its own reference. The
+   second sweep's `clearAlbedo` term in `scripts/sweep/score.mjs` still
+   scores the global value against 0.15. Four
+   changes, each on both engines with parity tests.
+
+   - The Rayleigh band from the spectrum (`scripts/rayleighReference.mjs`):
+     the visible band as 0.297–0.711 µm of a 5778 K Planck spectrum (the
+     0.5 of the beam below 0.711 µm less ozone's 0.03 below 0.297 µm), 40
+     wavelengths, τ_R(λ) of Hansen & Travis (1974) at 1013.25 hPa (0.0973
+     at 0.55 µm, band mean 0.229), each through the model's τ/(τ + 2μ);
+     beside it scalar doubling-adding with the azimuth-averaged Rayleigh
+     phase function. The grey 0.18 departs from the reference by −11.8 % at
+     μ = 1 and +10.4 % at μ = 0.1 (minimax grey 0.182: 11.0 %); two
+     sub-bands, weights 0.712 / 0.288 at depths 0.0874 / 0.5687
+     (`rayleighBands`), follow it within 0.1 % over μ 0.1–1 and 0.8 % at
+     0.05. The grazing-sun excess that remains is the two-stream's own:
+     against doubling-adding it is +17.7 % at μ = 0.05, +9.6 % at 0.1,
+     +3.8 % at 0.2 and −0.9 % at 1.
+
+     | μ | 0.05 | 0.1 | 0.2 | 0.5 | 1 |
+     |---|---|---|---|---|---|
+     | spectral two-stream (the reference) | 0.573 | 0.429 | 0.297 | 0.162 | 0.094 |
+     | doubling-adding | 0.487 | 0.392 | 0.286 | 0.162 | 0.095 |
+     | grey 0.18 | 0.643 | 0.474 | 0.310 | 0.153 | 0.083 |
+     | two sub-bands | 0.577 | 0.430 | 0.297 | 0.162 | 0.094 |
+
+     Rayleigh-only reflection of a full atmosphere over a black surface,
+     global mean: 23.5 W/m² by the reference, 23.4 by doubling-adding,
+     22.3 under the grey 0.18, 23.6 under the two sub-bands; on
+     eight64_day0183 lit over day 186 (the terrain's lower pressures) 21.9
+     under the grey depth and 23.1 under the sub-bands.
+   - Aerosol from natural backgrounds, mid-visible: `seaAerosol` 0.07, the
+     remote ocean's 0.06–0.07 at 500 nm (Smirnov et al. 2009, the Maritime
+     Aerosol Network; tropical Pacific mean 0.07, mode 0.06, Smirnov et al.
+     2003); `landAerosol` 0.12, a remote continental background of about
+     0.05 (AERONET's clean and aged-background sites 0.04–0.1, Eck et al.
+     2009) plus the land-mean dust, 0.068 by CALIOP and 0.103 by MODIS
+     (Song et al. 2021; global dust 0.030 ± 0.005, Ridley et al. 2016),
+     spread over all land. Area-weighted they give about 0.085, against the
+     natural 0.09 of MAC-v1 (0.13 in all, 0.037 of it anthropogenic; Kinne
+     et al. 2013). Single-scattering albedo 0.95 and asymmetry 0.7 kept
+     (from memory: dust 0.93–0.97, sea salt near 0.99). Aerosol alone over
+     a black surface: 3.1 → 3.5 W/m².
+   - The surface's reflection absorbed on its way up (`upwardAbsorption`):
+     the vapour's share by the Lacis–Hansen absorptivity of the path down
+     plus 5/3 of the column's, the aerosol's 1 − exp(−(1 − ω) τ_a 5/3)
+     (`test/clearScattering.test.mjs`: to 1.5·10⁻¹⁴ and 1.6·10⁻¹⁵ against
+     the formulas, engines' change apart by 5.1·10⁻⁶ of the beam).
+   - Wet bare soil (`soilDarkening`, land): the bare soil's albedo falls
+     linearly with the bucket's fill from `bareAlbedo` 0.30 at a fill of
+     0.2, below which the cover settles under 0.2, to `wetSoilAlbedo` 0.15
+     at 0.5 (`darkeningWetness` [0.2, 0.5]); the engines agree to 4.4·10⁻⁸
+     (`test/landGpu.test.mjs`). The snow-free albedo by bucket fill and
+     vegetation cover v:
+
+     | fill | 0 | 0.2 | 0.3 | 0.4 | 0.5 | 1 |
+     |---|---|---|---|---|---|---|
+     | v = 0 | 0.300 | 0.300 | 0.250 | 0.200 | 0.150 | 0.150 |
+     | v = 0.5 | 0.215 | 0.215 | 0.190 | 0.165 | 0.140 | 0.140 |
+     | v = 1 | 0.130 | 0.130 | 0.130 | 0.130 | 0.130 | 0.130 |
+
+   The global clear-sky albedo of eight64_day0183 lit over day 186
+   (`scripts/clearSkyBudget.mjs`, 48 instants) moves 0.148 (the grey build)
+   → 0.152 (sub-bands) → 0.152 (aerosol) → 0.149 (upward absorption) →
+   0.145 (wet soil). Three N=64 GPU days from a copy of eight64_day0183
+   with the final defaults, day 186, before → after: albedo 0.312 → 0.310,
+   ASR 234.3 → 234.9, OLR 242.1 → 242.2, SWCRE −56.0 → −56.2, LWCRE 17.6 →
+   17.6 W/m², clear-sky albedo 0.147 → 0.145, rain 1.70 → 1.71 mm/d (the
+   audit's 2.04 → 2.05), the sea's surface sunlight 178.9 → 177.7 W/m²; the
+   60–90N ice lost from nine64_day0091 0.166·10³ km³/day (9.191 → 8.692;
+   0.174 before the scattering). The physics pass's added sub-band and
+   escape streams left the three days at 0.6–0.7 wall minutes, as before.
+   The day-186 state by class (`scripts/clearSkyBudget.mjs` and the audit's
+   `clear sky,` rows, `scripts/clearSkyClasses.mjs`):
+
+   | class | area | surface albedo | at the top | atmosphere's own | reference | verdict |
+   |---|---|---|---|---|---|---|
+   | open sea 0–30° | 0.372 | 0.044 | 0.095 | 0.066 | top 0.08–0.10 | matches |
+   | open sea 30–50° | 0.194 | 0.058 | 0.117 | 0.077 | top 0.10–0.13 | matches |
+   | open sea 50–70° | 0.098 | 0.090 | 0.159 | 0.097 | top 0.13–0.20 | matches |
+   | open sea 70–90° | 0.019 | 0.184 | 0.275 | 0.161 | | |
+   | partly vegetated (v 0.2–0.7) | 0.191 | 0.199 | 0.208 | 0.074 | 0.18–0.25 | matches |
+   | dense vegetation (v > 0.7) | 0.056 | 0.137 | 0.166 | 0.075 | 0.12–0.15 | matches |
+   | thin snow on land (< 10 kg/m²) | 0.009 | 0.186 | 0.241 | 0.119 | | |
+   | snow on open land (v < 0.5) | 0.001 | 0.542 | 0.499 | 0.147 | 0.60–0.85 | low by 0.058 |
+   | snow under forest (v ≥ 0.5) | 0.003 | 0.472 | 0.437 | 0.132 | 0.20–0.35 | high by 0.122 |
+   | thin sea ice (< 0.5 m) | 0.000 | 0.446 | 0.427 | 0.114 | 0.20–0.50 | matches |
+   | bare sea ice | 0.000 | 0.568 | 0.520 | 0.174 | 0.50–0.60 | matches |
+   | snow-covered sea ice (≥ 10 kg/m²) | 0.026 | 0.749 | 0.649 | 0.118 | 0.80–0.85 | low by 0.051 |
+   | ice sheets | 0.030 | 0.800 | 0.715 | 0.132 | 0.80–0.85 | matches |
+
+   | open sea by μ | 0–0.1 | 0.1–0.2 | 0.2–0.4 | 0.4–0.7 | 0.7–1 |
+   |---|---|---|---|---|---|
+   | mean μ; share of the sea's sunlight | 0.067; 0.008 | 0.156; 0.025 | 0.312; 0.103 | 0.566; 0.331 | 0.860; 0.532 |
+   | direct-beam albedo (Briegleb et al. 1986) | 0.343 | 0.246 | 0.136 | 0.059 | 0.027 |
+   | Taylor et al. (1996); Fresnel, flat water | 0.212; 0.660 | 0.160; 0.387 | 0.101; 0.158 | 0.057; 0.045 | 0.036; 0.022 |
+   | surface albedo, direct and diffuse | 0.262 | 0.206 | 0.124 | 0.058 | 0.029 |
+   | at the top | 0.373 | 0.290 | 0.194 | 0.115 | 0.074 |
+
+   Global and by type: clear-sky albedo 0.145 (open sea 0.108 at the top
+   over a surface of 0.053, land 0.201 over 0.187, sea ice 0.646 over
+   0.744, ice sheets 0.715 over 0.800); the atmosphere over a black surface
+   reflects 25.3 W/m², 0.074 of the incoming. The eight64 state has no bare
+   land: of its ice-free land 0.782 carries a cover of 0.2–0.7 and 0.218
+   more, after 186 days from the 0.5 every cell starts with. The year-six
+   state five64_day2190 (0.121 of its ice-free land under 0.2) lit over its
+   own day: bare dry soil (fill < 0.35, 0.029 of the globe) 0.275, low by
+   0.025 against 0.30–0.40; bare wet soil 0.191 (0.10–0.20, matches, a
+   trace of area); partly vegetated 0.193 and dense 0.138 (both match);
+   snow on open land 0.547 and under forest 0.546 (0.025 and 0.033 of the
+   globe); its global clear-sky albedo 0.156 (0.159 without the darkening).
+   Where a class misses, the surface model lacks it: one snow albedo 0.55
+   with no ageing and no masking by forest (snow on open land low by
+   0.05–0.06, under forest high by 0.12–0.20); snow on sea ice 0.75 with
+   no ageing (low by 0.051); one dry soil albedo 0.30, no sand or soil
+   colour, and a cover that blends bare soil into forest with no grass
+   (bare dry soil low by 0.025). References: the open sea at the top,
+   CERES EBAF clear-sky ocean (approximate); the surfaces, textbook ranges
+   (approximate; thin ice from memory); the sea's curves as named.
+   Defaults: `rayleighBands` [[0.712, 0.0874], [0.288, 0.5687]],
+   `rayleighDepth` null, `upwardAbsorption` true, `landAerosol` 0.12,
+   `seaAerosol` 0.07, `aerosolAlbedo` 0.95, `aerosolAsymmetry` 0.7,
+   `visibleFraction` 0.5, `aerosolHeight` 2000 m, `skylight` 0; land
+   `soilDarkening` true, `wetSoilAlbedo` 0.15, `darkeningWetness`
+   [0.2, 0.5], `bareAlbedo` 0.30, `vegetatedAlbedo` 0.13.
+   Snow and sea ice by surface (Oct 1). The model's clock starts at the
+   March equinox, so the states measured here are nine64_day0091 at the
+   June solstice (the Arctic pack bare and melting, no snow on it),
+   eight64_day0183 at the September equinox (the Arctic minimum, the
+   southern pack at its maximum under a returning sun) and nine64_day0365
+   at the March equinox (the northern snow at its extent, the Arctic pack
+   under 90 kg/m² of snow). Before the change land snow was 0.55 at
+   20 kg/m² whatever its age or the trees above it, snow on sea ice 0.75
+   and bare sea ice 0.5 whatever the temperature
+   (`scripts/snowIceAlbedo.mjs`, each state lit over its own day,
+   sunlight-weighted):
+
+   - Snow-covered land on nine64_day0365: 0.066 of the globe, 0.535–0.549
+     in every band from 30N to 90N; the cover under it 0.44–0.62 by band,
+     0.031 of the globe at 0.3–0.5 and 0.035 at 0.5–0.7, 0.001 below 0.3
+     (the atlas start's 0.5 a year on); 0.06 of it within 2 K of melting.
+   - The cover through a winter: under snow it decays over
+     `snowDeclineTime` 720 days, keeping 0.81–0.76 of itself over 150–200
+     days of snow. The boreal belt 50–70N carries 0.648 at the September
+     equinox (0.138 under snow) and 0.506 at the March one (0.861 under
+     snow); in the year-six state five64_day2190 (also a March equinox)
+     0.564, with 0.60 under the snow at 50–60N, 0.46 at 60–70N and 0.30 at
+     70–90N.
+   - Sea ice: the March Arctic pack 0.744 (snow ≥ 20 kg/m² below −10 °C,
+     0.019 of the globe, 0.750), the southern pack in September 0.746, the
+     June Arctic pack 0.500 (bare, its skin within 1 K of melting).
+   - The snowfall against the ageing: on the March Arctic pack below
+     −10 °C 0.66 mm/d (skin below freezing, the state's last day) balances
+     the cold ageing at 0.82 when it slows in the cold and 0.73 at the
+     plain 0.008 a day; the Antarctic pack 0.40 mm/d, 0.79 and 0.71; land
+     at 60–70N 1.63 mm/d, 0.83 and 0.80.
+
+   The scheme, on both engines (`js/physics/ice.module.js`,
+   `js/physics/land.module.js`, `js/gpu/physics.gpu.js`):
+
+   - Snow ageing (`agedSnowAlbedo`, `refreshedSnowAlbedo`): the Douville et
+     al. (1995) scheme of the ECMWF land surface (Dutra et al. 2010,
+     appendix eq. A7 and eq. 9): fresh 0.85; snow whose skin is within
+     2 K of melting (Dutra's revised test) relaxes toward its floor at
+     0.24 a day; colder snow loses 0.008 a day down to the floor; a fall of
+     F kg/m² moves it min(1, F/10) of the way back to 0.85. The cold
+     ageing is slowed by the temperature dependence of grain growth in
+     BATS (Dickinson et al. 1993), exp(5000 (1/273.15 − 1/T)): 0.50 at
+     −10 °C, 0.24 at −20 °C (from memory). BATS sums that grain-growth
+     term with a melt term (its tenth power) and a dirt term 0.3, 2.3 at
+     melting (as CLM carries it, from memory); taken whole and scaled to 1
+     at melting it would age cold snow at 0.35, 0.23 and 0.18 of the full
+     pace at −10, −20 and −30 °C where the grain-growth term alone gives
+     0.50, 0.24 and 0.10. Without it the snowfall above
+     holds cold snow on the Arctic pack at 0.73 against 0.80–0.85. Each
+     cell's albedo is in the land's `snowAlbedo` (its ocean cells the sea
+     ice's); ground and ice without snow hold 0.85 so the next snow
+     starts fresh. Floors: 0.50 on land (Dutra's), 0.70 on sea ice
+     (melting snow on Arctic ice about 0.7, Perovich et al. 2002, and
+     CCSM3's melting snow about 0.72 in the broadband: visible and
+     near-infrared cold snow 0.98 and 0.70, Briegleb et al. 2004, its
+     melting reductions from memory).
+   - Masking by trees: a full snow cover's albedo falls linearly from the
+     snow's own to `forestSnowAlbedo` 0.27 as the standing cover rises to
+     `closedCanopy` 0.7, constant above; 0.27 is MODIS's snow-covered
+     evergreen needleleaf forest (Moody et al. 2007, tabulated in Dutra et
+     al. 2010: deciduous needleleaf 0.33, deciduous broadleaf 0.31, mixed
+     0.29), the knee the MODIS finding that snow changes the albedo little
+     above about 70 % tree cover (from memory, no paper named). The
+     cover ramp `fullSnow` 20 kg/m² is
+     kept. The standing cover `canopy` rises with the cover at once and
+     falls toward it over `canopyMemory` 365 days, so it keeps 0.94 of an
+     autumn cover through 200 days of snow while the cover keeps 0.76, and
+     follows a cell under snow for years down at the cover's own pace.
+   - Bare sea ice: 0.62 while its skin is colder than −1 °C, falling
+     linearly to 0.48 at the melting point, as CCSM3 lowers its bare ice
+     over the last kelvin (Briegleb et al. 2004: cold visible and
+     near-infrared 0.78 and 0.36, 0.57 broadband; melting about 0.50,
+     from memory) and between SHEBA's cold bare ice 0.60–0.65 and its
+     ponded July ice 0.45–0.55 (Perovich et al. 2002, as given); the
+     ramp from the water's albedo below 0.5 m kept.
+   - Ice sheets keep 0.80. The ageing would hold their dry interiors at
+     0.80–0.85 (Antarctica below −10 °C, 0.58 mm/d, balances at 0.83;
+     0.71 without the cold slowing), but at the June solstice 0.0015 of
+     the globe, 44 % of the northern sheet, lies within 2 K of melting,
+     where the field falls from 0.85 to 0.73 in ten days toward 0.50, and
+     a margin cell bare of snow (3 kg/m² at the September equinox) would
+     need a glacier-ice albedo the model does not have.
+
+   Saved states and the page's snapshots carry `snowAlbedo` and `canopy`
+   (both engines; on the GPU at the end of PH); an older state loads its
+   snow at 0.85 and its standing cover at its cover. Unit tests against
+   hand-computed values (`test/snowAlbedo.test.mjs`): a day of snow at
+   −20 °C from 0.85 to 0.84812 (0.842 without the slowing), a wet day
+   0.85 → 0.77532 (0.81799 on ice), 5 kg/m² on 0.6 → 0.725, the cover
+   0.8 → 0.69626 and the standing cover 0.8 → 0.77514 after 100 days
+   under snow. At N=6 on random snow, snow albedo, standing cover and
+   skin temperature the engines' albedos agree to 4.9·10⁻⁸ over land and
+   2.7·10⁻⁶ over 99 iced cells (22 within 1 K of melting, the single
+   precision of the skin); over 48 steps with snow falling on 42 of 57
+   snow cells, wet and cold, the snow albedo agrees to rms 4.8·10⁻⁶ (max
+   1.9·10⁻⁵) and the standing cover to 2.8·10⁻⁷. Digests re-pinned to
+   b892e42f, e228ab4c and d8b73e96; the scattering's layer-heating parity
+   is held on the grey ice of 0.5 it was measured with.
+
+   Short N=64 GPU runs from copies of the three states with the final
+   defaults (OCEAN `{"everySteps":8}`, bl34), before → after. By class
+   (`scripts/clearSkyBudget.mjs`, surface albedo; area share of the
+   globe):
+
+   | class | June solstice + 3 d | September equinox + 3 d | March equinox + 10 d | reference |
+   |---|---|---|---|---|
+   | snow among sparse trees (standing 0.2–0.7) | trace: 0.528 → 0.433 | 0.003: 0.482 → 0.335 | 0.063: 0.546 → 0.416 | |
+   | snow under forest (standing ≥ 0.7) | | trace: 0.461 → 0.205 | trace: 0.487 → 0.245 (3 d) | 0.20–0.35 |
+   | thin snow on land (< 10 kg/m²) | trace: 0.162 → 0.154 | 0.009: 0.186 → 0.160 | 0.004: 0.232 → 0.196 | |
+   | bare sea ice, melting (T ≥ −1 °C) | 0.012: 0.500 → 0.487 | | trace: 0.500 → 0.480 | 0.45–0.55 |
+   | bare sea ice, cold | trace: 0.500 → 0.620 | | trace: 0.500 → 0.620 | 0.60–0.65 |
+   | sea ice under 1–10 kg/m² of snow | 0.001: 0.548 → 0.602 | 0.001: 0.491 → 0.572 | 0.001: 0.533 → 0.616 | |
+   | snow-covered sea ice, cold (T < −2 °C) | 0.023: 0.738 → 0.827 | 0.024: 0.749 → 0.836 | 0.032: 0.748 → 0.828 | 0.80–0.85 |
+   | snow-covered sea ice, wet (T ≥ −2 °C) | trace: 0.747 → 0.837 | 0.002: 0.747 → 0.818 | 0.002: 0.749 → 0.811 | 0.65–0.75 |
+   | ice sheets | 0.030: 0.800 | 0.030: 0.800 | 0.030: 0.800 | 0.80–0.85 |
+
+   The open sea and the snow-free land change by at most 0.001.
+   No state has snow on open land (standing below 0.2): the atlas start's
+   0.5 stands everywhere. The year-six state lit over its own day with
+   its snow fresh: cold snow on open land 0.544 → 0.719 (0.002 of the
+   globe; a standing cover of 0.1–0.2 already masks it by 0.08–0.17),
+   under sparse trees 0.547 → 0.410, under forest 0.539 → 0.266, cold
+   snow on sea ice 0.749 → 0.849.
+
+   - The northern snow over ten days from the March equinox (day 375,
+     sunlight-weighted): before 0.538–0.550 in every band; after 0.387
+     (30–40N), 0.417 (40–50N), 0.411 (50–60N), 0.421 (60–70N) and 0.471
+     (70–90N), the snow's own albedo 0.76–0.83; the snow line (the lowest
+     5° band at least half covered) 50–55N both, the snow-covered land
+     0.0629 → 0.0617 of the globe (45–50N 0.39 → 0.37 covered, 40–45N
+     0.23 → 0.20). Ten days from the June solstice leave snow only at
+     70–90N (0.04–0.05 of that land): 0.550 → 0.382, the snow at 0.57.
+   - The Arctic from the June solstice: the 60–90N ice lost 0.166 → 0.168
+     ·10³ km³ a day over three days (9.191 → 8.692 and 8.687), 0.192 →
+     0.191 over ten (7.268 and 7.277); the pack's ice albedo 0.500 →
+     0.491 (day 94) and 0.500 → 0.484 (day 101); the sunlight absorbed at
+     the surface of the iced cells poleward of 60N 62.6 → 64.0 and 72.1 →
+     76.8 W/m². The September Arctic pack 0.705 → 0.780.
+   - The southern pack at the September equinox (day 186): 0.746 → 0.831,
+     its iced cells' surface sunlight 12.9 → 10.9 W/m². The March Arctic
+     pack 0.743 → 0.836 (day 368) and 0.823 (day 375), its iced cells'
+     surface sunlight 5.9 → 5.3 W/m² on day 375.
+   - Day means (outcomes), before → after: day 94 albedo 0.322 → 0.321,
+     ASR 230.8 → 231.1, OLR 240.7 → 240.7, SWCRE −60.0 → −59.8, LWCRE
+     20.2 → 20.2 W/m², clear-sky reflectance 0.1459 → 0.1457; day 186
+     0.310 → 0.311, 234.9 → 234.8, 242.2 → 242.2, −56.2 → −56.1, 17.6 →
+     17.6, 0.1451 → 0.1458; day 375 0.342 → 0.340, 224.1 → 224.6, 233.3 →
+     233.4, −62.6 → −63.6, 21.8 → 21.7, 0.1579 → 0.1536. The clear-sky
+     albedo of the day-375 state lit over its day 0.158 → 0.153 (land
+     0.244 → 0.225 at the top, sea ice 0.647 → 0.706). A three-day run
+     took 0.3 wall minutes and a ten-day one 0.8, before and after.
+
+   Review (Oct 1). A cold week at −15 °C, a melting week at −0.5 °C and
+   4 kg/m² of snow, in closed form, take fresh snow to 0.830669, 0.561628
+   and 0.676977 on land and 0.830669, 0.724353 and 0.774612 on sea ice;
+   stepped every half hour the land module gives the land's to 2·10⁻¹⁴
+   and the GPU's own WGSL ageing and refresh functions both to 5.2·10⁻⁶
+   (single precision), and the sea-ice module, which ages at the skin it
+   ends each step with, falls 5.2·10⁻⁵ short where conduction warms that
+   skin. A cell whose snow melts away and is snowed on starts at 0.85. In
+   the day-94 and day-186 states of reruns of the two three-day runs
+   (which reproduce the day means above and the Arctic loss of 0.168)
+   every land snow albedo lies in 0.670–0.850 and every sea-ice one in
+   0.783–0.850, every snow-free cell holds 0.85, and the standing cover is
+   never below the cover. The ice albedo falls monotonically with the
+   skin temperature, by at most 1.4·10⁻⁵ over 10⁻⁴ K through the melting
+   ramp, and the masking monotonically with the standing cover. With
+   grey ice (`iceAlbedo` and `meltingIceAlbedo` 0.5, `snowAgeing` false)
+   the three physics digests are those pinned before the change
+   (3ca002d1, 3d0c610f, da3ea94c).
+
+   What still misses:
+
+   - One cover cannot tell a forest from tundra or grassland. The masking
+     reads the cover as tree cover, so the atlas start's 0.5 masks all
+     northern snow 0.71 of the way to 0.27: 70–90N reads 0.471 against
+     tundra's 0.60–0.80 (MODIS grassland and tundra, approximate), and
+     50–60N reads 0.411 where Earth's snow-covered boreal forest reads
+     0.27–0.33 and its steppe about 0.6–0.7 (approximate). Without the
+     masking the forest snow read 0.46–0.55 against 0.20–0.35.
+   - The standing cover's memory needs a winter to show: runs from older
+     states start it at the cover. From the boreal belt's cover of 0.648
+     in September it would hold about 0.61 by March, where the cover is
+     0.506: a masked albedo of about 0.34 instead of 0.41.
+   - Wet snow on sea ice reads 0.81–0.84 against melting snow's
+     0.65–0.75: these cells (0.002 of the globe) are mostly at the ice
+     edge, where 2–6 mm/d of snow refreshes it, and the runs start their
+     snow fresh.
+   - The June Arctic pack carries no snow from the solstice on, so it
+     goes from bare to ponded (0.48) without SHEBA's month of melting
+     snow near 0.7.
+   - The ice sheets keep one albedo, 0.80.
+   - Wet soil at the June solstice. Three days from nine64_day0091 (day
+     94, review of Oct 1) partly vegetated land reads 0.167 against
+     0.18–0.25 (0.259 of the globe; 0.205 with `soilDarkening` false),
+     its snow-free buckets 0.49 full on the mean, where the September
+     state's are 0.31 (0.199, inside) and the year-six state's 0.36. The
+     darkening reads the root zone's fill, which stays high for months
+     after rain, where BATS and CLM read the top layer's water (from
+     memory). The open
+     sea 0–30° reads 0.102 at the top on that day against 0.08–0.10.
+
+   Defaults: sea ice `iceAlbedo` 0.62 (cold bare ice), `meltingIceAlbedo`
+   0.48, `iceMeltingRange` 1 K, `fullAlbedoThickness` 0.5 m,
+   `iceFullSnow` 20 kg/m², `snowAgeing` true, `iceSnowFloor` 0.70
+   (`iceSnowAlbedo` 0.75 only without the ageing); the ageing shared by
+   land and ice (`SNOW_AGEING` and `snowAgeing`; the GPU has one set for
+   both and refuses a model whose land and ice options differ, a default
+   counting as given) `freshSnowAlbedo` 0.85,
+   `coldSnowAgeing` 0.008 /day, `meltingSnowAgeing` 0.24 /day,
+   `refreshSnowfall` 10 kg/m², `wetSnowRange` 2 K, `ageingActivation`
+   5000 K; land `snowAgeing` true, `oldSnowAlbedo` 0.50 (`snowAlbedo`
+   0.55 only without the ageing), `fullSnow` 20 kg/m², `snowMasking`
+   true, `forestSnowAlbedo` 0.27, `closedCanopy` 0.7, `canopyMemory` 365
+   days, `iceSheetAlbedo` 0.80; an older state's snow albedo 0.85 and
+   standing cover its cover.
+   Treeline and top-soil wetness (Oct 1). Two changes on both engines
+   (`js/physics/land.module.js`, `js/gpu/physics.gpu.js`), each with
+   parity and hand-computed unit tests (`test/treeline.test.mjs`,
+   `test/land.test.mjs`, `test/landGpu.test.mjs`).
+
+   - A tree cover the season admits (`treeline`). The masking's `canopy`
+     is a tree cover. Each land cell keeps two running means of its
+     lowest layer's air temperature over `seasonMemory` (3 years):
+     `seasonLength`, the share of the time at or above `seasonThreshold`
+     0.9 °C, and `seasonWarmth`, the mean excess over it (K). Their ratio
+     plus 0.9 °C is the growing season's mean temperature, taken over at
+     least `minimumSeason` 94 days (a shorter season counts as cooler; no
+     season gives 0.9 °C). The limits are TREELIM's (Paulsen & Körner
+     2014, Alpine Botany 124: 1–12, 376 treelines from satellite images):
+     a season of days whose mean air is at least 0.9 °C, at least 94 days
+     long, at least 6.4 °C on the mean; Körner & Paulsen (2004, J.
+     Biogeogr. 31: 713–732) measured 6.7 ± 0.8 °C in the root zone at 46
+     treelines from 68N to 42S. The treeline factor f rises linearly from
+     0 at 6.4 °C to 1 at 8.0 °C (`treelineWarmth`; the width, twice the
+     2004 sites' spread, is not itself sourced). Köppen's 10 °C warmest
+     month gives the same line: a sine year of −9 °C ± 19 K has a 10 °C
+     warmest month and a 119-day season at 6.9 °C, a maritime 2 °C ± 8 K
+     a 199-day season at 6.6 °C, where growing degree days above 5 °C
+     read 283 and 448 K·d against LPJ's 350 for boreal summergreen and
+     600 for boreal evergreen trees (Sitch et al. 2003, Global Change
+     Biol.), which is why the season's mean and not degree days is used.
+     Snow-free, the tree cover relaxes toward f v over `treeGrowthTime` 10
+     years rising and `treeDeclineTime` 3 years falling; under snow it
+     holds, falling toward f over 3 years only where it stands above f (a
+     failed warmth, or summers that stay under snow). Times: jack pine
+     reaches crown closure 20–21 years after fire with its seed in place
+     (Porter et al. 2023, Sci. Rep., a chronosequence); ten years of
+     snow-free time closes 90 % of the gap in 23 years where it never
+     snows and about 46 where the ground is bare half the year. The
+     decline time is not sourced: in the 2000–03 drought of the US
+     Southwest piñon mortality reached 90 % at some sites and about 25 %
+     region-wide, after 15 consecutive months of dry soil (Breshears et
+     al. 2005, PNAS 102: 15144–15148), faster than three years, which
+     remove 90 % in 7; the masking needs the time the dead stems stop
+     shading the snow, for which no source was checked. The air is
+     sampled every step, where TREELIM gates daily means.
+   - Starts. A state without the season means (every state saved before
+     this, and a fresh start) starts them from a sine year with mean
+     −31.8 + 0.148 Q̄ − 6.5 K/km × the ground's height (°C) and amplitude
+     min(0.069 ΔQ, 19.7 − 0.0205 ΔQ) (K), Q̄ and ΔQ the annual mean and
+     annual harmonic of the top-of-atmosphere daily insolation at the
+     cell's latitude (W/m²; `SEASON_ESTIMATE`, `seasonEstimate`), and its
+     trees at the cover times f. The constants are least-squares fits to
+     the model's own first year: the lowest air of nine64 and eight64 at
+     days 91, 183, 274 and 365, harmonically fitted per land cell off the
+     ice sheets (the amplitude's second branch over 40–85N). The atlas
+     start's land temperature, 288 + 45(1/3 − sin²φ) K with no season and
+     no lapse, is 3–7 K colder at 45–75N than that first year and is not
+     used. Land added by regridding takes the estimate and its trees the
+     guessed cover (0.5 snow-free) times the estimate's f. The estimate
+     against the first years' own season (season mean °C, mean f, days):
+
+     | band | estimate | nine64 | eight64 | nine64 / eight64 warmest month |
+     |---|---|---|---|---|
+     | 55–60N | 11.4, 0.99, 196 | 11.2, 0.90, 206 | 10.3, 0.90, 217 | 17.4 / 16.0 |
+     | 60–65N | 9.1, 0.86, 167 | 8.8, 0.69, 160 | 9.2, 0.78, 183 | 13.0 / 13.9 |
+     | 65–70N | 7.6, 0.67, 148 | 8.0, 0.66, 145 | 7.8, 0.58, 163 | 11.8 / 11.6 |
+     | 70–75N | 7.0, 0.44, 142 | 6.5, 0.48, 131 | 6.9, 0.46, 145 | 9.4 / 10.0 |
+     | 75–80N | 5.6, 0.03, 121 | 2.9, 0.01, 75 | 5.5, 0.15, 118 | 3.9 / 7.8 |
+     | 80–85N | 4.2, 0.00, 101 | 1.9, 0.00, 40 | 5.5, 0.34, 110 | 1.9 / 8.0 |
+
+     In the model's own climate the season's mean crosses 6.4 °C at about
+     73N (nine64) and 74N (eight64) and the warmest month 10 °C at about
+     71N and 72.5N, the band means' factor falling through a half between
+     65–70N and 70–75N. Earth's northern treeline lies at 56N in
+     Labrador (53N in parts), 61N by Hudson Bay, 68N in Alaska, 69N in
+     the Northwest Territories, 70N in Norway and 73N on the Central
+     Siberian Plateau (Wikipedia, "Tree line", its table of Arctic tree
+     lines). The zonal band means lie at the poleward end of that range,
+     and the estimate, being zonal, puts the line at 67.5–70N in
+     Labrador and by Hudson Bay (2.5° bands, mean factor under a half),
+     9–11° poleward of Earth's there, and at 65N in Taimyr and eastern
+     Siberia, where it subtracts the plateaus' height. The model's own
+     first year by sector, from per-cell fits to the four instants, is
+     too noisy to place the line: nine64 and eight64 differ by up to 10°
+     in a sector (Labrador 67.5N and 75N, Hudson Bay 72.5N and 65N).
+   - Top-soil wetness (`soilDarkening` 'surface', the default). The bare
+     soil darkens linearly with the 15 kg/m² surface layer's fill
+     (`darkeningWetness` [0, 1]), from
+     `bareAlbedo` 0.30 dry to `wetSoilAlbedo` 0.15 full, whatever the root
+     zone holds: Idso et al. (1975, J. Appl. Meteor. 14: 109–113) found
+     a loam's albedo linear in its top layer's water, 0.30 dry to 0.14 wet (a
+     ratio of 0.47; 0.15 / 0.30 is 0.50), linear in a layer under 0.2 cm
+     thick (as cited by later studies; the paper itself was not read).
+     The 15 kg/m² store is far deeper than that, so a few millimetres of
+     rain darken the model's soil by a fraction where they would darken
+     the top 0.2 cm fully. The layer seeps into the root
+     zone over a day, so a wetted bare soil brightens 0.150, 0.209, 0.244,
+     0.265, 0.278 every 12 hours after the rain stops (with the cover
+     growing over a full bucket). 'rootZone' keeps the bucket's ramp
+     ([0.2, 0.5]); without the vegetated land there is no surface layer
+     and no darkening. The snow-free albedo by the layer's fill and the
+     cover v:
+
+     | fill | 0 | 0.25 | 0.5 | 0.75 | 1 |
+     |---|---|---|---|---|---|
+     | v = 0 | 0.300 | 0.263 | 0.225 | 0.188 | 0.150 |
+     | v = 0.5 | 0.215 | 0.196 | 0.177 | 0.159 | 0.140 |
+     | v = 1 | 0.130 | 0.130 | 0.130 | 0.130 | 0.130 |
+
+   Engines: at N=6 over 48 steps (season memory 6 h, trees 3 h up and 2
+   h down, f over 6–22 °C; 151 land cells, 14 under snow, 113 in season,
+   trees grew on 13 and died back on 128) the season length agrees to
+   4.1·10⁻⁷, the season warmth to 3.1·10⁻³ K under lowest-air
+   differences of 1.4·10⁻² K, the tree cover to 3.8·10⁻⁵; the albedo of
+   173 land cells with a random surface layer to 7.6·10⁻⁸ (it darkens
+   136, by up to 0.132; by the root zone 1.1·10⁻⁷). Hand values: a sine
+   year −4 °C ± 15 K over 0.9 °C, share 0.394075 and excess 2.581744 K;
+   a 146-day season at 7.9 °C, f 0.9375; a 73-day one with 1.5 K of
+   excess, f 0.202793; trees 0.2 → 0.705696 in 10 years at f = 1, 0.6
+   → 0.220728 in 3 at f = 0, 0.8 → 0.610364 in 3 under snow at f = 0.5.
+   States save `seasonLength` and `seasonWarmth` (on the GPU at the end
+   of PH, read back by `land.serialize`, which the page's snapshot uses);
+   land regridding samples them by tile. The digests are unchanged (their
+   model has no land).
+
+   Runs: N=64 GPU, bl34, OCEAN `{"everySteps":8}`, from copies of the
+   states, before (`treeline` false, `soilDarkening` 'rootZone', the
+   previous rule) → after; the five64_day2190 state lit over its own day
+   without running. Snow-covered land (`scripts/snowIceAlbedo.mjs`,
+   sunlight-weighted surface albedo, area share of the globe):
+
+   | row | June solstice + 3 d | September equinox + 3 d | March equinox + 3 d | March equinox + 10 d | five64_day2190 | reference |
+   |---|---|---|---|---|---|---|
+   | 70–90N (tundra) | trace: 0.450 → 0.758 | 0.0018: 0.370 → 0.714 | 0.0056: 0.473 → 0.707 | 0.0056: 0.471 → 0.704 | 0.0056: 0.589 → 0.744 | 0.60–0.80 |
+   | 50–70N (boreal) | | 0.0012: 0.298 → 0.596 | 0.044: 0.424 → 0.470 | 0.044: 0.416 → 0.464 | 0.041: 0.409 → 0.449 | 0.27–0.45 |
+   | 50–60N | | | 0.019: 0.423 → 0.429 | 0.018: 0.411 → 0.417 | 0.016: 0.352 → 0.359 | |
+   | 60–70N | | 0.0012: 0.298 → 0.596 | 0.026: 0.425 → 0.511 | 0.025: 0.421 → 0.505 | 0.024: 0.461 → 0.531 | |
+   | 30–40N | | | 0.005: 0.392 → 0.728 | 0.005: 0.387 → 0.741 | 0.004: 0.366 → 0.785 | |
+   | trees < 0.1 (open; none before) | | 0.0027: 0.698 | 0.011: 0.818 | 0.011: 0.816 | 0.012: 0.839 | 0.80–0.85 cold |
+   | trees 0.1–0.3 | | | 0.006: 0.645 | 0.006: 0.631 | 0.007: 0.684 | |
+   | all land snow | 0.0002: 0.433 → 0.724 | 0.003: 0.333 → 0.648 | 0.066: 0.427 → 0.517 | 0.062: 0.416 → 0.509 | 0.058: 0.405 → 0.503 | |
+
+   The tree cover by band on day 375 (cover, trees, f; share of the
+   land with trees ≥ 0.2): 55–60N 0.51, 0.51, 0.99 (0.99); 60–65N 0.51,
+   0.45, 0.86 (0.88); 65–70N 0.49, 0.34, 0.67 (0.74); 70–75N 0.46,
+   0.21, 0.44 (0.56); 75–80N 0.40, 0.01, 0.03 (0); 80–85N 0.37, 0, 0
+   (0); south of 55N and in the south the trees are within 0.02 of the
+   cover. The 30–40N snow is the high plateau's, whose season's mean is
+   below 6.4 °C at its height. Cold snow
+   on open land (trees < 0.2) reads 0.806 and 0.802 on days 368 and 375
+   (0.80–0.85, matches; 0.013 of the globe), 0.814 on the year-six
+   state. Bare and vegetated land (`scripts/clearSkyBudget.mjs`, surface
+   albedo; with the darkening off in brackets):
+
+   | class | June solstice + 3 d | September equinox + 3 d | five64_day2190 | reference |
+   |---|---|---|---|---|
+   | partly vegetated (v 0.2–0.7) | 0.259: 0.167 → 0.200 (0.205) | 0.191: 0.199 → 0.213 (0.217) | 0.084: 0.193 → 0.222 (0.227) | 0.18–0.25 |
+   | dense vegetation (v > 0.7) | trace: 0.136 → 0.178 | 0.056: 0.137 → 0.165 (0.171) | 0.083: 0.138 → 0.147 (0.149) | 0.12–0.15 |
+   | bare dry soil (v < 0.2, layer < half full) | | | 0.030: 0.274 → 0.278 (0.279) | 0.30–0.40 |
+   | bare wet soil (layer ≥ half full) | | | trace: 0.271 → 0.172 | 0.10–0.20 |
+
+   The partly vegetated land's surface layer is 0.09 full on day 94
+   (its root zone 0.49) and 0.06 on day 186 (0.31); the dense
+   vegetation's 0.18 (0.81); the year-six deserts' 0.017 (0.13).
+   Outcomes, before → after: clear-sky albedo of the state lit over its
+   day 0.146 → 0.153 (day 94), 0.146 → 0.149 (186), 0.153 → 0.160 (368),
+   0.153 → 0.161 (375), 0.153 → 0.159 (year six); day means (spin-up
+   log) day 94 albedo 0.321 → 0.326, ASR 231.1 → 229.5, OLR 240.7 →
+   240.6, SWCRE −59.8 → −58.7, clear-sky reflectance 0.1457 → 0.1535,
+   Ts 16.66 → 16.57 °C; day 186 0.311 → 0.312, 234.8 → 234.2, 242.2 →
+   242.2, −56.1 → −55.5, 0.1458 → 0.1493, 16.71 → 16.65; day 368 0.325
+   → 0.328, 229.8 → 228.8, 233.3 → 233.3, −58.6 → −57.2, 0.1532 →
+   0.1602, 13.78 → 13.69; day 375 0.340 → 0.345, 224.6 → 223.2, 233.4
+   → 233.1, −63.6 → −62.4, 0.1536 → 0.1613, 13.86 → 13.70. Three days
+   took 0.3 wall minutes and ten 0.8 → 1.0 (CPU work alongside).
+
+   What still misses:
+
+   - The rule cannot tell grassland from forest where the season is
+     warm: there f is 1 and the trees are the cover. On day 375 the snow
+     at 40–60N under f = 1 (0.025 of the globe) reads 0.416 under trees
+     of 0.49; its part with a cover under 0.5 (0.012 of the globe, steppe
+     and prairie by their moisture) reads 0.471 under trees of 0.41,
+     against MODIS snow-covered grassland and cropland (Moody et al.
+     2007 tabulate them by IGBP class; the values were not checked
+     here). A moisture split (the cover's goal already keeps a
+     dry steppe sparse) or fire would be needed.
+   - The boreal belt 50–70N reads 0.464 against 0.27–0.45: its cover is
+     still the atlas start's 0.5 a year on (0.50), so its trees are at
+     most 0.5, masking 0.71 of the way, where MODIS snow-covered
+     needleleaf and mixed forest reads 0.27–0.33 (Moody et al. 2007 as
+     tabulated by Dutra et al. 2010).
+   - The zonal treeline (70–75N) sits at the poleward end of Earth's
+     56–73N: the model's 70–75N land has a 9.4–10.0 °C warmest month,
+     and the zonal start estimate cannot hold Labrador's and Hudson
+     Bay's line far south until three years of the model's own seasons
+     replace it.
+   - Dense vegetation in September reads 0.165 against 0.12–0.15: the
+     cover blends the dry soil (0.30 at a layer 0.18 full) at 1 − v =
+     0.25 into the forest, where a forest floor is shaded and littered;
+     the root zone's darkening had hidden it at 0.137.
+   - Bare dry soil still reads 0.278 against 0.30–0.40 (one soil colour).
+   - Ten days cannot show the rule's own times: the season means move
+     by about 1 % in ten days, the trees by under 1 % of their gap.
+
+   Defaults: land `treeline` true, `seasonThreshold` 0.9 °C,
+   `minimumSeason` 94 days, `treelineWarmth` [6.4, 8.0] °C,
+   `seasonMemory` 3 years, `treeGrowthTime` 10 years (snow-free),
+   `treeDeclineTime` 3 years, `SEASON_ESTIMATE` mean [−31.8, 0.148],
+   amplitude [0.069, 19.7, −0.0205], lapse 0.0065 K/m; `soilDarkening`
+   'surface', `darkeningWetness` [0, 1] ('rootZone' [0.2, 0.5]),
+   `wetSoilAlbedo` 0.15, `bareAlbedo` 0.30, `surfaceCapacity` 15 kg/m²;
+   the GPU takes these and `percolationTime`, `stomatalResistance`,
+   `growthColdest`, `growthWarmest` and `iceSheetAlbedo` from the land's
+   options (it had taken the last five from its own defaults whatever
+   the options said); `canopyMemory` 365 days only without the
+   treeline. Older states start their season means from the estimate
+   and their trees at the cover times f.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to

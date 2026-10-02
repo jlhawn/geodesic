@@ -66,9 +66,13 @@ test('scripts/verticalAudit.mjs prints every headline number of a saved state wi
   assert.equal(run.status, 0, run.stderr);
   assert.equal(saved.status, 0, saved.stderr);
   const lines = run.stdout.split('\n').filter((line) => line.includes(' Earth '));
-  assert.equal(lines.length, 83, `${lines.length} rows`);
-  assert.match(run.stdout, /global clear-sky albedo, mean over the window's 2 steps +0\.[0-9]{3}  Earth 0\.140\.\.0\.160  -> /);
-  assert.match(run.stdout, /30S-30N clear-sky albedo, mean over the window's 2 steps +0\.[0-9]{3}  Earth n\/a\.\.n\/a  -> n\/a  \[the window's 2 steps 0\.[0-9]{3}; Earth 0\.15 \+- 0\.01 globally\]/);
+  const classLines = lines.filter((line) => line.includes('clear sky, '));
+  assert.equal(lines.length - classLines.length, 83, `${lines.length - classLines.length} rows besides the surface classes`);
+  assert.ok(classLines.some((line) => /clear sky, open sea 0-30: albedo at the top +0\.[0-9]{3}  Earth 0\.080\.\.0\.100  -> /.test(line)), 'a row for the tropical open sea at the top');
+  assert.ok(classLines.some((line) => /clear sky, partly vegetated \(0\.2-0\.7\): surface albedo +0\.[0-9]{3}  Earth 0\.180\.\.0\.250  -> /.test(line)), 'a row for partly vegetated land');
+  assert.equal(classLines.filter((line) => line.includes('direct-beam surface albedo')).length, 5, 'five rows of the open sea by the sun\'s cosine');
+  assert.match(run.stdout, /global clear-sky albedo, mean over the window's 2 steps +0\.[0-9]{3}  Earth n\/a\.\.n\/a  -> n\/a  \[the window's 2 steps 0\.[0-9]{3}; an outcome of the surface classes below, Earth about 0\.15 globally\]/);
+  assert.match(run.stdout, /30S-30N clear-sky albedo, mean over the window's 2 steps +0\.[0-9]{3}  Earth n\/a\.\.n\/a  -> n\/a  \[the window's 2 steps 0\.[0-9]{3}; an outcome/);
   for (const name of ['global shortwave cloud effect', 'global longwave cloud effect', '30S-30N shortwave cloud effect', '30S-30N longwave cloud effect']) assert.ok(lines.some((line) => line.includes(`${name}, mean over the window's 2 steps (W/m2)`)), `a row for the window's ${name}`);
   assert.match(saved.stdout, /global shortwave cloud effect, day mean of the state's last day \(W\/m2\) +-40\.0  Earth -43\.0\.\.-51\.0  -> too weak by x1\.08  \[the window's 2 steps -?[0-9.]+\]/);
   assert.match(saved.stdout, /30S-30N longwave cloud effect, day mean of the state's last day \(W\/m2\) +25\.0  Earth n\/a\.\.n\/a  -> n\/a  \[the window's 2 steps -?[0-9.]+; Earth \+26 \+- 3 globally\]/);

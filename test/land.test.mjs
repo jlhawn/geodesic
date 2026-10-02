@@ -57,7 +57,7 @@ test('the bucket conserves water: rain, evaporation, melt and runoff balance the
 
 test('snow accumulates below freezing, raises the albedo, holds the surface at the melting point while it melts, and drains into the bucket', () => {
   const geography = createGeography(mesh, syntheticTopography(90, 180, () => 100), { landBridges: {}, seaStraits: {} });
-  const land = createLandSurface(mesh, geography, { heatCapacity: 1e6, albedo: 0.25, snowAlbedo: 0.7, fullSnow: 20, vegetation: false });
+  const land = createLandSurface(mesh, geography, { heatCapacity: 1e6, albedo: 0.25, snowAlbedo: 0.7, fullSnow: 20, vegetation: false, snowAgeing: false });
   land.initialize();
   const i = 3;
   land.deposit(i, 10, MELTING_POINT - 5);
@@ -102,7 +102,7 @@ test('vegetation grows over a wet bucket and dies back over a dry one on its tim
   assert.equal(land.vegetation[i], 0.5);
   assert.equal(land.capacity(i), 300);
   assert.equal(land.soil[i], 150);
-  assert.ok(Math.abs(land.albedo(i) - 0.215) < 1e-12);
+  assert.ok(Math.abs(land.albedo(i) - (0.30 + (0.13 - 0.30) * 0.5)) < 1e-12, 'a fresh start\'s dry surface layer leaves the bare soil dry');
   land.vegetation[i] = 0.5; land.soil[i] = 0;
   land.update(i, surfaceT, flux, 0, 50 * DAY);
   assert.ok(Math.abs(land.vegetation[i] - 0.5 * Math.exp(-1)) < 1e-12, `dry: ${land.vegetation[i]}`);
@@ -135,7 +135,7 @@ test('a browning cell keeps its bucket, and water above the root zone runs off',
 });
 
 test('under snow the vegetation fades over snowDeclineTime and the snow sets the albedo', () => {
-  const land = createLandSurface(mesh, flat(), { snowDeclineTime: 200 * DAY, snowAlbedo: 0.55, fullSnow: 20 });
+  const land = createLandSurface(mesh, flat(), { snowDeclineTime: 200 * DAY, snowAlbedo: 0.55, fullSnow: 20, snowAgeing: false, snowMasking: false });
   land.initialize();
   const i = 2, surfaceT = new Float64Array(mesh.nCells).fill(MELTING_POINT - 10), flux = new Float64Array(mesh.nCells);
   land.deposit(i, 50, MELTING_POINT - 10);
@@ -156,7 +156,7 @@ test('a saved land state without vegetation loads green with full buckets where 
   }
   land.load({ soil: new Float64Array(mesh.nCells).fill(20), snow, vegetation: new Float64Array(mesh.nCells).fill(1.5) });
   for (let i = 0; i < mesh.nCells; i++) assert.equal(land.vegetation[i], geography.land[i] && !geography.iceSheet[i] ? 1 : 0);
-  assert.deepEqual(Object.keys(land.serialize()), ['soil', 'snow', 'vegetation', 'surface']);
+  assert.deepEqual(Object.keys(land.serialize()), ['soil', 'snow', 'snowAlbedo', 'vegetation', 'surface', 'canopy', 'seasonLength', 'seasonWarmth']);
 });
 
 test('an ice sheet keeps its albedo under anything and grows nothing', () => {
@@ -209,4 +209,41 @@ test('with vegetation the soil has a surface layer that bare ground evaporates a
   land.soil[i] = 0;
   land.update(i, cold, flux, 0, 30 * DAY);
   assert.ok(land.vegetation[i] < grown - 0.01, 'decline needs no warmth');
+});
+
+test('bare soil darkens linearly with the surface layer\'s fill from 0.30 dry to 0.15 full whatever the root zone holds, the vegetation blending it toward 0.13; the root zone\'s fill darkens it with soilDarkening \'rootZone\', and without the darkening it stays 0.30', () => {
+  const land = createLandSurface(mesh, flat()), roots = createLandSurface(mesh, flat(), { soilDarkening: 'rootZone' }), plain = createLandSurface(mesh, flat(), { soilDarkening: false });
+  const bare = createLandSurface(mesh, flat(), { vegetation: false, albedo: 0.2 });
+  for (const m of [land, roots, plain, bare]) m.initialize();
+  const i = 3, cap = land.capacity(i), rows = [];
+  for (const v of [0, 0.5, 1]) {
+    const row = [];
+    for (const fill of [0, 0.25, 0.5, 0.75, 1]) {
+      for (const bucket of [0, 1]) {
+        for (const m of [land, roots, plain]) { m.vegetation[i] = v; m.surface[i] = 15 * fill; m.soil[i] = bucket * cap; m.snow[i] = 0; }
+        const soil = 0.30 - 0.15 * fill;
+        assert.ok(Math.abs(land.albedo(i) - (soil + (0.13 - soil) * v)) < 1e-12, `v ${v}, store ${fill}, bucket ${bucket}: ${land.albedo(i)}`);
+        const rooted = 0.30 - 0.15 * bucket;
+        assert.ok(Math.abs(roots.albedo(i) - (rooted + (0.13 - rooted) * v)) < 1e-12, `root zone, v ${v}, bucket ${bucket}`);
+        assert.ok(Math.abs(plain.albedo(i) - (0.30 + (0.13 - 0.30) * v)) < 1e-12, `without darkening, v ${v}, store ${fill}`);
+      }
+      row.push(land.albedo(i).toFixed(3));
+    }
+    rows.push(`v ${v}: ${row.join(' ')}`);
+  }
+  land.surface[i] = 15; land.soil[i] = cap;
+  roots.soil[i] = 0.3 * cap; roots.vegetation[i] = 0;
+  assert.ok(Math.abs(roots.albedo(i) - 0.25) < 1e-12, 'the root zone ramps from a fifth to half full');
+  bare.soil[i] = bare.capacity(i);
+  assert.equal(bare.albedo(i), 0.2, 'without the vegetated land there is no surface layer and no darkening');
+  land.vegetation[i] = 0; land.canopy[i] = 0; land.snow[i] = 20;
+  assert.ok(Math.abs(land.albedo(i) - 0.85) < 1e-12, 'full fresh snow hides the wet soil');
+  land.snow[i] = 0; land.vegetation[i] = 0; land.surface[i] = 15; land.soil[i] = cap;
+  const surfaceT = new Float64Array(mesh.nCells).fill(295), flux = new Float64Array(mesh.nCells), seen = [land.albedo(i)];
+  let cover = 0;
+  for (let h = 0; h < 48; h++) { land.update(i, surfaceT, flux, 0, 3600); if (h % 12 === 11) seen.push(land.albedo(i)); if (h === 23) cover = land.vegetation[i]; }
+  const day = 0.30 - 0.15 * Math.exp(-1);
+  assert.ok(Math.abs(seen[2] - (day + (0.13 - day) * cover)) < 1e-9, `the store seeps out over a day and the soil brightens with it: ${seen[2]}`);
+  assert.ok(seen.every((a, n) => n === 0 || a > seen[n - 1]), `brightening: ${seen.map((a) => a.toFixed(3)).join(' ')}`);
+  console.log(`albedo at surface-layer fill 0, 0.25, 0.5, 0.75, 1 by vegetation cover: ${rows.join('; ')}; a wetted bare soil every 12 h after the rain stops: ${seen.map((a) => a.toFixed(3)).join(' ')}`);
 });

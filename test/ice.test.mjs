@@ -70,7 +70,7 @@ test('the initial state has ice at the poles and the model steps with it', () =>
 test('snow on the ice brightens it, insulates it, melts before it, and goes into the water when the ice is gone', () => {
   const snowy = createSeaIce(model.mesh), bare = createSeaIce(model.mesh);
   const flux = (w) => new Float64Array([w]);
-  assert.ok(Math.abs(snowy.albedo(1, null, 0) - 0.5) < 1e-12 && Math.abs(snowy.albedo(1, null, 20) - 0.75) < 1e-12 && Math.abs(snowy.albedo(1, null, 10) - 0.625) < 1e-12);
+  assert.ok(Math.abs(snowy.albedo(1, null, 0) - 0.62) < 1e-12 && Math.abs(snowy.albedo(1, null, 20) - 0.85) < 1e-12 && Math.abs(snowy.albedo(1, null, 10) - 0.735) < 1e-12);
   assert.equal(snowy.albedo(0, null, 20), snowy.albedo(0), 'open water is not brightened');
   const ice = new Float64Array([1, 0]), water = new Float64Array([FREEZING_POINT - 3, FREEZING_POINT + 1]);
   assert.equal(snowy.deposit(0, 5, MELTING_POINT - 5, ice, water), true);
@@ -215,8 +215,8 @@ test('the albedo blends linearly in the concentration between open water and ful
   const before = (h, mu, snow) => {
     const water = mu === null ? 0.06 : openWaterAlbedo(mu);
     if (h <= 0) return water;
-    const bare = water + (0.5 - water) * Math.min(1, h / 0.5);
-    return bare + (0.75 - bare) * Math.min(1, snow / 20);
+    const bare = water + (0.62 - water) * Math.min(1, h / 0.5);
+    return bare + (0.85 - bare) * Math.min(1, snow / 20);
   };
   for (const mu of [null, 0.2, 0.9]) for (const [h, snow] of [[0.1, 0], [0.3, 8], [2, 30]]) {
     assert.equal(sea.albedo(h, mu, snow, 1), before(h, mu, snow), 'full cover is the ice');

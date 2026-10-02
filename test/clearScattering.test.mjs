@@ -6,7 +6,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16, syntheticTopography } from '../js/geography.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
-import { REFERENCE_PRESSURE, RAYLEIGH_DEPTH, LAND_AEROSOL, SEA_AEROSOL, SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
+import { REFERENCE_PRESSURE, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -17,7 +17,7 @@ function random(seed) {
   return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
 }
 
-test('over a black surface the clear column reflects the two-stream value of its Rayleigh and aerosol scattering, τ/(τ + 2μ) of the visible beam less ozone and aerosol absorption, at three zenith angles over sea and over land', () => {
+test('over a black surface the clear column reflects the two-stream value of its Rayleigh sub-bands and aerosol, the weighted τ/(τ + 2μ) of the visible beam less ozone and aerosol absorption, at three zenith angles over sea and over land', () => {
   const grid = new Grid(4), C = createModel(grid, { ocean: false }).mesh.nCells, land = Uint8Array.from({ length: C }, (_, i) => i % 2);
   const model = createModel(grid, { ocean: false, radiation: { land, clearSkyPass: true } });
   const init = initializeState(model, {});
@@ -32,15 +32,16 @@ test('over a black surface the clear column reflects the two-stream value of its
     const b = radiation.budget, aerosol = land[i] ? LAND_AEROSOL : SEA_AEROSOL;
     const ozone = 0.03 * beam, visible = 0.5 * beam - ozone;
     const taken = visible * (1 - Math.exp(-0.05 * aerosol * 35 / Math.sqrt(1224 * mu * mu + 1)));
-    const depth = RAYLEIGH_DEPTH * pi[i] / REFERENCE_PRESSURE + 0.3 * 0.95 * aerosol;
-    const reflected = (visible - taken) * depth / (depth + 2 * mu);
-    const direct = (visible - taken) * Math.exp(-depth / mu) + 0.5 * beam;
+    const depths = RAYLEIGH_BANDS.map(([w, tau]) => [w, tau * pi[i] / REFERENCE_PRESSURE + 0.3 * 0.95 * aerosol]);
+    const depth = depths.reduce((s, [w, d]) => s + w * d, 0);
+    const reflected = (visible - taken) * depths.reduce((s, [w, d]) => s + w * d / (d + 2 * mu), 0);
+    const direct = (visible - taken) * depths.reduce((s, [w, d]) => s + w * Math.exp(-d / mu), 0) + 0.5 * beam;
     const error = Math.max(Math.abs(b.reflectedSolar - reflected) / reflected, Math.abs(b.aerosolSolar - taken) / taken, Math.abs(b.surfaceDirect - direct) / direct);
     worst = Math.max(worst, error);
     assert.ok(error < 1e-12, `cell ${i} (${land[i] ? 'land' : 'sea'}), μ ${mu}: reflected ${b.reflectedSolar} against ${reflected}, aerosol ${b.aerosolSolar} against ${taken}, direct ${b.surfaceDirect} against ${direct}`);
     assert.ok(Math.abs(b.absorbedSolar + b.reflectedSolar - beam) < 1e-12 * beam && Math.abs(b.clearAbsorbedSolar - b.absorbedSolar) < 1e-12 * beam, `cell ${i}, μ ${mu}: the column closes and is its own clear sky`);
     checked++;
-    if (mu === 0.5) console.log(`${land[i] ? 'land' : 'sea'} (aerosol ${aerosol}, scattering depth ${depth.toFixed(4)}) at μ 0.5: reflects ${(b.reflectedSolar / beam).toFixed(4)} of the beam over a black surface, aerosol absorbs ${(taken / beam).toFixed(4)}`);
+    if (mu === 0.5) console.log(`${land[i] ? 'land' : 'sea'} (aerosol ${aerosol}, mean scattering depth ${depth.toFixed(4)}) at μ 0.5: reflects ${(b.reflectedSolar / beam).toFixed(4)} of the beam over a black surface, aerosol absorbs ${(taken / beam).toFixed(4)}`);
   }
   console.log(`${checked} clear columns over a black surface match the two-stream to ${worst.toExponential(1)}`);
 });
@@ -112,7 +113,7 @@ async function enginePair(radiation, seed) {
 }
 
 test('both engines give a random set of sunlit columns over sea and land, clear and cloudy, the same absorbed, atmospheric, reflected, clear-sky and surface sunlight with the Rayleigh and aerosol scattering, and the same change from turning it off', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const on = await enginePair({ clearSkyPass: true }, 11), off = await enginePair({ clearSkyPass: true, rayleighDepth: 0, landAerosol: 0, seaAerosol: 0 }, 11);
+  const on = await enginePair({ clearSkyPass: true }, 11), off = await enginePair({ clearSkyPass: true, rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, upwardAbsorption: false }, 11);
   const { C, land } = on;
   let lit = 0, landLit = 0, worst = 0, worstEffect = 0, largest = 0, name = '';
   for (let i = 0; i < C; i++) {
@@ -132,5 +133,64 @@ test('both engines give a random set of sunlit columns over sea and land, clear 
   assert.ok(lit > 100 && landLit > 20, `${lit} sunlit, ${landLit} over land`);
   assert.ok(worst < 2e-5, `engines apart by ${worst} of the beam at ${name}`);
   assert.ok(largest > 0.02 && worstEffect < 2e-5, `effect ${largest}, engines' effect apart by ${worstEffect}`);
+  on.done(); off.done();
+});
+
+test('the light the surface reflects loses to vapour what the path it crossed coming down plus 5/3 of the column\'s absorbs beyond the first, and in the visible what the aerosol absorbs over 5/3 of its depth', async () => {
+  const { waterVaporAbsorptivity } = await import('../js/physics/radiation.module.js');
+  const grid = new Grid(4), C = createModel(grid, { ocean: false }).mesh.nCells, land = Uint8Array.from({ length: C }, (_, i) => i % 2);
+  const make = (options) => {
+    const model = createModel(grid, { ocean: false, radiation: { land, clearSkyPass: true, ...options } });
+    initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
+    return model;
+  };
+  const plain = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0 };
+  const on = make(plain), off = make({ ...plain, upwardAbsorption: false }), hazy = make({ rayleighDepth: 0, aerosolAsymmetry: 1 }), hazyOff = make({ rayleighDepth: 0, aerosolAsymmetry: 1, upwardAbsorption: false });
+  const { core } = on, { K, dSigma, sigmaMid, g } = core.diagnostics, [pi, theta] = on.state, bottom = (K - 1) * C;
+  const q = new Float64Array(K * C);
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) if (sigmaMid[k] > 0.4) q[k * C + i] = 0.6 * saturationHumidity(theta[k * C + i] * (pi[i] * sigmaMid[k] / 1e5) ** 0.2857, pi[i] * sigmaMid[k]);
+  for (const m of [on, off, hazy, hazyOff]) for (let i = 0; i < C; i++) m.core.diagnoseColumn(i, pi, theta, q, null);
+  let worst = 0, worstAerosol = 0, largest = 0;
+  for (const i of [0, 1]) for (const mu of [1, 0.4, 0.1]) for (const albedo of [0.3, 0.8]) {
+    const beam = SOLAR_CONSTANT * mu, run = (m) => { m.radiation.column(i, pi[i], theta, 290, 5, undefined, beam, q[bottom + i], q, null, albedo, albedo); return { ...m.radiation.budget }; };
+    const a = run(on), b = run(off);
+    let path = 0;
+    for (let k = 0; k < K; k++) path += q[k * C + i] * pi[i] * dSigma[k] / g * Math.sqrt(sigmaMid[k]) * 0.1;
+    const down = path * 35 / Math.sqrt(1224 * mu * mu + 1);
+    const expected = albedo * 0.97 * beam * (waterVaporAbsorptivity(down + 5 / 3 * path) - waterVaporAbsorptivity(down));
+    const error = Math.abs(b.reflectedSolar - a.reflectedSolar - expected) / expected;
+    worst = Math.max(worst, error);
+    largest = Math.max(largest, expected / beam);
+    assert.ok(error < 1e-12, `cell ${i}, μ ${mu}, albedo ${albedo}: vapour takes ${b.reflectedSolar - a.reflectedSolar} of the reflected light, expected ${expected}`);
+    assert.ok(Math.abs(a.absorbedSolar + a.reflectedSolar - beam) < 1e-12 * beam && Math.abs(a.clearAbsorbedSolar - a.absorbedSolar) < 1e-12 * beam && Math.abs(a.atmosphereSolar - b.atmosphereSolar - expected) < 1e-12 * beam, `cell ${i}, μ ${mu}: closes, is its own clear sky, and heats the air by what it takes`);
+    const h = run(hazy), hb = run(hazyOff), aerosol = land[i] ? LAND_AEROSOL : SEA_AEROSOL;
+    const reflectedVisible = (0.5 * beam - 0.03 * beam - hb.aerosolSolar) * albedo;
+    const aerosolUp = h.aerosolSolar - hb.aerosolSolar;
+    worstAerosol = Math.max(worstAerosol, Math.abs(aerosolUp / reflectedVisible - -Math.expm1(-0.05 * aerosol * 5 / 3)) / -Math.expm1(-0.05 * aerosol * 5 / 3));
+  }
+  console.log(`12 humid clear columns: the vapour takes up to ${largest.toFixed(4)} of the beam from the reflected light, as the up path's absorptivity gives to ${worst.toExponential(1)}; an absorbing aerosol takes 1 - exp(-(1 - ω) τ 5/3) of the visible light the surface reflects to ${worstAerosol.toExponential(1)}`);
+  assert.ok(largest > 0.005, `the up path takes ${largest} of the beam`);
+  assert.ok(worstAerosol < 1e-12, `aerosol share off by ${worstAerosol}`);
+});
+
+test('both engines take the same light from the surface\'s reflection on its way up, and give it the same change', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const on = await enginePair({ clearSkyPass: true }, 11), off = await enginePair({ clearSkyPass: true, upwardAbsorption: false }, 11);
+  const { C } = on;
+  let lit = 0, worst = 0, worstEffect = 0, largest = 0, name = '';
+  for (let i = 0; i < C; i++) {
+    if (!(on.cpu.insolation[i] > 0)) continue;
+    lit++;
+    for (const key of ['absorbed', 'atmosphere', 'reflected', 'clear', 'down']) {
+      const scale = on.cpu.insolation[i];
+      const d = Math.abs(on.cpu[key][i] - on.gpu[key][i]) / scale;
+      if (d > worst) { worst = d; name = `${key} at cell ${i}`; }
+      const effect = on.cpu[key][i] - off.cpu[key][i], gpuEffect = on.gpu[key][i] - off.gpu[key][i];
+      largest = Math.max(largest, Math.abs(effect) / scale);
+      worstEffect = Math.max(worstEffect, Math.abs(effect - gpuEffect) / scale);
+    }
+  }
+  console.log(`one step at N=6: ${lit} sunlit columns; engines apart by ${worst.toExponential(1)} of the beam (${name}); the upward absorption moves the fluxes by up to ${largest.toFixed(4)} of it and the engines' change differs by ${worstEffect.toExponential(1)}`);
+  assert.ok(worst < 2e-5, `engines apart by ${worst} at ${name}`);
+  assert.ok(largest > 0.002 && worstEffect < 2e-5, `effect ${largest}, engines' effect apart by ${worstEffect}`);
   on.done(); off.done();
 });

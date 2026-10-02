@@ -1,4 +1,5 @@
-import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physics/ice.module.js';
+import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT } from '../physics/ice.module.js';
+import { DARKENING_WETNESS } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE } from '../physics/radiation.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS } from '../physics/moist.module.js';
@@ -29,6 +30,10 @@ export function physicsConstants(o) {
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
   if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${o.cloudOverlap}`);
+  const darkening = o.soilDarkening === true ? 'surface' : o.soilDarkening;
+  if (darkening !== false && !DARKENING_WETNESS[darkening]) throw new Error(`soilDarkening is 'surface', 'rootZone' or false, not ${o.soilDarkening}`);
+  const wetting = o.darkeningWetness ?? DARKENING_WETNESS[darkening || 'surface'];
+  if (!(o.treelineWarmth[1] > o.treelineWarmth[0])) throw new Error(`treelineWarmth must rise from its first to its second temperature, not ${o.treelineWarmth}`);
   if (!(o.overcastInversion?.[1] > o.overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${o.overcastInversion}`);
   if (o.deckRest !== 'depth' && o.deckRest !== 'inversion' && o.deckRest !== 'regime') throw new Error(`deckRest must be 'depth', 'inversion' or 'regime', not ${o.deckRest}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
@@ -44,7 +49,12 @@ export function physicsConstants(o) {
   if (o.boundaryCover !== 'variance' && o.boundaryCover !== 'pdf') throw new Error(`boundaryCover must be 'variance' or 'pdf', not ${o.boundaryCover}`);
   if (o.deckRegime !== 'inversion' && o.deckRegime !== 'boundaryLayer') throw new Error(`deckRegime must be 'inversion' or 'boundaryLayer', not ${o.deckRegime}`);
   const moistTurbulence = o.turbulence === 'moist';
+  const rayleigh = o.rayleighDepth != null ? [[1, o.rayleighDepth]] : o.rayleighBands;
+  if (!(rayleigh.length >= 1 && rayleigh.length <= 3 && Math.abs(rayleigh.reduce((sum, [w]) => sum + w, 0) - 1) < 1e-9 && rayleigh.every(([w, tau]) => w > 0 && tau >= 0))) throw new Error(`rayleighBands must be one to three [weight, depth] pairs whose weights sum to 1, not ${JSON.stringify(rayleigh)}`);
+  const visibleSum = (term) => rayleigh.map(([w, tau]) => `${w} * ${term(`${tau / REFERENCE_PRESSURE} * light.y + light.z`)}`).join(' + ');
   return `
+fn visibleStreams(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec4<f32> { return ${visibleSum((depth) => `stream(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
+fn visibleEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `streamEscape(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
 const MOIST_BL: bool = ${moistTurbulence}; const CT_THRESH: f32 = ${cloudTop.threshold}; const CT_HMAX: f32 = ${cloudTop.maximumHeight}; const CT_PERT: f32 = ${cloudTop.perturbation}; const CT_PROFILE: f32 = ${cloudTop.profile}; const CT_EXCESS: f32 = ${cloudTop.excess}; const CT_TOLERANCE: f32 = ${cloudTop.tolerance}; const CT_CUMULUS: f32 = ${cloudTop.cumulusDepth};
 const BL_A2: f32 = ${entrainment.evaporativeEnhancement}; const BL_AMAX: f32 = ${entrainment.maximumEfficiency}; const BL_TAPER: bool = ${!!entrainment.taper}; const BL_JUMP2: bool = ${entrainment.jumpLayers > 1};
 const VARIANCE_COVER: bool = ${moistTurbulence && o.boundaryCover === 'variance'}; const VAR_FLOOR: f32 = ${o.varianceFloor}; const VAR_SCALE: f32 = ${o.varianceScale}; const MIX_LENGTH: f32 = ${o.mixingLength}; const STABLE_LENGTH: f32 = ${o.stableMixingLength};
@@ -55,8 +65,9 @@ const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudSc
 const STRATUS: bool = ${!!o.stratus}; const ECTEI: bool = ${o.stratusIndex === 'ectei'}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6; const CLEAR_SKY: bool = ${!!o.clearSkyPass};
-const SCATTER: bool = ${o.rayleighDepth > 0 || o.landAerosol > 0 || o.seaAerosol > 0}; const RAYLEIGH: f32 = ${o.rayleighDepth / REFERENCE_PRESSURE}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
-const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
+const SCATTER: bool = ${rayleigh.some(([, tau]) => tau > 0) || o.landAerosol > 0 || o.seaAerosol > 0}; const UPWARD: bool = ${!!o.upwardAbsorption}; const DIFFUSE_PATH: f32 = ${5 / 3}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
+const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo}; const ALB_ICEMELT: f32 = ${o.meltingIceAlbedo}; const ICE_MELTRANGE: f32 = ${o.iceMeltingRange};
+const AGEING: bool = ${!!o.snowAgeing}; const ALB_FRESH: f32 = ${o.freshSnowAlbedo}; const SNOW_COLDAGE: f32 = ${o.coldSnowAgeing}; const SNOW_MELTAGE: f32 = ${o.meltingSnowAgeing}; const SNOW_REFRESH: f32 = ${o.refreshSnowfall}; const WETSNOW: f32 = ${o.wetSnowRange}; const AGE_ACT: f32 = ${o.ageingActivation}; const ICE_SNOWFLOOR: f32 = ${o.iceSnowFloor};
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME};
@@ -71,25 +82,37 @@ const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: 
 const PL_SEPARATE: bool = ${o.plumeClosure === 'separate'}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
 const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.plumeConsumption === 'buoyant'}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
 const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
-const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
+const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const DARKENING: bool = ${darkening !== false}; const DARK_SURFACE: bool = ${darkening === 'surface'}; const ALB_WETSOIL: f32 = ${o.wetSoilAlbedo}; const DARK_FROM: f32 = ${wetting[0]}; const DARK_SPAN: f32 = ${wetting[1] - wetting[0]}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_CEILINV: f32 = ${o.ceilingInversion ?? o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
 const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
 const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling};
 const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
+const ALB_OLDSNOW: f32 = ${o.oldSnowAlbedo}; const MASKED: bool = ${!!o.snowMasking && !!o.vegetation}; const ALB_FOREST: f32 = ${o.forestSnowAlbedo}; const CLOSED_CANOPY: f32 = ${o.closedCanopy}; const CANOPY_MEM: f32 = ${o.canopyMemory};
+const TREELINE: bool = ${!!o.treeline}; const SEASON_C: f32 = ${o.seasonThreshold}; const SEASON_K: f32 = ${MELTING_POINT + o.seasonThreshold}; const SEASON_SHORTEST: f32 = ${o.minimumSeason / 365}; const SEASON_MEM: f32 = ${o.seasonMemory}; const TREE_LO: f32 = ${o.treelineWarmth[0]}; const TREE_SPAN: f32 = ${o.treelineWarmth[1] - o.treelineWarmth[0]}; const TREE_GROW: f32 = ${o.treeGrowthTime}; const TREE_DECLINE: f32 = ${o.treeDeclineTime};
 `;
 }
 
 export const PHYSICS_FUNCTIONS = `
 fn esat(T: f32) -> f32 { return 611.2 * exp(17.67 * (T - 273.15) / (T - 29.65)); }
 fn qsat(T: f32, p: f32) -> f32 { let es = esat(T); let dry = p - (1.0 - EPSILON) * es; return select(1.0, EPSILON * es / dry, dry > 0.0); }
+fn smallRate(x: f32) -> f32 { return select(1.0 - exp(-x), x * (1.0 - 0.5 * x), x < 1e-3); }
 fn openWaterAlbedo(mu: f32) -> f32 { return 0.026 / (pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1.0); }
-fn surfaceAlbedo(h: f32, water: f32, snow: f32) -> f32 {
+fn surfaceAlbedo(h: f32, water: f32, snow: f32, T: f32, snowAlbedo: f32) -> f32 {
   if (h <= 0.0) { return water; }
-  let bare = water + (ALB_ICE - water) * min(1.0, h / FULLALB);
-  return bare + (ALB_ICESNOW - bare) * min(1.0, snow / FULLSNOW_ICE);
+  let bareIce = ALB_ICE + (ALB_ICEMELT - ALB_ICE) * clamp((T - MELTING + ICE_MELTRANGE) / ICE_MELTRANGE, 0.0, 1.0);
+  let bare = water + (bareIce - water) * min(1.0, h / FULLALB);
+  return bare + (select(ALB_ICESNOW, snowAlbedo, AGEING) - bare) * min(1.0, snow / FULLSNOW_ICE);
 }
+fn agedSnow(albedo: f32, T: f32, dt: f32, floor: f32) -> f32 {
+  let days = dt / 86400.0;
+  if (T >= MELTING - WETSNOW) { return floor + (albedo - floor) * exp(-SNOW_MELTAGE * days); }
+  var pace = 1.0;
+  if (AGE_ACT > 0.0) { pace = min(1.0, exp(AGE_ACT * (T - MELTING) / (MELTING * T))); }
+  return max(floor, albedo - SNOW_COLDAGE * pace * days);
+}
+fn refreshedSnow(albedo: f32, fall: f32) -> f32 { return albedo + min(1.0, fall / SNOW_REFRESH) * (ALB_FRESH - albedo); }
 fn cellWind(i: i32, k: i32) -> vec3<f32> {
   var w = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {
@@ -217,16 +240,26 @@ fn overlapCover(blocks: vec3<f32>) -> f32 {
   if (!PDF_COVER) { return 0.0; }
   return select(blocks.z, 1.0 - blocks.y, RANDOM_OVERLAP);
 }
-fn shortwave(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec2<f32>) -> vec4<f32> {
+fn shortwave(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec4<f32> {
   if (!SCATTER) { return stream(cloudDepth, keep, mu, adir, adif); }
-  return light.x * stream(cloudDepth + light.y, keep, mu, adir, adif) + (1.0 - light.x) * stream(cloudDepth, keep, mu, adir, adif);
+  return light.x * visibleStreams(cloudDepth, keep, mu, adir, adif, light) + (1.0 - light.x) * stream(cloudDepth, keep, mu, adir, adif);
 }
-fn clearLight(beam: f32, mu: f32, ozoneHeating: f32, incident: f32, pi: f32, aerosol: f32) -> vec3<f32> {
+fn streamEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32) -> f32 {
+  let s = stream(cloudDepth, keep, mu, adir, adif);
+  let reflectance = select(0.0, cloudDepth / (cloudDepth + 2.0 * mu), mu > 0.0 && cloudDepth > 0.0);
+  return 1.0 - s.x - keep * reflectance - s.w;
+}
+fn escapes(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec2<f32> {
+  let rest = streamEscape(cloudDepth, keep, mu, adir, adif);
+  if (!SCATTER) { return vec2<f32>(light.x * rest, (1.0 - light.x) * rest); }
+  return vec2<f32>(light.x * visibleEscape(cloudDepth, keep, mu, adir, adif, light), (1.0 - light.x) * rest);
+}
+fn clearLight(beam: f32, mu: f32, ozoneHeating: f32, incident: f32, pi: f32, aerosol: f32) -> vec4<f32> {
   let visible = max(0.0, VIS_FRAC * beam - ozoneHeating);
   var taken = 0.0;
   if (mu > 0.0 && aerosol > 0.0) { taken = visible * (1.0 - exp(-AER_ABS * aerosol * 35.0 / sqrt(1224.0 * mu * mu + 1.0))); }
   let left = incident - taken;
-  return vec3<f32>(taken, select(0.0, min(1.0, (visible - taken) / left), left > 0.0), RAYLEIGH * pi + AER_SCAT * aerosol);
+  return vec4<f32>(taken, select(0.0, min(1.0, (visible - taken) / left), left > 0.0), pi, AER_SCAT * aerosol);
 }
 fn stream(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32) -> vec4<f32> {
   let reflectance = select(0.0, cloudDepth / (cloudDepth + 2.0 * mu), mu > 0.0 && cloudDepth > 0.0);
@@ -285,7 +318,7 @@ struct MlmAir { T: f32, ql: f32, qv: f32, qs: f32, dqs: f32 }
 struct MlmState { h: f32, thetaL: f32, qt: f32 }
 struct MlmOut { lwp: f32, cover: f32, entrainment: f32, jump: f32, heat: f32, water: f32 }
 struct MlmDeck { ok: bool, cover: f32, water: f32, entrainment: f32, top: f32 }
-struct MlmSun { incident: f32, mu: f32, adir: f32, adif: f32, path: f32, layer: f32, clear: f32, light: vec2<f32> }
+struct MlmSun { incident: f32, mu: f32, adir: f32, adif: f32, path: f32, layer: f32, clear: f32, light: vec3<f32> }
 fn mlmFinite(x: f32) -> bool { return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u; }
 fn mlmFresh(x: f32) -> f32 {
   if (x < 1e-2) { return x * (1.0 - 0.5 * x * (1.0 - x / 3.0 * (1.0 - 0.25 * x))); }
@@ -555,6 +588,7 @@ export const SEA_SURFACE_WGSL = `if (h <= 0.0) {
       if (area >= MIN_CONC && volume >= MIN_VOLUME) { h = volume / area; T = FREEZING; fresh = area; }
     }
     PH[PH_CONC + i] = fresh;
+    PH[PH_SNOWALB + i] = ALB_FRESH;
   } else {
     var snow = snow0;
     let split = contrast - LEADX * (FREEZING - T);
@@ -582,6 +616,7 @@ export const SEA_SURFACE_WGSL = `if (h <= 0.0) {
       snow -= flooded; h = spread + flooded / RHOICE; PH[PH_CONC + i] = area;
     }
     PH[PH_SNOW + i] = snow;
+    PH[PH_SNOWALB + i] = select(ALB_FRESH, agedSnow(PH[PH_SNOWALB + i], T, dt, ICE_SNOWFLOOR), snow > 0.0);
   }`;
 
 /*
@@ -590,6 +625,7 @@ export const SEA_SURFACE_WGSL = `if (h <= 0.0) {
 export const snowOnSea = (amount) => `if (IN[S_ICE + i] > 0.0) {
       let conc = PH[PH_CONC + i]; let cover = select(conc, 1.0, conc <= 0.0);
       PH[PH_SNOW + i] += ${amount};
+      PH[PH_SNOWALB + i] = refreshedSnow(PH[PH_SNOWALB + i], ${amount});
       IN[S_ICE + i] += (1.0 - cover) * (${amount}) / (RHOICE * cover);
     } else { IN[S_TS + i] -= LFUS * (${amount}) / PH[PH_CAP + i]; }`;
 
@@ -611,12 +647,15 @@ export const PHYSICS_KERNELS = {
   let onLand = PH[PH_LAND + i] > 0.5; let onIceSheet = PH[PH_LAND + i] > 1.5;
   let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i]; let veg0 = PH[PH_VEG + i]; let surf0 = PH[PH_SURF + i];
   let bucket = select(BUCKET, ROOTCAP, VEGETATED);
-  let bareAlbedo = select(ALB_LAND, ALB_BARE + (ALB_VEG - ALB_BARE) * veg0, VEGETATED);
-  let landAlbedo = select(bareAlbedo + min(1.0, snow0 / FULLSNOW) * (ALB_SNOW - bareAlbedo), ALB_ICESHEET, onIceSheet);
+  let soilAlbedo = select(ALB_BARE, ALB_BARE - (ALB_BARE - ALB_WETSOIL) * clamp((select(soil0 / ROOTCAP, surf0 / SURFCAP, DARK_SURFACE) - DARK_FROM) / DARK_SPAN, 0.0, 1.0), DARKENING);
+  let bareAlbedo = select(ALB_LAND, soilAlbedo + (ALB_VEG - soilAlbedo) * veg0, VEGETATED);
+  let ownSnow = select(ALB_SNOW, PH[PH_SNOWALB + i], AGEING);
+  let coveredSnow = select(ownSnow, ownSnow + (ALB_FOREST - ownSnow) * min(1.0, PH[PH_CANOPY + i] / CLOSED_CANOPY), MASKED);
+  let landAlbedo = select(bareAlbedo + min(1.0, snow0 / FULLSNOW) * (coveredSnow - bareAlbedo), ALB_ICESHEET, onIceSheet);
   let conc0 = PH[PH_CONC + i];
   let cover = select(0.0, select(conc0, 1.0, conc0 <= 0.0), ice > 0.0);
   let waterDir = openWaterAlbedo(mu);
-  let iceDif = surfaceAlbedo(ice, ALB_DIF_WATER, snow0); let iceDir = surfaceAlbedo(ice, waterDir, snow0);
+  let iceDif = surfaceAlbedo(ice, ALB_DIF_WATER, snow0, skin, PH[PH_SNOWALB + i]); let iceDir = surfaceAlbedo(ice, waterDir, snow0, skin, PH[PH_SNOWALB + i]);
   let adif = select(cover * iceDif + (1.0 - cover) * ALB_DIF_WATER, landAlbedo, onLand);
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
   let ts = select(skin, cover * skin + (1.0 - cover) * FREEZING, !onLand && ice > 0.0 && cover < 1.0);
@@ -646,7 +685,7 @@ export const PHYSICS_KERNELS = {
     let exchange = rho * select(CEX, PH[PH_DRAG + i], LANDED) * max(ws, GUST);
     let sensible = exchange * CP * (ts - airT);
     let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
-    var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0, vec2<f32>(0.0, 0.0));
+    var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0, vec3<f32>(0.0, 0.0, 0.0));
     if (STRATUS_SOLAR && CLOUD_SW > 0.0) {
       var path = 0.0; var layer = 0.0; var shadeBlocks = vec3<f32>(0.0, 1.0, 0.0);
       for (var k = 0; k < K; k++) {
@@ -668,8 +707,8 @@ export const PHYSICS_KERNELS = {
         for (var k = 0; k < K; k++) { vapor += max(0.0, IN[S_Q + k * C + i]) * pi * LV[L_DS + k] / GRAV * sqrt(LV[L_SM + k]) * 0.1 * magnification; }
         lit -= lit * (VAPOR_ABS * 2.9 * vapor / (pow(1.0 + 141.5 * vapor, 0.635) + 5.925 * vapor));
       }
-      var deckLight = vec2<f32>(0.0, 0.0);
-      if (SCATTER) { let clear = clearLight(beam, mu, ozoneHeating, lit, pi, aerosol); lit -= clear.x; deckLight = clear.yz; }
+      var deckLight = vec3<f32>(0.0, 0.0, 0.0);
+      if (SCATTER) { let clear = clearLight(beam, mu, ozoneHeating, lit, pi, aerosol); lit -= clear.x; deckLight = clear.yzw; }
       var sky = shortwave(CLOUD_SCAT * path / shade, cloudKeep(path / shade), mu, adir, adif, deckLight);
       if (PDF_COVER && shade < 1.0) { sky = shade * sky + (1.0 - shade) * shortwave(0.0, 1.0, mu, adir, adif, deckLight); }
       deckSun = MlmSun(lit, mu, adir, adif, path, layer, select(0.0, lit * sky.w / path, path > 0.0) * layer, deckLight);
@@ -716,10 +755,10 @@ export const PHYSICS_KERNELS = {
     netFlux[k] = ozoneHeating * LV[L_OZ + k];
   }
   var incident = beam - ozoneHeating;
-  var vaporHeating = 0.0;
+  var vaporHeating = 0.0; var path = 0.0;
   if (VAPOR_ABS > 0.0 && mu > 0.0) {
     let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
-    var path = 0.0; var taken = 0.0;
+    var taken = 0.0;
     for (var k = 0; k < K; k++) {
       path += max(0.0, IN[S_Q + k * C + i]) * pi * LV[L_DS + k] / GRAV * sqrt(LV[L_SM + k]) * 0.1 * magnification;
       let through = VAPOR_ABS * 2.9 * path / (pow(1.0 + 141.5 * path, 0.635) + 5.925 * path);
@@ -729,10 +768,10 @@ export const PHYSICS_KERNELS = {
     vaporHeating = incident * taken;
     incident -= vaporHeating;
   }
-  var light = vec2<f32>(0.0, 0.0); var aerosolHeating = 0.0;
-  if (SCATTER) {
+  var light = vec3<f32>(0.0, 0.0, 0.0); var aerosolHeating = 0.0;
+  if (SCATTER || UPWARD) {
     let clear = clearLight(beam, mu, ozoneHeating, incident, pi, aerosol);
-    aerosolHeating = clear.x; light = clear.yz;
+    aerosolHeating = clear.x; light = clear.yzw;
     incident -= aerosolHeating;
     if (aerosolHeating > 0.0) { for (var k = 0; k < K; k++) { netFlux[k] += aerosolHeating * LV[L_AER + k]; } }
   }
@@ -757,6 +796,35 @@ export const PHYSICS_KERNELS = {
       netFlux[k] += share;
       cloudHeating += share;
     }
+  }
+  var upwardHeating = 0.0; var upwardAerosol = 0.0; var restLoss = 0.0; var visibleLoss = 0.0;
+  if (UPWARD && mu > 0.0) {
+    visibleLoss = select(0.0, 1.0 - exp(-AER_ABS * aerosol * DIFFUSE_PATH), aerosol > 0.0);
+    let sunlit = beam - ozoneHeating;
+    let restAfter = sunlit - max(0.0, VIS_FRAC * beam - ozoneHeating) - vaporHeating;
+    var esc = escapes(CLOUD_SCAT * cloudPath / columnCover, cloudKeep(cloudPath / columnCover), mu, adir, adif, light);
+    if (PDF_COVER && columnCover < 1.0) { esc = columnCover * esc + (1.0 - columnCover) * escapes(0.0, 1.0, mu, adir, adif, light); }
+    if (deck > 0.0) { esc = fraction * escapes(CLOUD_SCAT * (cloudPath + deck), cloudKeep(cloudPath + deck), mu, adir, adif, light) + (1.0 - fraction) * esc; }
+    if (VAPOR_ABS > 0.0 && restAfter > 0.0) {
+      let start = 2.9 * path / (pow(1.0 + 141.5 * path, 0.635) + 5.925 * path);
+      var up = path;
+      for (var k = 0; k < K; k++) { up += max(0.0, IN[S_Q + k * C + i]) * pi * LV[L_DS + k] / GRAV * sqrt(LV[L_SM + k]) * 0.1 * DIFFUSE_PATH; }
+      restLoss = sunlit * VAPOR_ABS * (2.9 * up / (pow(1.0 + 141.5 * up, 0.635) + 5.925 * up) - start) / restAfter;
+      let scale = select(1.0, 1.0 / restLoss, restLoss > 1.0);
+      restLoss = min(restLoss, 1.0);
+      let rest = incident * esc.y;
+      var climbed = path; var before = start;
+      for (var k = K - 1; k >= 0; k--) {
+        climbed += max(0.0, IN[S_Q + k * C + i]) * pi * LV[L_DS + k] / GRAV * sqrt(LV[L_SM + k]) * 0.1 * DIFFUSE_PATH;
+        let through = 2.9 * climbed / (pow(1.0 + 141.5 * climbed, 0.635) + 5.925 * climbed);
+        netFlux[k] += rest * scale * sunlit * VAPOR_ABS * (through - before) / restAfter;
+        before = through;
+      }
+      upwardHeating = rest * restLoss;
+    }
+    upwardAerosol = incident * esc.x * visibleLoss;
+    if (upwardAerosol > 0.0) { for (var k = 0; k < K; k++) { netFlux[k] += upwardAerosol * LV[L_AER + k]; } }
+    upwardHeating += upwardAerosol;
   }
   let absorbed = incident * sw.x;
   var beforeBands: array<f32, K>;
@@ -784,18 +852,20 @@ export const PHYSICS_KERNELS = {
   PH[PH_SWDN + i] = swdn;
   let directDown = incident * sw.z;
   let contrast = directDown * (iceDir - waterDir) + (swdn - directDown) * (iceDif - ALB_DIF_WATER);
-  let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating; let absorbedSolar = absorbed + ozoneHeating + vaporHeating + aerosolHeating + cloudHeating; let reflectedSolar = incident - absorbed - cloudHeating;
+  let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let absorbedSolar = absorbed + ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let reflectedSolar = incident - absorbed - cloudHeating - upwardHeating;
   PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbedSolar; PH[PH_ATMSW + i] = atmosphereSolar; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = reflectedSolar; PH[PH_ADIF + i] = adif;
   PH[PH_ABSSUM + i] += absorbedSolar; PH[PH_ATMSUM + i] += atmosphereSolar; PH[PH_OLRSUM + i] += outgoing; PH[PH_INSSUM + i] += beam; PH[PH_REFLSUM + i] += reflectedSolar;
   if (CLEAR_SKY) {
     let clearSw = shortwave(0.0, 1.0, mu, adir, adif, light);
+    var clearUp = 0.0;
+    if (UPWARD && mu > 0.0) { let clearEsc = escapes(0.0, 1.0, mu, adir, adif, light); clearUp = clearEsc.y * restLoss + clearEsc.x * visibleLoss; }
     var upVapor = VAPOR_FRAC * surfaceEmission; var upGas = GAS_FRAC * surfaceEmission;
     for (var k = K - 1; k >= 0; k--) {
       let t = temperature[k]; let ev = clearE[k]; let eg = LV[L_GASE + k];
       upVapor = upVapor * (1.0 - ev) + VAPOR_FRAC * ev * STEFAN * t * t * t * t;
       upGas = upGas * (1.0 - eg) + GAS_FRAC * eg * STEFAN * t * t * t * t;
     }
-    PH[PH_ABSCLRSUM + i] += incident * clearSw.x + ozoneHeating + vaporHeating + aerosolHeating;
+    PH[PH_ABSCLRSUM + i] += incident * (clearSw.x + clearUp) + ozoneHeating + vaporHeating + aerosolHeating;
     PH[PH_OLRCLRSUM + i] += upVapor + upGas + WINDOW * surfaceEmission;
   }
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
@@ -829,10 +899,24 @@ export const PHYSICS_KERNELS = {
       }
       if (onIceSheet) { veg = 0.0; }
       PH[PH_VEG + i] = veg;
+      let air = IN[S_TH + bottom] * D[D_EXM + bottom];
+      let keep = smallRate(dt / SEASON_MEM);
+      let seasonLength = PH[PH_SEASONL + i] + (select(0.0, 1.0, air >= SEASON_K) - PH[PH_SEASONL + i]) * keep;
+      let seasonWarmth = PH[PH_SEASONW + i] + (max(0.0, air - SEASON_K) - PH[PH_SEASONW + i]) * keep;
+      PH[PH_SEASONL + i] = seasonLength; PH[PH_SEASONW + i] = seasonWarmth;
+      let standing = PH[PH_CANOPY + i];
+      var trees = max(veg, standing + (veg - standing) * (1.0 - exp(-dt / CANOPY_MEM)));
+      if (TREELINE) {
+        let factor = clamp((SEASON_C + seasonWarmth / max(seasonLength, SEASON_SHORTEST) - TREE_LO) / TREE_SPAN, 0.0, 1.0);
+        let goal = select(factor * veg, min(standing, factor), snow > 0.0);
+        trees = standing + (goal - standing) * smallRate(dt / select(TREE_DECLINE, TREE_GROW, goal > standing));
+      }
+      PH[PH_CANOPY + i] = select(trees, 0.0, onIceSheet);
       cap = ROOTCAP;
     }
     if (soil > cap) { PH[PH_RUNOFF + i] += soil - cap; soil = cap; }
     PH[PH_SOIL + i] = soil; PH[PH_SNOW + i] = snow; PH[PH_SURF + i] = surf;
+    PH[PH_SNOWALB + i] = select(ALB_FRESH, agedSnow(PH[PH_SNOWALB + i], T, dt, ALB_OLDSNOW), snow > 0.0);
   } else ${SEA_SURFACE_WGSL}
   IN[S_TS + i] = T; IN[S_ICE + i] = h;
 }`,
@@ -1488,6 +1572,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   if (PH[PH_LAND + i] > 0.5) {
     if (airT < MELTING) {
       PH[PH_SNOW + i] += rained + convected;
+      PH[PH_SNOWALB + i] = refreshedSnow(PH[PH_SNOWALB + i], rained + convected);
       IN[S_TH + bottom * C + i] += LFUS * (rained + convected) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
     }
     else {

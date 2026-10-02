@@ -151,7 +151,7 @@ export function createForcedOcean(model) {
   let cover = select(0.0, select(conc0, 1.0, conc0 <= 0.0), ice > 0.0);
   let pull = -P[1] * (select(skin, FREEZING, ice > 0.0) - OUT[FC_sst + i]);
   let net = OUT[FC_netFlux + i] + (1.0 - cover) * pull;
-  let contrast = OUT[FC_shortwaveDown + i] * (surfaceAlbedo(ice, ALB_DIF_WATER, snow0) - ALB_DIF_WATER) + pull;
+  let contrast = OUT[FC_shortwaveDown + i] * (surfaceAlbedo(ice, ALB_DIF_WATER, snow0, skin, PH[PH_SNOWALB + i]) - ALB_DIF_WATER) + pull;
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = skin; var h = ice;
   ${SEA_SURFACE_WGSL}

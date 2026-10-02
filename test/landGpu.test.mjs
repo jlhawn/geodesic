@@ -30,7 +30,7 @@ function prepare(model) {
 }
 
 test('eight GPU steps over a continent track the CPU model: surface, soil, snow, vegetation, and the coast-bound ocean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600 };
+  const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
   const cpu = prepare(createModel(new Grid(6), { topography, land }));
   const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }));
   for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
@@ -82,4 +82,40 @@ test('the stratiform share that tapers the boundary layer\'s entrainment is zero
   assert.ok(landRamp > 20 && seaRamp > 20, `share on ${landRamp} land and ${seaRamp} sea cells`);
   assert.ok(share.maxDiff < 2e-3, `share differs by ${share.maxDiff} at ${share.at}`);
   assert.ok(entrain.maxDiff < 2e-5, `w_e differs by ${entrain.maxDiff} at ${entrain.at}`);
+});
+
+test('both engines give each land cell the same albedo from its surface layer, soil water, vegetation and snow, with the wet-soil darkening by the surface layer, by the root zone and without it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = async (land) => {
+    const cpu = createModel(new Grid(6), { topography, land }), gpu = await createGpuModel(new Grid(6), { topography, land });
+    const C = cpu.mesh.nCells;
+    let s = 7;
+    const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+    const init = initializeState(cpu, {});
+    for (let i = 0; i < C; i++) if (cpu.geography.land[i]) init[6][i] = 0;
+    cpu.land.initialize();
+    const soil = Float64Array.from({ length: C }, (_, i) => (cpu.geography.land[i] ? 300 * rnd() : 0));
+    const snow = Float64Array.from({ length: C }, (_, i) => (cpu.geography.land[i] && rnd() < 0.2 ? 30 * rnd() : 0));
+    const vegetation = Float64Array.from({ length: C }, () => rnd()), surface = Float64Array.from({ length: C }, () => 15 * rnd());
+    for (const m of [cpu, gpu]) {
+      for (let a = 0; a < init.length; a++) m.state[a].set(init[a]);
+      m.land.load({ soil, snow, vegetation, surface });
+    }
+    gpu.load();
+    const expected = Float64Array.from({ length: C }, (_, i) => (cpu.geography.land[i] ? cpu.land.albedo(i) : NaN));
+    await gpu.step(900);
+    const ph = await gpu.gpu.downloadPhysics();
+    let worst = 0, cells = 0;
+    for (let i = 0; i < C; i++) if (cpu.geography.land[i]) { worst = Math.max(worst, Math.abs(ph.ADIF[i] - expected[i])); cells++; }
+    gpu.destroy();
+    return { worst, cells, expected, land: cpu.geography.land };
+  };
+  const dark = await run({}), roots = await run({ soilDarkening: 'rootZone' }), plain = await run({ soilDarkening: false }), sheets = await run({ iceSheetAlbedo: 0.7 });
+  assert.ok(sheets.worst < 1e-6 && sheets.expected.some((a) => a === 0.7), `a chosen ice-sheet albedo: engines apart by ${sheets.worst}`);
+  for (const [name, ran] of [['surface layer', dark], ['root zone', roots]]) {
+    let darkened = 0, most = 0;
+    for (let i = 0; i < ran.expected.length; i++) if (ran.land[i]) { const d = plain.expected[i] - ran.expected[i]; if (d > 1e-6) darkened++; most = Math.max(most, d); }
+    console.log(`${ran.cells} land cells with a random surface layer, soil water, vegetation and snow: albedo engines apart by ${ran.worst.toExponential(1)} darkened by the ${name} and ${plain.worst.toExponential(1)} without; it darkens ${darkened} cells, by up to ${most.toFixed(3)}`);
+    assert.ok(ran.worst < 1e-6 && plain.worst < 1e-6, `${name}: engines apart by ${ran.worst} and ${plain.worst}`);
+    assert.ok(darkened > ran.cells / 3 && most > 0.05, `${name}: ${darkened} cells darkened by up to ${most}`);
+  }
 });

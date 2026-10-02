@@ -1,5 +1,7 @@
 import { cellVector } from '../dynamics/operators.module.js';
 import { UNDECIDED } from './radiation.module.js';
+import { SNOW_AGEING } from './ice.module.js';
+import { seasonEstimate, treelineFactor } from './land.module.js';
 
 /*
  * Barycentric weights of p in the plane through unit vectors a, b, c:
@@ -199,7 +201,9 @@ export function regridOcean(source, target, ocean, progress = null) {
 export function regridLand(source, target, land, progress = null, { ice = null, surfaceT = null } = {}) {
   const vegetation = land.vegetation ? { vegetation: Float64Array.from(land.vegetation) } : {};
   const surfaceKept = land.surface ? { surface: Float64Array.from(land.surface) } : {};
-  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow), ...vegetation, ...surfaceKept };
+  const ageKept = land.snowAlbedo ? { snowAlbedo: Float64Array.from(land.snowAlbedo) } : {}, canopyKept = land.canopy ? { canopy: Float64Array.from(land.canopy) } : {};
+  const seasoned = !!(land.seasonLength && land.seasonWarmth), seasonKept = seasoned ? { seasonLength: Float64Array.from(land.seasonLength), seasonWarmth: Float64Array.from(land.seasonWarmth) } : {};
+  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow), ...vegetation, ...surfaceKept, ...ageKept, ...canopyKept, ...seasonKept };
   if (progress) progress(0, 'the land');
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), onLand = landMask(source);
   const bucket = target.land && target.land.bucketCapacity ? target.land.bucketCapacity : 150;
@@ -207,8 +211,14 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   const soil = sampleTiles(source, target, Float64Array.from(land.soil), onLand, atCells, (tile) => guess(tile).soil), snow = sampleTiles(source, target, Float64Array.from(land.snow), onLand, atCells, (tile) => guess(tile).snow);
   const cover = land.vegetation ? sampleTiles(source, target, Float64Array.from(land.vegetation), onLand, atCells, (tile) => (guess(tile).snow > 0 ? 0 : 0.5)) : null;
   const surface = land.surface ? sampleTiles(source, target, Float64Array.from(land.surface), onLand, atCells, () => 0) : null;
-  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; if (surface) surface[n] = 0; }
-  return { soil, snow, ...(cover ? { vegetation: cover } : {}), ...(surface ? { surface } : {}) };
+  const snowAlbedo = land.snowAlbedo ? sampleTiles(source, target, Float64Array.from(land.snowAlbedo), onLand, atCells, () => SNOW_AGEING.freshSnowAlbedo) : null;
+  const estimate = (tile) => seasonEstimate(source.mesh.latCell[tile]);
+  const trees = (tile) => (guess(tile).snow > 0 ? 0 : 0.5) * (seasoned ? treelineFactor(estimate(tile).length, estimate(tile).warmth) : 1);
+  const canopy = land.canopy && cover ? sampleTiles(source, target, Float64Array.from(land.canopy), onLand, atCells, trees) : null;
+  const seasonLength = seasoned ? sampleTiles(source, target, Float64Array.from(land.seasonLength), onLand, atCells, (tile) => estimate(tile).length) : null;
+  const seasonWarmth = seasoned ? sampleTiles(source, target, Float64Array.from(land.seasonWarmth), onLand, atCells, (tile) => estimate(tile).warmth) : null;
+  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; if (surface) surface[n] = 0; if (canopy) canopy[n] = 0; if (seasoned) { seasonLength[n] = 0; seasonWarmth[n] = 0; } }
+  return { soil, snow, ...(cover ? { vegetation: cover } : {}), ...(surface ? { surface } : {}), ...(snowAlbedo ? { snowAlbedo } : {}), ...(canopy ? { canopy } : {}), ...(seasoned ? { seasonLength, seasonWarmth } : {}) };
 }
 
 /*

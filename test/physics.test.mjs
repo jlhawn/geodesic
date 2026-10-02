@@ -21,7 +21,7 @@ const core = createSigmaCore(mesh);
 const { K, C, E } = core.diagnostics;
 const EPS = 1e-12;
 const OVERCAST = { cloudCover: 'overcast' };
-const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15 };
+const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
 
 function random(seed) {
   let s = seed >>> 0;
@@ -404,7 +404,7 @@ test('water vapour absorbs sunlight by the Lacis–Hansen curve: a humid column 
 });
 
 test('cloud water absorbs 1 − exp(−0.4 m²/kg × W) of the sunlight that meets it — 3.9 % at 100 g/m², 15 % at 400 g/m² — heating the cloudy layers in proportion to their water, and incident = reflected + atmosphere + surface', () => {
-  const radiation = createRadiation(mesh, core, OVERCAST), scattering = createRadiation(mesh, core, { cloudSolarAbsorption: 0, ...OVERCAST });
+  const radiation = createRadiation(mesh, core, { ...OVERCAST, upwardAbsorption: false }), scattering = createRadiation(mesh, core, { cloudSolarAbsorption: 0, ...OVERCAST, upwardAbsorption: false });
   radiation.setTime(0); scattering.setTime(0);
   const noon = brightest(radiation), beam = radiation.insolation(noon), incident = beam * 0.97;
   const pi = new Float64Array(C).fill(P0), theta = sampleState(3)[1], q = new Float64Array(K * C), qc = new Float64Array(K * C);
@@ -514,8 +514,8 @@ test('the deck is two independent columns: its shortwave is the cover-weighted m
 });
 
 test('the deck\'s own water absorbs in the deck layer in the same two-column blend: half the cover absorbs half as much', () => {
-  const { radiation, withStability, run } = deckColumns();
-  const scattering = createRadiation(mesh, core, { stratus: true, mixedLayerDeck: false, cloudSolarAbsorption: 0 });
+  const { radiation, withStability, run } = deckColumns({ upwardAbsorption: false });
+  const scattering = createRadiation(mesh, core, { stratus: true, mixedLayerDeck: false, cloudSolarAbsorption: 0, upwardAbsorption: false });
   scattering.setTime(0);
   const layer = radiation.stratusLayer, stable = withStability(30);
   const absorbed = (openSea) => {
@@ -886,8 +886,9 @@ test('with deckRest \'regime\' (the default) a surface-driven or decoupled colum
   core.diagnostics.piSigmaDot.fill(0);
 });
 
-function modelDigest(radiation, moist = {}) {
-  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, plumeCape: 70, stratiformLifetime: null, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 }, radiation: { exchangeCoefficient: 1.5e-3, ...radiation } });
+const GREY_ICE = { iceAlbedo: 0.5, meltingIceAlbedo: 0.5, snowAgeing: false };
+function modelDigest(radiation, moist = {}, ice = {}) {
+  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, plumeCape: 70, stratiformLifetime: null, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 }, radiation: { exchangeCoefficient: 1.5e-3, ...radiation }, ice });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   for (let n = 0; n < 12; n++) model.step(900);
   const hash = createHash('sha256');
@@ -896,8 +897,9 @@ function modelDigest(radiation, moist = {}) {
 }
 
 test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
-  const before = '3ca002d1e990a4335a223eb2232c51d0';
+  const before = 'b892e42f1b7ea8359ea7af62e3e635ba';
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED }).digest, before);
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED }, {}, GREY_ICE).digest, '3ca002d1e990a4335a223eb2232c51d0', 'on grey ice with unaged snow, the engine before the ice and snow albedo depended on temperature and age');
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
   assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
@@ -916,11 +918,13 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
   const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED };
-  assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, '3d0c610f9d4aebf624f3b240b5e2f6c1');
-  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
-  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
-  assert.notEqual(modelDigest({ ...forced, ...REDIAGNOSED }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
-  assert.notEqual(modelDigest({ ...forced, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275', 'the carried height and the gate\'s memory change the deck');
+  assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, 'e228ab4c057b5be612c8b079dabc0e93');
+  assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }, {}, GREY_ICE).digest, '3d0c610f9d4aebf624f3b240b5e2f6c1');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }, {}, GREY_ICE).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, 'd8b73e961d0ff0eb0535a4629ac35ba1');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, 'd8b73e961d0ff0eb0535a4629ac35ba1');
+  assert.notEqual(modelDigest({ ...forced, ...REDIAGNOSED }).digest, 'd8b73e961d0ff0eb0535a4629ac35ba1');
+  assert.notEqual(modelDigest({ ...forced, ...scatteringOnly }).digest, 'd8b73e961d0ff0eb0535a4629ac35ba1', 'the carried height and the gate\'s memory change the deck');
   const shadow = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED }), dark = createRadiation(mesh, core, { subsidenceMemory: 1e-9, stratusSolar: false, ...REDIAGNOSED });
   const scattering = createRadiation(mesh, core, { subsidenceMemory: 1e-9, cloudSolarAbsorption: 0, ...REDIAGNOSED });
   shadow.setTime(0); dark.setTime(0); scattering.setTime(0);
