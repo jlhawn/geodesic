@@ -313,7 +313,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * Defaults: inhibitionThreshold 50 J/kg, shallowTop 700 hPa,
  * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
  * cloudLifetime 1 h, no upperCloudLifetime, stratiformLifetime 3 h, autoconversionFloor 'lowest', rainEvaporation 1,
- * cumulusClosure 0.06, cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
+ * cumulusClosure 0.03 (Grant 2001), cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
  * 3e-3 /m, cumulusSourceDepth 50 hPa, cumulusBoundaryLoss 0.1,
  * cumulusFriction 1, cumulusOvershoot 1, cumulusUpdraft 1 m/s, no
  * cumulusRain, cumulusSource 'mean' (or 'lowest': the plume leaves with
@@ -333,7 +333,7 @@ export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
   autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest',
   deckVeto: true, coupledVeto: false, evaporationInCloud: false, virtualBuoyancy: true,
-  cumulusClosure: 0.06, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
+  cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean',
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: false, plumeConsumption: 'all',

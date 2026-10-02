@@ -376,6 +376,20 @@ test('the Jordan sounding lifts a deep plume that rains, heats most between 400 
   assert.ok(Math.abs(after.water + rain - before.water) < 1e-12 * before.water, `water ${before.water} → ${after.water} + ${rain}`);
 });
 
+test('the trade-wind column\'s cumulus base flux at Grant\'s 0.03 is half that at 0.06, with column enthalpy and water exact', () => {
+  const dt = 600, flux = (options) => {
+    const model = tradeWindColumn(options), [pi, theta, , , q, qc] = model.state, before = budget(model, 0);
+    model.moist.cumulusColumn(0, pi, theta, q, qc, dt);
+    const after = budget(model, 0);
+    return { base: model.moist.cumulusBaseFlux[0], enthalpy: (after.enthalpy - before.enthalpy) / before.enthalpy, water: (after.water - before.water) / before.water };
+  };
+  const grant = flux({}), double = flux({ cumulusClosure: 0.06 });
+  console.log(`trade wind: base mass flux ${grant.base.toFixed(5)} kg/m²/s at c ${MOIST_DEFAULTS.cumulusClosure}, ${double.base.toFixed(5)} at 0.06; enthalpy ${grant.enthalpy.toExponential(1)}, water ${grant.water.toExponential(1)}`);
+  assert.equal(MOIST_DEFAULTS.cumulusClosure, 0.03);
+  assert.ok(Math.abs(grant.base - 0.5 * double.base) < 1e-15 * double.base, `${grant.base} against half of ${double.base}`);
+  assert.ok(Math.abs(grant.enthalpy) < 1e-15 && Math.abs(grant.water) < 1e-15, 'enthalpy and water');
+});
+
 test('a trade-wind column lifts exactly the shallow cumulus plume and rains nothing', () => {
   const plume = tradeWindColumn(), shallow = tradeWindColumn(), dt = 600;
   const [pi, theta, , , q, qc] = plume.state, [sp, st, , , sq, sqc] = shallow.state;
