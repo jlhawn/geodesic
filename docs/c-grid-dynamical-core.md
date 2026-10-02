@@ -4646,6 +4646,37 @@ close to 3.4·10⁻¹⁶ of the beam and their layers to 2.8·10⁻¹⁵.
 `test/cloudEffect.test.mjs`'s 48-step run keeps the gray optics: under
 the phase optics one cell parts by 1.04 W/m² (rms 1.1·10⁻³).
 
+Review (Oct 1). By hand from the sources, an overcast layer over a black
+surface at μ 0.5, reflectance τ'/(τ' + 2μ) and emissivity 1 − exp(−κW):
+100 g/m² of liquid at 285 K, sea τ 12.71, g 0.858, τ' 1.801, 0.64304;
+land τ 17.65, τ' 2.645, 0.72568; emissivity 1.00000 in both. Ice at
+220 K: r_e 21.26 µm, τ 117.8 and τ' 26.09 m²/kg, κ 86.4 m²/kg; at 250 K:
+r_e 64.73 µm, 74.7, 11.94 and 79.3. 20 g/m² reflect 0.34289 and 0.19272
+and emit 0.82234 and 0.79525; 100 g/m² reflect 0.72292 and 0.54414 and
+emit 0.99982 and 0.99964. Both engines' columns give each of these to
+the sixth digit, the GPU's from its own `cloudOptics` and `stream`. From
+180 to 300 K in steps of 0.1 K the GPU's optics follow the CPU's to
+1.6·10⁻⁶ relative, and no step between neighbours moves τ' by more than
+0.20 or κ by more than 0.59 m²/kg. One step from eight64_day0183 on both
+engines against the parent tree (15754a7) on the same state: with 95 and
+130 the CPU's absorbed, reflected and outgoing fluxes, clear-sky fluxes
+and surface sunlight are bit-identical cell by cell and the GPU's state
+and day sums hash alike; under the phase optics the clear-sky ASR and
+OLR (284.82 and 264.13 W/m² for that step) are identical in every cell;
+in the 20480 lit columns absorbed and reflected sunlight add up to the
+beam to 4.2·10⁻¹⁶ (CPU) and 2.0·10⁻⁷ (GPU, f32), no column has a
+negative absorbed, reflected, atmospheric or surface term, and the
+night columns have none. `scripts/cloudClasses.mjs` on the day-186 state
+of the phase-optics run with every class taken away at once returns the
+clear-sky fluxes to 0 W/m² in every cell and the total effects −38.098
+and 15.130 W/m², against the single classes' sum −36.1 and 14.4 (30S–30N
+−25.6 against −25.2; 30–60S −73.9 against −80.5). The three-day run from
+eight64_day0183 and the Arctic run from nine64_day0091, repeated, give
+the table's day-186 line and audit and 9.191 → 8.261 (0.310) again.
+`scripts/sweep/runs.mjs` reads each parameter's base from
+`PHYSICS_DEFAULTS`, where `cloudScattering` and `cloudAbsorption` are
+now null: their base in `PARAMETERS2` is NaN.
+
 Not built: an ice fall speed. The standard remedy for thick, short-lived
 high cloud is sedimenting ice that sublimates below (Heymsfield and
 Donner 1990), a moist-physics change on both engines. Three N=64 days from
