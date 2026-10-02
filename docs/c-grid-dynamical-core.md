@@ -3109,7 +3109,12 @@ The work, in order:
      F kg/m² moves it min(1, F/10) of the way back to 0.85. The cold
      ageing is slowed by the temperature dependence of grain growth in
      BATS (Dickinson et al. 1993), exp(5000 (1/273.15 − 1/T)): 0.50 at
-     −10 °C, 0.24 at −20 °C (from memory). Without it the snowfall above
+     −10 °C, 0.24 at −20 °C (from memory). BATS sums that grain-growth
+     term with a melt term (its tenth power) and a dirt term 0.3, 2.3 at
+     melting (as CLM carries it, from memory); taken whole and scaled to 1
+     at melting it would age cold snow at 0.35, 0.23 and 0.18 of the full
+     pace at −10, −20 and −30 °C where the grain-growth term alone gives
+     0.50, 0.24 and 0.10. Without it the snowfall above
      holds cold snow on the Arctic pack at 0.73 against 0.80–0.85. Each
      cell's albedo is in the land's `snowAlbedo` (its ocean cells the sea
      ice's); ground and ice without snow hold 0.85 so the next snow
@@ -3124,7 +3129,8 @@ The work, in order:
      evergreen needleleaf forest (Moody et al. 2007, tabulated in Dutra et
      al. 2010: deciduous needleleaf 0.33, deciduous broadleaf 0.31, mixed
      0.29), the knee the MODIS finding that snow changes the albedo little
-     above about 70 % tree cover. The cover ramp `fullSnow` 20 kg/m² is
+     above about 70 % tree cover (from memory, no paper named). The
+     cover ramp `fullSnow` 20 kg/m² is
      kept. The standing cover `canopy` rises with the cover at once and
      falls toward it over `canopyMemory` 365 days, so it keeps 0.94 of an
      autumn cover through 200 days of snow while the cover keeps 0.76, and
