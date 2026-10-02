@@ -4230,7 +4230,12 @@ The work, in order:
    - The jump (`land.jump()`). At the end of year one and again at the
      end of year two every land cell's trees are set to f m v (the
      record's treeline factor times its moisture factor times the cover
-     at that moment) and its topsoil carbon to `litterInput` ×
+     at that moment, or under snow `snowFreeCover`, the cover at the
+     cell's last snow-free step: the trees do not follow the cover under
+     snow and no litter falls there, and the March equinox finds the
+     northern boreal land under snow with its cover decayed, five64's
+     Siberia box 0.60 against 0.75 at the September equinox) and its
+     topsoil carbon to `litterInput` ×
      `soilTurnover` × litter × `litterMean` / `decayMean` (35 kg/m² ×
      the type-weighted cover × the ratio), the store's equilibrium for
      its cover, trees and record; ice sheets 0. The first jump ends the
@@ -4330,12 +4335,70 @@ The work, in order:
      second; the third year's running mean dilutes it.
    - The cover's own start (0.5) is left to its own times (0.068 of
      cover after two years where the goal is 0).
-   - The trees jump to f m v at the jump's moment of the cover (the
-     March equinox), and the carbon to the year's ratio, not its
-     seasonal phase.
+   - A snow-free cell's trees jump to f m v of its cover at the March
+     equinox, wherever its wet and dry seasons leave the cover then
+     (five64's Sahel box 0.48 at day 2190 against 0.54, 0.58 and 0.38 at
+     days 2008, 2099 and 2281), and the carbon to the year's ratio, not
+     its seasonal phase.
    - Land added by regridding during the record takes the estimates,
      counted as a record as old as the rest.
    - The twins ('bare', 'green') are built, not run.
+
+   Review (Oct 2), each check run independently of the work's own
+   tests:
+
+   - The CPU record of one cell driven through `update` for three years
+     and 30 days matches a compensated float64 average of the cell's
+     per-step values, and the exponential recursion after day 1095, to
+     4.1·10⁻¹⁴ of the mean at 337.5 s and 168.75 s.
+   - The GPU's update m + (x − m) w in a WGSL kernel with the host's
+     float64 weights rounded to float32, over seven signals (boreal
+     season length and warmth, tropical warmth, rain in showers, demand
+     with dew, the litter and tundra decay factors): worst in year one
+     2.3·10⁻⁶ to 7.1·10⁻⁵ of the mean's scale; over the three plain
+     years 6.2·10⁻⁶ to 1.0·10⁻⁴ at 337.5 s and 1.2·10⁻⁵ to 2.7·10⁻⁴ at
+     168.75 s, the showers the worst at both; the kernel equals a
+     Math.fround emulation's worst to two digits. The step at the
+     hand-over equals its neighbours' (no jump); in the 60 days after it
+     the float32 exponential mean errs by up to 4.6·10⁻⁴ (showers,
+     337.5 s). The engine itself (N=6, 1200 steps with a 600-step
+     memory, against a twin whose record restarts every step): within
+     1.0·10⁻⁶ of the scale before the hand-over and 1.3·10⁻⁶ after,
+     the placeholders held to the bit on every step.
+   - From nine64_day0365 (saved without the means) the CPU engine is
+     bit-identical to the work's parent c753e21 over three steps in
+     every state and land array; the state loads with the record
+     [−1, 0, 0] and the estimates exactly on both engines.
+   - N=64 starts on both engines: the same uniform initial fields
+     (neutral 0.5, 0.25, 1.802 kg/m²; bare 0, 0, 0; green 1, 0,
+     13 kg/m²; bucket 150 mm), the six means 0; over 16 GPU steps the
+     carbon is held, the bare trees 0 and the green trees f m v of the
+     record to 1.4·10⁻⁷.
+   - Runs, N=64 bl34 from the atlas: rvA five days without a jump, rvB
+     a jump at the end of day 5 and a second segment to day 10, rvC the
+     same in one segment, rvE and rvD five days without and with the
+     jump on the snow-free cover. At day 5 all 10640 land cells off the
+     ice sheets hold trees 0.5 v and carbon 1.8022 kg/m² to the bit, the
+     jump changes only the trees, the carbon and the hold, and both
+     engines' jumps of rvE's state equal a hand computation of
+     the formula (trees to 1.1·10⁻¹⁶, carbon exactly) and rvD's saved
+     state; a repeat changes nothing on either engine; rvD reloads to
+     the bit on both engines and through the state file; after it no
+     value is negative or non-finite, the carbon is at most 11.38 kg/m²
+     and the dry soil spans 0.123–0.370. Four cells of rvE's five-day
+     record: warm and wet (20.1°N 75.6°W, P/PET 3.6) trees 0.50747,
+     carbon 4.7268 kg/m²; beyond the treeline (76.0°N) 0 and 0; arid
+     (11.9°N 125.1°E, P/PET 0.11) 0 and 4.5142; under 29.9 mm of snow
+     (23.8°N 105.8°W) 0 and 6.4215. The jump at day 5: trees 0.225 →
+     0.025, carbon 1.61 → 3.15 kg/m², dry soil 0.258 → 0.253, land
+     albedo 0.279 → 0.296. On day 5 1889 cells with cover lie under
+     snow, their snow-free cover above their cover by 1.3·10⁻³ on
+     average (3.3·10⁻³ at most). Between days 5 and 10 the trees move
+     in 1720 cells by at most 1.4·10⁻³ and the carbon in 6863 cells by
+     −0.095 to +0.107 kg/m². rvB and rvC part from day 6 on as rvA's
+     second segment and jump64 do without any jump: a whole-day segment
+     break is not bit-exact in this spin-up, while the land's own fields
+     reload to the bit.
 
    Defaults: land `start` 'neutral' (`startPlaceholders`: neutral
    cover 0.5, share 0.5, carbon ln 2 × `topsoilMass` × `organicScale`/100
