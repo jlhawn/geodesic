@@ -317,6 +317,7 @@ export function createLandSurface(mesh, geography, {
   const soil = shared('soil'), snow = shared('snow'), runoff = shared('runoff'), vegetation = shared('vegetation'), surface = shared('surface');
   const snowAlbedoField = shared('snowAlbedo'), canopy = shared('canopy'), seasonLength = shared('seasonLength'), seasonWarmth = shared('seasonWarmth');
   const rainMean = shared('rainMean'), demandMean = shared('demandMean'), soilCarbon = shared('soilCarbon'), litterMean = shared('litterMean'), decayMean = shared('decayMean');
+  const snowFreeCover = shared('snowFreeCover');
   const record = shared('record', 3);
   if (!(buffers && buffers.record)) record[0] = -1;
   if (!(buffers && buffers.snowAlbedo)) snowAlbedoField.fill(freshSnowAlbedo);
@@ -396,13 +397,14 @@ export function createLandSurface(mesh, geography, {
   }
 
   function grow(i, dt, temperature) {
-    if (onIceSheet(i)) { vegetation[i] = 0; canopy[i] = 0; return; }
+    if (onIceSheet(i)) { vegetation[i] = 0; canopy[i] = 0; snowFreeCover[i] = 0; return; }
     if (snow[i] > 0) vegetation[i] *= Math.exp(-dt / snowDeclineTime);
     else {
       const cap = capacity(i);
       const goal = Math.min(1, Math.max(0, (Math.min(soil[i], cap) / cap - dryWetness) / (wetWetness - dryWetness)));
       if (goal > vegetation[i]) vegetation[i] += (goal - vegetation[i]) * (1 - Math.exp(-dt * warmth(temperature) / growthTime));
       else vegetation[i] += (goal - vegetation[i]) * (1 - Math.exp(-dt / declineTime));
+      snowFreeCover[i] = vegetation[i];
     }
     if (!treed) { canopy[i] = Math.max(vegetation[i], canopy[i] + (vegetation[i] - canopy[i]) * (1 - Math.exp(-dt / canopyMemory))); return; }
     const f = treeFactor(i);
@@ -494,7 +496,7 @@ export function createLandSurface(mesh, geography, {
     const e = carbonRecord(mean, amplitude, soil[i] / capacity(i), carbonOptions);
     litterMean[i] = e.litter; decayMean[i] = e.decay;
   }
-  const carbonTarget = (i) => (decayMean[i] > 0 ? litterInput * soilTurnover * litter(i) * litterMean[i] / decayMean[i] : 0);
+  const carbonTarget = (i, cover) => (decayMean[i] > 0 ? litterInput * soilTurnover * (treeLitter * Math.min(1, canopy[i]) + grassLitter * Math.max(0, cover - canopy[i])) * litterMean[i] / decayMean[i] : 0);
 
   /*
    * A fresh land surface has half-full buckets, no snow, an empty record
@@ -506,6 +508,7 @@ export function createLandSurface(mesh, geography, {
     for (let i = 0; i < C; i++) {
       const grown = land[i] && vegetated && !onIceSheet(i);
       vegetation[i] = grown ? placed.cover : 0;
+      snowFreeCover[i] = vegetation[i];
       soil[i] = land[i] ? 0.5 * capacity(i) : 0;
       seasonLength[i] = 0; seasonWarmth[i] = 0; rainMean[i] = 0; demandMean[i] = 0; litterMean[i] = 0; decayMean[i] = 0;
       canopy[i] = !grown ? 0 : treed ? (placed.share === null ? 0 : placed.share * vegetation[i]) : vegetation[i];
@@ -521,7 +524,10 @@ export function createLandSurface(mesh, geography, {
    * Sets every land cell's trees to the cover times its own treeline and
    * moisture factor and its topsoil carbon to litterInput soilTurnover ×
    * litter × litterMean / decayMean, the store's equilibrium for that
-   * cover, trees and record, and releases a fresh start's hold. `round`
+   * cover, trees and record, and releases a fresh start's hold. Under
+   * snow the cover is `snowFreeCover`, the cover at the cell's last
+   * snow-free step: the trees do not follow the cover under snow and no
+   * litter falls there. `round`
    * gives each value as it will be stored (Math.fround on the GPU), so a
    * repeat at once changes nothing. Returns the change by land area,
    * globally and by 10° band.
@@ -532,8 +538,9 @@ export function createLandSurface(mesh, geography, {
     for (let i = 0; i < C; i++) {
       if (!land[i] || !vegetated) continue;
       if (onIceSheet(i)) { canopy[i] = 0; soilCarbon[i] = 0; continue; }
-      if (treed) canopy[i] = round(Math.min(1, treeFactor(i) * vegetation[i]));
-      if (humic) soilCarbon[i] = round(carbonTarget(i));
+      const cover = snow[i] > 0 ? snowFreeCover[i] : vegetation[i];
+      if (treed) canopy[i] = round(Math.min(1, treeFactor(i) * cover));
+      if (humic) soilCarbon[i] = round(carbonTarget(i, cover));
     }
     record[1] = 0;
     return changeReport(before, fields());
@@ -579,7 +586,7 @@ export function createLandSurface(mesh, geography, {
    * SEASON_ESTIMATE's sine year of the lowest air, and one without the
    * carbon's record at that sine year's. One saved without a record has
    * age −1: its means are exponential running means, and nothing is
-   * held.
+   * held. One saved without a snow-free cover takes its cover for it.
    */
   function load(saved, ice = null) {
     if (saved.record && saved.record.length >= 3) { record[0] = saved.record[0]; record[1] = vegetated ? saved.record[1] : 0; record[2] = saved.record[2]; }
@@ -593,6 +600,7 @@ export function createLandSurface(mesh, geography, {
       if (!land[i] || !vegetated || onIceSheet(i)) vegetation[i] = 0;
       else if (saved.vegetation) vegetation[i] = Math.min(1, Math.max(0, saved.vegetation[i]));
       else { vegetation[i] = snow[i] > 0 ? 0 : 1; if (snow[i] <= 0) soil[i] = capacity(i); }
+      snowFreeCover[i] = !land[i] || !vegetated || onIceSheet(i) ? 0 : saved.snowFreeCover ? Math.min(1, Math.max(0, saved.snowFreeCover[i])) : vegetation[i];
       if (!land[i]) { seasonLength[i] = 0; seasonWarmth[i] = 0; }
       else if (seasoned) { seasonLength[i] = Math.min(1, Math.max(0, saved.seasonLength[i])); seasonWarmth[i] = Math.max(0, saved.seasonWarmth[i]); }
       else estimateSeason(i);
@@ -617,8 +625,8 @@ export function createLandSurface(mesh, geography, {
   const weights = (dt) => [weight(seasonMemory, dt), weight(moistureMemory, dt), record[1]];
 
   return {
-    soil, surface, snow, runoff, vegetation, snowAlbedo: snowAlbedoField, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, record, dryAlbedo, treeFactor, moistureFactor, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load, advance, jump, weights, placeholders,
-    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy), seasonLength: Float64Array.from(seasonLength), seasonWarmth: Float64Array.from(seasonWarmth), rainMean: Float64Array.from(rainMean), demandMean: Float64Array.from(demandMean), record: Float64Array.from(record) } : {}), ...(humic ? { soilCarbon: Float64Array.from(soilCarbon), litterMean: Float64Array.from(litterMean), decayMean: Float64Array.from(decayMean) } : {}) }; },
-    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer, seasonLength: seasonLength.buffer, seasonWarmth: seasonWarmth.buffer, rainMean: rainMean.buffer, demandMean: demandMean.buffer, soilCarbon: soilCarbon.buffer, litterMean: litterMean.buffer, decayMean: decayMean.buffer, record: record.buffer },
+    soil, surface, snow, runoff, vegetation, snowAlbedo: snowAlbedoField, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, record, dryAlbedo, treeFactor, moistureFactor, land, budget, heatCapacity, latentHeatFusion, bucketCapacity, capacity, wetness, albedo: surfaceAlbedo, update, deposit, initialize, water, load, advance, jump, weights, placeholders,
+    serialize() { return { soil: Float64Array.from(soil), snow: Float64Array.from(snow), snowAlbedo: Float64Array.from(snowAlbedoField), ...(vegetated ? { vegetation: Float64Array.from(vegetation), surface: Float64Array.from(surface), canopy: Float64Array.from(canopy), seasonLength: Float64Array.from(seasonLength), seasonWarmth: Float64Array.from(seasonWarmth), rainMean: Float64Array.from(rainMean), demandMean: Float64Array.from(demandMean), snowFreeCover: Float64Array.from(snowFreeCover), record: Float64Array.from(record) } : {}), ...(humic ? { soilCarbon: Float64Array.from(soilCarbon), litterMean: Float64Array.from(litterMean), decayMean: Float64Array.from(decayMean) } : {}) }; },
+    shared: { soil: soil.buffer, surface: surface.buffer, snow: snow.buffer, runoff: runoff.buffer, vegetation: vegetation.buffer, snowAlbedo: snowAlbedoField.buffer, canopy: canopy.buffer, seasonLength: seasonLength.buffer, seasonWarmth: seasonWarmth.buffer, rainMean: rainMean.buffer, demandMean: demandMean.buffer, soilCarbon: soilCarbon.buffer, litterMean: litterMean.buffer, decayMean: decayMean.buffer, snowFreeCover: snowFreeCover.buffer, record: record.buffer },
   };
 }

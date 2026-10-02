@@ -911,6 +911,7 @@ export const PHYSICS_KERNELS = {
       }
       if (onIceSheet) { veg = 0.0; }
       PH[PH_VEG + i] = veg;
+      if (snow <= 0.0 || onIceSheet) { PH[PH_SNOWFREEV + i] = veg; }
       let air = IN[S_TH + bottom] * D[D_EXM + bottom];
       let keep = P[5]; let hold = P[7];
       let seasonLength = PH[PH_SEASONL + i] + (select(0.0, 1.0, air >= SEASON_K) - PH[PH_SEASONL + i]) * keep;
