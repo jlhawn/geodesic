@@ -5534,7 +5534,7 @@ The scheme. Per cell, from the state at the start of the physics:
 | bare soil | 0.013 | 1.3·10⁻⁴ | same, desert |
 | snow on grass and bare soil, ice sheets | 1.3·10⁻³ | Andreas (1987) | same, ice caps and glaciers; snow covers the short tiles over min(1, S/30 kg/m²), the IFS's c_sn with D_cr 0.1 m at 300 kg/m³; the trees stand above it |
 | sea ice of concentration A | max(10⁻³, 0.93·10⁻³ (1 − A) + 6.05·10⁻³ e^(−17 (A − 0.5)²)) | Andreas (1987) | IFS eq. 3.30 (Andreas et al. 2010, Bidlot et al. 2014) |
-| open sea (1 − A) | α u*²/g + 0.11 ν/u*, α = 0.0017 U10N − 0.005 (U10N ≤ 19 m/s, α ≥ 0) | min(1.6·10⁻⁴, 5.8·10⁻⁵ Rr^−0.72) | COARE 3.5 (Edson et al. 2013; the scalar form of COARE 3.0, Fairall et al. 2003), ν of the air at its temperature (COARE's fit), four fixed-point steps from the neutral u* |
+| open sea (1 − A) | α u*²/g + 0.11 ν/u*, α = 0.0017 U10N − 0.005 (U10N ≤ 19 m/s, α ≥ 0) | min(1.6·10⁻⁴, 5.8·10⁻⁵ Rr^−0.72) | COARE 3.5 (Edson et al. 2013; the scalar fit as in its coare35vn.m, where COARE 3.0's was min(1.15·10⁻⁴, 5.5·10⁻⁵ Rr^−0.6)), ν of the air at its temperature (COARE's fit), four fixed-point steps from the neutral u* |
 
 Andreas (1987, Table 2 of Andreas 2002): ln(z₀h/z₀m) = b₀ + b₁ ln R* +
 b₂ (ln R*)², R* = u* z₀m/ν with the tile's neutral u*, (1.25, 0, 0) for
@@ -5547,15 +5547,19 @@ surface-layer functions (eqs. 3.16–3.26: Dyer–Hicks integrated by
 Paulson when unstable; Holtslag and De Bruin 1988 with a 1, b 2/3, c 5,
 d 0.35 when stable; no cap on z/L), ζ = z₁/L from the bulk Richardson
 number g z₁ (θv₁ − θv_s)/(θ̄v U²) by five steps (fixed point when
-unstable, Newton in ln ζ when stable; worst error against the converged
-coefficients 5·10⁻⁴ over Ri −10…10, z 5–40 m, z₀m 10⁻⁵–2 m), U the
+unstable, Newton in ln ζ when stable; worst error against 200 steps
+over Ri −10…10 at z 16–40 m 4·10⁻⁴ for the tiles above and their blends
+and 1.6·10⁻³ for any z₀m ≤ 2 m with z₀h/z₀m ≥ 10⁻³; below z 10 m with
+z₀m 2 m five steps miss by up to 99 %, a height the model's z₁ of
+16–21 m does not reach), U the
 wind with the 3 m/s floor, θv_s with the skin's saturation humidity over
 sea and sea ice and dry over land. z₁ = c_p θv₁ (Π_s − Π₁)/g. C_D and
 C_H go to the momentum, the ocean's stress and u*; C_H to the sensible
 heat and evaporation, the mixed-layer deck's surface fluxes and the
 land's aerodynamic conductance. The reference evapotranspiration takes
 FAO-56's own reference grass at z₁ (eq. 4: h 0.12 m, d 2/3 h, z₀m
-0.123 h, z₀h 0.1 z₀m; 2.33·10⁻³ at 20 m, 208/u₂ at 2 m with κ 0.41).
+0.123 h, z₀h 0.1 z₀m and FAO-56's κ 0.41; 2.45·10⁻³ at 20 m, 208/u₂ at
+2 m).
 
 Three consequences built with it, on both engines:
 - The surface drag is the lower boundary of the boundary layer's
@@ -5672,6 +5676,42 @@ reference to 8·10⁻⁶, latent heat to 0.04 W/m² and the net surface flux to
 digests unchanged. Tests that feed the boundary layer a hand-made
 surface or compare deck regimes, rain sums and cloud effects that one
 switching column moves run on 'fixed', the surface they were written for.
+
+The review's checks (Oct 2). On the real state eight64 day 183, both
+engines from one copy: the CPU's implicit drag changes each edge
+column's momentum by Δt τ to 8·10⁻¹⁴ of the total |Δt τ| (worst edge
+1.5·10⁻¹⁰ kg/m/s against a largest Δt τ of 2.2·10³), and the ocean receives the stored
+stress unchanged (on the GPU the ocean's stress is the same PH_STRESS
+times the ice's transmission). Engine parity (rms over the grid of the
+lowest layer's θ and u and of Ts; the 'fixed' exchange's own in
+brackets): after one step θ 1.2·10⁻² K (9.6·10⁻⁴) and u 3.5·10⁻³ m/s
+(7.6·10⁻⁴), the largest differences in moist-boundary-layer columns of
+the coupled regime switching between engines; after 4 steps θ 6.2·10⁻³
+(3.8·10⁻³), u 3.3·10⁻³ (3.6·10⁻³), Ts 5.7·10⁻² K (5.7·10⁻²); after 16
+θ 3.2·10⁻² (2.7·10⁻²), u 1.9·10⁻² (1.7·10⁻²), Ts 0.18 K (0.18); C_D and C_H after
+one step 1.7·10⁻⁵ relative (largest 1.9·10⁻⁴), the stored stress
+5.5·10⁻⁵ N/m², latent heat 2.3·10⁻³ W/m². 'fixed' on the CPU reproduces
+3db505a bit for bit over nine N=64 steps from that state (every state
+array, the land, the ocean and its stress), both by default and with
+the sweep's `dragCoefficient` 1.3·10⁻³; on the GPU it differs from
+3db505a in the last bits (357 θ values after one step, at most 3 f32
+ulps), the shader compiler's rounding of the edited kernels. Workers
+reproduce the serial CPU step bit for bit with land (N=8, six steps,
+both exchanges). The drag and heat exchange over one step,
+λ = ρ C U Δt/m₁ with m₁ the lowest layer's mass, after four steps
+(N=64 Δt 337.5 s, N=128 Δt 168.75 s): forest λ_D mean 0.88 (largest
+2.3; 4.7 on the first step, in the winds of the fixed drag), λ_H 0.95 (largest 2.2, above 1 in 47 % of the forest cells, above
+2 in 0.6 %) at N=64 and λ_H 0.52 (largest 1.24) at N=128; the open sea
+λ_H at most 0.32. The drag is implicit; the heat and vapour fluxes stay
+explicit sources into the lowest layer. Over 96 N=64 steps the forest's
+sensible heat has a mean step-to-step second difference of 0.7 W/m²
+against 0.05 on 'fixed' (|H| 37–42 W/m²) and reverses in 0.4–0.5 % of
+step pairs by more than 5 W/m² each way (0.0 % on 'fixed'), with no
+growth; at N=6 and Δt 900 s, where λ_H reaches 13 over a continent of
+forest, 192 steps stay finite with the lowest layer's θ reversing in
+0.09 % of step pairs. The three-day runs from nine64 day 91 and eight64
+day 183, re-run from copies (3db505a against cf1cdea), reproduce
+the tables above to their last digit.
 
 Subgrid orography (reported, not built). Climate models add two
 stresses over mountains that the resolved terrain and the roughness
