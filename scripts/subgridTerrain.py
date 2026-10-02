@@ -22,6 +22,8 @@ fields (Cy47r3 Part IV §11.3). numpy and Pillow only.
                land   the share of the block's 30″ points above 0 m
   spectrum   the land orography's one-dimensional power spectra along
              rows and columns and their slopes
+  selftest   analytic ridges through `filter` and a −1.9 spectrum through
+             the slope fit (test/subgridTerrain.test.mjs)
 
 The smoothing is a convolution with the radial kernel h(r) on the sphere's
 local plane, applied by FFT in bands of rows: within a band (at most 1°,
@@ -33,6 +35,7 @@ normalised to unit sum, and the band is periodic in longitude. Within
   python3 scripts/subgridTerrain.py assemble CACHE
   python3 scripts/subgridTerrain.py filter CACHE
   python3 scripts/subgridTerrain.py spectrum CACHE
+  python3 scripts/subgridTerrain.py selftest -
 """
 import os
 import re
