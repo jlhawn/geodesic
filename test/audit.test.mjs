@@ -128,6 +128,8 @@ test('scripts/tropicalHeating.mjs replays the moist step exactly, closes the hea
   assert.equal(Number(mismatch), 0, `${mismatch} of ${columns} column-steps`);
   assert.ok(Number(columns) > 0 && Number(heat) < 1e-12 && Number(water) < 1e-16, `heat ${heat} K, water ${water} kg/kg a step`);
   assert.equal(sensible, own, 'the global sensible heat');
+  const [, deepFlux, probe, probed] = run.stdout.match(/the deep-only plume's base flux in (\d+); the probe's top, CAPE or inhibition in (\d+) of (\d+) candidates/);
+  assert.ok(Number(deepFlux) === 0 && Number(probe) === 0 && Number(probed) > 0, `the deep-only plume parts in ${deepFlux}, the probe in ${probe} of ${probed}`);
   const summaries = run.stdout.split('\n').filter((line) => line.startsWith('summary '));
   assert.deepEqual(summaries.map((line) => line.slice(8, line.indexOf(': {'))), TROPICAL_BOXES.map(([name]) => name));
   for (const line of summaries) assert.ok('q1rCentroid' in JSON.parse(line.slice(line.indexOf(': {') + 2)), line);
