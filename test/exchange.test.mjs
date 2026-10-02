@@ -69,8 +69,8 @@ test('roughness by surface: COARE 3.5 over the sea, the IFS over sea ice, Andrea
   const mixed = createBlend(10).clear().add(0.5, 2, 2).add(0.5, 0.1, 1e-3).finish();
   close(mixed.momentum, 1.1664147664251205, 1e-12, 'forest and grass z0m');
   close(mixed.heat, 1.030731926828355, 1e-12, 'forest and grass z0h');
-  close(referenceCoefficient(2), KARMAN ** 2 / (Math.log(1.92 / 0.01476) * Math.log(1.92 / 0.001476)), 1e-12, 'FAO-56 reference at 2 m (r_a 208/u₂ with κ 0.41)');
-  close(1 / referenceCoefficient(2) * KARMAN ** 2 / 0.41 ** 2, 208, 3e-3, 'FAO-56 eq. 4');
+  close(referenceCoefficient(2), 0.41 ** 2 / (Math.log(1.92 / 0.01476) * Math.log(1.92 / 0.001476)), 1e-12, 'FAO-56 reference at 2 m');
+  close(1 / referenceCoefficient(2), 208, 3e-3, 'FAO-56 eq. 4: r_a 208/u₂');
 });
 
 test('the exchange is physical by default and fixed where an option set names a coefficient', () => {

@@ -22,8 +22,7 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
  *  - open sea: COARE 3.5 (Edson et al. 2013), z0m = α u*²/g + 0.11 ν/u*
  *    with Charnock's α = 0.0017 U10N − 0.005 (U10N at most 19 m/s, α at
  *    least 0) and ν the air's viscosity at its temperature, iterated
- *    from the neutral u*; z0h = min(1.6e-4, 5.8e-5 Rr^−0.72), Rr = z0m u* / ν
- *    (COARE 3.0, kept by 3.5).
+ *    from the neutral u*; z0h = min(1.6e-4, 5.8e-5 Rr^−0.72), Rr = z0m u* / ν.
  *  - sea ice of concentration A: the IFS's (Cy47r3 eq. 3.30, after
  *    Andreas et al. 2010) z0m = max(1e-3, 0.93e-3 (1 − A) + 6.05e-3
  *    exp(−17 (A − 0.5)²)).
@@ -46,7 +45,7 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
  *
  * `reference` is the FAO-56 reference grass's neutral C_H at the same
  * height (Allen et al. 1998 eq. 4: crop height 0.12 m, d = 2/3 h,
- * z0m = 0.123 h, z0h = 0.1 z0m), which the radiation's reference
+ * z0m = 0.123 h, z0h = 0.1 z0m, κ 0.41), which the radiation's reference
  * evapotranspiration takes.
  *
  * exchange 'fixed' gives constant coefficients: the sea's dragCoefficient
@@ -55,6 +54,7 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
  * fixed.
  */
 export const KARMAN = 0.4;
+export const FAO_KARMAN = 0.41;
 export const ROUGHNESS = { forest: [2.0, 2.0], grass: [0.1, 1e-3], bare: [0.013, 1.3e-4], snow: 1.3e-3 };
 export const EXCHANGE_DEFAULTS = { roughness: ROUGHNESS, snowCover: 30, blendingHeight: 10, charnock: [0.0017, -0.005, 19], smoothFlow: 0.11, iterations: 5, referenceCrop: 0.12 };
 export const ANDREAS = [[0.135, 1.25, 0, 0], [2.5, 0.149, -0.55, 0], [Infinity, 0.317, -0.565, -0.183]];
@@ -179,7 +179,7 @@ export function createBlend(height) {
 
 export function referenceCoefficient(z, crop = EXCHANGE_DEFAULTS.referenceCrop) {
   const d = 2 / 3 * crop, z0m = 0.123 * crop, z0h = 0.1 * z0m;
-  return KARMAN * KARMAN / (Math.log((z - d) / z0m) * Math.log((z - d) / z0h));
+  return FAO_KARMAN * FAO_KARMAN / (Math.log((z - d) / z0m) * Math.log((z - d) / z0h));
 }
 
 export function createSurfaceExchange(mesh, core, { geography = null, vegetated = true, mode = 'roughness', seaDrag = SEA_DRAG, landDrag = LAND_DRAG, gustiness = 3, buffers = null, ...options } = {}) {

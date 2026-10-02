@@ -1,4 +1,4 @@
-import { EXCHANGE_DEFAULTS, ROUGHNESS, ANDREAS, KARMAN } from '../physics/exchange.module.js';
+import { EXCHANGE_DEFAULTS, ROUGHNESS, ANDREAS, KARMAN, FAO_KARMAN } from '../physics/exchange.module.js';
 
 /*
  * The surface layer of js/physics/exchange.module.js in WGSL, line by
@@ -14,7 +14,7 @@ export function exchangeConstants(o) {
 const ROUGH: bool = ${o.surfaceExchange === 'roughness'}; const IMPLICIT_DRAG: bool = ${o.surfaceExchange === 'roughness' && !!o.implicitDrag};
 const XKARMAN: f32 = ${KARMAN}; const XGRAV: f32 = 9.81; const X_ITER: i32 = ${x.iterations}; const X_BLEND: f32 = ${x.blendingHeight}; const X_SNOWCOVER: f32 = ${x.snowCover};
 const Z0_FOREST: f32 = ${r.forest[0]}; const ZH_FOREST: f32 = ${r.forest[1]}; const Z0_GRASS: f32 = ${r.grass[0]}; const ZH_GRASS: f32 = ${r.grass[1]}; const Z0_BARE: f32 = ${r.bare[0]}; const ZH_BARE: f32 = ${r.bare[1]}; const Z0_SNOW: f32 = ${r.snow};
-const CH_SLOPE: f32 = ${slope}; const CH_OFFSET: f32 = ${offset}; const CH_CEIL: f32 = ${ceiling}; const SMOOTH: f32 = ${x.smoothFlow}; const REF_CROP: f32 = ${x.referenceCrop};
+const CH_SLOPE: f32 = ${slope}; const CH_OFFSET: f32 = ${offset}; const CH_CEIL: f32 = ${ceiling}; const SMOOTH: f32 = ${x.smoothFlow}; const REF_CROP: f32 = ${x.referenceCrop}; const REF_KARMAN: f32 = ${FAO_KARMAN};
 const AND_SMOOTH: f32 = ${ANDREAS[0][0]}; const AND_TRANS: f32 = ${ANDREAS[1][0]};
 const AND0: vec3<f32> = vec3<f32>(${ANDREAS[0].slice(1).join(', ')}); const AND1: vec3<f32> = vec3<f32>(${ANDREAS[1].slice(1).join(', ')}); const AND2: vec3<f32> = vec3<f32>(${ANDREAS[2].slice(1).join(', ')});
 `;
@@ -108,6 +108,6 @@ fn surfaceExchange(i: i32, pi: f32, skin: f32, wind: f32, concentration: f32, sn
   let ri = GRAV * z * (airV - surfaceV) / (0.5 * (airV + surfaceV) * speed * speed);
   let c = xTransfer(ri, z, z0m, z0h);
   let d = 2.0 / 3.0 * REF_CROP; let rm = 0.123 * REF_CROP; let rh = 0.1 * rm;
-  return vec3<f32>(c.x, c.y, XKARMAN * XKARMAN / (log((z - d) / rm) * log((z - d) / rh)));
+  return vec3<f32>(c.x, c.y, REF_KARMAN * REF_KARMAN / (log((z - d) / rm) * log((z - d) / rh)));
 }
 `;
