@@ -960,12 +960,14 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   assert.equal(positive, grant, 'these twelve steps do not tell the two apart');
   assert.equal(layer, '6c479c250a74b4fea47256612ab65a98');
   const elements = { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure, pcapeBoundary: MOIST_DEFAULTS.pcapeBoundary, excessVelocity: MOIST_DEFAULTS.excessVelocity };
-  const merged = modelDigest({}, elements).digest, typed = modelDigest({}, { ...elements, convectionType: MOIST_DEFAULTS.convectionType }).digest;
-  const entraining = modelDigest({}, { ...elements, convectionType: MOIST_DEFAULTS.convectionType, plumeEntrainmentLaw: MOIST_DEFAULTS.plumeEntrainmentLaw }).digest;
-  console.log(`12 steps at N=4 under the model top and the convection's elements 2-4: ${merged}; with the deep type by the cloud's depth: ${typed}; with the IFS entrainment: ${entraining}`);
+  const merged = modelDigest({}, elements).digest, typed = modelDigest({}, { ...elements, convectionType: 'cloudDepth' }).digest;
+  const entraining = modelDigest({}, { ...elements, convectionType: 'cloudDepth', plumeEntrainmentLaw: MOIST_DEFAULTS.plumeEntrainmentLaw }).digest;
+  const parcel = modelDigest({}, { ...elements, convectionType: MOIST_DEFAULTS.convectionType, plumeEntrainmentLaw: MOIST_DEFAULTS.plumeEntrainmentLaw }).digest;
+  console.log(`12 steps at N=4 under the model top and the convection's elements 2-4: ${merged}; with the deep type by the cloud's depth: ${typed}; with the IFS entrainment: ${entraining}; typed by the IFS test parcel: ${parcel}`);
   assert.equal(merged, '01214faf52bfc0cdf61055804ec3a883');
   assert.equal(typed, '27947df67a49a0558171d3f9b78ff6c4');
   assert.equal(entraining, 'fe6cbf5feebc316eca9a6055f53bf16c');
+  assert.equal(parcel, 'dd6c45b64bf47cd17a0b6c086226ff1f');
 });
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {

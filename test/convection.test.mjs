@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
-import { saturationHumidity, cloudSaturation, LATENT_HEAT, MOIST_DEFAULTS, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT } from '../js/physics/moist.module.js';
+import { saturationHumidity, cloudSaturation, LATENT_HEAT, MOIST_DEFAULTS, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 
@@ -659,7 +659,7 @@ test('a column convects deep where its plume\'s cloud is deeper than 200 hPa and
     }
     return out;
   };
-  const depth = run({}), topCape = run({ convectionType: 'top', plumeClosure: 'cape' }), topSeparate = run({ convectionType: 'top' });
+  const depth = run({ convectionType: 'cloudDepth' }), topCape = run({ convectionType: 'top', plumeClosure: 'cape' }), topSeparate = run({ convectionType: 'top' });
   let deep = 0, same = 0, onlyDepth = 0, onlyTop = 0, alone = 0, both = 0, worst = 0;
   depth.forEach((c, i) => {
     worst = Math.max(worst, c.enthalpy, c.water);
@@ -677,6 +677,114 @@ test('a column convects deep where its plume\'s cloud is deeper than 200 hPa and
   });
   console.log(`${depth.length} random columns: ${deep} deep by the cloud's depth (${alone} with a flux, all alone), ${same} deep by both rules and as top with cape, ${onlyDepth} deep by the depth only, ${onlyTop} by the 700 hPa top only; under top with separate ${both} columns run both plumes; enthalpy and water within ${worst.toExponential(1)}`);
   assert.ok(deep > 10 && same > 10 && alone > 10 && both > 0, `${deep} deep, ${same} alike, ${alone} alone, ${both} with both under top`);
+  assert.ok(worst < 1e-15, `enthalpy and water ${worst}`);
+});
+
+/*
+ * The IFS's first-guess deep updraught by hand (Cy43r1 §6.4, eqs 6.18–6.21)
+ * on column 0 as plumeColumn sees it: from the deep source's s_l and q_t at
+ * its top interface at 1 m/s, mixing at 0.4 · 1.75e-3 (q_s/q_s,lowest)³,
+ * half the condensate removed at each upper interface, w² by the IFS form,
+ * its zero inside the top layer found by bisection and the pressure there
+ * interpolated in ln p; with the interface at which its cloud first exceeds
+ * 200 hPa.
+ */
+function handParcel(model) {
+  const { K, C, levels, sigmaMid, geopotential, g, cp, R, exnerLayer, exnerLower } = model.core.diagnostics, thetaV = model.core.arrays.thetaV;
+  const [pi, theta, , , q, qc] = model.state, O = MOIST_DEFAULTS, sat = { qs: 0, slope: 0, liquid: 1 }, L = LATENT_HEAT;
+  const qsOf = (T, p) => cloudSaturation(T, p, O.iceSaturation, O.liquidTemperature, O.iceTemperature, sat).qs;
+  const T = (k) => theta[k * C] * exnerLayer[k * C], p = (k) => pi[0] * sigmaMid[k], zMid = (k) => geopotential[k * C] / g;
+  const zUp = (k) => (geopotential[k * C] + cp * thetaV[k * C] * (exnerLayer[k * C] - exnerLower[(k - 1) * C])) / g;
+  const envS = (k) => cp * T(k) + g * zMid(k) - L * Math.max(0, qc[k * C]), envQ = (k) => Math.max(0, q[k * C]) + Math.max(0, qc[k * C]);
+  const state = (sl, qt, z, pressure) => {
+    const dry = (sl - g * z) / cp;
+    if (!(qt > saturationHumidity(dry, pressure))) return { T: dry, l: 0 };
+    let t = dry;
+    for (let n = 0; n < 40; n++) { const qs = saturationHumidity(t, pressure); t -= (cp * t + L * qs - (sl - g * z + L * qt)) / (cp + L * L * qs / (461.5 * t * t)); }
+    return { T: t, l: Math.max(0, qt - saturationHumidity(t, pressure)) };
+  };
+  const bottom = K - 1;
+  let source = bottom;
+  while (source > 0 && p(source - 1) >= pi[0] - O.cumulusSourceDepth) source--;
+  const twin = build({}, 2); twin.state.forEach((a, n) => a.set(model.state[n])); twin.boundaryLayer.depth.set(model.boundaryLayer.depth); twin.radiation.mlmGate.set(model.radiation.mlmGate);
+  twin.core.diagnoseColumn(0, twin.state[0], twin.state[1], twin.state[4], twin.state[5]);
+  twin.moist.plumeColumn(0, twin.state[0], twin.state[1], twin.state[4], twin.state[5], 600);
+  let sl = twin.moist.deep.sourceS, qt = twin.moist.deep.sourceQ, w2 = 1, base = 0, deepAt = NaN;
+  const surface = qsOf(T(bottom), p(bottom));
+  for (let k = source - 1; k > 0; k--) {
+    const lower = zUp(k + 1), depth = zUp(k) - lower, eps = 0.4 * 1.75e-3 * (qsOf(T(k), p(k)) / surface) ** 3, m = (1 + 1.875 * 0.506) * eps;
+    const half = Math.exp(-eps * (zMid(k) - lower)), ms = envS(k) + (sl - envS(k)) * half, mq = envQ(k) + (qt - envQ(k)) * half, mid = state(ms, mq, zMid(k), p(k));
+    if (!(base > 0) && mid.l > 0) base = pi[0] * levels[k + 1];
+    const Tv = T(k) * (1 + 0.608 * Math.max(0, q[k * C]) - Math.max(0, qc[k * C])), B = g * (mid.T * (1 + 0.608 * (mq - mid.l) - mid.l) - Tv) / Tv;
+    const w2at = (d) => (m > 0 ? w2 * Math.exp(-2 * m * d) + (B / 3 / m) * (1 - Math.exp(-2 * m * d)) : w2 + 2 * B / 3 * d);
+    if (!(w2at(depth) > 0)) {
+      if (!(base > 0)) return { base: 0, top: NaN, deep: false, deepAt };
+      let a = 0, b = depth;
+      for (let n = 0; n < 200; n++) { const c = 0.5 * (a + b); if (w2at(c) > 0) a = c; else b = c; }
+      const top = pi[0] * levels[k + 1] * Math.pow(levels[k] / levels[k + 1], 0.5 * (a + b) / depth);
+      return { base, top, deep: base - top > DEEP_CLOUD_DEPTH, deepAt, layer: k };
+    }
+    w2 = w2at(depth);
+    if (base > 0 && !Number.isFinite(deepAt) && base - pi[0] * levels[k] > DEEP_CLOUD_DEPTH) deepAt = pi[0] * levels[k];
+    const full = Math.exp(-eps * depth);
+    sl = envS(k) + (sl - envS(k)) * full; qt = envQ(k) + (qt - envQ(k)) * full;
+    const upper = state(sl, qt, zUp(k), pi[0] * levels[k]);
+    qt -= 0.5 * upper.l; sl += L * 0.5 * upper.l;
+  }
+  return { base, top: pi[0] * levels[1], deep: base > 0 && base - pi[0] * levels[1] > DEEP_CLOUD_DEPTH, deepAt };
+}
+
+test('the IFS test parcel types the column: from the deep source at 1 m/s, mixing at 0.4 · 1.75e-3 (q_s/q_s,lowest)³ and keeping half its condensate, its cloud from its first cloudy layer to where its w² vanishes inside a layer; deep beyond 200 hPa, as by hand on Jordan\'s column, a drier one and the trade-wind columns', () => {
+  const dt = 600, cases = [
+    ['Jordan', plumeColumn({})],
+    ['Jordan, free troposphere × 0.3', plumeColumn({}, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? 0.3 : 1), saturationHumidity(air.T, p)) }; })],
+    ['Jordan, free troposphere × 0.1', plumeColumn({}, (z, p) => { const air = jordan(p); return { T: air.T, q: Math.min(air.q * (p < 850e2 ? 0.1 : 1), saturationHumidity(air.T, p)) }; })],
+    ['trade wind', tradeWindColumn()],
+    ['trade cumulus', plumeColumn({}, tradeCumulus)],
+  ];
+  assert.equal(MOIST_DEFAULTS.convectionType, 'testParcel');
+  assert.deepEqual(TEST_PARCEL, { entrainment: 0.4, removal: 0.5 });
+  const lines = [];
+  let deepSeen = 0, shallowSeen = 0;
+  for (const [label, model] of cases) {
+    const [pi, theta, , , q, qc] = model.state;
+    model.core.diagnoseColumn(0, pi, theta, q, qc);
+    const hand = handParcel(model), before = budget(model, 0);
+    const rain = model.moist.plumeColumn(0, pi, theta, q, qc, dt);
+    const after = budget(model, 0), d = model.moist.deep;
+    lines.push(`${label}: test cloud ${(d.parcelBase / 100).toFixed(1)}–${(d.parcelTop / 100).toFixed(1)} hPa (by hand ${(hand.base / 100).toFixed(1)}–${((hand.deep ? hand.deepAt : hand.top) / 100).toFixed(1)}${hand.deep ? `, w² vanishing at ${(hand.top / 100).toFixed(1)}` : ''}), ${d.parcelDeep ? 'deep' : 'shallow'}; ${d.deep ? `the deep plume tops at ${(model.moist.cumulusTop[0] / 100).toFixed(0)} hPa` : model.moist.cumulusBaseFlux[0] > 0 ? `the shallow plume tops at ${(model.moist.cumulusTop[0] / 100).toFixed(0)} hPa` : 'no plume'}`);
+    assert.equal(d.parcelDeep, hand.deep, `${label}: typed alike`);
+    assert.ok(Math.abs(d.parcelBase - hand.base) < 1e-6, `${label}: base ${d.parcelBase} against ${hand.base}`);
+    const expectedTop = hand.deep ? hand.deepAt : hand.top;
+    assert.ok(Math.abs(d.parcelTop - expectedTop) < 1e-6 * expectedTop, `${label}: top ${d.parcelTop} against ${expectedTop}`);
+    if (hand.deep) deepSeen++; else shallowSeen++;
+    if (!d.parcelDeep) assert.ok(!d.deep, `${label}: shallow by the test parcel, no deep plume`);
+    assert.ok(Math.abs(after.enthalpy - before.enthalpy) < 1e-15 * before.enthalpy && Math.abs(after.water + rain - before.water) < 1e-15 * before.water, `${label}: enthalpy and water`);
+  }
+  console.log(lines.join('\n'));
+  assert.ok(deepSeen >= 1 && shallowSeen >= 1, `${deepSeen} deep and ${shallowSeen} shallow`);
+});
+
+test('under the test parcel a column whose test cloud is deeper than 200 hPa runs the deep plume alone and every other column the shallow plume alone, with column enthalpy and water exact on random columns', () => {
+  const dt = 900, model = build({}, 6), C = model.mesh.nCells;
+  randomColumns(model);
+  const [pi, theta, , , q, qc] = model.state, { moist, core } = model;
+  let typed = 0, fired = 0, shallowTyped = 0, shallowRun = 0, worst = 0, deeperThanPlume = 0;
+  for (let i = 0; i < C; i++) {
+    core.diagnoseColumn(i, pi, theta, q, qc);
+    const before = budget(model, i), rain = moist.plumeColumn(i, pi, theta, q, qc, dt), after = budget(model, i), d = moist.deep;
+    worst = Math.max(worst, Math.abs(after.enthalpy - before.enthalpy) / before.enthalpy, Math.abs(after.water + rain - before.water) / before.water);
+    if (d.parcelDeep) { typed++; assert.ok(d.parcelBase - d.parcelTop > DEEP_CLOUD_DEPTH, `column ${i}: deep with a test cloud of ${d.parcelBase - d.parcelTop} Pa`); }
+    else if (d.parcelBase > 0) { shallowTyped++; assert.ok(!(d.parcelBase - d.parcelTop > DEEP_CLOUD_DEPTH), `column ${i}`); }
+    if (d.deep) {
+      fired++;
+      assert.ok(d.parcelDeep, `column ${i}: the deep plume runs only where the test parcel is deep`);
+      assert.equal(moist.cumulusBaseFlux[i], d.baseFlux, `column ${i}: the deep plume runs alone`);
+      if (!(pi[i] * (model.core.diagnostics.levels[d.base] - model.core.diagnostics.levels[d.top]) > DEEP_CLOUD_DEPTH)) deeperThanPlume++;
+    } else if (moist.cumulusBaseFlux[i] > 0) shallowRun++;
+  }
+  console.log(`${C} random columns: ${typed} typed deep by the test parcel (${fired} fire the deep plume, ${deeperThanPlume} of them with the plume's own cloud no deeper than 200 hPa), ${shallowTyped} typed shallow, ${shallowRun} run the shallow plume; enthalpy and water within ${worst.toExponential(1)}`);
+  assert.ok(typed > 10 && fired > 10 && shallowTyped > 10 && shallowRun > 10, `${typed}, ${fired}, ${shallowTyped}, ${shallowRun}`);
   assert.ok(worst < 1e-15, `enthalpy and water ${worst}`);
 });
 
@@ -828,6 +936,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ excessVelocity: 'convective' });
   await parity({ plumeSourceDepth: 'boundaryLayer' });
   await parity({ convectionType: 'top' });
+  await parity({ convectionType: 'cloudDepth' });
   await parity({ plumeEntrainmentLaw: 'gregory' });
 });
 

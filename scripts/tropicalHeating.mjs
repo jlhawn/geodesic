@@ -129,7 +129,7 @@ const acc = Array.from({ length: NB }, () => ({
   heat: new Float64Array(NT * K), energy: new Float64Array(NT * K), total: new Float64Array(K), water: new Float64Array(NW * K), waterMass: new Float64Array(NW * K), totalWater: new Float64Array(K), pressure: new Float64Array(K), thickness: new Float64Array(K), height: new Float64Array(K), areaSteps: 0,
   temperature: new Float64Array(K), humidity: new Float64Array(K), localHour: new Float64Array(HOURS),
   rain: { deep: 0, shallow: 0, liquidLow: 0, liquidHigh: 0, iceMelted: 0, iceGround: 0, model: 0, modelConvective: 0 },
-  plume: { deck: 0, noLcl: 0, notCloudy: 0, shallowTop: new Float64Array(10), weakCape: 0, weakCapeSum: 0, closed: 0, closedCape: 0, closedInhibition: 0, fired: 0, firedCape: 0, firedInhibition: 0, firedFlux: 0, firedTop: new Float64Array(10), limited: 0, candidateCape: new Float64Array(8), consumption: 0, cloudBase: 0, cloudBaseN: 0, pcape: 0, pcapeBoundary: 0, tau: 0, speed: 0, taus: [], closedByForcing: 0, closedByForcingSum: 0,
+  plume: { typed: 0, deck: 0, noLcl: 0, notCloudy: 0, shallowTop: new Float64Array(10), weakCape: 0, weakCapeSum: 0, closed: 0, closedCape: 0, closedInhibition: 0, fired: 0, firedCape: 0, firedInhibition: 0, firedFlux: 0, firedTop: new Float64Array(10), limited: 0, candidateCape: new Float64Array(8), consumption: 0, cloudBase: 0, cloudBaseN: 0, pcape: 0, pcapeBoundary: 0, tau: 0, speed: 0, taus: [], closedByForcing: 0, closedByForcingSum: 0,
     dilute: new Float64Array(10), undilute: new Float64Array(10), diluteN: 0, neverBuoyant: 0, pureNeverBuoyant: 0, diluteCape: 0, pureCape: 0 },
   counter: { subcloud: 0, cloudLayer: 0, fires: 0, firesOnly: 0, both: 0, actualOnly: 0, flux: 0, fluxActual: 0, low: new Float64Array(4), lowOnly: new Float64Array(4), temperature: new Float64Array(K), humidity: new Float64Array(K), pressure: new Float64Array(K), weight: 0 },
 }));
@@ -417,7 +417,7 @@ function ascend(i, s, entraining) {
     }
   }
   if (top === 0) top = 1;
-  const deepTop = cloudy && top >= 1 && (O.convectionType === 'cloudDepth' ? pi[i] * (levels[base] - levels[top]) > DEEP_CLOUD_DEPTH : levels[top] * DEEP_REFERENCE < O.shallowTop);
+  const deepTop = cloudy && top >= 1 && (O.convectionType === 'testParcel' || (O.convectionType === 'cloudDepth' ? pi[i] * (levels[base] - levels[top]) > DEEP_CLOUD_DEPTH : levels[top] * DEEP_REFERENCE < O.shallowTop));
   return { status: !cloudy ? 'notCloudy' : deepTop ? 'candidate' : 'shallow', source, top, cape, inhibition, lclPressure: lcl.pressure, base, buoyant, unbuoyant, topPressure: top >= 0 ? pi[i] * levels[top] : NaN };
 }
 function fillEnvironment(i, s) {
@@ -464,6 +464,8 @@ moist.adjust = (st, iFrom, iTo, step) => {
     const dilute = open > 0 ? ascend(i, sa, true) : { status: 'deck' };
     const pure = dilute.status !== 'deck' && dilute.status !== 'noLcl' ? ascend(i, sa, false) : null;
     deepOnly.plumeColumn(i, pi, sb.theta, sb.q, sb.qc, step, wind);
+    if (O.convectionType === 'testParcel' && dilute.status === 'candidate' && !deepOnly.deep.parcelDeep) dilute.status = 'shallow';
+    if (deepOnly.deep.parcelDeep) A.plume.typed += a;
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
       deepHeat[k] = deepOnly.deep.deep ? (sb.theta[idx] - sa.theta[idx]) * exnerLayer[idx] : 0;
@@ -747,7 +749,7 @@ acc.forEach((A, b) => {
     const tops = Array.from(P.shallowTop, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / total, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ');
     const firedTops = Array.from(P.firedTop, (x, n) => `${n * 100}-${n * 100 + 100} ${f(x / P.fired, 3)}`).filter((x) => !x.endsWith(' 0.000')).join(', ');
     const capes = Array.from(P.candidateCape, (x, n) => `${n * 60}-${n === 7 ? 'up' : n * 60 + 60} ${f(x / total, 3)}`).join(', ');
-    say(`deep plume, share of the column-steps: deck veto ${f(P.deck / total, 3)}, no condensation level ${f(P.noLcl / total, 3)}, never cloudy ${f(P.notCloudy / total, 3)}, ${O.convectionType === 'cloudDepth' ? 'cloudy but its cloud no deeper than 200 hPa' : 'cloudy but topping below 700 hPa'} ${f(P.shallowTop.reduce((x, y) => x + y, 0) / total, 3)} (tops by hPa: ${tops}); ${bechtold ? `deep candidates whose PCAPE the boundary-layer part PCAPE_bl takes up ${f(P.closedByForcing / total, 3)} (mean CAPE ${f(P.closedByForcingSum / P.closedByForcing, 0)} J/kg)` : `deep candidates with CAPE at most plumeCape ${O.plumeCape} ${f(P.weakCape / total, 3)} (mean CAPE ${f(P.weakCapeSum / P.weakCape, 0)} J/kg)`}, otherwise closed by inhibition or consumption ${f(P.closed / total, 3)} (CAPE ${f(P.closedCape / P.closed, 0)}, inhibition ${f(P.closedInhibition / P.closed, 1)} J/kg), fired ${f(P.fired / total, 3)}`);
+    say(`deep plume, share of the column-steps: deck veto ${f(P.deck / total, 3)}, no condensation level ${f(P.noLcl / total, 3)}, never cloudy ${f(P.notCloudy / total, 3)}, ${O.convectionType === 'testParcel' ? 'cloudy but its test parcel\'s cloud no deeper than 200 hPa' : O.convectionType === 'cloudDepth' ? 'cloudy but its cloud no deeper than 200 hPa' : 'cloudy but topping below 700 hPa'} ${f(P.shallowTop.reduce((x, y) => x + y, 0) / total, 3)} (tops by hPa: ${tops}); ${bechtold ? `deep candidates whose PCAPE the boundary-layer part PCAPE_bl takes up ${f(P.closedByForcing / total, 3)} (mean CAPE ${f(P.closedByForcingSum / P.closedByForcing, 0)} J/kg)` : `deep candidates with CAPE at most plumeCape ${O.plumeCape} ${f(P.weakCape / total, 3)} (mean CAPE ${f(P.weakCapeSum / P.weakCape, 0)} J/kg)`}, otherwise closed by inhibition or consumption ${f(P.closed / total, 3)} (CAPE ${f(P.closedCape / P.closed, 0)}, inhibition ${f(P.closedInhibition / P.closed, 1)} J/kg), fired ${f(P.fired / total, 3)}`);
     say(`  candidates' CAPE (J/kg, share of all column-steps): ${capes}`);
     say(`  fired: mean CAPE ${f(P.firedCape / P.fired, 0)} J/kg, inhibition ${f(P.firedInhibition / P.fired, 1)} J/kg, base flux ${f(P.firedFlux / P.fired, 4)} kg/m2/s (box mean ${f(P.firedFlux / total, 5)}), consumption F ${f(P.consumption / P.fired, 4)} J/kg per s per kg/m2/s, held below its closure by the boundary-loss or Courant limit on ${f(P.limited / P.fired, 3)}; tops by hPa: ${firedTops}`);
     if (bechtold) say(`  fired, the closure of Bechtold et al. (2014): mean PCAPE ${f(P.pcape / P.fired, 1)} Pa, PCAPE_bl ${f(P.pcapeBoundary / P.fired, 1)} Pa, w-bar ${f(P.speed / P.fired, 2)} m/s, tau ${f(P.tau / P.fired / 60, 1)} min (median ${f(weightedMedian(P.taus) / 60, 1)} min)`);
@@ -780,7 +782,7 @@ acc.forEach((A, b) => {
   const hourly = A.localHour.reduce((x, y) => x + y, 0) > 0 ? A.localHour.indexOf(Math.max(...A.localHour)) : NaN;
   const layerMean = (profile, top, bottomP) => { let sum = 0, mass = 0; for (let k = 0; k < K; k++) if (p[k] >= top && p[k] <= bottomP) { sum += profile[k] * dp[k]; mass += dp[k]; } return sum / mass; };
   const longwave = Float64Array.from({ length: K }, (_, k) => kday(T_.longwave, k)), q1r = heatingProfile(Q1R, p, dp), P = A.plume;
-  const summary = { rain: mm(r.model), convectiveShare: r.modelConvective / r.model, firing: P.fired / S, q1rLayer: q1r.layer / 100, q1rBin: (q1r.bin[0] + q1r.bin[1]) / 200, q1rBinValue: q1r.binValue, q1rCentroid: q1r.centroid / 100, largeScaleBelow700: mm(r.liquidLow), stratiformShare: (r.iceMelted + r.liquidHigh) / r.model, longwave300to500: layerMean(longwave, 300e2, 500e2), dilutedCape: P.diluteCape / P.diluteN, undilutedCape: P.pureCape / P.diluteN, ...sounding, undiluteStop700: P.undilute[7] / P.diluteN, shallowExport950: shallowExport, wettestCell: wettest, convectivePeakHour: hourly, firedAbove300: P.firedTop.slice(0, 3).reduce((x, y) => x + y, 0) / P.fired, ...(bechtold ? { tauMedian: weightedMedian(P.taus) / 60, pcape: P.pcape / P.fired, pcapeBoundary: P.pcapeBoundary / P.fired } : {}) };
+  const summary = { rain: mm(r.model), convectiveShare: r.modelConvective / r.model, firing: P.fired / S, q1rLayer: q1r.layer / 100, q1rBin: (q1r.bin[0] + q1r.bin[1]) / 200, q1rBinValue: q1r.binValue, q1rCentroid: q1r.centroid / 100, largeScaleBelow700: mm(r.liquidLow), stratiformShare: (r.iceMelted + r.liquidHigh) / r.model, longwave300to500: layerMean(longwave, 300e2, 500e2), dilutedCape: P.diluteCape / P.diluteN, undilutedCape: P.pureCape / P.diluteN, ...sounding, undiluteStop700: P.undilute[7] / P.diluteN, shallowExport950: shallowExport, wettestCell: wettest, convectivePeakHour: hourly, firedAbove300: P.firedTop.slice(0, 3).reduce((x, y) => x + y, 0) / P.fired, typedDeep: P.typed / S, ...(bechtold ? { tauMedian: weightedMedian(P.taus) / 60, pcape: P.pcape / P.fired, pcapeBoundary: P.pcapeBoundary / P.fired } : {}) };
   say(`summary ${name}: ${JSON.stringify(Object.fromEntries(Object.entries(summary).map(([key, v]) => [key, Number(v.toPrecision(6))])))}`);
 });
 {
