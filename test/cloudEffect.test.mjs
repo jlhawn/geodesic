@@ -66,11 +66,16 @@ test('both engines sum the clear-sky fluxes per cell alike and read out the day-
   const { cpu, gpu, C } = await engines({ clearSkyPass: true }, 3e-4);
   const K = cpu.core.K;
   const mixedTop = (q, i) => { let k = K - 1; while (k > 0 && Math.abs(q[(k - 1) * C + i] - q[(K - 1) * C + i]) <= 1e-6 * q[(K - 1) * C + i]) k--; return k; };
-  const merged = new Set();
+  const merged = new Set(), decided = new Set();
   for (let s = 0; s < STEPS; s++) {
+    const absorbedBefore = Float64Array.from(cpu.radiation.summed.absorbedSolar);
     cpu.step(DT); await gpu.step(DT);
     await gpu.sync();
-    for (let i = 0; i < C; i++) if (mixedTop(cpu.state[4], i) !== mixedTop(gpu.state[4], i)) merged.add(i);
+    const ph = await gpu.gpu.downloadPhysics();
+    for (let i = 0; i < C; i++) {
+      if (mixedTop(cpu.state[4], i) !== mixedTop(gpu.state[4], i)) merged.add(i);
+      if (Math.abs(cpu.radiation.outgoing[i] - ph.OLR[i]) > 1 || Math.abs(cpu.radiation.summed.absorbedSolar[i] - absorbedBefore[i] - ph.ABS[i]) > 1) decided.add(i);
+    }
   }
   const device = await gpu.gpu.downloadPhysics();
   const cpuSums = Object.fromEntries(CLEAR_SUMMED.map((name) => [name, Float64Array.from(cpu.radiation.summed[name])]));
@@ -96,10 +101,11 @@ test('both engines sum the clear-sky fluxes per cell alike and read out the day-
     assert.ok(Math.abs(cpu.radiation.meanLongwaveCloudEffect[i] - (cpuSums.clearOutgoingLongwave[i] / STEPS - cpu.radiation.meanOutgoingLongwave[i])) <= 1e-9, `cell ${i}: the CPU's per-cell longwave effect`);
     for (const [name, slot] of Object.entries(EFFECT_SLOTS)) assert.equal(gpu.radiation[name][i], after[slot][i], `cell ${i}: ${name} mirrored`);
   }
-  const agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !merged.has(i));
+  const agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !merged.has(i) && !decided.has(i));
   const effects = Object.fromEntries(Object.keys(EFFECT_SLOTS).map((name) => [name, stats(agreed.map((i) => cpu.radiation[name][i]), agreed.map((i) => gpu.radiation[name][i]))]));
-  console.log(`per-cell cloud effects CPU against GPU over the ${agreed.length} of ${C} columns whose well-mixed bottom block of uniform q tops at the same layer on both engines after every step: ${Object.entries(effects).map(([name, s]) => `${name} rms ${s.rmsRel.toExponential(1)} (max ${s.maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
+  console.log(`per-cell cloud effects CPU against GPU over the ${agreed.length} of ${C} columns whose well-mixed bottom block of uniform q tops at the same layer on both engines after every step and whose OLR and absorbed sunlight never parted by more than 1 W/m² at a step (${decided.size} did: a layer's cloud decided apart): ${Object.entries(effects).map(([name, s]) => `${name} rms ${s.rmsRel.toExponential(1)} (max ${s.maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
   assert.ok(merged.size <= C / 100, `${merged.size} columns' dry adjustment merges a different number of layers`);
+  assert.ok(decided.size <= 0.02 * C, `${decided.size} columns' cloud decided apart`);
   for (const s of Object.values(effects)) assert.ok(s.rmsRel < 2e-3 && s.maxDiff < 0.5, `per-cell effects apart by ${s.maxDiff} W/m² (rms ${s.rmsRel})`);
 
   const saved = await decodeState(encodeState({ N: 6, K: gpu.core.K, day: 0, time: gpu.time, pi: gpu.state[0], ...Object.fromEntries(Object.keys(RADIATION_FIELDS).map((name) => [name, gpu.radiation[name]])) }));

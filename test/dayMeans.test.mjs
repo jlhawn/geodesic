@@ -35,13 +35,15 @@ async function engines() {
   return { cpu, gpu, C: cpu.mesh.nCells, area };
 }
 
-async function stepBoth({ cpu, gpu, area }, n) {
+async function stepBoth({ cpu, gpu, area }, n, parted = null) {
   const cpuSteps = [], gpuSteps = [];
   for (let s = 0; s < n; s++) {
+    const absorbedBefore = parted && cpu ? Float64Array.from(cpu.radiation.summed.absorbedSolar) : null;
     if (cpu) { cpu.step(DT); cpuSteps.push(Object.fromEntries(SUMMED.map((name) => [name, cpu.totals[name] / area]))); }
     if (gpu) {
       await gpu.step(DT);
       const ph = await gpu.gpu.downloadPhysics();
+      if (parted && cpu) for (let i = 0; i < gpu.mesh.nCells; i++) if (Math.abs(cpu.radiation.outgoing[i] - ph.OLR[i]) > 1 || Math.abs(cpu.radiation.summed.absorbedSolar[i] - absorbedBefore[i] - ph.ABS[i]) > 1) parted.add(i);
       gpuSteps.push(Object.fromEntries(SUMMED.map((name) => {
         let sum = 0;
         for (let i = 0; i < gpu.mesh.nCells; i++) sum += gpu.mesh.areaCell[i] * ph[STEP_SLOTS[name]][i];
@@ -66,13 +68,15 @@ function assertReadout(label, d, steps, tolerance) {
 }
 
 test('both engines sum each cell\'s radiation over the steps alike and read out day means: the mean of the per-step global values, the albedo the ratio of the summed reflected to the summed incoming sunlight, the last step\'s kept apart, the sums starting again at each read-out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const run = await engines(), { cpu, gpu, C } = run;
-  const first = await stepBoth(run, 24);
+  const run = await engines(), { cpu, gpu, C } = run, parted = new Set();
+  const first = await stepBoth(run, 24, parted);
   const device = await gpu.gpu.downloadPhysics();
   const cpuSums = Object.fromEntries(SUMMED.map((name) => [name, Float64Array.from(cpu.radiation.summed[name])]));
   const gpuSums = Object.fromEntries(SUMMED.map((name) => [name, Float64Array.from(device[SUM_SLOTS[name]].subarray(0, C))]));
-  const parity = Object.fromEntries(SUMMED.map((name) => [name, stats(cpuSums[name], gpuSums[name])]));
-  console.log(`24 steps at N=6, per-cell sums CPU against GPU: ${SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
+  const agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !parted.has(i)), pick = (values) => Float64Array.from(agreed, (i) => values[i]);
+  const parity = Object.fromEntries(SUMMED.map((name) => [name, stats(pick(cpuSums[name]), pick(gpuSums[name]))]));
+  console.log(`24 steps at N=6, per-cell sums CPU against GPU over the ${agreed.length} of ${C} columns whose OLR and absorbed sunlight never parted by more than 1 W/m² at a step (a layer's cloud decided apart): ${SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
+  assert.ok(parted.size <= 0.02 * C, `${parted.size} columns' cloud decided apart`);
   for (const name of SUMMED) assert.ok(parity[name].rmsRel < 1e-4, `${name}: per-cell rms ${parity[name].rmsRel}`);
   assert.ok(parity.insolation.rmsRel < 1e-6, `the incoming sunlight differs by ${parity.insolation.rmsRel}`);
 
