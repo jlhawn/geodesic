@@ -30,7 +30,7 @@ function prepare(model) {
 }
 
 test('eight GPU steps over a continent track the CPU model: surface, soil, snow, vegetation, and the coast-bound ocean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600 };
+  const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
   const cpu = prepare(createModel(new Grid(6), { topography, land }));
   const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }));
   for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
@@ -109,7 +109,8 @@ test('both engines give each land cell the same albedo from its surface layer, s
     gpu.destroy();
     return { worst, cells, expected, land: cpu.geography.land };
   };
-  const dark = await run({}), roots = await run({ soilDarkening: 'rootZone' }), plain = await run({ soilDarkening: false });
+  const dark = await run({}), roots = await run({ soilDarkening: 'rootZone' }), plain = await run({ soilDarkening: false }), sheets = await run({ iceSheetAlbedo: 0.7 });
+  assert.ok(sheets.worst < 1e-6 && sheets.expected.some((a) => a === 0.7), `a chosen ice-sheet albedo: engines apart by ${sheets.worst}`);
   for (const [name, ran] of [['surface layer', dark], ['root zone', roots]]) {
     let darkened = 0, most = 0;
     for (let i = 0; i < ran.expected.length; i++) if (ran.land[i]) { const d = plain.expected[i] - ran.expected[i]; if (d > 1e-6) darkened++; most = Math.max(most, d); }
