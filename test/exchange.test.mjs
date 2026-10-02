@@ -173,7 +173,7 @@ test('the gustiness is the free-convection velocity of the step\'s own flux, and
     const { z, ri } = call(cell, skin, 0.5, 1, 800);
     const speed = exchange.wind[cell], buoyancy = -ri * speed ** 3 * exchange.heat[cell] / z;
     assert.ok(buoyancy > 0, 'a heated surface');
-    close(speed, Math.hypot(0.5, Math.max(0.2, beta * Math.cbrt(buoyancy * (800 + z)))), 2e-3, `U² = |v|² + max(0.2, β w*)² with β ${beta}, z_i above the ground`);
+    close(speed, Math.hypot(0.5, Math.max(0.2, beta * Math.cbrt(buoyancy * 800))), 2e-3, `U² = |v|² + max(0.2, β w*)² with β ${beta}`);
     let stable = skin - 20, unstable = skin;
     for (let n = 0; n < 60; n++) { const mid = 0.5 * (stable + unstable); if (call(cell, mid, 0.5, 1, 800).ri > 0) stable = mid; else unstable = mid; }
     call(cell, stable, 0.5, 1, 800); const below = exchange.wind[cell];

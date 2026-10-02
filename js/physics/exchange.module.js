@@ -48,17 +48,17 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
  * U is the lowest wind with a free-convection gustiness (convectiveGust
  * [β_sea, β_land, floor]): U² = |v|² + u_g², u_g = max(floor, β w*) where
  * the surface buoyancy flux B₀ = −Ri_b U³ C_H / z is positive, w*³ = B₀ z_i
- * with z_i the boundary layer's depth above the ground of the step before
- * (at least z), and u_g = floor otherwise, so that u_g is continuous where
- * B₀ changes sign (COARE's code takes β w* alone there), found with the
- * coefficients by gustIterations
- * fixed-point passes from u_g = floor as COARE iterates its gust with its
- * fluxes: COARE 3.5 (Fairall et al. 1996, 2003; Edson et al. 2013) with β
- * 1.2 and its 0.2 m/s over the sea and sea ice, the IFS (Cy47r3 eqs.
- * 3.19–3.20, Beljaars 1994) with β 1 over land, where z_i is the boundary
- * layer's depth in place of the IFS's fixed 1000 m and COARE's 0.2 m/s
- * stands for the floor. `wind` keeps U per cell, the speed every surface
- * flux and the drag take. convectiveGust false keeps max(|v|, gustiness).
+ * with z_i the boundary layer's depth of the step before (at least z), and
+ * u_g = floor otherwise, so that u_g is continuous where B₀ changes sign
+ * (COARE's code takes β w* alone there), found with the coefficients by
+ * gustIterations fixed-point passes from u_g = floor as COARE iterates
+ * its gust with its fluxes: COARE 3.5 (Fairall et al. 1996, 2003; Edson
+ * et al. 2013) with β 1.2 and its 0.2 m/s over the sea and sea ice, the
+ * IFS (Cy47r3 eqs. 3.19–3.20, Beljaars 1994) with β 1 over land, where
+ * z_i is the boundary layer's depth in place of the IFS's fixed 1000 m
+ * and COARE's 0.2 m/s stands for the floor. `wind` keeps U per cell, the
+ * speed every surface flux and the drag take. convectiveGust false keeps
+ * max(|v|, gustiness).
  *
  * `reference` is the FAO-56 reference grass's neutral C_H at the same
  * height (Allen et al. 1998 eq. 4: crop height 0.12 m, d = 2/3 h,
@@ -237,7 +237,7 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
     const z = cp * thetaV[b] * (exnerLower[b] - exnerLayer[b]) / g;
     const onLand = landMask && landMask[i];
     const [seaGust, landGust, floor] = gusty ? convectiveGust : [0, 0, 0];
-    const scale = onLand ? landGust : seaGust, mixed = Math.max(0, depth) + z;
+    const scale = onLand ? landGust : seaGust, mixed = Math.max(depth, z);
     let speed = gusty ? Math.sqrt(lowest * lowest + floor * floor) : Math.max(lowest, gustiness);
     const viscosity = airViscosity(theta[b] * exnerLayer[b] - 273.15);
     const exS = exnerLower[b];

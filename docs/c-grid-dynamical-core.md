@@ -5881,8 +5881,8 @@ the blocked flow's drag 0.014 N/m².
 The surface layer. (1) Gustiness: U² = |v|² + u_g², u_g = max(0.2 m/s,
 β w*) where B₀ > 0 and 0.2 m/s otherwise, w*³ = B₀ z_i with B₀ = −Ri_b U³
 C_H/z the surface buoyancy flux of the step's own coefficients and z_i
-the boundary layer's depth above the ground of the step before (at least
-z), found with the coefficients in four fixed-point passes as COARE
+the boundary layer's depth of the step before above the lowest midpoint
+(at least z), found with the coefficients in four fixed-point passes as COARE
 iterates its gust; β 1.2 and u_g 0.2 m/s in stable air over sea and sea
 ice (COARE 3.5: Fairall et al. 1996, 2003, Edson et al. 2013; its code,
 coare35vn.m and coare36vn, takes β w* alone where B₀ > 0, which drops
@@ -6043,10 +6043,20 @@ The review of the mountains' drag (Oct 2), on 3066df7 and the fixes after it:
   with the scheme off.
 - With everything off the CPU reproduces 3f57d8f bit for bit (N=8 six
   steps, N=16 eight steps), on 3066df7 and on the fixes.
-- The gust: u_g continuous across B₀ = 0 (above), z_i measured from the
-  ground. With it the treeline test's 48-step parity holds under the
-  default surface layer: tree cover 8.5·10⁻⁵ apart (1.8·10⁻⁴ on 3066df7),
-  the lowest air 1.8·10⁻³ K (9.6·10⁻³). The land humidity in Ri_b is
+- The gust: u_g continuous across B₀ = 0 (above). z_i is the depth above
+  the lowest midpoint, not the ground (z, 21 m in bl34, short: about 1 %
+  of w* at z_i 500 m); measuring it from the ground is right but was not
+  kept, because the two 48-step f32/f64 parity tests turn on it by luck:
+  with z_i from the ground the treeline test passes under the default
+  surface layer (tree cover 8.5·10⁻⁵ apart against 1.8·10⁻⁴, the lowest
+  air 1.8·10⁻³ K against 9.6·10⁻³) and the snow-albedo test fails (rms
+  3.3·10⁻⁴ against 4.4·10⁻⁵, its tolerance 10⁻⁴); scaling z_i by 0.99,
+  1.01 and 1.05 gives that test 1.7·10⁻⁵, 2.1·10⁻⁴ and 2.2·10⁻⁴, and
+  with the gust off it gives 1.0·10⁻⁴. The source is the gust's z_i: the
+  boundary layer's diagnosed depth jumps where a column changes regime,
+  so either engine's regime flip moves the surface fluxes. The treeline
+  test keeps 3066df7's premise (gust and land humidity off). The land
+  humidity in Ri_b is
   continuous in w and T_s and the same on both engines. The exchange
   flux parity's relative measure stands: the fresh test state's snow
   cells carry |LE| near 2·10⁴ W/m² on 3f57d8f as well (19623 W/m²).
