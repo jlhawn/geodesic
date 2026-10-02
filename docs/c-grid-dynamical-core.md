@@ -9455,6 +9455,115 @@ eight128_day0183: finite on both engines, largest wind 84.0 then
 and 1.33, then 0.74 at the tenth on the GPU; the CPU's solve never
 raises an edge column's kinetic energy or its largest |u|.
 
+**The gravity waves' sources and bl36's top merged (Oct 2).** Branch
+integrate-c: gas-benchmark 4a4eb83 onto 0063c54 (86d02b9). The new wave
+source and lid sit beside the mountains' drag and the form drag, the
+level set's longwave table beside the cloud optics and the clamped dry
+fraction, the remap beside the land's regridding; fresh runs start on
+bl36. The twelve-step digests all moved with the fresh stratosphere read
+by pressure (the Rayleigh-top ones too), re-pinned; on grey ice the
+three deck digests equal 4a4eb83's. Tests: 61 of 63 files pass, the five
+that run bl36 among them. dayMeans (reflected sunlight per-cell rms
+1.26·10⁻⁴ against 10⁻⁴; one column, 2.7 W/m² of summed reflection, whose
+plume base flux parts by 5 % at step 7 with no decision the cloud-effect
+test watches apart) and gpuModel's uniform-condensation heating
+(2.68·10⁻⁴ K/day at cell 109 layer 24 against 1e-5 × 26.6; the CPU's
+own response to ±1 ulp on every input of that column 2.40·10⁻⁴ in 200
+draws) fail; both pass with 0063c54's init.module.js on the merged tree,
+as did cloudEffect, whose one column at 0.544 W/m² neighbours column 299
+(dry adjustment, plume top and cloudy layers apart from step 9): its
+neighbours are now left out too (abcbea6; 14 of 362, the rest within
+0.048 W/m²). Proofs: with `speedStep` 4 and `sourceDescent` false the
+CPU gives 0063c54's state from eight64_day0183 to 7.7·10⁻¹⁷ of the
+largest u after one step (the top layer, the spectrum's flux taken out
+as a factor) and to 6.5·10⁻¹² (qc), 2.4·10⁻¹² (q), 5.6·10⁻¹³ (u),
+3.9·10⁻¹⁴ (θ) after nine; the defaults move u by 3.0·10⁻⁴ in one step.
+bl34 states load and step on both engines (eight64_day0183 three days:
+day 186 albedo 0.291, ASR 241.3, OLR 234.0, SWCRE −52.4, LWCRE 25.9, rain
+1.70, 0063c54's within 0.1 W/m²). On nine64_day0274 remapped to bl36,
+the second CPU step: each edge column's momentum + Δt (τ_s + τ_form)
+2.6·10⁻¹¹ of 4.8·10⁵ kg/m/s, blocking 2.3·10⁻¹³, orographic waves
+4.6·10⁻¹³, each cell column's wave force 1.1·10⁻¹⁸ of 4.3·10⁻³ Pa; the
+sponge 5.7·10¹⁴ and 2.6·10¹⁴ J at 0.15 and 0.65 hPa, its angular
+momentum 0.033 of a Rayleigh drag's; heat 1.15·10¹⁸ J against the sinks
+to 7.9·10⁻¹⁴; GPU kernels drag 1.8·10⁻⁵, mountains 1.6·10⁻⁵, waves
+4.7·10⁻⁸, heat 1.3·10⁻³. Parity on bl36 after 1, 4, 16 steps, from
+nine64_day0091 (day 274): top eight layers u 8.5·10⁻⁵, 2.1·10⁻⁴,
+8.4·10⁻⁴ m/s rms (9.1·10⁻⁵, 1.1·10⁻³, 1.1·10⁻³; largest 0.46 m/s at step
+4 in the top layer at 47.6N 142.5E, at step 16 in layer 6 at 49.2N
+119.1W), θ 1.8·10⁻⁴, 6.4·10⁻⁴, 2.6·10⁻³ K; lowest layer T 1.0·10⁻⁴,
+4.6·10⁻⁴, 2.2·10⁻³ K, u 4.8·10⁻⁵, 4.3·10⁻⁴, 6.4·10⁻³ m/s (4.0·10⁻⁴,
+1.9·10⁻⁴, 2.1·10⁻³; the launched stress 6.0·10⁻² of its largest at step
+1, the blocking column); wave acceleration 2.6·10⁻⁴, 9.7·10⁻⁴,
+1.8·10⁻³ m/s/day rms; regime flips 0, 0, 21. The remap
+(eight64_day0183, nine64_day0274): each column's Σ θΠ dσ to 2.4·10⁻¹⁶,
+q and qc exactly, u to 3.4·10⁻¹⁶; the θ integral 6.4–6.6·10⁻⁴; 0.15 /
+0.65 / 1.6 hPa 242–243 / 257 / 266 K under 272 K at 3.6 hPa, θ rising
+upward in every column; the round trip to 5·10⁻¹⁶. Three one-day
+segments from the remapped eight64_day0183 end day 186 byte for byte as
+one. radiationBenchmark on bl34 is 0063c54's line for line, on bl36
+4a4eb83's line for line (M21's TROP row for bl36 reads −5.03 / −11.04 /
+−8.80 where the script prints −5.05 / −11.08 / −8.83; every other row as
+printed). A paired spin-up on bl36: `NS="64 128" PREFIX=<new>
+LEVELS=bl36 OCEAN='{"everySteps":8}' scripts/pairedSpinup.sh` with no
+`<PREFIX><N>_day*.bin` in OUT (`STRATOSPHERE=1` for the upper lines);
+the land starts neutral and jumps at days 365 and 730 by default. Two
+fresh days so: N=64 largest wind 72 / 93 m/s, Courant 0.23 / 0.30, day
+2 ASR 204.5, OLR 200.1, albedo 0.399; N=128 77 / 97 m/s, 0.25 / 0.31,
+215.8, 202.2, 0.366; both read their terrain files (no fallback note),
+so the mountains' drag and the form drag act from the first step.
+
+The top's pre-flight: 60 days at N=64 from a fresh atlas start on bl36,
+the defaults (`runs/igpre64.log` in the worktree), day 0 the March
+equinox. Top six layers (0.15 / 0.64 / 1.6 / 3.5 / 7.4 / 14 hPa); 5S-5N,
+57.5–62.5S and N zonal-mean u in m/s; the largest wind and horizontal
+Courant number there; 70-90N and 70-90S layer-mean T in K:
+
+| day | 5S-5N | 60S | 60N | largest, Courant | 70-90N | 70-90S |
+|---|---|---|---|---|---|---|
+| 10 | +1 / +4 / 0 / 0 / 0 / 0 | 22 / 25 / 22 / 17 / 14 / 12 | 22 / 22 / 19 / 16 / 13 / 12 | 53, 0.17 | 232 / 251 / 248 / 238 / 230 / 223 | 223 / 241 / 241 / 236 / 230 / 223 |
+| 20 | +12 / +12 / +12 / −1 / −2 / −3 | 47 / 39 / 29 / 22 / 18 / 16 | 10 / 11 / 8 / 3 / 0 / −1 | 75, 0.24 | 235 / 254 / 249 / 234 / 224 / 220 | 218 / 236 / 234 / 227 / 219 / 215 |
+| 30 | 0 / +10 / +34 / 0 / −3 / −3 | 67 / 49 / 34 / 25 / 20 / 17 | 8 / 10 / 7 / 2 / −1 / −3 | 99, 0.32 | 237 / 258 / 255 / 239 / 227 / 221 | 213 / 231 / 230 / 222 / 215 / 211 |
+| 40 | −38 / +2 / +49 / +13 / −6 / −8 | 70 / 56 / 42 / 33 / 28 / 25 | −2 / 2 / 0 / −4 / −6 / −4 | 100, 0.32 | 240 / 263 / 260 / 244 / 230 / 224 | 212 / 228 / 224 / 218 / 209 / 205 |
+| 50 | −86 / −16 / +47 / +25 / −4 / −11 | 95 / 72 / 56 / 47 / 41 / 37 | −18 / −9 / −7 / −7 / −6 / −5 | 121, 0.39 | 243 / 267 / 266 / 248 / 234 / 226 | 213 / 226 / 223 / 215 / 206 / 201 |
+| 60 | −100 / −27 / +42 / +32 / +6 / −13 | 146 / 98 / 70 / 56 / 47 / 40 | −35 / −18 / −12 / −10 / −8 / −6 | 156, 0.50 | 245 / 270 / 270 / 252 / 236 / 228 | 210 / 223 / 218 / 211 / 202 / 197 |
+
+Largest over the run 159 m/s and horizontal Courant 0.51 (day 59),
+vertical 0.09 (day 1). Global-mean T
+on day 60 of the layers above 100 hPa, 0.15 … 85 hPa: 227.7 / 252.8 /
+256.6 / 242.5 / 227.4 / 219.0 / 214.1 / 210.2 / 207.6 / 205.8 / 204.7 K;
+trends over days 31-60 −0.018 / +0.009 / −0.013 / −0.013 / −0.020 /
+−0.014 / +0.001 / +0.019 / +0.033 / +0.044 / +0.060 K/day. The caps over
+days 31-60: 70-90N +0.27 to +0.50 K/day, 70-90S −0.03 / −0.21 / −0.29 /
+−0.33 / −0.37 / −0.41 K/day (the season's). The 5S-5N wind's trend in
+the top four layers, days 1-20 against 41-60: +1.01 / +0.96 / +0.54 /
+−0.03 against −2.80 / −1.46 / −0.38 / +0.90 m/s/day; over days 41-50
+−4.84 / −1.61 / −0.43 / +1.11 and 51-60 −0.95 / −0.81 / −0.60 / +0.55.
+The 60S wind at 0.15 hPa gains 3.8 m/s/day over days 41-60, the
+day's largest wind 2.3 m/s/day over 31-60. Verdict: above 2 hPa the
+equatorial winds drift, one way, for 60 days, the 0.15 hPa layer
+easterly to −100 m/s, slowing from −4.8 to −0.95 m/s/day but not level,
+the 0.64 hPa layer still at −0.8 m/s/day, the 1.6 hPa westerly level at
++42 to +51 since day 35; no reversal, so no oscillation is seen. Nothing
+breaks in 60 days; for a multi-year run the open risks are the top
+layer's −100 m/s easterly still growing, the winter jet and Courant
+number still rising toward June (0.50 on day 60, 0.62 seen at July in
+M21), and the winter cap at 210 / 223 / 218 K over 0.15-1.6 hPa, 30-40 K
+under AFGL's subarctic winter.
+
+Troposphere and cost. Three N=64 days from eight64_day0183, bl34 /
+remapped bl36, days 184-186: ASR 253.3 / 253.3, 249.1 / 249.1, 241.3 /
+241.3; OLR 228.9 / 228.6, 235.8 / 235.5, 234.0 / 233.7 W/m²; albedo
+0.256 / 0.256, 0.269 / 0.268, 0.291 / 0.291; LWCRE 34.6 / 34.4, 25.7 /
+25.6, 25.9 / 25.8; rain 0.81, 1.05, 1.70 mm/d on both. One N=128 day
+from eight128_day0183: ASR 254.7 / 254.7, OLR 231.7 / 231.5, albedo
+0.252, SWCRE −38.8, LWCRE 32.1 / 32.0, rain 0.77, largest wind 78.0 /
+84.8 m/s. Step cost under the exclusive lock, 128 steps after 16,
+twice: N=64 bl34 25.69 / 26.70, bl36 27.69 / 29.07 ms (+8 %); N=128 bl34
+108.75 / 108.59, bl36 117.05 / 116.28 ms (+7.4 %). A day at N=128 on
+bl36: 59.7 s of steps, 77.7 s from the end of setup (20 s) to the saved
+file (bl34 55.6 and 74.2 s).
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
