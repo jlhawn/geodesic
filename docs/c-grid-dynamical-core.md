@@ -7750,6 +7750,79 @@ at 5–7 m/s fell to 0.92–1.05 from 1.36 and the winds there rose by
 0.3–0.4 m/s, so the stress stands; its deficit is the trades' own); and the stress over mountains lacks the orographic terms
 above.
 
+**The land and roughness branches merged (Oct 2).** Branch integrate-c:
+clear-sky 8acba74, then roughness 3f57d8f, both sides kept in every
+hunk; the GPU's physics parameters carry the ozone's year fraction in
+slot 1 and the land's season and moisture weights and hold in 5–7.
+Tests pass but the cloudy columns' layer heating (1.26·10⁻⁴ against
+10⁻⁴ K/day). On exchange 'fixed' now: the frame's deck cloud (two
+columns coupled on the GPU, decoupled on the CPU, 4.6·10⁻² kg/m²), the
+boundary layer under a stratocumulus, the 48-step season means and trees
+(1.2·10⁻⁴ in tree cover under roughness, 5.3·10⁻⁵ fixed); the engines'
+flux check allows 10⁻⁵ of each cell's own flux (snow columns of 2·10⁴
+W/m², 4.6·10⁻⁶ apart). Proofs: 'fixed' with `soilCarbon`, `grassland`
+and `treeline` off reproduces b913e99 (`treeline` off) bit for bit over
+nine CPU steps from eight64_day0183, ocean step included; the benchmark
+prints b913e99's output character for character. On eight64_day0183 and
+nine64_day0091 the CPU closes the shortwave to 4.5·10⁻¹³, the layers'
+shortwave to 1.1·10⁻¹² and longwave to 5.7·10⁻¹³, the surface flux
+against its terms to 9.1·10⁻¹³, the column heating applied against
+atmosphere SW + LW + SH to 1.8·10⁻¹² and the vapour against LE to
+9.1·10⁻¹³ W/m²; each edge column's momentum changes by Δt τ to
+3.2·10⁻¹¹ of 1.3·10³ kg/m/s, and the ocean takes the stored stress on
+every edge. The GPU closes to 1.8·10⁻⁴ (SW), 2.2·10⁻⁴ (LW) and 1.7·10⁻⁴
+(surface) W/m², one physics kernel's column heating to 8.3·10⁻⁴ and its
+vapour to 1.3·10⁻⁴ W/m², and the ocean's stress at its step is the
+step before's stored stress times the ice's transmission to 1.2·10⁻⁷
+N/m². Parity from nine64_day0091 after 1, 4 and 16 steps, rms of the
+lowest layer's T and u and of Ts ('fixed' in brackets): 4.2·10⁻⁵,
+4.9·10⁻⁵, 9.3·10⁻⁶ (8.6·10⁻⁴, 1.3·10⁻⁴, 8.7·10⁻⁶); 1.2·10⁻³, 5.5·10⁻⁴,
+2.6·10⁻⁵ (5.7·10⁻⁴, 2.7·10⁻⁴, 2.4·10⁻⁵); 1.9·10⁻³, 1.0·10⁻³, 1.2·10⁻³
+(1.8·10⁻³, 1.1·10⁻³, 1.6·10⁻³); C_D 1.5·10⁻⁵, 3.8·10⁻⁵, 1.0·10⁻⁴ rms
+relative; regime flips 0, 3, 23 (1, 2, 24). Three one-day segments from
+eight64_day0183 end day 186 byte for byte as one; a fresh ten-day start
+with `LAND_JUMPS=5` split at day 5 ends day 10 byte for byte as unsplit.
+five64_day2190, nine64_day0365 and ten64_day0183 load and step. Classes
+on day 186: partly vegetated 0.200, dense vegetation 0.134, open sea
+0.091 / 0.110 / 0.149, all land snow 0.637; day 94 partly vegetated
+0.159.
+
+Three GPU days, b913e99 in brackets: eight64 day 186 albedo 0.296
+(0.294), ASR 239.8 (240.6), OLR 233.6 (234.2), SWCRE −53.9 (−52.1),
+LWCRE 26.2 (26.4), clear-sky reflectance 0.1374 (0.1405), rain 1.76
+(1.68), cover 0.54 (0.54), 60–90S 0.67 (0.67), Ts 16.31 (16.94), land
+14.73 (16.87) °C; nine64 day 94 0.307 (0.305), 235.9 (236.8), 234.1
+(235.0), −58.5 (−54.6), 26.1 (26.2), 0.1354 (0.1443), 2.39 (2.21), 0.56
+(0.55), 0.64 (0.65), 15.98 (16.76), 15.63 (18.31); ten64 day 186 0.312
+(0.311), 234.4 (234.7), 232.5 (232.7), −59.1 (−57.8), 26.1 (26.6),
+0.1380 (0.1409), 2.54 (2.56), 0.56 (0.56), 0.61 (0.63), 14.61 (15.10),
+11.72 (13.45). Day 94 by class, 8-step samples: forest wind 6.17 → 2.66
+m/s, stress 0.079 → 0.232 N/m², LE 64.3 → 93.2 W/m², skin − air 3.10 →
+0.27 K; grass 6.69 → 4.70, 5.76 → 3.94 K; bare 6.81 → 4.21, 4.50 → 1.55
+K; global evaporation 2.54 → 2.77 mm/d. Southern Ocean τx 40–60S 0.130 →
+0.167, 0.110 → 0.135, 0.131 → 0.163 N/m²; 2S–2N 160E–100W −0.037,
+−0.023, −0.072 → −0.037, −0.023, −0.074. Arctic pack 9.191 → 8.281·10³
+km³ over days 91–94 (8.272), the last day's surface SW at ≥ 70N 125.7
+(119.7), net LW −7.6 (−6.6) W/m². Pacific ITCZ on ten64 day 186 + 1
+CPU day (`scripts/tropicalHeating.mjs`): rain 6.48 (6.02) mm/d,
+convective 0.24 (0.26), lowest-layer RH 0.81 (0.81; Jordan 0.88), T −1.3
+(−1.4) K against Jordan at 1008 hPa, −2.8 (−2.8) at 848, +1.1 (+1.0) at
+516; deep plume fired 0.160 (0.175), fired CAPE 170 (165) J/kg, the
+firing columns' peak 973 (974) hPa. The land's reference coefficient
+2.44·10⁻³ against 1.5·10⁻³ on bl34 (1.89·10⁻³ on five64's cam26): the
+state's day-mean PET 3.31 → 4.00 (eight64), 4.14 → 4.78 (nine64), 2.73
+→ 2.93 (five64) mm/d; land with P/PET < 0.2 by the estimated rain 0.138
+→ 0.241, 0.218 → 0.290, 0.112 → 0.131, the mean moisture factor 0.433 →
+0.369, 0.385 → 0.345, 0.616 → 0.596. Ten days from the atlas: day 10
+albedo 0.347, ASR − OLR +7.2, rain 3.87 mm/d; the record 864000 s, its
+land means season length 0.624 (land branch 0.546), warmth 7.24 (5.46)
+K, rain 1.166 (1.219), demand 2.560 (1.777) mm/d, litter 0.215 (0.177),
+decay 0.747 (0.572). Cost under the exclusive lock (alternated twice
+with b913e99 built by `git archive`): N=64 22.47 and 22.51 → 22.53 and
+22.60 ms, the physics pass 4.67 → 4.75; N=128 98.38 and 98.49 → 99.45
+and 99.53 ms, 19.76 → 20.37; a day at N=128 from eight128_day0183 73 s
+with setup on both.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
