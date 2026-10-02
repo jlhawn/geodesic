@@ -5386,13 +5386,13 @@ The work, in order:
      the fit now scores every layer above 3 hPa that RRTMG's column
      covers to 90 % of its mass, so bl34's score is unchanged). Cooling
      K/day at 0.15 / 0.64 / 1.6 hPa against RRTMG, bl34's table → bl36's:
-     TROP −3.92 / −11.09 / −9.90 → −5.03 / −11.04 / −8.80 (−5.40 / −9.92 /
+     TROP −3.92 / −11.09 / −9.90 → −5.05 / −11.08 / −8.83 (−5.40 / −9.92 /
      −9.42); MLS −3.53 / −11.98 / −11.23 → −4.43 / −11.91 / −9.95 (−6.14
      over the 78 % of the top layer RRTMG covers / −12.19 / −10.16); MLW
-     −6.75 / −12.11 / −8.16 → −8.55 / −12.00 / −7.39 (−7.69 / −10.67 /
+     −6.75 / −12.11 / −8.16 → −8.56 / −12.01 / −7.40 (−7.69 / −10.67 /
      −7.90); SAW −9.08 / −9.88 / −5.32 → −12.05 / −9.81 / −4.72 (−9.89
      over 67 % / −9.02 / −5.37). Where RRTMG covers the layer the misses
-     are −7 / +11 / −7 % (TROP), −2 / −2 % (MLS), +11 / +12 / −6 % (MLW),
+     are −6 / +12 / −6 % (TROP), −2 / −2 % (MLS), +11 / +13 / −6 % (MLW),
      +9 / −12 % (SAW), against −27 / +12 / +5, −2 / +11, −12 / +14 / +3,
      +10 / −1 % with bl34's table; UPPER_WEIGHT 30 and 300 and a
      continued fits gave 24 / 13.5 / 25 / 17 % at worst. The 3-30 hPa layers
@@ -5405,7 +5405,7 @@ The work, in order:
      cooling 16.4 / 18.7 / 18.7 / 16.1 / 11.9 K; vapour × 1.2 4.04 / 4.76
      / 12.18 (3.79 / 4.52 / 11.55); methane and nitrous oxide from none
      3.13 / 2.94 / 1.15 (3.60 / 3.45 / 1.08); ICRCCM tropical surface
-     downward −5.2 W/m². The 0.64 hPa layer still overcools by 11-12 % in
+     downward −5.2 W/m². The 0.64 hPa layer still overcools by 9-13 % in
      three of four columns: the shortfall of the reduction, not refitted
      further. Both engines carry the table alike on bl36
      (`test/gasRadiation.test.mjs`, the layers above 30 hPa 1e-6 to 2e-5
@@ -5542,7 +5542,7 @@ The work, in order:
      the 247 / 257 / 236 K measured on bl36 earlier came with the grid-box
      test's doubled flux and its runaway top); the winter mesospheric jet
      at 0.15 hPa 104-125 m/s near 59-64° (no climatology read for it);
-     the 0.64 hPa cooling 11-12 % above RRTMG's; the larger eddies and edge winds at 1.6-7.4 hPa with the sponge
+     the 0.64 hPa cooling 9-13 % above RRTMG's; the larger eddies and edge winds at 1.6-7.4 hPa with the sponge
      raised (Courant 0.62 at most at N=64); the fresh start's stratopause
      at 3.6 hPa and its first-week cloud (as on bl34); the flux through 20
      km 4.4-5.3 mPa, at the top of the observed 2-6, uniform in latitude
@@ -9488,7 +9488,7 @@ sponge 5.7·10¹⁴ and 2.6·10¹⁴ J at 0.15 and 0.65 hPa, its angular
 momentum 0.033 of a Rayleigh drag's; heat 1.15·10¹⁸ J against the sinks
 to 7.9·10⁻¹⁴; GPU kernels drag 1.8·10⁻⁵, mountains 1.6·10⁻⁵, waves
 4.7·10⁻⁸, heat 1.3·10⁻³. Parity on bl36 after 1, 4, 16 steps, from
-nine64_day0091 (day 274): top eight layers u 8.5·10⁻⁵, 2.1·10⁻⁴,
+nine64_day0091 (in parentheses nine64_day0274): top eight layers u 8.5·10⁻⁵, 2.1·10⁻⁴,
 8.4·10⁻⁴ m/s rms (9.1·10⁻⁵, 1.1·10⁻³, 1.1·10⁻³; largest 0.46 m/s at step
 4 in the top layer at 47.6N 142.5E, at step 16 in layer 6 at 49.2N
 119.1W), θ 1.8·10⁻⁴, 6.4·10⁻⁴, 2.6·10⁻³ K; lowest layer T 1.0·10⁻⁴,
@@ -9502,9 +9502,8 @@ q and qc exactly, u to 3.4·10⁻¹⁶; the θ integral 6.4–6.6·10⁻⁴; 0.1
 upward in every column; the round trip to 5·10⁻¹⁶. Three one-day
 segments from the remapped eight64_day0183 end day 186 byte for byte as
 one. radiationBenchmark on bl34 is 0063c54's line for line, on bl36
-4a4eb83's line for line (M21's TROP row for bl36 reads −5.03 / −11.04 /
-−8.80 where the script prints −5.05 / −11.08 / −8.83; every other row as
-printed). A paired spin-up on bl36: `NS="64 128" PREFIX=<new>
+4a4eb83's line for line (M21's bl36 rows above as the script prints
+them: TROP −5.05 / −11.08 / −8.83, MLW −8.56 / −12.01 / −7.40 K/day). A paired spin-up on bl36: `NS="64 128" PREFIX=<new>
 LEVELS=bl36 OCEAN='{"everySteps":8}' scripts/pairedSpinup.sh` with no
 `<PREFIX><N>_day*.bin` in OUT (`STRATOSPHERE=1` for the upper lines);
 the land starts neutral and jumps at days 365 and 730 by default. Two
