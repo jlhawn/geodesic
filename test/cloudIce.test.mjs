@@ -89,7 +89,21 @@ test('air at 220 K saturated over ice holds cloud under iceSaturation and none o
   assert.ok(iced > 0 && liquid === 0);
 });
 
-test('cloud ice falls in the step: the layer keeps 1/(1 + v dt/dz) of it at the Heymsfield and Donner speed, the layers below take the rest and sublimate it into dry air, column water with the snow and moist enthalpy exact; liquid cloud and iceFall null convert as before', () => {
+test('with iceNucleation clear air colder than 235 K stays supersaturated over ice below the homogeneous nucleation threshold, while the same layer with cloud in it deposits to the distribution about ice saturation', () => {
+  const run = (options, seed, humidity = 1.1) => {
+    const model = build(options), k = layerAt(model, 2e4), { C } = model.core.diagnostics;
+    const s = column(model, (j, T, p) => (j === k ? humidity : 0.3) * cloudSaturation(T, p, true, 273.15, 235.15, {}).qs);
+    s.qc[k * C] = seed;
+    model.core.diagnoseColumn(0, s.pi, s.theta, s.q, s.qc);
+    model.moist.condenseColumn(0, s.pi, s.theta, s.q, s.qc);
+    return s.qc[k * C];
+  };
+  const on = { iceNucleation: true }, clear = run(on, 0), seeded = run(on, 1e-6), free = run({}, 0), freeSeeded = run({}, 1e-6), nucleated = run(on, 0, 1.6);
+  console.log(`near 200 hPa at RH_ice 1.1: ${clear} kg/kg of cloud in clear air (${(1e6 * free).toFixed(2)} mg/kg without the threshold), ${(1e6 * seeded).toFixed(2)} mg/kg where 1 mg/kg was; at RH_ice 1.6 clear air nucleates ${(1e6 * nucleated).toFixed(2)} mg/kg`);
+  assert.ok(clear === 0 && free > 0 && seeded === freeSeeded && nucleated > 0);
+});
+
+test('cloud ice falls in the step: the layer keeps 1/(1 + v dt/dz) of it at the speed of Heymsfield and Donner\'s form, the layers below take the rest and sublimate it into dry air, column water with the snow and moist enthalpy exact; liquid cloud and iceFall null convert as before', () => {
   const dt = 600, model = build(), { moist, core } = model, { K, C, sigmaMid, dSigma, g, R, exnerLayer } = core.diagnostics;
   const k = layerAt(model, 2e4);
   const { pi, theta, q, qc } = column(model, (j, T, p) => (j === k ? 1 : 0.3) * cloudSaturation(T, p, true, 273.15, 235.15, {}).qs);
@@ -99,7 +113,7 @@ test('cloud ice falls in the step: the layer keeps 1/(1 + v dt/dz) of it at the 
   assert.ok(T < 235.15, `the cloud layer at ${T} K is all ice`);
   const out = cloudSaturation(T, p, true, 273.15, 235.15, {});
   const rhc = criticalHumidityAt(p, pi[0], 0.975, 0.75, 2), b = (1 - rhc) * out.qs / (1 + LATENT_HEAT * out.slope / core.diagnostics.cp);
-  const f = uniformCover(3e-5, b), speed = 3.29 * Math.pow(p / (R * T) * 3e-5 / f, 0.16), courant = speed * dt * sigmaMid[k] * g / (R * T * dSigma[k]);
+  const f = uniformCover(3e-5, b), speed = MOIST_DEFAULTS.iceFall * Math.pow(p / (R * T) * 3e-5 / f, MOIST_DEFAULTS.iceFallExponent), courant = speed * dt * sigmaMid[k] * g / (R * T * dSigma[k]);
   const qBelow = q[(k + 1) * C], thetaBelow = theta[(k + 1) * C];
   const snow = moist.autoconvertColumn(0, pi, theta, q, qc, dt);
   assert.ok(Math.abs(qc[k * C] - 3e-5 / (1 + courant)) < 1e-18, `kept ${qc[k * C]} against ${3e-5 / (1 + courant)}`);

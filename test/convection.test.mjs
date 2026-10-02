@@ -557,6 +557,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ autoconversionFloor: 'boundaryLayer' });
   await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, virtualBuoyancy: false });
   await parity({ condensation: 'saturation', iceSaturation: false, iceFall: null });
+  await parity({ iceNucleation: true, iceFall: 3.29 });
 });
 
 test('the stratiform lifetime matches between the engines on random columns of every regime, mixing top, EIS share and sea-ice cover, and keeps cloud the short lifetime would rain out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

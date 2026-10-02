@@ -65,7 +65,7 @@ const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME};
 const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
 const RAIN_EVAP: f32 = ${o.rainEvaporation};
-const UNIFORM: bool = ${o.condensation === 'uniform'}; const ICE_SAT: bool = ${!!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
+const UNIFORM: bool = ${o.condensation === 'uniform'}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
 const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
 const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
@@ -1098,11 +1098,20 @@ fn saturateColumn(i: i32, pi: f32) {
     var change = 0.0;
     if (UNIFORM && !(MOIST_BL && (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV < PH[PH_MIXTOP + i])) {
       let water = IN[S_QC + idx];
-      let saturated = cloudSat(temperature - LHEAT * water / CP, pressure);
+      let liquidT = temperature - LHEAT * water / CP;
+      let saturated = cloudSat(liquidT, pressure);
+      let a = 1.0 / (1.0 + LHEAT * saturated.y / CP);
       let b = uniformWidth(saturated, pressure, pi);
-      let Q = (IN[S_Q + idx] + water - saturated.x) / (1.0 + LHEAT * saturated.y / CP);
+      let total = IN[S_Q + idx] + water;
+      let Q = a * (total - saturated.x);
       var held = max(0.0, Q);
       if (b > 0.0) { held = select(select(0.0, (Q + b) * (Q + b) / (4.0 * b), Q > -b), Q, Q >= b); }
+      if (NUCLEATION && !(water > CLEAR_AIR) && liquidT < ICE_T) {
+        let reference = min(qsat(liquidT, pressure), (2.583 - liquidT / 207.8) * saturated.x);
+        let width = b / (a * saturated.x) * reference;
+        let lowest = max(reference, total - width);
+        held = select(0.0, max(0.0, a * (total + width - lowest) / (2.0 * width) * (0.5 * (lowest + total + width) - saturated.x)), total + width > reference);
+      }
       change = held - water;
     } else {
       let saturated = cloudSat(temperature, pressure);

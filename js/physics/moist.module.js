@@ -113,6 +113,14 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * `topCriticalHumidity` 0.75 and `criticalExponent` 2 (ECHAM6 at T63,
  * mo_cloud's crs, crt and nex). The layers below the mixing top, whose
  * cover is the boundary layer's variance cover, adjust to saturation.
+ * With `iceNucleation` (false; under iceSaturation) a cloud-free layer (at
+ * most CLEAR_AIR of condensate) colder than iceTemperature forms cloud only
+ * where its distribution exceeds q_ref = min(q_sw, RH_homo q_si),
+ * RH_homo = 2.583 − T/207.8 the homogeneous nucleation threshold of Kärcher
+ * and Lohmann (2002), so clear air may be supersaturated over ice; the part
+ * above q_ref deposits to ice saturation, and from then on the layer holds
+ * the distribution's condensate about q_si (the scheme of Tompkins et al.
+ * 2007 in the IFS, Cy43r1 documentation §7.2.4c).
  *
  * Convection is one entraining mass-flux plume with a shallow and a
  * deep branch. Both run in proportion to the deck's opening, 1 where
@@ -232,7 +240,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * Rain: with `iceFall` (m/s; null: none) the ice share 1 − α of each
  * layer's cloud falls at v = iceFall (ρ q_i / f)^`iceFallExponent`, ρ q_i/f
  * the in-cloud ice content in kg/m³ over the uniform distribution's cover
- * f (Heymsfield and Donner 1990: 3.29 and 0.16), implicitly in flux form
+ * f (Heymsfield and Donner 1990: 3.29 and 0.16; ECHAM6 takes 2.5 at T63
+ * and 3.0 at other resolutions), implicitly in flux form
  * from the top down within the step: a layer keeps 1/(1 + v Δt/Δz) of the
  * ice it holds with what fell into it and passes the rest to the layer
  * below, which takes its ice share 1 − α as cloud ice and its liquid share
@@ -288,8 +297,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * plumeRainRate 3e-3 /m,
  * plumeRainThreshold 0, plumeRainEvaporation 1e-3 /m, downdraftShare 0.3,
  * downdraftEntrainment 1e-4 /m, plumeCape 120 J/kg, plumeRelaxation 1 h, no
- * plumeMomentum, condensation 'uniform', iceSaturation true, iceFall
- * 3.29 m/s, iceFallExponent 0.16.
+ * plumeMomentum, condensation 'uniform', iceSaturation true, no
+ * iceNucleation, iceFall 2.5 m/s, iceFallExponent 0.16.
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
@@ -299,7 +308,7 @@ export const MOIST_DEFAULTS = {
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean',
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: false, plumeConsumption: 'all',
-  condensation: 'uniform', iceSaturation: true, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 3.29, iceFallExponent: 0.16,
+  condensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
   liquidTemperature: LIQUID_TEMPERATURE, iceTemperature: ICE_TEMPERATURE,
 };
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
@@ -313,10 +322,10 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource,
     plumeClosure, plumeCapeParcel, plumeSource, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
     downdraftShare, downdraftEntrainment, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption,
-    condensation, iceSaturation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, liquidTemperature, iceTemperature,
+    condensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, liquidTemperature, iceTemperature,
   } = { ...MOIST_DEFAULTS, ...options };
   if (condensation !== 'uniform' && condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${condensation}`);
-  const uniform = condensation === 'uniform';
+  const uniform = condensation === 'uniform', nucleating = iceNucleation && iceSaturation;
   const saturated = { qs: 0, slope: 0, liquid: 1 };
   const saturation = (T, p) => cloudSaturation(T, p, iceSaturation, liquidTemperature, iceTemperature, saturated);
   const halfWidth = (p, ps) => (1 - criticalHumidityAt(p, ps, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent)) * saturated.qs / (1 + latentHeat * saturated.slope / cp);
@@ -396,9 +405,14 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const pressure = pi[i] * sigmaMid[k];
       let change;
       if (uniform && !(boundaryTop !== null && geopotential[idx] / g < boundaryTop[i])) {
-        saturation(temperature - latentHeat * qc[idx] / cp, pressure);
-        const b = halfWidth(pressure, pi[i]), Q = (q[idx] + qc[idx] - saturated.qs) / (1 + latentHeat * saturated.slope / cp);
-        change = (b > 0 ? uniformCondensate(Q, b) : Math.max(0, Q)) - qc[idx];
+        const liquidT = temperature - latentHeat * qc[idx] / cp;
+        saturation(liquidT, pressure);
+        const a = 1 / (1 + latentHeat * saturated.slope / cp), b = halfWidth(pressure, pi[i]), total = q[idx] + qc[idx], Q = a * (total - saturated.qs);
+        if (nucleating && !(qc[idx] > CLEAR_AIR) && liquidT < iceTemperature) {
+          const reference = Math.min(saturationHumidity(liquidT, pressure), (2.583 - liquidT / 207.8) * saturated.qs), width = b / (a * saturated.qs) * reference;
+          const lowest = Math.max(reference, total - width);
+          change = total + width > reference ? Math.max(0, a * (total + width - lowest) / (2 * width) * (0.5 * (lowest + total + width) - saturated.qs)) - qc[idx] : -qc[idx];
+        } else change = (b > 0 ? uniformCondensate(Q, b) : Math.max(0, Q)) - qc[idx];
       } else {
         const qs = iceSaturation ? saturation(temperature, pressure).qs : saturationHumidity(temperature, pressure);
         const slope = iceSaturation ? saturated.slope : qs * latentHeat / (R_VAPOR * temperature * temperature);
