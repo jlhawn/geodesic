@@ -2,7 +2,7 @@ import { buildMesh } from '../mesh.module.js';
 import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING, GRAVITY } from '../dynamics/sigmaCore.module.js';
 import { createSeaIce, SNOW_AGEING } from '../physics/ice.module.js';
 import { createSurface, SEA_DRAG, LAND_DRAG, TOP_DRAG } from '../physics/surface.module.js';
-import { spongeRates, spongeSigmaFor, SPONGE } from '../dynamics/sponge.module.js';
+import { spongeRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
 import { createRadiation } from '../physics/radiation.module.js';
 import { createMoistPhysics } from '../physics/moist.module.js';
 import { LATENT_HEAT } from '../physics/moist.module.js';
@@ -85,7 +85,8 @@ export async function createGpuModel(gridOrMesh, {
     ...Object.fromEntries(VEGETATION_OPTIONS.filter((key) => landOptions[key] !== undefined).map((key) => [key, landOptions[key]])),
   };
   const sponge = spongeRates(core.sigmaMid, surface.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), surface.spongeDays ?? SPONGE.days);
-  const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, physics, topSigma: surface.topSigma ?? TOP_DRAG.sigma, topDragDays: surface.topDragDays ?? TOP_DRAG.days, spongeRates: sponge, gravityWaves, surfaceGeopotential: phis });
+  const lidFriction = lidFrictionRates(levels, surface.lidFriction === undefined ? lidFrictionFor(sigmaGridName(levels)) : surface.lidFriction);
+  const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, physics, topSigma: surface.topSigma ?? TOP_DRAG.sigma, topDragDays: surface.topDragDays ?? TOP_DRAG.days, spongeRates: sponge, spongeMeanRates: lidFriction, gravityWaves, surfaceGeopotential: phis });
   const seaIce = createSeaIce(mesh, ice);
   const radiationCpu = createRadiation(mesh, core, { surfaceLayer: mode === 'roughness', ...radiation });
   const surfaceCpu = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, ...surface });

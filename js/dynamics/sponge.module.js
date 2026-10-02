@@ -75,11 +75,64 @@ export function spongeRates(sigmaMid, sigma, days) {
 }
 
 /*
- * One step of the sponge on one layer's normal velocity, in place:
- * u ← ū + (u − ū)/(1 + r dt), the zonal mean ū from `means` (2 per band,
- * filled here).
+ * Rayleigh friction on the zonal-mean wind of the top layers, standing in
+ * for the mesospheric gravity-wave drag above a low lid: profiles of the decay time (days) against
+ * log-pressure height z = H ln(p0/p), H = 7 km, as pairs [z (m), days],
+ * the rate's logarithm linear in z between them, the last held above
+ * and none below the first. `holtonWehrbein`: Holton & Wehrbein (1980,
+ * PAGEOPH 118, 284), 5 days at 65 km to 2 days at 75 km, as Rind et al.
+ * (1984) quote them; `rind`: the GISS 21-layer model's drag in its layers
+ * of 65-75 km (Rind, Suozzo, Lacis, Russell & Hansen 1984, NASA
+ * TM-86183), its winter decay times 2, 1 and 0.5 days at 65, 70 and 75 km.
  */
-export function dampEddies(mesh, geometry, u, rate, dt, means) {
+export const LID_FRICTION = {
+  holtonWehrbein: [[65e3, 5], [75e3, 2]],
+  rind: [[65e3, 2], [70e3, 1], [75e3, 0.5]],
+};
+const FRICTION_SCALE_HEIGHT = 7e3;
+
+/*
+ * Each layer's friction rate (1/s): the profile's rate averaged over the
+ * layer's mass at the reference surface pressure p0. `profile` is a name
+ * in LID_FRICTION, an array of [z, days] pairs, or null for none.
+ */
+export function lidFrictionRates(levels, profile, p0 = 101325) {
+  const K = levels.length - 1, rates = new Float64Array(K), points = typeof profile === 'string' ? LID_FRICTION[profile] : profile;
+  if (typeof profile === 'string' && !points) throw new Error(`no lid friction is named ${profile}; the profiles are ${Object.keys(LID_FRICTION).join(', ')}`);
+  if (!points || !points.length) return rates;
+  const rateAt = (p) => {
+    const z = FRICTION_SCALE_HEIGHT * Math.log(p0 / p);
+    if (z < points[0][0]) return 0;
+    let n = 0;
+    while (n < points.length - 1 && points[n + 1][0] <= z) n++;
+    if (n === points.length - 1) return 1 / (points[n][1] * 86400);
+    const [z0, d0] = points[n], [z1, d1] = points[n + 1], t = (z - z0) / (z1 - z0);
+    return Math.exp((1 - t) * Math.log(1 / d0) + t * Math.log(1 / d1)) / 86400;
+  };
+  const steps = 2000;
+  for (let k = 0; k < K; k++) {
+    const top = levels[k] * p0, bottom = levels[k + 1] * p0;
+    let sum = 0;
+    for (let n = 0; n < steps; n++) sum += rateAt(top + (n + 0.5) * (bottom - top) / steps);
+    rates[k] = sum / steps;
+  }
+  return rates;
+}
+
+/*
+ * The lid friction of a grid by name: none.
+ */
+export function lidFrictionFor() {
+  return null;
+}
+
+/*
+ * One step of the sponge on one layer's normal velocity, in place:
+ * u ← ū/(1 + r̄ dt) + (u − ū)/(1 + r dt), the zonal mean ū from `means`
+ * (2 per band, filled here), r the eddies' rate and r̄ the zonal mean's
+ * (the lid friction's).
+ */
+export function dampEddies(mesh, geometry, u, rate, dt, means, meanRate = 0) {
   const { nCells: C, nEdges: E, maxEdges, nEdgesOnCell, edgesOnCell } = mesh;
   const { bands, cellBand, eastWeight, northWeight, edgeBand, edgeShare, edgeEast, edgeNorth } = geometry;
   means.fill(0, 0, 2 * bands);
@@ -93,11 +146,11 @@ export function dampEddies(mesh, geometry, u, rate, dt, means) {
     means[2 * cellBand[i]] += east;
     means[2 * cellBand[i] + 1] += north;
   }
-  const keep = 1 / (1 + rate * dt);
+  const keep = 1 / (1 + rate * dt), meanKeep = 1 / (1 + meanRate * dt);
   for (let e = 0; e < E; e++) {
     const b = edgeBand[e], s = edgeShare[e];
     const east = (1 - s) * means[2 * b] + s * means[2 * b + 2], north = (1 - s) * means[2 * b + 1] + s * means[2 * b + 3];
     const mean = east * edgeEast[e] + north * edgeNorth[e];
-    u[e] = mean + (u[e] - mean) * keep;
+    u[e] = mean * meanKeep + (u[e] - mean) * keep;
   }
 }

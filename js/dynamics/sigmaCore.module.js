@@ -100,7 +100,7 @@ export function sigmaGridName(levels) {
 export function createSigmaCore(mesh, options = {}) {
   const {
     levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0,
-    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, surfaceGeopotential = null, buffers = null, splitClosure = false, spongeRates = null,
+    nu4 = 0, nu4Theta = 0, divergenceDamping = 0, surfaceGeopotential = null, buffers = null, splitClosure = false, spongeRates = null, spongeMeanRates = null,
   } = options;
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -109,7 +109,7 @@ export function createSigmaCore(mesh, options = {}) {
   const K = levels.length - 1;
   const kappa = R / cp;
   if (divergenceDamping > 0 && !splitClosure) throw new Error('divergence damping needs a core with splitClosure');
-  const sponged = spongeRates ? spongeRates.some((rate) => rate > 0) : false;
+  const sponged = [spongeRates, spongeMeanRates].some((rates) => rates && rates.some((rate) => rate > 0));
   if (sponged && !splitClosure) throw new Error('the sponge needs a core with splitClosure');
   const sigmaUpper = levels.subarray(0, K);
   const sigmaLower = levels.subarray(1, K + 1);
@@ -316,7 +316,8 @@ export function createSigmaCore(mesh, options = {}) {
 
   /*
    * The ∇⁴ closures, and the divergence damping and the top sponge
-   * (`spongeRates`, 1/s per layer, see sponge.module.js) after the
+   * (`spongeRates` on the eddies and `spongeMeanRates` on the zonal
+   * mean, 1/s per layer, see sponge.module.js) after the
    * momentum one, applied to the state itself over one time step, for
    * cores built with splitClosure: the model runs this once per step
    * after the RK4 dynamics instead of inside every stage.
@@ -332,12 +333,12 @@ export function createSigmaCore(mesh, options = {}) {
       }
       if (part === 'tracers') continue;
       const off = k * E;
-      const spongeRate = sponge ? spongeRates[k] : 0;
-      if (nu4 > 0 || divergenceStep > 0 || spongeRate > 0) {
+      const spongeRate = sponge && spongeRates ? spongeRates[k] : 0, meanRate = sponge && spongeMeanRates ? spongeMeanRates[k] : 0;
+      if (nu4 > 0 || divergenceStep > 0 || spongeRate > 0 || meanRate > 0) {
         for (let e = 0; e < E; e++) uBefore[e] = u[off + e];
         if (nu4 > 0) momentumClosure(k, u, u, dt * nu4);
         if (divergenceStep > 0) divergenceClosure(k, u);
-        if (spongeRate > 0) dampEddies(mesh, sponge, u.subarray(off, off + E), spongeRate, dt, bandMeans);
+        if (spongeRate > 0 || meanRate > 0) dampEddies(mesh, sponge, u.subarray(off, off + E), spongeRate, dt, bandMeans, meanRate);
         for (let e = 0; e < E; e++) dissipation[off + e] = uBefore[e] * uBefore[e] - u[off + e] * u[off + e];
       } else dissipation.fill(0, off, off + E);
     }
@@ -409,5 +410,5 @@ export function createSigmaCore(mesh, options = {}) {
     return m / g;
   }
 
-  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, spongeRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
+  return { K, levels, sigmaMid, nu4, nu4Theta, divergenceDamping, spongeRates, spongeMeanRates, spacing, tendency, phaseFlux, phaseColumn, phaseVertex, phaseLayer, phaseClosure, splitClosure, diagnose, diagnoseColumn, diagnostics, mass, shared, arrays: { exnerLayer, exnerLower, dExnerDpi, geopotential, piSigmaDot, thetaLower, qLower, qcLower, thetaV, dissipation } };
 }

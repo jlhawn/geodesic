@@ -8,7 +8,7 @@ import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { SNOW_AGEING } from '../physics/ice.module.js';
 import { FOREST_ARIDITY, SOIL_CARBON } from '../physics/land.module.js';
 import { orographyConstants, OROGRAPHY_KERNELS } from './orography.gpu.js';
-import { spongeGeometry, spongeRates as layerRates, spongeSigmaFor, SPONGE } from '../dynamics/sponge.module.js';
+import { spongeGeometry, spongeRates as layerRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
 import { longwaveTableFor } from '../physics/longwave.module.js';
 import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveColumns, gravityWaveBreaking, gravityWaveLid } from '../physics/gravityWaves.module.js';
 
@@ -41,7 +41,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   const seq = (names) => { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; };
   const MI = seq([['COE', 2 * E], ['VOE', 2 * E], ['EOC', MAX_EDGES * C], ['ESC', MAX_EDGES * C], ['COC', MAX_EDGES * C], ['NEC', C], ['COV', 3 * V], ['EOV', 3 * V], ['ESV', 3 * V], ['EOE', MAX_EDGES_ON_EDGE * E], ['NEE', E], ['SBC', spongeCells], ['SBS', SPK ? SPB + 1 : 0], ['SEB', spongeEdges], ['GWS', waveCells]]);
   const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E], ['PHIS', C], ['SEW', MAX_EDGES * spongeCells], ['SNW', MAX_EDGES * spongeCells], ['SES', spongeEdges], ['SEE', spongeEdges], ['SEN', spongeEdges], ['GWX', 6 * waveCells], ['GWP', 4 * waveEdges], ['GWF', waveCells]]);
-  const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K], ['SPG', K]]);
+  const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K], ['SPG', K], ['SPMR', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]);
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E]]);
@@ -557,7 +557,7 @@ var<workgroup> partNorth: array<f32, ${WORKGROUP}>;
     let base = D_SPM + 2 * (k * SPB + b);
     let mean = ((1.0 - share) * D[base] + share * D[base + 2]) * toEast + ((1.0 - share) * D[base + 1] + share * D[base + 3]) * toNorth;
     let n = k * E + e;
-    let before = IN[S_U + n]; let after = mean + (before - mean) / (1.0 + P[0] * LV[L_SPG + k]);
+    let before = IN[S_U + n]; let after = mean / (1.0 + P[0] * LV[L_SPMR + k]) + (before - mean) / (1.0 + P[0] * LV[L_SPG + k]);
     IN[S_U + n] = after;
     let lost = before * before - after * after;
     if (accumulate) { D[D_DISS + n] += lost; } else { D[D_DISS + n] = lost; }
@@ -665,7 +665,7 @@ export const PHYSICS_DEFAULTS = {
 
 export async function createGpuCore(mesh, {
   levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0, divergenceDamping = 0,
-  dragCoefficient = SEA_DRAG, gustiness = 3, topSigma = TOP_DRAG.sigma, topDragDays = TOP_DRAG.days, spongeRates: spongeOption, gravityWaves = {}, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
+  dragCoefficient = SEA_DRAG, gustiness = 3, topSigma = TOP_DRAG.sigma, topDragDays = TOP_DRAG.days, spongeRates: spongeOption, spongeMeanRates: meanOption, gravityWaves = {}, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
 } = {}) {
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
   phys.longwaveTable ??= longwaveTableFor(levels);
@@ -675,8 +675,10 @@ export async function createGpuCore(mesh, {
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > phys.shallowTop) cumulusK0--;
   phys.cumulusK0 = cumulusK0;
   const spongeRates = spongeOption === undefined ? layerRates(Float64Array.from({ length: K }, (_, k) => 0.5 * (levels[k] + levels[k + 1])), spongeSigmaFor(sigmaGridName(levels)), SPONGE.days) : spongeOption;
-  const spongeLayers = spongeRates ? spongeRates.findIndex((rate) => !(rate > 0)) : 0, spongeLayerCount = spongeLayers < 0 ? K : spongeLayers;
-  if (spongeRates && spongeRates.some((rate, k) => k >= spongeLayerCount && rate > 0)) throw new Error('the sponge is on the top layers only');
+  const spongeMeanRates = meanOption === undefined ? lidFrictionRates(levels, lidFrictionFor(sigmaGridName(levels))) : meanOption;
+  const damped = Array.from({ length: K }, (_, k) => (spongeRates ? spongeRates[k] : 0) > 0 || (spongeMeanRates ? spongeMeanRates[k] : 0) > 0);
+  const spongeLayers = damped.indexOf(false), spongeLayerCount = spongeLayers < 0 ? K : spongeLayers;
+  if (damped.some((on, k) => k >= spongeLayerCount && on)) throw new Error('the sponge is on the top layers only');
   const sponge = spongeLayerCount ? { ...spongeGeometry(mesh), layers: spongeLayerCount } : null;
   const waves = gravityWaves === false ? null : { ...GRAVITY_WAVES, ...gravityWaves };
   let formTop = 0;
@@ -742,6 +744,7 @@ export async function createGpuCore(mesh, {
   const lv = new Float32Array(L.LV.total);
   put(lv, L.LV.SL, sigmaLower); put(lv, L.LV.SU, sigmaUpper); put(lv, L.LV.DS, dSigma); put(lv, L.LV.SM, sigmaMid); put(lv, L.LV.TOP, topRate);
   if (spongeRates) put(lv, L.LV.SPG, spongeRates);
+  if (spongeMeanRates) put(lv, L.LV.SPMR, spongeMeanRates);
   const cl = Float64Array.from(sigmaLower, (s) => Math.pow(s, kappa));
   const cm = Float64Array.from(sigmaLower, (s, k) => (Math.pow(s, 1 + kappa) - Math.pow(sigmaUpper[k], 1 + kappa)) / ((1 + kappa) * dSigma[k]));
   const cd = Float64Array.from(sigmaLower, (s, k) => (kappa / (1 + kappa)) * (Math.pow(s, 1 + kappa) - Math.pow(sigmaUpper[k], 1 + kappa)) / dSigma[k]);
@@ -933,7 +936,7 @@ export async function createGpuCore(mesh, {
   }
 
   let stepCount = 0;
-  const hooks = { beforePhysics: null, landWeights: null };
+  const hooks = { beforePhysics: null, afterPhysics: null, landWeights: null };
   async function stepModel(dt, time) {
     const sun = sunDirection(time);
     rungeKutta(dt);
@@ -948,6 +951,7 @@ export async function createGpuCore(mesh, {
       if (waves) dispatch(pass, 'gravityWaves', g, C);
       if (phys.orography) dispatch(pass, 'orography', g, C);
     });
+    if (hooks.afterPhysics) await hooks.afterPhysics(dt, stepCount);
     closurePasses(dt);
     setParams([dt, (time % YEAR) / YEAR, sun[0], sun[1], sun[2], seasonKeep, moistureKeep, hold]);
     compute((pass) => {
