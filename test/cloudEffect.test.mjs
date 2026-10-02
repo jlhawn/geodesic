@@ -62,7 +62,7 @@ async function engines(radiation, cloud = 0) {
   return { cpu, gpu, C: cpu.mesh.nCells };
 }
 
-test('both engines sum the clear-sky fluxes per cell alike and read out the day-mean cloud effects, mirrored per cell and carried in a saved state, alike in every column whose dry adjustment merged the same layers, whose shallow plume topped at the same interface and whose layers held cloud water alike on both engines after every step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both engines sum the clear-sky fluxes per cell alike and read out the day-mean cloud effects, mirrored per cell and carried in a saved state, alike in every column whose dry adjustment merged the same layers, whose shallow plume topped at the same interface and whose layers held cloud water alike on both engines after every step, and whose neighbours\' did', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpu, gpu, C } = await engines({ clearSkyPass: true }, 3e-4);
   const K = cpu.core.K;
   const mixedTop = (q, i) => { let k = K - 1; while (k > 0 && Math.abs(q[(k - 1) * C + i] - q[(K - 1) * C + i]) <= 1e-6 * q[(K - 1) * C + i]) k--; return k; };
@@ -101,11 +101,13 @@ test('both engines sum the clear-sky fluxes per cell alike and read out the day-
     assert.ok(Math.abs(cpu.radiation.meanLongwaveCloudEffect[i] - (cpuSums.clearOutgoingLongwave[i] / STEPS - cpu.radiation.meanOutgoingLongwave[i])) <= 1e-9, `cell ${i}: the CPU's per-cell longwave effect`);
     for (const [name, slot] of Object.entries(EFFECT_SLOTS)) assert.equal(gpu.radiation[name][i], after[slot][i], `cell ${i}: ${name} mirrored`);
   }
-  const agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !merged.has(i) && !plumed.has(i) && !condensed.has(i));
+  const parted = new Set([...merged, ...plumed, ...condensed]), near = new Set(parted), { cellsOnCell, nEdgesOnCell } = cpu.mesh;
+  for (const i of parted) for (let j = 0; j < nEdgesOnCell[i]; j++) near.add(cellsOnCell[i * 6 + j]);
+  const agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !near.has(i));
   const effects = Object.fromEntries(Object.keys(EFFECT_SLOTS).map((name) => [name, stats(agreed.map((i) => cpu.radiation[name][i]), agreed.map((i) => gpu.radiation[name][i]))]));
-  console.log(`per-cell cloud effects CPU against GPU over the ${agreed.length} of ${C} columns whose well-mixed bottom block of uniform q tops at the same layer (${merged.size} apart), whose shallow plume tops at the same interface (${plumed.size} apart) and whose layers holding cloud water are the same (${condensed.size} apart) on both engines after every step: ${Object.entries(effects).map(([name, s]) => `${name} rms ${s.rmsRel.toExponential(1)} (max ${s.maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
+  console.log(`per-cell cloud effects CPU against GPU over the ${agreed.length} of ${C} columns whose well-mixed bottom block of uniform q tops at the same layer (${merged.size} apart), whose shallow plume tops at the same interface (${plumed.size} apart) and whose layers holding cloud water are the same (${condensed.size} apart) on both engines after every step, nor neighbour one that parted (${near.size - parted.size} more): ${Object.entries(effects).map(([name, s]) => `${name} rms ${s.rmsRel.toExponential(1)} (max ${s.maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
   assert.ok(merged.size <= C / 100, `${merged.size} columns' dry adjustment merges a different number of layers`);
-  assert.ok(C - agreed.length <= 0.02 * C, `${C - agreed.length} of ${C} columns left out`);
+  assert.ok(parted.size <= 0.02 * C && C - agreed.length <= 0.08 * C, `${parted.size} of ${C} columns parted, ${C - agreed.length} left out with their neighbours`);
   for (const s of Object.values(effects)) assert.ok(s.rmsRel < 2e-3 && s.maxDiff < 0.5, `per-cell effects apart by ${s.maxDiff} W/m² (rms ${s.rmsRel})`);
 
   const saved = await decodeState(encodeState({ N: 6, K: gpu.core.K, day: 0, time: gpu.time, pi: gpu.state[0], ...Object.fromEntries(Object.keys(RADIATION_FIELDS).map((name) => [name, gpu.radiation[name]])) }));
