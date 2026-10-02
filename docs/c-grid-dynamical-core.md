@@ -8534,7 +8534,10 @@ false. The twelve-step digests re-pinned; with `topDragDays` 5,
 `spongeDays` 0 and `gravityWaves` false they are 32417c2's. Tests pass
 but the cloudy columns' heating (1.26·10⁻⁴ K/day) and the cloud-effect
 parity (one column 0.66 against 0.5 W/m² at step 8; passes with
-`spongeDays` 0). Proofs, nine64_day0274, one CPU step: each edge
+`spongeDays` 0, but with `spongeDays` 0 fails the same way, 0.665
+W/m², from initial θ perturbed by 3·10⁻⁷ or 10⁻⁶ relative: a column at
+a threshold, not the sponge). Proofs, nine64_day0274, the second CPU
+step after loading: each edge
 column's momentum + Δt τ 1.9·10⁻¹¹ (implicit drag) and 2.3·10⁻¹³
 (mountains) of 1.6·10³ kg/m/s, each cell column's wave force 6.5·10⁻¹⁹
 of 4.2·10⁻³ Pa, the energy each gives the heat against its own loss
@@ -8554,6 +8557,12 @@ layers' u 7.4·10⁻⁵, 1.7·10⁻⁴, 3.4·10⁻⁴ m/s rms; lowest layer T 1.
 4.9·10⁻⁵, 5.5·10⁻⁴, 1.6·10⁻³), Ts 9.4·10⁻⁶, 2.6·10⁻⁵, 1.3·10⁻³ K;
 regime flips 0, 2, 27; launched stress 1.0·10⁻⁴, 9.6·10⁻⁴, 1.5·10⁻³ of
 its largest; wave acceleration 2.7·10⁻⁴, 9.0·10⁻⁴, 1.1·10⁻³ m/s/day rms.
+The lowest layer's largest edge apart at step 16, 2.84 m/s, is a sea
+edge at 65.8S 43.3E whose cell's boundary layer is in regime 0 on the
+CPU and 3 on the GPU (depth 829 against 36 m) under the same gust wind
+(27.7 m/s); the gust wind is 9.3·10⁻⁴ m/s rms apart. From the same
+state bd42fa5 gives 1.95·10⁻³, 2.05·10⁻³, 8.2·10⁻³ m/s and 32417c2
+4.9·10⁻⁵, 5.5·10⁻⁴, 1.0·10⁻³ m/s for the lowest layer's u.
 Three one-day segments from eight64_day0183 end day 186 byte for byte as
 one. 16 steps from eight128_day0183: finite, top six layers' largest
 wind 73 m/s, Courant 0.24 / 0.04. five64_day2190 (cam26) loads and steps.
