@@ -329,7 +329,8 @@ v_i = (1/A_i) Σ_{e ∈ EC(i)} ½ d_e l_e u_e n_e
 
 Exact for a uniform field on a regular hexagon (`Σ_e ½ d l (U·n_e) n_e =
 ½ d l · 3U = A_i U`). Used only by physics that need a speed (surface
-drag, sensible heat flux), by the Rayleigh sponge, and by the viewer.
+drag, sensible heat flux), by the top sponge's zonal mean and the
+gravity-wave drag (M21 item 1, The model top), and by the viewer.
 Pole cells need no special basis: `v_i` is a 3-vector in the tangent
 plane; zonal/meridional components are computed for display only.
 
@@ -388,9 +389,10 @@ with the reason for it).
 - Vertical advection: the current energy-consistent flux-difference form,
   with `(π σ̇)_e` averaged from the two cells and `u_{e,k±½}` averaged
   between layers.
-- `F_e`: Rayleigh drag terms (PBL `σ>0.7`, top `σ<0.05`), bulk surface drag
-  on the lowest layer using `|v|_e = ½(|v_i| + |v_j|)` from 3.7, and the
-  ∇⁴ closure `−K₄ (∇⁴u)_e`.
+- `F_e`: bulk surface drag on the lowest layer using `|v|_e = ½(|v_i| +
+  |v_j|)` from 3.7, the ∇⁴ closure `−K₄ (∇⁴u)_e`, and at the top the
+  sponge on the zonally asymmetric wind and the gravity-wave drag (M21
+  item 1, The model top).
 
 ### 4.3 Thermodynamics (cells)
 
@@ -680,7 +682,10 @@ a sponge over σ < 0.02 (the top four layers, above ~20 hPa) with a
 the range of the real polar-night jet — at no measurable tropospheric
 cost (EKE 152 vs 157–161, jets identical). Radiation sets up the
 pole-to-pole contrast that drives that jet; only a momentum sink
-bounds it, which is why removing the drag was not an option.
+bounds it, which is why removing the drag was not an option. On the gas
+radiation of M21 the drag on the mean wind warms the winter pole by
+10-37 K; the sink is now a gravity-wave drag and the sponge acts on the
+eddies alone (M21 item 1, The model top).
 
 ### M4 — Worker and viewer — done
 
@@ -4762,7 +4767,7 @@ The work, in order:
      it (275 / 265 / 250 K at 1.1 / 3.5 / 7.4 hPa against 268 / 255 / 241);
      the global and tropical means move by 3 K or less, the 30-day means
      of balance, OLR and rain by under 0.3. No change made: the sponge is
-     the dynamics', for the core's own review.
+     the dynamics', for the core's own review (The model top, below).
    - The cold middle stratosphere is in part a radiation term: on the
      standard columns at an overhead sun the solar heating is below
      RRTMG's (MLS: −3.6 % at 1.1 hPa, −4.0 / −10.3 / −14.3 / −17.1 /
@@ -4956,6 +4961,332 @@ The work, in order:
      and the open sea's classes 0.091 / 0.110 / 0.148; the step medians
      21.75 / 21.74 → 22.45 / 22.42 ms at N=64 and 92.61 → 95.95 ms at
      N=128 (49.1 s a model day).
+
+   The model top (Oct 2). Thirty N=64 GPU days from copies of
+   nine64_day0091 (to day 121, July) and nine64_day0274 (to day 304,
+   January), one at a time, `STRATOSPHERE=1` (with the second daily line
+   of the upper layers' winds) and `scripts/upperAtmosphere.mjs` on the
+   day-30 states.
+   - What the Rayleigh sponge prevents (σ < 0.02, 5 days at the top:
+     rates 0.95 / 0.82 / 0.63 / 0.30 of 1/5 days at 1.1 / 3.5 / 7.4 /
+     14 hPa; off with `topDragDays` 0). Nothing breaks without it: the
+     step stays stable, the largest wind's horizontal Courant number in
+     the top layer reaches 0.54 (July) / 0.62 (January) against 0.24 /
+     0.22, the vertical one stays at 0.08 or less above 100 hPa. The top layer
+     has no momentum sink: its winter jet grows from 66 to 131 m/s at 54S
+     (still 1.2 m/s/day at the end) and to 122 m/s at 59N, the largest
+     edge wind to 167 / 195 m/s, its eddy kinetic energy to 197 / 250
+     m²/s² (27 / 43 with the sponge), twice the 3.5 hPa layer's, its
+     eddy temperature to 4.4 / 4.3 K rms (2.1 / 2.5) and its rms
+     divergence to 8.9 / 10.6·10⁻⁶ /s (4.7 / 6.0): the waves that reach
+     the lid stay under it. The winter pole cools without bound: 70-90S
+     181 K at 1.1 hPa and 187 K at 7-24 hPa on day 121, still falling
+     0.7 and 1.0-1.2 K/day.
+   - What it does where it should not. Its zonal force on day 121
+     (m/s/day): −11.3 / −11.2 / −9.8 at 65 / 55 / 45S and +4.5 at 25-35N
+     (on the summer easterlies) in the 1.1 hPa layer, −7.0 / −6.7 at
+     3.5 hPa, −5.1 / −5.0 at 7.4 hPa, −2.4 / −2.5 at 14 hPa (65 / 55S);
+     on day 304 −10.1 / −9.0 at 65 / 55N at 1.1 hPa, −5.6 / −4.7 at
+     3.5 hPa. By downward control (f v* = −F, Haynes et al. 1991) it
+     drives 80 kg/m/s poleward across 50S below 24 hPa (57 across 50N in
+     January), and the descent over the cap at the 70-90° cap's static
+     stability warms it 2.3 / 2.0 / 1.8 / 1.4 / 0.9 / 0.5 K/day at 1.1 /
+     3.5 / 7.4 / 14 / 24 / 37 hPa; the ascent over the summer cap cools it
+     1.4 / 1.3 / 0.9 / 0.6 K/day at 1.1-14 hPa. The polar-night jet it
+     leaves is 43-47 m/s at 3.5-37 hPa near 60S in July and 33-35 m/s near
+     64N in January, against Earth's 60-80 m/s near 60° at 1-10 hPa in
+     winter (CIRA-86, Fleming et al. 1990; the SPARC climatologies,
+     Randel et al. 2004; from memory, not re-read here), and the winter
+     pole 205-227 K at 1-53 hPa where the vortex is 185-195 K at 30-50 hPa.
+   - What published models do at a low lid (from memory of their
+     documentation, not re-read here): CAM-SE adds ∇² viscosity on the
+     wind and temperature in its top three layers (`nu_top`, Lauritzen et
+     al. 2018, JAMES 10, 1537); CAM-FV raises its divergence damping
+     there; ECHAM5 lowers the order of its hyperdiffusion in the
+     uppermost layers (Roeckner et al. 2003, MPI Report 349); the IFS
+     raises its diffusion in the top levels and replaced its Rayleigh
+     friction above 10 hPa by Scinocca's (2003) non-orographic
+     gravity-wave drag in 2009 (Orr et al. 2010, J. Climate 23, 5905);
+     CMAM's sponge acts on the departures from the zonal mean alone,
+     after Shepherd, Semeniuk & Koshyk (1996, JGR 101, 23447), who showed
+     that a Rayleigh drag on the zonal-mean wind drives a spurious
+     downward-control circulation below it. None of these five, as
+     remembered, keeps a drag on the mean wind at its top.
+   - Built, both engines (`js/dynamics/sponge.module.js`,
+     `js/physics/gravityWaves.module.js`). The sponge: in the layers above
+     `spongeSigma` 0.005 the departure of each edge's normal velocity
+     from its zonal mean relaxes at up to 1/`spongeDays` (1 day), falling
+     linearly in σ (0.78 and 0.29 /day at 1.1 and 3.5 hPa on bl34),
+     implicitly and once per step with the closures; the zonal mean is
+     the band mean of Section 3.7's cell winds over bands one mesh
+     spacing wide, interpolated to the edges as angular velocity, so a
+     zonal flow is 0.42 / 0.11 m/s rms (1.7 / 0.4 %) from it at N=16 / 32
+     and the sponge's torque is 1.4·10⁻³ / 2.9·10⁻⁴ of a Rayleigh drag's
+     at the same rate (`test/sponge.test.mjs`); its zonal force on the
+     day-121 state is under 0.08 m/s/day. The gravity-wave drag:
+     Alexander & Dunkerton (1999, JAS 56, 4167), from the layer nearest
+     315 hPa (316 hPa), in two directions (east, north), phase speeds
+     u₀ ± j·4 m/s to ±100 m/s about the source wind, a Gaussian of
+     half-width 40 m/s antisymmetric about u₀ carrying 4.3 mPa of
+     absolute flux in each direction, one wavelength of 300 km (values of
+     the order used with this scheme in GFDL's AM3 and in MiMA, Jucker &
+     Gerber 2017, J. Climate 30, 7339; from memory, unchecked); each wave
+     leaves its whole flux at its critical level or where it first
+     exceeds the saturation flux ρk|c − u|³/(2N) (its grid-box mean flux
+     in the runs of this section; its amplitude where present since the
+     review below), and what reaches the
+     top layer is left there (Shepherd & Shaw 2004, JAS 61, 2899), so
+     each column launches and keeps zero net momentum (to 1·10⁻¹⁸ Pa
+     against 4·10⁻³ Pa of deposit, `test/gravityWaves.test.mjs`); computed per cell after the
+     physics, applied to the edges with the momentum mixing; the kinetic
+     energy both change returns as heat (total energy to 1e-9 of the
+     change). CPU and GPU: the accelerations after one step at N=8 differ
+     by 4.4·10⁻⁷ m/s/day rms of up to 7.8 m/s/day, the sponge's wind
+     after 20 steps by 1.6·10⁻³ m/s of the 4.2 m/s it moves. The Rayleigh drag
+     stays as an option (`topDragDays`, default 0).
+   - What the drag does. Its absolute flux rising through 53 hPa
+     (~20 km) is 6.4-8.1 mPa in July and 6.8-8.1 in January at every
+     latitude (Earth: 1-5 mPa at 20-25 km outside the southern winter's
+     5-10, Ern et al. 2004, JGR 109, D20103, Geller et al. 2013, J.
+     Climate 26, 6383; from memory), 5.2-7.3 mPa through 3.5 hPa, nearly
+     all of it left in the top layer. Its force on day 121: −6.6 / −6.9 /
+     −5.1 m/s/day at 65 / 55 / 45S and +3.7 to +5.0 at 25-55N in the
+     1.1 hPa layer; +1.0 to +2.0 at 25-45S at 3.5 hPa where the eastward
+     waves meet their critical levels in the jet, under 0.6 in magnitude
+     below; on day 304 −3.9 to −4.7 at 55-85N and +3.1 to +4.9 at 15-55S.
+     Its descent warms the 70-90S cap 1.3 / 0.8 / 0.4 / 0.2 / 0.1 K/day
+     at 1.1 / 3.5 / 7.4 / 14 / 24 hPa (13 kg/m/s across 50S at 3.5 hPa,
+     7-10 below 24 hPa: an eighth of the Rayleigh drag's there).
+   - Before → after, the strongest zonal-mean westerly of the winter
+     hemisphere (m/s at latitude) and the winter cap's layer-mean
+     temperature (K) on the last day: Rayleigh (as it was) / none /
+     sponge and drag (the defaults) / drag alone / sponge and drag at
+     8.6 mPa (`GRAVITY_WAVES='{"flux":8.6e-3}'`), July 70-90S and
+     January 70-90N:
+
+     | layer | July jet | July 70-90S | January jet | January 70-90N |
+     |---|---|---|---|---|
+     | 1.1 hPa | 61@61S / 131@54S / 112@39S / 112@44S / 110@46S | 215 / 181 / 204 / 199 / 214 | 54@66N / 122@59N / 92@41N / – / 86@31N | 217 / 185 / 212 / – / 214 |
+     | 3.5 hPa | 44 / 92 / 67 / 81 / 63 | 227 / 190 / 212 / 205 / 222 | 35 / 76 / 62 / – / 62 | 225 / 192 / 216 / – / 218 |
+     | 7.4 hPa | 43 / 77 / 65 / 74 / 57 | 223 / 187 / 203 / 196 / 213 | 33 / 64 / 51 / – / 47 | 221 / 192 / 208 / – / 211 |
+     | 14 hPa | 44 / 66 / 63 / 68 / 58 | 219 / 187 / 197 / 192 / 203 | 33 / 57 / 51 / – / 50 | 218 / 193 / 202 / – / 204 |
+     | 24 hPa | 46 / 58 / 59 / 62 / 57 | 213 / 187 / 193 / 190 / 197 | 34 / 51 / 49 / – / 51 | 213 / 194 / 199 / – / 200 |
+     | 37 hPa | 47 / 52 / 55 / 58 / 54 | 208 / 188 / 192 / 190 / 195 | 34 / 46 / 47 / – / 49 | 209 / 196 / 199 / – / 199 |
+     | 53 hPa | 48 / 50 / 53 / 56 / 51 | 206 / 190 / 193 / 192 / 196 | 33 / 43 / 44 / – / 47 | 207 / 197 / 199 / – / 199 |
+
+     The jets at 7.4-53 hPa sit at 49-56S and 61-64N in every run. The
+     zonal-mean wind in the 55° and 65° bands (m/s, 1.1 / 3.5 / 7.4 / 14
+     / 24 hPa): July 55S 59 / 41 / 39 / 42 / 44 → 84 / 67 / 63 / 60 / 55
+     (none: 129 / 90 / 75 / 64 / 56), 65S 60 / 43 / 41 / 39 / 37 → 69 /
+     53 / 49 / 43 / 36; January 55N 47 / 28 / 25 / 26 / 29 → 74 / 50 /
+     47 / 44 / 42 (none: 120 / 74 / 55 / 45 / 40), 65N 53 / 34 / 32 / 33
+     / 34 → 57 / 47 / 49 / 50 / 47. The summer cap at 1.1 / 3.5 / 7.4
+     hPa: July 70-90N 268 / 255 / 240 → 269 / 259 / 247 (none 275 / 265 /
+     250), January 70-90S 269 / 262 / 248 → 271 / 265 / 253 (274 / 270 /
+     255). Trends over the last ten days at 70-90S in July (K/day, 1.1 /
+     3.5 / 7.4 / 14 / 24 / 37 / 53 hPa): Rayleigh +0.10 / −0.21 / −0.20 /
+     −0.22 / −0.17 / −0.14 / −0.12, defaults −0.64 / −0.71 / −0.76 /
+     −0.70 / −0.58 / −0.45 / −0.35, none −0.73 / −0.94 / −1.15 / −1.12 /
+     −0.99 / −0.85 / −0.71; at 70-90N in January −0.33 / −0.25 / −0.34 /
+     −0.33 / −0.41 / −0.46 / −0.49 → −0.38 / −0.36 / −0.43 / −0.51 /
+     −0.52 / −0.48 / −0.43. The global layer means move by 1.3 K or
+     less; the tropics (20S-20N) warm 1.7 / 3.0 / 3.0 / 2.2 / 1.4 K at
+     1.1 / 3.5 / 7.4 / 14 / 24 hPa in July and 2.9 / 3.3 / 2.1 / 1.4 /
+     0.8 K in January (to 256 / 248 / 234 / 223 / 215 K, AFGL's tropical
+     layer means 261 / 252 / 240 / 230 / 222), as the Rayleigh drag's
+     ascent over them goes; the tropical cold point (85-101 hPa) is
+     197-198 K and falls 0.2-0.3 K/day in every run. Without the
+     sponge (drag alone) the top two layers carry 4 times the eddy
+     kinetic energy (98 / 113 against 24 / 27 m²/s² at 1.1 / 3.5 hPa on
+     day 121) and the largest winds 139 / 120 against 124 / 85 m/s, and
+     the 70-90S cap is 5-7 K colder at 1.1-7.4 hPa, inside what a
+     round-off twin moves it (review, below): the sponge keeps the top
+     quiet. The troposphere does
+     not move: means of days 1-10 and 21-30, Rayleigh → defaults, July
+     balance −6.16 → −6.01 and −12.24 → −12.25, OLR 234.23 → 234.21 and
+     232.36 → 232.48 W/m², rain 2.163 → 2.164 and 2.697 → 2.710 mm/d;
+     January −4.91 → −4.71 and −8.88 → −9.01, 225.21 → 225.18 and
+     224.22 → 224.24, 2.121 → 2.117 and 2.650 → 2.691 (the runs without a
+     sponge or at 8.6 mPa differ from the defaults by up to 2.0 W/m² and
+     0.15 mm/d over days 21-30; a round-off twin of the defaults moves
+     them by up to 1.4 W/m² and 0.07 mm/d, review below). Three days
+     with the defaults gave the explicit run's lines bit for bit.
+   - Whether a gravity-wave drag is needed at this lid: yes. Without any
+     momentum sink the top layer's jet and its cooling do not stop
+     (above); the drag closes the vortex where Earth's is closed, by
+     waves breaking above the lid, and gives what reaches the lid to the
+     top layer, as momentum conservation asks. Its cost: 0.8 ms of the
+     23 ms N=64 step and 2.4 ms of the 98 ms N=128 step, the sponge's
+     included (below). Doubling its flux warms the 1.1-7.4 hPa winter
+     cap by 10 K (July) and 2-3 K (January) and weakens the July jet at
+     3.5-24 hPa by 2-8 m/s; not adopted: the flux it would send through
+     20 km, 13-16 mPa, is beyond what is observed.
+   - bl36 (optional; `sigmaInterfaces('bl36')`, `LEVELS=bl36`): bl34
+     with its 0-2.19 hPa layer split at 0.3 and 1 hPa (36 layers,
+     midpoints 0.15 / 0.64 / 1.6 hPa); `scripts/remapState.mjs` carries a
+     saved state onto it (each new layer takes the old top layer's θ and
+     wind; back onto bl34 to 1e-12, `test/levels.test.mjs`). The
+     radiation benchmark on it (`LEVELS=bl36 node
+     scripts/radiationBenchmark.mjs`, the g-points as fitted on bl34),
+     cooling K/day of the 0.15 / 0.64 / 1.6 / 3.6 hPa layers against
+     RRTMG: TROP −3.94 / −11.09 / −9.90 / −6.03 (−5.40 / −9.92 / −9.42 /
+     −6.00), MLS −3.53 / −11.98 / −11.23 / −6.53 (−6.14 / −12.19 /
+     −10.16 / −6.42), MLW −6.75 / −12.12 / −8.17 / −3.87 (−7.69 / −10.67
+     / −7.90 / −3.86), SAW −9.08 / −9.88 / −5.32 / −2.76 (−9.89 / −9.02 /
+     −5.37 / −2.90; the MLS and SAW references stop at 6.7 and 10 Pa, 78
+     and 67 % of the top layer's mass, and count the rest as not
+     cooling); the cooling rms at 3-200 hPa 0.08 / 0.10 / 0.09 / 0.12 →
+     0.07 / 0.09 / 0.09 / 0.11 K/day, OLR and surface fluxes within 0.03
+     W/m² of bl34's, the shortwave heating rms at 1-200 hPa 0.37 / 0.37 /
+     0.32 / 0.29 / 0.18 → 0.31 / 0.33 / 0.29 / 0.28 / 0.13 K/day; doubled
+     CO₂ at the top 2.63 → 2.65 W/m² (LBLRTM 2.84; its 630-700 cm⁻¹ band
+     −0.74 → −0.72 against −0.57, `LEVELS=bl36 node
+     scripts/longwaveFit.mjs`), the stratosphere-adjusted forcing 5.49 →
+     5.49 W/m² with the layers above 10 hPa cooling 19.3 / 14.7 / 11.4 K
+     (1.1 / 3.5 / 7.4 hPa) → 16.8 / 20.6 / 19.0 / 14.6 / 11.3 K (0.15 /
+     0.64 / 1.6 / 3.5 / 7.4 hPa). The g-points' cooling rms above 200 hPa
+     by band (MLS) rises on bl36, 630-700 cm⁻¹ 0.32 → 0.59, 700-820 0.17
+     → 0.25, 10-350 0.26 → 0.32 K/day: the reduction was binned on bl34's
+     columns, and a bl36 run would want its own (`LEVELS=bl36 WRITE=1`).
+   - Final defaults: `topDragDays` 0 (was 5; `topSigma` 0.02 unused),
+     `spongeSigma` 0.005 and `spongeDays` 1 (`SPONGE`, the sponge on the
+     eddies; `surface` options), `gravityWaves` on with `flux` 4.3·10⁻³
+     Pa, `sourcePressure` 31500 Pa, `halfWidth` 40 m/s, `maxSpeed` 100
+     m/s, `speedStep` 4 m/s, `wavelength` 300 km, `minimumFrequency`
+     0.005 /s and, since the review below, `breakingAmplitude` 0.4 m²/s²
+     (`GRAVITY_WAVES`; `gravityWaves: false` for none); the
+     levels stay bl34. What still misses: the winter cap's top layer,
+     204 K in July and 212 K in January against AFGL's 247 K subarctic
+     winter layer mean and still cooling 0.4-0.6 K/day, and the 1.1 hPa
+     jet growing 1.9 m/s/day at 39S in July and 0.4 at 41N in January
+     over the last ten days (one 0-2.2 hPa layer
+     holds the whole mesosphere's drag and the polar stratopause it
+     drives); the July jet at 3.5-37 hPa 55-67 m/s against 60-80; the
+     January vortex at 14-53 hPa 199-202 K; the waves' flux at 20 km
+     4.6-5.7 mPa at every latitude with `breakingAmplitude` (6.2-8.1
+     without it), at the top of the observed 1-5 outside the southern
+     winter, from a source uniform in latitude and season; the tropical
+     upper stratosphere 5-7 K below AFGL's means; and
+     the 30-day runs start from states whose stratosphere the earlier
+     radiation warmed, so the caps are still adjusting.
+     Thirty N=64 days on bl36 from nine64_day0091 remapped, the defaults
+     (the sponge then covers the 0.15 / 0.64 / 1.6 / 3.5 hPa layers at
+     0.97 / 0.87 / 0.68 / 0.29 /day, and the waves' flux that reaches the
+     lid is left in the 0-0.3 hPa layer): the winter cap (70-90S, day 121)
+     247 / 257 / 236 / 219 / 207 / 198 / 193 / 192 / 193 K at 0.15 / 0.64
+     / 1.6 / 3.5 / 7.4 / 14 / 24 / 37 / 53 hPa, a polar winter
+     stratopause, 244 K in the mass mean of 0-2.2 hPa where bl34's one
+     layer is 204 K (AFGL subarctic winter 247); the global means 234 /
+     253 / 254 / 243 K at 0.15 / 0.64 / 1.6 / 3.5 hPa, the tropical
+     stratopause 261 K at 1.6 hPa, the summer cap 216 / 253 / 266 / 258 K;
+     the winter jet 62 / 63 / 61 / 56 / 54 m/s at 3.5 / 7.4 / 14 / 24 /
+     37 hPa near 51-54S (bl34 67 / 65 / 63 / 59 / 55). But the 0-0.3 hPa
+     layer runs away at the equator: a zonal-mean westerly of 221 m/s at
+     5S (202 at 5N) by day 121, the largest edge wind 349 m/s on day 113
+     (horizontal Courant number 1.12; 258 m/s, 0.83 on day 121). The
+     sponge drives it: without it (`spongeDays` 0, otherwise the same)
+     the layer's equatorial westerly is 47 m/s at 5S on day 121, the
+     sponge having taken the eastward equatorial waves' momentum into the
+     zonal mean of a 30 Pa layer, but its eddy kinetic energy reaches
+     1080 m²/s² and its largest wind 275 m/s (Courant 0.88). On bl34 the
+     1.1 hPa layer's equatorial wind is −19 / −34 m/s at 5S / 5N with the
+     sponge and −24 / −39 without. bl36's 0-0.3 hPa layer wants a
+     treatment of its own before a season on it. Days
+     21-30 of the troposphere: balance −11.03, OLR 233.37 W/m², rain
+     2.604 mm/d (bl34 −12.25, 232.48, 2.710, within the realizations'
+     spread). Three N=128 days from eight128_day0183 remapped: largest
+     wind 94-103 m/s, Courant numbers 0.33 / 0.09 at most, day 186 ASR
+     241.8, OLR 239.9 W/m², rain 1.85 mm/d (bl34 241.8, 239.8, 1.85).
+   - Cost, `js/gpu/profile.module.js` over 128 steps under the exclusive
+     lock, two runs each, the step median: N=64 (nine64_day0091) 22.12 /
+     22.17 ms with the Rayleigh drag → 23.22 / 22.91 ms (+3.6 %; the
+     physics pass, where the drag's column kernel runs, 4.31 → 4.78 ms,
+     the sponge 0.08 ms), on bl36 25.36 / 25.54 ms (+10 % over bl34);
+     N=128 (eight128_day0183) 95.91 / 95.88 → 98.20 / 98.37 ms (+2.5 %;
+     physics pass 18.40 → 19.84, sponge 0.27), 50.3 s a model day where
+     it was 49.1, on bl36 107.49 / 107.33 ms (+9 %), 55.0 s a model day.
+     The tables' runs used a search up the column for each wave; the
+     committed form leaves each side's waves as contiguous runs of phase
+     speed and agrees with it to 5·10⁻¹⁴ m/s/day on their states.
+   - Review (Oct 2), N=64 and N=128 GPU runs one at a time, the CPU
+     engine's operators on the saved states.
+     - Round-off twins: the defaults above from nine64_day0091 and
+       nine64_day0274 with the lowest layer's θ perturbed by ±1·10⁻⁴ K.
+       July day 121, 70-90S at 1.1 / 3.5 / 7.4 / 14 / 24 / 37 / 53 hPa
+       208 / 217 / 209 / 201 / 196 / 195 / 196 K against 204 / 212 / 203
+       / 197 / 193 / 192 / 193, the winter jet 107 / 62 / 60 / 58 / 55 /
+       51 / 50 against 112 / 67 / 65 / 63 / 59 / 55 / 53 m/s; January day
+       304, 70-90N 212 / 213 / 208 / 205 / 203 / 204 / 204 against 212 /
+       216 / 208 / 202 / 199 / 199 / 199 K, the jet at 7.4-53 hPa 42 /
+       33 / 33 / 34 / 34 against 51 / 51 / 49 / 47 / 44 m/s; days 21-30
+       balance / OLR / rain July −11.67 / 233.41 / 2.640 against −12.25 /
+       232.48 / 2.710, January −7.63 / 224.17 / 2.642 against −9.01 /
+       224.24 / 2.691. One 30-day realization moves the winter cap by up
+       to 6 K and the January vortex by up to 18 m/s. What stands outside
+       that: the Rayleigh drag's warming of the July cap at 1.1-53 hPa,
+       10-22 K over the defaults and 16-37 K over no sink at all. What
+       does not: the sponge's 5-7 K, the doubled flux's 0-10 K, and every January
+       difference of the jet at 7.4-53 hPa in the table above. The
+       troposphere's day means under the Rayleigh drag and the defaults
+       agree within the twins.
+     - The sponge on real states (nine64_day0091, nine64_day0274,
+       eight128_day0183; one step, zonal means in 10° bands by Section
+       3.7's reconstruction): its zonal force is 0.053 m/s/day at most at
+       1.1 hPa and 0.021 at 3.5 hPa, where a Rayleigh drag at the same
+       rates gives up to 50 and 14; its change of the layer's axial
+       angular momentum is 0.3-3 % of that drag's, of either sign.
+     - CPU and GPU, the whole model from nine64_day0091 (ocean off), the
+       top six layers: the wind 1.0 / 2.7 / 6.4·10⁻⁴ m/s rms apart after
+       1 / 4 / 16 steps (1.2·10⁻² at most) of the 0.09 / 0.33 / 1.3 m/s
+       it moves, θ 1.5·10⁻³ K rms after 16 steps of 3.9 K; with the
+       Rayleigh drag in their place 7.1·10⁻⁴ (4.6·10⁻² at most).
+     - The gravity waves' breaking. With each wave's grid-box mean flux
+       tested against the saturation flux, saturation takes 0.3 mPa of
+       the 8.4 that rise from the source before the lid on the nine64
+       states (6.5 against 6.8 mPa through 3.5 hPa with breaking left
+       out): the scheme acts as a critical-level filter. Alexander &
+       Dunkerton (1999) test each wave's amplitude where it is present
+       and take the grid-box mean flux as its intermittent fraction ε;
+       `breakingAmplitude` B_w tests ρ₀ B_w times the spectrum's shape,
+       ρ₀ the source layer's density, with B_w 0.4 m²/s² (GFDL cg_drag's
+       wide-spectrum amplitude, from memory, not re-read). The flux
+       rising through 53 hPa is then 4.6-5.7 mPa against 6.2-8.1, through
+       3.5 hPa 2.4-3.3 against 5.6-7.3, on the day-121 and day-304
+       states. Thirty days with it from the same states: July 70-90S 206
+       / 213 / 205 / 198 / 194 / 193 / 194 K at 1.1-53 hPa, jet 110@41S /
+       65 / 61 / 58 / 54 / 52 / 50 m/s; January 70-90N 210 / 215 / 209 /
+       203 / 199 / 199 / 199 K, jet 88@44N / 61 / 45 / 44 / 42 / 38 / 35
+       m/s; days 21-30 July −12.29 / 233.11 / 2.654, January −8.11 /
+       223.99 / 2.705: within the twins. It is the default
+       (`GRAVITY_WAVES`; `breakingAmplitude: null` tests the grid-box
+       mean as before); the GPU's accelerations match the CPU's to
+       8.7·10⁻⁸ m/s/day rms at N=8 (`test/gravityWaves.test.mjs`).
+     - Stability with the final defaults: the July and January 30-day
+       runs reach a horizontal Courant number of 0.40 (124 m/s) in the
+       top six layers, the vertical 0.09. The strongest polar-night jet:
+       30 days from nine64_day0091 with no sink at all (the top layer's
+       jet 131 m/s at 54S, Courant 0.56; the earlier run bit for bit),
+       then 10 days with the defaults: Courant 0.54 → 0.45, the top
+       layer's jet 129 → 127 m/s, the jet at 3.5-37 hPa still
+       strengthening to 98 / 86 / 77 / 68 / 61 m/s and the cap at 7.4-37
+       hPa 184-186 K on day 131: the drag does not undo a vortex that
+       strong in ten days. Three N=128 days from eight128_day0183: largest
+       wind 85.5 m/s, Courant 0.23 at most in the top six layers, day 186
+       ASR 241.8, OLR 239.8 W/m², rain 1.85 mm/d, albedo 0.290.
+     - bl36: nine64_day0091 carried onto it and back keeps the mass, the
+       enthalpy (the layer-integral Exner function of each new layer
+       sums to the old one's) and the kinetic energy to 1·10⁻¹⁴, θ to
+       2·10⁻¹³ K; the radiation benchmark on it gives the numbers above.
+       Ten days on it with the final defaults: largest wind 129 → 126 m/s
+       (Courant 0.41 → 0.40), the 0-0.3 hPa layer's zonal mean −56 / −48
+       m/s at 5S / 5N on day 101 and 1.0-1.9 mPa reaching it; the earlier
+       run's runaway began after day 103, so whether the intermittent
+       breaking prevents it is open. bl34 stays the default everywhere.
+     - Cost under the exclusive lock, 128 steps, two runs each, the step
+       median: N=64 21.94 / 21.90 ms with the Rayleigh drag, 22.63 /
+       22.63 with the grid-box breaking, 22.71 / 22.70 with the defaults
+       (+3.6 %); N=128 95.82 / 95.82, 98.07 / 98.07, 98.21 / 98.07 ms
+       (+2.4 %), 50.2 s a model day.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
@@ -8048,6 +8379,7 @@ js/
     operators.module.js     NEW  M0: div, grad, curl, KE, uPerp, ∇², reconstruct
     shallowWater.module.js  NEW  M1: single-layer test core
     sigmaCore.module.js     NEW  M2: K-layer hydrostatic core (steps 1–8 on arrays)
+    sponge.module.js        M21: the top sponge on the zonally asymmetric wind
   geography.module.js       M16: land mask, land fraction, elevation and coast from a raster; M17: smoothed surface geopotential
   physics/
     land.module.js          M16: bucket, snow, land albedo and wetness
@@ -8056,6 +8388,7 @@ js/
     shortwaveGases.module.js M21: ozone, water vapour, O2 and CO2 absorption of sunlight after CLIRAD-SW
     surface.module.js       ported: surface and top drag, ocean wind stress, convective adjustment
     exchange.module.js      M22: the surface layer's C_D and C_H by roughness and stability
+    gravityWaves.module.js  M21: Alexander & Dunkerton (1999) non-orographic gravity-wave drag
     boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
     init.module.js          ported: thermal init, balance, seed, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes; ice, snow and soil by source tile
@@ -8104,6 +8437,8 @@ scripts/
   radiationBenchmark.mjs    M21: the gas radiation of one CPU column on the standard atmospheres against its references
   longwaveFit.mjs           M21: the longwave spectral model's fit and its reduction to the g-points
   standardAtmospheres.mjs   M21: the benchmark's profiles laid onto a model column
+  upperAtmosphere.mjs       M21: the layers above 200 hPa of saved states, the top treatment's force, the spin-up's wind line
+  remapState.mjs            a saved state carried onto another sigma grid
   packWoa.py                data/woa_annual_1deg.bin from the World Ocean Atlas 2023 NetCDF files
   splitState.mjs            a saved state gzipped into parts for the page
 test/

@@ -2,8 +2,8 @@
 // itself (data/radiationBenchmark.json, sources in the file):
 //   node scripts/radiationBenchmark.mjs
 // One column of the CPU radiation (js/physics/radiation.module.js) on the
-// bl34 levels for each standard atmosphere: clear sky, a black surface in the
-// longwave, the reference's own temperature, vapour, ozone and well-mixed
+// bl34 levels (LEVELS, one of SIGMA_GRIDS) for each standard atmosphere:
+// clear sky, a black surface in the longwave, the reference's own temperature, vapour, ozone and well-mixed
 // gases (the layer means of scripts/standardAtmospheres.mjs), no aerosol.
 // Two schemes side by side: BEFORE (RADIATION_BEFORE, JSON; by default the
 // three-band grey longwave and the Lacis-Hansen vapour with a fixed ozone
@@ -32,7 +32,7 @@ import { BENCHMARK, MOLAR, modelColumn, meanMixingRatio, referenceAt, referenceH
 
 const BEFORE = { longwaveScheme: 'gray', solarGases: 'lacisHansen', ...JSON.parse(process.env.RADIATION_BEFORE ?? '{}') };
 const AFTER = JSON.parse(process.env.RADIATION ?? '{}');
-const levels = sigmaInterfaces('bl34');
+const LEVELS = process.env.LEVELS ?? 'bl34', levels = sigmaInterfaces(LEVELS);
 const mesh = buildMesh(new Grid(2));
 const core = createSigmaCore(mesh, { levels });
 const { K, C } = core.diagnostics;
@@ -146,7 +146,7 @@ function sensitivityTable() {
       const tropopause = 17900, adjustedColumn = adjusted(o, one, two, tropopause), ra = runColumn(o, adjustedColumn);
       const dT = adjustedColumn.T.map((t, k) => t - two.T[k]);
       const residual = Math.max(...ra.lw.map((x, k) => (midPressure(mls, k) < tropopause ? Math.abs(x - r1.lw[k]) : 0)));
-      console.log(`  ${name.padEnd(6)} stratosphere-adjusted (fixed dynamical heating above 179 hPa): TOA ${f(r1.olr - ra.olr, 2)}  179 hPa ${f(interfaceAt(mls, r1.net, tropopause) - interfaceAt(mls, ra.net, tropopause), 2)} W/m2; stratospheric cooling ${f(Math.min(...dT), 1)} K at most, the top three layers ${dT.slice(0, 3).map((x) => f(x, 1)).join(' / ')} K; largest layer heating left ${residual.toExponential(1)} W/m2`);
+      console.log(`  ${name.padEnd(6)} stratosphere-adjusted (fixed dynamical heating above 179 hPa): TOA ${f(r1.olr - ra.olr, 2)}  179 hPa ${f(interfaceAt(mls, r1.net, tropopause) - interfaceAt(mls, ra.net, tropopause), 2)} W/m2; stratospheric cooling ${f(Math.min(...dT), 1)} K at most, the layers above 10 hPa ${dT.filter((_, k) => midPressure(mls, k) < 1000).map((x) => f(x, 1)).join(' / ')} K; largest layer heating left ${residual.toExponential(1)} W/m2`);
     }
     for (const a of ['MLS', 'TROP']) {
       const c = columns[a], slope = (delta) => {
@@ -206,7 +206,7 @@ function fitVaporStrength() {
 
 if (import.meta.url === `file://${process.argv[1]}` && process.env.VAPOR_FIT) fitVaporStrength();
 else if (import.meta.url === `file://${process.argv[1]}`) {
-  console.log(`before ${JSON.stringify(BEFORE)}; after ${JSON.stringify(AFTER)} (the radiation's defaults otherwise); bl34, ${K} layers`);
+  console.log(`before ${JSON.stringify(BEFORE)}; after ${JSON.stringify(AFTER)} (the radiation's defaults otherwise); ${LEVELS}, ${K} layers`);
   longwaveTable();
   sensitivityTable();
   shortwaveTable();
