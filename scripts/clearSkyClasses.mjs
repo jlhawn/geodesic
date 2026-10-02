@@ -36,9 +36,10 @@ export const REFERENCES = [
   ['snow on open land, wet (standing < 0.2, T >= -2 C)', [0.50, 0.60], null, 'the ageing toward 0.50'],
   ['snow among sparse trees (standing 0.2-0.7)', null, null, ''],
   ['snow under forest (standing >= 0.7)', [0.20, 0.35], null, 'the forest value 0.27 that the masking reaches'],
-  ['thin sea ice (< 0.5 m, snow < 10 kg/m2)', [0.20, 0.50], null, 'ice albedo ramps from the water\'s at 0 m to the bare ice\'s at 0.5 m'],
-  ['bare sea ice, cold (>= 0.5 m, snow < 10 kg/m2, T < -1 C)', [0.60, 0.65], null, 'cold bare ice 0.62'],
-  ['bare sea ice, melting (>= 0.5 m, snow < 10 kg/m2, T >= -1 C)', [0.45, 0.55], null, 'melting bare ice 0.48 in place of its ponds'],
+  ['thin sea ice (< 0.5 m, snow < 1 kg/m2)', [0.20, 0.50], null, 'ice albedo ramps from the water\'s at 0 m to the bare ice\'s at 0.5 m'],
+  ['bare sea ice, cold (>= 0.5 m, snow < 1 kg/m2, T < -1 C)', [0.60, 0.65], null, 'cold bare ice 0.62'],
+  ['bare sea ice, melting (>= 0.5 m, snow < 1 kg/m2, T >= -1 C)', [0.45, 0.55], null, 'melting bare ice 0.48 in place of its ponds'],
+  ['thinly snow-covered sea ice (snow 1-10 kg/m2)', null, null, ''],
   ['snow-covered sea ice, cold (snow >= 10 kg/m2, T < -2 C)', [0.80, 0.85], null, 'the ageing\'s balance with the snowfall'],
   ['snow-covered sea ice, wet (snow >= 10 kg/m2, T >= -2 C)', [0.65, 0.75], null, 'the ageing toward 0.70'],
   ['ice sheets', [0.80, 0.85], null, 'one ice-sheet albedo 0.8'],
@@ -74,8 +75,9 @@ export function landClass(land, i, iceSheet, temperature) {
 }
 export function iceClass(h, snow, temperature) {
   if (snow >= SNOWY) return temperature >= MELTING - WET_SNOW ? 'snow-covered sea ice, wet (snow >= 10 kg/m2, T >= -2 C)' : 'snow-covered sea ice, cold (snow >= 10 kg/m2, T < -2 C)';
-  if (h < 0.5) return 'thin sea ice (< 0.5 m, snow < 10 kg/m2)';
-  return temperature >= MELTING - MELTING_ICE ? 'bare sea ice, melting (>= 0.5 m, snow < 10 kg/m2, T >= -1 C)' : 'bare sea ice, cold (>= 0.5 m, snow < 10 kg/m2, T < -1 C)';
+  if (snow >= 1) return 'thinly snow-covered sea ice (snow 1-10 kg/m2)';
+  if (h < 0.5) return 'thin sea ice (< 0.5 m, snow < 1 kg/m2)';
+  return temperature >= MELTING - MELTING_ICE ? 'bare sea ice, melting (>= 0.5 m, snow < 1 kg/m2, T >= -1 C)' : 'bare sea ice, cold (>= 0.5 m, snow < 1 kg/m2, T < -1 C)';
 }
 export function seaBand(latDegrees) {
   const a = Math.abs(latDegrees);

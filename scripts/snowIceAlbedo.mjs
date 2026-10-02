@@ -82,7 +82,7 @@ const snowLine = new Map(), boreal = { area: 0, v: 0, forest: 0, snow: 0 };
 for (let i = 0; i < C; i++) {
   const lat = mesh.latCell[i] * deg;
   if (geography.land[i]) {
-    if (iceSheet(i)) { add(`ice sheet ${lat >= 0 ? 'N' : 'S'} ${tBin(surfaceT[i]).replace('T -2..-1', 'T >= -2').replace('T >= -1', 'T >= -2')}`, i, reflectedLand[i], { snow: land.snow[i] }); continue; }
+    if (iceSheet(i)) { add(`ice sheet ${lat >= 0 ? 'N' : 'S'} ${tBin(surfaceT[i]).replace('T -2..-1', 'T >= -2').replace('T >= -1', 'T >= -2')}`, i, reflectedLand[i], { snow: land.snow[i], snowAlbedo: snowAlbedo ? snowAlbedo[i] : NaN, pace: pace(i) }); continue; }
     const b5 = band(lat, [30, 35, 40, 45, 50, 55, 60, 65, 70, 75]);
     if (b5) { if (!snowLine.has(b5)) snowLine.set(b5, { area: 0, covered: 0 }); const s = snowLine.get(b5); s.area += mesh.areaCell[i]; if (land.snow[i] >= 1) s.covered += mesh.areaCell[i]; }
     if (lat >= 50 && lat < 70) { const a = mesh.areaCell[i]; boreal.area += a; boreal.v += a * land.vegetation[i]; boreal.forest += land.vegetation[i] >= 0.5 ? a : 0; boreal.snow += land.snow[i] > 0 ? a : 0; }
