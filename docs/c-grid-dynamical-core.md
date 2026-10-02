@@ -6027,7 +6027,7 @@ The review of the mountains' drag (Oct 2), on 3066df7 and the fixes after it:
   relative in ten CPU steps from nine64 day 274 and from eight128 day 183;
   no sea–sea edge takes any. Of the launched stress 0.9995–0.9996 (N=64)
   and 0.9972–0.9977 (N=128) is taken in the column; the rest, in 277–342 and
-  775–957 columns, is what the per-step limit keeps from the top layers.
+  774–957 columns, is what the per-step limit keeps from the top layers.
 - Stability over those ten steps: the largest blocking rate times the step
   0.20 (N=64, 85.7S 151.5W, μ 422 m, σ 0.038) and 0.21 (N=128, 86.1S
   156.3W), solved implicitly; the largest wave tendency times the step
@@ -6035,12 +6035,13 @@ The review of the mountains' drag (Oct 2), on 3066df7 and the fixes after it:
   drag in a step 2.1 and 2.8 m/s; everything finite, the largest edge wind
   93.6 and 84.0 m/s.
 - Engines on nine64 day 274 (N=64, real state, no ocean): after 1, 4 and
-  16 steps the launched stress apart by 7.5·10⁻⁵, 8.8·10⁻³ and 9.2·10⁻³
-  of its largest value, the blocking height by 2.7·10⁻⁴, 1.8·10⁻² and
-  1.6·10⁻², the edge stress by 1.2·10⁻³, 2.5·10⁻³ and 4.4·10⁻³, the gusty
-  wind by 4·10⁻⁶, 7·10⁻³ and 3.5·10⁻²; the state's u apart by 2.9·10⁻³,
-  2.7·10⁻³ and 3.9·10⁻³ m/s rms, against 2.9·10⁻³, 3.2·10⁻³ and 8.6·10⁻³
-  with the scheme off.
+  16 steps the launched stress apart by 7.5·10⁻⁵, 2.0·10⁻² and 1.1·10⁻²
+  of its largest value, the blocking height by 2.7·10⁻⁴, 2.0·10⁻² and
+  6.4·10⁻², the edge stress by 1.2·10⁻³, 9.0·10⁻³ and 8.8·10⁻³, the gusty
+  wind by 4·10⁻⁶, 9.5·10⁻³ and 8.1·10⁻²; the state's u apart by
+  2.8·10⁻³, 3.2·10⁻³ and 6.1·10⁻³ m/s rms, against 2.8·10⁻³, 4.1·10⁻³ and
+  8.9·10⁻³ with the scheme off (the largest single edge 1.8 m/s after one
+  step either way).
 - With everything off the CPU reproduces 3f57d8f bit for bit (N=8 six
   steps, N=16 eight steps), on 3066df7 and on the fixes.
 - The gust: u_g continuous across B₀ = 0 (above). z_i is the depth above
@@ -6080,9 +6081,11 @@ The review of the mountains' drag (Oct 2), on 3066df7 and the fixes after it:
   against 0.17–0.59 hPa and the Aleutian bin 0.3 against 1.4 hPa. The
   SLP's rise at 60–85N and the slower land winds are 5–7 times the twin's
   spread; the 200 hPa jet's and the stationary waves' changes are within
-  it. The fixed code against 3066df7 over the same ten days is within the
-  twin's spread in every field (rms 0.10 hPa SLP, 0.05 m/s land wind,
-  0.13 m/s at 200 hPa).
+  it. The fixed code against 3066df7 over the same ten days differs by
+  about the twin's spread (rms SLP 0.15 against 0.15 hPa, the lowest
+  wind over land 0.07 against 0.06, 500 hPa 0.34 against 0.25, 200 hPa
+  0.20 against 0.22 m/s; the orographic stress over land 0.052 N/m² at
+  45–55N in both, 0.034 against 0.035 in the land mean).
 
 ### M23 — The equatorial ocean — in progress
 
