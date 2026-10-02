@@ -69,11 +69,11 @@ const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling >
 const LW_CORRELATED: bool = ${o.longwaveScheme === 'correlated'}; const SOLAR_CLIRAD: bool = ${o.solarGases === 'clirad'}; const NG: i32 = ${points.length}; const LW_D: f32 = ${LONGWAVE_CONSTANTS.diffusivity}; const LW_PREF: f32 = ${LONGWAVE_CONSTANTS.pRef};
 const LW_TSELF: f32 = ${LONGWAVE_TABLE.tSelf}; const LW_TCO2: f32 = ${LONGWAVE_TABLE.tCo2}; const LW_NO3: f32 = ${LONGWAVE_TABLE.nO3};
 const CO2_MASS: f32 = ${o.carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air}; const CH4_MASS: f32 = ${o.methane * GAS_MOLAR.ch4 / GAS_MOLAR.air}; const N2O_MASS: f32 = ${o.nitrousOxide * GAS_MOLAR.n2o / GAS_MOLAR.air};
-var<private> LW_K: array<f32, ${6 * points.length}> = ${f32(points.flatMap((row) => row.slice(0, 6)))};
-var<private> LW_PLANCK: array<f32, ${5 * points.length}> = ${f32(points.flatMap((row) => row.slice(6, 11)))};
+const LW_K: array<f32, ${6 * points.length}> = ${f32(points.flatMap((row) => row.slice(0, 6)))};
+const LW_PLANCK: array<f32, ${5 * points.length}> = ${f32(points.flatMap((row) => row.slice(6, 11)))};
 const OZ_EQ: f32 = ${o.ozoneColumn[0]}; const OZ_POLE: f32 = ${o.ozoneColumn[1]}; const OZ_KG: f32 = ${OZONE_CM_ATM}; const VIS_O3: f32 = ${(OZONE_SHARES[6] * OZONE_COEFFICIENTS[6] + OZONE_SHARES[7] * OZONE_COEFFICIENTS[7]) / (OZONE_SHARES[6] + OZONE_SHARES[7])};
-var<private> O3_SHARE: array<f32, 8> = ${f32(OZONE_SHARES)}; var<private> O3_COEF: array<f32, 8> = ${f32(OZONE_COEFFICIENTS)};
-var<private> H2O_K: array<f32, 10> = ${f32(VAPOR_COEFFICIENTS)}; var<private> H2O_W: array<f32, 10> = ${f32(VAPOR_WEIGHTS)};
+const O3_SHARE: array<f32, 8> = ${f32(OZONE_SHARES)}; const O3_COEF: array<f32, 8> = ${f32(OZONE_COEFFICIENTS)};
+const H2O_K: array<f32, 10> = ${f32(VAPOR_COEFFICIENTS)}; const H2O_W: array<f32, 10> = ${f32(VAPOR_WEIGHTS)};
 const VIS_H2O_S: f32 = ${VISIBLE_VAPOR.share}; const VIS_H2O_K: f32 = ${VISIBLE_VAPOR.coefficient}; const VAP_STRENGTH: f32 = ${o.vaporStrength};
 const O2_SHARE: f32 = ${OXYGEN.share}; const O2_K: f32 = ${OXYGEN.coefficient}; const O2_PATH: f32 = ${OXYGEN.mixingRatio * STP_DEPTH}; const CO2_PATH: f32 = ${o.carbonDioxide * STP_DEPTH}; const CO2_SW_K: f32 = ${CO2_COEFFICIENT};
 const SCALE_P: f32 = ${SCALING_PRESSURE}; const SCALE_N: f32 = ${SCALING_EXPONENT};
@@ -180,8 +180,18 @@ fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, ar
   }
   return loss;
 }
-fn planckShare(g: i32, T: f32) -> f32 {
-  let t = (T - 250.0) / 100.0; let b = 5 * g;
+fn longwavePaths(i: i32, k: i32, pi: f32, T: f32, column: f32) -> array<f32, 6> {
+  let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
+  let scale = p / LW_PREF; let vapour = q * mass; let dry = (1.0 - q) * mass * scale;
+  return array<f32, 6>(vapour * scale, vapour * (q * p / (0.622 + 0.378 * q)) * exp(LW_TSELF * (1.0 / T - 1.0 / 296.0)), CO2_MASS * dry * exp(LW_TCO2 * (T - 250.0)),
+    column * LV[L_OZS + k] * OZ_KG * pow(scale, LW_NO3), CH4_MASS * dry, N2O_MASS * dry);
+}
+fn longwaveDepth(g: i32, row: array<f32, 6>) -> f32 {
+  let r = 6 * g;
+  return LW_D * (LW_K[r] * row[0] + LW_K[r + 1] * row[1] + LW_K[r + 2] * row[2] + LW_K[r + 3] * row[3] + LW_K[r + 4] * row[4] + LW_K[r + 5] * row[5]);
+}
+fn planckShare(g: i32, t: f32) -> f32 {
+  let b = 5 * g;
   return LW_PLANCK[b] + t * (LW_PLANCK[b + 1] + t * (LW_PLANCK[b + 2] + t * (LW_PLANCK[b + 3] + t * LW_PLANCK[b + 4])));
 }
 fn condensationLevel(T: f32, q: f32, p: f32) -> vec2<f32> {
@@ -895,39 +905,32 @@ export const PHYSICS_KERNELS = {
   if (MOIST_BL) { for (var k = 0; k < K; k++) { beforeBands[k] = netFlux[k]; } }
   var outgoing = 0.0; var back = 0.0; var clearOutgoing = 0.0;
   if (LW_CORRELATED) {
-    var paths: array<f32, 6 * K>; var gasE: array<f32, K>; var totalE: array<f32, K>; var source: array<f32, K>;
     let column = ozoneColumnAt(i);
+    var downG: array<f32, NG>; var upG: array<f32, NG>; var clearG: array<f32, NG>;
     for (var k = 0; k < K; k++) {
-      let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]); let T = temperature[k];
-      let scale = p / LW_PREF; let vapour = q * mass; let dry = 1.0 - q;
-      paths[6 * k] = vapour * scale;
-      paths[6 * k + 1] = vapour * (q * p / (0.622 + 0.378 * q)) * exp(LW_TSELF * (1.0 / T - 1.0 / 296.0));
-      paths[6 * k + 2] = CO2_MASS * dry * mass * scale * exp(LW_TCO2 * (T - 250.0));
-      paths[6 * k + 3] = column * LV[L_OZS + k] * OZ_KG * pow(scale, LW_NO3);
-      paths[6 * k + 4] = CH4_MASS * dry * mass * scale;
-      paths[6 * k + 5] = N2O_MASS * dry * mass * scale;
-    }
-    let surfaceT4 = surfaceEmission;
-    for (var g = 0; g < NG; g++) {
-      var down = 0.0;
-      for (var k = 0; k < K; k++) {
-        let r = 6 * g; let a = 6 * k;
-        let tau = LW_D * (LW_K[r] * paths[a] + LW_K[r + 1] * paths[a + 1] + LW_K[r + 2] * paths[a + 2] + LW_K[r + 3] * paths[a + 3] + LW_K[r + 4] * paths[a + 4] + LW_K[r + 5] * paths[a + 5]);
-        let t = temperature[k];
-        gasE[k] = relaxedFraction(tau);
-        totalE[k] = 1.0 - (1.0 - gasE[k]) * (1.0 - cloudE[k]);
-        source[k] = planckShare(g, t) * STEFAN * t * t * t * t;
-        netFlux[k] += totalE[k] * (down - 2.0 * source[k]);
-        down = down * (1.0 - totalE[k]) + totalE[k] * source[k];
+      let row = longwavePaths(i, k, pi, temperature[k], column); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
+      var heat = 0.0;
+      for (var g = 0; g < NG; g++) {
+        let e = 1.0 - (1.0 - relaxedFraction(longwaveDepth(g, row))) * clear; let src = planckShare(g, t) * hot;
+        heat += e * (downG[g] - 2.0 * src);
+        downG[g] = downG[g] * (1.0 - e) + e * src;
       }
-      var up = planckShare(g, ts) * surfaceT4; var upClear = up;
-      for (var k = K - 1; k >= 0; k--) {
-        netFlux[k] += totalE[k] * up;
-        up = up * (1.0 - totalE[k]) + totalE[k] * source[k];
-        if (CLEAR_SKY) { upClear = upClear * (1.0 - gasE[k]) + gasE[k] * source[k]; }
-      }
-      outgoing += up; back += down; clearOutgoing += upClear;
+      netFlux[k] += heat;
     }
+    let surfaceScaled = (ts - 250.0) / 100.0;
+    for (var g = 0; g < NG; g++) { back += downG[g]; upG[g] = planckShare(g, surfaceScaled) * surfaceEmission; clearG[g] = upG[g]; }
+    for (var k = K - 1; k >= 0; k--) {
+      let row = longwavePaths(i, k, pi, temperature[k], column); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
+      var heat = 0.0;
+      for (var g = 0; g < NG; g++) {
+        let gas = relaxedFraction(longwaveDepth(g, row)); let e = 1.0 - (1.0 - gas) * clear; let src = planckShare(g, t) * hot;
+        heat += e * upG[g];
+        upG[g] = upG[g] * (1.0 - e) + e * src;
+        if (CLEAR_SKY) { clearG[g] = clearG[g] * (1.0 - gas) + gas * src; }
+      }
+      netFlux[k] += heat;
+    }
+    for (var g = 0; g < NG; g++) { outgoing += upG[g]; clearOutgoing += clearG[g]; }
   } else {
     let v = band(VAPOR_FRAC, &vaporE, &temperature, &netFlux, surfaceEmission);
     let g = band(GAS_FRAC, &mixedE, &temperature, &netFlux, surfaceEmission);
