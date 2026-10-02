@@ -186,9 +186,11 @@ export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = 2, 
  * holds. With `land`, a cell the mask makes sea has no subgrid orography.
  * With `filtered`, a raster on the same grid of the band-passed variance
  * (σ_flt² per point, scripts/subgridTerrain.py), `filtered` per cell is
- * the square root of its area-weighted mean.
+ * the square root of its area-weighted mean. With `spacing` (metres) the
+ * central differences reach that far east, west, north and south
+ * (bilinear on the raster, at least one point), as on the IFS's 5 km grid.
  */
-export function subgridOrography(mesh, topography, resolved = null, land = null, { filtered: band = null } = {}) {
+export function subgridOrography(mesh, topography, resolved = null, land = null, { filtered: band = null, spacing = 0 } = {}) {
   const { nCells: C, xCell, cellsOnCell, nEdgesOnCell, maxEdges, verticesOnCell, cellsOnVertex, radius } = mesh;
   const { rows, cols, data } = topography;
   const R = radius ?? 6371220;
@@ -236,13 +238,20 @@ export function subgridOrography(mesh, topography, resolved = null, land = null,
   }
   const weight = new Float64Array(C), sum = new Float64Array(C), square = new Float64Array(C), kSum = new Float64Array(C), lSum = new Float64Array(C), mSum = new Float64Array(C), bandSum = new Float64Array(C), count = new Int32Array(C);
   const dLat = Math.PI / rows, dLon = 2 * Math.PI / cols;
+  const wrap = (c) => ((c % cols) + cols) % cols;
+  const sample = (row, column) => {
+    const r0 = Math.floor(row), c0 = Math.floor(column), tr = row - r0, tc = column - c0, r1 = Math.min(rows - 1, r0 + 1), a = wrap(c0), b = wrap(c0 + 1);
+    return (1 - tr) * ((1 - tc) * residual[r0 * cols + a] + tc * residual[r0 * cols + b]) + tr * ((1 - tc) * residual[r1 * cols + a] + tc * residual[r1 * cols + b]);
+  };
   for (let r = 0; r < rows; r++) {
-    const lat = Math.PI / 2 - (r + 0.5) * dLat, w = Math.cos(lat), dx = 2 * R * w * dLon;
-    const north = Math.max(0, r - 1), south = Math.min(rows - 1, r + 1), dy = (south - north) * R * dLat;
+    const lat = Math.PI / 2 - (r + 0.5) * dLat, w = Math.cos(lat);
+    const reachX = spacing > 0 ? Math.min(cols / 4, Math.max(1, spacing / (R * w * dLon))) : 1, dx = 2 * reachX * R * w * dLon;
+    const reachY = spacing > 0 ? Math.max(1, spacing / (R * dLat)) : 1;
+    const north = Math.max(0, r - reachY), south = Math.min(rows - 1, r + reachY), dy = (south - north) * R * dLat;
     for (let c = 0; c < cols; c++) {
       const n = r * cols + c, i = owner[n], h = residual[n];
-      const hx = (residual[r * cols + (c + 1) % cols] - residual[r * cols + (c + cols - 1) % cols]) / dx;
-      const hy = (residual[north * cols + c] - residual[south * cols + c]) / dy;
+      const hx = spacing > 0 ? (sample(r, c + reachX) - sample(r, c - reachX)) / dx : (residual[r * cols + (c + 1) % cols] - residual[r * cols + (c + cols - 1) % cols]) / dx;
+      const hy = spacing > 0 ? (sample(north, c) - sample(south, c)) / dy : (residual[north * cols + c] - residual[south * cols + c]) / dy;
       weight[i] += w; sum[i] += w * h; square[i] += w * h * h; count[i]++;
       if (band) bandSum[i] += w * band.data[n];
       kSum[i] += w * 0.5 * (hx * hx + hy * hy); lSum[i] += w * 0.5 * (hx * hx - hy * hy); mSum[i] += w * hx * hy;

@@ -7,7 +7,9 @@
  *  - μ, γ, θ, σ (geography.module.js's subgridOrography) of h5, the 30″
  *    orography smoothed at 5 km, less the orography the model resolves
  *    (the surface geopotential of the 0.25° raster on this mesh over g),
- *    so the fields hold the scales between 5 km and what the mesh carries;
+ *    so the fields hold the scales between 5 km and what the mesh carries,
+ *    the gradients by central differences 5 km each way, as on the IFS's
+ *    5 km grid;
  *  - σ_flt, the square root of the cell's area-weighted mean of
  *    (h₂ − h₂₀)², the 3–22 km band the form drag takes.
  * Every 2′30″ point counts for the cell nearest it; sea cells hold zeros.
@@ -19,7 +21,7 @@ import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16, subgridOrography, encodeSubgrid, decodeSubgrid, subgridUrl } from '../js/geography.module.js';
 import { createModel } from '../js/model.module.js';
 
-export const FINE_ROWS = 4320, FINE_COLS = 8640;
+export const FINE_ROWS = 4320, FINE_COLS = 8640, GRADIENT_SPACING = 5000;
 
 export function readFine(cache, name, rows = FINE_ROWS, cols = FINE_COLS) {
   const bytes = readFileSync(`${cache}/fine_${name}.f32`);
@@ -34,7 +36,7 @@ export function readFine(cache, name, rows = FINE_ROWS, cols = FINE_COLS) {
  */
 export function meshFields(model, h5, flt2, rows = FINE_ROWS, cols = FINE_COLS) {
   const g = model.core.diagnostics.g, phis = model.surfaceGeopotential;
-  return subgridOrography(model.mesh, { rows, cols, data: h5 }, phis ? Float64Array.from(phis, (p) => p / g) : null, model.geography.land, { filtered: { data: flt2 } });
+  return subgridOrography(model.mesh, { rows, cols, data: h5 }, phis ? Float64Array.from(phis, (p) => p / g) : null, model.geography.land, { filtered: { data: flt2 }, spacing: GRADIENT_SPACING });
 }
 
 function summary(N, model, fields) {

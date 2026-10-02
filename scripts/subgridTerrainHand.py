@@ -5,8 +5,10 @@ An independent check of data/subgrid_N<N>.bin for a few cells, from the
 direct sum over the 30″ points within the kernel's reach, with the
 kernel laid out at each target row's own latitude; the cell's members by
 brute force against its two rings of neighbours; the resolved orography
-on the triangle of cell centres that contains each point; σ_flt over the
-cell's 30″ points (the IFS's definition) rather than the 2′30″ blocks.
+on the triangle of cell centres that contains each point; the gradients
+by central differences 5 km each way, bilinear between the 2′30″ points;
+σ_flt over the cell's 30″ points (the IFS's definition) rather than the
+2′30″ blocks.
 
   node scripts/subgridTerrainCells.mjs 64 39,-99 28,84 -32.6,-70 > cells.json
   python3 scripts/subgridTerrainHand.py CACHE cells.json
@@ -17,6 +19,7 @@ import numpy as np
 
 RADIUS = 6371220.0
 ROWS, COLS = 21600, 43200
+SPACING = 5000.0
 
 
 def profile(r, width, edge):
@@ -101,23 +104,33 @@ def check(grid, cell):
             p = xyz(flat(j), flon(i))
             if np.argmax(ring @ p) == own:
                 members.append((j, i))
-    need_rows = sorted({5 * j + 2 + d for j, _ in members for d in (-5, 0, 5)})
+    need_rows = sorted({5 * j + 2 + d for j, _ in members for d in (-10, -5, 0, 5, 10)})
     s5 = smooth_rows(rows, need_rows, 5000.0, 1000.0)
     h5 = lambda j, i: s5[5 * j + 2][(5 * i + 2) % COLS]
+    dlat = np.radians(1 / 24)
+    reach_y = max(1.0, SPACING / (RADIUS * dlat))
+    reach_x = lambda j: min(8640 / 4, max(1.0, SPACING / (RADIUS * np.cos(np.radians(flat(j))) * dlat)))
+    corners = lambda row, col: [(int(np.floor(row)) + a, (int(np.floor(col)) + b) % 8640) for a in (0, 1) for b in (0, 1)]
     stencil = []
     for j, i in members:
-        stencil += [(j, i), (j, (i + 1) % 8640), (j, (i - 1) % 8640), (j - 1, i), (j + 1, i)]
+        stencil += [(j, i)] + corners(j, i + reach_x(j)) + corners(j, i - reach_x(j)) + corners(j - reach_y, i) + corners(j + reach_y, i)
     stencil = sorted(set(stencil))
     index = {key: n for n, key in enumerate(stencil)}
     points = np.array([xyz(flat(j), flon(i)) for j, i in stencil])
     res = np.array([h5(j, i) for j, i in stencil]) - resolved(points, cell['triangles'])
+
+    def sample(row, col):
+        r0, c0 = int(np.floor(row)), int(np.floor(col))
+        tr, tc = row - r0, col - c0
+        at = lambda a, b: res[index[(r0 + a, (c0 + b) % 8640)]]
+        return (1 - tr) * ((1 - tc) * at(0, 0) + tc * at(0, 1)) + tr * ((1 - tc) * at(1, 0) + tc * at(1, 1))
+
     w = s = s2 = K = L = M = 0.0
-    dlat = np.radians(1 / 24)
     for j, i in members:
         phi = np.radians(flat(j))
         h = res[index[(j, i)]]
-        hx = (res[index[(j, (i + 1) % 8640)]] - res[index[(j, (i - 1) % 8640)]]) / (2 * RADIUS * np.cos(phi) * dlat)
-        hy = (res[index[(j - 1, i)]] - res[index[(j + 1, i)]]) / (2 * RADIUS * dlat)
+        hx = (sample(j, i + reach_x(j)) - sample(j, i - reach_x(j))) / (2 * reach_x(j) * RADIUS * np.cos(phi) * dlat)
+        hy = (sample(j - reach_y, i) - sample(j + reach_y, i)) / (2 * reach_y * RADIUS * dlat)
         c = np.cos(phi)
         w += c; s += c * h; s2 += c * h * h
         K += c * 0.5 * (hx * hx + hy * hy); L += c * 0.5 * (hx * hx - hy * hy); M += c * hx * hy

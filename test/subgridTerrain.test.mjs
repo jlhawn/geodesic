@@ -29,8 +29,8 @@ test('the 30″ filters of analytic orography: the 5 km smoothing and the 3–22
   close(spectrumSlope, -1.9, 0.03, 'the fit recovers a −1.9 spectrum');
 });
 
-function analyticFields(N, elevationAt, band) {
-  const rows = 2160, cols = 4320, h5 = new Float32Array(rows * cols), flt2 = new Float32Array(rows * cols).fill(band * band);
+function analyticFields(N, elevationAt, band, rows = 2160, cols = 4320) {
+  const h5 = new Float32Array(rows * cols), flt2 = new Float32Array(rows * cols).fill(band * band);
   for (let r = 0; r < rows; r++) {
     const lat = Math.PI / 2 - (r + 0.5) * Math.PI / rows;
     for (let c = 0; c < cols; c++) h5[r * cols + c] = elevationAt(lat, -Math.PI + (c + 0.5) * 2 * Math.PI / cols);
@@ -64,15 +64,31 @@ test('an analytic ridge and an analytic isotropic field through the per-mesh scr
   assert.ok(n > 30, `${n} cells`);
 });
 
+test('the gradients reach 5 km each way: a north–south ridge of 20 km wavelength on 2′30″ rows', () => {
+  const amplitude = 300, waves = 2000, rows = 4320, cols = 1440;
+  const { mesh, fields } = analyticFields(16, (lat) => 1000 + amplitude * Math.cos(waves * lat), 20, rows, cols);
+  const k = waves / R, step = R * Math.PI / rows, reach = 5000 / step, whole = Math.floor(reach), t = reach - whole;
+  const factor = ((1 - t) * Math.sin(k * whole * step) + t * Math.sin(k * (whole + 1) * step)) / (k * reach * step);
+  assert.ok(Math.sin(k * step) / (k * step) - factor > 0.08, 'the neighbouring rows would give a larger slope');
+  let n = 0;
+  for (let i = 0; i < mesh.nCells; i++) {
+    if (Math.abs(mesh.latCell[i]) > 60 * deg) continue;
+    n++;
+    close(fields.slope[i], amplitude * k * factor / Math.SQRT2, 0.01, `σ at ${(mesh.latCell[i] / deg).toFixed(1)}°`);
+    close(fields.deviation[i], amplitude / Math.SQRT2, 0.02, 'μ');
+  }
+  assert.ok(n > 1000, `${n} cells`);
+});
+
 /*
  * scripts/subgridTerrainHand.py's values for three N=64 cells, each
  * recomputed from GMTED2010's 30″ grid by direct sums (the cell's own 30″
  * points for σ_flt): the Great Plains, the Himalayan front, the Andes.
  */
 const HAND_N64 = [
-  { cell: 14486, where: 'the Great Plains, 39.4N 98.7W', deviation: 30.376, anisotropy: 0.64721, orientation: 1.30596, slope: 0.0035142, filtered: 15.014 },
-  { cell: 4854, where: 'the Himalayan front, 28.5N 84.4E', deviation: 1421.24, anisotropy: 0.87731, orientation: 0.81182, slope: 0.095739, filtered: 461.36 },
-  { cell: 34912, where: 'the Andes, 32.7S 70.2W', deviation: 940.09, anisotropy: 0.80679, orientation: 0.00147, slope: 0.073658, filtered: 359.34 },
+  { cell: 14486, where: 'the Great Plains, 39.4N 98.7W', deviation: 30.376, anisotropy: 0.53879, orientation: 1.38416, slope: 0.0032324, filtered: 15.014 },
+  { cell: 4854, where: 'the Himalayan front, 28.5N 84.4E', deviation: 1421.24, anisotropy: 0.79910, orientation: 1.13378, slope: 0.087253, filtered: 461.36 },
+  { cell: 34912, where: 'the Andes, 32.7S 70.2W', deviation: 940.09, anisotropy: 0.92716, orientation: 0.06030, slope: 0.059268, filtered: 359.34 },
 ];
 
 test('the N=64 file holds three real cells as recomputed by hand from the 30″ raster', () => {
