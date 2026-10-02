@@ -59,6 +59,7 @@ export function physicsConstants(o) {
   return `
 fn visibleStreams(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec4<f32> { return ${visibleSum((depth) => `stream(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
 fn visibleEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `streamEscape(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
+fn visibleReflection(cloudDepth: f32, keep: f32, mu: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `reflection(cloudDepth + ${depth}, keep, mu)`)}; }
 const MOIST_BL: bool = ${moistTurbulence}; const CT_THRESH: f32 = ${cloudTop.threshold}; const CT_HMAX: f32 = ${cloudTop.maximumHeight}; const CT_PERT: f32 = ${cloudTop.perturbation}; const CT_PROFILE: f32 = ${cloudTop.profile}; const CT_EXCESS: f32 = ${cloudTop.excess}; const CT_TOLERANCE: f32 = ${cloudTop.tolerance}; const CT_CUMULUS: f32 = ${cloudTop.cumulusDepth};
 const BL_A2: f32 = ${entrainment.evaporativeEnhancement}; const BL_AMAX: f32 = ${entrainment.maximumEfficiency}; const BL_TAPER: bool = ${!!entrainment.taper}; const BL_JUMP2: bool = ${entrainment.jumpLayers > 1};
 const VARIANCE_COVER: bool = ${moistTurbulence && o.boundaryCover === 'variance'}; const VAR_FLOOR: f32 = ${o.varianceFloor}; const VAR_SCALE: f32 = ${o.varianceScale}; const MIX_LENGTH: f32 = ${o.mixingLength}; const STABLE_LENGTH: f32 = ${o.stableMixingLength};
@@ -332,9 +333,10 @@ fn streamEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32) -> f3
   let reflectance = select(0.0, cloudDepth / (cloudDepth + 2.0 * mu), mu > 0.0 && cloudDepth > 0.0);
   return 1.0 - s.x - keep * reflectance - s.w;
 }
-fn escapes(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec2<f32> {
-  if (!SCATTER) { let rest = streamEscape(cloudDepth, keep, mu, adir, adif); return vec2<f32>(light.x * rest, (1.0 - light.x) * rest); }
-  return vec2<f32>(light.x * visibleEscape(cloudDepth, keep, mu, adir, adif, light), (1.0 - light.x) * streamEscape(cloudDepth + NIR_RAY * light.y, keep, mu, adir, adif));
+fn reflection(cloudDepth: f32, keep: f32, mu: f32) -> f32 { return select(0.0, keep * cloudDepth / (cloudDepth + 2.0 * mu), mu > 0.0 && cloudDepth > 0.0); }
+fn escapes(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec3<f32> {
+  if (!SCATTER) { let rest = streamEscape(cloudDepth, keep, mu, adir, adif); return vec3<f32>(light.x * rest, (1.0 - light.x) * rest, light.x * reflection(cloudDepth, keep, mu)); }
+  return vec3<f32>(light.x * visibleEscape(cloudDepth, keep, mu, adir, adif, light), (1.0 - light.x) * streamEscape(cloudDepth + NIR_RAY * light.y, keep, mu, adir, adif), light.x * visibleReflection(cloudDepth, keep, mu, light));
 }
 fn clearLight(beam: f32, mu: f32, ozoneHeating: f32, incident: f32, pi: f32, aerosol: f32) -> vec4<f32> {
   let visible = max(0.0, VIS_FRAC * beam - ozoneHeating);
@@ -923,7 +925,7 @@ export const PHYSICS_KERNELS = {
     if (upwardAerosol > 0.0) { for (var k = 0; k < K; k++) { netFlux[k] += upwardAerosol * LV[L_AER + k]; } }
     upwardHeating += upwardAerosol;
     if (ozoneLoss > 0.0) {
-      let upwardOzone = incident * esc.x * (1.0 - aerosolLoss) * ozoneLoss;
+      let upwardOzone = incident * (esc.x * (1.0 - aerosolLoss) + esc.z) * ozoneLoss;
       for (var k = 0; k < K; k++) { netFlux[k] += upwardOzone * layerOzone[k] / ozoneColumn; }
       upwardHeating += upwardOzone;
     }
@@ -989,7 +991,7 @@ export const PHYSICS_KERNELS = {
   if (CLEAR_SKY) {
     let clearSw = shortwave(0.0, 1.0, mu, adir, adif, light);
     var clearUp = 0.0;
-    if (UPWARD && mu > 0.0) { let clearEsc = escapes(0.0, 1.0, mu, adir, adif, light); clearUp = clearEsc.y * restLoss + clearEsc.x * aerosolLoss + select(0.0, clearEsc.x * (1.0 - aerosolLoss) * ozoneLoss, ozoneLoss > 0.0); }
+    if (UPWARD && mu > 0.0) { let clearEsc = escapes(0.0, 1.0, mu, adir, adif, light); clearUp = clearEsc.y * restLoss + clearEsc.x * aerosolLoss + select(0.0, (clearEsc.x * (1.0 - aerosolLoss) + clearEsc.z) * ozoneLoss, ozoneLoss > 0.0); }
     var upVapor = VAPOR_FRAC * surfaceEmission; var upGas = GAS_FRAC * surfaceEmission;
     for (var k = K - 1; k >= 0 && !LW_CORRELATED; k--) {
       let t = temperature[k]; let ev = clearE[k]; let eg = LV[L_GASE + k];

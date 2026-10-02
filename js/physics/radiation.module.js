@@ -296,7 +296,8 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * distributed in the vertical as the column above σ below; an
  * `ozoneProfile` of per-layer amounts replaces either, for one-column
  * use. With upwardAbsorption the visible light the surface sends out of
- * the column also crosses the ozone column at 5/3, losing
+ * the column, and the visible light cloud and clear air reflect, also
+ * cross the ozone column at 5/3, losing
  * 1 − exp(−0.0542 Ω 5/3) (the ozone coefficients of the 0.32-0.7 µm bands
  * weighted by their share), and the near-infrared light the gases'
  * absorption of the path down plus 5/3 of the column's beyond the first.
@@ -345,7 +346,8 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * that part of the beam left after the descent, each layer what its own
  * vapour adds going up; in the visible part the aerosol takes
  * 1 − exp(−(1 − aerosolAlbedo) τ_a 5/3), heating the layers as above.
- * The light cloud and clear air reflect leaves unabsorbed. The clear-sky
+ * The light cloud and clear air reflect leaves unabsorbed by vapour and
+ * aerosol. The clear-sky
  * pass has the same scattering and absorption. `skylight` (0) sends that
  * fraction of the beam reaching the surface as diffuse light in every band.
  */
@@ -376,7 +378,7 @@ const DIFFUSE_PATH = 5 / 3;
 export const GREENHOUSE_GASES = { carbonDioxide: 388.75e-6, methane: 1798.93e-9, nitrousOxide: 323.18e-9 };
 export const OZONE_COLUMN = [0.26, 0.35];
 const VISIBLE_OZONE = (OZONE_SHARES[6] * OZONE_COEFFICIENTS[6] + OZONE_SHARES[7] * OZONE_COEFFICIENTS[7]) / (OZONE_SHARES[6] + OZONE_SHARES[7]);
-const SHORTWAVE_KEYS = ['absorbed', 'down', 'direct', 'reflectance', 'cloud', 'visibleEscape', 'restEscape'];
+const SHORTWAVE_KEYS = ['absorbed', 'down', 'direct', 'reflectance', 'cloud', 'visibleEscape', 'restEscape', 'visibleReflectance'];
 export const SUMMED = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', 'insolation', 'reflectedSolar'];
 export const CLEAR_SUMMED = ['clearAbsorbedSolar', 'clearOutgoingLongwave'];
 
@@ -465,7 +467,7 @@ export function createRadiation(mesh, core, {
   const cloudEmissivity = new Float64Array(K);
   const layerCover = new Float64Array(K).fill(1);
   let cumulusCover = null, cumulusWater = null;
-  const clearSky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0, visibleEscape: 0, restEscape: 0 };
+  const clearSky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0, visibleEscape: 0, restEscape: 0, visibleReflectance: 0 };
   const vaporEmissivity = new Float64Array(K);
   const mixedEmissivity = new Float64Array(K);
   const surfaceFlux = new Float64Array(C), surfaceDirect = new Float64Array(C);
@@ -521,7 +523,7 @@ export function createRadiation(mesh, core, {
   const sun = new Float64Array([1, 0, 0]), ozoneWeight = new Float64Array(5);
   let yearFraction = 0;
   const budget = { absorbedSolar: 0, atmosphereSolar: 0, aerosolSolar: 0, outgoingLongwave: 0, clearAbsorbedSolar: 0, clearOutgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, stratiform: 0, ozoneSolar: 0, vaporSolar: 0, oxygenSolar: 0, carbonDioxideSolar: 0, upwardGasSolar: 0, downwardLongwave: 0 };
-  const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0, visibleEscape: 0, restEscape: 0 }, decked = { ...sky }, probe = { ...sky };
+  const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0, visibleEscape: 0, restEscape: 0, visibleReflectance: 0 }, decked = { ...sky }, probe = { ...sky };
   const deckLight = { incident: 0, mu: 0, direct: 0, diffuse: 0, path: 0, layer: 0, clear: 0 };
 
   function setTime(t) {
@@ -686,15 +688,16 @@ export function createRadiation(mesh, core, {
   function shortwave(out, cloudDepth, keep, mu, surfaceAlbedo, diffuseAlbedo) {
     stream(out, cloudDepth + nearInfraredRayleigh * light.pressure, keep, mu, surfaceAlbedo, diffuseAlbedo);
     const escape = 1 - out.absorbed - out.reflectance - out.cloud;
-    if (!scatters) { out.visibleEscape = light.share * escape; out.restEscape = (1 - light.share) * escape; return; }
+    if (!scatters) { out.visibleEscape = light.share * escape; out.restEscape = (1 - light.share) * escape; out.visibleReflectance = light.share * out.reflectance; return; }
     const rest = 1 - light.share;
     for (const key of ['absorbed', 'down', 'direct', 'reflectance', 'cloud']) out[key] *= rest;
-    out.restEscape = rest * escape; out.visibleEscape = 0;
+    out.restEscape = rest * escape; out.visibleEscape = 0; out.visibleReflectance = 0;
     for (const [weight, depth] of rayleigh) {
       stream(visibleLight, cloudDepth + depth * light.pressure + light.aerosol, keep, mu, surfaceAlbedo, diffuseAlbedo);
       const share = light.share * weight;
       for (const key of ['absorbed', 'down', 'direct', 'reflectance', 'cloud']) out[key] += share * visibleLight[key];
       out.visibleEscape += share * (1 - visibleLight.absorbed - visibleLight.reflectance - visibleLight.cloud);
+      out.visibleReflectance += share * visibleLight.reflectance;
     }
   }
 
@@ -926,6 +929,7 @@ export function createRadiation(mesh, core, {
       sky.cloud = fraction * decked.cloud + (1 - fraction) * sky.cloud;
       sky.visibleEscape = fraction * decked.visibleEscape + (1 - fraction) * sky.visibleEscape;
       sky.restEscape = fraction * decked.restEscape + (1 - fraction) * sky.restEscape;
+      sky.visibleReflectance = fraction * decked.visibleReflectance + (1 - fraction) * sky.visibleReflectance;
     }
     let cloudHeating = 0;
     if (incident > 0 && sky.cloud > 0) {
@@ -941,7 +945,7 @@ export function createRadiation(mesh, core, {
       for (let k = 0; k < K; k++) netFlux[k] += rest * upwardVapor[k];
       upwardAerosol = incident * sky.visibleEscape * aerosolLoss;
       if (upwardAerosol > 0) for (let k = 0; k < K; k++) netFlux[k] += upwardAerosol * aerosolFraction[k];
-      upwardOzoneHeating = incident * sky.visibleEscape * (1 - aerosolLoss) * ozoneLoss;
+      upwardOzoneHeating = incident * (sky.visibleEscape * (1 - aerosolLoss) + sky.visibleReflectance) * ozoneLoss;
       if (upwardOzoneHeating > 0) for (let k = 0; k < K; k++) netFlux[k] += upwardOzoneHeating * layerOzone[k] / ozoneColumnAmount;
       upwardHeating = rest * restLoss + upwardAerosol + upwardOzoneHeating;
     }
@@ -977,7 +981,7 @@ export function createRadiation(mesh, core, {
     for (let k = 0; k < K; k++) longwave[k * C + i] = netFlux[k] - beforeBands[k];
     if (clearSkyPass) {
       shortwave(clearSky, 0, 1, mu, surfaceAlbedo, diffuseAlbedo);
-      const clearUpward = restLoss > 0 || visibleLoss > 0 ? incident * clearSky.restEscape * restLoss + incident * clearSky.visibleEscape * aerosolLoss + (ozoneLoss > 0 ? incident * clearSky.visibleEscape * (1 - aerosolLoss) * ozoneLoss : 0) : 0;
+      const clearUpward = restLoss > 0 || visibleLoss > 0 ? incident * clearSky.restEscape * restLoss + incident * clearSky.visibleEscape * aerosolLoss + (ozoneLoss > 0 ? incident * (clearSky.visibleEscape * (1 - aerosolLoss) + clearSky.visibleReflectance) * ozoneLoss : 0) : 0;
       budget.clearAbsorbedSolar = incident * clearSky.absorbed + ozoneHeating + vaporHeating + aerosolHeating + clearUpward;
       budget.clearOutgoingLongwave = clearOutgoing;
     }
