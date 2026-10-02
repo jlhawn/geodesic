@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
-import { createLandSurface, sineSeason, insolationCycle, seasonEstimate, SEASON_ESTIMATE } from '../js/physics/land.module.js';
+import { createLandSurface, sineSeason, insolationCycle, seasonEstimate, treelineFactor, SEASON_ESTIMATE } from '../js/physics/land.module.js';
 import { MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
@@ -183,19 +183,22 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
   assert.ok(worstLength < 1e-4 && worstWarmth <= worstAir && worstTrees < 1e-4, `season length ${worstLength}, warmth ${worstWarmth} under air ${worstAir}, trees ${worstTrees}`);
 });
 
-test('land regridding carries the season means and fills land the source lacks from the estimate', async () => {
+test('land regridding carries the season means and fills land the source lacks from the estimate, its trees at the guessed cover times the estimate\'s factor', async () => {
   const { regridLand } = await import('../js/physics/regrid.module.js');
-  const make = (N) => { const m = createModel(new Grid(N), { physics: false, topography }); return { mesh: m.mesh, geography: createGeography(m.mesh, topography) }; };
-  const source = make(6), target = make(8), C = source.mesh.nCells;
+  const make = (N, relief) => { const m = createModel(new Grid(N), { physics: false, topography: relief }); return { mesh: m.mesh, geography: createGeography(m.mesh, relief, { landBridges: {}, seaStraits: {} }) }; };
+  const islands = syntheticTopography(90, 180, (lat, lon) => (lat > 1.3 && Math.cos(lon) < 0 ? 50 : 0) || (((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15) ? 300 : -4000));
+  const source = make(6, topography), target = make(8, islands), C = source.mesh.nCells;
   const land = { soil: new Float64Array(C).fill(100), snow: new Float64Array(C), vegetation: new Float64Array(C).fill(0.5), canopy: new Float64Array(C).fill(0.3), seasonLength: new Float64Array(C).fill(0.45), seasonWarmth: new Float64Array(C).fill(4) };
   const out = regridLand(source, target, land);
-  let carried = 0;
+  let carried = 0, filled = 0, partial = 0;
   for (let n = 0; n < target.mesh.nCells; n++) {
     if (!target.geography.land[n]) { assert.equal(out.seasonLength[n], 0); assert.equal(out.seasonWarmth[n], 0); continue; }
-    if (out.seasonLength[n] === 0.45 && out.seasonWarmth[n] === 4) carried++;
-    else assert.ok(out.seasonLength[n] > 0 && out.seasonLength[n] <= 1, `cell ${n}: estimated ${out.seasonLength[n]}`);
+    if (out.seasonLength[n] === 0.45 && out.seasonWarmth[n] === 4) { carried++; continue; }
+    assert.ok(out.seasonLength[n] > 0 && out.seasonLength[n] <= 1, `cell ${n}: estimated ${out.seasonLength[n]}`);
+    assert.ok(near(out.canopy[n], 0.5 * treelineFactor(out.seasonLength[n], out.seasonWarmth[n])), `cell ${n}: trees ${out.canopy[n]} on new land`);
+    filled++; if (out.canopy[n] < 0.5) partial++;
   }
-  assert.ok(carried > 0.9 * [...target.geography.land].filter(Boolean).length, `${carried} carried`);
+  assert.ok(carried > 0.8 * [...target.geography.land].filter(Boolean).length && filled > 5 && partial > 5, `${carried} carried, ${filled} filled, ${partial} of them under the full cover`);
   const same = regridLand(source, source, land);
   assert.deepEqual([...same.seasonWarmth], [...land.seasonWarmth]);
   assert.equal(regridLand(source, target, { soil: land.soil, snow: land.snow, vegetation: land.vegetation }).seasonLength, undefined);

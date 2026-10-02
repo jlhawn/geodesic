@@ -117,6 +117,11 @@ export function seasonEstimate(lat, elevation = 0, threshold = 0.9) {
   return sineSeason(a + b * mean - SEASON_ESTIMATE.lapseRate * Math.max(0, elevation), Math.max(0, Math.min(k * amplitude, c0 + c1 * amplitude)), threshold);
 }
 
+export function treelineFactor(length, warmth, { seasonThreshold = 0.9, minimumSeason = 94, treelineWarmth = [6.4, 8.0] } = {}) {
+  const [treeless, treed] = treelineWarmth;
+  return Math.min(1, Math.max(0, (seasonThreshold + warmth / Math.max(length, minimumSeason / 365) - treeless) / (treed - treeless)));
+}
+
 export function createLandSurface(mesh, geography, {
   heatCapacity = 1e6, bucketCapacity = 150, wetnessThreshold = 0.75, albedo = 0.2, snowAlbedo = 0.55, fullSnow = 20,
   latentHeatFusion = 3.34e5, vegetation: vegetated = true, bareAlbedo = 0.30, vegetatedAlbedo = 0.13, rootZoneCapacity = 300, dryWetness = 0.1, wetWetness = 0.6, growthTime = 180 * 86400, declineTime = 365 * 86400,
@@ -149,9 +154,8 @@ export function createLandSurface(mesh, geography, {
   const soilAlbedo = (i) => (darkening ? bareAlbedo - (bareAlbedo - wetSoilAlbedo) * Math.min(1, Math.max(0, (wetFill(i) - darkeningFrom) / (darkeningTo - darkeningFrom))) : bareAlbedo);
   const [treelessWarmth, treedWarmth] = treelineWarmth;
   if (!(treedWarmth > treelessWarmth)) throw new Error(`treelineWarmth must rise from its first to its second temperature, not ${treelineWarmth}`);
-  const seasonKelvin = MELTING_POINT + seasonThreshold, shortestSeason = minimumSeason / 365;
-  const seasonMean = (i) => seasonThreshold + seasonWarmth[i] / Math.max(seasonLength[i], shortestSeason);
-  const treeFactor = (i) => Math.min(1, Math.max(0, (seasonMean(i) - treelessWarmth) / (treedWarmth - treelessWarmth)));
+  const seasonKelvin = MELTING_POINT + seasonThreshold;
+  const treeFactor = (i) => treelineFactor(seasonLength[i], seasonWarmth[i], { seasonThreshold, minimumSeason, treelineWarmth });
   const bareGround = (i) => { if (!vegetated) return albedo; const s = soilAlbedo(i); return s + (vegetatedAlbedo - s) * vegetation[i]; };
 
   function overflow(i) {

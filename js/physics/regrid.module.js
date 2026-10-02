@@ -1,7 +1,7 @@
 import { cellVector } from '../dynamics/operators.module.js';
 import { UNDECIDED } from './radiation.module.js';
 import { SNOW_AGEING } from './ice.module.js';
-import { seasonEstimate } from './land.module.js';
+import { seasonEstimate, treelineFactor } from './land.module.js';
 
 /*
  * Barycentric weights of p in the plane through unit vectors a, b, c:
@@ -212,8 +212,9 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   const cover = land.vegetation ? sampleTiles(source, target, Float64Array.from(land.vegetation), onLand, atCells, (tile) => (guess(tile).snow > 0 ? 0 : 0.5)) : null;
   const surface = land.surface ? sampleTiles(source, target, Float64Array.from(land.surface), onLand, atCells, () => 0) : null;
   const snowAlbedo = land.snowAlbedo ? sampleTiles(source, target, Float64Array.from(land.snowAlbedo), onLand, atCells, () => SNOW_AGEING.freshSnowAlbedo) : null;
-  const canopy = land.canopy && cover ? sampleTiles(source, target, Float64Array.from(land.canopy), onLand, atCells, (tile) => (guess(tile).snow > 0 ? 0 : 0.5)) : null;
   const estimate = (tile) => seasonEstimate(source.mesh.latCell[tile]);
+  const trees = (tile) => (guess(tile).snow > 0 ? 0 : 0.5) * (seasoned ? treelineFactor(estimate(tile).length, estimate(tile).warmth) : 1);
+  const canopy = land.canopy && cover ? sampleTiles(source, target, Float64Array.from(land.canopy), onLand, atCells, trees) : null;
   const seasonLength = seasoned ? sampleTiles(source, target, Float64Array.from(land.seasonLength), onLand, atCells, (tile) => estimate(tile).length) : null;
   const seasonWarmth = seasoned ? sampleTiles(source, target, Float64Array.from(land.seasonWarmth), onLand, atCells, (tile) => estimate(tile).warmth) : null;
   if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; if (surface) surface[n] = 0; if (canopy) canopy[n] = 0; if (seasoned) { seasonLength[n] = 0; seasonWarmth[n] = 0; } }
