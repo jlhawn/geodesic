@@ -118,7 +118,7 @@ fn uniformWidth(s: vec2<f32>, p: f32, ps: f32) -> f32 {
 }
 fn plumeSeen(seen: f32, cu: vec2<f32>, mass: f32) -> f32 {
   if (!PDF_COVER || !(cu.y * mass > 0.0)) { return seen; }
-  return max(seen, cu.x * (1.0 - exp(-cu.y * mass / (cu.x * VISIBLE_PATH))));
+  return max(seen, cu.x * smallRate(cu.y * mass / (cu.x * VISIBLE_PATH)));
 }
 fn uniformCover(qc: f32, b: f32) -> f32 {
   if (qc >= b) { return 1.0; }
@@ -763,7 +763,7 @@ export const PHYSICS_KERNELS = {
         let optics = cloudOptics(IN[S_TH + k * C + i] * D[D_EXM + k * C + i], continental);
         depth += optics.x * water;
         if (k == STRATUS_K) { layer = water; unit = optics.x; }
-        let shadeSeen = plumeSeen(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), cu, mass);
+        let shadeSeen = plumeSeen(select(0.0, f * smallRate(water / VISIBLE_PATH), PDF_COVER && water > 0.0), cu, mass);
         overlap(shadeSeen, k == K - 1, &shadeBlocks);
         if (EXP_OVERLAP) { overlapLayer(shadeSeen, overlapAlpha(i, k), &shadeLayered); }
       }
@@ -817,7 +817,7 @@ export const PHYSICS_KERNELS = {
     let optics = cloudOptics(IN[S_TH + idx] * D[D_EXM + idx], continental);
     cloudDepth += optics.x * water;
     if (k == STRATUS_K) { deckUnit = optics.x; }
-    let seen = plumeSeen(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), cu, mass);
+    let seen = plumeSeen(select(0.0, f * smallRate(water / VISIBLE_PATH), PDF_COVER && water > 0.0), cu, mass);
     overlap(seen, k == K - 1, &blocks);
     if (EXP_OVERLAP) { overlapLayer(seen, overlapAlpha(i, k), &layered); }
     cloudE[k] = select(0.0, f * (1.0 - exp(-optics.y * water / f)), water > 0.0);

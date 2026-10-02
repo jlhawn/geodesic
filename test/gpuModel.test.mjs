@@ -322,6 +322,32 @@ test('the uniform condensation\'s cover of each layer\'s condensate, over ice wh
   assert.ok(engines < 1e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
 });
 
+test('under maximum-random overlap a layer of trace cloud water joins the layers either side into one block in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { base } = cloudyState(), traced = cloudyState().base;
+  const { K } = base.core, C = base.mesh.nCells, qc = traced.state[5];
+  let filled = 0;
+  for (let i = 0; i < C; i++) {
+    let top = -1, bottom = -1;
+    for (let k = 0; k < K; k++) if (qc[k * C + i] > 0) { if (top < 0) top = k; bottom = k; }
+    for (let k = top + 1; k < bottom; k++) if (!(qc[k * C + i] > 0)) { qc[k * C + i] = Math.fround(1e-14); filled++; }
+  }
+  const options = { cloudOverlap: 'maximumRandom', condensation: 'saturation', iceSaturation: false };
+  const plain = await physicsHeating(base, options), joined = await physicsHeating(traced, options);
+  let engines = 0, scale = 0, moved = 0;
+  for (let i = 0; i < C; i++) {
+    if (!(base.radiation.insolation(i) > 0)) continue;
+    for (let k = 0; k < K - 1; k++) {
+      const x = k * C + i;
+      engines = Math.max(engines, Math.abs(joined.cpu[x] - joined.gpu[x]));
+      scale = Math.max(scale, Math.abs(joined.cpu[x]));
+      moved = Math.max(moved, Math.abs(joined.cpu[x] - plain.cpu[x]));
+    }
+  }
+  console.log(`${filled} gaps between cloud layers filled with 1e-14 of cloud water: joining the blocks moves the layer heating by up to ${moved.toFixed(2)} K/day; the engines differ by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}`);
+  assert.ok(filled > C && moved > 0.1, `${filled} gaps, heating moved ${moved} K/day`);
+  assert.ok(engines < 1e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
+});
+
 test('the variance cover of the cloudy layers below the moist boundary layer\'s mixing top, and the longwave heating the cloud-top scheme reads, agree between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { base } = cloudyState(), { geopotential, g } = base.core.diagnostics, C = base.mesh.nCells, K = base.core.K, depth = base.boundaryLayer.depth;
   const mixingTop = Float64Array.from(depth, (d, i) => Math.fround(i % 3 === 0 ? 0 : d + (i % 3) * 400));
