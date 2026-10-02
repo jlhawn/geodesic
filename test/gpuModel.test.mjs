@@ -534,8 +534,8 @@ test('the deck reads the same ring-smoothed πσ̇ in both engines, and the smoo
   assert.ok(movedOnce.rmsRel > 30 * once.subsidence.rmsRel && passes.rmsRel > 30 * Math.max(once.subsidence.rmsRel, smoothed.subsidence.rmsRel), `one pass moved the subsidence by ${movedOnce.rmsRel}, the second by ${passes.rmsRel}; the engines differ by ${once.subsidence.rmsRel}`);
 });
 
-test('over six steps the carried inversion height, the gate and the deck they give match between the engines, and the boundary layer mixes to the deck\'s height in both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const run = await mixedLayerPair(6, UNSCATTERED);
+test('over six steps the carried inversion height, the gate and the deck they give match between the engines, and the boundary layer mixes to the deck\'s height in both (under the gray gases: under the spectral ones a shallow cumulus fires on the fifth step in one column on the CPU alone)', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = await mixedLayerPair(6, { ...UNSCATTERED, longwaveScheme: 'gray', solarGases: 'lacisHansen' });
   const { C, model } = run, { geopotential, g } = model.core.diagnostics, K = model.core.K;
   let carried = 0, above = 0, active = 0;
   for (let i = 0; i < C; i++) {

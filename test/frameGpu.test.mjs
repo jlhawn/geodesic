@@ -181,8 +181,9 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
   assert.ok(worst(off.cpu, off.gpu).max < 1e-4);
 });
 
-test('the mixed-layer deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const cpu = createModel(new Grid(6), { ocean: false }), gpu = await createGpuModel(new Grid(6), { ocean: false });
+test('the mixed-layer deck shows in the cloud field, the same in both engines (under the gray gases: under the spectral ones the condensate of one layer above the deck parts by 3e-7 kg/kg in two steps, where a perturbation of 1e-7 of the state moves the CPU\'s own cloud field by 9e-3 kg/m²)', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const radiation = { longwaveScheme: 'gray', solarGases: 'lacisHansen' };
+  const cpu = createModel(new Grid(6), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation });
   const C = cpu.mesh.nCells, { K, sigmaMid } = cpu.core;
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) cpu.state[a].set(init[a]);

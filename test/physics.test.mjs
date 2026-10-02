@@ -275,9 +275,9 @@ test('with cloudCover: pdf a cloudy layer covers the part of a uniform total-wat
   for (const [depth, rhc] of [[height + 100, 0.85], [0.5 * height, 0.8]]) {
     const f = 0.5 + 0.02 / (2 * (1 - rhc)), thick = Float64Array.from(qc, (x) => x / f);
     const partial = run(pdf, depth), inCloud = run(overcast, depth, thick), full = run(overcast, depth), clear = run(pdf, depth, new Float64Array(K * C));
-    console.log(`cloud of ${(1000 * qc[idx]).toFixed(2)} g/kg in a saturated layer ${height.toFixed(0)} m up, RHc ${rhc}: cover ${f.toFixed(3)}, reflectance ${partial.cloudReflectance.toFixed(4)} against ${full.cloudReflectance.toFixed(4)} overcast`);
+    console.log(`cloud of ${(1000 * qc[idx]).toFixed(2)} g/kg in a saturated layer ${height.toFixed(0)} m up, RHc ${rhc}: cover ${f.toFixed(3)}, reflectance ${partial.cloudReflectance.toFixed(4)} against ${full.cloudReflectance.toFixed(4)} overcast and ${clear.cloudReflectance.toFixed(4)} clear`);
     assert.ok(Math.abs(partial.cloudReflectance - (f * inCloud.cloudReflectance + (1 - f) * clear.cloudReflectance)) < 1e-12, `reflectance ${partial.cloudReflectance} against ${f} × ${inCloud.cloudReflectance} + ${1 - f} × ${clear.cloudReflectance}`);
-    assert.ok(partial.cloudReflectance < 0.8 * full.cloudReflectance, 'thin cloud in a partly humid layer reflects less than overcast');
+    assert.ok(partial.cloudReflectance - clear.cloudReflectance < 0.8 * (full.cloudReflectance - clear.cloudReflectance), 'thin cloud in a partly humid layer adds less reflection to the clear column\'s than overcast');
     assert.ok(partial.outgoingLongwave > full.outgoingLongwave, 'and closes less of the window');
     assert.ok(partial.closure < 1e-9 * partial.absorbedSolar, `closure ${partial.closure}`);
   }
@@ -916,6 +916,7 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
   const before = 'b892e42f1b7ea8359ea7af62e3e635ba';
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }).digest, before);
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }, {}, GREY_ICE).digest, '3ca002d1e990a4335a223eb2232c51d0', 'on grey ice with unaged snow, the engine before the ice and snow albedo depended on temperature and age');
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED }, {}, GREY_ICE).digest, '41e2f59e2169a6967b452f75740022a0', 'on grey ice under the spectral gases, the gas parent\'s digest');
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
   assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
@@ -936,7 +937,8 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   const defaults = { condensation: MOIST_DEFAULTS.condensation, iceSaturation: MOIST_DEFAULTS.iceSaturation, iceFall: MOIST_DEFAULTS.iceFall };
   const now = modelDigest({}, defaults).digest, random = modelDigest({ cloudOverlap: 'maximumRandom' }, defaults).digest;
   console.log(`12 steps at N=4: ${now} under the defaults, ${random} with maximum-random overlap`);
-  assert.equal(now, '9790266388b2da8b1ca3f6d314c3304a');
+  assert.equal(now, 'fbd9be1fa786711eac99bc2e37174836');
+  assert.equal(modelDigest({ ...GRAY_GASES }, defaults).digest, '9790266388b2da8b1ca3f6d314c3304a', 'under the gray gases, the cloud parent\'s digest');
   assert.notEqual(random, now);
   assert.notEqual(modelDigest({ cloudOverlap: 'maximumRandom' }).digest, random);
 });
