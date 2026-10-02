@@ -191,6 +191,25 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
   assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `global cloud absorption ${cpuMean / area} against ${gpuMean / area} W/m²`);
 });
 
+test('the change the Rayleigh and aerosol scattering makes to the heating of each layer of the sunlit columns agrees between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const base = heatingState(UNSCATTERED);
+  const on = await physicsHeating(base, {}), off = await physicsHeating(base, UNSCATTERED);
+  const { K, C } = on;
+  let worst = 0, largest = 0, at = null, lit = 0;
+  for (let i = 0; i < C; i++) {
+    if (!(base.radiation.insolation(i) > 0)) continue;
+    lit++;
+    for (let k = 0; k < K - 1; k++) {
+      const x = k * C + i, change = on.cpu[x] - off.cpu[x], d = Math.abs(change - (on.gpu[x] - off.gpu[x]));
+      largest = Math.max(largest, Math.abs(change));
+      if (d > worst) { worst = d; at = [i, k, change]; }
+    }
+  }
+  console.log(`physics alone at N=6 on ${lit} sunlit columns: the scattering changes a layer's heating by up to ${largest.toFixed(3)} K/day, and the engines' change differs by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(3)} K/day)`);
+  assert.ok(lit > 0.3 * C && largest > 0.02, `${lit} sunlit columns, largest change ${largest} K/day`);
+  assert.ok(worst < 2e-5, `the scattering's heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
+});
+
 test('shallow cumulus of partial cover beside and without resolved cloud heats the layers of sunlit columns alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const base = heatingState(), { K, sigmaMid } = base.core, C = base.mesh.nCells;
   const cover = new Float64Array(K * C), water = new Float64Array(K * C);
