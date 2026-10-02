@@ -49,6 +49,11 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
         dU[bottom * E + e] -= rate * u[bottom * E + e];
       }
     }
+    applyTop(state, out, kFrom, kTo);
+  }
+
+  function applyTop(state, out, kFrom = 0, kTo = K) {
+    const u = state[2], dU = out[2];
     for (let k = kFrom; k < kTo; k++) {
       const rate = topDragRate(k);
       if (rate > 0) for (let e = 0; e < E; e++) dU[k * E + e] -= rate * u[k * E + e];
@@ -147,5 +152,5 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
     return mixes;
   }
 
-  return { lowestWindSpeed, apply, applyLayers, heatLayers, stress, convectiveAdjustment, convectiveAdjustColumn, windSpeed, shared: { windSpeed: windBuffer } };
+  return { lowestWindSpeed, apply, applyLayers, applyTop, heatLayers, stress, convectiveAdjustment, convectiveAdjustColumn, windSpeed, shared: { windSpeed: windBuffer } };
 }
