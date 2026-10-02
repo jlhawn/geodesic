@@ -102,7 +102,7 @@ test('vegetation grows over a wet bucket and dies back over a dry one on its tim
   assert.equal(land.vegetation[i], 0.5);
   assert.equal(land.capacity(i), 300);
   assert.equal(land.soil[i], 150);
-  assert.ok(Math.abs(land.albedo(i) - 0.215) < 1e-12);
+  assert.ok(Math.abs(land.albedo(i) - (0.15 + (0.13 - 0.15) * 0.5)) < 1e-12, 'a bucket half full darkens the bare soil fully');
   land.vegetation[i] = 0.5; land.soil[i] = 0;
   land.update(i, surfaceT, flux, 0, 50 * DAY);
   assert.ok(Math.abs(land.vegetation[i] - 0.5 * Math.exp(-1)) < 1e-12, `dry: ${land.vegetation[i]}`);
@@ -209,4 +209,24 @@ test('with vegetation the soil has a surface layer that bare ground evaporates a
   land.soil[i] = 0;
   land.update(i, cold, flux, 0, 30 * DAY);
   assert.ok(land.vegetation[i] < grown - 0.01, 'decline needs no warmth');
+});
+
+test('bare soil darkens with the bucket\'s wetness from 0.30 dry to 0.15 at half full and beyond, the vegetation blending it toward 0.13, and without the darkening stays 0.30', () => {
+  const land = createLandSurface(mesh, flat()), plain = createLandSurface(mesh, flat(), { soilDarkening: false });
+  land.initialize(); plain.initialize();
+  const i = 3, cap = land.capacity(i), rows = [];
+  for (const v of [0, 0.5, 1]) {
+    const row = [];
+    for (const w of [0, 0.1, 0.25, 0.5, 0.75, 1]) {
+      for (const m of [land, plain]) { m.vegetation[i] = v; m.soil[i] = w * cap; m.snow[i] = 0; }
+      const soil = 0.30 - 0.15 * Math.min(1, w / 0.5);
+      assert.ok(Math.abs(land.albedo(i) - (soil + (0.13 - soil) * v)) < 1e-12, `v ${v}, w ${w}: ${land.albedo(i)}`);
+      assert.ok(Math.abs(plain.albedo(i) - (0.30 + (0.13 - 0.30) * v)) < 1e-12, `without darkening, v ${v}, w ${w}`);
+      row.push(land.albedo(i).toFixed(3));
+    }
+    rows.push(`v ${v}: ${row.join(' ')}`);
+  }
+  land.vegetation[i] = 0; land.soil[i] = cap; land.snow[i] = 20;
+  assert.ok(Math.abs(land.albedo(i) - 0.55) < 1e-12, 'full snow hides the wet soil');
+  console.log(`albedo at bucket fill 0, 0.1, 0.25, 0.5, 0.75, 1 by vegetation cover: ${rows.join('; ')}`);
 });

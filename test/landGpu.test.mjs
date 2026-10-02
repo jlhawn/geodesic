@@ -83,3 +83,36 @@ test('the stratiform share that tapers the boundary layer\'s entrainment is zero
   assert.ok(share.maxDiff < 2e-3, `share differs by ${share.maxDiff} at ${share.at}`);
   assert.ok(entrain.maxDiff < 2e-5, `w_e differs by ${entrain.maxDiff} at ${entrain.at}`);
 });
+
+test('both engines give each land cell the same albedo from its soil water, vegetation and snow, with the wet-soil darkening and without it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = async (land) => {
+    const cpu = createModel(new Grid(6), { topography, land }), gpu = await createGpuModel(new Grid(6), { topography, land });
+    const C = cpu.mesh.nCells;
+    let s = 7;
+    const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+    const init = initializeState(cpu, {});
+    for (let i = 0; i < C; i++) if (cpu.geography.land[i]) init[6][i] = 0;
+    cpu.land.initialize();
+    const soil = Float64Array.from({ length: C }, (_, i) => (cpu.geography.land[i] ? 300 * rnd() : 0));
+    const snow = Float64Array.from({ length: C }, (_, i) => (cpu.geography.land[i] && rnd() < 0.2 ? 30 * rnd() : 0));
+    const vegetation = Float64Array.from({ length: C }, () => rnd());
+    for (const m of [cpu, gpu]) {
+      for (let a = 0; a < init.length; a++) m.state[a].set(init[a]);
+      m.land.load({ soil, snow, vegetation });
+    }
+    gpu.load();
+    const expected = Float64Array.from({ length: C }, (_, i) => (cpu.geography.land[i] ? cpu.land.albedo(i) : NaN));
+    await gpu.step(900);
+    const ph = await gpu.gpu.downloadPhysics();
+    let worst = 0, cells = 0;
+    for (let i = 0; i < C; i++) if (cpu.geography.land[i]) { worst = Math.max(worst, Math.abs(ph.ADIF[i] - expected[i])); cells++; }
+    gpu.destroy();
+    return { worst, cells, expected, land: cpu.geography.land };
+  };
+  const dark = await run({}), plain = await run({ soilDarkening: false });
+  let darkened = 0, most = 0;
+  for (let i = 0; i < dark.expected.length; i++) if (dark.land[i]) { const d = plain.expected[i] - dark.expected[i]; if (d > 1e-6) darkened++; most = Math.max(most, d); }
+  console.log(`${dark.cells} land cells with random soil water, vegetation and snow: albedo engines apart by ${dark.worst.toExponential(1)} with the darkening and ${plain.worst.toExponential(1)} without; it darkens ${darkened} cells, by up to ${most.toFixed(3)}`);
+  assert.ok(dark.worst < 1e-6 && plain.worst < 1e-6, `engines apart by ${dark.worst} and ${plain.worst}`);
+  assert.ok(darkened > dark.cells / 3 && most > 0.05, `${darkened} cells darkened by up to ${most}`);
+});
