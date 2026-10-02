@@ -160,7 +160,7 @@ async function physicsHeating(base, options, dt = 864000, cumulus = null, mixing
     if (model.radiation.insolation(i) > 0 && (water > 1e-3 || model.radiation.stratus[i] > 0)) cloudy.push(i);
   }
   const power = (rate, i) => { let sum = 0; for (let k = 0; k < K; k++) sum += rate[k * C + i] / 86400 * cp * pi[i] * dSigma[k] / g; return sum; };
-  return { K, C, cloudy, cpu: heating(model.state[1]), gpu: heating(after), power, area: model.mesh.areaCell, cpuDeck: Float64Array.from(model.radiation.stratusFraction), gpuDeck: ph.DECKF.subarray(0, C), cpuLongwave: Float64Array.from(model.radiation.longwave), gpuLongwave: ph.LWH.subarray(0, K * C) };
+  return { K, C, cloudy, cpu: heating(model.state[1]), gpu: heating(after), power, area: model.mesh.areaCell, cpuDeck: Float64Array.from(model.radiation.stratusFraction), gpuDeck: ph.DECKF.subarray(0, C), cpuLongwave: Float64Array.from(model.radiation.longwave), gpuLongwave: ph.LWH.subarray(0, K * C), cpuOutgoing: Float64Array.from(model.radiation.outgoing), gpuOutgoing: ph.OLR.subarray(0, C), gpuSurfaceLongwave: ph.LWSFCSUM.subarray(0, C) };
 }
 
 test('the heating of each layer of the sunlit cloudy columns, and the part of it the cloud water absorbs, agree between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -320,6 +320,35 @@ test('the uniform condensation\'s cover of each layer\'s condensate, over ice wh
   console.log(`the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the exponential-random overlap moves it by up to ${overlap.toFixed(2)} K/day from maximum-random, the uniform cover by ${cover.toFixed(2)} from the saturation adjustment's, its saturation over ice by ${ice.toFixed(2)}, the stratiform blend at the cover's saturation on an inversion ramp of −40 to 40 K by ${blended.toFixed(2)}`);
   assert.ok(overlap > 1e-3 && cover > 0.1 && ice > 0.01 && blended > 0.1, `overlap ${overlap}, cover ${cover}, ice ${ice}, blend ${blended} K/day`);
   assert.ok(engines < 1e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
+});
+
+test('the longwave\'s exponential-random overlap of resolved cloud of partial cover in separate runs of layers heats the layers alike in both engines, moves their heating and the OLR alike from the random overlap\'s, and the GPU\'s layers\' longwave closes on its surface and top fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { base } = cloudyState();
+  const chain = await physicsHeating(base, {}), random = await physicsHeating(base, { longwaveOverlap: 'random' });
+  const { K, C } = chain;
+  let engines = 0, scale = 0, moved = 0, change = 0, olr = 0, olrMoved = 0, closure = 0, longwave = 0, longwaveScale = 0;
+  for (let i = 0; i < C; i++) {
+    olr = Math.max(olr, ...[chain, random].map((r) => Math.abs(r.cpuOutgoing[i] - r.gpuOutgoing[i])));
+    olrMoved = Math.max(olrMoved, Math.abs(chain.cpuOutgoing[i] - random.cpuOutgoing[i]));
+    let sum = 0;
+    for (let k = 0; k < K; k++) {
+      const x = k * C + i;
+      sum += chain.gpuLongwave[x];
+      longwave = Math.max(longwave, ...[chain, random].map((r) => Math.abs(r.cpuLongwave[x] - r.gpuLongwave[x])));
+      longwaveScale = Math.max(longwaveScale, Math.abs(chain.cpuLongwave[x]));
+      if (k === K - 1) continue;
+      engines = Math.max(engines, ...[chain, random].map((r) => Math.abs(r.cpu[x] - r.gpu[x])));
+      scale = Math.max(scale, Math.abs(chain.cpu[x]));
+      moved = Math.max(moved, Math.abs(chain.cpu[x] - random.cpu[x]));
+      change = Math.max(change, Math.abs((chain.cpu[x] - random.cpu[x]) - (chain.gpu[x] - random.gpu[x])));
+    }
+    closure = Math.max(closure, Math.abs(sum + chain.gpuSurfaceLongwave[i] + chain.gpuOutgoing[i]));
+  }
+  console.log(`${C} columns at N=6: the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}, the layers' longwave by ${longwave.toExponential(1)} of ${longwaveScale.toFixed(0)} W/m2 and the OLR by ${olr.toExponential(1)} W/m2; the exponential-random overlap moves the heating by up to ${moved.toFixed(2)} K/day and the OLR by up to ${olrMoved.toFixed(2)} W/m2 from the random overlap's, the engines' change of the heating alike to ${change.toExponential(1)} K/day; on the GPU the layers' longwave closes on the surface and top fluxes to ${closure.toExponential(1)} W/m2`);
+  assert.ok(moved > 0.05 && olrMoved > 1, `the overlap moves the heating by ${moved} K/day and the OLR by ${olrMoved} W/m2`);
+  assert.ok(engines < 1e-5 * scale && change < 1e-5 * scale, `layer heating differs by ${engines} K/day, its change by ${change}, against ${scale}`);
+  assert.ok(olr < 2e-5 * 300 && longwave < 2e-5 * longwaveScale, `OLR apart by ${olr}, the layers' longwave by ${longwave} W/m2 of ${longwaveScale}`);
+  assert.ok(closure < 1e-3, `the GPU's longwave closes to ${closure} W/m2`);
 });
 
 test('under maximum-random overlap a layer of trace cloud water joins the layers either side into one block in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

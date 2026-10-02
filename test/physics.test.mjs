@@ -916,7 +916,8 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
   const before = 'b892e42f1b7ea8359ea7af62e3e635ba';
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }).digest, before);
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }, {}, GREY_ICE).digest, '3ca002d1e990a4335a223eb2232c51d0', 'on grey ice with unaged snow, the engine before the ice and snow albedo depended on temperature and age');
-  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED }, {}, GREY_ICE).digest, 'a73d33f305faa4910fbb5b6bc63e08dd', 'on grey ice under the spectral gases, the gas parent\'s digest');
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, longwaveOverlap: 'random' }, {}, GREY_ICE).digest, 'a73d33f305faa4910fbb5b6bc63e08dd', 'on grey ice under the spectral gases with the longwave\'s random overlap, the gas parent\'s digest');
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED }, {}, GREY_ICE).digest, '70ac021e4554c218459894c990e3d142', 'on grey ice under the spectral gases with the longwave\'s exponential-random overlap');
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
   assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
@@ -937,7 +938,8 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   const defaults = { condensation: MOIST_DEFAULTS.condensation, iceSaturation: MOIST_DEFAULTS.iceSaturation, iceFall: MOIST_DEFAULTS.iceFall };
   const now = modelDigest({}, defaults).digest, random = modelDigest({ cloudOverlap: 'maximumRandom' }, defaults).digest;
   console.log(`12 steps at N=4: ${now} under the defaults, ${random} with maximum-random overlap`);
-  assert.equal(now, 'a64fbb13d210cbd6b4d13cdfc32a6fd7');
+  assert.equal(now, '52b46a99f0e802fa2ad3fdfed1b7487f');
+  assert.equal(modelDigest({ longwaveOverlap: 'random' }, defaults).digest, 'a64fbb13d210cbd6b4d13cdfc32a6fd7', 'with the longwave\'s random overlap, the engine before the longwave overlapped as the shortwave does');
   assert.equal(modelDigest({ ...GRAY_GASES, visibleFraction: 0.5, rayleighBands: [[0.712, 0.0874], [0.288, 0.5687]], nearInfraredRayleigh: 0 }, defaults).digest, '9790266388b2da8b1ca3f6d314c3304a', 'under the gray gases and the visible split and Rayleigh bands before the gas branch\'s, the cloud parent\'s digest');
   assert.notEqual(random, now);
   assert.notEqual(modelDigest({ cloudOverlap: 'maximumRandom' }).digest, random);

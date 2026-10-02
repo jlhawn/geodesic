@@ -147,6 +147,19 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * plume's own path, so that its in-cloud path is the plume's however
  * small the fraction.
  *
+ * In the correlated longwave, `longwaveOverlap` 'exponentialRandom' (the
+ * default) overlaps the cloudy layers as the shortwave's cover does: in
+ * each g-point every layer is two regions, its cloud's f with emissivity
+ * 1 − (1 − ε_gas)(1 − exp(−κ W/f)) and the clear rest with ε_gas, and the
+ * flux leaving a region of one layer enters the regions of the next in
+ * proportion to the pair's joint areas over the source region's, both
+ * cloudy f_a + f_b − C with C = α max(f_a, f_b) + (1 − α)(f_a + f_b −
+ * f_a f_b) and α the shortwave's (Hogan and Illingworth 2000; the
+ * two-region transfer of Shonk and Hogan 2008); each layer's heating is
+ * the divergence of the summed net flux. The deck's layer is one region
+ * with its blended emissivity. 'random' takes each layer's mean emissivity
+ * f (1 − exp(−κ W/f)), the expectation under random overlap (α = 0).
+ *
  * With `boundaryCover` 'variance' (the default; 'pdf' keeps the cover
  * above) a cloudy layer whose midpoint lies below the moist boundary
  * layer's mixing top (`useBoundaryLayer`) covers the Gaussian share of
@@ -520,7 +533,7 @@ export function createRadiation(mesh, core, {
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
-  longwaveScheme = 'correlated', solarGases = 'clirad', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
+  longwaveScheme = 'correlated', longwaveOverlap = 'exponentialRandom', solarGases = 'clirad', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
   rayleighBands = RAYLEIGH_BANDS, rayleighDepth = null, nearInfraredRayleigh = NEAR_INFRARED_RAYLEIGH, upwardAbsorption = true, visibleFraction = VISIBLE_FRACTION, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, land = null, iceSheet = null,
   liquidTemperature = CLOUD_OPTICS.liquidTemperature, iceTemperature = CLOUD_OPTICS.iceTemperature, seaDropletRadius = CLOUD_OPTICS.seaDropletRadius, landDropletRadius = CLOUD_OPTICS.landDropletRadius,
   liquidInfrared = CLOUD_OPTICS.liquidInfrared, diffusivity = CLOUD_OPTICS.diffusivity, iceFitWarmest = CLOUD_OPTICS.iceFitWarmest, iceFitColdest = CLOUD_OPTICS.iceFitColdest,
@@ -536,6 +549,7 @@ export function createRadiation(mesh, core, {
   const beamLeft = (sigma) => Math.exp(-ozoneOpacity * ozoneAbove(sigma));
   const ozoneFraction = Float64Array.from({ length: K }, (_, k) => (beamLeft(levels[k]) - beamLeft(levels[k + 1])) / (1 - Math.exp(-ozoneOpacity)));
   if (longwaveScheme !== 'correlated' && longwaveScheme !== 'gray') throw new Error(`longwaveScheme must be 'correlated' or 'gray', not ${longwaveScheme}`);
+  if (longwaveOverlap !== 'exponentialRandom' && longwaveOverlap !== 'random') throw new Error(`longwaveOverlap must be 'exponentialRandom' or 'random', not ${longwaveOverlap}`);
   if (solarGases !== 'clirad' && solarGases !== 'lacisHansen') throw new Error(`solarGases must be 'clirad' or 'lacisHansen', not ${solarGases}`);
   if (ozone !== 'afgl' && ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${ozone}`);
   if (ozoneProfile && ozoneProfile.length !== K) throw new Error(`ozoneProfile must give one ozone amount per layer, ${K}, not ${ozoneProfile.length}`);
@@ -544,6 +558,9 @@ export function createRadiation(mesh, core, {
   const wellMixed = [carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air, methane * GAS_MOLAR.ch4 / GAS_MOLAR.air, nitrousOxide * GAS_MOLAR.n2o / GAS_MOLAR.air];
   const layerOzone = new Float64Array(K), paths = Array.from({ length: 6 }, () => new Float64Array(K)), pathRow = new Float64Array(6);
   const gasEmissivityG = new Float64Array(K), totalEmissivity = new Float64Array(K), planck = new Float64Array(K);
+  const chained = longwaveOverlap === 'exponentialRandom';
+  const chainCover = new Float64Array(K), chainCloud = new Float64Array(K), chainOutside = new Float64Array(K), clearShareInverse = new Float64Array(K), cloudShareInverse = new Float64Array(K);
+  const joint = Array.from({ length: 4 }, () => new Float64Array(K)), leavingUp = new Float64Array(K), leavingDown = new Float64Array(K);
   const ozoneTaken = new Float64Array(K), visibleVaporTaken = new Float64Array(K), nearInfraredTaken = new Float64Array(K), upwardOzone = new Float64Array(K);
   const gasSplit = { vapour: 0, oxygen: 0, co2: 0 };
   const rayleigh = rayleighDepth !== null ? [[1, rayleighDepth]] : rayleighBands;
@@ -676,6 +693,36 @@ export function createRadiation(mesh, core, {
     let up = surfaceUp;
     for (let k = K - 1; k >= 0; k--) up = up * (1 - eps[k]) + eps[k] * source[k];
     return up;
+  }
+
+  function chainPlanck(source, gas, surfaceUp) {
+    const [p00, p01, p10, p11] = joint;
+    let up0 = 0, up1 = 0;
+    for (let k = K - 1; k >= 0; k--) {
+      const f = chainCover[k], clear = 1 - (1 - gas[k]) * (1 - chainOutside[k]), cloudy = 1 - (1 - gas[k]) * (1 - chainCloud[k]);
+      let in0 = (1 - f) * surfaceUp, in1 = f * surfaceUp;
+      if (k < K - 1) {
+        const from0 = up0 * clearShareInverse[k + 1], from1 = up1 * cloudShareInverse[k + 1];
+        in0 = from0 * p00[k + 1] + from1 * p01[k + 1]; in1 = from0 * p10[k + 1] + from1 * p11[k + 1];
+      }
+      up0 = in0 * (1 - clear) + clear * source[k] * (1 - f);
+      up1 = in1 * (1 - cloudy) + cloudy * source[k] * f;
+      leavingUp[k] = up0 + up1;
+    }
+    let down0 = 0, down1 = 0;
+    for (let k = 0; k < K; k++) {
+      const f = chainCover[k], clear = 1 - (1 - gas[k]) * (1 - chainOutside[k]), cloudy = 1 - (1 - gas[k]) * (1 - chainCloud[k]);
+      let in0 = 0, in1 = 0;
+      if (k > 0) {
+        const from0 = down0 * clearShareInverse[k - 1], from1 = down1 * cloudShareInverse[k - 1];
+        in0 = from0 * p00[k] + from1 * p10[k]; in1 = from0 * p01[k] + from1 * p11[k];
+      }
+      down0 = in0 * (1 - clear) + clear * source[k] * (1 - f);
+      down1 = in1 * (1 - cloudy) + cloudy * source[k] * f;
+      leavingDown[k] = down0 + down1;
+    }
+    for (let k = 0; k < K; k++) netFlux[k] += (k > 0 ? leavingDown[k - 1] : 0) - leavingUp[k] - leavingDown[k] + (k < K - 1 ? leavingUp[k + 1] : surfaceUp);
+    return [leavingUp[0], leavingDown[K - 1]];
   }
 
   function solarGasPaths(i, pi, theta, q, mu) {
@@ -1086,6 +1133,20 @@ export function createRadiation(mesh, core, {
         layerPaths(pathRow, pi * sigmaMid[k], pi * dSigma[k] / g, temperature[k], q[idx], layerOzone[k] * OZONE_CM_ATM, wellMixed[0] * dry, wellMixed[1] * dry, wellMixed[2] * dry);
         for (let j = 0; j < 6; j++) paths[j][k] = pathRow[j];
       }
+      if (chained) {
+        for (let k = 0; k < K; k++) {
+          const water = cloudWater[k], decked = deck > 0 && k === stratusLayer;
+          chainCover[k] = water > 0 && !decked ? layerCover[k] : 0;
+          chainCloud[k] = chainCover[k] > 0 ? -Math.expm1(-infrared[k] * water / chainCover[k]) : 0;
+          chainOutside[k] = decked ? cloudEmissivity[k] : 0;
+          clearShareInverse[k] = chainCover[k] < 1 ? 1 / (1 - chainCover[k]) : 0;
+          cloudShareInverse[k] = chainCover[k] > 0 ? 1 / chainCover[k] : 0;
+          if (k === 0) continue;
+          const a = chainCover[k - 1], b = chainCover[k], alpha = Math.exp(-(geopotential[(k - 1) * C + i] - geopotential[k * C + i]) / (g * decorrelation[i]));
+          const both = a + b - (alpha * Math.max(a, b) + (1 - alpha) * (a + b - a * b));
+          joint[0][k] = 1 - a - b + both; joint[1][k] = b - both; joint[2][k] = a - both; joint[3][k] = both;
+        }
+      }
       for (const row of LONGWAVE_TABLE.points) {
         for (let k = 0; k < K; k++) {
           const tau = LONGWAVE_CONSTANTS.diffusivity * (row[0] * paths[0][k] + row[1] * paths[1][k] + row[2] * paths[2][k] + row[3] * paths[3][k] + row[4] * paths[4][k] + row[5] * paths[5][k]);
@@ -1094,7 +1155,7 @@ export function createRadiation(mesh, core, {
           planck[k] = planckShare(row, temperature[k]) * STEFAN_BOLTZMANN * temperature[k] ** 4;
         }
         const surfaceUp = planckShare(row, surfaceT) * surfaceEmission;
-        const [up, down] = bandPlanck(planck, totalEmissivity, surfaceUp);
+        const [up, down] = chained ? chainPlanck(planck, gasEmissivityG, surfaceUp) : bandPlanck(planck, totalEmissivity, surfaceUp);
         outgoing += up; back += down;
         if (clearSkyPass) clearOutgoing += upwardPlanck(planck, gasEmissivityG, surfaceUp);
       }

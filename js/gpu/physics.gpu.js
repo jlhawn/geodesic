@@ -55,6 +55,7 @@ export function physicsConstants(o) {
   if (o.deckRegime !== 'inversion' && o.deckRegime !== 'boundaryLayer') throw new Error(`deckRegime must be 'inversion' or 'boundaryLayer', not ${o.deckRegime}`);
   const moistTurbulence = o.turbulence === 'moist';
   if (o.longwaveScheme !== 'correlated' && o.longwaveScheme !== 'gray') throw new Error(`longwaveScheme must be 'correlated' or 'gray', not ${o.longwaveScheme}`);
+  if (o.longwaveOverlap !== 'exponentialRandom' && o.longwaveOverlap !== 'random') throw new Error(`longwaveOverlap must be 'exponentialRandom' or 'random', not ${o.longwaveOverlap}`);
   if (o.solarGases !== 'clirad' && o.solarGases !== 'lacisHansen') throw new Error(`solarGases must be 'clirad' or 'lacisHansen', not ${o.solarGases}`);
   if (o.ozoneProfile) throw new Error('the GPU radiation takes its ozone from its climatology, not an ozoneProfile');
   if (o.ozone !== 'afgl' && o.ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${o.ozone}`);
@@ -78,7 +79,7 @@ const CLOUD_SW: f32 = ${o.cloudSolarAbsorption}; const WINDOW: f32 = ${o.window}
 const STRATUS: bool = ${!!o.stratus}; const ECTEI: bool = ${o.stratusIndex === 'ectei'}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6; const CLEAR_SKY: bool = ${!!o.clearSkyPass};
-const LW_CORRELATED: bool = ${o.longwaveScheme === 'correlated'}; const SOLAR_CLIRAD: bool = ${o.solarGases === 'clirad'}; const NG: i32 = ${points.length}; const LW_D: f32 = ${LONGWAVE_CONSTANTS.diffusivity}; const LW_PREF: f32 = ${LONGWAVE_CONSTANTS.pRef};
+const LW_CORRELATED: bool = ${o.longwaveScheme === 'correlated'}; const LW_CHAIN: bool = ${o.longwaveOverlap === 'exponentialRandom'}; const SOLAR_CLIRAD: bool = ${o.solarGases === 'clirad'}; const NG: i32 = ${points.length}; const LW_D: f32 = ${LONGWAVE_CONSTANTS.diffusivity}; const LW_PREF: f32 = ${LONGWAVE_CONSTANTS.pRef};
 const LW_TSELF: f32 = ${LONGWAVE_TABLE.tSelf}; const LW_TCO2: f32 = ${LONGWAVE_TABLE.tCo2}; const LW_NO3: f32 = ${LONGWAVE_TABLE.nO3};
 const LW_DH2O: f32 = ${LONGWAVE_TABLE.dopplerH2o ?? 0}; const LW_DCO2: f32 = ${LONGWAVE_TABLE.dopplerCo2 ?? 0}; const LW_DO3: f32 = ${LONGWAVE_TABLE.dopplerO3 ?? 0};
 const CO2_MASS: f32 = ${o.carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air}; const CH4_MASS: f32 = ${o.methane * GAS_MOLAR.ch4 / GAS_MOLAR.air}; const N2O_MASS: f32 = ${o.nitrousOxide * GAS_MOLAR.n2o / GAS_MOLAR.air};
@@ -841,7 +842,7 @@ export const PHYSICS_KERNELS = {
   let visibleTaken = ozoneHeating + beam * solar.x;
   let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
-  var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
+  var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>; var chainF: array<f32, K>;
   var cloudPath = 0.0; var cloudDepth = 0.0; var deckUnit = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0); var layered = vec2<f32>(0.0, 0.0);
   let tau0 = PH[PH_TAU + i];
   var deck = 0.0; var fraction = 0.0; var mlmCover = 0.0; var mlmWater = 0.0; var mlmEntrainment = 0.0; var mlmTop = 0.0;
@@ -929,6 +930,7 @@ export const PHYSICS_KERNELS = {
     if (EXP_OVERLAP) { overlapLayer(seen, overlapAlpha(i, k), &layered); }
     cloudE[k] = select(0.0, f * (1.0 - exp(-optics.y * water / f)), water > 0.0);
     if (STRATUS && k == STRATUS_K && deck > 0.0) { cloudE[k] = fraction * (1.0 - exp(-optics.y * (water + deck))) + (1.0 - fraction) * cloudE[k]; }
+    if (LW_CHAIN) { chainF[k] = select(0.0, f, water > 0.0 && !(STRATUS && k == STRATUS_K && deck > 0.0)); }
     let clear = 1.0 - cloudE[k];
     vaporE[k] = 1.0 - (1.0 - eps) * clear;
     mixedE[k] = 1.0 - (1.0 - LV[L_GASE + k]) * clear;
@@ -1031,7 +1033,50 @@ export const PHYSICS_KERNELS = {
   var beforeBands: array<f32, K>;
   if (MOIST_BL) { for (var k = 0; k < K; k++) { beforeBands[k] = netFlux[k]; } }
   var outgoing = 0.0; var back = 0.0; var clearOutgoing = 0.0;
-  if (LW_CORRELATED) {
+  if (LW_CORRELATED && LW_CHAIN) {
+    // each region's heat is its absorption less its emission: the difference of whole fluxes loses the thin top layers to f32 cancellation
+    var down0: array<f32, NG>; var down1: array<f32, NG>; var up0: array<f32, NG>; var up1: array<f32, NG>; var clearG: array<f32, NG>;
+    for (var k = 0; k < K; k++) {
+      let row = longwavePaths(i, k, pi, temperature[k], layerOzone[k]); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0;
+      let f = chainF[k]; let a = select(0.0, chainF[max(k - 1, 0)], k > 0); let alpha = overlapAlpha(i, k);
+      let cloudIn = select(0.0, cloudE[k] / f, f > 0.0); let clearIn = select(cloudE[k], 0.0, f > 0.0);
+      let both = a + f - (alpha * max(a, f) + (1.0 - alpha) * (a + f - a * f));
+      let p00 = 1.0 - a - f + both; let p01 = f - both; let p10 = a - both;
+      let clearShare = select(0.0, 1.0 / (1.0 - a), a < 1.0); let cloudShare = select(0.0, 1.0 / a, a > 0.0);
+      var heat = 0.0;
+      for (var g = 0; g < NG; g++) {
+        let gas = relaxedFraction(longwaveDepth(g, row)); let src = planckShare(g, t) * hot;
+        let e0 = 1.0 - (1.0 - gas) * (1.0 - clearIn); let e1 = 1.0 - (1.0 - gas) * (1.0 - cloudIn);
+        let from0 = down0[g] * clearShare; let from1 = down1[g] * cloudShare;
+        let in0 = from0 * p00 + from1 * p10; let in1 = from0 * p01 + from1 * both;
+        heat += e0 * (in0 - src * (1.0 - f)) + e1 * (in1 - src * f);
+        down0[g] = in0 * (1.0 - e0) + e0 * src * (1.0 - f); down1[g] = in1 * (1.0 - e1) + e1 * src * f;
+      }
+      netFlux[k] += heat;
+    }
+    let surfaceScaled = (ts - 250.0) / 100.0;
+    for (var g = 0; g < NG; g++) { back += down0[g] + down1[g]; up0[g] = planckShare(g, surfaceScaled) * surfaceEmission; clearG[g] = up0[g]; }
+    for (var k = K - 1; k >= 0; k--) {
+      let row = longwavePaths(i, k, pi, temperature[k], layerOzone[k]); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0;
+      let f = chainF[k]; let b = select(0.0, chainF[min(k + 1, K - 1)], k < K - 1); let alpha = overlapAlpha(i, min(k + 1, K - 1));
+      let cloudIn = select(0.0, cloudE[k] / f, f > 0.0); let clearIn = select(cloudE[k], 0.0, f > 0.0);
+      let both = f + b - (alpha * max(f, b) + (1.0 - alpha) * (f + b - f * b));
+      let p00 = 1.0 - f - b + both; let p01 = b - both; let p10 = f - both;
+      let clearShare = select(0.0, 1.0 / (1.0 - b), b < 1.0); let cloudShare = select(0.0, 1.0 / b, b > 0.0);
+      var heat = 0.0;
+      for (var g = 0; g < NG; g++) {
+        let gas = relaxedFraction(longwaveDepth(g, row)); let src = planckShare(g, t) * hot;
+        let e0 = 1.0 - (1.0 - gas) * (1.0 - clearIn); let e1 = 1.0 - (1.0 - gas) * (1.0 - cloudIn);
+        let from0 = up0[g] * clearShare; let from1 = up1[g] * cloudShare;
+        let in0 = from0 * p00 + from1 * p01; let in1 = from0 * p10 + from1 * both;
+        heat += e0 * (in0 - src * (1.0 - f)) + e1 * (in1 - src * f);
+        up0[g] = in0 * (1.0 - e0) + e0 * src * (1.0 - f); up1[g] = in1 * (1.0 - e1) + e1 * src * f;
+        if (CLEAR_SKY) { clearG[g] = clearG[g] * (1.0 - gas) + gas * src; }
+      }
+      netFlux[k] += heat;
+    }
+    for (var g = 0; g < NG; g++) { outgoing += up0[g] + up1[g]; clearOutgoing += clearG[g]; }
+  } else if (LW_CORRELATED) {
     var downG: array<f32, NG>; var upG: array<f32, NG>; var clearG: array<f32, NG>;
     for (var k = 0; k < K; k++) {
       let row = longwavePaths(i, k, pi, temperature[k], layerOzone[k]); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
