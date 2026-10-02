@@ -8087,6 +8087,32 @@ subcloud layer into a flux far beyond what the PCAPE asks; 0.42 of the box's
 convective rain falls at 0–6 LT (0.41 with element 4) and none at 11–16 LT. Global rain of the
 replayed day 2.41 (base) → 2.05 mm/d, of which convective 0.27 → 0.79.
 
+**PCAPE_bl at least 0 (review, Oct 2).** `pcapeBoundary` 'positive' (the
+default; 'signed' is elements 2–4 bit for bit on the CPU) takes
+max(0, Σ dT_v/dt|nc Δp) in PCAPE_bl. Bechtold et al. (2014, ECMWF Tech.
+Memo. 705, §2b) define PCAPE_bl as the boundary-layer production of PCAPE
+that shallow convection takes up, and report that the closure barely
+changes the convection at night; the IFS-derived scheme of WRF
+(`module_cu_ntiedtke.F`, its non-equilibrium branch) sets
+`zcape2 = max(0, zcape2)`. Signed, a cooling subcloud layer adds to the
+PCAPE: on Jordan's land column under −10 K/d PCAPE_bl is −1124 Pa against
+a PCAPE of 220 Pa and the base flux 0.0963 against 0.0243 kg/m²/s with no
+tendency (bounded: 0 Pa and 0.0243). Over one CPU day from element 4's
+day-186 state the deep plume fired on 235 106 column-steps with no PCAPE
+(none bounded); 0.76 of the fired land column-steps were held at the
+boundary-loss or Courant limit (0.02 bounded) and 0.97 of the tropical
+land base flux was beyond what the PCAPE alone asks; over sea 0.29 of the
+fired column-steps had PCAPE_bl < 0, their flux a median 1.5 times the
+PCAPE's. Three days from eight64_day0183 against element 4: Amazon mean
+fired PCAPE_bl −1884 → +1.6 Pa, dilute CAPE 6.6 → 25.7 J/kg, firing 0.39 →
+0.21, rain 0.32 → 0.47 mm/d, fired tops above 300 hPa 0.01 → 0.16, its
+convective rain still none at 11–15 LT with its maximum at 22 LT; ITCZ
+convective share 0.823 → 0.826, firing 0.476 → 0.496, Q1R centroid 714.7
+→ 718.4 hPa; warm-pool share 0.666 → 0.678; N Pacific trades deep firing
+0.704 → 0.757, convective rain 1.60 → 1.59 mm/d; replayed day's global
+rain 2.049 → 2.041 mm/d, wettest cell 258 → 242 mm/d; GPU day 186 ASR −
+OLR 11.8 → 11.9, SWCRE −45.8 → −44.9, LWCRE 23.8 → 23.1 W/m².
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21

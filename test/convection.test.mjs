@@ -493,6 +493,21 @@ test('under the Bechtold closure a warming subcloud layer over the sea takes its
   assert.ok(calm.deep && calm.baseFlux > 0 && calm.pcapeBoundary === 0, 'the calm land column fires');
 });
 
+test('a cooling subcloud layer gives no boundary-layer part under pcapeBoundary positive, so the land plume at night removes its PCAPE over τ as with no tendency; signed lets the cooling add to the PCAPE', () => {
+  const dt = 600, fire = (heating, options = {}) => {
+    const land = plumeColumn({ land: Uint8Array.from({ length: 16 * 16 * 10 + 2 }, (_, i) => (i === 0 ? 1 : 0)), ...options }, null, 16), [lp, lt, , , lq, lqc] = land.state;
+    subcloudVirtual(land, 0, heating, dt);
+    land.moist.plumeColumn(0, lp, lt, lq, lqc, dt);
+    return { ...land.moist.deep };
+  };
+  const calm = fire(0), night = fire(-10), signed = fire(-10, { pcapeBoundary: 'signed' }), day = fire(10), signedDay = fire(10, { pcapeBoundary: 'signed' });
+  console.log(`land under −10 K/d below cloud base: PCAPE_bl ${night.pcapeBoundary} Pa and base flux ${night.baseFlux.toFixed(5)} kg/m²/s (${calm.baseFlux.toFixed(5)} with no tendency); signed PCAPE_bl ${signed.pcapeBoundary.toFixed(0)} Pa against PCAPE ${signed.pcape.toFixed(0)}, base flux ${signed.baseFlux.toFixed(5)}`);
+  assert.equal(MOIST_DEFAULTS.pcapeBoundary, 'positive');
+  assert.ok(night.deep && night.pcapeBoundary === 0 && night.baseFlux === calm.baseFlux, 'a cooling subcloud layer leaves the closure as with no tendency');
+  assert.ok(signed.pcapeBoundary < -signed.pcape && signed.baseFlux > 2 * calm.baseFlux, 'signed, the cooling adds to the PCAPE');
+  assert.deepEqual(day, signedDay, 'a warming subcloud layer is the same under both');
+});
+
 test('the deep plume leaves the lowest 50 hPa with the IFS surface-flux excess, the plain 50 hPa mean when the fluxes vanish, and the shallow plume keeps the mixed layer', () => {
   const dt = 600, run = (fluxes, options = {}) => {
     const model = plumeColumn(options), { moist } = model, [pi, theta, , , q, qc] = model.state;
@@ -698,6 +713,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ condensation: 'saturation', iceSaturation: false, iceFall: null });
   await parity({ iceNucleation: true, iceFall: 3.29 });
   await parity({ capeClosure: 'threshold' });
+  await parity({ pcapeBoundary: 'signed' });
   await parity({ plumeSourceDepth: 'boundaryLayer' });
 });
 

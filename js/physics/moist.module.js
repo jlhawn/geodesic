@@ -237,7 +237,10 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * the previous step's adjustment (`subcloudVirtual`, 0 until one has run:
  * no tendency), τ_bl the base's height over the mass-mean wind speed of
  * those layers (at least 2 m/s) over sea and sea ice, and H / w̄ over
- * `land`. 'threshold' relaxes the CAPE toward `plumeCape` over
+ * `land`; with `pcapeBoundary` 'positive' (the default) a cooling subcloud
+ * layer gives PCAPE_bl 0, the boundary-layer production that shallow
+ * convection takes up (Bechtold et al. 2014, §2b; max(0, zcape2) in WRF's
+ * IFS-derived module_cu_ntiedtke.F), 'signed' keeps its sign. 'threshold' relaxes the CAPE toward `plumeCape` over
  * `plumeRelaxation`: the deep base flux is (CAPE − CAPE0) / (τ F), F the
  * change of the plume's net work over the layers between its source and
  * its top per second and unit base flux, the plume held fixed and the
@@ -324,8 +327,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * (or 'buoyant': F counts only the layers whose work the CAPE counts),
  * plumeRainRate 3e-3 /m,
  * plumeRainThreshold 0, plumeRainEvaporation 1e-3 /m, downdraftShare 0.3,
- * downdraftEntrainment 1e-4 /m, capeClosure 'bechtold' (with 'threshold'
- * plumeCape 120 J/kg and plumeRelaxation 1 h), no
+ * downdraftEntrainment 1e-4 /m, capeClosure 'bechtold' with pcapeBoundary
+ * 'positive' (with 'threshold' plumeCape 120 J/kg and plumeRelaxation 1 h), no
  * plumeMomentum, condensation 'uniform', iceSaturation true, no
  * iceNucleation, iceFall 2.5 m/s, iceFallExponent 0.16.
  */
@@ -336,7 +339,7 @@ export const MOIST_DEFAULTS = {
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean',
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
-  plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: false, plumeConsumption: 'all',
+  plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: false, plumeConsumption: 'all',
   condensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
   liquidTemperature: LIQUID_TEMPERATURE, iceTemperature: ICE_TEMPERATURE,
 };
@@ -350,7 +353,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     deckVeto, coupledVeto, evaporationInCloud, virtualBuoyancy,
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
-    downdraftShare, downdraftEntrainment, capeClosure, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption,
+    downdraftShare, downdraftEntrainment, capeClosure, pcapeBoundary, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption,
     condensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, liquidTemperature, iceTemperature,
   } = { ...MOIST_DEFAULTS, ...options };
   if (condensation !== 'uniform' && condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${condensation}`);
@@ -362,6 +365,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const buoyantConsumption = plumeConsumption === 'buoyant';
   if (capeClosure !== 'bechtold' && capeClosure !== 'threshold') throw new Error(`capeClosure must be 'bechtold' or 'threshold', not ${capeClosure}`);
   const bechtold = capeClosure === 'bechtold';
+  if (pcapeBoundary !== 'positive' && pcapeBoundary !== 'signed') throw new Error(`pcapeBoundary must be 'positive' or 'signed', not ${pcapeBoundary}`);
+  const positiveBoundary = pcapeBoundary === 'positive';
   if (plumeSource !== 'mean' && plumeSource !== 'lowest') throw new Error(`plumeSource must be 'mean' or 'lowest', not ${plumeSource}`);
   const deepLowest = plumeSource === 'lowest';
   if (plumeSourceDepth !== 'surface50' && plumeSourceDepth !== 'boundaryLayer') throw new Error(`plumeSourceDepth must be 'surface50' or 'boundaryLayer', not ${plumeSourceDepth}`);
@@ -886,7 +891,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         mass += dp[k];
       }
       const boundaryWind = Math.max(BECHTOLD.boundaryWind, wind / mass), boundaryTime = land && land[i] ? turnover : (baseHeight - ground) / boundaryWind;
-      const pcapeBoundary = boundaryTime / BECHTOLD.temperatureScale * forcing;
+      const pcapeBoundary = boundaryTime / BECHTOLD.temperatureScale * (positiveBoundary ? Math.max(0, forcing) : forcing);
       relaxed = consumptionP > 0 ? Math.max(0, pcape - pcapeBoundary) / (tau * consumptionP) : 0;
       deep.pcape = pcape; deep.pcapeBoundary = pcapeBoundary; deep.consumptionP = consumptionP; deep.tau = tau; deep.speed = speed; deep.depth = cloudDepth; deep.boundaryWind = boundaryWind; deep.boundaryTime = boundaryTime;
     } else relaxed = consumption > 0 && cape > plumeCape ? (cape - plumeCape) / (plumeRelaxation * consumption) : 0;

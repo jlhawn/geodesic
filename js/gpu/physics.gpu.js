@@ -51,6 +51,7 @@ export function physicsConstants(o) {
   if (o.plumeConsumption !== 'all' && o.plumeConsumption !== 'buoyant') throw new Error(`plumeConsumption must be 'all' or 'buoyant', not ${o.plumeConsumption}`);
   if (o.plumeSourceDepth !== 'surface50' && o.plumeSourceDepth !== 'boundaryLayer') throw new Error(`plumeSourceDepth must be 'surface50' or 'boundaryLayer', not ${o.plumeSourceDepth}`);
   if (o.capeClosure !== 'bechtold' && o.capeClosure !== 'threshold') throw new Error(`capeClosure must be 'bechtold' or 'threshold', not ${o.capeClosure}`);
+  if (o.pcapeBoundary !== 'positive' && o.pcapeBoundary !== 'signed') throw new Error(`pcapeBoundary must be 'positive' or 'signed', not ${o.pcapeBoundary}`);
   if (o.condensation !== 'uniform' && o.condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${o.condensation}`);
   const entrainment = { ...ENTRAINMENT_DEFAULTS, ...o.entrainment };
   const cloudTop = { ...CLOUD_TOP_DEFAULTS, ...o.cloudTop };
@@ -117,7 +118,7 @@ const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: 
 const PL_SEPARATE: bool = ${o.plumeClosure === 'separate'}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
 const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.plumeConsumption === 'buoyant'}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
 const PL_SURFACE50: bool = ${o.plumeSourceDepth === 'surface50'}; const EX_COEF: f32 = ${SOURCE_EXCESS.coefficient}; const EX_T: f32 = ${SOURCE_EXCESS.temperature}; const EX_Q: f32 = ${SOURCE_EXCESS.humidity};
-const PL_BECHTOLD: bool = ${o.capeClosure === 'bechtold'}; const BT_SCALE: f32 = ${BECHTOLD.resolution / BECHTOLD.reference}; const BT_SHORT: f32 = ${BECHTOLD.shortest}; const BT_LONG: f32 = ${BECHTOLD.longest}; const BT_WIND: f32 = ${BECHTOLD.boundaryWind}; const BT_TSTAR: f32 = ${BECHTOLD.temperatureScale}; const SUB_K: i32 = ${o.subcloudLayers ?? 0};
+const PL_BECHTOLD: bool = ${o.capeClosure === 'bechtold'}; const BT_POSITIVE: bool = ${o.pcapeBoundary === 'positive'}; const BT_SCALE: f32 = ${BECHTOLD.resolution / BECHTOLD.reference}; const BT_SHORT: f32 = ${BECHTOLD.shortest}; const BT_LONG: f32 = ${BECHTOLD.longest}; const BT_WIND: f32 = ${BECHTOLD.boundaryWind}; const BT_TSTAR: f32 = ${BECHTOLD.temperatureScale}; const SUB_K: i32 = ${o.subcloudLayers ?? 0};
 const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const DARKENING: bool = ${darkening !== false}; const DARK_SURFACE: bool = ${darkening === 'surface'}; const ALB_WETSOIL: f32 = ${o.wetSoilAlbedo}; const DARK_FROM: f32 = ${wetting[0]}; const DARK_SPAN: f32 = ${wetting[1] - wetting[0]}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_CEILINV: f32 = ${o.ceilingInversion ?? o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
@@ -1761,7 +1762,7 @@ fn plumeColumn(i: i32, pi: f32, dt: f32) -> f32 {
       wind += dp[k] * length(cellWind(i, k)); layerMass += dp[k];
     }
     let boundaryTime = select((baseHeight - ground) / max(BT_WIND, wind / layerMass), turnover, PH[PH_LAND + i] > 0.5);
-    let pcapeBoundary = boundaryTime / BT_TSTAR * forcing;
+    let pcapeBoundary = boundaryTime / BT_TSTAR * select(forcing, max(0.0, forcing), BT_POSITIVE);
     if (consumptionP > 0.0) { relaxed = max(0.0, pcape - pcapeBoundary) / (tau * consumptionP); }
   } else if (consumption > 0.0 && cape > PL_CAPE) { relaxed = (cape - PL_CAPE) / (PL_TAU * consumption); }
   let gate = clamp(0.5 + (CIN_MAX - inhibition) / max(1.0, CIN_MAX), 0.0, 1.0);
