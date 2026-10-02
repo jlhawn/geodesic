@@ -61,8 +61,8 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * (Slingo 1989, 0.25–0.69 µm); κ = `diffusivity` (1.66) times
  * `liquidInfrared` (0.090361 m²/g, CAM3). Ice: r_e from Ou and Liou's
  * (1995) effective size D_e = 326.3 + 12.42 T_c + 0.197 T_c² +
- * 0.0012 T_c³ µm at the layer's T_c in °C held to [`iceRadiusColdest`,
- * `iceRadiusWarmest`] (−60 to −20 °C, their fit's range), r_e = D_e/2
+ * 0.0012 T_c³ µm at the layer's T_c in °C held to [`iceFitColdest`,
+ * `iceFitWarmest`] (−60 to −20 °C, their fit's range), r_e = D_e/2
  * (15.55 to 73.55 µm); τ = IWP (3.448·10⁻³ + 2.431/r_e) and
  * g = 0.7661 + 5.851·10⁻⁴ r_e (Ebert and Curry 1992, IWP in g/m², r_e in
  * µm, 0.25–0.69 µm); κ = 1.66 (0.005 + 1/r_e) m²/g (Ebert and Curry). A
@@ -393,15 +393,15 @@ export function adiabaticWaterLapse(T, p, cp, R, g, latentHeat = LATENT_HEAT) {
 
 export const CLOUD_OPTICS = {
   liquidTemperature: 273.15, iceTemperature: 235.15, seaDropletRadius: 11.8, landDropletRadius: 8.5, liquidInfrared: 0.090361, diffusivity: 1.66,
-  iceRadiusWarmest: -20, iceRadiusColdest: -60,
+  iceFitWarmest: -20, iceFitColdest: -60,
 };
 
 export function liquidShare(T, { liquidTemperature, iceTemperature } = CLOUD_OPTICS) {
   return Math.min(1, Math.max(0, (T - iceTemperature) / (liquidTemperature - iceTemperature)));
 }
 
-export function iceRadius(T, { iceRadiusWarmest, iceRadiusColdest } = CLOUD_OPTICS) {
-  const c = Math.min(iceRadiusWarmest, Math.max(iceRadiusColdest, T - 273.15));
+export function iceRadius(T, { iceFitWarmest, iceFitColdest } = CLOUD_OPTICS) {
+  const c = Math.min(iceFitWarmest, Math.max(iceFitColdest, T - 273.15));
   return 0.5 * (326.3 + c * (12.42 + c * (0.197 + c * 0.0012)));
 }
 
@@ -433,7 +433,7 @@ export function createRadiation(mesh, core, {
   exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
   rayleighDepth = RAYLEIGH_DEPTH, visibleFraction = 0.5, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, land = null, iceSheet = null,
   liquidTemperature = CLOUD_OPTICS.liquidTemperature, iceTemperature = CLOUD_OPTICS.iceTemperature, seaDropletRadius = CLOUD_OPTICS.seaDropletRadius, landDropletRadius = CLOUD_OPTICS.landDropletRadius,
-  liquidInfrared = CLOUD_OPTICS.liquidInfrared, diffusivity = CLOUD_OPTICS.diffusivity, iceRadiusWarmest = CLOUD_OPTICS.iceRadiusWarmest, iceRadiusColdest = CLOUD_OPTICS.iceRadiusColdest,
+  liquidInfrared = CLOUD_OPTICS.liquidInfrared, diffusivity = CLOUD_OPTICS.diffusivity, iceFitWarmest = CLOUD_OPTICS.iceFitWarmest, iceFitColdest = CLOUD_OPTICS.iceFitColdest,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential, piSigmaDot, p0 } = core.diagnostics;
   const { thetaV } = core.arrays;
@@ -502,7 +502,7 @@ export function createRadiation(mesh, core, {
   const stratusLayer = nearestLayer(sigmaMid, stratusSigma), stabilityLayer = nearestLayer(sigmaMid, STABILITY_SIGMA);
   const gasEmissivity = Float64Array.from({ length: K }, (_, k) => 1 - Math.exp(-gasOpticalDepth * (levels[k + 1] - levels[k])));
   const temperature = new Float64Array(K);
-  const optics = { liquidTemperature, iceTemperature, seaDropletRadius, landDropletRadius, liquidInfrared, diffusivity, iceRadiusWarmest, iceRadiusColdest };
+  const optics = { liquidTemperature, iceTemperature, seaDropletRadius, landDropletRadius, liquidInfrared, diffusivity, iceFitWarmest, iceFitColdest };
   const graySolar = cloudScattering !== null, grayInfrared = cloudAbsorption !== null;
   const continental = Uint8Array.from({ length: C }, (_, i) => (land && land[i] && !(iceSheet && iceSheet[i]) ? 1 : 0));
   const solarDepth = new Float64Array(K), infrared = new Float64Array(K), layerOptics = { liquid: 0, visible: 0, solar: 0, infrared: 0 };

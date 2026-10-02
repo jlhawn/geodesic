@@ -16,6 +16,7 @@ test('the optics of a kilogram of condensate: liquid above 273.15 K with the dro
   assert.deepEqual([liquidShare(300), liquidShare(273.15), liquidShare(235.15), liquidShare(200)], [1, 1, 0, 0]);
   assert.ok(close(liquidShare(254.15), 0.5, 1e-12));
   assert.ok(close(iceRadius(213.15), 15.55, 1e-12) && close(iceRadius(150), 15.55, 1e-12) && close(iceRadius(253.15), 73.55, 1e-12) && close(iceRadius(290), 73.55, 1e-12));
+  assert.ok(close(iceRadius(253.15, { iceFitWarmest: -30, iceFitColdest: -60 }), iceRadius(243.15), 1e-12) && close(iceRadius(203.15, { iceFitWarmest: -20, iceFitColdest: -50 }), iceRadius(223.15), 1e-12));
   const cases = [
     [285, false, { liquid: 1, visible: 127.11864406779661, solar: 18.01428813559323, infrared: 149.99926 }],
     [285, true, { liquid: 1, visible: 176.47058823529412, solar: 26.453470588235295, infrared: 149.99926 }],
