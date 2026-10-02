@@ -4086,7 +4086,14 @@ The work, in order:
    20.3, 0.1636 → 0.1574, 13.64 → 13.73, 2.33 → 2.34; day 2193 0.304 →
    0.301, 237.1 → 237.9, 240.6 → 240.7, −48.7 → −49.1, 17.2 → 17.3,
    0.1607 → 0.1571, 15.43 → 15.48, 1.88 → 1.89. Three days took 0.5–1.1
-   wall minutes on a shared GPU, before and after.
+   wall minutes on a shared GPU, before and after. Repeated from
+   nine64_day0365 and five64_day2190 in the review (Oct 2), the day lines
+   and the class table of the year-six state lit are the same to the
+   digits above. The review's converged equilibrium moves single cells'
+   start carbon by up to 1.9 kg/m² (26 %) and their land albedo by up to
+   0.008, the land means unchanged (6.974 and 7.520 kg/m² on those two
+   states), and leaves the class tables of both start states the same to
+   three decimals.
 
    The feedback (year-six state, snow-free cells, surface sunlight taken
    as 0.75 of the annual-mean insolation at the top; d(absorbed)/d(cover),
