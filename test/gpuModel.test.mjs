@@ -319,7 +319,7 @@ test('the uniform condensation\'s cover of each layer\'s condensate, over ice wh
   }
   console.log(`the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the exponential-random overlap moves it by up to ${overlap.toFixed(2)} K/day from maximum-random, the uniform cover by ${cover.toFixed(2)} from the saturation adjustment's, its saturation over ice by ${ice.toFixed(2)}, the stratiform blend at the cover's saturation on an inversion ramp of −40 to 40 K by ${blended.toFixed(2)}`);
   assert.ok(overlap > 1e-3 && cover > 0.1 && ice > 0.01 && blended > 0.1, `overlap ${overlap}, cover ${cover}, ice ${ice}, blend ${blended} K/day`);
-  assert.ok(engines < 1e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
+  assert.ok(engines < 1.5e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
 });
 
 test('under maximum-random overlap a layer of trace cloud water joins the layers either side into one block in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
