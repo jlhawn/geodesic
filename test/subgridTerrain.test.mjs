@@ -4,8 +4,8 @@ import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { topographyFromInt16, decodeSubgrid, encodeSubgrid, meshSubgrid, subgridUrl, SUBGRID_FIELDS } from '../js/geography.module.js';
-import { createModel } from '../js/model.module.js';
+import { topographyFromInt16, syntheticTopography, decodeSubgrid, encodeSubgrid, meshSubgrid, subgridUrl, SUBGRID_FIELDS } from '../js/geography.module.js';
+import { createModel, orographyFields } from '../js/model.module.js';
 import { meshFields } from '../scripts/subgridTerrain.mjs';
 
 const close = (actual, expected, tolerance, what) => assert.ok(Math.abs(actual - expected) <= tolerance * Math.abs(expected), `${what}: ${actual} against ${expected}`);
@@ -122,4 +122,22 @@ test('every mesh the page offers has its file; sea cells hold nothing and the co
     for (const [name, scale] of SUBGRID_FIELDS) for (let i = 0; i < mesh.nCells; i++) assert.ok(Math.abs(again[name][i] - fields[name][i]) <= 0.5 * scale + 1e-12, `${name} round trip`);
   }
   assert.equal(meshSubgrid(buildMesh(new Grid(8))), null, 'no file for N=8');
+});
+
+test('the files serve the bundled land mask with its terrain only: given fields lose their sea cells, and a run without terrain or on another mask takes the raster’s', () => {
+  const N = 16, mesh = buildMesh(new Grid(N)), file = meshSubgrid(mesh), g = 9.80616;
+  const model = createModel(new Grid(N), { physics: false, topography }), { geography, surfaceGeopotential: phis } = model;
+  const spread = Object.fromEntries(SUBGRID_FIELDS.map(([name]) => [name, Float64Array.from(file[name], (v, i) => (geography.land[i] ? v : 1))]));
+  const fitted = orographyFields(mesh, topography, geography, phis, spread, g);
+  assert.ok(!fitted.raster);
+  for (let i = 0; i < mesh.nCells; i++) {
+    if (geography.land[i]) assert.equal(fitted.deviation[i], file.deviation[i]);
+    else for (const [name] of SUBGRID_FIELDS) assert.equal(fitted[name][i], 0, `sea cell ${i} ${name}`);
+  }
+  assert.ok(orographyFields(mesh, topography, geography, null, undefined, g).raster, 'no terrain');
+  const other = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
+  const elsewhere = createModel(new Grid(N), { physics: false, topography: other });
+  assert.ok(orographyFields(mesh, other, elsewhere.geography, elsewhere.surfaceGeopotential, undefined, g).raster, 'another land mask');
+  assert.equal(createModel(new Grid(N), { topography: other }).boundaryLayer.formDrag, null);
+  assert.equal(createModel(new Grid(N), { topography, terrain: false }).boundaryLayer.formDrag, null);
 });

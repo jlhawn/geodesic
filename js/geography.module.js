@@ -329,12 +329,33 @@ export function meshSubgrid(mesh, given = undefined) {
   return decodeSubgrid(fs.readFileSync(url));
 }
 
+/*
+ * `fields` with the sea cells of `land` zeroed, or null when more than
+ * 0.5 % of the land cells hold nothing: fields made for another land mask.
+ */
+export function landSubgrid(fields, land) {
+  const masked = {};
+  for (const [name] of SUBGRID_FIELDS) if (fields[name]) masked[name] = Float64Array.from(fields[name], (v, i) => (land[i] ? v : 0));
+  let cells = 0, bare = 0;
+  for (let i = 0; i < land.length; i++) {
+    if (!land[i]) continue;
+    cells++;
+    if (!(masked.deviation[i] > 0 || masked.slope[i] > 0 || (masked.filtered && masked.filtered[i] > 0))) bare++;
+  }
+  return bare <= 0.005 * cells ? masked : null;
+}
+
+const SUBGRID_FALLBACK = {
+  missing: (N) => `no data/subgrid_N${N}.bin for this mesh`,
+  terrain: () => 'the terrain is off, and the files hold only the scales below the resolved terrain',
+  land: (N) => `data/subgrid_N${N}.bin was made for another land mask`,
+};
 const fallbackSaid = new Set();
-export function subgridFallbackNote(mesh) {
+export function subgridFallbackNote(mesh, reason = 'missing') {
   const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
-  if (fallbackSaid.has(N)) return;
-  fallbackSaid.add(N);
-  console.log(`subgrid orography: no data/subgrid_N${N}.bin for this mesh; computed from the 0.25° raster (σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);
+  if (fallbackSaid.has(`${N} ${reason}`)) return;
+  fallbackSaid.add(`${N} ${reason}`);
+  console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](N)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);
 }
 
 /*

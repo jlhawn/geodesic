@@ -7,7 +7,7 @@ import { createMoistPhysics } from './physics/moist.module.js';
 import { createSeaIce, MELTING_POINT, FREEZING_POINT } from './physics/ice.module.js';
 import { createOcean } from './ocean/layered.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
-import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, subgridFallbackNote } from './geography.module.js';
+import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
 import { createSurfaceExchange, exchangeMode } from './physics/exchange.module.js';
 import { createOrographicDrag, LOTT_MILLER } from './physics/orography.module.js';
@@ -51,12 +51,14 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * The subgrid orography of a mesh: data/subgrid_N<N>.bin's fields from
  * GMTED2010 (`subgrid`, or under node the bundled file), else the 0.25°
  * raster's (`raster` true), which carry no σ_flt and so no form drag and
- * take Lott and Miller's constants, not the IFS's for 5 km fields.
+ * take Lott and Miller's constants, not the IFS's for 5 km fields. The
+ * files' fields hold the scales below the resolved terrain on the bundled
+ * land mask, so a run without terrain or on another mask takes the raster's.
  */
 export function orographyFields(mesh, topography, geography, phis, subgrid, g) {
-  const fields = meshSubgrid(mesh, subgrid);
-  if (fields) return fields;
-  subgridFallbackNote(mesh);
+  const fields = phis ? meshSubgrid(mesh, subgrid) : null, fitted = fields ? landSubgrid(fields, geography.land) : null;
+  if (fitted) return fitted;
+  subgridFallbackNote(mesh, !phis ? 'terrain' : fields ? 'land' : 'missing');
   return { ...subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / g) : null, geography.land), raster: true };
 }
 
