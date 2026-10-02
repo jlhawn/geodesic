@@ -25,15 +25,19 @@
 // hemisphere. The
 // state saved carries the last day's per-cell convective and large-scale
 // rain, absorbed sunlight, outgoing longwave, albedo and cloud effects,
-// and the boundary layer's depth, mixing top, regime and surface buoyancy
-// flux.
+// the boundary layer's depth, mixing top, regime and surface buoyancy
+// flux, what the next step reads from the last before it computes its
+// own (the lowest layer's wind speed, the evaporation and the shallow
+// cumulus) and the ocean's restart arrays, so that a run continued from
+// a day's snapshot steps on bit for bit as the run that did not stop.
 //
 // SIGTERM or SIGINT stops the segment after the ocean step in progress
 // and exits 0: at a day's end it saves <TAG>_dayDDDD.bin as usual, inside
 // a day <TAG>_dayDDDD_stepSSSS.bin (DDDD days and SSSS steps done, with
-// the ocean's restart arrays and, when RECORD is set, the forcing
-// recorder's part of the day), which the next segment continues from and
-// deletes once it has saved a whole day.
+// the running rain and runoff totals the ocean takes its freshwater from
+// as differences and, when RECORD is set, the forcing recorder's part of
+// the day), which the next segment continues from and deletes once it has
+// saved a whole day.
 // Whole-day names alone count towards KEEP, and only whole-day names match
 // the day patterns of the shell drivers.
 //
@@ -142,6 +146,9 @@ function loadSaved(saved) {
   if (saved.mixingTop) model.boundaryLayer.mixingTop.set(saved.mixingTop);
   if (saved.boundaryRegime) model.boundaryLayer.regime.set(saved.boundaryRegime);
   if (saved.boundaryBuoyancy) model.boundaryLayer.buoyancyFlux.set(saved.boundaryBuoyancy);
+  if (saved.windSpeed) model.surface.windSpeed.set(saved.windSpeed);
+  if (saved.evaporation) model.radiation.evaporation.set(saved.evaporation);
+  for (const field of ['cumulusCover', 'cumulusWater']) if (saved[field] && saved[field].length === model.moist[field].length) model.moist[field].set(saved[field]);
   model.time = saved.time;
   model.load();
   model.ocean.load(saved.ocean, state[3], state[6]);
@@ -226,6 +233,16 @@ const readSplit = async () => {
 };
 const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration', 'ice'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12, fields.ice]; };
 await model.diagnostics();
+if (startStep && saved.rainTotal) {
+  const queue = model.gpu.device.queue;
+  queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.RAIN, Float32Array.from(saved.rainTotal));
+  queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.RUNOFF, Float32Array.from(saved.runoffTotal));
+  if (model.oceanEngine && saved.rainSeen) {
+    const { OD } = model.oceanEngine.layout;
+    queue.writeBuffer(model.oceanEngine.buffers.OD, 4 * OD.RAINSEEN, Float32Array.from(saved.rainSeen));
+    queue.writeBuffer(model.oceanEngine.buffers.OD, 4 * OD.RUNOFFSEEN, Float32Array.from(saved.runoffSeen));
+  }
+}
 const RECORD = process.env.RECORD;
 if (RECORD) mkdirSync(RECORD, { recursive: true });
 const partOfDay = RECORD && startStep && saved.forcingSums ? { sums: saved.forcingSums, steps: saved.forcingSteps, oceanSteps: saved.forcingOceanSteps, seconds: saved.forcingSeconds, rain: saved.forcingRain, runoff: saved.forcingRunoff } : null;
@@ -281,6 +298,14 @@ for (;;) {
 }
 
 const partial = {};
+if (step) {
+  const [rainTotal, runoffTotal] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.RAIN, length: C }, { offset: PH.RUNOFF, length: C }]);
+  Object.assign(partial, { rainTotal, runoffTotal });
+  if (model.oceanEngine) {
+    const { OD } = model.oceanEngine.layout, [rainSeen, runoffSeen] = await readRanges(model.gpu.device, model.oceanEngine.buffers.OD, [{ offset: OD.RAINSEEN, length: C }, { offset: OD.RUNOFFSEEN, length: C }]);
+    Object.assign(partial, { rainSeen, runoffSeen });
+  }
+}
 if (step && recorder) {
   await model.diagnostics();
   const part = await recorder.checkpoint();
@@ -288,7 +313,7 @@ if (step && recorder) {
 }
 await model.sync();
 const days = day - day0;
-const ocean = await model.ocean.serialize({ restart: step > 0 }), landState = await model.land.serialize();
+const ocean = await model.ocean.serialize({ restart: true }), landState = await model.land.serialize();
 const kT = LAYER_DENSITIES.filter((r) => r < THERMOCLINE_DENSITY).length;
 const sea = (a, b, c, e) => [...Array(C).keys()].filter((i) => !land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && (c <= e ? mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e : mesh.lonCell[i] * deg >= c || mesh.lonCell[i] * deg <= e));
 const meanOf = (cells, f) => cells.reduce((s, i) => s + f(i), 0) / Math.max(1, cells.length);
@@ -309,9 +334,9 @@ if (days > 0 && !step) {
   log(equatorLine(mesh, land, ocean, stress, days));
 }
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
-const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect } = model.radiation, { convectiveRain, largeScaleRain } = model.moist, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
+const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
 const header = { N, K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, ocean: step ? ocean : { h: ocean.h, u: ocean.u, T: ocean.T, S: ocean.S, eta: ocean.eta, densities: ocean.densities }, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, cumulusCover, cumulusWater, ocean, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));
 for (const old of whole.slice(0, Math.max(0, whole.length - KEEP))) unlinkSync(`${OUT}/${old}`);

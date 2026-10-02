@@ -1,5 +1,5 @@
 import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT } from '../physics/ice.module.js';
-import { DARKENING_WETNESS } from '../physics/land.module.js';
+import { DARKENING_WETNESS, TRACE_SNOW } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE } from '../physics/radiation.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS, FUSION_HEAT } from '../physics/moist.module.js';
@@ -135,7 +135,7 @@ fn uniformWidth(s: vec2<f32>, p: f32, ps: f32) -> f32 {
 }
 fn plumeSeen(seen: f32, cu: vec2<f32>, mass: f32) -> f32 {
   if (!PDF_COVER || !(cu.y * mass > 0.0)) { return seen; }
-  return max(seen, cu.x * (1.0 - exp(-cu.y * mass / (cu.x * VISIBLE_PATH))));
+  return max(seen, cu.x * smallRate(cu.y * mass / (cu.x * VISIBLE_PATH)));
 }
 fn uniformCover(qc: f32, b: f32) -> f32 {
   if (qc >= b) { return 1.0; }
@@ -803,8 +803,8 @@ export const PHYSICS_KERNELS = {
   let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);
   let canopyWet = veg0 * roots / (1.0 + RSTOM * aero / max(0.05, warmth));
   let landWet = select(roots, bareWet + canopyWet, VEGETATED);
-  let wetness = select(1.0, select(landWet, 1.0, snow0 > 0.0), onLand);
-  let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= 0.0);
+  let wetness = select(1.0, select(landWet, 1.0, snow0 > ${TRACE_SNOW}), onLand);
+  let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= ${TRACE_SNOW});
   var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0);
   if (SOLAR_CLIRAD && mu > 0.0) { solar = solarGases(i, pi, mu, &ozoneTaken, &gasTaken); }
   let ozoneHeating = select(beam * OZONE_ABS, beam * ozoneTaken[K - 1], SOLAR_CLIRAD);
@@ -839,7 +839,7 @@ export const PHYSICS_KERNELS = {
         let optics = cloudOptics(IN[S_TH + k * C + i] * D[D_EXM + k * C + i], continental);
         depth += optics.x * water;
         if (k == STRATUS_K) { layer = water; unit = optics.x; }
-        let shadeSeen = plumeSeen(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), cu, mass);
+        let shadeSeen = plumeSeen(select(0.0, f * smallRate(water / VISIBLE_PATH), PDF_COVER && water > 0.0), cu, mass);
         overlap(shadeSeen, k == K - 1, &shadeBlocks);
         if (EXP_OVERLAP) { overlapLayer(shadeSeen, overlapAlpha(i, k), &shadeLayered); }
       }
@@ -894,7 +894,7 @@ export const PHYSICS_KERNELS = {
     let optics = cloudOptics(IN[S_TH + idx] * D[D_EXM + idx], continental);
     cloudDepth += optics.x * water;
     if (k == STRATUS_K) { deckUnit = optics.x; }
-    let seen = plumeSeen(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), cu, mass);
+    let seen = plumeSeen(select(0.0, f * smallRate(water / VISIBLE_PATH), PDF_COVER && water > 0.0), cu, mass);
     overlap(seen, k == K - 1, &blocks);
     if (EXP_OVERLAP) { overlapLayer(seen, overlapAlpha(i, k), &layered); }
     cloudE[k] = select(0.0, f * (1.0 - exp(-optics.y * water / f)), water > 0.0);
@@ -1167,7 +1167,7 @@ fn blEntrain(i: i32, pi: f32, kE: i32, lowest: i32, h: f32, buoyant: f32, sheare
 }
 fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, friction: f32) {
   let bottom = K - 1;
-  var surfaceDepth = richardsonDepth;
+  var surfaceDepth = richardsonDepth; var surfaceLevel = -1;
   if (buoyancy > 0.0 && CT_CUMULUS > 0.0) {
     let base = bottom * C + i;
     let mixed = pow(friction * friction * friction + 0.6 * buoyancy * max(0.0, surfaceDepth), 1.0 / 3.0);
@@ -1182,7 +1182,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     }
     if (condensation > k && k >= KTOP) {
       let parcelTop = blInterface(k, i, zb); let cloudBase = blInterface(condensation, i, zb);
-      if (parcelTop - cloudBase <= CT_CUMULUS && parcelTop <= CT_HMAX && parcelTop > surfaceDepth) { surfaceDepth = parcelTop; }
+      if (parcelTop - cloudBase <= CT_CUMULUS && parcelTop <= CT_HMAX && parcelTop > surfaceDepth) { surfaceDepth = parcelTop; surfaceLevel = k; }
     }
   }
   var top = -1; var cooling = 0.0;
@@ -1206,7 +1206,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     }
     lowest = k - 1;
     if (k <= bottom) { base0 = blInterface(k - 1, i, zb); }
-    coupled = k > bottom || base0 <= surfaceDepth;
+    coupled = k > bottom || select(base0 <= surfaceDepth, k - 1 >= surfaceLevel, surfaceLevel >= 0);
     if (coupled) { base0 = 0.0; }
     cloudTopZ = blInterface(top - 1, i, zb);
   }
@@ -1239,11 +1239,11 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     let driven = coupled && buoyancy > 0.0;
     PH[PH_ENTRAIN + i] = blEntrain(i, pi, top - 1, lowest, select(layerDepth, cloudTopZ, coupled), velocityCubed + select(0.0, buoyancy * cloudTopZ, driven), select(0.0, sheared, driven));
     if (!coupled && buoyancy > 0.0 && surfaceDepth > 0.0) {
-      let kE = blSurfaceInterface(i, zb, surfaceDepth);
+      let kE = select(blSurfaceInterface(i, zb, surfaceDepth), surfaceLevel, surfaceLevel >= 0);
       if (kE >= lowest) { _ = blEntrain(i, pi, kE, K - 1, surfaceDepth, buoyancy * surfaceDepth, sheared); }
     }
   } else if (buoyancy > 0.0 && h > 0.0) {
-    PH[PH_ENTRAIN + i] = blEntrain(i, pi, blSurfaceInterface(i, zb, h), K - 1, h, buoyancy * h, sheared);
+    PH[PH_ENTRAIN + i] = blEntrain(i, pi, select(blSurfaceInterface(i, zb, h), surfaceLevel, surfaceLevel >= 0 && h == surfaceDepth), K - 1, h, buoyancy * h, sheared);
   }
 }
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {

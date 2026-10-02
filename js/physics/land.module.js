@@ -7,7 +7,9 @@ import { SOLAR_CONSTANT, AXIAL_TILT } from './radiation.module.js';
  * dries and spills what it cannot hold into runoff, and a snow cover in
  * water equivalent that precipitation builds when the lowest air is
  * below freezing and the surface energy melts. Evaporation draws on the
- * snow while there is any, else on the bucket; snow raises the albedo
+ * snow while there is any, else on the bucket, at the potential rate
+ * while the snow is more than a trace (TRACE_SNOW kg/m²), else at the
+ * bucket's wetness; snow raises the albedo
  * toward snowAlbedo over fullSnow kg/m². update() applies the surface
  * flux and the evaporation of the physics phase; deposit() adds the
  * step's precipitation in the adjustment phase, when it is known. The
@@ -74,6 +76,7 @@ import { SOLAR_CONSTANT, AXIAL_TILT } from './radiation.module.js';
  * decline does not.
  */
 export const DARKENING_WETNESS = { surface: [0, 1], rootZone: [0.2, 0.5] };
+export const TRACE_SNOW = 1e-6;
 
 /*
  * The start of the season means where a state carries none: a year of
@@ -169,7 +172,7 @@ export function createLandSurface(mesh, geography, {
   }
 
   function wetness(i, aero = 0, temperature = growthWarmest) {
-    if (snow[i] > 0) { bareShare[i] = 0; return 1; }
+    if (snow[i] > TRACE_SNOW) { bareShare[i] = 0; return 1; }
     const roots = Math.min(1, soil[i] / (wetnessThreshold * capacity(i)));
     if (!vegetated) { bareShare[i] = 0; return roots; }
     const bare = (1 - vegetation[i]) * Math.min(1, surface[i] / surfaceCapacity);

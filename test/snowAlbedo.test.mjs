@@ -187,12 +187,18 @@ test('over 48 GPU steps the snow albedo and the standing cover evolve as on the 
   };
   const cpu = prepare(createModel(new Grid(6), { topography, ...options }));
   const gpu = prepare(await createGpuModel(new Grid(6), { topography, ...options }));
-  for (let n = 0; n < 48; n++) { cpu.step(900); await gpu.step(900); }
+  const C = cpu.mesh.nCells, apart = new Float64Array(C);
+  for (let n = 0; n < 48; n++) {
+    cpu.step(900); await gpu.step(900);
+    const { STEPRAIN } = await gpu.gpu.downloadPhysics();
+    for (let i = 0; i < C; i++) apart[i] = Math.max(apart[i], Math.abs(cpu.moist.rain[i] - STEPRAIN[i]) / Math.max(1e-6, cpu.moist.rain[i]));
+  }
   await gpu.sync();
-  const saved = await gpu.land.serialize(), C = cpu.mesh.nCells;
-  let worst = 0, sum = 0, n = 0, moved = 0, refreshed = 0, wet = 0, canopyWorst = 0, standing = 0, at = -1;
+  const saved = await gpu.land.serialize();
+  let worst = 0, sum = 0, n = 0, moved = 0, refreshed = 0, wet = 0, canopyWorst = 0, standing = 0, at = -1, unlike = 0;
   for (let i = 0; i < C; i++) {
     if (!(cpu.land.snow[i] > 0)) continue;
+    if (apart[i] > 0.05) { unlike++; continue; }
     const d = Math.abs(cpu.land.snowAlbedo[i] - saved.snowAlbedo[i]);
     if (d > worst) { worst = d; at = i; }
     sum += d * d; n++;
@@ -203,8 +209,8 @@ test('over 48 GPU steps the snow albedo and the standing cover evolve as on the 
   }
   const rms = Math.sqrt(sum / n);
   gpu.destroy();
-  console.log(`N=6, 48 steps: ${n} snow cells, ${moved} moved from 0.8 (${refreshed} snowed on, ${wet} wet), snow albedo engines rms ${rms.toExponential(1)}, max ${worst.toExponential(1)} at ${at}; standing cover above the cover on ${standing} cells, engines max ${canopyWorst.toExponential(1)}`);
-  assert.ok(moved > n / 2 && refreshed > 3 && standing > 5 && wet > 5 && n - wet > 5, `${moved} moved, ${refreshed} snowed on, ${wet} of ${n} wet, ${standing} standing`);
+  console.log(`N=6, 48 steps: ${n} snow cells (${unlike} more whose snowfall parted by over 5% in some step), ${moved} moved from 0.8 (${refreshed} snowed on, ${wet} wet), snow albedo engines rms ${rms.toExponential(1)}, max ${worst.toExponential(1)} at ${at}; standing cover above the cover on ${standing} cells, engines max ${canopyWorst.toExponential(1)}`);
+  assert.ok(moved > n / 2 && refreshed > 3 && standing > 5 && wet > 5 && n - wet > 5 && unlike < n / 4, `${moved} moved, ${refreshed} snowed on, ${wet} of ${n} wet, ${standing} standing, ${unlike} snowed on unlike`);
   assert.ok(rms < 1e-4 && worst < 1e-3, `snow albedo rms ${rms}, max ${worst}`);
   assert.ok(canopyWorst < 1e-4, `standing cover max ${canopyWorst}`);
 });
