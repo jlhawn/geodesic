@@ -5569,7 +5569,7 @@ states; the last day's means; cover, audit and classes on the last state;
 "surface" is the clear-sky branch under gray cloud and "cloud" the
 cloud-optics branch, both from their own paragraphs; Earth: albedo about
 0.29, SWCRE −47 ± 4 and LWCRE +26 ± 3 W/m² (CERES EBAF), rain 2.6–2.8
-mm/d, cover 0.65–0.68):
+mm/d (GPCP), cover 0.65–0.68 (ISCCP, MODIS, CALIPSO)):
 
 | | albedo | ASR; OLR; ASR − OLR | SWCRE; LWCRE | clear-sky albedo | rain, day (audit); convective share | total cover; 60–90S |
 |---|---|---|---|---|---|---|
@@ -5662,19 +5662,24 @@ SHEBA's 85 at 0.55–0.70, under downwelling sunlight of 209 against 300
 (the June 60–90N SWCRE is −105 W/m², classes on day 94). The ice's net
 gain is about 108 W/m² against SHEBA's 40: +22 of the difference
 sunlight (no snow left at the solstice, so no melting-snow albedo near
-0.7), +30 longwave (downwelling 303 against about 280), +14 sensible heat
+0.7), +30 longwave (net −11 against −40; the downwelling 303 against about
+280 makes 23 of it), +14 sensible heat
 from air warmer than the melting surface (SHEBA near 0), +3 latent; the
 ocean's 4.7 W/m² is SHEBA's. The model's 3.4 % a day is 2–3 times
 Earth's 1.2–1.6 %: the surface flux makes about 2 of it (4.7 cm of ice a
-day over the pack, against PIOMAS's 0.22·10³ km³ a day over an ice area of
-about 10⁷ km², about 2 cm (the June area from memory), and SHEBA's 1.1 cm
-at 40 W/m², 2.4 at 85), the thin pack about 1.3 (1.38 m against about
-1.8), the ocean none. The test's reference is the fractional loss: 1.2–1.6
-% of the volume a day at the June solstice (PIOMAS v2.1, 2011–2025
-monthly means, the rates mid-May to mid-June and mid-June to mid-July over
-their mean volumes), 0.11–0.15·10³ km³/day for this state's 9.19; the
-melt per area of the pack, about 2 cm of ice a day (PIOMAS) and 1.1–2.4
-cm (SHEBA), is the second check.
+day over the pack, against PIOMAS's 0.15–0.22·10³ km³ a day over the June
+ice area of the NSIDC Sea Ice Index v4, 8.53·10⁶ km² for 2011–2025
+(extent 10.78), 1.8–2.6 cm and about 2.3 at the solstice, and SHEBA's
+1.1 cm at 40 W/m², 2.4 at 85), the thin pack about 1.4 (1.38 m against
+PIOMAS's June 16.81·10³ km³ over that area, 1.97 m), the ocean none. The
+test's reference is the fractional loss: 1.2–1.6 % of the volume a day at
+the June solstice (PIOMAS v2.1, 2011–2025 monthly means: the rate
+interpolated to 21 June, 0.20·10³ km³/day, over the volume then, 15.8,
+and mid-June to mid-July over its mean volume), 0.11–0.15·10³ km³/day for
+this state's 9.19, which the second sweep's score now takes (0.129 ±
+0.018 in `scripts/sweep/score.mjs`); the melt per area of the pack, about
+2.3 cm of ice a day (PIOMAS over the NSIDC area) and 1.1–2.4 cm (SHEBA),
+is the second check.
 
 Cost under the exclusive lock (`js/gpu/profile.module.js`, 128 steps
 after 16 from eight64_day0183 and eight128_day0183, alternated twice with
@@ -5685,6 +5690,34 @@ boundary-layer passes 2.79 against 2.25 ms and 11.70 against 9.55 ms. A
 day at N=128 takes 60 s of wall time (one day from eight128_day0183 after
 6 s of setup). No run made a NaN; nine64's known day-94 clamp is the
 only one.
+
+Review of the integration (Oct 1). Each conflicted file's merge equals
+the union of both sides' changes but for the GPU escapes above; PH's slots
+are named in one sequence, so no two fields share one. The suite (52
+files, concurrently) passes. On real states, one step (N=64; eight64_day0183
+and nine64_day0091): the CPU with gray optics, maximum-random overlap and
+the saturation adjustment is bit-identical to the clear-sky branch in
+every flux and field; the clear-sky ASR and OLR of every cell are
+bit-identical on each engine under the defaults, the gray optics, either
+overlap and the old condensation; `scripts/clearSkyBudget.mjs` gives the
+clear-sky branch's table to the digit, with and without the gray cloud.
+The shortwave closes per column to 4·10⁻¹⁶ of the beam on the CPU and
+2.5·10⁻⁷ on the GPU (also on five64_day2190, nine64_day0365 and
+eight128_day0183, which load on both engines); the moist adjustment keeps
+column water and c_p T + L q to 8·10⁻¹⁶ on the CPU and 1.6·10⁻⁶ and
+8.5·10⁻⁷ on the GPU over 16 steps. Engines under the defaults, one step:
+ASR within 0.03, OLR 0.004 and the net surface flux 0.04 W/m² in every
+cell (the clear-sky branch's engines differ by up to 165 W/m² in about
+400 cells, as do 15754a7's: the saturation adjustment's cover; the new
+defaults do not carry it); nine to fifteen columns differ by more than
+0.1 K in their lowest ten layers, as on 15754a7. A GPU run repeats
+itself bit for bit, but a restart from a saved state is not bit-exact:
+three days in one segment and three one-day segments from eight64_day0183
+part in every field by day 186 (global day means alike to the log's
+digits), on both parents too. The eight64 rerun, day by day as above,
+matches the table to every digit; the June rerun, day by day where the
+table's ran in one segment, gives ASR 236.9, ASR − OLR −4.4 and SWCRE
+−51.4 on day 94 and the same loss, 0.314·10³ km³/day (9.191 → 8.249).
 
 ### M23 — The equatorial ocean — in progress
 
