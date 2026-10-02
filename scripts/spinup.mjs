@@ -47,8 +47,9 @@
 // MOIST (JSON options for the moist physics, e.g. '{"plumeEntrainment":0.15}'),
 // BOUNDARY_LAYER (JSON options for the boundary layer, e.g.
 // '{"entrainment":{"efficiency":0.3}}'), SURFACE (JSON options for the
-// surface, e.g. '{"dragCoefficient":1.3e-3}', the sea's drag coefficient,
-// which its heat and vapour exchange share), LAND (JSON options for the
+// surface layer, e.g. '{"exchange":"fixed"}' for constant coefficients or
+// '{"dragCoefficient":1.3e-3}', a fixed sea drag coefficient, which its
+// heat and vapour exchange share), LAND (JSON options for the
 // land surface, e.g. '{"treeMoisture":false}'; '{"start":"bare"}' or
 // '{"start":"green"}' make a fresh start's land bare or green in place of
 // 'neutral', see START_CODES in js/physics/land.module.js), LAND_JUMPS (the

@@ -8,6 +8,7 @@ import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwa
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
 import { SUMMER_DAY } from '../physics/ozone.module.js';
 import { OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR, VAPOR_COEFFICIENTS, VAPOR_WEIGHTS, OXYGEN, CO2_COEFFICIENT, STP_DEPTH, OZONE_CM_ATM, SCALING_PRESSURE, SCALING_EXPONENT } from '../physics/shortwaveGases.module.js';
+import { exchangeConstants, EXCHANGE_WGSL } from './exchange.gpu.js';
 
 /*
  * The column physics of the model as WGSL, one thread per column (or per
@@ -128,7 +129,7 @@ const HUMIC: bool = ${!!o.soilCarbon && !!o.vegetation}; const ALB_MINERAL: f32 
 const LITTER_IN: f32 = ${o.litterInput}; const LITTER_TREE: f32 = ${o.treeLitter}; const LITTER_GRASS: f32 = ${o.grassLitter}; const DECAY_RATE: f32 = ${1 / o.soilTurnover}; const DECAY_WILT: f32 = ${o.decompositionWilting}; const DECAY_OPT: f32 = ${0.5 * (1 + o.decompositionWilting)}; const CARBON_ACC: f32 = ${o.carbonAcceleration};
 const LT_E: f32 = ${LLOYD_TAYLOR.activation}; const LT_REF: f32 = ${1 / LLOYD_TAYLOR.reference}; const LT_T0: f32 = ${LLOYD_TAYLOR.offset}; const MIAMI_A: f32 = ${MIAMI[0]}; const MIAMI_B: f32 = ${MIAMI[1]};
 const HELD_SHARE: f32 = ${startPlaceholders(o).neutral.share}; const HELD_NEUTRAL_C: f32 = ${startPlaceholders(o).neutral.carbon}; const HELD_GREEN_C: f32 = ${startPlaceholders(o).green.carbon};
-`;
+${exchangeConstants(o)}`;
 }
 
 export const PHYSICS_FUNCTIONS = `
@@ -804,7 +805,7 @@ export const snowOnSea = (amount) => `if (IN[S_ICE + i] > 0.0) {
     } else { IN[S_TS + i] -= LFUS * (${amount}) / PH[PH_CAP + i]; }`;
 
 export const PHYSICS_KERNELS = {
-  physics: `${MIXED_LAYER_WGSL}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+  physics: `${MIXED_LAYER_WGSL}${EXCHANGE_WGSL}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
   if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
   let slot = (k - CU_K0) * C + i;
   return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
@@ -836,8 +837,12 @@ export const PHYSICS_KERNELS = {
   let adif = select(cover * iceDif + (1.0 - cover) * ALB_DIF_WATER, landAlbedo, onLand);
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
   let ts = select(skin, cover * skin + (1.0 - cover) * FREEZING, !onLand && ice > 0.0 && cover < 1.0);
+  if (ROUGH) {
+    let exchange = surfaceExchange(i, pi, ts, ws, select(0.0, cover, !onLand), snow0, veg0, trees0, onLand, onIceSheet);
+    PH[PH_DRAG + i] = exchange.x; PH[PH_HEATX + i] = exchange.y; PH[PH_REFX + i] = exchange.z;
+  }
   let warmth = clamp((ts - GROWCOLD) / (GROWWARM - GROWCOLD), 0.0, 1.0);
-  let aero = select(CEX, PH[PH_DRAG + i], LANDED) * max(ws, GUST);
+  let aero = PH[PH_HEATX + i] * max(ws, GUST);
   let roots = min(1.0, soil0 / (WETT * bucket));
   let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);
   let canopyWet = veg0 * roots / (1.0 + RSTOM * aero / max(0.05, warmth));
@@ -863,8 +868,8 @@ export const PHYSICS_KERNELS = {
   if (STRATUS && MLM_DECK && !onLand && 1.0 - cover > 0.0 && mixedDepth > 0.0) {
     let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
     let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-    let exchange = rho * select(CEX, PH[PH_DRAG + i], LANDED) * max(ws, GUST);
-    let sensible = exchange * CP * (ts - airT);
+    let exchange = rho * PH[PH_HEATX + i] * max(ws, GUST);
+    let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
     let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
     var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0, vec3<f32>(0.0, 0.0, 0.0), 0.0, 0.0);
     if (STRATUS_SOLAR && CLOUD_SW > 0.0) {
@@ -1076,10 +1081,11 @@ export const PHYSICS_KERNELS = {
   if (MOIST_BL) { for (var k = 0; k < K; k++) { PH[PH_LWH + k * C + i] = netFlux[k] - beforeBands[k]; } }
   let airT = temperature[K - 1];
   let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-  let exchange = rho * select(CEX, PH[PH_DRAG + i], LANDED) * max(ws, GUST);
-  let sensible = exchange * CP * (ts - airT);
+  let exchange = rho * PH[PH_HEATX + i] * max(ws, GUST);
+  let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
   let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
-  let airQs = qsat(airT, pi); let airSlope = airQs * 4302.645 / ((airT - 29.65) * (airT - 29.65)); let conductance = select(CEX, PH[PH_DRAG + i], LANDED) * max(ws, GUST);
+  if (ROUGH) { PH[PH_BUOY + i] = GRAV / IN[S_TH + bottom] * (sensible / (rho * CP * D[D_EXM + bottom]) + 0.61 * IN[S_TH + bottom] * evap / rho); }
+  let airQs = qsat(airT, pi); let airSlope = airQs * 4302.645 / ((airT - 29.65) * (airT - 29.65)); let conductance = PH[PH_REFX + i] * max(ws, GUST);
   let potential = (airSlope * (absorbed - surfaceEmission + back) + rho * CP * conductance * (airQs - IN[S_Q + bottom])) / (LHEAT * airSlope + CP * (1.0 + REF_RESIST * conductance));
   netFlux[K - 1] += sensible;
   let net = absorbed - surfaceEmission + back - sensible - LHEAT * evap;
@@ -1142,7 +1148,7 @@ export const PHYSICS_KERNELS = {
       if (onIceSheet) { veg = 0.0; }
       PH[PH_VEG + i] = veg;
       if (snow <= 0.0 || onIceSheet) { PH[PH_SNOWFREEV + i] = veg; }
-      let air = IN[S_TH + bottom] * D[D_EXM + bottom];
+      let air = select(IN[S_TH + bottom] * D[D_EXM + bottom], airT, ROUGH);
       let keep = P[5]; let hold = P[7];
       let seasonLength = PH[PH_SEASONL + i] + (select(0.0, 1.0, air >= SEASON_K) - PH[PH_SEASONL + i]) * keep;
       let seasonWarmth = PH[PH_SEASONW + i] + (max(0.0, air - SEASON_K) - PH[PH_SEASONW + i]) * keep;
@@ -1331,7 +1337,8 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   for (var k = KTOP; k < K; k++) { PH[PH_MIX + k * C + i] = 0.0; }
   PH[PH_ENTRAIN + i] = 0.0;
   let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
-  let buoyancy = GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture);
+  if (IMPLICIT_DRAG) { PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * PH[PH_DRAG + i] * max(speed, GUST); }
+  let buoyancy = select(GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture), PH[PH_BUOY + i], ROUGH);
   PH[PH_BUOY + i] = buoyancy; PH[PH_USTAR + i] = friction;
   if (MOIST_BL) { blMoist(i, pi, depth - zb, zb, buoyancy, friction); return; }
   if (h <= 0.0) { return; }
@@ -1933,7 +1940,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   var mixes = false;
   for (var k = KTOP; k < K - 1; k++) { if (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b] > 0.0) { mixes = true; } }
-  if (mixes) { mixEdge(e, a, b); }
+  if (mixes || IMPLICIT_DRAG) { mixEdge(e, a, b); }
   if (PL_MOMENTUM) { transportEdge(e, a, b); }
 }
 fn transportEdge(e: i32, a: i32, b: i32) {
@@ -1979,13 +1986,15 @@ fn mixEdge(e: i32, a: i32, b: i32) {
     let k = KTOP + j;
     let mass = columnMass * LV[L_DS + k] / GRAV;
     upper[j] = select(0.0, dt * 0.5 * (PH[PH_MIX + (k - 1) * C + a] + PH[PH_MIX + (k - 1) * C + b]) / mass, j > 0);
-    lower[j] = select(0.0, dt * 0.5 * (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b]) / mass, k < K - 1);
+    lower[j] = select(select(0.0, dt * 0.5 * (PH[PH_SDRAG + a] + PH[PH_SDRAG + b]) / mass, IMPLICIT_DRAG), dt * 0.5 * (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b]) / mass, k < K - 1);
     rhs[j] = IN[S_U + k * E + e];
   }
   var before: array<f32, K>;
   for (var j = 0; j < n; j++) { before[j] = rhs[j]; }
   thomas(n, &upper, &lower, &rhs);
   for (var j = 0; j < n; j++) { IN[S_U + (KTOP + j) * E + e] = rhs[j]; }
+  let surfaceDrag = 0.5 * (PH[PH_SDRAG + a] + PH[PH_SDRAG + b]);
+  if (IMPLICIT_DRAG) { PH[PH_STRESS + e] = surfaceDrag * rhs[n - 1]; PH[PH_STRESSOK] = 1.0; }
   var share: array<f32, K>;
   var loss = 0.0; var total = 0.0;
   for (var j = 0; j < n; j++) {
@@ -1998,6 +2007,7 @@ fn mixEdge(e: i32, a: i32, b: i32) {
     let part = dt * 0.5 * (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b]) * shear * shear;
     share[j] += part; share[j + 1] += part;
   }
+  if (IMPLICIT_DRAG) { share[n - 1] += dt * surfaceDrag * rhs[n - 1] * rhs[n - 1]; }
   for (var j = 0; j < n; j++) { total += share[j]; }
   if (total <= 0.0) { return; }
   for (var j = 0; j < n; j++) {

@@ -3648,7 +3648,8 @@ The work, in order:
      PH), `land.serialize` (the page's snapshot) and land regridding
      carry both means.
    What else differs between forest and grass, ranked by its effect on
-   the model's surface fluxes (none built):
+   the model's surface fluxes (the first built Oct 2: M22, the surface
+   layer by roughness):
 
    1. Roughness. The land's exchange coefficient is one value, 1.5·10⁻³
       for momentum, heat and vapour, which at the bl34 grid's lowest
@@ -3849,8 +3850,9 @@ The work, in order:
      skin in the net radiation, not FAO-56's 0.23 reference surface; the
      hot dry skin lowers it in deserts (Sahara 1355 mm/yr against
      the bulk potential's 6739).
-   - Roughness, interception and rooting depth do not yet differ between
-     forest and grass (above).
+   - Interception and rooting depth do not yet differ between forest and
+     grass (above); roughness does since Oct 2 (M22, the surface layer by
+     roughness).
 
    Defaults: land `treeMoisture` true, `moistureMemory` 3 years,
    `forestAridity` [0.2, 1.0] (P/PET), `grassland` true, `forestAlbedo`
@@ -7494,6 +7496,260 @@ physics pass 3.89 → 4.67 ms; N=128 97.24 and 95.56 → 98.38 and 98.38 ms
 (+2.0 %), the physics pass 16.74–17.22 → 19.74 ms. A day at N=128 from
 eight128_day0183 takes 66 s (72 s with setup; sweep2 64 and 70).
 
+**The surface layer by roughness (Oct 2).** `js/physics/exchange.module.js`
+(CPU) and `js/gpu/exchange.gpu.js` (WGSL), parity and hand-value tests
+in `test/exchange.test.mjs`.
+
+Before: one constant per cell for momentum, heat and vapour alike,
+`SEA_DRAG` 1.2·10⁻³ over sea and sea ice and `LAND_DRAG` 1.5·10⁻³ over
+land and the ice sheets, at the lowest layer's midpoint (z₁ 16.6 m over
+the ice sheets, 18–21 m elsewhere on the day-94 means). It entered the
+explicit RK4 drag ρ C max(|v|, 3) |v|/m (`surface.module.js`, the core's
+D_DRAG), the ocean's stress, the boundary layer's u* = √C max(|v|, 3) and
+its surface buoyancy flux, the radiation column's sensible heat
+ρ C U c_p (T_s − T₁) and evaporation, the land's aerodynamic conductance
+and the FAO-56 reference evaporation. No stability dependence: the
+boundary layer's `stability` changes only the K-profile's velocity scale
+(Holtslag and Boville) in unstable columns, and the gustiness is the
+3 m/s floor on the wind. The sensible heat used T_s − T₁, not the dry
+static energy, about 0.2 K of difference at 20 m (IFS eq. 8.6 carries
+g z₁/c_p). At 10 m the sea's constant is a neutral C_D10N of 1.36·10⁻³
+(z₀ 1.9·10⁻⁴ m) at every wind. The day means of three N=64 days from
+nine64_day0091 (bulk Richardson number of the surface layer, 10th / 50th /
+90th percentile of the 8-step samples): forest (trees ≥ 0.5) wind 5.9 m/s,
+stress 0.075 N/m², Ri −0.25 / −0.02 / 0.03; bare soil 6.8 m/s, 0.094,
+−0.27 / −0.04 / 0.005; ice sheets 9.2 m/s, 0.174, −0.001 / 0.010 / 0.042;
+the Arctic pack (≥ 70N, A ≥ 0.8) 5.3 m/s, 0.054, −0.007 / 0.004 / 0.035;
+the open sea 20S–20N 5.2 m/s, 0.048, −0.14 / −0.03 / −0.002, 40–60S
+10.1 m/s, 0.185, −0.05 / −0.007 / 0.006.
+
+The scheme. Per cell, from the state at the start of the physics:
+
+| surface | z₀m (m) | z₀h (m) | source |
+|---|---|---|---|
+| forest (the trees' share) | 2.0 | 2.0 | IFS Cy47r3 Part IV Table 8.3 (all tree types), calibrated so that the 10 m wind's error against SYNOP vanishes per type (Sandu et al. 2011) |
+| grass (cover less trees) | 0.1 | 0.001 | same, short grass (the table's low vegetation spans 0.034 tundra to 0.5 irrigated crops and bogs) |
+| bare soil | 0.013 | 1.3·10⁻⁴ | same, desert |
+| snow on grass and bare soil, ice sheets | 1.3·10⁻³ | Andreas (1987) | same, ice caps and glaciers; snow covers the short tiles over min(1, S/30 kg/m²), the IFS's c_sn with D_cr 0.1 m at 300 kg/m³; the trees stand above it |
+| sea ice of concentration A | max(10⁻³, 0.93·10⁻³ (1 − A) + 6.05·10⁻³ e^(−17 (A − 0.5)²)) | Andreas (1987) | IFS eq. 3.30 (Andreas et al. 2010, Bidlot et al. 2014) |
+| open sea (1 − A) | α u*²/g + 0.11 ν/u*, α = 0.0017 U10N − 0.005 (U10N ≤ 19 m/s, α ≥ 0) | min(1.6·10⁻⁴, 5.8·10⁻⁵ Rr^−0.72) | COARE 3.5 (Edson et al. 2013; the scalar fit as in its coare35vn.m, where COARE 3.0's was min(1.15·10⁻⁴, 5.5·10⁻⁵ Rr^−0.6)), ν of the air at its temperature (COARE's fit), four fixed-point steps from the neutral u* |
+
+Andreas (1987, Table 2 of Andreas 2002): ln(z₀h/z₀m) = b₀ + b₁ ln R* +
+b₂ (ln R*)², R* = u* z₀m/ν with the tile's neutral u*, (1.25, 0, 0) for
+R* ≤ 0.135, (0.149, −0.55, 0) to 2.5, (0.317, −0.565, −0.183) above (R*
+capped at 1000). The tiles blend as the IFS aggregates its tiles'
+roughness for its 10 m wind: the shares' neutral C_D and C_H at 10 m are
+summed and the cell's z₀m and z₀h backed out (a forest–grass half and
+half: z₀m 1.17 m, z₀h 1.03 m). Stability: Monin–Obukhov with the IFS's
+surface-layer functions (eqs. 3.16–3.26: Dyer–Hicks integrated by
+Paulson when unstable; Holtslag and De Bruin 1988 with a 1, b 2/3, c 5,
+d 0.35 when stable; no cap on z/L), ζ = z₁/L from the bulk Richardson
+number g z₁ (θv₁ − θv_s)/(θ̄v U²) by five steps (fixed point when
+unstable, Newton in ln ζ when stable; worst error against 200 steps
+over Ri −10…10 at z 16–40 m 4·10⁻⁴ for the tiles above and their blends
+and 1.6·10⁻³ for any z₀m ≤ 2 m with z₀h/z₀m ≥ 10⁻³; below z 10 m with
+z₀m 2 m five steps miss by up to 99 %, a height the model's z₁ of
+16–21 m does not reach), U the
+wind with the 3 m/s floor, θv_s with the skin's saturation humidity over
+sea and sea ice and dry over land. z₁ = c_p θv₁ (Π_s − Π₁)/g. C_D and
+C_H go to the momentum, the ocean's stress and u*; C_H to the sensible
+heat and evaporation, the mixed-layer deck's surface fluxes and the
+land's aerodynamic conductance. The reference evapotranspiration takes
+FAO-56's own reference grass at z₁ (eq. 4: h 0.12 m, d 2/3 h, z₀m
+0.123 h, z₀h 0.1 z₀m and FAO-56's κ 0.41; 2.45·10⁻³ at 20 m, 208/u₂ at
+2 m).
+
+Three consequences built with it, on both engines:
+- The surface drag is the lower boundary of the boundary layer's
+  implicit edge solve (`implicitDrag`, the default under roughness): a
+  forest's C_D of 0.02–0.03 on the 40 m lowest layer gives the explicit
+  RK4 drag λΔt up to 3–6 at N=64, past RK4's 2.8; at N=6 with Δt 900 s
+  the explicit form went NaN within three steps. The solve keeps the
+  stress it applies (`surfaceStress`), which the ocean takes (on the GPU
+  `PH_STRESS`), and its kinetic energy goes to the lowest layer's
+  dissipation heat; the RK4 drag and its heat are off.
+- The sensible heat is ρ C_H U (c_p T_s − c_p T₁ − g z₁) (IFS eq. 8.6),
+  and the boundary layer's surface buoyancy flux is the radiation's,
+  g/θ (H/(ρ c_p Π) + 0.61 θ E/ρ) from the fluxes it applied
+  (`surfaceBuoyancy`, on the GPU written to `PH_BUOY` by the physics
+  kernel), moist over land too: the boundary layer diagnoses after the
+  flux has heated the lowest layer, and with C_H U Δt/Δz of order one
+  over forest a buoyancy from the heated layer read as stable.
+- The land's season means read the lowest air before this step's
+  surface and radiative heating.
+
+Options (`SURFACE`): `exchange` 'roughness' (default) or 'fixed', the
+constant coefficients bit for bit; an option set that names
+`dragCoefficient` (surface or land) and no `exchange` is fixed, so the
+sweep's sea-drag dial still runs as it did; `roughness` {forest, grass,
+bare, snow}, `snowCover` 30 kg/m², `blendingHeight` 10 m, `charnock`
+[0.0017, −0.005, 19], `smoothFlow` 0.11, `iterations` 5,
+`referenceCrop` 0.12 m, `implicitDrag` true.
+
+The sea's neutral 10 m coefficients against the 10 m neutral wind
+(×10⁻³; the model's four steps and COARE 3.5's converged relation agree
+to 0.4 %): 3 m/s C_D 0.92, C_H 1.10; 5: 0.92, 1.10; 7: 1.05, 1.10; 10:
+1.32, 1.11; 15: 1.83, 1.17; 20: 2.35, 1.23; 25: 2.73, 1.28. Large and
+Yeager (2004): 1.27, 1.06, 1.06, 1.18, 1.47, 1.81, 2.16. The constant
+before: 1.36 at every wind.
+
+C_D / C_H (×10⁻³) at z 20 m by the bulk Richardson number:
+
+| surface | Ri −0.3 | −0.05 | 0 | 0.05 | 0.2 |
+|---|---|---|---|---|---|
+| forest | 60.8 / 88.3 | 36.4 / 41.4 | 27.8 / 27.8 | 16.0 / 16.0 | 2.29 / 2.17 |
+| grass | 8.35 / 4.41 | 6.51 / 3.49 | 5.69 / 3.04 | 4.22 / 2.41 | 1.17 / 0.82 |
+| bare soil | 4.22 / 2.61 | 3.40 / 2.11 | 2.97 / 1.83 | 2.12 / 1.38 | 0.65 / 0.48 |
+| snow, ice sheet (u* 0.25) | 2.39 / 1.86 | 1.98 / 1.51 | 1.72 / 1.29 | 1.15 / 0.90 | 0.40 / 0.32 |
+| sea ice A = 1 | 2.27 / 1.85 | 1.88 / 1.50 | 1.63 / 1.27 | 1.08 / 0.87 | 0.38 / 0.31 |
+| sea ice A = 0.5 | 3.39 / 1.79 | 2.80 / 1.50 | 2.48 / 1.33 | 1.85 / 1.06 | 0.63 / 0.43 |
+
+Runs, N=64 GPU, OCEAN `{"everySteps":8}`, from copies of the states,
+before (HEAD 3db505a) → after, day means of 8-step samples over the
+three days (wind at z₁; stress ρ C_D max(|v|, 3) |v|; H, LE upward
+positive; the Arctic pack ≥ 70N with A ≥ 0.8):
+
+| class, nine64 day 91 + 3 | share | wind m/s | stress N/m² | C_D / C_H ×10⁻³ | H W/m² | LE W/m² | skin °C |
+|---|---|---|---|---|---|---|---|
+| forest (trees ≥ 0.5) | 0.068 | 5.92 → 2.63 | 0.075 → 0.226 | 1.5 → 19.2 / 19.8 | 18.9 → 12.2 | 67.2 → 86.4 | 20.40 → 17.86 |
+| grass (≥ 0.5) | 0.008 | 6.72 → 4.69 | 0.071 → 0.122 | 1.5 → 5.80 / 3.26 | 39.0 → 43.3 | 42.4 → 45.7 | 11.40 → 10.27 |
+| bare (≥ 0.5) | 0.058 | 6.83 → 4.22 | 0.094 → 0.222 | 1.5 → 9.38 / 8.48 | 42.1 → 54.2 | 26.9 → 36.6 | 27.65 → 25.10 |
+| mixed land | 0.126 | 6.46 → 3.30 | 0.086 → 0.227 | 1.5 → 13.8 / 13.9 | 30.7 → 31.0 | 58.1 → 78.2 | 24.12 → 21.28 |
+| ice sheets | 0.030 | 9.17 → 9.60 | 0.174 → 0.215 | 1.5 → 1.59 / 1.09 | −19.9 → −19.1 | 2.8 → 2.3 | −36.23 → −36.23 |
+| Arctic pack | 0.009 | 5.34 → 5.06 | 0.054 → 0.058 | 1.2 → 1.35 / 1.11 | −5.8 → −5.0 | 2.5 → 2.3 | −0.06 → −0.06 |
+| Antarctic sea ice (A ≥ 0.8) | 0.015 | 9.93 → 9.80 | 0.202 → 0.271 | 1.2 → 1.58 / 1.16 | 3.1 → −0.2 | 5.5 → 5.4 | −19.72 → −19.63 |
+| open sea 60–40S | 0.107 | 10.11 → 10.46 | 0.185 → 0.236 | 1.2 → 1.24 / 1.08 | 22.3 → 19.2 | 57.8 → 54.8 | 5.67 |
+| open sea 20S–20N | 0.262 | 5.16 → 5.52 | 0.048 → 0.048 | 1.2 → 1.01 / 1.19 | 3.7 → 3.2 | 106.2 → 108.2 | 25.25 |
+| open sea 40–60N | 0.052 | 5.90 → 6.41 | 0.066 → 0.061 | 1.2 → 0.80 / 0.85 | −14.0 → −10.5 | 15.6 → 14.4 | 10.04 |
+
+| outcome | nine64 day 91 + 3 | eight64 day 183 + 3 | eight64 day 183 + 10 | nine64 day 365 + 3 | eight128 day 183 + 3 |
+|---|---|---|---|---|---|
+| forest wind, m/s; stress, N/m² | 5.92 → 2.63; 0.075 → 0.226 | 5.91 → 2.56; 0.080 → 0.255 | 6.99 → 2.68; 0.112 → 0.274 | 5.94 → 2.57; 0.086 → 0.291 | 6.03 → 2.50; 0.081 → 0.232 |
+| forest LE, W/m²; skin, °C | 67.2 → 86.4; 20.40 → 17.86 | 46.3 → 62.9; 16.07 → 14.34 | 42.8 → 49.6; 14.59 → 12.81 | 59.6 → 78.1; 18.07 → 15.55 | 44.6 → 59.2; 15.29 → 13.57 |
+| land skin, all land, last day °C | 17.53 → 14.85 | 15.89 → 13.92 | 13.70 → 11.50 | 7.74 → 6.12 | 15.59 → 13.61 |
+| global surface, last day °C | 16.52 → 15.75 | 16.60 → 16.02 | 15.99 → 15.37 | 13.64 → 13.16 | 16.48 → 15.92 |
+| global evaporation (samples), mm/d | 2.40 → 2.57 | 1.94 → 2.00 | 2.20 → 2.18 | 2.22 → 2.33 | 2.00 → 2.02 |
+| global rain, last day, mm/d | 2.19 → 2.30 | 1.70 → 1.73 | 2.54 → 2.42 | 2.33 → 2.38 | 1.93 → 1.94 |
+| global sensible heat, W/m² | 13.03 → 12.96 | 9.23 → 9.44 | 11.67 → 11.21 | 12.80 → 11.59 | 10.13 → 10.62 |
+| sea stress magnitude, N/m² | 0.083 → 0.095 | 0.081 → 0.090 | 0.091 → 0.101 | 0.080 → 0.089 | 0.085 → 0.090 |
+| equatorial Pacific τx 2S–2N 160E–100W, N/m² (Earth −0.04…−0.06) | −0.038 → −0.038 | −0.022 → −0.019 | −0.031 → −0.027 | −0.006 → −0.006 | −0.020 → −0.018 |
+| trades τx 5–20N / 5–20S, N/m² | −0.006 / −0.036 → −0.007 / −0.035 | −0.009 / −0.053 → −0.008 / −0.053 | −0.018 / −0.056 → −0.016 / −0.056 | −0.035 / −0.015 → −0.032 / −0.015 | −0.017 / −0.058 → −0.016 / −0.055 |
+| Southern Ocean τx 40–60S mean; peak band, N/m² (Earth about 0.17, SCOW) | 0.132 → 0.170; 0.170 → 0.215 at 47.5S | 0.111 → 0.137; 0.153 → 0.191 at 47.5S | 0.119 → 0.138; 0.136 at 52.5S → 0.154 at 47.5S | 0.093 → 0.114; 0.131 → 0.160 at 52.5S | 0.096 → 0.113; 0.169 → 0.213 at 57.5S |
+| Arctic pack H, W/m² (SHEBA near 0 in June) | −5.8 → −5.0 | — | — | 2.0 → 0.3 | — |
+
+The stresses on the sea are the ocean's (`OD_STRESS`, the stress it
+receives under the ice's transmission), averaged over the samples.
+Earth's Southern Ocean: the 40–60S decadal-mean zonal stress was about
+0.17 N/m² in the 1990s, and the westerlies exceed 0.25 N/m² in July
+(Risien and Chelton 2008, SCOW, citing Huang et al. 2006). The audit of
+the end states (`scripts/verticalAudit.mjs`, each on its own code): day
+94 global rain 2.36 → 2.49 and evaporation 2.41 → 2.50 mm/d (Earth
+2.6–2.8), the Pacific ITCZ's rain 6.78 → 5.75 mm/d, SE Pacific low cloud
+0.38 → 0.42, the zonal rain peak 9.12 → 9.81 mm/d, cloud effects −58.3 →
+−59.7 and 20.1 → 20.1 W/m²; day 368 rain 2.46 → 2.63, evaporation 2.34 →
+2.43, ITCZ 2.77 → 2.48, SE Pacific low cloud 0.24 → 0.30, zonal peak 5.51
+→ 6.08 mm/d, shortwave effect −56.7 → −60.0; day 193 rain 2.48 → 2.44,
+evaporation 2.44 → 2.37, ITCZ 6.07 → 9.93, SE Pacific low cloud 0.29 →
+0.34, zonal peak 5.73 → 8.93 mm/d, cloud effects −58.8 → −59.4 and 19.1 →
+19.9 W/m², the day's ASR − OLR −10.3 → −9.1 W/m²; N=128 day 186 rain
+2.15 → 2.34, evaporation 2.21 → 2.25, ITCZ 3.60 → 3.75, SE Pacific low
+cloud 0.21 → 0.19, zonal peak 4.97 → 5.67 mm/d, cloud effects −50.4 →
+−50.8 and 16.8 → 16.7 W/m². The land's skin falls by 1.7–2.7 K and its
+air much less: at day 193's end over the land off the ice sheets the
+lowest air 17.50 → 17.15 °C and the skin 19.34 → 17.15 °C (the skin
+was 1.8 K above the air and now sits on it), the global lowest air 15.77
+→ 15.65 °C.
+
+Step cost under the exclusive lock (each engine's own day-193 and day-186
+state, 128 steps after 16, twice): N=64 27.31–27.33 → 27.31–27.61 ms a
+step (7.0 → 7.0–7.1 s a model day), N=128 116.8–117.3 → 117.2–117.3 ms
+(59.8–60.0 → 60.0–60.1 s a model day).
+
+Parity (N=6, one step from random land, snow, trees and sea ice, 361
+cells): C_D and C_H agree to 2–8·10⁻⁶ relative over open sea, forest,
+other land, snow and the ice sheets and 6.5·10⁻⁵ over sea ice, the
+reference to 8·10⁻⁶, latent heat to 0.04 W/m² and the net surface flux to
+0.06 W/m²; eight steps over the continent on bl34: Ts 2.5·10⁻⁴ K, θ rms
+4.4·10⁻⁷, column water rms 9.7·10⁻⁷. `exchange` 'fixed' reproduces the
+digests unchanged. Tests that feed the boundary layer a hand-made
+surface or compare deck regimes, rain sums and cloud effects that one
+switching column moves run on 'fixed', the surface they were written for.
+
+The review's checks (Oct 2). On the real state eight64 day 183, both
+engines from one copy: the CPU's implicit drag changes each edge
+column's momentum by Δt τ to 8·10⁻¹⁴ of the total |Δt τ| (worst edge
+1.5·10⁻¹⁰ kg/m/s against a largest Δt τ of 2.2·10³), and the ocean receives the stored
+stress unchanged (on the GPU the ocean's stress is the same PH_STRESS
+times the ice's transmission). Engine parity (rms over the grid of the
+lowest layer's θ and u and of Ts; the 'fixed' exchange's own in
+brackets): after one step θ 1.2·10⁻² K (9.6·10⁻⁴) and u 3.5·10⁻³ m/s
+(7.6·10⁻⁴), the largest differences in moist-boundary-layer columns of
+the coupled regime switching between engines; after 4 steps θ 6.2·10⁻³
+(3.8·10⁻³), u 3.3·10⁻³ (3.6·10⁻³), Ts 5.7·10⁻² K (5.7·10⁻²); after 16
+θ 3.2·10⁻² (2.7·10⁻²), u 1.9·10⁻² (1.7·10⁻²), Ts 0.18 K (0.18); C_D and C_H after
+one step 1.7·10⁻⁵ relative (largest 1.9·10⁻⁴), the stored stress
+5.5·10⁻⁵ N/m², latent heat 2.3·10⁻³ W/m². 'fixed' on the CPU reproduces
+3db505a bit for bit over nine N=64 steps from that state (every state
+array, the land, the ocean and its stress), both by default and with
+the sweep's `dragCoefficient` 1.3·10⁻³; on the GPU it differs from
+3db505a in the last bits (357 θ values after one step, at most 3 f32
+ulps), the shader compiler's rounding of the edited kernels. Workers
+reproduce the serial CPU step bit for bit with land (N=8, six steps,
+both exchanges). The drag and heat exchange over one step,
+λ = ρ C U Δt/m₁ with m₁ the lowest layer's mass, after four steps
+(N=64 Δt 337.5 s, N=128 Δt 168.75 s): forest λ_D mean 0.88 (largest
+2.3; 4.7 on the first step, in the winds of the fixed drag), λ_H 0.95 (largest 2.2, above 1 in 47 % of the forest cells, above
+2 in 0.6 %) at N=64 and λ_H 0.52 (largest 1.24) at N=128; the open sea
+λ_H at most 0.32. The drag is implicit; the heat and vapour fluxes stay
+explicit sources into the lowest layer. Over 96 N=64 steps the forest's
+sensible heat has a mean step-to-step second difference of 0.7 W/m²
+against 0.05 on 'fixed' (|H| 37–42 W/m²) and reverses in 0.4–0.5 % of
+step pairs by more than 5 W/m² each way (0.0 % on 'fixed'), with no
+growth; at N=6 and Δt 900 s, where λ_H reaches 13 over a continent of
+forest, 192 steps stay finite with the lowest layer's θ reversing in
+0.09 % of step pairs. The three-day runs from nine64 day 91 and eight64
+day 183, re-run from copies (3db505a against cf1cdea), reproduce
+the tables above to their last digit.
+
+Subgrid orography (reported, not built). Climate models add two
+stresses over mountains that the resolved terrain and the roughness
+lengths above do not give. (1) Turbulent orographic form drag (Beljaars
+et al. 2004, IFS eqs. 3.54–3.57): a drag ∂U/∂t = −C_tofd(z) |U| U spread
+over the lowest kilometre or two, C_tofd = α β C_md C_corr 2.109
+e^(−(z/1500)^1.5) a₂ z^(−1.2) with α 35, β 1, C_md 0.005, C_corr 0.6 and
+a₂ from σ_flt, the standard deviation of the orography filtered to the
+3–22 km band; for 10 m/s from the lowest level (20 m) up, σ_flt 25, 50,
+100 and 200 m give 0.03, 0.13, 0.52 and 2.1 N/m² (an effective C_D at
+20 m of 0.3, 1.2, 4.7 and 19·10⁻³), so over hills of σ_flt near 100 m it
+doubles the grass's drag. σ_flt needs 1 km topography (the IFS's from
+1 km data; GMTED2010 or SRTM30 would serve); the model's 0.25° file
+cannot resolve the band. (2) Gravity-wave drag and low-level blocking
+(Lott and Miller 1997, IFS eqs. 4.1–4.19), from the standard deviation
+μ, anisotropy γ, orientation and mean slope σ of the subgrid orography
+between the 0.25° data and the cell: the wave stress ρ U N (H_eff²/4)
+(σ/μ) G (B cos²ψ + C sin²ψ), taken unblocked (H_eff = 2μ) with G 1 and
+B π/4, at 10 m/s and N 0.01/s, is over N=64 land: μ < 50 m on 0.37 of the
+land (0.003 N/m²), 50–100 m 0.21 (0.020), 100–200 m 0.19 (0.086),
+200–400 m 0.16 (0.31), above 400 m 0.07 (1.37), 0.17 N/m² in the land
+mean; at N=128 0.12 N/m² (less of the variance is subgrid). Blocking adds
+C_d ρ (σ/2μ) U² over the blocked depth where N H/U > 1. These are the
+order of the vegetation's turbulent stress itself over the mountains
+(0.12–0.29 N/m² after); the μ, γ, θ and σ fields can be computed from the
+0.25° file at the model's start.
+
+What still misses: the gustiness is the 3 m/s floor, not a free
+convection velocity (COARE's 1.2 w*, the IFS's w* with z_i 1000 m), so
+calm stable nights keep a flux; the tiles share one skin, so a forest's
+strong coupling and the bare soil's weak one average into one
+temperature (the IFS solves each tile's skin); the grass is one IFS type
+(0.1 m) where the table spans 0.034 (tundra) to 0.47 (tall grass); there
+is no displacement height and no z/L cap; the snow's density is fixed;
+the sea's Charnock coefficient takes the neutral u* and no waves; the
+equatorial Pacific stress stays at −0.018…−0.038 against −0.04…−0.06 (C_D10N
+at 5–7 m/s fell to 0.92–1.05 from 1.36 and the winds there rose by
+0.3–0.4 m/s, so the stress stands; its deficit is the trades' own); and the stress over mountains lacks the orographic terms
+above.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
@@ -7693,6 +7949,7 @@ js/
     longwave.module.js      M21: the longwave gases' g-points (table in longwaveTable.module.js, written by scripts/longwaveFit.mjs)
     shortwaveGases.module.js M21: ozone, water vapour, O2 and CO2 absorption of sunlight after CLIRAD-SW
     surface.module.js       ported: surface and top drag, ocean wind stress, convective adjustment
+    exchange.module.js      M22: the surface layer's C_D and C_H by roughness and stability
     boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
     init.module.js          ported: thermal init, balance, seed, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes; ice, snow and soil by source tile

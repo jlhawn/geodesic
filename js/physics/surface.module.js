@@ -10,9 +10,12 @@ export const LAND_DRAG = 1.5e-3;
  * cells, so it only ever removes kinetic energy. An optional Rayleigh drag
  * above topSigma, ramping to 1/topDragDays at the model top, absorbs what
  * reaches the lid. heatLayers returns the kinetic energy both drags
- * remove as heat in the cells whose edges lost it.
+ * remove as heat in the cells whose edges lost it. With implicitStress, a
+ * boundary layer that applies the surface drag in its implicit momentum
+ * solve, the lowest layer's drag and its heat are left to it, and stress
+ * gives the stress that solve applied once it has run.
  */
-export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoefficients = null, gustiness = 3, topSigma = 0.05, topDragDays = 0, buffers = null } = {}) {
+export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoefficients = null, gustiness = 3, topSigma = 0.05, topDragDays = 0, implicitStress = null, buffers = null } = {}) {
   const { K, C, E, dSigma, sigmaMid, R, g, cp, exnerLayer } = core.diagnostics;
   const { cellsOnEdge, nEdgesOnCell, edgesOnCell, maxEdges, dcEdge, dvEdge, areaCell } = mesh;
   const bottom = K - 1;
@@ -41,7 +44,7 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
   function applyLayers(state, out, kFrom = 0, kTo = K) {
     const [pi, theta, u] = state;
     const [, , dU] = out;
-    if (kFrom <= bottom && bottom < kTo) {
+    if (!implicitStress && kFrom <= bottom && bottom < kTo) {
       surfaceDragRates(pi, theta, dragRate);
       for (let e = 0; e < E; e++) {
         const rate = 0.5 * (dragRate[cellsOnEdge[2 * e]] + dragRate[cellsOnEdge[2 * e + 1]]);
@@ -60,13 +63,14 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
     const dTheta = out[1];
     for (let k = kFrom; k < kTo; k++) {
       const top = topDragRate(k);
-      if (k !== bottom && top === 0) continue;
-      if (k === bottom) surfaceDragRates(pi, theta, heatRate);
+      const surfaceLayer = k === bottom && !implicitStress;
+      if (!surfaceLayer && top === 0) continue;
+      if (surfaceLayer) surfaceDragRates(pi, theta, heatRate);
       for (let i = 0; i < C; i++) {
         let power = 0;
         for (let m = 0; m < nEdgesOnCell[i]; m++) {
           const e = edgesOnCell[maxEdges * i + m], ue = u[k * E + e];
-          const rate = top + (k === bottom ? 0.5 * (heatRate[cellsOnEdge[2 * e]] + heatRate[cellsOnEdge[2 * e + 1]]) : 0);
+          const rate = top + (surfaceLayer ? 0.5 * (heatRate[cellsOnEdge[2 * e]] + heatRate[cellsOnEdge[2 * e + 1]]) : 0);
           power += 0.5 * dcEdge[e] * dvEdge[e] * rate * ue * ue;
         }
         dTheta[k * C + i] += power / areaCell[i] / (cp * exnerLayer[k * C + i]);
@@ -77,6 +81,7 @@ export function createSurface(mesh, core, { dragCoefficient = SEA_DRAG, dragCoef
   const aeroFactor = new Float64Array(C);
 
   function stress(state, out = new Float64Array(E)) {
+    if (implicitStress && implicitStress.stressReady[0]) { out.set(implicitStress.surfaceStress); return out; }
     const [pi, theta, u] = state;
     for (let i = 0; i < C; i++) {
       const idx = bottom * C + i;

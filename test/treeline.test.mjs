@@ -121,23 +121,31 @@ test('an older state starts the trees at the cover times the estimated season\'s
   }
 });
 
-test('the model hands the land its lowest air temperature each step', () => {
+test('the model hands the land its lowest air temperature each step: after the step on the fixed exchange, before the physics heats it under roughness', () => {
   const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
-  const model = createModel(new Grid(6), { topography, land: { seasonMemory: 2 * 900 } });
-  const init = initializeState(model, {});
-  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
-  for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
-  model.land.initialize();
-  const { K, C, exnerLayer } = model.core.diagnostics, start = Float64Array.from(model.land.seasonWarmth);
-  model.step(900);
-  let toward = 0, away = 0;
-  for (let i = 0; i < C; i++) {
-    if (!model.geography.land[i]) continue;
-    const excess = Math.max(0, model.state[1][(K - 1) * C + i] * exnerLayer[(K - 1) * C + i] - MELTING_POINT - 0.9), moved = model.land.seasonWarmth[i] - start[i];
-    if (Math.abs(excess - start[i]) < 2) continue;
-    if (Math.sign(moved) === Math.sign(excess - start[i]) && Math.abs(moved) > 0.2 * Math.abs(excess - start[i])) toward++; else away++;
+  for (const exchange of ['fixed', 'roughness']) {
+    const model = createModel(new Grid(6), { topography, land: { seasonMemory: 2 * 900 }, surface: { exchange } });
+    const init = initializeState(model, {});
+    for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+    for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
+    model.land.initialize();
+    const { K, C, exnerLayer } = model.core.diagnostics, start = Float64Array.from(model.land.seasonWarmth), heated = new Float64Array(C);
+    const apply = model.radiation.apply;
+    model.radiation.apply = (state, ...rest) => {
+      for (let i = 0; i < C; i++) heated[i] = state[1][(K - 1) * C + i] * exnerLayer[(K - 1) * C + i];
+      return apply(state, ...rest);
+    };
+    model.step(900);
+    let toward = 0, away = 0;
+    for (let i = 0; i < C; i++) {
+      if (!model.geography.land[i]) continue;
+      const air = exchange === 'fixed' ? model.state[1][(K - 1) * C + i] * exnerLayer[(K - 1) * C + i] : heated[i];
+      const excess = Math.max(0, air - MELTING_POINT - 0.9), moved = model.land.seasonWarmth[i] - start[i];
+      if (Math.abs(excess - start[i]) < 2) continue;
+      if (Math.sign(moved) === Math.sign(excess - start[i]) && Math.abs(moved) > 0.2 * Math.abs(excess - start[i])) toward++; else away++;
+    }
+    assert.ok(toward > 50 && away === 0, `${exchange}: ${toward} land cells moved toward their air, ${away} did not`);
   }
-  assert.ok(toward > 50 && away === 0, `${toward} land cells moved toward their air, ${away} did not`);
 });
 
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
@@ -159,8 +167,9 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
     model.land.load({ soil: Float64Array.from({ length: C }, () => 300 * rnd()), snow, vegetation, canopy, seasonLength, seasonWarmth }, model.state[6]);
     return model;
   };
-  const cpu = prepare(createModel(new Grid(6), { topography, land }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }));
+  const surface = { exchange: 'fixed' };
+  const cpu = prepare(createModel(new Grid(6), { topography, land, surface }));
+  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land, surface }));
   const C = cpu.mesh.nCells, before = Float64Array.from(cpu.land.canopy), lengthBefore = Float64Array.from(cpu.land.seasonLength);
   const { K, exnerLayer } = cpu.core.diagnostics;
   let worstAir = 0;

@@ -183,7 +183,8 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
 
 test('the mixed-layer deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const radiation = {};
-  const cpu = createModel(new Grid(6), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation });
+  const surface = { exchange: 'fixed' };
+  const cpu = createModel(new Grid(6), { ocean: false, radiation, surface }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation, surface });
   const C = cpu.mesh.nCells, { K, sigmaMid } = cpu.core;
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) cpu.state[a].set(init[a]);
