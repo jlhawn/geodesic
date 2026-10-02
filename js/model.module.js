@@ -200,6 +200,7 @@ export function createModel(gridOrMesh, {
     phases.adjust(0, C, dt);
     phases.mixMomentum(0, E, dt);
     phases.dissipate(0, C);
+    if (land) land.advance(dt);
     model.time += dt;
     model.radiationSteps++;
   };

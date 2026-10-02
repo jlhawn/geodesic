@@ -156,7 +156,7 @@ test('a saved land state without vegetation loads green with full buckets where 
   }
   land.load({ soil: new Float64Array(mesh.nCells).fill(20), snow, vegetation: new Float64Array(mesh.nCells).fill(1.5) });
   for (let i = 0; i < mesh.nCells; i++) assert.equal(land.vegetation[i], geography.land[i] && !geography.iceSheet[i] ? 1 : 0);
-  assert.deepEqual(Object.keys(land.serialize()), ['soil', 'snow', 'snowAlbedo', 'vegetation', 'surface', 'canopy', 'seasonLength', 'seasonWarmth', 'rainMean', 'demandMean', 'soilCarbon']);
+  assert.deepEqual(Object.keys(land.serialize()), ['soil', 'snow', 'snowAlbedo', 'vegetation', 'surface', 'canopy', 'seasonLength', 'seasonWarmth', 'rainMean', 'demandMean', 'record', 'soilCarbon', 'litterMean', 'decayMean']);
 });
 
 test('an ice sheet keeps its albedo under anything and grows nothing', () => {

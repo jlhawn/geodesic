@@ -1,5 +1,5 @@
 import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT } from '../physics/ice.module.js';
-import { DARKENING_WETNESS, LLOYD_TAYLOR, MIAMI } from '../physics/land.module.js';
+import { DARKENING_WETNESS, LLOYD_TAYLOR, MIAMI, startPlaceholders } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE } from '../physics/radiation.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS } from '../physics/moist.module.js';
@@ -97,6 +97,7 @@ const GRASSY: bool = ${!!o.grassland && !!o.vegetation}; const ALB_FORESTV: f32 
 const HUMIC: bool = ${!!o.soilCarbon && !!o.vegetation}; const ALB_MINERAL: f32 = ${o.mineralAlbedo}; const ALB_HUMUS: f32 = ${o.humusAlbedo}; const HUMUS_SCALE: f32 = ${100 / (o.topsoilMass * o.organicScale)};
 const LITTER_IN: f32 = ${o.litterInput}; const LITTER_TREE: f32 = ${o.treeLitter}; const LITTER_GRASS: f32 = ${o.grassLitter}; const DECAY_RATE: f32 = ${1 / o.soilTurnover}; const DECAY_WILT: f32 = ${o.decompositionWilting}; const DECAY_OPT: f32 = ${0.5 * (1 + o.decompositionWilting)}; const CARBON_ACC: f32 = ${o.carbonAcceleration};
 const LT_E: f32 = ${LLOYD_TAYLOR.activation}; const LT_REF: f32 = ${1 / LLOYD_TAYLOR.reference}; const LT_T0: f32 = ${LLOYD_TAYLOR.offset}; const MIAMI_A: f32 = ${MIAMI[0]}; const MIAMI_B: f32 = ${MIAMI[1]};
+const HELD_SHARE: f32 = ${startPlaceholders(o).neutral.share}; const HELD_NEUTRAL_C: f32 = ${startPlaceholders(o).neutral.carbon}; const HELD_GREEN_C: f32 = ${startPlaceholders(o).green.carbon};
 `;
 }
 
@@ -911,11 +912,11 @@ export const PHYSICS_KERNELS = {
       if (onIceSheet) { veg = 0.0; }
       PH[PH_VEG + i] = veg;
       let air = IN[S_TH + bottom] * D[D_EXM + bottom];
-      let keep = smallRate(dt / SEASON_MEM);
+      let keep = P[5]; let hold = P[7];
       let seasonLength = PH[PH_SEASONL + i] + (select(0.0, 1.0, air >= SEASON_K) - PH[PH_SEASONL + i]) * keep;
       let seasonWarmth = PH[PH_SEASONW + i] + (max(0.0, air - SEASON_K) - PH[PH_SEASONW + i]) * keep;
       PH[PH_SEASONL + i] = seasonLength; PH[PH_SEASONW + i] = seasonWarmth;
-      let demand = PH[PH_DEMAND + i] + (86400.0 * potential - PH[PH_DEMAND + i]) * smallRate(dt / MOIST_MEM);
+      let demand = PH[PH_DEMAND + i] + (86400.0 * potential - PH[PH_DEMAND + i]) * P[6];
       PH[PH_DEMAND + i] = demand;
       let standing = PH[PH_CANOPY + i];
       var trees = max(veg, standing + (veg - standing) * (1.0 - exp(-dt / CANOPY_MEM)));
@@ -924,15 +925,21 @@ export const PHYSICS_KERNELS = {
         let factor = clamp((SEASON_C + seasonWarmth / max(seasonLength, SEASON_SHORTEST) - TREE_LO) / TREE_SPAN, 0.0, 1.0) * moist;
         let goal = select(factor * veg, min(standing, factor), snow > 0.0);
         trees = standing + (goal - standing) * smallRate(dt / select(TREE_DECLINE, TREE_GROW, goal > standing));
+        if (hold > 0.5) { trees = select(select(factor * veg, 0.0, hold < 2.5), HELD_SHARE * veg, hold < 1.5); }
       }
       PH[PH_CANOPY + i] = select(trees, 0.0, onIceSheet);
       if (HUMIC) {
         let fill = clamp(soil / ROOTCAP, 0.0, 1.0); let airC = air - MELTING;
         let input = LITTER_IN * (LITTER_TREE * min(1.0, trees) + LITTER_GRASS * max(0.0, veg - trees)) * min(1.0, soil / (WETT * ROOTCAP)) * select(0.0, 1.0 / (1.0 + exp(MIAMI_A - MIAMI_B * airC)), airC >= SEASON_C);
         let moistDecay = select(select(select(1.0 - 0.8 * (fill - DECAY_OPT), 0.2 + 0.8 * (fill - DECAY_WILT) / (DECAY_OPT - DECAY_WILT), fill <= DECAY_OPT), 0.2, fill <= DECAY_WILT), 0.2, air < MELTING);
-        let decay = select(0.0, exp(LT_E * (LT_REF - 1.0 / max(air - LT_T0, 1e-3))), air > LT_T0) * moistDecay * DECAY_RATE;
+        let decayFactor = select(0.0, exp(LT_E * (LT_REF - 1.0 / max(air - LT_T0, 1e-3))), air > LT_T0) * moistDecay;
+        let decay = decayFactor * DECAY_RATE;
+        let litterFactor = min(1.0, soil / (WETT * ROOTCAP)) * select(0.0, 1.0 / (1.0 + exp(MIAMI_A - MIAMI_B * airC)), airC >= SEASON_C);
+        PH[PH_LITTERM + i] = select(PH[PH_LITTERM + i] + (litterFactor - PH[PH_LITTERM + i]) * keep, 0.0, onIceSheet);
+        PH[PH_DECAYM + i] = select(PH[PH_DECAYM + i] + (decayFactor - PH[PH_DECAYM + i]) * keep, 0.0, onIceSheet);
         let x = CARBON_ACC * decay * dt; let carbon0 = PH[PH_SOILC + i];
-        PH[PH_SOILC + i] = select(max(0.0, carbon0 + (input - decay * carbon0) * CARBON_ACC * dt * select(1.0 - x * (0.5 - x / 6.0), (1.0 - exp(-x)) / x, x > 1e-2)), 0.0, onIceSheet);
+        let heldCarbon = select(select(HELD_GREEN_C, 0.0, hold < 2.5), HELD_NEUTRAL_C, hold < 1.5);
+        PH[PH_SOILC + i] = select(select(max(0.0, carbon0 + (input - decay * carbon0) * CARBON_ACC * dt * select(1.0 - x * (0.5 - x / 6.0), (1.0 - exp(-x)) / x, x > 1e-2)), heldCarbon, hold > 0.5), 0.0, onIceSheet);
       }
       cap = ROOTCAP;
     }
@@ -1592,7 +1599,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     IN[S_TH + bottom * C + i] += LFUS * (rained + convected) * GRAV / (CP * pi * LV[L_DS + K - 1] * D[D_EXM + bottom * C + i]);
   }
   if (PH[PH_LAND + i] > 0.5) {
-    if (VEGETATED) { PH[PH_RAINMEAN + i] += ((rained + convected) * 86400.0 / dt - PH[PH_RAINMEAN + i]) * smallRate(dt / MOIST_MEM); }
+    if (VEGETATED) { PH[PH_RAINMEAN + i] += ((rained + convected) * 86400.0 / dt - PH[PH_RAINMEAN + i]) * P[6]; }
     if (airT < MELTING) {
       PH[PH_SNOW + i] += rained + convected;
       PH[PH_SNOWALB + i] = refreshedSnow(PH[PH_SNOWALB + i], rained + convected);

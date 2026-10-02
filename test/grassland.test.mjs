@@ -31,6 +31,7 @@ test('the moisture factor ramps with the aridity index P/PET between the forest 
   assert.deepEqual(MOISTURE_ESTIMATE, { demand: [-2.14, 0.0134], aridity: [0.01, 0.79, 0.63] });
   const land = createLandSurface(mesh, flat());
   land.initialize();
+  land.record.set([-1, 0, 0]);
   const i = 7, surfaceT = new Float64Array(mesh.nCells).fill(290), flux = new Float64Array(mesh.nCells), half = 3 * YEAR * Math.LN2;
   land.rainMean[i] = 1; land.demandMean[i] = 4;
   land.deposit(i, 2 * half / DAY, 290, half);
@@ -48,6 +49,7 @@ test('the moisture factor ramps with the aridity index P/PET between the forest 
 test('trees grow toward the treeline factor times the moisture factor times the cover, die back toward it where the climate dries, and the rest of the cover is grass', () => {
   const land = createLandSurface(mesh, flat(), { forestAridity: [0.2, 1.0] });
   land.initialize();
+  land.record.set([-1, 0, 0]);
   const i = 6, cap = land.capacity(i), flux = new Float64Array(mesh.nCells), warm = new Float64Array(mesh.nCells).fill(295), cold = new Float64Array(mesh.nCells).fill(MELTING_POINT - 10);
   const set = (rain, demand, cover, trees, snow = 0) => { land.seasonLength[i] = 1; land.seasonWarmth[i] = 20; land.rainMean[i] = rain; land.demandMean[i] = demand; land.vegetation[i] = cover; land.canopy[i] = trees; land.snow[i] = snow; land.soil[i] = cap; land.surface[i] = 0; };
   set(1.8, 3, 1, 0.1);
@@ -94,16 +96,14 @@ test('the vegetated albedo blends forest and grass by their shares of the cover,
   assert.ok(near(plain.albedo(i), 0.30 + (0.13 - 0.30) * 0.6), 'without grassland one vegetated albedo');
 });
 
-test('a fresh start and an older state take the moisture means from the estimate and their trees at most at the cover times the potential; a saved state keeps them through a state file', async () => {
+test('a fresh start begins its moisture means empty with its trees at half the cover, an older state takes the means from the estimate and its trees at most at the cover times the potential; a saved state keeps them through a state file', async () => {
   const topography = syntheticTopography(180, 360, (lat, lon) => (lat < -1.2 ? 2000 : Math.cos(lon) > 0 ? 100 : -4000));
   const geography = createGeography(mesh, topography, { landBridges: {}, seaStraits: {} });
   const land = createLandSurface(mesh, geography), C = mesh.nCells;
   land.initialize();
   for (let i = 0; i < C; i++) {
-    if (!geography.land[i]) { assert.equal(land.rainMean[i], 0); assert.equal(land.demandMean[i], 0); continue; }
-    const e = moistureEstimate(mesh.latCell[i], 0.5, geography.iceSheet[i] ? 0 : 0.5);
-    assert.ok(near(land.rainMean[i], e.rain) && near(land.demandMean[i], e.demand), `cell ${i}`);
-    if (!geography.iceSheet[i]) assert.ok(near(land.canopy[i], 0.5 * land.treeFactor(i)), `cell ${i}: trees ${land.canopy[i]}`);
+    assert.equal(land.rainMean[i], 0); assert.equal(land.demandMean[i], 0);
+    if (geography.land[i] && !geography.iceSheet[i]) assert.equal(land.canopy[i], 0.25, `cell ${i}: trees ${land.canopy[i]}`);
   }
   const soil = Float64Array.from({ length: C }, (_, i) => 300 * ((i % 9) / 8)), vegetation = Float64Array.from({ length: C }, (_, i) => (i % 5) / 5), snow = new Float64Array(C);
   const seasonLength = new Float64Array(C).fill(0.6), seasonWarmth = new Float64Array(C).fill(8);

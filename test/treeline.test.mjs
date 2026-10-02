@@ -38,6 +38,7 @@ test('a sine year gives the share above the threshold and the mean excess over i
 test('the treeline factor reads the season\'s mean over at least 94 days against 6.4–8.0 °C, and the season means follow the lowest air', () => {
   const land = createLandSurface(mesh, flat(), { treeMoisture: false });
   land.initialize();
+  land.record.set([-1, 0, 0]);
   const i = 5;
   land.seasonLength[i] = 0.4; land.seasonWarmth[i] = 2.8;
   assert.ok(near(land.treeFactor(i), 0.9374999999999994), `a 146-day season at 7.9 °C: ${land.treeFactor(i)}`);
@@ -58,6 +59,7 @@ test('the treeline factor reads the season\'s mean over at least 94 days against
 test('trees grow toward the cover times the treeline factor over ten years of snow-free time, die back over three, and under snow hold unless the warmth fails', () => {
   const land = createLandSurface(mesh, flat(), { treeMoisture: false });
   land.initialize();
+  land.record.set([-1, 0, 0]);
   const i = 6, cap = land.capacity(i), flux = new Float64Array(mesh.nCells);
   const warm = new Float64Array(mesh.nCells).fill(295), cold = new Float64Array(mesh.nCells).fill(MELTING_POINT - 10);
   const set = (length, warmth, cover, trees, snow = 0) => { land.seasonLength[i] = length; land.seasonWarmth[i] = warmth; land.vegetation[i] = cover; land.canopy[i] = trees; land.snow[i] = snow; land.soil[i] = cap; land.surface[i] = 0; };
@@ -85,11 +87,11 @@ test('trees grow toward the cover times the treeline factor over ten years of sn
   assert.ok(plain.canopy[i] >= plain.vegetation[i], 'without the treeline the standing cover follows the cover up at once');
 });
 
-test('a fresh start and an older state start the trees at the cover times the estimated season\'s factor, a saved state keeps its season means and trees, and the ice sheets grow none', async () => {
+test('an older state starts the trees at the cover times the estimated season\'s factor, a saved state keeps its season means and trees, and the ice sheets grow none', async () => {
   const topography = syntheticTopography(180, 360, (lat, lon) => (lat < -1.2 ? 2000 : Math.cos(lon) > 0 ? 100 : -4000));
   const geography = createGeography(mesh, topography, { landBridges: {}, seaStraits: {} });
   const land = createLandSurface(mesh, geography, { treeMoisture: false }), C = mesh.nCells;
-  land.initialize();
+  land.load({ soil: new Float64Array(C).fill(150), snow: new Float64Array(C), vegetation: new Float64Array(C).fill(0.5) });
   let polar = 0, temperate = 0, sheet = 0;
   for (let i = 0; i < C; i++) {
     if (!geography.land[i]) { assert.equal(land.seasonLength[i], 0); assert.equal(land.canopy[i], 0); continue; }

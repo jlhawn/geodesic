@@ -36,6 +36,7 @@ function cell(options = {}) {
   const i = [...geography.land.keys()].find((n) => geography.land[n] && !geography.iceSheet[n]);
   const surfaceT = new Float64Array(mesh.nCells).fill(290), flux = new Float64Array(mesh.nCells);
   const set = (fill, cover, trees, carbon) => { land.soil[i] = fill * land.capacity(i); land.surface[i] = 0; land.snow[i] = 0; land.vegetation[i] = cover; land.canopy[i] = trees; land.soilCarbon[i] = carbon; };
+  land.record.set([-1, 0, 0]);
   const run = (celsius, years) => land.update(i, surfaceT, flux, 0, years * YEAR, MELTING_POINT + celsius);
   return { land, i, set, run };
 }
@@ -116,7 +117,7 @@ test('the albedo stays between the humus and mineral ends, never rises with the 
   }
 });
 
-test('a fresh start and an older state start at the equilibrium of their own cover and the estimated year, a saved state keeps its carbon, the ice sheets hold none, and regridding carries it', async () => {
+test('a fresh start holds the neutral carbon, an older state starts at the equilibrium of its own cover and the estimated year, a saved state keeps its carbon, the ice sheets hold none, and regridding carries it', async () => {
   const topography = syntheticTopography(180, 360, (lat, lon) => (lat < -1.2 ? 2000 : Math.cos(lon) > 0 ? 100 : -4000));
   const geography = createGeography(mesh, topography, { landBridges: {}, seaStraits: {} });
   const land = createLandSurface(mesh, geography), C = mesh.nCells;
@@ -124,8 +125,7 @@ test('a fresh start and an older state start at the equilibrium of their own cov
   let checked = 0;
   for (let i = 0; i < C; i++) {
     if (!geography.land[i] || geography.iceSheet[i]) { assert.equal(land.soilCarbon[i], 0); continue; }
-    const { mean, amplitude } = airCycle(mesh.latCell[i], geography.elevation[i]);
-    assert.ok(near(land.soilCarbon[i], carbonEquilibrium(mean, amplitude, 0.5, land.canopy[i] + Math.max(0, 0.5 - land.canopy[i]))), `cell ${i}`);
+    assert.equal(land.soilCarbon[i], 2.6 * Math.LN2, `cell ${i}`);
     checked++;
   }
   assert.ok(checked > 50);
@@ -161,7 +161,7 @@ test('every option of the land surface reaches the GPU or is refused there', { s
   const source = createLandSurface.toString();
   const block = source.slice(source.indexOf('{', source.indexOf('geography,')) + 1, source.indexOf('} = {})'));
   const names = [...block.matchAll(/(?:^|,)\s*([A-Za-z]+)\s*(?::|=)/g)].map((m) => m[1]);
-  const handled = new Set([...VEGETATION_OPTIONS, 'snowAgeing', ...Object.keys(SNOW_AGEING), 'heatCapacity', 'bucketCapacity', 'wetnessThreshold', 'albedo', 'snowAlbedo', 'fullSnow', 'latentHeatFusion', 'buffers']);
+  const handled = new Set([...VEGETATION_OPTIONS, 'snowAgeing', ...Object.keys(SNOW_AGEING), 'heatCapacity', 'bucketCapacity', 'wetnessThreshold', 'albedo', 'snowAlbedo', 'fullSnow', 'latentHeatFusion', 'start', 'buffers']);
   assert.ok(names.length > 60, names.join(' '));
   assert.deepEqual(names.filter((n) => !handled.has(n)), []);
   for (const key of Object.keys(SOIL_CARBON)) assert.ok(VEGETATION_OPTIONS.includes(key), key);

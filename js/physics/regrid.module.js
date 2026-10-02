@@ -1,7 +1,7 @@
 import { cellVector } from '../dynamics/operators.module.js';
 import { UNDECIDED } from './radiation.module.js';
 import { SNOW_AGEING } from './ice.module.js';
-import { seasonEstimate, treelineFactor, moistureEstimate, aridityFactor, airCycle, carbonEquilibrium } from './land.module.js';
+import { seasonEstimate, treelineFactor, moistureEstimate, aridityFactor, airCycle, carbonEquilibrium, carbonRecord } from './land.module.js';
 
 /*
  * Barycentric weights of p in the plane through unit vectors a, b, c:
@@ -205,7 +205,9 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   const seasoned = !!(land.seasonLength && land.seasonWarmth), seasonKept = seasoned ? { seasonLength: Float64Array.from(land.seasonLength), seasonWarmth: Float64Array.from(land.seasonWarmth) } : {};
   const moistened = !!(land.rainMean && land.demandMean), moistureKept = moistened ? { rainMean: Float64Array.from(land.rainMean), demandMean: Float64Array.from(land.demandMean) } : {};
   const carbonKept = land.soilCarbon ? { soilCarbon: Float64Array.from(land.soilCarbon) } : {};
-  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow), ...vegetation, ...surfaceKept, ...ageKept, ...canopyKept, ...seasonKept, ...moistureKept, ...carbonKept };
+  const recorded = !!(land.litterMean && land.decayMean), carbonRecordKept = recorded ? { litterMean: Float64Array.from(land.litterMean), decayMean: Float64Array.from(land.decayMean) } : {};
+  const recordKept = land.record ? { record: Float64Array.from(land.record) } : {};
+  if (source.mesh.nCells === target.mesh.nCells) return { soil: Float64Array.from(land.soil), snow: Float64Array.from(land.snow), ...vegetation, ...surfaceKept, ...ageKept, ...canopyKept, ...seasonKept, ...moistureKept, ...carbonKept, ...carbonRecordKept, ...recordKept };
   if (progress) progress(0, 'the land');
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), onLand = landMask(source);
   const bucket = target.land && target.land.bucketCapacity ? target.land.bucketCapacity : 150;
@@ -224,8 +226,11 @@ export function regridLand(source, target, land, progress = null, { ice = null, 
   const demandMean = moistened ? sampleTiles(source, target, Float64Array.from(land.demandMean), onLand, atCells, (tile) => moist(tile).demand) : null;
   const carbon = (tile) => { const { mean, amplitude } = airCycle(source.mesh.latCell[tile]); return carbonEquilibrium(mean, amplitude, guess(tile).soil / bucket, guess(tile).snow > 0 ? 0 : 0.5); };
   const soilCarbon = land.soilCarbon ? sampleTiles(source, target, Float64Array.from(land.soilCarbon), onLand, atCells, carbon) : null;
-  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; if (surface) surface[n] = 0; if (canopy) canopy[n] = 0; if (seasoned) { seasonLength[n] = 0; seasonWarmth[n] = 0; } if (moistened) { rainMean[n] = 0; demandMean[n] = 0; } if (soilCarbon) soilCarbon[n] = 0; }
-  return { soil, snow, ...(cover ? { vegetation: cover } : {}), ...(surface ? { surface } : {}), ...(snowAlbedo ? { snowAlbedo } : {}), ...(canopy ? { canopy } : {}), ...(seasoned ? { seasonLength, seasonWarmth } : {}), ...(moistened ? { rainMean, demandMean } : {}), ...(soilCarbon ? { soilCarbon } : {}) };
+  const sineRecord = (tile) => { const { mean, amplitude } = airCycle(source.mesh.latCell[tile]); return carbonRecord(mean, amplitude, guess(tile).soil / bucket); };
+  const litterMean = recorded ? sampleTiles(source, target, Float64Array.from(land.litterMean), onLand, atCells, (tile) => sineRecord(tile).litter) : null;
+  const decayMean = recorded ? sampleTiles(source, target, Float64Array.from(land.decayMean), onLand, atCells, (tile) => sineRecord(tile).decay) : null;
+  if (target.geography) for (let n = 0; n < soil.length; n++) if (!target.geography.land[n]) { soil[n] = 0; snow[n] = 0; if (cover) cover[n] = 0; if (surface) surface[n] = 0; if (canopy) canopy[n] = 0; if (seasoned) { seasonLength[n] = 0; seasonWarmth[n] = 0; } if (moistened) { rainMean[n] = 0; demandMean[n] = 0; } if (soilCarbon) soilCarbon[n] = 0; if (recorded) { litterMean[n] = 0; decayMean[n] = 0; } }
+  return { soil, snow, ...(cover ? { vegetation: cover } : {}), ...(surface ? { surface } : {}), ...(snowAlbedo ? { snowAlbedo } : {}), ...(canopy ? { canopy } : {}), ...(seasoned ? { seasonLength, seasonWarmth } : {}), ...(moistened ? { rainMean, demandMean } : {}), ...(soilCarbon ? { soilCarbon } : {}), ...(recorded ? { litterMean, decayMean } : {}), ...recordKept };
 }
 
 /*
