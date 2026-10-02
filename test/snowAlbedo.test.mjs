@@ -172,7 +172,7 @@ test('both engines give land, ice and the snow on them the same albedo from rand
 });
 
 test('over 48 GPU steps the snow albedo and the standing cover evolve as on the CPU, on land and on the ice', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const options = { land: { treeline: false, coldSnowAgeing: 2, meltingSnowAgeing: 12, canopyMemory: 6 * 3600, snowDeclineTime: 4 * 3600, refreshSnowfall: 0.5, wetSnowRange: 10 }, ice: { coldSnowAgeing: 2, meltingSnowAgeing: 12, refreshSnowfall: 0.5, wetSnowRange: 10 }, moist: { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 } };
+  const options = { land: { treeline: false, coldSnowAgeing: 2, meltingSnowAgeing: 12, canopyMemory: 6 * 3600, snowDeclineTime: 4 * 3600, refreshSnowfall: 0.5, wetSnowRange: 10 }, ice: { coldSnowAgeing: 2, meltingSnowAgeing: 12, refreshSnowfall: 0.5, wetSnowRange: 10 }, moist: { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06, convectionType: 'top', plumeEntrainmentLaw: 'gregory' } };
   const prepare = (model) => {
     const C = model.mesh.nCells, init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);

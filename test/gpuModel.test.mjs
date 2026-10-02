@@ -751,8 +751,8 @@ test('the convective and large-scale rain accumulate alike in both engines, cell
 
 test('both models read the rain split out at the diagnostics as means in mm/d, clearing its sums, alike but for the odd column whose onset falls a step apart, and the GPU model sends the means to the device on load and mirrors them on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
-  const surface = { convectiveGust: false };
-  const cpu = createModel(new Grid(6), { ocean: false, surface }), gpu = await createGpuModel(new Grid(6), { ocean: false, surface });
+  const surface = { convectiveGust: false }, moist = { convectionType: 'top', plumeEntrainmentLaw: 'gregory' };
+  const cpu = createModel(new Grid(6), { ocean: false, surface, moist }), gpu = await createGpuModel(new Grid(6), { ocean: false, surface, moist });
   const C = cpu.mesh.nCells, init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   const loaded = Float64Array.from({ length: C }, (_, i) => 0.5 * (i % 9));
@@ -798,7 +798,7 @@ test('step by step from one state with partly iced, melting polar cells, the eng
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   const { readRanges } = await import('../js/gpu/device.module.js');
-  const N = 6, dt = 1350 * 16 / N, options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false } };
+  const N = 6, dt = 1350 * 16 / N, options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false }, moist: { convectionType: 'top', plumeEntrainmentLaw: 'gregory' } };
   const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options);
   const C = cpu.mesh.nCells, K = cpu.core.K, init = initializeState(cpu, {});
   const iced = [];

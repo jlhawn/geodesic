@@ -163,7 +163,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 
 test('on the GPU the falling ice and the uniform condensation keep column water with the precipitation and moist enthalpy to single precision, and match the CPU column by column', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
-  const dt = 900, model = createModel(new Grid(6), { ocean: false, levels, moist: {} }), { core, mesh } = model, C = mesh.nCells, { K, sigmaMid, exnerLayer, dSigma, g, cp } = core.diagnostics;
+  const dt = 900, previous = { plumeEntrainmentLaw: 'gregory' }, model = createModel(new Grid(6), { ocean: false, levels, moist: previous }), { core, mesh } = model, C = mesh.nCells, { K, sigmaMid, exnerLayer, dSigma, g, cp } = core.diagnostics;
   const [pi, theta, , surfaceT, q, qc] = model.state;
   let seed = 4242;
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
@@ -183,7 +183,7 @@ test('on the GPU the falling ice and the uniform condensation keep column water 
   const before = Array.from({ length: C }, (_, i) => budget(theta, q, qc, i));
   let icy = 0;
   for (let i = 0; i < C; i++) { let cold = false; for (let k = 0; k < K; k++) if (qc[k * C + i] > 0 && theta[k * C + i] * exner[k * C + i] < 235.15) cold = true; if (cold) icy++; }
-  const gpu = await createGpuCore(mesh, { levels, physics: {} });
+  const gpu = await createGpuCore(mesh, { levels, physics: previous });
   const { device, buffers, kernels } = gpu;
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate, concentration: model.seaIce.concentration });
