@@ -7823,6 +7823,39 @@ with b913e99 built by `git archive`): N=64 22.47 and 22.51 → 22.53 and
 and 99.53 ms, 19.76 → 20.37; a day at N=128 from eight128_day0183 73 s
 with setup on both.
 
+Review of the two merges (Oct 2). Every conflict rebuilt with `git
+merge-tree`: each line either side added since its merge base is in the
+merged tree or in the hunk that joins both, and no line either side
+removed is back. The suite passes in concurrent per-file runners but
+the cloudy columns' layer heating (1.2592·10⁻⁴ K/day, alone as in the
+suite). On the CPU, 'fixed' with `soilCarbon`, `grassland` and
+`treeMoisture` off gives b913e99's state and land digests after each of
+nine steps from eight64_day0183 with the treeline on as well as off. The
+GPU under the same options is not bit for bit: after one step the
+sensible heat differs in 20051 of 40962 cells by at most 6.1·10⁻⁵ W/m²
+and θ in 475 of 1392708 values by at most 2.4·10⁻⁴ K, and each merge
+alone does as much (the land merge: 22691 cells, 6.1·10⁻⁵ W/m²). Parity
+from eight64_day0183 after 1, 4 and 16 steps, rms of the lowest layer's
+T and u and of Ts (b913e99 in brackets): 4.0·10⁻⁵, 4.9·10⁻⁵, 1.5·10⁻⁵
+(3.4·10⁻⁴, 5.4·10⁻⁵, 1.5·10⁻⁵); 1.8·10⁻⁴, 8.8·10⁻⁴, 7.4·10⁻⁴ (1.8·10⁻⁴,
+8.9·10⁻⁴, 6.9·10⁻⁴); 1.7·10⁻³, 2.7·10⁻³, 1.3·10⁻³ (2.1·10⁻³, 1.7·10⁻³,
+2.2·10⁻³); regime flips 0, 2, 14 (0, 2, 12). One step from
+nine64_day0091: each edge column's momentum changes by Δt τ to
+3.4·10⁻¹¹ kg/m/s on the CPU; the GPU's stored stress is the CPU's to
+4.8·10⁻⁶ rms and 1.5·10⁻⁴ N/m² at most; the GPU's net surface flux is
+its shortwave, longwave, sensible and latent terms to 4.5·10⁻⁴ W/m²
+(forest) and the engines' net surface fluxes agree to 0.16 W/m² there;
+the ocean's stress at the eighth step equals the stored stress of the
+seventh on all 79133 open edges. Splits from eight64_day0183 to day 185:
+at the day with `LAND_JUMPS=184` byte for byte; inside day 185 (a
+step-48 snapshot) with and without that jump, and from a fresh start to
+day 2 with `LAND_JUMPS=1` split inside day 2, every field but the
+saved last-interval means (the two rains, ASR, OLR, albedo and the two
+cloud effects, which cover the segment's part of the day) is byte for
+byte; b913e99 splits inside a day with the same seven fields apart. The
+three days from eight64_day0183 repeat the day lines above to every
+printed digit.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
