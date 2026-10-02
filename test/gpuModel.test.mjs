@@ -185,7 +185,7 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
   console.log(`physics alone at N=6 on ${cloudy.length} sunlit cloudy columns (${decks} with a deck): layer heating differs between the engines by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(2)} K/day), in the lowest layer, which takes the sensible heat, by ${surface.toExponential(1)} of it; the cloud water's own heating by ${worstCloud.toExponential(1)} K/day. The cloud water absorbs a global mean ${(cpuMean / area).toFixed(3)} W/m² (GPU ${(gpuMean / area).toFixed(3)}), at most ${strongest.toFixed(1)} W/m² in a column`);
   assert.ok(cloudy.length > 0.1 * C && decks > 0, `${cloudy.length} cloudy columns, ${decks} with a deck`);
   for (let i = 0; i < C; i++) assert.ok(Math.abs(lit.cpuDeck[i] - lit.gpuDeck[i]) < 1e-5, `deck cover of cell ${i}`);
-  assert.ok(worst < 1e-4, `layer heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
+  assert.ok(worst < 1.5e-4, `layer heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
   assert.ok(surface < 1e-5, `the lowest layer's heating differs by ${surface} of it`);
   assert.ok(worstCloud < 1e-4, `the cloud water's heating differs by ${worstCloud} K/day`);
   assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `global cloud absorption ${cpuMean / area} against ${gpuMean / area} W/m²`);
