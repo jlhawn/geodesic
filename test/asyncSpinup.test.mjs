@@ -166,6 +166,25 @@ test('a coupled run split at each day\'s end ends byte for byte where the uninte
   assert.ok(readFileSync(join(whole, 's_day0003.bin')).equals(readFileSync(join(parts, 's_day0003.bin'))), 'the split run ends where the uninterrupted one does');
 });
 
+test('a coupled run split inside a day ends the day with the uninterrupted run\'s state', { skip }, async () => {
+  const whole = outDir('halfWhole', 'h_day0000.bin'), parts = outDir('halfParts', 'h_day0000.bin');
+  const env = { TAG: 'h', MINUTES: '100', DAYS: '1' };
+  assert.equal(run('spinup.mjs', { ...env, OUT: whole }), 0);
+  assert.equal(run('spinup.mjs', { ...env, OUT: parts, STOP_AFTER_STEPS: '12' }), 0);
+  const inside = await load(join(parts, 'h_day0000_step0012.bin'));
+  for (const field of ['rainTotal', 'runoffTotal', 'rainSeen', 'runoffSeen']) assert.ok(inside[field], `the in-day file carries ${field}`);
+  assert.equal(run('spinup.mjs', { ...env, OUT: parts }), 0);
+  const [a, b] = await Promise.all([whole, parts].map((out) => load(join(out, 'h_day0001.bin'))));
+  const means = ['convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect'];
+  const apart = [];
+  for (const [name, x] of [...Object.entries(a), ...Object.entries(a.ocean).map(([k, v]) => [`ocean.${k}`, v]), ...Object.entries(a.land).map(([k, v]) => [`land.${k}`, v])]) {
+    if (!ArrayBuffer.isView(x) || means.includes(name)) continue;
+    const y = name.startsWith('ocean.') ? b.ocean[name.slice(6)] : name.startsWith('land.') ? b.land[name.slice(5)] : b[name];
+    if (!x.every((v, n) => Object.is(v, y[n]))) apart.push(name);
+  }
+  assert.deepEqual(apart, []);
+});
+
 test('the asynchronous driver alternates coupled and ocean-only phases, hands the ocean over and picks up where it stands', { skip }, async () => {
   const out = outDir('driver', 'async6_day0000.bin');
   assert.equal(driver({ OUT: out, CYCLES: '2', OCEAN_YEARS: '2' }), 0);

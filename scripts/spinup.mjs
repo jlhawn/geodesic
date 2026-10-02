@@ -31,9 +31,11 @@
 //
 // SIGTERM or SIGINT stops the segment after the ocean step in progress
 // and exits 0: at a day's end it saves <TAG>_dayDDDD.bin as usual, inside
-// a day <TAG>_dayDDDD_stepSSSS.bin (DDDD days and SSSS steps done, with,
-// when RECORD is set, the forcing recorder's part of the day), which the
-// next segment continues from and deletes once it has saved a whole day.
+// a day <TAG>_dayDDDD_stepSSSS.bin (DDDD days and SSSS steps done, with
+// the running rain and runoff totals the ocean takes its freshwater from
+// as differences and, when RECORD is set, the forcing recorder's part of
+// the day), which the next segment continues from and deletes once it has
+// saved a whole day.
 // Whole-day names alone count towards KEEP, and only whole-day names match
 // the day patterns of the shell drivers.
 //
@@ -229,6 +231,16 @@ const readSplit = async () => {
 };
 const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration', 'ice'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12, fields.ice]; };
 await model.diagnostics();
+if (startStep && saved.rainTotal) {
+  const queue = model.gpu.device.queue;
+  queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.RAIN, Float32Array.from(saved.rainTotal));
+  queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.RUNOFF, Float32Array.from(saved.runoffTotal));
+  if (model.oceanEngine && saved.rainSeen) {
+    const { OD } = model.oceanEngine.layout;
+    queue.writeBuffer(model.oceanEngine.buffers.OD, 4 * OD.RAINSEEN, Float32Array.from(saved.rainSeen));
+    queue.writeBuffer(model.oceanEngine.buffers.OD, 4 * OD.RUNOFFSEEN, Float32Array.from(saved.runoffSeen));
+  }
+}
 const RECORD = process.env.RECORD;
 if (RECORD) mkdirSync(RECORD, { recursive: true });
 const partOfDay = RECORD && startStep && saved.forcingSums ? { sums: saved.forcingSums, steps: saved.forcingSteps, oceanSteps: saved.forcingOceanSteps, seconds: saved.forcingSeconds, rain: saved.forcingRain, runoff: saved.forcingRunoff } : null;
@@ -283,6 +295,14 @@ for (;;) {
 }
 
 const partial = {};
+if (step) {
+  const [rainTotal, runoffTotal] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.RAIN, length: C }, { offset: PH.RUNOFF, length: C }]);
+  Object.assign(partial, { rainTotal, runoffTotal });
+  if (model.oceanEngine) {
+    const { OD } = model.oceanEngine.layout, [rainSeen, runoffSeen] = await readRanges(model.gpu.device, model.oceanEngine.buffers.OD, [{ offset: OD.RAINSEEN, length: C }, { offset: OD.RUNOFFSEEN, length: C }]);
+    Object.assign(partial, { rainSeen, runoffSeen });
+  }
+}
 if (step && recorder) {
   await model.diagnostics();
   const part = await recorder.checkpoint();
