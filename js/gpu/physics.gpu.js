@@ -140,14 +140,14 @@ fn band(fraction: f32, eps: ptr<function, array<f32, K>>, temperature: ptr<funct
 }
 fn ozoneAbsorb(path: f32) -> f32 {
   var a = 0.0;
-  for (var b = 0; b < 8; b++) { a += O3_SHARE[b] * (1.0 - exp(-O3_COEF[b] * path)); }
+  for (var b = 0; b < 8; b++) { a += O3_SHARE[b] * relaxedFraction(O3_COEF[b] * path); }
   return a;
 }
-fn visibleVapour(path: f32) -> f32 { return VIS_H2O_S * (1.0 - exp(-VIS_H2O_K * VAP_STRENGTH * path)); }
+fn visibleVapour(path: f32) -> f32 { return VIS_H2O_S * relaxedFraction(VIS_H2O_K * VAP_STRENGTH * path); }
 fn nearInfraredGases(vapour: f32, oxygen: f32, co2: f32) -> f32 {
   var a = 0.0;
-  for (var j = 0; j < 10; j++) { a += H2O_W[j] * (1.0 - exp(-H2O_K[j] * VAP_STRENGTH * vapour)); }
-  return VAPOR_ABS * a + O2_SHARE * (1.0 - exp(-O2_K * sqrt(oxygen))) + CO2_SW_K * sqrt(co2);
+  for (var j = 0; j < 10; j++) { a += H2O_W[j] * relaxedFraction(H2O_K[j] * VAP_STRENGTH * vapour); }
+  return VAPOR_ABS * a + O2_SHARE * relaxedFraction(O2_K * sqrt(oxygen)) + CO2_SW_K * sqrt(co2);
 }
 fn ozoneColumnAt(i: i32) -> f32 { let s = sin(MF[F_LAT + i]); return OZ_EQ + (OZ_POLE - OZ_EQ) * s * s; }
 fn solarGases(i: i32, pi: f32, mu: f32, ozoneTaken: ptr<function, array<f32, K>>, gasTaken: ptr<function, array<f32, K>>) -> vec4<f32> {
@@ -849,7 +849,7 @@ export const PHYSICS_KERNELS = {
   var upwardHeating = 0.0; var upwardAerosol = 0.0; var restLoss = 0.0; var visibleLoss = 0.0; var aerosolLoss = 0.0; var ozoneLoss = 0.0;
   if (UPWARD && mu > 0.0) {
     aerosolLoss = select(0.0, 1.0 - exp(-AER_ABS * aerosol * DIFFUSE_PATH), aerosol > 0.0);
-    if (SOLAR_CLIRAD) { ozoneLoss = 1.0 - exp(-VIS_O3 * ozoneColumnAt(i) * DIFFUSE_PATH); }
+    if (SOLAR_CLIRAD) { ozoneLoss = relaxedFraction(VIS_O3 * ozoneColumnAt(i) * DIFFUSE_PATH); }
     visibleLoss = select(aerosolLoss, 1.0 - (1.0 - aerosolLoss) * (1.0 - ozoneLoss), ozoneLoss > 0.0);
     let sunlit = beam - ozoneHeating;
     let restAfter = sunlit - max(0.0, VIS_FRAC * beam - visibleTaken) - vaporHeating;
@@ -914,7 +914,7 @@ export const PHYSICS_KERNELS = {
         let r = 6 * g; let a = 6 * k;
         let tau = LW_D * (LW_K[r] * paths[a] + LW_K[r + 1] * paths[a + 1] + LW_K[r + 2] * paths[a + 2] + LW_K[r + 3] * paths[a + 3] + LW_K[r + 4] * paths[a + 4] + LW_K[r + 5] * paths[a + 5]);
         let t = temperature[k];
-        gasE[k] = 1.0 - exp(-tau);
+        gasE[k] = relaxedFraction(tau);
         totalE[k] = 1.0 - (1.0 - gasE[k]) * (1.0 - cloudE[k]);
         source[k] = planckShare(g, t) * STEFAN * t * t * t * t;
         netFlux[k] += totalE[k] * (down - 2.0 * source[k]);
@@ -955,7 +955,7 @@ export const PHYSICS_KERNELS = {
   let contrast = directDown * (iceDir - waterDir) + (swdn - directDown) * (iceDif - ALB_DIF_WATER);
   let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let absorbedSolar = absorbed + ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let reflectedSolar = incident - absorbed - cloudHeating - upwardHeating;
   PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbedSolar; PH[PH_ATMSW + i] = atmosphereSolar; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = reflectedSolar; PH[PH_ADIF + i] = adif;
-  PH[PH_ABSSUM + i] += absorbedSolar; PH[PH_ATMSUM + i] += atmosphereSolar; PH[PH_OLRSUM + i] += outgoing; PH[PH_INSSUM + i] += beam; PH[PH_REFLSUM + i] += reflectedSolar;
+  PH[PH_ABSSUM + i] += absorbedSolar; PH[PH_ATMSUM + i] += atmosphereSolar; PH[PH_OLRSUM + i] += outgoing; PH[PH_INSSUM + i] += beam; PH[PH_REFLSUM + i] += reflectedSolar; PH[PH_LWSFCSUM + i] += back - surfaceEmission;
   if (CLEAR_SKY) {
     let clearSw = shortwave(0.0, 1.0, mu, adir, adif, light);
     var clearUp = 0.0;

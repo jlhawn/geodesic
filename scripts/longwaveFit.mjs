@@ -44,7 +44,7 @@
 import { writeFileSync } from 'node:fs';
 import { GRAVITY } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, referenceHeating, layerHeating, interfaceAt, MOLAR } from './standardAtmospheres.mjs';
-import { LONGWAVE_CONSTANTS, gasPaths, clearLongwave } from '../js/physics/longwave.module.js';
+import { LONGWAVE_CONSTANTS, gasPaths, clearLongwave, normalizedPoints } from '../js/physics/longwave.module.js';
 
 const H = 6.62607015e-34, CL = 2.99792458e8, KB = 1.380649e-23, SIGMA = 5.670374419e-8;
 const { pRef, diffusivity } = LONGWAVE_CONSTANTS;
@@ -241,7 +241,7 @@ export function reduce(P, keys = binning(P), step = 1) {
   return points.sort((a, b) => a.nu - b.nu);
 }
 
-export const tableOf = (P, points) => ({ ...P, points: points.map((g) => [g.line, g.continuum, g.co2, g.o3, g.ch4, g.n2o, ...g.planck]) });
+export const tableOf = (P, points) => ({ ...P, points: normalizedPoints(points.map((g) => [g.line, g.continuum, g.co2, g.o3, g.ch4, g.n2o, ...g.planck])) });
 
 function fitQuartic(x, y) {
   const t = x.map((T) => (T - 250) / 100), n = 5;
@@ -270,11 +270,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const points = reduce(P, keys);
   console.log(`${points.length} g-points:`);
   score(P, true, keys);
-  const table = tableOf(P, points);
-  table.points = table.points.map((row) => row.map((v) => +v.toPrecision(6)));
+  const table = { ...P, points: points.map((g) => [g.line, g.continuum, g.co2, g.o3, g.ch4, g.n2o, ...g.planck].map((v) => +v.toPrecision(6))) };
   for (const a of Object.keys(BENCHMARK.iae)) {
     if (a === 'note') continue;
-    const c = columns[a], g = clearLongwave(c, { table }), [, down, olr] = BENCHMARK.iae[a];
+    const c = columns[a], g = clearLongwave(c, { table: tableOf(P, points) }), [, down, olr] = BENCHMARK.iae[a];
     console.log(`${a.padEnd(8)} g-points against ICRCCM line-by-line (Feigelson et al. 1991; CO2 300 ppmv, no CH4 or N2O): OLR ${(g.up[0] - olr).toFixed(2)} DLR ${(g.down[c.T.length] - down).toFixed(2)}`);
   }
   if (process.env.WRITE) {

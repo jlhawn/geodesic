@@ -6,6 +6,9 @@ import { initializeState } from '../js/physics/init.module.js';
 import { clearLongwave } from '../js/physics/longwave.module.js';
 import { BENCHMARK, modelColumn, referenceAt, interfaceAt, MOLAR } from '../scripts/standardAtmospheres.mjs';
 import { runColumn } from '../scripts/radiationBenchmark.mjs';
+import { SOLAR_CONSTANT, GREENHOUSE_GASES, OZONE_COLUMN } from '../js/physics/radiation.module.js';
+import { saturationHumidity } from '../js/physics/moist.module.js';
+import { ozoneAbsorptivity, visibleVaporAbsorptivity, nearInfraredVaporAbsorptivity, oxygenAbsorptivity, carbonDioxideAbsorptivity, pressureScaling, vaporScaling, OXYGEN, STP_DEPTH } from '../js/physics/shortwaveGases.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -47,6 +50,37 @@ test('the solar gases absorb what RRTMG gives within 2 per cent at an overhead s
     assert.ok(Math.abs(layers - r.budget.atmosphereSolar) < 1e-9 * top.down, `${a}: the layers take the atmosphere's absorption, ${layers} against ${r.budget.atmosphereSolar}`);
     assert.ok(r.budget.oxygenSolar > 0 && r.budget.carbonDioxideSolar > 0, `${a}: O2 and CO2 absorb`);
   }
+});
+
+test('without scattering the solar gases take the CLIRAD absorptivities of their paths down, and of the path down plus 5/3 of the column from the light the surface reflects', () => {
+  const grid = new Grid(4), plain = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, clearSkyPass: true };
+  const make = (options) => { const m = createModel(grid, { ocean: false, radiation: { ...plain, ...options } }); initializeState(m, {}).forEach((v, a) => m.state[a].set(v)); return m; };
+  const on = make({}), off = make({ upwardAbsorption: false });
+  const { core, mesh } = on, { K, C, dSigma, sigmaMid, g, exnerLayer } = core.diagnostics, [pi, theta] = on.state, bottom = (K - 1) * C;
+  const q = new Float64Array(K * C);
+  for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) if (sigmaMid[k] > 0.4) q[k * C + i] = 0.6 * saturationHumidity(theta[k * C + i] * (pi[i] * sigmaMid[k] / 1e5) ** 0.2857, pi[i] * sigmaMid[k]);
+  for (const m of [on, off]) for (let i = 0; i < C; i++) m.core.diagnoseColumn(i, pi, theta, q, null);
+  let worst = 0;
+  for (const i of [0, 7]) for (const mu of [1, 0.4, 0.1]) for (const albedo of [0, 0.3]) {
+    const beam = SOLAR_CONSTANT * mu, m = 35 / Math.sqrt(1224 * mu * mu + 1);
+    let vapour = 0, oxygen = 0, co2 = 0;
+    for (let k = 0; k < K; k++) {
+      const idx = k * C + i, p = pi[i] * sigmaMid[k], mass = pi[i] * dSigma[k] / g, dry = mass * (1 - q[idx]);
+      vapour += q[idx] * mass * 0.1 * vaporScaling(p, theta[idx] * exnerLayer[idx]); oxygen += OXYGEN.mixingRatio * STP_DEPTH * dry * pressureScaling(p); co2 += GREENHOUSE_GASES.carbonDioxide * STP_DEPTH * dry * pressureScaling(p);
+    }
+    const ozone = OZONE_COLUMN[0] + (OZONE_COLUMN[1] - OZONE_COLUMN[0]) * Math.sin(mesh.latCell[i]) ** 2;
+    const nir = (f) => nearInfraredVaporAbsorptivity(f * vapour) + oxygenAbsorptivity(f * oxygen) + carbonDioxideAbsorptivity(f * co2);
+    const down = beam * (ozoneAbsorptivity(m * ozone) + visibleVaporAbsorptivity(m * vapour) + nir(m));
+    const visible = 0.5 * beam - beam * (ozoneAbsorptivity(m * ozone) + visibleVaporAbsorptivity(m * vapour));
+    const up = albedo * beam * (nir(m + 5 / 3) - nir(m)) + albedo * visible * -Math.expm1(-0.054209 * ozone * 5 / 3);
+    const run = (model) => { model.radiation.column(i, pi[i], theta, 290, 5, undefined, beam, q[bottom + i], q, null, albedo, albedo); return { ...model.radiation.budget }; };
+    const a = run(on), b = run(off);
+    const error = Math.max(Math.abs(b.atmosphereSolar - down) / down, albedo > 0 ? Math.abs(a.atmosphereSolar - b.atmosphereSolar - up) / up : 0);
+    worst = Math.max(worst, error);
+    assert.ok(error < 1e-4, `cell ${i}, μ ${mu}, albedo ${albedo}: down ${b.atmosphereSolar} against ${down}, up ${a.atmosphereSolar - b.atmosphereSolar} against ${up}`);
+    assert.ok(Math.abs(a.absorbedSolar + a.reflectedSolar - beam) < 1e-12 * beam && Math.abs(a.clearAbsorbedSolar - a.absorbedSolar) < 1e-12 * beam, `cell ${i}, μ ${mu}: closes and is its own clear sky`);
+  }
+  console.log(`12 humid clear columns without scattering: the gases take their absorptivities down and up to ${worst.toExponential(1)}`);
 });
 
 async function engines(radiation) {

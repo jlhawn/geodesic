@@ -22,6 +22,7 @@ const { K, C, E } = core.diagnostics;
 const EPS = 1e-12;
 const OVERCAST = { cloudCover: 'overcast' };
 const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
+const GRAY_GASES = { longwaveScheme: 'gray', solarGases: 'lacisHansen' };
 
 function random(seed) {
   let s = seed >>> 0;
@@ -374,7 +375,7 @@ test('water vapour absorbs sunlight by the Lacis–Hansen curve: a humid column 
   assert.equal(waterVaporAbsorptivity(0), 0);
   assert.ok(Math.abs(waterVaporAbsorptivity(1) - 0.099) < 0.002 && Math.abs(waterVaporAbsorptivity(5) - 0.154) < 0.002);
   for (let y = 0.01; y < 20; y *= 1.5) assert.ok(waterVaporAbsorptivity(1.5 * y) > waterVaporAbsorptivity(y));
-  const radiation = createRadiation(mesh, core), none = createRadiation(mesh, core, { vaporAbsorption: 0 });
+  const radiation = createRadiation(mesh, core, { solarGases: 'lacisHansen' }), none = createRadiation(mesh, core, { solarGases: 'lacisHansen', vaporAbsorption: 0 });
   const [pi, theta, u, surfaceT] = sampleState(3);
   const q = new Float64Array(K * C), qc = new Float64Array(K * C);
   core.diagnose(pi, theta, q, qc);
@@ -438,7 +439,7 @@ test('cloud water absorbs 1 − exp(−0.4 m²/kg × W) of the sunlight that mee
 });
 
 function deckColumns(options = {}) {
-  const radiation = createRadiation(mesh, core, { stratus: true, mixedLayerDeck: false, ...OVERCAST, ...options }), off = createRadiation(mesh, core, { stratus: false, ...OVERCAST });
+  const radiation = createRadiation(mesh, core, { stratus: true, mixedLayerDeck: false, ...OVERCAST, ...options }), off = createRadiation(mesh, core, { ...OVERCAST, ...options, stratus: false });
   radiation.setTime(0); off.setTime(0);
   let noon = 0;
   for (let i = 0; i < C; i++) if (radiation.insolation(i) > radiation.insolation(noon)) noon = i;
@@ -493,7 +494,7 @@ test('a stable column over warm open sea carries a stratocumulus deck that refle
 });
 
 test('the deck is two independent columns: its shortwave is the cover-weighted mean of the overcast and clear columns, the overcast one is the column with the deck water condensed in its layer, and the column closes', () => {
-  const { radiation, off, noon, qc, withStability, run } = deckColumns();
+  const { radiation, off, noon, qc, withStability, run } = deckColumns({ solarGases: 'lacisHansen' });
   const part = run(radiation, withStability(18), 298, 1), full = run(radiation, withStability(30), 298, 1), none = run(radiation, withStability(30), 298, 0);
   const f = part.stratusFraction;
   assert.ok(f > 0.2 && f < 0.8 && full.stratusFraction === 1 && none.stratusFraction === 0, `covers ${f}, ${full.stratusFraction}, ${none.stratusFraction}`);
@@ -897,7 +898,7 @@ function modelDigest(radiation, moist = {}) {
 
 test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
   const before = '3ca002d1e990a4335a223eb2232c51d0';
-  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED }).digest, before);
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }).digest, before);
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
   assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
@@ -915,7 +916,7 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
 });
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
-  const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED };
+  const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES };
   assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, '3d0c610f9d4aebf624f3b240b5e2f6c1');
   assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
   assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');

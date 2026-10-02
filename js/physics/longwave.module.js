@@ -13,7 +13,21 @@ import { LONGWAVE_SPECTRAL_MODEL, LONGWAVE_POINTS } from './longwaveTable.module
  * share of sigma T^4 its row's quartic in (T - 250)/100 gives.
  */
 export const LONGWAVE_CONSTANTS = { pRef: 50000, diffusivity: 1.66, gravity: 9.806 };
-export const LONGWAVE_TABLE = { ...LONGWAVE_SPECTRAL_MODEL, points: LONGWAVE_POINTS };
+
+/*
+ * The rows with their quartics' coefficients shifted, in proportion to each
+ * row's share at 250 K, so that the shares sum to 1 at every temperature
+ * and the surface emits σT⁴ in all: the table spans 10-3250 cm-1 only.
+ */
+export function normalizedPoints(points) {
+  const rows = points.map((row) => row.slice());
+  for (let n = 0; n < 5; n++) {
+    const excess = rows.reduce((s, row) => s + row[6 + n], 0) - (n === 0 ? 1 : 0), weight = rows.reduce((s, row) => s + row[6], 0);
+    for (const row of rows) row[6 + n] -= excess * row[6] / weight;
+  }
+  return rows;
+}
+export const LONGWAVE_TABLE = { ...LONGWAVE_SPECTRAL_MODEL, points: normalizedPoints(LONGWAVE_POINTS) };
 export const GAS_MOLAR = { air: 28.964, h2o: 18.015, co2: 44.01, o3: 47.997, ch4: 16.04, n2o: 44.013 };
 const STEFAN = 5.670374419e-8;
 

@@ -22,7 +22,7 @@ function stats(cpu, gpu) {
   return { maxDiff, rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
 const relative = (got, expected) => Math.abs(got - expected) / Math.abs(expected);
-const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
+const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false, longwaveScheme: 'gray', solarGases: 'lacisHansen' };
 
 async function engines() {
   const cpu = createModel(new Grid(6), { ocean: false, radiation: UNSCATTERED }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation: UNSCATTERED });

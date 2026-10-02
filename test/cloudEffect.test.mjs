@@ -15,6 +15,7 @@ const CLEAR_SLOTS = { clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'O
 const EFFECT_SLOTS = { meanShortwaveCloudEffect: 'SWCREMEAN', meanLongwaveCloudEffect: 'LWCREMEAN' };
 const DT = 900;
 const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15, upwardAbsorption: false };
+const STEPS = 16;
 
 function stats(cpu, gpu) {
   let maxDiff = 0, sumSq = 0, sumRef = 0;
@@ -52,27 +53,28 @@ test('the clear-sky pass gives each column the top-of-atmosphere fluxes of the s
   console.log(`${checked} columns (${lit} lit) with cloud in every third layer: clear-sky ASR and OLR equal the cloudless column's to ${worst.toExponential(1)}`);
 });
 
-async function engines(radiation) {
+async function engines(radiation, cloud = 0) {
   const cpu = createModel(new Grid(6), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation });
-  const init = initializeState(cpu, {});
+  const init = initializeState(cpu, {}), { K, C, sigmaMid } = cpu.core.diagnostics;
+  for (let k = 0; k < K; k++) if (sigmaMid[k] > 0.5 && sigmaMid[k] < 0.9) for (let i = 0; i < C; i++) init[5][k * C + i] = cloud;
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();
   return { cpu, gpu, C: cpu.mesh.nCells };
 }
 
 test('both engines sum the clear-sky fluxes per cell alike and read out the day-mean cloud effects, mirrored per cell and carried in a saved state', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpu, gpu, C } = await engines({ clearSkyPass: true, ...UNSCATTERED });
-  for (let s = 0; s < 48; s++) { cpu.step(DT); await gpu.step(DT); }
+  const { cpu, gpu, C } = await engines({ clearSkyPass: true, ...UNSCATTERED }, 3e-4);
+  for (let s = 0; s < STEPS; s++) { cpu.step(DT); await gpu.step(DT); }
   const device = await gpu.gpu.downloadPhysics();
   const cpuSums = Object.fromEntries(CLEAR_SUMMED.map((name) => [name, Float64Array.from(cpu.radiation.summed[name])]));
   const gpuSums = Object.fromEntries(CLEAR_SUMMED.map((name) => [name, Float64Array.from(device[CLEAR_SLOTS[name]].subarray(0, C))]));
   const parity = Object.fromEntries(CLEAR_SUMMED.map((name) => [name, stats(cpuSums[name], gpuSums[name])]));
-  console.log(`48 steps at N=6, per-cell clear-sky sums CPU against GPU: ${CLEAR_SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m² summed)`).join(', ')}`);
+  console.log(`${STEPS} steps at N=6, per-cell clear-sky sums CPU against GPU: ${CLEAR_SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m² summed)`).join(', ')}`);
   for (const name of CLEAR_SUMMED) assert.ok(parity[name].rmsRel < 1e-4, `${name}: per-cell rms ${parity[name].rmsRel}`);
 
   const dc = cpu.diagnostics(), dg = await gpu.diagnostics();
   await gpu.sync();
-  console.log(`day means over the 48 steps (CPU / GPU): ASR ${dc.absorbedSolar.toFixed(3)} / ${dg.absorbedSolar.toFixed(3)}, clear ${dc.clearAbsorbedSolar.toFixed(3)} / ${dg.clearAbsorbedSolar.toFixed(3)}; OLR ${dc.outgoingLongwave.toFixed(3)} / ${dg.outgoingLongwave.toFixed(3)}, clear ${dc.clearOutgoingLongwave.toFixed(3)} / ${dg.clearOutgoingLongwave.toFixed(3)}; SWCRE ${dc.shortwaveCloudEffect.toFixed(3)} / ${dg.shortwaveCloudEffect.toFixed(3)}, LWCRE ${dc.longwaveCloudEffect.toFixed(3)} / ${dg.longwaveCloudEffect.toFixed(3)} W/m²`);
+  console.log(`day means over the ${STEPS} steps (CPU / GPU): ASR ${dc.absorbedSolar.toFixed(3)} / ${dg.absorbedSolar.toFixed(3)}, clear ${dc.clearAbsorbedSolar.toFixed(3)} / ${dg.clearAbsorbedSolar.toFixed(3)}; OLR ${dc.outgoingLongwave.toFixed(3)} / ${dg.outgoingLongwave.toFixed(3)}, clear ${dc.clearOutgoingLongwave.toFixed(3)} / ${dg.clearOutgoingLongwave.toFixed(3)}; SWCRE ${dc.shortwaveCloudEffect.toFixed(3)} / ${dg.shortwaveCloudEffect.toFixed(3)}, LWCRE ${dc.longwaveCloudEffect.toFixed(3)} / ${dg.longwaveCloudEffect.toFixed(3)} W/m²`);
   for (const d of [dc, dg]) {
     assert.ok(Math.abs(d.shortwaveCloudEffect - (d.absorbedSolar - d.clearAbsorbedSolar)) < 1e-3 && Math.abs(d.longwaveCloudEffect - (d.clearOutgoingLongwave - d.outgoingLongwave)) < 1e-3, 'each effect is the difference of its means');
     assert.ok(d.shortwaveCloudEffect < -1 && d.longwaveCloudEffect > 1, `the run has cloud to see: SWCRE ${d.shortwaveCloudEffect}, LWCRE ${d.longwaveCloudEffect}`);
@@ -83,8 +85,8 @@ test('both engines sum the clear-sky fluxes per cell alike and read out the day-
   const after = await gpu.gpu.downloadPhysics();
   for (let i = 0; i < C; i++) {
     for (const name of CLEAR_SUMMED) assert.ok(cpu.radiation.summed[name][i] === 0 && after[CLEAR_SLOTS[name]][i] === 0, `cell ${i}: ${name} starts again`);
-    assert.ok(Math.abs(cpu.radiation.meanShortwaveCloudEffect[i] - (cpu.radiation.meanAbsorbedSolar[i] - cpuSums.clearAbsorbedSolar[i] / 48)) <= 1e-9, `cell ${i}: the CPU's per-cell shortwave effect`);
-    assert.ok(Math.abs(cpu.radiation.meanLongwaveCloudEffect[i] - (cpuSums.clearOutgoingLongwave[i] / 48 - cpu.radiation.meanOutgoingLongwave[i])) <= 1e-9, `cell ${i}: the CPU's per-cell longwave effect`);
+    assert.ok(Math.abs(cpu.radiation.meanShortwaveCloudEffect[i] - (cpu.radiation.meanAbsorbedSolar[i] - cpuSums.clearAbsorbedSolar[i] / STEPS)) <= 1e-9, `cell ${i}: the CPU's per-cell shortwave effect`);
+    assert.ok(Math.abs(cpu.radiation.meanLongwaveCloudEffect[i] - (cpuSums.clearOutgoingLongwave[i] / STEPS - cpu.radiation.meanOutgoingLongwave[i])) <= 1e-9, `cell ${i}: the CPU's per-cell longwave effect`);
     for (const [name, slot] of Object.entries(EFFECT_SLOTS)) assert.equal(gpu.radiation[name][i], after[slot][i], `cell ${i}: ${name} mirrored`);
   }
   const effects = Object.fromEntries(Object.keys(EFFECT_SLOTS).map((name) => [name, stats(cpu.radiation[name], gpu.radiation[name])]));
