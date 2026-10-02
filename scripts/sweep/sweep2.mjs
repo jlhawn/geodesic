@@ -6,8 +6,8 @@
 // in runs/sweep2/results.csv runs its three N=64 screens on the GPU: TAG
 // s2<NN>f, ten days from a fresh atlas start on bl34 (the means of days
 // 6-10), beside s2<NN>m, three days from eight64_day0183 (day 186's
-// balance, the equatorial stress and the audit of the day-186 state over
-// three windows two hours apart), followed by s2<NN>a, three days from
+// balance and clear-sky albedo, the equatorial stress and the audit of the
+// day-186 state over three windows two hours apart), followed by s2<NN>a, three days from
 // nine64_day0091 (the 60-90N ice loss). PARALLEL (1) points run at once.
 // The audits run on the CPU beside the next point's screens, and one row
 // per point goes to results.csv with each parameter, each TERMS2 value,
@@ -38,7 +38,7 @@ export async function values2(point, prefix, { fresh, eight, arctic }) {
     fNan: flog.nan ? 1 : 0, fClamped: flog.days.reduce((s, d) => s + d.clamped, 0),
     nan: log.nan || !day ? 1 : 0, clamped: log.days.reduce((s, d) => s + d.clamped, 0), stress: log.stress ?? NaN,
   };
-  if (day && !log.nan) Object.assign(values, { balance: day.asr - day.olr, eAlbedo: day.albedo, eOlr: day.olr, eSwcre: day.swcre, eLwcre: day.lwcre, eDayRain: day.precip });
+  if (day && !log.nan) Object.assign(values, { balance: day.asr - day.olr, clearAlbedo: day.clearAlbedo, eAlbedo: day.albedo, eOlr: day.olr, eSwcre: day.swcre, eLwcre: day.lwcre, eDayRain: day.precip });
   if (existsSync(eight.state) && !log.nan) Object.assign(values, await auditWindows(eight.state, point, `${SWEEP2}/${prefix}m`, 64));
   const iceStart = await arcticStart();
   if (existsSync(arctic.state) && !readLog(arctic.log).nan) { const iceEnd = await arcticVolume(arctic.state); Object.assign(values, { iceStart, iceEnd, arctic: (iceStart - iceEnd) / 3 }); }
@@ -58,6 +58,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   mkdirSync(SWEEP2, { recursive: true });
   const design = readDesign(`${SWEEP2}/design.csv`, PARAMETERS2, POINTS, SEED);
   if (!existsSync(resultsFile)) writeFileSync(resultsFile, header.join(',') + '\n');
+  const written = readFileSync(resultsFile, 'utf8').split('\n')[0];
+  if (written !== header.join(',')) throw new Error(`${resultsFile} has the columns ${written}, not ${header.join(',')}: move it aside to start a new sweep`);
   const done = new Set(readFileSync(resultsFile, 'utf8').trim().split('\n').slice(1).map((l) => Number(l.split(',')[0])));
   const queue = design.filter((p) => !done.has(p.point) && (!ONLY || ONLY.includes(p.point)));
   const pending = [];

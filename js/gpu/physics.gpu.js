@@ -1,6 +1,6 @@
 import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physics/ice.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
-import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH } from '../physics/radiation.module.js';
+import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE } from '../physics/radiation.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 
@@ -55,6 +55,7 @@ const CLOUD_ABS: f32 = ${o.cloudAbsorption}; const CLOUD_SCAT: f32 = ${o.cloudSc
 const STRATUS: bool = ${!!o.stratus}; const ECTEI: bool = ${o.stratusIndex === 'ectei'}; const STRATUS_SCALE: f32 = ${o.stratusScale}; const STRATUS_MAX: f32 = ${o.stratusWaterMax}; const STRATUS_K: i32 = ${o.stratusLayer}; const STABILITY_K: i32 = ${o.stabilityLayer};
 const VAPOR_FRAC: f32 = ${1 - o.window - o.gasFraction}; const OZONE_ABS: f32 = ${o.ozoneAbsorption}; const VAPOR_ABS: f32 = ${o.vaporAbsorption}; const CEX: f32 = ${o.exchangeCoefficient};
 const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling > 0}; const SKYLIGHT: f32 = ${o.skylight}; const DIFFUSE_MU: f32 = 0.6; const CLEAR_SKY: bool = ${!!o.clearSkyPass};
+const SCATTER: bool = ${o.rayleighDepth > 0 || o.landAerosol > 0 || o.seaAerosol > 0}; const RAYLEIGH: f32 = ${o.rayleighDepth / REFERENCE_PRESSURE}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
 const ALB_ICE: f32 = ${o.iceAlbedo}; const FULLALB: f32 = ${o.fullAlbedoThickness}; const ALB_DIF_WATER: f32 = ${o.diffuseWaterAlbedo};
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
@@ -216,7 +217,18 @@ fn overlapCover(blocks: vec3<f32>) -> f32 {
   if (!PDF_COVER) { return 0.0; }
   return select(blocks.z, 1.0 - blocks.y, RANDOM_OVERLAP);
 }
-fn shortwave(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32) -> vec4<f32> {
+fn shortwave(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec2<f32>) -> vec4<f32> {
+  if (!SCATTER) { return stream(cloudDepth, keep, mu, adir, adif); }
+  return light.x * stream(cloudDepth + light.y, keep, mu, adir, adif) + (1.0 - light.x) * stream(cloudDepth, keep, mu, adir, adif);
+}
+fn clearLight(beam: f32, mu: f32, ozoneHeating: f32, incident: f32, pi: f32, aerosol: f32) -> vec3<f32> {
+  let visible = max(0.0, VIS_FRAC * beam - ozoneHeating);
+  var taken = 0.0;
+  if (mu > 0.0 && aerosol > 0.0) { taken = visible * (1.0 - exp(-AER_ABS * aerosol * 35.0 / sqrt(1224.0 * mu * mu + 1.0))); }
+  let left = incident - taken;
+  return vec3<f32>(taken, select(0.0, min(1.0, (visible - taken) / left), left > 0.0), RAYLEIGH * pi + AER_SCAT * aerosol);
+}
+fn stream(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32) -> vec4<f32> {
   let reflectance = select(0.0, cloudDepth / (cloudDepth + 2.0 * mu), mu > 0.0 && cloudDepth > 0.0);
   var direct = (1.0 - SKYLIGHT) * select(1.0, exp(-cloudDepth / mu), cloudDepth > 0.0 && mu > 0.0);
   var diffuse = 1.0 - reflectance - direct;
@@ -273,7 +285,7 @@ struct MlmAir { T: f32, ql: f32, qv: f32, qs: f32, dqs: f32 }
 struct MlmState { h: f32, thetaL: f32, qt: f32 }
 struct MlmOut { lwp: f32, cover: f32, entrainment: f32, jump: f32, heat: f32, water: f32 }
 struct MlmDeck { ok: bool, cover: f32, water: f32, entrainment: f32, top: f32 }
-struct MlmSun { incident: f32, mu: f32, adir: f32, adif: f32, path: f32, layer: f32, clear: f32 }
+struct MlmSun { incident: f32, mu: f32, adir: f32, adif: f32, path: f32, layer: f32, clear: f32, light: vec2<f32> }
 fn mlmFinite(x: f32) -> bool { return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u; }
 fn mlmFresh(x: f32) -> f32 {
   if (x < 1e-2) { return x * (1.0 - 0.5 * x * (1.0 - x / 3.0 * (1.0 - 0.25 * x))); }
@@ -325,7 +337,7 @@ fn mlmAbsorbed(sun: MlmSun, lwp: f32) -> f32 {
   let water = min(STRATUS_MAX, lwp);
   if (!(water > 0.0) || !(sun.incident > 0.0)) { return 0.0; }
   let total = sun.path + water;
-  let sw = shortwave(CLOUD_SCAT * total, cloudKeep(total), sun.mu, sun.adir, sun.adif);
+  let sw = shortwave(CLOUD_SCAT * total, cloudKeep(total), sun.mu, sun.adir, sun.adif, sun.light);
   return sun.incident * sw.w / total * (sun.layer + water) - sun.clear;
 }
 fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove: f32, qtAbove: f32, sun: MlmSun) -> MlmOut {
@@ -617,6 +629,7 @@ export const PHYSICS_KERNELS = {
   let wetness = select(1.0, select(landWet, 1.0, snow0 > 0.0), onLand);
   let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= 0.0);
   let ozoneHeating = beam * OZONE_ABS;
+  let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
   var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
   var cloudPath = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0);
@@ -633,7 +646,7 @@ export const PHYSICS_KERNELS = {
     let exchange = rho * select(CEX, PH[PH_DRAG + i], LANDED) * max(ws, GUST);
     let sensible = exchange * CP * (ts - airT);
     let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
-    var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0);
+    var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0, vec2<f32>(0.0, 0.0));
     if (STRATUS_SOLAR && CLOUD_SW > 0.0) {
       var path = 0.0; var layer = 0.0; var shadeBlocks = vec3<f32>(0.0, 1.0, 0.0);
       for (var k = 0; k < K; k++) {
@@ -655,9 +668,11 @@ export const PHYSICS_KERNELS = {
         for (var k = 0; k < K; k++) { vapor += max(0.0, IN[S_Q + k * C + i]) * pi * LV[L_DS + k] / GRAV * sqrt(LV[L_SM + k]) * 0.1 * magnification; }
         lit -= lit * (VAPOR_ABS * 2.9 * vapor / (pow(1.0 + 141.5 * vapor, 0.635) + 5.925 * vapor));
       }
-      var sky = shortwave(CLOUD_SCAT * path / shade, cloudKeep(path / shade), mu, adir, adif);
-      if (PDF_COVER && shade < 1.0) { sky = shade * sky + (1.0 - shade) * shortwave(0.0, 1.0, mu, adir, adif); }
-      deckSun = MlmSun(lit, mu, adir, adif, path, layer, select(0.0, lit * sky.w / path, path > 0.0) * layer);
+      var deckLight = vec2<f32>(0.0, 0.0);
+      if (SCATTER) { let clear = clearLight(beam, mu, ozoneHeating, lit, pi, aerosol); lit -= clear.x; deckLight = clear.yz; }
+      var sky = shortwave(CLOUD_SCAT * path / shade, cloudKeep(path / shade), mu, adir, adif, deckLight);
+      if (PDF_COVER && shade < 1.0) { sky = shade * sky + (1.0 - shade) * shortwave(0.0, 1.0, mu, adir, adif, deckLight); }
+      deckSun = MlmSun(lit, mu, adir, adif, path, layer, select(0.0, lit * sky.w / path, path > 0.0) * layer, deckLight);
     }
     let mixed = mlmColumn(i, pi, mixedDepth, sensible, evap, P[0], deckSun);
     if (mixed.ok) {
@@ -714,14 +729,21 @@ export const PHYSICS_KERNELS = {
     vaporHeating = incident * taken;
     incident -= vaporHeating;
   }
+  var light = vec2<f32>(0.0, 0.0); var aerosolHeating = 0.0;
+  if (SCATTER) {
+    let clear = clearLight(beam, mu, ozoneHeating, incident, pi, aerosol);
+    aerosolHeating = clear.x; light = clear.yz;
+    incident -= aerosolHeating;
+    if (aerosolHeating > 0.0) { for (var k = 0; k < K; k++) { netFlux[k] += aerosolHeating * LV[L_AER + k]; } }
+  }
   var columnCover = overlapCover(blocks);
   if (!(columnCover > 0.0)) { columnCover = 1.0; }
-  var sw = shortwave(CLOUD_SCAT * cloudPath / columnCover, cloudKeep(cloudPath / columnCover), mu, adir, adif);
-  if (PDF_COVER && columnCover < 1.0) { sw = columnCover * sw + (1.0 - columnCover) * shortwave(0.0, 1.0, mu, adir, adif); }
+  var sw = shortwave(CLOUD_SCAT * cloudPath / columnCover, cloudKeep(cloudPath / columnCover), mu, adir, adif, light);
+  if (PDF_COVER && columnCover < 1.0) { sw = columnCover * sw + (1.0 - columnCover) * shortwave(0.0, 1.0, mu, adir, adif, light); }
   var clearShare = select(0.0, incident * sw.w / cloudPath, cloudPath > 0.0);
   var deckShare = 0.0;
   if (deck > 0.0) {
-    let decked = shortwave(CLOUD_SCAT * (cloudPath + deck), cloudKeep(cloudPath + deck), mu, adir, adif);
+    let decked = shortwave(CLOUD_SCAT * (cloudPath + deck), cloudKeep(cloudPath + deck), mu, adir, adif, light);
     deckShare = fraction * incident * decked.w / (cloudPath + deck);
     clearShare *= 1.0 - fraction;
     sw = fraction * decked + (1.0 - fraction) * sw;
@@ -762,18 +784,18 @@ export const PHYSICS_KERNELS = {
   PH[PH_SWDN + i] = swdn;
   let directDown = incident * sw.z;
   let contrast = directDown * (iceDir - waterDir) + (swdn - directDown) * (iceDif - ALB_DIF_WATER);
-  let atmosphereSolar = ozoneHeating + vaporHeating + cloudHeating; let absorbedSolar = absorbed + ozoneHeating + vaporHeating + cloudHeating; let reflectedSolar = incident - absorbed - cloudHeating;
+  let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating; let absorbedSolar = absorbed + ozoneHeating + vaporHeating + aerosolHeating + cloudHeating; let reflectedSolar = incident - absorbed - cloudHeating;
   PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbedSolar; PH[PH_ATMSW + i] = atmosphereSolar; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = reflectedSolar; PH[PH_ADIF + i] = adif;
   PH[PH_ABSSUM + i] += absorbedSolar; PH[PH_ATMSUM + i] += atmosphereSolar; PH[PH_OLRSUM + i] += outgoing; PH[PH_INSSUM + i] += beam; PH[PH_REFLSUM + i] += reflectedSolar;
   if (CLEAR_SKY) {
-    let clearSw = shortwave(0.0, 1.0, mu, adir, adif);
+    let clearSw = shortwave(0.0, 1.0, mu, adir, adif, light);
     var upVapor = VAPOR_FRAC * surfaceEmission; var upGas = GAS_FRAC * surfaceEmission;
     for (var k = K - 1; k >= 0; k--) {
       let t = temperature[k]; let ev = clearE[k]; let eg = LV[L_GASE + k];
       upVapor = upVapor * (1.0 - ev) + VAPOR_FRAC * ev * STEFAN * t * t * t * t;
       upGas = upGas * (1.0 - eg) + GAS_FRAC * eg * STEFAN * t * t * t * t;
     }
-    PH[PH_ABSCLRSUM + i] += incident * clearSw.x + ozoneHeating + vaporHeating;
+    PH[PH_ABSCLRSUM + i] += incident * clearSw.x + ozoneHeating + vaporHeating + aerosolHeating;
     PH[PH_OLRCLRSUM + i] += upVapor + upGas + WINDOW * surfaceEmission;
   }
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];

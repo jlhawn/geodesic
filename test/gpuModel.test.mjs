@@ -9,6 +9,7 @@ import { saturationHumidity } from '../js/physics/moist.module.js';
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuCore } = gpuAvailable ? await import('../js/gpu/core.gpu.js') : {};
+const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15 };
 
 function meanTheta(model) {
   const { K } = model.core, C = model.mesh.nCells, theta = model.state[1];
@@ -102,8 +103,8 @@ test('with the ∇⁴ closures off, the divergence damping alone and the heat it
  * imposed): the heating of every layer, (θ' − θ)Π/dt, over a step long
  * enough that the rounding of θ is far below the tolerance.
  */
-function heatingState() {
-  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false, exchangeCoefficient: 1.5e-3 }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 } });
+function heatingState(radiation = {}) {
+  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false, exchangeCoefficient: 1.5e-3, ...radiation }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
@@ -163,8 +164,8 @@ async function physicsHeating(base, options, dt = 864000, cumulus = null, mixing
 }
 
 test('the heating of each layer of the sunlit cloudy columns, and the part of it the cloud water absorbs, agree between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const base = heatingState();
-  const lit = await physicsHeating(base, {}), scattering = await physicsHeating(base, { cloudSolarAbsorption: 0 });
+  const base = heatingState(UNSCATTERED);
+  const lit = await physicsHeating(base, UNSCATTERED), scattering = await physicsHeating(base, { cloudSolarAbsorption: 0, ...UNSCATTERED });
   const { K, C, cloudy } = lit;
   let worst = 0, surface = 0, worstCloud = 0, at = null, cpuMean = 0, gpuMean = 0, area = 0, strongest = 0, decks = 0;
   for (const i of cloudy) {
@@ -188,6 +189,25 @@ test('the heating of each layer of the sunlit cloudy columns, and the part of it
   assert.ok(surface < 1e-5, `the lowest layer's heating differs by ${surface} of it`);
   assert.ok(worstCloud < 1e-4, `the cloud water's heating differs by ${worstCloud} K/day`);
   assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `global cloud absorption ${cpuMean / area} against ${gpuMean / area} W/m²`);
+});
+
+test('the change the Rayleigh and aerosol scattering makes to the heating of each layer of the sunlit columns agrees between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const base = heatingState(UNSCATTERED);
+  const on = await physicsHeating(base, {}), off = await physicsHeating(base, UNSCATTERED);
+  const { K, C } = on;
+  let worst = 0, largest = 0, at = null, lit = 0;
+  for (let i = 0; i < C; i++) {
+    if (!(base.radiation.insolation(i) > 0)) continue;
+    lit++;
+    for (let k = 0; k < K - 1; k++) {
+      const x = k * C + i, change = on.cpu[x] - off.cpu[x], d = Math.abs(change - (on.gpu[x] - off.gpu[x]));
+      largest = Math.max(largest, Math.abs(change));
+      if (d > worst) { worst = d; at = [i, k, change]; }
+    }
+  }
+  console.log(`physics alone at N=6 on ${lit} sunlit columns: the scattering changes a layer's heating by up to ${largest.toFixed(3)} K/day, and the engines' change differs by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(3)} K/day)`);
+  assert.ok(lit > 0.3 * C && largest > 0.02, `${lit} sunlit columns, largest change ${largest} K/day`);
+  assert.ok(worst < 2e-5, `the scattering's heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
 });
 
 test('shallow cumulus of partial cover beside and without resolved cloud heats the layers of sunlit columns alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -491,7 +511,7 @@ test('the deck reads the same ring-smoothed πσ̇ in both engines, and the smoo
 });
 
 test('over six steps the carried inversion height, the gate and the deck they give match between the engines, and the boundary layer mixes to the deck\'s height in both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const run = await mixedLayerPair(6);
+  const run = await mixedLayerPair(6, UNSCATTERED);
   const { C, model } = run, { geopotential, g } = model.core.diagnostics, K = model.core.K;
   let carried = 0, above = 0, active = 0;
   for (let i = 0; i < C; i++) {

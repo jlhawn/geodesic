@@ -47,7 +47,10 @@
 // less clear-sky ASR) and longwave (clear-sky OLR less OLR), the day means
 // of the state's last day where the state carries them, else the
 // window's means (the radiation runs its clear-sky pass here unless
-// RADIATION sets clearSkyPass false), with the window's in the note.
+// RADIATION sets clearSkyPass false), with the window's in the note; the
+// clear-sky albedo, global and over 30S-30N, the clear-sky reflected over
+// the incoming sunlight from the same day means (the insolation of each
+// cell its ASR over one less its albedo) or the window's sums.
 // "u" is twice the grid-noise standard error of a
 // snapshot's box mean; a verdict is "too noisy to tell" when u exceeds
 // half the value.
@@ -61,7 +64,8 @@
 // hPa with 6-9 mm/d, the zonal-mean rain peaking at 6-7 mm/d near 8N
 // (GPCP); the winter Hadley cell 100-200e9 kg/s and the summer one
 // 10-50e9 kg/s; the global cloud-radiative effects -47 +- 4 W/m2
-// shortwave and +26 +- 3 W/m2 longwave (CERES EBAF).
+// shortwave and +26 +- 3 W/m2 longwave and the global clear-sky albedo
+// 0.15 +- 0.01 (CERES EBAF).
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
@@ -435,6 +439,13 @@ row('zonal-mean rain peak (mm/d)', zonalPeak.value, 2, 6, 7, 0, `at ${f(zonalPea
   if (dayMeans || radiation.clearSkyPass) for (const [name, mask, global] of [['global', everywhere, true], ['30S-30N', cloudBand, false]]) {
     row(`${name} shortwave cloud effect, ${source} (W/m2)`, mean(field('meanShortwaveCloudEffect'), mask), 1, global ? -43 : NaN, global ? -51 : NaN, 0, `${windowNote('meanShortwaveCloudEffect', mask)}${global ? '' : '; Earth -47 +- 4 globally'}`);
     row(`${name} longwave cloud effect, ${source} (W/m2)`, mean(field('meanLongwaveCloudEffect'), mask), 1, global ? 23 : NaN, global ? 29 : NaN, 0, `${windowNote('meanLongwaveCloudEffect', mask)}${global ? '' : '; Earth +26 +- 3 globally'}`);
+  }
+  const reflectance = (clear, insolation, mask) => { let c = 0, s = 0; for (let i = 0; i < C; i++) if (mask[i]) { c += area[i] * clear[i]; s += area[i] * insolation[i]; } return 1 - c / s; };
+  const savedClear = (mask) => reflectance(Float64Array.from(saved.meanAbsorbedSolar, (x, i) => x - saved.meanShortwaveCloudEffect[i]), Float64Array.from(saved.meanAbsorbedSolar, (x, i) => (saved.meanPlanetaryAlbedo[i] < 1 ? x / (1 - saved.meanPlanetaryAlbedo[i]) : 0)), mask);
+  const windowClear = (mask) => reflectance(radiation.summed.clearAbsorbedSolar, radiation.summed.insolation, mask);
+  if ((dayMeans && saved.meanAbsorbedSolar && saved.meanPlanetaryAlbedo) || radiation.clearSkyPass) for (const [name, mask, global] of [['global', everywhere, true], ['30S-30N', cloudBand, false]]) {
+    const daily = dayMeans && saved.meanAbsorbedSolar && saved.meanPlanetaryAlbedo;
+    row(`${name} clear-sky albedo, ${daily ? source : `mean over the window's ${STEPS} steps`}`, daily ? savedClear(mask) : windowClear(mask), 3, global ? 0.14 : NaN, global ? 0.16 : NaN, 0, `${radiation.clearSkyPass ? `the window's ${STEPS} steps ${f(windowClear(mask), 3)}` : 'no clear-sky pass in the window'}${global ? '' : '; Earth 0.15 +- 0.01 globally'}`);
   }
 }
 const grid = noise(omega700, everywhere);

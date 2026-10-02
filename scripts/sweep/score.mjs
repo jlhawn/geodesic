@@ -34,6 +34,7 @@ export const TERMS2 = [
   { key: 'fLwcre', label: 'fresh start: longwave cloud effect, days 6-10 (W/m2)', target: 27, tolerance: 3, weight: 2 },
   { key: 'fRain', label: 'fresh start: global rain, days 6-10 (mm/d)', target: 2.7, tolerance: 0.2, weight: 1 },
   { key: 'balance', label: 'eight64: ASR - OLR, day 186 (W/m2)', target: 0, tolerance: 3, weight: 2 },
+  { key: 'clearAlbedo', label: 'eight64: clear-sky albedo, day 186', target: 0.15, tolerance: 0.01, weight: 3 },
   { key: 'sepLow', label: 'SE Pacific low cloud, radiative', target: 0.6, tolerance: 0.1, weight: 1 },
   { key: 'peruLow', label: 'Peru low cloud, radiative', target: 0.6, tolerance: 0.1, weight: 1 },
   { key: 'sepDeckWater', label: "SE Pacific deck's own water path where it runs (g/m2)", target: 100, tolerance: 50, weight: 1 },
@@ -60,6 +61,13 @@ export function score(values, terms = TERMS) {
   return { errors, parts, total };
 }
 
+// The clear-sky albedo of a day from its ASR, albedo and shortwave cloud
+// effect: the day's insolation is ASR / (1 - albedo), its clear-sky ASR
+// ASR - SWCRE.
+export function clearAlbedo(asr, albedo, swcre) {
+  return 1 - (asr - swcre) * (1 - albedo) / asr;
+}
+
 export function readLog(file) {
   const days = [];
   let stress = null, nan = false;
@@ -68,7 +76,9 @@ export function readLog(file) {
     if (d) {
       const row = { day: +d[1], asr: +d[2], olr: +d[3], precip: +d[4], albedo: +d[5], clamped: +d[6] };
       const c = line.match(/SWCRE ([-\d.]+) LWCRE ([-\d.]+)/);
-      if (c) Object.assign(row, { swcre: +c[1], lwcre: +c[2] });
+      if (c) Object.assign(row, { swcre: +c[1], lwcre: +c[2], clearAlbedo: clearAlbedo(row.asr, row.albedo, +c[1]) });
+      const r = line.match(/clear-sky reflectance ([-\d.]+)/);
+      if (r) row.clearAlbedo = +r[1];
       Object.assign(row, { meanAlbedo: row.albedo, meanAsr: row.asr, meanOlr: row.olr, meanPrecip: row.precip });
       days.push(row);
     }
@@ -124,7 +134,7 @@ export function readAudit(file) {
 export function dayMeans(log, first, last) {
   const days = log.days.filter((d) => d.day >= first && d.day <= last), whole = days.length === last - first + 1 && !log.nan;
   const mean = (f) => (whole ? days.reduce((s, d) => s + f(d), 0) / days.length : NaN);
-  return { balance: mean((d) => d.asr - d.olr), asr: mean((d) => d.asr), olr: mean((d) => d.olr), albedo: mean((d) => d.albedo), swcre: mean((d) => d.swcre), lwcre: mean((d) => d.lwcre), rain: mean((d) => d.precip) };
+  return { balance: mean((d) => d.asr - d.olr), asr: mean((d) => d.asr), olr: mean((d) => d.olr), albedo: mean((d) => d.albedo), clearAlbedo: mean((d) => d.clearAlbedo), swcre: mean((d) => d.swcre), lwcre: mean((d) => d.lwcre), rain: mean((d) => d.precip) };
 }
 
 // The mean of several audits' readings, each key over the windows that gave
