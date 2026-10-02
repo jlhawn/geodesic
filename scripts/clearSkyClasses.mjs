@@ -28,7 +28,7 @@ export const REFERENCES = [
   ['open sea 50-70', null, [0.13, 0.20], ''],
   ['open sea 70-90', null, null, ''],
   ['bare dry soil (v < 0.2, surface layer < half full)', [0.30, 0.40], null, 'one mineral albedo 0.37 under the organic darkening, no sand, rock or iron colour'],
-  ['bare wet soil (v < 0.2, surface layer >= half full)', [0.10, 0.20], null, 'the darkening reaches 0.15 only with the surface layer full'],
+  ['bare wet soil (v < 0.2, surface layer >= half full)', [0.10, 0.20], null, 'the darkening halves the dry soil only with the surface layer full'],
   ['partly vegetated (0.2-0.7)', [0.18, 0.25], null, 'the cover blends bare soil with grass and forest by the trees\' share'],
   ['dense vegetation (v > 0.7)', [0.12, 0.15], null, 'the grass under v - trees and the dry soil showing through at 1 - v'],
   ['thin snow on land (< 10 kg/m2)', null, null, ''],
