@@ -796,9 +796,9 @@ export async function createGpuCore(mesh, {
     });
   }
 
-  const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, snowAlbedo: null, canopy: null, seasonLength: null, seasonWarmth: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, meanAbsorbedSolar: null, meanOutgoingLongwave: null, meanPlanetaryAlbedo: null, meanShortwaveCloudEffect: null, meanLongwaveCloudEffect: null, boundaryDepth: null, mixingTop: null, regime: null, buoyancyFlux: null };
-  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux } = {}) {
-    for (const [name, value] of Object.entries({ land, drag, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux })) if (value !== undefined) retained[name] = value;
+  const retained = { land: null, drag: null, soil: null, snow: null, vegetation: null, snowAlbedo: null, canopy: null, seasonLength: null, seasonWarmth: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, meanAbsorbedSolar: null, meanOutgoingLongwave: null, meanPlanetaryAlbedo: null, meanShortwaveCloudEffect: null, meanLongwaveCloudEffect: null, boundaryDepth: null, mixingTop: null, regime: null, buoyancyFlux: null, evaporation: null, cumulusCover: null, cumulusWater: null };
+  function uploadPhysics({ capacity = null, oceanFlux = null, land, drag, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux, evaporation, cumulusCover, cumulusWater } = {}) {
+    for (const [name, value] of Object.entries({ land, drag, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux, evaporation, cumulusCover, cumulusWater })) if (value !== undefined) retained[name] = value;
     const ph = new Float32Array(L.PH.total);
     for (let i = 0; i < C; i++) {
       const lat = mesh.latCell[i];
@@ -830,7 +830,10 @@ export async function createGpuCore(mesh, {
       ph[L.PH.MIXTOP + i] = retained.mixingTop ? retained.mixingTop[i] : 0;
       ph[L.PH.REGIME + i] = retained.regime ? retained.regime[i] : 0;
       ph[L.PH.BUOY + i] = retained.buoyancyFlux ? retained.buoyancyFlux[i] : 0;
+      ph[L.PH.EVAP + i] = retained.evaporation ? retained.evaporation[i] : 0;
     }
+    if (retained.cumulusCover) ph.set(retained.cumulusCover, L.PH.CUCOVER);
+    if (retained.cumulusWater) ph.set(retained.cumulusWater, L.PH.CUWATER);
     device.queue.writeBuffer(buffers.PH, 0, ph);
   }
   function uploadLand({ soil, snow, vegetation, surface = null, snowAlbedo = null, canopy = null, seasonLength = null, seasonWarmth = null }) {

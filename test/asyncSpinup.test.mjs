@@ -153,6 +153,19 @@ test('a coupled segment stopped inside a day carries the recorded day across the
   }
 });
 
+test('a coupled run split at each day\'s end ends byte for byte where the uninterrupted run does', { skip }, async () => {
+  const whole = outDir('splitWhole', 's_day0000.bin'), parts = outDir('splitParts', 's_day0000.bin');
+  const env = { TAG: 's', MINUTES: '100' };
+  assert.equal(run('spinup.mjs', { ...env, OUT: whole, DAYS: '3' }), 0);
+  assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '1' }), 0);
+  const day = await load(join(parts, 's_day0001.bin'));
+  for (const field of ['windSpeed', 'evaporation', 'cumulusCover', 'cumulusWater']) assert.ok(day[field], `the day's file carries ${field}`);
+  assert.ok(day.ocean.Q && day.ocean.flux && day.ocean.capacity, 'the day\'s file carries the ocean\'s restart arrays');
+  assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '2' }), 0);
+  assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '3' }), 0);
+  assert.ok(readFileSync(join(whole, 's_day0003.bin')).equals(readFileSync(join(parts, 's_day0003.bin'))), 'the split run ends where the uninterrupted one does');
+});
+
 test('the asynchronous driver alternates coupled and ocean-only phases, hands the ocean over and picks up where it stands', { skip }, async () => {
   const out = outDir('driver', 'async6_day0000.bin');
   assert.equal(driver({ OUT: out, CYCLES: '2', OCEAN_YEARS: '2' }), 0);
