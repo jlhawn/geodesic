@@ -4169,6 +4169,178 @@ The work, in order:
    308.56 K, 56.02 K, 227.13 K; `MIAMI` [1.315, 0.119]; the wet
    darkening's ratio `wetSoilAlbedo` / `bareAlbedo` 0.5; `bareAlbedo`
    0.30 only without the carbon. Older states start at S*.
+   An unbiased fresh start (Oct 2). A start from the atlas (no FROM
+   state) had put the cover at 0.5 everywhere and filled the slow means
+   from the latitude and bucket estimates, whose errors stay for the
+   means' three-year memory (the estimate's moisture factor 0.34 where
+   the land's own climate gives 0.00, 0.83–0.93 where it gives 1.00).
+   The two-stage start replaces that on both engines
+   (`js/physics/land.module.js`, `js/gpu/physics.gpu.js`, `core.gpu.js`,
+   `model.gpu.js`), with hand-computed and parity tests
+   (`test/landStart.test.mjs`).
+
+   - The record. The six slow means (`seasonLength`, `seasonWarmth`,
+     `rainMean`, `demandMean`, and two new ones the soil's equilibrium
+     needs: `litterMean`, the mean of min(1, fill/0.75) × m(T), and
+     `decayMean`, the mean of r(T) M(fill), both over `seasonMemory`)
+     share one record [age, hold, start] (`record`, float64 in state
+     files). While age + Δt ≤ the memory a mean takes the weight
+     Δt/(age + Δt), the plain average of every step so far; after it the
+     exponential weight 1 − e^(−Δt/memory) as before. Both memories are 3
+     years, so the record is a plain average to day 1095 and a running
+     mean from then on. A state saved without a record (every state
+     before this) has age −1 and the exponential weight at once (the CPU
+     weight is the old one to the bit); the estimates stay for those
+     states and for land added by regridding, which carries the record.
+     The GPU takes the two weights and the hold as step parameters P[5],
+     P[6], P[7], computed on the host in float64.
+   - Float32. The GPU's mean is m + (x − m) w in float32. Over three
+     years of steps (Math.fround in every operation, against a
+     compensated float64 sum over the step count) the worst error is 1.1·10⁻⁵
+     (N=64 steps, 337.5 s) and 4.3·10⁻⁵ (N=128, 168.75 s) of the mean
+     for a boreal season length, 5.8·10⁻⁶ and 2.3·10⁻⁵ for its warmth,
+     2.7·10⁻⁶ and 5.8·10⁻⁶ for a tundra decomposition, 6.3·10⁻⁵ and
+     1.6·10⁻⁴ for rain in showers (3 % of the steps); the exponential
+     mean the model already ran in float32 is off by 9.2·10⁻⁴ and
+     2.1·10⁻³ on the same showers in years 3–6. At 1.6·10⁻⁴ of P/PET
+     the moisture factor moves by 2·10⁻⁴, and 2.3·10⁻⁵ of the season's
+     warmth moves the treeline factor by under 10⁻⁴: no compensated or
+     count-based form is needed.
+   - The placeholder year. During a fresh start's first year the trees
+     and the topsoil carbon are held and the cover runs free. The trees
+     (10 years rising, 3 falling) close 9.5 % of a rising gap in a year
+     and the carbon (e-folding 0.2–6.3 years at A = 100) follows the
+     trees and cover, so both carry their start for years; they are held
+     at values that favour no region (`startPlaceholders`): trees at
+     half the cover, the grass–forest split's middle (vegetated albedo
+     0.165, half way from grass 0.20 to forest 0.13; snow masked by
+     0.25/0.70 of the way at v = 0.5), and carbon 1.802 kg/m² (c = ln 2 ×
+     `organicScale`, 0.69 % C), where the dry soil reads 0.245, midway
+     between mineral 0.37 and humus 0.12. The cover runs free from 0.5:
+     in a year it closes 63 % of a falling gap (365 days), 87 % of a
+     rising one at full warmth (180 days) and 40 % of its decay under
+     snow (720 days), so it follows the year; holding it would need its
+     equilibrium over the seasons, which depends on which side of its
+     goal it stands at each moment (the rates differ rising and falling
+     and the growth reads the warmth), a record of the goal's spread
+     through the year rather than a mean. What it leaves: a cell whose
+     goal is 0 all year keeps 0.5 e⁻² = 0.068 of cover after two years.
+     The bucket starts half full and fills or drains within months.
+   - The jump (`land.jump()`). At the end of year one and again at the
+     end of year two every land cell's trees are set to f m v (the
+     record's treeline factor times its moisture factor times the cover
+     at that moment) and its topsoil carbon to `litterInput` ×
+     `soilTurnover` × litter × `litterMean` / `decayMean` (35 kg/m² ×
+     the type-weighted cover × the ratio), the store's equilibrium for
+     its cover, trees and record; ice sheets 0. The first jump ends the
+     hold. The cover and the record are not touched: the record goes on
+     as a plain average, so the second jump reads years one and two
+     with equal weights. The day-365 record covers exactly one year,
+     equinox to equinox. On the GPU the jump reads the land back, applies
+     the same function with each value rounded to float32 as stored and
+     writes the trees and carbon back, so a repeat at once changes
+     nothing (to the bit, tested). The equilibrium is the ratio of the
+     year's means: the store's seasonal swing at A = 100 is not set,
+     and the annual mean of the periodic store lies within 0.7 % of the
+     ratio (the review's measurement above).
+   - Starts (`start`, LAND `{"start": ...}`): 'neutral' (the default)
+     as above; 'bare': no cover, no trees, mineral soil (0.37) held;
+     'green': cover 1, the trees held at f m v of the record as it
+     builds (none until the record admits them, since a part-year record
+     reads the season so far) and carbon 13 kg/m² (c = 5 `organicScale`,
+     dry soil 0.122) held. The cover runs free in all three, so a bare
+     and a green twin keep their own covers through the jumps.
+   - Why not a random start. A start drawn per cell from 0–1 has an rms
+     error of 0.29 against any cell's own value; the trees keep 82 % of
+     it after two years where they rise and 51 % where they fall, and
+     the noise sits at the grid scale in the albedo and evaporation. The
+     placeholders have no error that varies by region, and the jump
+     removes what error they have wholesale once a year of the cell's
+     own climate is known.
+   - Where it runs. scripts/spinup.mjs takes `LAND_JUMPS`: 'fresh' (the
+     default) jumps when a record that started fresh passes 365 and 730
+     days, at the end of the day that reaches them in whichever segment
+     holds it; 'none' never; a list of model days at their ends. A FROM
+     run of a state saved before the record never jumps unless asked. Each
+     jump is logged with the land means of trees, carbon, dry and full
+     land albedo, globally and by 10° band. The page jumps a fresh land
+     at the same record ages. A saved negative demand mean (FAO-56's
+     reference can be negative under dew) now reloads as saved rather
+     than clamped to 0, so a state saved after the jump reloads to the
+     bit on the GPU and with its record exact on the CPU.
+
+   Tests. CPU: ten steps crossing 0.9 °C and freezing match the
+   arithmetic mean of the steps' own values to 10⁻¹⁴ while within the
+   memory and the exponential recursion after; the jump gives 0.1875 of
+   trees and 14 kg/m² for a 183-day season at 7.4 °C, P/PET 0.5, cover
+   0.8 and record ratio 0.5, and from a sine year's record lands on
+   `carbonEquilibrium` to 10⁻¹³. GPU, N=6: a twin whose record is reset
+   every step gives each step's own values, and the record matches their
+   plain average to 4.2·10⁻⁸ (season length) to 1.5·10⁻⁶ (demand,
+   scale 13.5 mm/d) over ten steps, six within the memory; the held
+   placeholders of the three starts, the jump against the formula on
+   the read-back fields, its repeat and a state file reloaded to the
+   bit; after the jump the trees move.
+
+   Run (mechanics, not a result): `jump64`, N=64 GPU, bl34, OCEAN
+   `{"everySteps":8}`, ten days from the atlas with `LAND_JUMPS=10`,
+   4.0 wall minutes on a shared GPU. A twin run from the same start with
+   its record reset every step (a scratch driver; the covers of the two
+   stayed identical to the bit, as the held land feeds nothing back)
+   gives the model's own per-step values. Land means off the ice sheets
+   (area-weighted), the record against the plain average of the
+   per-step values and, in brackets, the day's own mean:
+
+   | day | season length | season warmth K | rain mm/d | demand mm/d | litter factor | decay factor |
+   |---|---|---|---|---|---|---|
+   | 1 | 0.5442 = 0.5442 (0.5442) | 4.4032 = 4.4032 (4.4032) | 0.8824 = 0.8824 (0.8824) | 1.4148 = 1.4148 (1.4148) | 0.1593 = 0.1593 (0.1593) | 0.4781 = 0.4781 (0.4781) |
+   | 2 | 0.5399 = 0.5399 (0.5357) | 4.3978 = 4.3978 (4.3924) | 0.9473 = 0.9473 (1.0123) | 1.5173 = 1.5173 (1.6198) | 0.1584 = 0.1584 (0.1574) | 0.4772 = 0.4772 (0.4764) |
+   | 5 | 0.5324 = 0.5324 (0.5302) | 4.5579 = 4.5579 (4.9630) | 0.9919 = 0.9919 (1.2893) | 1.7140 = 1.7140 (1.8753) | 0.1598 = 0.1598 (0.1662) | 0.4897 = 0.4897 (0.5227) |
+   | 10 | 0.5456 = 0.5456 (0.5819) | 5.4591 = 5.4591 (7.2178) | 1.2191 = 1.2191 (1.3556) | 1.7766 = 1.7766 (1.8797) | 0.1770 = 0.1770 (0.2113) | 0.5723 = 0.5723 (0.7411) |
+
+   The worst cell differs from its own average by 1.3·10⁻⁶ to 2.4·10⁻⁶
+   of the field's land maximum on day 10. An exponential mean from an
+   empty start would stand at 10/1095 = 0.9 % of these after ten days.
+   The jump at the end of day 10 (a ten-day record, March to mid-March:
+   the northern land has no season yet), land means including the ice
+   sheets: trees 0.226 → 0.037, topsoil carbon 1.61 → 3.30 kg/m², dry
+   soil albedo 0.258 → 0.243, land albedo 0.300 → 0.316; by band, trees
+   and carbon: 70–60N 0.24 → 0.00 and 1.7 → 0.0, 50–40N 0.25 → 0.00 and
+   1.8 → 1.4, 30–20N 0.25 → 0.07 and 1.8 → 6.0, 0–10S 0.26 → 0.06 and
+   1.8 → 5.2, 30–40S 0.25 → 0.13 and 1.8 → 6.5. Repeated at once: trees
+   0.0374 → 0.0374, carbon 3.2947 → 3.2947. The saved day-10 state holds
+   the record [864000 s, 0, 1].
+
+   What a paired spin-up from the atlas now does (scripts/pairedSpinup.sh,
+   the defaults): day 0, the cover 0.5 and free, trees held at half the
+   cover, carbon held at 1.802 kg/m², the six means empty at age 0; to
+   day 365 the means are the plain average of every step; at the end of
+   day 365 (a snapshot day for PER_YEAR 4, saved after the jump) the
+   trees jump to f m v and the carbon to its equilibrium from the
+   one-year record, and both run free; at the end of day 730 they jump
+   again from the two-year record; at day 1095 the record reaches its
+   memory and the means become 3-year running means; no later jump.
+
+   What still misses:
+
+   - The year-one record is of a planet whose trees and soils are the
+     placeholders, and the second jump weighs that year as much as the
+     second; the third year's running mean dilutes it.
+   - The cover's own start (0.5) is left to its own times (0.068 of
+     cover after two years where the goal is 0).
+   - The trees jump to f m v at the jump's moment of the cover (the
+     March equinox), and the carbon to the year's ratio, not its
+     seasonal phase.
+   - Land added by regridding during the record takes the estimates,
+     counted as a record as old as the rest.
+   - The twins ('bare', 'green') are built, not run.
+
+   Defaults: land `start` 'neutral' (`startPlaceholders`: neutral
+   cover 0.5, share 0.5, carbon ln 2 × `topsoilMass` × `organicScale`/100
+   = 1.802 kg/m²; bare 0, 0, 0; green 1, f m v, 13 kg/m²);
+   `FRESH_JUMPS` 365 and 730 days of the record; the spin-up's
+   `LAND_JUMPS` 'fresh'; `seasonMemory` and `moistureMemory` 3 years (the
+   plain average's length).
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
