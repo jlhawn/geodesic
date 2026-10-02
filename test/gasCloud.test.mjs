@@ -7,6 +7,8 @@ import { saturationHumidity } from '../js/physics/moist.module.js';
 import { sunDirection, SOLAR_CONSTANT, STEFAN_BOLTZMANN, GREENHOUSE_GASES } from '../js/physics/radiation.module.js';
 import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from '../js/physics/longwave.module.js';
 import { OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
+import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
+import { BENCHMARK, modelColumn } from '../scripts/standardAtmospheres.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -181,4 +183,102 @@ test('with a liquid and an ice layer in every column and every default on but th
   console.log(`${C} columns at N=6 (${lit.length} lit), a 100 g/m2 layer near 282 K and a 20 g/m2 layer near 222 K in each: layer heating apart by at most ${heating.toExponential(1)} K/day of ${scale.toFixed(1)}, the spectral gases' change of it alike to ${movedApart.toExponential(1)}; ${keys.map((key) => `${key} ${apart[key].toExponential(1)} of ${size(key).toFixed(0)}`).join(', ')} W/m2; means CPU / GPU, spectral then gray: SWCRE ${runs.map((r) => `${mean(r, 'cpu', 'shortwaveEffect').toFixed(2)} / ${mean(r, 'gpu', 'shortwaveEffect').toFixed(2)}`).join(', ')}, LWCRE ${runs.map((r) => `${mean(r, 'cpu', 'longwaveEffect').toFixed(2)} / ${mean(r, 'gpu', 'longwaveEffect').toFixed(2)}`).join(', ')}`);
   assert.ok(heating < 1e-5 * scale && movedApart < 1e-5 * scale, `layer heating apart by ${heating} K/day, the gases' change of it by ${movedApart}`);
   for (const [key, d] of Object.entries(apart)) assert.ok(d < 2e-5 * size(key), `${key} apart by ${d} W/m2 of ${size(key)}`);
+});
+
+function layeredColumns(radiation) {
+  const levels = sigmaInterfaces('bl34'), mls = modelColumn(BENCHMARK.atmospheres.MLS, levels);
+  const model = createModel(new Grid(4), { ocean: false, levels, radiation: { mixedLayerDeck: false, stratus: false, clearSkyPass: true, ozoneColumn: [0, 0], ...radiation } });
+  initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
+  const { core } = model, { K } = core.diagnostics, C = model.mesh.nCells, [pi, theta, u, surfaceT, q, qc, ice] = model.state;
+  pi.fill(mls.ps); u.fill(0); surfaceT.fill(mls.Ts); ice.fill(0); qc.fill(0);
+  core.diagnose(pi, theta);
+  const set = (k, T) => { for (let i = 0; i < C; i++) theta[k * C + i] = T / core.diagnostics.exnerLayer[k * C + i]; };
+  for (let k = 0; k < K; k++) { set(k, mls.T[k]); for (let i = 0; i < C; i++) q[k * C + i] = mls.q[k]; }
+  const nearest = (T) => { let best = K - 1; for (let k = 0; k < K; k++) if (core.diagnostics.sigmaMid[k] > 0.15 && Math.abs(mls.T[k] - T) < Math.abs(mls.T[best] - T)) best = k; return best; };
+  const layers = [[nearest(285), 285, 0.1], [nearest(220), 220, 0.02]];
+  for (const [k, T] of layers) set(k, T);
+  core.diagnose(pi, theta, q, qc);
+  const { dSigma, g } = core.diagnostics, cloud = new Float64Array(K * C);
+  for (const [k, , path] of layers) for (let i = 0; i < C; i++) cloud[k * C + i] = path * g / (pi[i] * dSigma[k]);
+  return { model, levels, layers, cloud };
+}
+
+function handEffects({ model, layers }, i, covers) {
+  const { K, sigmaMid, dSigma, g, exnerLayer } = model.core.diagnostics, C = model.mesh.nCells, [pi, theta, , surfaceT, q] = model.state;
+  const crystal = 0.5 * (326.3 - 53.15 * (12.42 - 53.15 * (0.197 - 53.15 * 0.0012)));
+  const kappa = [1.66 * 1000 * 0.090361, 1.66 * 1000 * (0.005 + 1 / crystal)];
+  const [[kLiquid, , liquidPath], [kIce, , icePath]] = layers;
+  const liquid = covers[0] * (1 - Math.exp(-kappa[0] * liquidPath / covers[0])), frozen = covers[1] * (1 - Math.exp(-kappa[1] * icePath / covers[1]));
+  const T = Array.from({ length: K }, (_, k) => theta[k * C + i] * exnerLayer[k * C + i]), row = new Float64Array(6);
+  const paths = T.map((t, k) => {
+    const x = k * C + i, dry = (1 - q[x]) / GAS_MOLAR.air;
+    layerPaths(row, pi[i] * sigmaMid[k], pi[i] * dSigma[k] / g, t, q[x], 0, GREENHOUSE_GASES.carbonDioxide * GAS_MOLAR.co2 * dry, GREENHOUSE_GASES.methane * GAS_MOLAR.ch4 * dry, GREENHOUSE_GASES.nitrousOxide * GAS_MOLAR.n2o * dry);
+    return Float64Array.from(row);
+  });
+  let top = 0, surface = 0;
+  for (const point of LONGWAVE_TABLE.points) {
+    const gas = paths.map((p) => 1 - Math.exp(-LONGWAVE_CONSTANTS.diffusivity * p.reduce((s, x, n) => s + point[n] * x, 0)));
+    const B = T.map((t) => planckShare(point, t) * STEFAN_BOLTZMANN * t ** 4);
+    const down = [0], up = new Array(K + 1);
+    for (let k = 0; k < K; k++) down.push(down[k] * (1 - gas[k]) + gas[k] * B[k]);
+    up[K] = planckShare(point, surfaceT[i]) * STEFAN_BOLTZMANN * surfaceT[i] ** 4;
+    for (let k = K - 1; k >= 0; k--) up[k] = up[k + 1] * (1 - gas[k]) + gas[k] * B[k];
+    const through = (a, b) => gas.slice(a, b).reduce((t, e) => t * (1 - e), 1);
+    const upLiquid = liquid * (1 - gas[kLiquid]) * (B[kLiquid] - up[kLiquid + 1]) * through(kIce + 1, kLiquid);
+    top -= (upLiquid * (1 - gas[kIce]) * (1 - frozen) + frozen * (1 - gas[kIce]) * (B[kIce] - up[kIce + 1])) * through(0, kIce);
+    const downIce = frozen * (1 - gas[kIce]) * (B[kIce] - down[kIce]) * through(kIce + 1, kLiquid);
+    surface += (downIce * (1 - gas[kLiquid]) * (1 - liquid) + liquid * (1 - gas[kLiquid]) * (B[kLiquid] - down[kLiquid])) * through(kLiquid + 1, K);
+  }
+  return { top, surface };
+}
+
+async function gpuLongwave({ model, levels }, radiation, water) {
+  const { core } = model, C = model.mesh.nCells, K = core.diagnostics.K;
+  const physics = { mixedLayerDeck: false, stratus: false, clearSkyPass: true, ozoneColumn: [0, 0], ...radiation };
+  const gpu = await createGpuCore(model.mesh, { nu4: core.nu4, nu4Theta: core.nu4Theta, divergenceDamping: core.divergenceDamping, referenceTheta: Float64Array.from({ length: K }, (_, k) => model.state[1][k * C]), levels, physics });
+  const { device, buffers, kernels } = gpu, state = model.state.map((a) => Float64Array.from(a));
+  state[5].set(water);
+  gpu.upload(state);
+  gpu.uploadPhysics({ snow: new Float64Array(C), concentration: new Float64Array(C) });
+  await gpu.tendency();
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([900, 0, 0, 0, 0, 0, 0, 0]));
+  const group = device.createBindGroup({ layout: kernels.physics.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+  const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+  pass.setPipeline(kernels.physics);
+  pass.setBindGroup(0, group);
+  pass.dispatchWorkgroups(Math.ceil(C / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  const ph = await gpu.downloadPhysics();
+  return Array.from({ length: C }, (_, i) => ({ outgoing: ph.OLRSUM[i], clear: ph.OLRCLRSUM[i], net: ph.LWSFCSUM[i] }));
+}
+
+test('on the midlatitude-summer profile 100 g/m2 of liquid at 285 K under 20 g/m2 of ice at 220 K change the OLR and the downward longwave by the g-point sums of their phase emissivities on the clear-sky fluxes, overcast and under the uniform cover, on both engines', async () => {
+  const lines = [];
+  for (const [label, radiation] of [['overcast', { cloudCover: 'overcast' }], ['uniform cover', {}]]) {
+    const column = layeredColumns(radiation), { model, cloud } = column, C = model.mesh.nCells, rad = model.radiation, [pi, theta, , surfaceT, q] = model.state;
+    const { K } = model.core.diagnostics, none = new Float64Array(K * C);
+    const run = (i, water) => { rad.column(i, pi[i], theta, surfaceT[i], 5, undefined, 0, q[(K - 1) * C + i], q, water, 0.07, 0.07); return { ...rad.budget, covers: column.layers.map(([k]) => rad.layerCover[k]) }; };
+    const hand = [], cpu = [];
+    let worst = 0;
+    for (let i = 0; i < C; i++) {
+      const cloudy = run(i, cloud), clear = run(i, none), h = handEffects(column, i, cloudy.covers);
+      hand.push(h);
+      cpu.push({ top: cloudy.clearOutgoingLongwave - cloudy.outgoingLongwave, surface: cloudy.downwardLongwave - clear.downwardLongwave });
+      worst = Math.max(worst, Math.abs(cpu[i].top - h.top), Math.abs(clear.outgoingLongwave - cloudy.clearOutgoingLongwave), Math.abs(cpu[i].surface - h.surface));
+    }
+    const covers = run(0, cloud).covers;
+    assert.ok(label === 'overcast' ? covers.every((f) => f === 1) : covers[0] > 0.2 && covers[0] < 0.8, `${label}: covers ${covers}`);
+    assert.ok(worst < 1e-9, `${label}: CPU against the hand sums by ${worst} W/m2`);
+    let line = `${label} (covers ${covers.map((f) => f.toFixed(3)).join(', ')}): LWCRE at the top ${hand[0].top.toFixed(3)}, at the surface ${hand[0].surface.toFixed(3)} W/m2 by hand; CPU apart by ${worst.toExponential(1)}`;
+    if (gpuAvailable) {
+      const cloudy = await gpuLongwave(column, radiation, cloud), clear = await gpuLongwave(column, radiation, none);
+      let apart = 0;
+      for (let i = 0; i < C; i++) apart = Math.max(apart, Math.abs(cloudy[i].clear - cloudy[i].outgoing - hand[i].top), Math.abs(cloudy[i].net - clear[i].net - hand[i].surface));
+      assert.ok(apart < 1e-3, `${label}: GPU against the hand sums by ${apart} W/m2`);
+      line += `, GPU by ${apart.toExponential(1)}`;
+    }
+    lines.push(line);
+  }
+  console.log(lines.join('; '));
 });
