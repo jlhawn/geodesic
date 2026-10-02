@@ -23,7 +23,8 @@ import { cellVector } from '../dynamics/operators.module.js';
  *    implicitly with |U| at the start of the step (4.41).
  *  - The gravity waves launched above it carry the stress
  *      τ_0 = ρ_L (H_eff²/9) (σ/μ) G |U_L| √(D1² + D2²) N_L,
- *    H_eff = 3μ − Z_b (4.37, which for Z_b = 0 is LM97's eq. with H = 2μ),
+ *    H_eff = effectiveHeight × (3μ − Z_b) (4.37, which for Z_b = 0 and
+ *    effectiveHeight 1 is LM97's eq. with H = 2μ),
  *    along the direction (D1, D2) in the frame of U_L (D2 towards the
  *    left of the flow), constant from the ground to Z_b. Up the column the
  *    stress stays until the wave Richardson number
@@ -50,7 +51,7 @@ import { cellVector } from '../dynamics/operators.module.js';
  * lost per unit area and time, the stress on the ground along the edge's
  * normal (N/m²).
  */
-export const OROGRAPHY_DEFAULTS = { blockingDrag: 1, waveDrag: 1, criticalHeight: 0.5, criticalRichardson: 0.25 };
+export const OROGRAPHY_DEFAULTS = { blockingDrag: 1, waveDrag: 1, criticalHeight: 0.5, criticalRichardson: 0.25, effectiveHeight: 1 };
 
 /*
  * One column, k = 0 at the top: z (above the ground), p, rho, theta, east
@@ -118,7 +119,7 @@ export function orographicColumn(sub, column, options = OROGRAPHY_DEFAULTS, out 
     const speed = Math.hypot(east[k], north[k]);
     out.beta[k] = o.blockingDrag * shape * sigma / (2 * mu) * Math.sqrt((blocking - z[k]) / (z[k] + mu)) * (B * c * c + Cc * s * s) * speed / 2;
   }
-  const height = top - blocking;
+  const height = o.effectiveHeight * (top - blocking);
   if (!(nL2 > 0) || !(height > 0)) return out;
   const nL = Math.sqrt(nL2);
   const launch = rhoL * height * height / 9 * sigma / mu * o.waveDrag * speedL * D * nL;

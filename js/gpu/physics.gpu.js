@@ -303,6 +303,18 @@ fn thomas(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, arra
   }
   for (var j = n - 2; j >= 0; j--) { (*rhs)[j] -= gain[j] * (*rhs)[j + 1]; }
 }
+fn thomasRate(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, array<f32, K>>, own: ptr<function, array<f32, K>>, rhs: ptr<function, array<f32, K>>, dt: f32) {
+  var gain: array<f32, K>;
+  var denominator = 1.0 + (*upper)[0] + (*lower)[0] + dt * (*own)[0];
+  gain[0] = -(*lower)[0] / denominator;
+  (*rhs)[0] = (*rhs)[0] / denominator;
+  for (var j = 1; j < n; j++) {
+    denominator = 1.0 + (*upper)[j] + (*lower)[j] + dt * (*own)[j] + (*upper)[j] * gain[j - 1];
+    gain[j] = -(*lower)[j] / denominator;
+    (*rhs)[j] = ((*rhs)[j] + (*upper)[j] * (*rhs)[j - 1]) / denominator;
+  }
+  for (var j = n - 2; j >= 0; j--) { (*rhs)[j] -= gain[j] * (*rhs)[j + 1]; }
+}
 `;
 
 /*
@@ -1089,6 +1101,15 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   PH[PH_ENTRAIN + i] = 0.0;
   let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
   if (IMPLICIT_DRAG) { PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * PH[PH_DRAG + i] * xWind(i, speed); }
+  if (FORM_DRAG) {
+    let sflt = PH[PH_OFLT + i];
+    for (var k = KTOP; k < K; k++) {
+      var rate = 0.0;
+      let z = (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV;
+      if (sflt > 0.0 && z > 0.0) { rate = TOFD_SCALE * sflt * sflt * exp(-pow(z / TOFD_DECAY, 1.5)) * pow(z, -1.2) * length(cellWind(i, k)); }
+      PH[PH_TOFD + (k - KTOP) * C + i] = rate;
+    }
+  }
   let buoyancy = select(GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture), PH[PH_BUOY + i], ROUGH);
   PH[PH_BUOY + i] = buoyancy; PH[PH_USTAR + i] = friction;
   if (MOIST_BL) { blMoist(i, pi, depth - zb, zb, buoyancy, friction); return; }
@@ -1643,6 +1664,10 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   var mixes = false;
   for (var k = KTOP; k < K - 1; k++) { if (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b] > 0.0) { mixes = true; } }
+  if (FORM_DRAG) {
+    PH[PH_FSTRESS + e] = 0.0;
+    if (PH[PH_OFLT + a] + PH[PH_OFLT + b] > 0.0) { mixes = true; }
+  }
   if (mixes || IMPLICIT_DRAG) { mixEdge(e, a, b); }
   if (PL_MOMENTUM) { transportEdge(e, a, b); }
 }
@@ -1694,10 +1719,20 @@ fn mixEdge(e: i32, a: i32, b: i32) {
   }
   var before: array<f32, K>;
   for (var j = 0; j < n; j++) { before[j] = rhs[j]; }
-  thomas(n, &upper, &lower, &rhs);
+  var own: array<f32, K>;
+  var forming = false;
+  if (FORM_DRAG) {
+    for (var j = 0; j < n; j++) { own[j] = 0.5 * (PH[PH_TOFD + j * C + a] + PH[PH_TOFD + j * C + b]); if (own[j] > 0.0) { forming = true; } }
+  }
+  if (forming) { thomasRate(n, &upper, &lower, &own, &rhs, dt); } else { thomas(n, &upper, &lower, &rhs); }
   for (var j = 0; j < n; j++) { IN[S_U + (KTOP + j) * E + e] = rhs[j]; }
   let surfaceDrag = 0.5 * (PH[PH_SDRAG + a] + PH[PH_SDRAG + b]);
   if (IMPLICIT_DRAG) { PH[PH_STRESS + e] = surfaceDrag * rhs[n - 1]; PH[PH_STRESSOK] = 1.0; }
+  if (forming) {
+    var formed = 0.0;
+    for (var j = 0; j < n; j++) { formed += columnMass * LV[L_DS + KTOP + j] / GRAV * own[j] * rhs[j]; }
+    PH[PH_FSTRESS + e] = formed;
+  }
   var share: array<f32, K>;
   var loss = 0.0; var total = 0.0;
   for (var j = 0; j < n; j++) {
@@ -1711,6 +1746,7 @@ fn mixEdge(e: i32, a: i32, b: i32) {
     share[j] += part; share[j + 1] += part;
   }
   if (IMPLICIT_DRAG) { share[n - 1] += dt * surfaceDrag * rhs[n - 1] * rhs[n - 1]; }
+  if (forming) { for (var j = 0; j < n; j++) { share[j] += dt * columnMass * LV[L_DS + KTOP + j] / GRAV * own[j] * rhs[j] * rhs[j]; } }
   for (var j = 0; j < n; j++) { total += share[j]; }
   if (total <= 0.0) { return; }
   for (var j = 0; j < n; j++) {

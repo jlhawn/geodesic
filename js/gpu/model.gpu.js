@@ -5,10 +5,10 @@ import { createSurface, SEA_DRAG, LAND_DRAG } from '../physics/surface.module.js
 import { createRadiation } from '../physics/radiation.module.js';
 import { createMoistPhysics } from '../physics/moist.module.js';
 import { LATENT_HEAT } from '../physics/moist.module.js';
-import { SIDEREAL_DAY } from '../model.module.js';
+import { SIDEREAL_DAY, orographyFields } from '../model.module.js';
 import { createGpuCore } from './core.gpu.js';
 import { createLayeredOcean } from './layeredOcean.gpu.js';
-import { createGeography, surfaceGeopotential, subgridOrography } from '../geography.module.js';
+import { createGeography, surfaceGeopotential } from '../geography.module.js';
 import { readRanges } from './device.module.js';
 import { RAIN_MEMORY, VERTICAL_MEMORY } from '../frames.module.js';
 import { createLandSurface } from '../physics/land.module.js';
@@ -48,13 +48,15 @@ const AGEING_OPTIONS = ['snowAgeing', ...Object.keys(SNOW_AGEING)];
  */
 export async function createGpuModel(gridOrMesh, {
   radius, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
-  topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true, orography = {}, levels = sigmaInterfaces(),
+  topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true, orography: orographyOptions = {}, subgrid: givenSubgrid = undefined, levels = sigmaInterfaces(),
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
   const mode = exchangeMode(surface, landOptions);
-  const subgrid = geography && orography !== false ? subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / GRAVITY) : null, geography.land) : null;
+  const subgrid = geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, givenSubgrid, GRAVITY) : null;
+  const { formDrag: formDragOptions = {}, ...orography } = orographyOptions || {};
+  const formDrag = subgrid && subgrid.filtered && formDragOptions !== false ? formDragOptions : false;
   let spacing = 0;
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;
@@ -67,7 +69,7 @@ export async function createGpuModel(gridOrMesh, {
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
-    orography: subgrid ? orography : false, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
+    orography: subgrid ? orography : false, formDrag, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
     landed: !!geography, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
     ...Object.fromEntries(VEGETATION_OPTIONS.filter((key) => landOptions[key] !== undefined).map((key) => [key, landOptions[key]])),

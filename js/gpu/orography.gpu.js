@@ -1,4 +1,5 @@
 import { OROGRAPHY_DEFAULTS } from '../physics/orography.module.js';
+import { FORM_DRAG_DEFAULTS, formDragScale } from '../physics/formDrag.module.js';
 
 /*
  * The subgrid orography's drag of physics/orography.module.js in WGSL, a
@@ -9,8 +10,10 @@ import { OROGRAPHY_DEFAULTS } from '../physics/orography.module.js';
 export function orographyConstants(o) {
   const on = o.orography !== false && o.orography !== undefined;
   const c = { ...OROGRAPHY_DEFAULTS, ...(on ? o.orography : {}) };
+  const form = { ...FORM_DRAG_DEFAULTS, ...(o.formDrag || {}) };
   return `
-const OROGRAPHY: bool = ${on}; const ORO_CD: f32 = ${c.blockingDrag}; const ORO_G: f32 = ${c.waveDrag}; const ORO_HN: f32 = ${c.criticalHeight}; const ORO_RIC: f32 = ${c.criticalRichardson};
+const OROGRAPHY: bool = ${on}; const ORO_CD: f32 = ${c.blockingDrag}; const ORO_G: f32 = ${c.waveDrag}; const ORO_HN: f32 = ${c.criticalHeight}; const ORO_RIC: f32 = ${c.criticalRichardson}; const ORO_HEFF: f32 = ${c.effectiveHeight};
+const FORM_DRAG: bool = ${!!o.formDrag}; const TOFD_SCALE: f32 = ${formDragScale(form)}; const TOFD_DECAY: f32 = ${form.decayHeight};
 `;
 }
 
@@ -99,7 +102,7 @@ fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
     let speed = sqrt(ue[k] * ue[k] + vn[k] * vn[k]);
     PH[PH_OBETA + k * C + i] = ORO_CD * shape * sigma / (2.0 * mu) * sqrt((blocking - z[k]) / (z[k] + mu)) * (B * c * c + Cc * s * s) * speed / 2.0;
   }
-  let height = top - blocking;
+  let height = ORO_HEFF * (top - blocking);
   if (!(nL2 > 0.0) || !(height > 0.0)) { return; }
   let nL = sqrt(nL2);
   let launch = rhoL * height * height / 9.0 * sigma / mu * ORO_G * speedL * Dn * nL;
