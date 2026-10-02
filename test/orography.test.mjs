@@ -6,7 +6,7 @@ import { buildMesh } from '../js/mesh.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography, topographyFromInt16, subgridOrography, createGeography, surfaceGeopotential } from '../js/geography.module.js';
-import { orographicColumn } from '../js/physics/orography.module.js';
+import { orographicColumn, OROGRAPHY_DEFAULTS, LOTT_MILLER } from '../js/physics/orography.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 
 let gpuAvailable = true;
@@ -65,28 +65,32 @@ function uniformColumn(east = 10, north = 0) {
   return column;
 }
 
-test('a uniform flow normal to a ridge: the blocking height, the blocked drag and the wave stress by hand', () => {
+for (const [name, o, byHand] of [['the IFS’s constants', OROGRAPHY_DEFAULTS, 4 * 1.23 / 3], ['Lott and Miller’s constants', LOTT_MILLER, 1 / 3]]) test(`a uniform flow normal to a ridge: the blocking height, the blocked drag and the wave stress by hand, ${name}`, () => {
   const column = uniformColumn(), K = column.z.length, g = column.g;
   const sub = { deviation: 200, anisotropy: 0, orientation: 0, slope: 0.02 };
-  const out = orographicColumn(sub, column);
+  const out = orographicColumn(sub, column, o);
   close(out.blocking, 600 - 0.5 / (0.01 / 10), 1e-6, 'Z_b = 3μ − H_n,crit U/N');
-  const launch = 1.2 * (600 - out.blocking) ** 2 / 9 * (0.02 / 200) * 1 * 10 * 1 * 0.01;
+  const height = o.effectiveHeight * (600 - out.blocking), launch = 1.2 * height ** 2 / 9 * (0.02 / 200) * o.waveDrag * 10 * 1 * 0.01;
   close(out.launch, launch, 1e-6, 'τ = ρ H_eff²/9 (σ/μ) G |U| N');
-  close(launch, 1 / 3, 1e-6, 'τ by hand');
+  close(launch, byHand, 1e-6, 'τ by hand');
   for (let k = 0; k < K; k++) {
     const z = column.z[k];
-    const expected = z < out.blocking ? 1 * 2 * 0.02 / (2 * 200) * Math.sqrt((out.blocking - z) / (z + 200)) * 1 * 10 / 2 : 0;
+    const expected = z < out.blocking ? o.blockingDrag * 2 * 0.02 / (2 * 200) * Math.sqrt((out.blocking - z) / (z + 200)) * 1 * 10 / 2 : 0;
     if (expected === 0) assert.equal(out.beta[k], 0, `no blocking at ${z.toFixed(0)} m`);
     else close(out.beta[k], expected, 1e-9, `blocking rate at ${z.toFixed(0)} m`);
   }
-  const critical = (Math.SQRT2 - 1) / (2 * 0.25), launchAlpha = 0.01 * (600 - out.blocking) / 10;
-  let tau = 0;
-  for (let k = 0; k < K; k++) {
+  const critical = (Math.SQRT2 - 1) / (2 * 0.25), launchAlpha = 0.01 * height / 10;
+  const spread = launchAlpha > critical ? out.blocking + Math.PI / 2 * 10 / 0.01 : 0;
+  let tau = 0, previous = launch;
+  for (let k = K - 1; k >= 0; k--) {
     const expectedAbove = k === 0 ? 0 : launch * Math.min(1, 0.5 * (column.rho[k] + column.rho[k - 1]) / 1.2 * (critical / launchAlpha) ** 2);
-    tau = expectedAbove - out.wave[k] * (column.pBottom[k] - column.pTop[k]) / g;
-    const expectedBelow = k === K - 1 ? launch : launch * Math.min(1, 0.5 * (column.rho[k] + column.rho[k + 1]) / 1.2 * (critical / launchAlpha) ** 2);
-    assert.ok(Math.abs(tau - expectedBelow) < 2e-3 * launch, `stress at the base of layer ${k} (${column.z[k].toFixed(0)} m): ${tau} against ${expectedBelow}`);
+    const below = k === K - 1 ? launch : previous;
+    tau = below + out.wave[k] * (column.pBottom[k] - column.pTop[k]) / g;
+    if (spread === 0 || k === 0 || column.z[k - 1] > spread + 300) assert.ok(Math.abs(tau - expectedAbove) < 2e-3 * launch, `stress at the top of layer ${k} (${column.z[k].toFixed(0)} m): ${tau} against ${expectedAbove}`);
+    else assert.ok(tau <= below + 1e-12 && tau >= expectedAbove - 2e-3 * launch, `within the low-level breaking, layer ${k}: ${tau} between ${expectedAbove} and ${below}`);
+    previous = tau;
   }
+  if (spread > 0) assert.ok(launch * (critical / launchAlpha) ** 2 < 0.7 * launch, 'the IFS’s doubled height breaks the waves above the blocked layer');
   close(out.deposited, out.launch, 1e-12, 'the column takes the whole launched stress');
   assert.deepEqual(out.direction, [1, 0]);
 });
@@ -100,9 +104,10 @@ test('an oblique flow over an elongated ridge: the stress turns towards the cros
   close(out.direction[0], (D1 * along[0] + D2 * cross[0]) / D, 1e-12, 'stress east');
   close(out.direction[1], (D1 * along[1] + D2 * cross[1]) / D, 1e-12, 'stress north');
   assert.ok(Math.atan2(out.direction[1], out.direction[0]) < angle, 'the stress lies between the wind and the cross-ridge axis');
-  close(out.launch, 1.2 * (600 - out.blocking) ** 2 / 9 * (0.02 / 200) * 10 * D * 0.01, 1e-6, 'τ with √(D1² + D2²)');
+  const o = OROGRAPHY_DEFAULTS;
+  close(out.launch, 1.2 * (o.effectiveHeight * (600 - out.blocking)) ** 2 / 9 * (0.02 / 200) * o.waveDrag * 10 * D * 0.01, 1e-6, 'τ with √(D1² + D2²)');
   const z = column.z[column.z.length - 1], r = (Math.cos(psi) ** 2 + gamma * Math.sin(psi) ** 2) / (gamma * Math.cos(psi) ** 2 + Math.sin(psi) ** 2);
-  close(out.beta[column.z.length - 1], (2 - 1 / r) * 0.02 / 400 * Math.sqrt((out.blocking - z) / (z + 200)) * (B * Math.cos(psi) ** 2 + C * Math.sin(psi) ** 2) * 10 / 2, 1e-9, 'blocking rate with r and B cos²ψ + C sin²ψ');
+  close(out.beta[column.z.length - 1], o.blockingDrag * (2 - 1 / r) * 0.02 / 400 * Math.sqrt((out.blocking - z) / (z + 200)) * (B * Math.cos(psi) ** 2 + C * Math.sin(psi) ** 2) * 10 / 2, 1e-9, 'blocking rate with r and B cos²ψ + C sin²ψ');
 });
 
 test('over a wind that weakens with height the waves break low, and the stress never grows upward', () => {

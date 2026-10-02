@@ -23,8 +23,7 @@ import { cellVector } from '../dynamics/operators.module.js';
  *    implicitly with |U| at the start of the step (4.41).
  *  - The gravity waves launched above it carry the stress
  *      τ_0 = ρ_L (H_eff²/9) (σ/μ) G |U_L| √(D1² + D2²) N_L,
- *    H_eff = effectiveHeight × (3μ − Z_b) (4.37, which for Z_b = 0 and
- *    effectiveHeight 1 is LM97's eq. with H = 2μ),
+ *    H_eff = effectiveHeight × (3μ − Z_b) (4.37 with 4.8),
  *    along the direction (D1, D2) in the frame of U_L (D2 towards the
  *    left of the flow), constant from the ground to Z_b. Up the column the
  *    stress stays until the wave Richardson number
@@ -40,9 +39,13 @@ import { cellVector } from '../dynamics/operators.module.js';
  *    ∂u/∂t = −g ∂τ/∂p along the stress, at most what stops its own wind
  *    along it within the step, the rest passing to the layer above.
  *
- * Constants (Lott and Miller 1997): blockingDrag C_d 1, waveDrag G 1,
- * criticalHeight 0.5, criticalRichardson 0.25. The IFS Cy47r3 documents
- * C_d 2 and H_eff doubled (from Cy32r2) with its own G, not taken here.
+ * Constants, IFS Cy47r3 Part IV Chapter 4 for fields defined as its
+ * §11.3.4 defines them (5 km data less the target orography): blockingDrag
+ * C_d 2 (eq. 4.17), waveDrag G 1.23 (the value §4.1 gives for the
+ * elliptical mountain of eq. 4.2 that the scheme assumes), effectiveHeight
+ * 2 (H_eff = 2(H − Z_b), eq. 4.8), criticalHeight H_n,crit 0.5 (§4.1),
+ * criticalRichardson 0.25 (§4.4.2). Lott and Miller's (1997) are C_d 1,
+ * G 1 and effectiveHeight 1.
  *
  * `diagnose` lays the per-cell rates, `apply` steps each edge's normal
  * velocity as u ← (u + Δt a)/(1 + Δt β), with a and β the two cells'
@@ -51,7 +54,8 @@ import { cellVector } from '../dynamics/operators.module.js';
  * lost per unit area and time, the stress on the ground along the edge's
  * normal (N/m²).
  */
-export const OROGRAPHY_DEFAULTS = { blockingDrag: 1, waveDrag: 1, criticalHeight: 0.5, criticalRichardson: 0.25, effectiveHeight: 1 };
+export const OROGRAPHY_DEFAULTS = { blockingDrag: 2, waveDrag: 1.23, criticalHeight: 0.5, criticalRichardson: 0.25, effectiveHeight: 2 };
+export const LOTT_MILLER = { blockingDrag: 1, waveDrag: 1, criticalHeight: 0.5, criticalRichardson: 0.25, effectiveHeight: 1 };
 
 /*
  * One column, k = 0 at the top: z (above the ground), p, rho, theta, east
