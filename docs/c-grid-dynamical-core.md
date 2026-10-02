@@ -9720,6 +9720,7 @@ detrains where its mass flux falls, and it falls there.
 source (Oct 2).** Three N=64 days from eight64_day0183 on the tree with
 elements 5 and 6, the regimes one step on (cloudRegimes.mjs; the reference's
 replicate spread of high cover and its thin share is at most 0.002 / 0.01):
+
 | day 186 | defaults (fall 2.5) | `iceFall` 3.29 | `iceNucleation` | both |
 |---|---|---|---|---|
 | global high cover; thin share | 0.278; 0.49 | 0.249; 0.46 | 0.267; 0.47 | 0.240; 0.45 |
@@ -9728,6 +9729,7 @@ replicate spread of high cover and its thin share is at most 0.002 / 0.01):
 | RH 150–350 hPa over water / ice: global; warm pool; ITCZ | 0.39/0.59; 0.48/0.70; 0.55/0.80 | 0.39/0.59; 0.49/0.71; 0.54/0.80 | 0.40/0.60; 0.49/0.71; 0.55/0.81 | 0.40/0.60; 0.50/0.73; 0.55/0.80 |
 | upper-tropospheric layer area above ice saturation (of it clear) | 0.01 (0.00) | 0.00 | 0.02 (0.69) | 0.02 (0.77) |
 | GPU day 186 SWCRE; LWCRE | −47.6; 23.2 | −46.4; 20.6 | −47.4; 22.2 | −46.2; 19.6 |
+
 Against the references in the regime table (ISCCP and CALIPSO: global high
 0.2–0.3 with about 0.6 of it thin, warm pool high 0.55–0.70 with about 0.5
 thin, ITCZ 0.45–0.60), the fall coefficient of 3.29 lowers the high cover
@@ -9740,6 +9742,22 @@ supported by the regime observations; the defaults stay at 2.5 and off. The
 anvil source of element 6 is too low to test them fairly: its detrainment
 centres at 600–680 hPa, below the cirrus levels where the fall speed and
 nucleation act.
+
+**The type, the ice and the conversion together (Oct 2).** Cost under the
+exclusive lock, 128 GPU steps from nine64 / nine128_day0183, alternated
+twice, 49b2ceb against 994f72f: N=64 step median 29.39, 29.25 → 30.61,
+30.64 ms (+4.4 %), the adjust group 5.53 → 6.94 ms; N=128 120.98, 119.87 →
+125.86, 123.11 ms (+3.0 %), the adjust group 19.73 → 23.47 ms, 61.7 → 63.7
+s per model day. The specification's budget for elements 5 and 6 was 1.3 %;
+most of the rest is the mixed-phase saturation, two exponentials in every
+Newton step below 273.15 K, and the test parcel's ascent. Deep firing over a
+CPU day from the day-186 state of element 6's run against the reference: N
+Pacific trades 0.711 → 0.730, S Atlantic trades 0.376 → 0.335, SE Pacific
+0.086 → 0.107, California 0.594 → 0.601, 35–55° oceans 0.195 / 0.237 →
+0.188 / 0.227, ITCZ 0.426 → 0.559, warm pool 0.571 → 0.664, tropical land
+0.156 → 0.093. The full suite (64 files, concurrently) passes; two N=6
+coupled parity cases (day means, rain accumulation) run on the previous
+type, phase and conversion, with the measured reasons in 218e104.
 
 ### M23 — The equatorial ocean — in progress
 
