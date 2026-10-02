@@ -286,7 +286,7 @@ function stratosphereLine(day) {
 }
 const band = (b) => `${Math.abs(b.from)}${b.from > 0 ? 'N' : b.from < 0 ? 'S' : ''}–${Math.abs(b.to)}${b.to > 0 ? 'N' : b.to < 0 ? 'S' : ''}`;
 const change = ([before, after], digits) => `${before.toFixed(digits)} → ${after.toFixed(digits)}`;
-const jumpLine = (day, r) => `land jump at the end of day ${day} (record ${(r.age / 86400).toFixed(2)} days): land means trees ${change(r.global.trees, 3)}, topsoil carbon ${change(r.global.carbon, 2)} kg/m², dry soil albedo ${change(r.global.dry, 3)}, land albedo ${change(r.global.albedo, 3)}; by band (share of the land: trees, carbon, land albedo) ${r.bands.map((b) => `${band(b)} (${b.share.toFixed(3)}: ${change(b.trees, 2)}, ${change(b.carbon, 1)}, ${change(b.albedo, 3)})`).join(', ')}`;
+const jumpLine = (day, r) => `land jump at the end of day ${day} (record ${r.age < 0 ? 'taken over (exponential means)' : `${(r.age / 86400).toFixed(2)} days`}): land means trees ${change(r.global.trees, 3)}, topsoil carbon ${change(r.global.carbon, 2)} kg/m², dry soil albedo ${change(r.global.dry, 3)}, land albedo ${change(r.global.albedo, 3)}; by band (share of the land: trees, carbon, land albedo) ${r.bands.map((b) => `${band(b)} (${b.share.toFixed(3)}: ${change(b.trees, 2)}, ${change(b.carbon, 1)}, ${change(b.albedo, 3)})`).join(', ')}`;
 let landAge = model.land.record[0];
 for (;;) {
   if (BATCH === 1) {
