@@ -3956,7 +3956,7 @@ The work, in order:
      | spectrum | Gaussian, peak at ground-relative c = 0 (`flag` 1, not in AM4's namelist) | peak at c − u₀ = 0 (`flag` 0 in input.nml; Garfinkel: "symmetric about the zonal wind at the source level") | meridional flux symmetric about intrinsic c = 0 (Hertzog 2008) | about u₀ | about u₀ |
      | half-width c_w | 40 m/s (earlier 50, 25) | 35 (input.nml, Garfinkel) | intrinsic spread broader than AD99's broad spectrum, exponential scale ≤ 92 m/s, an upper bound (Hertzog 2008) | 40 | 40 |
      | B_w | 0.4 m²/s² | 0.4 | – | 0.4 | 0.4 |
-     | flux | `Bt_0` 0.005, `Bt_nh` 0.002, `Bt_sh` −0.00025 m²/s² × 1.5 ρ₀, tanh at ±30° over 5° (AM4) | code 4 mPa + 1 / −1 at ±30°; input.nml 4.3 mPa everywhere (`Bt_eq` = `Bt_0`, `Bt_nh` = `Bt_sh` = 0); Garfinkel 4.3 + 3.5 mPa beyond ±15° (tanh over 10°), "to keep the polar vortex from becoming too strong" | about 3 mPa tropical background at ~20 km (Corcos 2021); 2.5 raw, 3.2 corrected, ≤ 6.4 with the unresolved high frequencies over 50-75S in spring (Hertzog 2008); HIRDLS global means 1.8-4.1 mPa at 20 km (Geller 2013 Table 1), perhaps 2-4 times low | 4.3 mPa per direction, uniform | 4.3, uniform (eq. A3 built: `equatorialFlux`, `northFlux`, `southFlux`, `edge`, `width`) |
+     | flux | `Bt_0` 0.005, `Bt_nh` 0.002, `Bt_sh` −0.00025 m²/s² × 1.5 ρ₀, tanh at ±30° over 5° (AM4) | code 4 mPa + 1 / −1 at ±30°; input.nml 4.3 mPa everywhere (`Bt_eq` = `Bt_0`, `Bt_nh` = `Bt_sh` = 0); Garfinkel 4.3 + 3.5 mPa beyond ±15° (tanh over 10°), "to keep the polar vortex from becoming too strong" | a non-zero background away from convection, no value in the abstract (Corcos 2021); 2.5 raw, 3.2 corrected, ≤ 6.4 with the unresolved high frequencies over 50-75S in spring (Hertzog 2008); HIRDLS global means 1.8-4.1 mPa at 20 km (Geller 2013 Table 1), perhaps 2-4 times low | 4.3 mPa per direction, uniform | 4.3, uniform (eq. A3 built: `equatorialFlux`, `northFlux`, `southFlux`, `edge`, `width`) |
      | launch | 315 hPa at the equator, level index (K+1) − (K+1−k₀) cos φ | the same code; "315 hPa in the tropics" after Donner et al. (2011) | – | 316 hPa everywhere | nearest σ = 0.315^cos φ (the index rule read as log-pressure height), never the lowest layer (`sourceDescent`) |
      | phase speeds | ±99.6 m/s by 1.2 (code), 2.4 (AM4) | ±99.6 by 1.2 (code), 2 (Garfinkel) | – | u₀ ± 4 j to 100 | u₀ ± 2 j to 100 |
      | wavelength | 300 km (`nk` 1) | 300 km | – | 300 km | 300 km |
@@ -4148,8 +4148,10 @@ The work, in order:
      136/0.44 136/0.44 141/0.45 139/0.45 152/0.49 164/0.53 176/0.56
      174/0.56 167/0.54 167/0.54 162/0.52 162/0.52 149/0.48 138/0.44
      135/0.43 136/0.43 134/0.43 130/0.42 127/0.41 (January);
-     their eddy kinetic energy at 1.6-7.4 hPa is 77-137 m²/s² on bl36,
-     where bl34's sponge holds 24-36 at 3.5-7.4 hPa. The troposphere,
+     their eddy kinetic energy at 1.6-7.4 hPa on the last day is 77-137
+     m²/s² on bl36 in July (twin 58-102), 88-113 in January (70-111),
+     where bl34's sponge holds 27-36 (July) and 16-27 (January) at
+     3.5-7.4 hPa. The troposphere,
      means of days 1-10 and 21-30, balance / OLR (W/m²) / rain (mm/d):
      July bl36 −5.73 / 233.82 / 2.160 and −11.69 / 232.31 / 2.636, twin
      −5.66 / 233.81 / 2.160 and −12.17 / 232.81 / 2.677, bl34 −6.09 /
@@ -4185,17 +4187,116 @@ The work, in order:
      resolves the shape, not the warmth, with the intermittent breaking:
      the 247 / 257 / 236 K measured on bl36 earlier came with the grid-box
      test's doubled flux and its runaway top); the winter mesospheric jet
-     at 0.15 hPa 104-125 m/s near 59-64° (CIRA-86 puts it near 40-50° at
-     80-100 m/s, from memory); the 0.64 hPa cooling 11-12 % above RRTMG's;
-     the larger eddies and edge winds at 1.6-7.4 hPa with the sponge
+     at 0.15 hPa 104-125 m/s near 59-64° (no climatology read for it);
+     the 0.64 hPa cooling 11-12 % above RRTMG's; the larger eddies and edge winds at 1.6-7.4 hPa with the sponge
      raised (Courant 0.62 at most at N=64); the fresh start's stratopause
      at 3.6 hPa and its first-week cloud (as on bl34); the flux through 20
      km 4.4-5.3 mPa, at the top of the observed 2-6, uniform in latitude
      and season. Whether bl36 can take a multi-year run: stable in both
      solstice months at N=64, from a fresh atlas start at N=64 and N=128
-     and from a remapped N=128 state, with physical equatorial winds and a
-     troposphere within the twins of bl34's, at +9 to +13 % a step; its
+     and from a remapped N=128 state, with equatorial winds of the
+     solstice's easterly sign on day 30 (their trend: the review below) and
+     a troposphere within the twins of bl34's, at +9 to +13 % a step; its
      polar winter stratopause and mesospheric jets are not yet Earth's.
+   The second round's review (Oct 2). Read here: MiMA's `cg_drag.f90`
+   and `input/input.nml` (mjucker/MiMA, master), GFDL's `cg_drag.F90`
+   (NOAA-GFDL/atmos_phys, main) and AM4's `run/input.nml`, Garfinkel et
+   al. (2022) Appendix A (PMC9286580), Hertzog et al. (2008) in full, the
+   abstracts of Corcos et al. (2021) and Geller et al. (2013), IFS CY48r1
+   Part III section 2.2.11(b). Alexander & Dunkerton (1999) was again
+   unreachable (403), as was Holt et al. (2017).
+   - Confirmed in the sources: B_w 0.4 m²/s² (both codes, Garfinkel);
+     c_w 40 m/s (GFDL code) and 35 (MiMA input.nml, Garfinkel); 300 km
+     (`nk` 1 in both); c_max 99.6 m/s with Δc 1.2 (both codes), 2.4
+     (AM4), 2 (Garfinkel: "the spectral resolution for the phase speed
+     bins is 2 m/s"); 315 hPa at the equator descending as (K + 1) − (K +
+     1 − k₀) cos φ, at most the second-lowest level (both codes); MiMA's
+     4.3 mPa everywhere in input.nml and 4.3 + 3.5 mPa poleward of 15° in
+     Garfinkel's CONTROL, with eq. A3 as `gravityWaveFlux` writes it; the
+     breaking test and ε (MiMA divides by ρ₀ and drops GFDL's 1.5); MiMA
+     tests the waves in every model level and spreads only what would
+     leave the top evenly over the levels above 85 Pa
+     (`damp_level_pressure`; Garfinkel: "deposited evenly in the levels
+     above 0.85 hPa"), with no sponge; the IFS sponge from 0.78 hPa with
+     the zonal mean undamped (Shepherd et al. 1996). Hertzog (2008): 2.5
+     mPa raw, 3.2 corrected, about 6.4 an upper bound; ĉp 92 m/s an upper
+     bound. Unconfirmed: AD99's own values, the HIRDLS 1.8-4.1 mPa
+     (Geller's Table 1 through Holt), the Fleming et al. (1990) quotation.
+     Corcos (2021)'s abstract gives no background value. Not as the
+     sources: the source level is the nearest σ to 0.315^cos φ (the codes
+     take the level above the first one below 315 hPa and truncate
+     the index); the spectrum moves with u₀ (the codes keep a fixed
+     ground-relative grid); no reflection test (MiMA drops waves with |c −
+     u| k at or above N k / (k² + 1/(4H²))^½); the lid layers untested
+     (MiMA tests them).
+   - On real bl36 states (CPU, N=64: nine64_day0091 remapped, and the July
+     run's day 121): each column's momentum is kept to 3e-16 of its
+     absolute deposit; the kinetic energy one step takes (2.3 and 6.0
+     mW/m²) returns as heat to 1.5e-8 of itself. The flux through the 45
+     and 62 hPa interfaces is 4.5-5.6 mPa in every 10° band, the summer
+     pole included (Geller 2013: the observed fluxes "are very small at
+     summer high latitudes"). Source layers by latitude: 314 hPa near the
+     equator and 15°, 314-369 near 30°, 369-510 near 45°, 510-601 near
+     60°, 601-839 near 75°, 882-993 near the poles. Zonal-mean torque on
+     day 121 (July, m/s/day): the two lid layers alike, −15 to −12 at
+     50-80S, +8 to +9 at 10-40N, +3 to +6 within 10° of the equator;
+     below them at most 1.9 (1.6 hPa), 1.4 (3.6 hPa) and 0.5 (7.5 hPa and
+     down). With `lidTests` (MiMA's rule, added on both engines, 3.9e-7
+     m/s/day rms apart at N=8) the top layer takes −24 to −25 at 50-70S
+     and +15 at 20-40N.
+   - The remap. `remapLevels` gave the three layers that split bl34's
+     0-2.2 hPa layer its θ: N² = 0 across them and, on nine64_day0091,
+     global means of 155 / 236 / 306 K at 0.15 / 0.65 / 1.6 hPa where the
+     source layer holds 275 K; every remapped bl36 run above began so
+     (day 92 of the July runs 162 / 242 / 289 K, the 70-90S cap 137 K at
+     0.15 hPa). θ now remaps as θ·Π (the core's layer Exner function), so
+     each column's enthalpy is kept to round-off, and a split layer's
+     temperature is log-linear in σ with the minmod of its slopes to its
+     neighbours, at most isentropic: 244 / 258 / 267 K above 272 K at 3.6
+     hPa (day 274: 243 / 257 / 266). The column θ integral moves by 6.6e-4
+     of its global value, all in the split layer; the round trip to bl34
+     returns every field to 1.1e-12; mass, q, qc and u keep to 1e-14.
+     Fresh starts do not remap: ten N=64 days log line for line as above.
+   - Thirty July days (N=64) from nine64_day0091 so remapped, the
+     defaults, and a round-off twin; the July run above reproduced log
+     line for line. Top six layers' largest wind and horizontal / vertical Courant
+     number 152 m/s, 0.49 / 0.10 (twin 185, 0.59 / 0.13, on day 120); the
+     70-90S cap at 0.15 / 0.64 / 1.6 hPa 216 / 232 / 225 K (twin 210 / 226
+     / 221), so the cold cap is not the remap's; days 21-30 balance −11.97
+     / −10.27 W/m², OLR 233.47 / 233.03, rain 2.649 / 2.618 mm/d. The 5S-5N
+     wind at 0.64 hPa went from −11 m/s to +17 (twin +40) on day 121,
+     gaining 2.1 (twin 4.0) m/s/day over the last ten days; at 0.15 / 1.6
+     hPa +8 / −31 (twin +5 / −29). The waves push both lid layers there at
+     +4.1 to +5.5 m/s/day (the easterlies below filter the westward half),
+     and nothing in an untested lid answers its own wind. The build's
+     January runs (old remap) do the same at 1.6 hPa: −6 → +19 (twin +23) m/s, 1.8
+     (2.1) m/s/day over days 295-304. With `lidTests` (one July run): the
+     top layer's 5S-5N wind −16 → −93 m/s, falling 11 m/s/day at the end,
+     0.64 hPa +53, 1.6 hPa +30, largest wind 176 m/s, as the build found
+     for that rule.
+   - Three N=128 days from eight128_day0183 so remapped: top six layers'
+     largest wind 86 / 82 / 82 m/s, Courant 0.27 at most; day 186 ASR
+     241.9, OLR 239.5 W/m², rain 1.85 mm/d, albedo 0.290 (bl34 241.8 /
+     239.8 / 1.85 / 0.290).
+   - Engines from the review's July day-121 state (bl36, N=64, no ocean,
+     full physics), the top eight layers: after 1 / 4 / 16 steps the
+     temperature 2.8e-3 / 3.6e-2 / 0.37 K apart at most (rms 5.5e-5 /
+     2.7e-3 / 5.1e-2), the wind 1.4e-3 / 3.1e-2 / 0.44 m/s (rms 8.1e-5 /
+     6.0e-4 / 2.7e-2), most in the top layer; below them 4.2 K and 2.8
+     m/s at most after 16 steps (rms 1.3e-2 K, 9.0e-3 m/s).
+   - bl34: the CPU model three steps from nine64_day0091 with `speedStep`
+     4 and no `sourceDescent` against 9b7b476: 18645 of 8.5 million values
+     apart, by 7e-11 Pa at most (the flux now scales a unit spectrum); the
+     bl34 benchmark prints as 9b7b476's, the bl36 one as recorded above.
+   - Cost, 128 steps, exclusive lock, step median: N=64 bl34 24.22 / 24.39
+     ms, bl36 27.28 / 27.52 (+12.7 %); N=128 bl34 99.16 / 99.35, bl36
+     111.79 / 112.33 (+12.9 %), 57.4 s of steps a model day.
+   - Whether bl36 can take a multi-year run: thirty days hold (Courant
+     0.59 at most), but the equatorial lid has not settled: under the
+     default its 0.64 hPa wind was still gaining 2-4 m/s/day on day 30 in
+     July (1.6 hPa in January, 2 m/s/day), and under MiMA's rule the top
+     layer's easterly runs away instead. The winter cap stays 30-40 K
+     below AFGL subarctic winter above 2 hPa from either start.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
