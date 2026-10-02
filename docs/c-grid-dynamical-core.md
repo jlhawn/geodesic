@@ -572,11 +572,12 @@ three arrays (`createRK4Arrays`).
   model on them; a state without them is on cam26. `remapLevels`
   (`js/physics/regrid.module.js`) carries a state onto another grid
   conservatively in σ, each layer the σ-weighted mean of the layers it
-  overlaps, so cam26 and bl34 exchange their layers above 2.4 km
-  unchanged; a spin-up seeded from a state on the other grid carries
-  its atmosphere across with it. The page starts a run from nothing
-  (`climate.html?from=none`) on bl34; a run started from a saved state
-  is on that state's grid.
+  overlaps (θ as its temperature, keeping enthalpy, and stratified where
+  a layer is split: M21), so cam26 and bl34 exchange their layers above
+  2.4 km unchanged; a spin-up seeded from a state on the other grid
+  carries its atmosphere across with it. The page starts a run from
+  nothing (`climate.html?from=none`) on bl36; a run started from a saved
+  state is on that state's grid.
 - **A required closure on θ.** Without any θ dissipation the A-grid
   set's thin top layers (Δσ ≈ 0.0008 above ~2 hPa) went unstable from
   day 3 in the steady run — θ departures of hundreds of kelvin with no surface
