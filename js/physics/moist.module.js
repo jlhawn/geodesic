@@ -21,6 +21,57 @@ export function saturationHumidity(T, p) {
   return dry > 0 ? EPSILON * es / dry : 1;
 }
 
+export const FUSION_HEAT = 3.34e5;
+export const LIQUID_TEMPERATURE = 273.15, ICE_TEMPERATURE = 235.15;
+
+export function iceVaporPressure(T) {
+  return 611.21 * Math.exp(22.587 * (T - 273.16) / (T + 0.7));
+}
+
+export function liquidFraction(T, liquidTemperature = LIQUID_TEMPERATURE, iceTemperature = ICE_TEMPERATURE) {
+  return Math.min(1, Math.max(0, (T - iceTemperature) / (liquidTemperature - iceTemperature)));
+}
+
+/*
+ * The saturation humidity of cloud at temperature T and pressure p into
+ * out.qs, with out.slope its Clausius–Clapeyron derivative q_s L/(R_v T²)
+ * and out.liquid the liquid share. Over liquid water (Bolton's) unless
+ * `ice`; with it the vapour pressure is the liquid share's mix
+ * α e_w + (1 − α) e_i, α linear in T from 0 at iceTemperature to 1 at
+ * liquidTemperature (the radiation's phase ramp), e_i the IFS form, and
+ * the slope's latent heat L + (1 − α) FUSION_HEAT.
+ */
+export function cloudSaturation(T, p, ice, liquidTemperature, iceTemperature, out) {
+  const alpha = ice ? liquidFraction(T, liquidTemperature, iceTemperature) : 1;
+  const es = alpha < 1 ? alpha * saturationVaporPressure(T) + (1 - alpha) * iceVaporPressure(T) : saturationVaporPressure(T);
+  const dry = p - (1 - EPSILON) * es;
+  out.qs = dry > 0 ? EPSILON * es / dry : 1;
+  out.slope = out.qs * (LATENT_HEAT + (1 - alpha) * FUSION_HEAT) / (R_VAPOR * T * T);
+  out.liquid = alpha;
+  return out;
+}
+
+/*
+ * The critical relative humidity at pressure p under surface pressure ps,
+ * top + (surface − top) exp(1 − (ps/p)^exponent) (ECHAM's profile).
+ */
+export function criticalHumidityAt(p, ps, surface, top, exponent) {
+  return top + (surface - top) * Math.exp(1 - Math.pow(ps / p, exponent));
+}
+
+/*
+ * The uniform total-water distribution of half-width b (in saturation
+ * deficit, b > 0) about a mean deficit Q: its condensate, and the cover
+ * that a condensate qc implies, sqrt(qc / b) up to 1.
+ */
+export function uniformCondensate(Q, b) {
+  return Q >= b ? Q : Q > -b ? (Q + b) * (Q + b) / (4 * b) : 0;
+}
+
+export function uniformCover(qc, b) {
+  return qc >= b ? 1 : qc > 0 ? Math.sqrt(qc / b) : 0;
+}
+
 /*
  * Lifting condensation level of a parcel (T, q, p) by Bolton (1980):
  * the dew point from the vapour pressure, the LCL temperature from his
@@ -43,7 +94,33 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  *
  * Saturation adjustment: supersaturated vapour condenses into cloud
  * water and cloud water evaporates into subsaturated air, latent heat to
- * the layer.
+ * the layer. With `iceSaturation` (true) saturation is cloudSaturation's
+ * mix over water and ice along the phase ramp from `iceTemperature`
+ * (235.15 K) to `liquidTemperature` (273.15 K), the radiation's; the
+ * model's condensate carries no enthalpy, every phase change takes the
+ * latent heat L of vaporisation, and the fusion heat of what falls as snow
+ * is released at the surface. With `condensation` 'uniform' (the
+ * default; 'saturation' adjusts every layer to its own saturation) a layer
+ * above the moist boundary layer's mixing top (every layer without it)
+ * holds the condensate of a uniform distribution of total water about its
+ * mean (LeTreut and Li 1991; with fixed width the cover of Sundqvist et
+ * al. 1989): in the saturation deficit of the layer's θ_l and q_t,
+ * Q = a (q_t − q_s(T_l)) with a = 1/(1 + (L/c_p) dq_s/dT), half-width
+ * b = a (1 − RH_c) q_s(T_l), the condensate is Q above b, (Q + b)²/(4b)
+ * between −b and b and none below, the cover (Q + b)/(2b) = sqrt(q_c/b),
+ * in one linearised step about T_l. RH_c follows ECHAM's profile
+ * criticalHumidityAt with `surfaceCriticalHumidity` 0.975,
+ * `topCriticalHumidity` 0.75 and `criticalExponent` 2 (ECHAM6 at T63,
+ * mo_cloud's crs, crt and nex). The layers below the mixing top, whose
+ * cover is the boundary layer's variance cover, adjust to saturation.
+ * With `iceNucleation` (false; under iceSaturation) a cloud-free layer (at
+ * most CLEAR_AIR of condensate) colder than iceTemperature forms cloud only
+ * where its distribution exceeds q_ref = min(q_sw, RH_homo q_si),
+ * RH_homo = 2.583 − T/207.8 the homogeneous nucleation threshold of Kärcher
+ * and Lohmann (2002), so clear air may be supersaturated over ice; the part
+ * above q_ref deposits to ice saturation, and from then on the layer holds
+ * the distribution's condensate about q_si (the scheme of Tompkins et al.
+ * 2007 in the IFS, Cy43r1 documentation §7.2.4c).
  *
  * Convection is one entraining mass-flux plume with a shallow and a
  * deep branch. Both run in proportion to the deck's opening, 1 where
@@ -160,7 +237,21 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * mixing factors, and `transportMomentum` moves the edges' normal
  * velocity by them (see there).
  *
- * Rain: Kessler autoconversion of cloud water above the threshold at
+ * Rain: with `iceFall` (m/s; null: none) the ice share 1 − α of each
+ * layer's cloud falls at v = iceFall (ρ q_i / f)^`iceFallExponent`, ρ q_i/f
+ * the in-cloud ice content in kg/m³ over the uniform distribution's cover
+ * f (Heymsfield and Donner 1990: 3.29 and 0.16; ECHAM6 takes 2.5 at T63
+ * and 3.0 at other resolutions), implicitly in flux form
+ * from the top down within the step: a layer keeps 1/(1 + v Δt/Δz) of the
+ * ice it holds with what fell into it and passes the rest to the layer
+ * below, which takes its ice share 1 − α as cloud ice and its liquid share
+ * α as precipitation falling on with the autoconversion's (all of it
+ * above liquidTemperature, none below iceTemperature), and what
+ * leaves the lowest layer is large-scale precipitation, snow or rain by
+ * the surface's rule. The column is then adjusted again, so that ice
+ * falling into subsaturated layers sublimates, moistening and cooling
+ * them. Only the liquid share α of the cloud converts to rain as below.
+ * Kessler autoconversion of cloud water above the threshold at
  * autoconversionRate, and of all cloud water over cloudLifetime
  * (`upperCloudLifetime` where the layer's pressure is below `shallowTop`,
  * the anvils' layers; null: cloudLifetime throughout). Stratiform cloud
@@ -178,7 +269,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * lowest two without a boundary layer). The rain falls through the layers below within the
  * step and evaporates into each cloud-free (at most CLEAR_AIR of cloud
  * water) subsaturated one up to `rainEvaporation` of what would saturate
- * it, latent cooling included. A filler removes negative humidity by
+ * it (with `iceSaturation`, of cloudSaturation's mix), latent cooling
+ * included. A filler removes negative humidity by
  * borrowing from the layer below.
  *
  * Precipitation accumulates per cell (kg/m²), and so do its two parts:
@@ -206,7 +298,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * plumeRainRate 3e-3 /m,
  * plumeRainThreshold 0, plumeRainEvaporation 1e-3 /m, downdraftShare 0.3,
  * downdraftEntrainment 1e-4 /m, plumeCape 120 J/kg, plumeRelaxation 1 h, no
- * plumeMomentum.
+ * plumeMomentum, condensation 'uniform', iceSaturation true, no
+ * iceNucleation, iceFall 2.5 m/s, iceFallExponent 0.16.
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
@@ -216,6 +309,8 @@ export const MOIST_DEFAULTS = {
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean',
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, downdraftShare: 0.3, downdraftEntrainment: 1e-4, plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: false, plumeConsumption: 'all',
+  condensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
+  liquidTemperature: LIQUID_TEMPERATURE, iceTemperature: ICE_TEMPERATURE,
 };
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
   'downdraftEvaporation', 'downdraftSpread', 'shallowHumidity', 'shallowCape', 'shallowInhibition', 'shallowStability', 'shallowReference', 'shallowRain', 'boundaryParcel', 'adjustFrom'];
@@ -228,7 +323,13 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource,
     plumeClosure, plumeCapeParcel, plumeSource, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
     downdraftShare, downdraftEntrainment, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption,
+    condensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, liquidTemperature, iceTemperature,
   } = { ...MOIST_DEFAULTS, ...options };
+  if (condensation !== 'uniform' && condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${condensation}`);
+  const uniform = condensation === 'uniform', nucleating = iceNucleation && iceSaturation;
+  const saturated = { qs: 0, slope: 0, liquid: 1 };
+  const saturation = (T, p) => cloudSaturation(T, p, iceSaturation, liquidTemperature, iceTemperature, saturated);
+  const halfWidth = (p, ps) => (1 - criticalHumidityAt(p, ps, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent)) * saturated.qs / (1 + latentHeat * saturated.slope / cp);
   if (plumeConsumption !== 'all' && plumeConsumption !== 'buoyant') throw new Error(`plumeConsumption must be 'all' or 'buoyant', not ${plumeConsumption}`);
   const buoyantConsumption = plumeConsumption === 'buoyant';
   if (plumeSource !== 'mean' && plumeSource !== 'lowest') throw new Error(`plumeSource must be 'mean' or 'lowest', not ${plumeSource}`);
@@ -266,7 +367,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   let cumulusK0 = K;
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > shallowTop) cumulusK0--;
   const cumulus = { top: -1, source: K - 1, inhibition: 0, lclPressure: 0, velocity: 0, baseFlux: 0 };
-  const falling = { evaporated: 0, convective: 0 };
+  const falling = { evaporated: 0, convective: 0, ice: 0, moved: false };
   const budget = { condensation: 0, convection: 0, lost: 0 };
   const trace = { convection: null, largeScale: null };
   const marked = new Float64Array(K);
@@ -303,9 +404,21 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const ex = exnerLayer[idx];
       const temperature = theta[idx] * ex;
       const pressure = pi[i] * sigmaMid[k];
-      const qs = saturationHumidity(temperature, pressure);
-      const slope = qs * latentHeat / (R_VAPOR * temperature * temperature);
-      let change = (q[idx] - qs) / (1 + latentHeat * slope / cp);
+      let change;
+      if (uniform && !(boundaryTop !== null && geopotential[idx] / g < boundaryTop[i])) {
+        const liquidT = temperature - latentHeat * qc[idx] / cp;
+        saturation(liquidT, pressure);
+        const a = 1 / (1 + latentHeat * saturated.slope / cp), b = halfWidth(pressure, pi[i]), total = q[idx] + qc[idx], Q = a * (total - saturated.qs);
+        if (nucleating && !(qc[idx] > CLEAR_AIR) && liquidT < iceTemperature) {
+          const reference = Math.min(saturationHumidity(liquidT, pressure), (2.583 - liquidT / 207.8) * saturated.qs), width = b / (a * saturated.qs) * reference;
+          const lowest = Math.max(reference, total - width);
+          change = total + width > reference ? Math.max(0, a * (total + width - lowest) / (2 * width) * (0.5 * (lowest + total + width) - saturated.qs)) - qc[idx] : -qc[idx];
+        } else change = (b > 0 ? uniformCondensate(Q, b) : Math.max(0, Q)) - qc[idx];
+      } else {
+        const qs = iceSaturation ? saturation(temperature, pressure).qs : saturationHumidity(temperature, pressure);
+        const slope = iceSaturation ? saturated.slope : qs * latentHeat / (R_VAPOR * temperature * temperature);
+        change = (q[idx] - qs) / (1 + latentHeat * slope / cp);
+      }
       if (change < 0) change = Math.max(change, -qc[idx]);
       if (change === 0) continue;
       q[idx] -= change;
@@ -334,7 +447,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   }
 
   function autoconvertColumn(i, pi, theta, q, qc, dt, stream = null, iced = 0) {
-    let rain = 0, convective = 0, streamed = 0;
+    let rain = 0, convective = 0, streamed = 0, descending = 0;
+    falling.moved = false;
     const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
     for (let k = 0; k < K; k++) {
@@ -342,8 +456,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       if (rain > 0 && (evaporationInCloud || !(qc[idx] > CLEAR_AIR)) && rainEvaporation > 0) {
         const ex = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;
         const temperature = theta[idx] * ex;
-        const qs = saturationHumidity(temperature, pi[i] * sigmaMid[k]);
-        const slope = qs * latentHeat / (R_VAPOR * temperature * temperature);
+        const qs = iceSaturation ? saturation(temperature, pi[i] * sigmaMid[k]).qs : saturationHumidity(temperature, pi[i] * sigmaMid[k]);
+        const slope = iceSaturation ? saturated.slope : qs * latentHeat / (R_VAPOR * temperature * temperature);
         const deficit = Math.max(0, (qs - q[idx]) / (1 + latentHeat * slope / cp)) * mass;
         const evaporated = Math.min(rain, rainEvaporation * deficit);
         if (evaporated > 0) {
@@ -371,18 +485,44 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
           }
         }
       }
+      let liquid = qc[idx];
+      if (iceFall !== null) {
+        const mass = pi[i] * dSigma[k] / g;
+        if (descending > 0) {
+          const melted = descending * liquidFraction(theta[idx] * exnerLayer[idx], liquidTemperature, iceTemperature);
+          qc[idx] += (descending - melted) / mass;
+          rain += melted;
+          descending = 0;
+        }
+        liquid = qc[idx];
+        if (qc[idx] > 0) {
+          const temperature = theta[idx] * exnerLayer[idx], pressure = pi[i] * sigmaMid[k];
+          const share = liquidFraction(temperature, liquidTemperature, iceTemperature), ice = (1 - share) * qc[idx];
+          liquid = share * qc[idx];
+          if (ice > 0) {
+            saturation(temperature, pressure);
+            const cover = Math.max(CLEAR_AIR, uniformCover(qc[idx], halfWidth(pressure, pi[i])));
+            const speed = iceFall * Math.pow(pressure / (R * temperature) * ice / cover, iceFallExponent);
+            const courant = speed * dt * sigmaMid[k] * g / (R * temperature * dSigma[k]), leaving = ice * courant / (1 + courant);
+            qc[idx] -= leaving;
+            descending = leaving * mass;
+            falling.moved = true;
+          }
+        }
+      }
       if (!(qc[idx] > 0)) continue;
       if (autoconversionFloor !== 'none' && (floor === null ? k >= K - 2 : k > 0 && upperInterface(i, k) < floor)) continue;
-      const excess = Math.max(0, qc[idx] - autoconversionThreshold);
+      const excess = Math.max(0, liquid - autoconversionThreshold);
       let lifetime = upperCloudLifetime !== null && pi[i] * sigmaMid[k] < shallowTop ? upperCloudLifetime : cloudLifetime;
       if (stratiformLifetime !== null) lifetime += longCloudShare(i, k, pi, iced) * (stratiformLifetime - lifetime);
-      const converted = Math.min(qc[idx], excess * (1 - Math.exp(-autoconversionRate * dt)) + qc[idx] * (1 - Math.exp(-dt / lifetime)));
+      const converted = Math.min(liquid, excess * (1 - Math.exp(-autoconversionRate * dt)) + liquid * (1 - Math.exp(-dt / lifetime)));
       qc[idx] -= converted;
       rain += pi[i] * dSigma[k] / g * converted;
     }
     falling.evaporated = streamed;
     falling.convective = convective;
-    return rain;
+    falling.ice = descending;
+    return rain + descending;
   }
 
   function clearCumulus(i) {
@@ -817,6 +957,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       if (cumulusBaseFlux[i] > 0) condenseColumn(i, pi, theta, q, qc);
       const rained = autoconvertColumn(i, pi, theta, q, qc, dt, deep.deep ? convectiveFall : null, ice && ice[i] > 0 ? (iceConcentration !== null && iceConcentration[i] > 0 ? iceConcentration[i] : 1) : 0);
       const convected = deep.deep ? falling.convective + deep.shallowRain : produced;
+      if (falling.moved) condenseColumn(i, pi, theta, q, qc);
       if (traced) {
         charge(trace.largeScale, i, theta);
         if (trace.convection) {
@@ -852,8 +993,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     return water;
   }
 
+  const settings = { uniform, iceSaturation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, liquidTemperature, iceTemperature };
   return {
-    adjust, useSeaIce, condenseColumn, autoconvertColumn, cumulusColumn, plumeColumn, transportMomentum, fillColumn, columnWater, readRain,
+    condensation: settings, adjust, useSeaIce, condenseColumn, autoconvertColumn, cumulusColumn, plumeColumn, transportMomentum, fillColumn, columnWater, readRain,
     precipitation, rain, convectivePrecipitation, largeScalePrecipitation, convectiveRain, largeScaleRain, budget, latentHeat, trace, falling,
     cumulus, cumulusCover, cumulusWater, cumulusBaseFlux, cumulusTop, cumulusFlux, deep, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained,
     momentum: { up: momentumUp, upKeep: momentumUpKeep, down: momentumDown, downKeep: momentumDownKeep, source: momentumSource },

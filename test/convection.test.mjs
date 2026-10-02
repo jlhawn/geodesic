@@ -283,8 +283,8 @@ test('autoconversion stays out of the lowest two layers, or with autoconversionF
   assert.equal(q[cloudBelow * C], qBefore[cloudBelow], 'and not into a cloudy one');
 });
 
-test('with upperCloudLifetime cloud water in the layers above the shallow top converts over that lifetime and the cloud below over cloudLifetime', () => {
-  const dt = 600, model = build({ upperCloudLifetime: 1800 }), plain = build(), { K, C, sigmaMid } = model.core.diagnostics;
+test('with upperCloudLifetime cloud water in the layers above the shallow top converts over that lifetime and the cloud below over cloudLifetime (with no ice falling, all of it as liquid)', () => {
+  const dt = 600, model = build({ upperCloudLifetime: 1800, iceFall: null }), plain = build({ iceFall: null }), { K, C, sigmaMid } = model.core.diagnostics;
   for (const m of [model, plain]) jordanColumn(m, 0);
   const pressure = (k) => model.state[0][0] * sigmaMid[k];
   let upper = 0, lower = K - 3;
@@ -556,6 +556,8 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ plumeMomentum: true, downdraftShare: 0 }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });
   await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, virtualBuoyancy: false });
+  await parity({ condensation: 'saturation', iceSaturation: false, iceFall: null });
+  await parity({ iceNucleation: true, iceFall: 3.29 });
 });
 
 test('the stratiform lifetime matches between the engines on random columns of every regime, mixing top, EIS share and sea-ice cover, and keeps cloud the short lifetime would rain out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
