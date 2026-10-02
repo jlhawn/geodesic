@@ -3,7 +3,7 @@ import { shareMesh } from './mesh.module.js';
 import { parallelism, spawn } from './threads.module.js';
 import { loadClimatology } from './ocean/climatology.module.js';
 
-export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, PHYSICS: 4, ADVANCE: 5, COMBINE: 6, CLOSURE: 7, ADJUST: 8, DISSIPATE: 9, OCEAN: 10, EXIT: 11 };
+export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, PHYSICS: 4, ADVANCE: 5, COMBINE: 6, CLOSURE: 7, ADJUST: 8, DISSIPATE: 9, OCEAN: 10, MIX: 11, EXIT: 12 };
 
 function blocks(kind, n, size, extra = {}) {
   const chunks = [];
@@ -31,7 +31,8 @@ export function phaseChunks({ K, C, E, V, L = 0 }, workers = 8) {
     [PHASE.ADVANCE]: arrays,
     [PHASE.COMBINE]: arrays,
     [PHASE.CLOSURE]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
-    [PHASE.ADJUST]: [...blocks('cells', C, size(C, 16)), ...blocks('edges', E, size(E, 64))],
+    [PHASE.ADJUST]: blocks('cells', C, size(C, 16)),
+    [PHASE.MIX]: blocks('edges', E, size(E, 64)),
     [PHASE.DISSIPATE]: blocks('cells', C, size(C, 32)),
     [PHASE.OCEAN]: [...blocks('momentum', L, 1), ...blocks('tracers', L, 1)],
   };
@@ -133,6 +134,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     run(PHASE.PHYSICS, { dt });
     run(PHASE.CLOSURE, { dt });
     run(PHASE.ADJUST, { dt });
+    run(PHASE.MIX, { dt });
     run(PHASE.DISSIPATE, { dt });
     if (model.land) model.land.advance(dt);
     model.time += dt;
