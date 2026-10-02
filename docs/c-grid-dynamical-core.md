@@ -4766,7 +4766,10 @@ cover and overlap, the adjust and physics kernels of
   radiation covers sqrt(q_c/b) of it, so that in-cloud water is sqrt(b q_c)
   and thin cloud is thin. RH_c = 0.75 + 0.225 exp(1 − (p_s/p)²), ECHAM6's
   crs 0.975, crt 0.75 and nex 2 at T63 (CAM3 uses 0.70–0.80 for its high
-  clouds, the IFS 0.8 above σ 0.8). Below the mixing top the variance cover
+  clouds, the IFS 0.8 above σ 0.8). These are not observed values: ECHAM6
+  sets crs, crt, nex and cvtfall by truncation in mo_echam_cloud_params
+  (Stevens et al. 2013, with cvtfall 2.5, crs 0.975, crt 0.75 and nex 2 at
+  T63), the values of its tuning (Mauritsen et al. 2012). Below the mixing top the variance cover
   and the adjustment to saturation stay. A clear layer at 600 hPa and
   0.95 of water saturation now holds 0.10 g/kg (`test/cloudIce.test.mjs`).
 - Falling ice (`iceFall` 2.5 m/s, `iceFallExponent` 0.16): the ice share of
@@ -4775,11 +4778,16 @@ cover and overlap, the adjust and physics kernels of
   coefficient at T63 (Heymsfield and Donner 3.29, ECHAM6 3.0 at other
   resolutions), implicitly from the top down within the step: each layer
   keeps 1/(1 + v Δt/Δz) of its ice with what fell into it, the layer below
-  takes the rest as ice in its ice share and as rain in its liquid share,
+  takes the rest as ice in its ice share and as precipitation in its
+  liquid share (at any temperature on the phase ramp, not melting),
   and the column is adjusted again so that ice falling into dry air
   sublimates there; only the liquid share converts over the lifetimes.
   30 mg/kg of ice at 193 hPa falls at 0.39 m/s and keeps 0.817 of itself
-  over 600 s.
+  over 600 s. Heymsfield and Donner's 3.29 is the fit to observed cirrus;
+  2.5 was taken over it because three N=64 days from ten64_day0183 put
+  the upper troposphere drier and its high cloud sparser at 3.29, an
+  outcome of the missing anvil source rather than an observation of the
+  fall speed.
 - Exponential-random overlap (`cloudOverlap` 'exponentialRandom'):
   adjacent cloudy layers overlap with α = exp(−Δz/z₀) between maximum and
   random (Hogan and Illingworth 2000), z₀ = 2899 − 27.59 |latitude°| m
@@ -4923,6 +4931,45 @@ coefficient within 2.5–3.29 (ECHAM6, Heymsfield and Donner) and its
 exponent at 0.16, and the decorrelation length by a factor of 0.5–1.5
 about Shonk et al.'s (Hogan and Illingworth 2000 found 1.6 km, Barker 2008
 about 2 km); not the phase ramp, the ice saturation or the optics.
+
+Review of the cloud amount and falling ice (Oct 1). The three N=64 days
+from eight64_day0183 rerun to the same day lines (day 186: albedo 0.293,
+ASR − OLR −0.8, SWCRE −49.7, LWCRE 21.9), the regime and class tables to
+the values above, and the Arctic three days to 9.191 → 8.272·10³ km³
+(0.306 a day; no ice lies south of 60N on day 91, so 50–90N and 60–90N
+agree). The moist step alone, 256 steps of 337.5 s on the day-186 state,
+keeps every column's c_p T + L q and water with the precipitation to
+3.7·10⁻¹⁵ and 3.1·10⁻¹⁴ relative on the CPU; on the GPU (fusion heat of
+snow off, it is released into the lowest layer by design) to 1.2·10⁻⁷ and
+1.6·10⁻⁷ after one step and 2.7·10⁻⁵ and 1.8·10⁻⁵ after the day, the
+global water changing by 3.3·10⁻⁷ and the enthalpy by 582 J/m² (0.007 W/m²),
+f32 round-off accumulated (with the three switches off 8.6·10⁻⁶ and
+1.2·10⁻⁵); both engines precipitate 0.175 kg/m² over the day. One layer of
+20 mg/kg of ice at 266 hPa (236.4 K, cover 0.453, Δz 1122 m) falls at
+0.43 m/s; its mass-weighted fall over 10, 337.5 and 3600 s is 4.25, 127.7
+and 652.7 m against v Δt/(1 + v Δt/Δz) of the ice share 0.967 plus the
+liquid share's conversion over the 1 h lifetime, 4.25, 127.7 and 652.7 m. Ice of 10⁻⁹ to
+3·10⁻³ kg/kg above 250 K stays non-negative and conserved at steps up to
+10⁶ s. Ice falling into a layer below sublimates only while it is under
+ice saturation; under 'saturation' adjustment one step leaves a mixed-phase
+layer at most 1.001 of saturation (at 236 K the slope omits
+(e_w − e_i) dα/dT), corrected by the next step; a slope with that term
+moved the gpuModel rain-split parity (large-scale rms 5.7·10⁻⁴ to 6.3·10⁻³
+on 10⁻⁶ kg/m² of onset drizzle) and was not kept. The uniform cover equals
+Sundqvist's 1 − sqrt((1 − RH)/(1 − RH_c)) of the adjusted grid humidity to
+0.0004 at 314 hPa and 0.004 at 510 hPa for RH_t 0.80–0.99, is continuous
+and bounded, and the radiation's column cover is the decomposition's (0.473
+and 0.394 for the globe and 60–90S in both). The in-cloud path the
+shortwave takes, the column's path over its visible cover, has a median of
+102 g/m², 99 % below 1.48 kg/m², and 67 of 40,962 columns above
+10 kg/m² (largest 2.6·10³ kg/m²): plume cumulus of cover below 10⁻⁶ with
+no cover floor and a visibility weight of the grid-mean path, over column
+covers of 10⁻¹⁰, which carry no flux. Step cost under the exclusive lock,
+two alternations: 20.21 and 20.20 ms against 19.88 and 19.74 at N=64
+(+1.7 and +2.3 %), 89.65 and 89.46 against 87.50 and 87.57 at N=128
+(+2.5 and +2.2 %). five64_day2281, twin64_day0900 (27 layers),
+six64_day1004, seven64_day0639, m21b64_day0183 and ten64_day0183 load and
+take two CPU steps with nothing non-finite.
 
 ### M23 — The equatorial ocean — in progress
 
