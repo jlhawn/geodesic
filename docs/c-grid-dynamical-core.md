@@ -3498,6 +3498,918 @@ The work, in order:
    treeline. Older states start their season means from the estimate
    and their trees at the cover times f.
 
+   Trees and grass (Oct 1). Where the season admits trees, water now
+   decides between forest and grass, and the cover not under trees is
+   grass, on both engines (`js/physics/land.module.js`,
+   `js/physics/radiation.module.js`, `js/gpu/physics.gpu.js`), with
+   parity and hand-computed unit tests (`test/grassland.test.mjs`).
+
+   - The moisture gate (`treeMoisture`). Each land cell keeps running
+     means over `moistureMemory` (3 years, the season means' memory; no
+     source was found for another) of its rain and snow (`rainMean`,
+     mm/d) and of its evaporative demand (`demandMean`, mm/d). The
+     demand is the FAO-56 Penman–Monteith reference evapotranspiration
+     (Allen et al. 1998, FAO Irrigation and Drainage Paper 56) from the
+     model's own fluxes: the surface's net radiation, the lowest air's
+     temperature, humidity and density at surface pressure, and the
+     land's aerodynamic conductance C|V| (the exchange the land's
+     evaporation already uses), through a surface resistance of 70 s/m
+     (`REFERENCE_RESISTANCE`, FAO-56's reference grass; the land's
+     `stomatalResistance` is also 70). The treeline factor f is
+     multiplied by a moisture factor m that rises linearly with the
+     aridity index P/PET from 0 at 0.2 to 1 at 1.0 (`forestAridity`),
+     and the trees relax toward f m v with the treeline's times (10
+     years rising snow-free, 3 falling). Grass is the rest of the cover,
+     v − trees, and keeps the cover's own times (180 days rising, 365
+     falling, 720 under snow).
+   - Why P/PET. The bulk potential evaporation the land's exchange
+     implies, E with wetness 1 from the skin, reads the skin's heat: a
+     dry surface runs hot, so the drier the land the larger its
+     "demand". Four ten-day means of the model's first year (nine64 and
+     eight64 copied and run from days 91, 183, 274 and 365, the means
+     kept with a 100-day memory and the start's weight removed) by band,
+     mm/yr:
+
+     | band | 60–70N | 50–60N | 40–50N | 30–40N | 20–30N | 0–10N | 10–20S | 20–30S |
+     |---|---|---|---|---|---|---|---|---|
+     | rain | 718 | 744 | 735 | 702 | 665 | 1487 | 838 | 649 |
+     | bulk potential (skin) | 748 | 1356 | 2355 | 3151 | 4803 | 3364 | 4928 | 4346 |
+     | FAO-56 reference | 288 | 490 | 709 | 854 | 1122 | 1132 | 1211 | 1131 |
+     | P/PET (reference) | 2.50 | 1.52 | 1.04 | 0.82 | 0.59 | 1.31 | 0.69 | 0.57 |
+
+     The reference by region: Europe 627, Siberia 452, Congo 1163,
+     Amazon 1339, Sahara 1355 (the hot dry skin cutting the net
+     radiation); the bulk potential reads 1855 in Europe and 6739 in the
+     Sahara. No regional values of Earth's reference evaporation were
+     read (Zomer et al. 2022, Sci. Data, doi:10.1038/s41597-022-01493-1,
+     the FAO-56 global database, gives them only as maps). What can be checked is the
+     aridity classes the index draws: by the first year's own P/PET
+     (rain and reference demand of the four ten-day means, per cell off
+     the ice sheets) the land is 4.3 % hyper-arid, 12.9 % arid, 17.6 %
+     semi-arid, 8.0 % dry subhumid and 57.3 % humid, against UNEP's
+     6.6, 10.6, 15.3, 9.0 and 58.5 % (Bastin et al. 2017's 978, 1566,
+     2263 and 1326 Mha of drylands making 41.5 % of the land).
+     Rain alone against P/PET and the root zone's fill, the model's
+     first year (rain, reference demand, P/PET, mean fill of the four
+     states) with the Earth biome of each region of the spin-up's log:
+
+     | region | P mm/yr | PET mm/yr | P/PET | fill | Earth |
+     |---|---|---|---|---|---|
+     | Sahara | 331 | 1355 | 0.24 | 0.20 | desert |
+     | Gobi | 348 | 703 | 0.50 | 0.28 | desert steppe |
+     | Kalahari | 171 | 1356 | 0.13 | 0.27 | semi-desert, savanna |
+     | Sahel | 1327 | 1298 | 1.02 | 0.47 | savanna, steppe |
+     | Cerrado | 1170 | 1232 | 0.95 | 0.44 | savanna |
+     | Congo | 1437 | 1163 | 1.24 | 0.51 | rainforest |
+     | Amazon | 1057 | 1339 | 0.79 | 0.38 | rainforest |
+     | Europe | 1186 | 627 | 1.89 | 0.63 | temperate forest |
+     | Siberia | 524 | 452 | 1.16 | 0.74 | taiga |
+
+     Rain alone puts Siberia's 524 mm below Sankaran's 650 mm ceiling
+     and Staver's 1000 mm, so the taiga would be capped as an African
+     savanna; its P/PET of 1.16 is humid. The fill is the model's own
+     store: it compresses the range (R² 0.51 against P/PET over the
+     first year's land), reads the Congo drier than Siberia, swings with
+     the season (the Sahel's fills 0.04 at the year-six March equinox
+     after 657 mm), and the cover v already follows it (its goal ramps
+     with the fill from 0.1 to 0.6), so gating trees by it would count
+     the bucket twice. P/PET is the index Earth's classes are drawn in.
+   - The limits. UNEP's classes (as Bastin et al. 2017, Science 356:
+     635–638, give them): hyper-arid below 0.05, arid 0.05–0.2,
+     semi-arid 0.2–0.5, dry subhumid 0.5–0.65, humid above. Bastin's
+     Table 1 (2015, photo-interpreted plots, Mha): of 1566 Mha arid land
+     103 carry at least 10 % tree cover and 28 at least 40 %; semi-arid
+     2263: 559 and 276; dry subhumid 1326: 652 and 469. Taking 0.6 for
+     the closed class, 0.22 for the open one and 0–0.02 for the rest (my
+     assumption, not Bastin's), the mean tree cover is 0.02–0.04 arid,
+     0.10–0.12 semi-arid and 0.24–0.25 dry subhumid. The dry limit 0.2 is
+     the arid border, below which 1.8 % of the land carries a closed
+     canopy; the wet limit 1.0 makes the year-one land (v about 0.5)
+     carry those means: 0.00 arid, 0.09 semi-arid, 0.24 dry subhumid
+     (0.75 instead gives 0.13 and 0.35). In rainfall: maximum woody cover
+     in African savannas rises linearly with mean annual rain up to about
+     650 mm and is held below closure above it by fire and herbivory
+     (Sankaran et al. 2005, Nature 438: 846–849, 854 sites); between
+     1000 and 2500 mm with a dry season under 7 months tree cover is
+     bimodal and only fire tells savanna from forest (Staver et al. 2011,
+     Science 334: 230–232); Hirota et al. (2011, Science 334: 232–235)
+     find forest, savanna and treeless states, bimodal at about
+     1000–2000 mm (as Baudena et al. 2015, Biogeosciences 12: 1833–1848,
+     summarise it; Hirota's own numbers not read). With a tropical
+     reference demand of about 1300 mm, 650 mm is P/PET 0.5 and 2500 mm
+     1.9; the ramp, with no fire in the model, stands for the mixture.
+   - Grass's albedo (`grassland`). The vegetated albedo runs from
+     `grassAlbedo` 0.20 to `forestAlbedo` 0.13 with the trees' share of
+     the cover (trees above v count as all forest), the ground showing
+     through at 1 − v as before. Crops and natural vegetation under 1 m
+     with a full green cover 0.18–0.25 (Oke 1987, Boundary Layer
+     Climates, p. 132); forest 0.12–0.15 is the class table's textbook
+     range (Oke's Table 1.1 is an image in the copy found, not read). Snow buries grass: a snow
+     cover's own albedo less `grassSnowDarkening` 0.06 times the grass's
+     share of the cell, then masked by the trees as before. MODIS
+     broadband (0.3–5.0 µm) white-sky albedo in the presence of snow,
+     Northern Hemisphere 2000–04 (Moody et al. 2007, Remote Sens.
+     Environ. 111: 337–345, Table 1; standard deviations 0.10–0.15):
+     grassland 0.59, cropland 0.58, open shrubland 0.56, savanna 0.47,
+     barren 0.65, permanent snow 0.74, evergreen needleleaf forest 0.27,
+     deciduous needleleaf 0.33, deciduous broadleaf 0.31, mixed 0.29.
+     These are means over snow-flagged pixels, partial and patchy cover
+     included, which the model's own snow fraction carries; 0.06 is
+     grassland's (and cropland's 0.07) difference from barren land under
+     the same sampling, the grass's own effect. Snow-covered grassland in
+     the model reads its snow's albedo less 0.06 g: 0.79 fresh, 0.44 at
+     the 0.50 floor, at full grass.
+   - The cover v keeps its dynamics. In the year-six state the cover
+     follows the last year's rain of the log (the four 91-day means to
+     day 2190): Sahara 0.20 at 265 mm, Gobi 0.29 at 301, ausNorth 0.38 at
+     456, Sahel 0.48 at 657, Europe 0.84 at 812, Congo 0.96 at 1387,
+     Amazon 0.90 at 1360; Borneo 0.47 at 739 and New Guinea 0.32 at 557
+     where the model's rain is a third of Earth's. Nothing there calls
+     for a change: the cover is low where the model is dry.
+   - Starts. A state without the moisture means (every state before
+     this, and a fresh start) takes the demand −2.14 + 0.0134 Q̄ mm/d
+     (Q̄ the annual mean insolation at the top, W/m²; R² 0.72, rms 0.57
+     mm/d over the first year's land) and the rain that demand times
+     0.01 + 0.79 × fill + 0.63 × v (`MOISTURE_ESTIMATE`, the same on both
+     engines through the land's load), and its trees start at f m v (a
+     state with season means and trees keeps those below f m v). The
+     index's fit is to the 21 regions of five64's log (last year's rain
+     over the estimated demand against the year-six state's fill and
+     cover, R² 0.64); the fill alone fits the first year's cells at
+     0.27 + 1.69 × fill (R² 0.35). Mean |m − m_true|: over the year-six
+     regions 0.111 with the fill and cover, 0.255 with the fill alone;
+     over the first year's cells (v still near the atlas's 0.5) 0.251
+     and 0.271. Its rain against the log's at the year-six start (mm/yr):
+     Sahara 335 / 265, Sahel 416 / 657, Congo 1366 / 1387, Amazon 1573 /
+     1360, Europe 790 / 812, Siberia 443 / 757, Gobi 344 / 301, Cerrado
+     1084 / 694. A fresh start (fill and cover 0.5) reads P/PET 0.72 and
+     m 0.65. Land added by regridding takes the estimate at the guessed
+     fill and cover (0.5 snow-free); saved states, the GPU (at the end of
+     PH), `land.serialize` (the page's snapshot) and land regridding
+     carry both means.
+   What else differs between forest and grass, ranked by its effect on
+   the model's surface fluxes (the first built Oct 2: M22, the surface
+   layer by roughness):
+
+   1. Roughness. The land's exchange coefficient is one value, 1.5·10⁻³
+      for momentum, heat and vapour, which at the bl34 grid's lowest
+      level (20 m) is the neutral drag of a roughness length of 0.65 mm.
+      Neutral at 20 m: grass (z₀ 0.03 m) C_D 3.8·10⁻³ and, with the heat
+      roughness a tenth, C_H 2.8·10⁻³; forest (z₀ 1 m, 0.1 m) C_D
+      1.8·10⁻² and C_H 1.0·10⁻². The IFS (Cy43r1 Part IV, Table 8.3)
+      calibrates z₀ for momentum against SYNOP winds at 0.2 m for short
+      grass, 0.25 m crops, 0.034 m tundra, 0.013 m desert and 2.0 m for
+      all forests (heat 0.002 m over grass, 2.0 m over forest). One step
+      on eight64_day0183 at its instant over snow-free land: with 1.5·10⁻³
+      H 22.1, LE 42.6 W/m²; grass-like 2.8·10⁻³ H 41.3, LE 62.9; forest-
+      like 1.0·10⁻² H 148.9, LE 124.6. Three N=64 days from the same state
+      with the whole land at 3.8·10⁻³: on day 186 the snow-free land's
+      instantaneous H 24.8 → 24.3 W/m² (its skin−air difference 2.57 →
+      1.20 K), LE 38.4 → 46.7 W/m², the lowest wind 6.8 → 5.5 m/s, the
+      land's skin 23.22 → 21.86 °C, the global surface 16.65 → 16.34 °C.
+      Building it means a drag that follows the trees on both engines in
+      the momentum, the boundary layer and the surface fluxes.
+   2. Interception. The model has no canopy store: rain falls into the
+      15 kg/m² surface layer, of which only the bare share evaporates.
+      The IFS holds 0.2 mm per unit leaf area (0.2 mm on bare ground,
+      Cy43r1 eq. 8.2), so a forest of leaf area 5 holds about 1 mm and
+      grass of 2 about 0.4; the intercepted water evaporates at the
+      potential rate. Forest interception loss is 10–50 % of the gross
+      annual rain (Carlyle-Moses and Gash 2011, Forest Hydrology and
+      Biogeochemistry, Springer, as later papers quote it; the chapter
+      not read): on 2 mm/d over forest 0.2–1.0 mm/d, 6–29 W/m² of LE
+      where it rains, nothing on dry days.
+   3. Rooting depth. One bucket of 300 kg/m² under every cover. Maximum
+      rooting depth 7.0 ± 1.2 m for trees, 5.1 ± 0.8 for shrubs, 2.6 ±
+      0.1 for herbaceous plants, 2.0 ± 0.3 m in boreal forest (Canadell
+      et al. 1996, Oecologia 108: 583–595). The IFS root profiles
+      (Table 8.1, after Zeng et al. 1998) put 90 % of the roots above
+      0.62 m for short grass, 0.67 crops, 0.75 evergreen needleleaf, 0.84
+      deciduous broadleaf, 1.24 evergreen broadleaf. A one-step or
+      three-day effect is nil; through a dry season a forest bucket half
+      again as deep would carry 150 mm more, 50 days at 3 mm/d.
+   Engines: at N=6 on random cover, trees, snow, snow albedo and moisture
+   means the land albedos agree to 4.7·10⁻⁸ over 151 land cells (58 with
+   grass above 0.2, 18 of them under snow; the grass moves the albedo
+   by up to 0.059); over 48 steps (memories 6 h, trees 3 h up and 2 h
+   down) the rain means agree to 6.1·10⁻⁴ mm/d (up to 3.1), the demand
+   means to 2.1·10⁻² mm/d (up to 4.9; the engines' lowest air and net
+   radiation drift apart) and the trees, thinned by the moisture on 88
+   cells, to 3.4·10⁻⁵. Hand values: P/PET 0.4 gives m 0.25; a half-life
+   of 2 mm/d of rain moves a mean of 1 to 1.5, snowfall counts; trees
+   0.1 → 0.5 − 0.4/e in ten years at P/PET 0.6, 0.8 → 0.8/e in three
+   at P/PET 0.1, under snow 0.8 → 0.125 + 0.675/e at P/PET 0.3; a cover
+   of 0.6 a third under trees on dry soil 0.30 + (0.1767 − 0.30) × 0.6;
+   snow of 0.85 on it 0.826 masked 0.2/0.7 of the way to 0.27; the
+   estimate at the equator 3.43 mm/d of demand and 2.47 of rain. An
+   older state's trees restart at f m v, or keep their own where
+   those are lower; saved states keep the means
+   through a state file; regridding carries them. The digests are
+   unchanged (their model has no land).
+
+   Runs: N=64 GPU, OCEAN `{"everySteps":8}`, from copies of the states
+   (bl34; five64_day2190 on its own cam26 grid), before (`treeMoisture`
+   and `grassland` false, the previous rule; the moisture means kept as a
+   diagnostic with a 100-day memory) → after (the defaults, means and
+   trees from the estimate). Surface classes, insolation-weighted
+   surface albedo (`land.albedo` by the day's mean insolation at the
+   cell's latitude), area share of the globe:
+
+   | class | June solstice + 3 d | September equinox + 3 d | December solstice + 3 d | March equinox + 10 d | year six + 10 d | reference |
+   |---|---|---|---|---|---|---|
+   | dense forest (v > 0.7, trees ≥ half of it) | trace | 0.052: 0.165 → 0.167 | 0.053: 0.159 → 0.162 | 0.056: 0.157 → 0.160 | 0.077: 0.148 → 0.150 | 0.12–0.15 |
+   | dense vegetation (v > 0.7) | trace | 0.056: 0.165 → 0.170 | 0.054: 0.159 → 0.163 | 0.058: 0.157 → 0.162 | 0.084: 0.148 → 0.154 | |
+   | grassland (v ≥ 0.4, trees < 0.3 of it) | 0.014 → 0.050: 0.199 → 0.241 | 0.009 → 0.047: 0.180 → 0.243 | 0.002 → 0.010: 0.180 → 0.239 | 0.002 → 0.010: 0.179 → 0.239 | 0.002 → 0.009: 0.153 → 0.232 | 0.18–0.25 |
+   | partly vegetated (v 0.2–0.7) | 0.259: 0.200 → 0.215 | 0.191: 0.213 → 0.232 | 0.122: 0.217 → 0.234 | 0.134: 0.216 → 0.231 | 0.088: 0.219 → 0.236 | 0.18–0.25 |
+   | bare dry soil (v < 0.2) | | | | | 0.029: 0.278 → 0.286 | 0.30–0.40 |
+   | snow under forest (trees ≥ 0.5, ≥ 20 kg/m²) | | trace | 0.030 → 0.023: 0.333 → 0.319 | 0.024 → 0.020: 0.377 → 0.376 | 0.024 → 0.022: 0.343 → 0.342 | 0.27–0.33 (MODIS) |
+   | snow on grassland (trees < 0.2, v ≥ 0.3) | | trace | 0.003 → 0.007: 0.735 → 0.732 | 0.003 → 0.010: 0.725 → 0.692 | 0.004 → 0.005: 0.725 → 0.708 | 0.59 ± 0.14 (MODIS, patchy included) |
+   | tundra snow (f < 0.1) | trace | 0.002: 0.802 → 0.773 | 0.007: 0.845 → 0.808 | 0.010: 0.830 → 0.799 | 0.010: 0.830 → 0.802 | 0.60–0.80 |
+   | snow 40–60N under a cover < 0.5 | | | 0.015: 0.385 → 0.498 | 0.013: 0.457 → 0.595 | 0.003: 0.527 → 0.629 | grassland 0.59, cropland 0.58 |
+   | snow 50–70N (boreal), all | | | 0.049: 0.348 → 0.398 | 0.045: 0.459 → 0.501 | 0.040: 0.442 → 0.448 | |
+
+   The trees and grass by band after ten days (cover v, trees, grass;
+   the bands' P/PET from their own means), year one (from the March
+   equinox) and year six:
+
+   | band | year one | year six |
+   |---|---|---|
+   | 70–80N | 0.45, 0.15, 0.30 | 0.31, 0.11, 0.20 |
+   | 60–70N | 0.50, 0.36, 0.14 | 0.47, 0.39, 0.09 |
+   | 50–60N | 0.50, 0.45, 0.06 | 0.64, 0.62, 0.02 |
+   | 40–50N | 0.47, 0.35, 0.12 | 0.55, 0.46, 0.10 |
+   | 30–40N | 0.53, 0.34, 0.19 | 0.58, 0.39, 0.19 |
+   | 20–30N | 0.52, 0.32, 0.20 | 0.45, 0.26, 0.18 |
+   | 10–20N | 0.57, 0.30, 0.27 | 0.39, 0.14, 0.25 |
+   | 0–10N | 0.68, 0.55, 0.13 | 0.69, 0.48, 0.21 |
+   | 0–10S | 0.66, 0.55, 0.11 | 0.74, 0.66, 0.08 |
+   | 10–20S | 0.54, 0.38, 0.16 | 0.53, 0.37, 0.16 |
+   | 20–30S | 0.51, 0.28, 0.22 | 0.58, 0.40, 0.18 |
+   | 30–40S | 0.67, 0.46, 0.20 | 0.75, 0.56, 0.18 |
+
+   Before, the trees were f v (year six: 0.86 under the dense
+   vegetation's cover of 0.88, 0.43 under the partly vegetated land's
+   0.43, 0.12 under the bare land's 0.12). By the aridity class of the
+   state's means, year six after ten days (still the estimate's: ten
+   days move them by 1 %, so the classes and the trees both come from
+   it; the check against the model's own P/PET follows) (area share of the globe; cover, trees, grass; share of the land with
+   trees ≥ 0.1 and ≥ 0.4) against Bastin's land with tree cover ≥ 10 %
+   and ≥ 40 %: arid (0.019) 0.12, 0.00, 0.12; 0.00, 0.00 against 0.066,
+   0.018; semi-arid (0.054) 0.32, 0.07, 0.25; 0.25, 0.00 against 0.247,
+   0.122; dry subhumid (0.026) 0.54, 0.25, 0.29; 0.98, 0.09 against
+   0.492, 0.354; humid 0.65–1 (0.047) 0.61, 0.45, 0.16; humid 1–2
+   (0.113) 0.74, 0.68, 0.06. The zone means match; the spread does not:
+   the model's trees are a smooth fraction of every cell where Earth's
+   are bimodal (closed or open), so the dry subhumid land is almost all
+   lightly wooded and rarely closed. By rain (mm/yr): 250–500 0.38,
+   0.21, 0.17; 500–650 0.57, 0.39, 0.18; 650–1000 0.72, 0.57, 0.15;
+   1000–1500 0.85, 0.75, 0.10; 1500–2500 0.94, 0.89, 0.05. By region (cover, trees,
+   grass, P/PET of the means): Sahara 0.21, 0.05, 0.16, 0.30; Sahel
+   0.46, 0.13, 0.33, 0.34; Kalahari 0.61, 0.33, 0.28, 0.58; Gobi 0.29,
+   0.10, 0.19, 0.44; Congo 0.96, 0.89, 0.07, 1.09; Amazon 0.90, 0.86,
+   0.04, 1.28; Europe 0.85, 0.83, 0.02, 1.27; Siberia 0.59, 0.59, 0.00,
+   1.17; Cerrado 0.58, 0.48, 0.10, 0.91.
+
+   Against the model's own P/PET (the first year's four ten-day means
+   per cell, v from nine64's day 365, f from the season estimate), the
+   trees at f m v by class: hyper-arid and arid 0.000, semi-arid 0.090
+   (trees ≥ 0.1 on 0.38 of it, ≥ 0.4 on none), dry subhumid 0.243 (0.97,
+   0.07), humid 0.65–1 0.420, 1–2 0.573, above 2 0.515: the limits put
+   the class means on Bastin's with the model's own rain and demand, not
+   only with the estimate's. The estimate puts them on the wrong cells:
+   over the land whose season factor is at least 0.5, the estimate's m
+   by the own P/PET class is 0.34 where the own m is 0.00 (own arid,
+   0.18 of that land), 0.52 against 0.18 (semi-arid), 0.62 against 0.47
+   (dry subhumid), 0.71 against 0.77, 0.83 against 1.00 and 0.93 against
+   1.00 (humid 0.65–1, 1–2, above 2); the two agree on which side of m
+   = 0.5 a cell lies on 0.74 of that land, mean |Δm| 0.245.
+
+   Review (Oct 1). The CPU land stepped through three wet years, three
+   dry, two of regrowth and one under snow (6 h steps) matches a float64
+   reference of the moisture means, cover, season means and trees to
+   5·10⁻¹⁴; the GPU over 48 steps at N=6 matches an f32 hand formula of
+   the rain mean to 3.2·10⁻⁷ (relative) and of the trees to 6.0·10⁻⁸
+   over 4315 cell-steps (672 under snow), and the potential its first
+   step implies matches the CPU's to 2.2·10⁻⁵ mm/d. Land surfaces absorb
+   (1 − α) of the shortwave reaching them on both engines (one albedo
+   for the direct and diffuse beams). Under snow the cover decays over
+   720 days while the trees hold, so trees can stand above the cover;
+   the grass is then 0 and the cover reads as forest. A state with
+   season means and trees but no moisture means keeps trees below f m v
+   instead of raising them to it. Three N=64 days from nine64_day0365
+   and five64_day2190 (tags bmr365, bmr2190), the class table with
+   `grassland` false → true on the same states: dense vegetation 0.156
+   → 0.162 and 0.147 → 0.155 (0.12–0.15), partly vegetated 0.218 →
+   0.232 and 0.221 → 0.236 (0.18–0.25), bare dry soil 0.277 → 0.285
+   (year six), snow on open land, cold (standing < 0.2) 0.773 → 0.753
+   and 0.806 → 0.783 against the class's 0.80–0.85: the grass darkens
+   deep snow as much as patchy snow, where Moody's 0.06 is a mean over
+   both. Snow at 40–60N under a cover below 0.5 reads 0.604 and 0.661
+   after three days.
+
+   Day means (outcomes), before → after: day 94 albedo 0.326 → 0.328,
+   ASR 229.6 → 228.8, OLR 240.6 → 240.5, SWCRE −58.7 → −58.3, clear-sky
+   reflectance 0.1535 → 0.1569, Ts 16.57 → 16.52 °C; day 101 0.336 →
+   0.337, 225.9 → 225.8, 240.2 → 240.1, 0.1525 → 0.1561, 16.42 → 16.33;
+   day 186 0.312 → 0.314, 234.2 → 233.4, 242.2 → 242.1, 0.1493 → 0.1523,
+   16.65 → 16.60; day 193 0.326 → 0.325, 229.6 → 229.7, 0.1509 → 0.1538,
+   16.07 → 15.99; day 277 0.349 → 0.350, 221.7 → 221.2, 0.1650 → 0.1671,
+   13.56 → 13.53; day 284 0.359 → 0.360, 218.1 → 218.0, 0.1636 → 0.1657,
+   13.11 → 13.07; day 368 0.328 → 0.330, 228.7 → 228.1, 0.1602 →
+   0.1636, 13.69 → 13.64; day 375 0.345 → 0.347, 223.0 → 222.3, 233.2 →
+   233.3, −62.5 → −62.1, 0.1613 → 0.1649, 13.73 → 13.67; day 2193 0.302
+   → 0.304, 237.6 → 237.1, 0.1588 → 0.1607, 15.46 → 15.43; day 2200
+   0.310 → 0.312, 235.0 → 234.3, 240.4 → 240.3, −51.0 → −50.9, 0.1602 →
+   0.1624, 15.73 → 15.69. Rain 2.19–2.73 mm/d, within 0.07 of before.
+   The runs shared the GPU with other jobs; their wall times say nothing.
+
+   What it cannot do:
+
+   - No fire and no competition for light: the moisture factor is a
+     ramp fitted to the zone means, so where Earth splits into closed
+     forest and open savanna (Staver's 1000–2500 mm) every cell carries
+     the mixture's fraction; no herbivory, no succession, one tree type
+     and one grass (no evergreen against deciduous, no C3 against C4).
+   - The model's own climate decides: its Sahara rains 265–340 mm/yr
+     (P/PET 0.24–0.30, Earth's below 0.05), so it is a grassy semi-desert,
+     and its mid-latitude continents are humid (40–50N P/PET 1.04 in the
+     first year), so the 40–60N snow under a sparse cover is still masked
+     by trees of 0.2 (0.595 against MODIS grassland's 0.59, but under a
+     cover the masking assigns to trees).
+   - Dense forest still reads 0.148–0.167 against 0.12–0.15: the ground
+     showing through at 1 − v (0.25 at v 0.75) is the dry soil.
+   - Snow on grassland reads 0.69–0.73 on full snow; MODIS's 0.59 mixes
+     in patchy snow, which the model's own snow fraction carries in the
+     thin-snow class.
+   - Ten days move the means by 1 % of their gap and the trees by under
+     1 %: what the runs show is the start, the estimate's trees.
+   - The estimate's error (mean |m − m_true| 0.11 on the year-six regions,
+     0.25 on the first year's cells) stays in the trees for about three
+     years, the means' memory.
+   - The reference evapotranspiration uses the model's own albedo and
+     skin in the net radiation, not FAO-56's 0.23 reference surface; the
+     hot dry skin lowers it in deserts (Sahara 1355 mm/yr against
+     the bulk potential's 6739).
+   - Interception and rooting depth do not yet differ between forest and
+     grass (above); roughness does since Oct 2 (M22, the surface layer by
+     roughness).
+
+   Defaults: land `treeMoisture` true, `moistureMemory` 3 years,
+   `forestAridity` [0.2, 1.0] (P/PET), `grassland` true, `forestAlbedo`
+   0.13, `grassAlbedo` 0.20, `grassSnowDarkening` 0.06,
+   `MOISTURE_ESTIMATE` demand [−2.14, 0.0134] (mm/d against W/m²),
+   aridity [0.01, 0.79, 0.63] (constant, fill, cover); radiation
+   `REFERENCE_RESISTANCE` 70 s/m; `vegetatedAlbedo` 0.13 only without
+   grassland. The spin-up takes land options through `LAND`. Older
+   states start their moisture means from the estimate and their trees
+   at f m v, or at their own where those are lower.
+   Soil colour from the soil's own carbon (Oct 2). The dry bare soil's
+   albedo follows a topsoil organic-carbon store that each cell's own
+   cover and climate build, on both engines (`js/physics/land.module.js`,
+   `js/gpu/physics.gpu.js`), with parity and hand-computed unit tests
+   (`test/soilCarbon.test.mjs`). No map of soils or soil colour enters.
+
+   - The store (`soilCarbon`, kg C/m² in the top 0.2 m, Jobbágy & Jackson
+     2000's top interval; one pool): dS/dt = A (I − k S), stepped exactly
+     for each step's I and k. Litter I = `litterInput` × (`treeLitter` ×
+     trees + `grassLitter` × grass) × min(1, fill / 0.75) × m(T), with
+     m(T) = 1 / (1 + e^(1.315 − 0.119 T)) in the lowest air (°C) while it
+     is at least 0.9 °C and 0 otherwise: the temperature curve of Lieth's
+     (1975) Miami model of net primary production (there in the annual
+     mean temperature; here step by step inside TREELIM's growing
+     season), and min(1, fill / 0.75) the root-zone factor the
+     transpiration already uses. Decomposition k = r(T) M(fill) /
+     `soilTurnover`, r = exp(308.56 (1/56.02 − 1/(T − 227.13))) of the
+     lowest air in K (Lloyd & Taylor 1994, Funct. Ecol. 8: 315–323): 1 at
+     10 °C, 0.30 at 0 °C, 0.047 at −10 °C, 0.002 at −20 °C, 2.30 at
+     20 °C, 4.26 at 30 °C. M is TRIFFID's moisture factor (Cox 2001,
+     Hadley Centre Technical Note 24, as given by Clark et al. 2011,
+     Geosci. Model Dev. 4: 701–722, eq. 67, read: 0.2 up to s_w, linear
+     to 1 at s_o = 0.5 (1 + s_w), then 1 − 0.8 (s − s_o); Cox's original
+     lower bound s_w, which JULES later raised to 1.7 s_w) in the
+     bucket's fill: 0.2 below the wilting fill 0.1
+     (`decompositionWilting`), 1 at 0.55, 0.64 full; 0.2 whenever the air
+     is below freezing, as JULES's s counts only the unfrozen water. There
+     s is the top layer's water as a fraction of saturation; here it is
+     the fill, the share of the root zone's capacity, so a full bucket
+     decomposes at 0.64 where a loam at field capacity would sit near
+     s_o and decompose at about 1 (recalled loam values). Mapping the fill linearly onto a saturation
+     fraction from wilting to field capacity (loam, clay, sandy loam; the
+     hydraulic values recalled, not read) fits the seven climates below
+     worse, rms log ratio to J&J 0.67–0.73 against 0.58, the desert at
+     0.4 kg/m² against 2.05, and leaves the boreal forest at 10.7–11.4.
+   - Trees against grass. Jobbágy & Jackson (2000, Ecol. Appl. 10:
+     423–436, Table 4): temperate grasslands keep 0.21 of their biomass
+     above ground and 70 % of their roots in the top 20 cm, forests
+     0.75–0.85 above ground; root-derived carbon stays in soil 2.4 times
+     as long as shoot-derived (Rasse et al. 2005, Plant Soil 269:
+     341–356). Per unit of production grass therefore feeds the mineral
+     topsoil more; per unit of cover forest produces more (from memory,
+     about 1.5–2 times grassland's NPP in one climate, not checked). The
+     stocks they leave in 0–20 cm (J&J Tables 3 and 4, the first metre
+     times its top-20-cm share): temperate grassland 4.8 kg/m², temperate
+     deciduous and evergreen forest 9.0 and 6.8, under wetter climates.
+     The weights are 1 and 1. What makes grassland soils dark in the
+     field is depth: SOC under grass lies deeper (41 % of the first metre
+     in the top 20 cm against temperate forests' 47–52 %), the thick
+     mollic A horizon,
+     which one 0.2 m pool does not resolve.
+   - Calibration. The equilibrium S* = ⟨I⟩/⟨k⟩ depends on `litterInput` ×
+     `soilTurnover` alone, 35 kg/m², the geometric-mean fit (34.8, rms
+     log ratio 0.58) to J&J's 0–20 cm stocks, Table 3's first metre times
+     Table 4's top-20-cm share, for seven sine-year climates (mean ±
+     amplitude °C, fill, cover → model S*, J&J, carbon %, dry albedo;
+     `carbonEquilibrium` integrates the year by Simpson's rule between
+     the rates' jumps at 0.9 °C and freezing, converged to 10⁻⁷): tropical
+     evergreen forest 26 ± 1.5, 0.55, 1.0 → 6.45, 8.2, 2.5 %, 0.141;
+     tropical savanna 25 ± 3, 0.3, 0.6 → 3.94, 4.8, 1.5 %, 0.175;
+     temperate deciduous forest 10 ± 11, 0.6, 0.95 → 10.5, 9.0, 4.0 %,
+     0.124; temperate grassland 7 ± 14, 0.3, 0.6 → 5.58, 4.8, 2.1 %,
+     0.149; boreal forest −3 ± 18, 0.7, 0.7 → 11.3, 4.7, 4.4 %, 0.123;
+     tundra −11 ± 16, 0.75, 0.4 → 8.57, 5.7, 3.3 %, 0.129; desert 22 ± 8,
+     0.12, 0.1 → 0.66, 2.0, 0.25 %, 0.314. Without the water factor on the
+     litter the desert reads 2.2 kg/m² and 0.227; with the growth warmth
+     (5–15 °C) in place of Lieth's curve the tundra gets no litter.
+     J&J's deserts include shrub deserts; their top-20-cm SOC
+     (0.8 % at 260 kg/m²) would read 0.23 by the curve below.
+   - Time. `soilTurnover` 70 years at 10 °C and optimal moisture with
+     `litterInput` 0.5 kg C/m² a year at full cover, warmth and water
+     (about a third of Lieth's ceiling of 3000 g dry matter, 1.4 kg C,
+     /m²/yr): the year's mean decomposition gives real turnover times of
+     21 years in the tropical forest climate, 63 temperate, 108 desert,
+     129 steppe, 171 boreal, 628 tundra. Carvalhais et al. (2014, Nature
+     514: 213–217) give whole-ecosystem carbon 23 (+7/−4) years globally,
+     15 near the equator, 255 north of 75N; TRIFFID's κ_s 0.5·10⁻⁸ s⁻¹ at
+     25 °C is 6.3 years there, 20 at 10 °C under Lloyd–Taylor (recalled).
+     `carbonAcceleration` A = 100 multiplies input and decomposition
+     alike, leaving S* where it is under steady forcing: e-folding times
+     0.2 years tropical, 0.6 temperate, 1.1 desert, 1.3 steppe, 1.7
+     boreal, 6.3 tundra. Under the seasons the store's swing correlates
+     with the decomposition, so the year's mean moves with A: stepped
+     daily to its periodic state, the seven climates' annual means at
+     A = 100 lie within 0.7 % of A = 1's (temperate forest +0.6 %), at
+     A = 1000 up to +9 %; a monsoon year (27 ± 3 °C, fill 0.35 ± 0.30 in
+     phase, grass 0.4) −0.7 % at A = 100. What
+     it loses is the soil's lag: a cell whose cover dies keeps its dark
+     soil for decades to centuries on Earth (a 0.2 m store at 63 years in
+     a temperate climate) and for months to a year here, so the soil
+     brightens with the cover's own 365-day decline instead of after it,
+     and the seasonal swing of a store follows the seasons more than a
+     real one.
+   - Colour. Dry albedo = `mineralAlbedo` − (`mineralAlbedo` −
+     `humusAlbedo`) (1 − exp(−c / `organicScale`)), c = 100 S / `topsoilMass`
+     (% organic carbon; 260 kg/m², 0.2 m at an assumed 1300 kg/m³). The
+     shape: soil reflectance falls with organic matter in all visible and
+     near-infrared bands, other constituents mask organic matter below
+     about 2 % (1.2 % C; Baumgardner et al. 1985, Adv. Agron. 38, as
+     quoted by later studies) and above about 5 % (2.9 % C) more changes
+     little (Page 1974, as quoted); dry Munsell value falls
+     logarithmically with organic carbon (Konen et al. 2003, SSSAJ 67:
+     1823–1830, r² 0.74 air-dry, 130 Iowa Ap horizons on one parent
+     material; steep below 1 % C in a multi-state set, as summarised);
+     broadband albedo = 0.069 × Munsell value − 0.114 (Post et al.
+     2000, SSSAJ 64: 1027–1034, 26 smoothed US soils air-dry and wet, the
+     value of each as measured, r² 0.93, as the abstract gives it):
+     value 7 0.369, 6
+     0.300, 5 0.231, 4 0.162, 3 0.093. `organicScale` 1 % C puts 70 % of
+     the darkening below 1.2 % C and 95 % below 3 %. `mineralAlbedo` 0.37
+     is Post's value 7, inside desert sand and rock's 0.30–0.40;
+     `humusAlbedo` 0.12 is the darkest dry CLM soil colour, (vis 0.08 +
+     nir 0.16)/2 of class 20, whose brightest class 1 is (0.36 + 0.61)/2
+     = 0.485 (CLM5 Technical Note, Table 2.3.3; the colours fitted to
+     MODIS by Lawrence & Chase 2007). Carbon 0.25, 0.6, 1, 2.5, 5 % →
+     0.315, 0.257, 0.212, 0.141, 0.122. The wet darkening takes the dry
+     value d to d − (d − 0.15 d/0.30) × the surface layer's fill, a
+     saturated/dry ratio of 0.5 (Idso et al. 1975's 0.47; CLM's 0.50 for
+     class 20 to 0.69 visible, 0.82 near-infrared for class 1). With no
+     carbon over a 0.30 mineral, or `soilCarbon` false, the land albedo
+     is the fixed soil's to the bit (on five64_day2190's 11 882 land cells
+     against the previous commit, and in the test).
+   - Starts and plumbing. A fresh start and a state without the field
+     (every state before this) start each cell at S* for its own cover,
+     trees and present bucket fill under SEASON_ESTIMATE's sine year of
+     the lowest air (`airCycle`), on both engines through the land's load;
+     a state with the field keeps it. Ice sheets hold 0. Saved states,
+     the GPU (at the end of PH, `SOILC`), `land.serialize` (the page's
+     snapshot) and land regridding (S* at the guessed cover 0.5 for new
+     land) carry it. Every option of `createLandSurface` reaches the GPU
+     through `VEGETATION_OPTIONS` or the named heat, bucket, albedo, snow
+     and ageing options (the test reads the signature); a land
+     `latentHeatFusion` that differs from the sea ice's is refused, the
+     engines sharing one.
+
+   Tests. Hand values: a forest cell at 26 °C, fill 0.55, cover 1 from 0
+   reaches 4.0140 kg/m² in 0.2 years and S* 6.4594 (dry albedo 0.14084);
+   a desert at 30 °C, fill 0.12, grass 0.1: 0.50518 (0.32585); a tundra
+   summer at 8 °C, fill 0.75, grass 0.4: 8.3839 (0.12994); a tundra winter
+   at −5 °C keeps 9.8112 of 10 over half a year (no litter, frozen
+   decay); a cell losing its cover at 20 °C, fill 0.55: 6.4594 → 1.2466 in
+   half a year, the dry soil 0.1408 → 0.2748. A = 1 over 100 years equals
+   A = 100 over one; three sine-year climates stepped 1460 times a year
+   hold S* within 0.1 % at A = 1 and within 1 % after 30 years at A = 100.
+   Over 2000 random cells the dry albedo stays within 0.12–0.37 and the
+   land albedo never rises with the carbon under any cover, trees,
+   surface layer or snow. Stepped by hand (review, Oct 2): a warm
+   vegetated year, a cold year, a dry year and a lost cover, 1460 steps
+   at A = 1, 100 and 3·10⁵, agree with the exact solution
+   I/k + (S − I/k) e^(−A k Δt) in float64 to 3·10⁻¹⁴ kg/m²; one GPU
+   physics pass over the N=6 cells against the same step in float32
+   arithmetic agrees to the bit at A = 100 and to 1.1·10⁻⁶ kg/m² at
+   A = 3·10⁵ (steps up to 1.35 kg/m²). A state's carbon through the
+   state file reloads to 2.4·10⁻⁷ kg/m² (float32) on the CPU, to the bit
+   on the GPU. At N=6 with random cover, trees, fill, surface layer
+   and carbon the engines' land albedos agree to 3.6·10⁻⁸ (the carbon moves
+   them by up to 0.135); over 24 steps at A = 3·10⁵ the carbon rose on 88
+   cells and fell on 31, by up to 18.3 kg/m², engines apart by
+   5.3·10⁻⁴ kg/m². The treeline parity test runs with `soilCarbon` false:
+   darker soils move its N=6 trajectory (lowest air apart by 9.6·10⁻³ K
+   against 2.9·10⁻³; its tree cover 1.3·10⁻⁴ apart against the test's
+   10⁻⁴). Digests unchanged (their model has no land).
+
+   The year-six state five64_day2190 at the start (S* from its cover and
+   fill, carbon %, dry albedo; class by its own season means and P/PET,
+   area share of the globe):
+
+   | class | globe | cover, trees | fill | P/PET | carbon kg/m² (%) | dry albedo | reference |
+   |---|---|---|---|---|---|---|---|
+   | desert (P/PET < 0.2) | 0.020 | 0.12, 0.00 | 0.07 | 0.13 | 0.40 (0.15) | 0.336 | sand and rock 0.30–0.40; J&J desert 2.0 kg/m² |
+   | steppe and savanna (0.2–0.65) | 0.079 | 0.39, 0.13 | 0.21 | 0.42 | 2.24 (0.86) | 0.238 | J&J temperate grassland 4.8, savanna 4.8 |
+   | temperate forest (humid) | 0.057 | 0.76, 0.71 | 0.78 | 1.10 | 11.5 (4.4) | 0.133 | J&J 6.8–9.0 |
+   | boreal (humid, season < 0.6 yr) | 0.049 | 0.56, 0.51 | 0.94 | 1.10 | 12.4 (4.8) | 0.125 | J&J 4.7 |
+   | tundra (treeline factor < 0.1) | 0.013 | 0.51, 0.00 | 0.92 | 1.06 | 9.4 (3.6) | 0.185 | J&J 5.7 |
+   | tropical forest (humid, < 25°, no cold season) | 0.042 | 0.84, 0.78 | 0.71 | 1.11 | 9.2 (3.5) | 0.136 | J&J 8.2 |
+
+   The class means of the dry albedo average the exponential over cells
+   (a tundra mean of 3.6 % reads 0.185 because its sparse cells are
+   pale). No measured broadband albedo by soil group was read beyond the
+   desert range; by Post's regression the chernic horizon's moist value
+   ≤ 3 (WRB 2022, as summarised, not read) would be dark, about 0.09–0.16
+   dry. By band (cover, carbon kg/m², dry albedo): 0–10N 0.70, 4.8,
+   0.203; 10–20N 0.40, 1.7, 0.285; 20–30N 0.45, 4.4, 0.220; 30–40N 0.58,
+   8.2, 0.185; 40–50N 0.55, 8.8, 0.167; 50–60N 0.64, 12.8, 0.128; 60–70N
+   0.48, 11.2, 0.125; 70–80N 0.31, 7.1, 0.143; 80–90N 0.18, 4.0, 0.180;
+   0–10S 0.73, 8.3, 0.172; 10–20S 0.52, 6.3, 0.196; 20–30S 0.58, 5.8,
+   0.186; 30–40S 0.75, 7.4, 0.156; 40–50S 0.95, 12.9, 0.126.
+
+   Runs: N=64 GPU, OCEAN `{"everySteps":8}`, three days from copies of
+   nine64_day0091, eight64_day0183, nine64_day0365 (bl34) and
+   five64_day2190 (cam26), before (the previous commit) → after (the
+   defaults, carbon from S*). Snow-free land, insolation-weighted surface
+   albedo over the end day (`land.albedo`), area share of the globe:
+
+   | class | June solstice + 3 d | September equinox + 3 d | March equinox + 3 d | year six + 3 d | reference |
+   |---|---|---|---|---|---|
+   | bare dry soil (v < 0.2, layer < half) | | | | 0.029: 0.285 → 0.300 | 0.30–0.40 |
+   | grassland (v ≥ 0.4, trees < 0.3 v) | 0.050: 0.241 → 0.198 | 0.047: 0.243 → 0.214 | 0.010: 0.239 → 0.206 | 0.009: 0.233 → 0.218 | 0.18–0.25 |
+   | partly vegetated (v 0.2–0.7) | 0.259: 0.215 → 0.159 | 0.191: 0.232 → 0.199 | 0.128: 0.232 → 0.186 | 0.086: 0.236 → 0.194 | 0.18–0.25 |
+   | dense vegetation (v > 0.7) | trace: 0.178 → 0.128 | 0.056: 0.170 → 0.133 | 0.057: 0.161 → 0.135 | 0.083: 0.155 → 0.138 | 0.12–0.15 |
+   | dense forest (v > 0.7, trees ≥ v/2) | trace: 0.178 → 0.128 | 0.052: 0.167 → 0.129 | 0.054: 0.159 → 0.133 | 0.075: 0.149 → 0.133 | 0.12–0.15 |
+
+   Their soils' dry albedo after (carbon kg/m²): bare dry soil 0.316
+   (0.66); grassland 0.210–0.244 (3.4–5.6); partly vegetated 0.164–0.220
+   (3.4–6.0); dense forest 0.126–0.132 (9.9–11.9). Dense forest comes
+   inside 0.12–0.15 on every state: the forest floor's own soil (0.13)
+   shows at 1 − v in place of 0.30. The partly vegetated land of the June
+   state reads 0.159, low by 0.021: the atlas start's cover of 0.5 a year
+   on, over humid mid-latitude land whose estimated store is 6.0 kg/m².
+   The class table (`scripts/clearSkyBudget.mjs`, surface albedo; LAND
+   `{"soilCarbon":false}` before): day 186 partly vegetated 0.233 →
+   0.200, dense vegetation 0.171 → 0.133 (high by 0.021 → matches);
+   year six lit over its day bare dry soil 0.286 → 0.301 (low by 0.014 →
+   matches), partly vegetated 0.237 → 0.195, dense vegetation 0.155 →
+   0.139 (high by 0.005 → matches). Outcomes: clear-sky albedo of the
+   state lit 0.152 → 0.146 (day 186), 0.161 → 0.157 (year six); land at
+   the top 0.225 → 0.201 and 0.252 → 0.239. Day means (spin-up log),
+   before → after: day 94 albedo 0.328 → 0.320, ASR 228.8 → 231.7, OLR
+   240.5 → 240.7, SWCRE −58.3 → −59.7, LWCRE 20.1 → 20.2, clear-sky
+   reflectance 0.1569 → 0.1441, Ts 16.52 → 16.69 °C, rain 2.19 → 2.21
+   mm/d; day 186 0.314 → 0.311, 233.4 → 234.7, 242.1 → 242.2, −55.2 →
+   −56.1, 17.6 → 17.6, 0.1523 → 0.1462, 16.60 → 16.70, 1.70 → 1.72; day
+   368 0.330 → 0.326, 228.1 → 229.4, 233.2 → 233.3, −56.7 → −57.5, 20.2 →
+   20.3, 0.1636 → 0.1574, 13.64 → 13.73, 2.33 → 2.34; day 2193 0.304 →
+   0.301, 237.1 → 237.9, 240.6 → 240.7, −48.7 → −49.1, 17.2 → 17.3,
+   0.1607 → 0.1571, 15.43 → 15.48, 1.88 → 1.89. Three days took 0.5–1.1
+   wall minutes on a shared GPU, before and after. Repeated from
+   nine64_day0365 and five64_day2190 in the review (Oct 2), the day lines
+   and the class table of the year-six state lit are the same to the
+   digits above. The review's converged equilibrium moves single cells'
+   start carbon by up to 1.9 kg/m² (26 %) and their land albedo by up to
+   0.008, the land means unchanged (6.974 and 7.520 kg/m² on those two
+   states), and leaves the class tables of both start states the same to
+   three decimals.
+
+   The feedback (year-six state, snow-free cells, surface sunlight taken
+   as 0.75 of the annual-mean insolation at the top; d(absorbed)/d(cover),
+   W/m² per unit of cover; with the soil held, and at equilibrium, where
+   S* falls in proportion to the litter):
+
+   | land | cover | sunlight W/m² | fixed 0.30 soil | carbon, soil held | carbon at S* | all cover lost: Δalbedo, Δabsorbed W/m² (fixed → carbon) |
+   |---|---|---|---|---|---|---|
+   | semi-arid and dry subhumid (P/PET 0.2–0.65) | 0.39 | 284 | 33.8 | 16.7 | 65.3 | 0.049 → 0.151, 13.9 → 42.8 |
+   | Sahel box 10–20N, 20W–40E | 0.32 | 302 | 32.5 | 35.4 | 77.1 | 0.037 → 0.094, 11.2 → 28.4 |
+   | all snow-free land | 0.58 | 277 | 38.7 | 9.5 | 37.4 | 0.088 → 0.183, 24.4 → 50.7 |
+
+   The sign is Charney's: losing cover brightens the ground and cuts the
+   sunlight it absorbs, now twice as much per unit of cover in the
+   drylands once the soil has followed. Charney (1975, Q. J. R. Meteorol.
+   Soc. 101: 193–202) raised the Sahel's albedo from 0.14 to 0.35 (from
+   memory, not re-read), 0.21; a dryland that loses all its cover here
+   gains 0.09–0.15 (0.04–0.05 with the fixed soil). With A = 100 the
+   soil's part arrives within about a year of the cover's loss.
+
+   How bare soil's albedo divides between organic matter and moisture
+   on one side and parent material and iron on the other. The evidence
+   read: (1) organic matter dominates the spectrum above about 2 % organic
+   matter (1.2 % C) and is masked by mineral constituents below it
+   (Baumgardner et al. 1985 as quoted); (2) over Northern Africa and
+   Arabia, where it is below that, MODIS diffuse shortwave albedo varies
+   by a factor of about 2.5 from the darkest volcanic terrain to the
+   brightest sand sheets, with the soil and rock type (Tsvetsinskaya et
+   al. 2002, GRL 29(9), abstract): parent material alone spans about
+   0.15–0.40 there, as wide as the organic range 0.12–0.37; (3) the top
+   20 cm's carbon correlates with precipitation (r² 0.33) more than
+   with sand (−0.28), temperature (−0.17) or clay (0.07), one variable
+   at a time (J&J Table 2): precipitation leads, texture comes second,
+   ahead of temperature; (4) on one
+   parent material carbon explains 74 % of the dry Munsell value (Konen
+   et al. 2003); (5) the first principal component of 12 509 soil
+   spectra (55 % of the variance) is iron oxides and kaolinite (Viscarra
+   Rossel et al. 2016, Earth-Sci. Rev. 155: 198–230), but the spectra
+   were continuum-removed, which takes out the overall brightness, so it
+   says nothing of the albedo's split; (6) water halves any soil's
+   albedo (Idso; CLM 0.5–0.8). No global map of bare-soil albedo (CLM's
+   colour classes, MODIS) was read, so no global share was computed.
+   Plainly: on humid vegetated land, roughly the 58 % outside UNEP's
+   drylands (Bastin et al. 2017), organic matter and water set the soil's
+   darkness and parent material matters little; on drylands, 42 %,
+   parent material and iron set it, with a spread as wide as the whole
+   organic range; the single largest contrast, pale deserts against dark
+   vegetated soils, follows climate. Neither "the climate-driven part is
+   the larger" nor "parent material dominates" holds over all land;
+   each holds where its regime applies.
+
+   What it cannot do:
+
+   - One mineral colour: no pale quartz sand against dark basalt or
+     red iron-rich soils, no salt pans, no carbonate crusts; the model's
+     deserts read 0.30–0.34 dry where Earth's span 0.15–0.45.
+   - One 0.2 m pool: no litter layer, no peat, no depth of the dark
+     horizon; boreal soils read the darkest (12.4 kg/m² against J&J's
+     4.7, whose profiles leave out the organic layer), tundra 9.4 against
+     5.7.
+   - No fire, erosion, photodegradation of dry litter or grazing; the
+     water factor alone keeps deserts pale.
+   - The start reads the present fill and cover, so a seasonally dry cell
+     started in its dry season (the Sahel's fill 0.04 in the year-six
+     March) starts low; A = 100 corrects it within a year or two, the
+     tundra within about six.
+   - The lag of soil behind vegetation is lost (above).
+
+   Defaults: land `soilCarbon` true, `mineralAlbedo` 0.37, `humusAlbedo`
+   0.12, `organicScale` 1 % C, `topsoilMass` 260 kg/m², `soilTurnover` 70
+   years, `litterInput` 0.5 kg C/m²/yr, `treeLitter` 1, `grassLitter` 1,
+   `decompositionWilting` 0.1, `carbonAcceleration` 100; `LLOYD_TAYLOR`
+   308.56 K, 56.02 K, 227.13 K; `MIAMI` [1.315, 0.119]; the wet
+   darkening's ratio `wetSoilAlbedo` / `bareAlbedo` 0.5; `bareAlbedo`
+   0.30 only without the carbon. Older states start at S*.
+   An unbiased fresh start (Oct 2). A start from the atlas (no FROM
+   state) had put the cover at 0.5 everywhere and filled the slow means
+   from the latitude and bucket estimates, whose errors stay for the
+   means' three-year memory (with the half-full bucket and half cover
+   the estimate's moisture factor is 0.65 on every one of the 10640
+   land cells off the ice sheets at N=64, whatever its climate).
+   The two-stage start replaces that on both engines
+   (`js/physics/land.module.js`, `js/gpu/physics.gpu.js`, `core.gpu.js`,
+   `model.gpu.js`), with hand-computed and parity tests
+   (`test/landStart.test.mjs`).
+
+   - The record. The six slow means (`seasonLength`, `seasonWarmth`,
+     `rainMean`, `demandMean`, and two new ones the soil's equilibrium
+     needs: `litterMean`, the mean of min(1, fill/0.75) × m(T), and
+     `decayMean`, the mean of r(T) M(fill), both over `seasonMemory`)
+     share one record [age, hold, start] (`record`, float64 in state
+     files). While age + Δt ≤ the memory a mean takes the weight
+     Δt/(age + Δt), the plain average of every step so far; after it the
+     exponential weight 1 − e^(−Δt/memory) as before. Both memories are 3
+     years, so the record is a plain average to day 1095 and a running
+     mean from then on. A state saved without a record (every state
+     before this) has age −1 and the exponential weight at once (the CPU
+     weight is the old one to the bit); the estimates stay for those
+     states and for land added by regridding, which carries the record.
+     The GPU takes the two weights and the hold as step parameters P[5],
+     P[6], P[7], computed on the host in float64.
+   - Float32. The GPU's mean is m + (x − m) w in float32. Over three
+     years of steps (Math.fround in every operation, against a
+     compensated float64 sum over the step count) the worst error is 1.1·10⁻⁵
+     (N=64 steps, 337.5 s) and 4.3·10⁻⁵ (N=128, 168.75 s) of the mean
+     for a boreal season length, 5.8·10⁻⁶ and 2.3·10⁻⁵ for its warmth,
+     2.7·10⁻⁶ and 5.8·10⁻⁶ for a tundra decomposition, 6.3·10⁻⁵ and
+     1.6·10⁻⁴ for rain in showers (3 % of the steps); the exponential
+     mean the model already ran in float32 is off by 9.2·10⁻⁴ and
+     2.1·10⁻³ on the same showers in years 3–6. At 1.6·10⁻⁴ of P/PET
+     the moisture factor moves by 2·10⁻⁴, and 2.3·10⁻⁵ of the season's
+     warmth moves the treeline factor by under 10⁻⁴: no compensated or
+     count-based form is needed.
+   - The placeholder year. During a fresh start's first year the trees
+     and the topsoil carbon are held and the cover runs free. The trees
+     (10 years rising, 3 falling) close 9.5 % of a rising gap in a year
+     and the carbon (e-folding 0.2–6.3 years at A = 100) follows the
+     trees and cover, so both carry their start for years; they are held
+     at values that favour no region (`startPlaceholders`): trees at
+     half the cover, the grass–forest split's middle (vegetated albedo
+     0.165, half way from grass 0.20 to forest 0.13; snow masked by
+     0.25/0.70 of the way at v = 0.5), and carbon 1.802 kg/m² (c = ln 2 ×
+     `organicScale`, 0.69 % C), where the dry soil reads 0.245, midway
+     between mineral 0.37 and humus 0.12. The cover runs free from 0.5:
+     in a year it closes 63 % of a falling gap (365 days), 87 % of a
+     rising one at full warmth (180 days) and 40 % of its decay under
+     snow (720 days), so it follows the year; holding it would need its
+     equilibrium over the seasons, which depends on which side of its
+     goal it stands at each moment (the rates differ rising and falling
+     and the growth reads the warmth), a record of the goal's spread
+     through the year rather than a mean. What it leaves: a cell whose
+     goal is 0 all year keeps 0.5 e⁻² = 0.068 of cover after two years.
+     The bucket starts half full and fills or drains within months.
+   - The jump (`land.jump()`). At the end of year one and again at the
+     end of year two every land cell's trees are set to f m v (the
+     record's treeline factor times its moisture factor times the cover
+     at that moment, or under snow `snowFreeCover`, the cover at the
+     cell's last snow-free step: the trees do not follow the cover under
+     snow and no litter falls there, and the March equinox finds the
+     northern boreal land under snow with its cover decayed, five64's
+     Siberia box 0.60 against 0.75 at the September equinox) and its
+     topsoil carbon to `litterInput` ×
+     `soilTurnover` × litter × `litterMean` / `decayMean` (35 kg/m² ×
+     the type-weighted cover × the ratio), the store's equilibrium for
+     its cover, trees and record; ice sheets 0. The first jump ends the
+     hold. The cover and the record are not touched: the record goes on
+     as a plain average, so the second jump reads years one and two
+     with equal weights. The day-365 record covers exactly one year,
+     equinox to equinox. On the GPU the jump reads the land back, applies
+     the same function with each value rounded to float32 as stored and
+     writes the trees and carbon back, so a repeat at once changes
+     nothing (to the bit, tested). The equilibrium is the ratio of the
+     year's means: the store's seasonal swing at A = 100 is not set,
+     and the annual mean of the periodic store lies within 0.7 % of the
+     ratio (the review's measurement above).
+   - Starts (`start`, LAND `{"start": ...}`): 'neutral' (the default)
+     as above; 'bare': no cover, no trees, mineral soil (0.37) held;
+     'green': cover 1, the trees held at f m v of the record as it
+     builds (none until the record admits them, since a part-year record
+     reads the season so far) and carbon 13 kg/m² (c = 5 `organicScale`,
+     dry soil 0.122) held. The cover runs free in all three, so a bare
+     and a green twin keep their own covers through the jumps.
+   - Why not a random start. A start drawn per cell from 0–1 has an rms
+     error of 0.29 (a cell whose own value is 0.5) to 0.58 (0 or 1)
+     against the cell's own value; the trees keep 82 % of
+     it after two years where they rise and 51 % where they fall, and
+     the noise sits at the grid scale in the albedo and evaporation. The
+     placeholders have no error that varies by region, and the jump
+     removes what error they have wholesale once a year of the cell's
+     own climate is known.
+   - Where it runs. scripts/spinup.mjs takes `LAND_JUMPS`: 'fresh' (the
+     default) jumps when a record that started fresh passes 365 and 730
+     days, at the end of the day that reaches them in whichever segment
+     holds it; 'none' never; a list of model days at their ends. A FROM
+     run of a state saved before the record never jumps unless asked. Each
+     jump is logged with the land means of trees, carbon, dry and full
+     land albedo, globally and by 10° band. The page jumps a fresh land
+     at the same record ages. A saved negative demand mean (FAO-56's
+     reference can be negative under dew) now reloads as saved rather
+     than clamped to 0, so a state saved after the jump reloads to the
+     bit on the GPU and with its record exact on the CPU.
+
+   Tests. CPU: ten steps crossing 0.9 °C and freezing match the
+   arithmetic mean of the steps' own values to 10⁻¹⁴ while within the
+   memory and the exponential recursion after; the jump gives 0.1875 of
+   trees and 14 kg/m² for a 183-day season at 7.4 °C, P/PET 0.5, cover
+   0.8 and record ratio 0.5, and from a sine year's record lands on
+   `carbonEquilibrium` to 10⁻¹³. GPU, N=6: a twin whose record is reset
+   every step gives each step's own values, and the record matches their
+   plain average to 4.2·10⁻⁸ (season length) to 1.5·10⁻⁶ (demand,
+   scale 13.5 mm/d) over ten steps, six within the memory; the held
+   placeholders of the three starts, the jump against the formula on
+   the read-back fields, its repeat and a state file reloaded to the
+   bit; after the jump the trees move.
+
+   Run (mechanics, not a result): `jump64`, N=64 GPU, bl34, OCEAN
+   `{"everySteps":8}`, ten days from the atlas with `LAND_JUMPS=10`,
+   4.0 wall minutes on a shared GPU. A twin run from the same start with
+   its record reset every step (a scratch driver; the covers of the two
+   stayed identical to the bit, as the held land feeds nothing back)
+   gives the model's own per-step values. Land means off the ice sheets
+   (area-weighted), the record against the plain average of the
+   per-step values and, in brackets, the day's own mean:
+
+   | day | season length | season warmth K | rain mm/d | demand mm/d | litter factor | decay factor |
+   |---|---|---|---|---|---|---|
+   | 1 | 0.5442 = 0.5442 (0.5442) | 4.4032 = 4.4032 (4.4032) | 0.8824 = 0.8824 (0.8824) | 1.4148 = 1.4148 (1.4148) | 0.1593 = 0.1593 (0.1593) | 0.4781 = 0.4781 (0.4781) |
+   | 2 | 0.5399 = 0.5399 (0.5357) | 4.3978 = 4.3978 (4.3924) | 0.9473 = 0.9473 (1.0123) | 1.5173 = 1.5173 (1.6198) | 0.1584 = 0.1584 (0.1574) | 0.4772 = 0.4772 (0.4764) |
+   | 5 | 0.5324 = 0.5324 (0.5302) | 4.5579 = 4.5579 (4.9630) | 0.9919 = 0.9919 (1.2893) | 1.7140 = 1.7140 (1.8753) | 0.1598 = 0.1598 (0.1662) | 0.4897 = 0.4897 (0.5227) |
+   | 10 | 0.5456 = 0.5456 (0.5819) | 5.4591 = 5.4591 (7.2178) | 1.2191 = 1.2191 (1.3556) | 1.7766 = 1.7766 (1.8797) | 0.1770 = 0.1770 (0.2113) | 0.5723 = 0.5723 (0.7411) |
+
+   The worst cell differs from its own average by 1.3·10⁻⁶ to 2.4·10⁻⁶
+   of the field's land maximum on day 10. An exponential mean from an
+   empty start would stand at 10/1095 = 0.9 % of these after ten days.
+   The jump at the end of day 10 (a ten-day record, March to mid-March:
+   the northern land has no season yet), land means including the ice
+   sheets: trees 0.226 → 0.037, topsoil carbon 1.61 → 3.30 kg/m², dry
+   soil albedo 0.258 → 0.243, land albedo 0.300 → 0.316; by band, trees
+   and carbon: 70–60N 0.24 → 0.00 and 1.7 → 0.0, 50–40N 0.25 → 0.00 and
+   1.8 → 1.4, 30–20N 0.25 → 0.07 and 1.8 → 6.1, 0–10S 0.26 → 0.07 and
+   1.8 → 5.2, 30–40S 0.25 → 0.13 and 1.8 → 6.6 (runs/jump64.log). Repeated at once: trees
+   0.0374 → 0.0374, carbon 3.2947 → 3.2947. The saved day-10 state holds
+   the record [864000 s, 0, 1].
+
+   What a paired spin-up from the atlas now does (scripts/pairedSpinup.sh,
+   the defaults): day 0, the cover 0.5 and free, trees held at half the
+   cover, carbon held at 1.802 kg/m², the six means empty at age 0; to
+   day 365 the means are the plain average of every step; at the end of
+   day 365 (a snapshot day for PER_YEAR 4, saved after the jump) the
+   trees jump to f m v and the carbon to its equilibrium from the
+   one-year record, and both run free; at the end of day 730 they jump
+   again from the two-year record; at day 1095 the record reaches its
+   memory and the means become 3-year running means; no later jump.
+
+   What still misses:
+
+   - The year-one record is of a planet whose trees and soils are the
+     placeholders, and the second jump weighs that year as much as the
+     second; the third year's running mean dilutes it.
+   - The cover's own start (0.5) is left to its own times (0.068 of
+     cover after two years where the goal is 0).
+   - A snow-free cell's trees jump to f m v of its cover at the March
+     equinox, wherever its wet and dry seasons leave the cover then
+     (five64's Sahel box 0.48 at day 2190 against 0.54, 0.58 and 0.38 at
+     days 2008, 2099 and 2281), and the carbon to the year's ratio, not
+     its seasonal phase.
+   - Land added by regridding during the record takes the estimates,
+     counted as a record as old as the rest.
+   - The twins ('bare', 'green') are built, not run.
+
+   Review (Oct 2), each check run independently of the work's own
+   tests:
+
+   - The CPU record of one cell driven through `update` for three years
+     and 30 days matches a compensated float64 average of the cell's
+     per-step values, and the exponential recursion after day 1095, to
+     4.1·10⁻¹⁴ of the mean at 337.5 s and 168.75 s.
+   - The GPU's update m + (x − m) w in a WGSL kernel with the host's
+     float64 weights rounded to float32, over seven signals (boreal
+     season length and warmth, tropical warmth, rain in showers, demand
+     with dew, the litter and tundra decay factors): worst in year one
+     2.3·10⁻⁶ to 7.1·10⁻⁵ of the mean's scale; over the three plain
+     years 6.2·10⁻⁶ to 1.0·10⁻⁴ at 337.5 s and 1.2·10⁻⁵ to 2.7·10⁻⁴ at
+     168.75 s, the showers the worst at both; the kernel equals a
+     Math.fround emulation's worst to two digits. The step at the
+     hand-over equals its neighbours' (no jump); in the 60 days after it
+     the float32 exponential mean errs by up to 4.6·10⁻⁴ (showers,
+     337.5 s). The engine itself (N=6, 1200 steps with a 600-step
+     memory, against a twin whose record restarts every step): within
+     1.0·10⁻⁶ of the scale before the hand-over and 1.3·10⁻⁶ after,
+     the placeholders held to the bit on every step.
+   - From nine64_day0365 (saved without the means) the CPU engine is
+     bit-identical to the work's parent c753e21 over three steps in
+     every state and land array; the state loads with the record
+     [−1, 0, 0] and the estimates exactly on both engines.
+   - N=64 starts on both engines: the same uniform initial fields
+     (neutral 0.5, 0.25, 1.802 kg/m²; bare 0, 0, 0; green 1, 0,
+     13 kg/m²; bucket 150 mm), the six means 0; over 16 GPU steps the
+     carbon is held, the bare trees 0 and the green trees f m v of the
+     record to 1.4·10⁻⁷.
+   - Runs, N=64 bl34 from the atlas: rvA five days without a jump, rvB
+     a jump at the end of day 5 and a second segment to day 10, rvC the
+     same in one segment, rvE and rvD five days without and with the
+     jump on the snow-free cover. At day 5 all 10640 land cells off the
+     ice sheets hold trees 0.5 v and carbon 1.8022 kg/m² to the bit, the
+     jump changes only the trees, the carbon and the hold, and both
+     engines' jumps of rvE's state equal a hand computation of
+     the formula (trees to 1.1·10⁻¹⁶, carbon exactly) and rvD's saved
+     state; a repeat changes nothing on either engine; rvD reloads to
+     the bit on both engines and through the state file; after it no
+     value is negative or non-finite, the carbon is at most 11.38 kg/m²
+     and the dry soil spans 0.123–0.370. Four cells of rvE's five-day
+     record: warm and wet (20.1°N 75.6°W, P/PET 3.6) trees 0.50747,
+     carbon 4.7268 kg/m²; beyond the treeline (76.0°N) 0 and 0; arid
+     (11.9°N 125.1°E, P/PET 0.11) 0 and 4.5142; under 29.9 mm of snow
+     (23.8°N 105.8°W) 0 and 6.4215. The jump at day 5: trees 0.225 →
+     0.025, carbon 1.61 → 3.15 kg/m², dry soil 0.258 → 0.253, land
+     albedo 0.279 → 0.296. On day 5 1889 cells with cover lie under
+     snow, their snow-free cover above their cover by 1.3·10⁻³ on
+     average (3.3·10⁻³ at most). Between days 5 and 10 the trees move
+     in 1720 cells by at most 1.4·10⁻³ and the carbon in 6863 cells by
+     −0.095 to +0.107 kg/m². rvB and rvC part from day 6 on as rvA's
+     second segment and jump64 do without any jump: a whole-day segment
+     break is not bit-exact in this spin-up, while the land's own fields
+     reload to the bit.
+
+   Defaults: land `start` 'neutral' (`startPlaceholders`: neutral
+   cover 0.5, share 0.5, carbon ln 2 × `topsoilMass` × `organicScale`/100
+   = 1.802 kg/m²; bare 0, 0, 0; green 1, f m v, 13 kg/m²);
+   `FRESH_JUMPS` 365 and 730 days of the record; the spin-up's
+   `LAND_JUMPS` 'fresh'; `seasonMemory` and `moistureMemory` 3 years (the
+   plain average's length).
+
    The gases on fixed profiles (Oct 1). `scripts/radiationBenchmark.mjs`
    runs one CPU column on bl34 for each standard atmosphere with the
    reference's own temperature, vapour, ozone and well-mixed gases, clear
@@ -6584,6 +7496,366 @@ physics pass 3.89 → 4.67 ms; N=128 97.24 and 95.56 → 98.38 and 98.38 ms
 (+2.0 %), the physics pass 16.74–17.22 → 19.74 ms. A day at N=128 from
 eight128_day0183 takes 66 s (72 s with setup; sweep2 64 and 70).
 
+**The surface layer by roughness (Oct 2).** `js/physics/exchange.module.js`
+(CPU) and `js/gpu/exchange.gpu.js` (WGSL), parity and hand-value tests
+in `test/exchange.test.mjs`.
+
+Before: one constant per cell for momentum, heat and vapour alike,
+`SEA_DRAG` 1.2·10⁻³ over sea and sea ice and `LAND_DRAG` 1.5·10⁻³ over
+land and the ice sheets, at the lowest layer's midpoint (z₁ 16.6 m over
+the ice sheets, 18–21 m elsewhere on the day-94 means). It entered the
+explicit RK4 drag ρ C max(|v|, 3) |v|/m (`surface.module.js`, the core's
+D_DRAG), the ocean's stress, the boundary layer's u* = √C max(|v|, 3) and
+its surface buoyancy flux, the radiation column's sensible heat
+ρ C U c_p (T_s − T₁) and evaporation, the land's aerodynamic conductance
+and the FAO-56 reference evaporation. No stability dependence: the
+boundary layer's `stability` changes only the K-profile's velocity scale
+(Holtslag and Boville) in unstable columns, and the gustiness is the
+3 m/s floor on the wind. The sensible heat used T_s − T₁, not the dry
+static energy, about 0.2 K of difference at 20 m (IFS eq. 8.6 carries
+g z₁/c_p). At 10 m the sea's constant is a neutral C_D10N of 1.36·10⁻³
+(z₀ 1.9·10⁻⁴ m) at every wind. The day means of three N=64 days from
+nine64_day0091 (bulk Richardson number of the surface layer, 10th / 50th /
+90th percentile of the 8-step samples): forest (trees ≥ 0.5) wind 5.9 m/s,
+stress 0.075 N/m², Ri −0.25 / −0.02 / 0.03; bare soil 6.8 m/s, 0.094,
+−0.27 / −0.04 / 0.005; ice sheets 9.2 m/s, 0.174, −0.001 / 0.010 / 0.042;
+the Arctic pack (≥ 70N, A ≥ 0.8) 5.3 m/s, 0.054, −0.007 / 0.004 / 0.035;
+the open sea 20S–20N 5.2 m/s, 0.048, −0.14 / −0.03 / −0.002, 40–60S
+10.1 m/s, 0.185, −0.05 / −0.007 / 0.006.
+
+The scheme. Per cell, from the state at the start of the physics:
+
+| surface | z₀m (m) | z₀h (m) | source |
+|---|---|---|---|
+| forest (the trees' share) | 2.0 | 2.0 | IFS Cy47r3 Part IV Table 8.3 (all tree types), calibrated so that the 10 m wind's error against SYNOP vanishes per type (Sandu et al. 2011) |
+| grass (cover less trees) | 0.1 | 0.001 | same, short grass (the table's low vegetation spans 0.034 tundra to 0.5 irrigated crops and bogs) |
+| bare soil | 0.013 | 1.3·10⁻⁴ | same, desert |
+| snow on grass and bare soil, ice sheets | 1.3·10⁻³ | Andreas (1987) | same, ice caps and glaciers; snow covers the short tiles over min(1, S/30 kg/m²), the IFS's c_sn with D_cr 0.1 m at 300 kg/m³; the trees stand above it |
+| sea ice of concentration A | max(10⁻³, 0.93·10⁻³ (1 − A) + 6.05·10⁻³ e^(−17 (A − 0.5)²)) | Andreas (1987) | IFS eq. 3.30 (Andreas et al. 2010, Bidlot et al. 2014) |
+| open sea (1 − A) | α u*²/g + 0.11 ν/u*, α = 0.0017 U10N − 0.005 (U10N ≤ 19 m/s, α ≥ 0) | min(1.6·10⁻⁴, 5.8·10⁻⁵ Rr^−0.72) | COARE 3.5 (Edson et al. 2013; the scalar fit as in its coare35vn.m, where COARE 3.0's was min(1.15·10⁻⁴, 5.5·10⁻⁵ Rr^−0.6)), ν of the air at its temperature (COARE's fit), four fixed-point steps from the neutral u* |
+
+Andreas (1987, Table 2 of Andreas 2002): ln(z₀h/z₀m) = b₀ + b₁ ln R* +
+b₂ (ln R*)², R* = u* z₀m/ν with the tile's neutral u*, (1.25, 0, 0) for
+R* ≤ 0.135, (0.149, −0.55, 0) to 2.5, (0.317, −0.565, −0.183) above (R*
+capped at 1000). The tiles blend as the IFS aggregates its tiles'
+roughness for its 10 m wind: the shares' neutral C_D and C_H at 10 m are
+summed and the cell's z₀m and z₀h backed out (a forest–grass half and
+half: z₀m 1.17 m, z₀h 1.03 m). Stability: Monin–Obukhov with the IFS's
+surface-layer functions (eqs. 3.16–3.26: Dyer–Hicks integrated by
+Paulson when unstable; Holtslag and De Bruin 1988 with a 1, b 2/3, c 5,
+d 0.35 when stable; no cap on z/L), ζ = z₁/L from the bulk Richardson
+number g z₁ (θv₁ − θv_s)/(θ̄v U²) by five steps (fixed point when
+unstable, Newton in ln ζ when stable; worst error against 200 steps
+over Ri −10…10 at z 16–40 m 4·10⁻⁴ for the tiles above and their blends
+and 1.6·10⁻³ for any z₀m ≤ 2 m with z₀h/z₀m ≥ 10⁻³; below z 10 m with
+z₀m 2 m five steps miss by up to 99 %, a height the model's z₁ of
+16–21 m does not reach), U the
+wind with the 3 m/s floor, θv_s with the skin's saturation humidity over
+sea and sea ice and dry over land. z₁ = c_p θv₁ (Π_s − Π₁)/g. C_D and
+C_H go to the momentum, the ocean's stress and u*; C_H to the sensible
+heat and evaporation, the mixed-layer deck's surface fluxes and the
+land's aerodynamic conductance. The reference evapotranspiration takes
+FAO-56's own reference grass at z₁ (eq. 4: h 0.12 m, d 2/3 h, z₀m
+0.123 h, z₀h 0.1 z₀m and FAO-56's κ 0.41; 2.45·10⁻³ at 20 m, 208/u₂ at
+2 m).
+
+Three consequences built with it, on both engines:
+- The surface drag is the lower boundary of the boundary layer's
+  implicit edge solve (`implicitDrag`, the default under roughness): a
+  forest's C_D of 0.02–0.03 on the 40 m lowest layer gives the explicit
+  RK4 drag λΔt up to 3–6 at N=64, past RK4's 2.8; at N=6 with Δt 900 s
+  the explicit form went NaN within three steps. The solve keeps the
+  stress it applies (`surfaceStress`), which the ocean takes (on the GPU
+  `PH_STRESS`), and its kinetic energy goes to the lowest layer's
+  dissipation heat; the RK4 drag and its heat are off.
+- The sensible heat is ρ C_H U (c_p T_s − c_p T₁ − g z₁) (IFS eq. 8.6),
+  and the boundary layer's surface buoyancy flux is the radiation's,
+  g/θ (H/(ρ c_p Π) + 0.61 θ E/ρ) from the fluxes it applied
+  (`surfaceBuoyancy`, on the GPU written to `PH_BUOY` by the physics
+  kernel), moist over land too: the boundary layer diagnoses after the
+  flux has heated the lowest layer, and with C_H U Δt/Δz of order one
+  over forest a buoyancy from the heated layer read as stable.
+- The land's season means read the lowest air before this step's
+  surface and radiative heating.
+
+Options (`SURFACE`): `exchange` 'roughness' (default) or 'fixed', the
+constant coefficients bit for bit; an option set that names
+`dragCoefficient` (surface or land) and no `exchange` is fixed, so the
+sweep's sea-drag dial still runs as it did; `roughness` {forest, grass,
+bare, snow}, `snowCover` 30 kg/m², `blendingHeight` 10 m, `charnock`
+[0.0017, −0.005, 19], `smoothFlow` 0.11, `iterations` 5,
+`referenceCrop` 0.12 m, `implicitDrag` true.
+
+The sea's neutral 10 m coefficients against the 10 m neutral wind
+(×10⁻³; the model's four steps and COARE 3.5's converged relation agree
+to 0.4 %): 3 m/s C_D 0.92, C_H 1.10; 5: 0.92, 1.10; 7: 1.05, 1.10; 10:
+1.32, 1.11; 15: 1.83, 1.17; 20: 2.35, 1.23; 25: 2.73, 1.28. Large and
+Yeager (2004): 1.27, 1.06, 1.06, 1.18, 1.47, 1.81, 2.16. The constant
+before: 1.36 at every wind.
+
+C_D / C_H (×10⁻³) at z 20 m by the bulk Richardson number:
+
+| surface | Ri −0.3 | −0.05 | 0 | 0.05 | 0.2 |
+|---|---|---|---|---|---|
+| forest | 60.8 / 88.3 | 36.4 / 41.4 | 27.8 / 27.8 | 16.0 / 16.0 | 2.29 / 2.17 |
+| grass | 8.35 / 4.41 | 6.51 / 3.49 | 5.69 / 3.04 | 4.22 / 2.41 | 1.17 / 0.82 |
+| bare soil | 4.22 / 2.61 | 3.40 / 2.11 | 2.97 / 1.83 | 2.12 / 1.38 | 0.65 / 0.48 |
+| snow, ice sheet (u* 0.25) | 2.39 / 1.86 | 1.98 / 1.51 | 1.72 / 1.29 | 1.15 / 0.90 | 0.40 / 0.32 |
+| sea ice A = 1 | 2.27 / 1.85 | 1.88 / 1.50 | 1.63 / 1.27 | 1.08 / 0.87 | 0.38 / 0.31 |
+| sea ice A = 0.5 | 3.39 / 1.79 | 2.80 / 1.50 | 2.48 / 1.33 | 1.85 / 1.06 | 0.63 / 0.43 |
+
+Runs, N=64 GPU, OCEAN `{"everySteps":8}`, from copies of the states,
+before (HEAD 3db505a) → after, day means of 8-step samples over the
+three days (wind at z₁; stress ρ C_D max(|v|, 3) |v|; H, LE upward
+positive; the Arctic pack ≥ 70N with A ≥ 0.8):
+
+| class, nine64 day 91 + 3 | share | wind m/s | stress N/m² | C_D / C_H ×10⁻³ | H W/m² | LE W/m² | skin °C |
+|---|---|---|---|---|---|---|---|
+| forest (trees ≥ 0.5) | 0.068 | 5.92 → 2.63 | 0.075 → 0.226 | 1.5 → 19.2 / 19.8 | 18.9 → 12.2 | 67.2 → 86.4 | 20.40 → 17.86 |
+| grass (≥ 0.5) | 0.008 | 6.72 → 4.69 | 0.071 → 0.122 | 1.5 → 5.80 / 3.26 | 39.0 → 43.3 | 42.4 → 45.7 | 11.40 → 10.27 |
+| bare (≥ 0.5) | 0.058 | 6.83 → 4.22 | 0.094 → 0.222 | 1.5 → 9.38 / 8.48 | 42.1 → 54.2 | 26.9 → 36.6 | 27.65 → 25.10 |
+| mixed land | 0.126 | 6.46 → 3.30 | 0.086 → 0.227 | 1.5 → 13.8 / 13.9 | 30.7 → 31.0 | 58.1 → 78.2 | 24.12 → 21.28 |
+| ice sheets | 0.030 | 9.17 → 9.60 | 0.174 → 0.215 | 1.5 → 1.59 / 1.09 | −19.9 → −19.1 | 2.8 → 2.3 | −36.23 → −36.23 |
+| Arctic pack | 0.009 | 5.34 → 5.06 | 0.054 → 0.058 | 1.2 → 1.35 / 1.11 | −5.8 → −5.0 | 2.5 → 2.3 | −0.06 → −0.06 |
+| Antarctic sea ice (A ≥ 0.8) | 0.015 | 9.93 → 9.80 | 0.202 → 0.271 | 1.2 → 1.58 / 1.16 | 3.1 → −0.2 | 5.5 → 5.4 | −19.72 → −19.63 |
+| open sea 60–40S | 0.107 | 10.11 → 10.46 | 0.185 → 0.236 | 1.2 → 1.24 / 1.08 | 22.3 → 19.2 | 57.8 → 54.8 | 5.67 |
+| open sea 20S–20N | 0.262 | 5.16 → 5.52 | 0.048 → 0.048 | 1.2 → 1.01 / 1.19 | 3.7 → 3.2 | 106.2 → 108.2 | 25.25 |
+| open sea 40–60N | 0.052 | 5.90 → 6.41 | 0.066 → 0.061 | 1.2 → 0.80 / 0.85 | −14.0 → −10.5 | 15.6 → 14.4 | 10.04 |
+
+| outcome | nine64 day 91 + 3 | eight64 day 183 + 3 | eight64 day 183 + 10 | nine64 day 365 + 3 | eight128 day 183 + 3 |
+|---|---|---|---|---|---|
+| forest wind, m/s; stress, N/m² | 5.92 → 2.63; 0.075 → 0.226 | 5.91 → 2.56; 0.080 → 0.255 | 6.99 → 2.68; 0.112 → 0.274 | 5.94 → 2.57; 0.086 → 0.291 | 6.03 → 2.50; 0.081 → 0.232 |
+| forest LE, W/m²; skin, °C | 67.2 → 86.4; 20.40 → 17.86 | 46.3 → 62.9; 16.07 → 14.34 | 42.8 → 49.6; 14.59 → 12.81 | 59.6 → 78.1; 18.07 → 15.55 | 44.6 → 59.2; 15.29 → 13.57 |
+| land skin, all land, last day °C | 17.53 → 14.85 | 15.89 → 13.92 | 13.70 → 11.50 | 7.74 → 6.12 | 15.59 → 13.61 |
+| global surface, last day °C | 16.52 → 15.75 | 16.60 → 16.02 | 15.99 → 15.37 | 13.64 → 13.16 | 16.48 → 15.92 |
+| global evaporation (samples), mm/d | 2.40 → 2.57 | 1.94 → 2.00 | 2.20 → 2.18 | 2.22 → 2.33 | 2.00 → 2.02 |
+| global rain, last day, mm/d | 2.19 → 2.30 | 1.70 → 1.73 | 2.54 → 2.42 | 2.33 → 2.38 | 1.93 → 1.94 |
+| global sensible heat, W/m² | 13.03 → 12.96 | 9.23 → 9.44 | 11.67 → 11.21 | 12.80 → 11.59 | 10.13 → 10.62 |
+| sea stress magnitude, N/m² | 0.083 → 0.095 | 0.081 → 0.090 | 0.091 → 0.101 | 0.080 → 0.089 | 0.085 → 0.090 |
+| equatorial Pacific τx 2S–2N 160E–100W, N/m² (Earth −0.04…−0.06) | −0.038 → −0.038 | −0.022 → −0.019 | −0.031 → −0.027 | −0.006 → −0.006 | −0.020 → −0.018 |
+| trades τx 5–20N / 5–20S, N/m² | −0.006 / −0.036 → −0.007 / −0.035 | −0.009 / −0.053 → −0.008 / −0.053 | −0.018 / −0.056 → −0.016 / −0.056 | −0.035 / −0.015 → −0.032 / −0.015 | −0.017 / −0.058 → −0.016 / −0.055 |
+| Southern Ocean τx 40–60S mean; peak band, N/m² (Earth about 0.17, SCOW) | 0.132 → 0.170; 0.170 → 0.215 at 47.5S | 0.111 → 0.137; 0.153 → 0.191 at 47.5S | 0.119 → 0.138; 0.136 at 52.5S → 0.154 at 47.5S | 0.093 → 0.114; 0.131 → 0.160 at 52.5S | 0.096 → 0.113; 0.169 → 0.213 at 57.5S |
+| Arctic pack H, W/m² (SHEBA near 0 in June) | −5.8 → −5.0 | — | — | 2.0 → 0.3 | — |
+
+The stresses on the sea are the ocean's (`OD_STRESS`, the stress it
+receives under the ice's transmission), averaged over the samples.
+Earth's Southern Ocean: the 40–60S decadal-mean zonal stress was about
+0.17 N/m² in the 1990s, and the westerlies exceed 0.25 N/m² in July
+(Risien and Chelton 2008, SCOW, citing Huang et al. 2006). The audit of
+the end states (`scripts/verticalAudit.mjs`, each on its own code): day
+94 global rain 2.36 → 2.49 and evaporation 2.41 → 2.50 mm/d (Earth
+2.6–2.8), the Pacific ITCZ's rain 6.78 → 5.75 mm/d, SE Pacific low cloud
+0.38 → 0.42, the zonal rain peak 9.12 → 9.81 mm/d, cloud effects −58.3 →
+−59.7 and 20.1 → 20.1 W/m²; day 368 rain 2.46 → 2.63, evaporation 2.34 →
+2.43, ITCZ 2.77 → 2.48, SE Pacific low cloud 0.24 → 0.30, zonal peak 5.51
+→ 6.08 mm/d, shortwave effect −56.7 → −60.0; day 193 rain 2.48 → 2.44,
+evaporation 2.44 → 2.37, ITCZ 6.07 → 9.93, SE Pacific low cloud 0.29 →
+0.34, zonal peak 5.73 → 8.93 mm/d, cloud effects −58.8 → −59.4 and 19.1 →
+19.9 W/m², the day's ASR − OLR −10.3 → −9.1 W/m²; N=128 day 186 rain
+2.15 → 2.34, evaporation 2.21 → 2.25, ITCZ 3.60 → 3.75, SE Pacific low
+cloud 0.21 → 0.19, zonal peak 4.97 → 5.67 mm/d, cloud effects −50.4 →
+−50.8 and 16.8 → 16.7 W/m². The land's skin falls by 1.7–2.7 K and its
+air much less: at day 193's end over the land off the ice sheets the
+lowest air 17.50 → 17.15 °C and the skin 19.34 → 17.15 °C (the skin
+was 1.8 K above the air and now sits on it), the global lowest air 15.77
+→ 15.65 °C.
+
+Step cost under the exclusive lock (each engine's own day-193 and day-186
+state, 128 steps after 16, twice): N=64 27.31–27.33 → 27.31–27.61 ms a
+step (7.0 → 7.0–7.1 s a model day), N=128 116.8–117.3 → 117.2–117.3 ms
+(59.8–60.0 → 60.0–60.1 s a model day).
+
+Parity (N=6, one step from random land, snow, trees and sea ice, 361
+cells): C_D and C_H agree to 2–8·10⁻⁶ relative over open sea, forest,
+other land, snow and the ice sheets and 6.5·10⁻⁵ over sea ice, the
+reference to 8·10⁻⁶, latent heat to 0.04 W/m² and the net surface flux to
+0.06 W/m²; eight steps over the continent on bl34: Ts 2.5·10⁻⁴ K, θ rms
+4.4·10⁻⁷, column water rms 9.7·10⁻⁷. `exchange` 'fixed' reproduces the
+digests unchanged. Tests that feed the boundary layer a hand-made
+surface or compare deck regimes, rain sums and cloud effects that one
+switching column moves run on 'fixed', the surface they were written for.
+
+The review's checks (Oct 2). On the real state eight64 day 183, both
+engines from one copy: the CPU's implicit drag changes each edge
+column's momentum by Δt τ to 8·10⁻¹⁴ of the total |Δt τ| (worst edge
+1.5·10⁻¹⁰ kg/m/s against a largest Δt τ of 2.2·10³), and the ocean receives the stored
+stress unchanged (on the GPU the ocean's stress is the same PH_STRESS
+times the ice's transmission). Engine parity (rms over the grid of the
+lowest layer's θ and u and of Ts; the 'fixed' exchange's own in
+brackets): after one step θ 1.2·10⁻² K (9.6·10⁻⁴) and u 3.5·10⁻³ m/s
+(7.6·10⁻⁴), the largest differences in moist-boundary-layer columns of
+the coupled regime switching between engines; after 4 steps θ 6.2·10⁻³
+(3.8·10⁻³), u 3.3·10⁻³ (3.6·10⁻³), Ts 5.7·10⁻² K (5.7·10⁻²); after 16
+θ 3.2·10⁻² (2.7·10⁻²), u 1.9·10⁻² (1.7·10⁻²), Ts 0.18 K (0.18); C_D and C_H after
+one step 1.7·10⁻⁵ relative (largest 1.9·10⁻⁴), the stored stress
+5.5·10⁻⁵ N/m², latent heat 2.3·10⁻³ W/m². 'fixed' on the CPU reproduces
+3db505a bit for bit over nine N=64 steps from that state (every state
+array, the land, the ocean and its stress), both by default and with
+the sweep's `dragCoefficient` 1.3·10⁻³; on the GPU it differs from
+3db505a in the last bits (357 θ values after one step, at most 3 f32
+ulps), the shader compiler's rounding of the edited kernels. Workers
+reproduce the serial CPU step bit for bit with land (N=8, six steps,
+both exchanges). The drag and heat exchange over one step,
+λ = ρ C U Δt/m₁ with m₁ the lowest layer's mass, after four steps
+(N=64 Δt 337.5 s, N=128 Δt 168.75 s): forest λ_D mean 0.88 (largest
+2.3; 4.7 on the first step, in the winds of the fixed drag), λ_H 0.95 (largest 2.2, above 1 in 47 % of the forest cells, above
+2 in 0.6 %) at N=64 and λ_H 0.52 (largest 1.24) at N=128; the open sea
+λ_H at most 0.32. The drag is implicit; the heat and vapour fluxes stay
+explicit sources into the lowest layer. Over 96 N=64 steps the forest's
+sensible heat has a mean step-to-step second difference of 0.7 W/m²
+against 0.05 on 'fixed' (|H| 37–42 W/m²) and reverses in 0.4–0.5 % of
+step pairs by more than 5 W/m² each way (0.0 % on 'fixed'), with no
+growth; at N=6 and Δt 900 s, where λ_H reaches 13 over a continent of
+forest, 192 steps stay finite with the lowest layer's θ reversing in
+0.09 % of step pairs. The three-day runs from nine64 day 91 and eight64
+day 183, re-run from copies (3db505a against cf1cdea), reproduce
+the tables above to their last digit.
+
+Subgrid orography (reported, not built). Climate models add two
+stresses over mountains that the resolved terrain and the roughness
+lengths above do not give. (1) Turbulent orographic form drag (Beljaars
+et al. 2004, IFS eqs. 3.54–3.57): a drag ∂U/∂t = −C_tofd(z) |U| U spread
+over the lowest kilometre or two, C_tofd = α β C_md C_corr 2.109
+e^(−(z/1500)^1.5) a₂ z^(−1.2) with α 35, β 1, C_md 0.005, C_corr 0.6 and
+a₂ from σ_flt, the standard deviation of the orography filtered to the
+3–22 km band; for 10 m/s from the lowest level (20 m) up, σ_flt 25, 50,
+100 and 200 m give 0.03, 0.13, 0.52 and 2.1 N/m² (an effective C_D at
+20 m of 0.3, 1.2, 4.7 and 19·10⁻³), so over hills of σ_flt near 100 m it
+doubles the grass's drag. σ_flt needs 1 km topography (the IFS's from
+1 km data; GMTED2010 or SRTM30 would serve); the model's 0.25° file
+cannot resolve the band. (2) Gravity-wave drag and low-level blocking
+(Lott and Miller 1997, IFS eqs. 4.1–4.19), from the standard deviation
+μ, anisotropy γ, orientation and mean slope σ of the subgrid orography
+between the 0.25° data and the cell: the wave stress ρ U N (H_eff²/4)
+(σ/μ) G (B cos²ψ + C sin²ψ), taken unblocked (H_eff = 2μ) with G 1 and
+B π/4, at 10 m/s and N 0.01/s, is over N=64 land: μ < 50 m on 0.37 of the
+land (0.003 N/m²), 50–100 m 0.21 (0.020), 100–200 m 0.19 (0.086),
+200–400 m 0.16 (0.31), above 400 m 0.07 (1.37), 0.17 N/m² in the land
+mean; at N=128 0.12 N/m² (less of the variance is subgrid). Blocking adds
+C_d ρ (σ/2μ) U² over the blocked depth where N H/U > 1. These are the
+order of the vegetation's turbulent stress itself over the mountains
+(0.12–0.29 N/m² after); the μ, γ, θ and σ fields can be computed from the
+0.25° file at the model's start.
+
+What still misses: the gustiness is the 3 m/s floor, not a free
+convection velocity (COARE's 1.2 w*, the IFS's w* with z_i 1000 m), so
+calm stable nights keep a flux; the tiles share one skin, so a forest's
+strong coupling and the bare soil's weak one average into one
+temperature (the IFS solves each tile's skin); the grass is one IFS type
+(0.1 m) where the table spans 0.034 (tundra) to 0.47 (tall grass); there
+is no displacement height and no z/L cap; the snow's density is fixed;
+the sea's Charnock coefficient takes the neutral u* and no waves; the
+equatorial Pacific stress stays at −0.018…−0.038 against −0.04…−0.06 (C_D10N
+at 5–7 m/s fell to 0.92–1.05 from 1.36 and the winds there rose by
+0.3–0.4 m/s, so the stress stands; its deficit is the trades' own); and the stress over mountains lacks the orographic terms
+above.
+
+**The land and roughness branches merged (Oct 2).** Branch integrate-c:
+clear-sky 8acba74, then roughness 3f57d8f, both sides kept in every
+hunk; the GPU's physics parameters carry the ozone's year fraction in
+slot 1 and the land's season and moisture weights and hold in 5–7.
+Tests pass but the cloudy columns' layer heating (1.26·10⁻⁴ against
+10⁻⁴ K/day). On exchange 'fixed' now: the frame's deck cloud (two
+columns coupled on the GPU, decoupled on the CPU, 4.6·10⁻² kg/m²), the
+boundary layer under a stratocumulus, the 48-step season means and trees
+(1.2·10⁻⁴ in tree cover under roughness, 5.3·10⁻⁵ fixed); the engines'
+flux check allows 10⁻⁵ of each cell's own flux (snow columns of 2·10⁴
+W/m², 4.6·10⁻⁶ apart). Proofs: 'fixed' with `soilCarbon`, `grassland`
+and `treeline` off reproduces b913e99 (`treeline` off) bit for bit over
+nine CPU steps from eight64_day0183, ocean step included; the benchmark
+prints b913e99's output character for character. On eight64_day0183 and
+nine64_day0091 the CPU closes the shortwave to 4.5·10⁻¹³, the layers'
+shortwave to 1.1·10⁻¹² and longwave to 5.7·10⁻¹³, the surface flux
+against its terms to 9.1·10⁻¹³, the column heating applied against
+atmosphere SW + LW + SH to 1.8·10⁻¹² and the vapour against LE to
+9.1·10⁻¹³ W/m²; each edge column's momentum changes by Δt τ to
+3.2·10⁻¹¹ of 1.3·10³ kg/m/s, and the ocean takes the stored stress on
+every edge. The GPU closes to 1.8·10⁻⁴ (SW), 2.2·10⁻⁴ (LW) and 1.7·10⁻⁴
+(surface) W/m², one physics kernel's column heating to 8.3·10⁻⁴ and its
+vapour to 1.3·10⁻⁴ W/m², and the ocean's stress at its step is the
+step before's stored stress times the ice's transmission to 1.2·10⁻⁷
+N/m². Parity from nine64_day0091 after 1, 4 and 16 steps, rms of the
+lowest layer's T and u and of Ts ('fixed' in brackets): 4.2·10⁻⁵,
+4.9·10⁻⁵, 9.3·10⁻⁶ (8.6·10⁻⁴, 1.3·10⁻⁴, 8.7·10⁻⁶); 1.2·10⁻³, 5.5·10⁻⁴,
+2.6·10⁻⁵ (5.7·10⁻⁴, 2.7·10⁻⁴, 2.4·10⁻⁵); 1.9·10⁻³, 1.0·10⁻³, 1.2·10⁻³
+(1.8·10⁻³, 1.1·10⁻³, 1.6·10⁻³); C_D 1.5·10⁻⁵, 3.8·10⁻⁵, 1.0·10⁻⁴ rms
+relative; regime flips 0, 3, 23 (1, 2, 24). Three one-day segments from
+eight64_day0183 end day 186 byte for byte as one; a fresh ten-day start
+with `LAND_JUMPS=5` split at day 5 ends day 10 byte for byte as unsplit.
+five64_day2190, nine64_day0365 and ten64_day0183 load and step. Classes
+on day 186: partly vegetated 0.200, dense vegetation 0.134, open sea
+0.091 / 0.110 / 0.149, all land snow 0.637; day 94 partly vegetated
+0.159.
+
+Three GPU days, b913e99 in brackets: eight64 day 186 albedo 0.296
+(0.294), ASR 239.8 (240.6), OLR 233.6 (234.2), SWCRE −53.9 (−52.1),
+LWCRE 26.2 (26.4), clear-sky reflectance 0.1374 (0.1405), rain 1.76
+(1.68), cover 0.54 (0.54), 60–90S 0.67 (0.67), Ts 16.31 (16.94), land
+14.73 (16.87) °C; nine64 day 94 0.307 (0.305), 235.9 (236.8), 234.1
+(235.0), −58.5 (−54.6), 26.1 (26.2), 0.1354 (0.1443), 2.39 (2.21), 0.56
+(0.55), 0.64 (0.65), 15.98 (16.76), 15.63 (18.31); ten64 day 186 0.312
+(0.311), 234.4 (234.7), 232.5 (232.7), −59.1 (−57.8), 26.1 (26.6),
+0.1380 (0.1409), 2.54 (2.56), 0.56 (0.56), 0.61 (0.63), 14.61 (15.10),
+11.72 (13.45). Day 94 by class, 8-step samples: forest wind 6.17 → 2.66
+m/s, stress 0.079 → 0.232 N/m², LE 64.3 → 93.2 W/m², skin − air 3.10 →
+0.27 K; grass 6.69 → 4.70, 5.76 → 3.94 K; bare 6.81 → 4.21, 4.50 → 1.55
+K; global evaporation 2.54 → 2.77 mm/d. Southern Ocean τx 40–60S 0.130 →
+0.167, 0.110 → 0.135, 0.131 → 0.163 N/m²; 2S–2N 160E–100W −0.037,
+−0.023, −0.072 → −0.037, −0.023, −0.074. Arctic pack 9.191 → 8.281·10³
+km³ over days 91–94 (8.272), the last day's surface SW at ≥ 70N 125.7
+(119.7), net LW −7.6 (−6.6) W/m². Pacific ITCZ on ten64 day 186 + 1
+CPU day (`scripts/tropicalHeating.mjs`): rain 6.48 (6.02) mm/d,
+convective 0.24 (0.26), lowest-layer RH 0.81 (0.81; Jordan 0.88), T −1.3
+(−1.4) K against Jordan at 1008 hPa, −2.8 (−2.8) at 848, +1.1 (+1.0) at
+516; deep plume fired 0.160 (0.175), fired CAPE 170 (165) J/kg, the
+firing columns' peak 973 (974) hPa. The land's reference coefficient
+2.44·10⁻³ against 1.5·10⁻³ on bl34 (1.89·10⁻³ on five64's cam26): the
+state's day-mean PET 3.31 → 4.00 (eight64), 4.14 → 4.78 (nine64), 2.73
+→ 2.93 (five64) mm/d; land with P/PET < 0.2 by the estimated rain 0.138
+→ 0.241, 0.218 → 0.290, 0.112 → 0.131, the mean moisture factor 0.433 →
+0.369, 0.385 → 0.345, 0.616 → 0.596. Ten days from the atlas: day 10
+albedo 0.347, ASR − OLR +7.2, rain 3.87 mm/d; the record 864000 s, its
+land means season length 0.624 (land branch 0.546), warmth 7.24 (5.46)
+K, rain 1.166 (1.219), demand 2.560 (1.777) mm/d, litter 0.215 (0.177),
+decay 0.747 (0.572). Cost under the exclusive lock (alternated twice
+with b913e99 built by `git archive`): N=64 22.47 and 22.51 → 22.53 and
+22.60 ms, the physics pass 4.67 → 4.75; N=128 98.38 and 98.49 → 99.45
+and 99.53 ms, 19.76 → 20.37; a day at N=128 from eight128_day0183 73 s
+with setup on both.
+
+Review of the two merges (Oct 2). Every conflict rebuilt with `git
+merge-tree`: each line either side added since its merge base is in the
+merged tree or in the hunk that joins both, and no line either side
+removed is back. The suite passes in concurrent per-file runners but
+the cloudy columns' layer heating (1.2592·10⁻⁴ K/day, alone as in the
+suite). On the CPU, 'fixed' with `soilCarbon`, `grassland` and
+`treeMoisture` off gives b913e99's state and land digests after each of
+nine steps from eight64_day0183 with the treeline on as well as off. The
+GPU under the same options is not bit for bit: after one step the
+sensible heat differs in 20051 of 40962 cells by at most 6.1·10⁻⁵ W/m²
+and θ in 475 of 1392708 values by at most 2.4·10⁻⁴ K, and each merge
+alone does as much (the land merge: 22691 cells, 6.1·10⁻⁵ W/m²). Parity
+from eight64_day0183 after 1, 4 and 16 steps, rms of the lowest layer's
+T and u and of Ts (b913e99 in brackets): 4.0·10⁻⁵, 4.9·10⁻⁵, 1.5·10⁻⁵
+(3.4·10⁻⁴, 5.4·10⁻⁵, 1.5·10⁻⁵); 1.8·10⁻⁴, 8.8·10⁻⁴, 7.4·10⁻⁴ (1.8·10⁻⁴,
+8.9·10⁻⁴, 6.9·10⁻⁴); 1.7·10⁻³, 2.7·10⁻³, 1.3·10⁻³ (2.1·10⁻³, 1.7·10⁻³,
+2.2·10⁻³); regime flips 0, 2, 14 (0, 2, 12). One step from
+nine64_day0091: each edge column's momentum changes by Δt τ to
+3.4·10⁻¹¹ kg/m/s on the CPU; the GPU's stored stress is the CPU's to
+4.8·10⁻⁶ rms and 1.5·10⁻⁴ N/m² at most; the GPU's net surface flux is
+its shortwave, longwave, sensible and latent terms to 4.5·10⁻⁴ W/m²
+(forest) and the engines' net surface fluxes agree to 0.16 W/m² there;
+the ocean's stress at the eighth step equals the stored stress of the
+seventh on all 79133 open edges. Splits from eight64_day0183 to day 185:
+at the day with `LAND_JUMPS=184` byte for byte; inside day 185 (a
+step-48 snapshot) with and without that jump, and from a fresh start to
+day 2 with `LAND_JUMPS=1` split inside day 2, every field but the
+saved last-interval means (the two rains, ASR, OLR, albedo and the two
+cloud effects, which cover the segment's part of the day) is byte for
+byte; b913e99 splits inside a day with the same seven fields apart. The
+three days from eight64_day0183 repeat the day lines above to every
+printed digit.
+
 **The apparent heat source, the replicate spread and the longwave
 overlap (Oct 2).** The tropical boxes are now measured by the box-mean
 apparent heat source of the physics Q1, the same without the shortwave
@@ -6873,6 +8145,7 @@ js/
     longwave.module.js      M21: the longwave gases' g-points (table in longwaveTable.module.js, written by scripts/longwaveFit.mjs)
     shortwaveGases.module.js M21: ozone, water vapour, O2 and CO2 absorption of sunlight after CLIRAD-SW
     surface.module.js       ported: surface and top drag, ocean wind stress, convective adjustment
+    exchange.module.js      M22: the surface layer's C_D and C_H by roughness and stability
     boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
     init.module.js          ported: thermal init, balance, seed, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes; ice, snow and soil by source tile

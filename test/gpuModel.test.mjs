@@ -21,7 +21,7 @@ function stats(cpu, gpu) {
   return { maxDiff, at, rms: Math.sqrt(sumSq / cpu.length), rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
 async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, options = {}, moist = {}, boundaryLayer = {}) {
-  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus, ...options }, moist, boundaryLayer });
+  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus, ...options }, moist, boundaryLayer, surface: { exchange: options.surfaceExchange ?? 'roughness' } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
@@ -138,7 +138,7 @@ async function physicsHeating(base, options, dt = 864000, cumulus = null, mixing
   }
   await gpu.tendency();
   const sun = sunDirection(model.time);
-  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, sun[0], sun[1], sun[2], (model.time % YEAR) / YEAR, 0, 0]));
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, (model.time % YEAR) / YEAR, sun[0], sun[1], sun[2], 0, 0, 0]));
   const group = device.createBindGroup({ layout: kernels.physics.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
   pass.setPipeline(kernels.physics);
@@ -513,9 +513,9 @@ test('partly covered ice matches between the engines', { skip: !gpuAvailable && 
  * column's own inversion: the second step, the first with a diagnosed
  * boundary layer, carries the deck.
  */
-async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloudLifetime: 3 * 3600, plumeCape: 70 }, step = null, turbulence = 'dry', ...options } = {}) {
+async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloudLifetime: 3 * 3600, plumeCape: 70 }, step = null, turbulence = 'dry', exchange = 'roughness', ...options } = {}) {
   const physics = { mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options };
-  const model = createModel(new Grid(6), { ocean: false, radiation: physics, moist, boundaryLayer: { turbulence } });
+  const model = createModel(new Grid(6), { ocean: false, radiation: physics, moist, boundaryLayer: { turbulence }, surface: { exchange } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells, theta = model.state[1], q = model.state[4];
@@ -525,7 +525,7 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloud
   }
   model.radiation.mlmSubsidence.fill(seed);
   model.radiation.mlmHeight.fill(height);
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...moist, turbulence } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...moist, turbulence, surfaceExchange: exchange } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }
@@ -637,7 +637,7 @@ test('with deckRest \'inversion\' the carried height starts and rests at the inv
 });
 
 test('with deckRest \'regime\' the deck stands down in surface-driven and decoupled columns whose inversion lies above cumulusCeiling, alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const shared = { deckRest: 'regime', turbulence: 'moist', moist: { cloudLifetime: 3 * 3600, plumeCape: 70 } };
+  const shared = { deckRest: 'regime', turbulence: 'moist', exchange: 'fixed', moist: { cloudLifetime: 3 * 3600, plumeCape: 70 } };
   const high = await mixedLayerPair(4, { ...shared, cumulusCeiling: 3000 }), low = await mixedLayerPair(4, { ...shared, cumulusCeiling: 200 });
   const regimes = (run) => { const n = [0, 0, 0, 0]; for (const r of run.model.boundaryLayer.regime) n[r]++; return n; };
   let shut = 0;
@@ -704,7 +704,7 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
 });
 
 test('the convective and large-scale rain accumulate alike in both engines, cell by cell but for the odd column whose onset falls a step apart (a plume shortens the lifetime of the cloud below its top), and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { model, physics } = await pair(6, 24, 900, 0, false, {}, { rainEvaporation: 0 });
+  const { model, physics } = await pair(6, 24, 900, 0, false, { surfaceExchange: 'fixed' }, { rainEvaporation: 0 });
   const C = model.mesh.nCells, { convectivePrecipitation: convective, largeScalePrecipitation: largeScale, precipitation, rain } = model.moist;
   const largest = Math.max(...convective), largestScale = Math.max(...largeScale);
   const onset = (i) => Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest || Math.abs(largeScale[i] - physics.COND[i]) > 1e-3 * largestScale;

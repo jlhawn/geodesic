@@ -15,6 +15,7 @@ import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
 import { LEVEL_FIELDS, OCEAN_FIELDS, RAIN_MEMORY, VERTICAL_MEMORY } from './frames.module.js';
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
+import { freshJumpDue } from './physics/land.module.js';
 
 const FREEZING = 273.15;
 let model = null, serving = false, running = false, dt = 450, stepsPerFrame = 24, frame = 0;
@@ -183,7 +184,8 @@ async function yieldToPage() {
  * On the GPU a step only queues work: the frame's kernels and read-backs
  * are queued ahead of the batch of steps and the frame is posted after
  * it. The CPU engines step their arrays in place, so they build the
- * frame after the steps.
+ * frame after the steps. A land that started fresh jumps once its
+ * record passes each of FRESH_JUMPS, as the spin-up's default does.
  */
 async function loop() {
   if (!running) return;
@@ -191,6 +193,7 @@ async function loop() {
   let finish;
   batchDone = new Promise((resolve) => { finish = resolve; });
   try {
+    const landAge = model.land ? model.land.record[0] : -1;
     if (model.beginFrame) {
       const capturing = model.beginFrame(subscription);
       capturing.catch(() => {}); // when a step fails first, its error is the one reported
@@ -200,6 +203,7 @@ async function loop() {
       for (let n = 0; n < stepsPerFrame; n++) await model.step(dt);
       await sendFrame();
     }
+    if (model.land && freshJumpDue(model.land.record, landAge, model.land.record[0])) await model.land.jump();
   } catch (error) {
     running = false;
     report(error);

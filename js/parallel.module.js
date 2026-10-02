@@ -134,6 +134,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     run(PHASE.CLOSURE, { dt });
     run(PHASE.ADJUST, { dt });
     run(PHASE.DISSIPATE, { dt });
+    if (model.land) model.land.advance(dt);
     model.time += dt;
     model.radiationSteps++;
   };

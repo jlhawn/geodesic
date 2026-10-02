@@ -68,16 +68,18 @@ test('a strongly stable column stays unmixed', () => {
   for (let k = 0; k < K; k++) assert.equal(theta[k * C + i], before[k * C + i]);
 });
 
-test('momentum mixing brings wind down to the surface layer and conserves each edge column\'s momentum', () => {
+test('momentum mixing brings wind down to the surface layer and changes each edge column\'s momentum by the surface stress alone', () => {
   const state = column(300, -1e-3, 8, 1000);
   const [pi, , u] = state;
   boundaryLayer.diagnose(state);
   const e = mesh.edgesOnCell[mesh.maxEdges * 0];
   const total = () => { let s = 0; const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1]; for (let k = 0; k < K; k++) s += 0.5 * (pi[a] + pi[b]) * dSigma[k] / g * u[k * E + e]; return s; };
   const before = total(), surfaceBefore = Math.abs(u[(K - 1) * E + e]);
-  for (let n = 0; n < 24; n++) boundaryLayer.mixEdges(pi, u, e, e + 1, 900);
+  let lost = 0;
+  for (let n = 0; n < 24; n++) { boundaryLayer.mixEdges(pi, u, e, e + 1, 900); lost += 900 * boundaryLayer.surfaceStress[e]; }
+  assert.ok(boundaryLayer.implicitDrag && lost !== 0);
   assert.ok(Math.abs(u[(K - 1) * E + e]) > surfaceBefore + 0.5, `surface wind ${surfaceBefore} → ${u[(K - 1) * E + e]}`);
-  assert.ok(Math.abs(total() - before) < 1e-10 * Math.abs(before) + 1e-9);
+  assert.ok(Math.abs(total() - before + lost) < 1e-10 * Math.abs(before) + 1e-9, `momentum ${before} → ${total()}, the surface took ${lost}`);
 });
 
 test('serial and parallel engines stay bit-identical with the boundary layer', async () => {
@@ -95,7 +97,7 @@ test('serial and parallel engines stay bit-identical with the boundary layer', a
 
 test('a warm or moist sea surface deepens the momentum mixing; a cool one keeps the neutral profile', () => {
   const { exnerLayer, sigmaMid, kappa } = core.diagnostics;
-  const neutralLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry', stability: false });
+  const neutralLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry', stability: false }), bulkLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry' });
   const sum = (layer) => { let s = 0; for (let k = layer.kTop; k < K - 1; k++) s += layer.mixing[k * C]; return s; };
   const compare = (offset, humidity) => {
     const state = column(300, -1e-3, 8, 1000);
@@ -104,8 +106,8 @@ test('a warm or moist sea surface deepens the momentum mixing; a cool one keeps 
       state[3][i] = state[1][base + i] * exnerLayer[base + i] * Math.pow(sigmaMid[K - 1], -kappa) + offset;
       state[4][base + i] = humidity * saturationHumidity(state[3][i], state[0][i]);
     }
-    boundaryLayer.diagnose(state); neutralLayer.diagnose(state);
-    return sum(boundaryLayer) / sum(neutralLayer);
+    bulkLayer.diagnose(state); neutralLayer.diagnose(state);
+    return sum(bulkLayer) / sum(neutralLayer);
   };
   const warm = compare(3, 1), cool = compare(-3, 1), moist = compare(0, 0.7);
   assert.ok(warm > 1.3 && warm < 2.4, `warm surface: ${warm} times the neutral mixing`);
@@ -297,7 +299,7 @@ test('the shear term comes in continuously with the surface buoyancy flux: w_e f
 async function engines(entrainment) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(6), { ocean: false, levels, boundaryLayer: { entrainment, turbulence: 'dry' } });
+  const pair = createModel(new Grid(6), { ocean: false, levels, boundaryLayer: { entrainment, turbulence: 'dry' }, surface: { exchange: 'fixed' } });
   const { core: c, mesh: m, state, radiation, moist, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -326,7 +328,7 @@ async function engines(entrainment) {
   for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   for (const a of [radiation.mlmGate, radiation.stratiform]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   c.diagnose(pi, theta, q, qc);
-  const gpu = await createGpuCore(m, { levels, physics: { entrainment, turbulence: 'dry' } });
+  const gpu = await createGpuCore(m, { levels, physics: { entrainment, turbulence: 'dry', surfaceExchange: 'fixed' } });
   const { device, buffers, kernels } = gpu, dt = 900;
   gpu.upload(state);
   gpu.uploadPhysics({ mlmGate: radiation.mlmGate });
@@ -383,7 +385,7 @@ test('the dry boundary layer with entrainment matches between the engines on a r
 test('a surface parcel that tops out at the base of a stratocumulus whose descending parcel stops there is coupled to it in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(6), { ocean: false, levels });
+  const pair = createModel(new Grid(6), { ocean: false, levels, surface: { exchange: 'fixed' } });
   const { core: c, mesh: m, state, radiation, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -413,7 +415,7 @@ test('a surface parcel that tops out at the base of a stratocumulus whose descen
   u.fill(0);
   for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   c.diagnose(pi, theta, q, qc);
-  const gpu = await createGpuCore(m, { levels });
+  const gpu = await createGpuCore(m, { levels, physics: { surfaceExchange: 'fixed' } });
   const { device, buffers, kernels } = gpu;
   gpu.upload(state);
   gpu.uploadPhysics();
