@@ -7946,6 +7946,147 @@ the base, with Q1R's column 144.10 W/m² = L P 138.72 + sensible 3.26 +
 the physics' condensate gain 0.87 + dissipation 0.91 + 0.34, and Q2's
 column L(P − E) to the printed digits.
 
+**The merged tree (237263d) proved (Oct 2).** Of 59 test files three
+failed. `bulkSensible` (`js/audit.module.js`) still took the fixed
+`SEA_DRAG`/`LAND_DRAG` and c_p (T_s − T₁): tropicalHeating.mjs's global
+check on the audit test's N=12 state read 62.4969 against the model's
+92.8688 W/m², the difference landing in the lowest layer between the
+sensible and the shortwave terms; it now takes the exchange's C_H and,
+under roughness, the dry static energy with the lowest layer's height read
+before the physics phase (`lowestHeight`): 92.8688 against 92.8688, and on
+the base's day-186 state 15.7736 against 15.7736. The bl34 checkpoint test
+(`test/levels.test.mjs`) went NaN on day 2 at N=6: at cell 51 (42N 116E,
+skin 237–247 K) C_H max(U, 3) Δt/Δz of the lowest layer reached 9.1 and
+then 28 as C_H swung between 2.4·10⁻⁴ and 0.12 with the surface layer's
+stability, the lowest air fell to 157.7 K and both engines were
+non-finite by step 17–19; the same run is NaN on day 5 at the land
+parent and day 6 at the overlap parent (winds 198 m/s), so the test now
+runs its spin-ups on the fixed exchange. Three GPU–CPU cases of
+`test/gpuModel.test.mjs` parted at single columns: at cell 325 (rain
+accumulation, step 23) the GPU stepped from the CPU's exact state gave OLR
+241.54 against 257.66 W/m², having found cloud water in layers 21 and
+23–26 that the CPU had not (the cover floor 0.01, and the boundary layer's
+variance cover 0.33 in layer 21 under 9.5·10⁻⁴ kg/kg of cumulus water); the
+cases now leave out the columns whose OLR or absorbed sunlight part by more
+than 1 W/m² at a step (every other column within 0.11 W/m²) and assert
+their share. The sunlit cloudy columns' heating limit is 1.5·10⁻⁴ K/day
+(1.26·10⁻⁴ at cell 196 layer 24 on both parents). The treeline test passed
+on this tree (tree cover 1.6·10⁻⁵).
+
+**The base on this tree and its replicate spread (Oct 2).** Three days at
+N=64 from eight64_day0183 (`cvb0`) and two replicates with the sea's
+Charnock coefficients ×(1 ± 10⁻⁴) (under the surface layer by roughness the
+sea has no single drag coefficient), budgets over day 186 → 187 by
+tropicalHeating.mjs, base (spread of the three): Pacific ITCZ rain 5.12
+(0.11) mm/d, convective share 0.1141 (0.0017), firing 0.0868 (0.0003),
+Q1R peak bin 700–750 hPa at 2.776 K/day (0.073), centroid 675.0 hPa
+(0.64), large-scale rain converted below 700 hPa 2.388 (0.054) mm/d, T −
+Jordan at 848 / 704 / 516 / 439 hPa −2.32 / +0.19 / +1.91 / +1.92 K
+(0.003 / 0.007 / 0.011 / 0.008), RH 0.926 / 0.637 / 0.647 / 0.614
+(≤ 0.002), RH at 946 / 963 hPa and the lowest layer 0.863 / 0.840 / 0.779
+(≤ 0.0004), the shallow plume's export below 950 hPa 1.858 (0.005) mm/d,
+mean dilute and undilute CAPE of the cloudy plumes 40.4 (0.13) and 132.7
+(0.24) J/kg, undilute plumes stopping at 700–800 hPa 0.582 (0.002), fired
+tops above 300 hPa 0.525 (0.020), wettest cell 157 (3) mm/d; warm pool
+rain 9.79 (0.08), share 0.145 (0.004), firing 0.206 (0.003), centroid
+620.2 (1.0); N Pacific trades rain 1.616 (0.021), share 0.202 (0.007),
+firing 0.176 (0.003); Amazon rain 0.279 (0.005), all convective, peaking
+at 14 LT; the replayed day's global rain 2.406 (0.0003) mm/d. GPU day-186
+means: ASR − OLR 4.36 / 4.28 / 4.26, SWCRE −53.46 / −53.55 / −53.56,
+LWCRE 23.87 / 23.88 / 23.87 W/m².
+
+**The deep plume's closure of Bechtold et al. (2014) (Oct 2).**
+`capeClosure` 'bechtold' (the default; 'threshold' keeps `plumeCape` 120
+J/kg over `plumeRelaxation` 1 h bit for bit on the CPU) on both engines:
+M_b = max(0, PCAPE − PCAPE_bl)/(τ F_P), PCAPE = Σ (T_v,u − T_v)/T_v Δp over
+the layers the CAPE counts, F_P its change per unit base flux from the
+scheme's own tendencies, τ = α_x H/w̄ within 720–10800 s, α_x = 1 + 1.66
+dx/125 km, PCAPE_bl = τ_bl/T* Σ dT_v/dt|nc Δp below the plume's base (at
+most the lowest 12 layers), T* = 1 K, τ_bl = z_base/max(ū_bl, 2 m/s) over
+sea and sea ice and H/w̄ over land; IFS Cy43r1 eqs 6.22–6.29, all IFS
+choices. dT_v/dt|nc is each subcloud layer's change of T_v since the end
+of the previous adjustment (`subcloudVirtual`, PH SUBTV), saved in
+spin-up states. On Jordan's column: PCAPE 199.05 Pa, H 11383 m, w̄ 6.301
+m/s, τ 6631 s at N=32 and 4214 s at N=64, the flux scaling as 1/α_x; a sea
+column under +2 K/d below cloud base with ū_bl 5 m/s: PCAPE_bl 23.9 Pa;
+a land column under +10 K/d: 1583 Pa over τ_bl 1806 s, no deep flux.
+Three days from eight64_day0183 against the base: ITCZ convective share
+0.114 → 0.618, firing 0.087 → 0.375, large-scale rain below 700 hPa 2.39 →
+0.78 mm/d, T − Jordan at 516 / 439 hPa +1.91 / +1.92 → +1.01 / +1.10 K,
+wettest ITCZ cell 157 → 106 mm/d, median τ 85 min, Q1R centroid 675 → 703
+hPa, fired tops above 300 hPa 0.53 → 0.15; warm pool share 0.145 → 0.446;
+trades convective rain 0.33 → 1.34 mm/d, their Q1R peak bin 1000–1050 →
+850–900 hPa; Amazon convective rain none at 11–16 LT, starting at 17–18 LT
+and peaking at 0 LT; the replayed day's global rain 2.41 → 2.16 mm/d; GPU
+day 186 ASR − OLR 4.36 → 9.93, SWCRE −53.46 → −48.46, LWCRE 23.87 → 24.33
+W/m². From ten64_day0183: ITCZ share 0.588, warm pool 0.918, zonal-mean
+rain peak 7.62 mm/d at 8–10N. Acceptance met: ITCZ share, large-scale rain
+below 700 hPa, the 439–516 hPa bias, the wettest cell, the trades' Q1R
+peak, τ, the ten64 shares and peak; not met: warm-pool share, ITCZ firing,
+global rain, trades' convective rain; the Amazon peak later but past
+15–18 LT.
+
+**The deep plume's source: the lowest 50 hPa with the IFS surface-flux
+excess (Oct 2).** `plumeSourceDepth` 'surface50' (the default;
+'boundaryLayer' the previous source, bit for bit on the CPU): the deep
+plume leaves the layers whose midpoints lie within 50 hPa of the surface
+with their mean s_l and q_t plus ΔT = min(3 K, 1.5 J_s/(ρ c_p w*)) and
+Δq = min(2 g/kg, 1.5 J_q/(ρ L w*)), w* = max((B₀ h)^⅓, u*), from the cell's
+surface sensible and latent fluxes (Cy43r1 §6.5, eqs 6.19–6.21; IFS
+coefficients). On Jordan with 10 and 130 W/m² at w* 0.585 m/s: ΔT 0.0217 K,
+Δq 0.113 g/kg, CAPE 301.5 J/kg plain and 321.2 with the excess (273.0 from
+the boundary layer). On element 2's day-186 state after one step the ITCZ
+source's h/cp rises 0.73 K (0.50 the cut, 0.23 the excess), CAPE on the 257
+columns with CAPE from both sources 46.8 → 48.0 → 53.0 J/kg and the
+columns with CAPE 259 → 397 of 687 (warm pool 52.6 → 60.2 J/kg, 506 → 699
+of 851). Three days against element 2: mean candidate dilute CAPE 32.1 →
+29.3 J/kg (the new weak candidates and the stronger convection's
+consumption), undilute plumes stopping at 700–800 hPa 0.407 → 0.386, fired
+tops above 300 hPa 0.148 → 0.133, trades deep firing 0.518 → 0.255 and
+convective rain 1.34 → 1.51 mm/d, ITCZ share 0.618 → 0.685, firing 0.375 →
+0.332, large-scale rain below 700 hPa 0.78 → 0.62 mm/d, T − Jordan at 516 /
+439 hPa +0.93 / +1.01 K, warm-pool share 0.446 → 0.523; Amazon peak 0 →
+18 LT; global rain 2.16 → 2.11 mm/d; GPU day 186 ASR − OLR 10.00, SWCRE
+−47.96, LWCRE 23.96 W/m². From ten64_day0183: ITCZ share 0.658, warm pool
+0.976, zonal peak 7.40 mm/d at 8–10N. Acceptance met: the 700–800 hPa
+stops, the trades' deep firing, the Amazon peak not earlier; not met: the
+candidate CAPE (+20 %), the tops above 300 hPa (+0.05), the trades'
+convective rain.
+
+**The shallow cumulus base flux at Grant's 0.03 (Oct 2).**
+`cumulusClosure` 0.06 → 0.03: M_b = ρ_LCL c w exp(−CIN/w²) with c the
+coefficient Grant (2001, QJRMS 127, 407–421) fitted to LES (M = 0.03 w*)
+and the inhibition factor of Bretherton, McCaa and Grenier (2004) kept, a
+combination of the two published forms; 0.06 restores the previous
+closure bit for bit on the CPU. The trade-wind column lifts 0.02087 against
+0.04174 kg/m²/s. Three days against element 3: the ITCZ shallow plume's
+export below 950 hPa 1.892 → 1.440 mm/d, RH at 946 / 963 hPa 0.896 / 0.866
+→ 0.898 / 0.882, the lowest layer's 0.800 → 0.815, convective share 0.685
+→ 0.823, firing 0.332 → 0.476, large-scale rain below 700 hPa 0.62 → 0.29
+mm/d, Q1R centroid 701 → 715 hPa, wettest cell 105 → 46 mm/d; warm-pool
+share 0.523 → 0.666; N Pacific trades low-cloud cover (the radiation's
+lowCover over 8 CPU steps) 0.164 → 0.128; SE Pacific low cloud
+(verticalAudit.mjs) 0.449 → 0.394, radiative 0.360 → 0.318, rain 0.28 →
+0.26 mm/d; global rain 2.11 → 2.05 mm/d; GPU day 186 ASR − OLR 11.80,
+SWCRE −45.85, LWCRE 23.79 W/m². From ten64_day0183: export 2.31 → 1.50
+mm/d, RH at 946 / 963 hPa 0.904 / 0.876 → 0.918 / 0.901. Acceptance met:
+the lowest layer's RH; not met: the export (≤ 1.1), the 946–963 hPa RH
+(+0.025), the trades' low cover (≥ 0.18) and the SE Pacific guard (no more
+than 0.03 below element 3).
+
+**Elements 2–4 together (Oct 2).** Cost under the exclusive lock, 128
+steps after 16 from nine64 and nine128_day0183, alternated twice with the
+previous convection (`capeClosure` 'threshold', `plumeSourceDepth`
+'boundaryLayer', `cumulusClosure` 0.06): N=64 27.05 and 27.12 → 27.54 and
+27.55 ms (+1.7 %), the adjust pass 4.90 → 5.31 ms; N=128 113.66 and 112.76
+→ 114.17 and 113.85 ms (+0.7 %), the adjust pass 17.23 → 18.38 ms. Over
+the Amazon the boundary-layer part is negative at night: the fired
+columns' mean PCAPE_bl is −1823 Pa against a PCAPE of 1.3 Pa (element 3;
+−1884 and 2.8 with element 4), τ_bl = H/w̄ ≈ 30 min turning a cooling
+subcloud layer into a flux far beyond what the PCAPE asks; 0.42 of the box's
+convective rain falls at 0–6 LT (0.41 with element 4) and none at 11–16 LT. Global rain of the
+replayed day 2.41 (base) → 2.05 mm/d, of which convective 0.27 → 0.79.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
