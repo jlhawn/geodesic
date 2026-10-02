@@ -32,9 +32,11 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * clear-sky gases are the g-points of js/physics/longwave.module.js
  * (scripts/longwaveFit.mjs): water vapour lines and self continuum, CO₂
  * (`carbonDioxide`), ozone, methane (`methane`) and nitrous oxide
- * (`nitrousOxide`), volume mixing ratios of dry air, the ozone the
- * column's (below); each g-point is a gray band whose layer emissivity
- * 1 − exp(−τ) joins the cloud's, 1 − (1 − ε_gas)(1 − ε_cloud), emitting
+ * (`nitrousOxide`), volume mixing ratios of dry air (by default
+ * GREENHOUSE_GASES, NOAA GML's global annual means for 2010, the model's
+ * present day), the ozone the column's (below); each g-point is a gray
+ * band whose layer emissivity 1 − exp(−τ) joins the cloud's,
+ * 1 − (1 − ε_gas)(1 − ε_cloud), emitting
  * its share of σT⁴. Without humidity, or with 'gray', the gases are the
  * three-band gray column: a window band carrying the fraction `window` of
  * blackbody emission is transparent: the surface radiates it straight
@@ -366,7 +368,7 @@ export const VISIBLE_PATH = 1e-3;
 export const REFERENCE_PRESSURE = 101325;
 export const RAYLEIGH_BANDS = [[0.712, 0.0874], [0.288, 0.5687]], LAND_AEROSOL = 0.12, SEA_AEROSOL = 0.07;
 const DIFFUSE_PATH = 5 / 3;
-export const GREENHOUSE_GASES = { carbonDioxide: 390e-6, methane: 1.8e-6, nitrousOxide: 0.323e-6 };
+export const GREENHOUSE_GASES = { carbonDioxide: 388.75e-6, methane: 1798.93e-9, nitrousOxide: 323.18e-9 };
 export const OZONE_COLUMN = [0.26, 0.35];
 const VISIBLE_OZONE = (OZONE_SHARES[6] * OZONE_COEFFICIENTS[6] + OZONE_SHARES[7] * OZONE_COEFFICIENTS[7]) / (OZONE_SHARES[6] + OZONE_SHARES[7]);
 const SHORTWAVE_KEYS = ['absorbed', 'down', 'direct', 'reflectance', 'cloud', 'visibleEscape', 'restEscape'];
