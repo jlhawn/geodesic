@@ -71,17 +71,32 @@ export function heatingProfile(Q, p, dp, { top = 100e2, width = 50e2 } = {}) {
 /*
  * The bulk sensible heat (W/m²) the CPU model's radiation step gives cell
  * i from the lowest air temperature airT and the surface temperature
- * surfaceT it read, and the sea-ice cover before the step (the step's ice
- * update moves the concentration): over partly iced sea the skin blends in
- * open water at the freezing point.
+ * surfaceT it read, the sea-ice cover before the step (the step's ice
+ * update moves the concentration; over partly iced sea the skin blends in
+ * open water at the freezing point) and `height`, lowestHeight's value
+ * before the step. The coefficient is the surface exchange's C_H of the
+ * step where the model has one, seaDrag and landDrag otherwise.
  */
-export function bulkSensible(model, i, airT, surfaceT, cover, { seaDrag, landDrag, freezing, gustiness = 3 }) {
+export function bulkSensible(model, i, airT, surfaceT, cover, height, { seaDrag, landDrag, freezing, gustiness = 3 }) {
   const pi = model.state[0], { sigmaMid, K, R, cp } = model.core.diagnostics;
   let skin = surfaceT;
-  const land = model.geography.land[i];
+  const land = model.geography.land[i], exchange = model.exchange;
   if (!land && cover > 0 && cover < 1) skin = cover * surfaceT + (1 - cover) * freezing;
   const density = pi[i] * sigmaMid[K - 1] / (R * airT);
-  return density * (land ? landDrag : seaDrag) * Math.max(model.surface.windSpeed[i], gustiness) * cp * (skin - airT);
+  const coefficient = exchange ? exchange.heat[i] : land ? landDrag : seaDrag;
+  return density * coefficient * Math.max(model.surface.windSpeed[i], gustiness) * (cp * (skin - airT) - height);
+}
+
+/*
+ * The geopotential of cell i's lowest layer above the ground,
+ * c_p θ_v (Π_lower − Π_layer), which the surface layer by roughness (whose
+ * C_H array is not its C_D's) takes out of the sensible heat, the flux of
+ * dry static energy; 0 under fixed exchange. Read before the physics phase,
+ * whose boundary-layer diagnosis forms the diagnostics again.
+ */
+export function lowestHeight(model, i) {
+  const exchange = model.exchange, { K, C, cp, exnerLower, exnerLayer } = model.core.diagnostics, b = (K - 1) * C + i;
+  return exchange && exchange.heat !== exchange.drag ? cp * model.core.arrays.thetaV[b] * (exnerLower[b] - exnerLayer[b]) : 0;
 }
 
 /*

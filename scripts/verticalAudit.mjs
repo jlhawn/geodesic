@@ -84,7 +84,7 @@ import { divergence } from '../js/dynamics/operators.module.js';
 import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, ringMean } from '../js/physics/radiation.module.js';
 import { LATENT_HEAT } from '../js/physics/moist.module.js';
-import { BOXES, inLongitudes, tropicalBoxOf, heatingProfile, bulkSensible, layerExner } from '../js/audit.module.js';
+import { BOXES, inLongitudes, tropicalBoxOf, heatingProfile, bulkSensible, lowestHeight, layerExner } from '../js/audit.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
@@ -296,10 +296,10 @@ const sensibleOptions = { seaDrag: SURFACE.dragCoefficient ?? SEA_DRAG, landDrag
 const physicsPhase = phases.physics, closurePhase = phases.closure;
 phases.physics = (...args) => {
   deckStart();
-  const air = heated.map((i) => theta[bottom + i] * exnerLayer[bottom + i]), skin = heated.map((i) => state[3][i]), coverBefore = heated.map((i) => model.seaIce.cover(i, ice[i]));
+  const air = heated.map((i) => theta[bottom + i] * exnerLayer[bottom + i]), skin = heated.map((i) => state[3][i]), coverBefore = heated.map((i) => model.seaIce.cover(i, ice[i])), heightBefore = heated.map((i) => lowestHeight(model, i));
   heated.forEach((i, n) => { lowestExner[n] = exnerLayer[bottom + i]; });
   physicsPhase(...args);
-  heated.forEach((i, n) => { sensibleHeat[n] = bulkSensible(model, i, air[n], skin[n], coverBefore[n], sensibleOptions); });
+  heated.forEach((i, n) => { sensibleHeat[n] = bulkSensible(model, i, air[n], skin[n], coverBefore[n], heightBefore[n], sensibleOptions); });
   deckAfter();
   for (let i = 0; i < C; i++) if (Number.isFinite(radiation.stabilityIndex[i])) { acc.eis[i] += radiation.stabilityIndex[i]; acc.eisN[i] += 1; }
 };

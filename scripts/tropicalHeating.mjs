@@ -63,7 +63,7 @@ import { createMoistPhysics, MOIST_DEFAULTS, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DE
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
-import { TROPICAL_BOXES, tropicalBoxOf, heatingProfile, bulkSensible, layerExner } from '../js/audit.module.js';
+import { TROPICAL_BOXES, tropicalBoxOf, heatingProfile, bulkSensible, lowestHeight, layerExner } from '../js/audit.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/tropicalHeating.mjs <state.bin>'); process.exit(1); }
@@ -172,10 +172,10 @@ const sensibleOptions = { seaDrag: SURFACE.dragCoefficient ?? SEA_DRAG, landDrag
 phases.physics = (iFrom, iTo, step, sums) => {
   for (let i = 0; i < C; i++) { physicsExner[i] = exnerLayer[bottom * C + i]; physicsAir[i] = theta[bottom * C + i] * physicsExner[i]; physicsSurface[i] = surfaceT[i]; }
   traced.forEach((i, n) => { for (let k = 0; k < K; k++) staleExner[n * K + k] = exnerLayer[k * C + i]; });
-  const coverBefore = Float64Array.from({ length: C }, (_, i) => seaIce.cover(i, ice[i]));
+  const coverBefore = Float64Array.from({ length: C }, (_, i) => seaIce.cover(i, ice[i])), heightBefore = Float64Array.from({ length: C }, (_, i) => lowestHeight(model, i));
   physicsPhase(iFrom, iTo, step, sums);
   let sensibleSum = 0;
-  const sensibleOf = (i) => bulkSensible(model, i, physicsAir[i], physicsSurface[i], coverBefore[i], sensibleOptions);
+  const sensibleOf = (i) => bulkSensible(model, i, physicsAir[i], physicsSurface[i], coverBefore[i], heightBefore[i], sensibleOptions);
   for (let i = 0; i < C; i++) sensibleSum += area[i] * sensibleOf(i);
   checks.sensibleGlobal = sensibleSum; checks.sensibleModel = sums.sensibleHeat;
   traced.forEach((i, n) => {
