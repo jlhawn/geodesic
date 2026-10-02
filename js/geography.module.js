@@ -347,6 +347,7 @@ export function landSubgrid(fields, land) {
 
 const SUBGRID_FALLBACK = {
   missing: (N) => `no data/subgrid_N${N}.bin for this mesh`,
+  off: () => 'the subgrid files are turned off (subgrid false)',
   terrain: () => 'the terrain is off, and the files hold only the scales below the resolved terrain',
   land: (N) => `data/subgrid_N${N}.bin was made for another land mask`,
 };

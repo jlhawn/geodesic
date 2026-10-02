@@ -63,7 +63,7 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
 export function orographyFields(mesh, topography, geography, phis, subgrid, g) {
   const fields = phis ? meshSubgrid(mesh, subgrid) : null, fitted = fields ? landSubgrid(fields, geography.land) : null;
   if (fitted) return fitted;
-  subgridFallbackNote(mesh, !phis ? 'terrain' : fields ? 'land' : 'missing');
+  subgridFallbackNote(mesh, !phis ? 'terrain' : fields ? 'land' : subgrid === false ? 'off' : 'missing');
   return { ...subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / g) : null, geography.land), raster: true };
 }
 

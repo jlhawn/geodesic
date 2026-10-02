@@ -124,7 +124,7 @@ test('every mesh the page offers has its file; sea cells hold nothing and the co
   assert.equal(meshSubgrid(buildMesh(new Grid(8))), null, 'no file for N=8');
 });
 
-test('the files serve the bundled land mask with its terrain only: given fields lose their sea cells, and a run without terrain or on another mask takes the raster’s', () => {
+test('the files serve the bundled land mask with its terrain only: given fields lose their sea cells, and a run without terrain, on another mask or with the files off takes the raster’s', () => {
   const N = 16, mesh = buildMesh(new Grid(N)), file = meshSubgrid(mesh), g = 9.80616;
   const model = createModel(new Grid(N), { physics: false, topography }), { geography, surfaceGeopotential: phis } = model;
   const spread = Object.fromEntries(SUBGRID_FIELDS.map(([name]) => [name, Float64Array.from(file[name], (v, i) => (geography.land[i] ? v : 1))]));
@@ -135,6 +135,11 @@ test('the files serve the bundled land mask with its terrain only: given fields 
     else for (const [name] of SUBGRID_FIELDS) assert.equal(fitted[name][i], 0, `sea cell ${i} ${name}`);
   }
   assert.ok(orographyFields(mesh, topography, geography, null, undefined, g).raster, 'no terrain');
+  const said = [], log = console.log;
+  console.log = (line) => said.push(line);
+  const off = orographyFields(mesh, topography, geography, phis, false, g);
+  console.log = log;
+  assert.ok(off.raster && said.length === 1 && said[0].includes('turned off'), `files turned off: ${said.join(' | ')}`);
   const other = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
   const elsewhere = createModel(new Grid(N), { physics: false, topography: other });
   assert.ok(orographyFields(mesh, other, elsewhere.geography, elsewhere.surfaceGeopotential, undefined, g).raster, 'another land mask');
