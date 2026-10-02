@@ -944,6 +944,7 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   assert.equal(now, '1dbd465a5de040d6320e5e2b1b4c2b06');
   assert.equal(modelDigest({ longwaveOverlap: 'random' }, defaults).digest, '361695d69a3e6174ccfd063ef06fed48', 'with the longwave\'s random overlap, the model-top parent\'s digest');
   assert.equal(modelDigest({ longwaveOverlap: 'random' }, defaults, {}, RAYLEIGH_TOP).digest, 'a64fbb13d210cbd6b4d13cdfc32a6fd7', 'with the longwave\'s random overlap and the Rayleigh top, the engine before the longwave overlapped as the shortwave does');
+  assert.equal(modelDigest({}, defaults, {}, RAYLEIGH_TOP).digest, '52b46a99f0e802fa2ad3fdfed1b7487f', 'with the Rayleigh top, the convection parent\'s digest');
   assert.equal(modelDigest({ ...GRAY_GASES, visibleFraction: 0.5, rayleighBands: [[0.712, 0.0874], [0.288, 0.5687]], nearInfraredRayleigh: 0 }, defaults, {}, RAYLEIGH_TOP).digest, '9790266388b2da8b1ca3f6d314c3304a', 'under the gray gases, the visible split and Rayleigh bands before the gas branch\'s and the Rayleigh top, the cloud parent\'s digest');
   assert.notEqual(random, now);
   assert.notEqual(modelDigest({ cloudOverlap: 'maximumRandom' }).digest, random);
