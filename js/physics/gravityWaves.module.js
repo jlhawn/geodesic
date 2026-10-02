@@ -32,7 +32,7 @@ import { cellVector } from '../dynamics/operators.module.js';
  * `absoluteFlux` (K·C, Pa) holds the absolute flux of the waves of both
  * directions that rise through each layer above the source.
  */
-export const GRAVITY_WAVES = { flux: 4.3e-3, sourcePressure: 31500, halfWidth: 40, maxSpeed: 100, speedStep: 4, wavelength: 300e3, minimumFrequency: 0.005, breakingAmplitude: null };
+export const GRAVITY_WAVES = { flux: 4.3e-3, sourcePressure: 31500, halfWidth: 40, maxSpeed: 100, speedStep: 4, wavelength: 300e3, minimumFrequency: 0.005, breakingAmplitude: 0.4 };
 
 export function gravityWaveSpectrum({ flux, halfWidth, maxSpeed, speedStep }) {
   const J = Math.floor(maxSpeed / speedStep), shape = Float64Array.from({ length: J }, (_, j) => Math.exp(-Math.LN2 * (((j + 1) * speedStep) / halfWidth) ** 2));
