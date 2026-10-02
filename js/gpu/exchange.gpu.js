@@ -79,7 +79,7 @@ fn xWetness(aero: f32, roots: f32, bareWet: f32, veg: f32, snow: f32, warmth: f3
 fn surfaceExchange(i: i32, pi: f32, skin: f32, wind: f32, concentration: f32, snow: f32, cover: f32, trees: f32, onLand: bool, onIceSheet: bool, wetness: f32, depth: f32) -> vec3<f32> {
   let b = (K - 1) * C + i;
   let z = CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b]) / GRAV;
-  let scale = select(X_GUST_SEA, X_GUST_LAND, onLand); let mixed = max(depth, z);
+  let scale = select(X_GUST_SEA, X_GUST_LAND, onLand); let mixed = max(depth, 0.0) + z;
   var speed = select(max(wind, GUST), sqrt(wind * wind + X_GUST_FLOOR * X_GUST_FLOOR), X_GUSTY);
   let celsius = IN[S_TH + b] * D[D_EXM + b] - 273.15;
   let viscosity = 1.326e-5 * (1.0 + 6.542e-3 * celsius + 8.301e-6 * celsius * celsius - 4.84e-9 * celsius * celsius * celsius);
@@ -95,7 +95,7 @@ fn surfaceExchange(i: i32, pi: f32, skin: f32, wind: f32, concentration: f32, sn
     if (sweep > 0) {
       let buoyancy = -ri * speed * speed * speed * c.y / z;
       var gust = X_GUST_FLOOR;
-      if (buoyancy > 0.0) { gust = scale * pow(buoyancy * mixed, 1.0 / 3.0); }
+      if (buoyancy > 0.0) { gust = max(X_GUST_FLOOR, scale * pow(buoyancy * mixed, 1.0 / 3.0)); }
       speed = sqrt(wind * wind + gust * gust);
     }
     var blend = XBlend(0.0, 0.0);
