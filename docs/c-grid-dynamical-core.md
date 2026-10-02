@@ -5651,6 +5651,181 @@ The work, in order:
      July (1.6 hPa in January, 2 m/s/day), and under MiMA's rule the top
      layer's easterly runs away instead. The winter cap stays 30-40 K
      below AFGL subarctic winter above 2 hPa from either start.
+   The lid's budget and the lid friction (Oct 2, third round). N=64 GPU
+   runs on bl36 one at a time, `STRATOSPHERE=1`, `TOP_BUDGET=8` (the top
+   six layers' zonal-mean budgets sampled eight times a day:
+   `createTopBudget` in `scripts/upperAtmosphere.mjs`, the gravity waves'
+   force as the step applies it, the radiative heating as the physics
+   pass applies it, the sponge's and the friction's by the CPU operators,
+   the resolved terms of the Eulerian mean in σ; the residual is the
+   total less the parameterized forces, so it holds the resolved
+   dynamics, the closures and the dissipation heat). Thirty fresh days
+   with it repeat `runs/igpre64.log` line for line, and days 31-60 from
+   its day-30 snapshot repeat the rest (180 of 180 daily lines).
+   - The lid's momentum from the fresh start, m/s/day at 0.15 / 0.64 hPa
+     (the gravity-wave drag is the lid deposit, one acceleration over
+     both layers):
+
+     | band, days | total | gravity waves | resolved | Coriolis (f − ζ̄) v̄ | eddy u′v′ | vertical advection | eddy u′ω′ |
+     |---|---|---|---|---|---|---|---|
+     | 50-70S, 21-30 | +1.64 / +1.01 | −5.92 | +7.57 / +6.93 | +6.12 / +4.67 | +1.93 / +1.33 | +0.15 / +0.43 | −0.31 / −0.16 |
+     | 50-70S, 51-60 | +3.50 / +2.12 | −11.84 | +15.40 / +13.97 | +16.05 / +11.84 | +1.77 / +1.09 | +0.40 / +0.86 | +0.87 / +0.40 |
+     | 5S-5N, 21-30 | −1.17 / −0.20 | −0.01 | −1.13 / −0.19 | −0.54 / −0.33 | −0.42 / −0.36 | +0.01 / +0.16 | −0.07 / +0.08 |
+     | 5S-5N, 41-50 | −4.85 / −1.85 | −3.93 | −0.99 / +2.08 | −2.19 / −1.23 | +0.32 / +0.22 | +0.44 / +1.92 | +0.04 / +0.72 |
+     | 5S-5N, 51-60 | −1.36 / −1.03 | −5.24 | +3.82 / +4.20 | +1.70 / −1.62 | +0.22 / +1.32 | +0.88 / +3.04 | +0.33 / +0.49 |
+
+     The sponge's zonal force is 0.07 m/s/day at most. The
+     winter jet at the lid is driven by the Coriolis torque on the
+     poleward mean flow (the radiatively driven summer-to-winter drift),
+     which outgrows the lid deposit as the jet strengthens (63 → 127 m/s
+     at 0.15 hPa, 50-70S, days 30 → 60). The top layer's equatorial
+     easterly is driven by the waves: over days 41-50, −3.93 of its −4.85
+     m/s/day, the 1.6 hPa westerly (+47 m/s, the waves' eastward deposit
+     there +2.10 m/s/day) filtering the eastward half so that the westward
+     half reaches the lid. Temperature, K/day at 0.15 / 0.64 / 1.6 hPa,
+     days 51-60: the 70-90S cap radiates −4.33 / −5.74 / −3.61 and the
+     dynamics returns +3.96 / +5.37 / +3.12 (cooling 0.38 / 0.37 / 0.49);
+     20S-20N over days 41-50 +0.60 / +1.08 / +0.95 against −0.83 / −1.26 /
+     −1.03 of ascent. The descent is too weak by the cap's 0.4-0.5 K/day
+     because the drag that drives it is weak: the winter lid's force is
+     −5.9 to −11.8 m/s/day, where the atmosphere's gravity-wave forcing
+     in the winter reaches 100-160 m/s/day near 60° in the upper
+     mesosphere (Sato et al. 2018, JAS 75, the abstract as a search quoted
+     it, the paper not read), and the
+     drag that closed the jet in models of the time was a 2 ± 1 day decay
+     at 65 km, 1 at 70 and ½ at 75 km in winter (the GISS 21-layer model,
+     Rind, Suozzo, Lacis, Russell & Hansen 1984, NASA TM-86183, read),
+     with Holton & Wehrbein (1980) at 5 to 2 days over the same heights
+     (as Rind et al. quote them; HW80 itself, Lindzen 1981, Holton 1982,
+     1983 and Garcia & Solomon 1985 were not reachable). At the
+     equatorial stratopause the observed gravity-wave forcing of the SAO
+     peaks at about 5-7 m/s/day eastward and about 2 westward in
+     reanalyses, the westward up to half the eastward on average in the
+     middle mesosphere (Ern et al. 2021, ACP 21, 13763); the SAO's
+     amplitude near the stratopause is over 30 m/s (Hirota 1978, through
+     Kawatani et al. 2020, ACP 20, 9115), with westerlies all year at 0.1
+     hPa in SABER and MLS winds (Kawatani 2020; both read through a
+     summary of the paper), and easterlies at the solstices and
+     westerlies at the equinoxes near the stratopause (Fleming et al.
+     1990, CIRA-86, read). The lid's westward
+     −5.2 m/s/day at the equator (days 51-60) is about two and a half
+     times the westward forcing observed at the stratopause. CIRA-86 puts the
+     winter jet's maximum in the midlatitude mesosphere ("Maximum
+     velocities generally occur in the midlatitude mesosphere"), so a jet
+     that does not close between 1.6 and 0.15 hPa is not by itself a
+     misfit; its speed is: 146 m/s at 60S on day 60.
+   - Built (both engines): a Rayleigh friction on the zonal-mean wind,
+     the sponge's band mean, u ← ū/(1 + r̄ dt) + (u − ū)/(1 + r dt), the
+     kinetic energy it removes returned as heat through the closure's
+     dissipation (`dampEddies`, the core's `spongeMeanRates`, the GPU's
+     `spongeApply`); its rate a profile of decay time against log-pressure
+     height (H = 7 km) averaged over each layer's mass (`LID_FRICTION`,
+     `lidFrictionRates`, `surface.lidFriction`): `holtonWehrbein` 5 days
+     at 65 km to 2 at 75 km, `rind` 2 / 1 / 0.5 days at 65 / 70 / 75 km,
+     none below 65 km, the last held above. On bl36 both reach the 0-0.3
+     hPa layer alone (9.30 and 2.71 days; nothing at 0.64 hPa or below),
+     on bl34 its 0-2.19 hPa layer (68.7 and 20.0 days). The friction does
+     not conserve the column's momentum: on the July day-121 state it
+     removes the top layer's axial angular momentum at 1/(2.69 days)
+     (2.2·10¹⁷ of 5.1·10²² kg m²/s a second), the layers below untouched,
+     and returns 8.0 mW/m² as heat, each column's heat equal to its
+     kinetic energy lost to 2.2·10⁻¹³; one step's change of the top layer's
+     wind (up to 0.10 m/s) agrees between the engines to 8.3·10⁻⁶ m/s
+     (1.4·10⁻⁶ rms); `test/sponge.test.mjs`: torque 1.0001 of a Rayleigh
+     drag on a zonal flow with the wave moved by 1.3·10⁻³ m/s rms, heat to
+     10⁻⁹ of the kinetic energy removed with the sponge, 20 N=8 steps
+     1.7·10⁻³ m/s apart of the 6.58 m/s the treatment moves.
+   - The candidates, thirty days each from nine64_day0091 and
+     nine64_day0274 remapped (days 92-121 and 275-304) and days 31-60
+     from the fresh start's day-30 snapshot, defaults (no friction) →
+     `holtonWehrbein` → `rind`, round-off twins (the lowest layer's θ ±
+     10⁻⁴ K) in brackets; 0.15 / 0.64 / 1.6 hPa unless stated:
+
+     | | July day 121 | January day 304 | fresh day 60 |
+     |---|---|---|---|
+     | 5S-5N u | −2/+15/−35 [−4/+5/−24] → 0/+30/−31 → +2/+53/−30 [+1/+55/−25] | −18/−16/0 [−18/−15/−9] → −13/−14/+3 → −8/−14/+8 [−8/−16/+15] | −100/−27/+42 → −53/−32/+42 → −23/−30/+43 |
+     | winter 60° u | 105/87/75 [97/84/73] → 93/83/74 → 67/74/72 [67/68/65] | 57/30/18 [50/34/24] → 59/34/20 → 58/38/23 [44/35/24] | 146/98/70 → 91/76/60 → 68/62/53 |
+     | winter jet | 106@59S/91@49S/81@36S → 95@64S/85@54S/78@56S → 70@64S/76@59S/75@56S | 67@34N/81@34N/72@31N → 69@51N/67@34N/65@31N → 58@61N/61@31N/60@29N | 146@59S/102@56S/76@54S → 91@59S/85@49S/73@49S → 68@59S/72@39S/65@39S |
+     | winter cap, 70-90° | 212/226/222 [214/228/224] → 219/234/228 → 234/249/241 [233/248/239] | 218/227/228 [223/232/232] → 218/226/228 → 227/233/232 [232/238/234] | 210/223/218 → 220/232/224 → 233/245/236 |
+     | winter cap, 14 / 24 / 37 / 53 hPa | 196/193/193/194 [197/195/195/196] → 198/195/194/195 → 202/198/196/196 [200/196/195/195] | 215/212/210/208 [213/209/207/205] → 216/214/213/212 → 217/213/210/208 [215/210/207/206] | 197 (14 hPa) → 198 → 202 |
+     | summer cap, 70-90° | 245/270/274 [245/271/274] → 241/267/272 → 235/262/270 [235/262/270] | 242/270/278 [242/270/278] → 238/266/275 → 233/262/273 [232/261/272] | 244/270/270 → 242/268/269 → 238/264/267 |
+     | 20S-20N T | 229/256/262 → 228/256/262 → 227/255/261 | 226/252/260 → 226/252/260 → 226/251/260 | 220/247/257 → 226/250/257 → 226/249/258 |
+     | global T, 0.15-14 hPa | 230.0/253.6/257.0/243.6/229.2/220.6 → 230.2/253.4/257.3/243.8/229.3/220.7 → 230.0/253.4/257.8/244.1/229.4/220.8 | 229.2/252.6/257.0/243.9/229.0/220.1 → same → 229.2/252.5/257.5/244.0/229.1/220.2 | 227.7/252.8/256.6/242.5/227.4/219.0 → 229.1/252.6/256.8/242.5/227.4/219.0 → 229.0/252.7/257.4/242.7/227.6/219.1 |
+     | top six layers' largest wind, Courant, last day | 132, 0.42 [133, 0.42] → 155, 0.50 → 144, 0.46 [135, 0.43] | 118, 0.38 [103, 0.33] → 119, 0.38 → 95, 0.30 [95, 0.30] | 156, 0.50 → 123, 0.39 → 95, 0.30 |
+     | the same, largest of the run | 140, 0.45 [142, 0.45] → 155, 0.50 → 161, 0.52 [146, 0.47] | 155, 0.50 [148, 0.48] → 132, 0.42 → 126, 0.40 [127, 0.41] | 159, 0.51 → 124, 0.40 → 112, 0.36 |
+
+     AFGL's layer means at 0.15 / 0.64 / 1.6 / 3.5 hPa: subarctic winter
+     250 / 256 / 241 / 227, subarctic summer 233 / 274 / 275 / 261,
+     tropical 235 / 266 / 265 / 252 (`scripts/standardAtmospheres.mjs`
+     on bl36). Trends over the last ten days (m/s/day; K/day): July
+     `rind` 5S-5N +0.48 / +3.52 / +0.16 [+0.18 / +3.65 / +0.32], 60S +1.56
+     / +2.15 / +2.05 [−0.33 / +0.42 / +0.47], the 70-90S cap +0.02 / −0.02
+     / −0.18 [+0.05 / +0.06 / −0.20] (defaults −0.31 / −0.26 / −0.39);
+     January `rind` 60N +4.38 / +3.66 / +3.03 [+2.92 / +3.83 / +4.09]
+     (defaults +5.79 / +3.80 / +3.44), the 70-90N cap −0.64 / −1.07 /
+     −1.28 [+0.01 / −0.21 / −0.92] (defaults −1.20 / −1.55 / −1.46); fresh
+     days 51-60 `rind` 5S-5N −0.29 / −1.88 / −0.73, 60S +0.75 / +0.52 /
+     +0.74, the 70-90S cap +0.20 / +0.08 / −0.15 (defaults −0.95 / −0.81 /
+     −0.60, +5.21 / +2.67 / +1.38, −0.41 / −0.39 / −0.53); global layer
+     means −0.18 to +0.04 K/day in every run. Thirty fresh days (to day
+     30): 5S-5N 0/+10/+34 → −14/+3/+36 → −6/+8/+30, 60S 67/49/34 →
+     48/35/23 → 43/42/35, the 70-90S cap 213/231/230 → 221/238/237 →
+     229/244/238, the top six layers' largest wind and Courant number
+     over the run 99 m/s, 0.32 → 92, 0.30 → 79, 0.25.
+   - The lid's budget under `rind`, m/s/day at 0.15 / 0.64 hPa: fresh days
+     51-60, 50-70S friction −23.13 / 0, waves −8.85, Coriolis +33.79 /
+     +8.46, total +0.67 / +0.53; July days 112-121 friction −22.16, waves
+     −10.25, Coriolis +30.01 / +6.19; the 70-90S cap's descent +8.02 /
+     +9.55 / +5.32 K/day against radiation −7.94 / −9.53 / −5.48 (fresh
+     days 51-60). At the equator the friction holds the top layer
+     (+8.03 m/s/day at −23 m/s against the waves' −5.26, fresh days
+     51-60), and in July it does not reach the 0.64 hPa layer, whose
+     westerly the waves push at +4.28 / +4.47 m/s/day [twin] with the
+     Coriolis torque −1.91 / −1.97 against the defaults' −3.06 / −3.26
+     (days 92-121): +53 / +55 m/s on day 121, where the solstice's
+     stratopause is easterly.
+   - Troposphere, means of the first and the last ten days, balance /
+     OLR (W/m²) / rain (mm/d): July defaults +1.98 / 234.26 / 2.362 and
+     −6.07 / 238.46 / 2.695 [+1.97 / 234.30 / 2.359 and −6.23 / 238.23 /
+     2.774], `rind` +2.03 / 234.27 / 2.363 and −6.07 / 238.81 / 2.714
+     [+2.01 / 234.26 / 2.365 and −6.03 / 238.71 / 2.693]; January
+     defaults +8.69 / 223.53 / 2.166 and +3.12 / 229.33 / 2.672 [+8.67 /
+     223.53 / 2.163 and +2.90 / 229.63 / 2.751], `rind` +8.62 / 223.56 /
+     2.161 and +2.13 / 229.79 / 2.710 [+8.57 / 223.57 / 2.163 and +3.40 /
+     229.79 / 2.640]; fresh days 21-30 defaults +2.13 / 229.92 / 2.875,
+     `rind` +3.46 / 229.23 / 2.796. `rind` and the defaults differ by up to
+     1.0 W/m² in balance, 0.5 in OLR and 0.04 mm/d over the last ten days,
+     the twins by up to 1.3, 0.3 and 0.08.
+   - Cost, `js/gpu/profile.module.js`, 128 steps after 64 under the
+     exclusive lock, twice each, the step median: N=64 (nine64_day0091 on
+     bl36) 27.7 / 27.9 ms without the friction, 27.8 / 27.8 with it;
+     N=128 (eight128_day0183 on bl36) 116.0 / 116.6 → 116.3 / 117.3 ms
+     (+0.4 %), 59.8 s of steps a model day. The friction runs in the
+     sponge's pass, on layers it already covers.
+   - Final defaults: `lidFriction` `rind` on bl36 (`lidFrictionFor`), none
+     on bl34 and cam26; the sponge, the gravity waves and their lid (85
+     Pa) as above. The validation the readiness rests on, a fresh atlas
+     start to day 150 at N=64 with the defaults (`TAG=<new> N=64 DAYS=150
+     LEVELS=bl36 STRATOSPHERE=1 TOP_BUDGET=8 OCEAN='{"everySteps":8}'
+     node scripts/spinup.mjs`), was not run: its launch was refused by the
+     session's permission check, though the user's approval of N=64 runs
+     of up to 150 days for the model top stands. It would test whether the
+     top six layers' winds and temperatures level or oscillate within
+     bounds over days 100-150 (through the June solstice and a month past
+     it): the top layer's equatorial wind against the SAO's range, the
+     0.64 hPa equatorial westerly that the July runs build to +53 m/s, the
+     winter jet at 60S (68 m/s and +0.75 m/s/day on day 60), the winter
+     cap's approach to AFGL, and the Courant number's margin (0.30 on day
+     60, 0.52 at most in the July runs). Verdict: bl36 is not shown ready for a
+     multi-year run from a fresh start. The friction removes the fresh
+     start's runaway at the lid (day 60: top-layer equatorial wind −23 m/s
+     against −100, the 60S jet 68 against 146 m/s, Courant 0.30 against
+     0.50, the winter cap rising 0.08-0.20 K/day at 0.15-0.64 hPa against
+     falling 0.4) and brings the July winter cap to AFGL at 1.6 hPa, but
+     the 0.64 hPa equatorial wind in July is +53 / +55 m/s and still
+     gaining 3.5 m/s/day, the winter vortex at 14 hPa is 4-6 K warmer in
+     July (202 / 200 K against 196 / 197), and nothing beyond day 60 of a
+     fresh start has been seen.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
