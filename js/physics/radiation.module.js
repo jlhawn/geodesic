@@ -48,8 +48,8 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * cloud. In the shortwave the column's cloud optical depth
  * cloudScattering × path reflects the beam by the two-stream
  * reflectance τ / (τ + 2μ). What reaches the surface is direct beam,
- * exp(−τ/μ) of it less the clear-sky `skylight` fraction, and diffuse
- * light, the rest; the surface reflects each with its own albedo, and
+ * exp(−τ/μ) of it less the `skylight` fraction, and diffuse light, the
+ * rest; the surface reflects each with its own albedo, and
  * the multiple reflections between surface and cloud base (diffuse,
  * at the mean cosine DIFFUSE_MU) are summed. The two albedos are given
  * per cell (open water or sea ice); `albedo` is the default for both.
@@ -280,6 +280,24 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * their magnification 35/√(1224μ² + 1) — times `vaporAbsorption`, each
  * layer taking what its own vapour adds to the path above it; what is
  * left goes on to the clouds and the surface. Dry air absorbs nothing.
+ *
+ * Clear air scatters: the part `visibleFraction` (0.5) of the beam, the
+ * solar spectrum below 0.7 µm, less what ozone takes, has the scattering
+ * depth rayleighDepth × p_s / REFERENCE_PRESSURE + (1 − aerosolAsymmetry)
+ * aerosolAlbedo τ_a added to the cloud's in its two-stream, conservative
+ * Rayleigh scattering with asymmetry 0 and the aerosol's forward peak
+ * counted as transmitted; the rest of the beam meets the cloud alone.
+ * rayleighDepth (0.18, a full atmosphere) gives in this one band the
+ * Rayleigh reflection τ/(τ + 2μ) of a 5778 K solar spectrum above 0.32 µm
+ * under τ(λ) = 0.0088 λ^−4.05 (λ in µm), 0.169 at μ = 0.3 to 0.185 at
+ * μ = 1. τ_a, the aerosol's mid-visible depth, is landAerosol (0.11) over
+ * land and seaAerosol (0.06) over sea and ice sheets; before the two-stream
+ * it absorbs 1 − exp(−(1 − aerosolAlbedo) τ_a m) of that part of the beam,
+ * m the vapour's magnification, and heats each layer by its share of an
+ * aerosol whose density falls off over aerosolHeight (2 km), the fraction
+ * σ^(scaleHeight/aerosolHeight) of it lying above σ. The clear-sky pass
+ * has the same scattering. `skylight` (0) sends that fraction of the
+ * beam reaching the surface as diffuse light in every band.
  */
 export function erf(x) {
   const t = 1 / (1 + 0.3275911 * Math.abs(x));
@@ -302,6 +320,8 @@ export const STABILITY_SIGMA = 0.7;
 export const DECK_CLOUD_LEVELS = 8;
 export const UNDECIDED = 0.5;
 export const VISIBLE_PATH = 1e-3;
+export const REFERENCE_PRESSURE = 101325;
+export const RAYLEIGH_DEPTH = 0.18, LAND_AEROSOL = 0.11, SEA_AEROSOL = 0.06;
 export const SUMMED = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', 'insolation', 'reflectedSolar'];
 export const CLEAR_SUMMED = ['clearAbsorbedSolar', 'clearOutgoingLongwave'];
 
@@ -354,7 +374,8 @@ export function createRadiation(mesh, core, {
   boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, deckRegime = 'inversion', deckBypass = false,
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
-  exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0.15, clearSkyPass = false, buffers = null,
+  exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
+  rayleighDepth = RAYLEIGH_DEPTH, visibleFraction = 0.5, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, land = null, iceSheet = null,
 } = {}) {
   const { K, C, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential, piSigmaDot, p0 } = core.diagnostics;
   const { thetaV } = core.arrays;
@@ -366,6 +387,10 @@ export function createRadiation(mesh, core, {
   const ozoneAbove = (sigma) => (sigma <= 0 ? 0 : (1 + Math.exp(-ozoneHeight / ozoneWidth)) / (1 + Math.exp((-scaleHeight * Math.log(sigma) - ozoneHeight) / ozoneWidth)));
   const beamLeft = (sigma) => Math.exp(-ozoneOpacity * ozoneAbove(sigma));
   const ozoneFraction = Float64Array.from({ length: K }, (_, k) => (beamLeft(levels[k]) - beamLeft(levels[k + 1])) / (1 - Math.exp(-ozoneOpacity)));
+  const scatters = rayleighDepth > 0 || landAerosol > 0 || seaAerosol > 0;
+  const aerosolCell = Float64Array.from({ length: C }, (_, i) => (land && land[i] && !(iceSheet && iceSheet[i]) ? landAerosol : seaAerosol));
+  const aerosolFraction = Float64Array.from({ length: K }, (_, k) => levels[k + 1] ** (scaleHeight / aerosolHeight) - levels[k] ** (scaleHeight / aerosolHeight));
+  const light = { share: 0, depth: 0 }, visibleLight = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 };
   const emissivity = new Float64Array(K);
   const cloudEmissivity = new Float64Array(K);
   const layerCover = new Float64Array(K).fill(1);
@@ -424,7 +449,7 @@ export function createRadiation(mesh, core, {
   const emitted = new Float64Array(K);
   const netFlux = new Float64Array(K);
   const sun = new Float64Array([1, 0, 0]);
-  const budget = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, clearAbsorbedSolar: 0, clearOutgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, stratiform: 0 };
+  const budget = { absorbedSolar: 0, atmosphereSolar: 0, aerosolSolar: 0, outgoingLongwave: 0, clearAbsorbedSolar: 0, clearOutgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, stratiform: 0 };
   const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 }, decked = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 }, probe = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0 };
   const deckLight = { incident: 0, mu: 0, direct: 0, diffuse: 0, path: 0, layer: 0, clear: 0 };
 
@@ -531,6 +556,13 @@ export function createRadiation(mesh, core, {
   }
 
   function shortwave(out, cloudDepth, keep, mu, surfaceAlbedo, diffuseAlbedo) {
+    if (!scatters) { stream(out, cloudDepth, keep, mu, surfaceAlbedo, diffuseAlbedo); return; }
+    stream(visibleLight, cloudDepth + light.depth, keep, mu, surfaceAlbedo, diffuseAlbedo);
+    stream(out, cloudDepth, keep, mu, surfaceAlbedo, diffuseAlbedo);
+    for (const key of ['absorbed', 'down', 'direct', 'reflectance', 'cloud']) out[key] = light.share * visibleLight[key] + (1 - light.share) * out[key];
+  }
+
+  function stream(out, cloudDepth, keep, mu, surfaceAlbedo, diffuseAlbedo) {
     const reflectance = mu > 0 && cloudDepth > 0 ? cloudDepth / (cloudDepth + 2 * mu) : 0;
     let direct = (1 - skylight) * (cloudDepth > 0 && mu > 0 ? Math.exp(-cloudDepth / mu) : 1);
     let diffuse = 1 - reflectance - direct;
@@ -643,7 +675,15 @@ export function createRadiation(mesh, core, {
     }
     if (cloudOverlap === 'maximumRandom' && cloudCover === 'pdf') columnCover = 1 - clearColumn;
     if (!(columnCover > 0)) columnCover = 1;
-    const sunlit = beam - ozoneHeating, vaporHeating = lit ? sunlit * vaporTaken[K - 1] : 0, incident = sunlit - vaporHeating;
+    const sunlit = beam - ozoneHeating, vaporHeating = lit ? sunlit * vaporTaken[K - 1] : 0;
+    let incident = sunlit - vaporHeating, aerosolHeating = 0;
+    if (scatters) {
+      const visible = Math.max(0, visibleFraction * beam - ozoneHeating), aerosol = aerosolCell[i];
+      if (mu > 0 && aerosol > 0) aerosolHeating = -visible * Math.expm1(-(1 - aerosolAlbedo) * aerosol * 35 / Math.sqrt(1224 * mu * mu + 1));
+      incident -= aerosolHeating;
+      light.share = incident > 0 ? Math.min(1, (visible - aerosolHeating) / incident) : 0;
+      light.depth = rayleighDepth * pi / REFERENCE_PRESSURE + (1 - aerosolAsymmetry) * aerosolAlbedo * aerosol;
+    }
     const inCloud = cloudPath / columnCover;
     shortwave(sky, cloudScattering * inCloud, Math.exp(-cloudSolarAbsorption * inCloud), mu, surfaceAlbedo, diffuseAlbedo);
     if (columnCover < 1) {
@@ -686,6 +726,7 @@ export function createRadiation(mesh, core, {
       mixedEmissivity[k] = 1 - (1 - gasEmissivity[k]) * clear;
       temperature[k] = theta[k * C + i] * exnerLayer[k * C + i];
       netFlux[k] = ozoneHeating * ozoneFraction[k];
+      if (aerosolHeating > 0) netFlux[k] += aerosolHeating * aerosolFraction[k];
     }
     if (lit) {
       let taken = 0;
@@ -724,13 +765,14 @@ export function createRadiation(mesh, core, {
     const back = backVapor + backGas + backWindow;
     if (clearSkyPass) {
       shortwave(clearSky, 0, 1, mu, surfaceAlbedo, diffuseAlbedo);
-      budget.clearAbsorbedSolar = incident * clearSky.absorbed + ozoneHeating + vaporHeating;
+      budget.clearAbsorbedSolar = incident * clearSky.absorbed + ozoneHeating + vaporHeating + aerosolHeating;
       budget.clearOutgoingLongwave = upward(vaporFraction, emissivity, surfaceEmission) + upward(gasFraction, gasEmissivity, surfaceEmission) + window * surfaceEmission;
     }
     netFlux[bottom] += sensible;
     const net = absorbedSolar - surfaceEmission + back - sensible - latentHeat * evaporation;
-    budget.absorbedSolar = absorbedSolar + ozoneHeating + vaporHeating + cloudHeating;
-    budget.atmosphereSolar = ozoneHeating + vaporHeating + cloudHeating;
+    budget.absorbedSolar = absorbedSolar + ozoneHeating + vaporHeating + aerosolHeating + cloudHeating;
+    budget.atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating;
+    budget.aerosolSolar = aerosolHeating;
     budget.cloudSolar = cloudHeating;
     budget.outgoingLongwave = outgoing;
     budget.sensibleHeat = sensible;

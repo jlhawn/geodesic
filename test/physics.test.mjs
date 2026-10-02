@@ -21,6 +21,7 @@ const core = createSigmaCore(mesh);
 const { K, C, E } = core.diagnostics;
 const EPS = 1e-12;
 const OVERCAST = { cloudCover: 'overcast' };
+const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15 };
 
 function random(seed) {
   let s = seed >>> 0;
@@ -272,9 +273,9 @@ test('with cloudCover: pdf a cloudy layer covers the part of a uniform total-wat
   };
   for (const [depth, rhc] of [[height + 100, 0.85], [0.5 * height, 0.8]]) {
     const f = 0.5 + 0.02 / (2 * (1 - rhc)), thick = Float64Array.from(qc, (x) => x / f);
-    const partial = run(pdf, depth), inCloud = run(overcast, depth, thick), full = run(overcast, depth);
+    const partial = run(pdf, depth), inCloud = run(overcast, depth, thick), full = run(overcast, depth), clear = run(pdf, depth, new Float64Array(K * C));
     console.log(`cloud of ${(1000 * qc[idx]).toFixed(2)} g/kg in a saturated layer ${height.toFixed(0)} m up, RHc ${rhc}: cover ${f.toFixed(3)}, reflectance ${partial.cloudReflectance.toFixed(4)} against ${full.cloudReflectance.toFixed(4)} overcast`);
-    assert.ok(Math.abs(partial.cloudReflectance - f * inCloud.cloudReflectance) < 1e-12, `reflectance ${partial.cloudReflectance} against ${f} × ${inCloud.cloudReflectance}`);
+    assert.ok(Math.abs(partial.cloudReflectance - (f * inCloud.cloudReflectance + (1 - f) * clear.cloudReflectance)) < 1e-12, `reflectance ${partial.cloudReflectance} against ${f} × ${inCloud.cloudReflectance} + ${1 - f} × ${clear.cloudReflectance}`);
     assert.ok(partial.cloudReflectance < 0.8 * full.cloudReflectance, 'thin cloud in a partly humid layer reflects less than overcast');
     assert.ok(partial.outgoingLongwave > full.outgoingLongwave, 'and closes less of the window');
     assert.ok(partial.closure < 1e-9 * partial.absorbedSolar, `closure ${partial.closure}`);
@@ -896,7 +897,7 @@ function modelDigest(radiation, moist = {}) {
 
 test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 the model is bit-identical to the engine before the mixed-layer deck; by default the deck follows the mixed-layer model', () => {
   const before = '3ca002d1e990a4335a223eb2232c51d0';
-  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST }).digest, before);
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED }).digest, before);
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
   assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
@@ -914,7 +915,7 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
 });
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {
-  const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST };
+  const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, ...OVERCAST, ...UNSCATTERED };
   assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, '3d0c610f9d4aebf624f3b240b5e2f6c1');
   assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, stratusSolar: false, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');
   assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, ...scatteringOnly }).digest, 'da3ea94c450ed3c8ee7b6855a9e70275');

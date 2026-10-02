@@ -1,6 +1,6 @@
 import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf } from './device.module.js';
 import { sigmaInterfaces, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
-import { sunDirection, nearestLayer, STABILITY_SIGMA, UNDECIDED } from '../physics/radiation.module.js';
+import { sunDirection, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_DEPTH, LAND_AEROSOL, SEA_AEROSOL } from '../physics/radiation.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.gpu.js';
 import { MOIST_DEFAULTS } from '../physics/moist.module.js';
 import { SEA_DRAG } from '../physics/surface.module.js';
@@ -30,7 +30,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0) {
   const seq = (names) => { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; };
   const MI = seq([['COE', 2 * E], ['VOE', 2 * E], ['EOC', MAX_EDGES * C], ['ESC', MAX_EDGES * C], ['COC', MAX_EDGES * C], ['NEC', C], ['COV', 3 * V], ['EOV', 3 * V], ['ESV', 3 * V], ['EOE', MAX_EDGES_ON_EDGE * E], ['NEE', E]]);
   const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E], ['PHIS', C]]);
-  const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K]]);
+  const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE]]);
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C]]);
@@ -532,7 +532,8 @@ export const PHYSICS_DEFAULTS = {
   solarConstant: 1362, cloudAbsorption: 130, cloudScattering: 95, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
   mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'maximumRandom', prognosticHeight: true, deckRest: 'regime', cumulusCeiling: 2000, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
-  exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0.15, clearSkyPass: false,
+  exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0, clearSkyPass: false,
+  rayleighDepth: RAYLEIGH_DEPTH, visibleFraction: 0.5, landAerosol: LAND_AEROSOL, seaAerosol: SEA_AEROSOL, aerosolAlbedo: 0.95, aerosolAsymmetry: 0.7, aerosolHeight: 2000,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10,
   diffuseWaterAlbedo: 0.06, iceAlbedo: 0.5, fullAlbedoThickness: 0.5, iceSnowAlbedo: 0.75, iceFullSnow: 20, snowConductivity: 0.31, snowDensity: 300, waterDensity: 1026,
   ...MOIST_DEFAULTS,
@@ -565,6 +566,7 @@ export async function createGpuCore(mesh, {
   const beamLeft = (sigma) => Math.exp(-phys.ozoneOpacity * ozoneAbove(sigma));
   const ozoneFraction = Float64Array.from({ length: K }, (_, k) => (beamLeft(levels[k]) - beamLeft(levels[k + 1])) / (1 - Math.exp(-phys.ozoneOpacity)));
   const gasEmissivity = Float64Array.from({ length: K }, (_, k) => 1 - Math.exp(-phys.gasOpticalDepth * (levels[k + 1] - levels[k])));
+  const aerosolFraction = Float64Array.from({ length: K }, (_, k) => levels[k + 1] ** (phys.scaleHeight / phys.aerosolHeight) - levels[k] ** (phys.scaleHeight / phys.aerosolHeight));
   let kTop = 0;
   while (kTop < K - 1 && sigmaMid[kTop] <= phys.searchTop) kTop++;
 
@@ -607,7 +609,7 @@ export async function createGpuCore(mesh, {
   for (let k = K - 2; k >= 0; k--) gr[k] = cp * (thetaRef[k + 1] * ca[k] + thetaRef[k] * cb[k]);
   gabs[K - 1] = gr[K - 1];
   for (let k = K - 2; k >= 0; k--) gabs[k] = gabs[k + 1] + gr[k];
-  put(lv, L.LV.GR, gr); put(lv, L.LV.GABS, gabs); put(lv, L.LV.SHAPE, shape); put(lv, L.LV.OZ, ozoneFraction); put(lv, L.LV.GASE, gasEmissivity);
+  put(lv, L.LV.GR, gr); put(lv, L.LV.GABS, gabs); put(lv, L.LV.SHAPE, shape); put(lv, L.LV.OZ, ozoneFraction); put(lv, L.LV.GASE, gasEmissivity); put(lv, L.LV.AER, aerosolFraction);
 
   const buffers = {
     MI: storageBuffer(device, mi), MF: storageBuffer(device, mf), LV: storageBuffer(device, lv),

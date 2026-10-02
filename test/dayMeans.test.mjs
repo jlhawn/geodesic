@@ -22,9 +22,10 @@ function stats(cpu, gpu) {
   return { maxDiff, rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
 const relative = (got, expected) => Math.abs(got - expected) / Math.abs(expected);
+const UNSCATTERED = { rayleighDepth: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15 };
 
 async function engines() {
-  const cpu = createModel(new Grid(6), { ocean: false }), gpu = await createGpuModel(new Grid(6), { ocean: false });
+  const cpu = createModel(new Grid(6), { ocean: false, radiation: UNSCATTERED }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation: UNSCATTERED });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();

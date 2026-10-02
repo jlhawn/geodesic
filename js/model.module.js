@@ -60,7 +60,7 @@ export function createModel(gridOrMesh, {
   const nu4 = Math.pow(spacing / Math.PI, 4) / (nu4Hours * 3600);
   const core = createSigmaCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
-  const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, exchangeCoefficients: dragCoefficients, ...radiationOptions });
+  const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, exchangeCoefficients: dragCoefficients, land: geography ? geography.land : null, iceSheet: geography ? geography.iceSheet : null, ...radiationOptions });
   const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, land: geography ? geography.land : null, deckTop: radiation.mlmTop, deckGate: radiation.mlmGate, stratiform: radiation.stratiform, longwave: radiation.longwave, ...boundaryLayerOptions }) : null;
   if (boundaryLayer && boundaryLayer.turbulence === 'moist') radiation.useBoundaryLayer(boundaryLayer.regime, boundaryLayer.mixingTop, boundaryLayer.buoyancyFlux);
   const surface = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, buffers: buffers ? buffers.surface : null, dragCoefficients, ...surfaceOptions });
