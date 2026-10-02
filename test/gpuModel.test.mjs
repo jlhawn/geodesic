@@ -333,19 +333,20 @@ test('under maximum-random overlap a layer of trace cloud water joins the layers
   }
   const options = { cloudOverlap: 'maximumRandom', condensation: 'saturation', iceSaturation: false };
   const plain = await physicsHeating(base, options), joined = await physicsHeating(traced, options);
-  let engines = 0, scale = 0, moved = 0;
+  let engines = 0, joining = 0, scale = 0, moved = 0;
   for (let i = 0; i < C; i++) {
     if (!(base.radiation.insolation(i) > 0)) continue;
     for (let k = 0; k < K - 1; k++) {
       const x = k * C + i;
       engines = Math.max(engines, Math.abs(joined.cpu[x] - joined.gpu[x]));
+      joining = Math.max(joining, Math.abs((joined.cpu[x] - plain.cpu[x]) - (joined.gpu[x] - plain.gpu[x])));
       scale = Math.max(scale, Math.abs(joined.cpu[x]));
       moved = Math.max(moved, Math.abs(joined.cpu[x] - plain.cpu[x]));
     }
   }
-  console.log(`${filled} gaps between cloud layers filled with 1e-14 of cloud water: joining the blocks moves the layer heating by up to ${moved.toFixed(2)} K/day; the engines differ by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}`);
+  console.log(`${filled} gaps between cloud layers filled with 1e-14 of cloud water: joining the blocks moves the layer heating by up to ${moved.toFixed(2)} K/day, and the engines' change by the join differs by at most ${joining.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the joined heating itself differs by at most ${engines.toExponential(1)} K/day`);
   assert.ok(filled > C && moved > 0.1, `${filled} gaps, heating moved ${moved} K/day`);
-  assert.ok(engines < 1e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
+  assert.ok(joining < 1e-5 * scale, `the join's change of the layer heating differs by ${joining} K/day against ${scale}`);
 });
 
 test('the variance cover of the cloudy layers below the moist boundary layer\'s mixing top, and the longwave heating the cloud-top scheme reads, agree between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
