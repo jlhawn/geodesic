@@ -238,11 +238,11 @@ function longCloudShare(twin, i, k, iced) {
   }
   return Math.max(share, iced);
 }
-const fall = { evaporated: new Float64Array(K), convective: new Float64Array(K), sublimated: new Float64Array(K), converted: new Float64Array(K), melted: new Float64Array(K), tags: { low: 0, high: 0, ice: 0 }, ground: 0, rain: 0, streamed: 0, convectiveLeft: 0 };
+const fall = { evaporated: new Float64Array(K), convective: new Float64Array(K), sublimated: new Float64Array(K), refunded: new Float64Array(K), converted: new Float64Array(K), melted: new Float64Array(K), tags: { low: 0, high: 0, ice: 0 }, ground: 0, rain: 0, streamed: 0, convectiveLeft: 0 };
 const reserve = new Float64Array(K);
 function shadowFall(twin, i, s, stream, iced, frozenStream = null) {
   const th = s.theta, qq = s.q, cc = s.qc;
-  fall.evaporated.fill(0); fall.convective.fill(0); fall.converted.fill(0); fall.melted.fill(0); fall.sublimated.fill(0);
+  fall.evaporated.fill(0); fall.convective.fill(0); fall.converted.fill(0); fall.melted.fill(0); fall.sublimated.fill(0); fall.refunded.fill(0);
   let frozen = 0;
   const tags = fall.tags; tags.low = 0; tags.high = 0; tags.ice = 0;
   let rain = 0, convective = 0, streamed = 0, descending = 0;
@@ -268,7 +268,12 @@ function shadowFall(twin, i, s, stream, iced, frozenStream = null) {
     }
     if (stream) {
       convective = Math.max(0, convective + stream[k]);
-      if (frozenStream) frozen = Math.min(convective, Math.max(0, frozen + frozenStream[k]));
+      if (frozenStream) {
+        const arriving = frozen + frozenStream[k];
+        frozen = Math.min(convective, Math.max(0, arriving));
+        const fusion = FUSION_HEAT * (Math.max(0, arriving) - frozen + Math.min(0, arriving)) / (pi[i] * dSigma[k] / g * cp);
+        if (fusion !== 0) { th[idx] -= fusion / exnerLayer[idx]; fall.refunded[k] -= fusion; }
+      }
       const spare = convective - reserve[k];
       if (spare > 0 && k > twin.deep.base && O.plumeRainEvaporation > 0 && O.rainEvaporation > 0 && (O.evaporationInCloud || !(cc[idx] > CLEAR_AIR))) {
         const exl = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;
@@ -549,6 +554,7 @@ moist.adjust = (st, iFrom, iTo, step) => {
       const idx = k * C + i, mass = pi[i] * dSigma[k] / g, now = sa.q[idx] + sa.qc[idx];
       add(n, 'largeScaleEvaporation', k, -L * fall.evaporated[k] / (cp * mass));
       add(n, 'convectiveEvaporation', k, -(L * fall.convective[k] + FUSION_HEAT * fall.sublimated[k]) / (cp * mass));
+      add(n, 'deepMelting', k, fall.refunded[k]);
       const evaporated = fall.evaporated[k] / mass, streamed = fall.convective[k] / mass, converted = -fall.converted[k] / mass;
       water(n, 'largeScaleEvaporation', k, evaporated); water(n, 'convectiveEvaporation', k, streamed); water(n, 'conversion', k, converted);
       water(n, 'iceFall', k, now - replayQt[k] - evaporated - streamed - converted); replayQt[k] = now;

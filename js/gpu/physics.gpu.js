@@ -2042,7 +2042,12 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     }
     if (cuDeep) {
       convective = max(0.0, convective + cuFall[k]);
-      if (PL_MIXED) { frozen = min(convective, max(0.0, frozen + cuFrozen[k])); }
+      if (PL_MIXED) {
+        let arriving = frozen + cuFrozen[k];
+        frozen = min(convective, max(0.0, arriving));
+        let fusion = max(0.0, arriving) - frozen + min(0.0, arriving);
+        if (fusion != 0.0) { IN[S_TH + idx] -= LFUSION * fusion / (mass * CP * D[D_EXM + idx]); }
+      }
       let spare = convective - cuReserve[k];
       if (spare > 0.0 && k > cuBase && PL_EVAP > 0.0 && RAIN_EVAP > 0.0 && (EVAP_IN_CLOUD || !(IN[S_QC + idx] > CLEAR_AIR))) {
         let ex = D[D_EXM + idx];

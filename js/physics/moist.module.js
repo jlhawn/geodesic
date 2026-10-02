@@ -244,12 +244,13 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * (IFS Cy43r1 §6.6.2, with the model's linear ramp in place of the IFS's
  * quadratic one); a rain's ice share takes L_f more to s_li, falls as its own
  * stream and melts in the first layer below it at liquidTemperature or
- * warmer, L_f times it taken from that layer (§6.6.6, there a relaxation over
- * a few layers); below cloud base the evaporation of the stream's ice share
- * takes L + L_f, and what reaches the ground frozen is `convectiveSnow`, to
- * which the surface adds no fusion heat (and from which it takes L_f where the
- * air at the ground is not freezing); the downdraft evaporates only the
- * liquid and melted rain. The flux form carries s_li, so condensate frozen in
+ * warmer, L_f times what arrives there frozen taken from that layer (§6.6.6,
+ * there a relaxation over a few layers); below cloud base the evaporation of
+ * the stream's ice share takes L + L_f, and what reaches the ground frozen is
+ * `convectiveSnow`, to which the surface adds no fusion heat (and from which
+ * it takes L_f where the air at the ground is not freezing); the downdraft's
+ * share is limited by the liquid and melted rain, and frozen rain it takes
+ * where sublimation left less liquid costs L_f more there. The flux form carries s_li, so condensate frozen in
  * the plume that detrains returns to the environment's L-only convention in
  * the detraining layer, and column c_p T + L q stays exact. The plume ends in the layer where w² falls to zero, or in
  * the top layer but one. With `convectionType` 'testParcel' (the default)
@@ -594,7 +595,15 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       }
       if (stream) {
         convective = Math.max(0, convective + stream[k]);
-        if (frozenStream) frozen = Math.min(convective, Math.max(0, frozen + frozenStream[k]));
+        if (frozenStream) {
+          const arriving = frozen + frozenStream[k];
+          frozen = Math.min(convective, Math.max(0, arriving));
+          const fusion = FUSION_HEAT * (Math.max(0, arriving) - frozen + Math.min(0, arriving)) / (pi[i] * dSigma[k] / g * cp);
+          if (fusion !== 0) {
+            theta[idx] -= fusion / exnerLayer[idx];
+            if (trace.convection) downdraftCooling[k] += fusion;
+          }
+        }
         const spare = convective - convectiveReserve[k];
         if (spare > 0 && k > deep.base && plumeRainEvaporation > 0 && rainEvaporation > 0 && (evaporationInCloud || !(qc[idx] > CLEAR_AIR))) {
           const ex = exnerLayer[idx], mass = pi[i] * dSigma[k] / g;

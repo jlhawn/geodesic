@@ -865,6 +865,71 @@ test('over a 265 K surface the mixed-phase plume\'s snow reaches the ground froz
   for (const r of [mixed, liquid]) assert.ok(Math.abs(r.enthalpy) < 1e-15 && Math.abs(r.water) < 1e-15, `enthalpy ${r.enthalpy}, water ${r.water}`);
 });
 
+/*
+ * A column over a surface at Ts whose air keeps the mixing ratio of
+ * saturation at the cloud base, `base` metres up, below it (lapse 9.7 K/km)
+ * and is `humid` saturated above it (lapse 8.5 K/km to 205 K): the plume's
+ * base lies above the 0 °C level, with unsaturated air below it.
+ */
+const coldBase = (Ts, base, humid) => (z, p) => {
+  const top = Ts - 9.7e-3 * base;
+  if (z < base) return { T: Ts - 9.7e-3 * z, q: 0.98 * saturationHumidity(top, 101500 * Math.pow(top / Ts, 3.5)) };
+  const T = Math.max(205, top - 8.5e-3 * (z - base));
+  return { T, q: humid * saturationHumidity(T, p) };
+};
+const COLD_BASES = [276, 278, 280, 283].flatMap((Ts) => [800, 1200, 1600].flatMap((base) => [0.8, 0.95].map((humid) => [Ts, base, humid])));
+
+test('a deep plume whose frozen rain sublimates in the unsaturated air below its cloud base before it melts, or is taken by the downdraft, changes column enthalpy by L_f times the snow reaching the ground only, on the CPU exactly and on the GPU to single precision, alike on both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const dt = 900, model = build({}, 6), C = model.mesh.nCells, { K, exnerLayer } = model.core.diagnostics, { moist } = model;
+  for (let i = 0; i < C; i++) {
+    place(model, i, 101500, coldBase(...COLD_BASES[i % COLD_BASES.length]));
+    setDepth(model, i, 500);
+    model.boundaryLayer.buoyancyFlux[i] = 4e-4; model.boundaryLayer.friction[i] = 0.25; model.radiation.mlmGate[i] = 0.3;
+  }
+  for (const a of model.state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  for (const a of [model.boundaryLayer.depth, model.radiation.mlmGate]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  const [pi, theta, , , q, qc] = model.state;
+  for (let i = 0; i < C; i++) model.core.diagnoseColumn(i, pi, theta, q, qc);
+  const { createGpuCore } = await import('../js/gpu/core.gpu.js');
+  const gpu = await createGpuCore(model.mesh, { levels, physics: {} }), { device, buffers, kernels, layout } = gpu;
+  gpu.upload(model.state);
+  gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate, concentration: model.seaIce.concentration });
+  for (const [field, values] of [['DEPTH', model.boundaryLayer.depth], ['BUOY', model.boundaryLayer.buoyancyFlux], ['USTAR', model.boundaryLayer.friction], ['MIXTOP', model.boundaryLayer.mixingTop]]) device.queue.writeBuffer(buffers.PH, 4 * layout.PH[field], Float32Array.from(values));
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
+  const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+  pass.setPipeline(kernels.adjust);
+  pass.setBindGroup(0, device.createBindGroup({ layout: kernels.adjust.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
+  pass.dispatchWorkgroups(Math.ceil(C / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  const gpuState = await gpu.download(), ph = await gpu.downloadPhysics(), gpuBefore = model.state.map((a) => Float64Array.from(a));
+  const twin = build({}, 6);
+  twin.state.forEach((a, n) => a.set(model.state[n]));
+  for (const field of ['depth', 'buoyancyFlux', 'friction']) twin.boundaryLayer[field].set(model.boundaryLayer[field]);
+  twin.radiation.mlmGate.set(model.radiation.mlmGate);
+  twin.phases.adjust(0, C, dt);
+  const enthalpyOf = (state, i) => { const [p0, th, , , qv] = state, { dSigma, g, cp } = model.core.diagnostics; let h = 0; for (let k = 0; k < K; k++) { const x = k * C + i; h += (cp * th[x] * exnerLayer[x] + LATENT_HEAT * qv[x]) * p0[i] * dSigma[k] / g; } return h; };
+  let sublimating = 0, worstCpu = 0, worstGpu = 0, worstTheta = 0, deep = 0;
+  for (let i = 0; i < C; i++) {
+    const before = budget(model, i);
+    moist.adjust(model.state, i, i + 1, dt);
+    const after = budget(model, i), d = moist.deep, rain = moist.rain[i];
+    if (!d.deep) continue;
+    deep++;
+    let melt = -1;
+    for (let k = 0; k < K; k++) if (moist.convectiveMelted[k] > 0) melt = k;
+    if (melt > d.base) sublimating++;
+    worstCpu = Math.max(worstCpu, Math.abs(after.enthalpy - before.enthalpy - FUSION_HEAT * moist.convectiveSnow[i]) / before.enthalpy, Math.abs(after.water + rain - before.water) / before.water);
+    const freezing = gpuState[1][(K - 1) * C + i] * exnerLayer[(K - 1) * C + i] < MOIST_DEFAULTS.liquidTemperature;
+    worstGpu = Math.max(worstGpu, Math.abs(enthalpyOf(gpuState, i) - enthalpyOf(gpuBefore, i) - (freezing ? FUSION_HEAT * ph.STEPRAIN[i] : 0)) / FUSION_HEAT);
+    for (let k = 0; k < K; k++) worstTheta = Math.max(worstTheta, Math.abs(twin.state[1][k * C + i] - gpuState[1][k * C + i]));
+  }
+  console.log(`${C} cold-based columns: ${deep} deep, ${sublimating} melting below their cloud base; CPU enthalpy less L_f times the snow and water within ${worstCpu.toExponential(1)}; GPU enthalpy off L_f times the precipitation onto freezing air by at most ${worstGpu.toExponential(1)} kg/m² of L_f; θ apart by ${worstTheta.toExponential(1)} K`);
+  assert.ok(deep > C / 3 && sublimating > C / 3, `${deep} deep, ${sublimating} melting below the base`);
+  assert.ok(worstCpu < 1e-15, `CPU ${worstCpu}`);
+  assert.ok(worstGpu < 1e-3 && worstTheta < 1e-3, `GPU ${worstGpu} kg/m² of L_f, θ ${worstTheta} K`);
+});
+
 test('the IFS updraught conversion: on Jordan\'s column each layer rains l (1 − exp(−a Δz)) with a = c0/(0.75 w)(1 − exp(−(l/l_crit)²)) and the Bergeron–Findeisen factor below 268.16 K, nothing where l is at most 0.3 g/kg, and the plume detrains more of what it rains than under the previous conversion, above 400 hPa; a drier free troposphere still tops lower', () => {
   const dt = 600, P = IFS_PRECIPITATION, O = MOIST_DEFAULTS, model = plumeColumn({}), [pi, theta, , , q, qc] = model.state, { K, C, levels } = model.core.diagnostics;
   assert.equal(O.plumeConversion, 'sundqvist');
