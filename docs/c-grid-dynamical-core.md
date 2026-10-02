@@ -8598,6 +8598,375 @@ lock, 128 steps after 16, twice: N=64 22.54 / 22.65 → 24.18 / 24.32 ms
 99.22 / 99.24 → 104.65 / 104.70 ms (+5.5 %; 20.09 → 24.47, 16.43 →
 17.24); a day at N=128 1.1 min of steps on both.
 
+**The terrain's fine scales, from data (Oct 2).** `scripts/subgridTerrain.py`
+(numpy and Pillow: the 30″ filters need FFTs), `scripts/subgridTerrain.mjs`,
+the per-mesh files `data/subgrid_N16.bin`, `_N32`, `_N64`, `_N128`, their
+codec and loader in `js/geography.module.js` (`encodeSubgrid`,
+`decodeSubgrid`, `meshSubgrid`), `js/physics/formDrag.module.js`, the form
+drag in `boundaryLayer.module.js` and `physics.gpu.js`; tests in
+`test/subgridTerrain.test.mjs`, `test/formDrag.test.mjs` and
+`test/orography.test.mjs`.
+
+The data. GMTED2010's 30-arc-second mean elevation (Danielson, J.J., and
+Gesch, D.B., 2011, Global multi-resolution terrain elevation data 2010
+(GMTED2010): U.S. Geological Survey Open-File Report 2011–1073, 26 p.), a
+USGS product and so in the public domain (a work of the U.S. Government;
+cite the report). The 108 tiles of 20° × 30° (`<lat><lon>_20101117_gmted_mea300.tif`,
+lower-left corners 90S…70N and 180W…150E), fetched on Oct 2 2026 with
+curl from
+`https://edcintl.cr.usgs.gov/downloads/sciweb1/shared/topo/downloads/GMTED/Global_tiles_GMTED/300darcsec/mea/<W180…E150>/`
+into `/Users/jlhawn/git_repos/jlhawn/geodesic-terrain-cache` (outside every
+repository, never committed): 17,339,044 to 17,339,080 bytes each,
+1,872,620,024 in all, each equal to the server's Content-Length. The host
+publishes no checksum for them; in its place each tile's own GDAL
+statistics (minimum, maximum, mean, standard deviation of the valid values)
+are reproduced from its data to 10⁻⁶ relative. Each tile is an
+uncompressed GeoTIFF of 3600 × 2400 little-endian int16 (Pillow and a raw
+read agree), WGS 84 (EPSG 4326), pixel scale 1/120°, RasterPixelIsArea, its
+tie point at its named north-west corner less 0.5″ (the grid's half-arc-second
+registration offset, 15 m, not carried further), nodata −32768 on the 720
+rows north of 84N (31,104,000 points) and the sea at 0 m. Spot heights:
+Everest 8625 m at 27.9874N 86.9290E (the summit 8849 m; a 30″ mean), K2
+8190, Aconcagua 6678, Denali 5977, Mont Blanc 4447, the Dead Sea −412 m,
+Vostok 3500 m (the station 3488), Greenland's Summit 3206 (3216), the plains
+at 39N 99W 546 m, the Pacific at 0N 140W 0. `assemble` writes the global
+21600 × 43200 grid (1.87 GB) into the cache in 7 s.
+
+The fields, as IFS Cy47r3 Part IV §11.3 defines them, every smoothing
+with its operator (eq. 11.4: a radial top hat of width Δ with cosine edges
+of half-width δ 1 km), applied by FFT in latitude bands of at most 1° on
+the 30″ grid, the sea and land below sea level at 0 m (`filter`, 77 s):
+- μ, γ, θ, σ (§11.3.4): the 30″ orography smoothed at Δ 5 km and sampled on a
+  2′30″ grid (4.6 km), less the orography the model resolves, its own
+  surface geopotential over g (the 0.25° ETOPO1 raster's cell means, two
+  smoothing passes on the mesh) interpolated linearly on the triangle of
+  cell centres, so the fields hold the scales between 5 km and what the
+  mesh carries; gradients by central differences 5 km each way (the
+  spacing of the IFS's 5 km grid), bilinear between the 2′30″ points; K, L,
+  M, h, h² area-weighted over the 2′30″ points nearest the cell
+  (`subgridOrography` on this grid with `spacing` 5000). The IFS subtracts its
+  own target-resolution smoothing; this model's resolved terrain and land
+  mask are left as they are. Over the land off the ice sheets the
+  residual's cell mean is 19.9 m at N=64 (rms 151 m) and 10.1 m at N=128
+  (rms 117 m), mostly the mesh's two smoothing passes; μ removes it. At
+  0.25° GMTED and the ETOPO1 raster differ by 1.9 m on average (rms 62 m)
+  over land outside Antarctica, 6.5 m (rms 76 m) over Antarctica.
+- σ_flt (§11.3.3): the 30″ orography smoothed at Δ 2 km and at Δ 20 km; the
+  square of the difference averaged over each 2′30″ block (5 × 5 points),
+  the blocks area-weighted over the cell, the square root.
+Sea cells hold zeros (the land mask, as before). Files: a 16-byte header
+and per field one uint16 per cell (μ in steps of 0.1 m, γ 1/65535, θ
+π/65535 from −π/2, σ 10⁻⁵, σ_flt 0.05 m): 25,636 (N=16), 102,436 (N=32),
+409,636 (N=64) and 1,638,436 bytes (N=128), 5–10 s each. The quantization's
+worst error over land, relative with floors of 1 m, 0.01, 0.01 rad, 10⁻³
+and 1 m: μ 0.3–5 %, γ ≤ 1.3·10⁻⁴, θ 2.4·10⁻³ rad, σ 0.5 %, σ_flt 1.1–2.5 %
+(at the floors). Both engines and the page's worker (which fetches
+`data/subgrid_N<N>.bin` for the run's and the device test's N) use them,
+with any value on a sea cell of the run's land mask set to zero; a mesh
+without a file (or whose fetched file does not decode), a run without
+terrain (the files hold only the scales below the resolved terrain) and a
+land mask on which more than 0.5 % of the land cells would hold nothing
+compute the fields from the topography's raster, say why once in the log,
+take Lott and Miller's constants with them and have no form drag.
+
+| land | N=16 | N=32 | N=64 | N=128 |
+|---|---|---|---|---|
+| cells; 2′30″ points a cell | 731; 17148 | 2950; 4271 | 11882; 1069 | 47357; 267 |
+| mean μ, m (0.25° raster) | 292.2 | 202.7 | 141.7 (118) | 100.1 (68) |
+| mean σ (0.25° raster) | 0.0119 | 0.0117 | 0.0113 (0.0043) | 0.0109 (0.0037) |
+| mean γ (0.25° raster) | 0.795 | 0.750 | 0.704 (0.53) | 0.651 (0.42) |
+| μ < 50 / 50–100 / 100–200 / 200–400 / ≥ 400 m | 0.08 / 0.20 / 0.24 / 0.24 / 0.25 | 0.24 / 0.20 / 0.21 / 0.22 / 0.14 | 0.39 / 0.18 / 0.17 / 0.17 / 0.08 | 0.53 / 0.16 / 0.16 / 0.12 / 0.04 |
+| σ_flt mean; rms; off the ice sheets, m | 57.6 | 56.0 | 53.8; 86.5; 57.8 | 51.7; 87.3; 55.8 |
+| σ_flt < 10 / 10–25 / 25–50 / 50–100 / 100–200 / ≥ 200 m | | | 0.27 / 0.24 / 0.15 / 0.16 / 0.14 / 0.05 | 0.30 / 0.24 / 0.14 / 0.14 / 0.13 / 0.05 |
+
+σ from the 5 km data is 2.62 (N=64) and 2.96 (N=128) times the 0.25°
+raster's (the spectral estimate above gave 2.9 and 3.3), μ 1.20 and 1.48
+times (1.15 and 1.37). The land-mean σ_flt is 54 and 52 m against 68–73 m
+extrapolated from the 0.25° band.
+
+Checks (`test/subgridTerrain.test.mjs`):
+- Analytic orography through `filter` on a 5° band at the equator: a ridge
+  of 300 m amplitude at 40 km keeps 207.45 m rms after the 5 km smoothing
+  (the kernel's response, ∫ h J₀(kr) r dr / ∫ h r dr, gives 207.47) and
+  58.39 m in the 3–22 km band (58.30); at 8 km 115.76 (115.95) and 173.18
+  (172.58); an isotropic field sin kx sin ky at 40 km 143.96 (143.46) and
+  74.48 (74.11).
+- An analytic ridge and an isotropic field (amplitude 300 m, 400 waves round
+  the equator) through the per-mesh script on N=16: μ within 2 % of A/√2 and
+  A/2, σ within 3–4 % of the central-differenced slope, γ < 0.03 for the
+  ridge and > 0.95 cos φ for the isotropic field, θ east–west, σ_flt exact.
+- A north–south ridge of 20 km wavelength on 2′30″ rows (N=16): σ within
+  1 % of A k F/√2, F = 0.594 the response of the bilinear 5 km difference
+  (the neighbouring rows' would be 0.683).
+- Three N=64 cells recomputed by `scripts/subgridTerrainHand.py` from the
+  30″ grid by direct sums (each smoothing laid out at its own row's
+  latitude, the cell's members by brute force against its two rings of
+  neighbours, the resolved terrain on the containing triangle, the
+  gradients 5 km each way bilinear between the 2′30″ points, σ_flt over
+  the cell's own 30″ points as the IFS defines it), against the file:
+
+| cell | μ, m | γ | θ, rad | σ | σ_flt, m |
+|---|---|---|---|---|---|
+| the Great Plains, 39.4N 98.7W (754 points; 18732 at 30″) | 30.376 / 30.4 | 0.5388 / 0.5388 | 1.3842 / 1.3842 | 0.003232 / 0.00323 | 15.01 / 15.00 |
+| the Himalayan front, 28.5N 84.4E | 1421.24 / 1421.2 | 0.7991 / 0.7990 | 1.1338 / 1.1338 | 0.08725 / 0.08725 | 461.4 / 462.2 |
+| the Andes, 32.7S 70.2W | 940.09 / 940.1 | 0.9272 / 0.9272 | 0.0603 / 0.0604 | 0.05927 / 0.05927 | 359.3 / 358.8 |
+
+- The spectrum (`spectrum`; land segments of 1024 points wholly above 0 m
+  within 60° of the equator, Hann window, linear trend removed; 918
+  east–west and 6973 north–south segments): slope −1.85 east–west and
+  −1.85 north–south over the filter's band (k 0.00014–0.00112 m⁻¹,
+  wavelengths 45–5.6 km), against Beljaars et al.'s (2004) n₁ −1.9 that the
+  IFS's I_H and k_flt assume (eq. 11.14); −1.68 and −1.69 over 63–10 km;
+  −2.63 and −2.68 over k₀–k₁ (10–2.1 km), where the 30″ cell means'
+  own averaging steepens the spectrum toward the grid scale. The fit
+  recovers −1.91 from a synthetic −1.9 line.
+
+The mountains' drag on these fields. The fields now follow the IFS's
+definition (5 km data less the target orography), so the scheme takes the
+constants IFS Cy47r3 Part IV Chapter 4 documents for them (read from that
+document; Cy43r1's states the same C_d): C_d 2 (eq. 4.17), H_eff = 2(H − Z_blk)
+(eq. 4.8, the factor added in Cy32r2 "because diagnostics indicated that
+without the factor 2, the gravity wave activity was too weak"), G 1.23 (the
+only value the chapter gives, for the elliptical mountain of eq. 4.2 that
+the scheme assumes; it calls G "a function of the mountain sharpness" and
+states no operational value), H_n,crit 0.5, Ri_crit 0.25
+(`OROGRAPHY_DEFAULTS`; `LOTT_MILLER` keeps C_d 1, G 1, factor 1). The
+doubled H_eff enters the wave's launch amplitude δz as well as its stress.
+Eq. 4.37's remark that its /9 equals eq. 4.19's /4 at Z_blk = 0 holds only
+without the factor; taken as eq. 4.8 states it. Against Lott and Miller's
+set the launched stress is 4 × 1.23 = 4.9 times larger for one column, the
+blocking twice; by hand for μ 200 m, σ 0.02, γ 0, 10 m/s and N 0.01/s,
+τ₀ = 4 × 1.23/3 = 1.64 N/m² (ρ 1.2) against 1/3, and the waves, launched at
+α = N δz/U = 1.0 against the critical 0.83, break just above the blocked
+layer.
+
+The turbulent orographic form drag (Beljaars, Brown and Wood 2004) as IFS
+Cy47r3 Part IV §3.4 documents it: ∂U/∂t = −C_tofd(z) |U| U with C_tofd =
+α β C_md C_corr 2.109 e^(−(z/1500)^1.5) a₂ z^(−1.2), a₂ = a₁ k₁^(n₁−n₂),
+a₁ = σ_flt² (I_H k_flt^n₁)⁻¹ and the published α 35, β 1, C_md 0.005, C_corr
+0.6, n₁ −1.9, n₂ −2.8, k₁ 0.003 m⁻¹, k_flt 0.00035 m⁻¹, I_H 0.00102 m⁻¹ (eqs.
+3.55–3.57); C_tofd = 3.161·10⁻⁷ σ_flt² e^(−(z/1500)^1.5) z^(−1.2). It enters
+the boundary layer's implicit edge solve with the surface drag, on every
+layer the solve spans (σ > 0.5, the lowest 15 of bl34's 34, to 5.4 km):
+C_tofd(z)|U| on each layer's diagonal, z the midpoint's height above the
+model's ground and |U| the cell's wind in that layer at the diagnosis (the
+IFS's |U| from the old time level, U implicit; fully implicit here where
+the IFS weights 1.5), averaged onto the edge. The momentum it removes is a
+stress on the ground per edge (`formStress`, on the GPU `PH_FSTRESS`), not
+on the ocean, which takes the surface drag's stress alone; its kinetic
+energy goes to the layers' dissipation heat with the solve's own; σ_flt is
+zero over sea cells. Option `orography.formDrag` (false off, or the
+constants). For σ_flt 100 m, C_tofd is 8.668·10⁻⁵, 1.505·10⁻⁶ and
+7.412·10⁻⁸ m⁻¹ at 20 m, 500 m and 2 km, and ρ ∫ C_tofd U² dz from 20 m at
+10 m/s is 0.565 N/m²; on the files' σ_flt (∝ σ_flt²) that is 0.42 N/m² in
+the land mean at N=64 and 0.43 at N=128 (0.46–0.47 off the ice sheets),
+against the 0.6–0.7 estimated from the 0.25° band.
+
+Checks: a column of the solve with σ_flt 100 m on every cell, a uniform
+10 m/s and no mixing or surface drag gives each land cell's rate as the
+formula by hand times its wind to 10⁻⁹, none over sea cells, each edge
+u/(1 + Δt C_tofd |U|) to 10⁻¹², the stress Σ m C_tofd |U| u and the heat
+equal to the kinetic energy removed to 10⁻¹²; on a real N=16 state each
+edge column loses (τ_surface + τ_form) Δt to 10⁻¹¹ and no sea–sea edge takes
+any form stress; the engines lay the same rates, form stress, surface
+stress and u after one N=16 step to 5.7·10⁻⁶, 5.7·10⁻⁶, 1.2·10⁻⁵ and
+1.8·10⁻⁶ of their largest values. On nine64 day 274 (real state, no
+ocean), the engines after 1, 4 and 16 steps, rms of the difference over
+rms of the CPU's (largest difference over largest value): launched stress
+2.4·10⁻³ (8.8·10⁻³), 1.8·10⁻² (9.8·10⁻²), 1.4·10⁻² (5.9·10⁻²); blocking
+height 1.3·10⁻³ (1.8·10⁻²), 1.9·10⁻² (0.22), 2.0·10⁻² (0.23); orographic
+stress 1.6·10⁻³, 6.1·10⁻³, 9.0·10⁻³; form stress 1.7·10⁻³, 2.3·10⁻³,
+4.1·10⁻³; form rate 4.7·10⁻⁴, 6.2·10⁻³, 4.0·10⁻³; the state's u 8.2·10⁻³,
+6.8·10⁻³ and 1.2·10⁻² m/s rms apart against 8.3·10⁻³, 7.8·10⁻³ and
+1.3·10⁻² with the scheme off, θ 1.0–1.7·10⁻² K either way; the GPU's σ_flt,
+μ and σ equal the file's to float32 in every cell and are zero on every sea
+cell. Ten CPU steps from that state: the largest blocking rate times the
+step 0.54 (50.0N 87.6E), the form drag's 9.0 (30.0N 94.5E, the lowest
+layer), both implicit; the largest wave tendency times the step 6.3 m/s,
+in the top layer (53.7N 159.1E), within the per-step limit; of the
+launched stress 0.9997 taken in the column; the boundary layer's solve
+balances each edge column against its two stresses to 3·10⁻¹¹ of its
+momentum change and heats by the kinetic energy it removes to 6·10⁻¹³; the
+largest change of an edge in that solve 19.5 m/s; every value finite, the
+largest wind 96.1 m/s. From nine64 day 91 (the strongest lowest-layer wind
+of the states, 37.2 m/s): 6.6 and 0.55, balance 1.5·10⁻¹⁰; ten GPU steps
+from eight128 day 183: 6.3 (29.7S 70.2W) and 0.45, every value finite. A
+mesh without a file (N=8, six CPU steps; the raster's fields on N=64, two
+CPU steps from nine64 day 274), the scheme off and the terrain off (N=64,
+two steps) reproduce bd42fa5 bit for bit.
+
+Runs, N=64 GPU, OCEAN `{"everySteps":8}`, ten days from copies of the
+states with 8-step samples, as the diagnosis above (stresses as
+magnitudes of each sample's cell vector, the wave stress the launched
+τ₀ along its direction, the blocking the orographic stress less it):
+bd42fa5 (0.25° fields, Lott and Miller's constants) → the GMTED fields
+with Lott and Miller's constants and no form drag → the IFS's constants →
+with the form drag (these commits). The twin is the last with θ perturbed
+by 10⁻⁷ (relative, random per value).
+
+| nine64 day 274 + 10 | 30–35N | 45–50N | 50–55N | 55–60N | 60–65N | 70–75N | 80–85N |
+|---|---|---|---|---|---|---|---|
+| SLP zonal mean, hPa | 1021.0 → 1020.9 → 1020.3 → 1020.6 | 1012.9 → 1013.3 → 1014.7 → 1014.8 | 1008.1 → 1008.8 → 1011.2 → 1011.3 | 1004.6 → 1005.9 → 1008.9 → 1009.5 | 1001.7 → 1003.2 → 1006.5 → 1007.5 | 998.0 → 1000.0 → 1004.7 → 1004.0 | 1002.8 → 1005.0 → 1011.0 → 1010.1 |
+| u lowest layer, land, m/s | 1.2 → 1.0 → 0.6 → 0.5 | 2.7 → 2.4 → 1.6 → 1.3 | 1.8 → 1.5 → 1.0 → 0.6 | 1.5 → 1.3 → 1.0 → 0.7 | 1.6 → 1.4 → 1.1 → 1.0 | 1.0 → 1.2 → 0.6 → 0.8 | 2.5 → 2.1 → 1.1 → 0.9 |
+| u lowest layer, all | 1.0 → 0.9 → 0.8 → 0.6 | 3.8 → 3.6 → 2.7 → 2.8 | 3.6 → 3.2 → 2.4 → 2.3 | 2.3 → 2.2 → 2.2 → 1.8 | 1.9 → 1.6 → 1.6 → 1.5 | −0.1 → −0.0 → −0.8 → −0.1 | −2.3 → −2.8 → −2.8 → −3.0 |
+| u 850 hPa | 4.2 → 4.0 → 3.8 → 3.6 | 8.6 → 8.3 → 6.7 → 6.9 | 8.2 → 7.5 → 6.2 → 6.0 | 5.9 → 5.7 → 5.5 → 4.8 | 4.6 → 4.2 → 3.9 → 3.8 | 0.5 → 0.6 → −0.5 → 0.6 | −2.0 → −2.1 → −2.0 → −2.3 |
+| u 200 hPa | 19.6 → 19.4 → 19.1 → 19.0 | 28.4 → 28.3 → 27.7 → 27.6 | 33.0 → 32.9 → 32.5 → 32.7 | 32.1 → 31.4 → 31.1 → 31.2 | 24.1 → 23.3 → 22.8 → 22.5 | 7.6 → 7.9 → 6.7 → 7.5 | 1.7 → 2.7 → 2.6 → 1.9 |
+
+The stationary SLP at 45–50N has its maximum at 45W (1025.0 hPa) in
+bd42fa5 and with the fields alone (1024.2), at 95E (1025.5 and 1027.1 hPa)
+with the IFS's constants: a Siberian high where there was none (NCEP–NCAR
+DJF near 1035 hPa at 50N 100E). The 60–65N minimum (the Aleutian bins,
+175W) 983.7 → 983.3 → 988.0 → 987.6 hPa. The southern bands (30–55S) move
+by at most 1.1 hPa and 0.5 m/s.
+
+| nine64 day 91 + 10 | 45–50N | 50–55N | 60–65N | 70–75N | 80–85N | 45–40S | 50–45S | 55–50S |
+|---|---|---|---|---|---|---|---|---|
+| SLP, hPa | 1013.1 → 1013.0 → 1012.8 → 1012.8 | 1010.5 → 1010.5 → 1011.0 → 1011.1 | 1003.5 → 1003.9 → 1004.1 → 1004.5 | 999.2 → 1000.1 → 1001.5 → 1002.1 | 1001.9 → 1002.7 → 1005.4 → 1005.6 | 1012.4 → 1012.2 → 1012.4 → 1012.3 | 1004.9 → 1004.6 → 1004.9 → 1004.9 | 997.2 → 996.9 → 997.4 → 997.6 |
+| u lowest, land; all, m/s | 1.0 → 1.0 → 0.7 → 0.6; 1.8 → 1.8 → 1.5 → 1.3 | 1.5 → 1.4 → 1.3 → 1.1; 2.9 → 2.8 → 2.7 → 2.6 | 1.5 → 1.4 → 1.3 → 1.1; 2.5 → 2.3 → 2.1 → 2.1 | 0.2 → 0.1 → −0.2 → −0.4; −0.1 → −0.1 → −0.5 → −0.8 | 0.5 → 0.5 → −0.8 → −0.3 | 2.7 → 2.4 → 2.0 → 1.6; 6.5 → 6.6 → 6.5 → 6.4 | 3.9 → 3.5 → 2.9 → 2.0; 7.7 → 7.8 → 7.6 → 7.5 | 4.8 → 4.1 → 3.3 → 2.3; 5.8 → 5.7 → 5.4 → 5.2 |
+| u 200 hPa | 12.8 → 12.7 → 12.7 → 12.5 | 19.9 → 20.3 → 20.1 → 19.8 | 19.4 → 18.7 → 18.7 → 18.9 | 7.7 → 7.3 → 7.1 → 7.5 | 1.5 → 1.8 → 0.7 → 0.8 | 44.6 → 44.7 → 44.6 → 44.4 | 38.7 → 38.7 → 38.2 → 38.1 | 28.8 → 28.7 → 28.4 → 28.3 |
+
+Change against the twin's spread over the 5° bands 30–85N (rms; largest):
+
+| | SLP, hPa | u lowest, land | u lowest | u 850 | u 500 | u 200, m/s |
+|---|---|---|---|---|---|---|
+| Dec: bd42fa5 → these commits | 4.71 (7.31) | 1.02 (1.62) | 0.78 (1.28) | 1.21 (2.24) | 1.12 (1.84) | 0.86 (1.56) |
+| Dec: the fields alone | 1.34 (2.20) | 0.28 (0.45) | 0.27 (0.46) | 0.37 (0.68) | 0.51 (1.29) | 0.54 (0.98) |
+| Dec: the form drag alone (against the IFS's constants without it) | 0.68 (1.20) | 0.26 (0.41) | 0.26 (0.64) | 0.47 (1.13) | 0.70 (1.45) | 0.38 (0.77) |
+| Dec: twin | 0.15 (0.27) | 0.05 (0.09) | 0.12 (0.27) | 0.19 (0.41) | 0.19 (0.29) | 0.16 (0.31) |
+| June: bd42fa5 → these commits | 1.95 (3.73) | 0.44 (0.81) | 0.40 (0.78) | 0.57 (0.96) | 0.61 (1.15) | 0.34 (0.72) |
+| June: the fields alone | 0.51 (0.91) | 0.08 (0.15) | 0.15 (0.32) | 0.21 (0.47) | 0.38 (0.91) | 0.38 (0.76) |
+| June: the form drag alone | 0.39 (0.87) | 0.21 (0.55) | 0.23 (0.64) | 0.28 (0.74) | 0.25 (0.49) | 0.29 (0.57) |
+| June: twin | 0.10 (0.24) | 0.04 (0.11) | 0.03 (0.07) | 0.06 (0.12) | 0.10 (0.18) | 0.12 (0.23) |
+
+The December SLP rise at 60–85N (6–7 hPa) is 31 times the twin's rms, the
+land wind's fall 19 times, 200 hPa 5 times; the form drag alone moves the
+zonal means by 2–7 times the twin's spread. The two December twins (the
+fields of 9f1faf7 and of a8105bd) differ in spread by a factor 2.5 (SLP
+0.37 and 0.15 hPa), so these ratios carry that much uncertainty.
+
+Stresses over land, N/m² (bd42fa5 → these commits; lowest-layer speed
+m/s; veg the turbulent surface stress):
+
+| nine64 day 274 + 10 | speed | veg | form | blocking | waves | orographic | total |
+|---|---|---|---|---|---|---|---|
+| the Rockies | 4.22 → 2.38 | 0.254 → 0.086 | 0 → 0.214 | 0.060 → 0.265 | 0.061 → 0.358 | 0.111 → 0.579 | 0.363 → 0.874 |
+| the Andes | 2.49 → 1.33 | 0.113 → 0.051 | 0 → 0.124 | 0.058 → 0.176 | 0.012 → 0.070 | 0.069 → 0.235 | 0.179 → 0.401 |
+| the Himalaya and Tibet | 5.08 → 1.87 | 0.150 → 0.033 | 0 → 0.258 | 0.086 → 0.247 | 0.033 → 0.142 | 0.113 → 0.369 | 0.258 → 0.638 |
+| the Alps (43–48N, 5–17E, above 500 m) | 3.51 → 1.18 | 0.337 → 0.031 | 0 → 0.299 | 0.123 → 0.359 | 0.107 → 0.320 | 0.211 → 0.617 | 0.541 → 0.938 |
+| Greenland | 8.84 → 6.31 | 0.184 → 0.099 | 0 → 0.107 | 0.053 → 0.145 | 0.050 → 0.165 | 0.086 → 0.267 | 0.267 → 0.466 |
+| Antarctica below 2500 m | 6.85 → 5.21 | 0.115 → 0.072 | 0 → 0.027 | 0.035 → 0.076 | 0.032 → 0.109 | 0.056 → 0.146 | 0.169 → 0.243 |
+| land mean | 3.83 → 2.94 | 0.199 → 0.125 | 0 → 0.058 | 0.021 → 0.073 | 0.019 → 0.099 | 0.034 → 0.148 | 0.232 → 0.328 |
+| land 45–55N | 4.33 → 3.11 | 0.351 → 0.192 | 0 → 0.092 | 0.025 → 0.106 | 0.035 → 0.176 | 0.052 → 0.248 | 0.402 → 0.528 |
+| land mean, eastward | | 0.034 → 0.004 | 0 → 0.021 | 0.004 → 0.014 | 0.007 → 0.030 | | 0.045 → 0.069 |
+| land 45–55N, eastward | | 0.201 → 0.064 | 0 → 0.061 | 0.011 → 0.036 | 0.027 → 0.107 | | 0.239 → 0.268 |
+| **nine64 day 91 + 10** | | | | | | | |
+| the Rockies | 2.67 → 1.79 | 0.163 → 0.090 | 0 → 0.100 | 0.014 → 0.068 | 0.010 → 0.073 | 0.022 → 0.125 | 0.184 → 0.313 |
+| the Andes | 2.88 → 1.32 | 0.125 → 0.038 | 0 → 0.166 | 0.120 → 0.306 | 0.036 → 0.184 | 0.152 → 0.462 | 0.273 → 0.658 |
+| the Himalaya and Tibet | 3.70 → 1.62 | 0.115 → 0.035 | 0 → 0.143 | 0.049 → 0.133 | 0.013 → 0.040 | 0.060 → 0.165 | 0.172 → 0.337 |
+| land mean | 3.63 → 3.01 | 0.183 → 0.135 | 0 → 0.044 | 0.017 → 0.054 | 0.011 → 0.061 | 0.024 → 0.099 | 0.207 → 0.276 |
+| **eight128 day 183 + 1** | | | | | | | |
+| the Andes | 4.16 → 1.79 | 0.207 → 0.065 | 0 → 0.294 | 0.047 → 0.227 | 0.050 → 0.332 | 0.078 → 0.490 | 0.281 → 0.837 |
+| the Himalaya and Tibet | 4.54 → 2.19 | 0.142 → 0.049 | 0 → 0.197 | 0.024 → 0.141 | 0.013 → 0.071 | 0.034 → 0.197 | 0.174 → 0.439 |
+| land mean | 4.07 → 3.50 | 0.185 → 0.144 | 0 → 0.058 | 0.009 → 0.044 | 0.010 → 0.069 | 0.015 → 0.093 | 0.200 → 0.292 |
+
+In the December land mean the IFS's constants without the form drag give
+blocking 0.086 and waves 0.117 N/m² (the fields alone 0.049 and 0.043); the
+form drag, slowing the low-level wind, takes 0.058 and leaves blocking
+0.073 and waves 0.099. Over the mountains the vegetation's stress falls to
+9–54 % of its value as the lowest layer's wind halves or more; the total
+over land rises by 41 % (December), 34 % (June) and 46 % (N=128).
+
+Land by cover and the global fluxes (8-step samples, bd42fa5 → these
+commits; wind m/s at the lowest layer, stress the turbulent surface
+stress ρ C_D U |v| in N/m², H and LE upward W/m², skin °C):
+
+| class | eight64 day 183 + 3: wind; stress; H; LE; skin | eight128 day 183 + 1 |
+|---|---|---|
+| forest (trees ≥ 0.5) | 2.70 → 2.18; 0.250 → 0.185; 8.0 → 10.8; 58.5 → 56.0; 14.46 → 14.59 | 2.76 → 2.29; 0.243 → 0.187; 9.1 → 12.2; 67.4 → 64.3; 13.99 → 14.05 |
+| grass (≥ 0.5) | 5.27 → 2.71; 0.173 → 0.062; 22.0 → 19.0; 24.4 → 21.8; 5.02 → 5.47 | 5.31 → 2.67; 0.171 → 0.059; 25.9 → 21.8; 31.2 → 27.8; 4.48 → 4.84 |
+| bare (≥ 0.5) | 3.69 → 3.35; 0.137 → 0.117; 51.0 → 50.6; 23.6 → 23.1; 28.49 → 28.64 | 3.80 → 3.55; 0.142 → 0.126; 61.3 → 60.6; 25.6 → 25.2; 29.62 → 29.68 |
+| mixed land | 3.45 → 2.91; 0.233 → 0.177; 23.9 → 25.8; 41.5 → 39.8; 16.78 → 16.93 | 3.47 → 3.03; 0.233 → 0.190; 33.4 → 34.8; 48.2 → 46.5; 17.57 → 17.61 |
+| snow-covered land | 8.48 → 3.94; 0.250 → 0.073; −17.7 → −6.4; 6.9 → 2.7; −3.24 → −3.66 | 7.95 → 3.37; 0.234 → 0.061; −15.2 → −4.7; 8.5 → 3.4; −4.53 → −4.62 |
+| ice sheets | 10.43 → 8.81; 0.241 → 0.173; −23.2 → −17.6; 2.2 → 1.5; −34.83 → −35.29 | 9.58 → 8.58; 0.203 → 0.162; −17.8 → −15.2; 1.8 → 1.4; −35.30 → −35.43 |
+| global evaporation, mm/d; sensible heat, W/m² | 1.949 → 1.930; 9.92 → 10.36 | 2.042 → 2.021; 11.35 → 11.67 |
+| sea stress; equatorial Pacific τx; Southern Ocean peak, N/m² | 0.089 → 0.087; −0.018 → −0.018; 0.191 → 0.186 at 47.5S | 0.086 → 0.085; −0.022 → −0.022; 0.211 → 0.211 at 57.5S |
+| global surface; land, last day, °C | 16.050 → 16.082; 14.02 → 14.15 | 16.261 → 16.280; 14.95 → 15.02 |
+
+The observed references for the stress over mountains and the
+near-surface wind over hilly land are Beljaars et al.'s (2004); the paper
+was not read here (the approval covered the USGS data only), so no
+observed number is set against these. The circulation references are the
+diagnosis's above: the polar low, 9–13 hPa too deep at 60–75N in
+December, is now 2.5–6 hPa too deep against the NCEP–NCAR zonal mean near
+1010 hPa; the land westerlies at 45–55N, 2.0–3.0 m/s before against ERA5's
+3–5, are now 0.6–1.3 m/s.
+
+Step cost under the exclusive lock (`profileGpu`, bd42fa5 and 35c9fae on
+copies of eight64 day 183 and eight128 day 183, 128 steps after 16,
+twice): N=64 20.81–20.89 → 21.21–21.42 ms a step (5.34 → 5.46 s a model
+day), the adjustment and momentum kernels 4.34–4.36 → 4.57–4.67 ms and the
+physics, boundary-layer and orography kernels 3.34–3.35 → 3.50–3.57 ms;
+N=128 91.02 → 92.61–92.69 ms (46.6 → 47.4 s a model day), those kernels
+15.90–15.95 → 16.63–16.71 and 13.36–13.41 → 13.94–14.03 ms. The form drag
+adds (K − k_top + 1) C + E floats to the GPU's physics buffer (16 C + E,
+12.4 MB at N=128). The four files add 2,176,144 bytes to `data/`; the page
+fetches one of them (1.64 MB at N=128, 410 kB at N=64).
+
+The review (Oct 2), on aa98bbf and the fixes after it. The cache holds
+the 108 tiles (each the size the fetch log and the server's Content-Length
+give, all from edcintl.cr.usgs.gov), the fetch log and listing probes, and
+the derived grids (`gmted_mea300.npy`, four `fine_*.f32`), 4.1 GB; no file
+in it is executable and none is in the repository. Spot heights read from
+the tiles by their own tie points: Everest 8625 m, K2 8190, Aconcagua 6678,
+Kilimanjaro 5778 (the next pixel), Denali 6035 (the next pixel), Mont Blanc
+4505 (the next pixel), each the 7 × 7 maximum within a pixel of the
+summit's coordinates; lake surfaces Titicaca 3815 m (3812), Baikal 449
+(456), the Dead Sea −412, the Caspian 0 (−28: GMTED holds it at 0); Dome A
+4086 (4093), Greenland's Summit 3206 (3216); 30N 40W and 0N 160W 0 m.
+Six cells (N=64 and N=128 at the Alps 46.5N 9.5E, the Ethiopian highlands
+9N 38.5E across the 10N tile edge, the Alaska Range 63N 149W) recomputed
+from the tiles by a script of the review's own (each smoothing by direct
+sums with great-circle distances, σ_flt over each 30″ point): μ to 0.03 %,
+σ_flt to 0.8 % (the 2′30″ blocks' version to 0.05 %), and the slope
+from neighbouring 2′30″ points to 0.1 % of the files of aa98bbf; against
+exact differences 5 km each way that σ was 26–30 % too large at 46.5N
+and 63N (3 % at 9N) and the Alps' and the Alaska Range's θ −0.16 and −0.27 rad,
+steepest east–west across ridges that run east–west (−1.08 and −1.15 with
+5 km each way). a8105bd takes the IFS's 5 km spacing; with exact 5 km
+offsets on the 30″ field σ is 2–4 % above the files' bilinear version, γ
+within 0.05, θ within 0.13 rad. The band filter's integral reproduces I_H
+0.00102 m⁻¹; eq. 11.13 as printed gives k_flt 0.00051 m⁻¹ for that filter
+against the documented 0.00035 (taken, with the α 35 tuned with it). The
+form drag by hand (σ_flt 150 m, 12 m/s, N=16, no blocking): each rate to
+3·10⁻¹⁴ on the CPU, also inside a full step on the state it diagnosed;
+ρ∫ C_tofd U² dz from 20 m 1.815 N/m² (0.565 × 2.25 × 1.44 = 1.831); the
+layer sum Σ m C_tofd U² with the lowest midpoint at 18 m 3.0 N/m² before
+the implicit reduction; each edge u/(1 + Δt C_tofd |U|) exactly. The
+page's path (fetch, `arrayBuffer`, `decodeSubgrid`) equals the node loader
+to float32 for N=16 and 64. The terrain-off and other-land-mask fallbacks
+(b3ba2d8) and the worker's decode fallback (35c9fae) are the review's. The
+December ten-day run and its twin on aa98bbf reproduced the reports above
+bit for bit before a8105bd; every number in the run tables is from
+a8105bd's fields. Full suite 55 files, six at a time under the shared lock:
+all pass but parallel.test (its speedup, 1.0× under the load of other
+jobs), which passes alone (3.7×).
+
+What still misses: the IFS's G for its operational fields is not stated
+in the documentation read, so G 1.23 is the textbook mountain's and the
+doubled H_eff rests on eq. 4.8 against eq. 4.37's remark; with them the
+December land westerlies at 45–55N fall to 0.6–1.3 m/s, below ERA5's 3–5,
+while the polar SLP rises toward the reanalysis: the two references now
+pull opposite ways and ten days cannot say which constant is wrong; the
+5 km field is sampled at 2′30″ and its differences are bilinear between
+those points (σ 2–4 % below exact 5 km offsets on six cells); σ_flt
+averages 2′30″ blocks by their centres' cells, not each 30″ point (0.2–0.8 %
+on six cells); the form drag's |U| is the cell's at the diagnosis, averaged
+onto the edge; the wave stress that the per-step limit carries to the top
+layer reaches 6.3 m/s a step there (the top layer's own wind is the
+bound); the form drag's 2.109 and z^(−1.2) fit is the IFS's for n₁ −1.9
+where these data give −1.85; the summer and winter responses need a
+season, which needs a spin-up.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
@@ -8791,7 +9160,7 @@ js/
     shallowWater.module.js  NEW  M1: single-layer test core
     sigmaCore.module.js     NEW  M2: K-layer hydrostatic core (steps 1–8 on arrays)
     sponge.module.js        M21: the top sponge on the zonally asymmetric wind
-  geography.module.js       M16: land mask, land fraction, elevation and coast from a raster; M17: smoothed surface geopotential
+  geography.module.js       M16: land mask, land fraction, elevation and coast from a raster; M17: smoothed surface geopotential; M22: subgrid orography fields and the data/subgrid_N<N>.bin codec
   physics/
     land.module.js          M16: bucket, snow, land albedo and wetness
     radiation.module.js     ported from sim.js RadiationColumn
@@ -8800,7 +9169,9 @@ js/
     surface.module.js       ported: surface and top drag, ocean wind stress, convective adjustment
     exchange.module.js      M22: the surface layer's C_D and C_H by roughness and stability
     gravityWaves.module.js  M21: Alexander & Dunkerton (1999) non-orographic gravity-wave drag
-    boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u
+    boundaryLayer.module.js M14: K-profile boundary layer, implicit column mixing of θ, q, qc and u; M22: the implicit surface and form drag
+    orography.module.js     M22: Lott and Miller's blocking and gravity-wave drag (js/gpu/orography.gpu.js its port)
+    formDrag.module.js      M22: the turbulent orographic form drag's coefficient
     init.module.js          ported: thermal init, balance, seed, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes; ice, snow and soil by source tile
     moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler; M21: its triggered entraining parcel and shallow branch, the shallow cumulus mass flux and the convective plume
@@ -8851,6 +9222,9 @@ scripts/
   upperAtmosphere.mjs       M21: the layers above 200 hPa of saved states, the top treatment's force, the spin-up's wind line
   remapState.mjs            a saved state carried onto another sigma grid
   packWoa.py                data/woa_annual_1deg.bin from the World Ocean Atlas 2023 NetCDF files
+  subgridTerrain.py         M22: GMTED2010's 30″ tiles assembled and filtered to 2′30″ grids in the download cache
+  subgridTerrain.mjs        M22: data/subgrid_N<N>.bin from those grids per mesh
+  subgridTerrainHand.py, subgridTerrainCells.mjs  M22: a few cells recomputed by direct sums from the 30″ grid
   splitState.mjs            a saved state gzipped into parts for the page
 test/
   mesh.test.mjs, operators.test.mjs, trisk.test.mjs, sw_tc2.mjs, sw_tc6.mjs,

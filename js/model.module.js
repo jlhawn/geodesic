@@ -8,11 +8,11 @@ import { createMoistPhysics } from './physics/moist.module.js';
 import { createSeaIce, MELTING_POINT, FREEZING_POINT } from './physics/ice.module.js';
 import { createOcean } from './ocean/layered.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
-import { createGeography, surfaceGeopotential, subgridOrography } from './geography.module.js';
+import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
 import { createSurfaceExchange, exchangeMode } from './physics/exchange.module.js';
 import { createGravityWaveDrag } from './physics/gravityWaves.module.js';
-import { createOrographicDrag } from './physics/orography.module.js';
+import { createOrographicDrag, LOTT_MILLER } from './physics/orography.module.js';
 
 export const SIDEREAL_DAY = 86164.0905;
 export const STATE_NAMES = ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'];
@@ -52,9 +52,26 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * Arrays read across phases live in `shared`; `buffers` adopts another
  * instance's so a worker computes on the same memory.
  */
+/*
+ * The subgrid orography of a mesh: data/subgrid_N<N>.bin's fields from
+ * GMTED2010 (`subgrid`, or under node the bundled file), else the 0.25°
+ * raster's (`raster` true), which carry no σ_flt and so no form drag and
+ * take Lott and Miller's constants, not the IFS's for 5 km fields. The
+ * files' fields hold the scales below the resolved terrain on the bundled
+ * land mask, so a run without terrain or on another mask takes the raster's.
+ */
+export function orographyFields(mesh, topography, geography, phis, subgrid, g) {
+  const fields = phis ? meshSubgrid(mesh, subgrid) : null, fitted = fields ? landSubgrid(fields, geography.land) : null;
+  if (fitted) return fitted;
+  subgridFallbackNote(mesh, !phis ? 'terrain' : fields ? 'land' : 'missing');
+  return { ...subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / g) : null, geography.land), raster: true };
+}
+
+export const dragConstants = (fields, options) => (fields.raster ? { ...LOTT_MILLER, ...options } : options);
+
 export function createModel(gridOrMesh, {
   radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {}, boundaryLayer: boundaryLayerOptions = {},
-  topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true, gravityWaves: gravityWaveOptions = {}, orography: orographyOptions = {},
+  topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true, gravityWaves: gravityWaveOptions = {}, orography: orographyOptions = {}, subgrid = undefined,
   physics = true, moist = true, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, buffers = null, levels = sigmaInterfaces(),
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
@@ -70,10 +87,13 @@ export function createModel(gridOrMesh, {
   const sponge = physics ? spongeRates(sigmaMid, surfaceOptions.spongeSigma ?? SPONGE.sigma, surfaceOptions.spongeDays ?? SPONGE.days) : null;
   const core = createSigmaCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, spongeRates: sponge, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
+  const subgridFields = physics && geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, subgrid, core.diagnostics.g) : null;
+  const { formDrag: formDragOptions = {}, ...dragOptions } = orographyOptions || {};
+  const formDrag = subgridFields && subgridFields.filtered && formDragOptions !== false ? { ...formDragOptions, sigma: Float64Array.from(subgridFields.filtered, (value, i) => (geography.land[i] ? value : 0)) } : null;
   const exchange = geography || rough ? createSurfaceExchange(mesh, core, { ...surfaceOptions, geography, vegetated: landOptions.vegetation !== false, mode, seaDrag: surfaceOptions.dragCoefficient ?? SEA_DRAG, landDrag: landOptions.dragCoefficient ?? LAND_DRAG, gustiness: surfaceOptions.gustiness ?? 3, buffers: buffers ? buffers.exchange : null }) : null;
   const dragCoefficients = exchange ? exchange.drag : null, heatCoefficients = exchange ? exchange.heat : null, gusty = !!(exchange && exchange.gusty);
   const radiation = createRadiation(mesh, core, { buffers: buffers ? buffers.radiation : null, ...(gusty ? { gustiness: 0 } : {}), exchangeCoefficients: heatCoefficients, referenceCoefficients: rough ? exchange.reference : null, surfaceLayer: rough, land: geography ? geography.land : null, iceSheet: geography ? geography.iceSheet : null, ...radiationOptions });
-  const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, heatCoefficients: rough ? heatCoefficients : null, surfaceBuoyancy: rough ? radiation.surfaceBuoyancy : null, implicitDrag, ...(gusty ? { surfaceWind: exchange.wind, gustiness: 0 } : {}), land: geography ? geography.land : null, deckTop: radiation.mlmTop, deckGate: radiation.mlmGate, stratiform: radiation.stratiform, longwave: radiation.longwave, ...boundaryLayerOptions }) : null;
+  const boundaryLayer = physics && boundaryLayerOptions !== false ? createBoundaryLayer(mesh, core, { buffers: buffers ? buffers.boundaryLayer : null, dragCoefficients, heatCoefficients: rough ? heatCoefficients : null, surfaceBuoyancy: rough ? radiation.surfaceBuoyancy : null, implicitDrag, formDrag, ...(gusty ? { surfaceWind: exchange.wind, gustiness: 0 } : {}), land: geography ? geography.land : null, deckTop: radiation.mlmTop, deckGate: radiation.mlmGate, stratiform: radiation.stratiform, longwave: radiation.longwave, ...boundaryLayerOptions }) : null;
   if (boundaryLayer && boundaryLayer.turbulence === 'moist') radiation.useBoundaryLayer(boundaryLayer.regime, boundaryLayer.mixingTop, boundaryLayer.buoyancyFlux);
   const gravityWaves = physics && gravityWaveOptions !== false ? createGravityWaveDrag(mesh, core, { buffers: buffers ? buffers.gravityWaves : null, ...gravityWaveOptions }) : null;
   const surface = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, buffers: buffers ? buffers.surface : null, dragCoefficients, ...surfaceOptions, implicitStress: implicitDrag ? boundaryLayer : null });
@@ -89,7 +109,7 @@ export function createModel(gridOrMesh, {
   const ocean = physics && oceanOptions !== false ? createOcean(mesh, { buffers: buffers ? buffers.ocean : null, geography, ...oceanOptions }) : null;
   const land = physics && geography ? createLandSurface(mesh, geography, { buffers: buffers ? buffers.land : null, ...landOptions }) : null;
   const landMask = geography ? geography.land : null;
-  const orography = physics && geography && orographyOptions !== false ? createOrographicDrag(mesh, core, subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / core.diagnostics.g) : null, geography.land), { buffers: buffers ? buffers.orography : null, ...orographyOptions }) : null;
+  const orography = subgridFields ? createOrographicDrag(mesh, core, subgridFields, { buffers: buffers ? buffers.orography : null, ...dragConstants(subgridFields, dragOptions) }) : null;
   const sharedCapacity = !ocean && buffers && buffers.ocean ? new Float64Array(buffers.ocean.capacity) : null;
   const seaIce = createSeaIce(mesh, {
     buffers: { ...(buffers && buffers.ice ? buffers.ice : {}), ...(land ? { snow: land.shared.snow, snowAlbedo: land.shared.snowAlbedo } : {}) },

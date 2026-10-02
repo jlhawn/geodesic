@@ -33,7 +33,7 @@ const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384,
  * momentum mixing. Every kernel binds the same seven buffers in the same
  * order.
  */
-export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orographyLayers = 0, sponge = null, waves = false) {
+export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orographyLayers = 0, sponge = null, waves = false, formLayers = 0) {
   const C = mesh.nCells, E = mesh.nEdges, V = mesh.nVertices, waveCells = waves ? C : 0, waveEdges = waves ? E : 0;
   const SPK = sponge ? sponge.layers : 0, SPB = sponge ? sponge.bands : 0, spongeCells = SPK ? C : 0, spongeEdges = SPK ? E : 0;
   const KC = K * C, KE = K * E, KV = K * V;
@@ -43,7 +43,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K], ['SPG', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]);
-  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E]]);
+  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E]]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, SPK, SPB, MI, MF, LV, S, D, PH, FR };
 }
@@ -673,7 +673,9 @@ export async function createGpuCore(mesh, {
   if (spongeRates && spongeRates.some((rate, k) => k >= spongeLayerCount && rate > 0)) throw new Error('the sponge is on the top layers only');
   const sponge = spongeLayerCount ? { ...spongeGeometry(mesh), layers: spongeLayerCount } : null;
   const waves = gravityWaves === false ? null : { ...GRAVITY_WAVES, ...gravityWaves };
-  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0, phys.orography ? K : 0, sponge, !!waves);
+  let formTop = 0;
+  while (formTop < K - 1 && 0.5 * (levels[formTop] + levels[formTop + 1]) <= phys.searchTop) formTop++;
+  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0, phys.orography ? K : 0, sponge, !!waves, phys.formDrag ? K - formTop : 0);
   const { C, E, V } = L;
   const kappa = R / cp;
   const sigmaUpper = levels.subarray(0, K), sigmaLower = levels.subarray(1, K + 1);
@@ -992,7 +994,7 @@ export async function createGpuCore(mesh, {
       ph[L.PH.REGIME + i] = retained.regime ? retained.regime[i] : 0;
       ph[L.PH.BUOY + i] = retained.buoyancyFlux ? retained.buoyancyFlux[i] : 0;
       ph[L.PH.EVAP + i] = retained.evaporation ? retained.evaporation[i] : 0;
-      if (retained.orography) { ph[L.PH.OSTD + i] = retained.orography.deviation[i]; ph[L.PH.OANI + i] = retained.orography.anisotropy[i]; ph[L.PH.OORI + i] = retained.orography.orientation[i]; ph[L.PH.OSLP + i] = retained.orography.slope[i]; }
+      if (retained.orography) { ph[L.PH.OSTD + i] = retained.orography.deviation[i]; ph[L.PH.OANI + i] = retained.orography.anisotropy[i]; ph[L.PH.OORI + i] = retained.orography.orientation[i]; ph[L.PH.OSLP + i] = retained.orography.slope[i]; ph[L.PH.OFLT + i] = phys.formDrag && retained.orography.filtered && retained.land && retained.land[i] > 0 ? retained.orography.filtered[i] : 0; }
     }
     if (retained.cumulusCover) ph.set(retained.cumulusCover, L.PH.CUCOVER);
     if (retained.cumulusWater) ph.set(retained.cumulusWater, L.PH.CUWATER);

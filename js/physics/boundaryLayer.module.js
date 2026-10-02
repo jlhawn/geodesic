@@ -2,6 +2,7 @@ import { cellVector } from '../dynamics/operators.module.js';
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { saturationHumidity, DECK_OPEN, DECK_CLOSED, LATENT_HEAT, R_VAPOR } from './moist.module.js';
 import { SEA_DRAG } from './surface.module.js';
+import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDrag.module.js';
 
 /*
  * A diffusive planetary boundary layer in the manner of Troen and Mahrt
@@ -34,7 +35,14 @@ import { SEA_DRAG } from './surface.module.js';
  * the kinetic energy it removes into the lowest layer's dissipation. The
  * surface buoyancy flux takes heatCoefficients (C_H) where given, and is
  * `surfaceBuoyancy` per cell where given: the radiation's, from the
- * sensible and latent fluxes it applied.
+ * sensible and latent fluxes it applied. With `formDrag` ({ sigma, the
+ * per-cell σ_flt, and formDrag.module.js's constants }) every layer the
+ * solve spans also takes the turbulent orographic form drag C_tofd(z) |U|
+ * on its diagonal (`formRate`, per cell, s⁻¹, |U| the cell's wind in that
+ * layer and z its midpoint's height above the ground at the diagnosis),
+ * averaged onto the edge; the momentum it removes is a stress on the
+ * ground per edge (`formStress`, N/m², along the edge's normal) and its
+ * kinetic energy goes to each layer's dissipation.
  *
  * A stratocumulus deck mixes its layer from cloud top, which the bulk
  * Richardson number of the surface-driven search does not see. With
@@ -133,7 +141,7 @@ export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 
 export function createBoundaryLayer(mesh, core, {
   dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, stratiform = null, buffers = null,
-  entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT,
+  entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT, formDrag = null,
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
   const { efficiency, shear, cap, jumpFloor, shearOnset, evaporativeEnhancement, maximumEfficiency, taper: tapered, jumpLayers } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
@@ -159,6 +167,11 @@ export function createBoundaryLayer(mesh, core, {
   const regimeBuffer = extra('regime'), mixingTopBuffer = extra('mixingTop'), coolingBuffer = extra('cloudTopCooling'), velocityBuffer = extra('radiativeVelocity'), decouplingBuffer = extra('decoupling');
   const surfaceDragBuffer = extra('surfaceDrag'), stressBuffer = buffers && buffers.surfaceStress ? buffers.surfaceStress : new SharedArrayBuffer(8 * (E + 1));
   const surfaceDrag = new Float64Array(surfaceDragBuffer), surfaceStress = new Float64Array(stressBuffer, 0, E), stressReady = new Float64Array(stressBuffer, 8 * E, 1);
+  const formOptions = formDrag ? { ...FORM_DRAG_DEFAULTS, ...formDrag } : null, formScale = formOptions ? formDragScale(formOptions) : 0, formSigma = formOptions ? formOptions.sigma : null;
+  const formRateBuffer = formDrag ? (buffers && buffers.formRate ? buffers.formRate : new SharedArrayBuffer(8 * K * C)) : null;
+  const formStressBuffer = formDrag ? (buffers && buffers.formStress ? buffers.formStress : new SharedArrayBuffer(8 * E)) : null;
+  const formRate = formDrag ? new Float64Array(formRateBuffer) : null, formStress = formDrag ? new Float64Array(formStressBuffer) : null;
+  const { exnerLower } = core.diagnostics;
   const heatCoefficient = (i) => (heatCoefficients ? heatCoefficients[i] : dragCoefficients ? dragCoefficients[i] : dragCoefficient);
   const regime = new Float64Array(regimeBuffer), mixingTop = new Float64Array(mixingTopBuffer), cloudTopCooling = new Float64Array(coolingBuffer), radiativeVelocity = new Float64Array(velocityBuffer), decoupling = new Float64Array(decouplingBuffer);
   const thetaL = new Float64Array(K), totalWater = new Float64Array(K);
@@ -181,10 +194,15 @@ export function createBoundaryLayer(mesh, core, {
       zPrev[i] = geopotential[bottom * C + i] / g;
       depth[i] = zPrev[i];
       if (implicitDrag) surfaceDrag[i] = density(pi, bottom, i, theta) * (dragCoefficients ? dragCoefficients[i] : dragCoefficient) * Math.max(speed[i], gustiness);
+      if (formRate) {
+        for (let k = kTop; k < K; k++) formRate[k * C + i] = 0;
+        if (formSigma[i] > 0) formRate[bottom * C + i] = formDragCoefficient(formSigma[i], formHeight(bottom, i), formOptions, formScale) * Math.hypot(bottomVector[3 * i], bottomVector[3 * i + 1], bottomVector[3 * i + 2]);
+      }
     }
     for (let k = bottom - 1; k >= kTop; k--) {
       cellVector(mesh, u.subarray(k * E, (k + 1) * E), vector, iFrom, iTo);
       for (let i = iFrom; i < iTo; i++) {
+        if (formRate && formSigma[i] > 0) formRate[k * C + i] = formDragCoefficient(formSigma[i], formHeight(k, i), formOptions, formScale) * Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]);
         if (found[i]) continue;
         const idx = k * C + i, base = bottom * C + i;
         const z = geopotential[idx] / g, zb = geopotential[base] / g;
@@ -247,6 +265,11 @@ export function createBoundaryLayer(mesh, core, {
     const base = bottom * C + i;
     const moisture = q && !(land && land[i]) ? 0.61 * theta[base] * (saturationHumidity(surfaceT[i], pi[i]) - q[base]) : 0;
     return g / theta[base] * heatCoefficient(i) * Math.max(speed[i], gustiness) * (surfaceT[i] * Math.pow(sigmaMid[bottom], kappa) / exnerLayer[base] - theta[base] + moisture);
+  }
+
+  function formHeight(k, i) {
+    const base = bottom * C + i, ground = geopotential[base] - cp * thetaV[base] * (exnerLower[base] - exnerLayer[base]);
+    return (geopotential[k * C + i] - ground) / g;
   }
 
   function density(pi, k, i, theta) {
@@ -382,9 +405,9 @@ export function createBoundaryLayer(mesh, core, {
     }
   }
 
-  function solve(field, offset, stride, coefficient, coefficientStride, dt, columnMass) {
+  function solve(field, offset, stride, coefficient, coefficientStride, dt, columnMass, rate = null) {
     let active = false;
-    for (let k = kTop; k < K; k++) if (coefficient[k * coefficientStride] > 0) { active = true; break; }
+    for (let k = kTop; k < K; k++) if (coefficient[k * coefficientStride] > 0 || (rate && rate[k] > 0)) { active = true; break; }
     if (!active) return false;
     for (let j = 0; j < n; j++) {
       const k = kTop + j;
@@ -393,11 +416,12 @@ export function createBoundaryLayer(mesh, core, {
       lower[j] = dt * coefficient[k * coefficientStride] / mass[j];
       rhs[j] = field[offset + k * stride];
     }
-    let denominator = 1 + upper[0] + lower[0];
+    const own = (j) => (rate ? dt * rate[kTop + j] : 0);
+    let denominator = 1 + upper[0] + lower[0] + own(0);
     gain[0] = -lower[0] / denominator;
     rhs[0] /= denominator;
     for (let j = 1; j < n; j++) {
-      denominator = 1 + upper[j] + lower[j] + upper[j] * gain[j - 1];
+      denominator = 1 + upper[j] + lower[j] + own(j) + upper[j] * gain[j - 1];
       gain[j] = -lower[j] / denominator;
       rhs[j] = (rhs[j] + upper[j] * rhs[j - 1]) / denominator;
     }
@@ -431,7 +455,7 @@ export function createBoundaryLayer(mesh, core, {
     if (qc) solve(qc, i, C, coefficient, C, dt, pi[i]);
   }
 
-  const edgeCoefficient = new Float64Array(K), before = new Float64Array(K), share = new Float64Array(K);
+  const edgeCoefficient = new Float64Array(K), before = new Float64Array(K), share = new Float64Array(K), edgeRate = formRate ? new Float64Array(K) : null;
   /*
    * The implicit mixing removes kinetic energy at each interface's shear
    * and in each layer's own increment; `dissipation` receives each
@@ -443,8 +467,15 @@ export function createBoundaryLayer(mesh, core, {
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], columnMass = 0.5 * (pi[a] + pi[b]);
       for (let k = kTop; k < K; k++) { edgeCoefficient[k] = 0.5 * (mixing[k * C + a] + mixing[k * C + b]); before[k] = u[k * E + e]; }
       if (implicitDrag) edgeCoefficient[bottom] = 0.5 * (surfaceDrag[a] + surfaceDrag[b]);
-      const solved = solve(u, e, E, edgeCoefficient, 1, dt, columnMass);
+      let forming = false;
+      if (edgeRate) for (let k = kTop; k < K; k++) { edgeRate[k] = 0.5 * (formRate[k * C + a] + formRate[k * C + b]); if (edgeRate[k] > 0) forming = true; }
+      const solved = solve(u, e, E, edgeCoefficient, 1, dt, columnMass, forming ? edgeRate : null);
       if (implicitDrag) { surfaceStress[e] = edgeCoefficient[bottom] * u[bottom * E + e]; stressReady[0] = 1; }
+      if (formStress) {
+        let stress = 0;
+        if (forming) for (let k = kTop; k < K; k++) stress += columnMass * dSigma[k] / g * edgeRate[k] * u[k * E + e];
+        formStress[e] = stress;
+      }
       if (!solved || !dissipation) continue;
       let loss = 0, total = 0;
       for (let k = kTop; k < K; k++) {
@@ -457,6 +488,7 @@ export function createBoundaryLayer(mesh, core, {
         share[k] += part; share[k + 1] += part;
       }
       if (implicitDrag) share[bottom] += dt * edgeCoefficient[bottom] * u[bottom * E + e] * u[bottom * E + e];
+      if (forming) for (let k = kTop; k < K; k++) share[k] += dt * columnMass * dSigma[k] / g * edgeRate[k] * u[k * E + e] * u[k * E + e];
       for (let k = kTop; k < K; k++) total += share[k];
       if (total <= 0) continue;
       for (let k = kTop; k < K; k++) dissipation[k * E + e] += loss * share[k] / (total * columnMass * dSigma[k] / g);
@@ -464,7 +496,7 @@ export function createBoundaryLayer(mesh, core, {
   }
 
   return {
-    diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, regime, mixingTop, cloudTopCooling, radiativeVelocity, decoupling, kTop, turbulence, implicitDrag, surfaceDrag, surfaceStress, stressReady,
-    shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer, regime: regimeBuffer, mixingTop: mixingTopBuffer, cloudTopCooling: coolingBuffer, radiativeVelocity: velocityBuffer, decoupling: decouplingBuffer, surfaceDrag: surfaceDragBuffer, surfaceStress: stressBuffer },
+    diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, regime, mixingTop, cloudTopCooling, radiativeVelocity, decoupling, kTop, turbulence, implicitDrag, surfaceDrag, surfaceStress, stressReady, formRate, formStress, formDrag: formOptions,
+    shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer, regime: regimeBuffer, mixingTop: mixingTopBuffer, cloudTopCooling: coolingBuffer, radiativeVelocity: velocityBuffer, decoupling: decouplingBuffer, surfaceDrag: surfaceDragBuffer, surfaceStress: stressBuffer, ...(formDrag ? { formRate: formRateBuffer, formStress: formStressBuffer } : {}) },
   };
 }
