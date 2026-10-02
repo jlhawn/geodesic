@@ -35,6 +35,18 @@ export function gravityWaveSpectrum({ flux, halfWidth, maxSpeed, speedStep }) {
   return shape.map((x) => (flux * x) / total);
 }
 
+/*
+ * The spectrum's partial sums, cumulative[n] = Σ_{j<n} amplitude[j]:
+ * the waves of one side leave a layer as a contiguous run of phase
+ * speeds nearest the source wind, since both the critical level and the
+ * saturation flux take the slowest waves first.
+ */
+export function gravityWaveSums(amplitude) {
+  const sums = new Float64Array(amplitude.length + 1);
+  for (let j = 0; j < amplitude.length; j++) sums[j + 1] = sums[j] + amplitude[j];
+  return sums;
+}
+
 export function gravityWaveSource(sigmaMid, sourcePressure, p0) {
   let best = 0;
   for (let k = 1; k < sigmaMid.length; k++) if (Math.abs(sigmaMid[k] * p0 - sourcePressure) < Math.abs(sigmaMid[best] * p0 - sourcePressure)) best = k;
@@ -45,7 +57,7 @@ export function createGravityWaveDrag(mesh, core, options = {}) {
   const { flux, sourcePressure, halfWidth, maxSpeed, speedStep, wavelength, minimumFrequency, buffers = null, diagnose = false } = { ...GRAVITY_WAVES, ...options };
   const { K, C, E, sigmaMid, dSigma, R, g, kappa, p0 } = core.diagnostics;
   const { cellsOnEdge, nEdge, latCell, lonCell } = mesh;
-  const amplitude = gravityWaveSpectrum({ flux, halfWidth, maxSpeed, speedStep }), J = amplitude.length;
+  const amplitude = gravityWaveSpectrum({ flux, halfWidth, maxSpeed, speedStep }), J = amplitude.length, cumulative = gravityWaveSums(amplitude);
   const source = gravityWaveSource(sigmaMid, sourcePressure, p0), wavenumber = 2 * Math.PI / wavelength, floor = minimumFrequency * minimumFrequency;
   const shared = { east: buffers ? buffers.east : new SharedArrayBuffer(8 * K * C), north: buffers ? buffers.north : new SharedArrayBuffer(8 * K * C) };
   const east = new Float64Array(shared.east), north = new Float64Array(shared.north);
@@ -68,21 +80,26 @@ export function createGravityWaveDrag(mesh, core, options = {}) {
     if (absoluteFlux) passing.fill(0);
     const u0 = wind[source * C + i];
     for (let side = -1; side <= 1; side += 2) {
-      for (let j = 0; j < J; j++) {
-        const c = u0 + side * (j + 1) * speedStep, B = side * amplitude[j];
-        let k = source - 1;
-        for (; k > 0; k--) {
-          const relative = c - wind[k * C + i];
-          if (side * relative <= 0) break;
-          if (Math.abs(B) >= density[k] * wavenumber * relative * relative * Math.abs(relative) / (2 * frequency[k])) break;
+      let gone = 0;
+      for (let k = source - 1; k > 0 && gone < J; k--) {
+        const ahead = side * (u0 - wind[k * C + i]), saturation = density[k] * wavenumber / (2 * frequency[k]);
+        let reached = Math.max(gone, Math.min(J, Math.floor(-ahead / speedStep)));
+        while (reached < J) {
+          const relative = ahead + (reached + 1) * speedStep;
+          if (amplitude[reached] < saturation * relative * relative * relative) break;
+          reached++;
         }
-        deposit[k] += B;
-        if (absoluteFlux) for (let crossed = k + 1; crossed < source; crossed++) passing[crossed] += Math.abs(B);
+        deposit[k] += side * (cumulative[reached] - cumulative[gone]);
+        if (absoluteFlux) passing[k] += cumulative[reached] - cumulative[gone];
+        gone = reached;
       }
+      deposit[0] += side * (cumulative[J] - cumulative[gone]);
+      if (absoluteFlux) passing[0] += cumulative[J] - cumulative[gone];
     }
     for (let k = 0; k < source; k++) out[k * C + i] = g * deposit[k] / (columnPressure * dSigma[k]);
-    if (absoluteFlux) for (let k = 0; k < source; k++) absoluteFlux[k * C + i] += passing[k];
+    if (absoluteFlux) for (let k = 0, above = 0; k < source; k++) { absoluteFlux[k * C + i] += above; above += passing[k]; }
   }
+
 
   function compute(state, iFrom = 0, iTo = C) {
     const [pi, theta, u] = state;

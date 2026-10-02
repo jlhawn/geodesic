@@ -6,7 +6,7 @@ import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.
 import { MOIST_DEFAULTS } from '../physics/moist.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { spongeGeometry, spongeRates as layerRates, SPONGE } from '../dynamics/sponge.module.js';
-import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSource } from '../physics/gravityWaves.module.js';
+import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveSource } from '../physics/gravityWaves.module.js';
 
 const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384, MAXIMUM_SURFACE_PRESSURE = 110000;
 
@@ -560,15 +560,14 @@ var<workgroup> partNorth: array<f32, ${WORKGROUP}>;
   }
 }`,
   gravityWaves: `const GW_AMP = array<f32, GW_J>(GW_AMPLITUDES);
+const GW_CUM = array<f32, GW_J_PLUS>(GW_SUMS);
 @compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
-  for (var k = 0; k < K; k++) { PH[PH_GWE + k * C + i] = 0.0; PH[PH_GWN + k * C + i] = 0.0; }
   let ex = MF[F_GWX + 6 * i]; let ey = MF[F_GWX + 6 * i + 1];
-  if (ex == 0.0 && ey == 0.0) { return; }
+  if (ex == 0.0 && ey == 0.0) { for (var k = 0; k < GW_SOURCE; k++) { PH[PH_GWE + k * C + i] = 0.0; PH[PH_GWN + k * C + i] = 0.0; } return; }
   let nx = MF[F_GWX + 6 * i + 2]; let ny = MF[F_GWX + 6 * i + 3]; let nz = MF[F_GWX + 6 * i + 4];
   let pi = IN[S_PI + i]; let area = MF[F_AREA + i];
-  var windE: array<f32, GW_SOURCE_PLUS>; var windN: array<f32, GW_SOURCE_PLUS>; var rho: array<f32, GW_SOURCE_PLUS>; var freq: array<f32, GW_SOURCE_PLUS>;
-  var temp: array<f32, GW_SOURCE_PLUS>; var pres: array<f32, GW_SOURCE_PLUS>; var depE: array<f32, GW_SOURCE_PLUS>; var depN: array<f32, GW_SOURCE_PLUS>;
+  var windE: array<f32, GW_SOURCE_PLUS>; var windN: array<f32, GW_SOURCE_PLUS>; var temp: array<f32, GW_SOURCE_PLUS>; var pres: array<f32, GW_SOURCE_PLUS>; var sat: array<f32, GW_SOURCE_PLUS>;
   for (var k = 0; k <= GW_SOURCE; k++) {
     var x = 0.0; var y = 0.0; var z = 0.0;
     for (var m = 0; m < MAXE; m++) {
@@ -579,33 +578,35 @@ var<workgroup> partNorth: array<f32, ${WORKGROUP}>;
     windE[k] = (ex * x + ey * y) / area; windN[k] = (nx * x + ny * y + nz * z) / area;
     pres[k] = LV[L_SM + k] * pi;
     temp[k] = IN[S_TH + k * C + i] * pow(pres[k] / P0, KAPPA);
-    rho[k] = pres[k] / (RGAS * temp[k]);
-    depE[k] = 0.0; depN[k] = 0.0;
   }
   for (var k = 0; k < GW_SOURCE; k++) {
     let above = max(0, k - 1); let below = k + 1;
     let depth = RGAS / GRAV * 0.5 * (temp[above] + temp[below]) * log(pres[below] / pres[above]);
     let n2 = GRAV / IN[S_TH + k * C + i] * (IN[S_TH + above * C + i] - IN[S_TH + below * C + i]) / depth;
-    freq[k] = sqrt(max(n2, GW_N2_FLOOR));
+    sat[k] = pres[k] / (RGAS * temp[k]) * GW_KH / (2.0 * sqrt(max(n2, GW_N2_FLOOR)));
   }
   for (var dir = 0; dir < 2; dir++) {
-    let u0 = select(windN[GW_SOURCE], windE[GW_SOURCE], dir == 0);
+    var w: array<f32, GW_SOURCE_PLUS>; var dep: array<f32, GW_SOURCE_PLUS>;
+    for (var k = 0; k <= GW_SOURCE; k++) { w[k] = select(windN[k], windE[k], dir == 0); dep[k] = 0.0; }
+    let u0 = w[GW_SOURCE];
     for (var side = -1.0; side <= 1.0; side += 2.0) {
-      for (var j = 0; j < GW_J; j++) {
-        let c = u0 + side * f32(j + 1) * GW_DC; let b = side * GW_AMP[j];
-        var k = GW_SOURCE - 1;
-        for (; k > 0; k--) {
-          let rel = c - select(windN[k], windE[k], dir == 0);
-          if (side * rel <= 0.0) { break; }
-          if (abs(b) >= rho[k] * GW_KH * rel * rel * abs(rel) / (2.0 * freq[k])) { break; }
+      var gone = 0;
+      for (var k = GW_SOURCE - 1; k > 0 && gone < GW_J; k--) {
+        let ahead = side * (u0 - w[k]);
+        var reached = max(gone, i32(clamp(floor(-ahead / GW_DC), 0.0, f32(GW_J))));
+        loop {
+          if (reached >= GW_J) { break; }
+          let rel = ahead + f32(reached + 1) * GW_DC;
+          if (GW_AMP[reached] < sat[k] * rel * rel * rel) { break; }
+          reached++;
         }
-        if (dir == 0) { depE[k] += b; } else { depN[k] += b; }
+        dep[k] += side * (GW_CUM[reached] - GW_CUM[gone]);
+        gone = reached;
       }
+      dep[0] += side * (GW_CUM[GW_J] - GW_CUM[gone]);
     }
-  }
-  for (var k = 0; k < GW_SOURCE; k++) {
-    let mass = pi * LV[L_DS + k];
-    PH[PH_GWE + k * C + i] = GRAV * depE[k] / mass; PH[PH_GWN + k * C + i] = GRAV * depN[k] / mass;
+    let base = select(PH_GWN, PH_GWE, dir == 0);
+    for (var k = 0; k < GW_SOURCE; k++) { PH[base + k * C + i] = GRAV * dep[k] / (pi * LV[L_DS + k]); }
   }
 }`,
   gravityWaveDrag: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -757,7 +758,8 @@ export async function createGpuCore(mesh, {
   const divergenceStep = divergenceDamping * meshSpacing * meshSpacing;
   const kernels = {};
   const waveSource = waves ? gravityWaveSource(sigmaMid, waves.sourcePressure, p0) : 0, waveAmplitudes = waves ? gravityWaveSpectrum(waves) : [0];
-  const waveConstants = (body) => body.replaceAll('GW_AMPLITUDES', Array.from(waveAmplitudes, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SOURCE_PLUS', String(waveSource + 1)).replaceAll('GW_SOURCE', String(waveSource)).replaceAll('GW_J', String(waveAmplitudes.length))
+  const waveSums = gravityWaveSums(waveAmplitudes);
+  const waveConstants = (body) => body.replaceAll('GW_AMPLITUDES', Array.from(waveAmplitudes, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SUMS', Array.from(waveSums, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SOURCE_PLUS', String(waveSource + 1)).replaceAll('GW_SOURCE', String(waveSource)).replaceAll('GW_J_PLUS', String(waveAmplitudes.length + 1)).replaceAll('GW_J', String(waveAmplitudes.length))
     .replaceAll('GW_DC', waves ? waves.speedStep.toFixed(6) : '0.0').replaceAll('GW_KH', waves ? (2 * Math.PI / waves.wavelength).toExponential(9) : '0.0').replaceAll('GW_N2_FLOOR', waves ? (waves.minimumFrequency ** 2).toExponential(9) : '0.0');
   const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
   if (!waves) { delete kernelBodies.gravityWaves; delete kernelBodies.gravityWaveDrag; }
