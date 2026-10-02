@@ -1,5 +1,5 @@
 import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT } from '../physics/ice.module.js';
-import { DARKENING_WETNESS } from '../physics/land.module.js';
+import { DARKENING_WETNESS, TRACE_SNOW } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE } from '../physics/radiation.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS, FUSION_HEAT } from '../physics/moist.module.js';
@@ -730,8 +730,8 @@ export const PHYSICS_KERNELS = {
   let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);
   let canopyWet = veg0 * roots / (1.0 + RSTOM * aero / max(0.05, warmth));
   let landWet = select(roots, bareWet + canopyWet, VEGETATED);
-  let wetness = select(1.0, select(landWet, 1.0, snow0 > 0.0), onLand);
-  let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= 0.0);
+  let wetness = select(1.0, select(landWet, 1.0, snow0 > ${TRACE_SNOW}), onLand);
+  let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= ${TRACE_SNOW});
   let ozoneHeating = beam * OZONE_ABS;
   let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
   let surfaceEmission = STEFAN * ts * ts * ts * ts;

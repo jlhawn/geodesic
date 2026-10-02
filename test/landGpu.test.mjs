@@ -119,3 +119,29 @@ test('both engines give each land cell the same albedo from its surface layer, s
     assert.ok(darkened > ran.cells / 3 && most > 0.05, `${name}: ${darkened} cells darkened by up to ${most}`);
   }
 });
+
+test('a trace of snow on land leaves the bucket its own wetness in both engines, a snow cover evaporates at the potential rate', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const evaporation = async (engine, snow) => {
+    const model = engine === 'cpu' ? createModel(new Grid(6), { topography }) : await createGpuModel(new Grid(6), { topography });
+    const C = model.mesh.nCells, init = initializeState(model, {});
+    for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+    for (let i = 0; i < C; i++) if (model.geography.land[i]) { model.state[6][i] = 0; model.state[3][i] = 268; }
+    if (model.load) model.load();
+    model.ocean.initialize(model.state[3], model.state[6]);
+    model.land.load({ soil: new Float64Array(C).fill(40), snow: new Float64Array(C).fill(snow), vegetation: new Float64Array(C).fill(0.5) });
+    if (engine === 'cpu') { model.step(900); return Float64Array.from(model.radiation.evaporation); }
+    await model.step(900);
+    const ph = await model.gpu.downloadPhysics();
+    model.destroy();
+    return Float64Array.from(ph.EVAP);
+  };
+  const land = createModel(new Grid(6), { topography }).geography.land, cells = [...land.keys()].filter((i) => land[i]);
+  for (const engine of ['cpu', 'gpu']) {
+    const [bare, trace, covered] = [await evaporation(engine, 0), await evaporation(engine, 1e-20), await evaporation(engine, 5)];
+    let apart = 0, wetter = 0;
+    for (const i of cells) { apart = Math.max(apart, Math.abs(trace[i] - bare[i])); if (covered[i] > bare[i]) wetter++; }
+    console.log(`${engine}: ${cells.length} land cells; 1e-20 kg/m² of snow moves their evaporation by at most ${apart.toExponential(1)} kg/m²/s, 5 kg/m² raises it in ${wetter}`);
+    assert.equal(apart, 0, `${engine}: a trace of snow moves the evaporation by ${apart}`);
+    assert.ok(wetter > cells.length / 4, `${engine}: a snow cover raises the evaporation in ${wetter} cells`);
+  }
+});
