@@ -287,10 +287,11 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * aerosolAlbedo τ_a added to the cloud's in its two-stream, conservative
  * Rayleigh scattering with asymmetry 0 and the aerosol's forward peak
  * counted as transmitted; the rest of the beam meets the cloud alone.
- * rayleighDepth (0.18, a full atmosphere) gives in this one band the
- * Rayleigh reflection τ/(τ + 2μ) of a 5778 K solar spectrum above 0.32 µm
- * under τ(λ) = 0.0088 λ^−4.05 (λ in µm), 0.169 at μ = 0.3 to 0.185 at
- * μ = 1. τ_a, the aerosol's mid-visible depth, is landAerosol (0.11) over
+ * rayleighDepth (0.18, a full atmosphere) is near the depth at which this
+ * one band, 0.47 of the beam, reflects by τ/(τ + 2μ) what a 5778 K solar
+ * spectrum above 0.32 µm under τ(λ) = 0.0088 λ^−4.05 (λ in µm) reflects
+ * of the whole beam: 0.178 at μ = 0.3 to 0.193 at μ = 1.
+ * τ_a, the aerosol's mid-visible depth, is landAerosol (0.11) over
  * land and seaAerosol (0.06) over sea and ice sheets; before the two-stream
  * it absorbs 1 − exp(−(1 − aerosolAlbedo) τ_a m) of that part of the beam,
  * m the vapour's magnification, and heats each layer by its share of an
