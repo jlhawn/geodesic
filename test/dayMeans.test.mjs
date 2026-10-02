@@ -26,7 +26,7 @@ const UNSCATTERED = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0,
 
 async function engines() {
   const surface = { exchange: 'fixed' };
-  const cpu = createModel(new Grid(6), { ocean: false, radiation: UNSCATTERED, surface }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation: UNSCATTERED, surface });
+  const cpu = createModel(new Grid(6), { ocean: false, radiation: UNSCATTERED, surface, moist: { excessVelocity: 'convective' } }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation: UNSCATTERED, surface, moist: { excessVelocity: 'convective' } });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();

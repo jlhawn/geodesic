@@ -54,7 +54,7 @@ test('the clear-sky pass gives each column the top-of-atmosphere fluxes of the s
 
 async function engines(radiation, cloud = 0) {
   const surface = { exchange: 'fixed' };
-  const cpu = createModel(new Grid(6), { ocean: false, radiation, surface }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation, surface });
+  const cpu = createModel(new Grid(6), { ocean: false, radiation, surface, moist: { excessVelocity: 'convective' } }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation, surface, moist: { excessVelocity: 'convective' } });
   const init = initializeState(cpu, {}), { K, C, sigmaMid } = cpu.core.diagnostics;
   for (let k = 0; k < K; k++) if (sigmaMid[k] > 0.5 && sigmaMid[k] < 0.9) for (let i = 0; i < C; i++) init[5][k * C + i] = cloud;
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }

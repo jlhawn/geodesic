@@ -725,7 +725,7 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
 
 test('the convective and large-scale rain accumulate alike in both engines, cell by cell but for the odd column whose onset falls a step apart (a plume shortens the lifetime of the cloud below its top), and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const decisions = cloudDecisions(362);
-  const { model, physics } = await pair(6, 24, 900, 0, false, { surfaceExchange: 'fixed' }, { rainEvaporation: 0 }, {}, (cpu, device) => decisions.check(cpu, device));
+  const { model, physics } = await pair(6, 24, 900, 0, false, { surfaceExchange: 'fixed' }, { rainEvaporation: 0, excessVelocity: 'convective' }, {}, (cpu, device) => decisions.check(cpu, device));
   const C = model.mesh.nCells, { convectivePrecipitation: convective, largeScalePrecipitation: largeScale, precipitation, rain } = model.moist;
   const largest = Math.max(...convective), largestScale = Math.max(...largeScale);
   const onset = (i) => decisions.parted.has(i) || Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest || Math.abs(largeScale[i] - physics.COND[i]) > 1e-3 * largestScale;
