@@ -3860,6 +3860,268 @@ The work, in order:
    grassland. The spin-up takes land options through `LAND`. Older
    states start their moisture means from the estimate and their trees
    at f m v, or at their own where those are lower.
+   Soil colour from the soil's own carbon (Oct 2). The dry bare soil's
+   albedo follows a topsoil organic-carbon store that each cell's own
+   cover and climate build, on both engines (`js/physics/land.module.js`,
+   `js/gpu/physics.gpu.js`), with parity and hand-computed unit tests
+   (`test/soilCarbon.test.mjs`). No map of soils or soil colour enters.
+
+   - The store (`soilCarbon`, kg C/m² in the top 0.2 m, Jobbágy & Jackson
+     2000's top interval; one pool): dS/dt = A (I − k S), stepped exactly
+     for each step's I and k. Litter I = `litterInput` × (`treeLitter` ×
+     trees + `grassLitter` × grass) × min(1, fill / 0.75) × m(T), with
+     m(T) = 1 / (1 + e^(1.315 − 0.119 T)) in the lowest air (°C) while it
+     is at least 0.9 °C and 0 otherwise: the temperature curve of Lieth's
+     (1975) Miami model of net primary production (there in the annual
+     mean temperature; here step by step inside TREELIM's growing
+     season), and min(1, fill / 0.75) the root-zone factor the
+     transpiration already uses. Decomposition k = r(T) M(fill) /
+     `soilTurnover`, r = exp(308.56 (1/56.02 − 1/(T − 227.13))) of the
+     lowest air in K (Lloyd & Taylor 1994, Funct. Ecol. 8: 315–323): 1 at
+     10 °C, 0.30 at 0 °C, 0.047 at −10 °C, 0.002 at −20 °C, 2.30 at
+     20 °C, 4.26 at 30 °C. M is TRIFFID's single-pool moisture factor
+     (Cox 2001, Hadley Centre Technical Note 24; recalled, not re-read)
+     in the bucket's fill: 0.2 below the wilting fill 0.1
+     (`decompositionWilting`), linear to 1 at 0.55, then 1 − 0.8 (fill −
+     0.55), 0.64 full; 0.2 whenever the air is below freezing.
+   - Trees against grass. Jobbágy & Jackson (2000, Ecol. Appl. 10:
+     423–436, Table 4): temperate grasslands keep 0.21 of their biomass
+     above ground and 70 % of their roots in the top 20 cm, forests
+     0.75–0.85 above ground; root-derived carbon stays in soil 2.4 times
+     as long as shoot-derived (Rasse et al. 2005, Plant Soil 269:
+     341–356). Per unit of production grass therefore feeds the mineral
+     topsoil more; per unit of cover forest produces more (from memory,
+     about 1.5–2 times grassland's NPP in one climate, not checked). The
+     stocks they leave in 0–20 cm (J&J Tables 3 and 4, the first metre
+     times its top-20-cm share): temperate grassland 4.8 kg/m², temperate
+     deciduous and evergreen forest 9.0 and 6.8, under wetter climates.
+     The weights are 1 and 1. What makes grassland soils dark in the
+     field is depth: SOC under grass lies deeper (42 % of the first metre
+     in the top 20 cm against forests' 50 %), the thick mollic A horizon,
+     which one 0.2 m pool does not resolve.
+   - Calibration. The equilibrium S* = ⟨I⟩/⟨k⟩ depends on `litterInput` ×
+     `soilTurnover` alone, 35 kg/m², the geometric-mean fit to J&J's
+     0–20 cm stocks for seven sine-year climates (mean ± amplitude °C,
+     fill, cover → model S*, J&J, carbon %, dry albedo): tropical
+     evergreen forest 26 ± 1.5, 0.55, 1.0 → 6.45, 8.2, 2.5 %, 0.141;
+     tropical savanna 25 ± 3, 0.3, 0.6 → 3.94, 4.8, 1.5 %, 0.175;
+     temperate deciduous forest 10 ± 11, 0.6, 0.95 → 10.5, 9.0, 4.0 %,
+     0.124; temperate grassland 7 ± 14, 0.3, 0.6 → 5.54, 4.8, 2.1 %,
+     0.150; boreal forest −3 ± 18, 0.7, 0.7 → 11.5, 4.7, 4.4 %, 0.123;
+     tundra −11 ± 16, 0.75, 0.4 → 9.15, 5.7, 3.5 %, 0.127; desert 22 ± 8,
+     0.12, 0.1 → 0.66, 2.0, 0.25 %, 0.314. Without the water factor on the
+     litter the desert reads 2.2 kg/m² and 0.227; with the growth warmth
+     (5–15 °C) in place of Lieth's curve the tundra gets no litter.
+     J&J's deserts include shrub deserts; their top-20-cm SOC
+     (0.8 % at 260 kg/m²) would read 0.23 by the curve below.
+   - Time. `soilTurnover` 70 years at 10 °C and optimal moisture with
+     `litterInput` 0.5 kg C/m² a year at full cover, warmth and water
+     (about a third of Lieth's ceiling of 3000 g dry matter, 1.4 kg C,
+     /m²/yr): the year's mean decomposition gives real turnover times of
+     21 years in the tropical forest climate, 63 temperate, 108 desert,
+     129 steppe, 171 boreal, 641 tundra. Carvalhais et al. (2014, Nature
+     514: 213–217) give whole-ecosystem carbon 23 (+7/−4) years globally,
+     15 near the equator, 255 north of 75N; TRIFFID's κ_s 0.5·10⁻⁸ s⁻¹ at
+     25 °C is 6.3 years there, 20 at 10 °C under Lloyd–Taylor (recalled).
+     `carbonAcceleration` A = 100 multiplies input and decomposition
+     alike, leaving S* where it is: e-folding times 0.2 years tropical,
+     0.6 temperate, 1.1 desert, 1.3 steppe, 1.7 boreal, 6.4 tundra. What
+     it loses is the soil's lag: a cell whose cover dies keeps its dark
+     soil for decades to centuries on Earth (a 0.2 m store at 63 years in
+     a temperate climate) and for months to a year here, so the soil
+     brightens with the cover's own 365-day decline instead of after it,
+     and the seasonal swing of a store follows the seasons more than a
+     real one (the stepped year's mean is within 0.2 % of S* at A = 1).
+   - Colour. Dry albedo = `humusAlbedo` + (`mineralAlbedo` −
+     `humusAlbedo`) exp(−c / `organicScale`), c = 100 S / `topsoilMass`
+     (% organic carbon; 260 kg/m², 0.2 m at an assumed 1300 kg/m³). The
+     shape: soil reflectance falls with organic matter in all visible and
+     near-infrared bands, other constituents mask organic matter below
+     about 2 % (1.2 % C; Baumgardner et al. 1985, Adv. Agron. 38, as
+     quoted by later studies) and above about 5 % (2.9 % C) more changes
+     little (Page 1974, as quoted); dry Munsell value falls
+     logarithmically with organic carbon (Konen et al. 2003, SSSAJ 67:
+     1823–1830, r² 0.74 air-dry, 130 Iowa Ap horizons on one parent
+     material; steep below 1 % C in a multi-state set, as summarised);
+     broadband albedo = 0.069 × dry Munsell value − 0.114 (Post et al.
+     2000, SSSAJ 64: 1027–1034, 26 US soils, r² 0.93): value 7 0.369, 6
+     0.300, 5 0.231, 4 0.162, 3 0.093. `organicScale` 1 % C puts 70 % of
+     the darkening below 1.2 % C and 95 % below 3 %. `mineralAlbedo` 0.37
+     is Post's value 7, inside desert sand and rock's 0.30–0.40;
+     `humusAlbedo` 0.12 is the darkest dry CLM soil colour, (vis 0.08 +
+     nir 0.16)/2 of class 20, whose brightest class 1 is (0.36 + 0.61)/2
+     = 0.485 (CLM5 Technical Note, Table 2.3.3; the colours fitted to
+     MODIS by Lawrence & Chase 2007). Carbon 0.25, 0.6, 1, 2.5, 5 % →
+     0.315, 0.257, 0.212, 0.141, 0.122. The wet darkening multiplies the
+     dry value by 1 − (1 − 0.15/0.30) × the surface layer's fill, a
+     saturated/dry ratio of 0.5 (Idso et al. 1975's 0.47; CLM's 0.50 for
+     class 20 to 0.69 visible, 0.82 near-infrared for class 1).
+   - Starts and plumbing. A fresh start and a state without the field
+     (every state before this) start each cell at S* for its own cover,
+     trees and present bucket fill under SEASON_ESTIMATE's sine year of
+     the lowest air (`airCycle`), on both engines through the land's load;
+     a state with the field keeps it. Ice sheets hold 0. Saved states,
+     the GPU (at the end of PH, `SOILC`), `land.serialize` (the page's
+     snapshot) and land regridding (S* at the guessed cover 0.5 for new
+     land) carry it. Every option of `createLandSurface` reaches the GPU
+     through `VEGETATION_OPTIONS` or the named heat, bucket, albedo, snow
+     and ageing options (the test reads the signature); a land
+     `latentHeatFusion` that differs from the sea ice's is refused, the
+     engines sharing one.
+
+   Tests. Hand values: a forest cell at 26 °C, fill 0.55, cover 1 from 0
+   reaches 4.0140 kg/m² in 0.2 years and S* 6.4594 (dry albedo 0.14084);
+   a desert at 30 °C, fill 0.12, grass 0.1: 0.50518 (0.32585); a tundra
+   summer at 8 °C, fill 0.75, grass 0.4: 8.3839 (0.12994); a tundra winter
+   at −5 °C keeps 9.8112 of 10 over half a year (no litter, frozen
+   decay); a cell losing its cover at 20 °C, fill 0.55: 6.4594 → 1.2466 in
+   half a year, the dry soil 0.1408 → 0.2748. A = 1 over 100 years equals
+   A = 100 over one. At N=6 with random cover, trees, fill, surface layer
+   and carbon the engines' land albedos agree to 4.5·10⁻⁸ (the carbon moves
+   them by up to 0.135); over 24 steps at A = 3·10⁵ the carbon rose on 88
+   cells and fell on 31, by up to 18.3 kg/m², engines apart by
+   5.3·10⁻⁴ kg/m². The treeline parity test runs with `soilCarbon` false:
+   darker soils move its N=6 trajectory (lowest air apart by 9.6·10⁻³ K
+   against 2.9·10⁻³). Digests unchanged (their model has no land).
+
+   The year-six state five64_day2190 at the start (S* from its cover and
+   fill, carbon %, dry albedo; class by its own season means and P/PET,
+   area share of the globe):
+
+   | class | globe | cover, trees | fill | P/PET | carbon kg/m² (%) | dry albedo | reference |
+   |---|---|---|---|---|---|---|---|
+   | desert (P/PET < 0.2) | 0.020 | 0.12, 0.00 | 0.07 | 0.13 | 0.40 (0.15) | 0.336 | sand and rock 0.30–0.40; J&J desert 2.0 kg/m² |
+   | steppe and savanna (0.2–0.65) | 0.079 | 0.39, 0.13 | 0.21 | 0.42 | 2.24 (0.86) | 0.238 | J&J temperate grassland 4.8, savanna 4.8 |
+   | temperate forest (humid) | 0.057 | 0.76, 0.71 | 0.78 | 1.10 | 11.5 (4.4) | 0.133 | J&J 6.8–9.0 |
+   | boreal (humid, season < 0.6 yr) | 0.049 | 0.56, 0.51 | 0.94 | 1.10 | 12.4 (4.8) | 0.125 | J&J 4.7 |
+   | tundra (treeline factor < 0.1) | 0.013 | 0.51, 0.00 | 0.92 | 1.06 | 9.4 (3.6) | 0.185 | J&J 5.7 |
+   | tropical forest (humid, < 25°, no cold season) | 0.042 | 0.84, 0.78 | 0.71 | 1.11 | 9.2 (3.5) | 0.136 | J&J 8.2 |
+
+   The class means of the dry albedo average the exponential over cells
+   (a tundra mean of 3.6 % reads 0.185 because its sparse cells are
+   pale). No measured broadband albedo by soil group was read beyond the
+   desert range; by Post's regression the chernic horizon's moist value
+   ≤ 3 (WRB 2022, as summarised, not read) would be dark, about 0.09–0.16
+   dry. By band (cover, carbon kg/m², dry albedo): 0–10N 0.70, 4.8,
+   0.203; 10–20N 0.40, 1.7, 0.285; 20–30N 0.45, 4.4, 0.220; 30–40N 0.58,
+   8.2, 0.185; 40–50N 0.55, 8.8, 0.167; 50–60N 0.64, 12.8, 0.128; 60–70N
+   0.48, 11.2, 0.125; 70–80N 0.31, 7.1, 0.143; 80–90N 0.18, 4.0, 0.180;
+   0–10S 0.73, 8.3, 0.172; 10–20S 0.52, 6.3, 0.196; 20–30S 0.58, 5.8,
+   0.186; 30–40S 0.75, 7.4, 0.156; 40–50S 0.95, 12.9, 0.126.
+
+   Runs: N=64 GPU, OCEAN `{"everySteps":8}`, three days from copies of
+   nine64_day0091, eight64_day0183, nine64_day0365 (bl34) and
+   five64_day2190 (cam26), before (the previous commit) → after (the
+   defaults, carbon from S*). Snow-free land, insolation-weighted surface
+   albedo over the end day (`land.albedo`), area share of the globe:
+
+   | class | June solstice + 3 d | September equinox + 3 d | March equinox + 3 d | year six + 3 d | reference |
+   |---|---|---|---|---|---|
+   | bare dry soil (v < 0.2, layer < half) | | | | 0.029: 0.285 → 0.300 | 0.30–0.40 |
+   | grassland (v ≥ 0.4, trees < 0.3 v) | 0.050: 0.241 → 0.198 | 0.047: 0.243 → 0.214 | 0.010: 0.239 → 0.206 | 0.009: 0.233 → 0.218 | 0.18–0.25 |
+   | partly vegetated (v 0.2–0.7) | 0.259: 0.215 → 0.159 | 0.191: 0.232 → 0.199 | 0.128: 0.232 → 0.186 | 0.086: 0.236 → 0.194 | 0.18–0.25 |
+   | dense vegetation (v > 0.7) | trace: 0.178 → 0.128 | 0.056: 0.170 → 0.133 | 0.057: 0.161 → 0.135 | 0.083: 0.155 → 0.138 | 0.12–0.15 |
+   | dense forest (v > 0.7, trees ≥ v/2) | trace: 0.178 → 0.128 | 0.052: 0.167 → 0.129 | 0.054: 0.159 → 0.133 | 0.075: 0.149 → 0.133 | 0.12–0.15 |
+
+   Their soils' dry albedo after (carbon kg/m²): bare dry soil 0.316
+   (0.66); grassland 0.210–0.244 (3.4–5.6); partly vegetated 0.164–0.220
+   (3.4–6.0); dense forest 0.126–0.132 (9.9–11.9). Dense forest comes
+   inside 0.12–0.15 on every state: the forest floor's own soil (0.13)
+   shows at 1 − v in place of 0.30. The partly vegetated land of the June
+   state reads 0.159, low by 0.021: the atlas start's cover of 0.5 a year
+   on, over humid mid-latitude land whose estimated store is 6.0 kg/m².
+   The class table (`scripts/clearSkyBudget.mjs`, surface albedo; LAND
+   `{"soilCarbon":false}` before): day 186 partly vegetated 0.233 →
+   0.200, dense vegetation 0.171 → 0.133 (high by 0.021 → matches);
+   year six lit over its day bare dry soil 0.286 → 0.301 (low by 0.014 →
+   matches), partly vegetated 0.237 → 0.195, dense vegetation 0.155 →
+   0.139 (high by 0.005 → matches). Outcomes: clear-sky albedo of the
+   state lit 0.152 → 0.146 (day 186), 0.161 → 0.157 (year six); land at
+   the top 0.225 → 0.201 and 0.252 → 0.239. Day means (spin-up log),
+   before → after: day 94 albedo 0.328 → 0.320, ASR 228.8 → 231.7, OLR
+   240.5 → 240.7, SWCRE −58.3 → −59.7, LWCRE 20.1 → 20.2, clear-sky
+   reflectance 0.1569 → 0.1441, Ts 16.52 → 16.69 °C, rain 2.19 → 2.21
+   mm/d; day 186 0.314 → 0.311, 233.4 → 234.7, 242.1 → 242.2, −55.2 →
+   −56.1, 17.6 → 17.6, 0.1523 → 0.1462, 16.60 → 16.70, 1.70 → 1.72; day
+   368 0.330 → 0.326, 228.1 → 229.4, 233.2 → 233.3, −56.7 → −57.5, 20.2 →
+   20.3, 0.1636 → 0.1574, 13.64 → 13.73, 2.33 → 2.34; day 2193 0.304 →
+   0.301, 237.1 → 237.9, 240.6 → 240.7, −48.7 → −49.1, 17.2 → 17.3,
+   0.1607 → 0.1571, 15.43 → 15.48, 1.88 → 1.89. Three days took 0.5–1.1
+   wall minutes on a shared GPU, before and after.
+
+   The feedback (year-six state, snow-free cells, surface sunlight taken
+   as 0.75 of the annual-mean insolation at the top; d(absorbed)/d(cover),
+   W/m² per unit of cover; with the soil held, and at equilibrium, where
+   S* falls in proportion to the litter):
+
+   | land | cover | sunlight W/m² | fixed 0.30 soil | carbon, soil held | carbon at S* | all cover lost: Δalbedo, Δabsorbed W/m² (fixed → carbon) |
+   |---|---|---|---|---|---|---|
+   | semi-arid and dry subhumid (P/PET 0.2–0.65) | 0.39 | 284 | 33.8 | 16.7 | 65.3 | 0.049 → 0.151, 13.9 → 42.8 |
+   | Sahel box 10–20N, 20W–40E | 0.32 | 302 | 32.5 | 35.4 | 77.1 | 0.037 → 0.094, 11.2 → 28.4 |
+   | all snow-free land | 0.58 | 277 | 38.7 | 9.5 | 37.4 | 0.088 → 0.183, 24.4 → 50.7 |
+
+   The sign is Charney's: losing cover brightens the ground and cuts the
+   sunlight it absorbs, now twice as much per unit of cover in the
+   drylands once the soil has followed. Charney (1975, Q. J. R. Meteorol.
+   Soc. 101: 193–202) raised the Sahel's albedo from 0.14 to 0.35 (from
+   memory, not re-read), 0.21; a dryland that loses all its cover here
+   gains 0.09–0.15 (0.04–0.05 with the fixed soil). With A = 100 the
+   soil's part arrives within about a year of the cover's loss.
+
+   How bare soil's albedo divides between organic matter and moisture
+   on one side and parent material and iron on the other. The evidence
+   read: (1) organic matter dominates the spectrum above about 2 % organic
+   matter (1.2 % C) and is masked by mineral constituents below it
+   (Baumgardner et al. 1985 as quoted); (2) over Northern Africa and
+   Arabia, where it is below that, MODIS diffuse shortwave albedo varies
+   by a factor of about 2.5 from the darkest volcanic terrain to the
+   brightest sand sheets, with the soil and rock type (Tsvetsinskaya et
+   al. 2002, GRL 29(9), abstract): parent material alone spans about
+   0.15–0.40 there, as wide as the organic range 0.12–0.37; (3) the top
+   20 cm's carbon itself correlates with precipitation (r² 0.33) and
+   temperature (−0.17) more than with sand (−0.28) and clay (0.07) (J&J
+   Table 2): climate sets most, not all, of the organic part; (4) on one
+   parent material carbon explains 74 % of the dry Munsell value (Konen
+   et al. 2003); (5) the first principal component of 12 509 soil
+   spectra (55 % of the variance) is iron oxides and kaolinite (Viscarra
+   Rossel et al. 2016, Earth-Sci. Rev. 155: 198–230), but the spectra
+   were continuum-removed, which takes out the overall brightness, so it
+   says nothing of the albedo's split; (6) water halves any soil's
+   albedo (Idso; CLM 0.5–0.8). No global map of bare-soil albedo (CLM's
+   colour classes, MODIS) was read, so no global share was computed.
+   Plainly: on humid vegetated land, roughly the 58 % outside UNEP's
+   drylands (Bastin et al. 2017), organic matter and water set the soil's
+   darkness and parent material matters little; on drylands, 42 %,
+   parent material and iron set it, with a spread as wide as the whole
+   organic range; the single largest contrast, pale deserts against dark
+   vegetated soils, follows climate. Neither "the climate-driven part is
+   the larger" nor "parent material dominates" holds over all land;
+   each holds where its regime applies.
+
+   What it cannot do:
+
+   - One mineral colour: no pale quartz sand against dark basalt or
+     red iron-rich soils, no salt pans, no carbonate crusts; the model's
+     deserts read 0.30–0.34 dry where Earth's span 0.15–0.45.
+   - One 0.2 m pool: no litter layer, no peat, no depth of the dark
+     horizon; boreal soils read the darkest (12.4 kg/m² against J&J's
+     4.7, whose profiles leave out the organic layer), tundra 9.4 against
+     5.7.
+   - No fire, erosion, photodegradation of dry litter or grazing; the
+     water factor alone keeps deserts pale.
+   - The start reads the present fill and cover, so a seasonally dry cell
+     started in its dry season (the Sahel's fill 0.04 in the year-six
+     March) starts low; A = 100 corrects it within a year or two, the
+     tundra within about six.
+   - The lag of soil behind vegetation is lost (above).
+
+   Defaults: land `soilCarbon` true, `mineralAlbedo` 0.37, `humusAlbedo`
+   0.12, `organicScale` 1 % C, `topsoilMass` 260 kg/m², `soilTurnover` 70
+   years, `litterInput` 0.5 kg C/m²/yr, `treeLitter` 1, `grassLitter` 1,
+   `decompositionWilting` 0.1, `carbonAcceleration` 100; `LLOYD_TAYLOR`
+   308.56 K, 56.02 K, 227.13 K; `MIAMI` [1.315, 0.119]; the wet
+   darkening's ratio `wetSoilAlbedo` / `bareAlbedo` 0.5; `bareAlbedo`
+   0.30 only without the carbon. Older states start at S*.
 2. The deck gate. The vertical mass flux smoothed over neighbouring
    cells before it is interpolated to the deck height (the page's
    overlay already does this), the memory shortened from ten days to
