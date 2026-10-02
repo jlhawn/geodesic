@@ -6584,6 +6584,68 @@ physics pass 3.89 → 4.67 ms; N=128 97.24 and 95.56 → 98.38 and 98.38 ms
 (+2.0 %), the physics pass 16.74–17.22 → 19.74 ms. A day at N=128 from
 eight128_day0183 takes 66 s (72 s with setup; sweep2 64 and 70).
 
+**The apparent heat source, the replicate spread and the longwave
+overlap (Oct 2).** The tropical boxes are now measured by the box-mean
+apparent heat source of the physics Q1, the same without the shortwave
+and longwave Q1R, and Q2 = −(L/c_p) dq_t/dt of the physics, each in K/day
+with its peak over 50 hPa bins of the mass-weighted mean and its centroid
+Σ p Q dp / Σ Q dp over its positive part (`heatingProfile` in
+`js/audit.module.js`); `scripts/tropicalHeating.mjs` prints them with the
+column integrals of Q1R and Q2 by process, the total water's budget by
+process and layer, the stratiform share of the rain (melted falling ice
+and conversion above 700 hPa) and an Amazon land box (10S–2N 70–50W) with
+the local solar hour of its convective rain, and `scripts/verticalAudit.mjs`
+gives the ITCZ and warm-pool Q1R peak and centroid over its window in
+place of the firing columns' convective heating peak. That row was the
+layer maximum of the convective trace in K/day without mass weights: on
+the diagnosis state (tdb64 rebuilt from b2310ca by `git archive`, its
+three-day log identical line for line) it reads 974 hPa, 13.67 K/day, of
+which the shallow plume is 12.45; on the gray-gas state 974 hPa again
+(6.84). On the same diagnosis state the ITCZ Q1 peaks at 600–650 hPa
+(1.81 K/day), Q1R at 704 hPa (2.64, bin 700–750) with 1.29 K/day at 439
+hPa and its centroid at 677 hPa; the warm pool's Q1R peaks at 607 hPa
+(3.35) with its centroid at 628; the gray-gas state's ITCZ Q1R at 439 hPa
+(2.23), centroid 606; convective share 0.13, firing 0.099, mean dilute
+and undilute CAPE 43 and 133 J/kg; the replay matches the model in every
+column-step, the heat closes to 1.1·10⁻¹³ K and q_t to 4.3·10⁻¹⁹ kg/kg a
+step. Over the same eight steps both scripts give the ITCZ 850–900 hPa
+(2.14 K/day), centroid 724 hPa, and the warm pool 750–800 hPa (3.34),
+centroid 654. Replicates of the three-day N=64 run from eight64_day0183
+at this tree's physics (b913e99), the sea drag ×(1 ± 10⁻⁴), budgets over
+day 186 → 187, base and range of the three: ITCZ convective share 0.1327
+(0.0051), firing 0.0979 (0.0022), Q1R peak 704 hPa, bin 700–750 at 2.643
+K/day (0.024), centroid 680.4 hPa (2.3); T − Jordan at 848 / 704 / 516 /
+439 hPa −2.40 / −0.09 / +1.71 / +1.71 K (0.002 / 0.009 / 0.005 / 0.005),
+RH 0.937 / 0.655 / 0.667 / 0.634 (≤ 0.0006); large-scale rain converted
+below 700 hPa 2.248 mm/d (0.030); warm pool share 0.1689 (0.0024), firing
+0.2161 (0.0022), centroid 627.6 hPa (0.8); day-186 global rain 1.681 mm/d
+(0.0024), SWCRE −52.11 (0.030), LWCRE 26.37 (0.008), ASR − OLR 6.35
+(0.024) W/m². The longwave's exponential-random overlap
+(`longwaveOverlap`, above, and `physics.gpu.js`): the in-model fluxes
+repeat `scripts/longwaveOverlap.mjs` to 8.3·10⁻¹⁶ (OLR) and 6.3·10⁻¹⁶
+(surface downward) relative in every column; on the rebuilt diagnosis
+state after one CPU step OLR +2.20 W/m² above random, LWCRE 26.22 →
+24.02, surface downward −2.82, ITCZ +6.29, warm pool +2.71; on the day-186
+state of the base +2.20, 25.77 → 23.57. Three days from eight64_day0183,
+against the base: LWCRE 26.37 → 24.07, OLR 234.20 → 236.43, ASR − OLR
+6.35 → 4.51 W/m², rain 1.680 mm/d; ITCZ convective share 0.1327 → 0.1210,
+firing 0.0979 → 0.0872, Q1R centroid 680.4 → 684.6 hPa, the 300–500 hPa
+longwave heating −1.838 → −1.822 K/day (warm pool −1.830 → −1.820, share
+0.1689 → 0.1526). Cost under the exclusive lock (128 steps after 16 from
+nine64/nine128_day0183, alternated twice with `longwaveOverlap: 'random'`,
+which is bit-identical to b913e99 over 32 GPU steps): N=64 22.60 and 22.51
+→ 25.90 and 26.34 ms (+16 %), the physics pass 4.68 → 8.00 ms; N=128
+99.39 and 99.13 → 111.24 ms (+12 %; the second 125.03, minimum 109.85),
+the physics pass 19.93 → 32.07 ms. Layers clear or overcast on both sides
+taken as one region, three loops per layer, measured 28.60 and 28.92 ms
+and 120.52 and 120.68 ms and is not kept. Tests: the layers' longwave
+closes on the surface emission less the back radiation and the OLR to
+3·10⁻¹³ W/m² on the CPU and 1.8·10⁻⁴ on the GPU; the cloudy columns'
+layer heating parts by 1.26·10⁻⁴ K/day at cell 196 layer 24 as at
+b913e99; over the treeline test's 48 GPU steps the lowest air parts by
+7.7·10⁻² K (2.3·10⁻² under 'random') and the tree cover by 1.2·10⁻⁴
+(2.5·10⁻⁵), above its 10⁻⁴.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
