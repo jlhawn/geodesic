@@ -666,7 +666,7 @@ export function createRadiation(mesh, core, {
     const magnification = 35 / Math.sqrt(1224 * mu * mu + 1);
     let ozone = 0, vapour = 0, oxygen = 0, co2 = 0;
     for (let k = 0; k < K; k++) {
-      const idx = k * C + i, p = pi * sigmaMid[k], mass = pi * dSigma[k] / g, dry = mass * (1 - Math.max(0, q[idx])), scaling = pressureScaling(p) * magnification;
+      const idx = k * C + i, p = pi * sigmaMid[k], mass = pi * dSigma[k] / g, dry = mass * Math.max(0, 1 - Math.max(0, q[idx])), scaling = pressureScaling(p) * magnification;
       ozone += layerOzone[k] * magnification;
       vapour += Math.max(0, q[idx]) * mass * 0.1 * vaporScaling(p, theta[idx] * exnerLayer[idx]) * magnification;
       oxygen += OXYGEN.mixingRatio * STP_DEPTH * dry * scaling;
@@ -686,7 +686,7 @@ export function createRadiation(mesh, core, {
     const total = () => vaporAbsorption * nearInfraredVaporAbsorptivity(vapour, vaporStrength) + oxygenAbsorptivity(oxygen) + carbonDioxideAbsorptivity(co2);
     let before = total(), loss = 0;
     for (let k = K - 1; k >= 0; k--) {
-      const idx = k * C + i, p = pi * sigmaMid[k], mass = pi * dSigma[k] / g, dry = mass * (1 - Math.max(0, q[idx])), scaling = pressureScaling(p) * DIFFUSE_PATH;
+      const idx = k * C + i, p = pi * sigmaMid[k], mass = pi * dSigma[k] / g, dry = mass * Math.max(0, 1 - Math.max(0, q[idx])), scaling = pressureScaling(p) * DIFFUSE_PATH;
       vapour += Math.max(0, q[idx]) * mass * 0.1 * vaporScaling(p, theta[idx] * exnerLayer[idx]) * DIFFUSE_PATH;
       oxygen += OXYGEN.mixingRatio * STP_DEPTH * dry * scaling;
       co2 += carbonDioxide * STP_DEPTH * dry * scaling;
@@ -1059,7 +1059,7 @@ export function createRadiation(mesh, core, {
     let outgoing = 0, back = 0, clearOutgoing = 0;
     if (correlated) {
       for (let k = 0; k < K; k++) {
-        const idx = k * C + i, dry = 1 - Math.max(0, q[idx]);
+        const idx = k * C + i, dry = Math.max(0, 1 - Math.max(0, q[idx]));
         layerPaths(pathRow, pi * sigmaMid[k], pi * dSigma[k] / g, temperature[k], q[idx], layerOzone[k] * OZONE_CM_ATM, wellMixed[0] * dry, wellMixed[1] * dry, wellMixed[2] * dry);
         for (let j = 0; j < 6; j++) paths[j][k] = pathRow[j];
       }

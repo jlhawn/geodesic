@@ -201,7 +201,7 @@ fn solarGases(i: i32, pi: f32, mu: f32, ozoneTaken: ptr<function, array<f32, K>>
   var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
   for (var k = 0; k < K; k++) {
     let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
-    let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * (1.0 - q);
+    let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * max(0.0, 1.0 - q);
     ozone += column * LV[L_OZS + k] * magnification;
     vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
     oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
@@ -215,7 +215,7 @@ fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, ar
   var before = nearInfraredGases(vapour, oxygen, co2); var loss = 0.0;
   for (var k = K - 1; k >= 0; k--) {
     let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
-    let scaling = pow(p / SCALE_P, SCALE_N) * DIFFUSE_PATH; let dry = mass * (1.0 - q);
+    let scaling = pow(p / SCALE_P, SCALE_N) * DIFFUSE_PATH; let dry = mass * max(0.0, 1.0 - q);
     vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
     oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
     let through = nearInfraredGases(vapour, oxygen, co2);
@@ -227,7 +227,7 @@ fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, ar
 }
 fn longwavePaths(i: i32, k: i32, pi: f32, T: f32, column: f32) -> array<f32, 6> {
   let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
-  let scale = p / LW_PREF; let vapour = q * mass; let dry = (1.0 - q) * mass * scale;
+  let scale = p / LW_PREF; let vapour = q * mass; let dry = max(0.0, 1.0 - q) * mass * scale;
   return array<f32, 6>(vapour * scale, vapour * (q * p / (0.622 + 0.378 * q)) * exp(LW_TSELF * (1.0 / T - 1.0 / 296.0)), CO2_MASS * dry * exp(LW_TCO2 * (T - 250.0)),
     column * LV[L_OZS + k] * OZ_KG * pow(scale, LW_NO3), CH4_MASS * dry, N2O_MASS * dry);
 }
