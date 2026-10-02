@@ -78,16 +78,16 @@ test('autoconversion rains out cloud water above the threshold and conserves wat
 });
 
 test('rain evaporates into the dry layers it falls through, conserving water and moist enthalpy, and never oversaturates them', () => {
-  const cloudAt = K - 12, converted = (m) => {
+  const cloudAt = K - 12, converted = (m, mCore = core) => {
     const [pi, theta, q, qc] = column(300, 0.3);
     qc[cloudAt * C] = 2e-3;
-    core.diagnoseColumn(0, pi, theta, q, qc);
+    mCore.diagnoseColumn(0, pi, theta, q, qc);
     const water = moist.columnWater(pi, q, 0) + moist.columnWater(pi, qc, 0), enthalpy = moistEnthalpy(pi, theta, q, 0), qBefore = Float64Array.from(q);
     const rain = m.autoconvertColumn(0, pi, theta, q, qc, 900);
     return { pi, theta, q, qc, qBefore, rain, water, enthalpy };
   };
-  const { moist: noEvaporation } = createModel(new Grid(3), { moist: { rainEvaporation: 0 } });
-  const reference = converted(noEvaporation);
+  const { moist: noEvaporation, core: noEvaporationCore } = createModel(new Grid(3), { moist: { rainEvaporation: 0 } });
+  const reference = converted(noEvaporation, noEvaporationCore);
   const r = converted(moist);
   assert.ok(reference.rain > 1e-3, `the cloud converts ${reference.rain} kg/m²`);
   assert.ok(r.rain < 0.5 * reference.rain, `rain reaching the ground ${r.rain} of ${reference.rain}`);

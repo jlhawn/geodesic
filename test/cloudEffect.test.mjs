@@ -53,16 +53,16 @@ test('the clear-sky pass gives each column the top-of-atmosphere fluxes of the s
   console.log(`${checked} columns (${lit} lit) with cloud in every third layer: clear-sky ASR and OLR equal the cloudless column's to ${worst.toExponential(1)}`);
 });
 
-async function engines(radiation) {
-  const cpu = createModel(new Grid(6), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation });
+async function engines(radiation, moist = {}) {
+  const cpu = createModel(new Grid(6), { ocean: false, radiation, moist }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation, moist });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();
   return { cpu, gpu, C: cpu.mesh.nCells };
 }
 
-test('both engines sum the clear-sky fluxes per cell alike and read out the day-mean cloud effects, mirrored per cell and carried in a saved state (under the gray optics, whose 48-step trajectories stay together cell by cell)', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpu, gpu, C } = await engines({ clearSkyPass: true, ...UNSCATTERED, ...GRAY });
+test('both engines sum the clear-sky fluxes per cell alike and read out the day-mean cloud effects, mirrored per cell and carried in a saved state (under the gray optics and the saturation adjustment, whose 48-step trajectories stay together cell by cell)', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpu, gpu, C } = await engines({ clearSkyPass: true, cloudOverlap: 'maximumRandom', ...UNSCATTERED, ...GRAY }, { condensation: 'saturation', iceSaturation: false, iceFall: null });
   for (let s = 0; s < 48; s++) { cpu.step(DT); await gpu.step(DT); }
   const device = await gpu.gpu.downloadPhysics();
   const cpuSums = Object.fromEntries(CLEAR_SUMMED.map((name) => [name, Float64Array.from(cpu.radiation.summed[name])]));

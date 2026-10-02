@@ -5,9 +5,9 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, P0, CP_DRY, R_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { curl, divergence } from '../js/dynamics/operators.module.js';
-import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex, ringMean, VISIBLE_PATH, STABILITY_SIGMA } from '../js/physics/radiation.module.js';
+import { createRadiation, sunDirection, AXIAL_TILT, DAY, YEAR, waterVaporAbsorptivity, adiabaticWaterLapse, inversionStrength, entrainmentIndex, ringMean, VISIBLE_PATH, STABILITY_SIGMA, DECORRELATION_LENGTH, DECORRELATION_SLOPE, overlapped } from '../js/physics/radiation.module.js';
 import { smoothCells } from '../js/levels.module.js';
-import { LATENT_HEAT, saturationHumidity, liftingCondensationLevel } from '../js/physics/moist.module.js';
+import { LATENT_HEAT, MOIST_DEFAULTS, saturationHumidity, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { createSurface } from '../js/physics/surface.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
@@ -305,7 +305,7 @@ function cloudColumn(seed, options) {
 }
 
 test('with cloudOverlap maximumRandom the layers of a run of adjacent cloudy layers overlap maximally and separate runs randomly: one run covers as its largest layer, two cover 1 − (1 − f1)(1 − f2); maximum takes the largest layer of the column', () => {
-  const column = cloudColumn(3, { overcastWater: null }), maximum = createRadiation(mesh, core, { overcastWater: null, cloudOverlap: 'maximum' });
+  const column = cloudColumn(3, { overcastWater: null, cloudOverlap: 'maximumRandom' }), maximum = createRadiation(mesh, core, { overcastWater: null, cloudOverlap: 'maximum' });
   maximum.setTime(0);
   core.diagnose(column.pi, column.theta, column.q, column.qc);
   const layer = (share) => 0.5 + share / (2 * (1 - 0.8));
@@ -319,6 +319,21 @@ test('with cloudOverlap maximumRandom the layers of a run of adjacent cloudy lay
   column.cloud(K - 5, 0.01); column.cloud(K - 6, 0.01);
   const joined = column.cover();
   assert.ok(Math.abs(joined - Math.max(low, high, layer(0.01) * column.cloud(K - 5, 0.01))) < 1e-12, `filling the gap joins the runs: ${joined}`);
+});
+
+test('with cloudOverlap exponentialRandom (the default) two adjacent cloudy layers cover α max + (1 − α) random, α = exp(−Δz/z₀) with Shonk et al.\'s z₀ at the column\'s latitude, and layers two clear layers apart cover at random', () => {
+  const column = cloudColumn(3, { overcastWater: null });
+  core.diagnose(column.pi, column.theta, column.q, column.qc);
+  const { geopotential, g } = core.diagnostics, { noon } = column;
+  const layer = (share) => 0.5 + share / (2 * (1 - 0.8));
+  const lower = layer(0.01) * column.cloud(K - 3, 0.01), upper = layer(0.05) * column.cloud(K - 4, 0.05);
+  const z0 = DECORRELATION_LENGTH - DECORRELATION_SLOPE * Math.abs(mesh.latCell[noon]) * 180 / Math.PI, alpha = Math.exp(-(geopotential[(K - 4) * C + noon] - geopotential[(K - 3) * C + noon]) / g / z0);
+  const expected = alpha * Math.max(lower, upper) + (1 - alpha) * (lower + upper - lower * upper), pair = column.cover();
+  console.log(`two adjacent layers of cover ${lower.toFixed(3)} and ${upper.toFixed(3)}, ${((geopotential[(K - 4) * C + noon] - geopotential[(K - 3) * C + noon]) / g).toFixed(0)} m apart under z0 ${z0.toFixed(0)} m (α ${alpha.toFixed(3)}): column cover ${pair.toFixed(4)}`);
+  assert.ok(Math.abs(pair - expected) < 1e-12 && pair > Math.max(lower, upper), `two adjacent layers cover ${pair} against ${expected}`);
+  const high = layer(0.03) * column.cloud(K - 7, 0.03), apart = column.cover();
+  assert.ok(Math.abs(apart - (1 - (1 - expected) * (1 - high))) < 1e-12, `a layer two clear layers above adds at random: ${apart}`);
+  assert.ok(Math.abs(overlapped(0.3, 1, 0.2, 0.5) - 1) < 1e-15 && Math.abs(overlapped(0.3, 0, 0.2, 0.7) - (1 - 0.7 * 0.8)) < 1e-15);
 });
 
 test('where the column\'s EIS rises through overcastInversion the cover blends into that of a half-width bounded by the cloud water: a saturated layer holding more than overcastWater is overcast under a strong inversion, and under a weak one keeps the uniform distribution\'s cover', () => {
@@ -887,7 +902,7 @@ test('with deckRest \'regime\' (the default) a surface-driven or decoupled colum
 });
 
 function modelDigest(radiation, moist = {}) {
-  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, plumeCape: 70, stratiformLifetime: null, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 }, radiation: { exchangeCoefficient: 1.5e-3, ...radiation } });
+  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, plumeCape: 70, stratiformLifetime: null, condensation: 'saturation', iceSaturation: false, iceFall: null, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 }, radiation: { exchangeCoefficient: 1.5e-3, ...radiation } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   for (let n = 0; n < 12; n++) model.step(900);
   const hash = createHash('sha256');
@@ -912,6 +927,15 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
     if (stratusFraction[i] > 0) covered++;
   }
   assert.ok(covered > 0, 'some cells carry a mixed-layer deck');
+});
+
+test('the uniform condensation, saturation over ice and falling ice of the moist defaults give their own twelve-step digest, which the overlap moves (the digests above run with all three off and are the parent\'s)', () => {
+  const defaults = { condensation: MOIST_DEFAULTS.condensation, iceSaturation: MOIST_DEFAULTS.iceSaturation, iceFall: MOIST_DEFAULTS.iceFall };
+  const now = modelDigest({}, defaults).digest, random = modelDigest({ cloudOverlap: 'maximumRandom' }, defaults).digest;
+  console.log(`12 steps at N=4: ${now} under the defaults, ${random} with maximum-random overlap`);
+  assert.equal(now, '36e2ce6f43071e9040dd69fc3b80787e');
+  assert.notEqual(random, now);
+  assert.notEqual(modelDigest({ cloudOverlap: 'maximumRandom' }).digest, random);
 });
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {

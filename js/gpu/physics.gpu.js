@@ -1,7 +1,7 @@
 import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME } from '../physics/ice.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE } from '../physics/radiation.module.js';
-import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, DEEP_REFERENCE, RETIRED_OPTIONS, FUSION_HEAT } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 
 /*
@@ -28,7 +28,7 @@ export function physicsConstants(o) {
   const m = { ...MIXED_LAYER_DEFAULTS, cloudLevels: DECK_CLOUD_LEVELS, ...o.mixedLayer };
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
-  if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom') throw new Error(`cloudOverlap must be 'maximum' or 'maximumRandom', not ${o.cloudOverlap}`);
+  if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom' && o.cloudOverlap !== 'exponentialRandom') throw new Error(`cloudOverlap must be 'maximum', 'maximumRandom' or 'exponentialRandom', not ${o.cloudOverlap}`);
   if (!(o.overcastInversion?.[1] > o.overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${o.overcastInversion}`);
   if (o.deckRest !== 'depth' && o.deckRest !== 'inversion' && o.deckRest !== 'regime') throw new Error(`deckRest must be 'depth', 'inversion' or 'regime', not ${o.deckRest}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
@@ -38,6 +38,7 @@ export function physicsConstants(o) {
   if (o.plumeCapeParcel !== 'plume' && o.plumeCapeParcel !== 'undilute') throw new Error(`plumeCapeParcel must be 'plume' or 'undilute', not ${o.plumeCapeParcel}`);
   if (o.plumeSource !== 'mean' && o.plumeSource !== 'lowest') throw new Error(`plumeSource must be 'mean' or 'lowest', not ${o.plumeSource}`);
   if (o.plumeConsumption !== 'all' && o.plumeConsumption !== 'buoyant') throw new Error(`plumeConsumption must be 'all' or 'buoyant', not ${o.plumeConsumption}`);
+  if (o.condensation !== 'uniform' && o.condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${o.condensation}`);
   const entrainment = { ...ENTRAINMENT_DEFAULTS, ...o.entrainment };
   const cloudTop = { ...CLOUD_TOP_DEFAULTS, ...o.cloudTop };
   if (o.turbulence !== 'moist' && o.turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${o.turbulence}`);
@@ -50,7 +51,7 @@ const BL_A2: f32 = ${entrainment.evaporativeEnhancement}; const BL_AMAX: f32 = $
 const VARIANCE_COVER: bool = ${moistTurbulence && o.boundaryCover === 'variance'}; const VAR_FLOOR: f32 = ${o.varianceFloor}; const VAR_SCALE: f32 = ${o.varianceScale}; const MIX_LENGTH: f32 = ${o.mixingLength}; const STABLE_LENGTH: f32 = ${o.stableMixingLength};
 const MLM_BL_GATE: bool = ${o.deckRegime === 'boundaryLayer'}; const MLM_BYPASS: bool = ${!!o.deckBypass};
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
-const PDF_COVER: bool = ${o.cloudCover === 'pdf'}; const VISIBLE_PATH: f32 = ${VISIBLE_PATH}; const RHC: f32 = ${o.criticalHumidity}; const RHC_BL: f32 = ${o.boundaryCriticalHumidity}; const COVER_FLOOR: f32 = ${o.coverFloor ?? 0.01}; const BOUND_WIDTH: bool = ${o.overcastWater != null}; const OVERCAST_WATER: f32 = ${o.overcastWater ?? 0}; const OVERCAST_EIS: f32 = ${o.overcastInversion[0]}; const OVERCAST_RAMP: f32 = ${o.overcastInversion[1] - o.overcastInversion[0]}; const RANDOM_OVERLAP: bool = ${o.cloudOverlap === 'maximumRandom'};
+const PDF_COVER: bool = ${o.cloudCover === 'pdf'}; const VISIBLE_PATH: f32 = ${VISIBLE_PATH}; const RHC: f32 = ${o.criticalHumidity}; const RHC_BL: f32 = ${o.boundaryCriticalHumidity}; const COVER_FLOOR: f32 = ${o.coverFloor ?? 0.01}; const BOUND_WIDTH: bool = ${o.overcastWater != null}; const OVERCAST_WATER: f32 = ${o.overcastWater ?? 0}; const OVERCAST_EIS: f32 = ${o.overcastInversion[0]}; const OVERCAST_RAMP: f32 = ${o.overcastInversion[1] - o.overcastInversion[0]}; const RANDOM_OVERLAP: bool = ${o.cloudOverlap === 'maximumRandom'}; const EXP_OVERLAP: bool = ${o.cloudOverlap === 'exponentialRandom'}; const DECOR_LEN: f32 = ${o.decorrelationLength}; const DECOR_SLOPE: f32 = ${o.decorrelationSlope};
 const CLOUD_ABS: f32 = ${o.cloudAbsorption ?? 0}; const CLOUD_SCAT: f32 = ${o.cloudScattering ?? 0}; const GRAY_LW: bool = ${o.cloudAbsorption != null}; const GRAY_SW: bool = ${o.cloudScattering != null};
 const LIQUID_T: f32 = ${o.liquidTemperature}; const ICE_T: f32 = ${o.iceTemperature}; const DROP_SEA: f32 = ${o.seaDropletRadius}; const DROP_LAND: f32 = ${o.landDropletRadius}; const LIQUID_IR: f32 = ${o.liquidInfrared}; const IR_DIFFUSIVITY: f32 = ${o.diffusivity}; const ICE_WARMEST: f32 = ${o.iceFitWarmest}; const ICE_COLDEST: f32 = ${o.iceFitColdest};
 const CLOUD_SW: f32 = ${o.cloudSolarAbsorption}; const WINDOW: f32 = ${o.window}; const GAS_FRAC: f32 = ${o.gasFraction};
@@ -64,6 +65,8 @@ const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME};
 const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
 const RAIN_EVAP: f32 = ${o.rainEvaporation};
+const UNIFORM: bool = ${o.condensation === 'uniform'}; const ICE_SAT: bool = ${!!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
+const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
 const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
 const DECK_OPEN: f32 = ${DECK_OPEN}; const DECK_CLOSED: f32 = ${DECK_CLOSED}; const PARCEL_VIRT: f32 = ${o.virtualBuoyancy === false ? 0 : 'VIRT'};
@@ -86,6 +89,23 @@ const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const SURFCAP: f32 = ${o.surfaceC
 export const PHYSICS_FUNCTIONS = `
 fn esat(T: f32) -> f32 { return 611.2 * exp(17.67 * (T - 273.15) / (T - 29.65)); }
 fn qsat(T: f32, p: f32) -> f32 { let es = esat(T); let dry = p - (1.0 - EPSILON) * es; return select(1.0, EPSILON * es / dry, dry > 0.0); }
+fn cloudSat(T: f32, p: f32) -> vec2<f32> {
+  let alpha = select(1.0, clamp((T - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0), ICE_SAT);
+  var es = esat(T);
+  if (alpha < 1.0) { es = alpha * es + (1.0 - alpha) * 611.21 * exp(22.587 * (T - 273.16) / (T + 0.7)); }
+  let dry = p - (1.0 - EPSILON) * es;
+  let qs = select(1.0, EPSILON * es / dry, dry > 0.0);
+  return vec2<f32>(qs, qs * (LHEAT + (1.0 - alpha) * LFUSION) / (RVAP * T * T));
+}
+fn uniformWidth(s: vec2<f32>, p: f32, ps: f32) -> f32 {
+  let rhc = RHC_TOP + (RHC_SURF - RHC_TOP) * exp(1.0 - pow(ps / p, RHC_EXP));
+  return (1.0 - rhc) * s.x / (1.0 + LHEAT * s.y / CP);
+}
+fn uniformCover(qc: f32, b: f32) -> f32 {
+  if (qc >= b) { return 1.0; }
+  if (qc > 0.0) { return sqrt(qc / b); }
+  return 0.0;
+}
 fn openWaterAlbedo(mu: f32) -> f32 { return 0.026 / (pow(mu, 1.7) + 0.065) + 0.15 * (mu - 0.1) * (mu - 0.5) * (mu - 1.0); }
 fn surfaceAlbedo(h: f32, water: f32, snow: f32) -> f32 {
   if (h <= 0.0) { return water; }
@@ -165,7 +185,7 @@ fn turbulentCover(i: i32, k: i32, pi: f32, mixTop: f32) -> f32 {
   let bottom = (K - 1) * C + i; let idx = k * C + i; let ex = D[D_EXM + idx];
   let water = max(0.0, IN[S_QC + idx]); let total = max(0.0, IN[S_Q + idx]) + water;
   let level = IN[S_TH + idx] - LHEAT * water / (CP * ex); let liquidT = level * ex;
-  let qs = qsat(liquidT, pi * LV[L_SM + k]); let slope = qs * LHEAT / (RVAP * liquidT * liquidT);
+  let saturated = cloudSat(liquidT, pi * LV[L_SM + k]); let qs = saturated.x; let slope = saturated.y;
   let a = 1.0 / (1.0 + LHEAT / CP * slope);
   let zk = D[D_GEO + idx] + LV[L_GABS + k]; let zs = D[D_GEO + bottom] + LV[L_GABS + K - 1];
   var gradientQ = 0.0; var gradientL = 0.0; var n = 0.0;
@@ -207,7 +227,11 @@ fn layerCover(idx: i32, k: i32, bottom: i32, pi: f32, water: f32, mixedDepth: f3
   let qsl = qsat(IN[S_TH + idx] * D[D_EXM + idx], pi * LV[L_SM + k]); let condensate = max(0.0, IN[S_QC + idx]);
   let excess = max(0.0, IN[S_Q + idx]) + condensate - qsl;
   let width = (1.0 - select(RHC, RHC_BL, inside)) * qsl;
-  let f = clamp((excess + width) / (2.0 * width), COVER_FLOOR, 1.0);
+  var f = clamp((excess + width) / (2.0 * width), COVER_FLOOR, 1.0);
+  if (UNIFORM) {
+    let pressure = pi * LV[L_SM + k];
+    f = clamp(uniformCover(condensate, uniformWidth(cloudSat(IN[S_TH + idx] * D[D_EXM + idx] - LHEAT * condensate / CP, pressure), pressure, pi)), COVER_FLOOR, 1.0);
+  }
   if (!(stratiform > 0.0)) { return f; }
   let bound = min(width, max(condensate, OVERCAST_WATER));
   return (1.0 - stratiform) * f + stratiform * clamp((excess + bound) / (2.0 * bound), COVER_FLOOR, 1.0);
@@ -225,9 +249,23 @@ fn overlap(seen: f32, last: bool, blocks: ptr<function, vec3<f32>>) {
   if (seen > 0.0) { (*blocks).x = max((*blocks).x, seen); }
   if ((*blocks).x > 0.0 && (!(seen > 0.0) || last)) { (*blocks).y *= 1.0 - (*blocks).x; (*blocks).z = max((*blocks).z, (*blocks).x); (*blocks).x = 0.0; }
 }
-fn overlapCover(blocks: vec3<f32>) -> f32 {
+fn overlapCover(blocks: vec3<f32>, layered: vec2<f32>) -> f32 {
   if (!PDF_COVER) { return 0.0; }
+  if (EXP_OVERLAP) { return layered.x; }
   return select(blocks.z, 1.0 - blocks.y, RANDOM_OVERLAP);
+}
+fn overlapAlpha(i: i32, k: i32) -> f32 {
+  if (k == 0) { return 0.0; }
+  let dz = (D[D_GEO + (k - 1) * C + i] + LV[L_GABS + k - 1] - D[D_GEO + k * C + i] - LV[L_GABS + k]) / GRAV;
+  return exp(-dz / (DECOR_LEN - DECOR_SLOPE * abs(MF[F_LAT + i]) * 57.29577951308232));
+}
+fn overlapLayer(seen: f32, alpha: f32, layered: ptr<function, vec2<f32>>) {
+  let previous = (*layered).y;
+  if (previous < 1.0) {
+    let pair = alpha * max(previous, seen) + (1.0 - alpha) * (previous + seen - previous * seen);
+    (*layered).x = 1.0 - (1.0 - (*layered).x) * (1.0 - pair) / (1.0 - previous);
+  } else { (*layered).x = 1.0; }
+  (*layered).y = seen;
 }
 fn shortwave(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec2<f32>) -> vec4<f32> {
   if (!SCATTER) { return stream(cloudDepth, keep, mu, adir, adif); }
@@ -644,7 +682,7 @@ export const PHYSICS_KERNELS = {
   let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
   var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>;
-  var cloudPath = 0.0; var cloudDepth = 0.0; var deckUnit = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0);
+  var cloudPath = 0.0; var cloudDepth = 0.0; var deckUnit = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0); var layered = vec2<f32>(0.0, 0.0);
   let tau0 = PH[PH_TAU + i];
   var deck = 0.0; var fraction = 0.0; var mlmCover = 0.0; var mlmWater = 0.0; var mlmEntrainment = 0.0; var mlmTop = 0.0;
   let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
@@ -660,7 +698,7 @@ export const PHYSICS_KERNELS = {
     let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
     var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0, vec2<f32>(0.0, 0.0), 0.0, 0.0);
     if (STRATUS_SOLAR && CLOUD_SW > 0.0) {
-      var path = 0.0; var depth = 0.0; var unit = 0.0; var layer = 0.0; var shadeBlocks = vec3<f32>(0.0, 1.0, 0.0);
+      var path = 0.0; var depth = 0.0; var unit = 0.0; var layer = 0.0; var shadeBlocks = vec3<f32>(0.0, 1.0, 0.0); var shadeLayered = vec2<f32>(0.0, 0.0);
       for (var k = 0; k < K; k++) {
         let mass = pi * LV[L_DS + k] / GRAV;
         var water = max(0.0, IN[S_QC + k * C + i]) * mass;
@@ -671,9 +709,11 @@ export const PHYSICS_KERNELS = {
         let optics = cloudOptics(IN[S_TH + k * C + i] * D[D_EXM + k * C + i], continental);
         depth += optics.x * water;
         if (k == STRATUS_K) { layer = water; unit = optics.x; }
-        overlap(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), k == K - 1, &shadeBlocks);
+        let shadeSeen = select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0);
+        overlap(shadeSeen, k == K - 1, &shadeBlocks);
+        if (EXP_OVERLAP) { overlapLayer(shadeSeen, overlapAlpha(i, k), &shadeLayered); }
       }
-      var shade = overlapCover(shadeBlocks);
+      var shade = overlapCover(shadeBlocks, shadeLayered);
       if (!(shade > 0.0)) { shade = 1.0; }
       var lit = beam - ozoneHeating;
       if (VAPOR_ABS > 0.0 && mu > 0.0) {
@@ -723,7 +763,9 @@ export const PHYSICS_KERNELS = {
     let optics = cloudOptics(IN[S_TH + idx] * D[D_EXM + idx], continental);
     cloudDepth += optics.x * water;
     if (k == STRATUS_K) { deckUnit = optics.x; }
-    overlap(select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0), k == K - 1, &blocks);
+    let seen = select(0.0, f * (1.0 - exp(-water / VISIBLE_PATH)), PDF_COVER && water > 0.0);
+    overlap(seen, k == K - 1, &blocks);
+    if (EXP_OVERLAP) { overlapLayer(seen, overlapAlpha(i, k), &layered); }
     cloudE[k] = select(0.0, f * (1.0 - exp(-optics.y * water / f)), water > 0.0);
     if (STRATUS && k == STRATUS_K && deck > 0.0) { cloudE[k] = fraction * (1.0 - exp(-optics.y * (water + deck))) + (1.0 - fraction) * cloudE[k]; }
     let clear = 1.0 - cloudE[k];
@@ -753,7 +795,7 @@ export const PHYSICS_KERNELS = {
     incident -= aerosolHeating;
     if (aerosolHeating > 0.0) { for (var k = 0; k < K; k++) { netFlux[k] += aerosolHeating * LV[L_AER + k]; } }
   }
-  var columnCover = overlapCover(blocks);
+  var columnCover = overlapCover(blocks, layered);
   if (!(columnCover > 0.0)) { columnCover = 1.0; }
   var sw = shortwave(select(cloudDepth / columnCover, CLOUD_SCAT * cloudPath / columnCover, GRAY_SW), cloudKeep(cloudPath / columnCover), mu, adir, adif, light);
   if (PDF_COVER && columnCover < 1.0) { sw = columnCover * sw + (1.0 - columnCover) * shortwave(0.0, 1.0, mu, adir, adif, light); }
@@ -1053,9 +1095,19 @@ fn saturateColumn(i: i32, pi: f32) {
     let ex = D[D_EXM + idx];
     let temperature = IN[S_TH + idx] * ex;
     let pressure = pi * LV[L_SM + k];
-    let qs = qsat(temperature, pressure);
-    let slope = qs * LHEAT / (RVAP * temperature * temperature);
-    var change = (IN[S_Q + idx] - qs) / (1.0 + LHEAT * slope / CP);
+    var change = 0.0;
+    if (UNIFORM && !(MOIST_BL && (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV < PH[PH_MIXTOP + i])) {
+      let water = IN[S_QC + idx];
+      let saturated = cloudSat(temperature - LHEAT * water / CP, pressure);
+      let b = uniformWidth(saturated, pressure, pi);
+      let Q = (IN[S_Q + idx] + water - saturated.x) / (1.0 + LHEAT * saturated.y / CP);
+      var held = max(0.0, Q);
+      if (b > 0.0) { held = select(select(0.0, (Q + b) * (Q + b) / (4.0 * b), Q > -b), Q, Q >= b); }
+      change = held - water;
+    } else {
+      let saturated = cloudSat(temperature, pressure);
+      change = (IN[S_Q + idx] - saturated.x) / (1.0 + LHEAT * saturated.y / CP);
+    }
     if (change < 0.0) { change = max(change, -IN[S_QC + idx]); }
     if (change == 0.0) { continue; }
     IN[S_Q + idx] -= change; IN[S_QC + idx] += change; IN[S_TH + idx] += LHEAT * change / (CP * ex);
@@ -1440,7 +1492,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   let produced = plumeColumn(i, pi, dt);
   if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }
   // autoconversion, and the rain evaporating as it falls
-  var rained = 0.0; var convective = 0.0;
+  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false;
   let floor = PH[PH_DEPTH + i];
   let iceConc = PH[PH_CONC + i]; let iced = select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
   for (var k = 0; k < K; k++) {
@@ -1449,8 +1501,9 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
     if (rained > 0.0 && (EVAP_IN_CLOUD || !(IN[S_QC + idx] > CLEAR_AIR)) && RAIN_EVAP > 0.0) {
       let ex = D[D_EXM + idx];
       let temperature = IN[S_TH + idx] * ex;
-      let qs = qsat(temperature, pi * LV[L_SM + k]);
-      let slope = qs * LHEAT / (RVAP * temperature * temperature);
+      let saturated = cloudSat(temperature, pi * LV[L_SM + k]);
+      let qs = saturated.x;
+      let slope = saturated.y;
       let deficit = max(0.0, (qs - IN[S_Q + idx]) / (1.0 + LHEAT * slope / CP)) * mass;
       let evaporated = min(rained, RAIN_EVAP * deficit);
       if (evaporated > 0.0) {
@@ -1476,16 +1529,44 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
         }
       }
     }
+    var liquid = IN[S_QC + idx];
+    if (ICE_FALL) {
+      if (descending > 0.0) {
+        let melted = descending * clamp((IN[S_TH + idx] * D[D_EXM + idx] - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+        IN[S_QC + idx] += (descending - melted) / mass;
+        rained += melted;
+        descending = 0.0;
+      }
+      liquid = IN[S_QC + idx];
+      if (liquid > 0.0) {
+        let temperature = IN[S_TH + idx] * D[D_EXM + idx]; let pressure = pi * LV[L_SM + k];
+        let share = clamp((temperature - ICE_T) / (LIQUID_T - ICE_T), 0.0, 1.0);
+        let iceWater = (1.0 - share) * liquid;
+        let total = liquid;
+        liquid = share * total;
+        if (iceWater > 0.0) {
+          let cover = max(CLEAR_AIR, uniformCover(total, uniformWidth(cloudSat(temperature, pressure), pressure, pi)));
+          let speed = FALL_C * pow(pressure / (RGAS * temperature) * iceWater / cover, FALL_EXP);
+          let courant = speed * dt * LV[L_SM + k] * GRAV / (RGAS * temperature * LV[L_DS + k]);
+          let leaving = iceWater * courant / (1.0 + courant);
+          IN[S_QC + idx] = total - leaving;
+          descending = leaving * mass;
+          moved = true;
+        }
+      }
+    }
     let qc = IN[S_QC + idx];
     if (!(qc > 0.0)) { continue; }
     if (AUTO_NONE) { } else if (AUTO_BL) { if (k > 0 && upperInterface(i, k) < floor) { continue; } } else if (k >= K - 2) { continue; }
-    let excess = max(0.0, qc - AUTO_T);
+    let excess = max(0.0, liquid - AUTO_T);
     var lifetime = select(CLOUD_LIFE, UPPER_LIFE, UPPER_SPLIT && pi * LV[L_SM + k] < SHALLOW_TOP);
     if (STRAT_SPLIT) { lifetime += longCloudShare(i, k, pi, iced) * (STRAT_LIFE - lifetime); }
-    let converted = min(qc, excess * (1.0 - exp(-AUTO_R * dt)) + qc * (1.0 - exp(-dt / lifetime)));
+    let converted = min(liquid, excess * (1.0 - exp(-AUTO_R * dt)) + liquid * (1.0 - exp(-dt / lifetime)));
     IN[S_QC + idx] = qc - converted;
     rained += mass * converted;
   }
+  rained += descending;
+  if (moved) { saturateColumn(i, pi); }
   let convected = select(produced, convective + cuShallowRain, cuDeep);
   // filler
   for (var f = 0; f < 2; f++) {

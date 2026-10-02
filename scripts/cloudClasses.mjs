@@ -18,7 +18,7 @@
 // 440 hPa. Effects do not add: the sum of the classes is printed beside
 // the total.
 // Cover: the radiation's own, each layer's cover times its visibility
-// overlapped maximum-random as the radiation does, of the class's layers
+// overlapped as the radiation overlaps them (cloudOverlap), of the class's layers
 // alone; the deck's is its fraction; "all" the column's resolved and
 // cumulus cover combined at random with the deck's, as the radiation's two
 // columns are. Water paths are grid means and in-cloud (over the class's
@@ -44,7 +44,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { DAY, VISIBLE_PATH, LOW_CLOUD_PRESSURE, CLOUD_OPTICS, cloudOptics } from '../js/physics/radiation.module.js';
+import { DAY, VISIBLE_PATH, LOW_CLOUD_PRESSURE, CLOUD_OPTICS, cloudOptics, overlapped, DECORRELATION_LENGTH, DECORRELATION_SLOPE } from '../js/physics/radiation.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 
 const FILE = process.argv[2];
@@ -104,6 +104,7 @@ for (let i = 0; i < C; i++) {
 }
 
 const ones = new Float64Array(K * C).fill(1), zeros = new Float64Array(K * C);
+const exponential = (RADIATION.cloudOverlap ?? 'exponentialRandom') === 'exponentialRandom';
 const fullDeck = { fraction: null, deck: null };
 function mask(without) {
   const resolved = Float64Array.from({ length: K * C }, (_, idx) => (runClass[idx] === without ? 0 : 1));
@@ -145,10 +146,17 @@ for (let i = 0; i < C; i++) {
   radiation.apply(fluxState, out, model.surface.windSpeed, null, i, i + 1, adir, adif, null, openSea, bl.depth, 0);
   resolvedCover.set(radiation.layerCover);
   radiation.useCloudMask(null);
-  const blocks = CLASSES.map(() => ({ block: 0, clear: 1 })), together = { block: 0, clear: 1 };
-  const close = (b, seen, last) => { if (seen > 0) b.block = Math.max(b.block, seen); if (b.block > 0 && (!(seen > 0) || last)) { b.clear *= 1 - b.block; b.block = 0; } };
+  const blocks = CLASSES.map(() => ({ block: 0, clear: 1, above: 0, cumulative: 0 })), together = { block: 0, clear: 1, above: 0, cumulative: 0 };
+  const decorrelation = (RADIATION.decorrelationLength ?? DECORRELATION_LENGTH) - (RADIATION.decorrelationSlope ?? DECORRELATION_SLOPE) * Math.abs(mesh.latCell[i] * 180 / Math.PI);
+  let alpha = 0;
+  const close = (b, seen, last) => {
+    if (exponential) { b.cumulative = overlapped(b.cumulative, b.above, seen, alpha); b.above = seen; b.clear = 1 - b.cumulative; return; }
+    if (seen > 0) b.block = Math.max(b.block, seen);
+    if (b.block > 0 && (!(seen > 0) || last)) { b.clear *= 1 - b.block; b.block = 0; }
+  };
   for (let k = 0; k < K; k++) {
     const idx = k * C + i, m = mass(k, i), T = temperature[idx];
+    alpha = k > 0 ? Math.exp(-(core.diagnostics.geopotential[(k - 1) * C + i] - core.diagnostics.geopotential[idx]) / (g * decorrelation)) : 0;
     cloudOptics(T, surfaceOf(i) === 1, optics, layerOptics);
     const resolved = Math.max(0, qc[idx]) * m, cumulus = cuCover[idx] * cuWater[idx] * m, c = runClass[idx];
     const seenAll = resolved + cumulus > 0 ? layerCover[k] * -Math.expm1(-(resolved + cumulus) / VISIBLE_PATH) : 0;
