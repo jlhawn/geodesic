@@ -145,7 +145,7 @@ fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
       }
     }
     let pBreak = pi * LV[L_SU + kb];
-    for (var k = first; k > kb; k--) { tau[k] = launch + (tau[kb] - launch) * (pi * LV[L_SU + k] - pBlock) / (pBreak - pBlock); }
+    for (var k = first; k > kb; k--) { tau[k] = launch + (tau[kb] - launch) * clamp((pi * LV[L_SU + k] - pBlock) / (pBreak - pBlock), 0.0, 1.0); }
   }
   var carried = 0.0;
   for (var k = bottom; k >= 0; k--) {

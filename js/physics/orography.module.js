@@ -164,7 +164,7 @@ export function orographicColumn(sub, column, options = OROGRAPHY_DEFAULTS, out 
   while (kb > 0 && zi(kb) <= breakTop) kb--;
   if (kb < first && tau[kb] < launch) {
     const pBlock = pAt(blocking), pBreak = pTop[kb];
-    for (let k = first; k > kb; k--) tau[k] = launch + (tau[kb] - launch) * (pTop[k] - pBlock) / (pBreak - pBlock);
+    for (let k = first; k > kb; k--) tau[k] = launch + (tau[kb] - launch) * Math.min(1, Math.max(0, (pTop[k] - pBlock) / (pBreak - pBlock)));
   }
   let carried = 0;
   for (let k = bottom; k >= 0; k--) {

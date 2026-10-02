@@ -105,6 +105,23 @@ test('an oblique flow over an elongated ridge: the stress turns towards the cros
   close(out.beta[column.z.length - 1], (2 - 1 / r) * 0.02 / 400 * Math.sqrt((out.blocking - z) / (z + 200)) * (B * Math.cos(psi) ** 2 + C * Math.sin(psi) ** 2) * 10 / 2, 1e-9, 'blocking rate with r and B cos²ψ + C sin²ψ');
 });
 
+test('over a wind that weakens with height the waves break low, and the stress never grows upward', () => {
+  const column = uniformColumn(), K = column.z.length, g = column.g;
+  for (let k = 0; k < K; k++) column.east[k] = Math.max(3, 15 - 0.004 * column.z[k]);
+  let lowBreaking = 0;
+  for (let mu = 300; mu <= 900; mu += 0.5) {
+    const out = orographicColumn({ deviation: mu, anisotropy: 0.4, orientation: 0.3, slope: 0.01 }, column, undefined, null, 337.5);
+    let tau = out.launch;
+    for (let k = K - 1; k >= 0; k--) {
+      assert.ok(out.wave[k] <= 0, `μ ${mu}: the wave drag does not accelerate layer ${k}`);
+      tau += out.wave[k] * (column.pBottom[k] - column.pTop[k]) / g;
+      if (k === K - 8 && tau < 0.9 * out.launch) lowBreaking++;
+    }
+    assert.ok(tau <= 1e-12 * out.launch + 1e-15, `μ ${mu}: all of the stress is taken in the column (${tau} left)`);
+  }
+  assert.ok(lowBreaking > 50, `low-level breaking in ${lowBreaking} of the columns`);
+});
+
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 
 function prepare(model) {
