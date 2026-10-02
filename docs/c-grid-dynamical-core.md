@@ -8967,6 +8967,88 @@ bound); the form drag's 2.109 and z^(−1.2) fit is the IFS's for n₁ −1.9
 where these data give −1.85; the summer and winter responses need a
 season, which needs a spin-up.
 
+**The terrain's fields merged (Oct 2).** Branch integrate-c: roughness
+fe5de7f onto 9ba8c38. The form drag is in the boundary layer's edge
+solve with the surface drag, its stress the ground's (`formStress`,
+`PH_FSTRESS`), not the ocean's, its energy in the solve's dissipation
+once. Tests: the sunlit cloudy layers' heating may part by 1.5·10⁻⁴
+K/day (1.26·10⁻⁴ at one cell; the CPU's own heating there moves by
+7.7·10⁻⁵ when one input changes by one float32 ulp, 1.3–1.5·10⁻⁴ when
+every input of the column changes by ±1 ulp); the cloud-effect parity
+leaves out the columns whose cloudy layers differ between the engines
+after any step, at most 2 % (4 of 362, 1 merged and 3 condensed; the
+rest 1.2·10⁻² W/m² at most apart). No digest moved; 63 files pass.
+Proofs, nine64_day0274, the second CPU step after loading: each edge
+column's momentum + Δt (τ_s + τ_form) 2.3·10⁻¹¹ of 4.8·10⁵ kg/m/s (Δt
+τ_form up to 3.3·10³), blocking alone 2.3·10⁻¹³, the orographic waves
+alone 4.6·10⁻¹³, each cell column's wave force 6.5·10⁻¹⁹ of 4.2·10⁻³
+Pa; the sponge 3.8·10¹⁵ and 1.1·10¹⁵ J, its angular momentum 0.033 and
+0.020 of a Rayleigh drag's; heat applied 1.36·10¹⁸ J against closure
+1.42·10¹⁷ + surface and form drag 8.52·10¹⁷ (the form drag's 7.5·10¹⁶)
++ mountains 3.64·10¹⁷ + waves 5.2·10¹⁴ to 5·10⁻¹⁴; 37998 edges take
+form stress, none sea–sea; no sea cell holds σ_flt, a form or blocking
+rate or a wave tendency; the ocean's stress is the surface stress (0
+apart). GPU kernels: drag 1.8·10⁻⁵, mountains 1.6·10⁻⁵, waves 4.2·10⁻⁸
+relative, heat against the sinks 7.8·10⁻⁴. With `subgrid` false the CPU
+gives 9ba8c38's state, land and ocean digests after each of nine steps
+from eight64_day0183; N=8 (no file) and N=16 and N=64 with the terrain
+off take the raster with its note and give 9ba8c38's six-step digests,
+the GPU the raster, Lott and Miller's constants and no form layers.
+Parity after 1, 4, 16 steps, lowest layer u (9ba8c38; fe5de7f): from
+nine64_day0091 4.8·10⁻⁵, 1.4·10⁻³, 2.7·10⁻³ m/s (4.9·10⁻⁵, 2.5·10⁻⁴,
+1.5·10⁻²; 1.9·10⁻³, 2.0·10⁻³, 3.7·10⁻³), launched stress 2.4·10⁻⁴,
+1.3·10⁻³, 3.8·10⁻² of its largest (1.0·10⁻⁴, 9.6·10⁻⁴, 1.5·10⁻³;
+4.7·10⁻⁴, 9.9·10⁻², 2.2·10⁻²), form stress 6.6·10⁻⁶, 8.1·10⁻⁴,
+4.8·10⁻⁴ rms relative, regime flips 0, 3, 32 (0, 2, 27; 9, 11, 73);
+from nine64_day0274 3.8·10⁻⁴, 1.9·10⁻³, 8.1·10⁻³ (4.9·10⁻⁵, 7.0·10⁻³,
+5.5·10⁻³; 7.9·10⁻⁴, 1.9·10⁻³, 5.0·10⁻³). Three one-day segments end day
+186 byte for byte as one. Ten CPU steps: the form rate × Δt 9.02 (30.0N
+94.5E, lowest layer) from nine64_day0274, 6.58 from nine64_day0091,
+6.30 (29.7S 70.2W) at N=128; no column's largest |u| grows and no
+column's kinetic energy rises in the solve; balance 3.5·10⁻¹¹ to
+1.3·10⁻⁹; all finite, largest wind 95.8, 85.8, 84.0 m/s.
+five64_day2190 (cam26) loads and steps on both engines.
+
+GPU runs, 8-step samples, one script on the three trees (it gives
+fe5de7f's December numbers above to the digits printed), merge
+(9ba8c38; fe5de7f): eight64 day 186 albedo 0.291 (0.293; 0.312), ASR
+241.4 (240.9; 234.4), OLR 234.1 (233.8; 241.7), SWCRE −52.4 (−52.8;
+−54.3), LWCRE 25.9 (26.1; 17.3), rain 1.70 (1.72; 1.67); nine64 day 94
+0.303 (0.305; 0.329), 237.3 (236.8; 228.4), 234.3 (234.3; 239.6),
+−57.1 (−57.6; −58.7), 26.1 (26.0; 20.0), 2.36 (2.36; 2.26). Land by
+cover, eight64 day 183 + 3, wind m/s; stress N/m²; H; LE W/m²: forest
+2.14; 0.197; 14.1; 64.0 (2.65; 0.258; 11.8; 66.4 / 2.18; 0.185; 10.8;
+56.0), grass 2.71; 0.062; 22.0; 24.7 (5.19; 0.171; 25.5; 27.3 / 2.71;
+0.062; 19.0; 21.8), bare 3.37; 0.123; 61.0; 25.3 (3.68; 0.142; 61.6;
+25.7 / 3.35; 0.117; 50.6; 23.1), snow 4.00; 0.074; −6.2; 2.7 (8.43;
+0.245; −16.8; 6.7 / 3.94; 0.073; −6.4; 2.7), ice sheets 8.67; 0.163;
+−20.9; 2.0 (10.35; 0.233; −26.7; 2.8 / 8.81; 0.173; −17.6; 1.5);
+evaporation 2.196 (2.217; 1.930) mm/d, sensible 12.50 (12.11; 10.36)
+W/m², calm tropical sea LE 45.5 (45.1; 28.3); nine64 day 91 + 3 forest
+wind 2.10 (2.67; 2.11), grass 2.21 (4.35; 2.12), evaporation 2.711
+(2.726; 2.505). nine64 day 274 + 10: SLP 60–65 / 70–75 / 80–85N
+1006.6 / 1003.3 / 1008.4 (1002.4 / 997.8 / 1002.4; 1007.5 / 1004.0 /
+1010.1) hPa, 30–85N rms against 9ba8c38 4.26 hPa against a 10⁻⁷ twin's
+0.12; lowest-layer u over land at 45–50 / 50–55N 1.1 / 0.8 (2.7 / 1.9;
+1.3 / 0.6) m/s; 200 hPa at 50–55N 32.5 (32.6; 32.7), rms 0.76 against
+9ba8c38 (twin 0.08); land-mean stress vegetation / form / blocking /
+waves / total 0.112 / 0.052 / 0.068 / 0.085 / 0.296 (0.188 / 0 / 0.020
+/ 0.017 / 0.220; 0.125 / 0.058 / 0.073 / 0.099 / 0.328) N/m²; day 284
+at 70–90N, 1.1 / 3.5 / 7.4 / 14 / 24 / 37 / 53 hPa, 225.6 / 229.8 /
+223.1 / 216.3 / 210.4 / 206.7 / 204.2 K (220.7 / 225.2 / 218.9 / 213.1
+/ 208.1 / 205.0 / 203.0; 240.8 / 249.6 / 239.6 / 229.9 / 218.4 / 209.0
+/ 204.3; twin within 0.1 K), zonal-mean u at 65–67.5N 38.6 / 34.2 /
+36.0 / 35.6 / 34.6 / 32.5 / 29.4 (48.1 / 39.5 / 40.1 / 38.6 / 36.1 /
+32.9 / 29.8) m/s; without the form drag 225.2 / 229.8 / 223.1 / 216.5 K
+and 39.0 / 34.2 / 35.9 / 36.5 m/s. eight128 day 183 + 1: albedo 0.252
+(0.253; 0.281), land-mean wind 3.48 (4.04; 3.50) m/s, stress 0.149 /
+0.057 / 0.042 / 0.064 (0.189 / 0 / 0.008 / 0.010; 0.144 / 0.058 / 0.044
+/ 0.069). Cost under the exclusive lock, 128 steps after 16, twice:
+N=64 25.18 / 25.04 → 25.65 / 26.14 ms (+3.4 %); N=128 105.90 / 106.76
+→ 108.13 / 106.60 ms (+0.9 %; physics pass 42.24 / 42.34 → 43.94 /
+43.48, mixing pass 17.65 / 17.74 → 18.65 / 18.22); a day at N=128 54.4
+→ 55.0 s of steps, 77.1 → 78.1 s to the saved file.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
