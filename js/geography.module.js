@@ -170,6 +170,196 @@ export function surfaceGeopotential(mesh, geography, { g = 9.80616, passes = 2, 
 }
 
 /*
+ * The subgrid orography of each cell after Baines and Palmer (1990), as
+ * the IFS computes its fields for Lott and Miller's (1997) scheme (IFS
+ * Cy47r3 Part IV §11.3.4): the raster, clamped at sea level, less the
+ * orography the dynamics resolves (`resolved`, per cell in metres,
+ * interpolated linearly to each raster point on the triangle of cell
+ * centres that holds it); every raster point's gradient by central
+ * differences, K = ½(h_x² + h_y²), L = ½(h_x² − h_y²), M = h_x h_y, h
+ * and h² averaged over the points nearest each cell with area weights;
+ * then the standard deviation μ² = ⟨h²⟩ − ⟨h⟩², the anisotropy
+ * γ² = (K − √(L² + M²))/(K + √(L² + M²)), the orientation θ = ½ atan2(M, L)
+ * of the principal axis (radians from east towards north, the direction
+ * of the steepest mean-square slope) and the slope σ² = K + √(L² + M²).
+ * x is east and y north; `count` is the number of raster points a cell
+ * holds. With `land`, a cell the mask makes sea has no subgrid orography.
+ * With `filtered`, a raster on the same grid of the band-passed variance
+ * (σ_flt² per point, scripts/subgridTerrain.py), `filtered` per cell is
+ * the square root of its area-weighted mean. With `spacing` (metres) the
+ * central differences reach that far east, west, north and south
+ * (bilinear on the raster, at least one point), as on the IFS's 5 km grid.
+ */
+export function subgridOrography(mesh, topography, resolved = null, land = null, { filtered: band = null, spacing = 0 } = {}) {
+  const { nCells: C, xCell, cellsOnCell, nEdgesOnCell, maxEdges, verticesOnCell, cellsOnVertex, radius } = mesh;
+  const { rows, cols, data } = topography;
+  const R = radius ?? 6371220;
+  const residual = new Float64Array(rows * cols), owner = new Int32Array(rows * cols);
+  const nearest = (x, y, z, start) => {
+    let best = start, bestDot = x * xCell[3 * start] + y * xCell[3 * start + 1] + z * xCell[3 * start + 2];
+    for (;;) {
+      let next = best;
+      for (let m = 0; m < nEdgesOnCell[best]; m++) {
+        const j = cellsOnCell[maxEdges * best + m];
+        const dot = x * xCell[3 * j] + y * xCell[3 * j + 1] + z * xCell[3 * j + 2];
+        if (dot > bestDot) { bestDot = dot; next = j; }
+      }
+      if (next === best) return best;
+      best = next;
+    }
+  };
+  const height = (i) => (resolved ? resolved[i] : 0);
+  const at = (x, y, z, i) => {
+    if (!resolved) return 0;
+    let bestWeight = -Infinity, value = height(i);
+    for (let m = 0; m < nEdgesOnCell[i]; m++) {
+      const v = verticesOnCell[maxEdges * i + m];
+      if (v < 0) continue;
+      const a = cellsOnVertex[3 * v], b = cellsOnVertex[3 * v + 1], c = cellsOnVertex[3 * v + 2];
+      const ax = xCell[3 * a], ay = xCell[3 * a + 1], az = xCell[3 * a + 2], bx = xCell[3 * b], by = xCell[3 * b + 1], bz = xCell[3 * b + 2], cx = xCell[3 * c], cy = xCell[3 * c + 1], cz = xCell[3 * c + 2];
+      const det = ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+      const wa = (x * (by * cz - bz * cy) - y * (bx * cz - bz * cx) + z * (bx * cy - by * cx)) / det;
+      const wb = (ax * (y * cz - z * cy) - ay * (x * cz - z * cx) + az * (x * cy - y * cx)) / det;
+      const wc = (ax * (by * z - bz * y) - ay * (bx * z - bz * x) + az * (bx * y - by * x)) / det;
+      const sum = wa + wb + wc, low = Math.min(wa, wb, wc) / sum;
+      if (low > bestWeight) { bestWeight = low; value = (wa * height(a) + wb * height(b) + wc * height(c)) / sum; }
+    }
+    return value;
+  };
+  let cell = 0;
+  for (let r = 0; r < rows; r++) {
+    const lat = Math.PI / 2 - (r + 0.5) * Math.PI / rows, cosLat = Math.cos(lat), sinLat = Math.sin(lat);
+    for (let c = 0; c < cols; c++) {
+      const lon = -Math.PI + (c + 0.5) * 2 * Math.PI / cols, x = cosLat * Math.cos(lon), y = cosLat * Math.sin(lon);
+      cell = nearest(x, y, sinLat, cell);
+      owner[r * cols + c] = cell;
+      residual[r * cols + c] = Math.max(0, data[r * cols + c]) - at(x, y, sinLat, cell);
+    }
+  }
+  const weight = new Float64Array(C), sum = new Float64Array(C), square = new Float64Array(C), kSum = new Float64Array(C), lSum = new Float64Array(C), mSum = new Float64Array(C), bandSum = new Float64Array(C), count = new Int32Array(C);
+  const dLat = Math.PI / rows, dLon = 2 * Math.PI / cols;
+  const wrap = (c) => ((c % cols) + cols) % cols;
+  const sample = (row, column) => {
+    const r0 = Math.floor(row), c0 = Math.floor(column), tr = row - r0, tc = column - c0, r1 = Math.min(rows - 1, r0 + 1), a = wrap(c0), b = wrap(c0 + 1);
+    return (1 - tr) * ((1 - tc) * residual[r0 * cols + a] + tc * residual[r0 * cols + b]) + tr * ((1 - tc) * residual[r1 * cols + a] + tc * residual[r1 * cols + b]);
+  };
+  for (let r = 0; r < rows; r++) {
+    const lat = Math.PI / 2 - (r + 0.5) * dLat, w = Math.cos(lat);
+    const reachX = spacing > 0 ? Math.min(cols / 4, Math.max(1, spacing / (R * w * dLon))) : 1, dx = 2 * reachX * R * w * dLon;
+    const reachY = spacing > 0 ? Math.max(1, spacing / (R * dLat)) : 1;
+    const north = Math.max(0, r - reachY), south = Math.min(rows - 1, r + reachY), dy = (south - north) * R * dLat;
+    for (let c = 0; c < cols; c++) {
+      const n = r * cols + c, i = owner[n], h = residual[n];
+      const hx = spacing > 0 ? (sample(r, c + reachX) - sample(r, c - reachX)) / dx : (residual[r * cols + (c + 1) % cols] - residual[r * cols + (c + cols - 1) % cols]) / dx;
+      const hy = spacing > 0 ? (sample(north, c) - sample(south, c)) / dy : (residual[north * cols + c] - residual[south * cols + c]) / dy;
+      weight[i] += w; sum[i] += w * h; square[i] += w * h * h; count[i]++;
+      if (band) bandSum[i] += w * band.data[n];
+      kSum[i] += w * 0.5 * (hx * hx + hy * hy); lSum[i] += w * 0.5 * (hx * hx - hy * hy); mSum[i] += w * hx * hy;
+    }
+  }
+  const deviation = new Float64Array(C), anisotropy = new Float64Array(C), orientation = new Float64Array(C), slope = new Float64Array(C), filtered = band ? new Float64Array(C) : null;
+  for (let i = 0; i < C; i++) {
+    if (!(weight[i] > 0) || (land && !land[i])) continue;
+    if (band) filtered[i] = Math.sqrt(Math.max(0, bandSum[i] / weight[i]));
+    const mean = sum[i] / weight[i], kk = kSum[i] / weight[i], ll = lSum[i] / weight[i], mm = mSum[i] / weight[i], spread = Math.hypot(ll, mm);
+    deviation[i] = Math.sqrt(Math.max(0, square[i] / weight[i] - mean * mean));
+    anisotropy[i] = kk + spread > 0 ? Math.sqrt(Math.max(0, (kk - spread) / (kk + spread))) : 1;
+    orientation[i] = 0.5 * Math.atan2(mm, ll);
+    slope[i] = Math.sqrt(kk + spread);
+  }
+  return { deviation, anisotropy, orientation, slope, count, ...(band ? { filtered } : {}) };
+}
+
+/*
+ * The per-mesh subgrid orography files data/subgrid_N<N>.bin that
+ * scripts/subgridTerrain.mjs writes from GMTED2010: a 16-byte header
+ * ('SGO1', the cell count, the field count, 0) and per field one uint16
+ * per cell, value = q × scale + offset, in SUBGRID_FIELDS' order.
+ */
+export const SUBGRID_FIELDS = [
+  ['deviation', 0.1, 0],
+  ['anisotropy', 1 / 65535, 0],
+  ['orientation', Math.PI / 65535, -Math.PI / 2],
+  ['slope', 1e-5, 0],
+  ['filtered', 0.05, 0],
+];
+
+export function encodeSubgrid(fields) {
+  const C = fields.deviation.length, out = new ArrayBuffer(16 + 2 * C * SUBGRID_FIELDS.length);
+  const head = new DataView(out);
+  [83, 71, 79, 49].forEach((b, j) => head.setUint8(j, b));
+  head.setUint32(4, C, true); head.setUint32(8, SUBGRID_FIELDS.length, true);
+  SUBGRID_FIELDS.forEach(([name, scale, offset], f) => {
+    const q = new Uint16Array(out, 16 + 2 * C * f, C), values = fields[name];
+    for (let i = 0; i < C; i++) q[i] = Math.min(65535, Math.max(0, Math.round((values[i] - offset) / scale)));
+  });
+  return out;
+}
+
+export function decodeSubgrid(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  const head = new DataView(bytes);
+  if (String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'SGO1') throw new Error('not a subgrid orography file');
+  const C = head.getUint32(4, true), count = head.getUint32(8, true);
+  if (count !== SUBGRID_FIELDS.length || bytes.byteLength !== 16 + 2 * C * count) throw new Error('subgrid orography file of the wrong size');
+  const fields = {};
+  SUBGRID_FIELDS.forEach(([name, scale, offset], f) => {
+    const q = new Uint16Array(bytes, 16 + 2 * C * f, C);
+    fields[name] = Float64Array.from(q, (v) => v * scale + offset);
+  });
+  for (let i = 0; i < C; i++) if (!(fields.deviation[i] > 0)) fields.orientation[i] = 0;
+  return fields;
+}
+
+export const subgridUrl = (N) => new URL(`../data/subgrid_N${N}.bin`, import.meta.url);
+
+/*
+ * The fields for a mesh: `given` when it has the mesh's cell count, else
+ * under node the file for N if there is one, else null (the caller
+ * computes them from the 0.25° raster and says so).
+ */
+export function meshSubgrid(mesh, given = undefined) {
+  if (given === false) return null;
+  if (given) return given.deviation.length === mesh.nCells ? given : null;
+  const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
+  const fs = globalThis.process?.getBuiltinModule?.('node:fs');
+  if (!fs || 10 * N * N + 2 !== mesh.nCells) return null;
+  const url = subgridUrl(N);
+  if (!fs.existsSync(url)) return null;
+  return decodeSubgrid(fs.readFileSync(url));
+}
+
+/*
+ * `fields` with the sea cells of `land` zeroed, or null when more than
+ * 0.5 % of the land cells hold nothing: fields made for another land mask.
+ */
+export function landSubgrid(fields, land) {
+  const masked = {};
+  for (const [name] of SUBGRID_FIELDS) if (fields[name]) masked[name] = Float64Array.from(fields[name], (v, i) => (land[i] ? v : 0));
+  let cells = 0, bare = 0;
+  for (let i = 0; i < land.length; i++) {
+    if (!land[i]) continue;
+    cells++;
+    if (!(masked.deviation[i] > 0 || masked.slope[i] > 0 || (masked.filtered && masked.filtered[i] > 0))) bare++;
+  }
+  return bare <= 0.005 * cells ? masked : null;
+}
+
+const SUBGRID_FALLBACK = {
+  missing: (N) => `no data/subgrid_N${N}.bin for this mesh`,
+  off: () => 'the subgrid files are turned off (subgrid false)',
+  terrain: () => 'the terrain is off, and the files hold only the scales below the resolved terrain',
+  land: (N) => `data/subgrid_N${N}.bin was made for another land mask`,
+};
+const fallbackSaid = new Set();
+export function subgridFallbackNote(mesh, reason = 'missing') {
+  const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
+  if (fallbackSaid.has(`${N} ${reason}`)) return;
+  fallbackSaid.add(`${N} ${reason}`);
+  console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](N)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);
+}
+
+/*
  * Moves a column's surface pressure between surface geopotentials
  * hydrostatically, so a state saved over one terrain starts balanced
  * over another: π scales by exp(−Δφ / (R T)) with T the lowest layer's

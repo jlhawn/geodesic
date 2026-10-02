@@ -11,7 +11,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography, topographyFromInt16 } from '../js/geography.module.js';
 import { regridState, savedDeckField, remapLevels, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { sigmaInterfaces, sigmaGridName, standardHeight, standardSigma, SIGMA_GRIDS } from '../js/dynamics/sigmaCore.module.js';
+import { sigmaInterfaces, sigmaGridName, standardHeight, standardSigma, SIGMA_GRIDS, P0 } from '../js/dynamics/sigmaCore.module.js';
 import { encodeState, decodeState, savedLevels } from '../js/stateFile.module.js';
 
 let gpuAvailable = true;
@@ -38,7 +38,7 @@ function prepare(model) {
 }
 
 test('the sigma grids go by name, cam26 by default, and a grid is named again from its interfaces in single precision', () => {
-  assert.deepEqual(SIGMA_GRIDS, ['cam26', 'bl34']);
+  assert.deepEqual(SIGMA_GRIDS, ['cam26', 'bl34', 'bl36']);
   assert.deepEqual(sigmaInterfaces(), cam);
   assert.equal(cam.length - 1, 27);
   assert.equal(bl.length - 1, 34);
@@ -184,6 +184,21 @@ test('remapLevels carries a state between sigma grids conservatively: each colum
   assert.throws(() => remapLevels(cam, bl.subarray(1), drying, mesh), /the grids span σ 0–1 and 0\.00219.*–1/);
 });
 
+test('bl36 is bl34 with its top layer split at 0.3 and 1 hPa, and remapLevels carries a bl34 state onto it and back unchanged', () => {
+  const top = sigmaInterfaces('bl36');
+  assert.equal(top.length - 1, 36);
+  assert.equal(sigmaGridName(Float32Array.from(top)), 'bl36');
+  assert.deepEqual(Array.from(top.subarray(1, 3), (sigma) => +(sigma * P0 / 100).toFixed(6)), [0.3, 1]);
+  assert.deepEqual(top.subarray(3), bl.subarray(1));
+  const mesh = buildMesh(new Grid(2)), C = mesh.nCells, E = mesh.nEdges;
+  const state = { pi: new Float64Array(C).fill(1e5), theta: Float64Array.from({ length: 34 * C }, (_, x) => 300 + x % 97), q: new Float64Array(34 * C).fill(1e-3), qc: null, u: Float64Array.from({ length: 34 * E }, (_, x) => (x % 13) - 6) };
+  const up = remapLevels(bl, top, state, mesh);
+  for (let k = 0; k < 3; k++) assert.deepEqual(up.theta.subarray(k * C, (k + 1) * C), state.theta.subarray(0, C), `layer ${k} takes the 0-2.2 hPa layer`);
+  assert.deepEqual(up.u.subarray(3 * E), state.u.subarray(E));
+  const back = remapLevels(top, bl, up, mesh);
+  for (const name of ['theta', 'u']) for (let x = 0; x < state[name].length; x++) assert.ok(Math.abs(back[name][x] - state[name][x]) <= 1e-12 * Math.abs(state[name][x]), `${name} at ${x}`);
+});
+
 test('the worker-thread engine on bl34 reproduces the single-thread step bit for bit', async () => {
   const serial = createModel(new Grid(6), { levels: bl });
   const parallel = await createParallelModel(new Grid(6), { levels: bl }, 2);
@@ -199,8 +214,9 @@ test('the worker-thread engine on bl34 reproduces the single-thread step bit for
 });
 
 test('the full model on bl34 steps alike on the CPU and the GPU, over a continent with its ocean, but for the odd column whose convection switches a step apart and its neighbours', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const cpu = prepare(createModel(new Grid(6), { topography, levels: bl, moist: { excessVelocity: 'convective' } }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, levels: bl, moist: { excessVelocity: 'convective' } }));
+  const floorWind = { convectiveGust: false };
+  const cpu = prepare(createModel(new Grid(6), { topography, levels: bl, surface: floorWind, moist: { excessVelocity: 'convective' } }));
+  const gpu = prepare(await createGpuModel(new Grid(6), { topography, levels: bl, surface: floorWind, moist: { excessVelocity: 'convective' } }));
   assert.equal(gpu.gpu.K, 34);
   assert.equal(gpu.core.K, 34);
   for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }

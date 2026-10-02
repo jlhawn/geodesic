@@ -49,10 +49,13 @@
 // '{"entrainment":{"efficiency":0.3}}'), SURFACE (JSON options for the
 // surface layer, e.g. '{"exchange":"fixed"}' for constant coefficients or
 // '{"dragCoefficient":1.3e-3}', a fixed sea drag coefficient, which its
-// heat and vapour exchange share), LAND (JSON options for the
-// land surface, e.g. '{"treeMoisture":false}'; '{"start":"bare"}' or
-// '{"start":"green"}' make a fresh start's land bare or green in place of
-// 'neutral', see START_CODES in js/physics/land.module.js), LAND_JUMPS (the
+// heat and vapour exchange share, and the model top's sponge and Rayleigh
+// drag), GRAVITY_WAVES (JSON options for the gravity-wave drag of
+// js/physics/gravityWaves.module.js, e.g. '{"flux":3e-3}', or false),
+// LAND (JSON options for the land surface, e.g. '{"treeMoisture":false}';
+// '{"start":"bare"}' or '{"start":"green"}' make a fresh start's land
+// bare or green in place of 'neutral', see START_CODES in
+// js/physics/land.module.js), LAND_JUMPS (the
 // model days at whose end land.jump() sets every land cell's trees and
 // topsoil carbon to the equilibrium of its own record and ends a fresh
 // start's hold, logging the change by land area globally and by 10° band,
@@ -75,8 +78,9 @@
 // SYNC_CMD (a shell command run after every snapshot, forcing file and log
 // update with the file's path as $1, see scripts/runControl.mjs),
 // STOP_AFTER_STEPS (for tests: stop as on SIGTERM once this many steps
-// have run), STRATOSPHERE (1: a second daily line with the layer-mean
-// temperature of every layer above 200 hPa, global and by zone).
+// have run), STRATOSPHERE (1: two more daily lines, the layer-mean
+// temperature of every layer above 200 hPa, global and by zone, and those
+// layers' winds, see scripts/upperAtmosphere.mjs).
 // A fresh start can take from saved states: FROM, a state at
 // the same N, gives the ocean, the land, the sea-surface temperature of
 // its mixed layer and the land-surface temperature and, with
@@ -114,6 +118,7 @@ import { CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 import { freshJumpDue } from '../js/physics/land.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
+import { upperWindLine } from './upperAtmosphere.mjs';
 
 const BOXES = {
   sahara: [16, 30, -10, 32], arabia: [16, 30, 38, 55], sahel: [8, 16, -15, 35], india: [15, 28, 72, 88], congo: [-5, 5, 12, 30], amazon: [-10, 3, -70, -50],
@@ -126,6 +131,7 @@ const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MIN
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
 const RADIATION = { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') }, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
+const GRAVITY_WAVES = process.env.GRAVITY_WAVES === undefined ? {} : { gravityWaves: JSON.parse(process.env.GRAVITY_WAVES) };
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
 const ATMOSPHERE = process.env.ATMOSPHERE ?? 'carry', STRATOSPHERE = process.env.STRATOSPHERE === '1';
 const LAND_JUMPS = process.env.LAND_JUMPS ?? 'fresh', jumpDays = LAND_JUMPS === 'fresh' || LAND_JUMPS === 'none' ? [] : LAND_JUMPS.split(',').map(Number);
@@ -147,7 +153,7 @@ const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} l
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
 const fallback = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');
 const climatology = !saved && !process.env.FROM && chosen !== 'none' ? chosen : null;
-const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: LAND, ...DAMPING, levels });
+const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: LAND, ...DAMPING, ...GRAVITY_WAVES, levels });
 const { mesh, core, state } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 function loadSaved(saved) {
@@ -162,6 +168,8 @@ function loadSaved(saved) {
   if (saved.boundaryBuoyancy) model.boundaryLayer.buoyancyFlux.set(saved.boundaryBuoyancy);
   if (saved.windSpeed) model.surface.windSpeed.set(saved.windSpeed);
   if (saved.evaporation) model.radiation.evaporation.set(saved.evaporation);
+  if (saved.exchangeHeat && model.exchange && !model.exchange.fixed) model.exchange.heat.set(saved.exchangeHeat);
+  if (saved.exchangeWind && model.exchange) model.exchange.wind.set(saved.exchangeWind);
   for (const field of ['cumulusCover', 'cumulusWater']) if (saved[field] && saved[field].length === model.moist[field].length) model.moist[field].set(saved[field]);
   if (saved.subcloudVirtual && saved.subcloudVirtual.length === model.moist.subcloudVirtual.length) model.moist.subcloudVirtual.set(saved.subcloudVirtual); else model.moist.subcloudVirtual.fill(0);
   model.time = saved.time;
@@ -328,7 +336,7 @@ for (;;) {
   iceNorth += north; iceSouth += south;
   const minutes = (performance.now() - start) / 60000;
   log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}`);
-  if (STRATOSPHERE) { await model.sync(); log(stratosphereLine(day)); }
+  if (STRATOSPHERE) { await model.sync(); log(stratosphereLine(day)); log(upperWindLine(mesh, levels, state, dt, day)); }
   if (!Number.isFinite(d.meanSurfaceT) || !Number.isFinite(d.maxWind) || !Number.isFinite(d.oceanSpeed)) { log(`NaN on day ${day}; stopping`); await hook.drain(); process.exit(2); }
   if (jumpDays.includes(day) || (LAND_JUMPS === 'fresh' && freshJumpDue(model.land.record, landAge, model.land.record[0]))) log(jumpLine(day, await model.land.jump()));
   landAge = model.land.record[0];
@@ -373,8 +381,9 @@ if (days > 0 && !step) {
 }
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater, subcloudVirtual } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
+const exchangeFields = model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {};
 const header = { N, K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
-writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, cumulusCover, cumulusWater, subcloudVirtual, ocean, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
+writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, subcloudVirtual, ocean, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));
 for (const old of whole.slice(0, Math.max(0, whole.length - KEEP))) unlinkSync(`${OUT}/${old}`);

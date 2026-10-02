@@ -482,6 +482,18 @@ fn thomas(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, arra
   }
   for (var j = n - 2; j >= 0; j--) { (*rhs)[j] -= gain[j] * (*rhs)[j + 1]; }
 }
+fn thomasRate(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, array<f32, K>>, own: ptr<function, array<f32, K>>, rhs: ptr<function, array<f32, K>>, dt: f32) {
+  var gain: array<f32, K>;
+  var denominator = 1.0 + (*upper)[0] + (*lower)[0] + dt * (*own)[0];
+  gain[0] = -(*lower)[0] / denominator;
+  (*rhs)[0] = (*rhs)[0] / denominator;
+  for (var j = 1; j < n; j++) {
+    denominator = 1.0 + (*upper)[j] + (*lower)[j] + dt * (*own)[j] + (*upper)[j] * gain[j - 1];
+    gain[j] = -(*lower)[j] / denominator;
+    (*rhs)[j] = ((*rhs)[j] + (*upper)[j] * (*rhs)[j - 1]) / denominator;
+  }
+  for (var j = n - 2; j >= 0; j--) { (*rhs)[j] -= gain[j] * (*rhs)[j + 1]; }
+}
 `;
 
 /*
@@ -845,14 +857,15 @@ export const PHYSICS_KERNELS = {
   let adif = select(cover * iceDif + (1.0 - cover) * ALB_DIF_WATER, landAlbedo, onLand);
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
   let ts = select(skin, cover * skin + (1.0 - cover) * FREEZING, !onLand && ice > 0.0 && cover < 1.0);
-  if (ROUGH) {
-    let exchange = surfaceExchange(i, pi, ts, ws, select(0.0, cover, !onLand), snow0, veg0, trees0, onLand, onIceSheet);
-    PH[PH_DRAG + i] = exchange.x; PH[PH_HEATX + i] = exchange.y; PH[PH_REFX + i] = exchange.z;
-  }
   let warmth = clamp((ts - GROWCOLD) / (GROWWARM - GROWCOLD), 0.0, 1.0);
-  let aero = PH[PH_HEATX + i] * max(ws, GUST);
   let roots = min(1.0, soil0 / (WETT * bucket));
   let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);
+  if (ROUGH) {
+    let before = select(0.0, xWetness(PH[PH_HEATX + i] * xWind(i, ws), roots, bareWet, veg0, snow0, warmth), onLand);
+    let exchange = surfaceExchange(i, pi, ts, ws, select(0.0, cover, !onLand), snow0, veg0, trees0, onLand, onIceSheet, before, PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV);
+    PH[PH_DRAG + i] = exchange.x; PH[PH_HEATX + i] = exchange.y; PH[PH_REFX + i] = exchange.z;
+  }
+  let aero = PH[PH_HEATX + i] * xWind(i, ws);
   let canopyWet = veg0 * roots / (1.0 + RSTOM * aero / max(0.05, warmth));
   let landWet = select(roots, bareWet + canopyWet, VEGETATED);
   let wetness = select(1.0, select(landWet, 1.0, snow0 > ${TRACE_SNOW}), onLand);
@@ -876,7 +889,7 @@ export const PHYSICS_KERNELS = {
   if (STRATUS && MLM_DECK && !onLand && 1.0 - cover > 0.0 && mixedDepth > 0.0) {
     let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
     let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-    let exchange = rho * PH[PH_HEATX + i] * max(ws, GUST);
+    let exchange = rho * PH[PH_HEATX + i] * xWind(i, ws);
     let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
     let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
     var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0, vec3<f32>(0.0, 0.0, 0.0), 0.0, 0.0);
@@ -1133,11 +1146,11 @@ export const PHYSICS_KERNELS = {
   if (MOIST_BL) { for (var k = 0; k < K; k++) { PH[PH_LWH + k * C + i] = netFlux[k] - beforeBands[k]; } }
   let airT = temperature[K - 1];
   let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-  let exchange = rho * PH[PH_HEATX + i] * max(ws, GUST);
+  let exchange = rho * PH[PH_HEATX + i] * xWind(i, ws);
   let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
   let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
   if (ROUGH) { PH[PH_BUOY + i] = GRAV / IN[S_TH + bottom] * (sensible / (rho * CP * D[D_EXM + bottom]) + 0.61 * IN[S_TH + bottom] * evap / rho); }
-  let airQs = qsat(airT, pi); let airSlope = airQs * 4302.645 / ((airT - 29.65) * (airT - 29.65)); let conductance = PH[PH_REFX + i] * max(ws, GUST);
+  let airQs = qsat(airT, pi); let airSlope = airQs * 4302.645 / ((airT - 29.65) * (airT - 29.65)); let conductance = PH[PH_REFX + i] * xWind(i, ws);
   let potential = (airSlope * (absorbed - surfaceEmission + back) + rho * CP * conductance * (airQs - IN[S_Q + bottom])) / (LHEAT * airSlope + CP * (1.0 + REF_RESIST * conductance));
   netFlux[K - 1] += sensible;
   let net = absorbed - surfaceEmission + back - sensible - LHEAT * evap;
@@ -1369,7 +1382,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   let pi = IN[S_PI + i]; let base = (K - 1) * C + i;
   let bottomWind = cellWind(i, K - 1);
   let speed = length(bottomWind);
-  let friction = sqrt(PH[PH_DRAG + i]) * max(speed, GUST);
+  let friction = sqrt(PH[PH_DRAG + i]) * xWind(i, speed);
   let zb = (D[D_GEO + base] + LV[L_GABS + K - 1]) / GRAV;
   var found = false; var riPrev = 0.0; var zPrev = zb; var depth = zb;
   for (var k = K - 2; k >= KTOP; k--) {
@@ -1389,7 +1402,16 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   for (var k = KTOP; k < K; k++) { PH[PH_MIX + k * C + i] = 0.0; }
   PH[PH_ENTRAIN + i] = 0.0;
   let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
-  if (IMPLICIT_DRAG) { PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * PH[PH_DRAG + i] * max(speed, GUST); }
+  if (IMPLICIT_DRAG) { PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * PH[PH_DRAG + i] * xWind(i, speed); }
+  if (FORM_DRAG) {
+    let sflt = PH[PH_OFLT + i];
+    for (var k = KTOP; k < K; k++) {
+      var rate = 0.0;
+      let z = (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV;
+      if (sflt > 0.0 && z > 0.0) { rate = TOFD_SCALE * sflt * sflt * exp(-pow(z / TOFD_DECAY, 1.5)) * pow(z, -1.2) * length(cellWind(i, k)); }
+      PH[PH_TOFD + (k - KTOP) * C + i] = rate;
+    }
+  }
   let buoyancy = select(GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture), PH[PH_BUOY + i], ROUGH);
   PH[PH_BUOY + i] = buoyancy; PH[PH_USTAR + i] = friction;
   if (MOIST_BL) { blMoist(i, pi, depth - zb, zb, buoyancy, friction); return; }
@@ -2033,6 +2055,10 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   var mixes = false;
   for (var k = KTOP; k < K - 1; k++) { if (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b] > 0.0) { mixes = true; } }
+  if (FORM_DRAG) {
+    PH[PH_FSTRESS + e] = 0.0;
+    if (PH[PH_OFLT + a] + PH[PH_OFLT + b] > 0.0) { mixes = true; }
+  }
   if (mixes || IMPLICIT_DRAG) { mixEdge(e, a, b); }
   if (PL_MOMENTUM) { transportEdge(e, a, b); }
 }
@@ -2084,10 +2110,20 @@ fn mixEdge(e: i32, a: i32, b: i32) {
   }
   var before: array<f32, K>;
   for (var j = 0; j < n; j++) { before[j] = rhs[j]; }
-  thomas(n, &upper, &lower, &rhs);
+  var own: array<f32, K>;
+  var forming = false;
+  if (FORM_DRAG) {
+    for (var j = 0; j < n; j++) { own[j] = 0.5 * (PH[PH_TOFD + j * C + a] + PH[PH_TOFD + j * C + b]); if (own[j] > 0.0) { forming = true; } }
+  }
+  if (forming) { thomasRate(n, &upper, &lower, &own, &rhs, dt); } else { thomas(n, &upper, &lower, &rhs); }
   for (var j = 0; j < n; j++) { IN[S_U + (KTOP + j) * E + e] = rhs[j]; }
   let surfaceDrag = 0.5 * (PH[PH_SDRAG + a] + PH[PH_SDRAG + b]);
   if (IMPLICIT_DRAG) { PH[PH_STRESS + e] = surfaceDrag * rhs[n - 1]; PH[PH_STRESSOK] = 1.0; }
+  if (forming) {
+    var formed = 0.0;
+    for (var j = 0; j < n; j++) { formed += columnMass * LV[L_DS + KTOP + j] / GRAV * own[j] * rhs[j]; }
+    PH[PH_FSTRESS + e] = formed;
+  }
   var share: array<f32, K>;
   var loss = 0.0; var total = 0.0;
   for (var j = 0; j < n; j++) {
@@ -2101,6 +2137,7 @@ fn mixEdge(e: i32, a: i32, b: i32) {
     share[j] += part; share[j + 1] += part;
   }
   if (IMPLICIT_DRAG) { share[n - 1] += dt * surfaceDrag * rhs[n - 1] * rhs[n - 1]; }
+  if (forming) { for (var j = 0; j < n; j++) { share[j] += dt * columnMass * LV[L_DS + KTOP + j] / GRAV * own[j] * rhs[j] * rhs[j]; } }
   for (var j = 0; j < n; j++) { total += share[j]; }
   if (total <= 0.0) { return; }
   for (var j = 0; j < n; j++) {

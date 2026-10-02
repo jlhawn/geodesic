@@ -1,11 +1,12 @@
 import { buildMesh } from '../mesh.module.js';
-import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING } from '../dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, DIVERGENCE_DAMPING, GRAVITY } from '../dynamics/sigmaCore.module.js';
 import { createSeaIce, SNOW_AGEING } from '../physics/ice.module.js';
-import { createSurface, SEA_DRAG, LAND_DRAG } from '../physics/surface.module.js';
+import { createSurface, SEA_DRAG, LAND_DRAG, TOP_DRAG } from '../physics/surface.module.js';
+import { spongeRates, SPONGE } from '../dynamics/sponge.module.js';
 import { createRadiation } from '../physics/radiation.module.js';
 import { createMoistPhysics } from '../physics/moist.module.js';
 import { LATENT_HEAT } from '../physics/moist.module.js';
-import { SIDEREAL_DAY } from '../model.module.js';
+import { SIDEREAL_DAY, orographyFields, dragConstants } from '../model.module.js';
 import { createGpuCore } from './core.gpu.js';
 import { createLayeredOcean } from './layeredOcean.gpu.js';
 import { createGeography, surfaceGeopotential } from '../geography.module.js';
@@ -28,7 +29,9 @@ const AGEING_OPTIONS = ['snowAgeing', ...Object.keys(SNOW_AGEING)];
  * mixing top, regime and surface buoyancy flux `boundaryLayer.mixingTop`,
  * `regime` and `buoyancyFlux` (the radiation's variance cover reads the
  * flux of the step before), the lowest layer's wind speed
- * `surface.windSpeed`, the evaporation `radiation.evaporation` and the
+ * `surface.windSpeed`, the evaporation `radiation.evaporation`, the
+ * surface layer's C_H and gusty wind `exchange.heat` and `exchange.wind`
+ * (the land's surface humidity reads both) and the
  * shallow cumulus `moist.cumulusCover` and `moist.cumulusWater` (the
  * layers from `moist.cumulusK0` down) that the next step reads before it
  * diagnoses its own, the per-cell convective and
@@ -53,12 +56,16 @@ const AGEING_OPTIONS = ['snowAgeing', ...Object.keys(SNOW_AGEING)];
  */
 export async function createGpuModel(gridOrMesh, {
   radius, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, radiation = {}, ice = {}, moist = {}, boundaryLayer = {}, ocean: oceanOptions = {}, surface = {},
-  topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true, levels = sigmaInterfaces(),
+  topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true, orography: orographyOptions = {}, subgrid: givenSubgrid = undefined, levels = sigmaInterfaces(), gravityWaves = {},
 } = {}) {
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
   const mode = exchangeMode(surface, landOptions);
+  const subgrid = geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, givenSubgrid, GRAVITY) : null;
+  const { formDrag: formDragOptions = {}, ...dragOptions } = orographyOptions || {};
+  const orography = subgrid ? dragConstants(subgrid, dragOptions) : dragOptions;
+  const formDrag = subgrid && subgrid.filtered && formDragOptions !== false ? formDragOptions : false;
   let spacing = 0;
   for (let e = 0; e < mesh.nEdges; e++) spacing += mesh.dcEdge[e];
   spacing /= mesh.nEdges;
@@ -72,15 +79,16 @@ export async function createGpuModel(gridOrMesh, {
   const physics = {
     ...radiation, ...ice, ...moist, ...boundaryLayer,
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
-    surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
+    orography: subgrid ? orography : false, formDrag, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
     landed: !!geography, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
     ...Object.fromEntries(VEGETATION_OPTIONS.filter((key) => landOptions[key] !== undefined).map((key) => [key, landOptions[key]])),
   };
-  const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, physics, topSigma: surface.topSigma ?? 0.02, topDragDays: surface.topDragDays ?? 5, surfaceGeopotential: phis });
+  const sponge = spongeRates(core.sigmaMid, surface.spongeSigma ?? SPONGE.sigma, surface.spongeDays ?? SPONGE.days);
+  const gpu = await createGpuCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, physics, topSigma: surface.topSigma ?? TOP_DRAG.sigma, topDragDays: surface.topDragDays ?? TOP_DRAG.days, spongeRates: sponge, gravityWaves, surfaceGeopotential: phis });
   const seaIce = createSeaIce(mesh, ice);
   const radiationCpu = createRadiation(mesh, core, { surfaceLayer: mode === 'roughness', ...radiation });
-  const surfaceCpu = createSurface(mesh, core, { topSigma: 0.02, topDragDays: 5, ...surface });
+  const surfaceCpu = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, ...surface });
   const moistCpu = createMoistPhysics(mesh, core, moist);
   const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { ...oceanOptions, climatology: await loadClimatology(oceanOptions.climatology ?? null), geography });
   const landCpu = geography ? createLandSurface(mesh, geography, landOptions) : null;
@@ -95,7 +103,7 @@ export async function createGpuModel(gridOrMesh, {
   const state = lengths.map((n) => new Float64Array(n));
   let dirty = true, lastFrameTime = 0, lastFrameStep = 0;
 
-  const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
+  const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, subgridOrography: subgrid, exchange, surfaceGeopotential: phis, state, time: 0, physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
   const cumulusLength = gpu.layout.PH.CUWATER - gpu.layout.PH.CUCOVER;
   model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain, cumulusK0: K - cumulusLength / C, cumulusCover: new Float64Array(cumulusLength), cumulusWater: new Float64Array(cumulusLength), subcloudVirtual: new Float64Array(gpu.layout.PH.total - gpu.layout.PH.SUBTV) };
   model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C), buoyancyFlux: new Float64Array(C) };
@@ -103,7 +111,7 @@ export async function createGpuModel(gridOrMesh, {
 
   function pushState() {
     gpu.upload(state);
-    gpu.uploadPhysics({ land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: exchange ? exchange.drag : null, heat: exchange && !exchange.fixed ? exchange.heat : null, reference: exchange && !exchange.fixed ? exchange.reference : null, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, snowAlbedo: landCpu ? landCpu.snowAlbedo : null, canopy: landCpu ? landCpu.canopy : null, seasonLength: landCpu ? landCpu.seasonLength : null, seasonWarmth: landCpu ? landCpu.seasonWarmth : null, rainMean: landCpu ? landCpu.rainMean : null, demandMean: landCpu ? landCpu.demandMean : null, soilCarbon: landCpu ? landCpu.soilCarbon : null, litterMean: landCpu ? landCpu.litterMean : null, decayMean: landCpu ? landCpu.decayMean : null, snowFreeCover: landCpu ? landCpu.snowFreeCover : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, meanShortwaveCloudEffect: radiationCpu.meanShortwaveCloudEffect, meanLongwaveCloudEffect: radiationCpu.meanLongwaveCloudEffect, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux, evaporation: radiationCpu.evaporation, cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual });
+    gpu.uploadPhysics({ orography: subgrid, wind: exchange ? exchange.wind : null, land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: exchange ? exchange.drag : null, heat: exchange && !exchange.fixed ? exchange.heat : null, reference: exchange && !exchange.fixed ? exchange.reference : null, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, snowAlbedo: landCpu ? landCpu.snowAlbedo : null, canopy: landCpu ? landCpu.canopy : null, seasonLength: landCpu ? landCpu.seasonLength : null, seasonWarmth: landCpu ? landCpu.seasonWarmth : null, rainMean: landCpu ? landCpu.rainMean : null, demandMean: landCpu ? landCpu.demandMean : null, soilCarbon: landCpu ? landCpu.soilCarbon : null, litterMean: landCpu ? landCpu.litterMean : null, decayMean: landCpu ? landCpu.decayMean : null, snowFreeCover: landCpu ? landCpu.snowFreeCover : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, meanShortwaveCloudEffect: radiationCpu.meanShortwaveCloudEffect, meanLongwaveCloudEffect: radiationCpu.meanLongwaveCloudEffect, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux, evaporation: radiationCpu.evaporation, cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual });
     gpu.setWindSpeed(surfaceCpu.windSpeed);
     gpu.clearFrame();
     if (gpuOcean) gpuOcean.initialize(state[3], state[6], { climatology: null });
@@ -116,6 +124,11 @@ export async function createGpuModel(gridOrMesh, {
   async function sync() {
     if (!dirty) return;
     const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, shortwaveEffect, longwaveEffect, depth, mixingTop, regime, buoyancy, evaporation, cumulusCover, cumulusWater, subcloudVirtual], [windSpeed]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, [...['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'SWCREMEAN', 'LWCREMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY', 'EVAP'].map((name) => ({ offset: gpu.layout.PH[name], length: C })), ...['CUCOVER', 'CUWATER'].map((name) => ({ offset: gpu.layout.PH[name], length: cumulusLength })), { offset: gpu.layout.PH.SUBTV, length: model.moist.subcloudVirtual.length }]), readRanges(gpu.device, gpu.buffers.D, [{ offset: gpu.layout.D.WIND, length: C }])]);
+    if (exchange) {
+      const [heat, wind] = await readRanges(gpu.device, gpu.buffers.PH, ['HEATX', 'XWIND'].map((name) => ({ offset: gpu.layout.PH[name], length: C })));
+      if (!exchange.fixed) exchange.heat.set(heat);
+      exchange.wind.set(wind);
+    }
     arrays.forEach((a, i) => state[i].set(a));
     seaIce.concentration.set(concentration);
     radiationCpu.mlmSubsidence.set(mean);

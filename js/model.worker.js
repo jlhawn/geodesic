@@ -5,7 +5,7 @@ import { createGpuModel } from './gpu/model.gpu.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
-import { topographyFromInt16, rebalanceSurfacePressure } from './geography.module.js';
+import { topographyFromInt16, rebalanceSurfacePressure, decodeSubgrid, subgridUrl } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
@@ -324,6 +324,15 @@ async function loadTopography(url) {
   return topography;
 }
 
+const subgrids = new Map();
+async function loadSubgrid(N) {
+  if (subgrids.has(N)) return subgrids.get(N);
+  const response = await fetch(subgridUrl(N)).catch(() => null);
+  const fields = response && response.ok ? await response.arrayBuffer().then(decodeSubgrid).catch(() => null) : null;
+  subgrids.set(N, fields);
+  return fields;
+}
+
 /*
  * The ocean climatology a fresh start takes its ocean and sea surface
  * from, fetched with the bytes received on the status line. Without a
@@ -442,7 +451,7 @@ async function probe(message) {
     let test = null;
     try {
       status('testing the GPU…', 0.1);
-      test = await createGpuModel(new Grid(PROBE.gpuN), options);
+      test = await createGpuModel(new Grid(PROBE.gpuN), { ...options, ...(topography ? { subgrid: await loadSubgrid(PROBE.gpuN) } : {}) });
       prepare(test, PROBE.gpuN);
       const step = 1350 * 16 / PROBE.gpuN, queued = [];
       for (let n = 0; n < PROBE.warmup; n++) await test.step(step);
@@ -463,7 +472,7 @@ async function probe(message) {
   }
   if (!result.gpu || result.gpu.error) {
     status('testing the CPU…', 0.3);
-    const test = createModel(new Grid(PROBE.cpuN), options);
+    const test = createModel(new Grid(PROBE.cpuN), { ...options, ...(topography ? { subgrid: await loadSubgrid(PROBE.cpuN) } : {}) });
     prepare(test, PROBE.cpuN);
     const step = 1350 * 16 / PROBE.cpuN;
     await test.step(step);
@@ -556,7 +565,7 @@ async function start(message) {
   const N = message.N ?? saved?.N ?? 16;
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   const options = { ...(message.options ?? {}) };
-  if (message.land !== false) { status('loading the topography…', 0.52); options.topography = await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href); }
+  if (message.land !== false) { status('loading the topography…', 0.52); options.topography = await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href); options.subgrid = await loadSubgrid(N); }
   if (!saved && message.land !== false && message.climatology !== false) {
     const climatology = await loadOceanClimatology(message.climatology ?? null, 0.53, 0.55);
     if (climatology) options.ocean = { ...(options.ocean ?? {}), climatology };

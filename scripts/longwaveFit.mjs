@@ -4,6 +4,7 @@
 //   node scripts/longwaveFit.mjs            report the spectral model and the g-points
 //   FIT=3000 node scripts/longwaveFit.mjs   refit the spectral model (Nelder-Mead iterations)
 //   WRITE=1 node scripts/longwaveFit.mjs    rewrite js/physics/longwaveTable.module.js
+// LEVELS (one of SIGMA_GRIDS, bl34 by default) names the levels the columns are laid on.
 //
 // The spectral model is that of Jeevanjee & Fueglistaler (2020, JAS 77, 479)
 // and Williams et al. (2025, arXiv 2508.09353): the water vapour lines' mass
@@ -52,7 +53,7 @@
 // transmission where the bin's mean optical depth is 1, and the share of the
 // Planck emission they hold, fitted as a quartic in temperature.
 import { writeFileSync } from 'node:fs';
-import { GRAVITY } from '../js/dynamics/sigmaCore.module.js';
+import { GRAVITY, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, referenceHeating, layerHeating, interfaceAt, MOLAR } from './standardAtmospheres.mjs';
 import { LONGWAVE_CONSTANTS, gasPaths, clearLongwave, normalizedPoints } from '../js/physics/longwave.module.js';
 
@@ -143,7 +144,7 @@ export function spectralFluxes(P, column, intervals) {
 
 const RRTMG = ['TROP', 'MLS', 'MLW', 'SAW'];
 const UPPER_WEIGHT = Number(process.env.UPPER_WEIGHT ?? 30), BAND_WEIGHT = Number(process.env.BAND_WEIGHT ?? 3), MINOR_WEIGHT = Number(process.env.MINOR_WEIGHT ?? 20), DOUBLING_WEIGHT = Number(process.env.DOUBLING_WEIGHT ?? 150), DLR_WEIGHT = Number(process.env.DLR_WEIGHT ?? 3), TROPOSPHERE_WEIGHT = Number(process.env.TROPOSPHERE_WEIGHT ?? 1000);
-const columns = Object.fromEntries(Object.keys(BENCHMARK.atmospheres).map((a) => [a, modelColumn(BENCHMARK.atmospheres[a])]));
+const columns = Object.fromEntries(Object.keys(BENCHMARK.atmospheres).map((a) => [a, modelColumn(BENCHMARK.atmospheres[a], sigmaInterfaces(process.env.LEVELS ?? 'bl34'))]));
 const mls = columns.MLS;
 const scaled = (column, gas, factor) => ({ ...column, [gas]: column[gas].map((x) => x * factor) });
 const withGas = (column, gas, vmr) => ({ ...column, [gas]: column[gas].map((_, k) => vmr * MOLAR[gas] / MOLAR.air * (1 - column.q[k])) });
