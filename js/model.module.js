@@ -131,7 +131,7 @@ export function createModel(gridOrMesh, {
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
       const { surfaceShortwave, surfaceDirect } = radiation;
       for (let i = iFrom; i < iTo; i++) {
-        if (land && landMask[i]) { land.update(i, state[3], radiation.surfaceFlux, radiation.evaporation[i], dt, state[1][bottom + i] * core.diagnostics.exnerLayer[bottom + i]); continue; }
+        if (land && landMask[i]) { land.update(i, state[3], radiation.surfaceFlux, radiation.evaporation[i], dt, state[1][bottom + i] * core.diagnostics.exnerLayer[bottom + i], radiation.potentialEvaporation[i]); continue; }
         const h = state[6][i], partial = h > 0 && seaIce.cover(i, h) < 1;
         seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt, partial ? surfaceDirect[i] * directContrast[i] + (surfaceShortwave[i] - surfaceDirect[i]) * diffuseContrast[i] : 0);
       }
@@ -148,7 +148,7 @@ export function createModel(gridOrMesh, {
         for (let i = iFrom; i < iTo; i++) {
           const airTemperature = state[1][bottom + i] * exner[bottom + i], amount = moistPhysics.rain[i];
           let frozen;
-          if (land && landMask[i]) { land.deposit(i, amount, airTemperature); frozen = airTemperature < MELTING_POINT; }
+          if (land && landMask[i]) { land.deposit(i, amount, airTemperature, dt); frozen = airTemperature < MELTING_POINT; }
           else frozen = seaIce.deposit(i, amount, airTemperature, state[6], state[3]);
           if (frozen) state[1][bottom + i] += seaIce.latentHeatFusion * amount * g / (cp * state[0][i] * dSigma[K - 1] * exner[bottom + i]);
         }
@@ -202,6 +202,7 @@ export function createModel(gridOrMesh, {
     phases.adjust(0, C, dt);
     phases.mixMomentum(0, E, dt);
     phases.dissipate(0, C);
+    if (land) land.advance(dt);
     model.time += dt;
     model.radiationSteps++;
   };
