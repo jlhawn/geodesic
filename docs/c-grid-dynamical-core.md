@@ -5811,7 +5811,11 @@ land, μ below 50 / 50–100 / 100–200 / 200–400 / above 400 m on 0.44 /
 γ 0.53, 30 raster points a cell) and 0.62 / 0.16 / 0.14 / 0.07 / 0.02 at
 N=128 (μ 68 m, σ 0.0037, γ 0.42, 7.4 points a cell, 0.04 of the land
 with fewer than 4); 0.19 s to compute at either N, on both engines at
-the model's start. The raster's values are 0.25° area means, so it holds
+the model's start. A cell the land mask makes sea has no subgrid
+orography (at N=64, 2608 of the 29080 sea cells hold a μ from their land
+points and the resolved terrain interpolated across the coast: mean 55 m,
+883 above 50 m, 861 m on the cell holding Hawaii's Big Island; their drag
+would slow air over a sea surface whose ocean never receives it). The raster's values are 0.25° area means, so it holds
 the scales between its 28 km spacing and the cell (112 km at N=64, 56 km
 at N=128), and loses everything below 28 km. Its land structure function
 over 56–222 km rises as r^1.07 north–south and r^0.87 east–west within
@@ -5839,7 +5843,11 @@ wave Richardson number N²(1 − α)/(S + Nα)² (S the shear of the wind in
 the stress's plane, α = N δz/V, ρ N V δz² ∝ τ) falls below Ri_crit, all
 of it at a critical level V ≤ 0; breaking below Z_b + Δz (∫ N/U_p dz =
 π/2 above Z_b, at least 4μ) spreads linearly in pressure over that depth
-(4.33, 4.35); the stress left at the top goes into the top layer.
+(4.33, 4.35), the weight clamped to [0, 1] because p(Z_b) is interpolated
+in ln p between midpoints while the interfaces sit at the midpoints' mean
+height (up to 80 m apart in the lowest 2 km of bl34); the stress left at
+the top goes into the top layer (σ < 0.0022; the IFS spreads what is
+left above 9.9 Pa between there and its top, Cy33r1 eq. 4.39).
 B = 1 − 0.18γ − 0.04γ², C = 0.48γ + 0.3γ² (Phillips 1984). Constants,
 LM97's: C_d 1, G 1, H_n,crit 0.5, Ri_crit 0.25. The IFS documents
 H_n,crit 0.5 and Ri_crit 0.25 too, but C_d 2 (eq. 4.17) and H_eff doubled
@@ -5870,13 +5878,16 @@ the land mean, all of it taken in the column, 0.0112 below 500 hPa,
 near one most waves break just above the blocked layer (IFS §4.2.2);
 the blocked flow's drag 0.014 N/m².
 
-The surface layer. (1) Gustiness: U² = |v|² + u_g², u_g = β w*, w*³ =
-B₀ z_i with B₀ = −Ri_b U³ C_H/z the surface buoyancy flux of the step's
-own coefficients and z_i the boundary layer's depth of the step before
-(at least z), found with the coefficients in four fixed-point passes as
-COARE iterates its gust; β 1.2 and u_g 0.2 m/s in stable air over sea
-and sea ice (COARE 3.5: Fairall et al. 1996, 2003, Edson et al. 2013), β
-1 over land (IFS eqs. 3.19–3.20, Beljaars 1994, with the model's z_i for
+The surface layer. (1) Gustiness: U² = |v|² + u_g², u_g = max(0.2 m/s,
+β w*) where B₀ > 0 and 0.2 m/s otherwise, w*³ = B₀ z_i with B₀ = −Ri_b U³
+C_H/z the surface buoyancy flux of the step's own coefficients and z_i
+the boundary layer's depth above the ground of the step before (at least
+z), found with the coefficients in four fixed-point passes as COARE
+iterates its gust; β 1.2 and u_g 0.2 m/s in stable air over sea and sea
+ice (COARE 3.5: Fairall et al. 1996, 2003, Edson et al. 2013; its code,
+coare35vn.m and coare36vn, takes β w* alone where B₀ > 0, which drops
+the gust from 0.2 m/s to 0 as B₀ crosses zero, so the floor is kept
+there to make u_g continuous), β 1 over land (IFS eqs. 3.19–3.20, Beljaars 1994, with the model's z_i for
 the IFS's 1000 m), in place of max(|v|, 3 m/s), for every surface flux,
 the implicit drag and u*. A gust from the step before's flux went NaN in
 seven hourly N=6 steps of a fresh start: a forest's C_H U grows without
@@ -5985,6 +5996,83 @@ December the zonal-mean wind at 30–70N moved by at most 0.45 m/s at the
 lowest layer, 0.65 at 850 hPa and 0.44 at 200 hPa and the SLP by at most
 1.9 hPa, so the signature's answer to the drag needs a season, which
 needs a spin-up.
+
+The review of the mountains' drag (Oct 2), on 3066df7 and the fixes after it:
+
+- Fields: recomputed for four N=64 cells by a separate script (brute-force
+  nearest cells, the resolved terrain on the triangle that contains each
+  point, its own differences): the West Siberian plain (61N 75E: 32
+  points, μ 10.76 m, γ 0.631, θ 13.0°, σ 5.24·10⁻⁴), the Great Plains
+  (39N 99W: μ 20.4 m, σ 7.79·10⁻⁴), the Himalayan front (28N 84E: 17
+  points, μ 1335.5 m, γ 0.445, θ 85.6°, σ 0.0350) and the Andes (32.6S
+  70W: 20 points, μ 922.7 m, γ 0.238, θ 7.9°, σ 0.0276), all equal to
+  `subgridOrography`'s to the digits printed. The land bins, means and
+  point counts above reproduce. Sea cells held fields (above); they no
+  longer do.
+- The column against hand values, a stated mountain (μ 300 m, γ 0.5,
+  θ 30°, σ 0.015) in a uniform 10 m/s eastward flow with N 0.01/s on a
+  hydrostatic bl34 column: Z_b 399.9999 m (hand 400), τ_0 0.123060 N/m²
+  (hand ρ_L × 0.110441 with ρ_L 1.1143), the direction 18.5759° (hand
+  atan(D2/D1)), the blocking rate at the six midpoints below Z_b to
+  6·10⁻⁷, the stress profile against τ_0 min(1, (ρ/ρ_L)(α_c/α_0)²) to
+  5·10⁻⁶ of τ_0, all of it taken by the top. On a synthetic N=16 state
+  with those fields everywhere both engines give the same Z_b and τ_0 to
+  the digits printed (6 % from the hand values, from the cell
+  reconstruction of the edge winds at N=16).
+- The stress never grew upward in uniform columns, but over a wind that
+  falls with height 4376 of 142104 swept columns had a layer the wave
+  drag accelerated, by up to 2.6 % of τ_0 (the low-level breaking's
+  weight, above); with the clamp none does.
+- Momentum: each edge's column loss against its stress to 1.7·10⁻¹⁶
+  relative in ten CPU steps from nine64 day 274 and from eight128 day 183;
+  no sea–sea edge takes any. Of the launched stress 0.9995–0.9996 (N=64)
+  and 0.9972–0.9977 (N=128) is taken in the column; the rest, in 277–342 and
+  775–957 columns, is what the per-step limit keeps from the top layers.
+- Stability over those ten steps: the largest blocking rate times the step
+  0.20 (N=64, 85.7S 151.5W, μ 422 m, σ 0.038) and 0.21 (N=128, 86.1S
+  156.3W), solved implicitly; the largest wave tendency times the step
+  2.9 m/s (N=64) and 1.0 m/s (N=128); the largest edge change from the
+  drag in a step 2.1 and 2.8 m/s; everything finite, the largest edge wind
+  93.6 and 84.0 m/s.
+- Engines on nine64 day 274 (N=64, real state, no ocean): after 1, 4 and
+  16 steps the launched stress apart by 7.5·10⁻⁵, 8.8·10⁻³ and 9.2·10⁻³
+  of its largest value, the blocking height by 2.7·10⁻⁴, 1.8·10⁻² and
+  1.6·10⁻², the edge stress by 1.2·10⁻³, 2.5·10⁻³ and 4.4·10⁻³, the gusty
+  wind by 4·10⁻⁶, 7·10⁻³ and 3.5·10⁻²; the state's u apart by 2.9·10⁻³,
+  2.7·10⁻³ and 3.9·10⁻³ m/s rms, against 2.9·10⁻³, 3.2·10⁻³ and 8.6·10⁻³
+  with the scheme off.
+- With everything off the CPU reproduces 3f57d8f bit for bit (N=8 six
+  steps, N=16 eight steps), on 3066df7 and on the fixes.
+- The gust: u_g continuous across B₀ = 0 (above), z_i measured from the
+  ground. With it the treeline test's 48-step parity holds under the
+  default surface layer: tree cover 8.5·10⁻⁵ apart (1.8·10⁻⁴ on 3066df7),
+  the lowest air 1.8·10⁻³ K (9.6·10⁻³). The land humidity in Ri_b is
+  continuous in w and T_s and the same on both engines. The exchange
+  flux parity's relative measure stands: the fresh test state's snow
+  cells carry |LE| near 2·10⁴ W/m² on 3f57d8f as well (19623 W/m²).
+- Sources read for this review: IFS Cy33r1 Part IV Chapter 4 confirms
+  H_n,crit 0.5 (§4.1), Ri_crit 0.25 (§4.4.2), H_eff = 2(H − Z_blk) since
+  Cy32r2 (eq. 4.8), G ≈ 1.23 for the mountain of eq. 4.2, the /9 of eq.
+  4.37 with H = 3μ, eqs. 4.26–4.41 as used, and gives C_d only as close to
+  1 by free-streamline theory and nearer 2 with suction behind the
+  obstacle; C_d 2 as Cy47r3's value and LM97's C_d 1 and G 1 were not
+  checked against those texts. Its gust is |U|² = u² + v² + w*² with
+  z_i 1000 m (Cy33r1 eqs. 3.17–3.18) and its Ri_b takes q_surf (eqs.
+  3.24–3.25). COARE's gust from coare35vn.m and coare36vn as above.
+- Ten days from nine64 day 274 on 3066df7 reproduce the run above to the
+  digits printed. A twin with θ perturbed by 10⁻⁷ (relative, random per
+  value) gives, against the documented 3f57d8f → 3066df7 changes over the
+  5° bands at 30–85N (rms; largest): SLP 0.15 against 0.98 hPa (0.30;
+  1.79), the lowest wind over land 0.06 against 0.41 m/s (0.12; 0.90), the
+  lowest wind 0.14 against 0.26 (0.31; 0.55), 850 hPa 0.18 against 0.35
+  (0.36; 0.68), 500 hPa 0.25 against 0.41 (0.60; 0.81), 200 hPa 0.22
+  against 0.25 (0.64; 0.44); the stationary wave's rms at 55–65N 0.25–0.31
+  against 0.17–0.59 hPa and the Aleutian bin 0.3 against 1.4 hPa. The
+  SLP's rise at 60–85N and the slower land winds are 5–7 times the twin's
+  spread; the 200 hPa jet's and the stationary waves' changes are within
+  it. The fixed code against 3066df7 over the same ten days is within the
+  twin's spread in every field (rms 0.10 hPa SLP, 0.05 m/s land wind,
+  0.13 m/s at 200 hPa).
 
 ### M23 — The equatorial ocean — in progress
 
