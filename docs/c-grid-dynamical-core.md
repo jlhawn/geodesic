@@ -3219,6 +3219,25 @@ The work, in order:
      0.244 → 0.225 at the top, sea ice 0.647 → 0.706). A three-day run
      took 0.3 wall minutes and a ten-day one 0.8, before and after.
 
+   Review (Oct 1). A cold week at −15 °C, a melting week at −0.5 °C and
+   4 kg/m² of snow, in closed form, take fresh snow to 0.830669, 0.561628
+   and 0.676977 on land and 0.830669, 0.724353 and 0.774612 on sea ice;
+   stepped every half hour the land module gives the land's to 2·10⁻¹⁴
+   and the GPU's own WGSL ageing and refresh functions both to 5.2·10⁻⁶
+   (single precision), and the sea-ice module, which ages at the skin it
+   ends each step with, falls 5.2·10⁻⁵ short where conduction warms that
+   skin. A cell whose snow melts away and is snowed on starts at 0.85. In
+   the day-94 and day-186 states of reruns of the two three-day runs
+   (which reproduce the day means above and the Arctic loss of 0.168)
+   every land snow albedo lies in 0.670–0.850 and every sea-ice one in
+   0.783–0.850, every snow-free cell holds 0.85, and the standing cover is
+   never below the cover. The ice albedo falls monotonically with the
+   skin temperature, by at most 1.4·10⁻⁵ over 10⁻⁴ K through the melting
+   ramp, and the masking monotonically with the standing cover. With
+   grey ice (`iceAlbedo` and `meltingIceAlbedo` 0.5, `snowAgeing` false)
+   the three physics digests are those pinned before the change
+   (3ca002d1, 3d0c610f, da3ea94c).
+
    What still misses:
 
    - One cover cannot tell a forest from tundra or grassland. The masking
