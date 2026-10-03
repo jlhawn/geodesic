@@ -10985,15 +10985,22 @@ W/m² and the longwave heating within 5·10⁻⁴ K/day, as under
 response to their single-precision differences, which reach 10⁻⁴–10⁻³
 K of θ in the lowest layers within a few steps. On the rain-accumulation
 test's setup (`scripts/perturbedRain.mjs`) the CPU against itself with
-±10⁻⁴ K of noise on θ before every step parts the rain of 20 of 362
-cells by 10⁻³ of the largest cell's under 'uniform', the GPU's count,
-and of 1 under 'cloudLayer'; ±3·10⁻⁵ K parts none, nor does one ulp of
-θ or rounding the state to single precision every step; ±10⁻³ K once
-parts 16 and 1. Of the 20, 11 follow a discrete decision (7 a plume's
+±10⁻⁴ K of noise on θ before every step parts the rain of 4 to 23 of
+362 cells by 10⁻³ of the largest cell's under 'uniform' over six noise
+seeds (20 with the script's default seed) and of 0 to 9 under
+'cloudLayer'; ±3·10⁻⁵ K parts none with three seeds of four and 13
+with the fourth, all of them among the GPU's 20; one ulp of θ, or
+rounding the state to single precision every step, parts none; ±10⁻³ K
+once parts 16 and 1. 18 of the GPU's 20 cells part under the CPU's
+noise with some seed, and 14 lie within two cells of cells 90 and 223,
+where the deep plume fires on one engine only at steps 19 and 20. With
+the default seed 11 of the 20 follow a discrete decision (7 a plume's
 base flux near its onset, 1 a plume firing, 2 a layer's cloud at the
-cloud-top threshold, 1 a merge of the dry adjustment) and 9 none: their
-large-scale rain, which every mixed layer's distribution condensate
-feeds at each step, moves by 1.0–7.4·10⁻³ of the largest cell's. The
+cloud-top threshold, 1 a merge of the dry adjustment) and 9 none of
+their own, each beside a cell whose decision parted: 8 of them part in
+the large-scale rain, which every mixed layer's distribution condensate
+feeds at each step, by 1.1–7.4·10⁻³ of the largest cell's, one in the
+convective rain by 1.1·10⁻³. The
 other failures: the cloud effects test finds 4 columns whose dry
 adjustment merges apart against a bound of 3.6 and leaves out 37
 columns against 32.6; 5 parted columns move the day-mean absorbed
