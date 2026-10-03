@@ -10965,7 +10965,14 @@ large-scale scheme under Lock et al. (2000)'s mixing, condense every
 layer of the boundary layer, which is 'uniform' here, so 'cloudLayer' is
 this model's restriction of the published scheme to the layers whose
 cloud the boundary layer's diagnosis reads. 'uniform' gives every mixed
-layer that distribution, 'saturation' is the scheme before. Every cloudy
+layer that distribution, 'saturation' is the scheme before. 'uniform'
+is the arrangement the sources describe and would be the default by this
+model's rule, but with it the engines part in the parity tests far
+beyond their settled shares (the stratiform-lifetime test differs on 263
+of 2,727 random columns, the rain accumulation on 20 cells, the day
+means and the treeline's 48-step means disagree, Oct 3), which points at
+an engine difference in the mixed layers' uniform path that has to be
+found before it can be the default. Every cloudy
 layer below the mixing top keeps the variance cover in the radiation,
 so the run's condensate is the distribution's and its cover is not: at
 N=64 after 8 steps from eleven64_day1825, over the 62,637 run layers
