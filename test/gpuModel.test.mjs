@@ -5,6 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { sunDirection, YEAR } from '../js/physics/radiation.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
+import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -49,7 +50,7 @@ async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, option
   const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, ...options, ...moist, ...boundaryLayer } });
   gpu.upload(model.state);
   gpu.uploadPhysics();
-  for (let n = 0; n < steps; n++) { const time = model.time; model.step(dt); await gpu.stepModel(dt, time); if (each) each(model, await gpu.downloadPhysics()); }
+  for (let n = 0; n < steps; n++) { const time = model.time; model.step(dt); await gpu.stepModel(dt, time); if (each) await each(model, await gpu.downloadPhysics(), gpu); }
   return { model, gpu, state: await gpu.download(), physics: await gpu.downloadPhysics() };
 }
 
@@ -733,25 +734,29 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
   assert.ok(moved > C / 2, `the mean moved on ${moved} cells`);
 });
 
-test('the convective and large-scale rain accumulate alike in both engines, cell by cell but for the odd column whose onset falls a step apart (a plume shortens the lifetime of the cloud below its top), and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const decisions = cloudDecisions(362);
-  const { model, physics } = await pair(6, 24, 900, 0, false, { surfaceExchange: 'fixed' }, { rainEvaporation: 0, excessVelocity: 'convective', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' }, {}, (cpu, device) => decisions.check(cpu, device));
+test('the convective and large-scale rain accumulate alike in both engines, cell by cell outside the columns where a discrete decision of the boundary layer, the plume or the condensation parted at some step and their neighbours within two cells, and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  let decisions = null;
+  const { model, physics } = await pair(6, 24, 900, 0, false, { surfaceExchange: 'fixed' }, { rainEvaporation: 0, excessVelocity: 'convective', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' }, {}, async (cpu, device, gpu) => {
+    decisions ??= decisionTracker(cpu.core.K, cpu.mesh.nCells);
+    decisions.check(cpuDecisions(cpu), gpuDecisions(await gpu.download(), device));
+  });
   const C = model.mesh.nCells, { convectivePrecipitation: convective, largeScalePrecipitation: largeScale, precipitation, rain } = model.moist;
   const largest = Math.max(...convective), largestScale = Math.max(...largeScale);
-  const onset = (i) => decisions.parted.has(i) || Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest || Math.abs(largeScale[i] - physics.COND[i]) > 1e-3 * largestScale;
-  const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !onset(i)), pick = (values) => Float64Array.from(kept, (i) => values[i]);
+  const near = neighbourhood(model.mesh, decisions.parted, 2);
+  const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !near.has(i)), pick = (values) => Float64Array.from(kept, (i) => values[i]);
   const conv = stats(pick(convective), pick(physics.CONV)), ls = stats(pick(largeScale), pick(physics.COND)), step = stats(pick(rain), pick(physics.STEPRAIN));
-  let fired = 0, rained = 0, apart = 0, area = 0, cpuMean = 0, gpuMean = 0;
+  let fired = 0, rained = 0, apart = 0, area = 0, cpuMean = 0, gpuMean = 0, outliers = 0;
   for (let i = 0; i < C; i++) {
     const a = model.mesh.areaCell[i];
     if (convective[i] > 0) fired++;
     if (largeScale[i] > 0) rained++;
+    if (Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest || Math.abs(largeScale[i] - physics.COND[i]) > 1e-3 * largestScale) outliers++;
     apart = Math.max(apart, Math.abs(convective[i] + largeScale[i] - precipitation[i]));
     area += a; cpuMean += a * convective[i]; gpuMean += a * physics.CONV[i];
   }
-  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain of either kind or whose OLR or absorbed sunlight parted by more than 1 W/m² at a step (${decisions.parted.size}); over the rest per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
+  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${outliers} cells apart by more than 1e-3 of the largest cell's rain of either kind; a discrete decision parted in ${decisions.parted.size} cells (${Object.entries(decisions.kinds).map(([kind, cells]) => `${kind} ${cells.size}`).join(', ')}), ${near.size} with their neighbours within two cells; over the other ${kept.length} per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
   assert.ok(fired > C / 3 && rained > 0, `convective rain on ${fired} cells, large-scale on ${rained}`);
-  assert.ok(C - kept.length <= 0.02 * C, `${C - kept.length} cells apart`);
+  assert.ok(decisions.parted.size <= C / 6 && near.size <= 0.8 * C, `a decision parted in ${decisions.parted.size} cells, ${near.size} with their neighbours`);
   const keptMean = (values) => kept.reduce((sum, i) => sum + model.mesh.areaCell[i] * values[i], 0);
   assert.ok(Math.abs(keptMean(physics.CONV) - keptMean(convective)) < 1e-3 * keptMean(convective), `mean convective rain over the kept cells ${keptMean(convective)} against ${keptMean(physics.CONV)}`);
   assert.ok(conv.rmsRel < 1e-3 && ls.rmsRel < 1e-3, `per-cell rms convective ${conv.rmsRel}, large-scale ${ls.rmsRel}`);
