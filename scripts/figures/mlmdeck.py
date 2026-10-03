@@ -46,7 +46,7 @@ def panel(ax, field, cmap, norm, label, extend='max'):
     ax.set_title(label, color='#eee', fontsize=10.5, loc='left')
 thick, cover, h, lwp = (np.where(on, c[k], np.nan) for k in ('thickness', 'cover', 'h', 'lwp'))
 act = on & np.isfinite(thick)
-panel(axes[0, 0], grid(thick), cloud, PowerNorm(0.5, 0, 600), f"(a) Cloud-layer thickness h − z_b, m (max {np.nanmax(thick):.0f} m; square-root colour scale)")
+panel(axes[0, 0], grid(thick), cloud, PowerNorm(0.5, 0, 600), f"(a) Cloud-layer thickness h − z_b, m, host z_b without sunlight (max {np.nanmax(thick):.0f} m; √ scale)")
 for b in BOXES[:-1]:
     _, x0, x1, y0, y1 = b; x0, x1 = (x0 - 360, x1 - 360) if x0 > 180 else (x0, x1)
     for off in ((0,) if x1 <= 180 else (0, -360)): axes[0, 0].add_patch(plt.Rectangle((x0 + off, y0), x1 - x0, y1 - y0, fill=False, ec='#ffd84d', lw=0.7, alpha=0.8))
