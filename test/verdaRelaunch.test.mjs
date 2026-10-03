@@ -4,7 +4,7 @@ import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, rmSync, chmodSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { listed, pickInstance, osVolumeOf, volumeStatus } from '../scripts/verdaInstances.mjs';
+import { listed, pickInstance, osVolumeOf, volumeStatus, volumeOf } from '../scripts/verdaInstances.mjs';
 
 const root = new URL('..', import.meta.url).pathname;
 let dir;
@@ -59,6 +59,19 @@ test('the JSON helper finds the instance to act on and its OS volume in the shap
   assert.equal(osVolumeOf({ id: 'i' }), null);
   assert.equal(volumeStatus({ volumes: [{ id: 'vol-1', status: 'detached' }] }, 'vol-1'), 'detached');
   assert.equal(volumeStatus([], 'vol-1'), null);
+  assert.equal(volumeOf([{ id: 'vol-1', status: 'detached', size: 150 }], 'vol-1').size, 150);
+  assert.equal(pickInstance([{ id: 'a', hostname: 'gcm64', status: 'error' }, { id: 'b', hostname: 'gcm64', status: 'unknown' }], 'gcm64').id, 'b');
+});
+
+test('as a command the helper prints the instance, its address and a volume\'s status and size', () => {
+  const helper = (args, json) => spawnSync('node', [join(root, 'scripts/verdaInstances.mjs'), ...args], { input: JSON.stringify(json), encoding: 'utf8' }).stdout.trim();
+  const list = [{ id: 'i-1', hostname: 'gcm-eleven', status: 'running', ip: '135.181.8.9', os_volume_id: 'vol-1' }];
+  assert.equal(helper(['instance', 'gcm-eleven'], list), 'i-1 running vol-1');
+  assert.equal(helper(['address', 'gcm-eleven'], list), 'i-1 running 135.181.8.9');
+  assert.equal(helper(['address', 'gcm-eleven'], [{ id: 'i-2', hostname: 'gcm-eleven', status: 'provisioning' }]), 'i-2 provisioning -');
+  assert.equal(helper(['address', 'gcm-eleven'], []), '');
+  assert.equal(helper(['volume', 'vol-1'], [{ id: 'vol-1', status: 'detached', size: 150 }]), 'detached 150');
+  assert.equal(helper(['volume', 'vol-1'], [{ id: 'vol-1', status: 'attached' }]), 'attached -');
 });
 
 test('the relauncher remembers the OS volume, waits for it to detach after an eviction, recreates the spot instance on it and starts an offline one', () => {
@@ -68,8 +81,8 @@ test('the relauncher remembers the OS volume, waits for it to detach after an ev
     'list.2.json': [],
     'volumes.2.json': [{ id: 'vol-1', status: 'attached' }],
     'list.3.json': { instances: [{ id: 'i-1', hostname: 'gcm64', status: 'discontinued' }] },
-    'volumes.3.json': [{ id: 'vol-1', status: 'detached' }],
-    'list.4.json': [{ id: 'i-2', hostname: 'gcm64', status: 'provisioning' }],
+    'volumes.3.json': [{ id: 'vol-1', status: 'detached', size: 150 }],
+    'list.4.json': [{ id: 'i-2', hostname: 'gcm64', status: 'unknown' }],
     'list.5.json': [{ id: 'i-2', hostname: 'gcm64', status: 'offline' }],
     'list.6.json': [{ id: 'i-2', hostname: 'gcm64', status: 'running', os_volume_id: 'vol-1' }],
   });
@@ -77,12 +90,13 @@ test('the relauncher remembers the OS volume, waits for it to detach after an ev
   assert.equal(readFileSync(join(at, 'state'), 'utf8').trim(), 'vol-1');
   assert.equal(creates(calls).length, 1);
   const create = creates(calls)[0];
-  for (const flag of ['--agent', 'vm create', '--kind gpu', '--instance-type 1A100.22V', '--location FIN-01', '--is-spot', '--os vol-1', '--os-volume-size 100', '--os-volume-on-spot-discontinue keep_detached', '--ssh-key key-1', '--hostname gcm64', '--startup-script script-1', '--wait', '-o json']) assert.ok(create.includes(flag), `${flag} in: ${create}`);
+  for (const flag of ['--agent', 'vm create', '--kind gpu', '--instance-type 1A100.22V', '--location FIN-01', '--is-spot', '--os vol-1', '--os-volume-size 150', '--os-volume-on-spot-discontinue keep_detached', '--ssh-key key-1', '--hostname gcm64', '--startup-script script-1', '--wait', '-o json']) assert.ok(create.includes(flag), `${flag} in: ${create}`);
   assert.ok(calls.includes('--agent vm start i-2 -o json'), calls.join('\n'));
   assert.match(log, /\d{4}-\d\d-\d\d \d\d:\d\d:\d\d gcm64 is running \(i-1\)/);
   assert.match(log, /remembering OS volume vol-1 of gcm64/);
   assert.match(log, /waiting for OS volume vol-1 to detach \(it is attached\)/);
-  assert.match(log, /creating gcm64: 1A100\.22V spot in FIN-01 on vol-1/);
+  assert.match(log, /creating gcm64: 1A100\.22V spot in FIN-01 on vol-1 \(150 GiB\)/);
+  assert.match(log, /gcm64 is unknown \(i-2\)/);
   assert.match(log, /starting gcm64 \(i-2\)/);
   assert.equal(log.match(/remembering/g).length, 1, 'the same volume is remembered once');
 });
@@ -90,7 +104,7 @@ test('the relauncher remembers the OS volume, waits for it to detach after an ev
 test('with no OS volume known the first instance comes from the image, and a volume that vanished stops the relauncher from creating on another', () => {
   const first = relaunch(scenario('fresh', { 'list.json': [] }), 1);
   assert.equal(creates(first.calls).length, 1);
-  assert.ok(creates(first.calls)[0].includes('--os ubuntu-24.04-cuda-12.8-open-docker'));
+  assert.ok(creates(first.calls)[0].includes('--os ubuntu-24.04-cuda-12.8-open-docker --os-volume-size 100'));
 
   const lost = scenario('lost', { 'list.json': [], 'volumes.json': [{ id: 'vol-other', status: 'detached' }] });
   writeFileSync(join(lost, 'state'), 'vol-1\n');

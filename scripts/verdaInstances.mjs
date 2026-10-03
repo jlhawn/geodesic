@@ -1,17 +1,21 @@
 // The parts of the verda CLI's JSON (verda --agent ... -o json) that
-// scripts/verdaRelaunch.sh acts on. As a command it reads that JSON on
-// stdin and prints one line, or nothing when there is nothing to report:
+// scripts/verdaRelaunch.sh, verdaPush.sh and verdaPull.sh act on. As a
+// command it reads that JSON on stdin and prints one line, or nothing when
+// there is nothing to report:
 //   instance <hostname>  from `vm list`: the id, status and OS volume
 //                        ('-' when the list leaves it out) of the instance
 //                        of that hostname to act on: a running one before
 //                        one starting or stopping, before an offline one,
 //                        before any other
+//   address <hostname>   from `vm list`: the same instance's id, status and
+//                        public address (ip; '-' when there is none)
 //   osvolume             from `vm describe`: the instance's OS volume
-//   volume <id>          from `volume list`: that volume's status
+//   volume <id>          from `volume list`: that volume's status and size
+//                        in GiB ('-' when the list leaves it out)
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-const RANK = { running: 0, new: 1, ordered: 1, provisioning: 1, validating: 1, deleting: 1, offline: 2 };
+const RANK = { running: 0, new: 1, ordered: 1, provisioning: 1, validating: 1, deleting: 1, unknown: 1, offline: 2 };
 
 export function listed(json) {
   if (Array.isArray(json)) return json;
@@ -32,8 +36,12 @@ export function osVolumeOf(instance) {
   return volume ? volume.id : null;
 }
 
+export function volumeOf(json, id) {
+  return listed(json).find((v) => v && v.id === id) ?? null;
+}
+
 export function volumeStatus(json, id) {
-  const volume = listed(json).find((v) => v && v.id === id);
+  const volume = volumeOf(json, id);
   return volume ? volume.status : null;
 }
 
@@ -44,11 +52,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (mode === 'instance') {
     const instance = pickInstance(json, argument);
     if (instance) console.log(`${instance.id} ${instance.status} ${osVolumeOf(instance) ?? '-'}`);
+  } else if (mode === 'address') {
+    const instance = pickInstance(json, argument);
+    if (instance) console.log(`${instance.id} ${instance.status} ${instance.ip || '-'}`);
   } else if (mode === 'osvolume') {
     const volume = osVolumeOf(json);
     if (volume) console.log(volume);
   } else if (mode === 'volume') {
-    const status = volumeStatus(json, argument);
-    if (status) console.log(status);
-  } else throw new Error(`unknown mode ${mode}: instance <hostname>, osvolume or volume <id>`);
+    const volume = volumeOf(json, argument);
+    if (volume) console.log(`${volume.status} ${Number.isFinite(volume.size) ? volume.size : '-'}`);
+  } else throw new Error(`unknown mode ${mode}: instance <hostname>, address <hostname>, osvolume or volume <id>`);
 }
