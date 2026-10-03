@@ -10952,7 +10952,8 @@ layer's midpoint, and the slab of whole layers whose midpoints lie below
 h took that layer in on one step and out on the next, the water path
 going between 150 and 0 g/m² with the gate above 0.6 throughout.
 
-The scheme. `boundaryCondensation` 'cloudLayer' (the default): the run of
+The scheme. `boundaryCondensation` 'cloudLayer' (the default here, until
+'uniform' replaced it the same day, below): the run of
 cloudy layers that makes a column cloud-topped (the cloud top's layer
 and the cloudy layers below it whose cooling the diagnosis sums,
 `cloudLayer`, PH `CLOUDK`, diagnosed each step and not saved) holds the
@@ -10966,8 +10967,8 @@ layer of the boundary layer, which is 'uniform' here, so 'cloudLayer' is
 this model's restriction of the published scheme to the layers whose
 cloud the boundary layer's diagnosis reads. 'uniform' gives every mixed
 layer that distribution, 'saturation' is the scheme before. 'uniform'
-is the arrangement the sources describe and would be the default by this
-model's rule; under it five parity tests fail at their limits, and not
+is the arrangement the sources describe and the default by this model's
+rule (below); under it five parity tests failed at their limits, and not
 through an engine difference. Stage by stage (`scripts/adjustStages.mjs`
 on eleven64_day1825, both engines given the CPU physics phase's state
 in single precision and its boundary-layer fields): after the mixing and
@@ -11008,9 +11009,9 @@ sunlight by 1.6·10⁻⁴ of itself against 10⁻⁴; the treeline's season
 length parts by 5.4·10⁻² against 10⁻⁴; and in the stratiform-lifetime
 test the engines agree exactly (263 and 263 layers) but the 3 h
 lifetime keeps more cloud in 9.6 % of the 2,727 cloudy layers against
-its floor of 10 % (Oct 3). Making 'uniform' the default needs those
+its floor of 10 % (Oct 3). Making 'uniform' the default needed those
 bounds restated against the CPU's response to perturbations of the
-engines' size. Every cloudy
+engines' size (below). Every cloudy
 layer below the mixing top keeps the variance cover in the radiation,
 so the run's condensate is the distribution's and its cover is not: at
 N=64 after 8 steps from eleven64_day1825, over the 62,637 run layers
@@ -11029,8 +11030,9 @@ Tested and not kept: the Gaussian condensate of the variance cover
 (Sommeria and Deardorff 1977) below the mixing top, 1.37 % at N=128
 with a new cycle where the surface-driven top moved between 0.26 and
 1.25 km, and 4.6 mm/d of rain and SWCRE +8 W/m² on its first day;
-'uniform', 0.034 % at N=128 but SWCRE −3.7 W/m² over the three days
-below against −3.0 under 'cloudLayer'.
+'uniform' with the midpoint slab, 0.034 % at N=128 but SWCRE −3.7 W/m²
+over the three days below against −3.0 under 'cloudLayer' ('uniform'
+became the default after, below).
 
 After, the same runs: 0.010 % a step at N=128 (934 blink onsets against
 246,813) and 0.006 % at N=64 (321 against 108,484), 0.01 % and 0.10 %
@@ -11083,6 +11085,78 @@ h, so the jump and with it the decoupling ratio switch with the
 midpoint. Of the 1,730 deck-driven transitions at N=128 the cover moves
 with the blink in all, the water path in 411, the count of layers below
 h changed in 1,408.
+
+**'uniform' the default (Oct 3).** `boundaryCondensation` defaults to
+'uniform': every mixed layer holds the uniform distribution's
+condensate, the arrangement ECHAM6 and the Unified Model's large-scale
+scheme under Lock et al. (2000) publish, and the user's choice, for
+realistic schemes with parameters tuned to observations; 'cloudLayer' and
+'saturation' stay as options with their code untouched (CPU, 24 steps at
+N=6: the parent's default and the new explicit 'cloudLayer' hash the
+same, as do 'saturation' on both and the parent's explicit 'uniform'
+against the new default; the GPU takes its defaults from MOIST_DEFAULTS).
+No pinned digest changed. The five tests are restated on one principle:
+a parity test compares the engines where the physics is deterministic
+and leaves out the columns where a discrete decision parted, with their
+neighbours within two cells, asserting that share against a bound from
+the CPU's own sensitivity. `test/helpers/decisions.mjs` reads, after each
+step on either engine, the regime, the plume's firing, its base flux (by
+1 %) and top, each layer's cloud water against the cloud-top threshold
+(10⁻⁶) and the dry adjustment's merges; `scripts/perturbedRain.mjs` and
+`scripts/perturbedDecisions.mjs` (SETUP cloudEffect, dayMeans, treeline)
+count the same on the CPU against itself with ±10⁻⁴ K of θ noise before
+every step. The rain accumulation (gpuModel.test.mjs, 24 steps at N=6):
+over 18 seeds a decision parts in 36–49 cells, 191–255 within two cells
+(0.53–0.70 of 362), and no cell whose rain parts by 10⁻³ of the largest
+lies outside them; the GPU 38 and 191 (all 20 parted cells within one
+cell of a decision); bounds C/6 and 0.8 C; over the 171 kept cells
+convective rms 2.0·10⁻⁵, large-scale 7.6·10⁻⁵ and the last step's rain
+9.5·10⁻⁶ kg/m² against the unchanged 10⁻³, 10⁻³ and 3·10⁻⁴. The cloud
+effects (cloudEffect.test.mjs, its own rules joined to the shared one):
+over 12 seeds 12–27 columns parted, 0–5 whose bottom block of q merged
+apart, 143–248 left out; the GPU 24, 4 and 199; bounds C/10, C/50 and
+0.8 C; over the 163 kept SWCRE rms 9.8·10⁻⁶ (max 5.3·10⁻³ W/m²) against
+the unchanged 2·10⁻³ and 0.5. The day means (dayMeans.test.mjs): over 16
+seeds 37–58 parted, 181–247 left out, the day-mean ASR over all columns
+apart by up to 1.7·10⁻⁴ of itself (above 10⁻⁴ in 5 seeds, as between the
+engines) and over the kept by at most 6.6·10⁻⁶; the GPU 50 and 229, its
+day means over the 133 kept ASR 344.534 / 344.536 W/m² (5·10⁻⁶ of
+itself), OLR to 4·10⁻⁷ of itself, albedo to 4·10⁻⁶; bounds C/5 and 0.8 C, the 10⁻⁴ limits now on
+the kept columns' means. The treeline (48 steps with ocean and land):
+the atmosphere's decisions part in 160–198 columns and cover every land
+cell, so the test leaves out the land's own decisions: what parted is
+cell 351, whose step fell in season on the GPU only at steps 36 and 40
+(each moving the 6-hour mean by 0.042); at ±10⁻⁴ K, whose lowest-air
+drift (up to 3.9·10⁻² K) matches the engines', the season or snow parts
+in 0–1 of 151 land cells over 12 seeds (at most 16 left out), at ±10⁻³ K
+in 1–5 (12–58); bounds 0.04 and 0.4 of the land cells; over the 133 kept
+season length 1.5·10⁻⁷, trees within their targets' gap. Snow covers 31
+land cells on both engines (24 under 'cloudLayer'). The stratiform
+lifetime (convection.test.mjs) counted 263 of 2,727 cloudy layers kept
+on both engines against 272.7, the denominator grown by cloud in mixed
+layers whose long share is 0; it now counts the layers its rule gives a
+positive share: 257 of 876 (29 %; 196 of 723, 27 %, under 'cloudLayer'),
+floor a fifth.
+
+The blinking measured again at main, where the page's cloud column has
+counted the shallow cumulus' cover × water since 3da313c (merged with the
+branch, not in its measurement): 0.162 % a step at N=128 (15,918 onsets)
+and 0.091 % at N=64 (4,619), at the page's cadence 0.143 % and 0.117 %,
+2.25 % and 2.75 % of cells blinking at least once, lag-1 autocorrelation
+of the step change −0.44 and −0.36 over all cells (−0.53 and −0.52 over
+the blinking), 86 % and 88 % of cloudy runs one step long; in 95 % of the
+blinks the cumulus' change is larger than any grid-scale part's. Under
+'cloudLayer' at main the same: 0.161 % and 0.086 % (15,787 and 4,383),
+−0.45 and −0.36, the cumulus larger in 94 % and 93 %; the 0.010 % and
+0.006 % above were measured without the cumulus in the frame. Three GPU
+days at N=64 from eleven64_day1825 (days 1826–1828, the parent → 'cloudLayer'
+→ 'uniform'): albedo 0.318, 0.314, 0.311 → 0.326, 0.323, 0.321 → 0.328,
+0.325, 0.324; SWCRE −59.3, −57.7, −56.6 → −61.8, −60.7, −60.0 → −62.7,
+−61.4, −60.9 W/m² (−3.8 on the parent, −3.0 under 'cloudLayer'); LWCRE
+29.2, 29.6, 28.8 → 29.5, 29.9, 29.2 → 29.6, 30.0, 29.3; rain 2.77, 2.77,
+2.70 → 2.79, 2.78, 2.73 → 2.81, 2.81, 2.75 mm/d; ASR 232.1, 233.6, 234.6
+→ 229.5, 230.6, 231.2 → 228.7, 229.9, 230.3; OLR 229.9, 229.7, 230.6 →
+229.6, 229.3, 230.1 → 229.5, 229.1, 229.9 W/m².
 
 ### M23 — The equatorial ocean — in progress
 
