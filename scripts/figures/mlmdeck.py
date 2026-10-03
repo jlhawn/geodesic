@@ -31,7 +31,7 @@ def inbox(b):
     return (x >= x0) & (x <= x1) & (lat >= y0) & (lat <= y1)
 cloud = LinearSegmentedColormap.from_list('cloud', ['#1f4f8f', '#5b95cf', '#b9d6f0', '#f7faff'])
 height = LinearSegmentedColormap.from_list('height', ['#6b3410', '#c0692a', '#f0b27a', '#fff2e0'])
-fig, axes = plt.subplots(2, 2, figsize=(16, 10.2), facecolor='#0b1020')
+fig, axes = plt.subplots(2, 2, figsize=(16, 9.6), facecolor='#0b1020')
 def panel(ax, field, cmap, norm, label, extend='max'):
     ax.set_facecolor('#0b1020')
     ax.imshow(cat, extent=(-180, 180, -90, 90), origin='lower', cmap=ListedColormap(['#172133', '#3b4a60', '#3a3a3a']), vmin=-0.5, vmax=2.5, interpolation='nearest')
@@ -73,4 +73,4 @@ for b in BOXES:
     print(f"  {b[0]:12s} gates (% of ice-free sea): " + ', '.join(f"{name} {100 * mean((gate == g).astype(float), open_, m):.0f}" for g, name in enumerate(d['gates']) if g and np.any(m & (gate == g))))
 fig.suptitle(f"Marine stratocumulus deck of the mixed-layer model — {title}\nthe deck after four steps from the state, subsolar point (+) {ss_lat:.1f}°, {ss_lon:.1f}°, terminator dotted", color='#eee', fontsize=12)
 fig.text(0.01, 0.012, glob + '\n' + boxes, color='#cfd6e4', fontsize=8.3, ha='left', va='bottom', family='DejaVu Sans')
-plt.tight_layout(rect=(0, 0.09, 1, 0.95)); fig.savefig(sys.argv[2], dpi=130 if d['N'] > 64 else 90, facecolor=fig.get_facecolor()); print('wrote', sys.argv[2])
+fig.subplots_adjust(left=0.03, right=0.975, top=0.9, bottom=0.135, hspace=0.2, wspace=0.1); fig.savefig(sys.argv[2], dpi=130 if d['N'] > 64 else 90, facecolor=fig.get_facecolor()); print('wrote', sys.argv[2])
