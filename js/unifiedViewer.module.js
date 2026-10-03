@@ -550,8 +550,58 @@ vec3 paletteColor(float t) {
   });
 
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.frustumCulled = false; 
+  mesh.frustumCulled = false;
   scene.add(mesh);
+
+  /*
+   * The sunlit air beyond the limb, on the back faces of a shell that the
+   * globe hides inside its silhouette: each ray's column exp(-h / H) at
+   * its closest height h, lit as the globe's air is at that point. H stays
+   * at least a fraction of a pixel so the rim is resolved when far out.
+   */
+  const GLOW_HEIGHT = 0.0035, GLOW_PIXELS = 0.6, GLOW_CUT = 6, GLOW_SHELL = 1.1;
+  const glow = {
+    uModelRotation: { value: rotationMatrix },
+    uSunDirection: lighting.uSunDirection,
+    uCameraPosition: lighting.uCameraPosition,
+    uSun: lighting.uSun,
+    uScaleHeight: { value: GLOW_HEIGHT },
+    uFade: { value: 0 },
+  };
+  const glowMaterial = new THREE.ShaderMaterial({
+    uniforms: glow, side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `
+varying vec3 vWorld;
+void main() {
+  vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+  gl_Position = projectionMatrix * viewMatrix * vec4(vWorld, 1.0);
+}`,
+    fragmentShader: `
+uniform mat4 uModelRotation;
+uniform vec3 uSunDirection;
+uniform vec3 uCameraPosition;
+uniform float uSun;
+uniform float uScaleHeight;
+uniform float uFade;
+varying vec3 vWorld;
+${airGlow}
+void main() {
+  vec3 ray = normalize(vWorld - uCameraPosition);
+  vec3 closest = vWorld - dot(vWorld, ray) * ray;
+  if (dot(closest - uCameraPosition, ray) < 0.0) closest = uCameraPosition;
+  float b = length(closest);
+  float h = max(b - 1.0, 0.0) / uScaleHeight;
+  float column = max(exp(-h) - exp(-${GLOW_CUT.toFixed(1)}), 0.0) / (1.0 - exp(-${GLOW_CUT.toFixed(1)}));
+  float mu = dot(closest / b, mat3(uModelRotation) * uSunDirection);
+  gl_FragColor = vec4(uFade * uSun * 0.6 * column * airLit(mu) * airColour(mu), 1.0);
+  #include <colorspace_fragment>
+}`,
+  });
+  const glowShell = new THREE.Mesh(new THREE.SphereGeometry(GLOW_SHELL, 192, 96), glowMaterial);
+  glowShell.frustumCulled = false;
+  glowShell.renderOrder = 1;
+  glowShell.visible = false;
+  scene.add(glowShell);
   
 
   // Create GUI / Buttons
@@ -645,6 +695,13 @@ vec3 paletteColor(float t) {
     }
     camera.updateProjectionMatrix();
     applyInset(camera);
+
+    glow.uFade.value = space.enabled ? 1 - THREE.MathUtils.smoothstep(viewState.blend, 0, 0.15) : 0;
+    glowShell.visible = glow.uFade.value > 0;
+    if (glowShell.visible) {
+      const limb = state.perspective ? 2 * TAN_HALF * Math.sqrt(Math.max(camera.position.lengthSq() - 1, 0)) : viewHeight();
+      glow.uScaleHeight.value = Math.min(Math.max(GLOW_HEIGHT, GLOW_PIXELS * limb / container.clientHeight), (GLOW_SHELL - 1) / GLOW_CUT);
+    }
 
     renderer.setClearColor(space.enabled ? 0x000000 : backgroundColor);
     renderer.clear();
@@ -1220,6 +1277,7 @@ uniform float uReferenceSpeed;
       renderer.dispose();
       geometry.dispose();
       material.dispose();
+      glowShell.geometry.dispose(); glowMaterial.dispose();
       centerTexture.dispose();
       cellColors.dispose(); cellSurface.dispose(); cellValues.dispose();
       renderer.domElement.remove();
