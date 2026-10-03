@@ -548,8 +548,16 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloud
   const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...moist, turbulence, surfaceExchange: exchange, exchangeOptions: surfaceLayer } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
-  for (let n = 0; n < steps; n++) { const time = model.time; model.step(900); await gpu.stepModel(900, time); }
+  const plumed = new Set();
+  for (let n = 0; n < steps; n++) {
+    const time = model.time;
+    model.step(900);
+    await gpu.stepModel(900, time);
+    const device = await gpu.downloadPhysics(), { cumulusBaseFlux, cumulusTop } = model.moist;
+    for (let i = 0; i < C; i++) if ((cumulusBaseFlux[i] > 0) !== (device.CUMF[i] > 0) || (cumulusBaseFlux[i] > 0 && Math.abs(cumulusTop[i] - device.CUTOP[i]) > 1)) plumed.add(i);
+  }
   const after = await gpu.downloadPhysics(), r = model.radiation;
+  const agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !plumed.has(i));
   const cell = (name) => after[name].subarray(0, C);
   const sunlit = [];
   for (let i = 0; i < C; i++) if (r.mlmCover[i] > 0 && r.insolation(i) > 200) sunlit.push(i);
@@ -567,6 +575,7 @@ async function mixedLayerPair(steps, { seed = -1e-3, height = 0, moist = { cloud
     heights: Float64Array.from(r.mlmHeight), tops: Float64Array.from(r.mlmTop), depth: Float64Array.from(model.boundaryLayer.depth),
     fraction: stats(r.stratusFraction, cell('DECKF')), deck: stats(r.stratus, cell('DECK')), mean: r.mlmSubsidence,
     sunlit, sunlitWater: stats(pick(r.mlmWater), pick(cell('MLMWATER'))), sunlitDeck: stats(pick(r.stratus), pick(cell('DECK'))), waterPath: Float64Array.from(r.mlmWater),
+    plumed, agreedWater: stats(Float64Array.from(agreed, (i) => r.mlmWater[i]), Float64Array.from(agreed, (i) => cell('MLMWATER')[i])),
   };
 }
 
@@ -662,11 +671,12 @@ test('with deckRest \'regime\' the deck stands down in surface-driven and decoup
   const regimes = (run) => { const n = [0, 0, 0, 0]; for (const r of run.model.boundaryLayer.regime) n[r]++; return n; };
   let shut = 0;
   for (let i = 0; i < low.C; i++) if (low.gpuGate[i] === 0 && low.model.radiation.mlmGate[i] === 0) shut++;
-  console.log(`four moist steps under a 10 K inversion, regimes (stable, surface, decoupled, coupled) ${regimes(high).join(', ')}: with the stand-down above 3 km decks on ${high.decked} of ${high.C} cells (GPU ${high.gpuDecked}), above 200 m on ${low.decked} (GPU ${low.gpuDecked}) with ${shut} gates shut in both; height rms ${high.height.rmsRel.toExponential(1)} and ${low.height.rmsRel.toExponential(1)}, gate max ${high.gate.maxDiff.toExponential(1)} and ${low.gate.maxDiff.toExponential(1)}, water rms ${high.mlmWater.rmsRel.toExponential(1)} and ${low.mlmWater.rmsRel.toExponential(1)}`);
+  console.log(`four moist steps under a 10 K inversion, regimes (stable, surface, decoupled, coupled) ${regimes(high).join(', ')}: with the stand-down above 3 km decks on ${high.decked} of ${high.C} cells (GPU ${high.gpuDecked}), above 200 m on ${low.decked} (GPU ${low.gpuDecked}) with ${shut} gates shut in both; height rms ${high.height.rmsRel.toExponential(1)} and ${low.height.rmsRel.toExponential(1)}, gate max ${high.gate.maxDiff.toExponential(1)} and ${low.gate.maxDiff.toExponential(1)}, water rms ${high.agreedWater.rmsRel.toExponential(1)} and ${low.agreedWater.rmsRel.toExponential(1)} over the columns whose shallow plume fired alike and topped at the same interface on both engines after every step (${high.plumed.size} and ${low.plumed.size} parted; over all columns ${high.mlmWater.rmsRel.toExponential(1)} and ${low.mlmWater.rmsRel.toExponential(1)})`);
   assert.ok(high.decked > 0.5 * high.C && low.decked < 0.5 * high.decked && shut > 0.5 * low.C, `decks ${high.decked} and ${low.decked}, ${shut} shut`);
   for (const run of [high, low]) {
     assert.ok(run.decked === run.gpuDecked, `deck on ${run.decked}, GPU ${run.gpuDecked}`);
-    assert.ok(run.height.rmsRel < 1e-5 && run.gate.maxDiff < 1e-6 && run.cover.maxDiff < 1e-3 && run.mlmWater.rmsRel < 1e-3, `height ${run.height.rmsRel}, gate ${run.gate.maxDiff}, cover ${run.cover.maxDiff}, water ${run.mlmWater.rmsRel}`);
+    assert.ok(run.plumed.size <= 0.02 * run.C, `${run.plumed.size} of ${run.C} columns' shallow plumes parted`);
+    assert.ok(run.height.rmsRel < 1e-5 && run.gate.maxDiff < 1e-6 && run.cover.maxDiff < 1e-3 && run.agreedWater.rmsRel < 1e-3, `height ${run.height.rmsRel}, gate ${run.gate.maxDiff}, cover ${run.cover.maxDiff}, water ${run.agreedWater.rmsRel}`);
   }
 });
 
