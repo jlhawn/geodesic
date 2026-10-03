@@ -71,7 +71,9 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   const mslp = Float64Array.from(pi, (p, i) => p * Math.exp(phis[i] / (R * (theta[bottom + i] * exnerLayer[bottom + i] + 0.00325 * phis[i] / g))));
   const water = Float64Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, q, i));
   const condensed = Float64Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, qc, i));
-  const cloud = Float64Array.from(condensed, (w, i) => w + physics.DECKF[i] * physics.DECK[i]);
+  const { dSigma, g: gravity } = core.diagnostics, K0 = model.moist.cumulusK0;
+  const cumulus = Float64Array.from({ length: C }, (_, i) => { let path = 0; for (let k = K0; k < core.K; k++) { const slot = (k - K0) * C + i; path += pi[i] * dSigma[k] / gravity * physics.CUCOVER[slot] * physics.CUWATER[slot]; } return path; });
+  const cloud = Float64Array.from(condensed, (w, i) => w + cumulus[i] + physics.DECKF[i] * physics.DECK[i]);
   const sea = (source) => Float64Array.from({ length: C }, (_, i) => (model.geography.land[i] ? NaN : source[i]));
   const currents = cellVector(mesh, ocean.u1);
   for (let i = 0; i < C; i++) if (model.geography.land[i]) currents.fill(0, 3 * i, 3 * i + 3);
@@ -167,18 +169,23 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
     for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) { cpu.state[1][k * C + i] += 10; gpu.state[1][k * C + i] += 10; }
     gpu.load();
     for (let n = 0; n < 2; n++) { cpu.step(900); await gpu.step(900); }
-    const frame = await gpu.beginFrame({ fields: ['cloud'] });
-    return { cpu: Float64Array.from({ length: C }, (_, i) => cpu.cloudWater(i)), gpu: frame.fields.cloud, deck: Float64Array.from({ length: C }, (_, i) => cpu.radiation.stratusFraction[i] * cpu.radiation.stratus[i]) };
+    const frame = await gpu.beginFrame({ fields: ['cloud'] }), physics = await gpu.gpu.downloadPhysics(), K0 = gpu.moist.cumulusK0, { dSigma, g } = cpu.core.diagnostics, pi = cpu.state[0];
+    const gpuCumulus = Float64Array.from({ length: C }, (_, i) => { let path = 0; for (let k = K0; k < K; k++) { const slot = (k - K0) * C + i; path += pi[i] * dSigma[k] / g * physics.CUCOVER[slot] * physics.CUWATER[slot]; } return path; });
+    const parted = [];
+    for (let i = 0; i < C; i++) if ((cpu.moist.cumulusCloudPath(pi, i) > 0) !== (gpuCumulus[i] > 0)) parted.push(i);
+    return { cpu: Float64Array.from({ length: C }, (_, i) => (parted.includes(i) ? NaN : cpu.cloudWater(i))), gpu: Float64Array.from(frame.fields.cloud, (x, i) => (parted.includes(i) ? NaN : x)), deck: Float64Array.from({ length: C }, (_, i) => cpu.radiation.stratusFraction[i] * cpu.radiation.stratus[i]), parted };
   };
   const on = await run(true), off = await run(false);
+  assert.ok(on.parted.length + off.parted.length <= 0.02 * on.cpu.length, `the cumulus fired on one engine only in ${on.parted.length} + ${off.parted.length} of ${on.cpu.length} columns`);
   let at = 0;
-  for (let i = 0; i < on.deck.length; i++) if (on.deck[i] > on.deck[at]) at = i;
-  const engines = worst(on.cpu, on.gpu);
+  for (let i = 0; i < on.deck.length; i++) if (on.deck[i] > on.deck[at] && Number.isFinite(on.cpu[i]) && Number.isFinite(off.cpu[i])) at = i;
+  const engines = worst(on.cpu, on.gpu, { skipNaN: true });
   console.log(`under a 10 K inversion the thickest deck adds ${(1000 * on.deck[at]).toFixed(1)} g/m² to cell ${at}'s cloud: ${(1000 * on.cpu[at]).toFixed(1)} against ${(1000 * off.cpu[at]).toFixed(1)} g/m² without it; the engines' cloud fields differ by at most ${engines.max.toExponential(1)} kg/m²`);
   assert.ok(on.deck[at] > 1e-3, `deck ${on.deck[at]} kg/m²`);
   assert.ok(on.cpu[at] > off.cpu[at] + 0.5 * on.deck[at] && on.gpu[at] > off.gpu[at] + 0.5 * on.deck[at], `cloud ${on.cpu[at]} (GPU ${on.gpu[at]}) against ${off.cpu[at]} (GPU ${off.gpu[at]}) without the deck`);
   assert.ok(engines.max < 1e-4, `cloud differs between the engines by ${engines.max} at ${engines.at}`);
-  assert.ok(worst(off.cpu, off.gpu).max < 1e-4);
+  const apart = worst(off.cpu, off.gpu, { skipNaN: true });
+  assert.ok(apart.max < 1e-4, `without the deck the engines' cloud fields differ by ${apart.max} kg/m² at ${apart.at} (${off.cpu[apart.at]} against ${off.gpu[apart.at]})`);
 });
 
 test('the mixed-layer deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

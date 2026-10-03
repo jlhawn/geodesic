@@ -221,6 +221,10 @@ const FRAME_KERNELS = {
     let d = pi * LV[L_DS + j] / GRAV;
     water += d * IN[S_Q + j * C + i]; cloud += d * IN[S_QC + j * C + i];
   }
+  for (var j = CU_K0; j < K; j++) {
+    let slot = (j - CU_K0) * C + i;
+    cloud += pi * LV[L_DS + j] / GRAV * PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot];
+  }
   OUT[FR_TPW + i] = water; OUT[FR_TCW + i] = cloud + PH[PH_DECKF + i] * PH[PH_DECK + i];
   let tb = IN[S_TH + (K - 1) * C + i] * exner0 * LV[L_CM + K - 1];
   OUT[FR_MSLP + i] = pi * exp(phis / (RGAS * (tb + 0.00325 * phis / GRAV)));

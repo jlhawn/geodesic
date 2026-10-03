@@ -241,7 +241,7 @@ export function createModel(gridOrMesh, {
   };
 
   model.oceanFields = (depth = 0) => (ocean ? ocean.fields(depth) : null);
-  model.cloudWater = (i) => moistPhysics.columnWater(state[0], state[5], i) + radiation.stratusFraction[i] * radiation.stratus[i];
+  model.cloudWater = (i) => moistPhysics.columnWater(state[0], state[5], i) + moistPhysics.cumulusCloudPath(state[0], i) + radiation.stratusFraction[i] * radiation.stratus[i];
 
   model.step = function step(dt) {
     rk4 ??= createRK4Arrays(STATE_NAMES.map((name) => lengths[name]));

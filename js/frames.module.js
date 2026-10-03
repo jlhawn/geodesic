@@ -26,7 +26,7 @@ export const FIELDS = {
   ps: 'surface pressure, Pa',
   mslp: 'sea-level pressure, Pa',
   water: 'precipitable water, kg/m²',
-  cloud: 'column cloud water, the stratocumulus deck\'s water times its cover included, kg/m²',
+  cloud: 'column cloud water: the resolved condensate, the cumulus cloud\'s condensate times its cover and the stratocumulus deck\'s water times its cover, kg/m²',
   rain: 'recent rain, mm, with a three-hour exponential memory',
   ice: 'sea-ice thickness over the part of the cell the ice covers, m',
   concentration: 'sea-ice concentration, the fraction of the cell the ice covers, 0 to 1',
