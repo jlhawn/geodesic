@@ -82,6 +82,12 @@ const vertexLogic = `
   vec3 transformed = finalPos;
 `;
 
+// The share of sunlit air at sun elevation cosine mu, and its colour: red at the terminator, blue above it.
+const airGlow = `
+float airLit(float mu) { return smoothstep(-0.08, 0.025, mu); }
+vec3 airColour(float mu) { return mix(vec3(1.0, 0.5, 0.2), vec3(0.45, 0.65, 1.0), smoothstep(0.0, 0.125, mu)); }
+`;
+
 // ----------------------------------------------------------------------------
 // CPU MATH HELPER: INVERSE PROJECTION
 // ----------------------------------------------------------------------------
@@ -501,6 +507,7 @@ vec3 terrainGrey(float z) {
   float g = z < 0.0 ? 0.03 + 0.12 * clamp((z + 6000.0) / 6000.0, 0.0, 1.0) : 0.22 + 0.6 * clamp(z / 5000.0, 0.0, 1.0);
   return vec3(g);
 }
+${airGlow}
 vec3 srgbToLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
 vec3 paletteColor(float t) {
   float x = clamp(t, 0.0, 1.0) * (uStopCount - 1.0);
@@ -522,20 +529,19 @@ vec3 paletteColor(float t) {
   // reaches a few degrees past the terminator, and the sunlit air seen at a slant toward the limb.
   vec3 n = normalize(position);
   float mu = dot(n, uSunDirection);
-  float airMass = 1.0 / (max(mu, 0.0) + 0.025);
+  float airMass = 1.0 / (min(2.0 * max(mu, 0.0), 1.0) + 0.025);
   vec3 sunColour = exp(-vec3(0.06, 0.12, 0.29) * (airMass - 1.0));
   float groundLight = max(0.0, dot(normalize(slope), uSunDirection)) * (1.0 - 0.7 * surface.z);
   float diffuse = mix(groundLight, max(0.0, mu), surface.y);
-  vec3 skyColour = mix(vec3(1.0, 0.45, 0.15), vec3(0.5, 0.7, 1.0), smoothstep(0.0, 0.35, mu));
-  float skyLight = 0.2 * smoothstep(-0.12, 0.1, mu);
+  vec3 skyColour = mix(vec3(1.0, 0.45, 0.15), vec3(0.5, 0.7, 1.0), smoothstep(0.0, 0.175, mu));
+  float skyLight = 0.2 * smoothstep(-0.06, 0.05, mu);
   mat3 spin = mat3(uModelRotation);
   vec3 nView = spin * n;
   vec3 toCamera = normalize(uCameraPosition - nView);
   vec3 halfway = normalize(spin * uSunDirection + toCamera);
-  float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.05, mu);
-  float airLit = smoothstep(-0.16, 0.05, mu);
+  float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.025, mu);
   float slant = pow(1.0 - max(0.0, dot(nView, toCamera)), 2.0) * (1.0 - uBlend);
-  vec3 glow = 0.45 * slant * airLit * mix(vec3(1.0, 0.5, 0.2), vec3(0.45, 0.65, 1.0), smoothstep(0.0, 0.25, mu));
+  vec3 glow = 0.45 * slant * airLit(mu) * airColour(mu);
   vec3 lit = vColor.rgb * (uAmbient + uSun * (diffuse * sunColour + skyLight * skyColour))
     + uSun * glint * sunColour * 0.9
     + uSun * glow;
