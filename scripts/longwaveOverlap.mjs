@@ -30,7 +30,7 @@ import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, STEFAN_BOLTZMANN, YEAR } from '../js/physics/radiation.module.js';
 import { ozoneWeights, ozoneAbove as climatologyAbove } from '../js/physics/ozone.module.js';
-import { LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from '../js/physics/longwave.module.js';
+import { longwaveTableFor, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from '../js/physics/longwave.module.js';
 import { OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -72,7 +72,7 @@ const wellMixed = [R.carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air, R.methane * 
 const ozoneAbove = (sigma) => (sigma <= 0 ? 0 : (1 + Math.exp(-R.ozoneHeight / R.ozoneWidth)) / (1 + Math.exp((-R.scaleHeight * Math.log(sigma) - R.ozoneHeight) / R.ozoneWidth)));
 const ozoneShare = Float64Array.from({ length: K }, (_, k) => ozoneAbove(levels[k + 1]) - ozoneAbove(levels[k]));
 const layerOzone = new Float64Array(K), weights = new Float64Array(5);
-const points = LONGWAVE_TABLE.points, NG = points.length;
+const table = longwaveTableFor(levels), points = table.points, NG = points.length;
 const paths = Array.from({ length: 6 }, () => new Float64Array(K)), pathRow = new Float64Array(6);
 const T = new Float64Array(K), water = new Float64Array(K), cover = new Float64Array(K), inCloud = new Float64Array(K), effective = new Float64Array(K), outside = new Float64Array(K), gas = new Float64Array(NG * K), planck = new Float64Array(NG * K), surfaceUp = new Float64Array(NG);
 const alpha = new Float64Array(K);
@@ -158,7 +158,7 @@ for (let i = 0; i < C; i++) {
     }
     alpha[k] = k > 0 ? Math.exp(-(geopotential[(k - 1) * C + i] - geopotential[idx]) / (g * z0)) : 0;
     const dry = Math.max(0, 1 - Math.max(0, q[idx]));
-    layerPaths(pathRow, pi[i] * sigmaMid[k], mass, T[k], q[idx], layerOzone[k] * OZONE_CM_ATM, wellMixed[0] * dry, wellMixed[1] * dry, wellMixed[2] * dry);
+    layerPaths(pathRow, pi[i] * sigmaMid[k], mass, T[k], q[idx], layerOzone[k] * OZONE_CM_ATM, wellMixed[0] * dry, wellMixed[1] * dry, wellMixed[2] * dry, table);
     for (let j = 0; j < 6; j++) paths[j][k] = pathRow[j];
   }
   const surfaceEmission = STEFAN_BOLTZMANN * skin ** 4;
