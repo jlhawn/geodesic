@@ -45,7 +45,9 @@
 #   scripts/verdaEleven.sh bootstrap --detach
 #   PRICE=1.88 scripts/verdaEleven.sh bench
 # Environment: PREFIX (eleven), OUT ($HOME/runs/<PREFIX>), NS ("64 128"),
-# PER_YEAR (36), YEARS (3), UNTIL (365·YEARS), KEEP (1000), LEVELS (bl36),
+# PER_YEAR (36), YEARS (3), UNTIL (365·YEARS; `run` writes the value it uses
+# to OUT/UNTIL_<PREFIX>, which a later run or resume without UNTIL takes, so
+# a run extended by hand stays extended after an eviction), KEEP (1000), LEVELS (bl36),
 # OCEAN ('{"everySteps":8}'), STRATOSPHERE (1), PRICE (1.85 $/h), CASES
 # ("128:2 64:5"), JOBS (the core count), GPU_WAIT (600), EXPECT_VENDOR,
 # MARGIN_GB (5, free space kept beyond the states), FORCE_DISK (1 runs
@@ -55,7 +57,7 @@ cd "$(dirname "$0")/.."
 PREFIX=${PREFIX:-eleven}
 OUT=${OUT:-$HOME/runs/$PREFIX}
 NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-36} YEARS=${YEARS:-3} KEEP=${KEEP:-1000}
-UNTIL=${UNTIL:-$((365 * YEARS))}
+UNTIL=${UNTIL:-$(cat "$OUT/UNTIL_$PREFIX" 2>/dev/null || echo $((365 * YEARS)))}
 LEVELS=${LEVELS:-bl36} OCEAN=${OCEAN:-'{"everySteps":8}'} STRATOSPHERE=${STRATOSPHERE:-1}
 PRICE=${PRICE:-1.85} CASES=${CASES:-"128:2 64:5"} GPU_WAIT=${GPU_WAIT:-600} MARGIN_GB=${MARGIN_GB:-5}
 JOBS=${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}
@@ -199,6 +201,7 @@ run() {
   if [ -f "$OUT/STOP_$PREFIX" ]; then say "run: STOP_$PREFIX is in $OUT; remove it to run"; return 1; fi
   if ! room && [ "$FORCE_DISK" != 1 ]; then say "run: not started, the disk lacks room for the states plus $MARGIN_GB GB (FORCE_DISK=1 runs anyway)"; return 1; fi
   [ -f "$OUT/STARTED_$PREFIX" ] || echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') commit $(git rev-parse --short HEAD 2>/dev/null)" > "$OUT/STARTED_$PREFIX"
+  echo "$UNTIL" > "$OUT/UNTIL_$PREFIX"
   rm -f "$OUT/ENDED_$PREFIX"
   local stops
   stops=$(grep -c 'stopped (' "$OUT/$PREFIX.log" 2>/dev/null); stops=${stops:-0}

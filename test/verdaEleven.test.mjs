@@ -133,6 +133,7 @@ test('verdaEleven runs the paired spin-up with the run\'s settings, marks it, an
   assert.match(r.stdout, /run: interrupted \(exit 143\) before .* logged a stop; not marked ended, so resume continues it/);
   assert.ok(!existsSync(join(out, 'ENDED_eleven')), 'an earlier stop line in the log does not mark a killed run ended');
   rmSync(join(out, 'killed'));
+
   r = eleven(out, ['resume']);
   assert.equal(calls(), 3);
   assert.match(readFileSync(join(out, 'ENDED_eleven'), 'utf8'), /exit 0: .*stopped \(day 1095 reached\)/);
@@ -157,6 +158,19 @@ test('verdaEleven runs the paired spin-up with the run\'s settings, marks it, an
   assert.match(r.stdout, /STARTED_eleven: /);
   assert.match(readFileSync(join(out, 'eleven.stages.log'), 'utf8'), /\d{4}-\d\d-\d\d \d\d:\d\d:\d\d run: NS="64 128" PREFIX=eleven LEVELS=bl36 PER_YEAR=36 KEEP=1000/);
   assert.equal(eleven(out, ['nonsense']).status, 2);
+
+  rmSync(join(out, 'ENDED_eleven'));
+  r = eleven(out, ['run'], { UNTIL: '1825' });
+  assert.equal(calls(), 5);
+  assert.equal(readFileSync(join(out, 'UNTIL_eleven'), 'utf8').trim(), '1825');
+  assert.match(readFileSync(join(out, 'paired.env'), 'utf8'), /UNTIL=1825/);
+  assert.match(readFileSync(join(out, 'ENDED_eleven'), 'utf8'), /stopped \(day 1825 reached\)/);
+  rmSync(join(out, 'ENDED_eleven'));
+  r = eleven(out, ['resume']);
+  assert.equal(calls(), 6);
+  assert.match(readFileSync(join(out, 'paired.env'), 'utf8'), /UNTIL=1825/, 'a resume without UNTIL keeps the extended end');
+  assert.match(r.stdout, /N=128 day 10, 179 segments left/);
+  assert.match(eleven(out, ['status']).stdout, /day 10 of 1825, 179 segments left/);
 });
 
 test('verdaEleven keeps one GPU mode at a time, takes over a lock whose process is gone, and detaches on request', () => {
