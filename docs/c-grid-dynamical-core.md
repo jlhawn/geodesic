@@ -10861,6 +10861,35 @@ checks, 9b2141a gives scripts/longwaveOverlap.mjs the level set's table.
   type apart on 12, 51 and 313 of 40962 columns after 1, 4 and 16 steps
   (276d936 on the same state 1, 9, 40), lowest layer T rms 3.7·10⁻⁴,
   8.9·10⁻⁴, 6.2·10⁻³ K; with `subcloudVirtual` zeroed on both, 1, 40, 225.
+- Launch (Oct 2, 20:05 PDT; Oct 3 03:05Z): run eleven started on the Verda
+  H100 spot instance gcm-eleven (1H100.80S.30V, FIN-02) at 85539ef, main
+  fast-forwarded to it, with `NS="64 128" PREFIX=eleven LEVELS=bl36
+  PER_YEAR=36 KEEP=1000 OCEAN='{"everySteps":8}' STRATOSPHERE=1 UNTIL=1095`.
+  The instance's benchmark (fresh atlas starts on bl36): N=128 13.19 s a
+  model day steady, 18.1 with a segment's setup and finish; N=64 2.41 and
+  4.50; the three years project to 7.0 h and $13.28 at 1.8911 $/h with
+  58 GB of states on the volume. Its suite (30 runners, node 22, driver
+  580.178.04, Dawn on Vulkan): every file passes but gpuModel, whose
+  three cloud-cover and overlap parity tests fail by 3.6·10⁻⁴ and
+  4.1·10⁻⁴ K/day against largest heatings of 23.6 and 26.5 (limits
+  1·10⁻⁵ and 1.5·10⁻⁵ of the largest, the second already at the
+  settlement rule's ceiling). The differences sit in the same columns of
+  the top-but-one layer as the Mac's largest (1.2·10⁻⁴), two to four
+  times bigger, with the same rms over all sunlit layers (1.2·10⁻⁵
+  against 0.96·10⁻⁵ K/day) and the same per-layer maxima below: the
+  transcendental precision of that driver, not a decision or a defect,
+  and the limits stay as they are. Before the launch, the merged tree
+  from the remapped eight64 day-183 state at N=64 ran 30 days: ASR − OLR
+  +22.7 on day 184, +9.5 on 186, +3.9 on 199 and +0.4 over days 204–213
+  (ASR 236.6, OLR 236.2, albedo 0.305, SWCRE −55.4, LWCRE 24.0, rain
+  2.64 mm/d), Ts falling 1.3 K over the 30 days on that state;
+  `scripts/toaBalance.mjs` folds any log's daily lines into the balance
+  over its last day, week, month and year and every whole year. The land
+  jump was rehearsed on the 150-day bl36 record with a jump forced at day
+  151: land albedo 0.260 → 0.234, trees 0.248 → 0.266, topsoil carbon
+  1.6 → 5.2 kg/m², and the run continued; that half-year record is a
+  northern summer, so the rehearsal put trees in 0–20N and stripped
+  10–50S, which a whole year's record does not.
 
 ### M23 — The equatorial ocean — in progress
 
