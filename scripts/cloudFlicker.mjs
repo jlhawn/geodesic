@@ -35,7 +35,10 @@
 // scripts/figures/cloudFlicker.py.
 //   node scripts/cloudFlicker.mjs <state.bin> <outdir>
 // Environment: STEPS (64), CELLS (10), JUMP (0.4), STRIDE (the page's
-// steps per frame, max(2, round(384 / N))), CHECK (4; 0 skips), PYTHON.
+// steps per frame, max(2, round(384 / N))), CHECK (4; 0 skips), PYTHON,
+// BOX (the strip's box as 'south,north,west,east' in degrees; the densest
+// 10° × 15° box), STRIP_START (the strip's first step; the eight steps
+// with the most blinks in the box).
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { getDevice, readRanges } from '../js/gpu/device.module.js';
@@ -505,8 +508,12 @@ const summary = {
 const name = `flicker_${tagOf(file)}_N${N}`;
 writeFileSync(`${outDir}/${name}.json`, JSON.stringify(summary));
 
-/* The plot's data: the blink frequency map and the strip over the densest blinking box. */
+/* The plot's data: the blink frequency map and the strip over BOX or the densest blinking box. */
 const box = (() => {
+  if (process.env.BOX) {
+    const b = process.env.BOX.split(',').map(Number);
+    return { box: b, count: steps.onsets.filter((x) => inBox(x.i, b)).length };
+  }
   let best = null;
   for (let s = -60; s <= 50; s += 2.5) for (let w = -180; w < 180; w += 2.5) {
     const e = w + 15 > 180 ? w + 15 - 360 : w + 15, b = [s, s + 10, w, e];
@@ -517,11 +524,14 @@ const box = (() => {
   return best;
 })();
 const boxCells = Array.from({ length: C }, (_, i) => i).filter((i) => inBox(i, box.box));
-let start = 0, most = -1;
-for (let t = 0; t + 8 <= T; t++) {
-  let count = 0;
-  for (const x of steps.onsets) if (x.t >= t && x.t < t + 7 && inBox(x.i, box.box)) count++;
-  if (count > most) { most = count; start = t; }
+let start = Number(process.env.STRIP_START ?? 0);
+if (process.env.STRIP_START === undefined) {
+  let most = -1;
+  for (let t = 0; t + 8 <= T; t++) {
+    let count = 0;
+    for (const x of steps.onsets) if (x.t >= t && x.t < t + 7 && inBox(x.i, box.box)) count++;
+    if (count > most) { most = count; start = t; }
+  }
 }
 const plot = {
   ...header, steps: STEPS, dt, stride: STRIDE, jump: JUMP, transitions: steps.counted,
