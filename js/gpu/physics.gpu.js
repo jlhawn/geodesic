@@ -58,6 +58,7 @@ export function physicsConstants(o) {
   if (o.capeClosure !== 'bechtold' && o.capeClosure !== 'threshold') throw new Error(`capeClosure must be 'bechtold' or 'threshold', not ${o.capeClosure}`);
   if (o.pcapeBoundary !== 'positive' && o.pcapeBoundary !== 'signed') throw new Error(`pcapeBoundary must be 'positive' or 'signed', not ${o.pcapeBoundary}`);
   if (o.condensation !== 'uniform' && o.condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${o.condensation}`);
+  if (o.boundaryCondensation !== 'cloudLayer' && o.boundaryCondensation !== 'uniform' && o.boundaryCondensation !== 'saturation') throw new Error(`boundaryCondensation must be 'cloudLayer', 'uniform' or 'saturation', not ${o.boundaryCondensation}`);
   const entrainment = { ...ENTRAINMENT_DEFAULTS, ...o.entrainment };
   const cloudTop = { ...CLOUD_TOP_DEFAULTS, ...o.cloudTop };
   if (o.turbulence !== 'moist' && o.turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${o.turbulence}`);
@@ -112,7 +113,7 @@ const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME};
 const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
 const RAIN_EVAP: f32 = ${o.rainEvaporation};
-const UNIFORM: bool = ${o.condensation === 'uniform'}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
+const UNIFORM: bool = ${o.condensation === 'uniform'}; const BL_UNIFORM: bool = ${o.boundaryCondensation === 'uniform'}; const BL_CLOUDLAYER: bool = ${o.boundaryCondensation === 'cloudLayer' && moistTurbulence}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
 const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
 const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
@@ -1324,10 +1325,12 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     if (blInterface(k - 1, i, zb) > CT_HMAX) { break; }
     if (IN[S_QC + k * C + i] > CT_THRESH && !(IN[S_QC + (k - 1) * C + i] > CT_THRESH)) { top = k; break; }
   }
+  var runBottom = -1;
   if (top >= 0) {
-    for (var k = top; k <= bottom; k++) { if (!(IN[S_QC + k * C + i] > CT_THRESH)) { break; } cooling -= PH[PH_LWH + k * C + i]; }
-    if (!(cooling > 0.0)) { top = -1; cooling = 0.0; }
+    for (var k = top; k <= bottom; k++) { if (!(IN[S_QC + k * C + i] > CT_THRESH)) { break; } cooling -= PH[PH_LWH + k * C + i]; runBottom = k; }
+    if (!(cooling > 0.0)) { top = -1; cooling = 0.0; runBottom = -1; }
   }
+  if (BL_CLOUDLAYER) { PH[PH_CLOUDK + i] = f32(runBottom); }
   var coupled = false; var lowest = bottom; var base0 = 0.0; var cloudTopZ = 0.0;
   if (top >= 0) {
     let idx = top * C + i;
@@ -1466,7 +1469,7 @@ fn saturateColumn(i: i32, pi: f32) {
     let temperature = IN[S_TH + idx] * ex;
     let pressure = pi * LV[L_SM + k];
     var change = 0.0;
-    if (UNIFORM && !(MOIST_BL && (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV < PH[PH_MIXTOP + i])) {
+    if (UNIFORM && (BL_UNIFORM || (BL_CLOUDLAYER && f32(k) <= PH[PH_CLOUDK + i]) || !(MOIST_BL && (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV < PH[PH_MIXTOP + i]))) {
       let water = IN[S_QC + idx];
       let liquidT = temperature - LHEAT * water / CP;
       let saturated = cloudSat(liquidT, pressure);

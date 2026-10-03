@@ -104,7 +104,7 @@ const NB = BOX_LIST.length;
 
 const twinOptions = (extra) => ({
   boundaryDepth: bl.depth, boundaryRegime: bl.regime, deckGate: radiation.mlmGate,
-  boundaryTop: bl.turbulence === 'moist' ? bl.mixingTop : null, stratiform: radiation.stratiform,
+  boundaryTop: bl.turbulence === 'moist' ? bl.mixingTop : null, boundaryCloudLayer: bl.turbulence === 'moist' ? bl.cloudLayer : null, stratiform: radiation.stratiform,
   surfaceBuoyancy: bl.buoyancyFlux, frictionVelocity: bl.friction, land: model.geography.land, surfaceSensible: radiation.sensibleHeat, surfaceEvaporation: radiation.evaporation, buffers: { subcloudVirtual: moist.shared.subcloudVirtual },
   ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in RADIATION).map((key) => [key, RADIATION[key]])),
   ...MOIST, ...extra,
@@ -491,7 +491,8 @@ moist.adjust = (st, iFrom, iTo, step) => {
     for (let k = 0; k < K; k++) {
       const idx = k * C + i, below = boundaryTop !== null && geopotential[idx] / g < boundaryTop[i];
       lsCondensed[k] = sa.qc[idx] - columnQc[k];
-      uniformLayer[k] = O.condensation === 'uniform' && !below ? 1 : 0;
+      const held = O.boundaryCondensation === 'uniform' || (O.boundaryCondensation === 'cloudLayer' && boundaryTop !== null && k <= bl.cloudLayer[i]);
+      uniformLayer[k] = O.condensation === 'uniform' && (held || !below) ? 1 : 0;
       add(n, uniformLayer[k] ? 'condensationUniform' : 'condensationMixed', k, (sa.theta[idx] - columnT[k]) * exnerLayer[idx] + mixedPhase[n * K + k]);
       mixedPhase[n * K + k] = 0;
       columnT[k] = sa.theta[idx]; columnQ[k] = sa.q[idx]; columnQc[k] = sa.qc[idx];

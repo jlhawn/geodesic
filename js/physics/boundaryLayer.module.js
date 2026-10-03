@@ -132,8 +132,11 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * column also entrains across its surface-driven top at that form. Nothing is
  * tapered by the deck unless `entrainment.taper`. The diagnosis keeps
  * per cell the cloud-top cooling ΔF (`cloudTopCooling`, W/m²), V
- * (`radiativeVelocity`) and the decoupling height z_b (`decoupling`, in
- * the coordinate of `depth`; 0 where coupled or without a cloud top).
+ * (`radiativeVelocity`), the decoupling height z_b (`decoupling`, in
+ * the coordinate of `depth`; 0 where coupled or without a cloud top) and
+ * the index of the cloud-top run's lowest layer (`cloudLayer`; −1 without
+ * a cloud top), whose layers the moist physics condenses as it does above
+ * the mixing top.
  */
 export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5, evaporativeEnhancement: 25, maximumEfficiency: 1, taper: false, jumpLayers: 2 };
 export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, perturbation: 0.2, profile: 0.85, excess: 8.5, tolerance: 0.5, cumulusDepth: 400 };
@@ -164,7 +167,7 @@ export function createBoundaryLayer(mesh, core, {
   const buoyancyFlux = new Float64Array(buoyancyBuffer), friction = new Float64Array(frictionBuffer);
   const entrainmentVelocity = new Float64Array(entrainmentBuffer);
   const extra = (name) => (buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * C));
-  const regimeBuffer = extra('regime'), mixingTopBuffer = extra('mixingTop'), coolingBuffer = extra('cloudTopCooling'), velocityBuffer = extra('radiativeVelocity'), decouplingBuffer = extra('decoupling');
+  const regimeBuffer = extra('regime'), cloudLayerBuffer = extra('cloudLayer'), mixingTopBuffer = extra('mixingTop'), coolingBuffer = extra('cloudTopCooling'), velocityBuffer = extra('radiativeVelocity'), decouplingBuffer = extra('decoupling');
   const surfaceDragBuffer = extra('surfaceDrag'), stressBuffer = buffers && buffers.surfaceStress ? buffers.surfaceStress : new SharedArrayBuffer(8 * (E + 1));
   const surfaceDrag = new Float64Array(surfaceDragBuffer), surfaceStress = new Float64Array(stressBuffer, 0, E), stressReady = new Float64Array(stressBuffer, 8 * E, 1);
   const formOptions = formDrag ? { ...FORM_DRAG_DEFAULTS, ...formDrag } : null, formScale = formOptions ? formDragScale(formOptions) : 0, formSigma = formOptions ? formOptions.sigma : null;
@@ -173,7 +176,7 @@ export function createBoundaryLayer(mesh, core, {
   const formRate = formDrag ? new Float64Array(formRateBuffer) : null, formStress = formDrag ? new Float64Array(formStressBuffer) : null;
   const { exnerLower } = core.diagnostics;
   const heatCoefficient = (i) => (heatCoefficients ? heatCoefficients[i] : dragCoefficients ? dragCoefficients[i] : dragCoefficient);
-  const regime = new Float64Array(regimeBuffer), mixingTop = new Float64Array(mixingTopBuffer), cloudTopCooling = new Float64Array(coolingBuffer), radiativeVelocity = new Float64Array(velocityBuffer), decoupling = new Float64Array(decouplingBuffer);
+  const regime = new Float64Array(regimeBuffer), cloudLayer = new Float64Array(cloudLayerBuffer), mixingTop = new Float64Array(mixingTopBuffer), cloudTopCooling = new Float64Array(coolingBuffer), radiativeVelocity = new Float64Array(velocityBuffer), decoupling = new Float64Array(decouplingBuffer);
   const thetaL = new Float64Array(K), totalWater = new Float64Array(K);
   const entraining = efficiency > 0 || shear > 0;
   const vector = new Float64Array(3 * C), bottomVector = new Float64Array(3 * C);
@@ -346,15 +349,15 @@ export function createBoundaryLayer(mesh, core, {
         }
       }
     }
-    let top = -1, cooling = 0;
+    let top = -1, cooling = 0, runBottom = -1;
     if (longwave && q && qc) {
       for (let k = bottom; k > kTop; k--) {
         if (interfaceZ(k - 1) > cloudTopHeight) break;
         if (qc[k * C + i] > cloudThreshold && !(qc[(k - 1) * C + i] > cloudThreshold)) { top = k; break; }
       }
       if (top >= 0) {
-        for (let k = top; k <= bottom && qc[k * C + i] > cloudThreshold; k++) cooling -= longwave[k * C + i];
-        if (!(cooling > 0)) { top = -1; cooling = 0; }
+        for (let k = top; k <= bottom && qc[k * C + i] > cloudThreshold; k++) { cooling -= longwave[k * C + i]; runBottom = k; }
+        if (!(cooling > 0)) { top = -1; cooling = 0; runBottom = -1; }
       }
     }
     let coupled = false, lowest = bottom, base0 = 0, cloudTopZ = 0;
@@ -373,6 +376,7 @@ export function createBoundaryLayer(mesh, core, {
     if (deckTop && deckTop[i] > 0) h = Math.max(h, deckTop[i] - zb);
     regime[i] = top >= 0 ? (coupled ? REGIME.COUPLED : REGIME.DECOUPLED) : buoyancy > 0 ? REGIME.SURFACE : REGIME.STABLE;
     mixingTop[i] = zb + Math.max(h, cloudTopZ);
+    cloudLayer[i] = runBottom;
     cloudTopCooling[i] = cooling;
     decoupling[i] = top >= 0 && !coupled ? zb + base0 : 0;
     const layerDepth = cloudTopZ - base0;
@@ -496,7 +500,7 @@ export function createBoundaryLayer(mesh, core, {
   }
 
   return {
-    diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, regime, mixingTop, cloudTopCooling, radiativeVelocity, decoupling, kTop, turbulence, implicitDrag, surfaceDrag, surfaceStress, stressReady, formRate, formStress, formDrag: formOptions,
-    shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer, regime: regimeBuffer, mixingTop: mixingTopBuffer, cloudTopCooling: coolingBuffer, radiativeVelocity: velocityBuffer, decoupling: decouplingBuffer, surfaceDrag: surfaceDragBuffer, surfaceStress: stressBuffer, ...(formDrag ? { formRate: formRateBuffer, formStress: formStressBuffer } : {}) },
+    diagnose, mixColumn, mixEdges, mixing, depth, buoyancyFlux, friction, entrainment: entrainmentVelocity, regime, cloudLayer, mixingTop, cloudTopCooling, radiativeVelocity, decoupling, kTop, turbulence, implicitDrag, surfaceDrag, surfaceStress, stressReady, formRate, formStress, formDrag: formOptions,
+    shared: { mixing: mixingBuffer, depth: depthBuffer, buoyancyFlux: buoyancyBuffer, friction: frictionBuffer, entrainment: entrainmentBuffer, regime: regimeBuffer, cloudLayer: cloudLayerBuffer, mixingTop: mixingTopBuffer, cloudTopCooling: coolingBuffer, radiativeVelocity: velocityBuffer, decoupling: decouplingBuffer, surfaceDrag: surfaceDragBuffer, surfaceStress: stressBuffer, ...(formDrag ? { formRate: formRateBuffer, formStress: formStressBuffer } : {}) },
   };
 }
