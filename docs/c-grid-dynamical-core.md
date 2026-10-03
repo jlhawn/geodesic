@@ -10967,12 +10967,43 @@ this model's restriction of the published scheme to the layers whose
 cloud the boundary layer's diagnosis reads. 'uniform' gives every mixed
 layer that distribution, 'saturation' is the scheme before. 'uniform'
 is the arrangement the sources describe and would be the default by this
-model's rule, but with it the engines part in the parity tests far
-beyond their settled shares (the stratiform-lifetime test differs on 263
-of 2,727 random columns, the rain accumulation on 20 cells, the day
-means and the treeline's 48-step means disagree, Oct 3), which points at
-an engine difference in the mixed layers' uniform path that has to be
-found before it can be the default. Every cloudy
+model's rule; under it five parity tests fail at their limits, and not
+through an engine difference. Stage by stage (`scripts/adjustStages.mjs`
+on eleven64_day1825, both engines given the CPU physics phase's state
+in single precision and its boundary-layer fields): after the mixing and
+after the condensation no layer of the 355,944 below the mixing top or
+the 1,118,688 above parts by 10⁻³ K in θ or 10⁻⁷ in q or qc (qc within
+2.7·10⁻⁸); after the plumes and after the whole adjust step 31 and 33
+of 40,962 columns part in θ and 824 plumes' base flux by 1 % (43, 44
+and 849 under 'cloudLayer'); the boundary layer's diagnosis of the
+adjusted state parts in no regime and no mixing top by 1 m over 23,903
+cloud-topped columns (one of each under 'cloudLayer'). The physics
+kernel alone on N=6 states stepped 12 and 18 steps under 'uniform' (295
+and 674 cloudy layers below the mixing top) keeps OLR within 7·10⁻⁴
+W/m² and the longwave heating within 5·10⁻⁴ K/day, as under
+'cloudLayer'. What parts the engines over many steps is the scheme's own
+response to their single-precision differences, which reach 10⁻⁴–10⁻³
+K of θ in the lowest layers within a few steps. On the rain-accumulation
+test's setup (`scripts/perturbedRain.mjs`) the CPU against itself with
+±10⁻⁴ K of noise on θ before every step parts the rain of 20 of 362
+cells by 10⁻³ of the largest cell's under 'uniform', the GPU's count,
+and of 1 under 'cloudLayer'; ±3·10⁻⁵ K parts none, nor does one ulp of
+θ or rounding the state to single precision every step; ±10⁻³ K once
+parts 16 and 1. Of the 20, 11 follow a discrete decision (7 a plume's
+base flux near its onset, 1 a plume firing, 2 a layer's cloud at the
+cloud-top threshold, 1 a merge of the dry adjustment) and 9 none: their
+large-scale rain, which every mixed layer's distribution condensate
+feeds at each step, moves by 1.0–7.4·10⁻³ of the largest cell's. The
+other failures: the cloud effects test finds 4 columns whose dry
+adjustment merges apart against a bound of 3.6 and leaves out 37
+columns against 32.6; 5 parted columns move the day-mean absorbed
+sunlight by 1.6·10⁻⁴ of itself against 10⁻⁴; the treeline's season
+length parts by 5.4·10⁻² against 10⁻⁴; and in the stratiform-lifetime
+test the engines agree exactly (263 and 263 layers) but the 3 h
+lifetime keeps more cloud in 9.6 % of the 2,727 cloudy layers against
+its floor of 10 % (Oct 3). Making 'uniform' the default needs those
+bounds restated against the CPU's response to perturbations of the
+engines' size. Every cloudy
 layer below the mixing top keeps the variance cover in the radiation,
 so the run's condensate is the distribution's and its cover is not: at
 N=64 after 8 steps from eleven64_day1825, over the 62,637 run layers
