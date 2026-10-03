@@ -48,9 +48,10 @@ levT = np.arange(21, 31.5, 0.5)
 cf = cells(ax, c['tair'], levT, 'RdYlBu_r', mask=c['land'] < 0.5) if polys is not None else ax.contourf(LON, LAT, T, levels=levT, cmap='RdYlBu_r', extend='both')
 if polys is None: ax.contourf(LON, LAT, landg.astype(float), levels=[0.5, 1.5], colors=['#3a3a3a'])
 cs = ax.contour(LON, LAT, smooth(P, 2), levels=np.arange(990, 1030, 2.5), colors='k', linewidths=0.6, zorder=3); ax.clabel(cs, fmt='%.1f', fontsize=7, inline=True)
-s = 3; ax.quiver(LON[::s, ::s], LAT[::s, ::s], U[::s, ::s], V[::s, ::s], color='w', edgecolor='k', linewidth=0.5, scale=220, width=0.0022, headwidth=3.5, headlength=4, zorder=4)
+WIND_SCALE, CURRENT_SCALE = 220, 9
+s = 3; ax.quiver(LON[::s, ::s], LAT[::s, ::s], U[::s, ::s], V[::s, ::s], color='w', edgecolor='k', linewidth=0.5, scale=WIND_SCALE, width=0.0022, headwidth=3.5, headlength=4, zorder=4)
 cb = fig.colorbar(cf, ax=ax, pad=0.01, aspect=25); cb.set_label('lowest-layer air temperature °C', color='w'); cb.ax.yaxis.set_tick_params(color='w'); plt.setp(cb.ax.get_yticklabels(), color='w')
-style(ax, f"Surface wind (arrows, 5 m/s ≈ 7% of axis), air temperature (colour) and sea-level pressure (2.5 hPa isobars) — {title}")
+style(ax, f"Lowest-layer wind (arrows, 5 m/s ≈ {100 * 5 / WIND_SCALE:.1f}% of the axis width), air temperature (colour) and sea-level pressure (2.5 hPa isobars) — {title}")
 ax = axes[1]
 sea = c['land'] < 0.5
 S = grid(c['sst'], sea); Z = grid(c['thermocline'], sea); CU = grid(c['cu'], sea); CV = grid(c['cv'], sea)
@@ -61,8 +62,8 @@ if polys is None: ax.contourf(LON, LAT, landg.astype(float), levels=[0.5, 1.5], 
 cs = ax.contour(LON, LAT, smooth(Z), levels=np.arange(50, 400, 25), colors='k', linewidths=0.7, zorder=3); ax.clabel(cs, fmt='%d m', fontsize=7, inline=True)
 mag = np.hypot(CU, CV); ref = 0.3
 shrink = np.where(mag > 0, ref * np.sqrt(mag / ref) / np.maximum(mag, 1e-9), 0)
-ax.quiver(LON[::s, ::s], LAT[::s, ::s], (CU * shrink)[::s, ::s], (CV * shrink)[::s, ::s], color='w', edgecolor='k', linewidth=0.5, scale=9, width=0.0022, headwidth=3.5, headlength=4, zorder=4)
+ax.quiver(LON[::s, ::s], LAT[::s, ::s], (CU * shrink)[::s, ::s], (CV * shrink)[::s, ::s], color='w', edgecolor='k', linewidth=0.5, scale=CURRENT_SCALE, width=0.0022, headwidth=3.5, headlength=4, zorder=4)
 cb = fig.colorbar(cf, ax=ax, pad=0.01, aspect=25); cb.set_label('mixed-layer temperature °C', color='w'); cb.ax.yaxis.set_tick_params(color='w'); plt.setp(cb.ax.get_yticklabels(), color='w')
-style(ax, f"Mixed-layer current (arrows on a square-root length scale: 0.3 m/s ≈ 7% of axis, 0.03 m/s ≈ 2%), mixed-layer temperature (colour) and the top of the {d.get('thermoclineDensity', 1024.0):.1f} class (25 m contours)")
+style(ax, f"Mixed-layer current (arrows on a square-root length scale: 0.3 m/s ≈ {100 * ref / CURRENT_SCALE:.1f}%, 0.03 m/s ≈ {100 * ref * np.sqrt(0.1) / CURRENT_SCALE:.1f}% of the axis width), mixed-layer temperature (colour) and the top of the {d.get('thermoclineDensity', 1024.0):.1f} class (25 m contours)")
 ax.set_xlabel('Longitude', color='w')
 plt.tight_layout(); fig.savefig(sys.argv[2], dpi=90, facecolor=fig.get_facecolor()); print('wrote', sys.argv[2])
