@@ -10957,12 +10957,21 @@ cloudy layers that makes a column cloud-topped (the cloud top's layer
 and the cloudy layers below it whose cooling the diagnosis sums,
 `cloudLayer`, PH `CLOUDK`, diagnosed each step and not saved) holds the
 uniform distribution's condensate as the free troposphere does, and the
-other mixed layers adjust to saturation as before. This is Lock et al.
-(2000)'s arrangement, where the cloud of a cloud-topped layer is the
-large-scale scheme's, and ECHAM6's, whose Sundqvist distribution with
-RH_c from crs 0.975, crt 0.75 and nex 2 (tuned at T63, not observed)
-condenses in its boundary layer too; no new parameter. 'uniform' gives
-every mixed layer that distribution, 'saturation' is the scheme before.
+other mixed layers adjust to saturation as before. The distribution is
+ECHAM6's Sundqvist one with RH_c from crs 0.975, crt 0.75 and nex 2
+(tuned at T63, not observed); no new parameter. Neither source draws the
+line at the cloud-top run: ECHAM6's scheme, and the Unified Model's
+large-scale scheme under Lock et al. (2000)'s mixing, condense every
+layer of the boundary layer, which is 'uniform' here, so 'cloudLayer' is
+this model's restriction of the published scheme to the layers whose
+cloud the boundary layer's diagnosis reads. 'uniform' gives every mixed
+layer that distribution, 'saturation' is the scheme before. Every cloudy
+layer below the mixing top keeps the variance cover in the radiation,
+so the run's condensate is the distribution's and its cover is not: at
+N=64 after 8 steps from eleven64_day1825, over the 62,637 run layers
+below the mixing top in 22,933 columns, the radiation's cover averages
+0.61 (weighted by condensate; 0.1 % at the cover floor) against the
+distribution's own 0.71, an in-cloud water of 0.20 against 0.16 g/kg.
 `deckSlab` 'fraction' (the default): the deck's slab takes the layer its
 height lies in by the share of that layer's height below h, so that the
 slab moves with h continuously, except the inversion ceiling's layer,

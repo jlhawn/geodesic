@@ -137,11 +137,12 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * with `boundaryCondensation` 'cloudLayer' (the default) the cloudy layers
  * whose cooling makes the column cloud-topped (`boundaryCloudLayer`, the
  * lowest of them, from the boundary layer's diagnosis of the step) hold
- * that distribution's condensate too, the cloud of a cloud-topped layer
- * being the large-scale scheme's as in Lock et al. (2000), and the other
- * mixed layers, whose cover is the boundary layer's variance cover,
- * adjust to saturation; 'uniform' gives every mixed layer the
- * distribution, as ECHAM6 does, and 'saturation' adjusts every mixed layer
+ * that distribution's condensate too and the other mixed layers adjust to
+ * saturation, every cloudy mixed layer taking the boundary layer's
+ * variance cover in the radiation; 'uniform' gives every mixed layer the
+ * distribution, as ECHAM6's scheme and the Unified Model's large-scale
+ * scheme under Lock et al. (2000) condense the whole boundary layer, and
+ * 'saturation' adjusts every mixed layer
  * to saturation, so that the cloud top's layer condenses by one rule above
  * the mixing top and by the other below it, and the mixing top follows
  * that cloud.
