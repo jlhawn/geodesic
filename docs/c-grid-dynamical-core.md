@@ -9759,6 +9759,62 @@ Pacific trades 0.711 → 0.730, S Atlantic trades 0.376 → 0.335, SE Pacific
 coupled parity cases (day means, rain accumulation) run on the previous
 type, phase and conversion, with the measured reasons in 218e104.
 
+**Review of the type, the ice and the conversion (Oct 2).** Re-run from
+eight64_day0183, the three days, tropicalHeating.mjs and cloudRegimes.mjs
+reproduce every number above (replay mismatches 0 of 722432). Three CPU
+steps from that day-186 state under convectionType 'cloudDepth', plumePhase
+'liquid' and plumeConversion 'zhangMcFarlane' (and under each later pair)
+give the digests of 49b2ceb, 8e10cff and e76c952 bit for bit.
+- The test parcel against the IFS first guess (Cy43r1 §6.4) integrated by
+  hand in 20–40 sub-steps a layer, its base at its first cloudy height:
+  Jordan's column deep with w² vanishing at 107 hPa (the code's discrete
+  form 106), ×0.3 at 161 (159); a trades sounding built from the model's
+  box (T − Jordan −2.2 K below 850 hPa, RH 0.95 → 0.46 over 924–608 hPa)
+  without the surface excess shallow, its parcel stopping at 949 hPa below
+  its condensation level. On a CPU day from the day-186 state the hand
+  parcel and the code type alike on 0.952 (ITCZ), 0.977 (warm pool), 0.995
+  (N Pacific trades, 0.964 deep by hand), 0.923 (SE Pacific), 0.942
+  (California) and 0.92–0.96 (35–55° oceans) of the column-steps; the GPU
+  types, tops and base fluxes match the CPU's on all 362 columns of
+  Jordan, Jordan ×0.3, both trades soundings and a cold-based column.
+- The mixed-phase plume air at 268, 254 and 238 K from guesses 15 K below
+  to 8 K above: CPU within 2.1·10⁻⁶ K of bisection, GPU within 1.2·10⁻⁵ K;
+  T(s_li) continuous through 273.15 and 235.15 K to 2·10⁻⁹ K (CPU) and
+  3.5·10⁻⁵ K (GPU, single precision).
+- The conversion equals eqs 6.38–6.40 by hand on every layer of Jordan's
+  column to 5·10⁻¹⁶; a Δz there is 0.3–1.3 in the bl34 layers. Converting
+  the condensate at the layer's top over the whole layer keeps a steady
+  condensate of aΔz e^(−aΔz)/(1 − e^(−aΔz)) = 0.47–0.86 of the IFS's
+  analytic solution with the condensation source (l = l₀e^(−az) + b/a (1 −
+  e^(−az)), §6.6.3); with that solution Jordan's detrained condensate per
+  unit of rain made is 0.097 (net mass-flux decrease) or 0.189 (with the
+  turbulent detrainment δM of the buoyant layers) against 0.065 and 0.126.
+  The tropicalHeating.mjs detrainment counts the net decrease only.
+- The condensate the deep plume detrains (a CPU day, twin every eighth
+  step): the condensation that follows the plume keeps 0.278 (ITCZ) and
+  0.293 (warm pool) of it as cloud, 0 where the layer's RH was below 0.7,
+  0.12–0.15 at 0.7–0.9, 0.53–0.60 above 0.9; after the step's conversion
+  to rain and ice fall the cloud has gained 0.008 and 0.022 of it.
+- The fusion heat: where the cloud base lies above the 0 °C layer the
+  frozen rain that sublimated below the base, or that the downdraft took,
+  was melted again at the 0 °C layer. Over 32 CPU steps from the day-186
+  state 8248 column-steps (high-latitude land and sea) were off by up to
+  5.5·10⁻³ kg/m² of L_f a step (global mean −1.6·10⁻³ W/m²); fixed in
+  8615f9e (16 column-steps left, the same non-convective cells as under
+  plumePhase 'liquid'); on 362 cold-based columns 1.3·10⁻⁶ → 5.8·10⁻¹⁶
+  relative on the CPU, 9.8·10⁻³ → 4.0·10⁻⁴ kg/m² of L_f on the GPU. Water
+  exact to 4·10⁻¹⁵ per column-step with the filler's loss counted.
+- Engine parity of the full models from the fixed tree's day-186 state:
+  columns of a different convection type 123 / 212 / 577 of 40962 after 1 /
+  4 / 16 steps (81 / 118 / 507 under the previous elements), θ rms relative
+  2.5 / 5.7 / 13.5·10⁻⁶. The fixed tree's three days give the numbers above
+  within the trajectory's noise (ITCZ convective share 0.714, warm pool
+  0.682, stratiform share 0.200 / 0.214, detrained 0.323 at 675 hPa and
+  0.166 at 602 hPa); the full suite passes (64 files, 623 tests).
+- The frozen share of the deep plume's rain, from the column budgets:
+  0.05 (ITCZ) and 0.13 (warm pool); the specification's 0.1–0.3 K/day per
+  mm/day at the 0 °C layer implies 0.15–0.45.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
