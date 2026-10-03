@@ -1,4 +1,5 @@
 import { buildMesh } from './mesh.module.js';
+import { createEnergyRecord } from './physics/energyRecord.module.js';
 import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING } from './dynamics/sigmaCore.module.js';
 import { spongeRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from './dynamics/sponge.module.js';
 import { createRK4Arrays } from './dynamics/integrators.module.js';
@@ -235,6 +236,7 @@ export function createModel(gridOrMesh, {
   const model = {
     mesh, core, radiation, surface, exchange, moist: moistPhysics, seaIce, ocean, boundaryLayer, gravityWaves, geography, land, orography, surfaceGeopotential: phis, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
     radiationSteps: 0,
+    energyRecord: createEnergyRecord(),
     shared: { core: core.shared, surface: surface.shared, exchange: exchange ? exchange.shared : null, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, gravityWaves: gravityWaves ? gravityWaves.shared : null, orography: orography ? orography.shared : null, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
@@ -318,7 +320,7 @@ export function createModel(gridOrMesh, {
         clearAbsorbedSolar: clearAbsorbedSum / area / steps, clearOutgoingLongwave: clearOutgoingSum / area / steps,
         shortwaveCloudEffect: (absorbedSum - clearAbsorbedSum) / area / steps, longwaveCloudEffect: (clearOutgoingSum - outgoingSum) / area / steps,
       } : {}),
-      instantaneous, sensibleHeat: sums.sensibleHeat / area,
+      instantaneous, meanSteps: steps, sensibleHeat: sums.sensibleHeat / area,
       evaporation: sums.evaporation / area, latentHeat: moistPhysics.latentHeat * sums.evaporation / area,
       columnWater: water / area, columnCloud: cloud / area, precipitation: interval > 0 ? rain / area / interval : 0,
       iceFraction: iceArea / area, iceThickness: iceArea > 0 ? iceVolume / iceArea : 0, surfaceAlbedo: albedoSum / area,

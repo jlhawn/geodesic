@@ -175,7 +175,7 @@ test('a coupled run split inside a day ends the day with the uninterrupted run\'
   for (const field of ['rainTotal', 'runoffTotal', 'rainSeen', 'runoffSeen']) assert.ok(inside[field], `the in-day file carries ${field}`);
   assert.equal(run('spinup.mjs', { ...env, OUT: parts }), 0);
   const [a, b] = await Promise.all([whole, parts].map((out) => load(join(out, 'h_day0001.bin'))));
-  const means = ['convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect'];
+  const means = ['convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'energyRecord'];
   const apart = [];
   for (const [name, x] of [...Object.entries(a), ...Object.entries(a.ocean).map(([k, v]) => [`ocean.${k}`, v]), ...Object.entries(a.land).map(([k, v]) => [`land.${k}`, v])]) {
     if (!ArrayBuffer.isView(x) || means.includes(name)) continue;
