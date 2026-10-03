@@ -738,6 +738,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       ['Surface temperature', `<b>${(d.meanSurfaceT + CELSIUS).toFixed(1)} °C</b> — area-weighted global mean of the skin temperature.`],
       ['Absorbed solar', `<b>${d.absorbedSolar.toFixed(0)} W/m²</b> — global mean sunlight absorbed by atmosphere and surface.`],
       ['Outgoing longwave', `<b>${d.outgoingLongwave.toFixed(0)} W/m²</b> — infrared leaving the top; absorbed solar minus this is the planet's energy imbalance, <b>${(d.absorbedSolar - d.outgoingLongwave).toFixed(0)} W/m²</b>.`],
+      ...(d.energy && d.energy.day ? [['Energy balance', `${['day', 'week', 'month', 'year'].map((w) => { const x = d.energy[w]; return x ? `${w} <b>${x.net >= 0 ? '+' : ''}${x.net.toFixed(1)}</b>${x.n < x.width ? ` (${x.n} of ${x.width} d)` : ''}` : `${w} —`; }).join(', ')} W/m² — absorbed solar minus outgoing longwave, mean over whole model days to day ${d.energyDay}; only the year cancels the seasonal cycle.`]] : []),
       ['Latent heat', `<b>${d.latentHeat.toFixed(0)} W/m²</b> — heat leaving the surface as evaporation.`],
       ['Sensible heat', `<b>${d.sensibleHeat.toFixed(0)} W/m²</b> — heat conducted from the surface into the air.`],
       ['Precipitation', `<b>${(d.precipitation * 86400).toFixed(2)} mm/day</b> — global mean rain rate since the last frame, or over the last three hours while paused.`],

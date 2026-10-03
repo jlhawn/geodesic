@@ -104,7 +104,35 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
 
 const captureFrame = () => (model.beginFrame ? model.beginFrame(subscription) : cpuFrame(subscription));
 
+/*
+ * The energy record takes a day from the frames' diagnostics: each frame's
+ * means, over the steps since the diagnostics before it, are summed into
+ * the day its last step falls in, and the day goes in once its sum holds a
+ * whole day's steps to within a frame (the frames do not end on the day).
+ * A frame whose means span more than a frame (the panel was closed, so no
+ * diagnostics were taken) restarts the sum, so the record gains days only
+ * while the panel stays open; the state's own record stands otherwise.
+ */
+let energyDay = { day: 0, steps: 0, asr: 0, olr: 0, ts: 0 };
+function feedEnergy(d, time) {
+  if (!(d.meanSteps > 0)) return;
+  const perDay = Math.round(86400 / dt), day = Math.ceil(time / 86400 - 1e-9);
+  if (d.meanSteps > stepsPerFrame || day !== energyDay.day) {
+    if (day === energyDay.day + 1 && Math.abs(energyDay.steps - perDay) <= stepsPerFrame && d.meanSteps <= stepsPerFrame) model.energyRecord.add(energyDay.day, { asr: energyDay.asr / energyDay.steps, olr: energyDay.olr / energyDay.steps, ts: energyDay.ts });
+    energyDay = { day, steps: 0, asr: 0, olr: 0, ts: 0 };
+    if (d.meanSteps > stepsPerFrame) return;
+  }
+  energyDay.steps += d.meanSteps; energyDay.asr += d.meanSteps * d.absorbedSolar; energyDay.olr += d.meanSteps * d.outgoingLongwave; energyDay.ts = d.meanSurfaceT;
+}
+function placeEnergy(model, saved) {
+  if (!model.energyRecord) return;
+  model.energyRecord.clear();
+  if (saved && saved.energyRecord && saved.energyRecord.length === model.energyRecord.values.length) model.energyRecord.load(saved.energyRecord);
+  energyDay = { day: 0, steps: 0, asr: 0, olr: 0, ts: 0 };
+}
+
 function postFrame({ time, level, depth, fields, diagnostics }) {
+  if (diagnostics && model.energyRecord) { feedEnergy(diagnostics, time); diagnostics.energy = model.energyRecord.windows(); diagnostics.energyDay = model.energyRecord.newest; }
   const transfer = [...new Set(Object.values(fields).map((values) => values.buffer))];
   self.postMessage({ type: 'frame', frame: frame++, time, day: time / 86400, level, depth, engine: model.engine ?? 'cpu', pause: model.beginFrame ? pace.pause : 0, fields, diagnostics }, transfer);
 }
@@ -549,6 +577,7 @@ async function restore(snapshot) {
   if (model.load) model.load();
   if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
   placeLand(model, saved, currentN);
+  placeEnergy(model, saved);
   model.time = saved.time;
   restartRain();
   serving = true;
@@ -596,6 +625,7 @@ async function start(message) {
     else model.ocean.initialize(model.state[3], model.state[6]);
   }
   placeLand(model, saved, N);
+  placeEnergy(model, saved);
   layerWinds = new Array(model.core.K).fill(null);
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
   restartRain();
