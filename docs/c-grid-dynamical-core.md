@@ -1614,6 +1614,11 @@ Beyond the globe's limb the Satellite mode draws the sunlit air as a
 thin blue rim, an exponential column of about 0.5 % of the radius in
 scale height lit with the same sun-elevation ramps as the surface's
 twilight, so it reddens and ends where the globe's terminator does.
+With the sun in the frame a camera flare is drawn over the picture in
+screen space, a halo, a horizontal streak and a starburst on the sun and
+five ghost discs on the line through the view centre, scaled by the
+sunlight slider and faded out toward the frame edge and over the sun's
+own width as it passes behind the limb.
 
 The first 400-day N=16 run with continents (from the aquaplanet
 `pbl16b` state) was stable but cold: planetary albedo 0.37 against the

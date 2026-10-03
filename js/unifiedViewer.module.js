@@ -398,6 +398,102 @@ void main() {
     return sprite;
   }
 
+  /*
+   * The camera's flare from the sun, drawn over the whole picture in
+   * screen space with half the frame height as the unit: a halo, a
+   * horizontal streak and a starburst on the sun, and ghosts along the
+   * line from the sun through the centre of the view. Each part is
+   * [texture, width, height, tint, place], the place along that line
+   * with the sun at 0 and the centre at 1.
+   */
+  const SUN_ANGULAR_RADIUS = 0.012;
+  const flareScene = new THREE.Scene();
+  const flareCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
+  const flare = buildFlare();
+  flareScene.add(flare.group);
+  const flareSun = new THREE.Vector3();
+
+  function buildFlare() {
+    const texture = (width, height, value) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      const context = canvas.getContext('2d');
+      const image = context.createImageData(width, height);
+      for (let j = 0; j < height; j++) {
+        for (let i = 0; i < width; i++) {
+          const linear = Math.min(1, Math.max(0, value(2 * (i + 0.5) / width - 1, 2 * (j + 0.5) / height - 1)));
+          const v = 255 * (linear <= 0.0031308 ? 12.92 * linear : 1.055 * linear ** (1 / 2.4) - 0.055);
+          const k = 4 * (j * width + i);
+          image.data[k] = image.data[k + 1] = image.data[k + 2] = v;
+          image.data[k + 3] = 255;
+        }
+      }
+      context.putImageData(image, 0, 0);
+      const map = new THREE.CanvasTexture(canvas);
+      map.colorSpace = THREE.SRGBColorSpace;
+      return map;
+    };
+    const edge = (r, inner) => r >= 1 ? 0 : r <= inner ? 1 : 1 - THREE.MathUtils.smoothstep(r, inner, 1);
+    const halo = texture(256, 256, (x, y) => { const r = Math.hypot(x, y); return (0.55 * Math.exp(-r * r / 0.01) + 0.45 * (1 - r) ** 4) * edge(r, 0.9); });
+    const streak = texture(512, 32, (x, y) => Math.exp(-((y / 0.3) ** 2)) * (1 - Math.abs(x)) ** 2 * (0.35 + 0.65 * Math.exp(-6 * Math.abs(x))));
+    const random = mulberry32(11);
+    const rays = Array.from({ length: 18 }, (_, n) => [Math.PI * n / 9 + 0.08 * (random() - 0.5), 0.5 + 0.5 * random()]);
+    const burst = texture(256, 256, (x, y) => {
+      const r = Math.hypot(x, y), theta = Math.atan2(y, x);
+      let spikes = 0;
+      for (const [angle, length] of rays) {
+        const off = Math.abs(Math.atan2(Math.sin(theta - angle), Math.cos(theta - angle)));
+        spikes += Math.exp(-((off * Math.max(r, 0.02) / 0.012) ** 2)) * Math.max(0, 1 - r / length) ** 2;
+      }
+      return spikes / (1 + 6 * r) * edge(r, 0.8);
+    });
+    const ring = texture(128, 128, (x, y) => { const r = Math.hypot(x, y); return (0.3 + 0.7 * THREE.MathUtils.smoothstep(r, 0.7, 0.96)) * edge(r, 0.93); });
+    const blob = texture(128, 128, (x, y) => { const r = Math.hypot(x, y); return Math.exp(-r * r / 0.18) * edge(r, 0.6); });
+    const parts = [
+      [halo, 0.9, 0.9, [0.24, 0.225, 0.2], 0],
+      [streak, 2.4, 0.05, [0.06, 0.085, 0.13], 0],
+      [burst, 0.6, 0.6, [0.09, 0.087, 0.078], 0],
+      [ring, 0.1, 0.1, [0.045, 0.032, 0.018], 1.35],
+      [blob, 0.06, 0.06, [0.03, 0.07, 0.04], 1.7],
+      [ring, 0.24, 0.24, [0.012, 0.017, 0.03], 2.0],
+      [ring, 0.13, 0.13, [0.025, 0.015, 0.032], 2.45],
+      [blob, 0.36, 0.36, [0.01, 0.02, 0.028], 2.9],
+    ].map(([map, width, height, tint, place]) => {
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true }));
+      return { sprite, width, height, tint: new THREE.Color(...tint), place };
+    });
+    const group = new THREE.Group();
+    for (const part of parts) group.add(part.sprite);
+    group.visible = false;
+    return { group, parts, textures: [halo, streak, burst, ring, blob] };
+  }
+
+  // The main camera sees the sun along the sky camera's line of sight, so its position decides the limb test.
+  function updateFlare(aspect) {
+    flare.group.visible = false;
+    const strength = lighting.uSun.value * glow.uFade.value;
+    if (!state.perspective || strength <= 0 || sun.position.z >= 0) return;
+    flareSun.copy(sun.position).project(skyCamera);
+    const inFrame = 1 - THREE.MathUtils.smoothstep(Math.max(Math.abs(flareSun.x), Math.abs(flareSun.y)), 0.75, 1);
+    const distance = camera.position.length();
+    const fromCentre = Math.acos(THREE.MathUtils.clamp(-camera.position.dot(sun.position) / (distance * SKY_RADIUS), -1, 1));
+    const limb = Math.asin(Math.min(1 / distance, 1));
+    const unhidden = THREE.MathUtils.smoothstep(fromCentre, limb - SUN_ANGULAR_RADIUS, limb + SUN_ANGULAR_RADIUS);
+    const brightness = strength * inFrame * unhidden;
+    if (brightness <= 0) return;
+    flare.group.visible = true;
+    flareCamera.left = -aspect; flareCamera.right = aspect;
+    flareCamera.updateProjectionMatrix();
+    const size = Math.sqrt(lighting.uSun.value);
+    const x = flareSun.x * aspect, y = flareSun.y, centreY = 2 * inset.shift / container.clientHeight;
+    for (let k = 0; k < flare.parts.length; k++) {
+      const { sprite, width, height, tint, place } = flare.parts[k];
+      sprite.position.set(x * (1 - place), y + place * (centreY - y), 0);
+      sprite.scale.set(width * size, height * size, 1);
+      sprite.material.color.copy(tint).multiplyScalar(brightness);
+    }
+  }
+
   function mulberry32(seed) {
     let a = seed >>> 0;
     return () => {
@@ -714,8 +810,10 @@ void main() {
       stars.quaternion.copy(sphereQuaternion).multiply(space.sidereal);
       sun.position.copy(space.sun).applyQuaternion(sphereQuaternion).multiplyScalar(SKY_RADIUS);
       renderer.render(skyScene, skyCamera);
-    }
+      updateFlare(aspect);
+    } else flare.group.visible = false;
     renderer.render(scene, camera);
+    if (flare.group.visible) renderer.render(flareScene, flareCamera);
   }
   requestAnimationFrame(render);
 
@@ -1279,6 +1377,8 @@ uniform float uReferenceSpeed;
       geometry.dispose();
       material.dispose();
       glowShell.geometry.dispose(); glowMaterial.dispose();
+      for (const part of flare.parts) part.sprite.material.dispose();
+      for (const map of flare.textures) map.dispose();
       centerTexture.dispose();
       cellColors.dispose(); cellSurface.dispose(); cellValues.dispose();
       renderer.domElement.remove();
