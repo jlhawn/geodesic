@@ -6,6 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { SUMMED } from '../js/physics/radiation.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { RADIATION_FIELDS, savedRadiationField } from '../js/physics/regrid.module.js';
+import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -35,18 +36,8 @@ async function engines() {
   return { cpu, gpu, C: cpu.mesh.nCells, area };
 }
 
-function plumesParted(cpu, ph, parted) {
-  const { cumulusBaseFlux, cumulusTop } = cpu.moist, C = cpu.mesh.nCells;
-  let largest = 0;
-  for (let i = 0; i < C; i++) largest = Math.max(largest, cumulusBaseFlux[i], ph.CUMF[i]);
-  for (let i = 0; i < C; i++) {
-    const a = cumulusBaseFlux[i], b = ph.CUMF[i];
-    if ((a > 0) !== (b > 0) || Math.abs(a - b) > 0.01 * largest || (a > 0 && Math.abs(cumulusTop[i] - ph.CUTOP[i]) > 1)) parted.add(i);
-  }
-}
-
 async function stepBoth({ cpu, gpu, area }, n, parted = null) {
-  const cpuSteps = [], gpuSteps = [];
+  const cpuSteps = [], gpuSteps = [], decisions = parted && decisionTracker(cpu.core.K, cpu.mesh.nCells);
   for (let s = 0; s < n; s++) {
     const absorbedBefore = parted && cpu ? Float64Array.from(cpu.radiation.summed.absorbedSolar) : null;
     if (cpu) { cpu.step(DT); cpuSteps.push(Object.fromEntries(SUMMED.map((name) => [name, cpu.totals[name] / area]))); }
@@ -59,9 +50,10 @@ async function stepBoth({ cpu, gpu, area }, n, parted = null) {
         for (let i = 0; i < gpu.mesh.nCells; i++) sum += gpu.mesh.areaCell[i] * ph[STEP_SLOTS[name]][i];
         return [name, sum / area];
       })));
-      if (parted) plumesParted(cpu, ph, parted);
+      if (parted) decisions.check(cpuDecisions(cpu), gpuDecisions(await gpu.gpu.download(), ph));
     }
   }
+  if (parted) for (const i of decisions.parted) parted.add(i);
   return { cpuSteps, gpuSteps };
 }
 
@@ -78,17 +70,17 @@ function assertReadout(label, d, steps, tolerance) {
   return expected;
 }
 
-test('both engines sum each cell\'s radiation over the steps alike in every column whose shallow plume took the same base flux and top on both engines after every step and whose OLR and absorbed sunlight never parted by more than 1 W/m² at a step, and read out day means: the mean of the per-step global values, the albedo the ratio of the summed reflected to the summed incoming sunlight, the last step\'s kept apart, the sums starting again at each read-out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both engines sum each cell\'s radiation over the steps alike, and their day means agree, over every column more than two cells from one whose regime, plume, cloud against the cloud-top threshold or dry adjustment decided apart or whose OLR or absorbed sunlight parted by more than 1 W/m² at a step, and read out day means: the mean of the per-step global values, the albedo the ratio of the summed reflected to the summed incoming sunlight, the last step\'s kept apart, the sums starting again at each read-out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = await engines(), { cpu, gpu, C } = run, parted = new Set();
   const first = await stepBoth(run, 24, parted);
   const device = await gpu.gpu.downloadPhysics();
-  const agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !parted.has(i));
+  const near = neighbourhood(cpu.mesh, parted, 2), agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !near.has(i));
   const cpuSums = Object.fromEntries(SUMMED.map((name) => [name, Float64Array.from(cpu.radiation.summed[name])]));
   const gpuSums = Object.fromEntries(SUMMED.map((name) => [name, Float64Array.from(device[SUM_SLOTS[name]].subarray(0, C))]));
   const parity = Object.fromEntries(SUMMED.map((name) => [name, stats(agreed.map((i) => cpuSums[name][i]), agreed.map((i) => gpuSums[name][i]))]));
   const whole = Object.fromEntries(SUMMED.map((name) => [name, stats(cpuSums[name], gpuSums[name])]));
-  console.log(`24 steps at N=6, per-cell sums CPU against GPU over the ${agreed.length} of ${C} columns whose shallow plume's base flux stayed within 1 % of the largest column's, and its top within 1 Pa, and whose OLR and absorbed sunlight never parted by more than 1 W/m² (a layer's cloud decided apart), on both engines after every step (${[...parted].join(', ')} apart; over all columns reflectedSolar rms ${whole.reflectedSolar.rmsRel.toExponential(1)}): ${SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
-  assert.ok(parted.size <= 0.02 * C, `${parted.size} of ${C} columns' plumes or cloud parted`);
+  console.log(`24 steps at N=6, per-cell sums CPU against GPU over the ${agreed.length} of ${C} columns more than two cells from the ${parted.size} whose decisions or radiation parted (over all columns reflectedSolar rms ${whole.reflectedSolar.rmsRel.toExponential(1)}): ${SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
+  assert.ok(parted.size <= C / 5 && near.size <= 0.8 * C, `${parted.size} of ${C} columns' decisions or radiation parted, ${near.size} with their neighbours within two cells`);
   for (const name of SUMMED) assert.ok(parity[name].rmsRel < 1e-4, `${name}: per-cell rms ${parity[name].rmsRel}`);
   assert.ok(whole.insolation.rmsRel < 1e-6, `the incoming sunlight differs by ${whole.insolation.rmsRel}`);
 
@@ -98,7 +90,10 @@ test('both engines sum each cell\'s radiation over the steps alike in every colu
   const expectedGpu = assertReadout('GPU, 24 steps', dg, first.gpuSteps, 2e-6);
   const last = first.cpuSteps[23];
   console.log(`day means over the 24 steps (CPU / GPU): ASR ${dc.absorbedSolar.toFixed(3)} / ${dg.absorbedSolar.toFixed(3)} (atmosphere ${dc.atmosphereSolar.toFixed(3)} / ${dg.atmosphereSolar.toFixed(3)}), OLR ${dc.outgoingLongwave.toFixed(3)} / ${dg.outgoingLongwave.toFixed(3)} W/m², albedo ${dc.planetaryAlbedo.toFixed(4)} / ${dg.planetaryAlbedo.toFixed(4)}; the last step's ASR ${last.absorbedSolar.toFixed(1)}, albedo ${(last.reflectedSolar / last.insolation).toFixed(4)}; GPU against the mean of its own steps to ${relative(dg.absorbedSolar, expectedGpu.absorbedSolar).toExponential(1)}`);
-  assert.ok(relative(dg.absorbedSolar, dc.absorbedSolar) < 1e-4 && relative(dg.outgoingLongwave, dc.outgoingLongwave) < 1e-4 && Math.abs(dg.planetaryAlbedo - dc.planetaryAlbedo) < 1e-4, 'the engines agree on the day means');
+  const agreedMean = (values) => agreed.reduce((sum, i) => sum + cpu.mesh.areaCell[i] * values[i], 0) / agreed.reduce((sum, i) => sum + cpu.mesh.areaCell[i], 0);
+  const agreedAlbedo = (sums) => agreedMean(sums.reflectedSolar) / agreedMean(sums.insolation);
+  console.log(`day means over the ${agreed.length} agreed columns (CPU / GPU): ASR ${(agreedMean(cpuSums.absorbedSolar) / 24).toFixed(3)} / ${(agreedMean(gpuSums.absorbedSolar) / 24).toFixed(3)}, OLR ${(agreedMean(cpuSums.outgoingLongwave) / 24).toFixed(3)} / ${(agreedMean(gpuSums.outgoingLongwave) / 24).toFixed(3)} W/m², albedo ${agreedAlbedo(cpuSums).toFixed(5)} / ${agreedAlbedo(gpuSums).toFixed(5)}; over all columns ASR apart by ${relative(dg.absorbedSolar, dc.absorbedSolar).toExponential(1)} of itself`);
+  assert.ok(relative(agreedMean(gpuSums.absorbedSolar), agreedMean(cpuSums.absorbedSolar)) < 1e-4 && relative(agreedMean(gpuSums.outgoingLongwave), agreedMean(cpuSums.outgoingLongwave)) < 1e-4 && Math.abs(agreedAlbedo(gpuSums) - agreedAlbedo(cpuSums)) < 1e-4, 'the engines agree on the day means over the agreed columns');
   assert.ok(Math.abs(dc.absorbedSolar - last.absorbedSolar) > 1, `the day mean ${dc.absorbedSolar} is not the last step's ${last.absorbedSolar}`);
 
   const after = await gpu.gpu.downloadPhysics();

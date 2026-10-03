@@ -6,13 +6,14 @@
 // (test/treeline.test.mjs, 48 steps). One run is plain, the other has ±AMP
 // K of uniform noise on every layer's θ (seeded with SEED) before the first
 // step and after every step. It counts the columns whose decisions parted
-// (test/helpers/decisions.mjs and the tests' own: the bottom block of
-// uniform q, the layers holding cloud water, OLR or absorbed sunlight by 1
-// W/m² at a step, and on land whether the step is in season and whether
-// there is snow) and their neighbours within one and two cells, and prints
-// the test's measures between the runs over every column and over the
-// columns kept: for the treeline those outside two cells of a land
-// decision that parted, for the others outside two cells of any.
+// (test/helpers/decisions.mjs and the tests' own: OLR or absorbed sunlight
+// by 1 W/m² at a step; for the cloud effects the bottom block of uniform q
+// and the layers holding cloud water; on land whether the step is in
+// season and whether there is snow) and their neighbours within one and
+// two cells, and prints the test's measures between the runs over every
+// column and over the columns kept: for the treeline those outside two
+// cells of a land decision that parted, for the others outside two cells
+// of any.
 //   SETUP=cloudEffect node scripts/perturbedDecisions.mjs
 //   SETUP=treeline SEED=7 node scripts/perturbedDecisions.mjs
 import { Grid } from '../js/grid.module.js';
@@ -83,8 +84,8 @@ for (let n = 0; n < setup.steps; n++) {
   perturb();
   decisions.check(cpuDecisions(a), cpuDecisions(b));
   for (let i = 0; i < C; i++) {
-    if (mixedTop(a.state[4], i) !== mixedTop(b.state[4], i)) own.merged.add(i);
-    if (cloudyLayers(a.state[5], i) !== cloudyLayers(b.state[5], i)) own.condensed.add(i);
+    if (SETUP === 'cloudEffect' && mixedTop(a.state[4], i) !== mixedTop(b.state[4], i)) own.merged.add(i);
+    if (SETUP === 'cloudEffect' && cloudyLayers(a.state[5], i) !== cloudyLayers(b.state[5], i)) own.condensed.add(i);
     if (Math.abs(a.radiation.outgoing[i] - b.radiation.outgoing[i]) > 1 || Math.abs(a.radiation.summed.absorbedSolar[i] - absorbed[0][i] - (b.radiation.summed.absorbedSolar[i] - absorbed[1][i])) > 1) own.radiation.add(i);
     if (seasons && a.geography.land[i]) {
       const x = (K - 1) * C + i;
