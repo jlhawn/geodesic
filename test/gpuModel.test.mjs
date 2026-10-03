@@ -745,18 +745,19 @@ test('the convective and large-scale rain accumulate alike in both engines, cell
   const near = neighbourhood(model.mesh, decisions.parted, 2);
   const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !near.has(i)), pick = (values) => Float64Array.from(kept, (i) => values[i]);
   const conv = stats(pick(convective), pick(physics.CONV)), ls = stats(pick(largeScale), pick(physics.COND)), step = stats(pick(rain), pick(physics.STEPRAIN));
-  let fired = 0, rained = 0, apart = 0, area = 0, cpuMean = 0, gpuMean = 0, outliers = 0;
+  let fired = 0, rained = 0, apart = 0, area = 0, cpuMean = 0, gpuMean = 0, outliers = 0, keptOutliers = 0;
   for (let i = 0; i < C; i++) {
     const a = model.mesh.areaCell[i];
     if (convective[i] > 0) fired++;
     if (largeScale[i] > 0) rained++;
-    if (Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest || Math.abs(largeScale[i] - physics.COND[i]) > 1e-3 * largestScale) outliers++;
+    if (Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest || Math.abs(largeScale[i] - physics.COND[i]) > 1e-3 * largestScale) { outliers++; if (!near.has(i)) keptOutliers++; }
     apart = Math.max(apart, Math.abs(convective[i] + largeScale[i] - precipitation[i]));
     area += a; cpuMean += a * convective[i]; gpuMean += a * physics.CONV[i];
   }
-  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${outliers} cells apart by more than 1e-3 of the largest cell's rain of either kind; a discrete decision parted in ${decisions.parted.size} cells (${Object.entries(decisions.kinds).map(([kind, cells]) => `${kind} ${cells.size}`).join(', ')}), ${near.size} with their neighbours within two cells; over the other ${kept.length} per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
+  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${outliers} cells apart by more than 1e-3 of the largest cell's rain of either kind, ${keptOutliers} of them kept; a discrete decision parted in ${decisions.parted.size} cells (${Object.entries(decisions.kinds).map(([kind, cells]) => `${kind} ${cells.size}`).join(', ')}), ${near.size} with their neighbours within two cells; over the other ${kept.length} per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
   assert.ok(fired > C / 3 && rained > 0, `convective rain on ${fired} cells, large-scale on ${rained}`);
   assert.ok(decisions.parted.size <= C / 6 && near.size <= 0.8 * C, `a decision parted in ${decisions.parted.size} cells, ${near.size} with their neighbours`);
+  assert.equal(keptOutliers, 0, `${keptOutliers} kept cells' rain apart by more than 1e-3 of the largest cell's`);
   const keptMean = (values) => kept.reduce((sum, i) => sum + model.mesh.areaCell[i] * values[i], 0);
   assert.ok(Math.abs(keptMean(physics.CONV) - keptMean(convective)) < 1e-3 * keptMean(convective), `mean convective rain over the kept cells ${keptMean(convective)} against ${keptMean(physics.CONV)}`);
   assert.ok(conv.rmsRel < 1e-3 && ls.rmsRel < 1e-3, `per-cell rms convective ${conv.rmsRel}, large-scale ${ls.rmsRel}`);
