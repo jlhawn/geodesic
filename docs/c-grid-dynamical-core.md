@@ -10658,8 +10658,9 @@ checks, 9b2141a gives scripts/longwaveOverlap.mjs the level set's table.
   overlap's recomputation repeats the OLR to 6.6·10⁻¹⁶ and the surface
   downward longwave to 5.2·10⁻¹⁶. The moist step alone over 16 steps: CPU
   per column c_p T + L q (with L_f of the convective snow) to 8.4·10⁻¹⁶ and
-  water to 8.0·10⁻¹⁶; GPU 3.7·10⁻⁵ (the check counts no L_f; its worst
-  column, 60.8S 48.2W, rains 0.17 kg/m² in a step) and 1.6·10⁻⁶.
+  water to 8.0·10⁻¹⁶; GPU, one adjust kernel from the same state with L_f
+  of the CPU's convective snow counted, c_p T + L q to 6.1·10⁻⁸ and water
+  to 1.7·10⁻⁷ in every column.
 - Engine parity from that state after 1, 4 and 16 steps: convection type
   (none, shallow, deep by a top above 700 hPa) apart on 2, 3 and 21 of 40962
   columns (8351, 7776, 8566 fired), the same type with tops an interface
@@ -10711,10 +10712,12 @@ checks, 9b2141a gives scripts/longwaveOverlap.mjs the level set's table.
   0.04, 751, 0.25; global rain 3.16 mm/d (convective 1.43).
 - Pace (Apple GPU of this Mac, exclusive lock, 128 steps after 16 from
   eight64/eight128_day0183 on bl36, ocean every 8 steps, alternated twice):
-  N=64 30.09, 30.07 ms a step against 276d936's 26.67, 26.62 (+13 %), the
-  physics pass 15.3 against 11.9 ms; N=128 127.27, 126.97 against 115.19,
-  115.30 ms (+10 %), the physics pass 58.4 against 46.6 ms. At N=128 512
-  steps a model day: 65.1 s of steps; a one-day segment from
+  profiled median N=64 30.09, 30.07 ms a step against 276d936's 26.67, 26.62
+  (+13 %), the physics pass 15.3 against 11.9 ms; N=128 127.27, 126.97
+  against 115.19, 115.30 ms (+10 %), the physics pass 58.4 against 46.6 ms.
+  128 steps back to back, each awaited as the spin-up awaits them: N=64
+  35.97, 35.91 against 32.55, 32.57 ms; N=128 151.27, 151.44 against 139.59,
+  139.57 ms, 77.5 s for a model day's 512 steps; a one-day segment from
   eight128_day0183 on bl36 (STRATOSPHERE=1) logs the day at 1.3 min and
   saves day 184 82.4 s after its 8 s of setup, 90.8 s of process wall.
 - On by default: the correlated longwave on the level set's table with the
@@ -10737,7 +10740,20 @@ checks, 9b2141a gives scripts/longwaveOverlap.mjs the level set's table.
   blocking and wave drag and the turbulent form drag on the GMTED fields.
   Off by evidence: the latitude-dependent gravity-wave flux (`northFlux`,
   `southFlux` 0, `equatorialFlux` = `flux`); the ice fall at 3.29 with
-  homogeneous nucleation (`iceFall` 2.5, `iceNucleation` false).
+  homogeneous nucleation (`iceFall` 2.5, `iceNucleation` false). Also off: the
+  deep plume's momentum transport (`plumeMomentum` false).
+- Review (Oct 2): the suite again 64 files, 567 tests, 0 failures, in 293 s
+  six files at a time; the ten-day N=64 smoke run through pairedSpinup.sh
+  repeats every daily line of smoke64.log; the bit-for-bit proofs against
+  both parents, the N=4 Rayleigh-top digests from e0d95f0's fresh state,
+  the split-run byte equality, the CPU closure and the engine parity above
+  reproduce. e0d95f0's defaults digest under the older gravity waves
+  differs after 12 steps at N=4 in 287 of 26568 values, by at most
+  2.2·10⁻¹⁵. From smoke64_day0010, which carries `subcloudVirtual` and the
+  cumulus cloud, the engines part faster than from the remap: convection
+  type apart on 12, 51 and 313 of 40962 columns after 1, 4 and 16 steps
+  (276d936 on the same state 1, 9, 40), lowest layer T rms 3.7·10⁻⁴,
+  8.9·10⁻⁴, 6.2·10⁻³ K; with `subcloudVirtual` zeroed on both, 1, 40, 225.
 
 ### M23 — The equatorial ocean — in progress
 
