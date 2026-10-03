@@ -17,10 +17,13 @@
 #   bootstrap  setup, suite and bench
 #   run        the paired run through scripts/pairedSpinup.sh to day UNTIL,
 #              once the disk has room for every state to the end; every
-#              snapshot stays (KEEP) for the Mac to pull. It marks OUT with
-#              STARTED_<PREFIX>, and with ENDED_<PREFIX> when pairedSpinup
-#              returns (day UNTIL reached, STOP_<PREFIX>, or no resolution
-#              left)
+#              snapshot stays (KEEP) for the Mac to pull, each saved file
+#              flushed to the disk (SYNC_CMD 'sync "$1"') so that a power
+#              cut cannot leave a state named but empty. It marks OUT with
+#              STARTED_<PREFIX>, and with ENDED_<PREFIX> only when
+#              pairedSpinup logs its own stop (day UNTIL reached,
+#              STOP_<PREFIX>, or no resolution left); killed by a signal,
+#              as at an eviction's shutdown, it leaves no mark
 #   resume     what the startup script runs on a new instance: if run was
 #              started here and has neither ended nor been stopped, waits
 #              up to GPU_WAIT seconds for the GPU and runs on from the
@@ -176,13 +179,16 @@ run() {
   if ! room && [ "$FORCE_DISK" != 1 ]; then say "run: not started, the disk lacks room for the states plus $MARGIN_GB GB (FORCE_DISK=1 runs anyway)"; return 1; fi
   [ -f "$OUT/STARTED_$PREFIX" ] || echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') commit $(git rev-parse --short HEAD 2>/dev/null)" > "$OUT/STARTED_$PREFIX"
   rm -f "$OUT/ENDED_$PREFIX"
+  local stops
+  stops=$(grep -c 'stopped (' "$OUT/$PREFIX.log" 2>/dev/null); stops=${stops:-0}
   say "run: NS=\"$NS\" PREFIX=$PREFIX LEVELS=$LEVELS PER_YEAR=$PER_YEAR KEEP=$KEEP OCEAN=$OCEAN STRATOSPHERE=$STRATOSPHERE UNTIL=$UNTIL OUT=$OUT $PAIRED"
-  env -u FROM -u OCEAN_FROM -u LAND_FROM -u ICE_FROM -u RECORD -u SYNC_CMD -u STOP_AFTER_STEPS \
+  env -u FROM -u OCEAN_FROM -u LAND_FROM -u ICE_FROM -u RECORD -u STOP_AFTER_STEPS SYNC_CMD='sync "$1"' \
     NS="$NS" PREFIX="$PREFIX" LEVELS="$LEVELS" PER_YEAR="$PER_YEAR" KEEP="$KEEP" OCEAN="$OCEAN" STRATOSPHERE="$STRATOSPHERE" UNTIL="$UNTIL" OUT="$OUT" bash "$PAIRED"
   local code=$? reason
-  reason=$(grep 'stopped (' "$OUT/$PREFIX.log" 2>/dev/null | tail -1)
-  echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') exit $code: ${reason:-no stop line}" > "$OUT/ENDED_$PREFIX"
-  say "run: ended (exit $code): ${reason:-no stop line in $PREFIX.log}"
+  reason=$(grep 'stopped (' "$OUT/$PREFIX.log" 2>/dev/null | tail -n +"$((stops + 1))" | tail -1)
+  if [ -z "$reason" ]; then say "run: interrupted (exit $code) before $PAIRED logged a stop; not marked ended, so resume continues it"; return 1; fi
+  echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') exit $code: $reason" > "$OUT/ENDED_$PREFIX"
+  say "run: ended (exit $code): $reason"
 }
 
 resume() {

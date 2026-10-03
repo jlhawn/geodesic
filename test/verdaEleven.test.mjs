@@ -94,8 +94,9 @@ test('the suite report names every failing test with its error and output, and t
 });
 
 const PAIRED = `#!/bin/bash
-env | grep -E '^(NS|PREFIX|LEVELS|PER_YEAR|KEEP|OCEAN|STRATOSPHERE|UNTIL|OUT|FROM)=' | sort > "$OUT/paired.env"
+env | grep -E '^(NS|PREFIX|LEVELS|PER_YEAR|KEEP|OCEAN|STRATOSPHERE|UNTIL|OUT|FROM|SYNC_CMD)=' | sort > "$OUT/paired.env"
 echo call >> "$OUT/paired.calls"
+[ -f "$OUT/killed" ] && exit 143
 echo "2026-10-02 12:00 stopped (day $UNTIL reached)" >> "$OUT/$PREFIX.log"
 `;
 const eleven = (out, args, env = {}) => run('scripts/verdaEleven.sh', args, { OUT: out, SKIP_GPU_CHECK: '1', PAIRED: join(dir, 'paired', 'paired.sh'), MARGIN_GB: '0', FROM: 'should-not-pass', ...env });
@@ -113,7 +114,7 @@ test('verdaEleven runs the paired spin-up with the run\'s settings, marks it, an
   r = eleven(out, ['run']);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(calls(), 1);
-  assert.equal(readFileSync(join(out, 'paired.env'), 'utf8'), [`KEEP=1000`, `LEVELS=bl36`, `NS=64 128`, `OCEAN={"everySteps":8}`, `OUT=${out}`, `PER_YEAR=36`, `PREFIX=eleven`, `STRATOSPHERE=1`, `UNTIL=1095`, ''].join('\n'));
+  assert.equal(readFileSync(join(out, 'paired.env'), 'utf8'), [`KEEP=1000`, `LEVELS=bl36`, `NS=64 128`, `OCEAN={"everySteps":8}`, `OUT=${out}`, `PER_YEAR=36`, `PREFIX=eleven`, `STRATOSPHERE=1`, `SYNC_CMD=sync "$1"`, `UNTIL=1095`, ''].join('\n'));
   assert.match(readFileSync(join(out, 'STARTED_eleven'), 'utf8'), /commit [0-9a-f]+/);
   assert.match(readFileSync(join(out, 'ENDED_eleven'), 'utf8'), /exit 0: .*stopped \(day 1095 reached\)/);
   assert.match(r.stdout, /disk: N=64 day 0, 108 segments left × 106 MB; N=128 day 0, 108 segments left × 425 MB; the states take 57\.4 GB at day 1095/);
@@ -124,9 +125,17 @@ test('verdaEleven runs the paired spin-up with the run\'s settings, marks it, an
 
   rmSync(join(out, 'ENDED_eleven'));
   writeFileSync(join(out, 'eleven128_day0010.bin'), Buffer.alloc(1000));
+  writeFileSync(join(out, 'killed'), '');
   r = eleven(out, ['resume']);
   assert.equal(calls(), 2);
   assert.match(r.stdout, /N=128 day 10, 107 segments left × 0 MB/);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /run: interrupted \(exit 143\) before .* logged a stop; not marked ended, so resume continues it/);
+  assert.ok(!existsSync(join(out, 'ENDED_eleven')), 'an earlier stop line in the log does not mark a killed run ended');
+  rmSync(join(out, 'killed'));
+  r = eleven(out, ['resume']);
+  assert.equal(calls(), 3);
+  assert.match(readFileSync(join(out, 'ENDED_eleven'), 'utf8'), /exit 0: .*stopped \(day 1095 reached\)/);
 
   rmSync(join(out, 'ENDED_eleven'));
   writeFileSync(join(out, 'STOP_eleven'), '');
@@ -134,14 +143,14 @@ test('verdaEleven runs the paired spin-up with the run\'s settings, marks it, an
   r = eleven(out, ['run']);
   assert.equal(r.status, 1);
   assert.match(r.stdout, /remove it to run/);
-  assert.equal(calls(), 2);
+  assert.equal(calls(), 3);
   rmSync(join(out, 'STOP_eleven'));
 
   r = eleven(out, ['run'], { MARGIN_GB: '1000000000' });
   assert.equal(r.status, 1);
   assert.match(r.stdout, /not started, the disk lacks room/);
   assert.equal(eleven(out, ['run'], { MARGIN_GB: '1000000000', FORCE_DISK: '1' }).status, 0);
-  assert.equal(calls(), 3);
+  assert.equal(calls(), 4);
 
   r = eleven(out, ['status']);
   assert.match(r.stdout, /N=128: eleven128_day0010\.bin \(day 10 of 1095, 107 segments left\)/);
