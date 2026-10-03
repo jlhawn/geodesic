@@ -2531,11 +2531,12 @@ state, each a node dump (`<figure>.mjs <state.bin> <out.json>`) and a
 python plot (`<figure>.py <json> <png> [title]`, matplotlib), titled
 `<tag> day N (<season>)` on the model calendar: `stateMaps`, the mixed
 layer's temperature, the sea ice's thickness (iced cells and their mean
-snow), the land's vegetation cover v (0 bare, 1 closed forest; the land
-means of v and of the trees in the title) and the surface temperature;
+snow), the land's vegetation cover v (0 bare, 1 closed by trees or
+grass; the land means of v and of the trees in the title) and the
+surface temperature;
 `eqsection`, the equatorial Pacific's 2S–2N temperature to 300 m on the
 ocean's layers; `eqpanels`, four GPU steps from the state and then the
-surface wind, air temperature and sea-level pressure over the mixed
+lowest layer's wind, air temperature and sea-level pressure over the mixed
 layer's current, temperature and the 1024.0 class top, 90E–70W within
 15°; `mlmdeck`, the deck after four GPU steps with a host port of its
 column checked against the GPU on the night side (where the GPU's

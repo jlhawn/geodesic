@@ -33,7 +33,7 @@ iceG = raster(np.where(iced, ice, np.nan))
 meanSnow = float(np.mean(snow[iced])) if iced.any() else 0.0
 panel(axes[0, 1], np.where(landG, np.nan, iceG), 'Blues', 0, 3, f"Sea-ice thickness m (iced cells {int(iced.sum())}, mean snow {meanSnow:.0f} kg/m² over them)", 'm', extend='max', background=seaBackground)
 landMean = lambda v: float(np.mean(v[land])) if land.any() else 0.0
-panel(axes[1, 0], np.where(landG, raster(veg), np.nan), 'YlGn', 0, 1, f"Vegetation cover v, 0 bare – 1 forest (land means: v {landMean(veg):.2f}, trees {landMean(trees):.2f})", 'cover', background=seaBackground)
+panel(axes[1, 0], np.where(landG, raster(veg), np.nan), 'YlGn', 0, 1, f"Vegetation cover v, 0 bare – 1 closed (trees or grass) (land means: v {landMean(veg):.2f}, trees {landMean(trees):.2f})", 'cover', background=seaBackground)
 panel(axes[1, 1], raster(ts), 'coolwarm', -30, 40, 'Surface temperature °C', '°C', extend='both')
 fig.suptitle(title, color=TEXT, fontsize=13)
 plt.tight_layout(rect=(0, 0, 1, 0.965))
