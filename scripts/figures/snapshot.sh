@@ -4,9 +4,9 @@
 # equatorial panels and the mixed-layer deck, as
 # <outdir>/<tag>_<figure>_dayNNNN.png with the dump's JSON and both
 # steps' output beside it in .json and .log. Prints each figure's path and
-# wall time and the deck's area and box statistics lines; a figure that
-# fails prints its error and the rest still run, and the exit status is
-# then 1.
+# wall time, the deck's night-side LWP check and its area and box
+# statistics lines; a figure that fails prints its error and the rest
+# still run, and the exit status is then 1.
 #   scripts/figures/snapshot.sh <state.bin> <outdir> ["title"]
 # Environment: OCEAN (JSON options for the GPU dumps' ocean,
 # '{"everySteps":8}' as the run), GPULOCK (the lock wrapper, called as

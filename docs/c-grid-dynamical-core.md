@@ -2526,6 +2526,31 @@ $/h for the 150 GB volume) × that lifetime, plus the same rate over
 any eviction gap's lost segment and restart, and a volume left detached
 by an eviction bills on until it is reused or deleted.
 
+**Report figures.** `scripts/figures/` draws four figures of a pulled
+state, each a node dump (`<figure>.mjs <state.bin> <out.json>`) and a
+python plot (`<figure>.py <json> <png> [title]`, matplotlib), titled
+`<tag> day N (<season>)` on the model calendar: `stateMaps`, the mixed
+layer's temperature, the sea ice's thickness (iced cells and their mean
+snow), the land's vegetation cover v (0 bare, 1 closed forest; the land
+means of v and of the trees in the title) and the surface temperature;
+`eqsection`, the equatorial Pacific's 2S–2N temperature to 300 m on the
+ocean's layers; `eqpanels`, four GPU steps from the state and then the
+surface wind, air temperature and sea-level pressure over the mixed
+layer's current, temperature and the 1024.0 class top, 90E–70W within
+15°; `mlmdeck`, the deck after four GPU steps with a host port of its
+column checked against the GPU on the night side (where the GPU's
+absorbed sunlight is zero, as the host's) and the deck's area and box
+statistics. `snapshot.sh` runs the four under the GPU lock, writes
+`<tag>_<figure>_dayNNNN.png` with its JSON and log, prints the paths, the
+wall times and the deck's lines, and carries on past a failing figure
+(exit 1); at N=128 the four take about 35 s on the Mac. The test
+(`test/figures.test.mjs`) draws from the newest pulled eleven64 state
+or FIGURES_STATE and skips without one.
+
+```
+scripts/figures/snapshot.sh $PULLED/eleven128_day0132.bin <outdir>
+```
+
 **Density-consistent interior.** After the mixed-layer exchanges, an
 interior layer more than 0.01 kg/m³ from its label mixes in water from
 the nearest layer lying clearly (by more than 0.01) on the other side of
