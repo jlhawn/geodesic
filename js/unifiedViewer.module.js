@@ -597,7 +597,7 @@ void main() {
   #include <colorspace_fragment>
 }`,
   });
-  const glowShell = new THREE.Mesh(new THREE.SphereGeometry(GLOW_SHELL, 192, 96), glowMaterial);
+  const glowShell = new THREE.Mesh(new THREE.SphereGeometry(GLOW_SHELL, 64, 32), glowMaterial);
   glowShell.frustumCulled = false;
   glowShell.renderOrder = 1;
   glowShell.visible = false;
