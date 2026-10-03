@@ -134,15 +134,15 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * criticalHumidityAt with `surfaceCriticalHumidity` 0.975,
  * `topCriticalHumidity` 0.75 and `criticalExponent` 2 (ECHAM6 at T63,
  * mo_cloud's crs, crt and nex). Below the mixing top (`boundaryTop`),
- * with `boundaryCondensation` 'cloudLayer' (the default) the cloudy layers
- * whose cooling makes the column cloud-topped (`boundaryCloudLayer`, the
- * lowest of them, from the boundary layer's diagnosis of the step) hold
- * that distribution's condensate too and the other mixed layers adjust to
- * saturation, every cloudy mixed layer taking the boundary layer's
- * variance cover in the radiation; 'uniform' gives every mixed layer the
- * distribution, as ECHAM6's scheme and the Unified Model's large-scale
- * scheme under Lock et al. (2000) condense the whole boundary layer, and
- * 'saturation' adjusts every mixed layer
+ * with `boundaryCondensation` 'uniform' (the default) every mixed layer
+ * holds that distribution's condensate too, as ECHAM6's scheme and the
+ * Unified Model's large-scale scheme under Lock et al. (2000) condense the
+ * whole boundary layer, every cloudy mixed layer taking the boundary
+ * layer's variance cover in the radiation; 'cloudLayer' gives the
+ * distribution only to the cloudy layers whose cooling makes the column
+ * cloud-topped (`boundaryCloudLayer`, the lowest of them, from the
+ * boundary layer's diagnosis of the step) and adjusts the other mixed
+ * layers to saturation, and 'saturation' adjusts every mixed layer
  * to saturation, so that the cloud top's layer condenses by one rule above
  * the mixing top and by the other below it, and the mixing top follows
  * that cloud.
@@ -416,7 +416,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * plumeRainThreshold 0, plumeRainEvaporation 1e-3 /m, downdraftShare 0.3, convectionType 'testParcel',
  * downdraftEntrainment 1e-4 /m, capeClosure 'bechtold' with pcapeBoundary
  * 'positive' (with 'threshold' plumeCape 120 J/kg and plumeRelaxation 1 h), no
- * plumeMomentum, condensation 'uniform', boundaryCondensation 'cloudLayer', iceSaturation true, no
+ * plumeMomentum, condensation 'uniform', boundaryCondensation 'uniform', iceSaturation true, no
  * iceNucleation, iceFall 2.5 m/s, iceFallExponent 0.16.
  */
 export const MOIST_DEFAULTS = {
@@ -427,7 +427,7 @@ export const MOIST_DEFAULTS = {
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean',
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', excessVelocity: 'surfaceLayer', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainmentLaw: 'ifs', plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, plumePhase: 'mixed', plumeConversion: 'sundqvist', convectionType: 'testParcel', downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: false, plumeConsumption: 'all',
-  condensation: 'uniform', boundaryCondensation: 'cloudLayer', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
+  condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
   liquidTemperature: LIQUID_TEMPERATURE, iceTemperature: ICE_TEMPERATURE,
 };
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
