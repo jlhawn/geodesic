@@ -1,15 +1,18 @@
-// How far the CPU model's rain moves under θ perturbations of the size of
-// the engines' single-precision differences, on the setup of the rain
+// How far the CPU model's rain moves under θ perturbations near the size
+// of the engines' single-precision differences, on the setup of the rain
 // accumulation parity test in test/gpuModel.test.mjs (24 steps of 900 s at
 // N=6). One run is plain, the other has ±AMP K of uniform noise added to
-// every layer's θ before the first step and, unless EACH=0, after every
-// step. It prints the cells whose convective or large-scale rain parts by
-// more than 1e-3 of the largest cell's (the test's outlier rule) and, for
+// every layer's θ (from the generator seeded with SEED) before the first
+// step and, unless EACH=0, after every step; the count of parted cells
+// depends on the seed, so compare settings over several. It prints the
+// cells whose convective or large-scale rain parts by more than 1e-3 of
+// the largest cell's (the test's outlier rule) and, for
 // each, the first discrete decision that parted between the runs: the
 // regime, the cloud-top run's lowest layer, the count of mixed interfaces,
 // whether the plume fires, its base flux by 1 % or its top, a layer's
 // cloud against the cloud-top threshold, or a merge of the dry adjustment.
 //   node scripts/perturbedRain.mjs
+//   SEED=2024 node scripts/perturbedRain.mjs
 //   BC=cloudLayer AMP=1e-3 EACH=0 node scripts/perturbedRain.mjs
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
@@ -22,7 +25,7 @@ const make = () => createModel(new Grid(6), { ocean: false, radiation: { stratus
 const a = make(), b = make();
 const init = initializeState(a, {});
 for (let n = 0; n < init.length; n++) { a.state[n].set(init[n]); b.state[n].set(init[n]); }
-let seed = 99;
+let seed = Number(process.env.SEED ?? 99);
 const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 - 0.5; };
 const perturb = () => { for (let x = 0; x < b.state[1].length; x++) b.state[1][x] += 2 * AMP * random(); };
 perturb();
