@@ -83,7 +83,7 @@ test('the suite report names every failing test with its error and output, and t
     'good.test.mjs': "import { test } from 'node:test';\ntest('fine', () => {});\n",
   });
   const report = join(at, 'report.txt');
-  const result = run('scripts/suiteReport.sh', [report], { FILES: ['bad', 'crash', 'good'].map((f) => join(at, `${f}.test.mjs`)).join(' '), JOBS: '3' });
+  const result = run('scripts/suiteReport.sh', [report], { FILES: ['bad', 'crash', 'good'].map((f) => join(at, `${f}.test.mjs`)).join(' '), JOBS: '3', DIR: join(at, 'report') });
   assert.equal(result.status, 1);
   const text = readFileSync(report, 'utf8');
   assert.match(text, /3 files, 1 passed, 2 failed; tests: 2 passed, 2 failed/);

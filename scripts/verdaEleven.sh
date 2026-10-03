@@ -159,7 +159,7 @@ gpu_check() {
 
 suite() {
   local report=$OUT/${PREFIX}_suite.txt
-  JOBS=$JOBS DIR=$OUT/${PREFIX}_suite scripts/suiteReport.sh "$report" > /dev/null
+  JOBS=$JOBS scripts/suiteReport.sh "$report" > /dev/null
   say "suite: $(head -1 "$report")"
 }
 

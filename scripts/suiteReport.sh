@@ -25,7 +25,7 @@ unset NODE_TEST_CONTEXT
 start=$(date +%s)
 printf '%s\n' $FILES | xargs -P "$JOBS" -I{} bash -c '
   f=$1; name=$(basename "$f" .test.mjs); s=$(date +%s)
-  $3 node --test --test-reporter=tap "$f" > "$2/$name.tap" 2>&1
+  env -u DIR -u FILES -u JOBS -u TIMEOUT_MIN $3 node --test --test-reporter=tap "$f" > "$2/$name.tap" 2>&1
   echo "$? $(( $(date +%s) - s )) $f" > "$2/$name.status"' _ {} "$DIR" "$LIMIT"
 wall=$(( $(date +%s) - start ))
 
