@@ -697,7 +697,7 @@ void main() {
     applyInset(camera);
 
     glow.uFade.value = space.enabled ? 1 - THREE.MathUtils.smoothstep(viewState.blend, 0, 0.15) : 0;
-    glowShell.visible = glow.uFade.value > 0;
+    glowShell.visible = glow.uFade.value > 0 && lighting.uSun.value > 0;
     if (glowShell.visible) {
       const limb = state.perspective ? 2 * TAN_HALF * Math.sqrt(Math.max(camera.position.lengthSq() - 1, 0)) : viewHeight();
       glow.uScaleHeight.value = Math.min(Math.max(GLOW_HEIGHT, GLOW_PIXELS * limb / container.clientHeight), (GLOW_SHELL - 1) / GLOW_CUT);
