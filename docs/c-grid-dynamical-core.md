@@ -11010,6 +11010,35 @@ seas (−2.17 of the −3.43 W/m² of day 1828 from the seas within 30° of
 the equator, −5.8 W/m² there). A step costs the same within the
 timing's noise (162.2–164.4 ms at N=128 under either, two runs each).
 
+Review of the same (Oct 3). The measurement reproduces at 930f066 and
+under 'saturation' with 'midpoint' to the count (246,813 onsets at
+N=128), and with both off the GPU state and the deck, mixing-top,
+regime, rain and flux fields hash the same as the parent's after 16
+steps at N=64 and N=128. Over those 16 steps the saturation stage keeps
+each layer's θ_l to 3.1·10⁻⁵ K and q_t to 1.9·10⁻⁹ (one f32 ulp, as in
+the parent) and the global water budget's residual is unchanged
+(2.29·10⁻⁶ against 2.28·10⁻⁶ kg/m² a step at N=64). A three-day run
+saved after its second day and continued ends byte for byte on the
+file of the run that did not stop. Two days at N=128 from
+eleven128_day1825: SWCRE −49.3, −49.4 → −52.4, −52.7 W/m², LWCRE 25.5,
+25.7 → 25.8, 26.0, rain 2.68, 2.69 → 2.70, 2.73 mm/d, ASR 241.7, 241.6
+→ 238.6, 238.2, OLR 235.1, 235.0 → 234.8, 234.6. A step costs
+161.4–164.2 ms before and 161.7–163.7 after (two runs each, exclusive
+lock). In cloudEffect.test.mjs 30 of 362 columns are left out against
+20 at the parent (5 parted on a cloud decision against 3), so it passes
+only with the bound on the excluded share at 0.09 (30/362 = 0.083); the
+precision bounds on the columns kept are unchanged and met (SWCRE rms
+4.0·10⁻⁵, max 0.07 W/m², against 2.2·10⁻⁵ and 0.02 at the parent). The
+deck blinks left are a third cycle of the same kind: at 34.8S 127.9E
+the carried height sits at 1465–1467 m across a layer's midpoint, the
+water path holds at 54–57 g/m² and the cover goes 1, 0.3, 1, 0.3 (57
+blinks in 60 steps); the free troposphere the deck entrains
+(θ_l and q_t above) is still the first layer whose midpoint lies above
+h, so the jump and with it the decoupling ratio switch with the
+midpoint. Of the 1,730 deck-driven transitions at N=128 the cover moves
+with the blink in all, the water path in 411, the count of layers below
+h changed in 1,408.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
