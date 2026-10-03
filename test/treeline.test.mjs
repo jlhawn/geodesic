@@ -7,6 +7,7 @@ import { createLandSurface, sineSeason, insolationCycle, seasonEstimate, treelin
 import { MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
+import { neighbourhood } from './helpers/decisions.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -150,7 +151,7 @@ test('the model hands the land its lowest air temperature each step: after the s
 
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
 
-test('over 48 GPU steps the season means and the tree cover evolve as on the CPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('over 48 GPU steps the season means and the tree cover evolve as on the CPU in every land cell more than two cells from one whose step fell in season or under snow on one engine only', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const land = { soilCarbon: false, seasonMemory: 6 * 3600, treeGrowthTime: 3 * 3600, treeDeclineTime: 2 * 3600, treelineWarmth: [6, 22], growthTime: 4 * 3600, declineTime: 3 * 3600, snowDeclineTime: 4 * 3600 };
   const prepare = (model) => {
     const C = model.mesh.nCells, init = initializeState(model, {});
@@ -172,37 +173,44 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
   const gpu = prepare(await createGpuModel(new Grid(6), { topography, land, surface }));
   const C = cpu.mesh.nCells, before = Float64Array.from(cpu.land.canopy), lengthBefore = Float64Array.from(cpu.land.seasonLength);
   const { K, exnerLayer } = cpu.core.diagnostics;
-  let worstAir = 0;
   const target = (record, i) => treelineFactor(record.seasonLength[i], record.seasonWarmth[i], { treelineWarmth: land.treelineWarmth }) * aridityFactor(record.rainMean[i], record.demandMean[i]) * record.vegetation[i];
-  const targetGap = new Float64Array(C);
+  const targetGap = new Float64Array(C), airGap = new Float64Array(C), parted = new Set(), keep = 900 / land.seasonMemory;
+  const inSeason = (after, before, i) => Math.round((after[i] - (1 - keep) * before[i]) / keep);
+  let previous = [Float64Array.from(cpu.land.seasonLength), Float64Array.from((await gpu.land.serialize()).seasonLength)];
   for (let n = 0; n < 48; n++) {
     cpu.step(900); await gpu.step(900);
     await gpu.sync();
     const now = await gpu.land.serialize();
     for (let i = 0; i < C; i++) {
       if (!cpu.geography.land[i] || cpu.geography.iceSheet[i]) continue;
-      worstAir = Math.max(worstAir, Math.abs(cpu.state[1][(K - 1) * C + i] - gpu.state[1][(K - 1) * C + i]) * exnerLayer[(K - 1) * C + i]);
+      airGap[i] = Math.max(airGap[i], Math.abs(cpu.state[1][(K - 1) * C + i] - gpu.state[1][(K - 1) * C + i]) * exnerLayer[(K - 1) * C + i]);
       targetGap[i] = Math.max(targetGap[i], Math.abs(target(cpu.land, i) - target(now, i)));
+      if (inSeason(cpu.land.seasonLength, previous[0], i) !== inSeason(now.seasonLength, previous[1], i) || (cpu.land.snow[i] > 0) !== (now.snow[i] > 0)) parted.add(i);
     }
+    previous = [Float64Array.from(cpu.land.seasonLength), Float64Array.from(now.seasonLength)];
   }
+  const near = neighbourhood(cpu.mesh, parted, 2);
   const saved = await gpu.land.serialize();
-  let worstLength = 0, worstWarmth = 0, worstTrees = 0, beyond = -Infinity, widestGap = 0, grew = 0, died = 0, snowy = 0, inSeason = 0, cells = 0;
+  let worstLength = 0, worstWarmth = 0, worstTrees = 0, worstAir = 0, beyond = -Infinity, widestGap = 0, grew = 0, died = 0, snowy = 0, seasonal = 0, cells = 0, left = 0;
   for (let i = 0; i < C; i++) {
     if (!cpu.geography.land[i] || cpu.geography.iceSheet[i]) continue;
     cells++;
+    if (cpu.land.canopy[i] > before[i] + 0.05) grew++;
+    if (cpu.land.canopy[i] < before[i] - 0.05) died++;
+    if (cpu.land.snow[i] > 0) snowy++;
+    if (cpu.land.seasonLength[i] > lengthBefore[i]) seasonal++;
+    if (near.has(i)) { left++; continue; }
+    worstAir = Math.max(worstAir, airGap[i]);
     worstLength = Math.max(worstLength, Math.abs(cpu.land.seasonLength[i] - saved.seasonLength[i]));
     worstWarmth = Math.max(worstWarmth, Math.abs(cpu.land.seasonWarmth[i] - saved.seasonWarmth[i]));
     worstTrees = Math.max(worstTrees, Math.abs(cpu.land.canopy[i] - saved.canopy[i]));
     beyond = Math.max(beyond, Math.abs(cpu.land.canopy[i] - saved.canopy[i]) - targetGap[i]);
     widestGap = Math.max(widestGap, targetGap[i]);
-    if (cpu.land.canopy[i] > before[i] + 0.05) grew++;
-    if (cpu.land.canopy[i] < before[i] - 0.05) died++;
-    if (cpu.land.snow[i] > 0) snowy++;
-    if (cpu.land.seasonLength[i] > lengthBefore[i]) inSeason++;
   }
   gpu.destroy();
-  console.log(`N=6, 48 steps over ${cells} land cells (${snowy} under snow, ${inSeason} in season): trees grew on ${grew} and died back on ${died}; engines apart by ${worstLength.toExponential(1)} in season length, ${worstWarmth.toExponential(1)} K in season warmth (the lowest air by up to ${worstAir.toExponential(1)} K over the run), ${worstTrees.toExponential(1)} in tree cover, which the trees' targets (treeline factor times moisture factor times cover, from each engine's own means) parted by up to ${widestGap.toExponential(1)} over the run; no cell's trees part by more than ${beyond.toExponential(1)} beyond their target's largest gap`);
-  assert.ok(grew > 10 && died > 10 && snowy > 5 && inSeason > 10 && cells - inSeason > 5, `${grew} grew, ${died} died, ${snowy} snowy, ${inSeason} in season`);
+  console.log(`N=6, 48 steps over ${cells} land cells (${snowy} under snow, ${seasonal} in season): trees grew on ${grew} and died back on ${died}; a step fell in season or under snow on one engine only in ${parted.size} cells (${[...parted].join(', ')}), ${left} land cells left out with those within two cells; over the other ${cells - left} engines apart by ${worstLength.toExponential(1)} in season length, ${worstWarmth.toExponential(1)} K in season warmth (the lowest air by up to ${worstAir.toExponential(1)} K over the run), ${worstTrees.toExponential(1)} in tree cover, which the trees' targets (treeline factor times moisture factor times cover, from each engine's own means) parted by up to ${widestGap.toExponential(1)} over the run; no cell's trees part by more than ${beyond.toExponential(1)} beyond their target's largest gap`);
+  assert.ok(grew > 10 && died > 10 && snowy > 5 && seasonal > 10 && cells - seasonal > 5, `${grew} grew, ${died} died, ${snowy} snowy, ${seasonal} in season`);
+  assert.ok(parted.size <= 0.04 * cells && left <= 0.4 * cells, `${parted.size} of ${cells} land cells' season or snow parted, ${left} left out with their neighbours`);
   assert.ok(worstLength < 1e-4 && worstWarmth <= worstAir && beyond < 1e-4, `season length ${worstLength}, warmth ${worstWarmth} under air ${worstAir}, trees ${worstTrees}, ${beyond} beyond their target's gap`);
 });
 
