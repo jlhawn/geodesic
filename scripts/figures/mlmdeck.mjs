@@ -3,7 +3,7 @@
 // taken; the physics kernel's inputs of the fourth are read before it
 // runs and its deck after, and every ice-free sea column is re-diagnosed
 // on the host by mixedLayer.module.js along the GPU's own path through
-// mlmColumn in js/gpu/physics.gpu.js (the regime rest, the inversion
+// mlmColumn in js/gpu/physics.gpu.js (the regime rest, the slab, the inversion
 // ceiling, the ring-smoothed subsidence and its running mean, the gate
 // memory, the carried height). The host gives the mixed layer no
 // sunlight, so the liquid water path, cover and the heights after the
@@ -81,6 +81,17 @@ function column(i) {
     heat += LV.DS[k] * (S.TH[idx] - Lh * cloud / (cp * D.EXM[idx]));
     water += LV.DS[k] * (Math.max(0, S.Q[idx]) + cloud);
     weight += LV.DS[k];
+  }
+  if (ph.deckSlab === 'fraction' && k >= 1 && k < K - 1) {
+    const part = h < interfaceHeight(i, k + 1) ? k + 1 : k;
+    if (part !== capping) {
+      const pdx = part * C + i, bottom = (K - 1) * C + i, cloud = Math.max(0, S.QC[pdx]);
+      const lowerEdge = part < K - 1 ? interfaceHeight(i, part + 1) : (D.GEO[bottom] + LV.GABS[K - 1] - cp * D.THV[bottom] * (D.EXL[bottom] - D.EXM[bottom])) / g;
+      const share = Math.min(1, Math.max(0, (h - lowerEdge) / (interfaceHeight(i, part) - lowerEdge))) - (part === k + 1 ? 1 : 0);
+      heat += share * LV.DS[part] * (S.TH[pdx] - Lh * cloud / (cp * D.EXM[pdx]));
+      water += share * LV.DS[part] * (Math.max(0, S.Q[pdx]) + cloud);
+      weight += share * LV.DS[part];
+    }
   }
   if (k < 1) return { gate: 3, height: rested };
   let lowerHeight = 0, lower = K, m = K - 1;
