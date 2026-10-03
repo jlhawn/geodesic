@@ -198,10 +198,17 @@ const instance = (id, ip, status = 'running') => JSON.stringify([{ id, hostname:
 
 test('the push stages HEAD without runs/, copies it over ssh to the address verda gives, and checks the commit and data there', () => {
   const fake = script('push', { ssh: FAKE_SSH, verda: FAKE_VERDA, 'list.1.json': '[]', 'list.json': instance('i-1', '10.0.0.1') });
-  const env = { FAKE: fake, HOME: join(fake, 'home'), VERDA: join(fake, 'verda'), SSH: join(fake, 'ssh'), REMOTE_REPO: join(fake, 'remote', 'geodesic'), ALLOW_DIRTY: '1' };
+  const env = { FAKE: fake, HOME: join(fake, 'home'), VERDA: join(fake, 'verda'), SSH: join(fake, 'ssh'), REMOTE_REPO: join(fake, 'remote', 'geodesic'), REMOTE_OUT: join(fake, 'remote', 'out'), ALLOW_DIRTY: '1' };
   let r = run('scripts/verdaPush.sh', [], env);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /gcm-eleven is absent/);
+  mkdirSync(env.REMOTE_OUT, { recursive: true });
+  writeFileSync(join(env.REMOTE_OUT, 'STARTED_eleven'), '');
+  r = run('scripts/verdaPush.sh', [], env);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /was started and has not ended; set ALLOW_RUNNING=1/);
+  assert.ok(!existsSync(env.REMOTE_REPO), 'nothing is pushed into a running run\'s checkout');
+  writeFileSync(join(env.REMOTE_OUT, 'ENDED_eleven'), '');
   r = run('scripts/verdaPush.sh', [], env);
   assert.equal(r.status, 0, r.stderr);
   const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();

@@ -5,8 +5,11 @@
 # states), with a .git that holds the commit and the blobs checked out, so
 # that `git rev-parse HEAD` there names the commit the run used. It goes
 # to REMOTE_REPO (/root/geodesic) by rsync, which deletes nothing there;
-# rsync itself is installed on the instance first if it is missing, and
-# node_modules is left to verdaEleven.sh setup. The data the model reads
+# rsync and git are installed on the instance first if they are missing,
+# and node_modules is left to verdaEleven.sh setup. It refuses while a run
+# started there has not ended (REMOTE_OUT/STARTED_<PREFIX> without
+# ENDED_<PREFIX>; its next segment would load the new code) unless
+# ALLOW_RUNNING=1. The data the model reads
 # is tracked and travels with it (data/topography_0p25.bin,
 # woa_annual_1deg.bin, subgrid_N*.bin, radiationBenchmark.json); after
 # the copy the instance's HEAD and the size of every file in data/ are
@@ -14,12 +17,14 @@
 # tracked files is refused unless ALLOW_DIRTY=1 (the stage is the
 # commit either way).
 #   scripts/verdaPush.sh
-# Environment: NAME (gcm-eleven), REMOTE_REPO (/root/geodesic), ALLOW_DIRTY,
+# Environment: NAME (gcm-eleven), REMOTE_REPO (/root/geodesic), PREFIX
+# (eleven), REMOTE_OUT (/root/runs/<PREFIX>), ALLOW_DIRTY, ALLOW_RUNNING,
 # STAGE (the directory to stage in, made and removed when unset), and
 # HOST, SSH_USER, VERDA and SSH of scripts/verdaHost.sh.
 cd "$(dirname "$0")/.."
 REPO=$PWD
-NAME=${NAME:-gcm-eleven} REMOTE_REPO=${REMOTE_REPO:-/root/geodesic}
+NAME=${NAME:-gcm-eleven} REMOTE_REPO=${REMOTE_REPO:-/root/geodesic} PREFIX=${PREFIX:-eleven}
+REMOTE_OUT=${REMOTE_OUT:-/root/runs/$PREFIX}
 . "$REPO/scripts/verdaHost.sh"
 
 if [ -n "$(git status --porcelain --untracked-files=no)" ] && [ "$ALLOW_DIRTY" != 1 ]; then
@@ -41,8 +46,11 @@ all=$(kb "$STAGE/repo") git_kb=$(kb "$STAGE/repo/.git") data_kb=$(kb "$STAGE/rep
 echo "staged $(git log -1 --format='%h %s' "$commit" | cut -c1-100): $files files, $((all / 1024)) MB ($((data_kb / 1024)) MB of data/, $((git_kb / 1024)) MB of .git; runs/ left out)"
 
 resolve || { echo "$why" >&2; exit 1; }
+if [ "$ALLOW_RUNNING" != 1 ] && remote "[ -f '$REMOTE_OUT/STARTED_$PREFIX' ] && [ ! -f '$REMOTE_OUT/ENDED_$PREFIX' ]"; then
+  echo "the run in $REMOTE_OUT on $target was started and has not ended; set ALLOW_RUNNING=1 to push into its checkout anyway" >&2; exit 1
+fi
 if [ "$target" != local ]; then
-  remote "command -v rsync > /dev/null || { apt-get -o DPkg::Lock::Timeout=600 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq rsync; } > /dev/null" || { echo "rsync is missing on $target and could not be installed" >&2; exit 1; }
+  remote "{ command -v rsync && command -v git; } > /dev/null || { apt-get -o DPkg::Lock::Timeout=600 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq rsync git; } > /dev/null" || { echo "rsync or git is missing on $target and could not be installed" >&2; exit 1; }
 fi
 remote "mkdir -p '$REMOTE_REPO'" || { echo "cannot reach $target" >&2; exit 1; }
 rsync -a --exclude node_modules -e "$rsh" "$STAGE/repo/" "$(at "$REMOTE_REPO")/" || { echo "rsync to $target failed" >&2; exit 1; }
