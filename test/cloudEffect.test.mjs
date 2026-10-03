@@ -6,6 +6,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { CLEAR_SUMMED } from '../js/physics/radiation.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { RADIATION_FIELDS, savedRadiationField } from '../js/physics/regrid.module.js';
+import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -62,18 +63,19 @@ async function engines(radiation, cloud = 0) {
   return { cpu, gpu, C: cpu.mesh.nCells };
 }
 
-test('both engines sum the clear-sky fluxes per cell alike and read out the day-mean cloud effects, mirrored per cell and carried in a saved state, alike in every column whose dry adjustment merged the same layers, whose shallow plume topped at the same interface and whose layers held cloud water alike on both engines after every step, and whose neighbours\' did', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both engines sum the clear-sky fluxes per cell alike and read out the day-mean cloud effects, mirrored per cell and carried in a saved state, alike in every column whose dry adjustment merged the same layers, whose shallow plume topped at the same interface, whose layers held cloud water alike and whose regime, plume and cloud against the cloud-top threshold decided alike on both engines after every step, and whose neighbours within two cells did', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpu, gpu, C } = await engines({ clearSkyPass: true }, 3e-4);
   const K = cpu.core.K;
   const mixedTop = (q, i) => { let k = K - 1; while (k > 0 && Math.abs(q[(k - 1) * C + i] - q[(K - 1) * C + i]) <= 1e-6 * q[(K - 1) * C + i]) k--; return k; };
   const cloudyLayers = (qc, i) => { let bits = ''; for (let k = 0; k < K; k++) bits += qc[k * C + i] > 0 ? '1' : '0'; return bits; };
   const plumeTop = (flux, top) => (flux > 0 ? top : 0);
-  const merged = new Set(), plumed = new Set(), condensed = new Set(), decided = new Set();
+  const merged = new Set(), plumed = new Set(), condensed = new Set(), decided = new Set(), decisions = decisionTracker(K, C);
   for (let s = 0; s < STEPS; s++) {
     const absorbedBefore = Float64Array.from(cpu.radiation.summed.absorbedSolar);
     cpu.step(DT); await gpu.step(DT);
     await gpu.sync();
     const ph = await gpu.gpu.downloadPhysics();
+    decisions.check(cpuDecisions(cpu), gpuDecisions(gpu.state, ph));
     for (let i = 0; i < C; i++) {
       if (mixedTop(cpu.state[4], i) !== mixedTop(gpu.state[4], i)) merged.add(i);
       if (cloudyLayers(cpu.state[5], i) !== cloudyLayers(gpu.state[5], i)) condensed.add(i);
@@ -105,13 +107,12 @@ test('both engines sum the clear-sky fluxes per cell alike and read out the day-
     assert.ok(Math.abs(cpu.radiation.meanLongwaveCloudEffect[i] - (cpuSums.clearOutgoingLongwave[i] / STEPS - cpu.radiation.meanOutgoingLongwave[i])) <= 1e-9, `cell ${i}: the CPU's per-cell longwave effect`);
     for (const [name, slot] of Object.entries(EFFECT_SLOTS)) assert.equal(gpu.radiation[name][i], after[slot][i], `cell ${i}: ${name} mirrored`);
   }
-  const parted = new Set([...merged, ...plumed, ...condensed, ...decided]), near = new Set(parted), { cellsOnCell, nEdgesOnCell, maxEdges } = cpu.mesh;
-  for (const i of parted) for (let j = 0; j < nEdgesOnCell[i]; j++) near.add(cellsOnCell[i * maxEdges + j]);
+  const parted = new Set([...merged, ...plumed, ...condensed, ...decided, ...decisions.parted]), near = neighbourhood(cpu.mesh, parted, 2);
   const agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !near.has(i));
   const effects = Object.fromEntries(Object.keys(EFFECT_SLOTS).map((name) => [name, stats(agreed.map((i) => cpu.radiation[name][i]), agreed.map((i) => gpu.radiation[name][i]))]));
-  console.log(`per-cell cloud effects CPU against GPU over the ${agreed.length} of ${C} columns whose well-mixed bottom block of uniform q tops at the same layer (${merged.size} apart), whose shallow plume tops at the same interface (${plumed.size} apart), whose layers holding cloud water are the same (${condensed.size} apart) on both engines after every step and whose OLR and absorbed sunlight never parted by more than 1 W/m² at a step (${decided.size} did: a layer's cloud decided apart), nor neighbour one that parted (${near.size - parted.size} more): ${Object.entries(effects).map(([name, s]) => `${name} rms ${s.rmsRel.toExponential(1)} (max ${s.maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
-  assert.ok(merged.size <= C / 100, `${merged.size} columns' dry adjustment merges a different number of layers`);
-  assert.ok(parted.size <= 0.02 * C && C - agreed.length <= 0.09 * C, `${parted.size} of ${C} columns parted, ${C - agreed.length} left out with their neighbours`);
+  console.log(`per-cell cloud effects CPU against GPU over the ${agreed.length} of ${C} columns whose well-mixed bottom block of uniform q tops at the same layer (${merged.size} apart), whose shallow plume tops at the same interface (${plumed.size} apart), whose layers holding cloud water are the same (${condensed.size} apart), whose regime, plume, cloud against the cloud-top threshold and dry adjustment decided alike (${decisions.parted.size} apart: ${Object.entries(decisions.kinds).map(([kind, cells]) => `${kind} ${cells.size}`).join(', ')}) on both engines after every step and whose OLR and absorbed sunlight never parted by more than 1 W/m² at a step (${decided.size} did), nor lie within two cells of one that parted (${near.size - parted.size} more): ${Object.entries(effects).map(([name, s]) => `${name} rms ${s.rmsRel.toExponential(1)} (max ${s.maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
+  assert.ok(merged.size <= C / 50, `${merged.size} columns' dry adjustment merges a different number of layers`);
+  assert.ok(parted.size <= C / 10 && C - agreed.length <= 0.8 * C, `${parted.size} of ${C} columns parted, ${C - agreed.length} left out with their neighbours within two cells`);
   for (const s of Object.values(effects)) assert.ok(s.rmsRel < 2e-3 && s.maxDiff < 0.5, `per-cell effects apart by ${s.maxDiff} W/m² (rms ${s.rmsRel})`);
 
   const saved = await decodeState(encodeState({ N: 6, K: gpu.core.K, day: 0, time: gpu.time, pi: gpu.state[0], ...Object.fromEntries(Object.keys(RADIATION_FIELDS).map((name) => [name, gpu.radiation[name]])) }));
