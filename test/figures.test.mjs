@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, existsSync, mkdtempSync, rmSync, copyFileSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, rmSync, copyFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -118,7 +118,29 @@ test('the deck dump matches the host port of the column on the night side and pl
 });
 
 test('the driver carries on past a failing figure and exits 1', () => {
-  const run = spawnSync('bash', [join(root, 'scripts/figures/snapshot.sh'), join(dir, 'missing_day0007.bin'), join(dir, 'driver')], { cwd: root, encoding: 'utf8', env: { ...process.env, GPULOCK: '/nonexistent' } });
+  const run = spawnSync('bash', [join(root, 'scripts/figures/snapshot.sh'), join(dir, 'in', 'missing_day0007.bin'), join(dir, 'driver')], { cwd: root, encoding: 'utf8', env: { ...process.env, GPULOCK: '/nonexistent' } });
   assert.equal(run.status, 1);
   for (const figure of ['stateMaps', 'eqsection', 'eqpanels', 'mlmdeck']) assert.match(run.stdout, new RegExp(`^${figure}: the dump failed .*missing_${figure}_day0007\\.log`, 'm'));
+});
+
+test('the driver clears a figure\'s earlier outputs before it runs', () => {
+  const out = join(dir, 'stale');
+  mkdirSync(out, { recursive: true });
+  const old = join(out, 'missing_eqsection_day0007.png');
+  writeFileSync(old, 'an earlier picture');
+  const run = spawnSync('bash', [join(root, 'scripts/figures/snapshot.sh'), join(dir, 'in', 'missing_day0007.bin'), out], { cwd: root, encoding: 'utf8', env: { ...process.env, GPULOCK: '/nonexistent' } });
+  assert.equal(run.status, 1);
+  assert.ok(!existsSync(old), 'the earlier PNG is gone');
+});
+
+test('the driver refuses an output directory in the state\'s own directory and creates nothing there', () => {
+  const states = join(dir, 'states');
+  mkdirSync(states, { recursive: true });
+  writeFileSync(join(states, 'eleven64_day0007.bin'), '');
+  for (const out of [states, join(states, 'figures')]) {
+    const run = spawnSync('bash', [join(root, 'scripts/figures/snapshot.sh'), join(states, 'eleven64_day0007.bin'), out], { cwd: root, encoding: 'utf8', env: { ...process.env, GPULOCK: '/nonexistent' } });
+    assert.equal(run.status, 2, run.stderr);
+    assert.match(run.stderr, /lies in the state's own directory/);
+  }
+  assert.deepEqual(readdirSync(states), ['eleven64_day0007.bin']);
 });

@@ -6,7 +6,9 @@
 # steps' output beside it in .json and .log. Prints each figure's path and
 # wall time, the deck's night-side LWP check and its area and box
 # statistics lines; a figure that fails prints its error and the rest
-# still run, and the exit status is then 1.
+# still run, and the exit status is then 1. A figure's earlier outputs
+# are removed before it runs, and an <outdir> in the state's own
+# directory is refused.
 #   scripts/figures/snapshot.sh <state.bin> <outdir> ["title"]
 # Environment: OCEAN (JSON options for the GPU dumps' ocean,
 # '{"everySteps":8}' as the run), GPULOCK (the lock wrapper, called as
@@ -18,6 +20,11 @@ PYTHON=${PYTHON:-python3}
 export OCEAN=${OCEAN:-'{"everySteps":8}'}
 GPULOCK=${GPULOCK:-/private/tmp/claude-501/-Users-jlhawn-git-repos-jlhawn-geodesic/4ab28226-4f31-4147-a831-f542e02bf0fc/scratchpad/gpulock.sh}
 LOCK=(); [ -x "$GPULOCK" ] && LOCK=("$GPULOCK" shared)
+physical() { local d=$1 rest=; case "$d" in /*) ;; *) d=$PWD/$d;; esac
+  while [ ! -d "$d" ]; do rest=/$(basename "$d")$rest; d=$(dirname "$d"); done
+  echo "$(cd "$d" && pwd -P)$rest"; }
+STATEDIR=$(physical "$(dirname "$STATE")")
+case "$(physical "$OUT")/" in "$STATEDIR"/*) echo "snapshot.sh: <outdir> $OUT lies in the state's own directory $STATEDIR; give one elsewhere" >&2; exit 2;; esac
 mkdir -p "$OUT" || exit 1
 NAME=$(basename "$STATE"); NAME=${NAME%.gz}; NAME=${NAME%.bin}; NAME=${NAME%.json}
 TAG=${NAME%%_day*}
@@ -27,6 +34,7 @@ DAY=$(node -e 'const b=require("fs").readFileSync(process.argv[1]);if(b.toString
 failed=0
 for FIGURE in stateMaps eqsection eqpanels mlmdeck; do
   BASE="$OUT/${TAG}_${FIGURE}_day$DAY"
+  rm -f "$BASE.json" "$BASE.log" "$BASE.png"
   start=$(date +%s)
   if ! "${LOCK[@]}" node "$HERE/$FIGURE.mjs" "$STATE" "$BASE.json" > "$BASE.log" 2>&1; then
     echo "$FIGURE: the dump failed ($BASE.log):"; tail -n 5 "$BASE.log" | sed 's/^/  /'; failed=1; continue
