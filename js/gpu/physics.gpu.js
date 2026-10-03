@@ -45,6 +45,7 @@ export function physicsConstants(o) {
   if (!(o.treelineWarmth[1] > o.treelineWarmth[0])) throw new Error(`treelineWarmth must rise from its first to its second temperature, not ${o.treelineWarmth}`);
   if (!(o.forestAridity[1] > o.forestAridity[0])) throw new Error(`forestAridity must rise from its first to its second index, not ${o.forestAridity}`);
   if (!(o.overcastInversion?.[1] > o.overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${o.overcastInversion}`);
+  if (o.deckSlab !== 'fraction' && o.deckSlab !== 'midpoint') throw new Error(`deckSlab must be 'fraction' or 'midpoint', not ${o.deckSlab}`);
   if (o.deckRest !== 'depth' && o.deckRest !== 'inversion' && o.deckRest !== 'regime') throw new Error(`deckRest must be 'depth', 'inversion' or 'regime', not ${o.deckRest}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
   for (const retired of RETIRED_OPTIONS) if (retired in o) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
@@ -58,6 +59,7 @@ export function physicsConstants(o) {
   if (o.capeClosure !== 'bechtold' && o.capeClosure !== 'threshold') throw new Error(`capeClosure must be 'bechtold' or 'threshold', not ${o.capeClosure}`);
   if (o.pcapeBoundary !== 'positive' && o.pcapeBoundary !== 'signed') throw new Error(`pcapeBoundary must be 'positive' or 'signed', not ${o.pcapeBoundary}`);
   if (o.condensation !== 'uniform' && o.condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${o.condensation}`);
+  if (o.boundaryCondensation !== 'cloudLayer' && o.boundaryCondensation !== 'uniform' && o.boundaryCondensation !== 'saturation') throw new Error(`boundaryCondensation must be 'cloudLayer', 'uniform' or 'saturation', not ${o.boundaryCondensation}`);
   const entrainment = { ...ENTRAINMENT_DEFAULTS, ...o.entrainment };
   const cloudTop = { ...CLOUD_TOP_DEFAULTS, ...o.cloudTop };
   if (o.turbulence !== 'moist' && o.turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${o.turbulence}`);
@@ -112,7 +114,7 @@ const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME};
 const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
 const RAIN_EVAP: f32 = ${o.rainEvaporation};
-const UNIFORM: bool = ${o.condensation === 'uniform'}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
+const UNIFORM: bool = ${o.condensation === 'uniform'}; const BL_UNIFORM: bool = ${o.boundaryCondensation === 'uniform'}; const BL_CLOUDLAYER: bool = ${o.boundaryCondensation === 'cloudLayer' && moistTurbulence}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
 const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
 const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
@@ -131,7 +133,7 @@ const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
 const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
-const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling};
+const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_FRACTION: bool = ${o.deckSlab === 'fraction'}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling};
 const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 const ALB_OLDSNOW: f32 = ${o.oldSnowAlbedo}; const MASKED: bool = ${!!o.snowMasking && !!o.vegetation}; const ALB_FOREST: f32 = ${o.forestSnowAlbedo}; const CLOSED_CANOPY: f32 = ${o.closedCanopy}; const CANOPY_MEM: f32 = ${o.canopyMemory};
 const TREELINE: bool = ${!!o.treeline}; const SEASON_C: f32 = ${o.seasonThreshold}; const SEASON_K: f32 = ${MELTING_POINT + o.seasonThreshold}; const SEASON_SHORTEST: f32 = ${o.minimumSeason / 365}; const SEASON_MEM: f32 = ${o.seasonMemory}; const TREE_LO: f32 = ${o.treelineWarmth[0]}; const TREE_SPAN: f32 = ${o.treelineWarmth[1] - o.treelineWarmth[0]}; const TREE_GROW: f32 = ${o.treeGrowthTime}; const TREE_DECLINE: f32 = ${o.treeDeclineTime};
@@ -724,6 +726,21 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
     heat += LV[L_DS + k] * (IN[S_TH + idx] - LHEAT * cloud / (CP * D[D_EXM + idx]));
     water += LV[L_DS + k] * (max(0.0, IN[S_Q + idx]) + cloud);
     weight += LV[L_DS + k];
+  }
+  if (MLM_FRACTION && k >= 1 && k < K - 1) {
+    let upper = mlmInterface(i, k + 1);
+    var part = k;
+    if (h < upper) { part = k + 1; }
+    if (part != capping) {
+      let pdx = part * C + i;
+      var lowerEdge = (D[D_GEO + bottom] + LV[L_GABS + K - 1] - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])) / GRAV;
+      if (part < K - 1) { lowerEdge = mlmInterface(i, part + 1); }
+      let share = clamp((h - lowerEdge) / (mlmInterface(i, part) - lowerEdge), 0.0, 1.0) - select(0.0, 1.0, part == k + 1);
+      let cloud = max(0.0, IN[S_QC + pdx]);
+      heat += share * LV[L_DS + part] * (IN[S_TH + pdx] - LHEAT * cloud / (CP * D[D_EXM + pdx]));
+      water += share * LV[L_DS + part] * (max(0.0, IN[S_Q + pdx]) + cloud);
+      weight += share * LV[L_DS + part];
+    }
   }
   if (k < 1) { mlmRest(i, resting, dt); return none; }
   let above = k * C + i; let aboveCloud = max(0.0, IN[S_QC + above]);
@@ -1324,10 +1341,12 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     if (blInterface(k - 1, i, zb) > CT_HMAX) { break; }
     if (IN[S_QC + k * C + i] > CT_THRESH && !(IN[S_QC + (k - 1) * C + i] > CT_THRESH)) { top = k; break; }
   }
+  var runBottom = -1;
   if (top >= 0) {
-    for (var k = top; k <= bottom; k++) { if (!(IN[S_QC + k * C + i] > CT_THRESH)) { break; } cooling -= PH[PH_LWH + k * C + i]; }
-    if (!(cooling > 0.0)) { top = -1; cooling = 0.0; }
+    for (var k = top; k <= bottom; k++) { if (!(IN[S_QC + k * C + i] > CT_THRESH)) { break; } cooling -= PH[PH_LWH + k * C + i]; runBottom = k; }
+    if (!(cooling > 0.0)) { top = -1; cooling = 0.0; runBottom = -1; }
   }
+  if (BL_CLOUDLAYER) { PH[PH_CLOUDK + i] = f32(runBottom); }
   var coupled = false; var lowest = bottom; var base0 = 0.0; var cloudTopZ = 0.0;
   if (top >= 0) {
     let idx = top * C + i;
@@ -1466,7 +1485,7 @@ fn saturateColumn(i: i32, pi: f32) {
     let temperature = IN[S_TH + idx] * ex;
     let pressure = pi * LV[L_SM + k];
     var change = 0.0;
-    if (UNIFORM && !(MOIST_BL && (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV < PH[PH_MIXTOP + i])) {
+    if (UNIFORM && (BL_UNIFORM || (BL_CLOUDLAYER && f32(k) <= PH[PH_CLOUDK + i]) || !(MOIST_BL && (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV < PH[PH_MIXTOP + i]))) {
       let water = IN[S_QC + idx];
       let liquidT = temperature - LHEAT * water / CP;
       let saturated = cloudSat(liquidT, pressure);

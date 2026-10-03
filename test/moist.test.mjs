@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
-import { saturationHumidity, LATENT_HEAT } from '../js/physics/moist.module.js';
+import { saturationHumidity, LATENT_HEAT, createMoistPhysics, cloudSaturation, criticalHumidityAt, LIQUID_TEMPERATURE, ICE_TEMPERATURE } from '../js/physics/moist.module.js';
 
 const model = createModel(new Grid(3));
 const { core, moist } = model;
@@ -61,6 +61,36 @@ test('saturation adjustment moves exactly the supersaturation into cloud water a
   const evaporated = -moist.condenseColumn(0, pi, theta, q, qc);
   assert.ok(evaporated > 0 && evaporated <= cloudBefore * (1 + 1e-12));
   for (let k = 0; k < K; k++) assert.ok(theta[k * C] <= thetaBefore[k * C]);
+});
+
+test('the cloud layer atop a cloud-topped boundary layer holds the uniform distribution\'s condensate, and the mixed layers below it adjust to saturation', () => {
+  const [pi, theta, q, qc] = column(290, 0.5);
+  const k0 = sigmaMid.findIndex((s) => s > 0.85);
+  core.diagnoseColumn(0, pi, theta, q, qc);
+  const humid = (k) => cloudSaturation(theta[k * C] * exnerLayer[k * C], pi[0] * sigmaMid[k], true, LIQUID_TEMPERATURE, ICE_TEMPERATURE, { qs: 0, slope: 0, liquid: 1 }).qs * 0.96;
+  q[k0 * C] = humid(k0); q[(k0 + 1) * C] = humid(k0 + 1);
+  const T = theta[k0 * C] * exnerLayer[k0 * C], p = pi[0] * sigmaMid[k0];
+  const qs = 611.2 * Math.exp(17.67 * (T - 273.15) / (T - 29.65)) * 0.622 / (p - 0.378 * 611.2 * Math.exp(17.67 * (T - 273.15) / (T - 29.65)));
+  const a = 1 / (1 + LATENT_HEAT / cp * qs * LATENT_HEAT / (287.06 / 0.622 * T * T));
+  const rhc = 0.75 + 0.225 * Math.exp(1 - (pi[0] / p) ** 2), b = a * (1 - rhc) * qs, Q = a * (q[k0 * C] - qs);
+  const expected = (Q + b) * (Q + b) / (4 * b);
+  const top = new Float64Array(C).fill(1e5), cloudLayer = new Float64Array(C).fill(k0), none = new Float64Array(C).fill(-1);
+  const condensed = (boundaryCondensation, layer) => {
+    const physics = createMoistPhysics(model.mesh, core, { boundaryTop: top, boundaryCloudLayer: layer, boundaryCondensation });
+    const t = Float64Array.from(theta), v = Float64Array.from(q), c = Float64Array.from(qc);
+    physics.condenseColumn(0, pi, t, v, c);
+    for (let k = 0; k < K; k++) {
+      const idx = k * C, ex = exnerLayer[idx];
+      assert.ok(Math.abs(t[idx] - LATENT_HEAT * c[idx] / (cp * ex) - theta[idx]) <= 1e-13 * theta[idx] && Math.abs(v[idx] + c[idx] - q[idx]) <= 1e-15, `layer ${k} keeps θ_l and q_t`);
+    }
+    return [c[k0 * C], c[(k0 + 1) * C]];
+  };
+  assert.equal(criticalHumidityAt(p, pi[0], 0.975, 0.75, 2), rhc);
+  const [cloud, below] = condensed('cloudLayer', cloudLayer), [old, oldBelow] = condensed('saturation', cloudLayer), [lost] = condensed('cloudLayer', none), [whole, wholeBelow] = condensed('uniform', none);
+  console.log(`at ${(p / 100).toFixed(0)} hPa and ${T.toFixed(2)} K, humidity 0.96 of q_s ${(1000 * qs).toFixed(4)} g/kg under RH_c ${rhc.toFixed(4)}: a ${a.toFixed(4)}, Q ${(1000 * Q).toFixed(4)}, b ${(1000 * b).toFixed(4)} g/kg, the cloud layer holds ${(1000 * expected).toFixed(5)} g/kg (model ${(1000 * cloud).toFixed(5)})`);
+  assert.ok(Math.abs(cloud - expected) <= 1e-12 * expected && expected > 1e-5, `the cloud layer holds (Q + b)²/(4b): ${cloud} against ${expected}`);
+  assert.ok(below === 0 && old === 0 && oldBelow === 0 && lost === 0, 'a mixed layer outside the cloud layer, and every mixed layer under saturation, holds no cloud below saturation');
+  assert.ok(Math.abs(whole - expected) <= 1e-12 * expected && wholeBelow > 0, 'with \'uniform\' every mixed layer holds the distribution\'s condensate');
 });
 
 test('autoconversion rains out cloud water above the threshold and conserves water', () => {

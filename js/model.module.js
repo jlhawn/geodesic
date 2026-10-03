@@ -104,7 +104,7 @@ export function createModel(gridOrMesh, {
   const gustiness = surfaceOptions.gustiness ?? 3;
   const moistPhysics = createMoistPhysics(mesh, core, {
     buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, boundaryRegime: boundaryLayer ? boundaryLayer.regime : null, deckGate: radiation.mlmGate,
-    boundaryTop: boundaryLayer && boundaryLayer.turbulence === 'moist' ? boundaryLayer.mixingTop : null, stratiform: radiation.stratiform,
+    boundaryTop: boundaryLayer && boundaryLayer.turbulence === 'moist' ? boundaryLayer.mixingTop : null, boundaryCloudLayer: boundaryLayer && boundaryLayer.turbulence === 'moist' ? boundaryLayer.cloudLayer : null, stratiform: radiation.stratiform,
     surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null, land: geography ? geography.land : null, surfaceSensible: radiation.sensibleHeat, surfaceEvaporation: radiation.evaporation,
     ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in radiationOptions).map((key) => [key, radiationOptions[key]])), ...moistOptions,
   });

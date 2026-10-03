@@ -10926,6 +10926,119 @@ checks, 9b2141a gives scripts/longwaveOverlap.mjs the level set's table.
   northern summer, so the rehearsal put trees in 0–20N and stripped
   10–50S, which a whole year's record does not.
 
+**The cloud overlay's blinking (Oct 3).** On the page's Cloud cover
+overlay low cloud blinked on and off from one step to the next.
+`scripts/cloudFlicker.mjs` (from eleven128_day1825, 64 steps of 168.75 s,
+and eleven64_day1825, 128 of 337.5 s) counts a blink where a cell's
+overlay opacity moves by more than 0.4 and back within three steps: 2.51
+% of the cells a step at N=128 and 2.14 % at N=64, 97 % of the cloudy
+runs one step long and a lag-1 autocorrelation of −0.95 in the step
+changes of the blinking cells, a two-step limit cycle. Its mechanism, from
+the adjust kernel's stages: a layer near 800–850 hPa at 0.95–0.99
+humidity above a shallow mixing top (median 0.75 km) holds the uniform
+distribution's condensate (50–140 g/m²); the next step's diagnosis finds
+it as a cooling cloud top, the regime goes decoupled or coupled and the
+mixing top rises to it (median 2.5 km); the mixing returns its water to
+vapour and the layers below the mixing top adjusted to grid saturation,
+which at 0.96 is none (99.8 % of the vanishings); with no cloud the top
+falls back and the uniform distribution condenses it again. The rain's
+conversion emptied a layer in 0.004 % of them and the plume and transport
+in under 0.1 %, so neither a limit on the conversion nor a lifetime on
+the cloud would stop it: a cloud given a lifetime would decay inside the
+mixed layer and pop back above it on a slower cycle. A second, smaller
+cycle (1.5 % of the blinks, 96–99 % of those in the Peru and Namibia
+boxes) was the deck's: its carried height h rested within 1–2 m of a
+layer's midpoint, and the slab of whole layers whose midpoints lie below
+h took that layer in on one step and out on the next, the water path
+going between 150 and 0 g/m² with the gate above 0.6 throughout.
+
+The scheme. `boundaryCondensation` 'cloudLayer' (the default): the run of
+cloudy layers that makes a column cloud-topped (the cloud top's layer
+and the cloudy layers below it whose cooling the diagnosis sums,
+`cloudLayer`, PH `CLOUDK`, diagnosed each step and not saved) holds the
+uniform distribution's condensate as the free troposphere does, and the
+other mixed layers adjust to saturation as before. The distribution is
+ECHAM6's Sundqvist one with RH_c from crs 0.975, crt 0.75 and nex 2
+(tuned at T63, not observed); no new parameter. Neither source draws the
+line at the cloud-top run: ECHAM6's scheme, and the Unified Model's
+large-scale scheme under Lock et al. (2000)'s mixing, condense every
+layer of the boundary layer, which is 'uniform' here, so 'cloudLayer' is
+this model's restriction of the published scheme to the layers whose
+cloud the boundary layer's diagnosis reads. 'uniform' gives every mixed
+layer that distribution, 'saturation' is the scheme before. Every cloudy
+layer below the mixing top keeps the variance cover in the radiation,
+so the run's condensate is the distribution's and its cover is not: at
+N=64 after 8 steps from eleven64_day1825, over the 62,637 run layers
+below the mixing top in 22,933 columns, the radiation's cover averages
+0.61 (weighted by condensate; 0.1 % at the cover floor) against the
+distribution's own 0.71, an in-cloud water of 0.20 against 0.16 g/kg.
+`deckSlab` 'fraction' (the default): the deck's slab takes the layer its
+height lies in by the share of that layer's height below h, so that the
+slab moves with h continuously, except the inversion ceiling's layer,
+which stays the free troposphere as before; 'midpoint' is the slab
+before. Both conserve θ_l and q_t layer by layer (the condensation is
+the existing linearized step). Under 'saturation' and 'midpoint' both
+engines reproduce the parent bit for bit (GPU: 16 steps from
+eleven64_day1825, state and frame digests; CPU: 24 steps at N=6).
+Tested and not kept: the Gaussian condensate of the variance cover
+(Sommeria and Deardorff 1977) below the mixing top, 1.37 % at N=128
+with a new cycle where the surface-driven top moved between 0.26 and
+1.25 km, and 4.6 mm/d of rain and SWCRE +8 W/m² on its first day;
+'uniform', 0.034 % at N=128 but SWCRE −3.7 W/m² over the three days
+below against −3.0 under 'cloudLayer'.
+
+After, the same runs: 0.010 % a step at N=128 (934 blink onsets against
+246,813) and 0.006 % at N=64 (321 against 108,484), 0.01 % and 0.10 %
+at the page's cadence (2.29 and 0.35 before); cells blinking at least
+once 0.06 % and 0.24 % (6.8 and 12.3); the lag-1 autocorrelation of the
+step change +0.06 and +0.15 over all cells (−0.92 and −0.87), −0.60 and
+−0.38 over those still blinking; one-step cloudy runs 56 % and 38 % of
+511 and 169 (97 % and 94 % of 128,778 and 56,121); of the blinks left
+93 % and 73 % the deck's. Under 'uniform' with the midpoint slab 0.034
+% and 0.11 % were left, the deck's in 99 % (Namibia 10.9 % at N=64),
+which 'fraction' took to 0.16 %. Three GPU days at N=64 from
+eleven64_day1825, days 1826–1828, before → after: albedo 0.318, 0.314, 0.311 → 0.326, 0.323, 0.321; SWCRE
+−59.3, −57.7, −56.6 → −61.8, −60.7, −60.0 W/m²; LWCRE 29.2, 29.6, 28.8 →
+29.5, 29.9, 29.2; rain 2.77, 2.77, 2.70 → 2.79, 2.78, 2.73 mm/d; total
+cover at the end of day 1828 (`scripts/cloudRegimes.mjs`, one CPU step)
+0.57 → 0.60, SE Pacific 0.28 → 0.35, Peru 0.33 → 0.43, Namibia 0.37 →
+0.50, the trades 0.52–0.55 → 0.60–0.62. A replicate (the cover floor
+moved by 10⁻⁷) stays within 0.1 W/m² of the run before, so the −3.0
+W/m² mean in SWCRE and +0.3 in LWCRE are the fix's: the cycle had held
+these clouds on half the steps, mostly over the tropical and subtropical
+seas (−2.17 of the −3.43 W/m² of day 1828 from the seas within 30° of
+the equator, −5.8 W/m² there). A step costs the same within the
+timing's noise (162.2–164.4 ms at N=128 under either, two runs each).
+
+Review of the same (Oct 3). The measurement reproduces at 930f066 and
+under 'saturation' with 'midpoint' to the count (246,813 onsets at
+N=128), and with both off the GPU state and the deck, mixing-top,
+regime, rain and flux fields hash the same as the parent's after 16
+steps at N=64 and N=128. Over those 16 steps the saturation stage keeps
+each layer's θ_l to 3.1·10⁻⁵ K and q_t to 1.9·10⁻⁹ (one f32 ulp, as in
+the parent) and the global water budget's residual is unchanged
+(2.29·10⁻⁶ against 2.28·10⁻⁶ kg/m² a step at N=64). A three-day run
+saved after its second day and continued ends byte for byte on the
+file of the run that did not stop. Two days at N=128 from
+eleven128_day1825: SWCRE −49.3, −49.4 → −52.4, −52.7 W/m², LWCRE 25.5,
+25.7 → 25.8, 26.0, rain 2.68, 2.69 → 2.70, 2.73 mm/d, ASR 241.7, 241.6
+→ 238.6, 238.2, OLR 235.1, 235.0 → 234.8, 234.6. A step costs
+161.4–164.2 ms before and 161.7–163.7 after (two runs each, exclusive
+lock). In cloudEffect.test.mjs 30 of 362 columns are left out against
+20 at the parent (5 parted on a cloud decision against 3), so it passes
+only with the bound on the excluded share at 0.09 (30/362 = 0.083); the
+precision bounds on the columns kept are unchanged and met (SWCRE rms
+4.0·10⁻⁵, max 0.07 W/m², against 2.2·10⁻⁵ and 0.02 at the parent). The
+deck blinks left are a third cycle of the same kind: at 34.8S 127.9E
+the carried height sits at 1465–1467 m across a layer's midpoint, the
+water path holds at 54–57 g/m² and the cover goes 1, 0.3, 1, 0.3 (57
+blinks in 60 steps); the free troposphere the deck entrains
+(θ_l and q_t above) is still the first layer whose midpoint lies above
+h, so the jump and with it the decoupling ratio switch with the
+midpoint. Of the 1,730 deck-driven transitions at N=128 the cover moves
+with the blink in all, the water path in 411, the count of layers below
+h changed in 1,408.
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
