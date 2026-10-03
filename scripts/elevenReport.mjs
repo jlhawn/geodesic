@@ -9,7 +9,7 @@
 // temperature moving more than DRIFT K in 30 days after day 120 (the
 // fresh start warms through its first months), sea ice
 // gone or past 25 Mkm² in a hemisphere, a driver silent for STALL minutes
-// while the instance runs, and the quarter, year and rolling-year table of
+// while the instance runs (the driver's log is stamped in UTC), and the quarter, year and rolling-year table of
 // scripts/rounds.py for the leading resolution. Nothing here touches the run.
 //   node scripts/elevenReport.mjs [runs/verda-eleven] [eleven] [gcm-eleven]
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -55,9 +55,10 @@ const stamp = (s) => new Date(s.replace(' ', 'T') + (s.endsWith('Z') ? '' : ''))
 export function report(now = new Date()) {
   const out = [], flags = [];
   const driver = text(join(DIR, `${PREFIX}.log`)).split('\n');
-  const done = driver.map((l) => l.match(/^(\S+ \S+) day (\d+) done/)).filter(Boolean).map((m) => ({ at: new Date(m[1].replace(' ', 'T')).getTime(), day: +m[2] }));
-  const stopped = driver.filter((l) => /stopped \(/.test(l)).pop();
-  const pulled = text(join(DIR, 'pull.log')).split('\n').filter((l) => /states there/.test(l)).pop();
+  const done = driver.map((l) => l.match(/^(\S+ \S+) day (\d+) done/)).filter(Boolean).map((m) => ({ at: new Date(m[1].replace(' ', 'T') + 'Z').getTime(), day: +m[2] }));
+  const lastStop = driver.findLastIndex((l) => /stopped \(/.test(l)), lastStart = driver.findLastIndex((l) => /^\S+ \S+ paired spin-up of/.test(l));
+  const stopped = lastStop > lastStart ? driver[lastStop] : null;
+  const pulled = text(join(DIR, 'pull.log')).split('\n').filter((l) => /states (there|wanted)/.test(l)).pop();
   const relaunch = text(join(homedir(), `verda-relaunch-${NAME}.log`)).split('\n').filter(Boolean);
   const statusLines = relaunch.filter((l) => / is /.test(l)), evictions = relaunch.filter((l) => /creat/.test(l)).length;
   const started = text(join(DIR, `STARTED_${PREFIX}`)).trim();
