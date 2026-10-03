@@ -2427,8 +2427,10 @@ detached OS volume's ID is in `verda --agent volume list --status detached -o js
 default) on one H100 spot instance (1H100.80S.30V, FIN-02 on Oct 2),
 with the Mac pulling every state back. `scripts/verdaEleven.sh` is the
 instance side: `setup` installs what the CUDA image lacks (node 22 or
-later, rsync, the Vulkan loader and tools, node_modules) and checks that
-nvidia-smi, vulkaninfo and node's webgpu adapter all see the NVIDIA GPU;
+later, rsync, the Vulkan loader and tools, node_modules), checks that
+nvidia-smi, vulkaninfo and node's webgpu adapter all see the NVIDIA GPU,
+and enables the systemd unit `gcm-eleven-resume.service`, which runs
+`resume` at every boot of the OS volume;
 `suite` runs every test file as a concurrent runner
 (`scripts/suiteReport.sh`) and writes each failing test's name and
 output to `eleven_suite.txt`; `bench` (`scripts/verdaBenchmark.mjs`)
@@ -2438,13 +2440,19 @@ setup, first day, steady seconds per model day, finish and state size,
 and the run's projection, per N segments × (setup + first day − steady
 + finish) + days × steady, plus one `compareStates.mjs` per round, the
 hours times PRICE (the spot price, 1.85 $/h by default) and the GB of
-states at the end; `bootstrap` does the three; `run` starts
+states at the end (the setup is a fresh start's, which on the Mac at
+N=64 took 7 s against 2 s for a segment continuing from a state, so the
+projection errs high); `bootstrap` does the three; `run` starts
 `NS="64 128" PREFIX=eleven LEVELS=bl36 PER_YEAR=36 KEEP=1000
-OCEAN='{"everySteps":8}' STRATOSPHERE=1 UNTIL=1095 scripts/pairedSpinup.sh`
-with OUT `/root/runs/eleven` on the OS volume, after checking the
-volume has room for every state still to come; `resume` is what the
-startup script `scripts/verdaElevenStartup.sh` runs on a recreated
-instance, and continues only a run that `run` started and that has
+OCEAN='{"everySteps":8}' STRATOSPHERE=1 UNTIL=1095 SYNC_CMD='sync "$1"'
+scripts/pairedSpinup.sh` with OUT `/root/runs/eleven` on the OS volume,
+after checking the volume has room for every state still to come, and
+writes `ENDED_eleven` only when pairedSpinup logs its own stop, so a
+run killed by an eviction's shutdown stays resumable; the SYNC_CMD
+fsyncs every saved state and checkpoint, which spinup.mjs renames into
+place without; `resume` is what the startup script
+`scripts/verdaElevenStartup.sh` and the unit run at boot (the lock lets
+one through), and continues only a run that `run` started and that has
 neither ended (`ENDED_eleven`) nor been stopped (`STOP_eleven`); `status`
 says where it stands. PER_YEAR 36 puts pairedSpinup's targets
 int(k·365/36 + 0.5) 10 or 11 days apart, 108 segments a resolution, with
@@ -2454,12 +2462,15 @@ eviction loses at most one segment, and UNTIL ends the run there. KEEP
 N=64 on bl36 (measured) and about four times that at N=128, some 57 GB
 in all (a 150 GB OS volume). `scripts/verdaPush.sh` sends the checkout's
 commit (a partial, sparse clone of HEAD without runs/: 53 MB, the data
-files and a .git recording the commit included) and checks it there;
+files and a .git recording the commit included) and checks it there,
+refusing while a run started there has not ended;
 `scripts/verdaPull.sh` copies the states, logs and reports into
-`runs/verda-eleven` of the main checkout every ten minutes, never
-deleting anything, and with `--verify` compares the SHA-256 of every
-file on both sides. On the Mac, from the checkout of the commit to run
-(a clean tree; `IP` is the instance's current address):
+`runs/verda-eleven` of the main checkout (PULLED below) every ten
+minutes, never deleting anything and never replacing a state it already
+has, and with `--verify` compares the SHA-256 of every file on both
+sides, pulling a differing one again and keeping the copy it replaces
+as `<file>.replaced-<time>`. On the Mac, from the checkout of the
+commit to run (a clean tree; `IP` is the instance's current address):
 
 ```
 verda --agent instance-types -o json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).find(t=>t.instance_type==="1H100.80S.30V").spot_price))'
@@ -2467,35 +2478,46 @@ verda --agent cost balance -o json
 verda --agent startup-script add --name gcm-eleven --file scripts/verdaElevenStartup.sh -o json
 verda --agent vm create --kind gpu --instance-type 1H100.80S.30V --location FIN-02 --is-spot \
   --os 24.04.cuda13.0 --os-volume-size 150 --os-volume-on-spot-discontinue keep_detached \
-  --ssh-key <key id> --hostname gcm-eleven --startup-script <script id> --wait -o json
+  --ssh-key <key id> --hostname gcm-eleven --startup-script <script id> --wait --wait-timeout 15m -o json
 NAME=gcm-eleven INSTANCE_TYPE=1H100.80S.30V LOCATION=FIN-02 OS_VOLUME_SIZE=150 SSH_KEY=<key id> \
   STARTUP_SCRIPT=<script id> nohup caffeinate -is scripts/verdaRelaunch.sh > /dev/null 2>&1 &
 scripts/verdaPush.sh
 IP=$(verda --agent vm list -o json | node scripts/verdaInstances.mjs address gcm-eleven | cut -d' ' -f3)
 ssh -o StrictHostKeyChecking=accept-new root@$IP 'cd /root/geodesic && PRICE=<price> scripts/verdaEleven.sh bootstrap --detach'
 nohup caffeinate -is scripts/verdaPull.sh > /dev/null 2>&1 &
-ssh root@$IP 'tail -n 4 /root/runs/eleven/eleven.stages.log'
-cat runs/verda-eleven/eleven_suite.txt runs/verda-eleven/eleven_benchmark.txt
+PULLED=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/runs/verda-eleven
+ssh root@$IP 'tail -n 5 /root/runs/eleven/eleven.stages.log'
+cat $PULLED/eleven_gpu.txt $PULLED/eleven_suite.txt $PULLED/eleven_benchmark.txt
 ssh root@$IP 'cd /root/geodesic && scripts/verdaEleven.sh run --detach'
 ssh root@$IP 'cd /root/geodesic && scripts/verdaEleven.sh status'
 scripts/verdaPull.sh --verify
-touch ~/STOP_verda-relaunch-gcm-eleven runs/verda-eleven/STOP_pull
+touch ~/STOP_verda-relaunch-gcm-eleven $PULLED/STOP_pull
+while pgrep -f scripts/verdaRelaunch.sh > /dev/null; do sleep 10; done
 verda --agent vm delete <instance id> --with-volumes --yes -o json
-verda --agent vm list -o json; verda --agent volume list -o json
+verda --agent vm list -o json; verda --agent volume list -o json; verda --agent volume trash -o json
 ```
 
-The relauncher starts without OS, so it only ever recreates the
-instance on its kept volume, and it remembers that volume within a poll
-of the instance running. A recreated instance has new host keys and
+If the create's wait runs out, the instance may still be coming: look
+in `vm list` before creating again. The relauncher starts without OS,
+so it only ever recreates the instance on its kept volume, and it
+remembers that volume within a poll of the instance running. A
+recreated instance has new host keys and
 perhaps a new address: take IP again and `ssh-keygen -R $IP` before the
 next ssh (the puller keeps a known-hosts file per instance id and needs
 nothing). The run is started (`run`) only once the
 benchmark's projection has been weighed against the balance. The end is
 `ENDED_eleven` in the run's directory (and pulled into
-`runs/verda-eleven`); `--verify` must then exit 0 with no problems in
-`runs/verda-eleven/verify.txt`, and only after that are the relauncher
-and the puller stopped and the instance deleted with its volume, the
-relauncher first, since it would otherwise recreate the instance. The
+PULLED); `--verify` must then exit 0 with no problems in
+`$PULLED/verify.txt`, and only after that are the relauncher
+and the puller stopped and the instance deleted with its volume, once
+the relauncher has exited, since it would otherwise recreate the
+instance. An eviction near the end leaves the OS volume detached until
+the relauncher, still running, recreates the instance on it, whose
+resume then finds `ENDED_eleven` and does nothing; the verification
+waits for that instance. A volume left detached with no instance (the
+relauncher stopped first) is deleted, once verified, by `verda --agent
+volume delete <volume id> --yes -o json`. A deleted volume waits 96
+hours in `volume trash` before it is gone. The
 instance lives for the bootstrap (about half an hour), the wait for the
 go, the run (the benchmark's hours; some 4–5 h by the Sept 28 H100
 timings scaled to bl36) and the final pull and verification (under half
