@@ -11111,7 +11111,8 @@ over 18 seeds a decision parts in 36–49 cells, 191–255 within two cells
 lies outside them; the GPU 38 and 191 (all 20 parted cells within one
 cell of a decision); bounds C/6 and 0.8 C; over the 171 kept cells
 convective rms 2.0·10⁻⁵, large-scale 7.6·10⁻⁵ and the last step's rain
-9.5·10⁻⁶ kg/m² against the unchanged 10⁻³, 10⁻³ and 3·10⁻⁴. The cloud
+9.5·10⁻⁶ kg/m² against the unchanged 10⁻³, 10⁻³ and 3·10⁻⁴, and no kept
+cell's rain apart by 10⁻³ of the largest cell's. The cloud
 effects (cloudEffect.test.mjs, its own rules joined to the shared one):
 over 12 seeds 12–27 columns parted, 0–5 whose bottom block of q merged
 apart, 143–248 left out; the GPU 24, 4 and 199; bounds C/10, C/50 and
@@ -11152,7 +11153,8 @@ blinks the cumulus' change is larger than any grid-scale part's. Under
 days at N=64 from eleven64_day1825 (days 1826–1828, the parent → 'cloudLayer'
 → 'uniform'): albedo 0.318, 0.314, 0.311 → 0.326, 0.323, 0.321 → 0.328,
 0.325, 0.324; SWCRE −59.3, −57.7, −56.6 → −61.8, −60.7, −60.0 → −62.7,
-−61.4, −60.9 W/m² (−3.8 on the parent, −3.0 under 'cloudLayer'); LWCRE
+−61.4, −60.9 W/m² (over the three days −3.8 W/m² from the parent under
+'uniform', −3.0 under 'cloudLayer'); LWCRE
 29.2, 29.6, 28.8 → 29.5, 29.9, 29.2 → 29.6, 30.0, 29.3; rain 2.77, 2.77,
 2.70 → 2.79, 2.78, 2.73 → 2.81, 2.81, 2.75 mm/d; ASR 232.1, 233.6, 234.6
 → 229.5, 230.6, 231.2 → 228.7, 229.9, 230.3; OLR 229.9, 229.7, 230.6 →
