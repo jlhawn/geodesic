@@ -235,7 +235,7 @@ test('the push stages HEAD without runs/, copies it over ssh to the address verd
   assert.ok(readFileSync(join(fake, 'ssh-hosts'), 'utf8').trim().split('\n').every((h) => h === 'root@10.0.0.1'));
 });
 
-test('the puller survives an absent instance and a new address, checks the states\' sizes, and verifies every file by SHA-256', () => {
+test('the puller survives an absent instance and a new address, checks the states\' sizes, verifies every file by SHA-256, and with KEEP_DAYS takes the newest state of each resolution and the listed days', () => {
   const fake = script('pull', { ssh: FAKE_SSH, verda: FAKE_VERDA, 'list.1.json': '[]', 'list.2.json': instance('i-1', '10.0.0.1'), 'list.3.json': instance('i-1', null, 'discontinued'), 'list.json': instance('i-2', '10.0.0.2') });
   const out = join(fake, 'remote', 'out'), dest = join(fake, 'dest');
   mkdirSync(join(out, 'eleven_bench'), { recursive: true });
@@ -273,6 +273,16 @@ test('the puller survives an absent instance and a new address, checks the state
   assert.equal(kept.length, 2, readdirSync(dest).join(' '));
   assert.deepEqual(readFileSync(join(dest, kept[1])), Buffer.alloc(1000, 7), 'verify keeps the copy it replaces');
   assert.equal(readFileSync(join(dest, kept[0])).length, 3000);
+
+  const latest = join(fake, 'latest');
+  for (const [f, n] of Object.entries({ 'eleven64_day0020.bin': 1000, 'eleven128_day0030.bin': 3000, 'eleven128_day0365.bin': 3000, 'eleven64_day0365.bin': 1000, 'eleven128_day0730.bin': 3000 })) writeFileSync(join(out, f), Buffer.alloc(n, f.length));
+  r = run('scripts/verdaPull.sh', [], { ...env, DEST: latest, ROUNDS: '1', KEEP_DAYS: '365,1095' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /3 states wanted \(0\.0 GB\): 3 here of the same size, 0 missing, 0 of another size; 3 other files; 4 states left there; newest: eleven128_day0730\.bin eleven64_day0365\.bin/);
+  assert.deepEqual(readdirSync(latest).filter((f) => f.endsWith('.bin')).sort(), ['eleven128_day0365.bin', 'eleven128_day0730.bin', 'eleven64_day0365.bin']);
+  r = run('scripts/verdaPull.sh', ['--verify'], { ...env, DEST: latest, KEEP_DAYS: '365,1095' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(readFileSync(join(latest, 'verify.txt'), 'utf8'), /^verified \S+: 6 files on root@10\.0\.0\.2:.*, 6 identical in .*, 0 problems\n/);
 
   writeFileSync(join(fake, 'list.json'), '[]');
   r = run('scripts/verdaPull.sh', ['--verify'], env);
