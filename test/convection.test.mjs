@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
-import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION } from '../js/physics/moist.module.js';
+import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, COUPLED_REGIME, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 
@@ -1117,7 +1117,13 @@ async function parity(options, { momentum = false } = {}) {
   assert.equal(flips, 0);
   assert.ok(thetaOver < 0 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta} (${thetaOver} above 1e-3 K and twice the response to one ulp), q ${worstQ}, qc ${worstQc}`);
   assert.ok(rainOver < 0, `rain ${worstRain} against ${rainScale}, ${rainOver} above 1e-4 of it and twice the response to one ulp of the saved T_v or of θ`);
-  return { cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]) };
+  const { geopotential, g } = core.diagnostics, ice = model.state[6], shared = new Uint8Array(K * C);
+  for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) {
+    const below = geopotential[k * C + i] / g < mixingTop[i], iced = ice[i] > 0 ? (concentration[i] > 0 ? concentration[i] : 1) : 0;
+    const plumed = moist.cumulusBaseFlux[i] > 0 && pi[i] * sigmaMid[k] >= moist.cumulusTop[i];
+    if (!plumed && Math.max(below ? (regime[i] === COUPLED_REGIME ? 1 : 0) : stratiform[i], iced) > 0) shared[k * C + i] = 1;
+  }
+  return { cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared };
 }
 
 test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -1142,17 +1148,19 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ plumeEntrainmentLaw: 'gregory' });
 });
 
-test('the stratiform lifetime matches between the engines on random columns of every regime, mixing top, EIS share and sea-ice cover, and keeps cloud the short lifetime would rain out', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the stratiform lifetime matches between the engines on random columns of every regime, mixing top, EIS share and sea-ice cover, and keeps cloud the short lifetime would rain out in the layers its rule gives a long share', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const long = await parity({}), short = await parity({ stratiformLifetime: null });
-  let cloudy = 0, kept = 0, gpuKept = 0;
+  let cloudy = 0, kept = 0, gpuKept = 0, shared = 0, keptShared = 0;
   for (let x = 0; x < long.cloud.length; x++) {
     if (!(short.cloud[x] > 0)) continue;
     cloudy++;
-    if (long.cloud[x] > short.cloud[x] * (1 + 1e-6)) kept++;
+    const keeps = long.cloud[x] > short.cloud[x] * (1 + 1e-6);
+    if (keeps) kept++;
     if (long.gpuCloud[x] > short.gpuCloud[x] * (1 + 1e-6)) gpuKept++;
+    if (long.shared[x]) { shared++; if (keeps) keptShared++; }
   }
-  console.log(`after one step the 3 h stratiform lifetime keeps more cloud than the 1 h lifetime alone in ${kept} of ${cloudy} cloudy layers (GPU ${gpuKept})`);
-  assert.ok(kept > cloudy / 10 && kept < cloudy && Math.abs(gpuKept - kept) <= cloudy / 100, `${kept} and ${gpuKept} of ${cloudy}`);
+  console.log(`after one step the 3 h stratiform lifetime keeps more cloud than the 1 h lifetime alone in ${kept} of ${cloudy} cloudy layers (GPU ${gpuKept}), ${keptShared} of the ${shared} whose long share is positive (outside a plume's layers, below the mixing top of a coupled or ice-covered column or above it under an EIS share)`);
+  assert.ok(keptShared > shared / 5 && kept < cloudy && Math.abs(gpuKept - kept) <= cloudy / 100, `${kept} and ${gpuKept} of ${cloudy}, ${keptShared} of the ${shared} with a long share`);
 });
 
 test('the retired Betts–Miller options are refused on both engines', async () => {
