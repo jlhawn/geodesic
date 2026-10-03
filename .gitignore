@@ -1,9 +1,9 @@
 .DS_Store
 
 runs/*
-!runs/twin128_day0810.parts.json
-!runs/twin128_day0810.bin.gz.*
-!runs/twin64_day0810.parts.json
-!runs/twin64_day0810.bin.gz.*
+!runs/eleven128_day1825.parts.json
+!runs/eleven128_day1825.bin.gz.*
+!runs/eleven64_day1825.parts.json
+!runs/eleven64_day1825.bin.gz.*
 node_modules/
 node_modules

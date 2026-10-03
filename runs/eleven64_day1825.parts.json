@@ -1,0 +1,33 @@
+{
+ "name": "eleven64_day1825",
+ "parts": [
+  {
+   "file": "eleven64_day1825.bin.gz.000",
+   "bytes": 10485760
+  },
+  {
+   "file": "eleven64_day1825.bin.gz.001",
+   "bytes": 10485760
+  },
+  {
+   "file": "eleven64_day1825.bin.gz.002",
+   "bytes": 10485760
+  },
+  {
+   "file": "eleven64_day1825.bin.gz.003",
+   "bytes": 10485760
+  },
+  {
+   "file": "eleven64_day1825.bin.gz.004",
+   "bytes": 10485760
+  },
+  {
+   "file": "eleven64_day1825.bin.gz.005",
+   "bytes": 10485760
+  },
+  {
+   "file": "eleven64_day1825.bin.gz.006",
+   "bytes": 1967371
+  }
+ ]
+}
