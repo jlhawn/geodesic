@@ -19,7 +19,7 @@ import { spawnSync } from 'node:child_process';
 
 const DIR = process.argv[2] ?? 'runs/verda-eleven', PREFIX = process.argv[3] ?? 'eleven', NAME = process.argv[4] ?? 'gcm-eleven';
 const PRICE = Number(process.env.PRICE ?? 1.8911), UNTIL = Number(process.env.UNTIL ?? 1095);
-const WIND = 150, COURANT = 0.6, DRIFT = 1.5, STALL = 20;
+const WIND = 180, COURANT = 0.7, DRIFT = 1.5, STALL = 20;
 const text = (file) => (existsSync(file) ? readFileSync(file, 'utf8') : '');
 const DAY = /^day (\d+) \(([\d.]+) min\): Ts ([-\d.]+) °C, ASR ([-\d.]+) \(atmosphere ([-\d.]+)\) OLR ([-\d.]+) W\/m².*?max wind ([-\d.]+) m\/s, precip ([-\d.]+) mm\/d, ice ([-\d.]+)% \(N ([-\d.]+) S ([-\d.]+) Mkm²\), albedo ([-\d.]+)(?:, SWCRE ([-\d.]+) LWCRE ([-\d.]+))?.*?(?:ocean h1 (\d+) m, interior ([-\d.]+) °C, currents ≤ ([-\d.]+) m\/s, transport ([-\d.]+) Sv, clamped (\d+))?/;
 
