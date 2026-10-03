@@ -1611,7 +1611,7 @@ from soil water (dry tan to wet green) with snow whitening it, and
 adds Soil water, Snow and Elevation overlays; `?land=off` keeps the
 aquaplanet and `?topography=<url>` takes another raster.
 Beyond the globe's limb the Satellite mode draws the sunlit air as a
-thin blue rim, an exponential column of about 0.35 % of the radius in
+thin blue rim, an exponential column of about 0.5 % of the radius in
 scale height lit with the same sun-elevation ramps as the surface's
 twilight, so it reddens and ends where the globe's terminator does.
 

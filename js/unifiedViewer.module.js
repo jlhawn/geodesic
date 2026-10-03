@@ -85,7 +85,7 @@ const vertexLogic = `
 // The share of sunlit air at sun elevation cosine mu, and its colour: red at the terminator, blue above it.
 const airGlow = `
 float airLit(float mu) { return smoothstep(-0.08, 0.025, mu); }
-vec3 airColour(float mu) { return mix(vec3(1.0, 0.5, 0.2), vec3(0.45, 0.65, 1.0), smoothstep(0.0, 0.125, mu)); }
+vec3 airColour(float mu, vec3 blue) { return mix(vec3(1.0, 0.5, 0.2), blue, smoothstep(0.0, 0.125, mu)); }
 `;
 
 // ----------------------------------------------------------------------------
@@ -541,7 +541,7 @@ vec3 paletteColor(float t) {
   vec3 halfway = normalize(spin * uSunDirection + toCamera);
   float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.025, mu);
   float slant = pow(1.0 - max(0.0, dot(nView, toCamera)), 2.0) * (1.0 - uBlend);
-  vec3 glow = 0.45 * slant * airLit(mu) * airColour(mu);
+  vec3 glow = 0.45 * slant * airLit(mu) * airColour(mu, vec3(0.45, 0.65, 1.0));
   vec3 lit = vColor.rgb * (uAmbient + uSun * (diffuse * sunColour + skyLight * skyColour))
     + uSun * glint * sunColour * 0.9
     + uSun * glow;
@@ -559,7 +559,7 @@ vec3 paletteColor(float t) {
    * its closest height h, lit as the globe's air is at that point. H stays
    * at least a fraction of a pixel so the rim is resolved when far out.
    */
-  const GLOW_HEIGHT = 0.0035, GLOW_PIXELS = 0.6, GLOW_CUT = 6, GLOW_SHELL = 1.1;
+  const GLOW_HEIGHT = 0.005, GLOW_PIXELS = 0.6, GLOW_CUT = 6, GLOW_SHELL = 1.1;
   const glow = {
     uModelRotation: { value: rotationMatrix },
     uSunDirection: lighting.uSunDirection,
@@ -593,7 +593,7 @@ void main() {
   float h = max(b - 1.0, 0.0) / uScaleHeight;
   float column = max(exp(-h) - exp(-${GLOW_CUT.toFixed(1)}), 0.0) / (1.0 - exp(-${GLOW_CUT.toFixed(1)}));
   float mu = dot(closest / b, mat3(uModelRotation) * uSunDirection);
-  gl_FragColor = vec4(uFade * uSun * 0.6 * column * airLit(mu) * airColour(mu), 1.0);
+  gl_FragColor = vec4(uFade * uSun * 1.2 * column * airLit(mu) * airColour(mu, vec3(0.1, 0.3, 1.0)), 1.0);
   #include <colorspace_fragment>
 }`,
   });
