@@ -10,6 +10,7 @@ import { createDisplayClock } from "./displayClock.module.js";
 import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot } from "./snapshots.module.js";
 import { Stats } from "./stats.module.js";
 import { pickDevice, isMobileBrowser, probeN, PROBE_VERSION, DESKTOP_MAX_N, MOBILE_MAX_N } from "./deviceChoice.module.js";
+import { defaultRunFor } from "./defaultRun.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
 const VERTICAL_MAX = { surface: 3, 1000: 3, 850: 10, 700: 10, 500: 10, 250: 10, 70: 3, 10: 1 };
@@ -939,7 +940,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
   const climatologyUrl = climatology === 'off' ? false : climatology ? new URL(climatology, location.href).href : null;
   const maxN = isMobileBrowser(navigator) ? MOBILE_MAX_N : DESKTOP_MAX_N;
   const begin = (choice = auto ? { N: maxN } : {}) => {
-    const run = (auto && choice.N && defaults[choice.N]) || from;
+    const run = (auto && choice.N && Object.keys(defaults).length && defaultRunFor(choice.N, defaults)) || from;
     worker.postMessage({ type: 'start', N: choice.N ?? N, from: run ? new URL(run, location.href).href : null, levels, workers: threads, engine: choice.engine ?? engine, paused: !running, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl, climatology: climatologyUrl });
   };
   const PROBE_TIMEOUT = 120000;

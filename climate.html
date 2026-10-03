@@ -183,10 +183,10 @@
   </div></div>
   <script type="module">
     import runClimate from './js/climate.module.js';
-    import { DEFAULT_RUN, DEFAULT_RUNS } from './js/defaultRun.module.js';
+    import { DEFAULT_RUN, DEFAULT_RUNS, defaultRunFor } from './js/defaultRun.module.js';
     const params = new URLSearchParams(location.search);
     const snapshot = params.get('snapshot');
-    const from = snapshot ?? params.get('from') ?? DEFAULT_RUN;
+    const from = snapshot ?? params.get('from') ?? (params.get('N') ? defaultRunFor(Number(params.get('N'))) : DEFAULT_RUN);
     const workers = Number(params.get('workers') ?? Math.max(1, (navigator.hardwareConcurrency || 4) - 2));
     const engine = params.get('engine') ?? (navigator.gpu ? 'gpu' : 'cpu');
     const number = (key) => (params.has(key) && Number.isFinite(Number(params.get(key))) ? Number(params.get(key)) : null);
