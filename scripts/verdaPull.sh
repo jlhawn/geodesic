@@ -24,7 +24,8 @@
 # Environment: NAME (gcm-eleven), PREFIX (eleven), REMOTE_OUT
 # (/root/runs/<PREFIX>), REMOTE_REPO (/root/geodesic, whose
 # scripts/verdaFiles.mjs lists the files there), DEST (runs/verda-<PREFIX>
-# of the main checkout, made if missing), INTERVAL, ROUNDS (stop after
+# of the main checkout, made if missing), INTERVAL, STREAMS (4 rsyncs of
+# the states at a time, each with its share of the list), ROUNDS (stop after
 # that many rounds), STOP_FILE (DEST/STOP_pull), LOG (DEST/pull.log), and
 # HOST, SSH_USER, VERDA and SSH of scripts/verdaHost.sh.
 cd "$(dirname "$0")/.."
@@ -33,7 +34,7 @@ NAME=${NAME:-gcm-eleven} PREFIX=${PREFIX:-eleven}
 REMOTE_OUT=${REMOTE_OUT:-/root/runs/$PREFIX} REMOTE_REPO=${REMOTE_REPO:-/root/geodesic}
 MAIN=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$REPO/.git")")
 DEST=${DEST:-$MAIN/runs/verda-$PREFIX}
-INTERVAL=${INTERVAL:-600} STOP_FILE=${STOP_FILE:-$DEST/STOP_pull} LOG=${LOG:-$DEST/pull.log}
+INTERVAL=${INTERVAL:-600} STREAMS=${STREAMS:-4} STOP_FILE=${STOP_FILE:-$DEST/STOP_pull} LOG=${LOG:-$DEST/pull.log}
 verify=; [ "$1" = --verify ] && verify=1
 . "$REPO/scripts/verdaHost.sh"
 mkdir -p "$DEST" || exit 1
@@ -52,10 +53,18 @@ round() {
   [ -s "$work/there" ] || { log "nothing in $REMOTE_OUT yet"; return 0; }
   cut -f3 "$work/there" | grep -E '\.bin$' > "$work/states"
   cut -f3 "$work/there" | grep -vE '\.bin$' > "$work/files"
-  for list in states files; do
-    [ -s "$work/$list" ] || continue
-    rsync -a $([ $list = states ] && echo --ignore-existing) --files-from="$work/$list" -e "$rsh" "$(at "$REMOTE_OUT")/" "$DEST/" 2> "$work/error" || log "rsync: $(tr '\n' ' ' < "$work/error" | cut -c1-200)"
-  done
+  if [ -s "$work/states" ]; then
+    rm -f "$work/states."*
+    awk -v n="$STREAMS" -v out="$work/states." '{ print > (out NR % n) }' "$work/states"
+    for part in "$work/states."*; do
+      [ -s "$part" ] || continue
+      rsync -a --ignore-existing --files-from="$part" -e "$rsh" "$(at "$REMOTE_OUT")/" "$DEST/" 2> "$part.error" || log "rsync: $(tr '\n' ' ' < "$part.error" | cut -c1-200)" &
+    done
+    wait
+  fi
+  if [ -s "$work/files" ]; then
+    rsync -a --files-from="$work/files" -e "$rsh" "$(at "$REMOTE_OUT")/" "$DEST/" 2> "$work/error" || log "rsync: $(tr '\n' ' ' < "$work/error" | cut -c1-200)"
+  fi
   listed_here > "$work/here"
   local summary
   summary=$(awk -F'\t' '
