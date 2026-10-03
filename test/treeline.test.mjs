@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
-import { createLandSurface, sineSeason, insolationCycle, seasonEstimate, treelineFactor, aridityFactor, SEASON_ESTIMATE } from '../js/physics/land.module.js';
+import { createLandSurface, sineSeason, insolationCycle, seasonEstimate, treelineFactor, aridityFactor, recordWeight, SEASON_ESTIMATE } from '../js/physics/land.module.js';
 import { MELTING_POINT } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
@@ -174,7 +174,7 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
   const C = cpu.mesh.nCells, before = Float64Array.from(cpu.land.canopy), lengthBefore = Float64Array.from(cpu.land.seasonLength);
   const { K, exnerLayer } = cpu.core.diagnostics;
   const target = (record, i) => treelineFactor(record.seasonLength[i], record.seasonWarmth[i], { treelineWarmth: land.treelineWarmth }) * aridityFactor(record.rainMean[i], record.demandMean[i]) * record.vegetation[i];
-  const targetGap = new Float64Array(C), airGap = new Float64Array(C), parted = new Set(), keep = 900 / land.seasonMemory;
+  const targetGap = new Float64Array(C), airGap = new Float64Array(C), parted = new Set(), keep = recordWeight(-1, 900, land.seasonMemory);
   const inSeason = (after, before, i) => Math.round((after[i] - (1 - keep) * before[i]) / keep);
   let previous = [Float64Array.from(cpu.land.seasonLength), Float64Array.from((await gpu.land.serialize()).seasonLength)];
   for (let n = 0; n < 48; n++) {

@@ -20,6 +20,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
+import { recordWeight } from '../js/physics/land.module.js';
 import { decisionTracker, cpuDecisions, neighbourhood } from '../test/helpers/decisions.mjs';
 
 const SETUP = process.env.SETUP ?? 'cloudEffect', AMP = Number(process.env.AMP ?? 1e-4);
@@ -75,7 +76,7 @@ perturb();
 const decisions = decisionTracker(K, C), own = { merged: new Set(), condensed: new Set(), radiation: new Set(), season: new Set(), snow: new Set() };
 const mixedTop = (q, i) => { let k = K - 1; while (k > 0 && Math.abs(q[(k - 1) * C + i] - q[(K - 1) * C + i]) <= 1e-6 * q[(K - 1) * C + i]) k--; return k; };
 const cloudyLayers = (qc, i) => { let bits = ''; for (let k = 0; k < K; k++) bits += qc[k * C + i] > 0 ? '1' : '0'; return bits; };
-const keep = 900 / (6 * 3600), inSeason = (after, before, i) => Math.round((after[i] - (1 - keep) * before[i]) / keep);
+const keep = recordWeight(-1, 900, 6 * 3600), inSeason = (after, before, i) => Math.round((after[i] - (1 - keep) * before[i]) / keep);
 const { exnerLayer } = a.core.diagnostics, airGap = new Float64Array(C);
 for (let n = 0; n < setup.steps; n++) {
   const absorbed = [Float64Array.from(a.radiation.summed.absorbedSolar), Float64Array.from(b.radiation.summed.absorbedSolar)];
