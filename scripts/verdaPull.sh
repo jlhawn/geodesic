@@ -7,11 +7,14 @@
 # suite and benchmark reports and markers; no .partial files, in-day
 # checkpoints or benchmark states), copies them by rsync into DEST and
 # compares sizes: a state here of the size listed there counts as pulled,
-# any other is fetched again next round. Nothing is ever deleted, here or
-# there. A round without a running instance (an eviction gap), or one that
-# fails, is logged and the next one tries again.
+# a missing one is fetched next round, and one of another size is logged
+# and left as it is, since a round never replaces a state already here.
+# Nothing is ever deleted, here or there. A round without a running
+# instance (an eviction gap), or one that fails, is logged and the next
+# one tries again.
 # --verify pulls once more and then compares the SHA-256 of every listed
-# file on both sides, pulls whatever differs again by checksum and
+# file on both sides, pulls whatever differs again by checksum, keeping
+# the copy it replaces here as <file>.replaced-<UTC time>, and
 # compares once more, writing DEST/verify.txt: each file's size and sum,
 # the problems left (missing here, different size or sum) and whether the
 # run had ended (ENDED_<PREFIX> on the instance); it exits 0 only when
@@ -47,8 +50,12 @@ round() {
   last=$target
   listing > "$work/there" 2> "$work/error" || { log "listing $REMOTE_OUT on $target failed: $(tr '\n' ' ' < "$work/error" | cut -c1-200)"; return 1; }
   [ -s "$work/there" ] || { log "nothing in $REMOTE_OUT yet"; return 0; }
-  cut -f3 "$work/there" > "$work/files"
-  rsync -a --files-from="$work/files" -e "$rsh" "$(at "$REMOTE_OUT")/" "$DEST/" 2> "$work/error" || log "rsync: $(tr '\n' ' ' < "$work/error" | cut -c1-200)"
+  cut -f3 "$work/there" | grep -E '\.bin$' > "$work/states"
+  cut -f3 "$work/there" | grep -vE '\.bin$' > "$work/files"
+  for list in states files; do
+    [ -s "$work/$list" ] || continue
+    rsync -a $([ $list = states ] && echo --ignore-existing) --files-from="$work/$list" -e "$rsh" "$(at "$REMOTE_OUT")/" "$DEST/" 2> "$work/error" || log "rsync: $(tr '\n' ' ' < "$work/error" | cut -c1-200)"
+  done
   listed_here > "$work/here"
   local summary
   summary=$(awk -F'\t' '
@@ -98,7 +105,7 @@ if [ -n "$verify" ]; then
   check
   code=$?
   if [ $code -ne 0 ] && [ -s "$work/bad" ]; then
-    rsync -a --checksum --files-from="$work/bad" -e "$rsh" "$(at "$REMOTE_OUT")/" "$DEST/" 2> "$work/error" || log "rsync: $(tr '\n' ' ' < "$work/error" | cut -c1-200)"
+    rsync -a --checksum --backup --suffix=".replaced-$(date -u '+%Y%m%dT%H%M%SZ')" --files-from="$work/bad" -e "$rsh" "$(at "$REMOTE_OUT")/" "$DEST/" 2> "$work/error" || log "rsync: $(tr '\n' ' ' < "$work/error" | cut -c1-200)"
     check "$(wc -l < "$work/bad" | tr -d ' ')"
     code=$?
   fi

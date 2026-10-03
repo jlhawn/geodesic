@@ -236,13 +236,22 @@ test('the puller survives an absent instance and a new address, checks the state
   const old = new Date('2020-01-01');
   utimesSync(join(dest, 'eleven64_day0010.bin'), old, old);
   utimesSync(join(out, 'eleven64_day0010.bin'), old, old);
+  writeFileSync(join(out, 'eleven128_day0010.bin'), Buffer.alloc(2000, 9));
+  r = run('scripts/verdaPull.sh', [], { ...env, ROUNDS: '1' });
+  assert.match(r.stdout, /2 states there \(0\.0 GB\): 1 here of the same size, 0 missing, 1 of another size; 2 other files; eleven128_day0010\.bin \(3000 of 2000 bytes\)/);
+  assert.equal(readFileSync(join(dest, 'eleven128_day0010.bin')).length, 3000, 'a round never replaces a state already here');
+
   writeFileSync(join(out, 'ENDED_eleven'), 'exit 0: stopped (day 1095 reached)\n');
   r = run('scripts/verdaPull.sh', ['--verify'], env);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const report = readFileSync(join(dest, 'verify.txt'), 'utf8');
-  assert.match(report, /^verified \S+: 5 files on root@10\.0\.0\.2:.* \(0\.00 GB\), 5 identical in .*, 0 problems\nthe run had ended: exit 0: stopped \(day 1095 reached\)\n1 files that differed were pulled again by checksum/);
+  assert.match(report, /^verified \S+: 5 files on root@10\.0\.0\.2:.* \(0\.00 GB\), 5 identical in .*, 0 problems\nthe run had ended: exit 0: stopped \(day 1095 reached\)\n2 files that differed were pulled again by checksum/);
   assert.match(report, /\n1000\t[0-9a-f]{64}\televen64_day0010\.bin\n/);
   assert.deepEqual(readFileSync(join(dest, 'eleven64_day0010.bin')), readFileSync(join(out, 'eleven64_day0010.bin')));
+  const kept = readdirSync(dest).filter((f) => /\.bin\.replaced-\d{8}T\d{6}Z$/.test(f)).sort();
+  assert.equal(kept.length, 2, readdirSync(dest).join(' '));
+  assert.deepEqual(readFileSync(join(dest, kept[1])), Buffer.alloc(1000, 7), 'verify keeps the copy it replaces');
+  assert.equal(readFileSync(join(dest, kept[0])).length, 3000);
 
   writeFileSync(join(fake, 'list.json'), '[]');
   r = run('scripts/verdaPull.sh', ['--verify'], env);
