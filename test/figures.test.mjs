@@ -69,7 +69,7 @@ test('the state maps dump every cell\'s sea, ice, land and surface fields and pl
   within(d.ts, -90, 60, 'surface temperature °C');
   within(d.ice, 0, 15, 'sea-ice thickness m');
   within(d.vegetation, 0, 1, 'vegetation'); within(d.trees, 0, 1, 'trees');
-  assert.ok(d.trees.every((t, i) => t <= d.vegetation[i] + 1e-3), 'the trees are part of the cover');
+  assert.ok(d.trees.every((t, i) => d.land[i] || t === 0 || t === null), 'trees only on land');
   plot('stateMaps', out);
 });
 
