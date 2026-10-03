@@ -10614,6 +10614,131 @@ give the digests of 49b2ceb, 8e10cff and e76c952 bit for bit.
   0.05 (ITCZ) and 0.13 (warm pool); the specification's 0.1–0.3 K/day per
   mm/day at the 0 °C layer implies 0.15–0.45.
 
+**Spin-up eleven's tree (Oct 2).** Branch integrate-c at 276d936 (the
+surface by class, the land, the surface layer by roughness, the cloud
+optics, the spectral gases, the model top, the GMTED terrain drags, bl36
+with its lid friction and longwave table) merged with sweep2 at e0d95f0
+(the convection-cloud elements 0–6) in 438491c; 306badc settles two parity
+checks, 9b2141a gives scripts/longwaveOverlap.mjs the level set's table.
+- The merge: createRadiation takes `longwaveOverlap` beside `longwaveTable`,
+  the overlap's chain running over the level set's table; cloudEffect and
+  dayMeans leave out the union of both sides' parted columns. At N=4 every
+  276d936 digest reproduces under its own options, the spectral-gas ones with
+  `longwaveOverlap` 'random' (5d1fa897, fc689d9b, 5108787c, 8cb36fdf,
+  ce584ac4, e6a0e8e2); e0d95f0's ran from 0063c54's fresh start and are
+  re-pinned (the moist defaults c3d3550c, elements 2–6 under the Rayleigh
+  top 7545db91, b131be14, d36518ff, ee85badd, then 6baaa821, 9155cbcb,
+  6174bf4c, bf86f179, a8f4d734, 1fcfa81c). From e0d95f0's own N=4 fresh
+  state the merged tree gives its Rayleigh-top digests bit for bit
+  (52b46a99, a64fbb13 with the random overlap, c70751a7, 6761a720, c5362ea5,
+  6c479c25); its defaults digest 1dbd465a does not reproduce with the
+  gravity waves at their older values (`speedStep` 4, `sourceDescent` false,
+  `lidPressure` 0: e7cec906), the flux being scaled after the spectrum's sum
+  since b6e8854: after one CPU step from eight64_day0183 2046 of 8478930
+  state values differ, by at most 7.1·10⁻¹⁵ (3.9·10⁻¹⁴ relative).
+- Suite: 64 files, 567 tests, concurrently; 62 files passed at once.
+  dayMeans' per-cell albedo (0.00223 against 10⁻³ over all columns) and
+  gpuModel's deckRest 'regime' water (rms 3.0·10⁻³ against 10⁻³; one column
+  topping at 84404 Pa on the CPU and 75604 Pa on the GPU, 1.6·10⁻⁴ over the
+  other 361; 1.7·10⁻⁴ and 2.0·10⁻⁴ on the parents) now leave out the
+  columns whose shallow plume parted (at most 2 % asserted).
+- Proofs, CPU, ocean off: three N=64 steps from eight64_day0183 remapped to
+  bl36 with `capeClosure` 'threshold', `pcapeBoundary` 'signed',
+  `excessVelocity` 'convective', `plumeSourceDepth` 'boundaryLayer',
+  `cumulusClosure` 0.06, `convectionType` 'top', `plumeEntrainmentLaw`
+  'gregory', `plumePhase` 'liquid', `plumeConversion` 'zhangMcFarlane' and
+  `longwaveOverlap` 'random' give 276d936's state digests bit for bit
+  (f10554f5, 18df3a04, 621da31e); three steps from eight64_day0183 (bl34)
+  with `gravityWaves` false give e0d95f0's (e386cf8d, 0bf5043a, e7e8c953).
+- Closure on the bl36 state (scratch closure script, 40962 columns at four
+  times of day): CPU |ASR + reflected − incoming| 4.5·10⁻¹³, layers' SW
+  6.8·10⁻¹³, LW 5.4·10⁻¹³, surface flux 9.1·10⁻¹³, column heating 1.4·10⁻¹²,
+  vapour 1.4·10⁻¹² W/m²; GPU 1.8·10⁻⁴, 1.2·10⁻³ (LW), 1.5·10⁻⁴, one physics
+  kernel's heating 8.4·10⁻⁴ and vapour 1.05·10⁻⁴ W/m². The longwave
+  overlap's recomputation repeats the OLR to 6.6·10⁻¹⁶ and the surface
+  downward longwave to 5.2·10⁻¹⁶. The moist step alone over 16 steps: CPU
+  per column c_p T + L q (with L_f of the convective snow) to 8.4·10⁻¹⁶ and
+  water to 8.0·10⁻¹⁶; GPU 3.7·10⁻⁵ (the check counts no L_f; its worst
+  column, 60.8S 48.2W, rains 0.17 kg/m² in a step) and 1.6·10⁻⁶.
+- Engine parity from that state after 1, 4 and 16 steps: convection type
+  (none, shallow, deep by a top above 700 hPa) apart on 2, 3 and 21 of 40962
+  columns (8351, 7776, 8566 fired), the same type with tops an interface
+  apart on 0, 3, 16, regimes apart on 0, 2, 10; lowest layer T rms 4.0·10⁻⁵,
+  6.1·10⁻⁴, 1.4·10⁻³ K; top eight layers' u rms 8.6·10⁻⁵, 2.1·10⁻⁴,
+  4.8·10⁻⁴ m/s; gravity-wave acceleration rms 7.5·10⁻⁴ to 1.6·10⁻³ m/s/day
+  of up to 25.
+- Three one-day GPU segments equal one three-day segment byte for byte
+  (N=64, bl36, ocean every 8 steps, STRATOSPHERE=1; the snapshot carries
+  `subcloudVirtual`, 491544 values). bl34 states load and step:
+  eight64_day0183 for three days (day 186 ASR 246.0, OLR 236.8, rain 1.58
+  mm/d, SWCRE −47.7, LWCRE 23.2; e0d95f0 246.1, 236.9, 1.58, −47.6, 23.2;
+  276d936 on the bl36 remap 241.3, 233.7, 1.70, −52.4, 25.8),
+  eight128_day0183 for 64 steps, finite, largest |u| 76.0 m/s.
+- Smoke test of eleven's configuration: `NS="64 128" PREFIX=smoke
+  LEVELS=bl36 PER_YEAR=36 KEEP=200 OCEAN='{"everySteps":8}' STRATOSPHERE=1
+  scripts/pairedSpinup.sh`, fresh from the atlas (WOA, 29078 and 116471 sea
+  cells), STOP_smoke placed while N=64's first segment ran, so the driver
+  ended after it (day 10); N=128's first segment then ran as the driver
+  runs it with DAYS=2. Both log the land's neutral start with its record at
+  0 days, read data/subgrid_N64.bin and data/subgrid_N128.bin and the bl36
+  longwave table (34 g-points); clamped 0 on every day, no NaN; the day-10
+  and day-2 states reload and step 16 steps finite (largest |u| 96.9 and
+  82.1 m/s). Day means:
+
+| N, day | ASR | OLR | rain mm/d | albedo | SWCRE | LWCRE |
+|---|---|---|---|---|---|---|
+| 64, 1 | 218.4 | 191.8 | 2.91 | 0.359 | −73.2 | 53.3 |
+| 64, 2 | 214.9 | 185.7 | 4.63 | 0.369 | −76.8 | 58.3 |
+| 64, 3 | 224.1 | 195.9 | 4.44 | 0.342 | −67.6 | 51.0 |
+| 64, 4 | 228.8 | 199.5 | 4.46 | 0.328 | −62.8 | 49.6 |
+| 64, 5 | 230.9 | 202.2 | 4.41 | 0.322 | −60.7 | 48.4 |
+| 64, 6 | 230.6 | 205.1 | 4.21 | 0.323 | −61.1 | 46.8 |
+| 64, 7 | 230.0 | 207.6 | 3.85 | 0.324 | −61.7 | 45.2 |
+| 64, 8 | 230.1 | 210.9 | 3.54 | 0.324 | −61.6 | 42.3 |
+| 64, 9 | 230.6 | 213.8 | 3.37 | 0.323 | −61.1 | 39.8 |
+| 64, 10 | 230.5 | 215.1 | 3.30 | 0.323 | −61.1 | 38.9 |
+| 128, 1 | 227.1 | 194.6 | 3.37 | 0.333 | −64.5 | 51.4 |
+| 128, 2 | 226.3 | 192.8 | 4.78 | 0.335 | −65.4 | 52.7 |
+
+  Top six layers (0.148–14 hPa), largest wind and Courant number
+  horizontal/vertical over the days: N=64 75 m/s, 0.24/0.09 (day 10: 47,
+  0.15/0.03); N=128 85 m/s, 0.27/0.10. scripts/tropicalHeating.mjs on
+  smoke64_day0010 (replay mismatches 0 of 722432; heat closes to 1.1·10⁻¹³
+  K and q_t to 2.2·10⁻¹⁹ a step): rain, convective share, firing, Q1R
+  centroid, stratiform share: Pacific ITCZ 7.06 mm/d, 0.96, 0.79, 654 hPa,
+  0.03; warm pool 7.16, 0.95, 0.60, 552, 0.04; SPCZ 7.73, 0.58, 0.42, 608,
+  0.30; N Pacific trades 3.82, 0.94, 0.66, 659, 0.04; Amazon 0.42, 0.45,
+  0.04, 751, 0.25; global rain 3.16 mm/d (convective 1.43).
+- Pace (Apple GPU of this Mac, exclusive lock, 128 steps after 16 from
+  eight64/eight128_day0183 on bl36, ocean every 8 steps, alternated twice):
+  N=64 30.09, 30.07 ms a step against 276d936's 26.67, 26.62 (+13 %), the
+  physics pass 15.3 against 11.9 ms; N=128 127.27, 126.97 against 115.19,
+  115.30 ms (+10 %), the physics pass 58.4 against 46.6 ms. At N=128 512
+  steps a model day: 65.1 s of steps; a one-day segment from
+  eight128_day0183 on bl36 (STRATOSPHERE=1) logs the day at 1.3 min and
+  saves day 184 82.4 s after its 8 s of setup, 90.8 s of process wall.
+- On by default: the correlated longwave on the level set's table with the
+  exponential-random overlap; CLIRAD gases with the AFGL ozone and
+  near-infrared Rayleigh; the cloud optics; the PDF cloud cover with
+  exponential-random overlap; the mixed-layer deck by regime
+  (`deckRest` 'regime'); the moist boundary layer with the implicit drag;
+  the surface layer by roughness with the convective gust and land
+  humidity by wetness; the land's trees by moisture, the treeline,
+  grassland, soil darkening, snow ageing and masking, the neutral start and
+  its jumps at days 365 and 730; snow and ice albedo by temperature and
+  age; the uniform condensation with ice saturation, the falling ice at
+  2.5 and the stratiform lifetime; the Bechtold closure with PCAPE_bl at
+  least 0, the deep source from the lowest 50 hPa with the IFS excess,
+  Grant's shallow closure (0.03), the test-parcel type, the IFS
+  entrainment, the mixed-phase plume with melting and the Sundqvist
+  conversion; the eddy sponge from 78 Pa and the GISS lid friction on bl36;
+  the gravity waves launched as cg_drag does (source descending with
+  latitude, 2 m/s phase speeds, the lid's flux spread); the mountains'
+  blocking and wave drag and the turbulent form drag on the GMTED fields.
+  Off by evidence: the latitude-dependent gravity-wave flux (`northFlux`,
+  `southFlux` 0, `equatorialFlux` = `flux`); the ice fall at 3.29 with
+  homogeneous nucleation (`iceFall` 2.5, `iceNucleation` false).
+
 ### M23 — The equatorial ocean — in progress
 
 What the atmosphere's changes will not fix on their own. The M21
