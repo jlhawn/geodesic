@@ -107,7 +107,7 @@ install() {
   if [ "$(node_major)" -lt 22 ]; then
     apt_ready "node 22 or later" || return 1
     command -v curl > /dev/null || apt_install curl ca-certificates || return 1
-    curl -fsSL https://deb.nodesource.com/setup_22.x | $SUDO -E bash - > /dev/null && apt_install nodejs || { say "setup: installing node failed"; return 1; }
+    curl -fsSL https://deb.nodesource.com/setup_22.x | ${SUDO:+$SUDO -E} bash - > /dev/null && apt_install nodejs || { say "setup: installing node failed"; return 1; }
   fi
   command -v rsync > /dev/null || { apt_ready rsync && apt_install rsync; } || return 1
   if [ "$(uname)" = Linux ] && ! command -v vulkaninfo > /dev/null; then apt_ready vulkaninfo && apt_install libvulkan1 vulkan-tools || return 1; fi
