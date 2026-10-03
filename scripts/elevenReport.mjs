@@ -9,11 +9,13 @@
 // temperature moving more than DRIFT K in 30 days after day 120 (the
 // fresh start warms through its first months), sea ice
 // gone or past 25 Mkm² in a hemisphere, a driver silent for STALL minutes
-// while the instance runs. Nothing here touches the run.
+// while the instance runs, and the quarter, year and rolling-year table of
+// scripts/rounds.py for the leading resolution. Nothing here touches the run.
 //   node scripts/elevenReport.mjs [runs/verda-eleven] [eleven] [gcm-eleven]
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 
 const DIR = process.argv[2] ?? 'runs/verda-eleven', PREFIX = process.argv[3] ?? 'eleven', NAME = process.argv[4] ?? 'gcm-eleven';
 const PRICE = Number(process.env.PRICE ?? 1.8911), UNTIL = Number(process.env.UNTIL ?? 1095);
@@ -101,6 +103,8 @@ export function report(now = new Date()) {
   if (silent !== null && silent > STALL && !stopped && /running/.test(statusLines[statusLines.length - 1] ?? '')) flags.push(`the driver has not finished a round for ${silent.toFixed(0)} min while the instance runs`);
   if (stopped && !/day \d+ reached/.test(stopped)) flags.push(`the driver stopped: ${stopped}`);
   if (pulled) out.push(`puller: ${pulled.replace(/^\S+ \S+ /, '').replace(/; newest:.*/, '')}, last round ${pulled.slice(0, 19)}`);
+  const rounds = spawnSync('python3', [join(import.meta.dirname, 'rounds.py'), join(DIR, `${PREFIX}${lead}.log`)], { encoding: 'utf8', env: { ...process.env, SEGMENTS: '0' } });
+  if (rounds.status === 0 && rounds.stdout.trim()) out.push(rounds.stdout.trim());
   out.push(flags.length ? `FLAGS: ${flags.join(' | ')}` : 'no flags: no NaN, no stop, no clamped edges, winds and Courant bounded, Ts drift within limits, both ice caps present');
   return out.join('\n');
 }
