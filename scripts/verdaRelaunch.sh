@@ -1,21 +1,23 @@
 #!/bin/bash
-# Keeps one Verda spot instance alive for scripts/asyncSpinup.sh. Every POLL
-# seconds it lists the account's instances (verda --agent vm list -o json)
-# and looks at the one called NAME:
+# Keeps one Verda spot instance alive for a spin-up driver
+# (scripts/asyncSpinup.sh, scripts/verdaEleven.sh). Every POLL seconds it
+# lists the account's instances (verda --agent vm list -o json) and looks
+# at the one called NAME:
 #   running                    left alone; its OS volume is remembered in
 #                              STATE_FILE
-#   new, ordered, provisioning, validating or deleting
+#   new, ordered, provisioning, validating, deleting or unknown
 #                              waited for
 #   offline                    started (verda vm start)
-#   absent, discontinued, failed or anything else
+#   absent, discontinued, error, no_capacity or anything else
 #                              created again as a spot instance whose OS
 #                              volume is kept detached when the spot
 #                              instance is discontinued: on the remembered
 #                              OS volume (or OS_VOLUME) once it is detached,
-#                              on the image OS while none is known yet.
+#                              at that volume's own size, on the image OS
+#                              while none is known yet.
 # The OS volume holds the repository, node_modules and the run's files, so
-# the startup script (STARTUP_SCRIPT) only has to cd there and start
-# asyncSpinup.sh, which continues from the newest files. Every action and
+# the startup script (STARTUP_SCRIPT) only has to cd there and start the
+# driver, which continues from the newest files. Every action and
 # every change of the instance's status is logged with a timestamp to LOG
 # and stdout. It stops at STOP_FILE.
 #
@@ -24,7 +26,8 @@
 #
 # Environment: NAME (hostname), INSTANCE_TYPE, LOCATION (FIN-01), OS (the
 # image of the first instance), OS_VOLUME (a detached OS volume to start
-# from, in LOCATION; otherwise the one remembered), OS_VOLUME_SIZE (100 GiB),
+# from, in LOCATION; otherwise the one remembered), OS_VOLUME_SIZE (100 GiB, for
+# a volume made from the image and a reused one the volume list gives no size),
 # SSH_KEY and STARTUP_SCRIPT (IDs from verda ssh-key list and verda
 # startup-script list), POLL (120 s), STATE_FILE ($HOME/.verda-relaunch-NAME),
 # LOG ($HOME/verda-relaunch-NAME.log), STOP_FILE ($HOME/STOP_verda-relaunch-NAME),
@@ -40,21 +43,21 @@ verda_json() { local out; out=$($VERDA --agent "$@" -o json 2>&1) || { log "verd
 remembered() { [ -n "$OS_VOLUME" ] && echo "$OS_VOLUME" || { [ -f "$STATE_FILE" ] && cat "$STATE_FILE"; }; }
 
 create() {
-  local os=$OS volume volumes status out
+  local os=$OS size=$OS_VOLUME_SIZE volume volumes status listed out
   volume=$(remembered)
   if [ -n "$volume" ]; then
     volumes=$(verda_json volume list) || return
-    status=$(echo "$volumes" | node "$HELPER" volume "$volume")
+    read -r status listed <<< "$(echo "$volumes" | node "$HELPER" volume "$volume")"
     case "$status" in
-      detached) os=$volume ;;
+      detached) os=$volume; [ -n "$listed" ] && [ "$listed" != - ] && size=$listed ;;
       "") log "OS volume $volume is not listed; not creating $NAME on another (set OS_VOLUME, or remove $STATE_FILE to start from $OS)"; return ;;
       *) log "waiting for OS volume $volume to detach (it is $status)"; return ;;
     esac
   fi
   [ -n "$os" ] || { log "no OS volume known and no OS image set; not creating $NAME"; return; }
-  log "creating $NAME: $INSTANCE_TYPE spot in $LOCATION on $os"
+  log "creating $NAME: $INSTANCE_TYPE spot in $LOCATION on $os ($size GiB)"
   if out=$($VERDA --agent vm create --kind gpu --instance-type "$INSTANCE_TYPE" --location "$LOCATION" --is-spot \
-      --os "$os" --os-volume-size "$OS_VOLUME_SIZE" --os-volume-on-spot-discontinue keep_detached \
+      --os "$os" --os-volume-size "$size" --os-volume-on-spot-discontinue keep_detached \
       --ssh-key "$SSH_KEY" --hostname "$NAME" --startup-script "$STARTUP_SCRIPT" --wait -o json 2>&1); then
     log "created $NAME: $(echo "$out" | tr '\n' ' ' | cut -c1-300)"
   else
@@ -77,7 +80,7 @@ while [ ! -f "$STOP_FILE" ]; do
           echo "$volume" > "$STATE_FILE"
           log "remembering OS volume $volume of $NAME"
         fi ;;
-      new|ordered|provisioning|validating|deleting) ;;
+      new|ordered|provisioning|validating|deleting|unknown) ;;
       offline)
         log "starting $NAME ($id)"
         verda_json vm start "$id" > /dev/null && log "started $NAME" ;;

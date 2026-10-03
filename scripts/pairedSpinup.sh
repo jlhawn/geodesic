@@ -5,7 +5,9 @@
 # PER_YEAR snapshot days of the 365-day model year (quarters: days 91, 183,
 # 274, 365, 456, ...), keeping its KEEP (default 4) newest snapshots, and then
 # scripts/compareStates.mjs appends the round's states side by side to
-# <OUT>/<PREFIX>_compare.md. Stops at <OUT>/STOP_<PREFIX>. A resolution
+# <OUT>/<PREFIX>_compare.md. Stops at <OUT>/STOP_<PREFIX>, and with UNTIL
+# set once every resolution still running has reached that day (the first
+# snapshot day at or past it). A resolution
 # that hits NaN drops out and the others go on; any other failure is
 # retried three times from the last snapshot. The environment reaches
 # scripts/spinup.mjs: a fresh start's land holds its trees and topsoil carbon
@@ -16,7 +18,7 @@
 # 'none'; or model days such as 365,730).
 #   NS="64 128" PER_YEAR=4 PREFIX=twin scripts/pairedSpinup.sh
 cd "$(dirname "$0")/.."
-NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-4} PREFIX=${PREFIX:-twin} KEEP=${KEEP:-4}
+NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-4} PREFIX=${PREFIX:-twin} KEEP=${KEEP:-4} UNTIL=${UNTIL:-}
 export OUT=${OUT:-$PWD/runs}
 LOG=$OUT/$PREFIX.log
 alive=$NS
@@ -29,6 +31,7 @@ note "paired spin-up of N=$NS, $PER_YEAR snapshots a year, commit $(git rev-pars
 while [ ! -f "$OUT/STOP_$PREFIX" ] && [ -n "$alive" ]; do
   lowest=
   for n in $alive; do day=$(dayOf "$n"); [ -z "$lowest" ] || [ "$day" -lt "$lowest" ] && lowest=$day; done
+  [ -n "$UNTIL" ] && [ "$lowest" -ge "$UNTIL" ] && break
   target=$(awk -v d="$lowest" -v q="$PER_YEAR" 'BEGIN { for (k = 1; ; k++) { t = int(k * 365 / q + 0.5); if (t > d) { print t; exit } } }')
   for n in $alive; do
     [ -f "$OUT/STOP_$PREFIX" ] && break
@@ -51,4 +54,4 @@ while [ ! -f "$OUT/STOP_$PREFIX" ] && [ -n "$alive" ]; do
     note "day $target done:$(for f in $states; do printf ' %s' "$(basename "$f")"; done)"
   fi
 done
-note "stopped ($( [ -f "$OUT/STOP_$PREFIX" ] && echo "STOP_$PREFIX" || echo 'no resolution left'))"
+note "stopped ($( [ -f "$OUT/STOP_$PREFIX" ] && echo "STOP_$PREFIX" || { [ -n "$alive" ] && echo "day $UNTIL reached"; } || echo 'no resolution left'))"
