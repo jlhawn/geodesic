@@ -529,7 +529,8 @@ vec3 paletteColor(float t) {
   // reaches a few degrees past the terminator, and the sunlit air seen at a slant toward the limb.
   vec3 n = normalize(position);
   float mu = dot(n, uSunDirection);
-  float airMass = 1.0 / (min(2.0 * max(mu, 0.0), 1.0) + 0.025);
+  float sunHeight = max(mu, 0.0);
+  float airMass = 1.0 / (sunHeight * (2.0 - 2.0 * min(sunHeight, 0.5)) + 0.025);
   vec3 sunColour = exp(-vec3(0.06, 0.12, 0.29) * (airMass - 1.0));
   float groundLight = max(0.0, dot(normalize(slope), uSunDirection)) * (1.0 - 0.7 * surface.z);
   float diffuse = mix(groundLight, max(0.0, mu), surface.y);
