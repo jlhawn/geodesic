@@ -53,7 +53,7 @@ if [ "$target" != local ]; then
   remote "{ command -v rsync && command -v git; } > /dev/null || { apt-get -o DPkg::Lock::Timeout=600 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y -qq rsync git; } > /dev/null" || { echo "rsync or git is missing on $target and could not be installed" >&2; exit 1; }
 fi
 remote "mkdir -p '$REMOTE_REPO'" || { echo "cannot reach $target" >&2; exit 1; }
-rsync -a --exclude node_modules -e "$rsh" "$STAGE/repo/" "$(at "$REMOTE_REPO")/" || { echo "rsync to $target failed" >&2; exit 1; }
+rsync -a --no-owner --no-group --exclude node_modules -e "$rsh" "$STAGE/repo/" "$(at "$REMOTE_REPO")/" || { echo "rsync to $target failed" >&2; exit 1; }
 
 sizes() { (cd "$1" && git rev-parse HEAD && for f in data/*; do echo "$(wc -c < "$f" | tr -d ' ') $f"; done); }
 here=$(sizes "$STAGE/repo")
