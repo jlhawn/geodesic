@@ -184,6 +184,20 @@ test('verdaEleven keeps one GPU mode at a time, takes over a lock whose process 
   assert.ok(existsSync(join(out, 'ENDED_eleven')));
 });
 
+test('verdaEleven autostart installs and enables a unit that resumes the run at every boot', () => {
+  const at = script('systemd', { systemctl: '#!/bin/bash\necho "$*" >> "$(dirname "$0")/calls"\n' });
+  mkdirSync(join(at, 'units'), { recursive: true });
+  const out = join(dir, 'autostart');
+  const r = eleven(out, ['autostart'], { SYSTEMD_DIR: join(at, 'units'), SYSTEMCTL: join(at, 'systemctl'), HOME: '/root' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /autostart: gcm-eleven-resume\.service enabled/);
+  const unit = readFileSync(join(at, 'units', 'gcm-eleven-resume.service'), 'utf8');
+  assert.match(unit, new RegExp(`\\nEnvironment=HOME=/root OUT=${out} PREFIX=eleven\\n`));
+  assert.match(unit, new RegExp(`\\nExecStart=/bin/bash ${join(root, 'scripts', 'verdaEleven.sh').replace(/\//g, '\\/')} resume\\n`));
+  assert.match(unit, /\nType=simple\n[\s\S]*\nTimeoutStopSec=300\n[\s\S]*\nWantedBy=multi-user\.target\n$/);
+  assert.equal(readFileSync(join(at, 'calls'), 'utf8'), 'daemon-reload\nenable gcm-eleven-resume.service\n');
+});
+
 const FAKE_SSH = `#!/bin/bash
 while [ $# -gt 0 ]; do case "$1" in -o|-i|-p|-l|-F) shift 2 ;; -*) shift ;; *) break ;; esac; done
 echo "$1" >> "$FAKE/ssh-hosts"; shift

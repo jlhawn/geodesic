@@ -9,7 +9,14 @@
 #              npm ci, with build-essential and python3 only if that
 #              fails), then checks that node's webgpu reaches the GPU:
 #              nvidia-smi, vulkaninfo's device and the adapter's vendor
-#              (EXPECT_VENDOR, nvidia on Linux), into OUT/<PREFIX>_gpu.txt
+#              (EXPECT_VENDOR, nvidia on Linux), into OUT/<PREFIX>_gpu.txt;
+#              and autostart
+#   autostart  where systemd runs (Linux, or SYSTEMD_DIR set), installs and
+#              enables gcm-<PREFIX>-resume.service in SYSTEMD_DIR
+#              (/etc/systemd/system) through SYSTEMCTL (systemctl): resume
+#              at every boot of the OS volume, a restart of the same
+#              instance included, on which Verda's startup script may not
+#              run again
 #   suite      scripts/suiteReport.sh: every test file as a concurrent
 #              runner, failures with their output in OUT/<PREFIX>_suite.txt
 #   bench      scripts/verdaBenchmark.mjs: fresh starts of CASES timed, the
@@ -24,7 +31,8 @@
 #              pairedSpinup logs its own stop (day UNTIL reached,
 #              STOP_<PREFIX>, or no resolution left); killed by a signal,
 #              as at an eviction's shutdown, it leaves no mark
-#   resume     what the startup script runs on a new instance: if run was
+#   resume     what the startup script and the autostart unit run at boot
+#              (a second one exits on the lock): if run was
 #              started here and has neither ended nor been stopped, waits
 #              up to GPU_WAIT seconds for the GPU and runs on from the
 #              newest files; otherwise nothing
@@ -58,7 +66,7 @@ SUDO=; [ "$(id -u)" -ne 0 ] && SUDO=sudo
 
 mode= detach=
 for arg in "$@"; do case "$arg" in --detach) detach=1 ;; *) mode=$arg ;; esac; done
-case "$mode" in setup|suite|bench|bootstrap|run|resume|status) ;; *) echo "usage: $0 setup|suite|bench|bootstrap|run|resume|status [--detach]" >&2; exit 2 ;; esac
+case "$mode" in setup|autostart|suite|bench|bootstrap|run|resume|status) ;; *) echo "usage: $0 setup|autostart|suite|bench|bootstrap|run|resume|status [--detach]" >&2; exit 2 ;; esac
 mkdir -p "$OUT"
 
 say() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" | tee -a "$OUT/$PREFIX.stages.log"; }
@@ -107,6 +115,19 @@ install() {
     npm ci --no-audit --no-fund > /dev/null 2>&1 || { apt_ready "a compiler for npm ci" && apt_install build-essential python3 && npm ci --no-audit --no-fund > /dev/null; } || { say "setup: npm ci failed"; return 1; }
   fi
   say "setup: node $(node --version), $(rsync --version 2>/dev/null | head -1 | cut -c1-40), webgpu $(node -p 'require("./node_modules/webgpu/package.json").version' 2>/dev/null)"
+}
+
+autostart() {
+  local dir=${SYSTEMD_DIR:-/etc/systemd/system} ctl=${SYSTEMCTL:-systemctl} unit=gcm-$PREFIX-resume.service as=
+  if [ "$(uname)" != Linux ] && [ -z "$SYSTEMD_DIR" ]; then say "autostart: no systemd here; nothing installed"; return 0; fi
+  command -v "$ctl" > /dev/null || { say "autostart: $ctl is missing; the startup script alone resumes the run"; return 0; }
+  [ -w "$dir" ] || as=$SUDO
+  printf '%s\n' '[Unit]' "Description=Resume the paired spin-up $PREFIX at boot" 'Wants=network-online.target' 'After=network-online.target' '' \
+    '[Service]' 'Type=simple' "Environment=HOME=$HOME OUT=$OUT PREFIX=$PREFIX" "WorkingDirectory=$PWD" "ExecStart=/bin/bash $SELF resume" \
+    "StandardOutput=append:$OUT/$PREFIX.resume.out" "StandardError=append:$OUT/$PREFIX.resume.out" 'TimeoutStopSec=300' '' \
+    '[Install]' 'WantedBy=multi-user.target' | $as tee "$dir/$unit" > /dev/null || { say "autostart: cannot write $dir/$unit"; return 1; }
+  $as "$ctl" daemon-reload && $as "$ctl" enable "$unit" > /dev/null 2>&1 || { say "autostart: $ctl could not enable $unit"; return 1; }
+  say "autostart: $unit enabled ($dir), resume runs at every boot"
 }
 
 gpu_check() {
@@ -216,10 +237,11 @@ status() {
 }
 
 case "$mode" in
-  setup) lock; install && gpu_check ;;
+  setup) lock; install && { autostart; gpu_check; } ;;
+  autostart) autostart ;;
   suite) lock; suite ;;
   bench) lock; bench ;;
-  bootstrap) lock; install && gpu_check || exit 1; suite; bench ;;
+  bootstrap) lock; install && { autostart; gpu_check; } || exit 1; suite; bench ;;
   run) lock; gpu_check && run ;;
   resume) [ -f "$OUT/STARTED_$PREFIX" ] && [ ! -f "$OUT/ENDED_$PREFIX" ] && [ ! -f "$OUT/STOP_$PREFIX" ] && lock; resume ;;
   status) status ;;
