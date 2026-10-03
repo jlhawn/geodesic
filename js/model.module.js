@@ -104,7 +104,7 @@ export function createModel(gridOrMesh, {
   const moistPhysics = createMoistPhysics(mesh, core, {
     buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, boundaryRegime: boundaryLayer ? boundaryLayer.regime : null, deckGate: radiation.mlmGate,
     boundaryTop: boundaryLayer && boundaryLayer.turbulence === 'moist' ? boundaryLayer.mixingTop : null, stratiform: radiation.stratiform,
-    surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null,
+    surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null, land: geography ? geography.land : null, surfaceSensible: radiation.sensibleHeat, surfaceEvaporation: radiation.evaporation,
     ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in radiationOptions).map((key) => [key, radiationOptions[key]])), ...moistOptions,
   });
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
@@ -196,7 +196,8 @@ export function createModel(gridOrMesh, {
           let frozen;
           if (land && landMask[i]) { land.deposit(i, amount, airTemperature, dt); frozen = airTemperature < MELTING_POINT; }
           else frozen = seaIce.deposit(i, amount, airTemperature, state[6], state[3]);
-          if (frozen) state[1][bottom + i] += seaIce.latentHeatFusion * amount * g / (cp * state[0][i] * dSigma[K - 1] * exner[bottom + i]);
+          const fusion = (frozen ? amount : 0) - moistPhysics.convectiveSnow[i];
+          if (fusion !== 0) state[1][bottom + i] += seaIce.latentHeatFusion * fusion * g / (cp * state[0][i] * dSigma[K - 1] * exner[bottom + i]);
         }
       }
       surface.convectiveAdjustment(state[0], state[1], iFrom, iTo, moist ? state[4] : null, moist ? state[5] : null);

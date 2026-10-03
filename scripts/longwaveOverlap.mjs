@@ -13,8 +13,10 @@
 // the radiation's own shortwave cover) and of maximum-random overlap
 // (alpha 1), each layer cloudy over f with its in-cloud emissivity
 // 1 - exp(-kappa W/f) or clear. The deck's layer keeps the radiation's own
-// emissivity, outside the chain. Printed: how closely the random recomputation
-// repeats the radiation's OLR, and the OLR, the longwave cloud effect and the
+// emissivity, outside the chain. Printed: how closely the recomputation under
+// the radiation's own longwaveOverlap (exponential-random by default, or
+// random) repeats its OLR and surface downward longwave, and the OLR, the
+// longwave cloud effect and the
 // downward longwave at the surface under each overlap, global, 30S-30N and in
 // the tropical boxes of scripts/tropicalHeating.mjs.
 // RADIATION, MOIST, BOUNDARY_LAYER and SURFACE (JSON) pass options as to
@@ -121,7 +123,8 @@ function randomFlux(gp) {
   return [up, down];
 }
 
-const NAMES = ['random (the radiation)', 'exponential-random', 'maximum-random'];
+const OWN = (RADIATION.longwaveOverlap ?? 'exponentialRandom') === 'random' ? 0 : 1;
+const NAMES = ['random', 'exponential-random', 'maximum-random'];
 const out = { olr: NAMES.map(() => new Float64Array(C)), down: NAMES.map(() => new Float64Array(C)), model: new Float64Array(C), modelDown: new Float64Array(C), clear: new Float64Array(C) };
 let worst = 0, worstDown = 0, worstChain = 0, decks = 0;
 for (let i = 0; i < C; i++) {
@@ -175,8 +178,8 @@ for (let i = 0; i < C; i++) {
     chainRandom += c[0]; chainRandomDown += c[1];
   }
   sums.forEach(([up, down], n) => { out.olr[n][i] = up; out.down[n][i] = down; });
-  worst = Math.max(worst, Math.abs(sums[0][0] - budget.outgoingLongwave) / budget.outgoingLongwave);
-  worstDown = Math.max(worstDown, Math.abs(sums[0][1] - budget.downwardLongwave) / budget.downwardLongwave);
+  worst = Math.max(worst, Math.abs(sums[OWN][0] - budget.outgoingLongwave) / budget.outgoingLongwave);
+  worstDown = Math.max(worstDown, Math.abs(sums[OWN][1] - budget.downwardLongwave) / budget.downwardLongwave);
   worstChain = Math.max(worstChain, Math.abs(chainRandom - sums[0][0]) / sums[0][0], Math.abs(chainRandomDown - sums[0][1]) / sums[0][1]);
 }
 const sea = (i) => !landMask[i];
@@ -190,16 +193,16 @@ const regions = [
 ];
 const f = (x, d) => (Number.isFinite(x) ? x.toFixed(d) : 'n/a');
 say(`longwave overlap of ${FILE.split('/').pop()}: day ${saved.day}, N=${saved.N}, one CPU step, then every column at t = ${f(model.time / 86400, 3)} d; ${C} columns, ${decks} with a deck`);
-say(`the random recomputation repeats the radiation's OLR to ${worst.toExponential(1)} and its surface downward longwave to ${worstDown.toExponential(1)} relative in every column; the chain with alpha 0 repeats the random recomputation to ${worstChain.toExponential(1)}`);
+say(`the ${NAMES[OWN]} recomputation (the radiation's longwaveOverlap) repeats the radiation's OLR to ${worst.toExponential(1)} and its surface downward longwave to ${worstDown.toExponential(1)} relative in every column; the chain with alpha 0 repeats the random recomputation to ${worstChain.toExponential(1)}`);
 for (const [name, keep] of regions) {
-  let A = 0, model0 = 0, clear = 0;
+  let A = 0, model0 = 0, modelDown = 0, clear = 0;
   const olr = [0, 0, 0], down = [0, 0, 0];
   for (let i = 0; i < C; i++) {
     if (!keep(i)) continue;
     const a = area[i];
-    A += a; model0 += a * out.model[i]; clear += a * out.clear[i];
+    A += a; model0 += a * out.model[i]; modelDown += a * out.modelDown[i]; clear += a * out.clear[i];
     for (let n = 0; n < 3; n++) { olr[n] += a * out.olr[n][i]; down[n] += a * out.down[n][i]; }
   }
-  say(`${name}: clear-sky OLR ${f(clear / A, 2)}; ${NAMES.map((label, n) => `${label} OLR ${f(olr[n] / A, 2)}, LWCRE ${f((clear - olr[n]) / A, 2)}, surface downward ${f(down[n] / A, 2)}`).join('; ')} W/m2; exponential-random less random: OLR ${f((olr[1] - olr[0]) / A, 2)}, LWCRE ${f((olr[0] - olr[1]) / A, 2)}, surface downward ${f((down[1] - down[0]) / A, 2)} W/m2`);
+  say(`${name}: clear-sky OLR ${f(clear / A, 2)}; the radiation's OLR ${f(model0 / A, 2)}, LWCRE ${f((clear - model0) / A, 2)}, surface downward ${f(modelDown / A, 2)}; ${NAMES.map((label, n) => `${label} OLR ${f(olr[n] / A, 2)}, LWCRE ${f((clear - olr[n]) / A, 2)}, surface downward ${f(down[n] / A, 2)}`).join('; ')} W/m2; exponential-random less random: OLR ${f((olr[1] - olr[0]) / A, 2)}, LWCRE ${f((olr[0] - olr[1]) / A, 2)}, surface downward ${f((down[1] - down[0]) / A, 2)} W/m2`);
 }
 say(`(${f((performance.now() - t0) / 1000, 0)} s)`);

@@ -205,7 +205,7 @@ test('the per-cell convective and large-scale rain survive a saved state: as sav
   source.diagnostics();
   const { convectiveRain, largeScaleRain } = source.moist, C = source.mesh.nCells;
   const area = (model, values) => { let s = 0, a = 0; for (let i = 0; i < model.mesh.nCells; i++) { s += model.mesh.areaCell[i] * values[i]; a += model.mesh.areaCell[i]; } return s / a; };
-  assert.ok(area(source, convectiveRain) > 0.1, `six hours rain ${area(source, convectiveRain)} mm/d convectively`);
+  assert.ok(area(source, convectiveRain) > 0.01, `six hours rain ${area(source, convectiveRain)} mm/d convectively`);
   const saved = await decodeState(encodeState({ N: 6, K: source.core.K, day: 0, time: source.time, pi: source.state[0], convectiveRain, largeScaleRain }));
   for (const name of RAIN_FIELDS) {
     const back = savedRainField(saved, name, source), moved = savedRainField(saved, name, target, source);

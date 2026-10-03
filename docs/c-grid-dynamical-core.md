@@ -8812,6 +8812,288 @@ byte; b913e99 splits inside a day with the same seven fields apart. The
 three days from eight64_day0183 repeat the day lines above to every
 printed digit.
 
+**The apparent heat source, the replicate spread and the longwave
+overlap (Oct 2).** The tropical boxes are now measured by the box-mean
+apparent heat source of the physics Q1, the same without the shortwave
+and longwave Q1R, and Q2 = −(L/c_p) dq_t/dt of the physics, each in K/day
+with its peak over 50 hPa bins of the mass-weighted mean and its centroid
+Σ p Q dp / Σ Q dp over its positive part (`heatingProfile` in
+`js/audit.module.js`); `scripts/tropicalHeating.mjs` prints them with the
+column integrals of Q1R and Q2 by process, the total water's budget by
+process and layer, the stratiform share of the rain (melted falling ice
+and conversion above 700 hPa) and an Amazon land box (10S–2N 70–50W) with
+the local solar hour of its convective rain, and `scripts/verticalAudit.mjs`
+gives the ITCZ and warm-pool Q1R peak and centroid over its window in
+place of the firing columns' convective heating peak. That row was the
+layer maximum of the convective trace in K/day without mass weights: on
+the diagnosis state (tdb64 rebuilt from b2310ca by `git archive`, its
+three-day log identical line for line) it reads 974 hPa, 13.67 K/day, of
+which the shallow plume is 12.45; on the gray-gas state 974 hPa again
+(6.84). On the same diagnosis state the ITCZ Q1 peaks at 600–650 hPa
+(1.81 K/day), Q1R at 704 hPa (2.64, bin 700–750) with 1.29 K/day at 439
+hPa and its centroid at 677 hPa; the warm pool's Q1R peaks at 607 hPa
+(3.35) with its centroid at 628; the gray-gas state's ITCZ Q1R at 439 hPa
+(2.23), centroid 606; convective share 0.13, firing 0.099, mean dilute
+and undilute CAPE 43 and 133 J/kg; the replay matches the model in every
+column-step, the heat closes to 1.1·10⁻¹³ K and q_t to 4.3·10⁻¹⁹ kg/kg a
+step. Over the same eight steps both scripts give the ITCZ 850–900 hPa
+(2.14 K/day), centroid 724 hPa, and the warm pool 750–800 hPa (3.34),
+centroid 654. Replicates of the three-day N=64 run from eight64_day0183
+at this tree's physics (b913e99), the sea drag ×(1 ± 10⁻⁴), budgets over
+day 186 → 187, base and range of the three: ITCZ convective share 0.1327
+(0.0051), firing 0.0979 (0.0022), Q1R peak 704 hPa, bin 700–750 at 2.643
+K/day (0.024), centroid 680.4 hPa (2.3); T − Jordan at 848 / 704 / 516 /
+439 hPa −2.40 / −0.09 / +1.71 / +1.71 K (0.002 / 0.009 / 0.005 / 0.005),
+RH 0.937 / 0.655 / 0.667 / 0.634 (≤ 0.0006); large-scale rain converted
+below 700 hPa 2.248 mm/d (0.030); warm pool share 0.1689 (0.0024), firing
+0.2161 (0.0022), centroid 627.6 hPa (0.8); day-186 global rain 1.681 mm/d
+(0.0024), SWCRE −52.11 (0.030), LWCRE 26.37 (0.008), ASR − OLR 6.35
+(0.024) W/m². The longwave's exponential-random overlap
+(`longwaveOverlap`, above, and `physics.gpu.js`): the in-model fluxes
+repeat `scripts/longwaveOverlap.mjs` to 8.3·10⁻¹⁶ (OLR) and 6.3·10⁻¹⁶
+(surface downward) relative in every column; on the rebuilt diagnosis
+state after one CPU step OLR +2.20 W/m² above random, LWCRE 26.22 →
+24.02, surface downward −2.82, ITCZ +6.29, warm pool +2.71; on the day-186
+state of the base +2.20, 25.77 → 23.57. Three days from eight64_day0183,
+against the base: LWCRE 26.37 → 24.07, OLR 234.20 → 236.43, ASR − OLR
+6.35 → 4.51 W/m², rain 1.680 mm/d; ITCZ convective share 0.1327 → 0.1210,
+firing 0.0979 → 0.0872, Q1R centroid 680.4 → 684.6 hPa, the 300–500 hPa
+longwave heating −1.838 → −1.822 K/day (warm pool −1.830 → −1.820, share
+0.1689 → 0.1526). Cost under the exclusive lock (128 steps after 16 from
+nine64/nine128_day0183, alternated twice with `longwaveOverlap: 'random'`,
+which is bit-identical to b913e99 over 32 GPU steps): N=64 22.60 and 22.51
+→ 25.90 and 26.34 ms (+16 %), the physics pass 4.68 → 8.00 ms; N=128
+99.39 and 99.13 → 111.24 ms (+12 %; the second 125.03, minimum 109.85),
+the physics pass 19.93 → 32.07 ms. Layers clear or overcast on both sides
+taken as one region, three loops per layer, measured 28.60 and 28.92 ms
+and 120.52 and 120.68 ms and is not kept. Tests: the layers' longwave
+closes on the surface emission less the back radiation and the OLR to
+3·10⁻¹³ W/m² on the CPU and 1.8·10⁻⁴ on the GPU; the cloudy columns'
+layer heating parts by 1.26·10⁻⁴ K/day at cell 196 layer 24 as at
+b913e99; over the treeline test's 48 GPU steps the lowest air parts by
+7.7·10⁻² K (2.3·10⁻² under 'random') and the tree cover by 1.2·10⁻⁴
+(2.5·10⁻⁵), above its 10⁻⁴.
+
+**Independent checks of the Q1 metric and the overlap (Oct 2).** The
+longwave's chain against the expectation over every sub-column pattern
+(each an overcast or clear column, weighted by the chain's pair
+transitions), at N=6 on 335 ice-free columns with two adjacent partly
+cloudy layers near 500 hPa, 210 of them under a deck in layer 24, half
+with resolved water in the deck's layer and the one above it: OLR and back
+radiation agree to 2.1·10⁻¹⁵ relative and the layer longwave to 10⁻¹³ W/m²
+on the CPU, to 5·10⁻⁶ relative and 1.1·10⁻³ W/m² on the GPU (1.05·10⁻³
+under 'random'), for z₀ the default, 2000 m, 10⁻⁶ m (random) and 10¹⁵ m
+(maximum); at z₀ 10⁻⁶ m the CPU's OLR and back radiation are bit-identical
+to 'random' in 244 of 362 columns and within 4.1·10⁻¹⁶ in the rest. One
+step from eight64_day0183 on each engine: the CPU's layers close on the
+surface and top fluxes to 5.4·10⁻¹³ W/m², the GPU's to 1.4·10⁻³
+(2.3·10⁻⁴ under 'random'); the engines' OLR differ by at most 2.1·10⁻³
+W/m² and the layer longwave by 8.2·10⁻³ of 121 W/m² under either overlap.
+On the default run's day-186 state (three days from eight64_day0183)
+99.5 % of the columns have two adjacent layers of cover strictly between 0
+and 1, and every 32-cell group has one, so no collapse to one region can
+take back much of the cost; one reused vec2 array for the two regions'
+fluxes made the physics pass slower (43.5 ms at N=128 against 32.0). The
+three-day runs repeat ceb0 (under 'random') and ceb1 line for line, and
+tropicalHeating.mjs repeats their budgets; a separate replay of the ITCZ
+from phase snapshots gives the same Q1 (600–650 hPa, 1.761 K/day), Q1R
+(700–750 hPa, 2.643, centroid 680.4 hPa) and Q2 (700–750 hPa, 2.491) on
+the base, with Q1R's column 144.10 W/m² = L P 138.72 + sensible 3.26 +
+the physics' condensate gain 0.87 + dissipation 0.91 + 0.34, and Q2's
+column L(P − E) to the printed digits.
+
+**The merged tree (237263d) proved (Oct 2).** Of 59 test files three
+failed. `bulkSensible` (`js/audit.module.js`) still took the fixed
+`SEA_DRAG`/`LAND_DRAG` and c_p (T_s − T₁): tropicalHeating.mjs's global
+check on the audit test's N=12 state read 62.4969 against the model's
+92.8688 W/m², the difference landing in the lowest layer between the
+sensible and the shortwave terms; it now takes the exchange's C_H and,
+under roughness, the dry static energy with the lowest layer's height read
+before the physics phase (`lowestHeight`): 92.8688 against 92.8688, and on
+the base's day-186 state 15.7736 against 15.7736. The bl34 checkpoint test
+(`test/levels.test.mjs`) went NaN on day 2 at N=6: at cell 51 (42N 116E,
+skin 237–247 K) C_H max(U, 3) Δt/Δz of the lowest layer reached 9.1 and
+then 28 as C_H swung between 2.4·10⁻⁴ and 0.12 with the surface layer's
+stability, the lowest air fell to 157.7 K and both engines were
+non-finite by step 17–19; the same run is NaN on day 5 at the land
+parent and day 6 at the overlap parent (winds 198 m/s), so the test now
+runs its spin-ups on the fixed exchange. Three GPU–CPU cases of
+`test/gpuModel.test.mjs` parted at single columns: at cell 325 (rain
+accumulation, step 23) the GPU stepped from the CPU's exact state gave OLR
+241.54 against 257.66 W/m², having found cloud water in layers 21 and
+23–26 that the CPU had not (the cover floor 0.01, and the boundary layer's
+variance cover 0.33 in layer 21 under 9.5·10⁻⁴ kg/kg of cumulus water); the
+cases now leave out the columns whose OLR or absorbed sunlight part by more
+than 1 W/m² at a step (every other column within 0.11 W/m²) and assert
+their share. The sunlit cloudy columns' heating limit is 1.5·10⁻⁴ K/day
+(1.26·10⁻⁴ at cell 196 layer 24 on both parents). The treeline test passed
+on this tree (tree cover 1.6·10⁻⁵).
+
+**The base on this tree and its replicate spread (Oct 2).** Three days at
+N=64 from eight64_day0183 (`cvb0`) and two replicates with the sea's
+Charnock coefficients ×(1 ± 10⁻⁴) (under the surface layer by roughness the
+sea has no single drag coefficient), budgets over day 186 → 187 by
+tropicalHeating.mjs, base (spread of the three): Pacific ITCZ rain 5.12
+(0.11) mm/d, convective share 0.1141 (0.0017), firing 0.0868 (0.0003),
+Q1R peak bin 700–750 hPa at 2.776 K/day (0.073), centroid 675.0 hPa
+(0.64), large-scale rain converted below 700 hPa 2.388 (0.054) mm/d, T −
+Jordan at 848 / 704 / 516 / 439 hPa −2.32 / +0.19 / +1.91 / +1.92 K
+(0.003 / 0.007 / 0.011 / 0.008), RH 0.926 / 0.637 / 0.647 / 0.614
+(≤ 0.002), RH at 946 / 963 hPa and the lowest layer 0.863 / 0.840 / 0.779
+(≤ 0.0004), the shallow plume's export below 950 hPa 1.858 (0.005) mm/d,
+mean dilute and undilute CAPE of the cloudy plumes 40.4 (0.13) and 132.7
+(0.24) J/kg, undilute plumes stopping at 700–800 hPa 0.582 (0.002), fired
+tops above 300 hPa 0.525 (0.020), wettest cell 157 (3) mm/d; warm pool
+rain 9.79 (0.08), share 0.145 (0.004), firing 0.206 (0.003), centroid
+620.2 (1.0); N Pacific trades rain 1.616 (0.021), share 0.202 (0.007),
+firing 0.176 (0.003); Amazon rain 0.279 (0.005), all convective, peaking
+at 14 LT; the replayed day's global rain 2.406 (0.0003) mm/d. GPU day-186
+means: ASR − OLR 4.36 / 4.28 / 4.26, SWCRE −53.46 / −53.55 / −53.56,
+LWCRE 23.87 / 23.88 / 23.87 W/m².
+
+**The deep plume's closure of Bechtold et al. (2014) (Oct 2).**
+`capeClosure` 'bechtold' (the default; 'threshold' keeps `plumeCape` 120
+J/kg over `plumeRelaxation` 1 h bit for bit on the CPU) on both engines:
+M_b = max(0, PCAPE − PCAPE_bl)/(τ F_P), PCAPE = Σ (T_v,u − T_v)/T_v Δp over
+the layers the CAPE counts, F_P its change per unit base flux from the
+scheme's own tendencies, τ = α_x H/w̄ within 720–10800 s, α_x = 1 + 1.66
+dx/125 km, PCAPE_bl = τ_bl/T* Σ dT_v/dt|nc Δp below the plume's base (at
+most the lowest 12 layers), T* = 1 K, τ_bl = z_base/max(ū_bl, 2 m/s) over
+sea and sea ice and H/w̄ over land; IFS Cy43r1 eqs 6.22–6.29, all IFS
+choices. dT_v/dt|nc is each subcloud layer's change of T_v since the end
+of the previous adjustment (`subcloudVirtual`, PH SUBTV), saved in
+spin-up states. On Jordan's column: PCAPE 199.05 Pa, H 11383 m, w̄ 6.301
+m/s, τ 6631 s at N=32 and 4214 s at N=64, the flux scaling as 1/α_x; a sea
+column under +2 K/d below cloud base with ū_bl 5 m/s: PCAPE_bl 23.9 Pa;
+a land column under +10 K/d: 1583 Pa over τ_bl 1806 s, no deep flux.
+Three days from eight64_day0183 against the base: ITCZ convective share
+0.114 → 0.618, firing 0.087 → 0.375, large-scale rain below 700 hPa 2.39 →
+0.78 mm/d, T − Jordan at 516 / 439 hPa +1.91 / +1.92 → +1.01 / +1.10 K,
+wettest ITCZ cell 157 → 106 mm/d, median τ 85 min, Q1R centroid 675 → 703
+hPa, fired tops above 300 hPa 0.53 → 0.15; warm pool share 0.145 → 0.446;
+trades convective rain 0.33 → 1.34 mm/d, their Q1R peak bin 1000–1050 →
+850–900 hPa; Amazon convective rain none at 11–16 LT, starting at 17–18 LT
+and peaking at 0 LT; the replayed day's global rain 2.41 → 2.16 mm/d; GPU
+day 186 ASR − OLR 4.36 → 9.93, SWCRE −53.46 → −48.46, LWCRE 23.87 → 24.33
+W/m². From ten64_day0183: ITCZ share 0.588, warm pool 0.918, zonal-mean
+rain peak 7.62 mm/d at 8–10N. Acceptance met: ITCZ share, large-scale rain
+below 700 hPa, the 439–516 hPa bias, the wettest cell, the trades' Q1R
+peak, τ, the ten64 shares and peak; not met: warm-pool share, ITCZ firing,
+global rain, trades' convective rain; the Amazon peak later but past
+15–18 LT.
+
+**The deep plume's source: the lowest 50 hPa with the IFS surface-flux
+excess (Oct 2).** `plumeSourceDepth` 'surface50' (the default;
+'boundaryLayer' the previous source, bit for bit on the CPU): the deep
+plume leaves the layers whose midpoints lie within 50 hPa of the surface
+with their mean s_l and q_t plus ΔT = min(3 K, 1.5 J_s/(ρ c_p w*)) and
+Δq = min(2 g/kg, 1.5 J_q/(ρ L w*)), w* = max((B₀ h)^⅓, u*), from the cell's
+surface sensible and latent fluxes (Cy43r1 §6.5, eqs 6.19–6.21; IFS
+coefficients). On Jordan with 10 and 130 W/m² at w* 0.585 m/s: ΔT 0.0217 K,
+Δq 0.113 g/kg, CAPE 301.5 J/kg plain and 321.2 with the excess (273.0 from
+the boundary layer). On element 2's day-186 state after one step the ITCZ
+source's h/cp rises 0.73 K (0.50 the cut, 0.23 the excess), CAPE on the 257
+columns with CAPE from both sources 46.8 → 48.0 → 53.0 J/kg and the
+columns with CAPE 259 → 397 of 687 (warm pool 52.6 → 60.2 J/kg, 506 → 699
+of 851). Three days against element 2: mean candidate dilute CAPE 32.1 →
+29.3 J/kg (the new weak candidates and the stronger convection's
+consumption), undilute plumes stopping at 700–800 hPa 0.407 → 0.386, fired
+tops above 300 hPa 0.148 → 0.133, trades deep firing 0.518 → 0.255 and
+convective rain 1.34 → 1.51 mm/d, ITCZ share 0.618 → 0.685, firing 0.375 →
+0.332, large-scale rain below 700 hPa 0.78 → 0.62 mm/d, T − Jordan at 516 /
+439 hPa +0.93 / +1.01 K, warm-pool share 0.446 → 0.523; Amazon peak 0 →
+18 LT; global rain 2.16 → 2.11 mm/d; GPU day 186 ASR − OLR 10.00, SWCRE
+−47.96, LWCRE 23.96 W/m². From ten64_day0183: ITCZ share 0.658, warm pool
+0.976, zonal peak 7.40 mm/d at 8–10N. Acceptance met: the 700–800 hPa
+stops, the trades' deep firing, the Amazon peak not earlier; not met: the
+candidate CAPE (+20 %), the tops above 300 hPa (+0.05), the trades'
+convective rain.
+
+**The shallow cumulus base flux at Grant's 0.03 (Oct 2).**
+`cumulusClosure` 0.06 → 0.03: M_b = ρ_LCL c w exp(−CIN/w²) with c the
+coefficient Grant (2001, QJRMS 127, 407–421) fitted to LES (M = 0.03 w*)
+and the inhibition factor of Bretherton, McCaa and Grenier (2004) kept, a
+combination of the two published forms; 0.06 restores the previous
+closure bit for bit on the CPU. The trade-wind column lifts 0.02087 against
+0.04174 kg/m²/s. Three days against element 3: the ITCZ shallow plume's
+export below 950 hPa 1.892 → 1.440 mm/d, RH at 946 / 963 hPa 0.896 / 0.866
+→ 0.898 / 0.882, the lowest layer's 0.800 → 0.815, convective share 0.685
+→ 0.823, firing 0.332 → 0.476, large-scale rain below 700 hPa 0.62 → 0.29
+mm/d, Q1R centroid 701 → 715 hPa, wettest cell 105 → 46 mm/d; warm-pool
+share 0.523 → 0.666; N Pacific trades low-cloud cover (the radiation's
+lowCover over 8 CPU steps) 0.164 → 0.128; SE Pacific low cloud
+(verticalAudit.mjs) 0.449 → 0.394, radiative 0.360 → 0.318, rain 0.28 →
+0.26 mm/d; global rain 2.11 → 2.05 mm/d; GPU day 186 ASR − OLR 11.80,
+SWCRE −45.85, LWCRE 23.79 W/m². From ten64_day0183: export 2.31 → 1.50
+mm/d, RH at 946 / 963 hPa 0.904 / 0.876 → 0.918 / 0.901. Acceptance met:
+the lowest layer's RH; not met: the export (≤ 1.1), the 946–963 hPa RH
+(+0.025), the trades' low cover (≥ 0.18) and the SE Pacific guard (no more
+than 0.03 below element 3).
+
+**Elements 2–4 together (Oct 2).** Cost under the exclusive lock, 128
+steps after 16 from nine64 and nine128_day0183, alternated twice with the
+previous convection (`capeClosure` 'threshold', `plumeSourceDepth`
+'boundaryLayer', `cumulusClosure` 0.06): N=64 27.05 and 27.12 → 27.54 and
+27.55 ms (+1.7 %), the adjust pass 4.90 → 5.31 ms; N=128 113.66 and 112.76
+→ 114.17 and 113.85 ms (+0.7 %), the adjust pass 17.23 → 18.38 ms. Over
+the Amazon the boundary-layer part is negative at night: the fired
+columns' mean PCAPE_bl is −1823 Pa against a PCAPE of 1.3 Pa (element 3;
+−1884 and 2.8 with element 4), τ_bl = H/w̄ ≈ 30 min turning a cooling
+subcloud layer into a flux far beyond what the PCAPE asks; 0.42 of the box's
+convective rain falls at 0–6 LT (0.41 with element 4) and none at 11–16 LT. Global rain of the
+replayed day 2.41 (base) → 2.05 mm/d, of which convective 0.27 → 0.79.
+
+**PCAPE_bl at least 0 (review, Oct 2).** `pcapeBoundary` 'positive' (the
+default; 'signed' is elements 2–4 bit for bit on the CPU) takes
+max(0, Σ dT_v/dt|nc Δp) in PCAPE_bl. Bechtold et al. (2014, ECMWF Tech.
+Memo. 705, §2b) define PCAPE_bl as the boundary-layer production of PCAPE
+that shallow convection takes up, and report that the closure barely
+changes the convection at night; the IFS-derived scheme of WRF
+(`module_cu_ntiedtke.F`, its non-equilibrium branch) sets
+`zcape2 = max(0, zcape2)`. Signed, a cooling subcloud layer adds to the
+PCAPE: on Jordan's land column under −10 K/d PCAPE_bl is −1124 Pa against
+a PCAPE of 220 Pa and the base flux 0.0963 against 0.0243 kg/m²/s with no
+tendency (bounded: 0 Pa and 0.0243). Over one CPU day from element 4's
+day-186 state the deep plume fired on 235 106 column-steps with no PCAPE
+(none bounded); 0.76 of the fired land column-steps were held at the
+boundary-loss or Courant limit (0.02 bounded) and 0.97 of the tropical
+land base flux was beyond what the PCAPE alone asks; over sea 0.29 of the
+fired column-steps had PCAPE_bl < 0, their flux a median 1.5 times the
+PCAPE's. Three days from eight64_day0183 against element 4: Amazon mean
+fired PCAPE_bl −1884 → +1.6 Pa, dilute CAPE 6.6 → 25.7 J/kg, firing 0.39 →
+0.21, rain 0.32 → 0.47 mm/d, fired tops above 300 hPa 0.01 → 0.16, its
+convective rain still none at 11–15 LT with its maximum at 22 LT; ITCZ
+convective share 0.823 → 0.826, firing 0.476 → 0.496, Q1R centroid 714.7
+→ 718.4 hPa; warm-pool share 0.666 → 0.678; N Pacific trades deep firing
+0.704 → 0.757, convective rain 1.60 → 1.59 mm/d; replayed day's global
+rain 2.049 → 2.041 mm/d, wettest cell 258 → 242 mm/d; GPU day 186 ASR −
+OLR 11.8 → 11.9, SWCRE −45.8 → −44.9, LWCRE 23.8 → 23.1 W/m².
+
+**The source excess over the IFS's own w\* (review, Oct 2).** Element 3
+took eq. 6.19's coefficients with the shallow closure's w* = max((B₀
+h)^⅓, u*); the IFS forms w* at the lowest model level (Cy43r1 eq. 6.20):
+w* = 1.2 (u*³ + 1.5 g z κ/T (J_s/(ρ c_p) + 0.61 T J_q/(ρ L)))^⅓ with u*
+0.1 m/s, and its code (WRF's IFS-derived `module_cu_ntiedtke.F`) gives the
+parcel an excess only under an upward buoyancy flux, each part at least 0.
+`excessVelocity` 'surfaceLayer' (the default; 'convective' is the previous
+excess bit for bit on the CPU) does so on both engines. On Jordan's column
+with 10 and 130 W/m² and the lowest layer at 21.0 m: w* 0.238 against
+0.585 m/s, ΔT 0.0532 against 0.0217 K, Δq 0.278 against 0.113 g/kg, CAPE
+344.4 against 321.2 J/kg (301.5 plain). Three days from eight64_day0183
+against the bounded PCAPE_bl above: ITCZ mean candidate dilute CAPE 39.4 →
+40.4 J/kg, undilute 306 → 342 J/kg, undilute plumes stopping at 700–800
+hPa 0.261 → 0.229, fired tops above 300 hPa 0.072 → 0.070, convective
+share 0.826 → 0.855, firing 0.496 → 0.504, large-scale rain below 700 hPa
+0.291 → 0.228 mm/d, Q1R centroid 718.4 → 717.5 hPa, wettest cell 41 → 32
+mm/d; warm-pool share 0.678 → 0.717; N Pacific trades deep firing 0.757 →
+0.759, convective rain 1.59 → 1.62 mm/d; Amazon convective rain none at
+11–15 LT, maximum 22 LT; replayed day's global rain 2.041 → 2.036 mm/d,
+wettest cell 242 → 221 mm/d; GPU day 186 ASR − OLR 11.9 → 12.4, SWCRE
+−44.9 → −44.4, LWCRE 23.1 → 23.0 W/m². From ten64_day0183 against element
+4: ITCZ share 0.750 → 0.786, warm pool 0.991 → 0.988, zonal-mean rain peak
+7.15 mm/d at 8–10N, Amazon mean fired PCAPE_bl −1556 → +23 Pa and dilute
+CAPE 44 → 81 J/kg.
+
 **The mountains' drag (Oct 2).** `js/physics/orography.module.js`
 (CPU) and `js/gpu/orography.gpu.js` (WGSL) with the fields of
 `subgridOrography` in `js/geography.module.js`; the surface layer's
@@ -9889,6 +10171,448 @@ days, but on day 60 the top layer's easterly, the tropical top's cooling,
 the winter jet and the Courant number are all still moving, the last two
 faster over the last ten days than over the twenty before, with the
 solstice 31 days off.
+
+**The convection and the model top merged (Oct 2).** de82fce merges
+0063c54 (the eddy sponge and gravity-wave drag, the mountains' and form
+drag on GMTED fields, the gust) into elements 0–4. Every parent digest at
+N=4 reproduces with its parent's options (the convection side's under the
+Rayleigh top, the model top's with the longwave's random overlap);
+re-pinned where both sides moved the inputs: the moist defaults 1dbd465a,
+the model top under elements 2–4 01214faf. Three of the suite's files
+failed on the merge and were settled: the audit's bulk sensible heat took
+max(wind, 3 m/s) where the model now takes the gust wind (82.67 against
+94.21 W/m², exact after 388f6b6); the bl34 continent case parted at one
+land cell (168, at 947 m) whose absorbed sunlight at step 7 was 646.8
+W/m² on the CPU and 546.6 on the GPU (reflected 636.8 against 736.9, OLR
+184.8 against 159.1), with the same mixing top (6046 m above sea level),
+the cloud water of its cloudy layers 19–21 within 0.9 % and their vapour
+within 0.2 %, but their longwave heating apart (layer 21 −58.9 against
+−69.2, layer 22 −10.2 against +9.2 K/d): the cover of those layers
+decided apart in both bands; cell 189 parted so at step 6 (OLR 185.3
+against 161.4). The case now leaves out such columns (2 of 362 at
+3f3d915, none at dc14743);
+the snow-albedo case's premise failed on the new closure's onsets (16 of
+63 snow cells apart; 3 on the previous convection, on which it now runs).
+The reference on this tree, three N=64 days from eight64_day0183 with two
+Charnock replicates (×(1 ± 1e-4)), values with the replicate spread:
+ITCZ convective share 0.871 (0.001), firing 0.448 (0.003), fired tops
+above 300 hPa 0.024 (0.0001), Q1R centroid 725.8 hPa (0.4), T − Jordan at
+516 / 439 / 848 hPa +0.90 / +0.96 / −1.91 K (0.0001 / 0.0006 / 0.009),
+large-scale rain below 700 hPa 0.11 mm/d; warm pool share 0.744 (0.003),
+centroid 682.7 hPa (0.25); N Pacific trades deep firing 0.758 (0.004),
+convective rain 1.61 mm/d (0.006); SE Pacific convective share (8 audit
+steps) 0.72, low cloud 0.459 (0.03); California radiative low cover 0.215
+(0.007); trades low cover (cloudRegimes) 0.037 (0.005); the replayed
+day's global rain 1.962 mm/d (0.003); GPU day 186 ASR − OLR 13.1, SWCRE
+−43.3, LWCRE 22.8 W/m². From ten64_day0183: ITCZ share 0.747, fired tops
+above 300 hPa 0.143, centroid 757.9 hPa, ITCZ rain 4.73 mm/d.
+
+**What the deep plume did after elements 2–4 (Oct 2).** A day of CPU
+steps from the reference's day-186 state (scratchpad ce/probe.mjs:
+before each box column's moist step, twins replay the shallow plume
+alone, the deep plume alone, the shallow plume after it, and the same
+deep plume unentrained), over fired column-steps:
+- Trades (fired 0.758): cloud base 934 hPa, cloud depth 200–300 hPa
+  0.27, 300–400 hPa 0.45, 400–500 hPa 0.18; tops 500–600 hPa 0.45,
+  600–700 hPa 0.27; PCAPE 24.0 Pa (PCAPE_bl 7.5), τ 92 min, base flux
+  0.0097 kg/m²/s. The same columns' shallow plume alone tops at 800–900
+  hPa (0.69). Together at 849 / 893 hPa the deep plume heats 3.78 / 4.63
+  K/d and the shallow one −0.61 / −2.40, and the moistening (L/c_p
+  dq/dt) is −1.04 / −0.61 K/d; the shallow plume alone cools −1.90 /
+  −2.25 K/d and moistens +4.67 / +9.04 K/d: the deep plume heats and
+  dries the trade-cumulus layer that the shallow plume alone moistens.
+  The entraining plume's buoyancy is +0.4 to +0.8 K at 850–893 hPa and
+  −0.04 to −0.8 K from 789 to 608 hPa, where it coasts to its top; the
+  same plume unentrained keeps +0.6 to +1.2 K to 600 hPa. On the
+  old-convection base state (cx0b) the trade plumes' clouds are as deep
+  (300–400 hPa: 0.79 of the fired ones) but the 120 J/kg threshold fired
+  0.19 of them; the 200 hPa criterion cannot separate them.
+- SE Pacific (fired 0.082): depth 200–300 hPa 0.66, tops 600–700 hPa
+  0.72, base flux 0.0185, PCAPE 23.7 Pa; California (fired 0.618): depth
+  300–500 hPa 0.71, tops 400–600 hPa 0.85, PCAPE 33.0 Pa.
+- ITCZ (fired 0.448): depth 200–300 / 300–400 / 400–500 hPa 0.17 / 0.25
+  / 0.35, tops 400–500 hPa 0.51, 500–700 hPa 0.42, above 300 hPa 0.024;
+  PCAPE 38.3 Pa, τ 88 min, base flux 0.0097. The 2.4 % topping above 300
+  hPa have PCAPE 117 Pa, CAPE 137 J/kg; the rest 36 Pa and 37 J/kg. Their
+  buoyancy, entraining: +0.26 / +0.46 / +0.75 / +0.95 / +0.95 / +0.65 /
+  +0.28 / −0.01 / −0.22 K at 944 / 922 / 848 / 787 / 704 / 606 / 515 / 438
+  / 372 hPa for the deep-topping ones; for the rest +0.38 / +0.57 / +0.29
+  / +0.04 / −0.17 / −0.54 at 922 / 848 / 788 / 704 / 607 / 516 hPa,
+  topping at 400–600 hPa on momentum; unentrained the same plumes keep
+  +0.7 to +1.2 K from 850 to 370 hPa. Entrainment is 1.8–3.9 e-4 /m at
+  790–920 hPa (Gregory's 0.1 B/w²) and the floor 1e-4 above; the source
+  (lowest 50 hPa with the excess) is 1.0–2.5 K of h/c_p below the lowest
+  layer, and h*/c_p is least (336 K) at 600–850 hPa.
+- Why the tops fell: on the same old-convection base state the old
+  closure fires 0.074 of ITCZ column-steps (CAPE 146 J/kg) with 0.44 of
+  its tops above 300 hPa; the Bechtold closure fires 0.352 (CAPE 43
+  J/kg) with 0.049 above 300 hPa, and the plumes topping above 300 hPa
+  number 0.017 of the column-steps against 0.033. Most of the fall is
+  selection (many weak plumes fired), the rest the state they leave
+  (0.011 of column-steps after three days). The stable 600–850 hPa layer
+  limits what entrainment of the cloud-base layers leaves: the plume's
+  margin is 1 K.
+
+**The type of convection by the cloud's depth (Oct 2).**
+`convectionType` 'cloudDepth' (the default; 'top' the previous test on
+the top above σ 0.7 with the shallow plume beside the deep one, bit for
+bit on the CPU): the plume is deep if its cloud from base interface to top
+interface is deeper than 200 hPa, and a column convects as one type: the
+deep plume alone, or the shallow plume alone where the deep plume is not
+deep or its closure gives no flux (IFS Cy43r1 §6.4 and §6.4.2; the IFS
+text does not say what a deep column with no closure flux does). On 362
+random columns 51 are deep by the depth only and none by the top only;
+the type removes the shallow plume beside 48. Three days against the
+reference (eight64 / ten64): trades deep firing 0.758 → 0.698,
+convective rain 1.61 → 1.66 mm/d, low cover (cloudRegimes) 0.037 →
+0.133; SE Pacific convective share 0.72 → 0.76 (CPU day 0.67 → 0.72), low
+cloud 0.459 → 0.464; California deep firing 0.618 → 0.583, convective
+share (CPU day) 0.73 → 0.87, radiative low cover 0.215 → 0.306; ITCZ
+convective share 0.871 → 0.951 / 0.747 → 0.888, firing 0.448 → 0.539,
+fired tops above 300 hPa 0.024 → 0.009 / 0.143 → 0.203, Q1R centroid
+725.8 → 738.8 / 757.9 → 765.9 hPa, T − Jordan 516 / 439 / 848 +0.95 /
++0.99 / −1.48 K; warm pool share 0.744 → 0.850, centroid 682.7 → 692.2
+hPa; wettest ITCZ cell 46 → 24 mm/d; replayed global rain 1.962 → 1.944
+mm/d; GPU day 186 ASR − OLR 13.1 → 11.9, SWCRE −43.3 → −44.5 W/m². The
+trade, deck and California plumes' clouds are 200–500 hPa deep: the type
+cannot keep them shallow. It stays on: it is the IFS's rule, it moves its
+own observations (trades firing, low cover) the right way, if little.
+
+**The IFS entrainment (Oct 2).** `plumeEntrainmentLaw` 'ifs' (the
+default; 'gregory' bit for bit on the CPU): ε = 1.75e-3 /m (1.3 − RH)
+(q_s(T)/q_s(T_base))³ where the layer below is buoyant, δ = 0.75e-4 /m
+(1.6 − RH), the w² drag 1 + βC_d = 1.949 with mixing rate ε or δ, the
+mass flux growing by exp((ε − δ)Δz) where buoyant and falling by
+exp(−δΔz) min(1, (1.6 − RH)√(w²_above/w²_below)) elsewhere (IFS Cy43r1
+eqs 6.7, 6.8, 6.10, 6.12; Bechtold et al. 2008; all IFS tuning). Not
+built: the IFS test parcel's 0.4 ε and its 50 % condensate removal. On
+Jordan's column: top 211 hPa, CAPE 209 J/kg; ε 5.7, 5.0, 4.4 e-4 /m in
+the first cloud layers. Three days against the type (eight64 / ten64):
+trades deep firing 0.698 → 0.711, convective rain 1.66 → 1.62 mm/d, low
+cover 0.133 → 0.199; SE Pacific convective share 0.76 → 0.72 (CPU day
+0.72 → 0.71), low cloud 0.464 → 0.450; California deep firing 0.583 →
+0.594, convective share 0.87 → 0.85, radiative low cover 0.306 → 0.387;
+ITCZ convective share 0.951 → 0.871 / 0.888 → 0.891, firing 0.539 →
+0.426, fired tops above 300 hPa 0.009 → 0.010 / 0.203 → 0.219, Q1R
+centroid 738.8 → 739.6 / 765.9 → 714.8 hPa, ITCZ rain 1.77 → 1.70 / 4.57
+→ 6.85 mm/d; T − Jordan 516 / 439 / 848 +0.92 / +1.03 / −1.85 K; warm
+pool share 0.850 → 0.797, centroid 692.2 → 680.9 / 797.9 → 771.3 hPa;
+wettest ITCZ cell 37 mm/d; replayed global rain 1.972 mm/d; GPU day 186
+ASR − OLR 10.2, SWCRE −46.2, LWCRE 22.8 W/m². In the trades the plume
+now entrains 5.4–6.1 e-4 /m at 850–924 hPa, loses its buoyancy at 705
+hPa (−0.47 K) where it was −0.15, and coasts to 600–700 hPa (0.59 of
+tops; clouds 200–300 hPa deep 0.61, 300–400 hPa 0.29): the depth counts
+the whole layer in which w² vanishes, about 97 hPa there on bl34. In the ITCZ 0.427 of fired plumes are
+200–300 hPa deep with tops at 600–800 hPa; the plumes topping above 300
+hPa have PCAPE 147 Pa (ten64: 179 Pa, 0.219 of fired). Kept: it moves the
+trades' and California's low cloud and the ten64 ITCZ's heating centroid
+(−51 hPa) and rain the right way, and does not move the trades' firing.
+
+**The regimes after the type and the entrainment, and what still misses
+(Oct 2).** Acceptance (three N=64 days; the reference's spread above):
+N Pacific trades deep firing 0.711 (≤ 0.15) and convective rain 1.62 mm/d
+(≤ 1.0): not met; trades low cover 0.199 against the reference's 0.037:
+met. SE Pacific convective share 0.72 (CPU day 0.71) and California 0.85
+(≤ 0.15): not met; their low cloud 0.450 (within the reference's spread
+of 0.459) and radiative 0.387 against 0.215: met. ITCZ convective share
+0.871 (0.5–0.8): not met (ten64 0.891); warm pool 0.797 (≥ 0.5): met.
+Fired ITCZ tops above 300 hPa 0.010 (≥ 0.4): not met (ten64 0.219). ITCZ
+Q1R centroid 739.6 hPa against the base's 675 (eight64): not met; ten64
+714.8, and the warm pool's 680.9 / 771.3. T − Jordan at 439–516 hPa
++0.92 / +1.03 K (≤ +1.3): met; 848 hPa −1.85 K against the reference's
+−1.91: met. No ITCZ cell above 150 mm/d (37): met. Global rain (replayed
+day) 1.972 mm/d. What is in the way of the plume's depth, from the
+buoyancy profiles: the entraining plume keeps 0.3–1.0 K of buoyancy below
+700 hPa and none above about 650 hPa, against +1.5–1.8 K for the same
+plume unentrained (liquid-only thermodynamics, all condensate held as
+loading or rained at 3e-3 /m); the plumes that reach above 300 hPa are
+those with PCAPE above about 100 Pa. The ice in the plume (element 5:
+on Jordan CAPE 177 → 222 J/kg, top 247 → 210 hPa, from the fusion heat of
+the condensate frozen above the 0 °C level near 560 hPa) and the plume's
+own microphysics (element 6) act exactly in the 300–650 hPa layer where
+the fired plumes now stop; they come next. In the trades and the decks the
+plume's cloud is deeper than 200 hPa because the sounding has no trade
+inversion near 800 hPa (trades h*/c_p 335.0 / 335.9 / 336.1 / 335.1 /
+336.9 K at 893 / 850 / 789 / 705 / 608 hPa, no rise): neither element
+stops convection there, and the old 120 J/kg threshold had.
+
+**Cost (Oct 2).** Under the exclusive lock, 128 GPU steps from nine64 / nine128_day0183,
+alternated twice, merged head (388f6b6) against the type and the
+entrainment (16529fa): N=64 step median 28.77, 28.76 → 28.50, 29.86 ms,
+the adjust group 5.75, 5.76 → 5.44, 5.64 ms; N=128 123.03, 122.64 →
+122.12, 129.64 ms, adjust group 20.72, 20.69 → 19.97, 21.21 ms (the
+second pair's physics group, which neither element touches, also rose
+38.02 → 39.46 ms). The deep column no longer runs the shallow plume
+beside the deep one, which pays for the IFS entrainment's saturation
+calls: no measurable cost; 122–123 ms is 62.8 s per model day at N=128.
+
+**Review of the merge and the regime elements (Oct 2).** The merge's
+seven conflicted files, rebuilt with git merge-tree, are the only files
+where de82fce differs from the automatic merge; every line either side
+added is kept or combined there, and 74d7ecb's default digest under the
+Rayleigh top, which the merge had stopped asserting, reproduces
+(52b46a99). On eight64_day0183 three CPU steps of the full model with
+`convectionType` 'top' and `plumeEntrainmentLaw` 'gregory' equal 3f3d915
+bit for bit, and with 'gregory' alone 115389e. The IFS formulas at every
+cloud layer of Jordan's column and of the same column with its free
+troposphere ×0.6 and ×0.3 equal the code exactly (ε 1.1e-8 to 7.3e-4 /m,
+δ 5.0e-5 to 1.0e-4 /m); the ×0.3 plume is deep with a 203 hPa cloud
+whose w² vanishes inside its 756–826 hPa top layer. On the three-day
+state, a day of moist steps keeps each column's water and c_pT + Lq to
+1.1e-15 / 1.3e-15 on the CPU and 2.3e-7 / 1.4e-7 on the GPU (the
+boundary layer's mixing of θ_l and the dry adjustment are not part of
+it). The full models from that state: 104, 153 and 515 of 40962 columns
+convect as another type on the two engines at steps 1, 4 and 16 (84 at
+step 4 on the previous type and entrainment). The worker-thread engine
+parted from the single thread under load (parallel.test, from f6cae8b):
+the cells' adjust, which reads the subcloud wind since the Bechtold
+closure, shared a phase with the edges' momentum mixing; they are now
+two phases. A day of CPU steps from the three-day state, with a twin
+of each column every eighth step: deep firing 0.71 in the N Pacific
+trades, 0.38 in the S Atlantic trades, 0.19 / 0.24 over the northern /
+southern 35–55° oceans, 0.16 over tropical land; with the cloud's top
+at the height where w² vanishes inside the top layer instead of that
+layer's top interface the fired deep plumes' share would be 0.51, 0.005,
+0.10 and 0.13 (ITCZ 0.42 → 0.33, warm pool 0.57 → 0.51), and the IFS's
+own test parcel (0.4 ε, half the condensate removed), not built, would
+deepen its clouds instead. Nine cells rain more than 150 mm/d, all land,
+with convective shares 0.00–0.11.
+
+**The type of convection by the IFS's test parcel (Oct 2).**
+`convectionType` 'testParcel' (the default; 'cloudDepth' the previous type
+bit for bit on the CPU): the IFS's first-guess deep updraught (Cy43r1 §6.4,
+eqs 6.18–6.21 with the w² equation 6.10) types the column before the full
+ascent. A test parcel of the deep source's s_l and q_t (the lowest 50 hPa
+with the eq. 6.19 excess) leaves the source's top interface at 1 m/s and
+mixes toward each layer's air at ε = 0.4 · 1.75e-3 /m (q_s(T)/q_s(T_lowest))³,
+below and in its cloud, its w² following the IFS form with that mixing rate,
+and keeps half its condensate at each upper interface. Its cloud runs from
+the lower interface of its first cloudy layer to the height inside a layer
+where its w² vanishes, solved exactly for that layer's buoyancy and mixing
+and placed in ln p. Deeper than 200 hPa, the column runs the deep plume
+alone; otherwise the shallow plume alone, without the deep ascent. One
+departure level only: the IFS repeats the test from higher levels up to
+350 hPa above the ground, and the model's deep plume has one source. On
+Jordan's column the test cloud passes 200 hPa at 756 hPa and its w² vanishes
+at 124 hPa (the plume tops at 211); with the free troposphere ×0.3 and ×0.1
+the test parcel is still deep (w² zero at 215 and 266 hPa) while the plume
+tops at 756 and 659 hPa: the test parcel's entrainment does not depend on
+the environment's humidity. The trade-wind and trade-cumulus columns are
+shallow (test clouds 939–833 and 958–808 hPa). Three N=64 days from
+eight64_day0183 against the regime elements' reference (cxb; the reference's
+replicate spread in brackets): N Pacific trades typed deep on 0.950 of the
+column-steps, deep firing 0.711 → 0.749 (0.004), convective rain 1.62 →
+1.58 mm/d, low cover (cloudRegimes) 0.199 → 0.306; SE Pacific convective
+share (8 audit steps) 0.72 → 0.77, CPU day 0.71 → 0.73, low cloud 0.450 →
+0.446 (0.03); California deep firing 0.594 → 0.608, convective share 0.849
+→ 0.836, radiative low cover 0.387 → 0.413; ITCZ typed deep 0.703, firing
+0.426 → 0.545, convective share 0.871 → 0.881 (0.001), fired tops above 300
+hPa 0.010 → 0.010, Q1R centroid 739.6 → 743.0 hPa; warm pool share 0.797 →
+0.829; replayed global rain 1.972 → 1.979 mm/d; GPU day 186 SWCRE −46.3,
+LWCRE 22.8 W/m². From ten64_day0183: trades firing 0.554 → 0.653, ITCZ share
+0.891 → 0.876. Acceptance: trades firing (≤ 0.15) and convective rain
+(≤ 1.0 mm/d), the SE Pacific and California shares (≤ 0.15) and the ITCZ
+share (0.5–0.8) not met; the low-cloud guards and the warm-pool share met.
+Deep firing over a CPU day from the day-186 state (twin map, ce/rv/mapday.mjs):
+35–55° oceans 0.195 → 0.177 (north) and 0.237 → 0.211 (south), S Atlantic
+trades 0.376 → 0.300, tropical land 0.156 → 0.098.
+
+What the trades' sounding lacks. The test parcel types 0.95 of the trade
+column-steps deep because nothing near 800 hPa stops a weakly entraining
+parcel: the box's T − Jordan is −2.2 K at 850–924 hPa, −1.4 at 705 and +0.6
+at 608 hPa, its humidity falls from 0.95 at 924–946 hPa to 0.66 at 705 and
+0.46 at 608 hPa, a decline spread over 250 hPa with no temperature jump,
+where the observed trade inversion is a 2–5 K jump in θ over 100–300 m near
+850–800 hPa (BOMEX, ATEX). The budget of the 800–900 hPa layer (the 850 and
+893 hPa layers, W/m²): longwave −24.4, shortwave +9.0, dynamics −5.7, the
+boundary layer's mixing −8.0, condensation +4.3, the deep plume's rain
++23.1, its transport +13.0, its downdraft's evaporation −6.8, the shallow
+plume −4.4, recondensation −2.4, rain evaporation −1.6. The deep plume
+heats the layer by 2.5–3.2 K/day and the dynamics cool it (−0.5 K/day, net
+ascent), where the observed trade-cumulus layer is warmed by subsidence and
+cooled and moistened at its top by the shallow cumulus' detrainment. The
+inversion is made by the subsidence above the shallow plume's detrainment
+and cloud-top cooling; here the deep plume's own heating replaces the
+subsidence warming, and the bl34 layers there (789, 850, 893 hPa) are
+40–60 hPa (about 500 m) thick, wider than the observed inversion. The
+element stays on: it is the IFS's procedure, and the wrong-way move of the
+trades' firing (+0.04) comes from the sounding it is given, not from the
+test; 'cloudDepth' gives the previous type.
+
+**Ice in the plumes and the melting of their frozen rain (Oct 2).**
+`plumePhase` 'mixed' (the default; 'liquid' the previous plumes bit for bit
+on the CPU), element 5 of the specification (IFS Cy43r1 §6.6.2 and §6.6.6
+on the model's own linear 235.15–273.15 K ramp): both plumes and the test
+parcel carry s_li = c_p T + g z − L q_l − (L + L_f) q_i, saturated over
+cloudSaturation's mix, q_i = (1 − α(T)) l, T by four Newton steps (within
+1.5·10⁻⁶ K of bisection over 180–900 hPa and 205–290 K). A rain's ice share
+takes L_f more into s_li, falls as its own stream and melts in the first
+layer below it at 273.15 K or warmer (the IFS relaxes toward 0 °C over a
+few layers, eqs 6.47–6.48); its evaporation below cloud base takes L + L_f;
+what reaches the ground frozen is `convectiveSnow`, to which the surface adds
+no fusion heat (and from which it takes L_f where the lowest air is not
+freezing); the downdraft evaporates only the liquid and melted rain. The
+flux form carries s_li, so frozen condensate that detrains returns to the
+environment's L-only convention in the detraining layer, and column
+c_p T + L q stays exact (a 265 K column whose plume snows: L_f times the
+precipitation under either phase, to 2.3·10⁻¹⁶). On Jordan's column the deep
+plume's top rises 211 → 153 hPa and its CAPE 209 → 311 J/kg, its frozen
+rain melting at 610 hPa (275.7 K). Three N=64 days from eight64_day0183
+against the test parcel's run (ten64_day0183 in brackets): fired ITCZ tops
+above 300 hPa 0.010 → 0.025 (0.217 → 0.277), warm pool 0.198 → 0.288
+(0.100 → 0.149); the 0 °C layer's melting (607 hPa) −0.02 K/day in the ITCZ,
+0.013 K/day per mm/day of deep rain (−0.32 and 0.049; warm pool −0.19 and
+0.042), the freezing's heating 0.01–0.14 K/day near 373 hPa: the plume rains
+most of its condensate below the freezing level at 3·10⁻³ /m, so little
+freezes; ITCZ high cover 0.413 → 0.407 (0.382 → 0.347), warm pool 0.367 →
+0.363 (0.301 → 0.291); T − Jordan at 607 / 516 hPa 0.1 / 0.9 → 0.1 / 0.9 K
+(0.3 / 0.5 → 0.0 / 0.4); ITCZ convective share 0.881 → 0.903 (0.876 →
+0.952), Q1R centroid 743.0 → 744.1 hPa (708.7 → 708.5), warm-pool centroid
+688.5 → 671.8 (779.8 → 754.1); trades deep firing 0.749 → 0.759; replayed
+global rain 1.979 → 1.989 mm/d; GPU day 186 SWCRE −46.0, LWCRE 22.5 W/m².
+Acceptance: the tops (≥ 0.6 or +0.08) not met on eight64 (+0.015) nor
+ten64 (+0.060), met for the warm pool (+0.090); the melting (0.1–0.3 K/day
+per mm/day) not met, an order of magnitude weaker; high cover not lower:
+not met by 0.004–0.035; the 516–600 hPa bias: met.
+
+**The IFS updraught conversion (Oct 2).** `plumeConversion` 'sundqvist'
+(the default; 'zhangMcFarlane' the previous 1 − exp(−3·10⁻³ /m Δz) bit for
+bit on the CPU), element 6 of the specification (IFS Cy43r1 eqs 6.38–6.40
+after Sundqvist 1978; IFS tuning, which the IFS says probably still
+overestimates the updraught condensate): where the plume's condensate l at
+an upper interface exceeds 0.3 g/kg over sea or 0.5 g/kg over land,
+l (1 − exp(−a Δz)) rains, a = c0/(0.75 w)(1 − exp(−(l/l_crit)²)),
+c0 = 1.4·10⁻³ /s (1.3 α + 1 − α) on the model's phase ramp, l_crit
+0.5 g/kg, w the plume's speed there within 1–10 m/s, and below 268.16 K c0
+times and l_crit over 1 + 0.5 √min(268.16 − T, 18). What the plume keeps
+detrains where its mass flux falls. The in-updraught fallout (eqs
+6.41–6.42) is not built. On Jordan's column the rain of each layer equals
+the analytic integral to 1.9·10⁻¹⁶; the detrained condensate (Σ
+max(0, M_k+1 − M_k) times the condensate carried in) is 0.065 of the rain
+made, centred at 346 hPa (0.002 at 378 hPa before; the specification's
+single column on the previous plume expected 0.15–0.35). Three N=64 days
+from eight64_day0183 against the mixed-phase run (ten64_day0183 in
+brackets): detrained condensate per unit of convective rain, ITCZ 0.327 at
+676 hPa, 0.023 of it above 400 hPa (0.187 at 566 hPa), warm pool 0.167 at
+602 hPa (0.260 at 630); convective share, ITCZ 0.903 → 0.711 (0.952 →
+0.833), warm pool 0.897 → 0.681 (0.988 → 0.955); stratiform share (melted
+falling ice and conversion above 700 hPa) ITCZ 0.071 → 0.203 (0.010 →
+0.070), warm pool 0.064 → 0.213 (0.002 → 0.017); Q1R peak bin ITCZ 925 →
+925 hPa, warm pool 775 → 775 hPa; Q1R centroid ITCZ 744.1 → 730.5 (708.5 →
+706.6), warm pool 671.8 → 665.5 (754.1 → 778.0) hPa against spreads of 0.4
+and 0.25; warm-pool high cover 0.363 → 0.361 (0.291 → 0.307), its thin
+share (τ < 3.6) 0.44 (0.90); ITCZ high cover 0.407 → 0.417; trades low cover
+0.282 → 0.318, their convective rain 1.62 → 1.25 mm/d, deep firing 0.759 →
+0.735; SE Pacific convective share (audit) 0.74 → 0.60, California (CPU day)
+0.826 → 0.696; fired ITCZ tops above 300 hPa 0.025 → 0.034; replayed global
+rain 1.989 → 1.967 mm/d; GPU day 186 SWCRE −47.6, LWCRE 23.2 W/m².
+Acceptance on eight64: the detrained share (0.15–0.4) met, its centroid
+above 400 hPa not met (676 and 602 hPa); the convective share (0.55–0.75)
+met; the stratiform share (≥ 0.25) not met (0.20–0.21); the Q1R peak at or
+above 600 hPa not met; the centroid's rise beyond the spread met; the warm
+pool's high cover not up (within its 0.002 spread), its thin share (≥ 0.38)
+met; the trades' low cover (≥ 0.18) met. The detrainment centroid lies low
+because the plumes still stop at 500–700 hPa: what the plume carries
+detrains where its mass flux falls, and it falls there.
+
+**The ice fall at 3.29 and homogeneous nucleation, tested on the anvil
+source (Oct 2).** Three N=64 days from eight64_day0183 on the tree with
+elements 5 and 6, the regimes one step on (cloudRegimes.mjs; the reference's
+replicate spread of high cover and its thin share is at most 0.002 / 0.01):
+
+| day 186 | defaults (fall 2.5) | `iceFall` 3.29 | `iceNucleation` | both |
+|---|---|---|---|---|
+| global high cover; thin share | 0.278; 0.49 | 0.249; 0.46 | 0.267; 0.47 | 0.240; 0.45 |
+| warm pool high cover; thin share | 0.361; 0.44 | 0.333; 0.43 | 0.358; 0.43 | 0.326; 0.42 |
+| ITCZ high cover; thin share | 0.417; 0.30 | 0.377; 0.31 | 0.414; 0.28 | 0.379; 0.31 |
+| RH 150–350 hPa over water / ice: global; warm pool; ITCZ | 0.39/0.59; 0.48/0.70; 0.55/0.80 | 0.39/0.59; 0.49/0.71; 0.54/0.80 | 0.40/0.60; 0.49/0.71; 0.55/0.81 | 0.40/0.60; 0.50/0.73; 0.55/0.80 |
+| upper-tropospheric layer area above ice saturation (of it clear) | 0.01 (0.00) | 0.00 | 0.02 (0.69) | 0.02 (0.77) |
+| GPU day 186 SWCRE; LWCRE | −47.6; 23.2 | −46.4; 20.6 | −47.4; 22.2 | −46.2; 19.6 |
+
+Against the references in the regime table (ISCCP and CALIPSO: global high
+0.2–0.3 with about 0.6 of it thin, warm pool high 0.55–0.70 with about 0.5
+thin, ITCZ 0.45–0.60), the fall coefficient of 3.29 lowers the high cover
+where it is already short (warm pool −0.028, ITCZ −0.040, global −0.029) and
+thins nothing; nucleation leaves the high cover within 0.011, lets 0.02 of
+the upper-tropospheric layer area stand supersaturated over ice, mostly
+clear, and raises the RH over ice by 0.01. The docs give no observed
+upper-tropospheric humidity to judge either by. Neither change is
+supported by the regime observations; the defaults stay at 2.5 and off. The
+anvil source of element 6 is too low to test them fairly: its detrainment
+centres at 600–680 hPa, below the cirrus levels where the fall speed and
+nucleation act.
+
+**The type, the ice and the conversion together (Oct 2).** Cost under the
+exclusive lock, 128 GPU steps from nine64 / nine128_day0183, alternated
+twice, 49b2ceb against 994f72f: N=64 step median 29.39, 29.25 → 30.61,
+30.64 ms (+4.4 %), the adjust group 5.53 → 6.94 ms; N=128 120.98, 119.87 →
+125.86, 123.11 ms (+3.0 %), the adjust group 19.73 → 23.47 ms, 61.7 → 63.7
+s per model day. The specification's budget for elements 5 and 6 was 1.3 %;
+most of the rest is the mixed-phase saturation, two exponentials in every
+Newton step below 273.15 K, and the test parcel's ascent. Deep firing over a
+CPU day from the day-186 state of element 6's run against the reference: N
+Pacific trades 0.711 → 0.730, S Atlantic trades 0.376 → 0.335, SE Pacific
+0.086 → 0.107, California 0.594 → 0.601, 35–55° oceans 0.195 / 0.237 →
+0.188 / 0.227, ITCZ 0.426 → 0.559, warm pool 0.571 → 0.664, tropical land
+0.156 → 0.093. The full suite (64 files, concurrently) passes; two N=6
+coupled parity cases (day means, rain accumulation) run on the previous
+type, phase and conversion, with the measured reasons in 218e104.
+
+**Review of the type, the ice and the conversion (Oct 2).** Re-run from
+eight64_day0183, the three days, tropicalHeating.mjs and cloudRegimes.mjs
+reproduce every number above (replay mismatches 0 of 722432). Three CPU
+steps from that day-186 state under convectionType 'cloudDepth', plumePhase
+'liquid' and plumeConversion 'zhangMcFarlane' (and under each later pair)
+give the digests of 49b2ceb, 8e10cff and e76c952 bit for bit.
+- The test parcel against the IFS first guess (Cy43r1 §6.4) integrated by
+  hand in 20–40 sub-steps a layer, its base at its first cloudy height:
+  Jordan's column deep with w² vanishing at 107 hPa (the code's discrete
+  form 106), ×0.3 at 161 (159); a trades sounding built from the model's
+  box (T − Jordan −2.2 K below 850 hPa, RH 0.95 → 0.46 over 924–608 hPa)
+  without the surface excess shallow, its parcel stopping at 949 hPa below
+  its condensation level. On a CPU day from the day-186 state the hand
+  parcel and the code type alike on 0.952 (ITCZ), 0.977 (warm pool), 0.995
+  (N Pacific trades, 0.964 deep by hand), 0.923 (SE Pacific), 0.942
+  (California) and 0.92–0.96 (35–55° oceans) of the column-steps; the GPU
+  types, tops and base fluxes match the CPU's on all 362 columns of
+  Jordan, Jordan ×0.3, both trades soundings and a cold-based column.
+- The mixed-phase plume air at 268, 254 and 238 K from guesses 15 K below
+  to 8 K above: CPU within 2.1·10⁻⁶ K of bisection, GPU within 1.2·10⁻⁵ K;
+  T(s_li) continuous through 273.15 and 235.15 K to 2·10⁻⁹ K (CPU) and
+  3.5·10⁻⁵ K (GPU, single precision).
+- The conversion equals eqs 6.38–6.40 by hand on every layer of Jordan's
+  column to 5·10⁻¹⁶; a Δz there is 0.3–1.3 in the bl34 layers. Converting
+  the condensate at the layer's top over the whole layer keeps a steady
+  condensate of aΔz e^(−aΔz)/(1 − e^(−aΔz)) = 0.47–0.86 of the IFS's
+  analytic solution with the condensation source (l = l₀e^(−az) + b/a (1 −
+  e^(−az)), §6.6.3); with that solution Jordan's detrained condensate per
+  unit of rain made is 0.097 (net mass-flux decrease) or 0.189 (with the
+  turbulent detrainment δM of the buoyant layers) against 0.065 and 0.126.
+  The tropicalHeating.mjs detrainment counts the net decrease only.
+- The condensate the deep plume detrains (a CPU day, twin every eighth
+  step): the condensation that follows the plume keeps 0.278 (ITCZ) and
+  0.293 (warm pool) of it as cloud, 0 where the layer's RH was below 0.7,
+  0.12–0.15 at 0.7–0.9, 0.53–0.60 above 0.9; after the step's conversion
+  to rain and ice fall the cloud has gained 0.008 and 0.022 of it.
+- The fusion heat: where the cloud base lies above the 0 °C layer the
+  frozen rain that sublimated below the base, or that the downdraft took,
+  was melted again at the 0 °C layer. Over 32 CPU steps from the day-186
+  state 8248 column-steps (high-latitude land and sea) were off by up to
+  5.5·10⁻³ kg/m² of L_f a step (global mean −1.6·10⁻³ W/m²); fixed in
+  8615f9e (16 column-steps left, the same non-convective cells as under
+  plumePhase 'liquid'); on 362 cold-based columns 1.3·10⁻⁶ → 5.8·10⁻¹⁶
+  relative on the CPU, 9.8·10⁻³ → 4.0·10⁻⁴ kg/m² of L_f on the GPU. Water
+  exact to 4·10⁻¹⁵ per column-step with the filler's loss counted.
+- Engine parity of the full models from the fixed tree's day-186 state:
+  columns of a different convection type 123 / 212 / 577 of 40962 after 1 /
+  4 / 16 steps (81 / 118 / 507 under the previous elements), θ rms relative
+  2.5 / 5.7 / 13.5·10⁻⁶. The fixed tree's three days give the numbers above
+  within the trajectory's noise (ITCZ convective share 0.714, warm pool
+  0.682, stratiform share 0.200 / 0.214, detrained 0.323 at 675 hPa and
+  0.166 at 602 hPa); the full suite passes (64 files, 623 tests).
+- The frozen share of the deep plume's rain, from the column budgets:
+  0.05 (ITCZ) and 0.13 (warm pool); the specification's 0.1–0.3 K/day per
+  mm/day at the 0 °C layer implies 0.15–0.45.
 
 ### M23 — The equatorial ocean — in progress
 

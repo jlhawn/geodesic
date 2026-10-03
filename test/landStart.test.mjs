@@ -224,8 +224,10 @@ test('land regridding carries the record and the carbon\'s record and fills new 
   assert.deepEqual([...regridLand(source, source, land).record], [1e6, 1, 1]);
 });
 
+const RAINING_START = { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 };
+
 test('a CPU model\'s fresh land holds its trees and carbon through its steps, and after the jump they run free', () => {
-  const model = createModel(new Grid(6), { topography, land: { start: 'neutral', treeGrowthTime: 3600, treeDeclineTime: 3600 } });
+  const model = createModel(new Grid(6), { topography, land: { start: 'neutral', treeGrowthTime: 3600, treeDeclineTime: 3600 }, moist: RAINING_START });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
@@ -242,7 +244,7 @@ test('a CPU model\'s fresh land holds its trees and carbon through its steps, an
 });
 
 const prepareGpu = async (land, start = 'neutral') => {
-  const model = await createGpuModel(new Grid(6), { topography, land: { start, ...land } });
+  const model = await createGpuModel(new Grid(6), { topography, land: { start, ...land }, moist: RAINING_START });
   const C = model.mesh.nCells, init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   for (let i = 0; i < C; i++) if (model.geography.land[i]) model.state[6][i] = 0;

@@ -23,10 +23,13 @@
 // window of STEPS (8) steps: the rain and its convective share, the
 // fraction of columns firing (convective rain above 1 mm/d in a step)
 // and of those whose temperature convection changes at all, the global
-// rain and the convective share of 15S-15N, the convective heating
-// profile of the Pacific ITCZ's firing columns (the pressure of its
-// maximum, and its mean over the lowest 100 m) and the box's large-scale
-// heating (condensation, autoconversion and rain evaporation) below 1 km,
+// rain and the convective share of 15S-15N, the apparent heat source
+// without radiation Q1R of the Pacific ITCZ and the warm pool (the boxes of
+// scripts/tropicalHeating.mjs: every physics process of the step but the
+// shortwave and longwave, the box mean in K/day, its peak over 50 hPa bins
+// and its centroid, heatingProfile of js/audit.module.js) and the ITCZ's
+// large-scale heating (condensation, autoconversion and rain evaporation)
+// below 1 km,
 // the low cloud (a layer below 680 hPa with more than 1e-5 kg/kg of cloud
 // water, or the deck's cover), the estimated inversion strength, and the
 // mixed-layer deck's height and virtual potential temperature jump above
@@ -81,7 +84,9 @@ import { divergence } from '../js/dynamics/operators.module.js';
 import { createMixedLayer, dycomsLongwave } from '../js/physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, ringMean } from '../js/physics/radiation.module.js';
 import { LATENT_HEAT } from '../js/physics/moist.module.js';
-import { BOXES, inLongitudes } from '../js/audit.module.js';
+import { BOXES, inLongitudes, tropicalBoxOf, heatingProfile, bulkSensible, lowestHeight, layerExner } from '../js/audit.module.js';
+import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
+import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 import { clearSkyClasses } from './clearSkyClasses.mjs';
 
@@ -282,18 +287,46 @@ function deckAfter() {
     }
   }
 }
-const physicsPhase = phases.physics;
+const boxOf = tropicalBoxOf(mesh, landMask), HEATED = [0, 1];
+const heated = [];
+for (let i = 0; i < C; i++) if (HEATED.includes(boxOf[i])) heated.push(i);
+const source = HEATED.map(() => ({ q1r: new Float64Array(K), pressure: new Float64Array(K), thickness: new Float64Array(K), areaSteps: 0 }));
+const afterClosure = new Float64Array(heated.length * K), sensibleHeat = new Float64Array(heated.length), lowestExner = new Float64Array(heated.length), layerEx = new Float64Array(K);
+const sensibleOptions = { seaDrag: SURFACE.dragCoefficient ?? SEA_DRAG, landDrag: LAND_DRAG, freezing: FREEZING_POINT, gustiness: RADIATION.gustiness ?? 3 };
+const physicsPhase = phases.physics, closurePhase = phases.closure;
 phases.physics = (...args) => {
   deckStart();
+  const air = heated.map((i) => theta[bottom + i] * exnerLayer[bottom + i]), skin = heated.map((i) => state[3][i]), coverBefore = heated.map((i) => model.seaIce.cover(i, ice[i])), heightBefore = heated.map((i) => lowestHeight(model, i));
+  heated.forEach((i, n) => { lowestExner[n] = exnerLayer[bottom + i]; });
   physicsPhase(...args);
+  heated.forEach((i, n) => { sensibleHeat[n] = bulkSensible(model, i, air[n], skin[n], coverBefore[n], heightBefore[n], sensibleOptions); });
   deckAfter();
   for (let i = 0; i < C; i++) if (Number.isFinite(radiation.stabilityIndex[i])) { acc.eis[i] += radiation.stabilityIndex[i]; acc.eisN[i] += 1; }
 };
+phases.closure = (...args) => {
+  closurePhase(...args);
+  heated.forEach((i, n) => { for (let k = 0; k < K; k++) afterClosure[n * K + k] = theta[k * C + i]; });
+};
+function chargeSource() {
+  heated.forEach((i, n) => {
+    const box = source[HEATED.indexOf(boxOf[i])], a = area[i];
+    layerExner(pi[i], core.diagnostics, layerEx);
+    box.areaSteps += a;
+    for (let k = 0; k < K; k++) {
+      const mass = pi[i] * dSigma[k] / g;
+      let dT = (theta[k * C + i] - afterClosure[n * K + k]) * layerEx[k];
+      if (k === K - 1) dT += sensibleHeat[n] * dt / (cp * mass) * layerEx[k] / lowestExner[n];
+      box.q1r[k] += a * dT;
+      box.pressure[k] += a * pi[i] * sigmaMid[k];
+      box.thickness[k] += a * pi[i] * dSigma[k];
+    }
+  });
+}
 model.restartPrecipitation();
 const before = new Float64Array(C);
 moist.trace.convection = new Float64Array(K * C);
 moist.trace.largeScale = new Float64Array(K * C);
-const heating = { convection: new Float64Array(K), largeScale: new Float64Array(K), pressure: new Float64Array(K), height: new Float64Array(K), fired: 0, area: 0 };
+const heating = { largeScale: new Float64Array(K), height: new Float64Array(K), fired: 0, area: 0 };
 const tropicsMask = boxMask([-15, 15, -180, 180], everywhere), TOP_BINS = 10;
 const plumes = { tops: new Float64Array(TOP_BINS), deep: 0, shallow: 0, area: 0, deepFlux: 0, shallowFlux: 0 };
 for (let n = 0; n < STEPS; n++) {
@@ -301,6 +334,7 @@ for (let n = 0; n < STEPS; n++) {
   moist.trace.convection.fill(0);
   moist.trace.largeScale.fill(0);
   model.step(dt);
+  chargeSource();
   for (let i = 0; i < C; i++) {
     const fired = (moist.convectivePrecipitation[i] - before[i]) * 86400 / dt > 1;
     if (fired) acc.fire[i] += 1;
@@ -314,9 +348,7 @@ for (let n = 0; n < STEPS; n++) {
       for (let k = 0; k < K; k++) {
         const idx = k * C + i;
         heating.largeScale[k] += a * moist.trace.largeScale[idx];
-        heating.pressure[k] += a * pi[i] * sigmaMid[k];
         heating.height[k] += a * (geopotential[idx] / g - zs[i]);
-        if (fired) heating.convection[k] += a * moist.trace.convection[idx];
       }
     }
     if (tropicsMask[i]) {
@@ -340,15 +372,10 @@ for (let n = 0; n < STEPS; n++) {
 const perDay = 86400 / (STEPS * dt);
 if (radiation.clearSkyPass) radiation.readMeans(STEPS);
 const itczProfile = (() => {
-  const perStep = 86400 / dt, conv = Float64Array.from(heating.convection, (x) => x / heating.fired * perStep), large = Float64Array.from(heating.largeScale, (x) => x / heating.area * perStep);
-  const p = Float64Array.from(heating.pressure, (x) => x / heating.area / 100), z = Float64Array.from(heating.height, (x) => x / heating.area);
-  let peak = 0, low = 0, lowMass = 0, most = 0, least = 0;
-  for (let k = 0; k < K; k++) {
-    if (conv[k] > conv[peak]) peak = k;
-    if (z[k] < 100) { low += conv[k] * dSigma[k]; lowMass += dSigma[k]; }
-    if (z[k] < 1000) { if (large[k] > large[most]) most = k; if (large[k] < large[least]) least = k; }
-  }
-  return { peakP: heating.fired > 0 ? p[peak] : NaN, peak: conv[peak], low: low / lowMass, fired: heating.fired / heating.area, most: large[most], mostZ: z[most], least: large[least], leastZ: z[least] };
+  const large = Float64Array.from(heating.largeScale, (x) => x / heating.area * 86400 / dt), z = Float64Array.from(heating.height, (x) => x / heating.area);
+  let most = 0, least = 0;
+  for (let k = 0; k < K; k++) if (z[k] < 1000) { if (large[k] > large[most]) most = k; if (large[k] < large[least]) least = k; }
+  return { fired: heating.fired / heating.area, most: large[most], mostZ: z[most], least: large[least], leastZ: z[least] };
 })();
 const convective = Float64Array.from(moist.convectivePrecipitation, (x) => x * perDay), rain = Float64Array.from(convective, (x, i) => x + moist.largeScalePrecipitation[i] * perDay);
 const ratio = (sum, count, mask) => { let s = 0, w = 0; for (let i = 0; i < C; i++) if (mask[i] && count[i] > 0) { s += area[i] * sum[i]; w += area[i] * count[i]; } return s / w; };
@@ -430,7 +457,12 @@ for (const [name, mask] of [['Namibia 10-20S 0-10E', namibia], ['California 20-3
 }
 row('Pacific ITCZ 5-12N 160E-100W: rain (mm/d)', mean(rain, itcz), 2, 6, 9, 0, `convective share ${f(mean(convective, itcz) / mean(rain, itcz), 2)}`);
 row('Pacific ITCZ 5-12N 160E-100W: omega500 (Pa/s)', mean(omega500, itcz), 4, -0.05, -0.10, noise(omega500, itcz).u);
-row('Pacific ITCZ 5-12N 160E-100W: firing columns\' convective heating peak (hPa)', itczProfile.peakP, 0, 400, 500, 0, `${f(itczProfile.peak, 2)} K/d; ${f(itczProfile.low, 2)} K/d over the lowest 100 m; firing ${f(itczProfile.fired, 3)} of the column-steps`);
+HEATED.forEach((b, m) => {
+  const box = source[m], S = box.areaSteps, name = b === 0 ? 'Pacific ITCZ 5-12N 160E-100W' : 'warm pool 10S-10N 120-170E sea';
+  const Q = Float64Array.from(box.q1r, (x) => x / S * 86400 / dt), pk = heatingProfile(Q, Float64Array.from(box.pressure, (x) => x / S), Float64Array.from(box.thickness, (x) => x / S));
+  row(`${name}: Q1-QR peak over 50 hPa bins (hPa)`, (pk.bin[0] + pk.bin[1]) / 200, 0, 400, 500, 0, `${f(pk.bin[0] / 100, 0)}-${f(pk.bin[1] / 100, 0)} hPa, ${f(pk.binValue, 2)} K/d; largest layer ${f(pk.layer / 100, 0)} hPa, ${f(pk.value, 2)} K/d${b === 0 ? `; firing ${f(itczProfile.fired, 3)} of the column-steps` : ''}`);
+  row(`${name}: Q1-QR centroid (hPa)`, pk.centroid / 100, 0, NaN, NaN, 0, 'heating-weighted over its positive part');
+});
 row('Pacific ITCZ 5-12N 160E-100W: large-scale heating below 1 km, largest |K/d|', Math.max(itczProfile.most, -itczProfile.least), 2, NaN, NaN, 0, `${f(itczProfile.most, 2)} at ${f(itczProfile.mostZ, 0)} m, ${f(itczProfile.least, 2)} at ${f(itczProfile.leastZ, 0)} m`);
 const tropics = boxMask([-15, 15, -180, 180], everywhere);
 row('global rain (mm/d)', mean(rain, everywhere), 2, 2.6, 2.8, 0, `convective share ${f(mean(convective, everywhere) / mean(rain, everywhere), 2)}`);

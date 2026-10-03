@@ -139,9 +139,11 @@ test('a fresh start begins its moisture means empty with its trees at half the c
   }
 });
 
+const RAINING_START = { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 };
+
 test('the model hands the land each step\'s rain and potential evaporation', () => {
   const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
-  const model = createModel(new Grid(6), { topography, land: { moistureMemory: 900 } });
+  const model = createModel(new Grid(6), { topography, land: { moistureMemory: 900 }, moist: RAINING_START });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
@@ -236,8 +238,8 @@ test('over 48 GPU steps the moisture means and the gated trees evolve as on the 
     model.land.load({ soil: Float64Array.from({ length: C }, () => 300 * rnd()), snow, vegetation, canopy, seasonLength, seasonWarmth, rainMean, demandMean }, model.state[6]);
     return model;
   };
-  const cpu = prepare(createModel(new Grid(6), { topography, land }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }));
+  const cpu = prepare(createModel(new Grid(6), { topography, land, moist: RAINING_START }));
+  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land, moist: RAINING_START }));
   const C = cpu.mesh.nCells, rainBefore = Float64Array.from(cpu.land.rainMean), demandBefore = Float64Array.from(cpu.land.demandMean), treesBefore = Float64Array.from(cpu.land.canopy);
   for (let n = 0; n < 48; n++) { cpu.step(900); await gpu.step(900); }
   await gpu.sync();

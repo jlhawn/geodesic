@@ -140,7 +140,7 @@ test('two recorded days replayed over the ocean alone keep its SST with the coup
   fresh.destroy();
   const forcing = join(dir, 'forcing');
   const run = (script, env) => execFileSync(process.execPath, [join(root, 'scripts', script)], { cwd: root, env: { ...process.env, N: String(N), OUT: dir, ...env }, encoding: 'utf8' });
-  run('spinup.mjs', { TAG: 'rec', RECORD: forcing, DAYS: '2', MINUTES: '100' });
+  run('spinup.mjs', { TAG: 'rec', RECORD: forcing, DAYS: '2', MINUTES: '100', MOIST: JSON.stringify({ capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 }) });
   assert.deepEqual(readdirSync(forcing).sort(), [forcingName(1), forcingName(2)]);
   run('oceanSpinup.mjs', { TAG: 'alone', STATE: join(dir, 'rec_day0000.bin'), FORCING: forcing, YEARS: '1', DAYS_PER_YEAR: '2' });
 

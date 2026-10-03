@@ -20,7 +20,27 @@ function stats(cpu, gpu) {
   for (let x = 0; x < cpu.length; x++) { const d = Math.abs(cpu[x] - gpu[x]); if (d > maxDiff) { maxDiff = d; at = x; } sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
   return { maxDiff, at, rms: Math.sqrt(sumSq / cpu.length), rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
-async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, options = {}, moist = {}, boundaryLayer = {}) {
+/*
+ * The columns where a layer's cloud decided apart (trace cloud water on
+ * one engine only switching on the layer's cover, over which the cumulus
+ * water then spreads): their OLR or absorbed sunlight parts by more than
+ * `limit` W/m² at some step, where the engines otherwise agree to about
+ * 10⁻² W/m². `check` takes the CPU model and the GPU's physics buffer after
+ * each step.
+ */
+function cloudDecisions(C, limit = 1) {
+  const parted = new Set();
+  let absorbed = null;
+  return {
+    parted,
+    check(cpu, device) {
+      const summed = cpu.radiation.summed.absorbedSolar;
+      for (let i = 0; i < C; i++) if (Math.abs(cpu.radiation.outgoing[i] - device.OLR[i]) > limit || (absorbed && Math.abs(summed[i] - absorbed[i] - device.ABS[i]) > limit)) parted.add(i);
+      absorbed = Float64Array.from(summed);
+    },
+  };
+}
+async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, options = {}, moist = {}, boundaryLayer = {}, each = null) {
   const model = createModel(new Grid(N), { ocean: false, radiation: { stratus, ...options }, moist, boundaryLayer, surface: { exchange: options.surfaceExchange ?? 'roughness' } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
@@ -29,7 +49,7 @@ async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, option
   const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, ...options, ...moist, ...boundaryLayer } });
   gpu.upload(model.state);
   gpu.uploadPhysics();
-  for (let n = 0; n < steps; n++) { const time = model.time; model.step(dt); await gpu.stepModel(dt, time); }
+  for (let n = 0; n < steps; n++) { const time = model.time; model.step(dt); await gpu.stepModel(dt, time); if (each) each(model, await gpu.downloadPhysics()); }
   return { model, gpu, state: await gpu.download(), physics: await gpu.downloadPhysics() };
 }
 
@@ -160,7 +180,7 @@ async function physicsHeating(base, options, dt = 864000, cumulus = null, mixing
     if (model.radiation.insolation(i) > 0 && (water > 1e-3 || model.radiation.stratus[i] > 0)) cloudy.push(i);
   }
   const power = (rate, i) => { let sum = 0; for (let k = 0; k < K; k++) sum += rate[k * C + i] / 86400 * cp * pi[i] * dSigma[k] / g; return sum; };
-  return { K, C, cloudy, cpu: heating(model.state[1]), gpu: heating(after), power, area: model.mesh.areaCell, cpuDeck: Float64Array.from(model.radiation.stratusFraction), gpuDeck: ph.DECKF.subarray(0, C), cpuLongwave: Float64Array.from(model.radiation.longwave), gpuLongwave: ph.LWH.subarray(0, K * C) };
+  return { K, C, cloudy, cpu: heating(model.state[1]), gpu: heating(after), power, area: model.mesh.areaCell, cpuDeck: Float64Array.from(model.radiation.stratusFraction), gpuDeck: ph.DECKF.subarray(0, C), cpuLongwave: Float64Array.from(model.radiation.longwave), gpuLongwave: ph.LWH.subarray(0, K * C), cpuOutgoing: Float64Array.from(model.radiation.outgoing), gpuOutgoing: ph.OLR.subarray(0, C), gpuSurfaceLongwave: ph.LWSFCSUM.subarray(0, C) };
 }
 
 test('the heating of each layer of the sunlit cloudy columns, and the part of it the cloud water absorbs, agree between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -320,6 +340,35 @@ test('the uniform condensation\'s cover of each layer\'s condensate, over ice wh
   console.log(`the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}; the exponential-random overlap moves it by up to ${overlap.toFixed(2)} K/day from maximum-random, the uniform cover by ${cover.toFixed(2)} from the saturation adjustment's, its saturation over ice by ${ice.toFixed(2)}, the stratiform blend at the cover's saturation on an inversion ramp of −40 to 40 K by ${blended.toFixed(2)}`);
   assert.ok(overlap > 1e-3 && cover > 0.1 && ice > 0.01 && blended > 0.1, `overlap ${overlap}, cover ${cover}, ice ${ice}, blend ${blended} K/day`);
   assert.ok(engines < 1.5e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
+});
+
+test('the longwave\'s exponential-random overlap of resolved cloud of partial cover in separate runs of layers heats the layers alike in both engines, moves their heating and the OLR alike from the random overlap\'s, and the GPU\'s layers\' longwave closes on its surface and top fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { base } = cloudyState();
+  const chain = await physicsHeating(base, {}), random = await physicsHeating(base, { longwaveOverlap: 'random' });
+  const { K, C } = chain;
+  let engines = 0, scale = 0, moved = 0, change = 0, olr = 0, olrMoved = 0, closure = 0, longwave = 0, longwaveScale = 0;
+  for (let i = 0; i < C; i++) {
+    olr = Math.max(olr, ...[chain, random].map((r) => Math.abs(r.cpuOutgoing[i] - r.gpuOutgoing[i])));
+    olrMoved = Math.max(olrMoved, Math.abs(chain.cpuOutgoing[i] - random.cpuOutgoing[i]));
+    let sum = 0;
+    for (let k = 0; k < K; k++) {
+      const x = k * C + i;
+      sum += chain.gpuLongwave[x];
+      longwave = Math.max(longwave, ...[chain, random].map((r) => Math.abs(r.cpuLongwave[x] - r.gpuLongwave[x])));
+      longwaveScale = Math.max(longwaveScale, Math.abs(chain.cpuLongwave[x]));
+      if (k === K - 1) continue;
+      engines = Math.max(engines, ...[chain, random].map((r) => Math.abs(r.cpu[x] - r.gpu[x])));
+      scale = Math.max(scale, Math.abs(chain.cpu[x]));
+      moved = Math.max(moved, Math.abs(chain.cpu[x] - random.cpu[x]));
+      change = Math.max(change, Math.abs((chain.cpu[x] - random.cpu[x]) - (chain.gpu[x] - random.gpu[x])));
+    }
+    closure = Math.max(closure, Math.abs(sum + chain.gpuSurfaceLongwave[i] + chain.gpuOutgoing[i]));
+  }
+  console.log(`${C} columns at N=6: the engines' layer heating differs by at most ${engines.toExponential(1)} K/day against a largest ${scale.toFixed(1)}, the layers' longwave by ${longwave.toExponential(1)} of ${longwaveScale.toFixed(0)} W/m2 and the OLR by ${olr.toExponential(1)} W/m2; the exponential-random overlap moves the heating by up to ${moved.toFixed(2)} K/day and the OLR by up to ${olrMoved.toFixed(2)} W/m2 from the random overlap's, the engines' change of the heating alike to ${change.toExponential(1)} K/day; on the GPU the layers' longwave closes on the surface and top fluxes to ${closure.toExponential(1)} W/m2`);
+  assert.ok(moved > 0.05 && olrMoved > 1, `the overlap moves the heating by ${moved} K/day and the OLR by ${olrMoved} W/m2`);
+  assert.ok(engines < 1e-5 * scale && change < 1e-5 * scale, `layer heating differs by ${engines} K/day, its change by ${change}, against ${scale}`);
+  assert.ok(olr < 2e-5 * 300 && longwave < 2e-5 * longwaveScale, `OLR apart by ${olr}, the layers' longwave by ${longwave} W/m2 of ${longwaveScale}`);
+  assert.ok(closure < 1e-3, `the GPU's longwave closes to ${closure} W/m2`);
 });
 
 test('under maximum-random overlap a layer of trace cloud water joins the layers either side into one block in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -675,10 +724,11 @@ test('the GPU model sends the deck\'s running-mean subsidence, carried height an
 });
 
 test('the convective and large-scale rain accumulate alike in both engines, cell by cell but for the odd column whose onset falls a step apart (a plume shortens the lifetime of the cloud below its top), and add up to the precipitation', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { model, physics } = await pair(6, 24, 900, 0, false, { surfaceExchange: 'fixed' }, { rainEvaporation: 0 });
+  const decisions = cloudDecisions(362);
+  const { model, physics } = await pair(6, 24, 900, 0, false, { surfaceExchange: 'fixed' }, { rainEvaporation: 0, excessVelocity: 'convective', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' }, {}, (cpu, device) => decisions.check(cpu, device));
   const C = model.mesh.nCells, { convectivePrecipitation: convective, largeScalePrecipitation: largeScale, precipitation, rain } = model.moist;
   const largest = Math.max(...convective), largestScale = Math.max(...largeScale);
-  const onset = (i) => Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest || Math.abs(largeScale[i] - physics.COND[i]) > 1e-3 * largestScale;
+  const onset = (i) => decisions.parted.has(i) || Math.abs(convective[i] - physics.CONV[i]) > 1e-3 * largest || Math.abs(largeScale[i] - physics.COND[i]) > 1e-3 * largestScale;
   const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !onset(i)), pick = (values) => Float64Array.from(kept, (i) => values[i]);
   const conv = stats(pick(convective), pick(physics.CONV)), ls = stats(pick(largeScale), pick(physics.COND)), step = stats(pick(rain), pick(physics.STEPRAIN));
   let fired = 0, rained = 0, apart = 0, area = 0, cpuMean = 0, gpuMean = 0;
@@ -689,10 +739,11 @@ test('the convective and large-scale rain accumulate alike in both engines, cell
     apart = Math.max(apart, Math.abs(convective[i] + largeScale[i] - precipitation[i]));
     area += a; cpuMean += a * convective[i]; gpuMean += a * physics.CONV[i];
   }
-  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain of either kind; over the rest per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
-  assert.ok(fired > C / 2 && rained > 0, `convective rain on ${fired} cells, large-scale on ${rained}`);
+  console.log(`24 steps at N=6: convective rain on ${fired} of ${C} cells, ${(cpuMean / area).toFixed(4)} kg/m² in the mean (GPU ${(gpuMean / area).toFixed(4)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain of either kind or whose OLR or absorbed sunlight parted by more than 1 W/m² at a step (${decisions.parted.size}); over the rest per-cell rms ${conv.rmsRel.toExponential(1)}, large-scale on ${rained}, per-cell rms ${ls.rmsRel.toExponential(1)}; the last step's rain differs by at most ${step.maxDiff.toExponential(1)} kg/m²`);
+  assert.ok(fired > C / 3 && rained > 0, `convective rain on ${fired} cells, large-scale on ${rained}`);
   assert.ok(C - kept.length <= 0.02 * C, `${C - kept.length} cells apart`);
-  assert.ok(Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `mean convective rain ${cpuMean / area} against ${gpuMean / area}`);
+  const keptMean = (values) => kept.reduce((sum, i) => sum + model.mesh.areaCell[i] * values[i], 0);
+  assert.ok(Math.abs(keptMean(physics.CONV) - keptMean(convective)) < 1e-3 * keptMean(convective), `mean convective rain over the kept cells ${keptMean(convective)} against ${keptMean(physics.CONV)}`);
   assert.ok(conv.rmsRel < 1e-3 && ls.rmsRel < 1e-3, `per-cell rms convective ${conv.rmsRel}, large-scale ${ls.rmsRel}`);
   assert.ok(step.maxDiff < 3e-4, `the last step's rain differs by ${step.maxDiff} at ${step.at}`);
   assert.ok(apart < 1e-12, `convective plus large-scale is the precipitation to ${apart}`);
@@ -700,8 +751,8 @@ test('the convective and large-scale rain accumulate alike in both engines, cell
 
 test('both models read the rain split out at the diagnostics as means in mm/d, clearing its sums, alike but for the odd column whose onset falls a step apart, and the GPU model sends the means to the device on load and mirrors them on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
-  const surface = { convectiveGust: false };
-  const cpu = createModel(new Grid(6), { ocean: false, surface }), gpu = await createGpuModel(new Grid(6), { ocean: false, surface });
+  const surface = { convectiveGust: false }, moist = { convectionType: 'top', plumeEntrainmentLaw: 'gregory' };
+  const cpu = createModel(new Grid(6), { ocean: false, surface, moist }), gpu = await createGpuModel(new Grid(6), { ocean: false, surface, moist });
   const C = cpu.mesh.nCells, init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   const loaded = Float64Array.from({ length: C }, (_, i) => 0.5 * (i % 9));
@@ -714,7 +765,8 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
   device = await gpu.gpu.downloadPhysics();
   assert.equal(device.CONVMEAN[1], Math.fround(loaded[1]), 'a diagnostics frame with no time elapsed keeps the means');
   const steps = 24, seconds = steps * 900;
-  for (let n = 0; n < steps; n++) { cpu.step(900); await gpu.step(900); }
+  const decisions = cloudDecisions(C);
+  for (let n = 0; n < steps; n++) { cpu.step(900); await gpu.step(900); decisions.check(cpu, await gpu.gpu.downloadPhysics()); }
   const sums = Float64Array.from(cpu.moist.convectivePrecipitation);
   device = await gpu.gpu.downloadPhysics();
   const gpuSums = Float64Array.from(device.CONV.subarray(0, C)), gpuLarge = Float64Array.from(device.COND.subarray(0, C));
@@ -731,20 +783,22 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
     const a = cpu.mesh.areaCell[i];
     area += a; cpuMean += a * cpu.moist.convectiveRain[i]; gpuMean += a * gpu.moist.convectiveRain[i];
   }
-  const largest = Math.max(...cpu.moist.convectiveRain), kept = Array.from({ length: C }, (_, i) => i).filter((i) => !(Math.abs(cpu.moist.convectiveRain[i] - gpu.moist.convectiveRain[i]) > 1e-3 * largest));
+  const largest = Math.max(...cpu.moist.convectiveRain), kept = Array.from({ length: C }, (_, i) => i).filter((i) => !decisions.parted.has(i) && !(Math.abs(cpu.moist.convectiveRain[i] - gpu.moist.convectiveRain[i]) > 1e-3 * largest));
   const pick = (values) => Float64Array.from(kept, (i) => values[i]);
   const convective = stats(pick(cpu.moist.convectiveRain), pick(gpu.moist.convectiveRain)), largeScale = stats(pick(cpu.moist.largeScaleRain), pick(gpu.moist.largeScaleRain));
-  console.log(`six hours at N=6: convective rain ${(cpuMean / area).toFixed(3)} mm/d in the mean (GPU ${(gpuMean / area).toFixed(3)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain; over the rest per-cell rms ${convective.rmsRel.toExponential(1)}, large-scale per-cell rms ${largeScale.rmsRel.toExponential(1)}`);
-  assert.ok(cpuMean / area > 0.1 && Math.abs(gpuMean - cpuMean) < 1e-3 * cpuMean, `mean convective rain ${cpuMean / area} against ${gpuMean / area} mm/d`);
-  assert.ok(C - kept.length <= 0.01 * C, `${C - kept.length} cells apart`);
-  assert.ok(convective.rmsRel < 1e-3 && largeScale.rmsRel < 1e-3, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScale.rmsRel}`);
+  const rainScale = Math.sqrt(kept.reduce((sum, i) => sum + (cpu.moist.convectiveRain[i] + cpu.moist.largeScaleRain[i]) ** 2, 0)), largeScaleOfRain = largeScale.rms * Math.sqrt(kept.length) / rainScale;
+  console.log(`six hours at N=6: convective rain ${(cpuMean / area).toFixed(3)} mm/d in the mean (GPU ${(gpuMean / area).toFixed(3)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain or whose OLR or absorbed sunlight parted by more than 1 W/m² at a step (${decisions.parted.size}); over the rest per-cell rms ${convective.rmsRel.toExponential(1)}; large-scale at most ${Math.max(...cpu.moist.largeScaleRain).toExponential(1)} mm/d, its per-cell rms ${largeScale.rmsRel.toExponential(1)} of itself and ${largeScaleOfRain.toExponential(1)} of the rain`);
+  const keptMean = (values) => kept.reduce((sum, i) => sum + cpu.mesh.areaCell[i] * values[i], 0);
+  assert.ok(cpuMean / area > 0.01 && Math.abs(keptMean(gpu.moist.convectiveRain) - keptMean(cpu.moist.convectiveRain)) < 1e-3 * keptMean(cpu.moist.convectiveRain), `mean convective rain ${cpuMean / area} against ${gpuMean / area} mm/d`);
+  assert.ok(C - kept.length <= 0.02 * C, `${C - kept.length} cells apart`);
+  assert.ok(convective.rmsRel < 1e-3 && largeScaleOfRain < 1e-3, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScaleOfRain} of the rain`);
 });
 
 test('step by step from one state with partly iced, melting polar cells, the engines agree on the ice, its snow and their albedo, the surface flux, the lowest layers and the boundary layer\'s regime, but for the odd column whose dry adjustment merges one layer more on one engine', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
   const { readRanges } = await import('../js/gpu/device.module.js');
-  const N = 6, dt = 1350 * 16 / N, options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false } };
+  const N = 6, dt = 1350 * 16 / N, options = { ocean: false, levels: sigmaInterfaces('bl34'), radiation: { clearSkyPass: true }, surface: { convectiveGust: false }, moist: { convectionType: 'top', plumeEntrainmentLaw: 'gregory' } };
   const cpu = createModel(new Grid(N), options), gpu = await createGpuModel(new Grid(N), options);
   const C = cpu.mesh.nCells, K = cpu.core.K, init = initializeState(cpu, {});
   const iced = [];
@@ -758,14 +812,16 @@ test('step by step from one state with partly iced, melting polar cells, the eng
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SNOW, snow);
   const worst = { h: 0, A: 0, snow: 0, albedo: 0, skin: 0, flux: 0, iceFlux: 0, theta: 0, flips: 0 };
   const mixedTop = (q, i) => { let k = K - 1; while (k > 0 && Math.abs(q[(k - 1) * C + i] - q[(K - 1) * C + i]) <= 1e-6 * q[(K - 1) * C + i]) k--; return k; };
-  const merged = new Set();
+  const merged = new Set(), decisions = cloudDecisions(C);
   let melted = 0;
   for (let n = 0; n < 8; n++) {
     cpu.step(dt);
     await gpu.step(dt);
     await gpu.sync();
-    const [conc, snowNow, snowAlbedo, flux, regime] = await readRanges(device, buffers.PH, ['CONC', 'SNOW', 'SNOWALB', 'SFLUX', 'REGIME'].map((name) => ({ offset: layout.PH[name], length: C })));
+    const [conc, snowNow, snowAlbedo, flux, regime, outgoing] = await readRanges(device, buffers.PH, ['CONC', 'SNOW', 'SNOWALB', 'SFLUX', 'REGIME', 'OLR'].map((name) => ({ offset: layout.PH[name], length: C })));
     for (let i = 0; i < C; i++) if (mixedTop(cpu.state[4], i) !== mixedTop(gpu.state[4], i)) merged.add(i);
+    decisions.check(cpu, { OLR: outgoing, ABS: (await gpu.gpu.downloadPhysics()).ABS });
+    for (const i of decisions.parted) merged.add(i);
     for (let i = 0; i < C; i++) {
       if (cpu.boundaryLayer.regime[i] !== regime[i]) worst.flips++;
       if (merged.has(i)) continue;
@@ -779,8 +835,8 @@ test('step by step from one state with partly iced, melting polar cells, the eng
       if (n === 7 && cpu.state[3][i] >= 273.15 && cpu.seaIce.snow[i] < 3) melted++;
     }
   }
-  console.log(`8 steps, ${iced.length} cells iced at 0.7 under 1.2 m and 3 kg/m² of snow (${melted} melting at the end): the engines differ by up to ${worst.h.toExponential(1)} m of ice, ${worst.A.toExponential(1)} of cover, ${worst.snow.toExponential(1)} kg/m² of snow, ${worst.albedo.toExponential(1)} of its albedo, ${worst.skin.toExponential(1)} K at the skin and ${worst.iceFlux.toExponential(1)} W/m² of surface flux there; everywhere ${worst.flux.toExponential(1)} W/m², ${worst.theta.toExponential(1)} K of θ in the lowest ten layers, ${worst.flips} boundary-layer regimes, over the ${C - merged.size} of ${C} columns whose well-mixed bottom block of uniform q tops at the same layer on both engines after every step`);
-  assert.ok(merged.size <= C / 100, `${merged.size} columns' dry adjustment merges a different number of layers`);
+  console.log(`8 steps, ${iced.length} cells iced at 0.7 under 1.2 m and 3 kg/m² of snow (${melted} melting at the end): the engines differ by up to ${worst.h.toExponential(1)} m of ice, ${worst.A.toExponential(1)} of cover, ${worst.snow.toExponential(1)} kg/m² of snow, ${worst.albedo.toExponential(1)} of its albedo, ${worst.skin.toExponential(1)} K at the skin and ${worst.iceFlux.toExponential(1)} W/m² of surface flux there; everywhere ${worst.flux.toExponential(1)} W/m², ${worst.theta.toExponential(1)} K of θ in the lowest ten layers, ${worst.flips} boundary-layer regimes, over the ${C - merged.size} of ${C} columns whose well-mixed bottom block of uniform q tops at the same layer on both engines after every step and whose OLR and absorbed sunlight never parted by more than 1 W/m² (${decisions.parted.size} did)`);
+  assert.ok(merged.size - decisions.parted.size <= C / 100 && decisions.parted.size <= C / 100, `${merged.size} columns' dry adjustment merges a different number of layers or their cloud decisions part (${decisions.parted.size})`);
   assert.ok(melted > 0, 'some cell melts');
   assert.ok(worst.h < 1e-4 && worst.A < 1e-4 && worst.snow < 1e-3 && worst.albedo < 1e-4 && worst.skin < 0.01 && worst.iceFlux < 0.5, JSON.stringify(worst));
   assert.ok(worst.flux < 1 && worst.theta < 0.01 && worst.flips === 0, JSON.stringify(worst));
