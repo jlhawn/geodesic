@@ -3,13 +3,16 @@
  * device test (probe in model.worker.js) picks them: the highest
  * resolution up to maxN (N=128 on desktop browsers, N=64 on phones and
  * tablets) whose projected rate clears TARGET_RATE simulated hours a
- * minute, 24 plus room for the page's own work. A step's time grows with
- * the number of cells, N², from the GPU's test at N=64, or from one CPU
- * thread's at N=16 divided by the workers' speed-up. The choice is kept in
- * this browser for the same browser and GPU.
+ * minute, a model day in about a minute and a half. A step's time grows
+ * with the number of cells, N², from the GPU's test (at N=64 on desktops,
+ * N=32 on phones and tablets, whose memory an N=64 test alone would
+ * strain), or from one CPU thread's at N=16 divided by the workers'
+ * speed-up. The choice is kept in this browser for the same browser and
+ * GPU.
  */
-export const TARGET_RATE = 30, PROBE_VERSION = 2, GPU_LADDER = [128, 64, 32], CPU_LADDER = [64, 32, 16];
+export const TARGET_RATE = 15, PROBE_VERSION = 3, GPU_LADDER = [128, 64, 32], CPU_LADDER = [64, 32, 16];
 export const DESKTOP_MAX_N = 128, MOBILE_MAX_N = 64;
+export const probeN = (maxN) => (maxN >= DESKTOP_MAX_N ? 64 : 32);
 
 /*
  * Phones and tablets, which run N=64 at most: the browser's own mobile

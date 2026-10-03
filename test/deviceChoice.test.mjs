@@ -1,28 +1,35 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pickDevice, hoursPerMinute, isMobileBrowser, TARGET_RATE, MOBILE_MAX_N } from '../js/deviceChoice.module.js';
+import { pickDevice, hoursPerMinute, isMobileBrowser, probeN, TARGET_RATE, DESKTOP_MAX_N, MOBILE_MAX_N } from '../js/deviceChoice.module.js';
 
-test('an M1 Max GPU (14.5 ms a step at N=64) runs N=128', () => {
-  const choice = pickDevice({ gpu: { N: 64, ms: 14.5 } }, 8);
+test('an M1 Max GPU (30 ms a step at N=64 with the whole physics) runs N=128', () => {
+  const choice = pickDevice({ gpu: { N: 64, ms: 30 } }, 8);
   assert.equal(choice.engine, 'gpu');
   assert.equal(choice.N, 128);
-  assert.ok(Math.abs(choice.rate - 48.5) < 0.5, `${choice.rate}`);
+  assert.ok(Math.abs(choice.rate - 23.4) < 0.5, `${choice.rate}`);
 });
 
-test('an iPhone GPU (165 ms a step at N=64) runs N=64', () => {
-  const choice = pickDevice({ gpu: { N: 64, ms: 165 } }, 4);
+test('a GPU at 50 ms a step at N=64 runs N=64, and the test on a phone runs at N=32', () => {
+  const choice = pickDevice({ gpu: { N: 64, ms: 50 } }, 4);
   assert.deepEqual([choice.engine, choice.N], ['gpu', 64]);
   assert.ok(choice.rate >= TARGET_RATE);
+  assert.equal(probeN(DESKTOP_MAX_N), 64);
+  assert.equal(probeN(MOBILE_MAX_N), 32);
+  const phone = pickDevice({ gpu: { N: 32, ms: 20 } }, 4, { maxN: MOBILE_MAX_N });
+  assert.deepEqual([phone.engine, phone.N], ['gpu', 64]);
 });
 
 test('a slower GPU falls to N=32', () => {
   assert.equal(pickDevice({ gpu: { N: 64, ms: 400 } }, 4).N, 32);
+  assert.equal(pickDevice({ gpu: { N: 32, ms: 120 } }, 4, { maxN: MOBILE_MAX_N }).N, 32);
 });
 
 test('without the GPU, the CPU runs what its workers can carry', () => {
   const failed = { N: 64, error: 'no adapter' };
-  assert.deepEqual((({ engine, N }) => [engine, N])(pickDevice({ gpu: failed, cpu: { N: 16, ms: 105 } }, 8)), ['cpu', 32]);
-  assert.equal(pickDevice({ gpu: null, cpu: { N: 16, ms: 105 } }, 1).N, 16);
+  assert.deepEqual((({ engine, N }) => [engine, N])(pickDevice({ gpu: failed, cpu: { N: 16, ms: 105 } }, 8)), ['cpu', 64]);
+  assert.deepEqual((({ engine, N }) => [engine, N])(pickDevice({ gpu: failed, cpu: { N: 16, ms: 250 } }, 8)), ['cpu', 32]);
+  assert.equal(pickDevice({ gpu: null, cpu: { N: 16, ms: 105 } }, 1).N, 32);
+  assert.equal(pickDevice({ gpu: null, cpu: { N: 16, ms: 200 } }, 1).N, 16);
 });
 
 test('hours a minute from the step time', () => {

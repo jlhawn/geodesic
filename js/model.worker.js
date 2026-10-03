@@ -456,15 +456,16 @@ self.onmessage = async (event) => {
 };
 
 /*
- * The device test the page runs before its first start on a device: an
- * N=64 model on the GPU from the fresh initial state, stepped as the loop
- * steps it after a short warm-up, reporting milliseconds a step. Without
- * a GPU, or when that fails, one thread of the CPU engine at N=16 instead.
- * It runs alone: anything else on the worker's thread slows the steps.
+ * The device test the page runs before its first start on a device: a
+ * model on the GPU at the message's N (64 on desktops, 32 on phones) from
+ * the fresh initial state, stepped as the loop steps it after a short
+ * warm-up, reporting milliseconds a step. Without a GPU, or when that
+ * fails, one thread of the CPU engine at N=16 instead. It runs alone:
+ * anything else on the worker's thread slows the steps.
  */
 const PROBE = { gpuN: 64, cpuN: 16, warmup: 4, steps: 12, cpuSteps: 3 };
 async function probe(message) {
-  const result = { gpu: null, cpu: null };
+  const result = { gpu: null, cpu: null }, gpuN = message.N ?? PROBE.gpuN;
   const topography = message.land === false ? null : await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href);
   const options = { ...(topography ? { topography } : {}), terrain: message.terrain !== false };
   const prepare = (test, N) => {
@@ -479,9 +480,9 @@ async function probe(message) {
     let test = null;
     try {
       status('testing the GPU…', 0.1);
-      test = await createGpuModel(new Grid(PROBE.gpuN), { ...options, ...(topography ? { subgrid: await loadSubgrid(PROBE.gpuN) } : {}) });
-      prepare(test, PROBE.gpuN);
-      const step = 1350 * 16 / PROBE.gpuN, queued = [];
+      test = await createGpuModel(new Grid(gpuN), { ...options, ...(topography ? { subgrid: await loadSubgrid(gpuN) } : {}) });
+      prepare(test, gpuN);
+      const step = 1350 * 16 / gpuN, queued = [];
       for (let n = 0; n < PROBE.warmup; n++) await test.step(step);
       await test.settle();
       const begin = performance.now();
@@ -491,9 +492,9 @@ async function probe(message) {
         if (queued.length >= QUEUE_DEPTH) await queued.shift();
       }
       await Promise.all(queued);
-      result.gpu = { N: PROBE.gpuN, ms: (performance.now() - begin) / PROBE.steps };
+      result.gpu = { N: gpuN, ms: (performance.now() - begin) / PROBE.steps };
     } catch (error) {
-      result.gpu = { N: PROBE.gpuN, error: String(error) };
+      result.gpu = { N: gpuN, error: String(error) };
     } finally {
       if (test && test.destroy) test.destroy();
     }

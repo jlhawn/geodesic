@@ -9,7 +9,7 @@ import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
 import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot } from "./snapshots.module.js";
 import { Stats } from "./stats.module.js";
-import { pickDevice, isMobileBrowser, PROBE_VERSION, DESKTOP_MAX_N, MOBILE_MAX_N } from "./deviceChoice.module.js";
+import { pickDevice, isMobileBrowser, probeN, PROBE_VERSION, DESKTOP_MAX_N, MOBILE_MAX_N } from "./deviceChoice.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
 const VERTICAL_MAX = { surface: 3, 1000: 3, 850: 10, 700: 10, 500: 10, 250: 10, 70: 3, 10: 1 };
@@ -958,7 +958,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     const reply = await new Promise((resolve, reject) => {
       probed = resolve;
       setTimeout(() => { probed = null; reject(new Error('the device test did not answer')); }, PROBE_TIMEOUT);
-      worker.postMessage({ type: 'probe', engine, land, terrain, topography: topographyUrl });
+      worker.postMessage({ type: 'probe', engine, land, terrain, topography: topographyUrl, N: probeN(maxN) });
     });
     const choice = reply.result && pickDevice(reply.result, threads, { maxN });
     if (!choice) throw new Error(reply.error ?? 'the device test found nothing to run on');
