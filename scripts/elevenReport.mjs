@@ -95,7 +95,7 @@ export function report(now = new Date()) {
     if (d.iceN > 25 || d.iceS > 25) flags.push(`N=${n}: sea ice past 25 Mkm² (N ${d.iceN.toFixed(1)} S ${d.iceS.toFixed(1)})`);
     for (const j of l.jumps.slice(-2)) out.push(`N=${n} ${j.split('; by band')[0]}`);
   }
-  const compare = text(join(DIR, `${PREFIX}_compare.md`)).split(/^### /m).filter(Boolean).pop();
+  const compare = text(join(DIR, `${PREFIX}_compare.md`)).split(/^### /m).filter((c) => /Surface temperature \(°C\) \|[^|]+\|[^|]*\d[^|]*\|/.test(c)).pop();
   if (compare) {
     const want = ['Surface temperature (°C)', 'SST, west Pacific warm pool', 'SST, east Pacific cold tongue', 'Thermocline, equator', 'Surface wind, trades', 'Surface wind, strongest westerlies'];
     const rows = compare.split('\n').filter((r) => want.some((w) => r.includes(w))).map((r) => r.replace(/\*\*/g, '').split('|').map((c) => c.trim()).filter(Boolean)).map((c) => `${c[0].replace(/ \(.*?\)$/, '')}: ${c[1]} | ${c[2]}`);
