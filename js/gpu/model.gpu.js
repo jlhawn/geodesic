@@ -168,8 +168,10 @@ export async function createGpuModel(gridOrMesh, {
    * to the number of submissions. `afterStep` runs after each step's
    * recording, and whatever it records through the core lands after that
    * step in the same submission. The mirrors stay lazy, as after `step`.
+   * With `wait` false it resolves once the batch is submitted, as `step`
+   * does, and `settle` waits for it.
    */
-  model.stepBatch = async function stepBatch(count, dt, afterStep = null) {
+  model.stepBatch = async function stepBatch(count, dt, afterStep = null, wait = true) {
     const submissions = await gpu.batched(async () => {
       for (let n = 0; n < count; n++) {
         await gpu.stepModel(dt, model.time);
@@ -179,7 +181,7 @@ export async function createGpuModel(gridOrMesh, {
       }
     });
     dirty = true;
-    await gpu.device.queue.onSubmittedWorkDone();
+    if (wait) await gpu.device.queue.onSubmittedWorkDone();
     return submissions;
   };
   model.settle = () => gpu.device.queue.onSubmittedWorkDone();

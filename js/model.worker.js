@@ -215,8 +215,9 @@ async function yieldToPage() {
 
 /*
  * On the GPU a step only queues work: the frame's kernels and read-backs
- * are queued ahead of the batch of steps and the frame is posted after
- * it. The CPU engines step their arrays in place, so they build the
+ * are queued ahead of the frame's steps, which go to the device together
+ * as one batch (model.stepBatch) yielding to the page once, and the frame
+ * is posted after them. The CPU engines step their arrays in place, so they build the
  * frame after the steps. A land that started fresh jumps once its
  * record passes each of FRESH_JUMPS, as the spin-up's default does.
  */
@@ -230,7 +231,8 @@ async function loop() {
     if (model.beginFrame) {
       const capturing = model.beginFrame(subscription);
       capturing.catch(() => {}); // when a step fails first, its error is the one reported
-      for (let n = 0; n < stepsPerFrame; n++) { await model.step(dt); await yieldToPage(); }
+      await model.stepBatch(stepsPerFrame, dt, null, false);
+      await yieldToPage();
       postFrame(await capturing);
     } else {
       for (let n = 0; n < stepsPerFrame; n++) await model.step(dt);

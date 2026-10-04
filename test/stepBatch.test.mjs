@@ -13,8 +13,8 @@ const { createForcingRecorder } = gpuAvailable ? await import('../js/gpu/forcing
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 + 2500 * Math.exp(-(((lat - 0.3) / 0.3) ** 2)) : -4000));
 const DT = 900;
 
-async function prepared() {
-  const model = await createGpuModel(new Grid(6), { topography, land: { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600 } });
+async function prepared(radiation = {}) {
+  const model = await createGpuModel(new Grid(6), { topography, radiation, land: { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600 } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
@@ -90,5 +90,19 @@ test('the forcing recorder writes the same day inside batches as after single st
   for (let x = 0; x < days[0].length; x++) if (days[0][x] !== days[1][x]) differ++;
   assert.equal(differ, 0, `the recorded day differs in ${differ} of ${days[0].length} bytes`);
   console.log(`33 recorded steps at N=6, batched as 5 + 28 in ${submissions} submissions: the ${days[0].length}-byte forcing day matches the single steps' byte for byte`);
+  for (const model of [single, batched]) model.destroy();
+});
+
+test('with the radiation held between calls every third step, steps batched without waiting for the device leave it where single steps do', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const single = await prepared({ radiationEvery: 3 }), batched = await prepared({ radiationEvery: 3 });
+  for (let n = 0; n < 14; n++) await single.step(DT);
+  await single.settle();
+  await batched.stepBatch(5, DT, null, false);
+  await batched.stepBatch(9, DT, null, false);
+  await batched.settle();
+  assertIdentical('5 + 9 steps', await snapshot(single), await snapshot(batched));
+  const [a, b] = [await single.diagnostics(), await batched.diagnostics()];
+  assert.deepEqual(b, a);
+  console.log(`N=6, radiation every 3 steps: 5 + 9 batched steps queued without waiting match 14 single steps bit for bit (OLR ${a.outgoingLongwave.toFixed(3)} W/m²)`);
   for (const model of [single, batched]) model.destroy();
 });
