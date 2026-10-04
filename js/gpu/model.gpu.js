@@ -111,17 +111,21 @@ export async function createGpuModel(gridOrMesh, {
   model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C), buoyancyFlux: new Float64Array(C) };
   model.oceanEngine = gpuOcean;
 
-  function pushState() {
+  function pushState(ocean) {
     gpu.upload(state);
     gpu.uploadPhysics({ orography: subgrid, wind: exchange ? exchange.wind : null, land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: exchange ? exchange.drag : null, heat: exchange && !exchange.fixed ? exchange.heat : null, reference: exchange && !exchange.fixed ? exchange.reference : null, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, snowAlbedo: landCpu ? landCpu.snowAlbedo : null, canopy: landCpu ? landCpu.canopy : null, seasonLength: landCpu ? landCpu.seasonLength : null, seasonWarmth: landCpu ? landCpu.seasonWarmth : null, rainMean: landCpu ? landCpu.rainMean : null, demandMean: landCpu ? landCpu.demandMean : null, soilCarbon: landCpu ? landCpu.soilCarbon : null, litterMean: landCpu ? landCpu.litterMean : null, decayMean: landCpu ? landCpu.decayMean : null, snowFreeCover: landCpu ? landCpu.snowFreeCover : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, meanShortwaveCloudEffect: radiationCpu.meanShortwaveCloudEffect, meanLongwaveCloudEffect: radiationCpu.meanLongwaveCloudEffect, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux, evaporation: radiationCpu.evaporation, cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual });
     gpu.setWindSpeed(surfaceCpu.windSpeed);
     gpu.clearFrame();
-    if (gpuOcean) gpuOcean.initialize(state[3], state[6], { climatology: null });
+    if (gpuOcean && ocean) gpuOcean.initialize(state[3], state[6], { climatology: null });
     lastFrameTime = model.time;
     lastFrameStep = gpu.stepCount;
     dirty = false;
   }
-  model.load = function load() { pushState(); };
+  /*
+   * With `ocean` false the ocean on the device is left for the caller to
+   * fill by ocean.load or ocean.initialize, which must follow before a step.
+   */
+  model.load = function load({ ocean = true } = {}) { pushState(ocean); };
 
   async function sync() {
     if (!dirty) return;
