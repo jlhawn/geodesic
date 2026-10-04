@@ -1,7 +1,8 @@
 # The blink figures of scripts/cloudFlicker.mjs: a map of how often each cell's cloud overlay blinks, and a strip of
 # eight consecutive steps and eight of the page's frames over the box where blinks are densest, painted as the page's
-# Cloud cover overlay paints them (white at opacity 1 - exp(-g / 40 g/m^2) over sea blue and land brown).
-#   python3 scripts/figures/cloudFlicker.py <plot.json> <map.png> <strip.png>
+# Cloud cover overlay paints them (white at opacity 1 - exp(-g / 40 g/m^2) over sea blue and land brown), and, given a
+# third file, the blink-frequency maps of each cloud type through its own overlay side by side, each on its own scale.
+#   python3 scripts/figures/cloudFlicker.py <plot.json> <map.png> <strip.png> [<types.png>]
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
@@ -67,3 +68,26 @@ fig.suptitle(f"{title}: the Cloud cover overlay over {abs(s):.0f}{'S' if s < 0 e
              color=TEXT, fontsize=11)
 plt.tight_layout(rect=(0, 0, 1, 0.93))
 fig.savefig(sys.argv[3], dpi=100, facecolor=fig.get_facecolor())
+
+if len(sys.argv) > 4 and d.get('types'):
+    NAMES = {'cloud': 'All clouds', 'cloudLow': 'Low cloud (below 800 hPa)', 'cloudMid': 'Mid cloud (800-500 hPa)', 'cloudHigh': 'High cloud (above 500 hPa)',
+             'cloudCumulus': 'Cumulus', 'cloudDeck': 'Stratocumulus deck'}
+    types = d['types']
+    rows = (len(types) + 2) // 3
+    fig, axes = plt.subplots(rows, 3, figsize=(21, 4.1 * rows + 0.7), facecolor=BACKGROUND, squeeze=False, layout='constrained')
+    for a in axes.flat:
+        a.set_visible(False)
+    for a, (name, t) in zip(axes.flat, types.items()):
+        a.set_visible(True)
+        style_axes(a); world_ticks(a)
+        frequencyT = array(t['blinks']) / max(1, d['transitions'])
+        M = raster(np.where(frequencyT > 0, frequencyT, np.nan))
+        top = max(0.02, float(np.nanpercentile(M, 99.5))) if np.isfinite(M).any() else 0.02
+        a.imshow(raster(land.astype(float)), extent=raster.extent, origin='lower', cmap=plt.matplotlib.colors.ListedColormap(['#10182b', '#3a3a3a']), vmin=0, vmax=1, interpolation='nearest')
+        im = a.imshow(np.ma.masked_invalid(M), extent=raster.extent, origin='lower', cmap='inferno', vmin=0, vmax=top, interpolation='nearest')
+        colourbar(fig, im, a, 'blink onsets per step', fraction=0.03, pad=0.01, extend='max')
+        a.set_title(f"{NAMES.get(name, name)}, range {t['range']} g/m²\n{100 * t['blinkShare']:.3f}% of cells per step, {100 * t['cellsBlinkingShare']:.2f}% of cells ever",
+                    color=TEXT, fontsize=10, loc='left')
+    fig.suptitle(f"{title}: blinks of each cloud type through its own overlay, opacity 1 - exp(-g / (0.4 range)) moving > {d['jump']} in one step and back within three\n"
+                 f"({d['transitions']} counted steps of {d['dt']:.2f} s; each map on its own scale)", color=TEXT, fontsize=12)
+    fig.savefig(sys.argv[4], dpi=90 if d['N'] > 64 else 75, facecolor=fig.get_facecolor())

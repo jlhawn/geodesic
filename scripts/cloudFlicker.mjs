@@ -27,12 +27,22 @@
 // steps with the profiles stored by layer of the CELLS worst-blinking
 // cells and of the three cells whose blinks the deck most often drives.
 //
+// The same blink statistics are taken on each cloud type's own frame
+// field (cloudLow, cloudMid, cloudHigh, cloudCumulus, cloudDeck, and
+// 'cloud' itself), each through the opacity its overlay paints, the curve
+// stretched to the overlay's range, a = 1 − exp(−g / (0.4 × range)) with
+// the ranges of CLOUD_RANGES: per type the blink share per step, the
+// share of cells blinking at least once, the lag-1 autocorrelation of the
+// step change, the share of one-step runs and the blink share by region;
+// the table goes into the JSON as `types` and is printed, and the
+// per-type blink-frequency maps into <out>/flicker_<tag>_N<N>_types.png.
+//
 // A blink is a cell whose opacity moves by more than JUMP (0.4) in one
 // step and back by more than JUMP within the next three steps. Writes
 // <out>/flicker_<tag>_N<N>.json (the numbers and the worst cells'
 // histories) and <out>/flicker_<tag>_N<N>_plot.json, and draws the
-// blink-frequency map and the strip of overlay frames with
-// scripts/figures/cloudFlicker.py.
+// blink-frequency map, the strip of overlay frames and the per-type maps
+// with scripts/figures/cloudFlicker.py.
 //   node scripts/cloudFlicker.mjs <state.bin> <outdir>
 // Environment: STEPS (64), CELLS (10), JUMP (0.4), STRIDE (the page's
 // steps per frame, max(2, round(384 / N))), CHECK (4; 0 skips), PYTHON.
@@ -41,6 +51,7 @@ import { spawnSync } from 'node:child_process';
 import { getDevice, readRanges } from '../js/gpu/device.module.js';
 import { readState, tagOf, figureHeader, gpuModelFrom, dt as stepOf, DEG } from './figures/figureState.mjs';
 import { DECK_OPEN, DECK_CLOSED } from '../js/physics/moist.module.js';
+import { CLOUD_TYPES, CLOUD_RANGES } from '../js/frames.module.js';
 
 const [file, outDir] = process.argv.slice(2);
 if (!file || !outDir) { console.error('usage: node scripts/cloudFlicker.mjs <state.bin> <outdir>'); process.exit(2); }
@@ -184,11 +195,11 @@ async function run(on, cells, steps, record) {
   const loaded = toc(t0);
   for (let n = 1; n <= steps; n++) {
     await model.step(dt);
-    const frame = model.beginFrame({ fields: ['cloud'] });
+    const frame = model.beginFrame({ fields: ['cloud', ...CLOUD_TYPES] });
     const extra = on ? readRanges(device, gpu.buffers.K1, [{ offset: 0, length: NSLOT * C }, ...(cells.length ? [{ offset: NSLOT * C, length: cells.length * ROWS * gpu.K }] : [])]) : null;
     const flux = on ? readRanges(device, gpu.buffers.PH, ['REFL', 'INS', 'OLR'].map((name) => ({ offset: PH[name], length: C }))) : null;
     const [f, e, x] = await Promise.all([frame, extra, flux]);
-    record(n, { cloud: Float32Array.from(f.fields.cloud), diag: e ? Float32Array.from(e[0]) : null, profiles: e && e[1] ? Float32Array.from(e[1]) : null, flux: x ? x.map((v) => Float32Array.from(v)) : null });
+    record(n, { cloud: Float32Array.from(f.fields.cloud), types: f.fields, diag: e ? Float32Array.from(e[0]) : null, profiles: e && e[1] ? Float32Array.from(e[1]) : null, flux: x ? x.map((v) => Float32Array.from(v)) : null });
   }
   await model.settle();
   console.log(`${on ? 'probed' : 'plain'} run: ${steps} steps, loaded in ${loaded} s, done in ${toc(t0)} s`);
@@ -208,8 +219,13 @@ if (CHECK > 0) {
   console.log(`probe check over ${CHECK} steps: ${JSON.stringify(check)}`);
 }
 
+const TYPE_NAMES = ['cloud', ...CLOUD_TYPES];
+const typeOpacity = Object.fromEntries(TYPE_NAMES.map((name) => [name, []]));
 const frames = [], diags = [], fluxes = [];
-let model = await run(true, [], STEPS, (n, r) => { frames.push(r.cloud); diags.push(r.diag); fluxes.push(r.flux); });
+let model = await run(true, [], STEPS, (n, r) => {
+  frames.push(r.cloud); diags.push(r.diag); fluxes.push(r.flux);
+  for (const name of TYPE_NAMES) typeOpacity[name].push(Float32Array.from(r.types[name], (v) => 1 - Math.exp(-Math.max(0, 1000 * v) / (OPACITY_SCALE * CLOUD_RANGES[name] / CLOUD_RANGES.cloud))));
+});
 const { mesh, geography } = model, C = mesh.nCells, K = model.gpu.K;
 if (C !== probe.C) throw new Error(`the mesh has ${C} cells, not ${probe.C}`);
 model.destroy();
@@ -403,13 +419,13 @@ const allCells = regionCells.global, blinking = allCells.filter((i) => blinkCoun
 const autocorrelation = { all: lagOne(allCells), blinkingCells: lagOne(blinking), pageCadenceAll: lagOne(allCells, pageFrames), pageCadenceBlinking: lagOne(blinking, pageFrames) };
 
 /* How many steps a blinking cell stays on (from an up-jump to the next down-jump) or off. */
-function runLengths(cells) {
+function runLengths(cells, seq = opacity) {
   const on = {}, off = {};
   let censoredOn = 0, censoredOff = 0;
   for (const i of cells) {
     let state = null, since = 0;
     for (let t = 0; t + 1 < T; t++) {
-      const d = opacity[t + 1][i] - opacity[t][i];
+      const d = seq[t + 1][i] - seq[t][i];
       if (Math.abs(d) <= JUMP) continue;
       const now = d > 0 ? 'on' : 'off';
       if (state !== null && state !== now) { const tally = state === 'on' ? on : off; const len = t + 1 - since; tally[len] = (tally[len] ?? 0) + 1; }
@@ -420,6 +436,28 @@ function runLengths(cells) {
   return { on, off, censoredOn, censoredOff };
 }
 const runs = runLengths(blinking);
+
+/* Each type's own blinks, through its overlay's opacity. */
+const types = Object.fromEntries(TYPE_NAMES.map((name) => {
+  const seq = typeOpacity[name], b = blinksOf(seq), count = new Uint16Array(C);
+  for (const x of b.onsets) count[x.i]++;
+  const cellsBlinking = allCells.filter((i) => count[i] > 0);
+  const r = runLengths(cellsBlinking, seq);
+  let finished = 0, single = 0;
+  for (const tally of [r.on, r.off]) for (const [len, n] of Object.entries(tally)) { finished += n; if (Number(len) === 1) single += n; }
+  let present = 0;
+  for (const a of seq) for (let i = 0; i < C; i++) if (a[i] > 0.05) present++;
+  return [name, {
+    range: CLOUD_RANGES[name], onsets: b.onsets.length,
+    blinkShare: round(share(b.onsets.length, C, b.counted), 5), cellsBlinkingShare: round(cellsBlinking.length / C, 4),
+    jumpShare: round(b.plain.reduce((x, y) => x + y, 0) / Math.max(1, b.plain.length), 5), visibleShare: round(present / (C * seq.length), 4),
+    lagOneChange: lagOne(allCells, seq).change, lagOneChangeBlinking: cellsBlinking.length ? lagOne(cellsBlinking, seq).change : null,
+    oneStepRunShare: finished ? round(single / finished, 3) : null, runs: finished,
+    oneStepCloudyRunShare: (() => { const n = Object.values(r.on).reduce((x, y) => x + y, 0); return n ? round((r.on[1] ?? 0) / n, 3) : null; })(),
+    regions: Object.fromEntries(Object.entries(regionCells).map(([region, cells]) => { let n = 0; for (const i of cells) n += count[i]; return [region, round(share(n, cells.length, b.counted), 5)]; })),
+    count,
+  }];
+}));
 
 /* The worst cells, at least two degrees apart. */
 const order = Array.from({ length: C }, (_, i) => i).filter((i) => blinkCount[i] > 0).sort((x, y) => blinkCount[y] - blinkCount[x] || magnitude[y] - magnitude[x]);
@@ -501,6 +539,7 @@ const summary = {
   regions, attribution, quietRadiation: quiet, autocorrelation, runs,
   cellsBlinking: blinking.length, cellsBlinkingShare: round(blinking.length / C, 4),
   worst: history,
+  types: Object.fromEntries(Object.entries(types).map(([name, { count, ...rest }]) => [name, rest])),
 };
 const name = `flicker_${tagOf(file)}_N${N}`;
 writeFileSync(`${outDir}/${name}.json`, JSON.stringify(summary));
@@ -531,10 +570,16 @@ const plot = {
     pageFrames: Array.from({ length: 8 }, (_, n) => (STRIDE * n + STRIDE - 1 < T ? boxCells.map((i) => round(opacity[STRIDE * n + STRIDE - 1][i], 3)) : null)).filter(Boolean),
     hours: Array.from({ length: 8 }, (_, n) => round((start + n + 1) * dt / 3600, 2)) },
   worst: worst.map((i) => [round(lon[i], 2), round(lat[i], 2)]),
+  types: Object.fromEntries(Object.entries(types).map(([name, t]) => [name, { range: t.range, blinkShare: t.blinkShare, cellsBlinkingShare: t.cellsBlinkingShare, blinks: Array.from(t.count) }])),
 };
 writeFileSync(`${outDir}/${name}_plot.json`, JSON.stringify(plot));
 const python = process.env.PYTHON ?? 'python3';
-const drawn = spawnSync(python, [new URL('./figures/cloudFlicker.py', import.meta.url).pathname, `${outDir}/${name}_plot.json`, `${outDir}/${name}_map.png`, `${outDir}/${name}_strip.png`], { stdio: 'inherit' });
+const drawn = spawnSync(python, [new URL('./figures/cloudFlicker.py', import.meta.url).pathname, `${outDir}/${name}_plot.json`, `${outDir}/${name}_map.png`, `${outDir}/${name}_strip.png`, `${outDir}/${name}_types.png`], { stdio: 'inherit' });
 if (drawn.status !== 0) console.error('cloudFlicker.py failed');
 console.log(JSON.stringify({ ...summary, worst: history.map((h) => ({ cell: h.cell, lat: h.lat, lon: h.lon, blinks: h.blinks, deckDriven: h.deckDrivenBlinks, regions: h.regions })) }, null, 1));
-console.log(`wrote ${outDir}/${name}.json, ${name}_plot.json, ${name}_map.png, ${name}_strip.png`);
+const percent = (v, n = 3) => (v === null ? '-' : (100 * v).toFixed(n));
+const TABLE_REGIONS = ['sea', 'land', 'tropics', 'itcz', 'northStormTrack', 'southStormTrack', 'sePacific', 'peru', 'namibia', 'california', 'nPacific'];
+console.log(`blinks by cloud type, each through its own overlay's opacity (N=${N}, ${STEPS} steps; shares in %):`);
+console.log(['type', 'range g/m²', 'visible', 'blink/step', 'cells ever', 'lag-1 Δ', 'lag-1 Δ blinking', '1-step runs', '1-step cloudy', ...TABLE_REGIONS].join('\t'));
+for (const [type, t] of Object.entries(types)) console.log([type, t.range, percent(t.visibleShare, 1), percent(t.blinkShare), percent(t.cellsBlinkingShare, 2), t.lagOneChange, t.lagOneChangeBlinking, t.oneStepRunShare, t.oneStepCloudyRunShare, ...TABLE_REGIONS.map((r) => percent(t.regions[r]))].join('\t'));
+console.log(`wrote ${outDir}/${name}.json, ${name}_plot.json, ${name}_map.png, ${name}_strip.png, ${name}_types.png`);
