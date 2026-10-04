@@ -11517,7 +11517,7 @@ without it.
 
 The default stays at `closureFill` 0 (the token edges carry the layer above's velocity as before): the two-ring fill with its transpose damps the thermocline classes' own flow by 0.2–95·10⁻⁶ /s on the audited states and took the N=128 undercurrent from 0.47 to 0.36 m/s in a day, while the first ring alone with its transpose showed no systematic drag but was not run for stability. The fill and its transpose remain options; the first-ring form is the next step here. The atlas deep fill is on.
 
-### M24 — Performance — in progress (three levers done)
+### M24 — Performance — in progress (seven levers done)
 
 The goal is a model day in a minute at N=128 on the M1 Max with every
 scheme of M21–M23 in place. Three levers, each an option whose off value
@@ -11864,8 +11864,9 @@ pressure, layer mass, height and plume environment from a state it has
 not yet changed; the shallow cumulus (`cumulusFrom`) now takes those six
 arrays instead of building them again, and builds its own only for the
 separate shallow plume after the deep plume (with the deck's gate closed
-it returns before building any). The deep plume's per-layer rain arrays are cleared only on its
-own path. Every device buffer matches 0bcd938 word for word after 16
+it returns before building any). The deep plume's per-layer rain
+arrays are cleared only on its own path. Every device buffer matches
+0bcd938 word for word after 16
 steps from eleven64_day1826 and 8 from eleven128_day1826. The adjust
 kernel at N=128 falls from 23.8 to 21.7 ms a step (−2.1: 2.0 the
 hand-over, 0.1 the clearing), at N=64 from 6.6 to 6.0. These are its
@@ -11894,6 +11895,91 @@ the class known. With the test parcel's typing as the class (99 %
 persistent) and two classes, adjust took 1.7–1.8 ms less (blocks of
 1024), and 1.2–1.4 ms less on top of the hand-over (blocks of 1024 and
 4096); a random order within blocks of 1024 took 15 ms more.
+
+**The four levers together** (branch perf-night: 55b18b8 with
+perf2-atmos-core, perf2-ocean-kernels, perf2-slow-drags and
+perf2-adjust-order merged in that order, the largest saving first). The
+code merged without a conflict; pblDiagnose takes both the atmosphere's
+column diagnosis that stores only what is read and the drags' six edges
+loaded once. The suite passes (71 files, 609 tests); the only test
+changes are the drags' two new tests and their dragEvery key in two
+exact assertions, no bound changed. On the quiet device (the streaming
+probe at 356–372 GB/s throughout), 55b18b8 and perf-night alternated,
+from eleven128_day1826 and eleven64_day1826 (`scripts/profileGpu.mjs`
+WARM=8 STEPS=32, three profiles of 55b18b8 and four of perf-night;
+`scripts/paceGpu.mjs`, four model days of each at N=128 awaited and one
+queued, four two-day runs at N=64; each column's runs within 0.4 ms
+and 0.2 s of each other):
+
+| | 55b18b8 | perf-night | less |
+|---|---|---|---|
+| dynamics: three RK4 stages with their advance | 43.1 ms | 27.8 | 15.3 |
+| dynamics: the fourth stage | 13.2 | 8.5 | 4.7 |
+| physics (radiation, surface, deck; PBL diagnosis, gravity waves, orography) | 23.4 | 15.7 | 7.7 |
+| adjust (moist, mixing, drag, dissipation) | 24.8 | 19.7 | 5.1 |
+| ocean, amortised over its calls | 25.2 | 11.9 | 13.3 |
+| ∇⁴ closures, divergence damping, sponge, combine | 10.7 | 9.3 | 1.4 |
+| GPU time per step | 140.5 ms | 92.9 | 47.6 (34 %) |
+| step median, awaited one at a time | 110.1 ms | 74.9 | 35.2 |
+| a model day at N=128, steps awaited one at a time | 72.6 s | 48.4 | 24.2 (33 %) |
+| a model day at N=128, queued 8 to a submission | 72.6 s | 48.3 | 24.3 |
+| a model day at N=64, steps awaited one at a time | 9.2 s | 7.0 | 2.2 (24 %) |
+| GPU buffers at N=128 | 3668 MiB | 3286 | 382 |
+| GPU buffers at N=64 | 917 MiB | 822 | 96 |
+
+The four entries' own estimates sum to about 48–49 ms a step (the
+atmosphere's kernels about 26, the ocean's 15, the drags 6.2, the
+hand-over 1.7–2.0); together they save 47.6, the sum within the
+estimates' error. By kernel (two SPLIT=1 profiles each of 0bcd938 and
+perf-night, ms a step): the column −10.1 (+1.2 for columnLast),
+oMomentum −8.2, cellTendency −4.4, adjust −4.1 (its own column
+diagnosis stores fewer fields too, besides the hand-over), pblDiagnose
+−4.0, divergence −3.5, oDivCurl −2.3, pvVertex −2.3, gravityWaves −2.2,
+divCurl −1.4, orography −1.3, oCellTendency −1.2, dissipationHeat −1.0.
+The GPU buffers are those alive after two steps, counted by wrapping
+the device's createBuffer; all of the 382 MiB at N=128 is D (768.8 to
+386.3 MiB).
+
+Not every lever is bit for bit (the ocean's kernels round differently,
+and the drags are laid every 4 steps at N=128 and 2 at N=64), so the day
+lines are compared with 0bcd938's, whose model is 55b18b8's, and its two
+replicates (`scripts/spinup.mjs` with STRATOSPHERE=1). Over two days at
+N=128 from eleven128_day1826 every figure of the day lines is 55b18b8's
+but the day's largest wind (89.0 and 86.1 m/s against 88.9 and 86.7, the
+replicates 89.0 and 87.1, 88.9 and 86.4), the sea surface's sunlight
+(163.2 and 160.3 W/m² against 163.1 and 160.4, the replicates 163.2 and
+160.3, 163.2 and 160.4), that of the iced cells north of 60° on the
+first day (12.7 against 12.6, both replicates 12.7) and the sea
+surface's net longwave on the second (−47.9 against −48.0): Ts 14.79 and
+14.82 °C, ASR 237.1 and 235.5, OLR 234.4 and 233.9, SWCRE −53.8 and
+−55.4, LWCRE 26.2 and 26.7 W/m², precipitation 2.76 and 2.75 mm/d, no
+clamped edge, currents at most 1.19 m/s, the balance lines alike. In the
+end lines the regions' rain differs by at most 0.1 mm/d, as the
+replicates' does, the Pacific ITCZ's by 0.01 (4.83 against 4.82), the
+Kalahari's surface reads 37 against 36 °C (36 in both replicates, the
+log's whole degrees), and the equatorial Pacific's lines are alike. Over
+three days at N=64 the run means less 55b18b8's are ASR +0.03, OLR 0.00,
+SWCRE +0.03, LWCRE −0.03 (the third day's 28.8 against 28.9 at the log's
+rounding) and precipitation +0.003, the replicates' sizes; no clamped
+edge, the largest current 1.02 m/s alike, and the top six layers'
+largest wind and Courant number the replicates'.
+
+The page from perf-night in the hidden Browser pane, with another page
+holding the GPU as in the first two timing rounds (the probe at 167–390
+GB/s, 55b18b8 at 289–297 ms of GPU time a step): at N=64 14–15 s a
+simulated day; the overlays (wind, temperature and rain at N=64, OLR and
+low cloud at N=128) switched with their legends, a pause held the clock
+and a resume continued it, and the console stayed empty. At N=128 it
+read 81.8–82.8 and 82.7–87.1 s a simulated day in two runs of two to
+three minutes, 55b18b8's page between them 118.9–120.4 (−31 %); the page
+on the quiet device was not measured.
+
+What is left at 92.9 ms a step (SPLIT=1, ms a step): the momentum kernel
+15.1 (one edge a thread over the layers on both), adjust 15.6, the
+physics kernel 13.2 (the radiation 8.7 of it, amortised), cellTendency
+9.4, advance and combine 5.8. Of the 3286 MiB at N=128 the RK4 registers
+S, T and K1–K4 hold 1834 (the atmosphere's 6 × 136.9, the ocean's 6 ×
+168.8), the ocean's OD 642, D 386 and PH 283.
 
 ### M25 — The long spin-up — planned
 
@@ -11947,7 +12033,7 @@ js/
     model.gpu.js             M15: the GPU model behind the CPU model's interface
     profile.module.js        the model dialog's GPU profile: step times and kernel timestamps
   model.module.js           assembles core + physics, RK4 step, diagnostics
-  cadence.module.js         M24: the radiation's and the ocean's intervals the drivers turn into steps
+  cadence.module.js         M24: the radiation's, the drags' and the ocean's intervals the drivers turn into steps
   audit.module.js           M21: the audit's boxes and the spin-up's convection and equator lines
   forcing.module.js         M18: one recorded day of the ocean's surface forcing, encoded and decoded
   oceanHandOff.module.js    M18: a coupled state with the ocean, sea ice and sea surface of another
