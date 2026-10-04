@@ -11857,6 +11857,44 @@ ms, gravityWaves 3.87 to 0.70 ms a step and orography 2.16 to 0.46, 6.6
 ms a step less. Whole model days under that load (`scripts/paceGpu.mjs`,
 151–166 s a day at N=128 for both) do not resolve it.
 
+**The adjust kernel's shallow cumulus fed from the deep plume** (GPU
+only, bit for bit). The deep plume (`diagnosedPlume`) falls back to the
+shallow cumulus in five places after building the column's temperature,
+pressure, layer mass, height and plume environment from a state it has
+not yet changed; the shallow cumulus (`cumulusFrom`) now takes those six
+arrays instead of building them again, and builds its own only for the
+separate shallow plume after the deep plume (with the deck's gate closed
+it returns before building any). The deep plume's per-layer rain arrays are cleared only on its
+own path. Every device buffer matches 0bcd938 word for word after 16
+steps from eleven64_day1826 and 8 from eleven128_day1826. The adjust
+kernel at N=128 falls from 23.8 to 21.7 ms a step (−2.1: 2.0 the
+hand-over, 0.1 the clearing), at N=64 from 6.6 to 6.0. These are its
+times on a shared device: another GPU process took nearly all of the GPU
+through the night (the streaming probe at 170–390 GB/s against 390), so
+the variants were interleaved step by step in one process (64
+split-profiled dispatches each in each of two runs at N=128, 192 at
+N=64) and each figure is the tight lower cluster of a variant's dispatch
+times, its 10th percentile. Alone the kernel runs about a fifth faster
+(19.0 ms), so the saving there is likely nearer 1.7 ms. A model day at
+N=128 under the same load: 294.0 ms a step before and 292.7 after (two
+pairs of `scripts/paceGpu.mjs`); at N=64 the pairs scattered by ±10 %.
+
+**Columns sorted by convective class** (tried, not kept). A counting
+sort of the column order within blocks, so that each 32-lane SIMD group
+of the adjust kernel runs columns of one class, costs under 0.07 ms but
+gains less than 2 ms. With last step's deep convection as the costliest
+class (then the deck's gate open with a positive buoyancy flux, open,
+closed), adjust took 1.7–2.9 ms longer than in the natural order with
+blocks of 128, 256 and 1024 columns. At N=64 26 % of columns convect
+deeply and 92 % of those did so the step before, but the other 8 % and
+the columns the test parcel types deep without a deep closure (the full
+plume runs for 39 %) land in most groups: in blocks of 256, 61 % of the
+sorted groups hold a deep column, against 85 % unsorted and 32 % were
+the class known. With the test parcel's typing as the class (99 %
+persistent) and two classes, adjust took 1.7–1.8 ms less (blocks of
+1024), and 1.2–1.4 ms less on top of the hand-over (blocks of 1024 and
+4096); a random order within blocks of 1024 took 15 ms more.
+
 ### M25 — The long spin-up — planned
 
 The asynchronous schedule of M18 (`scripts/asyncSpinup.sh`: a hundred
