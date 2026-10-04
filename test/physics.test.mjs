@@ -691,7 +691,7 @@ test('the free troposphere the deck entrains moves with its height across a laye
   core.diagnose(pi, theta, q, qc);
   const { g, cp, geopotential, exnerLayer, exnerLower } = core.diagnostics, thetaV = core.arrays.thetaV;
   const shallow = { ...column, mixedDepth: () => 10 };
-  const r = { interpolate: createRadiation(mesh, core, { subsidenceMemory: 1e-9 }), layer: createRadiation(mesh, core, { subsidenceMemory: 1e-9, deckReference: 'layer' }) };
+  const r = { interpolate: createRadiation(mesh, core, { subsidenceMemory: 1e-9, deckReference: 'interpolate' }), layer: createRadiation(mesh, core, { subsidenceMemory: 1e-9, deckReference: 'layer' }) };
   r.interpolate.setTime(0); r.layer.setTime(0);
   const noon = brightest(r.interpolate), j = K - 3, bottom = (K - 1) * C + noon;
   const surface = geopotential[bottom] - cp * thetaV[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);

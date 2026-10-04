@@ -11236,15 +11236,22 @@ at 34.8S 127.9E (above): the free troposphere the deck entrains (θ_l and
 q_t above h, as `thetaLAbove` and `qtAbove`) was the first layer whose
 midpoint lies above the carried height, so it switched layers as h
 crossed a midpoint and the jump, and through the decoupling ratio the
-cover, went 1 ↔ 0.3. `deckReference` 'interpolate' (the default) moves
+cover, went 1 ↔ 0.3. `deckReference` 'interpolate' moves
 that layer's θ_l and q_t toward the next layer up's by the share of the
 height from the midpoint below h to the first one above that lies below
 h, on both engines and in the host replica of
 `scripts/figures/mlmdeck.mjs`: continuous in h, the layer's own value
 with h on the midpoint below, the next layer's as h reaches the midpoint
-above, as the slab already weights the layer h lies in; 'layer' is the
-reference before, under which both engines hash as at f319996 (GPU as
-for M21's memory; CPU: the pinned deck digests in physics.test.mjs). The
+above, as the slab already weights the layer h lies in; 'layer' (the
+default) is the reference before, under which both engines hash as at
+f319996 (GPU as for M21's memory; CPU: the pinned deck digests in
+physics.test.mjs). 'layer' stays the default because the interpolation
+as built is a climate change (below), while the cycle it removes is
+0.008 % of cells a step; the reference that belongs to the physics is
+the free troposphere's air at h itself, extrapolated down from the
+layers above, which the deck's tuning against observed cover, water
+path and thickness (minimumInversion, the entrainment efficiency and a
+drizzle sink) is to set together with the gate's threshold. The
 subsidence's bracket was already the two interfaces about h and is
 unchanged (only the density it divides by is the layer's that holds h).
 By layer the reference sat from one layer's spacing above h down to h
