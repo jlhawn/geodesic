@@ -1,4 +1,4 @@
-import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf } from './device.module.js';
+import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
@@ -1084,7 +1084,7 @@ export async function createGpuCore(mesh, {
     if (retained.cumulusWater) ph.set(retained.cumulusWater, L.PH.CUWATER);
     if (retained.subcloudVirtual) ph.set(retained.subcloudVirtual, L.PH.SUBTV);
     submitNow((encoder) => encoder.clearBuffer(buffers.PH, 0, 4 * L.PH.total));
-    const words = new Uint32Array(ph.buffer), block = 262144;
+    const words = new Uint32Array(ph.buffer), block = WRITE_PIECE / 4;
     for (let start = 0; start < words.length; start += block) {
       const end = Math.min(words.length, start + block);
       let n = start;
@@ -1144,7 +1144,7 @@ export async function createGpuCore(mesh, {
     if (batch) throw new Error('a load cannot be recorded inside a batch');
     const packed = new Float32Array(L.S.total);
     state.forEach((array, a) => packed.set(array, L.S[names[a]]));
-    device.queue.writeBuffer(buffers.S, 0, packed);
+    writeInPieces(device, buffers.S, 0, packed);
     submitNow((encoder) => {
       encoder.copyBufferToBuffer(buffers.S, 0, buffers.T, 0, 4 * L.S.total);
       for (const b of [buffers.K1, buffers.K2, buffers.K3, buffers.K4]) encoder.clearBuffer(b, 0, 4 * L.S.total);

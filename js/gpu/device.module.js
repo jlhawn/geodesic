@@ -26,10 +26,21 @@ export async function getDevice() {
   return cached;
 }
 
+/*
+ * Chrome carries a queue write of a few MiB or less through its 16 MiB
+ * transfer ring, waiting for the GPU process when the ring is full, but
+ * gives a larger one shared memory of its own in both processes and
+ * keeps it for the life of the page, so large uploads go in pieces.
+ */
+export const WRITE_PIECE = 1 << 20;
+export function writeInPieces(device, buffer, offset, data) {
+  const step = WRITE_PIECE / data.BYTES_PER_ELEMENT;
+  for (let at = 0; at < data.length; at += step) device.queue.writeBuffer(buffer, offset + at * data.BYTES_PER_ELEMENT, data, at, Math.min(step, data.length - at));
+}
+
 export function storageBuffer(device, data, extraUsage = 0) {
-  const buffer = device.createBuffer({ size: Math.max(4, Math.ceil(data.byteLength / 4) * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | extraUsage, mappedAtCreation: true });
-  new (data.constructor)(buffer.getMappedRange()).set(data);
-  buffer.unmap();
+  const buffer = device.createBuffer({ size: Math.max(4, Math.ceil(data.byteLength / 4) * 4), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | extraUsage });
+  writeInPieces(device, buffer, 0, data);
   return buffer;
 }
 

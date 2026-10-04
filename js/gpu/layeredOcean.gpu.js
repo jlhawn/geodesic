@@ -1,4 +1,4 @@
-import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups } from './device.module.js';
+import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
 import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
@@ -1153,7 +1153,7 @@ export function createLayeredOcean(core, options = {}) {
     const packed = new Float32Array(OS.total);
     packed.set(h, OS.OH); packed.set(u, OS.OU); packed.set(Q, OS.OQ); packed.set(W, OS.OW);
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) packed[OS.OU + e] = 0;
-    device.queue.writeBuffer(ob.S, 0, packed);
+    writeInPieces(device, ob.S, 0, packed);
     const encoder = device.createCommandEncoder();
     encoder.copyBufferToBuffer(ob.S, 0, ob.T, 0, 4 * OS.total);
     for (const b of [ob.K1, ob.K2, ob.K3, ob.K4]) encoder.clearBuffer(b, 0, 4 * OS.total);
