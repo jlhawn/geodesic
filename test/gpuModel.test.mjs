@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { sunDirection, YEAR } from '../js/physics/radiation.module.js';
-import { saturationHumidity } from '../js/physics/moist.module.js';
+import { saturationHumidity, SUBCLOUD_LAYERS } from '../js/physics/moist.module.js';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
 
 let gpuAvailable = true;
@@ -484,6 +484,15 @@ test('with the radiation held between full calls every fourth step, twelve GPU s
   assert.ok(mu.maxDiff < 1e-6 && escape.maxDiff < 1e-4 && share.maxDiff < 1e-4, `cosine ${mu.maxDiff}, escape ${escape.maxDiff} at ${escape.at}, shares ${share.maxDiff} at ${share.at}`);
   assert.ok(olr.rmsRel < 1e-5 && sw.rmsRel < 2e-5, `OLR rms ${olr.rmsRel}, surface shortwave rms ${sw.rmsRel}`);
   assert.ok(theta.rmsRel < 1e-4 && ts.maxDiff < 0.02, `θ rms ${theta.rmsRel}, Ts max ${ts.maxDiff} K at ${ts.at}`);
+});
+
+test('the subcloud memory a GPU model carries is its lowest layers\' alone whether or not the radiation is held, so states pass between the two', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
+  const [every, held] = [await createGpuModel(new Grid(6), { ocean: false }), await createGpuModel(new Grid(6), { ocean: false, radiation: { radiationEvery: 4 } })];
+  const length = Math.min(SUBCLOUD_LAYERS, every.core.K) * every.mesh.nCells;
+  assert.equal(every.moist.subcloudVirtual.length, length);
+  assert.equal(held.moist.subcloudVirtual.length, length);
+  for (const model of [every, held]) model.destroy();
 });
 
 test('snow-ice formation matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
