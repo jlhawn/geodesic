@@ -685,6 +685,8 @@ const columnKernel = (diagnose) => `@compute @workgroup_size(${WORKGROUP}) fn ma
   }
   let dPi = -sum;
   OUT[S_PI + i] = dPi;
+  // The RK registers are shared with the ocean, so every stage writes every row of OUT.
+  OUT[S_TS + i] = 0.0; OUT[S_ICE + i] = 0.0;
   var cumulative = 0.0;
   D[D_PSD + i] = 0.0;
   for (var k = 0; k < K; k++) {
@@ -727,6 +729,7 @@ export const PHYSICS_DEFAULTS = {
 export async function createGpuCore(mesh, {
   levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0, divergenceDamping = 0,
   dragCoefficient = SEA_DRAG, gustiness = 3, topSigma = TOP_DRAG.sigma, topDragDays = TOP_DRAG.days, spongeRates: spongeOption, spongeMeanRates: meanOption, gravityWaves = {}, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
+  registerLength = 0,
 } = {}) {
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
   phys.longwaveTable ??= longwaveTableFor(levels);
@@ -827,8 +830,8 @@ export async function createGpuCore(mesh, {
 
   const buffers = {
     MI: storageBuffer(device, mi), MF: storageBuffer(device, mf), LV: storageBuffer(device, lv),
-    S: emptyBuffer(device, 4 * L.S.total), T: emptyBuffer(device, 4 * L.S.total),
-    K1: emptyBuffer(device, 4 * L.S.total), K2: emptyBuffer(device, 4 * L.S.total), K3: emptyBuffer(device, 4 * L.S.total), K4: emptyBuffer(device, 4 * L.S.total),
+    S: emptyBuffer(device, 4 * L.S.total),
+    ...Object.fromEntries(['T', 'K1', 'K2', 'K3', 'K4'].map((name) => [name, emptyBuffer(device, 4 * Math.max(L.S.total, registerLength))])),
     D: emptyBuffer(device, 4 * L.D.total), P: storageBuffer(device, new Float32Array(8)), PH: emptyBuffer(device, 4 * L.PH.total),
     FR: emptyBuffer(device, 4 * L.FR.total), FP: storageBuffer(device, new Float32Array(8)), PR: emptyBuffer(device, 32 * RING_SLOTS),
   };

@@ -36,6 +36,10 @@ export const OCEAN_DEFAULTS = {
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
 
+export function oceanStateLength(C, E, options = {}) {
+  return ({ ...OCEAN_DEFAULTS, ...options }.densities.length + 1) * (3 * C + E);
+}
+
 function seq(names) { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; }
 
 function oceanKernels(o) {
@@ -749,7 +753,7 @@ const oceanReducedSetup = (thermoclineLayers) => `    let a = MF[F_AREA + i];
       transport = max(transport, abs(select(1.0, sill / sum, sum > sill) * flow) * MF[F_DV + e]);
     }`;
 
-export function createLayeredOcean(core, options = {}) {
+export function createLayeredOcean(core, { registers = null, ...options } = {}) {
   const o = { ...OCEAN_DEFAULTS, ...options };
   if (o.closureTokens !== 'interior' && o.closureTokens !== 'beside') throw new Error(`closureTokens is 'interior' or 'beside', not ${o.closureTokens}`);
   o.closureRings = o.closureTokens === 'interior' && o.closureFill > 0;
@@ -849,12 +853,10 @@ export function createLayeredOcean(core, options = {}) {
   OUT[${OF.UPW} + i] = upwelling / MF[F_AREA + i];
 }`;
   kernels.oReduce = reductionKernel(OCEAN_REDUCED, { count: C, base: OF.PART, setup: oceanReducedSetup(thermoclineLayers) });
-  const ob = {
-    S: emptyBuffer(device, 4 * OS.total), T: emptyBuffer(device, 4 * OS.total),
-    K1: emptyBuffer(device, 4 * OS.total), K2: emptyBuffer(device, 4 * OS.total), K3: emptyBuffer(device, 4 * OS.total), K4: emptyBuffer(device, 4 * OS.total),
-    OD: emptyBuffer(device, 4 * ODTOTAL), OF: emptyBuffer(device, 4 * OF.total),
-  };
-  for (const [name, b] of Object.entries(ob)) b.label = 'layeredOcean' + name;
+  const ob = {}, own = (name, size) => { const b = emptyBuffer(device, size); b.label = 'layeredOcean' + name; return b; };
+  ob.S = own('S', 4 * OS.total);
+  for (const name of ['T', 'K1', 'K2', 'K3', 'K4']) ob[name] = registers && registers[name] && registers[name].size >= 4 * OS.total ? registers[name] : own(name, 4 * OS.total);
+  ob.OD = own('OD', 4 * ODTOTAL); ob.OF = own('OF', 4 * OF.total);
   const bindLayout = device.createBindGroupLayout({ entries: Array.from({ length: 10 }, (_, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } })) });
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindLayout] });
   const head = core.preludeConstants + kernels.head;
