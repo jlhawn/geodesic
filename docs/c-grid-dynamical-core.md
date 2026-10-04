@@ -11676,10 +11676,10 @@ step each column last laid them in shared memory, as the held radiation
 does, so that its workers decide alike (test/gpuModel.test.mjs holds the
 engines together with the drags laid every 4 steps, and the limiter over
 16). At the drivers' cadences the drags are laid at the full
-radiation's calls. With these the column kernels load a column's six edges once and form
-each layer's cell wind from them (pblDiagnose, orography and
-gravityWaves; bit for bit, by the saved device buffers after 16 steps at
-N=64 and 8 at N=128).
+radiation's calls. With these the column kernels load a column's six
+edges once and form each layer's cell wind from them (pblDiagnose,
+orography and gravityWaves; bit for bit, by the saved device buffers
+after 16 steps at N=64 and 8 at N=128).
 
 Against the every-step drags (0bcd938, which dragEvery 1 reproduces bit
 for bit on both engines), with the full-precision day means of each day
