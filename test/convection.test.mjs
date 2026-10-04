@@ -256,7 +256,6 @@ test('with cumulusMemory the cumulus cloud of a plume that fires every other ste
     assert.ok(Math.abs(kept.covers[0][k] - (1 - keep) * x) < 1e-15, `layer ${k}: the first step from no cloud`);
   }
   assert.ok(worst < 1e-12, `the cover and path follow X ← X' + (X − X') e^(−Δt/τ) to ${worst}`);
-  assert.throws(() => build({ cumulusMemory: -1 }));
 });
 
 test('with cumulusRain the plume rains its condensate above the threshold, keeping column enthalpy exact and water with the rain', () => {
@@ -1205,6 +1204,15 @@ test('the stratiform lifetime matches between the engines on random columns of e
   }
   console.log(`after one step the 3 h stratiform lifetime keeps more cloud than the 1 h lifetime alone in ${kept} of ${cloudy} cloudy layers (GPU ${gpuKept}), ${keptShared} of the ${shared} whose long share is positive (outside a plume's layers, below the mixing top of a coupled or ice-covered column or above it under an EIS share)`);
   assert.ok(keptShared > shared / 5 && kept < cloudy && Math.abs(gpuKept - kept) <= cloudy / 100, `${kept} and ${gpuKept} of ${cloudy}, ${keptShared} of the ${shared} with a long share`);
+});
+
+test('a cumulusMemory other than a finite time of 0 s or more is refused on both engines', async () => {
+  const refused = [-1, null, Infinity, '1800'];
+  for (const value of refused) assert.throws(() => build({ cumulusMemory: value }), /cumulusMemory/, `CPU: ${value}`);
+  if (!gpuAvailable) return;
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
+  for (const value of refused) assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, cumulusMemory: value }), /cumulusMemory/, `GPU: ${value}`);
 });
 
 test('the retired Betts–Miller options are refused on both engines', async () => {
