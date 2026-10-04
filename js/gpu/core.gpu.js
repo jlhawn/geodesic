@@ -44,7 +44,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E], ['PHIS', C], ['SEW', MAX_EDGES * spongeCells], ['SNW', MAX_EDGES * spongeCells], ['SES', spongeEdges], ['SEE', spongeEdges], ['SEN', spongeEdges], ['GWX', 6 * waveCells], ['GWP', 4 * waveEdges], ['GWF', waveCells]]);
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K], ['SPG', K], ['SPMR', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
-  const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]);
+  const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]);
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['CLOUDK', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E], ['SUBTV', subcloudLayers * C], ...(heldRadiation ? HELD_RADIATION.map((name) => [name, name === 'RADP' ? 8 : name === 'RADSW' || name === 'RADDF' ? KC : C]) : [])]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['CLOW', C], ['CMID', C], ['CHIGH', C], ['CCU', C], ['CDECK', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, SPK, SPB, MI, MF, LV, S, D, PH, FR };
@@ -81,30 +81,24 @@ ${consts}
 @group(0) @binding(6) var<storage, read_write> P: array<f32>;
 @group(0) @binding(7) var<storage, read_write> PH: array<f32>;
 ${constants.physics}
-fn diagnoseColumn(i: i32) {
+${[['diagnoseColumn', true], ['diagnoseColumnMid', false]].map(([name, lower]) => `fn ${name}(i: i32) {
   let pi = IN[S_PI + i];
   let exner0 = pow(pi / P0, KAPPA);
-  var thBelow = 0.0; var qBelow = 0.0; var qcBelow = 0.0; var thvBelow = 0.0; var geoBelow = 0.0;
+  var thvBelow = 0.0; var geoBelow = 0.0;
   for (var k = K - 1; k >= 0; k--) {
     let idx = k * C + i;
-    let th = IN[S_TH + idx]; let q = IN[S_Q + idx]; let qc = IN[S_QC + idx];
-    D[D_EXL + idx] = exner0 * LV[L_CL + k];
+    let th = IN[S_TH + idx]; let q = IN[S_Q + idx]; let qc = IN[S_QC + idx];${lower ? `
+    D[D_EXL + idx] = exner0 * LV[L_CL + k];` : ''}
     D[D_EXM + idx] = exner0 * LV[L_CM + k];
     let thv = th * (1.0 + VIRT * q - qc);
     D[D_THV + idx] = thv;
     var geo = 0.0;
     if (k == K - 1) { geo = CP * exner0 * thv * LV[L_CB + K - 1] - LV[L_GR + K - 1]; }
-    else {
-      let t = LV[L_CT + k];
-      D[D_THL + idx] = th + t * (thBelow - th);
-      D[D_QL + idx] = q + t * (qBelow - q);
-      D[D_QCL + idx] = qc + t * (qcBelow - qc);
-      geo = geoBelow + CP * exner0 * (thvBelow * LV[L_CA + k] + thv * LV[L_CB + k]) - LV[L_GR + k];
-    }
+    else { geo = geoBelow + CP * exner0 * (thvBelow * LV[L_CA + k] + thv * LV[L_CB + k]) - LV[L_GR + k]; }
     D[D_GEO + idx] = geo;
-    thBelow = th; qBelow = q; qcBelow = qc; thvBelow = thv; geoBelow = geo;
+    thvBelow = thv; geoBelow = geo;
   }
-}
+}`).join('\n')}
 ${PHYSICS_FUNCTIONS}
 `;
 }
@@ -312,28 +306,6 @@ const KERNELS = {
     D[D_DIV + k * C + i] = sum / area;
   }
 }`,
-  column: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let i = i32(id.x); if (i >= C) { return; }
-  let pi = IN[S_PI + i];
-  var sum = 0.0;
-  for (var k = 0; k < K; k++) { sum += D[D_DIV + k * C + i] * LV[L_DS + k]; }
-  let dPi = -sum;
-  OUT[S_PI + i] = dPi;
-  var cumulative = 0.0;
-  D[D_PSD + i] = 0.0;
-  for (var k = 0; k < K; k++) {
-    cumulative += D[D_DIV + k * C + i] * LV[L_DS + k];
-    D[D_PSD + (k + 1) * C + i] = -cumulative - LV[L_SL + k] * dPi;
-  }
-  D[D_PSD + K * C + i] = 0.0;
-  D[D_LNPI + i] = log(pi);
-  diagnoseColumn(i);
-  let bottom = (K - 1) * C + i;
-  let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
-  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-  let mass = pi * LV[L_DS + K - 1] / GRAV;
-  D[D_DRAG + i] = select(PH[PH_DRAG + i] * rho * max(D[D_WIND + i], GUST) / mass, 0.0, IMPLICIT_DRAG);
-}`,
   vertexPi: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let v = i32(id.x); if (v >= V) { return; }
   var sum = 0.0;
@@ -390,8 +362,14 @@ const KERNELS = {
     let lowerFlow = D[D_PSD + (k + 1) * C + i];
     let layerMass = pi * LV[L_DS + k];
     var lowerT = 0.0; var lowerQ = 0.0; var lowerC = 0.0; var upperT = 0.0; var upperQ = 0.0; var upperC = 0.0;
-    if (k < K - 1) { lowerT = D[D_THL + idx]; lowerQ = D[D_QL + idx]; lowerC = D[D_QCL + idx]; }
-    if (k > 0) { upperT = D[D_THL + idx - C]; upperQ = D[D_QL + idx - C]; upperC = D[D_QCL + idx - C]; }
+    if (k < K - 1) {
+      let t = LV[L_CT + k]; let nextT = IN[S_TH + idx + C]; let nextQ = IN[S_Q + idx + C]; let nextC = IN[S_QC + idx + C];
+      lowerT = fT + t * (nextT - fT); lowerQ = fQ + t * (nextQ - fQ); lowerC = fC + t * (nextC - fC);
+    }
+    if (k > 0) {
+      let t = LV[L_CT + k - 1]; let aboveT = IN[S_TH + idx - C]; let aboveQ = IN[S_Q + idx - C]; let aboveC = IN[S_QC + idx - C];
+      upperT = aboveT + t * (fT - aboveT); upperQ = aboveQ + t * (fQ - aboveQ); upperC = aboveC + t * (fC - aboveC);
+    }
     let verticalT = (lowerFlow * lowerT - upperFlow * upperT - fT * (lowerFlow - upperFlow)) / layerMass;
     let verticalQ = (lowerFlow * lowerQ - upperFlow * upperQ - fQ * (lowerFlow - upperFlow)) / layerMass;
     let verticalC = (lowerFlow * lowerC - upperFlow * upperC - fC * (lowerFlow - upperFlow)) / layerMass;
@@ -692,6 +670,31 @@ const GW_SHARE = array<f32, GW_LID>(GW_LID_SHARES);
 }`,
 };
 
+// Only columnLast (RK stage 4) stores EXL: the physics pass after the stages reads it, and adjust diagnoses its own.
+const columnKernel = (diagnose) => `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let pi = IN[S_PI + i];
+  var sum = 0.0;
+  for (var k = 0; k < K; k++) { sum += D[D_DIV + k * C + i] * LV[L_DS + k]; }
+  let dPi = -sum;
+  OUT[S_PI + i] = dPi;
+  var cumulative = 0.0;
+  D[D_PSD + i] = 0.0;
+  for (var k = 0; k < K; k++) {
+    cumulative += D[D_DIV + k * C + i] * LV[L_DS + k];
+    D[D_PSD + (k + 1) * C + i] = -cumulative - LV[L_SL + k] * dPi;
+  }
+  D[D_PSD + K * C + i] = 0.0;
+  D[D_LNPI + i] = log(pi);
+  ${diagnose}(i);
+  let bottom = (K - 1) * C + i;
+  let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
+  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
+  let mass = pi * LV[L_DS + K - 1] / GRAV;
+  D[D_DRAG + i] = select(PH[PH_DRAG + i] * rho * max(D[D_WIND + i], GUST) / mass, 0.0, IMPLICIT_DRAG);
+}`;
+Object.assign(KERNELS, { column: columnKernel('diagnoseColumnMid'), columnLast: columnKernel('diagnoseColumn') });
+
 export const PHYSICS_DEFAULTS = {
   solarConstant: 1362, cloudAbsorption: null, cloudScattering: null, ...CLOUD_OPTICS, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
   mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'exponentialRandom', decorrelationLength: DECORRELATION_LENGTH, decorrelationSlope: DECORRELATION_SLOPE, prognosticHeight: true, deckRest: 'regime', deckSlab: 'fraction', deckReference: 'layer', cumulusCeiling: 2000, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
@@ -864,11 +867,11 @@ export async function createGpuCore(mesh, {
     pass.dispatchWorkgroups(Math.min(groups, 65535), Math.ceil(groups / 65535));
   }
 
-  function tendencyPasses(pass, IN, OUT) {
+  function tendencyPasses(pass, IN, OUT, last) {
     const g = group(IN, OUT);
     dispatch(pass, 'flux', g, E);
     dispatch(pass, 'divergence', g, C);
-    dispatch(pass, 'column', g, C);
+    dispatch(pass, last ? 'columnLast' : 'column', g, C);
     dispatch(pass, 'vertexPi', g, V);
     dispatch(pass, 'pvVertex', g, V);
     dispatch(pass, 'pvEdge', g, E);
@@ -937,7 +940,7 @@ export async function createGpuCore(mesh, {
     const stage = (IN, OUT, factor, next) => {
       setParams([factor]);
       compute((pass) => {
-        tendencyPasses(pass, IN, OUT);
+        tendencyPasses(pass, IN, OUT, !next);
         if (next) dispatch(pass, 'advance', group(buffers.S, next, OUT), L.S.total);
       });
     };
@@ -1102,7 +1105,7 @@ export async function createGpuCore(mesh, {
   async function tendency(IN = buffers.S, OUT = buffers.K1) {
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
-    tendencyPasses(pass, IN, OUT);
+    tendencyPasses(pass, IN, OUT, true);
     pass.end();
     device.queue.submit([encoder.finish()]);
     await device.queue.onSubmittedWorkDone();
