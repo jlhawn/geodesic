@@ -105,33 +105,93 @@ async function partsOf(url) {
   return manifest.parts.map((part) => ({ url: new URL(part.file, url).href, bytes: part.bytes }));
 }
 
-export async function fetchState(url, progress = null) {
-  const parts = await partsOf(url);
-  let total = parts.reduce((sum, part) => sum + part.bytes, 0);
-  const chunks = [];
-  let received = 0;
-  for (const part of parts) {
-    const response = await fetch(part.url);
-    if (!response.ok) throw new Error(`${part.url}: ${response.status}`);
-    if (!total) total = Number(response.headers.get('content-length')) || 0;
-    if (!response.body) {
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      chunks.push(bytes);
-      received += bytes.length;
-      progress?.(received, total);
-      continue;
-    }
-    const reader = response.body.getReader();
+async function* chunksOf(reader) {
+  try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      progress?.(received, total);
+      if (done) return;
+      yield value;
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+}
+
+async function* inflated(chunks) {
+  const source = new ReadableStream({
+    async pull(controller) {
+      const { done, value } = await chunks.next();
+      if (done) controller.close(); else controller.enqueue(value);
+    },
+    async cancel() { await chunks.return(); },
+  });
+  yield* chunksOf(source.pipeThrough(new DecompressionStream('gzip')).getReader());
+}
+
+async function* following(head, rest) {
+  if (head.length) yield head;
+  yield* rest;
+}
+
+async function gather(chunks, wanted, head = new Uint8Array(0)) {
+  const pieces = [head];
+  let length = head.length;
+  while (length < wanted) {
+    const { done, value } = await chunks.next();
+    if (done) break;
+    pieces.push(value);
+    length += value.length;
+  }
+  if (pieces.length === 1) return head;
+  if (pieces.length === 2 && !head.length) return pieces[1];
+  const bytes = new Uint8Array(length);
+  let at = 0;
+  for (const piece of pieces) { bytes.set(piece, at); at += piece.length; }
+  return bytes;
+}
+
+/*
+ * A state's parts are fetched in turn as one stream of bytes, inflated on
+ * the way when they are gzipped. A binary state goes into one buffer of
+ * the size its header gives, which decodeBinary reads in place; any other
+ * state is gathered and decoded as decodeState decodes it.
+ */
+export async function fetchState(url, progress = null) {
+  const parts = await partsOf(url);
+  let total = parts.reduce((sum, part) => sum + part.bytes, 0), received = 0;
+  async function* fetched() {
+    for (const part of parts) {
+      const response = await fetch(part.url);
+      if (!response.ok) throw new Error(`${part.url}: ${response.status}`);
+      if (!total) total = Number(response.headers.get('content-length')) || 0;
+      const body = response.body ? chunksOf(response.body.getReader()) : [new Uint8Array(await response.arrayBuffer())];
+      for await (const value of body) {
+        received += value.length;
+        progress?.(received, total);
+        yield value;
+      }
     }
   }
-  const bytes = new Uint8Array(received);
-  let at = 0;
-  for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.length; }
-  return decodeState(bytes);
+  const raw = fetched();
+  const first = await gather(raw, 2);
+  const chunks = first.length > 1 && first[0] === 0x1f && first[1] === 0x8b ? inflated(following(first, raw)) : following(first, raw);
+  let head = await gather(chunks, 9);
+  if (!isBinary(head)) return decodeState(await gather(chunks, Infinity, head));
+  const headerLength = new DataView(head.buffer, head.byteOffset, head.byteLength).getUint32(4, true);
+  head = await gather(chunks, 8 + headerLength, head);
+  const { arrays } = JSON.parse(new TextDecoder().decode(head.subarray(8, 8 + headerLength)));
+  const start = 8 + Math.ceil(headerLength / 4) * 4;
+  const ends = arrays.map(({ name, length, offset, type = 'f32' }) => ({ name, end: start + offset + length * (type === 'f64' ? 8 : 4) }));
+  const bytes = new Uint8Array(ends.reduce((size, { end }) => Math.max(size, end), start));
+  if (head.length > bytes.length) throw new Error(`${url}: the state runs past the end of its arrays`);
+  bytes.set(head);
+  let at = head.length;
+  for await (const chunk of chunks) {
+    if (at + chunk.length > bytes.length) throw new Error(`${url}: the state runs past the end of its arrays`);
+    bytes.set(chunk, at);
+    at += chunk.length;
+  }
+  const short = ends.find(({ end }) => end > at);
+  if (short) throw new Error(`${short.name} runs past the end of the state`);
+  return decodeBinary(bytes);
 }
