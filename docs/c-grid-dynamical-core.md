@@ -11981,6 +11981,87 @@ physics kernel 13.2 (the radiation 8.7 of it, amortised), cellTendency
 S, T and K1–K4 hold 1834 (the atmosphere's 6 × 136.9, the ocean's 6 ×
 168.8), the ocean's OD 642, D 386 and PH 283.
 
+**Memory: the RK4 registers shared by the atmosphere and the ocean, and
+the ocean's scratch overlaid by lifetime** (`js/gpu/core.gpu.js`,
+`js/gpu/layeredOcean.gpu.js`, `js/gpu/model.gpu.js`; GPU only, bit for
+bit). Since the N=64 default state grew, the page crashes on an iPhone
+17 Pro, whose Safari ends a tab at about 1–1.5 GB. Two placements free
+234 MiB of the GPU model's buffers at N=64 and 938 at N=128 without
+changing a number:
+
+1. The two integrators' trial states and tendencies, T and K1–K4, are
+   live only within their own integrator: the atmosphere's from its
+   first RK stage to its combine, the ocean's within its step, which
+   runs from the hook before the physics, after the atmosphere's
+   combine, on one step in 8. The core allocates one set at the larger
+   of the two states (`registerLength`: the ocean's 45 classes ×
+   (3C + E) words against the atmosphere's 3(K + 1)C + KE) and the
+   ocean takes it (`registers`); a core and an ocean built apart, as
+   the tests build them, keep their own. Every stage writes every row
+   of its register: the column kernel stores zero in the tendency's TS
+   and ICE rows, which no kernel had written (the advance and the
+   combine read the upload's zeros there) and which the ocean's
+   tendencies pass through.
+2. Every L-sized scratch field of the ocean's OD lives within one
+   tendency, most for a few dispatches of it. FLUX (oFlux to
+   oCellTendency), LAPA (the first oLapVelocity to the second oDivCurl)
+   and LAPB (the second oLapVelocity to oMomentum) share one slot;
+   AVORT (oVertexVort to oEdgePV), CURLS (each oDivCurl to its
+   oLapVelocity) and PHI share another, oKineticPhi moving to the
+   tendency's second pass just before oMomentum (the state's h and u,
+   ETA and RHOML, which it reads, are not written in between); HEDGE,
+   QE and DIVS keep their own: 3LE + LV + LC words in place of 5LE +
+   2LV + 2LC. The eddy passes after the combine leave their fluxes over
+   FLUX, HEDGE and QE, which oEdgeThickness and the next tendency
+   recompute before reading them. With the closure's rings
+   (closureTokens 'interior' and closureFill above 0) FLUX flags the
+   fitted edges and LAPA and LAPB carry the rings to oClosureBack2, so
+   those three keep separate slots and the eddy fluxes theirs.
+
+| | 3610d2a | 1 | 1 and 2 |
+|---|---|---|---|
+| GPU buffers at N=64 | 821.8 MiB | 650.7 | 587.4 (−29 %) |
+| GPU buffers at N=128 | 3285.7 MiB | 2601.3 | 2348.2 (−29 %) |
+| the ocean's OD at N=64 / N=128 | 160.6 / 642.2 MiB | 160.6 / 642.2 | 97.3 / 389.1 |
+| the page at N=64: the GPU process's Metal buffers | 865 MB | 694 | 626–630 |
+| the page at N=64: the GPU process's footprint (its peak) | 2271–2421 MB (2414–2540) | 2116 (2229–2239) | 2038–2040 (2098–2122) |
+| the page at N=128: the GPU process's Metal buffers | 3329 MB | | 2391 |
+
+(The GPU buffers alive after two steps from eleven64_day1826 and
+eleven128_day1826, createBuffer wrapped: 861732068, 682322828 and
+615967268 B at N=64, 3445279348, 2727655708 and 2462234548 at N=128. The
+page is climate.html from eleven64_day1825's and eleven128_day1825's
+parts in a headless Chrome for Testing with the measurement round's
+instrumented worker, footprint's phys_footprint and its owned unmapped
+graphics memory once the model is ready: at N=64 three runs of 3610d2a
+and two of each change, at N=128 one of the change against the
+measurement round's of 3610d2a.) The largest buffer at N=128 is now OD's
+389 MiB, 642 before. The renderer's footprint (1870–2000 MB at N=64) and
+the 1258 MB that the load's queue writes leave shared in both processes
+are untouched by these two.
+
+Bit for bit: `scripts/spinup.mjs` from eleven64_day1826 for 24 steps and
+from eleven128_day1826 for 16, awaited and with BATCH=8, saves states
+identical to 3610d2a's after each lever (cmp), and the device buffers
+after the same steps with a frame every 8 (the core's S, PH, FR and D,
+the ocean's S and OF, and OD's carried sections and barotropic blocks by
+name) match 3610d2a's word for word on both paths at both N. At N=16
+from `initializeState` with the ocean every 4 steps, 24 steps in each
+closure mode (closureFill 0; 1 with 'interior'; 0.5 with 'beside'),
+awaited and in batches of 4, match likewise. With T and K1–K4
+overwritten by NaN before every atmosphere step and every ocean step,
+every L-sized section of OD at the start of each ocean tendency and the
+eddy fluxes' slots after the eddy passes, 24 steps at N=64 still save
+3610d2a's state on both paths, and so they do with 1.2·10⁷ in place of
+NaN; without the TS and ICE stores, or with oKineticPhi left in the
+first pass, the NaN run differs. `scripts/paceGpu.mjs` on the quiet
+device (the probe at 356–372 GB/s), 3610d2a and the change alternated
+four times: 48.4, 48.3, 48.4 and 48.5 s a model day at N=128 against
+48.4, 50.5, 48.5 and 48.4, and 7.0 s at N=64 in all eight runs, with
+identical day means. The page (climate.html?N=64 and N=128, engine=gpu,
+headless) ran at 8.8 and 50.3 s a simulated day with no console message.
+The suite passes (71 files, 609 tests) with no test changed.
+
 ### M25 — The long spin-up — planned
 
 The asynchronous schedule of M18 (`scripts/asyncSpinup.sh`: a hundred
