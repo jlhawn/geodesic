@@ -11981,6 +11981,92 @@ physics kernel 13.2 (the radiation 8.7 of it, amortised), cellTendency
 S, T and K1–K4 hold 1834 (the atmosphere's 6 × 136.9, the ocean's 6 ×
 168.8), the ocean's OD 642, D 386 and PH 283.
 
+**The load writes only data, in 1 MiB pieces** (memory; bit for bit).
+Once the default state had loaded at N=64, the page's tab held about
+1.9 GB in its renderer and 2.3 GB in Chrome's GPU process against the
+822 MiB of the model's GPU buffers, and Safari on the iPhone 17 Pro,
+which ends a tab at around 1–1.5 GB, crashed on it. Most of the
+difference was shared memory mapped into both processes alike, 1258 MB.
+Chrome gives a queue.writeBuffer larger than a few MiB, and a buffer
+mapped at creation, shared memory of its own in both processes and
+keeps it (vmmap shows one region per such write, sized to it), while
+writes of 1–2 MiB go through its 16 MiB transfer ring, which waits for
+the GPU process when it is full: in a test page 128 MiB written in 1
+MiB pieces without a wait left 16 MB of shared memory, one 63 MiB write
+64 MB, and writes of 16, 32 and 64 MiB awaited in turn 113 MB. The
+worker's load wrote 1355 MiB at N=64 (5421 at N=128), most of it zeros
+and copies: the core's and the ocean's K1–K4, D and OD as zeros, T as a
+copy of S, the whole of PH three times and the ocean twice, first from
+the analytic start that model.load laid and the saved ocean replaced.
+Now:
+
+- `core.upload` writes S, and one encoder copies it into T and clears
+  K1–K4 and D; the ocean's `uploadArrays` does the same for its S, T,
+  K1–K4 and the whole of OD before its sections' writes; `clearFrame`
+  clears FR on the device, and `uploadPhysics` clears PH and writes only
+  the 1 MiB blocks of it that hold a nonzero word. Each clear is
+  submitted before the queue writes it must not wipe, and a load throws
+  inside a batch, whose encoder would be submitted after them.
+- `model.load({ ocean: false })` leaves the ocean to the ocean's load or
+  initialize, which the worker's start, restore and device probe always
+  follow it with; `model.load()` alone still initializes it.
+- `storageBuffer` (the mesh's MI and MF, LV, the parameter buffers)
+  writes through the queue instead of mapping at creation, and it, S
+  and the ocean's S go in 1 MiB pieces (`writeInPieces` in
+  `js/gpu/device.module.js`), as PH's blocks do.
+- The worker waits for the queue after building the model, after
+  model.load, after the ocean's load and after placing the land.
+
+The worker's load now writes 147 MiB at N=64 and 537 at N=128. In
+headless Chrome for Testing from the page's default parts, with the
+phys_footprint 15 s after ready, its peak and the shared VM_ALLOCATE in
+each process (MB; ready in seconds from navigation):
+
+| | renderer | peak | GPU process | peak | shared | ready |
+|---|---|---|---|---|---|---|
+| N=64, 3610d2a (4 runs) | 1811–2000 | 2835–2998 | 2262–2422 | 2414–2546 | 1258–1259 | 3.2–5.5 |
+| N=64, the device's clears | 746 | 1307 | 1384 | 1401 | 129 | 3.4 |
+| N=64, and no throwaway ocean | 744 | 1111 | 1161 | 1178 | 129 | 2.8 |
+| N=64, and the 1 MiB pieces (3 runs) | 637–644 | 991–1005 | 1044–1059 | 1067–1084 | 23–24 | 2.8–3.0 |
+| N=128, 3610d2a | 7214 | 9892 | 9136 | 9822 | 5518 | 12.6 |
+| N=128, all but the pieces | 2250 | 3496 | 4062 | 4097 | 458 | 8.4 |
+| N=128, all | 1783 | 3109 | 3653 | 3683 | 39–40 | 8.2 |
+
+The page measured its own memory throughout these runs
+(`performance.measureUserAgentSpecificMemory`, which collects the
+garbage each time), so the renderer's column is after collection. The
+same page without that measuring, 15 s after ready at N=64, held 1183
+MB in the renderer (peak 1263) against 2921 (2998) at 3610d2a, garbage
+not yet collected, while the GPU process (1059 against 2303) and the
+shared memory (23 against 1258–1266) read as in the table.
+
+With the clears alone the shared memory was the regions of the writes
+of MI (13.6 MiB), MF (16.3), S (34.2) and the ocean's S (42.2) beside
+the ring; at N=128 those four were 425 MiB. Of what is left at N=64,
+the GPU process holds the model's 865 MB of Metal buffers, and the
+renderer 484 MB of the worker's JavaScript arrays (the second model
+`sourceFor` builds, the GPU model's CPU core and mirrors) and 117 MB of
+other heap. The device after the load is word for word 3610d2a's: the
+sha256 of every one of the 23 GPU buffers after the worker's start
+(Node, model.worker.js, both default states), after 10 steps at N=64
+and 5 at N=128 through model.step and through model.stepBatch with the
+worker's snapshot of them, and after a snapshot's restore into the live
+model; `scripts/spinup.mjs` from eleven64_day1826 and eleven128_day1826,
+BATCH 1 and 8, saves states that cmp equal. `test/gpuReload.test.mjs`
+loads a stepped model's state into a fresh model at N=16, steps it and
+loads the state again, and holds every buffer but the parameters and
+the ocean's frame fields to the fresh load word for word. The step is
+untouched: `scripts/paceGpu.mjs` alone on the device, 3610d2a and the
+change alternated, gives 48.5 and 48.4 s a model day at N=128 against
+48.3 and 48.4, and 7.0 s at N=64 in all four runs, with the same day
+means. In the headless Chrome the page loads and runs at both defaults
+without a console message (6.7–8.1 s a simulated day at N=64, 47.9 at
+N=128), and a snapshot saved at N=32 restores into the running model,
+which steps on from it. There a save or a 'Download and restore' at
+N=64, as at 3610d2a, and the download at N=128 fail in IndexedDB, which
+aborts the write without an error (the page's only console messages).
+Not measured: Safari, whose WebKit may hold uploads differently.
+
 ### M25 — The long spin-up — planned
 
 The asynchronous schedule of M18 (`scripts/asyncSpinup.sh`: a hundred

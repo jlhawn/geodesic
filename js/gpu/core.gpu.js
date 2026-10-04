@@ -1,4 +1,4 @@
-import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf } from './device.module.js';
+import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
@@ -1083,7 +1083,14 @@ export async function createGpuCore(mesh, {
     if (retained.cumulusCover) ph.set(retained.cumulusCover, L.PH.CUCOVER);
     if (retained.cumulusWater) ph.set(retained.cumulusWater, L.PH.CUWATER);
     if (retained.subcloudVirtual) ph.set(retained.subcloudVirtual, L.PH.SUBTV);
-    device.queue.writeBuffer(buffers.PH, 0, ph);
+    submitNow((encoder) => encoder.clearBuffer(buffers.PH, 0, 4 * L.PH.total));
+    const words = new Uint32Array(ph.buffer), block = WRITE_PIECE / 4;
+    for (let start = 0; start < words.length; start += block) {
+      const end = Math.min(words.length, start + block);
+      let n = start;
+      while (n < end && words[n] === 0) n++;
+      if (n < end) device.queue.writeBuffer(buffers.PH, 4 * start, ph, start, end - start);
+    }
     dragCall = -1;
   }
   function uploadLand({ soil, snow, vegetation, surface = null, snowAlbedo = null, canopy = null, seasonLength = null, seasonWarmth = null, rainMean = null, demandMean = null, soilCarbon = null, litterMean = null, decayMean = null, snowFreeCover = null }) {
@@ -1121,15 +1128,28 @@ export async function createGpuCore(mesh, {
     await device.queue.onSubmittedWorkDone();
   }
 
+  /*
+   * A queue write and a submission run in the order they are called, so
+   * a load submits each clear or copy before the writes it must not
+   * wipe, and never inside a batch, whose encoder is submitted later.
+   */
+  function submitNow(record) {
+    if (batch) throw new Error('a load cannot be recorded inside a batch');
+    const encoder = device.createCommandEncoder();
+    record(encoder);
+    device.queue.submit([encoder.finish()]);
+  }
   const names = ['PI', 'TH', 'U', 'TS', 'Q', 'QC', 'ICE'];
   function upload(state) {
+    if (batch) throw new Error('a load cannot be recorded inside a batch');
     const packed = new Float32Array(L.S.total);
     state.forEach((array, a) => packed.set(array, L.S[names[a]]));
-    device.queue.writeBuffer(buffers.S, 0, packed);
-    device.queue.writeBuffer(buffers.T, 0, packed);
-    const zero = new Float32Array(L.S.total);
-    for (const b of [buffers.K1, buffers.K2, buffers.K3, buffers.K4]) device.queue.writeBuffer(b, 0, zero);
-    device.queue.writeBuffer(buffers.D, 0, new Float32Array(L.D.total));
+    writeInPieces(device, buffers.S, 0, packed);
+    submitNow((encoder) => {
+      encoder.copyBufferToBuffer(buffers.S, 0, buffers.T, 0, 4 * L.S.total);
+      for (const b of [buffers.K1, buffers.K2, buffers.K3, buffers.K4]) encoder.clearBuffer(b, 0, 4 * L.S.total);
+      encoder.clearBuffer(buffers.D, 0, 4 * L.D.total);
+    });
   }
   function uploadSurfaceTemperature(surfaceT) {
     const values = Float32Array.from(surfaceT);
@@ -1187,7 +1207,7 @@ export async function createGpuCore(mesh, {
       return out;
     });
   }
-  function clearFrame() { device.queue.writeBuffer(buffers.FR, 0, new Float32Array(L.FR.total)); }
+  function clearFrame() { submitNow((encoder) => encoder.clearBuffer(buffers.FR, 0, 4 * L.FR.total)); }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
   return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };

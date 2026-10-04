@@ -503,20 +503,23 @@ async function probe(message) {
   const result = { gpu: null, cpu: null }, gpuN = message.N ?? PROBE.gpuN;
   const topography = message.land === false ? null : await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href);
   const options = { ...(topography ? { topography } : {}), terrain: message.terrain !== false };
-  const prepare = (test, N) => {
+  const prepare = async (test, N) => {
     for (const [a, values] of initialState(test, null, N).entries()) test.state[a].set(values);
     placeIce(test, null, N);
     placeDeck(test, null, N);
-    if (test.load) test.load();
+    if (test.load) test.load({ ocean: false });
+    await test.settle?.();
     if (test.ocean) test.ocean.initialize(test.state[3], test.state[6]);
+    await test.settle?.();
     if (test.land) test.land.initialize();
+    await test.settle?.();
   };
   if (message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu) {
     let test = null;
     try {
       status('testing the GPU…', 0.1);
       test = await createGpuModel(new Grid(gpuN), { ...options, ...withCadence({}, 1350 * 16 / gpuN, gpuN), ...(topography ? { subgrid: await loadSubgrid(gpuN) } : {}) });
-      prepare(test, gpuN);
+      await prepare(test, gpuN);
       const step = 1350 * 16 / gpuN, queued = [];
       for (let n = 0; n < PROBE.warmup; n++) await test.step(step);
       await test.settle();
@@ -537,7 +540,7 @@ async function probe(message) {
   if (!result.gpu || result.gpu.error) {
     status('testing the CPU…', 0.3);
     const test = createModel(new Grid(PROBE.cpuN), { ...options, ...withCadence({}, 1350 * 16 / PROBE.cpuN, PROBE.cpuN), ...(topography ? { subgrid: await loadSubgrid(PROBE.cpuN) } : {}) });
-    prepare(test, PROBE.cpuN);
+    await prepare(test, PROBE.cpuN);
     const step = 1350 * 16 / PROBE.cpuN;
     await test.step(step);
     const begin = performance.now();
@@ -611,10 +614,13 @@ async function restore(snapshot) {
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   placeIce(model, saved, currentN);
   placeDeck(model, saved, currentN);
-  if (model.load) model.load();
+  if (model.load) model.load({ ocean: false });
+  await model.settle?.();
   if (model.dragsDue) model.dragsDue();
   if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
+  await model.settle?.();
   placeLand(model, saved, currentN);
+  await model.settle?.();
   placeEnergy(model, saved);
   model.time = saved.time;
   restartRain();
@@ -647,6 +653,7 @@ async function start(message) {
   const grid = new Grid(N);
   status(gpuWanted ? 'compiling the GPU model…' : workers > 1 ? `starting ${workers} workers…` : 'building the model…', 0.65);
   const built = gpuWanted ? await createGpuModel(grid, options) : workers > 1 ? await createParallelModel(grid, options, workers) : createModel(grid, options);
+  await built.settle?.();
   serving = false;
   model = built;
   currentN = N;
@@ -659,12 +666,15 @@ async function start(message) {
   placeIce(model, saved, N);
   placeDeck(model, saved, N);
   status('uploading the state…', 0.92);
-  if (model.load) model.load();
+  if (model.load) model.load({ ocean: false });
+  await model.settle?.();
   if (model.ocean) {
     if (saved && saved.ocean) model.ocean.load(saved.N === N ? saved.ocean : regridOcean(sourceFor(saved), model, saved.ocean, (fraction, text) => status(`regridding ${text}…`, 0.93)), model.state[3], model.state[6]);
     else model.ocean.initialize(model.state[3], model.state[6]);
   }
+  await model.settle?.();
   placeLand(model, saved, N);
+  await model.settle?.();
   placeEnergy(model, saved);
   layerWinds = new Array(model.core.K).fill(null);
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
