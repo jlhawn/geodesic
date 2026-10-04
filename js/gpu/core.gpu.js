@@ -597,12 +597,17 @@ const GW_SHARE = array<f32, GW_LID>(GW_LID_SHARES);
   let nx = MF[F_GWX + 6 * i + 2]; let ny = MF[F_GWX + 6 * i + 3]; let nz = MF[F_GWX + 6 * i + 4];
   let pi = IN[S_PI + i]; let area = MF[F_AREA + i];
   var windE: array<f32, GW_SOURCE_PLUS>; var windN: array<f32, GW_SOURCE_PLUS>; var temp: array<f32, GW_SOURCE_PLUS>; var pres: array<f32, GW_SOURCE_PLUS>; var sat: array<f32, GW_SOURCE_PLUS>;
+  var edge: array<i32, MAXE>; var weight: array<f32, MAXE>; var normal: array<vec3<f32>, MAXE>;
+  for (var m = 0; m < MAXE; m++) {
+    let slot = MAXE * i + m; let e = MI[EOC + slot];
+    edge[m] = e; weight[m] = 0.5 * MF[F_DC + e] * MF[F_DV + e] * abs(f32(MI[ESC + slot]));
+    normal[m] = vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
+  }
   for (var k = 0; k <= src; k++) {
     var x = 0.0; var y = 0.0; var z = 0.0;
     for (var m = 0; m < MAXE; m++) {
-      let slot = MAXE * i + m; let e = MI[EOC + slot];
-      let w = 0.5 * MF[F_DC + e] * MF[F_DV + e] * abs(f32(MI[ESC + slot])) * IN[S_U + k * E + e];
-      x += w * MF[F_NEDGE + 3 * e]; y += w * MF[F_NEDGE + 3 * e + 1]; z += w * MF[F_NEDGE + 3 * e + 2];
+      let w = weight[m] * IN[S_U + k * E + edge[m]];
+      x += w * normal[m].x; y += w * normal[m].y; z += w * normal[m].z;
     }
     windE[k] = (ex * x + ey * y) / area; windN[k] = (nx * x + ny * y + nz * z) / area;
     pres[k] = LV[L_SM + k] * pi;
