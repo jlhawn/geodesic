@@ -6,6 +6,7 @@ import { basename } from 'node:path';
 import { Grid } from '../../js/grid.module.js';
 import { topographyFromInt16 } from '../../js/geography.module.js';
 import { createGpuModel } from '../../js/gpu/model.gpu.js';
+import { withCadence } from '../../js/cadence.module.js';
 import { decodeState, savedLevels, stateName } from '../../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../../js/physics/regrid.module.js';
 
@@ -33,12 +34,13 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
  * A GPU model on the state's grid and level set with the run's options
  * (OCEAN, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE, LAND as JSON in the
  * environment; the radiation's clear-sky pass on unless RADIATION turns
- * it off), loaded with everything a whole-day snapshot carries.
+ * it off, and the cadences of js/cadence.module.js at the state's dt),
+ * loaded with everything a whole-day snapshot carries.
  */
 export async function gpuModelFrom(saved) {
   const env = (name) => JSON.parse(process.env[name] ?? '{}');
   const model = await createGpuModel(new Grid(saved.N), {
-    topography: readTopography(), levels: savedLevels(saved), ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') },
+    topography: readTopography(), levels: savedLevels(saved), ocean: env('OCEAN'), ...withCadence({ radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt(saved.N)),
     moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), land: env('LAND'),
   });
   const { state } = model;

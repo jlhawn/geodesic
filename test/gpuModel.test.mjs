@@ -475,6 +475,17 @@ test('twelve full GPU steps track the CPU model and its energy budget', { skip: 
   assert.ok(ice.maxDiff < 1e-3 && concentration.maxDiff < 1e-3, `ice ${ice.maxDiff} m at ${ice.at}, concentration ${concentration.maxDiff} at ${concentration.at}`);
 });
 
+test('with the radiation held between full calls every fourth step, twelve GPU steps track the CPU model: the call\'s cosine, the shares of the surface\'s emission, the OLR and the surface fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { model, state, physics } = await pair(6, 12, 900, 10, true, { radiationEvery: 4, clearSkyPass: true });
+  const C = model.mesh.nCells, { held } = model.radiation;
+  const theta = stats(model.state[1], state[1]), ts = stats(model.state[3], state[3]), mu = stats(held.mu, physics.RADMU.subarray(0, C)), escape = stats(held.escape, physics.RADT.subarray(0, C));
+  const olr = stats(model.radiation.outgoing, physics.OLR.subarray(0, C)), sw = stats(model.radiation.surfaceShortwave, physics.SWDN.subarray(0, C)), share = stats(held.share, physics.RADDF.subarray(0, model.core.K * C));
+  console.log(`twelve steps at N=6, radiation every 4: call cosine max ${mu.maxDiff.toExponential(1)}, escaping share max ${escape.maxDiff.toExponential(1)}, layers' shares max ${share.maxDiff.toExponential(1)}; OLR rms ${olr.rmsRel.toExponential(1)}, surface shortwave rms ${sw.rmsRel.toExponential(1)}; θ rms ${theta.rmsRel.toExponential(1)}, Ts max ${ts.maxDiff.toExponential(1)} K`);
+  assert.ok(mu.maxDiff < 1e-6 && escape.maxDiff < 1e-4 && share.maxDiff < 1e-4, `cosine ${mu.maxDiff}, escape ${escape.maxDiff} at ${escape.at}, shares ${share.maxDiff} at ${share.at}`);
+  assert.ok(olr.rmsRel < 1e-5 && sw.rmsRel < 2e-5, `OLR rms ${olr.rmsRel}, surface shortwave rms ${sw.rmsRel}`);
+  assert.ok(theta.rmsRel < 1e-4 && ts.maxDiff < 0.02, `θ rms ${theta.rmsRel}, Ts max ${ts.maxDiff} K at ${ts.at}`);
+});
+
 test('snow-ice formation matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const model = createModel(new Grid(6), { ocean: false });
   const init = initializeState(model, {});

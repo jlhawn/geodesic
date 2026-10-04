@@ -31,9 +31,10 @@
 // cumulus) and the ocean's restart arrays, so that a run continued from
 // a day's snapshot steps on bit for bit as the run that did not stop.
 //
-// SIGTERM or SIGINT stops the segment after the ocean step in progress
-// and exits 0: at a day's end it saves <TAG>_dayDDDD.bin as usual, inside
-// a day <TAG>_dayDDDD_stepSSSS.bin (DDDD days and SSSS steps done, with
+// SIGTERM or SIGINT stops the segment at the next step that ends both an
+// ocean step and a held radiation interval (the radiation's
+// radiationEvery) and exits 0: at a day's end it saves <TAG>_dayDDDD.bin
+// as usual, inside a day <TAG>_dayDDDD_stepSSSS.bin (DDDD days and SSSS steps done, with
 // the running rain and runoff totals the ocean takes its freshwater from
 // as differences and, when RECORD is set, the forcing recorder's part of
 // the day), which the next segment continues from and deletes once it has
@@ -43,7 +44,8 @@
 //
 // Environment: N (128), TAG (spin<N>), MINUTES (15), DAYS (none), KEEP (2), OUT
 // (runs/), OCEAN (JSON options for the ocean, e.g. '{"closureHours":3}'),
-// RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}'),
+// RADIATION (JSON options for the radiation, e.g. '{"cloudSolarAbsorption":0}';
+// radiationEvery by default from js/cadence.module.js),
 // MOIST (JSON options for the moist physics, e.g. '{"plumeEntrainment":0.15}'),
 // BOUNDARY_LAYER (JSON options for the boundary layer, e.g.
 // '{"entrainment":{"efficiency":0.3}}'), SURFACE (JSON options for the
@@ -84,7 +86,8 @@
 // steps a day, dividing the day's, at which the zonal-mean budgets of the top
 // six layers' wind and temperature are sampled, read out daily as the 'top
 // budget' line, see createTopBudget in scripts/upperAtmosphere.mjs; with
-// BATCH 1 only).
+// BATCH 1 only), PERTURB (a replicate of a continued run: every θ of the
+// snapshot scaled by 1 + PERTURB·u, u uniform in ±1/2 from a fixed seed).
 // A fresh start can take from saved states: FROM, a state at
 // the same N, gives the ocean, the land, the sea-surface temperature of
 // its mixed layer and the land-surface temperature and, with
@@ -120,6 +123,7 @@ import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
 import { CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
+import { withCadence } from '../js/cadence.module.js';
 import { freshJumpDue } from '../js/physics/land.module.js';
 import { balanceLine } from '../js/physics/energyRecord.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
@@ -135,7 +139,7 @@ const BOXES = {
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = Number(process.env.KEEP ?? 2);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = JSON.parse(process.env.OCEAN ?? '{}');
-const RADIATION = { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') }, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
+const RADIATION = withCadence({ radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, 1350 * 16 / N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const GRAVITY_WAVES = process.env.GRAVITY_WAVES === undefined ? {} : { gravityWaves: JSON.parse(process.env.GRAVITY_WAVES) };
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
 const ATMOSPHERE = process.env.ATMOSPHERE ?? 'carry', STRATOSPHERE = process.env.STRATOSPHERE === '1';
@@ -153,6 +157,12 @@ const topography = topographyFromInt16(readFileSync(new URL('../data/topography_
 const existing = snapshots(), file = existing[existing.length - 1];
 let saved = file ? await decodeState(new Uint8Array(readFileSync(`${OUT}/${file}`))) : null;
 if (saved && saved.N !== N) throw new Error(`${file} is N=${saved.N}`);
+const PERTURB = Number(process.env.PERTURB ?? 0);
+if (saved && PERTURB) {
+  let seed = 12345;
+  const uniform = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 - 0.5; };
+  saved.theta = Float64Array.from(saved.theta, (x) => x * (1 + PERTURB * uniform()));
+}
 const levels = saved ? savedLevels(saved) : sigmaInterfaces(process.env.LEVELS ?? 'bl36');
 const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} layers)`;
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
@@ -246,7 +256,8 @@ if (saved) {
   log(`land: record ${record[0] < 0 ? 'taken over (exponential means)' : `${(record[0] / 86400).toFixed(0)} days old`}${held ? `, ${['', 'neutral', 'bare', 'green'][record[2]]} start holding ${held} ${Object.values(model.land.placeholders)[record[1] - 1].carbon.toFixed(3)} kg/m²` : ''}; jumps ${LAND_JUMPS === 'fresh' ? (record[2] >= 1 ? 'as the record passes 365 and 730 days' : 'none (the land did not start fresh)') : LAND_JUMPS}`);
   log(`--- ${new Date().toISOString()} fresh start at N=${N} on ${grid} (${C} cells, dt ${dt} s, ${perDay} steps a day) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 }
-const everySteps = model.oceanEngine ? model.oceanEngine.everySteps : 1;
+const everySteps = model.oceanEngine ? model.oceanEngine.everySteps : 1, radiationEvery = model.gpu.physics.radiationEvery;
+const gcd = (a, b) => (b ? gcd(b, a % b) : a), cadence = everySteps * radiationEvery / gcd(everySteps, radiationEvery);
 if (startStep % everySteps) throw new Error(`the snapshot stopped at step ${startStep}, off the ocean's ${everySteps}-step cadence`);
 
 const deg = 180 / Math.PI, land = model.geography.land;
@@ -330,14 +341,14 @@ for (;;) {
       await model.step(dt); recorder?.step(); step++; taken++;
       if (budgetArmed) { await model.sync(); budget.sample(state); budgetArmed = false; }
       if (step % 8 === 0) await model.settle();
-      if (halted() && step % everySteps === 0) break;
+      if (halted() && step % cadence === 0) break;
     }
   } else {
     while (step < perDay) {
       const count = Math.min(BATCH, perDay - step);
       await model.stepBatch(count, dt, recorder ? () => recorder.step() : null);
       step += count; taken += count;
-      if (halted() && step % everySteps === 0) break;
+      if (halted() && step % cadence === 0) break;
     }
   }
   if (step < perDay) break;

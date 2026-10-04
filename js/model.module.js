@@ -124,7 +124,7 @@ export function createModel(gridOrMesh, {
   moistPhysics.useSeaIce(seaIce.concentration);
   const totals = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), openSea = new Float64Array(C), stressScratch = new Float64Array(E);
-  const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C);
+  const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C), callAlbedo = radiation.callCosZenith && (radiationOptions.radiationEvery ?? 1) > 1 ? new Float64Array(C) : null;
   const runoffSeen = land ? new Float64Array(C) : null, runoffStep = land ? new Float64Array(C) : null, airBefore = new Float64Array(C);
 
   const lengths = stateLengths({ K, C, E });
@@ -163,16 +163,17 @@ export function createModel(gridOrMesh, {
           const depthAbove = boundaryLayer ? boundaryLayer.depth[i] - core.diagnostics.geopotential[bottom + i] / core.diagnostics.g : 0;
           exchange.cell(i, state[0], state[1], moist ? state[4] : null, moist ? state[5] : null, fluxT[i], surface.windSpeed[i], area, land ? land.snow[i] : 0, land ? land.vegetation[i] : 0, land ? land.canopy[i] : 0, before, depthAbove);
         }
-        if (onLand) { surfaceAlbedo[i] = diffuseAlbedo[i] = land.albedo(i); wetness[i] = land.wetness(i, heatCoefficients[i] * (gusty ? exchange.wind[i] : Math.max(surface.windSpeed[i], gustiness)), state[3][i]); continue; }
+        if (onLand) { surfaceAlbedo[i] = diffuseAlbedo[i] = land.albedo(i); if (callAlbedo) callAlbedo[i] = surfaceAlbedo[i]; wetness[i] = land.wetness(i, heatCoefficients[i] * (gusty ? exchange.wind[i] : Math.max(surface.windSpeed[i], gustiness)), state[3][i]); continue; }
         const mu = radiation.cosZenith(i);
         const skin = state[3][i], snowy = seaIce.snowAlbedo[i];
         surfaceAlbedo[i] = seaIce.albedo(h, mu, seaIce.snow[i], area, skin, snowy); diffuseAlbedo[i] = seaIce.albedo(h, null, seaIce.snow[i], area, skin, snowy);
+        if (callAlbedo) callAlbedo[i] = seaIce.albedo(h, radiation.callCosZenith(i, dt), seaIce.snow[i], area, skin, snowy);
         openSea[i] = 1 - area;
         if (h > 0 && area < 1) {
           directContrast[i] = seaIce.albedoContrast(h, mu, seaIce.snow[i], skin, snowy); diffuseContrast[i] = seaIce.albedoContrast(h, null, seaIce.snow[i], skin, snowy);
         }
       }
-      radiation.apply(moist ? fluxState : dryFluxState, forcing, gusty ? exchange.wind : surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null, moist ? openSea : null, boundaryLayer ? boundaryLayer.depth : null, dt);
+      radiation.apply(moist ? fluxState : dryFluxState, forcing, gusty ? exchange.wind : surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null, moist ? openSea : null, boundaryLayer ? boundaryLayer.depth : null, dt, callAlbedo);
       if (rough) for (let i = iFrom; i < iTo; i++) airBefore[i] = state[1][bottom + i] * core.diagnostics.exnerLayer[bottom + i];
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
       const { surfaceShortwave, surfaceDirect } = radiation;
