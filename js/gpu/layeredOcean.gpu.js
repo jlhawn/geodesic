@@ -40,6 +40,7 @@ function seq(names) { const out = {}; let off = 0; for (const [name, n] of names
 
 function oceanKernels(o) {
   const { L, C, E, V, OS, OD, B } = o;
+  if (L > 64) throw new Error(`oMomentum marks an edge's thick classes in 64 bits, and the ocean has ${L} classes`);
   const constLine = (name, value) => `const ${name}: f32 = ${Number(value).toExponential(10)};`;
   const rhoLine = `const RHO: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => v.toFixed(6)).join(', ')});`;
   const spread = (sign) => o.rho.map((r, k) => r + sign * 0.5 * (sign < 0 ? (k > 1 ? r - o.rho[k - 1] : o.rho[k + 1] - r) : (k < L - 1 ? o.rho[k + 1] - r : r - o.rho[k - 1])));
