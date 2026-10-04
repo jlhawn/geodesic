@@ -133,27 +133,26 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     oGradRho: `${K}  let e = ${idx}; if (e >= E) { return; }
   OD[O_GRADRHO + e] = (OD[O_RHOML + MI[COE + 2 * e + 1]] - OD[O_RHOML + MI[COE + 2 * e]]) / MF[F_DC + e];
 }`,
-    oEdgeThicknessRaw: `${K}  let n = ${idx}; if (n >= L * E) { return; }
-  let k = n / E; let e = n % E;
+    oEdgeThickness: `${K}  let e = ${idx}; if (e >= E) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
-  if (k == 0) { OD[O_HEDGE + e] = 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]); }
-  else { OD[O_HEDGE + k * E + e] = min(IN[hOff(k) + a], IN[hOff(k) + b]); }
-}`,
-    oEdgeThicknessSill: `${K}  let e = ${idx}; if (e >= E) { return; }
-  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  OD[O_HEDGE + e] = 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]);
+  for (var k = 1; k < L; k++) { OD[O_HEDGE + k * E + e] = min(IN[hOff(k) + a], IN[hOff(k) + b]); }
   let sill = max(EPSO, min(OD[O_BATH + a], OD[O_BATH + b]) + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
   var sum = 0.0;
   for (var k = 0; k < L; k++) { sum += OD[O_HEDGE + k * E + e]; }
   if (sum > sill) { let f = sill / sum; for (var k = 0; k < L; k++) { OD[O_HEDGE + k * E + e] *= f; } }
 }`,
-    oFlux: `${K}  let n = ${idx}; if (n >= L * E) { return; }
-  let k = n / E; let e = n % E;
-  var he = OD[O_HEDGE + n];
-  if (k == 0) {
-    let donor = MI[COE + 2 * e + select(1, 0, IN[uOff(0) + e] > 0.0)];
-    he = min(he, max(0.0, IN[hOff(0) + donor]));
+    oFlux: `${K}  let e = ${idx}; if (e >= E) { return; }
+  let wet = OD[O_EMASK + e] > 0.5;
+  for (var k = 0; k < L; k++) {
+    let n = k * E + e;
+    var he = OD[O_HEDGE + n];
+    if (k == 0) {
+      let donor = MI[COE + 2 * e + select(1, 0, IN[uOff(0) + e] > 0.0)];
+      he = min(he, max(0.0, IN[hOff(0) + donor]));
+    }
+    OD[O_FLUX + n] = select(0.0, he * IN[uOff(k) + e], wet);
   }
-  OD[O_FLUX + n] = select(0.0, he * IN[uOff(k) + e], OD[O_EMASK + e] > 0.5);
 }`,
     oCellTendency: `${K}  let n = ${idx}; if (n >= L * C) { return; }
   let k = n / C; let i = n % C;
@@ -173,18 +172,24 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   if (OD[O_CMASK + i] < 0.5) { dh = 0.0; dQ = 0.0; dW = 0.0; }
   OUT[hOff(k) + i] = dh; OUT[qOff(k) + i] = dQ; OUT[wOff(k) + i] = dW;
 }`,
-    oVertexVort: `${K}  let n = ${idx}; if (n >= L * V) { return; }
-  let k = n / V; let v = n % V;
-  var zeta = 0.0;
-  for (var m = 0; m < 3; m++) { let e = MI[EOV + 3 * v + m]; zeta += f32(MI[ESV + 3 * v + m]) * IN[uOff(k) + e] * MF[F_DC + e]; }
-  OD[O_AVORT + n] = zeta / MF[F_ATRI + v] + MF[F_FV + v];
+    oVertexVort: `${K}  let v = ${idx}; if (v >= V) { return; }
+  var edges: array<i32, 3>; var signs: array<f32, 3>; var dcs: array<f32, 3>;
+  for (var m = 0; m < 3; m++) { let e = MI[EOV + 3 * v + m]; edges[m] = e; signs[m] = f32(MI[ESV + 3 * v + m]); dcs[m] = MF[F_DC + e]; }
+  let atri = MF[F_ATRI + v]; let fv = MF[F_FV + v];
+  for (var k = 0; k < L; k++) {
+    var zeta = 0.0;
+    for (var m = 0; m < 3; m++) { zeta += signs[m] * IN[uOff(k) + edges[m]] * dcs[m]; }
+    OD[O_AVORT + k * V + v] = zeta / atri + fv;
+  }
 }`,
-    oEdgePV: `${K}  let n = ${idx}; if (n >= L * E) { return; }
-  let k = n / E; let e = n % E;
-  let v1 = MI[VOE + 2 * e]; let v2 = MI[VOE + 2 * e + 1];
-  var hq = OD[O_HEDGE + n];
-  if (k > 0) { hq = max(hq, CENTRING * 0.5 * (IN[hOff(k) + MI[COE + 2 * e]] + IN[hOff(k) + MI[COE + 2 * e + 1]])); }
-  OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, PVFLOOR);
+    oEdgePV: `${K}  let e = ${idx}; if (e >= E) { return; }
+  let v1 = MI[VOE + 2 * e]; let v2 = MI[VOE + 2 * e + 1]; let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  for (var k = 0; k < L; k++) {
+    let n = k * E + e;
+    var hq = OD[O_HEDGE + n];
+    if (k > 0) { hq = max(hq, CENTRING * 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b])); }
+    OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, PVFLOOR);
+  }
 }`,
     oKineticPhi: `${K}  let n = ${idx}; if (n >= L * C) { return; }
   let k = n / C; let i = n % C;
@@ -277,24 +282,28 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
 }`,
     oDivCurl: `${K}  let n = ${idx};
   let fromLap = P[1] > 0.5 || CLOSUREFILL > 0.0;
-  if (n < L * C) {
-    let k = n / C; let i = n % C;
-    var sum = 0.0;
-    for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; let u = select(IN[uOff(k) + e], OD[O_LAPA + k * E + e], fromLap); sum += f32(MI[ESC + MAXE * i + m]) * u * MF[F_DV + e]; }
-    OD[O_DIVS + n] = sum / MF[F_AREA + i];
-  }
-  if (n < L * V) {
-    let k = n / V; let v = n % V;
-    var sum = 0.0;
-    for (var m = 0; m < 3; m++) { let e = MI[EOV + 3 * v + m]; let u = select(IN[uOff(k) + e], OD[O_LAPA + k * E + e], fromLap); sum += f32(MI[ESV + 3 * v + m]) * u * MF[F_DC + e]; }
-    OD[O_CURLS + n] = sum / MF[F_ATRI + v];
+  if (n < C) {
+    let i = n;
+    var edges: array<i32, MAXE>; var signs: array<f32, MAXE>; var dvs: array<f32, MAXE>;
+    for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; edges[m] = e; signs[m] = f32(MI[ESC + MAXE * i + m]); dvs[m] = MF[F_DV + e]; }
+    let area = MF[F_AREA + i];
+    if (fromLap) { for (var k = 0; k < L; k++) { var sum = 0.0; for (var m = 0; m < MAXE; m++) { let e = edges[m]; sum += signs[m] * OD[O_LAPA + k * E + e] * dvs[m]; } OD[O_DIVS + k * C + i] = sum / area; } } else { for (var k = 0; k < L; k++) { var sum = 0.0; for (var m = 0; m < MAXE; m++) { let e = edges[m]; sum += signs[m] * IN[uOff(k) + e] * dvs[m]; } OD[O_DIVS + k * C + i] = sum / area; } }
+  } else if (n < C + V) {
+    let v = n - C;
+    var edges: array<i32, 3>; var signs: array<f32, 3>; var dcs: array<f32, 3>;
+    for (var m = 0; m < 3; m++) { let e = MI[EOV + 3 * v + m]; edges[m] = e; signs[m] = f32(MI[ESV + 3 * v + m]); dcs[m] = MF[F_DC + e]; }
+    let area = MF[F_ATRI + v];
+    if (fromLap) { for (var k = 0; k < L; k++) { var sum = 0.0; for (var m = 0; m < 3; m++) { let e = edges[m]; sum += signs[m] * OD[O_LAPA + k * E + e] * dcs[m]; } OD[O_CURLS + k * V + v] = sum / area; } } else { for (var k = 0; k < L; k++) { var sum = 0.0; for (var m = 0; m < 3; m++) { let e = edges[m]; sum += signs[m] * IN[uOff(k) + e] * dcs[m]; } OD[O_CURLS + k * V + v] = sum / area; } }
   }
 }`,
-    oLapVelocity: `${K}  let n = ${idx}; if (n >= L * E) { return; }
-  let k = n / E; let e = n % E;
-  let lap = (OD[O_DIVS + k * C + MI[COE + 2 * e + 1]] - OD[O_DIVS + k * C + MI[COE + 2 * e]]) / MF[F_DC + e]
-    - (OD[O_CURLS + k * V + MI[VOE + 2 * e + 1]] - OD[O_CURLS + k * V + MI[VOE + 2 * e]]) / MF[F_DV + e];
-  if (P[1] > 0.5) { OD[O_LAPB + n] = lap; } else { OD[O_LAPA + n] = lap; }
+    oLapVelocity: `${K}  let e = ${idx}; if (e >= E) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1]; let va = MI[VOE + 2 * e]; let vb = MI[VOE + 2 * e + 1];
+  let dc = MF[F_DC + e]; let dv = MF[F_DV + e];
+  let dst = select(O_LAPA, O_LAPB, P[1] > 0.5);
+  for (var k = 0; k < L; k++) {
+    let lap = (OD[O_DIVS + k * C + b] - OD[O_DIVS + k * C + a]) / dc - (OD[O_CURLS + k * V + vb] - OD[O_CURLS + k * V + va]) / dv;
+    OD[dst + k * E + e] = lap;
+  }
 }`,
     /*
      * interfaceRate is ocean/layered.module.js's; P[3] is the step.
@@ -858,23 +867,22 @@ export function createLayeredOcean(core, options = {}) {
     compute((pass) => {
       dispatch(pass, 'oSurfaceDensity', g, C);
       dispatch(pass, 'oGradRho', g, E);
-      dispatch(pass, 'oEdgeThicknessRaw', g, L * E);
-      dispatch(pass, 'oEdgeThicknessSill', g, E);
-      dispatch(pass, 'oFlux', g, L * E);
+      dispatch(pass, 'oEdgeThickness', g, E);
+      dispatch(pass, 'oFlux', g, E);
       dispatch(pass, 'oCellTendency', g, L * C);
-      dispatch(pass, 'oVertexVort', g, L * V);
-      dispatch(pass, 'oEdgePV', g, L * E);
+      dispatch(pass, 'oVertexVort', g, V);
+      dispatch(pass, 'oEdgePV', g, E);
       dispatch(pass, 'oKineticPhi', g, L * C);
       if (o.closureRings) dispatch(pass, 'oDeepestEdge', g, E);
       if (o.closureFill > 0) dispatch(pass, 'oClosureFill', g, L * E);
       if (o.closureRings) dispatch(pass, 'oClosureRing', g, L * E);
-      dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
-      dispatch(pass, 'oLapVelocity', g, L * E);
+      dispatch(pass, 'oDivCurl', g, C + V);
+      dispatch(pass, 'oLapVelocity', g, E);
     });
     setParams([0, 1, relaxRate, stepDt]);
     compute((pass) => {
-      dispatch(pass, 'oDivCurl', g, Math.max(L * C, L * V));
-      dispatch(pass, 'oLapVelocity', g, L * E);
+      dispatch(pass, 'oDivCurl', g, C + V);
+      dispatch(pass, 'oLapVelocity', g, E);
       if (o.closureRings) {
         dispatch(pass, 'oClosureBack1', g, L * E);
         dispatch(pass, 'oClosureBack2', g, L * E);
@@ -930,8 +938,7 @@ export function createLayeredOcean(core, options = {}) {
     compute((pass) => {
       dispatch(pass, 'oRescale', g, C);
       if (eddyLimit > 0) eddyPasses(pass, g);
-      dispatch(pass, 'oEdgeThicknessRaw', g, L * E);
-      dispatch(pass, 'oEdgeThicknessSill', g, E);
+      dispatch(pass, 'oEdgeThickness', g, E);
       dispatch(pass, 'oVelocityShiftClamp', g, E);
     });
   }
