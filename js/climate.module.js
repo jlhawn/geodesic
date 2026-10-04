@@ -363,11 +363,11 @@ export default function runClimate({ N = null, from = null, levels = null, worke
   let cells = null, centres = null, selected = -1, hoverTip = null, neighbours = null, surface = null;
   let geographyFields = {}, hasLand = false;
   const clock = [];
-  function simulatedHoursPerMinute() {
+  function secondsPerSimulatedDay() {
     if (clock.length < 2) return null;
     const first = clock[0], last = clock[clock.length - 1];
-    if (last.wall - first.wall < 2000) return null;
-    return (last.time - first.time) / 3600 / ((last.wall - first.wall) / 60000);
+    if (last.wall - first.wall < 2000 || last.time <= first.time) return null;
+    return ((last.wall - first.wall) / 1000) / ((last.time - first.time) / 86400);
   }
 
   const display = createDisplayClock();
@@ -735,8 +735,8 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     refreshTip();
     if (coast) coast.setVisible(hasLand && settings.view !== 'space');
     showDate(latest.time);
-    const rate = simulatedHoursPerMinute();
-    document.getElementById('rate').textContent = !running ? 'paused' : rate === null ? 'measuring…' : `${rate.toFixed(1)} simulated hours per minute`;
+    const rate = secondsPerSimulatedDay();
+    document.getElementById('rate').textContent = !running ? 'paused' : rate === null ? 'measuring…' : `${rate.toFixed(1)} seconds per simulated day`;
     if (!document.getElementById('modelModal').classList.contains('hidden')) renderModelDetails();
   }
 
@@ -762,7 +762,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       ['Time step', ready ? `<b>${ready.dt} s</b> per step.` : ''],
       ['Engine', latest.engine === 'gpu' ? '<b>GPU</b> — every kernel runs on the graphics processor through WebGPU in single precision.' : `<b>${latest.workers > 1 ? `${latest.workers} worker threads` : 'one thread'}</b> — the CPU engine in double precision.`],
       ...(latest.engine === 'gpu' ? [['Pacing', latest.pause ? `<b>${latest.pause} ms</b> of idle GPU after each step, so the page can draw every frame.` : '<b>none</b> — the steps run back to back.']] : []),
-      ['Chosen by', deviceChoice ? `the device test: <b>${deviceChoice.engine === 'gpu' ? 'GPU' : 'CPU'} at N=${deviceChoice.N}</b>, projected ${deviceChoice.rate.toFixed(0)} simulated hours a minute from ${deviceChoice.measured}. <button class="flat" data-action="retest">Test again</button>` : 'the page\'s address, which names the resolution, the engine or the saved run.'],
+      ['Chosen by', deviceChoice ? `the device test: <b>${deviceChoice.engine === 'gpu' ? 'GPU' : 'CPU'} at N=${deviceChoice.N}</b>, projected ${(1440 / deviceChoice.rate).toFixed(0)} seconds per simulated day from ${deviceChoice.measured}. <button class="flat" data-action="retest">Test again</button>` : 'the page\'s address, which names the resolution, the engine or the saved run.'],
     );
     if (d && d.oceanUpperDepth !== undefined) rows.push(['Ocean', `mixed layer <b>${d.oceanUpperDepth.toFixed(0)} m</b> deep on average, currents to <b>${d.oceanSpeed.toFixed(2)} m/s</b>${d.oceanTransport !== undefined ? `, the strongest transport <b>${d.oceanTransport.toFixed(0)} Sv</b>` : ''}${d.oceanThermoclineDepth !== undefined ? `, thermocline <b>${d.oceanThermoclineDepth.toFixed(0)} m</b>` : ''}.`]);
     if (d && d.landFraction !== undefined) rows.push(['Land', `<b>${(100 * d.landFraction).toFixed(0)}%</b> of the area${ready && ready.terrain ? ' with terrain' : ', flat'}; surface <b>${(d.landMeanT + CELSIUS).toFixed(1)} °C</b>, soil water <b>${d.soilWater.toFixed(0)} kg/m²</b>, snow on <b>${(100 * d.snowFraction).toFixed(0)}%</b> of it.`]);
@@ -1120,7 +1120,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
   const profileButton = document.getElementById('profileButton'), profileCopy = document.getElementById('profileCopy'), profileOut = document.getElementById('profileOut');
   let profileText = '', rateBefore = null;
   profileButton.addEventListener('click', () => {
-    rateBefore = running ? simulatedHoursPerMinute() : null;
+    rateBefore = running ? secondsPerSimulatedDay() : null;
     profileButton.disabled = true;
     profileCopy.disabled = true;
     profileText = '';
@@ -1141,7 +1141,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       `Device: ${r.device}`,
       `Browser: ${navigator.userAgent}`,
       `Screen: ${innerWidth}×${innerHeight} CSS px at ${devicePixelRatio}×, a frame every ${pacing.interval.toFixed(1)} ms`,
-      `Running before: ${rateBefore === null ? 'paused or still measuring' : `${rateBefore.toFixed(0)} simulated hours per minute`}, pause ${r.pause} ms, ${r.queueDepth} frames' steps in flight`,
+      `Running before: ${rateBefore === null ? 'paused or still measuring' : `${rateBefore.toFixed(0)} seconds per simulated day`}, pause ${r.pause} ms, ${r.queueDepth} frames' steps in flight`,
       `Step, one at a time: ${ms(r.stepMedian)} median (${ms(r.stepMin)} to ${ms(r.stepMax)})`,
       r.gpuMs === null ? 'GPU timestamps: not offered by this browser' : `GPU time per step, from timestamps: ${ms(r.gpuMs)}`,
       `Empty round trip to the GPU: ${ms(r.roundTrip)}`,
