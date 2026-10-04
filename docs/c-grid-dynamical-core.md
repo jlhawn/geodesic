@@ -2852,7 +2852,7 @@ field the Satellite view draws (white over grey at opacity
 1 − exp(−g / 40 g/m²), its legend to 100 g/m²), and each type on its
 own from its own frame field, Low, Mid and High cloud (`cloudLow`,
 `cloudMid`, `cloudHigh`: the resolved condensate in the layers whose
-midpoint pressure lies below 800 hPa, between 800 and 500, above 500),
+midpoint pressure is above 800 hPa, between 800 and 500, 500 or less),
 Cumulus (`cloudCumulus`, the plumes' cover × condensate) and
 Stratocumulus deck (`cloudDeck`, the mixed-layer deck's cover × water
 path); `cloud` is their sum, and `test/frameGpu.test.mjs` checks each
@@ -11186,12 +11186,12 @@ overlay (the page's curve stretched to the type's range): the baseline
 at main's physics (f319996), from the same states and steps as above,
 N=128 / N=64. The `cloud` row reproduces the combined numbers.
 
-| type (range, g/m²) | cells visible | blinks per step | cells ever | lag-1 of the step change, all / blinking | one-step runs, all / cloudy |
+| type (range, g/m²) | cells visible | blinks per step | cells ever | lag-1 of the step change: all cells, blinking cells | one-step runs: all, cloudy |
 |---|---|---|---|---|---|
 | all clouds (100) | 79.8 / 85.4 % | 0.162 / 0.091 % | 2.25 / 2.75 % | −0.44 / −0.36, −0.53 / −0.52 | 64 / 62 %, 86 / 88 % |
 | low (200) | 52.1 / 63.3 % | 5 / 8 onsets | 0.002 / 0.017 % | 0.31 / 0.20 | — |
 | mid (500) | 31.5 / 33.0 % | none | none | 0.58 / 0.48 | — |
-| high (400) | 23.2 / 25.1 % | 0 / 1 onset | — | 0.44 / 0.37 | — |
+| high (400) | 23.2 / 25.1 % | 0 / 1 onset | 0 / 0.002 % | 0.44 / 0.37 | — |
 | cumulus (40) | 43.8 / 51.6 % | 1.18 / 1.79 % | 13.2 / 30.4 % | −0.48 / −0.49, −0.51 / −0.49 | 58 / 53 %, 69 / 65 % |
 | deck (150) | 4.8 / 4.3 % | 0.0085 / 0.0082 % | 0.07 / 0.17 % | −0.33 / −0.21, −0.54 / −0.48 | 64 / 55 %, 61 / 48 % |
 
