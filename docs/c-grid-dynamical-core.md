@@ -7221,9 +7221,9 @@ or detrains as before), so there is no budget. The scheme is Tiedtke's
 (1993), kept by the IFS, in which convective detrainment is the source of
 a cloud that then decays on its own timescale, reduced to a first-order
 decay of the diagnosed cloud. The value: in a tracked LES shallow-cumulus
-ensemble active clouds live about 20 min on average and passive ones about
-5 min (Sakradzija, Seifert and Heus 2015, Nonlin. Processes Geophys. 22,
-65–85); τ = 30 min lies past the active clouds' mean life by the decay of
+ensemble (RICO, 25 m LES over 50 km) active clouds live about 20 min on
+average and passive ones about 5 min, 3–7 min over all clouds (Sakradzija,
+Seifert and Heus 2015, Nonlin. Processes Geophys. 22, 65–85, Table 2); τ = 30 min lies past the active clouds' mean life by the decay of
 what they leave. The persistence of a grid cell's cumulus field beyond a
 cloud's life is the plume's forcing persisting, which the closure already
 reads each step, so the memory is not set to the field's decorrelation
@@ -11247,9 +11247,17 @@ reference before, under which both engines hash as at f319996 (GPU as
 for M21's memory; CPU: the pinned deck digests in physics.test.mjs). The
 subsidence's bracket was already the two interfaces about h and is
 unchanged (only the density it divides by is the layer's that holds h).
-Before, as h rose toward a midpoint the reference became the air at h
-itself; now it lies between half a layer and a layer above h, so the
-jump the gate tests and the entrainment reads is larger on average. The
+By layer the reference sat from one layer's spacing above h down to h
+itself as h rose toward a midpoint, half a spacing on average; the
+interpolated reference sits one spacing above h wherever h lies (exactly
+so on even spacing), so the jump the gate tests and the entrainment
+reads is larger. Over the ice-free sinking sea columns the host replica
+tests at the fourth step from day 1825, the virtual jump grows by a
+median 1.2 K at N=64 (mean 2.2 K, 10 % of columns by more than 5 K) and
+1.6 K at N=128 (mean 2.6 K), and the columns passing the 4 K test go
+from 3,608 to 5,776 of 12,655 (N=128: 15,821 to 25,898 of 45,260); the
+shift is not uniform, so no single minimumInversion restores the old
+pass count (6.5 K still passes 4,276 at N=64). The
 host replica agrees with the GPU on the night side as before (eleven64:
 964 decks on both, none on one only, LWP ≥ 1 g/m² within 2.4·10⁻⁴
 relative against 2.8·10⁻⁴ at f319996; eleven128: 3,916, 2.8·10⁻⁴ against
@@ -11277,7 +11285,8 @@ eleven64_day1825 (days 1826–1828), f319996 → both, with a replicate
 (replicate −63.9, −64.4, −64.1) W/m²; LWCRE 29.6, 30.0, 29.3 → 29.7,
 30.3, 29.6; albedo 0.328, 0.325, 0.324 → 0.332, 0.334, 0.333; ASR 228.7,
 229.9, 230.3 → 227.4, 226.8, 227.1; OLR 229.5, 229.1, 229.9 → 229.4,
-228.9, 229.6; rain 2.81, 2.81, 2.75 → 2.81, 2.81, 2.76 mm/d. Two N=128
+228.9, 229.6 (ASR − OLR −0.8, +0.8, +0.4 → −2.0, −2.1, −2.5); rain 2.81, 2.81,
+2.75 → 2.81, 2.81, 2.76 mm/d. Two N=128
 days (1826–1827): SWCRE −53.3, −53.6 → −54.4, −56.5 (replicate −54.5,
 −56.5); LWCRE 25.9, 26.1 → 26.0, 26.4; albedo 0.302, 0.303 → 0.305,
 0.311; ASR 237.7, 237.3 → 236.5, 234.5; OLR 234.7, 234.5 → 234.6, 234.2;
