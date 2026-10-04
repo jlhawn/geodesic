@@ -11981,6 +11981,71 @@ physics kernel 13.2 (the radiation 8.7 of it, amortised), cellTendency
 S, T and K1–K4 hold 1834 (the atmosphere's 6 × 136.9, the ocean's 6 ×
 168.8), the ocean's OD 642, D 386 and PH 283.
 
+**The worker's load kept lean** (`js/model.worker.js`,
+`js/stateFile.module.js`; memory, bit for bit). The page's tab holds
+far more than the GPU buffers: in a headless Chrome on the M1 Max the
+renderer (page and worker) held a phys_footprint of about 1.9 GB at N=64
+and 7.3 GB at N=128 once ready, the worker's own share 872 and 3458 MiB
+by `performance.measureUserAgentSpecificMemory`. Of the worker's, a
+whole physics-free CPU model built for its surface geopotential alone
+(`sourceFor`, also at the saved run's own N whenever the run had
+terrain) stayed for the session, and the saved arrays were copied once
+more into Float64 arrays before going into the model's. Now:
+
+1. At the worker's own N `initialState` writes the saved arrays straight
+   into `model.state` (Float64Array's `set` converts float32 exactly as
+   `Float64Array.from` does) and takes the saved run's terrain from the
+   model it built: its surface geopotential, or with terrain off its
+   geography's. `test/sourceGeopotential.test.mjs` holds these to the
+   physics-free model's, cell for cell, at N=16 and 32 (and a script at
+   N=64 and 128). The surface pressure's rebalance between two equal
+   geopotentials is the identity, so the GPU engine skips it and the
+   diagnosis of its unused CPU sigma core; the CPU engines still
+   diagnose, as their first frame reads the diagnosis. The source model
+   is built only for a regrid and dropped once the start or restore is
+   done.
+2. `fetchState` reads the parts as one stream, inflated on the way, and
+   a binary state goes into one buffer of the size its header gives, so
+   neither the compressed bytes nor a second inflated copy are held.
+
+Bit for bit against 3610d2a, with the worker run in Node from the
+page's start message: every device buffer, the mirrors and the first
+frame after the load, then after 10 steps at N=64 and 5 at N=128 by
+`stepBatch` and by `step` the device buffers and the snapshot, from the
+two default parts and eleven64/128_day1826.bin, with a restore at the
+same N, a regrid to N=32, terrain off, land off, an N=32 snapshot
+restored at N=64, and the CPU engine (one thread and two workers) at
+N=32 and regridded to N=16. `fetchState` decodes all 74 saved states at
+hand (runs/*.bin, the five parts manifests, the two JSON states) to the
+bit as `decodeState` does the whole file. Memory (the worker in Node,
+`memWorker.mjs` of the measurement with a fetch that streams files in
+64 KiB chunks, MiB; Chrome's phys_footprint in MB, two runs at N=64):
+
+| | 3610d2a, N=64 | lean, N=64 | 3610d2a, N=128 | lean, N=128 |
+|---|---|---|---|---|
+| worker, live JS at the end of the decode before GC | 445.4 | 122.5 | 1491.6 | 428.7 |
+| worker, live JS after `initialState` | 1076.6 | 556.1 | 4261.2 | 2180.0 |
+| worker, allocated after two frames | 878.9 | 426.8 | 3470.4 | 1662.9 |
+| of which pages holding data | 278.1 | 150.8 | 1101.6 | 592.2 |
+| Chrome, the worker once ready | 872.3 | 420.3 | 3457.5 | 1650.2 |
+| Chrome, the renderer's RSS by the end of the decode | 1125, 1234 | 913, 902 | 2705 | 1207 |
+| Chrome, the renderer's footprint once ready | 1872, 1876 | 1709, 1709 | 7287 | 6594 |
+| Chrome, the renderer's peak footprint | 2790, 2889 | 2616, 2583 | 9881 | 9547 |
+| Chrome, the GPU process's footprint | 2311, 2303 | 2306, 2292 | 9129 | 9128 |
+| the page ready, s | 3.9, 3.5 | 2.9, 2.9 | 14.3 | 12.4 |
+
+The renderer's footprint falls by 165 MB at N=64 and 693 at N=128, less
+than the allocations because most of the source model's arrays were
+never touched; the peaks, at the uploads, and the GPU process are the
+`queue.writeBuffer` copies' (the upload lever's). In that headless
+Chrome the page's "Download and restore" fails on 3610d2a as on this
+change (IndexedDB aborts the 177 MB snapshot's transaction without an
+error), so restores were driven by the message the page posts; the
+defaults loaded and restores at the same N and at another N worked.
+Nothing the step runs changed: `scripts/paceGpu.mjs` at N=128 gives
+48.4 and 48.5 s a model day on 3610d2a and 48.4 twice with the change,
+and the suite passes (72 files, 614 tests).
+
 ### M25 — The long spin-up — planned
 
 The asynchronous schedule of M18 (`scripts/asyncSpinup.sh`: a hundred
