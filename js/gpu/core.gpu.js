@@ -4,6 +4,7 @@ import { sunDirection, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS,
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
+import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { SNOW_AGEING } from '../physics/ice.module.js';
 import { FOREST_ARIDITY, SOIL_CARBON } from '../physics/land.module.js';
@@ -45,7 +46,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]);
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['CLOUDK', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E], ['SUBTV', subcloudLayers * C]]);
-  const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
+  const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['CLOW', C], ['CMID', C], ['CHIGH', C], ['CCU', C], ['CDECK', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, SPK, SPB, MI, MF, LV, S, D, PH, FR };
 }
 
@@ -179,6 +180,7 @@ fn miseryC(t: f32, rh: f32, v: f32) -> f32 {
 
 const FRAME_KERNELS = {
   frameFields: `${COMFORT_WGSL}
+const CLOUD_LOW_P: f32 = ${CLOUD_LOW_PRESSURE.toFixed(1)}; const CLOUD_HIGH_P: f32 = ${CLOUD_HIGH_PRESSURE.toFixed(1)};
 @compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let pi = IN[S_PI + i];
@@ -216,16 +218,20 @@ const FRAME_KERNELS = {
   OUT[FR_SPD + i] = speed;
   OUT[FR_DP + i] = dewPointC(celsius, rh) + 273.15; OUT[FR_WB + i] = wetBulbC(celsius, rh) + 273.15; OUT[FR_MI + i] = miseryC(celsius, rh, speed) + 273.15;
   OUT[FR_WIND + 3 * i] = wind.x; OUT[FR_WIND + 3 * i + 1] = wind.y; OUT[FR_WIND + 3 * i + 2] = wind.z;
-  var water = 0.0; var cloud = 0.0;
+  var water = 0.0; var cloud = 0.0; var low = 0.0; var mid = 0.0; var high = 0.0; var cumulus = 0.0;
   for (var j = 0; j < K; j++) {
-    let d = pi * LV[L_DS + j] / GRAV;
-    water += d * IN[S_Q + j * C + i]; cloud += d * IN[S_QC + j * C + i];
+    let d = pi * LV[L_DS + j] / GRAV; let condensed = d * IN[S_QC + j * C + i]; let p = pi * LV[L_SM + j];
+    water += d * IN[S_Q + j * C + i]; cloud += condensed;
+    if (p > CLOUD_LOW_P) { low += condensed; } else if (p > CLOUD_HIGH_P) { mid += condensed; } else { high += condensed; }
   }
   for (var j = CU_K0; j < K; j++) {
     let slot = (j - CU_K0) * C + i;
-    cloud += pi * LV[L_DS + j] / GRAV * PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot];
+    let path = pi * LV[L_DS + j] / GRAV * PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot];
+    cloud += path; cumulus += path;
   }
-  OUT[FR_TPW + i] = water; OUT[FR_TCW + i] = cloud + PH[PH_DECKF + i] * PH[PH_DECK + i];
+  let deck = PH[PH_DECKF + i] * PH[PH_DECK + i];
+  OUT[FR_TPW + i] = water; OUT[FR_TCW + i] = cloud + deck;
+  OUT[FR_CLOW + i] = low; OUT[FR_CMID + i] = mid; OUT[FR_CHIGH + i] = high; OUT[FR_CCU + i] = cumulus; OUT[FR_CDECK + i] = deck;
   let tb = IN[S_TH + (K - 1) * C + i] * exner0 * LV[L_CM + K - 1];
   OUT[FR_MSLP + i] = pi * exp(phis / (RGAS * (tb + 0.00325 * phis / GRAV)));
   if (P[3] > 0.5) {
@@ -1090,7 +1096,8 @@ export async function createGpuCore(mesh, {
   const FIELDS = {
     temperature: ['FR', 'T', 1], height: ['FR', 'Z', 1], humidity: ['FR', 'RH', 1], speed: ['FR', 'SPD', 1], wind: ['FR', 'WIND', 3],
     dewPoint: ['FR', 'DP', 1], wetBulb: ['FR', 'WB', 1], misery: ['FR', 'MI', 1], vertical: ['FR', 'WM', 1],
-    water: ['FR', 'TPW', 1], cloud: ['FR', 'TCW', 1], mslp: ['FR', 'MSLP', 1], rain: ['FR', 'RAIN', 1], ps: ['S', 'PI', 1], ice: ['S', 'ICE', 1],
+    water: ['FR', 'TPW', 1], cloud: ['FR', 'TCW', 1], cloudLow: ['FR', 'CLOW', 1], cloudMid: ['FR', 'CMID', 1], cloudHigh: ['FR', 'CHIGH', 1], cloudCumulus: ['FR', 'CCU', 1], cloudDeck: ['FR', 'CDECK', 1],
+    mslp: ['FR', 'MSLP', 1], rain: ['FR', 'RAIN', 1], ps: ['S', 'PI', 1], ice: ['S', 'ICE', 1],
     albedo: ['PH', 'ADIF', 1], shortwave: ['PH', 'SWDN', 1], longwave: ['PH', 'OLR', 1], soil: ['PH', 'SOIL', 1], snow: ['PH', 'SNOW', 1], vegetation: ['PH', 'VEG', 1],
     concentration: ['PH', 'CONC', 1],
   };

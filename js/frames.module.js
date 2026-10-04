@@ -27,6 +27,11 @@ export const FIELDS = {
   mslp: 'sea-level pressure, Pa',
   water: 'precipitable water, kg/m²',
   cloud: 'column cloud water: the resolved condensate, the cumulus cloud\'s condensate times its cover and the stratocumulus deck\'s water times its cover, kg/m²',
+  cloudLow: 'the resolved condensate in the layers below 800 hPa, kg/m²',
+  cloudMid: 'the resolved condensate in the layers between 800 and 500 hPa, kg/m²',
+  cloudHigh: 'the resolved condensate in the layers above 500 hPa, kg/m²',
+  cloudCumulus: 'the cumulus cloud\'s condensate times its cover, kg/m²',
+  cloudDeck: 'the stratocumulus deck\'s water times its cover, kg/m²',
   rain: 'recent rain, mm, with a three-hour exponential memory',
   ice: 'sea-ice thickness over the part of the cell the ice covers, m',
   concentration: 'sea-ice concentration, the fraction of the cell the ice covers, 0 to 1',
@@ -49,6 +54,10 @@ export const FIELDS = {
 export const LEVEL_FIELDS = new Set(['temperature', 'height', 'humidity', 'speed', 'wind', 'dewPoint', 'wetBulb', 'misery', 'vertical']);
 export const OCEAN_FIELDS = new Set(['sst', 'sss', 'layerDepth', 'thermocline', 'ssh', 'current', 'currents', 'upwelling']);
 export const DEPTH_FIELDS = new Set(['sst', 'current', 'currents', 'upwelling']);
+
+// A layer's group goes by the pressure at its middle, Pa.
+export const CLOUD_LOW_PRESSURE = 80000, CLOUD_HIGH_PRESSURE = 50000;
+export const CLOUD_TYPES = ['cloudLow', 'cloudMid', 'cloudHigh', 'cloudCumulus', 'cloudDeck'];
 
 export const RAIN_MEMORY = 3 * 3600;
 export const VERTICAL_MEMORY = 2 * 3600;

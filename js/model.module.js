@@ -11,6 +11,7 @@ import { createOcean } from './ocean/layered.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
+import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE } from './frames.module.js';
 import { createSurfaceExchange, exchangeMode } from './physics/exchange.module.js';
 import { createGravityWaveDrag } from './physics/gravityWaves.module.js';
 import { createOrographicDrag, LOTT_MILLER } from './physics/orography.module.js';
@@ -242,6 +243,15 @@ export function createModel(gridOrMesh, {
 
   model.oceanFields = (depth = 0) => (ocean ? ocean.fields(depth) : null);
   model.cloudWater = (i) => moistPhysics.columnWater(state[0], state[5], i) + moistPhysics.cumulusCloudPath(state[0], i) + radiation.stratusFraction[i] * radiation.stratus[i];
+  model.cloudParts = (i) => {
+    const pi = state[0][i], qc = state[5], { sigmaMid, dSigma, g } = core.diagnostics;
+    let low = 0, mid = 0, high = 0;
+    for (let k = 0; k < K; k++) {
+      const path = pi * dSigma[k] / g * qc[k * C + i], p = pi * sigmaMid[k];
+      if (p > CLOUD_LOW_PRESSURE) low += path; else if (p > CLOUD_HIGH_PRESSURE) mid += path; else high += path;
+    }
+    return { cloudLow: low, cloudMid: mid, cloudHigh: high, cloudCumulus: moistPhysics.cumulusCloudPath(state[0], i), cloudDeck: radiation.stratusFraction[i] * radiation.stratus[i] };
+  };
 
   model.step = function step(dt) {
     rk4 ??= createRK4Arrays(STATE_NAMES.map((name) => lengths[name]));

@@ -12,7 +12,7 @@ import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCe
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName, savedLevels } from './stateFile.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
-import { LEVEL_FIELDS, OCEAN_FIELDS, RAIN_MEMORY, VERTICAL_MEMORY } from './frames.module.js';
+import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY } from './frames.module.js';
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
@@ -81,6 +81,10 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
   }
   if (want.has('water')) out.water = Float32Array.from({ length: C }, (_, i) => model.moist.columnWater(pi, q, i));
   if (want.has('cloud')) out.cloud = Float32Array.from({ length: C }, (_, i) => model.cloudWater(i));
+  if (CLOUD_TYPES.some((name) => want.has(name))) {
+    const parts = Array.from({ length: C }, (_, i) => model.cloudParts(i));
+    for (const name of CLOUD_TYPES) if (want.has(name)) out[name] = Float32Array.from(parts, (part) => part[name]);
+  }
   if (want.has('rain')) out.rain = Float32Array.from(rain.total);
   if (want.has('ice')) out.ice = Float32Array.from(iceField);
   if (want.has('concentration')) out.concentration = Float32Array.from(model.seaIce.concentration);
