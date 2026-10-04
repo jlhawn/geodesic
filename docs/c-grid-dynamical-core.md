@@ -11517,18 +11517,131 @@ without it.
 
 The default stays at `closureFill` 0 (the token edges carry the layer above's velocity as before): the two-ring fill with its transpose damps the thermocline classes' own flow by 0.2–95·10⁻⁶ /s on the audited states and took the N=128 undercurrent from 0.47 to 0.36 m/s in a day, while the first ring alone with its transpose showed no systematic drag but was not run for stability. The fill and its transpose remain options; the first-ring form is the next step here. The atlas deep fill is on.
 
-### M24 — Performance — planned
+### M24 — Performance — in progress (three levers done)
 
-The M21 physics costs about 2.5 % a step for the plume and more for
-the 45-class ocean (its momentum kernel's thick-layer search grows
-faster than the layer count), and the machine measured 57–78 s a model
-day at N=128 on the evening of Sept 30 against 54 before. The goal is
-a model day in a minute at N=128 with all of the above in place.
-Profile with `js/gpu/profile.module.js` back to back; the candidates
-are the ocean momentum kernel at L=45, the adjust kernel (16 of an
-86 ms step), the second saturation adjustment after the plume, the ∇⁴
-closure passes and the deck's ring passes, and on the page the frame
-and overlay costs.
+The goal is a model day in a minute at N=128 on the M1 Max with every
+scheme of M21–M23 in place. Three levers, each an option whose off value
+steps bit for bit as 086dccf did (checked on both engines, and for two
+model days at N=128 against 086dccf itself), with its realism cost
+measured against a replicate (every θ scaled by 1 ± 5·10⁻⁷) and its time
+saving measured on the M1 Max at N=128 (`scripts/profileGpu.mjs`, GPU
+timestamps per pass, and `scripts/paceGpu.mjs`, whole model days):
+
+| | 086dccf, page (ocean every 4) | 086dccf, spin-ups (ocean every 8) | now (radiation every 4, ocean every 8) |
+|---|---|---|---|
+| dynamics: three RK4 stages with their advance | 42.8 ms | 42.9 | 43.3 |
+| dynamics: the fourth stage | 13.1 | 13.1 | 13.2 |
+| physics (radiation, surface, deck; PBL diagnosis, gravity waves, orography) | 41.1 | 41.1 | 23.7 |
+| adjust (moist, mixing, drag, dissipation) | 24.8 | 24.8 | 25.5 |
+| ocean, amortised over its calls | ≈ 48 | 25.3 | 26.2 |
+| ∇⁴ closures, divergence damping, sponge, combine | 10.7 | 10.8 | 11.1 |
+| GPU time per step | 180.5 ms | 158.0 | 142.8 |
+| a model day, steps awaited one at a time | 94.2 s | 81.6 | 74.2 |
+| a model day, queued 8 to a submission | 94.6 s | 81.6 | 73.7 |
+
+(N=128 from runs/eleven128_day1825.bin, 24 steps profiled before and
+32 after; the page's worker loop in Node, `scripts/pageLoop.mjs`, runs
+at 19.9 simulated hours a minute, 72.3 s a model day, with the frame's
+fields; N=64 goes from 11.8 to 9.5 s a model day.)
+
+Two model days at N=128 from eleven128_day1826 with these defaults,
+against 086dccf at the spin-ups' cadence (`scripts/spinup.mjs`, whose
+log lines the radiation every step and the ocean every 8 reproduce
+exactly): day 1 Ts 14.79 against 14.78 °C, ASR 237.2 against 237.1, OLR
+234.4 against 234.5 W/m², SWCRE −53.8 and LWCRE 26.2 alike; day 2 Ts
+14.82 and ASR 235.5 alike, OLR 233.9 against 234.0, LWCRE 26.7 against
+26.6, precipitation 2.76 against 2.75 mm/d.
+
+**The radiation held between full calls** (`radiationEvery`, both
+engines; the drivers' default from `js/cadence.module.js`, RADIATION_MINUTES
+11.25: every 4 steps at N=128, every 2 at N=64). As in every GCM (CAM and
+the IFS call their radiation hourly) the full longwave and shortwave,
+clear-sky pass included, run every k steps. Between calls the shortwave
+heating of the layers and the surface and top shortwave fluxes scale
+with the cosine of the zenith angle over the call's, and a change in the
+surface's emission since the call, σT⁴ less the call's, is absorbed by the
+layers in the shares the call found and the rest escapes (the approximate
+updates of Hogan and Bozzo 2015, J. Adv. Model. Earth Syst. 7, 1401: the
+upward fluxes' derivative with respect to the surface's emission, one
+upward pass per g-point at the call); the longwave heating, the downward
+longwave and the column's own emission stay the call's. The call takes
+the insolation-weighted mean cosine of the steps it covers, Σμ²/Σμ of the
+positive ones: a cell whose sun rises between calls has sunlight to scale
+(the mean over the sunlit part, Hogan and Hirahara 2016, Geophys. Res.
+Lett. 43, 482, does that too but left the surface 0.4 and 1.0 W/m² short
+of every-step sunlight at 45 and 90 minutes; the weighted mean, whose
+first-order error in μ averages out over the interval, 0.1 and 0.0). The
+deck, the cloud its sunlight reads and the surface fluxes of heat and
+vapour step every step under the current sun, and the day-mean sums take
+what each step received. Measured with `scripts/radiationInterval.mjs`
+against every step, from eleven64_day1826 over 3 days (two replicates)
+and eleven128_day1826 over 2 (W/m², K):
+
+| | ASR | OLR | LWCRE | surface SW | Ts | land diurnal Ts amplitude | rms of per-cell day-mean OLR, day 1 |
+|---|---|---|---|---|---|---|---|
+| N=64 replicates | −0.03, −0.02 | +0.01, 0.00 | −0.01, 0.00 | −0.04, −0.02 | 0.000 | 0.00, −0.03 % | 0.77, 0.82 |
+| N=64 every 2 (11 min) | −0.04 | −0.06 | +0.05 | −0.02 | 0.000 | +0.02 % | 1.27 |
+| N=64 every 4 (22.5 min) | −0.06 | −0.17 | +0.16 | 0.00 | +0.002 | −0.02 % | 1.50 |
+| N=64 every 8 (45 min) | −0.24 | −0.25 | +0.24 | −0.08 | +0.004 | −0.07 % | 2.04 |
+| N=64 every 16 (90 min) | −0.38 | −0.35 | +0.33 | +0.04 | +0.010 | −0.18 % | 3.38 |
+| N=128 replicate | −0.01 | 0.00 | 0.00 | −0.01 | 0.000 | +0.02 % | 0.81 |
+| N=128 every 4 (11.25 min) | −0.01 | −0.08 | +0.08 | +0.01 | +0.002 | +0.02 % | 1.22 |
+| N=128 every 8 (22.5 min) | −0.03 | −0.12 | +0.12 | +0.03 | +0.004 | +0.02 % | 1.50 |
+
+The cost grows with the interval in minutes rather than in steps: the
+OLR falls and the longwave cloud effect rises as the cloud the longwave
+sees ages (by half the interval on average), and the shortwave cloud
+effect strengthens likewise. 11.25 minutes is the longest interval whose
+means stay within 0.1 W/m² of every step; the peak of the diurnal cycle
+of Ts over land (15.6 h local at N=64, 15.4 at N=128) moves by under
+0.03 h at any interval, its amplitude by under 0.2 %. The physics pass
+falls from 41.1 to 23.7 ms at N=128 (19.9 every 8), the radiation's
+24 ms falling by (k−1)/k.
+
+**The ocean's step** (the ocean's `everySteps`; the drivers' default from
+`js/cadence.module.js`: OCEAN_MINUTES 45 up to N=64 and shorter in
+proportion to the cell spacing at finer N, so every 8 steps at both N=64
+and N=128, the eleven spin-up's cadence; coarser grids keep the ocean's
+own every 4 steps). Coupled models exchange with
+the ocean every 30–60 minutes (CESM every 30), but the layered ocean at
+N=128 does not take a 45-minute step: every 16 steps from
+eleven128_day1826 its currents reach the 5 m/s cap on the first day
+(305279 clamped edges) and the run is NaN on the fourth; every 12 (33.75
+minutes) held for the two days it was run. At N=64 every 16 (90 minutes)
+stayed within a replicate's noise over ten days. Against every 8, over
+the run (scripts/spinup.mjs, radiation every step; K, W/m², m):
+
+| | Ts | ASR | OLR | sea surface SW | warm pool / cold tongue SST | mixed layer, global / equatorial | SST rms | clamped, largest current |
+|---|---|---|---|---|---|---|---|---|
+| N=64 replicate, 10 days | 0.00 | 0.0 | +0.1 | +0.06 | +0.001 / −0.005 | −0.24 / +0.08 | 0.028 | 0, 1.60 m/s |
+| N=64 every 16 (90 min) | 0.00 | +0.02 | 0.0 | +0.07 | −0.001 / −0.011 | −0.30 / −0.10 | 0.030 | 0, 1.69 |
+| N=64 every 4 (22.5 min) | 0.00 | +0.05 | +0.01 | +0.18 | +0.003 / −0.009 | +0.07 / +0.01 | 0.031 | 0, 1.51 |
+| N=128 replicate, 5 days | 0.00 | +0.04 | +0.02 | +0.08 | +0.002 / −0.009 | +0.01 / +0.01 | 0.010 | 0, 1.20 |
+| N=128 every 4 (11.25 min) | 0.00 | +0.02 | 0.00 | +0.02 | +0.002 / −0.005 | +0.01 / −0.01 | 0.011 | 0, 1.21 |
+
+The page, which took the ocean engine's own default of every 4 steps,
+now steps it as the spin-ups did, halving its ocean (48 to 25 ms a step
+at N=128).
+
+**The page's steps queued as one batch** (`model.stepBatch` in the
+worker's loop, with `wait` false so that two submissions stay in flight;
+the frame's capture queued ahead as before; a pause still takes effect at
+the end of the frame's steps). On Metal the steps run back to back either
+way, the GPU time per step equalling the wall time, so the rate is the
+same: N=128 19.9 simulated hours a minute per step and 19.9/19.8 batched,
+N=64 155.9/158.4 and 158.2/158.2 (two 120 s runs of
+`scripts/pageLoop.mjs` each). It sends one submission a frame in place of
+about ten a step, which on Vulkan saved 16 % at N=128 (127 against
+151 ms a step, the Verda benchmark); the spin-up's BATCH default stays 1.
+
+What is left between 74 s and a minute a model day at N=128: the
+dynamics' four RK4 stages (56 ms, 39 %), the adjust pass (25.5), the
+ocean (26) and the physics pass (24, of which the deck's own cloud and
+sunlight, the surface fluxes and the boundary-layer diagnosis are now
+most). Candidates are the ocean momentum kernel at L=45, the adjust
+kernel's second saturation adjustment after the plume, a longer stable
+ocean step at N=128 (every 12 held two days), the ∇⁴ closure passes and
+the deck's ring passes, and on the page the frame and overlay costs.
 
 ### M25 — The long spin-up — planned
 
@@ -11582,6 +11695,7 @@ js/
     model.gpu.js             M15: the GPU model behind the CPU model's interface
     profile.module.js        the model dialog's GPU profile: step times and kernel timestamps
   model.module.js           assembles core + physics, RK4 step, diagnostics
+  cadence.module.js         M24: the radiation's and the ocean's intervals the drivers turn into steps
   audit.module.js           M21: the audit's boxes and the spin-up's convection and equator lines
   forcing.module.js         M18: one recorded day of the ocean's surface forcing, encoded and decoded
   oceanHandOff.module.js    M18: a coupled state with the ocean, sea ice and sea surface of another

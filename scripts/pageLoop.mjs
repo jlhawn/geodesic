@@ -6,9 +6,8 @@
 // stepsPerFrame steps (the worker's default for the resolution) and read
 // back after them, for SECONDS (120) of wall time after a warm-up frame.
 // MODE 'batch' queues each frame's steps as one batch (model.stepBatch),
-// as the worker does; 'steps' queues and yields after every step, as it
-// did before. Prints simulated hours per wall minute and seconds per
-// model day.
+// as the worker does; 'steps' queues and yields after every step. Prints
+// simulated hours per wall minute and seconds per model day.
 //   MODE=steps node scripts/pageLoop.mjs runs/eleven128_day1825.bin
 import { gpuModelFrom, readState } from './figures/figureState.mjs';
 
