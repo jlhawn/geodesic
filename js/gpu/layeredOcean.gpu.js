@@ -1154,11 +1154,11 @@ export function createLayeredOcean(core, options = {}) {
     packed.set(h, OS.OH); packed.set(u, OS.OU); packed.set(Q, OS.OQ); packed.set(W, OS.OW);
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) packed[OS.OU + e] = 0;
     device.queue.writeBuffer(ob.S, 0, packed);
-    device.queue.writeBuffer(ob.T, 0, packed);
-    const zero = new Float32Array(OS.total);
-    for (const b of [ob.K1, ob.K2, ob.K3, ob.K4]) device.queue.writeBuffer(b, 0, zero);
-    const odZero = new Float32Array(ODTOTAL);
-    device.queue.writeBuffer(ob.OD, 0, odZero);
+    const encoder = device.createCommandEncoder();
+    encoder.copyBufferToBuffer(ob.S, 0, ob.T, 0, 4 * OS.total);
+    for (const b of [ob.K1, ob.K2, ob.K3, ob.K4]) encoder.clearBuffer(b, 0, 4 * OS.total);
+    encoder.clearBuffer(ob.OD, 0, 4 * ODTOTAL);
+    device.queue.submit([encoder.finish()]);
     device.queue.writeBuffer(ob.OD, 4 * OD.ETA, Float32Array.from(eta));
     device.queue.writeBuffer(ob.OD, 4 * OD.EMASK, Float32Array.from(edgeOcean));
     device.queue.writeBuffer(ob.OD, 4 * OD.CMASK, Float32Array.from(cellOcean));
