@@ -11547,10 +11547,12 @@ fields; N=64 goes from 11.8 to 9.5 s a model day.)
 Two model days at N=128 from eleven128_day1826 with these defaults,
 against 086dccf at the spin-ups' cadence (`scripts/spinup.mjs`, whose
 log lines the radiation every step and the ocean every 8 reproduce
-exactly): day 1 Ts 14.79 against 14.78 °C, ASR 237.2 against 237.1, OLR
+exactly): day 1 Ts 14.79 against 14.78 °C, ASR 237.1 alike, OLR
 234.4 against 234.5 W/m², SWCRE −53.8 and LWCRE 26.2 alike; day 2 Ts
 14.82 and ASR 235.5 alike, OLR 233.9 against 234.0, LWCRE 26.7 against
-26.6, precipitation 2.76 against 2.75 mm/d.
+26.6, precipitation 2.75 alike; no clamped ocean edges, currents at most
+1.19 m/s in both. The ocean every 4 steps with these defaults gave the
+same day lines.
 
 **The radiation held between full calls** (`radiationEvery`, both
 engines; the drivers' default from `js/cadence.module.js`, RADIATION_MINUTES
@@ -11568,25 +11570,29 @@ longwave and the column's own emission stay the call's. The call takes
 the insolation-weighted mean cosine of the steps it covers, Σμ²/Σμ of the
 positive ones: a cell whose sun rises between calls has sunlight to scale
 (the mean over the sunlit part, Hogan and Hirahara 2016, Geophys. Res.
-Lett. 43, 482, does that too but left the surface 0.4 and 1.0 W/m² short
-of every-step sunlight at 45 and 90 minutes; the weighted mean, whose
-first-order error in μ averages out over the interval, 0.1 and 0.0). The
+Lett. 43, 482, does that too but left the surface's sunlight 0.3 and 1.0
+W/m² further below every step's at 45 and 90 minutes than the weighted
+mean, whose first-order error in μ averages out over the interval). The
 deck, the cloud its sunlight reads and the surface fluxes of heat and
 vapour step every step under the current sun, and the day-mean sums take
-what each step received. Measured with `scripts/radiationInterval.mjs`
-against every step, from eleven64_day1826 over 3 days (two replicates)
-and eleven128_day1826 over 2 (W/m², K):
+what each step received: over 2–3 days at N=64 (every 1, 2 and 4 steps)
+and 2 at N=128 (every 1, 4 and 8), the accumulated ASR less OLR equals the heating the
+physics pass applied to the layers and the surface to 0.0004 W/m² in the
+global mean and 0.002 in any cell (f32 sums). Measured with
+`scripts/radiationInterval.mjs` against every step, from
+eleven64_day1826 over 3 days (two replicates) and eleven128_day1826 over
+2 (W/m², K):
 
 | | ASR | OLR | LWCRE | surface SW | Ts | land diurnal Ts amplitude | rms of per-cell day-mean OLR, day 1 |
 |---|---|---|---|---|---|---|---|
 | N=64 replicates | −0.03, −0.02 | +0.01, 0.00 | −0.01, 0.00 | −0.04, −0.02 | 0.000 | 0.00, −0.03 % | 0.77, 0.82 |
-| N=64 every 2 (11 min) | −0.04 | −0.06 | +0.05 | −0.02 | 0.000 | +0.02 % | 1.27 |
-| N=64 every 4 (22.5 min) | −0.06 | −0.17 | +0.16 | 0.00 | +0.002 | −0.02 % | 1.50 |
-| N=64 every 8 (45 min) | −0.24 | −0.25 | +0.24 | −0.08 | +0.004 | −0.07 % | 2.04 |
-| N=64 every 16 (90 min) | −0.38 | −0.35 | +0.33 | +0.04 | +0.010 | −0.18 % | 3.38 |
+| N=64 every 2 (11 min) | −0.04 | −0.07 | +0.06 | −0.02 | 0.000 | −0.01 % | 1.15 |
+| N=64 every 4 (22.5 min) | −0.10 | −0.15 | +0.14 | −0.05 | +0.002 | −0.02 % | 1.42 |
+| N=64 every 8 (45 min) | −0.28 | −0.25 | +0.24 | −0.13 | +0.004 | −0.07 % | 2.00 |
+| N=64 every 16 (90 min) | −0.43 | −0.31 | +0.30 | −0.02 | +0.010 | −0.21 % | 3.32 |
 | N=128 replicate | −0.01 | 0.00 | 0.00 | −0.01 | 0.000 | +0.02 % | 0.81 |
-| N=128 every 4 (11.25 min) | −0.01 | −0.08 | +0.08 | +0.01 | +0.002 | +0.02 % | 1.22 |
-| N=128 every 8 (22.5 min) | −0.03 | −0.12 | +0.12 | +0.03 | +0.004 | +0.02 % | 1.50 |
+| N=128 every 4 (11.25 min) | −0.03 | −0.07 | +0.07 | −0.02 | +0.001 | +0.01 % | 1.13 |
+| N=128 every 8 (22.5 min) | −0.08 | −0.12 | +0.12 | −0.02 | +0.003 | +0.01 % | 1.42 |
 
 The cost grows with the interval in minutes rather than in steps: the
 OLR falls and the longwave cloud effect rises as the cloud the longwave
@@ -11594,7 +11600,7 @@ sees ages (by half the interval on average), and the shortwave cloud
 effect strengthens likewise. 11.25 minutes is the longest interval whose
 means stay within 0.1 W/m² of every step; the peak of the diurnal cycle
 of Ts over land (15.6 h local at N=64, 15.4 at N=128) moves by under
-0.03 h at any interval, its amplitude by under 0.2 %. The physics pass
+0.03 h at any interval, its amplitude by under 0.25 %. The physics pass
 falls from 41.1 to 23.7 ms at N=128 (19.9 every 8), the radiation's
 24 ms falling by (k−1)/k.
 
@@ -11633,6 +11639,14 @@ N=64 155.9/158.4 and 158.2/158.2 (two 120 s runs of
 `scripts/pageLoop.mjs` each). It sends one submission a frame in place of
 about ten a step, which on Vulkan saved 16 % at N=128 (127 against
 151 ms a step, the Verda benchmark); the spin-up's BATCH default stays 1.
+The page itself in Chrome on the M1 Max at N=128 from eleven128_day1825
+(the browser pane hidden, so the globe drew few frames) ran at 15.9
+simulated hours a minute on 086dccf and 20.2 with all three levers (90.6
+and 71.3 s a model day); pausing, resuming and changing the overlay
+while running behaved as before. With a pane hidden the page reports no
+late frames, so whether one frame's steps in one submission delay the
+globe's drawing more than ten submissions a step did is not measured;
+the pacer's pause now comes once a frame rather than once a step.
 
 What is left between 74 s and a minute a model day at N=128: the
 dynamics' four RK4 stages (56 ms, 39 %), the adjust pass (25.5), the
