@@ -12,7 +12,7 @@ export function orographyConstants(o) {
   const c = { ...OROGRAPHY_DEFAULTS, ...(on ? o.orography : {}) };
   const form = { ...FORM_DRAG_DEFAULTS, ...(o.formDrag || {}) };
   return `
-const OROGRAPHY: bool = ${on}; const ORO_CD: f32 = ${c.blockingDrag}; const ORO_G: f32 = ${c.waveDrag}; const ORO_HN: f32 = ${c.criticalHeight}; const ORO_RIC: f32 = ${c.criticalRichardson}; const ORO_HEFF: f32 = ${c.effectiveHeight};
+const OROGRAPHY: bool = ${on}; const ORO_CD: f32 = ${c.blockingDrag}; const ORO_G: f32 = ${c.waveDrag}; const ORO_HN: f32 = ${c.criticalHeight}; const ORO_RIC: f32 = ${c.criticalRichardson}; const ORO_HEFF: f32 = ${c.effectiveHeight}; const ORO_INTERVAL: f32 = ${(o.dragEvery ?? 1).toFixed(1)};
 const FORM_DRAG: bool = ${!!o.formDrag}; const TOFD_SCALE: f32 = ${formDragScale(form)}; const TOFD_DECAY: f32 = ${form.decayHeight};
 `;
 }
@@ -156,7 +156,7 @@ fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
     var accel = (tau[k + 1] - tau[k]) / mass + carried / mass;
     carried = 0.0;
     if (dt > 0.0) {
-      let limit = max(0.0, ue[k] * tx + vn[k] * ty) / dt;
+      let limit = max(0.0, ue[k] * tx + vn[k] * ty) / (dt * ORO_INTERVAL);
       if (accel > limit) { carried = (accel - limit) * mass; accel = limit; }
     }
     PH[PH_OWAVE + k * C + i] = -accel;

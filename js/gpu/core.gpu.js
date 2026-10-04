@@ -667,7 +667,7 @@ export const PHYSICS_DEFAULTS = {
   solarConstant: 1362, cloudAbsorption: null, cloudScattering: null, ...CLOUD_OPTICS, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
   mixedLayerDeck: true, mixedLayer: {}, stratusSubsidence: -1e-3, minimumInversion: 4, ceilingInversion: null, subsidenceMemory: 2 * 86400, subsidenceSmoothing: 2, cloudCover: 'pdf', criticalHumidity: 0.8, boundaryCriticalHumidity: 0.85, coverFloor: 0.01, overcastWater: 5e-5, overcastInversion: [8, 12], cloudOverlap: 'exponentialRandom', decorrelationLength: DECORRELATION_LENGTH, decorrelationSlope: DECORRELATION_SLOPE, prognosticHeight: true, deckRest: 'regime', deckSlab: 'fraction', deckReference: 'layer', cumulusCeiling: 2000, gateMemory: 86400, stratusSolar: true, window: 0.25, tauEquator: 5.3, tauPole: 1.325, linearFraction: 0.1,
   gasFraction: 0.2, gasOpticalDepth: 7, ozoneAbsorption: 0.03, vaporAbsorption: 1, ozoneHeight: 25e3, ozoneWidth: 5e3, ozoneOpacity: 4, scaleHeight: 7e3,
-  exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0, clearSkyPass: false, radiationEvery: 1,
+  exchangeCoefficient: SEA_DRAG, latentHeat: 2.5e6, vaporCoupling: 0.55, skylight: 0, clearSkyPass: false, radiationEvery: 1, dragEvery: 1,
   longwaveScheme: 'correlated', longwaveOverlap: 'exponentialRandom', solarGases: 'clirad', ...GREENHOUSE_GASES, ozone: 'afgl', ozoneColumn: OZONE_COLUMN, ozoneProfile: null, vaporStrength: VAPOR_STRENGTH,
   rayleighBands: RAYLEIGH_BANDS, rayleighDepth: null, nearInfraredRayleigh: NEAR_INFRARED_RAYLEIGH, upwardAbsorption: true, visibleFraction: VISIBLE_FRACTION, landAerosol: LAND_AEROSOL, seaAerosol: SEA_AEROSOL, aerosolAlbedo: 0.95, aerosolAsymmetry: 0.7, aerosolHeight: 2000,
   slabHeatCapacity: 2.1e7, skinHeatCapacity: 2e5, conductivity: 2, minimumThickness: 0.1, iceDensity: 917, latentHeatFusion: 3.34e5, leadClosing: 0.3, leadExchange: 10,
@@ -706,6 +706,7 @@ export async function createGpuCore(mesh, {
   let formTop = 0;
   while (formTop < K - 1 && 0.5 * (levels[formTop] + levels[formTop + 1]) <= phys.searchTop) formTop++;
   if (!(Number.isInteger(phys.radiationEvery) && phys.radiationEvery >= 1)) throw new Error(`radiationEvery must be a whole number of steps, 1 or more, not ${phys.radiationEvery}`);
+  if (!(Number.isInteger(phys.dragEvery) && phys.dragEvery >= 1)) throw new Error(`dragEvery must be a whole number of steps, 1 or more, not ${phys.dragEvery}`);
   const heldRadiation = phys.radiationEvery > 1;
   const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0, phys.orography ? K : 0, sponge, !!waves, phys.formDrag ? K - formTop : 0, Math.min(SUBCLOUD_LAYERS, K), heldRadiation);
   phys.subcloudLayers = Math.min(SUBCLOUD_LAYERS, K);
@@ -960,7 +961,7 @@ export async function createGpuCore(mesh, {
     }
   }
 
-  let stepCount = 0;
+  let stepCount = 0, dragCall = -1;
   const hooks = { beforePhysics: null, afterPhysics: null, landWeights: null };
   async function stepModel(dt, time) {
     const sun = sunDirection(time);
@@ -974,11 +975,13 @@ export async function createGpuCore(mesh, {
       const into = Math.round(time / dt) % phys.radiationEvery;
       writeParams(new Float32Array([into === 0 ? 1 : 0, phys.radiationEvery - into, 2 * Math.PI * dt / DAY, 0, 0, 0, 0, 0]), buffers.PH, 4 * L.PH.RADP);
     }
+    const index = Math.round(time / dt), drags = phys.dragEvery === 1 || !(dragCall >= index - index % phys.dragEvery && dragCall <= index);
+    if (drags) dragCall = index;
     compute((pass) => {
       dispatch(pass, 'physics', g, C);
       dispatch(pass, 'pblDiagnose', g, C);
-      if (waves) dispatch(pass, 'gravityWaves', g, C);
-      if (phys.orography) dispatch(pass, 'orography', g, C);
+      if (waves && drags) dispatch(pass, 'gravityWaves', g, C);
+      if (phys.orography && drags) dispatch(pass, 'orography', g, C);
     });
     if (hooks.afterPhysics) await hooks.afterPhysics(dt, stepCount);
     closurePasses(dt);
@@ -1043,6 +1046,7 @@ export async function createGpuCore(mesh, {
     if (retained.cumulusWater) ph.set(retained.cumulusWater, L.PH.CUWATER);
     if (retained.subcloudVirtual) ph.set(retained.subcloudVirtual, L.PH.SUBTV);
     device.queue.writeBuffer(buffers.PH, 0, ph);
+    dragCall = -1;
   }
   function uploadLand({ soil, snow, vegetation, surface = null, snowAlbedo = null, canopy = null, seasonLength = null, seasonWarmth = null, rainMean = null, demandMean = null, soilCarbon = null, litterMean = null, decayMean = null, snowFreeCover = null }) {
     retained.soil = soil; retained.snow = snow; retained.vegetation = vegetation; retained.surface = surface; retained.snowAlbedo = snowAlbedo; retained.canopy = canopy; retained.seasonLength = seasonLength; retained.seasonWarmth = seasonWarmth; retained.rainMean = rainMean; retained.demandMean = demandMean; retained.soilCarbon = soilCarbon; retained.litterMean = litterMean; retained.decayMean = decayMean; retained.snowFreeCover = snowFreeCover;
