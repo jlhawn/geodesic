@@ -12032,6 +12032,14 @@ each process (MB; ready in seconds from navigation):
 | N=128, all but the pieces | 2250 | 3496 | 4062 | 4097 | 458 | 8.4 |
 | N=128, all | 1783 | 3109 | 3653 | 3683 | 39–40 | 8.2 |
 
+The page measured its own memory throughout these runs
+(`performance.measureUserAgentSpecificMemory`, which collects the
+garbage each time), so the renderer's column is after collection. The
+same page without that measuring, 15 s after ready at N=64, held 1183
+MB in the renderer (peak 1263) against 2921 (2998) at 3610d2a, garbage
+not yet collected, while the GPU process (1059 against 2303) and the
+shared memory (23 against 1258–1266) read as in the table.
+
 With the clears alone the shared memory was the regions of the writes
 of MI (13.6 MiB), MF (16.3), S (34.2) and the ocean's S (42.2) beside
 the ring; at N=128 those four were 425 MiB. Of what is left at N=64,
