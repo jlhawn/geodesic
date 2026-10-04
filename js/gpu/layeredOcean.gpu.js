@@ -154,23 +154,26 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     OD[O_FLUX + n] = select(0.0, he * IN[uOff(k) + e], wet);
   }
 }`,
-    oCellTendency: `${K}  let n = ${idx}; if (n >= L * C) { return; }
-  let k = n / C; let i = n % C;
-  let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k], IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k], IN[wOff(k) + i] / hv, hv > 1e-6);
-  var divH = 0.0; var divQ = 0.0; var divW = 0.0; var lapQ = 0.0; var lapW = 0.0;
-  for (var m = 0; m < MAXE; m++) {
-    let e = MI[EOC + MAXE * i + m]; let j = MI[COC + MAXE * i + m];
-    let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
-    divH += f;
-    let hvj = IN[hOff(k) + j]; let Tj = select(LABEL_T[k], IN[qOff(k) + j] / hvj, hvj > 1e-6); let Sj = select(LABEL_S[k], IN[wOff(k) + j] / hvj, hvj > 1e-6);
-    divQ += f * select(Tj, Ti, f > 0.0); divW += f * select(Sj, Si, f > 0.0);
-    if (k == 0 && OD[O_EMASK + e] > 0.5) { lapQ += MF[F_DV + e] * (Tj - Ti) / MF[F_DC + e]; lapW += MF[F_DV + e] * (Sj - Si) / MF[F_DC + e]; }
+    oCellTendency: `${K}  let i = ${idx}; if (i >= C) { return; }
+  var edges: array<i32, MAXE>; var nbrs: array<i32, MAXE>;
+  for (var m = 0; m < MAXE; m++) { edges[m] = MI[EOC + MAXE * i + m]; nbrs[m] = MI[COC + MAXE * i + m]; }
+  for (var k = 0; k < L; k++) {
+    let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k], IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k], IN[wOff(k) + i] / hv, hv > 1e-6);
+    var divH = 0.0; var divQ = 0.0; var divW = 0.0; var lapQ = 0.0; var lapW = 0.0;
+    for (var m = 0; m < MAXE; m++) {
+      let e = edges[m]; let j = nbrs[m];
+      let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
+      divH += f;
+      let hvj = IN[hOff(k) + j]; let Tj = select(LABEL_T[k], IN[qOff(k) + j] / hvj, hvj > 1e-6); let Sj = select(LABEL_S[k], IN[wOff(k) + j] / hvj, hvj > 1e-6);
+      divQ += f * select(Tj, Ti, f > 0.0); divW += f * select(Sj, Si, f > 0.0);
+      if (k == 0 && OD[O_EMASK + e] > 0.5) { lapQ += MF[F_DV + e] * (Tj - Ti) / MF[F_DC + e]; lapW += MF[F_DV + e] * (Sj - Si) / MF[F_DC + e]; }
+    }
+    let area = MF[F_AREA + i];
+    var dh = -divH / area; var dQ = -divQ / area; var dW = -divW / area;
+    if (k == 0 && DIFFUSION > 0.0) { dQ += DIFFUSION * lapQ / area; dW += DIFFUSION * lapW / area; }
+    if (OD[O_CMASK + i] < 0.5) { dh = 0.0; dQ = 0.0; dW = 0.0; }
+    OUT[hOff(k) + i] = dh; OUT[qOff(k) + i] = dQ; OUT[wOff(k) + i] = dW;
   }
-  let area = MF[F_AREA + i];
-  var dh = -divH / area; var dQ = -divQ / area; var dW = -divW / area;
-  if (k == 0 && DIFFUSION > 0.0) { dQ += DIFFUSION * lapQ / area; dW += DIFFUSION * lapW / area; }
-  if (OD[O_CMASK + i] < 0.5) { dh = 0.0; dQ = 0.0; dW = 0.0; }
-  OUT[hOff(k) + i] = dh; OUT[qOff(k) + i] = dQ; OUT[wOff(k) + i] = dW;
 }`,
     oVertexVort: `${K}  let v = ${idx}; if (v >= V) { return; }
   var edges: array<i32, 3>; var signs: array<f32, 3>; var dcs: array<f32, 3>;
@@ -191,18 +194,22 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, PVFLOOR);
   }
 }`,
-    oKineticPhi: `${K}  let n = ${idx}; if (n >= L * C) { return; }
-  let k = n / C; let i = n % C;
-  var kinetic = 0.0;
-  for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; let u = IN[uOff(k) + e]; kinetic += abs(f32(MI[ESC + MAXE * i + m])) * 0.25 * MF[F_DC + e] * MF[F_DV + e] * u * u; }
-  kinetic = kinetic / MF[F_AREA + i];
-  var phi = kinetic + OGRAV * OD[O_ETA + i];
-  if (k > 0) {
-    var p = (OD[O_RHOML + i] - RHO[k]) * IN[hOff(0) + i];
-    for (var j = 1; j < k; j++) { p += (RHO[j] - RHO[k]) * IN[hOff(j) + i]; }
-    phi += OGRAV * p / RHO0;
+    oKineticPhi: `${K}  let i = ${idx}; if (i >= C) { return; }
+  var edges: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>;
+  for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; edges[m] = e; signs[m] = f32(MI[ESC + MAXE * i + m]); dcs[m] = MF[F_DC + e]; dvs[m] = MF[F_DV + e]; }
+  let area = MF[F_AREA + i];
+  for (var k = 0; k < L; k++) {
+    var kinetic = 0.0;
+    for (var m = 0; m < MAXE; m++) { let u = IN[uOff(k) + edges[m]]; kinetic += abs(signs[m]) * 0.25 * dcs[m] * dvs[m] * u * u; }
+    kinetic = kinetic / area;
+    var phi = kinetic + OGRAV * OD[O_ETA + i];
+    if (k > 0) {
+      var p = (OD[O_RHOML + i] - RHO[k]) * IN[hOff(0) + i];
+      for (var j = 1; j < k; j++) { p += (RHO[j] - RHO[k]) * IN[hOff(j) + i]; }
+      phi += OGRAV * p / RHO0;
+    }
+    OD[O_PHI + k * C + i] = phi;
   }
-  OD[O_PHI + n] = phi;
 }`,
     /*
      * The ∇⁴ closure's input, closureVelocity of ocean/layered.module.js:
@@ -325,37 +332,52 @@ fn interfaceRate(e: i32, up: i32, down: i32) -> f32 {
   let nu = SHEARNU / ((1.0 + 5.0 * ri) * (1.0 + 5.0 * ri)) + BACKNU;
   return min(max(select(RINT, 0.0, interior), nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
 }
-${K}  let n = ${idx}; if (n >= L * E) { return; }
-  let k = n / E; let e = n % E;
+fn firstThickBelow(k: i32, lo: u32, hi: u32) -> i32 {
+  let start = k + 1;
+  if (start < 32) {
+    let m = lo & (0xffffffffu << u32(start));
+    if (m != 0u) { return i32(countTrailingZeros(m)); }
+    if (hi != 0u) { return 32 + i32(countTrailingZeros(hi)); }
+    return -1;
+  }
+  if (start >= 64) { return -1; }
+  let m = hi & (0xffffffffu << u32(start - 32));
+  if (m != 0u) { return 32 + i32(countTrailingZeros(m)); }
+  return -1;
+}
+${K}  let e = ${idx}; if (e >= E) { return; }
+  if (OD[O_EMASK + e] < 0.5) { for (var k = 0; k < L; k++) { OUT[uOff(k) + e] = 0.0; } return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
-  let qHere = 0.5 * OD[O_QE + n];
-  var pv = 0.0;
-  for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; let other = MI[EOE + slot]; let fo = select(0.0, OD[O_HEDGE + k * E + other] * IN[uOff(k) + other], OD[O_EMASK + other] > 0.5); pv += MF[F_PVW + slot] * fo * (qHere + 0.5 * OD[O_QE + k * E + other]); }
   let dc = MF[F_DC + e];
-  let gradPhi = (OD[O_PHI + k * C + b] - OD[O_PHI + k * C + a]) / dc;
-  var du = pv / dc - gradPhi;
-  if (k == 0) { du -= OGRAV / RHO0 * 0.5 * OD[O_HEDGE + e] * OD[O_GRADRHO + e]; }
-  let he = max(OD[O_HEDGE + n], MINTHICK);
-  var force = 0.0; var drag = 0.0;
-  if (k == 0) { force += OD[O_STRESS + e] / RHO0; }
-  if (k > 0) {
-    var j = k - 1;
-    loop { if (j == 0 || OD[O_HEDGE + j * E + e] >= THINO) { break; } j -= 1; }
-    drag += interfaceRate(e, j, k) * (IN[uOff(j) + e] - IN[uOff(k) + e]);
+  var others: array<i32, MAXEE>; var weights: array<f32, MAXEE>; var live: array<bool, MAXEE>;
+  for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; others[s] = MI[EOE + slot]; weights[s] = MF[F_PVW + slot]; live[s] = OD[O_EMASK + others[s]] > 0.5; }
+  var thickLo = 0u; var thickHi = 0u;
+  for (var j = 0; j < L; j++) { if (OD[O_HEDGE + j * E + e] >= THINO) { if (j < 32) { thickLo |= 1u << u32(j); } else { thickHi |= 1u << u32(j - 32); } } }
+  var above = 0; var uAbove = 0.0;
+  for (var k = 0; k < L; k++) {
+    let n = k * E + e;
+    let u = IN[uOff(k) + e];
+    let qHere = 0.5 * OD[O_QE + n];
+    var pv = 0.0;
+    for (var s = 0; s < MAXEE; s++) { let other = others[s]; let fo = select(0.0, OD[O_HEDGE + k * E + other] * IN[uOff(k) + other], live[s]); pv += weights[s] * fo * (qHere + 0.5 * OD[O_QE + k * E + other]); }
+    let gradPhi = (OD[O_PHI + k * C + b] - OD[O_PHI + k * C + a]) / dc;
+    var du = pv / dc - gradPhi;
+    if (k == 0) { du -= OGRAV / RHO0 * 0.5 * OD[O_HEDGE + e] * OD[O_GRADRHO + e]; }
+    let hk = OD[O_HEDGE + n];
+    let he = max(hk, MINTHICK);
+    var force = 0.0; var drag = 0.0;
+    if (k == 0) { force += OD[O_STRESS + e] / RHO0; }
+    if (k > 0) { drag += interfaceRate(e, above, k) * (IN[uOff(above) + e] - u); }
+    let below = firstThickBelow(k, thickLo, thickHi);
+    if (below >= 0) { drag -= interfaceRate(e, k, below) * (u - IN[uOff(below) + e]); }
+    if (below < 0) { force -= RBOT * abs(u) * u; }
+    du += force / he + drag / dragThickness(k, e);
+    if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
+    if (k > 0 && hk < THINO) { du = (uAbove - u) * P[2]; }
+    OUT[uOff(k) + e] = du;
+    if (k >= 1 && hk >= THINO) { above = k; }
+    uAbove = u;
   }
-  if (k < L - 1) {
-    var j = k + 1;
-    loop { if (j == L - 1 || OD[O_HEDGE + j * E + e] >= THINO) { break; } j += 1; }
-    if (OD[O_HEDGE + j * E + e] >= THINO) { drag -= interfaceRate(e, k, j) * (IN[uOff(k) + e] - IN[uOff(j) + e]); }
-  }
-  var bottom = k == L - 1;
-  if (!bottom) { bottom = true; for (var j = k + 1; j < L; j++) { if (OD[O_HEDGE + j * E + e] >= THINO) { bottom = false; break; } } }
-  if (bottom) { force -= RBOT * abs(IN[uOff(k) + e]) * IN[uOff(k) + e]; }
-  du += force / he + drag / dragThickness(k, e);
-  if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
-  if (k > 0 && OD[O_HEDGE + n] < THINO) { du = (IN[uOff(k - 1) + e] - IN[uOff(k) + e]) * P[2]; }
-  if (OD[O_EMASK + e] < 0.5) { du = 0.0; }
-  OUT[uOff(k) + e] = du;
 }`,
     /*
      * The eddy transport of ocean/layered.module.js, one edge a thread,
@@ -869,10 +891,10 @@ export function createLayeredOcean(core, options = {}) {
       dispatch(pass, 'oGradRho', g, E);
       dispatch(pass, 'oEdgeThickness', g, E);
       dispatch(pass, 'oFlux', g, E);
-      dispatch(pass, 'oCellTendency', g, L * C);
+      dispatch(pass, 'oCellTendency', g, C);
       dispatch(pass, 'oVertexVort', g, V);
       dispatch(pass, 'oEdgePV', g, E);
-      dispatch(pass, 'oKineticPhi', g, L * C);
+      dispatch(pass, 'oKineticPhi', g, C);
       if (o.closureRings) dispatch(pass, 'oDeepestEdge', g, E);
       if (o.closureFill > 0) dispatch(pass, 'oClosureFill', g, L * E);
       if (o.closureRings) dispatch(pass, 'oClosureRing', g, L * E);
@@ -887,7 +909,7 @@ export function createLayeredOcean(core, options = {}) {
         dispatch(pass, 'oClosureBack1', g, L * E);
         dispatch(pass, 'oClosureBack2', g, L * E);
       }
-      dispatch(pass, 'oMomentum', g, L * E);
+      dispatch(pass, 'oMomentum', g, E);
     });
   }
   function advanceState(next, stage, factor) {
