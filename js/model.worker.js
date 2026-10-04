@@ -318,6 +318,34 @@ function placeDeck(model, saved, N) {
   for (const name of Object.keys(DECK_FIELDS)) model.radiation[name].set(savedDeckField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
   for (const name of Object.keys(MOIST_FIELDS)) model.moist[name].set(savedMoistField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
   for (const name of Object.keys(RADIATION_FIELDS)) model.radiation[name].set(savedRadiationField(saved, name, model, saved && saved[name] && saved.N !== N ? sourceFor(saved) : null));
+  placeCumulus(model, saved, N);
+}
+
+/*
+ * The cumulus cloud's cover and water are saved in the GPU's layout, the
+ * plume layers from cumulusK0 down, (K − K0) × C; the CPU keeps K × C.
+ * A run at another resolution starts without them, as a fresh start does.
+ */
+const CUMULUS_FIELDS = ['cumulusCover', 'cumulusWater'];
+function placeCumulus(model, saved, N) {
+  const C = model.mesh.nCells, K = model.core.K, K0 = model.moist.cumulusK0 ?? 0;
+  for (const name of CUMULUS_FIELDS) {
+    const target = model.moist[name];
+    if (!target) continue;
+    target.fill(0);
+    const values = saved && saved.N === N ? saved[name] : null;
+    if (!values) continue;
+    if (values.length === target.length) target.set(values);
+    else if (values.length === (K - K0) * C && target.length === K * C) target.set(values, K0 * C);
+  }
+}
+function savedCumulus(model) {
+  const C = model.mesh.nCells, K = model.core.K, K0 = model.moist.cumulusK0 ?? 0, out = {};
+  for (const name of CUMULUS_FIELDS) {
+    const values = model.moist[name];
+    if (values) out[name] = Float64Array.from(values.length === K * C ? values.subarray(K0 * C) : values).buffer;
+  }
+  return out;
 }
 
 /*
@@ -545,6 +573,7 @@ async function snapshot() {
   arrays.concentration = Float64Array.from(model.seaIce.concentration).buffer;
   for (const name of Object.keys(DECK_FIELDS)) arrays[name] = Float64Array.from(model.radiation[name]).buffer;
   for (const name of Object.keys(MOIST_FIELDS)) arrays[name] = Float64Array.from(model.moist[name]).buffer;
+  Object.assign(arrays, savedCumulus(model));
   for (const name of Object.keys(RADIATION_FIELDS)) arrays[name] = Float64Array.from(model.radiation[name]).buffer;
   arrays.levels = Float64Array.from(model.core.levels).buffer;
   let ocean = null, land = null;
