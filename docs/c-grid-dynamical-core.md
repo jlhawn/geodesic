@@ -11657,6 +11657,73 @@ kernel's second saturation adjustment after the plume, a longer stable
 ocean step at N=128 (every 12 held two days), the ∇⁴ closure passes and
 the deck's ring passes, and on the page the frame and overlay costs.
 
+**The drags laid every 11.25 minutes** (`dragEvery`, both engines; the
+drivers' default from `js/cadence.module.js`, DRAG_MINUTES 11.25, the
+radiation's interval: every 4 steps at N=128, every 2 at N=64, every
+step at N=32 and coarser). The non-orographic gravity-wave drag and the
+subgrid orography's blocking and gravity waves follow the large-scale
+wind, which changes over hours, yet their columns took 3.6 and 2.1 ms a
+step at N=128, a quarter of the physics pass. They are laid at a
+column's first step (after a model is built or its physics uploaded) and
+at the steps whose number is a multiple of k, and applied at every step
+from what was laid last: the gravity-wave accelerations as pushes, the
+blocking implicitly against the current wind, u ← (u + Δt a)/(1 + Δt β),
+so that it still stops a wind that has slowed or turned since. The
+orographic waves' limiter, at most what stops a layer's wind along the
+stress, takes the interval kΔt. On the GPU the gravityWaves and
+orography kernels are dispatched on one step in k; the CPU keeps the
+step each column last laid them in shared memory, as the held radiation
+does, so that its workers decide alike (test/gpuModel.test.mjs holds the
+engines together with the drags laid every 4 steps, and the limiter over
+16). At the drivers' cadences the drags are laid at the full
+radiation's calls. With these the column kernels load a column's six edges once and form
+each layer's cell wind from them (pblDiagnose, orography and
+gravityWaves; bit for bit, by the saved device buffers after 16 steps at
+N=64 and 8 at N=128).
+
+Against the every-step drags (0bcd938, which dragEvery 1 reproduces bit
+for bit on both engines), with the full-precision day means of each day
+(`model.diagnostics()` at the day's end, the numbers
+`scripts/spinup.mjs` logs, unrounded) and two replicates of it, every θ
+scaled by 1 ± 5·10⁻⁷ (W/m², K, mm/d):
+
+| | ASR | OLR | SWCRE | LWCRE | Ts | precipitation |
+|---|---|---|---|---|---|---|
+| N=64 replicates, 3 days | −0.027, +0.025 | −0.008, +0.001 | −0.027, +0.026 | +0.006, −0.002 | +0.0005, −0.0003 | +0.0003, +0.0011 |
+| N=64 every 2 (11.25 min) | +0.003 | +0.009 | +0.003 | −0.010 | +0.0004 | +0.0009 |
+| N=128 replicates, 2 days | −0.003, +0.006 | −0.003, +0.004 | −0.003, +0.006 | +0.001, −0.006 | +0.0002, +0.0001 | −0.0007, −0.0001 |
+| N=128 every 4 (11.25 min) | −0.013 | +0.004 | −0.013 | −0.007 | 0.0000 | −0.0004 |
+
+Every difference is within 1.5 times the largest spread among the run
+and its replicates (the N=128 ASR and SWCRE, 0.013 against 0.009, the
+most). The spin-ups' logs of the same runs against the replicates of
+0bcd938: no clamped ocean edges in any; the largest current 1.02 m/s at
+N=64 and 1.19 at N=128 in all; the day's largest wind, as a mean over
+the days, 91.93 against 92.03, 92.00 and 91.97 m/s at N=64 and 87.80
+against 87.80, 88.05 and 87.65 at N=128; the top six layers' largest
+wind (100 m/s at N=64, 85 at N=128) and horizontal Courant number (0.32,
+0.27) those of the replicates. Over 30 days at N=64 from
+eleven64_day1826, against 0bcd938: no NaN and no clamped edge in either,
+the top six layers' largest wind 100 m/s in both (each layer's at most
+the base's) and their Courant number at most 0.32 in both, the largest
+wind 103.8 against 106.3 m/s and the largest current 1.78 against 1.79.
+
+The saving, at N=128 with every dispatch timed in its own pass
+(`scripts/profileGpu.mjs` SPLIT=1, base and change alternated): the
+desktop app's GPU process held the device through every measurement
+(probe medians 158–390 GB/s against 390 alone, about 290 ms of GPU time
+a step against 142.6), so each kernel's tight cluster of dispatch times
+is taken. gravityWaves (3.85 ms a dispatch) and orography (2.18) run on
+one step in four, 4.5 ms a step less, 4.3 against the alone profile's
+rows; the edges loaded once take pblDiagnose from 5.44 to 3.80 ms and
+the drags' kernels to 2.8 and 1.85 ms a dispatch, 2.0 ms a step less.
+Together about 6.5 ms a step here and 6.2 against the alone profile (the
+three kernels ran 4–6 % slower here than alone); 0bcd938 against the
+change in one session, three rounds each, gives pblDiagnose 5.5 to 3.8
+ms, gravityWaves 3.87 to 0.70 ms a step and orography 2.16 to 0.46, 6.6
+ms a step less. Whole model days under that load (`scripts/paceGpu.mjs`,
+151–166 s a day at N=128 for both) do not resolve it.
+
 ### M25 — The long spin-up — planned
 
 The asynchronous schedule of M18 (`scripts/asyncSpinup.sh`: a hundred
