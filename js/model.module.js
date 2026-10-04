@@ -57,6 +57,8 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * orographic drags only at a column's first step and at the steps whose
  * number is a multiple of k, and mixMomentum applies what it laid last at
  * every step; the orographic waves' limiter then takes the k steps.
+ * `dragsDue()` has every column lay them at its next step, as a state
+ * placed into the model needs.
  * Arrays read across phases live in `shared`; `buffers` adopts another
  * instance's so a worker computes on the same memory.
  */
@@ -266,6 +268,7 @@ export function createModel(gridOrMesh, {
   };
 
   model.oceanFields = (depth = 0) => (ocean ? ocean.fields(depth) : null);
+  model.dragsDue = () => dragStep.fill(-1);
   model.cloudWater = (i) => moistPhysics.columnWater(state[0], state[5], i) + moistPhysics.cumulusCloudPath(state[0], i) + radiation.stratusFraction[i] * radiation.stratus[i];
   model.cloudParts = (i) => {
     const pi = state[0][i], qc = state[5], { sigmaMid, dSigma, g } = core.diagnostics;
