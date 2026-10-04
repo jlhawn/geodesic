@@ -7218,6 +7218,76 @@ gain the negative cloud water the filler removes (5.1·10⁻⁶ and
 layer is σ 0.93 under a deck of cover 0.41–0.67, cooling 2.7–3.7 K/day.
 The full suite (44 files, run concurrently) passes with nothing skipped.
 
+**The cumulus cloud's memory (Oct 3).** The plumes' radiative cloud
+(`moist.cumulusCover` and `cumulusWater`, PH `CUCOVER` and `CUWATER`, the
+plume layers from `cumulusK0` down) was diagnosed afresh each step from
+the mass flux, f = M/(ρ w_u) with the plume's condensate at the layer's
+midpoint, and was zero on any step the plume did not run; the page's cloud
+column counts it, and a plume firing on alternate steps made a cloud that
+blinked (95 % of the overlay's blinks at main, M22). `cumulusMemory` τ
+(seconds, default 1800; 0 the instantaneous cloud) carries it: after the
+plume stage of every step, in `adjust` on the CPU and around the adjust
+kernel's plume on the GPU, each layer's cover f and path P = f × water
+relax toward the step's diagnosed f' and P' (0 where no plume ran) as
+X ← X' + (X − X') e^(−Δt/τ), the water is P/f, and both are 0 below
+CUMULUS_TRACE (10⁻⁶ of cover). The deep plume's cloud, merged into the
+same fields, takes the same memory. The filter is linear in f and in P, so
+the time means of the cover and of the cover × water the radiation sees
+are kept; filtering the water itself would give a 0/x plume a quarter of
+its path. The cloud carries no water mass (the plume's condensate rains
+or detrains as before), so there is no budget. The scheme is Tiedtke's
+(1993), kept by the IFS, in which convective detrainment is the source of
+a cloud that then decays on its own timescale, reduced to a first-order
+decay of the diagnosed cloud. The value: in a tracked LES shallow-cumulus
+ensemble (RICO, 25 m LES over 50 km) active clouds live about 20 min on
+average and passive ones about 5 min, 3–7 min over all clouds (Sakradzija,
+Seifert and Heus 2015, Nonlin. Processes Geophys. 22, 65–85, Table 2); τ = 30 min lies past the active clouds' mean life by the decay of
+what they leave. The persistence of a grid cell's cumulus field beyond a
+cloud's life is the plume's forcing persisting, which the closure already
+reads each step, so the memory is not set to the field's decorrelation
+time. The fields are saved as before, so a state saved before this
+change loads with its last instantaneous cloud as the memory's start
+(asyncSpinup.test.mjs: one GPU step at N=6 from a day saved with τ = 0
+lies within 2.4·10⁻⁷ of X' + (X − X') e^(−Δt/τ) from the saved X in
+every plume layer, 710 relaxing toward the plume's and 64 keeping the
+saved cloud where the plume made none; the runs split at and inside a
+day still end byte for byte on the uninterrupted run's files). With
+τ = 0 both engines hash as at f319996 (GPU: state, the whole PH buffer
+and the frame after 16 steps from eleven64_day1825 and eleven128_day1825;
+CPU: 24 steps at N=6). Over one GPU day at N=64 from eleven64_day1825
+the time mean of the cumulus path is 5.513 g/m² at f319996 and 5.507
+with the memory, the share of cell-steps with a plume 0.600 and 0.599;
+the mean of each column's largest layer cover falls from 0.0071 to
+0.0066, the largest of smoothed fields. Over three N=64 days and two
+N=128 days with the memory alone the day means move by at most 0.2 W/m²
+in SWCRE (−62.7, −61.4, −60.9 → −62.8, −61.5, −61.0 at N=64; −53.3,
+−53.6 → −53.5, −53.8 at N=128), 0.1 in LWCRE, ASR and OLR and 0.01 mm/d
+in rain, against 0.1 W/m² between replicates; the blinking it removes is
+in M22.
+
+Three tests moved with the memory, none through an engine difference.
+The pinned twelve-step digest of the moist defaults (physics.test.mjs)
+is the parent's with cumulusMemory 0 and has its own with the memory.
+The rain split at the diagnostics (gpuModel.test.mjs, 24 steps at N=6
+under convectionType 'top') counted 8 cells apart against its bound of
+0.02 C (7.2): the CPU against itself under ±10⁻⁴ K of θ noise each step
+(16 seeds) parts 2–11 cells by the test's measure with the memory and
+1–6 without, every parting a resolved cloud's or the dry adjustment's
+decision or beside one, the cumulus traces alike; the test now takes
+the shared rule, leaving out the columns within two cells of a parted
+decision of test/helpers/decisions.mjs (CPU: 2–15 decisions, 35–190
+columns with their neighbours, 0–4 apart outside them; GPU 25, 242 and
+1), with the shared bounds C/6 and 0.8 C and the old 0.02 C on the cells
+apart outside. The soil-carbon test (soilCarbon.test.mjs, 24 steps at
+N=6 with the carbon accelerated 3·10⁵ times) parted by 3.0·10⁻² kg/m²
+against 1.8·10⁻²: in cell 18 the shallow plume fires at step 3 on one
+run only and its rain wets the soil; the CPU against itself parts the
+same cell by 3.0·10⁻² in 8 of 16 seeds with the memory and in none of
+8 without. It now leaves out the land cells where the plume fired on one
+engine only at some step (CPU: at most 4 of 151, the rest within
+3.0·10⁻³; GPU 1, the rest within 5.4·10⁻⁴), bound 0.05 of the land
+cells, the carbon's 10⁻³ of its largest change unchanged.
+
 ### M22 — A moist boundary layer — done (first tuning; acceptance partly met)
 
 The boundary-layer scheme was the dry Troen–Mahrt K-profile of M14
@@ -11205,6 +11275,90 @@ or in the ITCZ. The resolved cloud does not blink at any height on its
 own scale; the cumulus does, 30 % of all cells blinking at least once
 in the 128 steps at N=64 (13 % in 64 at N=128), and the combined overlay
 sees only the part of it that crosses 0.4 on the 40 g/m² curve.
+
+**The cumulus memory and the deck's reference (Oct 3).** The blinks
+left at main were the plumes' cloud (95 %, M21's memory) and a deck cycle
+at 34.8S 127.9E (above): the free troposphere the deck entrains (θ_l and
+q_t above h, as `thetaLAbove` and `qtAbove`) was the first layer whose
+midpoint lies above the carried height, so it switched layers as h
+crossed a midpoint and the jump, and through the decoupling ratio the
+cover, went 1 ↔ 0.3. `deckReference` 'interpolate' moves
+that layer's θ_l and q_t toward the next layer up's by the share of the
+height from the midpoint below h to the first one above that lies below
+h, on both engines and in the host replica of
+`scripts/figures/mlmdeck.mjs`: continuous in h, the layer's own value
+with h on the midpoint below, the next layer's as h reaches the midpoint
+above, as the slab already weights the layer h lies in; 'layer' (the
+default) is the reference before, under which both engines hash as at
+f319996 (GPU as for M21's memory; CPU: the pinned deck digests in
+physics.test.mjs). 'layer' stays the default because the interpolation
+as built is a climate change (below), while the cycle it removes is
+0.008 % of cells a step; the reference that belongs to the physics is
+the free troposphere's air at h itself, extrapolated down from the
+layers above, which the deck's tuning against observed cover, water
+path and thickness (minimumInversion, the entrainment efficiency and a
+drizzle sink) is to set together with the gate's threshold. The
+subsidence's bracket was already the two interfaces about h and is
+unchanged (only the density it divides by is the layer's that holds h).
+By layer the reference sat from one layer's spacing above h down to h
+itself as h rose toward a midpoint, half a spacing on average; the
+interpolated reference sits one spacing above h wherever h lies (exactly
+so on even spacing), so the jump the gate tests and the entrainment
+reads is larger. Over the ice-free sinking sea columns the host replica
+tests at the fourth step from day 1825, the virtual jump grows by a
+median 1.2 K at N=64 (mean 2.2 K, 10 % of columns by more than 5 K) and
+1.6 K at N=128 (mean 2.6 K), and the columns passing the 4 K test go
+from 3,608 to 5,776 of 12,655 (N=128: 15,821 to 25,898 of 45,260); the
+shift is not uniform, so no single minimumInversion restores the old
+pass count (6.5 K still passes 4,276 at N=64). The
+host replica agrees with the GPU on the night side as before (eleven64:
+964 decks on both, none on one only, LWP ≥ 1 g/m² within 2.4·10⁻⁴
+relative against 2.8·10⁻⁴ at f319996; eleven128: 3,916, 2.8·10⁻⁴ against
+2.9·10⁻⁴; no gate decision apart).
+
+Measured with `scripts/cloudFlicker.mjs` (BOX 10–20N 160–140W, the same
+steps as before) from eleven128_day1825 (64 steps) and eleven64_day1825
+(128), f319996 → this branch: blink onsets 15,918 → 18 at N=128 (0.162 %
+→ 0.0002 % of cells a step) and 4,619 → 44 at N=64 (0.091 % → 0.0009 %);
+at the page's cadence 0.143 % → 0.002 % and 0.117 % → 0.040 %; cells
+blinking at least once 2.25 % → 0.01 % and 2.75 % → 0.11 %; the lag-1
+autocorrelation of the step change over all cells −0.44 → +0.31 and
+−0.36 → +0.26 (over the blinking cells −0.53 → +0.06 and −0.52 → +0.06);
+one-step cloudy runs 86 % of 10,167 → none of 3 and 88 % of 2,886 → 2 of
+2. Before, the cumulus' change was larger than any grid-scale part's in
+95 % and 96 % of the blinks; after, in none, and the few left are
+resolved low cloud (56 % and 80 %) and the deck (33 % and 5 %). Apart:
+the memory alone leaves 760 and 194 onsets (0.008 % and 0.004 %), 98 %
+and 82 % of them the deck's; the reference alone 15,253 and 4,506, the
+cumulus larger in 99.9 % and 98.7 %, the deck-driven transitions 1,485
+and 298 → 13 and 4. Over the trades box the eight-step strip loses the
+pale speckle the cumulus put on and off. Three N=64 days from
+eleven64_day1825 (days 1826–1828), f319996 → both, with a replicate
+(cumulusMemory 1801 s): SWCRE −62.7, −61.4, −60.9 → −63.9, −64.5, −64.1
+(replicate −63.9, −64.4, −64.1) W/m²; LWCRE 29.6, 30.0, 29.3 → 29.7,
+30.3, 29.6; albedo 0.328, 0.325, 0.324 → 0.332, 0.334, 0.333; ASR 228.7,
+229.9, 230.3 → 227.4, 226.8, 227.1; OLR 229.5, 229.1, 229.9 → 229.4,
+228.9, 229.6 (ASR − OLR −0.8, +0.8, +0.4 → −2.0, −2.1, −2.5); rain 2.81, 2.81,
+2.75 → 2.81, 2.81, 2.76 mm/d. Two N=128
+days (1826–1827): SWCRE −53.3, −53.6 → −54.4, −56.5 (replicate −54.5,
+−56.5); LWCRE 25.9, 26.1 → 26.0, 26.4; albedo 0.302, 0.303 → 0.305,
+0.311; ASR 237.7, 237.3 → 236.5, 234.5; OLR 234.7, 234.5 → 234.6, 234.2;
+rain 2.72, 2.75 → 2.72, 2.76. The memory moves the cloud effects by
+0.1–0.2 W/m² (M21); the −2.5 W/m² of SWCRE at N=64 (−2.0 at N=128) is
+the reference's, run alone: −63.8, −64.2, −64.0 and −54.3, −56.4. Its
+larger jump passes the gate's 4 K test (minimumInversion, set against
+the layer reference) more often: the gate stands open over 0.100 of the
+globe at the end of day 1828 against 0.060 (0.073 of 30S–30N against
+0.040; N=128 day 1827: 0.097 against 0.061), the carried height there
+1449 against 1498 m. At the end of day 1828 (`scripts/cloudRegimes.mjs`,
+one CPU step, f319996's code for its state) the deck's cover is 0.059
+against 0.028 globally, total cover SE Pacific 10–30S 110–80W 0.41 → 0.52
+(SWCRE −35.4 → −54.3 W/m²), Peru 0.45 → 0.63 (−35.2 → −64.8), Namibia
+0.52 → 0.68 (−66.9 → −115.0), California 0.84 → 0.87, toward the decks'
+observed 0.6–0.8 low cover; but the Atlantic trades 10–20N 50–25W go
+0.64 → 0.77 against Earth's 0.35–0.55, the deck there 0.16 → 0.39, and
+the N Pacific trades stay 0.83. minimumInversion has not been restated
+against the interpolated reference.
 
 ### M23 — The equatorial ocean — in progress
 

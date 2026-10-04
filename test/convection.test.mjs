@@ -219,6 +219,45 @@ test('a trade-wind column lifts a cumulus plume that tops in the inversion and d
   assert.ok(Math.abs(adjusted.enthalpy - whole.enthalpy) < 1e-12 * whole.enthalpy && Math.abs(adjusted.water - whole.water) < 1e-12 * whole.water, 'enthalpy and water exact through the adjustment');
 });
 
+test('with cumulusMemory the cumulus cloud of a plume that fires every other step settles between on and off: its cover and cover × water relax toward each step\'s with e^(−Δt/τ), to half the plume\'s on average, and with 0 it is the step\'s own', () => {
+  const dt = 600, tau = MOIST_DEFAULTS.cumulusMemory, keep = Math.exp(-dt / tau), steps = 24;
+  const run = (options) => {
+    const model = tradeWindColumn(options), { moist } = model, start = model.state.map((a) => Float64Array.from(a)), subcloud = Float64Array.from(moist.subcloudVirtual);
+    const { K, C } = model.core.diagnostics, covers = [], paths = [], waters = [];
+    for (let n = 0; n < steps; n++) {
+      model.state.forEach((a, j) => a.set(start[j]));
+      moist.subcloudVirtual.set(subcloud);
+      model.boundaryLayer.buoyancyFlux[0] = n % 2 === 0 ? 4e-4 : 0;
+      moist.adjust(model.state, 0, 1, dt);
+      covers.push(Float64Array.from({ length: K }, (_, k) => moist.cumulusCover[k * C]));
+      paths.push(Float64Array.from({ length: K }, (_, k) => moist.cumulusCover[k * C] * moist.cumulusWater[k * C]));
+      waters.push(Float64Array.from({ length: K }, (_, k) => moist.cumulusWater[k * C]));
+    }
+    return { covers, paths, waters, K };
+  };
+  assert.equal(MOIST_DEFAULTS.cumulusMemory, 1800);
+  const fresh = run({ cumulusMemory: 0 }), kept = run({}), { K } = fresh;
+  const layers = Array.from({ length: K }, (_, k) => k).filter((k) => fresh.covers[0][k] > 0);
+  assert.ok(layers.length > 0, 'the plume makes a cloud');
+  for (let n = 0; n < steps; n++) for (let k = 0; k < K; k++) assert.equal(fresh.covers[n][k], n % 2 === 0 ? fresh.covers[0][k] : 0, `cumulusMemory 0: step ${n} layer ${k} is the plume's own`);
+  let worst = 0;
+  for (const k of layers) {
+    let cover = 0, path = 0;
+    for (let n = 0; n < steps; n++) {
+      cover = fresh.covers[n][k] + (cover - fresh.covers[n][k]) * keep;
+      path = fresh.paths[n][k] + (path - fresh.paths[n][k]) * keep;
+      worst = Math.max(worst, Math.abs(kept.covers[n][k] - cover) / cover, Math.abs(kept.paths[n][k] - path) / path);
+    }
+    const x = fresh.covers[0][k], on = kept.covers[steps - 2][k], off = kept.covers[steps - 1][k];
+    console.log(`layer ${k}: the plume's cover ${x.toFixed(4)} on alternate steps; with τ ${tau} s and Δt ${dt} s the cloud settles at ${on.toFixed(4)} after an on step and ${off.toFixed(4)} after an off step (x/(1 + e^(−Δt/τ)) ${(x / (1 + keep)).toFixed(4)}, mean ${(0.5 * (on + off)).toFixed(4)}); its water ${(1000 * kept.waters[steps - 1][k]).toFixed(4)} against the plume's ${(1000 * fresh.waters[0][k]).toFixed(4)} g/kg`);
+    assert.ok(Math.abs(on - x / (1 + keep)) < 1e-3 * x && Math.abs(off - keep * x / (1 + keep)) < 1e-3 * x, `layer ${k}: ${on}, ${off} against ${x / (1 + keep)}, ${keep * x / (1 + keep)}`);
+    assert.ok(Math.abs(0.5 * (on + off) - 0.5 * x) < 1e-3 * x, `layer ${k}: mean ${0.5 * (on + off)} against ${0.5 * x}`);
+    assert.ok(Math.abs(kept.waters[steps - 1][k] - fresh.waters[0][k]) < 1e-12 * fresh.waters[0][k], `layer ${k}: the cloud keeps the plume's in-cloud water`);
+    assert.ok(Math.abs(kept.covers[0][k] - (1 - keep) * x) < 1e-15, `layer ${k}: the first step from no cloud`);
+  }
+  assert.ok(worst < 1e-12, `the cover and path follow X ← X' + (X − X') e^(−Δt/τ) to ${worst}`);
+});
+
 test('with cumulusRain the plume rains its condensate above the threshold, keeping column enthalpy exact and water with the rain', () => {
   const model = tradeWindColumn({ cumulusRain: 2e-4 }), { moist } = model, [pi, theta, , , q, qc] = model.state;
   const before = budget(model, 0);
@@ -982,10 +1021,14 @@ async function parity(options, { momentum = false } = {}) {
   const model = build(options, 6), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
   const [pi, theta, , surfaceT, q, qc] = model.state;
   const { buoyancy, friction, regime, mixingTop, stratiform, concentration, saved, sensible, evaporation } = randomColumns(model);
+  let cloudSeed = 4242;
+  const cloudRandom = () => { cloudSeed = (cloudSeed * 1103515245 + 12345) % 2147483648; return cloudSeed / 2147483648; };
+  for (let x = moist.cumulusK0 * C; x < K * C; x++) if (cloudRandom() < 0.3) { moist.cumulusCover[x] = Math.fround(0.05 * cloudRandom()); moist.cumulusWater[x] = Math.fround(1e-3 * cloudRandom()); }
+  const priorCover = Float64Array.from(moist.cumulusCover), priorWater = Float64Array.from(moist.cumulusWater);
   const gpu = await createGpuCore(mesh, { levels, physics: options });
   const { device, buffers, kernels, layout } = gpu;
   gpu.upload(model.state);
-  gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate, concentration });
+  gpu.uploadPhysics({ mlmGate: model.radiation.mlmGate, concentration, cumulusCover: priorCover.subarray(moist.cumulusK0 * C), cumulusWater: priorWater.subarray(moist.cumulusK0 * C) });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.REGIME, Float32Array.from(regime));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.MIXTOP, Float32Array.from(mixingTop));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.STRAT, Float32Array.from(stratiform));
@@ -1016,14 +1059,14 @@ async function parity(options, { momentum = false } = {}) {
     for (let x = 0; x < saved.length; x++) saved[x] *= 1 + 2 ** -23;
     model.phases.adjust(0, C, dt);
     for (let i = 0; i < C; i++) response[i] = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i];
-    model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow);
+    model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow); moist.cumulusCover.set(priorCover); moist.cumulusWater.set(priorWater);
     for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation]) a.fill(0);
     for (let x = 0; x < theta.length; x++) theta[x] *= 1 + 2 ** -23;
     model.phases.adjust(0, C, dt);
     for (let i = 0; i < C; i++) { warmed[i] = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i]; warmedFlux[i] = moist.cumulusBaseFlux[i]; }
     thetaResponse.set(theta);
     if (momentum) { model.phases.mixMomentum(0, mesh.nEdges, dt); windResponse = Float64Array.from(model.state[2]); }
-    model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow);
+    model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow); moist.cumulusCover.set(priorCover); moist.cumulusWater.set(priorWater);
     for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation]) a.fill(0);
   }
   moist.trace.convection = new Float64Array(K * C);
@@ -1161,6 +1204,15 @@ test('the stratiform lifetime matches between the engines on random columns of e
   }
   console.log(`after one step the 3 h stratiform lifetime keeps more cloud than the 1 h lifetime alone in ${kept} of ${cloudy} cloudy layers (GPU ${gpuKept}), ${keptShared} of the ${shared} whose long share is positive (outside a plume's layers, below the mixing top of a coupled or ice-covered column or above it under an EIS share)`);
   assert.ok(keptShared > shared / 5 && kept < cloudy && Math.abs(gpuKept - kept) <= cloudy / 100, `${kept} and ${gpuKept} of ${cloudy}, ${keptShared} of the ${shared} with a long share`);
+});
+
+test('a cumulusMemory other than a finite time of 0 s or more is refused on both engines', async () => {
+  const refused = [-1, null, Infinity, '1800'];
+  for (const value of refused) assert.throws(() => build({ cumulusMemory: value }), /cumulusMemory/, `CPU: ${value}`);
+  if (!gpuAvailable) return;
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
+  for (const value of refused) assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, cumulusMemory: value }), /cumulusMemory/, `GPU: ${value}`);
 });
 
 test('the retired Betts–Miller options are refused on both engines', async () => {

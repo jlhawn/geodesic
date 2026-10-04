@@ -8,6 +8,7 @@ export const CLEAR_AIR = 1e-7;
 export const DECK_OPEN = 0.5;
 export const DECK_CLOSED = 0.6;
 export const CUMULUS_FLOOR = 1e-6;
+export const CUMULUS_TRACE = 1e-6;
 export const MAXIMUM_SURFACE_PRESSURE = 110000;
 export const DEEP_REFERENCE = 1e5;
 export const COUPLED_REGIME = 3;
@@ -350,6 +351,23 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * convective. The cumulus cover of each layer at or below the shallow
  * top at the highest surface pressure (`cumulusK0`) is the larger of the
  * shallow plume's and the deep plume's M / (ρ w_u), w_u at least w0.
+ * With `cumulusMemory` τ (s; 0: none) the cloud outlives the step that
+ * made it: in `adjust` each plume layer's cover f and path P = f × water
+ * relax toward the step's diagnosed f' and P' (0 where no plume ran) as
+ * X ← X' + (X − X') e^(−Δt/τ), the water is P/f, and both are 0 where f
+ * falls below CUMULUS_TRACE. The filter is linear in f and in P, so it
+ * keeps the time means of the cover and of the cover × water the
+ * radiation sees, and smooths a plume that fires on some steps and not
+ * others into a cloud between its on and off values. The radiative cloud
+ * carries no water mass (the plume's condensate rains or detrains as the
+ * step leaves it), so the memory has no budget. It stands for the plume's
+ * clouds outliving it, as Tiedtke (1993) and the IFS make convective
+ * detrainment the source of a cloud that decays on its own time: in a
+ * tracked LES shallow cumulus ensemble active clouds live about 20 min
+ * on average and passive ones about 5 min (Sakradzija, Seifert and Heus
+ * 2015), and τ = 30 min, past the active clouds' mean life by the decay
+ * of what they leave; the persistence of a grid cell's cumulus field
+ * beyond that comes from that of the plume's forcing.
  * With `plumeMomentum` each cell keeps the deep plume's mass fluxes and
  * mixing factors, and `transportMomentum` moves the edges' normal
  * velocity by them (see there).
@@ -405,8 +423,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * cloudLifetime 1 h, no upperCloudLifetime, stratiformLifetime 3 h, autoconversionFloor 'lowest', rainEvaporation 1,
  * cumulusClosure 0.03 (Grant 2001), cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
  * 3e-3 /m, cumulusSourceDepth 50 hPa, cumulusBoundaryLoss 0.1,
- * cumulusFriction 1, cumulusOvershoot 1, cumulusUpdraft 1 m/s, no
- * cumulusRain, cumulusSource 'mean' (or 'lowest': the plume leaves with
+ * cumulusFriction 1, cumulusOvershoot 1, cumulusUpdraft 1 m/s, cumulusMemory
+ * 1800 s, no cumulusRain, cumulusSource 'mean' (or 'lowest': the plume leaves with
  * the lowest layer's air), plumeClosure 'separate',
  * plumeCapeParcel 'plume', plumeSource 'mean', plumeVelocity 1 m/s,
  * plumeAcceleration 1/3, plumeDrag 1, plumeEntrainmentLaw 'ifs', plumeEntrainment 0.1,
@@ -424,7 +442,7 @@ export const MOIST_DEFAULTS = {
   autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest',
   deckVeto: true, coupledVeto: false, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
-  cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean',
+  cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', excessVelocity: 'surfaceLayer', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainmentLaw: 'ifs', plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, plumePhase: 'mixed', plumeConversion: 'sundqvist', convectionType: 'testParcel', downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: false, plumeConsumption: 'all',
   condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
@@ -438,7 +456,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const {
     latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, stratiformLifetime, rainEvaporation, autoconversionFloor,
     deckVeto, coupledVeto, evaporationInCloud, virtualBuoyancy,
-    cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource,
+    cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, excessVelocity, plumePhase, plumeConversion, convectionType, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainmentLaw, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
     downdraftShare, downdraftEntrainment, capeClosure, pcapeBoundary, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption,
     condensation, boundaryCondensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, liquidTemperature, iceTemperature,
@@ -473,6 +491,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const separate = plumeClosure === 'separate' && convectionType === 'top', relaxedOnly = plumeClosure !== 'maximum';
   if (plumeCapeParcel !== 'plume' && plumeCapeParcel !== 'undilute') throw new Error(`plumeCapeParcel must be 'plume' or 'undilute', not ${plumeCapeParcel}`);
   const undilute = plumeCapeParcel === 'undilute';
+  if (typeof cumulusMemory !== 'number' || !(cumulusMemory >= 0 && cumulusMemory < Infinity)) throw new Error(`cumulusMemory must be a time in seconds, 0 or more, not ${cumulusMemory}`);
   if (cumulusSource !== 'mean' && cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${cumulusSource}`);
   if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest' or 'boundaryLayer', not ${autoconversionFloor}`);
   const { K, C, levels, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential } = core.diagnostics;
@@ -506,6 +525,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   let cumulusK0 = K;
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > shallowTop) cumulusK0--;
   const cumulus = { top: -1, source: K - 1, inhibition: 0, lclPressure: 0, velocity: 0, baseFlux: 0, snow: 0 };
+  const rememberedCover = new Float64Array(K), rememberedPath = new Float64Array(K);
   const falling = { evaporated: 0, convective: 0, frozen: 0, ice: 0, moved: false };
   const budget = { condensation: 0, convection: 0, lost: 0 };
   const trace = { convection: null, largeScale: null };
@@ -841,6 +861,26 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     cumulus.top = top; cumulus.baseFlux = base * scale;
     cumulusBaseFlux[i] = base * scale; cumulusTop[i] = pi[i] * levels[top];
     return rain;
+  }
+
+  /*
+   * plumeColumn with the cumulus cloud's memory over cumulusMemory (see the
+   * header): the cover and the path cover × water relax toward the plume's.
+   */
+  function rememberedPlume(i, pi, theta, q, qc, dt, u) {
+    for (let k = cumulusK0; k < K; k++) {
+      const idx = k * C + i;
+      rememberedCover[k] = cumulusCover[idx]; rememberedPath[k] = cumulusCover[idx] * cumulusWater[idx];
+    }
+    const produced = plumeColumn(i, pi, theta, q, qc, dt, u), keep = Math.exp(-dt / cumulusMemory);
+    for (let k = cumulusK0; k < K; k++) {
+      const idx = k * C + i, cover = cumulusCover[idx], path = cover * cumulusWater[idx];
+      const kept = cover + (rememberedCover[k] - cover) * keep;
+      if (!(kept >= CUMULUS_TRACE)) { cumulusCover[idx] = 0; cumulusWater[idx] = 0; continue; }
+      cumulusCover[idx] = kept;
+      cumulusWater[idx] = (path + (rememberedPath[k] - path) * keep) / kept;
+    }
+    return produced;
   }
 
   /*
@@ -1271,7 +1311,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       if (traced) mark(i, theta);
       condenseColumn(i, pi, theta, q, qc);
       if (traced) charge(trace.largeScale, i, theta);
-      const produced = plumeColumn(i, pi, theta, q, qc, dt, u);
+      const produced = cumulusMemory > 0 ? rememberedPlume(i, pi, theta, q, qc, dt, u) : plumeColumn(i, pi, theta, q, qc, dt, u);
       if (traced) charge(trace.convection, i, theta);
       if (cumulusBaseFlux[i] > 0) condenseColumn(i, pi, theta, q, qc);
       const rained = autoconvertColumn(i, pi, theta, q, qc, dt, deep.deep ? convectiveFall : null, ice && ice[i] > 0 ? (iceConcentration !== null && iceConcentration[i] > 0 ? iceConcentration[i] : 1) : 0, deep.deep && mixedPlume ? convectiveFrozen : null);

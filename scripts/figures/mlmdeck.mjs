@@ -3,9 +3,10 @@
 // taken; the physics kernel's inputs of the fourth are read before it
 // runs and its deck after, and every ice-free sea column is re-diagnosed
 // on the host by mixedLayer.module.js along the GPU's own path through
-// mlmColumn in js/gpu/physics.gpu.js (the regime rest, the slab, the inversion
-// ceiling, the ring-smoothed subsidence and its running mean, the gate
-// memory, the carried height). The host gives the mixed layer no
+// mlmColumn in js/gpu/physics.gpu.js (the regime rest, the slab, the
+// free troposphere's reference, the inversion ceiling, the ring-smoothed
+// subsidence and its running mean, the gate memory, the carried height).
+// The host gives the mixed layer no
 // sunlight, so the liquid water path, cover and the heights after the
 // step are compared on the night side alone, where the GPU's absorbed
 // sunlight is zero too; the gates, the running means and the entrainment
@@ -102,10 +103,13 @@ function column(i) {
   const subsidence = -flow / (pi * LV.SM[m] / (R * D.THV[m * C + i] * D.EXM[m * C + i]) * g);
   const mean = P.MLMSUB[i] + (subsidence - P.MLMSUB[i]) * fresh(dt / ph.subsidenceMemory), sinking = !(mean > -ph.stratusSubsidence);
   const above = k * C + i, aboveCloud = Math.max(0, S.QC[above]);
-  const forcing = {
-    surfacePressure: pi, sensibleHeat: out.SH[i], evaporation: out.EVAP[i], radiation: longwave, subsidence: () => subsidence, absorbedSolar: null,
-    thetaLAbove: S.TH[above] - Lh * aboveCloud / (cp * D.EXM[above]), qtAbove: Math.max(0, S.Q[above]) + aboveCloud,
-  };
+  let thetaLAbove = S.TH[above] - Lh * aboveCloud / (cp * D.EXM[above]), qtAbove = Math.max(0, S.Q[above]) + aboveCloud;
+  if (ph.deckReference === 'interpolate' && k < K - 1) {
+    const higher = above - C, higherCloud = Math.max(0, S.QC[higher]), share = Math.min(1, Math.max(0, (h - zOf(k + 1, i)) / (zOf(k, i) - zOf(k + 1, i))));
+    thetaLAbove += share * (S.TH[higher] - Lh * higherCloud / (cp * D.EXM[higher]) - thetaLAbove);
+    qtAbove += share * (Math.max(0, S.Q[higher]) + higherCloud - qtAbove);
+  }
+  const forcing = { surfacePressure: pi, sensibleHeat: out.SH[i], evaporation: out.EVAP[i], radiation: longwave, subsidence: () => subsidence, absorbedSolar: null, thetaLAbove, qtAbove };
   const start = { h, thetaL: heat / weight, qt: water / weight };
   let now = null, pass = 0;
   if (sinking && !standDown) {
