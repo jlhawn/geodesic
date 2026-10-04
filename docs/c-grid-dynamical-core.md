@@ -11684,10 +11684,11 @@ the least of a kernel's 48–96 dispatches, in µs): oMomentum 23986 →
 and 5112 → 1049, oLapVelocity 2032 → 786 (twice), oVertexVort 2097 →
 590, oEdgePV 1770 → 1049, oFlux 918 → 721, the edge thickness 852 + 328
 → 721. Amortised over the ocean's every 8 steps the ocean's kernels
-fall from 35.0 to 14.2 ms a step by these least times, 6.8 for the
-first step and 12.9 for the second; scaled by the 0.68–0.81 that took
-the split profile's ocean passes to their alone times at 22:15, about
-15 ms of the 142.6, a projected 127 ms a step and 65 s a model day.
+fall from 35.0 to 14.2 ms a step by these least times, the first
+step's kernels 7.1 of it and the second's 12.9. Scaled by 0.68–0.81,
+each ocean pass's time on the quiet device (55b18b8 at 142.6 ms a
+step) over its kernels' least times on the shared one, that is about
+15 ms, a projected 127 ms a step and 65 s a model day.
 At N=64 every changed kernel is as fast or faster (oMomentum 5964 →
 1311 µs, oCellTendency 1704 → 590, oDivCurl 1180 → 262). Whole model
 days on the shared GPU (`scripts/paceGpu.mjs`, 0bcd938 and 49814b5
