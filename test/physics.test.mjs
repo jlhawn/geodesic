@@ -685,6 +685,32 @@ test('the deck\'s slab takes the layer its height lies in by the share of that l
   assert.ok(across('fraction') < 0.01 * across('midpoint'), `a metre across the layer's midpoint moves the slab by ${across('fraction')} K, against ${across('midpoint')} K by midpoints`);
 });
 
+test('the free troposphere the deck entrains moves with its height across a layer\'s midpoint, and with deckReference \'layer\' switches there', () => {
+  const column = mixedLayerColumn(), { pi, theta, q, qc } = column;
+  for (let k = 0; k < K; k++) if (core.sigmaMid[k] > 0.9) for (let i = 0; i < C; i++) { theta[k * C + i] = 289 + 0.3 * (K - 1 - k); q[k * C + i] = 9e-3 - 1e-4 * (K - 1 - k); }
+  core.diagnose(pi, theta, q, qc);
+  const { g, cp, geopotential, exnerLayer, exnerLower } = core.diagnostics, thetaV = core.arrays.thetaV;
+  const shallow = { ...column, mixedDepth: () => 10 };
+  const r = { interpolate: createRadiation(mesh, core, { subsidenceMemory: 1e-9 }), layer: createRadiation(mesh, core, { subsidenceMemory: 1e-9, deckReference: 'layer' }) };
+  r.interpolate.setTime(0); r.layer.setTime(0);
+  const noon = brightest(r.interpolate), j = K - 3, bottom = (K - 1) * C + noon;
+  const surface = geopotential[bottom] - cp * thetaV[bottom] * (exnerLower[bottom] - exnerLayer[bottom]);
+  const middle = (k) => (geopotential[k * C + noon] - surface) / g;
+  const reference = (scheme, h) => { r[scheme].mlmHeight[noon] = h; const b = mixedLayerRun(r[scheme], noon, shallow, 1, 0); return [b.mlmThetaLAbove, b.mlmTotalWaterAbove]; };
+  const halfway = 0.5 * (middle(j + 1) + middle(j));
+  const [thetaHalf, waterHalf] = reference('interpolate', halfway), [thetaLayer, waterLayer] = reference('layer', halfway);
+  const expectedTheta = 0.5 * (theta[j * C + noon] + theta[(j - 1) * C + noon]), expectedWater = 0.5 * (q[j * C + noon] + q[(j - 1) * C + noon]);
+  console.log(`h ${halfway.toFixed(1)} m, halfway between the midpoints of layers ${j + 1} and ${j}: θ_l above ${thetaHalf.toFixed(6)} K (hand ${expectedTheta.toFixed(6)}), by layer ${thetaLayer.toFixed(6)} K; q_t above ${(1000 * waterHalf).toFixed(6)} g/kg (hand ${(1000 * expectedWater).toFixed(6)})`);
+  assert.ok(Math.abs(thetaHalf - expectedTheta) <= 1e-12 * expectedTheta && Math.abs(waterHalf - expectedWater) <= 1e-12 * expectedWater, `θ_l ${thetaHalf}, q_t ${waterHalf}`);
+  assert.ok(thetaLayer === theta[j * C + noon] && waterLayer === q[j * C + noon], 'by layer the first layer whose midpoint lies above h');
+  const across = (scheme, n) => Math.abs(reference(scheme, middle(j) + 0.1)[n] - reference(scheme, middle(j) - 0.1)[n]);
+  for (const [n, name] of [[0, 'θ_l'], [1, 'q_t']]) {
+    console.log(`${name} above across layer ${j}'s midpoint ±0.1 m: ${across('interpolate', n).toExponential(3)} interpolated, ${across('layer', n).toExponential(3)} by layer`);
+    assert.ok(across('interpolate', n) < 0.01 * across('layer', n), `${name}: ${across('interpolate', n)} against ${across('layer', n)}`);
+  }
+  assert.throws(() => createRadiation(mesh, core, { deckReference: 'midpoint' }));
+});
+
 test('the mixed-layer deck on a stable column over a warm sea carries the water path and cover of the mixed-layer model, advanced one step, in the same two-column blend', () => {
   const shadow = createRadiation(mesh, core, { mixedLayerDeck: true, subsidenceMemory: 1e-9, ...REDIAGNOSED }), off = createRadiation(mesh, core, { stratus: false });
   shadow.setTime(0); off.setTime(0);
@@ -726,7 +752,7 @@ test('the mixed-layer deck needs subsidence and a capping inversion: a column un
   const column = mixedLayerColumn(0.4), above = (K - 4) * C + noon;
   const mlm = createMixedLayer({ cp: CP_DRY, R: R_DRY, g: core.diagnostics.g, latentHeat: LATENT_HEAT, referencePressure: P0, cloudLevels: 8 });
   const jump = (thetaAbove) => mlm.diagnose({ h: column.depth[noon], thetaL: 289, qt: 9e-3 }, { surfacePressure: P0, sensibleHeat: 0, evaporation: 0, thetaLAbove: thetaAbove, qtAbove: column.q[above], subsidence: () => 0, radiation: dycomsLongwave() }).virtualJump;
-  const slope = jump(301) - jump(300), withJump = (target) => { const theta = Float64Array.from(column.theta); theta[above] = 300 + (target - jump(300)) / slope; return theta; };
+  const slope = jump(301) - jump(300), withJump = (target) => { const theta = Float64Array.from(column.theta); theta[above] = theta[above - C] = 300 + (target - jump(300)) / slope; return theta; };
   const weak = withJump(1), strong = withJump(3);
   console.log(`first layer above h at ${weak[above].toFixed(2)} K gives Δθ_v ${jump(weak[above]).toFixed(2)} K, at ${strong[above].toFixed(2)} K ${jump(strong[above]).toFixed(2)} K`);
   core.diagnose(column.pi, weak, column.q, column.qc);
@@ -792,7 +818,7 @@ function boundaryLayerTop(column, i) {
 }
 
 test('the deck carries its inversion height: from the boundary-layer top it deepens step after step by its own dh/dt, while the re-diagnosed deck starts from that top each step; mlmTop hands the height to the boundary layer', () => {
-  const carried = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...DEPTH_REST }), rediagnosed = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED, ...DEPTH_REST });
+  const carried = createRadiation(mesh, core, { subsidenceMemory: 1e-9, deckReference: 'layer', ...DEPTH_REST }), rediagnosed = createRadiation(mesh, core, { subsidenceMemory: 1e-9, deckReference: 'layer', ...REDIAGNOSED, ...DEPTH_REST });
   carried.setTime(0); rediagnosed.setTime(0);
   const noon = brightest(carried), column = mixedLayerColumn(0.4), top = boundaryLayerTop(column, noon), dt = 900;
   let previous = top.height, fixed = null;
@@ -1008,9 +1034,9 @@ test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer
   const forced = { stratusSubsidence: 0, minimumInversion: 0, subsidenceSmoothing: 0, subsidenceMemory: 10 * DAY }, scatteringOnly = { cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES };
   assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }).digest, '53b4ccf50cf7bc463624df0cb6e5a25b');
   assert.equal(modelDigest({ stratusSolar: false, ...scatteringOnly }, {}, GREY_ICE).digest, '0a8cae468ac0040bec3b55b089ee2a30');
-  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, deckSlab: 'midpoint', ...scatteringOnly }, {}, GREY_ICE).digest, 'c8dc412236f07136049e6a12f52d8fc9');
-  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, deckSlab: 'midpoint', stratusSolar: false, ...scatteringOnly }).digest, 'b20353cdb30b9a671f26d0ffc46f1cf9');
-  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, deckSlab: 'midpoint', ...scatteringOnly }).digest, 'b20353cdb30b9a671f26d0ffc46f1cf9');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, deckSlab: 'midpoint', deckReference: 'layer', ...scatteringOnly }, {}, GREY_ICE).digest, 'c8dc412236f07136049e6a12f52d8fc9');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, deckSlab: 'midpoint', deckReference: 'layer', stratusSolar: false, ...scatteringOnly }).digest, 'b20353cdb30b9a671f26d0ffc46f1cf9');
+  assert.equal(modelDigest({ ...forced, ...REDIAGNOSED, deckSlab: 'midpoint', deckReference: 'layer', ...scatteringOnly }).digest, 'b20353cdb30b9a671f26d0ffc46f1cf9');
   assert.notEqual(modelDigest({ ...forced, ...REDIAGNOSED }).digest, 'b20353cdb30b9a671f26d0ffc46f1cf9');
   assert.notEqual(modelDigest({ ...forced, ...scatteringOnly }).digest, 'b20353cdb30b9a671f26d0ffc46f1cf9', 'the carried height and the gate\'s memory change the deck');
   const shadow = createRadiation(mesh, core, { subsidenceMemory: 1e-9, ...REDIAGNOSED }), dark = createRadiation(mesh, core, { subsidenceMemory: 1e-9, stratusSolar: false, ...REDIAGNOSED });

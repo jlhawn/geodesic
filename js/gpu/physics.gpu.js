@@ -46,6 +46,7 @@ export function physicsConstants(o) {
   if (!(o.forestAridity[1] > o.forestAridity[0])) throw new Error(`forestAridity must rise from its first to its second index, not ${o.forestAridity}`);
   if (!(o.overcastInversion?.[1] > o.overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${o.overcastInversion}`);
   if (o.deckSlab !== 'fraction' && o.deckSlab !== 'midpoint') throw new Error(`deckSlab must be 'fraction' or 'midpoint', not ${o.deckSlab}`);
+  if (o.deckReference !== 'interpolate' && o.deckReference !== 'layer') throw new Error(`deckReference must be 'interpolate' or 'layer', not ${o.deckReference}`);
   if (o.deckRest !== 'depth' && o.deckRest !== 'inversion' && o.deckRest !== 'regime') throw new Error(`deckRest must be 'depth', 'inversion' or 'regime', not ${o.deckRest}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
   for (const retired of RETIRED_OPTIONS) if (retired in o) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
@@ -133,7 +134,7 @@ const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
 const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
-const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_FRACTION: bool = ${o.deckSlab === 'fraction'}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling};
+const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_FRACTION: bool = ${o.deckSlab === 'fraction'}; const MLM_INTERPOLATE: bool = ${o.deckReference === 'interpolate'}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling};
 const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 const ALB_OLDSNOW: f32 = ${o.oldSnowAlbedo}; const MASKED: bool = ${!!o.snowMasking && !!o.vegetation}; const ALB_FOREST: f32 = ${o.forestSnowAlbedo}; const CLOSED_CANOPY: f32 = ${o.closedCanopy}; const CANOPY_MEM: f32 = ${o.canopyMemory};
 const TREELINE: bool = ${!!o.treeline}; const SEASON_C: f32 = ${o.seasonThreshold}; const SEASON_K: f32 = ${MELTING_POINT + o.seasonThreshold}; const SEASON_SHORTEST: f32 = ${o.minimumSeason / 365}; const SEASON_MEM: f32 = ${o.seasonMemory}; const TREE_LO: f32 = ${o.treelineWarmth[0]}; const TREE_SPAN: f32 = ${o.treelineWarmth[1] - o.treelineWarmth[0]}; const TREE_GROW: f32 = ${o.treeGrowthTime}; const TREE_DECLINE: f32 = ${o.treeDeclineTime};
@@ -762,8 +763,15 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
   let mean = PH[PH_MLMSUB + i] + (subsidence - PH[PH_MLMSUB + i]) * fresh;
   PH[PH_MLMSUB + i] = mean;
   let sinking = !(mean > -MLM_SUBSIDENCE);
-  let thetaAbove = IN[S_TH + above] - LHEAT * aboveCloud / (CP * D[D_EXM + above]);
-  let qtAbove = max(0.0, IN[S_Q + above]) + aboveCloud;
+  var thetaAbove = IN[S_TH + above] - LHEAT * aboveCloud / (CP * D[D_EXM + above]);
+  var qtAbove = max(0.0, IN[S_Q + above]) + aboveCloud;
+  if (MLM_INTERPOLATE && k < K - 1) {
+    let higher = above - C; let higherCloud = max(0.0, IN[S_QC + higher]);
+    let below = D[D_GEO + above + C] + LV[L_GABS + k + 1];
+    let share = clamp((GRAV * h - below) / (D[D_GEO + above] + LV[L_GABS + k] - below), 0.0, 1.0);
+    thetaAbove += share * (IN[S_TH + higher] - LHEAT * higherCloud / (CP * D[D_EXM + higher]) - thetaAbove);
+    qtAbove += share * (max(0.0, IN[S_Q + higher]) + higherCloud - qtAbove);
+  }
   let start = MlmState(h, heat / weight, water / weight);
   var now = MlmOut(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
   var passed = 0.0;
