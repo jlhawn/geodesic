@@ -166,6 +166,42 @@ test('a coupled run split at each day\'s end ends byte for byte where the uninte
   assert.ok(readFileSync(join(whole, 's_day0003.bin')).equals(readFileSync(join(parts, 's_day0003.bin'))), 'the split run ends where the uninterrupted one does');
 });
 
+test('a state saved with the instantaneous cumulus cloud loads with that cloud as the memory\'s start: the first step relaxes each layer\'s cover and cover × water from it toward the plume\'s', { skip }, async () => {
+  const { readState, gpuModelFrom, dt } = await import('../scripts/figures/figureState.mjs');
+  const { readRanges } = await import('../js/gpu/device.module.js');
+  const { MOIST_DEFAULTS, CUMULUS_TRACE } = await import('../js/physics/moist.module.js');
+  const out = outDir('memoryStart', 'm_day0000.bin');
+  assert.equal(run('spinup.mjs', { TAG: 'm', MINUTES: '100', OUT: out, DAYS: '1', MOIST: '{"cumulusMemory":0}' }), 0);
+  const saved = await readState(join(out, 'm_day0001.bin'));
+  const first = async (moist) => {
+    const held = process.env.MOIST;
+    process.env.MOIST = moist;
+    try {
+      const model = await gpuModelFrom(saved), L = model.gpu.layout.PH, n = L.CUWATER - L.CUCOVER;
+      await model.step(dt(N));
+      await model.settle();
+      const [cover, water] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: L.CUCOVER, length: n }, { offset: L.CUWATER, length: n }]);
+      model.destroy();
+      return { cover, water };
+    } finally { if (held === undefined) delete process.env.MOIST; else process.env.MOIST = held; }
+  };
+  const plume = await first('{"cumulusMemory":0}'), kept = await first('{}'), keep = Math.exp(-dt(N) / MOIST_DEFAULTS.cumulusMemory);
+  const prior = saved.cumulusCover, priorWater = saved.cumulusWater;
+  assert.equal(prior.length, plume.cover.length);
+  let carried = 0, made = 0, worst = 0;
+  for (let x = 0; x < prior.length; x++) {
+    const cover = plume.cover[x] + (prior[x] - plume.cover[x]) * keep, path = plume.cover[x] * plume.water[x] + (prior[x] * priorWater[x] - plume.cover[x] * plume.water[x]) * keep;
+    if (Math.abs(cover - CUMULUS_TRACE) < 1e-3 * CUMULUS_TRACE) continue;
+    if (cover < CUMULUS_TRACE) { assert.equal(kept.cover[x], 0); continue; }
+    if (prior[x] > 0 && !(plume.cover[x] > 0)) carried++;
+    if (plume.cover[x] > 0) made++;
+    worst = Math.max(worst, Math.abs(kept.cover[x] - cover) / cover, Math.abs(kept.cover[x] * kept.water[x] - path) / Math.max(path, 1e-30));
+  }
+  console.log(`one step from a day saved with cumulusMemory 0: ${carried} plume layers keep the saved cloud where the plume made none, ${made} relax toward the plume's; cover and path within ${worst.toExponential(1)} of X' + (X − X') e^(−Δt/τ) from the saved X`);
+  assert.ok(carried > 0 && made > 0, `${carried} carried, ${made} made`);
+  assert.ok(worst < 1e-5, `worst ${worst}`);
+});
+
 test('a coupled run split inside a day ends the day with the uninterrupted run\'s state', { skip }, async () => {
   const whole = outDir('halfWhole', 'h_day0000.bin'), parts = outDir('halfParts', 'h_day0000.bin');
   const env = { TAG: 'h', MINUTES: '100', DAYS: '1' };

@@ -993,11 +993,14 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
   assert.ok(covered > 0, 'some cells carry a mixed-layer deck');
 });
 
-test('the uniform condensation, saturation over ice and falling ice of the moist defaults give their own twelve-step digest, which the overlap moves (the digests above run with all three off and are the parent\'s)', () => {
-  const defaults = { condensation: MOIST_DEFAULTS.condensation, iceSaturation: MOIST_DEFAULTS.iceSaturation, iceFall: MOIST_DEFAULTS.iceFall };
+test('the uniform condensation, saturation over ice and falling ice of the moist defaults give their own twelve-step digest, which the overlap moves (the digests above run with all three off and are the parent\'s), and the cumulus memory its own again', () => {
+  const defaults = { condensation: MOIST_DEFAULTS.condensation, iceSaturation: MOIST_DEFAULTS.iceSaturation, iceFall: MOIST_DEFAULTS.iceFall, cumulusMemory: 0 };
   const now = modelDigest({}, defaults).digest, random = modelDigest({ cloudOverlap: 'maximumRandom' }, defaults).digest;
-  console.log(`12 steps at N=4: ${now} under the defaults, ${random} with maximum-random overlap`);
+  const remembered = { ...defaults, cumulusMemory: MOIST_DEFAULTS.cumulusMemory }, memory = modelDigest({}, remembered).digest, memoryRandom = modelDigest({ cloudOverlap: 'maximumRandom' }, remembered).digest;
+  console.log(`12 steps at N=4: ${now} under the defaults without the cumulus memory, ${random} with maximum-random overlap; ${memory} and ${memoryRandom} with it`);
   assert.equal(now, 'c3d3550c6c3ffce5884c10a074ec5814');
+  assert.equal(memory, '5eb9c6973ac6c00ff93985b8fc086733');
+  assert.equal(memoryRandom, '6c751cc6afe36baa27054ff3ad228466');
   assert.equal(modelDigest({ longwaveOverlap: 'random' }, defaults).digest, 'ce584ac4ed32dada97ac7ae50a3c074e', 'with the longwave\'s random overlap, the integration parent\'s digest');
   assert.equal(modelDigest({ longwaveOverlap: 'random' }, defaults, {}, RAYLEIGH_TOP).digest, 'e56a63aa7bf0382cd59a314e8fe15d89', 'with the longwave\'s random overlap and the Rayleigh top, the engine before the longwave overlapped as the shortwave does');
   assert.equal(modelDigest({}, defaults, {}, RAYLEIGH_TOP).digest, 'af76fa172a52296419f5bde853c771bc', 'with the Rayleigh top, the convection parent\'s digest');

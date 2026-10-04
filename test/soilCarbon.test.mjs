@@ -8,6 +8,7 @@ import { MELTING_POINT, SNOW_AGEING } from '../js/physics/ice.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
 import { regridLand } from '../js/physics/regrid.module.js';
+import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -171,7 +172,7 @@ test('every option of the land surface reaches the GPU or is refused there', { s
 
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
 
-test('both engines darken the bare soil alike with its carbon, wet and dry, and step the carbon alike', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both engines darken the bare soil alike with its carbon, wet and dry, and step the carbon alike outside the cells where the plume fired on one engine only', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const land = { carbonAcceleration: 3e5, growthTime: 4 * 3600, declineTime: 3 * 3600, snowDeclineTime: 4 * 3600 };
   const prepare = (model, s0) => {
     const C = model.mesh.nCells, init = initializeState(model, {});
@@ -203,20 +204,24 @@ test('both engines darken the bare soil alike with its carbon, wet and dry, and 
     worstAlbedo = Math.max(worstAlbedo, Math.abs(ph.ADIF[i] - albedo[i]));
     moved = Math.max(moved, Math.abs(albedo[i] - plain.albedo(i)));
   }
+  const decisions = decisionTracker(cpu.core.K, C), check = async () => decisions.check(cpuDecisions(cpu), gpuDecisions(await gpu.gpu.download(), await gpu.gpu.downloadPhysics()));
   cpu.step(900);
-  for (let n = 1; n < 24; n++) { cpu.step(900); await gpu.step(900); }
+  await check();
+  for (let n = 1; n < 24; n++) { cpu.step(900); await gpu.step(900); await check(); }
   await gpu.sync();
   const saved = await gpu.land.serialize();
-  let worstCarbon = 0, scale = 0, rose = 0, fell = 0;
+  let worstCarbon = 0, scale = 0, rose = 0, fell = 0, fired = 0;
   for (let i = 0; i < C; i++) {
     if (!mask[i] || sheet[i]) continue;
-    worstCarbon = Math.max(worstCarbon, Math.abs(cpu.land.soilCarbon[i] - saved.soilCarbon[i]));
+    if (decisions.kinds.fires.has(i)) fired++;
+    else worstCarbon = Math.max(worstCarbon, Math.abs(cpu.land.soilCarbon[i] - saved.soilCarbon[i]));
     scale = Math.max(scale, Math.abs(cpu.land.soilCarbon[i] - before[i]));
     if (cpu.land.soilCarbon[i] > before[i] + 0.1) rose++;
     if (cpu.land.soilCarbon[i] < before[i] - 0.1) fell++;
   }
   gpu.destroy();
-  console.log(`N=6, ${cells} land cells: albedo engines apart by ${worstAlbedo.toExponential(1)} (the carbon moves it by up to ${moved.toFixed(3)}); after 24 steps at A = 3e5 the carbon rose on ${rose} and fell on ${fell}, by up to ${scale.toFixed(2)} kg/m², engines apart by ${worstCarbon.toExponential(1)} kg/m²`);
+  console.log(`N=6, ${cells} land cells: albedo engines apart by ${worstAlbedo.toExponential(1)} (the carbon moves it by up to ${moved.toFixed(3)}); after 24 steps at A = 3e5 the carbon rose on ${rose} and fell on ${fell}, by up to ${scale.toFixed(2)} kg/m², engines apart by ${worstCarbon.toExponential(1)} kg/m² outside the ${fired} land cells where the plume fired on one engine only at some step`);
   assert.ok(worstAlbedo < 1e-6 && moved > 0.1, `albedo ${worstAlbedo}, moved ${moved}`);
   assert.ok(rose > 10 && fell > 10 && worstCarbon < 1e-3 * scale, `rose ${rose}, fell ${fell}, carbon ${worstCarbon} of ${scale}`);
+  assert.ok(fired <= 0.05 * cells, `the plume fired on one engine only in ${fired} of ${cells} land cells`);
 });

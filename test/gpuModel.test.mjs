@@ -765,7 +765,7 @@ test('the convective and large-scale rain accumulate alike in both engines, cell
   assert.ok(apart < 1e-12, `convective plus large-scale is the precipitation to ${apart}`);
 });
 
-test('both models read the rain split out at the diagnostics as means in mm/d, clearing its sums, alike but for the odd column whose onset falls a step apart, and the GPU model sends the means to the device on load and mirrors them on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('both models read the rain split out at the diagnostics as means in mm/d, clearing its sums, alike outside the columns where a discrete decision parted and their neighbours within two cells, and the GPU model sends the means to the device on load and mirrors them on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const surface = { convectiveGust: false }, moist = { convectionType: 'top', plumeEntrainmentLaw: 'gregory' };
   const cpu = createModel(new Grid(6), { ocean: false, surface, moist }), gpu = await createGpuModel(new Grid(6), { ocean: false, surface, moist });
@@ -781,8 +781,13 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
   device = await gpu.gpu.downloadPhysics();
   assert.equal(device.CONVMEAN[1], Math.fround(loaded[1]), 'a diagnostics frame with no time elapsed keeps the means');
   const steps = 24, seconds = steps * 900;
-  const decisions = cloudDecisions(C);
-  for (let n = 0; n < steps; n++) { cpu.step(900); await gpu.step(900); decisions.check(cpu, await gpu.gpu.downloadPhysics()); }
+  const decisions = cloudDecisions(C), shared = decisionTracker(cpu.core.K, C);
+  for (let n = 0; n < steps; n++) {
+    cpu.step(900); await gpu.step(900);
+    const physics = await gpu.gpu.downloadPhysics();
+    decisions.check(cpu, physics);
+    shared.check(cpuDecisions(cpu), gpuDecisions(await gpu.gpu.download(), physics));
+  }
   const sums = Float64Array.from(cpu.moist.convectivePrecipitation);
   device = await gpu.gpu.downloadPhysics();
   const gpuSums = Float64Array.from(device.CONV.subarray(0, C)), gpuLarge = Float64Array.from(device.COND.subarray(0, C));
@@ -803,10 +808,12 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
   const pick = (values) => Float64Array.from(kept, (i) => values[i]);
   const convective = stats(pick(cpu.moist.convectiveRain), pick(gpu.moist.convectiveRain)), largeScale = stats(pick(cpu.moist.largeScaleRain), pick(gpu.moist.largeScaleRain));
   const rainScale = Math.sqrt(kept.reduce((sum, i) => sum + (cpu.moist.convectiveRain[i] + cpu.moist.largeScaleRain[i]) ** 2, 0)), largeScaleOfRain = largeScale.rms * Math.sqrt(kept.length) / rainScale;
-  console.log(`six hours at N=6: convective rain ${(cpuMean / area).toFixed(3)} mm/d in the mean (GPU ${(gpuMean / area).toFixed(3)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain or whose OLR or absorbed sunlight parted by more than 1 W/m² at a step (${decisions.parted.size}); over the rest per-cell rms ${convective.rmsRel.toExponential(1)}; large-scale at most ${Math.max(...cpu.moist.largeScaleRain).toExponential(1)} mm/d, its per-cell rms ${largeScale.rmsRel.toExponential(1)} of itself and ${largeScaleOfRain.toExponential(1)} of the rain`);
+  const near = neighbourhood(cpu.mesh, shared.parted, 2), unexplained = Array.from({ length: C }, (_, i) => i).filter((i) => !kept.includes(i) && !near.has(i)).length;
+  console.log(`six hours at N=6: convective rain ${(cpuMean / area).toFixed(3)} mm/d in the mean (GPU ${(gpuMean / area).toFixed(3)}); ${C - kept.length} cells apart by more than 1e-3 of the largest cell's rain or whose OLR or absorbed sunlight parted by more than 1 W/m² at a step (${decisions.parted.size}), ${unexplained} of them outside two cells of the ${shared.parted.size} where a discrete decision parted (${Object.entries(shared.kinds).map(([kind, cells]) => `${kind} ${cells.size}`).join(', ')}; ${near.size} with their neighbours); over the rest per-cell rms ${convective.rmsRel.toExponential(1)}; large-scale at most ${Math.max(...cpu.moist.largeScaleRain).toExponential(1)} mm/d, its per-cell rms ${largeScale.rmsRel.toExponential(1)} of itself and ${largeScaleOfRain.toExponential(1)} of the rain`);
   const keptMean = (values) => kept.reduce((sum, i) => sum + cpu.mesh.areaCell[i] * values[i], 0);
   assert.ok(cpuMean / area > 0.01 && Math.abs(keptMean(gpu.moist.convectiveRain) - keptMean(cpu.moist.convectiveRain)) < 1e-3 * keptMean(cpu.moist.convectiveRain), `mean convective rain ${cpuMean / area} against ${gpuMean / area} mm/d`);
-  assert.ok(C - kept.length <= 0.02 * C, `${C - kept.length} cells apart`);
+  assert.ok(shared.parted.size <= C / 6 && near.size <= 0.8 * C, `a decision parted in ${shared.parted.size} cells, ${near.size} with their neighbours`);
+  assert.ok(unexplained <= 0.02 * C, `${unexplained} cells apart outside two cells of a parted decision (${C - kept.length} in all)`);
   assert.ok(convective.rmsRel < 1e-3 && largeScaleOfRain < 1e-3, `per-cell rms convective ${convective.rmsRel}, large-scale ${largeScaleOfRain} of the rain`);
 });
 
