@@ -2,19 +2,21 @@
 // saved state: loads the state as a continuing spin-up would (the options
 // as JSON in OCEAN, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE and LAND, see
 // scripts/figures/figureState.mjs), steps WARM steps (8) to settle, then
-// profiles STEPS steps (24, three ocean calls at the default cadence) with
+// profiles STEPS steps (32: two ocean calls and eight full radiation
+// calls at N=128 under js/cadence.module.js) with
 // js/gpu/profile.module.js: each step submitted alone and awaited, its
 // wall time from submission to completion, and with the device's
 // timestamp queries the GPU time of every compute pass, charged to the
 // kernels it dispatched and averaged per step (so the ocean's passes are
-// amortised over its call interval). Prints the step median, the empty
-// round trip, the summed GPU time and the ROWS (28) costliest passes.
+// amortised over its call interval, the radiation over its). Prints the
+// step median, the empty round trip, the summed GPU time and the ROWS (28)
+// costliest passes.
 //   node scripts/profileGpu.mjs [state.bin]
 import { gpuModelFrom, readState } from './figures/figureState.mjs';
 import { profileGpu } from '../js/gpu/profile.module.js';
 
 const file = process.argv[2] ?? new URL('../runs/eleven128_day1825.bin', import.meta.url).pathname;
-const WARM = Number(process.env.WARM ?? 8), STEPS = Number(process.env.STEPS ?? 24), ROWS = Number(process.env.ROWS ?? 28);
+const WARM = Number(process.env.WARM ?? 8), STEPS = Number(process.env.STEPS ?? 32), ROWS = Number(process.env.ROWS ?? 28);
 const saved = await readState(file);
 const model = await gpuModelFrom(saved);
 const dt = 1350 * 16 / saved.N;

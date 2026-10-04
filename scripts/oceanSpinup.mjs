@@ -34,7 +34,8 @@
 // of FORCING are looped, a whole number of years), RESTORE (30), TAG
 // (ocean<N>), OUT (runs/), KEEP (2), SNAPSHOT_DAYS (30; 0 saves at the
 // years' ends alone), OCEAN and RADIATION (JSON options as in spinup.mjs;
-// OCEAN's everySteps sets the ocean step), SYNC_CMD and STOP_AFTER_STEPS
+// OCEAN's everySteps sets the ocean step, by default from
+// js/cadence.module.js), SYNC_CMD and STOP_AFTER_STEPS
 // (as in spinup.mjs).
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
@@ -44,6 +45,7 @@ import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js
 import { savedDeckField, DECK_FIELDS, MOIST_FIELDS, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
 import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
+import { withCadence } from '../js/cadence.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { createForcedOcean } from '../js/gpu/forcing.gpu.js';
 import { decodeForcing, forcingDay } from '../js/forcing.module.js';
@@ -53,7 +55,7 @@ const N = Number(process.env.N ?? 64), TAG = process.env.TAG ?? `ocean${N}`, YEA
 const DAYS_PER_YEAR = Number(process.env.DAYS_PER_YEAR ?? 365), LOOP_DAYS = Number(process.env.LOOP_DAYS ?? DAYS_PER_YEAR), RESTORE = Number(process.env.RESTORE ?? 30);
 const SNAPSHOT_DAYS = Number(process.env.SNAPSHOT_DAYS ?? 30), STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname, FORCING = process.env.FORCING;
-const OCEAN = JSON.parse(process.env.OCEAN ?? '{}'), RADIATION = JSON.parse(process.env.RADIATION ?? '{}');
+const OCEAN = withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}') }, 1350 * 16 / N, N).ocean, RADIATION = JSON.parse(process.env.RADIATION ?? '{}');
 if (!FORCING) throw new Error('FORCING must name a directory of recorded forcing');
 if (LOOP_DAYS % DAYS_PER_YEAR) throw new Error(`LOOP_DAYS ${LOOP_DAYS} is not a whole number of ${DAYS_PER_YEAR}-day years`);
 const log = (line) => { console.log(line); appendFileSync(`${OUT}/${TAG}.log`, line + '\n'); };

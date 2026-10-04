@@ -40,7 +40,7 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
 export async function gpuModelFrom(saved) {
   const env = (name) => JSON.parse(process.env[name] ?? '{}');
   const model = await createGpuModel(new Grid(saved.N), {
-    topography: readTopography(), levels: savedLevels(saved), ocean: env('OCEAN'), ...withCadence({ radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt(saved.N)),
+    topography: readTopography(), levels: savedLevels(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt(saved.N), saved.N),
     moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), land: env('LAND'),
   });
   const { state } = model;

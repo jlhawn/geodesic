@@ -513,7 +513,7 @@ async function probe(message) {
     let test = null;
     try {
       status('testing the GPU…', 0.1);
-      test = await createGpuModel(new Grid(gpuN), { ...options, ...withCadence({}, 1350 * 16 / gpuN), ...(topography ? { subgrid: await loadSubgrid(gpuN) } : {}) });
+      test = await createGpuModel(new Grid(gpuN), { ...options, ...withCadence({}, 1350 * 16 / gpuN, gpuN), ...(topography ? { subgrid: await loadSubgrid(gpuN) } : {}) });
       prepare(test, gpuN);
       const step = 1350 * 16 / gpuN, queued = [];
       for (let n = 0; n < PROBE.warmup; n++) await test.step(step);
@@ -534,7 +534,7 @@ async function probe(message) {
   }
   if (!result.gpu || result.gpu.error) {
     status('testing the CPU…', 0.3);
-    const test = createModel(new Grid(PROBE.cpuN), { ...options, ...withCadence({}, 1350 * 16 / PROBE.cpuN), ...(topography ? { subgrid: await loadSubgrid(PROBE.cpuN) } : {}) });
+    const test = createModel(new Grid(PROBE.cpuN), { ...options, ...withCadence({}, 1350 * 16 / PROBE.cpuN, PROBE.cpuN), ...(topography ? { subgrid: await loadSubgrid(PROBE.cpuN) } : {}) });
     prepare(test, PROBE.cpuN);
     const step = 1350 * 16 / PROBE.cpuN;
     await test.step(step);
@@ -639,7 +639,7 @@ async function start(message) {
   else if (message.levels) options.levels = sigmaInterfaces(message.levels);
   const workers = message.workers ?? 1;
   const step = message.dt ?? 1350 * 16 / N;
-  Object.assign(options, withCadence(options, step));
+  Object.assign(options, withCadence(options, step, N));
   status(`building the N=${N} grid…`, 0.55);
   const grid = new Grid(N);
   status(gpuWanted ? 'compiling the GPU model…' : workers > 1 ? `starting ${workers} workers…` : 'building the model…', 0.65);
