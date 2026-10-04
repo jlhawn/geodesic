@@ -44,7 +44,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E], ['PHIS', C], ['SEW', MAX_EDGES * spongeCells], ['SNW', MAX_EDGES * spongeCells], ['SES', spongeEdges], ['SEE', spongeEdges], ['SEN', spongeEdges], ['GWX', 6 * waveCells], ['GWP', 4 * waveEdges], ['GWF', waveCells]]);
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K], ['SPG', K], ['SPMR', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
-  const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]);
+  const D = seq([['FLUX', KE], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]);
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['CLOUDK', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E], ['SUBTV', subcloudLayers * C], ...(heldRadiation ? HELD_RADIATION.map((name) => [name, name === 'RADP' ? 8 : name === 'RADSW' || name === 'RADDF' ? KC : C]) : [])]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['CLOW', C], ['CMID', C], ['CHIGH', C], ['CCU', C], ['CDECK', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, SPK, SPB, MI, MF, LV, S, D, PH, FR };
@@ -295,17 +295,6 @@ const KERNELS = {
   let piEdge = 0.5 * (IN[S_PI + MI[COE + 2 * e]] + IN[S_PI + MI[COE + 2 * e + 1]]);
   for (var k = 0; k < K; k++) { D[D_FLUX + k * E + e] = piEdge * IN[S_U + k * E + e]; }
 }`,
-  divergence: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let i = i32(id.x); if (i >= C) { return; }
-  var edges: array<i32, MAXE>; var signs: array<f32, MAXE>; var dvs: array<f32, MAXE>;
-  for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; edges[m] = e; signs[m] = f32(MI[ESC + MAXE * i + m]); dvs[m] = MF[F_DV + e]; }
-  let area = MF[F_AREA + i];
-  for (var k = 0; k < K; k++) {
-    var sum = 0.0;
-    for (var m = 0; m < MAXE; m++) { sum += signs[m] * D[D_FLUX + k * E + edges[m]] * dvs[m]; }
-    D[D_DIV + k * C + i] = sum / area;
-  }
-}`,
   vertexPi: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let v = i32(id.x); if (v >= V) { return; }
   var sum = 0.0;
@@ -332,18 +321,21 @@ const KERNELS = {
   cellTendency: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let pi = IN[S_PI + i]; let area = MF[F_AREA + i]; let dragHere = D[D_DRAG + i];
-  var edges: array<i32, MAXE>; var neighbours: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>; var dragThere: array<f32, MAXE>;
+  var edges: array<i32, MAXE>; var neighbours: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>; var dragThere: array<f32, MAXE>; var sides: array<f32, MAXE>;
   for (var m = 0; m < MAXE; m++) {
     let slot = MAXE * i + m;
     let e = MI[EOC + slot]; let j = MI[COC + slot]; let sign = f32(MI[ESC + slot]);
     edges[m] = e; neighbours[m] = j; signs[m] = sign;
-    dcs[m] = MF[F_DC + e]; dvs[m] = MF[F_DV + e] * abs(sign); dragThere[m] = D[D_DRAG + j];
+    dcs[m] = MF[F_DC + e]; dvs[m] = MF[F_DV + e] * abs(sign); dragThere[m] = D[D_DRAG + j]; sides[m] = MF[F_DV + e];
   }
   var upperFlow = D[D_PSD + i];
   for (var k = 0; k < K; k++) {
     let idx = k * C + i; let row = k * C; let flux0 = k * E;
     let fT = IN[S_TH + idx]; let fQ = IN[S_Q + idx]; let fC = IN[S_QC + idx];
     let top = LV[L_TOP + k]; let bottomLayer = k == K - 1;
+    var flow = 0.0;
+    for (var m = 0; m < MAXE; m++) { flow += signs[m] * D[D_FLUX + flux0 + edges[m]] * sides[m]; }
+    let divergence = flow / area;
     var kinetic = 0.0; var dragPower = 0.0; var divT = 0.0; var divQ = 0.0; var divC = 0.0;
     for (var m = 0; m < MAXE; m++) {
       let e = edges[m]; let j = neighbours[m];
@@ -358,7 +350,6 @@ const KERNELS = {
       divC += carried * (fC + IN[S_QC + row + j]) * dv;
     }
     D[D_PHI + idx] = D[D_GEO + idx] + kinetic / area;
-    let divergence = D[D_DIV + idx];
     let lowerFlow = D[D_PSD + (k + 1) * C + i];
     let layerMass = pi * LV[L_DS + k];
     var lowerT = 0.0; var lowerQ = 0.0; var lowerC = 0.0; var upperT = 0.0; var upperQ = 0.0; var upperC = 0.0;
@@ -674,14 +665,23 @@ const GW_SHARE = array<f32, GW_LID>(GW_LID_SHARES);
 const columnKernel = (diagnose) => `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let pi = IN[S_PI + i];
+  var edges: array<i32, MAXE>; var signs: array<f32, MAXE>; var dvs: array<f32, MAXE>;
+  for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; edges[m] = e; signs[m] = f32(MI[ESC + MAXE * i + m]); dvs[m] = MF[F_DV + e]; }
+  let area = MF[F_AREA + i];
+  var divergence: array<f32, K>;
   var sum = 0.0;
-  for (var k = 0; k < K; k++) { sum += D[D_DIV + k * C + i] * LV[L_DS + k]; }
+  for (var k = 0; k < K; k++) {
+    var flow = 0.0;
+    for (var m = 0; m < MAXE; m++) { flow += signs[m] * D[D_FLUX + k * E + edges[m]] * dvs[m]; }
+    divergence[k] = flow / area;
+    sum += divergence[k] * LV[L_DS + k];
+  }
   let dPi = -sum;
   OUT[S_PI + i] = dPi;
   var cumulative = 0.0;
   D[D_PSD + i] = 0.0;
   for (var k = 0; k < K; k++) {
-    cumulative += D[D_DIV + k * C + i] * LV[L_DS + k];
+    cumulative += divergence[k] * LV[L_DS + k];
     D[D_PSD + (k + 1) * C + i] = -cumulative - LV[L_SL + k] * dPi;
   }
   D[D_PSD + K * C + i] = 0.0;
@@ -870,7 +870,6 @@ export async function createGpuCore(mesh, {
   function tendencyPasses(pass, IN, OUT, last) {
     const g = group(IN, OUT);
     dispatch(pass, 'flux', g, E);
-    dispatch(pass, 'divergence', g, C);
     dispatch(pass, last ? 'columnLast' : 'column', g, C);
     dispatch(pass, 'vertexPi', g, V);
     dispatch(pass, 'pvVertex', g, V);
