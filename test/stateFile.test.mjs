@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gzipSync } from 'node:zlib';
+import { gzipSync, gunzipSync } from 'node:zlib';
+import { readFileSync, readdirSync } from 'node:fs';
 import { decodeState, encodeState, fetchState, stateName, listedStates, stateDay } from '../js/stateFile.module.js';
 
 const state = { N: 4, day: 12, pi: [1e5, 99999.5], theta: [[300, 301], [302, 303]] };
@@ -91,6 +92,123 @@ test("a binary state in the spin-up driver's layout, at a misaligned offset, or 
   assertClose(fromShifted.theta, binarySample().theta, 'shifted theta');
 
   await assert.rejects(decodeState(encoded.subarray(0, encoded.length - 4)), /runs past the end/);
+});
+
+/*
+ * fetchState against decodeState of the whole file, through a fetch whose
+ * bodies arrive in chunks of `size` bytes (or with no body at all).
+ */
+function sameBits(actual, expected, path = 'state') {
+  if (ArrayBuffer.isView(expected)) {
+    assert.ok(ArrayBuffer.isView(actual) && actual.constructor === expected.constructor && actual.length === expected.length, `${path}: ${actual?.constructor?.name} of ${actual?.length} against ${expected.constructor.name} of ${expected.length}`);
+    assert.ok(Buffer.from(actual.buffer, actual.byteOffset, actual.byteLength).equals(Buffer.from(expected.buffer, expected.byteOffset, expected.byteLength)), `${path} differs`);
+  } else if (expected && typeof expected === 'object') {
+    assert.deepEqual(Object.keys(actual).sort(), Object.keys(expected).sort(), `${path} keys`);
+    for (const key of Object.keys(expected)) sameBits(actual[key], expected[key], `${path}.${key}`);
+  } else assert.equal(actual, expected, path);
+}
+
+function chunkedFetch(files, size, { bodyless = false } = {}) {
+  return async (url) => {
+    const bytes = files[url];
+    if (!bytes) return new Response('', { status: 404 });
+    if (bodyless) return { ok: true, status: 200, body: null, headers: new Headers({ 'content-length': String(bytes.length) }), arrayBuffer: async () => bytes.slice().buffer, json: async () => JSON.parse(new TextDecoder().decode(bytes)) };
+    let at = 0;
+    return new Response(new ReadableStream({
+      pull(controller) {
+        if (at >= bytes.length) { controller.close(); return; }
+        controller.enqueue(bytes.slice(at, at + size));
+        at += size;
+      },
+    }), { headers: { 'content-length': String(bytes.length) } });
+  };
+}
+
+async function withFetch(fetcher, work) {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = fetcher;
+  try { return await work(); } finally { globalThis.fetch = realFetch; }
+}
+
+function partsOf(name, gz, cuts) {
+  const files = {}, parts = [];
+  let from = 0;
+  for (const [n, to] of [...cuts, gz.length].entries()) {
+    const file = `${name}.${String(n).padStart(3, '0')}`;
+    files[`http://h/runs/${file}`] = gz.subarray(from, to);
+    parts.push({ file, bytes: to - from });
+    from = to;
+  }
+  files[`http://h/runs/${name.replace(/\.(?:bin|json)\.gz$/, '')}.parts.json`] = new TextEncoder().encode(JSON.stringify({ parts }));
+  return files;
+}
+
+test('fetchState decodes small binary and JSON states, gzipped or not and in parts, as decodeState does, through chunks of any size', async () => {
+  const encoded = encodeState(binarySample(), { f64: ['pi', 'ocean.eta'] });
+  const gz = new Uint8Array(gzipSync(encoded)), jsonGz = new Uint8Array(gzipSync(text));
+  const files = {
+    'http://h/runs/s_day12.bin': encoded,
+    'http://h/runs/s_day12.bin.gz': gz,
+    'http://h/runs/a_state_day12.json': new TextEncoder().encode(text),
+    'http://h/runs/a_state_day12.json.gz': jsonGz,
+    ...partsOf('s_day12.bin.gz', gz, [5, 6, 40]),
+    ...partsOf('a_state_day12.json.gz', jsonGz, [1, 30]),
+  };
+  const expected = { bin: await decodeState(encoded), json: await decodeState(new TextEncoder().encode(text)) };
+  for (const size of [1, 2, 3, 7, 8, 9, 64, 4096]) {
+    for (const bodyless of size === 4096 ? [false, true] : [false]) {
+      await withFetch(chunkedFetch(files, size, { bodyless }), async () => {
+        for (const name of ['s_day12.bin', 's_day12.bin.gz', 's_day12.parts.json']) {
+          const seen = [];
+          sameBits(await fetchState(`http://h/runs/${name}`, (received, total) => seen.push([received, total])), expected.bin, `${name} in chunks of ${size}${bodyless ? ', no body' : ''}`);
+          assert.equal(seen.at(-1)[0], name === 's_day12.bin' ? encoded.length : gz.length);
+          assert.ok(seen.every(([, total]) => total === seen.at(-1)[0]));
+        }
+        for (const name of ['a_state_day12.json', 'a_state_day12.json.gz', 'a_state_day12.parts.json']) sameBits(await fetchState(`http://h/runs/${name}`), expected.json, `${name} in chunks of ${size}`);
+      });
+    }
+  }
+});
+
+test('fetchState rejects a missing part, a state cut short and one longer than its arrays', async () => {
+  const encoded = encodeState(binarySample(), { f64: ['pi'] });
+  const gz = new Uint8Array(gzipSync(encoded));
+  const files = partsOf('s_day12.bin.gz', gz, [10, 20]);
+  const missing = { ...files };
+  delete missing['http://h/runs/s_day12.bin.gz.001'];
+  const longer = new Uint8Array(encoded.length + 4);
+  longer.set(encoded);
+  const shortGz = new Uint8Array(gzipSync(encoded.subarray(0, encoded.length - 4)));
+  await withFetch(chunkedFetch({ ...missing, 'http://h/runs/short.bin': encoded.subarray(0, encoded.length - 4), 'http://h/runs/short.bin.gz': shortGz, 'http://h/runs/long.bin': longer, 'http://h/runs/long.bin.gz': new Uint8Array(gzipSync(longer)) }, 7), async () => {
+    await assert.rejects(fetchState('http://h/runs/s_day12.parts.json'), /s_day12\.bin\.gz\.001: 404/);
+    await assert.rejects(fetchState('http://h/runs/short.bin'), /runs past the end/);
+    await assert.rejects(fetchState('http://h/runs/short.bin.gz'), /runs past the end/);
+    await assert.rejects(decodeState(encoded.subarray(0, encoded.length - 4)), /runs past the end/);
+    await assert.rejects(fetchState('http://h/runs/long.bin'), /runs past the end/);
+    await assert.rejects(fetchState('http://h/runs/long.bin.gz'), /runs past the end/);
+  });
+});
+
+test("fetchState reads the page's default states in parts as decodeState reads the whole file, and eleven64's as one .bin.gz and as a .bin", async () => {
+  const runs = new URL('../runs/', import.meta.url);
+  const manifests = readdirSync(runs).filter((file) => file.endsWith('.parts.json')).sort();
+  assert.ok(manifests.length >= 2, `parts in runs/: ${manifests}`);
+  for (const manifest of manifests) {
+    const { parts } = JSON.parse(readFileSync(new URL(manifest, runs)));
+    const files = { [`http://h/runs/${manifest}`]: readFileSync(new URL(manifest, runs)) };
+    for (const { file } of parts) files[`http://h/runs/${file}`] = new Uint8Array(readFileSync(new URL(file, runs)));
+    const whole = () => Buffer.concat(parts.map(({ file }) => files[`http://h/runs/${file}`]));
+    const expected = await decodeState(whole());
+    assert.ok(expected.N >= 64 && expected.theta instanceof Float32Array);
+    await withFetch(chunkedFetch(files, 1 << 20), async () => sameBits(await fetchState(`http://h/runs/${manifest}`), expected, manifest));
+    if (!manifest.startsWith('eleven64')) continue;
+    const name = manifest.replace('.parts.json', ''), gz = whole();
+    const single = { [`http://h/runs/${name}.bin.gz`]: gz, [`http://h/runs/${name}.bin`]: new Uint8Array(gunzipSync(gz)) };
+    await withFetch(chunkedFetch(single, 65536 + 3), async () => {
+      sameBits(await fetchState(`http://h/runs/${name}.bin.gz`), expected, `${name}.bin.gz`);
+      sameBits(await fetchState(`http://h/runs/${name}.bin`), expected, `${name}.bin`);
+    });
+  }
 });
 
 test('a directory index lists JSON, parts and binary states, and their days', () => {
