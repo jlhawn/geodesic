@@ -86,7 +86,7 @@ if len(sys.argv) > 4 and d.get('types'):
         a.imshow(raster(land.astype(float)), extent=raster.extent, origin='lower', cmap=plt.matplotlib.colors.ListedColormap(['#10182b', '#3a3a3a']), vmin=0, vmax=1, interpolation='nearest')
         im = a.imshow(np.ma.masked_invalid(M), extent=raster.extent, origin='lower', cmap='inferno', vmin=0, vmax=top, interpolation='nearest')
         colourbar(fig, im, a, 'blink onsets per step', fraction=0.03, pad=0.01, extend='max')
-        a.set_title(f"{NAMES.get(name, name)}, range {t['range']} g/m²\n{100 * t['blinkShare']:.3f}% of cells per step, {100 * t['cellsBlinkingShare']:.2f}% of cells ever",
+        a.set_title(f"{NAMES.get(name, name)}, range {t['range']} g/m²\n{100 * t['blinkShare']:.4f}% of cells per step, {100 * t['cellsBlinkingShare']:.3f}% of cells ever",
                     color=TEXT, fontsize=10, loc='left')
     fig.suptitle(f"{title}: blinks of each cloud type through its own overlay, opacity 1 - exp(-g / (0.4 range)) moving > {d['jump']} in one step and back within three\n"
                  f"({d['transitions']} counted steps of {d['dt']:.2f} s; each map on its own scale)", color=TEXT, fontsize=12)

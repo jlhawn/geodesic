@@ -449,12 +449,12 @@ const types = Object.fromEntries(TYPE_NAMES.map((name) => {
   for (const a of seq) for (let i = 0; i < C; i++) if (a[i] > 0.05) present++;
   return [name, {
     range: CLOUD_RANGES[name], onsets: b.onsets.length,
-    blinkShare: round(share(b.onsets.length, C, b.counted), 5), cellsBlinkingShare: round(cellsBlinking.length / C, 4),
-    jumpShare: round(b.plain.reduce((x, y) => x + y, 0) / Math.max(1, b.plain.length), 5), visibleShare: round(present / (C * seq.length), 4),
+    blinkShare: round(share(b.onsets.length, C, b.counted), 7), cellsBlinkingShare: round(cellsBlinking.length / C, 6),
+    jumpShare: round(b.plain.reduce((x, y) => x + y, 0) / Math.max(1, b.plain.length), 7), visibleShare: round(present / (C * seq.length), 4),
     lagOneChange: lagOne(allCells, seq).change, lagOneChangeBlinking: cellsBlinking.length ? lagOne(cellsBlinking, seq).change : null,
     oneStepRunShare: finished ? round(single / finished, 3) : null, runs: finished,
     oneStepCloudyRunShare: (() => { const n = Object.values(r.on).reduce((x, y) => x + y, 0); return n ? round((r.on[1] ?? 0) / n, 3) : null; })(),
-    regions: Object.fromEntries(Object.entries(regionCells).map(([region, cells]) => { let n = 0; for (const i of cells) n += count[i]; return [region, round(share(n, cells.length, b.counted), 5)]; })),
+    regions: Object.fromEntries(Object.entries(regionCells).map(([region, cells]) => { let n = 0; for (const i of cells) n += count[i]; return [region, round(share(n, cells.length, b.counted), 7)]; })),
     count,
   }];
 }));
@@ -581,5 +581,5 @@ const percent = (v, n = 3) => (v === null ? '-' : (100 * v).toFixed(n));
 const TABLE_REGIONS = ['sea', 'land', 'tropics', 'itcz', 'northStormTrack', 'southStormTrack', 'sePacific', 'peru', 'namibia', 'california', 'nPacific'];
 console.log(`blinks by cloud type, each through its own overlay's opacity (N=${N}, ${STEPS} steps; shares in %):`);
 console.log(['type', 'range g/m²', 'visible', 'blink/step', 'cells ever', 'lag-1 Δ', 'lag-1 Δ blinking', '1-step runs', '1-step cloudy', ...TABLE_REGIONS].join('\t'));
-for (const [type, t] of Object.entries(types)) console.log([type, t.range, percent(t.visibleShare, 1), percent(t.blinkShare), percent(t.cellsBlinkingShare, 2), t.lagOneChange, t.lagOneChangeBlinking, t.oneStepRunShare, t.oneStepCloudyRunShare, ...TABLE_REGIONS.map((r) => percent(t.regions[r]))].join('\t'));
+for (const [type, t] of Object.entries(types)) console.log([type, t.range, percent(t.visibleShare, 1), percent(t.blinkShare, 4), percent(t.cellsBlinkingShare, 3), t.lagOneChange, t.lagOneChangeBlinking, t.oneStepRunShare, t.oneStepCloudyRunShare, ...TABLE_REGIONS.map((r) => percent(t.regions[r], 4))].join('\t'));
 console.log(`wrote ${outDir}/${name}.json, ${name}_plot.json, ${name}_map.png, ${name}_strip.png, ${name}_types.png`);

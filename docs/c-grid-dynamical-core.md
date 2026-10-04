@@ -2847,6 +2847,24 @@ linearizes it. A frame costs the page 0.02 ms and 160 KB at N=64
 (0.14 ms and 640 KB at N=128) against 0.9 ms and 720 KB (3.7 ms and
 2.9 MB) for colouring every vertex on the main thread.
 
+The cloud overlays have a row of their own: All clouds, the `cloud`
+field the Satellite view draws (white over grey at opacity
+1 − exp(−g / 40 g/m²), its legend to 100 g/m²), and each type on its
+own from its own frame field, Low, Mid and High cloud (`cloudLow`,
+`cloudMid`, `cloudHigh`: the resolved condensate in the layers whose
+midpoint pressure lies below 800 hPa, between 800 and 500, above 500),
+Cumulus (`cloudCumulus`, the plumes' cover × condensate) and
+Stratocumulus deck (`cloudDeck`, the mixed-layer deck's cover × water
+path); `cloud` is their sum, and `test/frameGpu.test.mjs` checks each
+type against the state and against the CPU engine. Each type paints the
+same curve stretched to its own range (`CLOUD_RANGES` in
+`js/frames.module.js`), the opacity 1 − exp(−g / (0.4 × range)), so all
+the legends share their stops; the ranges sit near the 95th percentile
+of the cells holding each type on eleven64 and eleven128 at day 1825:
+low 200 g/m² (175 and 221), mid 500 (486, 589), high 400 (379, 358),
+cumulus 40 (35, 39) and deck 150 (150 at both, the deck's water-path
+cap). Total cloud water stays a palette overlay in the rain row.
+
 The browser draws the globe on the same GPU, so the worker must not let
 its queue run ahead of the page's frames. With no wait on the device, a
 frame that asked for nothing let the worker queue steps far faster than
@@ -10951,6 +10969,8 @@ boxes) was the deck's: its carried height h rested within 1–2 m of a
 layer's midpoint, and the slab of whole layers whose midpoints lie below
 h took that layer in on one step and out on the next, the water path
 going between 150 and 0 g/m² with the gate above 0.6 throughout.
+Each cloud type's blinking on its own overlay is in the per-type table
+at the end of M22 (`types` in the script's JSON).
 
 The scheme. `boundaryCondensation` 'cloudLayer' (the default here, until
 'uniform' replaced it the same day, below): the run of
@@ -11159,6 +11179,32 @@ days at N=64 from eleven64_day1825 (days 1826–1828, the parent → 'cloudLayer
 2.70 → 2.79, 2.78, 2.73 → 2.81, 2.81, 2.75 mm/d; ASR 232.1, 233.6, 234.6
 → 229.5, 230.6, 231.2 → 228.7, 229.9, 230.3; OLR 229.9, 229.7, 230.6 →
 229.6, 229.3, 230.1 → 229.5, 229.1, 229.9 W/m².
+
+**Blinking by cloud type (Oct 3).** `scripts/cloudFlicker.mjs` also
+counts the blinks of each type's own frame field through its own
+overlay (the page's curve stretched to the type's range): the baseline
+at main's physics (f319996), from the same states and steps as above,
+N=128 / N=64. The `cloud` row reproduces the combined numbers.
+
+| type (range, g/m²) | cells visible | blinks per step | cells ever | lag-1 of the step change, all / blinking | one-step runs, all / cloudy |
+|---|---|---|---|---|---|
+| all clouds (100) | 79.8 / 85.4 % | 0.162 / 0.091 % | 2.25 / 2.75 % | −0.44 / −0.36, −0.53 / −0.52 | 64 / 62 %, 86 / 88 % |
+| low (200) | 52.1 / 63.3 % | 5 / 8 onsets | 0.002 / 0.017 % | 0.31 / 0.20 | — |
+| mid (500) | 31.5 / 33.0 % | none | none | 0.58 / 0.48 | — |
+| high (400) | 23.2 / 25.1 % | 0 / 1 onset | — | 0.44 / 0.37 | — |
+| cumulus (40) | 43.8 / 51.6 % | 1.18 / 1.79 % | 13.2 / 30.4 % | −0.48 / −0.49, −0.51 / −0.49 | 58 / 53 %, 69 / 65 % |
+| deck (150) | 4.8 / 4.3 % | 0.0085 / 0.0082 % | 0.07 / 0.17 % | −0.33 / −0.21, −0.54 / −0.48 | 64 / 55 %, 61 / 48 % |
+
+By region (blinks per cell and step, N=128 / N=64), the cumulus: sea
+1.37 / 1.96 %, land 0.71 / 1.37, tropics 1.63 / 2.56, ITCZ box 2.11 /
+2.94, storm tracks 0.66 / 1.08 (north) and 0.98 / 0.94 (south), SE
+Pacific 0.88 / 1.34, Peru 0.23 / 0.45, Namibia 0 / 0.03, California 0 /
+0.57, N Pacific 0.54 / 0.82; the deck: Peru 0 / 0.059, Namibia 0.105 /
+0.085, California 0.167 / 0.027, SE Pacific 0.010 / 0.010, none on land
+or in the ITCZ. The resolved cloud does not blink at any height on its
+own scale; the cumulus does, 30 % of all cells blinking at least once
+in the 128 steps at N=64 (13 % in 64 at N=128), and the combined overlay
+sees only the part of it that crosses 0.4 on the 40 g/m² curve.
 
 ### M23 — The equatorial ocean — in progress
 
