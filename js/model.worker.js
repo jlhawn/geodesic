@@ -191,8 +191,8 @@ async function hold(work, { resume = false } = {}) {
 
 /*
  * The GPU draws the page's globe too, and it takes queued work in order,
- * so the worker keeps at most QUEUE_DEPTH steps in flight: after queuing
- * a step it waits for the one before to finish, which keeps the device
+ * so the worker keeps at most QUEUE_DEPTH frames' steps in flight: after
+ * queuing a frame's batch it waits for the one before to finish, which keeps the device
  * busy without letting the queue run ahead of the page's frames. The page
  * reports once a second how many of its frames came late for want of the
  * GPU, and the pacer (js/pace.module.js) turns that into an idle pause:

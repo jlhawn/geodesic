@@ -1,5 +1,5 @@
 /*
- * The idle pause the model worker takes between GPU steps, chosen from
+ * The idle pause the model worker takes between its frames' GPU steps, chosen from
  * the page's once-a-second count of frames that came late for want of
  * the GPU. A pause costs simulation speed, so it is worth taking only when
  * the model's GPU work is what makes frames late. After `raise` late

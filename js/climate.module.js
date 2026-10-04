@@ -1141,7 +1141,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       `Device: ${r.device}`,
       `Browser: ${navigator.userAgent}`,
       `Screen: ${innerWidth}×${innerHeight} CSS px at ${devicePixelRatio}×, a frame every ${pacing.interval.toFixed(1)} ms`,
-      `Running before: ${rateBefore === null ? 'paused or still measuring' : `${rateBefore.toFixed(0)} simulated hours per minute`}, pause ${r.pause} ms, ${r.queueDepth} steps in flight`,
+      `Running before: ${rateBefore === null ? 'paused or still measuring' : `${rateBefore.toFixed(0)} simulated hours per minute`}, pause ${r.pause} ms, ${r.queueDepth} frames' steps in flight`,
       `Step, one at a time: ${ms(r.stepMedian)} median (${ms(r.stepMin)} to ${ms(r.stepMax)})`,
       r.gpuMs === null ? 'GPU timestamps: not offered by this browser' : `GPU time per step, from timestamps: ${ms(r.gpuMs)}`,
       `Empty round trip to the GPU: ${ms(r.roundTrip)}`,
