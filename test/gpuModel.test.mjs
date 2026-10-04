@@ -42,7 +42,8 @@ function cloudDecisions(C, limit = 1) {
   };
 }
 async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, options = {}, moist = {}, boundaryLayer = {}, each = null) {
-  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus, ...options }, moist, boundaryLayer, surface: { exchange: options.surfaceExchange ?? 'roughness' } });
+  const { dragEvery = 1, ...radiation } = options;
+  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus, ...radiation }, moist, boundaryLayer, surface: { exchange: options.surfaceExchange ?? 'roughness' }, dragEvery });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
@@ -484,6 +485,76 @@ test('with the radiation held between full calls every fourth step, twelve GPU s
   assert.ok(mu.maxDiff < 1e-6 && escape.maxDiff < 1e-4 && share.maxDiff < 1e-4, `cosine ${mu.maxDiff}, escape ${escape.maxDiff} at ${escape.at}, shares ${share.maxDiff} at ${share.at}`);
   assert.ok(olr.rmsRel < 1e-5 && sw.rmsRel < 2e-5, `OLR rms ${olr.rmsRel}, surface shortwave rms ${sw.rmsRel}`);
   assert.ok(theta.rmsRel < 1e-4 && ts.maxDiff < 0.02, `θ rms ${theta.rmsRel}, Ts max ${ts.maxDiff} K at ${ts.at}`);
+});
+
+test('with the gravity-wave drag laid every fourth step, twelve GPU steps track the CPU model and its energy budget, both engines holding the accelerations between', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const laid = [];
+  const { model, state, physics } = await pair(6, 12, 900, 0, false, { dragEvery: 4 }, {}, {}, (cpu, device) => { laid.push([Float64Array.from(cpu.gravityWaves.east), Float32Array.from(device.GWE.subarray(0, cpu.core.K * cpu.mesh.nCells))]); });
+  const read = model.diagnostics(), d = { ...read, ...read.instantaneous };
+  const C = model.mesh.nCells, K = model.core.K;
+  for (let n = 1; n < laid.length; n++) {
+    for (const engine of [0, 1]) {
+      const same = laid[n][engine].every((x, at) => x === laid[n - 1][engine][at]);
+      assert.equal(same, n % 4 !== 0, `${engine ? 'GPU' : 'CPU'} step ${n}: the accelerations ${same ? 'held' : 'laid anew'}`);
+    }
+  }
+  let worst = 0, scale = 0, rms = 0;
+  for (let x = 0; x < K * C; x++) {
+    for (const [cpu, gpu] of [[model.gravityWaves.east[x], physics.GWE[x]], [model.gravityWaves.north[x], physics.GWN[x]]]) { worst = Math.max(worst, Math.abs(cpu - gpu)); scale = Math.max(scale, Math.abs(cpu)); }
+    rms += (model.gravityWaves.east[x] - physics.GWE[x]) ** 2;
+  }
+  rms = Math.sqrt(rms / (K * C));
+  let area = 0, ts = 0, abs = 0, atmosphere = 0, olr = 0;
+  for (let i = 0; i < C; i++) { const a = model.mesh.areaCell[i]; area += a; ts += a * state[3][i]; abs += a * physics.ABS[i]; atmosphere += a * physics.ATMSW[i]; olr += a * physics.OLR[i]; }
+  ts /= area; abs /= area; atmosphere /= area; olr /= area;
+  const theta = stats(model.state[1], state[1]), u = stats(model.state[2], state[2]);
+  console.log(`twelve steps at N=6, the drag laid every 4: accelerations of the last laying differ by ${(86400 * worst).toExponential(1)} m/s/day at most (rms ${(86400 * rms).toExponential(1)}) of up to ${(86400 * scale).toFixed(2)}; mean Ts ${d.meanSurfaceT.toFixed(3)} vs ${ts.toFixed(3)} K; solar ${d.absorbedSolar.toFixed(2)} vs ${abs.toFixed(2)}, in the atmosphere ${d.atmosphereSolar.toFixed(2)} vs ${atmosphere.toFixed(2)}; OLR ${d.outgoingLongwave.toFixed(2)} vs ${olr.toFixed(2)} W/m²; θ rms ${theta.rmsRel.toExponential(1)}; wind max ${u.maxDiff.toExponential(1)} m/s`);
+  assert.ok(scale > 0 && rms < 1e-3 * scale, `rms difference ${rms} against ${scale}`);
+  assert.ok(Math.abs(d.meanSurfaceT - ts) < 0.02, `mean Ts ${d.meanSurfaceT} vs ${ts}`);
+  assert.ok(Math.abs(d.absorbedSolar - abs) < 0.5, `absorbed solar ${d.absorbedSolar} vs ${abs}`);
+  assert.ok(d.atmosphereSolar > 0 && Math.abs(d.atmosphereSolar - atmosphere) < 0.5, `absorbed in the atmosphere ${d.atmosphereSolar} vs ${atmosphere}`);
+  assert.ok(Math.abs(d.outgoingLongwave - olr) < 0.5, `OLR ${d.outgoingLongwave} vs ${olr}`);
+  assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
+});
+
+test('with the drags laid every fourth step over terrain, both engines lay the same blocking and wave drag, take the same stress while they hold them, and lay them anew at the fifth step; laid every 16 steps, the waves\' limiter takes the 16 steps alike in both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuModel } = await import('../js/gpu/model.gpu.js');
+  const { readRanges } = await import('../js/gpu/device.module.js');
+  const { topographyFromInt16 } = await import('../js/geography.module.js');
+  const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
+  const { readFileSync } = await import('node:fs');
+  const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
+  const options = { topography, levels: sigmaInterfaces('bl34'), ocean: false }, dt = 1350;
+  const prepare = (model) => {
+    const init = initializeState(model, {});
+    for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+    model.seaIce.load(model.state[6]);
+    if (model.load) model.load();
+    model.land.initialize();
+    return model;
+  };
+  const apart = (a, b) => { let worst = 0, scale = 0; for (let n = 0; n < b.length; n++) { worst = Math.max(worst, Math.abs(a[n] - b[n])); scale = Math.max(scale, Math.abs(b[n])); } return worst / scale; };
+  const laid = [];
+  for (const [dragEvery, steps] of [[4, 5], [16, 1]]) {
+    const cpu = prepare(createModel(new Grid(16), { ...options, dragEvery })), gpu = prepare(await createGpuModel(new Grid(16), { ...options, dragEvery }));
+    const C = cpu.mesh.nCells, E = cpu.mesh.nEdges, K = cpu.core.K, PH = gpu.gpu.layout.PH, o = cpu.orography;
+    let before = null;
+    for (let n = 0; n < steps; n++) {
+      cpu.step(dt); await gpu.step(dt); await gpu.settle();
+      const [beta, wave, stress, launch] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, [['OBETA', K * C], ['OWAVE', K * C], ['OSTRESS', E], ['OLAUNCH', C]].map(([name, length]) => ({ offset: PH[name], length })));
+      const now = [Float64Array.from(o.beta), Float64Array.from(o.wave), Float32Array.from(beta), Float32Array.from(wave)];
+      if (before) for (let a = 0; a < 4; a++) assert.equal(now[a].every((x, at) => x === before[a][at]), n % 4 !== 0, `${a < 2 ? 'CPU' : 'GPU'} step ${n}: ${a % 2 ? 'wave drag' : 'blocking'} ${n % 4 ? 'held' : 'laid anew'}`);
+      if (n === 0) laid.push(now[1]);
+      before = now;
+      const report = { beta: apart(beta, o.beta), wave: apart(wave, o.wave), stress: apart(stress, o.stress), launch: apart(launch, o.launch) };
+      console.log(`step ${n} at N=16 on bl34, the drags laid every ${dragEvery}: engines apart, largest difference over largest value: ${Object.entries(report).map(([k, v]) => `${k} ${v.toExponential(1)}`).join(', ')}`);
+      if (n < 4) for (const [k, v] of Object.entries(report)) assert.ok(v < 1e-3, `every ${dragEvery}, step ${n}: ${k} ${v}`);
+    }
+    gpu.destroy();
+  }
+  const limited = laid[0].reduce((count, x, at) => count + (x !== laid[1][at] ? 1 : 0), 0);
+  console.log(`the limiter over 16 steps cuts the first laying's wave drag in ${limited} layer values that over 4 steps it leaves`);
+  assert.ok(limited > 0, 'the limiter over 16 steps binds');
 });
 
 test('the subcloud memory a GPU model carries is its lowest layers\' alone whether or not the radiation is held, so states pass between the two', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

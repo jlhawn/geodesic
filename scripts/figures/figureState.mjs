@@ -34,13 +34,14 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
  * A GPU model on the state's grid and level set with the run's options
  * (OCEAN, RADIATION, MOIST, BOUNDARY_LAYER, SURFACE, LAND as JSON in the
  * environment; the radiation's clear-sky pass on unless RADIATION turns
- * it off, and the cadences of js/cadence.module.js at the state's dt),
+ * it off, and the cadences of js/cadence.module.js at the state's dt,
+ * the drags' unless DRAG_EVERY gives it in steps),
  * loaded with everything a whole-day snapshot carries.
  */
 export async function gpuModelFrom(saved) {
   const env = (name) => JSON.parse(process.env[name] ?? '{}');
   const model = await createGpuModel(new Grid(saved.N), {
-    topography: readTopography(), levels: savedLevels(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt(saved.N), saved.N),
+    topography: readTopography(), levels: savedLevels(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, dt(saved.N), saved.N),
     moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), land: env('LAND'),
   });
   const { state } = model;

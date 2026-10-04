@@ -12,7 +12,7 @@ export function orographyConstants(o) {
   const c = { ...OROGRAPHY_DEFAULTS, ...(on ? o.orography : {}) };
   const form = { ...FORM_DRAG_DEFAULTS, ...(o.formDrag || {}) };
   return `
-const OROGRAPHY: bool = ${on}; const ORO_CD: f32 = ${c.blockingDrag}; const ORO_G: f32 = ${c.waveDrag}; const ORO_HN: f32 = ${c.criticalHeight}; const ORO_RIC: f32 = ${c.criticalRichardson}; const ORO_HEFF: f32 = ${c.effectiveHeight};
+const OROGRAPHY: bool = ${on}; const ORO_CD: f32 = ${c.blockingDrag}; const ORO_G: f32 = ${c.waveDrag}; const ORO_HN: f32 = ${c.criticalHeight}; const ORO_RIC: f32 = ${c.criticalRichardson}; const ORO_HEFF: f32 = ${c.effectiveHeight}; const ORO_INTERVAL: f32 = ${(o.dragEvery ?? 1).toFixed(1)};
 const FORM_DRAG: bool = ${!!o.formDrag}; const TOFD_SCALE: f32 = ${formDragScale(form)}; const TOFD_DECAY: f32 = ${form.decayHeight};
 `;
 }
@@ -29,24 +29,25 @@ fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   if (!OROGRAPHY) { return; }
+  let mu = PH[PH_OSTD + i]; let sigma = PH[PH_OSLP + i];
+  if (!(mu > 0.0) || !(sigma > 0.0)) { return; }
   for (var k = 0; k < K; k++) { PH[PH_OBETA + k * C + i] = 0.0; PH[PH_OWAVE + k * C + i] = 0.0; }
   PH[PH_ODIR + 3 * i] = 0.0; PH[PH_ODIR + 3 * i + 1] = 0.0; PH[PH_ODIR + 3 * i + 2] = 0.0;
   PH[PH_OBLOCK + i] = 0.0; PH[PH_OLAUNCH + i] = 0.0;
-  let mu = PH[PH_OSTD + i]; let sigma = PH[PH_OSLP + i];
-  if (!(mu > 0.0) || !(sigma > 0.0)) { return; }
   let gamma = PH[PH_OANI + i]; let theta0 = PH[PH_OORI + i];
   let pi = IN[S_PI + i]; let dt = P[0]; let bottom = K - 1;
   let xc = vec3<f32>(MF[F_XC + 3 * i], MF[F_XC + 3 * i + 1], MF[F_XC + 3 * i + 2]);
   let ex = vec3<f32>(-xc.y, xc.x, 0.0) / length(xc.xy);
   let ny = cross(xc, ex);
   var z: array<f32, K>; var p: array<f32, K>; var rho: array<f32, K>; var th: array<f32, K>; var ue: array<f32, K>; var vn: array<f32, K>;
+  var edges = edgesOf(i);
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     z[k] = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV;
     p[k] = pi * LV[L_SM + k];
     th[k] = IN[S_TH + idx];
     rho[k] = p[k] / (RGAS * th[k] * D[D_EXM + idx]);
-    let w = cellWind(i, k);
+    let w = edgeWind(&edges, i, k);
     ue[k] = dot(w, ex); vn[k] = dot(w, ny);
   }
   var weight = 0.0; var uL = 0.0; var vL = 0.0; var rhoL = 0.0; var nL2 = 0.0;
@@ -156,7 +157,7 @@ fn oroInterface(k: i32, z: ptr<function, array<f32, K>>) -> f32 {
     var accel = (tau[k + 1] - tau[k]) / mass + carried / mass;
     carried = 0.0;
     if (dt > 0.0) {
-      let limit = max(0.0, ue[k] * tx + vn[k] * ty) / dt;
+      let limit = max(0.0, ue[k] * tx + vn[k] * ty) / (dt * ORO_INTERVAL);
       if (accel > limit) { carried = (accel - limit) * mass; accel = limit; }
     }
     PH[PH_OWAVE + k * C + i] = -accel;

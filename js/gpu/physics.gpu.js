@@ -198,6 +198,20 @@ fn cellWind(i: i32, k: i32) -> vec3<f32> {
   }
   return w / MF[F_AREA + i];
 }
+fn edgesOf(i: i32) -> array<i32, MAXE> {
+  var e: array<i32, MAXE>;
+  for (var m = 0; m < MAXE; m++) { e[m] = MI[EOC + MAXE * i + m]; }
+  return e;
+}
+fn edgeWind(edges: ptr<function, array<i32, MAXE>>, i: i32, k: i32) -> vec3<f32> {
+  var w = vec3<f32>(0.0, 0.0, 0.0);
+  for (var m = 0; m < MAXE; m++) {
+    let e = (*edges)[m];
+    let s = abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + e] * MF[F_DV + e] * IN[S_U + k * E + e];
+    w += s * vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
+  }
+  return w / MF[F_AREA + i];
+}
 fn band(fraction: f32, eps: ptr<function, array<f32, K>>, temperature: ptr<function, array<f32, K>>, netFlux: ptr<function, array<f32, K>>, surfaceEmission: f32) -> vec2<f32> {
   var down = 0.0;
   for (var k = 0; k < K; k++) {
@@ -1476,7 +1490,8 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   let i = i32(id.x); if (i >= C) { return; }
   diagnoseColumnMid(i);
   let pi = IN[S_PI + i]; let base = (K - 1) * C + i;
-  let bottomWind = cellWind(i, K - 1);
+  var edges = edgesOf(i);
+  let bottomWind = edgeWind(&edges, i, K - 1);
   let speed = length(bottomWind);
   let friction = sqrt(PH[PH_DRAG + i]) * xWind(i, speed);
   let zb = (D[D_GEO + base] + LV[L_GABS + K - 1]) / GRAV;
@@ -1485,7 +1500,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     if (found) { continue; }
     let idx = k * C + i;
     let z = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV;
-    let dw = cellWind(i, k) - bottomWind;
+    let dw = edgeWind(&edges, i, k) - bottomWind;
     let shear = dot(dw, dw) + 100.0 * friction * friction;
     let ri = GRAV * (D[D_THV + idx] - D[D_THV + base]) * (z - zb) / (D[D_THV + base] * shear);
     if (ri > RIC) { depth = zPrev + (z - zPrev) * (RIC - riPrev) / (ri - riPrev); found = true; }
@@ -1499,12 +1514,12 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   PH[PH_ENTRAIN + i] = 0.0;
   let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
   if (IMPLICIT_DRAG) { PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * PH[PH_DRAG + i] * xWind(i, speed); }
-  if (FORM_DRAG) {
+  if (FORM_DRAG && PH[PH_OFLT + i] > 0.0) {
     let sflt = PH[PH_OFLT + i];
     for (var k = KTOP; k < K; k++) {
       var rate = 0.0;
       let z = (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV;
-      if (sflt > 0.0 && z > 0.0) { rate = TOFD_SCALE * sflt * sflt * exp(-pow(z / TOFD_DECAY, 1.5)) * pow(z, -1.2) * length(cellWind(i, k)); }
+      if (sflt > 0.0 && z > 0.0) { rate = TOFD_SCALE * sflt * sflt * exp(-pow(z / TOFD_DECAY, 1.5)) * pow(z, -1.2) * length(edgeWind(&edges, i, k)); }
       PH[PH_TOFD + (k - KTOP) * C + i] = rate;
     }
   }

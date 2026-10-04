@@ -37,7 +37,9 @@ import { cellVector } from '../dynamics/operators.module.js';
  *    linearly in pressure over that depth (4.33, 4.35); what reaches the
  *    model top goes into the top layer. A layer takes
  *    ∂u/∂t = −g ∂τ/∂p along the stress, at most what stops its own wind
- *    along it within the step, the rest passing to the layer above.
+ *    along it within the interval the model holds the drag for (the step,
+ *    or dragEvery steps, see js/model.module.js), the rest passing to the
+ *    layer above.
  *
  * Constants, IFS Cy47r3 Part IV Chapter 4 for fields defined as its
  * §11.3.4 defines them (5 km data less the target orography): blockingDrag
@@ -63,7 +65,7 @@ export const LOTT_MILLER = { blockingDrag: 1, waveDrag: 1, criticalHeight: 0.5, 
  * interface pressures. Writes the blocking rate out.beta (s⁻¹), the wave
  * acceleration out.wave (m/s², along out.direction, the stress's unit
  * vector east and north), the blocking height, the launched stress and
- * the stress the column takes; with dt > 0 the wave's limit per step.
+ * the stress the column takes; with dt > 0 the wave's limit over dt.
  */
 export function orographicColumn(sub, column, options = OROGRAPHY_DEFAULTS, out = null, dt = 0) {
   const { deviation: mu, anisotropy: gamma, orientation: theta0, slope: sigma } = sub;

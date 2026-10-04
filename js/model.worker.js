@@ -612,6 +612,7 @@ async function restore(snapshot) {
   placeIce(model, saved, currentN);
   placeDeck(model, saved, currentN);
   if (model.load) model.load();
+  if (model.dragsDue) model.dragsDue();
   if (model.ocean) { if (saved.ocean) model.ocean.load(saved.ocean, model.state[3], model.state[6]); else model.ocean.initialize(model.state[3], model.state[6]); }
   placeLand(model, saved, currentN);
   placeEnergy(model, saved);
