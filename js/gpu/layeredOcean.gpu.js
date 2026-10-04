@@ -7,7 +7,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * The layered ocean of ocean/layered.module.js on the GPU: a bulk mixed
  * layer over interior isopycnal layers, each a TRiSK shallow-water layer
  * carrying thickness, edge velocity, heat h·T and salt h·S. The RK4
- * baroclinic state (h, u, h·T, h·S for all L layers) lives in its own
+ * baroclinic state (h, u, h·T, h·S for all L layers) lives in a
  * ping-pong buffer set (S/T/K1-K4); everything else the step needs
  * (edge thicknesses, PV, the interior potential, the ∇⁴ closure scratch,
  * the barotropic sub-stepping state, the surface staging) lives in one
@@ -36,7 +36,11 @@ export const OCEAN_DEFAULTS = {
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
 
-function seq(names) { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; }
+export function oceanStateLength(C, E, options = {}) {
+  return ({ ...OCEAN_DEFAULTS, ...options }.densities.length + 1) * (3 * C + E);
+}
+
+function seq(names) { const out = {}; let off = 0; for (const [name, n] of names) { for (const alias of [].concat(name)) out[alias] = off; off += n; } out.total = off; return out; }
 
 function oceanKernels(o) {
   const { L, C, E, V, OS, OD, B } = o;
@@ -382,16 +386,16 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
 }`,
     /*
      * The eddy transport of ocean/layered.module.js, one edge a thread,
-     * leaving each class's volume, heat and salt fluxes in the FLUX, LAPA and
-     * LAPB scratch, which the tendency alone uses and refills; P[0] is the
-     * step and P[1] the stability limit on κ.
+     * leaving each class's volume, heat and salt fluxes in the EDDYV, EDDYQ
+     * and EDDYW scratch (see OD's layout); P[0] is the step and P[1] the
+     * stability limit on κ.
      */
     oEddyFlux: `${constLine('EDDYTOP', o.eddyTaperDepth)} ${constLine('EDDYBOTTOM', EDDY_BOTTOM_TAPER)} ${constLine('EDDYSLACK', EDDY_SLACK)}
 fn eddyAllowance(k: i32, i: i32) -> f32 {
   return (max(0.0, IN[hOff(k) + i] - EPSO) + EDDYSLACK) * MF[F_AREA + i] / (f32(MI[NEC + i]) * P[0]);
 }
 ${K}  let e = ${idx}; if (e >= E) { return; }
-  for (var k = 0; k < L; k++) { OD[O_FLUX + k * E + e] = 0.0; OD[O_LAPA + k * E + e] = 0.0; OD[O_LAPB + k * E + e] = 0.0; }
+  for (var k = 0; k < L; k++) { OD[O_EDDYV + k * E + e] = 0.0; OD[O_EDDYQ + k * E + e] = 0.0; OD[O_EDDYW + k * E + e] = 0.0; }
   let kappa = min(OD[O_EDDYK + e], P[1]);
   if (OD[O_EMASK + e] < 0.5 || !(kappa > 0.0)) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
@@ -444,9 +448,9 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
     if (f == 0.0) { continue; }
     let d = select(b, a, f > 0.0);
     let hd = IN[hOff(k) + d];
-    OD[O_FLUX + k * E + e] = f;
-    OD[O_LAPA + k * E + e] = f * IN[qOff(k) + d] / hd;
-    OD[O_LAPB + k * E + e] = f * IN[wOff(k) + d] / hd;
+    OD[O_EDDYV + k * E + e] = f;
+    OD[O_EDDYQ + k * E + e] = f * IN[qOff(k) + d] / hd;
+    OD[O_EDDYW + k * E + e] = f * IN[wOff(k) + d] / hd;
   }
 }`,
     oEddyApply: `${K}  let n = ${idx}; if (n >= L * C) { return; }
@@ -455,7 +459,7 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
   var volume = 0.0; var heat = 0.0; var salt = 0.0;
   for (var m = 0; m < MI[NEC + i]; m++) {
     let e = MI[EOC + MAXE * i + m]; let s = f32(MI[ESC + MAXE * i + m]);
-    volume += s * OD[O_FLUX + k * E + e]; heat += s * OD[O_LAPA + k * E + e]; salt += s * OD[O_LAPB + k * E + e];
+    volume += s * OD[O_EDDYV + k * E + e]; heat += s * OD[O_EDDYQ + k * E + e]; salt += s * OD[O_EDDYW + k * E + e];
   }
   let factor = P[0] / MF[F_AREA + i];
   IN[hOff(k) + i] -= factor * volume; IN[qOff(k) + i] -= factor * heat; IN[wOff(k) + i] -= factor * salt;
@@ -749,7 +753,7 @@ const oceanReducedSetup = (thermoclineLayers) => `    let a = MF[F_AREA + i];
       transport = max(transport, abs(select(1.0, sill / sum, sum > sill) * flow) * MF[F_DV + e]);
     }`;
 
-export function createLayeredOcean(core, options = {}) {
+export function createLayeredOcean(core, { registers = null, ...options } = {}) {
   const o = { ...OCEAN_DEFAULTS, ...options };
   if (o.closureTokens !== 'interior' && o.closureTokens !== 'beside') throw new Error(`closureTokens is 'interior' or 'beside', not ${o.closureTokens}`);
   o.closureRings = o.closureTokens === 'interior' && o.closureFill > 0;
@@ -788,9 +792,23 @@ export function createLayeredOcean(core, options = {}) {
     }
     drainStart[C] = drainCells.length;
   }
+  /*
+   * The L-sized scratch lives within one tendency (tendency below, in
+   * dispatch order): FLUX from oFlux to oCellTendency, LAPA from
+   * oClosureFill (or the first oLapVelocity without it) to the second
+   * oDivCurl and LAPB from the second oLapVelocity to oMomentum share a
+   * slot; AVORT from oVertexVort to oEdgePV, CURLS from each oDivCurl to
+   * the oLapVelocity after it and PHI from oKineticPhi, dispatched just
+   * before oMomentum, to oMomentum share another. With the closure's
+   * rings FLUX marks the fitted edges and LAPA and LAPB hold the rings
+   * until oClosureBack2, so those three stay apart. After the combine the
+   * eddy passes leave their fluxes in EDDYV, EDDYQ and EDDYW over FLUX,
+   * HEDGE and QE (over FLUX, LAPA and LAPB with the rings), which
+   * oEdgeThickness and every tendency recompute before reading them.
+   */
   const OD = seq([
-    ['FLUX', L * E], ['HEDGE', L * E], ['AVORT', L * V], ['QE', L * E], ['PHI', L * C],
-    ['LAPA', L * E], ['LAPB', L * E], ['DIVS', L * C], ['CURLS', L * V],
+    ...(o.closureRings ? [[['FLUX', 'EDDYV'], L * E], [['LAPA', 'EDDYQ'], L * E], [['LAPB', 'EDDYW'], L * E]] : [[['FLUX', 'LAPA', 'LAPB', 'EDDYV'], L * E]]),
+    [o.closureRings ? 'HEDGE' : ['HEDGE', 'EDDYQ'], L * E], [['AVORT', 'CURLS', 'PHI'], L * V], [o.closureRings ? 'QE' : ['QE', 'EDDYW'], L * E], ['DIVS', L * C],
     ['RHOML', C], ['REACH', C], ['BUOY', C], ['GRADRHO', E], ['GRADETA', E], ['SLOW', E], ['DEPTHEDGE', E],
     ['ETA', C], ['FRESH', C], ['PREVT0', C], ['PREVICE', C], ['ICED', C], ['STRESS', E],
     ['SURFT', C], ['SURFICE', C], ['SURFACEIN', C], ['T0', C], ['S0', C], ['RAINSEEN', C],
@@ -849,12 +867,10 @@ export function createLayeredOcean(core, options = {}) {
   OUT[${OF.UPW} + i] = upwelling / MF[F_AREA + i];
 }`;
   kernels.oReduce = reductionKernel(OCEAN_REDUCED, { count: C, base: OF.PART, setup: oceanReducedSetup(thermoclineLayers) });
-  const ob = {
-    S: emptyBuffer(device, 4 * OS.total), T: emptyBuffer(device, 4 * OS.total),
-    K1: emptyBuffer(device, 4 * OS.total), K2: emptyBuffer(device, 4 * OS.total), K3: emptyBuffer(device, 4 * OS.total), K4: emptyBuffer(device, 4 * OS.total),
-    OD: emptyBuffer(device, 4 * ODTOTAL), OF: emptyBuffer(device, 4 * OF.total),
-  };
-  for (const [name, b] of Object.entries(ob)) b.label = 'layeredOcean' + name;
+  const ob = {}, own = (name, size) => { const b = emptyBuffer(device, size); b.label = 'layeredOcean' + name; return b; };
+  ob.S = own('S', 4 * OS.total);
+  for (const name of ['T', 'K1', 'K2', 'K3', 'K4']) ob[name] = registers && registers[name] && registers[name].size >= 4 * OS.total ? registers[name] : own(name, 4 * OS.total);
+  ob.OD = own('OD', 4 * ODTOTAL); ob.OF = own('OF', 4 * OF.total);
   const bindLayout = device.createBindGroupLayout({ entries: Array.from({ length: 10 }, (_, binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } })) });
   const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindLayout] });
   const head = core.preludeConstants + kernels.head;
@@ -895,7 +911,6 @@ export function createLayeredOcean(core, options = {}) {
       dispatch(pass, 'oCellTendency', g, C);
       dispatch(pass, 'oVertexVort', g, V);
       dispatch(pass, 'oEdgePV', g, E);
-      dispatch(pass, 'oKineticPhi', g, C);
       if (o.closureRings) dispatch(pass, 'oDeepestEdge', g, E);
       if (o.closureFill > 0) dispatch(pass, 'oClosureFill', g, L * E);
       if (o.closureRings) dispatch(pass, 'oClosureRing', g, L * E);
@@ -910,6 +925,7 @@ export function createLayeredOcean(core, options = {}) {
         dispatch(pass, 'oClosureBack1', g, L * E);
         dispatch(pass, 'oClosureBack2', g, L * E);
       }
+      dispatch(pass, 'oKineticPhi', g, C);
       dispatch(pass, 'oMomentum', g, E);
     });
   }
