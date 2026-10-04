@@ -11662,9 +11662,9 @@ only, bit for bit). The deep plume (`diagnosedPlume`) falls back to the
 shallow cumulus in five places after building the column's temperature,
 pressure, layer mass, height and plume environment from a state it has
 not yet changed; the shallow cumulus (`cumulusFrom`) now takes those six
-arrays instead of building them again, and builds its own only with the
-deck's gate closed and for the separate shallow plume after the deep
-plume. The deep plume's per-layer rain arrays are cleared only on its
+arrays instead of building them again, and builds its own only for the
+separate shallow plume after the deep plume (with the deck's gate closed
+it returns before building any). The deep plume's per-layer rain arrays are cleared only on its
 own path. Every device buffer matches 0bcd938 word for word after 16
 steps from eleven64_day1826 and 8 from eleven128_day1826. The adjust
 kernel at N=128 falls from 23.8 to 21.7 ms a step (−2.1: 2.0 the
