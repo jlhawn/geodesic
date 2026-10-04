@@ -6,7 +6,7 @@ import { withCadence } from './cadence.module.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
-import { topographyFromInt16, rebalanceSurfacePressure, decodeSubgrid, subgridUrl } from './geography.module.js';
+import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
@@ -272,7 +272,11 @@ async function fetchWithProgress(url, from, to) {
 /*
  * The initial state comes from a saved run (a *_state_*.json written by
  * the emergence driver) when the start message names one, regridded if
- * it was saved at another resolution; otherwise from initializeState.
+ * it was saved at another resolution and otherwise written straight into
+ * the model's own state arrays; without one from initializeState. A saved
+ * run's surface pressure is rebalanced from its terrain, taken to be the
+ * current topography's, to the model's; the CPU engines' first frame
+ * reads the core's diagnosis, so they diagnose even when the two match.
  */
 function initialState(model, saved, N) {
   if (!saved) {
@@ -280,15 +284,21 @@ function initialState(model, saved, N) {
     if (model.geography) for (let i = 0; i < fresh[6].length; i++) if (model.geography.land[i]) fresh[6][i] = 0;
     return fresh;
   }
-  const arrays = [saved.pi, saved.theta, saved.u, saved.surfaceT].map((a) => Float64Array.from(a));
-  if (saved.q) arrays.push(Float64Array.from(saved.q));
-  if (saved.q && saved.qc) arrays.push(Float64Array.from(saved.qc));
-  if (saved.q && saved.qc && saved.ice) arrays.push(Float64Array.from(saved.ice));
+  const kept = [saved.pi, saved.theta, saved.u, saved.surfaceT];
+  if (saved.q) kept.push(saved.q);
+  if (saved.q && saved.qc) kept.push(saved.qc);
+  if (saved.q && saved.qc && saved.ice) kept.push(saved.ice);
   model.time = saved.time;
-  const source = saved.N !== N || saved.terrain ? sourceFor(saved) : null;
-  const carried = saved.N === N ? arrays : regridState(source, model, arrays, (fraction, text) => status(`regridding day ${saved.day} from N=${saved.N} to N=${N}: ${text}…`, 0.8 + 0.12 * fraction), { land: saved.land ?? null });
-  const fromPhi = saved.terrain ? (saved.N === N ? source.surfaceGeopotential : regridCellField(source, model, source.surfaceGeopotential)) : null;
-  if (fromPhi || model.surfaceGeopotential) {
+  let carried, fromPhi = null;
+  if (saved.N === N) {
+    carried = kept.map((values, a) => { model.state[a].set(values); return model.state[a]; });
+    if (saved.terrain) fromPhi = model.surfaceGeopotential ?? (model.geography ? surfaceGeopotential(model.mesh, model.geography) : null);
+  } else {
+    const source = sourceFor(saved);
+    carried = regridState(source, model, kept.map((a) => Float64Array.from(a)), (fraction, text) => status(`regridding day ${saved.day} from N=${saved.N} to N=${N}: ${text}…`, 0.8 + 0.12 * fraction), { land: saved.land ?? null });
+    if (saved.terrain) fromPhi = regridCellField(source, model, source.surfaceGeopotential);
+  }
+  if (fromPhi !== model.surfaceGeopotential || (fromPhi && !model.beginFrame)) {
     model.core.diagnose(carried[0], carried[1], null, null);
     rebalanceSurfacePressure(model.core, carried[0], carried[1], fromPhi, model.surfaceGeopotential);
   }
@@ -354,7 +364,7 @@ function savedCumulus(model) {
 /*
  * A physics-free model on the saved run's mesh and sigma grid, with the
  * current topography so its land mask can steer the regrid; kept for
- * the ocean and land that follow the state.
+ * the ocean and land that follow the state, until the start is done.
  */
 let sourceModel = null;
 const sameLevels = (a, b) => a.length === b.length && a.every((sigma, k) => sigma === b[k]);
@@ -621,10 +631,11 @@ async function restore(snapshot) {
   serving = true;
   self.postMessage({ type: 'ready', N: currentN, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, ocean: !!model.ocean, ...geographyMessage(model) });
   await sendFrame();
+  sourceModel = null;
 }
 
 async function start(message) {
-  lastStart = message;
+  lastStart = { ...message, saved: null };
   let saved = message.saved ?? null;
   if (!saved && message.from) {
     saved = await fetchWithProgress(message.from, 0, 0.5);
@@ -672,4 +683,5 @@ async function start(message) {
   serving = true;
   self.postMessage({ type: 'ready', N, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, ocean: !!model.ocean, ...geographyMessage(model) });
   refresh();
+  sourceModel = null;
 }
