@@ -1758,7 +1758,6 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     for (var k = 0; k <= K; k++) { PH[PH_MOMU + k * C + i] = 0.0; PH[PH_MOMD + k * C + i] = 0.0; }
     for (var k = 0; k < K; k++) { PH[PH_MOMK + k * C + i] = 1.0; PH[PH_MOMKD + k * C + i] = 1.0; }
   }
-  for (var k = 0; k < K; k++) { cuFall[k] = 0.0; cuReserve[k] = 0.0; cuFrozen[k] = 0.0; }
   let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0);
   if (!(open > 0.0)) { return cumulusColumn(i, pi, dt); }
   let bottom = K - 1;
@@ -1932,6 +1931,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
   }
   var rainAbove = 0.0;
   for (var k = top + 1; k < source; k++) { rainAbove += flux[k] * fallout[k]; }
+  for (var k = 0; k < K; k++) { cuFall[k] = 0.0; cuReserve[k] = 0.0; cuFrozen[k] = 0.0; }
   if (PL_MIXED) {
     var flying = 0.0;
     for (var k = top; k <= bottom; k++) {
