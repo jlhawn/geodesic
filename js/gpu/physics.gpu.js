@@ -1474,7 +1474,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
 }
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
-  diagnoseColumn(i);
+  diagnoseColumnMid(i);
   let pi = IN[S_PI + i]; let base = (K - 1) * C + i;
   let bottomWind = cellWind(i, K - 1);
   let speed = length(bottomWind);

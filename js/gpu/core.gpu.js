@@ -44,7 +44,9 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E], ['PHIS', C], ['SEW', MAX_EDGES * spongeCells], ['SNW', MAX_EDGES * spongeCells], ['SES', spongeEdges], ['SEE', spongeEdges], ['SEN', spongeEdges], ['GWX', 6 * waveCells], ['GWP', 4 * waveEdges], ['GWF', waveCells]]);
   const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K], ['SPG', K], ['SPMR', K]]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
-  const D = seq([['FLUX', KE], ['DIV', KC], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['DEX', KC], ['THL', KC], ['QL', KC], ['QCL', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['QV', KV], ['QE', KE], ['PHI', KC], ['DRAG', C], ['WIND', C], ['LAPA', KE], ['LAPB', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]);
+  // The RK stages' scratch fields and the closures' share memory: neither set is read outside its own passes.
+  const stage = seq([['FLUX', KE], ['QV', KV], ['QE', KE], ['PHI', KC]]), closure = seq([['LAPA', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC]]);
+  const D = { ...stage, ...closure, ...seq([['SCRATCH', Math.max(stage.total, closure.total)], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['DRAG', C], ['WIND', C], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]) };
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['CLOUDK', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E], ['SUBTV', subcloudLayers * C], ...(heldRadiation ? HELD_RADIATION.map((name) => [name, name === 'RADP' ? 8 : name === 'RADSW' || name === 'RADDF' ? KC : C]) : [])]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['CLOW', C], ['CMID', C], ['CHIGH', C], ['CCU', C], ['CDECK', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, SPK, SPB, MI, MF, LV, S, D, PH, FR };
@@ -81,31 +83,24 @@ ${consts}
 @group(0) @binding(6) var<storage, read_write> P: array<f32>;
 @group(0) @binding(7) var<storage, read_write> PH: array<f32>;
 ${constants.physics}
-fn diagnoseColumn(i: i32) {
+${[['diagnoseColumn', true], ['diagnoseColumnMid', false]].map(([name, lower]) => `fn ${name}(i: i32) {
   let pi = IN[S_PI + i];
   let exner0 = pow(pi / P0, KAPPA);
-  var thBelow = 0.0; var qBelow = 0.0; var qcBelow = 0.0; var thvBelow = 0.0; var geoBelow = 0.0;
+  var thvBelow = 0.0; var geoBelow = 0.0;
   for (var k = K - 1; k >= 0; k--) {
     let idx = k * C + i;
-    let th = IN[S_TH + idx]; let q = IN[S_Q + idx]; let qc = IN[S_QC + idx];
-    D[D_EXL + idx] = exner0 * LV[L_CL + k];
+    let th = IN[S_TH + idx]; let q = IN[S_Q + idx]; let qc = IN[S_QC + idx];${lower ? `
+    D[D_EXL + idx] = exner0 * LV[L_CL + k];` : ''}
     D[D_EXM + idx] = exner0 * LV[L_CM + k];
-    D[D_DEX + idx] = exner0 / pi * LV[L_CD + k];
     let thv = th * (1.0 + VIRT * q - qc);
     D[D_THV + idx] = thv;
     var geo = 0.0;
     if (k == K - 1) { geo = CP * exner0 * thv * LV[L_CB + K - 1] - LV[L_GR + K - 1]; }
-    else {
-      let t = LV[L_CT + k];
-      D[D_THL + idx] = th + t * (thBelow - th);
-      D[D_QL + idx] = q + t * (qBelow - q);
-      D[D_QCL + idx] = qc + t * (qcBelow - qc);
-      geo = geoBelow + CP * exner0 * (thvBelow * LV[L_CA + k] + thv * LV[L_CB + k]) - LV[L_GR + k];
-    }
+    else { geo = geoBelow + CP * exner0 * (thvBelow * LV[L_CA + k] + thv * LV[L_CB + k]) - LV[L_GR + k]; }
     D[D_GEO + idx] = geo;
-    thBelow = th; qBelow = q; qcBelow = qc; thvBelow = thv; geoBelow = geo;
+    thvBelow = thv; geoBelow = geo;
   }
-}
+}`).join('\n')}
 ${PHYSICS_FUNCTIONS}
 `;
 }
@@ -298,42 +293,9 @@ const CLOUD_LOW_P: f32 = ${CLOUD_LOW_PRESSURE.toFixed(1)}; const CLOUD_HIGH_P: f
 
 const KERNELS = {
   flux: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= K * E) { return; }
-  let e = n % E;
+  let e = i32(id.x); if (e >= E) { return; }
   let piEdge = 0.5 * (IN[S_PI + MI[COE + 2 * e]] + IN[S_PI + MI[COE + 2 * e + 1]]);
-  D[D_FLUX + n] = piEdge * IN[S_U + n];
-}`,
-  divergence: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= K * C) { return; }
-  let k = n / C; let i = n % C;
-  var sum = 0.0;
-  for (var m = 0; m < MAXE; m++) {
-    let e = MI[EOC + MAXE * i + m];
-    sum += f32(MI[ESC + MAXE * i + m]) * D[D_FLUX + k * E + e] * MF[F_DV + e];
-  }
-  D[D_DIV + n] = sum / MF[F_AREA + i];
-}`,
-  column: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let i = i32(id.x); if (i >= C) { return; }
-  let pi = IN[S_PI + i];
-  var sum = 0.0;
-  for (var k = 0; k < K; k++) { sum += D[D_DIV + k * C + i] * LV[L_DS + k]; }
-  let dPi = -sum;
-  OUT[S_PI + i] = dPi;
-  var cumulative = 0.0;
-  D[D_PSD + i] = 0.0;
-  for (var k = 0; k < K; k++) {
-    cumulative += D[D_DIV + k * C + i] * LV[L_DS + k];
-    D[D_PSD + (k + 1) * C + i] = -cumulative - LV[L_SL + k] * dPi;
-  }
-  D[D_PSD + K * C + i] = 0.0;
-  D[D_LNPI + i] = log(pi);
-  diagnoseColumn(i);
-  let bottom = (K - 1) * C + i;
-  let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
-  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-  let mass = pi * LV[L_DS + K - 1] / GRAV;
-  D[D_DRAG + i] = select(PH[PH_DRAG + i] * rho * max(D[D_WIND + i], GUST) / mass, 0.0, IMPLICIT_DRAG);
+  for (var k = 0; k < K; k++) { D[D_FLUX + k * E + e] = piEdge * IN[S_U + k * E + e]; }
 }`,
   vertexPi: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let v = i32(id.x); if (v >= V) { return; }
@@ -342,36 +304,40 @@ const KERNELS = {
   D[D_PIV + v] = sum / MF[F_ATRI + v];
 }`,
   pvVertex: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= K * V) { return; }
-  let k = n / V; let v = n % V;
-  var zeta = 0.0;
-  for (var m = 0; m < 3; m++) {
-    let e = MI[EOV + 3 * v + m];
-    zeta += f32(MI[ESV + 3 * v + m]) * IN[S_U + k * E + e] * MF[F_DC + e];
+  let v = i32(id.x); if (v >= V) { return; }
+  var edges: array<i32, 3>; var signs: array<f32, 3>; var dcs: array<f32, 3>;
+  for (var m = 0; m < 3; m++) { let e = MI[EOV + 3 * v + m]; edges[m] = e; signs[m] = f32(MI[ESV + 3 * v + m]); dcs[m] = MF[F_DC + e]; }
+  let atri = MF[F_ATRI + v]; let fv = MF[F_FV + v]; let piv = D[D_PIV + v];
+  for (var k = 0; k < K; k++) {
+    var zeta = 0.0;
+    for (var m = 0; m < 3; m++) { zeta += signs[m] * IN[S_U + k * E + edges[m]] * dcs[m]; }
+    zeta = zeta / atri;
+    D[D_QV + k * V + v] = (zeta + fv) / piv;
   }
-  zeta = zeta / MF[F_ATRI + v];
-  D[D_QV + n] = (zeta + MF[F_FV + v]) / D[D_PIV + v];
 }`,
   pvEdge: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= K * E) { return; }
-  let k = n / E; let e = n % E;
-  D[D_QE + n] = 0.5 * (D[D_QV + k * V + MI[VOE + 2 * e]] + D[D_QV + k * V + MI[VOE + 2 * e + 1]]);
+  let e = i32(id.x); if (e >= E) { return; }
+  let v1 = MI[VOE + 2 * e]; let v2 = MI[VOE + 2 * e + 1];
+  for (var k = 0; k < K; k++) { D[D_QE + k * E + e] = 0.5 * (D[D_QV + k * V + v1] + D[D_QV + k * V + v2]); }
 }`,
   cellTendency: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let pi = IN[S_PI + i]; let area = MF[F_AREA + i]; let dragHere = D[D_DRAG + i];
-  var edges: array<i32, MAXE>; var neighbours: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>; var dragThere: array<f32, MAXE>;
+  var edges: array<i32, MAXE>; var neighbours: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>; var dragThere: array<f32, MAXE>; var sides: array<f32, MAXE>;
   for (var m = 0; m < MAXE; m++) {
     let slot = MAXE * i + m;
     let e = MI[EOC + slot]; let j = MI[COC + slot]; let sign = f32(MI[ESC + slot]);
     edges[m] = e; neighbours[m] = j; signs[m] = sign;
-    dcs[m] = MF[F_DC + e]; dvs[m] = MF[F_DV + e] * abs(sign); dragThere[m] = D[D_DRAG + j];
+    dcs[m] = MF[F_DC + e]; dvs[m] = MF[F_DV + e] * abs(sign); dragThere[m] = D[D_DRAG + j]; sides[m] = MF[F_DV + e];
   }
   var upperFlow = D[D_PSD + i];
   for (var k = 0; k < K; k++) {
     let idx = k * C + i; let row = k * C; let flux0 = k * E;
     let fT = IN[S_TH + idx]; let fQ = IN[S_Q + idx]; let fC = IN[S_QC + idx];
     let top = LV[L_TOP + k]; let bottomLayer = k == K - 1;
+    var flow = 0.0;
+    for (var m = 0; m < MAXE; m++) { flow += signs[m] * D[D_FLUX + flux0 + edges[m]] * sides[m]; }
+    let divergence = flow / area;
     var kinetic = 0.0; var dragPower = 0.0; var divT = 0.0; var divQ = 0.0; var divC = 0.0;
     for (var m = 0; m < MAXE; m++) {
       let e = edges[m]; let j = neighbours[m];
@@ -386,12 +352,17 @@ const KERNELS = {
       divC += carried * (fC + IN[S_QC + row + j]) * dv;
     }
     D[D_PHI + idx] = D[D_GEO + idx] + kinetic / area;
-    let divergence = D[D_DIV + idx];
     let lowerFlow = D[D_PSD + (k + 1) * C + i];
     let layerMass = pi * LV[L_DS + k];
     var lowerT = 0.0; var lowerQ = 0.0; var lowerC = 0.0; var upperT = 0.0; var upperQ = 0.0; var upperC = 0.0;
-    if (k < K - 1) { lowerT = D[D_THL + idx]; lowerQ = D[D_QL + idx]; lowerC = D[D_QCL + idx]; }
-    if (k > 0) { upperT = D[D_THL + idx - C]; upperQ = D[D_QL + idx - C]; upperC = D[D_QCL + idx - C]; }
+    if (k < K - 1) {
+      let t = LV[L_CT + k]; let nextT = IN[S_TH + idx + C]; let nextQ = IN[S_Q + idx + C]; let nextC = IN[S_QC + idx + C];
+      lowerT = fT + t * (nextT - fT); lowerQ = fQ + t * (nextQ - fQ); lowerC = fC + t * (nextC - fC);
+    }
+    if (k > 0) {
+      let t = LV[L_CT + k - 1]; let aboveT = IN[S_TH + idx - C]; let aboveQ = IN[S_Q + idx - C]; let aboveC = IN[S_QC + idx - C];
+      upperT = aboveT + t * (fT - aboveT); upperQ = aboveQ + t * (fQ - aboveQ); upperC = aboveC + t * (fC - aboveC);
+    }
     let verticalT = (lowerFlow * lowerT - upperFlow * upperT - fT * (lowerFlow - upperFlow)) / layerMass;
     let verticalQ = (lowerFlow * lowerQ - upperFlow * upperQ - fQ * (lowerFlow - upperFlow)) / layerMass;
     let verticalC = (lowerFlow * lowerC - upperFlow * upperC - fC * (lowerFlow - upperFlow)) / layerMass;
@@ -494,28 +465,52 @@ const KERNELS = {
     let area = MF[F_AREA + i];
     var edges: array<i32, MAXE>; var weights: array<f32, MAXE>;
     for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; edges[m] = e; weights[m] = f32(MI[ESC + MAXE * i + m]); }
-    for (var k = 0; k < K; k++) {
-      var sum = 0.0;
-      for (var m = 0; m < MAXE; m++) {
-        let e = edges[m];
-        let u = select(IN[S_U + k * E + e], D[D_LAPA + k * E + e], fromLap);
-        sum += weights[m] * u * MF[F_DV + e];
+    if (fromLap) {
+      for (var k = 0; k < K; k++) {
+        var sum = 0.0;
+        for (var m = 0; m < MAXE; m++) {
+          let e = edges[m];
+          let u = D[D_LAPA + k * E + e];
+          sum += weights[m] * u * MF[F_DV + e];
+        }
+        D[D_DIVS + k * C + i] = sum / area;
       }
-      D[D_DIVS + k * C + i] = sum / area;
+    } else {
+      for (var k = 0; k < K; k++) {
+        var sum = 0.0;
+        for (var m = 0; m < MAXE; m++) {
+          let e = edges[m];
+          let u = IN[S_U + k * E + e];
+          sum += weights[m] * u * MF[F_DV + e];
+        }
+        D[D_DIVS + k * C + i] = sum / area;
+      }
     }
   } else if (n < C + V) {
     let v = n - C;
     let area = MF[F_ATRI + v];
     var edges: array<i32, 3>; var weights: array<f32, 3>;
     for (var m = 0; m < 3; m++) { let e = MI[EOV + 3 * v + m]; edges[m] = e; weights[m] = f32(MI[ESV + 3 * v + m]); }
-    for (var k = 0; k < K; k++) {
-      var sum = 0.0;
-      for (var m = 0; m < 3; m++) {
-        let e = edges[m];
-        let u = select(IN[S_U + k * E + e], D[D_LAPA + k * E + e], fromLap);
-        sum += weights[m] * u * MF[F_DC + e];
+    if (fromLap) {
+      for (var k = 0; k < K; k++) {
+        var sum = 0.0;
+        for (var m = 0; m < 3; m++) {
+          let e = edges[m];
+          let u = D[D_LAPA + k * E + e];
+          sum += weights[m] * u * MF[F_DC + e];
+        }
+        D[D_CURLS + k * V + v] = sum / area;
       }
-      D[D_CURLS + k * V + v] = sum / area;
+    } else {
+      for (var k = 0; k < K; k++) {
+        var sum = 0.0;
+        for (var m = 0; m < 3; m++) {
+          let e = edges[m];
+          let u = IN[S_U + k * E + e];
+          sum += weights[m] * u * MF[F_DC + e];
+        }
+        D[D_CURLS + k * V + v] = sum / area;
+      }
     }
   }
 }`,
@@ -651,17 +646,56 @@ const GW_SHARE = array<f32, GW_LID>(GW_LID_SHARES);
   }
 }`,
   dissipationHeat: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= K * C) { return; }
-  let k = n / C; let i = n % C;
-  var sum = 0.0;
-  for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; sum += abs(f32(MI[ESC + MAXE * i + m])) * MF[F_DC + e] * MF[F_DV + e] * D[D_DISS + k * E + e]; }
-  IN[S_TH + n] += 0.25 * sum / MF[F_AREA + i] / (CP * D[D_EXM + n]);
+  let i = i32(id.x); if (i >= C) { return; }
+  var edges: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>;
+  for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; edges[m] = e; signs[m] = abs(f32(MI[ESC + MAXE * i + m])); dcs[m] = MF[F_DC + e]; dvs[m] = MF[F_DV + e]; }
+  let area = MF[F_AREA + i];
+  for (var k = 0; k < K; k++) {
+    let n = k * C + i;
+    var sum = 0.0;
+    for (var m = 0; m < MAXE; m++) { sum += signs[m] * dcs[m] * dvs[m] * D[D_DISS + k * E + edges[m]]; }
+    IN[S_TH + n] += 0.25 * sum / area / (CP * D[D_EXM + n]);
+  }
 }`,
   dissipationClear: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let n = i32(id.x); if (n >= K * E) { return; }
   D[D_DISS + n] = 0.0;
 }`,
 };
+
+// Only columnLast (RK stage 4) stores EXL: the physics pass after the stages reads it, and adjust diagnoses its own.
+const columnKernel = (diagnose) => `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let pi = IN[S_PI + i];
+  var edges: array<i32, MAXE>; var signs: array<f32, MAXE>; var dvs: array<f32, MAXE>;
+  for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; edges[m] = e; signs[m] = f32(MI[ESC + MAXE * i + m]); dvs[m] = MF[F_DV + e]; }
+  let area = MF[F_AREA + i];
+  var divergence: array<f32, K>;
+  var sum = 0.0;
+  for (var k = 0; k < K; k++) {
+    var flow = 0.0;
+    for (var m = 0; m < MAXE; m++) { flow += signs[m] * D[D_FLUX + k * E + edges[m]] * dvs[m]; }
+    divergence[k] = flow / area;
+    sum += divergence[k] * LV[L_DS + k];
+  }
+  let dPi = -sum;
+  OUT[S_PI + i] = dPi;
+  var cumulative = 0.0;
+  D[D_PSD + i] = 0.0;
+  for (var k = 0; k < K; k++) {
+    cumulative += divergence[k] * LV[L_DS + k];
+    D[D_PSD + (k + 1) * C + i] = -cumulative - LV[L_SL + k] * dPi;
+  }
+  D[D_PSD + K * C + i] = 0.0;
+  D[D_LNPI + i] = log(pi);
+  ${diagnose}(i);
+  let bottom = (K - 1) * C + i;
+  let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
+  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
+  let mass = pi * LV[L_DS + K - 1] / GRAV;
+  D[D_DRAG + i] = select(PH[PH_DRAG + i] * rho * max(D[D_WIND + i], GUST) / mass, 0.0, IMPLICIT_DRAG);
+}`;
+Object.assign(KERNELS, { column: columnKernel('diagnoseColumnMid'), columnLast: columnKernel('diagnoseColumn') });
 
 export const PHYSICS_DEFAULTS = {
   solarConstant: 1362, cloudAbsorption: null, cloudScattering: null, ...CLOUD_OPTICS, cloudSolarAbsorption: 0.4, stratus: true, stratusIndex: 'eis', stratusScale: 0.15, stratusWaterMax: 0.15, stratusSigma: 0.92,
@@ -835,14 +869,13 @@ export async function createGpuCore(mesh, {
     pass.dispatchWorkgroups(Math.min(groups, 65535), Math.ceil(groups / 65535));
   }
 
-  function tendencyPasses(pass, IN, OUT) {
+  function tendencyPasses(pass, IN, OUT, last) {
     const g = group(IN, OUT);
-    dispatch(pass, 'flux', g, L.KE);
-    dispatch(pass, 'divergence', g, L.KC);
-    dispatch(pass, 'column', g, C);
+    dispatch(pass, 'flux', g, E);
+    dispatch(pass, last ? 'columnLast' : 'column', g, C);
     dispatch(pass, 'vertexPi', g, V);
-    dispatch(pass, 'pvVertex', g, L.KV);
-    dispatch(pass, 'pvEdge', g, L.KE);
+    dispatch(pass, 'pvVertex', g, V);
+    dispatch(pass, 'pvEdge', g, E);
     dispatch(pass, 'cellTendency', g, C);
     dispatch(pass, 'momentum', g, E);
   }
@@ -908,7 +941,7 @@ export async function createGpuCore(mesh, {
     const stage = (IN, OUT, factor, next) => {
       setParams([factor]);
       compute((pass) => {
-        tendencyPasses(pass, IN, OUT);
+        tendencyPasses(pass, IN, OUT, !next);
         if (next) dispatch(pass, 'advance', group(buffers.S, next, OUT), L.S.total);
       });
     };
@@ -988,7 +1021,7 @@ export async function createGpuCore(mesh, {
       dispatch(pass, 'mixMomentum', g, E);
       if (phys.orography) dispatch(pass, 'orographyApply', g, E);
       if (waves) dispatch(pass, 'gravityWaveDrag', g, E);
-      dispatch(pass, 'dissipationHeat', g, L.KC);
+      dispatch(pass, 'dissipationHeat', g, C);
       dispatch(pass, 'dissipationClear', g, L.KE);
     });
   }
@@ -1073,7 +1106,7 @@ export async function createGpuCore(mesh, {
   async function tendency(IN = buffers.S, OUT = buffers.K1) {
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginComputePass();
-    tendencyPasses(pass, IN, OUT);
+    tendencyPasses(pass, IN, OUT, true);
     pass.end();
     device.queue.submit([encoder.finish()]);
     await device.queue.onSubmittedWorkDone();

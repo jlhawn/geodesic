@@ -11657,6 +11657,81 @@ kernel's second saturation adjustment after the plume, a longer stable
 ocean step at N=128 (every 12 held two days), the ∇⁴ closure passes and
 the deck's ring passes, and on the page the frame and overlay costs.
 
+**The atmosphere's dynamics kernels one element a thread, and D kept to
+what is read** (branch perf2-atmos-core, four commits, each bit-identical:
+after 16 GPU steps from eleven64_day1826 and 8 from eleven128_day1826 the
+core's S and PH and the ocean's S and OD are word for word those of
+0bcd938, and so is every remaining field of D compared by name but the
+RK stages' scratch, which after the fourth holds the closures' values at
+the end of a step). The profile's split mode (`SPLIT=1` in
+`scripts/profileGpu.mjs`) found the stencil kernels latency-bound at one
+thread per layer and element, each layer's loads waiting on its
+connectivity's. In turn:
+
+1. flux, divergence, pvVertex, pvEdge and dissipationHeat take one edge,
+   cell or vertex a thread and loop over the 36 layers with the element's
+   connectivity and geometry held in registers; divCurl tests whether it
+   differences U or the first Laplacian once, outside its layer loops.
+2. The column diagnosis stores the lowest interfaces' Exner function EXL
+   only where it is read: in the fourth RK stage (a kernel of its own,
+   columnLast) for the physics pass that follows the stages, and in
+   adjust. It stores no interface values of θ, q and qc: cellTendency
+   forms them from the column's own layers in each layer's iteration.
+   Carrying a layer's lower interface into the next layer's upper gave
+   the same values but let the Metal compiler contract the vertical flux
+   differently (one tendency from eleven64_day1826 differed at rounding
+   level in 90 % of the θ tendencies); formed twice, they are bit for bit
+   the stored ones. DEX, which nothing read, and LAPB, which no kernel
+   referenced, go.
+3. The column and cellTendency each sum the layers' divergence from FLUX
+   in the divergence kernel's order (cellTendency in a loop of its own:
+   inside its other edge sums the compiler reordered it), and the
+   divergence dispatch and DIV go.
+4. The closures' scratch fields (LAPA, DIVS, CURLS, LAP1) share memory
+   with the RK stages' (FLUX, QV, QE, PHI); neither set is read outside
+   its own passes.
+
+The device was never quiet while this was measured: the page in the
+Claude app's pane took 10–50 % of the GPU, and in eight attempts over an
+hour and a quarter no two streaming probes in a row reached 350 GB/s.
+The times are therefore each
+kernel's least dispatch time over three alternated rounds of
+`WARM=8 STEPS=32 SPLIT=1 scripts/profileGpu.mjs` from eleven128_day1826
+(µs per dispatch, which the timestamps resolve to 65.5 µs):
+
+| | 0bcd938 | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| flux (×4) | 852 | 393 | 393 | 328 | 393 |
+| divergence (×4) | 1376 | 393 | 393 | — | — |
+| column, stages 1–3 (×3) | 2097 | 1638 | 786 | 983 | 1049 |
+| column, stage 4 | 2163 | 1770 | 983 | 1376 | 1376 |
+| pvVertex (×4) | 1770 | 459 | 459 | 459 | 459 |
+| pvEdge (×4) | 786 | 459 | 459 | 459 | 393 |
+| cellTendency (×4) | 3277 | 3146 | 2949 | 2621 | 2556 |
+| divCurl (×2, ∇⁴) | 786 | 459 | 459 | 459 | 459 |
+| dissipationHeat | 2097 | 524 | 524 | 524 | 524 |
+| pblDiagnose | 4719 | 4194 | 2818 | 2818 | 2752 |
+| adjust | 24183 | 23855 | 23069 | 23069 | 23134 |
+| every kernel's least times its dispatches, ms a step | 155.3 | 135.0 | 128.5 | 126.0 | 126.5 |
+| D at N=128, MB | 806.1 | 806.1 | 641.0 | 617.4 | 405.0 |
+
+The least times overstate 0bcd938's 142.6 ms a step alone by 9 %; scaled
+to it, the four commits save about 26 ms a step (−19 in the first, −6 in
+the second, −2 in the third, nothing measurable in the fourth), the four
+RK stages' kernels falling from 58.5 to 37.6 ms of least time. Whole
+model days on the shared device (`scripts/paceGpu.mjs`, two rounds
+alternated): N=128 164.2 and 162.6 s a model day on 0bcd938 against
+125.7 and 125.7 (−23 %), N=64 25.4 and 21.3 against 22.0 and 18.6, with
+identical day means. At N=64, where the kernels launch a quarter of the
+threads, no kernel became slower by more than one timestamp tick
+(cellTendency, and the unchanged momentum, by one; the least times' sum
+36.6 to 31.4 ms a step), so every size takes the new forms. D at N=64
+falls from 201.5 to 101.3 MB. Bit-identity also shows in
+`scripts/figures/mlmdeck.mjs`, whose 7.5 MB of JSON from eleven64_day1826
+is byte for byte 0bcd938's, and the suite passes (607 tests) at the
+fourth commit. Not measured alone: the projection of about 116 ms a step
+and 60 s a model day at N=128.
+
 ### M25 — The long spin-up — planned
 
 The asynchronous schedule of M18 (`scripts/asyncSpinup.sh`: a hundred
