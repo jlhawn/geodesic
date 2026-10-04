@@ -11,6 +11,7 @@ import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapsho
 import { Stats } from "./stats.module.js";
 import { pickDevice, isMobileBrowser, probeN, PROBE_VERSION, DESKTOP_MAX_N, MOBILE_MAX_N } from "./deviceChoice.module.js";
 import { defaultRunFor } from "./defaultRun.module.js";
+import { CLOUD_RANGES } from "./frames.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
 const VERTICAL_MAX = { surface: 3, 1000: 3, 850: 10, 700: 10, 500: 10, 250: 10, 70: 3, 10: 1 };
@@ -74,7 +75,12 @@ const OVERLAYS = {
   rain: { label: 'Recent rain', short: 'RAIN', unit: 'mm', kind: 'sequential', field: 'rain', scale: 1, range: () => [0, 20] },
   tpw: { label: 'Total precipitable water', short: 'TPW', unit: 'kg/m²', kind: 'sequential', field: 'water', scale: 1, range: () => [0, 60] },
   tcw: { label: 'Total cloud water', short: 'TCW', unit: 'g/m²', kind: 'sequential', field: 'cloud', scale: 1000, range: () => [0, 500] },
-  cloudcover: { label: 'Cloud cover', short: 'CC', unit: 'g/m²', kind: 'clouds', field: 'cloud', scale: 1000, range: () => [0, 100] },
+  cloudcover: { label: 'All clouds', short: 'CLOUD', unit: 'g/m²', kind: 'clouds', note: 'Clouds', field: 'cloud', scale: 1000, range: () => [0, COVER_RANGE] },
+  cloudlow: { label: 'Low cloud', short: 'LOW', unit: 'g/m²', kind: 'clouds', note: 'Clouds', field: 'cloudLow', scale: 1000, range: () => [0, CLOUD_RANGES.cloudLow] },
+  cloudmid: { label: 'Mid cloud', short: 'MID', unit: 'g/m²', kind: 'clouds', note: 'Clouds', field: 'cloudMid', scale: 1000, range: () => [0, CLOUD_RANGES.cloudMid] },
+  cloudhigh: { label: 'High cloud', short: 'HIGH', unit: 'g/m²', kind: 'clouds', note: 'Clouds', field: 'cloudHigh', scale: 1000, range: () => [0, CLOUD_RANGES.cloudHigh] },
+  cloudcumulus: { label: 'Cumulus', short: 'CU', unit: 'g/m²', kind: 'clouds', note: 'Clouds', field: 'cloudCumulus', scale: 1000, range: () => [0, CLOUD_RANGES.cloudCumulus] },
+  clouddeck: { label: 'Stratocumulus deck', short: 'DECK', unit: 'g/m²', kind: 'clouds', note: 'Clouds', field: 'cloudDeck', scale: 1000, range: () => [0, CLOUD_RANGES.cloudDeck] },
   albedo: { label: 'Surface albedo', short: 'ALB', unit: '', kind: 'sequential', field: 'albedo', scale: 1, range: () => [0, 0.8] },
   swdown: { label: 'Surface sunlight', short: 'SSI', unit: 'W/m²', kind: 'sequential', field: 'shortwave', scale: 1, range: () => [0, 1200] },
   olr: { label: 'Outgoing longwave radiation', short: 'OLR', unit: 'W/m²', kind: 'sequential', field: 'longwave', scale: 1, range: () => [100, 320] },
@@ -95,7 +101,7 @@ const OVERLAYS = {
   none: { label: 'None', short: 'None' },
 };
 const MODE_OVERLAYS = {
-  atmosphere: [['none'], ['wind', 'temp', 'rh', 'vertical'], ['mi', 'wbt', 'dp'], ['rain', 'tpw', 'tcw', 'cloudcover'], ['albedo', 'swdown', 'olr'], ['mslp', 'ps', 'elevation'], ['ice', 'snow', 'soil', 'veg']],
+  atmosphere: [['none'], ['wind', 'temp', 'rh', 'vertical'], ['mi', 'wbt', 'dp'], ['rain', 'tpw', 'tcw'], ['cloudcover', 'cloudlow', 'cloudmid', 'cloudhigh', 'cloudcumulus', 'clouddeck'], ['albedo', 'swdown', 'olr'], ['mslp', 'ps', 'elevation'], ['ice', 'snow', 'soil', 'veg']],
   ocean: [['none'], ['seatemp', 'current', 'upwelling'], ['layer', 'thermocline', 'sss', 'ssh']],
 };
 const MODE_DEFAULT_OVERLAY = { atmosphere: 'wind', ocean: 'seatemp' };
@@ -106,15 +112,18 @@ const OVERLAY_NAMES = Object.fromEntries(Object.entries(OVERLAYS).map(([key, ove
  * The cloud view: open water is ocean blue, ice whitens with thickness,
  * and cloud is white composited on top with an opacity that rises with
  * the column's cloud water, 1 − exp(−TCW / CLOUD_OPACITY_SCALE), so
- * clear sky is transparent and 40 g/m² is two-thirds opaque.
+ * clear sky is transparent and 40 g/m² is two-thirds opaque. The cloud
+ * overlays stretch the same curve over their own ranges, as the All
+ * clouds overlay's COVER_RANGE is to CLOUD_OPACITY_SCALE, so All clouds
+ * matches the Satellite view and every legend shares COVER_STOPS.
  */
-const OCEAN_COLOR = [0.05, 0.22, 0.45], ICE_COLOR = [0.85, 0.90, 0.95], CLOUD_COLOR = [1, 1, 1], CLOUD_OPACITY_SCALE = 40;
+const OCEAN_COLOR = [0.05, 0.22, 0.45], ICE_COLOR = [0.85, 0.90, 0.95], CLOUD_COLOR = [1, 1, 1], CLOUD_OPACITY_SCALE = 40, COVER_RANGE = CLOUD_RANGES.cloud;
 const DRY_LAND = [0.45, 0.36, 0.22], WET_LAND = [0.16, 0.30, 0.12], SNOW_COLOR = [0.9, 0.92, 0.95];
 const COVER_BASE = [0.22, 0.22, 0.22];
 const cloudOpacity = (grams) => 1 - Math.exp(-Math.max(0, grams) / CLOUD_OPACITY_SCALE);
 const toLinear = (s) => (s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4);
 const NO_OVERLAY = Array(3).fill(toLinear(40 / 255)), NO_DATA = Array(3).fill(toLinear(70 / 255));
-const COVER_STOPS = Array.from({ length: 11 }, (_, k) => { const a = cloudOpacity(10 * k); return COVER_BASE.map((c) => c + a * (1 - c)); });
+const COVER_STOPS = Array.from({ length: 11 }, (_, k) => { const a = cloudOpacity(COVER_RANGE * k / 10); return COVER_BASE.map((c) => c + a * (1 - c)); });
 
 /*
  * Palettes as sRGB stops. The sequential ones are perceptually uniform
@@ -286,7 +295,7 @@ const VIEW_NOTES = [
   ['Temperature', 'Air temperature at the chosen height.'],
   ['Relative humidity', 'At the chosen height.'],
   ['Surface pressure', 'The pressure at the ground itself, about 1000 hPa at the coast and 550 hPa on the Tibetan plateau; the weather signal is the small variation on top of the elevation.'],
-  ['Cloud cover', 'Cloud as white over grey with the opacity the Satellite view uses, from the column\'s cloud water, the marine stratocumulus deck included.'],
+  ['Clouds', 'Cloud as white over grey, more opaque where the water is thicker: All clouds is the column\'s whole cloud water at the opacity the Satellite view uses, and each type shows on its own with its legend stretched to the type\'s range. Low, Mid and High cloud are the grid-scale condensate in the layers below 800 hPa, between 800 and 500 hPa and above 500 hPa, where the water in a layer spread evenly about its mean passes saturation: a layer starts to cloud once its humidity passes a critical value, 97.5 % near the ground falling to 75 % aloft, so fronts, storms and the tropical anvils cloud before they saturate. Cumulus is the convective plumes\' cloud, the condensate in the shallow and deep updrafts times the part of the cell they cover, over the trade-wind seas and in the tropical rain belt. Stratocumulus deck is the marine deck of the mixed-layer model, its liquid water path times its cover, the sheets under the strong inversions of the subtropical highs off Peru, Namibia and California.'],
   ['Sea temperature', 'The temperature of the ocean at the chosen depth: at the surface the wind-driven mixed layer, the freezing point under ice; grey over land.'],
   ['Current speed', 'The current at the chosen depth, up to a metre a second in the surface boundary currents and weaker below. With any ocean view selected, Particles and Vectors trace the current instead of the wind.'],
   ['Upwelling', 'The water\'s vertical velocity through the chosen depth, upward positive, from the convergence of the flow above it: up along the equator and the eastern boundaries where the wind drives the surface water away, down under the subtropical gyres.'],
@@ -564,7 +573,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     if (!values) return;
     const [min, max] = overlay.range(settings.view === 'ocean' ? shownDepth() : shownLevel());
     if (overlay.kind === 'clouds') {
-      viewer.setColorMap({ kind: 'cover', a: overlay.scale / CLOUD_OPACITY_SCALE, base: COVER_BASE, terrain: hasLand });
+      viewer.setColorMap({ kind: 'cover', a: overlay.scale * COVER_RANGE / (CLOUD_OPACITY_SCALE * max), base: COVER_BASE, terrain: hasLand });
       renderScale(COVER_STOPS, min, max, overlay.unit);
       overlayLabel = `${OVERLAY_NAMES[settings.overlay]} · wind @ ${levelLabel(shownLevel())}`;
     } else {
@@ -673,7 +682,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       const current = group.dataset.setting === 'isolines' ? isolineChoice() : String(settings[group.dataset.setting]);
       for (const button of group.querySelectorAll('button[data-value]')) button.classList.toggle('selected', button.dataset.value === current);
     }
-    const chosen = overlayBox.querySelector('button.selected'), note = NOTES.get(OVERLAYS[settings.overlay].label);
+    const chosen = overlayBox.querySelector('button.selected'), note = NOTES.get(OVERLAYS[settings.overlay].note ?? OVERLAYS[settings.overlay].label);
     if (chosen && note) { overlayNote.textContent = note; chosen.after(overlayNote); } else overlayNote.remove();
     const space = settings.view === 'space';
     const heights = settings.view === 'atmosphere' && HEIGHT_OVERLAYS.has(settings.overlay);

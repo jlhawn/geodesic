@@ -58,6 +58,8 @@ export const DEPTH_FIELDS = new Set(['sst', 'current', 'currents', 'upwelling'])
 // A layer's group goes by the pressure at its middle, Pa.
 export const CLOUD_LOW_PRESSURE = 80000, CLOUD_HIGH_PRESSURE = 50000;
 export const CLOUD_TYPES = ['cloudLow', 'cloudMid', 'cloudHigh', 'cloudCumulus', 'cloudDeck'];
+// The cloud overlays' legend ranges, g/m², the top near the 95th percentile of the cells holding each type.
+export const CLOUD_RANGES = { cloud: 100, cloudLow: 200, cloudMid: 500, cloudHigh: 400, cloudCumulus: 40, cloudDeck: 150 };
 
 export const RAIN_MEMORY = 3 * 3600;
 export const VERTICAL_MEMORY = 2 * 3600;
