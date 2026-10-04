@@ -11657,6 +11657,63 @@ kernel's second saturation adjustment after the plume, a longer stable
 ocean step at N=128 (every 12 held two days), the ∇⁴ closure passes and
 the deck's ring passes, and on the page the frame and overlay costs.
 
+**The layered ocean's kernels one element a thread**
+(`js/gpu/layeredOcean.gpu.js`). The ocean's tendency ran one thread per
+(class, element), so at its 45 classes (the mixed layer and 44 density
+classes) every class loaded the element's connectivity again and each
+gather waited on an index load first; a class cost 2.4 times what an
+atmospheric layer does. In two steps:
+
+- oDivCurl, oLapVelocity, oVertexVort, oEdgePV and oFlux run one cell,
+  vertex or edge a thread over the classes with the connectivity loaded
+  once, and the edge thickness and its sill cap are one kernel. Bit for
+  bit: the device buffers after 16 steps from eleven64_day1826 and 8
+  from eleven128_day1826 are identical to 0bcd938's (5d979f7).
+- oMomentum, oCellTendency and oKineticPhi likewise, oMomentum with its
+  neighbours' PV weights and masks in registers and the thick classes of
+  its edge as a 45-bit mask. The expressions are the same, but Metal's
+  compiler fuses and orders them differently once the operands sit in
+  registers: after one ocean call the velocities differ by at most
+  2.2·10⁻⁷ of the largest, h, h·T and h·S by 1.2·10⁻⁷ or less (49814b5).
+
+Times a dispatch at N=128 (`scripts/profileGpu.mjs` with SPLIT=1, 96
+steps from eleven128_day1826, before and after alternated twice; the
+Claude app's GPU process took about half the GPU throughout, so each is
+the least of a kernel's 48–96 dispatches, in µs): oMomentum 23986 →
+4325, oCellTendency 7078 → 2621, oKineticPhi 4325 → 2621, oDivCurl 5046
+and 5112 → 1049, oLapVelocity 2032 → 786 (twice), oVertexVort 2097 →
+590, oEdgePV 1770 → 1049, oFlux 918 → 721, the edge thickness 852 + 328
+→ 721. Amortised over the ocean's every 8 steps the ocean's kernels
+fall from 35.0 to 14.2 ms a step by these least times, 6.8 for the
+first step and 12.9 for the second; scaled by the 0.68–0.81 that took
+the split profile's ocean passes to their alone times at 22:15, about
+15 ms of the 142.6, a projected 127 ms a step and 65 s a model day.
+At N=64 every changed kernel is as fast or faster (oMomentum 5964 →
+1311 µs, oCellTendency 1704 → 590, oDivCurl 1180 → 262). Whole model
+days on the shared GPU (`scripts/paceGpu.mjs`, 0bcd938 and 49814b5
+alternated four times) say the same with the sharing's noise: at N=128
+150.5–184.8 s a model day before (median 161.5) and 129.8–152.4 after
+(130.0), at N=64 21.1–25.5 (22.4) and 18.5–22.8 (20.7).
+
+Against 0bcd938 and its replicates, run means less 0bcd938's
+(`scripts/spinup.mjs` with STRATOSPHERE=1 at the drivers' cadence; K,
+W/m², mm/d; the SST rms is the end state's over the sea cells, the max
+wind the run's largest daily maximum, m/s):
+
+| | Ts | ASR | OLR | LWCRE | SWCRE | precipitation | warm pool / cold tongue SST | SST rms | clamped, largest current, max wind |
+|---|---|---|---|---|---|---|---|---|---|
+| N=64 replicates, 3 days | 0.000, 0.000 | 0.00, +0.03 | −0.03, 0.00 | 0.00, 0.00 | −0.03, +0.03 | 0.000, +0.003 | 0.0 / 0.0 | 0.0047, 0.0048 | 0, 1.02, 100.0 and 99.9 |
+| N=64 one element a thread | 0.000 | +0.03 | +0.03 | 0.00 | +0.03 | +0.003 | 0.0 / 0.0 | 0.0046 | 0, 1.02, 100.1 |
+| N=128 replicates, 2 days | 0.000, 0.000 | 0.00, 0.00 | 0.00, 0.00 | 0.00, 0.00 | 0.00, 0.00 | −0.005, −0.005 | 0.0 / 0.0 | 0.0035, 0.0034 | 0, 1.19, 89.0 and 88.9 |
+| N=128 one element a thread | 0.000 | 0.00 | 0.00 | 0.00 | 0.00 | 0.000 | 0.0 / 0.0 | 0.0033 | 0, 1.19, 88.9 |
+
+(0bcd938: warm pool 27.6 and cold tongue 24.2 °C at N=64, 28.3 and
+23.9 at N=128, no clamped edges, max wind 99.9 and 88.9 m/s.) The
+mixed layer at 140–100W (51 m), the equatorial surface current and the
+undercurrent are alike in all four, the daily energy balance agrees to
+0.1 W/m² as the replicates' does, and the ocean's tests and the suite
+pass with no bound changed.
+
 ### M25 — The long spin-up — planned
 
 The asynchronous schedule of M18 (`scripts/asyncSpinup.sh`: a hundred
