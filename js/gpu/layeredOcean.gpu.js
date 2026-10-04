@@ -7,7 +7,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * The layered ocean of ocean/layered.module.js on the GPU: a bulk mixed
  * layer over interior isopycnal layers, each a TRiSK shallow-water layer
  * carrying thickness, edge velocity, heat h·T and salt h·S. The RK4
- * baroclinic state (h, u, h·T, h·S for all L layers) lives in its own
+ * baroclinic state (h, u, h·T, h·S for all L layers) lives in a
  * ping-pong buffer set (S/T/K1-K4); everything else the step needs
  * (edge thicknesses, PV, the interior potential, the ∇⁴ closure scratch,
  * the barotropic sub-stepping state, the surface staging) lives in one
@@ -794,17 +794,17 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   }
   /*
    * The L-sized scratch lives within one tendency (tendency below, in
-   * dispatch order): FLUX from oFlux to oCellTendency, LAPA from the first
-   * oLapVelocity to the second oDivCurl and LAPB from the second
-   * oLapVelocity to oMomentum share a slot; AVORT from oVertexVort to
-   * oEdgePV, CURLS from each oDivCurl to the oLapVelocity after it and
-   * PHI from oKineticPhi, dispatched just before oMomentum, to oMomentum
-   * share another. With the closure's rings FLUX marks the fitted edges
-   * and LAPA and LAPB hold the rings until oClosureBack2, so those three
-   * stay apart. After the combine the eddy passes leave their fluxes in
-   * EDDYV, EDDYQ and EDDYW over FLUX, HEDGE and QE (over FLUX, LAPA and
-   * LAPB with the rings), which oEdgeThickness and every tendency
-   * recompute before reading them.
+   * dispatch order): FLUX from oFlux to oCellTendency, LAPA from
+   * oClosureFill (or the first oLapVelocity without it) to the second
+   * oDivCurl and LAPB from the second oLapVelocity to oMomentum share a
+   * slot; AVORT from oVertexVort to oEdgePV, CURLS from each oDivCurl to
+   * the oLapVelocity after it and PHI from oKineticPhi, dispatched just
+   * before oMomentum, to oMomentum share another. With the closure's
+   * rings FLUX marks the fitted edges and LAPA and LAPB hold the rings
+   * until oClosureBack2, so those three stay apart. After the combine the
+   * eddy passes leave their fluxes in EDDYV, EDDYQ and EDDYW over FLUX,
+   * HEDGE and QE (over FLUX, LAPA and LAPB with the rings), which
+   * oEdgeThickness and every tendency recompute before reading them.
    */
   const OD = seq([
     ...(o.closureRings ? [[['FLUX', 'EDDYV'], L * E], [['LAPA', 'EDDYQ'], L * E], [['LAPB', 'EDDYW'], L * E]] : [[['FLUX', 'LAPA', 'LAPB', 'EDDYV'], L * E]]),

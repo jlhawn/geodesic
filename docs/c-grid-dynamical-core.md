@@ -12004,12 +12004,13 @@ changing a number:
    tendencies pass through.
 2. Every L-sized scratch field of the ocean's OD lives within one
    tendency, most for a few dispatches of it. FLUX (oFlux to
-   oCellTendency), LAPA (the first oLapVelocity to the second oDivCurl)
-   and LAPB (the second oLapVelocity to oMomentum) share one slot;
-   AVORT (oVertexVort to oEdgePV), CURLS (each oDivCurl to its
-   oLapVelocity) and PHI share another, oKineticPhi moving to the
-   tendency's second pass just before oMomentum (the state's h and u,
-   ETA and RHOML, which it reads, are not written in between); HEDGE,
+   oCellTendency), LAPA (oClosureFill, or the first oLapVelocity without
+   it, to the second oDivCurl) and LAPB (the second oLapVelocity to
+   oMomentum) share one slot; AVORT (oVertexVort to oEdgePV), CURLS
+   (each oDivCurl to its oLapVelocity) and PHI share another, oKineticPhi
+   moving to the tendency's second pass just before oMomentum (the
+   state's h and u, ETA and RHOML, which it reads, are not written in
+   between); HEDGE,
    QE and DIVS keep their own: 3LE + LV + LC words in place of 5LE +
    2LV + 2LC. The eddy passes after the combine leave their fluxes over
    FLUX, HEDGE and QE, which oEdgeThickness and the next tendency
@@ -12048,7 +12049,10 @@ the ocean's S and OF, and OD's carried sections and barotropic blocks by
 name) match 3610d2a's word for word on both paths at both N. At N=16
 from `initializeState` with the ocean every 4 steps, 24 steps in each
 closure mode (closureFill 0; 1 with 'interior'; 0.5 with 'beside'),
-awaited and in batches of 4, match likewise. With T and K1–K4
+awaited and in batches of 4, match likewise, and so do the states
+`scripts/spinup.mjs` saves from eleven64_day1826 after 24 steps with
+BATCH=8 under OCEAN closureFill 1 with 'interior' and 0.5 with
+'beside'. With T and K1–K4
 overwritten by NaN before every atmosphere step and every ocean step,
 every L-sized section of OD at the start of each ocean tendency and the
 eddy fluxes' slots after the eddy passes, 24 steps at N=64 still save
