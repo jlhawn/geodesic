@@ -53,6 +53,10 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  *                  the gravity-wave drag the physics phase computed
  *   dissipate(cells) the kinetic energy the closure and the mixing
  *                  removed, returned as heat
+ * With `dragEvery` k above 1 the physics phase lays the gravity-wave and
+ * orographic drags only at a column's first step and at the steps whose
+ * number is a multiple of k, and mixMomentum applies what it laid last at
+ * every step; the orographic waves' limiter then takes the k steps.
  * Arrays read across phases live in `shared`; `buffers` adopts another
  * instance's so a worker computes on the same memory.
  */
@@ -76,8 +80,9 @@ export const dragConstants = (fields, options) => (fields.raster ? { ...LOTT_MIL
 export function createModel(gridOrMesh, {
   radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {}, boundaryLayer: boundaryLayerOptions = {},
   topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true, gravityWaves: gravityWaveOptions = {}, orography: orographyOptions = {}, subgrid = undefined,
-  physics = true, moist = true, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, buffers = null, levels = sigmaInterfaces(),
+  physics = true, moist = true, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, buffers = null, levels = sigmaInterfaces(), dragEvery = 1,
 } = {}) {
+  if (!(Number.isInteger(dragEvery) && dragEvery >= 1)) throw new Error(`dragEvery must be a whole number of steps, 1 or more, not ${dragEvery}`);
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
@@ -126,6 +131,12 @@ export function createModel(gridOrMesh, {
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), openSea = new Float64Array(C), stressScratch = new Float64Array(E);
   const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C), callAlbedo = radiation.callCosZenith && (radiationOptions.radiationEvery ?? 1) > 1 ? new Float64Array(C) : null;
   const runoffSeen = land ? new Float64Array(C) : null, runoffStep = land ? new Float64Array(C) : null, airBefore = new Float64Array(C);
+  const dragBuffer = buffers && buffers.drags ? buffers.drags : new SharedArrayBuffer(8 * C), dragStep = new Float64Array(dragBuffer);
+  if (!(buffers && buffers.drags)) dragStep.fill(-1);
+  let physicsTime = 0;
+  const setRadiationTime = radiation.setTime;
+  // parallel.worker.js gives the physics phase its time through the radiation's clock alone.
+  radiation.setTime = (t) => { physicsTime = t; setRadiationTime(t); };
 
   const lengths = stateLengths({ K, C, E });
   const stateArray = (name) => new Float64Array(buffers && buffers.state && buffers.state[name] ? buffers.state[name] : new SharedArrayBuffer(8 * lengths[name]));
@@ -184,8 +195,20 @@ export function createModel(gridOrMesh, {
       }
       if (moist) for (let i = bottom + iFrom; i < bottom + iTo; i++) state[4][i] += dt * forcing[4][i];
       if (boundaryLayer) boundaryLayer.diagnose(state, iFrom, iTo);
-      if (gravityWaves) gravityWaves.compute(state, iFrom, iTo);
-      if (orography) orography.diagnose(state, iFrom, iTo, dt);
+      if (dragEvery === 1) {
+        if (gravityWaves) gravityWaves.compute(state, iFrom, iTo);
+        if (orography) orography.diagnose(state, iFrom, iTo, dt);
+      } else if (gravityWaves || orography) {
+        const index = Math.round(physicsTime / dt), start = index - index % dragEvery, held = (i) => dragStep[i] >= start && dragStep[i] <= index;
+        for (let i = iFrom; i < iTo;) {
+          if (held(i)) { i++; continue; }
+          let j = i;
+          while (j < iTo && !held(j)) dragStep[j++] = index;
+          if (gravityWaves) gravityWaves.compute(state, i, j);
+          if (orography) orography.diagnose(state, i, j, dt * dragEvery);
+          i = j;
+        }
+      }
     },
     closure(kFrom, kTo, dt, part = 'all') { core.phaseClosure(state, kFrom, kTo, dt, part); },
     adjust(iFrom, iTo, dt) {
@@ -239,7 +262,7 @@ export function createModel(gridOrMesh, {
     mesh, core, radiation, surface, exchange, moist: moistPhysics, seaIce, ocean, boundaryLayer, gravityWaves, geography, land, orography, surfaceGeopotential: phis, surfaceAlbedo, state, totals, phases, tendency, physics, moistOn: physics && moist, time: 0,
     radiationSteps: 0,
     energyRecord: createEnergyRecord(),
-    shared: { core: core.shared, surface: surface.shared, exchange: exchange ? exchange.shared : null, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, gravityWaves: gravityWaves ? gravityWaves.shared : null, orography: orography ? orography.shared : null, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
+    shared: { core: core.shared, surface: surface.shared, exchange: exchange ? exchange.shared : null, moist: moistPhysics.shared, ice: seaIce.shared, radiation: radiation.shared, ocean: ocean ? ocean.shared : (buffers && buffers.ocean ? buffers.ocean : null), boundaryLayer: boundaryLayer ? boundaryLayer.shared : null, gravityWaves: gravityWaves ? gravityWaves.shared : null, orography: orography ? orography.shared : null, drags: dragBuffer, land: land ? land.shared : null, state: Object.fromEntries(STATE_NAMES.map((name, a) => [name, state[a].buffer])) },
   };
 
   model.oceanFields = (depth = 0) => (ocean ? ocean.fields(depth) : null);
