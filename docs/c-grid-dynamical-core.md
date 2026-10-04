@@ -11517,7 +11517,7 @@ without it.
 
 The default stays at `closureFill` 0 (the token edges carry the layer above's velocity as before): the two-ring fill with its transpose damps the thermocline classes' own flow by 0.2–95·10⁻⁶ /s on the audited states and took the N=128 undercurrent from 0.47 to 0.36 m/s in a day, while the first ring alone with its transpose showed no systematic drag but was not run for stability. The fill and its transpose remain options; the first-ring form is the next step here. The atlas deep fill is on.
 
-### M24 — Performance — in progress (seven levers done)
+### M24 — Performance — in progress (ten levers done)
 
 The goal is a model day in a minute at N=128 on the M1 Max with every
 scheme of M21–M23 in place. Three levers, each an option whose off value
@@ -12216,6 +12216,81 @@ defaults loaded and restores at the same N and at another N worked.
 Nothing the step runs changed: `scripts/paceGpu.mjs` at N=128 gives
 48.4 and 48.5 s a model day on 3610d2a and 48.4 twice with the change,
 and the suite passes (72 files, 614 tests).
+
+**The three memory levers together** (branch mem-night: 3610d2a with
+mem-upload-clear-paced, mem-gpu-registers-and-ocean-scratch and
+mem-worker-load-lean merged in that order, the largest saving first).
+The code merged without a conflict, the three entries above being the
+only one. With the registers shared, the load's copy of S into T and
+its clears of K1–K4 run twice into the same buffers, the core's over its
+state's length and then the ocean's over its own, and every RK stage
+writes every row before reading it. The suite passes (73 files, 615
+tests); the only test changes are the levers' own (test/gpuReload.test.mjs
+and test/sourceGeopotential.test.mjs added, test/stateFile.test.mjs
+extended), with no bound changed and nothing skipped.
+
+Bit for bit against 3610d2a: `scripts/spinup.mjs` from eleven64_day1826
+for 16 steps and from eleven128_day1826 for 8, with BATCH 1 and 8, saves
+states that cmp equal, and so do the registers lever's own 24-step
+references at N=64 (BATCH 1 and 8) once the first two were merged. The
+worker run in Node from the page's start message and default parts
+(`dumpWorker.mjs` of the upload lever): after 10 steps at N=64 by `step`
+and by `stepBatch` and 5 at N=128 by `stepBatch` the worker's snapshot
+hashes alike, and every buffer that both trees allocate under one name
+and size (MI, MF, LV, S, D, P, PH, FR, FP, PR, the ocean's S and OF)
+matches word for word; so they do after 10 steps at N=64 and a restore
+of the snapshot at the same N.
+
+| | 3610d2a, N=64 | mem-night, N=64 | 3610d2a, N=128 | mem-night, N=128 |
+|---|---|---|---|---|
+| GPU buffers alive after two steps, MiB | 821.8 | 587.4 (−29 %) | 3285.7 | 2348.2 (−29 %) |
+| GPU buffers the model creates, MiB (count) | 808 (23) | 574 (18) | 3232 (23) | 2294 (18) |
+| the largest buffer (OD), MiB | 160.6 | 97.3 | 642.2 | 389.1 |
+| the worker's load: queue writes (mapped at creation), MiB | 1355.3 (29.8) | 146.9 (0) | 5421.2 (119.4) | 536.6 (0) |
+| the worker's load ready in Node, s | 3.5–4.3 | 1.8–2.1 | 10.9 | 5.3 |
+| the page: the renderer's footprint (peak), MB | 2931, 3003 (2998, 3048) | 965, 1035 (1078, 1122) | 9516 (9910) | 1864 (2573) |
+| the page: the GPU process's footprint (peak), MB | 2386, 2386 (2433, 2431) | 1010, 1003 (1018, 1003) | 9192 (9808) | 2768 (2798) |
+| the page: shared memory in each process, MB | 1258–1259 | 24 | 5518 | 39–40 |
+| the page: the GPU process's Metal buffers, MB | 870 | 635 | 3334 | 2396 |
+| the page: the two footprints added, MB | 5317, 5389 | 1975, 2038 (−63 %) | 18708 | 4632 (−75 %) |
+| the page: the worker's JavaScript after collection, MiB | 872.6, 872.6 | 420.5, 420.6 | 3457.8 | 1650.3 |
+| the page ready, s | 3.1, 3.1 | 2.1, 2.1 | 14.0 | 5.8 |
+
+(The GPU buffers counted by wrapping the device's createBuffer, alive
+after two steps from eleven64_day1826 and eleven128_day1826 by the
+registers lever's script, and created while the model is built by
+`gpumem.mjs`; the shared buffers are counted once. The page is the
+unmodified climate.html?N=64 and N=128 with engine=gpu from the default
+parts, running, in a headless Chrome for Testing on the M1 Max, each
+tree served by its own httpd.py: footprint's phys_footprint, its peak,
+its VM_ALLOCATE and the GPU process's owned unmapped graphics memory 15
+s after the worker's first frame, then one
+`performance.measureUserAgentSpecificMemory`, which collects the
+garbage first; two loads of each tree at N=64 and one at N=128. The
+shared memory is mapped into both processes and counted in both
+footprints.) At N=64 the tab's two processes hold 2.0 GB in place of
+5.3, the renderer under 1.1 GB and the GPU process 1.0 GB, of which
+the model's Metal buffers are 635 MB; at N=128 4.6 GB in place of 18.7.
+
+The step is untouched: `scripts/paceGpu.mjs` on the quiet device (the
+streaming probe at 356–372 GB/s), 3610d2a and mem-night alternated,
+gives at N=128 48.3, 48.4 and 48.4 s a model day awaited one step at a
+time against 48.3, 48.3 and 48.3, and queued 8 to a submission 48.4
+against 48.3 and 48.3, and 7.0 s at N=64 for both, with identical day
+means; three more runs within the same five minutes, two of 3610d2a
+(awaited and queued) and one of mem-night (awaited), took 51.6–55.2 s
+on a disturbed device and are left out. The page in that headless
+Chrome: at N=64 the pace readout gave 6.7 s a simulated day once the
+memory was taken, the overlays switched from wind to rain and then to
+OLR with their legends, a pause held the clock and the frames for 5 s
+and a resume went on at 6.9–7.0 s a simulated day, from Day 1825 to
+Day 1840.8 in two minutes; at N=128 the
+same over two minutes at 49.7–50.2 s a simulated day (46.0 before the
+switches), from Day 1825 to Day 1827.8. No load of either tree at
+either N wrote a console message. The Claude app's Browser pane was not
+open, its new tab refused and its navigation to localhost denied, so
+the built-in browser did not run this check, and Safari on the iPhone
+17 Pro, whose WebKit may hold the uploads differently, is not measured.
 
 ### M25 — The long spin-up — planned
 
