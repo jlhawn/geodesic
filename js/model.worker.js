@@ -86,6 +86,11 @@ async function cpuFrame({ level, depth, fields, diagnostics: summarize }) {
     const parts = Array.from({ length: C }, (_, i) => model.cloudParts(i));
     for (const name of CLOUD_TYPES) if (want.has(name)) out[name] = Float32Array.from(parts, (part) => part[name]);
   }
+  if (want.has('cloudTop') || want.has('cloudBase')) {
+    const heights = model.cloudHeights();
+    if (want.has('cloudTop')) out.cloudTop = heights.top;
+    if (want.has('cloudBase')) out.cloudBase = heights.base;
+  }
   if (want.has('rain')) out.rain = Float32Array.from(rain.total);
   if (want.has('ice')) out.ice = Float32Array.from(iceField);
   if (want.has('concentration')) out.concentration = Float32Array.from(model.seaIce.concentration);

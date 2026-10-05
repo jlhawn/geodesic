@@ -11,7 +11,7 @@ import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapsho
 import { Stats } from "./stats.module.js";
 import { pickDevice, isMobileBrowser, probeN, PROBE_VERSION, DESKTOP_MAX_N, MOBILE_MAX_N } from "./deviceChoice.module.js";
 import { defaultRunFor } from "./defaultRun.module.js";
-import { CLOUD_RANGES } from "./frames.module.js";
+import { CLOUD_RANGES, CLOUD_OPACITY_PATH } from "./frames.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
 const VERTICAL_MAX = { surface: 3, 1000: 3, 850: 10, 700: 10, 500: 10, 250: 10, 70: 3, 10: 1 };
@@ -117,7 +117,7 @@ const OVERLAY_NAMES = Object.fromEntries(Object.entries(OVERLAYS).map(([key, ove
  * clouds overlay's COVER_RANGE is to CLOUD_OPACITY_SCALE, so All clouds
  * matches the Satellite view and every legend shares COVER_STOPS.
  */
-const OCEAN_COLOR = [0.05, 0.22, 0.45], ICE_COLOR = [0.85, 0.90, 0.95], CLOUD_COLOR = [1, 1, 1], CLOUD_OPACITY_SCALE = 40, COVER_RANGE = CLOUD_RANGES.cloud;
+const OCEAN_COLOR = [0.05, 0.22, 0.45], ICE_COLOR = [0.85, 0.90, 0.95], CLOUD_COLOR = [1, 1, 1], CLOUD_OPACITY_SCALE = 1000 * CLOUD_OPACITY_PATH, COVER_RANGE = CLOUD_RANGES.cloud;
 const DRY_LAND = [0.45, 0.36, 0.22], WET_LAND = [0.16, 0.30, 0.12], SNOW_COLOR = [0.9, 0.92, 0.95];
 const COVER_BASE = [0.22, 0.22, 0.22];
 const cloudOpacity = (grams) => 1 - Math.exp(-Math.max(0, grams) / CLOUD_OPACITY_SCALE);

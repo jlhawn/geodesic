@@ -11,7 +11,7 @@ import { createOcean } from './ocean/layered.module.js';
 import { createBoundaryLayer } from './physics/boundaryLayer.module.js';
 import { createGeography, surfaceGeopotential, subgridOrography, meshSubgrid, landSubgrid, subgridFallbackNote } from './geography.module.js';
 import { createLandSurface } from './physics/land.module.js';
-import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE } from './frames.module.js';
+import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, visibleCloudHeights } from './frames.module.js';
 import { createSurfaceExchange, exchangeMode } from './physics/exchange.module.js';
 import { createGravityWaveDrag } from './physics/gravityWaves.module.js';
 import { createOrographicDrag, LOTT_MILLER } from './physics/orography.module.js';
@@ -278,6 +278,27 @@ export function createModel(gridOrMesh, {
       if (p > CLOUD_LOW_PRESSURE) low += path; else if (p > CLOUD_HIGH_PRESSURE) mid += path; else high += path;
     }
     return { cloudLow: low, cloudMid: mid, cloudHigh: high, cloudCumulus: moistPhysics.cumulusCloudPath(state[0], i), cloudDeck: radiation.stratusFraction[i] * radiation.stratus[i] };
+  };
+  /*
+   * Where light from above and from below first meets each column's cloud
+   * (visibleCloudHeights), from the layer heights of the last diagnosis.
+   */
+  model.cloudHeights = () => {
+    const top = new Float32Array(C), base = new Float32Array(C), z = new Float64Array(K), path = new Float64Array(K), out = [0, 0];
+    const pi = state[0], qc = state[5], { dSigma, g, geopotential } = core.diagnostics;
+    const cover = moistPhysics.cumulusCover, water = moistPhysics.cumulusWater;
+    for (let i = 0; i < C; i++) {
+      for (let k = 0; k < K; k++) {
+        const n = k * C + i;
+        z[k] = geopotential[n] / g;
+        path[k] = pi[i] * dSigma[k] / g * (Math.max(0, qc[n]) + cover[n] * water[n]);
+      }
+      const ground = (phis ? phis[i] : 0) / g;
+      const deckTop = Math.max(boundaryLayer ? boundaryLayer.depth[i] : 0, radiation.mlmTop[i]);
+      visibleCloudHeights(K, z, ground, path, radiation.stratusFraction[i] * radiation.stratus[i], deckTop, out);
+      top[i] = out[0]; base[i] = out[1];
+    }
+    return { top, base };
   };
 
   model.step = function step(dt) {

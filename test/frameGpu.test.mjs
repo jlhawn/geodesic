@@ -7,7 +7,7 @@ import { levelFields, verticalVelocity, smoothCells, dewPoint, wetBulb, miseryIn
 import { VERTICAL_MEMORY } from '../js/frames.module.js';
 import { depthFields } from '../js/ocean/layered.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { FIELDS, CLOUD_TYPES, CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE } from '../js/frames.module.js';
+import { FIELDS, CLOUD_TYPES, CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, visibleCloudHeights } from '../js/frames.module.js';
 import { createModel } from '../js/model.module.js';
 
 let gpuAvailable = true;
@@ -81,6 +81,26 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     cloudCumulus: cumulus, cloudDeck: Float64Array.from({ length: C }, (_, i) => physics.DECKF[i] * physics.DECK[i]),
   };
   for (const name of ['cloudLow', 'cloudMid', 'cloudHigh']) assert.ok(types[name].some((v) => v > 1e-4), `some ${name}`);
+  const visible = { top: new Float64Array(C), base: new Float64Array(C) }, seen = { top: Float64Array.from(f.cloudTop), base: Float64Array.from(f.cloudBase) };
+  {
+    const z = new Float64Array(core.K), paths = new Float64Array(core.K), out = [0, 0], geopotential = core.diagnostics.geopotential;
+    for (let i = 0; i < C; i++) {
+      let total = physics.DECKF[i] * physics.DECK[i];
+      for (let k = 0; k < core.K; k++) {
+        z[k] = geopotential[k * C + i] / gravity;
+        const plume = k >= K0 ? physics.CUCOVER[(k - K0) * C + i] * physics.CUWATER[(k - K0) * C + i] : 0;
+        paths[k] = pi[i] * dSigma[k] / gravity * (Math.max(0, qc[k * C + i]) + plume);
+        total += paths[k];
+      }
+      visibleCloudHeights(core.K, z, phis[i] / gravity, paths, physics.DECKF[i] * physics.DECK[i], Math.max(physics.DEPTH[i], physics.MLMTOP[i]) + phis[i] / gravity, out);
+      const opacity = 1 - Math.exp(-total / CLOUD_OPACITY_PATH);
+      if (Math.abs(opacity - CLOUD_SEEN) < 1e-4) { visible.top[i] = visible.base[i] = seen.top[i] = seen.base[i] = NaN; continue; }
+      visible.top[i] = out[0]; visible.base[i] = out[1];
+      if (opacity < CLOUD_SEEN) assert.ok(f.cloudTop[i] === 0 && f.cloudBase[i] === 0, `a clear column has no cloud heights at ${i}`);
+      else assert.ok(f.cloudBase[i] <= f.cloudTop[i], `cloud base ${f.cloudBase[i]} above the top ${f.cloudTop[i]} at ${i}`);
+    }
+  }
+  assert.ok(f.cloudTop.some((height) => height > 6000), 'some cloud tops above 6 km');
   const sea = (source) => Float64Array.from({ length: C }, (_, i) => (model.geography.land[i] ? NaN : source[i]));
   const currents = cellVector(mesh, ocean.u1);
   for (let i = 0; i < C; i++) if (model.geography.land[i]) currents.fill(0, 3 * i, 3 * i + 3);
@@ -93,6 +113,12 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
     current: [current, 1e-5], currents: [currents, 1e-5],
     ...Object.fromEntries(Object.entries(types).map(([name, values]) => [name, [values, 1e-6]])),
   };
+  const misses = ['top', 'base'].map((name) => {
+    const { max, at } = worst(visible[name], seen[name], { skipNaN: true });
+    assert.ok(max < 2, `cloud ${name}: ${max} m at ${at} (${visible[name][at]} against ${seen[name][at]})`);
+    return max;
+  });
+  console.log(`cloud tops up to ${Math.max(...f.cloudTop).toFixed(0)} m, the GPU's within ${misses[0].toFixed(2)} m (tops) and ${misses[1].toFixed(2)} m (bases) of double precision`);
   for (const [name, [values, tolerance]] of Object.entries(checks)) {
     const { max, at } = worst(values, f[name], { skipNaN: true });
     assert.ok(max < tolerance, `${name}: ${max} at ${at} (${values[at]} against ${f[name][at]})`);
@@ -180,7 +206,7 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
     for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) { cpu.state[1][k * C + i] += 10; gpu.state[1][k * C + i] += 10; }
     gpu.load();
     for (let n = 0; n < 2; n++) { cpu.step(900); await gpu.step(900); }
-    const frame = await gpu.beginFrame({ fields: ['cloud', ...CLOUD_TYPES] }), physics = await gpu.gpu.downloadPhysics(), K0 = gpu.moist.cumulusK0, { dSigma, g } = cpu.core.diagnostics, pi = cpu.state[0];
+    const frame = await gpu.beginFrame({ fields: ['cloud', ...CLOUD_TYPES, 'cloudTop', 'cloudBase'] }), physics = await gpu.gpu.downloadPhysics(), K0 = gpu.moist.cumulusK0, { dSigma, g } = cpu.core.diagnostics, pi = cpu.state[0];
     const gpuCumulus = Float64Array.from({ length: C }, (_, i) => { let path = 0; for (let k = K0; k < K; k++) { const slot = (k - K0) * C + i; path += pi[i] * dSigma[k] / g * physics.CUCOVER[slot] * physics.CUWATER[slot]; } return path; });
     const parted = [];
     for (let i = 0; i < C; i++) if ((cpu.moist.cumulusCloudPath(pi, i) > 0) !== (gpuCumulus[i] > 0)) parted.push(i);
@@ -188,11 +214,15 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
     const parts = Array.from({ length: C }, (_, i) => cpu.cloudParts(i));
     const types = Object.fromEntries(CLOUD_TYPES.map((name) => [name, { cpu: kept(parts.map((part) => part[name])), gpu: kept(frame.fields[name]) }]));
     const summed = Float64Array.from({ length: C }, (_, i) => CLOUD_TYPES.reduce((total, name) => total + frame.fields[name][i], 0));
-    return { cpu: kept(Array.from({ length: C }, (_, i) => cpu.cloudWater(i))), gpu: kept(frame.fields.cloud), types, summed, all: frame.fields.cloud, deck: Float64Array.from({ length: C }, (_, i) => cpu.radiation.stratusFraction[i] * cpu.radiation.stratus[i]), parted };
+    cpu.core.diagnose(cpu.state[0], cpu.state[1], cpu.state[4], cpu.state[5]);
+    const heights = cpu.cloudHeights();
+    const seen = { top: { cpu: kept(heights.top), gpu: kept(frame.fields.cloudTop) }, base: { cpu: kept(heights.base), gpu: kept(frame.fields.cloudBase) } };
+    return { cpu: kept(Array.from({ length: C }, (_, i) => cpu.cloudWater(i))), gpu: kept(frame.fields.cloud), types, summed, all: frame.fields.cloud, deck: Float64Array.from({ length: C }, (_, i) => cpu.radiation.stratusFraction[i] * cpu.radiation.stratus[i]), parted, seen };
   };
   const on = await run(true), off = await run(false);
   for (const [label, r] of Object.entries({ on, off })) {
     for (const [name, { cpu, gpu }] of Object.entries(r.types)) { const { max, at } = worst(cpu, gpu, { skipNaN: true }); assert.ok(max < 1e-4, `deck ${label}: ${name} differs between the engines by ${max} at ${at}`); }
+    for (const [name, { cpu, gpu }] of Object.entries(r.seen)) { const { max, at } = worst(cpu, gpu, { skipNaN: true }); assert.ok(max < 5, `deck ${label}: the cloud ${name} differs between the engines by ${max} m at ${at} (${cpu[at]} against ${gpu[at]})`); }
     const { max, at } = worst(r.all, r.summed);
     assert.ok(max <= 1e-6 * Math.max(...r.all), `deck ${label}: the GPU's types sum to its cloud to ${max} at ${at}`);
   }
@@ -225,7 +255,7 @@ test('the mixed-layer deck shows in the cloud field, the same in both engines', 
   gpu.radiation.mlmSubsidence.fill(-1e-3);
   gpu.load();
   for (let n = 0; n < 2; n++) { cpu.step(900); await gpu.step(900); }
-  const frame = await gpu.beginFrame({ fields: ['cloud', ...CLOUD_TYPES] });
+  const frame = await gpu.beginFrame({ fields: ['cloud', ...CLOUD_TYPES, 'cloudTop', 'cloudBase'] });
   const reference = Float64Array.from({ length: C }, (_, i) => cpu.cloudWater(i));
   const parts = Array.from({ length: C }, (_, i) => cpu.cloudParts(i));
   for (const name of CLOUD_TYPES) { const { max, at } = worst(parts.map((part) => part[name]), frame.fields[name]); assert.ok(max < 1e-4, `${name} differs between the engines by ${max} at ${at}`); }
@@ -236,4 +266,31 @@ test('the mixed-layer deck shows in the cloud field, the same in both engines', 
   console.log(`the mixed-layer deck on ${decked} of ${C} cells adds ${(1000 * added / Math.max(1, decked)).toFixed(1)} g/m² to their cloud; the engines' cloud fields differ by at most ${engines.max.toExponential(1)} kg/m²`);
   assert.ok(decked > C / 2 && added / decked > 0.05, `deck on ${decked} cells adding ${added / decked} kg/m²`);
   assert.ok(engines.max < 1e-4, `cloud differs between the engines by ${engines.max} at ${engines.at}`);
+
+  cpu.core.diagnose(cpu.state[0], cpu.state[1], cpu.state[4], cpu.state[5]);
+  const heights = cpu.cloudHeights();
+  for (const [name, values] of Object.entries({ cloudTop: heights.top, cloudBase: heights.base })) {
+    const { max, at } = worst(values, frame.fields[name]);
+    assert.ok(max < 5, `${name} differs between the engines by ${max} m at ${at}`);
+    console.log(`over the mixed-layer deck the engines' ${name} differ by at most ${max.toFixed(2)} m`);
+  }
+});
+
+test('frames leave the model state bit-identical whichever fields they carry', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const run = async (fields) => {
+    const model = await createGpuModel(new Grid(6), { topography });
+    const init = initializeState(model, {});
+    for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+    for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
+    model.load();
+    model.ocean.initialize(model.state[3], model.state[6]);
+    model.land.initialize();
+    for (let n = 0; n < 10; n++) { await model.step(900); await model.beginFrame({ fields }); }
+    const physics = await model.gpu.downloadPhysics();
+    await model.sync();
+    return { state: model.state.map((array) => Float64Array.from(array)), physics };
+  };
+  const plain = await run(['cloud']), heights = await run(['cloud', 'cloudTop', 'cloudBase']);
+  plain.state.forEach((array, a) => assert.deepEqual(heights.state[a], array, `state array ${a}`));
+  for (const [name, array] of Object.entries(plain.physics)) assert.deepEqual(heights.physics[name], array, `physics ${name}`);
 });

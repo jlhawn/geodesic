@@ -4,7 +4,7 @@ import { sunDirection, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_B
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, physicsKernel } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
-import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE } from '../frames.module.js';
+import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
 import { SNOW_AGEING } from '../physics/ice.module.js';
 import { FOREST_ARIDITY, SOIL_CARBON } from '../physics/land.module.js';
@@ -48,7 +48,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   const stage = seq([['FLUX', KE], ['QV', KV], ['QE', KE], ['PHI', KC]]), closure = seq([['LAPA', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC]]);
   const D = { ...stage, ...closure, ...seq([['SCRATCH', Math.max(stage.total, closure.total)], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['DRAG', C], ['WIND', C], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]) };
   const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['CLOUDK', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E], ['SUBTV', subcloudLayers * C], ...(heldRadiation ? HELD_RADIATION.map((name) => [name, name === 'RADP' ? 8 : name === 'RADSW' || name === 'RADDF' ? KC : C]) : [])]);
-  const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['CLOW', C], ['CMID', C], ['CHIGH', C], ['CCU', C], ['CDECK', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
+  const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['CLOW', C], ['CMID', C], ['CHIGH', C], ['CCU', C], ['CDECK', C], ['CTOP', C], ['CBASE', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, SPK, SPB, MI, MF, LV, S, D, PH, FR };
 }
 
@@ -154,7 +154,11 @@ const REDUCED_SETUP = `    let a = MF[F_AREA + i]; let pi = IN[S_PI + i];
  * the albedo ALBMEAN (reflected over incoming summed, 0 where no sun
  * rose), with clearSkyPass the cloud effects SWCREMEAN (absorbed less
  * clear-sky absorbed) and LWCREMEAN (clear-sky less all-sky outgoing),
- * and every frame clears those sums too.
+ * and every frame clears those sums too. When P[7] asks for them
+ * frameFields also finds where light from above and from below first meets
+ * the column's cloud, as visibleCloudHeights() in frames.module.js does,
+ * with the layers' heights integrated in registers and the deck's water in
+ * the lowest layer reaching the deck's top.
  */
 const COMFORT_WGSL = `
 fn dewPointC(t: f32, rh: f32) -> f32 {
@@ -188,6 +192,7 @@ fn miseryC(t: f32, rh: f32, v: f32) -> f32 {
 const FRAME_KERNELS = {
   frameFields: `${COMFORT_WGSL}
 const CLOUD_LOW_P: f32 = ${CLOUD_LOW_PRESSURE.toFixed(1)}; const CLOUD_HIGH_P: f32 = ${CLOUD_HIGH_PRESSURE.toFixed(1)};
+const CLOUD_PATH: f32 = ${CLOUD_OPACITY_PATH}; const CLOUD_SEEN_OPACITY: f32 = ${CLOUD_SEEN};
 @compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let pi = IN[S_PI + i];
@@ -225,10 +230,10 @@ const CLOUD_LOW_P: f32 = ${CLOUD_LOW_PRESSURE.toFixed(1)}; const CLOUD_HIGH_P: f
   OUT[FR_SPD + i] = speed;
   OUT[FR_DP + i] = dewPointC(celsius, rh) + 273.15; OUT[FR_WB + i] = wetBulbC(celsius, rh) + 273.15; OUT[FR_MI + i] = miseryC(celsius, rh, speed) + 273.15;
   OUT[FR_WIND + 3 * i] = wind.x; OUT[FR_WIND + 3 * i + 1] = wind.y; OUT[FR_WIND + 3 * i + 2] = wind.z;
-  var water = 0.0; var cloud = 0.0; var low = 0.0; var mid = 0.0; var high = 0.0; var cumulus = 0.0;
+  var water = 0.0; var cloud = 0.0; var low = 0.0; var mid = 0.0; var high = 0.0; var cumulus = 0.0; var cleanCloud = 0.0;
   for (var j = 0; j < K; j++) {
     let d = pi * LV[L_DS + j] / GRAV; let condensed = d * IN[S_QC + j * C + i]; let p = pi * LV[L_SM + j];
-    water += d * IN[S_Q + j * C + i]; cloud += condensed;
+    water += d * IN[S_Q + j * C + i]; cloud += condensed; cleanCloud += d * max(0.0, IN[S_QC + j * C + i]);
     if (p > CLOUD_LOW_P) { low += condensed; } else if (p > CLOUD_HIGH_P) { mid += condensed; } else { high += condensed; }
   }
   for (var j = CU_K0; j < K; j++) {
@@ -239,6 +244,46 @@ const CLOUD_LOW_P: f32 = ${CLOUD_LOW_PRESSURE.toFixed(1)}; const CLOUD_HIGH_P: f
   let deck = PH[PH_DECKF + i] * PH[PH_DECK + i];
   OUT[FR_TPW + i] = water; OUT[FR_TCW + i] = cloud + deck;
   OUT[FR_CLOW + i] = low; OUT[FR_CMID + i] = mid; OUT[FR_CHIGH + i] = high; OUT[FR_CCU + i] = cumulus; OUT[FR_CDECK + i] = deck;
+  if (P[7] > 0.5) {
+    let seen = cleanCloud + cumulus + deck;
+    let opacity = 1.0 - exp(-seen / CLOUD_PATH);
+    var cloudTop = 0.0; var cloudBase = 0.0;
+    if (opacity >= CLOUD_SEEN_OPACITY) {
+      let deckTop = max(PH[PH_DEPTH + i], PH[PH_MLMTOP + i]) + phis / GRAV;
+      var gz = 0.0; var thvUnder = 0.0; var zPrev = 0.0; var zPrev2 = 0.0; var pathPrev = 0.0;
+      var lower = phis / GRAV; var under = 0.0; var fromBelow = 1.0; var deckLeft = deck;
+      for (var j = K - 1; j >= -1; j--) {
+        var zj = 0.0; var pj = 0.0;
+        if (j >= 0) {
+          let slotK = j * C + i;
+          let thv = IN[S_TH + slotK] * (1.0 + VIRT * IN[S_Q + slotK] - IN[S_QC + slotK]);
+          if (j == K - 1) { gz = CP * exner0 * thv * LV[L_CB + j] - LV[L_GR + j]; }
+          else { gz = gz + CP * exner0 * (thvUnder * LV[L_CA + j] + thv * LV[L_CB + j]) - LV[L_GR + j]; }
+          thvUnder = thv;
+          zj = (gz + LV[L_GABS + j] + phis) / GRAV;
+          let mass = pi * LV[L_DS + j] / GRAV;
+          pj = mass * max(0.0, IN[S_QC + slotK]);
+          if (j >= CU_K0) { let cu = (j - CU_K0) * C + i; pj += mass * PH[PH_CUCOVER + cu] * PH[PH_CUWATER + cu]; }
+        }
+        if (j < K - 1) {
+          var upper = 0.5 * (zPrev + zj);
+          if (j < 0) { upper = zPrev + 0.5 * (zPrev - zPrev2); }
+          var layer = pathPrev;
+          if (deckLeft > 0.0 && (upper >= deckTop || j < 0)) { layer += deckLeft; deckLeft = 0.0; }
+          if (layer > 0.0) {
+            let through = exp(-layer / CLOUD_PATH);
+            cloudBase += fromBelow * (1.0 - through) * lower; fromBelow *= through;
+            cloudTop += exp(-max(0.0, seen - under - layer) / CLOUD_PATH) * (1.0 - through) * upper;
+            under += layer;
+          }
+          lower = upper;
+        }
+        zPrev2 = zPrev; zPrev = zj; pathPrev = pj;
+      }
+      cloudTop /= opacity; cloudBase /= opacity;
+    }
+    OUT[FR_CTOP + i] = cloudTop; OUT[FR_CBASE + i] = cloudBase;
+  }
   let tb = IN[S_TH + (K - 1) * C + i] * exner0 * LV[L_CM + K - 1];
   OUT[FR_MSLP + i] = pi * exp(phis / (RGAS * (tb + 0.00325 * phis / GRAV)));
   if (P[3] > 0.5) {
@@ -1179,7 +1224,7 @@ export async function createGpuCore(mesh, {
   const FIELDS = {
     temperature: ['FR', 'T', 1], height: ['FR', 'Z', 1], humidity: ['FR', 'RH', 1], speed: ['FR', 'SPD', 1], wind: ['FR', 'WIND', 3],
     dewPoint: ['FR', 'DP', 1], wetBulb: ['FR', 'WB', 1], misery: ['FR', 'MI', 1], vertical: ['FR', 'WM', 1],
-    water: ['FR', 'TPW', 1], cloud: ['FR', 'TCW', 1], cloudLow: ['FR', 'CLOW', 1], cloudMid: ['FR', 'CMID', 1], cloudHigh: ['FR', 'CHIGH', 1], cloudCumulus: ['FR', 'CCU', 1], cloudDeck: ['FR', 'CDECK', 1],
+    water: ['FR', 'TPW', 1], cloud: ['FR', 'TCW', 1], cloudLow: ['FR', 'CLOW', 1], cloudMid: ['FR', 'CMID', 1], cloudHigh: ['FR', 'CHIGH', 1], cloudCumulus: ['FR', 'CCU', 1], cloudDeck: ['FR', 'CDECK', 1], cloudTop: ['FR', 'CTOP', 1], cloudBase: ['FR', 'CBASE', 1],
     mslp: ['FR', 'MSLP', 1], rain: ['FR', 'RAIN', 1], ps: ['S', 'PI', 1], ice: ['S', 'ICE', 1],
     albedo: ['PH', 'ADIF', 1], shortwave: ['PH', 'SWDN', 1], longwave: ['PH', 'OLR', 1], soil: ['PH', 'SOIL', 1], snow: ['PH', 'SNOW', 1], vegetation: ['PH', 'VEG', 1],
     concentration: ['PH', 'CONC', 1],
@@ -1187,7 +1232,8 @@ export async function createGpuCore(mesh, {
   const frameParams = new Float32Array(8);
   function frame({ pressure = 0, keep = 1, keepVertical = 0, fields = [], diagnostics = false, rainScale = 0, meanScale = 0 } = {}) {
     const wanted = fields.filter((name) => name in FIELDS), vertical = wanted.includes('vertical');
-    frameParams.set([pressure, keep, diagnostics ? 1 : 0, vertical ? 1 : 0, keepVertical, rainScale, meanScale]);
+    const heights = wanted.includes('cloudTop') || wanted.includes('cloudBase');
+    frameParams.set([pressure, keep, diagnostics ? 1 : 0, vertical ? 1 : 0, keepVertical, rainScale, meanScale, heights ? 1 : 0]);
     device.queue.writeBuffer(buffers.FP, 0, frameParams);
     const g = group(buffers.S, buffers.FR, buffers.D, buffers.FP);
     const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();

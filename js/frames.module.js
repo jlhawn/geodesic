@@ -32,6 +32,8 @@ export const FIELDS = {
   cloudHigh: 'the resolved condensate in the layers above 500 hPa, kg/m²',
   cloudCumulus: 'the cumulus cloud\'s condensate times its cover, kg/m²',
   cloudDeck: 'the stratocumulus deck\'s water times its cover, kg/m²',
+  cloudTop: 'height above sea level where light from above first meets the column\'s cloud, averaged over where it does, 0 where the column is less than 1% opaque, m',
+  cloudBase: 'height above sea level where light from below first meets the column\'s cloud, averaged over where it does, 0 where the column is less than 1% opaque, m',
   rain: 'recent rain, mm, with a three-hour exponential memory',
   ice: 'sea-ice thickness over the part of the cell the ice covers, m',
   concentration: 'sea-ice concentration, the fraction of the cell the ice covers, 0 to 1',
@@ -60,6 +62,47 @@ export const CLOUD_LOW_PRESSURE = 80000, CLOUD_HIGH_PRESSURE = 50000;
 export const CLOUD_TYPES = ['cloudLow', 'cloudMid', 'cloudHigh', 'cloudCumulus', 'cloudDeck'];
 // The cloud overlays' legend ranges, g/m², the top near the 95th percentile of the cells holding each type.
 export const CLOUD_RANGES = { cloud: 100, cloudLow: 200, cloudMid: 500, cloudHigh: 400, cloudCumulus: 40, cloudDeck: 150 };
+
+// The cloud water path, kg/m², over which a column's opacity rises by a factor e, and the opacity below which it counts as clear.
+export const CLOUD_OPACITY_PATH = 0.040, CLOUD_SEEN = 0.01;
+
+/*
+ * Where light first meets a column's cloud, for layers k = 0 (top) to K-1
+ * (bottom) with mid heights z[k] above sea level over ground at 'ground':
+ * each layer spans halfway to its neighbours (the top layer as far above
+ * its middle as halfway down, the bottom one down to the ground) and holds
+ * the cloud water path[k], kg/m², and the deck's path joins the lowest
+ * layer reaching deckTop (the top layer if none does). With the opacity
+ * 1 - exp(-P / CLOUD_OPACITY_PATH) of a path P, light from above stops in a
+ * layer with the layer's own opacity times the clearness of all above it;
+ * out[0] is that layer's upper bound averaged with those weights, which
+ * sum to the column's opacity, and out[1] the same for light from below
+ * and lower bounds. Both are 0 where the column is less than CLOUD_SEEN
+ * opaque.
+ */
+export function visibleCloudHeights(K, z, ground, path, deck, deckTop, out) {
+  let total = deck;
+  for (let k = 0; k < K; k++) total += path[k];
+  const opacity = 1 - Math.exp(-total / CLOUD_OPACITY_PATH);
+  out[0] = 0; out[1] = 0;
+  if (opacity < CLOUD_SEEN) return out;
+  let below = 0, fromBelow = 1, left = deck, top = 0, base = 0;
+  for (let k = K - 1; k >= 0; k--) {
+    const lower = k === K - 1 ? ground : 0.5 * (z[k] + z[k + 1]);
+    const upper = k === 0 ? z[0] + 0.5 * (z[0] - z[1]) : 0.5 * (z[k] + z[k - 1]);
+    let p = path[k];
+    if (left > 0 && (upper >= deckTop || k === 0)) { p += left; left = 0; }
+    if (p > 0) {
+      const through = Math.exp(-p / CLOUD_OPACITY_PATH);
+      base += fromBelow * (1 - through) * lower;
+      fromBelow *= through;
+      top += Math.exp(-Math.max(0, total - below - p) / CLOUD_OPACITY_PATH) * (1 - through) * upper;
+      below += p;
+    }
+  }
+  out[0] = top / opacity; out[1] = base / opacity;
+  return out;
+}
 
 export const RAIN_MEMORY = 3 * 3600;
 export const VERTICAL_MEMORY = 2 * 3600;
