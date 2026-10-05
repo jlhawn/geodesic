@@ -442,6 +442,19 @@ export function initUnifiedViewer(container, grid, config = {}) {
   geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pData), 3).onUpload(disposeArray));
   geometry.setAttribute('cellIndex', new THREE.BufferAttribute(new Float32Array(idxData), 1).onUpload(disposeArray));
   geometry.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(kData), 3, true).onUpload(disposeArray));
+  const cornerData = new Float32Array(2 * vertexCounter);
+  {
+    let k = 0, c = 0;
+    for (const cell of grid) {
+      for (const v of cell.vertices || []) {
+        const others = (v.index === undefined ? [] : cellsOnVertex[v.index]).filter((other) => other !== c);
+        cornerData[k++] = others[0] ?? c;
+        cornerData[k++] = others[1] ?? c;
+      }
+      c++;
+    }
+  }
+  geometry.setAttribute('corner', new THREE.BufferAttribute(cornerData, 2).onUpload(disposeArray));
   const slopeAttribute = new THREE.BufferAttribute(Float32Array.from(pData, (v, k) => v / Math.hypot(pData[k - (k % 3)], pData[k - (k % 3) + 1], pData[k - (k % 3) + 2])), 3);
   geometry.setAttribute('slope', slopeAttribute);
   geometry.computeBoundingSphere();
@@ -1007,6 +1020,8 @@ uniform sampler2D uCellTerrain;
 uniform float uTerrain;
 uniform sampler2D uCellLight;
 attribute vec3 slope;
+attribute vec2 corner;
+vec2 cellUv(float i) { return (vec2(mod(i, uTexSize.x), floor(i / uTexSize.x)) + 0.5) / uTexSize; }
 vec3 terrainGrey(float z) {
   float g = z < 0.0 ? 0.03 + 0.12 * clamp((z + 6000.0) / 6000.0, 0.0, 1.0) : 0.22 + 0.6 * clamp(z / 5000.0, 0.0, 1.0);
   return vec3(g);
@@ -1033,10 +1048,14 @@ vec3 paletteColor(float t) {
    * The Satellite view's light on the cell: the sunbeam through the air
    * down to the ground or the cloud top, on the terrain's or the cloud's
    * facet, less what lies sunward casts off it, plus sky light; the air
-   * between the surface and the camera; the sea's glint. Where the sun
-   * stands high the day side's own look takes over (daylight()); below a
-   * sun cosine of NIGHT_DEEP even the air a grazing view crosses lies in
-   * the globe's shadow, leaving the ambient alone.
+   * between the surface and the camera; the sea's glint. The cloud top the
+   * beam reaches is, at each corner, the mean of the tops of the cells
+   * meeting there ('corner' holds the other two) weighted by their cloud's
+   * opacity, so the colour and the reach of the sunset light on cloud vary
+   * smoothly across the deck; what lies sunward casts off the cell's own
+   * top. Where the sun stands high the day side's own look takes over
+   * (daylight()); below a sun cosine of NIGHT_DEEP even the air a grazing
+   * view crosses lies in the globe's shadow, leaving the ambient alone.
    */
   if (uLighting > 0.0) {
     vec3 n = normalize(position);
@@ -1046,7 +1065,6 @@ vec3 paletteColor(float t) {
     float facet = dot(normalize(slope), uSunDirection);
     float groundUnblocked = cell.r * cell.r;
     float ground = 1.0 + max(texture2D(uCellTerrain, uv).r, 0.0) * METRE;
-    float top = max(ground, 1.0 + surface.z * METRE);
     float cloudFacet = (mu + lean * abs(lean)) * cell.a;
     float cloudUnblocked = cell.g * cell.g;
     mat3 spin = mat3(uModelRotation);
@@ -1057,6 +1075,9 @@ vec3 paletteColor(float t) {
     float day = daylight(mu);
     vec3 lit = vColor.rgb * uAmbient;
     if (day < 1.0 && mu > ${glsl(NIGHT_DEEP)}) {
+      vec4 next = texture2D(uCellSurface, cellUv(corner.x)), last = texture2D(uCellSurface, cellUv(corner.y));
+      float cover = surface.y + next.y + last.y;
+      float top = max(ground, 1.0 + METRE * (surface.y * surface.z + next.y * next.z + last.y * last.z) / max(cover, 1.0e-6));
       vec3 light = mix(illumination(ground, mu, facet, 0.0, groundUnblocked, 1.0),
                        illumination(top, mu, cloudFacet, CLOUD_ROUGHNESS, cloudUnblocked, CLOUD_TINT), surface.y);
       float visible = mix(ground, top, surface.y);
