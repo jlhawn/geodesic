@@ -286,7 +286,7 @@ const LIGHT_MAX = { sun: 2, ambient: 0.5 };
 
 const VIEW_NOTES = [
   ['Lighting', 'In the Satellite view, the strength of the sunlight and of the ambient light that keeps the night side from going black; both sliders follow a square law, so the left half covers the faint end finely.'],
-  ['Mode', 'Atmosphere and Ocean paint the chosen overlay on an evenly lit globe, each with its own overlays: the wind or the current is what the animation follows, and only Atmosphere offers isobars and height lines. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day. Sunlight is reddened and dimmed by the air it crosses, so seen from above the terminator is a dim blue-grey twilight rather than a band of colour, and cloud there catches the last warm light. Heights, the air\'s included, are drawn four times their real size so that this reads at the globe\'s scale. Sunset colours appear only where you look through a long path of air: along the limb, a band layered red, yellow-white and blue when the sun is just behind the planet, while the day side keeps a thin blue rim. The sun reddens as it sinks into the air at the limb, and when it is in the frame a faint camera flare follows it, a halo, a streak and rays on the sun with ghost discs across the view, tinted as the sun is and fading out as the globe hides it.'],
+  ['Mode', 'Atmosphere and Ocean paint the chosen overlay on an evenly lit globe, each with its own overlays: the wind or the current is what the animation follows, and only Atmosphere offers isobars and height lines. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day. Sunlight is reddened and dimmed by the air it crosses, so seen from above the terminator is a dim blue-grey twilight rather than a band of colour. Clouds stand at their diagnosed heights, so near the terminator high cloud catches the last, reddening light after the ground below has gone dark (its reddening tripled so that it reads), its tops shade toward and away from the sun, and it casts long shadows on the cloud and ground beyond, as mountains do. Heights, the air\'s and the clouds\' included, are drawn four times their real size so that this reads at the globe\'s scale. Sunset colours appear only where you look through a long path of air: along the limb, a band layered red, yellow-white and blue when the sun is just behind the planet, while the day side keeps a thin blue rim. The sun reddens as it sinks into the air at the limb, and when it is in the frame a faint camera flare follows it, a halo, a streak and rays on the sun with ghost discs across the view, tinted as the sun is and fading out as the globe hides it.'],
   ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
   ['Height', 'The pressure level shown by the wind, temperature, humidity and vertical-motion views and followed by the animation: Surface is the lowest layer, 20 to 60 m up depending on the model\'s layers, and the slider climbs from 1000 to 10 hPa giving each of the model\'s layers the same width, so the thin layers near the ground get as much room as the deep ones aloft. Where the ground rises above the level the map shows its relief in grey and the particles stop. Column views hide it and use the surface wind.'],
   ['Depth', 'The depth shown by the sea temperature, current and upwelling views and followed by the animation: Surface is the mixed layer, and the slider descends to 5500 m giving each of the ocean\'s layers the same width by its subtropical depth, each cell showing the isopycnal layer that holds the depth. Where the sea floor rises above the depth the map shows its relief in grey, as it shows the land. Column views hide it and use the surface current.'],
@@ -482,7 +482,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
    * kilometres reads as a hillside, which lengthens into shadow as the sun
    * sets.
    */
-  const SLOPE_EXAGGERATION = 20, EARTH_RADIUS = 6.371e6, CLOUD_TOP = 8000;
+  const SLOPE_EXAGGERATION = 20, EARTH_RADIUS = 6.371e6;
   function uploadSlopes() {
     if (!viewer || !cells || !latest || !latest.elevation) return;
     const slopes = new Float32Array(3 * cells.length), height = (i) => Math.max(0, latest.elevation[i]);
@@ -504,37 +504,15 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     viewer.updateSlopes(slopes);
   }
 
-  /*
-   * Cloud shadows: near the terminator a cloud top CLOUD_TOP high throws
-   * its shadow a distance CLOUD_TOP / tan(sun elevation) toward the dark
-   * side, so a cell is shaded by the cloud in the neighbouring cell that
-   * lies sunward, in proportion to how far that shadow reaches into it.
-   */
-  function cloudShadow(i, opacityOf, sun) {
-    const cx = centres[3 * i], cy = centres[3 * i + 1], cz = centres[3 * i + 2];
-    const sinE = sun[0] * cx + sun[1] * cy + sun[2] * cz;
-    if (sinE <= 0.001) return 0;
-    const tx = sun[0] - sinE * cx, ty = sun[1] - sinE * cy, tz = sun[2] - sinE * cz, tan = sinE / (Math.hypot(tx, ty, tz) || 1e-9);
-    const reach = CLOUD_TOP / tan / (7720e3 / latest.N);
-    if (reach < 0.05) return 0;
-    let best = -1, bestDot = 0;
-    for (let k = 0; k < 6; k++) {
-      const j = neighbours[6 * i + k];
-      if (j < 0) continue;
-      const dot = (centres[3 * j] - cx) * tx + (centres[3 * j + 1] - cy) * ty + (centres[3 * j + 2] - cz) * tz;
-      if (dot > bestDot) { bestDot = dot; best = j; }
-    }
-    return best < 0 ? 0 : Math.min(1, reach) * opacityOf(best);
-  }
-
   function paintSatellite() {
-    const cloud = latest.cloud, ice = latest.ice, cover = latest.concentration, land = latest.land, soil = latest.soil, snow = latest.snow, vegetation = latest.vegetation;
-    if (!cloud || !ice || (land && (!soil || !snow))) return;
+    const cloud = latest.cloud, ice = latest.ice, cover = latest.concentration, land = latest.land, soil = latest.soil, snow = latest.snow, vegetation = latest.vegetation, cloudTop = latest.cloudTop, cloudBase = latest.cloudBase;
+    if (!cloud || !ice || !cloudTop || !cloudBase || (land && (!soil || !snow))) return;
     document.querySelector('.scaleRow').classList.add('hidden');
     overlayLabel = 'Satellite view';
-    const sun = sunDirection(latest.time), opacityOf = (i) => cloudOpacity(cloud[i] * 1000);
+    let highest = 0;
     for (let i = 0; i < grid.size; i++) {
-      const opacity = opacityOf(i);
+      const opacity = cloudOpacity(cloud[i] * 1000);
+      if (opacity > 0.01 && cloudTop[i] > highest) highest = cloudTop[i];
       const onLand = land && land[i];
       const frozen = onLand ? Math.min(1, snow[i] / 20) : (cover && cover[i] > 0 ? cover[i] : 1) * Math.min(1, ice[i] / 0.5);
       const wet = !onLand ? 0 : vegetation ? vegetation[i] : Math.min(1, soil[i] / 150);
@@ -546,11 +524,11 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       }
       surface[4 * i] = onLand ? 0.06 : 1 - 0.85 * frozen;
       surface[4 * i + 1] = opacity;
-      surface[4 * i + 2] = cloudShadow(i, opacityOf, sun);
-      surface[4 * i + 3] = 0;
+      surface[4 * i + 2] = cloudTop[i];
+      surface[4 * i + 3] = cloudBase[i];
     }
     viewer.updateColors(rgb);
-    viewer.updateSurface(surface);
+    viewer.updateSurface(surface, highest);
   }
 
   /*
@@ -791,7 +769,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
   const modelShown = () => !document.getElementById('modelModal').classList.contains('hidden');
   function subscription() {
     const fields = new Set();
-    if (settings.view === 'space') for (const name of ['cloud', 'ice', 'concentration', 'soil', 'snow', 'vegetation']) fields.add(name);
+    if (settings.view === 'space') for (const name of ['cloud', 'cloudTop', 'cloudBase', 'ice', 'concentration', 'soil', 'snow', 'vegetation']) fields.add(name);
     else {
       const overlay = OVERLAYS[settings.overlay];
       if (overlay.field && !(overlay.field in geographyFields)) fields.add(overlay.field);

@@ -85,7 +85,7 @@ const vertexLogic = `
 const EARTH_RADIUS = 6.371e6, VERTICAL_EXAGGERATION = 4, METRE = VERTICAL_EXAGGERATION / EARTH_RADIUS;
 const SCALE_HEIGHT = 8000 * METRE, AEROSOL_HEIGHT = 1500 * METRE, OZONE_LOW = 1 + 15000 * METRE, OZONE_HIGH = 1 + 35000 * METRE;
 const RAYLEIGH = [0.06, 0.12, 0.29], AEROSOL = [0.05, 0.06, 0.07], OZONE = [0.035, 0.025, 0.003];
-const CLOUD_ROUGHNESS = 0.35, CLOUD_TINT = 2, DAY_START = 0.05, DAY_FULL = 0.175;
+const CLOUD_ROUGHNESS = 0.35, CLOUD_TINT = 3, DAY_START = 0.05, DAY_FULL = 0.175, NIGHT_DEEP = -0.35;
 const glsl = (x) => { const s = Number(x).toPrecision(9); return /[.e]/.test(s) ? s : `${s}.0`; };
 const glslVec3 = (v) => `vec3(${v.map(glsl).join(', ')})`;
 
@@ -447,9 +447,18 @@ export function initUnifiedViewer(container, grid, config = {}) {
     cellColors.needsUpdate = true;
     colorMap.uColorMode.value = 1;
   }
-  function updateSurface(values) {
+  /*
+   * The Satellite view's surface per cell: the sea's glint weight, the
+   * cloud's opacity and the heights above sea level, in metres, where light
+   * from above and from below first meets the cloud; 'highest' is the
+   * highest of those tops, which bounds the light pass's march.
+   */
+  const lightPass = { dirty: true, last: -Infinity, sun: new THREE.Vector3(2, 0, 0), cloud: 0, land: 0 };
+  function updateSurface(values, highest = 0) {
     cellSurface.image.data.set(values.subarray(0, 4 * cellCounter));
     cellSurface.needsUpdate = true;
+    lightPass.cloud = highest;
+    lightPass.dirty = true;
   }
   function updateValues(values) {
     const array = cellValues.image.data;
@@ -458,8 +467,11 @@ export function initUnifiedViewer(container, grid, config = {}) {
   }
   function updateTerrain(elevation) {
     const array = cellTerrain.image.data;
-    for (let c = 0; c < cellCounter; c++) array[c] = elevation ? elevation[c] : 0;
+    let land = 0;
+    for (let c = 0; c < cellCounter; c++) { array[c] = elevation ? elevation[c] : 0; land = Math.max(land, array[c]); }
     cellTerrain.needsUpdate = true;
+    lightPass.land = land;
+    lightPass.dirty = true;
   }
 
   /*
@@ -649,8 +661,8 @@ void main() {
    * transmission of a line of sight whose closest height to the globe is h
    * (globe radii, rescaled to the air's own scale height as the limb shell
    * draws it), through the Rayleigh air and the aerosol on both sides of
-   * the tangent point and the ozone shell. The flare takes it at the top of
-   * the sun's disc, the part that clears the limb first.
+   * the tangent point and the ozone shell. The flare takes it at the middle
+   * of the part of the sun's disc that clears the limb.
    */
   const limbTint = new THREE.Color(1, 1, 1), toSun = new THREE.Vector3(), nearest = new THREE.Vector3();
   function sunThroughLimb(h, out) {
@@ -678,8 +690,8 @@ void main() {
     flare.group.visible = true;
     toSun.copy(sun.position).normalize();
     const along = Math.max(-camera.position.dot(toSun), 0);
-    const past = nearest.copy(camera.position).addScaledVector(toSun, along).length() - 1 + SUN_ANGULAR_RADIUS * along;
-    sunThroughLimb(past * SCALE_HEIGHT / glow.uScaleHeight.value, limbTint);
+    const past = nearest.copy(camera.position).addScaledVector(toSun, along).length() - 1, disc = SUN_ANGULAR_RADIUS * along;
+    sunThroughLimb(0.5 * (past + disc + Math.max(past - disc, 0)) * SCALE_HEIGHT / glow.uScaleHeight.value, limbTint);
     flareCamera.left = -aspect; flareCamera.right = aspect;
     flareCamera.updateProjectionMatrix();
     const size = Math.sqrt(lighting.uSun.value);
@@ -775,9 +787,189 @@ void main() {
   }
 
   const lighting = { uSunDirection: { value: new THREE.Vector3(1, 0, 0) }, uCameraPosition: { value: new THREE.Vector3(0, 0, 1e5) }, uLighting: { value: 0 }, uAmbient: { value: 0.004 }, uSun: { value: 1 } };
+
+  /*
+   * The light pass: one texel per cell, on the cell textures' layout,
+   * drawn by a full-screen triangle into an RGBA8 target whenever a frame
+   * lands or the sun turns half a degree, at most every LIGHT_INTERVAL ms.
+   * r and g are the square roots of the share of the sunbeam reaching the
+   * cell's ground and its cloud top past what lies sunward (occlusion());
+   * b carries the cloud top's slope toward the sun as sign·√|slope| about
+   * texel 128, and a the cosine of the top's tilt.
+   */
+  const LIGHT_INTERVAL = 66, LIGHT_TURN = Math.cos(THREE.MathUtils.degToRad(0.5)), MAX_STEPS = 48;
+  const lightTarget = new THREE.WebGLRenderTarget(width, height, { type: THREE.UnsignedByteType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, generateMipmaps: false });
+  const lightUniforms = {
+    uCenterTexture: { value: centerTexture }, uNeighboursA: { value: null }, uNeighboursB: { value: null }, uCellSurface: { value: cellSurface }, uCellTerrain: { value: cellTerrain },
+    uSunDirection: lighting.uSunDirection, uTexWidth: { value: width }, uCellCount: { value: cellCounter }, uSpacing: { value: 0 }, uHighest: { value: 0 },
+  };
+  const lightCamera = new THREE.Camera();
+  let lightScene = null;
+
+  function buildLightPass() {
+    const index = new Map();
+    let n = 0;
+    for (const cell of grid) index.set(cell, n++);
+    const first = new Float32Array(4 * width * height), second = new Float32Array(2 * width * height);
+    const unit = (c) => { const x = centerData[3 * c], y = centerData[3 * c + 1], z = centerData[3 * c + 2], r = Math.hypot(x, y, z); return [x / r, y / r, z / r]; };
+    let arc = 0, pairs = 0;
+    n = 0;
+    for (const cell of grid) {
+      const around = (cell.neighbors || []).slice(0, 6).map((other) => index.get(other));
+      const [cx, cy, cz] = unit(n);
+      for (let k = 0; k < 6; k++) {
+        const j = around[k] ?? n;
+        if (k < 4) first[4 * n + k] = j; else second[2 * n + k - 4] = j;
+        if (k < around.length) { const [x, y, z] = unit(j); arc += Math.acos(Math.min(1, cx * x + cy * y + cz * z)); pairs++; }
+      }
+      n++;
+    }
+    lightUniforms.uNeighboursA.value = cellTexture(first, THREE.RGBAFormat, THREE.FloatType);
+    lightUniforms.uNeighboursB.value = cellTexture(second, THREE.RGFormat, THREE.FloatType);
+    lightUniforms.uSpacing.value = arc / Math.max(1, pairs);
+    const lightMaterial = new THREE.RawShaderMaterial({
+      glslVersion: THREE.GLSL3, uniforms: lightUniforms, depthTest: false, depthWrite: false,
+      vertexShader: `in vec3 position;
+void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+      fragmentShader: `precision highp float; precision highp int; precision highp sampler2D;
+uniform sampler2D uCenterTexture;
+uniform sampler2D uNeighboursA;
+uniform sampler2D uNeighboursB;
+uniform sampler2D uCellSurface;
+uniform sampler2D uCellTerrain;
+uniform vec3 uSunDirection;
+uniform int uTexWidth;
+uniform int uCellCount;
+uniform float uSpacing;
+uniform float uHighest;
+out vec4 cellLight;
+const float METRE = ${glsl(METRE)};
+const int MAX_STEPS = ${MAX_STEPS};
+ivec2 texel(int i) { int row = int((float(i) + 0.5) / float(uTexWidth)); return ivec2(i - row * uTexWidth, row); }
+vec3 centreOf(int i) { return normalize(texelFetch(uCenterTexture, texel(i), 0).xyz); }
+void neighboursOf(int i, out int js[6]) {
+  vec4 a = texelFetch(uNeighboursA, texel(i), 0);
+  vec2 b = texelFetch(uNeighboursB, texel(i), 0).xy;
+  js[0] = int(a.x); js[1] = int(a.y); js[2] = int(a.z); js[3] = int(a.w); js[4] = int(b.x); js[5] = int(b.y);
+}
+// The cell nearest p, walking from cur to whichever neighbour lies nearer until none does.
+int walk(int cur, vec3 p) {
+  float near = dot(centreOf(cur), p);
+  for (int it = 0; it < 4; it++) {
+    int js[6];
+    neighboursOf(cur, js);
+    int best = cur;
+    for (int m = 0; m < 6; m++) { float d = dot(centreOf(js[m]), p); if (d > near) { near = d; best = js[m]; } }
+    if (best == cur) break;
+    cur = best;
+  }
+  return cur;
+}
+/*
+ * The share of the sunbeam reaching a point h0 above cell i's centre c
+ * (heights in globe radii, four times the real ones): marching sunward
+ * along the great circle in steps of half the cell spacing, or longer when
+ * MAX_STEPS would not take the ray above the highest top, where the ray at
+ * arc a stands at (1 + h0) cos e / cos(a + e) - 1 for the sun's elevation
+ * e. Ground above sea level blocks the part of a step's height range below
+ * it; each cell's cloud is a slab from its base to its top holding the
+ * optical depth -ln(1 - opacity) evenly, which the step's path crosses
+ * over the part of its height range inside the slab. The cell's own cloud
+ * is left out, being drawn over its ground already, and so is the globe's
+ * shadow, which the light through the air (sunDepth) holds.
+ */
+float occlusion(int i, vec3 c, float h0) {
+  float mu = clamp(dot(c, uSunDirection), -1.0, 1.0);
+  float e = asin(mu);
+  if (e < -acos(1.0 / (1.0 + h0))) return 1.0;
+  vec3 t = uSunDirection - mu * c;
+  float tl = length(t);
+  if (tl < 1.0e-6) return 1.0;
+  t /= tl;
+  float k0 = (1.0 + h0) * sqrt(max(0.0, 1.0 - mu * mu));
+  float reach = acos(min(1.0, k0 / (1.0 + uHighest))) - e;
+  if (reach <= 0.0) return 1.0;
+  float ds = max(0.5 * uSpacing, reach / float(MAX_STEPS));
+  int steps = min(MAX_STEPS, int(ceil(reach / ds)));
+  float depth = 0.0, clear = 1.0, hPrev = h0;
+  int cur = i;
+  for (int k = 0; k < MAX_STEPS; k++) {
+    if (k >= steps) break;
+    float a0 = float(k) * ds, a1 = a0 + ds, a = a0 + 0.5 * ds;
+    cur = walk(cur, cos(a) * c + sin(a) * t);
+    float hNext = k0 / cos(min(a1 + e, 1.5)) - 1.0;
+    float lo = min(hPrev, hNext), hi = max(hPrev, hNext);
+    if (-e > a0 && -e < a1) lo = k0 - 1.0;
+    float range = max(hi - lo, 1.0e-7);
+    hPrev = hNext;
+    if (cur == i) continue;
+    float g = METRE * texelFetch(uCellTerrain, texel(cur), 0).r;
+    if (g > lo) clear = min(clear, clamp((hi - g) / range, 0.0, 1.0));
+    vec4 s = texelFetch(uCellSurface, texel(cur), 0);
+    if (s.y > 0.0) {
+      float tau = min(8.0, -log(max(1.0 - s.y, 3.4e-4)));
+      float top = METRE * s.z, base = METRE * s.w;
+      float inside = max(0.0, min(hi, top) - max(lo, base));
+      depth += tau / max(top - base, 1.0e-5) * length(vec2(ds, hi - lo)) * inside / range;
+    }
+    if (clear * exp(-depth) < 1.0e-3) return 0.0;
+  }
+  return clear * exp(-depth);
+}
+void main() {
+  int i = int(gl_FragCoord.y) * uTexWidth + int(gl_FragCoord.x);
+  if (i >= uCellCount) { cellLight = vec4(1.0, 1.0, 128.0 / 255.0, 1.0); return; }
+  vec3 c = centreOf(i);
+  vec4 s = texelFetch(uCellSurface, texel(i), 0);
+  float ground = METRE * max(0.0, texelFetch(uCellTerrain, texel(i), 0).r);
+  float toGround = occlusion(i, c, ground), toTop = 1.0, lean = 0.0, scale = 1.0;
+  if (s.y > 0.01) {
+    float top = METRE * s.z;
+    toTop = occlusion(i, c, max(top, ground));
+    int js[6];
+    neighboursOf(i, js);
+    vec3 gradient = vec3(0.0);
+    float n = 0.0;
+    for (int m = 0; m < 6; m++) {
+      if (js[m] == i) continue;
+      vec3 d = centreOf(js[m]) - c;
+      vec4 o = texelFetch(uCellSurface, texel(js[m]), 0);
+      gradient += o.y * (METRE * o.z - top) / dot(d, d) * d;
+      n += 1.0;
+    }
+    gradient *= 2.0 / n;
+    float tilt = clamp(-dot(gradient, uSunDirection), -1.0, 1.0);
+    lean = sign(tilt) * sqrt(abs(tilt));
+    scale = inversesqrt(1.0 + dot(gradient, gradient));
+  }
+  cellLight = vec4(sqrt(toGround), sqrt(toTop), (128.0 + 127.0 * lean) / 255.0, scale);
+}`,
+    });
+    const triangle = new THREE.BufferGeometry();
+    triangle.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
+    const quad = new THREE.Mesh(triangle, lightMaterial);
+    quad.frustumCulled = false;
+    lightScene = new THREE.Scene();
+    lightScene.add(quad);
+  }
+
+  function runLightPass() {
+    const now = performance.now();
+    if (!lightPass.dirty && lightPass.sun.dot(space.sun) >= LIGHT_TURN) return;
+    if (now - lightPass.last < LIGHT_INTERVAL) return;
+    if (!lightScene) buildLightPass();
+    lightUniforms.uHighest.value = METRE * Math.max(lightPass.cloud, lightPass.land) + 1e-6;
+    renderer.setRenderTarget(lightTarget);
+    renderer.render(lightScene, lightCamera);
+    renderer.setRenderTarget(null);
+    lightPass.dirty = false;
+    lightPass.last = now;
+    lightPass.sun.copy(space.sun);
+  }
+
   const material = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
   projectMaterial(material, 0.0, {
-    uniforms: { ...lighting, ...colorMap },
+    uniforms: { ...lighting, ...colorMap, uCellLight: { value: lightTarget.texture } },
     head: `
 uniform vec3 uSunDirection;
 uniform vec3 uCameraPosition;
@@ -796,6 +988,7 @@ uniform vec3 uFlat;
 uniform vec3 uCoverBase;
 uniform sampler2D uCellTerrain;
 uniform float uTerrain;
+uniform sampler2D uCellLight;
 attribute vec3 slope;
 vec3 terrainGrey(float z) {
   float g = z < 0.0 ? 0.03 + 0.12 * clamp((z + 6000.0) / 6000.0, 0.0, 1.0) : 0.22 + 0.6 * clamp(z / 5000.0, 0.0, 1.0);
@@ -824,25 +1017,29 @@ vec3 paletteColor(float t) {
    * down to the ground or the cloud top, on the terrain's or the cloud's
    * facet, less what lies sunward casts off it, plus sky light; the air
    * between the surface and the camera; the sea's glint. Where the sun
-   * stands high the day side's own look takes over (daylight()).
+   * stands high the day side's own look takes over (daylight()); below a
+   * sun cosine of NIGHT_DEEP even the air a grazing view crosses lies in
+   * the globe's shadow, leaving the ambient alone.
    */
   if (uLighting > 0.0) {
     vec3 n = normalize(position);
     float mu = dot(n, uSunDirection);
+    vec4 cell = texture2D(uCellLight, uv);
+    float lean = (cell.b * 255.0 - 128.0) / 127.0;
     float facet = dot(normalize(slope), uSunDirection);
-    float groundUnblocked = 1.0 - 0.7 * surface.z;
+    float groundUnblocked = cell.r * cell.r;
     float ground = 1.0 + max(texture2D(uCellTerrain, uv).r, 0.0) * METRE;
-    float top = ground;
-    float cloudFacet = mu;
-    float cloudUnblocked = 1.0;
+    float top = max(ground, 1.0 + surface.z * METRE);
+    float cloudFacet = (mu + lean * abs(lean)) * cell.a;
+    float cloudUnblocked = cell.g * cell.g;
     mat3 spin = mat3(uModelRotation);
     vec3 nView = spin * n;
     vec3 toCamera = normalize(uCameraPosition - nView);
     vec3 halfway = normalize(spin * uSunDirection + toCamera);
-    float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.025, mu);
+    float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.025, mu) * groundUnblocked;
     float day = daylight(mu);
-    vec3 lit = vec3(0.0);
-    if (day < 1.0) {
+    vec3 lit = vColor.rgb * uAmbient;
+    if (day < 1.0 && mu > ${glsl(NIGHT_DEEP)}) {
       vec3 light = mix(illumination(ground, mu, facet, 0.0, groundUnblocked, 1.0),
                        illumination(top, mu, cloudFacet, CLOUD_ROUGHNESS, cloudUnblocked, CLOUD_TINT), surface.y);
       float visible = mix(ground, top, surface.y);
@@ -1053,6 +1250,7 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
       glow.uScaleHeight.value = Math.min(Math.max(SCALE_HEIGHT, GLOW_PIXELS * limb / container.clientHeight), GLOW_LARGEST);
     }
 
+    if (space.enabled && lighting.uLighting.value > 0) runLightPass();
     renderer.setClearColor(space.enabled ? 0x000000 : backgroundColor);
     renderer.clear();
     if (space.enabled) {
@@ -1630,6 +1828,8 @@ uniform float uReferenceSpeed;
       geometry.dispose();
       material.dispose();
       glowShell.geometry.dispose(); glowMaterial.dispose();
+      lightTarget.dispose();
+      if (lightScene) { for (const quad of lightScene.children) { quad.geometry.dispose(); quad.material.dispose(); } lightUniforms.uNeighboursA.value.dispose(); lightUniforms.uNeighboursB.value.dispose(); }
       for (const part of flare.parts) part.sprite.material.dispose();
       for (const map of flare.textures) map.dispose();
       centerTexture.dispose();
