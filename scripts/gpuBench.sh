@@ -9,18 +9,22 @@
 # time and queued BATCH to a submission. For each N of FRESH, a resolution
 # with no saved run, it starts scripts/spinup.mjs from the atlas, stops it
 # after FRESH_STEPS steps and times FRESH_DAYS of a model day from that
-# checkpoint the same way. Where nvidia-smi exists the GPU's used memory
+# checkpoint the same way, all with the ocean's options FRESH_OCEAN: at
+# N=256 a start from the atlas goes NaN within 60 steps with the ocean
+# stepped every 8 (11.25 minutes, the drivers' cadence) and holds with it
+# stepped every 4. Where nvidia-smi exists the GPU's used memory
 # and utilisation are sampled once a second through each pace run and
 # their maxima reported. A failed stage is reported and the rest still run.
 # The report goes to OUT/report.txt, every stage's output to OUT/<stage>.txt.
 #   OUT=runs/bench scripts/gpuBench.sh
 # Environment: OUT (runs/bench), NS ("64 128"), FRESH ("256"), FRESH_STEPS
-# (32), FRESH_DAYS (0.25), PACE_DAYS (1; 2 at N=64), BATCH (8), SITE
+# (32), FRESH_DAYS (0.25), FRESH_OCEAN ('{"everySteps":4}'), PACE_DAYS (1;
+# 2 at N=64), BATCH (8), SITE
 # (https://gcm.echorelay.net), and whatever scripts/spinup.mjs and
 # scripts/figures/figureState.mjs read (OCEAN, RADIATION, MOIST, ...).
 cd "$(dirname "$0")/.."
 OUT=${OUT:-runs/bench} NS=${NS-"64 128"} FRESH=${FRESH-"256"} FRESH_STEPS=${FRESH_STEPS:-32} FRESH_DAYS=${FRESH_DAYS:-0.25}
-BATCH=${BATCH:-8} SITE=${SITE:-https://gcm.echorelay.net}
+BATCH=${BATCH:-8} SITE=${SITE:-https://gcm.echorelay.net} FRESH_OCEAN=${FRESH_OCEAN-'{"everySteps":4}'}
 mkdir -p "$OUT/start"
 OUT=$(cd "$OUT" && pwd)
 REPORT=$OUT/report.txt
@@ -77,8 +81,9 @@ for N in $NS; do
   timed "$N" "$OUT/start/eleven${N}_day1826.bin" "${PACE_DAYS:-$([ "$N" -le 64 ] && echo 2 || echo 1)}"
 done
 
+[ -n "$FRESH_OCEAN" ] && export OCEAN=$FRESH_OCEAN
 for N in $FRESH; do
-  say "N=$N from the atlas, $FRESH_STEPS steps in"
+  say "N=$N from the atlas, $FRESH_STEPS steps in${FRESH_OCEAN:+, ocean $FRESH_OCEAN}"
   rm -f "$OUT/start/fresh${N}"_day*.bin "$OUT/start/fresh$N.log"
   start=$SECONDS
   stage "fresh$N" env N="$N" TAG="fresh$N" DAYS=1 STOP_AFTER_STEPS="$FRESH_STEPS" MINUTES=60 STRATOSPHERE=1 OUT="$OUT/start" node scripts/spinup.mjs || continue
