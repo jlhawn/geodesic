@@ -621,8 +621,10 @@ void main() {
    * screen space with half the frame height as the unit: a halo, a
    * horizontal streak and a starburst on the sun, and ghosts along the
    * line from the sun through the centre of the view. Each part is
-   * [texture, width, height, tint, place], the place along that line
-   * with the sun at 0 and the centre at 1.
+   * [texture, width, height, tint, place, air], the place along that line
+   * with the sun at 0 and the centre at 1. All are dimmed as the visible
+   * part of the sun's disc is; 'air' parts take the colour of the sunlight
+   * along each fragment's own line of sight, the others that disc's colour.
    */
   const SUN_ANGULAR_RADIUS = 0.012;
   const flareScene = new THREE.Scene();
@@ -668,17 +670,17 @@ void main() {
     const ring = texture(128, 128, (x, y) => { const r = Math.hypot(x, y); return (0.3 + 0.7 * THREE.MathUtils.smoothstep(r, 0.7, 0.96)) * edge(r, 0.93); });
     const blob = texture(128, 128, (x, y) => { const r = Math.hypot(x, y); return Math.exp(-r * r / 0.18) * edge(r, 0.6); });
     const parts = [
-      [halo, 0.9, 0.9, [0.24, 0.225, 0.2], 0],
+      [halo, 0.9, 0.9, [0.24, 0.225, 0.2], 0, true],
       [streak, 2.4, 0.05, [0.06, 0.085, 0.13], 0],
-      [burst, 0.6, 0.6, [0.09, 0.087, 0.078], 0],
+      [burst, 0.6, 0.6, [0.09, 0.087, 0.078], 0, true],
       [ring, 0.1, 0.1, [0.045, 0.032, 0.018], 1.35],
       [blob, 0.06, 0.06, [0.03, 0.07, 0.04], 1.7],
       [ring, 0.24, 0.24, [0.012, 0.017, 0.03], 2.0],
       [ring, 0.13, 0.13, [0.025, 0.015, 0.032], 2.45],
       [blob, 0.36, 0.36, [0.01, 0.02, 0.028], 2.9],
-    ].map(([map, width, height, tint, place]) => {
+    ].map(([map, width, height, tint, place, air = false]) => {
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true }));
-      return { sprite, width, height, tint: new THREE.Color(...tint), place };
+      return { sprite, width, height, tint: new THREE.Color(...tint), place, air };
     });
     const group = new THREE.Group();
     for (const part of parts) group.add(part.sprite);
@@ -691,10 +693,11 @@ void main() {
    * transmission of a line of sight whose closest height to the globe is h
    * (globe radii, rescaled to the air's own scale height as the limb shell
    * draws it), through the Rayleigh air and the aerosol on both sides of
-   * the tangent point and the ozone shell. The flare takes it at the middle
-   * of the part of the sun's disc that clears the limb.
+   * the tangent point and the ozone shell. The flare is dimmed by its
+   * brightness, and its streak and ghosts take its colour, at the middle of
+   * the part of the sun's disc that clears the limb.
    */
-  const limbTint = new THREE.Color(1, 1, 1), toSun = new THREE.Vector3(), nearest = new THREE.Vector3();
+  const limbTint = new THREE.Color(1, 1, 1), toSun = new THREE.Vector3(), nearest = new THREE.Vector3(), sunTop = { value: 0 };
   function sunThroughLimb(h, out) {
     const b = 1 + Math.max(h, 0), chord = (o) => Math.sqrt(Math.max(o * o - b * b, 0));
     const air = 2 * Math.exp((1 - b) / SCALE_HEIGHT) * Math.sqrt(Math.PI * b / (2 * SCALE_HEIGHT));
@@ -702,6 +705,13 @@ void main() {
     const ozone = 2 * (chord(OZONE_HIGH) - chord(OZONE_LOW)) / (OZONE_HIGH - OZONE_LOW);
     const t = (k) => Math.exp(-(RAYLEIGH[k] * air + AEROSOL[k] * aerosol + OZONE[k] * ozone));
     return out.setRGB(t(0), t(1), t(2));
+  }
+
+  // The closest height above the globe of the camera's line of sight to the top of the sun's disc.
+  function sunDiscTop() {
+    toSun.copy(sun.position).normalize();
+    const eye = lighting.uCameraPosition.value, along = Math.max(-eye.dot(toSun), 0);
+    return nearest.copy(eye).addScaledVector(toSun, along).length() - 1 + SUN_ANGULAR_RADIUS * along;
   }
 
   // The main camera sees the sun along the sky camera's line of sight, so its position decides the limb test.
@@ -722,15 +732,17 @@ void main() {
     const along = Math.max(-camera.position.dot(toSun), 0);
     const past = nearest.copy(camera.position).addScaledVector(toSun, along).length() - 1, disc = SUN_ANGULAR_RADIUS * along;
     sunThroughLimb(0.5 * (past + disc + Math.max(past - disc, 0)) * SCALE_HEIGHT / glow.uScaleHeight.value, limbTint);
+    const dimmed = 0.2126 * limbTint.r + 0.7152 * limbTint.g + 0.0722 * limbTint.b;
     flareCamera.left = -aspect; flareCamera.right = aspect;
     flareCamera.updateProjectionMatrix();
     const size = Math.sqrt(lighting.uSun.value);
     const x = flareSun.x * aspect, y = flareSun.y, centreY = 2 * inset.shift / container.clientHeight;
     for (let k = 0; k < flare.parts.length; k++) {
-      const { sprite, width, height, tint, place } = flare.parts[k];
+      const { sprite, width, height, tint, place, air } = flare.parts[k];
       sprite.position.set(x * (1 - place), y + place * (centreY - y), 0);
       sprite.scale.set(width * size, height * size, 1);
-      sprite.material.color.copy(tint).multiplyScalar(brightness).multiply(limbTint);
+      if (air) sprite.material.color.copy(tint).multiplyScalar(brightness * dimmed);
+      else sprite.material.color.copy(tint).multiplyScalar(brightness).multiply(limbTint);
     }
   }
 
@@ -1169,27 +1181,52 @@ void main() {
   scene.add(glowShell);
 
   /*
-   * The sun's disc and halo, each fragment dimmed and reddened by the air
-   * its line of sight from the camera crosses past the globe, as
-   * sunThroughLimb() does for one height. The sky camera sits at the
-   * origin, so a fragment's direction is the main camera's ray there.
+   * The sun's disc and halo, and the flare's halo and rays on the sun, each
+   * fragment dimmed and reddened by the air its line of sight from the
+   * camera crosses past the globe (sunThroughAir), as sunThroughLimb() does
+   * for one height, so that where the sun stands in the band at the limb its
+   * glare is reddened with it. Glare beyond the top of the disc is that
+   * top's light, so the height is taken no higher than the line of sight to
+   * the disc's top (uSunTop, from sunDiscTop()). The sky camera sits at the
+   * origin, so a fragment's direction is the main camera's ray there; the
+   * flare, drawn in screen space, finds it through the sky camera's inverse
+   * projection.
    */
+  const airOnSun = { uCameraPosition: lighting.uCameraPosition, uScaleHeight: glow.uScaleHeight, uSunTop: sunTop, uSkyInverse: { value: skyCamera.projectionMatrixInverse } };
+  const sunThroughAir = `uniform vec3 uCameraPosition;
+uniform float uScaleHeight;
+uniform float uSunTop;
+${atmosphere}
+vec3 sunThroughAir(vec3 toSun) {
+  float past = min(length(uCameraPosition + max(-dot(uCameraPosition, toSun), 0.0) * toSun) - 1.0, uSunTop);
+  return exp(-2.0 * sunDepth(1.0 + max(past, 0.0) * SCALE_HEIGHT / uScaleHeight, 0.0));
+}`;
   sun.material.customProgramCacheKey = () => 'sun through the air';
   sun.material.onBeforeCompile = (shader) => {
-    shader.uniforms.uCameraPosition = lighting.uCameraPosition;
-    shader.uniforms.uScaleHeight = glow.uScaleHeight;
+    Object.assign(shader.uniforms, airOnSun);
     shader.vertexShader = `varying vec3 vSkyDirection;
 ${shader.vertexShader.replace('#include <fog_vertex>', `#include <fog_vertex>
   vSkyDirection = (vec4(mvPosition.xyz, 0.0) * viewMatrix).xyz;`)}`;
-    shader.fragmentShader = `uniform vec3 uCameraPosition;
-uniform float uScaleHeight;
-varying vec3 vSkyDirection;
-${atmosphere}
+    shader.fragmentShader = `varying vec3 vSkyDirection;
+${sunThroughAir}
 ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
-  vec3 toSun = normalize(vSkyDirection);
-  float past = length(uCameraPosition + max(-dot(uCameraPosition, toSun), 0.0) * toSun) - 1.0;
-  diffuseColor.rgb *= exp(-2.0 * sunDepth(1.0 + max(past, 0.0) * SCALE_HEIGHT / uScaleHeight, 0.0));`)}`;
+  diffuseColor.rgb *= sunThroughAir(normalize(vSkyDirection));`)}`;
   };
+  for (const { sprite } of flare.parts.filter((part) => part.air)) {
+    sprite.material.customProgramCacheKey = () => 'flare through the air';
+    sprite.material.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, airOnSun);
+      shader.vertexShader = `varying vec2 vScreen;
+${shader.vertexShader.replace('#include <fog_vertex>', `#include <fog_vertex>
+  vScreen = gl_Position.xy / gl_Position.w;`)}`;
+      shader.fragmentShader = `uniform mat4 uSkyInverse;
+varying vec2 vScreen;
+${sunThroughAir}
+${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+  vec4 far = uSkyInverse * vec4(vScreen, 1.0, 1.0);
+  diffuseColor.rgb *= sunThroughAir(normalize(far.xyz / far.w));`)}`;
+    };
+  }
   
 
   // Create GUI / Buttons
@@ -1303,6 +1340,7 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
       applyInset(skyCamera);
       stars.quaternion.copy(sphereQuaternion).multiply(space.sidereal);
       sun.position.copy(space.sun).applyQuaternion(sphereQuaternion).multiplyScalar(SKY_RADIUS);
+      sunTop.value = sunDiscTop();
       renderer.render(skyScene, skyCamera);
       updateFlare(aspect);
     } else flare.group.visible = false;
