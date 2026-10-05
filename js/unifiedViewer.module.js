@@ -82,16 +82,16 @@ const vertexLogic = `
   vec3 transformed = finalPos;
 `;
 
-const EARTH_RADIUS = 6.371e6, VERTICAL_EXAGGERATION = 4, METRE = VERTICAL_EXAGGERATION / EARTH_RADIUS;
+const EARTH_RADIUS = 6.371e6, VERTICAL_EXAGGERATION = 2, METRE = VERTICAL_EXAGGERATION / EARTH_RADIUS;
 const SCALE_HEIGHT = 8000 * METRE, AEROSOL_HEIGHT = 1500 * METRE, OZONE_LOW = 1 + 15000 * METRE, OZONE_HIGH = 1 + 35000 * METRE;
 const RAYLEIGH = [0.06, 0.12, 0.29], AEROSOL = [0.05, 0.06, 0.07], OZONE = [0.035, 0.025, 0.003];
-const CLOUD_ROUGHNESS = 0.35, CLOUD_TINT = 3, DAY_START = 0.05, DAY_FULL = 0.175, NIGHT_DEEP = -0.35;
+const CLOUD_ROUGHNESS = 0.35, CLOUD_TINT = 1.5, DAY_START = 0.05, DAY_FULL = 0.175, NIGHT_DEEP = -0.35;
 const glsl = (x) => { const s = Number(x).toPrecision(9); return /[.e]/.test(s) ? s : `${s}.0`; };
 const glslVec3 = (v) => `vec3(${v.map(glsl).join(', ')})`;
 
 /*
  * Sunlight through the air, in the globe's units (radius 1). Every height
- * the Satellite view draws is VERTICAL_EXAGGERATION (four) times its real
+ * the Satellite view draws is VERTICAL_EXAGGERATION (two) times its real
  * value, the air's scale height included, so cloud relief, cloud shadows,
  * how far past the terminator a high top stays lit and the layers of the
  * limb follow one exaggeration (METRE converts real metres to globe radii).
@@ -117,13 +117,19 @@ const vec3 BRIGHTNESS = vec3(0.2126, 0.7152, 0.0722);
 // Chapman's grazing-incidence function at x = r / H: the slant column toward cosine mu >= 0 over the vertical one.
 float chapman(float x, float mu) { return 1.0 / (0.65 * mu + sqrt(0.1225 * mu * mu + 0.6366 / x)); }
 
-// Column of a species of scale height h, in its sea-level vertical columns, from radius r toward cosine mu; -1 when the ray meets the globe.
-float slantColumn(float r, float mu, float h) {
-  if (mu >= 0.0) return exp((1.0 - r) / h) * chapman(r / h, mu);
+/*
+ * Column of a species of scale height h, in its sea-level vertical columns,
+ * from radius r toward cosine mu, past the horizon over the path that dips
+ * to its tangent radius; -1 when the ray meets the globe. The grazing
+ * function takes the globe's radius as 'curve' times its drawn ratio to h.
+ */
+float grazingColumn(float r, float mu, float h, float curve) {
+  if (mu >= 0.0) return exp((1.0 - r) / h) * chapman(curve * r / h, mu);
   float rt = r * sqrt(1.0 - mu * mu);
   if (rt < 1.0) return -1.0;
-  return 2.0 * exp((1.0 - rt) / h) * chapman(rt / h, 0.0) - exp((1.0 - r) / h) * chapman(r / h, -mu);
+  return 2.0 * exp((1.0 - rt) / h) * chapman(curve * rt / h, 0.0) - exp((1.0 - r) / h) * chapman(curve * r / h, -mu);
 }
+float slantColumn(float r, float mu, float h) { return grazingColumn(r, mu, h, 1.0); }
 
 // Path through the ozone shell from radius r toward cosine mu, over the shell's thickness.
 float ozonePath(float r, float mu) {
@@ -136,18 +142,29 @@ float ozonePath(float r, float mu) {
 }
 
 // Optical depth of the sunbeam reaching radius r where the sun's cosine is mu; the globe's shadow is opaque.
-vec3 sunDepth(float r, float mu) {
-  float air = slantColumn(r, mu, SCALE_HEIGHT);
+vec3 pathDepth(float r, float mu, float curve) {
+  float air = grazingColumn(r, mu, SCALE_HEIGHT, curve);
   if (air < 0.0) return vec3(1.0e4);
-  return RAYLEIGH * air + AEROSOL * max(slantColumn(r, mu, AEROSOL_HEIGHT), 0.0) + OZONE * ozonePath(r, mu);
+  return RAYLEIGH * air + AEROSOL * max(grazingColumn(r, mu, AEROSOL_HEIGHT, curve), 0.0) + OZONE * ozonePath(r, mu);
 }
+vec3 sunDepth(float r, float mu) { return pathDepth(r, mu, 1.0); }
+
+/*
+ * The same for the beam that lights a surface or a cloud top, its Rayleigh
+ * and aerosol columns grazing at the real ratio of the globe's radius to the
+ * scale height: about sqrt(pi R / 2 H) = 35 vertical columns at sea level,
+ * which the drawn air, thicker on the same globe, would cut by the square
+ * root of the exaggeration. Where the globe's shadow falls and how far below
+ * a top the beam dips stay in the drawn heights.
+ */
+vec3 beamDepth(float r, float mu) { return pathDepth(r, mu, ${glsl(VERTICAL_EXAGGERATION)}); }
 
 vec3 zenithDepth(float r) {
   return RAYLEIGH * exp((1.0 - r) / SCALE_HEIGHT) + AEROSOL * exp((1.0 - r) / AEROSOL_HEIGHT) + OZONE * ozonePath(r, 1.0);
 }
 
-// The sunbeam's colour at radius r, white where the sun stands overhead.
-vec3 sunColour(float r, float mu) { return exp(zenithDepth(r) - sunDepth(r, mu)); }
+// The beam's colour on a surface at radius r, white where the sun stands overhead.
+vec3 sunColour(float r, float mu) { return exp(zenithDepth(r) - beamDepth(r, mu)); }
 
 // Lambert's cosine averaged over facets whose slope toward the sun spreads by sigma radians.
 float lambertSoft(float c, float sigma) {
@@ -159,17 +176,17 @@ float lambertSoft(float c, float sigma) {
  * Sky light on a level surface at radius r, in units of the sun's flux: the
  * sunbeam scattered once in the sunlit air above (above the globe's shadow
  * past the terminator), with the beam's air mass ms taken one scale height
- * up, half of it going down at the diffuse air mass 1.66 and losing some on
- * the way through the shadowed air below.
+ * up as beamDepth() grazes, half of it going down at the diffuse air mass
+ * 1.66 and losing some on the way through the shadowed air below.
  */
 vec3 skyLight(float r, float mu) {
   float rb = mu < 0.0 ? max(r, inversesqrt(max(1.0 - mu * mu, 1.0e-6))) : r;
   if (rb > 1.0 + 12.0 * SCALE_HEIGHT) return vec3(0.0);
   float rr = rb + SCALE_HEIGHT;
-  float air = slantColumn(rr, mu, SCALE_HEIGHT);
+  float air = grazingColumn(rr, mu, SCALE_HEIGHT, ${glsl(VERTICAL_EXAGGERATION)});
   if (air < 0.0) return vec3(0.0);
   float ms = air * exp((rr - 1.0) / SCALE_HEIGHT);
-  vec3 loss = exp(-AEROSOL * max(slantColumn(rr, mu, AEROSOL_HEIGHT), 0.0) - OZONE * ozonePath(rr, mu));
+  vec3 loss = exp(-AEROSOL * max(grazingColumn(rr, mu, AEROSOL_HEIGHT, ${glsl(VERTICAL_EXAGGERATION)}), 0.0) - OZONE * ozonePath(rr, mu));
   vec3 above = RAYLEIGH * exp((1.0 - rb) / SCALE_HEIGHT);
   vec3 below = RAYLEIGH * exp((1.0 - r) / SCALE_HEIGHT) - above;
   float dm = 1.66 - ms;
@@ -186,7 +203,7 @@ vec3 skyLight(float r, float mu) {
  */
 vec3 illumination(float r, float mu, float facet, float roughness, float unblocked, float tint) {
   vec3 zenith = zenithDepth(r), overhead = exp(-zenith);
-  vec3 colour = exp(zenith - sunDepth(r, mu)), deeper = pow(colour, vec3(tint));
+  vec3 colour = exp(zenith - beamDepth(r, mu)), deeper = pow(colour, vec3(tint));
   colour = deeper * dot(colour, BRIGHTNESS) / max(dot(deeper, BRIGHTNESS), 1.0e-12);
   vec3 beam = overhead * colour * lambertSoft(facet, roughness) * unblocked;
   return (beam + skyLight(r, mu)) / (overhead + skyLight(r, 1.0));
@@ -867,7 +884,7 @@ int walk(int cur, vec3 p) {
 }
 /*
  * The share of the sunbeam reaching a point h0 above cell i's centre c
- * (heights in globe radii, four times the real ones): marching sunward
+ * (heights in globe radii, as drawn): marching sunward
  * along the great circle in steps of half the cell spacing, or longer when
  * MAX_STEPS would not take the ray above the highest top, where the ray at
  * arc a stands at (1 + h0) cos e / cos(a + e) - 1 for the sun's elevation
@@ -1076,15 +1093,17 @@ vec3 paletteColor(float t) {
    * sun behind the limb the band is red low down, yellow-white above and
    * blue higher up. That band shows as the sun nears the horizon at the
    * closest point and stands beyond it, along the ray; elsewhere the day
-   * side's blue rim, its column exp(-h / H), takes over.
+   * side's blue rim takes over, its column exp(-h / H) for a drawn scale
+   * height of DAY_RIM_HEIGHT under the same pixel floor.
    */
-  const GLOW_PIXELS = 0.6, GLOW_LARGEST = 1 / 60, GLOW_CUT = 8, DAY_RIM_CUT = 6, GLOW_SHELL = 1 + GLOW_CUT * GLOW_LARGEST;
+  const GLOW_PIXELS = 0.6, GLOW_LARGEST = 1 / 60, GLOW_CUT = 8, DAY_RIM_HEIGHT = 0.005, DAY_RIM_CUT = 6, GLOW_SHELL = 1 + GLOW_CUT * GLOW_LARGEST;
   const glow = {
     uModelRotation: { value: rotationMatrix },
     uSunDirection: lighting.uSunDirection,
     uCameraPosition: lighting.uCameraPosition,
     uSun: lighting.uSun,
     uScaleHeight: { value: SCALE_HEIGHT },
+    uRimHeight: { value: DAY_RIM_HEIGHT },
     uFade: { value: 0 },
   };
   const glowMaterial = new THREE.ShaderMaterial({
@@ -1101,6 +1120,7 @@ uniform vec3 uSunDirection;
 uniform vec3 uCameraPosition;
 uniform float uSun;
 uniform float uScaleHeight;
+uniform float uRimHeight;
 uniform float uFade;
 varying vec3 vWorld;
 ${atmosphere}
@@ -1109,14 +1129,14 @@ void main() {
   vec3 closest = vWorld - dot(vWorld, ray) * ray;
   if (dot(closest - uCameraPosition, ray) < 0.0) closest = uCameraPosition;
   float b = length(closest);
-  float h = max(b - 1.0, 0.0) / uScaleHeight;
-  if (h > ${glsl(GLOW_CUT)}) discard;
+  float h = max(b - 1.0, 0.0) / uScaleHeight, hRim = max(b - 1.0, 0.0) / uRimHeight;
+  if (h > ${glsl(GLOW_CUT)} && hRim > ${glsl(DAY_RIM_CUT)}) discard;
   vec3 sun = mat3(uModelRotation) * uSunDirection;
   float mu = dot(closest / b, sun);
   float twilight = (1.0 - daylight(mu)) * smoothstep(-0.25, 0.25, dot(ray, sun));
   vec3 light = vec3(0.0);
-  if (twilight > 0.0) light = (1.0 - smoothstep(${glsl(GLOW_CUT - 2)}, ${glsl(GLOW_CUT)}, h)) * limbLight(closest / b * (1.0 + h * SCALE_HEIGHT), ray, sun);
-  if (twilight < 1.0) light = mix(1.2 * max(exp(-h) - exp(-${glsl(DAY_RIM_CUT)}), 0.0) / (1.0 - exp(-${glsl(DAY_RIM_CUT)})) * dayRim(mu) * DAY_RIM, light, twilight);
+  if (twilight > 0.0 && h < ${glsl(GLOW_CUT)}) light = (1.0 - smoothstep(${glsl(GLOW_CUT - 2)}, ${glsl(GLOW_CUT)}, h)) * limbLight(closest / b * (1.0 + h * SCALE_HEIGHT), ray, sun);
+  if (twilight < 1.0) light = mix(1.2 * max(exp(-hRim) - exp(-${glsl(DAY_RIM_CUT)}), 0.0) / (1.0 - exp(-${glsl(DAY_RIM_CUT)})) * dayRim(mu) * DAY_RIM, light, twilight);
   gl_FragColor = vec4(uFade * uSun * light, 1.0);
   #include <colorspace_fragment>
 }`,
@@ -1247,7 +1267,9 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
     glowShell.visible = glow.uFade.value > 0 && lighting.uSun.value > 0;
     if (glowShell.visible) {
       const limb = state.perspective ? 2 * TAN_HALF * Math.sqrt(Math.max(camera.position.lengthSq() - 1, 0)) : viewHeight();
-      glow.uScaleHeight.value = Math.min(Math.max(SCALE_HEIGHT, GLOW_PIXELS * limb / container.clientHeight), GLOW_LARGEST);
+      const pixelFloor = GLOW_PIXELS * limb / container.clientHeight;
+      glow.uScaleHeight.value = Math.min(Math.max(SCALE_HEIGHT, pixelFloor), GLOW_LARGEST);
+      glow.uRimHeight.value = Math.min(Math.max(DAY_RIM_HEIGHT, pixelFloor), GLOW_LARGEST);
     }
 
     if (space.enabled && lighting.uLighting.value > 0) runLightPass();
