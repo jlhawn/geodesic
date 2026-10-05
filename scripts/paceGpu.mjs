@@ -25,5 +25,6 @@ for (let done = 0; done < total;) {
   if (done % perDay === 0) d = await model.diagnostics();
 }
 const seconds = (performance.now() - start) / 1000;
-console.log(`${file.replace(/.*\//, '')} N=${saved.N}, ${total} steps (${DAYS} d) ${BATCH === 1 ? 'awaited one at a time' : `queued ${BATCH} to a submission`}: ${(seconds / DAYS).toFixed(1)} s per model day, ${(1000 * seconds / total).toFixed(1)} ms per step; day mean ASR ${d.absorbedSolar.toFixed(2)} OLR ${d.outgoingLongwave.toFixed(2)} W/m², Ts ${(d.meanSurfaceT - 273.15).toFixed(3)} °C`);
+d ??= await model.diagnostics();
+console.log(`${file.replace(/.*\//, '')} N=${saved.N}, ${total} steps (${DAYS} d) ${BATCH === 1 ? 'awaited one at a time' : `queued ${BATCH} to a submission`}: ${(seconds / DAYS).toFixed(1)} s per model day, ${(1000 * seconds / total).toFixed(1)} ms per step; ${total % perDay ? 'mean' : 'day mean'} ASR ${d.absorbedSolar.toFixed(2)} OLR ${d.outgoingLongwave.toFixed(2)} W/m², Ts ${(d.meanSurfaceT - 273.15).toFixed(3)} °C`);
 process.exit(0);
