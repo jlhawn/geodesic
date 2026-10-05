@@ -82,10 +82,186 @@ const vertexLogic = `
   vec3 transformed = finalPos;
 `;
 
-// The share of sunlit air at sun elevation cosine mu, and its colour: red at the terminator, blue above it.
-const airGlow = `
-float airLit(float mu) { return smoothstep(-0.08, 0.025, mu); }
-vec3 airColour(float mu, vec3 blue) { return mix(vec3(1.0, 0.5, 0.2), blue, smoothstep(0.0, 0.125, mu)); }
+const EARTH_RADIUS = 6.371e6, VERTICAL_EXAGGERATION = 4, METRE = VERTICAL_EXAGGERATION / EARTH_RADIUS;
+const SCALE_HEIGHT = 8000 * METRE, AEROSOL_HEIGHT = 1500 * METRE, OZONE_LOW = 1 + 15000 * METRE, OZONE_HIGH = 1 + 35000 * METRE;
+const RAYLEIGH = [0.06, 0.12, 0.29], AEROSOL = [0.05, 0.06, 0.07], OZONE = [0.035, 0.025, 0.003];
+const CLOUD_ROUGHNESS = 0.35, CLOUD_TINT = 2, DAY_START = 0.05, DAY_FULL = 0.175;
+const glsl = (x) => { const s = Number(x).toPrecision(9); return /[.e]/.test(s) ? s : `${s}.0`; };
+const glslVec3 = (v) => `vec3(${v.map(glsl).join(', ')})`;
+
+/*
+ * Sunlight through the air, in the globe's units (radius 1). Every height
+ * the Satellite view draws is VERTICAL_EXAGGERATION (four) times its real
+ * value, the air's scale height included, so cloud relief, cloud shadows,
+ * how far past the terminator a high top stays lit and the layers of the
+ * limb follow one exaggeration (METRE converts real metres to globe radii).
+ * The depths are sea-level vertical optical depths in linear R, G, B of
+ * Rayleigh air, a boundary-layer aerosol, and the ozone layer's Chappuis
+ * band as a shell between 15 and 35 km. Light is in units of a white
+ * surface under the overhead sun.
+ */
+const atmosphere = `
+const float SCALE_HEIGHT = ${glsl(SCALE_HEIGHT)};
+const float AEROSOL_HEIGHT = ${glsl(AEROSOL_HEIGHT)};
+const float OZONE_LOW = ${glsl(OZONE_LOW)};
+const float OZONE_HIGH = ${glsl(OZONE_HIGH)};
+const float METRE = ${glsl(METRE)};
+const float CLOUD_ROUGHNESS = ${glsl(CLOUD_ROUGHNESS)};
+const float CLOUD_TINT = ${glsl(CLOUD_TINT)};
+const float AIR_NODES = 6.0;
+const vec3 RAYLEIGH = ${glslVec3(RAYLEIGH)};
+const vec3 AEROSOL = ${glslVec3(AEROSOL)};
+const vec3 OZONE = ${glslVec3(OZONE)};
+const vec3 BRIGHTNESS = vec3(0.2126, 0.7152, 0.0722);
+
+// Chapman's grazing-incidence function at x = r / H: the slant column toward cosine mu >= 0 over the vertical one.
+float chapman(float x, float mu) { return 1.0 / (0.65 * mu + sqrt(0.1225 * mu * mu + 0.6366 / x)); }
+
+// Column of a species of scale height h, in its sea-level vertical columns, from radius r toward cosine mu; -1 when the ray meets the globe.
+float slantColumn(float r, float mu, float h) {
+  if (mu >= 0.0) return exp((1.0 - r) / h) * chapman(r / h, mu);
+  float rt = r * sqrt(1.0 - mu * mu);
+  if (rt < 1.0) return -1.0;
+  return 2.0 * exp((1.0 - rt) / h) * chapman(rt / h, 0.0) - exp((1.0 - r) / h) * chapman(r / h, -mu);
+}
+
+// Path through the ozone shell from radius r toward cosine mu, over the shell's thickness.
+float ozonePath(float r, float mu) {
+  float p2 = r * r * (1.0 - mu * mu);
+  float top = sqrt(max(OZONE_HIGH * OZONE_HIGH - p2, 0.0)), bottom = sqrt(max(OZONE_LOW * OZONE_LOW - p2, 0.0));
+  float s = r > OZONE_HIGH ? (mu < 0.0 ? 2.0 * (top - bottom) : 0.0)
+    : r < OZONE_LOW ? top - bottom
+    : top - r * mu - (mu < 0.0 ? 2.0 * bottom : 0.0);
+  return max(s, 0.0) / (OZONE_HIGH - OZONE_LOW);
+}
+
+// Optical depth of the sunbeam reaching radius r where the sun's cosine is mu; the globe's shadow is opaque.
+vec3 sunDepth(float r, float mu) {
+  float air = slantColumn(r, mu, SCALE_HEIGHT);
+  if (air < 0.0) return vec3(1.0e4);
+  return RAYLEIGH * air + AEROSOL * max(slantColumn(r, mu, AEROSOL_HEIGHT), 0.0) + OZONE * ozonePath(r, mu);
+}
+
+vec3 zenithDepth(float r) {
+  return RAYLEIGH * exp((1.0 - r) / SCALE_HEIGHT) + AEROSOL * exp((1.0 - r) / AEROSOL_HEIGHT) + OZONE * ozonePath(r, 1.0);
+}
+
+// The sunbeam's colour at radius r, white where the sun stands overhead.
+vec3 sunColour(float r, float mu) { return exp(zenithDepth(r) - sunDepth(r, mu)); }
+
+// Lambert's cosine averaged over facets whose slope toward the sun spreads by sigma radians.
+float lambertSoft(float c, float sigma) {
+  float s = 0.576 * sigma;
+  return s > 0.0 ? max(c, 0.0) + s * log(1.0 + exp(-abs(c) / s)) : max(c, 0.0);
+}
+
+/*
+ * Sky light on a level surface at radius r, in units of the sun's flux: the
+ * sunbeam scattered once in the sunlit air above (above the globe's shadow
+ * past the terminator), with the beam's air mass ms taken one scale height
+ * up, half of it going down at the diffuse air mass 1.66 and losing some on
+ * the way through the shadowed air below.
+ */
+vec3 skyLight(float r, float mu) {
+  float rb = mu < 0.0 ? max(r, inversesqrt(max(1.0 - mu * mu, 1.0e-6))) : r;
+  if (rb > 1.0 + 12.0 * SCALE_HEIGHT) return vec3(0.0);
+  float rr = rb + SCALE_HEIGHT;
+  float air = slantColumn(rr, mu, SCALE_HEIGHT);
+  if (air < 0.0) return vec3(0.0);
+  float ms = air * exp((rr - 1.0) / SCALE_HEIGHT);
+  vec3 loss = exp(-AEROSOL * max(slantColumn(rr, mu, AEROSOL_HEIGHT), 0.0) - OZONE * ozonePath(rr, mu));
+  vec3 above = RAYLEIGH * exp((1.0 - rb) / SCALE_HEIGHT);
+  vec3 below = RAYLEIGH * exp((1.0 - r) / SCALE_HEIGHT) - above;
+  float dm = 1.66 - ms;
+  vec3 g = abs(dm) < 1.0e-3 ? above * exp(-1.66 * above) : (exp(-ms * above) - exp(-1.66 * above)) / dm;
+  return 0.5 * loss * g * exp(-1.66 * below);
+}
+
+/*
+ * Sun and sky on an element at radius r with facet cosine 'facet', relative
+ * to the same element under the overhead sun; 'unblocked' is the share of
+ * the beam that nothing sunward casts off. The beam's colour against the
+ * overhead sun's is raised to the power 'tint' at the same brightness, which
+ * deepens a reddened beam and leaves a white one white.
+ */
+vec3 illumination(float r, float mu, float facet, float roughness, float unblocked, float tint) {
+  vec3 zenith = zenithDepth(r), overhead = exp(-zenith);
+  vec3 colour = exp(zenith - sunDepth(r, mu)), deeper = pow(colour, vec3(tint));
+  colour = deeper * dot(colour, BRIGHTNESS) / max(dot(deeper, BRIGHTNESS), 1.0e-12);
+  vec3 beam = overhead * colour * lambertSoft(facet, roughness) * unblocked;
+  return (beam + skyLight(r, mu)) / (overhead + skyLight(r, 1.0));
+}
+
+/*
+ * Sunlight scattered once toward the camera by the air along a ray from o
+ * along the unit d, out to space: the ray's Rayleigh column cut into 'nodes'
+ * equal parts, each lit as at its middle (the sunbeam's own depth there, the
+ * globe's shadow included) and dimmed by the Rayleigh air between it and the
+ * camera, integrated exactly over the part, and by the aerosol and ozone. The
+ * camera is beyond the far end, or, with 'back', behind o (the far half of a
+ * limb ray). 'depth' is the whole ray's depth.
+ */
+vec3 airAlong(vec3 o, vec3 d, vec3 sun, float nodes, bool back, out vec3 depth) {
+  float r0 = length(o), mud = max(dot(o, d) / r0, 0.0), b = r0 * mud;
+  float column = exp((1.0 - r0) / SCALE_HEIGHT) * chapman(r0 / SCALE_HEIGHT, mud);
+  float aerosol0 = max(slantColumn(r0, mud, AEROSOL_HEIGHT), 0.0), ozone0 = ozonePath(r0, mud);
+  vec3 total = RAYLEIGH * column;
+  depth = total + AEROSOL * aerosol0 + OZONE * ozone0;
+  float cosT = dot(d, sun);
+  vec3 light = vec3(0.0);
+  for (int k = 0; k < 8; k++) {
+    if (float(k) >= nodes) break;
+    float rk = r0 - SCALE_HEIGHT * log(1.0 - (float(k) + 0.5) / nodes);
+    vec3 p = o + (sqrt(max(b * b + rk * rk - r0 * r0, 0.0)) - b) * d;
+    float r = length(p);
+    vec3 up = p / r;
+    float mk = dot(up, d);
+    float a = max(slantColumn(r, mk, AEROSOL_HEIGHT), 0.0), oz = ozonePath(r, mk);
+    vec3 view = back ? AEROSOL * max(aerosol0 - a, 0.0) + OZONE * max(ozone0 - oz, 0.0) : AEROSOL * a + OZONE * oz;
+    vec3 lo = total * (float(k) / nodes), hi = total * ((float(k) + 1.0) / nodes);
+    vec3 share = back ? exp(-lo) - exp(-hi) : exp(hi - total) - exp(lo - total);
+    light += exp(-sunDepth(r, dot(up, sun)) - view) * share;
+  }
+  return 0.1875 * (1.0 + cosT * cosT) * light;
+}
+
+// The air along a ray past the globe through tangent point t, direction v away from the camera: the near half, and the far half seen through it.
+vec3 limbLight(vec3 t, vec3 v, vec3 sun) {
+  vec3 nearDepth, farDepth;
+  vec3 near = airAlong(t, -v, sun, 4.0, false, nearDepth);
+  vec3 far = airAlong(t, v, sun, 4.0, true, farDepth);
+  return near + exp(-nearDepth) * far;
+}
+
+// The air light already in the colours the page paints: looking straight down with the sun overhead.
+vec3 bakedAir(float r) { return 0.1875 * (1.0 - exp(-2.0 * RAYLEIGH * exp((1.0 - r) / SCALE_HEIGHT))); }
+
+// What the slant path to the camera takes from a surface's light beyond the straight-down path: aerosol and ozone absorb; of the light Rayleigh
+// scattering takes out of the view, half comes back from the surroundings, taken to have the surface's own colour.
+vec3 viewLoss(float r, float muv) {
+  float air = exp((1.0 - r) / SCALE_HEIGHT) * (chapman(r / SCALE_HEIGHT, muv) - chapman(r / SCALE_HEIGHT, 1.0));
+  float aerosol = exp((1.0 - r) / AEROSOL_HEIGHT) * (chapman(r / AEROSOL_HEIGHT, muv) - chapman(r / AEROSOL_HEIGHT, 1.0));
+  return 0.5 * (1.0 + exp(-RAYLEIGH * air)) * exp(-AEROSOL * aerosol - OZONE * (ozonePath(r, muv) - ozonePath(r, 1.0)));
+}
+
+/*
+ * The day side's own look, which the twilight above hands over to as the
+ * sun climbs from DAY_START to DAY_FULL in cosine: the sunbeam reddened over
+ * the air mass of a sea-level path, a flat blue sky light, blue air seen at
+ * a slant toward the limb (DAY_AIR) and the blue rim past it (DAY_RIM),
+ * which fades out through the terminator (dayRim).
+ */
+const vec3 DAY_SKY = vec3(0.1, 0.14, 0.2);
+const vec3 DAY_AIR = vec3(0.45, 0.65, 1.0);
+const vec3 DAY_RIM = vec3(0.1, 0.3, 1.0);
+float daylight(float mu) { return smoothstep(${glsl(DAY_START)}, ${glsl(DAY_FULL)}, mu); }
+float dayRim(float mu) { return smoothstep(-0.08, 0.025, mu); }
+vec3 dayBeam(float mu) {
+  float sunHeight = max(mu, 0.0);
+  float low = min(sunHeight, 0.5);
+  float airMass = 1.0 / (sunHeight + low * (1.0 - 2.0 * low) * (1.0 - 2.0 * low) + 0.025);
+  return exp(-RAYLEIGH * (airMass - 1.0));
+}
 `;
 
 // ----------------------------------------------------------------------------
@@ -468,6 +644,24 @@ void main() {
     return { group, parts, textures: [halo, streak, burst, ring, blob] };
   }
 
+  /*
+   * The colour the air gives the sun's light seen past the globe: the
+   * transmission of a line of sight whose closest height to the globe is h
+   * (globe radii, rescaled to the air's own scale height as the limb shell
+   * draws it), through the Rayleigh air and the aerosol on both sides of
+   * the tangent point and the ozone shell. The flare takes it at the top of
+   * the sun's disc, the part that clears the limb first.
+   */
+  const limbTint = new THREE.Color(1, 1, 1), toSun = new THREE.Vector3(), nearest = new THREE.Vector3();
+  function sunThroughLimb(h, out) {
+    const b = 1 + Math.max(h, 0), chord = (o) => Math.sqrt(Math.max(o * o - b * b, 0));
+    const air = 2 * Math.exp((1 - b) / SCALE_HEIGHT) * Math.sqrt(Math.PI * b / (2 * SCALE_HEIGHT));
+    const aerosol = 2 * Math.exp((1 - b) / AEROSOL_HEIGHT) * Math.sqrt(Math.PI * b / (2 * AEROSOL_HEIGHT));
+    const ozone = 2 * (chord(OZONE_HIGH) - chord(OZONE_LOW)) / (OZONE_HIGH - OZONE_LOW);
+    const t = (k) => Math.exp(-(RAYLEIGH[k] * air + AEROSOL[k] * aerosol + OZONE[k] * ozone));
+    return out.setRGB(t(0), t(1), t(2));
+  }
+
   // The main camera sees the sun along the sky camera's line of sight, so its position decides the limb test.
   function updateFlare(aspect) {
     flare.group.visible = false;
@@ -482,6 +676,10 @@ void main() {
     const brightness = strength * inFrame * unhidden;
     if (brightness <= 0) return;
     flare.group.visible = true;
+    toSun.copy(sun.position).normalize();
+    const along = Math.max(-camera.position.dot(toSun), 0);
+    const past = nearest.copy(camera.position).addScaledVector(toSun, along).length() - 1 + SUN_ANGULAR_RADIUS * along;
+    sunThroughLimb(past * SCALE_HEIGHT / glow.uScaleHeight.value, limbTint);
     flareCamera.left = -aspect; flareCamera.right = aspect;
     flareCamera.updateProjectionMatrix();
     const size = Math.sqrt(lighting.uSun.value);
@@ -490,7 +688,7 @@ void main() {
       const { sprite, width, height, tint, place } = flare.parts[k];
       sprite.position.set(x * (1 - place), y + place * (centreY - y), 0);
       sprite.scale.set(width * size, height * size, 1);
-      sprite.material.color.copy(tint).multiplyScalar(brightness);
+      sprite.material.color.copy(tint).multiplyScalar(brightness).multiply(limbTint);
     }
   }
 
@@ -603,7 +801,7 @@ vec3 terrainGrey(float z) {
   float g = z < 0.0 ? 0.03 + 0.12 * clamp((z + 6000.0) / 6000.0, 0.0, 1.0) : 0.22 + 0.6 * clamp(z / 5000.0, 0.0, 1.0);
   return vec3(g);
 }
-${airGlow}
+${atmosphere}
 vec3 srgbToLinear(vec3 c) { return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c)); }
 vec3 paletteColor(float t) {
   float x = clamp(t, 0.0, 1.0) * (uStopCount - 1.0);
@@ -621,29 +819,48 @@ vec3 paletteColor(float t) {
     else if (uColorMode < 2.5) vColor.rgb = srgbToLinear(paletteColor(value * uValueMap.x + uValueMap.y));
     else vColor.rgb = srgbToLinear(uCoverBase + (1.0 - exp(-max(0.0, value) * uValueMap.x)) * (1.0 - uCoverBase));
   }
-  // Direct sun reddened by Rayleigh scattering over its air mass (white at the zenith), sky light that
-  // reaches a few degrees past the terminator, and the sunlit air seen at a slant toward the limb.
-  vec3 n = normalize(position);
-  float mu = dot(n, uSunDirection);
-  float sunHeight = max(mu, 0.0);
-  float low = min(sunHeight, 0.5);
-  float airMass = 1.0 / (sunHeight + low * (1.0 - 2.0 * low) * (1.0 - 2.0 * low) + 0.025);
-  vec3 sunColour = exp(-vec3(0.06, 0.12, 0.29) * (airMass - 1.0));
-  float groundLight = max(0.0, dot(normalize(slope), uSunDirection)) * (1.0 - 0.7 * surface.z);
-  float diffuse = mix(groundLight, max(0.0, mu), surface.y);
-  vec3 skyColour = mix(vec3(1.0, 0.45, 0.15), vec3(0.5, 0.7, 1.0), smoothstep(0.0, 0.175, mu));
-  float skyLight = 0.2 * smoothstep(-0.06, 0.05, mu);
-  mat3 spin = mat3(uModelRotation);
-  vec3 nView = spin * n;
-  vec3 toCamera = normalize(uCameraPosition - nView);
-  vec3 halfway = normalize(spin * uSunDirection + toCamera);
-  float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.025, mu);
-  float slant = pow(1.0 - max(0.0, dot(nView, toCamera)), 2.0) * (1.0 - uBlend);
-  vec3 glow = 0.45 * slant * airLit(mu) * airColour(mu, vec3(0.45, 0.65, 1.0));
-  vec3 lit = vColor.rgb * (uAmbient + uSun * (diffuse * sunColour + skyLight * skyColour))
-    + uSun * glint * sunColour * 0.9
-    + uSun * glow;
-  vColor.rgb = mix(vColor.rgb, lit, uLighting);
+  /*
+   * The Satellite view's light on the cell: the sunbeam through the air
+   * down to the ground or the cloud top, on the terrain's or the cloud's
+   * facet, less what lies sunward casts off it, plus sky light; the air
+   * between the surface and the camera; the sea's glint. Where the sun
+   * stands high the day side's own look takes over (daylight()).
+   */
+  if (uLighting > 0.0) {
+    vec3 n = normalize(position);
+    float mu = dot(n, uSunDirection);
+    float facet = dot(normalize(slope), uSunDirection);
+    float groundUnblocked = 1.0 - 0.7 * surface.z;
+    float ground = 1.0 + max(texture2D(uCellTerrain, uv).r, 0.0) * METRE;
+    float top = ground;
+    float cloudFacet = mu;
+    float cloudUnblocked = 1.0;
+    mat3 spin = mat3(uModelRotation);
+    vec3 nView = spin * n;
+    vec3 toCamera = normalize(uCameraPosition - nView);
+    vec3 halfway = normalize(spin * uSunDirection + toCamera);
+    float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.025, mu);
+    float day = daylight(mu);
+    vec3 lit = vec3(0.0);
+    if (day < 1.0) {
+      vec3 light = mix(illumination(ground, mu, facet, 0.0, groundUnblocked, 1.0),
+                       illumination(top, mu, cloudFacet, CLOUD_ROUGHNESS, cloudUnblocked, CLOUD_TINT), surface.y);
+      float visible = mix(ground, top, surface.y);
+      vec3 view = normalize(mix(toCamera * spin, n, uBlend));
+      vec3 airDepth;
+      vec3 haze = max(airAlong(visible * n, view, uSunDirection, AIR_NODES, false, airDepth) - light * bakedAir(visible), 0.0);
+      lit = vColor.rgb * (uAmbient + uSun * light * viewLoss(visible, max(dot(n, view), 0.0)))
+        + uSun * (0.9 * glint * sunColour(ground, mu) + haze);
+    }
+    if (day > 0.0) {
+      vec3 beam = dayBeam(mu);
+      float diffuse = mix(max(0.0, facet) * groundUnblocked, max(0.0, cloudFacet) * cloudUnblocked, surface.y);
+      float slant = pow(1.0 - max(0.0, dot(nView, toCamera)), 2.0) * (1.0 - uBlend);
+      vec3 dayLit = vColor.rgb * (uAmbient + uSun * (diffuse * beam + DAY_SKY)) + uSun * (0.9 * glint * beam + 0.45 * slant * DAY_AIR);
+      lit = mix(lit, dayLit, day);
+    }
+    vColor.rgb = mix(vColor.rgb, lit, uLighting);
+  }
 `,
   });
 
@@ -653,17 +870,24 @@ vec3 paletteColor(float t) {
 
   /*
    * The sunlit air beyond the limb, on the back faces of a shell that the
-   * globe hides inside its silhouette: each ray's column exp(-h / H) at
-   * its closest height h, lit as the globe's air is at that point. H stays
-   * at least a fraction of a pixel so the rim is resolved when far out.
+   * globe hides inside its silhouette. Each ray is taken at its closest
+   * height h, measured in a drawn scale height H that stays at least
+   * GLOW_PIXELS of a pixel so the rim is resolved when far out, and
+   * rescaled to the air's own scale height there: sunlight scattered once
+   * along the ray's near and far halves, the far half seen through the
+   * near, with the globe's shadow on both (limbLight), so that with the
+   * sun behind the limb the band is red low down, yellow-white above and
+   * blue higher up. That band shows as the sun nears the horizon at the
+   * closest point and stands beyond it, along the ray; elsewhere the day
+   * side's blue rim, its column exp(-h / H), takes over.
    */
-  const GLOW_HEIGHT = 0.005, GLOW_PIXELS = 0.6, GLOW_CUT = 6, GLOW_SHELL = 1.1;
+  const GLOW_PIXELS = 0.6, GLOW_LARGEST = 1 / 60, GLOW_CUT = 8, DAY_RIM_CUT = 6, GLOW_SHELL = 1 + GLOW_CUT * GLOW_LARGEST;
   const glow = {
     uModelRotation: { value: rotationMatrix },
     uSunDirection: lighting.uSunDirection,
     uCameraPosition: lighting.uCameraPosition,
     uSun: lighting.uSun,
-    uScaleHeight: { value: GLOW_HEIGHT },
+    uScaleHeight: { value: SCALE_HEIGHT },
     uFade: { value: 0 },
   };
   const glowMaterial = new THREE.ShaderMaterial({
@@ -682,16 +906,21 @@ uniform float uSun;
 uniform float uScaleHeight;
 uniform float uFade;
 varying vec3 vWorld;
-${airGlow}
+${atmosphere}
 void main() {
   vec3 ray = normalize(vWorld - uCameraPosition);
   vec3 closest = vWorld - dot(vWorld, ray) * ray;
   if (dot(closest - uCameraPosition, ray) < 0.0) closest = uCameraPosition;
   float b = length(closest);
   float h = max(b - 1.0, 0.0) / uScaleHeight;
-  float column = max(exp(-h) - exp(-${GLOW_CUT.toFixed(1)}), 0.0) / (1.0 - exp(-${GLOW_CUT.toFixed(1)}));
-  float mu = dot(closest / b, mat3(uModelRotation) * uSunDirection);
-  gl_FragColor = vec4(uFade * uSun * 1.2 * column * airLit(mu) * airColour(mu, vec3(0.1, 0.3, 1.0)), 1.0);
+  if (h > ${glsl(GLOW_CUT)}) discard;
+  vec3 sun = mat3(uModelRotation) * uSunDirection;
+  float mu = dot(closest / b, sun);
+  float twilight = (1.0 - daylight(mu)) * smoothstep(-0.25, 0.25, dot(ray, sun));
+  vec3 light = vec3(0.0);
+  if (twilight > 0.0) light = (1.0 - smoothstep(${glsl(GLOW_CUT - 2)}, ${glsl(GLOW_CUT)}, h)) * limbLight(closest / b * (1.0 + h * SCALE_HEIGHT), ray, sun);
+  if (twilight < 1.0) light = mix(1.2 * max(exp(-h) - exp(-${glsl(DAY_RIM_CUT)}), 0.0) / (1.0 - exp(-${glsl(DAY_RIM_CUT)})) * dayRim(mu) * DAY_RIM, light, twilight);
+  gl_FragColor = vec4(uFade * uSun * light, 1.0);
   #include <colorspace_fragment>
 }`,
   });
@@ -700,6 +929,29 @@ void main() {
   glowShell.renderOrder = 1;
   glowShell.visible = false;
   scene.add(glowShell);
+
+  /*
+   * The sun's disc and halo, each fragment dimmed and reddened by the air
+   * its line of sight from the camera crosses past the globe, as
+   * sunThroughLimb() does for one height. The sky camera sits at the
+   * origin, so a fragment's direction is the main camera's ray there.
+   */
+  sun.material.customProgramCacheKey = () => 'sun through the air';
+  sun.material.onBeforeCompile = (shader) => {
+    shader.uniforms.uCameraPosition = lighting.uCameraPosition;
+    shader.uniforms.uScaleHeight = glow.uScaleHeight;
+    shader.vertexShader = `varying vec3 vSkyDirection;
+${shader.vertexShader.replace('#include <fog_vertex>', `#include <fog_vertex>
+  vSkyDirection = (vec4(mvPosition.xyz, 0.0) * viewMatrix).xyz;`)}`;
+    shader.fragmentShader = `uniform vec3 uCameraPosition;
+uniform float uScaleHeight;
+varying vec3 vSkyDirection;
+${atmosphere}
+${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+  vec3 toSun = normalize(vSkyDirection);
+  float past = length(uCameraPosition + max(-dot(uCameraPosition, toSun), 0.0) * toSun) - 1.0;
+  diffuseColor.rgb *= exp(-2.0 * sunDepth(1.0 + max(past, 0.0) * SCALE_HEIGHT / uScaleHeight, 0.0));`)}`;
+  };
   
 
   // Create GUI / Buttons
@@ -798,7 +1050,7 @@ void main() {
     glowShell.visible = glow.uFade.value > 0 && lighting.uSun.value > 0;
     if (glowShell.visible) {
       const limb = state.perspective ? 2 * TAN_HALF * Math.sqrt(Math.max(camera.position.lengthSq() - 1, 0)) : viewHeight();
-      glow.uScaleHeight.value = Math.min(Math.max(GLOW_HEIGHT, GLOW_PIXELS * limb / container.clientHeight), (GLOW_SHELL - 1) / GLOW_CUT);
+      glow.uScaleHeight.value = Math.min(Math.max(SCALE_HEIGHT, GLOW_PIXELS * limb / container.clientHeight), GLOW_LARGEST);
     }
 
     renderer.setClearColor(space.enabled ? 0x000000 : backgroundColor);
