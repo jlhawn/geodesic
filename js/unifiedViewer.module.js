@@ -1066,8 +1066,9 @@ vec3 paletteColor(float t) {
    * opacity, so the colour and the reach of the sunset light on cloud vary
    * smoothly across the deck; what lies sunward casts off the cell's own
    * top. Where the sun stands high the day side's own look takes over
-   * (daylight()); below a sun cosine of NIGHT_DEEP even the air a grazing
-   * view crosses lies in the globe's shadow, leaving the ambient alone.
+   * (daylight()), with level cloud tops; below a sun cosine of NIGHT_DEEP
+   * even the air a grazing view crosses lies in the globe's shadow, leaving
+   * the ambient alone.
    */
   if (uLighting > 0.0) {
     vec3 n = normalize(position);
@@ -1077,14 +1078,14 @@ vec3 paletteColor(float t) {
     float facet = dot(normalize(slope), uSunDirection);
     float groundUnblocked = cell.r * cell.r;
     float ground = 1.0 + max(texture2D(uCellTerrain, uv).r, 0.0) * METRE;
-    float cloudFacet = (mu + lean * abs(lean)) * cell.a;
+    float day = daylight(mu);
+    float cloudFacet = mix((mu + lean * abs(lean)) * cell.a, mu, day);
     float cloudUnblocked = cell.g * cell.g;
     mat3 spin = mat3(uModelRotation);
     vec3 nView = spin * n;
     vec3 toCamera = normalize(uCameraPosition - nView);
     vec3 halfway = normalize(spin * uSunDirection + toCamera);
     float glint = pow(max(0.0, dot(nView, halfway)), 90.0) * surface.x * (1.0 - surface.y) * smoothstep(0.0, 0.025, mu) * groundUnblocked;
-    float day = daylight(mu);
     vec3 lit = vColor.rgb * uAmbient;
     if (day < 1.0 && mu > ${glsl(NIGHT_DEEP)}) {
       vec4 next = texture2D(uCellSurface, cellUv(corner.x)), last = texture2D(uCellSurface, cellUv(corner.y));
