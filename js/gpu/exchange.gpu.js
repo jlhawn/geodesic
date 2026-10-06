@@ -85,7 +85,7 @@ fn surfaceExchange(i: i32, pi: f32, skin: f32, wind: f32, concentration: f32, sn
   let celsius = IN[S_TH + b] * D[D_EXM + b] - 273.15;
   let viscosity = 1.326e-5 * (1.0 + 6.542e-3 * celsius + 8.301e-6 * celsius * celsius - 4.84e-9 * celsius * celsius * celsius);
   let exS = D[D_EXL + b];
-  let airV = IN[S_TH + b] * (1.0 + VIRT * IN[S_Q + b] - IN[S_QC + b]);
+  let airV = IN[S_TH + b] * (1.0 + VIRT * IN[S_Q + b]);
   let airQ = IN[S_Q + b];
   let surfaceQ = select(qsat(skin, pi), select(airQ, airQ + wetness * max(0.0, qsat(skin, pi) - airQ), X_WET_SURFACE), onLand);
   let surfaceV = skin / exS * (1.0 + VIRT * surfaceQ);

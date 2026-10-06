@@ -8794,7 +8794,10 @@ half: z₀m 1.17 m, z₀h 1.03 m). Stability: Monin–Obukhov with the IFS's
 surface-layer functions (eqs. 3.16–3.26: Dyer–Hicks integrated by
 Paulson when unstable; Holtslag and De Bruin 1988 with a 1, b 2/3, c 5,
 d 0.35 when stable; no cap on z/L), ζ = z₁/L from the bulk Richardson
-number g z₁ (θv₁ − θv_s)/(θ̄v U²) by five steps (fixed point when
+number g z₁ (θv₁ − θv_s)/(θ̄v U²), θv₁ the lowest layer's with its
+vapour alone (its cloud water counted as loading makes a fog-filled
+layer over a warmer surface read as unstable, and the fluxes that
+follow feed the fog), by five steps (fixed point when
 unstable, Newton in ln ζ when stable; worst error against 200 steps
 over Ri −10…10 at z 16–40 m 4·10⁻⁴ for the tiles above and their blends
 and 1.6·10⁻³ for any z₀m ≤ 2 m with z₀h/z₀m ≥ 10⁻³; below z 10 m with
@@ -12361,6 +12364,78 @@ either N wrote a console message. The Claude app's Browser pane was not
 open, its new tab refused and its navigation to localhost denied, so
 the built-in browser did not run this check, and Safari on the iPhone
 17 Pro, whose WebKit may hold the uploads differently, is not measured.
+
+**Reproducibility, and GPU work the system aborts (Oct 6 2026).** The
+deployed N=128 page on an RTX 4070 Ti Super went black after 25–30
+simulated days and N=192 after four (reported Oct 5). N=192's death is
+the ocean's cadence: at the drivers' 45 min × 64/N = 15 minutes a fresh
+atlas start clamped 700,000 edges at the speed limit and was NaN on day
+5, while 7.5 and 3.75 minutes each ran five clean days (currents ≤ 2.5
+m/s, nothing clamped), so `oceanMinutes` now shortens the step as the
+cube of the spacing above N=128, 22.5 × (128/N)³ minutes: every 4 steps
+at N=192, every 2 at N=256 (1fb7343). N=128's took the night. On the
+Mac one HEAD run from eleven128_day1826 went NaN within its first day
+while two identical repeats, run side by side an hour later, finished
+two days bit-identical; two models stepped in lockstep in one process
+from the same state compare word for word, S, PH, the ocean's state and
+its scratch, after every 8 steps for two days at N=64 and every 16 at
+N=128; and a model whose dead memory, the five RK4 registers and the
+ocean's scratch around every ocean step and the stages' and closures'
+D before every step, is filled with NaN stays finite for 256 steps, so
+no kernel reads stale memory and the shared registers and the overlaid
+scratch are sound. The system log explains the run that died: in the
+four minutes it ran, macOS aborted five of its command buffers and five
+of the other model running beside it ("Execution of the command buffer
+was aborted due to an error during execution. Impacting Interactivity",
+kIOGPUCommandBufferCallbackErrorImpactingInteractivity), which Dawn
+neither reports nor turns into a lost device, so the model stepped on
+from a partly executed submission. The night's log holds 33 such aborts,
+every one in a node process that shared the GPU with another model, and
+the old-code control that finished forty days sane took ten of them.
+So on this Mac one GPU model runs at a time, and a pair comparison is
+evidence only when `log show` finds no abort in its window; the pairs
+that differed earlier in the night all ran under that contention. The
+page now stops with a message on a non-finite frame (8618ec5) and on a
+lost device, where it drew a black globe, and the scripts' device logs
+both. The PC's failure was not reproduced here: a thirty-day run of
+`scripts/spinup.mjs` at HEAD from eleven128_day1825, alone on the GPU,
+reached day 1855 finite at 48 s a day (Ts 14.8 → 15.8 °C, the old-code
+control from the same state reaching the same temperatures over forty
+days; max wind 78–117 m/s; currents ≤ 2.5 m/s, nothing clamped), and
+so did the page's own loop (a frame queued ahead of every three steps,
+two submissions in flight) with a frame every step. The page's loop
+with its default three steps a frame, a different trajectory from the
+same state, was NaN on day 26, the PC's 25–30: not the ocean, whose
+currents were 1.3 m/s with nothing clamped, but the atmosphere within
+one batch of three steps, where fifteen thousand columns in every layer
+went non-finite along the latitude bands between 30°N and 80°N. A
+snapshot taken 117 steps before, replayed a step at a time, finds the
+seed in one land column on the east shore of Hudson Bay (54.0°N
+78.7°W): a forest cell with melting snow in April, a stable 37 m
+boundary layer and a wind under 1 m/s, whose lowest layer held 60–90
+g/kg of cloud water and no vapour while its surface exchange ran away,
+C_H 0.3 against a neutral 0.0025, the drag 0.4, u* equal to the wind,
+the sensible heat flux −7 kW/m² and the evaporation 200 mm a day. The
+loop: the surface layer's bulk Richardson number took the lowest
+layer's cloud water as loading in its θv, so a fog-filled layer over a
+warmer surface read as strongly unstable; the forest's 2 m roughness
+made that an enormous exchange; the exchange evaporated the melting
+snow into the layer, whose condensate the lowest two layers never
+convert to rain (`autoconversionFloor` 'lowest'); more fog, more
+loading, more flux. At step 111 the fog flashed to vapour, cooling the
+layer by 250 K, the column was NaN a step later, and the sponge's band
+means and the dynamics carried it along the band within three steps.
+Replays from the snapshot with the drags, the radiation or the ocean
+every step, or without frames, die at the same step with the same
+winds, so none of the cadences is the lever. Counting the lowest
+layer's vapour alone in that θv (both engines; `exchange.module.js`,
+`exchange.gpu.js`) carries the same snapshot through the stretch
+finite, with the jet at 34.5°S and 1.6 hPa still on its course from 92
+to 102 m/s, and the page's loop from eleven128_day1825 reaches day 1855
+finite (Ts 14.8 → 16.0 °C, max wind 82–106 m/s, currents ≤ 1.4 m/s,
+nothing clamped). An aborted command buffer on the Mac
+and this feedback on the PC both end in the same black globe, which
+the page now names.
 
 ### M25 — The long spin-up — planned
 

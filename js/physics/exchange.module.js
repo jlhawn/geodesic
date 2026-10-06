@@ -43,7 +43,10 @@ import { SEA_DRAG, LAND_DRAG } from './surface.module.js';
  * over sea and sea ice, and over land (landHumidity 'wetness') the
  * humidity the evaporation implies, q₁ + w max(0, q_s(T_s) − q₁) with w
  * the land's wetness (`wetness`, 1 under snow), so that Ri_b has the sign
- * and size of the surface's moist buoyancy flux; 'air' takes q₁.
+ * and size of the surface's moist buoyancy flux; 'air' takes q₁. The
+ * air's θv counts its vapour only: with its cloud water as loading, a
+ * fog-filled lowest layer over a warmer surface reads as unstable, and
+ * the fluxes that follow feed the fog.
  *
  * U is the lowest wind with a free-convection gustiness (convectiveGust
  * [β_sea, β_land, floor]): U² = |v|² + u_g², u_g = max(floor, β w*) where
@@ -241,7 +244,7 @@ export function createSurfaceExchange(mesh, core, { geography = null, vegetated 
     let speed = gusty ? Math.sqrt(lowest * lowest + floor * floor) : Math.max(lowest, gustiness);
     const viscosity = airViscosity(theta[b] * exnerLayer[b] - 273.15);
     const exS = exnerLower[b];
-    const airV = theta[b] * (1 + VIRTUAL_FACTOR * (q ? q[b] : 0) - (qc ? qc[b] : 0));
+    const airV = theta[b] * (1 + VIRTUAL_FACTOR * (q ? q[b] : 0));
     const surfaceQ = !q ? 0 : !onLand ? saturationHumidity(skin, pi[i]) : wetSurface ? q[b] + wetness * Math.max(0, saturationHumidity(skin, pi[i]) - q[b]) : q[b];
     const surfaceV = skin / exS * (1 + VIRTUAL_FACTOR * surfaceQ);
     let ri = 0;
