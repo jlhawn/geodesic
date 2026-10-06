@@ -6303,7 +6303,10 @@ The work, in order:
    stays out of the lowest two layers (`autoconversionFloor` 'lowest';
    'boundaryLayer' keeps it out of every layer wholly inside the
    boundary layer), and rain evaporates only into cloud-free layers (at
-   most 10⁻⁷ kg/kg of cloud water). Jordan's (1958) mean
+   most 10⁻⁷ kg/kg of cloud water). Since Oct 6 the floored layers lose
+   their cloud by the fog scheme of M26 instead (settling, deposition
+   onto the surface and drizzle); 'none' converts every layer by Kessler
+   and runs no fog scheme. Jordan's (1958) mean
    hurricane-season sounding heats most at 440 hPa with its top at
    195 hPa. The
    radiation gives resolved cloud a cover (`cloudCover` 'pdf', both
@@ -8073,6 +8076,26 @@ cover and overlap, the adjust and physics kernels of
   the upper troposphere drier and its high cloud sparser at 3.29, an
   outcome of the missing anvil source rather than an observation of the
   fall speed.
+- Fog in the floored layers (M26; `fogDroplets` [150, 60] cm⁻³,
+  `fogDeposition` 1, `fogDepositionLimit` 0.25 m/s): the liquid share l
+  of the cloud in the layers the autoconversion floor keeps Kessler and
+  the lifetimes out of settles at v_s = S_N (ρ l)^(2/3),
+  S_N = 7.32·10⁵ (N·10⁶)^(−2/3), the mass-weighted Stokes speed over a
+  gamma distribution of shape 8 (Morrison and Gettelman's form, as the
+  UM settles fog, Wilkinson et al. 2013), N the continental or the sea
+  and ice-sheet droplet number by the radiation's split; in the lowest
+  layer it also deposits onto the ground and its vegetation at
+  v_d = min(E C_D W, 0.25 m/s), the momentum limit u*²/U (Unsworth and
+  Wilshaw 1989) on the implicit drag's ρ C_D W. A layer keeps
+  1/(1 + (v_s + v_d) Δt/Δz) of its liquid, implicitly from the top down
+  as the ice falls, and hands the rest to the layer below as cloud, the
+  lowest to the ground as large-scale precipitation (tallied apart as
+  `fogPrecipitation`); what stays drizzles by Khairoutdinov and Kogan
+  (2000) with the IFS's factor 1.5, dl/dt = −2025 l^2.47 N^−1.79, exact
+  over the step. 0.3 g/m³ settles at 1.16 cm/s on land and 2.14 cm/s at
+  sea, against single-droplet Stokes speeds at the radiation's 8.5 and
+  11.8 µm radii of 0.9 and 1.7 cm/s and observed fog settling of
+  0.3–3 cm/s.
 - Exponential-random overlap (`cloudOverlap` 'exponentialRandom'):
   adjacent cloudy layers overlap with α = exp(−Δz/z₀) between maximum and
   random (Hogan and Illingworth 2000), z₀ = 2899 − 27.59 |latitude°| m
@@ -12444,7 +12467,8 @@ to 102 m/s, and the page's loop from eleven128_day1825 reaches day 1855
 finite (Ts 14.8 → 16.0 °C, max wind 82–106 m/s, currents ≤ 1.4 m/s,
 nothing clamped). An aborted command buffer on the Mac
 and this feedback on the PC both end in the same black globe, which
-the page now names.
+the page now names. M26 gives the floored layers' fog the sinks it
+lacked, so that the same column holds 0.4 g/kg where it held 60–90.
 
 ### M25 — The long spin-up — planned
 
@@ -12457,6 +12481,142 @@ an analytic one. The Verda spot prices and the measured H100 and A100
 paces of Sept 28 put the schedule near $300–400; the Verda tooling
 (`scripts/verdaRelaunch.sh`, `scripts/verdaInstances.mjs`) is in place.
 The page's default states are then taken from the spun-up ocean.
+
+### M26 — Fog in the lowest layers — done
+
+Why. The autoconversion floor (`autoconversionFloor` 'lowest', aa2d647;
+d089861 first kept every boundary-layer layer out) keeps Kessler
+autoconversion and the cloud lifetimes out of the lowest two layers.
+It was built to stop a ±10 K/d condensation–evaporation churn in the
+lowest 100 m, and the M21 screen (above, the ITCZ dipole) found that
+neither floor moves that dipole; no observation or physics stands
+behind it. It left the lowest two layers' cloud no sink but evaporation
+and mixing: a fog fed from below could hold tens of g/kg, where real
+fog holds 0.05–0.5 g/kg, removed by droplet settling, turbulent
+deposition onto the surface and vegetation, and drizzle. On the night
+of Oct 5–6 (M24) a James Bay forest column held 60–90 g/kg in its
+lowest layer before its surface exchange ran away. The floor stays,
+because removing it changes the convection retune's heating profile
+everywhere and needs its own screen; the floored layers convert by a
+fog scheme instead, so that every layer has exactly one way from cloud
+to precipitation.
+
+The scheme (both engines: `autoconvertColumn` in
+`js/physics/moist.module.js`, the adjust kernel in
+`js/gpu/physics.gpu.js`), for the liquid share l of a floored layer:
+
+- Settling at the mass-weighted Stokes speed of a gamma distribution
+  of shape 8 (Morrison and Gettelman 2008's vtrmc form; the UM's fog
+  settling, Wilkinson et al. 2013): v_s = S_N (ρ l)^(2/3),
+  S_N = (ρ_w g/18μ)·Γ(14)/Γ(12)·[6Γ(9)/(πρ_wΓ(12))]^(2/3)·(N·10⁶)^(−2/3)
+  = 7.32·10⁵ (N·10⁶)^(−2/3). `fogDroplets` [150, 60] cm⁻³
+  (continental; sea and ice sheet), which at 0.2–0.3 g/m³ reproduce the
+  radiation's effective radii (8.5 µm for N 105–157, 11.8 µm for
+  N 40–60), within the UM's 50–75 near the surface (Wilkinson 2013;
+  RAL1, Boutle et al. 2018), the IFS's 300/50 and observed 30–300.
+  1.25 cm/s at 0.27 g/kg on land, 1.56 cm/s at 0.15 g/kg at sea; observed
+  fog settles at 0.3–3 cm/s. The grid-mean liquid stands in for the
+  in-cloud one: near the surface the uniform distribution is overcast
+  above about 0.07 g/kg, so only trace fog settles too slowly.
+- Deposition onto the ground and its vegetation, lowest layer only,
+  with the implicit surface drag: v_d = min(E C_D W, 0.25 m/s), the
+  momentum limit u*²/U of Unsworth and Wilshaw (1989) with E
+  `fogDeposition` 1 (plausible 0.5–1.5) on the drag's ρ C_D W. With the
+  model's own C_D at the 18 m midpoint it gives forest 0.019–0.033 U
+  against FogDES's 0.027–0.037 U, grass 0.0039 U against 0.004–0.006 U
+  and sea about 0.0012 U (Taylor et al. 2021); observed V_d is 2.1–8 cm/s
+  over short vegetation and 1–20 cm/s over forest (Katata 2014). The
+  limit `fogDepositionLimit` 0.25 m/s, the top of the eddy-covariance
+  forest range (Katata; Burkard, Klemm), guards against pathological
+  exchange coefficients.
+- Both act implicitly in flux form from the top down within the step,
+  as the ice falls: a layer keeps 1/(1 + c), c = (v_s + v_d) Δt/Δz, and
+  hands l c/(1 + c) to the layer below as cloud water; the lowest hands
+  it to the ground as large-scale precipitation, tallied apart as fog
+  (`fogPrecipitation`, `fogRain` in mm/d; GPU PH FOG and FOGMEAN), and it
+  lands as rain or snow by the surface's existing rule. Settled water
+  that reaches subsaturated air evaporates in the column's second
+  adjustment.
+- Drizzle of what stays, Khairoutdinov and Kogan (2000) with the IFS
+  Cy49r1 factor 1.5 and no threshold: dl/dt = −1350·1.5 l^2.47 N^−1.79,
+  integrated exactly over the step. It is weak at fog water: 0.34 % of
+  0.3 g/kg over 600 s at sea, 2.6 % of 2 g/kg.
+- `fogDroplets` null and `fogDeposition` 0 turn it off, and the model
+  is then the one before bit for bit: a 1-day N=64 run from
+  eleven64_day1825 saves a snapshot byte-identical to 4088f66's. Under
+  'none' no fog scheme runs, deposition included. Under 'boundaryLayer'
+  fog settles through the whole boundary layer, which wants its own
+  screen before it is used.
+
+Fixed point of a lowest layer (38.8 m, 48.2 kg/m², ρ 1.244 kg/m³, W
+3 m/s; C_D 0.0012 sea, 0.0039 grass, 0.025 forest; g/kg):
+
+| Fed by       | sea, 168.75 / 337.5 s | grass         | forest        |
+|--------------|-----------------------|---------------|---------------|
+| 15 g/m²/h    | 0.160 / 0.155         | 0.159 / 0.156 | 0.042 / 0.042 |
+| 50 g/m²/h    | 0.336 / 0.320         | 0.386 / 0.373 | 0.132 / 0.130 |
+| 200 mm/d     | 5.00 / 3.75           | 8.34 / 6.73   | 6.86 / 5.66   |
+
+Settling and deposition carry 93–100 % of the loss, drizzle the rest.
+From 75 g/kg with no feed a lowest layer falls below 1 g/kg in six
+steps of 337.5 s at sea and seven on land.
+
+The James Bay snapshot (`page_day1850_step0256.bin`, N=128, 150 steps
+of 168.75 s, alone on the GPU). At 4088f66 its lowest layer's cloud
+grows from 8.7 to 18.7 g/kg (its second layer 3.8–5.6), and the globe
+ends with a lowest-layer p99 of 2.99 g/kg over the 11 984 cells above
+0.01 g/kg, a maximum of 18.7 and 69 cells above 5 g/kg. With the fog
+scheme the column falls from 4.9 g/kg after the first step to 0.78
+after 11 steps and holds 0.36–0.42 g/kg (its second layer 0.18–0.5),
+draining 2.3 g/m² a step (1.2 mm/d) at a neutral C_H of 0.0027; the
+globe ends with p99 0.24 and a maximum of 0.52 g/kg, three cells above
+0.5 and none above 1; everything finite, and the page's loop (three
+steps a frame) finite through the stretch. 48.1 against 48.2 s a
+simulated day.
+
+Ten days at N=64 from eleven64_day1825 (dt 337.5 s, `scripts/spinup.mjs`,
+day means, 4088f66 against the fog scheme):
+
+| Day means, days 1826–1835 | 4088f66 | fog scheme |
+|---------------------------|---------|------------|
+| Ts (°C)                   | 14.423  | 14.417     |
+| ASR / OLR (W/m²)          | 230.02 / 230.20 | 230.05 / 230.22 |
+| precipitation (mm/d)      | 2.789   | 2.786 (−0.11 %) |
+| planetary albedo          | 0.3245  | 0.3244     |
+| SWCRE / LWCRE (W/m²)      | −60.98 / 28.97 | −60.94 / 28.96 |
+| sea ice N / S (Mkm²)      | 13.87 / 1.13 | 13.87 / 1.12 |
+| iced-cell surface sunlight N / S (W/m²) | 16.98 / 16.47 | 17.01 / 16.24 |
+| ocean h1 (m)              | 68.8    | 68.8       |
+| fog (mm/d)                | —       | 0.0043 (land 0.007, sea 0.003) |
+| cells over 0.1 mm/d of fog, their mean | — | 166–540, 0.15–0.22 mm/d |
+| lowest-layer cloud on day 1835: p99 / max (g/kg) | 0.63 / 2.12 | 0.13 / 0.31 |
+| cells above 0.5 / 1 g/kg on day 1835 | 62 / 22 | 0 / 0 |
+
+The fog scheme's daily p99 stays at 0.10–0.16 g/kg and its maximum at
+0.17–0.38 g/kg over the ten days; fog cells deposit 0.15–0.22 mm/d,
+under the 0.4 mm/d measured at Waldstein and the 0.5–1.4 mm/d of cloud
+forests, and the global fog of 0.0043 mm/d sits just under the
+0.005 mm/d the plan expected. Everything else moves by less than a
+day's noise. The pace is the same: 6.9 s a simulated day on either
+side at N=64 (wall time of the ten days), and at N=128 48.1 against
+48.2 s (0.3 %); the scheme costs two pows and an exp in at most two
+layers of a column and two C-sized physics slots.
+
+The modelDigest base runs with the scheme off, so every pinned digest
+stands; its twelve N=4 steps from rest form no lowest-layer cloud, so
+the defaults with the scheme on give the same digest,
+8985603725f018265d173fccf8f2ba48 for the base, pinned as its own test.
+
+Risks: polar mixed-phase low liquid over sea ice thins a little; the
+mixed layer's slab total water and its cloud-top coupling see less
+lowest-layer water; the 'boundaryLayer' floor now settles fog through
+the whole boundary layer and wants its own screen; the deployed page
+and the phones take the scheme on the next deploy, since states carry
+no options; the GPU's f32 pow and relaxedFraction part from the CPU's
+Math.pow and expm1 at about 10⁻⁷ of themselves, within the parity
+tolerances. Settling above the floor, and dew or rime from vapour
+(the evaporation stays at or above zero), are left for their own
+screens.
 ## 7. Module layout in this repo
 
 ```
@@ -12483,7 +12643,7 @@ js/
     formDrag.module.js      M22: the turbulent orographic form drag's coefficient
     init.module.js          ported: thermal init, balance, seed, geostrophic winds
     regrid.module.js        barycentric interpolation of a state between meshes; ice, snow and soil by source tile
-    moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler; M21: its triggered entraining parcel and shallow branch, the shallow cumulus mass flux and the convective plume
+    moist.module.js         M7/M8: saturation adjustment, cloud water, autoconversion, Betts–Miller, filler; M21: its triggered entraining parcel and shallow branch, the shallow cumulus mass flux and the convective plume; M26: fog settling, deposition and drizzle in the floored layers (fogConstants)
     ice.module.js           M9/M11: zero-layer sea ice over the mixed layer, its concentration, zenith albedo
   ocean/
     layered.module.js       M18: 45-layer hybrid isopycnal ocean with a split free surface, the mixed layer coupled through the sea-ice cell update
@@ -12619,3 +12779,7 @@ core (which does more work per cell through the adjoint gather lists).
   and RK3 are upgrade paths, not prerequisites.
 - The A-grid model in `~/Desktop/climate_model` is retired; it is not a
   validation baseline.
+- The autoconversion floor is kept (M26): the floored layers lose their
+  cloud by the fog scheme (settling, deposition onto the surface and
+  drizzle) and by nothing else; settling above the floor is deferred to
+  a screen of its own.
