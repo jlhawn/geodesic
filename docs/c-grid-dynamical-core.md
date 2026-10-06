@@ -1610,15 +1610,56 @@ The page draws coastlines in the Atmosphere and Ocean modes, colours land in Sat
 from soil water (dry tan to wet green) with snow whitening it, and
 adds Soil water, Snow and Elevation overlays; `?land=off` keeps the
 aquaplanet and `?topography=<url>` takes another raster.
-Beyond the globe's limb the Satellite mode draws the sunlit air as a
-thin blue rim, an exponential column of about 0.5 % of the radius in
-scale height lit with the same sun-elevation ramps as the surface's
-twilight, so it reddens and ends where the globe's terminator does.
-With the sun in the frame a camera flare is drawn over the picture in
-screen space, a halo, a horizontal streak and a starburst on the sun and
-five ghost discs on the line through the view centre, scaled by the
-sunlight slider and faded out toward the frame edge and over the sun's
-own width as it passes behind the limb.
+The Satellite mode lights the globe by single scattering in an
+atmosphere drawn `VERTICAL_EXAGGERATION` (two) times its real height
+(`js/unifiedViewer.module.js`): every cell is lit by the beam that
+reaches its own altitude, the ground's or its cloud top's, through
+Rayleigh air (optical depths 0.06, 0.12, 0.29 per vertical column in R,
+G, B, scale height 8 km), a 1.5 km boundary-layer aerosol and an ozone
+shell, along Chapman's grazing path at the real Earth's ratio of radius
+to scale height, continued past the horizon over the path that dips
+below the receiver until the globe's own shadow; by the sky light that
+beam scatters, neutral to blue and a few per cent of noon at the
+terminator; and by the air between the cell and the camera. So the
+ground and sea fade to dark through a neutral grey-blue penumbra with no
+orange, and the sunset colours fall where they do in photographs from
+orbit: on the mid and high cloud at and just past the ground
+terminator, whose tops stay lit until the sun's cosine reaches
+−√(2z/R) and see it through air that has grazed below them. The
+cloud's beam colour carries a stated `CLOUD_TINT` of 1.5 (the colour
+relative to the overhead sun raised to that power, at the same
+brightness), because pure single scattering averaged over a 60 km cell
+read taupe where a 10 km top reads R/G 1.46; it is graded across the
+deck by having each vertex blend the three cells at its corner,
+weighted by their cloud opacity, so the warm light never lands on a
+single hexagon. The day side keeps its earlier shading where the sun's
+cosine is above 0.175 and hands over to the physics between 0.05 and
+0.175. Each cell's cloud top and base come from the frame fields
+`cloudTop` and `cloudBase` (`js/frames.module.js`
+`visibleCloudHeights`: the height where light from above, or below,
+first meets the column's cloud, averaged over where it does, on both
+engines, computed only when subscribed; `test/cloudHeights.test.mjs`
+and `test/frameGpu.test.mjs`, which also checks the model's state is
+bit-identical with and without the fields). A WebGL2 light pass writes
+one texel per cell, at most every 66 ms and only when a frame lands or
+the sun has turned half a degree: it marches sunward over the sphere in
+half-cell steps through the terrain and through cloud slabs from base
+to top (opacity 1 − exp(−path / 40 g/m²)), from the ground and from the
+cloud top, so high cloud and mountains throw shadows toward the night
+side that lengthen into the terminator, and it fits each cloud top's
+slope toward the sun, which shades the relief while the sun is low. It
+costs about 1 ms of GPU at N=128. Beyond the limb the shell draws the
+air's radiance by each ray's tangent height: on the day side the thin
+blue rim as before, with its own 0.5 % scale height, and where the sun
+stands low behind the limb along the ray the layered band of a sunset
+seen from orbit, red-orange at the bottom, yellow-white, then blue. The
+sun's disc and its flare are dimmed and reddened per fragment by the
+air along their lines of sight, so the sun sets red and no flare shows
+over the night side; the flare is otherwise as before: a halo, a
+horizontal streak and a starburst on the sun and five ghost discs on
+the line through the view centre, scaled by the sunlight slider and
+faded out toward the frame edge and over the sun's own width as it
+passes behind the limb.
 
 The first 400-day N=16 run with continents (from the aquaplanet
 `pbl16b` state) was stable but cold: planetary albedo 0.37 against the
@@ -2856,7 +2897,9 @@ midpoint pressure is above 800 hPa, between 800 and 500, 500 or less),
 Cumulus (`cloudCumulus`, the plumes' cover × condensate) and
 Stratocumulus deck (`cloudDeck`, the mixed-layer deck's cover × water
 path); `cloud` is their sum, and `test/frameGpu.test.mjs` checks each
-type against the state and against the CPU engine. Each type paints the
+type against the state and against the CPU engine. Two more fields,
+`cloudTop` and `cloudBase` (metres above sea level), give the Satellite
+view's light pass each column's visible cloud top and base. Each type paints the
 same curve stretched to its own range (`CLOUD_RANGES` in
 `js/frames.module.js`), the opacity 1 − exp(−g / (0.4 × range)), so all
 the legends share their stops; the ranges sit near the 95th percentile
