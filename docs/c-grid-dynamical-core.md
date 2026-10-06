@@ -12468,7 +12468,8 @@ finite (Ts 14.8 → 16.0 °C, max wind 82–106 m/s, currents ≤ 1.4 m/s,
 nothing clamped). An aborted command buffer on the Mac
 and this feedback on the PC both end in the same black globe, which
 the page now names. M26 gives the floored layers' fog the sinks it
-lacked, so that the same column holds 0.4 g/kg where it held 60–90.
+lacked: the same column, which held 9–19 g/kg with the θv fix alone,
+holds 0.4.
 
 ### M25 — The long spin-up — planned
 

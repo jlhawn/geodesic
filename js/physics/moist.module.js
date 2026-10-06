@@ -410,7 +410,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * boundary layer (`boundaryTop`, its mixing top, and `boundaryRegime`),
  * 1 below the mixing top of a coupled column, 0 below that of a
  * surface-driven, decoupled or stable one and the radiation's EIS share
- * (`stratiform`) above it. Every layer converts so except the floored
+ * (`stratiform`) above it. Every layer converts except the floored
  * ones: the lowest two (`autoconversionFloor` 'lowest') or those wholly
  * below the boundary-layer top ('boundaryLayer'; the lowest two without
  * a boundary layer). Their cloud is fog, and its liquid leaves by the
