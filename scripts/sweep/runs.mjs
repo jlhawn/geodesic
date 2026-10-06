@@ -42,13 +42,25 @@ const RANGES2 = [
   { key: 'stratusWaterMax', module: 'radiation', option: 'stratusWaterMax', low: 0.1, high: 0.3 },
   { key: 'cumulusCeiling', module: 'radiation', option: 'cumulusCeiling', low: 1500, high: 2500 },
 ];
-const baseOf = (p) => (p.module === 'surface' ? SEA_DRAG : PHYSICS_DEFAULTS[p.option] ?? PHYSICS_DEFAULTS[p.unset]) / (p.scale ?? 1);
+const FOG_RANGES = [
+  { key: 'landDroplets', module: 'moist', option: 'fogDroplets', index: 0, low: 50, high: 300 },
+  { key: 'seaDroplets', module: 'moist', option: 'fogDroplets', index: 1, low: 30, high: 150 },
+  { key: 'fogDeposition', module: 'moist', option: 'fogDeposition', low: 0.5, high: 1.5 },
+  { key: 'fogDepositionLimit', module: 'moist', option: 'fogDepositionLimit', low: 0.1, high: 0.25 },
+];
+const defaultOf = (p) => (p.index === undefined ? PHYSICS_DEFAULTS[p.option] : PHYSICS_DEFAULTS[p.option][p.index]);
+const baseOf = (p) => (p.module === 'surface' ? SEA_DRAG : defaultOf(p) ?? PHYSICS_DEFAULTS[p.unset]) / (p.scale ?? 1);
 export const PARAMETERS = RANGES.map((p) => ({ ...p, base: baseOf(p) }));
 export const PARAMETERS2 = RANGES2.map((p) => ({ ...p, base: baseOf(p) }));
+export const FOG_PARAMETERS = FOG_RANGES.map((p) => ({ ...p, base: baseOf(p) }));
 
 export function optionsOf(point, parameters = PARAMETERS) {
   const o = { radiation: {}, moist: {}, surface: {} };
-  for (const p of parameters) o[p.module][p.option] = Number((point[p.key] * (p.scale ?? 1)).toPrecision(6));
+  for (const p of parameters) {
+    const value = Number((point[p.key] * (p.scale ?? 1)).toPrecision(6));
+    if (p.index === undefined) o[p.module][p.option] = value;
+    else (o[p.module][p.option] ??= [...PHYSICS_DEFAULTS[p.option]])[p.index] = value;
+  }
   if (point.dragScale) o.surface.dragCoefficient = Number((SEA_DRAG * point.dragScale).toPrecision(8));
   return { RADIATION: JSON.stringify(o.radiation), MOIST: JSON.stringify(o.moist), SURFACE: JSON.stringify(o.surface) };
 }

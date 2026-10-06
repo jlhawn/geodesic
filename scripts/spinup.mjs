@@ -22,7 +22,11 @@
 // (downward less emitted) at the surface of the sea cells (sea ice
 // included), and the sunlight absorbed at the surface of the sea cells
 // poleward of 60° that hold ice at the day's end, leads included, in each
-// hemisphere. The
+// hemisphere. After the precipitation it gives the day-mean fog (what
+// settled or deposited out of the lowest layer) globally, over land and
+// over sea, and the cells with more than 0.1 mm/d; a second line gives the
+// lowest layer's cloud water at the day's end over the cells holding more
+// than 0.01 g/kg. The
 // state saved carries the last day's per-cell convective and large-scale
 // rain, absorbed sunlight, outgoing longwave, albedo and cloud effects,
 // the boundary layer's depth, mixing top, regime and surface buoyancy
@@ -271,12 +275,29 @@ const PH = model.gpu.layout.PH;
 const split = { convective: new Float64Array(C), largeScale: new Float64Array(C), wet: new Float64Array(C), seconds: 0 };
 let splitTime = model.time;
 const readSplit = async () => {
-  const [convective, largeScale] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.CONVMEAN, length: C }, { offset: PH.CONDMEAN, length: C }]);
+  const [convective, largeScale, fog] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.CONVMEAN, length: C }, { offset: PH.CONDMEAN, length: C }, { offset: PH.FOGMEAN, length: C }]);
+  split.fog = fog;
   const seconds = model.time - splitTime, days = seconds / 86400;
   splitTime = model.time;
   if (!(seconds > 0)) return;
   for (let i = 0; i < C; i++) { split.convective[i] += days * convective[i]; split.largeScale[i] += days * largeScale[i]; if (convective[i] > 0) split.wet[i] += days; }
   split.seconds += seconds;
+};
+const fogLine = () => {
+  let all = 0, onLand = 0, landArea = 0, seaArea = 0, onSea = 0, cells = 0, there = 0;
+  for (let i = 0; i < C; i++) {
+    const a = mesh.areaCell[i], f = split.fog ? split.fog[i] : 0;
+    all += a * f;
+    if (land[i]) { onLand += a * f; landArea += a; } else { onSea += a * f; seaArea += a; }
+    if (f > 0.1) { cells++; there += f; }
+  }
+  return `fog ${(all / (landArea + seaArea)).toFixed(3)} mm/d global (land ${(onLand / landArea).toFixed(3)}, sea ${(onSea / seaArea).toFixed(3)}; ${cells} cells over 0.1 mm/d, mean there ${(cells ? there / cells : 0).toFixed(3)} mm/d)`;
+};
+const lowestCloudLine = async (day) => {
+  const K = levels.length - 1, [qc] = await readRanges(model.gpu.device, model.gpu.buffers.S, [{ offset: model.gpu.layout.S.QC + (K - 1) * C, length: C }]);
+  const foggy = Array.from(qc).filter((x) => x > 1e-5).sort((a, b) => a - b), at = (p) => (foggy.length ? 1e3 * foggy[Math.min(foggy.length - 1, Math.floor(p * foggy.length))] : 0);
+  const over = (x) => foggy.filter((v) => v > x).length;
+  return `lowest-layer cloud day ${day}: ${foggy.length} cells over 0.01 g/kg, p50 ${at(0.5).toFixed(3)} p90 ${at(0.9).toFixed(3)} p99 ${at(0.99).toFixed(3)} max ${(foggy.length ? 1e3 * foggy[foggy.length - 1] : 0).toFixed(3)} g/kg; over 0.5/1/5 g/kg ${over(5e-4)}/${over(1e-3)}/${over(5e-3)} cells`;
 };
 const iceArea = async () => { const { fields } = await model.beginFrame({ fields: ['concentration', 'ice'] }); let north = 0, south = 0; for (let i = 0; i < C; i++) if (fields.concentration[i] >= 0.15) { if (mesh.latCell[i] > 0) north += mesh.areaCell[i]; else south += mesh.areaCell[i]; } return [north / 1e12, south / 1e12, fields.ice]; };
 await model.diagnostics();
@@ -380,7 +401,8 @@ for (;;) {
   const iceSurface = iceSolar.map((x, s) => (icedArea[s] > 0 ? x / (icedArea[s] * stepsToday) : 0));
   iceNorth += north; iceSouth += south;
   const minutes = (performance.now() - start) / 60000;
-  log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}; balance ${balanceLine(model.energyRecord)} W/m²`);
+  log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ${fogLine()}, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}; balance ${balanceLine(model.energyRecord)} W/m²`);
+  log(await lowestCloudLine(day));
   if (STRATOSPHERE) { await model.sync(); log(stratosphereLine(day)); log(upperWindLine(mesh, levels, state, dt, day)); }
   if (budget) { await model.sync(); log(budget.line(day, state, model.time)); }
   if (!Number.isFinite(d.meanSurfaceT) || !Number.isFinite(d.maxWind) || !Number.isFinite(d.oceanSpeed)) { log(`NaN on day ${day}; stopping`); await hook.drain(); process.exit(2); }
