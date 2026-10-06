@@ -96,6 +96,18 @@ export function uniformCover(qc, b) {
 }
 
 /*
+ * The fog scheme's coefficients for droplet numbers [continental, sea]
+ * (cm⁻³): the settling speed's S_N in v_s = S_N (ρ l)^(2/3) and the
+ * Khairoutdinov–Kogan rate's A_N in dl/dt = −A_N l^2.47; all zero when
+ * fogDroplets is null.
+ */
+export function fogConstants(fogDroplets) {
+  if (fogDroplets === null) return { settleLand: 0, settleSea: 0, drizzleLand: 0, drizzleSea: 0 };
+  const [land, sea] = fogDroplets;
+  return { settleLand: 7.32e5 * Math.pow(land * 1e6, -2 / 3), settleSea: 7.32e5 * Math.pow(sea * 1e6, -2 / 3), drizzleLand: 1350 * 1.5 * Math.pow(land, -1.79), drizzleSea: 1350 * 1.5 * Math.pow(sea, -1.79) };
+}
+
+/*
  * Lifting condensation level of a parcel (T, q, p) by Bolton (1980):
  * the dew point from the vapour pressure, the LCL temperature from his
  * eq. 15, and the pressure along the dry adiabat. Returns null when the
@@ -398,10 +410,34 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * boundary layer (`boundaryTop`, its mixing top, and `boundaryRegime`),
  * 1 below the mixing top of a coupled column, 0 below that of a
  * surface-driven, decoupled or stable one and the radiation's EIS share
- * (`stratiform`) above it. Every layer converts, except
- * in the lowest two layers (`autoconversionFloor` 'lowest') or in the
- * layers wholly below the boundary-layer top ('boundaryLayer'; the
- * lowest two without a boundary layer). The rain falls through the layers below within the
+ * (`stratiform`) above it. Every layer converts so except the floored
+ * ones: the lowest two (`autoconversionFloor` 'lowest') or those wholly
+ * below the boundary-layer top ('boundaryLayer'; the lowest two without
+ * a boundary layer). Their cloud is fog, and its liquid leaves by the
+ * fog scheme instead. It settles at the mass-weighted Stokes speed of a
+ * gamma distribution of shape 8 (the Morrison–Gettelman form, as the
+ * UM settles fog, Wilkinson et al. 2013), v_s = S_N (ρ l)^(2/3) with
+ * S_N = 7.32e5 (N·1e6)^(−2/3) for N droplets per cm³ (`fogDroplets`,
+ * [continental, sea and ice sheet], the radiation's split), the
+ * grid-mean liquid l standing in for the in-cloud one (the cover is
+ * overcast near the surface above about 0.07 g/kg, so trace fog
+ * settles a little too slowly). In the lowest layer, when the surface
+ * drag is implicit (`surfaceDrag`, ρ C_D W), it also deposits onto the
+ * ground and its vegetation at v_d = min(`fogDeposition` C_D W,
+ * `fogDepositionLimit`), the momentum limit u*²/U of Unsworth and
+ * Wilshaw (1989) (observed 2–8 cm/s over short vegetation and up to
+ * 20 cm/s over forest, Katata 2014). Both act implicitly in flux form
+ * from the top down, as the ice falls: a floored layer keeps
+ * 1/(1 + (v_s + v_d) Δt/Δz) of its liquid and hands the rest to the
+ * layer below as cloud water, the lowest layer to the ground as
+ * large-scale precipitation. What stays drizzles by Khairoutdinov and
+ * Kogan (2000), dl/dt = −1350 · 1.5 l^2.47 N^−1.79 (the IFS's factor
+ * 1.5, no threshold), integrated exactly over the step. Settled water
+ * evaporates in the column's second adjustment wherever it reaches
+ * subsaturated air. 'none' converts every layer by Kessler and the
+ * lifetime and runs no fog scheme, deposition included; fogDroplets
+ * null and fogDeposition 0 leave the floored layers' cloud no sink
+ * but evaporation and mixing. The rain falls through the layers below within the
  * step and evaporates into each cloud-free (at most CLEAR_AIR of cloud
  * water) subsaturated one up to `rainEvaporation` of what would saturate
  * it (with `iceSaturation`, of cloudSaturation's mix), latent cooling
@@ -410,9 +446,10 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  *
  * Precipitation accumulates per cell (kg/m²), and so do its two parts:
  * convective, the plumes' rain that reaches the ground; large-scale, the
- * autoconversion rain less what evaporates on the way down. `readRain`
- * turns the parts' sums into their means over the interval they cover,
- * in mm/d. The budget sums are area-weighted masses (kg). `trace`, when
+ * autoconversion rain less what evaporates on the way down; and of the
+ * large-scale part, fog (`fogPrecipitation`), what settled or deposited
+ * out of the lowest layer. `readRain` turns the sums into their means
+ * over the interval they cover, in mm/d (`fogRain` the fog's). The budget sums are area-weighted masses (kg). `trace`, when
  * its arrays (K·C) are set, receives each layer's temperature change (K)
  * from convection, the evaporation of the deep plume's rain below cloud
  * base included, and from the large-scale condensation, autoconversion
@@ -420,7 +457,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  *
  * Defaults: inhibitionThreshold 50 J/kg, shallowTop 700 hPa,
  * autoconversionThreshold 2e-4, autoconversionRate 1e-3 /s,
- * cloudLifetime 1 h, no upperCloudLifetime, stratiformLifetime 3 h, autoconversionFloor 'lowest', rainEvaporation 1,
+ * cloudLifetime 1 h, no upperCloudLifetime, stratiformLifetime 3 h, autoconversionFloor 'lowest',
+ * fogDroplets [150, 60] /cm³, fogDeposition 1, fogDepositionLimit 0.25 m/s, rainEvaporation 1,
  * cumulusClosure 0.03 (Grant 2001), cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
  * 3e-3 /m, cumulusSourceDepth 50 hPa, cumulusBoundaryLoss 0.1,
  * cumulusFriction 1, cumulusOvershoot 1, cumulusUpdraft 1 m/s, cumulusMemory
@@ -439,7 +477,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  */
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
-  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest',
+  autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
   deckVeto: true, coupledVeto: false, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
@@ -451,10 +489,10 @@ export const MOIST_DEFAULTS = {
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
   'downdraftEvaporation', 'downdraftSpread', 'shallowHumidity', 'shallowCape', 'shallowInhibition', 'shallowStability', 'shallowReference', 'shallowRain', 'boundaryParcel', 'adjustFrom'];
 
-export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, boundaryTop = null, boundaryCloudLayer = null, stratiform = null, deckGate = null, surfaceBuoyancy = null, frictionVelocity = null, land = null, surfaceSensible = null, surfaceEvaporation = null, buffers = null, ...options } = {}) {
+export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, boundaryTop = null, boundaryCloudLayer = null, stratiform = null, deckGate = null, surfaceBuoyancy = null, frictionVelocity = null, land = null, iceSheet = null, surfaceDrag = null, surfaceSensible = null, surfaceEvaporation = null, buffers = null, ...options } = {}) {
   for (const retired of RETIRED_OPTIONS) if (retired in options) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
   const {
-    latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, stratiformLifetime, rainEvaporation, autoconversionFloor,
+    latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, stratiformLifetime, rainEvaporation, autoconversionFloor, fogDroplets, fogDeposition, fogDepositionLimit,
     deckVeto, coupledVeto, evaporationInCloud, virtualBuoyancy,
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, excessVelocity, plumePhase, plumeConversion, convectionType, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainmentLaw, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
@@ -493,8 +531,14 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const undilute = plumeCapeParcel === 'undilute';
   if (typeof cumulusMemory !== 'number' || !(cumulusMemory >= 0 && cumulusMemory < Infinity)) throw new Error(`cumulusMemory must be a time in seconds, 0 or more, not ${cumulusMemory}`);
   if (cumulusSource !== 'mean' && cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${cumulusSource}`);
-  if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest' or 'boundaryLayer', not ${autoconversionFloor}`);
+  if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer' or 'none', not ${autoconversionFloor}`);
+  if (fogDroplets !== null && !(Array.isArray(fogDroplets) && fogDroplets.length === 2 && fogDroplets.every((n) => Number.isFinite(n) && n > 0))) throw new Error(`fogDroplets must be null or [continental, sea] droplet numbers above 0 per cm³, not ${JSON.stringify(fogDroplets)}`);
+  if (!(Number.isFinite(fogDeposition) && fogDeposition >= 0)) throw new Error(`fogDeposition must be an efficiency of 0 or more, not ${fogDeposition}`);
+  if (!(Number.isFinite(fogDepositionLimit) && fogDepositionLimit > 0)) throw new Error(`fogDepositionLimit must be a speed above 0 in m/s, not ${fogDepositionLimit}`);
+  const foggy = fogDroplets !== null, depositing = fogDeposition > 0 && surfaceDrag !== null;
+  const { settleLand, settleSea, drizzleLand, drizzleSea } = fogConstants(fogDroplets);
   const { K, C, levels, dSigma, sigmaMid, cp, R, g, kappa, exnerLayer, exnerLower, geopotential } = core.diagnostics;
+  const continental = Uint8Array.from({ length: C }, (_, i) => (land && land[i] && !(iceSheet && iceSheet[i]) ? 1 : 0));
   const thetaV = core.arrays.thetaV;
   const KL = Math.min(SUBCLOUD_LAYERS, K), subcloudBuffer = buffers && buffers.subcloudVirtual ? buffers.subcloudVirtual : new SharedArrayBuffer(8 * KL * C);
   const subcloudVirtual = new Float64Array(subcloudBuffer), windVector = new Float64Array(3 * C);
@@ -502,7 +546,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const upperInterface = (i, k) => (geopotential[k * C + i] + cp * thetaV[k * C + i] * (exnerLayer[k * C + i] - exnerLower[(k - 1) * C + i])) / g;
   const shared = (name, n) => (buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * n));
   const precipBuffer = shared('precipitation', C), rainBuffer = shared('rain', C), convectiveBuffer = shared('convectivePrecipitation', C);
-  const largeScaleBuffer = shared('largeScalePrecipitation', C);
+  const largeScaleBuffer = shared('largeScalePrecipitation', C), fogBuffer = shared('fogPrecipitation', C);
   const cumulusCoverBuffer = shared('cumulusCover', K * C), cumulusWaterBuffer = shared('cumulusWater', K * C), baseFluxBuffer = shared('cumulusBaseFlux', C), cumulusTopBuffer = shared('cumulusTop', C);
   const momentumLayers = plumeMomentum ? K : 0;
   const momentumBuffers = { up: shared('momentumUp', (momentumLayers + 1) * C), upKeep: shared('momentumUpKeep', momentumLayers * C), down: shared('momentumDown', (momentumLayers + 1) * C), downKeep: shared('momentumDownKeep', momentumLayers * C), source: shared('momentumSource', C) };
@@ -511,7 +555,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const cumulusCover = new Float64Array(cumulusCoverBuffer), cumulusWater = new Float64Array(cumulusWaterBuffer), cumulusBaseFlux = new Float64Array(baseFluxBuffer), cumulusTop = new Float64Array(cumulusTopBuffer);
   const precipitation = new Float64Array(precipBuffer), rain = new Float64Array(rainBuffer);
   const convectivePrecipitation = new Float64Array(convectiveBuffer), largeScalePrecipitation = new Float64Array(largeScaleBuffer);
-  const convectiveRain = new Float64Array(C), largeScaleRain = new Float64Array(C);
+  const fogPrecipitation = new Float64Array(fogBuffer);
+  const convectiveRain = new Float64Array(C), largeScaleRain = new Float64Array(C), fogRain = new Float64Array(C);
   const T = new Float64Array(K), p = new Float64Array(K), dp = new Float64Array(K), z = new Float64Array(K);
   const downdraftCooling = new Float64Array(K);
   const plumeS = new Float64Array(K), plumeQ = new Float64Array(K), plumeLiquid = new Float64Array(K), plumeGrowth = new Float64Array(K), plumeRain = new Float64Array(K);
@@ -526,8 +571,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   while (cumulusK0 > 0 && 0.5 * (levels[cumulusK0 - 1] + levels[cumulusK0]) * MAXIMUM_SURFACE_PRESSURE > shallowTop) cumulusK0--;
   const cumulus = { top: -1, source: K - 1, inhibition: 0, lclPressure: 0, velocity: 0, baseFlux: 0, snow: 0 };
   const rememberedCover = new Float64Array(K), rememberedPath = new Float64Array(K);
-  const falling = { evaporated: 0, convective: 0, frozen: 0, ice: 0, moved: false };
-  const budget = { condensation: 0, convection: 0, lost: 0 };
+  const falling = { evaporated: 0, convective: 0, frozen: 0, ice: 0, fog: 0, moved: false };
+  const budget = { condensation: 0, convection: 0, fog: 0, lost: 0 };
   const trace = { convection: null, largeScale: null };
   const marked = new Float64Array(K);
   const ramp = (x) => Math.min(1, Math.max(0, x));
@@ -606,7 +651,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   }
 
   function autoconvertColumn(i, pi, theta, q, qc, dt, stream = null, iced = 0, frozenStream = null) {
-    let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0;
+    let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0;
     falling.moved = false;
     const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
@@ -685,8 +730,43 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
           }
         }
       }
+      if (settling > 0) {
+        const added = settling * g / (pi[i] * dSigma[k]);
+        qc[idx] += added;
+        liquid += added;
+        settling = 0;
+      }
       if (!(qc[idx] > 0)) continue;
-      if (autoconversionFloor !== 'none' && (floor === null ? k >= K - 2 : k > 0 && upperInterface(i, k) < floor)) continue;
+      const floored = autoconversionFloor !== 'none' && (floor === null ? k >= K - 2 : k > 0 && upperInterface(i, k) < floor);
+      if (floored) {
+        if (liquid > 0 && (foggy || (depositing && k === K - 1))) {
+          const temperature = theta[idx] * exnerLayer[idx], pressure = pi[i] * sigmaMid[k], mass = pi[i] * dSigma[k] / g;
+          let courant = 0;
+          if (foggy) {
+            const speed = (continental[i] ? settleLand : settleSea) * Math.pow(pressure / (R * temperature) * liquid, 2 / 3);
+            courant = speed * dt * sigmaMid[k] * g / (R * temperature * dSigma[k]);
+          }
+          if (depositing && k === K - 1) courant += Math.min(fogDeposition * surfaceDrag[i], fogDepositionLimit * pressure / (R * temperature)) * dt * g / (pi[i] * dSigma[k]);
+          const leaving = liquid * courant / (1 + courant);
+          qc[idx] -= leaving;
+          if (k === K - 1) {
+            rain += leaving * mass;
+            fog += leaving * mass;
+          } else {
+            settling = leaving * mass;
+            falling.moved = true;
+          }
+          if (foggy) {
+            const kept = liquid - leaving;
+            if (kept > 0) {
+              const converted = -kept * Math.expm1(-(continental[i] ? drizzleLand : drizzleSea) * Math.pow(kept, 1.47) * dt);
+              qc[idx] -= converted;
+              rain += mass * converted;
+            }
+          }
+        }
+        continue;
+      }
       const excess = Math.max(0, liquid - autoconversionThreshold);
       let lifetime = upperCloudLifetime !== null && pi[i] * sigmaMid[k] < shallowTop ? upperCloudLifetime : cloudLifetime;
       if (stratiformLifetime !== null) lifetime += longCloudShare(i, k, pi, iced) * (stratiformLifetime - lifetime);
@@ -698,6 +778,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     falling.convective = convective;
     falling.frozen = Math.min(frozen, convective);
     falling.ice = descending;
+    falling.fog = fog;
     return rain + descending;
   }
 
@@ -1334,9 +1415,11 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       precipitation[i] += rained + convected;
       convectivePrecipitation[i] += convected;
       largeScalePrecipitation[i] += rained;
+      fogPrecipitation[i] += falling.fog;
       rain[i] = rained + convected;
       budget.condensation += mesh.areaCell[i] * rained;
       budget.convection += mesh.areaCell[i] * convected;
+      budget.fog += mesh.areaCell[i] * falling.fog;
     }
   }
 
@@ -1345,6 +1428,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     for (let i = 0; i < C; i++) {
       convectiveRain[i] = scale * convectivePrecipitation[i];
       largeScaleRain[i] = scale * largeScalePrecipitation[i];
+      fogRain[i] = scale * fogPrecipitation[i];
     }
   }
 
@@ -1364,9 +1448,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   return {
     condensation: settings, adjust, useSeaIce, condenseColumn, autoconvertColumn, cumulusColumn, plumeColumn, transportMomentum, fillColumn, columnWater, readRain,
     plumeAir(energy, water, height, pressure, guess) { plumeState(energy, water, height, pressure, guess); return { ...plume }; },
-    precipitation, rain, convectivePrecipitation, largeScalePrecipitation, convectiveRain, largeScaleRain, convectiveSnow, budget, latentHeat, trace, falling,
+    precipitation, rain, convectivePrecipitation, largeScalePrecipitation, fogPrecipitation, convectiveRain, largeScaleRain, fogRain, convectiveSnow, budget, latentHeat, trace, falling,
     cumulus, cumulusCover, cumulusWater, cumulusCloudPath, cumulusBaseFlux, cumulusTop, cumulusFlux, deep, subcloudVirtual, subcloudLayers: KL, saveSubcloud, deepSigma: shallowTop / DEEP_REFERENCE, cumulusK0, convectiveFall, convectiveFrozen, convectiveMelted, plumeFrozen, plumeCarried, plumeInterfaceT, draftFlux, plumeSpeed, plumeRain, plumeBuoyancy, plumeEntrained, plumeDetrained, envHumidity, plumeCounted, resolutionScale,
     momentum: { up: momentumUp, upKeep: momentumUpKeep, down: momentumDown, downKeep: momentumDownKeep, source: momentumSource },
-    shared: { momentumUp: momentumBuffers.up, momentumUpKeep: momentumBuffers.upKeep, momentumDown: momentumBuffers.down, momentumDownKeep: momentumBuffers.downKeep, momentumSource: momentumBuffers.source, precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, cumulusCover: cumulusCoverBuffer, cumulusWater: cumulusWaterBuffer, cumulusBaseFlux: baseFluxBuffer, cumulusTop: cumulusTopBuffer, subcloudVirtual: subcloudBuffer },
+    shared: { momentumUp: momentumBuffers.up, momentumUpKeep: momentumBuffers.upKeep, momentumDown: momentumBuffers.down, momentumDownKeep: momentumBuffers.downKeep, momentumSource: momentumBuffers.source, precipitation: precipBuffer, rain: rainBuffer, convectivePrecipitation: convectiveBuffer, largeScalePrecipitation: largeScaleBuffer, fogPrecipitation: fogBuffer, cumulusCover: cumulusCoverBuffer, cumulusWater: cumulusWaterBuffer, cumulusBaseFlux: baseFluxBuffer, cumulusTop: cumulusTopBuffer, subcloudVirtual: subcloudBuffer },
   };
 }

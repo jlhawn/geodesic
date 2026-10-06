@@ -113,7 +113,7 @@ export function createModel(gridOrMesh, {
   const moistPhysics = createMoistPhysics(mesh, core, {
     buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, boundaryRegime: boundaryLayer ? boundaryLayer.regime : null, deckGate: radiation.mlmGate,
     boundaryTop: boundaryLayer && boundaryLayer.turbulence === 'moist' ? boundaryLayer.mixingTop : null, boundaryCloudLayer: boundaryLayer && boundaryLayer.turbulence === 'moist' ? boundaryLayer.cloudLayer : null, stratiform: radiation.stratiform,
-    surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null, land: geography ? geography.land : null, surfaceSensible: radiation.sensibleHeat, surfaceEvaporation: radiation.evaporation,
+    surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null, land: geography ? geography.land : null, iceSheet: geography ? geography.iceSheet : null, surfaceDrag: boundaryLayer && boundaryLayer.implicitDrag ? boundaryLayer.surfaceDrag : null, surfaceSensible: radiation.sensibleHeat, surfaceEvaporation: radiation.evaporation,
     ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in radiationOptions).map((key) => [key, radiationOptions[key]])), ...moistOptions,
   });
   if (moist) radiation.useCumulus(moistPhysics.cumulusCover, moistPhysics.cumulusWater);
@@ -392,6 +392,7 @@ export function createModel(gridOrMesh, {
     moistPhysics.precipitation.fill(0);
     moistPhysics.convectivePrecipitation.fill(0);
     moistPhysics.largeScalePrecipitation.fill(0);
+    moistPhysics.fogPrecipitation.fill(0);
     radiation.restartSums();
     model.radiationSteps = 0;
     lastPrecipTime = model.time;

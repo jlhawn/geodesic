@@ -4,6 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
+import { saturationHumidity } from '../js/physics/moist.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -17,10 +18,27 @@ function stats(cpu, gpu) {
   return { maxDiff, at, rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
 
-function prepare(model) {
+function seedFog(model) {
+  const { mesh } = model, C = mesh.nCells, land = model.geography.land, { K, sigmaMid } = model.core, [pi, theta, , , q, qc] = model.state;
+  const coast = new Uint8Array(C);
+  for (let e = 0; e < mesh.nEdges; e++) { const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1]; if (land[a] !== land[b]) coast[land[a] ? b : a] = 1; }
+  let seeded = 0, cold = 0;
+  for (let i = 0; i < C; i++) {
+    if (!(land[i] || coast[i]) || i % 3 !== 0) continue;
+    const x = (K - 1) * C + i, p = pi[i] * sigmaMid[K - 1], T = theta[x] * Math.pow(p / 1e5, 287.04 / 1004.64);
+    q[x] = saturationHumidity(T, p);
+    qc[x] = 0.5e-3 * Math.pow(10, (i % 7) / 6);
+    seeded++;
+    if (mesh.latCell[i] > 1.0) cold++;
+  }
+  return { seeded, cold };
+}
+
+function prepare(model, fog = false) {
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
+  if (fog) model.seeded = seedFog(model);
   if (model.load) model.load();
   model.ocean.initialize(model.state[3], model.state[6]);
   model.land.initialize();
@@ -31,10 +49,17 @@ function prepare(model) {
 
 test('eight GPU steps over a continent track the CPU model: surface, soil, snow, vegetation, and the coast-bound ocean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
-  const cpu = prepare(createModel(new Grid(6), { topography, land }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }));
+  const cpu = prepare(createModel(new Grid(6), { topography, land }), true);
+  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }), true);
   for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
   await gpu.sync();
+  const fogGpu = Float64Array.from((await gpu.gpu.downloadPhysics()).FOG.subarray(0, cpu.mesh.nCells)), fogCpu = Float64Array.from(cpu.moist.fogPrecipitation);
+  const fog = stats(fogCpu, fogGpu);
+  let fogged = 0, coldFog = 0;
+  for (let i = 0; i < cpu.mesh.nCells; i++) if (fogCpu[i] > 0) { fogged++; if (cpu.geography.land[i] && cpu.mesh.latCell[i] > 1.0) coldFog++; }
+  console.log(`lowest-layer cloud of 0.5–5 g/kg seeded in ${cpu.seeded.seeded} land and coastal cells (${cpu.seeded.cold} poleward of 1 rad): over eight steps fog reached the ground in ${fogged} cells (${coldFog} cold land cells), at most ${Math.max(...fogCpu).toExponential(2)} kg/m², the engines differ by at most ${fog.maxDiff.toExponential(1)} kg/m² (rms ${fog.rmsRel.toExponential(1)} of it)`);
+  assert.ok(fogged > cpu.seeded.seeded / 2 && coldFog > 0, `fog from ${fogged} cells, ${coldFog} cold`);
+  assert.ok(fog.maxDiff < 1e-3 * Math.max(...fogCpu) + 1e-6 && fog.rmsRel < 1e-4, `fog differs by ${fog.maxDiff} at ${fog.at}, rms ${fog.rmsRel}`);
   const saved = await gpu.land.serialize();
   const d = await gpu.diagnostics(), dc = cpu.diagnostics();
   const ts = stats(cpu.state[3], gpu.state[3]), theta = stats(cpu.state[1], gpu.state[1]);

@@ -854,6 +854,14 @@ test('the convective and large-scale rain accumulate alike in both engines, cell
   assert.ok(conv.rmsRel < 1e-3 && ls.rmsRel < 1e-3, `per-cell rms convective ${conv.rmsRel}, large-scale ${ls.rmsRel}`);
   assert.ok(step.maxDiff < 3e-4, `the last step's rain differs by ${step.maxDiff} at ${step.at}`);
   assert.ok(apart < 1e-12, `convective plus large-scale is the precipitation to ${apart}`);
+  const { fogPrecipitation } = model.moist, fog = stats(pick(fogPrecipitation), pick(physics.FOG));
+  let fogged = 0;
+  for (let i = 0; i < C; i++) {
+    if (fogPrecipitation[i] > 0) fogged++;
+    assert.ok(fogPrecipitation[i] >= 0 && fogPrecipitation[i] <= largeScale[i] && physics.FOG[i] >= 0 && physics.FOG[i] <= physics.COND[i] * (1 + 1e-6), `cell ${i}: fog ${fogPrecipitation[i]} (GPU ${physics.FOG[i]}) within the large-scale ${largeScale[i]} (GPU ${physics.COND[i]})`);
+  }
+  console.log(`  fog reached the ground in ${fogged} cells, at most ${Math.max(...fogPrecipitation).toExponential(1)} kg/m²; over the kept cells the engines' fog differs by at most ${fog.maxDiff.toExponential(1)} kg/m²`);
+  assert.ok(fog.maxDiff <= 1e-3 * largestScale, `fog differs by ${fog.maxDiff} at ${fog.at}`);
 });
 
 test('both models read the rain split out at the diagnostics as means in mm/d, clearing its sums, alike outside the columns where a discrete decision parted and their neighbours within two cells, and the GPU model sends the means to the device on load and mirrors them on sync', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -881,7 +889,7 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
   }
   const sums = Float64Array.from(cpu.moist.convectivePrecipitation);
   device = await gpu.gpu.downloadPhysics();
-  const gpuSums = Float64Array.from(device.CONV.subarray(0, C)), gpuLarge = Float64Array.from(device.COND.subarray(0, C));
+  const gpuSums = Float64Array.from(device.CONV.subarray(0, C)), gpuLarge = Float64Array.from(device.COND.subarray(0, C)), gpuFog = Float64Array.from(device.FOG.subarray(0, C)), fogSums = Float64Array.from(cpu.moist.fogPrecipitation);
   cpu.diagnostics();
   await gpu.diagnostics();
   await gpu.sync();
@@ -892,6 +900,8 @@ test('both models read the rain split out at the diagnostics as means in mm/d, c
     assert.ok(Math.abs(gpu.moist.convectiveRain[i] - 86400 * gpuSums[i] / seconds) <= 1e-6 * gpu.moist.convectiveRain[i] && Math.abs(gpu.moist.largeScaleRain[i] - 86400 * gpuLarge[i] / seconds) <= 1e-6 * gpu.moist.largeScaleRain[i], `cell ${i}: the GPU mean is its sum over the interval`);
     assert.ok(gpu.moist.convectiveRain[i] === device.CONVMEAN[i] && gpu.moist.largeScaleRain[i] === device.CONDMEAN[i], `cell ${i} mirrored`);
     assert.ok(cpu.moist.convectivePrecipitation[i] === 0 && cpu.moist.largeScalePrecipitation[i] === 0 && device.CONV[i] === 0 && device.COND[i] === 0, `cell ${i}: the sums start again`);
+    assert.ok(Math.abs(cpu.moist.fogRain[i] - 86400 * fogSums[i] / seconds) < 1e-12 && Math.abs(gpu.moist.fogRain[i] - 86400 * gpuFog[i] / seconds) <= 1e-6 * gpu.moist.fogRain[i] && gpu.moist.fogRain[i] === device.FOGMEAN[i], `cell ${i}: the fog's mean`);
+    assert.ok(cpu.moist.fogPrecipitation[i] === 0 && device.FOG[i] === 0, `cell ${i}: the fog's sum starts again`);
     const a = cpu.mesh.areaCell[i];
     area += a; cpuMean += a * cpu.moist.convectiveRain[i]; gpuMean += a * gpu.moist.convectiveRain[i];
   }

@@ -2,7 +2,7 @@ import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT } from '../physics
 import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE } from '../physics/radiation.module.js';
-import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS } from '../physics/moist.module.js';
+import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, fogConstants } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
@@ -61,6 +61,11 @@ export function physicsConstants(o) {
   if (o.capeClosure !== 'bechtold' && o.capeClosure !== 'threshold') throw new Error(`capeClosure must be 'bechtold' or 'threshold', not ${o.capeClosure}`);
   if (o.pcapeBoundary !== 'positive' && o.pcapeBoundary !== 'signed') throw new Error(`pcapeBoundary must be 'positive' or 'signed', not ${o.pcapeBoundary}`);
   if (o.condensation !== 'uniform' && o.condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${o.condensation}`);
+  if (o.autoconversionFloor !== 'lowest' && o.autoconversionFloor !== 'boundaryLayer' && o.autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer' or 'none', not ${o.autoconversionFloor}`);
+  if (o.fogDroplets !== null && !(Array.isArray(o.fogDroplets) && o.fogDroplets.length === 2 && o.fogDroplets.every((n) => Number.isFinite(n) && n > 0))) throw new Error(`fogDroplets must be null or [continental, sea] droplet numbers above 0 per cm³, not ${JSON.stringify(o.fogDroplets)}`);
+  if (!(Number.isFinite(o.fogDeposition) && o.fogDeposition >= 0)) throw new Error(`fogDeposition must be an efficiency of 0 or more, not ${o.fogDeposition}`);
+  if (!(Number.isFinite(o.fogDepositionLimit) && o.fogDepositionLimit > 0)) throw new Error(`fogDepositionLimit must be a speed above 0 in m/s, not ${o.fogDepositionLimit}`);
+  const fog = fogConstants(o.fogDroplets);
   if (o.boundaryCondensation !== 'cloudLayer' && o.boundaryCondensation !== 'uniform' && o.boundaryCondensation !== 'saturation') throw new Error(`boundaryCondensation must be 'cloudLayer', 'uniform' or 'saturation', not ${o.boundaryCondensation}`);
   const entrainment = { ...ENTRAINMENT_DEFAULTS, ...o.entrainment };
   const cloudTop = { ...CLOUD_TOP_DEFAULTS, ...o.cloudTop };
@@ -118,6 +123,8 @@ const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoco
 const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const UNIFORM: bool = ${o.condensation === 'uniform'}; const BL_UNIFORM: bool = ${o.boundaryCondensation === 'uniform'}; const BL_CLOUDLAYER: bool = ${o.boundaryCondensation === 'cloudLayer' && moistTurbulence}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
 const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent};
+const FOG: bool = ${o.fogDroplets !== null}; const FOG_SETTLE_LAND: f32 = ${fog.settleLand}; const FOG_SETTLE_SEA: f32 = ${fog.settleSea}; const FOG_KK_LAND: f32 = ${fog.drizzleLand}; const FOG_KK_SEA: f32 = ${fog.drizzleSea}; const FOG_THIRDS: f32 = 0.6666666666666666;
+const FOG_DEP: bool = ${o.fogDeposition > 0 && o.surfaceExchange === 'roughness' && !!o.implicitDrag}; const FOG_E: f32 = ${o.fogDeposition}; const FOG_VMAX: f32 = ${o.fogDepositionLimit};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
 const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
 const DECK_OPEN: f32 = ${DECK_OPEN}; const DECK_CLOSED: f32 = ${DECK_CLOSED}; const PARCEL_VIRT: f32 = ${o.virtualBuoyancy === false ? 0 : 'VIRT'};
@@ -2148,7 +2155,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   let produced = plumeColumn(i, pi, dt);
   if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }
   // autoconversion, and the rain evaporating as it falls
-  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0;
+  var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
   let floor = PH[PH_DEPTH + i];
   let iceConc = PH[PH_CONC + i]; let iced = select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
   for (var k = 0; k < K; k++) {
@@ -2220,9 +2227,41 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
         }
       }
     }
+    if (FOG && settling > 0.0) {
+      IN[S_QC + idx] += settling / mass;
+      liquid += settling / mass;
+      settling = 0.0;
+    }
     let qc = IN[S_QC + idx];
     if (!(qc > 0.0)) { continue; }
-    if (AUTO_NONE) { } else if (AUTO_BL) { if (k > 0 && upperInterface(i, k) < floor) { continue; } } else if (k >= K - 2) { continue; }
+    var floored = false;
+    if (AUTO_NONE) { } else if (AUTO_BL) { floored = k > 0 && upperInterface(i, k) < floor; } else { floored = k >= K - 2; }
+    if (floored) {
+      if ((FOG || (FOG_DEP && k == K - 1)) && liquid > 0.0) {
+        let temperature = IN[S_TH + idx] * D[D_EXM + idx]; let pressure = pi * LV[L_SM + k];
+        let continental = PH[PH_LAND + i] > 0.5 && !(PH[PH_LAND + i] > 1.5);
+        var courant = 0.0;
+        if (FOG) {
+          let speed = select(FOG_SETTLE_SEA, FOG_SETTLE_LAND, continental) * pow(pressure / (RGAS * temperature) * liquid, FOG_THIRDS);
+          courant = speed * dt * LV[L_SM + k] * GRAV / (RGAS * temperature * LV[L_DS + k]);
+        }
+        if (FOG_DEP && k == K - 1) { courant += min(FOG_E * PH[PH_SDRAG + i], FOG_VMAX * pressure / (RGAS * temperature)) * dt * GRAV / (pi * LV[L_DS + k]); }
+        let leaving = liquid * courant / (1.0 + courant);
+        var water = qc - leaving;
+        if (k == K - 1) { rained += leaving * mass; fogged += leaving * mass; }
+        else { settling = leaving * mass; moved = true; }
+        if (FOG) {
+          let kept = liquid - leaving;
+          if (kept > 0.0) {
+            let converted = kept * relaxedFraction(select(FOG_KK_SEA, FOG_KK_LAND, continental) * pow(kept, 1.47) * dt);
+            water -= converted;
+            rained += mass * converted;
+          }
+        }
+        IN[S_QC + idx] = water;
+      }
+      continue;
+    }
     let excess = max(0.0, liquid - AUTO_T);
     var lifetime = select(CLOUD_LIFE, UPPER_LIFE, UPPER_SPLIT && pi * LV[L_SM + k] < SHALLOW_TOP);
     if (STRAT_SPLIT) { lifetime += longCloudShare(i, k, pi, iced) * (STRAT_LIFE - lifetime); }
@@ -2250,7 +2289,7 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
       PH[PH_SUBTV + (k - K + SUB_K) * C + i] = IN[S_TH + idx] * D[D_EXM + idx] * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + idx]) - CU_LOADING * max(0.0, IN[S_QC + idx]));
     }
   }
-  PH[PH_RAIN + i] += rained + convected; PH[PH_COND + i] += rained; PH[PH_CONV + i] += convected; PH[PH_STEPRAIN + i] = rained + convected;
+  PH[PH_RAIN + i] += rained + convected; PH[PH_COND + i] += rained; PH[PH_CONV + i] += convected; PH[PH_STEPRAIN + i] = rained + convected; PH[PH_FOG + i] += fogged;
   let airT = IN[S_TH + bottom * C + i] * D[D_EXM + bottom * C + i];
   if (PH[PH_LAND + i] < 0.5 && airT < MELTING && rained + convected > 0.0) {
     ${snowOnSea('rained + convected')}

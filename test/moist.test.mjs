@@ -178,6 +178,7 @@ test('with sources on, the water column change over a day matches evaporation mi
   console.log(`one day at N=4: evaporation ${evaporated.toFixed(3)} mm, precipitation ${precipitated.toFixed(3)} mm (budget ${rained.toFixed(3)}), water ${water0.toFixed(2)} → ${water1.toFixed(2)} mm of which cloud ${(1000 * diag.columnCloud).toFixed(0)} g/m², residual ${residual.toExponential(2)} mm, lost ${(wet.moist.budget.lost / area).toExponential(1)}`);
   assert.ok(evaporated > 0.5 && evaporated < 15, `evaporation ${evaporated} mm/day out of range`);
   assert.ok(Math.abs(rained - precipitated) < 1e-9 * (1 + rained));
+  assert.ok(wet.moist.budget.fog >= 0 && wet.moist.budget.fog <= wet.moist.budget.condensation, `fog ${wet.moist.budget.fog} of the large-scale ${wet.moist.budget.condensation} kg`);
   assert.ok(Math.abs(residual) < 0.05 * evaporated, `residual ${residual} vs evaporation ${evaporated}`);
   assert.ok(Number.isFinite(diag.maxWind) && diag.maxWind < 80);
 });

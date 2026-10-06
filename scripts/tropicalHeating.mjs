@@ -59,7 +59,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
-import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, FUSION_HEAT, IFS_PRECIPITATION, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
+import { createMoistPhysics, MOIST_DEFAULTS, SOURCE_EXCESS, FUSION_HEAT, IFS_PRECIPITATION, surfaceLayerVelocity, LATENT_HEAT, R_VAPOR, CLEAR_AIR, DECK_OPEN, DECK_CLOSED, COUPLED_REGIME, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, saturationHumidity, saturationVaporPressure, cloudSaturation, criticalHumidityAt, uniformCover, fogConstants, liquidFraction, liftingCondensationLevel } from '../js/physics/moist.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
@@ -105,7 +105,7 @@ const NB = BOX_LIST.length;
 const twinOptions = (extra) => ({
   boundaryDepth: bl.depth, boundaryRegime: bl.regime, deckGate: radiation.mlmGate,
   boundaryTop: bl.turbulence === 'moist' ? bl.mixingTop : null, boundaryCloudLayer: bl.turbulence === 'moist' ? bl.cloudLayer : null, stratiform: radiation.stratiform,
-  surfaceBuoyancy: bl.buoyancyFlux, frictionVelocity: bl.friction, land: model.geography.land, surfaceSensible: radiation.sensibleHeat, surfaceEvaporation: radiation.evaporation, buffers: { subcloudVirtual: moist.shared.subcloudVirtual },
+  surfaceBuoyancy: bl.buoyancyFlux, frictionVelocity: bl.friction, land: model.geography.land, iceSheet: model.geography.iceSheet ?? null, surfaceDrag: bl.implicitDrag ? bl.surfaceDrag : null, surfaceSensible: radiation.sensibleHeat, surfaceEvaporation: radiation.evaporation, buffers: { subcloudVirtual: moist.shared.subcloudVirtual },
   ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in RADIATION).map((key) => [key, RADIATION[key]])),
   ...MOIST, ...extra,
 });
@@ -115,6 +115,8 @@ const adjusted = createMoistPhysics(mesh, core, twinOptions({ condensation: 'sat
 for (const twin of [replica, deepOnly, adjusted]) twin.useSeaIce(seaIce.concentration);
 const boundaryTop = bl.turbulence === 'moist' ? bl.mixingTop : null;
 const gustiness = RADIATION.gustiness ?? 3;
+const FOG = fogConstants(O.fogDroplets), foggy = O.fogDroplets !== null, depositing = O.fogDeposition > 0 && bl.implicitDrag;
+const continental = Uint8Array.from({ length: C }, (_, i) => (landMask[i] && !(model.geography.iceSheet && model.geography.iceSheet[i]) ? 1 : 0));
 
 const TERMS = ['dynamics', 'closure', 'dissipation', 'shortwave', 'longwave', 'sensible', 'boundaryLayer', 'condensationMixed', 'condensationUniform', 'deepRain', 'deepFreezing', 'deepMelting', 'deepDowndraftEvaporation', 'deepTransport', 'shallow', 'recondensation', 'largeScaleEvaporation', 'convectiveEvaporation', 'afterFallPositive', 'afterFallNegative', 'snow', 'dryAdjustment'];
 const SHORT = ['dyn', 'clos', 'diss', 'SW', 'LW', 'sens', 'BL', 'condBL', 'condU', 'dRain', 'dFrz', 'dMelt', 'dDDev', 'dTrans', 'shal', 'recond', 'LSev', 'CVev', 'fall+', 'fall-', 'snow', 'dry'];
@@ -245,7 +247,7 @@ function shadowFall(twin, i, s, stream, iced, frozenStream = null) {
   fall.evaporated.fill(0); fall.convective.fill(0); fall.converted.fill(0); fall.melted.fill(0); fall.sublimated.fill(0); fall.refunded.fill(0);
   let frozen = 0;
   const tags = fall.tags; tags.low = 0; tags.high = 0; tags.ice = 0;
-  let rain = 0, convective = 0, streamed = 0, descending = 0;
+  let rain = 0, convective = 0, streamed = 0, descending = 0, settling = 0;
   const floor = O.autoconversionFloor === 'boundaryLayer' && bl.depth ? bl.depth[i] : null;
   for (let k = 0; k < K; k++) {
     const idx = k * C + i;
@@ -322,8 +324,43 @@ function shadowFall(twin, i, s, stream, iced, frozenStream = null) {
         }
       }
     }
+    if (settling > 0) {
+      const added = settling * g / (pi[i] * dSigma[k]);
+      cc[idx] += added;
+      liquid += added;
+      settling = 0;
+    }
     if (!(cc[idx] > 0)) continue;
-    if (O.autoconversionFloor !== 'none' && (floor === null ? k >= K - 2 : k > 0 && upperInterface(i, k) < floor)) continue;
+    const floored = O.autoconversionFloor !== 'none' && (floor === null ? k >= K - 2 : k > 0 && upperInterface(i, k) < floor);
+    if (floored) {
+      if (liquid > 0 && (foggy || (depositing && k === K - 1))) {
+        const temperature = th[idx] * exnerLayer[idx], pressure = pi[i] * sigmaMid[k], mass = pi[i] * dSigma[k] / g;
+        let courant = 0;
+        if (foggy) {
+          const speed = (continental[i] ? FOG.settleLand : FOG.settleSea) * Math.pow(pressure / (R * temperature) * liquid, 2 / 3);
+          courant = speed * dt * sigmaMid[k] * g / (R * temperature * dSigma[k]);
+        }
+        if (depositing && k === K - 1) courant += Math.min(O.fogDeposition * bl.surfaceDrag[i], O.fogDepositionLimit * pressure / (R * temperature)) * dt * g / (pi[i] * dSigma[k]);
+        const leaving = liquid * courant / (1 + courant);
+        cc[idx] -= leaving;
+        if (k === K - 1) {
+          rain += leaving * mass;
+          if (pressure > 700e2) tags.low += leaving * mass; else tags.high += leaving * mass;
+        } else settling = leaving * mass;
+        if (foggy) {
+          const kept = liquid - leaving;
+          if (kept > 0) {
+            const converted = -kept * Math.expm1(-(continental[i] ? FOG.drizzleLand : FOG.drizzleSea) * Math.pow(kept, 1.47) * dt);
+            cc[idx] -= converted;
+            const made = mass * converted;
+            rain += made;
+            fall.converted[k] += made;
+            if (pressure > 700e2) tags.low += made; else tags.high += made;
+          }
+        }
+      }
+      continue;
+    }
     const excess = Math.max(0, liquid - O.autoconversionThreshold);
     let lifetime = O.upperCloudLifetime !== null && pi[i] * sigmaMid[k] < O.shallowTop ? O.upperCloudLifetime : O.cloudLifetime;
     if (O.stratiformLifetime !== null) lifetime += longCloudShare(twin, i, k, iced) * (O.stratiformLifetime - lifetime);

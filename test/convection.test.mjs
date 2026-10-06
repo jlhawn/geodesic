@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
-import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, COUPLED_REGIME, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION } from '../js/physics/moist.module.js';
+import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, COUPLED_REGIME, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION, fogConstants } from '../js/physics/moist.module.js';
+import { syntheticTopography } from '../js/geography.module.js';
 import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { REGIME } from '../js/physics/boundaryLayer.module.js';
 
@@ -12,6 +13,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 
 const levels = sigmaInterfaces('bl34');
 const build = (moist = {}, N = 2) => createModel(new Grid(N), { ocean: false, levels, moist });
+const FOG_TOPOGRAPHY = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
 
 /*
  * Jordan's (1958) mean West Indies sounding for the hurricane season:
@@ -296,16 +298,18 @@ test('no column convects under an active deck, and an undecided gate lets it', (
   assert.ok(moist.plumeColumn(0, pi, theta, q, qc, 600) > 0 && moist.deep.deep, 'an undecided gate lets it rain');
 });
 
-test('autoconversion stays out of the lowest two layers, or with autoconversionFloor: boundaryLayer out of the boundary layer, and rain evaporates only into cloud-free layers', () => {
-  const lowest = build(), [pl, tl, , , ql, qcl] = lowest.state, KL = lowest.core.K, CL = lowest.core.diagnostics.C;
+test('without the fog scheme autoconversion stays out of the lowest two layers, or with autoconversionFloor: boundaryLayer out of the boundary layer, and rain evaporates only into cloud-free layers; an unknown floor is refused', () => {
+  const off = { fogDroplets: null, fogDeposition: 0 };
+  const lowest = build(off), [pl, tl, , , ql, qcl] = lowest.state, KL = lowest.core.K, CL = lowest.core.diagnostics.C;
   jordanColumn(lowest, 0);
   for (let k = 0; k < KL; k++) qcl[k * CL] = 0;
   qcl[(KL - 1) * CL] = 2e-3; qcl[(KL - 2) * CL] = 2e-3;
   assert.equal(lowest.moist.autoconvertColumn(0, pl, tl, ql, qcl, 600), 0, 'cloud in the lowest two layers does not rain');
+  assert.ok(qcl[(KL - 1) * CL] === 2e-3 && qcl[(KL - 2) * CL] === 2e-3);
   qcl[(KL - 3) * CL] = 2e-3;
   assert.ok(lowest.moist.autoconvertColumn(0, pl, tl, ql, qcl, 600) > 0 || qcl[(KL - 3) * CL] < 2e-3, 'the third layer converts');
-  assert.throws(() => build({ autoconversionFloor: 'surface' }), /autoconversionFloor/);
-  const model = build({ autoconversionFloor: 'boundaryLayer' }), { moist } = model, [pi, theta, , , q, qc] = model.state;
+  assert.throws(() => build({ autoconversionFloor: 'surface' }), /'lowest', 'boundaryLayer' or 'none'/);
+  const model = build({ autoconversionFloor: 'boundaryLayer', ...off }), { moist } = model, [pi, theta, , , q, qc] = model.state;
   const { K, C, geopotential, g } = model.core.diagnostics;
   jordanColumn(model, 0);
   setDepth(model, 0, 1000);
@@ -321,6 +325,282 @@ test('autoconversion stays out of the lowest two layers, or with autoconversionF
   moist.autoconvertColumn(0, pi, theta, q, qc, 600);
   assert.ok(q[dry * C] > qBefore[dry], 'the rain evaporates into a cloud-free layer below its cloud');
   assert.equal(q[cloudBelow * C], qBefore[cloudBelow], 'and not into a cloudy one');
+});
+
+/*
+ * The fog scheme of a floored layer k of column i holding `liquid`, by the
+ * formulas of the moist module's header: what settles or deposits out of
+ * it, what then drizzles, and what it keeps.
+ */
+function fogStep(model, i, k, liquid, dt, { droplets = MOIST_DEFAULTS.fogDroplets[1], drag = 0, efficiency = 0, limit = MOIST_DEFAULTS.fogDepositionLimit, settles = true } = {}) {
+  const { R, g, sigmaMid, dSigma, exnerLayer, C } = model.core.diagnostics, [pi, theta] = model.state, idx = k * C + i;
+  const temperature = theta[idx] * exnerLayer[idx], pressure = pi[i] * sigmaMid[k], mass = pi[i] * dSigma[k] / g;
+  const settle = 7.32e5 * Math.pow(droplets * 1e6, -2 / 3), drizzle = 1350 * 1.5 * Math.pow(droplets, -1.79);
+  let courant = 0;
+  if (settles) courant = settle * Math.pow(pressure / (R * temperature) * liquid, 2 / 3) * dt * sigmaMid[k] * g / (R * temperature * dSigma[k]);
+  const deposition = Math.min(efficiency * drag, limit * pressure / (R * temperature)) * dt * g / (pi[i] * dSigma[k]);
+  courant += deposition;
+  const leaving = liquid * courant / (1 + courant), kept = liquid - leaving;
+  const converted = settles && kept > 0 ? -kept * Math.expm1(-drizzle * Math.pow(kept, 1.47) * dt) : 0;
+  return { courant, deposition, leaving, kept, converted, mass, settle, drizzle };
+}
+const STOKES_GAMMA = 1000 * 9.81 / (18 * 1.8e-5) * 13 * 12 * Math.pow(6 * 40320 / (Math.PI * 1000 * 39916800), 2 / 3);
+
+test('in the lowest two layers fog settles into the layer below and out of the lowest to the ground and drizzles, and the third layer converts by Kessler as before', () => {
+  const dt = 600, model = build(), { moist } = model, [pi, theta, , , q, qc] = model.state, { K, C, g, dSigma } = model.core.diagnostics;
+  jordanColumn(model, 0);
+  for (let k = 0; k < K; k++) qc[k * C] = 0;
+  model.boundaryLayer.surfaceDrag.fill(0);
+  qc[(K - 1) * C] = 2e-3; qc[(K - 2) * C] = 2e-3;
+  const before = budget(model, 0);
+  const upper = fogStep(model, 0, K - 2, 2e-3, dt), settling = upper.leaving * upper.mass, arriving = 2e-3 + settling * g / (pi[0] * dSigma[K - 1]);
+  const lower = fogStep(model, 0, K - 1, arriving, dt);
+  const rain = moist.autoconvertColumn(0, pi, theta, q, qc, dt);
+  const expected = upper.mass * upper.converted + lower.leaving * lower.mass + lower.mass * lower.converted;
+  const after = budget(model, 0);
+  console.log(`2 g/kg in the lowest two layers over ${dt} s at N ${MOIST_DEFAULTS.fogDroplets[1]}/cm³: the upper settles ${(1e3 * upper.leaving).toFixed(4)} and drizzles ${(1e3 * upper.converted).toFixed(5)} g/kg (Courant ${upper.courant.toFixed(3)}), the lowest ${(1e3 * lower.leaving).toFixed(4)} and ${(1e3 * lower.converted).toFixed(5)} g/kg; ${(1e3 * rain).toFixed(3)} g/m² reach the ground, ${(1e3 * moist.falling.fog).toFixed(3)} of them as fog`);
+  assert.ok(Math.abs(rain - expected) <= 1e-15 * expected, `rain ${rain} against ${expected}`);
+  assert.ok(Math.abs(qc[(K - 2) * C] - (2e-3 - upper.leaving - upper.converted)) <= 1e-15 * 2e-3 && Math.abs(qc[(K - 1) * C] - (arriving - lower.leaving - lower.converted)) <= 1e-15 * 2e-3);
+  assert.ok(Math.abs(after.water + rain - before.water) <= 1e-15 * before.water, `water ${before.water} → ${after.water} + ${rain}`);
+  assert.equal(moist.falling.moved, true);
+  assert.equal(moist.falling.fog, lower.leaving * lower.mass);
+  const third = (fog) => {
+    const m = build(fog), [p3, t3, , , q3, c3] = m.state, K3 = m.core.K, C3 = m.core.diagnostics.C;
+    jordanColumn(m, 0);
+    for (let k = 0; k < K3; k++) c3[k * C3] = 0;
+    c3[(K3 - 3) * C3] = 2e-3;
+    m.moist.autoconvertColumn(0, p3, t3, q3, c3, dt);
+    return c3[(K3 - 3) * C3];
+  };
+  const kept = third({}), unfogged = third({ fogDroplets: null, fogDeposition: 0 });
+  assert.ok(kept < 2e-3 && kept === unfogged, `the third layer converts by Kessler alone: ${kept} against ${unfogged}`);
+});
+
+test('with autoconversionFloor boundaryLayer the fog scheme settles cloud down through the boundary layer and out of it, and leaves the layers above alone', () => {
+  const dt = 600, model = build({ autoconversionFloor: 'boundaryLayer' }), { moist } = model, [pi, theta, , , q, qc] = model.state;
+  const { K, C, geopotential, g, dSigma, exnerLayer, sigmaMid } = model.core.diagnostics;
+  jordanColumn(model, 0);
+  setDepth(model, 0, 1000);
+  model.boundaryLayer.surfaceDrag.fill(0);
+  for (let k = 0; k < K; k++) { qc[k * C] = 0; q[k * C] = 0.5 * saturationHumidity(theta[k * C] * exnerLayer[k * C], pi[0] * sigmaMid[k]); }
+  const height = (k) => geopotential[k * C] / g - geopotential[(K - 1) * C] / g;
+  let top = K;
+  for (let k = K - 1; k >= 0; k--) if (height(k) < 700) { qc[k * C] = 2e-3 * (1 + 0.1 * (K - k)); top = k; }
+  const was = snapshot(model, 0), before = budget(model, 0), mass = (k) => pi[0] * dSigma[k] / g;
+  const rain = moist.autoconvertColumn(0, pi, theta, q, qc, dt), after = budget(model, 0), now = snapshot(model, 0);
+  let above = 0, below = 0;
+  for (let k = 0; k < K; k++) {
+    above += (was.qc[k] + was.q[k]) * mass(k); below += (now.qc[k] + now.q[k]) * mass(k);
+    assert.ok(below <= above * (1 + 1e-15), `layer ${k}: the water above its base grew from ${above} to ${below}`);
+    if (height(k) > 1100) assert.ok(now.theta[k] === was.theta[k] && now.q[k] === was.q[k] && now.qc[k] === was.qc[k], `layer ${k} above the boundary layer changed`);
+  }
+  for (let k = top; k < K; k++) assert.ok(now.qc[k] > 0 && now.qc[k] < was.qc[k] + 2e-3, `layer ${k}: ${now.qc[k]}`);
+  assert.ok(rain > 0 && Math.abs(after.water + rain - before.water) <= 1e-15 * before.water);
+  assert.ok(moist.falling.fog > 0 && moist.falling.fog < rain);
+});
+
+test('fog settles implicitly and conservatively: a floored layer keeps 1/(1 + c) of its liquid, at the mass-weighted Stokes speed of a gamma distribution, never emptying a layer it feeds, with moist enthalpy exact, and only from the liquid share while ice falls', () => {
+  for (const [N, cm] of [[150, 1.16], [60, 2.14]]) {
+    const { settleLand, settleSea } = fogConstants([N, N]);
+    assert.equal(settleLand, settleSea);
+    assert.ok(Math.abs(STOKES_GAMMA - 7.32e5) < 1e-3 * 7.32e5, `the derivation gives ${STOKES_GAMMA}`);
+    const speed = settleLand * Math.pow(0.3e-3, 2 / 3);
+    assert.ok(Math.abs(100 * speed - cm) < 5e-3 && Math.abs(speed - STOKES_GAMMA * Math.pow(N * 1e6, -2 / 3) * Math.pow(0.3e-3, 2 / 3)) < 1e-3 * speed, `${N}/cm³: ${100 * speed} cm/s at 0.3 g/m³`);
+  }
+  const dt = 600, model = build(), { moist } = model, [pi, theta, , , q, qc] = model.state, { K, C, sigmaMid, exnerLayer } = model.core.diagnostics;
+  jordanColumn(model, 0);
+  model.boundaryLayer.surfaceDrag.fill(0);
+  for (let k = 0; k < K; k++) qc[k * C] = 0;
+  qc[(K - 1) * C] = 1e-3;
+  const one = fogStep(model, 0, K - 1, 1e-3, dt);
+  moist.autoconvertColumn(0, pi, theta, q, qc, dt);
+  assert.ok(Math.abs(qc[(K - 1) * C] + one.converted - 1e-3 / (1 + one.courant)) <= 1e-15 * 1e-3, 'the lowest layer keeps 1/(1 + c)');
+
+  const stack = build({ autoconversionFloor: 'boundaryLayer' }), [ps, ts, , , qs, cs] = stack.state;
+  jordanColumn(stack, 0);
+  setDepth(stack, 0, 1500);
+  stack.boundaryLayer.surfaceDrag.fill(0);
+  const { geopotential, g } = stack.core.diagnostics, fed = [];
+  for (let k = 0; k < K; k++) { cs[k * C] = 0; if (geopotential[k * C] / g - geopotential[(K - 1) * C] / g < 1400) { cs[k * C] = 1e-3; fed.push(k); } }
+  const start = budget(stack, 0);
+  let ground = 0;
+  for (const step of [60, 600, 6000, 60000]) {
+    ground += stack.moist.autoconvertColumn(0, ps, ts, qs, cs, step);
+    for (let k = 0; k < K; k++) assert.ok(cs[k * C] >= 0 && Number.isFinite(cs[k * C]), `layer ${k}: ${cs[k * C]} after ${step} s`);
+    for (const k of fed) assert.ok(cs[k * C] > 0, `layer ${k} emptied after ${step} s`);
+  }
+  assert.ok(fed.length > 8 && Math.abs(budget(stack, 0).water + ground - start.water) <= 1e-14 * start.water);
+
+  const dryBelow = build(), [pd, td, , , qd, cd] = dryBelow.state;
+  jordanColumn(dryBelow, 0);
+  dryBelow.boundaryLayer.surfaceDrag.fill(0);
+  for (let k = 0; k < K; k++) cd[k * C] = 0;
+  qd[(K - 2) * C] = saturationHumidity(td[(K - 2) * C] * exnerLayer[(K - 2) * C], pd[0] * sigmaMid[K - 2]);
+  qd[(K - 1) * C] *= 0.7;
+  cd[(K - 2) * C] = 3e-3;
+  dryBelow.core.diagnoseColumn(0, pd, td, qd, cd);
+  const enthalpy = budget(dryBelow, 0), vapourBelow = qd[(K - 1) * C];
+  const fell = dryBelow.moist.autoconvertColumn(0, pd, td, qd, cd, dt);
+  assert.ok(dryBelow.moist.falling.moved && cd[(K - 1) * C] > 0, 'fog settles into the subsaturated lowest layer');
+  dryBelow.moist.condenseColumn(0, pd, td, qd, cd);
+  const settled = budget(dryBelow, 0);
+  assert.ok(qd[(K - 1) * C] > vapourBelow && cd[(K - 1) * C] === 0, 'and evaporates there in the second adjustment');
+  assert.ok(Math.abs(settled.enthalpy - enthalpy.enthalpy) <= 1e-14 * enthalpy.enthalpy, `moist enthalpy ${enthalpy.enthalpy} → ${settled.enthalpy}`);
+  assert.ok(Math.abs(settled.water + fell - enthalpy.water) <= 1e-15 * enthalpy.water);
+
+  for (const iceFall of [MOIST_DEFAULTS.iceFall, null]) {
+    const cold = (fog) => {
+      const m = build({ iceFall, ...fog }), [pc, tc, , , qq, cc] = m.state;
+      place(m, 0, 101500, (z, p) => { const T = 255 + 0.004 * z; return { T, q: cloudSaturation(T, p, true, 273.15, 235.15, {}).qs, qc: 0 }; });
+      m.boundaryLayer.surfaceDrag.fill(0);
+      cc[(K - 1) * C] = 2e-3;
+      m.core.diagnoseColumn(0, pc, tc, qq, cc);
+      const share = liquidFraction(tc[(K - 1) * C] * m.core.diagnostics.exnerLayer[(K - 1) * C], 273.15, 235.15);
+      const liquid = iceFall === null ? 2e-3 : share * 2e-3, expected = fogStep(m, 0, K - 1, liquid, dt);
+      m.moist.autoconvertColumn(0, pc, tc, qq, cc, dt);
+      return { qc: cc[(K - 1) * C], share, expected };
+    };
+    const on = cold({}), off = cold({ fogDroplets: null, fogDeposition: 0 });
+    console.log(`supercooled fog at liquid share ${on.share.toFixed(3)} with iceFall ${iceFall}: the fog takes ${(1e3 * (off.qc - on.qc)).toFixed(4)} g/kg of the ${(2 * (iceFall === null ? 1 : on.share)).toFixed(3)} g/kg it acts on`);
+    assert.ok(on.share > 0.3 && on.share < 0.9);
+    assert.ok(Math.abs(off.qc - on.qc - on.expected.leaving - on.expected.converted) <= 1e-15 * 2e-3, `the fog takes ${off.qc - on.qc} against ${on.expected.leaving + on.expected.converted}`);
+  }
+});
+
+test('the floored layers drizzle by Khairoutdinov and Kogan, negligibly at fog\'s water and not at all without the fog scheme', () => {
+  const dt = 600, model = build(), { K, C } = model.core.diagnostics;
+  jordanColumn(model, 0);
+  model.boundaryLayer.surfaceDrag.fill(0);
+  const run = (amount, m = model) => {
+    const [p, t, , , qq, cc] = m.state;
+    for (let k = 0; k < K; k++) cc[k * C] = 0;
+    cc[(K - 1) * C] = amount;
+    const expected = fogStep(m, 0, K - 1, amount, dt);
+    const rain = m.moist.autoconvertColumn(0, p, t, qq, cc, dt);
+    return { rain, expected, qc: cc[(K - 1) * C] };
+  };
+  const thick = run(2e-3), { drizzleSea } = fogConstants(MOIST_DEFAULTS.fogDroplets);
+  assert.equal(thick.expected.drizzle, drizzleSea);
+  const kk = thick.expected.kept * (1 - Math.exp(-drizzleSea * Math.pow(thick.expected.kept, 1.47) * dt));
+  assert.ok(Math.abs(thick.expected.kept - thick.qc - kk) <= 1e-12 * kk && kk > 0, `drizzle ${thick.expected.kept - thick.qc} against ${kk}`);
+  assert.ok(Math.abs(thick.rain - thick.expected.mass * (thick.expected.leaving + kk)) <= 1e-12 * thick.rain);
+  const thin = run(3e-4), share = thin.expected.converted / thin.expected.kept;
+  console.log(`over ${dt} s at N 60/cm³ drizzle takes ${(100 * kk / thick.expected.kept).toFixed(3)} % of 2 g/kg and ${(100 * share).toFixed(3)} % of 0.3 g/kg`);
+  assert.ok(share > 0 && share < 1e-2, `0.3 g/kg drizzles ${share} of itself`);
+  const none = build({ fogDroplets: null, fogDeposition: 0 });
+  jordanColumn(none, 0);
+  const plain = run(2e-3, none);
+  assert.ok(plain.rain === 0 && plain.qc === 2e-3);
+});
+
+test('fog stays bounded: a lowest layer fed 200 mm/d holds under 10 g/kg, one fed 50 g/m²/h sits at the scalar fixed point near observed fog water, and 75 g/kg falls below 1 g/kg within six steps over the sea and seven over land, with water exact', () => {
+  const model = createModel(new Grid(6), { topography: FOG_TOPOGRAPHY, ocean: false, levels: sigmaInterfaces('bl36') }), { moist } = model, { K, C, g, dSigma } = model.core.diagnostics;
+  const [pi, theta, , , q, qc] = model.state, land = model.geography.land, iceSheet = model.geography.iceSheet;
+  const landCell = [...Array(C).keys()].find((i) => land[i] && !iceSheet[i] && Math.abs(model.mesh.latCell[i]) < 0.8), seaCell = [...Array(C).keys()].find((i) => !land[i] && Math.abs(model.mesh.latCell[i]) < 0.8);
+  const rows = [];
+  for (const [name, i, N] of [['land', landCell, MOIST_DEFAULTS.fogDroplets[0]], ['sea', seaCell, MOIST_DEFAULTS.fogDroplets[1]]]) {
+    jordanColumn(model, i);
+    const rho = pi[i] * model.core.diagnostics.sigmaMid[K - 1] / (model.core.diagnostics.R * theta[(K - 1) * C + i] * model.core.diagnostics.exnerLayer[(K - 1) * C + i]);
+    for (const dt of [337.5, 168.75]) {
+      const mass = pi[i] * dSigma[K - 1] / g, drag = rho * 0.0012 * 3;
+      const feed = (rate, start, steps, depositing) => {
+        model.boundaryLayer.surfaceDrag[i] = depositing ? drag : 0;
+        for (let k = 0; k < K; k++) qc[k * C + i] = 0;
+        qc[(K - 1) * C + i] = start;
+        const before = budget(model, i);
+        let most = start, ground = 0, given = 0;
+        const trace = [];
+        for (let n = 0; n < steps; n++) {
+          qc[(K - 1) * C + i] += rate * dt / mass; given += rate * dt;
+          ground += moist.autoconvertColumn(i, pi, theta, q, qc, dt);
+          most = Math.max(most, qc[(K - 1) * C + i]);
+          trace.push(qc[(K - 1) * C + i]);
+          assert.ok(Number.isFinite(qc[(K - 1) * C + i]));
+        }
+        assert.ok(Math.abs(budget(model, i).water + ground - given - before.water) <= 1e-14 * before.water, 'water exact');
+        return { most, last: qc[(K - 1) * C + i], trace };
+      };
+      const days = Math.round(2 * 86400 / dt);
+      const heavy = feed(200 / 86400, 0, days, true);
+      assert.ok(heavy.most < 10e-3, `${name} at ${dt} s: 200 mm/d holds up to ${heavy.most}`);
+      const moderate = feed(50e-3 / 3600, 0, days, false);
+      let fixed = 0;
+      for (let n = 0; n < 4 * days; n++) { const l = fixed + 50e-3 / 3600 * dt / mass, step = fogStep(model, i, K - 1, l, dt, { droplets: N }); fixed = l - step.leaving - step.converted; }
+      assert.ok(Math.abs(moderate.last - fixed) < 0.05 * fixed, `${name} at ${dt} s: ${moderate.last} against the fixed point ${fixed}`);
+      const deposited = feed(50e-3 / 3600, 0, days, true);
+      const decay = feed(0, 75e-3, 7, true);
+      if (dt === 337.5) assert.ok(decay.trace[name === 'sea' ? 5 : 6] < 1e-3, `${name}: 75 g/kg decays to ${decay.trace.join(', ')}`);
+      rows.push(`${name} dt ${dt}: 200 mm/d max ${(1e3 * heavy.most).toFixed(2)}, 50 g/m²/h ${(1e3 * moderate.last).toFixed(3)} (fixed point ${(1e3 * fixed).toFixed(3)}; with deposition at C_D 0.0012 W 3 ${(1e3 * deposited.last).toFixed(3)}), 75 g/kg after six and seven steps ${(1e3 * decay.trace[5]).toFixed(2)} and ${(1e3 * decay.trace[6]).toFixed(2)} g/kg`);
+    }
+  }
+  console.log(rows.join('\n'));
+});
+
+test('fog deposits onto the surface at E C_D W up to fogDepositionLimit, with the continental droplet number on land and the sea\'s on ice sheets, and not without the implicit drag', () => {
+  const dt = 600, make = (moist = {}, surface = {}) => createModel(new Grid(6), { topography: FOG_TOPOGRAPHY, ocean: false, levels, moist, surface });
+  const model = make(), { K, C } = model.core.diagnostics, land = model.geography.land, iceSheet = model.geography.iceSheet;
+  const landCell = [...Array(C).keys()].find((i) => land[i] && !iceSheet[i] && Math.abs(model.mesh.latCell[i]) < 0.8), sheetCell = [...Array(C).keys()].find((i) => iceSheet[i]);
+  assert.ok(landCell !== undefined && sheetCell !== undefined);
+  const lowest = (m, i, drag, amount = 1e-3) => {
+    const [pi, theta, , , q, qc] = m.state;
+    jordanColumn(m, i);
+    for (let k = 0; k < K; k++) qc[k * C + i] = 0;
+    qc[(K - 1) * C + i] = amount;
+    m.boundaryLayer.surfaceDrag[i] = drag;
+    const rain = m.moist.autoconvertColumn(i, pi, theta, q, qc, dt);
+    return { rain, qc: qc[(K - 1) * C + i], fog: m.moist.falling.fog };
+  };
+  const drag = 0.06, [N_LAND, N_SEA] = MOIST_DEFAULTS.fogDroplets;
+  const deposited = lowest(model, landCell, drag), expected = fogStep(model, landCell, K - 1, 1e-3, dt, { droplets: N_LAND, drag, efficiency: 1 });
+  const { R, g, dSigma } = model.core.diagnostics, pi = model.state[0];
+  assert.ok(Math.abs(expected.deposition - drag * dt * g / (pi[landCell] * dSigma[K - 1])) <= 1e-15 * expected.deposition, 'c_d = E surfaceDrag Δt g/(π Δσ)');
+  assert.ok(Math.abs(deposited.qc - (expected.kept - expected.converted)) <= 1e-15 * 1e-3 && deposited.fog === expected.leaving * expected.mass, `kept ${deposited.qc} against ${expected.kept - expected.converted}`);
+  const settledOnly = fogStep(model, landCell, K - 1, 1e-3, dt, { droplets: N_LAND });
+  console.log(`1 g/kg over a continental cell for ${dt} s: settling alone takes ${(1e3 * settledOnly.leaving).toFixed(4)} g/kg (c ${settledOnly.courant.toFixed(3)}), with ρ C_D W ${drag} kg/m²/s of deposition ${(1e3 * expected.leaving).toFixed(4)} (c_d ${expected.deposition.toFixed(3)})`);
+  const off = make({ fogDeposition: 0 }), noDeposit = lowest(off, landCell, drag);
+  assert.ok(Math.abs(noDeposit.qc - (settledOnly.kept - settledOnly.converted)) <= 1e-15 * 1e-3, 'fogDeposition 0 deposits nothing');
+  const explicit = make({}, { implicitDrag: false }), noDrag = lowest(explicit, landCell, drag);
+  assert.ok(Math.abs(noDrag.qc - (settledOnly.kept - settledOnly.converted)) <= 1e-15 * 1e-3, 'without the implicit drag nothing deposits');
+  const capped = lowest(model, landCell, 10), limit = fogStep(model, landCell, K - 1, 1e-3, dt, { droplets: N_LAND, drag: 10, efficiency: 1 });
+  const temperature = model.state[1][(K - 1) * C + landCell] * model.core.diagnostics.exnerLayer[(K - 1) * C + landCell], rho = pi[landCell] * model.core.diagnostics.sigmaMid[K - 1] / (R * temperature);
+  assert.ok(10 > 0.25 * rho && Math.abs(limit.deposition - 0.25 * rho * dt * g / (pi[landCell] * dSigma[K - 1])) <= 1e-15 * limit.deposition && Math.abs(capped.qc - (limit.kept - limit.converted)) <= 1e-15 * 1e-3, 'the limit binds');
+  const sheet = lowest(model, sheetCell, 0), sheetExpected = fogStep(model, sheetCell, K - 1, 1e-3, dt, { droplets: N_SEA }), sheetAsLand = fogStep(model, sheetCell, K - 1, 1e-3, dt, { droplets: N_LAND });
+  assert.ok(Math.abs(sheet.qc - (sheetExpected.kept - sheetExpected.converted)) <= 1e-15 * 1e-3 && Math.abs(sheet.qc - (sheetAsLand.kept - sheetAsLand.converted)) > 1e-8, 'an ice-sheet cell settles at the sea\'s droplet number');
+});
+
+test('fog reaching the ground follows the surface\'s phase rule: over cold land it is snow and its fusion heat warms the lowest layer, over warm sea it is rain', () => {
+  const dt = 600, model = createModel(new Grid(6), { topography: FOG_TOPOGRAPHY, ocean: false, levels, boundaryLayer: false, moist: { cumulusMemory: 0 } });
+  const { moist, seaIce } = model, { K, C, g, cp, dSigma, exnerLayer } = model.core.diagnostics, [pi, theta] = model.state, land = model.geography.land, iceSheet = model.geography.iceSheet;
+  const landCell = [...Array(C).keys()].find((i) => land[i] && !iceSheet[i] && Math.abs(model.mesh.latCell[i]) < 0.8), seaCell = [...Array(C).keys()].find((i) => !land[i] && Math.abs(model.mesh.latCell[i]) < 0.8);
+  const fog = (i, surfaceT) => place(model, i, 100000, (height, p) => { const z = height - (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0), T = surfaceT + 0.03 * Math.min(z, 300) - 0.0065 * Math.max(0, z - 300); return { T, q: (z < 150 ? 1 : 0.6) * cloudSaturation(T, p, true, 273.15, 235.15, {}).qs, qc: z < 100 ? 1.5e-3 : 0 }; });
+  for (const [i, surfaceT, frozen] of [[landCell, 265, true], [seaCell, 285, false]]) {
+    fog(i, surfaceT);
+    model.state[3][i] = surfaceT;
+    const kept = model.state.map((a) => Float64Array.from(a)), snowBefore = land[i] ? model.land.snow[i] : seaIce.snow[i];
+    moist.adjust(model.state, i, i + 1, dt);
+    const amount = moist.rain[i], fogged = moist.falling.fog, thetaMoist = theta[(K - 1) * C + i], plumeSnow = moist.convectiveSnow[i];
+    model.state.forEach((a, n) => a.set(kept[n]));
+    model.phases.adjust(i, i + 1, dt);
+    const snowAfter = land[i] ? model.land.snow[i] : seaIce.snow[i];
+    const heating = frozen ? seaIce.latentHeatFusion * (amount - plumeSnow) * g / (cp * pi[i] * dSigma[K - 1] * exnerLayer[(K - 1) * C + i]) : 0;
+    console.log(`${frozen ? 'supercooled fog at 265 K over land' : 'fog at 285 K over the sea'}: ${(1e3 * amount).toFixed(3)} g/m² reach the ground, ${(1e3 * fogged).toFixed(3)} of them as fog; snow +${(1e3 * (snowAfter - snowBefore)).toFixed(3)} g/m², fusion heating ${heating.toExponential(2)} K of θ`);
+    assert.ok(fogged > 0 && amount >= fogged);
+    if (frozen) assert.ok(snowAfter - snowBefore === amount || Math.abs(snowAfter - snowBefore - amount) <= 1e-15 * (snowBefore + amount), `snow rose by ${snowAfter - snowBefore} against ${amount}`);
+    else assert.equal(snowAfter, snowBefore);
+    assert.ok(Math.abs(theta[(K - 1) * C + i] - (thetaMoist + heating)) <= 1e-12, `θ ${theta[(K - 1) * C + i]} against ${thetaMoist} + ${heating}`);
+  }
+});
+
+test('the fog options are checked on both engines', async () => {
+  const refused = [{ fogDroplets: 'x' }, { fogDroplets: [0, 60] }, { fogDroplets: [150] }, { fogDroplets: [NaN, 60] }, { fogDeposition: -1 }, { fogDeposition: NaN }, { fogDepositionLimit: 0 }];
+  for (const options of refused) assert.throws(() => build(options), /fogD/, `CPU: ${JSON.stringify(options)}`);
+  assert.throws(() => build({ autoconversionFloor: 'surface' }), /autoconversionFloor/);
+  assert.doesNotThrow(() => build({ fogDroplets: null, fogDeposition: 0 }));
+  if (!gpuAvailable) return;
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS, createGpuCore } = await import('../js/gpu/core.gpu.js');
+  for (const options of refused) assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, ...options }), /fogD/, `GPU: ${JSON.stringify(options)}`);
+  await assert.rejects(() => createGpuCore(build().mesh, { levels, physics: { autoconversionFloor: 'surface' } }), /autoconversionFloor/);
 });
 
 test('with upperCloudLifetime cloud water in the layers above the shallow top converts over that lifetime and the cloud below over cloudLifetime (with no ice falling, all of it as liquid)', () => {
@@ -594,6 +874,8 @@ function randomColumns(model) {
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
   const kinds = new Int32Array(C);
   const buoyancy = new Float64Array(C), friction = new Float64Array(C);
+  let fogSeed = 99;
+  const fogRandom = () => { fogSeed = (fogSeed * 1103515245 + 12345) % 2147483648; return fogSeed / 2147483648; };
   for (let i = 0; i < C; i++) {
     const kind = Math.floor(random() * 5), warm = 3 * (random() - 0.5), wet = 1 + 0.15 * (random() - 0.3), surface = 100500 + 1500 * random();
     kinds[i] = kind;
@@ -610,6 +892,13 @@ function randomColumns(model) {
     const gate = random();
     model.radiation.mlmGate[i] = gate < 0.2 ? 0.7 : gate < 0.35 ? 0.5 + (gate - 0.2) / 0.15 * (DECK_CLOSED - 0.5) : 0.3;
     for (let k = 0; k < K; k++) if (random() < 0.08) qc[k * C + i] = 1e-3 * random();
+    if (fogRandom() < 0.3) {
+      for (const k of [K - 2, K - 1]) {
+        const x = k * C + i;
+        q[x] = saturationHumidity(theta[x] * core.diagnostics.exnerLayer[x], pi[i] * core.diagnostics.sigmaMid[k]);
+        qc[x] = 1e-5 * Math.pow(2e3, fogRandom());
+      }
+    }
   }
   for (let x = 0; x < model.state[2].length; x++) model.state[2][x] = 20 * (random() - 0.5) + 10 * Math.sin(x / mesh.nEdges);
   let layerSeed = 777;
@@ -1038,6 +1327,10 @@ async function parity(options, { momentum = false } = {}) {
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SUBTV, Float32Array.from(saved));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SH, Float32Array.from(sensible));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.EVAP, Float32Array.from(evaporation));
+  let dragSeed = 31;
+  const dragRandom = () => { dragSeed = (dragSeed * 1103515245 + 12345) % 2147483648; return dragSeed / 2147483648; };
+  model.boundaryLayer.surfaceDrag.set(Float64Array.from({ length: C }, () => (momentum ? 0 : Math.fround(0.08 * dragRandom()))));
+  device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SDRAG, Float32Array.from(model.boundaryLayer.surfaceDrag));
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
   const group = device.createBindGroup({ layout: kernels.adjust.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
@@ -1060,14 +1353,14 @@ async function parity(options, { momentum = false } = {}) {
     model.phases.adjust(0, C, dt);
     for (let i = 0; i < C; i++) response[i] = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i];
     model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow); moist.cumulusCover.set(priorCover); moist.cumulusWater.set(priorWater);
-    for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation]) a.fill(0);
+    for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation, moist.fogPrecipitation]) a.fill(0);
     for (let x = 0; x < theta.length; x++) theta[x] *= 1 + 2 ** -23;
     model.phases.adjust(0, C, dt);
     for (let i = 0; i < C; i++) { warmed[i] = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i]; warmedFlux[i] = moist.cumulusBaseFlux[i]; }
     thetaResponse.set(theta);
     if (momentum) { model.phases.mixMomentum(0, mesh.nEdges, dt); windResponse = Float64Array.from(model.state[2]); }
     model.state.forEach((a, n) => a.set(kept[n])); saved.set(keptSaved); model.seaIce.snow.set(keptSnow); moist.cumulusCover.set(priorCover); moist.cumulusWater.set(priorWater);
-    for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation]) a.fill(0);
+    for (const a of [moist.precipitation, moist.convectivePrecipitation, moist.largeScalePrecipitation, moist.fogPrecipitation]) a.fill(0);
   }
   moist.trace.convection = new Float64Array(K * C);
   const threshold = new Set();
@@ -1111,7 +1404,7 @@ async function parity(options, { momentum = false } = {}) {
   }
   const merged = new Set(), alike = (a, b) => Math.abs(a - b) <= 1e-6 * Math.max(Math.abs(a), Math.abs(b));
   for (let i = 0; i < C; i++) for (let k = 0; k < K - 1; k++) if (alike(model.state[4][k * C + i], model.state[4][(k + 1) * C + i]) !== alike(after[4][k * C + i], after[4][(k + 1) * C + i])) { merged.add(i); break; }
-  let rainOver = -Infinity, allowed = 0;
+  let rainOver = -Infinity, allowed = 0, fogged = 0, fogFlips = 0, worstFog = 0, fogScale = 0;
   for (let i = 0; i < C; i++) {
     let top = -1;
     for (let k = K - 1; k >= 0; k--) if (moist.trace.convection[k * C + i] !== 0) top = k;
@@ -1132,7 +1425,10 @@ async function parity(options, { momentum = false } = {}) {
       worstWater = Math.max(worstWater, Math.abs(moist.cumulusWater[k * C + i] - ph.CUWATER[(k - K0) * C + i]));
       waterScale = Math.max(waterScale, moist.cumulusWater[k * C + i]);
     }
-    const rainDiff = Math.max(Math.abs(moist.convectivePrecipitation[i] - ph.CONV[i]), Math.abs(moist.largeScalePrecipitation[i] - ph.COND[i]));
+    const rainDiff = Math.max(Math.abs(moist.convectivePrecipitation[i] - ph.CONV[i]), Math.abs(moist.largeScalePrecipitation[i] - ph.COND[i]), Math.abs(moist.fogPrecipitation[i] - ph.FOG[i]));
+    if (moist.fogPrecipitation[i] > 0) fogged++;
+    if ((moist.fogPrecipitation[i] > 0) !== (ph.FOG[i] > 0) && Math.max(moist.fogPrecipitation[i], ph.FOG[i]) > 1e-9) fogFlips++;
+    worstFog = Math.max(worstFog, Math.abs(moist.fogPrecipitation[i] - ph.FOG[i])); fogScale = Math.max(fogScale, moist.fogPrecipitation[i]);
     if ((moist.convectivePrecipitation[i] > 0) !== (ph.CONV[i] > 0)) { if (rainDiff > 1e-4 * rainScale + 2 * response[i]) flips++; else residues = Math.max(residues, Math.abs(moist.convectivePrecipitation[i] - ph.CONV[i])); }
     worstRain = Math.max(worstRain, rainDiff);
     rainOver = Math.max(rainOver, rainDiff - (1e-4 * rainScale + 2 * response[i]));
@@ -1160,6 +1456,10 @@ async function parity(options, { momentum = false } = {}) {
   assert.equal(flips, 0);
   assert.ok(thetaOver < 0 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta} (${thetaOver} above 1e-3 K and twice the response to one ulp), q ${worstQ}, qc ${worstQc}`);
   assert.ok(rainOver < 0, `rain ${worstRain} against ${rainScale}, ${rainOver} above 1e-4 of it and twice the response to one ulp of the saved T_v or of θ`);
+  const fogOn = (options.autoconversionFloor ?? MOIST_DEFAULTS.autoconversionFloor) !== 'none' && (('fogDroplets' in options ? options.fogDroplets : MOIST_DEFAULTS.fogDroplets) !== null || (options.fogDeposition ?? MOIST_DEFAULTS.fogDeposition) > 0);
+  console.log(`  fog reaches the ground from ${fogged} columns (largest ${(1e3 * fogScale).toFixed(3)} g/m²), the engines differ by ${worstFog.toExponential(1)} kg/m² and on ${fogFlips} in whether more than 1e-9 kg/m² does`);
+  assert.equal(fogFlips, 0);
+  assert.ok(fogOn ? fogged > C / 10 : fogged === 0, `${fogged} fog columns`);
   const { geopotential, g } = core.diagnostics, ice = model.state[6], shared = new Uint8Array(K * C);
   for (let i = 0; i < C; i++) for (let k = 0; k < K; k++) {
     const below = geopotential[k * C + i] / g < mixingTop[i], iced = ice[i] > 0 ? (concentration[i] > 0 ? concentration[i] : 1) : 0;
@@ -1189,6 +1489,13 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ plumePhase: 'liquid' });
   await parity({ plumeConversion: 'zhangMcFarlane' });
   await parity({ plumeEntrainmentLaw: 'gregory' });
+});
+
+test('the fog scheme of the floored layers matches between the engines: settling, deposition on the implicit drag and drizzle, under other droplet numbers, under the boundary-layer floor, off, without a floor and as liquid alone without falling ice', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  await parity({ fogDroplets: null, fogDeposition: 0 });
+  await parity({ fogDroplets: [50, 300] });
+  await parity({ autoconversionFloor: 'none' });
+  await parity({ iceFall: null, fogDroplets: [150, 60] });
 });
 
 test('the stratiform lifetime matches between the engines on random columns of every regime, mixing top, EIS share and sea-ice cover, and keeps cloud the short lifetime would rain out in the layers its rule gives a long share', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
