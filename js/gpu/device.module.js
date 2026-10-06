@@ -22,6 +22,8 @@ export async function getDevice() {
   for (const name of wanted) if (adapter.limits[name] !== undefined) requiredLimits[name] = adapter.limits[name];
   const requiredFeatures = adapter.features.has('timestamp-query') ? ['timestamp-query'] : [];
   const device = await adapter.requestDevice({ requiredLimits, requiredFeatures });
+  device.addEventListener('uncapturederror', (event) => console.error(`WebGPU: ${event.error.message}`));
+  device.lost.then((info) => { if (info.reason !== 'destroyed') console.error(`WebGPU device lost: ${info.message || info.reason}`); });
   cached = { gpu, adapter, device };
   return cached;
 }

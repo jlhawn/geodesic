@@ -674,6 +674,7 @@ async function start(message) {
   await built.settle?.();
   serving = false;
   model = built;
+  if (built.gpu) built.gpu.device.lost.then((info) => { if (info.reason === 'destroyed' || model !== built) return; running = false; self.postMessage({ type: 'halted', day: model.time / 86400, reason: `the GPU device was lost (${info.message || info.reason}) — reload the page` }); });
   currentN = N;
   currentTopography = options.topography ?? null;
   dt = step;

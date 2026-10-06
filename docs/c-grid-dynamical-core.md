@@ -2948,6 +2948,15 @@ by a third. On an iPhone 17 Pro the late frames came as often without a
 pause as with one; the earlier controller had pinned 12 ms there at 10%
 of the rate. `?pace=off` stops the reports.
 
+A frame whose sampled fields or diagnostics are mostly non-finite is
+not sent: the worker stops its loop and posts `halted` with the model
+day, and the page's rate line says the state is no longer finite and
+that restoring a snapshot or reloading is the way on. The worker also
+waits on the WebGPU device's `lost` promise, which a GPU reset or a
+driver's timeout settles, and posts the same message with the device's
+reason, since a lost device answers no readback that a frame could
+show. Either case drew a black globe before.
+
 The model dialog's GPU profile (`js/gpu/profile.module.js`) runs 16
 steps one at a time. Where the browser offers `timestamp-query`, it puts
 timestamps around every compute pass and charges each pass to the

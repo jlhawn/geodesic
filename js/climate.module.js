@@ -368,7 +368,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
   let cells = null, centres = null, selected = -1, hoverTip = null, neighbours = null, surface = null;
   let geographyFields = {}, hasLand = false;
   const clock = [];
-  let haltedAt = null;
+  let haltedAt = null, haltedReason = null;
   function secondsPerSimulatedDay() {
     if (clock.length < 2) return null;
     const first = clock[0], last = clock[clock.length - 1];
@@ -721,7 +721,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     if (coast) coast.setVisible(hasLand && settings.view !== 'space');
     showDate(latest.time);
     const rate = secondsPerSimulatedDay();
-    document.getElementById('rate').textContent = !running ? (haltedAt !== null ? `halted at day ${Math.floor(haltedAt)}: the model's state is no longer finite — restore a snapshot or reload` : 'paused') : rate === null ? 'measuring…' : `${rate.toFixed(1)} seconds per simulated day`;
+    document.getElementById('rate').textContent = !running ? (haltedAt !== null ? `halted at day ${Math.floor(haltedAt)}: ${haltedReason ?? "the model's state is no longer finite — restore a snapshot or reload"}` : 'paused') : rate === null ? 'measuring…' : `${rate.toFixed(1)} seconds per simulated day`;
     if (!document.getElementById('modelModal').classList.contains('hidden')) renderModelDetails();
   }
 
@@ -917,7 +917,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       slopesUploaded = false;
       document.getElementById('date').textContent = `model ready: ${message.cells} cells × ${message.layers} layers, dt ${message.dt} s, ${message.workers > 1 ? `${message.workers} workers` : 'one thread'}`;
     }
-    if (message.type === 'halted') { running = false; haltedAt = message.day; clock.length = 0; scheduleUrl(); render(); }
+    if (message.type === 'halted') { running = false; haltedAt = message.day; haltedReason = message.reason ?? null; clock.length = 0; scheduleUrl(); render(); }
     if (message.type === 'snapshotData') storeSnapshot(message);
     if (message.type === 'profile') showProfile(message);
     if (message.type === 'probe' && probed) { probed(message); probed = null; }
@@ -1044,7 +1044,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     const { meta, data } = await getSnapshot(id);
     if (!meta) return;
     running = false;
-    haltedAt = null;
+    haltedAt = haltedReason = null;
     clock.length = 0;
     closeModals();
     scheduleUrl();
@@ -1152,7 +1152,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
 
   document.querySelector('[data-control="play"]').addEventListener('click', () => {
     running = !running;
-    if (running) haltedAt = null;
+    if (running) haltedAt = haltedReason = null;
     clock.length = 0;
     worker.postMessage({ type: running ? 'resume' : 'pause' });
     scheduleUrl();
