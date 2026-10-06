@@ -82,10 +82,10 @@ const vertexLogic = `
   vec3 transformed = finalPos;
 `;
 
-const EARTH_RADIUS = 6.371e6, VERTICAL_EXAGGERATION = 2, METRE = VERTICAL_EXAGGERATION / EARTH_RADIUS;
+const EARTH_RADIUS = 6.371e6, VERTICAL_EXAGGERATION = 1, METRE = VERTICAL_EXAGGERATION / EARTH_RADIUS;
 const SCALE_HEIGHT = 8000 * METRE, AEROSOL_HEIGHT = 1500 * METRE, OZONE_LOW = 1 + 15000 * METRE, OZONE_HIGH = 1 + 35000 * METRE;
 const RAYLEIGH = [0.06, 0.12, 0.29], AEROSOL = [0.05, 0.06, 0.07], OZONE = [0.035, 0.025, 0.003];
-const CLOUD_ROUGHNESS = 0.35, CLOUD_TINT = 1.5, DAY_START = 0.05, DAY_FULL = 0.175, NIGHT_DEEP = -0.35;
+const CLOUD_ROUGHNESS = 0.2, CLOUD_TINT = 2.5, CLOUD_WARMTH_RISE = 1, DAY_START = 0.05, DAY_FULL = 0.175, NIGHT_DEEP = -0.35, CAMERA_TOE = 0.08, TOE_SATURATION = 0.5, CLOUD_RELIEF = 20;
 const glsl = (x) => { const s = Number(x).toPrecision(9); return /[.e]/.test(s) ? s : `${s}.0`; };
 const glslVec3 = (v) => `vec3(${v.map(glsl).join(', ')})`;
 
@@ -108,11 +108,15 @@ const float OZONE_HIGH = ${glsl(OZONE_HIGH)};
 const float METRE = ${glsl(METRE)};
 const float CLOUD_ROUGHNESS = ${glsl(CLOUD_ROUGHNESS)};
 const float CLOUD_TINT = ${glsl(CLOUD_TINT)};
+const float CLOUD_WARMTH_RISE = ${glsl(CLOUD_WARMTH_RISE)};
+const float CAMERA_TOE = ${glsl(CAMERA_TOE)};
+const float TOE_SATURATION = ${glsl(TOE_SATURATION)};
 const float AIR_NODES = 6.0;
 const vec3 RAYLEIGH = ${glslVec3(RAYLEIGH)};
 const vec3 AEROSOL = ${glslVec3(AEROSOL)};
 const vec3 OZONE = ${glslVec3(OZONE)};
 const vec3 BRIGHTNESS = vec3(0.2126, 0.7152, 0.0722);
+const float AEROSOL_ALBEDO = 0.9, AEROSOL_FORWARD = 0.65;
 
 // Chapman's grazing-incidence function at x = r / H: the slant column toward cosine mu >= 0 over the vertical one.
 float chapman(float x, float mu) { return 1.0 / (0.65 * mu + sqrt(0.1225 * mu * mu + 0.6366 / x)); }
@@ -173,37 +177,47 @@ float lambertSoft(float c, float sigma) {
 }
 
 /*
- * Sky light on a level surface at radius r, in units of the sun's flux: the
- * sunbeam scattered once in the sunlit air above (above the globe's shadow
- * past the terminator), with the beam's air mass ms taken one scale height
- * up as beamDepth() grazes, half of it going down at the diffuse air mass
- * 1.66 and losing some on the way through the shadowed air below.
+ * Sky light on a level surface at radius r with the sun's cosine mu, in
+ * units of the sun's flux: the sunbeam scattered once by the air above
+ * that the globe's shadow leaves lit, taken at four heights up through it,
+ * each slab lit by its own beam (deep red where that beam grazed the
+ * ground, bluer where it only crossed the ozone layer) and sending half of
+ * what it scatters down through the Rayleigh air and aerosol below at the
+ * diffuse air mass 1.66. After sunset the shadow climbs, the lit air thins
+ * and sees a redder beam, so the light goes orange, pink and purple as it
+ * fades, and is gone once the shadow stands twelve scale heights up.
  */
 vec3 skyLight(float r, float mu) {
   float rb = mu < 0.0 ? max(r, inversesqrt(max(1.0 - mu * mu, 1.0e-6))) : r;
-  if (rb > 1.0 + 12.0 * SCALE_HEIGHT) return vec3(0.0);
-  float rr = rb + SCALE_HEIGHT;
-  float air = grazingColumn(rr, mu, SCALE_HEIGHT, ${glsl(VERTICAL_EXAGGERATION)});
-  if (air < 0.0) return vec3(0.0);
-  float ms = air * exp((rr - 1.0) / SCALE_HEIGHT);
-  vec3 loss = exp(-AEROSOL * max(grazingColumn(rr, mu, AEROSOL_HEIGHT, ${glsl(VERTICAL_EXAGGERATION)}), 0.0) - OZONE * ozonePath(rr, mu));
-  vec3 above = RAYLEIGH * exp((1.0 - rb) / SCALE_HEIGHT);
-  vec3 below = RAYLEIGH * exp((1.0 - r) / SCALE_HEIGHT) - above;
-  float dm = 1.66 - ms;
-  vec3 g = abs(dm) < 1.0e-3 ? above * exp(-1.66 * above) : (exp(-ms * above) - exp(-1.66 * above)) / dm;
-  return 0.5 * loss * g * exp(-1.66 * below);
+  float hb = (rb - 1.0) / SCALE_HEIGHT;
+  if (hb > 12.0) return vec3(0.0);
+  float hr = (r - 1.0) / SCALE_HEIGHT, ar = (r - 1.0) / AEROSOL_HEIGHT;
+  const float NODE_H[4] = float[4](0.2, 0.7, 1.6, 3.5);
+  const float NODE_W[4] = float[4](0.4, 0.6, 1.2, 2.6);
+  vec3 sum = vec3(0.0);
+  for (int k = 0; k < 4; k++) {
+    float hk = hb + NODE_H[k], rk = 1.0 + hk * SCALE_HEIGHT;
+    vec3 beam = exp(-beamDepth(rk, mu));
+    vec3 slab = RAYLEIGH * exp(-hk) * NODE_W[k];
+    vec3 below = RAYLEIGH * max(exp(-hr) - exp(-hk), 0.0) + AEROSOL * max(exp(-ar) - exp(-hk * SCALE_HEIGHT / AEROSOL_HEIGHT), 0.0);
+    sum += beam * slab * exp(-1.66 * below);
+  }
+  return 0.5 * sum;
 }
 
 /*
  * Sun and sky on an element at radius r with facet cosine 'facet', relative
  * to the same element under the overhead sun; 'unblocked' is the share of
- * the beam that nothing sunward casts off. The beam's colour against the
- * overhead sun's is raised to the power 'tint' at the same brightness, which
- * deepens a reddened beam and leaves a white one white.
+ * the beam that nothing sunward casts off. The beam's hue is the colour the
+ * beam has with the sun 'rise' times as high above the horizon (its
+ * brightness stays the beam's own), raised to the power 'tint' at the same
+ * brightness, which deepens a reddened beam and leaves a white one white.
  */
-vec3 illumination(float r, float mu, float facet, float roughness, float unblocked, float tint) {
+vec3 illumination(float r, float mu, float facet, float roughness, float unblocked, float tint, float rise) {
   vec3 zenith = zenithDepth(r), overhead = exp(-zenith);
-  vec3 colour = exp(zenith - beamDepth(r, mu)), deeper = pow(colour, vec3(tint));
+  vec3 colour = exp(zenith - beamDepth(r, mu));
+  vec3 hue = rise == 1.0 ? colour : exp(zenith - beamDepth(r, mu > 0.0 ? mu * rise : mu));
+  vec3 deeper = pow(hue, vec3(tint));
   colour = deeper * dot(colour, BRIGHTNESS) / max(dot(deeper, BRIGHTNESS), 1.0e-12);
   vec3 beam = overhead * colour * lambertSoft(facet, roughness) * unblocked;
   return (beam + skyLight(r, mu)) / (overhead + skyLight(r, 1.0));
@@ -214,9 +228,12 @@ vec3 illumination(float r, float mu, float facet, float roughness, float unblock
  * along the unit d, out to space: the ray's Rayleigh column cut into 'nodes'
  * equal parts, each lit as at its middle (the sunbeam's own depth there, the
  * globe's shadow included) and dimmed by the Rayleigh air between it and the
- * camera, integrated exactly over the part, and by the aerosol and ozone. The
- * camera is beyond the far end, or, with 'back', behind o (the far half of a
- * limb ray). 'depth' is the whole ray's depth.
+ * camera, integrated exactly over the part, and by the aerosol and ozone,
+ * plus the aerosol of each part (its density against the air's at the
+ * part's middle) scattering the beam forward in a Henyey-Greenstein lobe,
+ * which is the glow around a setting sun. The camera is beyond the far end,
+ * or, with 'back', behind o (the far half of a limb ray). 'depth' is the
+ * whole ray's depth.
  */
 vec3 airAlong(vec3 o, vec3 d, vec3 sun, float nodes, bool back, out vec3 depth) {
   float r0 = length(o), mud = max(dot(o, d) / r0, 0.0), b = r0 * mud;
@@ -225,7 +242,7 @@ vec3 airAlong(vec3 o, vec3 d, vec3 sun, float nodes, bool back, out vec3 depth) 
   vec3 total = RAYLEIGH * column;
   depth = total + AEROSOL * aerosol0 + OZONE * ozone0;
   float cosT = dot(d, sun);
-  vec3 light = vec3(0.0);
+  vec3 light = vec3(0.0), glow = vec3(0.0);
   for (int k = 0; k < 8; k++) {
     if (float(k) >= nodes) break;
     float rk = r0 - SCALE_HEIGHT * log(1.0 - (float(k) + 0.5) / nodes);
@@ -237,9 +254,12 @@ vec3 airAlong(vec3 o, vec3 d, vec3 sun, float nodes, bool back, out vec3 depth) 
     vec3 view = back ? AEROSOL * max(aerosol0 - a, 0.0) + OZONE * max(ozone0 - oz, 0.0) : AEROSOL * a + OZONE * oz;
     vec3 lo = total * (float(k) / nodes), hi = total * ((float(k) + 1.0) / nodes);
     vec3 share = back ? exp(-lo) - exp(-hi) : exp(hi - total) - exp(lo - total);
-    light += exp(-sunDepth(r, dot(up, sun)) - view) * share;
+    vec3 lit = exp(-sunDepth(r, dot(up, sun)) - view) * share;
+    light += lit;
+    glow += lit * (AEROSOL / AEROSOL_HEIGHT * exp((1.0 - r) / AEROSOL_HEIGHT)) / (RAYLEIGH / SCALE_HEIGHT * exp((1.0 - r) / SCALE_HEIGHT));
   }
-  return 0.1875 * (1.0 + cosT * cosT) * light;
+  float g = AEROSOL_FORWARD, lobe = 0.25 * (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * cosT, 1.5);
+  return 0.1875 * (1.0 + cosT * cosT) * light + AEROSOL_ALBEDO * lobe * glow;
 }
 
 // The air along a ray past the globe through tangent point t, direction v away from the camera: the near half, and the far half seen through it.
@@ -538,7 +558,14 @@ export function initUnifiedViewer(container, grid, config = {}) {
    * globe by a perspective camera so that directions are correct, and
    * sunlight on the cells with a dark ambient. The stars sit in an
    * inertial frame that setSpace() turns about the pole by the sidereal
-   * angle; the drag rotation applies on top of both.
+   * angle; the drag rotation applies on top of both. The camera keeps
+   * station in a frame between the planet's (space.frame 0: it hangs over
+   * one point, the sun and stars wheel past) and the stars' (1: it holds
+   * still against the stars while the planet turns beneath it once per
+   * sidereal day and the sun creeps along the ecliptic): the globe turns
+   * about the pole by that share of every advance of the sidereal angle,
+   * summed in space.turn, so moving the slider changes the rate and never
+   * the orientation.
    */
   const SKY_RADIUS = 100;
   const skyScene = new THREE.Scene();
@@ -547,7 +574,12 @@ export function initUnifiedViewer(container, grid, config = {}) {
   skyScene.add(stars);
   const sun = buildSun();
   skyScene.add(sun);
-  const space = { enabled: false, sun: new THREE.Vector3(1, 0, 0), sidereal: new THREE.Quaternion() };
+  const space = { enabled: false, sun: new THREE.Vector3(1, 0, 0), sidereal: new THREE.Quaternion(), spin: null, frame: 0, turn: 0 };
+  const POLE = new THREE.Vector3(0, 0, 1), frameTurn = new THREE.Quaternion(), frameQ = new THREE.Quaternion();
+  function frameQuaternion() {
+    return frameQ.copy(sphereQuaternion).multiply(frameTurn.setFromAxisAngle(POLE, space.enabled ? space.turn : 0));
+  }
+  const updateRotation = () => rotationMatrix.makeRotationFromQuaternion(frameQuaternion());
 
   function buildStars() {
     const random = mulberry32(7);
@@ -833,13 +865,14 @@ void main() {
   /*
    * The light pass: one texel per cell, on the cell textures' layout,
    * drawn by a full-screen triangle into an RGBA8 target whenever a frame
-   * lands or the sun turns half a degree, at most every LIGHT_INTERVAL ms.
+   * lands or the sun turns a tenth of a degree, at most every LIGHT_INTERVAL ms.
    * r and g are the square roots of the share of the sunbeam reaching the
    * cell's ground and its cloud top past what lies sunward (occlusion());
    * b carries the cloud top's slope toward the sun as sign·√|slope| about
-   * texel 128, and a the cosine of the top's tilt.
+   * texel 128, and a the cosine of the top's tilt, the slope exaggerated
+   * CLOUD_RELIEF (twenty) times for the shading as the terrain's is.
    */
-  const LIGHT_INTERVAL = 66, LIGHT_TURN = Math.cos(THREE.MathUtils.degToRad(0.5)), MAX_STEPS = 48;
+  const LIGHT_INTERVAL = 66, LIGHT_TURN = Math.cos(THREE.MathUtils.degToRad(0.1)), MAX_STEPS = 48;
   const lightTarget = new THREE.WebGLRenderTarget(width, height, { type: THREE.UnsignedByteType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, generateMipmaps: false });
   const lightUniforms = {
     uCenterTexture: { value: centerTexture }, uNeighboursA: { value: null }, uNeighboursB: { value: null }, uCellSurface: { value: cellSurface }, uCellTerrain: { value: cellTerrain },
@@ -914,8 +947,9 @@ int walk(int cur, vec3 p) {
  * MAX_STEPS would not take the ray above the highest top, where the ray at
  * arc a stands at (1 + h0) cos e / cos(a + e) - 1 for the sun's elevation
  * e. Ground above sea level blocks the part of a step's height range below
- * it; each cell's cloud is a slab from its base to its top holding the
- * optical depth -ln(1 - opacity) evenly, which the step's path crosses
+ * it (the sea never does: the globe's shadow is the beam's own); each
+ * cell's cloud is a slab from its base to its top holding the optical
+ * depth 7.7 A / (1 - A) of its albedo A evenly, which the step's path crosses
  * over the part of its height range inside the slab. The cell's own cloud
  * is left out, being drawn over its ground already, and so is the globe's
  * shadow, which the light through the air (sunDepth) holds.
@@ -946,10 +980,10 @@ float occlusion(int i, vec3 c, float h0) {
     hPrev = hNext;
     if (cur == i) continue;
     float g = METRE * texelFetch(uCellTerrain, texel(cur), 0).r;
-    if (g > lo) clear = min(clear, clamp((hi - g) / range, 0.0, 1.0));
+    if (g > 0.0 && g > lo) clear = min(clear, clamp((hi - g) / range, 0.0, 1.0));
     vec4 s = texelFetch(uCellSurface, texel(cur), 0);
     if (s.y > 0.0) {
-      float tau = min(8.0, -log(max(1.0 - s.y, 3.4e-4)));
+      float tau = min(8.0, 7.7 * s.y / max(1.0 - s.y, 1.0e-3));
       float top = METRE * s.z, base = METRE * s.w;
       float inside = max(0.0, min(hi, top) - max(lo, base));
       depth += tau / max(top - base, 1.0e-5) * length(vec2(ds, hi - lo)) * inside / range;
@@ -979,7 +1013,7 @@ void main() {
       gradient += o.y * (METRE * o.z - top) / dot(d, d) * d;
       n += 1.0;
     }
-    gradient *= 2.0 / n;
+    gradient *= ${glsl(CLOUD_RELIEF)} * 2.0 / n;
     float tilt = clamp(-dot(gradient, uSunDirection), -1.0, 1.0);
     lean = sign(tilt) * sqrt(abs(tilt));
     scale = inversesqrt(1.0 + dot(gradient, gradient));
@@ -1066,9 +1100,14 @@ vec3 paletteColor(float t) {
    * opacity, so the colour and the reach of the sunset light on cloud vary
    * smoothly across the deck; what lies sunward casts off the cell's own
    * top. Where the sun stands high the day side's own look takes over
-   * (daylight()), with level cloud tops; below a sun cosine of NIGHT_DEEP
+   * (daylight()), the cloud tops' relief kept; below a sun cosine of NIGHT_DEEP
    * even the air a grazing view crosses lies in the globe's shadow, leaving
-   * the ambient alone.
+   * the ambient alone. The sunlit part goes through a camera's toe,
+   * L² / (L + CAMERA_TOE), which leaves the day side alone and crushes the
+   * dim light of the penumbra as a photograph does; applied to each channel
+   * it also deepens the colour of dark things, applied to the brightness
+   * alone it keeps their hue, and TOE_SATURATION sets the share of the
+   * former.
    */
   if (uLighting > 0.0) {
     vec3 n = normalize(position);
@@ -1079,7 +1118,7 @@ vec3 paletteColor(float t) {
     float groundUnblocked = cell.r * cell.r;
     float ground = 1.0 + max(texture2D(uCellTerrain, uv).r, 0.0) * METRE;
     float day = daylight(mu);
-    float cloudFacet = mix((mu + lean * abs(lean)) * cell.a, mu, day);
+    float cloudFacet = (mu + lean * abs(lean)) * cell.a;
     float cloudUnblocked = cell.g * cell.g;
     mat3 spin = mat3(uModelRotation);
     vec3 nView = spin * n;
@@ -1091,8 +1130,8 @@ vec3 paletteColor(float t) {
       vec4 next = texture2D(uCellSurface, cellUv(corner.x)), last = texture2D(uCellSurface, cellUv(corner.y));
       float cover = surface.y + next.y + last.y;
       float top = max(ground, 1.0 + METRE * (surface.y * surface.z + next.y * next.z + last.y * last.z) / max(cover, 1.0e-6));
-      vec3 light = mix(illumination(ground, mu, facet, 0.0, groundUnblocked, 1.0),
-                       illumination(top, mu, cloudFacet, CLOUD_ROUGHNESS, cloudUnblocked, CLOUD_TINT), surface.y);
+      vec3 light = mix(illumination(ground, mu, facet, 0.0, groundUnblocked, 1.0, 1.0),
+                       illumination(top, mu, cloudFacet, CLOUD_ROUGHNESS, cloudUnblocked, CLOUD_TINT, CLOUD_WARMTH_RISE), surface.y);
       float visible = mix(ground, top, surface.y);
       vec3 view = normalize(mix(toCamera * spin, n, uBlend));
       vec3 airDepth;
@@ -1107,6 +1146,10 @@ vec3 paletteColor(float t) {
       vec3 dayLit = vColor.rgb * (uAmbient + uSun * (diffuse * beam + DAY_SKY)) + uSun * (0.9 * glint * beam + 0.45 * slant * DAY_AIR);
       lit = mix(lit, dayLit, day);
     }
+    vec3 sunlit = max(lit - vColor.rgb * uAmbient, 0.0);
+    float luma = dot(sunlit, BRIGHTNESS);
+    vec3 toed = mix(sunlit * (luma / (luma + CAMERA_TOE)), sunlit * sunlit / (sunlit + CAMERA_TOE), TOE_SATURATION);
+    lit = vColor.rgb * uAmbient + toed;
     vColor.rgb = mix(vColor.rgb, lit, uLighting);
   }
 `,
@@ -1126,9 +1169,12 @@ vec3 paletteColor(float t) {
    * near, with the globe's shadow on both (limbLight), so that with the
    * sun behind the limb the band is red low down, yellow-white above and
    * blue higher up. That band shows as the sun nears the horizon at the
-   * closest point and stands beyond it, along the ray; elsewhere the day
+   * closest point and stands near the ray's own direction; elsewhere the day
    * side's blue rim takes over, its column exp(-h / H) for a drawn scale
-   * height of DAY_RIM_HEIGHT under the same pixel floor.
+   * height of DAY_RIM_HEIGHT under the same pixel floor. When the floor
+   * stretches the drawn air well past the real scale height, a pixel holds
+   * the whole band and shows its light summed over the band's real heights,
+   * which is the thin red-orange ring of a sunset seen from far away.
    */
   const GLOW_PIXELS = 0.6, GLOW_LARGEST = 1 / 60, GLOW_CUT = 8, DAY_RIM_HEIGHT = 0.005, DAY_RIM_CUT = 6, GLOW_SHELL = 1 + GLOW_CUT * GLOW_LARGEST;
   const glow = {
@@ -1167,9 +1213,19 @@ void main() {
   if (h > ${glsl(GLOW_CUT)} && hRim > ${glsl(DAY_RIM_CUT)}) discard;
   vec3 sun = mat3(uModelRotation) * uSunDirection;
   float mu = dot(closest / b, sun);
-  float twilight = (1.0 - daylight(mu)) * smoothstep(-0.25, 0.25, dot(ray, sun));
+  float twilight = (1.0 - daylight(mu)) * smoothstep(-0.2, 0.6, dot(ray, sun));
   vec3 light = vec3(0.0);
-  if (twilight > 0.0 && h < ${glsl(GLOW_CUT)}) light = (1.0 - smoothstep(${glsl(GLOW_CUT - 2)}, ${glsl(GLOW_CUT)}, h)) * limbLight(closest / b * (1.0 + h * SCALE_HEIGHT), ray, sun);
+  if (twilight > 0.0 && h < ${glsl(GLOW_CUT)}) {
+    vec3 up = closest / b;
+    light = limbLight(up * (1.0 + h * SCALE_HEIGHT), ray, sun);
+    float far = smoothstep(1.0, 3.0, uScaleHeight / SCALE_HEIGHT);
+    if (far > 0.0) {
+      vec3 whole = (0.3 * limbLight(up * (1.0 + 0.15 * SCALE_HEIGHT), ray, sun) + 0.5 * limbLight(up * (1.0 + 0.55 * SCALE_HEIGHT), ray, sun)
+        + 1.2 * limbLight(up * (1.0 + 1.4 * SCALE_HEIGHT), ray, sun) + 3.0 * limbLight(up * (1.0 + 3.5 * SCALE_HEIGHT), ray, sun)) / ${glsl(GLOW_CUT)};
+      light = mix(light, whole * ${glsl(GLOW_CUT / 1.5)} * exp(-h / 1.5) / (1.0 - exp(${glsl(-GLOW_CUT / 1.5)})), far);
+    }
+    light *= 1.0 - smoothstep(${glsl(GLOW_CUT - 2)}, ${glsl(GLOW_CUT)}, h);
+  }
   if (twilight < 1.0) light = mix(1.2 * max(exp(-hRim) - exp(-${glsl(DAY_RIM_CUT)}), 0.0) / (1.0 - exp(-${glsl(DAY_RIM_CUT)})) * dayRim(mu) * DAY_RIM, light, twilight);
   gl_FragColor = vec4(uFade * uSun * light, 1.0);
   #include <colorspace_fragment>
@@ -1331,6 +1387,7 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
       glow.uRimHeight.value = Math.min(Math.max(DAY_RIM_HEIGHT, pixelFloor), GLOW_LARGEST);
     }
 
+    updateRotation();
     if (space.enabled && lighting.uLighting.value > 0) runLightPass();
     renderer.setClearColor(space.enabled ? 0x000000 : backgroundColor);
     renderer.clear();
@@ -1339,8 +1396,8 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
       skyCamera.fov = state.perspective ? FIELD_OF_VIEW : 60;
       skyCamera.updateProjectionMatrix();
       applyInset(skyCamera);
-      stars.quaternion.copy(sphereQuaternion).multiply(space.sidereal);
-      sun.position.copy(space.sun).applyQuaternion(sphereQuaternion).multiplyScalar(SKY_RADIUS);
+      stars.quaternion.copy(frameQuaternion()).multiply(space.sidereal);
+      sun.position.copy(space.sun).applyQuaternion(frameQ).multiplyScalar(SKY_RADIUS);
       sunTop.value = sunDiscTop();
       renderer.render(skyScene, skyCamera);
       updateFlare(aspect);
@@ -1405,7 +1462,7 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
   const VIEW_AXIS = new THREE.Vector3(0, 0, 1);
   function rollBy(angle) {
     sphereQuaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(VIEW_AXIS, angle)).normalize();
-    rotationMatrix.makeRotationFromQuaternion(sphereQuaternion);
+    updateRotation();
   }
 
   /*
@@ -1419,7 +1476,7 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
       const angle = Math.acos(Math.max(-1, Math.min(1, state.lastVector.dot(currentVector))));
       if (angle > 0.0001) {
         sphereQuaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(axis.normalize(), angle)).normalize();
-        rotationMatrix.makeRotationFromQuaternion(sphereQuaternion);
+        updateRotation();
       }
     }
     state.lastVector = currentVector;
@@ -1845,14 +1902,19 @@ uniform float uReferenceSpeed;
 
   return {
     updateColors, updateSurface, updateSlopes, updateValues, updateTerrain, setColorMap,
-    setSpace({ enabled, sun: direction = null, sidereal = 0, ambient = 0.004, intensity = 1, perspective = enabled } = {}) {
+    setSpace({ enabled, sun: direction = null, sidereal = null, frame = null, ambient = 0.004, intensity = 1, perspective = enabled } = {}) {
       space.enabled = enabled;
+      if (frame !== null) space.frame = Math.min(Math.max(frame, 0), 1);
       if (state.perspective !== perspective) { state.perspective = perspective; viewState.version++; }
       lighting.uLighting.value = enabled ? 1 : 0;
       lighting.uAmbient.value = ambient;
       lighting.uSun.value = intensity;
       if (direction) { space.sun.set(direction[0], direction[1], direction[2]); lighting.uSunDirection.value.copy(space.sun); }
-      space.sidereal.setFromAxisAngle(new THREE.Vector3(0, 0, 1), -sidereal);
+      if (sidereal !== null) {
+        if (space.spin !== null) space.turn = (space.turn + space.frame * (sidereal - space.spin)) % (2 * Math.PI);
+        space.spin = sidereal;
+        space.sidereal.setFromAxisAngle(POLE, -sidereal);
+      }
     },
     addArrowLayer,
     addContourLayer,
@@ -1867,9 +1929,10 @@ uniform float uReferenceSpeed;
      * separates the actual orientation from it is the roll.
      */
     view() {
-      const front = new THREE.Vector3(0, 0, 1).applyQuaternion(sphereQuaternion.clone().invert());
+      const whole = frameQuaternion().clone();
+      const front = new THREE.Vector3(0, 0, 1).applyQuaternion(whole.clone().invert());
       const lat = THREE.MathUtils.radToDeg(Math.atan2(front.z, Math.hypot(front.x, front.y))), lon = THREE.MathUtils.radToDeg(Math.atan2(front.y, front.x));
-      const residual = sphereQuaternion.clone().multiply(canonicalQuaternion(lat, lon).invert());
+      const residual = whole.multiply(canonicalQuaternion(lat, lon).invert());
       let roll = THREE.MathUtils.radToDeg(2 * Math.atan2(residual.z, residual.w));
       if (roll > 180) roll -= 360; else if (roll <= -180) roll += 360;
       return { lat, lon, zoom: state.zoom, roll };
@@ -1879,8 +1942,9 @@ uniform float uReferenceSpeed;
         const current = this.view();
         sphereQuaternion.copy(canonicalQuaternion(lat ?? current.lat, lon ?? current.lon));
         const turn = roll ?? current.roll;
-        if (turn) sphereQuaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), THREE.MathUtils.degToRad(turn))).normalize();
-        rotationMatrix.makeRotationFromQuaternion(sphereQuaternion);
+        if (turn) sphereQuaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(POLE, THREE.MathUtils.degToRad(turn))).normalize();
+        if (space.enabled && space.turn) sphereQuaternion.multiply(new THREE.Quaternion().setFromAxisAngle(POLE, -space.turn)).normalize();
+        updateRotation();
       }
       if (zoom !== null) state.zoom = Math.max(10, Math.min(zoom, 10000));
       viewState.version++;

@@ -1611,22 +1611,29 @@ from soil water (dry tan to wet green) with snow whitening it, and
 adds Soil water, Snow and Elevation overlays; `?land=off` keeps the
 aquaplanet and `?topography=<url>` takes another raster.
 The Satellite mode lights the globe by single scattering in an
-atmosphere drawn `VERTICAL_EXAGGERATION` (two) times its real height
-(`js/unifiedViewer.module.js`): every cell is lit by the beam that
+atmosphere drawn at its real height (`VERTICAL_EXAGGERATION` 1 in
+`js/unifiedViewer.module.js`): every cell is lit by the beam that
 reaches its own altitude, the ground's or its cloud top's, through
 Rayleigh air (optical depths 0.06, 0.12, 0.29 per vertical column in R,
 G, B, scale height 8 km), a 1.5 km boundary-layer aerosol and an ozone
 shell, along Chapman's grazing path at the real Earth's ratio of radius
 to scale height, continued past the horizon over the path that dips
-below the receiver until the globe's own shadow; by the sky light that
-beam scatters, neutral to blue and a few per cent of noon at the
-terminator; and by the air between the cell and the camera. So the
+below the receiver until the globe's own shadow; by the sky light of the
+air above that the shadow leaves lit, four slabs each under its own
+beam, which after sunset runs orange, pink and purple as the shadow
+climbs and is gone once it stands twelve scale heights up; and by the
+air between the cell and the camera, Rayleigh scattering plus the
+boundary-layer aerosol's forward lobe (Henyey–Greenstein, g 0.65, albedo
+0.9), the glow around a setting sun. The sunlit light then passes a
+camera's toe, L² / (L + 0.08), half on each channel and half on the
+brightness, which crushes the dim penumbra as a photograph does and
+deepens the colour of dark things. So the
 ground and sea fade to dark through a neutral grey-blue penumbra with no
 orange, and the sunset colours fall where they do in photographs from
 orbit: on the mid and high cloud at and just past the ground
 terminator, whose tops stay lit until the sun's cosine reaches
 −√(2z/R) and see it through air that has grazed below them. The
-cloud's beam colour carries a stated `CLOUD_TINT` of 1.5 (the colour
+cloud's beam colour carries a stated `CLOUD_TINT` of 2.5 (the colour
 relative to the overhead sun raised to that power, at the same
 brightness), because pure single scattering averaged over a 60 km cell
 read taupe where a 10 km top reads R/G 1.46; it is graded across the
@@ -1634,7 +1641,9 @@ deck by having each vertex blend the three cells at its corner,
 weighted by their cloud opacity, so the warm light never lands on a
 single hexagon. The day side keeps its earlier shading where the sun's
 cosine is above 0.175 and hands over to the physics between 0.05 and
-0.175. Each cell's cloud top and base come from the frame fields
+0.175. Cloud is white by its albedo, τ / (τ + 7.7) for τ = 0.15 per
+g/m² of cloud water, so thin cloud stays translucent; the light pass
+recovers τ from it for the shadows. Each cell's cloud top and base come from the frame fields
 `cloudTop` and `cloudBase` (`js/frames.module.js`
 `visibleCloudHeights`: the height where light from above, or below,
 first meets the column's cloud, averaged over where it does, on both
@@ -1644,22 +1653,34 @@ bit-identical with and without the fields). A WebGL2 light pass writes
 one texel per cell, at most every 66 ms and only when a frame lands or
 the sun has turned half a degree: it marches sunward over the sphere in
 half-cell steps through the terrain and through cloud slabs from base
-to top (opacity 1 − exp(−path / 40 g/m²)), from the ground and from the
-cloud top, so high cloud and mountains throw shadows toward the night
+to top, from the ground and from the cloud top (land above sea level
+blocks the ray, the sea never does: the globe's own shadow is the
+beam's), so high cloud and mountains throw shadows toward the night
 side that lengthen into the terminator, and it fits each cloud top's
-slope toward the sun, which shades the relief while the sun is low. It
-costs about 1 ms of GPU at N=128. Beyond the limb the shell draws the
-air's radiance by each ray's tangent height: on the day side the thin
-blue rim as before, with its own 0.5 % scale height, and where the sun
-stands low behind the limb along the ray the layered band of a sunset
-seen from orbit, red-orange at the bottom, yellow-white, then blue. The
+slope toward the sun, exaggerated twentyfold for the shading as the
+terrain's slopes are, which shades the relief at every hour. It reruns
+when a frame lands or the sun has turned a tenth of a degree and costs
+about 1 ms of GPU at N=128. Beyond the limb the shell draws the air's
+radiance by each ray's tangent height: on the day side the thin blue
+rim as before, with its own 0.5 % scale height, and where the sun
+stands low near the ray's direction the layered band of a sunset seen
+from orbit, red-orange at the bottom, yellow-white, then blue, with the
+haze's glow around the sun; from far enough away that the band is at
+its pixel floor each pixel shows the band's light summed over its real
+heights, the thin red-orange ring of an eclipse. The
 sun's disc and its flare are dimmed and reddened per fragment by the
 air along their lines of sight, so the sun sets red and no flare shows
 over the night side; the flare is otherwise as before: a halo, a
 horizontal streak and a starburst on the sun and five ghost discs on
 the line through the view centre, scaled by the sunlight slider and
 faded out toward the frame edge and over the sun's own width as it
-passes behind the limb.
+passes behind the limb. A Camera slider sets the frame the camera
+keeps station in, from geosynchronous (over one point, the sun and the
+stars wheel past) to the stars (the planet turns beneath it once per
+sidereal day and the sun creeps along the ecliptic a degree a day): the
+globe turns about the pole by that share of every advance of the
+sidereal angle, so the slider changes the rate and never the
+orientation.
 
 The first 400-day N=16 run with continents (from the aquaplanet
 `pbl16b` state) was stable but cold: planetary albedo 0.37 against the

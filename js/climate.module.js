@@ -110,17 +110,21 @@ const OVERLAY_NAMES = Object.fromEntries(Object.entries(OVERLAYS).map(([key, ove
 
 /*
  * The cloud view: open water is ocean blue, ice whitens with thickness,
- * and cloud is white composited on top with an opacity that rises with
- * the column's cloud water, 1 − exp(−TCW / CLOUD_OPACITY_SCALE), so
- * clear sky is transparent and 40 g/m² is two-thirds opaque. The cloud
- * overlays stretch the same curve over their own ranges, as the All
- * clouds overlay's COVER_RANGE is to CLOUD_OPACITY_SCALE, so All clouds
- * matches the Satellite view and every legend shares COVER_STOPS.
+ * and cloud is white composited on top by its albedo, τ / (τ + 7.7) for
+ * the optical depth τ of CLOUD_OPTICAL_DEPTH per g/m² of cloud water (a
+ * non-absorbing cloud of 10 µm drops under the overhead sun), so clear
+ * sky is transparent, 50 g/m² is half white and 300 g/m² is 85 % white;
+ * the light pass recovers τ from it for the shadows. The cloud overlays
+ * use their own opacity, 1 − exp(−water / CLOUD_OPACITY_SCALE), stretched
+ * over each type's range, as the All clouds overlay's COVER_RANGE is to
+ * CLOUD_OPACITY_SCALE, so every legend shares COVER_STOPS.
  */
 const OCEAN_COLOR = [0.05, 0.22, 0.45], ICE_COLOR = [0.85, 0.90, 0.95], CLOUD_COLOR = [1, 1, 1], CLOUD_OPACITY_SCALE = 1000 * CLOUD_OPACITY_PATH, COVER_RANGE = CLOUD_RANGES.cloud;
 const DRY_LAND = [0.45, 0.36, 0.22], WET_LAND = [0.16, 0.30, 0.12], SNOW_COLOR = [0.9, 0.92, 0.95];
 const COVER_BASE = [0.22, 0.22, 0.22];
 const cloudOpacity = (grams) => 1 - Math.exp(-Math.max(0, grams) / CLOUD_OPACITY_SCALE);
+const CLOUD_OPTICAL_DEPTH = 0.15, CLOUD_ALBEDO_SCALE = 7.7;
+const cloudAlbedo = (grams) => { const tau = CLOUD_OPTICAL_DEPTH * Math.max(0, grams); return tau / (tau + CLOUD_ALBEDO_SCALE); };
 const toLinear = (s) => (s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4);
 const NO_OVERLAY = Array(3).fill(toLinear(40 / 255)), NO_DATA = Array(3).fill(toLinear(70 / 255));
 const COVER_STOPS = Array.from({ length: 11 }, (_, k) => { const a = cloudOpacity(COVER_RANGE * k / 10); return COVER_BASE.map((c) => c + a * (1 - c)); });
@@ -148,7 +152,7 @@ const PALETTES = {
  */
 const PHONE = matchMedia('(max-width: 600px), (max-height: 500px) and (pointer: coarse)');
 
-const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', depth: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: PHONE.matches ? 'closed' : 'open', sun: 1, ambient: 0.004, stats: 'off' };
+const DEFAULTS = { view: 'atmosphere', overlay: 'wind', level: 'surface', depth: 'surface', animate: 'particles', isobars: 'off', isobarStep: 5, heightStep: 60, graticule: '15', projection: 'sphere', palette: 'viridis', panel: PHONE.matches ? 'closed' : 'open', sun: 1, ambient: 0.004, frame: 0, stats: 'off' };
 
 /*
  * The contour row draws isobars of surface pressure at the surface and
@@ -188,7 +192,7 @@ function applyOverrides(settings, overrides) {
   for (const key of Object.keys(DEFAULTS)) {
     if (!(key in overrides) || key === 'level' || key === 'depth') continue;
     let value = overrides[key];
-    if (typeof DEFAULTS[key] === 'number') { if (Number(value) >= 0 && (Number(value) > 0 || key === 'sun' || key === 'ambient')) settings[key] = Number(value); continue; }
+    if (typeof DEFAULTS[key] === 'number') { if (Number(value) >= 0 && (Number(value) > 0 || key === 'sun' || key === 'ambient' || key === 'frame')) settings[key] = Number(value); continue; }
     if (key === 'overlay') value = OVERLAY_ALIASES[value] ?? value;
     const known = key === 'palette' ? PALETTES[value] : key === 'overlay' ? OVERLAYS[value] : key === 'view' ? ['space', 'atmosphere', 'ocean', 'data'].includes(value) : key === 'panel' ? ['open', 'closed'].includes(value) : key === 'isobars' ? ['on', 'off'].includes(value) : document.querySelector(`[data-setting="${key}"] [data-value="${CSS.escape(value)}"]`);
     if (known) settings[key] = value;
@@ -285,8 +289,9 @@ const CURRENT_REFERENCE = 0.2;
 const LIGHT_MAX = { sun: 2, ambient: 0.5 };
 
 const VIEW_NOTES = [
+  ['Camera', 'In the Satellite view, where the camera keeps station: at Geosynchronous it hangs over one point of the surface while the sun and the stars wheel past; at Stars it holds still against the star field while the planet turns beneath it once per sidereal day and the sun creeps along the ecliptic by about a degree a day; between, it circles at that share of the planet\'s rate.'],
   ['Lighting', 'In the Satellite view, the strength of the sunlight and of the ambient light that keeps the night side from going black; both sliders follow a square law, so the left half covers the faint end finely.'],
-  ['Mode', 'Atmosphere and Ocean paint the chosen overlay on an evenly lit globe, each with its own overlays: the wind or the current is what the animation follows, and only Atmosphere offers isobars and height lines. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day. Sunlight is reddened and dimmed by the air it crosses, so seen from above the terminator is a dim blue-grey twilight rather than a band of colour. Clouds stand at their diagnosed heights, so near the terminator high cloud catches the last, reddening light after the ground below has gone dark (its reddening deepened by half again so that it reads), its tops shade toward and away from the sun, and it casts long shadows on the cloud and ground beyond, as mountains do. Heights, the air\'s and the clouds\' included, are drawn twice their real size, and the terrain\'s slopes twenty times, so that this reads at the globe\'s scale. Sunset colours appear only where you look through a long path of air: along the limb, a band layered red, yellow-white and blue when the sun is just behind the planet, while the day side keeps a thin blue rim. The sun reddens as it sinks into the air at the limb, and when it is in the frame a faint camera flare follows it, a halo, a streak and rays on the sun with ghost discs across the view, tinted as the sun is and fading out as the globe hides it.'],
+  ['Mode', 'Atmosphere and Ocean paint the chosen overlay on an evenly lit globe, each with its own overlays: the wind or the current is what the animation follows, and only Atmosphere offers isobars and height lines. Satellite renders the planet as it would look from space: ocean, ice and cloud lit by the sun in its true direction for the model date and time, a dark ambient on the night side, and the stars turning behind it once a sidereal day. Sunlight is reddened and dimmed by the air it crosses, so seen from above the terminator is a dim blue-grey twilight rather than a band of colour, and the picture passes through a camera\'s toe that crushes that dim light as a photograph does. Cloud is white by its albedo, so thin cloud stays translucent and only thick cloud reads white. Clouds stand at their diagnosed heights, so near the terminator high cloud catches the last, reddening light after the ground below has gone dark (its reddening deepened so that it reads), then the twilight sky\'s orange, pink and purple as the planet\'s shadow climbs; its tops shade toward and away from the sun at every hour, and it casts long shadows on the cloud and ground beyond, as mountains do. Heights are drawn at their real size, the terrain\'s and the cloud tops\' slopes twenty times for their shading, so that they read at the globe\'s scale. Sunset colours appear only where you look through a long path of air: along the limb near the setting sun, a band layered red, yellow-white and blue with a haze glow around the sun, while the day side keeps a thin blue rim. The sun reddens as it sinks into the air at the limb, and when it is in the frame a faint camera flare follows it, a halo, a streak and rays on the sun with ghost discs across the view, tinted as the sun is and fading out as the globe hides it.'],
   ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
   ['Height', 'The pressure level shown by the wind, temperature, humidity and vertical-motion views and followed by the animation: Surface is the lowest layer, 20 to 60 m up depending on the model\'s layers, and the slider climbs from 1000 to 10 hPa giving each of the model\'s layers the same width, so the thin layers near the ground get as much room as the deep ones aloft. Where the ground rises above the level the map shows its relief in grey and the particles stop. Column views hide it and use the surface wind.'],
   ['Depth', 'The depth shown by the sea temperature, current and upwelling views and followed by the animation: Surface is the mixed layer, and the slider descends to 5500 m giving each of the ocean\'s layers the same width by its subtropical depth, each cell showing the isopycnal layer that holds the depth. Where the sea floor rises above the depth the map shows its relief in grey, as it shows the land. Column views hide it and use the surface current.'],
@@ -295,7 +300,7 @@ const VIEW_NOTES = [
   ['Temperature', 'Air temperature at the chosen height.'],
   ['Relative humidity', 'At the chosen height.'],
   ['Surface pressure', 'The pressure at the ground itself, about 1000 hPa at the coast and 550 hPa on the Tibetan plateau; the weather signal is the small variation on top of the elevation.'],
-  ['Clouds', 'Cloud as white over grey, more opaque where the water is thicker: All clouds is the column\'s whole cloud water at the opacity the Satellite view uses, and each type shows on its own with its legend stretched to the type\'s range. Low, Mid and High cloud are the grid-scale condensate in the layers below 800 hPa, between 800 and 500 hPa and above 500 hPa, where the water in a layer spread evenly about its mean passes saturation: a layer starts to cloud once its humidity passes a critical value, 97.5 % near the ground falling to 75 % aloft, so fronts, storms and the tropical anvils cloud before they saturate. Cumulus is the convective plumes\' cloud, the condensate in the shallow and deep updrafts times the part of the cell they cover, over the trade-wind seas and in the tropical rain belt. Stratocumulus deck is the marine deck of the mixed-layer model, its liquid water path times its cover, the sheets under the strong inversions of the subtropical highs off Peru, Namibia and California.'],
+  ['Clouds', 'Cloud as white over grey, more opaque where the water is thicker: All clouds is the column\'s whole cloud water, and each type shows on its own with its legend stretched to the type\'s range; the Satellite view whitens cloud by its albedo instead, which rises more slowly with the water, so thin cloud stays translucent there. Low, Mid and High cloud are the grid-scale condensate in the layers below 800 hPa, between 800 and 500 hPa and above 500 hPa, where the water in a layer spread evenly about its mean passes saturation: a layer starts to cloud once its humidity passes a critical value, 97.5 % near the ground falling to 75 % aloft, so fronts, storms and the tropical anvils cloud before they saturate. Cumulus is the convective plumes\' cloud, the condensate in the shallow and deep updrafts times the part of the cell they cover, over the trade-wind seas and in the tropical rain belt. Stratocumulus deck is the marine deck of the mixed-layer model, its liquid water path times its cover, the sheets under the strong inversions of the subtropical highs off Peru, Namibia and California.'],
   ['Sea temperature', 'The temperature of the ocean at the chosen depth: at the surface the wind-driven mixed layer, the freezing point under ice; grey over land.'],
   ['Current speed', 'The current at the chosen depth, up to a metre a second in the surface boundary currents and weaker below. With any ocean view selected, Particles and Vectors trace the current instead of the wind.'],
   ['Upwelling', 'The water\'s vertical velocity through the chosen depth, upward positive, from the convergence of the flow above it: up along the equator and the eastern boundaries where the wind drives the surface water away, down under the subtropical gyres.'],
@@ -441,7 +446,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     if (!latest) return;
     const time = display.advance(now, latest.time, { ...recentFrames(), running });
     if (running) showDate(time);
-    if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(time), sidereal: 2 * Math.PI * time * (1 / DAY + 1 / YEAR), ambient: settings.ambient, intensity: settings.sun });
+    if (settings.view === 'space' && viewer) viewer.setSpace({ enabled: true, sun: sunDirection(time), sidereal: 2 * Math.PI * time * (1 / DAY + 1 / YEAR), frame: settings.frame, ambient: settings.ambient, intensity: settings.sun });
   }
   requestAnimationFrame(tick);
 
@@ -511,7 +516,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     overlayLabel = 'Satellite view';
     let highest = 0;
     for (let i = 0; i < grid.size; i++) {
-      const opacity = cloudOpacity(cloud[i] * 1000);
+      const opacity = cloudAlbedo(cloud[i] * 1000);
       if (opacity > 0.01 && cloudTop[i] > highest) highest = cloudTop[i];
       const onLand = land && land[i];
       const frozen = onLand ? Math.min(1, snow[i] / 20) : (cover && cover[i] > 0 ? cover[i] : 1) * Math.min(1, ice[i] / 0.5);
@@ -670,7 +675,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     document.getElementById('depthLabel').classList.toggle('hidden', !depths);
     document.getElementById('depthOptions').classList.toggle('hidden', !depths);
     for (const id of ['overlayLabel', 'overlayOptions', 'animateLabel', 'animateOptions']) document.getElementById(id).classList.toggle('hidden', space);
-    for (const id of ['lightLabel', 'lightOptions']) document.getElementById(id).classList.toggle('hidden', !space);
+    for (const id of ['lightLabel', 'lightOptions', 'frameLabel', 'frameOptions']) document.getElementById(id).classList.toggle('hidden', !space);
     document.querySelector('[data-setting="projection"] [data-value="sphere"]').textContent = space ? 'Perspective' : 'Orthographic';
     if (settings.level !== 'surface') recent.level = settings.level;
     if (settings.depth !== 'surface') recent.depth = settings.depth;
@@ -684,6 +689,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     document.getElementById('depthRange').classList.toggle('selected', settings.depth !== 'surface');
     document.getElementById('sunSlider').value = String(Math.sqrt(settings.sun / LIGHT_MAX.sun));
     document.getElementById('ambientSlider').value = String(Math.sqrt(settings.ambient / LIGHT_MAX.ambient));
+    document.getElementById('frameSlider').value = String(settings.frame);
     for (const id of ['isolineLabel', 'isolineOptions']) document.getElementById(id).classList.toggle('hidden', settings.view !== 'atmosphere');
     document.getElementById('animateLabel').textContent = settings.view === 'ocean' ? 'Current animation' : 'Wind animation';
     document.getElementById('isolineLabel').textContent = isolines.label;
@@ -704,7 +710,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       document.body.appendChild(stats.dom);
     }
     if (stats) stats.dom.style.display = settings.stats === 'on' ? '' : 'none';
-    if (viewer) viewer.setSpace({ enabled: space, ambient: settings.ambient, intensity: settings.sun });
+    if (viewer) viewer.setSpace({ enabled: space, frame: settings.frame, ambient: settings.ambient, intensity: settings.sun });
     if (!latest) return;
     paintOverlay();
     paintWind();
@@ -877,6 +883,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     document.getElementById('depthSlider').addEventListener('input', (event) => update({ depth: depthFromSlider(Number(event.target.value)) }));
     document.getElementById('sunSlider').addEventListener('input', (event) => update({ sun: Math.round(1e3 * LIGHT_MAX.sun * Number(event.target.value) ** 2) / 1e3 }));
     document.getElementById('ambientSlider').addEventListener('input', (event) => update({ ambient: Math.round(1e4 * LIGHT_MAX.ambient * Number(event.target.value) ** 2) / 1e4 }));
+    document.getElementById('frameSlider').addEventListener('input', (event) => update({ frame: Number(event.target.value) }));
   }
 
   let ready = null, slopesUploaded = false;
