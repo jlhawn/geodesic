@@ -13,7 +13,7 @@ import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCe
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName, savedLevels } from './stateFile.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
-import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY } from './frames.module.js';
+import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, frameIsFinite } from './frames.module.js';
 import { createPacer } from './pace.module.js';
 import { profileGpu } from './gpu/profile.module.js';
 import { freshJumpDue } from './physics/land.module.js';
@@ -141,7 +141,9 @@ function placeEnergy(model, saved) {
   energyDay = { day: 0, steps: 0, asr: 0, olr: 0, ts: 0 };
 }
 
+// A frame that is no longer finite stops the loop and tells the page so, in place of the frame.
 function postFrame({ time, level, depth, fields, diagnostics }) {
+  if (!frameIsFinite(fields, diagnostics)) { running = false; self.postMessage({ type: 'halted', day: time / 86400 }); return; }
   if (diagnostics && model.energyRecord) { feedEnergy(diagnostics, time); diagnostics.energy = model.energyRecord.windows(); diagnostics.energyDay = model.energyRecord.newest; }
   const transfer = [...new Set(Object.values(fields).map((values) => values.buffer))];
   self.postMessage({ type: 'frame', frame: frame++, time, day: time / 86400, level, depth, engine: model.engine ?? 'cpu', pause: model.beginFrame ? pace.pause : 0, fields, diagnostics }, transfer);

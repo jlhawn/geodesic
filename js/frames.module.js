@@ -67,6 +67,26 @@ export const CLOUD_RANGES = { cloud: 100, cloudLow: 200, cloudMid: 500, cloudHig
 export const CLOUD_OPACITY_PATH = 0.040, CLOUD_SEEN = 0.01;
 
 /*
+ * Whether a frame still comes from a finite model. A model gone non-finite
+ * fills every prognostic field within a few steps, so each field is read
+ * on a stride of FINITE_STRIDE and counts as gone when most of those
+ * samples are not numbers; the ocean's fields are left out, as they carry
+ * NaN over land by design, and the mean surface temperature, when the
+ * diagnostics carry it, is read whole.
+ */
+export const FINITE_STRIDE = 61;
+export function frameIsFinite(fields, diagnostics = null) {
+  if (diagnostics && diagnostics.meanSurfaceT !== undefined && !Number.isFinite(diagnostics.meanSurfaceT)) return false;
+  for (const [name, values] of Object.entries(fields)) {
+    if (OCEAN_FIELDS.has(name) || !values || typeof values.length !== 'number') continue;
+    let bad = 0, seen = 0;
+    for (let i = 0; i < values.length; i += FINITE_STRIDE) { seen++; if (!Number.isFinite(values[i])) bad++; }
+    if (seen && 2 * bad > seen) return false;
+  }
+  return true;
+}
+
+/*
  * Where light first meets a column's cloud, for layers k = 0 (top) to K-1
  * (bottom) with mid heights z[k] above sea level over ground at 'ground':
  * each layer spans halfway to its neighbours (the top layer as far above
