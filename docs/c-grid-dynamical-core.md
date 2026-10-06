@@ -11669,10 +11669,16 @@ falls from 41.1 to 23.7 ms at N=128 (19.9 every 8), the radiation's
 24 ms falling by (k−1)/k.
 
 **The ocean's step** (the ocean's `everySteps`; the drivers' default from
-`js/cadence.module.js`: OCEAN_MINUTES 45 up to N=64 and shorter in
-proportion to the cell spacing at finer N, so every 8 steps at both N=64
-and N=128, the eleven spin-up's cadence; coarser grids keep the ocean's
-own every 4 steps). Coupled models exchange with
+`js/cadence.module.js` oceanMinutes(): OCEAN_MINUTES 45 up to N=64 and
+shorter in proportion to the cell spacing up to N=128, so every 8 steps
+at both N=64 and N=128, the eleven spin-up's cadence, then with the cube
+of the spacing, every 4 steps at N=192 and every 2 at N=256; coarser
+grids keep the ocean's own every 4 steps). At N=192 from the atlas (Oct
+6, 2026) a 15-minute step pinned 700,000 edges at the 5 m/s cap on its
+first day and was NaN on its fifth, where 7.5 minutes held five days
+with currents under 2.6 m/s and nothing clamped; at N=256 every 4 steps
+(5.6 minutes) clamped 1.27 million edges on the first day where every 2
+(2.8 minutes) held a day with currents under 0.9 m/s. Coupled models exchange with
 the ocean every 30–60 minutes (CESM every 30), but the layered ocean at
 N=128 does not take a 45-minute step: every 16 steps from
 eleven128_day1826 its currents reach the 5 m/s cap on the first day
