@@ -148,7 +148,8 @@ const PALETTES = {
 
 /*
  * Small screens get the phone layout (html.phone in climate.html's
- * stylesheet): the settings panel becomes a bottom sheet, closed at first.
+ * stylesheet): the settings panel is a bottom sheet, closed at first,
+ * where elsewhere it is a drawer at the left edge, open at first.
  */
 const PHONE = matchMedia('(max-width: 600px), (max-height: 500px) and (pointer: coarse)');
 
@@ -351,10 +352,11 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     if (dateTime.textContent !== text) dateTime.textContent = text;
     if (dateSeason.textContent !== phrase) dateSeason.textContent = phrase;
   }
-  // While the phone's settings sheet is open, the globe centres in the gap between the top bar and the sheet.
+  // While the settings panel is open, the globe centres right of the drawer, or on the phone between the top bar and the sheet.
   function frameGlobe() {
     if (!viewer) return;
-    if (!PHONE.matches || settings.panel !== 'open') { viewer.setInsets(); return; }
+    if (settings.panel !== 'open') { viewer.setInsets(); return; }
+    if (!PHONE.matches) { viewer.setInsets({ left: panel.offsetWidth }); return; }
     const area = document.getElementById('globe').getBoundingClientRect();
     viewer.setInsets({ top: document.getElementById('clock').getBoundingClientRect().bottom - area.top, bottom: area.bottom - panel.getBoundingClientRect().top });
   }
@@ -703,6 +705,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     for (const id of ['paletteLabel', 'paletteOptions']) document.getElementById(id).classList.toggle('hidden', !PHONE.matches || !palettes);
     document.querySelector('[data-control="play"]').textContent = running ? '❚❚' : '▶';
     panel.classList.toggle('hidden', settings.panel !== 'open');
+    panel.inert = settings.panel !== 'open';
     document.documentElement.classList.toggle('panel-open', settings.panel === 'open');
     frameGlobe();
     if (settings.stats === 'on' && !stats) {

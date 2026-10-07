@@ -768,10 +768,10 @@ void main() {
     flareCamera.left = -aspect; flareCamera.right = aspect;
     flareCamera.updateProjectionMatrix();
     const size = Math.sqrt(lighting.uSun.value);
-    const x = flareSun.x * aspect, y = flareSun.y, centreY = 2 * inset.shift / container.clientHeight;
+    const x = flareSun.x * aspect, y = flareSun.y, centreX = 2 * inset.shiftX / container.clientHeight, centreY = 2 * inset.shift / container.clientHeight;
     for (let k = 0; k < flare.parts.length; k++) {
       const { sprite, width, height, tint, place, air } = flare.parts[k];
-      sprite.position.set(x * (1 - place), y + place * (centreY - y), 0);
+      sprite.position.set(x + place * (centreX - x), y + place * (centreY - y), 0);
       sprite.scale.set(width * size, height * size, 1);
       if (air) sprite.material.color.copy(tint).multiplyScalar(brightness * dimmed);
       else sprite.material.color.copy(tint).multiplyScalar(brightness).multiply(limbTint);
@@ -1318,15 +1318,16 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
 
   /*
    * setInsets() centres the view in the part of the canvas that page
-   * elements leave uncovered: the picture moves up by `inset.shift`
-   * pixels, easing towards the target, through a translation of the
-   * projection itself, so the zoom and the pan keep their meaning and
-   * the raycaster (which reads the projection) stays exact.
+   * elements leave uncovered: the picture moves up by `inset.shift` and
+   * right by `inset.shiftX` pixels, easing towards the targets, through a
+   * translation of the projection itself, so the zoom and the pan keep
+   * their meaning and the raycaster (which reads the projection) stays exact.
    */
-  const inset = { target: 0, shift: 0, matrix: new THREE.Matrix4() };
+  const inset = { target: 0, shift: 0, targetX: 0, shiftX: 0, matrix: new THREE.Matrix4() };
+  const easeInset = (shift, target) => (Math.abs(target - shift) > 0.5 ? shift + 0.25 * (target - shift) : target);
   function applyInset(target) {
-    if (!inset.shift) return;
-    target.projectionMatrix.premultiply(inset.matrix.makeTranslation(0, 2 * inset.shift / container.clientHeight, 0));
+    if (!inset.shift && !inset.shiftX) return;
+    target.projectionMatrix.premultiply(inset.matrix.makeTranslation(2 * inset.shiftX / container.clientWidth, 2 * inset.shift / container.clientHeight, 0));
     target.projectionMatrixInverse.copy(target.projectionMatrix).invert();
   }
 
@@ -1355,8 +1356,9 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
     for (const projected of projectedMaterials) {
       if (projected.userData.shader) projected.userData.shader.uniforms.uBlend.value = viewState.blend;
     }
-    if (inset.shift !== inset.target) {
-      inset.shift = Math.abs(inset.target - inset.shift) > 0.5 ? inset.shift + 0.25 * (inset.target - inset.shift) : inset.target;
+    if (inset.shift !== inset.target || inset.shiftX !== inset.targetX) {
+      inset.shift = easeInset(inset.shift, inset.target);
+      inset.shiftX = easeInset(inset.shiftX, inset.targetX);
       viewState.version++;
     }
 
@@ -1493,7 +1495,7 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
     const before = viewHeight();
     state.zoom = Math.max(10, Math.min(state.zoom * factor, 10000));
     const shrink = (before - viewHeight()) / container.clientHeight, rect = container.getBoundingClientRect();
-    state.pan.x += (clientX - rect.left - rect.width / 2) * shrink;
+    state.pan.x += (clientX - rect.left - rect.width / 2 - inset.shiftX) * shrink;
     state.pan.y -= (clientY - rect.top - rect.height / 2 + inset.shift) * shrink;
   }
 
@@ -1603,11 +1605,11 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
       const distance = cameraDistance();
       const half = (distance - rz * (1 - blend)) * TAN_HALF;
       const aspect = container.clientWidth / container.clientHeight;
-      out[0] = ((fx - state.pan.x) / (half * aspect) + 1) / 2 * container.clientWidth;
+      out[0] = ((fx - state.pan.x) / (half * aspect) + 1) / 2 * container.clientWidth + inset.shiftX;
       out[1] = (1 - (fy - state.pan.y) / half) / 2 * container.clientHeight - inset.shift;
       out[2] = blend > 0.5 ? 1 : rx * state.pan.x + ry * state.pan.y + rz * distance - 1;
     } else {
-      out[0] = (fx - camera.left) / (camera.right - camera.left) * container.clientWidth;
+      out[0] = (fx - camera.left) / (camera.right - camera.left) * container.clientWidth + inset.shiftX;
       out[1] = (camera.top - fy) / (camera.top - camera.bottom) * container.clientHeight - inset.shift;
       out[2] = blend > 0.5 ? 1 : rz;
     }
@@ -1963,7 +1965,7 @@ uniform float uReferenceSpeed;
       return out;
     },
     pixelsPerUnit: () => container.clientHeight / viewHeight(),
-    setInsets({ top = 0, bottom = 0 } = {}) { inset.target = (bottom - top) / 2; },
+    setInsets({ top = 0, bottom = 0, left = 0, right = 0 } = {}) { inset.target = (bottom - top) / 2; inset.targetX = (left - right) / 2; },
     viewVersion: () => viewState.version,
     takeBusyTime() { const ms = busy; busy = 0; return ms; },
     dispose: () => {

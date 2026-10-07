@@ -2978,11 +2978,18 @@ kept for the same browser and GPU, and "Test again" in the model dialog
 repeats the test. The M1 Max measures 14.2 ms a step at N=64 and runs
 N=128.
 
+The settings panel stacks its rows under their captions and lists the
+overlays by name and unit, with the chosen one's note. On a desktop it
+is a drawer at the left edge, opened and closed by the gear: the clock
+and the legend slide right by its width, and the globe centres in the
+uncovered part (`viewer.setInsets`, a translation of the projection,
+which shifts the picture horizontally or vertically).
+
 Below 600 px wide, or on a short touch screen, the page takes a phone
 layout:
 - the settings panel is a bottom sheet, and the globe lifts into the gap
-  above it (`viewer.setInsets`, a translation of the projection);
-- overlays are listed by name with their notes, in place of hover tips;
+  above it;
+- the panel gives no hover tips;
 - the legend spans the width.
 
 On any touch screen, one finger turns the globe; two pan, pinch to zoom

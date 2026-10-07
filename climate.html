@@ -7,6 +7,8 @@
   <title>WebGCM</title>
   <style>
     html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+    :root { --drawer-width: min(360px, 40vw); --drawer: 0px; }
+    .panel-open { --drawer: var(--drawer-width); }
     body { margin: 0; background: #151515; color: #ddd; font: 15px system-ui, sans-serif; touch-action: manipulation; }
     #globe { position: absolute; inset: 0; }
     .box { background: rgba(0, 0, 0, 0.72); color: #eee; border-radius: 8px; }
@@ -15,7 +17,7 @@
     button.flat.selected { background: #4a4a4a; color: #ffe8a0; }
     button.flat:disabled { color: #666; cursor: default; background: transparent; }
     select { background: #222; color: #ddd; border: 1px solid #555; border-radius: 4px; font: inherit; font-size: 13px; padding: 1px 4px; }
-    #clock { position: absolute; left: 12px; top: 12px; z-index: 11; display: flex; align-items: center; gap: 10px; padding: 8px 12px; max-width: calc(100% - 200px); }
+    #clock { position: absolute; left: calc(12px + var(--drawer)); top: 12px; z-index: 11; display: flex; align-items: center; gap: 10px; padding: 8px 12px; max-width: calc(100% - 100px - var(--drawer)); transition: left 0.3s ease; }
     #clock .control { font-size: 22px; padding: 2px 10px; }
     #date, #rate { font-family: ui-monospace, Menlo, Consolas, monospace; }
     #date { font-size: 15px; }
@@ -25,25 +27,26 @@
     #snapshotsButton:hover { color: #fff; }
     #snapshotsButton svg { display: block; }
     #snapshotsButton { right: 12px; top: 12px; }
-    #bottom { position: absolute; left: 12px; bottom: 12px; z-index: 11; display: flex; align-items: stretch; max-width: calc(100% - 24px); }
+    #bottom { position: absolute; left: calc(12px + var(--drawer)); bottom: 12px; z-index: 11; display: flex; align-items: stretch; max-width: calc(100% - 24px - var(--drawer)); transition: left 0.3s ease; }
     #menu { border: 0; background: transparent; color: #ddd; padding: 6px 10px; display: flex; align-items: center; cursor: pointer; border-radius: 8px; }
     #menu:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
     #menu svg { display: block; }
-    #legend { padding: 6px 12px 6px 4px; display: flex; flex-direction: column; justify-content: center; gap: 3px; }
+    #legend { min-width: 0; padding: 6px 12px 6px 4px; display: flex; flex-direction: column; justify-content: center; gap: 3px; }
     #data { font-size: 13px; color: #ddd; }
     #tip { position: absolute; right: 12px; bottom: 12px; z-index: 11; padding: 6px 12px; font-size: 13px; color: #ddd; max-width: 40%; }
     #tip.hidden { display: none; }
     #tip .value { font-size: 15px; color: #eee; }
-    #scale { display: block; width: 300px; height: 14px; border-radius: 2px; }
-    #scaleTicks { display: flex; justify-content: space-between; width: 300px; font-size: 12px; color: #ccc; margin-top: 1px; }
+    #scale { display: block; width: 300px; max-width: 100%; height: 14px; border-radius: 2px; }
+    #scaleTicks { display: flex; justify-content: space-between; width: 300px; max-width: 100%; font-size: 12px; color: #ccc; margin-top: 1px; }
     .scaleRow { display: flex; align-items: flex-start; gap: 8px; }
+    .scaleRow > div { min-width: 0; }
     .scaleRow.hidden { display: none; }
-    #panel { position: absolute; left: 12px; bottom: calc(var(--legend-height, 36px) + 20px); z-index: 10; padding: 8px 14px; display: grid; grid-template-columns: max-content 1fr; column-gap: 0; row-gap: 0; align-items: center; max-width: calc(100% - 48px); max-height: calc(100% - 140px); overflow: auto; font-size: 14px; }
-    #panel.hidden { display: none; }
-    #panel .label { color: #ddd; padding: 5px 10px 5px 0; border-right: 2px solid #666; border-top: 1px solid #3c3c3c; align-self: stretch; display: flex; align-items: center; }
-    #panel .options { display: flex; flex-wrap: wrap; gap: 3px 8px; align-items: center; padding: 5px 0 5px 12px; border-top: 1px solid #3c3c3c; }
-    #panel > #sheetHandle + .label, #panel > #sheetHandle + .label + .options { border-top: 0; }
-    #panel .options.stacked { flex-direction: column; align-items: flex-start; }
+    #panel { position: absolute; left: 0; top: 0; bottom: 0; width: var(--drawer-width); box-sizing: border-box; z-index: 10; padding: 6px 16px 12px; display: grid; grid-template-columns: 1fr; align-content: start; overflow-y: auto; overscroll-behavior: contain; border-radius: 0 14px 14px 0; background: rgb(26, 26, 26); font-size: 15px; transition: transform 0.3s ease, visibility 0s linear 0s; }
+    #panel.hidden { transform: translateX(-100%); visibility: hidden; transition: transform 0.3s ease, visibility 0s linear 0.3s; }
+    #panel .label { color: #999; padding: 10px 0 4px; border-top: 1px solid #333; font-size: 13px; }
+    #panel > #sheetHandle + .label { border-top: 0; }
+    #panel .options { display: flex; flex-wrap: wrap; gap: 3px 8px; align-items: center; padding: 2px 0 10px; }
+    #panel .options.stacked { flex-direction: column; align-items: stretch; gap: 8px; }
     #panel .unit { color: #ddd; }
     #panel .slider { display: flex; align-items: center; gap: 6px; color: #ddd; }
     #panel .slider input { width: 110px; accent-color: #ffe8a0; }
@@ -58,6 +61,13 @@
     .segmented .range input { width: 110px; accent-color: #ffe8a0; }
     .segmented .range .unit { color: inherit; min-width: 4.4em; }
     #panel .hidden { display: none; }
+    #panel .segmented button, #panel .segmented .range { padding: 6px 11px; }
+    #overlayOptions .segmented { flex-direction: column; flex-wrap: nowrap; border: 1px solid #4a4a4a; border-radius: 8px; overflow: hidden; }
+    #panel #overlayOptions .segmented button { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0; border: 0; border-top: 1px solid #333; border-radius: 0; padding: 10px 12px; text-align: left; }
+    #panel #overlayOptions .segmented button:first-child { border-top: 0; }
+    #overlayOptions .short { display: none; }
+    #panel #overlayOptions .unit { color: #999; font-size: 13px; }
+    .overlayNote { padding: 0 12px 10px; background: #4a4a4a; color: #ccc; font-size: 13px; line-height: 1.4; }
     #progress { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); width: min(420px, calc(100% - 48px)); z-index: 20; padding: 10px 14px; display: none; }
     #progress.visible { display: block; }
     #progressTrack { height: 6px; background: #333; border-radius: 3px; overflow: hidden; }
@@ -85,7 +95,7 @@
     .empty { color: #888; font-size: 13px; }
     #profileOut { font: 12px ui-monospace, Menlo, Consolas, monospace; color: #ccc; white-space: pre-wrap; margin: 6px 0 0; }
     #profileOut.hidden { display: none; }
-    #sheetHandle, #snapshotsIcon, .overlayNote, #overlayOptions .name, #overlayOptions .unit { display: none; }
+    #sheetHandle, #snapshotsIcon { display: none; }
     #snapshotsIcon svg { display: block; }
     #date .season::before { content: ' · '; }
 
@@ -105,22 +115,12 @@
     .phone #scale, .phone #scaleTicks { width: 100%; }
     .phone #tip { left: 8px; right: 8px; bottom: calc(var(--legend-height, 60px) + 8px); max-width: none; }
     .phone.panel-open #tip { display: none; }
-    .phone #panel { left: 0; right: 0; bottom: var(--legend-height, 60px); max-width: none; max-height: 55dvh; grid-template-columns: 1fr; padding: 0 calc(14px + env(safe-area-inset-right)) 8px calc(14px + env(safe-area-inset-left)); border-radius: 14px 14px 0 0; background: rgb(26, 26, 26); overscroll-behavior: contain; font-size: 15px; }
+    .phone #panel { left: 0; right: 0; top: auto; bottom: var(--legend-height, 60px); width: auto; box-sizing: content-box; max-height: 55dvh; padding: 0 calc(14px + env(safe-area-inset-right)) 8px calc(14px + env(safe-area-inset-left)); border-radius: 14px 14px 0 0; transition: none; }
+    .phone #panel.hidden { display: none; }
     .phone #sheetHandle { display: flex; justify-content: center; align-items: center; height: 26px; position: sticky; top: 0; z-index: 1; background: rgb(26, 26, 26); touch-action: none; cursor: pointer; }
     .phone #sheetHandle::before { content: ''; width: 40px; height: 5px; border-radius: 3px; background: #666; }
-    .phone #panel .label { border-right: 0; border-top: 1px solid #333; padding: 10px 0 4px; font-size: 13px; color: #999; }
-    .phone #panel #sheetHandle + .label { border-top: 0; padding-top: 2px; }
-    .phone #panel .options { border-top: 0; padding: 2px 0 10px; }
-    .phone #panel .options.stacked { align-items: stretch; gap: 8px; }
-    .phone .segmented button { padding: 6px 11px; font-size: 15px; }
-    .phone .segmented .range { padding: 6px 11px; font-size: 15px; }
-    .phone #overlayOptions .segmented { flex-direction: column; flex-wrap: nowrap; border: 1px solid #4a4a4a; border-radius: 8px; overflow: hidden; }
-    .phone #overlayOptions .segmented button { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 0; border: 0; border-top: 1px solid #333; border-radius: 0; padding: 10px 12px; text-align: left; }
-    .phone #overlayOptions .segmented button:first-child { border-top: 0; }
-    .phone #overlayOptions .short { display: none; }
-    .phone #overlayOptions .name, .phone #overlayOptions .unit { display: inline; }
-    .phone #overlayOptions .unit { color: #999; font-size: 13px; }
-    .phone .overlayNote { display: block; padding: 0 12px 10px; background: #4a4a4a; color: #ccc; font-size: 13px; line-height: 1.4; }
+    .phone #panel #sheetHandle + .label { padding-top: 2px; }
+    .phone .tabs button { padding: 6px 11px; font-size: 15px; }
     .phone .modal { align-items: stretch; }
     .phone .dialog { width: 100%; max-height: none; border-radius: 0; box-sizing: border-box; padding: calc(12px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); }
   </style>
