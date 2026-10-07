@@ -2979,7 +2979,11 @@ repeats the test. The M1 Max measures 14.2 ms a step at N=64 and runs
 N=128.
 
 The settings panel stacks its rows under their captions and lists the
-overlays by name and unit, with the chosen one's note. On a desktop it
+overlays by name and unit, with the chosen one's note. Its first row is
+the projection, a segmented control of two equal icons: a globe with
+meridians for the orthographic (in the Satellite mode, perspective)
+view and the Equal Earth outline for the map, named by their hover tips
+and accessible labels. On a desktop it
 is a drawer at the left edge, opened and closed by the gear: the clock
 and the legend slide right by its width, and the globe centres in the
 uncovered part (`viewer.setInsets`, a translation of the projection,
