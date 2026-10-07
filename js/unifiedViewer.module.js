@@ -1939,9 +1939,9 @@ uniform float uReferenceSpeed;
       const residual = whole.multiply(canonicalQuaternion(lat, lon).invert());
       let roll = THREE.MathUtils.radToDeg(2 * Math.atan2(residual.z, residual.w));
       if (roll > 180) roll -= 360; else if (roll <= -180) roll += 360;
-      return { lat, lon, zoom: state.zoom, roll };
+      return { lat, lon, zoom: state.zoom, roll, x: state.pan.x, y: state.pan.y };
     },
-    setView({ lat = null, lon = null, zoom = null, roll = null } = {}) {
+    setView({ lat = null, lon = null, zoom = null, roll = null, x = null, y = null } = {}) {
       if (lat !== null || lon !== null || roll !== null) {
         const current = this.view();
         sphereQuaternion.copy(canonicalQuaternion(lat ?? current.lat, lon ?? current.lon));
@@ -1951,6 +1951,8 @@ uniform float uReferenceSpeed;
         updateRotation();
       }
       if (zoom !== null) state.zoom = Math.max(10, Math.min(zoom, 10000));
+      if (x !== null) state.pan.x = x;
+      if (y !== null) state.pan.y = y;
       viewState.version++;
     },
     projectPoint,

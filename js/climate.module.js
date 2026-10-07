@@ -410,6 +410,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       url.searchParams.set('lon', tenth(orientation.lon));
       url.searchParams.set('zoom', String(Math.round(orientation.zoom)));
       if (Math.abs(orientation.roll) >= 0.05) url.searchParams.set('roll', tenth(orientation.roll)); else url.searchParams.delete('roll');
+      for (const axis of ['x', 'y']) { const offset = Math.round(1e4 * orientation[axis]) / 1e4; if (offset) url.searchParams.set(axis, String(offset)); else url.searchParams.delete(axis); }
     }
     if (running) url.searchParams.delete('paused'); else url.searchParams.set('paused', '');
     history.replaceState(null, '', url);
