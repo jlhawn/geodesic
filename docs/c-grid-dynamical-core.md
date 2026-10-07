@@ -2980,7 +2980,7 @@ N=128.
 
 The settings panel stacks its rows under their captions and lists the
 overlays by name and unit, with the chosen one's note. Its first row is
-the projection, a segmented control of two equal icons: a globe with
+the projection, two equal segments each holding an icon: a globe with
 meridians for the orthographic (in the Satellite mode, perspective)
 view and the Equal Earth outline for the map, named by their hover tips
 and accessible labels. On a desktop it
