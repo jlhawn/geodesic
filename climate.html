@@ -17,7 +17,7 @@
     button.flat.selected { background: #4a4a4a; color: #ffe8a0; }
     button.flat:disabled { color: #666; cursor: default; background: transparent; }
     select { background: #222; color: #ddd; border: 1px solid #555; border-radius: 4px; font: inherit; font-size: 13px; padding: 1px 4px; }
-    #clock { position: absolute; left: calc(12px + var(--drawer)); top: 12px; z-index: 11; display: flex; align-items: center; gap: 10px; padding: 8px 12px; max-width: calc(100% - 100px - var(--drawer)); transition: left 0.3s ease; }
+    #clock { position: absolute; left: calc(12px + var(--drawer)); top: 12px; z-index: 11; display: flex; align-items: center; gap: 10px; padding: 8px 12px; max-width: calc(100% - 100px - var(--drawer)); transition: left 0.3s cubic-bezier(0.33, 1, 0.68, 1); }
     #clock .control { font-size: 22px; padding: 2px 10px; }
     #date, #rate { font-family: ui-monospace, Menlo, Consolas, monospace; }
     #date { font-size: 15px; }
@@ -27,7 +27,7 @@
     #snapshotsButton:hover { color: #fff; }
     #snapshotsButton svg { display: block; }
     #snapshotsButton { right: 12px; top: 12px; }
-    #bottom { position: absolute; left: calc(12px + var(--drawer)); bottom: 12px; z-index: 11; display: flex; align-items: stretch; max-width: calc(100% - 24px - var(--drawer)); transition: left 0.3s ease; }
+    #bottom { position: absolute; left: calc(12px + var(--drawer)); bottom: 12px; z-index: 11; display: flex; align-items: stretch; max-width: calc(100% - 24px - var(--drawer)); transition: left 0.3s cubic-bezier(0.33, 1, 0.68, 1); }
     #menu { border: 0; background: transparent; color: #ddd; padding: 6px 10px; display: flex; align-items: center; cursor: pointer; border-radius: 8px; }
     #menu:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
     #menu svg { display: block; }
@@ -42,8 +42,8 @@
     .scaleRow { display: flex; align-items: flex-start; gap: 8px; }
     .scaleRow > div { min-width: 0; }
     .scaleRow.hidden { display: none; }
-    #panel { position: absolute; left: 0; top: 0; bottom: 0; width: var(--drawer-width); box-sizing: border-box; z-index: 10; padding: 6px 16px 12px; display: grid; grid-template-columns: 1fr; align-content: start; overflow-y: auto; overscroll-behavior: contain; border-radius: 0 14px 14px 0; background: rgb(26, 26, 26); font-size: 15px; transition: transform 0.3s ease, visibility 0s linear 0s; }
-    #panel.hidden { transform: translateX(-100%); visibility: hidden; transition: transform 0.3s ease, visibility 0s linear 0.3s; }
+    #panel { position: absolute; left: 0; top: 0; bottom: 0; width: var(--drawer-width); box-sizing: border-box; z-index: 10; padding: 6px 16px 12px; display: grid; grid-template-columns: 1fr; align-content: start; overflow-y: auto; overscroll-behavior: contain; border-radius: 0 14px 14px 0; background: rgb(26, 26, 26); font-size: 15px; transition: transform 0.3s cubic-bezier(0.33, 1, 0.68, 1), visibility 0s linear 0s; }
+    #panel.hidden { transform: translateX(-100%); visibility: hidden; transition: transform 0.3s cubic-bezier(0.33, 1, 0.68, 1), visibility 0s linear 0.3s; }
     #panel .label { color: #999; padding: 10px 0 4px; border-top: 1px solid #333; font-size: 13px; }
     #panel > #sheetHandle + .label { border-top: 0; }
     #panel .twin { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 16px; }

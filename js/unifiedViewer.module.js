@@ -1319,12 +1319,13 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
   /*
    * setInsets() centres the view in the part of the canvas that page
    * elements leave uncovered: the picture moves up by `inset.shift` and
-   * right by `inset.shiftX` pixels, easing towards the targets, through a
-   * translation of the projection itself, so the zoom and the pan keep
+   * right by `inset.shiftX` pixels, easing towards the targets over the
+   * 0.3 s in which the page's panel slides, so the two move together,
+   * through a translation of the projection itself, so the zoom and the pan keep
    * their meaning and the raycaster (which reads the projection) stays exact.
    */
-  const inset = { target: 0, shift: 0, targetX: 0, shiftX: 0, matrix: new THREE.Matrix4() };
-  const easeInset = (shift, target) => (Math.abs(target - shift) > 0.5 ? shift + 0.25 * (target - shift) : target);
+  const inset = { target: 0, shift: 0, targetX: 0, shiftX: 0, from: 0, fromX: 0, since: 0, matrix: new THREE.Matrix4() };
+  const INSET_SECONDS = 0.3;
   function applyInset(target) {
     if (!inset.shift && !inset.shiftX) return;
     target.projectionMatrix.premultiply(inset.matrix.makeTranslation(2 * inset.shiftX / container.clientWidth, 2 * inset.shift / container.clientHeight, 0));
@@ -1357,8 +1358,9 @@ ${shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragme
       if (projected.userData.shader) projected.userData.shader.uniforms.uBlend.value = viewState.blend;
     }
     if (inset.shift !== inset.target || inset.shiftX !== inset.targetX) {
-      inset.shift = easeInset(inset.shift, inset.target);
-      inset.shiftX = easeInset(inset.shiftX, inset.targetX);
+      const part = Math.min(1, (performance.now() - inset.since) / (1000 * INSET_SECONDS)), eased = 1 - (1 - part) ** 3;
+      inset.shift = part < 1 ? inset.from + (inset.target - inset.from) * eased : inset.target;
+      inset.shiftX = part < 1 ? inset.fromX + (inset.targetX - inset.fromX) * eased : inset.targetX;
       viewState.version++;
     }
 
@@ -1965,7 +1967,12 @@ uniform float uReferenceSpeed;
       return out;
     },
     pixelsPerUnit: () => container.clientHeight / viewHeight(),
-    setInsets({ top = 0, bottom = 0, left = 0, right = 0 } = {}) { inset.target = (bottom - top) / 2; inset.targetX = (left - right) / 2; },
+    setInsets({ top = 0, bottom = 0, left = 0, right = 0 } = {}) {
+      const target = (bottom - top) / 2, targetX = (left - right) / 2;
+      if (target === inset.target && targetX === inset.targetX) return;
+      inset.from = inset.shift; inset.fromX = inset.shiftX; inset.since = performance.now();
+      inset.target = target; inset.targetX = targetX;
+    },
     viewVersion: () => viewState.version,
     takeBusyTime() { const ms = busy; busy = 0; return ms; },
     dispose: () => {
