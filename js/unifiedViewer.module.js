@@ -86,6 +86,7 @@ const EARTH_RADIUS = 6.371e6, VERTICAL_EXAGGERATION = 1, METRE = VERTICAL_EXAGGE
 const SCALE_HEIGHT = 8000 * METRE, AEROSOL_HEIGHT = 1500 * METRE, OZONE_LOW = 1 + 15000 * METRE, OZONE_HIGH = 1 + 35000 * METRE;
 const RAYLEIGH = [0.06, 0.12, 0.29], AEROSOL = [0.05, 0.06, 0.07], OZONE = [0.035, 0.025, 0.003];
 const CLOUD_ROUGHNESS = 0.2, CLOUD_TINT = 2.5, CLOUD_WARMTH_RISE = 1, DAY_START = 0.05, DAY_FULL = 0.175, NIGHT_DEEP = -0.35, CAMERA_TOE = 0.08, TOE_SATURATION = 0.5, CLOUD_RELIEF = 20;
+const SUNSET_START = 0.08, SUNSET_ORANGE = 0.08, SUNSET_PINK = 0.1, SUNSET_PURPLE = 0.12, SUNSET_DIM = 0.3, SUNSET_GONE = -0.1;
 const glsl = (x) => { const s = Number(x).toPrecision(9); return /[.e]/.test(s) ? s : `${s}.0`; };
 const glslVec3 = (v) => `vec3(${v.map(glsl).join(', ')})`;
 
@@ -293,6 +294,15 @@ const vec3 DAY_AIR = vec3(0.45, 0.65, 1.0);
 const vec3 DAY_RIM = vec3(0.1, 0.3, 1.0);
 float daylight(float mu) { return smoothstep(${glsl(DAY_START)}, ${glsl(DAY_FULL)}, mu); }
 float dayRim(float mu) { return smoothstep(-0.08, 0.025, mu); }
+const vec3 SET_ORANGE = vec3(1.0, 0.45, 0.12), SET_PINK = vec3(1.0, 0.35, 0.55), SET_PURPLE = vec3(0.45, 0.2, 0.75);
+float limbTail(float mu) { return smoothstep(${glsl(SUNSET_GONE)}, 0.0, mu); }
+float limbFade(float mu) { return mix(${glsl(SUNSET_DIM)} * smoothstep(${glsl(SUNSET_GONE)}, ${glsl(DAY_START)}, mu), 1.0, daylight(mu)); }
+vec3 limbHue(float mu) {
+  float down = max(${glsl(SUNSET_START)} - mu, 0.0);
+  vec3 hue = mix(DAY_RIM, SET_ORANGE, smoothstep(0.0, ${glsl(SUNSET_ORANGE)}, down));
+  hue = mix(hue, SET_PINK, smoothstep(${glsl(SUNSET_ORANGE)}, ${glsl(SUNSET_PINK)}, down));
+  return mix(hue, SET_PURPLE, smoothstep(${glsl(SUNSET_PINK)}, ${glsl(SUNSET_PURPLE)}, down));
+}
 vec3 dayBeam(float mu) {
   float sunHeight = max(mu, 0.0);
   float low = min(sunHeight, 0.5);
@@ -1175,6 +1185,14 @@ vec3 paletteColor(float t) {
    * stretches the drawn air well past the real scale height, a pixel holds
    * the whole band and shows its light summed over the band's real heights,
    * which is the thin red-orange ring of a sunset seen from far away.
+   * The rim's hue follows the sun's height at the closest point, in cosine:
+   * blue until the sun is SUNSET_START up, where the clouds below begin to
+   * warm, orange once it has come down SUNSET_ORANGE from there (the
+   * horizon), pink by SUNSET_PINK and purple by SUNSET_PURPLE. Its
+   * brightness falls with the surface's daylight to SUNSET_DIM of the day
+   * rim's by DAY_START and on to nothing by SUNSET_GONE, where the band
+   * ends too, and the band's own colours show through wherever the band is
+   * the brighter.
    */
   const GLOW_PIXELS = 0.6, GLOW_LARGEST = 1 / 60, GLOW_CUT = 8, DAY_RIM_HEIGHT = 0.005, DAY_RIM_CUT = 6, GLOW_SHELL = 1 + GLOW_CUT * GLOW_LARGEST;
   const glow = {
@@ -1224,9 +1242,10 @@ void main() {
         + 1.2 * limbLight(up * (1.0 + 1.4 * SCALE_HEIGHT), ray, sun) + 3.0 * limbLight(up * (1.0 + 3.5 * SCALE_HEIGHT), ray, sun)) / ${glsl(GLOW_CUT)};
       light = mix(light, whole * ${glsl(GLOW_CUT / 1.5)} * exp(-h / 1.5) / (1.0 - exp(${glsl(-GLOW_CUT / 1.5)})), far);
     }
-    light *= 1.0 - smoothstep(${glsl(GLOW_CUT - 2)}, ${glsl(GLOW_CUT)}, h);
+    light *= (1.0 - smoothstep(${glsl(GLOW_CUT - 2)}, ${glsl(GLOW_CUT)}, h)) * limbTail(mu) * twilight;
   }
-  if (twilight < 1.0) light = mix(1.2 * max(exp(-hRim) - exp(-${glsl(DAY_RIM_CUT)}), 0.0) / (1.0 - exp(-${glsl(DAY_RIM_CUT)})) * dayRim(mu) * DAY_RIM, light, twilight);
+  vec3 rim = 1.2 * max(exp(-hRim) - exp(-${glsl(DAY_RIM_CUT)}), 0.0) / (1.0 - exp(-${glsl(DAY_RIM_CUT)})) * limbFade(mu) * limbHue(mu);
+  light += rim * (1.0 - twilight * clamp(dot(light, BRIGHTNESS) / max(dot(rim, BRIGHTNESS), 1.0e-6), 0.0, 1.0));
   gl_FragColor = vec4(uFade * uSun * light, 1.0);
   #include <colorspace_fragment>
 }`,
