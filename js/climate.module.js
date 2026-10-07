@@ -7,7 +7,7 @@ import { sigmaInterfaces } from "./dynamics/sigmaCore.module.js";
 import { LAYER_BOTTOMS } from "./ocean/layered.module.js";
 import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
-import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot } from "./snapshots.module.js";
+import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot, listRuns, deleteRun, runStore } from "./snapshots.module.js";
 import { Stats } from "./stats.module.js";
 import { pickDevice, isMobileBrowser, probeN, PROBE_VERSION, DESKTOP_MAX_N, MOBILE_MAX_N } from "./deviceChoice.module.js";
 import { defaultRunFor } from "./defaultRun.module.js";
@@ -336,7 +336,7 @@ const VIEW_NOTES = [
   ['Outgoing longwave radiation', 'Infrared leaving the top of the atmosphere: low over cold cloud tops and the poles, high over clear warm regions.'],
   ['Isobars / Height lines', 'Contours of surface pressure at the surface, of geopotential height on a pressure level, at the chosen interval.'],
   ['Frame rate', 'How often the page redraws, in frames per second, in the top-right corner; click it to switch to the milliseconds between frames and, where the browser reports it, the memory in use.'],
-  ['Snapshots', 'Save the paused state in this browser, restore it later, download one of the runs saved on the server, or import and export snapshot files to share them.'],
+  ['Snapshots', 'Save the paused state in this browser, restore it later, download one of the runs saved on the server, or import and export snapshot files to share them. The run the page starts from stays in this browser once it has been downloaded, so later visits load it without the network; the Built in tab shows what is kept and can forget it.'],
 ];
 const NOTES = new Map(VIEW_NOTES);
 
@@ -1023,13 +1023,17 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     const roles = new Map(Object.entries(defaults).map(([n, file]) => [href(file), Number(n) === MOBILE_MAX_N ? 'the default on phones and tablets' : Number(n) === DESKTOP_MAX_N ? 'the default on desktops' : `the default at N=${n}`]));
     if (from && !roles.has(href(from))) roles.set(href(from), 'this page\'s run');
     const own = defaults[maxN] ? href(defaults[maxN]) : null, rank = (entry) => (entry.url === own ? 2 : roles.has(entry.url) ? 1 : 0);
+    const kept = await listRuns().catch(() => []);
     const builtin = (await builtinSnapshots([...Object.values(defaults), ...(from ? [from] : [])])).sort((a, b) => rank(b) - rank(a));
+    for (const run of kept) if (!builtin.some((entry) => entry.url === run.url)) builtin.push({ file: run.url.replace(/.*\//, ''), url: run.url, name: run.name });
     builtinList.replaceChildren(...builtin.map((entry) => {
-      const local = list.find((meta) => meta.source === entry.url);
+      const local = list.find((meta) => meta.source === entry.url), run = kept.find((run) => run.url === entry.url);
       const day = stateDay(entry.file);
-      return item(entry.name, `${day !== null ? `day ${day}` : ''}${roles.has(entry.url) ? ` · ${roles.get(entry.url)}` : ''}`, local ? 'downloaded' : '', [
+      const tags = [...(local ? ['downloaded'] : []), ...(run ? [`kept in this browser · ${(run.bytes / 1048576).toFixed(0)} MB`] : [])];
+      return item(entry.name, `${day !== null ? `day ${day}` : ''}${roles.has(entry.url) ? ` · ${roles.get(entry.url)}` : ''}`, tags.join(' · '), [
         [local ? 'Restore' : 'Download and restore', async () => { const id = local ? local.id : await download(entry); if (id) restoreSnapshot(id); }],
         ...(local ? [] : [['Download', async () => { await download(entry); }]]),
+        ...(run ? [['Forget', async () => { await deleteRun(run.id); refreshSnapshots(); }]] : []),
       ]);
     }));
     document.getElementById('builtinNote').style.display = builtin.length ? '' : 'none';
@@ -1038,7 +1042,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
   async function download(entry) {
     try {
       document.getElementById('date').textContent = `downloading ${entry.name}…`;
-      const saved = await fetchState(entry.url);
+      const saved = await fetchState(entry.url, null, { store: runStore });
       const { meta, data } = toSnapshot(saved, entry.url);
       const id = await saveSnapshot({ name: entry.name, created: Date.now(), ...meta }, data);
       await refreshSnapshots();

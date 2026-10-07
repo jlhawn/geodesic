@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { readFileSync, readdirSync } from 'node:fs';
-import { decodeState, encodeState, fetchState, stateName, listedStates, stateDay } from '../js/stateFile.module.js';
+import { createHash } from 'node:crypto';
+import { decodeState, encodeState, fetchState, runId, stateName, listedStates, stateDay } from '../js/stateFile.module.js';
 
 const state = { N: 4, day: 12, pi: [1e5, 99999.5], theta: [[300, 301], [302, 303]] };
 const text = JSON.stringify(state);
@@ -212,10 +213,92 @@ test("fetchState reads the page's default states in parts as decodeState reads t
 });
 
 test('a directory index lists JSON, parts and binary states, and their days', () => {
-  const html = ['layered64_state_day910.json', 'ocean64_state_day930.parts.json', 'ocean64_state_day930.json.gz.000', 'spin128c_day0678.bin', 'spin128c_day0650.bin.gz', 'layered64_day030.json', 'spin128c.log']
+  const html = ['layered64_state_day910.json', 'ocean64_state_day930.parts.json', 'ocean64_state_day930.json.gz.000', 'spin128c_day0678.bin', 'spin128c_day0650.bin.gz', 'eleven64_day1825.parts.json', 'eleven64_day1825.bin.gz.000', 'layered64_day030.json', 'spin128c.log']
     .map((file) => `<li><a href="${encodeURIComponent(file)}">${file}</a></li>`).join('\n');
-  assert.deepEqual(listedStates(html), ['layered64_state_day910.json', 'ocean64_state_day930.parts.json', 'spin128c_day0650.bin.gz', 'spin128c_day0678.bin']);
+  assert.deepEqual(listedStates(html), ['eleven64_day1825.parts.json', 'layered64_state_day910.json', 'ocean64_state_day930.parts.json', 'spin128c_day0650.bin.gz', 'spin128c_day0678.bin']);
   assert.equal(stateDay('runs/spin128c_day0678.bin'), 678);
   assert.equal(stateDay('runs/layered64_state_day910.json'), 910);
   assert.equal(stateDay('runs/notes.txt'), null);
+});
+
+const hex = (bytes) => createHash('sha256').update(bytes).digest('hex');
+
+function memoryStore() {
+  const chunks = new Map(), runs = new Map();
+  const store = {
+    chunks, runs, trims: 0,
+    async getChunk(sha256) { return chunks.has(sha256) ? new Uint8Array(chunks.get(sha256)) : null; },
+    async putChunk(sha256, bytes) { chunks.set(sha256, bytes.slice()); },
+    async runForUrl(url) { return [...runs.values()].find((run) => run.url === url) ?? null; },
+    async putRun(run) { runs.set(run.id, run); },
+    async trimRuns() { store.trims++; },
+  };
+  return store;
+}
+
+function hashedRun(name, gz, { corrupt = false, hashes = true } = {}) {
+  const cut = Math.floor(gz.length / 2), pieces = [gz.subarray(0, cut), gz.subarray(cut)];
+  const parts = pieces.map((bytes, k) => ({ file: `${name}.json.gz.00${k}`, bytes: bytes.length, ...(hashes ? { sha256: hex(bytes) } : {}) }));
+  const served = pieces.map((bytes) => bytes.slice());
+  if (corrupt) served[1][0] ^= 0xff;
+  const url = `http://h/runs/${name}.parts.json`;
+  const files = { [url]: new TextEncoder().encode(JSON.stringify({ name, description: 'a test', parts })) };
+  parts.forEach((part, k) => { files[`http://h/runs/${part.file}`] = served[k]; });
+  return { url, parts, files };
+}
+
+test('a run whose manifest hashes its parts is kept in the store and loads from it, even without the network', async () => {
+  const gz = gzipSync(text), { url, parts, files } = hashedRun('b_state_day3', gz);
+  const realFetch = globalThis.fetch;
+  let fetches = [];
+  globalThis.fetch = async (u) => { fetches.push(u); return files[u] ? new Response(files[u]) : new Response('', { status: 404 }); };
+  try {
+    const store = memoryStore(), sources = [];
+    assert.deepEqual(await fetchState(url, (received, total, source) => sources.push(source), { store }), state);
+    assert.ok(sources.length > 0 && sources.every((source) => source === 'network'));
+    assert.deepEqual([...store.chunks.keys()].sort(), parts.map((part) => part.sha256).sort());
+    assert.equal(store.runs.size, 1);
+    const [run] = store.runs.values();
+    assert.equal(run.id, await runId(parts));
+    assert.deepEqual({ name: run.name, description: run.description, url: run.url, bytes: run.bytes, parts: run.parts }, { name: 'b_state_day3', description: 'a test', url, bytes: gz.length, parts });
+    assert.equal(store.trims, 1);
+
+    fetches = []; sources.length = 0;
+    assert.deepEqual(await fetchState(url, (received, total, source) => sources.push(source), { store }), state);
+    assert.deepEqual(fetches, [url]);
+    assert.ok(sources.length > 0 && sources.every((source) => source === 'store'));
+
+    globalThis.fetch = async () => { throw new TypeError('offline'); };
+    assert.deepEqual(await fetchState(url, null, { store }), state);
+    await assert.rejects(fetchState(url, null, { store: memoryStore() }), /offline/);
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test('a part whose bytes are not those its manifest hashes is refused, and the run is not kept', async () => {
+  const gz = gzipSync(text), { url, parts, files } = hashedRun('c_state_day3', gz, { corrupt: true });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u) => (files[u] ? new Response(files[u]) : new Response('', { status: 404 }));
+  try {
+    const store = memoryStore();
+    await assert.rejects(fetchState(url, null, { store }), /SHA-256/);
+    assert.equal(store.runs.size, 0);
+    assert.ok(!store.chunks.has(parts[1].sha256));
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test('a manifest without hashes loads from the network alone and leaves the store as it was', async () => {
+  const gz = gzipSync(text), { url, files } = hashedRun('d_state_day3', gz, { hashes: false });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (u) => (files[u] ? new Response(files[u]) : new Response('', { status: 404 }));
+  try {
+    const store = memoryStore();
+    assert.deepEqual(await fetchState(url, null, { store }), state);
+    assert.equal(store.chunks.size, 0);
+    assert.equal(store.runs.size, 0);
+  } finally { globalThis.fetch = realFetch; }
+});
+
+test("a run's id is the SHA-256 of its parts' hashes, one per line", async () => {
+  const parts = [{ sha256: 'a'.repeat(64) }, { sha256: 'b'.repeat(64) }];
+  assert.equal(await runId(parts), hex(`${'a'.repeat(64)}\n${'b'.repeat(64)}`));
 });

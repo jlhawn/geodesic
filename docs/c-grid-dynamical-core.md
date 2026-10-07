@@ -704,7 +704,7 @@ viewer is not ported.
 Runs from the balanced initialization with the full physics, tilt on
 from the spring equinox, N=16 unless noted; `emergence.mjs` logs the
 zonal means every 5 days and writes surface snapshots every 10 days for
-`climate.html?snapshot=`. Any panel setting can be named in the query string (`?view=space`, `?overlay=wind&level=250&animate=arrows`, `?projection=map&isobars=on`, `?palette=`, `?panel=closed`), and `?lat=&lon=&zoom=&roll=` set the globe's orientation and `?x=&y=` the view's offset from the globe's centre, so a link opens an exact view. The trough metric is the zonal-mean surface
+`climate.html?snapshot=`. Any panel setting can be named in the query string (`?view=space`, `?overlay=wind&level=250&animate=arrows`, `?projection=map&isobars=on`, `?palette=`, `?panel=closed`), and `?lat=&lon=&zoom=&roll=` set the globe's orientation and `?x=&y=` the view's offset from the globe's centre, so a link opens an exact view. The run the page starts from, `runs/<name>.parts.json` listing gzip parts of at most 10 MB each with its SHA-256 and the run's id, the SHA-256 of those hashes one per line (`scripts/splitState.mjs` writes both), is kept in the browser's IndexedDB once downloaded, each part under its hash, so a later visit loads it without the network and a changed run fetches only the parts it lacks; the Snapshots dialog's Built in tab lists what is kept and can forget it, and the least recently used runs go once the kept parts pass 1 GB. The trough metric is the zonal-mean surface
 pressure at 35° minus that at 65° in each hemisphere; it starts at
 −34 hPa because the balanced initialization has polar highs.
 
@@ -12708,7 +12708,7 @@ scripts/
   subgridTerrain.py         M22: GMTED2010's 30″ tiles assembled and filtered to 2′30″ grids in the download cache
   subgridTerrain.mjs        M22: data/subgrid_N<N>.bin from those grids per mesh
   subgridTerrainHand.py, subgridTerrainCells.mjs  M22: a few cells recomputed by direct sums from the 30″ grid
-  splitState.mjs            a saved state gzipped into parts for the page
+  splitState.mjs            a saved state gzipped into hashed parts and their manifest for the page
 test/
   mesh.test.mjs, operators.test.mjs, trisk.test.mjs, sw_tc2.mjs, sw_tc6.mjs,
   sw_galewsky.mjs, rest_state.mjs, held_suarez.mjs, baseline_compare.mjs

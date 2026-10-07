@@ -12,6 +12,7 @@ import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName, savedLevels } from './stateFile.module.js';
+import { runStore } from './snapshots.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
 import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, frameIsFinite } from './frames.module.js';
 import { createPacer } from './pace.module.js';
@@ -266,14 +267,14 @@ const status = (text, fraction = null) => self.postMessage({ type: 'status', tex
  */
 async function fetchWithProgress(url, from, to) {
   const name = stateName(url.replace(/.*\//, '').replace(/[?#].*/, ''));
-  let reported = -1;
+  let reported = null;
   status(`loading ${name}…`, from);
-  return fetchState(url, (received, total) => {
+  return fetchState(url, (received, total, source) => {
     if (!total) return;
     if (received >= total) { status(`parsing ${name}…`, to); return; }
-    const percent = Math.floor(100 * received / total);
-    if (percent !== reported) { reported = percent; status(`loading ${name}: ${(received / 1048576).toFixed(0)} of ${(total / 1048576).toFixed(0)} MB`, from + (to - from) * received / total); }
-  });
+    const percent = Math.floor(100 * received / total), step = `${source} ${percent}`;
+    if (step !== reported) { reported = step; status(`${source === 'store' ? `loading ${name} from this browser` : `downloading ${name}`}: ${(received / 1048576).toFixed(0)} of ${(total / 1048576).toFixed(0)} MB`, from + (to - from) * received / total); }
+  }, { store: runStore });
 }
 
 /*

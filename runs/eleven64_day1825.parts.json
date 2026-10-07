@@ -1,33 +1,41 @@
 {
  "name": "eleven64_day1825",
+ "id": "81a275bdea4faf9582c6dfbee08dc758cc13cdaa95f1ea0aa22cf26a6e56cd97",
  "parts": [
   {
    "file": "eleven64_day1825.bin.gz.000",
-   "bytes": 10485760
+   "bytes": 10485760,
+   "sha256": "4f0373cdfd0a51c60efa98e63a20e310712c009d92a099e9e1fd95b0c8cf79c2"
   },
   {
    "file": "eleven64_day1825.bin.gz.001",
-   "bytes": 10485760
+   "bytes": 10485760,
+   "sha256": "6830f0b58e977bb79c0b4c7f29183f4fdd89745a0d2e20a3844f6381b6e6803e"
   },
   {
    "file": "eleven64_day1825.bin.gz.002",
-   "bytes": 10485760
+   "bytes": 10485760,
+   "sha256": "e3cbdac29ccb3a799a1aeff90be6c8fc6192e7a5c492242ff4c20c219b41fca8"
   },
   {
    "file": "eleven64_day1825.bin.gz.003",
-   "bytes": 10485760
+   "bytes": 10485760,
+   "sha256": "e28d4ffac0246fa9684cfe4b3a249a93a4b53d7778bc186cf6127c341f9c9925"
   },
   {
    "file": "eleven64_day1825.bin.gz.004",
-   "bytes": 10485760
+   "bytes": 10485760,
+   "sha256": "ff33d4232a0e92c4f73c60f22ca63e34c8e016a10d6be48d00526f60da4d8331"
   },
   {
    "file": "eleven64_day1825.bin.gz.005",
-   "bytes": 10485760
+   "bytes": 10485760,
+   "sha256": "6ca3169580cc8121692045986631a17900385288a7f7c3ee3e4db8d6c495d092"
   },
   {
    "file": "eleven64_day1825.bin.gz.006",
-   "bytes": 1967371
+   "bytes": 1967371,
+   "sha256": "92d01050eaf4bf71d41e5cb6c46356c98eb41518579f7a0cbe60b4da2d7934a2"
   }
  ]
 }
