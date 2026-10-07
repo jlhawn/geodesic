@@ -46,6 +46,8 @@
     #panel.hidden { transform: translateX(-100%); visibility: hidden; transition: transform 0.3s ease, visibility 0s linear 0.3s; }
     #panel .label { color: #999; padding: 10px 0 4px; border-top: 1px solid #333; font-size: 13px; }
     #panel > #sheetHandle + .label { border-top: 0; }
+    #panel .twin { display: flex; flex-wrap: wrap; justify-content: space-between; column-gap: 16px; }
+    #panel .twin .label { border-top: 0; }
     #panel .options { display: flex; flex-wrap: wrap; gap: 3px 8px; align-items: center; padding: 2px 0 10px; }
     #panel .options.stacked { flex-direction: column; align-items: stretch; gap: 8px; }
     #panel .unit { color: #ddd; }
@@ -122,7 +124,7 @@
     .phone #panel.hidden { display: none; }
     .phone #sheetHandle { display: flex; justify-content: center; align-items: center; height: 26px; position: sticky; top: 0; z-index: 1; background: rgb(26, 26, 26); touch-action: none; cursor: pointer; }
     .phone #sheetHandle::before { content: ''; width: 40px; height: 5px; border-radius: 3px; background: #666; }
-    .phone #panel #sheetHandle + .label { padding-top: 2px; }
+    .phone #panel #sheetHandle + .label, .phone #panel #sheetHandle + .twin .label { padding-top: 2px; }
     .phone .tabs button { padding: 6px 11px; font-size: 15px; }
     .phone .modal { align-items: stretch; }
     .phone .dialog { width: 100%; max-height: none; border-radius: 0; box-sizing: border-box; padding: calc(12px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left)); }
@@ -141,8 +143,10 @@
   <button id="snapshotsButton" class="box" title="snapshots" aria-label="snapshots"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg></button>
   <div id="panel" class="box hidden">
     <div id="sheetHandle" title="close"></div>
-    <span class="label">Projection</span>
-    <div class="options" id="projectionOptions" data-setting="projection"><div class="segmented"><button data-value="sphere" aria-label="Orthographic" data-tip="Orthographic"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2v20M3.34 7h17.32M3.34 17h17.32"/><ellipse cx="12" cy="12" rx="5" ry="10"/></svg></button><button data-value="map" aria-label="Equal Earth" data-tip="Equal Earth"><svg viewBox="0 0 44 24" width="40" height="22" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.83 2H34.17C38.57 4.05 42.5 7.52 42.5 12 42.5 16.48 38.57 19.95 34.17 22H9.83C5.43 19.95 1.5 16.48 1.5 12 1.5 7.52 5.43 4.05 9.83 2Z"/><path d="M1.5 12h41M22 2v20M3.26 7h37.48M3.26 17h37.48"/><path d="M28.08 2C30.29 4.05 32.25 7.52 32.25 12 32.25 16.48 30.29 19.95 28.08 22M15.92 2C13.71 4.05 11.75 7.52 11.75 12 11.75 16.48 13.71 19.95 15.92 22"/></svg></button></div></div>
+    <div class="twin">
+      <div><span class="label">Projection</span><div class="options" id="projectionOptions" data-setting="projection"><div class="segmented"><button data-value="sphere" aria-label="Orthographic" data-tip="Orthographic"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2v20M3.34 7h17.32M3.34 17h17.32"/><ellipse cx="12" cy="12" rx="5" ry="10"/></svg></button><button data-value="map" aria-label="Equal Earth" data-tip="Equal Earth"><svg viewBox="0 0 44 24" width="40" height="22" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.83 2H34.17C38.57 4.05 42.5 7.52 42.5 12 42.5 16.48 38.57 19.95 34.17 22H9.83C5.43 19.95 1.5 16.48 1.5 12 1.5 7.52 5.43 4.05 9.83 2Z"/><path d="M1.5 12h41M22 2v20M3.26 7h37.48M3.26 17h37.48"/><path d="M28.08 2C30.29 4.05 32.25 7.52 32.25 12 32.25 16.48 30.29 19.95 28.08 22M15.92 2C13.71 4.05 11.75 7.52 11.75 12 11.75 16.48 13.71 19.95 15.92 22"/></svg></button></div></div></div>
+      <div><span class="label">Graticule</span><div class="options" data-setting="graticule"><div class="segmented"><button data-value="off">Off</button><button data-value="10">10°</button><button data-value="15">15°</button><button data-value="30">30°</button></div></div></div>
+    </div>
     <span class="label">Mode</span>
     <div class="options" data-setting="view"><div class="segmented"><button data-value="space">Satellite</button><button data-value="atmosphere">Atmosphere</button><button data-value="ocean">Ocean</button></div></div>
     <span class="label" id="animateLabel">Wind animation</span>
@@ -159,8 +163,6 @@
     <div class="options" id="frameOptions"><label class="slider" data-tip="Where the camera keeps station: over one point of the surface, or still against the stars while the planet turns">Geosynchronous <input type="range" id="frameSlider" min="0" max="1" step="0.01"> Stars</label></div>
     <span class="label" id="isolineLabel">Isobars</span>
     <div class="options" id="isolineOptions" data-setting="isolines"><div class="segmented" id="isolineSegments"></div><span class="unit" id="isolineUnit">hPa</span></div>
-    <span class="label">Graticule</span>
-    <div class="options" data-setting="graticule"><div class="segmented"><button data-value="off">Off</button><button data-value="10">10°</button><button data-value="15">15°</button><button data-value="30">30°</button></div></div>
     <span class="label hidden" id="paletteLabel">Palette</span>
     <div class="options hidden" id="paletteOptions"></div>
     <span class="label">Frame rate</span>

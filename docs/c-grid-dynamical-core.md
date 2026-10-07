@@ -2983,7 +2983,8 @@ overlays by name and unit, with the chosen one's note. Its first row is
 the projection, two equal segments each holding an icon: a globe with
 meridians for the orthographic (in the Satellite mode, perspective)
 view and the Equal Earth outline for the map, named by their hover tips
-and accessible labels. On a desktop it
+and accessible labels, with the graticule's spacing beside them on the
+same row. On a desktop it
 is a drawer at the left edge, opened and closed by the gear: the clock
 and the legend slide right by its width, and the globe centres in the
 uncovered part (`viewer.setInsets`, a translation of the projection,
