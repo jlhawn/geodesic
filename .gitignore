@@ -5,5 +5,7 @@ runs/*
 !runs/eleven128_day1825.bin.gz.*
 !runs/eleven64_day1825.parts.json
 !runs/eleven64_day1825.bin.gz.*
+!runs/twelve192_day0020.parts.json
+!runs/twelve192_day0020.bin.gz.*
 node_modules/
 node_modules

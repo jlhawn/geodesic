@@ -1,0 +1,281 @@
+{
+ "name": "twelve192_day0020",
+ "id": "eacb910a8d8508fb82a14bbb9e2763c8c402fb472bbb128c6477bed71d30ceca",
+ "parts": [
+  {
+   "file": "twelve192_day0020.bin.gz.000",
+   "bytes": 10485760,
+   "sha256": "ce0e32a17f50380313851d5b1fdaacf34a1cd5d7fa33fc333b991721c1d0eb3d"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.001",
+   "bytes": 10485760,
+   "sha256": "c9e9e01a53edeab2b4f6e4876b6642658db35f1a3654f5e688d43a712936a7e3"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.002",
+   "bytes": 10485760,
+   "sha256": "623a8ad41367584bca81e72c18f281c1977ea9a804203b67668c48a8ba8206b3"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.003",
+   "bytes": 10485760,
+   "sha256": "1ad204991dd17301276c9895428eaf5e096c81bd4ddfa573f817ca16ab542ffd"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.004",
+   "bytes": 10485760,
+   "sha256": "d6db8de75849278f582c36c90ef844d44b9a13a3ff5846997740036d3417afdf"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.005",
+   "bytes": 10485760,
+   "sha256": "9cac71db6d5f6e068b4d8923fe338dc80068d0470a5646f24b928130c591b032"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.006",
+   "bytes": 10485760,
+   "sha256": "3b8ea879a8447447a73d85c41bef6ca442c8890946ce4afc4562c1dc49ce1097"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.007",
+   "bytes": 10485760,
+   "sha256": "195b7fd7b8a7e39145d4a1db1b89acf34cdda5e17ee2e121331e758884cc837c"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.008",
+   "bytes": 10485760,
+   "sha256": "19ef2915486639e3273c720fb6cfa078d034c274a8d99ae855193cff04960b91"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.009",
+   "bytes": 10485760,
+   "sha256": "2ddc79454644c8f89eb29317694fcc53ec315bc6634cd59613ecb7955d92048d"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.010",
+   "bytes": 10485760,
+   "sha256": "fd5cb07909a9ca10db783027c3e1331a1b3593fc3217b8b495b9b474b59a2b71"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.011",
+   "bytes": 10485760,
+   "sha256": "c12ca4f6aea8293993fb8c2cbe71f4145c43d4963856905b7bb6ea76f76a6a60"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.012",
+   "bytes": 10485760,
+   "sha256": "569853789716cb52179cbeadcf1605c7de32770226fe093343daeba9cd08afcb"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.013",
+   "bytes": 10485760,
+   "sha256": "aa8e07852ccd1a4418c5ba8aa22813073d5c567023c4395b9dee411f9b4339bc"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.014",
+   "bytes": 10485760,
+   "sha256": "4c161be322496a03c3d753f841f7d95203412f85b184e1dde9d8d93d817279dc"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.015",
+   "bytes": 10485760,
+   "sha256": "01605334e50e7f997216a8daf0fd7579cc24abb09bcfd2ec35653c480e63a59d"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.016",
+   "bytes": 10485760,
+   "sha256": "01a6567c1acfd99a546d3d02df504656d7e622944378722de19dd7d90dff3d9f"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.017",
+   "bytes": 10485760,
+   "sha256": "dd2850720168add4e7a627399e75da565676d8dd9a3d6ba5bbbcda2b12c2b479"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.018",
+   "bytes": 10485760,
+   "sha256": "0c8ac1015bf8ae84e736bdb45bc854c281a68c727014ab133a004ecf41c8e5ae"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.019",
+   "bytes": 10485760,
+   "sha256": "7ba2ed0812af15cf6e56f692b5d5d3a9fb0db0289e51381e378ea70c644dd045"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.020",
+   "bytes": 10485760,
+   "sha256": "80ecea4d39fdd130d4e0bdb0fbc11a7ad5b3f594cf655837fa53a92ec3524c2d"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.021",
+   "bytes": 10485760,
+   "sha256": "5242f88b8b7b4ba5aa3c2f6e7d0cc340cd1347df7fba0eae01deee95d7192606"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.022",
+   "bytes": 10485760,
+   "sha256": "9ecbff48d6d3e2e9a10b6a7a9692bcabdf1d9f52bdaeb6790efeb6f3502ce060"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.023",
+   "bytes": 10485760,
+   "sha256": "52041f9f5ddcc90ed66cf9803632373793dd6675efe41b7cff1ea8de3175f92d"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.024",
+   "bytes": 10485760,
+   "sha256": "2e68b4542db029c2682faf987ca849572c89b0f507c92ca1be4a29c117a7621d"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.025",
+   "bytes": 10485760,
+   "sha256": "7310e9743e42fdc8746651b082d676a0209bdf098550a09aa6aaa683061c0e67"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.026",
+   "bytes": 10485760,
+   "sha256": "c71803a10ac34a924076850fcc6fb0333dab45d356c90e400adcf5968c592829"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.027",
+   "bytes": 10485760,
+   "sha256": "2fc91cfc58fd34134af001889090f1b54f92555be134f2446adb55b7d0629eaf"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.028",
+   "bytes": 10485760,
+   "sha256": "5ea5e1c7a5f86c4c4d754cb8185f770ae1114e8c8f3509646cd2fd5d178971f3"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.029",
+   "bytes": 10485760,
+   "sha256": "f61f3007681e3071ef656be279412a74cf4ab47fe9536a5ca559a9e372b4e31f"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.030",
+   "bytes": 10485760,
+   "sha256": "2236fab0ddf339e744518f0bc373311ec63698e3b342b5d60223af19e52767c1"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.031",
+   "bytes": 10485760,
+   "sha256": "c9307abe66c7035a2ffe58edd953e53e1c06cf40cfbff67da6e342658523e184"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.032",
+   "bytes": 10485760,
+   "sha256": "420402f5e40d54c7f31c36632b202ac9c2bec69f62f3babacd27f6d10bfa5597"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.033",
+   "bytes": 10485760,
+   "sha256": "5fb5500e03d0a864f231c44535592ee0215bfce905d2ce0365847c6e2b78c715"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.034",
+   "bytes": 10485760,
+   "sha256": "8ed9061336baf538c2bd33dc246d2f26623fd722193ef5d31e09c9b4dde481e1"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.035",
+   "bytes": 10485760,
+   "sha256": "0a5040ed612f302b57bb4e692c9fd9c81b756cc55770aa3d590c184c4178b6ad"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.036",
+   "bytes": 10485760,
+   "sha256": "3affab2b23f0a259788326273885f0b9d6ef9bdc680d4eca194c26f512ecd262"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.037",
+   "bytes": 10485760,
+   "sha256": "d6f9af21e9c4b876fb368f3dfc69733c8a02ed40b41b4433e489265863901243"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.038",
+   "bytes": 10485760,
+   "sha256": "5328ef40255c73cb42fa276046dd63e4fc9ee74a09e16af1909e002aff6b9a80"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.039",
+   "bytes": 10485760,
+   "sha256": "15e888e519e1a9f2b4b7bc5a3d8313346099ae0022ba61170f9255e8444adfb6"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.040",
+   "bytes": 10485760,
+   "sha256": "6fcdf3907b96690bac6ae5b75dd1ac3d40807638ddc421ff9b539075babe9a93"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.041",
+   "bytes": 10485760,
+   "sha256": "fe21a5e58c2155aa6104fbd78c1a0f53beedcdb1f36439fd4c4e692f36fda88f"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.042",
+   "bytes": 10485760,
+   "sha256": "bc466bd9a31febe09ca21777f282e3ab29fb8eca3bba16dc05204599d83fb778"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.043",
+   "bytes": 10485760,
+   "sha256": "59f1a30655902578ce6c3cdd4c7bb808cfafdd004e169dc1ba3c55069210fc56"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.044",
+   "bytes": 10485760,
+   "sha256": "4dedff0abbe8236fddd8a0c49e0c4b29c00a423440424e1e397f875fe2f4db12"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.045",
+   "bytes": 10485760,
+   "sha256": "2879150080291b8fffe08cea35266b8d9b9908620efc0eaa2b90b97b95dcfe14"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.046",
+   "bytes": 10485760,
+   "sha256": "ac8c8e4cdd825afb33fc02adda2a20d4b22c119e2bd1f7bce4b03060479d7cae"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.047",
+   "bytes": 10485760,
+   "sha256": "22c3c7bd91915b71cd4ddd4cdd5fda93567c24e5601c36125b799f564280280f"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.048",
+   "bytes": 10485760,
+   "sha256": "029ab510233b56f97ceb066f4177d7d6a162e01309887a584b3fa6d39bfb6473"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.049",
+   "bytes": 10485760,
+   "sha256": "33154208c965eeb72b90a722d4db8e27065a22c0de10ae0fceedb27ac0254116"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.050",
+   "bytes": 10485760,
+   "sha256": "e8753faaa9db2ca1cfa946715169e4e14f2f79a6cb02052b44507f8d255dc02b"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.051",
+   "bytes": 10485760,
+   "sha256": "9d71dba771c987bcb60da5b4e5a5a39b9d32b2097c1a86497bd138493297bf11"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.052",
+   "bytes": 10485760,
+   "sha256": "49aa3675757d972b73a2bd5a6aac0a29f69c795c76e594f2ad241eab469fb12a"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.053",
+   "bytes": 10485760,
+   "sha256": "8ac6794084796c0fc9b6886f612f35a875f6ce90284686a7a6817ec3519c2c51"
+  },
+  {
+   "file": "twelve192_day0020.bin.gz.054",
+   "bytes": 373740,
+   "sha256": "fd62204f0a19e245bca98dd267d3bb2cafe1e6d23680fcf41c380ceea0dbdff8"
+  }
+ ]
+}

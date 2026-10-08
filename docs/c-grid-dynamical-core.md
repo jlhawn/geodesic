@@ -2972,8 +2972,9 @@ N=128, 64 and 32 (for the CPU: 64, 32 and 16), capped at N=128 on
 desktop browsers and N=64 on phones and tablets, that is projected to
 clear 30 simulated hours a minute (`js/deviceChoice.module.js`). The
 chosen resolution starts from its own default run when there is one
-(`js/defaultRun.module.js`): the paired spin-up's day-810 states at
-N=128 and N=64. The choice is
+(`js/defaultRun.module.js`): spin-up eleven's day-1825 states at N=128
+and N=64, and for `?N=192` the N=192 spin-up twelve's day-20 state, an
+early one kept for trying the resolution. The choice is
 kept for the same browser and GPU, and "Test again" in the model dialog
 repeats the test. The M1 Max measures 14.2 ms a step at N=64 and runs
 N=128.
