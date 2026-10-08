@@ -2,7 +2,7 @@ import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductio
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
-import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, physicsKernel } from './physics.gpu.js';
+import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, PHYSICS_PASSES, physicsKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
@@ -12,6 +12,8 @@ import { orographyConstants, OROGRAPHY_KERNELS } from './orography.gpu.js';
 import { spongeGeometry, spongeRates as layerRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
 import { longwaveTableFor } from '../physics/longwave.module.js';
 import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveColumns, gravityWaveBreaking, gravityWaveLid } from '../physics/gravityWaves.module.js';
+
+export { PHYSICS_PASSES };
 
 const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384, MAXIMUM_SURFACE_PRESSURE = 110000;
 
@@ -877,7 +879,7 @@ export async function createGpuCore(mesh, {
   const buffers = {
     MI: storageBuffer(device, mi), MF: storageBuffer(device, mf), LV: storageBuffer(device, lv),
     S: emptyBuffer(device, 4 * L.S.total),
-    ...Object.fromEntries(['T', 'K1', 'K2', 'K3', 'K4'].map((name) => [name, emptyBuffer(device, 4 * Math.max(L.S.total, registerLength))])),
+    ...Object.fromEntries(['T', 'K1', 'K2', 'K3', 'K4'].map((name) => [name, emptyBuffer(device, 4 * Math.max(L.S.total, registerLength, name === 'K1' ? LONGWAVE_STASH_FLOATS(L.K, L.C) : 0))])),
     D: emptyBuffer(device, 4 * L.D.total), P: storageBuffer(device, new Float32Array(8)), PH: emptyBuffer(device, 4 * L.PH.total),
     FR: emptyBuffer(device, 4 * L.FR.total), FP: storageBuffer(device, new Float32Array(8)), PR: emptyBuffer(device, 32 * RING_SLOTS),
   };
@@ -898,7 +900,7 @@ export async function createGpuCore(mesh, {
   const waveLidShares = Array.from({ length: waveLid }, (_, k) => (dSigma[k] / waveLidTotal).toExponential(9)).join(', ');
   const waveConstants = (body) => body.replaceAll('GW_TESTED', waves && waves.lidTests ? '0' : String(waveLid)).replaceAll('GW_LID_SHARES', waveLidShares).replaceAll('GW_LID', String(waveLid)).replaceAll('GW_BREAKING', Array.from(waveBreaking, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_INTERMITTENT', waves && waves.breakingAmplitude ? 'true' : 'false').replaceAll('GW_SUMS', Array.from(waveSums, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SOURCE_PLUS', String(waveSource + 1)).replaceAll('GW_SOURCE', String(waveSource)).replaceAll('GW_J_PLUS', String(waveAmplitudes.length + 1)).replaceAll('GW_J', String(waveAmplitudes.length))
     .replaceAll('GW_DC', waves ? waves.speedStep.toFixed(6) : '0.0').replaceAll('GW_KH', waves ? (2 * Math.PI / waves.wavelength).toExponential(9) : '0.0').replaceAll('GW_N2_FLOOR', waves ? (waves.minimumFrequency ** 2).toExponential(9) : '0.0');
-  const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, ...(heldRadiation ? { physics: physicsKernel(true) } : {}), ...(phys.orography ? OROGRAPHY_KERNELS : {}), ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
+  const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, physics: physicsKernel(heldRadiation), longwave: longwaveKernel(heldRadiation, phys.longwaveTable.points.length), physicsSurface: physicsSurfaceKernel(heldRadiation), ...(phys.orography ? OROGRAPHY_KERNELS : {}), ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
   if (!waves) { delete kernelBodies.gravityWaves; delete kernelBodies.gravityWaveDrag; }
   if (!sponge) { delete kernelBodies.spongeMean; delete kernelBodies.spongeApply; }
   for (const [name, raw] of Object.entries(kernelBodies)) {
@@ -1065,7 +1067,7 @@ export async function createGpuCore(mesh, {
     const index = Math.round(time / dt), drags = phys.dragEvery === 1 || !(dragCall >= index - index % phys.dragEvery && dragCall <= index);
     if (drags) dragCall = index;
     compute((pass) => {
-      dispatch(pass, 'physics', g, C);
+      for (const name of PHYSICS_PASSES) dispatch(pass, name, g, C);
       dispatch(pass, 'pblDiagnose', g, C);
       if (waves && drags) dispatch(pass, 'gravityWaves', g, C);
       if (phys.orography && drags) dispatch(pass, 'orography', g, C);
