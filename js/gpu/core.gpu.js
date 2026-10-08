@@ -2,7 +2,7 @@ import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductio
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
-import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, PHYSICS_PASSES, physicsKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
+import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, PHYSICS_PASSES, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
@@ -900,7 +900,7 @@ export async function createGpuCore(mesh, {
   const waveLidShares = Array.from({ length: waveLid }, (_, k) => (dSigma[k] / waveLidTotal).toExponential(9)).join(', ');
   const waveConstants = (body) => body.replaceAll('GW_TESTED', waves && waves.lidTests ? '0' : String(waveLid)).replaceAll('GW_LID_SHARES', waveLidShares).replaceAll('GW_LID', String(waveLid)).replaceAll('GW_BREAKING', Array.from(waveBreaking, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_INTERMITTENT', waves && waves.breakingAmplitude ? 'true' : 'false').replaceAll('GW_SUMS', Array.from(waveSums, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SOURCE_PLUS', String(waveSource + 1)).replaceAll('GW_SOURCE', String(waveSource)).replaceAll('GW_J_PLUS', String(waveAmplitudes.length + 1)).replaceAll('GW_J', String(waveAmplitudes.length))
     .replaceAll('GW_DC', waves ? waves.speedStep.toFixed(6) : '0.0').replaceAll('GW_KH', waves ? (2 * Math.PI / waves.wavelength).toExponential(9) : '0.0').replaceAll('GW_N2_FLOOR', waves ? (waves.minimumFrequency ** 2).toExponential(9) : '0.0');
-  const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, physics: physicsKernel(heldRadiation), longwave: longwaveKernel(heldRadiation, phys.longwaveTable.points.length), physicsSurface: physicsSurfaceKernel(heldRadiation), ...(phys.orography ? OROGRAPHY_KERNELS : {}), ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
+  const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, radiation: radiationKernel(heldRadiation), longwave: longwaveKernel(heldRadiation, phys.longwaveTable.points.length), physicsSurface: physicsSurfaceKernel(heldRadiation), ...(phys.orography ? OROGRAPHY_KERNELS : {}), ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
   if (!waves) { delete kernelBodies.gravityWaves; delete kernelBodies.gravityWaveDrag; }
   if (!sponge) { delete kernelBodies.spongeMean; delete kernelBodies.spongeApply; }
   for (const [name, raw] of Object.entries(kernelBodies)) {
