@@ -7,14 +7,14 @@
 // paints it) is read with the opacity the page gives it,
 // a = 1 − exp(−g / 40) with g in g/m², and its parts per cell.
 //
-// The parts come from a copy of the adjust kernel with extra stores into
+// The parts come from copies of the adjust kernels with extra stores into
 // the K1 buffer (free between a step's adjust and the next step's first
 // Runge–Kutta stage); the stores read the state and write nothing the
-// model reads. CHECK steps run twice with the plain kernel and once with
-// the copy, and the frames are compared value by value (the copy's code
+// model reads. CHECK steps run twice with the plain kernels and once with
+// the copies, and the frames are compared value by value (the copies' code
 // may round a few values differently, by under 0.1 g/m²). Per cell and step:
 // the column cloud water by layer group (below 800 hPa, 800–500, above
-// 500) on entry to the adjust kernel (after the dynamics), after the
+// 500) on entry to the adjust kernels (after the dynamics), after the
 // boundary layer's mixing, after the saturation adjustment, after the
 // plume convection, after the conversion to rain and the falling ice, and
 // at the step's end; the conversion to rain and the ice falling out of
@@ -52,6 +52,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { getDevice, readRanges } from '../js/gpu/device.module.js';
+import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { readState, tagOf, figureHeader, gpuModelFrom, dt as stepOf, DEG } from './figures/figureState.mjs';
 import { DECK_OPEN, DECK_CLOSED } from '../js/physics/moist.module.js';
 import { CLOUD_TYPES, CLOUD_RANGES } from '../js/frames.module.js';
@@ -74,10 +75,10 @@ const STAGES = ['transport', 'mixing', 'saturation', 'plume', 'rainout', 'filler
 const GROUPS = ['low', 'mid', 'high'];
 
 /*
- * The adjust kernel's text with the stores; `cells` are the cells whose
+ * An adjust kernel's text with its stores; `cells` are the cells whose
  * profiles are stored by layer (none: [-1]).
  */
-function instrumented(code, C, cells) {
+function instrumented(label, code, C, cells) {
   const base = NSLOT * C, n = cells.length;
   const helpers = `
 const FLK_BASE: i32 = ${base}; const FLK_ROWS: i32 = ${ROWS}; const FLK_N: i32 = ${n};
@@ -127,13 +128,15 @@ fn flkEntry(i: i32, pi: f32) {
     }
   }
 }
-fn flkExit(i: i32, pi: f32, rained: f32, convected: f32, mixes: bool) {
+fn flkExit(i: i32, pi: f32, rained: f32, convected: f32, deep: bool) {
+  var mixes = false;
+  for (var k = KTOP; k < K - 1; k++) { if (PH[PH_MIX + k * C + i] > 0.0) { mixes = true; } }
   flkStage(i, pi, 5);
   let zb = (D[D_GEO + (K - 1) * C + i] + LV[L_GABS + K - 1]) / GRAV;
   OUT[${SLOT.conversion} * C + i] = flkConv.x; OUT[${SLOT.conversion + 1} * C + i] = flkConv.y; OUT[${SLOT.conversion + 2} * C + i] = flkConv.z;
   OUT[${SLOT.fall} * C + i] = flkFall.x; OUT[${SLOT.fall + 1} * C + i] = flkFall.y; OUT[${SLOT.fall + 2} * C + i] = flkFall.z;
   OUT[${SLOT.rain} * C + i] = rained; OUT[${SLOT.convectiveRain} * C + i] = convected;
-  OUT[${SLOT.flags} * C + i] = select(0.0, 1.0, cuDeep) + select(0.0, 2.0, PH[PH_CUMF + i] > 0.0) + select(0.0, 4.0, mixes);
+  OUT[${SLOT.flags} * C + i] = select(0.0, 1.0, deep) + select(0.0, 2.0, PH[PH_CUMF + i] > 0.0) + select(0.0, 4.0, mixes);
   var cumulus = 0.0; var cumulusCover = 0.0;
   for (var k = CU_K0; k < K; k++) {
     let slot = (k - CU_K0) * C + i;
@@ -160,23 +163,28 @@ fn flkExit(i: i32, pi: f32, rained: f32, convected: f32, mixes: bool) {
   OUT[${SLOT.total} * C + i] = column + PH[PH_DECKF + i] * PH[PH_DECK + i];
 }
 `;
-  const swaps = [
-    ['  if (mixes) {\n    if (MOIST_BL)', '  flkEntry(i, pi);\n  if (mixes) {\n    if (MOIST_BL)'],
-    ['  diagnoseColumn(i);\n  saturateColumn(i, pi);\n  let produced = plumeColumn(i, pi, dt);\n  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n',
-      '  diagnoseColumn(i);\n  flkStage(i, pi, 1);\n  saturateColumn(i, pi);\n  flkStage(i, pi, 2);\n  let produced = plumeColumn(i, pi, dt);\n  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n  flkStage(i, pi, 3);\n'],
-    ['          descending = leaving * mass;\n', '          descending = leaving * mass;\n          flkFall[flkGroup(pi, k)] += leaving * mass; flkLayer(i, 7, k, leaving * mass);\n'],
-    ['    IN[S_QC + idx] = qc - converted;\n', '    IN[S_QC + idx] = qc - converted;\n    flkConv[flkGroup(pi, k)] += mass * converted; flkLayer(i, 6, k, mass * converted);\n'],
-    ['  if (moved) { saturateColumn(i, pi); }\n', '  if (moved) { saturateColumn(i, pi); }\n  flkStage(i, pi, 4);\n'],
-  ];
+  const swaps = {
+    adjustMix: [
+      ['  if (mixes) {\n    if (MOIST_BL)', '  flkEntry(i, pi);\n  if (mixes) {\n    if (MOIST_BL)'],
+      ['  diagnoseColumn(i);\n  saturateColumn(i, pi);\n', '  diagnoseColumn(i);\n  flkStage(i, pi, 1);\n  saturateColumn(i, pi);\n  flkStage(i, pi, 2);\n'],
+    ],
+    adjustPlume: [['  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n', '  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n  flkStage(i, pi, 3);\n']],
+    adjustRain: [
+      ['          descending = leaving * mass;\n', '          descending = leaving * mass;\n          flkFall[flkGroup(pi, k)] += leaving * mass; flkLayer(i, 7, k, leaving * mass);\n'],
+      ['    IN[S_QC + idx] = qc - converted;\n', '    IN[S_QC + idx] = qc - converted;\n    flkConv[flkGroup(pi, k)] += mass * converted; flkLayer(i, 6, k, mass * converted);\n'],
+      ['  if (moved) { saturateColumn(i, pi); }\n', '  if (moved) { saturateColumn(i, pi); }\n  flkStage(i, pi, 4);\n'],
+    ],
+  }[label];
   let out = code;
   for (const [from, to] of swaps) {
-    if (out.split(from).length !== 2) throw new Error(`the adjust kernel no longer holds exactly one ${JSON.stringify(from.slice(0, 40))}`);
+    if (out.split(from).length !== 2) throw new Error(`the ${label} kernel no longer holds exactly one ${JSON.stringify(from.slice(0, 40))}`);
     out = out.replace(from, to);
   }
   const main = out.lastIndexOf('@compute');
   out = out.slice(0, main) + helpers + out.slice(main);
+  if (label !== 'adjustRain') return out;
   const end = out.lastIndexOf('}');
-  return `${out.slice(0, end)}  flkExit(i, pi, rained, convected, mixes);\n}${out.slice(end + 1)}`;
+  return `${out.slice(0, end)}  flkExit(i, pi, rained, convected, deep);\n}${out.slice(end + 1)}`;
 }
 
 const saved = await readState(file);
@@ -184,7 +192,7 @@ const header = figureHeader(file, saved);
 const { device } = await getDevice();
 const plainModule = device.createShaderModule.bind(device);
 const probe = { on: false, cells: [-1], C: 10 * saved.N * saved.N + 2 };
-device.createShaderModule = (descriptor) => (probe.on && descriptor.label === 'adjust' ? plainModule({ ...descriptor, code: instrumented(descriptor.code, probe.C, probe.cells) }) : plainModule(descriptor));
+device.createShaderModule = (descriptor) => (probe.on && ADJUST_KERNELS.includes(descriptor.label) ? plainModule({ ...descriptor, code: instrumented(descriptor.label, descriptor.code, probe.C, probe.cells) }) : plainModule(descriptor));
 
 const N = saved.N, dt = stepOf(N), STRIDE = Number(process.env.STRIDE ?? Math.max(2, Math.round(24 * 16 / N)));
 const toc = (t0) => ((performance.now() - t0) / 1000).toFixed(1);

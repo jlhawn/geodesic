@@ -22,7 +22,9 @@ import { exchangeConstants, EXCHANGE_WGSL } from './exchange.gpu.js';
  * autoconversion and the rain's fall, the filler and the dry convective adjustment. Each is a line-by-line port of the JavaScript module it
  * names; the physics reads the Exner ratios the last RK4 stage left in
  * the diagnostic buffer, as the CPU does, and the adjustment
- * re-diagnoses the column first. The cloud water's shortwave absorption
+ * re-diagnoses the column first. The adjustment is three kernels
+ * (ADJUST_KERNELS): the mixing and first saturation, the plumes, and the
+ * rest, which takes the plume's rain from PH's CU fields. The cloud water's shortwave absorption
  * sits behind the constant CLOUD_SW, in the two-stream and in a pass of
  * its own for the mixed layer's sunlight, so that with
  * cloudSolarAbsorption 0 the kernel compiles to the purely scattering
@@ -1364,203 +1366,7 @@ ${held ? HELD_CLEAR : `  if (CLEAR_SKY) {
   IN[S_TS + i] = T; IN[S_ICE + i] = h;
 }`;
 
-export const PHYSICS_KERNELS = {
-  physics: physicsKernel(false),
-  pblDiagnose: `fn blHeight(k: i32, i: i32) -> f32 { return (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV; }
-fn blInterface(k: i32, i: i32, zb: f32) -> f32 { return 0.5 * (blHeight(k, i) + blHeight(k + 1, i)) - zb; }
-fn blDensity(k: i32, i: i32, pi: f32) -> f32 { let idx = k * C + i; return pi * LV[L_SM + k] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]); }
-fn parcelVirtual(level: f32, total: f32, k: i32, i: i32, pi: f32) -> f32 {
-  let ex = D[D_EXM + k * C + i]; let liquidT = level * ex; let qs = qsat(liquidT, pi * LV[L_SM + k]);
-  if (!(total > qs)) { return level * (1.0 + VIRT * total); }
-  let slope = qs * LHEAT / (RVAP * liquidT * liquidT); let liquid = (total - qs) / (1.0 + LHEAT * slope / CP);
-  return (liquidT + LHEAT * liquid / CP) / ex * (1.0 + VIRT * (total - liquid) - liquid);
-}
-fn blSurfaceInterface(i: i32, zb: f32, depthAbove: f32) -> i32 {
-  var kE = -1;
-  for (var k = KTOP; k < K - 1; k++) { if (blInterface(k, i, zb) >= depthAbove) { kE = k; } }
-  return kE;
-}
-fn blEntrain(i: i32, pi: f32, kE: i32, lowest: i32, h: f32, buoyant: f32, sheared: f32) -> f32 {
-  if (kE < KTOP || !(h > 0.0)) { return 0.0; }
-  var weight = 0.0; var sumV = 0.0; var sumL = 0.0; var sumQ = 0.0;
-  for (var k = kE + 1; k <= lowest; k++) {
-    let idx = k * C + i;
-    weight += LV[L_DS + k]; sumV += LV[L_DS + k] * D[D_THV + idx];
-    sumL += LV[L_DS + k] * (IN[S_TH + idx] - LHEAT * IN[S_QC + idx] / (CP * D[D_EXM + idx])); sumQ += LV[L_DS + k] * (IN[S_Q + idx] + IN[S_QC + idx]);
-  }
-  var above = kE * C + i;
-  if (BL_JUMP2 && kE > KTOP && D[D_THV + above - C] > D[D_THV + above]) { above -= C; }
-  let mean = sumV / weight; let jump = GRAV * (D[D_THV + above] - mean) / mean;
-  var efficiency = BL_A;
-  let top = (kE + 1) * C + i;
-  if (IN[S_QC + top] > CT_THRESH && BL_A2 > 0.0) {
-    let ex = D[D_EXM + top]; let T = IN[S_TH + top] * ex; let qs = qsat(T, pi * LV[L_SM + kE + 1]); let dqs = qs * LHEAT / (RVAP * T * T);
-    let gamma = LHEAT / CP * dqs; let c = 1.0 + VIRT * IN[S_Q + top] - IN[S_QC + top] + (1.0 + VIRT) * T * dqs;
-    let jumpL = IN[S_TH + above] - LHEAT * IN[S_QC + above] / (CP * D[D_EXM + above]) - sumL / weight; let jumpQ = IN[S_Q + above] + IN[S_QC + above] - sumQ / weight;
-    let virtualJump = max(D[D_THV + above] - mean, BL_BMIN * mean / GRAV);
-    let saturatedJump = c / (1.0 + gamma) * jumpL + (c * LHEAT / (CP * ex * (1.0 + gamma)) - IN[S_TH + top]) * jumpQ;
-    let demand = dqs * ex * jumpL - jumpQ;
-    var share = 1.0;
-    if (demand > 0.0) { share = min(1.0, IN[S_QC + top] * (1.0 + gamma) / demand); }
-    efficiency = min(BL_AMAX, BL_A * (1.0 + BL_A2 * max(0.0, share * (1.0 - saturatedJump / virtualJump))));
-  }
-  var velocity = min(BL_WEMAX, (efficiency * buoyant + BL_AS * sheared) / (h * max(jump, BL_BMIN)));
-  if (BL_TAPER) { velocity *= clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0) * (1.0 - PH[PH_STRAT + i]); }
-  if (!(velocity > 0.0)) { return 0.0; }
-  PH[PH_MIX + kE * C + i] += 0.5 * (blDensity(kE, i, pi) + blDensity(kE + 1, i, pi)) * velocity;
-  return velocity;
-}
-fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, friction: f32) {
-  let bottom = K - 1;
-  var surfaceDepth = richardsonDepth; var surfaceLevel = -1;
-  if (buoyancy > 0.0 && CT_CUMULUS > 0.0) {
-    let base = bottom * C + i;
-    let mixed = pow(friction * friction * friction + 0.6 * buoyancy * max(0.0, surfaceDepth), 1.0 / 3.0);
-    let level = IN[S_TH + base] - LHEAT * IN[S_QC + base] / (CP * D[D_EXM + base]) + CT_EXCESS * buoyancy * D[D_THV + base] / (GRAV * mixed);
-    let total = IN[S_Q + base] + IN[S_QC + base];
-    var k = bottom - 1; var condensation = -1;
-    loop {
-      if (k < KTOP) { break; }
-      if (condensation < 0 && total > qsat(level * D[D_EXM + k * C + i], pi * LV[L_SM + k])) { condensation = k; }
-      if (!(parcelVirtual(level, total, k, i, pi) + CT_TOLERANCE > D[D_THV + k * C + i])) { break; }
-      k--;
-    }
-    if (condensation > k && k >= KTOP) {
-      let parcelTop = blInterface(k, i, zb); let cloudBase = blInterface(condensation, i, zb);
-      if (parcelTop - cloudBase <= CT_CUMULUS && parcelTop <= CT_HMAX && parcelTop > surfaceDepth) { surfaceDepth = parcelTop; surfaceLevel = k; }
-    }
-  }
-  var top = -1; var cooling = 0.0;
-  for (var k = bottom; k > KTOP; k--) {
-    if (blInterface(k - 1, i, zb) > CT_HMAX) { break; }
-    if (IN[S_QC + k * C + i] > CT_THRESH && !(IN[S_QC + (k - 1) * C + i] > CT_THRESH)) { top = k; break; }
-  }
-  var runBottom = -1;
-  if (top >= 0) {
-    for (var k = top; k <= bottom; k++) { if (!(IN[S_QC + k * C + i] > CT_THRESH)) { break; } cooling -= PH[PH_LWH + k * C + i]; runBottom = k; }
-    if (!(cooling > 0.0)) { top = -1; cooling = 0.0; runBottom = -1; }
-  }
-  if (BL_CLOUDLAYER) { PH[PH_CLOUDK + i] = f32(runBottom); }
-  var coupled = false; var lowest = bottom; var base0 = 0.0; var cloudTopZ = 0.0;
-  if (top >= 0) {
-    let idx = top * C + i;
-    let level = IN[S_TH + idx] - LHEAT * IN[S_QC + idx] / (CP * D[D_EXM + idx]) - CT_PERT; let total = IN[S_Q + idx] + IN[S_QC + idx];
-    var k = top + 1;
-    loop {
-      if (k > bottom) { break; }
-      if (!(parcelVirtual(level, total, k, i, pi) < D[D_THV + k * C + i])) { break; }
-      k++;
-    }
-    lowest = k - 1;
-    if (k <= bottom) { base0 = blInterface(k - 1, i, zb); }
-    coupled = k > bottom || select(base0 <= surfaceDepth, k - 1 >= surfaceLevel, surfaceLevel >= 0);
-    if (coupled) { base0 = 0.0; }
-    cloudTopZ = blInterface(top - 1, i, zb);
-  }
-  var h = select(surfaceDepth, cloudTopZ, coupled);
-  PH[PH_DEPTH + i] = zb + h;
-  if (MLM_PROGNOSTIC && PH[PH_MLMTOP + i] > 0.0) { h = max(h, PH[PH_MLMTOP + i] - zb); }
-  PH[PH_REGIME + i] = select(select(0.0, 1.0, buoyancy > 0.0), select(2.0, 3.0, coupled), top >= 0);
-  PH[PH_MIXTOP + i] = zb + max(h, cloudTopZ);
-  PH[PH_CTCOOL + i] = cooling;
-  let layerDepth = cloudTopZ - base0;
-  var velocityCubed = 0.0;
-  if (top >= 0 && layerDepth > 0.0) { velocityCubed = GRAV / D[D_THV + top * C + i] * cooling / (blDensity(top, i, pi) * CP) * layerDepth; }
-  var velocity = 0.0;
-  if (velocityCubed > 0.0) { velocity = pow(velocityCubed, 1.0 / 3.0); }
-  PH[PH_VRAD + i] = velocity;
-  var scale = friction;
-  if (STABILITY && buoyancy > 0.0 && h > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN * buoyancy / (friction * friction * friction)), 0.25); }
-  for (var k = KTOP; k < K - 1; k++) {
-    let z = blInterface(k, i, zb);
-    var diffusivity = 0.0;
-    if (z < h) { diffusivity += KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h); }
-    if (velocity > 0.0 && z > base0 && z < cloudTopZ) { let x = (z - base0) / layerDepth; diffusivity += CT_PROFILE * KARMAN * velocity * layerDepth * x * x * sqrt(1.0 - x); }
-    if (diffusivity > 0.0) { PH[PH_MIX + k * C + i] = 0.5 * (blDensity(k, i, pi) + blDensity(k + 1, i, pi)) * diffusivity / (blHeight(k, i) - blHeight(k + 1, i)); }
-  }
-  if (!BL_ENTRAIN) { return; }
-  var onset = 1.0;
-  if (BL_ONSET > 0.0) { onset = min(1.0, buoyancy / BL_ONSET); }
-  let sheared = select(0.0, onset * friction * friction * friction, buoyancy > 0.0);
-  if (top >= 0) {
-    let driven = coupled && buoyancy > 0.0;
-    PH[PH_ENTRAIN + i] = blEntrain(i, pi, top - 1, lowest, select(layerDepth, cloudTopZ, coupled), velocityCubed + select(0.0, buoyancy * cloudTopZ, driven), select(0.0, sheared, driven));
-    if (!coupled && buoyancy > 0.0 && surfaceDepth > 0.0) {
-      let kE = select(blSurfaceInterface(i, zb, surfaceDepth), surfaceLevel, surfaceLevel >= 0);
-      if (kE >= lowest) { _ = blEntrain(i, pi, kE, K - 1, surfaceDepth, buoyancy * surfaceDepth, sheared); }
-    }
-  } else if (buoyancy > 0.0 && h > 0.0) {
-    PH[PH_ENTRAIN + i] = blEntrain(i, pi, select(blSurfaceInterface(i, zb, h), surfaceLevel, surfaceLevel >= 0 && h == surfaceDepth), K - 1, h, buoyancy * h, sheared);
-  }
-}
-@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let i = i32(id.x); if (i >= C) { return; }
-  diagnoseColumnMid(i);
-  let pi = IN[S_PI + i]; let base = (K - 1) * C + i;
-  var edges = edgesOf(i);
-  let bottomWind = edgeWind(&edges, i, K - 1);
-  let speed = length(bottomWind);
-  let friction = sqrt(PH[PH_DRAG + i]) * xWind(i, speed);
-  let zb = (D[D_GEO + base] + LV[L_GABS + K - 1]) / GRAV;
-  var found = false; var riPrev = 0.0; var zPrev = zb; var depth = zb;
-  for (var k = K - 2; k >= KTOP; k--) {
-    if (found) { continue; }
-    let idx = k * C + i;
-    let z = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV;
-    let dw = edgeWind(&edges, i, k) - bottomWind;
-    let shear = dot(dw, dw) + 100.0 * friction * friction;
-    let ri = GRAV * (D[D_THV + idx] - D[D_THV + base]) * (z - zb) / (D[D_THV + base] * shear);
-    if (ri > RIC) { depth = zPrev + (z - zPrev) * (RIC - riPrev) / (ri - riPrev); found = true; }
-    else { riPrev = ri; zPrev = z; if (k == KTOP) { depth = z; } }
-  }
-  PH[PH_DEPTH + i] = depth;
-  var top = depth;
-  if (MLM_PROGNOSTIC && PH[PH_MLMTOP + i] > 0.0) { top = max(depth, PH[PH_MLMTOP + i]); }
-  let h = top - zb;
-  for (var k = KTOP; k < K; k++) { PH[PH_MIX + k * C + i] = 0.0; }
-  PH[PH_ENTRAIN + i] = 0.0;
-  let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
-  if (IMPLICIT_DRAG) { PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * PH[PH_DRAG + i] * xWind(i, speed); }
-  if (FORM_DRAG && PH[PH_OFLT + i] > 0.0) {
-    let sflt = PH[PH_OFLT + i];
-    for (var k = KTOP; k < K; k++) {
-      var rate = 0.0;
-      let z = (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV;
-      if (sflt > 0.0 && z > 0.0) { rate = TOFD_SCALE * sflt * sflt * exp(-pow(z / TOFD_DECAY, 1.5)) * pow(z, -1.2) * length(edgeWind(&edges, i, k)); }
-      PH[PH_TOFD + (k - KTOP) * C + i] = rate;
-    }
-  }
-  let buoyancy = select(GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture), PH[PH_BUOY + i], ROUGH);
-  PH[PH_BUOY + i] = buoyancy; PH[PH_USTAR + i] = friction;
-  if (MOIST_BL) { blMoist(i, pi, depth - zb, zb, buoyancy, friction); return; }
-  if (h <= 0.0) { return; }
-  var scale = friction;
-  if (STABILITY && buoyancy > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN * buoyancy / (friction * friction * friction)), 0.25); }
-  var entrainK = -1;
-  for (var k = KTOP; k < K - 1; k++) {
-    let idx = k * C + i; let below = idx + C;
-    let zAbove = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV; let zBelow = (D[D_GEO + below] + LV[L_GABS + k + 1]) / GRAV;
-    let z = 0.5 * (zAbove + zBelow) - zb;
-    if (z >= h) { entrainK = k; continue; }
-    let diffusivity = KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h);
-    let rhoAbove = pi * LV[L_SM + k] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]);
-    let rhoBelow = pi * LV[L_SM + k + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below]);
-    PH[PH_MIX + idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
-  }
-  let taper = clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0) * (1.0 - PH[PH_STRAT + i]);
-  if (BL_ENTRAIN && entrainK >= KTOP && buoyancy > 0.0 && taper > 0.0) {
-    let idx = entrainK * C + i; let below = idx + C;
-    var weight = 0.0; var sum = 0.0;
-    for (var k = entrainK + 1; k < K; k++) { weight += LV[L_DS + k]; sum += LV[L_DS + k] * D[D_THV + k * C + i]; }
-    let mean = sum / weight; let jump = GRAV * (D[D_THV + idx] - mean) / mean;
-    var onset = 1.0;
-    if (BL_ONSET > 0.0) { onset = min(1.0, buoyancy / BL_ONSET); }
-    let velocity = taper * min(BL_WEMAX, (BL_A * buoyancy + BL_AS * onset * friction * friction * friction / h) / max(jump, BL_BMIN));
-    PH[PH_ENTRAIN + i] = velocity;
-    PH[PH_MIX + idx] = 0.5 * (pi * LV[L_SM + entrainK] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]) + pi * LV[L_SM + entrainK + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below])) * velocity;
-  }
-}`,
-  adjust: `fn upperInterface(i: i32, k: i32) -> f32 {
+const ADJUST_FUNCTIONS = `fn upperInterface(i: i32, k: i32) -> f32 {
   let idx = k * C + i;
   return (D[D_GEO + idx] + LV[L_GABS + k] + CP * D[D_THV + idx] * (D[D_EXM + idx] - D[D_EXL + idx - C])) / GRAV;
 }
@@ -2140,10 +1946,210 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   }
   thomas(n, &upper, &lower, &rhs);
   for (var j = 0; j < n; j++) { IN[fieldOff + (KTOP + j) * C + i] = rhs[j]; }
+}`;
+
+export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];
+
+export const PHYSICS_KERNELS = {
+  physics: physicsKernel(false),
+  pblDiagnose: `fn blHeight(k: i32, i: i32) -> f32 { return (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV; }
+fn blInterface(k: i32, i: i32, zb: f32) -> f32 { return 0.5 * (blHeight(k, i) + blHeight(k + 1, i)) - zb; }
+fn blDensity(k: i32, i: i32, pi: f32) -> f32 { let idx = k * C + i; return pi * LV[L_SM + k] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]); }
+fn parcelVirtual(level: f32, total: f32, k: i32, i: i32, pi: f32) -> f32 {
+  let ex = D[D_EXM + k * C + i]; let liquidT = level * ex; let qs = qsat(liquidT, pi * LV[L_SM + k]);
+  if (!(total > qs)) { return level * (1.0 + VIRT * total); }
+  let slope = qs * LHEAT / (RVAP * liquidT * liquidT); let liquid = (total - qs) / (1.0 + LHEAT * slope / CP);
+  return (liquidT + LHEAT * liquid / CP) / ex * (1.0 + VIRT * (total - liquid) - liquid);
+}
+fn blSurfaceInterface(i: i32, zb: f32, depthAbove: f32) -> i32 {
+  var kE = -1;
+  for (var k = KTOP; k < K - 1; k++) { if (blInterface(k, i, zb) >= depthAbove) { kE = k; } }
+  return kE;
+}
+fn blEntrain(i: i32, pi: f32, kE: i32, lowest: i32, h: f32, buoyant: f32, sheared: f32) -> f32 {
+  if (kE < KTOP || !(h > 0.0)) { return 0.0; }
+  var weight = 0.0; var sumV = 0.0; var sumL = 0.0; var sumQ = 0.0;
+  for (var k = kE + 1; k <= lowest; k++) {
+    let idx = k * C + i;
+    weight += LV[L_DS + k]; sumV += LV[L_DS + k] * D[D_THV + idx];
+    sumL += LV[L_DS + k] * (IN[S_TH + idx] - LHEAT * IN[S_QC + idx] / (CP * D[D_EXM + idx])); sumQ += LV[L_DS + k] * (IN[S_Q + idx] + IN[S_QC + idx]);
+  }
+  var above = kE * C + i;
+  if (BL_JUMP2 && kE > KTOP && D[D_THV + above - C] > D[D_THV + above]) { above -= C; }
+  let mean = sumV / weight; let jump = GRAV * (D[D_THV + above] - mean) / mean;
+  var efficiency = BL_A;
+  let top = (kE + 1) * C + i;
+  if (IN[S_QC + top] > CT_THRESH && BL_A2 > 0.0) {
+    let ex = D[D_EXM + top]; let T = IN[S_TH + top] * ex; let qs = qsat(T, pi * LV[L_SM + kE + 1]); let dqs = qs * LHEAT / (RVAP * T * T);
+    let gamma = LHEAT / CP * dqs; let c = 1.0 + VIRT * IN[S_Q + top] - IN[S_QC + top] + (1.0 + VIRT) * T * dqs;
+    let jumpL = IN[S_TH + above] - LHEAT * IN[S_QC + above] / (CP * D[D_EXM + above]) - sumL / weight; let jumpQ = IN[S_Q + above] + IN[S_QC + above] - sumQ / weight;
+    let virtualJump = max(D[D_THV + above] - mean, BL_BMIN * mean / GRAV);
+    let saturatedJump = c / (1.0 + gamma) * jumpL + (c * LHEAT / (CP * ex * (1.0 + gamma)) - IN[S_TH + top]) * jumpQ;
+    let demand = dqs * ex * jumpL - jumpQ;
+    var share = 1.0;
+    if (demand > 0.0) { share = min(1.0, IN[S_QC + top] * (1.0 + gamma) / demand); }
+    efficiency = min(BL_AMAX, BL_A * (1.0 + BL_A2 * max(0.0, share * (1.0 - saturatedJump / virtualJump))));
+  }
+  var velocity = min(BL_WEMAX, (efficiency * buoyant + BL_AS * sheared) / (h * max(jump, BL_BMIN)));
+  if (BL_TAPER) { velocity *= clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0) * (1.0 - PH[PH_STRAT + i]); }
+  if (!(velocity > 0.0)) { return 0.0; }
+  PH[PH_MIX + kE * C + i] += 0.5 * (blDensity(kE, i, pi) + blDensity(kE + 1, i, pi)) * velocity;
+  return velocity;
+}
+fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, friction: f32) {
+  let bottom = K - 1;
+  var surfaceDepth = richardsonDepth; var surfaceLevel = -1;
+  if (buoyancy > 0.0 && CT_CUMULUS > 0.0) {
+    let base = bottom * C + i;
+    let mixed = pow(friction * friction * friction + 0.6 * buoyancy * max(0.0, surfaceDepth), 1.0 / 3.0);
+    let level = IN[S_TH + base] - LHEAT * IN[S_QC + base] / (CP * D[D_EXM + base]) + CT_EXCESS * buoyancy * D[D_THV + base] / (GRAV * mixed);
+    let total = IN[S_Q + base] + IN[S_QC + base];
+    var k = bottom - 1; var condensation = -1;
+    loop {
+      if (k < KTOP) { break; }
+      if (condensation < 0 && total > qsat(level * D[D_EXM + k * C + i], pi * LV[L_SM + k])) { condensation = k; }
+      if (!(parcelVirtual(level, total, k, i, pi) + CT_TOLERANCE > D[D_THV + k * C + i])) { break; }
+      k--;
+    }
+    if (condensation > k && k >= KTOP) {
+      let parcelTop = blInterface(k, i, zb); let cloudBase = blInterface(condensation, i, zb);
+      if (parcelTop - cloudBase <= CT_CUMULUS && parcelTop <= CT_HMAX && parcelTop > surfaceDepth) { surfaceDepth = parcelTop; surfaceLevel = k; }
+    }
+  }
+  var top = -1; var cooling = 0.0;
+  for (var k = bottom; k > KTOP; k--) {
+    if (blInterface(k - 1, i, zb) > CT_HMAX) { break; }
+    if (IN[S_QC + k * C + i] > CT_THRESH && !(IN[S_QC + (k - 1) * C + i] > CT_THRESH)) { top = k; break; }
+  }
+  var runBottom = -1;
+  if (top >= 0) {
+    for (var k = top; k <= bottom; k++) { if (!(IN[S_QC + k * C + i] > CT_THRESH)) { break; } cooling -= PH[PH_LWH + k * C + i]; runBottom = k; }
+    if (!(cooling > 0.0)) { top = -1; cooling = 0.0; runBottom = -1; }
+  }
+  if (BL_CLOUDLAYER) { PH[PH_CLOUDK + i] = f32(runBottom); }
+  var coupled = false; var lowest = bottom; var base0 = 0.0; var cloudTopZ = 0.0;
+  if (top >= 0) {
+    let idx = top * C + i;
+    let level = IN[S_TH + idx] - LHEAT * IN[S_QC + idx] / (CP * D[D_EXM + idx]) - CT_PERT; let total = IN[S_Q + idx] + IN[S_QC + idx];
+    var k = top + 1;
+    loop {
+      if (k > bottom) { break; }
+      if (!(parcelVirtual(level, total, k, i, pi) < D[D_THV + k * C + i])) { break; }
+      k++;
+    }
+    lowest = k - 1;
+    if (k <= bottom) { base0 = blInterface(k - 1, i, zb); }
+    coupled = k > bottom || select(base0 <= surfaceDepth, k - 1 >= surfaceLevel, surfaceLevel >= 0);
+    if (coupled) { base0 = 0.0; }
+    cloudTopZ = blInterface(top - 1, i, zb);
+  }
+  var h = select(surfaceDepth, cloudTopZ, coupled);
+  PH[PH_DEPTH + i] = zb + h;
+  if (MLM_PROGNOSTIC && PH[PH_MLMTOP + i] > 0.0) { h = max(h, PH[PH_MLMTOP + i] - zb); }
+  PH[PH_REGIME + i] = select(select(0.0, 1.0, buoyancy > 0.0), select(2.0, 3.0, coupled), top >= 0);
+  PH[PH_MIXTOP + i] = zb + max(h, cloudTopZ);
+  PH[PH_CTCOOL + i] = cooling;
+  let layerDepth = cloudTopZ - base0;
+  var velocityCubed = 0.0;
+  if (top >= 0 && layerDepth > 0.0) { velocityCubed = GRAV / D[D_THV + top * C + i] * cooling / (blDensity(top, i, pi) * CP) * layerDepth; }
+  var velocity = 0.0;
+  if (velocityCubed > 0.0) { velocity = pow(velocityCubed, 1.0 / 3.0); }
+  PH[PH_VRAD + i] = velocity;
+  var scale = friction;
+  if (STABILITY && buoyancy > 0.0 && h > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN * buoyancy / (friction * friction * friction)), 0.25); }
+  for (var k = KTOP; k < K - 1; k++) {
+    let z = blInterface(k, i, zb);
+    var diffusivity = 0.0;
+    if (z < h) { diffusivity += KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h); }
+    if (velocity > 0.0 && z > base0 && z < cloudTopZ) { let x = (z - base0) / layerDepth; diffusivity += CT_PROFILE * KARMAN * velocity * layerDepth * x * x * sqrt(1.0 - x); }
+    if (diffusivity > 0.0) { PH[PH_MIX + k * C + i] = 0.5 * (blDensity(k, i, pi) + blDensity(k + 1, i, pi)) * diffusivity / (blHeight(k, i) - blHeight(k + 1, i)); }
+  }
+  if (!BL_ENTRAIN) { return; }
+  var onset = 1.0;
+  if (BL_ONSET > 0.0) { onset = min(1.0, buoyancy / BL_ONSET); }
+  let sheared = select(0.0, onset * friction * friction * friction, buoyancy > 0.0);
+  if (top >= 0) {
+    let driven = coupled && buoyancy > 0.0;
+    PH[PH_ENTRAIN + i] = blEntrain(i, pi, top - 1, lowest, select(layerDepth, cloudTopZ, coupled), velocityCubed + select(0.0, buoyancy * cloudTopZ, driven), select(0.0, sheared, driven));
+    if (!coupled && buoyancy > 0.0 && surfaceDepth > 0.0) {
+      let kE = select(blSurfaceInterface(i, zb, surfaceDepth), surfaceLevel, surfaceLevel >= 0);
+      if (kE >= lowest) { _ = blEntrain(i, pi, kE, K - 1, surfaceDepth, buoyancy * surfaceDepth, sheared); }
+    }
+  } else if (buoyancy > 0.0 && h > 0.0) {
+    PH[PH_ENTRAIN + i] = blEntrain(i, pi, select(blSurfaceInterface(i, zb, h), surfaceLevel, surfaceLevel >= 0 && h == surfaceDepth), K - 1, h, buoyancy * h, sheared);
+  }
 }
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
-  let pi = IN[S_PI + i]; let dt = P[0]; let bottom = K - 1;
+  diagnoseColumnMid(i);
+  let pi = IN[S_PI + i]; let base = (K - 1) * C + i;
+  var edges = edgesOf(i);
+  let bottomWind = edgeWind(&edges, i, K - 1);
+  let speed = length(bottomWind);
+  let friction = sqrt(PH[PH_DRAG + i]) * xWind(i, speed);
+  let zb = (D[D_GEO + base] + LV[L_GABS + K - 1]) / GRAV;
+  var found = false; var riPrev = 0.0; var zPrev = zb; var depth = zb;
+  for (var k = K - 2; k >= KTOP; k--) {
+    if (found) { continue; }
+    let idx = k * C + i;
+    let z = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV;
+    let dw = edgeWind(&edges, i, k) - bottomWind;
+    let shear = dot(dw, dw) + 100.0 * friction * friction;
+    let ri = GRAV * (D[D_THV + idx] - D[D_THV + base]) * (z - zb) / (D[D_THV + base] * shear);
+    if (ri > RIC) { depth = zPrev + (z - zPrev) * (RIC - riPrev) / (ri - riPrev); found = true; }
+    else { riPrev = ri; zPrev = z; if (k == KTOP) { depth = z; } }
+  }
+  PH[PH_DEPTH + i] = depth;
+  var top = depth;
+  if (MLM_PROGNOSTIC && PH[PH_MLMTOP + i] > 0.0) { top = max(depth, PH[PH_MLMTOP + i]); }
+  let h = top - zb;
+  for (var k = KTOP; k < K; k++) { PH[PH_MIX + k * C + i] = 0.0; }
+  PH[PH_ENTRAIN + i] = 0.0;
+  let moisture = select(0.61 * IN[S_TH + base] * (qsat(IN[S_TS + i], pi) - IN[S_Q + base]), 0.0, PH[PH_LAND + i] > 0.5);
+  if (IMPLICIT_DRAG) { PH[PH_SDRAG + i] = blDensity(K - 1, i, pi) * PH[PH_DRAG + i] * xWind(i, speed); }
+  if (FORM_DRAG && PH[PH_OFLT + i] > 0.0) {
+    let sflt = PH[PH_OFLT + i];
+    for (var k = KTOP; k < K; k++) {
+      var rate = 0.0;
+      let z = (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV;
+      if (sflt > 0.0 && z > 0.0) { rate = TOFD_SCALE * sflt * sflt * exp(-pow(z / TOFD_DECAY, 1.5)) * pow(z, -1.2) * length(edgeWind(&edges, i, k)); }
+      PH[PH_TOFD + (k - KTOP) * C + i] = rate;
+    }
+  }
+  let buoyancy = select(GRAV / IN[S_TH + base] * PH[PH_DRAG + i] * max(speed, GUST) * (IN[S_TS + i] * pow(LV[L_SM + K - 1], KAPPA) / D[D_EXM + base] - IN[S_TH + base] + moisture), PH[PH_BUOY + i], ROUGH);
+  PH[PH_BUOY + i] = buoyancy; PH[PH_USTAR + i] = friction;
+  if (MOIST_BL) { blMoist(i, pi, depth - zb, zb, buoyancy, friction); return; }
+  if (h <= 0.0) { return; }
+  var scale = friction;
+  if (STABILITY && buoyancy > 0.0) { scale = friction * pow(1.0 - 15.0 * max(-2.0, -0.1 * h * KARMAN * buoyancy / (friction * friction * friction)), 0.25); }
+  var entrainK = -1;
+  for (var k = KTOP; k < K - 1; k++) {
+    let idx = k * C + i; let below = idx + C;
+    let zAbove = (D[D_GEO + idx] + LV[L_GABS + k]) / GRAV; let zBelow = (D[D_GEO + below] + LV[L_GABS + k + 1]) / GRAV;
+    let z = 0.5 * (zAbove + zBelow) - zb;
+    if (z >= h) { entrainK = k; continue; }
+    let diffusivity = KARMAN * scale * z * (1.0 - z / h) * (1.0 - z / h);
+    let rhoAbove = pi * LV[L_SM + k] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]);
+    let rhoBelow = pi * LV[L_SM + k + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below]);
+    PH[PH_MIX + idx] = 0.5 * (rhoAbove + rhoBelow) * diffusivity / (zAbove - zBelow);
+  }
+  let taper = clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0) * (1.0 - PH[PH_STRAT + i]);
+  if (BL_ENTRAIN && entrainK >= KTOP && buoyancy > 0.0 && taper > 0.0) {
+    let idx = entrainK * C + i; let below = idx + C;
+    var weight = 0.0; var sum = 0.0;
+    for (var k = entrainK + 1; k < K; k++) { weight += LV[L_DS + k]; sum += LV[L_DS + k] * D[D_THV + k * C + i]; }
+    let mean = sum / weight; let jump = GRAV * (D[D_THV + idx] - mean) / mean;
+    var onset = 1.0;
+    if (BL_ONSET > 0.0) { onset = min(1.0, buoyancy / BL_ONSET); }
+    let velocity = taper * min(BL_WEMAX, (BL_A * buoyancy + BL_AS * onset * friction * friction * friction / h) / max(jump, BL_BMIN));
+    PH[PH_ENTRAIN + i] = velocity;
+    PH[PH_MIX + idx] = 0.5 * (pi * LV[L_SM + entrainK] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]) + pi * LV[L_SM + entrainK + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below])) * velocity;
+  }
+}`,
+  adjustMix: `${ADJUST_FUNCTIONS}
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let pi = IN[S_PI + i]; let dt = P[0];
   var mixes = false;
   for (var k = KTOP; k < K - 1; k++) { if (PH[PH_MIX + k * C + i] > 0.0) { mixes = true; } }
   if (mixes) {
@@ -2152,8 +2158,27 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   }
   diagnoseColumn(i);
   saturateColumn(i, pi);
+}`,
+  adjustPlume: `${ADJUST_FUNCTIONS}
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let pi = IN[S_PI + i]; let dt = P[0];
   let produced = plumeColumn(i, pi, dt);
   if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }
+  PH[PH_CURAIN + i] = produced; PH[PH_CUDEEP + i] = select(0.0, 1.0, cuDeep); PH[PH_CUBASE + i] = f32(cuBase); PH[PH_CUSHALLOW + i] = cuShallowRain; PH[PH_CUSNOW + i] = cuSnow;
+  if (cuDeep) {
+    for (var k = 0; k < K; k++) {
+      let idx = k * C + i;
+      PH[PH_CUFALL + idx] = cuFall[k]; PH[PH_CURESERVE + idx] = cuReserve[k];
+      if (PL_MIXED) { PH[PH_CUFROZEN + idx] = cuFrozen[k]; }
+    }
+  }
+}`,
+  adjustRain: `${ADJUST_FUNCTIONS}
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let pi = IN[S_PI + i]; let dt = P[0]; let bottom = K - 1;
+  let produced = PH[PH_CURAIN + i]; let deep = PH[PH_CUDEEP + i] > 0.0; let plumeBase = i32(PH[PH_CUBASE + i]);
   // autoconversion, and the rain evaporating as it falls
   var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
   let floor = PH[PH_DEPTH + i];
@@ -2175,16 +2200,16 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
         IN[S_TH + idx] -= LHEAT * evaporated / (mass * CP * ex);
       }
     }
-    if (cuDeep) {
-      convective = max(0.0, convective + cuFall[k]);
+    if (deep) {
+      convective = max(0.0, convective + PH[PH_CUFALL + idx]);
       if (PL_MIXED) {
-        let arriving = frozen + cuFrozen[k];
+        let arriving = frozen + PH[PH_CUFROZEN + idx];
         frozen = min(convective, max(0.0, arriving));
         let fusion = max(0.0, arriving) - frozen + min(0.0, arriving);
         if (fusion != 0.0) { IN[S_TH + idx] -= LFUSION * fusion / (mass * CP * D[D_EXM + idx]); }
       }
-      let spare = convective - cuReserve[k];
-      if (spare > 0.0 && k > cuBase && PL_EVAP > 0.0 && RAIN_EVAP > 0.0 && (EVAP_IN_CLOUD || !(IN[S_QC + idx] > CLEAR_AIR))) {
+      let spare = convective - PH[PH_CURESERVE + idx];
+      if (spare > 0.0 && k > plumeBase && PL_EVAP > 0.0 && RAIN_EVAP > 0.0 && (EVAP_IN_CLOUD || !(IN[S_QC + idx] > CLEAR_AIR))) {
         let ex = D[D_EXM + idx];
         let temperature = IN[S_TH + idx] * ex;
         let qs = qsat(temperature, pi * LV[L_SM + k]);
@@ -2271,9 +2296,9 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
   }
   rained += descending;
   if (moved) { saturateColumn(i, pi); }
-  let convected = select(produced, convective + cuShallowRain, cuDeep);
+  let convected = select(produced, convective + PH[PH_CUSHALLOW + i], deep);
   var snowed = 0.0;
-  if (PL_MIXED) { snowed = select(cuSnow, min(frozen, convective) + cuSnow, cuDeep); }
+  if (PL_MIXED) { snowed = select(PH[PH_CUSNOW + i], min(frozen, convective) + PH[PH_CUSNOW + i], deep); }
   // filler
   for (var f = 0; f < 2; f++) {
     let off = select(S_Q, S_QC, f == 1);

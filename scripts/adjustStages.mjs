@@ -2,8 +2,9 @@
 // from one saved state. The CPU model takes the state (with the land and
 // terrain) through its physics phase; that state, rounded to single
 // precision, and the phase's boundary-layer fields go to a GPU core, which
-// runs the adjust kernel alone, cut short after the mixing, after the
-// first condensation, after the plumes, or whole; the CPU runs the same
+// runs the first adjust kernel cut short after the mixing, the first
+// alone (to the first condensation), the first two (to the plumes), or
+// all three; the CPU runs the same
 // stages column by column. Then both diagnose the boundary layer from the
 // CPU's adjusted state, the GPU's friction velocity and surface buoyancy
 // flux taken from the CPU. Per stage it prints the layers below and above
@@ -19,6 +20,7 @@ import { createModel } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { getDevice } from '../js/gpu/device.module.js';
 import { createGpuCore } from '../js/gpu/core.gpu.js';
+import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { readTopography } from './figures/figureState.mjs';
 
 const BC = process.env.BC ?? 'uniform', DUMP = process.env.DUMP ? Number(process.env.DUMP) : -1;
@@ -28,13 +30,12 @@ const { device } = await getDevice();
 const plain = device.createShaderModule.bind(device);
 let stage = 3;
 device.createShaderModule = (descriptor) => {
-  if (descriptor.label !== 'adjust' && descriptor.label !== 'pblDiagnose') return plain(descriptor);
+  if (descriptor.label !== 'adjustMix' && descriptor.label !== 'pblDiagnose') return plain(descriptor);
   let code = descriptor.code;
   const swap = (from, to) => { if (code.split(from).length !== 2) throw new Error(`${descriptor.label} kernel text moved: ${from}`); code = code.replace(from, to); };
-  if (descriptor.label === 'adjust') {
-    swap('  let pi = IN[S_PI + i]; let dt = P[0]; let bottom = K - 1;\n  var mixes = false;\n', '  let pi = IN[S_PI + i]; let dt = P[0]; let bottom = K - 1;\n  diagnoseColumn(i);\n  var mixes = false;\n');
-    swap('  diagnoseColumn(i);\n  saturateColumn(i, pi);\n  let produced = plumeColumn(i, pi, dt);\n  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n',
-      `  if (${stage} == 0) { return; }\n  diagnoseColumn(i);\n  saturateColumn(i, pi);\n  if (${stage} == 1) { return; }\n  let produced = plumeColumn(i, pi, dt);\n  if (PH[PH_CUMF + i] > 0.0) { saturateColumn(i, pi); }\n  if (${stage} == 2) { return; }\n`);
+  if (descriptor.label === 'adjustMix') {
+    swap('  let pi = IN[S_PI + i]; let dt = P[0];\n  var mixes = false;\n', '  let pi = IN[S_PI + i]; let dt = P[0];\n  diagnoseColumn(i);\n  var mixes = false;\n');
+    swap('  diagnoseColumn(i);\n  saturateColumn(i, pi);\n', `  if (${stage} == 0) { return; }\n  diagnoseColumn(i);\n  saturateColumn(i, pi);\n`);
   } else {
     swap('  let friction = sqrt(PH[PH_DRAG + i]) * xWind(i, speed);', '  let friction = PH[PH_USTAR + i];');
     const buoyancy = code.match(/ {2}let buoyancy = select\(GRAV \/ IN\[S_TH \+ base\][^\n]*\n/);
@@ -71,11 +72,12 @@ const landCode = Float32Array.from(model.geography.land, (l, i) => (l ? (model.g
 async function gpuCore() {
   const gpu = await createGpuCore(mesh, { levels, surfaceGeopotential: model.surfaceGeopotential, physics: { ...moistOptions, landed: true } });
   const put = (name, values) => device.queue.writeBuffer(gpu.buffers.PH, 4 * gpu.layout.PH[name], Float32Array.from(values));
-  const run = (kernel) => {
+  const run = (...kernels) => {
     device.queue.writeBuffer(gpu.buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
-    const { buffers } = gpu, group = device.createBindGroup({ layout: gpu.kernels[kernel].getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+    const { buffers } = gpu, group = device.createBindGroup({ layout: gpu.kernels[kernels[0]].getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
     const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-    pass.setPipeline(gpu.kernels[kernel]); pass.setBindGroup(0, group); pass.dispatchWorkgroups(Math.ceil(C / 64)); pass.end();
+    for (const kernel of kernels) { pass.setPipeline(gpu.kernels[kernel]); pass.setBindGroup(0, group); pass.dispatchWorkgroups(Math.ceil(C / 64)); }
+    pass.end();
     device.queue.submit([encoder.finish()]);
   };
   return { gpu, put, run };
@@ -102,7 +104,7 @@ for (stage = 0; stage < 4; stage++) {
   gpu.uploadPhysics({ mlmGate: radiation.mlmGate, concentration: model.seaIce.concentration, land: landCode });
   put('MIX', bl.mixing); put('REGIME', bl.regime); put('MIXTOP', ground(bl.mixingTop)); put('STRAT', radiation.stratiform); put('DEPTH', ground(bl.depth));
   put('BUOY', bl.buoyancyFlux); put('USTAR', bl.friction); put('SUBTV', startSub); put('SH', radiation.sensibleHeat); put('EVAP', radiation.evaporation); put('CLOUDK', bl.cloudLayer);
-  run('adjust');
+  run(...ADJUST_KERNELS.slice(0, Math.max(1, stage)));
   const after = await gpu.download(), ph = await gpu.downloadPhysics();
   const tally = () => ({ n: 0, theta: 0, q: 0, qc: 0, worstT: 0, worstQ: 0, worstQc: 0 });
   const below = tally(), above = tally(), thetaApart = new Set(), qcApart = new Set();

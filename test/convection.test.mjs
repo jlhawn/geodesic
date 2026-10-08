@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
+import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { saturationHumidity, cloudSaturation, liquidFraction, LATENT_HEAT, FUSION_HEAT, MOIST_DEFAULTS, COUPLED_REGIME, DECK_CLOSED, BECHTOLD, SUBCLOUD_LAYERS, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION, fogConstants } from '../js/physics/moist.module.js';
@@ -1225,9 +1226,8 @@ test('a deep plume whose frozen rain sublimates in the unsaturated air below its
   for (const [field, values] of [['DEPTH', model.boundaryLayer.depth], ['BUOY', model.boundaryLayer.buoyancyFlux], ['USTAR', model.boundaryLayer.friction], ['MIXTOP', model.boundaryLayer.mixingTop]]) device.queue.writeBuffer(buffers.PH, 4 * layout.PH[field], Float32Array.from(values));
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-  pass.setPipeline(kernels.adjust);
-  pass.setBindGroup(0, device.createBindGroup({ layout: kernels.adjust.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
-  pass.dispatchWorkgroups(Math.ceil(C / 64));
+  const group = device.createBindGroup({ layout: kernels.adjustMix.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+  for (const name of ADJUST_KERNELS) { pass.setPipeline(kernels[name]); pass.setBindGroup(0, group); pass.dispatchWorkgroups(Math.ceil(C / 64)); }
   pass.end();
   device.queue.submit([encoder.finish()]);
   const gpuState = await gpu.download(), ph = await gpu.downloadPhysics(), gpuBefore = model.state.map((a) => Float64Array.from(a));
@@ -1332,11 +1332,9 @@ async function parity(options, { momentum = false } = {}) {
   model.boundaryLayer.surfaceDrag.set(Float64Array.from({ length: C }, () => (momentum ? 0 : Math.fround(0.08 * dragRandom()))));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.SDRAG, Float32Array.from(model.boundaryLayer.surfaceDrag));
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
-  const group = device.createBindGroup({ layout: kernels.adjust.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+  const group = device.createBindGroup({ layout: kernels.adjustMix.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-  pass.setPipeline(kernels.adjust);
-  pass.setBindGroup(0, group);
-  pass.dispatchWorkgroups(Math.ceil(C / 64));
+  for (const name of ADJUST_KERNELS) { pass.setPipeline(kernels[name]); pass.setBindGroup(0, group); pass.dispatchWorkgroups(Math.ceil(C / 64)); }
   if (momentum) {
     pass.setPipeline(kernels.mixMomentum);
     pass.setBindGroup(0, device.createBindGroup({ layout: kernels.mixMomentum.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
