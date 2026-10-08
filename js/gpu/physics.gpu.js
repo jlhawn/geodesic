@@ -1653,9 +1653,6 @@ fn layerTop(i: i32, k: i32) -> f32 {
   return max(fma(max(CP * D[D_THV + idx], -3.4e38), max(D[D_EXM + idx] - D[D_EXL + idx - C], -3.4e38), max(D[D_GEO + idx] + LV[L_GABS + k], -3.4e38)) / GRAV, -3.4e38);
 }
 fn layerDepth(i: i32, k: i32) -> f32 { return max(layerTop(i, k) - layerTop(i, k + 1), -3.4e38); }
-fn columnState(i: i32, T: ptr<function, array<f32, K>>, envS: ptr<function, array<f32, K>>, envQ: ptr<function, array<f32, K>>) {
-  for (var k = 0; k < K; k++) { (*T)[k] = plumeT(i, k); let env = plumeEnv(i, k); (*envS)[k] = env.x; (*envQ)[k] = env.y; }
-}
 // the shallow cumulus mass flux of moist.module.js's cumulusColumn; returns its rain
 fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   clearCumulus(i);
@@ -1677,8 +1674,6 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   if (!(sourceQ > 0.0)) { return 0.0; }
   let lcl = condensationLevel((sourceS - GRAV * plumeZ(i, bottom)) / CP, sourceQ, layerP(pi, bottom));
   if (!(lcl.y > SHALLOW_TOP)) { return 0.0; }
-  var T: array<f32, K>; var envS: array<f32, K>; var envQ: array<f32, K>;
-  columnState(i, &T, &envS, &envQ);
   var plumeS: array<f32, K + 1>; var plumeQ: array<f32, K + 1>; var liquid: array<f32, K>; var flux: array<f32, K + 1>; var fallout: array<f32, K>; var frozenOut: array<f32, K>;
   var s = sourceS; var w = sourceQ; var inhibition = 0.0; var cloudy = false; var top = -1; var guess = 0.0;
   plumeS[source] = s; plumeQ[source] = w;
@@ -1687,13 +1682,13 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
     if (!(pk > SHALLOW_TOP)) { if (cloudy) { top = k + 1; } break; }
     let below = upperInterface(i, k + 1); let above = upperInterface(i, k);
     let mixes = pi * LV[L_SL + k] <= lcl.y; let epsilon = select(0.0, CU_EPS, mixes);
-    let zk = plumeZ(i, k); let env = vec2<f32>(envS[k], envQ[k]);
+    let zk = plumeZ(i, k); let env = plumeEnv(i, k);
     let half = exp(-epsilon * (zk - below));
     let midS = env.x + (s - env.x) * half; let midQ = env.y + (w - env.y) * half;
     let mid = plumeState(midS, midQ, zk, pk, guess);
     guess = mid.x; liquid[k] = mid.y;
     let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
-    let work = RGAS * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - T[k] * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud)) * layerDp(pi, k) / pk;
+    let work = RGAS * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - plumeT(i, k) * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud)) * layerDp(pi, k) / pk;
     if (mid.y > 0.0) { cloudy = true; }
     if (!cloudy) { if (work < 0.0) { inhibition -= work; } } else if (!(work > 0.0)) { top = k; break; }
     let full = exp(-epsilon * (above - below));
@@ -1736,17 +1731,17 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   for (var j = bottom; j > top; j--) {
     var upS = plumeS[j]; var upQ = plumeQ[j];
     if (j > source) {
-      let dpj = layerDp(pi, j); let env = vec2<f32>(envS[j], envQ[j]);
+      let dpj = layerDp(pi, j); let env = plumeEnv(i, j);
       belowMass += dpj; belowS += dpj * env.x; belowQ += dpj * env.y;
       upS = select(belowS / belowMass, sourceS, CU_LOWEST); upQ = select(belowQ / belowMass, sourceQ, CU_LOWEST);
     }
-    let above = vec2<f32>(envS[j - 1], envQ[j - 1]);
+    let above = plumeEnv(i, j - 1);
     plumeS[j] = flux[j] * (upS - above.x); plumeQ[j] = flux[j] * (upQ - above.y);
   }
   for (var k = max(top, CU_K0); k < source; k++) {
     if (!(liquid[k] > 0.0)) { continue; }
     let slot = (k - CU_K0) * C + i;
-    PH[PH_CUCOVER + slot] = min(1.0, 0.5 * (flux[k] + flux[k + 1]) * RGAS * T[k] / (layerP(pi, k) * CU_WU));
+    PH[PH_CUCOVER + slot] = min(1.0, 0.5 * (flux[k] + flux[k + 1]) * RGAS * plumeT(i, k) / (layerP(pi, k) * CU_WU));
     PH[PH_CUWATER + slot] = liquid[k];
   }
   var rain = 0.0;
@@ -1797,18 +1792,16 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
   if (!(open > 0.0)) { return cumulusColumn(i, pi, dt); }
   let bottom = K - 1;
   let depthTop = PH[PH_DEPTH + i];
-  var T: array<f32, K>; var envS: array<f32, K>; var envQ: array<f32, K>;
-  columnState(i, &T, &envS, &envQ);
   var mass = 0.0; var energy = 0.0; var water = 0.0; var source = bottom;
   for (var k = bottom; k >= 0; k--) {
     let pk = layerP(pi, k);
     if (k < bottom && (((PL_SURFACE50 || !(upperInterface(i, k + 1) < depthTop)) && !(pk >= pi - CU_SOURCE)) || !(pk > SHALLOW_TOP))) { break; }
-    let dpk = layerDp(pi, k); let env = vec2<f32>(envS[k], envQ[k]);
+    let dpk = layerDp(pi, k); let env = plumeEnv(i, k);
     mass += dpk; energy += dpk * env.x; water += dpk * env.y; source = k;
   }
   var sourceS = energy / mass; var sourceQ = water / mass;
-  if (PL_LOWEST) { let env = vec2<f32>(envS[bottom], envQ[bottom]); sourceS = env.x; sourceQ = env.y; }
-  let surfaceT = T[bottom]; let surfaceP = layerP(pi, bottom); let surfaceZ = plumeZ(i, bottom);
+  if (PL_LOWEST) { let env = plumeEnv(i, bottom); sourceS = env.x; sourceQ = env.y; }
+  let surfaceT = plumeT(i, bottom); let surfaceP = layerP(pi, bottom); let surfaceZ = plumeZ(i, bottom);
   if (PL_SURFACE50) {
     let density = surfaceP / (RGAS * surfaceT);
     var velocity = 0.0;
@@ -1834,7 +1827,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     var ts = sourceS; var tq = sourceQ; var tw2 = PL_W0 * PL_W0; var tguess = 0.0; var tbase = 0.0; var typed = false; var decided = false;
     for (var k = source - 1; k > 0; k--) {
       let lower = upperInterface(i, k + 1); let upper = upperInterface(i, k); let depth = upper - lower;
-      let Tk = T[k]; let pk = layerP(pi, k); let zk = plumeZ(i, k); let env = vec2<f32>(envS[k], envQ[k]);
+      let Tk = plumeT(i, k); let pk = layerP(pi, k); let zk = plumeZ(i, k); let env = plumeEnv(i, k);
       let ratio = cloudSat(Tk, pk).x / surfaceSat;
       let epsilon = TP_EPS * IFS_EPS * ratio * ratio * ratio;
       let half = exp(-epsilon * (zk - lower));
@@ -1877,7 +1870,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     var upper = lower;
     if (k > 0) { upper = upperInterface(i, k); }
     let depth = upper - lower;
-    let Tk = T[k]; let pk = layerP(pi, k); let dpk = layerDp(pi, k); let zk = plumeZ(i, k); let env = vec2<f32>(envS[k], envQ[k]);
+    let Tk = plumeT(i, k); let pk = layerP(pi, k); let dpk = layerDp(pi, k); let zk = plumeZ(i, k); let env = plumeEnv(i, k);
     let mixes = pi * LV[L_SL + k] <= lcl.y;
     if (mixes && !started) { started = true; base = k + 1; w2 = PL_W0 * PL_W0; speed[k + 1] = w2; if (PL_IFS) { baseSat = cloudSat(Tk, pk).x; } }
     var epsilon = 0.0; var mixing = 0.0; var rh = 0.0; var detrained = 0.0;
@@ -1973,15 +1966,15 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
   var start = -1; var share = 0.0; var lowest = 0.0;
   if (DD_SHARE > 0.0 && rainAbove > 0.0) {
     for (var k = top + 1; k < base; k++) {
-      let env = vec2<f32>(envS[k], envQ[k]); let h = env.x + LHEAT * env.y;
+      let env = plumeEnv(i, k); let h = env.x + LHEAT * env.y;
       if (start < 0 || h < lowest) { start = k; lowest = h; }
     }
   }
   if (start >= 0) {
-    let env = vec2<f32>(envS[start], envQ[start]);
+    let env = plumeEnv(i, start);
     var hd = env.x + LHEAT * env.y; var fd = 1.0; var subcloud = 0.0;
     for (var k = base + 1; k <= bottom; k++) { subcloud += layerDp(pi, k); }
-    let td = saturatedTemperature(hd - GRAV * upperInterface(i, start + 1), pi * LV[L_SL + start], T[start]);
+    let td = saturatedTemperature(hd - GRAV * upperInterface(i, start + 1), pi * LV[L_SL + start], plumeT(i, start));
     let qd = qsat(td, pi * LV[L_SL + start]);
     dflux[start + 1] = -1.0; dS[start + 1] = hd - LHEAT * qd; dQ[start + 1] = qd;
     devap[start] = qd - env.y;
@@ -1989,7 +1982,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     for (var k = start + 1; k < bottom; k++) {
       var mixedQ = wd;
       if (k <= base) {
-        let env = vec2<f32>(envS[k], envQ[k]);
+        let env = plumeEnv(i, k);
         let keep = exp(-DD_EPS * (upperInterface(i, k) - upperInterface(i, k + 1))); let ambient = env.x + LHEAT * env.y;
         fd /= keep;
         hd = ambient + (hd - ambient) * keep;
@@ -2000,7 +1993,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
         fd = atBase * left / subcloud;
       }
       let pk = pi * LV[L_SL + k];
-      let tk = saturatedTemperature(hd - GRAV * upperInterface(i, k + 1), pk, T[k]);
+      let tk = saturatedTemperature(hd - GRAV * upperInterface(i, k + 1), pk, plumeT(i, k));
       let qk = qsat(tk, pk);
       dflux[k + 1] = -fd; dS[k + 1] = hd - LHEAT * qk; dQ[k + 1] = qk;
       devap[k] = (qk - mixedQ) * fd;
@@ -2012,7 +2005,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
   for (var k = top; k <= bottom; k++) {
     var melted = 0.0; var frozenOut = 0.0;
     if (PL_MIXED) {
-      if (flying > 0.0 && T[k] >= LIQUID_T) { melted = flying; flying = 0.0; }
+      if (flying > 0.0 && plumeT(i, k) >= LIQUID_T) { melted = flying; flying = 0.0; }
       frozenOut = cuFrozen[k];
       cuFrozen[k] = -melted;
       if (k > top && k < source && frozenOut > 0.0) { flying += flux[k] * frozenOut; cuFrozen[k] += flux[k] * frozenOut; }
@@ -2025,7 +2018,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
   }
   if (start >= 0 && !(share > 0.0)) { share = 0.0; }
   var belowMass = 0.0; var belowS = 0.0; var belowQ = 0.0;
-  var envJ = vec2<f32>(envS[bottom], envQ[bottom]);
+  var envJ = plumeEnv(i, bottom);
   for (var j = bottom; j > top; j--) {
     var upS = plumeS[j]; var upQ = plumeQ[j];
     if (j > source) {
@@ -2033,7 +2026,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
       belowMass += dpj; belowS += dpj * envJ.x; belowQ += dpj * envJ.y;
       upS = select(belowS / belowMass, sourceS, PL_LOWEST); upQ = select(belowQ / belowMass, sourceQ, PL_LOWEST);
     }
-    let envUp = vec2<f32>(envS[j - 1], envQ[j - 1]);
+    let envUp = plumeEnv(i, j - 1);
     dS[j] = flux[j] * (upS - envUp.x) + share * dflux[j] * (dS[j] - envJ.x);
     dQ[j] = flux[j] * (upQ - envUp.y) + share * dflux[j] * (dQ[j] - envJ.y);
     envJ = envUp;
@@ -2048,7 +2041,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
       var tS = (dS[k + 1] - dS[k] + LHEAT * (made - evaporated)) * per;
       if (PL_MIXED) { tS = (dS[k + 1] - dS[k] + LHEAT * (made - evaporated) + LFUSION * cuFrozen[k]) * per; } let tQ = (dQ[k + 1] - dQ[k] - made + evaporated) * per;
       let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
-      let Tk = T[k];
+      let Tk = plumeT(i, k);
       let warming = tS / CP * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud) + PARCEL_VIRT * Tk * tQ;
       consumption += RGAS * warming * dpk / layerP(pi, k);
       if (PL_BECHTOLD) { consumptionP += warming * dpk / plumeVirtual(Tk, air, cloud); }
@@ -2065,7 +2058,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     var forcing = 0.0; var layerMass = 0.0; var wind = 0.0;
     for (var k = max(base, K - SUB_K); k <= bottom; k++) {
       let idx = k * C + i; let saved = PH[PH_SUBTV + (k - K + SUB_K) * C + i]; let dpk = layerDp(pi, k);
-      if (saved > 0.0) { forcing += (T[k] * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + idx]) - CU_LOADING * max(0.0, IN[S_QC + idx])) - saved) / dt * dpk; }
+      if (saved > 0.0) { forcing += (plumeT(i, k) * (1.0 + PARCEL_VIRT * max(0.0, IN[S_Q + idx]) - CU_LOADING * max(0.0, IN[S_QC + idx])) - saved) / dt * dpk; }
       wind += dpk * length(cellWind(i, k)); layerMass += dpk;
     }
     let boundaryTime = select((baseHeight - ground) / max(BT_WIND, wind / layerMass), turnover, PH[PH_LAND + i] > 0.5);
@@ -2094,7 +2087,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
   for (var k = max(top, CU_K0); k < source; k++) {
     if (!(liquid[k] > 0.0)) { continue; }
     let up = max(PL_W0, sqrt(max(0.0, 0.5 * (speed[k] + speed[k + 1]))));
-    let cover = min(1.0, 0.5 * (flux[k] + flux[k + 1]) * baseFlux * RGAS * T[k] / (layerP(pi, k) * up));
+    let cover = min(1.0, 0.5 * (flux[k] + flux[k + 1]) * baseFlux * RGAS * plumeT(i, k) / (layerP(pi, k) * up));
     if (PL_SEPARATE) { held[k] = cover; continue; }
     let slot = (k - CU_K0) * C + i;
     if (cover > PH[PH_CUCOVER + slot]) { PH[PH_CUCOVER + slot] = cover; PH[PH_CUWATER + slot] = liquid[k]; }
