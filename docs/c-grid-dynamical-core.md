@@ -1491,13 +1491,26 @@ is single precision.
   tendency — then a fused advance; the ∇⁴ closures are two Laplacian
   passes per field, and dispatches beyond 65535 workgroups go through a
   second dimension.
-- `physics.gpu.js` is the column physics one thread per column: the
-  three-band radiation with clouds and the direct/diffuse surface
-  reflection, the bulk fluxes, the sea ice, the boundary-layer
-  diagnosis, and the adjustment (boundary-layer mixing by the
-  tridiagonal solve, saturation adjustment, Betts–Miller with
-  detrainment, autoconversion, the filler, the dry adjustment), with
-  momentum mixing one thread per edge. `layeredOcean.gpu.js` is the
+- `physics.gpu.js` is the column physics one thread per column, in
+  seven dispatches a step: physics (the surface state, the exchange and
+  the deck), radiation (the clouds and the shortwave, left at its first
+  line on a held step), longwave (the correlated-k sweeps, their g-points
+  in unrolled chunks kept in registers) and physicsSurface (the surface
+  budget and heating), the earlier ones leaving what the later read in
+  the K1 register, which nothing uses between a step's RK4 combine and
+  its next first stage; then adjustMix (the boundary-layer mixing by the
+  tridiagonal solve, the column diagnosis, the saturation adjustment),
+  adjustPlume (the convective plumes) and adjustRain (autoconversion, the
+  rain's fall and evaporation, the filler, the dry adjustment), the
+  plume's per-layer rain, reserve and frozen fall passing between them
+  through PH fields; with momentum mixing one thread per edge. A
+  per-layer array a thread keeps costs its bytes (on the M1 Max about
+  0.18 ms per written-and-read array over N=128's columns), so the
+  kernels keep few and recompute or fold the rest; lanes across the
+  longwave's g-points measured slower there (34 g-points fill a SIMD
+  group and a sixteenth, each lane one dependent chain), and the mesh's
+  gathers run near the hardware's rate in the layer-major layout.
+  `layeredOcean.gpu.js` is the
   ocean with its own state, stages and a binding that adds the
   atmosphere's state and diagnostics for the coupling kernels.
 - `model.gpu.js` presents the CPU model's interface: double-precision
