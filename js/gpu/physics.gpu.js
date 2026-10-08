@@ -1412,6 +1412,8 @@ fn saturateColumn(i: i32, pi: f32) {
     IN[S_Q + idx] -= change; IN[S_QC + idx] += change; IN[S_TH + idx] += LHEAT * change / (CP * ex);
   }
 }
+// Never runs (dt > 0): two more call sites keep Metal from inlining saturateColumn, which in these kernels is slower and rounds differently.
+fn saturateOutOfLine(i: i32, pi: f32, dt: f32) { if (dt < 0.0) { saturateColumn(i, pi); saturateColumn(i, pi + 1.0); } }
 fn clearCumulus(i: i32) {
   for (var k = CU_K0; k < K; k++) { PH[PH_CUCOVER + (k - CU_K0) * C + i] = 0.0; PH[PH_CUWATER + (k - CU_K0) * C + i] = 0.0; }
   PH[PH_CUMF + i] = 0.0; PH[PH_CUTOP + i] = 0.0;
@@ -2158,6 +2160,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   }
   diagnoseColumn(i);
   saturateColumn(i, pi);
+  saturateOutOfLine(i, pi, dt);
 }`,
   adjustPlume: `${ADJUST_FUNCTIONS}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -2173,6 +2176,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
       if (PL_MIXED) { PH[PH_CUFROZEN + idx] = cuFrozen[k]; }
     }
   }
+  saturateOutOfLine(i, pi, dt);
 }`,
   adjustRain: `${ADJUST_FUNCTIONS}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -2371,6 +2375,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
       lowest = top - 1;
     }
   }
+  saturateOutOfLine(i, pi, dt);
 }`,
   mixMomentum: `@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let e = i32(id.x); if (e >= E) { return; }
