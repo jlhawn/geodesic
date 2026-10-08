@@ -8,7 +8,7 @@ import { sunDirection, cloudOptics, liquidShare, iceRadius, CLOUD_OPTICS, SOLAR_
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
-const { createGpuCore } = gpuAvailable ? await import('../js/gpu/core.gpu.js') : {};
+const { createGpuCore, PHYSICS_PASSES } = gpuAvailable ? await import('../js/gpu/core.gpu.js') : {};
 const UNSCATTERED = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, skylight: 0.15 };
 const close = (a, b, tolerance = 1e-9) => Math.abs(a - b) <= tolerance * Math.abs(b);
 
@@ -104,9 +104,11 @@ async function physicsPair(base, options, dt = 864000) {
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, (model.time % YEAR) / YEAR, sun[0], sun[1], sun[2], 0, 0, 0]));
   const group = device.createBindGroup({ layout: kernels.physics.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) });
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-  pass.setPipeline(kernels.physics);
-  pass.setBindGroup(0, group);
-  pass.dispatchWorkgroups(Math.ceil(C / 64));
+  for (const name of PHYSICS_PASSES) {
+    pass.setPipeline(kernels[name]);
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(Math.ceil(C / 64));
+  }
   pass.end();
   device.queue.submit([encoder.finish()]);
   const [, after] = await gpu.download(), ph = await gpu.downloadPhysics();

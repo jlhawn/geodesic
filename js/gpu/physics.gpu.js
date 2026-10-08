@@ -285,6 +285,18 @@ fn solarGases(i: i32, pi: f32, mu: f32, layerOzone: ptr<function, array<f32, K>>
   }
   return vec4<f32>(VAPOR_ABS * visibleVapour(vapour), vapour, oxygen, co2);
 }
+fn solarGasTotals(i: i32, pi: f32, mu: f32, layerOzone: ptr<function, array<f32, K>>) -> vec3<f32> {
+  let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
+  var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
+    let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * max(0.0, 1.0 - q);
+    ozone += (*layerOzone)[k] * magnification;
+    vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
+    oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
+  }
+  return vec3<f32>(VAPOR_ABS * visibleVapour(vapour), ozoneAbsorb(ozone), VAPOR_ABS * visibleVapour(vapour) + nearInfraredGases(vapour, oxygen, co2));
+}
 fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, array<f32, K>>) -> f32 {
   var vapour = down.x; var oxygen = down.y; var co2 = down.z;
   var before = nearInfraredGases(vapour, oxygen, co2); var loss = 0.0;
@@ -497,10 +509,13 @@ fn saturatedTemperature(energy: f32, pressure: f32, guess: f32) -> f32 {
   }
   return t;
 }
+fn relaxedSeries(x: f32) -> f32 { return x * (1.0 - 0.5 * x * (1.0 - x / 3.0 * (1.0 - 0.25 * x))); }
 fn relaxedFraction(x: f32) -> f32 {
-  if (x < 1e-2) { return x * (1.0 - 0.5 * x * (1.0 - x / 3.0 * (1.0 - 0.25 * x))); }
+  if (x < 1e-2) { return relaxedSeries(x); }
   return 1.0 - exp(-x);
 }
+// both forms, no branch: the longwave's neighbouring columns straddle the cutoff often enough that branching costs more
+fn relaxedFractionBoth(x: f32) -> f32 { return select(1.0 - exp(-x), relaxedSeries(x), x < 1e-2); }
 fn thomas(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, array<f32, K>>, rhs: ptr<function, array<f32, K>>) {
   var gain: array<f32, K>;
   var denominator = 1.0 + (*upper)[0] + (*lower)[0];
@@ -877,9 +892,117 @@ export const snowOnSea = (amount) => `if (IN[S_ICE + i] > 0.0) {
       IN[S_ICE + i] += (1.0 - cover) * (${amount}) / (RHOICE * cover);
     } else { IN[S_TS + i] -= LFUS * (${amount}) / PH[PH_CAP + i]; }`;
 
-// physicsKernel(true) holds the radiation between full calls as radiation.module.js's applyHeld does.
-const HELD_OPEN = `  if (PH[PH_RADP] > 0.5 || !(PH[PH_RADEMIT + i] > 0.0)) {
-  var shone = 0.0; var weighted = 0.0;
+/*
+ * The column physics runs as four kernels: physics (the surface's state,
+ * the exchange and the deck), radiation (the clouds and the shortwave, on
+ * full calls only when held), longwave (one thread per column, sweeping
+ * the g-points a chunk at a time) and physicsSurface (the surface's energy
+ * budget, the heating and the surface's own state). Each leaves what the
+ * later ones read in the K1 register, free between the stages of a step:
+ * per layer the ozone, the cloud emissivity, the overlap share and weight
+ * and (unheld) the net flux, which the longwave turns into the net flux
+ * after it; and per column the scalars stash() numbers.
+ */
+const LONGWAVE_STASH = `const LWS_CLOUD: i32 = 0; const LWS_SHARE: i32 = K * C; const LWS_OZONE: i32 = 2 * K * C; const LWS_FLUX: i32 = 3 * K * C; const LWS_ALPHA: i32 = 4 * K * C; const LWS_SCALAR: i32 = 5 * K * C;
+fn stashed(j: i32, i: i32) -> f32 { return OUT[LWS_SCALAR + j * C + i]; }
+fn stash(j: i32, i: i32, x: f32) { OUT[LWS_SCALAR + j * C + i] = x; }
+`;
+export const LONGWAVE_STASH_FLOATS = (K, C) => 5 * K * C + 26 * C;
+/*
+ * The correlated longwave's sweeps with the g-points taken a chunk at a
+ * time, each chunk's fluxes held in scalars: the chunk's code is unrolled
+ * here, so the g-points' fluxes stay in registers where arrays indexed by
+ * g would be private memory the kernel streams through on every layer.
+ * Each layer's paths and overlap weights are found again for every chunk,
+ * and the layer's heat carries from chunk to chunk in g-point order, so
+ * every sum adds the same terms in the same order as one pass over all
+ * g-points would.
+ */
+const LONGWAVE_DOWN = 12, LONGWAVE_UP = 6;
+function longwaveSweeps(held, ng, { layer, chainF, cloudE, alpha, downEnd, upEnd }) {
+  const split = (size) => Array.from({ length: Math.ceil(ng / size) }, (_, n) => Array.from({ length: Math.min(size, ng - n * size) }, (_, j) => n * size + j));
+  const downChunks = split(LONGWAVE_DOWN), upChunks = split(LONGWAVE_UP);
+  const each = (G, line) => G.map(line).join('');
+  const chainDown = `
+        let f = ${chainF('k')}; let a = select(0.0, ${chainF('max(k - 1, 0)')}, k > 0); let alpha = ${alpha('k')};
+        let cloudIn = select(0.0, ${cloudE} / f, f > 0.0); let clearIn = select(${cloudE}, 0.0, f > 0.0);
+        let both = a + f - (alpha * max(a, f) + (1.0 - alpha) * (a + f - a * f));
+        let p00 = 1.0 - a - f + both; let p01 = f - both; let p10 = a - both;
+        let clearShare = select(0.0, 1.0 / (1.0 - a), a < 1.0); let cloudShare = select(0.0, 1.0 / a, a > 0.0);`;
+  const chainUp = `
+        let f = ${chainF('k')}; let b = select(0.0, ${chainF('min(k + 1, K - 1)')}, k < K - 1); let alpha = ${alpha('min(k + 1, K - 1)')};
+        let cloudIn = select(0.0, ${cloudE} / f, f > 0.0); let clearIn = select(${cloudE}, 0.0, f > 0.0);
+        let both = f + b - (alpha * max(f, b) + (1.0 - alpha) * (f + b - f * b));
+        let p00 = 1.0 - f - b + both; let p01 = b - both; let p10 = f - both;
+        let clearShare = select(0.0, 1.0 / (1.0 - b), b < 1.0); let cloudShare = select(0.0, 1.0 / b, b > 0.0);`;
+  const carried = downChunks.length > 1 || upChunks.length > 1 ? `    var lwHeat: array<f32, K>;${held && upChunks.length > 1 ? ' var lwTaken: array<f32, K>;' : ''}\n` : '';
+  const open = (n, name) => (n === 0 ? '0.0' : `lw${name}[k]`);
+  const close = (n, last) => (n === upChunks.length - 1 ? last : `lwHeat[k] = heat;${held ? ' lwTaken[k] = taken;' : ''}`);
+  const sweeps = (chain) => {
+    let text = carried;
+    downChunks.forEach((G, n) => {
+      text += `    {
+${each(G, (g) => (chain ? `      var down0_${g} = 0.0; var down1_${g} = 0.0;\n` : `      var down_${g} = 0.0;\n`))}      for (var k = 0; k < K; k++) {
+        ${layer}${chain ? chainDown : ` let clear = 1.0 - ${cloudE};`}
+        var heat = ${open(n, 'Heat')};
+${each(G, (g) => (chain ? `        {
+          let gas = relaxedFractionBoth(longwaveDepth(${g}, row)); let src = planckShare(${g}, t) * hot;
+          let e0 = 1.0 - (1.0 - gas) * (1.0 - clearIn); let e1 = 1.0 - (1.0 - gas) * (1.0 - cloudIn);
+          let from0 = down0_${g} * clearShare; let from1 = down1_${g} * cloudShare;
+          let in0 = from0 * p00 + from1 * p10; let in1 = from0 * p01 + from1 * both;
+          heat += e0 * (in0 - src * (1.0 - f)) + e1 * (in1 - src * f);
+          down0_${g} = in0 * (1.0 - e0) + e0 * src * (1.0 - f); down1_${g} = in1 * (1.0 - e1) + e1 * src * f;
+        }
+` : `        {
+          let e = 1.0 - (1.0 - relaxedFractionBoth(longwaveDepth(${g}, row))) * clear; let src = planckShare(${g}, t) * hot;
+          heat += e * (down_${g} - src);
+          down_${g} = down_${g} * (1.0 - e) + e * src;
+        }
+`))}        ${n === downChunks.length - 1 ? downEnd : 'lwHeat[k] = heat;'}
+      }
+${each(G, (g) => (chain ? `      back += down0_${g} + down1_${g};\n` : `      back += down_${g};\n`))}    }
+`;
+    });
+    text += '    let surfaceScaled = (ts - 250.0) / 100.0;\n';
+    upChunks.forEach((G, n) => {
+      text += `    {
+${each(G, (g) => (chain ? `      var up0_${g} = planckShare(${g}, surfaceScaled) * surfaceEmission; var up1_${g} = 0.0; var clear_${g} = up0_${g};\n` : `      var up_${g} = planckShare(${g}, surfaceScaled) * surfaceEmission; var clear_${g} = up_${g};\n`))}${held ? each(G, (g) => (chain ? `      var lift0_${g} = planckShare(${g}, surfaceScaled); var lift1_${g} = 0.0; var clearLift_${g} = lift0_${g};\n` : `      var lift_${g} = planckShare(${g}, surfaceScaled); var clearLift_${g} = lift_${g};\n`)) : ''}      for (var k = K - 1; k >= 0; k--) {
+        ${layer}${chain ? chainUp : ` let clear = 1.0 - ${cloudE};`}
+        var heat = ${open(n, 'Heat')};${held ? ` var taken = ${open(n, 'Taken')};` : ''}
+${each(G, (g) => (chain ? `        {
+          let gas = relaxedFractionBoth(longwaveDepth(${g}, row)); let src = planckShare(${g}, t) * hot;
+          let e0 = 1.0 - (1.0 - gas) * (1.0 - clearIn); let e1 = 1.0 - (1.0 - gas) * (1.0 - cloudIn);
+          let from0 = up0_${g} * clearShare; let from1 = up1_${g} * cloudShare;
+          let in0 = from0 * p00 + from1 * p01; let in1 = from0 * p10 + from1 * both;
+          heat += e0 * (in0 - src * (1.0 - f)) + e1 * (in1 - src * f);
+          up0_${g} = in0 * (1.0 - e0) + e0 * src * (1.0 - f); up1_${g} = in1 * (1.0 - e1) + e1 * src * f;
+          if (CLEAR_SKY) { clear_${g} = clear_${g} * (1.0 - gas) + gas * src; }
+${held ? `          let rise0 = lift0_${g} * clearShare; let rise1 = lift1_${g} * cloudShare;
+          let reach0 = rise0 * p00 + rise1 * p01; let reach1 = rise0 * p10 + rise1 * both;
+          taken += e0 * reach0 + e1 * reach1; lift0_${g} = reach0 * (1.0 - e0); lift1_${g} = reach1 * (1.0 - e1); clearLift_${g} *= 1.0 - gas;
+` : ''}        }
+` : `        {
+          let gas = relaxedFractionBoth(longwaveDepth(${g}, row)); let e = 1.0 - (1.0 - gas) * clear; let src = planckShare(${g}, t) * hot;
+          heat += e * (up_${g} - src);
+          up_${g} = up_${g} * (1.0 - e) + e * src;
+          if (CLEAR_SKY) { clear_${g} = clear_${g} * (1.0 - gas) + gas * src; }
+${held ? `          taken += e * lift_${g}; lift_${g} *= 1.0 - e; clearLift_${g} *= 1.0 - gas;\n` : ''}        }
+`))}        ${close(n, `${upEnd}${held ? ' PH[PH_RADDF + k * C + i] = taken;' : ''}`)}
+      }
+${each(G, (g) => (chain ? `      outgoing += up0_${g} + up1_${g}; clearOutgoing += clear_${g};\n` : `      outgoing += up_${g}; clearOutgoing += clear_${g};\n`))}${held ? each(G, (g) => (chain ? `      escape += lift0_${g} + lift1_${g}; clearEscape += clearLift_${g};\n` : `      escape += lift_${g}; clearEscape += clearLift_${g};\n`)) : ''}    }
+`;
+    });
+    return text;
+  };
+  return `  if (LW_CORRELATED && LW_CHAIN) {
+    // each region's heat is its absorption less its emission: the difference of whole fluxes loses the thin top layers to f32 cancellation
+${sweeps(true)}  } else if (LW_CORRELATED) {
+${sweeps(false)}  }`;
+}
+// The kernels' held variants hold the radiation between full calls as radiation.module.js's applyHeld does.
+const HELD_GATE = `  if (!(PH[PH_RADP] > 0.5 || !(PH[PH_RADEMIT + i] > 0.0))) { stash(0, i, 0.0); return; }
+`;
+const HELD_OPEN = `  var shone = 0.0; var weighted = 0.0;
   for (var n = 0; n < i32(PH[PH_RADP + 1]); n++) {
     let turn = f32(n) * PH[PH_RADP + 2]; let c = cos(turn); let s = sin(turn);
     let ahead = MF[F_XC + 3 * i] * (sun.x * c + sun.y * s) + MF[F_XC + 3 * i + 1] * (sun.y * c - sun.x * s) + MF[F_XC + 3 * i + 2] * sun.z;
@@ -894,30 +1017,41 @@ const HELD_OPEN = `  if (PH[PH_RADP] > 0.5 || !(PH[PH_RADEMIT + i] > 0.0)) {
   let ozoneHeating = select(beam * OZONE_ABS, beam * ozoneTaken[K - 1], SOLAR_CLIRAD);
   let visibleTaken = ozoneHeating + beam * solar.x;
 `;
-const HELD_STORE = `  for (var k = 0; k < K; k++) { PH[PH_RADSW + k * C + i] = beforeBands[k]; PH[PH_LWH + k * C + i] = netFlux[k] - beforeBands[k]; }
+const HELD_STORE = `  for (var k = 0; k < K; k++) { PH[PH_RADSW + k * C + i] = beforeBands[k]; }
   let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating;
-  PH[PH_RADABS + i] = absorbed; PH[PH_RADBACK + i] = back; PH[PH_RADEMIT + i] = surfaceEmission; PH[PH_RADOLR + i] = outgoing; PH[PH_RADT + i] = escape;
+  PH[PH_RADABS + i] = absorbed; PH[PH_RADEMIT + i] = surfaceEmission;
   PH[PH_RADSWDN + i] = incident * sw.y; PH[PH_RADDIR + i] = incident * sw.z;
   PH[PH_RADATM + i] = atmosphereSolar; PH[PH_RADTOA + i] = absorbed + atmosphereSolar; PH[PH_RADREFL + i] = incident - absorbed - cloudHeating - upwardHeating;
   if (CLEAR_SKY) {
     let clearSw = shortwave(0.0, 1.0, mu, adir, adif, light);
     var clearUp = 0.0;
     if (UPWARD && mu > 0.0) { let clearEsc = escapes(0.0, 1.0, mu, adir, adif, light); clearUp = clearEsc.y * restLoss + clearEsc.x * aerosolLoss + select(0.0, (clearEsc.x * (1.0 - aerosolLoss) + clearEsc.z) * ozoneLoss, ozoneLoss > 0.0); }
-    var upVapor = VAPOR_FRAC * surfaceEmission; var upGas = GAS_FRAC * surfaceEmission; var throughVapor = VAPOR_FRAC; var throughGas = GAS_FRAC;
-    for (var k = K - 1; k >= 0 && !LW_CORRELATED; k--) {
-      let t = temperature[k]; let ev = clearE[k]; let eg = LV[L_GASE + k];
-      upVapor = upVapor * (1.0 - ev) + VAPOR_FRAC * ev * STEFAN * t * t * t * t;
-      upGas = upGas * (1.0 - eg) + GAS_FRAC * eg * STEFAN * t * t * t * t;
-      throughVapor *= 1.0 - ev; throughGas *= 1.0 - eg;
-    }
     PH[PH_RADCLRSW + i] = incident * (clearSw.x + clearUp) + ozoneHeating + vaporHeating + aerosolHeating;
-    PH[PH_RADCLROLR + i] = select(upVapor + upGas + WINDOW * surfaceEmission, clearOutgoing, LW_CORRELATED);
-    PH[PH_RADTC + i] = select(throughVapor + throughGas + WINDOW, clearEscape, LW_CORRELATED);
   }
-  }
-  let held = PH[PH_RADMU + i]; let sunScale = select(0.0, mu / held, held > 0.0); let lift = surfaceEmission - PH[PH_RADEMIT + i];
+`;
+const HELD_GRAY = `    let outgoing = v.x + g.x + w.x; let back = v.y + g.y + w.y;
+    var through = vec3<f32>(VAPOR_FRAC, GAS_FRAC, WINDOW);
+    for (var k = K - 1; k >= 0; k--) {
+      PH[PH_RADDF + k * C + i] = through.x * vaporE[k] + through.y * mixedE[k] + through.z * cloudE[k];
+      through *= vec3<f32>(1.0 - vaporE[k], 1.0 - mixedE[k], 1.0 - cloudE[k]);
+    }
+    let escape = through.x + through.y + through.z;
+    for (var k = 0; k < K; k++) { PH[PH_LWH + k * C + i] = netFlux[k] - beforeBands[k]; }
+    PH[PH_RADBACK + i] = back; PH[PH_RADOLR + i] = outgoing; PH[PH_RADT + i] = escape;
+    if (CLEAR_SKY) {
+      var upVapor = VAPOR_FRAC * surfaceEmission; var upGas = GAS_FRAC * surfaceEmission; var throughVapor = VAPOR_FRAC; var throughGas = GAS_FRAC;
+      for (var k = K - 1; k >= 0; k--) {
+        let t = temperature[k]; let ev = clearE[k]; let eg = LV[L_GASE + k];
+        upVapor = upVapor * (1.0 - ev) + VAPOR_FRAC * ev * STEFAN * t * t * t * t;
+        upGas = upGas * (1.0 - eg) + GAS_FRAC * eg * STEFAN * t * t * t * t;
+        throughVapor *= 1.0 - ev; throughGas *= 1.0 - eg;
+      }
+      PH[PH_RADCLROLR + i] = upVapor + upGas + WINDOW * surfaceEmission;
+      PH[PH_RADTC + i] = throughVapor + throughGas + WINDOW;
+    }
+`;
+const HELD_REST = `  let held = PH[PH_RADMU + i]; let sunScale = select(0.0, mu / held, held > 0.0); let lift = surfaceEmission - PH[PH_RADEMIT + i];
   let absorbed = sunScale * PH[PH_RADABS + i]; let back = PH[PH_RADBACK + i]; let outgoing = PH[PH_RADOLR + i] + PH[PH_RADT + i] * lift;
-  let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
 `;
 const HELD_THETA = `  for (var k = 0; k < K; k++) {
     let idx = k * C + i;
@@ -930,7 +1064,7 @@ const HELD_TOA = `  let atmosphereSolar = sunScale * PH[PH_RADATM + i]; let abso
 `;
 const HELD_CLEAR = `  if (CLEAR_SKY) { PH[PH_ABSCLRSUM + i] += sunScale * PH[PH_RADCLRSW + i]; PH[PH_OLRCLRSUM + i] += PH[PH_RADCLROLR + i] + PH[PH_RADTC + i] * lift; }
 `;
-export const physicsKernel = (held) => `${MIXED_LAYER_WGSL}${EXCHANGE_WGSL}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+const PHYSICS_KERNEL = `${MIXED_LAYER_WGSL}${EXCHANGE_WGSL}${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
   if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
   let slot = (k - CU_K0) * C + i;
   return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
@@ -975,16 +1109,13 @@ export const physicsKernel = (held) => `${MIXED_LAYER_WGSL}${EXCHANGE_WGSL}fn cu
   let landWet = select(roots, bareWet + canopyWet, VEGETATED);
   let wetness = select(1.0, select(landWet, 1.0, snow0 > ${TRACE_SNOW}), onLand);
   let bareShare = select(0.0, bareWet / max(1e-12, bareWet + canopyWet), VEGETATED && snow0 <= ${TRACE_SNOW});
-  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0); var layerOzone: array<f32, K>;
+  var gases = vec3<f32>(0.0, 0.0, 0.0); var layerOzone: array<f32, K>;
   let ozoneColumn = columnOzone(i, pi, &layerOzone);
-  if (SOLAR_CLIRAD && mu > 0.0) { solar = solarGases(i, pi, mu, &layerOzone, &ozoneTaken, &gasTaken); }
-  let ozoneHeating = select(beam * OZONE_ABS, beam * ozoneTaken[K - 1], SOLAR_CLIRAD);
-  let visibleTaken = ozoneHeating + beam * solar.x;
+  if (SOLAR_CLIRAD && mu > 0.0) { gases = solarGasTotals(i, pi, mu, &layerOzone); }
+  let ozoneHeating = select(beam * OZONE_ABS, beam * gases.y, SOLAR_CLIRAD);
+  let visibleTaken = ozoneHeating + beam * gases.x;
   let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
-  var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>; var chainF: array<f32, K>;
-  var cloudPath = 0.0; var cloudDepth = 0.0; var deckUnit = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0); var layered = vec2<f32>(0.0, 0.0);
-  let tau0 = PH[PH_TAU + i];
   var deck = 0.0; var fraction = 0.0; var mlmCover = 0.0; var mlmWater = 0.0; var mlmEntrainment = 0.0; var mlmTop = 0.0;
   let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
   let mixTop = PH[PH_MIXTOP + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
@@ -1017,7 +1148,7 @@ export const physicsKernel = (held) => `${MIXED_LAYER_WGSL}${EXCHANGE_WGSL}fn cu
       var shade = overlapCover(shadeBlocks, shadeLayered);
       if (!(shade > 0.0)) { shade = 1.0; }
       var lit = beam - ozoneHeating;
-      if (SOLAR_CLIRAD) { lit -= beam * gasTaken[K - 1]; }
+      if (SOLAR_CLIRAD) { lit -= beam * gases.z; }
       else if (VAPOR_ABS > 0.0 && mu > 0.0) {
         let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
         var vapor = 0.0;
@@ -1051,7 +1182,38 @@ export const physicsKernel = (held) => `${MIXED_LAYER_WGSL}${EXCHANGE_WGSL}fn cu
   }
   PH[PH_DECK + i] = deck; PH[PH_DECKF + i] = fraction;
   PH[PH_MLMCOVER + i] = mlmCover; PH[PH_MLMWATER + i] = mlmWater; PH[PH_MLMENT + i] = mlmEntrainment; PH[PH_MLMTOP + i] = mlmTop;
-${held ? HELD_OPEN : ''}  for (var k = 0; k < K; k++) {
+  for (var k = 0; k < K; k++) { OUT[LWS_OZONE + k * C + i] = layerOzone[k]; }
+  stash(1, i, ws); stash(2, i, mu); stash(3, i, beam); stash(4, i, cover); stash(5, i, waterDir); stash(6, i, iceDif); stash(7, i, iceDir); stash(8, i, adif);
+  stash(9, i, ts); stash(10, i, warmth); stash(11, i, wetness); stash(12, i, bareShare); stash(13, i, surfaceEmission);
+  stash(22, i, landAlbedo); stash(23, i, stratiform); stash(24, i, ozoneColumn); stash(25, i, adir);
+}`;
+export const radiationKernel = (held) => `${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+  if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
+  let slot = (k - CU_K0) * C + i;
+  return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
+}
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+${held ? HELD_GATE : ''}  let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ice = IN[S_ICE + i]; let bottom = (K - 1) * C + i;
+  let sun = vec3<f32>(P[2], P[3], P[4]);
+  let onLand = PH[PH_LAND + i] > 0.5; let onIceSheet = PH[PH_LAND + i] > 1.5; let continental = onLand && !onIceSheet;
+  let snow0 = PH[PH_SNOW + i];
+${held ? '' : `  let mu = stashed(2, i); let beam = stashed(3, i); let adir = stashed(25, i);
+`}  let cover = stashed(4, i); let adif = stashed(8, i); let ts = stashed(9, i); let surfaceEmission = stashed(13, i);
+  let landAlbedo = stashed(22, i); let stratiform = stashed(23, i); let ozoneColumn = stashed(24, i);
+  var layerOzone: array<f32, K>;
+  for (var k = 0; k < K; k++) { layerOzone[k] = OUT[LWS_OZONE + k * C + i]; }
+  let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
+  let tau0 = PH[PH_TAU + i]; let deck = PH[PH_DECK + i]; let fraction = PH[PH_DECKF + i];
+  let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
+  let mixTop = PH[PH_MIXTOP + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
+  var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>; var chainF: array<f32, K>;
+  var cloudPath = 0.0; var cloudDepth = 0.0; var deckUnit = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0); var layered = vec2<f32>(0.0, 0.0);
+${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+  if (SOLAR_CLIRAD && mu > 0.0) { solar = solarGases(i, pi, mu, &layerOzone, &ozoneTaken, &gasTaken); }
+  let ozoneHeating = select(beam * OZONE_ABS, beam * ozoneTaken[K - 1], SOLAR_CLIRAD);
+  let visibleTaken = ozoneHeating + beam * solar.x;
+`}${held ? HELD_OPEN : ''}  for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
     var eps = 1.0 - exp(-tau0 * LV[L_SHAPE + k]);
@@ -1067,7 +1229,9 @@ ${held ? HELD_OPEN : ''}  for (var k = 0; k < K; k++) {
     if (k == STRATUS_K) { deckUnit = optics.x; }
     let seen = plumeSeen(select(0.0, f * smallRate(water / VISIBLE_PATH), PDF_COVER && water > 0.0), cu, mass);
     overlap(seen, k == K - 1, &blocks);
-    if (EXP_OVERLAP) { overlapLayer(seen, overlapAlpha(i, k), &layered); }
+    let alpha = overlapAlpha(i, k);
+    if (EXP_OVERLAP) { overlapLayer(seen, alpha, &layered); }
+    if (LW_CORRELATED && LW_CHAIN) { OUT[LWS_ALPHA + idx] = alpha; }
     cloudE[k] = select(0.0, f * (1.0 - exp(-optics.y * water / f)), water > 0.0);
     if (STRATUS && k == STRATUS_K && deck > 0.0) { cloudE[k] = fraction * (1.0 - exp(-optics.y * (water + deck))) + (1.0 - fraction) * cloudE[k]; }
     if (LW_CHAIN) { chainF[k] = select(0.0, f, water > 0.0 && !(STRATUS && k == STRATUS_K && deck > 0.0)); }
@@ -1172,130 +1336,83 @@ ${held ? HELD_OPEN : ''}  for (var k = 0; k < K; k++) {
   let absorbed = incident * sw.x;
   var beforeBands: array<f32, K>;
   if (MOIST_BL${held ? ' || true' : ''}) { for (var k = 0; k < K; k++) { beforeBands[k] = netFlux[k]; } }
-${held ? '  var escape = 0.0; var clearEscape = 0.0;\n' : ''}  var outgoing = 0.0; var back = 0.0; var clearOutgoing = 0.0;
-  if (LW_CORRELATED && LW_CHAIN) {
-    // each region's heat is its absorption less its emission: the difference of whole fluxes loses the thin top layers to f32 cancellation
-    var down0: array<f32, NG>; var down1: array<f32, NG>; var up0: array<f32, NG>; var up1: array<f32, NG>; var clearG: array<f32, NG>;
-${held ? '    var lift0: array<f32, NG>; var lift1: array<f32, NG>; var clearLift: array<f32, NG>;\n' : ''}    for (var k = 0; k < K; k++) {
-      let row = longwavePaths(i, k, pi, temperature[k], layerOzone[k]); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0;
-      let f = chainF[k]; let a = select(0.0, chainF[max(k - 1, 0)], k > 0); let alpha = overlapAlpha(i, k);
-      let cloudIn = select(0.0, cloudE[k] / f, f > 0.0); let clearIn = select(cloudE[k], 0.0, f > 0.0);
-      let both = a + f - (alpha * max(a, f) + (1.0 - alpha) * (a + f - a * f));
-      let p00 = 1.0 - a - f + both; let p01 = f - both; let p10 = a - both;
-      let clearShare = select(0.0, 1.0 / (1.0 - a), a < 1.0); let cloudShare = select(0.0, 1.0 / a, a > 0.0);
-      var heat = 0.0;
-      for (var g = 0; g < NG; g++) {
-        let gas = relaxedFraction(longwaveDepth(g, row)); let src = planckShare(g, t) * hot;
-        let e0 = 1.0 - (1.0 - gas) * (1.0 - clearIn); let e1 = 1.0 - (1.0 - gas) * (1.0 - cloudIn);
-        let from0 = down0[g] * clearShare; let from1 = down1[g] * cloudShare;
-        let in0 = from0 * p00 + from1 * p10; let in1 = from0 * p01 + from1 * both;
-        heat += e0 * (in0 - src * (1.0 - f)) + e1 * (in1 - src * f);
-        down0[g] = in0 * (1.0 - e0) + e0 * src * (1.0 - f); down1[g] = in1 * (1.0 - e1) + e1 * src * f;
-      }
-      netFlux[k] += heat;
-    }
-    let surfaceScaled = (ts - 250.0) / 100.0;
-    for (var g = 0; g < NG; g++) { back += down0[g] + down1[g]; up0[g] = planckShare(g, surfaceScaled) * surfaceEmission; clearG[g] = up0[g]; }
-${held ? '    for (var g = 0; g < NG; g++) { lift0[g] = planckShare(g, surfaceScaled); clearLift[g] = lift0[g]; }\n' : ''}    for (var k = K - 1; k >= 0; k--) {
-      let row = longwavePaths(i, k, pi, temperature[k], layerOzone[k]); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0;
-      let f = chainF[k]; let b = select(0.0, chainF[min(k + 1, K - 1)], k < K - 1); let alpha = overlapAlpha(i, min(k + 1, K - 1));
-      let cloudIn = select(0.0, cloudE[k] / f, f > 0.0); let clearIn = select(cloudE[k], 0.0, f > 0.0);
-      let both = f + b - (alpha * max(f, b) + (1.0 - alpha) * (f + b - f * b));
-      let p00 = 1.0 - f - b + both; let p01 = b - both; let p10 = f - both;
-      let clearShare = select(0.0, 1.0 / (1.0 - b), b < 1.0); let cloudShare = select(0.0, 1.0 / b, b > 0.0);
-      var heat = 0.0;
-${held ? '      var taken = 0.0;\n' : ''}      for (var g = 0; g < NG; g++) {
-        let gas = relaxedFraction(longwaveDepth(g, row)); let src = planckShare(g, t) * hot;
-        let e0 = 1.0 - (1.0 - gas) * (1.0 - clearIn); let e1 = 1.0 - (1.0 - gas) * (1.0 - cloudIn);
-        let from0 = up0[g] * clearShare; let from1 = up1[g] * cloudShare;
-        let in0 = from0 * p00 + from1 * p01; let in1 = from0 * p10 + from1 * both;
-        heat += e0 * (in0 - src * (1.0 - f)) + e1 * (in1 - src * f);
-        up0[g] = in0 * (1.0 - e0) + e0 * src * (1.0 - f); up1[g] = in1 * (1.0 - e1) + e1 * src * f;
-        if (CLEAR_SKY) { clearG[g] = clearG[g] * (1.0 - gas) + gas * src; }
-${held ? `        let rise0 = lift0[g] * clearShare; let rise1 = lift1[g] * cloudShare;
-        let reach0 = rise0 * p00 + rise1 * p01; let reach1 = rise0 * p10 + rise1 * both;
-        taken += e0 * reach0 + e1 * reach1; lift0[g] = reach0 * (1.0 - e0); lift1[g] = reach1 * (1.0 - e1); clearLift[g] *= 1.0 - gas;
-` : ''}      }
-      netFlux[k] += heat;
-${held ? '      PH[PH_RADDF + k * C + i] = taken;\n' : ''}    }
-    for (var g = 0; g < NG; g++) { outgoing += up0[g] + up1[g]; clearOutgoing += clearG[g]; }
-${held ? '    for (var g = 0; g < NG; g++) { escape += lift0[g] + lift1[g]; clearEscape += clearLift[g]; }\n' : ''}  } else if (LW_CORRELATED) {
-    var downG: array<f32, NG>; var upG: array<f32, NG>; var clearG: array<f32, NG>;
-${held ? '    var liftG: array<f32, NG>; var clearLift: array<f32, NG>;\n' : ''}    for (var k = 0; k < K; k++) {
-      let row = longwavePaths(i, k, pi, temperature[k], layerOzone[k]); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
-      var heat = 0.0;
-      for (var g = 0; g < NG; g++) {
-        let e = 1.0 - (1.0 - relaxedFraction(longwaveDepth(g, row))) * clear; let src = planckShare(g, t) * hot;
-        heat += e * (downG[g] - src);
-        downG[g] = downG[g] * (1.0 - e) + e * src;
-      }
-      netFlux[k] += heat;
-    }
-    let surfaceScaled = (ts - 250.0) / 100.0;
-    for (var g = 0; g < NG; g++) { back += downG[g]; upG[g] = planckShare(g, surfaceScaled) * surfaceEmission; clearG[g] = upG[g]; }
-${held ? '    for (var g = 0; g < NG; g++) { liftG[g] = planckShare(g, surfaceScaled); clearLift[g] = liftG[g]; }\n' : ''}    for (var k = K - 1; k >= 0; k--) {
-      let row = longwavePaths(i, k, pi, temperature[k], layerOzone[k]); let hot = STEFAN * temperature[k] * temperature[k] * temperature[k] * temperature[k]; let t = (temperature[k] - 250.0) / 100.0; let clear = 1.0 - cloudE[k];
-      var heat = 0.0;
-${held ? '      var taken = 0.0;\n' : ''}      for (var g = 0; g < NG; g++) {
-        let gas = relaxedFraction(longwaveDepth(g, row)); let e = 1.0 - (1.0 - gas) * clear; let src = planckShare(g, t) * hot;
-        heat += e * (upG[g] - src);
-        upG[g] = upG[g] * (1.0 - e) + e * src;
-        if (CLEAR_SKY) { clearG[g] = clearG[g] * (1.0 - gas) + gas * src; }
-${held ? '        taken += e * liftG[g]; liftG[g] *= 1.0 - e; clearLift[g] *= 1.0 - gas;\n' : ''}      }
-      netFlux[k] += heat;
-${held ? '      PH[PH_RADDF + k * C + i] = taken;\n' : ''}    }
-    for (var g = 0; g < NG; g++) { outgoing += upG[g]; clearOutgoing += clearG[g]; }
-${held ? '    for (var g = 0; g < NG; g++) { escape += liftG[g]; clearEscape += clearLift[g]; }\n' : ''}  } else {
+  if (LW_CORRELATED) {
+    for (var k = 0; k < K; k++) { let idx = k * C + i; OUT[LWS_CLOUD + idx] = cloudE[k]; OUT[LWS_SHARE + idx] = chainF[k];${held ? '' : ' OUT[LWS_FLUX + idx] = netFlux[k];'} }
+  } else {
     let v = band(VAPOR_FRAC, &vaporE, &temperature, &netFlux, surfaceEmission);
     let g = band(GAS_FRAC, &mixedE, &temperature, &netFlux, surfaceEmission);
     let w = band(WINDOW, &cloudE, &temperature, &netFlux, surfaceEmission);
-    outgoing = v.x + g.x + w.x; back = v.y + g.y + w.y;
-${held ? `    var through = vec3<f32>(VAPOR_FRAC, GAS_FRAC, WINDOW);
-    for (var k = K - 1; k >= 0; k--) {
-      PH[PH_RADDF + k * C + i] = through.x * vaporE[k] + through.y * mixedE[k] + through.z * cloudE[k];
-      through *= vec3<f32>(1.0 - vaporE[k], 1.0 - mixedE[k], 1.0 - cloudE[k]);
+${held ? HELD_GRAY : `    stash(20, i, v.y + g.y + w.y); stash(21, i, v.x + g.x + w.x);
+    for (var k = 0; k < K; k++) { OUT[LWS_FLUX + k * C + i] = netFlux[k]; }
+    if (MOIST_BL) { for (var k = 0; k < K; k++) { PH[PH_LWH + k * C + i] = netFlux[k] - beforeBands[k]; } }
+`}  }
+${held ? HELD_STORE : `  if (CLEAR_SKY) {
+    let clearSw = shortwave(0.0, 1.0, mu, adir, adif, light);
+    var clearUp = 0.0;
+    if (UPWARD && mu > 0.0) { let clearEsc = escapes(0.0, 1.0, mu, adir, adif, light); clearUp = clearEsc.y * restLoss + clearEsc.x * aerosolLoss + select(0.0, (clearEsc.x * (1.0 - aerosolLoss) + clearEsc.z) * ozoneLoss, ozoneLoss > 0.0); }
+    PH[PH_ABSCLRSUM + i] += incident * (clearSw.x + clearUp) + ozoneHeating + vaporHeating + aerosolHeating;
+    if (!LW_CORRELATED) {
+      var upVapor = VAPOR_FRAC * surfaceEmission; var upGas = GAS_FRAC * surfaceEmission;
+      for (var k = K - 1; k >= 0; k--) {
+        let t = temperature[k]; let ev = clearE[k]; let eg = LV[L_GASE + k];
+        upVapor = upVapor * (1.0 - ev) + VAPOR_FRAC * ev * STEFAN * t * t * t * t;
+        upGas = upGas * (1.0 - eg) + GAS_FRAC * eg * STEFAN * t * t * t * t;
+      }
+      PH[PH_OLRCLRSUM + i] += upVapor + upGas + WINDOW * surfaceEmission;
     }
-    escape = through.x + through.y + through.z;
-` : ''}  }
-${held ? HELD_STORE : `  if (MOIST_BL) { for (var k = 0; k < K; k++) { PH[PH_LWH + k * C + i] = netFlux[k] - beforeBands[k]; } }
-  let airT = temperature[K - 1];
-`}  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
+  }
+  let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let absorbedSolar = absorbed + ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let reflectedSolar = incident - absorbed - cloudHeating - upwardHeating;
+  stash(14, i, absorbed); stash(15, i, incident * sw.y); stash(16, i, incident * sw.z); stash(17, i, atmosphereSolar); stash(18, i, absorbedSolar); stash(19, i, reflectedSolar);
+`}  stash(0, i, 1.0);
+}`;
+export const longwaveKernel = (held, ng = DEFAULT_LONGWAVE_TABLE.points.length) => `${LONGWAVE_STASH}
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C || !LW_CORRELATED || !(stashed(0, i) > 0.0)) { return; }
+  let pi = IN[S_PI + i]; let ts = stashed(9, i); let surfaceEmission = stashed(13, i);
+  var back = 0.0; var outgoing = 0.0; var clearOutgoing = 0.0;${held ? ' var escape = 0.0; var clearEscape = 0.0;' : ''}
+${longwaveSweeps(held, ng, {
+    layer: 'let T = IN[S_TH + k * C + i] * D[D_EXM + k * C + i]; let row = longwavePaths(i, k, pi, T, OUT[LWS_OZONE + k * C + i]); let hot = STEFAN * T * T * T * T; let t = (T - 250.0) / 100.0;',
+    chainF: (k) => `OUT[LWS_SHARE + ${k} * C + i]`, cloudE: 'OUT[LWS_CLOUD + k * C + i]', alpha: (k) => `OUT[LWS_ALPHA + ${k} * C + i]`,
+    downEnd: held ? 'PH[PH_LWH + k * C + i] = PH[PH_RADSW + k * C + i] + heat;' : 'let b = OUT[LWS_FLUX + k * C + i]; if (MOIST_BL) { PH[PH_LWH + k * C + i] = b; } OUT[LWS_FLUX + k * C + i] = b + heat;',
+    upEnd: held ? 'PH[PH_LWH + k * C + i] = PH[PH_LWH + k * C + i] + heat - PH[PH_RADSW + k * C + i];' : 'let n = OUT[LWS_FLUX + k * C + i] + heat; OUT[LWS_FLUX + k * C + i] = n; if (MOIST_BL) { PH[PH_LWH + k * C + i] = n - PH[PH_LWH + k * C + i]; }',
+  })}
+${held ? `  PH[PH_RADBACK + i] = back; PH[PH_RADOLR + i] = outgoing; PH[PH_RADT + i] = escape;
+  if (CLEAR_SKY) { PH[PH_RADCLROLR + i] = clearOutgoing; PH[PH_RADTC + i] = clearEscape; }` : `  stash(20, i, back); stash(21, i, outgoing);
+  if (CLEAR_SKY) { PH[PH_OLRCLRSUM + i] += clearOutgoing; }`}
+}`;
+export const physicsSurfaceKernel = (held) => `${EXCHANGE_WGSL}${LONGWAVE_STASH}
+@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ice = IN[S_ICE + i]; let bottom = (K - 1) * C + i;
+  let onLand = PH[PH_LAND + i] > 0.5; let onIceSheet = PH[PH_LAND + i] > 1.5;
+  let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i]; let veg0 = PH[PH_VEG + i]; let surf0 = PH[PH_SURF + i];
+  let bucket = select(BUCKET, ROOTCAP, VEGETATED);
+  let ws = stashed(1, i); let mu = stashed(2, i); let beam = stashed(3, i); let cover = stashed(4, i); let waterDir = stashed(5, i); let iceDif = stashed(6, i); let iceDir = stashed(7, i); let adif = stashed(8, i);
+  let ts = stashed(9, i); let warmth = stashed(10, i); let wetness = stashed(11, i); let bareShare = stashed(12, i); let surfaceEmission = stashed(13, i);
+${held ? HELD_REST : `  let absorbed = stashed(14, i); let swdn = stashed(15, i); let directDown = stashed(16, i); let atmosphereSolar = stashed(17, i); let absorbedSolar = stashed(18, i); let reflectedSolar = stashed(19, i);
+  let back = stashed(20, i); let outgoing = stashed(21, i);
+`}  let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
+  let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
   let exchange = rho * PH[PH_HEATX + i] * xWind(i, ws);
   let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
   let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
   if (ROUGH) { PH[PH_BUOY + i] = GRAV / IN[S_TH + bottom] * (sensible / (rho * CP * D[D_EXM + bottom]) + 0.61 * IN[S_TH + bottom] * evap / rho); }
   let airQs = qsat(airT, pi); let airSlope = airQs * 4302.645 / ((airT - 29.65) * (airT - 29.65)); let conductance = PH[PH_REFX + i] * xWind(i, ws);
   let potential = (airSlope * (absorbed - surfaceEmission + back) + rho * CP * conductance * (airQs - IN[S_Q + bottom])) / (LHEAT * airSlope + CP * (1.0 + REF_RESIST * conductance));
-${held ? '' : `  netFlux[K - 1] += sensible;
-`}  let net = absorbed - surfaceEmission + back - sensible - LHEAT * evap;
+  let net = absorbed - surfaceEmission + back - sensible - LHEAT * evap;
   let dt = P[0];
 ${held ? HELD_THETA : `  for (var k = 0; k < K; k++) {
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
-    IN[S_TH + idx] += dt * netFlux[k] / (CP * mass) / D[D_EXM + idx];
+    let flux = OUT[LWS_FLUX + idx];
+    IN[S_TH + idx] += dt * select(flux, flux + sensible, k == K - 1) / (CP * mass) / D[D_EXM + idx];
   }
 `}  IN[S_Q + bottom] += dt * evap * GRAV / (pi * LV[L_DS + K - 1]);
-${held ? '  let swdn = sunScale * PH[PH_RADSWDN + i];\n' : `  let swdn = incident * sw.y;
-`}  PH[PH_SWDN + i] = swdn;
-${held ? '  let directDown = sunScale * PH[PH_RADDIR + i];\n' : `  let directDown = incident * sw.z;
-`}  let contrast = directDown * (iceDir - waterDir) + (swdn - directDown) * (iceDif - ALB_DIF_WATER);
-${held ? HELD_TOA : `  let atmosphereSolar = ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let absorbedSolar = absorbed + ozoneHeating + vaporHeating + aerosolHeating + cloudHeating + upwardHeating; let reflectedSolar = incident - absorbed - cloudHeating - upwardHeating;
-`}  PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbedSolar; PH[PH_ATMSW + i] = atmosphereSolar; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = reflectedSolar; PH[PH_ADIF + i] = adif;
+${held ? '  let swdn = sunScale * PH[PH_RADSWDN + i];\n' : ''}  PH[PH_SWDN + i] = swdn;
+${held ? '  let directDown = sunScale * PH[PH_RADDIR + i];\n' : ''}  let contrast = directDown * (iceDir - waterDir) + (swdn - directDown) * (iceDif - ALB_DIF_WATER);
+${held ? HELD_TOA : ''}  PH[PH_SFLUX + i] = net; PH[PH_ABS + i] = absorbedSolar; PH[PH_ATMSW + i] = atmosphereSolar; PH[PH_OLR + i] = outgoing; PH[PH_SH + i] = sensible; PH[PH_EVAP + i] = evap; PH[PH_INS + i] = beam; PH[PH_REFL + i] = reflectedSolar; PH[PH_ADIF + i] = adif;
   PH[PH_ABSSUM + i] += absorbedSolar; PH[PH_ATMSUM + i] += atmosphereSolar; PH[PH_OLRSUM + i] += outgoing; PH[PH_INSSUM + i] += beam; PH[PH_REFLSUM + i] += reflectedSolar; PH[PH_LWSFCSUM + i] += back - surfaceEmission;
-${held ? HELD_CLEAR : `  if (CLEAR_SKY) {
-    let clearSw = shortwave(0.0, 1.0, mu, adir, adif, light);
-    var clearUp = 0.0;
-    if (UPWARD && mu > 0.0) { let clearEsc = escapes(0.0, 1.0, mu, adir, adif, light); clearUp = clearEsc.y * restLoss + clearEsc.x * aerosolLoss + select(0.0, (clearEsc.x * (1.0 - aerosolLoss) + clearEsc.z) * ozoneLoss, ozoneLoss > 0.0); }
-    var upVapor = VAPOR_FRAC * surfaceEmission; var upGas = GAS_FRAC * surfaceEmission;
-    for (var k = K - 1; k >= 0 && !LW_CORRELATED; k--) {
-      let t = temperature[k]; let ev = clearE[k]; let eg = LV[L_GASE + k];
-      upVapor = upVapor * (1.0 - ev) + VAPOR_FRAC * ev * STEFAN * t * t * t * t;
-      upGas = upGas * (1.0 - eg) + GAS_FRAC * eg * STEFAN * t * t * t * t;
-    }
-    PH[PH_ABSCLRSUM + i] += incident * (clearSw.x + clearUp) + ozoneHeating + vaporHeating + aerosolHeating;
-    PH[PH_OLRCLRSUM + i] += select(upVapor + upGas + WINDOW * surfaceEmission, clearOutgoing, LW_CORRELATED);
-  }
-`}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
+${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = skin; var h = ice;
   if (onLand) {
     var soil = soil0; var snow = snow0; var surf = surf0;
@@ -1977,8 +2094,12 @@ fn mixField(fieldOff: i32, i: i32, pi: f32, dt: f32) {
 
 export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];
 
+export const PHYSICS_PASSES = ['physics', 'radiation', 'longwave', 'physicsSurface'];
 export const PHYSICS_KERNELS = {
-  physics: physicsKernel(false),
+  physics: PHYSICS_KERNEL,
+  radiation: radiationKernel(false),
+  longwave: longwaveKernel(false),
+  physicsSurface: physicsSurfaceKernel(false),
   pblDiagnose: `fn blHeight(k: i32, i: i32) -> f32 { return (D[D_GEO + k * C + i] + LV[L_GABS + k]) / GRAV; }
 fn blInterface(k: i32, i: i32, zb: f32) -> f32 { return 0.5 * (blHeight(k, i) + blHeight(k + 1, i)) - zb; }
 fn blDensity(k: i32, i: i32, pi: f32) -> f32 { let idx = k * C + i; return pi * LV[L_SM + k] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]); }
