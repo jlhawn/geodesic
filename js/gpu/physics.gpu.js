@@ -2394,52 +2394,73 @@ fn transportEdge(e: i32, a: i32, b: i32) {
   if (!(loss > 0.0) || !(total > 0.0)) { return; }
   for (var k = 0; k < K; k++) { D[D_DISS + k * E + e] += loss * share[k] / (total * columnMass * LV[L_DS + k] / GRAV); }
 }
+fn mixOwn(j: i32, a: i32, b: i32) -> f32 { return 0.5 * (PH[PH_TOFD + j * C + a] + PH[PH_TOFD + j * C + b]); }
+/*
+ * The share of the dissipated kinetic energy layer j takes, its own change
+ * and the shear against its neighbours, from the mixed winds in rhs and
+ * the winds still in the state; summed over the column it is the whole.
+ */
+fn mixShare(j: i32, n: i32, e: i32, a: i32, b: i32, columnMass: f32, dt: f32, surfaceDrag: f32, forming: bool, rhs: ptr<function, array<f32, K>>) -> f32 {
+  let k = KTOP + j; let mass = columnMass * LV[L_DS + k] / GRAV;
+  let change = (*rhs)[j] - IN[S_U + k * E + e];
+  var share = mass * change * change;
+  if (j > 0) { let shear = (*rhs)[j - 1] - (*rhs)[j]; share += dt * 0.5 * (PH[PH_MIX + (k - 1) * C + a] + PH[PH_MIX + (k - 1) * C + b]) * shear * shear; }
+  if (j < n - 1) { let shear = (*rhs)[j] - (*rhs)[j + 1]; share += dt * 0.5 * (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b]) * shear * shear; }
+  if (IMPLICIT_DRAG && j == n - 1) { share += dt * surfaceDrag * (*rhs)[j] * (*rhs)[j]; }
+  if (forming) { share += dt * columnMass * LV[L_DS + k] / GRAV * mixOwn(j, a, b) * (*rhs)[j] * (*rhs)[j]; }
+  return share;
+}
+/*
+ * The implicit mixing of the edge's wind down the column: the tridiagonal
+ * solve keeps only the winds and the back-sweep gains per layer, the
+ * coefficients read again from the mixing rates where they are used, and
+ * the state's winds stand until the dissipation has been shared out.
+ */
 fn mixEdge(e: i32, a: i32, b: i32) {
   let columnMass = 0.5 * (IN[S_PI + a] + IN[S_PI + b]); let dt = P[0];
-  var upper: array<f32, K>; var lower: array<f32, K>; var rhs: array<f32, K>;
   let n = K - KTOP;
+  let surfaceDrag = 0.5 * (PH[PH_SDRAG + a] + PH[PH_SDRAG + b]);
+  var forming = false;
+  if (FORM_DRAG) { for (var j = 0; j < n; j++) { if (mixOwn(j, a, b) > 0.0) { forming = true; } } }
+  var rhs: array<f32, K>; var gain: array<f32, K>;
+  var mixAbove = 0.0;
   for (var j = 0; j < n; j++) {
     let k = KTOP + j;
     let mass = columnMass * LV[L_DS + k] / GRAV;
-    upper[j] = select(0.0, dt * 0.5 * (PH[PH_MIX + (k - 1) * C + a] + PH[PH_MIX + (k - 1) * C + b]) / mass, j > 0);
-    lower[j] = select(select(0.0, dt * 0.5 * (PH[PH_SDRAG + a] + PH[PH_SDRAG + b]) / mass, IMPLICIT_DRAG), dt * 0.5 * (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b]) / mass, k < K - 1);
-    rhs[j] = IN[S_U + k * E + e];
+    let mixHere = PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b];
+    let upper = select(0.0, dt * 0.5 * mixAbove / mass, j > 0);
+    let lower = select(select(0.0, dt * 0.5 * (PH[PH_SDRAG + a] + PH[PH_SDRAG + b]) / mass, IMPLICIT_DRAG), dt * 0.5 * mixHere / mass, k < K - 1);
+    let u = IN[S_U + k * E + e];
+    var denominator = 0.0;
+    if (j == 0) {
+      if (forming) { denominator = 1.0 + upper + lower + dt * mixOwn(j, a, b); } else { denominator = 1.0 + upper + lower; }
+      rhs[j] = u / denominator;
+    } else {
+      if (forming) { denominator = 1.0 + upper + lower + dt * mixOwn(j, a, b) + upper * gain[j - 1]; } else { denominator = 1.0 + upper + lower + upper * gain[j - 1]; }
+      rhs[j] = (u + upper * rhs[j - 1]) / denominator;
+    }
+    gain[j] = -lower / denominator;
+    mixAbove = mixHere;
   }
-  var before: array<f32, K>;
-  for (var j = 0; j < n; j++) { before[j] = rhs[j]; }
-  var own: array<f32, K>;
-  var forming = false;
-  if (FORM_DRAG) {
-    for (var j = 0; j < n; j++) { own[j] = 0.5 * (PH[PH_TOFD + j * C + a] + PH[PH_TOFD + j * C + b]); if (own[j] > 0.0) { forming = true; } }
-  }
-  if (forming) { thomasRate(n, &upper, &lower, &own, &rhs, dt); } else { thomas(n, &upper, &lower, &rhs); }
-  for (var j = 0; j < n; j++) { IN[S_U + (KTOP + j) * E + e] = rhs[j]; }
-  let surfaceDrag = 0.5 * (PH[PH_SDRAG + a] + PH[PH_SDRAG + b]);
+  for (var j = n - 2; j >= 0; j--) { rhs[j] -= gain[j] * rhs[j + 1]; }
   if (IMPLICIT_DRAG) { PH[PH_STRESS + e] = surfaceDrag * rhs[n - 1]; PH[PH_STRESSOK] = 1.0; }
   if (forming) {
     var formed = 0.0;
-    for (var j = 0; j < n; j++) { formed += columnMass * LV[L_DS + KTOP + j] / GRAV * own[j] * rhs[j]; }
+    for (var j = 0; j < n; j++) { formed += columnMass * LV[L_DS + KTOP + j] / GRAV * mixOwn(j, a, b) * rhs[j]; }
     PH[PH_FSTRESS + e] = formed;
   }
-  var share: array<f32, K>;
   var loss = 0.0; var total = 0.0;
   for (var j = 0; j < n; j++) {
-    let mass = columnMass * LV[L_DS + KTOP + j] / GRAV; let change = rhs[j] - before[j];
-    loss += mass * (before[j] * before[j] - rhs[j] * rhs[j]);
-    share[j] = mass * change * change;
+    let k = KTOP + j; let mass = columnMass * LV[L_DS + k] / GRAV; let before = IN[S_U + k * E + e];
+    loss += mass * (before * before - rhs[j] * rhs[j]);
+    total += mixShare(j, n, e, a, b, columnMass, dt, surfaceDrag, forming, &rhs);
   }
-  for (var j = 0; j < n - 1; j++) {
-    let k = KTOP + j; let shear = rhs[j] - rhs[j + 1];
-    let part = dt * 0.5 * (PH[PH_MIX + k * C + a] + PH[PH_MIX + k * C + b]) * shear * shear;
-    share[j] += part; share[j + 1] += part;
+  if (total > 0.0) {
+    for (var j = 0; j < n; j++) {
+      let k = KTOP + j;
+      D[D_DISS + k * E + e] += loss * mixShare(j, n, e, a, b, columnMass, dt, surfaceDrag, forming, &rhs) / (total * columnMass * LV[L_DS + k] / GRAV);
+    }
   }
-  if (IMPLICIT_DRAG) { share[n - 1] += dt * surfaceDrag * rhs[n - 1] * rhs[n - 1]; }
-  if (forming) { for (var j = 0; j < n; j++) { share[j] += dt * columnMass * LV[L_DS + KTOP + j] / GRAV * own[j] * rhs[j] * rhs[j]; } }
-  for (var j = 0; j < n; j++) { total += share[j]; }
-  if (total <= 0.0) { return; }
-  for (var j = 0; j < n; j++) {
-    let k = KTOP + j;
-    D[D_DISS + k * E + e] += loss * share[j] / (total * columnMass * LV[L_DS + k] / GRAV);
-  }
+  for (var j = 0; j < n; j++) { IN[S_U + (KTOP + j) * E + e] = rhs[j]; }
 }`,
 };
