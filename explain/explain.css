@@ -44,3 +44,18 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; min-wid
 .readout b { color: #fff; font-weight: 500; }
 footer { margin-top: 64px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); padding-top: 16px; }
 @media (max-width: 480px) { article { padding: 32px 16px 64px; } h1 { font-size: 28px; } body { font-size: 16px; } .control { grid-template-columns: 1fr auto; } .control input { grid-column: 1 / -1; grid-row: 2; } }
+.preview { position: absolute; z-index: 10; background: #1e1e1e; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); overflow: hidden; font-size: 14px; line-height: 1.45; color: var(--fg); }
+.preview img { display: block; width: 100%; height: auto; max-height: 170px; object-fit: cover; }
+.preview .body { padding: 12px 14px 10px; }
+.preview .title { font-weight: 600; color: #fff; margin-bottom: 4px; }
+.preview p { margin: 0; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+.preview .from { margin-top: 8px; font-size: 11px; color: var(--muted); }
+.preview-backdrop { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.5); touch-action: none; }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; max-height: 80vh; overflow: hidden; background: #1e1e1e; border-radius: 16px 16px 0 0; box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.5); padding-bottom: env(safe-area-inset-bottom); transform: translateY(100%); transition: transform 0.28s ease; touch-action: none; font-size: 15px; line-height: 1.5; color: var(--fg); cursor: pointer; }
+.sheet.open { transform: translateY(0); }
+.sheet .handle { width: 40px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.3); margin: 10px auto 6px; }
+.sheet img { display: block; width: 100%; height: auto; max-height: 200px; object-fit: cover; }
+.sheet .body { padding: 12px 18px 18px; }
+.sheet .title { font-weight: 600; color: #fff; margin-bottom: 4px; }
+.sheet p { margin: 0; display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
+.sheet .from { margin-top: 10px; font-size: 12px; color: var(--muted); }
