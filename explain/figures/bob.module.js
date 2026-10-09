@@ -5,9 +5,11 @@ export function mountBob(root) {
   const controls = root.querySelector('.controls');
   const zTop = 10000, zRest = 3000, SPEED = 300, STEP = 2, WINDOW = 40 * 60;
   const lapseFor = (slope) => { let lapse = G / CP; for (let i = 0; i < 6; i++) lapse = G / CP - slope / 1000 / (P0 / pressureAt(zRest, T0, lapse)) ** KAPPA; return lapse; };
-  let lapse = lapseFor(3.6), delta = 0, z = zRest, wv = 0, holding = false, t = 0, geometry = null;
+  const LID_JUMP = 8, LID_DEPTH = 300;
+  let lapse = lapseFor(3.6), delta = 0, lid = 0, z = zRest, wv = 0, holding = false, t = 0, geometry = null;
   const history = [];
-  const thetaEnv = (zz) => thetaAt(zz, T0, lapse);
+  const smooth = (x) => x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x);
+  const thetaEnv = (zz) => thetaAt(zz, T0, lapse) + (lid > 0 ? LID_JUMP * smooth((zz - lid * 1000 + LID_DEPTH / 2) / LID_DEPTH) : 0);
   let thetaParcel = thetaEnv(zRest);
   function neutralHeight() {
     let previous = thetaEnv(0) - thetaParcel;
@@ -26,6 +28,7 @@ export function mountBob(root) {
   legend(root, [['ramp', 'lower to higher θ', 'cool', 'warm', 'neutral'], ['dash', 'where the parcel\u2019s θ matches the air', 'rgba(255,255,255,0.55)'], ['line', 'where the parcel has been', ACCENT]]);
   slider(controls, { label: 'θ of the air changes with height by', min: -3, max: 8, step: 0.1, value: 3.6, format: (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)} °C per km`, onInput: (v) => { lapse = lapseFor(v); thetaParcel = thetaEnv(zRest) + delta; rescale(); stability(); } });
   slider(controls, { label: 'Parcel θ compared with the air at 3 km', min: -8, max: 8, step: 0.5, value: 0, format: (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)} °C`, onInput: (v) => { delta = v; thetaParcel = thetaEnv(zRest) + delta; } });
+  slider(controls, { label: 'Inversion lid at', min: 0, max: 8, step: 0.1, value: 0, format: (v) => v === 0 ? 'none' : `${v.toFixed(1)} km`, onInput: (v) => { lid = v; thetaParcel = thetaEnv(zRest) + delta; rescale(); stability(); } });
   buttons(controls, [['Nudge it up', () => { z = clamp(z + 1500, 0, zTop); wv = 0; }], ['Nudge it down', () => { z = clamp(z - 1500, 0, zTop); wv = 0; }], ['Reset', () => { z = zRest; wv = 0; history.length = 0; t = 0; }]]);
   const out = readout(controls);
 
@@ -63,6 +66,7 @@ export function mountBob(root) {
     const level = neutralHeight();
     if (level !== null) { ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(left, y(level)); ctx.lineTo(right, y(level)); ctx.stroke(); ctx.setLineDash([]); }
     text(ctx, 'θ of the surrounding air', left + colW / 2, 11, { align: 'center', color: MUTED, size: 11 });
+    if (lid > 0) text(ctx, 'inversion', right + 6, y(lid * 1000), { color: MUTED, size: 10 });
     const cx = left + colW / 2, py = y(z);
     const cl = right + 44, cr = w - 16;
     ctx.strokeStyle = 'rgba(255,232,160,0.3)'; ctx.setLineDash([2, 4]); ctx.beginPath(); ctx.moveTo(cx + 13, py); ctx.lineTo(cr, py); ctx.stroke(); ctx.setLineDash([]);

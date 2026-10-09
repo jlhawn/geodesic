@@ -8,7 +8,7 @@
  */
 import { R, CP, KAPPA, G, P0, thetaAt, heightOf } from './physics.module.js';
 
-export function createSlice({ M = 64, K = 12, dx = 1e5, heated = M >> 1, dt = 60 } = {}) {
+export function createSlice({ M = 64, K = 12, dx = 1e5, heated = M >> 1, heatedHalf = 1, dt = 60 } = {}) {
   const dSigma = 1 / K, n = M * K;
   const sigmaK = new Float64Array(K + 1), sigma1K = new Float64Array(K + 1);
   for (let k = 0; k <= K; k++) { sigmaK[k] = (k / K) ** KAPPA; sigma1K[k] = (k / K) ** (1 + KAPPA); }
@@ -71,7 +71,7 @@ export function createSlice({ M = 64, K = 12, dx = 1e5, heated = M >> 1, dt = 60
       const fluxDown = k === K - 1 ? 0 : below * (below > 0 ? theta[idx] : theta[idx + M]);
       const fluxUp = k === 0 ? 0 : above * (above > 0 ? theta[idx - M] : theta[idx]);
       let q = -(theta[idx] - theta0[k]) / 28800;
-      if (i === heated) q += mode === 'ground' ? (k === K - 1 ? heating * K : 0) / exnerLayer[idx] : heating / exnerLayer[idx];
+      if (Math.abs(i - heated) <= heatedHalf) q += mode === 'ground' ? (k === K - 1 ? heating * K : 0) / exnerLayer[idx] : heating / exnerLayer[idx];
       out.Theta[idx] = -(fluxRight - fluxLeft) / dx - (fluxDown - fluxUp) / dSigma + pi[i] * q;
     }
     for (let k = 0; k < K; k++) for (let i = 0; i < M; i++) {
@@ -130,7 +130,7 @@ export function createSlice({ M = 64, K = 12, dx = 1e5, heated = M >> 1, dt = 60
 
   reset();
   return {
-    M, K, dx, dt, heated, dSigma, theta0, z0, state, pi, u, theta, exnerLayer, phiLayer, phiInterface, piSigmaDot,
+    M, K, dx, dt, heated, heatedHalf, dSigma, theta0, z0, state, pi, u, theta, exnerLayer, phiLayer, phiInterface, piSigmaDot,
     reset, step, temperature, verticalVelocity,
     interfaceHeight: (k, i) => phiInterface[k * M + i] / G,
     layerHeight: (k, i) => phiLayer[k * M + i] / G,

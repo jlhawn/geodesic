@@ -130,6 +130,8 @@ const SWATCHES = {
   bar: (color) => `<svg width="30" height="14" viewBox="0 0 30 14"><path d="M2 4h26" stroke="rgba(255,255,255,0.35)"/><rect x="9" y="4" width="12" height="8" fill="${color}"/></svg>`,
   line: (color) => `<svg width="30" height="12" viewBox="0 0 30 12"><path d="M2 9c6 0 6-6 12-6s6 6 12 6" fill="none" stroke="${color}" stroke-width="2"/></svg>`,
   dash: (color) => `<svg width="30" height="12" viewBox="0 0 30 12"><path d="M2 6h26" stroke="${color}" stroke-width="1.5" stroke-dasharray="3 4"/></svg>`,
+  faint: (color) => `<svg width="30" height="12" viewBox="0 0 30 12"><path d="M2 6h26" stroke="${color}" stroke-width="1"/></svg>`,
+  dots: (color) => `<svg width="30" height="12" viewBox="0 0 30 12"><path d="M2 6h26" stroke="${color}" stroke-width="2" stroke-dasharray="1.5 3.5" stroke-linecap="round"/></svg>`,
 };
 
 const legends = [];
@@ -145,11 +147,18 @@ function fillLegend(wrap, items) {
   }
 }
 
+export function caption(root, content) {
+  const line = el('div', 'caption', content);
+  root.querySelector('.stage').before(line);
+  return line;
+}
+
 export function legend(root, items) {
-  const wrap = el('div', 'legend');
+  const wrap = el('div', 'legend'), entry = [wrap, items];
   root.querySelector('.stage').after(wrap);
-  legends.push([wrap, items]);
+  legends.push(entry);
   fillLegend(wrap, items);
+  return { set(next) { entry[1] = next; fillLegend(wrap, next); } };
 }
 
 export function arrow(ctx, x0, y0, x1, y1, { color = INK, width = 1.5, head = 6 } = {}) {
