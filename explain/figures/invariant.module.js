@@ -33,7 +33,7 @@ export function mountInvariant(root) {
 
   const fig = new Figure(root, { height: 420, minHeight: 320, draw });
   root.classList.add('drag');
-  legend(root, [['ramp', 'the flow’s spin, clockwise to counterclockwise', 'cool', 'warm', 'neutral'], ['arrow', 'the wind', INK], ['force', 'the push the flow gives itself, −(u·∇)u', 'rgb(255, 232, 160)'], ['force', 'its vortex part, −ζ k×u', 'warm'], ['force', 'its kinetic-energy part, −∇K', 'cool']]);
+  legend(root, [['ramp', 'the flow’s spin, clockwise to counterclockwise', 'cool', 'warm', 'neutral'], ['arrow', 'the wind', INK], ['force', 'the push the flow gives itself, −(u·∇)u', 'rgb(255, 232, 160)'], ['force', 'its vortex part, −ζ ẑ×u', 'warm'], ['force', 'its kinetic-energy part, −∇K', 'cool']]);
   const start = choice(controls, { label: 'Start with', options: [['a vortex', 'vortex'], ['a straight jet', 'jet'], ['two vortices', 'pair'], ['calm air', 'calm']], value: 'vortex', onChange: preset, span: true });
   choice(controls, { label: 'Show', options: [['the two parts', 'parts'], ['the whole push', 'whole'], ['just the wind', 'wind']], value: show, onChange: (s) => { show = s; fig.render(); }, span: true });
   const out = readout(controls);

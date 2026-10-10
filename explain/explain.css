@@ -67,11 +67,12 @@ footer { margin-top: 64px; color: var(--muted); font-size: 14px; border-top: 1px
 .tex math { font-family: 'STIX Two Math', 'Cambria Math', 'Latin Modern Math', math; }
 div.tex, .tex.display { display: block; max-width: 100%; min-width: 0; margin: 2px 0 20px; padding: 0.3em 0; overflow-x: auto; overflow-y: hidden; font-size: 1.15em; color: #fff; }
 div.tex > math, .tex.display > math { min-width: max-content; }
-.tex .term-a { color: var(--term-a); }
-.tex .term-b { color: var(--term-b); }
-.tex .term-c { color: var(--term-c); }
-.tex .term-d { color: var(--term-d); }
-.tex .term-e { color: var(--term-e); }
+.term-a { color: var(--term-a); }
+.term-b { color: var(--term-b); }
+.term-c { color: var(--term-c); }
+.term-d { color: var(--term-d); }
+.term-e { color: var(--term-e); }
+.term-a a, .term-b a, .term-c a, .term-d a, .term-e a { color: inherit; }
 .tex .tex-aligned > mtr > mtd { padding: 0.45em 0; }
 .tex .tex-aligned > mtr > mtd:nth-child(odd) { text-align: right; }
 .tex .tex-aligned > mtr > mtd:nth-child(even) { text-align: left; }
