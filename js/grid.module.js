@@ -362,7 +362,7 @@ class GridCell {
 }
 
 class Grid {
-  constructor(N, { relax = 8 } = {}) {
+  constructor(N, { relax = 30 } = {}) {
     const { quadCells, northPole, southPole } = Grid.make(N);
 
     this.N = N;

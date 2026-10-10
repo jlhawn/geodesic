@@ -505,7 +505,14 @@ cost matters). Shared initial-condition and norm helpers live in
   1e-15, energy to 1e-10. This certified the sign conventions: the
   momentum tendency is `+Q⊥_e − (Φ_j − Φ_i)/d_e` with `u⊥_e = u·t_e`,
   `t_e = m_e × n_e`. On the raw ISEA grid the N=32 error is 4.8e-4 — 5×
-  worse — which settled the relaxation default.
+  worse — which settled the relaxation default. Oct 10, 2026: the default
+  went from 8 Lloyd passes to 30. At N=32 the `h` l₂ error is 1.07e-4
+  after 8 passes, 6.6e-5 after 30 and 5.5e-5 after 100; at N=64 it is
+  5.4e-5, 3.0e-5 and 2.2e-5, with the `u` l∞ error 8.1e-4, 6.5e-4 and
+  7.1e-4; the worst
+  edge-midpoint offset at N=128 is 9.9% of the edge after 8 passes and
+  8.8% after 100. Thirty passes build the N=128 grid in 1.8 s against
+  0.7 s for eight and 5.4 s for a hundred.
 - **Williamson TC6** (`test/sw_tc6.test.mjs`, 14 days, N=32): mass
   exact, energy drift 1.5e-9, potential enstrophy drift 7.6e-4 (bounded;
   the energy-conserving PV average does not also conserve enstrophy),
