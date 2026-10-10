@@ -1,19 +1,32 @@
 import * as THREE from '../../js/three.module.js';
 import { Grid } from '../../js/grid.module.js';
 import { Globe, rgb } from '../globe.module.js';
-import { choice, legend, readout, rampColor } from '../runtime.module.js';
+import { slider, buttons, legend, readout, rampColor } from '../runtime.module.js';
 
 export function mountRelax(root) {
   const controls = root.querySelector('.controls');
   const globe = new Globe(root, { height: 440, zoom: 0.42, lookAt: new THREE.Vector3(0, 0, 1) });
   legend(root, [['ramp', 'cell edges, from cut at the midpoint to cut 8% or more off it', 'neutral', 'warm'], ['faint', 'lines between neighboring cell centers', 'rgba(255,255,255,0.35)']]);
-  const grids = { off: new Grid(6, { relax: 0 }), on: new Grid(6, { relax: 8 }) };
-  let relaxed = 'off';
-  choice(controls, { label: 'Lloyd relaxation', options: [['off', 'off'], ['on', 'on']], value: relaxed, onChange: (v) => { relaxed = v; build(); } });
+  let N = 10, grid = new Grid(N, { relax: 0 }), passes = 0;
+  const reset = () => { grid = new Grid(N, { relax: 0 }); passes = 0; globe.zoom = 0.42 * Math.sqrt(6 / N); build(); };
+  let pending = 0;
+  slider(controls, { label: 'Subdivisions N', min: 10, max: 32, step: 1, value: N, format: (v) => `${v}`, onInput: (v) => { N = v; clearTimeout(pending); pending = setTimeout(reset, 150); } });
+  buttons(controls, [
+    ['Relax once more', () => { pass(1); }],
+    ['Ten more passes', () => { pass(10); }],
+    ['Reset', reset],
+  ]);
   const out = readout(controls);
 
+  function pass(n) {
+    for (let i = 0; i < n; i++) grid.relax();
+    for (const cell of grid) cell.calculateArea();
+    passes += n;
+    build();
+  }
+
   function build() {
-    const grid = grids[relaxed], cells = [...grid];
+    const cells = [...grid];
     globe.clear();
     globe.cells(cells.map((c) => ({ center: c.centerVertex, vertices: c.vertices })), () => rgb('rgb(70, 74, 84)'));
     const edges = [], duals = [];
@@ -28,9 +41,9 @@ export function mountRelax(root) {
     }
     globe.lines(duals, { color: 0xffffff, opacity: 0.25, lift: 1.002 });
     globe.coloredLines(edges, { lift: 1.004 });
-    out.set([['worst edge', `cut ${(worst * 100).toFixed(0)}% from its midpoint`], ['typical edge', `${(sum / count * 100).toFixed(1)}%`]]);
+    out.set([['cells', `${cells.length}`], ['Lloyd passes', `${passes}`], ['worst edge', `cut ${(worst * 100).toFixed(1)}% from its midpoint`], ['typical edge', `${(sum / count * 100).toFixed(2)}%`]]);
     globe.fig.render();
   }
 
-  build();
+  reset();
 }

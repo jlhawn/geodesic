@@ -42,6 +42,8 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; min-wid
 .buttons button, .choice button { border: 1px solid var(--line); background: rgba(255, 255, 255, 0.05); color: var(--fg); border-radius: 999px; padding: 4px 13px; font: inherit; font-size: 13px; cursor: pointer; }
 .buttons button:hover, .choice button:hover { border-color: rgba(255, 232, 160, 0.5); color: #fff; }
 .choice button[aria-pressed=true] { background: rgba(255, 232, 160, 0.16); border-color: rgba(255, 232, 160, 0.6); color: #fff; }
+.swatch-chip { width: 30px; height: 22px; padding: 0; border: 2px solid rgba(255, 255, 255, 0.18); border-radius: 6px; background: transparent; cursor: pointer; }
+.swatch-chip[aria-pressed=true] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .readout { color: var(--muted); font-variant-numeric: tabular-nums; grid-column: 1 / -1; }
 .readout b { color: #fff; font-weight: 500; }
 footer { margin-top: 64px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); padding-top: 16px; }

@@ -124,6 +124,7 @@ export function readout(parent) {
 const SWATCHES = {
   gradient: (a, b) => `<span class="gradient" style="background: linear-gradient(90deg, ${a}, transparent 50%, ${b})"></span>`,
   ramp: (a, b, mid = null) => `<span class="gradient" style="background: linear-gradient(90deg, ${a}, ${mid ?? b}, ${b})"></span>`,
+  force: (color) => `<svg width="30" height="12" viewBox="0 0 30 12"><path d="M2 6h19" stroke="${color}" stroke-width="1.5" stroke-dasharray="3 2.5" stroke-linecap="round"/><path d="M28 6l-6-3v6z" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/></svg>`,
   arrow: (color) => `<svg width="30" height="12" viewBox="0 0 30 12"><path d="M2 6h22" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/><path d="M28 6l-6-3v6z" fill="${color}"/></svg>`,
   varrow: (color) => `<svg width="30" height="16" viewBox="0 0 30 16"><path d="M10 14V4" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/><path d="M10 1l-3 6h6z" fill="${color}"/><path d="M20 2v10" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/><path d="M20 15l-3-6h6z" fill="${color}"/></svg>`,
   bar: (color) => `<svg width="30" height="14" viewBox="0 0 30 14"><path d="M2 4h26" stroke="rgba(255,255,255,0.35)"/><rect x="9" y="4" width="12" height="8" fill="${color}"/></svg>`,
@@ -160,14 +161,17 @@ export function legend(root, items) {
   return { set(next) { entry[1] = next; fillLegend(wrap, next); } };
 }
 
-export function arrow(ctx, x0, y0, x1, y1, { color = INK, width = 1.5, head = 6 } = {}) {
+export function arrow(ctx, x0, y0, x1, y1, { color = INK, width = 1.5, head = 6, dash = null, open = false } = {}) {
   const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
   if (len < 0.5) return;
   const ux = dx / len, uy = dy / len, hd = Math.min(head, len);
   ctx.save();
-  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1 - ux * hd * 0.7, y1 - uy * hd * 0.7); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - ux * hd - uy * hd * 0.5, y1 - uy * hd + ux * hd * 0.5); ctx.lineTo(x1 - ux * hd + uy * hd * 0.5, y1 - uy * hd - ux * hd * 0.5); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (dash) ctx.setLineDash(dash);
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1 - ux * hd * (open ? 1 : 0.7), y1 - uy * hd * (open ? 1 : 0.7)); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - ux * hd - uy * hd * 0.5, y1 - uy * hd + ux * hd * 0.5); ctx.lineTo(x1 - ux * hd + uy * hd * 0.5, y1 - uy * hd - ux * hd * 0.5); ctx.closePath();
+  if (open) ctx.stroke(); else ctx.fill();
   ctx.restore();
 }
 
@@ -194,6 +198,15 @@ export function rampColor(f) {
   const t = clamp(f, 0, 1) * 2, i = Math.min(1, Math.floor(t)), u = t - i;
   const [a, b] = [stops[i], stops[i + 1]];
   return `rgb(${Math.round(lerp(a[0], b[0], u))}, ${Math.round(lerp(a[1], b[1], u))}, ${Math.round(lerp(a[2], b[2], u))})`;
+}
+
+export const DARK_NEUTRAL = [52, 55, 62];
+
+export function rampRGB(f, out = [0, 0, 0], neutral = palette.neutral) {
+  const stops = [palette.cool, neutral, palette.warm];
+  const t = clamp(f, 0, 1) * 2, i = Math.min(1, Math.floor(t)), u = t - i, a = stops[i], b = stops[i + 1];
+  out[0] = lerp(a[0], b[0], u) / 255; out[1] = lerp(a[1], b[1], u) / 255; out[2] = lerp(a[2], b[2], u) / 255;
+  return out;
 }
 
 export function setPalette(name) {
