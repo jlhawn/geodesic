@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How WebGCM works, part 3: A dry sphere</title>
+  <link rel="icon" href="../favicon.ico">
+  <link rel="stylesheet" href="explain.css">
+  <script type="module" src="sphere.module.js"></script>
+</head>
+
+<body>
+  <article>
+    <h1>How WebGCM works<br>Part 3: A dry sphere</h1>
+    <p class="kicker">Putting the pieces together on a spinning globe.</p>
+    <nav class="parts"><a href="air.html">1 · Air</a><a href="grid.html">2 · The grid</a><span class="here">3 · A dry sphere</span><span class="palette"></span></nav>
+
+    <p><a href="air.html">Part 1</a> built a row of columns of air and watched one of them warm. <a href="grid.html">Part 2</a> built a grid that covers the sphere evenly, decided where on each cell the numbers live, and set the planet spinning. This part puts them together. It starts with the simplest atmosphere there is, a single layer of fluid over the whole globe, and every globe in it is the model's own equations running live in your browser. Drag them to turn them.</p>
+
+    <h2 id="one-layer-of-fluid"><a href="#one-layer-of-fluid">One layer of fluid</a></h2>
+    <p>Imagine the atmosphere replaced by a layer of water a few kilometers deep covering the whole planet. It is a better caricature than it sounds. The air is about ten kilometers deep and the planet forty thousand kilometers around, so, like water in a wide pan, it moves almost entirely sideways. A layer like that obeys the <a href="https://en.wikipedia.org/wiki/Shallow_water_equations">shallow-water equations</a>, and they need only the two kinds of number that Part 2 arranged: the depth of the layer at each cell's center and the water's speed across each edge.</p>
+    <p>The depth follows one rule. Each step, a cell gets deeper or shallower by however much water flows in or out through its edges. Whatever leaves one cell enters its neighbor, so the total amount of water never changes, not by a single drop in the last decimal place, which the figures below report as they run.</p>
+    <p>The speed across an edge follows another. It changes for three reasons. The surface may slope between the two cells, and water runs downhill: on a layer of fluid, the slope of the surface is the pressure gradient force of Part 2. The Coriolis force turns the flow, computed from the along-edge wind that TRiSK reconstructs. And the water carries its own motion along with it, which is called <a href="https://en.wikipedia.org/wiki/Advection">advection</a>. A little smoothing at the scale of the grid mops up the finest wiggles that the arithmetic leaves behind. The real model's air is a stack of layers like this one, each with its own depth and winds; this part comes to that later.</p>
+
+    <h2 id="dropping-a-stone"><a href="#dropping-a-stone">Dropping a stone</a></h2>
+    <p>Start with the water at rest and drop a hump of extra water onto it, the way a stone dropped in a pond makes a splash. Then change how fast the planet spins.</p>
+
+    <figure class="fig" data-figure="bump"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>With no spin, the hump collapses within hours into a ring of <a href="https://en.wikipedia.org/wiki/Gravity_wave">gravity waves</a> racing outward at about 200 m/s. On a sphere the ring has nowhere to go but around: it meets itself on the far side of the planet about 28 hours later and comes back, refocusing near where it started after about two and a half days. Nothing stays behind.</p>
+    <p>With the Earth's spin, the water rushing outward is turned by the Coriolis force before it gets far, and about a fifth of the hump stays, as a dome the water circles clockwise. That is the geostrophic balance of Part 2, assembled by the fluid on its own: it is called geostrophic adjustment. How much stays depends on the hump's size compared with the <a href="https://en.wikipedia.org/wiki/Rossby_radius_of_deformation">Rossby radius of deformation</a>, the gravity-wave speed divided by the Coriolis parameter, about 1,900 km here. Humps much wider than it are mostly kept, and narrower ones are mostly radiated away as waves. Spin the planet four times faster and the radius shrinks to 480 km, and about two-thirds of the hump stays.</p>
+    <p>The dome does not stay put, either. It drifts west, by 15 to 20 degrees of longitude a day at the Earth's spin. A drifting pattern like that is a <a href="https://en.wikipedia.org/wiki/Rossby_wave">Rossby wave</a>, and it comes from the same cause as the creeping circles of Part 2: the Coriolis force is stronger on the poleward side of the dome than on the equatorward side.</p>
+
+    <h2 id="breaking-a-jet"><a href="#breaking-a-jet">Breaking a jet</a></h2>
+    <p>Balance is not the same as stability. The figure below starts with a narrow jet blowing east around the northern midlatitudes, with the surface sloped so that the pressure gradient and Coriolis forces balance it exactly. This is one of the standard tests a model is checked against, set out by <a href="https://doi.org/10.3402/tellusa.v56i5.14436">Galewsky, Scott and Polvani in 2004</a>. The colors show how fast the fluid spins about the vertical, its <a href="https://en.wikipedia.org/wiki/Vorticity">vorticity</a>: the jet's poleward side spins one way and its equatorward side the other.</p>
+
+    <figure class="fig" data-figure="galewsky"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>In exact balance the jet should blow forever. It does not, because a jet this narrow is unstable: any wiggle in it can grow by drawing energy from the difference in speed across it, a process called <a href="https://en.wikipedia.org/wiki/Barotropic_instability">barotropic instability</a>. With a small bump in the surface, the jet begins to meander on the third day, and by the fifth or sixth it has rolled up into a chain of vortices.</p>
+    <p>Now restart it perfectly smooth. In a perfect world nothing would happen. On this grid the jet breaks anyway, barely a day later, and in both cases the pattern it breaks into has five waves around the globe. That five is no accident: it is the grid. The icosahedron the grid was built from has five triangles around each pole and five pentagons ringing each hemisphere at 27 degrees of latitude, so whatever small errors the grid makes, the misses of Part 2 among them, it makes five times around the globe, and the jet amplifies them. A finer grid makes the errors smaller and delays the breakup, but never removes the imprint, which is why the smooth jet is part of the test: it measures how loudly a model's grid speaks.</p>
+
+    <footer>Still to come in this part: waves that only a spinning sphere can carry, layers stacked into an atmosphere, and sunlight as the only forcing, with a climate that appears on its own.</footer>
+  </article>
+</body>
+
+</html>
