@@ -1,11 +1,11 @@
 import * as THREE from '../../js/three.module.js';
-import { slider, buttons, legend, readout, text, termColor, MUTED, rampRGB } from '../runtime.module.js';
+import { slider, buttons, legend, readout, text, termColor, clamp, MUTED, rampRGB } from '../runtime.module.js';
 import { Scene3D, hexPatch, Arrows, hexTiles, linear, cssColor } from '../scene3d.module.js';
 
-const K = 6, SPACING = 1.3, PRESETS = { rising: [2, 1.5, 0, 0, -1.5, -2], piling: [-1, -1, -1, -1, -1, -1], sinking: [-2, -1.5, 0, 0, 1.5, 2] };
+const K = 6, SPACING = 1.3, GAUGE = { x: 2.7, z: 1.4 }, PRESETS = { rising: [2, 1.5, 0, 0, -1.5, -2], piling: [-1, -1, -1, -1, -1, -1], sinking: [-2, -1.5, 0, 0, 1.5, 2] };
 
 export function mountContinuity(root) {
-  const controls = root.querySelector('.controls'), B = termColor('b'), C = termColor('c'), sides = cssColor(B), between = cssColor(C);
+  const controls = root.querySelector('.controls'), A = termColor('a'), B = termColor('b'), C = termColor('c'), weight = cssColor(A), sides = cssColor(B), between = cssColor(C);
   const patch = hexPatch(3, 3), center = patch.cells[4];
   const divergence = [...PRESETS.rising];
   const layerY = (k) => (K - 1 - k + 0.5) * SPACING, interfaceY = (k) => (K - k) * SPACING;
@@ -17,7 +17,8 @@ export function mountContinuity(root) {
   const tiles = hexTiles(scene.group, { thickness: 0.04, opacity: 0.45, depthWrite: false }).mesh(patch.cells.length * K);
   const flows = new Arrows(scene.group, 6 * K, { radius: 0.04, head: 0.2, headRadius: 0.1 });
   const lifts = new Arrows(scene.group, K + 1, { radius: 0.05, head: 0.22, headRadius: 0.12 });
-  legend(root, [['arrow', 'air flowing across the column’s six sides in each layer', B], ['arrow', 'air crossing between layers, πσ̇', C], ['ramp', 'the column’s layers, tinted from air flowing in to air flowing out', 'cool', 'warm', 'neutral']]);
+  const gauge = new Arrows(scene.group, 1, { radius: 0.09, head: 0.36, headRadius: 0.2 });
+  legend(root, [['arrow', 'the surface pressure rising or falling, ∂π/∂t: the ground glows as it changes', A], ['arrow', 'air flowing across the column’s six sides in each layer', B], ['arrow', 'air crossing between layers, πσ̇', C], ['ramp', 'the column’s layers, tinted from air flowing in to air flowing out', 'cool', 'warm', 'neutral']]);
   const sliders = divergence.map((value, k) => slider(controls, { label: k === 0 ? 'Top layer' : k === K - 1 ? 'Lowest layer' : `Layer ${k + 1}`, min: -3, max: 3, step: 0.5, value, format: (v) => v === 0 ? 'balanced' : v > 0 ? `${v} out` : `${-v} in`, onInput: (v) => { divergence[k] = v; compute(); } }));
   buttons(controls, [['Rising column', () => preset('rising')], ['Air piling in', () => preset('piling')], ['Sinking column', () => preset('sinking')]]);
   const out = readout(controls);
@@ -57,12 +58,20 @@ export function mountContinuity(root) {
     lifts.begin();
     for (let k = 1; k < K; k++) { const f = result.flux[k], len = -0.55 * f; lifts.push(center.x, interfaceY(k) - len / 2, center.z, 0, len, 0, between); }
     lifts.end();
+    const t = result.tendency, glow = Math.min(1, Math.abs(t) / 1.5) * 0.6, base = [0.05, 0.045, 0.035];
+    ground.material.color.setRGB(...base.map((b, i) => b + (linear(weight[i]) - b) * glow));
+    gauge.begin();
+    if (Math.abs(t) > 1e-9) { const len = clamp(1.1 * t, -3.3, 3.3); gauge.push(GAUGE.x, len < 0 ? -len : 0, GAUGE.z, 0, len, 0, weight); }
+    gauge.end();
   }
 
   function labels(ctx) {
     const top = scene.project(center.x, interfaceY(0) + 0.3, center.z), bottom = scene.project(center.x, -0.05, center.z);
     if (top.visible) text(ctx, 'top of the atmosphere, σ = 0', top.x, top.y - 10, { align: 'center', color: MUTED, size: 11 });
     if (bottom.visible) text(ctx, 'the ground, σ = 1', bottom.x, bottom.y + 16, { align: 'center', color: MUTED, size: 11 });
+    const t = result?.tendency ?? 0, steady = Math.abs(t) < 1e-9, at = scene.project(GAUGE.x, steady ? 0.1 : Math.abs(clamp(1.1 * t, -3.3, 3.3)) + 0.45, GAUGE.z);
+    const style = { align: 'center', color: steady ? MUTED : A, size: 11, halo: 'rgba(20, 20, 22, 0.85)' };
+    if (at.visible) { text(ctx, 'surface pressure', at.x, at.y - 20, style); text(ctx, steady ? 'steady' : `${t > 0 ? 'rising' : 'falling'} ${Math.abs(t).toFixed(2)} hPa an hour`, at.x, at.y - 6, style); }
   }
 
   compute();
