@@ -4,6 +4,8 @@ article { max-width: 680px; margin: 0 auto; padding: 48px 20px 96px; }
 h1 { font-size: 34px; line-height: 1.15; font-weight: 650; margin: 0 0 8px; color: #fff; }
 .kicker { color: var(--muted); margin: 0 0 24px; font-size: 15px; }
 nav.parts { display: flex; gap: 6px 18px; flex-wrap: wrap; font-size: 14px; color: var(--muted); margin: 0 0 40px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+nav.parts a { color: var(--muted); text-decoration: none; }
+nav.parts a:hover { color: var(--accent); }
 nav.parts .here { color: #fff; }
 nav.parts small { font-size: 11px; color: var(--muted); opacity: 0.8; margin-left: 2px; }
 nav.parts .palette { margin-left: auto; }

@@ -9,12 +9,12 @@ const figures = new Map();
 const observer = new IntersectionObserver((entries) => { for (const entry of entries) figures.get(entry.target)?.setVisible(entry.isIntersecting); }, { rootMargin: '120px' });
 
 export class Figure {
-  constructor(root, { height = 360, minHeight = 260, step = null, draw }) {
+  constructor(root, { height = 360, minHeight = 260, step = null, draw, context = '2d' }) {
     this.root = root;
     this.stage = root.querySelector('.stage');
     this.canvas = document.createElement('canvas');
     this.stage.append(this.canvas);
-    this.ctx = this.canvas.getContext('2d');
+    this.ctx = context === '2d' ? this.canvas.getContext('2d') : null;
     Object.assign(this, { height, minHeight, step, draw, visible: false, running: false, frame: 0, last: 0, width: 0, h: 0, dpr: 1 });
     this.tick = this.tick.bind(this);
     new ResizeObserver(() => this.resize()).observe(this.stage);
@@ -58,8 +58,7 @@ export class Figure {
   render() {
     if (!this.width) return;
     const { ctx, width: w, h, dpr } = this;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
+    if (ctx) { ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h); }
     this.draw(ctx, w, h);
   }
 

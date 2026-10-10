@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How WebGCM works, part 2: The grid</title>
+  <link rel="icon" href="../favicon.ico">
+  <link rel="stylesheet" href="explain.css">
+  <script type="module" src="grid.module.js"></script>
+</head>
+
+<body>
+  <article>
+    <h1>How WebGCM works<br>Part 2: The grid</h1>
+    <p class="kicker">How to cover a sphere with cells that a computer can march across.</p>
+    <nav class="parts"><a href="air.html">1 · Air</a><span class="here">2 · The grid</span><span>3 · A dry sphere <small>coming soon</small></span><span class="palette"></span></nav>
+
+    <p><a href="air.html">Part 1</a> ended with a row of columns of air standing side by side. The real model needs columns all over the globe, and a rule for which ones are neighbors. That is a grid, and on a sphere a grid is surprisingly hard to get right. This part is about the one WebGCM uses and the handful of ideas that make it work. Every figure can be turned by dragging it.</p>
+
+    <h2 id="squares-of-latitude-and-longitude"><a href="#squares-of-latitude-and-longitude">Squares of latitude and longitude</a></h2>
+    <p>The obvious grid is the one on every classroom globe: lines of <a href="https://en.wikipedia.org/wiki/Geographic_coordinate_system">latitude and longitude</a>, with a cell wherever they cross. It has two problems, and the figure shows both. Color the cells by their area and the ones along the equator are many times bigger than the ones beside the poles, because the meridians converge. A cell that is 1100 km wide at the equator is 100 km wide at 85° north and shrinks to a sliver at the pole itself. Slide the cell size and watch the ratio.</p>
+
+    <figure class="fig" data-figure="latlon"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>The second problem is the time step. A model marches forward in steps, and a step cannot be longer than the time the fastest wave needs to cross the smallest cell, or the arithmetic feeds on its own errors and blows up. That rule is the <a href="https://en.wikipedia.org/wiki/Courant%E2%80%93Friedrichs%E2%80%93Lewy_condition">Courant–Friedrichs–Lewy condition</a>, and Part 3 meets it properly. The slivers at the poles force the whole globe to take steps ten times shorter than its typical cell would need, so most of the work is wasted. Older models dealt with this by smoothing the poles or bolting on special treatments. The modern answer is a different grid.</p>
+
+    <h2 id="an-equal-area-grid"><a href="#an-equal-area-grid">An equal-area grid</a></h2>
+    <p>Start with an <a href="https://en.wikipedia.org/wiki/Icosahedron">icosahedron</a>, the twenty-sided die, inflated onto the sphere. Its twenty triangles are identical, so whatever you do to one you can do to all of them. Divide each edge into N parts, fill the triangle with N² smaller triangles, and carry the result onto the sphere with a <a href="https://en.wikipedia.org/wiki/Map_projection">map projection</a> that keeps areas equal: the one John Snyder published in 1992 for exactly this purpose, which is the basis of the <a href="https://en.wikipedia.org/wiki/Discrete_global_grid">ISEA grids</a> that geographers use for global datasets. The model does not use the triangles themselves but the cell around each of their corners, which is a hexagon, except at the twelve corners of the original icosahedron, where it is a pentagon. There are always exactly twelve pentagons, whatever N is, and 10N² + 2 cells in all.</p>
+
+    <figure class="fig" data-figure="icosa"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>The cells are drawn on the same color scale as the latitude–longitude grid, and they barely register on it: the largest is about a fifth bigger than the smallest, with the pentagons smallest of all, against a factor of twenty or more before. There is no pole to speak of, and the time step is set by a typical cell rather than a freak one. This kind of mesh is called a <a href="https://en.wikipedia.org/wiki/Geodesic_grid">geodesic grid</a>. The model runs at N = 128 on a desktop, which is 163,842 cells about 56 km across, and at N = 64 on a phone, with cells twice as wide.</p>
+
+    <h2 id="nudging-the-cells-into-shape"><a href="#nudging-the-cells-into-shape">Nudging the cells into shape</a></h2>
+    <p>The raw grid has one flaw that matters later. The method the model uses for the wind, which the end of this part explains, wants each cell edge to be cut at its midpoint by the line joining the two cell centers on either side of it. On the raw grid that line can miss the midpoint by up to 14 percent of the edge's length, mostly near the pentagons. So the model nudges the grid before it starts. It moves every cell's center to the center of mass of its cell, redraws the cells around the new centers, and repeats, eight times over. This is <a href="https://en.wikipedia.org/wiki/Lloyd%27s_algorithm">Lloyd's algorithm</a>, and what it converges toward is a <a href="https://en.wikipedia.org/wiki/Centroidal_Voronoi_tessellation">centroidal Voronoi tessellation</a>: each cell is the set of points closer to its center than to any other center, and each center sits at its cell's center of mass. The figure looks straight down on the north pole, one of the twelve pentagons, where the misses are largest.</p>
+
+    <figure class="fig" data-figure="relax"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>The worst miss falls from 14 percent to 9, and the typical one from 2.9 to 2.2. Those are small numbers, but the wind method is exact only when they are zero, and in a standard test of flow around the sphere the error it makes shrinks fivefold after the nudge.</p>
+
+    <footer>Still to come in this part: where the numbers live on a cell, and the checkerboard that broke the first version of this model; how a hexagon reconstructs the wind it does not store; and the Coriolis effect, which turns the next part's outflow sideways.</footer>
+  </article>
+</body>
+
+</html>
