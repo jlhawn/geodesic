@@ -99,7 +99,7 @@
           <a class="slide" href="climate.html?view=ocean&overlay=seatemp&depth=surface&animate=particles&projection=map&lat=0&lon=150&zoom=140&palette=inferno&panel=closed&stats=off&graticule=off" data-caption="Sea surface temperature, with current particles"><img data-src="screenshots/carousel_17.png" width="1920" height="1131" alt="A world map of sea surface temperature, warm across the tropics and cold around the poles, with particles tracing the surface currents"></a>
           <a class="slide" href="climate.html?view=ocean&overlay=current&depth=150&animate=particles&projection=sphere&lat=0&lon=-160&zoom=420&palette=dusk&panel=closed&stats=off&graticule=off" data-caption="The Equatorial Undercurrent at 150 m depth"><img data-src="screenshots/carousel_18.png" width="1920" height="1131" alt="Current speed at 150 m depth along the equatorial Pacific, with the undercurrent flowing east beneath the trade winds"></a>
           <a class="slide" href="climate.html?view=ocean&overlay=layer&depth=surface&animate=none&projection=sphere&lat=58&lon=-40&zoom=520&palette=cividis&panel=closed&stats=off&graticule=off" data-caption="Winter deep mixing in the Labrador and Irminger Seas: mixed layer depth"><img data-src="screenshots/carousel_19.png" width="1920" height="1131" alt="Mixed layer depth over the North Atlantic in March, with the deep mixing of the Labrador and Irminger Seas"></a>
-          <a class="slide" href="climate.html?view=ocean&overlay=current&depth=surface&animate=particles&projection=sphere&lat=8&lon=-52&zoom=650&palette=dusk&panel=closed&stats=off&graticule=off" data-caption="The North Brazil Current and the equatorial Atlantic"><img data-src="screenshots/carousel_20.png" width="1920" height="1131" alt="Ocean current speed off the coast of Brazil and the Guianas, with the North Brazil Current running north-west along the coast toward the Caribbean"></a>
+          <a class="slide" href="climate.html?view=ocean&overlay=current&depth=surface&animate=particles&projection=sphere&lat=8&lon=-52&zoom=650&palette=dusk&panel=closed&stats=off&graticule=off" data-caption="The North Brazil Current and the equatorial Atlantic"><img data-src="screenshots/carousel_20.png" width="1920" height="1131" alt="Ocean current speed off the coast of Brazil and the Guianas, with the North Brazil Current running northwest along the coast toward the Caribbean"></a>
           <noscript><img src="screenshots/carousel_1.png" width="1920" height="1131" alt="Satellite view of the Americas"></noscript>
         </div>
         <div class="controls">
@@ -112,8 +112,8 @@
       </div>
       <div class="body">
         <h2>Climate model</h2>
-        <p>A global climate model running live: a hydrostatic atmosphere with 27 levels on a geodesic C-grid, moist convection and clouds, a 24-layer ocean with a mixed layer over 23 isopycnal layers, sea ice, snow and soil on real continents with terrain. Every kernel runs on the graphics card through WebGPU. It picks up from day 810 of a spin-up, at 128 subdivisions on a desktop, about 164,000 cells 56 km across, or 64 on phones and tablets, about 41,000 cells 112 km across; a quick test when the page opens picks the engine and the resolution your device runs well. You can color the globe by wind, temperature, pressure, rain, clouds, ice or ocean currents, draw isobars, follow the wind with particles or arrows, watch the planet from space, and save snapshots.</p>
-        <p class="note">Best in a browser with WebGPU (Chrome, Edge or Safari 26). Without it the model falls back to a slower CPU engine. The starting state is a 98 MB download on a desktop and 25 MB on phones and tablets.</p>
+        <p>A global climate model running live: a hydrostatic atmosphere with 36 layers on a geodesic C-grid, moist convection and clouds, a 45-layer ocean with a mixed layer over 44 isopycnal layers, sea ice, snow, soil and vegetation on real continents with terrain. Every kernel runs on the graphics card through WebGPU. It picks up from day 1825, the March equinox at the end of a five-year spin-up, at up to 128 subdivisions on a desktop, about 164,000 cells 56 km across, or up to 64 on phones and tablets, about 41,000 cells 112 km across; the first time the page opens, a quick test picks the engine and the finest resolution your device runs well. You can color the globe by wind, temperature, pressure, rain, clouds, ice or ocean currents, draw isobars, follow the wind with particles or arrows, watch the planet from space, and save snapshots.</p>
+        <p class="note">Best in a browser with WebGPU (Chrome, Edge or Safari 26). Without it the model falls back to a slower CPU engine. The starting state is a 244 MB download on a desktop and 62 MB on phones and tablets, kept in the browser after the first visit.</p>
         <a class="go" href="climate.html?view=space&lat=15&lon=-95&zoom=230&graticule=off&sun=1&ambient=0.004">Open the climate model →</a>
       </div>
     </section>
@@ -132,7 +132,7 @@
         <img src="screenshots/grid.jpg" width="960" height="600" alt="A geodesic polyhedron shaded by procedural terrain">
         <div class="body">
           <h2>Geodesic grid</h2>
-          <p>Where the project began, and where its repository got its name: an icosahedron subdivided into 100,002 hexagonal cells, twelve of them pentagons, shaded by procedural terrain and rendered with Three.js. Drag to rotate, scroll to zoom.</p>
+          <p>Where the project began, and where its repository got its name: an icosahedron subdivided into 100,002 cells, all hexagons but twelve pentagons, shaded by procedural terrain and rendered with Three.js. Drag to rotate, scroll to zoom.</p>
           <span class="go">View the grid →</span>
         </div>
       </a>

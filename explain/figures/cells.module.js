@@ -63,7 +63,7 @@ export function mountCells(root) {
     let maxU = 0, maxW = 0;
     for (let k = 0; k < K; k++) for (let i = 0; i < M; i++) { maxU = Math.max(maxU, Math.abs(slice.u[k * M + i])); maxW = Math.max(maxW, Math.abs(slice.verticalVelocity(k, i))); }
     const minutes = Math.round(slice.state.time / 60);
-    out.set([['time', `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`], ['strongest wind', `${maxU.toFixed(1)} m/s`], ['strongest updraught', `${(maxW * 100).toFixed(0)} cm/s`]], every);
+    out.set([['time', `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`], ['strongest wind', `${maxU.toFixed(1)} m/s`], ['strongest updraft', `${(maxW * 100).toFixed(0)} cm/s`]], every);
   }
 
   function draw(ctx, w, h) {
