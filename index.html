@@ -5,7 +5,24 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>WebGCM</title>
-  <link rel="icon" href="favicon.ico">
+  <meta name="description" content="A global climate model that runs in your browser: winds, clouds and rain, an ocean with currents and sea ice, and land with snow and soil, all computed live.">
+  <link rel="canonical" href="https://gcm.echorelay.net/">
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <meta name="theme-color" content="#151515">
+  <meta property="og:site_name" content="WebGCM">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="WebGCM: a climate model that runs in your browser">
+  <meta property="og:description" content="A global climate model that runs in your browser: winds, clouds and rain, an ocean with currents and sea ice, and land with snow and soil, all computed live.">
+  <meta property="og:url" content="https://gcm.echorelay.net/">
+  <meta property="og:image" content="https://gcm.echorelay.net/screenshots/share.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="WebGCM's simulated Earth seen from space: Africa and Europe under the model's own clouds">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image:alt" content="WebGCM's simulated Earth seen from space: Africa and Europe under the model's own clouds">
   <style>
     :root { color-scheme: dark; }
     body { margin: 0; background: #151515; color: #ddd; font: 16px/1.5 system-ui, sans-serif; }
@@ -43,10 +60,14 @@
     .caption:hover { color: #ffe8a0; }
     .count { flex: none; color: #888; font-size: 13px; font-variant-numeric: tabular-nums; }
     @media (prefers-reduced-motion: reduce) { .slide { transition: none; } }
+    .wide { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); margin-bottom: 20px; }
+    .wide img { height: 100%; aspect-ratio: 16 / 10; object-fit: cover; }
+    .wide .body { align-self: center; }
     .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
     .row img { aspect-ratio: 16 / 10; object-fit: cover; }
     .row img.chart { object-fit: contain; background: #fff; }
     footer { margin-top: 40px; color: #888; font-size: 14px; }
+    @media (max-width: 700px) { .wide { grid-template-columns: 1fr; } }
     @media (max-width: 600px) { main { padding: 32px 16px 48px; } .hero .body, .card .body { padding: 20px; } .controls { flex-wrap: wrap; padding: 12px 20px 0; } .caption { order: 1; flex-basis: 100%; margin: 4px 0 0; } .count { margin-left: auto; } }
   </style>
 </head>
@@ -67,7 +88,7 @@
           <a class="slide" href="climate.html?view=atmosphere&overlay=wind&level=surface&animate=particles&isobars=off&projection=map&lat=0.9&lon=4.6&zoom=136&palette=dusk&panel=closed&stats=off&graticule=off" data-caption="Surface wind speed on the Equal Earth projection, with wind particles"><img data-src="screenshots/carousel_6.png" width="1920" height="1131" alt="A world map of surface wind speed, with the storm tracks of both hemispheres in green and red and the trade winds in blue"></a>
           <a class="slide" href="climate.html?view=atmosphere&overlay=wind&level=250&isobars=on&heightStep=30&animate=none&projection=sphere&lat=50&lon=-15&zoom=560&palette=dusk&panel=closed&stats=off&graticule=off" data-caption="The jet stream at 250 hPa over the North Atlantic and Europe, with height contours"><img data-src="screenshots/carousel_7.png" width="1920" height="1131" alt="Wind speed at 250 hPa with height contours, the polar jet crossing the Atlantic into Europe"></a>
           <a class="slide" href="climate.html?view=atmosphere&overlay=wind&level=surface&isobars=on&isobarStep=5&animate=arrows&projection=sphere&lat=54&lon=-155&zoom=1000&palette=dusk&panel=closed&stats=off&graticule=off" data-caption="A storm in the Gulf of Alaska: surface wind, isobars and wind vectors"><img data-src="screenshots/carousel_8.png" width="1920" height="1131" alt="A close view of surface wind speed, isobars and wind arrows circling a storm in the Gulf of Alaska"></a>
-          <a class="slide" href="climate.html?view=atmosphere&overlay=temp&level=surface&isobars=on&isobarStep=10&animate=particles&projection=map&lat=0.1&lon=150.4&zoom=140&palette=dusk&panel=closed&stats=off&graticule=off" data-caption="Global surface temperature with sea-level pressure isobars and wind particles"><img data-src="screenshots/carousel_9.png" width="1920" height="1131" alt="A world map of surface temperature centred on the Pacific, with isobars and wind particles"></a>
+          <a class="slide" href="climate.html?view=atmosphere&overlay=temp&level=surface&isobars=on&isobarStep=10&animate=particles&projection=map&lat=0.1&lon=150.4&zoom=140&palette=dusk&panel=closed&stats=off&graticule=off" data-caption="Global surface temperature with sea-level pressure isobars and wind particles"><img data-src="screenshots/carousel_9.png" width="1920" height="1131" alt="A world map of surface temperature centered on the Pacific, with isobars and wind particles"></a>
           <a class="slide" href="climate.html?view=atmosphere&overlay=tpw&animate=particles&isobars=off&projection=map&lat=1.8&lon=-0.2&zoom=140&palette=viridis&panel=closed&stats=off&graticule=off" data-caption="Total precipitable water, with surface wind particles"><img data-src="screenshots/carousel_10.png" width="1920" height="1131" alt="A world map of total precipitable water, with the moist tropics in yellow and plumes of moisture reaching into the midlatitudes"></a>
           <a class="slide" href="climate.html?view=atmosphere&overlay=vertical&level=500&animate=none&isobars=off&projection=sphere&lat=50&lon=-35&zoom=560&palette=blue-gray-red&panel=closed&stats=off&graticule=off" data-caption="Vertical motion at 500 hPa through a North Atlantic storm"><img data-src="screenshots/carousel_11.png" width="1920" height="1131" alt="Rising and sinking air at 500 hPa over the North Atlantic, red where the fronts of a storm south of Greenland lift the air and blue where it sinks behind them"></a>
           <a class="slide" href="climate.html?view=atmosphere&overlay=olr&animate=none&isobars=off&projection=map&lat=0&lon=140&zoom=140&palette=magma&panel=closed&stats=off&graticule=off" data-caption="Outgoing longwave radiation: cold cloud tops dark, warm deserts bright"><img data-src="screenshots/carousel_12.png" width="1920" height="1131" alt="A world map of outgoing longwave radiation, dark where tall cloud reaches the cold upper troposphere and bright over the deserts"></a>
@@ -91,11 +112,20 @@
       </div>
       <div class="body">
         <h2>Climate model</h2>
-        <p>A global climate model running live: a hydrostatic atmosphere with 27 levels on a geodesic C-grid, moist convection and clouds, a 24-layer ocean with a mixed layer over 23 isopycnal layers, sea ice, snow and soil on real continents with terrain. Every kernel runs on the graphics card through WebGPU. It picks up from day 810 of a spin-up, at 128 subdivisions on a desktop, about 164,000 cells 56 km across, or 64 on phones and tablets, about 41,000 cells 112 km across; a quick test when the page opens picks the engine and the resolution your device runs well. You can colour the globe by wind, temperature, pressure, rain, clouds, ice or ocean currents, draw isobars, follow the wind with particles or arrows, watch the planet from space, and save snapshots.</p>
+        <p>A global climate model running live: a hydrostatic atmosphere with 27 levels on a geodesic C-grid, moist convection and clouds, a 24-layer ocean with a mixed layer over 23 isopycnal layers, sea ice, snow and soil on real continents with terrain. Every kernel runs on the graphics card through WebGPU. It picks up from day 810 of a spin-up, at 128 subdivisions on a desktop, about 164,000 cells 56 km across, or 64 on phones and tablets, about 41,000 cells 112 km across; a quick test when the page opens picks the engine and the resolution your device runs well. You can color the globe by wind, temperature, pressure, rain, clouds, ice or ocean currents, draw isobars, follow the wind with particles or arrows, watch the planet from space, and save snapshots.</p>
         <p class="note">Best in a browser with WebGPU (Chrome, Edge or Safari 26). Without it the model falls back to a slower CPU engine. The starting state is a 98 MB download on a desktop and 25 MB on phones and tablets.</p>
         <a class="go" href="climate.html?view=space&lat=15&lon=-95&zoom=230&graticule=off&sun=1&ambient=0.004">Open the climate model →</a>
       </div>
     </section>
+
+    <a class="card wide" href="explain/air.html">
+      <img src="screenshots/explainer.jpg" width="960" height="600" alt="The model's state drawn in 3D: six layers of hexagonal cells, warmer in potential temperature higher up, with an arrow across every edge for the wind">
+      <div class="body">
+        <h2>How WebGCM works</h2>
+        <p>An illustrated explainer with live figures you can push on, building the model up from a single parcel of air: heating and lifting it, covering a sphere with a grid, a dry atmosphere that makes its own jet streams and storms on a spinning planet, and the primitive equations taken apart term by term.</p>
+        <span class="go">Start with part 1 →</span>
+      </div>
+    </a>
 
     <div class="row">
       <a class="card" href="grid.html">
