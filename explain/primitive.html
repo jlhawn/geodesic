@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How WebGCM works, part 4: The primitive equations</title>
+  <link rel="icon" href="../favicon.ico">
+  <link rel="stylesheet" href="explain.css">
+  <script type="module" src="primitive.module.js"></script>
+</head>
+
+<body>
+  <article>
+    <h1>How WebGCM works<br>Part 4: The primitive equations</h1>
+    <p class="kicker">The equations at the heart of the model, taken apart one term at a time.</p>
+    <nav class="parts"><a href="air.html">1 · Air</a><a href="grid.html">2 · The grid</a><a href="sphere.html">3 · A dry sphere</a><span class="here">4 · The primitive equations</span><span class="palette"></span></nav>
+
+    <p><a href="sphere.html">Part 3</a> stacked layers of air on the sphere and called the rules that move them the <a href="https://en.wikipedia.org/wiki/Primitive_equations">primitive equations</a>. It treated them as a black box: put in a state, get out jets and storms. This part opens the box. There are four rules, and each gets a section and a figure you can push on, mostly in three dimensions. Drag any of the 3D figures to turn them.</p>
+
+    <h2 id="what-the-model-stores"><a href="#what-the-model-stores">What the model stores</a></h2>
+    <p>Before the rules, the state they act on. The model keeps very little. In each layer it stores one potential temperature θ at the center of every cell and one wind speed across every edge, the across-edge wind of Part 2. Under each column it stores one surface pressure, π. That is all. Temperature, the pressure at every level, the height of every layer, the vertical motion, the wind along each edge: the model works out every one of them again from these few numbers at every step.</p>
+
+    <figure class="fig" data-figure="stack"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>The patch here has six layers; the climate model has 36. At N = 128 that is 5.9 million values of θ, 17.7 million winds and 164 thousand surface pressures, about 24 million numbers for the dry atmosphere alone, with water vapor, cloud and the ocean on top. Peel the layers off from the top and watch θ grow with height and fall toward the pole. That is the stable, sloping atmosphere of Parts 1 and 3, stored one number at a time.</p>
+    <p>The four rules say how each kind of number changes. The first tracks the air itself: how much there is in each column and where it goes. The second turns temperature into height. The third pushes the wind. The fourth carries the heat.</p>
+
+    <h2 id="air-in-air-out"><a href="#air-in-air-out">Air in, air out</a></h2>
+    <p>The first rule is the <a href="https://en.wikipedia.org/wiki/Continuity_equation">continuity equation</a>: air is never created or destroyed, only moved. In each layer the model adds up the air flowing in and out through the sides of a cell. If more flows in than out, the layer is said to converge; if more flows out, to diverge. The figure shows one column with six layers, and each slider sets how much air flows out of, or into, one layer.</p>
+
+    <figure class="fig" data-figure="continuity"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>Two things follow, and the model computes both exactly. The surface pressure, which is the weight of the whole column, changes by the total of all the layers' convergence: whatever piles in anywhere in the column adds to its weight. And each layer must keep its fixed share of the column. Its boundaries are levels of σ, the pressure divided by the surface pressure, so a layer between σ = 0.8 and 0.9 always holds a tenth of the column's air. Whatever a layer gains or loses through its sides beyond its share of the column's total change has to leave or arrive through its top and bottom. That flow between layers is written πσ̇: σ̇, said “sigma dot,” is how fast air crosses the levels of σ, and multiplying it by π turns that into an amount of air. The model finds it by adding up the layers from the top down. At the top it starts at zero, and when the sum reaches the ground it comes out exactly zero again, because the surface pressure took up the column's total. No air ever leaks through the ground or out of the top.</p>
+    <p>The rising column, with air flowing in near the ground and out near the top, leaves the surface pressure steady and lifts air up through the middle at about 0.6 hPa an hour: the warmed columns of Part 1, and the inside of every storm. Air piling in at every level raises the surface pressure by a hectopascal an hour and moves no air between layers at all. The whole column gets heavier, every layer keeps its share, and the layers simply thicken together.</p>
+
+    <h2 id="warm-air-takes-up-room"><a href="#warm-air-takes-up-room">Warm air takes up room</a></h2>
+    <p>The second rule is <a href="https://en.wikipedia.org/wiki/Hydrostatic_equilibrium">hydrostatic balance</a>, from Part 1. The thickness of each layer is set by its temperature, so the model finds the height of every layer, its <a href="https://en.wikipedia.org/wiki/Geopotential">geopotential</a>, by adding up thicknesses from the ground. Warm a patch of air and every surface of equal pressure above it lifts.</p>
+
+    <figure class="fig" data-figure="thickness"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>Six degrees of warming through the whole column lifts the 850 hPa surface by 29 m and the 200 hPa surface by 283 m: each layer adds its own extra thickness to everything above it, so the bulge grows with height. The ground does not move, because no air has gone anywhere yet; this is the instant before the wind responds. Warm only the air below 700 hPa and every surface above the warm layer rises by the same 63 m. The air up there is no warmer, but it has been lifted. The slopes of those raised surfaces are what push the air outward aloft, the first step of the circulation in Part 1, and they are the next rule's business.</p>
+
+    <h2 id="pushed-along-a-slope"><a href="#pushed-along-a-slope">Pushed along a slope</a></h2>
+    <p>The third rule is the momentum equation, and its first term is the <a href="https://en.wikipedia.org/wiki/Pressure-gradient_force">pressure gradient force</a> of Part 2. On a level surface it would be one term, the slope of the pressure. But the model's layers are surfaces of constant σ, and over a mountain they bend up with the ground. Along a bent layer the force comes out as two terms: the slope of the layer's height, and the change in pressure along the layer, weighted by the temperature. Over flat ground the layers are nearly level and both are small. Over a mountain both are large, and they nearly cancel.</p>
+
+    <figure class="fig" data-figure="mountain"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>This figure uses the model's own formulas and the climate model's own 36 layers, for air at rest over a mountain, with the temperature falling with height as in the standard atmosphere. The right answer is zero: the dotted surfaces of equal pressure are flat, so nothing should push. Each term on its own, low down on the flank of a 3 km mountain, would speed the air up by about 350 m/s in an hour. What is left over is 0.02 m/s an hour, enough to make a breeze of 0.4 m/s in a day where none should be. Move up through the layers and the leftover shrinks, almost to nothing near 350 hPa, then jumps at the tropopause, where the temperature profile bends sharply, to as much as 25 m/s a day. This is the classic weakness of σ coordinates, the price of layers that follow the ground. It is why most climate models switch to layers of constant pressure higher up, and it is one reason WebGCM smooths its mountains a little before it uses them.</p>
+
+    <h2 id="the-wind-carries-itself"><a href="#the-wind-carries-itself">The wind carries itself</a></h2>
+    <p>The momentum equation's next term is <a href="https://en.wikipedia.org/wiki/Advection">advection</a>: the wind carries its own motion along with it, so the wind at a point changes as faster or slower air arrives from upwind. As a formula it is −(u·∇)u: the wind, times how fast the wind changes along its own direction. The model never computes it in that form. It uses a mathematical identity to split it into two other pieces: a part that depends on how fast the flow spins, its <a href="https://en.wikipedia.org/wiki/Vorticity">vorticity</a> ζ, times the wind turned sideways, and the slope of the flow's <a href="https://en.wikipedia.org/wiki/Kinetic_energy">kinetic energy</a> per unit mass, K = ½|u|². Stir the flow and look at both.</p>
+
+    <figure class="fig" data-figure="invariant"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>In the vortex, the whole push points outward: a spinning patch of air flings itself apart unless a pressure gradient holds it in, which is the gradient wind of Part 2. Its two parts disagree. Near the center, where the air turns like a wheel, the vortex part points outward and is stronger than the whole, and the kinetic-energy part points inward, taking the difference back. Out past the fastest winds the vortex's spin reverses, and the two parts swap roles. In the straight jet the whole push is exactly zero, since air arriving from upwind is moving just as fast, yet the two parts are each large and cancel each other. On this coarse demonstration grid the two parts add up to the whole only approximately, because the figure computes each with simple differences; on paper they agree exactly.</p>
+    <p>The split is worth the trouble for two reasons. The vortex part has the same shape as the Coriolis force, the planet's spin times the wind turned sideways, so the model adds the two together and handles them as one term, the absolute vorticity times the sideways wind. That is the term TRiSK was built for in Part 2, the one that needs the reconstructed along-edge wind, and its weights make it neither create nor destroy energy. And the kinetic-energy part is a slope, just like the pressure gradient force, so it sits on the edges and costs almost nothing. The remaining pieces of the momentum equation are the wind carried up and down between layers by πσ̇, and the drags and smoothing that take momentum out.</p>
+
+    <h2 id="riding-the-isentropes"><a href="#riding-the-isentropes">Riding the isentropes</a></h2>
+    <p>The fourth rule is the thermodynamic equation, and in this model it is short: θ is carried along with the air, in each layer and between layers, and changes only where heat is added or where the model's smoothing mixes it. With no heating, every parcel keeps its θ, which means it stays on its own surface of equal potential temperature, its <a href="https://en.wikipedia.org/wiki/Isentropic_process">isentropic</a> surface, wherever it goes. In the sloping atmosphere of Part 3 those surfaces climb toward the pole.</p>
+
+    <figure class="fig" data-figure="isentropes"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>The parcel starts 700 m up at 34° north, on the 300 K surface, and drifts poleward with the jet carrying it east. Because it keeps its θ, it has to climb as it goes: by 63° north, nearly five days later, the 300 K surface is near 490 hPa, about 5.6 km up, and the parcel rides it all the way. Nothing pushed it up. It rose because the surface it lives on rises. Heat it and it climbs across the surfaces instead, faster than the slope alone would carry it, the way air does when its water vapor condenses. Air moving poleward and up, or equatorward and down, along these slanting surfaces is how heat travels poleward in the middle latitudes, and it is what the next figure shows inside a storm.</p>
+
+    <h2 id="the-storm-in-three-dimensions"><a href="#the-storm-in-three-dimensions">The storm in three dimensions</a></h2>
+    <p>Here are all four rules working together, inside the baroclinic wave of Part 3. On the sixth day, as the lows begin to deepen, 192 parcels are released at two heights across the storm's path, and the model's winds carry them for five days. Heights are exaggerated so the climbs show.</p>
+
+    <figure class="fig" data-figure="storm3d"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>Ahead of each low, east of it, the parcels move poleward and rise, roughly along the isentropes; behind it they move toward the equator and sink. That pairing of warm air rising and cold air sinking is the release of energy from the sloping atmosphere that Part 3 described. On this coarse grid the motions are gentle: after five days 171 of the 192 parcels are within 150 hPa of where they started, and the highest climb is about 290 hPa. All but two of the parcels that rose more than 50 hPa also moved poleward, and all but one of those that sank as far moved toward the equator. In a real storm the rising stream ahead of the low, called the warm conveyor belt, can carry air from near the ground to the upper troposphere in a day or two. Color the paths by potential temperature to see how well they keep it. The parcels released near 700 hPa do well: half of them end within 0.7 K of the θ they started with. Those released near 900 hPa, down where the fronts form, drift by about 4 K, the rising ones losing θ and the sinking ones gaining it. With cells 450 km across the model mixes warm and cold air together at the fronts, and the winds the parcels follow are blurred as well.</p>
+
+    <h2 id="where-the-energy-goes"><a href="#where-the-energy-goes">Where the energy goes</a></h2>
+    <p>The storm's winds come from somewhere. The chart follows the energy of the whole atmosphere over the twelve days of the test, as the change in each kind since the start: the kinetic energy of the wind, and the potential and internal energy of the air, its height in gravity and its heat, which in a hydrostatic atmosphere travel together. Hover over it to read the values.</p>
+
+    <figure class="fig" data-figure="energy"><div class="stage"></div><div class="controls"></div></figure>
+
+    <p>For the first week almost nothing changes, apart from a small zigzag: the starting state is not perfectly balanced on this coarse grid, and as it settles a few kJ per square meter slosh back and forth between the wind and the air. The two curves mirror each other, so the sloshing cancels in the total, which drifts down only slowly. Then, as the storm grows, kinetic energy rises by 90 kJ per square meter by day twelve, about 5 percent more than the jets started with, while the potential and internal energy fall by 155 kJ. That is the <a href="https://en.wikipedia.org/wiki/Lorenz_energy_cycle">conversion</a> that drives every storm: the sinking of cold air under warm turns stored energy into motion.</p>
+    <p>The total falls too, by 65 kJ per square meter, and that part is the model's doing rather than the atmosphere's. As the storm grows, its fronts sharpen and its swirls tighten until they reach the scale of the grid, where the model's smoothing, the same small amount of mixing that mopped up the shallow-water figures in Part 3, removes them. Real turbulence does the same job but turns the motion it destroys into heat, so the total is kept. The climate model does that too, handing the energy its smoothing removes back to the air as heat; this bare run of the core does not, so its total falls. The mass of the atmosphere is a different matter: it changes by about one part in a million billion, the limit of the computer's arithmetic, because of the way the continuity rule moves air from cell to cell. The total amount of θ changes by a few parts in a million over the twelve days, mostly through that same smoothing.</p>
+
+    <h2 id="the-whole-machine"><a href="#the-whole-machine">The whole machine</a></h2>
+    <p>Four rules: air moves from cell to cell and layer to layer without being lost; warm columns stand taller; the wind is pushed by the slope of the pressure, turned by the spin of the planet and the flow, and carries itself; and the heat goes where the air goes. The model applies them to every cell and edge of every layer, four times a step, about five hundred steps a simulated day at N = 128. The storms and the Held–Suarez climate of Part 3 came out of them, and so did the Rossby waves, from the single-layer version.</p>
+    <p>What they leave out is everything that makes weather wet and the climate the one we live in: water vapor and the heat it carries, clouds, sunlight and radiation that warm the ground and cool the sky, an ocean, ice, soil and the real shape of the land. Those are the subjects of the parts to come.</p>
+
+    <footer>Parts 1 to 4 of How WebGCM works. <a href="air.html">Part 1: Air</a> · <a href="grid.html">Part 2: The grid</a> · <a href="sphere.html">Part 3: A dry sphere</a> · Part 4: The primitive equations. More parts to come: water, radiation, the ocean and the land.</footer>
+  </article>
+</body>
+
+</html>

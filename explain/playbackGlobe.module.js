@@ -54,6 +54,6 @@ export function playbackGlobe(root, { url, N, center, sequences, fields, framesP
   }
 
   setKey();
-  loadFrames(url).then((loaded) => { data = loaded; rebuild(); globe.fig.play(true); });
+  loadFrames(url).then((loaded) => { data = loaded; rebuild(); globe.fig.play(playing); });
   return { globe, setNote: (text) => { top.textContent = text; } };
 }

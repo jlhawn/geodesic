@@ -17,3 +17,13 @@ export async function loadFrames(url) {
     times: (sequence) => sequences[sequence].times,
   };
 }
+
+const tracks = new Map();
+export function loadTracks(url) {
+  if (!tracks.has(url)) tracks.set(url, fetch(url).then((r) => r.arrayBuffer()).then((bytes) => {
+    if (String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'EXT1') throw new Error(`${url} is not a tracks file`);
+    const length = new DataView(bytes).getUint32(4, true);
+    return { header: JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 8, length))), data: new Float32Array(bytes, 8 + length) };
+  }));
+  return tracks.get(url);
+}

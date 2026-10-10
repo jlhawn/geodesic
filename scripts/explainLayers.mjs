@@ -1,7 +1,9 @@
-// Precomputes the layered-model frames that explain/sphere.html plays back:
-//   node scripts/explainLayers.mjs jw06|heldsuarez [OUT]
+// Precomputes the layered-model frames that explain/sphere.html and
+// explain/primitive.html play back:
+//   node scripts/explainLayers.mjs jw06|heldsuarez|tracks [OUT]
 // writing explain/data/<case>_N16.bin.
 import { writeFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore } from '../js/dynamics/sigmaCore.module.js';
@@ -79,8 +81,8 @@ function heldSuarez() {
   return { core, state: [pi, theta, new Float64Array(K * E)], tendency, surface: null };
 }
 
-const run = which === 'jw06' ? jw06() : which === 'heldsuarez' ? heldSuarez() : null;
-if (!run) { console.error('usage: node scripts/explainLayers.mjs jw06|heldsuarez [OUT]'); process.exit(1); }
+const run = which === 'jw06' || which === 'tracks' ? jw06() : which === 'heldsuarez' ? heldSuarez() : null;
+if (!run) { console.error('usage: node scripts/explainLayers.mjs jw06|heldsuarez|tracks [OUT]'); process.exit(1); }
 const { core, state, tendency } = run, K = core.K, step = createRK4Arrays([C, K * C, K * E]);
 const [pi, theta, u] = state, { exnerLayer } = core.arrays, sigmaMid = core.sigmaMid;
 
@@ -115,6 +117,83 @@ function accumulate() {
     }
   }
   means.samples++;
+}
+
+if (which === 'tracks') {
+  const { maxEdges, nEdgesOnCell, cellsOnCell, verticesOnCell, cellsOnVertex, cellsOnEdge, dcEdge, dvEdge, areaCell, xCell } = mesh, dSigma = core.diagnostics.dSigma, levels = core.levels;
+  const surface = run.surface;
+  const velocities = new Float64Array(2 * K * C), sigmaDot = new Float64Array((K + 1) * C), v2 = [0, 0];
+  const scratch = [new Float64Array(C), new Float64Array(K * C), new Float64Array(K * E)];
+  const parcels = [];
+  for (const sigma of [0.9, 0.7]) for (let latDeg = 32; latDeg <= 62; latDeg += 6) for (let lonDeg = 80; lonDeg <= 230; lonDeg += 10) parcels.push({ lat: latDeg * Math.PI / 180, lon: lonDeg * Math.PI / 180, sigma, cell: 0 });
+  const energy = [], times = [], START = 6 * DAY, END = 11 * DAY;
+  const nearest = (x, y, z, start) => { let best = start, bestDot = x * xCell[3 * start] + y * xCell[3 * start + 1] + z * xCell[3 * start + 2]; for (;;) { let next = best; for (let m = 0; m < nEdgesOnCell[best]; m++) { const j = cellsOnCell[maxEdges * best + m], d = x * xCell[3 * j] + y * xCell[3 * j + 1] + z * xCell[3 * j + 2]; if (d > bestDot) { bestDot = d; next = j; } } if (next === best) return best; best = next; } };
+  const triple = (x, y, z, i, j) => { const ax = xCell[3 * i], ay = xCell[3 * i + 1], az = xCell[3 * i + 2], bx = xCell[3 * j], by = xCell[3 * j + 1], bz = xCell[3 * j + 2]; return x * (ay * bz - az * by) + y * (az * bx - ax * bz) + z * (ax * by - ay * bx); };
+  function weights(p) {
+    const x = Math.cos(p.lat) * Math.cos(p.lon), y = Math.cos(p.lat) * Math.sin(p.lon), z = Math.sin(p.lat);
+    p.cell = nearest(x, y, z, p.cell);
+    let best = null, bestMin = -Infinity;
+    for (let m = 0; m < nEdgesOnCell[p.cell]; m++) {
+      const v = verticesOnCell[maxEdges * p.cell + m], [i, j, k] = [cellsOnVertex[3 * v], cellsOnVertex[3 * v + 1], cellsOnVertex[3 * v + 2]];
+      const w = [triple(x, y, z, j, k), triple(x, y, z, k, i), triple(x, y, z, i, j)], total = w[0] + w[1] + w[2];
+      const smallest = Math.min(...w) / total;
+      if (smallest > bestMin) { bestMin = smallest; best = [[i, w[0] / total], [j, w[1] / total], [k, w[2] / total]]; }
+    }
+    return best;
+  }
+  function sample(p) {
+    const ws = weights(p), mids = core.sigmaMid;
+    let k = 0; while (k < K - 2 && p.sigma > mids[k + 1]) k++;
+    const f = Math.min(1, Math.max(0, (p.sigma - mids[k]) / (mids[k + 1] - mids[k])));
+    let u = 0, v = 0, th = 0, ps = 0, sd = 0;
+    let kk = 0; while (kk < K - 1 && p.sigma > levels[kk + 1]) kk++;
+    const g2 = Math.min(1, Math.max(0, (p.sigma - levels[kk]) / (levels[kk + 1] - levels[kk])));
+    for (const [i, w] of ws) {
+      u += w * ((1 - f) * velocities[2 * (k * C + i)] + f * velocities[2 * ((k + 1) * C + i)]);
+      v += w * ((1 - f) * velocities[2 * (k * C + i) + 1] + f * velocities[2 * ((k + 1) * C + i) + 1]);
+      th += w * ((1 - f) * theta[k * C + i] + f * theta[(k + 1) * C + i]);
+      ps += w * pi[i];
+      sd += w * ((1 - g2) * sigmaDot[kk * C + i] + g2 * sigmaDot[(kk + 1) * C + i]);
+    }
+    return { u, v, theta: th, ps, sigmaDot: sd };
+  }
+  function measure(time) {
+    let kinetic = 0, internal = 0, mass = 0, thetaMass = 0;
+    core.diagnose(pi, theta);
+    for (let k = 0; k < K; k++) for (let e = 0; e < E; e++) { const i = cellsOnEdge[2 * e], j = cellsOnEdge[2 * e + 1], uu = u[k * E + e] ** 2; kinetic += 0.25 * dcEdge[e] * dvEdge[e] * uu * dSigma[k] * (pi[i] + pi[j]) / g; }
+    for (let i = 0; i < C; i++) { mass += areaCell[i] * pi[i] / g; internal += areaCell[i] * surface[i] * pi[i] / g; for (let k = 0; k < K; k++) { const layer = areaCell[i] * pi[i] * dSigma[k] / g; internal += layer * cp * theta[k * C + i] * exnerLayer[k * C + i]; thetaMass += layer * theta[k * C + i]; } }
+    const area = 4 * Math.PI * a * a;
+    energy.push({ day: +(time / DAY).toFixed(3), kinetic: kinetic / area, internal: internal / area, mass: mass / area, thetaMass: thetaMass / area });
+  }
+  const steps = Math.round(12 * DAY / dt), records = [], t0 = performance.now();
+  for (let n = 0; n <= steps; n++) {
+    const time = n * dt;
+    if (n % Math.round(3 * 3600 / dt) === 0) measure(time);
+    if (time >= START - 1 && time <= END + 1) {
+      core.diagnose(pi, theta);
+      for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) { cellVelocity(mesh, u, i, v2, 0, k * E); velocities[2 * (k * C + i)] = v2[0]; velocities[2 * (k * C + i) + 1] = v2[1]; }
+      core.tendency(state, scratch);
+      for (let k = 0; k <= K; k++) for (let i = 0; i < C; i++) sigmaDot[k * C + i] = core.arrays.piSigmaDot[k * C + i] / pi[i];
+      if (Math.round((time - START) / dt) % Math.round(3600 / dt) === 0) {
+        times.push(time);
+        records.push(parcels.map((p) => { const s = sample(p); return [p.lat * 180 / Math.PI, p.lon * 180 / Math.PI, p.sigma * s.ps / 100, s.theta]; }));
+      }
+      if (time < END) for (const p of parcels) {
+        const s = sample(p);
+        p.lat += s.v / a * dt; p.lon += s.u / (a * Math.cos(p.lat)) * dt; p.sigma = Math.min(0.995, Math.max(0.05, p.sigma + s.sigmaDot * dt));
+      }
+    }
+    if (n % Math.round(DAY / dt) === 0) console.error(`tracks day ${(time / DAY).toFixed(0)}: ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+    if (n < steps) step(tendency, state, dt);
+  }
+  const header = { version: 1, case: 'tracks', N, K, parcels: parcels.length, times, fields: ['lat', 'lon', 'pressure', 'theta'], energy };
+  const json = Buffer.from(JSON.stringify(header)), pad = (4 - ((8 + json.length) % 4)) % 4, data = new Float32Array(records.length * parcels.length * 4);
+  records.forEach((r, h) => r.forEach((v, q) => data.set(v, (h * parcels.length + q) * 4)));
+  const head = Buffer.alloc(8); head.write('EXT1', 0); head.writeUInt32LE(json.length + pad, 4);
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, Buffer.concat([head, json, Buffer.alloc(pad, 32), Buffer.from(data.buffer)]));
+  console.error(`wrote ${out}: ${parcels.length} parcels, ${records.length} hours, ${energy.length} energy samples`);
+  process.exit(0);
 }
 
 const plan = which === 'jw06'

@@ -20,7 +20,7 @@ export class Figure {
     new ResizeObserver(() => this.resize()).observe(this.stage);
     figures.set(root, this);
     observer.observe(root);
-    this.resize();
+    queueMicrotask(() => this.resize());
   }
 
   resize() {
@@ -50,8 +50,7 @@ export class Figure {
     this.frame = 0;
     const dt = clamp((now - this.last) / 1000, 0, 0.25);
     this.last = now;
-    this.step(dt);
-    this.render();
+    if (this.step(dt) !== false) this.render();
     this.sync();
   }
 
@@ -175,9 +174,10 @@ export function arrow(ctx, x0, y0, x1, y1, { color = INK, width = 1.5, head = 6,
   ctx.restore();
 }
 
-export function text(ctx, str, x, y, { color = INK, size = 12, align = 'left', baseline = 'middle', weight = 400 } = {}) {
+export function text(ctx, str, x, y, { color = INK, size = 12, align = 'left', baseline = 'middle', weight = 400, halo = null } = {}) {
   ctx.save();
   ctx.fillStyle = color; ctx.font = `${weight} ${size}px system-ui, sans-serif`; ctx.textAlign = align; ctx.textBaseline = baseline;
+  if (halo) { ctx.strokeStyle = halo; ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.strokeText(str, x, y); }
   ctx.fillText(str, x, y);
   ctx.restore();
 }
