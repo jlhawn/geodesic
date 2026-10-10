@@ -3,9 +3,9 @@ import { buildMesh } from '../js/mesh.module.js';
 import { createShallowWater } from '../js/dynamics/shallowWater.module.js';
 import { createRK4 } from '../js/dynamics/integrators.module.js';
 import { curl } from '../js/dynamics/operators.module.js';
-import { EARTH, edgeNormalVelocity, cellField, hyperdiffusion, bump, galewsky } from './swCases.module.js';
+import { EARTH, edgeNormalVelocity, cellField, hyperdiffusion, bump, galewsky, haurwitz, cellVelocity } from './swCases.module.js';
 
-const CASES = { bump, galewsky };
+const CASES = { bump, galewsky, haurwitz };
 const BUDGET_MS = 40;
 let sim = null;
 
@@ -18,20 +18,6 @@ function arrowCells(mesh, coarse) {
     picks.push(best);
   }
   return Int32Array.from(picks);
-}
-
-function cellVelocity(mesh, u, i, out, k) {
-  const { maxEdges, nEdgesOnCell, edgesOnCell, nEdge, xCell } = mesh;
-  const x = xCell[3 * i], y = xCell[3 * i + 1], z = xCell[3 * i + 2];
-  const rho = Math.hypot(x, y) || 1e-12, east = [-y / rho, x / rho, 0], north = [-z * x / rho, -z * y / rho, rho];
-  let saa = 0, sab = 0, sbb = 0, sau = 0, sbu = 0;
-  for (let m = 0; m < nEdgesOnCell[i]; m++) {
-    const e = edgesOnCell[maxEdges * i + m], n = [nEdge[3 * e], nEdge[3 * e + 1], nEdge[3 * e + 2]];
-    const a = n[0] * east[0] + n[1] * east[1] + n[2] * east[2], b = n[0] * north[0] + n[1] * north[1] + n[2] * north[2];
-    saa += a * a; sab += a * b; sbb += b * b; sau += a * u[e]; sbu += b * u[e];
-  }
-  const det = saa * sbb - sab * sab, ue = (sau * sbb - sbu * sab) / det, un = (saa * sbu - sab * sau) / det;
-  for (let c = 0; c < 3; c++) out[3 * k + c] = ue * east[c] + un * north[c];
 }
 
 function start({ N, kind, options = {}, spin = 1, closureHours = 0, coarse = 8, run = 0 }) {
@@ -54,8 +40,19 @@ function send() {
   } else for (let i = 0; i < mesh.nCells; i++) field[i] = h[i] - mean;
   const arrows = new Float32Array(3 * picks.length);
   for (let k = 0; k < picks.length; k++) cellVelocity(mesh, u, picks[k], arrows, k);
+  let phase = null;
+  if (kind === 'haurwitz') {
+    let cs = 0, sn = 0;
+    for (let i = 0; i < mesh.nCells; i++) {
+      const z = mesh.xCell[3 * i + 2], lat = Math.asin(Math.max(-1, Math.min(1, z)));
+      if (Math.abs(lat) > 0.6) continue;
+      const lon = Math.atan2(mesh.xCell[3 * i + 1], mesh.xCell[3 * i]), w = mesh.areaCell[i] * Math.cos(lat) ** 4;
+      cs += w * h[i] * Math.cos(4 * lon); sn += w * h[i] * Math.sin(4 * lon);
+    }
+    phase = Math.atan2(sn, cs) / 4;
+  }
   const mass = sim.model.diagnostics(h, u).mass;
-  self.postMessage({ type: 'frame', run: sim.run, time, field, arrows, picks, massDrift: (mass - sim.initialMass) / sim.initialMass }, [field.buffer, arrows.buffer]);
+  self.postMessage({ type: 'frame', run: sim.run, time, field, arrows, picks, phase, massDrift: (mass - sim.initialMass) / sim.initialMass }, [field.buffer, arrows.buffer]);
 }
 
 function advance(seconds) {

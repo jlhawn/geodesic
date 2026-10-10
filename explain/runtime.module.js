@@ -210,6 +210,12 @@ export function rampRGB(f, out = [0, 0, 0], neutral = palette.neutral) {
   return out;
 }
 
+export function sequentialRGB(f, out = [0, 0, 0]) {
+  const t = clamp(f, 0, 1), a = DARK_NEUTRAL, b = palette.warm;
+  out[0] = lerp(a[0], b[0], t) / 255; out[1] = lerp(a[1], b[1], t) / 255; out[2] = lerp(a[2], b[2], t) / 255;
+  return out;
+}
+
 export function setPalette(name) {
   palette = PALETTES[name] ?? PALETTES.standard;
   paletteVersion++;

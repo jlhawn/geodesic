@@ -57,3 +57,37 @@ export function galewsky({ perturbed = true } = {}) {
   const bumpAt = (lon, lat) => 120 * Math.cos(lat) * Math.exp(-((lon / (1 / 3)) ** 2)) * Math.exp(-(((Math.PI / 4 - lat) / (1 / 15)) ** 2));
   return { mean: hMean, height: (lon, lat) => balanced(lat) + (perturbed ? bumpAt(lon, lat) : 0), wind: (lon, lat) => ({ zonal: jet(lat), meridional: 0 }) };
 }
+
+export function cellVelocity(mesh, u, i, out, k, offset = 0) {
+  const { maxEdges, nEdgesOnCell, edgesOnCell, nEdge, xCell } = mesh;
+  const x = xCell[3 * i], y = xCell[3 * i + 1], z = xCell[3 * i + 2];
+  const rho = Math.hypot(x, y) || 1e-12, east = [-y / rho, x / rho, 0], north = [-z * x / rho, -z * y / rho, rho];
+  let saa = 0, sab = 0, sbb = 0, sau = 0, sbu = 0;
+  for (let m = 0; m < nEdgesOnCell[i]; m++) {
+    const e = edgesOnCell[maxEdges * i + m], n0 = nEdge[3 * e], n1 = nEdge[3 * e + 1], n2 = nEdge[3 * e + 2];
+    const a = n0 * east[0] + n1 * east[1] + n2 * east[2], b = n0 * north[0] + n1 * north[1] + n2 * north[2], ue = u[offset + e];
+    saa += a * a; sab += a * b; sbb += b * b; sau += a * ue; sbu += b * ue;
+  }
+  const det = saa * sbb - sab * sab, ue = (sau * sbb - sbu * sab) / det, un = (saa * sbu - sab * sau) / det;
+  if (out.length === 2) { out[0] = ue; out[1] = un; return out; }
+  for (let c = 0; c < 3; c++) out[3 * k + c] = ue * east[c] + un * north[c];
+  return out;
+}
+
+export function haurwitz() {
+  const { a, omega, g } = EARTH, w = 7.848e-6, K = 7.848e-6, R = 4, h0 = 8e3;
+  return {
+    mean: h0,
+    wind: (lon, lat) => {
+      const c = Math.cos(lat), s = Math.sin(lat);
+      return { zonal: a * w * c + a * K * c ** (R - 1) * (R * s * s - c * c) * Math.cos(R * lon), meridional: -a * K * R * c ** (R - 1) * s * Math.sin(R * lon) };
+    },
+    height: (lon, lat) => {
+      const c = Math.cos(lat);
+      const A = (w / 2) * (2 * omega + w) * c * c + (K * K / 4) * c ** (2 * R) * ((R + 1) * c * c + (2 * R * R - R - 2) - 2 * R * R / (c * c));
+      const B = (2 * (omega + w) * K / ((R + 1) * (R + 2))) * c ** R * ((R * R + 2 * R + 2) - (R + 1) ** 2 * c * c);
+      const C = (K * K / 4) * c ** (2 * R) * ((R + 1) * c * c - (R + 2));
+      return h0 + (a * a / g) * (A + B * Math.cos(R * lon) + C * Math.cos(2 * R * lon));
+    },
+  };
+}
