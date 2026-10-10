@@ -2,7 +2,7 @@ import * as THREE from '../../js/three.module.js';
 import { slider, buttons, legend, readout, text, termColor, clamp, MUTED, rampRGB } from '../runtime.module.js';
 import { Scene3D, hexPatch, Arrows, hexTiles, linear, cssColor } from '../scene3d.module.js';
 
-const K = 6, SPACING = 1.3, GAUGE = { x: 2.7, z: 1.4 }, PERIOD = 16, LAG = Math.PI / 2, CYCLE = 'Rising and sinking, out of step', PRESETS = { rising: [2, 1.5, 0, 0, -1.5, -2], piling: [-1, -1, -1, -1, -1, -1], draining: [1, 1, 1, 1, 1, 1], sinking: [-2, -1.5, 0, 0, 1.5, 2] };
+const K = 6, SPACING = 1.3, GAUGE = { x: 2.7, z: 1.4 }, PERIOD = 16, LAG = Math.PI / 2, SWING = [2, 1.5, 0.75, -0.75, -1.5, -2], CYCLE = 'Rising and sinking, out of step', PRESETS = { rising: [2, 1.5, 0, 0, -1.5, -2], piling: [-1, -1, -1, -1, -1, -1], draining: [1, 1, 1, 1, 1, 1], sinking: [-2, -1.5, 0, 0, 1.5, 2] };
 
 export function mountContinuity(root) {
   const controls = root.querySelector('.controls'), A = termColor('a'), B = termColor('b'), C = termColor('c'), weight = cssColor(A), sides = cssColor(B), between = cssColor(C);
@@ -29,8 +29,7 @@ export function mountContinuity(root) {
   function step(dt) {
     if (!cycling) return false;
     phase += 2 * Math.PI * dt / PERIOD;
-    const top = Math.cos(phase), low = Math.cos(phase - LAG);
-    [2 * top, 1.5 * top, 0, 0, -1.5 * low, -2 * low].forEach((v, k) => { divergence[k] = v; sliders[k].value = Math.round(v * 2) / 2; });
+    SWING.forEach((a, k) => { const v = a * Math.cos(phase - LAG * k / (K - 1)); divergence[k] = v; sliders[k].value = Math.round(v * 2) / 2; });
     compute(false);
   }
 
