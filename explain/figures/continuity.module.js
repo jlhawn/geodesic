@@ -2,16 +2,16 @@ import * as THREE from '../../js/three.module.js';
 import { slider, buttons, legend, readout, text, termColor, clamp, MUTED, rampRGB } from '../runtime.module.js';
 import { Scene3D, hexPatch, Arrows, hexTiles, linear, cssColor } from '../scene3d.module.js';
 
-const K = 6, SPACING = 1.3, GAUGE = { x: 2.7, z: 1.4 }, PRESETS = { rising: [2, 1.5, 0, 0, -1.5, -2], piling: [-1, -1, -1, -1, -1, -1], draining: [1, 1, 1, 1, 1, 1], sinking: [-2, -1.5, 0, 0, 1.5, 2] };
+const K = 6, SPACING = 1.3, GAUGE = { x: 2.7, z: 1.4 }, PERIOD = 16, LAG = Math.PI / 2, CYCLE = 'Rising and sinking, out of step', PRESETS = { rising: [2, 1.5, 0, 0, -1.5, -2], piling: [-1, -1, -1, -1, -1, -1], draining: [1, 1, 1, 1, 1, 1], sinking: [-2, -1.5, 0, 0, 1.5, 2] };
 
 export function mountContinuity(root) {
   const controls = root.querySelector('.controls'), A = termColor('a'), B = termColor('b'), C = termColor('c'), weight = cssColor(A), sides = cssColor(B), between = cssColor(C);
   const patch = hexPatch(3, 3), center = patch.cells[4];
   const divergence = [...PRESETS.rising];
   const layerY = (k) => (K - 1 - k + 0.5) * SPACING, interfaceY = (k) => (K - k) * SPACING;
-  let result = null;
+  let result = null, cycling = false, phase = 0, toggle = null;
 
-  const scene = new Scene3D(root, { height: 440, distance: 19, target: [0, 4.2, 0], yaw: -0.5, pitch: 0.28, update, draw: labels });
+  const scene = new Scene3D(root, { height: 440, distance: 19, target: [0, 4.2, 0], yaw: -0.5, pitch: 0.28, update, draw: labels, step });
   const ground = scene.add(new THREE.Mesh(new THREE.CircleGeometry(4.2, 48).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: new THREE.Color(0.05, 0.045, 0.035) })));
   ground.position.y = -0.02;
   const tiles = hexTiles(scene.group, { thickness: 0.04, opacity: 0.45, depthWrite: false }).mesh(patch.cells.length * K);
@@ -19,13 +19,22 @@ export function mountContinuity(root) {
   const lifts = new Arrows(scene.group, K + 1, { radius: 0.05, head: 0.22, headRadius: 0.12 });
   const gauge = new Arrows(scene.group, 1, { radius: 0.09, head: 0.36, headRadius: 0.2 });
   legend(root, [['arrow', 'the surface pressure rising or falling, ∂π/∂t: the ground glows as it changes', A], ['arrow', 'air flowing across the column’s six sides in each layer', B], ['arrow', 'air crossing between layers, πσ̇', C], ['ramp', 'the column’s layers, tinted from air flowing in to air flowing out', 'cool', 'warm', 'neutral']]);
-  const sliders = divergence.map((value, k) => slider(controls, { label: k === 0 ? 'Top layer' : k === K - 1 ? 'Lowest layer' : `Layer ${k + 1}`, min: -3, max: 3, step: 0.5, value, format: (v) => v === 0 ? 'balanced' : v > 0 ? `${v} out` : `${-v} in`, onInput: (v) => { divergence[k] = v; compute(); } }));
-  buttons(controls, [['Rising column', () => preset('rising')], ['Sinking column', () => preset('sinking')], ['Air piling in', () => preset('piling')], ['Air draining out', () => preset('draining')]]);
+  const sliders = divergence.map((value, k) => slider(controls, { label: k === 0 ? 'Top layer' : k === K - 1 ? 'Lowest layer' : `Layer ${k + 1}`, min: -3, max: 3, step: 0.5, value, format: (v) => v === 0 ? 'balanced' : v > 0 ? `${v} out` : `${-v} in`, onInput: (v) => { stop(); divergence[k] = v; compute(); } }));
+  [, , , , toggle] = buttons(controls, [['Rising column', () => preset('rising')], ['Sinking column', () => preset('sinking')], ['Air piling in', () => preset('piling')], ['Air draining out', () => preset('draining')], [CYCLE, () => (cycling ? stop() : start())]]);
   const out = readout(controls);
 
-  function preset(name) { PRESETS[name].forEach((v, k) => { divergence[k] = v; sliders[k].value = v; }); compute(); }
+  function preset(name) { stop(); PRESETS[name].forEach((v, k) => { divergence[k] = v; sliders[k].value = v; }); compute(); }
+  function start() { cycling = true; phase = 0; toggle.textContent = 'Stop'; scene.fig.play(true); }
+  function stop() { if (!cycling) return; cycling = false; toggle.textContent = CYCLE; scene.fig.play(false); }
+  function step(dt) {
+    if (!cycling) return false;
+    phase += 2 * Math.PI * dt / PERIOD;
+    const top = Math.cos(phase), low = Math.cos(phase - LAG);
+    [2 * top, 1.5 * top, 0, 0, -1.5 * low, -2 * low].forEach((v, k) => { divergence[k] = v; sliders[k].value = Math.round(v * 2) / 2; });
+    compute(false);
+  }
 
-  function compute() {
+  function compute(render = true) {
     const dSigma = 1 / K, tendency = -divergence.reduce((s, d) => s + d * dSigma, 0), flux = [0];
     let sum = 0;
     for (let k = 0; k < K; k++) { sum += divergence[k] * dSigma; flux.push(-sum - (k + 1) * dSigma * tendency); }
@@ -34,7 +43,7 @@ export function mountContinuity(root) {
     let strongest = 0;
     for (const f of flux) if (Math.abs(f) > Math.abs(strongest)) strongest = f;
     out.set([['surface pressure', Math.abs(tendency) < 1e-9 ? 'steady' : `${tendency > 0 ? 'rising' : 'falling'} by ${Math.abs(tendency).toFixed(2)} hPa per hour`], ['strongest flow between layers', Math.abs(strongest) < 1e-9 ? 'none' : `${Math.abs(strongest).toFixed(2)} hPa per hour ${strongest < 0 ? 'upward' : 'downward'}`], ['at the top and the ground', 'zero, always']]);
-    scene.fig.render();
+    if (render) scene.fig.render();
   }
 
   const m = new THREE.Matrix4(), color = new THREE.Color(), rgb = [0, 0, 0];
