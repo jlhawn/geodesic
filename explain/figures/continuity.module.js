@@ -14,7 +14,7 @@ export function mountContinuity(root) {
   const scene = new Scene3D(root, { height: 440, distance: 19, target: [0, 4.2, 0], yaw: -0.5, pitch: 0.28, update, draw: labels });
   const ground = scene.add(new THREE.Mesh(new THREE.CircleGeometry(4.2, 48).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: new THREE.Color(0.05, 0.045, 0.035) })));
   ground.position.y = -0.02;
-  const tiles = hexTiles(scene.group, { thickness: 0.04, opacity: 0.45 }).mesh(patch.cells.length * K);
+  const tiles = hexTiles(scene.group, { thickness: 0.04, opacity: 0.45, depthWrite: false }).mesh(patch.cells.length * K);
   const flows = new Arrows(scene.group, 6 * K, { radius: 0.04, head: 0.2, headRadius: 0.1 });
   const lifts = new Arrows(scene.group, K + 1, { radius: 0.05, head: 0.22, headRadius: 0.12 });
   legend(root, [['arrow', 'air flowing across the column’s six sides in each layer', B], ['arrow', 'air crossing between layers, πσ̇', C], ['ramp', 'the column’s layers, tinted from air flowing in to air flowing out', 'cool', 'warm', 'neutral']]);

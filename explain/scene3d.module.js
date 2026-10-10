@@ -131,10 +131,10 @@ export class Arrows {
   }
 }
 
-export function hexTiles(scene, { thickness = 0.06, opacity = 0.85 } = {}) {
+export function hexTiles(scene, { thickness = 0.06, opacity = 0.85, depthWrite = true } = {}) {
   const shape = new THREE.Shape();
   for (let k = 0; k < 6; k++) { const a = Math.PI / 6 + k * Math.PI / 3; const x = 0.96 * Math.cos(a), z = 0.96 * Math.sin(a); if (k) shape.lineTo(x, z); else shape.moveTo(x, z); }
   const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false }).rotateX(Math.PI / 2);
-  const material = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: opacity < 1, opacity });
+  const material = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: opacity < 1, opacity, depthWrite });
   return { geometry, material, mesh: (count) => { const mesh = new THREE.InstancedMesh(geometry, material, count); mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.frustumCulled = false; scene.add(mesh); return mesh; } };
 }
