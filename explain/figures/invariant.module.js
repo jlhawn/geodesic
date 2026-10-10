@@ -1,9 +1,9 @@
-import { Figure, choice, buttons, legend, readout, text, arrow, rampRGB, MUTED, INK, ACCENT, anomalyColor } from '../runtime.module.js';
+import { Figure, choice, buttons, legend, readout, text, arrow, rampRGB, termColor, paletteVersion, DARK_NEUTRAL, MUTED, INK, ACCENT } from '../runtime.module.js';
 
-const N = 24;
+const N = 24, SPIN = 0.35;
 
 export function mountInvariant(root) {
-  const controls = root.querySelector('.controls');
+  const controls = root.querySelector('.controls'), A = termColor('a'), B = termColor('b');
   const u = new Float64Array(N * N), v = new Float64Array(N * N);
   let show = 'parts', last = null, geometry = null;
   const at = (i, j) => ((j + N) % N) * N + ((i + N) % N);
@@ -33,7 +33,10 @@ export function mountInvariant(root) {
 
   const fig = new Figure(root, { height: 420, minHeight: 320, draw });
   root.classList.add('drag');
-  legend(root, [['ramp', 'the flow’s spin, clockwise to counterclockwise', 'cool', 'warm', 'neutral'], ['arrow', 'the wind', INK], ['force', 'the push the flow gives itself, −(u·∇)u', 'rgb(255, 232, 160)'], ['force', 'its vortex part, −ζ ẑ×u', 'warm'], ['force', 'its kinetic-energy part, −∇K', 'cool']]);
+  const shade = (f) => `rgb(${rampRGB(f, [0, 0, 0], DARK_NEUTRAL).map((c) => Math.round(c * 255)).join(', ')})`;
+  const items = () => [['ramp', 'the flow’s spin, clockwise to counterclockwise', shade(0.5 - 0.5 * SPIN), shade(0.5 + 0.5 * SPIN), shade(0.5)], ['arrow', 'the wind', INK], ['force', 'the push the flow gives itself, −(u·∇)u', ACCENT], ['force', 'its vortex part, −ζ ẑ×u', A], ['force', 'its kinetic-energy part, −∇K', B]];
+  const key = legend(root, items());
+  let keyed = paletteVersion;
   const start = choice(controls, { label: 'Start with', options: [['a vortex', 'vortex'], ['a straight jet', 'jet'], ['two vortices', 'pair'], ['calm air', 'calm']], value: 'vortex', onChange: preset, span: true });
   choice(controls, { label: 'Show', options: [['the two parts', 'parts'], ['the whole push', 'whole'], ['just the wind', 'wind']], value: show, onChange: (s) => { show = s; fig.render(); }, span: true });
   const out = readout(controls);
@@ -42,8 +45,9 @@ export function mountInvariant(root) {
     const side = Math.min(w - 24, h - 24), x0 = (w - side) / 2, y0 = (h - side) / 2, cell = side / N;
     geometry = { x0, y0, cell };
     const { zeta, adv, vort, grad } = terms(), rgb = [0, 0, 0];
+    if (keyed !== paletteVersion) { keyed = paletteVersion; key.set(items()); }
     let zmax = 1e-9; for (const z of zeta) zmax = Math.max(zmax, Math.abs(z));
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { rampRGB(0.5 + 0.5 * zeta[at(i, j)] / Math.max(zmax, 0.3), rgb); ctx.fillStyle = `rgb(${rgb.map((c) => Math.round(c * 255)).join(',')})`; ctx.fillRect(x0 + i * cell, y0 + (N - 1 - j) * cell, cell + 0.5, cell + 0.5); }
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const s = zeta[at(i, j)] / Math.max(zmax, 0.3); rampRGB(0.5 + 0.5 * SPIN * Math.sign(s) * Math.sqrt(Math.abs(s)), rgb, DARK_NEUTRAL); ctx.fillStyle = `rgb(${rgb.map((c) => Math.round(c * 255)).join(',')})`; ctx.fillRect(x0 + i * cell, y0 + (N - 1 - j) * cell, cell + 0.5, cell + 0.5); }
     let amax = 1e-9, wmax = 1e-9, mismatch = 0, total = 0;
     for (let n = 0; n < N * N; n++) { amax = Math.max(amax, Math.hypot(adv[2 * n], adv[2 * n + 1]), Math.hypot(vort[2 * n], vort[2 * n + 1]), Math.hypot(grad[2 * n], grad[2 * n + 1])); wmax = Math.max(wmax, Math.hypot(u[n], v[n])); mismatch += Math.hypot(adv[2 * n] - vort[2 * n] - grad[2 * n], adv[2 * n + 1] - vort[2 * n + 1] - grad[2 * n + 1]); total += Math.hypot(vort[2 * n], vort[2 * n + 1]) + Math.hypot(grad[2 * n], grad[2 * n + 1]); }
     const ws = 1.6 * cell / wmax, fs = 1.6 * cell / amax;
@@ -52,8 +56,8 @@ export function mountInvariant(root) {
       if (show === 'wind' || show === 'whole' || show === 'parts') arrow(ctx, cx, cy, cx + u[n] * ws, cy - v[n] * ws, { color: show === 'wind' ? INK : 'rgba(255,255,255,0.45)', width: 1.4, head: 5 });
       if (show === 'whole') arrow(ctx, cx, cy, cx + adv[2 * n] * fs, cy - adv[2 * n + 1] * fs, { color: ACCENT, width: 1.8, head: 6, dash: [4, 3], open: true });
       if (show === 'parts') {
-        arrow(ctx, cx, cy, cx + vort[2 * n] * fs, cy - vort[2 * n + 1] * fs, { color: anomalyColor(1), width: 1.8, head: 6, dash: [4, 3], open: true });
-        arrow(ctx, cx, cy, cx + grad[2 * n] * fs, cy - grad[2 * n + 1] * fs, { color: anomalyColor(-1), width: 1.8, head: 6, dash: [4, 3], open: true });
+        arrow(ctx, cx, cy, cx + vort[2 * n] * fs, cy - vort[2 * n + 1] * fs, { color: A, width: 1.8, head: 6, dash: [4, 3], open: true });
+        arrow(ctx, cx, cy, cx + grad[2 * n] * fs, cy - grad[2 * n + 1] * fs, { color: B, width: 1.8, head: 6, dash: [4, 3], open: true });
       }
     }
     text(ctx, 'drag across the flow to stir it', w / 2, y0 - 6, { align: 'center', color: MUTED, size: 11 });

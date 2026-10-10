@@ -1,12 +1,12 @@
-import { Figure, slider, legend, readout, text, arrow, anomalyColor, clamp, MUTED, LINE, GRID, ACCENT } from '../runtime.module.js';
+import { Figure, slider, legend, readout, text, arrow, termColor, clamp, MUTED, LINE, GRID, ACCENT } from '../runtime.module.js';
 import { R, CP, KAPPA, G, P0, pressureAt, heightOf, thetaAt } from '../physics.module.js';
 import { sigmaInterfaces } from '../../js/dynamics/sigmaCore.module.js';
 
-const LEVELS = sigmaInterfaces('bl36'), K = LEVELS.length - 1, DX = 1e5, COLUMNS = 24, WIDTH = 2.5e5;
+const LEVELS = sigmaInterfaces('bl36'), K = LEVELS.length - 1, DX = 1e5, COLUMNS = 24, WIDTH = 2.5e5, HALO = 'rgba(20, 20, 22, 0.85)';
 const MID = Array.from({ length: K }, (_, k) => 0.5 * (LEVELS[k] + LEVELS[k + 1])), FIRST = MID.findIndex((s) => s * 1013.25 > 130);
 
 export function mountMountain(root) {
-  const controls = root.querySelector('.controls');
+  const controls = root.querySelector('.controls'), B = termColor('b'), C = termColor('c');
   let peak = 3000, layer = K - 4, edge = COLUMNS / 2 - 3, geometry = null;
   const sigmaK = Float64Array.from(LEVELS, (s) => s ** KAPPA), sigma1K = Float64Array.from(LEVELS, (s) => s ** (1 + KAPPA));
   const xOf = (i) => (i - COLUMNS / 2 + 0.5) * DX;
@@ -30,7 +30,7 @@ export function mountMountain(root) {
   }
 
   const fig = new Figure(root, { height: 400, minHeight: 300, draw });
-  legend(root, [['force', 'the push from the slope of the layer’s height', 'warm'], ['force', 'the push from the change in pressure along the layer, weighted by temperature', 'cool'], ['force', 'what is left over, drawn 100 times larger', ACCENT]]);
+  legend(root, [['force', 'the push from the slope of the layer’s height', B], ['force', 'the push from the change in pressure along the layer, weighted by temperature', C], ['force', 'what is left over, drawn 100 times larger', ACCENT]]);
   slider(controls, { label: 'Mountain height', min: 0, max: 5000, step: 100, value: peak, format: (v) => `${(v / 1000).toFixed(1)} km`, onInput: (v) => { peak = v; fig.render(); } });
   slider(controls, { label: 'Layer', min: 1, max: K - FIRST, step: 1, value: K - layer, format: (v) => (v === 1 ? 'the lowest' : `${v} up from the ground`), onInput: (v) => { layer = K - v; fig.render(); } });
   const out = readout(controls);
@@ -47,15 +47,15 @@ export function mountMountain(root) {
     ctx.fillStyle = '#5a4a36'; ctx.beginPath(); ctx.moveTo(left, bottom);
     for (let s = 0; s <= 200; s++) { const m = (s / 200 - 0.5) * COLUMNS * DX; ctx.lineTo(x(m), y(ground(m))); }
     ctx.lineTo(w - right, bottom); ctx.closePath(); ctx.fill();
+    text(ctx, 'drag along the mountain to move the point', w / 2, top + 4, { align: 'center', color: MUTED, size: 11, halo: HALO });
     const a = cols[edge], b = cols[edge + 1], k = layer;
     const termA = -(b.phi[k] - a.phi[k]) / DX, termB = -R * 0.5 * (a.theta[k] * a.exner[k] + b.theta[k] * b.exner[k]) * Math.log(b.pi / a.pi) / DX, sum = termA + termB;
-    const ex = x((xOf(edge) + xOf(edge + 1)) / 2), ey = y((a.phi[k] + b.phi[k]) / (2 * G)), scale = 120 / Math.max(0.05, Math.abs(termA), Math.abs(termB));
-    arrow(ctx, ex, ey - 6, ex + termA * scale, ey - 6, { color: anomalyColor(1), width: 2, head: 8, dash: [5, 4], open: true });
-    arrow(ctx, ex, ey + 6, ex + termB * scale, ey + 6, { color: anomalyColor(-1), width: 2, head: 8, dash: [5, 4], open: true });
-    arrow(ctx, ex, ey + 18, ex + clamp(sum * scale * 100, -200, 200), ey + 18, { color: ACCENT, width: 2, head: 8, dash: [5, 4], open: true });
+    const ex = x((xOf(edge) + xOf(edge + 1)) / 2), ey = y((a.phi[k] + b.phi[k]) / (2 * G)), scale = Math.min(120, 0.3 * (w - left - right)) / Math.max(0.05, Math.abs(termA), Math.abs(termB));
+    arrow(ctx, ex, ey - 6, ex + termA * scale, ey - 6, { color: B, width: 2, head: 8, dash: [5, 4], open: true });
+    arrow(ctx, ex, ey + 6, ex + termB * scale, ey + 6, { color: C, width: 2, head: 8, dash: [5, 4], open: true });
+    arrow(ctx, ex, ey + 18, ex + clamp(sum * scale * 100, left - ex, w - right - ex), ey + 18, { color: ACCENT, width: 2, head: 8, dash: [5, 4], open: true });
     ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(ex, ey, 3.5, 0, Math.PI * 2); ctx.fill();
-    text(ctx, 'drag along the mountain to move the point', w / 2, top + 4, { align: 'center', color: MUTED, size: 11 });
-    const hour = (v) => `${(v * 3600).toFixed(Math.abs(v * 3600) < 10 ? 2 : 0)} m/s`;
+    const hour = (v) => { const s = v * 3600, d = Math.abs(s) < 10 ? 2 : 0; return `${Number(s.toFixed(d)) === 0 ? '' : s < 0 ? '−' : '+'}${Math.abs(s).toFixed(d)} m/s`; };
     out.set([['the layer’s height', `${hour(termA)} an hour`], ['the pressure change', `${hour(termB)} an hour`], ['left over', `${hour(sum)} an hour, ${(Math.abs(sum) * 86400).toFixed(1)} m/s after a day`], ['the point', `${Math.round(MID[k] * (a.pi + b.pi) / 200)} hPa, ${((a.phi[k] + b.phi[k]) / (2 * G * 1000)).toFixed(1)} km up`], ['the right answer', 'zero: the air is at rest and the pressure surfaces are flat']]);
   }
 

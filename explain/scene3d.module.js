@@ -2,7 +2,7 @@ import * as THREE from '../js/three.module.js';
 import { Figure, clamp } from './runtime.module.js';
 
 export const linear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-export const cssColor = (css) => { const m = css.match(/\d+(\.\d+)?/g).map(Number); return [m[0] / 255, m[1] / 255, m[2] / 255]; };
+export const cssColor = (css) => { const m = css[0] === '#' ? [1, 3, 5].map((i) => parseInt(css.slice(i, i + 2), 16)) : css.match(/\d+(\.\d+)?/g).map(Number); return [m[0] / 255, m[1] / 255, m[2] / 255]; };
 
 export class Scene3D {
   constructor(root, { height = 440, minHeight = 300, distance = 16, target = [0, 2, 0], yaw = -0.6, pitch = 0.45, fov = 32, step = null, draw = null, update = null } = {}) {

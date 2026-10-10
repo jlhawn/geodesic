@@ -3,6 +3,8 @@ export { R, CP, KAPPA, G, P0 };
 
 export const ACCENT = '#ffe8a0', INK = '#ddd', MUTED = '#8a8a8a', GRID = 'rgba(255,255,255,0.1)', LINE = 'rgba(255,255,255,0.35)';
 export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const TERMS = { a: '#e69f00', b: '#56b4e9', c: '#22b38a', d: '#d98cba', e: '#f0e442' };
+export const termColor = (name) => (typeof document === 'undefined' ? '' : getComputedStyle(document.documentElement).getPropertyValue(`--term-${name}`).trim()) || TERMS[name];
 export const lerp = (a, b, t) => a + (b - a) * t;
 
 const figures = new Map();

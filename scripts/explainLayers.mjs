@@ -1,7 +1,7 @@
 // Precomputes the layered-model frames that explain/sphere.html and
 // explain/primitive.html play back:
-//   node scripts/explainLayers.mjs jw06|heldsuarez|tracks [OUT]
-// writing explain/data/<case>_N16.bin.
+//   node scripts/explainLayers.mjs jw06|heldsuarez|tracks|state [OUT]
+// writing explain/data/<case>_N16.bin, jw06state_N16.bin for state.
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Grid } from '../js/grid.module.js';
@@ -11,7 +11,7 @@ import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 import { EARTH, edgeNormalVelocity, hyperdiffusion, cellVelocity } from '../explain/swCases.module.js';
 
 const which = process.argv[2], N = 16, DAY = 86400, dt = 450 * 16 / N;
-const out = process.argv[3] ?? new URL(`../explain/data/${which}_N${N}.bin`, import.meta.url).pathname;
+const out = process.argv[3] ?? new URL(`../explain/data/${which === 'state' ? 'jw06state' : which}_N${N}.bin`, import.meta.url).pathname;
 const { a, omega, g } = EARTH, R = 287, cp = 1004.5, p0 = 1e5;
 const mesh = buildMesh(new Grid(N), { radius: a, omega }), C = mesh.nCells, E = mesh.nEdges;
 
@@ -81,8 +81,8 @@ function heldSuarez() {
   return { core, state: [pi, theta, new Float64Array(K * E)], tendency, surface: null };
 }
 
-const run = which === 'jw06' || which === 'tracks' ? jw06() : which === 'heldsuarez' ? heldSuarez() : null;
-if (!run) { console.error('usage: node scripts/explainLayers.mjs jw06|heldsuarez|tracks [OUT]'); process.exit(1); }
+const run = which === 'jw06' || which === 'tracks' || which === 'state' ? jw06() : which === 'heldsuarez' ? heldSuarez() : null;
+if (!run) { console.error('usage: node scripts/explainLayers.mjs jw06|heldsuarez|tracks|state [OUT]'); process.exit(1); }
 const { core, state, tendency } = run, K = core.K, step = createRK4Arrays([C, K * C, K * E]);
 const [pi, theta, u] = state, { exnerLayer } = core.arrays, sigmaMid = core.sigmaMid;
 
@@ -193,6 +193,29 @@ if (which === 'tracks') {
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, Buffer.concat([head, json, Buffer.alloc(pad, 32), Buffer.from(data.buffer)]));
   console.error(`wrote ${out}: ${parcels.length} parcels, ${records.length} hours, ${energy.length} energy samples`);
+  process.exit(0);
+}
+
+if (which === 'state') {
+  const DAYS = 9, steps = Math.round(DAYS * DAY / dt), t0 = performance.now();
+  for (let n = 1; n <= steps; n++) {
+    step(tendency, state, dt);
+    if (n % Math.round(DAY / dt) === 0) console.error(`state day ${(n * dt / DAY).toFixed(0)}: ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+  }
+  const arrays = [['pi', 'Pa', ['C'], 'i', pi], ['theta', 'K', ['K', 'C'], 'k * C + i', theta], ['u', 'm/s', ['K', 'E'], 'k * E + e', u], ['surfaceGeopotential', 'm²/s²', ['C'], 'i', run.surface]];
+  let offset = 0;
+  const layout = arrays.map(([name, unit, shape, index, values]) => { const entry = { name, unit, shape, index, offset, length: values.length }; offset += values.length; return entry; });
+  const header = {
+    version: 1, case: 'jw06', N, K, C, E, day: DAYS, time: steps * dt, dt, levels: Array.from(core.levels), R, cp, p0, g, a, omega, nu4: core.nu4, nu4Theta: core.nu4Theta,
+    data: 'float32, little-endian, the arrays one after another; offset and length count floats from the start of the data, after the header; layer k = 0 is the top; cells and edges in buildMesh(new Grid(N)) order; u is the wind across each edge, along its normal nEdge', arrays: layout,
+  };
+  const json = Buffer.from(JSON.stringify(header)), pad = (4 - ((8 + json.length) % 4)) % 4, data = new Float32Array(offset);
+  for (const [n, entry] of layout.entries()) data.set(arrays[n][4], entry.offset);
+  const head = Buffer.alloc(8); head.write('EXS1', 0); head.writeUInt32LE(json.length + pad, 4);
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, Buffer.concat([head, json, Buffer.alloc(pad, 32), Buffer.from(data.buffer)]));
+  let low = 0; for (let i = 0; i < C; i++) if (pi[i] < pi[low]) low = i;
+  console.error(`wrote ${out}: day ${DAYS}, ${offset} floats, deepest low ${(pi[low] / 100).toFixed(1)} hPa at ${(mesh.latCell[low] * 180 / Math.PI).toFixed(1)}° ${(mesh.lonCell[low] * 180 / Math.PI).toFixed(1)}°, ${((performance.now() - t0) / 1000).toFixed(0)} s`);
   process.exit(0);
 }
 
