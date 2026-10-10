@@ -13,8 +13,8 @@ export function mountBump(root) {
     onFrame: (frame) => {
       let top = -Infinity;
       for (const v of frame.field) top = Math.max(top, v);
-      const hours = frame.time / 3600, f = 2 * EARTH.omega * spin * Math.SQRT1_2, c = Math.sqrt(EARTH.g * DEPTH);
-      out.set([['time', `${Math.floor(hours / 24)} d ${String(Math.round(hours % 24)).padStart(2, '0')} h`], ['highest point of the surface', `${top.toFixed(0)} m above the mean`], ['gravity waves travel at', `${c.toFixed(0)} m/s`], ['Rossby radius at 45°', spin ? `${(c / f / 1000).toFixed(0)} km` : 'unlimited: no spin']], 4);
+      const hours = Math.round(frame.time / 3600), f = 2 * EARTH.omega * spin * Math.SQRT1_2, c = Math.sqrt(EARTH.g * DEPTH);
+      out.set([['time', `${Math.floor(hours / 24)} d ${String(hours % 24).padStart(2, '0')} h`], ['highest point of the surface', `${top.toFixed(0)} m above the mean`], ['gravity waves travel at', `${c.toFixed(0)} m/s`], ['Rossby radius at 45°', spin ? `${(c / f / 1000).toFixed(0)} km` : 'unlimited: no spin']], 4);
     },
   });
   caption(root, `A ${DEPTH / 1000} km deep layer of water at rest covers the globe, with a hump ${HEIGHT} m high and about ${(2 * WIDTH / 1e6).toFixed(0)},000 km across dropped onto it at 45° north. Time runs ${SPEED / 3600} hours per second. Drag to turn the globe.`);

@@ -1,7 +1,7 @@
 import { choice, buttons, legend, caption, readout, rampRGB, clamp, INK, DARK_NEUTRAL } from '../runtime.module.js';
 import { simulationGlobe } from '../swGlobe.module.js';
 
-const N = 32, SPEED = 12 * 3600, SCALE = 1.0e-4;
+const N = 32, SPEED = 6 * 3600, SCALE = 1.0e-4;
 
 export function mountGalewsky(root) {
   const controls = root.querySelector('.controls');

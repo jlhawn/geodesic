@@ -34,14 +34,14 @@ function cellVelocity(mesh, u, i, out, k) {
   for (let c = 0; c < 3; c++) out[3 * k + c] = ue * east[c] + un * north[c];
 }
 
-function start({ N, kind, options = {}, spin = 1, closureHours = 0, coarse = 8 }) {
+function start({ N, kind, options = {}, spin = 1, closureHours = 0, coarse = 8, run = 0 }) {
   const mesh = buildMesh(new Grid(N), { radius: EARTH.a, omega: EARTH.omega * spin });
   const model = createShallowWater(mesh, { g: EARTH.g, nu4: closureHours ? hyperdiffusion(mesh, closureHours) : 0 });
   const step = createRK4(mesh.nCells, mesh.nEdges);
   const setup = CASES[kind](options);
   const h = cellField(mesh, setup.height), u = edgeNormalVelocity(mesh, setup.wind);
   const picks = arrowCells(mesh, coarse);
-  sim = { mesh, model, step, h, u, mean: setup.mean, dt: 240 * 32 / N, time: 0, owed: 0, picks, kind, initialMass: model.diagnostics(h, u).mass };
+  sim = { mesh, model, step, h, u, mean: setup.mean, dt: 240 * 32 / N, time: 0, owed: 0, picks, kind, run, initialMass: model.diagnostics(h, u).mass };
   send();
 }
 
@@ -55,7 +55,7 @@ function send() {
   const arrows = new Float32Array(3 * picks.length);
   for (let k = 0; k < picks.length; k++) cellVelocity(mesh, u, picks[k], arrows, k);
   const mass = sim.model.diagnostics(h, u).mass;
-  self.postMessage({ type: 'frame', time, field, arrows, picks, massDrift: (mass - sim.initialMass) / sim.initialMass }, [field.buffer, arrows.buffer]);
+  self.postMessage({ type: 'frame', run: sim.run, time, field, arrows, picks, massDrift: (mass - sim.initialMass) / sim.initialMass }, [field.buffer, arrows.buffer]);
 }
 
 function advance(seconds) {

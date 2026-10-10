@@ -3,6 +3,8 @@ import { Figure } from './runtime.module.js';
 
 const NORTH_UP = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0));
 
+const linear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+
 export const rgb = (css) => css.match(/\d+(\.\d+)?/g).slice(0, 3).map((v) => Number(v) / 255);
 
 export function arc(a, b, steps = 12) {
@@ -99,7 +101,8 @@ export class Globe {
     return (colorOf) => {
       for (let i = 0; i < polygons.length; i++) {
         colorOf(i, rgb);
-        for (let v = spans[2 * i], end = v + spans[2 * i + 1]; v < end; v++) { colors[3 * v] = rgb[0]; colors[3 * v + 1] = rgb[1]; colors[3 * v + 2] = rgb[2]; }
+        const r = linear(rgb[0]), g = linear(rgb[1]), b = linear(rgb[2]);
+        for (let v = spans[2 * i], end = v + spans[2 * i + 1]; v < end; v++) { colors[3 * v] = r; colors[3 * v + 1] = g; colors[3 * v + 2] = b; }
       }
       geometry.attributes.color.needsUpdate = true;
     };

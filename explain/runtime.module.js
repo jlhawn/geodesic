@@ -187,6 +187,7 @@ const PALETTES = {
   safe: { cool: [0, 114, 178], warm: [230, 159, 0], neutral: [150, 150, 150] },
 };
 let palette = PALETTES.standard;
+export let paletteVersion = 0;
 const rgba = (c, a = 1) => `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${a})`;
 
 export function anomalyColor(t, alpha = 1) {
@@ -211,6 +212,7 @@ export function rampRGB(f, out = [0, 0, 0], neutral = palette.neutral) {
 
 export function setPalette(name) {
   palette = PALETTES[name] ?? PALETTES.standard;
+  paletteVersion++;
   for (const [wrap, items] of legends) fillLegend(wrap, items);
   for (const figure of figures.values()) figure.render();
   try { localStorage.setItem('explain-palette', name); } catch {}
