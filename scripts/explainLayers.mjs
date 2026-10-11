@@ -1,6 +1,6 @@
 // Precomputes the layered-model frames that explain/sphere.html and
 // explain/primitive.html play back:
-//   node scripts/explainLayers.mjs jw06|heldsuarez|tracks|state [OUT]
+//   node scripts/explainLayers.mjs jw06|heldsuarez|radiation|tracks|state [OUT]
 // writing explain/data/<case>_N16.bin, jw06state_N16.bin for state.
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -8,6 +8,8 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore } from '../js/dynamics/sigmaCore.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
+import { createRadiation, YEAR } from '../js/physics/radiation.module.js';
+import { createSurface } from '../js/physics/surface.module.js';
 import { EARTH, edgeNormalVelocity, hyperdiffusion, cellVelocity } from '../explain/swCases.module.js';
 
 const which = process.argv[2], N = 16, DAY = 86400, dt = 450 * 16 / N;
@@ -56,8 +58,8 @@ function heldSuarez() {
   const { K, sigmaMid, kappa, exnerLayer } = core.diagnostics;
   const kf = 1 / DAY, ka = 1 / (40 * DAY), ks = 1 / (4 * DAY), sigmaB = 0.7, deltaTy = 60, deltaThetaZ = 10, tMin = 200, tMax = 315;
   const cosLat = Float64Array.from(mesh.latCell, Math.cos), sinLat = Float64Array.from(mesh.latCell, Math.sin);
-  const forcing = (state, outs) => {
-    const [pi, theta, u] = state, [, dTheta, dU] = outs;
+  const nudging = (state, outs) => {
+    const [pi, theta] = state, [, dTheta] = outs;
     for (let k = 0; k < K; k++) {
       const s = sigmaMid[k], weight = Math.max(0, (s - sigmaB) / (1 - sigmaB));
       for (let i = 0; i < C; i++) {
@@ -65,10 +67,17 @@ function heldSuarez() {
         const tEq = Math.max(tMin, (tMax - deltaTy * sinLat[i] * sinLat[i] - deltaThetaZ * Math.log(p / p0) * c2) * Math.pow(p / p0, kappa));
         dTheta[idx] -= (ka + (ks - ka) * weight * c2 * c2) * (theta[idx] - tEq / exnerLayer[idx]);
       }
+    }
+  };
+  const friction = (state, outs) => {
+    const u = state[2], dU = outs[2];
+    for (let k = 0; k < K; k++) {
+      const weight = Math.max(0, (sigmaMid[k] - sigmaB) / (1 - sigmaB));
       if (weight > 0) for (let e = 0; e < E; e++) dU[k * E + e] -= kf * weight * u[k * E + e];
     }
   };
-  const tendency = (state, outs) => { core.tendency(state, outs); forcing(state, outs); };
+  const tendency = (state, outs) => { core.tendency(state, outs); nudging(state, outs); friction(state, outs); };
+  const frictionOnly = (state, outs) => { core.tendency(state, outs); friction(state, outs); };
   const pi = new Float64Array(C).fill(p0), theta = new Float64Array(K * C);
   core.diagnose(pi, theta);
   let seed = 12345;
@@ -78,11 +87,11 @@ function heldSuarez() {
     const tEq = Math.max(tMin, (tMax - deltaTy * sinLat[i] ** 2 - deltaThetaZ * Math.log(p / p0) * c2) * (p / p0) ** kappa);
     theta[k * C + i] = tEq / exnerLayer[k * C + i] + 0.1 * noise();
   }
-  return { core, state: [pi, theta, new Float64Array(K * E)], tendency, surface: null };
+  return { core, state: [pi, theta, new Float64Array(K * E)], tendency, frictionOnly, surface: null };
 }
 
-const run = which === 'jw06' || which === 'tracks' || which === 'state' ? jw06() : which === 'heldsuarez' ? heldSuarez() : null;
-if (!run) { console.error('usage: node scripts/explainLayers.mjs jw06|heldsuarez|tracks|state [OUT]'); process.exit(1); }
+const run = which === 'jw06' || which === 'tracks' || which === 'state' ? jw06() : which === 'heldsuarez' || which === 'radiation' ? heldSuarez() : null;
+if (!run) { console.error('usage: node scripts/explainLayers.mjs jw06|heldsuarez|radiation|tracks|state [OUT]'); process.exit(1); }
 const { core, state, tendency } = run, K = core.K, step = createRK4Arrays([C, K * C, K * E]);
 const [pi, theta, u] = state, { exnerLayer } = core.arrays, sigmaMid = core.sigmaMid;
 
@@ -106,17 +115,19 @@ function frame() {
 }
 
 const BINS = 36;
-const means = { u: new Float64Array(BINS * K), T: new Float64Array(BINS * K), count: new Float64Array(BINS * K), samples: 0 };
-function accumulate() {
+const zonalSums = () => ({ u: new Float64Array(BINS * K), T: new Float64Array(BINS * K), count: new Float64Array(BINS * K), samples: 0 });
+const means = zonalSums();
+const binOf = (i) => Math.min(BINS - 1, Math.floor((mesh.latCell[i] + Math.PI / 2) / Math.PI * BINS));
+function accumulate(target = means) {
   core.diagnose(pi, theta);
   for (let i = 0; i < C; i++) {
-    const bin = Math.min(BINS - 1, Math.floor((mesh.latCell[i] + Math.PI / 2) / Math.PI * BINS));
+    const bin = binOf(i);
     for (let k = 0; k < K; k++) {
       cellVelocity(mesh, u, i, velocity, 0, k * E);
-      means.u[bin * K + k] += velocity[0] * mesh.areaCell[i]; means.T[bin * K + k] += theta[k * C + i] * exnerLayer[k * C + i] * mesh.areaCell[i]; means.count[bin * K + k] += mesh.areaCell[i];
+      target.u[bin * K + k] += velocity[0] * mesh.areaCell[i]; target.T[bin * K + k] += theta[k * C + i] * exnerLayer[k * C + i] * mesh.areaCell[i]; target.count[bin * K + k] += mesh.areaCell[i];
     }
   }
-  means.samples++;
+  target.samples++;
 }
 
 if (which === 'tracks') {
@@ -216,6 +227,106 @@ if (which === 'state') {
   writeFileSync(out, Buffer.concat([head, json, Buffer.alloc(pad, 32), Buffer.from(data.buffer)]));
   let low = 0; for (let i = 0; i < C; i++) if (pi[i] < pi[low]) low = i;
   console.error(`wrote ${out}: day ${DAYS}, ${offset} floats, deepest low ${(pi[low] / 100).toFixed(1)} hPa at ${(mesh.latCell[low] * 180 / Math.PI).toFixed(1)}° ${(mesh.lonCell[low] * 180 / Math.PI).toFixed(1)}°, ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+  process.exit(0);
+}
+
+if (which === 'radiation') {
+  const HELD_DAYS = 60, SPINUP_DAYS = 150, RECORD_DAYS = 365, FRAME_DAYS = 5, WEATHER_DAYS = [287, 317];
+  const ALBEDO = 0.07, HEAT_CAPACITY = 2.1e7, EVERY = 2, EQUINOX_DAY_OF_YEAR = 78;
+  const MONTHS = [['January', 31], ['February', 28], ['March', 31], ['April', 30], ['May', 31], ['June', 30], ['July', 31], ['August', 31], ['September', 30], ['October', 31], ['November', 30], ['December', 31]];
+  const monthStart = MONTHS.map((_, m) => MONTHS.slice(0, m).reduce((sum, [, days]) => sum + days, 0));
+  const monthOf = (day) => { const date = (Math.floor(day) + EQUINOX_DAY_OF_YEAR) % 365; let m = 11; while (monthStart[m] > date) m--; return m; };
+  const monthDays = (m) => { const from = (monthStart[m] - EQUINOX_DAY_OF_YEAR + 365) % 365, to = from + MONTHS[m][1]; return to <= 365 ? [[from, to]] : [[from, 365], [0, to - 365]]; };
+  const surface = createSurface(mesh, core), radiation = createRadiation(mesh, core, { albedo: ALBEDO, radiationEvery: EVERY });
+  const Ts = new Float64Array(C), q0 = new Float64Array(K * C), qc0 = new Float64Array(K * C), dry = new Float64Array(C), albedo = new Float64Array(C).fill(ALBEDO);
+  const columns = [pi, theta, u, Ts, q0, qc0], heating = [null, new Float64Array(K * C), null, null, new Float64Array(K * C)], totals = {};
+  const area = mesh.areaCell.reduce((sum, x) => sum + x, 0), perDay = Math.round(DAY / dt), bottom = (K - 1) * C, t0 = performance.now();
+  const seconds = () => ((performance.now() - t0) / 1000).toFixed(0);
+  const strongest = () => {
+    let speed = 0, at = 0;
+    for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) {
+      cellVelocity(mesh, u, i, velocity, 0, k * E);
+      const s = Math.hypot(velocity[0], velocity[1]);
+      if (!Number.isFinite(s)) return { speed: NaN, where: 'not finite' };
+      if (s > speed) { speed = s; at = k * C + i; }
+    }
+    const k = Math.floor(at / C), i = at % C;
+    return { speed, where: `${(sigmaMid[k] * pi[i] / 100).toFixed(1)} hPa ${(mesh.latCell[i] * 180 / Math.PI).toFixed(0)}°` };
+  };
+
+  for (let n = 1; n <= HELD_DAYS * perDay; n++) {
+    step(run.tendency, state, dt);
+    if (n % (10 * perDay) === 0) console.error(`held–suarez day ${n / perDay}: max wind ${strongest().speed.toFixed(0)} m/s, ${seconds()} s`);
+  }
+  core.diagnose(pi, theta);
+  for (let i = 0; i < C; i++) Ts[i] = theta[bottom + i] * exnerLayer[bottom + i];
+
+  const start = -SPINUP_DAYS * DAY, end = RECORD_DAYS * DAY, steps = Math.round((end - start) / dt), recordStep = Math.round(-start / dt), sixHours = Math.round(6 * 3600 / dt);
+  const sequences = [{ name: 'year', every: FRAME_DAYS * DAY, from: 0, to: end }, { name: 'weather', every: 6 * 3600, from: WEATHER_DAYS[0] * DAY, to: WEATHER_DAYS[1] * DAY }].map((s) => ({ ...s, times: [], frames: [] }));
+  const due = (time, s) => time >= s.from && time <= s.to + 1 && Math.abs(time / s.every - Math.round(time / s.every)) < 1e-6;
+  const radiationFrame = () => {
+    const [, t850, wind250] = frame(), ts = new Int16Array(C), olr = new Int16Array(C);
+    for (let i = 0; i < C; i++) { ts[i] = Math.round((Ts[i] - 260) * 50); olr[i] = Math.round(radiation.outgoing[i] * 50); }
+    return [ts, olr, t850, wind250];
+  };
+  const monthly = MONTHS.map(() => zonalSums());
+  const daily = { absorbedSolar: [], outgoingLongwave: [], surfaceTemperature: [] }, today = { absorbedSolar: 0, outgoingLongwave: 0, surfaceTemperature: 0 };
+  const surfaceSum = new Float64Array(C);
+  let recorded = 0;
+  for (let n = 0; n <= steps; n++) {
+    const time = start + n * dt;
+    for (const s of sequences) if (due(time, s)) { s.times.push(time); s.frames.push(radiationFrame()); }
+    if (time >= 0 && time < end && (n - recordStep) % sixHours === 0) accumulate(monthly[monthOf(time / DAY)]);
+    if (n === recordStep) radiation.restartSums();
+    if (n === steps) break;
+    step(run.frictionOnly, state, dt);
+    heating[1].fill(0); heating[4].fill(0);
+    core.diagnose(pi, theta, q0, qc0);
+    surface.lowestWindSpeed(u);
+    radiation.setTime(YEAR + time);
+    radiation.apply(columns, heating, surface.windSpeed, totals, 0, C, albedo, albedo, dry, null, null, dt);
+    for (let m = 0; m < K * C; m++) theta[m] += dt * heating[1][m];
+    for (let i = 0; i < C; i++) Ts[i] += dt * radiation.surfaceFlux[i] / HEAT_CAPACITY;
+    surface.convectiveAdjustment(pi, theta);
+    let meanTs = 0;
+    for (let i = 0; i < C; i++) meanTs += mesh.areaCell[i] * Ts[i];
+    today.absorbedSolar += totals.absorbedSolar / area; today.outgoingLongwave += totals.outgoingLongwave / area; today.surfaceTemperature += meanTs / area;
+    if (time >= 0) { for (let i = 0; i < C; i++) surfaceSum[i] += Ts[i]; recorded++; }
+    if ((n + 1) % perDay === 0) {
+      for (const key of Object.keys(today)) { daily[key].push(+(today[key] / perDay).toFixed(2)); today[key] = 0; }
+      let low = Infinity, high = -Infinity;
+      for (const t of Ts) { low = Math.min(low, t); high = Math.max(high, t); }
+      const wind = strongest(), day = (n + 1) / perDay;
+      console.error(`radiation day ${day} of ${steps / perDay}${time < 0 ? ' (spin-up)' : ''}: Ts ${daily.surfaceTemperature.at(-1).toFixed(2)} K (${low.toFixed(1)}–${high.toFixed(1)}), ASR ${daily.absorbedSolar.at(-1).toFixed(2)}, OLR ${daily.outgoingLongwave.at(-1).toFixed(2)} W/m², max wind ${wind.speed.toFixed(0)} m/s at ${wind.where}, ${seconds()} s`);
+      if (!(wind.speed < 400 && low > 100 && high < 400)) { console.error('unstable: stopping'); process.exit(1); }
+    }
+  }
+
+  const annual = zonalSums();
+  for (const sums of monthly) { for (const key of ['u', 'T', 'count']) sums[key].forEach((v, m) => { annual[key][m] += v; }); annual.samples += sums.samples; }
+  const finish = (sums) => ({ samples: sums.samples, u: Array.from(sums.u, (v, m) => +(v / sums.count[m]).toFixed(2)), T: Array.from(sums.T, (v, m) => +(v / sums.count[m]).toFixed(2)) });
+  const zonal = (value) => {
+    const sum = new Float64Array(BINS), weight = new Float64Array(BINS);
+    for (let i = 0; i < C; i++) { sum[binOf(i)] += value(i) * mesh.areaCell[i]; weight[binOf(i)] += mesh.areaCell[i]; }
+    return Array.from(sum, (v, b) => +(v / weight[b]).toFixed(2));
+  };
+  const header = {
+    version: 1, case: 'radiation', N, K, dt, levels: Array.from(core.levels),
+    fields: [{ name: 'surfaceTemperature', unit: 'K', scale: 1 / 50, offset: 260 }, { name: 'outgoingLongwave', unit: 'W/m²', scale: 1 / 50, offset: 0 }, { name: 'temperature850', unit: 'K', scale: 1 / 50, offset: 260 }, { name: 'wind250', unit: 'm/s', scale: 1 / 100, offset: 0 }],
+    sequences: sequences.map((s) => ({ name: s.name, times: s.times })),
+    time: 'seconds from the March equinox (March 20) that begins the recorded year; the sun is radiation.setTime(YEAR + time)',
+    ground: { albedo: ALBEDO, heatCapacity: HEAT_CAPACITY }, radiationEvery: EVERY, heldSuarezDays: HELD_DAYS, spinupDays: SPINUP_DAYS,
+    zonalMean: { bins: BINS, from: 0, to: end, sigma: Array.from(sigmaMid), ...finish(annual), months: MONTHS.map(([name], m) => ({ name, days: monthDays(m), ...finish(monthly[m]) })) },
+    zonalBudget: { bins: BINS, from: 0, to: end, steps: recorded, absorbedSolar: zonal((i) => radiation.summed.absorbedSolar[i] / recorded), outgoingLongwave: zonal((i) => radiation.summed.outgoingLongwave[i] / recorded), surfaceTemperature: zonal((i) => surfaceSum[i] / recorded) },
+    daily: { from: start, ...daily },
+  };
+  const json = Buffer.from(JSON.stringify(header)), pad = (4 - ((8 + json.length) % 4)) % 4;
+  const blocks = [];
+  for (const s of sequences) for (const f of s.frames) for (const field of f) blocks.push(Buffer.from(field.buffer));
+  const head = Buffer.alloc(8); head.write('EXF1', 0); head.writeUInt32LE(json.length + pad, 4);
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, Buffer.concat([head, json, Buffer.alloc(pad, 32), ...blocks]));
+  console.error(`wrote ${out}: ${sequences.map((s) => `${s.name} ${s.frames.length} frames`).join(', ')}, ${(json.length / 1024).toFixed(0)} KB header, ${((performance.now() - t0) / 60000).toFixed(1)} min`);
   process.exit(0);
 }
 

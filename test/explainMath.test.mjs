@@ -399,7 +399,7 @@ test('a sign opening a colored term is binary after an operand and unary after a
 
 test('every equation on the explainer pages is well formed', () => {
   let count = 0;
-  for (const page of ['air', 'spin', 'grid', 'primitive', 'sphere']) {
+  for (const page of ['air', 'spin', 'grid', 'primitive', 'sphere', 'radiation']) {
     const html = readFileSync(new URL(`../explain/${page}.html`, import.meta.url), 'utf8');
     for (const [, tag, flag, source] of html.matchAll(/<(span|div) class="tex( display)?">([^]*?)<\/\1>/g)) {
       wellFormed(unescape(source).trim(), tag === 'div' || flag ? { display: true } : undefined);
