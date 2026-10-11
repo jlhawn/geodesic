@@ -2,7 +2,7 @@ import * as THREE from '../../js/three.module.js';
 import { slider, buttons, legend, readout, text, termColor, clamp, MUTED, rampRGB } from '../runtime.module.js';
 import { Scene3D, hexPatch, Arrows, hexTiles, linear, cssColor } from '../scene3d.module.js';
 
-const K = 6, SPACING = 1.3, GAUGE = { x: 2.7, z: 1.4 }, PERIOD = 16, LAG = Math.PI / 2, SWING = [2, 1.5, 0.75, -0.75, -1.5, -2], CYCLE = 'Rising and sinking, out of step', PRESETS = { rising: [2, 1.5, 0, 0, -1.5, -2], piling: [-1, -1, -1, -1, -1, -1], draining: [1, 1, 1, 1, 1, 1], sinking: [-2, -1.5, 0, 0, 1.5, 2] };
+const K = 6, SPACING = 1.3, GAUGE = { x: 2.7, z: 1.4 }, PERIOD = 16, LAG = Math.PI / 2, SWING = [2, 1.5, 0.75, -0.75, -1.5, -2], CYCLE = 'Rising and sinking, out of step', PRESETS = { rising: [2, 1.5, 0, 0, -1.5, -2], piling: [-1, -1, -1, -1, -1, -1], draining: [1, 1, 1, 1, 1, 1], sinking: [-2, -1.5, 0, 0, 1.5, 2], squeezed: [-3, -3, -0.5, -3, -3, -3], emptied: [3, 3, 0.5, 3, 3, 3] };
 
 export function mountContinuity(root) {
   const controls = root.querySelector('.controls'), A = termColor('a'), B = termColor('b'), C = termColor('c'), weight = cssColor(A), sides = cssColor(B), between = cssColor(C);
@@ -22,7 +22,7 @@ export function mountContinuity(root) {
   const gauge = new Arrows(scene.group, 1, { radius: 0.09, head: 0.36, headRadius: 0.2 });
   legend(root, [['arrow', 'the surface pressure rising or falling, ∂π/∂t: the ground glows as it changes', A], ['arrow', 'air flowing across the column’s six sides in each layer', B], ['arrow', 'air crossing between layers, πσ̇', C], ['ramp', 'the column’s layers, tinted from air flowing in to air flowing out', 'cool', 'warm', 'neutral']]);
   const sliders = divergence.map((value, k) => slider(controls, { label: k === 0 ? 'Top layer' : k === K - 1 ? 'Lowest layer' : `Layer ${k + 1}`, min: -3, max: 3, step: 0.5, value, format: (v) => v === 0 ? 'balanced' : v > 0 ? `${v} out` : `${-v} in`, onInput: (v) => { stop(); divergence[k] = v; compute(); } }));
-  [, , , , toggle] = buttons(controls, [['Rising column', () => preset('rising')], ['Sinking column', () => preset('sinking')], ['Air piling in', () => preset('piling')], ['Air draining out', () => preset('draining')], [CYCLE, () => (cycling ? stop() : start())]]);
+  [, , , , toggle] = buttons(controls, [['Rising column', () => preset('rising')], ['Sinking column', () => preset('sinking')], ['Air piling in', () => preset('piling')], ['Air draining out', () => preset('draining')], ['Squeezed from every side', () => preset('squeezed')], ['Emptied from every side', () => preset('emptied')], [CYCLE, () => (cycling ? stop() : start())]]);
   const out = readout(controls);
 
   function preset(name) { stop(); PRESETS[name].forEach((v, k) => { divergence[k] = v; sliders[k].value = v; }); compute(); }
