@@ -11,7 +11,9 @@ export function mountContinuity(root) {
   const layerY = (k) => (K - 1 - k + 0.5) * SPACING, interfaceY = (k) => (K - k) * SPACING;
   let result = null, cycling = false, phase = 0, toggle = null;
 
-  const scene = new Scene3D(root, { height: 440, distance: 19, target: [center.x, 4.2, center.z], yaw: -0.5, pitch: 0.28, update, draw: labels, step });
+  const scene = new Scene3D(root, { height: 580, distance: 20, target: [center.x, 3.5, center.z], yaw: -0.5, pitch: 0.28, fit: 0.8, update, draw: labels, step });
+  const size = scene.fig.resize.bind(scene.fig);
+  scene.fig.resize = () => { scene.fig.height = scene.fig.minHeight = Math.round(clamp(scene.fig.stage.clientWidth * 1.35, 440, 580)); size(); };
   const ground = scene.add(new THREE.Mesh(new THREE.CircleGeometry(4.2, 48).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: new THREE.Color(0.05, 0.045, 0.035) })));
   ground.position.set(center.x, -0.02, center.z);
   const tiles = hexTiles(scene.group, { thickness: 0.04, opacity: 0.45, depthWrite: false }).mesh(cells.length * K);

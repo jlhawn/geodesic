@@ -5,7 +5,7 @@ export const linear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) *
 export const cssColor = (css) => { const m = css[0] === '#' ? [1, 3, 5].map((i) => parseInt(css.slice(i, i + 2), 16)) : css.match(/\d+(\.\d+)?/g).map(Number); return [m[0] / 255, m[1] / 255, m[2] / 255]; };
 
 export class Scene3D {
-  constructor(root, { height = 440, minHeight = 300, distance = 16, target = [0, 2, 0], yaw = -0.6, pitch = 0.45, fov = 32, step = null, draw = null, update = null } = {}) {
+  constructor(root, { height = 440, minHeight = 300, distance = 16, target = [0, 2, 0], yaw = -0.6, pitch = 0.45, fov = 32, fit = 1.45, step = null, draw = null, update = null } = {}) {
     root.classList.add('drag');
     this.drawOverlay = draw;
     this.update = update;
@@ -23,7 +23,7 @@ export class Scene3D {
     this.scene.add(sun);
     this.group = new THREE.Group();
     this.scene.add(this.group);
-    Object.assign(this, { distance, target: new THREE.Vector3(...target), yaw, pitch });
+    Object.assign(this, { distance, fit, target: new THREE.Vector3(...target), yaw, pitch });
     let last = null;
     this.fig.pointer({
       down: (p) => { last = p; },
@@ -47,7 +47,7 @@ export class Scene3D {
       this.overlay.height = Math.round(h * dpr);
       this.overlay.style.height = `${h}px`;
     }
-    const c = Math.cos(this.pitch), d = this.distance * Math.max(1, 1.45 * h / w);
+    const c = Math.cos(this.pitch), d = this.distance * Math.max(1, this.fit * h / w);
     this.camera.position.set(this.target.x + d * c * Math.sin(this.yaw), this.target.y + d * Math.sin(this.pitch), this.target.z + d * c * Math.cos(this.yaw));
     this.camera.lookAt(this.target);
     this.renderer.render(this.scene, this.camera);
