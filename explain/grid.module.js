@@ -5,10 +5,11 @@ import { mountStagger } from './figures/stagger.module.js';
 import { mountTrisk } from './figures/trisk.module.js';
 import { mountTurntable } from './figures/turntable.module.js';
 import { mountInertial } from './figures/inertial.module.js';
+import { mountSlices } from './figures/slices.module.js';
 import { paletteControl } from './runtime.module.js';
 import { previews } from './previews.module.js';
 
-const mounts = { latlon: mountLatLon, icosa: mountIcosa, relax: mountRelax, stagger: mountStagger, trisk: mountTrisk, turntable: mountTurntable, inertial: mountInertial };
+const mounts = { latlon: mountLatLon, icosa: mountIcosa, relax: mountRelax, stagger: mountStagger, trisk: mountTrisk, turntable: mountTurntable, inertial: mountInertial, slices: mountSlices };
 for (const figure of document.querySelectorAll('figure.fig[data-figure]')) mounts[figure.dataset.figure]?.(figure);
 paletteControl(document.querySelector('nav.parts .palette'));
 previews(document);
