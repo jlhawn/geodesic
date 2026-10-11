@@ -14,17 +14,15 @@ export function mountTurntable(root) {
   function launch() { t = 0; angle = 0; fixed.length = 0; riding.length = 0; launched = true; }
 
   function step(dt) {
-    if (!launched) return;
+    if (!launched) return false;
+    const x = -1 + 2 * (t + dt) / CROSSING, y = 0.35 * Math.sin(0.7), inside = Math.hypot(x, y) <= 1;
+    if (!inside && fixed.length) { launched = false; return false; }
     t += dt;
     angle += 2 * Math.PI * spin * dt;
-    const x = -1 + 2 * t / CROSSING, y = 0.35 * Math.sin(0.7);
-    if (x > 1.05) { launched = false; return; }
-    const r = Math.hypot(x, y);
-    if (r <= 1) {
-      fixed.push([x, y]);
-      const c = Math.cos(-angle), s = Math.sin(-angle);
-      riding.push([x * c - y * s, x * s + y * c]);
-    }
+    if (!inside) return;
+    fixed.push([x, y]);
+    const c = Math.cos(-angle), s = Math.sin(-angle);
+    riding.push([x * c - y * s, x * s + y * c]);
   }
 
   function draw(ctx, w, h) {
