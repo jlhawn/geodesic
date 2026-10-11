@@ -1,5 +1,5 @@
-// Precomputes the layered-model frames that explain/sphere.html and
-// explain/primitive.html play back:
+// Precomputes the layered-model frames that explain/sphere.html,
+// explain/primitive.html and explain/radiation.html play back:
 //   node scripts/explainLayers.mjs jw06|heldsuarez|radiation|tracks|state [OUT]
 // writing explain/data/<case>_N16.bin, jw06state_N16.bin for state.
 import { writeFileSync, mkdirSync } from 'node:fs';

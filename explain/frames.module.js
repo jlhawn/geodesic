@@ -1,5 +1,10 @@
-export async function loadFrames(url) {
-  const bytes = await (await fetch(url)).arrayBuffer();
+const frames = new Map();
+export function loadFrames(url) {
+  if (!frames.has(url)) frames.set(url, fetch(url).then((r) => r.arrayBuffer()).then((bytes) => readFrames(url, bytes)));
+  return frames.get(url);
+}
+
+export function readFrames(url, bytes) {
   const head = new DataView(bytes);
   if (String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'EXF1') throw new Error(`${url} is not a frames file`);
   const length = head.getUint32(4, true), header = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 8, length)));
