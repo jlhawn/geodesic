@@ -2,10 +2,10 @@ import * as THREE from '../js/three.module.js';
 import { Figure, clamp } from './runtime.module.js';
 
 export const linear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-export const cssColor = (css) => { const m = css[0] === '#' ? [1, 3, 5].map((i) => parseInt(css.slice(i, i + 2), 16)) : css.match(/\d+(\.\d+)?/g).map(Number); return [m[0] / 255, m[1] / 255, m[2] / 255]; };
+export const cssColor = (css) => { const hex = css[0] === '#' && (css.length === 4 ? [1, 2, 3].map((i) => css[i] + css[i]) : [1, 3, 5].map((i) => css.slice(i, i + 2))), m = hex ? hex.map((h) => parseInt(h, 16)) : css.match(/\d+(\.\d+)?/g).map(Number); return [m[0] / 255, m[1] / 255, m[2] / 255]; };
 
 export class Scene3D {
-  constructor(root, { height = 440, minHeight = 300, distance = 16, target = [0, 2, 0], yaw = -0.6, pitch = 0.45, fov = 32, fit = 1.45, step = null, draw = null, update = null } = {}) {
+  constructor(root, { height = 440, minHeight = 300, distance = 16, target = [0, 2, 0], yaw = -0.6, pitch = 0.45, fov = 32, fit = 1.45, pitchRange = [0.05, 1.45], view = null, step = null, draw = null, update = null } = {}) {
     root.classList.add('drag');
     this.drawOverlay = draw;
     this.update = update;
@@ -23,33 +23,41 @@ export class Scene3D {
     this.scene.add(sun);
     this.group = new THREE.Group();
     this.scene.add(this.group);
-    Object.assign(this, { distance, fit, target: new THREE.Vector3(...target), yaw, pitch });
+    Object.assign(this, { distance, fit, pitchRange, view, target: new THREE.Vector3(...target), yaw, pitch });
     let last = null;
     this.fig.pointer({
+      hit: (p) => { const [top, height] = this.region(); return p.y >= top && p.y < top + height; },
       down: (p) => { last = p; },
-      move: (p) => { this.yaw -= (p.x - last.x) * 0.008; this.pitch = clamp(this.pitch + (p.y - last.y) * 0.006, 0.05, 1.45); last = p; this.fig.render(); },
+      move: (p) => { this.yaw -= (p.x - last.x) * 0.008; this.pitch = clamp(this.pitch + (p.y - last.y) * 0.006, ...this.pitchRange); last = p; this.fig.render(); },
     });
     queueMicrotask(() => { this.started = true; this.fig.render(); });
+  }
+
+  region() {
+    const { width: w, h } = this.fig;
+    return this.view?.(w, h) ?? [0, h];
   }
 
   render() {
     const { width: w, h, dpr } = this.fig;
     if (!this.started || !w) return;
     this.update?.();
-    const size = `${w}x${h}@${dpr}`;
+    const [top, height] = this.region(), size = `${w}x${h}@${dpr}:${top}+${height}`;
     if (size !== this.size) {
       this.size = size;
       this.renderer.setPixelRatio(dpr);
       this.renderer.setSize(w, h, false);
-      this.camera.aspect = w / h;
-      this.camera.updateProjectionMatrix();
+      if (this.view) this.camera.setViewOffset(w, height, 0, -top, w, h);
+      else { this.camera.aspect = w / h; this.camera.updateProjectionMatrix(); }
       this.overlay.width = Math.round(w * dpr);
       this.overlay.height = Math.round(h * dpr);
       this.overlay.style.height = `${h}px`;
     }
-    const c = Math.cos(this.pitch), d = this.distance * Math.max(1, this.fit * h / w);
+    const c = Math.cos(this.pitch), d = this.distance * Math.max(1, this.fit * height / w);
     this.camera.position.set(this.target.x + d * c * Math.sin(this.yaw), this.target.y + d * Math.sin(this.pitch), this.target.z + d * c * Math.cos(this.yaw));
     this.camera.lookAt(this.target);
+    this.renderer.setScissorTest(!!this.view);
+    if (this.view) this.renderer.setScissor(0, h - top - height, w, height);
     this.renderer.render(this.scene, this.camera);
     const ctx = this.overlay.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -91,14 +99,14 @@ export function hexPatch(cols, rows, radius = 1) {
 const UP = new THREE.Vector3(0, 1, 0);
 
 export class Arrows {
-  constructor(scene, capacity, { radius = 0.035, head = 0.16, headRadius = 0.09, dashed = false } = {}) {
+  constructor(scene, capacity, { radius = 0.035, head = 0.16, headRadius = 0.09, dashed = false, headShare = Infinity } = {}) {
     const material = new THREE.MeshLambertMaterial({ color: 0xffffff });
     this.dashed = dashed;
     this.segments = dashed ? 3 : 1;
     this.shafts = new THREE.InstancedMesh(new THREE.CylinderGeometry(radius, radius, 1, 8, 1, false).translate(0, 0.5, 0), material, capacity * this.segments);
     this.heads = new THREE.InstancedMesh(dashed ? new THREE.ConeGeometry(headRadius, head, 12, 1, true).translate(0, -head / 2, 0) : new THREE.ConeGeometry(headRadius, head, 12).translate(0, -head / 2, 0), dashed ? new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide }) : material, capacity);
     for (const mesh of [this.shafts, this.heads]) { mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); mesh.frustumCulled = false; scene.add(mesh); }
-    Object.assign(this, { capacity, head, n: 0 });
+    Object.assign(this, { capacity, head, headShare, n: 0 });
     this.m = new THREE.Matrix4(); this.q = new THREE.Quaternion(); this.v = new THREE.Vector3(); this.s = new THREE.Vector3(); this.p = new THREE.Vector3(); this.color = new THREE.Color();
   }
 
@@ -110,7 +118,7 @@ export class Arrows {
     this.v.set(vx / len, vy / len, vz / len);
     this.q.setFromUnitVectors(UP, this.v);
     this.color.setRGB(linear(rgb[0]), linear(rgb[1]), linear(rgb[2]));
-    const shaft = Math.max(0, len - this.head);
+    const head = Math.min(this.head, this.headShare * len), shrink = head / this.head, shaft = Math.max(0, len - head);
     for (let k = 0; k < this.segments; k++) {
       const piece = this.dashed ? shaft / (2 * this.segments - 1) : shaft, start = this.dashed ? 2 * k * piece : 0;
       this.p.set(x + this.v.x * start, y + this.v.y * start, z + this.v.z * start);
@@ -119,7 +127,7 @@ export class Arrows {
       this.shafts.setColorAt(this.n * this.segments + k, this.color);
     }
     this.p.set(x + vx, y + vy, z + vz);
-    this.m.compose(this.p, this.q, this.s.set(1, 1, 1));
+    this.m.compose(this.p, this.q, this.s.set(shrink, shrink, shrink));
     this.heads.setMatrixAt(this.n, this.m);
     this.heads.setColorAt(this.n, this.color);
     this.n++;

@@ -28,7 +28,7 @@ export class Figure {
   resize() {
     const w = this.stage.clientWidth;
     if (!w) return;
-    const h = Math.round(Math.max(this.minHeight, Math.min(this.height, w * 0.8)));
+    const h = Math.round(typeof this.height === 'function' ? this.height(w) : Math.max(this.minHeight, Math.min(this.height, w * 0.8)));
     this.dpr = window.devicePixelRatio || 1;
     this.canvas.width = Math.round(w * this.dpr);
     this.canvas.height = Math.round(h * this.dpr);
