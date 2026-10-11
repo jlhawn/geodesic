@@ -4,10 +4,13 @@ import { mountEvaporation } from './figures/evaporation.module.js';
 import { mountWetcolumn } from './figures/wetcolumn.module.js';
 import { mountPlume } from './figures/plume.module.js';
 import { mountCloudlayer } from './figures/cloudlayer.module.js';
+import { mountWetsphere } from './figures/wetsphere.module.js';
+import { mountWetzones } from './figures/wetzones.module.js';
+import { mountWatercycle } from './figures/watercycle.module.js';
 import { paletteControl } from './runtime.module.js';
 import { previews } from './previews.module.js';
 
-const mounts = { moistlift: mountMoistlift, vaporslices: mountVaporslices, evaporation: mountEvaporation, wetcolumn: mountWetcolumn, plume: mountPlume, cloudlayer: mountCloudlayer };
+const mounts = { moistlift: mountMoistlift, vaporslices: mountVaporslices, evaporation: mountEvaporation, wetcolumn: mountWetcolumn, plume: mountPlume, cloudlayer: mountCloudlayer, wetsphere: mountWetsphere, wetzones: mountWetzones, watercycle: mountWatercycle };
 for (const figure of document.querySelectorAll('figure.fig[data-figure]')) mounts[figure.dataset.figure]?.(figure);
 paletteControl(document.querySelector('nav.parts .palette'));
 previews(document);
