@@ -1,4 +1,4 @@
-import { Figure, slider, choice, buttons, readout, legend, caption, text, arrow, anomalyColor, rampColor, clamp, ACCENT, INK, MUTED, LINE, GRID, P0 } from '../runtime.module.js';
+import { Figure, slider, choice, buttons, readout, legend, caption, text, arrow, anomalyColor, rampColor, clamp, ACCENT, INK, MUTED, LINE, GRID, P0, KAPPA } from '../runtime.module.js';
 import { createSlice } from '../sliceCore.module.js';
 
 export function mountCells(root) {
@@ -74,6 +74,8 @@ export function mountCells(root) {
     const yz = (z) => bottom - (z / zMax) * (bottom - top);
     const EXAG = EXAGGERATION[lines];
     const zi = (k, i) => z0[k] + EXAG * (slice.interfaceHeight(k, i) - z0[k]);
+    const isobar = (k, i) => { const p = k / K * P0, pi = slice.pi[i], j = Math.min(K - 1, Math.floor(p / pi * K)), ea = (j / K * pi / P0) ** KAPPA, eb = ((j + 1) / K * pi / P0) ** KAPPA; return slice.interfaceHeight(j + 1, i) + (slice.interfaceHeight(j, i) - slice.interfaceHeight(j + 1, i)) * (eb - (p / P0) ** KAPPA) / (eb - ea); };
+    const zp = (k, i) => z0[k] + EXAG * (isobar(k, i) - z0[k]);
     const yEdge = (k, i, side) => yz(0.5 * (zi(k, i) + zi(k, i + side)));
     const yTop = (k, i, side) => k === 0 ? top - 5 : side === 0 ? yz(zi(k, i)) : yEdge(k, i, side);
     ctx.save();
@@ -91,7 +93,7 @@ export function mountCells(root) {
     }
     ctx.globalAlpha = 1;
     ctx.strokeStyle = LINE; ctx.lineWidth = 1;
-    if (lines === 'isobars') for (let k = 1; k <= K; k++) { ctx.beginPath(); for (let i = c - half - 1; i <= c + half + 1; i++) { const x = xc(i), y = yz(zi(k, i)); if (i === c - half - 1) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.stroke(); }
+    if (lines === 'isobars') for (let k = 1; k <= K; k++) { ctx.beginPath(); for (let i = c - half - 1; i <= c + half + 1; i++) { const x = xc(i), y = yz(zp(k, i)); if (i === c - half - 1) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.stroke(); }
     ctx.strokeStyle = GRID;
     for (let i = c - half; i <= c + half + 1; i++) { const x = xc(i) - colW / 2; ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bottom); ctx.stroke(); }
     const uScale = colW * 0.5 / 3;
