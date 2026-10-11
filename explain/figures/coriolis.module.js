@@ -5,23 +5,25 @@ import { Scene3D, Arrows, linear, cssColor } from '../scene3d.module.js';
 import { OMEGA, RADIUS, launch, step as advance, parts, latitude } from '../coriolisSphere.module.js';
 
 const D = Math.PI / 180, SPEED = 5400, H = 60, TRAIL = 3 * 86400, CAPACITY = Math.ceil(TRAIL / H) + 64, LIFT = 1.004, WIDTH = 0.0075, OFFSET = 55 * D, MARK = -90 * D, FAR = 0.4, SOUTH = -Math.sin(0.1 * D);
-const AXIS = [-1.3, 1.36], HALO = 'rgba(20, 20, 22, 0.85)';
+const AXIS = [-1.3, 1.36], HEAD = 1.03, GREY = [0.75, 0.75, 0.78], HALO = 'rgba(20, 20, 22, 0.85)';
 const COMPASS = ['north', 'north-northeast', 'northeast', 'east-northeast', 'east', 'east-southeast', 'southeast', 'south-southeast', 'south', 'south-southwest', 'southwest', 'west-southwest', 'west', 'west-northwest', 'northwest', 'north-northwest'];
 const PALE = cssColor(INK);
 const place = (x) => [x[0] / RADIUS, x[2] / RADIUS, -x[1] / RADIUS];
 const turn = (v) => [v[0], v[2], -v[1]];
 const tilt = (lat) => 0.65 + 0.25 * Math.max(0, Math.abs(lat) - 60) / 30;
 const latitudeName = (v) => v === 0 ? 'equator' : `${Math.abs(v)}° ${v > 0 ? 'north' : 'south'}`;
+const tenths = (v) => Math.round(v * 10) / 10;
+const spinName = (v) => !tenths(v) ? 'none' : `${v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)} × Earth's${v < 0 ? ', backward' : ''}`;
 const rounded = (x) => { const p = 10 ** (Math.floor(Math.log10(x)) - 1); return (Math.round(x / p) * p).toLocaleString('en-US'); };
 const layout = (w) => { const r = Math.round(Math.max(60, Math.min(95, 0.21 * w))), globe = Math.round(Math.min(450, Math.max(320, 0.7 * w))); return { r, globe, height: globe + 2 * r + 62 }; };
 const enlarge = (w) => Math.max(1, Math.min(1.25, 1 + 0.25 * (640 - w) / 300));
 
 export function mountCoriolis(root) {
   const controls = root.querySelector('.controls'), SURFACE = termColor('c'), VERTICAL = termColor('d');
-  let lat = 45, heading = 90, speed = 100, state = null, trail = [], pending = 0;
+  let lat = 45, heading = 90, speed = 100, spin = 1, omega = OMEGA, state = null, trail = [], pending = 0;
 
   const scene = new Scene3D(root, { height: (w) => layout(w).height, distance: 4.8, target: [0, 0.1, 0], yaw: 0, pitch: tilt(45), fit: 1, pitchRange: [-1.45, 1.45], view: (w) => [0, layout(w).globe], step, update, draw: labels });
-  caption(root, 'The globe is drawn turning with the planet; beneath it, the same parcel seen from above the north pole. Time runs 1.5 hours per second. The force arrows have a scale of their own, and where the force and one of its parts coincide, the force is drawn over the part.');
+  caption(root, "The globe is drawn turning with the planet; beneath it, the same parcel seen from above the north pole. The last slider sets how fast the planet turns, as a multiple of Earth's rate, and below zero it turns the other way. Time runs 1.5 hours per second. The force arrows have a scale of their own and stop growing above Earth's spin, so take the force's size from the readout; where the force and one of its parts coincide, the force is drawn over the part.");
   legend(root, [['arrow', 'velocity', INK], ['force', 'Coriolis force, −2Ω × v', 'cool'], ['force', 'its part along the ground', SURFACE], ['force', 'its part along the vertical', VERTICAL], ['faint', 'how the force splits into the two', 'rgba(255,255,255,0.7)'], ['faint', 'the local vertical', 'rgba(255,255,255,0.4)'], ['faint', 'the plane through the parcel at right angles to the axis', 'cool'], ['line', 'the path over the last three days', ACCENT]]);
 
   const globe = new THREE.SphereGeometry(1, 64, 48), shell = { color: new THREE.Color(linear(0.2), linear(0.24), linear(0.32)), transparent: true, opacity: 0.25, depthWrite: false };
@@ -36,9 +38,15 @@ export function mountCoriolis(root) {
   scene.add(new THREE.Line(circle(parallel(0)), new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.42 }))).renderOrder = 1;
 
   const axis = new Arrows(scene.group, 1, { radius: 0.007, head: 0.09, headRadius: 0.032 });
-  axis.begin();
-  axis.push(0, AXIS[0], 0, 0, AXIS[1] - AXIS[0], 0, [0.75, 0.75, 0.78]);
-  axis.end();
+  const bare = scene.add(new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, -2 * AXIS[0], 8), new THREE.MeshLambertMaterial({ color: new THREE.Color(...GREY.map(linear)) })));
+  function pointAxis() {
+    axis.begin();
+    if (spin > 0) axis.push(0, AXIS[0], 0, 0, AXIS[1] - AXIS[0], 0, GREY);
+    if (spin < 0) axis.push(0, AXIS[1], 0, 0, HEAD - AXIS[1], 0, GREY);
+    axis.end();
+    bare.visible = spin <= 0;
+  }
+  pointAxis();
   const cameraLongitude = () => Math.atan2(-Math.cos(scene.yaw), Math.sin(scene.yaw));
 
   const parcel = scene.add(new THREE.Mesh(new THREE.SphereGeometry(0.03, 20, 14), new THREE.MeshBasicMaterial({ color: 0xffffff })));
@@ -64,11 +72,12 @@ export function mountCoriolis(root) {
   slider(controls, { label: 'Latitude', min: -90, max: 90, step: 1, value: lat, format: latitudeName, onInput: (v) => { lat = v; scene.pitch = (v < 0 || (!v && scene.pitch < 0) ? -1 : 1) * tilt(v); course.value = heading; relaunch(); } });
   const course = slider(controls, { label: 'Heading', min: 0, max: 359, step: 1, value: heading, format: (v) => Math.abs(lat) === 90 ? `${v}°` : `${v}°, ${COMPASS[Math.round(v / 22.5) % 16]}`, onInput: (v) => { heading = v; relaunch(); } });
   slider(controls, { label: 'Speed', min: 10, max: 300, step: 10, value: speed, format: (v) => `${v} m/s`, onInput: (v) => { speed = v; relaunch(); } });
+  slider(controls, { label: "Planet's spin", min: -2, max: 2, step: 0.1, value: spin, format: spinName, onInput: (v) => { spin = tenths(v); omega = spin * OMEGA; pointAxis(); relaunch(); } });
   const [, toggle] = buttons(controls, [['Launch again', () => { relaunch(); scene.fig.play(true); toggle.textContent = 'Pause'; }], ['Pause', (b) => { scene.fig.play(!scene.fig.running); b.textContent = scene.fig.running ? 'Pause' : 'Run'; }]]);
   const out = readout(controls);
 
   function relaunch() {
-    state = launch(lat * D, cameraLongitude() + OFFSET, heading * D, speed);
+    state = launch(lat * D, cameraLongitude() + OFFSET, heading * D, speed, omega);
     trail = [[0, ...place(state.x)]];
     pending = 0;
     show(1);
@@ -86,15 +95,15 @@ export function mountCoriolis(root) {
   }
 
   function show(every) {
-    const phi = latitude(state.x), { surface, vertical } = parts(state.x, state.v), f = 2 * OMEGA * Math.sin(phi), deg = phi / D;
+    const phi = latitude(state.x), { surface, vertical } = parts(state.x, state.v, omega), f = 2 * omega * Math.sin(phi), deg = phi / D;
     const days = Math.floor(state.t / 86400), hours = Math.floor(state.t % 86400 / 3600);
-    const ground = Math.hypot(...surface) * 3600, lift = Math.abs(vertical) * 3600, wide = Math.abs(deg) < 3 || speed / Math.abs(f) > RADIUS / 2;
+    const ground = Math.hypot(...surface) * 3600, lift = Math.abs(vertical) * 3600, near = Math.abs(deg) < 3, wide = near || speed / Math.abs(f) > RADIUS / 2;
     out.set([
       ['latitude now', latitudeName(Math.round(deg))],
-      ['along the ground', ground < 0.05 ? 'none' : `${ground.toFixed(1)} m/s an hour, to the ${phi > 0 ? 'right' : 'left'}`],
+      ['along the ground', ground < 0.05 ? 'none' : `${ground.toFixed(1)} m/s an hour, to the ${f > 0 ? 'right' : 'left'}`],
       ['along the vertical', lift < 0.05 ? 'none' : `${lift.toFixed(1)} m/s an hour ${vertical > 0 ? 'upward' : 'downward'}, 1 part in ${rounded(G / Math.abs(vertical))} of gravity`],
-      ['inertial period here', Math.abs(deg) < 3 ? 'none this close to the equator' : `${(2 * Math.PI / Math.abs(f) / 3600).toLocaleString('en-US', { maximumFractionDigits: 1, minimumFractionDigits: 1 })} h`],
-      ['turning radius here', Math.abs(deg) < 3 ? 'no circle this close to the equator' : wide ? 'more than half the planet' : `${Math.round(speed / Math.abs(f) / 1000).toLocaleString('en-US')} km`],
+      ['inertial period here', !spin ? 'none without spin' : near ? 'none this close to the equator' : `${(2 * Math.PI / Math.abs(f) / 3600).toLocaleString('en-US', { maximumFractionDigits: 1, minimumFractionDigits: 1 })} h`],
+      ['turning radius here', !spin ? 'no circle without spin' : near ? 'no circle this close to the equator' : wide ? 'more than half the planet' : `${Math.round(speed / Math.abs(f) / 1000).toLocaleString('en-US')} km`],
       ['time', days ? `${days} d ${hours} h` : `${hours} h`],
     ], every);
   }
@@ -102,11 +111,11 @@ export function mountCoriolis(root) {
   const cool = () => cssColor(anomalyColor(-1)), tips = [];
   function update() {
     if (!state) return;
-    const at = place(state.x), { up, full, vertical, surface } = parts(state.x, state.v), k = enlarge(scene.fig.width), length = 0.34 + 0.22 * (speed - 10) / 290, scale = length / (2 * OMEGA * speed);
+    const at = place(state.x), { up, full, vertical, surface } = parts(state.x, state.v, omega), k = enlarge(scene.fig.width), length = 0.34 + 0.22 * (speed - 10) / 290, scale = length / (2 * OMEGA * Math.max(1, Math.abs(spin)) * speed);
     const ring = cool(), c = Math.cos(scene.pitch), toward = [c * Math.sin(scene.yaw), Math.sin(scene.pitch), c * Math.cos(scene.yaw)].map((x) => 0.012 * x);
     parcel.position.set(...at);
     pin.position.set(...at); pin.scale.setScalar(k);
-    plane.scale.setScalar(length + 0.06); rim.scale.setScalar(length + 0.06);
+    plane.scale.setScalar(length + 0.06); rim.scale.setScalar(length + 0.06); plane.visible = rim.visible = !!spin;
     plane.material.color.setRGB(linear(ring[0]), linear(ring[1]), linear(ring[2])); rim.material.color.copy(plane.material.color);
     const v = turn(state.v).map((x) => x * length / speed), a = turn(full).map((x) => x * scale), s = turn(surface).map((x) => x * scale), u = turn(up).map((x) => x * vertical * scale);
     const ground = Math.hypot(...s) > 0.04, lift = Math.abs(vertical) * scale > 0.04;
@@ -141,7 +150,7 @@ export function mountCoriolis(root) {
     const { r, globe } = layout(w), style = { color: MUTED, size: 11, halo: HALO };
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, w, globe); ctx.clip();
-    const north = scene.project(0, 1, 0), south = scene.project(0, -1, 0), top = scene.project(0, AXIS[1] + 0.06, 0);
+    const north = scene.project(0, 1, 0), south = scene.project(0, -1, 0), top = scene.project(0, spin ? AXIS[1] + 0.06 : 0.06 - AXIS[0], 0);
     const e = cameraLongitude() - 0.75, edge = scene.project(Math.cos(e), 0, -Math.sin(e));
     const near = state ? latitude(state.x) / D : 0;
     let clear = () => true;
@@ -156,7 +165,8 @@ export function mountCoriolis(root) {
     }
     if (near < 80 && clear(north.x + 9, north.y - 7, 8)) text(ctx, 'N', north.x + 9, north.y - 7, { ...style, color: INK, weight: 600 });
     if (near > -80 && clear(south.x + 9, south.y + 8, 8)) text(ctx, 'S', south.x + 9, south.y + 8, style);
-    text(ctx, 'Ω', top.x, Math.max(10, top.y - 9), { ...style, color: INK, size: 14, align: 'center', weight: 600 });
+    if (spin) text(ctx, 'Ω', top.x, Math.max(10, top.y - 9), { ...style, color: INK, size: 14, align: 'center', weight: 600 });
+    else text(ctx, 'no spin', top.x, Math.max(10, top.y - 9), { ...style, align: 'center' });
     const ex = Math.max(30, edge.x), ey = edge.y + (scene.pitch >= 0 ? 11 : -11);
     if (clear(ex, ey, 24)) text(ctx, 'equator', ex, ey, { ...style, align: 'center' });
     ctx.restore();
@@ -166,21 +176,21 @@ export function mountCoriolis(root) {
   }
 
   function polar(ctx, xc, yc, r, base, fixed, label) {
-    const now = state ? state.t : 0, spin = base + (fixed ? OMEGA * now : 0);
+    const now = state ? state.t : 0, turned = base + (fixed ? omega * now : 0);
     const at = (x, y, a) => [xc + r * (x * Math.cos(a) - y * Math.sin(a)), yc - r * (x * Math.sin(a) + y * Math.cos(a))];
     ctx.save();
     ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.beginPath(); ctx.arc(xc, yc, r, 0, 2 * Math.PI); ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1;
     for (const phi of [30, 60]) { ctx.beginPath(); ctx.arc(xc, yc, r * Math.cos(phi * D), 0, 2 * Math.PI); ctx.stroke(); }
-    for (let k = 1; k < 12; k++) { const [x, y] = at(Math.cos(MARK + k * Math.PI / 6), Math.sin(MARK + k * Math.PI / 6), spin); ctx.beginPath(); ctx.moveTo(xc, yc); ctx.lineTo(x, y); ctx.stroke(); }
-    const [mx, my] = at(Math.cos(MARK), Math.sin(MARK), spin);
+    for (let k = 1; k < 12; k++) { const [x, y] = at(Math.cos(MARK + k * Math.PI / 6), Math.sin(MARK + k * Math.PI / 6), turned); ctx.beginPath(); ctx.moveTo(xc, yc); ctx.lineTo(x, y); ctx.stroke(); }
+    const [mx, my] = at(Math.cos(MARK), Math.sin(MARK), turned);
     ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.moveTo(xc, yc); ctx.lineTo(mx, my); ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(xc + 0.92 * (mx - xc), yc + 0.92 * (my - yc), 3.5, 0, 2 * Math.PI); ctx.fill();
     ctx.strokeStyle = LINE; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(xc, yc, r, 0, 2 * Math.PI); ctx.stroke();
     ctx.strokeStyle = ACCENT; ctx.lineWidth = 1.75; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     let south = null;
     trail.forEach(([t, x, z, y], i) => {
-      const p = at(x, -y, base + (fixed ? OMEGA * t : 0)), below = z < SOUTH;
+      const p = at(x, -y, base + (fixed ? omega * t : 0)), below = z < SOUTH;
       if (i && below === south) { ctx.lineTo(...p); return; }
       if (i) { ctx.lineTo(...p); ctx.stroke(); }
       ctx.globalAlpha = below ? FAR : 1;
@@ -190,11 +200,11 @@ export function mountCoriolis(root) {
     if (trail.length) ctx.stroke();
     ctx.globalAlpha = 1;
     ctx.fillStyle = INK; ctx.beginPath(); ctx.arc(xc, yc, 2.5, 0, 2 * Math.PI); ctx.fill();
-    const here = state ? at(...place(state.x).filter((_, i) => i !== 1).map((c, i) => (i ? -c : c)), spin) : [xc + 1, yc - 1];
+    const here = state ? at(...place(state.x).filter((_, i) => i !== 1).map((c, i) => (i ? -c : c)), turned) : [xc + 1, yc - 1];
     const away = Math.atan2(here[1] - yc, here[0] - xc) + Math.PI;
     text(ctx, 'N', xc + 9 * Math.cos(away), yc + 9 * Math.sin(away), { color: INK, size: 11, weight: 600, halo: HALO, align: 'center' });
     if (state) {
-      const [x, z, y] = place(state.x), p = at(x, -y, spin);
+      const [x, z, y] = place(state.x), p = at(x, -y, turned);
       ctx.globalAlpha = z < SOUTH ? FAR : 1;
       ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(...p, 4.5, 0, 2 * Math.PI); ctx.fill();
     }

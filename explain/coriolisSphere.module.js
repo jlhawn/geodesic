@@ -28,9 +28,9 @@ export function parts(x, v, omega = OMEGA) {
   return { up, full, vertical, surface: add(full, up, -vertical) };
 }
 
-export function launch(lat, lon, heading, speed, radius = RADIUS) {
+export function launch(lat, lon, heading, speed, omega = OMEGA, radius = RADIUS) {
   const { up, east, north } = frame(lat, lon);
-  return { x: scale(up, radius), v: add(scale(north, speed * Math.cos(heading)), east, speed * Math.sin(heading)), t: 0 };
+  return { x: scale(up, radius), v: add(scale(north, speed * Math.cos(heading)), east, speed * Math.sin(heading)), t: 0, omega };
 }
 
 function rate(x, v, omega) {
@@ -38,7 +38,7 @@ function rate(x, v, omega) {
   return add(add(a, up, -dot(a, up)), x, -dot(v, v) / dot(x, x));
 }
 
-export function step(state, dt, omega = OMEGA, radius = RADIUS) {
+export function step(state, dt, omega = state.omega ?? OMEGA, radius = RADIUS) {
   const { x, v } = state;
   const k1x = v, k1v = rate(x, v, omega);
   const x2 = add(x, k1x, dt / 2), v2 = add(v, k1v, dt / 2), k2v = rate(x2, v2, omega);
