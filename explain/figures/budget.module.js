@@ -109,7 +109,7 @@ export function mountBudget(root) {
   const fig = new Figure(root, { height: 420, minHeight: 380, draw });
   const fit = fig.resize.bind(fig);
   fig.resize = () => { const w = fig.stage.clientWidth, narrow = w < WIDE, tall = Math.min(320, Math.round(w * 0.85)) + PANEL; fig.height = narrow ? tall : 420; fig.minHeight = narrow ? tall : 380; fit(); };
-  caption(root, 'The baroclinic wave of Part 3 on day 9, as the model holds it: 27 layers on the N = 16 grid. Each arrow is a term of the momentum equation at one cell, computed by the model’s own code, and the terms share one scale so their lengths compare. Tap or hover over a cell, or drag the ring, to take it apart.');
+  caption(root, 'The baroclinic wave of Jablonowski and Williamson on day 9, as the model holds it: 27 layers on the N = 16 grid. Each arrow is a term of the momentum equation at one cell, computed by the model’s own code, and the terms share one scale so their lengths compare. Tap or hover over a cell, or drag the ring, to take it apart.');
   const key = legend(root, []);
   choice(controls, { label: 'Layer', options: [['near 850 hPa', '0'], ['near 500 hPa', '1'], ['near 250 hPa', '2']], value: '0', onChange: (v) => { layer = Number(v); setKey(); fig.render(); }, span: true });
   choice(controls, { label: 'Show', options: [['the turning, a', 'a'], ['the pressure terms, b + c', 'bc'], ['all four: the acceleration', 'sum'], ['b alone', 'b'], ['c alone', 'c'], ['d alone', 'd']], value: view, onChange: (v) => { view = v; setKey(); fig.render(); }, span: true });
