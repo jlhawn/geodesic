@@ -6,15 +6,15 @@ const K = 6, SPACING = 1.3, GAUGE = { x: 2.7, z: 1.4 }, PERIOD = 16, LAG = Math.
 
 export function mountContinuity(root) {
   const controls = root.querySelector('.controls'), A = termColor('a'), B = termColor('b'), C = termColor('c'), weight = cssColor(A), sides = cssColor(B), between = cssColor(C);
-  const patch = hexPatch(3, 3), center = patch.cells[4];
+  const patch = hexPatch(3, 3), center = patch.cells[4], cells = patch.cells.filter((cell) => Math.hypot(cell.x - center.x, cell.z - center.z) < 1.9), gx = center.x + GAUGE.x, gz = center.z + GAUGE.z;
   const divergence = [...PRESETS.rising];
   const layerY = (k) => (K - 1 - k + 0.5) * SPACING, interfaceY = (k) => (K - k) * SPACING;
   let result = null, cycling = false, phase = 0, toggle = null;
 
-  const scene = new Scene3D(root, { height: 440, distance: 19, target: [0, 4.2, 0], yaw: -0.5, pitch: 0.28, update, draw: labels, step });
+  const scene = new Scene3D(root, { height: 440, distance: 19, target: [center.x, 4.2, center.z], yaw: -0.5, pitch: 0.28, update, draw: labels, step });
   const ground = scene.add(new THREE.Mesh(new THREE.CircleGeometry(4.2, 48).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: new THREE.Color(0.05, 0.045, 0.035) })));
-  ground.position.y = -0.02;
-  const tiles = hexTiles(scene.group, { thickness: 0.04, opacity: 0.45, depthWrite: false }).mesh(patch.cells.length * K);
+  ground.position.set(center.x, -0.02, center.z);
+  const tiles = hexTiles(scene.group, { thickness: 0.04, opacity: 0.45, depthWrite: false }).mesh(cells.length * K);
   const flows = new Arrows(scene.group, 6 * K, { radius: 0.04, head: 0.2, headRadius: 0.1 });
   const lifts = new Arrows(scene.group, K + 1, { radius: 0.05, head: 0.22, headRadius: 0.12 });
   const gauge = new Arrows(scene.group, 1, { radius: 0.09, head: 0.36, headRadius: 0.2 });
@@ -49,7 +49,7 @@ export function mountContinuity(root) {
   function update() {
     if (!result) return;
     let n = 0;
-    for (let k = 0; k < K; k++) for (const cell of patch.cells) {
+    for (let k = 0; k < K; k++) for (const cell of cells) {
       m.makeTranslation(cell.x, layerY(k) - SPACING / 2 + 0.02, cell.z);
       tiles.setMatrixAt(n, m);
       const c = cell === center ? rampRGB(0.5 + divergence[k] / 6, rgb) : [0.32, 0.33, 0.36];
@@ -69,7 +69,7 @@ export function mountContinuity(root) {
     const t = result.tendency, glow = Math.min(1, Math.abs(t) / 1.5) * 0.6, base = [0.05, 0.045, 0.035];
     ground.material.color.setRGB(...base.map((b, i) => b + (linear(weight[i]) - b) * glow));
     gauge.begin();
-    if (Math.abs(t) > 1e-9) { const len = clamp(1.1 * t, -3.3, 3.3); gauge.push(GAUGE.x, len < 0 ? -len : 0, GAUGE.z, 0, len, 0, weight); }
+    if (Math.abs(t) > 1e-9) { const len = clamp(1.1 * t, -3.3, 3.3); gauge.push(gx, len < 0 ? -len : 0, gz, 0, len, 0, weight); }
     gauge.end();
   }
 
@@ -77,7 +77,7 @@ export function mountContinuity(root) {
     const top = scene.project(center.x, interfaceY(0) + 0.3, center.z), bottom = scene.project(center.x, -0.05, center.z);
     if (top.visible) text(ctx, 'top of the atmosphere, σ = 0', top.x, top.y - 10, { align: 'center', color: MUTED, size: 11 });
     if (bottom.visible) text(ctx, 'the ground, σ = 1', bottom.x, bottom.y + 16, { align: 'center', color: MUTED, size: 11 });
-    const t = result?.tendency ?? 0, steady = Math.abs(t) < 1e-9, at = scene.project(GAUGE.x, steady ? 0.1 : Math.abs(clamp(1.1 * t, -3.3, 3.3)) + 0.45, GAUGE.z);
+    const t = result?.tendency ?? 0, steady = Math.abs(t) < 1e-9, at = scene.project(gx, steady ? 0.1 : Math.abs(clamp(1.1 * t, -3.3, 3.3)) + 0.45, gz);
     const style = { align: 'center', color: steady ? MUTED : A, size: 11, halo: 'rgba(20, 20, 22, 0.85)' };
     if (at.visible) { text(ctx, 'surface pressure', at.x, at.y - 20, style); text(ctx, steady ? 'steady' : `${t > 0 ? 'rising' : 'falling'} ${Math.abs(t).toFixed(2)} hPa an hour`, at.x, at.y - 6, style); }
   }
