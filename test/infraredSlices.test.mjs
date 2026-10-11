@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { clearLongwave, longwaveTableFor, gasPaths, opticalDepth } from '../js/physics/longwave.module.js';
 import { STEFAN_BOLTZMANN } from '../js/physics/radiation.module.js';
 import { makeColumn, readColumn } from '../explain/radiativeColumn.module.js';
-import { slices, dryColumn, GASES, CLEAR } from '../explain/infraredSlices.module.js';
+import { slices, dryColumn, airColumn, vaporTable, GASES, VAPOR, ABSORBERS, CLEAR } from '../explain/infraredSlices.module.js';
 
 const MLS = readColumn(JSON.parse(readFileSync(new URL('../explain/data/mls_bl36.json', import.meta.url))));
 const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
@@ -115,4 +115,69 @@ test('the prose numbers: carbon dioxide\'s opaque slices, the clear window slice
   assert.equal(window.dominant, 'ozone');
   close(window.depth, 0.0616, 5e-4, 'its optical depth');
   close(sum(s.points.filter((p) => p.level === null).map((p) => p.share)), 0.7642, 5e-4, 'share in slices that see the ground');
+});
+
+const DRY_GASES = Object.fromEntries(GASES.map((g) => [g, false]));
+const MOIST = [
+  ['the midlatitude summer\'s vapor', { humidity: 1 }],
+  ['half its vapor', { humidity: 0.5 }],
+  ['twice its vapor', { humidity: 2 }],
+  ['its vapor and doubled carbon dioxide', { humidity: 1, carbonDioxide: 2 }],
+  ['its vapor without ozone', { humidity: 1, gases: { ozone: false } }],
+  ['vapor alone', { humidity: 1, gases: DRY_GASES }],
+  ['vapor lines alone', { humidity: 1, gases: { ...DRY_GASES, continuum: false } }],
+  ['the continuum alone', { humidity: 1, gases: { ...DRY_GASES, vaporLines: false } }],
+  ['its vapor without the continuum', { humidity: 1, gases: { continuum: false } }],
+  ['vapor given per layer', { humidity: MLS.humidity }],
+];
+
+test('with vapor the slices still sum to clearLongwave on the same table, and to the model\'s own column', () => {
+  for (const [name, options] of MOIST) {
+    const s = slices(MLS, options), table = vaporTable(MLS.levels, options.gases), column = airColumn(MLS, options), flux = clearLongwave(column, { table }), K = MLS.temperature.length;
+    close(sum(s.points.map((p) => p.up)), flux.up[0], 1e-9, `${name}: OLR from the slices`);
+    close(sum(s.points.map((p) => p.down)), flux.down[K], 1e-9, `${name}: DLR from the slices`);
+    close(sum(s.points.map((p) => p.share)), 1, 1e-12, `${name}: shares`);
+    const paths = gasPaths(column, table);
+    for (const p of s.points) {
+      close(sum(Object.values(p.gas)), p.depth, 1e-9 * Math.max(1, p.depth), `${name}: slice ${p.index} split by absorber`);
+      close(p.depth, sum(Array.from({ length: K }, (_, k) => opticalDepth(table.points[p.index], paths, k))), 1e-9 * Math.max(1, p.depth), `${name}: slice ${p.index} depth`);
+      if (options.gases?.vaporLines === false) assert.equal(p.gas.vaporLines, 0);
+      if (options.gases?.continuum === false) assert.equal(p.gas.continuum, 0);
+      if (p.dominant) assert.ok(ABSORBERS.includes(p.dominant) && p.gas[p.dominant] >= Math.max(...Object.values(p.gas)), `${name}: slice ${p.index} dominant absorber`);
+    }
+    if (options.gases?.vaporLines === false || options.gases?.continuum === false) continue;
+    const humidity = typeof options.humidity === 'number' ? MLS.humidity.map((q) => q * options.humidity) : options.humidity;
+    const own = makeColumn({ profile: MLS, beam: 0, humidity, carbonDioxide: options.carbonDioxide ?? 1, gases: options.gases }).budget;
+    close(s.olr, own.olr, 1e-9, `${name}: OLR against radiation.column`);
+    close(s.dlr, own.dlr, 1e-9, `${name}: DLR against radiation.column`);
+    close(s.escaping, own.escaping, 1e-12, `${name}: escaping share against radiation.column`);
+    close(s.precipitableWater, own.precipitableWater, 1e-9, `${name}: precipitable water against the column's`);
+  }
+  assert.deepEqual(VAPOR, ['vaporLines', 'continuum']);
+  assert.equal(vaporTable(MLS.levels), longwaveTableFor(MLS.levels), 'with both vapor absorbers on the table is the model\'s');
+  assert.equal(vaporTable(MLS.levels, { continuum: false }), vaporTable(MLS.levels, { continuum: false }), 'variants are made once');
+  for (const p of slices(MLS).points) assert.ok(p.gas.vaporLines === 0 && p.gas.continuum === 0, 'dry air has no vapor depth');
+});
+
+test('vapor\'s greenhouse in the midlatitude summer: G 143.6 W/m² against 68.6 dry, 95.6 from vapor alone and 15.4 percent escaping', () => {
+  const moist = slices(MLS, { humidity: 1 });
+  close(moist.olr, 281.2, 0.05, 'OLR');
+  close(moist.dlr, 348.1, 0.05, 'DLR');
+  close(moist.greenhouse, 143.6, 0.05, 'G');
+  close(moist.escaping, 0.154, 5e-4, 'share escaping directly');
+  close(moist.precipitableWater, 28.8, 0.05, 'precipitable water, kg/m²');
+  close(slices(MLS, { humidity: 1, gases: DRY_GASES }).greenhouse, 95.6, 0.05, 'G, vapor alone');
+  close(slices(MLS, { humidity: 1, gases: { ...DRY_GASES, vaporLines: false } }).greenhouse, 41.1, 0.05, 'G, the continuum alone');
+  close(slices(MLS, { humidity: 1, gases: { ...DRY_GASES, continuum: false } }).greenhouse, 86.5, 0.05, 'G, vapor lines alone');
+  const without = slices(MLS, { humidity: 1, gases: { continuum: false } });
+  close(moist.dlr - without.dlr, 44.9, 0.05, 'the continuum\'s back radiation');
+  close(without.olr - moist.olr, 6.2, 0.05, 'the continuum\'s OLR');
+  const window = moist.points[15];
+  assert.equal(window.index, moist.points.reduce((best, p) => (p.share > best.share ? p : best)).index, 'slice 15 is the widest');
+  close(window.depth, 0.61, 0.005, 'the window slice\'s optical depth');
+  close(window.gas.continuum, 0.48, 0.005, 'of which the continuum');
+  close(window.gas.vaporLines, 0.064, 0.001, 'of which the vapor lines');
+  assert.equal(window.dominant, 'continuum');
+  const doubling = [0.25, 0.5, 1, 2].map((f) => slices(MLS, { humidity: f }).greenhouse);
+  [121.36, 131.15, 143.57, 160.67].forEach((G, n) => close(doubling[n], G, 0.01, `G with ×${[0.25, 0.5, 1, 2][n]} vapor`));
 });

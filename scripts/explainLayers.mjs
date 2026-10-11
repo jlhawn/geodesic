@@ -1,21 +1,37 @@
 // Precomputes the layered-model frames that explain/sphere.html,
 // explain/primitive.html and explain/radiation.html play back:
 //   node scripts/explainLayers.mjs jw06|heldsuarez|radiation|tracks|state [OUT]
-// writing explain/data/<case>_N16.bin, jw06state_N16.bin for state.
+//   node scripts/explainLayers.mjs wet [SPINUP_DAYS] [RECORD_DAYS] [OUT]
+// writing explain/data/<case>_N16.bin, jw06state_N16.bin for state and
+// water_N16.bin for wet (365 days of spin-up and 365 recorded by default).
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createSigmaCore } from '../js/dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
+import { cellVector } from '../js/dynamics/operators.module.js';
 import { createRadiation, YEAR } from '../js/physics/radiation.module.js';
 import { createSurface } from '../js/physics/surface.module.js';
+import { saturationHumidity } from '../js/physics/moist.module.js';
+import { FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
+import { initializeState } from '../js/physics/init.module.js';
+import { createParallelModel } from '../js/parallel.module.js';
+import { withCadence } from '../js/cadence.module.js';
+import { levelFields } from '../js/levels.module.js';
 import { EARTH, edgeNormalVelocity, hyperdiffusion, cellVelocity } from '../explain/swCases.module.js';
 
 const which = process.argv[2], N = 16, DAY = 86400, dt = 450 * 16 / N;
-const out = process.argv[3] ?? new URL(`../explain/data/${which === 'state' ? 'jw06state' : which}_N${N}.bin`, import.meta.url).pathname;
+const named = { state: 'jw06state', wet: 'water' };
+const out = (which === 'wet' ? process.argv[5] : process.argv[3]) ?? new URL(`../explain/data/${named[which] ?? which}_N${N}.bin`, import.meta.url).pathname;
 const { a, omega, g } = EARTH, R = 287, cp = 1004.5, p0 = 1e5;
 const mesh = buildMesh(new Grid(N), { radius: a, omega }), C = mesh.nCells, E = mesh.nEdges;
+const EQUINOX_DAY_OF_YEAR = 78;
+const MONTHS = [['January', 31], ['February', 28], ['March', 31], ['April', 30], ['May', 31], ['June', 30], ['July', 31], ['August', 31], ['September', 30], ['October', 31], ['November', 30], ['December', 31]];
+const monthStart = MONTHS.map((_, m) => MONTHS.slice(0, m).reduce((sum, [, days]) => sum + days, 0));
+const monthOf = (day) => { const date = (Math.floor(day) + EQUINOX_DAY_OF_YEAR) % 365; let m = 11; while (monthStart[m] > date) m--; return m; };
+const monthDays = (m) => { const from = (monthStart[m] - EQUINOX_DAY_OF_YEAR + 365) % 365, to = from + MONTHS[m][1]; return to <= 365 ? [[from, to]] : [[from, 365], [0, to - 365]]; };
 
 function jw06() {
   const eta0 = 0.252, u0 = 35, T0 = 288, gamma = 0.005, deltaT = 4.8e5, etaT = 0.2;
@@ -90,8 +106,225 @@ function heldSuarez() {
   return { core, state: [pi, theta, new Float64Array(K * E)], tendency, frictionOnly, surface: null };
 }
 
+if (which === 'wet') {
+  const SPINUP_DAYS = Number(process.argv[3] ?? 365), RECORD_DAYS = Number(process.argv[4] ?? 365);
+  if (![SPINUP_DAYS, RECORD_DAYS].every((days) => Number.isInteger(days) && days >= 0)) { console.error('usage: node scripts/explainLayers.mjs wet [SPINUP_DAYS] [RECORD_DAYS] [OUT]'); process.exit(1); }
+  const STEP = 450, WORKERS = 6, GRID = 'bl36', FRAME_DAYS = 5, BINS = 36, ICE = JSON.parse(process.env.WET_ICE ?? '{}');
+  const weatherFrom = Math.max(0, Math.min(287, RECORD_DAYS - 30)), WEATHER_DAYS = [weatherFrom, Math.min(RECORD_DAYS, weatherFrom + 30)];
+  const cadence = withCadence({ ocean: false }, STEP, N);
+  const options = { ocean: false, levels: sigmaInterfaces(GRID), ...cadence, radiation: { ...cadence.radiation, clearSkyPass: true }, ice: ICE };
+  const t0 = performance.now(), seconds = () => (performance.now() - t0) / 1000;
+  const model = await createParallelModel(new Grid(N), options, WORKERS);
+  initializeState(model).forEach((values, s) => model.state[s].set(values));
+  const startTime = (Math.ceil(SPINUP_DAYS / 365) * 365 - SPINUP_DAYS) * DAY, recordStart = startTime + SPINUP_DAYS * DAY;
+  model.time = startTime;
+  model.restartPrecipitation();
+
+  const { mesh: grid, core, radiation, moist, seaIce } = model, [pi, theta, u, surfaceT, q, qc, ice] = model.state;
+  const cells = grid.nCells, edges = grid.nEdges, K = core.K, { sigmaMid, dSigma } = core.diagnostics, gravity = core.diagnostics.g, airCp = core.diagnostics.cp;
+  const look = createSigmaCore(grid, { levels: core.levels }), { exnerLayer: lookExner } = look.diagnostics;
+  const area = grid.areaCell.reduce((sum, x) => sum + x, 0), weight = grid.areaCell;
+  const bin = Int32Array.from(grid.latCell, (lat) => Math.min(BINS - 1, Math.floor((lat + Math.PI / 2) / Math.PI * BINS)));
+  const binArea = new Float64Array(BINS);
+  for (let i = 0; i < cells; i++) binArea[bin[i]] += weight[i];
+  const east = new Float64Array(3 * cells), north = new Float64Array(3 * cells);
+  for (let i = 0; i < cells; i++) {
+    const x = grid.xCell[3 * i], y = grid.xCell[3 * i + 1], z = grid.xCell[3 * i + 2], rho = Math.hypot(x, y) || 1e-12;
+    east.set([-y / rho, x / rho, 0], 3 * i); north.set([-z * x / rho, -z * y / rho, rho], 3 * i);
+  }
+  const columnMass = (i, k) => pi[i] * dSigma[k] / gravity;
+  const zonal = (value, digits = 3) => {
+    const sum = new Float64Array(BINS);
+    for (let i = 0; i < cells; i++) sum[bin[i]] += weight[i] * value(i);
+    return Array.from(sum, (v, b) => (digits === null ? v / binArea[b] : +(v / binArea[b]).toFixed(digits)));
+  };
+  const global = (value) => { let sum = 0; for (let i = 0; i < cells; i++) sum += weight[i] * value(i); return sum / area; };
+
+  const perDay = Math.round(DAY / STEP), steps = (SPINUP_DAYS + RECORD_DAYS) * perDay, recordStep = SPINUP_DAYS * perDay, sixHours = Math.round(6 * 3600 / STEP), end = RECORD_DAYS * DAY;
+  const FIELDS = [
+    { name: 'surfaceTemperature', unit: 'K', per: 50, offset: 260 }, { name: 'outgoingLongwave', unit: 'W/m²', per: 50, offset: 0 },
+    { name: 'temperature850', unit: 'K', per: 50, offset: 260 }, { name: 'wind250', unit: 'm/s', per: 100, offset: 0 },
+    { name: 'rain', unit: 'mm/d', per: 100, offset: 0 }, { name: 'precipitableWater', unit: 'kg/m²', per: 200, offset: 0 }, { name: 'cloudWater', unit: 'g/m²', per: 20, offset: 0 },
+  ];
+  const pack = (values, { per, offset }) => Int16Array.from(values, (v) => Math.max(-32768, Math.min(32767, Math.round((v - offset) * per))));
+  const rainBank = new Float64Array(cells);
+  const sequences = [{ name: 'year', every: FRAME_DAYS * DAY, from: 0, to: end }, { name: 'weather', every: 6 * 3600, from: WEATHER_DAYS[0] * DAY, to: WEATHER_DAYS[1] * DAY }]
+    .map((s) => ({ ...s, stride: Math.round(s.every / STEP), times: [], frames: [], last: new Float64Array(cells), lastTime: -SPINUP_DAYS * DAY }));
+  function wetFrame(s, time) {
+    look.diagnose(pi, theta);
+    const winds = new Array(K).fill(null), layerWind = (k) => (winds[k] ??= cellVector(grid, u.subarray(k * edges, (k + 1) * edges), new Float64Array(3 * cells)));
+    const t850 = levelFields(look, pi, theta, layerWind, 850, q).temperature, w250 = levelFields(look, pi, theta, layerWind, 250, q).speed;
+    const values = [
+      surfaceT, radiation.outgoing, t850, w250,
+      Float64Array.from({ length: cells }, (_, i) => (rainBank[i] + moist.precipitation[i] - s.last[i]) * DAY / Math.max(STEP, time - s.lastTime)),
+      Float64Array.from({ length: cells }, (_, i) => moist.columnWater(pi, q, i)),
+      Float64Array.from({ length: cells }, (_, i) => 1000 * model.cloudWater(i)),
+    ];
+    return values.map((v, f) => pack(v, FIELDS[f]));
+  }
+
+  const SECTION = ['T', 'u', 'v', 'q', 'RH', 'qc'];
+  const sectionSums = () => ({ ...Object.fromEntries(SECTION.map((name) => [name, new Float64Array(BINS * K)])), surfacePressure: new Float64Array(BINS), samples: 0 });
+  const sections = MONTHS.map(sectionSums), wind = new Float64Array(3 * cells);
+  function sampleSection(sums) {
+    look.diagnose(pi, theta);
+    for (let i = 0; i < cells; i++) sums.surfacePressure[bin[i]] += weight[i] * pi[i];
+    for (let k = 0; k < K; k++) {
+      cellVector(grid, u.subarray(k * edges, (k + 1) * edges), wind);
+      for (let i = 0; i < cells; i++) {
+        const n = k * cells + i, at = bin[i] * K + k, w = weight[i], T = theta[n] * lookExner[n];
+        const ue = wind[3 * i] * east[3 * i] + wind[3 * i + 1] * east[3 * i + 1] + wind[3 * i + 2] * east[3 * i + 2];
+        const vn = wind[3 * i] * north[3 * i] + wind[3 * i + 1] * north[3 * i + 1] + wind[3 * i + 2] * north[3 * i + 2];
+        sums.T[at] += w * T; sums.u[at] += w * ue; sums.v[at] += w * vn; sums.q[at] += w * q[n]; sums.qc[at] += w * qc[n];
+        sums.RH[at] += w * q[n] / saturationHumidity(T, pi[i] * sigmaMid[k]);
+      }
+    }
+    sums.samples++;
+  }
+  const SECTION_DIGITS = { T: [2, 'fixed'], u: [2, 'fixed'], v: [3, 'fixed'], q: [4, 'precision'], RH: [3, 'fixed'], qc: [3, 'precision'] };
+  const SECTION_SCALE = { T: 1, u: 1, v: 1, q: 1000, RH: 1, qc: 1e6 };
+  const finishSection = (sums) => ({
+    samples: sums.samples,
+    ...Object.fromEntries(SECTION.map((name) => {
+      const [digits, kind] = SECTION_DIGITS[name];
+      return [name, Array.from(sums[name], (v, at) => { const x = SECTION_SCALE[name] * v / (binArea[Math.floor(at / K)] * sums.samples); return kind === 'fixed' ? +x.toFixed(digits) : +x.toPrecision(digits); })];
+    })),
+    surfacePressure: Array.from(sums.surfacePressure, (v, b) => +(v / (binArea[b] * sums.samples) / 100).toFixed(2)),
+  });
+
+  const BUDGET = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', 'clearAbsorbedSolar', 'clearOutgoingLongwave', 'reflectedSolar', 'insolation', 'surfaceTemperature', 'precipitation', 'convectiveRain', 'largeScaleRain', 'evaporation', 'sensibleHeat', 'precipitableWater', 'cloudCondensate', 'cloudWater', 'ice'];
+  const budgetSums = () => ({ ...Object.fromEntries(BUDGET.map((name) => [name, new Float64Array(BINS)])), days: 0 });
+  const budgets = MONTHS.map(budgetSums);
+  const today = Object.fromEntries(['evaporation', 'sensibleHeat', 'surfaceTemperature', 'precipitableWater', 'cloudCondensate', 'cloudWater', 'ice'].map((name) => [name, new Float64Array(cells)]));
+  const cellDay = Object.fromEntries(BUDGET.map((name) => [name, new Float64Array(cells)]));
+  const finishBudget = (sums) => {
+    const mean = (name, digits) => Array.from(sums[name], (v, b) => +(v / (binArea[b] * sums.days)).toFixed(digits));
+    return {
+      days: sums.days,
+      ...Object.fromEntries(['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', 'clearAbsorbedSolar', 'clearOutgoingLongwave', 'surfaceTemperature', 'sensibleHeat', 'precipitableWater', 'cloudCondensate', 'cloudWater'].map((name) => [name, mean(name, 2)])),
+      ...Object.fromEntries(['precipitation', 'convectiveRain', 'largeScaleRain', 'evaporation', 'ice'].map((name) => [name, mean(name, 4)])),
+      planetaryAlbedo: Array.from(sums.reflectedSolar, (v, b) => (sums.insolation[b] > 0 ? +(v / sums.insolation[b]).toFixed(4) : null)),
+    };
+  };
+  const airEnergy = (i) => { let sum = 0; for (let k = 0; k < K; k++) sum += airCp * theta[k * cells + i] * lookExner[k * cells + i] * columnMass(i, k); return sum; };
+  const storage = () => {
+    look.diagnose(pi, theta);
+    return {
+      time: model.time - recordStart,
+      surfaceEnergy: zonal((i) => seaIce.energy(surfaceT[i], ice[i], seaIce.snow[i], seaIce.cover(i, ice[i])), null),
+      airEnergy: zonal(airEnergy, null),
+      precipitableWater: zonal((i) => moist.columnWater(pi, q, i), null), cloudCondensate: zonal((i) => moist.columnWater(pi, qc, i), null),
+      surfaceTemperature: zonal((i) => surfaceT[i], null), iceVolume: zonal((i) => seaIce.cover(i, ice[i]) * ice[i], null),
+    };
+  };
+
+  const DAILY = ['surfaceTemperature', 'absorbedSolar', 'outgoingLongwave', 'clearAbsorbedSolar', 'clearOutgoingLongwave', 'planetaryAlbedo', 'precipitation', 'convectiveRain', 'largeScaleRain', 'evaporation', 'sensibleHeat', 'precipitableWater', 'cloudCondensate', 'cloudWater', 'ice', 'maxWind', 'waterResidual'];
+  const daily = Object.fromEntries(DAILY.map((name) => [name, []]));
+  const totalWater = () => global((i) => moist.columnWater(pi, q, i) + moist.columnWater(pi, qc, i));
+  const water0 = totalWater();
+  let evaporated = 0, rained = 0, storedStart = null, storedEnd = null, lastDay = performance.now();
+
+  for (let n = 0; n <= steps; n++) {
+    const time = (n - recordStep) * STEP;
+    for (const s of sequences) {
+      if ((n - recordStep) % s.stride !== 0) continue;
+      if (time >= s.from && time <= s.to) { s.times.push(time); s.frames.push(wetFrame(s, time)); }
+      for (let i = 0; i < cells; i++) s.last[i] = rainBank[i] + moist.precipitation[i];
+      s.lastTime = time;
+    }
+    if (time >= 0 && time < end && (n - recordStep) % sixHours === 0) sampleSection(sections[monthOf(time / DAY)]);
+    if (n === recordStep) storedStart = storage();
+    if (n === steps) { storedEnd = storage(); break; }
+    model.step(STEP);
+    for (let i = 0; i < cells; i++) {
+      today.evaporation[i] += radiation.evaporation[i] * STEP; today.sensibleHeat[i] += radiation.sensibleHeat[i] / perDay; today.surfaceTemperature[i] += surfaceT[i] / perDay;
+      today.precipitableWater[i] += moist.columnWater(pi, q, i) / perDay; today.cloudCondensate[i] += 1000 * moist.columnWater(pi, qc, i) / perDay;
+      today.cloudWater[i] += 1000 * model.cloudWater(i) / perDay;
+      today.ice[i] += seaIce.cover(i, ice[i]) / perDay;
+    }
+    if ((n + 1) % perDay !== 0) continue;
+
+    const meanSteps = model.radiationSteps, summed = radiation.summed;
+    for (let i = 0; i < cells; i++) {
+      for (const name of ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', 'clearAbsorbedSolar', 'clearOutgoingLongwave']) cellDay[name][i] = summed[name][i] / meanSteps;
+      cellDay.reflectedSolar[i] = summed.reflectedSolar[i]; cellDay.insolation[i] = summed.insolation[i];
+      cellDay.precipitation[i] = moist.precipitation[i]; cellDay.convectiveRain[i] = moist.convectivePrecipitation[i]; cellDay.largeScaleRain[i] = moist.largeScalePrecipitation[i];
+      for (const name of Object.keys(today)) cellDay[name][i] = today[name][i];
+      rainBank[i] += moist.precipitation[i];
+    }
+    const d = model.diagnostics();
+    for (const array of Object.values(today)) array.fill(0);
+    evaporated += global((i) => cellDay.evaporation[i]); rained += global((i) => cellDay.precipitation[i]);
+    const residual = totalWater() - water0 - evaporated + rained;
+    const dayStart = (n + 1 - perDay - recordStep) * STEP;
+    if (dayStart >= 0) {
+      const sums = budgets[monthOf(dayStart / DAY)];
+      for (let i = 0; i < cells; i++) for (const name of BUDGET) sums[name][bin[i]] += weight[i] * cellDay[name][i];
+      sums.days++;
+    }
+    const means = Object.fromEntries(['surfaceTemperature', 'precipitation', 'convectiveRain', 'largeScaleRain', 'evaporation', 'sensibleHeat', 'precipitableWater', 'cloudCondensate', 'cloudWater', 'ice'].map((name) => [name, global((i) => cellDay[name][i])]));
+    const values = {
+      ...means, absorbedSolar: d.absorbedSolar, outgoingLongwave: d.outgoingLongwave, clearAbsorbedSolar: d.clearAbsorbedSolar, clearOutgoingLongwave: d.clearOutgoingLongwave, planetaryAlbedo: d.planetaryAlbedo,
+      ice: 100 * means.ice, maxWind: d.maxWind, waterResidual: residual,
+    };
+    for (const name of DAILY) daily[name].push(Number.isFinite(values[name]) ? +values[name].toPrecision(6) : null);
+    let low = Infinity, high = -Infinity, northIce = 0, southIce = 0, northArea = 0, southArea = 0;
+    for (let i = 0; i < cells; i++) {
+      low = Math.min(low, surfaceT[i]); high = Math.max(high, surfaceT[i]);
+      const cover = seaIce.cover(i, ice[i]) * weight[i];
+      if (grid.latCell[i] >= 0) { northIce += cover; northArea += weight[i]; } else { southIce += cover; southArea += weight[i]; }
+    }
+    let fastest = 0;
+    for (let m = 1; m < K * edges; m++) if (Math.abs(u[m]) > Math.abs(u[fastest])) fastest = m;
+    const fastLayer = Math.floor(fastest / edges), fastEdge = fastest % edges, fastCell = grid.cellsOnEdge[2 * fastEdge];
+    const day = (n + 1) / perDay, pace = (performance.now() - lastDay) / 1000;
+    lastDay = performance.now();
+    console.error(`wet day ${day} of ${steps / perDay}${dayStart < 0 ? ' (spin-up)' : ''}: Ts ${values.surfaceTemperature.toFixed(2)} K (${low.toFixed(1)}–${high.toFixed(1)}), ASR ${d.absorbedSolar.toFixed(1)} OLR ${d.outgoingLongwave.toFixed(1)} clear ${d.clearAbsorbedSolar.toFixed(1)}/${d.clearOutgoingLongwave.toFixed(1)} W/m², albedo ${d.planetaryAlbedo.toFixed(3)}, P ${means.precipitation.toFixed(2)} (conv ${means.convectiveRain.toFixed(2)}, ls ${means.largeScaleRain.toFixed(2)}) E ${means.evaporation.toFixed(2)} mm/d, SH ${means.sensibleHeat.toFixed(1)} W/m², water ${means.precipitableWater.toFixed(1)} kg/m², cloud ${means.cloudCondensate.toFixed(0)} g/m² (${means.cloudWater.toFixed(0)} with cumulus and deck), ice ${(100 * d.iceFraction).toFixed(2)} % (north ${(100 * northIce / northArea).toFixed(1)}, south ${(100 * southIce / southArea).toFixed(1)}), max |u| ${d.maxWind.toFixed(0)} m/s at ${(sigmaMid[fastLayer] * pi[fastCell] / 100).toPrecision(3)} hPa ${(grid.latEdge[fastEdge] * 180 / Math.PI).toFixed(0)}°, lost ${residual.toExponential(2)} kg/m², ${pace.toFixed(1)} s/day, ${seconds().toFixed(0)} s`);
+    if (![values.surfaceTemperature, d.absorbedSolar, d.outgoingLongwave, means.precipitableWater, d.maxWind, low, high].every(Number.isFinite) || d.maxWind > 400 || low < 100 || high > 400) { console.error('unstable: stopping'); await model.close(); process.exit(1); }
+  }
+
+  const sumMonths = (list, make) => {
+    const total = make();
+    for (const sums of list) for (const [name, value] of Object.entries(sums)) { if (typeof value === 'number') total[name] += value; else value.forEach((v, m) => { total[name][m] += v; }); }
+    return total;
+  };
+  const annualSection = sumMonths(sections, sectionSums), annualBudget = sumMonths(budgets, budgetSums);
+  const recorded = (list, finish) => MONTHS.map(([name], m) => ({ name, days: monthDays(m), ...finish(list[m]) }));
+  const git = (...args) => { try { return execFileSync('git', args, { cwd: new URL('..', import.meta.url).pathname, encoding: 'utf8' }).trim(); } catch { return null; } };
+  const probe = (h, snow, T) => +seaIce.albedo(h, null, snow, h > 0 ? 1 : 0, T).toFixed(3);
+  const header = {
+    version: 1, case: 'wet', N, K, dt: STEP, levels: Array.from(core.levels), grid: GRID, workers: WORKERS,
+    fields: FIELDS.map(({ name, unit, per, offset }) => ({ name, unit, scale: 1 / per, offset })),
+    sequences: sequences.map((s) => ({ name: s.name, every: s.every, times: s.times })),
+    time: 'seconds from the March equinox (March 20) that begins the recorded year; the model clock reads recordStart + time and the sun is radiation.setTime(model.time)',
+    rain: 'each frame\'s rain is the mean over the interval since the sequence\'s previous frame time (5 days for year, 6 hours for weather), or since the run began when that is shorter',
+    spinupDays: SPINUP_DAYS, recordDays: RECORD_DAYS, startTime, recordStart,
+    options: { ...options, levels: GRID }, cadence: { radiationEvery: options.radiation.radiationEvery, dragEvery: options.dragEvery },
+    initial: 'initializeState(model): sea at 30 cos²φ − 2 °C (28 °C at the equator) less 4 K over 50–70°, 1.5 m of ice poleward of 72°N and 0.7 m poleward of 68°S, RH 0.7σ², winds geostrophic outside ±15°',
+    ice: {
+      options: ICE, slabHeatCapacity: seaIce.slabHeatCapacity, latentHeatFusion: seaIce.latentHeatFusion, freezingPoint: FREEZING_POINT, meltingPoint: MELTING_POINT,
+      diffuseAlbedo: { water: probe(0, 0, 0), coldIce: probe(2, 0, 250), meltingIce: probe(2, 0, MELTING_POINT), freshSnowOnIce: probe(2, 100, 250) },
+    },
+    constants: { cp: airCp, R: core.diagnostics.R, g: gravity, latentHeat: moist.latentHeat, radius: Math.sqrt(area / (4 * Math.PI)) },
+    commit: git('rev-parse', '--short', 'HEAD'), modified: (git('status', '--porcelain', '--', 'js', 'scripts') ?? '').split('\n').filter(Boolean),
+    zonalMean: { bins: BINS, from: 0, to: end, sigma: Array.from(sigmaMid), weighting: 'area, 6-hourly samples; q in g/kg, qc in mg/kg, RH over liquid water, surfacePressure in hPa', ...finishSection(annualSection), months: recorded(sections, finishSection) },
+    zonalBudget: { bins: BINS, from: 0, to: end, units: 'W/m², K, mm/d for precipitation and evaporation, kg/m² for precipitableWater, g/m² for clouds, area fraction for ice; cloudWater adds the cumulus and the deck to the resolved condensate', ...finishBudget(annualBudget), months: recorded(budgets, finishBudget) },
+    storage: { units: 'J/m² for surfaceEnergy (slab and ice, relative to freezing water) and airEnergy (cp T over the column), kg/m² for water, K, m for iceVolume', start: storedStart, end: storedEnd },
+    daily: { from: -SPINUP_DAYS * DAY, units: 'waterResidual is the global water gained beyond evaporation less precipitation since the start, kg/m²; ice in percent; maxWind is the largest edge-normal |u|', ...daily },
+  };
+  await model.close();
+  const json = Buffer.from(JSON.stringify(header)), pad = (4 - ((8 + json.length) % 4)) % 4;
+  const blocks = [];
+  for (const s of sequences) for (const f of s.frames) for (const field of f) blocks.push(Buffer.from(field.buffer));
+  const head = Buffer.alloc(8); head.write('EXF1', 0); head.writeUInt32LE(json.length + pad, 4);
+  mkdirSync(dirname(out), { recursive: true });
+  writeFileSync(out, Buffer.concat([head, json, Buffer.alloc(pad, 32), ...blocks]));
+  console.error(`wrote ${out}: ${sequences.map((s) => `${s.name} ${s.frames.length} frames`).join(', ')}, ${(json.length / 1024).toFixed(0)} KB header, ${(seconds() / 60).toFixed(1)} min`);
+  process.exit(0);
+}
+
 const run = which === 'jw06' || which === 'tracks' || which === 'state' ? jw06() : which === 'heldsuarez' || which === 'radiation' ? heldSuarez() : null;
-if (!run) { console.error('usage: node scripts/explainLayers.mjs jw06|heldsuarez|radiation|tracks|state [OUT]'); process.exit(1); }
+if (!run) { console.error('usage: node scripts/explainLayers.mjs jw06|heldsuarez|radiation|tracks|state [OUT], or wet [SPINUP_DAYS] [RECORD_DAYS] [OUT]'); process.exit(1); }
 const { core, state, tendency } = run, K = core.K, step = createRK4Arrays([C, K * C, K * E]);
 const [pi, theta, u] = state, { exnerLayer } = core.arrays, sigmaMid = core.sigmaMid;
 
@@ -232,11 +465,7 @@ if (which === 'state') {
 
 if (which === 'radiation') {
   const HELD_DAYS = 60, SPINUP_DAYS = 150, RECORD_DAYS = 365, FRAME_DAYS = 5, WEATHER_DAYS = [287, 317];
-  const ALBEDO = 0.07, HEAT_CAPACITY = 2.1e7, EVERY = 2, EQUINOX_DAY_OF_YEAR = 78;
-  const MONTHS = [['January', 31], ['February', 28], ['March', 31], ['April', 30], ['May', 31], ['June', 30], ['July', 31], ['August', 31], ['September', 30], ['October', 31], ['November', 30], ['December', 31]];
-  const monthStart = MONTHS.map((_, m) => MONTHS.slice(0, m).reduce((sum, [, days]) => sum + days, 0));
-  const monthOf = (day) => { const date = (Math.floor(day) + EQUINOX_DAY_OF_YEAR) % 365; let m = 11; while (monthStart[m] > date) m--; return m; };
-  const monthDays = (m) => { const from = (monthStart[m] - EQUINOX_DAY_OF_YEAR + 365) % 365, to = from + MONTHS[m][1]; return to <= 365 ? [[from, to]] : [[from, 365], [0, to - 365]]; };
+  const ALBEDO = 0.07, HEAT_CAPACITY = 2.1e7, EVERY = 2;
   const surface = createSurface(mesh, core), radiation = createRadiation(mesh, core, { albedo: ALBEDO, radiationEvery: EVERY });
   const Ts = new Float64Array(C), q0 = new Float64Array(K * C), qc0 = new Float64Array(K * C), dry = new Float64Array(C), albedo = new Float64Array(C).fill(ALBEDO);
   const columns = [pi, theta, u, Ts, q0, qc0], heating = [null, new Float64Array(K * C), null, null, new Float64Array(K * C)], totals = {};

@@ -2,6 +2,7 @@ import { R, CP, KAPPA, G, P0 } from './physics.module.js';
 export { R, CP, KAPPA, G, P0 };
 
 export const ACCENT = '#ffe8a0', INK = '#ddd', MUTED = '#8a8a8a', GRID = 'rgba(255,255,255,0.1)', LINE = 'rgba(255,255,255,0.35)';
+export const VAPOR = 'rgb(105, 155, 215)', CLOUD = '#e6ebf2';
 export const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const TERMS = { a: '#e69f00', b: '#56b4e9', c: '#22b38a', d: '#d98cba', e: '#f0e442' };
 export const termColor = (name) => (typeof document === 'undefined' ? '' : getComputedStyle(document.documentElement).getPropertyValue(`--term-${name}`).trim()) || TERMS[name];
@@ -242,8 +243,8 @@ export function thermometer(ctx, x, top, height, value, { min, max, label, unit 
   ctx.fillStyle = color;
   ctx.beginPath(); ctx.roundRect(x - width / 4, tubeBottom - f * (height - width / 2) - width / 2, width / 2, f * (height - width / 2) + width / 2, width / 4); ctx.fill();
   ctx.beginPath(); ctx.arc(x, tubeBottom + bulb * 0.6, bulb, 0, Math.PI * 2); ctx.fill();
-  for (let v = min + 20; v <= max; v += 20) { const y = tubeBottom - width / 4 - ((v - min) / (max - min)) * (height - width / 2); ctx.strokeStyle = LINE; ctx.beginPath(); ctx.moveTo(x + width / 2 + 2, y); ctx.lineTo(x + width / 2 + 6, y); ctx.stroke(); text(ctx, `${v}`, x + width / 2 + 9, y, { color: MUTED, size: 10 }); }
+  for (let v = min + 20; v <= max; v += 20) { const y = tubeBottom - width / 4 - ((v - min) / (max - min)) * (height - width / 2); ctx.strokeStyle = LINE; ctx.beginPath(); ctx.moveTo(x + width / 2 + 2, y); ctx.lineTo(x + width / 2 + 6, y); ctx.stroke(); text(ctx, `${v}`.replace('-', '−'), x + width / 2 + 9, y, { color: MUTED, size: 10 }); }
   ctx.restore();
-  text(ctx, `${value.toFixed(1)} ${unit}`, x, top - 12, { align: 'center', color: '#fff', weight: 500 });
+  text(ctx, `${value.toFixed(1).replace(/^-(?=0\.0$)/, '').replace('-', '−')} ${unit}`, x, top - 12, { align: 'center', color: '#fff', weight: 500 });
   (Array.isArray(label) ? label : [label]).forEach((line, n) => { if (line) text(ctx, line, x, tubeBottom + bulb * 2.4 + n * 12, { align: 'center', color: MUTED, size: 11 }); });
 }

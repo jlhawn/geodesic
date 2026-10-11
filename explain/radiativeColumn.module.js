@@ -1,11 +1,18 @@
 /*
  * One column of the model's own radiation on the bl36 layers over a slab
- * ground: createRadiation(...).column with all-zero humidity (the shipped
- * correlated-k and CLIRAD gases, never the gray q = null path) on cell 0 of
- * a 42-cell mesh, θ stepped by dt·Q/(c_p Δm Π) and the ground by dt·F/C,
- * then the model's dry convective adjustment. Layers run top first; fluxes
- * are W/m², heating K/day at constant pressure; every column closes
- * absorbed sunlight − OLR = Σ layer terms + the ground's net flux.
+ * ground: createRadiation(...).column on cell 0 of a 42-cell mesh with the
+ * shipped correlated-k and CLIRAD gases (q is always an array, zero when
+ * dry, never the gray q = null path), θ stepped by dt·Q/(c_p Δm Π) and the
+ * ground by dt·F/C, then a convective adjustment: the model's dry one, or
+ * moistParcel.module.js's adjustment to a moist adiabat, which is explainer
+ * code, not the model's. Vapor is a fixed q profile or a fixed relative
+ * humidity recomputed from T; under moist convection the ground evaporates
+ * through the model's bulk formula, pays L·E and the adjustment releases it.
+ * A cloud is one layer's water at a cover f: the overcast call and the clear
+ * call blended by f. Layers run top first; fluxes are W/m², heating K/day
+ * at constant pressure. After a step, absorbed sunlight − OLR = Σ layer
+ * terms + the ground's net flux; after evaluate() the vapor's L·E is still
+ * in transit and adds to the right-hand side.
  */
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
@@ -14,7 +21,9 @@ import { createRadiation, SOLAR_CONSTANT, STEFAN_BOLTZMANN, GREENHOUSE_GASES, SU
 import { createSurface, SEA_DRAG } from '../js/physics/surface.module.js';
 import { ozoneWeights, ozoneAbove } from '../js/physics/ozone.module.js';
 import { openWaterAlbedo } from '../js/physics/ice.module.js';
+import { saturationHumidity, LATENT_HEAT } from '../js/physics/moist.module.js';
 import { sunTrack } from './insolation.module.js';
+import { moistAdjustColumn } from './moistParcel.module.js';
 
 export const LEVELS = sigmaInterfaces('bl36');
 export const K = LEVELS.length - 1;
@@ -23,6 +32,9 @@ export const GLOBAL_BEAM = SOLAR_CONSTANT / 4;
 export const HEAT_CAPACITY = 2.1e7;
 export const SEA_DIFFUSE_ALBEDO = 0.06;
 export const STANDARD_URL = new URL('./data/mls_bl36.json', import.meta.url).href;
+export const DRY_STRATOSPHERE = { pressure: 100e2, humidity: 3e-6 };
+export const manabeWetherald = (sigma) => Math.max(0, 0.77 * (sigma - 0.02) / 0.98);
+const REBUILDS = ['profile', 'surfacePressure', 'mu', 'beam', 'carbonDioxide', 'gases', 'ozoneProfile'];
 
 const CORE_BUFFERS = ['flux', 'dissipation', 'divFlux', 'piSigmaDot', 'exnerLower', 'exnerLayer', 'dExnerDpi', 'thetaLower', 'qLower', 'qcLower', 'thetaV', 'geopotential', 'piVertex'];
 const CELL_BUFFERS = ['outgoing', 'surfaceShortwave', 'evaporation', 'sensibleHeat', 'surfaceBuoyancy', 'stratus', 'stratusFraction', 'stabilityIndex', 'mlmCover', 'mlmWater', 'mlmEntrainment', 'mlmSubsidence', 'mlmHeight', 'mlmGate', 'mlmTop', 'stratiform'];
@@ -118,15 +130,16 @@ export function loadColumn(url = STANDARD_URL) {
 
 export function makeColumn(options = {}) {
   const { mesh, core, surface, C, pi } = setting(), { dSigma, cp, g, exnerLayer, geopotential } = core.diagnostics;
-  const theta = new Float64Array(K * C), q = new Float64Array(K * C), before = new Float64Array(K);
-  const settings = { surfacePressure: P0, albedo: 0.07, diffuseAlbedo: null, mu: GLOBAL_MU, beam: GLOBAL_BEAM, carbonDioxide: 1, gases: GASES, ozoneProfile: null, humidity: null, wind: 5, heatCapacity: HEAT_CAPACITY };
-  const T = new Float64Array(K), potential = new Float64Array(K), height = new Float64Array(K), mass = new Float64Array(K);
+  const theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C), before = new Float64Array(K), work = new Float64Array(K), adiabat = new Float64Array(K);
+  const settings = { surfacePressure: P0, albedo: 0.07, diffuseAlbedo: null, mu: GLOBAL_MU, beam: GLOBAL_BEAM, carbonDioxide: 1, gases: GASES, ozoneProfile: null, humidity: null, relativeHumidity: manabeWetherald, evaporation: true, cloud: null, wind: 5, heatCapacity: HEAT_CAPACITY };
+  const T = new Float64Array(K), potential = new Float64Array(K), height = new Float64Array(K), mass = new Float64Array(K), humidity = new Float64Array(K);
   const field = () => new Float64Array(K);
   const terms = { sunlight: field(), infrared: field(), ground: field(), convection: field() };
   const heating = { sunlight: field(), infrared: field(), ground: field(), convection: field(), total: field() };
+  const flux = field(), cloudyFlux = field(), cloudyLongwave = field();
   const budget = {};
-  const column = { T, theta: potential, height, pressure: field(), interfacePressure: new Float64Array(K + 1), terms, heating, budget, Ts: 288, time: 0, settings, set, step, evaluate, restart, coldPoint };
-  let radiation = null, ozone = null, sensible = true, start = null;
+  const column = { T, theta: potential, height, q: humidity, pressure: field(), interfacePressure: new Float64Array(K + 1), terms, heating, budget, Ts: 288, time: 0, convectionTop: -1, cloudLayer: -1, settings, set, step, evaluate, restart, coldPoint };
+  let radiation = null, ozone = null, sensible = true, latent = false, start = null;
 
   function albedos() {
     const mu = settings.beam > 0 ? settings.mu : 1;
@@ -143,20 +156,45 @@ export function makeColumn(options = {}) {
       methane: on.methane ? GREENHOUSE_GASES.methane : 0,
       nitrousOxide: on.nitrousOxide ? GREENHOUSE_GASES.nitrousOxide : 0,
       ozoneProfile: ozone,
+      cloudCover: 'overcast',
       buffers: radiationBuffers(C),
     });
     pi[0] = surfacePressure;
     column.pressure.set(layerPressures(surfacePressure));
     column.interfacePressure.set(interfacePressures(surfacePressure));
     for (let k = 0; k < K; k++) mass[k] = surfacePressure * dSigma[k] / g;
-    q.fill(0);
-    if (settings.humidity) for (let k = 0; k < K; k++) q[k * C] = settings.humidity[k];
+  }
+
+  function place() {
+    const cloud = settings.cloud;
+    qc.fill(0);
+    column.cloudLayer = -1;
+    if (!cloud || !(cloud.path > 0) || !(cloud.cover > 0)) return;
+    let k = 0;
+    for (let j = 1; j < K; j++) if (Math.abs(column.pressure[j] - cloud.pressure) < Math.abs(column.pressure[k] - cloud.pressure)) k = j;
+    qc[k * C] = cloud.path / mass[k];
+    column.cloudLayer = k;
+  }
+
+  function humidify() {
+    const { humidity: given, relativeHumidity, surfacePressure } = settings;
+    for (let k = 0; k < K; k++) {
+      let value = 0;
+      if (given === 'relative') {
+        const p = column.pressure[k];
+        value = relativeHumidity(p / surfacePressure) * saturationHumidity(T[k], p);
+        if (p < DRY_STRATOSPHERE.pressure) value = Math.min(value, DRY_STRATOSPHERE.humidity);
+      } else if (given) value = given[k];
+      humidity[k] = value;
+      q[k * C] = value;
+    }
   }
 
   function load(temperature) {
     pi[0] = settings.surfacePressure;
     core.diagnoseColumn(0, pi, theta);
     for (let k = 0; k < K; k++) theta[k * C] = (typeof temperature === 'number' ? temperature : temperature[k]) / exnerLayer[k * C];
+    column.convectionTop = -1;
   }
 
   function refresh() {
@@ -167,26 +205,44 @@ export function makeColumn(options = {}) {
       T[k] = theta[k * C] * exnerLayer[k * C];
       height[k] = geopotential[k * C] / g;
     }
+    humidify();
   }
 
   function radiate(part) {
     refresh();
     const [direct, diffuse] = albedos(), { beam } = settings, Ts = column.Ts;
-    const net = radiation.column(0, settings.surfacePressure, theta, Ts, settings.wind, undefined, beam, null, q, null, direct, diffuse, 1, sensible ? SEA_DRAG : 0, 0, 0, 0, 0, part);
-    const b = radiation.budget, flux = radiation.layerFlux, longwave = radiation.longwave;
+    const qAir = latent && settings.evaporation && settings.humidity ? q[(K - 1) * C] : null;
+    const call = (water) => radiation.column(0, settings.surfacePressure, theta, Ts, settings.wind, undefined, beam, qAir, q, water, direct, diffuse, 1, sensible ? SEA_DRAG : 0, 0, 0, 0, 0, part);
+    const f = column.cloudLayer >= 0 ? Math.min(1, settings.cloud.cover) : 0;
+    let net, b = radiation.budget;
+    if (f > 0) {
+      const cloudyNet = call(qc);
+      for (let k = 0; k < K; k++) { cloudyFlux[k] = radiation.layerFlux[k]; cloudyLongwave[k] = radiation.longwave[k * C]; }
+      const cloudy = { ...radiation.budget };
+      const clearNet = call(null);
+      net = f * cloudyNet + (1 - f) * clearNet;
+      b = {};
+      for (const key of Object.keys(cloudy)) b[key] = f * cloudy[key] + (1 - f) * radiation.budget[key];
+    } else net = call(null);
+    const clear = radiation.budget;
     for (let k = 0; k < K; k++) {
-      terms.infrared[k] = longwave[k * C];
+      flux[k] = f > 0 ? f * cloudyFlux[k] + (1 - f) * radiation.layerFlux[k] : radiation.layerFlux[k];
+      terms.infrared[k] = f > 0 ? f * cloudyLongwave[k] + (1 - f) * radiation.longwave[k * C] : radiation.longwave[k * C];
       terms.ground[k] = k === K - 1 ? b.sensibleHeat : 0;
       terms.sunlight[k] = flux[k] - terms.infrared[k] - terms.ground[k];
     }
+    let water = 0;
+    for (let k = 0; k < K; k++) water += humidity[k] * mass[k];
     const emission = STEFAN_BOLTZMANN * Ts ** 4;
     Object.assign(budget, {
       insolation: beam, reflected: b.reflectedSolar, albedo: beam > 0 ? b.reflectedSolar / beam : 0, absorbed: b.absorbedSolar,
       air: b.atmosphereSolar, ozone: b.ozoneSolar, oxygen: b.oxygenSolar, carbonDioxide: b.carbonDioxideSolar, vapor: b.vaporSolar, aerosol: b.aerosolSolar,
-      upwardNearInfrared: b.atmosphereSolar - b.ozoneSolar - b.oxygenSolar - b.carbonDioxideSolar - b.vaporSolar - b.aerosolSolar - b.cloudSolar,
+      upwardNearInfrared: b.atmosphereSolar - b.ozoneSolar - b.oxygenSolar - b.carbonDioxideSolar - b.vaporSolar - b.aerosolSolar - b.cloudSolar, cloudSolar: b.cloudSolar,
       ground: b.surfaceSolar, reachingGround: b.surfaceShortwave, directBeam: b.surfaceDirect,
       olr: b.outgoingLongwave, dlr: b.downwardLongwave, groundEmission: emission, greenhouse: emission - b.outgoingLongwave, escaping: part === 'radiation' ? b.escape : NaN,
-      sensible: b.sensibleHeat, groundNet: net, imbalance: b.absorbedSolar - b.outgoingLongwave,
+      sensible: b.sensibleHeat, evaporation: b.evaporation, latent: LATENT_HEAT * b.evaporation, precipitableWater: water, groundNet: net, imbalance: b.absorbedSolar - b.outgoingLongwave,
+      cloudCover: f, clearAbsorbed: clear.absorbedSolar, clearOlr: clear.outgoingLongwave,
+      shortwaveCloudEffect: b.absorbedSolar - clear.absorbedSolar, longwaveCloudEffect: clear.outgoingLongwave - b.outgoingLongwave,
     });
     return net;
   }
@@ -204,22 +260,45 @@ export function makeColumn(options = {}) {
 
   function evaluate(choice = {}) {
     if (choice.sensible !== undefined) sensible = choice.sensible;
+    if (choice.latent !== undefined) latent = choice.latent;
     radiate('radiation');
     terms.convection.fill(0);
     toHeating();
     return column;
   }
 
-  function step(dt, { convection = true, sensible: groundHeat = convection } = {}) {
+  function adjustMoist(dt) {
+    const b = K - 1;
+    for (let k = 0; k < K; k++) work[k] = before[k] = theta[k * C] * exnerLayer[k * C];
+    const rh = settings.humidity ? settings.relativeHumidity(column.pressure[b] / settings.surfacePressure) : 0;
+    column.convectionTop = moistAdjustColumn(work, column.pressure, mass, { rh, heat: budget.latent * dt, top: column.convectionTop >= 0 ? column.convectionTop : b, out: adiabat });
+    for (let k = 0; k < K; k++) {
+      theta[k * C] = work[k] / exnerLayer[k * C];
+      terms.convection[k] = cp * mass[k] * (work[k] - before[k]) / dt;
+    }
+  }
+
+  function adjustDry(dt) {
+    for (let k = 0; k < K; k++) before[k] = theta[k * C];
+    surface.convectiveAdjustColumn(0, pi, theta);
+    let top = K - 1;
+    while (top > 0 && theta[(top - 1) * C] === theta[(K - 1) * C]) top--;
+    column.convectionTop = top;
+    for (let k = 0; k < K; k++) terms.convection[k] = cp * mass[k] * exnerLayer[k * C] * (theta[k * C] - before[k]) / dt;
+  }
+
+  function step(dt, { convection = true, sensible: groundHeat = Boolean(convection) } = {}) {
     sensible = groundHeat;
-    const net = radiate('all'), flux = radiation.layerFlux;
+    latent = convection === 'moist';
+    const net = radiate('all');
     for (let k = 0; k < K; k++) theta[k * C] += dt * flux[k] / (cp * mass[k] * exnerLayer[k * C]);
     column.Ts += dt * net / settings.heatCapacity;
-    if (convection) {
-      for (let k = 0; k < K; k++) before[k] = theta[k * C];
-      surface.convectiveAdjustColumn(0, pi, theta);
-      for (let k = 0; k < K; k++) terms.convection[k] = cp * mass[k] * exnerLayer[k * C] * (theta[k * C] - before[k]) / dt;
-    } else terms.convection.fill(0);
+    if (convection === 'moist') adjustMoist(dt);
+    else if (convection) adjustDry(dt);
+    else {
+      terms.convection.fill(0);
+      column.convectionTop = -1;
+    }
     column.time += dt;
     refresh();
     toHeating();
@@ -233,8 +312,10 @@ export function makeColumn(options = {}) {
       settings.ozoneProfile = profile.ozone;
     }
     Object.assign(settings, rest);
+    if (rest.humidity && rest.humidity !== 'relative') settings.humidity = Float64Array.from(rest.humidity);
     settings.gases = { ...settings.gases, ...gases };
-    build();
+    if (!radiation || REBUILDS.some((key) => key in changes)) build();
+    place();
     const startT = temperature ?? profile?.temperature;
     if (startT !== undefined) load(startT);
     const startTs = groundTemperature ?? profile?.groundTemperature;

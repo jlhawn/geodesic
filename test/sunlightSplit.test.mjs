@@ -58,3 +58,36 @@ test('the tropopause is where the air stops cooling by 2 K per km', () => {
   assert.ok(mls.pressure > 12000 && mls.pressure < 20000, `midlatitude summer at ${mls.pressure} Pa`);
   assert.equal(lapseTropopause(Float64Array.from(height, (z) => 288 - 9.8e-3 * z), height, pressure), null, 'a column cooling all the way up has none');
 });
+
+test('with vapor the seven parts still add up to the sunlight arriving, for every ground, sun and amount', () => {
+  for (const humidity of [0.25, 0.5, 1, 2, MLS.humidity]) for (const ground of ['sea', 'snow', 0, 0.3]) for (const elevation of [90, 41.81, 12]) {
+    const s = split({ elevation, ground, humidity }), what = JSON.stringify({ elevation, ground, humidity: typeof humidity === 'number' ? humidity : 'array' });
+    close(s.byAir + s.byGround + s.ozone + s.vapor + s.gases + s.aerosol + s.ground, s.arriving, 1e-9 * s.arriving, `sum ${what}`);
+    close(s.ozone + s.vapor + s.gases + s.aerosol, s.air, 1e-9 * s.arriving, `the air's absorbers ${what}`);
+    assert.ok(s.vapor > 0 && s.byGround >= -1e-9, `vapor absorbs and the ground adds reflection ${what}`);
+  }
+  assert.equal(split().vapor, 0, 'dry air has no vapor to absorb');
+  close(split({ humidity: MLS.humidity }).air, split({ humidity: 1 }).air, 1e-12, 'a factor of 1 is the profile\'s own vapor');
+});
+
+test('the midlatitude summer\'s vapor: 256.7 W/m² in the air of an overhead sun and 73.2 of the global-mean sun', () => {
+  const overhead = split({ humidity: 1 });
+  close(overhead.air, 256.69, 0.005, 'the air, sun overhead');
+  close(overhead.vapor, 206.43, 0.005, 'vapor, sun overhead');
+  close(overhead.ground, 1016.80, 0.005, 'the ground, sun overhead');
+  close(overhead.reflected / overhead.arriving, 0.0650, 5e-5, 'reflected share, sun overhead');
+  close(overhead.lower.low, 2.017, 0.001, 'least heating below 10 km');
+  close(overhead.lower.high, 2.696, 0.001, 'most heating below 10 km');
+  close(overhead.precipitableWater, 28.85, 0.005, 'precipitable water');
+  close(overhead.peak.rate, 26.50, 0.01, 'ozone\'s peak is unchanged');
+  const vapor = [0.25, 0.5, 1, 2].map((humidity) => split({ humidity }).vapor);
+  [140.65, 171.31, 206.43, 246.65].forEach((v, n) => close(vapor[n], v, 0.005, `vapor's sunlight at ×${[0.25, 0.5, 1, 2][n]}`));
+  const mean = { elevation: Math.asin(2 / 3) * 180 / Math.PI, beam: 1362 / 4, ground: 0.07 };
+  const dry = split(mean), moist = split({ ...mean, humidity: 1 });
+  close(moist.arriving, 340.5, 1e-9, 'the global-mean sun');
+  close(dry.air, 15.22, 0.005, 'the dry air, global-mean sun');
+  close(moist.air, 73.21, 0.005, 'the air, global-mean sun');
+  close(moist.vapor, 57.31, 0.005, 'vapor, global-mean sun');
+  close(dry.ground, 282.86, 0.005, 'the ground under dry air, global-mean sun');
+  close(moist.ground, 230.18, 0.005, 'the ground under moist air, global-mean sun');
+});
