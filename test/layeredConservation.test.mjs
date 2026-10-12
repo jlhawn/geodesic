@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
-import { HEAT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
+import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -19,12 +19,12 @@ const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges, AREA = m
  * Grid(16) under a zonal surface from 28 °C at the equator to just above
  * freezing at the poles, with no ice, so that each column holds thick
  * deep classes under a thermocline that rises poleward and outcrops, thin
- * classes at the outcrops and tokens above them; then SPINUP steps under
+ * classes at the outcrops and tokens above them; then `steps` steps under
  * easterly trades and westerlies, each reading back the surface it wrote,
  * so the currents, the eddy transport and the mixed layer's exchanges are
  * all under way and no heat crosses the surface.
  */
-function spunUp() {
+function spunUp(steps = SPINUP) {
   const ocean = createOcean(mesh, { everySteps: 1 });
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => {
     const polar = Math.max(0, Math.min(1, (Math.abs(lat) / DEG - 50) / 20));
@@ -36,7 +36,7 @@ function spunUp() {
     stress[e] = -0.1 * Math.cos(3 * mesh.latEdge[e]) * ((-y / r) * mesh.nEdge[3 * e] + (x / r) * mesh.nEdge[3 * e + 1]);
   }
   ocean.initialize(surfaceT, ice);
-  for (let n = 0; n < SPINUP; n++) ocean.advance(surfaceT, ice, flux, stress, DT);
+  for (let n = 0; n < steps; n++) ocean.advance(surfaceT, ice, flux, stress, DT);
   return { ocean, surfaceT, ice, flux, stress };
 }
 
@@ -84,10 +84,11 @@ const largest = (rows, pick) => Math.max(...rows.map((row) => Math.abs(pick(row)
 const mean = (rows, pick) => rows.reduce((s, row) => s + pick(row), 0) / rows.length;
 const show = (x) => x.toExponential(1);
 const kept = (name) => (name === 'rescale' ? [(r) => r.offMean.heat, (r) => r.offMean.salt] : [(r) => r.heat, (r) => r.salt]);
+const volume = (r) => r.volume;
 function report(label, record) {
   for (const [name, rows] of Object.entries(record)) {
     const [heat, salt] = kept(name);
-    console.log(`${label} ${name}: heat ${name === 'rescale' ? 'off the columns\' means' : 'changed'} by ${show(mean(rows, heat))} W/m² on average, ${show(largest(rows, heat))} at most; salt ${show(mean(rows, salt))}, ${show(largest(rows, salt))} psu·m; volume ${show(largest(rows, (r) => r.volume))} m at most`);
+    console.log(`${label} ${name}: heat ${name === 'rescale' ? 'off the columns\' means' : 'changed'} by ${show(mean(rows, heat))} W/m² on average, ${show(largest(rows, heat))} at most; salt ${show(mean(rows, salt))}, ${show(largest(rows, salt))} psu·m; volume ${show(mean(rows, volume))}, ${show(largest(rows, volume))} m`);
   }
 }
 
@@ -109,50 +110,34 @@ test('in double precision every phase of the CPU ocean\'s step keeps the heat an
     const [heat, salt] = kept(name);
     assert.ok(largest(rows, heat) < 1e-6, `${name}: heat ${largest(rows, heat)} W/m²`);
     assert.ok(largest(rows, salt) < 1e-9, `${name}: salt ${largest(rows, salt)} psu·m`);
-    if (name !== 'rescale') assert.ok(largest(rows, (r) => r.volume) < 1e-12, `${name}: volume ${largest(rows, (r) => r.volume)} m`);
+    if (name !== 'rescale') assert.ok(largest(rows, volume) < 1e-12, `${name}: volume ${largest(rows, volume)} m`);
   }
   assert.ok(largest(record.rescale, (r) => r.heat) > 1e-3, 'the rescale moves water, and heat with it');
 });
 
 /*
- * The most each phase of a GPU step may change the stored heat (W/m²)
- * and salt (psu·m) of spunUp's sea, as [mean over the steps, largest
- * step] for each, the rescale's beyond what its water carries at its
- * columns' means: two to six times what an M1 Max leaves here. The
- * surface read adds nothing when the surface has not changed, and
- * without freshwater or ice the velocity shift and the salt and surface
- * write leave the stores alone. The mixed layer's exchanges move whole
- * multiples of both stores' spacing, exact unless a store's new value
- * lands in a coarser binade; the RK4 and the rescale round each cell's
- * update; the eddy transport's thick donors, whose stores are coarsest,
- * drop part of what they give.
+ * A GPU ocean holding a CPU ocean's sea, uploaded from its h·T and h·S
+ * as a file from before Qref and Wref would be, the surface it last
+ * wrote in the atmosphere's buffers and its wind on the sea; `stores`
+ * reads the device's h, heat and salt as stored, `snapshot` as books
+ * takes them, the salt as h·S.
  */
-const EXACT = [1e-9, 1e-9, 1e-12, 1e-12];
-const GPU_FLOORS = {
-  readSurface: EXACT,
-  dynamics: [0.03, 0.1, 2e-4, 5e-4],
-  rescale: [0.03, 0.25, 3e-4, 1e-3],
-  eddy: [0.5, 0.6, 3e-3, 3e-3],
-  shift: EXACT,
-  mixedLayer: [1e-4, 2e-3, 1e-6, 1e-5],
-  'salt and surface': EXACT,
-};
-
-test('in single precision every phase of the GPU ocean\'s step keeps the heat and salt it stores to its rounding, and the rescale changes them only with its water', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { ocean: cpu, surfaceT, ice, stress } = spunUp();
+async function onGpu({ ocean: cpu, surfaceT, ice, stress }) {
   const model = await createGpuModel(mesh, { ocean: { everySteps: 1 } });
   const { gpu, oceanEngine: ocean } = model, layers = ocean.layers, { OS } = ocean.layout;
-  const rhoCp = ocean.options.density * ocean.options.specificHeat;
   ocean.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, surfaceT, ice);
   gpu.uploadSurfaceTemperature(surfaceT);
   gpu.device.queue.writeBuffer(gpu.buffers.S, 4 * gpu.layout.S.ICE, new Float32Array(C));
   ocean.setStress(stress, ice);
-  const snapshot = async () => {
+  const stores = async () => {
     await gpu.device.queue.onSubmittedWorkDone();
-    const [h, q, w] = await readRanges(gpu.device, ocean.buffers.S, [{ offset: OS.OH, length: layers * C }, { offset: OS.OQ, length: layers * C }, { offset: OS.OW, length: layers * C }]);
-    return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w) };
+    return readRanges(gpu.device, ocean.buffers.S, [{ offset: OS.OH, length: layers * C }, { offset: OS.OQ, length: layers * C }, { offset: OS.OW, length: layers * C }]);
   };
-  const record = await follow([
+  const snapshot = async () => {
+    const [h, q, w] = await stores();
+    return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w, (x, n) => x + SALT_REFERENCE * h[n]) };
+  };
+  const phases = [
     ['readSurface', () => ocean.readSurfaceFromAtmosphere()],
     ['dynamics', () => ocean.phases.dynamics(DT)],
     ['rescale', () => ocean.phases.rescale()],
@@ -160,12 +145,86 @@ test('in single precision every phase of the GPU ocean\'s step keeps the heat an
     ['shift', () => ocean.phases.shift()],
     ['mixedLayer', () => ocean.mixedLayer(DT)],
     ['salt and surface', () => { ocean.salt(DT); ocean.writeSurface(DT); }],
-  ], snapshot, 16, layers, rhoCp);
-  model.destroy();
-  report('GPU', record);
-  for (const [name, [meanHeat, stepHeat, meanSalt, stepSalt]] of Object.entries(GPU_FLOORS)) {
+  ];
+  return { model, ocean, stores, follow: (steps) => follow(phases, snapshot, steps, layers, ocean.options.density * ocean.options.specificHeat) };
+}
+
+function within(label, record, floors) {
+  for (const [name, [meanHeat, stepHeat, meanSalt, stepSalt, meanVolume, stepVolume]] of Object.entries(floors)) {
     const rows = record[name], [heat, salt] = kept(name);
-    assert.ok(Math.abs(mean(rows, heat)) < meanHeat && largest(rows, heat) < stepHeat, `${name}: heat ${mean(rows, heat)} W/m² on average, ${largest(rows, heat)} at most`);
-    assert.ok(Math.abs(mean(rows, salt)) < meanSalt && largest(rows, salt) < stepSalt, `${name}: salt ${mean(rows, salt)} psu·m on average, ${largest(rows, salt)} at most`);
+    assert.ok(Math.abs(mean(rows, heat)) < meanHeat && largest(rows, heat) < stepHeat, `${label} ${name}: heat ${mean(rows, heat)} W/m² on average, ${largest(rows, heat)} at most`);
+    assert.ok(Math.abs(mean(rows, salt)) < meanSalt && largest(rows, salt) < stepSalt, `${label} ${name}: salt ${mean(rows, salt)} psu·m on average, ${largest(rows, salt)} at most`);
+    assert.ok(Math.abs(mean(rows, volume)) < meanVolume && largest(rows, volume) < stepVolume, `${label} ${name}: volume ${mean(rows, volume)} m on average, ${largest(rows, volume)} at most`);
   }
+}
+
+/*
+ * The most each phase of a GPU step may change the stored heat (W/m²),
+ * salt (psu·m) and volume (m) of spunUp's sea, as [mean over the steps,
+ * largest step] for each, the rescale's heat and salt beyond what its
+ * water carries at its columns' means and its volume by design: two to
+ * six times what an M1 Max leaves here. The surface read adds nothing
+ * when the surface has not changed, and without freshwater or ice the
+ * velocity shift and the salt and surface write leave the stores alone.
+ * The mixed layer's exchanges move whole multiples of the coarser store's
+ * spacing; the eddy transport moves them across each edge and gives what
+ * rounding leaves in a column to its finest stores; the RK4 and the
+ * rescale round each cell's update, and the RK4's water carries its salt.
+ */
+const EXACT = [1e-9, 1e-9, 1e-12, 1e-12, 1e-15, 1e-15];
+const GPU_FLOORS = {
+  readSurface: EXACT,
+  dynamics: [0.02, 0.1, 3e-5, 3e-4, 1e-6, 1e-5],
+  rescale: [0.01, 0.2, 2e-8, 1e-5, Infinity, Infinity],
+  eddy: [0.01, 0.01, 1e-6, 2e-6, 3e-8, 6e-8],
+  shift: EXACT,
+  mixedLayer: [1e-4, 2e-3, 1e-9, 1e-8, 1e-12, 1e-11],
+  'salt and surface': EXACT,
+};
+
+test('in single precision every phase of the GPU ocean\'s step keeps the heat, salt and volume it stores to its rounding, and the rescale changes heat and salt only with its water', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const sea = await onGpu(spunUp());
+  const record = await sea.follow(16);
+  sea.model.destroy();
+  report('GPU', record);
+  within('GPU', record, GPU_FLOORS);
+});
+
+/*
+ * The eddy transport straight after createOcean's start, when its
+ * interfaces are steepest and the transport strongest; bounds as for
+ * GPU_FLOORS.
+ */
+const FRESH_EDDY = { eddy: [0.01, 0.01, 3e-6, 3e-6, 6e-8, 1e-7] };
+
+test('from a fresh start the GPU ocean\'s eddy transport keeps the volume, heat and salt it moves to its rounding', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const sea = await onGpu(spunUp(0));
+  const record = await sea.follow(8);
+  sea.model.destroy();
+  report('GPU fresh', { eddy: record.eddy });
+  within('GPU fresh', record, FRESH_EDDY);
+});
+
+test('the GPU ocean loads a saved W of h·S, as files from before Wref carry it, with one rounding of each layer\'s salt, and a saved Wref as it is', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const start = spunUp(0), { ocean: cpu, surfaceT, ice } = start;
+  const first = await onGpu(start);
+  const [, , w] = await first.stores();
+  let rounded = 0;
+  for (let n = 0; n < w.length; n++) if (w[n] !== Math.fround(cpu.W[n] - SALT_REFERENCE * cpu.h[n])) rounded++;
+  assert.equal(rounded, 0, `${rounded} of ${w.length} stored salts are not h·S − ${SALT_REFERENCE}·h rounded once`);
+  const saved = { ...(await first.ocean.serialize()), ...(await first.ocean.restartArrays()) };
+  assert.ok(saved.Wref && saved.Qref && !saved.W && !saved.Q, 'the restart arrays carry Wref and Qref');
+  const legacy = { ...saved, W: Float64Array.from(saved.Wref, (x, n) => x + SALT_REFERENCE * saved.h[n]) };
+  delete legacy.Wref;
+  for (const [label, file, salt] of [['Wref', saved, (n) => saved.Wref[n]], ['W', legacy, (n) => Math.fround(legacy.W[n] - SALT_REFERENCE * saved.h[n])]]) {
+    const model = await createGpuModel(mesh, { ocean: { everySteps: 1 } }), ocean = model.oceanEngine, { OS } = ocean.layout;
+    ocean.upload(file, surfaceT, ice);
+    await model.gpu.device.queue.onSubmittedWorkDone();
+    const [q, stored] = await readRanges(model.gpu.device, ocean.buffers.S, [{ offset: OS.OQ, length: w.length }, { offset: OS.OW, length: w.length }]);
+    let off = 0;
+    for (let n = 0; n < w.length; n++) if (stored[n] !== salt(n) || q[n] !== saved.Qref[n]) off++;
+    assert.equal(off, 0, `loaded from ${label}, ${off} of ${w.length} layers' heat or salt are not as saved`);
+    model.destroy();
+  }
+  first.model.destroy();
 });

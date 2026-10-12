@@ -7,9 +7,9 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * The layered ocean of ocean/layered.module.js on the GPU: a bulk mixed
  * layer over interior isopycnal layers, each a TRiSK shallow-water layer
  * carrying thickness, edge velocity, heat h·(T − HEAT_REFERENCE) and salt
- * h·S, the heat measured from HEAT_REFERENCE so that a thick layer's
- * float32 store keeps the eddy transport's small changes. The RK4
- * baroclinic state (h, u, heat, h·S for all L layers) lives in a
+ * h·(S − SALT_REFERENCE), each measured from its reference so that a thick
+ * layer's float32 store keeps the eddy transport's small changes. The RK4
+ * baroclinic state (h, u, heat, salt for all L layers) lives in a
  * ping-pong buffer set (S/T/K1-K4); everything else the step needs
  * (edge thicknesses, PV, the interior potential, the ∇⁴ closure scratch,
  * the barotropic sub-stepping state, the surface staging) lives in one
@@ -27,8 +27,8 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * transport, mixed layer, salt, surface write-back) are WGSL.
  */
 const WORKGROUP = 64;
-// A float32 value, so the host's conversions use the number the kernels do.
-export const HEAT_REFERENCE = Math.fround(273.15);
+// Float32 values, so the host's conversions use the numbers the kernels do.
+export const HEAT_REFERENCE = Math.fround(273.15), SALT_REFERENCE = Math.fround(35);
 
 export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
@@ -71,7 +71,7 @@ ${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shall
 ${constLine('NEUTRALSNAP', o.neutralSnap ? 1 : 0)} ${constLine('EROSION', o.convectiveErosion ? 1 : 0)} ${constLine('BUOYMEM', o.buoyancyMemory)} ${constLine('NBRRATIO', o.mixedNeighbourRatio)} ${constLine('CENTRING', o.vorticityCentring)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('SHEARMIX', o.shearMixing ? 1 : 0)} ${constLine('INTSHEAR', o.interiorShearMixing ? 1 : 0)} ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundViscosity)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
-${constLine('FREEZE', FREEZING_POINT)} ${constLine('TREF', HEAT_REFERENCE)} ${constLine('GUSTO', o.gustiness)} ${constLine('CLOSURERIDGE', CLOSURE_RIDGE)} ${constLine('CLOSUREFILL', o.closureFill || 0)} ${constLine('CLOSURERINGS', o.closureRings ? 1 : 0)}
+${constLine('FREEZE', FREEZING_POINT)} ${constLine('TREF', HEAT_REFERENCE)} ${constLine('SREF', SALT_REFERENCE)} ${constLine('GUSTO', o.gustiness)} ${constLine('CLOSURERIDGE', CLOSURE_RIDGE)} ${constLine('CLOSUREFILL', o.closureFill || 0)} ${constLine('CLOSURERINGS', o.closureRings ? 1 : 0)}
 @group(0) @binding(0) var<storage, read_write> MI: array<i32>;
 @group(0) @binding(1) var<storage, read_write> MF: array<f32>;
 @group(0) @binding(2) var<storage, read_write> LV: array<f32>;
@@ -122,7 +122,8 @@ fn closureSolve(fit: ClosureFit) -> f32 {
   let p = fit.saa + CLOSURERIDGE; let q = fit.sbb + CLOSURERIDGE;
   return (q * fit.sau - fit.sab * fit.sbu) / (p * q - fit.sab * fit.sab);
 }
-fn grain(x: f32) -> f32 { return ldexp(1.0, frexp(x).exp - 24); }
+fn grain(x: f32) -> f32 { return ldexp(1.0, max(frexp(x).exp - 24, -126)); }
+fn settle(x: f32, change: f32) -> f32 { let g = grain(max(abs(x), abs(x + change))); return round(change / g) * g; }
 // A multiple of the coarser store's spacing, which both record exactly; Metal's fast math folds the (b + a) − b form to a.
 fn transfer(src: i32, dst: i32, amount: f32) -> f32 {
   let a = IN[src]; let b = IN[dst];
@@ -149,7 +150,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
 }`,
     oSurfaceDensity: `${K}  let i = ${idx}; if (i >= C) { return; }
   let h0 = max(EPSO, IN[hOff(0) + i]);
-  OD[O_RHOML + i] = eos(IN[qOff(0) + i] / h0 + TREF, IN[wOff(0) + i] / h0);
+  OD[O_RHOML + i] = eos(IN[qOff(0) + i] / h0 + TREF, IN[wOff(0) + i] / h0 + SREF);
 }`,
     oGradRho: `${K}  let e = ${idx}; if (e >= E) { return; }
   OD[O_GRADRHO + e] = (OD[O_RHOML + MI[COE + 2 * e + 1]] - OD[O_RHOML + MI[COE + 2 * e]]) / MF[F_DC + e];
@@ -179,13 +180,13 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   var edges: array<i32, MAXE>; var nbrs: array<i32, MAXE>;
   for (var m = 0; m < MAXE; m++) { edges[m] = MI[EOC + MAXE * i + m]; nbrs[m] = MI[COC + MAXE * i + m]; }
   for (var k = 0; k < L; k++) {
-    let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k] - TREF, IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k], IN[wOff(k) + i] / hv, hv > 1e-6);
+    let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k] - TREF, IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k] - SREF, IN[wOff(k) + i] / hv, hv > 1e-6);
     var divH = 0.0; var divQ = 0.0; var divW = 0.0; var lapQ = 0.0; var lapW = 0.0;
     for (var m = 0; m < MAXE; m++) {
       let e = edges[m]; let j = nbrs[m];
       let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
       divH += f;
-      let hvj = IN[hOff(k) + j]; let Tj = select(LABEL_T[k] - TREF, IN[qOff(k) + j] / hvj, hvj > 1e-6); let Sj = select(LABEL_S[k], IN[wOff(k) + j] / hvj, hvj > 1e-6);
+      let hvj = IN[hOff(k) + j]; let Tj = select(LABEL_T[k] - TREF, IN[qOff(k) + j] / hvj, hvj > 1e-6); let Sj = select(LABEL_S[k] - SREF, IN[wOff(k) + j] / hvj, hvj > 1e-6);
       divQ += f * select(Tj, Ti, f > 0.0); divW += f * select(Sj, Si, f > 0.0);
       if (k == 0 && OD[O_EMASK + e] > 0.5) { lapQ += MF[F_DV + e] * (Tj - Ti) / MF[F_DC + e]; lapW += MF[F_DV + e] * (Sj - Si) / MF[F_DC + e]; }
     }
@@ -404,11 +405,23 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
      * The eddy transport of ocean/layered.module.js, one edge a thread,
      * leaving each class's volume, heat and salt fluxes in the EDDYV, EDDYQ
      * and EDDYW scratch (see OD's layout); P[0] is the step and P[1] the
-     * stability limit on κ.
+     * stability limit on κ. Each class moves whole multiples of the coarser
+     * cell's spacing, measured in that cell, and the thinnest class thick
+     * in both cells takes back what the rounding left of the edge's net
+     * volume. oEddyApply rounds each class's change to its own spacing,
+     * leaving what it did not record in the trial state OUT, free after the
+     * combine, and oEddyLeftover gives each column's leftovers to its finest
+     * stores, so the column keeps its thickness to its finest layer's
+     * rounding and gains the heat and salt its edges carried.
      */
     oEddyFlux: `${constLine('EDDYTOP', o.eddyTaperDepth)} ${constLine('EDDYBOTTOM', EDDY_BOTTOM_TAPER)} ${constLine('EDDYSLACK', EDDY_SLACK)}
 fn eddyAllowance(k: i32, i: i32) -> f32 {
   return (max(0.0, IN[hOff(k) + i] - EPSO) + EDDYSLACK) * MF[F_AREA + i] / (f32(MI[NEC + i]) * P[0]);
+}
+fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
+  let ga = grain(max(abs(xa), abs(xa - moved / sa))); let gb = grain(max(abs(xb), abs(xb + moved / sb)));
+  let q = max(ga, gb); let area = select(sb, sa, ga > gb || (ga == gb && moved > 0.0));
+  return round(moved / area / q) * q * area;
 }
 ${K}  let e = ${idx}; if (e >= E) { return; }
   for (var k = 0; k < L; k++) { OD[O_EDDYV + k * E + e] = 0.0; OD[O_EDDYQ + k * E + e] = 0.0; OD[O_EDDYW + k * E + e] = 0.0; }
@@ -459,14 +472,22 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
     let allowed = eddyAllowance(k, select(b, a, f > 0.0));
     if (abs(f) > allowed) { scale = min(scale, allowed / abs(f)); }
   }
+  let sa = MF[F_AREA + a]; let sb = MF[F_AREA + b];
+  var net = 0.0; var taker = 0; var finest = 0.0;
   for (var k = 1; k < L; k++) {
-    let f = scale * flux[k];
-    if (f == 0.0) { continue; }
-    let d = select(b, a, f > 0.0);
-    let hd = IN[hOff(k) + d];
-    OD[O_EDDYV + k * E + e] = f;
-    OD[O_EDDYQ + k * E + e] = f * IN[qOff(k) + d] / hd;
-    OD[O_EDDYW + k * E + e] = f * IN[wOff(k) + d] / hd;
+    let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
+    if (flux[k] != 0.0) { flux[k] = eddyShare(ha, hb, sa, sb, scale * flux[k] * P[0]); net += flux[k]; }
+    if (min(ha, hb) > THINO) { let g = grain(max(ha, hb)); if (taker == 0 || g < finest) { taker = k; finest = g; } }
+  }
+  if (taker > 0) { flux[taker] -= net; }
+  for (var k = 1; k < L; k++) {
+    let moved = flux[k];
+    if (moved == 0.0) { continue; }
+    let qa = IN[qOff(k) + a]; let qb = IN[qOff(k) + b]; let wa = IN[wOff(k) + a]; let wb = IN[wOff(k) + b];
+    let toB = moved > 0.0; let carried = moved / IN[hOff(k) + select(b, a, toB)];
+    OD[O_EDDYV + k * E + e] = moved / P[0];
+    OD[O_EDDYQ + k * E + e] = eddyShare(qa, qb, sa, sb, carried * select(qb, qa, toB)) / P[0];
+    OD[O_EDDYW + k * E + e] = eddyShare(wa, wb, sa, sb, carried * select(wb, wa, toB)) / P[0];
   }
 }`,
     oEddyApply: `${K}  let n = ${idx}; if (n >= L * C) { return; }
@@ -478,7 +499,33 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
     volume += s * OD[O_EDDYV + k * E + e]; heat += s * OD[O_EDDYQ + k * E + e]; salt += s * OD[O_EDDYW + k * E + e];
   }
   let factor = P[0] / MF[F_AREA + i];
-  IN[hOff(k) + i] -= factor * volume; IN[qOff(k) + i] -= factor * heat; IN[wOff(k) + i] -= factor * salt;
+  let dq = -factor * heat; let dw = -factor * salt;
+  let rh = settle(IN[hOff(k) + i], -factor * volume); let rq = settle(IN[qOff(k) + i], dq); let rw = settle(IN[wOff(k) + i], dw);
+  IN[hOff(k) + i] += rh; IN[qOff(k) + i] += rq; IN[wOff(k) + i] += rw;
+  OUT[hOff(k) + i] = rh; OUT[qOff(k) + i] = dq - rq; OUT[wOff(k) + i] = dw - rw;
+}`,
+    oEddyLeftover: `${K}  let i = ${idx}; if (i >= C) { return; }
+  if (OD[O_CMASK + i] < 0.5) { return; }
+  var kept = 0.0; var owedQ = 0.0; var owedW = 0.0; var holder = 0; var finest = 0.0;
+  for (var k = 1; k < L; k++) {
+    kept += OUT[hOff(k) + i]; owedQ += OUT[qOff(k) + i]; owedW += OUT[wOff(k) + i];
+    let hk = IN[hOff(k) + i];
+    if (hk > THINO && (holder == 0 || grain(hk) < finest)) { holder = k; finest = grain(hk); }
+  }
+  if (holder == 0) { return; }
+  let hh = IN[hOff(holder) + i];
+  let rh = settle(hh, -kept); let rq = settle(IN[qOff(holder) + i], rh * IN[qOff(holder) + i] / hh); let rw = settle(IN[wOff(holder) + i], rh * IN[wOff(holder) + i] / hh);
+  IN[hOff(holder) + i] = hh + rh; IN[qOff(holder) + i] += rq; IN[wOff(holder) + i] += rw;
+  owedQ -= rq; owedW -= rw;
+  var heatHolder = holder; var saltHolder = holder; var finestQ = grain(IN[qOff(holder) + i]); var finestW = grain(IN[wOff(holder) + i]);
+  for (var k = 1; k < L; k++) {
+    if (IN[hOff(k) + i] <= THINO) { continue; }
+    let gq = grain(IN[qOff(k) + i]); let gw = grain(IN[wOff(k) + i]);
+    if (gq < finestQ) { heatHolder = k; finestQ = gq; }
+    if (gw < finestW) { saltHolder = k; finestW = gw; }
+  }
+  IN[qOff(heatHolder) + i] += settle(IN[qOff(heatHolder) + i], owedQ);
+  IN[wOff(saltHolder) + i] += settle(IN[wOff(saltHolder) + i], owedW);
 }`,
     oAdvance: `${K}  let n = ${idx}; if (n >= OSTOTAL) { return; }
   OUT[n] = IN[n] + P[0] * OD[n];
@@ -557,10 +604,10 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
     if (hv < EPSO) {
       let held = hv > 1e-9;
       let t = LABEL_T[k]; let s = LABEL_S[k];
-      let tHeld = select(t, clamp(IN[qOff(k) + i] / hv + TREF, t - 30.0, t + 30.0), held); let sHeld = select(s, clamp(IN[wOff(k) + i] / hv, s - 5.0, s + 5.0), held);
-      dh += EPSO - hv; dQ += EPSO * (t - TREF) - hv * (tHeld - TREF); dW += EPSO * s - hv * sHeld;
+      let tHeld = select(t, clamp(IN[qOff(k) + i] / hv + TREF, t - 30.0, t + 30.0), held); let sHeld = select(s, clamp(IN[wOff(k) + i] / hv + SREF, s - 5.0, s + 5.0), held);
+      dh += EPSO - hv; dQ += EPSO * (t - TREF) - hv * (tHeld - TREF); dW += EPSO * (s - SREF) - hv * (sHeld - SREF);
       hv = EPSO;
-      IN[hOff(k) + i] = EPSO; IN[qOff(k) + i] = EPSO * (t - TREF); IN[wOff(k) + i] = EPSO * s;
+      IN[hOff(k) + i] = EPSO; IN[qOff(k) + i] = EPSO * (t - TREF); IN[wOff(k) + i] = EPSO * (s - SREF);
     }
     sum += hv;
   }
@@ -620,12 +667,12 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
   let ustar3 = pow(tau / RHO0, 1.5); let stir = STIRRING * exp(-IN[hOff(0) + i] / STIRDEPTH);
   let reach = OD[O_REACH + i];
   let deepest = min(MAXMIXED, reach);
-  let s0 = IN[wOff(0) + i] / IN[hOff(0) + i];
+  let s0 = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
   let salted = s0 * OD[O_FRESH + i] / 1000.0 + (s0 - ICESAL) * (iceVolume(i) - OD[O_PREVVOL + i]) * ICEDENS / 1000.0;
   let buoyancy = OGRAV * (alphaT(OD[O_SURFACEIN + i], s0) * (OD[O_PREVT0 + i] - OD[O_SURFACEIN + i]) * PH[PH_CAP + i] / RHOCP + betaS(OD[O_SURFACEIN + i], s0) * salted) / P[6];
   let loss = OD[O_BUOY + i] + (buoyancy - OD[O_BUOY + i]) * select(1.0, min(1.0, P[6] / BUOYMEM), BUOYMEM > 0.0);
   OD[O_BUOY + i] = loss;
-  var rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i]);
+  var rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i] + SREF);
   var budget = CONVRATE * P[6];
   for (var k = 1; k < L; k++) {
     if (IN[hOff(0) + i] >= deepest || budget <= 0.0) { break; }
@@ -638,7 +685,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
     } else if (EROSION < 0.5 && RHO[k] > rm) { continue; }
     if (take > 0.0) {
       moveLayer(i, k, 0, take); budget -= take;
-      rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i]);
+      rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i] + SREF);
     }
     if (eroding) { break; }
   }
@@ -647,7 +694,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
   if (below > 0 && IN[hOff(0) + i] < deepest) {
     let db = max(1e-3, OGRAV * (RHO[below] - rm) / RHO0);
     let entrain = min(min(2.0 * stir * ustar3 / (IN[hOff(0) + i] * db) * P[6], IN[hOff(below) + i] - EPSO), reach - IN[hOff(0) + i]);
-    if (entrain > 0.0) { moveLayer(i, below, 0, entrain); rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i]); }
+    if (entrain > 0.0) { moveLayer(i, below, 0, entrain); rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i] + SREF); }
   }
   below = -1;
   for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { below = k; break; } }
@@ -670,7 +717,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
   for (var k = 1; k < L; k++) {
     let hk = IN[hOff(k) + i];
     if (hk <= THINO) { continue; }
-    let r = eosAnomaly(IN[qOff(k) + i] / hk + TREF, IN[wOff(k) + i] / hk);
+    let r = eosAnomaly(IN[qOff(k) + i] / hk + TREF, IN[wOff(k) + i] / hk + SREF);
     let label = RHOA[k];
     if (abs(r - label) <= RESTTOL) { continue; }
     let stepK = select(-1, 1, r < label);
@@ -679,7 +726,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
       if (j < 1 || j >= L) { break; }
       let hj = IN[hOff(j) + i];
       if (hj > THINO) {
-        let rd = eosAnomaly(IN[qOff(j) + i] / hj + TREF, IN[wOff(j) + i] / hj);
+        let rd = eosAnomaly(IN[qOff(j) + i] / hj + TREF, IN[wOff(j) + i] / hj + SREF);
         if (f32(stepK) * (rd - label) > RESTTOL) {
           let amount = min(fraction * hk * (label - r) / (rd - label), hj - EPSO);
           if (amount > 0.0) { moveLayer(i, j, k, amount); }
@@ -692,12 +739,12 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
 }`,
     oSalt: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
-  let s = IN[wOff(0) + i] / IN[hOff(0) + i];
+  let s = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
   var w = IN[wOff(0) + i] + s * OD[O_FRESH + i] / 1000.0;
   let volume = iceVolume(i);
   let grown = (volume - OD[O_PREVVOL + i]) * ICEDENS / 1000.0;
   w += (s - ICESAL) * grown;
-  w = max(0.0, w);
+  w = max(-SREF * IN[hOff(0) + i], w);
   IN[wOff(0) + i] = w;
   OD[O_FRESH + i] = 0.0;
   OD[O_PREVVOL + i] = volume;
@@ -705,7 +752,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
     oWriteSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { PH[PH_OFLUX + i] = 0.0; return; }
   PH[PH_CAP + i] = RHOCP * max(IN[hOff(0) + i], 1.0);
-  OD[O_S0 + i] = IN[wOff(0) + i] / IN[hOff(0) + i];
+  OD[O_S0 + i] = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
   if (OD[O_ICED + i] > 0.5) {
     PH[PH_OFLUX + i] = RHOCP * (IN[qOff(0) + i] - IN[hOff(0) + i] * (FREEZE - TREF)) / P[6];
     IN[qOff(0) + i] = IN[hOff(0) + i] * (FREEZE - TREF);
@@ -741,7 +788,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
  * the edge's first cell.
  */
 const OCEAN_REDUCED = [
-  ['area', 'sum', 'wet * a'], ['depth', 'sum', 'wet * a * h0'], ['salinity', 'sum', 'wet * a * IN[wOff(0) + i] / max(EPSO, h0)'],
+  ['area', 'sum', 'wet * a'], ['depth', 'sum', 'wet * a * h0'], ['salinity', 'sum', 'wet * a * (IN[wOff(0) + i] / max(EPSO, h0) + SREF)'],
   ['thermocline', 'sum', 'wet * a * thermo'], ['heat', 'sum', 'wet * a * RHOCP * heat'],
   ['interiorT', 'sum', 'wet * a * interiorQ'], ['interiorH', 'sum', 'wet * a * interiorH'],
   ['ssh', 'max', 'wet * abs(OD[O_ETA + i])'], ['speed', 'max', 'speed'], ['limited', 'sum', 'limited'], ['transport', 'max', 'transport'],
@@ -850,7 +897,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   kernels.oFrame = `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let h0 = max(EPSO, IN[hOff(0) + i]);
-  OUT[${OF.SSS} + i] = IN[wOff(0) + i] / h0;
+  OUT[${OF.SSS} + i] = IN[wOff(0) + i] / h0 + SREF;
   OUT[${OF.H1} + i] = IN[hOff(0) + i];
   var thermo = 0.0;
   for (var k = 0; k <= ${thermoclineLayers}; k++) { thermo += IN[hOff(k) + i]; }
@@ -1018,6 +1065,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   function eddyPasses(pass, g) {
     dispatch(pass, 'oEddyFlux', g, E);
     dispatch(pass, 'oEddyApply', g, L * C);
+    dispatch(pass, 'oEddyLeftover', g, C);
   }
   function eddyTransport(dt) {
     if (!(eddyLimit > 0)) return;
@@ -1201,9 +1249,11 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     stericSurface(h, Q, W, eta);
     return { h, u, Q, W, eta, T0, previousT0, filled };
   }
-  function uploadArrays({ h, u, Q, Qref, W, eta }, surfaceT, ice, restart = null, concentration = seaCover) {
+  function uploadArrays({ h, u, Q, Qref, W, Wref, eta }, surfaceT, ice, restart = null, concentration = seaCover) {
     const packed = new Float32Array(OS.total);
-    packed.set(h, OS.OH); packed.set(u, OS.OU); packed.set(Qref ?? Float64Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), OS.OQ); packed.set(W, OS.OW);
+    packed.set(h, OS.OH); packed.set(u, OS.OU);
+    packed.set(Qref ?? Float64Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), OS.OQ);
+    packed.set(Wref ?? Float64Array.from(W, (w, n) => w - SALT_REFERENCE * h[n]), OS.OW);
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) packed[OS.OU + e] = 0;
     writeInPieces(device, ob.S, 0, packed);
     const encoder = device.createCommandEncoder();
@@ -1240,10 +1290,9 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     }
     return { atlas: covered, analytic: other };
   }
-  const RESTART = [['W', L * C], ['previousT0', C], ['previousIceVolume', C], ['fresh', C], ['buoyancy', C], ['flux', C], ['capacity', C]];
+  const RESTART = [['previousT0', C], ['previousIceVolume', C], ['fresh', C], ['buoyancy', C], ['flux', C], ['capacity', C]];
   function restartable(saved) {
-    const heat = saved && (saved.Qref ?? saved.Q);
-    if (!saved || !saved.h || saved.h.length !== L * C || !heat || heat.length !== L * C || !RESTART.every(([name, length]) => saved[name] && saved[name].length === length)) return false;
+    if (!saved || !saved.h || saved.h.length !== L * C || ![saved.Qref ?? saved.Q, saved.Wref ?? saved.W].every((store) => store && store.length === L * C) || !RESTART.every(([name, length]) => saved[name] && saved[name].length === length)) return false;
     for (let i = 0; i < C; i++) {
       let sum = 0;
       for (let k = 0; k < L; k++) sum += saved.h[k * C + i];
@@ -1285,7 +1334,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     const u = Float64Array.from(s.subarray(OS.OU, OS.OU + L * E));
     const Qraw = s.subarray(OS.OQ, OS.OQ + L * C), Wraw = s.subarray(OS.OW, OS.OW + L * C);
     const T = new Float64Array(L * C), S = new Float64Array(L * C);
-    for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); T[n] = (Qraw[n] + HEAT_REFERENCE * h[n]) / hh; S[n] = Wraw[n] / hh; }
+    for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); T[n] = (Qraw[n] + HEAT_REFERENCE * h[n]) / hh; S[n] = (Wraw[n] + SALT_REFERENCE * h[n]) / hh; }
     const eta = Float64Array.from(etaRange);
     const h1 = h.subarray(0, C), T1 = T.subarray(0, C), S1 = S.subarray(0, C), u1 = u.subarray(0, E);
     const thermoclineDepth = new Float64Array(C);
@@ -1304,22 +1353,22 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   /*
    * What upload needs beside serialize()'s fields to put the device back
    * exactly as it stands between two ocean steps: the heat and salt
-   * contents as stored (the heat as Qref; upload also takes a Q of h·T),
-   * the mixed layer's last temperature and the ice volume it last saw,
-   * the freshwater not yet taken, its remembered surface buoyancy loss,
-   * and the heat flux and capacity the surface update is using. A saved
-   * ocean that carries all of them at this mesh's sizes, its columns
-   * within a meter of this bathymetry and dry on land, is uploaded as it
-   * is, without fitting its columns.
+   * contents as stored, Qref and Wref (upload also takes a Q of h·T and a
+   * W of h·S), the mixed layer's last temperature and the ice volume it
+   * last saw, the freshwater not yet taken, its remembered surface
+   * buoyancy loss, and the heat flux and capacity the surface update is
+   * using. A saved ocean that carries all of them at this mesh's sizes,
+   * its columns within a meter of this bathymetry and dry on land, is
+   * uploaded as it is, without fitting its columns.
    */
   async function restartArrays() {
     const PHL = core.layout.PH;
-    const [[Qref, W], [previousT0, previousIceVolume, fresh, buoyancy], [flux, capacity]] = await Promise.all([
+    const [[Qref, Wref], [previousT0, previousIceVolume, fresh, buoyancy], [flux, capacity]] = await Promise.all([
       readRanges(device, ob.S, [{ offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]),
       readRanges(device, ob.OD, [{ offset: OD.PREVT0, length: C }, { offset: OD.PREVVOL, length: C }, { offset: OD.FRESH, length: C }, { offset: OD.BUOY, length: C }]),
       readRanges(device, buffers.PH, [{ offset: PHL.OFLUX, length: C }, { offset: PHL.CAP, length: C }]),
     ]);
-    return Object.fromEntries(Object.entries({ Qref, W, previousT0, previousIceVolume, fresh, buoyancy, flux, capacity }).map(([name, values]) => [name, Float32Array.from(values)]));
+    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, buoyancy, flux, capacity }).map(([name, values]) => [name, Float32Array.from(values)]));
   }
 
   function diagnosticsFrom(sums) {

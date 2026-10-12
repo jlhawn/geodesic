@@ -8,6 +8,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { labelTemperature } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
+import { SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -441,7 +442,10 @@ test('the GPU ocean starts and loads under partly covered ice without salting it
   const { mesh, seaIce } = gpuModel, ocean = gpuModel.oceanEngine, n = mesh.nCells, dt = 3600;
   const surfaceT = new Float64Array(n).fill(FREEZING_POINT), ice = new Float64Array(n).fill(1), calm = new Float64Array(mesh.nEdges);
   seaIce.load(ice, new Float64Array(n).fill(0.4));
-  const salt = async () => (await ocean.restartArrays()).W.slice(0, n);
+  const salt = async () => {
+    const [{ Wref }, { h }] = await Promise.all([ocean.restartArrays(), ocean.download()]);
+    return Float64Array.from({ length: n }, (_, i) => Wref[i] + SALT_REFERENCE * h[i]);
+  };
   const unchanged = async (label) => {
     const before = await salt();
     await ocean.advance(Float64Array.from(surfaceT), ice, calm, dt);
