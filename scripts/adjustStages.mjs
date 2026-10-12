@@ -15,13 +15,13 @@
 //   node scripts/adjustStages.mjs runs/eleven64_day1825.bin
 //   BC=cloudLayer DUMP=1234 node scripts/adjustStages.mjs runs/eleven64_day1825.bin
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { getDevice } from '../js/gpu/device.module.js';
 import { createGpuCore } from '../js/gpu/core.gpu.js';
 import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { readTopography } from './figures/figureState.mjs';
+import { stateGrid } from '../js/stateGrid.module.js';
 
 const BC = process.env.BC ?? 'uniform', DUMP = process.env.DUMP ? Number(process.env.DUMP) : -1;
 const saved = await decodeState(new Uint8Array(readFileSync(process.argv[2])));
@@ -46,7 +46,8 @@ device.createShaderModule = (descriptor) => {
 };
 
 const moistOptions = { boundaryCondensation: BC };
-const model = createModel(new Grid(saved.N), { ocean: false, levels, moist: moistOptions, topography: readTopography() });
+const topography = readTopography();
+const model = createModel(stateGrid(saved, topography).mesh, { ocean: false, levels, moist: moistOptions, topography });
 const { core, moist, boundaryLayer: bl, radiation, mesh } = model, C = mesh.nCells, { K, geopotential, g } = core.diagnostics, dt = 1350 * 16 / saved.N;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => model.state[a].set(saved[name]));
 if (saved.boundaryDepth) bl.depth.set(saved.boundaryDepth);

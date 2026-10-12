@@ -8,19 +8,19 @@
 // closureVelocity, 'extended' the interior fill with closureAdjoint.
 //   [OCEAN='{"closureHours":12}'] [ITERATIONS=60] node scripts/closureStability.mjs <state.bin>
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
-import { buildMesh } from '../js/mesh.module.js';
 import { topographyFromInt16, createGeography } from '../js/geography.module.js';
 import { decodeState } from '../js/stateFile.module.js';
 import { laplacianVelocity } from '../js/dynamics/operators.module.js';
 import { createOcean, closureCoefficient, closureVelocity, closureAdjoint, THIN } from '../js/ocean/layered.module.js';
+import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) throw new Error('usage: node scripts/closureStability.mjs <state.bin>');
 const OCEAN = { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') }, ITERATIONS = Number(process.env.ITERATIONS ?? 60);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const N = saved.N, mesh = buildMesh(new Grid(N)), C = mesh.nCells, E = mesh.nEdges;
-const geography = createGeography(mesh, topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer));
+const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
+const N = saved.N, mesh = stateGrid(saved, topography).mesh, C = mesh.nCells, E = mesh.nEdges;
+const geography = createGeography(mesh, topography);
 const ocean = createOcean(mesh, { geography, ...OCEAN });
 ocean.load(saved.ocean, Float64Array.from(saved.surfaceT), Float64Array.from(saved.ice));
 const dt = OCEAN.everySteps * 1350 * 16 / N;

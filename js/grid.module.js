@@ -361,11 +361,14 @@ class GridCell {
   }
 }
 
+const DEFAULT_RELAX = 30;
+
 class Grid {
-  constructor(N, { relax = 30 } = {}) {
+  constructor(N, { relax = DEFAULT_RELAX } = {}) {
     const { quadCells, northPole, southPole } = Grid.make(N);
 
     this.N = N;
+    this.relaxPasses = relax;
     this.quadCells = quadCells;
     this.northPole = northPole;
     this.southPole = southPole;
@@ -540,5 +543,5 @@ class Grid {
 }
 
 export {
-  Grid, GridCell, GridVertex, circumcenter, centroid
+  Grid, GridCell, GridVertex, circumcenter, centroid, DEFAULT_RELAX
 };

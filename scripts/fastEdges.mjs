@@ -4,14 +4,13 @@
 // fast edge counts once for each token beneath it.
 //   [TOP=6] node scripts/fastEdges.mjs <threshold m/s> <state.bin>...
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
-import { buildMesh } from '../js/mesh.module.js';
 import { decodeState } from '../js/stateFile.module.js';
+import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 const limit = Number(process.argv[2]);
 const meshes = {};
 for (const file of process.argv.slice(3)) {
   const s = await decodeState(new Uint8Array(readFileSync(file)));
-  const mesh = meshes[s.N] ?? (meshes[s.N] = buildMesh(new Grid(s.N)));
+  const key = `${s.N} ${stateRelax(s).relax}`, mesh = meshes[key] ?? (meshes[key] = stateGrid(s).mesh);
   const C = mesh.nCells, E = mesh.nEdges, L = s.ocean.h.length / C, deg = 180 / Math.PI;
   const rows = [], perLayer = new Map();
   for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) {

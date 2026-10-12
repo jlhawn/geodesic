@@ -5,9 +5,8 @@
 // term the run did not give (a NaN, a missing log line, state or audit row).
 // TERMS are the first sweep's, TERMS2 the second's (sweep2.mjs).
 import { readFileSync } from 'node:fs';
-import { Grid } from '../../js/grid.module.js';
-import { buildMesh } from '../../js/mesh.module.js';
 import { decodeState } from '../../js/stateFile.module.js';
+import { stateGrid, stateRelax } from '../../js/stateGrid.module.js';
 
 export const TERMS = [
   { key: 'balance', label: 'ASR - OLR, day mean (W/m2)', target: 0, tolerance: 3, weight: 4 },
@@ -155,8 +154,9 @@ export function meanAudits(audits) {
 const meshes = new Map();
 export async function arcticVolume(file) {
   const s = await decodeState(new Uint8Array(readFileSync(file)));
-  if (!meshes.has(s.N)) meshes.set(s.N, buildMesh(new Grid(s.N)));
-  const mesh = meshes.get(s.N), deg = 180 / Math.PI;
+  const key = `${s.N} ${stateRelax(s).relax}`;
+  if (!meshes.has(key)) meshes.set(key, stateGrid(s).mesh);
+  const mesh = meshes.get(key), deg = 180 / Math.PI;
   let volume = 0;
   for (let i = 0; i < mesh.nCells; i++) if (mesh.latCell[i] * deg >= 60 && s.ice[i] > 0) volume += mesh.areaCell[i] * s.concentration[i] * s.ice[i];
   return volume / 1e12;

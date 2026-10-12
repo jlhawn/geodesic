@@ -13,7 +13,6 @@
 // divDamp, blMix the boundary layer's implicit mixing, plume the plume's
 // momentum transport, total. BOUNDARY_LAYER and SURFACE (JSON) pass options.
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { SEA_DRAG } from '../js/physics/surface.module.js';
@@ -21,12 +20,13 @@ import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVector } from '../js/dynamics/operators.module.js';
+import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2], LAT = Number(process.env.LAT ?? 3);
 const BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: false, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land, surface } = model;
 const { K, C, E, V, sigmaMid, sigmaLower, dSigma, R, g, exnerLayer, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;

@@ -6,8 +6,9 @@ import { encodeState, decodeState } from './stateFile.module.js';
  * and replayed over the ocean alone by scripts/oceanSpinup.mjs. A day is
  * one file, forcing-DDDD.bin for the model day DDDD it ends, in the
  * binary state format of stateFile.module.js: 'GCMS', the JSON header
- * { kind: 'forcing', version, N, day, time, seconds, steps, oceanSteps,
- * arrays }, then float32 arrays, each a mean over the day's `seconds`:
+ * { kind: 'forcing', version, N, grid, day, time, seconds, steps,
+ * oceanSteps, arrays }, then float32 arrays, each a mean over the day's
+ * `seconds`:
  *
  *   stress         edges  N/m²     normal wind stress on the ocean's top
  *                                  layer after the ice transmission, as
@@ -60,17 +61,17 @@ function check(N, fields) {
   }
 }
 
-export function encodeForcing({ N, day, time, seconds, steps, oceanSteps }, fields) {
+export function encodeForcing({ N, grid = null, day, time, seconds, steps, oceanSteps }, fields) {
   check(N, fields);
   const arrays = Object.fromEntries(FORCING_FIELDS.map(([name]) => [name, fields[name]]));
-  return encodeState({ kind: 'forcing', version: FORCING_VERSION, N, day, time, seconds, steps, oceanSteps, ...arrays });
+  return encodeState({ kind: 'forcing', version: FORCING_VERSION, N, ...(grid ? { grid } : {}), day, time, seconds, steps, oceanSteps, ...arrays });
 }
 
 export async function decodeForcing(bytes) {
-  const { kind, version, N, day, time, seconds, steps, oceanSteps, ...rest } = await decodeState(bytes);
+  const { kind, version, N, grid = null, day, time, seconds, steps, oceanSteps, ...rest } = await decodeState(bytes);
   if (kind !== 'forcing') throw new Error('not a forcing file');
   if (version !== FORCING_VERSION) throw new Error(`forcing version ${version}, not ${FORCING_VERSION}`);
   const fields = Object.fromEntries(FORCING_FIELDS.map(([name]) => [name, rest[name]]));
   check(N, fields);
-  return { N, day, time, seconds, steps, oceanSteps, fields };
+  return { N, ...(grid ? { grid } : {}), day, time, seconds, steps, oceanSteps, fields };
 }

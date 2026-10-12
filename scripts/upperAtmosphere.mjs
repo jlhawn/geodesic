@@ -5,8 +5,8 @@
 // temperature in 10-degree bands, its eddy kinetic energy and eddy
 // temperature (the departures from the band means), the largest edge wind,
 // the rms divergence, and the horizontal and vertical Courant numbers at the
-// N's time step (dt = 1350 * 16 / N); with several states, the means over
-// them. SURFACE and GRAVITY_WAVES (JSON, as for scripts/spinup.mjs; the
+// N's time step (dt = 1350 * 16 / N); with several states on one grid, the
+// means over them. SURFACE and GRAVITY_WAVES (JSON, as for scripts/spinup.mjs; the
 // model's defaults where unset) name the top treatment, whose zonal force
 // the tables give, by layer and band, from the CPU engine's own operators
 // on each state, with the gravity waves' absolute momentum flux by layer
@@ -16,8 +16,6 @@
 // layer of the 70-90 degree caps.
 // spinup.mjs's STRATOSPHERE line takes upperWindLine from here.
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
-import { buildMesh } from '../js/mesh.module.js';
 import { cellVector, divergence } from '../js/dynamics/operators.module.js';
 import { R_DRY, CP_DRY, P0, GRAVITY, createSigmaCore, sigmaGridName } from '../js/dynamics/sigmaCore.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
@@ -26,6 +24,7 @@ import { createSurface, TOP_DRAG } from '../js/physics/surface.module.js';
 import { spongeGeometry, spongeRates, dampEddies, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../js/dynamics/sponge.module.js';
 import { createGravityWaveDrag } from '../js/physics/gravityWaves.module.js';
 import { verticalVelocity } from '../js/levels.module.js';
+import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 
 const KAPPA = R_DRY / CP_DRY, DEG = 180 / Math.PI;
 
@@ -313,10 +312,12 @@ function topTendency(mesh, levels, state, options, waves) {
 
 async function main(files) {
   const SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), WAVES = JSON.parse(process.env.GRAVITY_WAVES ?? '{}');
-  let mesh = null, N = 0, sums = null, count = 0, levels = null, fluxSums = null;
+  let mesh = null, N = 0, relax = null, sums = null, count = 0, levels = null, fluxSums = null;
   for (const file of files) {
     const saved = await decodeState(new Uint8Array(readFileSync(file)));
-    if (!mesh) { N = saved.N; mesh = buildMesh(new Grid(N), { omega: 2 * Math.PI / SIDEREAL_DAY }); levels = savedLevels(saved); }
+    const found = stateRelax(saved).relax;
+    if (!mesh) { N = saved.N; relax = found; mesh = stateGrid(saved).mesh; levels = savedLevels(saved); }
+    else if (saved.N !== N || found !== relax) throw new Error(`${file} is on the N=${saved.N} grid of ${found} Lloyd passes, ${files[0]} on N=${N} with ${relax}: the means need one grid`);
     const dt = 1350 * 16 / N, state = [Float64Array.from(saved.pi), Float64Array.from(saved.theta), Float64Array.from(saved.u)];
     const { rows, bands, band } = upperAtmosphere(mesh, levels, state, { dt });
     const top = topTendency(mesh, levels, state, SURFACE, WAVES), force = zonalForce(mesh, top.tendency, rows.map((r) => r.k), band, bands);

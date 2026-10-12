@@ -30,7 +30,6 @@
 // with their sources; "from memory" marks a value not looked up for this
 // table.
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
@@ -38,6 +37,7 @@ import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { LOW_CLOUD_PRESSURE, CLOUD_OPTICS, cloudOptics, overlapped, DECORRELATION_LENGTH, DECORRELATION_SLOPE } from '../js/physics/radiation.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
+import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/cloudRegimes.mjs <state.bin>'); process.exit(1); }
@@ -47,7 +47,7 @@ const t0 = performance.now();
 
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, geography } = model;
 const { K, C, sigmaMid, dSigma, g, exnerLayer } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));

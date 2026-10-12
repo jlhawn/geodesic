@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto';
 import { dirname, basename, relative as relativeTo, resolve, isAbsolute } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Grid } from '../js/grid.module.js';
+import { stateGrid, gridHeader } from '../js/stateGrid.module.js';
 import { createSigmaCore, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
@@ -92,7 +93,7 @@ if (![...testCheckpointDays].every((d) => Number.isInteger(d) && d > firstDay &&
 const keepCheckpoints = process.env.KEEP_CHECKPOINTS === 'all';
 
 const t0 = performance.now(), seconds = () => (performance.now() - t0) / 1000;
-const model = await createGpuModel(new Grid(N), options);
+const model = await createGpuModel(resumed ? stateGrid(resumed, null).mesh : new Grid(N), options);
 const { mesh, core, state, seaIce, gpu } = model, ocean = model.oceanEngine, { device } = gpu;
 const [pi, theta, u, surfaceT, q, qc, ice] = state;
 const C = mesh.nCells, E = mesh.nEdges, K = core.K, L = ocean.layers, PH = gpu.layout.PH, SL = gpu.layout.S, OD = ocean.layout.OD;
@@ -403,7 +404,7 @@ async function saveCheckpoint(path, cloud) {
   kept.forEach((day, n) => { recentRain.set(day.rain, n * C); recentNet.set(day.net, n * C); });
   const dailyArrays = Object.fromEntries(DAILY.map((name) => [`daily_${name}`, Float64Array.from(daily[name], (v) => v ?? NaN)]));
   const bytes = encodeState({
-    kind: 'explainOcean', N, K, day: Math.round((model.time - runStartTime) / DAY), time: model.time, terrain: false, levels: core.levels,
+    kind: 'explainOcean', N, ...gridHeader(mesh), K, day: Math.round((model.time - runStartTime) / DAY), time: model.time, terrain: false, levels: core.levels,
     runStartTime, optionsJson: JSON.stringify({ ocean: OCEAN, ice: ICE }), segmentsJson: JSON.stringify(segments.map((s, n) => (n === segments.length - 1 ? { ...s, toTime: model.time } : s))), runJson: JSON.stringify(run), recentCount: kept.length,
     engineJson: JSON.stringify(engine), totalsJson: JSON.stringify(totals), countsJson: JSON.stringify({ spinup: spinup.counts }), eddyV: snap.eddy ? Float32Array.from(snap.eddy) : new Float32Array(0), cloud: Float32Array.from(cloud),
     pi, theta, u, surfaceT, q, qc, ice, concentration: seaIce.concentration, mlmSubsidence: r.mlmSubsidence, mlmHeight: r.mlmHeight, mlmGate: r.mlmGate,

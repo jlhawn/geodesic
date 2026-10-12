@@ -9,13 +9,13 @@
 // thermocline classes with the closure's pull near their token edges, and the
 // change of the mixed layer's current over one full ocean step.
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { cellVector, gradient, curl, kineticEnergy, laplacianVelocity } from '../js/dynamics/operators.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
 import { THIN, PV_FLOOR, THERMOCLINE_DENSITY, closureCoefficient, closureVelocity, closureAdjoint } from '../js/ocean/layered.module.js';
+import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) throw new Error('usage: node scripts/equatorialOcean.mjs <state.bin>');
@@ -30,7 +30,7 @@ const col = (s, n = 8) => String(s).padStart(n);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const N = saved.N, levels = savedLevels(saved);
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(new Grid(N), { topography, levels, ocean: OCEAN });
+const model = createModel(stateGrid(saved, topography).mesh, { topography, levels, ocean: OCEAN });
 const { mesh, core, state, surface, seaIce, ocean } = model;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);

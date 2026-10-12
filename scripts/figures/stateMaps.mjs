@@ -4,15 +4,14 @@
 // temperature, from a saved state on the CPU.
 //   node scripts/figures/stateMaps.mjs <state.bin> <out.json>
 import { writeFileSync } from 'node:fs';
-import { Grid } from '../../js/grid.module.js';
-import { buildMesh } from '../../js/mesh.module.js';
 import { createGeography } from '../../js/geography.module.js';
 import { readState, readTopography, figureHeader, DEG, rounded } from './figureState.mjs';
+import { stateGrid } from '../../js/stateGrid.module.js';
 
 const [file, out] = process.argv.slice(2);
 if (!file || !out) { console.error('usage: node scripts/figures/stateMaps.mjs <state.bin> <out.json>'); process.exit(2); }
 const saved = await readState(file);
-const mesh = buildMesh(new Grid(saved.N)), C = mesh.nCells;
+const mesh = stateGrid(saved).mesh, C = mesh.nCells;
 const geo = createGeography(mesh, readTopography());
 const { ocean, land } = saved, zero = new Float32Array(C);
 const vegetation = land.vegetation ?? zero, trees = land.canopy ?? zero, snow = land.snow ?? zero, concentration = saved.concentration ?? zero;

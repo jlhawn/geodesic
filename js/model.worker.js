@@ -12,6 +12,7 @@ import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
 import { fetchState, stateName, savedLevels } from './stateFile.module.js';
+import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
 import { runStore } from './snapshots.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
 import { LEVEL_FIELDS, OCEAN_FIELDS, CLOUD_TYPES, RAIN_MEMORY, VERTICAL_MEMORY, frameIsFinite } from './frames.module.js';
@@ -370,16 +371,19 @@ function savedCumulus(model) {
 }
 
 /*
- * A physics-free model on the saved run's mesh and sigma grid, with the
- * current topography so its land mask can steer the regrid; kept for
- * the ocean and land that follow the state, until the start is done.
+ * A physics-free model on the saved run's mesh (stateGrid) and sigma
+ * grid, with the current topography so its land mask can steer the
+ * regrid; kept for the ocean and land that follow the state, until the
+ * start is done. The saved state keeps the grid found for it.
  */
 let sourceModel = null;
 const sameLevels = (a, b) => a.length === b.length && a.every((sigma, k) => sigma === b[k]);
 function sourceFor(saved) {
   const levels = savedLevels(saved);
-  if (!sourceModel || sourceModel.N !== saved.N || sourceModel.topography !== currentTopography || !sameLevels(sourceModel.model.core.levels, levels)) {
-    sourceModel = { N: saved.N, topography: currentTopography, model: createModel(new Grid(saved.N), { physics: false, levels, ...(currentTopography ? { topography: currentTopography } : {}) }) };
+  if (!sourceModel || sourceModel.N !== saved.N || sourceModel.relax !== savedRelax(saved) || sourceModel.topography !== currentTopography || !sameLevels(sourceModel.model.core.levels, levels)) {
+    const { mesh, relax } = stateGrid(saved, currentTopography);
+    saved.grid = { relax };
+    sourceModel = { N: saved.N, relax, topography: currentTopography, model: createModel(mesh, { physics: false, levels, ...(currentTopography ? { topography: currentTopography } : {}) }) };
   }
   return sourceModel.model;
 }
@@ -610,22 +614,23 @@ async function snapshot() {
     land = Object.fromEntries(Object.entries(l).map(([k, v]) => [k, Float64Array.from(v).buffer]));
   }
   const transfer = [...Object.values(arrays), ...(ocean ? Object.values(ocean) : []), ...(land ? Object.values(land) : [])];
-  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, arrays, ocean, land }, transfer);
+  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), arrays, ocean, land }, transfer);
   refresh();
 }
 
 /*
  * Restores a snapshot while holding the model: into the running model
- * when the resolution and the sigma grid match, otherwise by starting
- * over with the snapshot as the saved state. The model stays paused
- * afterwards unless the page asked meanwhile for it to run.
+ * when the resolution, the mesh and the sigma grid match, otherwise by
+ * starting over with the snapshot as the saved state. The model stays
+ * paused afterwards unless the page asked meanwhile for it to run.
  */
 async function restore(snapshot) {
-  const saved = { N: snapshot.N, K: snapshot.K, day: snapshot.day, time: snapshot.time, terrain: !!snapshot.terrain };
+  const saved = { N: snapshot.N, K: snapshot.K, day: snapshot.day, time: snapshot.time, terrain: !!snapshot.terrain, ...(snapshot.grid ? { grid: snapshot.grid } : {}) };
   for (const [name, buffer] of Object.entries(snapshot.arrays)) saved[name] = new Float64Array(buffer);
   if (snapshot.ocean) saved.ocean = Object.fromEntries(Object.entries(snapshot.ocean).map(([k, buffer]) => [k, new Float64Array(buffer)]));
   if (snapshot.land) saved.land = Object.fromEntries(Object.entries(snapshot.land).map(([k, buffer]) => [k, new Float64Array(buffer)]));
-  if (!model || saved.N !== currentN || !sameLevels(savedLevels(saved), model.core.levels)) { await start({ ...lastStart, saved, paused: true }); return; }
+  if (model && saved.N === currentN && savedRelax(saved) === null) saved.grid = { relax: stateRelax(saved, currentTopography).relax };
+  if (!model || saved.N !== currentN || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels)) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);
   const init = initialState(model, saved, currentN);
@@ -643,7 +648,7 @@ async function restore(snapshot) {
   model.time = saved.time;
   restartRain();
   serving = true;
-  self.postMessage({ type: 'ready', N: currentN, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, ocean: !!model.ocean, ...geographyMessage(model) });
+  self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, ocean: !!model.ocean, ...geographyMessage(model) });
   await sendFrame();
   sourceModel = null;
 }
@@ -669,7 +674,9 @@ async function start(message) {
   const step = message.dt ?? 1350 * 16 / N;
   Object.assign(options, withCadence(options, step, N));
   status(`building the N=${N} grid…`, 0.55);
-  const grid = new Grid(N);
+  const found = saved && saved.N === N ? stateGrid(saved, options.topography ?? null) : null;
+  if (found) saved.grid = { relax: found.relax };
+  const grid = found ? found.mesh : new Grid(N);
   status(gpuWanted ? 'compiling the GPU model…' : workers > 1 ? `starting ${workers} workers…` : 'building the model…', 0.65);
   const built = gpuWanted ? await createGpuModel(grid, options) : workers > 1 ? await createParallelModel(grid, options, workers) : createModel(grid, options);
   await built.settle?.();
@@ -700,7 +707,7 @@ async function start(message) {
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
   restartRain();
   serving = true;
-  self.postMessage({ type: 'ready', N, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, ocean: !!model.ocean, ...geographyMessage(model) });
+  self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, ocean: !!model.ocean, ...geographyMessage(model) });
   refresh();
   sourceModel = null;
 }

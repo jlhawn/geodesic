@@ -59,7 +59,77 @@ test('load() fits carried-over columns to the bathymetry and fills sea cells tha
     assert.ok(ocean.h[i] >= 50 - 1e-9 || ocean.h[i] >= ocean.D[i] - 1, `mixed layer at cell ${i} keeps its floor (${ocean.h[i]})`);
     assert.ok(ocean.T0[i] > 250 && ocean.T0[i] < 320, `SST at cell ${i} is physical (${ocean.T0[i]})`);
   }
-  assert.ok(Math.abs(ocean.T0[empty] - 290) < 1e-6, 'an empty sea cell takes the climatology surface temperature');
+});
+
+test('a sea cell that arrives empty takes its sea neighbors\' area-weighted column, sea level and SST, never a column at the land\'s temperature, and one ringed by empty cells takes it on the next sweep', () => {
+  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.abs(lon) < 60 * DEG && Math.abs(lat) < 50 * DEG ? -4000 : 500)));
+  const ocean = createOcean(mesh, { everySteps: 1, geography });
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 275 + 25 * Math.cos(lat) ** 2), ice = new Float64Array(C), flux = new Float64Array(C);
+  ocean.initialize(surfaceT, ice);
+  const stressField = Float64Array.from(zonalWindOnEdges(mesh, (lat) => 8 * Math.cos(3 * lat)), (w) => RHO_AIR * DRAG * 8 * w);
+  for (let n = 0; n < 20; n++) ocean.advance(surfaceT, ice, flux, stressField, 1350);
+  const saved = ocean.serialize(), L = saved.h.length / C, { cellsOnCell, nEdgesOnCell, maxEdges, areaCell } = mesh;
+  const neighbors = (i) => Array.from({ length: nEdgesOnCell[i] }, (_, m) => cellsOnCell[maxEdges * i + m]);
+  const flat = (i) => ocean.cellOcean[i] && neighbors(i).every((j) => ocean.cellOcean[j] && ocean.D[j] === ocean.D[i]);
+  const inner = Array.from({ length: C }, (_, i) => i).find((i) => flat(i) && neighbors(i).every(flat));
+  assert.ok(inner !== undefined, 'the basin has a cell whose neighbors and theirs are all sea at its depth');
+  const ring = neighbors(inner), outer = ring[0], emptied = [inner, ...ring];
+  const empty = (i) => { for (let k = 0; k < L; k++) { saved.h[k * C + i] = 0; saved.T[k * C + i] = 0; saved.S[k * C + i] = 0; } saved.eta[i] = 0; };
+  const mean = (i, wet) => {
+    const from = neighbors(i).filter(wet);
+    const area = from.reduce((s, j) => s + areaCell[j], 0), at = (k, j) => k * C + j;
+    const h = Array.from({ length: L }, (_, k) => from.reduce((s, j) => s + areaCell[j] * saved.h[at(k, j)], 0) / area);
+    const heat = from.reduce((s, j) => s + areaCell[j] * saved.h[j] * saved.T[j], 0) / area;
+    return { h, eta: from.reduce((s, j) => s + areaCell[j] * saved.eta[j], 0) / area, sst: heat / h[0] };
+  };
+  const expected = mean(outer, (j) => !emptied.includes(j));
+  const landT = 316, start = Float64Array.from(surfaceT);
+  for (const i of emptied) { empty(i); start[i] = landT; }
+  const reloaded = createOcean(mesh, { everySteps: 1, geography });
+  reloaded.load(saved, start, ice);
+  for (const i of emptied) {
+    let sum = 0;
+    for (let k = 0; k < L; k++) sum += reloaded.h[k * C + i];
+    assert.ok(Math.abs(sum - reloaded.D[i] - reloaded.eta[i]) < 1e-6, `column ${i} sums to its depth plus sea level (${sum} vs ${reloaded.D[i]} + ${reloaded.eta[i]})`);
+    assert.ok(Math.abs(reloaded.T0[i] - landT) > 5, `cell ${i} is not at the land's temperature (${reloaded.T0[i]})`);
+    assert.equal(start[i], reloaded.T0[i], `the surface over cell ${i} takes its mixed layer's temperature`);
+  }
+  for (let k = 0; k < L; k++) assert.ok(Math.abs(reloaded.h[k * C + outer] - expected.h[k]) < 1e-9, `layer ${k} of the emptied cell is its wet neighbors' mean (${reloaded.h[k * C + outer]} vs ${expected.h[k]})`);
+  assert.ok(Math.abs(reloaded.eta[outer] - expected.eta) < 0.05, `its sea level is its neighbors' (${reloaded.eta[outer]} vs ${expected.eta})`);
+  assert.ok(Math.abs(reloaded.T0[outer] - expected.sst) < 1e-9, `its SST is its neighbors' (${reloaded.T0[outer]} vs ${expected.sst})`);
+  const area = ring.reduce((s, j) => s + areaCell[j], 0), ringMean = (values, k) => ring.reduce((s, j) => s + areaCell[j] * values[k * C + j], 0) / area;
+  for (let k = 0; k < L; k++) assert.ok(Math.abs(reloaded.h[k * C + inner] - ringMean(reloaded.h, k)) < 1e-9, `layer ${k} of the cell ringed by empty ones is the mean of the ring as the first sweep filled it`);
+  assert.ok(Math.abs(reloaded.eta[inner] - ringMean(reloaded.eta, 0)) < 0.05, `the ringed cell's sea level is the ring's (${reloaded.eta[inner]})`);
+});
+
+test('sea cells that arrive empty in an enclosed basin no neighbor sweep reaches take the climatology column and sum to their depth plus sea level', () => {
+  const { xCell, cellsOnCell, nEdgesOnCell, maxEdges } = mesh;
+  const neighbors = (i) => Array.from({ length: nEdgesOnCell[i] }, (_, m) => cellsOnCell[maxEdges * i + m]);
+  const dot = (lat, lon, i) => Math.cos(lat) * Math.cos(lon) * xCell[3 * i] + Math.cos(lat) * Math.sin(lon) * xCell[3 * i + 1] + Math.sin(lat) * xCell[3 * i + 2];
+  const within = (lat, lon, i) => neighbors(i).every((j) => dot(lat, lon, i) >= dot(lat, lon, j));
+  const center = Array.from({ length: C }, (_, i) => i).reduce((best, i) => (dot(0, 150 * DEG, i) > dot(0, 150 * DEG, best) ? i : best), 0);
+  const lake = [center, neighbors(center)[0]];
+  const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => ((Math.abs(lon) < 60 * DEG && Math.abs(lat) < 50 * DEG) || lake.some((i) => within(lat, lon, i)) ? -4000 : 500)));
+  const ocean = createOcean(mesh, { everySteps: 1, geography });
+  assert.ok(lake.every((i) => ocean.cellOcean[i]) && lake.every((i) => neighbors(i).every((j) => lake.includes(j) || !ocean.cellOcean[j])), 'the lake is two sea cells ringed by land');
+  ocean.initialize(new Float64Array(C).fill(290), new Float64Array(C));
+  const saved = ocean.serialize(), L = saved.h.length / C;
+  for (const i of lake) { for (let k = 0; k < L; k++) { saved.h[k * C + i] = 0; saved.T[k * C + i] = 0; saved.S[k * C + i] = 0; } saved.eta[i] = 0; }
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 275 + 25 * Math.cos(lat) ** 2), ice = new Float64Array(C);
+  const climatology = createOcean(mesh, { everySteps: 1, geography });
+  climatology.initialize(Float64Array.from(surfaceT), ice);
+  const reloaded = createOcean(mesh, { everySteps: 1, geography });
+  reloaded.load(saved, Float64Array.from(surfaceT), ice);
+  for (const i of lake) {
+    let sum = 0;
+    for (let k = 0; k < L; k++) {
+      const n = k * C + i;
+      for (const name of ['h', 'Q', 'W']) assert.equal(reloaded[name][n], climatology[name][n], `layer ${k}'s ${name} at lake cell ${i} is the climatology's`);
+      sum += reloaded.h[n];
+    }
+    assert.ok(Math.abs(sum - reloaded.D[i] - reloaded.eta[i]) < 1e-6, `column ${i} sums to its depth plus sea level (${sum} vs ${reloaded.D[i]} + ${reloaded.eta[i]})`);
+    assert.ok(Math.abs(reloaded.T0[i] - surfaceT[i]) < 1e-9, `the lake's mixed layer is at the surface temperature it was loaded with (${reloaded.T0[i]} vs ${surfaceT[i]})`);
+  }
 });
 
 const labels = (densities, salinities) => {

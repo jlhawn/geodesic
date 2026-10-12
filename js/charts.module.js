@@ -1,5 +1,6 @@
-import { Grid } from './grid.module.js';
 import { createModel } from './model.module.js';
+import { topographyFromInt16 } from './geography.module.js';
+import { stateGrid } from './stateGrid.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { LEVELS, levelFields } from './levels.module.js';
 import { fetchState, stateName, listedStates, savedLevels } from './stateFile.module.js';
@@ -43,10 +44,14 @@ function niceStep(range, target = 14) {
   return 10 * mag;
 }
 
-const models = new Map();
-function modelFor(state) {
-  const levels = savedLevels(state), key = `${state.N} ${levels.join(' ')}`;
-  if (!models.has(key)) models.set(key, createModel(new Grid(state.N), { levels }));
+const grids = new WeakMap(), models = new Map();
+function gridFor(state, topography) {
+  if (!grids.has(state)) grids.set(state, stateGrid(state, topography));
+  return grids.get(state);
+}
+function modelFor(state, found) {
+  const levels = savedLevels(state), key = `${state.N} ${found.relax} ${levels.join(' ')}`;
+  if (!models.has(key)) models.set(key, createModel(found.mesh, { levels }));
   return models.get(key);
 }
 
@@ -163,13 +168,15 @@ function svgFor(model, grid, title, subtitle, fill, contourField, contourStep, u
 }
 
 /*
- * Builds the chart for one level of a saved state: isobars over the
+ * Builds the chart for one level of a saved state, on the grid it was
+ * made on (stateGrid, matched under `topography`): isobars over the
  * lowest-layer wind at the surface, or geopotential-height contours over
  * the wind interpolated to that pressure.
  */
-export function chartFor(state, level) {
-  const model = modelFor(state);
-  const grid = [...new Grid(state.N)];
+export function chartFor(state, level, topography = null) {
+  const found = gridFor(state, topography);
+  const model = modelFor(state, found);
+  const grid = [...found.grid];
   const { K, C, E, sigmaMid } = model.core.diagnostics;
   const pi = Float64Array.from(state.pi), theta = Float64Array.from(state.theta), u = Float64Array.from(state.u);
   model.core.diagnose(pi, theta);
@@ -219,6 +226,7 @@ export default async function runCharts(directory = 'runs/') {
   if (params.get('state') && names.includes(params.get('state'))) stateSelect.value = params.get('state');
   if (params.get('level')) levelSelect.value = params.get('level');
   const states = new Map();
+  const topography = fetch(new URL('../data/topography_0p25.bin', import.meta.url)).then((response) => (response.ok ? response.arrayBuffer() : null)).then((buffer) => (buffer ? topographyFromInt16(buffer) : null)).catch(() => null);
   let current = '';
   async function render() {
     const name = stateSelect.value, level = levelSelect.value;
@@ -228,7 +236,7 @@ export default async function runCharts(directory = 'runs/') {
     status.textContent = `rendering ${level === 'surface' ? 'surface' : level + ' hPa'}…`;
     await new Promise((resolve) => setTimeout(resolve, 0));
     const t0 = performance.now();
-    current = chartFor(state, level);
+    current = chartFor(state, level, await topography);
     holder.innerHTML = current;
     status.textContent = `${name} · ${level === 'surface' ? 'surface' : level + ' hPa'} · ${(performance.now() - t0).toFixed(0)} ms`;
     history.replaceState(null, '', `?state=${encodeURIComponent(name)}&level=${level}`);

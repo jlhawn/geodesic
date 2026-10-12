@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
@@ -792,6 +792,7 @@ const OCEAN_REDUCED = [
   ['thermocline', 'sum', 'wet * a * thermo'], ['heat', 'sum', 'wet * a * RHOCP * heat'],
   ['interiorT', 'sum', 'wet * a * interiorQ'], ['interiorH', 'sum', 'wet * a * interiorH'],
   ['ssh', 'max', 'wet * abs(OD[O_ETA + i])'], ['speed', 'max', 'speed'], ['limited', 'sum', 'limited'], ['transport', 'max', 'transport'],
+  ['thinned', 'sum', `wet * a * select(0.0, 1.0, h0 < min(MINTHICK, h0 + interiorH - f32(L - 1) * EPSO) - ${THINNED_MARGIN})`],
 ];
 const oceanReducedSetup = (thermoclineLayers) => `    let a = MF[F_AREA + i];
     let wet = select(0.0, 1.0, OD[O_CMASK + i] > 0.5);
@@ -1318,12 +1319,15 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     const h = Float64Array.from(saved.h), u = Float64Array.from(saved.u), eta = Float64Array.from(saved.eta);
     const Q = new Float64Array(L * C), W = new Float64Array(L * C);
     for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
-    fitColumns({ h, Q, W, eta }, start, { D, cellOcean, L, C, labelT, labelS, minimumThickness: o.minimumThickness });
+    const { fromNeighbors } = fitColumns({ h, Q, W, eta }, start, { D, cellOcean, L, C, labelT, labelS, minimumThickness: o.minimumThickness, mesh });
     for (let e = 0; e < E; e++) if (!edgeOcean[e]) for (let k = 0; k < L; k++) u[k * E + e] = 0;
     uploadArrays({ h, u, Q, W, eta }, surfaceT, ice, null, concentration);
     const previousT0 = new Float64Array(C);
     for (let i = 0; i < C; i++) previousT0[i] = Q[i] / Math.max(EPS, h[i]);
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVT0, Float32Array.from(previousT0));
+    let surfaced = false;
+    for (const i of fromNeighbors) if (!(ice[i] > 0)) { surfaceT[i] = previousT0[i]; surfaced = true; }
+    return surfaced;
   }
 
   async function download() {
@@ -1372,8 +1376,8 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   }
 
   function diagnosticsFrom(sums) {
-    const { area, depth, heat, interiorT, interiorH, speed, thermocline, salinity, ssh, transport, limited } = sums;
-    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermocline / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited };
+    const { area, depth, heat, interiorT, interiorH, speed, thermocline, salinity, ssh, transport, limited, thinned } = sums;
+    return { oceanUpperDepth: depth / area, oceanHeat: heat / area, oceanInteriorT: interiorH > 0 ? interiorT / interiorH : 0, oceanSpeed: speed, oceanThermoclineDepth: thermocline / area, oceanSalinity: salinity / area, oceanSSH: ssh, oceanTransport: transport / 1e6, oceanLimited: limited, oceanThinned: thinned / area };
   }
 
   /*

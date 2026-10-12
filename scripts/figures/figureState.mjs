@@ -3,12 +3,12 @@
 // spin-up segment would (scripts/spinup.mjs).
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
-import { Grid } from '../../js/grid.module.js';
 import { topographyFromInt16 } from '../../js/geography.module.js';
 import { createGpuModel } from '../../js/gpu/model.gpu.js';
 import { withCadence } from '../../js/cadence.module.js';
 import { decodeState, savedLevels, stateName } from '../../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../../js/physics/regrid.module.js';
+import { stateGrid } from '../../js/stateGrid.module.js';
 
 export const readTopography = () => topographyFromInt16(readFileSync(new URL('../../data/topography_0p25.bin', import.meta.url)).buffer);
 export const readState = async (file) => decodeState(new Uint8Array(readFileSync(file)));
@@ -39,9 +39,9 @@ export const figureHeader = (file, saved) => ({ tag: tagOf(file), day: saved.day
  * loaded with everything a whole-day snapshot carries.
  */
 export async function gpuModelFrom(saved) {
-  const env = (name) => JSON.parse(process.env[name] ?? '{}');
-  const model = await createGpuModel(new Grid(saved.N), {
-    topography: readTopography(), levels: savedLevels(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, dt(saved.N), saved.N),
+  const env = (name) => JSON.parse(process.env[name] ?? '{}'), topography = readTopography();
+  const model = await createGpuModel(stateGrid(saved, topography).mesh, {
+    topography, levels: savedLevels(saved), ...withCadence({ ocean: env('OCEAN'), radiation: { clearSkyPass: true, ...env('RADIATION') }, dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, dt(saved.N), saved.N),
     moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), land: env('LAND'),
   });
   const { state } = model;

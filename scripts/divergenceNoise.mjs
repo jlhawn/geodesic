@@ -9,12 +9,11 @@
 // sea floor.
 //   [LAT=10] node scripts/divergenceNoise.mjs <state.bin>...
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
-import { buildMesh } from '../js/mesh.module.js';
 import { topographyFromInt16, createGeography } from '../js/geography.module.js';
 import { decodeState } from '../js/stateFile.module.js';
 import { divergence } from '../js/dynamics/operators.module.js';
 import { createOcean, THIN } from '../js/ocean/layered.module.js';
+import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 
 const files = process.argv.slice(2);
 if (!files.length) throw new Error('usage: node scripts/divergenceNoise.mjs <state.bin>...');
@@ -22,11 +21,11 @@ const LAT = Number(process.env.LAT ?? 10);
 let cache = null;
 for (const FILE of files) {
   const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-  const N = saved.N;
-  if (!cache || cache.N !== N) {
-    const mesh = buildMesh(new Grid(N));
+  const N = saved.N, key = `${N} ${stateRelax(saved).relax}`;
+  if (!cache || cache.key !== key) {
+    const mesh = stateGrid(saved).mesh;
     const geography = createGeography(mesh, topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer));
-    cache = { N, mesh, geography };
+    cache = { key, mesh, geography };
   }
   const { mesh, geography } = cache, C = mesh.nCells, E = mesh.nEdges;
   const ocean = createOcean(mesh, { geography, everySteps: 8 });

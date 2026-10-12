@@ -23,7 +23,6 @@
 // scripts/verticalAudit.mjs; the radiation must use longwaveScheme
 // 'correlated'.
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
@@ -35,6 +34,7 @@ import { OZONE_CM_ATM } from '../js/physics/shortwaveGases.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
+import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/longwaveOverlap.mjs <state.bin>'); process.exit(1); }
@@ -45,7 +45,7 @@ const say = (s = '') => console.log(s);
 
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: false, radiation: { clearSkyPass: true, ...RADIATION }, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
 const { mesh, core, state, radiation, boundaryLayer: bl, moist, seaIce, land, surface } = model;
 const { K, C, levels, sigmaMid, dSigma, g, exnerLayer, geopotential } = core.diagnostics;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));

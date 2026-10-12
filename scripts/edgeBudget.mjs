@@ -3,17 +3,17 @@
 // 'drag+rest' is the tendency less the other terms):
 //   EDGES=20091,20281 node scripts/edgeBudget.mjs <state.bin>
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { gradient, curl, kineticEnergy, laplacianVelocity } from '../js/dynamics/operators.module.js';
 import { THIN, PV_FLOOR, closureCoefficient } from '../js/ocean/layered.module.js';
+import { stateGrid } from '../js/stateGrid.module.js';
 const FILE = process.argv[2], EDGES = (process.env.EDGES ?? '').split(',').map(Number);
 const OCEAN = { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') };
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const N = saved.N, topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(new Grid(N), { topography, levels: savedLevels(saved), ocean: OCEAN });
+const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: OCEAN });
 const { mesh, core, state, surface, seaIce, ocean } = model;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);

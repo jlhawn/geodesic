@@ -6,12 +6,11 @@
 // first ring alone with its transpose ('one ring').
 //   [BOX=-2,2,180,260] [CLASSES=1022.5,1023,...] node scripts/closureDrag.mjs <state.bin>...
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
-import { buildMesh } from '../js/mesh.module.js';
 import { topographyFromInt16, createGeography } from '../js/geography.module.js';
 import { decodeState } from '../js/stateFile.module.js';
 import { laplacianVelocity } from '../js/dynamics/operators.module.js';
 import { createOcean, closureCoefficient, closureVelocity, closureAdjoint, THIN } from '../js/ocean/layered.module.js';
+import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 
 const FILES = process.argv.slice(2);
 if (!FILES.length) throw new Error('usage: node scripts/closureDrag.mjs <state.bin>...');
@@ -21,10 +20,10 @@ const deg = 180 / Math.PI;
 let grid = null;
 for (const FILE of FILES) {
   const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-  const N = saved.N;
-  if (!grid || grid.N !== N) {
-    const mesh = buildMesh(new Grid(N));
-    grid = { N, mesh, geography: createGeography(mesh, topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer)) };
+  const N = saved.N, key = `${N} ${stateRelax(saved).relax}`;
+  if (!grid || grid.key !== key) {
+    const mesh = stateGrid(saved).mesh;
+    grid = { key, mesh, geography: createGeography(mesh, topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer)) };
   }
   const { mesh, geography } = grid, E = mesh.nEdges, { dcEdge, dvEdge, latEdge, xEdge } = mesh;
   const ocean = createOcean(mesh, { geography, everySteps: 8 });

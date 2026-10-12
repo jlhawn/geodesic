@@ -5,16 +5,15 @@
 // class thicker than a token), on the CPU.
 //   node scripts/figures/eqsection.mjs <state.bin> <out.json>
 import { writeFileSync } from 'node:fs';
-import { Grid } from '../../js/grid.module.js';
-import { buildMesh } from '../../js/mesh.module.js';
 import { createGeography } from '../../js/geography.module.js';
 import { EPS } from '../../js/ocean/layered.module.js';
 import { readState, readTopography, figureHeader, DEG, rounded } from './figureState.mjs';
+import { stateGrid } from '../../js/stateGrid.module.js';
 
 const [file, out] = process.argv.slice(2);
 if (!file || !out) { console.error('usage: node scripts/figures/eqsection.mjs <state.bin> <out.json>'); process.exit(2); }
 const s = await readState(file);
-const mesh = buildMesh(new Grid(s.N)), C = mesh.nCells, L = s.ocean.h.length / C;
+const mesh = stateGrid(s).mesh, C = mesh.nCells, L = s.ocean.h.length / C;
 const geo = createGeography(mesh, readTopography());
 const DEPTHS = Array.from({ length: 61 }, (_, i) => 5 * i);
 const LONS = Array.from({ length: 81 }, (_, i) => 120 + 2 * i);

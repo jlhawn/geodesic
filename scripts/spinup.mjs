@@ -117,8 +117,8 @@
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { basename } from 'node:path';
 import { Grid } from '../js/grid.module.js';
+import { stateGrid, gridHeader, savedRelax, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
 import { topographyFromInt16, createGeography } from '../js/geography.module.js';
-import { buildMesh } from '../js/mesh.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
@@ -177,8 +177,12 @@ const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} l
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
 const fallback = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');
 const climatology = !saved && !process.env.FROM && chosen !== 'none' ? chosen : null;
-const model = await createGpuModel(new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: LAND, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
+const fromState = !saved && process.env.FROM ? await decodeState(new Uint8Array(readFileSync(process.env.FROM))) : null;
+if (fromState && fromState.N !== N) throw new Error(`FROM ${process.env.FROM} is N=${fromState.N}, not ${N}`);
+const found = saved || fromState ? stateGrid(saved ?? fromState, topography) : null;
+const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: LAND, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
+const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
 function loadSaved(saved) {
   ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
@@ -209,23 +213,23 @@ if (saved) {
   oceanFrom = saved.oceanFrom ?? null;
   if (OCEAN_FROM && oceanFrom === basename(OCEAN_FROM)) log(`${file} already carries the ocean of ${OCEAN_FROM}`);
   else if (OCEAN_FROM) {
-    const alone = await decodeState(new Uint8Array(readFileSync(OCEAN_FROM)));
+    const alone = await decodeState(new Uint8Array(readFileSync(OCEAN_FROM))), aloneDry = savedDryColumns(alone);
+    if (savedRelax(alone) !== null ? savedRelax(alone) !== mesh.relax : aloneDry && maskMismatches(aloneDry, model.geography.land) > 0) throw new Error(`${OCEAN_FROM} was not made on this run's mesh of ${mesh.relax} Lloyd passes`);
     saved = withOceanOf(saved, alone, model.geography.land);
     oceanYears = saved.oceanYears;
     oceanFrom = basename(OCEAN_FROM);
     log(`ocean, sea ice and sea surface of ${file} replaced by those of ${OCEAN_FROM} (day ${alone.day}, ${alone.oceanYears ?? 0} years alone; ${oceanYears} in all)`);
   }
   loadSaved(saved);
-  log(`--- ${new Date().toISOString()} continuing from ${file} (day ${saved.day}${startStep ? `, step ${startStep} of ${perDay}` : ''}) on ${grid} after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
+  log(`--- ${new Date().toISOString()} continuing from ${file} (day ${saved.day}${startStep ? `, step ${startStep} of ${perDay}` : ''}) on ${grid}, mesh of ${meshNote}, after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 } else {
   if (OCEAN_FROM) throw new Error(`OCEAN_FROM needs a ${TAG}_dayDDDD.bin in ${OUT} to hand the ocean to`);
   initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => state[a].set(values));
   for (let i = 0; i < C; i++) if (model.geography.land[i]) state[6][i] = 0;
-  const from = process.env.FROM ? await decodeState(new Uint8Array(readFileSync(process.env.FROM))) : null, iceFrom = !!from && process.env.ICE_FROM === '1';
+  const from = fromState, iceFrom = !!from && process.env.ICE_FROM === '1';
   const fromLevels = from ? savedLevels(from) : null, fromGrid = from ? sigmaGridName(fromLevels) ?? 'a saved grid' : null;
   let atmosphere = `a fresh atmosphere on ${grid}`;
   if (from) {
-    if (from.N !== N) throw new Error(`FROM ${process.env.FROM} is N=${from.N}, not ${N}`);
     if (ATMOSPHERE === 'carry') {
       const { pi, theta, u, q, qc } = remapLevels(fromLevels, levels, from, mesh);
       [pi, theta, u, from.surfaceT, q, qc].forEach((values, a) => { if (values) state[a].set(values); });
@@ -256,14 +260,14 @@ if (saved) {
   }
   if (process.env.LAND_FROM) {
     const seed = await decodeState(new Uint8Array(readFileSync(process.env.LAND_FROM)));
-    const sourceMesh = seed.N === N ? mesh : buildMesh(new Grid(seed.N));
+    const sourceMesh = seed.N === N ? mesh : stateGrid(seed, topography).mesh;
     const source = { mesh: sourceMesh, geography: seed.N === N ? model.geography : createGeography(sourceMesh, topography) };
     model.land.load(regridLand(source, { mesh, geography: model.geography, land: model.land }, seed.land, null, { ice: seed.ice, surfaceT: seed.surfaceT }), state[6]);
     log(`land seeded from ${process.env.LAND_FROM} (N=${seed.N}, day ${seed.day})`);
   }
   const { record } = model.land, held = ['', 'the trees at half the cover and the topsoil carbon at', 'no trees and the topsoil carbon at', 'the trees at the cover times their record\'s factor and the topsoil carbon at'][record[1]];
   log(`land: record ${record[0] < 0 ? 'taken over (exponential means)' : `${(record[0] / 86400).toFixed(0)} days old`}${held ? `, ${['', 'neutral', 'bare', 'green'][record[2]]} start holding ${held} ${Object.values(model.land.placeholders)[record[1] - 1].carbon.toFixed(3)} kg/m²` : ''}; jumps ${LAND_JUMPS === 'fresh' ? (record[2] >= 1 ? 'as the record passes 365 and 730 days' : 'none (the land did not start fresh)') : LAND_JUMPS}`);
-  log(`--- ${new Date().toISOString()} fresh start at N=${N} on ${grid} (${C} cells, dt ${dt} s, ${perDay} steps a day) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
+  log(`--- ${new Date().toISOString()} fresh start at N=${N} on ${grid}, mesh of ${meshNote} (${C} cells, dt ${dt} s, ${perDay} steps a day) after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup`);
 }
 const everySteps = model.oceanEngine ? model.oceanEngine.everySteps : 1, radiationEvery = model.gpu.physics.radiationEvery;
 const gcd = (a, b) => (b ? gcd(b, a % b) : a), lcm = (a, b) => a * b / gcd(a, b), cadence = lcm(lcm(everySteps, radiationEvery), DRAG_EVERY);
@@ -450,7 +454,7 @@ if (days > 0 && !step) {
 const name = `${TAG}_day${String(day).padStart(4, '0')}${step ? `_step${String(step).padStart(4, '0')}` : ''}.bin`;
 const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, { mlmSubsidence, mlmHeight, mlmGate, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, evaporation } = model.radiation, { convectiveRain, largeScaleRain, cumulusCover, cumulusWater, subcloudVirtual } = model.moist, { windSpeed } = model.surface, boundaryDepth = model.boundaryLayer.depth, mixingTop = model.boundaryLayer.mixingTop, boundaryRegime = model.boundaryLayer.regime, boundaryBuoyancy = model.boundaryLayer.buoyancyFlux;
 const exchangeFields = model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {};
-const header = { N, K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
+const header = { N, ...gridHeader(mesh), K: core.K, day, ...(step ? { step } : {}), time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels, ...(oceanYears ? { oceanYears } : {}), ...(oceanFrom ? { oceanFrom } : {}) };
 writeFileSync(`${OUT}/${name}.partial`, encodeState({ ...header, energyRecord: model.energyRecord.values, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, ...(RADIATION.clearSkyPass ? { meanShortwaveCloudEffect, meanLongwaveCloudEffect } : {}), boundaryDepth, mixingTop, boundaryRegime, boundaryBuoyancy, windSpeed, evaporation, ...exchangeFields, cumulusCover, cumulusWater, subcloudVirtual, ocean, land: landState, ...partial }, { f64: ['forcingRain', 'forcingRunoff'] }));
 renameSync(`${OUT}/${name}.partial`, `${OUT}/${name}`);
 const kept = snapshots(), whole = kept.filter((f) => !inDay(f));

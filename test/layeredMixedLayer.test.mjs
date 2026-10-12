@@ -163,3 +163,25 @@ test('the layer left a few metres thick under a 600 m mixed layer at 45°S stays
   assert.ok(fastest[0.5] < 0.3, `${fastest[0.5]} m/s`);
   assert.ok(fastest[0] > 1.5 * fastest[0.5], `the edge thickness no longer drives the remnant (${fastest[0]} against ${fastest[0.5]} m/s)`);
 });
+
+test('the thinned share counts the sea whose mixed layer is below its floor while the water beneath could fill it, and the refill tally takes what the floor drew', () => {
+  const ocean = createOcean(mesh, { everySteps: 1 });
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 275 + 25 * Math.cos(lat) ** 2), ice = new Float64Array(C), flux = new Float64Array(C);
+  ocean.initialize(surfaceT, ice);
+  assert.equal(ocean.diagnostics().oceanThinned, 0);
+  const { h, Q, W } = ocean, L = ocean.layers, sea = [];
+  for (let i = 0; i < C; i++) if (ocean.cellOcean[i]) sea.push(i);
+  const [short, emptied] = sea;
+  const move = (i, amount) => { const f = amount / h[i]; h[C + i] += amount; Q[C + i] += Q[i] * f; W[C + i] += W[i] * f; h[i] -= amount; Q[i] -= Q[i] * f; W[i] -= W[i] * f; };
+  move(short, 20);
+  for (let k = 1; k < L; k++) { const n = k * C + emptied; h[n] = 0.01; }
+  h[emptied] = 30;
+  const seaArea = sea.reduce((s, i) => s + mesh.areaCell[i], 0);
+  assert.ok(Math.abs(ocean.diagnostics().oceanThinned - mesh.areaCell[short] / seaArea) < 1e-12, 'only the column that could refill counts');
+  ocean.refilled.water.fill(0); ocean.refilled.heat.fill(0);
+  ocean.advance(surfaceT, ice, flux, new Float64Array(mesh.nEdges), 1350);
+  assert.ok(ocean.refilled.water[short] > 0, `the floor drew water into the shortened column (${ocean.refilled.water[short]} m)`);
+  assert.ok(ocean.refilled.water.every((x) => x >= 0));
+  assert.ok(h[short] >= 50 - 1e-9);
+  assert.ok(Math.abs(ocean.diagnostics().oceanThinned) < 1e-12, 'the instant refill leaves nothing thinned that could be filled');
+});

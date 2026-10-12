@@ -9,7 +9,7 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * so that a run is named by its content and a store can keep its chunks
  * under their hashes; or the same state in binary: 'GCMS', a
  * little-endian u32 header length, the JSON header { N, K, day, time,
- * terrain, arrays: [{ name, length, offset, type }] } (which may end in
+ * terrain, grid, arrays: [{ name, length, offset, type }] } (which may end in
  * spaces counted in that length), zero padding to a multiple of 4, then
  * each array at its byte offset from the end of the padding, as float32
  * unless its type is 'f64'. Array names are the JSON
@@ -18,6 +18,8 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * than the file name, since a server may already have inflated a .gz
  * file on the way. The array 'levels' holds the interface σ values of the
  * atmosphere's grid, top to ground; a state without it is on 'cam26'.
+ * `grid` is { relax }, the Lloyd passes of the mesh the state was made on
+ * (stateGrid.module.js finds them for a state saved without it).
  */
 export function stateName(file) {
   return file.replace(/(?:\.json(?:\.gz)?|\.parts\.json|\.bin(?:\.gz)?)$/, '');
@@ -90,7 +92,7 @@ export function encodeState(state, { f64 = [] } = {}) {
     offset += size * values.length;
     return entry;
   });
-  const meta = Object.fromEntries(Object.entries(state).filter(([, value]) => typeof value !== 'object'));
+  const meta = Object.fromEntries(Object.entries(state).filter(([key, value]) => typeof value !== 'object' || (key === 'grid' && value && !ArrayBuffer.isView(value) && !Array.isArray(value))));
   const json = JSON.stringify({ ...meta, arrays });
   const header = new TextEncoder().encode(json.padEnd(json.length + ((8 - ((8 + new TextEncoder().encode(json).length) % 8)) % 8)));
   const start = 8 + header.length;

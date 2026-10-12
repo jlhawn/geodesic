@@ -4,7 +4,7 @@ import { encodeForcing, decodeForcing, FORCING_FIELDS, forcingName, forcingDay }
 import { encodeState } from '../js/stateFile.module.js';
 
 const N = 6, C = 10 * N * N + 2, E = 30 * N * N;
-const header = { N, day: 1827, time: 1827 * 86400, seconds: 86400, steps: 24, oceanSteps: 6 };
+const header = { N, grid: { relax: 30 }, day: 1827, time: 1827 * 86400, seconds: 86400, steps: 24, oceanSteps: 6 };
 const day = () => Object.fromEntries(FORCING_FIELDS.map(([name, where], f) => [name, Float32Array.from({ length: where === 'edges' ? E : C }, (_, i) => Math.sin(0.37 * i + f) * (f + 1) * 100)]));
 
 test('a day of forcing comes back from its bytes as it went in', async () => {

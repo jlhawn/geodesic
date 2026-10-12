@@ -3,15 +3,14 @@
 // classes lighter than DENSITY hold more than SHARE of the column.
 //   [LAT=25] [DEPTH=300] [DENSITY=1025] [SHARE=0.7] node scripts/lightColumns.mjs <state.bin>...
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
-import { buildMesh } from '../js/mesh.module.js';
 import { decodeState } from '../js/stateFile.module.js';
+import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 
 const LAT = Number(process.env.LAT ?? 25), DEPTH = Number(process.env.DEPTH ?? 300), DENSITY = Number(process.env.DENSITY ?? 1025), SHARE = Number(process.env.SHARE ?? 0.7);
 const meshes = {}, deg = 180 / Math.PI;
 for (const file of process.argv.slice(2)) {
   const s = await decodeState(new Uint8Array(readFileSync(file)));
-  const mesh = meshes[s.N] ?? (meshes[s.N] = buildMesh(new Grid(s.N)));
+  const key = `${s.N} ${stateRelax(s).relax}`, mesh = meshes[key] ?? (meshes[key] = stateGrid(s).mesh);
   const C = mesh.nCells, L = s.ocean.h.length / C, rho = s.ocean.densities;
   const found = [];
   for (let i = 0; i < C; i++) {

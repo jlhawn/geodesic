@@ -16,12 +16,12 @@
 // the same with the token edges next to the filled ones fitted from them;
 // 'extended', the ocean's closure: interior2 with closureAdjoint.
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { cellVector, laplacianVelocity } from '../js/dynamics/operators.module.js';
 import { THIN, CLOSURE_RIDGE, closureCoefficient, closureVelocity, closureAdjoint } from '../js/ocean/layered.module.js';
+import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) throw new Error('usage: node scripts/closureCoupling.mjs <state.bin>');
@@ -30,7 +30,7 @@ const LAT = Number(process.env.LAT ?? 2);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const N = saved.N;
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(new Grid(N), { topography, levels: savedLevels(saved), ocean: OCEAN });
+const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: OCEAN });
 const { mesh, state, surface, seaIce, ocean, core } = model;
 STATE_NAMES.forEach((name, a) => state[a].set(saved[name]));
 seaIce.load(state[6], saved.concentration ?? null);

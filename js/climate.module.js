@@ -463,8 +463,8 @@ export default function runClimate({ N = null, from = null, levels = null, worke
 
   const worker = new Worker(new URL('./model.worker.js', import.meta.url), { type: 'module' });
 
-  function setup(size) {
-    grid = new Grid(size);
+  function setup(size, relax) {
+    grid = new Grid(size, { relax });
     rgb = new Uint8Array(3 * grid.size);
     viewer = initUnifiedViewer(document.getElementById('globe'), grid, { backgroundColor: 0x151515, controls: false, getColor: () => ({ r: 0.25, g: 0.25, b: 0.25 }) });
     uploaded = null;
@@ -917,10 +917,10 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       }
     }
     if (message.type === 'ready') {
-      const rebuild = !viewer || !ready || ready.cells !== message.cells;
+      const rebuild = !viewer || !ready || ready.cells !== message.cells || ready.relax !== message.relax;
       ready = message;
       if (message.levels) LEVEL_STOPS = levelStops(message.levels);
-      if (rebuild) { teardown(); setup(message.N); latest = null; }
+      if (rebuild) { teardown(); setup(message.N, message.relax); latest = null; }
       animatedSource = null;
       hasLand = !!message.land;
       geographyFields = hasLand ? { land: message.land, landFraction: message.landFraction, elevation: message.elevation } : {};
@@ -1006,7 +1006,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     const land = saved.land ? Object.fromEntries(Object.entries(saved.land).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
     const size = (o) => (o ? Object.values(o).reduce((n, b) => n + b.byteLength, 0) : 0);
     const bytes = size(arrays) + size(ocean) + size(land);
-    return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, bytes, source: url }, data: { arrays, ocean, land } };
+    return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, grid: saved.grid ?? null, bytes, source: url }, data: { arrays, ocean, land } };
   };
   async function refreshSnapshots() {
     const list = await listSnapshots();
@@ -1051,7 +1051,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     } catch (error) { document.getElementById('date').textContent = `download failed: ${error.message}`; return null; }
   }
   async function storeSnapshot(message) {
-    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? Object.fromEntries(Object.entries(message.ocean).map(([k, b]) => [k, new Float64Array(b)])) : null, land: message.land ? Object.fromEntries(Object.entries(message.land).map(([k, b]) => [k, new Float64Array(b)])) : null });
+    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, grid: message.grid, ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? Object.fromEntries(Object.entries(message.ocean).map(([k, b]) => [k, new Float64Array(b)])) : null, land: message.land ? Object.fromEntries(Object.entries(message.land).map(([k, b]) => [k, new Float64Array(b)])) : null });
     const name = `Day ${Math.floor(message.day)} · ${new Date().toLocaleString()}`;
     await saveSnapshot({ name, created: Date.now(), ...meta }, data);
     await refreshSnapshots();
@@ -1067,14 +1067,14 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     scheduleUrl();
     render();
     const transfer = [...Object.values(data.arrays), ...(data.ocean ? Object.values(data.ocean) : []), ...(data.land ? Object.values(data.land) : [])];
-    worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
+    worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, grid: meta.grid ?? null, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
   }
   const slug = (name) => name.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'snapshot';
   async function exportSnapshot(meta) {
     const { data } = await getSnapshot(meta.id);
     if (!data) return;
     document.getElementById('date').textContent = `exporting "${meta.name}"…`;
-    const saved = { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain };
+    const saved = { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, ...(meta.grid ? { grid: meta.grid } : {}) };
     for (const [key, buffer] of Object.entries(data.arrays)) saved[key] = new Float64Array(buffer);
     if (data.ocean) saved.ocean = Object.fromEntries(Object.entries(data.ocean).map(([k, b]) => [k, new Float64Array(b)]));
     if (data.land) saved.land = Object.fromEntries(Object.entries(data.land).map(([k, b]) => [k, new Float64Array(b)]));

@@ -9,12 +9,12 @@
 // node scripts/compareStates.mjs runs/twin64_day0090.bin runs/twin128_day0090.bin [--window 90]
 import { readFileSync, existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { THERMOCLINE_DENSITY, LAYER_DENSITIES, savedDensities } from '../js/ocean/layered.module.js';
+import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 
 const args = process.argv.slice(2);
 const at = args.indexOf('--window');
@@ -25,8 +25,8 @@ if (!files.length) { console.error('usage: node scripts/compareStates.mjs <state
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 const meshes = new Map();
 const modelFor = (saved) => {
-  const levels = savedLevels(saved), key = `${saved.N} ${levels.join(' ')}`;
-  return meshes.get(key) ?? meshes.set(key, createModel(new Grid(saved.N), { physics: false, topography, levels })).get(key);
+  const levels = savedLevels(saved), key = `${saved.N} ${stateRelax(saved, topography).relax} ${levels.join(' ')}`;
+  return meshes.get(key) ?? meshes.set(key, createModel(stateGrid(saved, topography).mesh, { physics: false, topography, levels })).get(key);
 };
 
 /*

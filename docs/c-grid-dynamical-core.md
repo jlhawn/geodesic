@@ -77,8 +77,13 @@ new time integrator (AB4 stays; RK3 is an optional later swap).
   the property TRiSK requires.
 - `cell.area`: exact spherical polygon area (sums to 4π to roundoff);
   `cell.isPentagon`, `cell.isPole`.
-- `new Grid(N)` applies 10 Lloyd iterations by default (Section 8 item
-  2); `new Grid(N, { relax: 0 })` is the raw ISEA tessellation.
+- `new Grid(N)` applies 30 Lloyd iterations by default (`DEFAULT_RELAX`,
+  Section 8 item 2) and keeps the count as `grid.relaxPasses`, which
+  `buildMesh` carries as `mesh.relax`; `new Grid(N, { relax: 0 })` is the
+  raw ISEA tessellation. A saved state records the count in its header as
+  `grid: { relax }`, and `js/stateGrid.module.js` loads a state on the
+  grid it was made on: one saved without the header goes on whichever of
+  30 and 8 passes puts land exactly where its ocean's columns are dry.
 - `test/grid.test.mjs` certifies all of the above at N = 2, 3, 5, 8, 16
   (`node --test`).
 

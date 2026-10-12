@@ -5,10 +5,9 @@
 // meridional Rossby wave at a third of its speed, and the second Kelvin wave.
 //   node scripts/waveSpeeds.mjs <state.bin>...
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
-import { buildMesh } from '../js/mesh.module.js';
 import { decodeState } from '../js/stateFile.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
+import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 const meshes = {};
 function jacobi(A) {
   const n = A.length, a = A.map((r) => r.slice());
@@ -27,7 +26,7 @@ function jacobi(A) {
 }
 for (const file of process.argv.slice(2)) {
   const s = await decodeState(new Uint8Array(readFileSync(file)));
-  const mesh = meshes[s.N] ?? (meshes[s.N] = buildMesh(new Grid(s.N)));
+  const key = `${s.N} ${stateRelax(s).relax}`, mesh = meshes[key] ?? (meshes[key] = stateGrid(s).mesh);
   const C = mesh.nCells, L = s.ocean.h.length / C, deg = 180 / Math.PI, g = 9.81, rho0 = 1025;
   const H = new Float64Array(L), R = new Float64Array(L); let n = 0;
   for (let i = 0; i < C; i++) {

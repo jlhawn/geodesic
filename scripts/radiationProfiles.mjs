@@ -10,7 +10,6 @@
 // layer heating is the radiation's own: its longwave record, and the rest of
 // its layer flux less the lowest layer's sensible heat as the shortwave.
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
@@ -18,14 +17,16 @@ import { savedDeckField, DECK_FIELDS } from '../js/physics/regrid.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { BOXES, inLongitudes } from '../js/audit.module.js';
+import { stateGrid } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2];
 if (!FILE) { console.error('usage: node scripts/radiationProfiles.mjs <state.bin>'); process.exit(1); }
 const RADIATION = JSON.parse(process.env.RADIATION ?? '{}'), OTHER = JSON.parse(process.env.OTHER ?? '{"longwaveScheme":"gray","solarGases":"lacisHansen"}'), TIMES = Number(process.env.TIMES ?? 24);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
+const stateMesh = stateGrid(saved, topography).mesh;
 function make(radiation) {
-  const model = createModel(new Grid(saved.N), { topography, levels: savedLevels(saved), ocean: false, radiation });
+  const model = createModel(stateMesh, { topography, levels: savedLevels(saved), ocean: false, radiation });
   STATE_NAMES.forEach((name, a) => model.state[a].set(saved[name]));
   model.seaIce.load(model.state[6], saved.concentration ?? null);
   for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));

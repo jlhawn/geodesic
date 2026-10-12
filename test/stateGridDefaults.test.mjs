@@ -1,0 +1,33 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { Grid } from '../js/grid.module.js';
+import { createOcean } from '../js/ocean/layered.module.js';
+import { createGeography, topographyFromInt16 } from '../js/geography.module.js';
+import { decodeState } from '../js/stateFile.module.js';
+import { stateGrid, gridMesh, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
+
+const runs = new URL('../runs/', import.meta.url);
+const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
+const readParts = async (manifest) => decodeState(Buffer.concat(JSON.parse(readFileSync(new URL(manifest, runs))).parts.map(({ file }) => readFileSync(new URL(file, runs)))));
+
+for (const [name, offCoast] of [['eleven64_day1825', 45], ['eleven128_day1825', 91]]) {
+  test(`${name}, saved without a grid header, loads on the 8-pass grid it was made on with no cell off its coast (${offCoast} on the 30-pass grid)`, async () => {
+    const saved = await readParts(`${name}.parts.json`);
+    assert.equal(saved.grid, undefined);
+    const found = stateGrid(saved, topography), dry = savedDryColumns(saved);
+    assert.deepEqual({ relax: found.relax, source: found.source, mismatches: found.mismatches }, { relax: 8, source: 'mask', mismatches: 0 });
+    assert.equal(maskMismatches(dry, createGeography(gridMesh(new Grid(saved.N, { relax: 30 })), topography).land), offCoast);
+    if (saved.N > 64) return;
+    const ocean = createOcean(found.mesh, { geography: createGeography(found.mesh, topography) });
+    const surfaceT = Float64Array.from(saved.surfaceT), ice = Float64Array.from(saved.ice);
+    ocean.load(saved.ocean, surfaceT, ice, Float64Array.from(saved.concentration));
+    const C = found.mesh.nCells, L = ocean.layers;
+    for (let i = 0; i < C; i++) {
+      if (!ocean.cellOcean[i]) continue;
+      for (let k = 0; k < L; k++) assert.ok(Math.abs(ocean.h[k * C + i] - saved.ocean.h[k * C + i]) < 1, `cell ${i} layer ${k} keeps its saved water`);
+      assert.ok(Math.abs(ocean.T0[i] - saved.ocean.T[i]) < 1e-3, `cell ${i} keeps its saved SST (${ocean.T0[i]} vs ${saved.ocean.T[i]})`);
+      assert.equal(surfaceT[i], saved.surfaceT[i]);
+    }
+  });
+}

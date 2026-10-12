@@ -77,7 +77,7 @@ if (mode === 'run') {
     weight[kind] += a;
   }
   for (const kind of ['land', 'sea']) for (let b = 0; b < HOURS; b++) diurnal[kind][b] /= weight[kind];
-  writeFileSync(out, JSON.stringify({ state: stateFile, N: saved.N, C, perDay, days: DAYS, perturb: PERTURB, radiation: process.env.RADIATION ?? '{}', ocean: process.env.OCEAN ?? '{}', means: days, diurnal: { land: Array.from(diurnal.land), sea: Array.from(diurnal.sea) } }, null, 1));
+  writeFileSync(out, JSON.stringify({ state: stateFile, N: saved.N, relax: mesh.relax, C, perDay, days: DAYS, perturb: PERTURB, radiation: process.env.RADIATION ?? '{}', ocean: process.env.OCEAN ?? '{}', means: days, diurnal: { land: Array.from(diurnal.land), sea: Array.from(diurnal.sea) } }, null, 1));
   writeFileSync(`${out}.bin`, new Uint8Array(cells.buffer));
   process.exit(0);
 }
@@ -87,7 +87,7 @@ if (mode === 'compare') {
   const { buildMesh } = await import('../js/mesh.module.js');
   const load = (file) => ({ ...JSON.parse(readFileSync(file, 'utf8')), cells: new Float32Array(readFileSync(`${file}.bin`).buffer.slice(0)), file });
   const [reference, ...runs] = files.map(load);
-  const mesh = buildMesh(new Grid(reference.N)), C = reference.C, area = mesh.areaCell, total = area.reduce((s, a) => s + a, 0);
+  const mesh = buildMesh(new Grid(reference.N, { relax: reference.relax })), C = reference.C, area = mesh.areaCell, total = area.reduce((s, a) => s + a, 0);
   const rms = (a, aOff, b, bOff) => { let s = 0; for (let i = 0; i < C; i++) { const x = a[aOff + i] - b[bOff + i]; s += area[i] * x * x; } return Math.sqrt(s / total); };
   const cycle = (curve) => {
     const top = curve.indexOf(Math.max(...curve)), before = curve[(top + HOURS - 1) % HOURS], after = curve[(top + 1) % HOURS];

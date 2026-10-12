@@ -5,16 +5,15 @@
 // around the equator where that flow exceeds half its peak.
 //   node scripts/undercurrentBand.mjs <state.bin>...
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
-import { buildMesh } from '../js/mesh.module.js';
 import { decodeState } from '../js/stateFile.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { equatorialOcean, inLongitudes } from '../js/audit.module.js';
+import { stateGrid, stateRelax } from '../js/stateGrid.module.js';
 
 const meshes = {}, deg = 180 / Math.PI;
 for (const file of process.argv.slice(2)) {
   const s = await decodeState(new Uint8Array(readFileSync(file)));
-  const mesh = meshes[s.N] ?? (meshes[s.N] = buildMesh(new Grid(s.N)));
+  const key = `${s.N} ${stateRelax(s).relax}`, mesh = meshes[key] ?? (meshes[key] = stateGrid(s).mesh);
   const C = mesh.nCells, E = mesh.nEdges, ocean = s.ocean, densities = Array.from(ocean.densities);
   const land = Uint8Array.from({ length: C }, (_, i) => (ocean.h[i] > 0 ? 0 : 1));
   const o = equatorialOcean(mesh, land, { h: ocean.h, u: ocean.u, densities }, new Float64Array(E));

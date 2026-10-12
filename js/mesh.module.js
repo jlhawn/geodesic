@@ -216,7 +216,7 @@ export function buildMesh(grid, { radius = EARTH_RADIUS, omega = SIDEREAL_OMEGA 
   }
 
   return {
-    nCells, nEdges, nVertices, radius, omega,
+    nCells, nEdges, nVertices, radius, omega, relax: grid.relaxPasses,
     maxEdges: MAX_EDGES, maxEdgesOnEdge: MAX_EDGES_ON_EDGE,
     xCell, latCell, lonCell, areaCell, fCell, nEdgesOnCell,
     cellsOnCell, verticesOnCell, edgesOnCell, edgeSignOnCell, kiteAreasOnCell,
