@@ -210,3 +210,87 @@ integrator change is judged by that year, not by speed alone.
 in which case Node with Dawn measures. Radiation cadence changes the
 diurnal cycle slightly. The snapshot at N=128 is about 480 MB; the
 snapshot store and the regrid must cope.
+
+## Milestones 27 and 28
+
+The milestones after M26 (fog). M27 is in hand; M28 follows it.
+
+| # | Milestone | What it delivers | Depends on |
+|---|-----------|------------------|------------|
+| M27 | A thin mixed layer | The three additions a mixed-layer floor below 50 m needs: the wind stress and drag acting over a momentum depth separate from the refill floor, with the mixed layer's momentum carried through its exchanges; penetrating sunlight (two-band Jerlov IB) deposited in the classes beneath the mixed layer; a rate-limited refill. Then the judging runs that choose the floor (20 m likely, 10 m once shear entrainment exists). | the Oct 12 conservation work |
+| M28 | Rivers, lakes and the land below sea level | An ocean mask by connection to the ocean rather than by elevation alone; river routing with travel time; lakes as a surface type and as reservoirs in the river network. | M16, M27's state-file work |
+
+## M27 — A thin mixed layer
+
+**Goal.** Let the mixed layer be as shallow as the physics asks
+(3–40 m in the tropics and the summer hemisphere, where the 50 m floor
+now holds a third of the sea) without the losses a thin layer exposes:
+the wind's momentum spread over a 50 m momentum depth and carried
+through the layer's retreat, refill and convection; the sunlight that
+passes a thin layer heating the water beneath it instead of the
+surface; the refill from below limited to a rate, with the coastal
+cells the dynamics drain fixed at their source. Every option off
+leaves today's model bit for bit, except the momentum depth where a
+mixed layer at an edge is already thinner than 50 m.
+
+**Acceptance.** With no surface flux, heat, salt and volume conserved
+through every phase on both engines (test/layeredConservation); the
+Ekman transport at 45° within 5 % of τ/(ρ₀f) with a 10 m layer; the
+momentum of an edge's column unchanged through a retreat and a refill;
+the sunlight deposited equal to the light passed; the step at N=128 no
+more than 0.6 ms per ocean step slower on the H100 scale. Then the
+judging arms (N=16, two years, floors 50/20/10 with the additions on
+and off; N=64, 30 days from the page's state) decide the floor and
+whether momentum carriage and penetration default on.
+
+## M28 — Rivers, lakes and the land below sea level
+
+**Goal.** Water on land that moves and collects the way the real
+water does. Three parts, in this order, because each one's data
+structure carries the next.
+
+1. **The ocean mask by connection.** A cell is sea only if its water
+   connects to the global ocean through sea cells or a listed strait;
+   dry land below sea level (the Qattara Depression, Chott el Djerid,
+   the Danakil, Death Valley) is land, and ETOPO's lake beds (the Great
+   Lakes lie below sea level in the raster) are not sea. The Caspian,
+   the Black Sea and the Baltic stay separate basins; a parameterized
+   strait exchange (the Bosporus at about 0.01 Sv, the Danish straits)
+   is the later way to join the last two to the ocean, since a one-cell
+   strait exchanges far too freely. A lake dataset (HydroLAKES or GLWD,
+   rasterized to the topography grid) says which closed depressions hold
+   water, with each lake's mean depth.
+2. **River routing with travel time.** A linear reservoir per land cell
+   (TRIP's form): the cell's channel store takes its bucket overflow
+   and its upstream neighbors' outflow and drains to its downstream
+   cell at S/τ, τ = d/v, with v from the slope (Manning reduced to one
+   constant, clamped), so a basin's rain reaches the sea over weeks and
+   snowmelt arrives as spring floods. One new state field; one per-cell
+   gather over the upstream neighbors on the GPU, deterministic, which
+   replaces the serial basin sum of oAccumulateFresh; the mouths'
+   discharge becomes the ocean's freshwater input; the land water
+   budget test extends to Δsoil + Δriver + discharge. Page overlays:
+   runoff per cell and the river network drawn by discharge, with the
+   mouths' discharge in the readout (the Amazon's mean is about
+   2×10⁵ m³/s). Left out at first: floodplains, baseflow, river
+   evaporation and river ice.
+3. **Lakes.** A lake tile with a fraction per cell: a freshwater column
+   with a seasonal mixed layer over a thermocline (FLake's form), depth
+   from the data (Superior 147 m, Baikal 744, Victoria 40, Malawi 292,
+   Titicaca 107, Winnipeg 12, the Caspian 211), water's albedo,
+   roughness and saturated evaporation, and freshwater ice at 0 °C (the
+   ice model's freezing point made per cell, its brine paths skipped).
+   Each lake is a reservoir node in the river network: inflow from
+   upstream, outflow over a sill at the lake's level, the closed basins
+   (the Caspian, Titicaca, Eyre, the Great Basin) balancing inflow
+   against their own evaporation, so a lake's level is a state the
+   seasons move. At N=128 the large lakes are 3–26 cells; at N=64 a few;
+   below that only tiles.
+
+**Acceptance.** No sea cell without a path to the ocean; the Great
+Lakes, Baikal, Victoria, Malawi, Titicaca and Winnipeg present as lakes
+at N=128 with ice seasons in the north and none in the tropics; the
+Amazon, Congo, Ob, Mississippi and Nile mouths within a factor of two
+of their observed mean discharge after a spun-up year; the land water
+budget closed to roundoff with the river and lake stores in it; both
+engines bit for bit with the options off.
