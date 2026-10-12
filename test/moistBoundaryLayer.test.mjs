@@ -78,9 +78,9 @@ function cooled(state, watts) {
 const liquid = (theta, qc, x) => theta[x] - L * qc[x] / (cp * exnerLayer[x]);
 const totals = (state, i) => {
   const [pi, theta, , , q, qc] = state;
-  let level = 0, water = 0;
-  for (let k = 0; k < K; k++) { const x = k * C + i; level += mass(pi, k, i) * liquid(theta, qc, x); water += mass(pi, k, i) * (q[x] + qc[x]); }
-  return [level, water];
+  let energy = 0, water = 0;
+  for (let k = 0; k < K; k++) { const x = k * C + i; energy += mass(pi, k, i) * cp * exnerLayer[x] * liquid(theta, qc, x); water += mass(pi, k, i) * (q[x] + qc[x]); }
+  return [energy, water];
 };
 
 function turtonNicholls(state, i, kE, lowest, h, buoyant, sheared) {
@@ -97,7 +97,7 @@ function turtonNicholls(state, i, kE, lowest, h, buoyant, sheared) {
   return { A, chi, jumpV, velocity: Math.min(cap, (A * buoyant + shear * sheared) / (h * Math.max(g * jumpV / mean, jumpFloor))) };
 }
 
-test('a stratocumulus-topped column over a 26 °C sea is mixed from its cloud top to the surface, entrains at the Turton–Nicholls rate, conserves θ_l, q_t and momentum, and keeps a cloud of 100–300 m at its top that the variance cover makes overcast', () => {
+test('a stratocumulus-topped column over a 26 °C sea is mixed from its cloud top to the surface, entrains at the Turton–Nicholls rate, conserves c_p T − L q_c, q_t and momentum, and keeps a cloud of 100–300 m at its top that the variance cover makes overcast', () => {
   const state = column(stratocumulus, 299.15), [pi, theta, u, , q, qc] = state, i = 0;
   const longwave = cooled(state, 60), top = cloudTop(qc, i);
   const layer = createBoundaryLayer(mesh, core, { longwave }), clear = createBoundaryLayer(mesh, core, {});
@@ -128,7 +128,7 @@ test('a stratocumulus-topped column over a 26 °C sea is mixed from its cloud to
   const before = totals(state, i), dt = 300;
   layer.mixColumn(i, pi, theta, q, qc, dt);
   const after = totals(state, i);
-  assert.ok(Math.abs(after[0] - before[0]) <= 2e-16 * K * before[0] && Math.abs(after[1] - before[1]) <= 2e-16 * K * before[1], `θ_l ${(after[0] - before[0]) / before[0]}, q_t ${(after[1] - before[1]) / before[1]}`);
+  assert.ok(Math.abs(after[0] - before[0]) <= 2e-16 * K * before[0] && Math.abs(after[1] - before[1]) <= 2e-16 * K * before[1], `c_p T − L q_c ${(after[0] - before[0]) / before[0]}, q_t ${(after[1] - before[1]) / before[1]}`);
   const e = mesh.edgesOnCell[mesh.maxEdges * i], a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
   const momentum = () => { let s = 0; for (let k = 0; k < K; k++) s += 0.5 * (pi[a] + pi[b]) * dSigma[k] / g * u[k * E + e]; return s; };
   const m0 = momentum(), surface0 = u[(K - 1) * E + e];
@@ -161,7 +161,7 @@ test('a stratocumulus-topped column over a 26 °C sea is mixed from its cloud to
   const covers = [];
   for (let k = newTop; k <= base; k++) covers.push(radiation.layerCover[k]);
   assert.ok(Math.max(...covers) > 0.99 && radiation.layerCover[newTop] > 0.9, `cloud layers covered ${covers.map((c) => c.toFixed(3)).join(', ')}`);
-  console.log(`stratocumulus column: cloud top ${hc.toFixed(0)} m, V ${velocity.toFixed(2)} m/s, cloud-top K adds ${added.toFixed(3)} kg/m²/s over ${inside} interfaces, peaking at ${peakZ.toFixed(0)} m; A ${A.toFixed(3)} (χ* ${chi.toFixed(3)}, Δθv ${jumpV.toFixed(2)} K), w_e ${(1000 * expected).toFixed(2)} mm/s; one step keeps θ_l and q_t to ${((after[0] - before[0]) / before[0]).toExponential(1)} and ${((after[1] - before[1]) / before[1]).toExponential(1)}; after 6 h θ_l spreads by ${spreadL.toFixed(3)} K and q_t by ${(1000 * spreadQ).toFixed(3)} g/kg, the cloud is ${thickness.toFixed(0)} m thick (top ${interfaceZ(newTop - 1, i).toFixed(0)} m) and covers ${covers.map((c) => c.toFixed(3)).join(', ')}`);
+  console.log(`stratocumulus column: cloud top ${hc.toFixed(0)} m, V ${velocity.toFixed(2)} m/s, cloud-top K adds ${added.toFixed(3)} kg/m²/s over ${inside} interfaces, peaking at ${peakZ.toFixed(0)} m; A ${A.toFixed(3)} (χ* ${chi.toFixed(3)}, Δθv ${jumpV.toFixed(2)} K), w_e ${(1000 * expected).toFixed(2)} mm/s; one step keeps c_p T − L q_c and q_t to ${((after[0] - before[0]) / before[0]).toExponential(1)} and ${((after[1] - before[1]) / before[1]).toExponential(1)}; after 6 h θ_l spreads by ${spreadL.toFixed(3)} K and q_t by ${(1000 * spreadQ).toFixed(3)} g/kg, the cloud is ${thickness.toFixed(0)} m thick (top ${interfaceZ(newTop - 1, i).toFixed(0)} m) and covers ${covers.map((c) => c.toFixed(3)).join(', ')}`);
 });
 
 test('a clear convective column gets the surface-driven K-profile and the M21 entrainment of the dry scheme, and the same mixing', () => {

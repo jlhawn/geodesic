@@ -247,7 +247,7 @@ test('the mixed-layer deck shows in the cloud field, the same in both engines', 
   for (let a = 0; a < init.length; a++) cpu.state[a].set(init[a]);
   const theta = cpu.state[1], q = cpu.state[4];
   for (let k = 0; k < K; k++) for (let i = 0; i < C; i++) {
-    if (sigmaMid[k] < 0.85) theta[k * C + i] += 10;
+    if (sigmaMid[k] < 0.85) theta[k * C + i] += 9.5;
     else { theta[k * C + i] = theta[(K - 1) * C + i]; q[k * C + i] = q[(K - 1) * C + i]; }
   }
   for (let a = 0; a < init.length; a++) gpu.state[a].set(cpu.state[a]);

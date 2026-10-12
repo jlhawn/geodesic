@@ -87,13 +87,18 @@ export function laplacianVelocity(mesh, u, out = new Float64Array(mesh.nEdges), 
   return out;
 }
 
-export function laplacianScalar(mesh, phi, out = new Float64Array(mesh.nCells)) {
+/*
+ * ∇²φ, or with a per-cell `weight` w the divergence ∇·(w_e ∇φ) with w_e
+ * the mean of the edge's two cells.
+ */
+export function laplacianScalar(mesh, phi, out = new Float64Array(mesh.nCells), weight = null) {
   const { nCells, maxEdges, nEdgesOnCell, edgesOnCell, cellsOnCell, edgeSignOnCell, dcEdge, dvEdge, areaCell } = mesh;
   for (let i = 0; i < nCells; i++) {
     let sum = 0;
     for (let k = 0; k < nEdgesOnCell[i]; k++) {
-      const e = edgesOnCell[maxEdges * i + k];
-      sum += dvEdge[e] * (phi[cellsOnCell[maxEdges * i + k]] - phi[i]) / dcEdge[e];
+      const e = edgesOnCell[maxEdges * i + k], j = cellsOnCell[maxEdges * i + k];
+      const flux = dvEdge[e] * (phi[j] - phi[i]) / dcEdge[e];
+      sum += weight ? 0.5 * (weight[i] + weight[j]) * flux : flux;
     }
     out[i] = sum / areaCell[i];
   }

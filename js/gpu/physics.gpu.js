@@ -2057,24 +2057,32 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
   cuShallowRain = shallowRain;
   return fallen;
 }
-fn mixConserved(i: i32, pi: f32, dt: f32) {
+fn staticEnergy(k: i32, i: i32, reference: f32, wet: bool) -> f32 {
+  let idx = k * C + i;
+  return fma(CP * D[D_EXM + idx], IN[S_TH + idx], D[D_GEO + idx] + LV[L_GABS + k] - reference) - select(0.0, LHEAT * IN[S_QC + idx], wet);
+}
+fn mixConserved(i: i32, pi: f32, dt: f32, wet: bool) {
   var upper: array<f32, K>; var lower: array<f32, K>; var level: array<f32, K>; var total: array<f32, K>;
   let n = K - KTOP;
+  let b = (K - 1) * C + i;
+  let reference = fma(CP * D[D_EXM + b], IN[S_TH + b], D[D_GEO + b] + LV[L_GABS + K - 1]);
   for (var j = 0; j < n; j++) {
     let k = KTOP + j; let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
     upper[j] = select(0.0, dt * PH[PH_MIX + (k - 1) * C + i] / mass, j > 0);
     lower[j] = select(0.0, dt * PH[PH_MIX + k * C + i] / mass, k < K - 1);
-    level[j] = IN[S_TH + idx] - LHEAT * IN[S_QC + idx] / (CP * D[D_EXM + idx]);
+    level[j] = staticEnergy(k, i, reference, wet);
     total[j] = IN[S_Q + idx] + IN[S_QC + idx];
   }
   thomas(n, &upper, &lower, &level);
-  thomas(n, &upper, &lower, &total);
+  if (wet) { thomas(n, &upper, &lower, &total); }
   for (var j = 0; j < n; j++) {
     let k = KTOP + j;
     if ((j > 0 && PH[PH_MIX + (k - 1) * C + i] > 0.0) || (k < K - 1 && PH[PH_MIX + k * C + i] > 0.0)) {
       let idx = k * C + i;
-      IN[S_TH + idx] = level[j]; IN[S_Q + idx] = total[j]; IN[S_QC + idx] = 0.0;
+      let latent = select(0.0, LHEAT * IN[S_QC + idx], wet);
+      IN[S_TH + idx] += (level[j] - staticEnergy(k, i, reference, wet) - latent) / (CP * D[D_EXM + idx]);
+      if (wet) { IN[S_Q + idx] = total[j]; IN[S_QC + idx] = 0.0; }
     }
   }
 }
@@ -2301,8 +2309,8 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   var mixes = false;
   for (var k = KTOP; k < K - 1; k++) { if (PH[PH_MIX + k * C + i] > 0.0) { mixes = true; } }
   if (mixes) {
-    if (MOIST_BL) { mixConserved(i, pi, dt); }
-    else { mixField(S_TH, i, pi, dt); mixField(S_Q, i, pi, dt); mixField(S_QC, i, pi, dt); }
+    if (MOIST_BL) { mixConserved(i, pi, dt, true); }
+    else { mixConserved(i, pi, dt, false); mixField(S_Q, i, pi, dt); mixField(S_QC, i, pi, dt); }
   }
   diagnoseColumn(i);
   saturateColumn(i, pi);

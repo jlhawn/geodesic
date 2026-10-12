@@ -94,8 +94,9 @@ export function sigmaGridName(levels) {
  * Exner, geopotential integrated upward with each layer's virtual theta
  * over its own Exner span, then flux-form theta and q transport and the
  * vector-invariant momentum equation with the RTSK PV flux. The
- * pressure-gradient force uses virtual theta (with condensate loading);
- * with no q it equals theta.
+ * pressure-gradient force uses virtual theta (with condensate loading;
+ * with no q it equals theta), and theta takes the pressure work that
+ * adds (virtualWork), so the core keeps c_p T + K.
  */
 export function createSigmaCore(mesh, options = {}) {
   const {
@@ -248,16 +249,18 @@ export function createSigmaCore(mesh, options = {}) {
    * The ∇⁴ closure of one layer of a scalar field as a tendency (or, with
    * a time step, as an explicit increment of the field). `conservative`
    * applies it to the mass-weighted field so the column's total is
-   * preserved exactly under it (used for water); theta keeps the closure
-   * on the field itself.
+   * preserved exactly under it (used for water). Theta (`exner` given)
+   * takes ∇·(π_e ∇∇²T)/π on its temperature T = θΠ, whose fluxes between
+   * cells are weighted by the edge's π, so the closure keeps the layer's
+   * c_p T Δm exactly.
    */
   function scalarClosure(k, pi, field, target, coefficient, conservative, exner = null) {
     const off = k * C;
     if (exner) {
       for (let i = 0; i < C; i++) massField[i] = field[off + i] * exner[off + i];
       laplacianScalar(mesh, massField, lapTheta);
-      laplacianScalar(mesh, lapTheta, lapTheta2);
-      for (let i = 0; i < C; i++) target[off + i] -= coefficient * lapTheta2[i] / exner[off + i];
+      laplacianScalar(mesh, lapTheta, lapTheta2, pi);
+      for (let i = 0; i < C; i++) target[off + i] -= coefficient * lapTheta2[i] / (pi[i] * exner[off + i]);
     } else if (conservative) {
       for (let i = 0; i < C; i++) massField[i] = pi[i] * field[off + i];
       laplacianScalar(mesh, massField, lapTheta);
@@ -315,6 +318,22 @@ export function createSigmaCore(mesh, options = {}) {
   }
 
   /*
+   * The pressure work of moist air beyond the dry air's, added to one
+   * layer's θ tendency: the pressure-gradient force and the geopotential
+   * take θ_v, so the energy equation must take α_v ω where the dry θ
+   * equation takes α ω, dθ/dt += κ θ (0.608 q − q_c) ω / p, with
+   * ω = σ(∂π/∂t + v·∇π) + πσ̇ at the layer's middle.
+   */
+  function virtualWork(k, pi, u, theta, q, qc, dPi, dTheta) {
+    divergence(mesh, u.subarray(k * E, (k + 1) * E), divScratch);
+    for (let i = 0; i < C; i++) {
+      const idx = k * C + i;
+      const omega = sigmaMid[k] * (dPi[i] + divFlux[idx] - pi[i] * divScratch[i]) + 0.5 * (piSigmaDot[idx] + piSigmaDot[idx + C]);
+      dTheta[idx] += kappa * theta[idx] * (VIRTUAL_FACTOR * q[idx] - (qc ? qc[idx] : 0)) * omega / (pi[i] * sigmaMid[k]);
+    }
+  }
+
+  /*
    * The ∇⁴ closures, and the divergence damping and the top sponge
    * (`spongeRates` on the eddies and `spongeMeanRates` on the zonal
    * mean, 1/s per layer, see sponge.module.js) after the
@@ -356,6 +375,7 @@ export function createSigmaCore(mesh, options = {}) {
     if (part !== 'momentum') {
       for (let k = kFrom; k < kTo; k++) {
         transportLayer(k, pi, theta, thetaLower, thetaFlux, divThetaFlux, dTheta);
+        if (q) virtualWork(k, pi, u, theta, q, qc, out[0], dTheta);
         if (q && dQ) transportLayer(k, pi, q, qLower, qFlux, divQFlux, dQ, true);
         if (qc && dQc) transportLayer(k, pi, qc, qcLower, qcFlux, divQcFlux, dQc, true);
       }

@@ -20,11 +20,13 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * marine boundary layer mixes momentum down to the surface; stable
  * columns keep the neutral profile. The interface coefficients ρK/Δz are
  * kept in a shared array so the cell units of the adjust phase can mix
- * θ, q and qc down each column and the edge units can mix the normal
- * velocity down each edge, both by implicit Euler on the same
+ * the dry static energy c_p T + Φ (Φ held at the column's last
+ * diagnosis), q and qc down each column and the edge units can mix the
+ * normal velocity down each edge, both by implicit Euler on the same
  * tridiagonal system, which conserves each column's mass-weighted
- * total exactly. Nothing mixes above the boundary-layer top; the search
- * stops at searchTop in σ. The surface fluxes and drag remain explicit
+ * totals, and with Φ held its enthalpy, exactly. Nothing mixes above
+ * the boundary-layer top; the search stops at searchTop in σ. The
+ * surface fluxes and drag remain explicit
  * sources on the lowest layer, which the diffusion then spreads upward,
  * save that with implicitDrag the edge solve takes the surface drag
  * ρ C_D max(|v|, gustiness) (`surfaceDrag`, per cell, averaged onto the
@@ -77,9 +79,9 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  *
  * `turbulence` 'moist' (the default) is a moist closure after Lock et al.
  * (2000), simplified for a coarse column. It mixes the liquid-water
- * potential temperature θ_l = θ − L q_c/(c_p Π) and the total water
- * q_t = q + q_c (and momentum) with the eddy diffusivity; each layer the
- * solve touches leaves it with θ = θ_l, q = q_t and no cloud water, and
+ * static energy s_l = c_p T − L q_c + Φ and the total water q_t = q + q_c
+ * (and momentum) with the eddy diffusivity; each layer the solve touches
+ * leaves it with c_p T + Φ = s_l, q = q_t and no cloud water, and
  * the saturation adjustment that follows returns the cloud, so a
  * well-mixed layer forms its stratus at its top. Untouched layers keep
  * their values exactly. Two profiles add:
@@ -177,7 +179,7 @@ export function createBoundaryLayer(mesh, core, {
   const { exnerLower } = core.diagnostics;
   const heatCoefficient = (i) => (heatCoefficients ? heatCoefficients[i] : dragCoefficients ? dragCoefficients[i] : dragCoefficient);
   const regime = new Float64Array(regimeBuffer), cloudLayer = new Float64Array(cloudLayerBuffer), mixingTop = new Float64Array(mixingTopBuffer), cloudTopCooling = new Float64Array(coolingBuffer), radiativeVelocity = new Float64Array(velocityBuffer), decoupling = new Float64Array(decouplingBuffer);
-  const thetaL = new Float64Array(K), totalWater = new Float64Array(K);
+  const staticEnergy = new Float64Array(K), totalWater = new Float64Array(K);
   const entraining = efficiency > 0 || shear > 0;
   const vector = new Float64Array(3 * C), bottomVector = new Float64Array(3 * C);
   const speed = new Float64Array(C), riPrev = new Float64Array(C), zPrev = new Float64Array(C);
@@ -438,25 +440,25 @@ export function createBoundaryLayer(mesh, core, {
   }
 
   function mixColumn(i, pi, theta, q, qc, dt) {
-    const coefficient = mixing.subarray(i);
-    if (moistScheme && q && qc) {
-      for (let k = kTop; k < K; k++) {
-        const idx = k * C + i;
-        thetaL[k] = theta[idx] - latentHeat * qc[idx] / (cp * exnerLayer[idx]);
-        totalWater[k] = q[idx] + qc[idx];
-      }
-      if (!solve(thetaL, 0, 1, coefficient, C, dt, pi[i])) return;
-      solve(totalWater, 0, 1, coefficient, C, dt, pi[i]);
-      for (let k = kTop; k < K; k++) {
-        if (!((k > kTop && coefficient[(k - 1) * C] > 0) || (k < bottom && coefficient[k * C] > 0))) continue;
-        const idx = k * C + i;
-        theta[idx] = thetaL[k]; q[idx] = totalWater[k]; qc[idx] = 0;
-      }
-      return;
+    const coefficient = mixing.subarray(i), wet = moistScheme && q && qc;
+    const latent = (idx) => (wet ? latentHeat * qc[idx] : 0), energy = (idx) => cp * exnerLayer[idx] * theta[idx] + geopotential[idx] - latent(idx);
+    for (let k = kTop; k < K; k++) {
+      const idx = k * C + i;
+      staticEnergy[k] = energy(idx);
+      if (wet) totalWater[k] = q[idx] + qc[idx];
     }
-    if (!solve(theta, i, C, coefficient, C, dt, pi[i])) return;
-    if (q) solve(q, i, C, coefficient, C, dt, pi[i]);
-    if (qc) solve(qc, i, C, coefficient, C, dt, pi[i]);
+    if (!solve(staticEnergy, 0, 1, coefficient, C, dt, pi[i])) return;
+    if (wet) solve(totalWater, 0, 1, coefficient, C, dt, pi[i]);
+    else {
+      if (q) solve(q, i, C, coefficient, C, dt, pi[i]);
+      if (qc) solve(qc, i, C, coefficient, C, dt, pi[i]);
+    }
+    for (let k = kTop; k < K; k++) {
+      if (!((k > kTop && coefficient[(k - 1) * C] > 0) || (k < bottom && coefficient[k * C] > 0))) continue;
+      const idx = k * C + i;
+      theta[idx] += (staticEnergy[k] - energy(idx) - latent(idx)) / (cp * exnerLayer[idx]);
+      if (wet) { q[idx] = totalWater[k]; qc[idx] = 0; }
+    }
   }
 
   const edgeCoefficient = new Float64Array(K), before = new Float64Array(K), share = new Float64Array(K), edgeRate = formRate ? new Float64Array(K) : null;

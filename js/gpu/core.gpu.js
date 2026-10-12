@@ -371,13 +371,15 @@ const KERNELS = {
   cellTendency: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let pi = IN[S_PI + i]; let area = MF[F_AREA + i]; let dragHere = D[D_DRAG + i];
-  var edges: array<i32, MAXE>; var neighbours: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>; var dragThere: array<f32, MAXE>; var sides: array<f32, MAXE>;
+  var edges: array<i32, MAXE>; var neighbours: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>; var dragThere: array<f32, MAXE>; var sides: array<f32, MAXE>; var leans: array<f32, MAXE>;
   for (var m = 0; m < MAXE; m++) {
     let slot = MAXE * i + m;
     let e = MI[EOC + slot]; let j = MI[COC + slot]; let sign = f32(MI[ESC + slot]);
     edges[m] = e; neighbours[m] = j; signs[m] = sign;
     dcs[m] = MF[F_DC + e]; dvs[m] = MF[F_DV + e] * abs(sign); dragThere[m] = D[D_DRAG + j]; sides[m] = MF[F_DV + e];
+    leans[m] = sign * 0.5 * (IN[S_PI + j] - pi) * MF[F_DV + e];
   }
+  let dPi = OUT[S_PI + i];
   var upperFlow = D[D_PSD + i];
   for (var k = 0; k < K; k++) {
     let idx = k * C + i; let row = k * C; let flux0 = k * E;
@@ -386,12 +388,13 @@ const KERNELS = {
     var flow = 0.0;
     for (var m = 0; m < MAXE; m++) { flow += signs[m] * D[D_FLUX + flux0 + edges[m]] * sides[m]; }
     let divergence = flow / area;
-    var kinetic = 0.0; var dragPower = 0.0; var divT = 0.0; var divQ = 0.0; var divC = 0.0;
+    var kinetic = 0.0; var dragPower = 0.0; var divT = 0.0; var divQ = 0.0; var divC = 0.0; var advection = 0.0;
     for (var m = 0; m < MAXE; m++) {
       let e = edges[m]; let j = neighbours[m];
       let dc = dcs[m]; let dv = dvs[m];
       let u = IN[S_U + flux0 + e];
       kinetic += 0.25 * dc * dv * u * u;
+      advection += leans[m] * u;
       let rate = top + select(0.0, 0.5 * (dragHere + dragThere[m]), bottomLayer);
       dragPower += 0.5 * dc * dv * rate * u * u;
       let carried = signs[m] * D[D_FLUX + flux0 + e] * 0.5;
@@ -414,7 +417,8 @@ const KERNELS = {
     let verticalT = (lowerFlow * lowerT - upperFlow * upperT - fT * (lowerFlow - upperFlow)) / layerMass;
     let verticalQ = (lowerFlow * lowerQ - upperFlow * upperQ - fQ * (lowerFlow - upperFlow)) / layerMass;
     let verticalC = (lowerFlow * lowerC - upperFlow * upperC - fC * (lowerFlow - upperFlow)) / layerMass;
-    OUT[S_TH + idx] = -(divT / area - fT * divergence) / pi - verticalT + dragPower / area / (CP * D[D_EXM + idx]);
+    let omega = LV[L_SM + k] * (dPi + advection / area) + 0.5 * (upperFlow + lowerFlow);
+    OUT[S_TH + idx] = -(divT / area - fT * divergence) / pi - verticalT + dragPower / area / (CP * D[D_EXM + idx]) + KAPPA * fT * (VIRT * fQ - fC) * omega / (pi * LV[L_SM + k]);
     OUT[S_Q + idx] = -(divQ / area - fQ * divergence) / pi - verticalQ;
     OUT[S_QC + idx] = -(divC / area - fC * divergence) / pi - verticalC;
     upperFlow = lowerFlow;
@@ -486,10 +490,10 @@ const KERNELS = {
   lapScalar2: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let area = MF[F_AREA + i]; let piHere = IN[S_PI + i];
-  var neighbours: array<i32, MAXE>; var dvs: array<f32, MAXE>; var dcs: array<f32, MAXE>;
+  var neighbours: array<i32, MAXE>; var dvs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var piEdges: array<f32, MAXE>;
   for (var m = 0; m < MAXE; m++) {
-    let e = MI[EOC + MAXE * i + m];
-    neighbours[m] = MI[COC + MAXE * i + m]; dvs[m] = MF[F_DV + e]; dcs[m] = MF[F_DC + e];
+    let e = MI[EOC + MAXE * i + m]; let j = MI[COC + MAXE * i + m];
+    neighbours[m] = j; dvs[m] = MF[F_DV + e]; dcs[m] = MF[F_DC + e]; piEdges[m] = 0.5 * (piHere + IN[S_PI + j]);
   }
   for (var k = 0; k < K; k++) {
     let idx = k * C + i; let row = k * C;
@@ -497,9 +501,10 @@ const KERNELS = {
       let base = field * K * C;
       let here = D[D_LAP1 + base + idx];
       var sum = 0.0;
-      for (var m = 0; m < MAXE; m++) { sum += dvs[m] * (D[D_LAP1 + base + row + neighbours[m]] - here) / dcs[m]; }
+      if (field == 0) { for (var m = 0; m < MAXE; m++) { sum += piEdges[m] * (dvs[m] * (D[D_LAP1 + base + row + neighbours[m]] - here) / dcs[m]); } }
+      else { for (var m = 0; m < MAXE; m++) { sum += dvs[m] * (D[D_LAP1 + base + row + neighbours[m]] - here) / dcs[m]; } }
       let lap2 = sum / area;
-      if (field == 0) { IN[S_TH + idx] -= P[0] * lap2 / D[D_EXM + idx]; }
+      if (field == 0) { IN[S_TH + idx] -= P[0] * lap2 / (piHere * D[D_EXM + idx]); }
       else if (field == 1) { IN[S_Q + idx] -= P[0] * lap2 / piHere; }
       else { IN[S_QC + idx] -= P[0] * lap2 / piHere; }
     }

@@ -2270,6 +2270,17 @@ ocean; what remains is the adiabatic dynamics gaining 0.29 W/m², the
 temperature closure losing 0.21 (it is area-weighted rather than
 mass-weighted over terrain) and the boundary layer's mixing of θ rather
 than enthalpy gaining 0.11. Before these, 2.57 W/m² simply vanished.
+Since Oct 12 those three keep the air's energy
+(`test/atmosphereConservation.test.mjs` follows it through each phase
+on both engines): the boundary layer mixes the static energy
+c_p T + Φ − L q_c with Φ held at the column's diagnosis, the θ closure
+weights its second Laplacian's fluxes by the edge's π, and the θ
+equation takes the moist pressure work κθ(0.608q − q_c)ω/p that its θ_v
+pressure-gradient force draws on, which leaves the dynamics' own
+truncation (about ±0.04 W/m² at N=16). In Parts 7 and 8 they had
+created 0.5–0.9, 0.03–0.04 and 0.30–0.39 W/m², the air's 0.9–1.3 W/m²
+gap, which those parts' data and pins and the page's spin-ups still
+carry.
 The ocean uptake is spin-up: the volume-mean
 ocean temperature is 1.0 °C against Earth's 3.5 °C, the two deepest
 layers sit at −0.7 and −1.8 °C, and because the interior layers push

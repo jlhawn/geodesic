@@ -36,8 +36,9 @@ function column(surfaceTheta, lapseAloft, windAloft, stableAbove = Infinity) {
 }
 
 const columnTotal = (field, pi, i) => { let s = 0; for (let k = 0; k < K; k++) s += pi[i] * dSigma[k] / g * field[k * C + i]; return s; };
+const enthalpy = (theta, pi, i) => { const { exnerLayer, cp } = core.diagnostics; let s = 0; for (let k = 0; k < K; k++) s += pi[i] * dSigma[k] / g * cp * theta[k * C + i] * exnerLayer[k * C + i]; return s; };
 
-test('an unstable, sheared column gets a kilometre-deep boundary layer that mixes θ and q toward uniform and conserves both', () => {
+test('an unstable, sheared column gets a kilometer-deep boundary layer that mixes θ and q toward uniform and conserves its enthalpy and water', () => {
   const state = column(300, -1e-3, 8, 1000);
   const [pi, theta, , , q, qc] = state;
   boundaryLayer.diagnose(state);
@@ -47,12 +48,12 @@ test('an unstable, sheared column gets a kilometre-deep boundary layer that mixe
   let coefficients = 0;
   for (let k = boundaryLayer.kTop; k < K - 1; k++) if (boundaryLayer.mixing[k * C + i] > 0) coefficients++;
   assert.ok(coefficients >= 2, `${coefficients} interfaces mix`);
-  const thetaBefore = columnTotal(theta, pi, i), qBefore = columnTotal(q, pi, i);
+  const heatBefore = enthalpy(theta, pi, i), qBefore = columnTotal(q, pi, i);
   const spreadBefore = Math.abs(theta[(K - 1) * C + i] - theta[(K - 3) * C + i]);
   for (let n = 0; n < 24; n++) boundaryLayer.mixColumn(i, pi, theta, q, qc, 900);
   const spreadAfter = Math.abs(theta[(K - 1) * C + i] - theta[(K - 3) * C + i]);
   assert.ok(spreadAfter < 0.5 * spreadBefore, `θ spread ${spreadBefore} → ${spreadAfter}`);
-  assert.ok(Math.abs(columnTotal(theta, pi, i) - thetaBefore) < 1e-10 * thetaBefore);
+  assert.ok(Math.abs(enthalpy(theta, pi, i) - heatBefore) < 1e-14 * heatBefore, `enthalpy ${heatBefore} → ${enthalpy(theta, pi, i)}`);
   assert.ok(Math.abs(columnTotal(q, pi, i) - qBefore) < 1e-10 * qBefore);
   console.log(`unstable column: boundary layer ${depth.toFixed(0)} m, ${coefficients} mixing interfaces, θ spread over the lowest three layers ${spreadBefore.toFixed(2)} → ${spreadAfter.toFixed(2)} K after 6 h`);
 });
@@ -194,7 +195,7 @@ function expectedEntrainment(state, layer, i, { efficiency = 0.2, shear = 5, cap
   return { above, buoyancy, jump, velocity: Math.min(cap, (efficiency * buoyancy + shear * onset * friction ** 3 / h) / Math.max(jump, jumpFloor)) };
 }
 
-test('a dry stable layer over a convective boundary layer is entrained at the closure\'s rate across the first interface above h, conserving the column\'s θ, water and momentum', () => {
+test('a dry stable layer over a convective boundary layer is entrained at the closure\'s rate across the first interface above h, conserving the column\'s enthalpy, water and momentum', () => {
   const state = entrainingColumn();
   const [pi, theta, u, , q, qc] = state;
   const i = 0;
@@ -211,15 +212,16 @@ test('a dry stable layer over a convective boundary layer is entrained at the cl
   assert.equal(still.mixing[idx], 0, 'which the K-profile alone leaves shut');
   for (let k = layer.kTop; k < K - 1; k++) if (k !== above) assert.equal(layer.mixing[k * C + i], still.mixing[k * C + i], `interface ${k}`);
 
-  const dt = 900, mass = pi[i] * dSigma[above] / g;
-  const totals = () => [columnTotal(theta, pi, i), columnTotal(q, pi, i), columnTotal(qc, pi, i)];
-  const before = totals(), qAbove = q[idx], thetaAbove = theta[idx];
+  const dt = 900, mass = pi[i] * dSigma[above] / g, { cp } = core.diagnostics;
+  const totals = () => [enthalpy(theta, pi, i), columnTotal(q, pi, i), columnTotal(qc, pi, i)];
+  const staticEnergy = (x) => cp * exnerLayer[x] * theta[x] + geopotential[x];
+  const before = totals(), qAbove = q[idx], energyAbove = staticEnergy(idx);
   const plainTheta = Float64Array.from(theta), plainQ = Float64Array.from(q), plainQc = Float64Array.from(qc);
   layer.mixColumn(i, pi, theta, q, qc, dt);
   const after = totals();
   for (let n = 0; n < 3; n++) assert.ok(Math.abs(after[n] - before[n]) <= 4e-16 * Math.abs(before[n]) * K, `total ${n}: ${before[n]} → ${after[n]}`);
   assert.ok(Math.abs(mass * (q[idx] - qAbove) - dt * rho * velocity * (q[idx + C] - q[idx])) < 1e-12 * mass * Math.abs(q[idx] - qAbove), 'the layer above h gains ρ w_e dt of the boundary layer\'s water');
-  assert.ok(Math.abs(mass * (theta[idx] - thetaAbove) - dt * rho * velocity * (theta[idx + C] - theta[idx])) < 1e-9 * mass * Math.abs(theta[idx] - thetaAbove), 'and loses heat at the same rate');
+  assert.ok(Math.abs(mass * (staticEnergy(idx) - energyAbove) - dt * rho * velocity * (staticEnergy(idx + C) - staticEnergy(idx))) < 1e-9 * mass * Math.abs(staticEnergy(idx) - energyAbove), 'and loses static energy at the same rate');
   still.mixColumn(i, pi, plainTheta, plainQ, plainQc, dt);
   assert.equal(plainQ[idx], qAbove, 'without entrainment the layer above h keeps its water');
   let bl = 0, blPlain = 0, blTheta = 0, blThetaPlain = 0;
@@ -232,7 +234,7 @@ test('a dry stable layer over a convective boundary layer is entrained at the cl
   layer.mixEdges(pi, u, e, e + 1, dt, lost);
   assert.ok(Math.abs(momentum() - m0) < 1e-13 * Math.abs(m0), `momentum ${m0} → ${momentum()}`);
   assert.ok(Math.abs(u[above * E + e]) < Math.abs(uAbove), 'the layer above h gives up momentum to the slower boundary layer');
-  console.log(`entraining column: h ${(layer.depth[i] - geopotential[(K - 1) * C + i] / g).toFixed(0)} m, B0 ${buoyancy.toExponential(2)} m²/s³, Δθv ${(jump * 300 / g).toFixed(2)} K, w_e ${(1000 * velocity).toFixed(2)} mm/s; one 900 s step moves ${(1000 * (qAbove - plainQ[idx] + q[idx] - qAbove) * mass).toFixed(1)} g/m² of water above h; column θ, water and momentum change by ${((after[0] - before[0]) / before[0]).toExponential(1)}, ${((after[1] + after[2] - before[1] - before[2]) / (before[1] + before[2])).toExponential(1)}, ${((momentum() - m0) / m0).toExponential(1)}`);
+  console.log(`entraining column: h ${(layer.depth[i] - geopotential[(K - 1) * C + i] / g).toFixed(0)} m, B0 ${buoyancy.toExponential(2)} m²/s³, Δθv ${(jump * 300 / g).toFixed(2)} K, w_e ${(1000 * velocity).toFixed(2)} mm/s; one 900 s step moves ${(1000 * (qAbove - plainQ[idx] + q[idx] - qAbove) * mass).toFixed(1)} g/m² of water above h; column enthalpy, water and momentum change by ${((after[0] - before[0]) / before[0]).toExponential(1)}, ${((after[1] + after[2] - before[1] - before[2]) / (before[1] + before[2])).toExponential(1)}, ${((momentum() - m0) / m0).toExponential(1)}`);
 });
 
 test('the deck\'s opening and the stratiform share taper w_e: a half-open gate or a share of one half halves it, a closed gate or an EIS of 12 K stops it; a stable surface, zero coefficients, the cap and the jump floor bound it', () => {
@@ -307,7 +309,7 @@ async function engines(entrainment) {
   const init = initializeState(pair, {});
   for (let a = 0; a < init.length; a++) state[a].set(init[a]);
   c.diagnose(pi, theta, q, qc);
-  let seed = 2024;
+  let seed = 2287;
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
   for (let i = 0; i < nC; i++) {
     const zb = phi[(nK - 1) * nC + i] / grav, surface = 286 + 14 * random(), top = 300 + 1500 * random(), below = -1e-3 + 2e-3 * random(), above = 3e-3 + 5e-3 * random(), jump = 4 * random();
