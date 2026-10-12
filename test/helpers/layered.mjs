@@ -169,7 +169,7 @@ async function gpuOcean(m, options, topography, surfaceT, ice, start) {
   if (start) start({ ocean: reference, surfaceT, ice });
   const model = await createGpuModel(m, { topography, ocean: options });
   const { gpu, oceanEngine: ocean } = model;
-  ocean.upload({ ...reference.serialize(), Q: reference.Q, W: reference.W, previousT0: reference.T0, previousIce: ice, fresh: reference.fresh, buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: reference.capacity }, surfaceT, ice);
+  ocean.upload({ ...reference.serialize(), Q: reference.Q, W: reference.W, previousT0: reference.T0, previousIceVolume: ice, fresh: reference.fresh, buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: reference.capacity }, surfaceT, ice);
   gpu.uploadSurfaceTemperature(surfaceT);
   gpu.device.queue.writeBuffer(gpu.buffers.S, 4 * gpu.layout.S.ICE, Float32Array.from(ice));
   return {

@@ -362,3 +362,56 @@ test('the GPU ocean takes an 8-layer state that carries no class list, as the pa
   for (const v of (await gpuOcean.download()).h) assert.ok(Number.isFinite(v));
   gpuModel.destroy();
 });
+
+test('the GPU ocean salts and freshens its mixed layer by the ice volume, cover times thickness, as the CPU one does, with the cover from the host or from the atmosphere\'s buffers', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, cpuOcean, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, land = cpuModel.geography.land, dt = 1350;
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: OCEAN_OPTIONS });
+  const { gpu } = gpuModel, gpuOcean = gpuModel.oceanEngine;
+  const start = Float64Array.from(ice, (h) => (h > 0 ? 0.8 : 0));
+  cpuOcean.initialize(surfaceT0, ice, { concentration: start });
+  gpuOcean.initialize(surfaceT0, ice, { concentration: start });
+  const grown = Float64Array.from(ice), spread = Float64Array.from(start), changed = [];
+  for (let i = 0; i < C; i++) {
+    if (land[i]) continue;
+    if (ice[i] > 0) { grown[i] = ice[i] + 0.2; spread[i] = 0.9; changed.push(i); }
+    else if (Math.abs(mesh.latCell[i]) > 50 * Math.PI / 180) { grown[i] = 0.3; spread[i] = 0.05; changed.push(i); }
+  }
+  const melted = Float64Array.from(grown, (h, i) => (ice[i] > 0 ? h : 0)), shrunk = Float64Array.from(spread, (a, i) => (ice[i] > 0 ? 0.5 : 0));
+  const volume = (h, a) => Float64Array.from(h, (x, i) => (x > 0 ? x * a[i] : 0));
+  const salinity = (state) => state.S.slice(0, C);
+  async function compare(label, from, to, before) {
+    const cpu = salinity(cpuOcean.serialize()), gpuS = salinity(await gpuOcean.serialize());
+    const previous = (await gpuOcean.restartArrays()).previousIceVolume;
+    let worst = 0, apart = Infinity;
+    for (const i of changed) {
+      worst = Math.max(worst, Math.abs(gpuS[i] - cpu[i]));
+      const depth = cpuOcean.h[i], byThickness = (before[i] - 5) * 0.917 * (to.h[i] - from.h[i]) / depth, byVolume = (before[i] - 5) * 0.917 * (to.v[i] - from.v[i]) / depth;
+      apart = Math.min(apart, Math.abs(byThickness - byVolume));
+    }
+    let remembered = 0;
+    for (let i = 0; i < C; i++) if (!land[i]) remembered = Math.max(remembered, Math.abs(previous[i] - to.v[i]));
+    console.log(`${label}: the engines' mixed-layer salinities differ by up to ${worst.toExponential(2)} psu in the ${changed.length} cells whose ice changed, where the thickness rule would differ from the volume rule by at least ${apart.toFixed(4)}; the GPU remembers the ice volume to ${remembered.toExponential(1)} m`);
+    assert.ok(apart > 0.01 && worst < 5e-4, `${label}: salinity differs by ${worst} psu, the rules by ${apart}`);
+    assert.ok(remembered < 1e-6, `${label}: the GPU remembers an ice volume off by ${remembered} m`);
+    return cpu;
+  }
+  const first = { h: ice, v: volume(ice, start) }, second = { h: grown, v: volume(grown, spread) }, third = { h: melted, v: volume(melted, shrunk) };
+  const before = salinity(cpuOcean.serialize());
+  cpuOcean.advance(Float64Array.from(surfaceT0), grown, new Float64Array(C), stress, dt, spread);
+  await gpuOcean.advance(Float64Array.from(surfaceT0), grown, stress, dt, spread);
+  const middle = await compare('ice grown and spread, cover from the host', first, second, before);
+  cpuOcean.advance(Float64Array.from(surfaceT0), melted, new Float64Array(C), stress, dt, shrunk);
+  gpu.uploadSurfaceTemperature(Float64Array.from(surfaceT0));
+  gpu.device.queue.writeBuffer(gpu.buffers.S, 4 * gpu.layout.S.ICE, Float32Array.from(melted));
+  gpu.uploadIce(shrunk);
+  gpuOcean.setStress(stress, melted, shrunk);
+  gpuOcean.readSurfaceFromAtmosphere();
+  gpuOcean.step(dt);
+  gpuOcean.mixedLayer(dt);
+  gpuOcean.salt(dt);
+  gpuOcean.writeSurface(dt);
+  await gpu.device.queue.onSubmittedWorkDone();
+  await compare('ice melted back and narrowed, cover from the atmosphere\'s buffers', second, third, middle);
+  gpuModel.destroy();
+});

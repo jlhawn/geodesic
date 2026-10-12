@@ -129,6 +129,7 @@ export function createModel(gridOrMesh, {
     ...iceOptions,
   });
   moistPhysics.useSeaIce(seaIce.concentration);
+  if (ocean) ocean.useSeaIce(seaIce.concentration);
   const totals = { absorbedSolar: 0, atmosphereSolar: 0, outgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, insolation: 0, reflectedSolar: 0 };
   const surfaceAlbedo = new Float64Array(C), diffuseAlbedo = new Float64Array(C), wetness = new Float64Array(C).fill(1), openSea = new Float64Array(C), stressScratch = new Float64Array(E);
   const fluxT = new Float64Array(C), directContrast = new Float64Array(C), diffuseContrast = new Float64Array(C), callAlbedo = radiation.callCosZenith && (radiationOptions.radiationEvery ?? 1) > 1 ? new Float64Array(C) : null;

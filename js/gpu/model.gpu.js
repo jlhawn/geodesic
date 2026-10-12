@@ -94,6 +94,7 @@ export async function createGpuModel(gridOrMesh, {
   const surfaceCpu = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, ...surface });
   const moistCpu = createMoistPhysics(mesh, core, moist);
   const gpuOcean = oceanOptions === false ? null : createLayeredOcean(gpu, { ...oceanOptions, climatology: await loadClimatology(oceanOptions.climatology ?? null), geography, registers: { T: gpu.buffers.T, K1: gpu.buffers.K1, K2: gpu.buffers.K2, K3: gpu.buffers.K3, K4: gpu.buffers.K4 } });
+  if (gpuOcean) gpuOcean.useSeaIce(seaIce.concentration);
   const landCpu = geography ? createLandSurface(mesh, geography, landOptions) : null;
   if (landCpu) gpu.hooks.landWeights = landCpu.weights;
   let oceanCounter = 0;

@@ -2001,7 +2001,9 @@ then three, and so on (`runoffOutlets`, built once per model; at N=32
 the largest outlets are the Ob, the Amazon, the Río de la Plata, the
 Congo and the Nile), all applied as virtual salt fluxes to the mixed
 layer; ice growth
-rejects brine and melt freshens with an ice salinity of 5. The freezing
+rejects brine and melt freshens with an ice salinity of 5, by the change
+since the last ocean step in the ice's volume per unit area of the cell,
+its cover times the thickness over that cover. The freezing
 point is still the fixed 271.35 K of M9.
 
 **Start.** From rest: the mixed layer 60 m deep with the atmosphere's
@@ -2397,7 +2399,7 @@ KEEP counts only whole days or whole years; the shell drivers' day
 patterns see only whole days. Every ocean-only file and in-day
 checkpoint also carries the ocean's restart arrays
 (`restartArrays` in `js/gpu/layeredOcean.gpu.js`: the heat and salt
-contents as stored, the mixed layer's previous temperature and ice,
+contents as stored, the mixed layer's previous temperature and ice volume,
 the freshwater not yet taken and the heat flux and capacity the surface
 update is using), which the ocean's upload restores as they are rather
 than rebuilding them from temperature and salinity and fitting the

@@ -80,7 +80,9 @@ import { profileAt } from './climatology.module.js';
  * the gradual, dead-banded correction keeps that from overshooting.
  * Tracers are carried by the flux with the donor cell's value. Surface
  * freshwater (evaporation minus rain, and runoff where it flows down to the sea) and ice
- * growth or melt act on its salinity as virtual salt fluxes. The mixed
+ * growth or melt, counted in the ice's volume per unit area of the cell
+ * (its cover times its thickness), act on its salinity as virtual salt
+ * fluxes. The mixed
  * layer's temperature is the sea surface temperature the atmosphere sees, its
  * heat capacity is published per cell, and the heat converged under ice
  * is handed to the ice base.
@@ -728,7 +730,8 @@ export function createOcean(mesh, {
   const h = shared('h', L * C), u = shared('u', L * E), Q = shared('Q', L * C), W = shared('W', L * C);
   const state = [h, u, Q, W];
   const eta = shared('eta', C);
-  const T0 = new Float64Array(C), S0 = new Float64Array(C), rhoMl = shared('rhoMl', C), previousT0 = new Float64Array(C), surfaceIn = new Float64Array(C), previousIce = new Float64Array(C);
+  const T0 = new Float64Array(C), S0 = new Float64Array(C), rhoMl = shared('rhoMl', C), previousT0 = new Float64Array(C), surfaceIn = new Float64Array(C), iceVolume = new Float64Array(C), previousVolume = new Float64Array(C);
+  let seaCover = null;
   const capacity = shared('capacity', C);
   if (!adopting) capacity.fill(rhoCp * mixedDepth);
   const stress = shared('stress', E), fresh = new Float64Array(C);
@@ -1175,7 +1178,7 @@ export function createOcean(mesh, {
     }
   }
 
-  function mixedLayer(dt, ice) {
+  function mixedLayer(dt) {
     cellVector(mesh, stress, tauCell);
     if (mixedNeighbourRatio > 0) neighbourReach();
     for (let i = 0; i < C; i++) {
@@ -1183,7 +1186,7 @@ export function createOcean(mesh, {
       const tau = Math.hypot(tauCell[3 * i], tauCell[3 * i + 1], tauCell[3 * i + 2]);
       const ustar3 = Math.pow(tau / rho0, 1.5), stir = stirring * Math.exp(-h[i] / stirringDepth);
       const deepest = Math.min(maximumMixedDepth, reach[i]), s0 = W[i] / h[i];
-      const salted = s0 * fresh[i] / 1000 + (s0 - iceSalinity) * (ice[i] - previousIce[i]) * iceDensity / 1000;
+      const salted = s0 * fresh[i] / 1000 + (s0 - iceSalinity) * (iceVolume[i] - previousVolume[i]) * iceDensity / 1000;
       const buoyancy = g * (expansionOf(surfaceIn[i], s0) * (previousT0[i] - surfaceIn[i]) * capacity[i] / rhoCp + contractionOf(surfaceIn[i], s0) * salted) / dt;
       buoyancyLoss[i] += (buoyancy - buoyancyLoss[i]) * (buoyancyMemory > 0 ? Math.min(1, dt / buoyancyMemory) : 1);
       let rm = eos(Q[i] / h[i], W[i] / h[i]), budget = convectiveRate * dt;
@@ -1243,9 +1246,13 @@ export function createOcean(mesh, {
     }
   }
 
+  const coverOf = (ice, concentration, i) => (ice[i] > 0 ? (concentration && concentration[i] > 0 ? concentration[i] : 1) : 0);
   function setStress(total, ice, concentration = null) {
-    const cover = (i) => (ice[i] > 0 ? (concentration && concentration[i] > 0 ? concentration[i] : 1) : 0);
+    const cover = (i) => coverOf(ice, concentration, i);
     for (let e = 0; e < E; e++) stress[e] = edgeOcean[e] ? total[e] * (1 - 0.5 * (cover(cellsOnEdge[2 * e]) + cover(cellsOnEdge[2 * e + 1])) * (1 - iceStressTransmission)) : 0;
+  }
+  function measureIce(ice, concentration, out) {
+    for (let i = 0; i < C; i++) out[i] = coverOf(ice, concentration, i) * ice[i];
   }
   function readSurface(surfaceT, ice) {
     for (let i = 0; i < C; i++) {
@@ -1259,16 +1266,16 @@ export function createOcean(mesh, {
     for (let i = 0; i < C; i++) if (cellOcean[i]) fresh[i] += (evaporation ? evaporation[i] * dt : 0) - (rain ? rain[i] : 0);
     if (runoff) for (let j = 0; j < C; j++) if (!cellOcean[j] && runoff[j] > 0 && outlet[j] >= 0) fresh[outlet[j]] -= runoff[j] * areaCell[j] / areaCell[outlet[j]];
   }
-  function salt(dt, ice) {
+  function salt() {
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
       const s = W[i] / h[i];
       W[i] += s * fresh[i] / 1000;
-      const grown = (ice[i] - previousIce[i]) * iceDensity / 1000;
+      const grown = (iceVolume[i] - previousVolume[i]) * iceDensity / 1000;
       W[i] += (s - iceSalinity) * grown;
       W[i] = Math.max(0, W[i]);
       fresh[i] = 0;
-      previousIce[i] = ice[i];
+      previousVolume[i] = iceVolume[i];
     }
   }
   function writeSurface(surfaceT, oceanFlux, dt) {
@@ -1289,16 +1296,17 @@ export function createOcean(mesh, {
     }
   }
 
-  function advance(surfaceT, ice, oceanFlux, totalStress, dt, concentration = null) {
+  function advance(surfaceT, ice, oceanFlux, totalStress, dt, concentration = seaCover) {
     if (++counter % everySteps !== 0) return false;
-    if (!initialised) initialize(surfaceT, ice);
+    if (!initialised) initialize(surfaceT, ice, { concentration });
     const dtOcean = everySteps * dt;
     params[0] = Math.min(1 / 3600, 1 / dtOcean);
     readSurface(surfaceT, ice);
+    measureIce(ice, concentration, iceVolume);
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
     step(dtOcean);
-    mixedLayer(dtOcean, ice);
-    salt(dtOcean, ice);
+    mixedLayer(dtOcean);
+    salt();
     writeSurface(surfaceT, oceanFlux, dtOcean);
     return true;
   }
@@ -1320,8 +1328,8 @@ export function createOcean(mesh, {
    * pressure below the thermocline is level and the ocean does not begin
    * with a barotropic shock.
    */
-  function initialize(surfaceT, ice, { climatology: atlas = climatology } = {}) {
-    const filled = build(surfaceT, ice, atlas);
+  function initialize(surfaceT, ice, { climatology: atlas = climatology, concentration = seaCover } = {}) {
+    const filled = build(surfaceT, ice, atlas, concentration);
     if (!filled) return null;
     let covered = 0, other = 0;
     for (let i = 0; i < C; i++) {
@@ -1331,11 +1339,11 @@ export function createOcean(mesh, {
     }
     return { atlas: covered, analytic: other };
   }
-  function build(surfaceT, ice, atlas) {
+  function build(surfaceT, ice, atlas, concentration = seaCover) {
     u.fill(0); eta.fill(0); fresh.fill(0); buoyancyLoss.fill(0);
+    measureIce(ice, concentration, previousVolume);
     const filled = atlas ? atlasColumns(mesh, atlas, { D, cellOcean, ice, rho, labelT, labelS, h, Q, W, T0, shallowestMixedDepth, maximumMixedDepth }) : null;
     for (let i = 0; i < C; i++) {
-      previousIce[i] = ice[i];
       iced[i] = ice[i] > 0 ? 1 : 0;
       const lat = latCell[i];
       if (filled && filled[i]) {
@@ -1438,25 +1446,26 @@ export function createOcean(mesh, {
    * A saved ocean on other classes is carried onto these (rebinOcean)
    * before its columns are fitted to the bathymetry.
    */
-  function load(saved, surfaceT, ice) {
+  function load(saved, surfaceT, ice, concentration = seaCover) {
     const classes = savedDensities(saved, C);
     if (classes && !sameDensities(classes, densities)) saved = rebinOcean(saved, classes, densities, C, { labelT, labelS });
     if (!saved.h || saved.h.length !== L * C) {
-      build(surfaceT, ice, climatology);
+      build(surfaceT, ice, climatology, concentration);
       return;
     }
     h.set(saved.h); u.set(saved.u); eta.set(saved.eta);
     for (let n = 0; n < L * C; n++) { Q[n] = h[n] * saved.T[n]; W[n] = h[n] * saved.S[n]; }
     const start = () => {
       const kept = { h: Float64Array.from(h), u: Float64Array.from(u), Q: Float64Array.from(Q), W: Float64Array.from(W), eta: Float64Array.from(eta) };
-      build(surfaceT, ice, climatology);
+      build(surfaceT, ice, climatology, concentration);
       const built = { h: Float64Array.from(h), Q: Float64Array.from(Q), W: Float64Array.from(W) };
       h.set(kept.h); u.set(kept.u); Q.set(kept.Q); W.set(kept.W); eta.set(kept.eta);
       return built;
     };
     fitColumns({ h, Q, W, eta }, start, { D, cellOcean, L, C, labelT, labelS, minimumThickness });
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
-    for (let i = 0; i < C; i++) { previousIce[i] = ice[i]; iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = Q[i] / Math.max(EPS, h[i]); S0[i] = W[i] / Math.max(EPS, h[i]); previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
+    measureIce(ice, concentration, previousVolume);
+    for (let i = 0; i < C; i++) { iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = Q[i] / Math.max(EPS, h[i]); S0[i] = W[i] / Math.max(EPS, h[i]); previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
     fresh.fill(0); buoyancyLoss.fill(0);
     counter = 0;
     initialised = true;
@@ -1503,5 +1512,5 @@ export function createOcean(mesh, {
   initialised = false;
   const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), setLayerRunner(fn) { layerRunner = fn; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }
