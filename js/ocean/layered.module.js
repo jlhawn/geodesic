@@ -1038,8 +1038,9 @@ export function createOcean(mesh, {
     for (let e = 0; e < E; e++) U[e] += dtb / 6 * (s1[1][e] + 2 * s2[1][e] + 2 * s3[1][e] + s4[1][e]);
   }
 
-  function step(dt) {
+  function dynamics(dt) {
     const [k1, k2, k3, k4] = stages;
+    params[0] = Math.min(1 / 3600, 1 / dt);
     params[1] = dt;
     freeSurface();
     tendency(state, k1);
@@ -1055,6 +1056,8 @@ export function createOcean(mesh, {
       const s = state[a], a1 = k1[a], a2 = k2[a], a3 = k3[a], a4 = k4[a];
       for (let i = 0; i < s.length; i++) s[i] += w * (a1[i] + 2 * a2[i] + 2 * a3[i] + a4[i]);
     }
+  }
+  function rescale() {
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
       let sum = 0, dh = 0, dQ = 0, dW = 0;
@@ -1074,7 +1077,8 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) { const n = at(k, i); h[n] *= scale; Q[n] *= scale; W[n] *= scale; }
       eta[i] = avgEta[i];
     }
-    if (eddyLimit > 0) eddyTransport(dt);
+  }
+  function shiftVelocities() {
     edgeThicknesses(h);
     limited = 0;
     for (let e = 0; e < E; e++) {
@@ -1087,6 +1091,17 @@ export function createOcean(mesh, {
       for (let k = 1; k < L; k++) if (hEdge[ae(k, e)] < THIN) u[ae(k, e)] = u[ae(k - 1, e)];
     }
   }
+  function step(dt) {
+    dynamics(dt);
+    rescale();
+    if (eddyLimit > 0) eddyTransport(dt);
+    shiftVelocities();
+  }
+  /*
+   * step's parts in its order, for the tests that follow heat and salt
+   * through it: dynamics(dt), rescale(), eddy(dt), shift().
+   */
+  const phases = { dynamics, rescale, eddy: eddyTransport, shift: shiftVelocities };
 
   function eddyTransport(dt) {
     if (!eddy) eddy = { volume: new Float64Array(L * C), heat: new Float64Array(L * C), salt: new Float64Array(L * C), flux: new Float64Array(L), share: new Float64Array(L) };
@@ -1300,7 +1315,6 @@ export function createOcean(mesh, {
     if (++counter % everySteps !== 0) return false;
     if (!initialised) initialize(surfaceT, ice, { concentration });
     const dtOcean = everySteps * dt;
-    params[0] = Math.min(1 / 3600, 1 / dtOcean);
     readSurface(surfaceT, ice);
     measureIce(ice, concentration, iceVolume);
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
@@ -1512,5 +1526,5 @@ export function createOcean(mesh, {
   initialised = false;
   const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }

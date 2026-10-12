@@ -132,7 +132,7 @@ test('an ocean-only run stopped inside a day and continued ends byte for byte wh
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')), ['alone_year0000_day001_step0004.bin']);
   const inside = await load(join(parts, 'alone_year0000_day001_step0004.bin'));
   assert.deepEqual([inside.oceanYears, inside.oceanDays, inside.oceanStep, inside.day], [0, 1, 4, 3]);
-  assert.ok(inside.ocean.Q && inside.ocean.flux, 'the in-day file carries the restart arrays');
+  assert.ok(inside.ocean.Qref && inside.ocean.flux, 'the in-day file carries the restart arrays');
   for (const field of ['mlmSubsidence', 'mlmHeight', 'mlmGate']) assert.ok(inside[field], `the in-day file carries ${field}`);
   assert.equal(run('oceanSpinup.mjs', { ...env, OUT: parts, STOP_AFTER_STEPS: String(PER_DAY + 16) }), 0);
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')).sort(), ['alone_year0001.bin', 'alone_year0001_day000_step0020.bin']);
@@ -193,7 +193,7 @@ test('a coupled run split at each day\'s end ends byte for byte where the uninte
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '1' }), 0);
   const day = await load(join(parts, 's_day0001.bin'));
   for (const field of ['windSpeed', 'evaporation', 'cumulusCover', 'cumulusWater']) assert.ok(day[field], `the day's file carries ${field}`);
-  assert.ok(day.ocean.Q && day.ocean.flux && day.ocean.capacity, 'the day\'s file carries the ocean\'s restart arrays');
+  assert.ok(day.ocean.Qref && day.ocean.flux && day.ocean.capacity, 'the day\'s file carries the ocean\'s restart arrays');
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '2' }), 0);
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, DAYS: '3' }), 0);
   assert.ok(readFileSync(join(whole, 's_day0003.bin')).equals(readFileSync(join(parts, 's_day0003.bin'))), 'the split run ends where the uninterrupted one does');

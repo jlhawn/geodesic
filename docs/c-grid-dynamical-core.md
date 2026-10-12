@@ -2235,6 +2235,18 @@ h ← h + h·(η̄ − (Σh − D))/Σh, rather than multiplying each column by
 year that also carried heat in at each layer's temperature. The
 correction keeps the drift near 2×10⁻⁷ m per step with no bias, and
 `test/layeredGpu.test.mjs` holds the volume over 400 wind-driven steps.
+The GPU keeps each layer's heat as h·(T − 273.15 K), so that a deep
+layer's single-precision store records the eddy transport's small
+losses (as h·T it rounded them away while the thin layers receiving
+them did not, and the sea gained 0.6 W/m² with no surface flux); the
+mixed layer's exchanges move whole multiples of the coarser store's
+spacing, and the surface read adds only the surface's change since the
+ocean wrote it, so that neither creates or destroys heat
+(`test/layeredConservation.test.mjs` follows heat and salt through each
+phase of a step on both engines). Over 140 coupled days from Part 8's
+day 3650 the sea's side of the books then leaves 0.11 W/m² unplaced
+rather than 0.60, nearly all of it (0.106) the rescale's water, added
+and removed at each column's mean temperature.
 The atmosphere returns the kinetic energy it dissipates as heat, in the
 cells whose edges lost it: the surface and top drags inside the RK4
 tendency, and the ∇⁴ momentum closure and the boundary-layer momentum
@@ -2399,19 +2411,22 @@ KEEP counts only whole days or whole years; the shell drivers' day
 patterns see only whole days. Every ocean-only file and in-day
 checkpoint also carries the ocean's restart arrays
 (`restartArrays` in `js/gpu/layeredOcean.gpu.js`: the heat and salt
-contents as stored, the mixed layer's previous temperature and ice volume,
-the freshwater not yet taken and the heat flux and capacity the surface
-update is using), which the ocean's upload restores as they are rather
+contents as stored, the heat as `Qref`, h·(T − 273.15 K), the mixed
+layer's previous temperature and ice volume, the freshwater not yet
+taken and the heat flux and capacity the surface update is using),
+which the ocean's upload restores as they are rather
 than rebuilding them from temperature and salinity and fitting the
 columns to the bathymetry, which puts the ice skin 0.08 K and the open
 water 3×10⁻⁴ K off the uninterrupted run within two N=6 days. With them
 an ocean-only run stopped inside a day or at any
 checkpoint and continued ends byte for byte where the uninterrupted run
-does (`test/asyncSpinup.test.mjs`). A coupled run continues from the
-exact step, but not bit for bit: the atmosphere's step-to-step
-diagnostics (the surface wind the next step's drag uses among them)
-start again from zero, and a recorded day spanning an interruption
-differs from the uninterrupted one by about 0.5% in its mean fluxes.
+does (`test/asyncSpinup.test.mjs`); a file from before `Qref`, which
+carries `Q`, h·T, loads with one rounding of each layer's heat. A
+coupled run continues from the exact step, but not bit for bit: the
+atmosphere's step-to-step diagnostics (the surface wind the next step's
+drag uses among them) start again from zero, and a recorded day
+spanning an interruption differs from the uninterrupted one by about
+0.5% in its mean fluxes.
 
 `SYNC_CMD` is a shell command both scripts run through `/bin/sh` after
 every snapshot, recorded forcing day and log update, with the file's
