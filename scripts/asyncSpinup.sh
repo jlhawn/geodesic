@@ -12,7 +12,10 @@
 #
 # Everything is recovered from the files in OUT, so the script can be
 # stopped and started again at any point, and one driver at a time holds
-# <OUT>/<PREFIX><N>_cycles.lock (another exits 0). It stops cleanly at
+# <OUT>/<PREFIX><N>_cycles.lock (another exits 0). A lock whose process is
+# gone, carries this process's own pid or was taken in an earlier boot is
+# taken over, so a start at boot after an eviction never refuses itself on
+# a pid the new boot reused. It stops cleanly at
 # <OUT>/STOP_<PREFIX> or STOP_<PREFIX><N> before its next segment, and on
 # SIGTERM or SIGINT, which it passes to the running segment, once that has
 # saved. A segment that fails is retried from its last snapshot after
@@ -134,16 +137,17 @@ finish_cycle() {
 
 mkdir -p "$OUT"
 LOCK=$OUT/${TAG}_cycles.lock
+boot() { cat /proc/sys/kernel/random/boot_id 2>/dev/null || sysctl -n kern.boottime 2>/dev/null | tr -dc '0-9' | cut -c1-12; }
 if ! mkdir "$LOCK" 2>/dev/null; then
-  holder=$(cat "$LOCK/pid" 2>/dev/null)
-  if [ -n "$holder" ] && ps -p "$holder" -o args= 2>/dev/null | grep -q asyncSpinup; then note "another driver (pid $holder) holds $LOCK; not starting"; exit 0; fi
+  read -r holder holder_boot 2>/dev/null < "$LOCK/pid"
+  if [ -n "$holder" ] && [ "$holder" != $$ ] && [ "${holder_boot:-$(boot)}" = "$(boot)" ] && ps -p "$holder" -o args= 2>/dev/null | grep -q asyncSpinup; then note "another driver (pid $holder) holds $LOCK; not starting"; exit 0; fi
   note "taking over $LOCK from pid ${holder:-unknown}, which is gone"
 fi
 trap 'rm -rf "$LOCK"' EXIT
 if [ -n "$RESTORE_CMD" ]; then
   /bin/sh -c "$RESTORE_CMD" || { echo "RESTORE_CMD failed; not starting" >&2; exit 1; }
 fi
-echo $$ > "$LOCK/pid"
+echo "$$ $(boot)" > "$LOCK/pid"
 start=$(ledger start)
 if [ -z "$start" ]; then
   if ls "$OUT" | grep -qE "^${TAG}_c[0-9]+_"; then note "cycle files of $TAG in $OUT but no $LEDGER; not starting"; exit 1; fi

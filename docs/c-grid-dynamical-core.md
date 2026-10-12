@@ -2476,7 +2476,8 @@ and it stops at STOP_FILE (`$HOME/STOP_verda-relaunch-NAME`). The OS
 volume carries the repository, node_modules and the run, so after an
 eviction the new instance boots the same disk, and the startup script
 only restarts the driver, which continues from the newest files (a
-second driver on the same OUT finds the lock and exits).
+second driver on the same OUT finds the lock and exits; a lock taken
+before the boot, or naming the new driver's own pid, is taken over).
 `test/verdaRelaunch.test.mjs` drives the loop through a stand-in for the
 CLI that answers with the
 documented JSON fields (`id`, `hostname`, `status`, `os_volume_id` or
@@ -2618,6 +2619,33 @@ an hour, the puller having kept up): its cost is about (PRICE + 0.04
 $/h for the 150 GB volume) × that lifetime, plus the same rate over
 any eviction gap's lost segment and restart, and a volume left detached
 by an eviction bills on until it is reused or deleted.
+
+**The asynchronous schedule on Verda.** With `DRIVER=async`, `run`
+drives `scripts/asyncPair.sh` in place of pairedSpinup: for each N in
+NS in turn, one after the other so that each has the GPU to itself,
+`asyncSpinup.sh` runs that resolution's whole schedule (CYCLES,
+COUPLED_YEARS, RECORD_YEARS, OCEAN_YEARS, FINAL_YEARS, OCEAN_ONLY,
+RESTORE, OCEAN_KEEP, SNAPSHOT_DAYS and KEEP_FORCING are passed on, at
+asyncSpinup's defaults unless set), and the wrapper logs
+`N=<n> ended: <why>` (done, NaN, failed, or `STOP_<PREFIX><N>`) to
+`<PREFIX>.log` and, once every resolution has ended or at
+`STOP_<PREFIX>`, the `stopped (…)` line that marks the run ended. An
+eviction's SIGTERM, which asyncSpinup turns into a save, leaves no stop
+line, and a resolution with an `ended` line since the log's last stop is
+not run again, so the resume carries on with the resolution in progress
+and then the rest. UNTIL is then the coupled day the schedule ends on,
+D₀ + 365·(CYCLES·COUPLED_YEARS + FINAL_YEARS); the disk check counts
+KEEP snapshots, CYCLES + OCEAN_KEEP year files and one cycle's forcing
+(2.3 MB a day at N=64, about 9 at N=128), and `status` gives each N's
+cycle and phase. `run` writes the run's settings to `SETTINGS_<PREFIX>`
+in OUT, which every later mode takes for those left unset, so the
+resume at boot, given only OUT and PREFIX, runs the run that was
+started. The startup script names its run in its `PREFIX=` line, so
+another run registers a copy with that line changed. The puller's
+listing (`scripts/verdaFiles.mjs`) adds the ocean-only year files
+`<PREFIX><N>_cCC_yearYYYY.bin`, kept also under a KEEP_DAYS list, while
+the forcing records and the in-year checkpoints stay on the instance;
+the cycle ledgers and logs come with the other logs.
 
 **Report figures.** `scripts/figures/` draws four figures of a pulled
 state, each a node dump (`<figure>.mjs <state.bin> <out.json>`) and a

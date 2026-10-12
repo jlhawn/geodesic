@@ -91,6 +91,39 @@ test('the hand-off takes the sea surface, ice and ocean and keeps the atmosphere
   assert.throws(() => withOceanOf(coupled, { ...alone, N: 2 }, land), /N=2/);
 });
 
+test('the driver leaves a lock held in this boot by another live driver alone and takes over one taken in an earlier boot or carrying its own pid', () => {
+  const boot = spawnSync('bash', ['-c', "cat /proc/sys/kernel/random/boot_id 2>/dev/null || sysctl -n kern.boottime 2>/dev/null | tr -dc '0-9' | cut -c1-12"], { encoding: 'utf8' }).stdout.trim();
+  const holder = spawn('sleep', ['60'], { argv0: 'asyncSpinup', stdio: 'ignore' });
+  const locked = (name, owner) => {
+    const out = outDir(name);
+    writeFileSync(join(out, 'STOP_async'), '');
+    mkdirSync(join(out, 'async6_cycles.lock'));
+    writeFileSync(join(out, 'async6_cycles.lock', 'pid'), `${owner}\n`);
+    return out;
+  };
+  const log = (out) => text(join(out, 'async6_cycles.log'));
+  try {
+    let out = locked('lockLive', `${holder.pid} ${boot}`);
+    assert.equal(driver({ OUT: out }), 0);
+    assert.match(log(out), new RegExp(`another driver \\(pid ${holder.pid}\\) holds .*async6_cycles\\.lock; not starting`));
+    assert.equal(text(join(out, 'async6_cycles.lock', 'pid')), `${holder.pid} ${boot}\n`, 'a live driver of this boot keeps its lock');
+
+    out = locked('lockEarlierBoot', `${holder.pid} an-earlier-boot`);
+    assert.equal(driver({ OUT: out }), 0);
+    assert.match(log(out), new RegExp(`taking over .*async6_cycles\\.lock from pid ${holder.pid}, which is gone`));
+    assert.match(log(out), /stopped at STOP_async or STOP_async6/);
+    assert.ok(!existsSync(join(out, 'async6_cycles.lock')), 'the lock goes with the driver');
+
+    out = locked('lockOwnPid', '');
+    const self = spawnSync('bash', ['-c', `echo "$$ ${boot}" > "$OUT/async6_cycles.lock/pid"; exec bash scripts/asyncSpinup.sh`], { cwd: root, env: { ...process.env, N: String(N), OUT: out }, encoding: 'utf8' });
+    assert.equal(self.status, 0, self.stderr);
+    assert.doesNotMatch(log(out), /another driver/);
+    assert.match(log(out), /taking over .*async6_cycles\.lock from pid \d+, which is gone[\s\S]*stopped at STOP_async or STOP_async6/);
+  } finally {
+    holder.kill();
+  }
+});
+
 test('an ocean-only run stopped inside a day and continued ends byte for byte where the uninterrupted run does', { skip }, async () => {
   const env = { TAG: 'alone', STATE: join(dir, 'recorded/rec_day0002.bin'), FORCING: forcing, YEARS: '3', DAYS_PER_YEAR: '2', SNAPSHOT_DAYS: '1' };
   const whole = outDir('whole'), parts = outDir('parts');

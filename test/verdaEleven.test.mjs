@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, readFileSync, mkdtempSync, mkdirSync, rmSync, chmodSync, existsSync, readdirSync, utimesSync } from 'node:fs';
 import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { segmentTargets, timings, projection, reportText } from '../scripts/verdaBenchmark.mjs';
 import { wanted, listFiles } from '../scripts/verdaFiles.mjs';
 
@@ -74,6 +74,22 @@ test('the pulled files are the whole-day states, logs and reports, without parti
   mkdirSync(join(out, 'eleven.lock'));
   for (const f of ['eleven64_day0010.bin', 'eleven64_day0011_step0008.bin', 'eleven.log', 'eleven_suite/a.tap', 'eleven.lock/owner']) writeFileSync(join(out, f), 'x');
   assert.deepEqual(listFiles(out, 'eleven'), ['eleven.log', 'eleven64_day0010.bin', 'eleven_suite/a.tap']);
+});
+
+test('the pulled files include the asynchronous spin-up\'s ocean-only year files, cycle ledgers and logs, not its forcing records or in-year checkpoints', () => {
+  for (const [path, yes] of [
+    ['twelve64_c01_year0020.bin', true], ['twelve128_c03_year0100.bin', true], ['twelve64_cycles.txt', true], ['twelve64_cycles.log', true], ['twelve64_c01.log', true], ['twelve64_c01.out', true],
+    ['twelve64_c01_year0003_day120.bin', false], ['twelve64_c01_year0003_day120_step0040.bin', false], ['twelve64_c01_year0020.bin.partial', false],
+    ['twelve64_c01_forcing/forcing-0731.bin', false], ['twelve64_c01_forcing/forcing-0732.bin.partial', false], ['twelve64_c01_forcing/notes.txt', false],
+    ['twelve64_cycles.lock/pid', false], ['eleven64_c01_year0020.bin', false], ['twelve64_c01_year0020_copy.bin', false],
+  ]) assert.equal(wanted(path, 'twelve'), yes, path);
+  const out = join(dir, 'asyncFiles');
+  mkdirSync(join(out, 'twelve64_c01_forcing'), { recursive: true });
+  mkdirSync(join(out, 'twelve64_cycles.lock'));
+  for (const f of ['twelve64_day1095.bin', 'twelve64_c01_year0007.bin', 'twelve64_c01_year0007_day030.bin', 'twelve64_cycles.txt', 'twelve64_cycles.log', 'twelve64_c01_forcing/forcing-0731.bin', 'twelve64_c01_forcing/index.txt', 'twelve64_cycles.lock/pid']) writeFileSync(join(out, f), 'x');
+  assert.deepEqual(listFiles(out, 'twelve'), ['twelve64_c01_year0007.bin', 'twelve64_cycles.log', 'twelve64_cycles.txt', 'twelve64_day1095.bin']);
+  const listed = spawnSync(process.execPath, [join(root, 'scripts/verdaFiles.mjs'), out, 'twelve'], { encoding: 'utf8' }).stdout;
+  assert.equal(listed, ['twelve64_c01_year0007.bin', 'twelve64_cycles.log', 'twelve64_cycles.txt', 'twelve64_day1095.bin'].map((f) => `1\t-\t${f}\n`).join(''));
 });
 
 test('the suite report names every failing test with its error and output, and the file that failed to load', () => {
@@ -171,6 +187,177 @@ test('verdaEleven runs the paired spin-up with the run\'s settings, marks it, an
   assert.match(readFileSync(join(out, 'paired.env'), 'utf8'), /UNTIL=1825/, 'a resume without UNTIL keeps the extended end');
   assert.match(r.stdout, /N=128 day 10, 179 segments left/);
   assert.match(eleven(out, ['status']).stdout, /day 10 of 1825, 179 segments left/);
+});
+
+const ASYNC = `#!/bin/bash
+echo "N=$N $(env | grep -E '^(PREFIX|DRIVER|CYCLES|COUPLED_YEARS|RECORD_YEARS|OCEAN_YEARS|FINAL_YEARS|OCEAN_ONLY|RESTORE|OCEAN_KEEP|SNAPSHOT_DAYS|KEEP_FORCING|KEEP|PER_YEAR|LEVELS|OCEAN|STRATOSPHERE|SYNC_CMD|FROM|UNTIL)=' | sort | tr '\\n' ' ')" >> "$OUT/async.calls"
+tag=$PREFIX$N
+note() { echo "$(date '+%Y-%m-%d %H:%M') $*" >> "$OUT/\${tag}_cycles.log"; }
+[ -f "$OUT/\${tag}_cycles.txt" ] || echo start=0 > "$OUT/\${tag}_cycles.txt"
+note "asynchronous spin-up of $tag from day 0"
+case "$(cat "$OUT/behave.$N" 2>/dev/null)" in
+  signal) : > "$OUT/\${tag}_day0400.bin"; note "stopped by a signal at coupled day 400"; exit 0 ;;
+  stopsignal) : > "$OUT/\${tag}_day0400.bin"; : > "$OUT/STOP_$PREFIX"; note "stopped by a signal at coupled day 400"; exit 0 ;;
+  nan) note "NaN: Ts NaN on day 3"; exit 2 ;;
+  stop) : > "$OUT/STOP_$PREFIX"; note "stopped at STOP_$PREFIX or STOP_$tag at coupled day 0"; exit 0 ;;
+  locked) note "another driver (pid 4242) holds $OUT/\${tag}_cycles.lock; not starting"; exit 0 ;;
+  fail) note "five failures in a row; giving up"; exit 1 ;;
+  stopn) : > "$OUT/STOP_$tag"; note "stopped at STOP_$PREFIX or STOP_$tag at coupled day 0"; exit 0 ;;
+  term) trap ': > "$OUT/\${tag}_day0400.bin"; note "stopped by a signal at coupled day 400"; exit 0' TERM; : > "$OUT/\${tag}.waiting"; sleep 60 & wait $!; exit 1 ;;
+esac
+: > "$OUT/\${tag}_day1825.bin"
+echo done=1 >> "$OUT/\${tag}_cycles.txt"
+note "done: 1 cycles, coupled day 1825"
+`;
+const SCHEDULE = { DRIVER: 'async', CYCLES: '1', COUPLED_YEARS: '3', RECORD_YEARS: '1', OCEAN_YEARS: '20', FINAL_YEARS: '2', OCEAN_ONLY: '{"everySteps":8}' };
+const twelve = (out, args, env = {}) => run('scripts/verdaEleven.sh', args, { OUT: out, PREFIX: 'twelve', SKIP_GPU_CHECK: '1', PAIRED: '', ASYNC: join(dir, 'async', 'async.sh'), MARGIN_GB: '0', FROM: 'should-not-pass', ...env });
+const calls = (out) => (existsSync(join(out, 'async.calls')) ? readFileSync(join(out, 'async.calls'), 'utf8').trim().split('\n') : []);
+
+test('verdaEleven DRIVER=async runs the asynchronous schedule for each N in turn, keeps its settings for the resume, and the resume carries on with the N in progress', () => {
+  script('async', { 'async.sh': ASYNC });
+  const out = join(dir, 'twelve');
+  mkdirSync(out, { recursive: true });
+  writeFileSync(join(out, 'behave.128'), 'signal');
+
+  let r = twelve(out, ['run'], SCHEDULE);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.equal(r.stderr, '');
+  assert.match(r.stdout, /disk: N=64 from day 0 to 1825, 180 snapshots and 3 ocean-only year files × 106 MB and 0\.8 GB of forcing; N=128 from day 0 to 1825, 180 snapshots and 3 ocean-only year files × 425 MB and 3\.4 GB of forcing; the files take 101\.4 GB at day 1825, 101\.4 GB of it still to come/);
+  assert.match(r.stdout, /run: NS="64 128" PREFIX=twelve .* UNTIL=1825 OUT=\S+ DRIVER=async CYCLES=1 COUPLED_YEARS=3 RECORD_YEARS=1 OCEAN_YEARS=20 FINAL_YEARS=2 OCEAN_ONLY=\{"everySteps":8\} RESTORE=30 OCEAN_KEEP=2 SNAPSHOT_DAYS=30 KEEP_FORCING=0 scripts\/asyncPair\.sh/);
+  assert.match(r.stdout, /run: interrupted \(exit 143\) before scripts\/asyncPair\.sh logged a stop; not marked ended, so resume continues it/);
+  assert.deepEqual(calls(out).map((c) => c.split(' ')[0]), ['N=64', 'N=128']);
+  for (const word of ['PREFIX=twelve', 'CYCLES=1', 'COUPLED_YEARS=3', 'RECORD_YEARS=1', 'OCEAN_YEARS=20', 'FINAL_YEARS=2', 'OCEAN_ONLY={"everySteps":8}', 'OCEAN={"everySteps":8}', 'RESTORE=30', 'OCEAN_KEEP=2', 'SNAPSHOT_DAYS=30', 'KEEP_FORCING=0', 'KEEP=1000', 'PER_YEAR=36', 'LEVELS=bl36', 'STRATOSPHERE=1', 'SYNC_CMD=sync "$1"']) assert.ok(calls(out)[0].includes(` ${word} `), `${word} in ${calls(out)[0]}`);
+  assert.doesNotMatch(calls(out)[0], /FROM=/);
+  assert.ok(existsSync(join(out, 'STARTED_twelve')));
+  assert.ok(!existsSync(join(out, 'ENDED_twelve')), 'an interrupted schedule is not marked ended');
+  assert.equal(readFileSync(join(out, 'UNTIL_twelve'), 'utf8').trim(), '1825');
+  const settings = readFileSync(join(out, 'SETTINGS_twelve'), 'utf8');
+  for (const line of ['DRIVER=async', 'NS=64 128', 'PER_YEAR=36', 'KEEP=1000', 'LEVELS=bl36', 'OCEAN={"everySteps":8}', 'STRATOSPHERE=1', 'CYCLES=1', 'COUPLED_YEARS=3', 'OCEAN_YEARS=20', 'FINAL_YEARS=2', 'OCEAN_ONLY={"everySteps":8}']) assert.match(settings, new RegExp(`^${line.replace(/[{}"]/g, '\\$&')}$`, 'm'), line);
+  const log = readFileSync(join(out, 'twelve.log'), 'utf8');
+  assert.match(log, /N=64 ended: done at coupled day 1825\n/);
+  assert.match(log, /N=128 interrupted by a signal at coupled day 400; a new start carries on from there\n/);
+  assert.doesNotMatch(log, /stopped \(/);
+  assert.match(twelve(out, ['status']).stdout, /N=128: twelve128_day0400\.bin; cycle 1 of 1: coupled, day 400 of 1095, recording the forcing from day 730; the schedule ends at coupled day 1825\n  .* stopped by a signal at coupled day 400\n/);
+
+  rmSync(join(out, 'behave.128'));
+  r = twelve(out, ['resume']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(calls(out).map((c) => c.split(' ')[0]), ['N=64', 'N=128', 'N=128'], 'the resume runs the N in progress, not the first again');
+  assert.ok(calls(out)[2].includes(' CYCLES=1 ') && calls(out)[2].includes(' OCEAN_YEARS=20 ') && calls(out)[2].includes(' FINAL_YEARS=2 '), 'the resume takes the schedule from SETTINGS_twelve');
+  assert.match(r.stdout, /disk: N=64 from day 0 to 1825, 180 snapshots .* × 0 MB .*; N=128 from day 0 to 1825/);
+  assert.match(readFileSync(join(out, 'twelve.log'), 'utf8'), /N=64 already ended \(done at coupled day 1825\); next\n/);
+  assert.match(readFileSync(join(out, 'ENDED_twelve'), 'utf8'), /exit 0: .*stopped \(schedule ended: N=64 done at coupled day 1825; N=128 done at coupled day 1825\)/);
+  assert.match(twelve(out, ['resume']).stdout, /resume: the run ended/);
+  const status = twelve(out, ['status']).stdout;
+  assert.match(status, /N=64: twelve64_day1825\.bin; done at coupled day 1825; the schedule ends at coupled day 1825\n  .* done: 1 cycles, coupled day 1825\n/);
+  assert.match(status, /ENDED_twelve: .*stopped \(schedule ended/);
+
+  rmSync(join(out, 'ENDED_twelve'));
+  r = twelve(out, ['run']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(calls(out).length, 5, 'once the schedule has stopped, a new run gives every N its schedule again');
+});
+
+test('the asynchronous schedule names a NaN, a failure or a resolution\'s own STOP_<PREFIX><N> in its stop, stops at STOP_<PREFIX>, leaves no stop while another driver holds a resolution, and status shows each phase', () => {
+  script('async', { 'async.sh': ASYNC });
+  const fresh = (name, behave = {}) => {
+    const out = join(dir, name);
+    mkdirSync(out, { recursive: true });
+    for (const [n, what] of Object.entries(behave)) writeFileSync(join(out, `behave.${n}`), what);
+    return out;
+  };
+  let out = fresh('twelveNaN', { 64: 'nan' });
+  let r = twelve(out, ['run'], SCHEDULE);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(readFileSync(join(out, 'ENDED_twelve'), 'utf8'), /exit 1: .*stopped \(schedule ended: N=64 NaN at coupled day 0; N=128 done at coupled day 1825\)/);
+  assert.equal(calls(out).length, 2);
+
+  out = fresh('twelveFail', { 64: 'fail' });
+  r = twelve(out, ['run'], SCHEDULE);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(readFileSync(join(out, 'twelve.log'), 'utf8'), /N=64 ended: failed \(exit 1\) at coupled day 0, see twelve64_cycles\.log\n/);
+  assert.match(readFileSync(join(out, 'ENDED_twelve'), 'utf8'), /exit 1: .*stopped \(schedule ended: N=64 failed \(exit 1\) at coupled day 0, see twelve64_cycles\.log; N=128 done at coupled day 1825\)/);
+  assert.deepEqual(calls(out).map((c) => c.split(' ')[0]), ['N=64', 'N=128'], 'a failed resolution ends its own schedule only');
+
+  out = fresh('twelveStopN', { 64: 'stopn' });
+  r = twelve(out, ['run'], SCHEDULE);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(readFileSync(join(out, 'twelve.log'), 'utf8'), /N=64 ended: STOP_twelve64 at coupled day 0\n/);
+  assert.match(readFileSync(join(out, 'ENDED_twelve'), 'utf8'), /exit 1: .*stopped \(schedule ended: N=64 STOP_twelve64 at coupled day 0; N=128 done at coupled day 1825\)/);
+  assert.deepEqual(calls(out).map((c) => c.split(' ')[0]), ['N=64', 'N=128'], 'STOP_twelve64 ends N=64 and the next N runs');
+  assert.ok(existsSync(join(out, 'STOP_twelve64')), 'the stop file stays until it is removed by hand');
+
+  out = fresh('twelveStop', { 64: 'stop' });
+  r = twelve(out, ['run'], SCHEDULE);
+  assert.match(readFileSync(join(out, 'ENDED_twelve'), 'utf8'), /exit 0: .*stopped \(STOP_twelve: N=64 not started; N=128 not started\)/);
+  assert.deepEqual(calls(out).map((c) => c.split(' ')[0]), ['N=64'], 'STOP_twelve stops the schedule before the next N');
+  assert.match(twelve(out, ['resume']).stdout, /resume: the run ended/);
+
+  out = fresh('twelveStopNow', { 128: 'stopsignal' });
+  r = twelve(out, ['run'], SCHEDULE);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(readFileSync(join(out, 'ENDED_twelve'), 'utf8'), /exit 0: .*stopped \(STOP_twelve: N=64 done at coupled day 1825; N=128 at coupled day 400\)/, 'STOP_twelve with a SIGTERM ends the run at once');
+
+  out = fresh('twelveLocked', { 128: 'locked' });
+  r = twelve(out, ['run'], SCHEDULE);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /run: interrupted \(exit 1\)/);
+  assert.match(readFileSync(join(out, 'twelve.log'), 'utf8'), /N=128 not run: another driver \(pid 4242\) holds/);
+  assert.ok(!existsSync(join(out, 'ENDED_twelve')));
+
+  r = twelve(fresh('twelveFull'), ['run'], { ...SCHEDULE, MARGIN_GB: '1000000000' });
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /not started, the disk lacks room/);
+
+  out = fresh('twelvePhases');
+  writeFileSync(join(out, 'SETTINGS_twelve'), Object.entries({ ...SCHEDULE, NS: '64 128 192' }).map(([k, v]) => `${k}=${v}\n`).join(''));
+  writeFileSync(join(out, 'twelve64_cycles.txt'), 'start=0\ndone=1\n');
+  writeFileSync(join(out, 'twelve128_cycles.txt'), 'start=0\n');
+  for (const f of ['twelve64_day1460.bin', 'twelve128_day1095.bin', 'twelve128_c01_year0007.bin', 'twelve128_c01_year0007_day120.bin']) writeFileSync(join(out, f), '');
+  const status = twelve(out, ['status']).stdout;
+  assert.match(status, /N=64: twelve64_day1460\.bin; after the last cycle: coupled, day 1460 of 1825; the schedule ends at coupled day 1825\n/);
+  assert.match(status, /N=128: twelve128_day1095\.bin; cycle 1 of 1: ocean-only, 7 of 20 years done \(twelve128_c01_year0007_day120\.bin\); the schedule ends at coupled day 1825\n/);
+  assert.match(status, /N=192: no state yet; not started; the schedule ends at coupled day 1825\n/);
+  writeFileSync(join(out, 'twelve128_day0740.bin'), '');
+  for (const f of ['twelve128_day1095.bin', 'twelve128_c01_year0007.bin', 'twelve128_c01_year0007_day120.bin']) rmSync(join(out, f));
+  assert.match(twelve(out, ['status']).stdout, /N=128: twelve128_day0740\.bin; cycle 1 of 1: coupled, day 740 of 1095, recording the forcing since day 730;/);
+});
+
+test('an eviction\'s SIGTERM to the whole process group leaves the asynchronous run unmarked, and the resume runs only the interrupted N', async () => {
+  script('async', { 'async.sh': ASYNC });
+  const out = join(dir, 'twelveEvicted');
+  mkdirSync(out, { recursive: true });
+  writeFileSync(join(out, 'behave.128'), 'term');
+  const until = async (check, what) => {
+    const deadline = Date.now() + 20000;
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+  const log = () => (existsSync(join(out, 'twelve.log')) ? readFileSync(join(out, 'twelve.log'), 'utf8') : '');
+  const env = { ...process.env, OUT: out, PREFIX: 'twelve', SKIP_GPU_CHECK: '1', PAIRED: '', ASYNC: join(dir, 'async', 'async.sh'), MARGIN_GB: '0', ...SCHEDULE };
+  const child = spawn('bash', [join(root, 'scripts/verdaEleven.sh'), 'run'], { cwd: root, env, detached: true, stdio: 'ignore' });
+  const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve(code ?? signal)));
+  await until(() => existsSync(join(out, 'twelve128.waiting')), 'N=128 to start');
+  process.kill(-child.pid, 'SIGTERM');
+  await exited;
+  await until(() => /N=128 interrupted/.test(log()), 'asyncPair to log the interruption');
+
+  assert.match(log(), /N=64 ended: done at coupled day 1825\n/);
+  assert.match(log(), /N=128 interrupted by a signal at coupled day 400; a new start carries on from there\n/);
+  assert.doesNotMatch(log(), /stopped \(/);
+  assert.ok(!existsSync(join(out, 'ENDED_twelve')), 'an evicted run is not marked ended');
+  assert.doesNotMatch(readFileSync(join(out, 'twelve.stages.log'), 'utf8'), /run: ended/);
+  assert.match(readFileSync(join(out, 'twelve128_cycles.log'), 'utf8'), /stopped by a signal at coupled day 400\n/);
+  assert.deepEqual(calls(out).map((c) => c.split(' ')[0]), ['N=64', 'N=128']);
+
+  rmSync(join(out, 'behave.128'));
+  const r = twelve(out, ['resume']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.deepEqual(calls(out).map((c) => c.split(' ')[0]), ['N=64', 'N=128', 'N=128'], 'the resume runs the interrupted N only');
+  assert.match(log(), /N=64 already ended \(done at coupled day 1825\); next\n/);
+  assert.match(readFileSync(join(out, 'ENDED_twelve'), 'utf8'), /exit 0: .*stopped \(schedule ended: N=64 done at coupled day 1825; N=128 done at coupled day 1825\)/);
 });
 
 test('verdaEleven keeps one GPU mode at a time, takes over a lock whose process is gone, and detaches on request', () => {
@@ -298,16 +485,37 @@ test('the puller survives an absent instance and a new address, checks the state
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(readFileSync(join(latest, 'verify.txt'), 'utf8'), /^verified \S+: 6 files on root@10\.0\.0\.2:.*, 6 identical in .*, 0 problems\n/);
 
+  const yearly = join(fake, 'yearly');
+  mkdirSync(join(out, 'eleven64_c01_forcing'), { recursive: true });
+  for (const [f, n] of Object.entries({ 'eleven64_c01_year0020.bin': 1000, 'eleven64_c01_year0003_day120.bin': 1000, 'eleven64_c01_forcing/forcing-0001.bin': 10, 'eleven64_cycles.txt': 8 })) writeFileSync(join(out, f), Buffer.alloc(n, 1));
+  r = run('scripts/verdaPull.sh', [], { ...env, DEST: yearly, ROUNDS: '1', KEEP_DAYS: '365' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(existsSync(join(yearly, 'eleven64_c01_year0020.bin')), 'a KEEP_DAYS list still pulls the ocean-only year files');
+  assert.ok(existsSync(join(yearly, 'eleven64_cycles.txt')));
+  assert.ok(!existsSync(join(yearly, 'eleven64_c01_year0003_day120.bin')) && !existsSync(join(yearly, 'eleven64_c01_forcing')), 'in-year checkpoints and forcing records stay there');
+
   writeFileSync(join(fake, 'list.json'), '[]');
   r = run('scripts/verdaPull.sh', ['--verify'], env);
   assert.equal(r.status, 1);
   assert.match(r.stdout, /cannot verify: gcm-eleven is absent/);
 });
 
-test('the startup script does nothing without a checkout and resumes from the kept volume\'s checkout otherwise', () => {
+test('the startup script does nothing without a checkout and resumes from the kept volume\'s checkout otherwise, for the run its PREFIX line names', () => {
   const text = readFileSync(join(root, 'scripts/verdaElevenStartup.sh'), 'utf8');
+  assert.match(text, /^PREFIX=eleven$/m);
   assert.match(text, /\[ -x "\$REPO\/scripts\/verdaEleven\.sh" \] \|\| exit 0/);
-  assert.match(text, /OUT=\/root\/runs\/eleven scripts\/verdaEleven\.sh resume --detach/);
   assert.equal(spawnSync('bash', ['-n', join(root, 'scripts/verdaElevenStartup.sh')]).status, 0);
-  assert.ok(hostname());
+  const at = script('startup', { 'gcm-twelve.sh': text.replace(/^PREFIX=eleven$/m, 'PREFIX=twelve') });
+  const repo = join(at, 'repo'), runs = join(at, 'runs'), env = { ...process.env, REPO: repo, RUNS: runs, HOME: at };
+  let r = spawnSync('bash', [join(at, 'gcm-twelve.sh')], { env, encoding: 'utf8' });
+  assert.equal(r.status, 0);
+  assert.ok(!existsSync(runs), 'nothing happens without a checkout');
+  mkdirSync(join(repo, 'scripts'), { recursive: true });
+  writeFileSync(join(repo, 'scripts', 'verdaEleven.sh'), '#!/bin/bash\necho "OUT=$OUT PREFIX=$PREFIX $* in $PWD"\n');
+  chmodSync(join(repo, 'scripts', 'verdaEleven.sh'), 0o755);
+  r = spawnSync('bash', [join(at, 'gcm-twelve.sh')], { env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const boot = readFileSync(join(runs, 'twelve', 'twelve.boot.log'), 'utf8');
+  assert.match(boot, new RegExp(`startup script on ${hostname()}\\n`));
+  assert.ok(boot.includes(`OUT=${runs}/twelve PREFIX=twelve resume --detach in ${repo}\n`), boot);
 });

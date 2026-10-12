@@ -3,9 +3,11 @@
 # INTERVAL (600) seconds until STOP_FILE: each round asks verda for the
 # instance's address (it changes when the relauncher recreates it), lists
 # the run's files on the instance with scripts/verdaFiles.mjs (the
-# whole-day states <PREFIX><N>_dayDDDD.bin, logs, the comparison, the
-# suite and benchmark reports and markers; no .partial files, in-day
-# checkpoints or benchmark states), copies them by rsync into DEST and
+# whole-day states <PREFIX><N>_dayDDDD.bin, the asynchronous spin-up's
+# ocean-only year files <PREFIX><N>_cCC_yearYYYY.bin, logs, cycle ledgers,
+# the comparison, the suite and benchmark reports and markers; no .partial
+# files, in-day or in-year checkpoints, forcing records or benchmark
+# states), copies them by rsync into DEST and
 # compares sizes: a state here of the size listed there counts as pulled,
 # a missing one is fetched next round, and one of another size is logged
 # and left as it is, since a round never replaces a state already here.
@@ -27,7 +29,8 @@
 # of the main checkout, made if missing), INTERVAL, STREAMS (4 rsyncs of
 # the states at a time, each with its share of the list), KEEP_DAYS (the
 # states to pull: 'all', or a comma-separated list of model days that are
-# pulled besides the newest state of each resolution, e.g. 365,730,1095;
+# pulled besides the newest state of each resolution and every ocean-only
+# year file, e.g. 365,730,1095;
 # with a list, --verify compares the files here with their copies there
 # rather than everything there), ROUNDS (stop after
 # that many rounds), STOP_FILE (DEST/STOP_pull), LOG (DEST/pull.log), and
@@ -58,6 +61,7 @@ round() {
   cut -f3 "$work/there" | grep -E '\.bin$' > "$work/states"
   [ "$KEEP_DAYS" = all ] || awk -F'\t' -v p="$PREFIX" -v keep=",$KEEP_DAYS," '
     $3 ~ "^" p "[0-9]+_day[0-9]+\\.bin$" { n = $3; sub(/_day.*/, "", n); if ($3 > last[n]) last[n] = $3; d = $3; sub(/.*_day0*/, "", d); sub(/\.bin$/, "", d); if (index(keep, "," d ",")) print $3 }
+    $3 ~ "^" p "[0-9]+_c[0-9]+_year[0-9]+\\.bin$" { print $3 }
     END { for (n in last) print last[n] }' "$work/there" | sort -u > "$work/states"
   cut -f3 "$work/there" | grep -vE '\.bin$' > "$work/files"
   if [ -s "$work/states" ]; then
