@@ -211,14 +211,16 @@ in which case Node with Dawn measures. Radiation cadence changes the
 diurnal cycle slightly. The snapshot at N=128 is about 480 MB; the
 snapshot store and the regrid must cope.
 
-## Milestones 27 and 28
+## Milestones 27, 28 and 29
 
-The milestones after M26 (fog). M27 is in hand; M28 follows it.
+The milestones after M26 (fog). M27 is in hand; M28 follows it, and
+M29 follows M28.
 
 | # | Milestone | What it delivers | Depends on |
 |---|-----------|------------------|------------|
 | M27 | A thin mixed layer | The three additions a mixed-layer floor below 50 m needs: the wind stress and drag acting over a momentum depth separate from the refill floor, with the mixed layer's momentum carried through its exchanges; penetrating sunlight (two-band Jerlov IB) deposited in the classes beneath the mixed layer; a rate-limited refill. Then the judging runs that choose the floor (20 m likely, 10 m once shear entrainment exists). | the Oct 12 conservation work |
 | M28 | Rivers, lakes and the land below sea level | An ocean mask by connection to the ocean rather than by elevation alone; river routing with travel time; lakes as a surface type and as reservoirs in the river network. | M16, M27's state-file work |
+| M29 | Land ice | The ice sheets as a layer of ice on the bedrock: bed and thickness from BedMachine, the surface the atmosphere sees as bed plus ice, a surface mass balance from snowfall, melt, sublimation and calving, meltwater through the rivers; the bed held fixed; flow by the shallow-ice approximation later. | M28 |
 
 ## M27 — A thin mixed layer
 
@@ -294,3 +296,37 @@ Amazon, Congo, Ob, Mississippi and Nile mouths within a factor of two
 of their observed mean discharge after a spun-up year; the land water
 budget closed to roundoff with the river and lake stores in it; both
 engines bit for bit with the options off.
+
+## M29 — Land ice
+
+**Goal.** The Greenland and Antarctic ice sheets as ice resting on the
+bedrock rather than as terrain. The topography carries two layers, the
+bed (ETOPO 2022's bedrock, which is BedMachine under the sheets) and
+the ice thickness, and the surface the atmosphere sees is their sum,
+rebuilt once a model year as the ice changes. The ice is a state with
+a surface mass balance: snow older than a threshold becomes ice, melt
+and sublimation take it away by the sea-ice energy balance with bare
+ice at about 0.6 and snow at about 0.8 albedo, the meltwater runs to
+the sea through M28's rivers, and ice at the coast calves. The ice-sheet
+mask comes from thickness rather than from latitude and elevation.
+
+**The bed stays fixed.** The ice's weight depresses the bed by about a
+third of its thickness, but the mantle answers on millennial
+timescales, so for runs of decades to centuries the bed of today is the
+right bed whatever the ice does; a melted Greenland keeps its central
+basin below sea level, which the M28 mask by connection treats as a
+lake or a sea as the channels dictate. No isostatic model.
+
+**Flow, later.** Without transport from the interior to the ablation
+zone the sheet thickens in the middle and thins at the margin without
+end; the shallow-ice approximation, a nonlinear diffusion of thickness
+on the surface slope stepped in years, is the minimal flow that makes
+century-scale experiments (a melting Greenland; ice caps on another
+planet, see the ice-free topography note) honest.
+
+**Acceptance.** Surface elevation over the sheets within the data's
+accuracy at the start; the surface mass balance of Greenland and
+Antarctica within a factor of two of the observed accumulation and
+ablation after a spun-up year; meltwater reaching the sea; the ice
+thickness changing by no more than a few meters a year anywhere; both
+engines bit for bit with the ice held fixed.
