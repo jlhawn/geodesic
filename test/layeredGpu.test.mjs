@@ -7,6 +7,7 @@ import { UNLISTED_OCEANS } from './helpers/layered.mjs';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { labelTemperature } from '../js/ocean/seawater.module.js';
+import { FREEZING_POINT } from '../js/physics/ice.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -363,11 +364,11 @@ test('the GPU ocean takes an 8-layer state that carries no class list, as the pa
   gpuModel.destroy();
 });
 
-test('the GPU ocean salts and freshens its mixed layer by the ice volume, cover times thickness, as the CPU one does, with the cover from the host or from the atmosphere\'s buffers', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the GPU ocean salts and freshens its mixed layer by the ice volume, cover times thickness, as the CPU one does, with the cover from the host or from the atmosphere\'s buffers, and one restarted between the two steps under the same cover takes the second as it does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpuModel, cpuOcean, surfaceT0, ice, stress } = buildScenario(8);
   const mesh = cpuModel.mesh, C = mesh.nCells, land = cpuModel.geography.land, dt = 1350;
   const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: OCEAN_OPTIONS });
-  const { gpu } = gpuModel, gpuOcean = gpuModel.oceanEngine;
+  const gpuOcean = gpuModel.oceanEngine;
   const start = Float64Array.from(ice, (h) => (h > 0 ? 0.8 : 0));
   cpuOcean.initialize(surfaceT0, ice, { concentration: start });
   gpuOcean.initialize(surfaceT0, ice, { concentration: start });
@@ -401,17 +402,60 @@ test('the GPU ocean salts and freshens its mixed layer by the ice volume, cover 
   cpuOcean.advance(Float64Array.from(surfaceT0), grown, new Float64Array(C), stress, dt, spread);
   await gpuOcean.advance(Float64Array.from(surfaceT0), grown, stress, dt, spread);
   const middle = await compare('ice grown and spread, cover from the host', first, second, before);
+  const saved = { ...(await gpuOcean.serialize()), ...(await gpuOcean.restartArrays()) };
+  const restarted = await createGpuModel(new Grid(8), { topography, ocean: OCEAN_OPTIONS });
+  await restarted.oceanEngine.upload(saved, Float64Array.from(surfaceT0), grown, spread);
+  const loaded = await restarted.oceanEngine.restartArrays();
+  assert.ok(saved.buoyancy.some((b) => b > 0), 'the first step left a buoyancy loss to carry');
+  for (const name of ['previousIceVolume', 'buoyancy']) assert.ok(stats(saved[name], loaded[name]).rmsRel < 1e-6, `the restarted GPU ocean holds the ${name} it was given`);
+  async function fromAtmosphere({ gpu, oceanEngine: ocean }) {
+    gpu.uploadSurfaceTemperature(Float64Array.from(surfaceT0));
+    gpu.device.queue.writeBuffer(gpu.buffers.S, 4 * gpu.layout.S.ICE, Float32Array.from(melted));
+    gpu.uploadIce(shrunk);
+    ocean.setStress(stress, melted, shrunk);
+    ocean.readSurfaceFromAtmosphere();
+    ocean.step(dt);
+    ocean.mixedLayer(dt);
+    ocean.salt(dt);
+    ocean.writeSurface(dt);
+    await gpu.device.queue.onSubmittedWorkDone();
+  }
   cpuOcean.advance(Float64Array.from(surfaceT0), melted, new Float64Array(C), stress, dt, shrunk);
-  gpu.uploadSurfaceTemperature(Float64Array.from(surfaceT0));
-  gpu.device.queue.writeBuffer(gpu.buffers.S, 4 * gpu.layout.S.ICE, Float32Array.from(melted));
-  gpu.uploadIce(shrunk);
-  gpuOcean.setStress(stress, melted, shrunk);
-  gpuOcean.readSurfaceFromAtmosphere();
-  gpuOcean.step(dt);
-  gpuOcean.mixedLayer(dt);
-  gpuOcean.salt(dt);
-  gpuOcean.writeSurface(dt);
-  await gpu.device.queue.onSubmittedWorkDone();
+  await fromAtmosphere(gpuModel);
+  await fromAtmosphere(restarted);
   await compare('ice melted back and narrowed, cover from the atmosphere\'s buffers', second, third, middle);
+  const ran = { ...(await gpuOcean.serialize()), ...(await gpuOcean.restartArrays()) }, resumed = { ...(await restarted.oceanEngine.serialize()), ...(await restarted.oceanEngine.restartArrays()) };
+  const wet = Array.from(ran.h, (v) => v > 1);
+  const gaps = ['h', 'u', 'T', 'S', 'eta', 'previousT0', 'previousIceVolume', 'buoyancy', 'flux', 'capacity'].map((f) => [f, (f === 'T' || f === 'S' ? stats(ran[f].filter((_, x) => wet[x]), resumed[f].filter((_, x) => wet[x])) : stats(ran[f], resumed[f])).rmsRel]);
+  let worst = 0;
+  for (let i = 0; i < C; i++) if (!land[i]) worst = Math.max(worst, Math.abs(ran.S[i] - resumed.S[i]));
+  console.log(`restarted after the first step under the same cover, the GPU ocean takes the second as the one that ran on does: mixed-layer salinity within ${worst.toExponential(1)} psu, rms relative ${gaps.map(([f, r]) => `${f} ${r.toExponential(1)}`).join(', ')}`);
+  assert.ok(worst < 1e-5, `the restarted GPU ocean's mixed-layer salinity differs by up to ${worst} psu`);
+  for (const [f, r] of gaps) assert.ok(r < 1e-6, `${f} rms relative diff ${r} between the GPU ocean that ran on and the restarted one`);
+  restarted.destroy();
+  gpuModel.destroy();
+});
+
+test('the GPU ocean starts and loads under partly covered ice without salting it, taking the cover from the sea ice it is given, as the model gives it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const gpuModel = await createGpuModel(new Grid(4), { ocean: { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34 } });
+  const { mesh, seaIce } = gpuModel, ocean = gpuModel.oceanEngine, n = mesh.nCells, dt = 3600;
+  const surfaceT = new Float64Array(n).fill(FREEZING_POINT), ice = new Float64Array(n).fill(1), calm = new Float64Array(mesh.nEdges);
+  seaIce.load(ice, new Float64Array(n).fill(0.4));
+  const salt = async () => (await ocean.restartArrays()).W.slice(0, n);
+  const unchanged = async (label) => {
+    const before = await salt();
+    await ocean.advance(Float64Array.from(surfaceT), ice, calm, dt);
+    const after = await salt();
+    for (let i = 0; i < n; i++) assert.ok(Math.abs(after[i] - before[i]) < 1e-5 * before[i], `${label}: cell ${i} salt ${before[i]} -> ${after[i]}`);
+  };
+  ocean.initialize(Float64Array.from(surfaceT), ice);
+  await unchanged('after initialize');
+  await ocean.upload(await ocean.serialize(), Float64Array.from(surfaceT), ice);
+  await unchanged('after upload');
+  await ocean.upload(await ocean.serialize(), Float64Array.from(surfaceT), ice, new Float64Array(n).fill(1));
+  const before = await salt();
+  await ocean.advance(Float64Array.from(surfaceT), ice, calm, dt);
+  const after = await salt();
+  assert.ok(after[0] < before[0] - 10, `an ocean uploaded under full cover books the cover falling to 0.4 as melt: ${before[0]} -> ${after[0]}`);
   gpuModel.destroy();
 });

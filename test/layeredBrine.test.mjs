@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createModel } from '../js/model.module.js';
-import { createOcean } from '../js/ocean/layered.module.js';
+import { createOcean, EPS } from '../js/ocean/layered.module.js';
+import { seawaterDensity, thermalExpansion, halineContraction } from '../js/ocean/seawater.module.js';
 import { createSeaIce, FREEZING_POINT } from '../js/physics/ice.module.js';
 
 const mesh = buildMesh(new Grid(2)), C = mesh.nCells, E = mesh.nEdges;
-const ICE_DENSITY = 917, ICE_SALINITY = 5, HOUR = 3600;
+const ICE_DENSITY = 917, ICE_SALINITY = 5, HOUR = 3600, GRAVITY = 9.81;
 
-function frozenColumn() {
-  const ocean = createOcean(mesh, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34, mixedDepth: 50, convectiveRate: 0, stirring: 0 });
+function frozenColumn(options = {}) {
+  const ocean = createOcean(mesh, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34, mixedDepth: 50, convectiveRate: 0, stirring: 0, ...options });
   const surfaceT = new Float64Array(C).fill(FREEZING_POINT + 0.001), ice = new Float64Array(C);
   const sea = createSeaIce(mesh, { heatCapacity: ocean.capacity });
   ocean.useSeaIce(sea.concentration);
@@ -32,6 +33,29 @@ test('new ice over a small part of a cell salts the mixed layer by its volume, c
   assert.ok(Math.abs(gained - byVolume) < 1e-6 * byVolume, `salinity gained ${gained} against ${byVolume} by volume`);
   assert.ok(gained > 0.0044 && gained < 0.0048 && byThickness > 30 * gained, `${gained} psu by volume, ${byThickness} by thickness`);
   for (let j = 1; j < C; j++) assert.ok(Math.abs(ocean.W[j] - salt[j]) < 1e-6, `cell ${j} without ice keeps its salt: ${salt[j]} -> ${ocean.W[j]}`);
+});
+
+test('the brine of new ice over a small part of a cell erodes the denser class under the mixed layer at the buoyancy of its volume, cover times thickness, not of its thickness', () => {
+  const { ocean, sea, surfaceT, ice, flux, calm } = frozenColumn({ buoyancyMemory: 0, convectiveRate: 0.1 });
+  const i = 0, rho = ocean.densities, depth = ocean.h[i], s0 = ocean.W[i] / depth, previousT0 = ocean.T0[i], rm = seawaterDensity(FREEZING_POINT, s0);
+  let k = 1;
+  while (ocean.h[k * C + i] <= EPS) k++;
+  const below = ocean.h[k * C + i], others = Float64Array.from(ocean.h.subarray(0, C));
+  flux[i] = -400;
+  for (let n = 0; n < 2; n++) sea.update(surfaceT, ice, flux, i, HOUR);
+  const cover = sea.concentration[i], volume = cover * ice[i];
+  ocean.advance(surfaceT, ice, sea.oceanFlux, calm, HOUR, sea.concentration);
+  const deepened = ocean.h[i] - depth, eroded = below - ocean.h[k * C + i];
+  const buoyancy = (grown) => GRAVITY * (thermalExpansion(FREEZING_POINT, s0) * (previousT0 - FREEZING_POINT) * depth + halineContraction(FREEZING_POINT, s0) * (s0 - ICE_SALINITY) * ICE_DENSITY * grown / 1000) / HOUR;
+  const N2 = GRAVITY * (rho[k] + 0.5 * (rho[k + 1] - rho[k]) - rm) / (rho[0] * below);
+  const byVolume = buoyancy(volume) * HOUR / (depth * N2), byThickness = buoyancy(ice[i]) * HOUR / (depth * N2);
+  console.log(`ice ${ice[i].toFixed(3)} m thick over ${(100 * cover).toFixed(1)}% of the cell deepens the ${depth} m mixed layer into the ${rho[k]} class beneath by ${deepened.toFixed(4)} m, where the buoyancy of its volume gives ${byVolume.toFixed(4)} m and of its thickness ${byThickness.toFixed(1)} m`);
+  assert.ok(cover > 0.02 && cover < 0.04 && ice[i] > 0.29, `the ice covers ${cover} of the cell, ${ice[i]} m thick`);
+  assert.ok(rho[k] > rm && rm > rho[k] - 0.5 * (rho[k] - rho[k - 1]) && below > 100, `the mixed layer at ${rm} lies in the lighter half of the ${below} m class labelled ${rho[k]}`);
+  assert.ok(Math.abs(deepened - byVolume) < 1e-6 * byVolume, `the mixed layer deepened by ${deepened} m against ${byVolume} by volume`);
+  assert.ok(Math.abs(eroded - deepened) < 1e-6 * deepened, `the class beneath gave ${eroded} m for the mixed layer's ${deepened}`);
+  assert.ok(deepened > 10 && byThickness > 30 * deepened, `${deepened} m by volume, ${byThickness} by thickness`);
+  for (let j = 1; j < C; j++) assert.ok(Math.abs(ocean.h[j] - others[j]) < 1e-6, `cell ${j} without ice keeps its mixed layer: ${others[j]} -> ${ocean.h[j]}`);
 });
 
 test('the ocean salts or freshens by exactly the ice volume the ice step froze or melted, and a freeze–melt cycle gives the salt back', () => {
