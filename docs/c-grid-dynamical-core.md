@@ -1819,6 +1819,7 @@ from the World Ocean Atlas**) holds its water in this equation of state,
 
 | Classes (kg/m³) | Spacing | Water | Atlas volume per class (10¹⁵ m³) |
 |---|---|---|---|
+| 1019.5, 1020.0 | 0.5 | the warm pool's water lighter than 1020.25 and, at load, the brackish seas' (the Black Sea's in 1020.0) | – |
 | 1020.5, 1021.0, 1021.5 | 0.5 | the warm pool (1020.7) and tropical surface water | 1.6, 1.5, 2.1 |
 | 1022.0–1026.0 | 0.25 | the thermocline, the 20 °C isotherm near the top of 1024.0 | 1.3–44 |
 | 1026.1–1026.6 | 0.1 | mode and intermediate water, Antarctic Intermediate Water at 1026.27 | 30–77 |
@@ -1829,11 +1830,12 @@ from the World Ocean Atlas**) holds its water in this equation of state,
 Between 50 and 70°S the atlas's water spans 1025.7–1026.95, 70% of it in
 1026.83–1026.92; north of 50°N in the Atlantic sector it runs from 1025.8
 through the dense band to the Nordic Seas' 1027.15. The label salinities
-(`LAYER_SALINITIES`) are the tropical atlas's 34.0, 34.5 and 34.85 psu in
-the warm-pool classes, 35 through 1025.0 falling to 34.8 at 1026.95,
+(`LAYER_SALINITIES`) are the tropical atlas's 33.0, 33.5, 34.0, 34.5 and
+34.85 psu in the warm-pool classes, 35 through 1025.0 falling to 34.8 at 1026.95,
 34.82–35.05 in the classes from 1026.98 to 1027.3 and 39.9, 39.0 and
 38.65 in the Red Sea's and Mediterranean's, so that every label
-temperature lies above the freezing point: 28.6 °C at 1020.5, 19.4 °C at
+temperature lies above the freezing point: 29.4 °C at 1019.5, 28.6 °C at
+1020.5, 19.4 °C at
 1024.0, 2.8 °C at 1026.80, −1.7 °C at 1027.3 and 14.1 °C at 1028.0. At
 65°S 0°E the N=64 atlas start holds the −1.4 °C winter water in
 1026.71–1026.77 at 50–83 m and the +0.7 °C deep water in 1026.86 at
@@ -1932,7 +1934,14 @@ false` swallows every class no denser than the mixed layer instead;
 rate w = 2 m u*³/(h₀ Δb) with m = 0.8 exp(−h₀/100 m), so the wind's
 stirring fades below the depth it can reach, and Δb the buoyancy step
 to that layer, at least 10⁻³ m/s² (a 0.1 kg/m³ step; the KT rate is
-unbounded as Δb → 0); all three within `maximumMixedDepth` = 600 m (the
+unbounded as Δb → 0); (4) under `shearEntrainment` Ri_c = 0.65, the
+bulk-Richardson rule of Price, Weller and Pinkel (1986), first takes in
+the class beneath to h₀√(Ri_c/Ri_b), at most that class in a step, where
+Ri_b = Δb h₀/|Δu|², Δb as above but at least g·0.005/ρ₀, and Δu is the
+cell's reconstruction of each edge's mixed-layer velocity less that of
+its first class at least 5 m thick; `carryMomentum`, which it needs,
+then mixes the entrained water's momentum in and brings Ri_b to Ri_c,
+and a retreat in the same step stops at that depth; all four within `maximumMixedDepth` = 600 m (the
 Southern Ocean's mode-water mixed layers reach 500–700 m; the deepest
 class, one label for everything below about 1600 m, would otherwise let
 a polar mixed layer that reaches its density erode it to the bottom at
@@ -1944,8 +1953,21 @@ convectively neutral or not. It detrains at once anything beyond
 600 m, and, over a day and never above 50 m (`shallowestMixedDepth`,
 also the minimum thickness, refilled from below), anything beyond its
 neighbours' reach and anything beyond the Monin–Obukhov depth
-2 m u*³/(−B̄) while B̄ < −10⁻⁹ m²/s³, which is how a winter's mixed layer
-retreats in spring and leaves its water behind as mode water.
+L = C_r ε u*³/(−B̄) while B̄ < −10⁻⁹ m²/s³, which is how a winter's mixed
+layer retreats in spring and leaves its water behind as mode water.
+C_r is `retreatStirring` = 2.5, 1/κ, with no fading with depth (2m, the
+entrainment's fading constant, under `retreatStirring: 0`). ε is the
+Langmuir factor of Li, Fox-Kemper, Breivik and Webb (2017),
+√(1 + La_SL⁻²/1.5² + La_SL⁻⁴/5.4⁴) capped at `langmuir` = 2, with La_SL
+from the theory wave of a 10 m wind U₁₀ = u*/1.19×10⁻³ and its Stokes
+drift averaged over 0.2 h₀, evaluated at the depth the step began with,
+1 in a calm and its excess over 1 scaled by the cell's open water.
+Under `retreatEkman` = 0.7, the constant of Large, McWilliams and Doney
+(1994), L is at most 0.7 u*/|f|, unbounded on the equator. Where the 50 m
+floor binds, the depth a column asks for is 3.7 m (median, March) and
+7.7 m (June) with these rules on the page's state against 1.4 m under
+the entrainment's 2m alone: the rest is the night's convection, which a
+one-day B̄ cannot see (M30).
 Detrained water goes to the interior layer whose density is nearest its
 own, so water swallowed from a layer returns to that layer (the first
 rule, the first layer at least as dense, put 900 m of 1027.24 water into
@@ -2007,8 +2029,8 @@ the mixed layer and the classes, and velocities live on edges, layer by
 layer, so an exchange that leaves u alone creates Δ(u_from − u_to) of
 momentum at each edge of the cell: a retreat hands the water it leaves
 the class's velocity, a refill or convection gives the new mixed-layer
-water the mixed layer's. Under `carryMomentum` (M27, off by default
-until its N=64 pair has run) the momentum moves with the water, as in
+water the mixed layer's. Under `carryMomentum` (M27, on by default) the
+momentum moves with the water, as in
 HYCOM's Kraus–Turner code: after the exchanges each edge's velocities
 are made uniform down to the deeper of its old and new mixed-layer
 base, measured at the edge, and the column's Σ h_e u is then restored by
@@ -2023,8 +2045,9 @@ not carry their own.
 
 **The refill.** A mixed layer the dynamics leave thinner than
 `minimumThickness` takes water from the classes beneath it, the lightest
-first. By default it is filled to the floor in the same step. Under
-`refillRate` (m/s; M27, 0 by default) it deepens by at most
+first. Under `refillRate` 0 it is filled to the floor in the same step.
+Under `refillRate` (m/s; M27, by default 2.7778×10⁻⁴, 24 m a day) it
+deepens by at most
 refillRate·dt in an ocean step and never stays thinner than
 `refillFloor` (5 m, filled at once), so a column draining faster than
 the cap keeps a thinner layer, which the atmosphere sees as a smaller
@@ -2034,8 +2057,8 @@ mixed layer lies more than 1 cm below its floor where the water beneath
 could fill it; `scripts/refillCheck.mjs` reports it each day with the
 cells held at `refillFloor`.
 
-**Penetrating sunlight.** Under `penetration: 'IB'` (M27; `null` by
-default, when all the sunlight absorbed at the surface heats the mixed
+**Penetrating sunlight.** Under `penetration: 'IB'` (M27, the default;
+under `null` all the sunlight absorbed at the surface heats the mixed
 layer) part of it passes the mixed layer as in Jerlov's water type IB
 (Paulson and Simpson 1977): the share passing depth z is
 J(z) = 0.67 e^(−z/1 m) + 0.33 e^(−z/17 m) less J(300 m), so none goes
@@ -2269,9 +2292,16 @@ takes it from there (`test/layeredState.test.mjs`). An ocean already on
 these classes loads as it did.
 
 **Wind.** The wind stress τ is a body force over the top
-H = max(`momentumDepth`, h₀) of each edge's column, `momentumDepth` = 50 m
-(M27), tokens counted for depth, shared by the mixed layer and the classes
-at least 20 m thick within it in proportion to the thickness o_k each
+H = max(H_m, h₀) of each edge's column, tokens counted for depth,
+where H_m is the wind's own Ekman depth under `ekmanDepth` c_E = 0.4,
+min(`momentumDepth`, max(`momentumFloor`, c_E u*/|f|)) with
+`momentumDepth` = 50 m and `momentumFloor` = 10 m, u* from the edge's
+normal stress and its reconstructed tangential stress, and
+`momentumDepth` where f = 0 (`momentumDepth` itself under
+`ekmanDepth: 0`); H_m is 21–38 m in the mid-latitude summer, about 20 m
+at 75°N in June and 50 m within about 15° of the equator and in storms.
+The stress is shared by the mixed layer and the classes
+at least `stressThickness` = 20 m thick within H in proportion to the thickness o_k each
 holds there: layer k gains (τ/ρ₀)(o_k/h_k)/Σo, so the column always takes
 τ/ρ₀, the layers wholly within H move alike, and a mixed layer thinner
 than H runs at the speed of one H thick (HYCOM spreads the stress over the

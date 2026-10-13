@@ -211,16 +211,17 @@ in which case Node with Dawn measures. Radiation cadence changes the
 diurnal cycle slightly. The snapshot at N=128 is about 480 MB; the
 snapshot store and the regrid must cope.
 
-## Milestones 27, 28 and 29
+## Milestones 27 to 30
 
-The milestones after M26 (fog). M27 is in hand; M28 follows it, and
-M29 follows M28.
+The milestones after M26 (fog). M27 is adopted at a 50 m floor; M28
+follows it, M29 follows M28, and M30 takes the floor further.
 
 | # | Milestone | What it delivers | Depends on |
 |---|-----------|------------------|------------|
-| M27 | A thin mixed layer | The three additions a mixed-layer floor below 50 m needs: the wind stress and drag acting over a momentum depth separate from the refill floor, with the mixed layer's momentum carried through its exchanges; penetrating sunlight (two-band Jerlov IB) deposited in the classes beneath the mixed layer; a rate-limited refill. Judged Oct 13: the floor stays 50 m until shear entrainment and the Arctic shelf mode are fixed; the additions default on. | the Oct 12 conservation work |
+| M27 | A thin mixed layer | The three additions a mixed-layer floor below 50 m needs: the wind stress and drag acting over a momentum depth separate from the refill floor, with the mixed layer's momentum carried through its exchanges; penetrating sunlight (two-band Jerlov IB) deposited in the classes beneath the mixed layer; a rate-limited refill. Adopted Oct 13 at a 50 m floor with the shelf fix, a mixing package and two lighter classes; no thinner floor passed its judging. | the Oct 12 conservation work |
 | M28 | Rivers, lakes and the land below sea level | An ocean mask by connection to the ocean rather than by elevation alone; river routing with travel time; lakes as a surface type and as reservoirs in the river network. | M16, M27's state-file work |
 | M29 | Land ice | The ice sheets as a layer of ice on the bedrock: bed and thickness from BedMachine, the surface the atmosphere sees as bed plus ice, a surface mass balance from snowfall, melt, sublimation and calving, meltwater through the rivers; the bed held fixed; flow by the shallow-ice approximation later. | M28 |
+| M30 | The sea's day and night | A warm layer and cool skin above the mixed layer, stepped with the atmosphere, and a retreat rule that holds the depth the night's convection reaches, so that a floor of 10–20 m no longer stands in for the night. | M27 |
 
 ## M27 — A thin mixed layer
 
@@ -272,6 +273,52 @@ commit with Part 8 regenerated; 20 m after the shelf mode and shear
 entrainment are fixed, with the June and 60-day March 20 m arms
 repeated and the WOA23 summer SST comparison; 10 m after those and
 lighter classes.
+
+**Adopted (Oct 13, 2026).** A second round fixed what the first found
+and judged the floor again. The shelf mode was a fault in both engines:
+the thin classes copied the velocity above them after the column's
+transport was shifted to the barotropic average, an explicit pressure
+kick; in the right order the Arctic shelf's rms neighbor step in η is
+0.02–0.07 m and the fastest current north of 60N 0.1–0.5 m/s at every
+floor. A mixing package went on both engines: the bulk-Richardson shear
+entrainment of Price, Weller and Pinkel at the mixed layer's base
+(Ri_c 0.65), the wind's stress over its own Ekman depth
+min(50, max(10, 0.4u*/|f|)) m, and a heated retreat to
+2.5 ε u*³/(−B̄), ε a Langmuir factor of at most 2, bounded by 0.7u*/|f|.
+Two lighter classes, 1019.5 and 1020.0, take the warm pool's lightest
+water, and a 44-class state rebins onto them at load (0.26–0.42 s at
+N=128). The arms ran as before at floors of 50 m with everything off
+and 50, 20, 10 and 5 m with everything on. No thin floor passed. At
+20 m one Mediterranean-outflow mixed-layer current reached 2.52 m/s on
+March day 25 (the stop rule is 2.5), the June Benguela–Peru mean lay
+1.21 K further from WOA23 than at 50 m off (Peru 2.15 K; the allowance
+is 1.0) and the June 10S–10N median mixed layer was 43.5 m (band
+10–40 m). At 10 and 5 m the June global SST ran 0.33–0.35 K above the
+control (limit 0.3), May's 40–60N, cold-tongue and coastal boxes lost
+0.37–0.62 K, and at 5 m the water planet's 20S–20N cooled by 0.59 K.
+At 50 m everything on passes against everything off: global SST −0.08 K
+on the water planet and −0.01 to −0.03 K at N=64, no clamps, the
+whole-run residual +0.053 W/m², no WOA23 box worse by more than 0.3 K
+but Peru in May (+0.63 K, within the coastal allowance), and in April
+Benguela 0.70 K, California 0.45 K and Canary 0.55 K closer. The
+floor's within-1-m share falls from 34.6 to 29.3 % on the water planet,
+and where it binds the depth a column asks for rises 2.7×, from 1.4 to
+3.7 m. Adopted as the defaults of both engines at the 50 m floor:
+`penetration` 'IB', `carryMomentum`, `refillRate` 24 m a day,
+`shearEntrainment` 0.65, `ekmanDepth` 0.4, `retreatStirring` 2.5,
+`langmuir` 2, `retreatEkman` 0.7 and the 46 classes, with Part 8
+regenerated. The cost at N=128 on the M1 Max is about 0.65 ms a model
+step for this round (+0.33 s a simulated day) and 0.83–0.92 ms with
+M27's additions (+0.43–0.47 s). Between the floor and 20 m stand, in
+order: the coastal upwelling under a thin layer (Peru is 2.2 K warmer
+at every thin floor and the Ekman depth saturates at 50 m there), the
+June SST drift, the Mediterranean outflow under a thin layer (M28's
+straits), and the night's convection, which a one-day buoyancy memory
+cannot see: where any floor binds the asked depth is about 1 m (M30).
+In June the 50 m arm with everything on has 16 columns at the 600 m cap
+against the control's 4–7 and 137 deeper than 400 m at 40–60S against
+17, in the southeast Pacific's winter; they are to be read before
+twelve.
 
 ## M28 — Rivers, lakes and the land below sea level
 
@@ -358,3 +405,30 @@ Antarctica within a factor of two of the observed accumulation and
 ablation after a spun-up year; meltwater reaching the sea; the ice
 thickness changing by no more than a few meters a year anywhere; both
 engines bit for bit with the ice held fixed.
+
+## M30 — The sea's day and night
+
+**Goal.** Let the mixed layer stand for what climatologies measure,
+the layer the night's convection mixes each dawn, and give the day's
+warming its own place above it. The retreat reads a one-day memory of
+the surface buoyancy flux, which cannot see the night: where any floor
+binds, a calm, strongly heated column asks for about 1 m, and the floor
+stands in for the night's depth. A shorter memory is not the answer by
+itself: 3 hours at a 10 m floor bound far less but cooled the water
+planet's SST by 0.72 K in a year, with no day and night in its
+snapshots.
+
+**Design.** A Zeng–Beljaars warm layer, with Takaya's stability
+function and Langmuir factor, and a Fairall cool skin, stepped with the
+atmosphere in the surface kernels and booked as a profile inside the
+mixed layer's heat, so that it stores nothing of its own. In the
+retreat only, the previous day's mean buoyancy flux replaces the
+one-day memory, and a night gate lets the mixed layer retreat only
+where the night's convection would fail to reach its base. The
+coupling risk runs through the surface exchange of the Oct 6 runaway.
+About 8–10 hours.
+
+**Acceptance.** Both engines, with a parity test at N=8 and rows in the
+conservation tests; heat conserved through the skin; then M27's
+judging rules at 20 and 10 m floors, where the floor should bind only
+where the nights are calm enough to leave a thin layer.
