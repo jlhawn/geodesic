@@ -11,8 +11,16 @@
  * each column keeps to itself and only the mixed layer's exchanges and
  * the restoring of the classes change it; the column read is the cell
  * nearest `latitude`. The slabs take the same F at a fixed capacity from
- * the same start. Temperatures are kelvin, depths meters below the
- * surface, heat J/m² relative to the start, times model days.
+ * the same start. With `sunlight`, absorbed sunlight (W/m², a function of
+ * the seconds from day 0 at the middle of the step) also falls on every
+ * cell, the share the ocean publishes as passing its mixed layer handed
+ * to it as `penetrated` and the rest warming the surface, and `loss`
+ * W/m² (or a function of the cell) leaves the surface throughout, as the
+ * coupled surface update has them; the ocean is told the time at the end
+ * of each step. `restart`, a saved ocean with its restart arrays, is
+ * loaded in place of the start.
+ * Temperatures are kelvin, depths meters below the surface, heat J/m²
+ * relative to the start, times model days.
  */
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
@@ -53,7 +61,7 @@ export function slabCycle({ capacity, heating = 150, damping = 20 }) {
 
 export function createSeasonalColumn({
   latitude = 32, heating = 150, wind = 0.05, damping = 20, sea = 'model', dt = STEP, days = YEAR_DAYS, start = 0, mean = START_T,
-  currents = false, every = 1, storeDepth = CAP, ocean: oceanOptions = {},
+  currents = false, every = 1, storeDepth = CAP, ocean: oceanOptions = {}, sunlight = null, loss = 0, restart = null,
 } = {}) {
   if (sea !== 'model' && !(sea in SEAS)) throw new Error(`sea is 'model', 'slab' or 'fixed', not ${sea}`);
   const steps = Math.round(days * DAY / dt), samples = Math.floor(steps / every) + 1;
@@ -62,7 +70,10 @@ export function createSeasonalColumn({
   const L = live ? ocean.layers : 0;
   const surfaceT = new Float64Array(C).fill(mean), ice = new Float64Array(C), flux = new Float64Array(C);
   const stress = eastwardStress(m, wind);
-  if (live) ocean.initialize(surfaceT, ice);
+  if (live && restart) {
+    for (let i = 0; i < C; i++) surfaceT[i] = restart.T[i];
+    ocean.load(restart, surfaceT, ice);
+  } else if (live) ocean.initialize(surfaceT, ice);
   const names = [...Object.keys(SEAS), ...(live ? ['model'] : [])];
   const slabT = Object.fromEntries(Object.keys(SEAS).map((name) => [name, mean]));
   const heatIn = Object.fromEntries(names.map((name) => [name, 0])), applied = Object.fromEntries(names.map((name) => [name, 0]));
@@ -133,10 +144,20 @@ export function createSeasonalColumn({
       heatIn[name] += applied[name] * dt;
     }
     if (live) {
-      applied.model = forcing - damping * (surfaceT[cell] - mean);
-      for (let i = 0; i < C; i++) surfaceT[i] += (forcing - damping * (surfaceT[i] - mean)) * dt / ocean.capacity[i];
+      if (sunlight || loss) {
+        const sun = sunlight ? sunlight(start * DAY + (step + 0.5) * dt) : 0, lost = typeof loss === 'function' ? loss : () => loss;
+        applied.model = forcing - damping * (surfaceT[cell] - mean) + sun - lost(cell);
+        for (let i = 0; i < C; i++) {
+          const passing = sun * ocean.transmission[i];
+          surfaceT[i] += (forcing - damping * (surfaceT[i] - mean) + sun - passing - lost(i)) * dt / ocean.capacity[i];
+          ocean.penetrated[i] += passing * dt;
+        }
+      } else {
+        applied.model = forcing - damping * (surfaceT[cell] - mean);
+        for (let i = 0; i < C; i++) surfaceT[i] += (forcing - damping * (surfaceT[i] - mean)) * dt / ocean.capacity[i];
+      }
       heatIn.model += applied.model * dt;
-      ocean.advance(surfaceT, ice, flux, stress, dt);
+      ocean.advance(surfaceT, ice, flux, stress, dt, undefined, start * DAY + (step + 1) * dt);
       if (!currents) ocean.u.fill(0);
     }
     step++;
