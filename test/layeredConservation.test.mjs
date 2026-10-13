@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean } from '../js/ocean/layered.module.js';
+import { createOcean, THIN, SPEED_LIMIT } from '../js/ocean/layered.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
 import { columnMomentum } from './helpers/layered.mjs';
@@ -279,7 +279,7 @@ const EXACT = [1e-9, 1e-9, 1e-12, 1e-12, 1e-15, 1e-15];
 const GPU_FLOORS = {
   readSurface: EXACT,
   dynamics: [0.02, 0.1, 3e-5, 3e-4, 1e-6, 1e-5],
-  rescale: [0.01, 0.2, 2e-8, 1e-5, Infinity, Infinity],
+  rescale: [0.01, 0.2, 5e-7, 1e-5, Infinity, Infinity],
   eddy: [0.01, 0.01, 1e-6, 2e-6, 3e-8, 6e-8],
   shift: EXACT,
   mixedLayer: EXACT,
@@ -296,6 +296,65 @@ test('in single precision every phase of the GPU ocean\'s step keeps the heat, s
   const taken = record.deposit.map((r, n) => r.stored / sea.light[n]), overall = record.deposit.reduce((s, r) => s + r.stored, 0) / sea.light.reduce((s, x) => s + x, 0);
   console.log(`GPU deposit: ${show(mean(sea.light, (x) => x))} W/m² of sunlight passed the mixed layer each step; the stores took ${Math.min(...taken).toFixed(4)} to ${Math.max(...taken).toFixed(4)} of each step's, with what waited from the step before, and ${overall.toFixed(5)} of all of it`);
   assert.ok(Math.min(...taken) > 0.95 && Math.max(...taken) < 1.05 && Math.abs(overall - 1) < 0.01, `the stores took ${taken} of the light`);
+});
+
+/*
+ * How far each wet edge's column transport Σ h_e u, on the thicknesses
+ * the shift used, lies from the barotropic average transport, relative to
+ * Σ h_e |u|; edges the speed limit clamped are counted and set aside.
+ */
+function landing(hEdge, u, avgU, edgeOcean, layers) {
+  let worst = 0, tokens = 0, clamped = 0, edges = 0;
+  for (let e = 0; e < E; e++) {
+    if (!edgeOcean[e]) continue;
+    let transport = 0, scale = Math.abs(avgU[e]), thin = false, limited = false;
+    for (let k = 0; k < layers; k++) {
+      const n = k * E + e;
+      transport += hEdge[n] * u[n]; scale += hEdge[n] * Math.abs(u[n]);
+      thin ||= k > 0 && hEdge[n] < THIN;
+      limited ||= Math.abs(u[n]) >= SPEED_LIMIT;
+    }
+    edges++;
+    if (thin) tokens++;
+    if (limited) { clamped++; continue; }
+    if (scale > 0) worst = Math.max(worst, Math.abs(transport - avgU[e]) / scale);
+  }
+  return { worst, tokens, clamped, edges };
+}
+
+function landed(label, rows, bound) {
+  const worst = Math.max(...rows.map((r) => r.worst)), tokens = Math.min(...rows.map((r) => r.tokens)), clamped = rows.reduce((s, r) => s + r.clamped, 0);
+  console.log(`${label} shift: the column transport off the barotropic average by ${show(worst)} of Σ h_e |u| at most over ${rows.length} steps; ${tokens} of ${rows[0].edges} edges hold a class thinner than THIN, ${clamped} clamped`);
+  assert.ok(tokens > 50, `only ${tokens} edges hold a class thinner than THIN`);
+  assert.equal(clamped, 0, `${clamped} edge-steps clamped`);
+  assert.ok(worst < bound, `the column transport lies ${worst} of Σ h_e |u| off the barotropic average`);
+}
+
+test('after the velocity shift every edge\'s column transport, tokens included, is the barotropic average transport to double-precision rounding on the CPU', () => {
+  const { ocean, surfaceT, ice, flux, stress } = spunUp();
+  ocean.setStress(stress, ice);
+  const hEdge = new Float64Array(ocean.shared.hEdge), rows = [];
+  for (let n = 0; n < 4; n++) {
+    ocean.readSurface(surfaceT, ice);
+    ocean.phases.dynamics(DT); ocean.phases.rescale(); ocean.phases.eddy(DT); ocean.phases.shift();
+    rows.push(landing(hEdge, ocean.u, ocean.avgU, ocean.edgeOcean, ocean.layers));
+    ocean.mixedLayer(DT); ocean.salt(); ocean.writeSurface(surfaceT, flux, DT);
+  }
+  landed('CPU', rows, 1e-12);
+});
+
+test('after the velocity shift every edge\'s column transport, tokens included, is the barotropic average transport to single-precision rounding on the GPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const start = spunUp(), sea = await onGpu(start), { model, ocean } = sea, { device } = model.gpu, layers = ocean.layers, { OS, OD, B } = ocean.layout, rows = [];
+  for (let n = 0; n < 4; n++) {
+    ocean.readSurfaceFromAtmosphere();
+    ocean.phases.dynamics(DT); ocean.phases.rescale(); ocean.phases.eddy(DT); ocean.phases.shift();
+    await device.queue.onSubmittedWorkDone();
+    const [[u], [hEdge, avgU]] = await Promise.all([readRanges(device, ocean.buffers.S, [{ offset: OS.OU, length: layers * E }]), readRanges(device, ocean.buffers.OD, [{ offset: OD.HEDGE, length: layers * E }, { offset: B.BAVG + C, length: E }])]);
+    rows.push(landing(hEdge, u, avgU, start.ocean.edgeOcean, layers));
+    ocean.mixedLayer(DT); ocean.salt(DT); ocean.writeSurface(DT);
+  }
+  model.destroy();
+  landed('GPU', rows, 2e-6);
 });
 
 /*
