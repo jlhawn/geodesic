@@ -69,7 +69,7 @@ test('heated without damping, the model\'s mixed layer sits on its 50 m floor fr
   assert.ok(seasonal.length >= 5 && seasonal.every((layer) => layer.density < 1025.25 && layer.temperature < r.seas.model.sst[N]), `the summer leaves thin, light classes under the mixed layer: ${seasonal.map((layer) => layer.density).join(', ')}`);
 });
 
-test('a year with damping: the floor from day 30 while the column gains heat, convection to 356 m by the end of winter, and a spring retreat that halves in 0.75 days, the model\'s one-day detrainment, and stands 15 m above the floor at the March equinox', () => {
+test('a year with damping: the floor from day 30 while the column gains heat, convection to 356 m by the end of winter, and a spring retreat toward the Ekman bound 0.7u*/|f| that halves its distance in 0.75 days, the model\'s one-day detrainment, and stands 15 m above the floor at the March equinox', () => {
   const t0 = performance.now();
   const column = seasonalColumn();
   const seconds = (performance.now() - t0) / 1000, { record: r } = column, N = column.samples - 1;

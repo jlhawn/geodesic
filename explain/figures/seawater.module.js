@@ -34,20 +34,20 @@ export function mountSeawater(root) {
   choice(controls, { label: 'Show', options: [['temperature and salinity', 'plane'], ['the classes by latitude', 'section']], value: state.view, onChange: (v) => { state.view = v; arrange(); } });
   choice(controls, { label: 'Probe', options: [['one water', 'one'], ['mix two waters', 'mix']], value: state.probe, onChange: (v) => { state.probe = v; touched = false; arrange(); } });
   const probeRow = controls.lastElementChild;
-  choice(controls, { label: 'Classes', options: [['all 44', 'all'], ['the four of the next figures', 'four']], value: state.classes, onChange: (v) => { state.classes = v; arrange(); } });
+  choice(controls, { label: 'Classes', options: [['all 46', 'all'], ['the four of the next figures', 'four']], value: state.classes, onChange: (v) => { state.classes = v; arrange(); } });
   const first = readout(controls), second = readout(controls), third = readout(controls);
 
   function arrange() {
     const plane = state.view === 'plane', four = state.classes === 'four';
     probeRow.style.display = plane ? '' : 'none';
     if (plane) {
-      words.textContent = `The model’s equation of state for seawater on a plane of salinity, left to right, and temperature, up the page, shaded by density, with lines of equal density every 1 kg/m³. The dots are ${four ? 'the four classes that the next figures use, among the model’s 44' : 'the 44 classes of the model’s interior'}, each at the temperature and salinity of its label. ${state.probe === 'one' ? 'Hover or tap to move the probe, or drag it.' : 'Drag either water. The dot between them is the two mixed half and half, which averages their temperatures and salinities.'}`;
-      const items = [['ramp', 'density, lighter water brighter', 'cool', DARK], ['faint', 'equal density, every 1 kg/m³', LINE], ['dash', 'the model’s freezing point', CLOUD], ['dots', four ? 'the four classes' : 'the 44 classes', four ? ACCENT : INK]];
+      words.textContent = `The model’s equation of state for seawater on a plane of salinity, left to right, and temperature, up the page, shaded by density, with lines of equal density every 1 kg/m³. The dots are ${four ? 'the four classes that the next figures use, among the model’s 46' : 'the 46 classes of the model’s interior'}, each at the temperature and salinity of its label. ${state.probe === 'one' ? 'Hover or tap to move the probe, or drag it.' : 'Drag either water. The dot between them is the two mixed half and half, which averages their temperatures and salinities.'}`;
+      const items = [['ramp', 'density, lighter water brighter', 'cool', DARK], ['faint', 'equal density, every 1 kg/m³', LINE], ['dash', 'the model’s freezing point', CLOUD], ['dots', four ? 'the four classes' : 'the 46 classes', four ? ACCENT : INK]];
       if (state.probe === 'mix') items.push(['dash', 'the density of each water', '#fff'], ['dash', 'the density of the mix', ACCENT]);
       else items.push(['dash', 'the density of the probe’s water; the nearest class is ringed', ACCENT]);
       key.set(items);
     } else {
-      words.textContent = `The start the model builds when it has no ocean atlas to begin from, here for a sea 4000 m deep with no land, under the climate model’s opening sea surface: 28 °C on the equator and ice poleward of 72°N and 68°S. It is the same at every longitude, so each latitude has one column. Each band is ${four ? 'one of the four classes of the next figures, the same start built with those four instead of 44' : 'one of the 44 classes'}; a class thinner than 5 m is not drawn. The top kilometer is drawn four times as tall for each meter as the water below it. Hover or tap to read a class, or drag the probe.`;
+      words.textContent = `The start the model builds when it has no ocean atlas to begin from, here for a sea 4000 m deep with no land, under the climate model’s opening sea surface: 28 °C on the equator and ice poleward of 72°N and 68°S. It is the same at every longitude, so each latitude has one column. Each band is ${four ? 'one of the four classes of the next figures, the same start built with those four instead of 46' : 'one of the 46 classes'}; a class thinner than 5 m is not drawn. The top kilometer is drawn four times as tall for each meter as the water below it. Hover or tap to read a class, or drag the probe.`;
       key.set([['ramp', 'density, lighter water brighter', 'cool', DARK], ['faint', 'boundaries between classes', LINE], ['line', 'the base of the mixed layer', ACCENT], ...(four ? [] : [['dash', 'the top of the 1024.0 class', '#fff']]), ['bar', 'sea ice', CLOUD]]);
       if (!sections && !building) build();
     }

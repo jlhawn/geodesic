@@ -306,15 +306,18 @@ and where it binds the depth a column asks for rises 2.7×, from 1.4 to
 3.7 m. Adopted as the defaults of both engines at the 50 m floor:
 `penetration` 'IB', `carryMomentum`, `refillRate` 24 m a day,
 `shearEntrainment` 0.65, `ekmanDepth` 0.4, `retreatStirring` 2.5,
-`langmuir` 2, `retreatEkman` 0.7 and the 46 classes, with Part 8
-regenerated. The cost at N=128 on the M1 Max is about 0.65 ms a model
-step for this round (+0.33 s a simulated day) and 0.83–0.92 ms with
+`langmuir` 2, `retreatEkman` 0.7 and the 46 classes. Part 8's live
+figures run these defaults; its recorded run, regenerated on them,
+waits on its rewritten prose and re-pinned tests. The cost at N=128
+on the M1 Max is about 0.65 ms a model step for this round (+0.33 s
+a simulated day) and 0.83–0.92 ms with
 M27's additions (+0.43–0.47 s). Between the floor and 20 m stand, in
 order: the coastal upwelling under a thin layer (Peru is 2.2 K warmer
 at every thin floor and the Ekman depth saturates at 50 m there), the
 June SST drift, the Mediterranean outflow under a thin layer (M28's
 straits), and the night's convection, which a one-day buoyancy memory
-cannot see: where any floor binds the asked depth is about 1 m (M30).
+cannot see: where a thin floor binds, the asked depth's median is
+1.0–1.5 m (M30).
 In June the 50 m arm with everything on has 16 columns at the 600 m cap
 against the control's 4–7 and 137 deeper than 400 m at 40–60S against
 17, in the southeast Pacific's winter; they are to be read before
@@ -411,8 +414,8 @@ engines bit for bit with the ice held fixed.
 **Goal.** Let the mixed layer stand for what climatologies measure,
 the layer the night's convection mixes each dawn, and give the day's
 warming its own place above it. The retreat reads a one-day memory of
-the surface buoyancy flux, which cannot see the night: where any floor
-binds, a calm, strongly heated column asks for about 1 m, and the floor
+the surface buoyancy flux, which cannot see the night: where a thin floor
+binds, a calm, strongly heated column asks for 1.0–1.5 m, and the floor
 stands in for the night's depth. A shorter memory is not the answer by
 itself: 3 hours at a 10 m floor bound far less but cooled the water
 planet's SST by 0.72 K in a year, with no day and night in its
