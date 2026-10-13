@@ -12,7 +12,7 @@
 // package-off value and, with the package on at a 50 m floor, when their
 // ratio leaves GATE. The default 2.3,3.6 is the model's own form, the
 // package-off rule's faded constant taken at the step's depth (the floor);
-// taken at the asked depth, as the probe does, the band is 1.4,2.2. It
+// taken at the asked depth, the band is 1.4,2.2. It
 // refuses to start beside another `node scripts/` or `node --test` job.
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
@@ -80,7 +80,7 @@ rebalanceSurfacePressure(model.core, state[0], state[1], model.surfaceGeopotenti
 
 const deg = 180 / Math.PI, rho0 = OCEAN.density ?? 1025, rhoCp = rho0 * (OCEAN.specificHeat ?? 3985);
 const F = OCEAN.shallowestMixedDepth ?? 50, stirring = OCEAN.stirring ?? 0.8, stirringDepth = OCEAN.stirringDepth ?? 100;
-const retreatStirring = OCEAN.retreatStirring ?? 0, langmuirCap = OCEAN.langmuir ?? 0, packaged = retreatStirring > 0 || langmuirCap > 0;
+const retreatStirring = OCEAN.retreatStirring ?? 0, langmuirCap = OCEAN.langmuir ?? 0, retreatEkman = OCEAN.retreatEkman ?? 0, packaged = retreatStirring > 0 || langmuirCap > 0;
 const momentumDepth = OCEAN.momentumDepth ?? 50, ekmanDepth = OCEAN.ekmanDepth ?? 0, stressThickness = OCEAN.stressThickness ?? PV_FLOOR;
 const { latCell, lonCell, latEdge, areaCell, cellsOnEdge } = mesh;
 const lat = (i) => latCell[i] * deg, lon = (i) => ((((lonCell[i] * deg) + 540) % 360) - 180);
@@ -120,11 +120,12 @@ function langmuirFactor(ustar, h0, cap) {
   return Math.min(cap, Math.sqrt(1 + la ** -2 / 1.5 ** 2 + la ** -4 / 5.4 ** 4));
 }
 const fadeOff = (h0) => 2 * stirring * Math.exp(-h0 / stirringDepth);
-function askedDepth(tau, loss, h0, inForce) {
+function askedDepth(tau, loss, h0, inForce, f = 0) {
   const ustar3 = Math.pow(tau / rho0, 1.5);
   if (!inForce) return fadeOff(h0) * ustar3 / -loss;
   const constant = retreatStirring > 0 ? retreatStirring : fadeOff(h0);
-  return constant * langmuirFactor(Math.sqrt(tau / rho0), h0, langmuirCap) * ustar3 / -loss;
+  const unbounded = constant * langmuirFactor(Math.sqrt(tau / rho0), h0, langmuirCap) * ustar3 / -loss;
+  return retreatEkman > 0 && f !== 0 ? Math.min(unbounded, retreatEkman * Math.sqrt(tau / rho0) / Math.abs(f)) : unbounded;
 }
 
 const fieldOf = (value) => (value == null ? null : ArrayBuffer.isView(value) ? value : value.water ?? value.volume ?? null);
@@ -152,7 +153,7 @@ function sampleAsked() {
     if (!(tau > 0)) continue;
     const off = askedDepth(tau, loss[i], h0, false);
     if (!(off < F)) continue;
-    rows.push({ i, off, on: askedDepth(tau, loss[i], h0, true), model: fieldOf(ocean.retreatDepth)?.[i], tau, loss: loss[i], h0 });
+    rows.push({ i, off, on: askedDepth(tau, loss[i], h0, true, mesh.fCell[i]), model: fieldOf(ocean.retreatDepth)?.[i], tau, loss: loss[i], h0 });
   }
   return { rows };
 }
@@ -219,7 +220,7 @@ function sampleOceanStep() {
   pen.stepsOver += over; pen.maxOver = Math.max(pen.maxOver, over);
 }
 
-console.log(`${FILE}: N=${N} on ${found.relax} Lloyd passes; floor ${F} m; ${packaged ? `retreat constant ${retreatStirring || 'faded'}, Langmuir cap ${langmuirCap || 'none'}` : 'retreat without the package'}; ekmanDepth ${ekmanDepth}, stressThickness ${stressThickness}; OCEAN ${JSON.stringify(OCEAN)}; setup ${seconds()} s`);
+console.log(`${FILE}: N=${N} on ${found.relax} Lloyd passes; floor ${F} m; ${packaged ? `retreat constant ${retreatStirring || 'faded'}, Langmuir cap ${langmuirCap || 'none'}${retreatEkman > 0 ? `, Ekman bound ${retreatEkman}u*/|f|` : ''}` : 'retreat without the package'}; ekmanDepth ${ekmanDepth}, stressThickness ${stressThickness}; OCEAN ${JSON.stringify(OCEAN)}; setup ${seconds()} s`);
 const steps = Math.round(DAYS * 86400 / STEP);
 for (let n = 0; n < steps; n++) {
   model.step(STEP);
