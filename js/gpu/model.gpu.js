@@ -102,7 +102,7 @@ export async function createGpuModel(gridOrMesh, {
   if (gpuOcean) gpu.hooks.beforePhysics = async (dt) => {
     gpuOcean.accumulateFreshwater(dt);
     if (++oceanCounter % gpuOcean.everySteps !== 0) return;
-    await gpuOcean.advanceCoupled(gpuOcean.everySteps * dt);
+    await gpuOcean.advanceCoupled(gpuOcean.everySteps * dt, model.time + dt);
   };
   const lengths = [C, K * C, K * E, C, K * C, K * C, C];
   const state = lengths.map((n) => new Float64Array(n));

@@ -2,11 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES, langmuirFactor, THIN_LAYER_CLASSES } from '../js/ocean/layered.module.js';
+import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES, langmuirFactor, THIN_LAYER_CLASSES, transmitted, deposited } from '../js/ocean/layered.module.js';
 import { UNLISTED_OCEANS, columnMomentum } from './helpers/layered.mjs';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
-import { labelTemperature, seawaterDensity } from '../js/ocean/seawater.module.js';
+import { labelTemperature, seawaterDensity, thermalExpansion } from '../js/ocean/seawater.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
@@ -677,6 +677,110 @@ test('under the mixing package the GPU ocean takes the wind over its Ekman depth
   console.log(`20 packaged ocean steps under 10 m floors at N=8, the engines' rms relative difference against the effect of the Ekman depth, the 5 m receivers and the Langmuir retreat: ${lines.join(', ')}`);
   assert.equal((await gpuOcean.diagnostics()).oceanLimited, 0);
   gpuModel.destroy();
+});
+
+/*
+ * Three mixed-layer calls at N=8 under retreatDaily and retreatLight 1,
+ * from a 40 m mixed layer on a 2 m floor, each handed the same sunlight
+ * below the mixed layer and the same surface, warmed by the rest of the
+ * sunlight less a dark loss, the second closing a day of two calls.
+ */
+test('under retreatDaily and retreatLight the GPU mixed layer closes the day to the CPU\'s means and retreats under the night gate as the CPU one does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const dt = 1350, dark = 175, suns = [750, 125, 500];
+  const night = { ...OCEAN_OPTIONS, penetration: 'IB', mixedDepth: 40, minimumThickness: 2, shallowestMixedDepth: 2, detrainmentTime: dt, retreatStirring: 2.5, retreatDaily: true, retreatLight: 1 };
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, flux = new Float64Array(C);
+  const cpu = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...night });
+  cpu.initialize(Float64Array.from(surfaceT0), ice);
+  const start = { ...cpu.serialize(), ...cpu.restartArrays(), Q: cpu.Q, W: cpu.W, flux };
+  cpu.load(start, Float64Array.from(surfaceT0), ice);
+  const model = await createGpuModel(new Grid(8), { topography, ocean: night }), gpu = model.oceanEngine, PH = model.gpu.layout.PH;
+  await gpu.upload(start, Float64Array.from(surfaceT0), ice);
+  const open = (i) => cpu.cellOcean[i] && !(ice[i] > 0);
+  let before = null, gates = null;
+  for (let call = 0; call < 3; call++) {
+    const light = Float32Array.from(cpu.transmission, (t, i) => (open(i) ? suns[call] * dt * t : 0));
+    const surfaceT = Float64Array.from(cpu.T0, (t, i) => (open(i) ? t + dt * (suns[call] * (1 - cpu.transmission[i]) - dark) / cpu.capacity[i] : surfaceT0[i]));
+    cpu.penetrated.set(light);
+    model.gpu.device.queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.PEN, light);
+    cpu.readSurface(Float64Array.from(surfaceT), ice); cpu.setStress(stress, ice);
+    gpu.readSurface(Float64Array.from(surfaceT), ice); gpu.setStress(stress, ice);
+    if (call === 2) {
+      const [{ h }, days] = await Promise.all([gpu.download(), gpu.restartArrays()]);
+      const gate = (sunDay, darkDay, depth, i) => {
+        const b = 9.81 * thermalExpansion(cpu.T0[i], cpu.S0[i]) / cpu.rhoCp, column = cpu.D[i] + cpu.eta[i];
+        return darkDay[i] - b * sunDay[i] * (1 - (transmitted(depth) - transmitted(column)) - depth * deposited(depth, column));
+      };
+      before = { cpu: Float64Array.from(cpu.h.subarray(0, C)), gpu: h.slice(0, C) };
+      gates = Array.from({ length: C }, (_, i) => (open(i) ? [gate(cpu.daily.sunDay, cpu.daily.darkDay, before.cpu[i], i), gate(days.sunDay, days.darkDay, before.gpu[i], i)] : null));
+      let sunGap = 0, darkGap = 0;
+      for (let i = 0; i < C; i++) {
+        if (!open(i) || !(cpu.daily.sunDay[i] > 0)) continue;
+        sunGap = Math.max(sunGap, Math.abs(days.sunDay[i] / cpu.daily.sunDay[i] - 1));
+        darkGap = Math.max(darkGap, Math.abs(days.darkDay[i] - cpu.daily.darkDay[i]) / Math.abs(cpu.daily.darkDay[i]));
+      }
+      console.log(`the day closed after two calls: the GPU's mean sunlight within ${sunGap.toExponential(2)} and its mean dark loss within ${darkGap.toExponential(2)} of the CPU's`);
+      assert.ok(sunGap < 1e-5 && darkGap < 1e-5, `S̄ ${sunGap}, D̄ ${darkGap}`);
+    }
+    cpu.mixedLayer(dt, call === 1 ? 1 / (2 * dt) : 0); gpu.mixedLayer(dt, call === 1 ? 1 / (2 * dt) : 0);
+    cpu.writeSurface(surfaceT, flux, dt); gpu.writeSurface(dt);
+  }
+  const { h } = await gpu.download();
+  model.destroy();
+  let signs = 0, mismatched = 0, retreated = 0, depthGap = 0, movedGap = 0;
+  for (let i = 0; i < C; i++) {
+    if (!gates[i]) continue;
+    const [onCpu, onGpu] = gates[i];
+    if (Math.abs(onCpu) > 1e-12) { signs++; if (Math.sign(onCpu) !== Math.sign(onGpu)) mismatched++; }
+    depthGap = Math.max(depthGap, Math.abs(h[i] / cpu.h[i] - 1));
+    const moved = before.cpu[i] - cpu.h[i];
+    if (cpu.retreatDepth[i] > 0 && moved > 1) { retreated++; movedGap = Math.max(movedGap, Math.abs((before.gpu[i] - h[i]) / moved - 1)); }
+  }
+  console.log(`the night gate: ${signs} open cells with |B_gate| > 1e-12, ${mismatched} of a different sign on the GPU; ${retreated} cells retreated over a meter, the GPU's volumes within ${movedGap.toExponential(2)} and its depths within ${depthGap.toExponential(2)} of the CPU's`);
+  assert.equal(mismatched, 0);
+  assert.ok(retreated > 20 && movedGap < 1e-5 && depthGap < 1e-5, `${retreated} retreating cells, volumes ${movedGap}, depths ${depthGap} apart`);
+});
+
+test('under retreatDaily without penetration the GPU mixed layer closes its days on B alone, as the CPU one does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const dt = 21600, options = { ...OCEAN_OPTIONS, mixedDepth: 40, minimumThickness: 2, shallowestMixedDepth: 2, retreatDaily: true };
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const C = cpuModel.mesh.nCells, cpu = createCpuLayeredOcean(cpuModel.mesh, { geography: cpuModel.geography, ...options });
+  const model = await createGpuModel(new Grid(8), { topography, ocean: options }), gpu = model.oceanEngine;
+  cpu.initialize(Float64Array.from(surfaceT0), ice); gpu.initialize(Float64Array.from(surfaceT0), ice);
+  const flux = new Float64Array(C);
+  for (let n = 0; n < 8; n++) {
+    const surfaceT = Float64Array.from(cpu.T0, (t, i) => (cpu.cellOcean[i] && !(ice[i] > 0) ? t + (n % 4 < 2 ? 0.2 : -0.1) : surfaceT0[i]));
+    cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, dt, undefined, (n + 1) * dt);
+    await gpu.advance(Float64Array.from(surfaceT), ice, stress, dt, undefined, (n + 1) * dt);
+  }
+  const [{ h }, days] = await Promise.all([gpu.download(), gpu.restartArrays()]);
+  model.destroy();
+  let gap = 0, depthGap = 0, closed = 0;
+  for (let i = 0; i < C; i++) {
+    if (!cpu.cellOcean[i] || ice[i] > 0) continue;
+    if (cpu.daily.darkDay[i] !== 0) closed++;
+    gap = Math.max(gap, Math.abs(days.darkDay[i] - cpu.daily.darkDay[i]) / Math.max(1e-12, Math.abs(cpu.daily.darkDay[i])));
+    depthGap = Math.max(depthGap, Math.abs(h[i] / cpu.h[i] - 1));
+    assert.equal(days.sunDay[i], 0);
+  }
+  console.log(`without penetration ${closed} open cells closed two days of B; the GPU's means within ${gap.toExponential(2)} and its depths within ${depthGap.toExponential(2)} of the CPU's`);
+  assert.ok(closed > 100 && gap < 1e-3 && depthGap < 1e-4, `${closed} cells, means ${gap}, depths ${depthGap} apart`);
+});
+
+test('with retreatDaily and retreatLight present but off, the GPU ocean lays out the same buffers and holds the same ones after 64 steps at N=8 as without them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { surfaceT0, ice, stress } = buildScenario(8);
+  const run = async (extra) => {
+    const model = await createGpuModel(new Grid(8), { topography, ocean: { ...OCEAN_OPTIONS, penetration: 'IB', ...extra } }), gpu = model.oceanEngine;
+    gpu.initialize(Float64Array.from(surfaceT0), ice);
+    for (let n = 0; n < 64; n++) await gpu.advance(Float64Array.from(surfaceT0), ice, stress, 1350, undefined, (n + 1) * 1350);
+    const [{ h, u, T, S, eta }, restart] = await Promise.all([gpu.download(), gpu.restartArrays()]);
+    const layout = JSON.stringify(gpu.layout);
+    model.destroy();
+    return { layout, arrays: { h, u, T, S, eta, ...restart } };
+  };
+  const absent = await run({}), present = await run({ retreatDaily: false, retreatLight: 0 });
+  assert.equal(present.layout, absent.layout);
+  for (const [name, values] of Object.entries(absent.arrays)) assert.deepEqual(Array.from(present.arrays[name]), Array.from(values), name);
 });
 
 test('the GPU ocean takes an 8-layer state that carries no class list, as the page\'s saved runs are, onto the class list as the CPU ocean does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

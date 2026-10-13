@@ -92,6 +92,17 @@ import { profileAt } from './climatology.module.js';
  * scaled by the cell's open water, as pack ice damps the waves. With
  * `retreatEkman` c that depth is at most c u* / |f|, the Ekman bound of
  * Large, McWilliams and Doney (1994), and unbounded where f is 0.
+ * With `retreatDaily` the retreat alone takes its B from the previous
+ * UTC day instead: the day's mean absorbed sunlight S̄ (the light handed
+ * below the mixed layer over the share τ_k that passed it) and mean dark
+ * loss D̄ (B with the sunlight the mixed layer kept, b S (1 − τ_k), put
+ * back, b = gα/ρc_p), means over a whole day of ocean calls ending at a
+ * UTC midnight (closeDay; a partial day after a start or a load is
+ * dropped), so that B = D̄ − b S̄ (1 − τ(h₀)) at the depth h₀ the layer
+ * has now. With `retreatLight` λ it retreats only while
+ * D̄ − b S̄ (1 − τ(h₀) − λ h₀ q(h₀)) < 0, q the light absorbed per meter
+ * at its base (deposited): it holds the depth to which the night's
+ * convection carries the day's light, the zero-wind trapping depth.
  * `neutralSnap` returns everything below
  * `shallowestMixedDepth` whenever the layer is as dense as the water
  * beneath it, and `convectiveErosion: false` swallows every class no
@@ -293,8 +304,11 @@ export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLER
  * than `cap`. erfc is Abramowitz and Stegun's 7.1.26, as on the GPU.
  */
 export const FRICTION_PER_WIND = 1.19e-3, CALM_WIND = 1e-3;
-export function mixingOptionCheck({ stressThickness, langmuir, retreatEkman = 0 }) {
+export function mixingOptionCheck({ stressThickness, langmuir, retreatEkman = 0, retreatDaily = false, retreatLight = 0, penetration = null }) {
   if (!(retreatEkman >= 0 && retreatEkman < Infinity)) throw new Error(`retreatEkman bounds the retreat at that multiple of u*/|f|, so it is 0 (no bound) or positive, not ${retreatEkman}`);
+  if (!(retreatLight >= 0 && retreatLight <= 1)) throw new Error(`retreatLight weighs the light the night's convection carries down to the mixed layer's base, from 0 (no gate) to 1, not ${retreatLight}`);
+  if (retreatLight > 0 && !retreatDaily) throw new Error('retreatLight gates the retreat on the previous day\'s sunlight and dark loss, so it needs retreatDaily');
+  if (retreatLight > 0 && !penetration) throw new Error('retreatLight weighs the sunlight absorbed at the mixed layer\'s base, so it needs penetration');
   if (!(stressThickness >= THIN)) throw new Error(`stressThickness is at least THIN (${THIN} m), the thinnest class that keeps its own velocity, not ${stressThickness}`);
   if (langmuir !== 0 && !(langmuir >= 1)) throw new Error(`langmuir caps a factor of at least 1, so it is 0 or at least 1, not ${langmuir}`);
 }
@@ -330,6 +344,28 @@ const jerlovShare = ([R, z1, z2], z) => R * Math.exp(-z / z1) + (1 - R) * Math.e
 export function transmitted(z, type = 'IB') {
   const bands = JERLOV[type];
   return jerlovShare(bands, Math.min(z, PENETRATION_DEPTH)) - jerlovShare(bands, PENETRATION_DEPTH);
+}
+export function deposited(z, depth, type = 'IB') {
+  const [R, z1, z2] = JERLOV[type];
+  return z < Math.min(depth, PENETRATION_DEPTH) ? R / z1 * Math.exp(-z / z1) + (1 - R) / z2 * Math.exp(-z / z2) : 0;
+}
+
+/*
+ * The day's end for retreatDaily, from the model time at the end of an
+ * ocean call `dt` long (day 0 starts at 00 UTC): closeDay adds the call to
+ * `day.span` and returns 0 while the day goes on, and at the call that
+ * reaches a UTC midnight 1/span when the span is a whole day, else −1,
+ * starting the next span. Both engines take the flag from here.
+ */
+export const DAY_SECONDS = 86400;
+export const dayEnds = (time, dt) => Math.floor((time + 1) / DAY_SECONDS) > Math.floor((time + 1 - dt) / DAY_SECONDS);
+export function closeDay(day, time, dt) {
+  if (!Number.isFinite(time)) throw new Error('retreatDaily needs the model time at the end of each ocean call, advance\'s last argument');
+  day.span += dt;
+  if (!dayEnds(time, dt)) return 0;
+  const closing = Math.abs(day.span - DAY_SECONDS) < 0.5 * dt ? 1 / day.span : -1;
+  day.span = 0;
+  return closing;
 }
 
 /*
@@ -741,7 +777,8 @@ export function sameDensities(a, b) {
  * as h·T and h·S, so a rebinned ocean restarts on either engine.
  */
 const SPREAD_T = 4, SPREAD_S = 0.5;
-export const REBIN_CARRIED = ['previousT0', 'previousIceVolume', 'fresh', 'buoyancy', 'remainder', 'flux', 'capacity', 'penetrated'];
+export const DAILY = ['sunSum', 'darkSum', 'sunDay', 'darkDay'];
+export const REBIN_CARRIED = ['previousT0', 'previousIceVolume', 'fresh', 'buoyancy', 'remainder', 'flux', 'capacity', 'penetrated', ...DAILY, 'daySpan'];
 export function rebinOcean(saved, from, to, C, { labelT, labelS }) {
   const Lo = from.length + 1, Ln = to.length + 1, E = saved.u.length / Lo;
   const spans = (labels) => labels.map((r, k) => {
@@ -896,7 +933,7 @@ export function createOcean(mesh, {
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
   momentumDepth = 50, carryMomentum = false, refillRate = 0, refillFloor = 5, shearEntrainment = 0,
-  ekmanDepth = 0, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 0, langmuir = 0, retreatEkman = 0,
+  ekmanDepth = 0, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 0, langmuir = 0, retreatEkman = 0, retreatDaily = false, retreatLight = 0,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = null,
   geography = null, bathymetry = null, buffers = null, climatology = null,
@@ -909,7 +946,7 @@ export function createOcean(mesh, {
   if (climatology && typeof climatology.columnAt !== 'function') throw new Error('the ocean climatology must be decoded (loadClimatology in ./climatology.module.js) before the ocean is built');
   if (penetration !== null && !JERLOV[penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${penetration}`);
   if (shearEntrainment > 0 && !carryMomentum) throw new Error('shearEntrainment needs carryMomentum: without the entrained water\'s momentum mixed in, the base\'s Richardson number never rises and the mixed layer swallows a class a step');
-  mixingOptionCheck({ stressThickness, langmuir, retreatEkman });
+  mixingOptionCheck({ stressThickness, langmuir, retreatEkman, retreatDaily, retreatLight, penetration });
   const L = densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = [rho0, ...densities];
   const labelS = [referenceS, ...salinities];
@@ -942,6 +979,7 @@ export function createOcean(mesh, {
   if (!adopting) capacity.fill(rhoCp * mixedDepth);
   const transmission = shared('transmission', C), penetrated = shared('penetrated', C), column = new Float64Array(L), shares = new Float64Array(L);
   const stress = shared('stress', E), fresh = new Float64Array(C);
+  const daily = retreatDaily ? { sunStep: new Float64Array(C), sunSum: new Float64Array(C), darkSum: new Float64Array(C), sunDay: new Float64Array(C), darkDay: new Float64Array(C) } : null, day = { span: 0 };
   const iced = new Uint8Array(C), iceCover = langmuir > 0 ? new Float64Array(C) : null;
   const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E);
   const stressDepth = shared('stressDepth', E), stressLayer = shared('stressLayer', E), stressFraction = shared('stressFraction', E);
@@ -1445,7 +1483,7 @@ export function createOcean(mesh, {
     cellVector(mesh, baseShear, shearCell);
   }
 
-  function mixedLayer(dt) {
+  function mixedLayer(dt, closing = 0) {
     if (carryMomentum) edgeThicknesses(h);
     cellVector(mesh, stress, tauCell);
     if (shearEntrainment > 0) baseShears();
@@ -1458,6 +1496,15 @@ export function createOcean(mesh, {
       const salted = s0 * fresh[i] / 1000 + (s0 - iceSalinity) * (iceVolume[i] - previousVolume[i]) * iceDensity / 1000;
       const buoyancy = g * (expansionOf(surfaceIn[i], s0) * (previousT0[i] - surfaceIn[i]) * capacity[i] / rhoCp + contractionOf(surfaceIn[i], s0) * salted) / dt;
       buoyancyLoss[i] += (buoyancy - buoyancyLoss[i]) * (buoyancyMemory > 0 ? Math.min(1, dt / buoyancyMemory) : 1);
+      const lightBuoyancy = g * expansionOf(surfaceIn[i], s0) / rhoCp;
+      if (daily) {
+        daily.sunSum[i] += daily.sunStep[i];
+        daily.darkSum[i] += buoyancy * dt + lightBuoyancy * daily.sunStep[i] * (1 - transmission[i]);
+        if (closing !== 0) {
+          if (closing > 0) { daily.sunDay[i] = daily.sunSum[i] * closing; daily.darkDay[i] = daily.darkSum[i] * closing; }
+          daily.sunSum[i] = 0; daily.darkSum[i] = 0;
+        }
+      }
       let rm = eos(Q[i] / h[i], W[i] / h[i]), budget = convectiveRate * dt;
       for (let k = 1; k < L && h[i] < deepest && budget > 0; k++) {
         const n = at(k, i);
@@ -1493,11 +1540,17 @@ export function createOcean(mesh, {
       if (neutralSnap && below > 0 && rm >= rho[below] - DENSITY_TOLERANCE) excess = Math.max(excess, h[i] - shallowestMixedDepth);
       detrain(i, excess, rm);
       if (h[i] > reach[i]) detrain(i, (h[i] - Math.max(reach[i], shallowestMixedDepth)) * Math.min(1, dt / detrainmentTime), rm);
+      let drive = buoyancyLoss[i], gate = drive;
+      if (daily) {
+        const passing = penetration ? transmissionAt(i) : 0, sun = lightBuoyancy * daily.sunDay[i];
+        drive = daily.darkDay[i] - sun * (1 - passing);
+        gate = retreatLight > 0 && passing > 0 ? drive + retreatLight * sun * h[i] * deposited(h[i], D[i] + eta[i], penetration) : drive;
+      }
       retreatDepth[i] = 0;
-      if (buoyancyLoss[i] < -1e-9) {
+      if (gate < -1e-9) {
         retreatDepth[i] = retreatStirring > 0 || langmuir > 0
-          ? (retreatStirring > 0 ? retreatStirring : 2 * stir) * (langmuir > 0 ? 1 + (langmuirFactor(Math.sqrt(tau / rho0), began, langmuir) - 1) * (1 - iceCover[i]) : 1) * ustar3 / -buoyancyLoss[i]
-          : 2 * stir * ustar3 / -buoyancyLoss[i];
+          ? (retreatStirring > 0 ? retreatStirring : 2 * stir) * (langmuir > 0 ? 1 + (langmuirFactor(Math.sqrt(tau / rho0), began, langmuir) - 1) * (1 - iceCover[i]) : 1) * ustar3 / -drive
+          : 2 * stir * ustar3 / -drive;
         if (retreatEkman > 0 && fCell[i] !== 0) retreatDepth[i] = Math.min(retreatDepth[i], retreatEkman * Math.sqrt(tau / rho0) / Math.abs(fCell[i]));
         const monin = Math.max(shallowestMixedDepth, retreatDepth[i], hold);
         if (h[i] > monin) detrain(i, (h[i] - monin) * Math.min(1, dt / detrainmentTime), rm);
@@ -1580,6 +1633,7 @@ export function createOcean(mesh, {
       T0[i] = iced[i] ? FREEZING_POINT : surfaceT[i];
       surfaceIn[i] = T0[i];
       Q[i] = h[i] * T0[i];
+      if (daily) daily.sunStep[i] = transmission[i] > 1e-6 ? penetrated[i] / transmission[i] : 0;
       if (penetrated[i] !== 0) depositLight(i);
     }
   }
@@ -1634,15 +1688,15 @@ export function createOcean(mesh, {
     }
   }
 
-  function advance(surfaceT, ice, oceanFlux, totalStress, dt, concentration = seaCover) {
+  function advance(surfaceT, ice, oceanFlux, totalStress, dt, concentration = seaCover, time = null) {
     if (++counter % everySteps !== 0) return false;
     if (!initialised) initialize(surfaceT, ice, { concentration });
-    const dtOcean = everySteps * dt;
+    const dtOcean = everySteps * dt, closing = daily ? closeDay(day, time, dtOcean) : 0;
     readSurface(surfaceT, ice, concentration);
     measureIce(ice, concentration, iceVolume);
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
     step(dtOcean);
-    mixedLayer(dtOcean);
+    mixedLayer(dtOcean, closing);
     salt();
     writeSurface(surfaceT, oceanFlux, dtOcean);
     return true;
@@ -1678,6 +1732,7 @@ export function createOcean(mesh, {
   }
   function build(surfaceT, ice, atlas, concentration = seaCover) {
     u.fill(0); eta.fill(0); fresh.fill(0); buoyancyLoss.fill(0);
+    forgetDays();
     measureIce(ice, concentration, previousVolume);
     const filled = atlas ? atlasColumns(mesh, atlas, { D, cellOcean, ice, rho, labelT, labelS, h, Q, W, T0, shallowestMixedDepth, maximumMixedDepth }) : null;
     for (let i = 0; i < C; i++) {
@@ -1824,13 +1879,31 @@ export function createOcean(mesh, {
     for (let i = 0; i < C; i++) { iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = Q[i] / Math.max(EPS, h[i]); S0[i] = W[i] / Math.max(EPS, h[i]); previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
     for (const i of fromNeighbors) if (!iced[i]) surfaceT[i] = T0[i];
     fresh.fill(0); buoyancyLoss.fill(0); penetrated.fill(0);
+    forgetDays();
     publishTransmission();
     if (restartable(saved)) {
       previousT0.set(saved.previousT0); previousVolume.set(saved.previousIceVolume); fresh.set(saved.fresh); buoyancyLoss.set(saved.buoyancy); capacity.set(saved.capacity);
       if (saved.penetrated && saved.penetrated.length === C) penetrated.set(saved.penetrated);
+      if (daily && DAILY.every((name) => saved[name] && saved[name].length === C)) {
+        for (const name of DAILY) daily[name].set(saved[name]);
+        day.span = saved.daySpan ? saved.daySpan[0] : 0;
+      }
     }
     counter = 0;
     initialised = true;
+  }
+
+  function forgetDays() {
+    if (daily) for (const values of Object.values(daily)) values.fill(0);
+    day.span = 0;
+  }
+  function restartArrays() {
+    const copy = (values) => Float64Array.from(values);
+    return {
+      previousT0: copy(previousT0), previousIceVolume: copy(previousVolume), fresh: copy(fresh), buoyancy: copy(buoyancyLoss), capacity: copy(capacity), penetrated: copy(penetrated),
+      ...(penetration ? { transmission: copy(transmission) } : {}),
+      ...(daily ? { ...Object.fromEntries(DAILY.map((name) => [name, copy(daily[name])])), daySpan: Float64Array.of(day.span) } : {}),
+    };
   }
 
   function serialize() {
@@ -1877,5 +1950,5 @@ export function createOcean(mesh, {
   initialised = false;
   const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, hEdge: hEdge.buffer, stressDepth: stressDepth.buffer, stressLayer: stressLayer.buffer, stressFraction: stressFraction.buffer, ...(windDepth ? { windDepth: windDepth.buffer } : {}), deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, retreatDepth, windDepth, avgU, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, retreatDepth, windDepth, avgU, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, daily, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }
