@@ -640,9 +640,13 @@ test('the GPU ocean takes an 8-layer state that carries no class list, as the pa
   gpuModel.destroy();
 });
 
-test('on the two lighter classes, a 44-class GPU state with its restart arrays loads onto both engines as a restart, and one and twenty-one GPU ocean steps from it track the CPU layered ocean at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('on the two lighter classes, a 44-class GPU state with its restart arrays loads onto both engines as a restart, and one and twenty-one GPU ocean steps from it track the CPU layered ocean at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, () => lighterClasses({}, ''));
+
+test('on the two lighter classes under the mixing package, the sunlight and a 20 m floor, a 44-class GPU state loads onto both engines and one and twenty-one GPU ocean steps from it track the CPU layered ocean at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, () => lighterClasses({ minimumThickness: 20, shallowestMixedDepth: 20, penetration: 'IB', momentumDepth: 50, carryMomentum: true, refillRate: 0.00027778, refillFloor: 5, shearEntrainment: 0.65, ekmanDepth: 0.4, momentumFloor: 10, stressThickness: 20, retreatStirring: 2.5, langmuir: 2 }, ' under the package'));
+
+async function lighterClasses(extra, name) {
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
-  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350, light = { ...OCEAN_OPTIONS, ...THIN_LAYER_CLASSES };
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350, light = { ...OCEAN_OPTIONS, ...THIN_LAYER_CLASSES, ...extra };
   const before = await createGpuModel(new Grid(8), { topography, ocean: OCEAN_OPTIONS });
   before.oceanEngine.initialize(Float64Array.from(surfaceT0), ice);
   for (let n = 0; n < 5; n++) await before.oceanEngine.advance(Float64Array.from(surfaceT0), ice, stress, dt);
@@ -667,7 +671,7 @@ test('on the two lighter classes, a 44-class GPU state with its restart arrays l
       lines.push(`${f} ${r.rmsRel.toExponential(2)}`);
       assert.ok(r.rmsRel < limit, `${label}: ${f} rms relative diff ${r.rmsRel} at index ${r.at}`);
     }
-    console.log(`46 classes, ${label}: the engines' rms relative difference ${lines.join(', ')}`);
+    console.log(`46 classes${name}, ${label}: the engines' rms relative difference ${lines.join(', ')}`);
   };
   await compare(1e-6, 'as loaded');
   for (const steps of [1, 20]) {
@@ -680,7 +684,7 @@ test('on the two lighter classes, a 44-class GPU state with its restart arrays l
   for (const v of (await gpuOcean.download()).h) assert.ok(Number.isFinite(v));
   assert.equal((await gpuOcean.diagnostics()).oceanLimited, 0);
   gpuModel.destroy();
-});
+}
 
 test('the GPU ocean salts and freshens its mixed layer by the ice volume, cover times thickness, as the CPU one does, with the cover from the host or from the atmosphere\'s buffers, and one restarted between the two steps under the same cover takes the second as it does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpuModel, cpuOcean, surfaceT0, ice, stress } = buildScenario(8);
