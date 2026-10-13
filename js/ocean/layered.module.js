@@ -1488,7 +1488,7 @@ export function createOcean(mesh, {
       const salted = s0 * fresh[i] / 1000 + (s0 - iceSalinity) * (iceVolume[i] - previousVolume[i]) * iceDensity / 1000;
       const buoyancy = g * (expansionOf(surfaceIn[i], s0) * (previousT0[i] - surfaceIn[i]) * capacity[i] / rhoCp + contractionOf(surfaceIn[i], s0) * salted) / dt;
       buoyancyLoss[i] += (buoyancy - buoyancyLoss[i]) * (buoyancyMemory > 0 ? Math.min(1, dt / buoyancyMemory) : 1);
-      const lightBuoyancy = g * expansionOf(surfaceIn[i], s0) / rhoCp;
+      const lightBuoyancy = daily ? g * expansionOf(surfaceIn[i], s0) / rhoCp : 0;
       if (daily) {
         daily.sunSum[i] += daily.sunStep[i];
         daily.darkSum[i] += buoyancy * dt + lightBuoyancy * daily.sunStep[i] * (1 - transmission[i]);
