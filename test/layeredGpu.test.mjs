@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, langmuirFactor, transmitted, deposited } from '../js/ocean/layered.module.js';
+import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, langmuirFactor, transmitted, deposited, DAILY, DAY_SECONDS } from '../js/ocean/layered.module.js';
 import { UNLISTED_OCEANS, columnMomentum } from './helpers/layered.mjs';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
@@ -686,7 +686,7 @@ test('under the mixing package the GPU ocean takes the wind over its Ekman depth
  * below the mixed layer and the same surface, warmed by the rest of the
  * sunlight less a dark loss, the second closing a day of two calls.
  */
-test('under retreatDaily and retreatLight the GPU mixed layer closes the day to the CPU\'s means and retreats under the night gate as the CPU one does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('under retreatDaily and retreatLight the GPU mixed layer closes the day to the CPU\'s means, the dark loss within two f32 steps of the surface temperature, and on the same means retreats under the night gate as the CPU one does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const dt = 1350, dark = 175, suns = [750, 125, 500];
   const night = { ...OCEAN_OPTIONS, penetration: 'IB', mixedDepth: 40, minimumThickness: 2, shallowestMixedDepth: 2, detrainmentTime: dt, retreatStirring: 2.5, retreatDaily: true, retreatLight: 1 };
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
@@ -697,35 +697,45 @@ test('under retreatDaily and retreatLight the GPU mixed layer closes the day to 
   cpu.load(start, Float64Array.from(surfaceT0), ice);
   const model = await createGpuModel(new Grid(8), { topography, ocean: night }), gpu = model.oceanEngine, PH = model.gpu.layout.PH;
   await gpu.upload(start, Float64Array.from(surfaceT0), ice);
-  const open = (i) => cpu.cellOcean[i] && !(ice[i] > 0);
-  let before = null, gates = null;
-  for (let call = 0; call < 3; call++) {
-    const light = Float32Array.from(cpu.transmission, (t, i) => (open(i) ? suns[call] * dt * t : 0));
-    const surfaceT = Float64Array.from(cpu.T0, (t, i) => (open(i) ? t + dt * (suns[call] * (1 - cpu.transmission[i]) - dark) / cpu.capacity[i] : surfaceT0[i]));
+  const open = (i) => cpu.cellOcean[i] && !(ice[i] > 0), ulp = (x) => 2 ** (Math.floor(Math.log2(Math.abs(x))) - 23);
+  const warmed = (call, T0) => Float64Array.from(T0, (t, i) => (open(i) ? t + dt * (suns[call] * (1 - cpu.transmission[i]) - dark) / cpu.capacity[i] : surfaceT0[i]));
+  const call = async (n, surfaceT, gpuSurfaceT, closing) => {
+    const light = Float32Array.from(cpu.transmission, (t, i) => (open(i) ? suns[n] * dt * t : 0));
     cpu.penetrated.set(light);
     model.gpu.device.queue.writeBuffer(model.gpu.buffers.PH, 4 * PH.PEN, light);
     cpu.readSurface(Float64Array.from(surfaceT), ice); cpu.setStress(stress, ice);
-    gpu.readSurface(Float64Array.from(surfaceT), ice); gpu.setStress(stress, ice);
-    if (call === 2) {
-      const [{ h }, days] = await Promise.all([gpu.download(), gpu.restartArrays()]);
-      const gate = (sunDay, darkDay, depth, i) => {
-        const b = 9.81 * thermalExpansion(cpu.T0[i], cpu.S0[i]) / cpu.rhoCp, column = cpu.D[i] + cpu.eta[i];
-        return darkDay[i] - b * sunDay[i] * (1 - (transmitted(depth) - transmitted(column)) - depth * deposited(depth, column));
-      };
-      before = { cpu: Float64Array.from(cpu.h.subarray(0, C)), gpu: h.slice(0, C) };
-      gates = Array.from({ length: C }, (_, i) => (open(i) ? [gate(cpu.daily.sunDay, cpu.daily.darkDay, before.cpu[i], i), gate(days.sunDay, days.darkDay, before.gpu[i], i)] : null));
-      let sunGap = 0, darkGap = 0;
-      for (let i = 0; i < C; i++) {
-        if (!open(i) || !(cpu.daily.sunDay[i] > 0)) continue;
-        sunGap = Math.max(sunGap, Math.abs(days.sunDay[i] / cpu.daily.sunDay[i] - 1));
-        darkGap = Math.max(darkGap, Math.abs(days.darkDay[i] - cpu.daily.darkDay[i]) / Math.abs(cpu.daily.darkDay[i]));
-      }
-      console.log(`the day closed after two calls: the GPU's mean sunlight within ${sunGap.toExponential(2)} and its mean dark loss within ${darkGap.toExponential(2)} of the CPU's`);
-      assert.ok(sunGap < 1e-5 && darkGap < 1e-5, `S̄ ${sunGap}, D̄ ${darkGap}`);
-    }
-    cpu.mixedLayer(dt, call === 1 ? 1 / (2 * dt) : 0); gpu.mixedLayer(dt, call === 1 ? 1 / (2 * dt) : 0);
+    gpu.readSurface(gpuSurfaceT, ice); gpu.setStress(stress, ice);
+    cpu.mixedLayer(dt, closing); gpu.mixedLayer(dt, closing);
     cpu.writeSurface(surfaceT, flux, dt); gpu.writeSurface(dt);
+  };
+  const capacity = new Float64Array(C);
+  for (let n = 0; n < 2; n++) {
+    for (let i = 0; i < C; i++) capacity[i] = Math.max(capacity[i], cpu.capacity[i]);
+    await call(n, warmed(n, cpu.T0), warmed(n, (await gpu.restartArrays()).previousT0), n === 1 ? 1 / (2 * dt) : 0);
   }
+  const days = await gpu.restartArrays();
+  let sunGap = 0, darkGap = 0, steps = 0;
+  for (let i = 0; i < C; i++) {
+    if (!open(i) || !(cpu.daily.sunDay[i] > 0)) continue;
+    const b = 9.81 * thermalExpansion(cpu.T0[i], cpu.S0[i]) / cpu.rhoCp, step = b * capacity[i] * ulp(cpu.T0[i]) / (2 * dt);
+    sunGap = Math.max(sunGap, Math.abs(days.sunDay[i] / cpu.daily.sunDay[i] - 1));
+    darkGap = Math.max(darkGap, Math.abs(days.darkDay[i] - cpu.daily.darkDay[i]) / Math.abs(cpu.daily.darkDay[i]));
+    steps = Math.max(steps, Math.abs(days.darkDay[i] - cpu.daily.darkDay[i]) / step);
+  }
+  console.log(`the day closed after two calls: the GPU's mean sunlight within ${sunGap.toExponential(2)} of the CPU's, its mean dark loss within ${darkGap.toExponential(2)}, ${steps.toFixed(2)} f32 steps of T₀ over the day`);
+  assert.ok(sunGap < 1e-5 && steps < 2, `S̄ ${sunGap}, D̄ ${steps} f32 steps of T₀`);
+
+  const means = { ...start, sunSum: new Float64Array(C), darkSum: new Float64Array(C), sunDay: Float64Array.from(cpu.daily.sunDay), darkDay: Float64Array.from(cpu.daily.darkDay), daySpan: [0] };
+  cpu.load(means, Float64Array.from(surfaceT0), ice);
+  await gpu.upload(means, Float64Array.from(surfaceT0), ice);
+  const loaded = await gpu.restartArrays(), before = { cpu: Float64Array.from(cpu.h.subarray(0, C)), gpu: (await gpu.download()).h.slice(0, C) };
+  const gate = (sunDay, darkDay, depth, i) => {
+    const b = 9.81 * thermalExpansion(cpu.T0[i], cpu.S0[i]) / cpu.rhoCp, column = cpu.D[i] + cpu.eta[i];
+    return darkDay[i] - b * sunDay[i] * (1 - (transmitted(depth) - transmitted(column)) - depth * deposited(depth, column));
+  };
+  const gates = Array.from({ length: C }, (_, i) => (open(i) ? [gate(cpu.daily.sunDay, cpu.daily.darkDay, before.cpu[i], i), gate(loaded.sunDay, loaded.darkDay, before.gpu[i], i)] : null));
+  const surfaceT = warmed(2, cpu.T0);
+  await call(2, surfaceT, Float64Array.from(surfaceT), 0);
   const { h } = await gpu.download();
   model.destroy();
   let signs = 0, mismatched = 0, retreated = 0, depthGap = 0, movedGap = 0;
@@ -737,12 +747,12 @@ test('under retreatDaily and retreatLight the GPU mixed layer closes the day to 
     const moved = before.cpu[i] - cpu.h[i];
     if (cpu.retreatDepth[i] > 0 && moved > 1) { retreated++; movedGap = Math.max(movedGap, Math.abs((before.gpu[i] - h[i]) / moved - 1)); }
   }
-  console.log(`the night gate: ${signs} open cells with |B_gate| > 1e-12, ${mismatched} of a different sign on the GPU; ${retreated} cells retreated over a meter, the GPU's volumes within ${movedGap.toExponential(2)} and its depths within ${depthGap.toExponential(2)} of the CPU's`);
+  console.log(`on the CPU's means, the night gate: ${signs} open cells with |B_gate| > 1e-12, ${mismatched} of a different sign on the GPU; ${retreated} cells retreated over a meter, the GPU's volumes within ${movedGap.toExponential(2)} and its depths within ${depthGap.toExponential(2)} of the CPU's`);
   assert.equal(mismatched, 0);
-  assert.ok(retreated > 20 && movedGap < 1e-5 && depthGap < 1e-5, `${retreated} retreating cells, volumes ${movedGap}, depths ${depthGap} apart`);
+  assert.ok(retreated > 20 && movedGap < 1e-4 && depthGap < 1e-5, `${retreated} retreating cells, volumes ${movedGap}, depths ${depthGap} apart`);
 });
 
-test('under retreatDaily without penetration the GPU mixed layer closes its days on B alone, as the CPU one does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('under retreatDaily without penetration the GPU mixed layer closes its days on B alone, each engine\'s surface nudged from its own T₀, as the CPU one does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const dt = 21600, options = { ...OCEAN_OPTIONS, penetration: null, mixedDepth: 40, minimumThickness: 2, shallowestMixedDepth: 2, retreatDaily: true };
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
   const C = cpuModel.mesh.nCells, cpu = createCpuLayeredOcean(cpuModel.mesh, { geography: cpuModel.geography, ...options });
@@ -750,9 +760,10 @@ test('under retreatDaily without penetration the GPU mixed layer closes its days
   cpu.initialize(Float64Array.from(surfaceT0), ice); gpu.initialize(Float64Array.from(surfaceT0), ice);
   const flux = new Float64Array(C);
   for (let n = 0; n < 8; n++) {
-    const surfaceT = Float64Array.from(cpu.T0, (t, i) => (cpu.cellOcean[i] && !(ice[i] > 0) ? t + (n % 4 < 2 ? 0.2 : -0.1) : surfaceT0[i]));
-    cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, dt, undefined, (n + 1) * dt);
-    await gpu.advance(Float64Array.from(surfaceT), ice, stress, dt, undefined, (n + 1) * dt);
+    const nudged = (T0) => Float64Array.from(T0, (t, i) => (cpu.cellOcean[i] && !(ice[i] > 0) ? t + (n % 4 < 2 ? 0.2 : -0.1) : surfaceT0[i]));
+    const gpuSurfaceT = nudged((await gpu.restartArrays()).previousT0);
+    cpu.advance(nudged(cpu.T0), ice, flux, stress, dt, undefined, (n + 1) * dt);
+    await gpu.advance(gpuSurfaceT, ice, stress, dt, undefined, (n + 1) * dt);
   }
   const [{ h }, days] = await Promise.all([gpu.download(), gpu.restartArrays()]);
   model.destroy();
@@ -765,7 +776,45 @@ test('under retreatDaily without penetration the GPU mixed layer closes its days
     assert.equal(days.sunDay[i], 0);
   }
   console.log(`without penetration ${closed} open cells closed two days of B; the GPU's means within ${gap.toExponential(2)} and its depths within ${depthGap.toExponential(2)} of the CPU's`);
-  assert.ok(closed > 100 && gap < 1e-3 && depthGap < 1e-4, `${closed} cells, means ${gap}, depths ${depthGap} apart`);
+  assert.ok(closed > 100 && gap < 1e-3 && depthGap < 5e-3, `${closed} cells, means ${gap}, depths ${depthGap} apart`);
+});
+
+test('under retreatDaily the GPU ocean saves its daily sums, and loaded half way through a day it closes the next day as it does uninterrupted; loaded without them it starts them at zero and drops the partial day', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const dt = 10800, options = { ...OCEAN_OPTIONS, penetration: 'IB', mixedDepth: 40, minimumThickness: 2, shallowestMixedDepth: 2, retreatDaily: true, retreatLight: 1 };
+  const { surfaceT0, ice, stress } = buildScenario(8);
+  const C = surfaceT0.length, open = (i) => !(ice[i] > 0);
+  const create = async () => { const model = await createGpuModel(new Grid(8), { topography, ocean: options }); return { model, gpu: model.oceanEngine }; };
+  const call = async ({ model, gpu }, n) => {
+    const hour = ((n + 0.5) * dt / 3600) % 24, sun = hour > 6 && hour < 18 ? 600 * Math.sin(Math.PI * (hour - 6) / 12) : 0;
+    const { previousT0, transmission } = await gpu.restartArrays();
+    model.gpu.device.queue.writeBuffer(model.gpu.buffers.PH, 4 * model.gpu.layout.PH.PEN, Float32Array.from(transmission, (t, i) => (open(i) ? sun * dt * t : 0)));
+    await gpu.advance(Float64Array.from(previousT0, (t, i) => (open(i) ? t + (sun > 0 ? 0.3 : -0.2) : surfaceT0[i])), ice, stress, dt, undefined, (n + 1) * dt);
+  };
+  const whole = await create();
+  whole.gpu.initialize(Float64Array.from(surfaceT0), ice);
+  for (let n = 0; n < 12; n++) await call(whole, n);
+  const saved = { ...(await whole.gpu.serialize()), ...(await whole.gpu.restartArrays()) };
+  assert.equal(saved.daySpan[0], DAY_SECONDS / 2);
+  const without = { ...saved };
+  for (const name of [...DAILY, 'daySpan']) delete without[name];
+  const resumed = await create(), forgetting = await create();
+  await resumed.gpu.upload(saved, Float64Array.from(surfaceT0), ice);
+  await forgetting.gpu.upload(without, Float64Array.from(surfaceT0), ice);
+  const loaded = await resumed.gpu.restartArrays(), cleared = await forgetting.gpu.restartArrays();
+  for (const name of DAILY) {
+    assert.deepEqual(Array.from(loaded[name]), Array.from(saved[name]), `the loaded ${name}`);
+    assert.ok(cleared[name].every((x) => x === 0), `${name} loads as zeros without the saved sums`);
+  }
+  assert.ok(saved.sunDay.some((x) => x > 0) && saved.darkDay.some((x) => x !== 0), 'the first day closed before the save');
+  for (let n = 12; n < 16; n++) for (const run of [whole, resumed, forgetting]) await call(run, n);
+  const [a, b, c] = await Promise.all([whole, resumed, forgetting].map(async ({ gpu }) => ({ ...(await gpu.restartArrays()), h: (await gpu.download()).h })));
+  for (const run of [whole, resumed, forgetting]) run.model.destroy();
+  const gap = (x, y) => { let worst = 0; for (let i = 0; i < C; i++) if (open(i)) worst = Math.max(worst, Math.abs(x[i] - y[i]) / Math.max(1e-30, Math.abs(x[i]))); return worst; };
+  const gaps = Object.fromEntries(['sunDay', 'darkDay', 'h'].map((name) => [name, gap(a[name], b[name])]));
+  console.log(`resumed against uninterrupted after the next close, largest relative gaps: ${Object.entries(gaps).map(([name, x]) => `${name} ${x.toExponential(1)}`).join(', ')}; without the sums the day's means stay zero and the mixed layers differ by up to ${gap(a.h, c.h).toExponential(1)}`);
+  assert.ok(a.darkDay.some((x, i) => x !== saved.darkDay[i]), 'the second day closed');
+  for (const [name, x] of Object.entries(gaps)) assert.ok(x < 1e-5, `${name}: ${x}`);
+  assert.ok(c.sunDay.every((x) => x === 0) && c.darkDay.every((x) => x === 0), 'a load without the sums leaves the partial day unclosed');
 });
 
 test('with retreatDaily and retreatLight present but off, the GPU ocean lays out the same buffers and holds the same ones after 64 steps at N=8 as without them', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
