@@ -34,7 +34,7 @@ import { SKIN, SEA_RHO_CP } from '../physics/skin.module.js';
  */
 const skinConstants = (o) => `const WARM_LAYER: bool = ${!!o.warmLayer}; const COOL_SKIN: bool = ${!!o.coolSkin}; const WL_D: f32 = ${o.warmLayerDepth}; const WL_NU: f32 = ${o.warmLayerProfile}; const WL_LA: f32 = ${o.warmLayerLangmuir}; const WL_CAP: f32 = ${o.warmLayerCap};
 const WL_R: f32 = ${o.skinLight[0]}; const WL_Z1: f32 = ${o.skinLight[1]}; const WL_Z2: f32 = ${o.skinLight[2]}; const SEA_RHOCP: f32 = ${SEA_RHO_CP}; const SEA_RHO: f32 = ${SKIN.waterDensity};
-const SKIN_KARMAN: f32 = ${SKIN.karman}; const SKIN_GRAV: f32 = ${SKIN.gravity}; const SKIN_NU: f32 = ${SKIN.viscosity}; const SKIN_K: f32 = ${SKIN.conductivity}; const SKIN_USTAR_FLOOR: f32 = ${SKIN.ustarFloor};
+const SKIN_KARMAN: f32 = ${SKIN.karman}; const SKIN_GRAV: f32 = ${SKIN.gravity}; const SKIN_NU: f32 = ${SKIN.viscosity}; const SKIN_K: f32 = ${SKIN.conductivity}; const SKIN_USTAR_FLOOR: f32 = ${SKIN.ustarFloor}; const SKIN_FIRST_DEPTH: f32 = ${SKIN.firstDepth}; const SKIN_MAX_DEPTH: f32 = ${SKIN.maxDepth}; const SKIN_COOL_CAP: f32 = ${SKIN.coolCap};
 const SKIN_BIGC: f32 = ${16 * SKIN.gravity * SKIN.specificHeat * (SKIN.waterDensity * SKIN.viscosity) ** 3 / (SKIN.conductivity * SKIN.conductivity)};
 `;
 
@@ -70,15 +70,15 @@ fn skinStep(i: i32, iceBefore: f32, iceAfter: f32, nonSolar: f32, solar: f32, us
   if (COOL_SKIN) {
     let ua = max(SKIN_USTAR_FLOOR, ustarAir);
     let csBig = SKIN_BIGC / (rhoAir * rhoAir);
-    var csDelta = 1e-3; var csLoss = 0.0;
+    var csDelta = SKIN_FIRST_DEPTH; var csLoss = 0.0;
     for (var n = 0; n < 2; n++) {
       let csShare = 0.065 + 11.0 * csDelta - 6.6e-5 / csDelta * (1.0 - exp(-csDelta / 8e-4));
       csLoss = -(nonSolar + csShare * solar);
       var csLambda = 6.0;
       if (alpha * csLoss > 0.0) { csLambda = 6.0 / pow(1.0 + pow(csBig * alpha * csLoss / (ua * ua * ua * ua), 0.75), 1.0 / 3.0); }
-      csDelta = min(0.01, csLambda * SKIN_NU / usw);
+      csDelta = min(SKIN_MAX_DEPTH, csLambda * SKIN_NU / usw);
     }
-    PH[PH_COOL + i] = min(1.0, max(0.0, csLoss * csDelta / SKIN_K));
+    PH[PH_COOL + i] = min(SKIN_COOL_CAP, max(0.0, csLoss * csDelta / SKIN_K));
   }
 }
 `;
