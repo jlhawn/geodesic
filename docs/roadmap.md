@@ -218,7 +218,7 @@ M29 follows M28.
 
 | # | Milestone | What it delivers | Depends on |
 |---|-----------|------------------|------------|
-| M27 | A thin mixed layer | The three additions a mixed-layer floor below 50 m needs: the wind stress and drag acting over a momentum depth separate from the refill floor, with the mixed layer's momentum carried through its exchanges; penetrating sunlight (two-band Jerlov IB) deposited in the classes beneath the mixed layer; a rate-limited refill. Then the judging runs that choose the floor (20 m likely, 10 m once shear entrainment exists). | the Oct 12 conservation work |
+| M27 | A thin mixed layer | The three additions a mixed-layer floor below 50 m needs: the wind stress and drag acting over a momentum depth separate from the refill floor, with the mixed layer's momentum carried through its exchanges; penetrating sunlight (two-band Jerlov IB) deposited in the classes beneath the mixed layer; a rate-limited refill. Judged Oct 13: the floor stays 50 m until shear entrainment and the Arctic shelf mode are fixed; the additions default on. | the Oct 12 conservation work |
 | M28 | Rivers, lakes and the land below sea level | An ocean mask by connection to the ocean rather than by elevation alone; river routing with travel time; lakes as a surface type and as reservoirs in the river network. | M16, M27's state-file work |
 | M29 | Land ice | The ice sheets as a layer of ice on the bedrock: bed and thickness from BedMachine, the surface the atmosphere sees as bed plus ice, a surface mass balance from snowfall, melt, sublimation and calving, meltwater through the rivers; the bed held fixed; flow by the shallow-ice approximation later. | M28 |
 
@@ -244,6 +244,34 @@ more than 0.6 ms per ocean step slower on the H100 scale. Then the
 judging arms (N=16, two years, floors 50/20/10 with the additions on
 and off; N=64, 30 days from the page's state) decide the floor and
 whether momentum carriage and penetration default on.
+
+**Judged (Oct 13, 2026).** The three additions landed (61e7850,
+d037d82, cc41cba, edb0d79) and the arms ran on the GPU: the N=16 water
+planet for two years at 50 m with the additions off and at 50, 20 and
+10 m with them on; N=64 from eleven's March state for 30 and 60 days
+and from its June state for 30 days. At 50 m the additions change the
+model within the spread between realizations: global SST −0.06 K, no
+clamps, at most 0.021 % of the sea thinned, the pending light steady
+at 500–750 J/m². At 20 m and 10 m the summer and tropical mixed layers
+fall into Earth's range (summer medians 14–24 m at 20–60°, tropical
+medians 14–22 m; the floor binds on 16 % and 8 % of the sea instead of
+33 %), the seasonal SST range at 45° stays under 4 K, nothing clamps,
+thins or reaches the 5 m backstop on the water planet, and the SST
+responds as a 10–28 m layer where it sits on the floor. Two things
+keep the page's floor at 50 m for now. In boreal spring the equatorial
+Pacific's zonal SST gradient collapses (W−E 2.8 → 1.1–1.2 K, the cold
+tongue 1.6–1.7 K warmer at day 30, 0.4–0.7 K at day 60) because
+nothing entrains thermocline water through a thin layer: shear
+entrainment at the mixed layer's base is missing. And a grid-scale
+sea-level mode on the Kara, Laptev and East Siberian shelves, already
+±2–4.5 m at 50 m under the ice, grows to ±10–13 m with 3–5 m/s
+mixed-layer jets once the shelf ice thins, and clamps at 10 m.
+Recommended: `penetration: 'IB'`, `carryMomentum: true` and
+`refillRate` 24 m/day (`refillFloor` 5 m) as the defaults in one
+commit with Part 8 regenerated; 20 m after the shelf mode and shear
+entrainment are fixed, with the June and 60-day March 20 m arms
+repeated and the WOA23 summer SST comparison; 10 m after those and
+lighter classes.
 
 ## M28 — Rivers, lakes and the land below sea level
 
