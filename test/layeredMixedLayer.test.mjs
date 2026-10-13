@@ -301,3 +301,46 @@ test('with carryMomentum every edge\'s column keeps its momentum through the mix
   assert.ok(Math.abs(still.ocean.h[0] - 10) < 1e-9);
   assert.deepEqual(still.ocean.u, still.start.u);
 });
+
+/*
+ * stacked()'s sea with every third mixed layer cut to 30, 3 and 49.9 m,
+ * the water put into the first class, and one mixed-layer step taken.
+ */
+const CUTS = [30, 3, 49.9];
+function cut(options, dt) {
+  const column = stacked(options), { ocean } = column, { h, Q, W } = ocean;
+  for (let i = 0; i < C; i++) {
+    const amount = h[i] - CUTS[i % 3], f = amount / h[i];
+    h[C + i] += amount; Q[C + i] += Q[i] * f; W[C + i] += W[i] * f; h[i] -= amount; Q[i] -= Q[i] * f; W[i] -= W[i] * f;
+  }
+  column.start.h.set(h);
+  const sums = (store, i) => { let s = 0, size = 0; for (let k = 0; k < ocean.layers; k++) { s += store[k * C + i]; size += Math.abs(store[k * C + i]); } return [s, size]; };
+  const before = [h, Q, W].map((store) => Array.from({ length: C }, (_, i) => sums(store, i)));
+  ocean.readSurface(column.surfaceT, column.ice);
+  ocean.refilled.water.fill(0);
+  ocean.mixedLayer(dt);
+  column.kept = Math.max(...[h, Q, W].flatMap((store, n) => Array.from({ length: C }, (_, i) => Math.abs(sums(store, i)[0] - before[n][i][0]) / before[n][i][1])));
+  return column;
+}
+
+test('under refillRate a mixed layer below its floor deepens by refillRate·dt and never stays thinner than refillFloor, keeping each column\'s water, heat, salt and each edge\'s momentum, and counts as thinned; at refillRate 0 it refills at once, bit for bit as by default', () => {
+  const dt = 1350, rate = 24 / 86400, expected = [30 + rate * dt, 5, 50];
+  const capped = cut({ refillRate: rate }, dt), { ocean } = capped;
+  let off = 0, tally = 0;
+  for (let i = 0; i < C; i++) {
+    off = Math.max(off, Math.abs(ocean.h[i] - expected[i % 3]));
+    tally = Math.max(tally, Math.abs(ocean.refilled.water[i] - (expected[i % 3] - CUTS[i % 3])));
+  }
+  let area = 0, short = 0;
+  for (let i = 0; i < C; i++) { area += mesh.areaCell[i]; if (i % 3 < 2) short += mesh.areaCell[i]; }
+  const momentum = columnChange(capped), thinned = ocean.diagnostics().oceanThinned;
+  console.log(`refill at ${rate * 86400} m/day over ${dt} s: 30 m → ${ocean.h[0].toFixed(6)}, 3 m → ${ocean.h[1].toFixed(6)}, 49.9 m → ${ocean.h[2].toFixed(6)} m, each to ${off.toExponential(2)} m; tallied to ${tally.toExponential(2)} m; columns keep water, heat and salt to ${capped.kept.toExponential(2)} and each edge its momentum to ${momentum.toExponential(2)}; thinned ${thinned.toFixed(4)} of the sea against ${(short / area).toFixed(4)}`);
+  assert.ok(off < 1e-12 && tally < 1e-12, `the mixed layers are off by ${off} m, the tally by ${tally} m`);
+  assert.ok(capped.kept < 1e-12 && momentum < 1e-12, `the columns changed by ${capped.kept}, an edge's momentum by ${momentum}`);
+  assert.ok(Math.abs(thinned - short / area) < 1e-12, `thinned ${thinned} against ${short / area}`);
+
+  const instant = cut({ refillRate: 0, refillFloor: 7 }, dt), plain = cut({}, dt);
+  assert.ok(Array.from({ length: C }, (_, i) => instant.ocean.h[i]).every((x) => Math.abs(x - 50) < 1e-9), 'at refillRate 0 every mixed layer is back on its floor');
+  for (const name of ['h', 'u', 'Q', 'W', 'eta']) assert.deepEqual(instant.ocean[name], plain.ocean[name], `${name} at refillRate 0 is the default's`);
+  assert.equal(instant.ocean.diagnostics().oceanThinned, 0);
+});

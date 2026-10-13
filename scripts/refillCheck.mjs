@@ -2,14 +2,18 @@
 // mixed layer's refill and the coasts where the 8- and 30-pass grids
 // disagree about land (the cells either grid calls land and the other sea,
 // and the sea cells beside them):
-//   [WORKERS=6] [DAYS=1] [RELAX=passes] node scripts/refillCheck.mjs [runs/eleven64_day1825.bin]
-// RELAX puts the state on another grid than its own, for comparison. It
-// passes when the refill takes no more than 2 m from a coastal column in
-// one ocean step (so no layer loses more to it; each layer's largest loss
-// to every process is reported beside it), the cells refilled at 5 m/day
-// or more cover at most 0.2 % of the sea, the refill takes −4.9 ± 0.5 W/m²
-// from the mixed layer of the sea deeper than 75 m, and no edge of a
-// coastal cell is clamped at the speed limit. Exits 1 when any fails.
+//   [WORKERS=6] [DAYS=1] [RELAX=passes] [OCEAN='{"refillRate":0.00027778}'] node scripts/refillCheck.mjs [runs/eleven64_day1825.bin]
+// RELAX puts the state on another grid than its own, for comparison, and
+// OCEAN sets the ocean's options. It passes when the refill takes no more
+// than 2 m from a coastal column in one ocean step (so no layer loses more
+// to it; each layer's largest loss to every process is reported beside
+// it), the cells refilled at 5 m/day or more cover at most 0.2 % of the
+// sea, the refill takes −4.9 ± 0.5 W/m² from the mixed layer of the sea
+// deeper than 75 m, no edge of a coastal cell is clamped at the speed
+// limit, and, under refillRate, no mixed layer stays at refillFloor for
+// more than 2 days running. Each day it reports the sea thinned below its
+// floor, the cells held at refillFloor and the Gulf of Cádiz. Exits 1 when
+// any fails.
 import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { createParallelModel } from '../js/parallel.module.js';
@@ -17,18 +21,20 @@ import { withCadence } from '../js/cadence.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { topographyFromInt16, createGeography, rebalanceSurfacePressure } from '../js/geography.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
-import { SPEED_LIMIT } from '../js/ocean/layered.module.js';
+import { SPEED_LIMIT, EPS } from '../js/ocean/layered.module.js';
 import { stateGrid, gridMesh, STATE_RELAX } from '../js/stateGrid.module.js';
 
 const FILE = process.argv[2] ?? new URL('../runs/eleven64_day1825.bin', import.meta.url).pathname;
 const WORKERS = Number(process.env.WORKERS ?? 6), DAYS = Number(process.env.DAYS ?? 1);
-const LOSS = 2, FAST = 5, FAST_SHARE = 0.002, HEAT = -4.9, HEAT_TOLERANCE = 0.5, SHELF = 75;
+const LOSS = 2, FAST = 5, FAST_SHARE = 0.002, HEAT = -4.9, HEAT_TOLERANCE = 0.5, SHELF = 75, HELD_DAYS = 2, AT_FLOOR = 0.01;
+const OCEAN = process.env.OCEAN ? JSON.parse(process.env.OCEAN) : {};
+const CADIZ = { south: 35, north: 37.5, west: -10, east: -6 };
 const t0 = performance.now(), seconds = () => ((performance.now() - t0) / 1000).toFixed(0);
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const N = saved.N, STEP = 1350 * 16 / N, found = process.env.RELAX ? { mesh: gridMesh(new Grid(N, { relax: Number(process.env.RELAX) })), relax: Number(process.env.RELAX), source: 'RELAX', mismatches: null } : stateGrid(saved, topography);
-const options = { topography, terrain: true, levels: savedLevels(saved) };
+const options = { topography, terrain: true, levels: savedLevels(saved), ...(Object.keys(OCEAN).length ? { ocean: OCEAN } : {}) };
 Object.assign(options, withCadence(options, STEP, N));
 const model = await createParallelModel(found.mesh, options, WORKERS);
 const { mesh, ocean, state } = model, C = mesh.nCells, E = mesh.nEdges, L = ocean.layers;
@@ -73,7 +79,12 @@ for (let i = 0; i < C; i++) {
   if (near) coast.push(i);
 }
 const coastEdges = [...new Set(coast.flatMap((i) => Array.from({ length: nEdgesOnCell[i] }, (_, m) => edgesOnCell[maxEdges * i + m])))].filter((e) => ocean.edgeOcean[e]);
-const where = (i) => `${i} (${(latCell[i] * deg).toFixed(1)}, ${((((lonCell[i] * deg) + 540) % 360) - 180).toFixed(1)})`;
+const longitude = (i) => ((((lonCell[i] * deg) + 540) % 360) - 180);
+const where = (i) => `${i} (${(latCell[i] * deg).toFixed(1)}, ${longitude(i).toFixed(1)})`;
+const minimumThickness = OCEAN.minimumThickness ?? 50, capped = (OCEAN.refillRate ?? 0) > 0, refillFloor = Math.min(minimumThickness, OCEAN.refillFloor ?? 5);
+const cadiz = [];
+for (let i = 0; i < C; i++) if (ocean.cellOcean[i] && latCell[i] * deg >= CADIZ.south && latCell[i] * deg <= CADIZ.north && longitude(i) >= CADIZ.west && longitude(i) <= CADIZ.east) cadiz.push(i);
+const held = new Float64Array(C), heldLongest = new Float64Array(C), thin = new Float64Array(C), thinLongest = new Float64Array(C), shallowest = new Float64Array(C).fill(Infinity);
 console.log(`${FILE}: N=${N} on ${found.relax} Lloyd passes (${found.source}${found.mismatches === null ? '' : `, ${found.mismatches} cells off the saved coast`}); ${coast.length} coastal sea cells beside the ${disputed.reduce((s, x) => s + x, 0)} cells the grids disagree on; setup ${seconds()} s`);
 
 const column = (i, out) => { for (let k = 0; k < L; k++) out[k] = ocean.h[k * C + i]; return out; };
@@ -83,9 +94,26 @@ const losses = [{ worst: 0, at: null, over: 0 }, { worst: 0, at: null, over: 0 }
 const sstStart = coast.map((i) => ocean.T0[i]);
 ocean.refilled.water.fill(0); ocean.refilled.heat.fill(0);
 let refilledBefore = coast.map(() => 0);
-const steps = Math.round(DAYS * 86400 / STEP);
+const steps = Math.round(DAYS * 86400 / STEP), stepsPerDay = Math.round(86400 / STEP);
 for (let n = 0; n < steps; n++) {
   model.step(STEP);
+  for (let i = 0; i < C; i++) {
+    if (!ocean.cellOcean[i]) continue;
+    const h0 = ocean.h[i];
+    let below = 0;
+    for (let k = 1; k < L; k++) below += ocean.h[k * C + i] - EPS;
+    shallowest[i] = Math.min(shallowest[i], h0);
+    held[i] = capped && h0 <= refillFloor + AT_FLOOR ? held[i] + STEP : 0;
+    heldLongest[i] = Math.max(heldLongest[i], held[i]);
+    thin[i] = h0 < Math.min(minimumThickness, h0 + below) - AT_FLOOR ? thin[i] + STEP : 0;
+    thinLongest[i] = Math.max(thinLongest[i], thin[i]);
+  }
+  if ((n + 1) % stepsPerDay === 0) {
+    let atFloor = 0, lowest = -1;
+    for (let i = 0; i < C; i++) if (ocean.cellOcean[i]) { if (held[i] > 0) atFloor++; if (lowest < 0 || ocean.h[i] < ocean.h[lowest]) lowest = i; }
+    const cadizNow = cadiz.map((i) => ocean.h[i].toFixed(1)).join(', ');
+    console.log(`day ${((n + 1) * STEP / 86400).toFixed(0)}: thinned ${(100 * ocean.diagnostics().oceanThinned).toFixed(4)} % of the sea, ${atFloor} cells at refillFloor, thinnest mixed layer ${ocean.h[lowest].toFixed(2)} m at ${where(lowest)}; Cádiz mixed layers ${cadizNow || 'none'} m; ${seconds()} s`);
+  }
   const after = coast.map((i) => column(i, new Float64Array(L)));
   if (!after.some((col, c) => col.some((x, k) => x !== before[c][k]))) continue;
   oceanSteps++;
@@ -121,11 +149,21 @@ console.log(`refill over the sea deeper than ${SHELF} m: ${(water / seaArea / da
 console.log(`coastal cells: refill up to ${Math.max(...coastRates).toFixed(2)} m/day; SST hottest ${hottest(sstStart)} at the start, ${hottest(sstEnd)} at the end`);
 console.log(`thinned at the end: ${(100 * oceanThinned).toFixed(4)} % of the sea; clamped edges in the last ocean step: ${oceanLimited}`);
 console.log(`largest loss of a coastal layer in one ocean step, to every process: mixed layer ${losses[0].worst.toFixed(2)} m (${losses[0].at ?? 'none'}; ${losses[0].over} cell-steps over ${LOSS} m), interior ${losses[1].worst.toFixed(2)} m (${losses[1].at ?? 'none'}; ${losses[1].over} layer-steps over ${LOSS} m)`);
+const longest = (values) => { let best = -1; for (let i = 0; i < C; i++) if (ocean.cellOcean[i] && (best < 0 || values[i] > values[best])) best = i; return best; };
+const heldWorst = longest(heldLongest), thinWorst = longest(thinLongest), heldCells = heldLongest.reduce((s, x) => s + (x > 0 ? 1 : 0), 0);
+let thinCells = 0, thinArea = 0, totalSea = 0;
+for (let i = 0; i < C; i++) {
+  if (ocean.cellOcean[i]) totalSea += areaCell[i];
+  if (thinLongest[i] > HELD_DAYS * 86400) { thinCells++; thinArea += areaCell[i]; }
+}
+console.log(`under ${capped ? `refillRate ${(OCEAN.refillRate * 86400).toFixed(2)} m/day, refillFloor ${refillFloor} m` : 'the instant refill'}: ${heldCells} cells reached refillFloor, the longest held ${(heldLongest[heldWorst] / 86400).toFixed(2)} days at ${where(heldWorst)}; the longest thinned below the ${minimumThickness} m floor ${(thinLongest[thinWorst] / 86400).toFixed(2)} days at ${where(thinWorst)} (shallowest ${shallowest[thinWorst].toFixed(2)} m), ${thinCells} cells (${(100 * thinArea / totalSea).toFixed(4)} % of the sea) thinned for more than ${HELD_DAYS} days`);
+for (const i of cadiz) console.log(`Cádiz ${where(i)}: depth ${ocean.D[i].toFixed(0)} m, mixed layer ${ocean.h[i].toFixed(2)} m at the end, ${shallowest[i].toFixed(2)} at its shallowest, refilled ${(ocean.refilled.water[i] / days).toFixed(2)} m/day, thinned at most ${(thinLongest[i] / 86400).toFixed(2)} days running, at refillFloor ${(heldLongest[i] / 86400).toFixed(2)}`);
 const checks = [
   [`the refill takes no more than ${LOSS} m from a coastal column in an ocean step (worst ${refillStep.worst.toFixed(2)} m, ${refillStep.at ?? 'none'}; ${refillStep.over} cell-steps over)`, refillStep.worst <= LOSS],
   [`cells refilled at ${FAST} m/day or more cover at most ${100 * FAST_SHARE} % of the sea (${(100 * fastShare).toFixed(3)} %)`, fastShare <= FAST_SHARE],
   [`refill heat ${HEAT} ± ${HEAT_TOLERANCE} W/m² (${heatFlux.toFixed(2)})`, Math.abs(heatFlux - HEAT) <= HEAT_TOLERANCE],
   [`no clamped edge at those coasts (${clamps} layer-edge-steps${clampAt ? `, first ${clampAt}` : ''})`, clamps === 0],
+  ...(capped ? [[`no mixed layer held at refillFloor for more than ${HELD_DAYS} days running (longest ${(heldLongest[heldWorst] / 86400).toFixed(2)}, ${where(heldWorst)}; Cádiz ${(Math.max(0, ...cadiz.map((i) => heldLongest[i])) / 86400).toFixed(2)})`, heldLongest[heldWorst] <= HELD_DAYS * 86400]] : []),
 ];
 for (const [text, ok] of checks) console.log(`${ok ? 'PASS' : 'FAIL'} ${text}`);
 await model.close();

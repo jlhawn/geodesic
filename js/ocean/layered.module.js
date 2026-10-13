@@ -803,7 +803,7 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
-  momentumDepth = 50, carryMomentum = false,
+  momentumDepth = 50, carryMomentum = false, refillRate = 0, refillFloor = 5,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = null,
   geography = null, bathymetry = null, buffers = null, climatology = null,
@@ -1369,9 +1369,10 @@ export function createOcean(mesh, {
       }
       if (h[i] < minimumThickness) {
         const h0 = h[i], q0 = Q[i];
-        for (let k = 1; k < L && h[i] < minimumThickness; k++) {
+        const refillTo = refillRate > 0 ? Math.max(Math.min(minimumThickness, h0 + refillRate * dt), Math.min(minimumThickness, refillFloor)) : minimumThickness;
+        for (let k = 1; k < L && h[i] < refillTo; k++) {
           const available = h[at(k, i)] - EPS;
-          if (available > 0) move(i, k, 0, Math.min(available, minimumThickness - h[i]));
+          if (available > 0) move(i, k, 0, Math.min(available, refillTo - h[i]));
         }
         refilled.water[i] += h[i] - h0;
         refilled.heat[i] += rhoCp * (Q[i] - q0 - (h[i] - h0) * q0 / h0);

@@ -2021,6 +2021,19 @@ each edge's column momentum unchanged to rounding
 The restoring's moves between classes keep the column's momentum but do
 not carry their own.
 
+**The refill.** A mixed layer the dynamics leave thinner than
+`minimumThickness` takes water from the classes beneath it, the lightest
+first. By default it is filled to the floor in the same step. Under
+`refillRate` (m/s; M27, 0 by default) it deepens by at most
+refillRate·dt in an ocean step and never stays thinner than
+`refillFloor` (5 m, filled at once), so a column draining faster than
+the cap keeps a thinner layer, which the atmosphere sees as a smaller
+heat capacity, while one draining more slowly is refilled exactly as
+before. The diagnostics' `oceanThinned` is the share of the sea whose
+mixed layer lies more than 1 cm below its floor where the water beneath
+could fill it; `scripts/refillCheck.mjs` reports it each day with the
+cells held at `refillFloor`.
+
 **Salinity.** Evaporation minus rain is accumulated per cell over the
 atmosphere steps between ocean steps, and each land cell's runoff flows
 down the terrain to the sea: to the lowest of its neighbours that is

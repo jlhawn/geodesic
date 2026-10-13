@@ -395,6 +395,61 @@ test('the GPU mixed layer holds, retreats, convects, keeps to its neighbours and
   }
 });
 
+test('under refillRate the GPU mixed layer refills a column in deficit by refillRate·dt and one below refillFloor to it, as the CPU one does, and reports the same thinned share', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, surfaceT0, ice } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350, rate = 24 / 86400;
+  const options = { ...OCEAN_OPTIONS, refillRate: rate };
+  const cpuOcean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options });
+  const surfaceT = Float64Array.from(surfaceT0);
+  cpuOcean.initialize(surfaceT, ice);
+  const { h, Q, W } = cpuOcean, sea = [...Array(C).keys()].filter((i) => cpuOcean.cellOcean[i]);
+  const deficit = sea.filter((_, n) => n % 3 === 0), backstop = sea.filter((_, n) => n % 3 === 1);
+  for (const [cells, depth] of [[deficit, 30], [backstop, 3]]) {
+    for (const i of cells) {
+      const amount = h[i] - depth, f = amount / h[i];
+      h[C + i] += amount; Q[C + i] += Q[i] * f; W[C + i] += W[i] * f; h[i] -= amount; Q[i] -= Q[i] * f; W[i] -= W[i] * f;
+    }
+  }
+  const saved = cpuOcean.serialize(), calm = new Float64Array(mesh.nEdges);
+  const unfilled = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...OCEAN_OPTIONS, minimumThickness: 1 });
+  for (const ocean of [cpuOcean, unfilled]) {
+    ocean.load(saved, Float64Array.from(surfaceT), ice);
+    ocean.setStress(calm, ice);
+    ocean.readSurface(Float64Array.from(surfaceT), ice);
+    ocean.mixedLayer(dt);
+  }
+  const onGpu = async (ocean) => {
+    const gpuModel = await createGpuModel(new Grid(8), { topography, ocean });
+    const gpuOcean = gpuModel.oceanEngine;
+    await gpuOcean.upload(saved, Float64Array.from(surfaceT), ice);
+    gpuOcean.setStress(calm, ice);
+    gpuOcean.readSurface(Float64Array.from(surfaceT), ice);
+    gpuOcean.mixedLayer(dt);
+    const out = { ...(await gpuOcean.download()), thinned: (await gpuOcean.diagnostics()).oceanThinned };
+    gpuModel.destroy();
+    return out;
+  };
+  const gpu = await onGpu(options), gpuUnfilled = await onGpu({ ...OCEAN_OPTIONS, minimumThickness: 1 }), cpuThinned = cpuOcean.diagnostics().oceanThinned;
+  let cpuOff = 0, gpuOff = 0, gap = 0, capped = 0, floored = 0;
+  const expected = (before) => Math.max(Math.min(50, before + rate * dt), 5);
+  for (const i of [...deficit, ...backstop]) {
+    const reached = unfilled.h[i] + rate * dt;
+    if (reached < 5) floored++; else if (reached < 50) capped++;
+    cpuOff = Math.max(cpuOff, Math.abs(cpuOcean.h[i] - expected(unfilled.h[i])));
+    gpuOff = Math.max(gpuOff, Math.abs(gpu.h[i] - expected(gpuUnfilled.h[i])));
+  }
+  let refillGap = 0, at = -1;
+  for (const i of sea) {
+    refillGap = Math.max(refillGap, Math.abs((gpu.h[i] - gpuUnfilled.h[i]) - (cpuOcean.h[i] - unfilled.h[i])));
+    if (Math.abs(gpu.h[i] - cpuOcean.h[i]) > gap) { gap = Math.abs(gpu.h[i] - cpuOcean.h[i]); at = i; }
+  }
+  console.log(`refill at ${rate * 86400} m/day: ${deficit.length} columns cut to 30 m and ${backstop.length} to 3 m; on the CPU ${capped} took refillRate·dt over what the rest of the step left and ${floored} rose to refillFloor, each to ${cpuOff.toExponential(2)} m, on the GPU to ${gpuOff.toExponential(2)} m; the engines' refills within ${refillGap.toExponential(2)} m of each other, their mixed layers within ${gap.toExponential(2)} m (cell ${at}: ${cpuOcean.h[at]} against ${gpu.h[at]} m, before the refill ${unfilled.h[at]} against ${gpuUnfilled.h[at]}); thinned ${cpuThinned.toFixed(5)} on the CPU, ${gpu.thinned.toFixed(5)} on the GPU`);
+  assert.ok(capped > 100 && floored > 100, `${capped} capped and ${floored} floored columns`);
+  assert.ok(cpuOff < 1e-9 && gpuOff < 1e-4, `the mixed layers are off by ${cpuOff} m on the CPU, ${gpuOff} m on the GPU`);
+  assert.ok(refillGap < 1e-4 && gap < 0.2, `the engines' refills differ by ${refillGap} m, their mixed layers by ${gap} m`);
+  assert.ok(cpuThinned > 0.5 && Math.abs(gpu.thinned - cpuThinned) < 1e-6, `thinned ${gpu.thinned} on the GPU against ${cpuThinned}`);
+});
+
 test('the GPU ocean takes an 8-layer state that carries no class list, as the page\'s saved runs are, onto the class list as the CPU ocean does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
   const mesh = cpuModel.mesh, C = mesh.nCells;

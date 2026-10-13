@@ -28,7 +28,7 @@ const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges, AREA = m
  * to it.
  */
 const CARRIED = { carryMomentum: true };
-function spunUp(steps = SPINUP, options = {}) {
+function spunUp(steps = SPINUP, options = {}, wind = 0.1) {
   const ocean = createOcean(mesh, { everySteps: 1, penetration: 'IB', ...options });
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => {
     const polar = Math.max(0, Math.min(1, (Math.abs(lat) / DEG - 50) / 20));
@@ -37,7 +37,7 @@ function spunUp(steps = SPINUP, options = {}) {
   const ice = new Float64Array(C), flux = new Float64Array(C), stress = new Float64Array(E);
   for (let e = 0; e < E; e++) {
     const x = mesh.xEdge[3 * e], y = mesh.xEdge[3 * e + 1], r = Math.hypot(x, y) || 1e-12;
-    stress[e] = -0.1 * Math.cos(3 * mesh.latEdge[e]) * ((-y / r) * mesh.nEdge[3 * e] + (x / r) * mesh.nEdge[3 * e + 1]);
+    stress[e] = -wind * Math.cos(3 * mesh.latEdge[e]) * ((-y / r) * mesh.nEdge[3 * e] + (x / r) * mesh.nEdge[3 * e + 1]);
   }
   ocean.initialize(surfaceT, ice);
   for (let n = 0; n < steps; n++) ocean.advance(surfaceT, ice, flux, stress, DT);
@@ -141,6 +141,61 @@ test('in double precision every phase of the CPU ocean\'s step keeps the heat an
   const deposited = record.deposit.map((r, n) => r.stored - light[n]);
   console.log(`CPU deposit: ${show(mean(light, (x) => x))} W/m² of sunlight passed the mixed layer each step; the stores took it to ${show(largest(deposited, (x) => x))} W/m², and none waits after it`);
   assert.ok(Math.min(...light) > 0.5 && largest(deposited, (x) => x) < 1e-6 && ocean.penetrated.every((x) => x === 0), `the stores took ${record.deposit.map((r) => r.stored)} of ${light} W/m²`);
+});
+
+/*
+ * spunUp's sea refilling its mixed layers toward an 80 m floor at
+ * refillRate 24 m/day, so that every column runs in deficit, with every
+ * 13th sea cell's mixed layer cut to 2 m, its water put into the first
+ * class, so that those refill from the 5 m refillFloor.
+ */
+const RATE = 24 / 86400, CAPPED = { ...CARRIED, minimumThickness: 80, refillRate: RATE };
+function capped() {
+  const sea = spunUp(SPINUP, CAPPED), { ocean } = sea, { h, Q, W } = ocean;
+  sea.cut = [];
+  for (let i = 0, n = 0; i < C; i++) {
+    if (!ocean.cellOcean[i] || n++ % 13) continue;
+    const amount = h[i] - 2, f = amount / h[i];
+    h[C + i] += amount; Q[C + i] += Q[i] * f; W[C + i] += W[i] * f; h[i] -= amount; Q[i] -= Q[i] * f; W[i] -= W[i] * f;
+    sea.cut.push(i);
+  }
+  return sea;
+}
+
+test('in double precision the mixed layer\'s refill under refillRate keeps each column\'s heat, salt and water and each edge\'s momentum while every column runs in deficit, the refill drawing no more than refillRate·dt but for the columns below refillFloor', async () => {
+  const { ocean, surfaceT, ice, flux, stress, cut } = capped();
+  ocean.setStress(stress, ice);
+  ocean.refilled.water.fill(0);
+  const snapshot = async () => ({ h: Float64Array.from(ocean.h), q: Float64Array.from(ocean.Q, (q, n) => q - HEAT_REFERENCE * ocean.h[n]), w: Float64Array.from(ocean.W), u: Float64Array.from(ocean.u), eta: Float64Array.from(ocean.eta), pen: Float64Array.from(ocean.penetrated) });
+  let thinnest = Infinity, thinned = 1, drawn = 0;
+  const record = await follow([
+    ['readSurface', () => ocean.readSurface(surfaceT, ice)],
+    ['dynamics', () => ocean.phases.dynamics(DT)],
+    ['rescale', () => ocean.phases.rescale()],
+    ['eddy', () => ocean.phases.eddy(DT)],
+    ['shift', () => ocean.phases.shift()],
+    ['mixedLayer', () => {
+      const before = Float64Array.from(ocean.refilled.water);
+      ocean.mixedLayer(DT);
+      for (let i = 0; i < C; i++) {
+        if (!ocean.cellOcean[i]) continue;
+        thinnest = Math.min(thinnest, ocean.h[i]);
+        if (!cut.includes(i)) drawn = Math.max(drawn, ocean.refilled.water[i] - before[i]);
+      }
+      thinned = Math.min(thinned, ocean.diagnostics().oceanThinned);
+    }],
+    ['salt and surface', () => { ocean.salt(); ocean.writeSurface(surfaceT, flux, DT); }],
+  ], snapshot, 4, ocean.layers, ocean.rhoCp, ocean.D);
+  report('CPU capped', { mixedLayer: record.mixedLayer });
+  for (const [name, rows] of Object.entries(record)) {
+    const [heat, salt] = kept(name);
+    assert.ok(largest(rows, heat) < 1e-6, `${name}: heat ${largest(rows, heat)} W/m²`);
+    assert.ok(largest(rows, salt) < 1e-9, `${name}: salt ${largest(rows, salt)} psu·m`);
+    if (name !== 'rescale') assert.ok(largest(rows, volume) < 1e-12, `${name}: volume ${largest(rows, volume)} m`);
+  }
+  console.log(`CPU capped: at least ${(100 * thinned).toFixed(1)} % of the sea thinned after each mixed-layer step, the thinnest mixed layer ${thinnest.toFixed(3)} m; the refill drew at most ${drawn.toFixed(4)} m in a step from a column not cut, against refillRate·dt ${(RATE * DT).toFixed(4)} m`);
+  assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-12, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
+  assert.ok(thinned > 0.5 && thinnest >= 5 - 1e-9 && drawn > 0 && drawn <= RATE * DT + 1e-12, `thinned ${thinned}, thinnest ${thinnest} m, drawn ${drawn} m`);
 });
 
 /*
@@ -281,6 +336,30 @@ test('with carryMomentum the GPU mixed layer\'s exchanges keep each edge\'s colu
   report('GPU carried', { mixedLayer: record.mixedLayer });
   within('GPU carried', record, { mixedLayer: GPU_FLOORS.mixedLayer });
   assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-5, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
+});
+
+/*
+ * Bounds as for GPU_FLOORS on capped()'s mixed-layer step, in which every
+ * column refills 0.5 m and a thirteenth of them from 2 m, where spunUp's
+ * sea refills none and its step changes nothing. An M1 Max leaves heat
+ * 2.1e-4 W/m² on average and 9.1e-4 at most, salt 6.3e-9 and 8.0e-8
+ * psu·m and volume 1.9e-10 and 2.3e-9 m; refilled at once to the same
+ * floor, 1.0e-5 and 8.0e-5, 7.8e-8 and 6.2e-7, and 2.3e-9 and 1.8e-8.
+ */
+const CAPPED_FLOORS = { mixedLayer: [1e-3, 5e-3, 3e-8, 3e-7, 1e-9, 1e-8] };
+
+test('under refillRate the GPU mixed layer\'s refill keeps heat, salt, volume and each edge\'s column momentum to single-precision rounding while every column runs in deficit, and leaves none below refillFloor', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const sea = await onGpu(capped()), { ocean, stores } = sea;
+  const record = await sea.follow(8);
+  const [h] = await stores(), thinned = (await ocean.diagnostics()).oceanThinned;
+  sea.model.destroy();
+  let thinnest = Infinity;
+  for (let i = 0; i < C; i++) if (sea.ocean.cellOcean[i]) thinnest = Math.min(thinnest, h[i]);
+  report('GPU capped', { mixedLayer: record.mixedLayer });
+  console.log(`GPU capped: ${(100 * thinned).toFixed(1)} % of the sea thinned at the end, the thinnest mixed layer ${thinnest.toFixed(3)} m`);
+  within('GPU capped', record, CAPPED_FLOORS);
+  assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-5, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
+  assert.ok(thinned > 0.5 && thinnest >= 5 - 1e-4, `thinned ${thinned}, thinnest ${thinnest} m`);
 });
 
 /*
