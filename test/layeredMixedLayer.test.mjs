@@ -663,6 +663,10 @@ test('the surface-layer Langmuir number of a 10 m/s theory wave over a 10 m laye
   assert.ok(Math.abs(la / laPublished - 1) < 0.01 && Math.abs(model / 0.07161749 - 1) < 0.01, `La_SL ${la} against ${laPublished}`);
   assert.ok(Math.abs(langmuirFactor(ustar, 10, 5) - Math.sqrt(1 + la ** -2 / 1.5 ** 2 + la ** -4 / 5.4 ** 4)) < 1e-12);
   assert.equal(langmuirFactor(0, 10, 2), 1);
+  const surface = 0.0162 * 10, transport = 0.125 * Math.PI * 0.667 * (1.296 * 0.877 * 9.81 / (2 * Math.PI * 1.075 * 10)) * (0.0246 * 100) ** 2;
+  const shallow = stokesSurfaceLayer(10, 1e-3) / surface, deep = 0.2 * 5000 * stokesSurfaceLayer(10, 5000) / transport;
+  console.log(`the theory wave's limits: over 1 mm the mean drift is ${shallow.toFixed(4)} of its surface drift, and over 5 km the drift times 0.2h is ${deep.toFixed(4)} of its Stokes transport`);
+  assert.ok(Math.abs(shallow - 1) < 0.01 && Math.abs(deep - 1) < 0.01, `the drift over 1 mm is ${shallow} of the surface's, the transport over 5 km ${deep} of the wave's`);
   let previous = Infinity;
   for (const h of [1, 3, 10, 30, 100, 300, 600]) {
     const at = langmuirFactor(ustar, h, 5);
