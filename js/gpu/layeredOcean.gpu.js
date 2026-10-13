@@ -1061,8 +1061,9 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
    * DU, the shear at the mixed layer's base from oShearEdge to
    * oMixedLayer, sits in FLUX's slot.
    */
+  const sheared = o.shearEntrainment > 0 ? ['DU'] : [];
   const OD = seq([
-    ...(o.closureRings ? [[['FLUX', 'EDDYV', 'DU'], L * E], [['LAPA', 'EDDYQ'], L * E], [['LAPB', 'EDDYW'], L * E]] : [[['FLUX', 'LAPA', 'LAPB', 'EDDYV', 'DU'], L * E]]),
+    ...(o.closureRings ? [[['FLUX', 'EDDYV', ...sheared], L * E], [['LAPA', 'EDDYQ'], L * E], [['LAPB', 'EDDYW'], L * E]] : [[['FLUX', 'LAPA', 'LAPB', 'EDDYV', ...sheared], L * E]]),
     [o.closureRings ? 'HEDGE' : ['HEDGE', 'EDDYQ'], L * E], [['AVORT', 'CURLS', 'PHI'], L * V], [o.closureRings ? 'QE' : ['QE', 'EDDYW'], L * E], ['DIVS', L * C],
     ['RHOML', C], ['REACH', C], ['BUOY', C], ['GRADRHO', E], ['GRADETA', E], ['SLOW', E], ['DEPTHEDGE', E],
     ['ETA', C], ['FRESH', C], ['PREVT0', C], ['PREVVOL', C], ['ICED', C], ['STRESS', E],
