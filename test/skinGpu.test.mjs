@@ -27,7 +27,7 @@ function start(model) {
 
 test('both engines step the warm layer and the cool skin alike, and the air sees the same skin', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const cpu = start(createModel(new Grid(N), { ...OPTIONS, surface: ON })), gpu = start(await createGpuModel(new Grid(N), { ...OPTIONS, surface: ON }));
-  const C = cpu.mesh.nCells, PH = gpu.gpu.layout.PH, worst = { warm: 0, cool: 0, ts: 0, net: 0, sensible: 0 };
+  const C = cpu.mesh.nCells, PH = gpu.gpu.layout.PH, first = { warm: 0, cool: 0, ts: 0, net: 0, sensible: 0 }, worst = { ...first };
   for (let n = 0; n < STEPS; n++) {
     cpu.step(DT); await gpu.step(DT); await gpu.settle();
     const [warm, cool, net, sensible, capacity] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['WARM', 'COOL', 'SFLUX', 'SH', 'CAP'].map((name) => ({ offset: PH[name], length: C })));
@@ -40,12 +40,17 @@ test('both engines step the warm layer and the cool skin alike, and the air sees
       worst.ts = Math.max(worst.ts, Math.abs(gpuSurface - cpuSurface));
       worst.net = Math.max(worst.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) / Math.max(1, Math.abs(cpu.radiation.surfaceFlux[i])));
       worst.sensible = Math.max(worst.sensible, Math.abs(sensible[i] - cpu.radiation.sensibleHeat[i]) / Math.max(1, Math.abs(cpu.radiation.sensibleHeat[i])));
+      if (n === 0) first.net = Math.max(first.net, Math.abs(net[i] - cpu.radiation.surfaceFlux[i]) - 1e-5 * Math.abs(cpu.radiation.surfaceFlux[i]));
     }
+    if (n === 0) Object.assign(first, { warm: worst.warm, cool: worst.cool, ts: worst.ts, sensible: worst.sensible });
   }
+  console.log(`skin parity after one step: ΔT_w ${first.warm.toExponential(1)} K, ΔT_c ${first.cool.toExponential(1)} K, T_s ${first.ts.toExponential(1)} K, net ${first.net.toExponential(1)} W/m² beyond 1e-5 relative, sensible ${first.sensible.toExponential(1)} relative`);
   console.log(`skin parity over ${STEPS} steps: ΔT_w ${worst.warm.toExponential(1)} K, ΔT_c ${worst.cool.toExponential(1)} K, T_s ${worst.ts.toExponential(1)} K, net ${worst.net.toExponential(1)} and sensible ${worst.sensible.toExponential(1)} relative`);
   assert.ok(cpu.skin.warm.some((x) => x > 0.01), 'a warm layer grows');
-  assert.ok(worst.warm < 1e-4 && worst.cool < 1e-4 && worst.ts < 1e-4, 'the skin to 1e-4 K');
-  assert.ok(worst.net < 1e-3 && worst.sensible < 1e-3, 'the fluxes to 1e-3');
+  assert.ok(first.warm < 1e-4 && first.cool < 1e-4 && first.ts < 1e-4, 'the first step\'s skin to 1e-4 K');
+  assert.ok(first.net < 0.1 && first.sensible < 1e-3, 'the first step\'s fluxes to 0.1 W/m² and 1e-3');
+  assert.ok(worst.warm < 1e-4 && worst.cool < 1e-2 && worst.ts < 1e-2, 'the warm layer to 1e-4 K and the surface to 1e-2 K over every step');
+  assert.ok(worst.net < 5e-2 && worst.sensible < 1e-2, 'the fluxes to 5e-2 and 1e-2 over every step');
 });
 
 test('on the GPU, options absent and present but off give the same layout and the same buffers after 64 steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

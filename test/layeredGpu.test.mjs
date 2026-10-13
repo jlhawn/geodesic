@@ -743,7 +743,7 @@ test('under retreatDaily and retreatLight the GPU mixed layer closes the day to 
 });
 
 test('under retreatDaily without penetration the GPU mixed layer closes its days on B alone, as the CPU one does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const dt = 21600, options = { ...OCEAN_OPTIONS, mixedDepth: 40, minimumThickness: 2, shallowestMixedDepth: 2, retreatDaily: true };
+  const dt = 21600, options = { ...OCEAN_OPTIONS, penetration: null, mixedDepth: 40, minimumThickness: 2, shallowestMixedDepth: 2, retreatDaily: true };
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
   const C = cpuModel.mesh.nCells, cpu = createCpuLayeredOcean(cpuModel.mesh, { geography: cpuModel.geography, ...options });
   const model = await createGpuModel(new Grid(8), { topography, ocean: options }), gpu = model.oceanEngine;
