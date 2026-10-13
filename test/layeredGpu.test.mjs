@@ -533,11 +533,11 @@ test('under the mixing package the GPU ocean takes the wind over its Ekman depth
   const mesh = cpuModel.mesh, C = mesh.nCells, E = mesh.nEdges, dt = 1350, net = 150, flux = new Float64Array(C);
   const cpuOcean = (options) => createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options });
 
-  const retreatOn = async (options) => {
+  const retreatOn = async (options, heat = net) => {
     const retreating = { ...options, mixedDepth: 60, detrainmentTime: dt, buoyancyMemory: 0 };
     const deep = cpuOcean(retreating);
     deep.initialize(Float64Array.from(surfaceT0), ice);
-    const deepState = deep.serialize(), warm = Float64Array.from(surfaceT0, (t, i) => t + dt * net / deep.capacity[i]);
+    const deepState = deep.serialize(), warm = Float64Array.from(surfaceT0, (t, i) => t + dt * heat / deep.capacity[i]);
     const cpu = cpuOcean(retreating);
     cpu.load(deepState, Float64Array.from(surfaceT0), ice);
     cpu.setStress(stress, ice);
@@ -567,6 +567,15 @@ test('under the mixing package the GPU ocean takes the wind over its Ekman depth
   console.log(`the Langmuir retreat: ${reached} heated cells retreat from about 60 m to their L in one step under both rules, ε from ${least.toFixed(3)} to ${most.toFixed(3)}; the GPU's ratio of the 2.5ε depth to the faded rule's within ${lGap.toExponential(2)} of the CPU's, the depths themselves within ${offset.toExponential(2)} under each engine's own buoyancy of an 8e-4 K warming, as with the options off`);
   assert.ok(reached > 20 && most > least + 0.1, `${reached} cells reached L under both rules, ε from ${least} to ${most}`);
   assert.ok(lGap < 1e-5, `the engines' retreat constants differ by ${lGap} of themselves`);
+  const free = await retreatOn(packaged, 30), bounded = await retreatOn({ ...packaged, retreatEkman: 0.7 }, 30);
+  let binding = 0, boundGap = 0;
+  for (let i = 0; i < C; i++) {
+    if (!bounded.reached[i] || !(bounded.L[i] < free.L[i] / 1.5)) continue;
+    binding++;
+    boundGap = Math.max(boundGap, Math.abs(bounded.gpu[i] / bounded.L[i] - 1));
+  }
+  console.log(`under 30 W/m² ${binding} heated cells retreat in one step to the Ekman bound 0.7u*/|f| at least a third below C_r·ε·u*³/(−B), which the bound frees of the engines' buoyancies, the GPU's depths within ${boundGap.toExponential(2)} of the CPU's`);
+  assert.ok(binding > 10 && boundGap < 1e-5, `${binding} cells at the bound, the engines ${boundGap} apart`);
 
   const seeded = cpuOcean(packaged);
   seeded.initialize(Float64Array.from(surfaceT0), ice);

@@ -88,7 +88,9 @@ import { profileAt } from './climatology.module.js';
  * C_r ε u*³/(−B) while it gains buoyancy, and what lies beyond its
  * neighbors' reach. C_r is the entrainment's 2m, or `retreatStirring`
  * without the fading with depth; ε is 1 or, with `langmuir` as its cap,
- * the Langmuir factor at the depth the step began with.
+ * the Langmuir factor at the depth the step began with. With
+ * `retreatEkman` c that depth is at most c u* / |f|, the Ekman bound of
+ * Large, McWilliams and Doney (1994), and unbounded where f is 0.
  * `neutralSnap` returns everything below
  * `shallowestMixedDepth` whenever the layer is as dense as the water
  * beneath it, and `convectiveErosion: false` swallows every class no
@@ -290,7 +292,8 @@ export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLER
  * than `cap`. erfc is Abramowitz and Stegun's 7.1.26, as on the GPU.
  */
 export const FRICTION_PER_WIND = 1.19e-3, CALM_WIND = 1e-3;
-export function mixingOptionCheck({ stressThickness, langmuir }) {
+export function mixingOptionCheck({ stressThickness, langmuir, retreatEkman = 0 }) {
+  if (!(retreatEkman >= 0 && retreatEkman < Infinity)) throw new Error(`retreatEkman bounds the retreat at that multiple of u*/|f|, so it is 0 (no bound) or positive, not ${retreatEkman}`);
   if (!(stressThickness >= THIN)) throw new Error(`stressThickness is at least THIN (${THIN} m), the thinnest class that keeps its own velocity, not ${stressThickness}`);
   if (langmuir !== 0 && !(langmuir >= 1)) throw new Error(`langmuir caps a factor of at least 1, so it is 0 or at least 1, not ${langmuir}`);
 }
@@ -892,20 +895,20 @@ export function createOcean(mesh, {
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
   momentumDepth = 50, carryMomentum = false, refillRate = 0, refillFloor = 5, shearEntrainment = 0,
-  ekmanDepth = 0, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 0, langmuir = 0,
+  ekmanDepth = 0, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 0, langmuir = 0, retreatEkman = 0,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = null,
   geography = null, bathymetry = null, buffers = null, climatology = null,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
-    cellsOnEdge, verticesOnEdge, areaCell, dcEdge, dvEdge, fVertex, fEdge, radius, latCell,
+    cellsOnEdge, verticesOnEdge, areaCell, dcEdge, dvEdge, fVertex, fEdge, fCell, radius, latCell,
     maxEdges, nEdgesOnCell, edgesOnCell, cellsOnCell,
   } = mesh;
   if (climatology && typeof climatology.columnAt !== 'function') throw new Error('the ocean climatology must be decoded (loadClimatology in ./climatology.module.js) before the ocean is built');
   if (penetration !== null && !JERLOV[penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${penetration}`);
   if (shearEntrainment > 0 && !carryMomentum) throw new Error('shearEntrainment needs carryMomentum: without the entrained water\'s momentum mixed in, the base\'s Richardson number never rises and the mixed layer swallows a class a step');
-  mixingOptionCheck({ stressThickness, langmuir });
+  mixingOptionCheck({ stressThickness, langmuir, retreatEkman });
   const L = densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = [rho0, ...densities];
   const labelS = [referenceS, ...salinities];
@@ -1494,6 +1497,7 @@ export function createOcean(mesh, {
         retreatDepth[i] = retreatStirring > 0 || langmuir > 0
           ? (retreatStirring > 0 ? retreatStirring : 2 * stir) * (langmuir > 0 ? langmuirFactor(Math.sqrt(tau / rho0), began, langmuir) : 1) * ustar3 / -buoyancyLoss[i]
           : 2 * stir * ustar3 / -buoyancyLoss[i];
+        if (retreatEkman > 0 && fCell[i] !== 0) retreatDepth[i] = Math.min(retreatDepth[i], retreatEkman * Math.sqrt(tau / rho0) / Math.abs(fCell[i]));
         const monin = Math.max(shallowestMixedDepth, retreatDepth[i], hold);
         if (h[i] > monin) detrain(i, (h[i] - monin) * Math.min(1, dt / detrainmentTime), rm);
       }

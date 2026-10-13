@@ -556,6 +556,40 @@ test('under retreatStirring and langmuir a heated mixed layer retreats toward C_
   assert.ok(books < 1e-12 && momentum < 1e-12, `columns ${books}, momentum ${momentum}`);
 });
 
+test('under retreatEkman the heated mixed layer retreats toward no more than retreatEkman·u*/|f|: a 300 m layer under a strong wind and a weak gain lands on that Ekman bound, while the unbounded rule holds it deeper, and wherever the bound lies deeper than C_r·ε·u*³/(−B) the depth keeps that closed form', () => {
+  const dt = 1350, net = 50, c = 0.7;
+  const stress = zonalWindOnEdges(mesh, (lat) => 0.01 + 0.2 * Math.cos(lat) ** 4);
+  const tauCell = cellVector(mesh, stress);
+  const run = (mixedDepth, options) => {
+    const { ocean, surfaceT, ice } = uniformOcean({ mixedDepth, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, detrainmentTime: dt, retreatStirring: 2.5, langmuir: 2, ...options });
+    for (let i = 0; i < C; i++) surfaceT[i] += dt * net / ocean.capacity[i];
+    ocean.setStress(stress, ice);
+    ocean.readSurface(surfaceT, ice);
+    ocean.mixedLayer(dt);
+    return { L: Float64Array.from(ocean.retreatDepth), h: Float64Array.from(ocean.h.subarray(0, C)) };
+  };
+  const lines = [];
+  for (const depth of [6, 300]) {
+    const free = run(depth, {}), bounded = run(depth, { retreatEkman: c });
+    let heated = 0, binding = 0, worst = 0, landed = 0, deeper = 0;
+    for (let i = 0; i < C; i++) {
+      if (!(free.L[i] > 0)) continue;
+      heated++;
+      const ustar = Math.sqrt(Math.hypot(tauCell[3 * i], tauCell[3 * i + 1], tauCell[3 * i + 2]) / RHO), limit = mesh.fCell[i] !== 0 ? c * ustar / Math.abs(mesh.fCell[i]) : Infinity;
+      worst = Math.max(worst, Math.abs(bounded.L[i] / Math.min(free.L[i], limit) - 1));
+      if (limit >= free.L[i]) continue;
+      binding++;
+      if (limit < depth && Math.abs(bounded.h[i] - Math.max(5, limit)) < 1e-9) landed++;
+      if (free.h[i] > bounded.h[i] + 1) deeper++;
+    }
+    lines.push(`${depth} m: ${heated} heated cells, ${binding} with the bound below C_r·ε·u*³/(−B), ${landed} landing on it, ${deeper} held over a meter deeper without it`);
+    assert.ok(worst < 1e-12, `the retreat depth is ${worst} off min(C_r·ε·u*³/(−B), ${c}u*/|f|) at ${depth} m`);
+    assert.ok(binding > 300 && heated - binding > 100, `${binding} of ${heated} heated cells bound at ${depth} m`);
+    if (depth === 300) assert.ok(landed > 300 && deeper > 300, `${landed} landed on the bound, ${deeper} held deeper without it`);
+  }
+  console.log(`the Ekman bound ${c}u*/|f| under ${net} W/m²: ${lines.join('; ')}`);
+});
+
 /*
  * CVMix's cvmix_kpp_ustokes_SL_model, the surface-layer Stokes drift of
  * the theory wave, written out with erfc from its Maclaurin series.

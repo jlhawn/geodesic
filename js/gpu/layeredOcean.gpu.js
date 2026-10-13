@@ -37,7 +37,7 @@ export const OCEAN_DEFAULTS = {
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
   momentumDepth: 50, carryMomentum: false, refillRate: 0, refillFloor: 5, shearEntrainment: 0,
-  ekmanDepth: 0, momentumFloor: 10, stressThickness: PV_FLOOR, retreatStirring: 0, langmuir: 0,
+  ekmanDepth: 0, momentumFloor: 10, stressThickness: PV_FLOOR, retreatStirring: 0, langmuir: 0, retreatEkman: 0,
   interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: null,
   gustiness: 3,
@@ -85,11 +85,13 @@ fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
     o.stressThickness !== PV_FLOOR ? constLine('STRESSTHICK', o.stressThickness) : '',
     o.retreatStirring > 0 ? constLine('RETREATSTIR', o.retreatStirring) : '',
     o.langmuir > 0 ? `${constLine('LANGMUIR', o.langmuir)}\n${langmuirLines}` : '',
+    o.retreatEkman > 0 ? `${constLine('RETREATEKMAN', o.retreatEkman)} ${constLine('TWOOMEGA', 2 * o.omega)}` : '',
   ].filter((line) => line).map((line) => `${line}\n`).join('');
   const momentumReach = o.ekmanDepth > 0 ? 'hm' : 'MOMDEPTH', stressFloor = o.stressThickness !== PV_FLOOR ? 'STRESSTHICK' : 'PVFLOOR';
-  const retreatTerm = o.retreatStirring > 0 || o.langmuir > 0
+  const unboundedRetreat = o.retreatStirring > 0 || o.langmuir > 0
     ? `${o.retreatStirring > 0 ? 'RETREATSTIR' : '2.0 * stir'} * ${o.langmuir > 0 ? 'langmuirFactor(sqrt(tau / RHO0), began)' : '1.0'} * ustar3 / -loss`
     : '2.0 * stir * ustar3 / -loss';
+  const retreatTerm = o.retreatEkman > 0 ? `min(${unboundedRetreat}, select(1.0e30, RETREATEKMAN * sqrt(tau / RHO0) / fCell, fCell > 0.0))` : unboundedRetreat;
   const offsetLines = Object.entries(OD).filter(([k]) => k !== 'total').map(([k, v]) => `const O_${k}: i32 = ${v};`).join('\n');
   const bLines = Object.entries(B).filter(([k]) => k !== 'total').map(([k, v]) => `const B_${k}: i32 = ${v};`).join('\n');
   const head = `
@@ -805,7 +807,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
   wv = wv / MF[F_AREA + i];
   let tau = length(wv);
   let ustar3 = pow(tau / RHO0, 1.5); let stir = STIRRING * exp(-IN[hOff(0) + i] / STIRDEPTH);
-${o.langmuir > 0 ? '  let began = IN[hOff(0) + i];\n' : ''}  let reach = OD[O_REACH + i];
+${o.langmuir > 0 ? '  let began = IN[hOff(0) + i];\n' : ''}${o.retreatEkman > 0 ? '  let fCell = abs(TWOOMEGA * sin(MF[F_LAT + i]));\n' : ''}  let reach = OD[O_REACH + i];
   let deepest = min(MAXMIXED, reach);
   let s0 = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
   let salted = s0 * OD[O_FRESH + i] / 1000.0 + (s0 - ICESAL) * (iceVolume(i) - OD[O_PREVVOL + i]) * ICEDENS / 1000.0;
@@ -1079,7 +1081,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   B.total = bTotal;
   const ODTOTAL = OD.total + bTotal;
 
-  const kernels = oceanKernels({ ...o, L, C, E, V, OS, OD, B, rho, labelT, labelS, nu4, diffusion, implicitStress: !!core.physics && core.physics.surfaceExchange === 'roughness' && !!core.physics.implicitDrag });
+  const kernels = oceanKernels({ ...o, L, C, E, V, OS, OD, B, rho, labelT, labelS, nu4, diffusion, omega: mesh.omega, implicitStress: !!core.physics && core.physics.surfaceExchange === 'roughness' && !!core.physics.implicitDrag });
   const OF = seq([['SST', C], ['SSS', C], ['H1', C], ['THD', C], ['ETA', C], ['CUR', 3 * C], ['CSPD', C], ['UPW', C], ['PART', OCEAN_REDUCED.length * reductionGroups(C)]]);
   kernels.oFrame = `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
