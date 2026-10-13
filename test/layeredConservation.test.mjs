@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, THIN, SPEED_LIMIT } from '../js/ocean/layered.module.js';
+import { createOcean, THIN, SPEED_LIMIT, PV_FLOOR } from '../js/ocean/layered.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
 import { columnMomentum } from './helpers/layered.mjs';
@@ -455,8 +455,9 @@ test('with carryMomentum the GPU mixed layer\'s exchanges keep each edge\'s colu
   assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-5, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
 });
 
-for (const [label, options] of [['sheared', SHEARED], ['packaged', PACKAGED]]) {
-  test(`under ${label === 'sheared' ? 'shearEntrainment' : 'the mixing package'} the GPU mixed layer's entrainment keeps heat, salt, volume and each edge's column momentum to single-precision rounding`, { skip: !gpuAvailable && 'webgpu not installed', todo: label === 'packaged' && 'on the 46 classes this case leaves up to 4e-9 m of water and 1.3e-7 psu·m of salt per column in the mixed-layer phase; on the 44 it is exact' }, async () => {
+const TITLES = { sheared: 'shearEntrainment', adopted: 'the mixing package as adopted, its stress on classes at least 20 m thick,', packaged: 'the mixing package with its stress on classes 5 m thick' };
+for (const [label, options] of [['sheared', SHEARED], ['adopted', { ...PACKAGED, stressThickness: PV_FLOOR }], ['packaged', PACKAGED]]) {
+  test(`under ${TITLES[label]} the GPU mixed layer's entrainment keeps heat, salt, volume and each edge's column momentum to single-precision rounding`, { skip: !gpuAvailable && 'webgpu not installed', todo: label === 'packaged' && 'on the 46 classes, with the stress on classes 5 m thick, this case leaves up to 4e-9 m of water and 1.3e-7 psu·m of salt per column in the mixed-layer phase and no heat; with the stress on classes 20 m thick, or on the 44 classes, it is exact' }, async () => {
     const sea = await onGpu(sheared(options));
     const record = await sea.follow(8);
     sea.model.destroy();

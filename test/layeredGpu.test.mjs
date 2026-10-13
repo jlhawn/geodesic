@@ -334,8 +334,8 @@ test('the GPU mixed layer holds, retreats, convects, keeps to its neighbors and,
   const sea = [...Array(C).keys()].filter((i) => cpuModel.geography.land[i] === 0);
   const neutral = sea.filter((_, n) => n % 5 === 0), stable = sea.filter((_, n) => n % 5 === 1), dense = sea.filter((_, n) => n % 5 === 2);
   const oldRules = { neutralSnap: true, convectiveErosion: false, buoyancyMemory: 0, maximumMixedDepth: 200, mixedNeighbourRatio: 0, vorticityCentring: 0 };
-  const kraus = { penetration: null, refillRate: 0, shearEntrainment: 0, ekmanDepth: 0, retreatStirring: 0, langmuir: 0, retreatEkman: 0, densities: LAYER_DENSITIES.slice(2), salinities: LAYER_SALINITIES.slice(2), bottoms: LAYER_BOTTOMS.slice(2) };
-  for (const options of [{ ...OCEAN_OPTIONS, ...kraus, mixedNeighbourRatio: 3, carryMomentum: true }, { ...OCEAN_OPTIONS, ...kraus, carryMomentum: false, ...oldRules }]) {
+  const unsheared = { shearEntrainment: 0 };
+  for (const options of [{ ...OCEAN_OPTIONS, ...unsheared, mixedNeighbourRatio: 3, carryMomentum: true }, { ...OCEAN_OPTIONS, ...unsheared, carryMomentum: false, ...oldRules }]) {
     const cpuOcean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options });
     const surfaceT = Float64Array.from(surfaceT0);
     cpuOcean.initialize(surfaceT, ice);
