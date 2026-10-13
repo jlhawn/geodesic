@@ -81,7 +81,7 @@ import { profileAt } from './climatology.module.js';
  * retreat in the same step stops at that depth. It deepens within
  * `maximumMixedDepth` and, when
  * `mixedNeighbourRatio` is set, within that multiple of the mean depth of
- * the neighbouring mixed layers. Otherwise it holds its depth,
+ * the neighboring mixed layers. Otherwise it holds its depth,
  * convectively neutral or not: it detrains at once what lies beyond the
  * maximum, and, over `detrainmentTime` and never above
  * `shallowestMixedDepth`, what lies beyond the Monin–Obukhov depth
