@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES, langmuirFactor } from '../js/ocean/layered.module.js';
+import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES, langmuirFactor, THIN_LAYER_CLASSES } from '../js/ocean/layered.module.js';
 import { UNLISTED_OCEANS, columnMomentum } from './helpers/layered.mjs';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
@@ -637,6 +637,48 @@ test('the GPU ocean takes an 8-layer state that carries no class list, as the pa
   }
   await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, 1350);
   for (const v of (await gpuOcean.download()).h) assert.ok(Number.isFinite(v));
+  gpuModel.destroy();
+});
+
+test('on the two lighter classes, a 44-class GPU state with its restart arrays loads onto both engines as a restart, and one and twenty-one GPU ocean steps from it track the CPU layered ocean at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350, light = { ...OCEAN_OPTIONS, ...THIN_LAYER_CLASSES };
+  const before = await createGpuModel(new Grid(8), { topography, ocean: OCEAN_OPTIONS });
+  before.oceanEngine.initialize(Float64Array.from(surfaceT0), ice);
+  for (let n = 0; n < 5; n++) await before.oceanEngine.advance(Float64Array.from(surfaceT0), ice, stress, dt);
+  const saved = { ...(await before.oceanEngine.serialize()), ...(await before.oceanEngine.restartArrays()) };
+  before.destroy();
+  assert.deepEqual(saved.densities, LAYER_DENSITIES);
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: light });
+  const gpuOcean = gpuModel.oceanEngine;
+  const cpuOcean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...light });
+  await gpuOcean.upload(saved, Float64Array.from(surfaceT0), ice);
+  cpuOcean.load(saved, Float64Array.from(surfaceT0), ice);
+  assert.equal(gpuOcean.layers, THIN_LAYER_CLASSES.densities.length + 1);
+  const restart = await gpuOcean.restartArrays();
+  for (const name of ['previousT0', 'fresh', 'buoyancy', 'capacity']) assert.deepEqual(Array.from(restart[name]), Array.from(saved[name]), `the GPU's ${name}`);
+  for (const name of ['fresh', 'capacity']) assert.deepEqual(Array.from(cpuOcean[name]), Array.from(saved[name]), `the CPU's ${name}`);
+  const compare = async (limit, label) => {
+    const cpu = cpuOcean.serialize(), gpu = await gpuOcean.serialize();
+    assert.deepEqual(gpu.densities, THIN_LAYER_CLASSES.densities);
+    const wet = Array.from(cpu.h, (v) => v > 1), lines = [];
+    for (const f of ['h', 'u', 'T', 'S', 'eta']) {
+      const r = f === 'T' || f === 'S' ? stats(cpu[f].filter((_, x) => wet[x]), gpu[f].filter((_, x) => wet[x])) : stats(cpu[f], gpu[f]);
+      lines.push(`${f} ${r.rmsRel.toExponential(2)}`);
+      assert.ok(r.rmsRel < limit, `${label}: ${f} rms relative diff ${r.rmsRel} at index ${r.at}`);
+    }
+    console.log(`46 classes, ${label}: the engines' rms relative difference ${lines.join(', ')}`);
+  };
+  await compare(1e-6, 'as loaded');
+  for (const steps of [1, 20]) {
+    for (let n = 0; n < steps; n++) {
+      cpuOcean.advance(Float64Array.from(surfaceT0), ice, new Float64Array(C), stress, dt);
+      await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, dt);
+    }
+    await compare(2e-3, steps === 1 ? 'after 1 step' : 'after 21 steps');
+  }
+  for (const v of (await gpuOcean.download()).h) assert.ok(Number.isFinite(v));
+  assert.equal((await gpuOcean.diagnostics()).oceanLimited, 0);
   gpuModel.destroy();
 });
 

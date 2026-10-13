@@ -5,7 +5,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { topographyFromInt16, createGeography } from '../js/geography.module.js';
 import { createOcean, atlasColumns, EPS, THIN, RESTORE_TOLERANCE, LAYER_DENSITIES, LAYER_SALINITIES } from '../js/ocean/layered.module.js';
-import { decodeClimatology, encodeClimatology, loadClimatology, profileAt, CLIMATOLOGY_FILE } from '../js/ocean/climatology.module.js';
+import { decodeClimatology, encodeClimatology, loadClimatology, profileAt, CLIMATOLOGY_FILE, decodeMonthlySst, encodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
 import { seawaterDensity, labelTemperature } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 
@@ -62,6 +62,53 @@ test('the repository file re-encodes byte for byte, so scripts/packWoa.py and en
   assert.ok(again.every((b, n) => b === bytes[n]), 'identical bytes');
   assert.equal(atlas.nLon, 360); assert.equal(atlas.nLat, 180); assert.equal(atlas.depths.length, 25);
   assert.ok(bytes.length <= 8 * 1024 * 1024, `${bytes.length} bytes`);
+});
+
+/*
+ * A 12 × 6 monthly grid at 30° spacing over four months, linear in month,
+ * latitude and longitude, with land from pole to pole in columns 2–8
+ * (105W–75E).
+ */
+const MONTHLY = { nLon: 12, nLat: 6, lon0: -165, dLon: 30, lat0: -75, dLat: 30, centers: [45, 136, 228, 319] };
+const monthlyT = (m, lat, lon) => 10 + m + 0.1 * lat + 0.02 * lon;
+function monthlyFixture() {
+  const { nLon, nLat, lon0, dLon, lat0, dLat, centers } = MONTHLY, T = [];
+  centers.forEach((_, m) => { for (let r = 0; r < nLat; r++) for (let c = 0; c < nLon; c++) T.push(c >= 2 && c <= 8 ? NaN : monthlyT(m, lat0 + r * dLat, lon0 + c * dLon)); });
+  return { ...MONTHLY, T, source: 'monthly fixture' };
+}
+
+test('a monthly sea surface climatology packed from arrays decodes to the same grid, values within half a step and missing points kept, and the repository file re-encodes byte for byte, so scripts/packWoaMonthlySst.py and encodeMonthlySst share one layout', () => {
+  const grid = monthlyFixture(), sst = decodeMonthlySst(encodeMonthlySst(grid));
+  for (const key of ['nLon', 'nLat', 'lon0', 'dLon', 'lat0', 'dLat', 'source']) assert.equal(sst[key], grid[key], key);
+  assert.deepEqual(Array.from(sst.centers), grid.centers);
+  for (let n = 0; n < grid.T.length; n++) {
+    if (Number.isNaN(grid.T[n])) { assert.ok(Number.isNaN(sst.T[n]), `missing ${n}`); continue; }
+    assert.ok(Math.abs(sst.T[n] - grid.T[n]) <= 0.5 * sst.tScale + 1e-9, `T ${n}`);
+  }
+  const bytes = new Uint8Array(readFileSync(new URL(`../${MONTHLY_SST_FILE}`, import.meta.url))), woa = decodeMonthlySst(bytes), again = encodeMonthlySst(woa);
+  assert.equal(again.length, bytes.length);
+  assert.ok(again.every((b, n) => b === bytes[n]), 'identical bytes');
+  assert.equal(woa.nLon, 360); assert.equal(woa.nLat, 180); assert.equal(woa.nMonth, 12);
+  assert.deepEqual(Array.from(woa.centers), [15.5, 45, 74.5, 105, 135.5, 166, 196.5, 227.5, 258, 288.5, 319, 349.5]);
+  let wet = 0, low = Infinity, high = -Infinity;
+  for (const t of woa.T) if (Number.isFinite(t)) { wet++; low = Math.min(low, t); high = Math.max(high, t); }
+  assert.ok(wet > 12 * 40000 && low > -2.5 && high < 36, `${wet} values from ${low} to ${high} °C`);
+});
+
+test('monthWeights takes the two months whose centers bracket a day, linearly, across the turn of the year; climatologyAt blends them, bilinearly among wet points, renormalized over dry ones, else from the nearest wet point within two steps, else NaN', () => {
+  const woa = decodeMonthlySst(readFileSync(new URL(`../${MONTHLY_SST_FILE}`, import.meta.url)));
+  const close = (got, want, label) => { assert.equal(got.length, 2, label); got.forEach(([m, w], q) => { assert.equal(m, want[q][0], label); assert.ok(Math.abs(w - want[q][1]) < 1e-12, `${label}: ${w}`); }); };
+  close(monthWeights(woa, 108), [[3, 27.5 / 30.5], [4, 3 / 30.5]], 'April 19');
+  close(monthWeights(woa, 15.5), [[0, 1], [1, 0]], 'January 16, noon');
+  close(monthWeights(woa, 0), [[11, 0.5], [0, 0.5]], 'January 1');
+  close(monthWeights(woa, 360), [[11, 20.5 / 31], [0, 10.5 / 31]], 'December 27');
+  for (let day = 0; day < 365; day += 0.25) { const [[, a], [, b]] = monthWeights(woa, day); assert.ok(a >= 0 && b >= 0 && Math.abs(a + b - 1) < 1e-12, `day ${day}`); }
+  const sst = decodeMonthlySst(encodeMonthlySst(monthlyFixture())), months = [[0, 0.25], [1, 0.75]], blend = (lat, lon) => 0.25 * monthlyT(0, lat, lon) + 0.75 * monthlyT(1, lat, lon);
+  close(monthWeights(sst, 113.25), [[0, 0.25], [1, 0.75]], 'the fixture');
+  assert.ok(Math.abs(climatologyAt(sst, months, 0, 120 * DEG) - KELVIN - blend(0, 120)) < 1e-3, 'between four wet points');
+  assert.ok(Math.abs(climatologyAt(sst, months, 0, 80 * DEG) - KELVIN - blend(0, 105)) < 1e-3, 'beside the coast, from the wet corners');
+  assert.ok(Math.abs(climatologyAt(sst, months, 15 * DEG, -105 * DEG) - KELVIN - blend(15, -135)) < 1e-3, 'on land, the nearest wet point');
+  assert.ok(Number.isNaN(climatologyAt(sst, months, 0, 15 * DEG)), 'more than two steps inland');
 });
 
 test('columnAt interpolates bilinearly among four wet points, takes the nearest wet one where a corner is dry, ends where none is wet and reaches for the nearest column over land', () => {

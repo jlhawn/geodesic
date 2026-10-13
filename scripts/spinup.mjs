@@ -126,7 +126,7 @@ import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0 } from '../js/dynamics/sigmaCore.module.js';
 import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS, regridLand, remapLevels } from '../js/physics/regrid.module.js';
 import { readRanges } from '../js/gpu/device.module.js';
-import { LAYER_DENSITIES, THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
+import { THERMOCLINE_DENSITY } from '../js/ocean/layered.module.js';
 import { createForcingRecorder } from '../js/gpu/forcing.gpu.js';
 import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
@@ -469,7 +469,7 @@ if (step && recorder) {
 await model.sync();
 const days = day - day0;
 const ocean = await model.ocean.serialize({ restart: true }), landState = await model.land.serialize();
-const kT = LAYER_DENSITIES.filter((r) => r < THERMOCLINE_DENSITY).length;
+const kT = ocean.densities.filter((r) => r < THERMOCLINE_DENSITY).length;
 const sea = (a, b, c, e) => [...Array(C).keys()].filter((i) => !land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && (c <= e ? mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e : mesh.lonCell[i] * deg >= c || mesh.lonCell[i] * deg <= e));
 const meanOf = (cells, f) => cells.reduce((s, i) => s + f(i), 0) / Math.max(1, cells.length);
 const sst = (cells) => meanOf(cells, (i) => ocean.T[i] - 273.15), classTop = (cells) => meanOf(cells, (i) => { let d = 0; for (let k = 0; k <= kT; k++) d += ocean.h[k * C + i]; return d; });

@@ -194,13 +194,29 @@ export const LAYER_SALINITIES = [
   34.91, 34.94, 35.05, 39.9, 39.0, 38.65,
 ];
 /*
+ * The same classes with two lighter ones, 1019.5 and 1020.0 at WOA23's
+ * tropical surface salinities, for the warm pool's water lighter than
+ * 1020.25: createOcean's densities, salinities and bottoms.
+ */
+export const THIN_LAYER_DENSITIES = [1019.5, 1020.0, ...LAYER_DENSITIES];
+export const THIN_LAYER_SALINITIES = [33.0, 33.5, ...LAYER_SALINITIES];
+export const THIN_LAYER_BOTTOMS = [60, 62, ...LAYER_BOTTOMS];
+export const THIN_LAYER_CLASSES = { densities: THIN_LAYER_DENSITIES, salinities: THIN_LAYER_SALINITIES, bottoms: THIN_LAYER_BOTTOMS };
+/*
  * The interior classes of saved oceans that carry no list of their own,
- * told apart by their layer count: the seven of the page's saved runs and
- * the twenty-three of later ones.
+ * told apart by their layer count: the seven of the page's saved runs,
+ * the twenty-three of later ones and the forty-four from 1020.5.
  */
 export const UNLISTED_LAYER_DENSITIES = [
   [1022.0, 1023.0, 1024.0, 1025.0, 1026.0, 1026.6, 1026.95],
   [1022.0, 1022.25, 1022.5, 1022.75, 1023.0, 1023.25, 1023.5, 1023.75, 1024.0, 1024.25, 1024.5, 1024.75, 1025.0, 1025.25, 1025.5, 1025.75, 1026.0, 1026.2, 1026.4, 1026.6, 1026.75, 1026.85, 1026.95],
+  [
+    1020.5, 1021.0, 1021.5,
+    1022.0, 1022.25, 1022.5, 1022.75, 1023.0, 1023.25, 1023.5, 1023.75, 1024.0, 1024.25, 1024.5, 1024.75, 1025.0, 1025.25, 1025.5, 1025.75, 1026.0,
+    1026.1, 1026.2, 1026.3, 1026.4, 1026.5, 1026.6,
+    1026.65, 1026.68, 1026.71, 1026.74, 1026.77, 1026.8, 1026.83, 1026.86, 1026.89, 1026.92, 1026.95, 1026.98,
+    1027.05, 1027.15, 1027.3, 1027.5, 1027.75, 1028.0,
+  ],
 ];
 export const THERMOCLINE_DENSITY = 1024.0;
 export const POLAR_INTERIOR_T = 272.15;
@@ -698,24 +714,30 @@ export function sameDensities(a, b) {
  * A saved ocean (serialize's layer-major h, u, T and S, and eta) carried
  * from the interior classes `from` onto `to`, column by column, the mixed
  * layer copied through. An old class stands for water spread over its
- * span, half-way to its neighbours' labels; the lightest and densest,
- * which hold all lighter and all denser water, span the same width
- * centred on their own water's density. Each new class, the lightest and
- * densest open-ended, takes the share of that span within its own, the
- * shares tilted linearly across the span (and none below zero) so that
- * their labels average to the density of the water. Each share keeps the
- * old class's temperature and salinity moved by the least change, counted
- * in 4 K and 0.5 psu (their spread along a density surface), that changes
+ * span, half-way to its neighbors' labels. The lightest and densest,
+ * which hold all lighter and all denser water, keep that inner boundary;
+ * when their water lies beyond the label by more than RESTORE_TOLERANCE,
+ * the span reaches as far beyond the water's density as the boundary lies
+ * within it, else as far beyond the label (a lone class spans the same
+ * width centered on its water). Each new class, the lightest and densest
+ * open-ended, takes the share of that span within its own, the shares
+ * tilted linearly across the span (and none below zero) so that their
+ * labels average to the density of the water. Each share keeps the old
+ * class's temperature and salinity moved by the least change, counted in
+ * 4 K and 0.5 psu (their spread along a density surface), that changes
  * the density by ρ_new − ρ̄, ρ̄ the shares' mean label: it lies near its
  * new label, warmer or colder in the thermocline and saltier or fresher
  * in cold water, and the column keeps its water, heat and salt. A class
- * left with less than the EPS token is made up to it at its label from the
- * column's thickest class, or from the mixed layer when no class can spare
- * the water. A new class moves with the old classes whose label spans
- * overlap its own, weighted by the overlap, or else with the old class of
- * the nearest label.
+ * left with less than the EPS token is made up to it at its label from
+ * the nearest class holding more than the token and two EPS besides, or
+ * from the mixed layer when none does. A new class moves with the old
+ * classes whose label spans overlap its own, weighted by the overlap, or
+ * else with the old class of the nearest label. The per-cell arrays a
+ * restart takes (REBIN_CARRIED) are carried as they are and Q and W given
+ * as h·T and h·S, so a rebinned ocean restarts on either engine.
  */
 const SPREAD_T = 4, SPREAD_S = 0.5;
+export const REBIN_CARRIED = ['previousT0', 'previousIceVolume', 'fresh', 'buoyancy', 'remainder', 'flux', 'capacity', 'penetrated'];
 export function rebinOcean(saved, from, to, C, { labelT, labelS }) {
   const Lo = from.length + 1, Ln = to.length + 1, E = saved.u.length / Lo;
   const spans = (labels) => labels.map((r, k) => {
@@ -724,7 +746,17 @@ export function rebinOcean(saved, from, to, C, { labelT, labelS }) {
   });
   const oldSpans = spans(from), newSpans = spans(to), receiving = newSpans.map(([a, b], n) => [n === 0 ? -Infinity : a, n === to.length - 1 ? Infinity : b]);
   const h = new Float64Array(Ln * C), Q = new Float64Array(Ln * C), W = new Float64Array(Ln * C);
-  const shares = [];
+  const overlaps = (a, b) => {
+    const out = [];
+    let total = 0;
+    for (let m = 0; m < to.length; m++) {
+      const f = Math.min(b, receiving[m][1]) - Math.max(a, receiving[m][0]);
+      if (f > 0) { out.push([m, f]); total += f; }
+    }
+    for (const share of out) share[1] /= total;
+    return out;
+  };
+  const fixed = oldSpans.map(([a, b]) => overlaps(a, b));
   for (let i = 0; i < C; i++) {
     h[i] = saved.h[i]; Q[i] = h[i] > 0 ? h[i] * saved.T[i] : 0; W[i] = h[i] > 0 ? h[i] * saved.S[i] : 0;
     let column = h[i];
@@ -733,18 +765,24 @@ export function rebinOcean(saved, from, to, C, { labelT, labelS }) {
       if (!(hj >= 0) || (hj > 0 && !(Number.isFinite(t) && Number.isFinite(s)))) { h[i] = NaN; continue; }
       if (hj === 0) continue;
       column += hj;
-      let [a, b] = oldSpans[j - 1];
-      if (j === 1 || j === Lo - 1) { const r = seawaterDensity(t, s), half = 0.5 * (b - a); a = r - half; b = r + half; }
-      shares.length = 0;
-      let total = 0;
-      for (let m = 0; m < to.length; m++) {
-        const f = Math.min(b, receiving[m][1]) - Math.max(a, receiving[m][0]);
-        if (f > 0) { shares.push([m, f]); total += f; }
+      let shares = fixed[j - 1], r = NaN;
+      if (j === 1 || j === Lo - 1) {
+        const label = from[j - 1];
+        let [a, b] = oldSpans[j - 1];
+        r = seawaterDensity(t, s);
+        if (Lo === 2) { const half = 0.5 * (b - a); a = r - half; b = r + half; } else if (j === 1 && r < label - RESTORE_TOLERANCE) a = 2 * r - b; else if (j === Lo - 1 && r > label + RESTORE_TOLERANCE) b = 2 * r - a;
+        if (a !== oldSpans[j - 1][0] || b !== oldSpans[j - 1][1]) shares = overlaps(a, b);
       }
+      if (shares.length === 1) {
+        const k = (shares[0][0] + 1) * C + i;
+        h[k] += hj; Q[k] += hj * t; W[k] += hj * s;
+        continue;
+      }
+      shares = shares.map(([m, f]) => [m, f]);
       let centre = 0, spread = 0, mean = 0, kept = 0;
-      for (const share of shares) { share[1] /= total; centre += share[1] * to[share[0]]; }
+      for (const [m, f] of shares) centre += f * to[m];
       for (const [m, f] of shares) spread += f * (to[m] - centre) ** 2;
-      const tilt = spread > 0 ? (seawaterDensity(t, s) - centre) / spread : 0;
+      const tilt = spread > 0 ? ((Number.isNaN(r) ? seawaterDensity(t, s) : r) - centre) / spread : 0;
       for (const share of shares) { share[1] = Math.max(0, share[1] * (1 + tilt * (to[share[0]] - centre))); kept += share[1]; }
       for (const share of shares) { share[1] /= kept; mean += share[1] * to[share[0]]; }
       const byT = -expansionOf(t, s) * SEAWATER.rho0, byS = contractionOf(t, s) * SEAWATER.rho0, norm = (byT * SPREAD_T) ** 2 + (byS * SPREAD_S) ** 2;
@@ -754,15 +792,14 @@ export function rebinOcean(saved, from, to, C, { labelT, labelS }) {
       }
     }
     if (!(column > 0)) continue;
-    let thickest = 1, needed = 0;
-    for (let k = 1; k < Ln; k++) {
-      if (h[k * C + i] > h[thickest * C + i]) thickest = k;
-      needed += Math.max(0, EPS - h[k * C + i]);
-    }
-    const giver = h[thickest * C + i] > needed + EPS ? thickest * C + i : i;
     for (let k = 1; k < Ln; k++) {
       const n = k * C + i, need = EPS - h[n];
       if (!(need > 0)) continue;
+      let giver = i;
+      for (let d = 1; d < Ln && giver === i; d++) {
+        if (k - d >= 1 && h[(k - d) * C + i] > need + 2 * EPS) giver = (k - d) * C + i;
+        else if (k + d < Ln && h[(k + d) * C + i] > need + 2 * EPS) giver = (k + d) * C + i;
+      }
       h[n] += need; Q[n] += need * labelT[k]; W[n] += need * labelS[k];
       h[giver] -= need; Q[giver] -= need * labelT[k]; W[giver] -= need * labelS[k];
     }
@@ -781,8 +818,11 @@ export function rebinOcean(saved, from, to, C, { labelT, labelS }) {
     const out = (m + 1) * E;
     for (const [j, w] of weights) for (let e = 0; e < E; e++) u[out + e] += (w / total) * saved.u[(j + 1) * E + e];
   }
-  const T = Float64Array.from(Q, (q, n) => (h[n] > 0 ? q / h[n] : 0)), S = Float64Array.from(W, (w, n) => (h[n] > 0 ? w / h[n] : 0));
-  return { h, u, T, S, eta: Float64Array.from(saved.eta), densities: Array.from(to) };
+  const T = new Float64Array(Ln * C), S = new Float64Array(Ln * C);
+  for (let n = 0; n < Ln * C; n++) if (h[n] > 0) { T[n] = Q[n] / h[n]; S[n] = W[n] / h[n]; }
+  const carried = {};
+  for (const name of REBIN_CARRIED) if (saved[name]) carried[name] = Float64Array.from(saved[name]);
+  return { h, u, T, S, Q, W, eta: Float64Array.from(saved.eta), densities: Array.from(to), ...carried };
 }
 
 /*
