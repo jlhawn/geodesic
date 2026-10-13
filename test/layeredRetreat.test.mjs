@@ -76,6 +76,12 @@ test('at 2 m/s the night gate holds the dawn depth within a quarter of the zero-
   });
 });
 
+test('at 4 m/s retreatDaily alone, the previous day\'s means without the night gate, leaves the dawn depth over 15 % deeper than the buoyancy average does', () => {
+  const off = dawns(4, 'off'), daily = dawns(4, 'daily');
+  console.log(`U 4 m/s, N/S ${RATIOS.join(' / ')}: dawn depth off ${show(off.dawn)}, retreatDaily ${show(daily.dawn)} m`);
+  RATIOS.forEach((ratio, n) => assert.ok(daily.dawn[n] >= 1.15 * off.dawn[n], `N/S ${ratio}: ${daily.dawn[n]} m with retreatDaily, ${off.dawn[n]} m without`));
+});
+
 test('at 8 m/s the wind holds the dawn depth and the night gate changes it by under a tenth', () => {
   const daily = dawns(8, 'daily'), light = dawns(8, 'light');
   console.log(`U 8 m/s, N/S ${RATIOS.join(' / ')}: dawn depth with retreatDaily ${show(daily.dawn)}, with retreatLight 1 ${show(light.dawn)} m`);
