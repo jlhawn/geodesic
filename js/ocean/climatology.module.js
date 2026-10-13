@@ -151,3 +151,85 @@ function climatology(grid, reach, deepReach) {
   }
   return { ...grid, reach, deepReach, columnAt, columnReaching };
 }
+
+/*
+ * A monthly sea surface temperature climatology on such a grid
+ * (data/woa_sst_monthly_1deg.bin, WOA23's twelve monthly means at 0 m,
+ * written by scripts/packWoaMonthlySst.py, which documents the layout):
+ * the annual file's header with months in place of depths, each month's
+ * center as a day of a 365-day year from January 1, and one int16 block.
+ * Decoded, T is °C [month][lat][lon] flattened, NaN where missing.
+ * `monthWeights(sst, dayOfYear)` gives the two months whose centers
+ * bracket the day, with linear weights; `climatologyAt(sst, months, lat,
+ * lon)`, in radians, the temperature in kelvin there under those weights:
+ * bilinear among the four surrounding grid points that hold water,
+ * renormalized over them, else that of the nearest point holding water
+ * within two grid steps (by rings, nearest in grid steps); NaN when none.
+ */
+export const MONTHLY_SST_FILE = 'data/woa_sst_monthly_1deg.bin';
+const MONTHLY_MAGIC = 'WOAM';
+
+export function decodeMonthlySst(bytes) {
+  const view = ArrayBuffer.isView(bytes) ? new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new DataView(bytes);
+  const magic = String.fromCharCode(...[0, 1, 2, 3].map((n) => view.getUint8(n)));
+  if (magic !== MONTHLY_MAGIC) throw new Error(`not a monthly sea surface temperature climatology (${magic})`);
+  const offset = view.getUint32(4, true), nLon = view.getUint16(8, true), nLat = view.getUint16(10, true), nMonth = view.getUint16(12, true), missing = view.getInt16(14, true);
+  const [lon0, dLon, lat0, dLat, tOffset, tScale] = [0, 1, 2, 3, 4, 5].map((n) => view.getFloat32(16 + 4 * n, true));
+  const centers = Float64Array.from({ length: nMonth }, (_, m) => view.getFloat32(48 + 4 * m, true));
+  const textAt = 48 + 4 * nMonth, textLength = view.getUint16(textAt, true);
+  const source = String.fromCharCode(...Array.from({ length: textLength }, (_, n) => view.getUint8(textAt + 2 + n)));
+  const T = new Float64Array(nMonth * nLat * nLon);
+  for (let n = 0; n < T.length; n++) { const v = view.getInt16(offset + 2 * n, true); T[n] = v === missing ? NaN : tOffset + tScale * v; }
+  return { nLon, nLat, nMonth, lon0, dLon, lat0, dLat, tOffset, tScale, missing, centers, T, source };
+}
+
+export function encodeMonthlySst({ nLon, nLat, lon0, dLon, lat0, dLat, centers, T, source = '', tOffset = 15, tScale = 0.001, missing = -32768 }) {
+  const nMonth = centers.length, count = nMonth * nLat * nLon;
+  let head = 48 + 4 * nMonth + 2 + source.length;
+  head += (8 - (head % 8)) % 8;
+  const buffer = new ArrayBuffer(head + 2 * count), view = new DataView(buffer);
+  for (let n = 0; n < 4; n++) view.setUint8(n, MONTHLY_MAGIC.charCodeAt(n));
+  view.setUint32(4, head, true); view.setUint16(8, nLon, true); view.setUint16(10, nLat, true); view.setUint16(12, nMonth, true); view.setInt16(14, missing, true);
+  [lon0, dLon, lat0, dLat, tOffset, tScale, 0, 0].forEach((value, n) => view.setFloat32(16 + 4 * n, value, true));
+  centers.forEach((c, m) => view.setFloat32(48 + 4 * m, c, true));
+  view.setUint16(48 + 4 * nMonth, source.length, true);
+  for (let n = 0; n < source.length; n++) view.setUint8(50 + 4 * nMonth + n, source.charCodeAt(n));
+  for (let n = 0; n < count; n++) view.setInt16(head + 2 * n, Number.isFinite(T[n]) ? Math.round((T[n] - tOffset) / tScale) : missing, true);
+  return new Uint8Array(buffer);
+}
+
+export function monthWeights({ centers, nMonth }, dayOfYear) {
+  const t = dayOfYear < centers[0] ? dayOfYear + 365 : dayOfYear;
+  for (let m = 0; m < nMonth; m++) {
+    const a = centers[m], b = m + 1 < nMonth ? centers[m + 1] : centers[0] + 365;
+    if (t >= a && t < b) return [[m, (b - t) / (b - a)], [(m + 1) % nMonth, (t - a) / (b - a)]];
+  }
+  throw new Error(`day of year ${dayOfYear} lies outside the month centers`);
+}
+
+export function climatologyAt({ nLon, nLat, lon0, dLon, lat0, dLat, T }, months, lat, lon) {
+  const deg = 180 / Math.PI;
+  const blend = (r, c) => { let s = 0; for (const [m, w] of months) s += w * T[(m * nLat + r) * nLon + (((c % nLon) + nLon) % nLon)]; return s; };
+  const x = (lon * deg - lon0) / dLon, y = (lat * deg - lat0) / dLat;
+  const c0 = Math.floor(x), r0 = Math.floor(y), fx = x - c0, fy = y - r0;
+  let sum = 0, weight = 0;
+  for (const [dr, dc, w] of [[0, 0, (1 - fy) * (1 - fx)], [0, 1, (1 - fy) * fx], [1, 0, fy * (1 - fx)], [1, 1, fy * fx]]) {
+    const r = r0 + dr;
+    if (r < 0 || r >= nLat || w <= 0) continue;
+    const v = blend(r, c0 + dc);
+    if (Number.isFinite(v)) { sum += w * v; weight += w; }
+  }
+  if (weight > 0) return sum / weight + KELVIN;
+  const rc = Math.round(y), cc = Math.round(x);
+  for (let ring = 1; ring <= 2; ring++) {
+    let best = NaN, nearest = Infinity;
+    for (let dr = -ring; dr <= ring; dr++) for (let dc = -ring; dc <= ring; dc++) {
+      const r = rc + dr;
+      if (Math.max(Math.abs(dr), Math.abs(dc)) !== ring || r < 0 || r >= nLat) continue;
+      const v = blend(r, cc + dc);
+      if (Number.isFinite(v) && dr * dr + dc * dc < nearest) { best = v; nearest = dr * dr + dc * dc; }
+    }
+    if (Number.isFinite(best)) return best + KELVIN;
+  }
+  return NaN;
+}
