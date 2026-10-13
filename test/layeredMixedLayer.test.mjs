@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, LAYER_BOTTOMS, transmitted } from '../js/ocean/layered.module.js';
-import { seawaterDensity, thermalExpansion, labelTemperature } from '../js/ocean/seawater.module.js';
+import { createOcean, LAYER_BOTTOMS, transmitted, THIN } from '../js/ocean/layered.module.js';
+import { SEAWATER, seawaterDensity, thermalExpansion, labelTemperature } from '../js/ocean/seawater.module.js';
+import { cellVector } from '../js/dynamics/operators.module.js';
 import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, UNIFORM, uniformOcean, deepen, slowOcean, columnMomentum } from './helpers/layered.mjs';
 
 test('surface warming shallows the mixed layer by detrainment; surface cooling deepens it by entrainment', () => {
@@ -382,4 +383,122 @@ test('under refillRate a mixed layer below its floor deepens by refillRate·dt a
   assert.ok(Array.from({ length: C }, (_, i) => instant.ocean.h[i]).every((x) => Math.abs(x - 50) < 1e-9), 'at refillRate 0 every mixed layer is back on its floor');
   for (const name of ['h', 'u', 'Q', 'W', 'eta']) assert.deepEqual(instant.ocean[name], plain.ocean[name], `${name} at refillRate 0 is the default's`);
   assert.equal(instant.ocean.diagnostics().oceanThinned, 0);
+});
+
+/*
+ * The shear across the mixed layer's base as the CPU ocean takes it:
+ * on each sea edge the mixed layer's velocity less that of the first
+ * class at least THIN thick there, reconstructed to the cells.
+ */
+function baseShear(ocean) {
+  const { h, u, layers: L } = ocean, { cellsOnEdge } = mesh, du = new Float64Array(E);
+  for (let e = 0; e < E; e++) {
+    const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+    for (let k = 1; k < L; k++) if (Math.min(h[k * C + a], h[k * C + b]) >= THIN) { du[e] = u[e] - u[k * E + e]; break; }
+  }
+  const v = cellVector(mesh, du);
+  return Float64Array.from({ length: C }, (_, i) => v[3 * i] ** 2 + v[3 * i + 1] ** 2 + v[3 * i + 2] ** 2);
+}
+
+/*
+ * A 20 m mixed layer moving east at 0.5 m/s over a still 60 m class,
+ * its buoyancy step set cell by cell so that the bulk Richardson number
+ * Δb·h/|Δu|² is 0.4 wherever the shear is at least 0.2 m²/s², and far
+ * above Ri_c elsewhere. The two waters differ along the one direction
+ * in which the quadratic equation of state is linear, so mixing them
+ * keeps the buoyancy step in proportion to the mixed layer's share.
+ */
+const RIC = 0.65, PWP = { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 35, densities: [1026.5, 1027.5], salinities: [35, 35], bottoms: [80, 12000], restoreTime: 1e30, carryMomentum: true, shearEntrainment: RIC, minimumThickness: 5, shallowestMixedDepth: 5, mixedDepth: 20 };
+function pwpColumns(options = {}) {
+  const { a0, b0, lambda1, lambda2, nu, t0, s0 } = SEAWATER, g = 9.81, rho0 = 1025;
+  const ocean = createOcean(mesh, { ...PWP, ...options }), { h, Q, W, u, eta, D } = ocean;
+  const t1 = labelTemperature(1026.5, 35), ta = t1 - t0, sa = 35 - s0;
+  const rhoT = -a0 * (1 + lambda1 * ta) - nu * sa, rhoS = b0 * (1 - lambda2 * sa) - nu * ta;
+  const r = (-nu + Math.sqrt(nu * nu - a0 * lambda1 * b0 * lambda2)) / (a0 * lambda1);
+  const east = zonalWindOnEdges(mesh, () => 0.5), v = cellVector(mesh, east), shear = Float64Array.from({ length: C }, (_, i) => v[3 * i] ** 2 + v[3 * i + 1] ** 2 + v[3 * i + 2] ** 2);
+  const surfaceT = new Float64Array(C), ice = new Float64Array(C);
+  ocean.initialize(new Float64Array(C).fill(t1), ice);
+  for (let i = 0; i < C; i++) {
+    const db = shear[i] >= 0.2 ? 0.4 * (shear[i] + 1e-12) / 20 : 40 * (shear[i] + 1e-12) / 20 + 0.01, x = db * rho0 / g / (r * rhoT + rhoS);
+    const tm = t1 - r * x, sm = 35 - x;
+    h[i] = 20; h[C + i] = 60; h[2 * C + i] = D[i] - 80;
+    Q[i] = 20 * tm; W[i] = 20 * sm; Q[C + i] = 60 * t1; W[C + i] = 60 * 35;
+    Q[2 * C + i] = h[2 * C + i] * labelTemperature(1027.5, 35); W[2 * C + i] = h[2 * C + i] * 35;
+    eta[i] = 0; surfaceT[i] = tm;
+  }
+  ocean.load(ocean.serialize(), surfaceT, ice);
+  u.fill(0);
+  u.set(east);
+  ocean.setStress(new Float64Array(E), ice);
+  ocean.readSurface(surfaceT, ice);
+  const entraining = new Set([...Array(C).keys()].filter((i) => shear[i] >= 0.2));
+  const inner = [...entraining].filter((i) => [...Array(mesh.nEdgesOnCell[i]).keys()].every((m) => entraining.has(mesh.cellsOnCell[mesh.maxEdges * i + m])));
+  return { ocean, surfaceT, ice, shear, inner, rib: (i) => g * (1026.5 - seawaterDensity(ocean.Q[i] / ocean.h[i], ocean.W[i] / ocean.h[i])) / rho0 * ocean.h[i] / (baseShear(ocean)[i] + 1e-12) };
+}
+const columnSums = (ocean) => [ocean.h, ocean.Q, ocean.W].map((store) => Array.from({ length: C }, (_, i) => { let s = 0, size = 0; for (let k = 0; k < ocean.layers; k++) { s += store[k * C + i]; size += Math.abs(store[k * C + i]); } return [s, size]; }));
+
+test('under shearEntrainment a mixed layer whose bulk Richardson number is below Ri_c takes in the class beneath to h·√(Ri_c/Ri_b) in one step, which the exchange of momentum brings to Ri_c, so that a second step takes nothing; columns keep their water, heat and salt and edges their momentum', () => {
+  const column = pwpColumns(), { ocean, inner } = column, dt = 1350;
+  const before = inner.map((i) => column.rib(i)), sums = columnSums(ocean), start = { h: Float64Array.from(ocean.h), u: Float64Array.from(ocean.u), eta: Float64Array.from(ocean.eta) };
+  ocean.mixedLayer(dt);
+  const expected = 20 * Math.sqrt(RIC / 0.4);
+  let closed = 0, ideal = 0, ri = 0, taken = 0;
+  inner.forEach((i, n) => {
+    closed = Math.max(closed, Math.abs(ocean.h[i] - 20 * Math.sqrt(RIC / before[n])));
+    ideal = Math.max(ideal, Math.abs(ocean.h[i] - expected));
+    ri = Math.max(ri, Math.abs(column.rib(i) - RIC));
+    taken = Math.max(taken, Math.abs(ocean.sheared[i] - (ocean.h[i] - 20)));
+  });
+  const after = columnSums(ocean);
+  const kept = Math.max(...after.flatMap((cells, n) => cells.map(([s], i) => Math.abs(s - sums[n][i][0]) / sums[n][i][1])));
+  const before2 = Float64Array.from(ocean.h);
+  ocean.mixedLayer(dt);
+  const second = Math.max(...inner.map((i) => ocean.h[i] - before2[i]));
+  const momentum = (() => { const a = columnMomentum(mesh, ocean.layers, start, ocean.D), b = columnMomentum(mesh, ocean.layers, ocean, ocean.D); let worst = 0; for (let e = 0; e < E; e++) worst = Math.max(worst, Math.abs(b.momentum[e] - a.momentum[e]) / a.scale[e]); return worst; })();
+  console.log(`PWP: ${inner.length} cells at Ri_b 0.4 deepen 20 → ${ocean.h[inner[0]].toFixed(6)} m, to the closed form h₀√(Ri_c/Ri_b) within ${closed.toExponential(2)} m (${expected.toFixed(6)} m within ${ideal.toExponential(2)}); Ri_b after the exchange of momentum ${RIC} within ${ri.toExponential(2)}; a second step takes ${second.toExponential(2)} m; columns keep water, heat and salt to ${kept.toExponential(2)}, edges their momentum to ${momentum.toExponential(2)} over both steps; sheared tallies the entrainment to ${taken.toExponential(2)} m`);
+  assert.ok(inner.length > 300, `${inner.length} cells`);
+  assert.ok(closed < 1e-12 && ideal < 1e-9, `h off the closed form by ${closed} m, off ${expected} by ${ideal} m`);
+  assert.ok(ri < 1e-9, `Ri_b after the exchange off Ri_c by ${ri}`);
+  assert.ok(second < 1e-9, `a second step took ${second} m`);
+  assert.ok(kept < 1e-12 && momentum < 1e-12 && taken < 1e-12, `columns ${kept}, momentum ${momentum}, tally ${taken}`);
+});
+
+test('shearEntrainment without carryMomentum throws: the base\'s Richardson number would never rise', () => {
+  assert.throws(() => createOcean(mesh, { shearEntrainment: RIC }), /carryMomentum/);
+  assert.throws(() => pwpColumns({ carryMomentum: false }), /carryMomentum/);
+});
+
+test('under shearEntrainment a 5 m mixed layer at 45°N over a stratification of N = 0.01 /s, the wind on it alone switched on and no interfacial drag, as the theory has none, deepens in half an inertial period to Pollard, Rhines and Thompson\'s 1.7u*/√(Nf), within a quarter, and without it stays 5 m deep', () => {
+  const step = 0.1, N2 = 1e-4, thick = step * 9.81 / (1025 * N2), n = 10, tau = 0.1, f45 = 2 * 7.2921e-5 * Math.SQRT1_2, steps = 24, dt = Math.PI / f45 / steps;
+  const densities = [...Array(n).keys()].map((k) => 1025.5 + step * k).concat([1027.5]);
+  const run = (shearEntrainment) => {
+    const ocean = createOcean(mesh, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 35, densities, salinities: densities.map(() => 35), bottoms: densities.map((_, k) => 100 + 100 * k), restoreTime: 1e30, carryMomentum: true, shearEntrainment, interfacialDrag: 0, momentumDepth: 5, minimumThickness: 5, shallowestMixedDepth: 5, stirring: 0, mixedDepth: 5 });
+    const { h, Q, W, eta, D } = ocean, L = ocean.layers, tm = labelTemperature(1025.5 - step / 2, 35);
+    const surfaceT = new Float64Array(C).fill(tm), ice = new Float64Array(C), flux = new Float64Array(C);
+    ocean.initialize(surfaceT, ice);
+    for (let i = 0; i < C; i++) {
+      h[i] = 5; Q[i] = 5 * tm; W[i] = 5 * 35; eta[i] = 0;
+      for (let k = 1; k < L; k++) { h[k * C + i] = k < L - 1 ? thick : D[i] - 5 - n * thick; Q[k * C + i] = h[k * C + i] * labelTemperature(densities[k - 1], 35); W[k * C + i] = h[k * C + i] * 35; }
+    }
+    ocean.load(ocean.serialize(), surfaceT, ice);
+    const stress = zonalWindOnEdges(mesh, () => tau);
+    for (let s = 0; s < steps; s++) ocean.advance(surfaceT, ice, flux, stress, dt);
+    const band = [...Array(C).keys()].filter((i) => Math.abs(mesh.latCell[i] / DEG - 45) < 5).map((i) => ocean.h[i]).sort((a, b) => a - b);
+    return band[band.length >> 1];
+  };
+  const prt = 1.7 * Math.sqrt(tau / 1025) / Math.sqrt(Math.sqrt(N2) * f45), deepened = run(RIC), still = run(0);
+  console.log(`PRT: under a ${tau} N/m² wind over N = ${Math.sqrt(N2)} /s, half an inertial period at 45°N takes the 5 m mixed layer to ${deepened.toFixed(2)} m against 1.7u*/√(Nf) = ${prt.toFixed(2)} m; without shearEntrainment it is ${still.toFixed(2)} m`);
+  assert.ok(Math.abs(deepened / prt - 1) < 0.25, `${deepened} m against ${prt} m`);
+  assert.ok(Math.abs(still - 5) < 0.5, `without shear entrainment the layer is ${still} m`);
+});
+
+test('at shearEntrainment 0 the ocean steps as without the option, bit for bit, over 48 steps from the analytic start', () => {
+  const run = (options) => {
+    const { ocean, surfaceT, ice, flux } = uniformOcean({ penetration: 'IB', carryMomentum: true, minimumThickness: 10, shallowestMixedDepth: 10, refillRate: 24 / 86400, ...options });
+    const stress = zonalWindOnEdges(mesh, (lat) => -0.1 * Math.cos(3 * lat));
+    for (let n = 0; n < 48; n++) { for (let i = 0; i < C; i++) surfaceT[i] = 278 + 2 * Math.cos(mesh.latCell[i]) - 0.01 * n; ocean.advance(surfaceT, ice, flux, stress, 1350); }
+    return ocean;
+  };
+  const off = run({ shearEntrainment: 0 }), plain = run({});
+  for (const name of ['h', 'u', 'Q', 'W', 'eta']) assert.deepEqual(off[name], plain[name], `${name} at shearEntrainment 0 is the default's`);
 });

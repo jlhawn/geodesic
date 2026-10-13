@@ -204,6 +204,52 @@ test('in double precision the mixed layer\'s refill under refillRate keeps each 
 });
 
 /*
+ * spunUp's sea under 10 m floors with shear entrainment, its mixed
+ * layers within 30° of the equator given another 0.4 m/s eastward so
+ * that their bases are sheared past Ri_c.
+ */
+const SHEARED = { ...CARRIED, shearEntrainment: 0.65, minimumThickness: 10, shallowestMixedDepth: 10 };
+function sheared() {
+  const sea = spunUp(SPINUP, SHEARED), { u } = sea.ocean;
+  for (let e = 0; e < E; e++) {
+    if (Math.abs(mesh.latEdge[e]) > 30 * DEG) continue;
+    const x = mesh.xEdge[3 * e], y = mesh.xEdge[3 * e + 1], r = Math.hypot(x, y) || 1e-12;
+    u[e] += 0.4 * ((-y / r) * mesh.nEdge[3 * e] + (x / r) * mesh.nEdge[3 * e + 1]);
+  }
+  return sea;
+}
+
+test('in double precision the mixed layer\'s shear entrainment keeps each column\'s heat, salt and water and each edge\'s momentum', async () => {
+  const { ocean, surfaceT, ice, flux, stress } = sheared();
+  ocean.setStress(stress, ice);
+  const snapshot = async () => ({ h: Float64Array.from(ocean.h), q: Float64Array.from(ocean.Q, (q, n) => q - HEAT_REFERENCE * ocean.h[n]), w: Float64Array.from(ocean.W), u: Float64Array.from(ocean.u), eta: Float64Array.from(ocean.eta), pen: Float64Array.from(ocean.penetrated) });
+  const entraining = [];
+  const record = await follow([
+    ['readSurface', () => ocean.readSurface(surfaceT, ice)],
+    ['dynamics', () => ocean.phases.dynamics(DT)],
+    ['rescale', () => ocean.phases.rescale()],
+    ['eddy', () => ocean.phases.eddy(DT)],
+    ['shift', () => ocean.phases.shift()],
+    ['mixedLayer', () => {
+      const before = Float64Array.from(ocean.sheared);
+      ocean.mixedLayer(DT);
+      entraining.push(ocean.sheared.filter((x, i) => x > before[i]).length);
+    }],
+    ['salt and surface', () => { ocean.salt(); ocean.writeSurface(surfaceT, flux, DT); }],
+  ], snapshot, 4, ocean.layers, ocean.rhoCp, ocean.D);
+  report('CPU sheared', { mixedLayer: record.mixedLayer });
+  for (const [name, rows] of Object.entries(record)) {
+    const [heat, salt] = kept(name);
+    assert.ok(largest(rows, heat) < 1e-6, `${name}: heat ${largest(rows, heat)} W/m²`);
+    assert.ok(largest(rows, salt) < 1e-9, `${name}: salt ${largest(rows, salt)} psu·m`);
+    if (name !== 'rescale') assert.ok(largest(rows, volume) < 1e-12, `${name}: volume ${largest(rows, volume)} m`);
+  }
+  console.log(`CPU sheared: ${entraining.join(', ')} of ${C} cells entrained by shear in the four mixed-layer steps`);
+  assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-12, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
+  assert.ok(entraining[0] > 100, `${entraining[0]} cells entrained`);
+});
+
+/*
  * A GPU ocean holding a CPU ocean's sea, uploaded from its h·T and h·S
  * as a file from before Qref and Wref would be, the surface it last
  * wrote in the atmosphere's buffers and its wind on the sea; `stores`
@@ -401,6 +447,15 @@ test('with carryMomentum the GPU mixed layer\'s exchanges keep each edge\'s colu
   sea.model.destroy();
   report('GPU carried', { mixedLayer: record.mixedLayer });
   within('GPU carried', record, { mixedLayer: GPU_FLOORS.mixedLayer });
+  assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-5, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
+});
+
+test('under shearEntrainment the GPU mixed layer\'s entrainment keeps heat, salt, volume and each edge\'s column momentum to single-precision rounding', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const sea = await onGpu(sheared());
+  const record = await sea.follow(8);
+  sea.model.destroy();
+  report('GPU sheared', { mixedLayer: record.mixedLayer });
+  within('GPU sheared', record, { mixedLayer: GPU_FLOORS.mixedLayer });
   assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-5, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
 });
 

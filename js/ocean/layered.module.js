@@ -69,7 +69,14 @@ import { profileAt } from './climatology.module.js';
  * season's buoyancy loss, not a whole class at a time where the surface
  * water crosses a label; and it entrains the layer below at the Kraus–Turner
  * wind-stirring rate, the stirring fading with depth over
- * `stirringDepth`. It deepens within `maximumMixedDepth` and, when
+ * `stirringDepth`. With `shearEntrainment` a critical bulk Richardson
+ * number Ri_c, it first takes in the class beneath to h₀√(Ri_c/Ri_b), at
+ * most that class in a step, where Ri_b = Δb h₀/|Δu|² and Δu is the
+ * cell's reconstruction of each edge's velocity less that of its first
+ * class at least THIN thick (Price, Weller and Pinkel 1986); the exchange
+ * of `carryMomentum`, which it needs, then brings Ri_b to Ri_c, and a
+ * retreat in the same step stops at that depth. It deepens within
+ * `maximumMixedDepth` and, when
  * `mixedNeighbourRatio` is set, within that multiple of the mean depth of
  * the neighbouring mixed layers. Otherwise it holds its depth,
  * convectively neutral or not: it detrains at once what lies beyond the
@@ -803,7 +810,7 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
-  momentumDepth = 50, carryMomentum = false, refillRate = 0, refillFloor = 5,
+  momentumDepth = 50, carryMomentum = false, refillRate = 0, refillFloor = 5, shearEntrainment = 0,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = null,
   geography = null, bathymetry = null, buffers = null, climatology = null,
@@ -815,6 +822,7 @@ export function createOcean(mesh, {
   } = mesh;
   if (climatology && typeof climatology.columnAt !== 'function') throw new Error('the ocean climatology must be decoded (loadClimatology in ./climatology.module.js) before the ocean is built');
   if (penetration !== null && !JERLOV[penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${penetration}`);
+  if (shearEntrainment > 0 && !carryMomentum) throw new Error('shearEntrainment needs carryMomentum: without the entrained water\'s momentum mixed in, the base\'s Richardson number never rises and the mixed layer swallows a class a step');
   const L = densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = [rho0, ...densities];
   const labelS = [referenceS, ...salinities];
@@ -863,6 +871,7 @@ export function createOcean(mesh, {
   if (!adopting) { params[0] = 1 / 3600; params[1] = 3600; }
   const tauCell = new Float64Array(3 * C), reach = new Float64Array(C).fill(Infinity), buoyancyLoss = new Float64Array(C);
   const refilled = { water: new Float64Array(C), heat: new Float64Array(C) };
+  const sheared = new Float64Array(C), retreatDepth = new Float64Array(C), baseShear = shearEntrainment > 0 ? new Float64Array(E) : null, shearCell = shearEntrainment > 0 ? new Float64Array(3 * C) : null;
   const lightest = rho.map((r, k) => r - 0.5 * (k > 1 ? r - rho[k - 1] : rho[k + 1] - r));
   const densest = rho.map((r, k) => r + 0.5 * (k < L - 1 ? rho[k + 1] - r : r - rho[k - 1]));
   let counter = 0, limited = 0, initialised = false, layerRunner = null;
@@ -1327,9 +1336,19 @@ export function createOcean(mesh, {
     }
   }
 
+  function baseShears() {
+    for (let e = 0; e < E; e++) {
+      let j = 0;
+      if (edgeOcean[e]) for (let k = 1; k < L; k++) if (hEdge[ae(k, e)] >= THIN) { j = k; break; }
+      baseShear[e] = j > 0 ? u[e] - u[ae(j, e)] : 0;
+    }
+    cellVector(mesh, baseShear, shearCell);
+  }
+
   function mixedLayer(dt) {
     if (carryMomentum) edgeThicknesses(h);
     cellVector(mesh, stress, tauCell);
+    if (shearEntrainment > 0) baseShears();
     if (mixedNeighbourRatio > 0) neighbourReach();
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
@@ -1350,8 +1369,19 @@ export function createOcean(mesh, {
         if (take > 0) { move(i, k, 0, take); budget -= take; rm = eos(Q[i] / h[i], W[i] / h[i]); }
         if (eroding) break;
       }
-      let below = -1;
+      let below = -1, hold = 0;
       for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) { below = k; break; }
+      if (shearEntrainment > 0 && below > 0) {
+        const h0 = h[i], shear = shearCell[3 * i] ** 2 + shearCell[3 * i + 1] ** 2 + shearCell[3 * i + 2] ** 2;
+        const db = Math.max(g * (rho[below] - rm) / rho0, g * DENSITY_TOLERANCE / rho0), ri = db * h0 / (shear + 1e-12);
+        if (ri < shearEntrainment) {
+          const reached = h0 * Math.sqrt(shearEntrainment / ri), take = Math.min(reached - h0, h[at(below, i)] - EPS, deepest - h0);
+          if (take > 0) { move(i, below, 0, take); sheared[i] += take; rm = eos(Q[i] / h[i], W[i] / h[i]); }
+          hold = Math.min(reached, h[i]);
+          below = -1;
+          for (let k = 1; k < L; k++) if (h[at(k, i)] > THIN) { below = k; break; }
+        }
+      }
       if (below > 0 && h[i] < deepest) {
         const db = Math.max(1e-3, g * (rho[below] - rm) / rho0);
         const entrain = Math.min(2 * stir * ustar3 / (h[i] * db) * dt, h[at(below, i)] - EPS, reach[i] - h[i]);
@@ -1363,8 +1393,10 @@ export function createOcean(mesh, {
       if (neutralSnap && below > 0 && rm >= rho[below] - DENSITY_TOLERANCE) excess = Math.max(excess, h[i] - shallowestMixedDepth);
       detrain(i, excess, rm);
       if (h[i] > reach[i]) detrain(i, (h[i] - Math.max(reach[i], shallowestMixedDepth)) * Math.min(1, dt / detrainmentTime), rm);
+      retreatDepth[i] = 0;
       if (buoyancyLoss[i] < -1e-9) {
-        const monin = Math.max(shallowestMixedDepth, 2 * stir * ustar3 / -buoyancyLoss[i]);
+        retreatDepth[i] = 2 * stir * ustar3 / -buoyancyLoss[i];
+        const monin = Math.max(shallowestMixedDepth, retreatDepth[i], hold);
         if (h[i] > monin) detrain(i, (h[i] - monin) * Math.min(1, dt / detrainmentTime), rm);
       }
       if (h[i] < minimumThickness) {
@@ -1740,5 +1772,5 @@ export function createOcean(mesh, {
   initialised = false;
   const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, hEdge: hEdge.buffer, stressDepth: stressDepth.buffer, stressLayer: stressLayer.buffer, stressFraction: stressFraction.buffer, deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, avgU, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, retreatDepth, avgU, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }
