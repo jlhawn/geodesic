@@ -652,11 +652,11 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
 }`,
     oVelocityShiftClamp: `${K}  let e = ${idx}; if (e >= E) { return; }
   if (OD[O_EMASK + e] < 0.5) { return; }
+  for (var k = 1; k < L; k++) { if (OD[O_HEDGE + k * E + e] < THINO) { IN[uOff(k) + e] = IN[uOff(k - 1) + e]; } }
   var sumH = 0.0; var transport = 0.0;
   for (var k = 0; k < L; k++) { let he = OD[O_HEDGE + k * E + e]; sumH += he; transport += he * IN[uOff(k) + e]; }
   let shift = (OD[B_BAVG + C + e] - transport) / max(sumH, EPSO);
   for (var k = 0; k < L; k++) { let n = uOff(k) + e; IN[n] = clamp(IN[n] + shift, -SPEEDLIM, SPEEDLIM); }
-  for (var k = 1; k < L; k++) { if (OD[O_HEDGE + k * E + e] < THINO) { IN[uOff(k) + e] = IN[uOff(k - 1) + e]; } }
 }`,
     /*
      * The mixed layer's momentum through its exchanges, exchangeMomentum

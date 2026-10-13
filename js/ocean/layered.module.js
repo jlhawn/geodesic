@@ -1218,11 +1218,11 @@ export function createOcean(mesh, {
     for (let e = 0; e < E; e++) {
       if (!edgeOcean[e]) continue;
       let sumH = 0, transport = 0, clamped = false;
+      for (let k = 1; k < L; k++) if (hEdge[ae(k, e)] < THIN) u[ae(k, e)] = u[ae(k - 1, e)];
       for (let k = 0; k < L; k++) { sumH += hEdge[ae(k, e)]; transport += hEdge[ae(k, e)] * u[ae(k, e)]; }
       const shift = (avgU[e] - transport) / Math.max(sumH, EPS);
       for (let k = 0; k < L; k++) { const n = ae(k, e); u[n] += shift; if (Math.abs(u[n]) > SPEED_LIMIT) { u[n] = Math.sign(u[n]) * SPEED_LIMIT; clamped = true; } }
       if (clamped) limited++;
-      for (let k = 1; k < L; k++) if (hEdge[ae(k, e)] < THIN) u[ae(k, e)] = u[ae(k - 1, e)];
     }
   }
   function step(dt) {
