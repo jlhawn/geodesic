@@ -188,7 +188,7 @@ while (done < YEARS * DAYS_PER_YEAR) {
   while (step < perDay) {
     const stepped = forced.step(dt, RESTORE);
     step++; taken++;
-    if (stepped && ++oceanSteps % 8 === 0) await model.settle();
+    if (stepped && ++oceanSteps % 8 === 0) await model.settleBehind();
     if (stepped && halted()) break;
   }
   if (step < perDay) break;

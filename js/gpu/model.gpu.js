@@ -105,7 +105,7 @@ export async function createGpuModel(gridOrMesh, {
   };
   const lengths = [C, K * C, K * E, C, K * C, K * C, C];
   const state = lengths.map((n) => new Float64Array(n));
-  let dirty = true, lastFrameTime = 0, lastFrameStep = 0;
+  let changes = 1, mirrored = 0, reading = null, lastFrameTime = 0, lastFrameStep = 0;
 
   const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, subgridOrography: subgrid, exchange, surfaceGeopotential: phis, state, time: 0, energyRecord: createEnergyRecord(), physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
   const cumulusLength = gpu.layout.PH.CUWATER - gpu.layout.PH.CUCOVER;
@@ -121,7 +121,7 @@ export async function createGpuModel(gridOrMesh, {
     if (gpuOcean && ocean) gpuOcean.initialize(state[3], state[6], { climatology: null });
     lastFrameTime = model.time;
     lastFrameStep = gpu.stepCount;
-    dirty = false;
+    mirrored = ++changes;
   }
   /*
    * With `ocean` false the ocean on the device is left for the caller to
@@ -129,13 +129,22 @@ export async function createGpuModel(gridOrMesh, {
    */
   model.load = function load({ ocean = true } = {}) { pushState(ocean); };
 
-  async function sync() {
-    if (!dirty) return;
-    const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, shortwaveEffect, longwaveEffect, depth, mixingTop, regime, buoyancy, evaporation, fog, cumulusCover, cumulusWater, subcloudVirtual], [windSpeed]] = await Promise.all([gpu.download(), readRanges(gpu.device, gpu.buffers.PH, [...['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'SWCREMEAN', 'LWCREMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY', 'EVAP', 'FOGMEAN'].map((name) => ({ offset: gpu.layout.PH[name], length: C })), ...['CUCOVER', 'CUWATER'].map((name) => ({ offset: gpu.layout.PH[name], length: cumulusLength })), { offset: gpu.layout.PH.SUBTV, length: model.moist.subcloudVirtual.length }]), readRanges(gpu.device, gpu.buffers.D, [{ offset: gpu.layout.D.WIND, length: C }])]);
-    if (exchange) {
-      const [heat, wind] = await readRanges(gpu.device, gpu.buffers.PH, ['HEATX', 'XWIND'].map((name) => ({ offset: gpu.layout.PH[name], length: C })));
-      if (!exchange.fixed) exchange.heat.set(heat);
-      exchange.wind.set(wind);
+  /*
+   * Every read is queued at the call, so steps queued behind it leave what
+   * it reads unchanged: the mirrors take the device as it stood then,
+   * unless a read queued later has landed first.
+   */
+  function sync() {
+    if (mirrored === changes) return Promise.resolve();
+    if (!reading || reading.at !== changes) reading = { at: changes, done: mirror(changes, [gpu.download(), readRanges(gpu.device, gpu.buffers.PH, [...['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'SWCREMEAN', 'LWCREMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY', 'EVAP', 'FOGMEAN'].map((name) => ({ offset: gpu.layout.PH[name], length: C })), ...['CUCOVER', 'CUWATER'].map((name) => ({ offset: gpu.layout.PH[name], length: cumulusLength })), { offset: gpu.layout.PH.SUBTV, length: model.moist.subcloudVirtual.length }]), readRanges(gpu.device, gpu.buffers.D, [{ offset: gpu.layout.D.WIND, length: C }]), exchange ? readRanges(gpu.device, gpu.buffers.PH, ['HEATX', 'XWIND'].map((name) => ({ offset: gpu.layout.PH[name], length: C }))) : null]) };
+    return reading.done;
+  }
+  async function mirror(at, reads) {
+    const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, shortwaveEffect, longwaveEffect, depth, mixingTop, regime, buoyancy, evaporation, fog, cumulusCover, cumulusWater, subcloudVirtual], [windSpeed], exchanged] = await Promise.all(reads);
+    if (at <= mirrored) return;
+    if (exchanged) {
+      if (!exchange.fixed) exchange.heat.set(exchanged[0]);
+      exchange.wind.set(exchanged[1]);
     }
     arrays.forEach((a, i) => state[i].set(a));
     seaIce.concentration.set(concentration);
@@ -159,7 +168,7 @@ export async function createGpuModel(gridOrMesh, {
     model.moist.subcloudVirtual.set(subcloudVirtual);
     model.moist.cumulusWater.set(cumulusWater);
     surfaceCpu.windSpeed.set(windSpeed);
-    dirty = false;
+    mirrored = at;
   }
   model.sync = sync;
 
@@ -167,7 +176,7 @@ export async function createGpuModel(gridOrMesh, {
     await gpu.stepModel(dt, model.time);
     landCpu?.advance(dt);
     model.time += dt;
-    dirty = true;
+    changes++;
   };
   /*
    * `count` steps recorded exactly as `step` queues them, submitted
@@ -176,7 +185,7 @@ export async function createGpuModel(gridOrMesh, {
    * recording, and whatever it records through the core lands after that
    * step in the same submission. The mirrors stay lazy, as after `step`.
    * With `wait` false it resolves once the batch is submitted, as `step`
-   * does, and `settle` waits for it.
+   * does, and `settle` or `settleBehind` waits for it.
    */
   model.stepBatch = async function stepBatch(count, dt, afterStep = null, wait = true) {
     const submissions = await gpu.batched(async () => {
@@ -187,11 +196,23 @@ export async function createGpuModel(gridOrMesh, {
         if (afterStep) afterStep();
       }
     });
-    dirty = true;
+    changes++;
     if (wait) await gpu.device.queue.onSubmittedWorkDone();
     return submissions;
   };
   model.settle = () => gpu.device.queue.onSubmittedWorkDone();
+  /*
+   * Resolves once the device has finished what was queued before the
+   * previous call: a host that calls it after queuing each batch of steps
+   * records the next batch while the device runs this one, with at most
+   * two batches queued.
+   */
+  let behind = Promise.resolve();
+  model.settleBehind = function settleBehind() {
+    const before = behind;
+    behind = gpu.device.queue.onSubmittedWorkDone();
+    return before;
+  };
   model.destroy = () => { for (const buffer of [...Object.values(gpu.buffers), ...(gpuOcean ? Object.values(gpuOcean.buffers) : [])]) buffer.destroy(); };
 
   /*
@@ -218,7 +239,7 @@ export async function createGpuModel(gridOrMesh, {
     const keepVertical = vertical && verticalLevel === level ? Math.exp(-Math.max(0, interval) / VERTICAL_MEMORY) : 0;
     verticalLevel = vertical ? level : null;
     const rainScale = summarize && interval > 0 ? 86400 / interval : 0, meanScale = summarize && steps > 0 ? 1 / steps : 0;
-    if (rainScale || meanScale) dirty = true;
+    if (rainScale || meanScale) changes++;
     const atmosphere = gpu.frame({ pressure: level === 'surface' ? 0 : 100 * level, keep: Math.exp(-Math.max(0, interval) / RAIN_MEMORY), keepVertical, fields, diagnostics: summarize, rainScale, meanScale });
     if (gpuOcean) { gpuOcean.forgetAccumulated('rain'); gpuOcean.forgetAccumulated('runoff'); }
     const ocean = gpuOcean ? gpuOcean.frame({ fields, diagnostics: summarize, depth: depth === 'surface' ? 0 : Number(depth) }) : null;

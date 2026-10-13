@@ -77,8 +77,9 @@
 // distance between cell centres),
 // RECORD (a directory to write each day's ocean and sea-ice forcing into as
 // forcing-DDDD.bin, see js/forcing.module.js), BATCH (1: the steps are queued
-// one at a time, waiting every eighth; more: that many steps go to the
-// GPU in one submission, byte-identical, for drivers where submitting
+// one at a time, and every eighth waits for the device to finish the eight
+// before; more: that many steps go to the GPU in one submission, each
+// waiting for the one before, byte-identical, for drivers where submitting
 // costs more than it does on Metal), LEVELS (bl36: the sigma grid of a
 // fresh start, one of SIGMA_GRIDS in js/dynamics/sigmaCore.module.js; a
 // run continues on its snapshot's grid), OCEAN_FROM (a state of the same
@@ -279,10 +280,11 @@ const PH = model.gpu.layout.PH;
 const split = { convective: new Float64Array(C), largeScale: new Float64Array(C), wet: new Float64Array(C), seconds: 0 };
 let splitTime = model.time;
 const readSplit = async () => {
-  const [convective, largeScale, fog] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.CONVMEAN, length: C }, { offset: PH.CONDMEAN, length: C }, { offset: PH.FOGMEAN, length: C }]);
+  const time = model.time, read = readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.CONVMEAN, length: C }, { offset: PH.CONDMEAN, length: C }, { offset: PH.FOGMEAN, length: C }]);
+  const [convective, largeScale, fog] = await read;
   split.fog = fog;
-  const seconds = model.time - splitTime, days = seconds / 86400;
-  splitTime = model.time;
+  const seconds = time - splitTime, days = seconds / 86400;
+  splitTime = time;
   if (!(seconds > 0)) return;
   for (let i = 0; i < C; i++) { split.convective[i] += days * convective[i]; split.largeScale[i] += days * largeScale[i]; if (convective[i] > 0) split.wet[i] += days; }
   split.seconds += seconds;
@@ -363,57 +365,92 @@ function stratosphereLine(day) {
 const band = (b) => `${Math.abs(b.from)}${b.from > 0 ? 'N' : b.from < 0 ? 'S' : ''}–${Math.abs(b.to)}${b.to > 0 ? 'N' : b.to < 0 ? 'S' : ''}`;
 const change = ([before, after], digits) => `${before.toFixed(digits)} → ${after.toFixed(digits)}`;
 const jumpLine = (day, r) => `land jump at the end of day ${day} (record ${r.age < 0 ? 'taken over (exponential means)' : `${(r.age / 86400).toFixed(2)} days`}): land means trees ${change(r.global.trees, 3)}, topsoil carbon ${change(r.global.carbon, 2)} kg/m², dry soil albedo ${change(r.global.dry, 3)}, land albedo ${change(r.global.albedo, 3)}; by band (share of the land: trees, carbon, land albedo) ${r.bands.map((b) => `${band(b)} (${b.share.toFixed(3)}: ${change(b.trees, 2)}, ${change(b.carbon, 1)}, ${change(b.albedo, 3)})`).join(', ')}`;
-let landAge = model.land.record[0];
-for (;;) {
-  if (BATCH === 1) {
-    while (step < perDay) {
-      budgetArmed = !!budget && (step + 1) % (perDay / TOP_BUDGET) === 0;
-      await model.step(dt); recorder?.step(); step++; taken++;
-      if (budgetArmed) { await model.sync(); budget.sample(state); budgetArmed = false; }
-      if (step % 8 === 0) await model.settle();
-      if (halted() && step % cadence === 0) break;
-    }
-  } else {
-    while (step < perDay) {
-      const count = Math.min(BATCH, perDay - step);
-      await model.stepBatch(count, dt, recorder ? () => recorder.step() : null);
-      step += count; taken += count;
-      if (halted() && step % cadence === 0) break;
-    }
-  }
-  if (step < perDay) break;
-  const [absorbedSum, atmosphereSum, longwaveSum] = await readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.ABSSUM, length: C }, { offset: PH.ATMSUM, length: C }, { offset: PH.LWSFCSUM, length: C }]);
-  let seaSolar = 0, seaLongwave = 0, seaArea = 0;
-  for (let i = 0; i < C; i++) if (!land[i]) { seaSolar += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); seaLongwave += mesh.areaCell[i] * longwaveSum[i]; seaArea += mesh.areaCell[i]; }
-  const stepsToday = perDay - dayStart;
-  seaSolar /= seaArea * stepsToday;
-  seaLongwave /= seaArea * stepsToday;
-  step = 0; dayStart = 0;
-  day++;
-  const d = await model.diagnostics();
-  model.energyRecord.add(day, stepsToday === perDay && d.meanSteps === perDay ? { asr: d.absorbedSolar, olr: d.outgoingLongwave, ts: d.meanSurfaceT } : null);
-  await readSplit();
+/*
+ * A day's end queues the reads of the day's numbers and resolves, once
+ * the forcing recorder has written and cleared its day (it takes the
+ * land's runoff from the diagnostics, so it waits for them), to `landed`,
+ * which logs the day's lines as they arrive, and `ready`, after which the
+ * next day's steps may be queued behind those reads: at once, unless a
+ * land jump must read and rewrite the land or the top budget is kept.
+ */
+async function dayEnd(day, stepsToday, jump) {
+  const time = model.time;
+  const sums = readRanges(model.gpu.device, model.gpu.buffers.PH, [{ offset: PH.ABSSUM, length: C }, { offset: PH.ATMSUM, length: C }, { offset: PH.LWSFCSUM, length: C }]);
+  const diagnosed = model.diagnostics(), splitRead = readSplit();
   if (recorder) {
+    await diagnosed;
     const file = `${RECORD}/${forcingName(day)}`;
     writeFileSync(`${file}.partial`, await recorder.day(day));
     renameSync(`${file}.partial`, file);
     hook.after(file);
   }
-  const [north, south, iceNow] = await iceArea();
-  const iceSolar = [0, 0], icedArea = [0, 0];
-  for (let i = 0; i < C; i++) if (!land[i] && iceNow[i] > 0 && Math.abs(mesh.latCell[i] * deg) >= 60) { const s = mesh.latCell[i] > 0 ? 0 : 1; iceSolar[s] += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); icedArea[s] += mesh.areaCell[i]; }
-  const iceSurface = iceSolar.map((x, s) => (icedArea[s] > 0 ? x / (icedArea[s] * stepsToday) : 0));
-  iceNorth += north; iceSouth += south;
-  const minutes = (performance.now() - start) / 60000;
-  log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ${fogLine()}, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}; balance ${balanceLine(model.energyRecord)} W/m²`);
-  log(await lowestCloudLine(day));
-  if (STRATOSPHERE) { await model.sync(); log(stratosphereLine(day)); log(upperWindLine(mesh, levels, state, dt, day)); }
-  if (budget) { await model.sync(); log(budget.line(day, state, model.time)); }
-  if (!Number.isFinite(d.meanSurfaceT) || !Number.isFinite(d.maxWind) || !Number.isFinite(d.oceanSpeed)) { log(`NaN on day ${day}; stopping`); await hook.drain(); process.exit(2); }
-  if (jumpDays.includes(day) || (LAND_JUMPS === 'fresh' && freshJumpDue(model.land.record, landAge, model.land.record[0]))) log(jumpLine(day, await model.land.jump()));
-  landAge = model.land.record[0];
-  if (minutes >= MINUTES || day >= DAYS || halted()) break;
+  const ice = iceArea(), lowest = lowestCloudLine(day), synced = STRATOSPHERE || budget ? model.sync() : null;
+  const landed = (async () => {
+    const [absorbedSum, atmosphereSum, longwaveSum] = await sums;
+    let seaSolar = 0, seaLongwave = 0, seaArea = 0;
+    for (let i = 0; i < C; i++) if (!land[i]) { seaSolar += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); seaLongwave += mesh.areaCell[i] * longwaveSum[i]; seaArea += mesh.areaCell[i]; }
+    seaSolar /= seaArea * stepsToday;
+    seaLongwave /= seaArea * stepsToday;
+    const d = await diagnosed;
+    model.energyRecord.add(day, stepsToday === perDay && d.meanSteps === perDay ? { asr: d.absorbedSolar, olr: d.outgoingLongwave, ts: d.meanSurfaceT } : null);
+    await splitRead;
+    const [north, south, iceNow] = await ice;
+    const iceSolar = [0, 0], icedArea = [0, 0];
+    for (let i = 0; i < C; i++) if (!land[i] && iceNow[i] > 0 && Math.abs(mesh.latCell[i] * deg) >= 60) { const s = mesh.latCell[i] > 0 ? 0 : 1; iceSolar[s] += mesh.areaCell[i] * (absorbedSum[i] - atmosphereSum[i]); icedArea[s] += mesh.areaCell[i]; }
+    const iceSurface = iceSolar.map((x, s) => (icedArea[s] > 0 ? x / (icedArea[s] * stepsToday) : 0));
+    iceNorth += north; iceSouth += south;
+    const minutes = (performance.now() - start) / 60000;
+    log(`day ${day} (${minutes.toFixed(1)} min): Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} (atmosphere ${d.atmosphereSolar.toFixed(1)}) OLR ${d.outgoingLongwave.toFixed(1)} W/m², ps ${(d.piMin / 100).toFixed(0)}–${(d.piMax / 100).toFixed(0)} hPa, max wind ${d.maxWind.toFixed(1)} m/s, precip ${(86400 * d.precipitation).toFixed(2)} mm/d, ${fogLine()}, ice ${(100 * d.iceFraction).toFixed(1)}% (N ${north.toFixed(1)} S ${south.toFixed(1)} Mkm²), albedo ${d.planetaryAlbedo.toFixed(3)}, ${d.shortwaveCloudEffect === undefined ? '' : `SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky reflectance ${(1 - d.clearAbsorbedSolar * (1 - d.planetaryAlbedo) / d.absorbedSolar).toFixed(4)}, `}sea surface shortwave ${seaSolar.toFixed(1)} net longwave ${seaLongwave.toFixed(1)} W/m² (iced cells poleward of 60°: N ${iceSurface[0].toFixed(1)} S ${iceSurface[1].toFixed(1)}), ocean h1 ${d.oceanUpperDepth.toFixed(0)} m, interior ${(d.oceanInteriorT - 273.15).toFixed(2)} °C, currents ≤ ${d.oceanSpeed.toFixed(2)} m/s, transport ${d.oceanTransport.toFixed(0)} Sv, clamped ${d.oceanLimited}; balance ${balanceLine(model.energyRecord)} W/m²`);
+    log(await lowest);
+    if (STRATOSPHERE) { await synced; await nextTurn(); log(stratosphereLine(day)); await nextTurn(); log(upperWindLine(mesh, levels, state, dt, day)); }
+    if (budget) { await synced; log(budget.line(day, state, time)); }
+    if (!Number.isFinite(d.meanSurfaceT) || !Number.isFinite(d.maxWind) || !Number.isFinite(d.oceanSpeed)) { log(`NaN on day ${day}; stopping`); await hook.drain(); process.exit(2); }
+    if (jump) log(jumpLine(day, await model.land.jump()));
+  })();
+  return { landed, ready: jump || budget ? landed : null };
 }
+/*
+ * The day's lines that take long to work out wait for the stepping to
+ * reach its next settle, so that each is worked out while the device runs
+ * the steps queued before it; outside the stepping they go at once.
+ */
+let stepping = false, turn = null;
+const nextTurn = () => (stepping ? (turn ??= Promise.withResolvers()).promise : Promise.resolve());
+function passTurn() { const held = turn; turn = null; held?.resolve(); }
+let landAge = model.land.record[0], ended = null;
+for (;;) {
+  stepping = true;
+  if (BATCH === 1) {
+    while (step < perDay) {
+      budgetArmed = !!budget && (step + 1) % (perDay / TOP_BUDGET) === 0;
+      await model.step(dt); recorder?.step(); step++; taken++;
+      if (budgetArmed) { await model.sync(); budget.sample(state); budgetArmed = false; }
+      if (step % 8 === 0) { await model.settleBehind(); passTurn(); }
+      if (halted() && step % cadence === 0) break;
+    }
+  } else {
+    while (step < perDay) {
+      const count = Math.min(BATCH, perDay - step);
+      await model.stepBatch(count, dt, recorder ? () => recorder.step() : null, false);
+      await model.settleBehind();
+      passTurn();
+      step += count; taken += count;
+      if (halted() && step % cadence === 0) break;
+    }
+  }
+  stepping = false;
+  passTurn();
+  if (step < perDay) break;
+  await ended?.landed;
+  const stepsToday = perDay - dayStart;
+  step = 0; dayStart = 0;
+  day++;
+  ended = await dayEnd(day, stepsToday, jumpDays.includes(day) || (LAND_JUMPS === 'fresh' && freshJumpDue(model.land.record, landAge, model.land.record[0])));
+  await ended.ready;
+  landAge = model.land.record[0];
+  if ((performance.now() - start) / 60000 >= MINUTES || day >= DAYS || halted()) break;
+}
+await ended?.landed;
 
 const partial = {};
 if (step) {
