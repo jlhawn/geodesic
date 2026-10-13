@@ -12,8 +12,9 @@
 // equinox, then the record; it refuses a checkpoint written by another
 // engine (other js/ contents) unless FORCE_RESUME=1, and stops if the
 // loaded state's stores differ from those saved.
-// WET_ICE (JSON, Part 7's dark ice by default) and OCEAN_OPTS (JSON merged
-// into the ocean options) set the options, over the checkpoint's on RESUME.
+// WET_ICE (JSON, Part 7's dark ice by default), OCEAN_OPTS (JSON merged
+// into the ocean options) and SURFACE_OPTS (JSON surface options, such as
+// warmLayer and coolSkin) set the options, over the checkpoint's on RESUME.
 import { writeFileSync, readFileSync, mkdirSync, renameSync, unlinkSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, basename, relative as relativeTo, resolve, isAbsolute } from 'node:path';
@@ -81,7 +82,7 @@ const base = resumed ? JSON.parse(resumed.optionsJson) : { ocean: { everySteps: 
 const ICE = process.env.WET_ICE ? JSON.parse(process.env.WET_ICE) : base.ice;
 const OCEAN = { ...base.ocean, ...JSON.parse(process.env.OCEAN_OPTS ?? '{}') };
 const cadence = withCadence({ ocean: OCEAN }, STEP, N);
-const options = { ocean: cadence.ocean, levels: sigmaInterfaces(GRID), radiation: { ...cadence.radiation, clearSkyPass: true }, dragEvery: cadence.dragEvery, ice: ICE };
+const options = { ocean: cadence.ocean, levels: sigmaInterfaces(GRID), radiation: { ...cadence.radiation, clearSkyPass: true }, dragEvery: cadence.dragEvery, ice: ICE, surface: JSON.parse(process.env.SURFACE_OPTS ?? '{}') };
 const runStartTime = resumed ? resumed.runStartTime : (Math.ceil(SPINUP_DAYS / 365) * 365 - SPINUP_DAYS) * DAY;
 const invocationStart = resumed ? resumed.time : runStartTime, recordStart = invocationStart + SPINUP_DAYS * DAY, end = RECORD_DAYS * DAY;
 if (Math.round(recordStart / DAY) % 365 !== 0) { console.error(`the checkpoint is at model day ${Math.round(invocationStart / DAY)}; a record must start on a March equinox, ${365 - (Math.round(invocationStart / DAY) % 365)} days on (or that plus whole years)`); process.exit(1); }
@@ -115,6 +116,7 @@ if (resumed) {
   if (model.exchange && resumed.exchangeHeat && !model.exchange.fixed) model.exchange.heat.set(resumed.exchangeHeat);
   if (model.exchange && resumed.exchangeWind) model.exchange.wind.set(resumed.exchangeWind);
   for (const field of ['cumulusCover', 'cumulusWater', 'subcloudVirtual']) model.moist[field].set(resumed[field]);
+  if (model.skin) model.skin.load(resumed);
   model.time = resumed.time;
   model.load({ ocean: false });
   model.ocean.load(resumed.ocean, surfaceT, ice);
@@ -412,7 +414,7 @@ async function saveCheckpoint(path, cloud) {
     convectiveRain: m.convectiveRain, largeScaleRain: m.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo,
     meanShortwaveCloudEffect: r.meanShortwaveCloudEffect, meanLongwaveCloudEffect: r.meanLongwaveCloudEffect, boundaryDepth: b.depth, mixingTop: b.mixingTop, boundaryRegime: b.regime, boundaryBuoyancy: b.buoyancyFlux,
     windSpeed: model.surface.windSpeed, evaporation: r.evaporation, ...(model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {}),
-    cumulusCover: m.cumulusCover, cumulusWater: m.cumulusWater, subcloudVirtual: m.subcloudVirtual, ocean: saved, seaSnow, seaSnowAlbedo,
+    cumulusCover: m.cumulusCover, cumulusWater: m.cumulusWater, subcloudVirtual: m.subcloudVirtual, ...(model.skin ? model.skin.serialize() : {}), ocean: saved, seaSnow, seaSnowAlbedo,
     spinupFrameTimes: Float64Array.from(spinup.times), spinupFrameData, recentRain, recentNet, ...dailyArrays,
   }, { f64: ['spinupFrameTimes', ...Object.keys(dailyArrays)] });
   mkdirSync(dirname(path), { recursive: true });

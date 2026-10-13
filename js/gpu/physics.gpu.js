@@ -9,6 +9,7 @@ import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
 import { SUMMER_DAY } from '../physics/ozone.module.js';
 import { OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR, VAPOR_COEFFICIENTS, VAPOR_WEIGHTS, OXYGEN, CO2_COEFFICIENT, STP_DEPTH, OZONE_CM_ATM, SCALING_PRESSURE, SCALING_EXPONENT } from '../physics/shortwaveGases.module.js';
 import { exchangeConstants, EXCHANGE_WGSL } from './exchange.gpu.js';
+import { SKIN, SEA_RHO_CP } from '../physics/skin.module.js';
 
 /*
  * The column physics of the model as WGSL, one thread per column (or per
@@ -31,6 +32,57 @@ import { exchangeConstants, EXCHANGE_WGSL } from './exchange.gpu.js';
  * one bit for bit: the shader compiler reassociates, and sharing terms
  * between the two changes the rounding.
  */
+const skinConstants = (o) => `const WARM_LAYER: bool = ${!!o.warmLayer}; const COOL_SKIN: bool = ${!!o.coolSkin}; const WL_D: f32 = ${o.warmLayerDepth}; const WL_NU: f32 = ${o.warmLayerProfile}; const WL_LA: f32 = ${o.warmLayerLangmuir}; const WL_CAP: f32 = ${o.warmLayerCap};
+const WL_R: f32 = ${o.skinLight[0]}; const WL_Z1: f32 = ${o.skinLight[1]}; const WL_Z2: f32 = ${o.skinLight[2]}; const SEA_RHOCP: f32 = ${SEA_RHO_CP}; const SEA_RHO: f32 = ${SKIN.waterDensity};
+const SKIN_KARMAN: f32 = ${SKIN.karman}; const SKIN_GRAV: f32 = ${SKIN.gravity}; const SKIN_NU: f32 = ${SKIN.viscosity}; const SKIN_K: f32 = ${SKIN.conductivity}; const SKIN_USTAR_FLOOR: f32 = ${SKIN.ustarFloor};
+const SKIN_BIGC: f32 = ${16 * SKIN.gravity * SKIN.specificHeat * (SKIN.waterDensity * SKIN.viscosity) ** 3 / (SKIN.conductivity * SKIN.conductivity)};
+`;
+
+/*
+ * The sea's skin (physics/skin.module.js, the CPU's createSkin): skinAdded
+ * gives the atmosphere T_slab + s ΔT_w − ΔT_c over open water, and
+ * skinStep advances PH_WARM and PH_COOL after the slab's own update, or
+ * clears both where the cell had or now has ice.
+ */
+export const SKIN_WGSL = `fn skinExpansion(t: f32) -> f32 { return max(1e-5, 2.1e-5 * pow(max(0.01, t - 273.15 + 3.2), 0.79)); }
+fn skinAdded(i: i32, onLand: bool, ice: f32, t: f32) -> f32 {
+  if (onLand || ice > 0.0) { return t; }
+  var warm = 0.0;
+  if (WARM_LAYER) {
+    let h0 = PH[PH_CAP + i] / SEA_RHOCP; let d = min(WL_D, h0);
+    warm = (1.0 - WL_NU * d / ((WL_NU + 1.0) * h0)) * PH[PH_WARM + i];
+  }
+  return t + warm - PH[PH_COOL + i];
+}
+fn skinStep(i: i32, iceBefore: f32, iceAfter: f32, nonSolar: f32, solar: f32, ustarAir: f32, rhoAir: f32, slabT: f32, capacity: f32, dt: f32) {
+  if (iceBefore > 0.0 || iceAfter > 0.0) { PH[PH_WARM + i] = 0.0; PH[PH_COOL + i] = 0.0; return; }
+  let alpha = skinExpansion(slabT);
+  let usw = max(SKIN_USTAR_FLOOR, ustarAir * sqrt(rhoAir / SEA_RHO));
+  if (WARM_LAYER) {
+    let d = min(WL_D, capacity / SEA_RHOCP);
+    let wlFlux = nonSolar + (1.0 - (WL_R * exp(-d / WL_Z1) + (1.0 - WL_R) * exp(-d / WL_Z2))) * solar;
+    let wlZeta = d * SKIN_KARMAN * SKIN_GRAV * alpha * wlFlux / (SEA_RHOCP * usw * usw * usw);
+    var wlPhi = 1.0;
+    if (wlZeta >= 0.0) { wlPhi = 1.0 + (5.0 * wlZeta + 4.0 * wlZeta * wlZeta) / (1.0 + 3.0 * wlZeta + 0.25 * wlZeta * wlZeta); } else { wlPhi = 1.0 / sqrt(1.0 - 16.0 * wlZeta); }
+    let wlNext = (PH[PH_WARM + i] + dt * wlFlux * (WL_NU + 1.0) / (WL_NU * d * SEA_RHOCP)) / (1.0 + dt * (WL_NU + 1.0) * SKIN_KARMAN * usw * WL_LA / (d * wlPhi));
+    PH[PH_WARM + i] = min(WL_CAP, max(0.0, wlNext));
+  }
+  if (COOL_SKIN) {
+    let ua = max(SKIN_USTAR_FLOOR, ustarAir);
+    let csBig = SKIN_BIGC / (rhoAir * rhoAir);
+    var csDelta = 1e-3; var csLoss = 0.0;
+    for (var n = 0; n < 2; n++) {
+      let csShare = 0.065 + 11.0 * csDelta - 6.6e-5 / csDelta * (1.0 - exp(-csDelta / 8e-4));
+      csLoss = -(nonSolar + csShare * solar);
+      var csLambda = 6.0;
+      if (alpha * csLoss > 0.0) { csLambda = 6.0 / pow(1.0 + pow(csBig * alpha * csLoss / (ua * ua * ua * ua), 0.75), 1.0 / 3.0); }
+      csDelta = min(0.01, csLambda * SKIN_NU / usw);
+    }
+    PH[PH_COOL + i] = min(1.0, max(0.0, csLoss * csDelta / SKIN_K));
+  }
+}
+`;
+
 export function physicsConstants(o) {
   if (o.plumeEntrainmentLaw !== 'ifs' && o.plumeEntrainmentLaw !== 'gregory') throw new Error(`plumeEntrainmentLaw must be 'ifs' or 'gregory', not ${o.plumeEntrainmentLaw}`);
   if (o.plumeConversion !== 'sundqvist' && o.plumeConversion !== 'zhangMcFarlane') throw new Error(`plumeConversion must be 'sundqvist' or 'zhangMcFarlane', not ${o.plumeConversion}`);
@@ -121,7 +173,7 @@ const AGEING: bool = ${!!o.snowAgeing}; const ALB_FRESH: f32 = ${o.freshSnowAlbe
 const ALB_ICESNOW: f32 = ${o.iceSnowAlbedo}; const FULLSNOW_ICE: f32 = ${o.iceFullSnow}; const KSNOW: f32 = ${o.snowConductivity}; const RHOSNOW: f32 = ${o.snowDensity}; const RHOICE: f32 = ${o.iceDensity}; const RHOWATER: f32 = ${o.waterDensity};
 const FREEZING: f32 = 271.35; const MELTING: f32 = 273.15; const SKINC: f32 = ${o.skinHeatCapacity}; const COND: f32 = ${o.conductivity}; const HMIN: f32 = ${o.minimumThickness}; const LATENT_ICE: f32 = ${o.iceDensity * o.latentHeatFusion};
 const LEADC: f32 = ${o.leadClosing}; const LEADX: f32 = ${o.leadExchange}; const MIN_CONC: f32 = ${MINIMUM_CONCENTRATION}; const MIN_VOLUME: f32 = ${MINIMUM_VOLUME}; const PENETRATING: bool = ${!!o.penetration};
-const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
+${o.warmLayer || o.coolSkin ? skinConstants(o) : ''}const AUTO_T: f32 = ${o.autoconversionThreshold}; const AUTO_R: f32 = ${o.autoconversionRate}; const CLOUD_LIFE: f32 = ${o.cloudLifetime}; const UPPER_LIFE: f32 = ${o.upperCloudLifetime ?? o.cloudLifetime}; const UPPER_SPLIT: bool = ${o.upperCloudLifetime != null}; const STRAT_LIFE: f32 = ${o.stratiformLifetime ?? o.cloudLifetime}; const STRAT_SPLIT: bool = ${o.stratiformLifetime != null};
 const RAIN_EVAP: f32 = ${o.rainEvaporation};
 const UNIFORM: bool = ${o.condensation === 'uniform'}; const BL_UNIFORM: bool = ${o.boundaryCondensation === 'uniform'}; const BL_CLOUDLAYER: bool = ${o.boundaryCondensation === 'cloudLayer' && moistTurbulence}; const ICE_SAT: bool = ${!!o.iceSaturation}; const NUCLEATION: bool = ${!!o.iceNucleation && !!o.iceSaturation}; const LFUSION: f32 = ${FUSION_HEAT}; const RHC_SURF: f32 = ${o.surfaceCriticalHumidity}; const RHC_TOP: f32 = ${o.topCriticalHumidity}; const RHC_EXP: f32 = ${o.criticalExponent};
 const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent};
@@ -1068,7 +1120,7 @@ const HELD_TOA = `  let atmosphereSolar = sunScale * PH[PH_RADATM + i]; let abso
 `;
 const HELD_CLEAR = `  if (CLEAR_SKY) { PH[PH_ABSCLRSUM + i] += sunScale * PH[PH_RADCLRSW + i]; PH[PH_OLRCLRSUM + i] += PH[PH_RADCLROLR + i] + PH[PH_RADTC + i] * lift; }
 `;
-const PHYSICS_KERNEL = `${MIXED_LAYER_WGSL}${EXCHANGE_WGSL}${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
+export const physicsKernel = (seaSkin = false) => `${MIXED_LAYER_WGSL}${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${LONGWAVE_STASH}fn cumulusCloud(k: i32, i: i32) -> vec2<f32> {
   if (!CU_CLOUD || k < CU_K0) { return vec2<f32>(0.0, 0.0); }
   let slot = (k - CU_K0) * C + i;
   return vec2<f32>(PH[PH_CUCOVER + slot], PH[PH_CUCOVER + slot] * PH[PH_CUWATER + slot]);
@@ -1099,7 +1151,7 @@ const PHYSICS_KERNEL = `${MIXED_LAYER_WGSL}${EXCHANGE_WGSL}${LONGWAVE_STASH}fn c
   let iceDif = surfaceAlbedo(ice, ALB_DIF_WATER, snow0, skin, PH[PH_SNOWALB + i]); let iceDir = surfaceAlbedo(ice, waterDir, snow0, skin, PH[PH_SNOWALB + i]);
   let adif = select(cover * iceDif + (1.0 - cover) * ALB_DIF_WATER, landAlbedo, onLand);
   let adir = select(cover * iceDir + (1.0 - cover) * waterDir, landAlbedo, onLand);
-  let ts = select(skin, cover * skin + (1.0 - cover) * FREEZING, !onLand && ice > 0.0 && cover < 1.0);
+  let ts = ${seaSkin ? 'skinAdded(i, onLand, ice, ' : ''}select(skin, cover * skin + (1.0 - cover) * FREEZING, !onLand && ice > 0.0 && cover < 1.0)${seaSkin ? ')' : ''};
   let warmth = clamp((ts - GROWCOLD) / (GROWWARM - GROWCOLD), 0.0, 1.0);
   let roots = min(1.0, soil0 / (WETT * bucket));
   let bareWet = (1.0 - veg0) * min(1.0, surf0 / SURFCAP);
@@ -1384,7 +1436,7 @@ ${held ? `  PH[PH_RADBACK + i] = back; PH[PH_RADOLR + i] = outgoing; PH[PH_RADT 
   if (CLEAR_SKY) { PH[PH_RADCLROLR + i] = clearOutgoing; PH[PH_RADTC + i] = clearEscape; }` : `  stash(20, i, back); stash(21, i, outgoing);
   if (CLEAR_SKY) { PH[PH_OLRCLRSUM + i] += clearOutgoing; }`}
 }`;
-export const physicsSurfaceKernel = (held) => `${EXCHANGE_WGSL}${LONGWAVE_STASH}
+export const physicsSurfaceKernel = (held, seaSkin = false) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${LONGWAVE_STASH}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
   let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ice = IN[S_ICE + i]; let bottom = (K - 1) * C + i;
@@ -1484,7 +1536,7 @@ ${held ? HELD_CLEAR : ''}  let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CA
     PH[PH_SOIL + i] = soil; PH[PH_SNOW + i] = snow; PH[PH_SURF + i] = surf;
     PH[PH_SNOWALB + i] = select(ALB_FRESH, agedSnow(PH[PH_SNOWALB + i], T, dt, ALB_OLDSNOW), snow > 0.0);
   } else ${SEA_SURFACE_WGSL}
-  IN[S_TS + i] = T; IN[S_ICE + i] = h;
+${seaSkin ? '  if (!onLand) { skinStep(i, ice, h, net - absorbed, absorbed, sqrt(PH[PH_DRAG + i]) * xWind(i, ws), rho, T, capacity, dt); }\n' : ''}  IN[S_TS + i] = T; IN[S_ICE + i] = h;
 }`;
 
 const ADJUST_FUNCTIONS = `fn upperInterface(i: i32, k: i32) -> f32 {
@@ -2108,7 +2160,7 @@ export const ADJUST_KERNELS = ['adjustMix', 'adjustPlume', 'adjustRain'];
 
 export const PHYSICS_PASSES = ['physics', 'radiation', 'longwave', 'physicsSurface'];
 export const PHYSICS_KERNELS = {
-  physics: PHYSICS_KERNEL,
+  physics: physicsKernel(false),
   radiation: radiationKernel(false),
   longwave: longwaveKernel(false),
   physicsSurface: physicsSurfaceKernel(false),
