@@ -2,17 +2,19 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES } from '../js/ocean/layered.module.js';
+import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES, langmuirFactor } from '../js/ocean/layered.module.js';
 import { UNLISTED_OCEANS, columnMomentum } from './helpers/layered.mjs';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
-import { labelTemperature } from '../js/ocean/seawater.module.js';
+import { labelTemperature, seawaterDensity } from '../js/ocean/seawater.module.js';
+import { cellVector } from '../js/dynamics/operators.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
+const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const OCEAN_OPTIONS = { everySteps: 1 };
@@ -448,6 +450,169 @@ test('under refillRate the GPU mixed layer refills a column in deficit by refill
   assert.ok(cpuOff < 1e-9 && gpuOff < 1e-4, `the mixed layers are off by ${cpuOff} m on the CPU, ${gpuOff} m on the GPU`);
   assert.ok(refillGap < 1e-4 && gap < 0.2, `the engines' refills differ by ${refillGap} m, their mixed layers by ${gap} m`);
   assert.ok(cpuThinned > 0.5 && Math.abs(gpu.thinned - cpuThinned) < 1e-6, `thinned ${gpu.thinned} on the GPU against ${cpuThinned}`);
+});
+
+test('under shearEntrainment the GPU mixed layer takes in the class beneath as the CPU one does, carrying its momentum, and twenty-one steps under 10 m floors track the CPU ocean at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const ric = 0.65, sheared = { ...OCEAN_OPTIONS, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, momentumDepth: 50, carryMomentum: true, shearEntrainment: ric };
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, E = mesh.nEdges, dt = 1350, calm = new Float64Array(E);
+  const cpuOcean = (options) => createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options });
+  const seeded = cpuOcean(sheared);
+  seeded.initialize(Float64Array.from(surfaceT0), ice);
+  for (let e = 0; e < E; e++) {
+    if (!seeded.edgeOcean[e] || Math.abs(mesh.latEdge[e]) > 40 * Math.PI / 180) continue;
+    const x = mesh.xEdge[3 * e], y = mesh.xEdge[3 * e + 1], r = Math.hypot(x, y) || 1e-12;
+    seeded.u[e] += 0.6 * ((-y / r) * mesh.nEdge[3 * e] + (x / r) * mesh.nEdge[3 * e + 1]);
+  }
+  const saved = seeded.serialize();
+  const L = seeded.layers, { h: h0, u: u0, T, S } = saved, rho = [1025, ...seeded.densities];
+  const du = new Float64Array(E);
+  for (let e = 0; e < E; e++) {
+    const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1];
+    if (seeded.edgeOcean[e]) for (let k = 1; k < L; k++) if (Math.min(h0[k * C + a], h0[k * C + b]) >= 5) { du[e] = u0[e] - u0[k * E + e]; break; }
+  }
+  const v = cellVector(mesh, du), rib = new Float64Array(C).fill(Infinity);
+  for (let i = 0; i < C; i++) {
+    if (!seeded.cellOcean[i]) continue;
+    let below = 0;
+    for (let k = 1; k < L; k++) if (h0[k * C + i] > 5) { below = k; break; }
+    if (below) rib[i] = Math.max(9.81 * (rho[below] - seawaterDensity(T[i], S[i])) / 1025, 9.81 * 0.005 / 1025) * h0[i] / (v[3 * i] ** 2 + v[3 * i + 1] ** 2 + v[3 * i + 2] ** 2 + 1e-12);
+  }
+  const cpu = cpuOcean(sheared);
+  cpu.load(saved, Float64Array.from(surfaceT0), ice);
+  cpu.setStress(calm, ice);
+  cpu.readSurface(Float64Array.from(surfaceT0), ice);
+  cpu.mixedLayer(dt);
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: sheared });
+  const gpuOcean = gpuModel.oceanEngine;
+  await gpuOcean.upload(saved, Float64Array.from(surfaceT0), ice);
+  gpuOcean.setStress(calm, ice);
+  gpuOcean.readSurface(Float64Array.from(surfaceT0), ice);
+  gpuOcean.mixedLayer(dt);
+  const gpu = await gpuOcean.download();
+  let entrained = 0, near = 0, hGap = 0, hRel = 0, takenGap = 0, uGap = 0;
+  for (let i = 0; i < C; i++) {
+    if (!cpu.cellOcean[i]) continue;
+    hGap = Math.max(hGap, Math.abs(gpu.h[i] - cpu.h[i]));
+    hRel = Math.max(hRel, Math.abs(gpu.h[i] - cpu.h[i]) / cpu.h[i]);
+    const taken = cpu.sheared[i];
+    if (Math.abs(rib[i] / ric - 1) < 0.01) { near++; continue; }
+    if (taken > 0) entrained++;
+    takenGap = Math.max(takenGap, Math.abs((gpu.h[i] - h0[i]) - taken) / Math.max(taken, 1e-3));
+  }
+  for (let x = 0; x < L * E; x++) uGap = Math.max(uGap, Math.abs(gpu.u[x] - cpu.u[x]));
+  console.log(`shear entrainment, one mixed-layer step: ${entrained} cells took in ${cpu.sheared.reduce((s, x) => s + x, 0).toFixed(1)} m on the CPU (${near} within 1 % of Ri_c set aside); the engines' mixed layers differ by ${hGap.toExponential(2)} m, ${hRel.toExponential(2)} of their depth, the entrained depth by ${takenGap.toExponential(2)} of itself, the velocities by ${uGap.toExponential(2)} m/s`);
+  assert.ok(entrained > 50, `${entrained} cells entrained`);
+  assert.ok(hRel < 1e-5 && takenGap < 1e-3 && uGap < 1e-5, `h ${hRel} of itself, entrained ${takenGap}, u ${uGap} m/s`);
+
+  await gpuOcean.upload(saved, Float64Array.from(surfaceT0), ice);
+  const along = cpuOcean(sheared), without = cpuOcean({ ...sheared, shearEntrainment: 0 }), flux = new Float64Array(C);
+  for (const ocean of [along, without]) ocean.load(saved, Float64Array.from(surfaceT0), ice);
+  for (let n = 0; n < 21; n++) {
+    along.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+    without.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+    await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, dt);
+  }
+  const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
+  const cpuState = along.serialize(), withoutState = without.serialize(), gpuState = await gpuOcean.serialize(), wet = Array.from(cpuState.h, (x) => x > 1);
+  const lines = [];
+  for (const f of ['h', 'u', 'T', 'S', 'eta']) {
+    const mask = f === 'T' || f === 'S' ? wet : null, gap = rms(cpuState[f], gpuState[f], mask), effect = rms(cpuState[f], withoutState[f], mask);
+    lines.push(`${f} ${gap.toExponential(2)} against ${effect.toExponential(2)}`);
+    assert.ok(gap < 2e-3, `${f} rms relative diff ${gap} after 21 steps`);
+    if (f === 'h' || f === 'u') assert.ok(effect > 5 * gap, `${f}: shear entrainment changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
+  }
+  console.log(`21 ocean steps under 10 m floors with shear entrainment at N=8, the engines' rms relative difference against the effect of the entrainment: ${lines.join(', ')}`);
+  assert.equal((await gpuOcean.diagnostics()).oceanLimited, 0);
+  gpuModel.destroy();
+});
+
+test('under the mixing package the GPU ocean takes the wind over its Ekman depth and retreats to the Langmuir-enhanced Monin–Obukhov depth as the CPU ocean does, and twenty steps under 10 m floors track it at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const packaged = { ...OCEAN_OPTIONS, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, momentumDepth: 50, carryMomentum: true, shearEntrainment: 0.65, ekmanDepth: 0.4, momentumFloor: 10, stressThickness: 5, retreatStirring: 2.5, langmuir: 2 };
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, E = mesh.nEdges, dt = 1350, net = 150, flux = new Float64Array(C);
+  const cpuOcean = (options) => createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options });
+
+  const retreatOn = async (options) => {
+    const retreating = { ...options, mixedDepth: 60, detrainmentTime: dt, buoyancyMemory: 0 };
+    const deep = cpuOcean(retreating);
+    deep.initialize(Float64Array.from(surfaceT0), ice);
+    const deepState = deep.serialize(), warm = Float64Array.from(surfaceT0, (t, i) => t + dt * net / deep.capacity[i]);
+    const cpu = cpuOcean(retreating);
+    cpu.load(deepState, Float64Array.from(surfaceT0), ice);
+    cpu.setStress(stress, ice);
+    cpu.readSurface(Float64Array.from(warm), ice);
+    const before = Float64Array.from(cpu.h.subarray(0, C));
+    cpu.mixedLayer(dt);
+    const model = await createGpuModel(new Grid(8), { topography, ocean: retreating }), gpu = model.oceanEngine;
+    await gpu.upload(deepState, Float64Array.from(surfaceT0), ice);
+    gpu.setStress(stress, ice);
+    gpu.readSurface(Float64Array.from(warm), ice);
+    gpu.mixedLayer(dt);
+    const { h } = await gpu.download();
+    model.destroy();
+    const reached = Array.from(before, (b, i) => cpu.cellOcean[i] && cpu.retreatDepth[i] > 10.5 && cpu.retreatDepth[i] < b - 0.5 && h[i] < b - 0.5);
+    return { L: Float64Array.from(cpu.retreatDepth), gpu: h, before, reached };
+  };
+  const faded = await retreatOn({ ...packaged, retreatStirring: 0, langmuir: 0 }), enhanced = await retreatOn(packaged), tauCell = cellVector(mesh, stress);
+  let reached = 0, lGap = 0, offset = 0, least = Infinity, most = 0;
+  for (let i = 0; i < C; i++) {
+    if (!faded.reached[i] || !enhanced.reached[i]) continue;
+    reached++;
+    lGap = Math.max(lGap, Math.abs((enhanced.gpu[i] / faded.gpu[i]) / (enhanced.L[i] / faded.L[i]) - 1));
+    offset = Math.max(offset, Math.abs(enhanced.gpu[i] / enhanced.L[i] - 1));
+    const epsilon = langmuirFactor(Math.sqrt(Math.hypot(tauCell[3 * i], tauCell[3 * i + 1], tauCell[3 * i + 2]) / 1025), enhanced.before[i], 2);
+    least = Math.min(least, epsilon); most = Math.max(most, epsilon);
+  }
+  console.log(`the Langmuir retreat: ${reached} heated cells retreat from about 60 m to their L in one step under both rules, ε from ${least.toFixed(3)} to ${most.toFixed(3)}; the GPU's ratio of the 2.5ε depth to the faded rule's within ${lGap.toExponential(2)} of the CPU's, the depths themselves within ${offset.toExponential(2)} under each engine's own buoyancy of an 8e-4 K warming, as with the options off`);
+  assert.ok(reached > 20 && most > least + 0.1, `${reached} cells reached L under both rules, ε from ${least} to ${most}`);
+  assert.ok(lGap < 1e-5, `the engines' retreat constants differ by ${lGap} of themselves`);
+
+  const seeded = cpuOcean(packaged);
+  seeded.initialize(Float64Array.from(surfaceT0), ice);
+  for (let e = 0; e < E; e++) {
+    if (!seeded.edgeOcean[e] || Math.abs(mesh.latEdge[e]) > 40 * Math.PI / 180) continue;
+    const x = mesh.xEdge[3 * e], y = mesh.xEdge[3 * e + 1], r = Math.hypot(x, y) || 1e-12;
+    seeded.u[e] += 0.6 * ((-y / r) * mesh.nEdge[3 * e] + (x / r) * mesh.nEdge[3 * e + 1]);
+  }
+  const saved = seeded.serialize();
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: packaged });
+  const gpuOcean = gpuModel.oceanEngine;
+  await gpuOcean.upload(saved, Float64Array.from(surfaceT0), ice);
+  const along = cpuOcean(packaged), without = cpuOcean({ ...packaged, ekmanDepth: 0, stressThickness: 20, retreatStirring: 0, langmuir: 0 });
+  for (const ocean of [along, without]) ocean.load(saved, Float64Array.from(surfaceT0), ice);
+  let hGap = 0, hRel = 0, uGap = 0, depthGap = 0, between = 0;
+  for (let n = 0; n < 20; n++) {
+    along.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+    without.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+    await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, dt);
+    if (n === 0) {
+      const first = await gpuOcean.download();
+      for (let i = 0; i < C; i++) if (along.cellOcean[i]) { hGap = Math.max(hGap, Math.abs(first.h[i] - along.h[i])); hRel = Math.max(hRel, Math.abs(first.h[i] - along.h[i]) / along.h[i]); }
+      for (let x = 0; x < first.u.length; x++) uGap = Math.max(uGap, Math.abs(first.u[x] - along.u[x]));
+      const [hm] = await readRanges(gpuModel.gpu.device, gpuOcean.buffers.OD, [{ offset: gpuOcean.layout.OD.HM, length: E }]);
+      for (let e = 0; e < E; e++) {
+        if (!along.edgeOcean[e]) continue;
+        depthGap = Math.max(depthGap, Math.abs(hm[e] - along.windDepth[e]) / along.windDepth[e]);
+        if (along.windDepth[e] > 10 && along.windDepth[e] < 50) between++;
+      }
+    }
+  }
+  console.log(`one packaged step: ${between} sea edges with the Ekman depth between its bounds, the GPU's within ${depthGap.toExponential(2)} of the CPU's; the mixed layers within ${hGap.toExponential(2)} m, ${hRel.toExponential(2)} of their depth, u within ${uGap.toExponential(2)} m/s`);
+  assert.ok(between > 100 && depthGap < 1e-5, `${between} edges, Ekman depths ${depthGap} apart`);
+  assert.ok(hRel < 3e-5 && uGap < 1e-5, `h ${hRel} of itself, u ${uGap} m/s`);
+  const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
+  const cpuState = along.serialize(), withoutState = without.serialize(), gpuState = await gpuOcean.serialize(), wet = Array.from(cpuState.h, (x) => x > 1);
+  const lines = [];
+  for (const f of ['h', 'u', 'T', 'S', 'eta']) {
+    const mask = f === 'T' || f === 'S' ? wet : null, gap = rms(cpuState[f], gpuState[f], mask), effect = rms(cpuState[f], withoutState[f], mask);
+    lines.push(`${f} ${gap.toExponential(2)} against ${effect.toExponential(2)}`);
+    assert.ok(gap < 2e-3, `${f} rms relative diff ${gap} after 20 steps`);
+    if (f === 'h' || f === 'u') assert.ok(effect > 5 * gap, `${f}: the package's Ekman depth and retreat changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
+  }
+  console.log(`20 packaged ocean steps under 10 m floors at N=8, the engines' rms relative difference against the effect of the Ekman depth, the 5 m receivers and the Langmuir retreat: ${lines.join(', ')}`);
+  assert.equal((await gpuOcean.diagnostics()).oceanLimited, 0);
+  gpuModel.destroy();
 });
 
 test('the GPU ocean takes an 8-layer state that carries no class list, as the page\'s saved runs are, onto the class list as the CPU ocean does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
