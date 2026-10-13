@@ -284,7 +284,7 @@ export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLER
  * Langmuir number La = √(u* / u_SL), La no less than 0.1, the factor no more
  * than `cap`. erfc is Abramowitz and Stegun's 7.1.26, as on the GPU.
  */
-export const FRICTION_PER_WIND = 1.19e-3, CALM_WIND = 1e-3;
+export const FRICTION_PER_WIND = 1.19e-3, CALM_WIND = 1e-3, RETREAT_EKMAN = 0.7;
 export function mixingOptionCheck({ stressThickness, langmuir, retreatEkman = 0 }) {
   if (!(retreatEkman >= 0 && retreatEkman < Infinity)) throw new Error(`retreatEkman bounds the retreat at that multiple of u*/|f|, so it is 0 (no bound) or positive, not ${retreatEkman}`);
   if (!(stressThickness >= THIN)) throw new Error(`stressThickness is at least THIN (${THIN} m), the thinnest class that keeps its own velocity, not ${stressThickness}`);
@@ -888,7 +888,7 @@ export function createOcean(mesh, {
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
   momentumDepth = 50, carryMomentum = true, refillRate = 0.00027778, refillFloor = 5, shearEntrainment = 0.65,
-  ekmanDepth = 0.4, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 2.5, langmuir = 2, retreatEkman = 0.7,
+  ekmanDepth = 0.4, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 2.5, langmuir = 2, retreatEkman = RETREAT_EKMAN,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, buffers = null, climatology = null,

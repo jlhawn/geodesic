@@ -6,14 +6,15 @@
  * salinity profile and mixed-layer depth, and its classes at the depths
  * its thermocline tilt gives that latitude. The column read is Grid(2)'s
  * 31.72° cell, whose start equals that latitude's once thermoclineTilt is
- * chosen so that its stretch there matches. The heating swings with the
+ * chosen so that its stretch there matches, and whose retreat's Ekman bound
+ * is scaled to that latitude's Coriolis parameter. The heating swings with the
  * annual harmonic of the sunlight a sea absorbs there under a sky that
  * passes TRANSMISSION of it, peaking at the June solstice, and the sea
  * loses DAMPING W/m² for each kelvin it is warmer than the start.
  */
 import { createSeasonalColumn, columnMesh, nearestCell, RHO_CP, AIR_COLUMN, SLAB, DAY, YEAR_DAYS } from './oceanColumn.module.js';
 import { dailySunlight, TOY } from './seaIceColumn.module.js';
-import { LAYER_DENSITIES, LAYER_SALINITIES } from '../js/ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_SALINITIES, RETREAT_EKMAN } from '../js/ocean/layered.module.js';
 import { labelTemperature } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 
@@ -42,10 +43,11 @@ export const classLabels = () => LAYER_DENSITIES.map((rho, k) => Math.max(FREEZI
 
 export function columnOptions({ latitude = POLEWARD, heating = sunSwing(latitude), wind = 0.1, days = YEAR_DAYS } = {}) {
   if (!(Math.abs(latitude) <= POLEWARD)) throw new Error(`the column's start holds for latitudes within ${POLEWARD}° of the equator, not ${latitude}`);
-  const m = columnMesh(), cos2 = Math.cos(m.latCell[nearestCell(m, CELL)]) ** 2, sea = startingSea(latitude);
+  const m = columnMesh(), phi = m.latCell[nearestCell(m, CELL)], cos2 = Math.cos(phi) ** 2, sea = startingSea(latitude);
+  const retreatEkman = latitude === 0 ? 0 : RETREAT_EKMAN * Math.abs(Math.sin(phi) / Math.sin(latitude * RAD));
   return {
     latitude: CELL, heating, wind, damping: DAMPING, dt: STEP, days, mean: sea.temperature, every: DAY / STEP, storeDepth: STORE,
-    ocean: { mixedDepth: START_DEPTH, salinityProfile: () => sea.salinity, thermoclineTilt: (sea.stretch - 1) / (2 * cos2 - 1) },
+    ocean: { mixedDepth: START_DEPTH, salinityProfile: () => sea.salinity, thermoclineTilt: (sea.stretch - 1) / (2 * cos2 - 1), retreatEkman },
   };
 }
 
