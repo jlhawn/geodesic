@@ -2,7 +2,7 @@ import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductio
 import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
-import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, ADJUST_KERNELS, PHYSICS_PASSES, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
+import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, PHYSICS_PASSES, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
 import { MOIST_DEFAULTS, SUBCLOUD_LAYERS } from '../physics/moist.module.js';
 import { CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN } from '../frames.module.js';
 import { SEA_DRAG, TOP_DRAG } from '../physics/surface.module.js';
@@ -11,6 +11,8 @@ import { FOREST_ARIDITY, SOIL_CARBON } from '../physics/land.module.js';
 import { orographyConstants, OROGRAPHY_KERNELS } from './orography.gpu.js';
 import { spongeGeometry, spongeRates as layerRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from '../dynamics/sponge.module.js';
 import { longwaveTableFor } from '../physics/longwave.module.js';
+import { SKIN_DEFAULTS } from '../physics/skin.module.js';
+import { JERLOV } from '../ocean/layered.module.js';
 import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveColumns, gravityWaveBreaking, gravityWaveLid } from '../physics/gravityWaves.module.js';
 
 export { PHYSICS_PASSES };
@@ -38,7 +40,7 @@ const ELEMENTS_PER_THREAD = { advance: 2, combine: 2, dissipationClear: 8 };
  * momentum mixing. Every kernel binds the same seven buffers in the same
  * order.
  */
-export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orographyLayers = 0, sponge = null, waves = false, formLayers = 0, subcloudLayers = 0, heldRadiation = false) {
+export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orographyLayers = 0, sponge = null, waves = false, formLayers = 0, subcloudLayers = 0, heldRadiation = false, skin = false) {
   const C = mesh.nCells, E = mesh.nEdges, V = mesh.nVertices, waveCells = waves ? C : 0, waveEdges = waves ? E : 0;
   const SPK = sponge ? sponge.layers : 0, SPB = sponge ? sponge.bands : 0, spongeCells = SPK ? C : 0, spongeEdges = SPK ? E : 0;
   const KC = K * C, KE = K * E, KV = K * V;
@@ -50,7 +52,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   // The RK stages' scratch fields and the closures' share memory: neither set is read outside its own passes.
   const stage = seq([['FLUX', KE], ['QV', KV], ['QE', KE], ['PHI', KC]]), closure = seq([['LAPA', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC]]);
   const D = { ...stage, ...closure, ...seq([['SCRATCH', Math.max(stage.total, closure.total)], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['DRAG', C], ['WIND', C], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]) };
-  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['CLOUDK', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['CUFALL', KC], ['CURESERVE', KC], ['CUFROZEN', KC], ['CURAIN', C], ['CUDEEP', C], ['CUBASE', C], ['CUSHALLOW', C], ['CUSNOW', C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E], ['FOG', C], ['FOGMEAN', C], ['SUBTV', subcloudLayers * C], ['PEN', C], ['TRANS', C], ...(heldRadiation ? HELD_RADIATION.map((name) => [name, name === 'RADP' ? 8 : name === 'RADSW' || name === 'RADDF' ? KC : C]) : [])]);
+  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['CLOUDK', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['CUFALL', KC], ['CURESERVE', KC], ['CUFROZEN', KC], ['CURAIN', C], ['CUDEEP', C], ['CUBASE', C], ['CUSHALLOW', C], ['CUSNOW', C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E], ['FOG', C], ['FOGMEAN', C], ['SUBTV', subcloudLayers * C], ['PEN', C], ['TRANS', C], ...(heldRadiation ? HELD_RADIATION.map((name) => [name, name === 'RADP' ? 8 : name === 'RADSW' || name === 'RADDF' ? KC : C]) : []), ...(skin ? [['WARM', C], ['COOL', C]] : [])]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['CLOW', C], ['CMID', C], ['CHIGH', C], ['CCU', C], ['CDECK', C], ['CTOP', C], ['CBASE', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, SPK, SPB, MI, MF, LV, S, D, PH, FR };
 }
@@ -777,7 +779,7 @@ export const PHYSICS_DEFAULTS = {
   treeline: true, seasonThreshold: 0.9, minimumSeason: 94, treelineWarmth: [6.4, 8.0], seasonMemory: 3 * 365 * 86400, treeGrowthTime: 10 * 365 * 86400, treeDeclineTime: 3 * 365 * 86400,
   treeMoisture: true, moistureMemory: 3 * 365 * 86400, forestAridity: FOREST_ARIDITY, grassland: true, forestAlbedo: 0.13, grassAlbedo: 0.20, grassSnowDarkening: 0.06, ...SOIL_CARBON,
   growthTime: 180 * 86400, declineTime: 365 * 86400, snowDeclineTime: 720 * 86400, surfaceCapacity: 15, percolationTime: 86400, stomatalResistance: 70, growthColdest: 278.15, growthWarmest: 288.15,
-  surfaceExchange: 'roughness', implicitDrag: true, exchangeOptions: {},
+  surfaceExchange: 'roughness', implicitDrag: true, exchangeOptions: {}, ...SKIN_DEFAULTS, skinLight: JERLOV.IB,
 };
 
 export async function createGpuCore(mesh, {
@@ -803,8 +805,8 @@ export async function createGpuCore(mesh, {
   while (formTop < K - 1 && 0.5 * (levels[formTop] + levels[formTop + 1]) <= phys.searchTop) formTop++;
   if (!(Number.isInteger(phys.radiationEvery) && phys.radiationEvery >= 1)) throw new Error(`radiationEvery must be a whole number of steps, 1 or more, not ${phys.radiationEvery}`);
   if (!(Number.isInteger(phys.dragEvery) && phys.dragEvery >= 1)) throw new Error(`dragEvery must be a whole number of steps, 1 or more, not ${phys.dragEvery}`);
-  const heldRadiation = phys.radiationEvery > 1;
-  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0, phys.orography ? K : 0, sponge, !!waves, phys.formDrag ? K - formTop : 0, Math.min(SUBCLOUD_LAYERS, K), heldRadiation);
+  const heldRadiation = phys.radiationEvery > 1, skinOn = !!(phys.warmLayer || phys.coolSkin);
+  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0, phys.orography ? K : 0, sponge, !!waves, phys.formDrag ? K - formTop : 0, Math.min(SUBCLOUD_LAYERS, K), heldRadiation, skinOn);
   phys.subcloudLayers = Math.min(SUBCLOUD_LAYERS, K);
   const { C, E, V } = L;
   const kappa = R / cp;
@@ -906,7 +908,7 @@ export async function createGpuCore(mesh, {
   const waveLidShares = Array.from({ length: waveLid }, (_, k) => (dSigma[k] / waveLidTotal).toExponential(9)).join(', ');
   const waveConstants = (body) => body.replaceAll('GW_TESTED', waves && waves.lidTests ? '0' : String(waveLid)).replaceAll('GW_LID_SHARES', waveLidShares).replaceAll('GW_LID', String(waveLid)).replaceAll('GW_BREAKING', Array.from(waveBreaking, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_INTERMITTENT', waves && waves.breakingAmplitude ? 'true' : 'false').replaceAll('GW_SUMS', Array.from(waveSums, (x) => x.toExponential(9)).join(', ')).replaceAll('GW_SOURCE_PLUS', String(waveSource + 1)).replaceAll('GW_SOURCE', String(waveSource)).replaceAll('GW_J_PLUS', String(waveAmplitudes.length + 1)).replaceAll('GW_J', String(waveAmplitudes.length))
     .replaceAll('GW_DC', waves ? waves.speedStep.toFixed(6) : '0.0').replaceAll('GW_KH', waves ? (2 * Math.PI / waves.wavelength).toExponential(9) : '0.0').replaceAll('GW_N2_FLOOR', waves ? (waves.minimumFrequency ** 2).toExponential(9) : '0.0');
-  const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, radiation: radiationKernel(heldRadiation), longwave: longwaveKernel(heldRadiation, phys.longwaveTable.points.length), physicsSurface: physicsSurfaceKernel(heldRadiation), ...(phys.orography ? OROGRAPHY_KERNELS : {}), ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
+  const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, radiation: radiationKernel(heldRadiation), longwave: longwaveKernel(heldRadiation, phys.longwaveTable.points.length), physics: physicsKernel(skinOn), physicsSurface: physicsSurfaceKernel(heldRadiation, skinOn), ...(phys.orography ? OROGRAPHY_KERNELS : {}), ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
   if (!waves) { delete kernelBodies.gravityWaves; delete kernelBodies.gravityWaveDrag; }
   if (!sponge) { delete kernelBodies.spongeMean; delete kernelBodies.spongeApply; }
   for (const [name, raw] of Object.entries(kernelBodies)) {
@@ -1092,8 +1094,8 @@ export async function createGpuCore(mesh, {
   }
 
   const retained = { orography: null, wind: null, land: null, drag: null, heat: null, reference: null, soil: null, snow: null, vegetation: null, snowAlbedo: null, canopy: null, seasonLength: null, seasonWarmth: null, rainMean: null, demandMean: null, soilCarbon: null, litterMean: null, decayMean: null, snowFreeCover: null, concentration: null, mlmSubsidence: null, mlmHeight: null, mlmGate: null, convectiveRain: null, largeScaleRain: null, meanAbsorbedSolar: null, meanOutgoingLongwave: null, meanPlanetaryAlbedo: null, meanShortwaveCloudEffect: null, meanLongwaveCloudEffect: null, boundaryDepth: null, mixingTop: null, regime: null, buoyancyFlux: null, evaporation: null, cumulusCover: null, cumulusWater: null, subcloudVirtual: null };
-  function uploadPhysics({ capacity = null, oceanFlux = null, transmission = null, penetrated = null, orography, wind, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux, evaporation, cumulusCover, cumulusWater, subcloudVirtual } = {}) {
-    for (const [name, value] of Object.entries({ orography, wind, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux, evaporation, cumulusCover, cumulusWater, subcloudVirtual })) if (value !== undefined) retained[name] = value;
+  function uploadPhysics({ capacity = null, oceanFlux = null, transmission = null, penetrated = null, orography, wind, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux, evaporation, cumulusCover, cumulusWater, subcloudVirtual, warmLayer, coolSkin } = {}) {
+    for (const [name, value] of Object.entries({ orography, wind, land, drag, heat, reference, soil, snow, vegetation, snowAlbedo, canopy, seasonLength, seasonWarmth, rainMean, demandMean, soilCarbon, litterMean, decayMean, snowFreeCover, concentration, mlmSubsidence, mlmHeight, mlmGate, convectiveRain, largeScaleRain, meanAbsorbedSolar, meanOutgoingLongwave, meanPlanetaryAlbedo, meanShortwaveCloudEffect, meanLongwaveCloudEffect, boundaryDepth, mixingTop, regime, buoyancyFlux, evaporation, cumulusCover, cumulusWater, subcloudVirtual, warmLayer, coolSkin })) if (value !== undefined) retained[name] = value;
     const ph = new Float32Array(L.PH.total);
     for (let i = 0; i < C; i++) {
       const lat = mesh.latCell[i];
@@ -1142,6 +1144,8 @@ export async function createGpuCore(mesh, {
     if (retained.cumulusCover) ph.set(retained.cumulusCover, L.PH.CUCOVER);
     if (retained.cumulusWater) ph.set(retained.cumulusWater, L.PH.CUWATER);
     if (retained.subcloudVirtual) ph.set(retained.subcloudVirtual, L.PH.SUBTV);
+    if (L.PH.WARM !== undefined && retained.warmLayer) ph.set(retained.warmLayer, L.PH.WARM);
+    if (L.PH.COOL !== undefined && retained.coolSkin) ph.set(retained.coolSkin, L.PH.COOL);
     submitNow((encoder) => encoder.clearBuffer(buffers.PH, 0, 4 * L.PH.total));
     const words = new Uint32Array(ph.buffer), block = WRITE_PIECE / 4;
     for (let start = 0; start < words.length; start += block) {

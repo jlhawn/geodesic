@@ -35,12 +35,22 @@ function spunUp() {
 /*
  * The spun-up air over a layered ocean started under it.
  */
-function overOcean() {
-  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: {} });
+function overOcean(surface = {}) {
+  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: {}, surface });
   slab.state.forEach((values, s) => model.state[s].set(values));
   model.seaIce.load(model.state[6], slab.seaIce.concentration);
   model.ocean.initialize(model.state[3], model.state[6]);
   model.time = slab.time;
+  return model;
+}
+
+/*
+ * The same with the sea's skin, its warm layer started at 1 K over the open
+ * water so that the air sees T_s ≠ T_slab from the first step.
+ */
+function overOceanSkin() {
+  const model = overOcean({ warmLayer: true, coolSkin: true });
+  for (let i = 0; i < model.mesh.nCells; i++) if (!(model.state[6][i] > 0)) model.skin.warm[i] = 1;
   return model;
 }
 
@@ -74,7 +84,7 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-for (const [label, build] of [['over a slab', spunUp], ['over a layered ocean', overOcean]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
+for (const [label, build] of [['over a slab', spunUp], ['over a layered ocean', () => overOcean()], ['over a layered ocean with the warm layer and the cool skin', overOceanSkin]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
   const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));
@@ -85,7 +95,17 @@ for (const [label, build] of [['over a slab', spunUp], ['over a layered ocean', 
     rk4(model.tendency, state, DT);
     let b = books(state);
     record.dynamics.push((b.H + b.Lq + b.KE - a.H - a.Lq - a.KE) / DT);
+    const slabBefore = Float64Array.from(state[3]), iceBefore = Float64Array.from(state[6]);
     phases.physics(0, C, DT, model.totals);
+    if (model.skin) {
+      let seen = 0;
+      for (let i = 0; i < C; i++) if (!(iceBefore[i] > 0) && !(state[6][i] > 0)) {
+        const paid = DT * (radiation.surfaceFlux[i] + model.seaIce.oceanFlux[i]) / model.ocean.capacity[i];
+        assert.ok(Math.abs(state[3][i] - slabBefore[i] - paid) <= 1e-9, `cell ${i}: the slab gains ${state[3][i] - slabBefore[i]} K for ${paid} K of flux at the skin`);
+        if (model.skin.offset(i, model.ocean.capacity[i]) !== 0) seen++;
+      }
+      assert.ok(seen > 0, 'the air sees the skin');
+    }
     a = books(state);
     phases.closure(0, K, DT);
     b = books(state);
