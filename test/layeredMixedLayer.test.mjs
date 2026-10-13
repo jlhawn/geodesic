@@ -463,6 +463,26 @@ test('under shearEntrainment a mixed layer whose bulk Richardson number is below
   assert.ok(kept < 1e-12 && momentum < 1e-12 && taken < 1e-12, `columns ${kept}, momentum ${momentum}, tally ${taken}`);
 });
 
+test('under shearEntrainment a heated mixed layer whose bulk Richardson number is below Ri_c ends the step at the shear\'s depth h·√(Ri_c/Ri_b), its retreat in the same step held there however shallow its Monin–Obukhov depth', () => {
+  const dt = 1350, net = 150;
+  const column = pwpColumns({ buoyancyMemory: 0, detrainmentTime: dt }), { ocean, surfaceT, ice, inner } = column;
+  for (let i = 0; i < C; i++) surfaceT[i] += dt * net / ocean.capacity[i];
+  ocean.setStress(zonalWindOnEdges(mesh, () => 0.002), ice);
+  ocean.readSurface(surfaceT, ice);
+  const before = inner.map((i) => column.rib(i));
+  ocean.mixedLayer(dt);
+  let held = 0, worst = 0, deepest = 0;
+  inner.forEach((i, n) => {
+    if (!(ocean.retreatDepth[i] > 0)) return;
+    held++;
+    worst = Math.max(worst, Math.abs(ocean.h[i] - 20 * Math.sqrt(RIC / before[n])));
+    deepest = Math.max(deepest, ocean.retreatDepth[i]);
+  });
+  console.log(`${held} heated cells at Ri_b about 0.4 with Monin–Obukhov depths of at most ${deepest.toFixed(3)} m end the step at the shear's depth within ${worst.toExponential(2)} m`);
+  assert.ok(held > 300 && deepest < 5, `${held} heated cells, L up to ${deepest} m`);
+  assert.ok(worst < 1e-9, `the heated layer ended ${worst} m off h·√(Ri_c/Ri_b)`);
+});
+
 test('shearEntrainment without carryMomentum throws: the base\'s Richardson number would never rise', () => {
   assert.throws(() => createOcean(mesh, { shearEntrainment: RIC }), /carryMomentum/);
   assert.throws(() => pwpColumns({ carryMomentum: false }), /carryMomentum/);

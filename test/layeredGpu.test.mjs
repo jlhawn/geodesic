@@ -505,6 +505,33 @@ test('under shearEntrainment the GPU mixed layer takes in the class beneath as t
   assert.ok(entrained > 50, `${entrained} cells entrained`);
   assert.ok(hRel < 1e-5 && takenGap < 1e-3 && uGap < 1e-5, `h ${hRel} of itself, entrained ${takenGap}, u ${uGap} m/s`);
 
+  const heatedOptions = { ...sheared, minimumThickness: 5, shallowestMixedDepth: 5, detrainmentTime: dt, buoyancyMemory: 0 }, weak = Float64Array.from(stress, (x) => 0.02 * x);
+  const heatedCpu = cpuOcean(heatedOptions);
+  heatedCpu.load(saved, Float64Array.from(surfaceT0), ice);
+  const warm = Float64Array.from(surfaceT0, (t, i) => t + dt * 150 / heatedCpu.capacity[i]);
+  heatedCpu.setStress(weak, ice);
+  heatedCpu.readSurface(Float64Array.from(warm), ice);
+  heatedCpu.mixedLayer(dt);
+  const heatedModel = await createGpuModel(new Grid(8), { topography, ocean: heatedOptions }), heatedGpu = heatedModel.oceanEngine;
+  await heatedGpu.upload(saved, Float64Array.from(surfaceT0), ice);
+  heatedGpu.setStress(weak, ice);
+  heatedGpu.readSurface(Float64Array.from(warm), ice);
+  heatedGpu.mixedLayer(dt);
+  const heatedH = (await heatedGpu.download()).h;
+  heatedModel.destroy();
+  let held = 0, heldCpu = 0, heldGap = 0, retreated = 0;
+  for (let i = 0; i < C; i++) {
+    if (!heatedCpu.cellOcean[i] || ice[i] > 0 || !(heatedCpu.retreatDepth[i] > 0) || heatedCpu.retreatDepth[i] > 5) continue;
+    if (heatedCpu.h[i] < 5 + 1e-9) retreated++;
+    if (!(heatedCpu.sheared[i] > 0.1) || Math.abs(rib[i] / ric - 1) < 0.05) continue;
+    held++;
+    heldCpu = Math.max(heldCpu, Math.abs(heatedCpu.h[i] - (h0[i] + heatedCpu.sheared[i])));
+    heldGap = Math.max(heldGap, Math.abs(heatedH[i] - heatedCpu.h[i]) / heatedCpu.h[i]);
+  }
+  console.log(`heated under a weak wind, ${retreated} cells retreat to the 5 m floor while ${held} that shear entrains end the step at the shear's depth on the CPU within ${heldCpu.toExponential(2)} m, the GPU's within ${heldGap.toExponential(2)} of the CPU's`);
+  assert.ok(held > 20 && retreated > 20, `${held} held, ${retreated} retreated`);
+  assert.ok(heldCpu < 1e-9 && heldGap < 2e-4, `the CPU ${heldCpu} m off the shear's depth, the GPU ${heldGap} of it off the CPU`);
+
   await gpuOcean.upload(saved, Float64Array.from(surfaceT0), ice);
   const along = cpuOcean(sheared), without = cpuOcean({ ...sheared, shearEntrainment: 0 }), flux = new Float64Array(C);
   for (const ocean of [along, without]) ocean.load(saved, Float64Array.from(surfaceT0), ice);
