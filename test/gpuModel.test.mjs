@@ -41,18 +41,25 @@ function cloudDecisions(C, limit = 1) {
     },
   };
 }
-async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, options = {}, moist = {}, boundaryLayer = {}, each = null) {
+/*
+ * With `transmission`, a function of latitude, both engines' open water
+ * passes that share of its absorbed sunlight to `penetrated` (PH_PEN on the
+ * device) as an ocean publishing it would have them.
+ */
+async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, options = {}, moist = {}, boundaryLayer = {}, each = null, { transmission = null } = {}) {
   const { dragEvery = 1, ...radiation } = options;
-  const model = createModel(new Grid(N), { ocean: false, radiation: { stratus, ...radiation }, moist, boundaryLayer, surface: { exchange: options.surfaceExchange ?? 'roughness' }, dragEvery });
+  const grid = new Grid(N), shares = transmission ? new Float64Array(grid.size) : null, penetrated = transmission ? new Float64Array(grid.size) : null;
+  const model = createModel(grid, { ocean: false, radiation: { stratus, ...radiation }, moist, boundaryLayer, surface: { exchange: options.surfaceExchange ?? 'roughness' }, dragEvery, ...(shares ? { ice: { transmission: shares, penetrated } } : {}) });
+  if (shares) model.mesh.latCell.forEach((lat, i) => { shares[i] = transmission(lat); });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
   for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += inversion;
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, ...options, ...moist, ...boundaryLayer } });
+  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, ...options, ...moist, ...boundaryLayer, ...(shares ? { penetration: 'IB' } : {}) } });
   gpu.upload(model.state);
-  gpu.uploadPhysics();
+  gpu.uploadPhysics(shares ? { transmission: shares } : {});
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(dt); await gpu.stepModel(dt, time); if (each) await each(model, await gpu.downloadPhysics(), gpu); }
-  return { model, gpu, state: await gpu.download(), physics: await gpu.downloadPhysics() };
+  return { model, gpu, state: await gpu.download(), physics: await gpu.downloadPhysics(), penetrated };
 }
 
 test('one full GPU step with physics matches the CPU model', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -453,8 +460,8 @@ test('under the moist boundary layer the deck gated by its coupled stratocumulus
   }
 });
 
-test('twelve full GPU steps track the CPU model and its energy budget', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { model, state, physics } = await pair(6, 12, 900);
+for (const [label, transmission] of [['', null], [', with open water passing a share of its sunlight to the ocean below', (lat) => 0.02 + 0.16 * Math.cos(lat) ** 2]]) test(`twelve full GPU steps track the CPU model and its energy budget${label}`, { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { model, state, physics, penetrated } = await pair(6, 12, 900, 0, false, {}, {}, {}, null, { transmission });
   const read = model.diagnostics(), d = { ...read, ...read.instantaneous };
   const C = model.mesh.nCells;
   let area = 0, ts = 0, abs = 0, atmosphere = 0, olr = 0, rain = 0;
@@ -476,6 +483,12 @@ test('twelve full GPU steps track the CPU model and its energy budget', { skip: 
   console.log(`snow on ${snowOnIce} iced sea cells, engines differ by at most ${worstSnow.toExponential(1)} kg/m²; ice by ${ice.maxDiff.toExponential(1)} m, concentration by ${concentration.maxDiff.toExponential(1)}; ice fraction ${d.iceFraction.toFixed(4)}`);
   assert.ok(worstSnow < 1e-3, `snow on the surface differs between engines by ${worstSnow}`);
   assert.ok(ice.maxDiff < 1e-3 && concentration.maxDiff < 1e-3, `ice ${ice.maxDiff} m at ${ice.at}, concentration ${concentration.maxDiff} at ${concentration.at}`);
+  if (!penetrated) return;
+  const passed = penetrated.subarray(0, C), held = stats(passed, physics.PEN.subarray(0, C));
+  let lit = 0, cpuMean = 0, gpuMean = 0;
+  for (let i = 0; i < C; i++) { const a = model.mesh.areaCell[i] / area; cpuMean += a * passed[i]; gpuMean += a * physics.PEN[i]; if (passed[i] > 0) lit++; }
+  console.log(`${lit} open-water cells passed ${cpuMean.toFixed(1)} J/m² of sunlight to the ocean below on the CPU and ${gpuMean.toFixed(1)} on the GPU; per cell rms relative ${held.rmsRel.toExponential(1)}, at most ${held.maxDiff.toExponential(1)} J/m²`);
+  assert.ok(lit > 0 && Math.abs(gpuMean - cpuMean) < 1e-4 * cpuMean && held.rmsRel < 1e-4, `the light passed: ${gpuMean} against ${cpuMean} J/m² in ${lit} cells, rms relative ${held.rmsRel}`);
 });
 
 test('with the radiation held between full calls every fourth step, twelve GPU steps track the CPU model: the call\'s cosine, the shares of the surface\'s emission, the OLR and the surface fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

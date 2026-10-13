@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, LAYER_BOTTOMS } from '../js/ocean/layered.module.js';
+import { createOcean, LAYER_BOTTOMS, transmitted } from '../js/ocean/layered.module.js';
 import { seawaterDensity, thermalExpansion, labelTemperature } from '../js/ocean/seawater.module.js';
 import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, UNIFORM, uniformOcean, deepen, slowOcean, columnMomentum } from './helpers/layered.mjs';
 
@@ -53,6 +53,45 @@ test('a deep mixed layer retreats toward shallowestMixedDepth over detrainmentTi
     const expected = warming > 0 ? 50 + 250 * (1 - dt / 86400) ** steps : 300;
     for (let i = 0; i < C; i++) assert.ok(Math.abs(ocean.h[i] - expected) < 1e-4, `warming ${warming} K a step: cell ${i} is ${ocean.h[i]} m deep, not ${expected}`);
   }
+});
+
+/*
+ * Open water under a steady 0.05 N/m² wind gaining 50 W/m² net, 200 W/m²
+ * of it sunlight, its surface updated as the atmosphere's step does it:
+ * with penetration the share the ocean publishes goes to the waiting light
+ * rather than the SST. The mixed layer retreats toward the Monin–Obukhov
+ * depth L = 2 m u*³/B of the heating it keeps, so with penetration toward
+ * the depth h that solves h = L(h), S·(transmitted(h) − transmitted(D))
+ * of the sunlight passing below it.
+ */
+test('with the same net flux, part of it sunlight, the mixed layer retreats to a deeper Monin–Obukhov depth with penetration than without, at the depth where L(h) = h', () => {
+  const dt = 2700, g = 9.81, tau = 0.05, sunlight = 200, net = 50, stirring = 0.8, stirringDepth = 100, days = 4;
+  const band = [...Array(C).keys()].filter((i) => Math.abs(mesh.latCell[i]) < 50 * DEG), runs = {};
+  for (const penetration of [null, 'IB']) {
+    const { ocean, surfaceT, ice, flux } = uniformOcean({ penetration, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, stirring, stirringDepth });
+    const stress = zonalWindOnEdges(mesh, () => tau);
+    for (let n = 0; n < days * 86400 / dt; n++) {
+      for (let i = 0; i < C; i++) {
+        const passed = penetration ? sunlight * ocean.transmission[i] : 0;
+        surfaceT[i] += dt * (net - passed) / ocean.capacity[i];
+        if (penetration) ocean.penetrated[i] += dt * passed;
+      }
+      ocean.advance(surfaceT, ice, flux, stress, dt);
+    }
+    let depth = 0, target = 0, worst = 0;
+    for (const i of band) {
+      const alpha = thermalExpansion(surfaceT[i], ocean.W[i] / ocean.h[i]), bottom = ocean.D[i] + ocean.eta[i];
+      const L = (h) => 2 * stirring * Math.exp(-h / stirringDepth) * (tau / RHO) ** 1.5 * ocean.rhoCp / (g * alpha * (net - (penetration ? sunlight * (transmitted(h) - transmitted(bottom)) : 0)));
+      let h = 10;
+      for (let it = 0; it < 100; it++) h = L(h);
+      depth += ocean.h[i] / band.length; target += h / band.length; worst = Math.max(worst, Math.abs(ocean.h[i] / h - 1));
+    }
+    runs[penetration ?? 'none'] = { depth, target, worst };
+    console.log(`penetration ${penetration}: after ${days} days the mixed layer within 50° of the equator is ${depth.toFixed(2)} m deep against a mean L(h) = h of ${target.toFixed(2)} m, each column within ${(100 * worst).toFixed(1)} % of its own`);
+  }
+  const { none, IB } = runs;
+  assert.ok(Math.abs(IB.depth / IB.target - 1) < 0.03 && IB.worst < 0.05, `with penetration the layer is ${IB.depth} m against ${IB.target}, a column ${IB.worst} off`);
+  assert.ok(IB.target > none.target + 3 && IB.depth - none.depth > 0.75 * (IB.target - none.target), `penetration deepens the layer by ${IB.depth - none.depth} m against ${IB.target - none.target}`);
 });
 
 test('a mixed layer within the density range of the class beneath erodes it at B/(h N²) while it loses buoyancy, N² the class\'s remaining density span over its thickness', () => {
@@ -195,12 +234,12 @@ test('at 10 m floors a 600 m mixed layer beside 10 m ones at 60°S, and the remn
     [fine, -45, { everySteps: 1, vorticityCentring: 0.5 }, 600, -0.05, 2 * 32, 2700],
   ]) {
     const offsetFrom = (i) => Math.abs(m.latCell[i] - latitude * DEG) + Math.abs(m.lonCell[i]);
-    let centre = 0;
-    for (let i = 1; i < m.nCells; i++) if (offsetFrom(i) < offsetFrom(centre)) centre = i;
+    let center = 0;
+    for (let i = 1; i < m.nCells; i++) if (offsetFrom(i) < offsetFrom(center)) center = i;
     const ocean = await slowOcean(m, {
       ocean: { ...options, ...floors },
       surfaceT: latitude === -60 ? new Float64Array(m.nCells).fill(278) : Float64Array.from(m.latCell, (lat) => Math.max(272, 302 - 32 * Math.sin(lat) ** 2)),
-      start: (column) => deepen(column, [centre], depth, offset),
+      start: (column) => deepen(column, [center], depth, offset),
     });
     const calm = new Float64Array(m.nEdges);
     let fastest = 0, thinnest = Infinity;
@@ -211,7 +250,7 @@ test('at 10 m floors a 600 m mixed layer beside 10 m ones at 60°S, and the remn
       for (let i = 0; i < m.nCells; i++) if (ocean.cellOcean[i]) thinnest = Math.min(thinnest, h[i]);
     }
     const limited = (await ocean.diagnostics()).oceanLimited, { h } = await ocean.download();
-    runs.push({ latitude, engine: ocean.engine, fastest, thinnest, limited, deep: h[centre] });
+    runs.push({ latitude, engine: ocean.engine, fastest, thinnest, limited, deep: h[center] });
     await ocean.close();
   }
   for (const run of runs) console.log(`a 600 m mixed layer at ${-run.latitude}°S among 10 m ones on the ${run.engine} ocean: fastest water ${run.fastest.toFixed(3)} m/s, the thinnest mixed layer ${run.thinnest.toFixed(1)} m, the deep one ${run.deep.toFixed(0)} m, ${run.limited} clamped edges`);

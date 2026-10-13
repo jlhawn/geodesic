@@ -46,8 +46,9 @@ function spunUp(steps = SPINUP, options = {}, wind = 0.1) {
 
 /*
  * What one phase did to the sea, from cell-by-cell differences of two
- * snapshots of the stores (h, heat as h·(T − HEAT_REFERENCE), salt h·S)
- * and of the sunlight waiting to be deposited (J/m²), summed over every
+ * snapshots of the stores (h, heat as h·(T − HEAT_REFERENCE), salt h·S),
+ * on the GPU with what each column's remainder holds of the three, and
+ * of the sunlight waiting to be deposited (J/m²), summed over every
  * layer and cell in double precision: the heat, the stores' with the
  * waiting light's, as a global-mean flux over the step (W/m²), and
  * `stored`, the stores' alone, the salt and the volume as global means
@@ -67,6 +68,10 @@ function books(before, after, layers, rhoCp, D) {
     }
     const a = mesh.areaCell[i];
     heat += a * dq; salt += a * dw; volume += a * dh; waiting += a * (after.pen[i] - before.pen[i]);
+    if (before.rem) {
+      const left = (n) => after.rem[n] - before.rem[n];
+      volume += a * left(i); heat += a * left(C + i); salt += a * (left(2 * C + i) + SALT_REFERENCE * left(i));
+    }
     if (h > 0) { offHeat += a * (dq - q / h * dh); offSalt += a * (dw - w / h * dh); }
   }
   const watts = (x) => rhoCp * x / (AREA * DT);
@@ -214,13 +219,13 @@ async function onGpu({ ocean: cpu, surfaceT, ice, stress, options }) {
   ocean.setStress(stress, ice);
   const stores = async () => {
     await gpu.device.queue.onSubmittedWorkDone();
-    const [[h, q, w], [pen]] = await Promise.all([readRanges(gpu.device, ocean.buffers.S, [{ offset: OS.OH, length: layers * C }, { offset: OS.OQ, length: layers * C }, { offset: OS.OW, length: layers * C }]), readRanges(gpu.device, gpu.buffers.PH, [{ offset: PH.PEN, length: C }])]);
-    return [h, q, w, pen];
+    const [[h, q, w], [pen], [rem]] = await Promise.all([readRanges(gpu.device, ocean.buffers.S, [{ offset: OS.OH, length: layers * C }, { offset: OS.OQ, length: layers * C }, { offset: OS.OW, length: layers * C }]), readRanges(gpu.device, gpu.buffers.PH, [{ offset: PH.PEN, length: C }]), readRanges(gpu.device, ocean.buffers.OD, [{ offset: ocean.layout.OD.REM, length: 3 * C }])]);
+    return [h, q, w, pen, rem];
   };
   const snapshot = async () => {
-    const [h, q, w, pen] = await stores();
+    const [h, q, w, pen, rem] = await stores();
     const [[u], [eta]] = await Promise.all([readRanges(gpu.device, ocean.buffers.S, [{ offset: OS.OU, length: layers * E }]), readRanges(gpu.device, ocean.buffers.OD, [{ offset: ocean.layout.OD.ETA, length: C }])]);
-    return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w, (x, n) => x + SALT_REFERENCE * h[n]), u: Float64Array.from(u), eta: Float64Array.from(eta), pen: Float64Array.from(pen) };
+    return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w, (x, n) => x + SALT_REFERENCE * h[n]), u: Float64Array.from(u), eta: Float64Array.from(eta), pen: Float64Array.from(pen), rem: Float64Array.from(rem) };
   };
   const light = [];
   const pass = async () => {
@@ -260,9 +265,11 @@ function within(label, record, floors) {
  * when the surface has not changed, and without freshwater or ice the
  * velocity shift and the salt and surface write leave the stores alone.
  * The mixed layer's exchanges move whole multiples of the coarser store's
- * spacing; the eddy transport moves them across each edge and gives what
- * rounding leaves in a column to its finest stores; the RK4 and the
- * rescale round each cell's update, and the RK4's water carries its salt.
+ * spacing and keep what a store's new spacing cannot hold in its column's
+ * remainder, so its rows are exact; the eddy transport moves them across
+ * each edge and gives what rounding leaves in a column to its finest
+ * stores; the RK4 and the rescale round each cell's update, and the RK4's
+ * water carries its salt.
  * The deposit of the passed sunlight changes each class by whole multiples
  * of its store's spacing and keeps the rest waiting, so only the sums of
  * its float32 subtractions round, and the surface read deposits what
@@ -275,7 +282,7 @@ const GPU_FLOORS = {
   rescale: [0.01, 0.2, 2e-8, 1e-5, Infinity, Infinity],
   eddy: [0.01, 0.01, 1e-6, 2e-6, 3e-8, 6e-8],
   shift: EXACT,
-  mixedLayer: [1e-4, 2e-3, 1e-9, 1e-8, 1e-12, 1e-11],
+  mixedLayer: EXACT,
   'salt and surface': EXACT,
   deposit: [1e-7, 2e-7, 1e-12, 1e-12, 1e-15, 1e-15],
 };
@@ -338,16 +345,6 @@ test('with carryMomentum the GPU mixed layer\'s exchanges keep each edge\'s colu
   assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-5, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
 });
 
-/*
- * Bounds as for GPU_FLOORS on capped()'s mixed-layer step, in which every
- * column refills 0.5 m and a thirteenth of them from 2 m, where spunUp's
- * sea refills none and its step changes nothing. An M1 Max leaves heat
- * 2.1e-4 W/m² on average and 9.1e-4 at most, salt 6.3e-9 and 8.0e-8
- * psu·m and volume 1.9e-10 and 2.3e-9 m; refilled at once to the same
- * floor, 1.0e-5 and 8.0e-5, 7.8e-8 and 6.2e-7, and 2.3e-9 and 1.8e-8.
- */
-const CAPPED_FLOORS = { mixedLayer: [1e-3, 5e-3, 3e-8, 3e-7, 1e-9, 1e-8] };
-
 test('under refillRate the GPU mixed layer\'s refill keeps heat, salt, volume and each edge\'s column momentum to single-precision rounding while every column runs in deficit, and leaves none below refillFloor', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const sea = await onGpu(capped()), { ocean, stores } = sea;
   const record = await sea.follow(8);
@@ -357,7 +354,7 @@ test('under refillRate the GPU mixed layer\'s refill keeps heat, salt, volume an
   for (let i = 0; i < C; i++) if (sea.ocean.cellOcean[i]) thinnest = Math.min(thinnest, h[i]);
   report('GPU capped', { mixedLayer: record.mixedLayer });
   console.log(`GPU capped: ${(100 * thinned).toFixed(1)} % of the sea thinned at the end, the thinnest mixed layer ${thinnest.toFixed(3)} m`);
-  within('GPU capped', record, CAPPED_FLOORS);
+  within('GPU capped', record, { mixedLayer: GPU_FLOORS.mixedLayer });
   assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-5, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
   assert.ok(thinned > 0.5 && thinnest >= 5 - 1e-4, `thinned ${thinned}, thinnest ${thinnest} m`);
 });

@@ -326,7 +326,7 @@ test('under interiorShearMixing the GPU drag between interior classes follows th
   gpuModel.destroy();
 });
 
-test('the GPU mixed layer holds, retreats, convects, keeps to its neighbours and, under the old options, snaps back as the CPU one does, carrying the momentum of the water it moves as the CPU one does and keeping each edge\'s column momentum', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the GPU mixed layer holds, retreats, convects, keeps to its neighbors and, under the old options, snaps back as the CPU one does, carrying the momentum of the water it moves as the CPU one does and keeping each edge\'s column momentum', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
   const mesh = cpuModel.mesh, C = mesh.nCells, E = mesh.nEdges;
   const sea = [...Array(C).keys()].filter((i) => cpuModel.geography.land[i] === 0);

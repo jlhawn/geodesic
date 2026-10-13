@@ -125,7 +125,7 @@ if (resumed) {
   restartNames.push(...new Set([...Object.keys(resumed.ocean), ...Object.keys(loaded)].filter((name) => !['T', 'S', 'densities'].includes(name))));
   for (const name of restartNames) {
     const want = resumed.ocean[name], got = loaded[name];
-    if ((want == null && name === 'penetrated' && got && got.every((x) => x === 0)) || (name === 'transmission' && (want == null || got == null))) continue;
+    if ((want == null && (name === 'penetrated' || name === 'remainder') && got && got.every((x) => x === 0)) || (name === 'transmission' && (want == null || got == null))) continue;
     if (want == null || got == null || want.length !== got.length) { differing.push(`${name} (${want == null ? 'missing' : want.length} saved, ${got == null ? 'missing' : got.length} loaded)`); continue; }
     let count = 0;
     for (let n = 0; n < want.length; n++) if (Math.fround(want[n]) !== Math.fround(got[n]) && !(Number.isNaN(want[n]) && Number.isNaN(got[n]))) count++;

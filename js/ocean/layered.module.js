@@ -34,7 +34,7 @@ import { profileAt } from './climatology.module.js';
  * layer is often a remnant a few metres thick beside the full layer next
  * door, and on the smaller thickness alone the Coriolis force it
  * assembles from its thick neighbours' fluxes is many times what its
- * pressure gradient balances, a jet at metres a second. The potential
+ * pressure gradient balances, a jet at meters a second. The potential
  * vorticity's thickness is no less than PV_FLOOR for a class and THIN for
  * the mixed layer.
  *

@@ -2034,6 +2034,39 @@ mixed layer lies more than 1 cm below its floor where the water beneath
 could fill it; `scripts/refillCheck.mjs` reports it each day with the
 cells held at `refillFloor`.
 
+**Penetrating sunlight.** Under `penetration: 'IB'` (M27; `null` by
+default, when all the sunlight absorbed at the surface heats the mixed
+layer) part of it passes the mixed layer as in Jerlov's water type IB
+(Paulson and Simpson 1977): the share passing depth z is
+J(z) = 0.67 e^(−z/1 m) + 0.33 e^(−z/17 m) less J(300 m), so none goes
+deeper than 300 m; 18 % passes 10 m, 10 % 20 m and 1.7 % 50 m. Each
+write of the surface publishes beside the heat capacity the share
+TRANS = J(h₀) − J(D + η) the classes take, 0 where no class beneath the
+mixed layer is thicker than 5 m. The surface update of every atmosphere
+step over open water keeps pen = TRANS × the absorbed sunlight out of
+the SST, which changes by dt (net − pen)/capacity, and adds dt·pen
+(J/m²) to the light waiting in `PEN`; under ice and in leads none
+passes. The net flux, the radiation and the atmosphere's books are as
+without penetration, and B̄, taken from the SST's change, counts only
+the heating the mixed layer keeps: under a 0.05 N/m² wind and 50 W/m²
+of net heating, 200 W/m² of it sunlight, the layer retreats to 35 m
+rather than 31 m, where h = L(h) with the light passing below it taken
+out (`test/layeredMixedLayer.test.mjs`). Each read of the surface
+deposits `PEN` in the classes beneath the mixed layer by depth: a class
+thicker than 5 m takes the light absorbed over its own depths, a thinner
+class or token passes its share down to the next, and the last receiver
+takes what passes it. On the GPU each class changes by whole multiples
+of its store's spacing and what the stores cannot take waits in `PEN`
+for the next read, at most ρc_p times half the spacing of the last
+receiver's store (about 1.6×10⁴ J/m² under a 4000 m class at 17 °C) plus
+the light passed since that read. The column's heat is therefore exact
+on both engines, while a class's share agrees between them only to its
+receivers' spacings (`test/layeredSunlight.test.mjs`, and over twelve
+coupled steps the light passed in `test/gpuModel.test.mjs`). The
+ocean-only phase reads the recorded absorbed shortwave, a restart
+carries `PEN` (older files load with none waiting), and
+`scripts/explainOcean.mjs` counts it in the ocean's store.
+
 **Salinity.** Evaporation minus rain is accumulated per cell over the
 atmosphere steps between ocean steps, and each land cell's runoff flows
 down the terrain to the sea: to the lowest of its neighbours that is
@@ -2295,8 +2328,11 @@ layer's single-precision store records the eddy transport's small
 losses (as h·T it rounded them away while the thin layers receiving
 them did not, and the sea gained 0.6 W/m² with no surface flux); the
 mixed layer's exchanges move whole multiples of the coarser store's
-spacing, and the surface read adds only the surface's change since the
-ocean wrote it, so that neither creates or destroys heat
+spacing, a store an exchange carries into a coarser binade gives the
+bit its new spacing cannot hold to the column's finest store that can
+take it or to a per-column remainder that waits for one (and that a
+restart carries), and the surface read adds only the surface's change
+since the ocean wrote it, so that neither creates or destroys heat
 (`test/layeredConservation.test.mjs` follows heat and salt through each
 phase of a step on both engines). Over 140 coupled days from Part 8's
 day 3650 the sea's side of the books then leaves 0.11 W/m² unplaced

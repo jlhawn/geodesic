@@ -128,23 +128,38 @@ fn closureSolve(fit: ClosureFit) -> f32 {
   return (q * fit.sau - fit.sab * fit.sbu) / (p * q - fit.sab * fit.sab);
 }
 fn grain(x: f32) -> f32 { return ldexp(1.0, max(frexp(x).exp - 24, -126)); }
-fn settle(x: f32, change: f32) -> f32 { let g = grain(max(abs(x), abs(x + change))); return round(change / g) * g; }
-fn transmitted(z: f32) -> f32 { let d = min(z, PENDEPTH); return JER_R1 * exp(-d / JER_Z1) + JER_R2 * exp(-d / JER_Z2) - JER_FLOOR; }
-// A multiple of the coarser store's spacing, which both record exactly; Metal's fast math folds the (b + a) − b form to a.
-fn transfer(src: i32, dst: i32, amount: f32) -> f32 {
-  let a = IN[src]; let b = IN[dst];
-  let q = max(max(grain(a), grain(b)), max(grain(a - amount), grain(b + amount)));
-  let moved = round(amount / q) * q;
-  IN[src] = a - moved; IN[dst] = b + moved;
-  return moved;
+fn settle(x: f32, change: f32) -> f32 {
+  let g = grain(max(abs(x), abs(x + change))); let r = round(change / g) * g;
+  return select(r, r - (x / g - round(x / g)) * g, abs(r) <= abs(x));
 }
+fn transmitted(z: f32) -> f32 { let d = min(z, PENDEPTH); return JER_R1 * exp(-d / JER_Z1) + JER_R2 * exp(-d / JER_Z2) - JER_FLOOR; }
+// Returns the amount moved and what the destination's new spacing cannot hold; Metal's fast math folds the (b + a) − b form to a.
+fn transfer(src: i32, dst: i32, amount: f32) -> vec2<f32> {
+  let a = IN[src]; let b = IN[dst];
+  var q = max(max(grain(a), grain(b)), max(grain(a - amount), grain(b + amount)));
+  var moved = round(amount / q) * q;
+  let g = max(grain(b), grain(b + moved));
+  if (g > q) { q = g; moved = round(amount / q) * q; }
+  let kept = round(b / g) * g;
+  IN[src] = a - moved; IN[dst] = kept + moved;
+  return vec2<f32>(moved, (b / g - round(b / g)) * g);
+}
+var<private> LEFT: vec3<f32>;
 fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   let ha = hOff(srcK) + i; let hb = hOff(dstK) + i;
   let qa = qOff(srcK) + i; let qb = qOff(dstK) + i;
   let wa = wOff(srcK) + i; let wb = wOff(dstK) + i;
   let h = IN[ha];
-  let f = transfer(ha, hb, amount) / h;
-  transfer(qa, qb, IN[qa] * f); transfer(wa, wb, IN[wa] * f);
+  let mh = transfer(ha, hb, amount); let f = mh.x / h;
+  let mq = transfer(qa, qb, IN[qa] * f); let mw = transfer(wa, wb, IN[wa] * f);
+  LEFT += vec3<f32>(mh.y, mq.y, mw.y);
+}
+fn placeLeft(at: i32, change: f32) -> f32 {
+  let x = IN[at]; let g = grain(x);
+  if (change == 0.0 || grain(x + change) > g) { return change; }
+  let r = round(change / g) * g;
+  IN[at] = x + r;
+  return change - r;
 }
 `;
   const idx = `(i32(id.x) + i32(id.y) * 4194240)`;
@@ -348,7 +363,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; sum += MF[F_PVW + slot] * IN[uOff(k) + MI[EOE + slot]]; }
   return sum / MF[F_DC + e];
 }
-// The mixed layer's term stays apart: Metal's fast math hoists it out of the layer loop, and folding it changes the drag's rounding.
+// Folding the k == 0 branch into the general one changes the drag's float32 rounding under Metal's fast math.
 fn dragThickness(k: i32, e: i32) -> f32 { return select(max(OD[O_HEDGE + k * E + e], THINO), max(OD[O_HEDGE + e], THINO), k == 0); }
 fn interfaceRate(e: i32, up: i32, down: i32) -> f32 {
   let interior = up > 0 && INTSHEAR > 0.5;
@@ -812,6 +827,22 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
       j += stepK;
     }
   }
+  let left = LEFT + vec3<f32>(OD[O_REM + i], OD[O_REM + C + i], OD[O_REM + 2 * C + i]);
+  if (any(left != vec3<f32>(0.0))) {
+    var kh = 0; var kq = 0; var kw = 0; var gh = 0.0; var gq = 0.0; var gw = 0.0;
+    for (var k = 0; k < L; k++) {
+      let hk = IN[hOff(k) + i];
+      if (hk <= THINO) { continue; }
+      let qk = IN[qOff(k) + i]; let wk = IN[wOff(k) + i];
+      let a = grain(hk); let b = grain(qk); let c = grain(wk);
+      if (grain(hk + left.x) <= a && (gh == 0.0 || a < gh)) { kh = k; gh = a; }
+      if (grain(qk + left.y) <= b && (gq == 0.0 || b < gq)) { kq = k; gq = b; }
+      if (grain(wk + left.z) <= c && (gw == 0.0 || c < gw)) { kw = k; gw = c; }
+    }
+    OD[O_REM + i] = select(left.x, placeLeft(hOff(kh) + i, left.x), gh > 0.0);
+    OD[O_REM + C + i] = select(left.y, placeLeft(qOff(kq) + i, left.y), gq > 0.0);
+    OD[O_REM + 2 * C + i] = select(left.z, placeLeft(wOff(kw) + i, left.z), gw > 0.0);
+  }
 }`,
     oSalt: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
@@ -961,7 +992,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ['SURFT', C], ['SURFICE', C], ['SURFCONC', C], ['SURFACEIN', C], ['T0', C], ['S0', C], ['RAINSEEN', C],
     ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
     ['RUNOFFSEEN', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
-    ['EDDYK', E], ['TEDGE', 3 * E], ['DEEPEST', E],
+    ['EDDYK', E], ['TEDGE', 3 * E], ['DEEPEST', E], ['REM', 3 * C],
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -1351,6 +1382,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVVOL, restart ? Float32Array.from(restart.previousIceVolume) : Float32Array.from(ice, (_, i) => coverOf(ice, concentration, i) * ice[i]));
     if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.FRESH, Float32Array.from(restart.fresh));
     if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.BUOY, Float32Array.from(restart.buoyancy));
+    if (restart && restart.remainder && restart.remainder.length === 3 * C) device.queue.writeBuffer(ob.OD, 4 * OD.REM, Float32Array.from(restart.remainder));
     const capacity = restart ? restart.capacity : Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
     const kept = (name) => (restart && restart[name] && restart[name].length === C ? restart[name] : null);
     core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null, transmission: o.penetration ? kept('transmission') ?? transmissionOf(h, eta) : null, penetrated: kept('penetrated') });
@@ -1457,13 +1489,13 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
    */
   async function restartArrays() {
     const PHL = core.layout.PH;
-    const [[Qref, Wref], [previousT0, previousIceVolume, fresh, buoyancy], [flux, capacity, penetrated]] = await Promise.all([
+    const [[Qref, Wref], [previousT0, previousIceVolume, fresh, buoyancy, remainder], [flux, capacity, penetrated]] = await Promise.all([
       readRanges(device, ob.S, [{ offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]),
-      readRanges(device, ob.OD, [{ offset: OD.PREVT0, length: C }, { offset: OD.PREVVOL, length: C }, { offset: OD.FRESH, length: C }, { offset: OD.BUOY, length: C }]),
+      readRanges(device, ob.OD, [{ offset: OD.PREVT0, length: C }, { offset: OD.PREVVOL, length: C }, { offset: OD.FRESH, length: C }, { offset: OD.BUOY, length: C }, { offset: OD.REM, length: 3 * C }]),
       readRanges(device, buffers.PH, [{ offset: PHL.OFLUX, length: C }, { offset: PHL.CAP, length: C }, { offset: PHL.PEN, length: C }]),
     ]);
     const transmission = o.penetration ? (await readRanges(device, buffers.PH, [{ offset: PHL.TRANS, length: C }]))[0] : null;
-    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, buoyancy, flux, capacity, penetrated, ...(transmission ? { transmission } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
+    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, buoyancy, remainder, flux, capacity, penetrated, ...(transmission ? { transmission } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
   }
 
   function diagnosticsFrom(sums) {

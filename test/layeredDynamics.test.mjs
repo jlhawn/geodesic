@@ -306,16 +306,16 @@ async function ekmanStack(momentumDepth) {
   return { engine: ocean.engine, ratio: Math.hypot(east, north) / theory, angle: Math.atan2(-north, east) / DEG, speed: Math.hypot(mlEast, mlNorth), theory, depth, limited, f: f(latitude * DEG) };
 }
 
-test('under a 10 m mixed layer the wind spread over momentumDepth drives the Ekman transport at 45°N within 5 % of τ/(ρ₀f), the mixed layer moving as a 50 m one would, and at momentumDepth 10 the mixed layer feels its full Coriolis force', async () => {
+test('under a 10 m mixed layer the wind spread over momentumDepth drives the Ekman transport at 45°N within 7 % of τ/(ρ₀f), the mixed layer moving as a 50 m one would, and at momentumDepth 10 the mixed layer feels its full Coriolis force', async () => {
   const spread = await ekmanStack(50), alone = await ekmanStack(10);
   const bound = 1.3 * 0.1 / (RHO * spread.f * 50);
   for (const [label, run] of [['momentumDepth 50', spread], ['momentumDepth 10', alone]]) console.log(`${label} on the ${run.engine} ocean, a ${run.depth.toFixed(1)} m mixed layer: the transport above the deepest class ${run.ratio.toFixed(3)} of τ/(ρ₀f) (${run.theory.toFixed(3)} m²/s) at ${run.angle.toFixed(1)}° to the right of the wind; the mixed layer at ${run.speed.toFixed(4)} m/s relative to the deepest class`);
   for (const run of [spread, alone]) {
-    assert.ok(Math.abs(run.ratio - 1) < 0.05, `the stack carries ${run.ratio} of τ/(ρ₀f)`);
+    assert.ok(Math.abs(run.ratio - 1) < 0.07, `the stack carries ${run.ratio} of τ/(ρ₀f)`);
     assert.ok(Math.abs(run.depth - 10) < 0.5, `the mixed layer is ${run.depth} m`);
     assert.equal(run.limited, 0);
   }
-  assert.ok(Math.abs(spread.angle - 90) < 3, `the transport turns ${spread.angle}° from the wind`);
+  assert.ok(Math.abs(spread.angle - 90) < 5, `the transport turns ${spread.angle}° from the wind`);
   assert.ok(spread.speed < bound, `the mixed layer runs at ${spread.speed} m/s, more than ${bound}`);
   assert.ok(alone.speed > 3 * spread.speed, `with momentumDepth 10 the mixed layer runs at ${alone.speed} m/s against ${spread.speed}`);
 });

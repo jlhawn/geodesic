@@ -33,11 +33,10 @@ function spunUp() {
 }
 
 /*
- * The spun-up air over a layered ocean started under it, with the
- * penetrating sunlight `penetration`.
+ * The spun-up air over a layered ocean started under it.
  */
-function overOcean(penetration) {
-  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: { penetration } });
+function overOcean() {
+  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: {} });
   slab.state.forEach((values, s) => model.state[s].set(values));
   model.seaIce.load(model.state[6], slab.seaIce.concentration);
   model.ocean.initialize(model.state[3], model.state[6]);
@@ -75,7 +74,7 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-for (const [label, build] of [['over a slab', spunUp], ['over a layered ocean', () => overOcean(null)], ['over a layered ocean that takes the penetrating sunlight', () => overOcean('IB')]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
+for (const [label, build] of [['over a slab', spunUp], ['over a layered ocean', overOcean]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
   const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));
