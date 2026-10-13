@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
@@ -8,7 +8,9 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * layer over interior isopycnal layers, each a TRiSK shallow-water layer
  * carrying thickness, edge velocity, heat h·(T − HEAT_REFERENCE) and salt
  * h·(S − SALT_REFERENCE), each measured from its reference so that a thick
- * layer's float32 store keeps the eddy transport's small changes. The RK4
+ * layer's float32 store keeps the eddy transport's small changes, and the
+ * sunlight it deposits below the mixed layer (`penetration`), whose
+ * remainder under each store's spacing waits in PH_PEN. The RK4
  * baroclinic state (h, u, heat, salt for all L layers) lives in a
  * ping-pong buffer set (S/T/K1-K4); everything else the step needs
  * (edge thicknesses, PV, the interior potential, the ∇⁴ closure scratch,
@@ -36,7 +38,7 @@ export const OCEAN_DEFAULTS = {
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
   momentumDepth: 50, carryMomentum: false,
   interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
-  eddyDiffusivity: 1000, eddyTaperDepth: 200,
+  eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: null,
   gustiness: 3,
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
@@ -51,6 +53,7 @@ function oceanKernels(o) {
   const { L, C, E, V, OS, OD, B } = o;
   if (L > 64) throw new Error(`oMomentum marks an edge's thick classes in 64 bits, and the ocean has ${L} classes`);
   const constLine = (name, value) => `const ${name}: f32 = ${Number(value).toExponential(10)};`;
+  const jerlov = JERLOV[o.penetration ?? 'IB'];
   const rhoLine = `const RHO: array<f32, ${L}> = array<f32, ${L}>(${o.rho.map((v) => v.toFixed(6)).join(', ')});`;
   const spread = (sign) => o.rho.map((r, k) => r + sign * 0.5 * (sign < 0 ? (k > 1 ? r - o.rho[k - 1] : o.rho[k + 1] - r) : (k < L - 1 ? o.rho[k + 1] - r : r - o.rho[k - 1])));
   const classLine = `const LIGHTEST: array<f32, ${L}> = array<f32, ${L}>(${spread(-1).map((v) => v.toFixed(6)).join(', ')});\nconst DENSEST: array<f32, ${L}> = array<f32, ${L}>(${spread(1).map((v) => v.toFixed(6)).join(', ')});`;
@@ -73,6 +76,7 @@ ${constLine('NEUTRALSNAP', o.neutralSnap ? 1 : 0)} ${constLine('EROSION', o.conv
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('SHEARMIX', o.shearMixing ? 1 : 0)} ${constLine('INTSHEAR', o.interiorShearMixing ? 1 : 0)} ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundViscosity)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
 ${constLine('FREEZE', FREEZING_POINT)} ${constLine('TREF', HEAT_REFERENCE)} ${constLine('SREF', SALT_REFERENCE)} ${constLine('GUSTO', o.gustiness)} ${constLine('CLOSURERIDGE', CLOSURE_RIDGE)} ${constLine('CLOSUREFILL', o.closureFill || 0)} ${constLine('CLOSURERINGS', o.closureRings ? 1 : 0)}
+${constLine('JER_R1', jerlov[0])} ${constLine('JER_R2', 1 - jerlov[0])} ${constLine('JER_Z1', jerlov[1])} ${constLine('JER_Z2', jerlov[2])} ${constLine('PENDEPTH', PENETRATION_DEPTH)} ${constLine('JER_FLOOR', jerlov[0] * Math.exp(-PENETRATION_DEPTH / jerlov[1]) + (1 - jerlov[0]) * Math.exp(-PENETRATION_DEPTH / jerlov[2]))}
 @group(0) @binding(0) var<storage, read_write> MI: array<i32>;
 @group(0) @binding(1) var<storage, read_write> MF: array<f32>;
 @group(0) @binding(2) var<storage, read_write> LV: array<f32>;
@@ -125,6 +129,7 @@ fn closureSolve(fit: ClosureFit) -> f32 {
 }
 fn grain(x: f32) -> f32 { return ldexp(1.0, max(frexp(x).exp - 24, -126)); }
 fn settle(x: f32, change: f32) -> f32 { let g = grain(max(abs(x), abs(x + change))); return round(change / g) * g; }
+fn transmitted(z: f32) -> f32 { let d = min(z, PENDEPTH); return JER_R1 * exp(-d / JER_Z1) + JER_R2 * exp(-d / JER_Z2) - JER_FLOOR; }
 // A multiple of the coarser store's spacing, which both record exactly; Metal's fast math folds the (b + a) − b form to a.
 fn transfer(src: i32, dst: i32, amount: f32) -> f32 {
   let a = IN[src]; let b = IN[dst];
@@ -679,6 +684,29 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
   OD[O_SURFACEIN + i] = t0;
   // Open water adds the surface's change since PREVT0: reading T0 = Q/h back whole gains heat under fast-math division.
   if (iced) { IN[qOff(0) + i] = IN[hOff(0) + i] * (t0 - TREF); } else { IN[qOff(0) + i] += IN[hOff(0) + i] * (t0 - OD[O_PREVT0 + i]); }
+  let light = PH[PH_PEN + i];
+  if (light == 0.0) { return; }
+  let taken = PH[PH_TRANS + i];
+  var given = 0.0; var last = 0;
+  if (taken > 0.0) {
+    var z = IN[hOff(0) + i]; var top = transmitted(z); var carry = 0.0;
+    for (var k = 1; k < L; k++) {
+      let hk = IN[hOff(k) + i];
+      z += hk;
+      let bottom = transmitted(z);
+      let want = carry + light * (top - bottom) / taken;
+      if (hk > THINO) {
+        let dq = settle(IN[qOff(k) + i], want / RHOCP);
+        IN[qOff(k) + i] += dq;
+        given += RHOCP * dq; carry = want - RHOCP * dq; last = k;
+      } else { carry = want; }
+      top = bottom;
+      if (z >= PENDEPTH && last > 0) { break; }
+    }
+  }
+  let rest = settle(IN[qOff(last) + i], (light - given) / RHOCP);
+  IN[qOff(last) + i] += rest;
+  PH[PH_PEN + i] = light - given - RHOCP * rest;
 }`,
     oStressFromAtmosphere: `${K}  let e = ${idx}; if (e >= E) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
@@ -799,7 +827,10 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
     oWriteSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { PH[PH_OFLUX + i] = 0.0; return; }
   PH[PH_CAP + i] = RHOCP * max(IN[hOff(0) + i], 1.0);
-  OD[O_S0 + i] = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
+${o.penetration ? `  var receiver = false;
+  for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { receiver = true; break; } }
+  PH[PH_TRANS + i] = select(0.0, transmitted(IN[hOff(0) + i]) - transmitted(OD[O_BATH + i] + OD[O_ETA + i]), receiver);
+` : ''}  OD[O_S0 + i] = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
   if (OD[O_ICED + i] > 0.5) {
     PH[PH_OFLUX + i] = RHOCP * (IN[qOff(0) + i] - IN[hOff(0) + i] * (FREEZE - TREF)) / P[6];
     IN[qOff(0) + i] = IN[hOff(0) + i] * (FREEZE - TREF);
@@ -869,6 +900,7 @@ const oceanReducedSetup = (thermoclineLayers) => `    let a = MF[F_AREA + i];
 export function createLayeredOcean(core, { registers = null, ...options } = {}) {
   const o = { ...OCEAN_DEFAULTS, ...options };
   if (o.closureTokens !== 'interior' && o.closureTokens !== 'beside') throw new Error(`closureTokens is 'interior' or 'beside', not ${o.closureTokens}`);
+  if (o.penetration !== null && !JERLOV[o.penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${o.penetration}`);
   o.closureRings = o.closureTokens === 'interior' && o.closureFill > 0;
   const { device, buffers, mesh, meshSpacing } = core;
   const C = core.C, E = core.E, V = core.V;
@@ -1319,7 +1351,17 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.FRESH, Float32Array.from(restart.fresh));
     if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.BUOY, Float32Array.from(restart.buoyancy));
     const capacity = restart ? restart.capacity : Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
-    core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null });
+    const kept = (name) => (restart && restart[name] && restart[name].length === C ? restart[name] : null);
+    core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null, transmission: o.penetration ? kept('transmission') ?? transmissionOf(h, eta) : null, penetrated: kept('penetrated') });
+  }
+  function transmissionOf(h, eta) {
+    const out = new Float64Array(C), column = new Float64Array(L);
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i]) continue;
+      for (let k = 0; k < L; k++) column[k] = h[k * C + i];
+      out[i] = penetrationShares(column, L, D[i] + eta[i], o.penetration);
+    }
+    return out;
   }
   function initialize(surfaceT, ice, { climatology: atlas = o.climatology ?? null, concentration = seaCover } = {}) {
     const arrays = initializeArrays(surfaceT, ice, atlas);
@@ -1404,19 +1446,23 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
    * contents as stored, Qref and Wref (upload also takes a Q of h·T and a
    * W of h·S), the mixed layer's last temperature and the ice volume it
    * last saw, the freshwater not yet taken, its remembered surface
-   * buoyancy loss, and the heat flux and capacity the surface update is
-   * using. A saved ocean that carries all of them at this mesh's sizes,
-   * its columns within a meter of this bathymetry and dry on land, is
-   * uploaded as it is, without fitting its columns.
+   * buoyancy loss, the heat flux and capacity the surface update is
+   * using, the sunlight not yet deposited, `penetrated`, and with
+   * penetration the share of the sunlight that passes the mixed layer,
+   * `transmission`. A saved ocean that carries all of them at this mesh's
+   * sizes, the last two optional, its columns within a meter of this
+   * bathymetry and dry on land, is uploaded as it is, without fitting its
+   * columns.
    */
   async function restartArrays() {
     const PHL = core.layout.PH;
-    const [[Qref, Wref], [previousT0, previousIceVolume, fresh, buoyancy], [flux, capacity]] = await Promise.all([
+    const [[Qref, Wref], [previousT0, previousIceVolume, fresh, buoyancy], [flux, capacity, penetrated]] = await Promise.all([
       readRanges(device, ob.S, [{ offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]),
       readRanges(device, ob.OD, [{ offset: OD.PREVT0, length: C }, { offset: OD.PREVVOL, length: C }, { offset: OD.FRESH, length: C }, { offset: OD.BUOY, length: C }]),
-      readRanges(device, buffers.PH, [{ offset: PHL.OFLUX, length: C }, { offset: PHL.CAP, length: C }]),
+      readRanges(device, buffers.PH, [{ offset: PHL.OFLUX, length: C }, { offset: PHL.CAP, length: C }, { offset: PHL.PEN, length: C }]),
     ]);
-    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, buoyancy, flux, capacity }).map(([name, values]) => [name, Float32Array.from(values)]));
+    const transmission = o.penetration ? (await readRanges(device, buffers.PH, [{ offset: PHL.TRANS, length: C }]))[0] : null;
+    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, buoyancy, flux, capacity, penetrated, ...(transmission ? { transmission } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
   }
 
   function diagnosticsFrom(sums) {

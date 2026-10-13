@@ -23,7 +23,10 @@ export const MINIMUM_VOLUME = 1e-4;
  * light (`albedo` without a zenith cosine) with diffuseWaterAlbedo,
  * unless oceanAlbedo fixes both. With `heatCapacity` given, that per-cell
  * array (a dynamic ocean's upper layer) replaces slabHeatCapacity in the
- * cell update.
+ * cell update; with `transmission` and `penetrated` too, open water keeps
+ * the share transmission[i] of the absorbed sunlight `solar` out of its
+ * temperature and adds it to penetrated[i] (J/m²) for the ocean to take
+ * below its mixed layer.
  *
  * Ice covers the fraction `concentration` of its cell (A), with the
  * thickness `ice` over that part, so the volume per cell area is A·h;
@@ -106,7 +109,7 @@ export function createSeaIce(mesh, {
   iceSnowAlbedo = 0.75, iceFullSnow = 20, snowConductivity = 0.31, snowDensity = 300, waterDensity = 1026, leadClosing = 0.3, leadExchange = 10,
   snowAgeing = true, iceSnowFloor = 0.70, freshSnowAlbedo = SNOW_AGEING.freshSnowAlbedo, coldSnowAgeing = SNOW_AGEING.coldSnowAgeing, meltingSnowAgeing = SNOW_AGEING.meltingSnowAgeing,
   refreshSnowfall = SNOW_AGEING.refreshSnowfall, wetSnowRange = SNOW_AGEING.wetSnowRange, ageingActivation = SNOW_AGEING.ageingActivation,
-  heatCapacity = null, buffers = null,
+  heatCapacity = null, transmission = null, penetrated = null, buffers = null,
 } = {}) {
   const C = mesh.nCells;
   const latent = iceDensity * latentHeatFusion;
@@ -166,7 +169,7 @@ export function createSeaIce(mesh, {
     return true;
   }
 
-  function update(surfaceT, ice, flux, i, dt, contrast = 0) {
+  function update(surfaceT, ice, flux, i, dt, contrast = 0, solar = 0) {
     const ocean = oceanFlux[i];
     const capacity = heatCapacity ? heatCapacity[i] : slabHeatCapacity;
     const cellArea = mesh.areaCell[i];
@@ -174,7 +177,9 @@ export function createSeaIce(mesh, {
       concentration[i] = 0;
       if (snow[i] > 0) { surfaceT[i] -= latentHeatFusion * snow[i] / capacity; budget.snowMelted += cellArea * snow[i]; snow[i] = 0; }
       snowAlbedo[i] = freshSnowAlbedo;
-      surfaceT[i] += dt * (flux[i] + ocean) / capacity;
+      const pen = transmission ? solar * transmission[i] : 0;
+      surfaceT[i] += dt * (flux[i] + ocean - pen) / capacity;
+      if (transmission) penetrated[i] += dt * pen;
       if (surfaceT[i] < FREEZING_POINT) {
         const volume = (FREEZING_POINT - surfaceT[i]) * capacity / latent, area = Math.min(1, volume / leadClosing);
         if (area >= MINIMUM_CONCENTRATION && volume >= MINIMUM_VOLUME) {

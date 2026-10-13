@@ -125,6 +125,7 @@ if (resumed) {
   restartNames.push(...new Set([...Object.keys(resumed.ocean), ...Object.keys(loaded)].filter((name) => !['T', 'S', 'densities'].includes(name))));
   for (const name of restartNames) {
     const want = resumed.ocean[name], got = loaded[name];
+    if ((want == null && name === 'penetrated' && got && got.every((x) => x === 0)) || (name === 'transmission' && (want == null || got == null))) continue;
     if (want == null || got == null || want.length !== got.length) { differing.push(`${name} (${want == null ? 'missing' : want.length} saved, ${got == null ? 'missing' : got.length} loaded)`); continue; }
     let count = 0;
     for (let n = 0; n < want.length; n++) if (Math.fround(want[n]) !== Math.fround(got[n]) && !(Number.isNaN(want[n]) && Number.isNaN(got[n]))) count++;
@@ -185,14 +186,14 @@ const coverOf = (iceH, concentration) => (iceH > 0 ? (concentration > 0 ? concen
 const STORES = ['ocean', 'ice', 'airEnthalpy', 'airKinetic', 'latent', 'vapor', 'condensate', 'salt', 'iceVolume'];
 const store = Object.fromEntries(STORES.map((name) => [name, new Float64Array(C)]));
 const kineticLayer = new Float64Array(C);
-function storeCells(snap, snow, oceanFlux) {
+function storeCells(snap, snow, oceanFlux, pending) {
   look.diagnose(pi, theta);
   const remaining = (everySteps - 1 - (model.oceanCounter % everySteps)) * STEP, { h, T, S } = snap;
   for (let i = 0; i < C; i++) {
     let heat = 0, salt = 0;
     for (let k = 1; k < L; k++) { const n = k * C + i; heat += h[n] * (T[n] - CELSIUS); salt += h[n] * S[n]; }
     const iced = ice[i] > 0, cover = seaIce.cover(i, ice[i]);
-    store.ocean[i] = rhoCp * (heat + h[i] * ((iced ? FREEZING_POINT : surfaceT[i]) - CELSIUS)) + oceanFlux[i] * remaining;
+    store.ocean[i] = rhoCp * (heat + h[i] * ((iced ? FREEZING_POINT : surfaceT[i]) - CELSIUS)) + oceanFlux[i] * remaining + pending[i];
     store.salt[i] = salt + h[i] * S[i];
     store.ice[i] = iced ? seaIce.energy(surfaceT[i], ice[i], snow[i], cover) : 0;
     store.iceVolume[i] = cover * ice[i];
@@ -330,9 +331,9 @@ const run = resumed ? JSON.parse(resumed.runJson) : { toa: 0, surface: 0, snow: 
 
 const initial = await model.beginFrame({ fields: ['cloud'], diagnostics: true });
 await model.sync();
-let snap = await oceanSnapshot(), [snow, oceanFlux] = await readRanges(device, gpu.buffers.PH, [{ offset: PH.SNOW, length: C }, { offset: PH.OFLUX, length: C }]);
+let snap = await oceanSnapshot(), [snow, oceanFlux, pending] = await readRanges(device, gpu.buffers.PH, [{ offset: PH.SNOW, length: C }, { offset: PH.OFLUX, length: C }, { offset: PH.PEN, length: C }]);
 if (resumed && !(resumed.eddyV && resumed.eddyV.length === L * E)) snap.eddy = null;
-storeCells(snap, snow, oceanFlux);
+storeCells(snap, snow, oceanFlux, pending);
 let totals = totalsNow(), previous = totals, resumeCheck = null;
 if (resumed) {
   const saved = resumed.totalsJson ? JSON.parse(resumed.totalsJson) : null;
@@ -440,8 +441,8 @@ for (let day = 1; day <= totalDays; day++) {
   const frame = await model.beginFrame({ fields: ['cloud'], diagnostics: true }), d = frame.diagnostics, cloud = Float64Array.from(frame.fields.cloud);
   const forcing = (await decodeForcing(await recorder.day(runDay))).fields;
   await model.sync();
-  [snow, oceanFlux] = await readRanges(device, gpu.buffers.PH, [{ offset: PH.SNOW, length: C }, { offset: PH.OFLUX, length: C }]);
-  storeCells(snap, snow, oceanFlux);
+  [snow, oceanFlux, pending] = await readRanges(device, gpu.buffers.PH, [{ offset: PH.SNOW, length: C }, { offset: PH.OFLUX, length: C }, { offset: PH.PEN, length: C }]);
+  storeCells(snap, snow, oceanFlux, pending);
   previous = totals; totals = totalsNow();
   recent.push({ rain: Float32Array.from(forcing.rain), net: Float32Array.from(forcing.netFlux) });
   if (recent.length > FRAME_DAYS) recent.shift();

@@ -126,6 +126,7 @@ export function createModel(gridOrMesh, {
   const seaIce = createSeaIce(mesh, {
     buffers: { ...(buffers && buffers.ice ? buffers.ice : {}), ...(land ? { snow: land.shared.snow, snowAlbedo: land.shared.snowAlbedo } : {}) },
     ...(ocean || sharedCapacity ? { heatCapacity: ocean ? ocean.capacity : sharedCapacity } : {}),
+    ...(ocean && ocean.penetration ? { transmission: ocean.transmission, penetrated: ocean.penetrated } : {}),
     ...iceOptions,
   });
   moistPhysics.useSeaIce(seaIce.concentration);
@@ -190,11 +191,11 @@ export function createModel(gridOrMesh, {
       radiation.apply(moist ? fluxState : dryFluxState, forcing, gusty ? exchange.wind : surface.windSpeed, sums, iFrom, iTo, surfaceAlbedo, diffuseAlbedo, land ? wetness : null, moist ? openSea : null, boundaryLayer ? boundaryLayer.depth : null, dt, callAlbedo);
       if (rough) for (let i = iFrom; i < iTo; i++) airBefore[i] = state[1][bottom + i] * core.diagnostics.exnerLayer[bottom + i];
       for (let k = 0; k < K; k++) for (let i = k * C + iFrom; i < k * C + iTo; i++) state[1][i] += dt * forcing[1][i];
-      const { surfaceShortwave, surfaceDirect } = radiation;
+      const { surfaceShortwave, surfaceDirect, surfaceSolar } = radiation;
       for (let i = iFrom; i < iTo; i++) {
         if (land && landMask[i]) { land.update(i, state[3], radiation.surfaceFlux, radiation.evaporation[i], dt, rough ? airBefore[i] : state[1][bottom + i] * core.diagnostics.exnerLayer[bottom + i], radiation.potentialEvaporation[i]); continue; }
         const h = state[6][i], partial = h > 0 && seaIce.cover(i, h) < 1;
-        seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt, partial ? surfaceDirect[i] * directContrast[i] + (surfaceShortwave[i] - surfaceDirect[i]) * diffuseContrast[i] : 0);
+        seaIce.update(state[3], state[6], radiation.surfaceFlux, i, dt, partial ? surfaceDirect[i] * directContrast[i] + (surfaceShortwave[i] - surfaceDirect[i]) * diffuseContrast[i] : 0, surfaceSolar[i]);
       }
       if (moist) for (let i = bottom + iFrom; i < bottom + iTo; i++) state[4][i] += dt * forcing[4][i];
       if (boundaryLayer) boundaryLayer.diagnose(state, iFrom, iTo);

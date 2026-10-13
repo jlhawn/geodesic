@@ -246,3 +246,25 @@ test('the leads at the freezing point lose the heat the colder ice would otherwi
   assert.ok(split.skin > shared.skin && split.grown - split.leads < shared.grown, 'the ice, relieved of the leads\' loss, warms and grows less at its base');
   for (const { energy } of [split, shared]) assert.ok(Math.abs(energy) < 1e-9 * 2 * split.sea.slabHeatCapacity, `energy moved by ${energy} J/m² at zero flux`);
 });
+
+test('with a transmission, open water keeps the passing share of its absorbed sunlight out of its temperature and adds it to the pending store, the two changing by exactly the surface and ocean fluxes; ice and its leads pass none', () => {
+  const capacity = new Float64Array([4.1e6 * 20, 4.1e6 * 50, 4.1e6 * 50]), transmission = new Float64Array([0.102, 0.0174, 0.0174]), penetrated = new Float64Array([5, 7, 11]);
+  const sea = createSeaIce(model.mesh, { heatCapacity: capacity, transmission, penetrated });
+  sea.load(new Float64Array([0, 1, 0.5]), new Float64Array([0, 1, 0.6]));
+  sea.oceanFlux.set([0, 3, 2]);
+  const surfaceT = new Float64Array([FREEZING_POINT + 12, FREEZING_POINT - 5, FREEZING_POINT - 1]), ice = new Float64Array([0, 1, 0.5]);
+  const flux = new Float64Array([180, 120, 140]), solar = 640, dt = 900;
+  const before = Float64Array.from(penetrated), water = surfaceT[0];
+  sea.update(surfaceT, ice, flux, 0, dt, 0, solar);
+  const pen = solar * transmission[0], stored = capacity[0] * (surfaceT[0] - water) + (penetrated[0] - before[0]);
+  assert.equal(penetrated[0] - before[0], dt * pen);
+  assert.ok(Math.abs(stored - dt * flux[0]) < 4 * Number.EPSILON * capacity[0] * surfaceT[0], `open water: capacity·ΔT + Δpenetrated = ${stored} J/m², the fluxes ${dt * flux[0]}, to the rounding of the temperature`);
+  assert.ok(capacity[0] * (surfaceT[0] - water) < dt * flux[0] - 0.9 * dt * pen, 'the passing light does not warm the mixed layer');
+  for (const i of [1, 2]) {
+    sea.update(surfaceT, ice, flux, i, dt, i === 2 ? 30 : 0, solar);
+    assert.equal(penetrated[i], before[i], `cell ${i}, ${i === 1 ? 'full ice' : 'ice with leads'}, passes no light`);
+  }
+  const plain = createSeaIce(model.mesh, { heatCapacity: capacity }), alone = new Float64Array([water]);
+  plain.update(alone, new Float64Array(1), flux, 0, dt, 0, solar);
+  assert.equal(alone[0], water + dt * flux[0] / capacity[0], 'without a transmission all of the sunlight stays in the mixed layer');
+});

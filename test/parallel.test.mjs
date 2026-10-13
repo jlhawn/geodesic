@@ -29,6 +29,23 @@ test('the worker-thread step reproduces the single-thread step bit for bit', asy
   }
 });
 
+test('with penetrating sunlight the worker-thread step reproduces the single-thread step bit for bit, the light waiting below the mixed layer included', async () => {
+  const options = { ocean: { penetration: 'IB' } };
+  const serial = createModel(new Grid(8), options);
+  const parallel = await createParallelModel(new Grid(8), options, 3);
+  const init = initializeState(serial, {});
+  for (let a = 0; a < 4; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
+  try {
+    for (let n = 0; n < 7; n++) { serial.step(600); parallel.step(600); }
+    assert.ok(serial.ocean.penetrated.some((x) => x > 0), 'light is waiting below the mixed layer');
+    for (let a = 0; a < serial.state.length; a++) assert.deepEqual(parallel.state[a], serial.state[a], `array ${a}`);
+    for (let a = 0; a < serial.ocean.state.length; a++) assert.deepEqual(parallel.ocean.state[a], serial.ocean.state[a], `ocean array ${a}`);
+    for (const name of ['penetrated', 'transmission', 'eta']) assert.deepEqual(parallel.ocean[name], serial.ocean[name], name);
+  } finally {
+    await parallel.close();
+  }
+});
+
 /*
  * Wall time (ms) of `threads` threads each doing the same fixed burn at
  * once, so that threads × burn(1) / burn(threads) is the speedup the

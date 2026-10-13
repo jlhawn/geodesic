@@ -32,7 +32,9 @@ import { gridHeader } from '../stateGrid.module.js';
  * the ocean as advanceCoupled does, with the recorded stress in place of
  * the lowest wind's, and returns true.
  * The lead/ice split of the flux takes the recorded shortwave reaching
- * the surface times the diffuse albedo contrast of the ice as it stands.
+ * the surface times the diffuse albedo contrast of the ice as it stands,
+ * and the sunlight passing the mixed layer is the recorded absorbed
+ * shortwave's share.
  * Surface temperature, ice and concentration stay on the device in the
  * atmosphere's buffers, where the coupled model keeps them.
  */
@@ -141,7 +143,7 @@ export function createForcedOcean(model) {
   const { gpu, mesh, oceanEngine: ocean } = model;
   const { device } = gpu;
   const C = mesh.nCells, E = mesh.nEdges, PH = gpu.layout.PH;
-  const F = seq([['netFlux', C], ['shortwaveDown', C], ['sst', C], ['snowfall', C], ['stress', E]]);
+  const F = seq([['netFlux', C], ['shortwave', C], ['shortwaveDown', C], ['sst', C], ['snowfall', C], ['stress', E]]);
   const forcing = emptyBuffer(device, 4 * F.total);
   const run = compile(model, 'forcedSurface', `
   let i = n; if (i >= C) { return; }
@@ -152,6 +154,7 @@ export function createForcedOcean(model) {
   let cover = select(0.0, select(conc0, 1.0, conc0 <= 0.0), ice > 0.0);
   let pull = -P[1] * (select(skin, FREEZING, ice > 0.0) - OUT[FC_sst + i]);
   let net = OUT[FC_netFlux + i] + (1.0 - cover) * pull;
+  let absorbed = OUT[FC_shortwave + i];
   let contrast = OUT[FC_shortwaveDown + i] * (surfaceAlbedo(ice, ALB_DIF_WATER, snow0, skin, PH[PH_SNOWALB + i]) - ALB_DIF_WATER) + pull;
   let ocean = PH[PH_OFLUX + i]; let capacity = PH[PH_CAP + i];
   var T = skin; var h = ice;
@@ -169,7 +172,7 @@ export function createForcedOcean(model) {
      * written as the amounts of one ocean step of `oceanDt` seconds.
      */
     setDay(fields, oceanDt) {
-      for (const name of ['netFlux', 'shortwaveDown', 'sst', 'snowfall', 'stress']) device.queue.writeBuffer(forcing, 4 * F[name], Float32Array.from(fields[name]));
+      for (const name of ['netFlux', 'shortwave', 'shortwaveDown', 'sst', 'snowfall', 'stress']) device.queue.writeBuffer(forcing, 4 * F[name], Float32Array.from(fields[name]));
       device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.EVAP, Float32Array.from(fields.evaporation));
       device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.RAIN, Float32Array.from(fields.rain, (x) => x * oceanDt));
       device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.RUNOFF, Float32Array.from(fields.runoff, (x) => x * oceanDt));
