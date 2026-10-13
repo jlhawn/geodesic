@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares, FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, mixingOptionCheck } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares, FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, mixingOptionCheck, closeDay, DAILY } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
@@ -37,7 +37,7 @@ export const OCEAN_DEFAULTS = {
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
   momentumDepth: 50, carryMomentum: true, refillRate: 0.00027778, refillFloor: 5, shearEntrainment: 0.65,
-  ekmanDepth: 0.4, momentumFloor: 10, stressThickness: PV_FLOOR, retreatStirring: 2.5, langmuir: 2, retreatEkman: RETREAT_EKMAN,
+  ekmanDepth: 0.4, momentumFloor: 10, stressThickness: PV_FLOOR, retreatStirring: 2.5, langmuir: 2, retreatEkman: RETREAT_EKMAN, retreatDaily: false, retreatLight: 0,
   interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB',
   gustiness: 3,
@@ -86,11 +86,31 @@ fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
     o.retreatStirring > 0 ? constLine('RETREATSTIR', o.retreatStirring) : '',
     o.langmuir > 0 ? `${constLine('LANGMUIR', o.langmuir)}\n${langmuirLines}` : '',
     o.retreatEkman > 0 ? `${constLine('RETREATEKMAN', o.retreatEkman)} ${constLine('TWOOMEGA', 2 * o.omega)}` : '',
+    o.retreatLight > 0 ? `${constLine('RETREATLIGHT', o.retreatLight)}\nfn deposited(z: f32) -> f32 { return select(0.0, JER_R1 / JER_Z1 * exp(-z / JER_Z1) + JER_R2 / JER_Z2 * exp(-z / JER_Z2), z < PENDEPTH); }` : '',
   ].filter((line) => line).map((line) => `${line}\n`).join('');
   const momentumReach = o.ekmanDepth > 0 ? 'hm' : 'MOMDEPTH', stressFloor = o.stressThickness !== PV_FLOOR ? 'STRESSTHICK' : 'PVFLOOR';
+  const retreatLoss = o.retreatDaily ? 'dayDrive' : 'loss';
   const unboundedRetreat = o.retreatStirring > 0 || o.langmuir > 0
-    ? `${o.retreatStirring > 0 ? 'RETREATSTIR' : '2.0 * stir'} * ${o.langmuir > 0 ? '(1.0 + (langmuirFactor(sqrt(tau / RHO0), began) - 1.0) * openSea)' : '1.0'} * ustar3 / -loss`
-    : '2.0 * stir * ustar3 / -loss';
+    ? `${o.retreatStirring > 0 ? 'RETREATSTIR' : '2.0 * stir'} * ${o.langmuir > 0 ? '(1.0 + (langmuirFactor(sqrt(tau / RHO0), began) - 1.0) * openSea)' : '1.0'} * ustar3 / -${retreatLoss}`
+    : `2.0 * stir * ustar3 / -${retreatLoss}`;
+  const dailySums = `  let lightBuoy = OGRAV * alphaT(OD[O_SURFACEIN + i], s0) / RHOCP;
+  let sunCall = OD[O_SUNSTEP + i];
+  var sunSum = OD[O_SUNSUM + i] + sunCall;
+  var darkSum = OD[O_DARKSUM + i] + buoyancy * P[6] + lightBuoy * sunCall * (1.0 - PH[PH_TRANS + i]);
+  if (P[7] != 0.0) {
+    if (P[7] > 0.0) { OD[O_SUNDAY + i] = sunSum * P[7]; OD[O_DARKDAY + i] = darkSum * P[7]; }
+    sunSum = 0.0; darkSum = 0.0;
+  }
+  OD[O_SUNSUM + i] = sunSum; OD[O_DARKSUM + i] = darkSum;
+`;
+  const dailyDrive = `  let dayDepth = IN[hOff(0) + i];
+${o.penetration ? `  var dayReceiver = false;
+  for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { dayReceiver = true; break; } }
+  let dayPassing = select(0.0, transmitted(dayDepth) - transmitted(OD[O_BATH + i] + OD[O_ETA + i]), dayReceiver);
+` : '  let dayPassing = 0.0;\n'}  let daySun = lightBuoy * OD[O_SUNDAY + i];
+  let dayDrive = OD[O_DARKDAY + i] - daySun * (1.0 - dayPassing);
+  let dayGate = ${o.retreatLight > 0 ? 'select(dayDrive, dayDrive + RETREATLIGHT * daySun * dayDepth * deposited(dayDepth), dayPassing > 0.0)' : 'dayDrive'};
+`;
   const retreatTerm = o.retreatEkman > 0 ? `min(${unboundedRetreat}, select(1.0e30, RETREATEKMAN * sqrt(tau / RHO0) / fCell, fCell > 0.0))` : unboundedRetreat;
   const offsetLines = Object.entries(OD).filter(([k]) => k !== 'total').map(([k, v]) => `const O_${k}: i32 = ${v};`).join('\n');
   const bLines = Object.entries(B).filter(([k]) => k !== 'total').map(([k, v]) => `const B_${k}: i32 = ${v};`).join('\n');
@@ -734,7 +754,7 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
   // Open water adds the surface's change since PREVT0: reading T0 = Q/h back whole gains heat under fast-math division.
   if (iced) { IN[qOff(0) + i] = IN[hOff(0) + i] * (t0 - TREF); } else { IN[qOff(0) + i] += IN[hOff(0) + i] * (t0 - OD[O_PREVT0 + i]); }
   let light = PH[PH_PEN + i];
-  if (light == 0.0) { return; }
+${o.retreatDaily ? '  OD[O_SUNSTEP + i] = select(0.0, light / max(PH[PH_TRANS + i], 1.0e-6), PH[PH_TRANS + i] > 1.0e-6);\n' : ''}  if (light == 0.0) { return; }
   let taken = PH[PH_TRANS + i];
   var given = 0.0; var last = 0;
   if (taken > 0.0) {
@@ -814,7 +834,7 @@ ${o.langmuir > 0 ? '  let began = IN[hOff(0) + i];\n  let openSea = 1.0 - select
   let buoyancy = OGRAV * (alphaT(OD[O_SURFACEIN + i], s0) * (OD[O_PREVT0 + i] - OD[O_SURFACEIN + i]) * PH[PH_CAP + i] / RHOCP + betaS(OD[O_SURFACEIN + i], s0) * salted) / P[6];
   let loss = OD[O_BUOY + i] + (buoyancy - OD[O_BUOY + i]) * select(1.0, min(1.0, P[6] / BUOYMEM), BUOYMEM > 0.0);
   OD[O_BUOY + i] = loss;
-  var rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i] + SREF);
+${o.retreatDaily ? dailySums : ''}  var rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i] + SREF);
   var budget = CONVRATE * P[6];
   for (var k = 1; k < L; k++) {
     if (IN[hOff(0) + i] >= deepest || budget <= 0.0) { break; }
@@ -865,7 +885,7 @@ ${o.shearEntrainment > 0 ? `  var hold = 0.0;
   if (NEUTRALSNAP > 0.5 && below > 0 && rm >= RHO[below] - DENSTOL) { excess = max(excess, IN[hOff(0) + i] - SHALLOWMIXED); }
   detrain(i, excess, rm);
   if (IN[hOff(0) + i] > reach) { detrain(i, (IN[hOff(0) + i] - max(reach, SHALLOWMIXED)) * min(1.0, P[6] / DETRAINT), rm); }
-  if (loss < -1e-9) {
+${o.retreatDaily ? dailyDrive : ''}  if (${o.retreatDaily ? 'dayGate' : 'loss'} < -1e-9) {
     let monin = ${o.shearEntrainment > 0 ? `max(max(SHALLOWMIXED, ${retreatTerm}), hold)` : `max(SHALLOWMIXED, ${retreatTerm})`};
     if (IN[hOff(0) + i] > monin) { detrain(i, (IN[hOff(0) + i] - monin) * min(1.0, P[6] / DETRAINT), rm); }
   }
@@ -1008,6 +1028,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   if (o.penetration !== null && !JERLOV[o.penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${o.penetration}`);
   if (o.shearEntrainment > 0 && !o.carryMomentum) throw new Error('shearEntrainment needs carryMomentum: without the entrained water\'s momentum mixed in, the base\'s Richardson number never rises and the mixed layer swallows a class a step');
   mixingOptionCheck(o);
+  const day = { span: 0 };
   o.closureRings = o.closureTokens === 'interior' && o.closureFill > 0;
   const { device, buffers, mesh, meshSpacing } = core;
   const C = core.C, E = core.E, V = core.V;
@@ -1072,6 +1093,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ['RUNOFFSEEN', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
     ['EDDYK', E], ['TEDGE', 3 * E], ['DEEPEST', E], ['REM', 3 * C],
     ...(o.ekmanDepth > 0 ? [['HM', E]] : []),
+    ...(o.retreatDaily ? [['SUNSTEP', C], ['SUNSUM', C], ['DARKSUM', C], ['SUNDAY', C], ['DARKDAY', C]] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -1282,8 +1304,8 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     for (let e = 0; e < E; e++) masked[e] = edgeOcean[e] ? total[e] * (1 - 0.5 * (cover(mesh.cellsOnEdge[2 * e]) + cover(mesh.cellsOnEdge[2 * e + 1])) * (1 - o.iceStressTransmission)) : 0;
     device.queue.writeBuffer(ob.OD, 4 * OD.STRESS, masked);
   }
-  function mixedLayer(dt) {
-    setParams([0, 0, relaxRate, 0, 0, 0, dt]);
+  function mixedLayer(dt, closing = 0) {
+    setParams([0, 0, relaxRate, 0, 0, 0, dt, closing]);
     const g = group(ob.S, ob.T);
     compute((pass) => {
       if (o.carryMomentum && !edgesCurrent) dispatch(pass, 'oEdgeThickness', g, E);
@@ -1318,21 +1340,24 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
    * counter so it only pays for the atmosphere-state read and the step
    * on the steps that need it).
    */
-  async function advance(surfaceT, ice, totalStress, dt, concentration = seaCover) {
+  function dayClosing(time, dt) { return o.retreatDaily ? closeDay(day, time, dt) : 0; }
+  async function advance(surfaceT, ice, totalStress, dt, concentration = seaCover, time = null) {
+    const closing = dayClosing(time, dt);
     readSurface(surfaceT, ice, concentration);
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
     step(dt);
-    mixedLayer(dt);
+    mixedLayer(dt, closing);
     salt(dt);
     writeSurface(dt);
     await device.queue.onSubmittedWorkDone();
     return true;
   }
-  async function advanceCoupled(dt) {
+  async function advanceCoupled(dt, time = null) {
+    const closing = dayClosing(time, dt);
     readSurfaceFromAtmosphere();
     stressFromAtmosphere();
     step(dt);
-    mixedLayer(dt);
+    mixedLayer(dt, closing);
     salt(dt);
     writeSurface(dt);
   }
@@ -1442,6 +1467,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   }
   function uploadArrays({ h, u, Q, Qref, W, Wref, eta }, surfaceT, ice, restart = null, concentration = seaCover) {
     edgesCurrent = false;
+    day.span = 0;
     const packed = new Float32Array(OS.total);
     packed.set(h, OS.OH); packed.set(u, OS.OU);
     packed.set(Qref ?? Float64Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), OS.OQ);
@@ -1466,6 +1492,10 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.FRESH, Float32Array.from(restart.fresh));
     if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.BUOY, Float32Array.from(restart.buoyancy));
     if (restart && restart.remainder && restart.remainder.length === 3 * C) device.queue.writeBuffer(ob.OD, 4 * OD.REM, Float32Array.from(restart.remainder));
+    if (o.retreatDaily && restart && DAILY.every((name) => restart[name] && restart[name].length === C)) {
+      for (const [name, at] of [['sunSum', OD.SUNSUM], ['darkSum', OD.DARKSUM], ['sunDay', OD.SUNDAY], ['darkDay', OD.DARKDAY]]) device.queue.writeBuffer(ob.OD, 4 * at, Float32Array.from(restart[name]));
+      day.span = restart.daySpan ? restart.daySpan[0] : 0;
+    }
     const capacity = restart ? restart.capacity : Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
     const kept = (name) => (restart && restart[name] && restart[name].length === C ? restart[name] : null);
     core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null, transmission: o.penetration ? kept('transmission') ?? transmissionOf(h, eta) : null, penetrated: kept('penetrated') });
@@ -1578,7 +1608,9 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
       readRanges(device, buffers.PH, [{ offset: PHL.OFLUX, length: C }, { offset: PHL.CAP, length: C }, { offset: PHL.PEN, length: C }]),
     ]);
     const transmission = o.penetration ? (await readRanges(device, buffers.PH, [{ offset: PHL.TRANS, length: C }]))[0] : null;
-    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, buoyancy, remainder, flux, capacity, penetrated, ...(transmission ? { transmission } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
+    const days = o.retreatDaily ? await readRanges(device, ob.OD, [OD.SUNSUM, OD.DARKSUM, OD.SUNDAY, OD.DARKDAY].map((offset) => ({ offset, length: C }))) : null;
+    const daily = days ? { ...Object.fromEntries(DAILY.map((name, n) => [name, days[n]])), daySpan: [day.span] } : {};
+    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, buoyancy, remainder, flux, capacity, penetrated, ...(transmission ? { transmission } : {}), ...daily }).map(([name, values]) => [name, Float32Array.from(values)]));
   }
 
   function diagnosticsFrom(sums) {
@@ -1624,7 +1656,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     useSeaIce(concentration) { seaCover = concentration; },
     initialize, upload, download, serialize, serializeFrom, restartArrays, diagnostics, frame,
     advance, advanceCoupled, accumulateFreshwater, forgetAccumulated,
-    setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, mixedLayer, salt, writeSurface, step, phases, eddyTransport,
+    setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, mixedLayer, dayClosing, salt, writeSurface, step, phases, eddyTransport,
     buffers: ob, layout: { OS, OD, B },
   };
 }

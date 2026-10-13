@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, THIN, SPEED_LIMIT, PV_FLOOR } from '../js/ocean/layered.module.js';
+import { createOcean, THIN, SPEED_LIMIT, PV_FLOOR, closeDay } from '../js/ocean/layered.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
 import { columnMomentum } from './helpers/layered.mjs';
@@ -40,7 +40,7 @@ function spunUp(steps = SPINUP, options = {}, wind = 0.1) {
     stress[e] = -wind * Math.cos(3 * mesh.latEdge[e]) * ((-y / r) * mesh.nEdge[3 * e] + (x / r) * mesh.nEdge[3 * e + 1]);
   }
   ocean.initialize(surfaceT, ice);
-  for (let n = 0; n < steps; n++) ocean.advance(surfaceT, ice, flux, stress, DT);
+  for (let n = 0; n < steps; n++) ocean.advance(surfaceT, ice, flux, stress, DT, undefined, (n + 1) * DT);
   return { ocean, surfaceT, ice, flux, stress, options };
 }
 
@@ -253,6 +253,64 @@ async function shearedBooks(label, options) {
 test('in double precision the mixed layer\'s shear entrainment keeps each column\'s heat, salt and water and each edge\'s momentum', () => shearedBooks('sheared', SHEARED));
 
 test('in double precision the mixing package, with the wind over its Ekman depth onto classes 5 m thick and the Langmuir retreat, keeps each column\'s heat, salt and water through every phase and each edge\'s momentum through the mixed layer', () => shearedBooks('packaged', PACKAGED));
+
+/*
+ * The mixing package on a 2 m floor with retreatDaily and retreatLight 1,
+ * spunUp's 12 hours and then two more days, so that the first whole UTC
+ * day closes and the second retreats under its means: before each step a
+ * 12 h half-sine of absorbed sunlight with a daily mean of 250 W/m² times
+ * the cosine of latitude, the share each column passes handed to it as
+ * pending light and the rest warming the surface at the published
+ * capacity, less a dark loss of 0.7 of the daily mean, as the coupled
+ * surface update does.
+ */
+const NIGHT = { ...PACKAGED, minimumThickness: 2, shallowestMixedDepth: 2, mixedDepth: 10, retreatDaily: true, retreatLight: 1 };
+test('in double precision the daily-mean retreat under the night gate keeps each column\'s heat, salt and water through every phase across a UTC day\'s close, the surface read taking exactly the surface\'s heat and the deposit exactly the light', async () => {
+  const { ocean, surfaceT, ice, flux, stress } = sheared(NIGHT);
+  ocean.setStress(stress, ice);
+  const snapshot = async () => ({ h: Float64Array.from(ocean.h), q: Float64Array.from(ocean.Q, (q, n) => q - HEAT_REFERENCE * ocean.h[n]), w: Float64Array.from(ocean.W), u: Float64Array.from(ocean.u), eta: Float64Array.from(ocean.eta), pen: Float64Array.from(ocean.penetrated) });
+  const day = { span: SPINUP * DT }, warmed = [], retreating = [];
+  let step = SPINUP, closing = 0;
+  const surface = () => {
+    const hour = ((step + 0.5) * DT / 3600) % 24, sun = hour > 6 && hour < 18 ? 250 * Math.PI * Math.sin(Math.PI * (hour - 6) / 12) : 0;
+    let applied = 0;
+    for (let i = 0; i < C; i++) {
+      const light = sun * Math.cos(mesh.latCell[i]), passed = light * ocean.transmission[i], heat = light - passed - 0.7 * 250 * Math.cos(mesh.latCell[i]);
+      surfaceT[i] += heat * DT / ocean.capacity[i];
+      ocean.penetrated[i] = passed * DT;
+      applied += mesh.areaCell[i] * heat * DT;
+    }
+    warmed.push(applied / (AREA * DT));
+    step++;
+    closing = closeDay(day, step * DT, DT);
+  };
+  const record = await follow([
+    ['readSurface', () => ocean.readSurface(surfaceT, ice), surface],
+    ['dynamics', () => ocean.phases.dynamics(DT)],
+    ['rescale', () => ocean.phases.rescale()],
+    ['eddy', () => ocean.phases.eddy(DT)],
+    ['shift', () => ocean.phases.shift()],
+    ['mixedLayer', () => {
+      const before = Float64Array.from(ocean.h.subarray(0, C));
+      ocean.mixedLayer(DT, closing);
+      retreating.push(ocean.retreatDepth.filter((x, i) => x > 0 && ocean.h[i] < before[i]).length);
+    }],
+    ['salt and surface', () => { ocean.salt(); ocean.writeSurface(surfaceT, flux, DT); }],
+  ], snapshot, 96, ocean.layers, ocean.rhoCp, ocean.D);
+  report('CPU night gate', record);
+  const read = record.readSurface.map((r, n) => r.heat - warmed[n]);
+  for (const [name, rows] of Object.entries(record)) {
+    const [heat, salt] = kept(name);
+    if (name !== 'readSurface') assert.ok(largest(rows, heat) < 1e-6, `${name}: heat ${largest(rows, heat)} W/m²`);
+    assert.ok(largest(rows, salt) < 1e-9, `${name}: salt ${largest(rows, salt)} psu·m`);
+    if (name !== 'rescale') assert.ok(largest(rows, volume) < 1e-12, `${name}: volume ${largest(rows, volume)} m`);
+  }
+  console.log(`CPU night gate: the surface read took the surface's ${show(mean(warmed, (x) => x))} W/m² to ${show(largest(read, (x) => x))}; ${retreating.slice(0, 23).reduce((s, x) => s + x, 0)} cell-steps retreated before the first close, ${retreating.slice(23, 71).reduce((s, x) => s + x, 0)} on the first whole day under its means`);
+  assert.ok(largest(read, (x) => x) < 1e-6, `the surface read took ${largest(read, (x) => x)} W/m² more than the surface gave`);
+  assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-12, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
+  assert.equal(retreating.slice(0, 23).reduce((s, x) => s + x, 0), 0, 'no retreat before the first whole day closes');
+  assert.ok(retreating.slice(23, 71).reduce((s, x) => s + x, 0) > 100, 'the means of the first day drive retreats through the second');
+});
 
 /*
  * A GPU ocean holding a CPU ocean's sea, uploaded from its h·T and h·S

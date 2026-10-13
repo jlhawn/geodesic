@@ -16,6 +16,8 @@ import { RAIN_MEMORY, VERTICAL_MEMORY } from '../frames.module.js';
 import { createLandSurface, SOIL_CARBON } from '../physics/land.module.js';
 import { loadClimatology } from '../ocean/climatology.module.js';
 import { createSurfaceExchange, exchangeMode, exchangeOptions } from '../physics/exchange.module.js';
+import { skinOptions, skinRequiresRoughness } from '../physics/skin.module.js';
+import { JERLOV } from '../ocean/layered.module.js';
 
 export const VEGETATION_OPTIONS = ['vegetation', 'bareAlbedo', 'vegetatedAlbedo', 'soilDarkening', 'wetSoilAlbedo', 'darkeningWetness', 'rootZoneCapacity', 'dryWetness', 'wetWetness', 'growthTime', 'declineTime', 'snowDeclineTime', 'oldSnowAlbedo', 'snowMasking', 'forestSnowAlbedo', 'closedCanopy', 'canopyMemory', 'treeline', 'seasonThreshold', 'minimumSeason', 'treelineWarmth', 'seasonMemory', 'treeGrowthTime', 'treeDeclineTime', 'surfaceCapacity', 'percolationTime', 'stomatalResistance', 'growthColdest', 'growthWarmest', 'iceSheetAlbedo', 'treeMoisture', 'moistureMemory', 'forestAridity', 'grassland', 'forestAlbedo', 'grassAlbedo', 'grassSnowDarkening', ...Object.keys(SOIL_CARBON)];
 const AGEING_OPTIONS = ['snowAgeing', ...Object.keys(SNOW_AGEING)];
@@ -64,6 +66,8 @@ export async function createGpuModel(gridOrMesh, {
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
   const mode = exchangeMode(surface, landOptions);
+  const skinSet = skinOptions(surface), skinOn = skinSet.warmLayer || skinSet.coolSkin;
+  skinRequiresRoughness(skinSet, mode);
   const subgrid = geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, givenSubgrid, GRAVITY) : null;
   const { formDrag: formDragOptions = {}, ...dragOptions } = orographyOptions || {};
   const orography = subgrid ? dragConstants(subgrid, dragOptions) : dragOptions;
@@ -83,6 +87,7 @@ export async function createGpuModel(gridOrMesh, {
     ...Object.fromEntries(AGEING_OPTIONS.map((key) => [key, ageingOf(geography ? landOptions : ice, key)])),
     orography: subgrid ? orography : false, formDrag, dragEvery, surfaceExchange: mode, implicitDrag: mode === 'roughness' && surface.implicitDrag !== false, exchangeOptions: exchangeOptions(surface),
     penetration: oceanOptions !== false && !!{ ...OCEAN_DEFAULTS, ...oceanOptions }.penetration,
+    ...skinSet, skinLight: JERLOV[(oceanOptions !== false && { ...OCEAN_DEFAULTS, ...oceanOptions }.penetration) || 'IB'],
     landed: !!geography, landHeatCapacity: landOptions.heatCapacity ?? 1e6, bucketCapacity: landOptions.bucketCapacity ?? 150, wetnessThreshold: landOptions.wetnessThreshold ?? 0.75,
     landAlbedo: landOptions.albedo ?? 0.2, snowAlbedo: landOptions.snowAlbedo ?? 0.55, fullSnow: landOptions.fullSnow ?? 20,
     ...Object.fromEntries(VEGETATION_OPTIONS.filter((key) => landOptions[key] !== undefined).map((key) => [key, landOptions[key]])),
@@ -102,13 +107,22 @@ export async function createGpuModel(gridOrMesh, {
   if (gpuOcean) gpu.hooks.beforePhysics = async (dt) => {
     gpuOcean.accumulateFreshwater(dt);
     if (++oceanCounter % gpuOcean.everySteps !== 0) return;
-    await gpuOcean.advanceCoupled(gpuOcean.everySteps * dt);
+    await gpuOcean.advanceCoupled(gpuOcean.everySteps * dt, model.time + dt);
   };
   const lengths = [C, K * C, K * E, C, K * C, K * C, C];
   const state = lengths.map((n) => new Float64Array(n));
   let changes = 1, mirrored = 0, reading = null, lastFrameTime = 0, lastFrameStep = 0;
 
-  const model = { mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, subgridOrography: subgrid, exchange, surfaceGeopotential: phis, state, time: 0, energyRecord: createEnergyRecord(), physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
+  const skin = skinOn ? {
+    on: true, options: skinSet, warm: new Float64Array(C), cool: new Float64Array(C),
+    load(saved) {
+      skin.warm.fill(0); skin.cool.fill(0);
+      if (saved && saved.warmLayer && saved.warmLayer.length === C) skin.warm.set(saved.warmLayer);
+      if (saved && saved.coolSkin && saved.coolSkin.length === C) skin.cool.set(saved.coolSkin);
+    },
+    serialize() { return { warmLayer: Float64Array.from(skin.warm), coolSkin: Float64Array.from(skin.cool) }; },
+  } : null;
+  const model = { skin, mesh, core, seaIce, radiation: radiationCpu, surface: surfaceCpu, geography, subgridOrography: subgrid, exchange, surfaceGeopotential: phis, state, time: 0, energyRecord: createEnergyRecord(), physics: true, moistOn: true, gpu, engine: 'gpu', get oceanCounter() { return oceanCounter; } };
   const cumulusLength = gpu.layout.PH.CUWATER - gpu.layout.PH.CUCOVER;
   model.moist = { columnWater: moistCpu.columnWater, latentHeat: LATENT_HEAT, budget: moistCpu.budget, convectiveRain: moistCpu.convectiveRain, largeScaleRain: moistCpu.largeScaleRain, fogRain: moistCpu.fogRain, cumulusK0: K - cumulusLength / C, cumulusCover: new Float64Array(cumulusLength), cumulusWater: new Float64Array(cumulusLength), subcloudVirtual: new Float64Array(gpu.physics.subcloudLayers * C) };
   model.boundaryLayer = { depth: new Float64Array(C), mixingTop: new Float64Array(C), regime: new Float64Array(C), buoyancyFlux: new Float64Array(C) };
@@ -116,7 +130,7 @@ export async function createGpuModel(gridOrMesh, {
 
   function pushState(ocean) {
     gpu.upload(state);
-    gpu.uploadPhysics({ orography: subgrid, wind: exchange ? exchange.wind : null, land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: exchange ? exchange.drag : null, heat: exchange && !exchange.fixed ? exchange.heat : null, reference: exchange && !exchange.fixed ? exchange.reference : null, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, snowAlbedo: landCpu ? landCpu.snowAlbedo : null, canopy: landCpu ? landCpu.canopy : null, seasonLength: landCpu ? landCpu.seasonLength : null, seasonWarmth: landCpu ? landCpu.seasonWarmth : null, rainMean: landCpu ? landCpu.rainMean : null, demandMean: landCpu ? landCpu.demandMean : null, soilCarbon: landCpu ? landCpu.soilCarbon : null, litterMean: landCpu ? landCpu.litterMean : null, decayMean: landCpu ? landCpu.decayMean : null, snowFreeCover: landCpu ? landCpu.snowFreeCover : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, meanShortwaveCloudEffect: radiationCpu.meanShortwaveCloudEffect, meanLongwaveCloudEffect: radiationCpu.meanLongwaveCloudEffect, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux, evaporation: radiationCpu.evaporation, cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual });
+    gpu.uploadPhysics({ orography: subgrid, wind: exchange ? exchange.wind : null, land: geography ? Float32Array.from(geography.land, (l, i) => (l ? (geography.iceSheet && geography.iceSheet[i] ? 2 : 1) : 0)) : null, drag: exchange ? exchange.drag : null, heat: exchange && !exchange.fixed ? exchange.heat : null, reference: exchange && !exchange.fixed ? exchange.reference : null, soil: landCpu ? landCpu.soil : null, snow: landCpu ? landCpu.snow : null, vegetation: landCpu ? landCpu.vegetation : null, snowAlbedo: landCpu ? landCpu.snowAlbedo : null, canopy: landCpu ? landCpu.canopy : null, seasonLength: landCpu ? landCpu.seasonLength : null, seasonWarmth: landCpu ? landCpu.seasonWarmth : null, rainMean: landCpu ? landCpu.rainMean : null, demandMean: landCpu ? landCpu.demandMean : null, soilCarbon: landCpu ? landCpu.soilCarbon : null, litterMean: landCpu ? landCpu.litterMean : null, decayMean: landCpu ? landCpu.decayMean : null, snowFreeCover: landCpu ? landCpu.snowFreeCover : null, surface: landCpu ? landCpu.surface : null, concentration: seaIce.concentration, mlmSubsidence: radiationCpu.mlmSubsidence, mlmHeight: radiationCpu.mlmHeight, mlmGate: radiationCpu.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: radiationCpu.meanAbsorbedSolar, meanOutgoingLongwave: radiationCpu.meanOutgoingLongwave, meanPlanetaryAlbedo: radiationCpu.meanPlanetaryAlbedo, meanShortwaveCloudEffect: radiationCpu.meanShortwaveCloudEffect, meanLongwaveCloudEffect: radiationCpu.meanLongwaveCloudEffect, boundaryDepth: model.boundaryLayer.depth, mixingTop: model.boundaryLayer.mixingTop, regime: model.boundaryLayer.regime, buoyancyFlux: model.boundaryLayer.buoyancyFlux, evaporation: radiationCpu.evaporation, cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual, ...(skin ? { warmLayer: skin.warm, coolSkin: skin.cool } : {}) });
     gpu.setWindSpeed(surfaceCpu.windSpeed);
     gpu.clearFrame();
     if (gpuOcean && ocean) gpuOcean.initialize(state[3], state[6], { climatology: null });
@@ -137,12 +151,13 @@ export async function createGpuModel(gridOrMesh, {
    */
   function sync() {
     if (mirrored === changes) return Promise.resolve();
-    if (!reading || reading.at !== changes) reading = { at: changes, done: mirror(changes, [gpu.download(), readRanges(gpu.device, gpu.buffers.PH, [...['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'SWCREMEAN', 'LWCREMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY', 'EVAP', 'FOGMEAN'].map((name) => ({ offset: gpu.layout.PH[name], length: C })), ...['CUCOVER', 'CUWATER'].map((name) => ({ offset: gpu.layout.PH[name], length: cumulusLength })), { offset: gpu.layout.PH.SUBTV, length: model.moist.subcloudVirtual.length }]), readRanges(gpu.device, gpu.buffers.D, [{ offset: gpu.layout.D.WIND, length: C }]), exchange ? readRanges(gpu.device, gpu.buffers.PH, ['HEATX', 'XWIND'].map((name) => ({ offset: gpu.layout.PH[name], length: C }))) : null]) };
+    if (!reading || reading.at !== changes) reading = { at: changes, done: mirror(changes, [gpu.download(), readRanges(gpu.device, gpu.buffers.PH, [...['CONC', 'MLMSUB', 'MLMH', 'MLMGATE', 'CONVMEAN', 'CONDMEAN', 'ASRMEAN', 'OLRMEAN', 'ALBMEAN', 'SWCREMEAN', 'LWCREMEAN', 'DEPTH', 'MIXTOP', 'REGIME', 'BUOY', 'EVAP', 'FOGMEAN'].map((name) => ({ offset: gpu.layout.PH[name], length: C })), ...['CUCOVER', 'CUWATER'].map((name) => ({ offset: gpu.layout.PH[name], length: cumulusLength })), { offset: gpu.layout.PH.SUBTV, length: model.moist.subcloudVirtual.length }]), readRanges(gpu.device, gpu.buffers.D, [{ offset: gpu.layout.D.WIND, length: C }]), exchange ? readRanges(gpu.device, gpu.buffers.PH, ['HEATX', 'XWIND'].map((name) => ({ offset: gpu.layout.PH[name], length: C }))) : null, skin ? readRanges(gpu.device, gpu.buffers.PH, ['WARM', 'COOL'].map((name) => ({ offset: gpu.layout.PH[name], length: C }))) : null]) };
     return reading.done;
   }
   async function mirror(at, reads) {
-    const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, shortwaveEffect, longwaveEffect, depth, mixingTop, regime, buoyancy, evaporation, fog, cumulusCover, cumulusWater, subcloudVirtual], [windSpeed], exchanged] = await Promise.all(reads);
+    const [arrays, [concentration, mean, height, gate, convective, largeScale, absorbed, outgoing, albedo, shortwaveEffect, longwaveEffect, depth, mixingTop, regime, buoyancy, evaporation, fog, cumulusCover, cumulusWater, subcloudVirtual], [windSpeed], exchanged, skinned] = await Promise.all(reads);
     if (at <= mirrored) return;
+    if (skinned) { skin.warm.set(skinned[0]); skin.cool.set(skinned[1]); }
     if (exchanged) {
       if (!exchange.fixed) exchange.heat.set(exchanged[0]);
       exchange.wind.set(exchanged[1]);

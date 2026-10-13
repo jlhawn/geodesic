@@ -5,6 +5,8 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { SEA_DRAG, LAND_DRAG } from '../js/physics/surface.module.js';
+import { saturationHumidity } from '../js/physics/moist.module.js';
+import { VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 import { transfer, psiMomentum, psiHeat, andreasScalar, seaIceRoughness, charnockRoughness, createBlend, referenceCoefficient, exchangeMode, airViscosity, KARMAN } from '../js/physics/exchange.module.js';
 
 let gpuAvailable = true;
@@ -190,4 +192,25 @@ test('the gustiness is the free-convection velocity of the step\'s own flux, and
   airHumidity.step(900);
   const other = (wetness) => airHumidity.exchange.cell(i, airHumidity.state[0], airHumidity.state[1], airHumidity.state[4], airHumidity.state[5], air + 2, 3, 0, 0, 1, 1, wetness, 800).ri;
   assert.equal(other(1), other(0), '\'air\' takes the lowest layer\'s humidity whatever the wetness');
+});
+
+test('a saturated, fog-filled lowest layer over a sea 3 K warmer counts its vapor only, so its Ri_b, C_H and gust stay those of moist air; with its cloud water as loading it would read far more unstable', () => {
+  const model = prepare(createModel(new Grid(6), { topography }));
+  model.step(900);
+  const { exchange, state, core, mesh } = model, C = mesh.nCells, K = core.K, b = (K - 1) * C;
+  const { exnerLayer, exnerLower, sigmaMid, g } = core.diagnostics;
+  const i = [...Array(C).keys()].find((n) => !model.geography.land[n] && !(state[6][n] > 0) && Math.abs(mesh.latCell[n]) < 0.5);
+  const pi = state[0][i], airT = state[1][b + i] * exnerLayer[b + i], skin = airT + 3;
+  state[4][b + i] = saturationHumidity(airT, pi * sigmaMid[K - 1]);
+  state[5][b + i] = 5e-3;
+  const { z, ri, momentum, heat } = { ...exchange.cell(i, state[0], state[1], state[4], state[5], skin, 0.5, 0, 0, 0, 0, 0, 800) };
+  const speed = exchange.wind[i], theta = state[1][b + i];
+  const surfaceV = skin / exnerLower[b + i] * (1 + VIRTUAL_FACTOR * saturationHumidity(skin, pi));
+  const richardson = (airV) => g * z * (airV - surfaceV) / (0.5 * (airV + surfaceV) * speed * speed);
+  const vapor = richardson(theta * (1 + VIRTUAL_FACTOR * state[4][b + i])), loaded = richardson(theta * (1 + VIRTUAL_FACTOR * state[4][b + i] - state[5][b + i]));
+  close(ri, vapor, 1e-12, 'Ri_b with the vapor alone');
+  const neutral = transfer(0, z, momentum, heat).heat;
+  assert.ok(exchange.heat[i] <= 5 * neutral, `C_H ${exchange.heat[i]} against neutral ${neutral}`);
+  assert.ok(Math.sqrt(speed * speed - 0.25) <= 2, `gust ${Math.sqrt(speed * speed - 0.25)} m/s`);
+  assert.ok(ri < 0 && loaded < 1.3 * ri, `the loading would read Ri_b ${loaded} against ${ri}`);
 });

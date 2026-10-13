@@ -30,7 +30,8 @@ import { gridHeader } from '../stateGrid.module.js';
  * the recorded snowfall; every everySteps-th, counted from creation as
  * the coupled model counts, also takes the recorded freshwater and steps
  * the ocean as advanceCoupled does, with the recorded stress in place of
- * the lowest wind's, and returns true.
+ * the lowest wind's and `time`, the model time at the step's end, closing
+ * retreatDaily's days, and returns true.
  * The lead/ice split of the flux takes the recorded shortwave reaching
  * the surface times the diffuse albedo contrast of the ice as it stands,
  * and the sunlight passing the mixed layer is the recorded absorbed
@@ -178,7 +179,7 @@ export function createForcedOcean(model) {
       device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.RUNOFF, Float32Array.from(fields.runoff, (x) => x * oceanDt));
       perInterval = oceanDt;
     },
-    step(dt, restore) {
+    step(dt, restore, time = null) {
       run([dt, restore], C);
       if (++counted % ocean.everySteps !== 0) return false;
       const oceanDt = ocean.everySteps * dt;
@@ -191,7 +192,7 @@ export function createForcedOcean(model) {
       encoder.copyBufferToBuffer(forcing, 4 * F.stress, ocean.buffers.OD, 4 * ocean.layout.OD.STRESS, 4 * E);
       device.queue.submit([encoder.finish()]);
       ocean.step(oceanDt);
-      ocean.mixedLayer(oceanDt);
+      ocean.mixedLayer(oceanDt, ocean.dayClosing(time, oceanDt));
       ocean.salt(oceanDt);
       ocean.writeSurface(oceanDt);
       return true;
