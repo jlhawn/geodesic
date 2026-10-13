@@ -1,5 +1,5 @@
 // One coupled CPU day from a saved state, judging the mixed layer's mixing:
-//   [WORKERS=6] [DAYS=1] [GATE=1.4,2.2] [OCEAN_OPTS='{"shallowestMixedDepth":50,...}'] node scripts/mixingCheck.mjs [runs/eleven64_day1825.bin]
+//   [WORKERS=6] [DAYS=1] [GATE=2.3,3.6] [OCEAN_OPTS='{"shallowestMixedDepth":50,...}'] node scripts/mixingCheck.mjs [runs/eleven64_day1825.bin]
 // OCEAN_OPTS (or OCEAN) sets the ocean's options. It reports the share of
 // sea cells entraining by shear each ocean step and the volume a day, the
 // momentum depth H_m by band, the depth the retreat asks for where the
@@ -10,8 +10,10 @@
 // force and under the retreat without the package, on the cells where the
 // latter binds. It fails when the median asked depth there falls below the
 // package-off value and, with the package on at a 50 m floor, when their
-// ratio leaves GATE (default 1.4,2.2). It refuses to start beside another
-// `node scripts/` or `node --test` job.
+// ratio leaves GATE. The default 2.3,3.6 is the model's own form, the
+// package-off rule's faded constant taken at the step's depth (the floor);
+// taken at the asked depth, as the probe does, the band is 1.4,2.2. It
+// refuses to start beside another `node scripts/` or `node --test` job.
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { Grid } from '../js/grid.module.js';
@@ -36,7 +38,7 @@ if (others) {
 const FILE = process.argv[2] ?? new URL('../runs/eleven64_day1825.bin', import.meta.url).pathname;
 const WORKERS = Number(process.env.WORKERS ?? 6), DAYS = Number(process.env.DAYS ?? 1);
 const OCEAN = JSON.parse(process.env.OCEAN_OPTS ?? process.env.OCEAN ?? '{}');
-const BINS = [0, 2, 5, 10, 20, 30, 40, 50], GATE = (process.env.GATE ?? '1.4,2.2').split(',').map(Number), U10_RATIO = 1.19e-3, LA_MIN = 0.1;
+const BINS = [0, 2, 5, 10, 20, 30, 40, 50], GATE = (process.env.GATE ?? '2.3,3.6').split(',').map(Number), U10_RATIO = 1.19e-3, LA_MIN = 0.1;
 const t0 = performance.now(), seconds = () => ((performance.now() - t0) / 1000).toFixed(0);
 
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
