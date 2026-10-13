@@ -1539,7 +1539,7 @@ export function createOcean(mesh, {
         gate = retreatLight > 0 && passing > 0 ? drive + retreatLight * sun * h[i] * deposited(h[i], D[i] + eta[i], penetration) : drive;
       }
       retreatDepth[i] = 0;
-      if (gate < -1e-9) {
+      if (drive < -1e-9 && gate < -1e-9) {
         retreatDepth[i] = retreatStirring > 0 || langmuir > 0
           ? (retreatStirring > 0 ? retreatStirring : 2 * stir) * (langmuir > 0 ? 1 + (langmuirFactor(Math.sqrt(tau / rho0), began, langmuir) - 1) * (1 - iceCover[i]) : 1) * ustar3 / -drive
           : 2 * stir * ustar3 / -drive;

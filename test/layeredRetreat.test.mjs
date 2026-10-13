@@ -104,6 +104,25 @@ test('the day\'s means are the previous UTC day\'s absorbed sunlight and its dar
   });
 });
 
+test('where the expansion coefficient is negative, a daily buoyancy loss leaves the slab in place though the light gate is negative, and a daily gain retreats it', () => {
+  const mesh = columnMesh(), C = mesh.nCells, cell = CELLS[0], dt = 3600, sunDay = 300;
+  const fresh = (dark) => {
+    const ocean = createOcean(mesh, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 2.4, mixedDepth: 15, ...PACKAGE, minimumThickness: 1, retreatDaily: true, retreatLight: 1 });
+    const surfaceT = new Float64Array(C).fill(272.25), ice = new Float64Array(C);
+    ocean.initialize(surfaceT, ice);
+    const h0 = ocean.h[cell], b = GRAVITY * thermalExpansion(ocean.T0[cell], ocean.S0[cell]) / RHO_CP, tau = passing(h0), kept = b * sunDay * h0 * deposited(h0, 4000);
+    ocean.daily.sunDay.fill(sunDay);
+    ocean.daily.darkDay.fill(b * sunDay * (1 - tau) + dark * Math.abs(kept));
+    ocean.advance(surfaceT, ice, new Float64Array(C), new Float64Array(mesh.nEdges), dt, undefined, DAY / 2);
+    return { b, h0, h: ocean.h[cell], drive: dark * Math.abs(kept), gate: dark * Math.abs(kept) + kept };
+  };
+  const still = fresh(0), loss = fresh(0.2), gain = fresh(-2);
+  console.log(`b ${loss.b.toExponential(2)}; from ${loss.h0.toFixed(3)} m: with no daily drive ${still.h.toFixed(4)} m, a loss (drive ${loss.drive.toExponential(2)}, gate ${loss.gate.toExponential(2)}) ${loss.h.toFixed(4)} m, a gain (drive ${gain.drive.toExponential(2)}) ${gain.h.toFixed(4)} m`);
+  assert.ok(loss.b < 0 && loss.drive > 0 && loss.gate < -1e-9, 'the case has α < 0, a daily loss and a negative gate');
+  assert.equal(loss.h, still.h);
+  assert.ok(gain.h < still.h - 1e-3, `a daily gain retreats the slab: ${gain.h} against ${still.h} m`);
+});
+
 test('retreatLight needs retreatDaily and penetration and lies in [0, 1], and retreatDaily needs the model time', () => {
   const mesh = columnMesh();
   assert.throws(() => createOcean(mesh, { penetration: 'IB', retreatLight: 1 }), /needs retreatDaily/);

@@ -885,7 +885,7 @@ ${o.shearEntrainment > 0 ? `  var hold = 0.0;
   if (NEUTRALSNAP > 0.5 && below > 0 && rm >= RHO[below] - DENSTOL) { excess = max(excess, IN[hOff(0) + i] - SHALLOWMIXED); }
   detrain(i, excess, rm);
   if (IN[hOff(0) + i] > reach) { detrain(i, (IN[hOff(0) + i] - max(reach, SHALLOWMIXED)) * min(1.0, P[6] / DETRAINT), rm); }
-${o.retreatDaily ? dailyDrive : ''}  if (${o.retreatDaily ? 'dayGate' : 'loss'} < -1e-9) {
+${o.retreatDaily ? dailyDrive : ''}  if (${o.retreatDaily ? 'dayDrive < -1e-9 && dayGate' : 'loss'} < -1e-9) {
     let monin = ${o.shearEntrainment > 0 ? `max(max(SHALLOWMIXED, ${retreatTerm}), hold)` : `max(SHALLOWMIXED, ${retreatTerm})`};
     if (IN[hOff(0) + i] > monin) { detrain(i, (IN[hOff(0) + i] - monin) * min(1.0, P[6] / DETRAINT), rm); }
   }
