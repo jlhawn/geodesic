@@ -96,7 +96,10 @@
 // six layers' wind and temperature are sampled, read out daily as the 'top
 // budget' line, see createTopBudget in scripts/upperAtmosphere.mjs; with
 // BATCH 1 only), PERTURB (a replicate of a continued run: every θ of the
-// snapshot scaled by 1 + PERTURB·u, u uniform in ±1/2 from a fixed seed).
+// snapshot scaled by 1 + PERTURB·u, u uniform in ±1/2 from a fixed seed),
+// SKIN_WATCH (a path prefix: the sea's daily skin and exchange record of
+// scripts/skinWatch.mjs, with its per-cell fields on the SKIN_FIELD_DAYS,
+// from the day SKIN_WATCH_FROM).
 // A fresh start can take from saved states: FROM, a state at
 // the same N, gives the ocean, the land, the sea-surface temperature of
 // its mixed layer and the land-surface temperature and, with
@@ -137,6 +140,7 @@ import { freshJumpDue } from '../js/physics/land.module.js';
 import { balanceLine } from '../js/physics/energyRecord.module.js';
 import { convectionLine, equatorLine } from '../js/audit.module.js';
 import { upperWindLine, createTopBudget } from './upperAtmosphere.mjs';
+import { watchSkin } from './skinWatch.mjs';
 
 const BOXES = {
   sahara: [16, 30, -10, 32], arabia: [16, 30, 38, 55], sahel: [8, 16, -15, 35], india: [15, 28, 72, 88], congo: [-5, 5, 12, 30], amazon: [-10, 3, -70, -50],
@@ -349,6 +353,7 @@ if (budget) {
   await model.sync();
   budget.start(state, model.time);
 }
+if (process.env.SKIN_WATCH) watchSkin(model, { prefix: process.env.SKIN_WATCH, sea: (i) => !land[i], surface: SURFACE, fieldDays: (process.env.SKIN_FIELD_DAYS ?? '').split(',').filter(Boolean), from: Number(process.env.SKIN_WATCH_FROM ?? 0) });
 const ZONES = [['global', -90, 90], ['20S-20N', -20, 20], ['35-55N', 35, 55], ['35-55S', -55, -35], ['70-90N', 70, 90], ['70-90S', -90, -70]];
 function stratosphereLine(day) {
   const kappa = R_DRY / CP_DRY, K = levels.length - 1, rows = [];

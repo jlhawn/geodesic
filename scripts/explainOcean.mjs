@@ -15,6 +15,8 @@
 // WET_ICE (JSON, Part 7's dark ice by default), OCEAN_OPTS (JSON merged
 // into the ocean options) and SURFACE_OPTS (JSON surface options, such as
 // warmLayer and coolSkin) set the options, over the checkpoint's on RESUME.
+// SKIN_WATCH, SKIN_FIELD_DAYS and SKIN_WATCH_FROM keep scripts/skinWatch.mjs's
+// record.
 import { writeFileSync, readFileSync, mkdirSync, renameSync, unlinkSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, basename, relative as relativeTo, resolve, isAbsolute } from 'node:path';
@@ -28,6 +30,7 @@ import { initializeState } from '../js/physics/init.module.js';
 import { withCadence } from '../js/cadence.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { createForcingRecorder } from '../js/gpu/forcing.gpu.js';
+import { watchSkin } from './skinWatch.mjs';
 import { readRanges, getDevice } from '../js/gpu/device.module.js';
 import { decodeForcing } from '../js/forcing.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
@@ -102,6 +105,7 @@ const { cellsOnEdge, dvEdge, dcEdge, areaCell: weight } = mesh;
 const rhoCp = ocean.options.density * ocean.options.specificHeat, LATENT = model.moist.latentHeat, FUSION = seaIce.latentHeatFusion;
 const airCp = core.diagnostics.cp, gravity = core.diagnostics.g, { dSigma } = core.diagnostics;
 const D = ocean.D, cellOcean = ocean.cellOcean, everySteps = ocean.everySteps, perDay = Math.round(DAY / STEP), quarter = perDay / 4;
+if (process.env.SKIN_WATCH) watchSkin(model, { prefix: process.env.SKIN_WATCH, sea: (i) => !!cellOcean[i], surface: options.surface, fieldDays: (process.env.SKIN_FIELD_DAYS ?? '').split(',').filter(Boolean), from: Number(process.env.SKIN_WATCH_FROM ?? 0) });
 
 const restartNames = [];
 if (resumed) {
