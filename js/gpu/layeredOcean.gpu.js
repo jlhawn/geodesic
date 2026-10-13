@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares } from '../ocean/layered.module.js';
+import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares, FRICTION_PER_WIND, CALM_WIND, mixingOptionCheck } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
@@ -37,6 +37,7 @@ export const OCEAN_DEFAULTS = {
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
   momentumDepth: 50, carryMomentum: false, refillRate: 0, refillFloor: 5, shearEntrainment: 0,
+  ekmanDepth: 0, momentumFloor: 10, stressThickness: PV_FLOOR, retreatStirring: 0, langmuir: 0,
   interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: null,
   gustiness: 3,
@@ -63,6 +64,32 @@ function oceanKernels(o) {
   let ta = q + ${(HEAT_REFERENCE - t0).toExponential(10)}; let sa = w + ${(SALT_REFERENCE - s0).toExponential(10)};
   return -${a0} * (1.0 + ${0.5 * lambda1} * ta) * ta + ${b0} * (1.0 - ${0.5 * lambda2} * sa) * sa - ${nu} * ta * sa;
 }`;
+  const langmuirLines = `fn erfcApprox(x: f32) -> f32 {
+  let t = 1.0 / (1.0 + 0.3275911 * x);
+  return t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * exp(-x * x);
+}
+fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
+  let u10 = ustar / ${FRICTION_PER_WIND.toExponential(10)};
+  if (!(u10 > ${CALM_WIND.toExponential(10)})) { return 1.0; }
+  let drift = 0.0162 * u10; let height = 0.0246 * u10 * u10; let mean = ${(1.296 * 0.877 * 9.81 / (2 * Math.PI * 1.075)).toExponential(10)} / u10;
+  let k = 0.176 * drift / (${(0.125 * Math.PI * 0.667).toExponential(10)} * mean * height * height); let ks = 2.56 * k; let z = 0.2 * depth;
+  let r1 = (0.151 / (k * z) - 0.84) * (1.0 - exp(-2.0 * k * z));
+  let r2 = -(0.84 + 0.0591 / (k * z)) * sqrt(${(2 * Math.PI).toExponential(10)} * k * z) * erfcApprox(sqrt(2.0 * k * z));
+  let r3 = (0.0632 / (ks * z) + 0.125) * (1.0 - exp(-2.0 * ks * z));
+  let r4 = (0.125 + 0.0946 / (ks * z)) * sqrt(${(2 * Math.PI).toExponential(10)} * ks * z) * erfcApprox(sqrt(2.0 * ks * z));
+  let inverse = min(100.0, max(0.0, drift * (0.715 + r1 + r2 + r3 + r4) / ustar));
+  return min(LANGMUIR, sqrt(1.0 + inverse / 2.25 + inverse * inverse / 850.3056));
+}`;
+  const mixingLines = [
+    o.ekmanDepth > 0 ? `${constLine('EKMAN', o.ekmanDepth)} ${constLine('MOMFLOOR', o.momentumFloor)}` : '',
+    o.stressThickness !== PV_FLOOR ? constLine('STRESSTHICK', o.stressThickness) : '',
+    o.retreatStirring > 0 ? constLine('RETREATSTIR', o.retreatStirring) : '',
+    o.langmuir > 0 ? `${constLine('LANGMUIR', o.langmuir)}\n${langmuirLines}` : '',
+  ].filter((line) => line).map((line) => `${line}\n`).join('');
+  const momentumReach = o.ekmanDepth > 0 ? 'hm' : 'MOMDEPTH', stressFloor = o.stressThickness !== PV_FLOOR ? 'STRESSTHICK' : 'PVFLOOR';
+  const retreatTerm = o.retreatStirring > 0 || o.langmuir > 0
+    ? `${o.retreatStirring > 0 ? 'RETREATSTIR' : '2.0 * stir'} * ${o.langmuir > 0 ? 'langmuirFactor(sqrt(tau / RHO0), began)' : '1.0'} * ustar3 / -loss`
+    : '2.0 * stir * ustar3 / -loss';
   const offsetLines = Object.entries(OD).filter(([k]) => k !== 'total').map(([k, v]) => `const O_${k}: i32 = ${v};`).join('\n');
   const bLines = Object.entries(B).filter(([k]) => k !== 'total').map(([k, v]) => `const B_${k}: i32 = ${v};`).join('\n');
   const head = `
@@ -76,7 +103,7 @@ ${labelLine}
 ${constLine('RHO0', o.density)} ${constLine('RHOCP', o.density * o.specificHeat)}
 ${constLine('OGRAV', o.gravity)}
 ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)} ${constLine('DENSTOL', DENSITY_TOLERANCE)} ${constLine('RESTTOL', RESTORE_TOLERANCE)} ${constLine('RESTORET', o.restoreTime)}
-${o.shearEntrainment > 0 ? `${constLine('RICRIT', o.shearEntrainment)}\n${shearDensity}\n` : ''}${constLine('MINTHICK', o.minimumThickness)} ${constLine('REFILLRATE', o.refillRate)} ${constLine('REFILLFLOOR', o.refillFloor)} ${constLine('MOMDEPTH', o.momentumDepth)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
+${o.shearEntrainment > 0 ? `${constLine('RICRIT', o.shearEntrainment)}\n${shearDensity}\n` : ''}${mixingLines}${constLine('MINTHICK', o.minimumThickness)} ${constLine('REFILLRATE', o.refillRate)} ${constLine('REFILLFLOOR', o.refillFloor)} ${constLine('MOMDEPTH', o.momentumDepth)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
 ${constLine('NEUTRALSNAP', o.neutralSnap ? 1 : 0)} ${constLine('EROSION', o.convectiveErosion ? 1 : 0)} ${constLine('BUOYMEM', o.buoyancyMemory)} ${constLine('NBRRATIO', o.mixedNeighbourRatio)} ${constLine('CENTRING', o.vorticityCentring)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('SHEARMIX', o.shearMixing ? 1 : 0)} ${constLine('INTSHEAR', o.interiorShearMixing ? 1 : 0)} ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundViscosity)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
@@ -415,7 +442,7 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
     let hk = OD[O_HEDGE + n];
     let he = max(hk, MOMDEPTH);
     var force = 0.0; var drag = 0.0;
-    if (k == 0 && hk >= MOMDEPTH) { force += OD[O_STRESS + e] / RHO0; }
+${o.ekmanDepth > 0 ? '    if (k == 0 && hk >= OD[O_HM + e]) { force += OD[O_STRESS + e] / RHO0 * he / hk; }' : '    if (k == 0 && hk >= MOMDEPTH) { force += OD[O_STRESS + e] / RHO0; }'}
     if (k > 0) { drag += interfaceRate(e, above, k) * (IN[uOff(above) + e] - u); }
     let below = firstThickBelow(k, thickLo, thickHi);
     if (below >= 0) { drag -= interfaceRate(e, k, below) * (u - IN[uOff(below) + e]); }
@@ -427,17 +454,17 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
     if (k >= 1 && hk >= THINO) { above = k; }
     uAbove = u;
   }
-  if (OD[O_HEDGE + e] < MOMDEPTH) {
+${o.ekmanDepth > 0 ? '  let hm = OD[O_HM + e];\n' : ''}  if (OD[O_HEDGE + e] < ${momentumReach}) {
     var top = 0.0; var depth = 0.0; var last = 0; var fraction = 1.0;
     for (var j = 0; j < L; j++) {
-      let hj = OD[O_HEDGE + j * E + e]; let part = min(hj, max(0.0, MOMDEPTH - top));
-      if (j == 0 || hj >= PVFLOOR) { depth += part; }
+      let hj = OD[O_HEDGE + j * E + e]; let part = min(hj, max(0.0, ${momentumReach} - top));
+      if (j == 0 || hj >= ${stressFloor}) { depth += part; }
       top += hj; last = j; fraction = select(1.0, part / hj, hj > 0.0);
-      if (top >= MOMDEPTH) { break; }
+      if (top >= ${momentumReach}) { break; }
     }
     if (depth > 0.0) {
       let push = OD[O_STRESS + e] / RHO0 / depth;
-      for (var k = 0; k <= last; k++) { if (k == 0 || OD[O_HEDGE + k * E + e] >= PVFLOOR) { OUT[uOff(k) + e] += push * select(fraction, 1.0, k < last); } }
+      for (var k = 0; k <= last; k++) { if (k == 0 || OD[O_HEDGE + k * E + e] >= ${stressFloor}) { OUT[uOff(k) + e] += push * select(fraction, 1.0, k < last); } }
     }
   }
 }`,
@@ -740,6 +767,17 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
   let fa = PH[PH_DRAG + a] * rhoA * max(D[D_WIND + a], GUSTO); let fb = PH[PH_DRAG + b] * rhoB * max(D[D_WIND + b], GUSTO);
   OD[O_STRESS + e] = through * 0.5 * (fa + fb) * S[S_U + (K - 1) * E + e];
 }`,
+    ...(o.ekmanDepth > 0 ? { oWindDepth: `${K}  let e = ${idx}; if (e >= E) { return; }
+  var hm = MOMDEPTH;
+  let f = abs(OD[O_FEDGE + e]); let normal = OD[O_STRESS + e];
+  if (OD[O_EMASK + e] > 0.5 && EKMAN * sqrt(abs(normal) / RHO0) < MOMDEPTH * f) {
+    var along = 0.0;
+    for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; along += MF[F_PVW + slot] * OD[O_STRESS + MI[EOE + slot]]; }
+    along = along / MF[F_DC + e];
+    hm = min(MOMDEPTH, max(MOMFLOOR, EKMAN * sqrt(sqrt(normal * normal + along * along) / RHO0) / f));
+  }
+  OD[O_HM + e] = hm;
+}` } : {}),
     ...(o.shearEntrainment > 0 ? { oShearEdge: `${K}  let e = ${idx}; if (e >= E) { return; }
   var du = 0.0;
   if (OD[O_EMASK + e] > 0.5) {
@@ -767,7 +805,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
   wv = wv / MF[F_AREA + i];
   let tau = length(wv);
   let ustar3 = pow(tau / RHO0, 1.5); let stir = STIRRING * exp(-IN[hOff(0) + i] / STIRDEPTH);
-  let reach = OD[O_REACH + i];
+${o.langmuir > 0 ? '  let began = IN[hOff(0) + i];\n' : ''}  let reach = OD[O_REACH + i];
   let deepest = min(MAXMIXED, reach);
   let s0 = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
   let salted = s0 * OD[O_FRESH + i] / 1000.0 + (s0 - ICESAL) * (iceVolume(i) - OD[O_PREVVOL + i]) * ICEDENS / 1000.0;
@@ -826,7 +864,7 @@ ${o.shearEntrainment > 0 ? `  var hold = 0.0;
   detrain(i, excess, rm);
   if (IN[hOff(0) + i] > reach) { detrain(i, (IN[hOff(0) + i] - max(reach, SHALLOWMIXED)) * min(1.0, P[6] / DETRAINT), rm); }
   if (loss < -1e-9) {
-    let monin = ${o.shearEntrainment > 0 ? 'max(max(SHALLOWMIXED, 2.0 * stir * ustar3 / -loss), hold)' : 'max(SHALLOWMIXED, 2.0 * stir * ustar3 / -loss)'};
+    let monin = ${o.shearEntrainment > 0 ? `max(max(SHALLOWMIXED, ${retreatTerm}), hold)` : `max(SHALLOWMIXED, ${retreatTerm})`};
     if (IN[hOff(0) + i] > monin) { detrain(i, (IN[hOff(0) + i] - monin) * min(1.0, P[6] / DETRAINT), rm); }
   }
   if (IN[hOff(0) + i] < MINTHICK) {
@@ -967,6 +1005,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   if (o.closureTokens !== 'interior' && o.closureTokens !== 'beside') throw new Error(`closureTokens is 'interior' or 'beside', not ${o.closureTokens}`);
   if (o.penetration !== null && !JERLOV[o.penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${o.penetration}`);
   if (o.shearEntrainment > 0 && !o.carryMomentum) throw new Error('shearEntrainment needs carryMomentum: without the entrained water\'s momentum mixed in, the base\'s Richardson number never rises and the mixed layer swallows a class a step');
+  mixingOptionCheck(o);
   o.closureRings = o.closureTokens === 'interior' && o.closureFill > 0;
   const { device, buffers, mesh, meshSpacing } = core;
   const C = core.C, E = core.E, V = core.V;
@@ -1029,6 +1068,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
     ['RUNOFFSEEN', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
     ['EDDYK', E], ['TEDGE', 3 * E], ['DEEPEST', E], ['REM', 3 * C],
+    ...(o.ekmanDepth > 0 ? [['HM', E]] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -1166,7 +1206,10 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
 
   function dynamics(dt) {
     relaxRate = Math.min(1 / 3600, 1 / dt); stepDt = dt;
-    compute((pass) => dispatch(pass, 'oGradEta', group(ob.S, ob.T), E));
+    compute((pass) => {
+      if (o.ekmanDepth > 0) dispatch(pass, 'oWindDepth', group(ob.S, ob.T), E);
+      dispatch(pass, 'oGradEta', group(ob.S, ob.T), E);
+    });
     tendency(ob.S, ob.K1);
     barotropicStep(dt, ob.K1);
     advanceState(ob.T, ob.K1, dt / 2);

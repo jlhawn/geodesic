@@ -38,12 +38,15 @@ import { profileAt } from './climatology.module.js';
  * vorticity's thickness is no less than PV_FLOOR for a class and THIN for
  * the mixed layer.
  *
- * The wind stress τ is a body force over the top H = max(momentumDepth,
- * h₀) of each edge's column, tokens counted for depth, on the mixed layer
- * and the classes at least PV_FLOOR thick: a layer with o_k of its edge
+ * The wind stress τ is a body force over the top H = max(H_m, h₀) of each
+ * edge's column, tokens counted for depth, on the mixed layer and the
+ * classes at least `stressThickness` thick: a layer with o_k of its edge
  * thickness h_k within H gains (τ/ρ₀)(o_k/h_k)/Σo, so the column takes
  * τ/ρ₀ whatever the mixed layer's depth and a mixed layer thinner than H
- * runs at the speed of one H thick. A thinner class, which feels only a
+ * runs at the speed of one H thick. H_m is momentumDepth or, with
+ * `ekmanDepth` c_E, the wind's Ekman depth c_E u* / |f| from the edge's
+ * normal and reconstructed tangential stress, held between
+ * `momentumFloor` and momentumDepth. A thinner class, which feels only a
  * fraction of its Coriolis force, takes its share through the drag. Each
  * layer divides its interfacial drag by its own edge thickness, no less
  * than THIN, so the drag moves momentum between layers without making
@@ -82,8 +85,11 @@ import { profileAt } from './climatology.module.js';
  * convectively neutral or not: it detrains at once what lies beyond the
  * maximum, and, over `detrainmentTime` and never above
  * `shallowestMixedDepth`, what lies beyond the Monin–Obukhov depth
- * 2 m u*³/(−B) while it gains buoyancy and what lies beyond its
- * neighbours' reach. `neutralSnap` returns everything below
+ * C_r ε u*³/(−B) while it gains buoyancy, and what lies beyond its
+ * neighbors' reach. C_r is the entrainment's 2m, or `retreatStirring`
+ * without the fading with depth; ε is 1 or, with `langmuir` as its cap,
+ * the Langmuir factor at the depth the step began with.
+ * `neutralSnap` returns everything below
  * `shallowestMixedDepth` whenever the layer is as dense as the water
  * beneath it, and `convectiveErosion: false` swallows every class no
  * denser than the mixed layer at `convectiveRate`.
@@ -256,6 +262,41 @@ export function interiorWater(rho, t, s, lat) {
   return [tp, salinityForDensity(rho, tp)];
 }
 export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005, RESTORE_TOLERANCE = 0.01, THINNED_MARGIN = 0.01;
+
+/*
+ * The Langmuir enhancement of the retreat: the theory wave of a fully
+ * developed sea under a 10 m wind U10 = u* / FRICTION_PER_WIND (air 1.2
+ * kg/m³, drag 1.2e-3), its Stokes drift averaged over the top fifth of a
+ * layer `depth` thick in the form of CVMix's cvmix_kpp_ustokes_SL_model
+ * (Li, Fox-Kemper, Breivik and Webb 2017), and the factor
+ * √(1 + La⁻²/1.5² + La⁻⁴/5.4⁴) of Li et al. (2016) for its surface-layer
+ * Langmuir number La = √(u* / u_SL), La no less than 0.1, the factor no more
+ * than `cap`. erfc is Abramowitz and Stegun's 7.1.26, as on the GPU.
+ */
+export const FRICTION_PER_WIND = 1.19e-3, CALM_WIND = 1e-3;
+export function mixingOptionCheck({ stressThickness, langmuir }) {
+  if (!(stressThickness >= THIN)) throw new Error(`stressThickness is at least THIN (${THIN} m), the thinnest class that keeps its own velocity, not ${stressThickness}`);
+  if (langmuir !== 0 && !(langmuir >= 1)) throw new Error(`langmuir caps a factor of at least 1, so it is 0 or at least 1, not ${langmuir}`);
+}
+export function erfc(x) {
+  const t = 1 / (1 + 0.3275911 * x);
+  return t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429)))) * Math.exp(-x * x);
+}
+export function stokesSurfaceLayer(u10, depth) {
+  const drift = 0.0162 * u10, height = 0.0246 * u10 * u10, mean = 1.296 * 0.877 * 9.81 / (2 * Math.PI * 1.075 * u10);
+  const k = 0.176 * drift / (0.125 * Math.PI * 0.667 * mean * height * height), ks = 2.56 * k, z = 0.2 * depth;
+  const r1 = (0.151 / (k * z) - 0.84) * (1 - Math.exp(-2 * k * z));
+  const r2 = -(0.84 + 0.0591 / (k * z)) * Math.sqrt(2 * Math.PI * k * z) * erfc(Math.sqrt(2 * k * z));
+  const r3 = (0.0632 / (ks * z) + 0.125) * (1 - Math.exp(-2 * ks * z));
+  const r4 = (0.125 + 0.0946 / (ks * z)) * Math.sqrt(2 * Math.PI * ks * z) * erfc(Math.sqrt(2 * ks * z));
+  return drift * (0.715 + r1 + r2 + r3 + r4);
+}
+export function langmuirFactor(ustar, depth, cap) {
+  const u10 = ustar / FRICTION_PER_WIND;
+  if (!(u10 > CALM_WIND)) return 1;
+  const inverse = Math.min(100, Math.max(0, stokesSurfaceLayer(u10, depth) / ustar));
+  return Math.min(cap, Math.sqrt(1 + inverse / 2.25 + inverse * inverse / 850.3056));
+}
 
 /*
  * The share of the absorbed surface shortwave that passes depth z, two
@@ -811,6 +852,7 @@ export function createOcean(mesh, {
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
   momentumDepth = 50, carryMomentum = false, refillRate = 0, refillFloor = 5, shearEntrainment = 0,
+  ekmanDepth = 0, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 0, langmuir = 0,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = null,
   geography = null, bathymetry = null, buffers = null, climatology = null,
@@ -823,6 +865,7 @@ export function createOcean(mesh, {
   if (climatology && typeof climatology.columnAt !== 'function') throw new Error('the ocean climatology must be decoded (loadClimatology in ./climatology.module.js) before the ocean is built');
   if (penetration !== null && !JERLOV[penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${penetration}`);
   if (shearEntrainment > 0 && !carryMomentum) throw new Error('shearEntrainment needs carryMomentum: without the entrained water\'s momentum mixed in, the base\'s Richardson number never rises and the mixed layer swallows a class a step');
+  mixingOptionCheck({ stressThickness, langmuir });
   const L = densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = [rho0, ...densities];
   const labelS = [referenceS, ...salinities];
@@ -858,6 +901,8 @@ export function createOcean(mesh, {
   const iced = new Uint8Array(C);
   const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E);
   const stressDepth = shared('stressDepth', E), stressLayer = shared('stressLayer', E), stressFraction = shared('stressFraction', E);
+  const windDepth = ekmanDepth > 0 ? shared('windDepth', E) : null;
+  if (windDepth && !adopting) windDepth.fill(momentumDepth);
   const T = new Float64Array(C), S = new Float64Array(C), lapT = new Float64Array(C);
   const zeta = new Float64Array(V), qEdge = new Float64Array(E);
   const K = new Float64Array(C), phi = new Float64Array(C), gradPhi = new Float64Array(E), gradEta = shared('gradEta', E), gradRho = shared('gradRho', E);
@@ -933,20 +978,28 @@ export function createOcean(mesh, {
     for (let e = 0; e < E; e++) {
       stressLayer[e] = -1; stressDepth[e] = 0; stressFraction[e] = 0;
       if (!edgeOcean[e]) continue;
-      const reach = Math.max(momentumDepth, hEdge[e]);
+      const reach = Math.max(windDepth ? windDepth[e] : momentumDepth, hEdge[e]);
       let top = 0, depth = 0;
       for (let k = 0; k < L; k++) {
         const hk = hEdge[ae(k, e)], part = Math.min(hk, Math.max(0, reach - top));
-        if (k === 0 || hk >= PV_FLOOR) depth += part;
+        if (k === 0 || hk >= stressThickness) depth += part;
         top += hk;
         if (top >= reach || k === L - 1) { stressLayer[e] = depth > 0 ? k : -1; stressFraction[e] = hk > 0 ? part / hk : 1; break; }
       }
       stressDepth[e] = depth;
     }
   }
+  function windDepths() {
+    for (let e = 0; e < E; e++) {
+      const f = Math.abs(fEdge[e]);
+      if (!edgeOcean[e] || !(f > 0)) { windDepth[e] = momentumDepth; continue; }
+      const ustar = Math.sqrt(Math.hypot(stress[e], tangential(stress, 0, e)) / rho0);
+      windDepth[e] = Math.min(momentumDepth, Math.max(momentumFloor, ekmanDepth * ustar / f));
+    }
+  }
   function windAcceleration(k, e) {
     const last = stressLayer[e];
-    if (k > last || (k > 0 && hEdge[ae(k, e)] < PV_FLOOR)) return 0;
+    if (k > last || (k > 0 && hEdge[ae(k, e)] < stressThickness)) return 0;
     return stress[e] / rho0 * (k < last ? 1 : stressFraction[e]) / stressDepth[e];
   }
   /*
@@ -1095,7 +1148,10 @@ export function createOcean(mesh, {
       for (let e = 0; e < E; e++) {
         const he = Math.max(hEdge[oe + e], momentumDepth);
         let force = 0, drag = 0, push = 0;
-        if (k === 0 && hEdge[e] >= momentumDepth) force += stress[e] / rho0;
+        if (windDepth) {
+          if (k === 0 && hEdge[e] >= windDepth[e]) push = stress[e] / rho0 / Math.max(hEdge[e], windDepth[e]);
+          else push = windAcceleration(k, e);
+        } else if (k === 0 && hEdge[e] >= momentumDepth) force += stress[e] / rho0;
         else push = windAcceleration(k, e);
         if (k > 0) {
           let j = k - 1;
@@ -1353,7 +1409,7 @@ export function createOcean(mesh, {
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
       const tau = Math.hypot(tauCell[3 * i], tauCell[3 * i + 1], tauCell[3 * i + 2]);
-      const ustar3 = Math.pow(tau / rho0, 1.5), stir = stirring * Math.exp(-h[i] / stirringDepth);
+      const ustar3 = Math.pow(tau / rho0, 1.5), stir = stirring * Math.exp(-h[i] / stirringDepth), began = h[i];
       const deepest = Math.min(maximumMixedDepth, reach[i]), s0 = W[i] / h[i];
       const salted = s0 * fresh[i] / 1000 + (s0 - iceSalinity) * (iceVolume[i] - previousVolume[i]) * iceDensity / 1000;
       const buoyancy = g * (expansionOf(surfaceIn[i], s0) * (previousT0[i] - surfaceIn[i]) * capacity[i] / rhoCp + contractionOf(surfaceIn[i], s0) * salted) / dt;
@@ -1395,7 +1451,9 @@ export function createOcean(mesh, {
       if (h[i] > reach[i]) detrain(i, (h[i] - Math.max(reach[i], shallowestMixedDepth)) * Math.min(1, dt / detrainmentTime), rm);
       retreatDepth[i] = 0;
       if (buoyancyLoss[i] < -1e-9) {
-        retreatDepth[i] = 2 * stir * ustar3 / -buoyancyLoss[i];
+        retreatDepth[i] = retreatStirring > 0 || langmuir > 0
+          ? (retreatStirring > 0 ? retreatStirring : 2 * stir) * (langmuir > 0 ? langmuirFactor(Math.sqrt(tau / rho0), began, langmuir) : 1) * ustar3 / -buoyancyLoss[i]
+          : 2 * stir * ustar3 / -buoyancyLoss[i];
         const monin = Math.max(shallowestMixedDepth, retreatDepth[i], hold);
         if (h[i] > monin) detrain(i, (h[i] - monin) * Math.min(1, dt / detrainmentTime), rm);
       }
@@ -1465,6 +1523,7 @@ export function createOcean(mesh, {
   function setStress(total, ice, concentration = null) {
     const cover = (i) => coverOf(ice, concentration, i);
     for (let e = 0; e < E; e++) stress[e] = edgeOcean[e] ? total[e] * (1 - 0.5 * (cover(cellsOnEdge[2 * e]) + cover(cellsOnEdge[2 * e + 1])) * (1 - iceStressTransmission)) : 0;
+    if (windDepth) windDepths();
   }
   function measureIce(ice, concentration, out) {
     for (let i = 0; i < C; i++) out[i] = coverOf(ice, concentration, i) * ice[i];
@@ -1770,7 +1829,7 @@ export function createOcean(mesh, {
 
   if (!adopting) build(new Float64Array(C).fill(288), new Float64Array(C), null);
   initialised = false;
-  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, hEdge: hEdge.buffer, stressDepth: stressDepth.buffer, stressLayer: stressLayer.buffer, stressFraction: stressFraction.buffer, deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
+  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, hEdge: hEdge.buffer, stressDepth: stressDepth.buffer, stressLayer: stressLayer.buffer, stressFraction: stressFraction.buffer, ...(windDepth ? { windDepth: windDepth.buffer } : {}), deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, retreatDepth, avgU, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, retreatDepth, windDepth, avgU, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }

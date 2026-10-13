@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, LAYER_BOTTOMS, transmitted, THIN } from '../js/ocean/layered.module.js';
+import { createOcean, LAYER_BOTTOMS, transmitted, THIN, langmuirFactor, stokesSurfaceLayer, FRICTION_PER_WIND } from '../js/ocean/layered.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion, labelTemperature } from '../js/ocean/seawater.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, UNIFORM, uniformOcean, deepen, slowOcean, columnMomentum } from './helpers/layered.mjs';
@@ -492,13 +492,97 @@ test('under shearEntrainment a 5 m mixed layer at 45°N over a stratification of
   assert.ok(Math.abs(still - 5) < 0.5, `without shear entrainment the layer is ${still} m`);
 });
 
-test('at shearEntrainment 0 the ocean steps as without the option, bit for bit, over 48 steps from the analytic start', () => {
+test('with shearEntrainment, ekmanDepth, retreatStirring and langmuir 0 and stressThickness PV_FLOOR the ocean steps as without the options, bit for bit, over 48 steps from the analytic start', () => {
   const run = (options) => {
     const { ocean, surfaceT, ice, flux } = uniformOcean({ penetration: 'IB', carryMomentum: true, minimumThickness: 10, shallowestMixedDepth: 10, refillRate: 24 / 86400, ...options });
     const stress = zonalWindOnEdges(mesh, (lat) => -0.1 * Math.cos(3 * lat));
     for (let n = 0; n < 48; n++) { for (let i = 0; i < C; i++) surfaceT[i] = 278 + 2 * Math.cos(mesh.latCell[i]) - 0.01 * n; ocean.advance(surfaceT, ice, flux, stress, 1350); }
     return ocean;
   };
-  const off = run({ shearEntrainment: 0 }), plain = run({});
-  for (const name of ['h', 'u', 'Q', 'W', 'eta']) assert.deepEqual(off[name], plain[name], `${name} at shearEntrainment 0 is the default's`);
+  const off = run({ shearEntrainment: 0, ekmanDepth: 0, momentumFloor: 10, stressThickness: 20, retreatStirring: 0, langmuir: 0 }), plain = run({});
+  for (const name of ['h', 'u', 'Q', 'W', 'eta']) assert.deepEqual(off[name], plain[name], `${name} with the options off is the default's`);
+});
+
+test('under retreatStirring and langmuir a heated mixed layer retreats toward C_r·ε·u*³/(−B), unfaded, with ε the Langmuir factor at the depth the step began with, between 1 and its cap', () => {
+  const dt = 1350, net = 150, cap = 2;
+  const stress = zonalWindOnEdges(mesh, (lat) => 0.01 + 0.2 * Math.cos(lat) ** 4);
+  const tauCell = cellVector(mesh, stress);
+  const run = (mixedDepth, options) => {
+    const { ocean, surfaceT, ice } = uniformOcean({ mixedDepth, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, ...options });
+    for (let i = 0; i < C; i++) surfaceT[i] += dt * net / ocean.capacity[i];
+    ocean.setStress(stress, ice);
+    ocean.readSurface(surfaceT, ice);
+    const began = Float64Array.from(ocean.h.subarray(0, C)), alpha = Float64Array.from(began, (h, i) => thermalExpansion(surfaceT[i], ocean.W[i] / h));
+    ocean.mixedLayer(dt);
+    return { L: Float64Array.from(ocean.retreatDepth), began, alpha, rhoCp: ocean.rhoCp };
+  };
+  let cells = 0, worst = 0, closed = 0, least = Infinity, most = 0, capped = 0;
+  for (const depth of [6, 80]) for (let faded = run(depth, {}), constant = run(depth, { retreatStirring: 2.5 }), langmuir = run(depth, { retreatStirring: 2.5, langmuir: cap }), i = 0; i < C; i++) {
+    if (!(faded.L[i] > 0)) continue;
+    cells++;
+    const h = faded.began[i], tau = Math.hypot(tauCell[3 * i], tauCell[3 * i + 1], tauCell[3 * i + 2]), ustar = Math.sqrt(tau / RHO);
+    const scale = faded.L[i] / (2 * 0.8 * Math.exp(-h / 100)), epsilon = langmuirFactor(ustar, h, cap);
+    assert.equal(constant.began[i], h);
+    worst = Math.max(worst, Math.abs(constant.L[i] / (2.5 * scale) - 1), Math.abs(langmuir.L[i] / (2.5 * epsilon * scale) - 1));
+    closed = Math.max(closed, Math.abs(constant.L[i] / (2.5 * ustar ** 3 * faded.rhoCp / (9.81 * faded.alpha[i] * net)) - 1));
+    const ratio = langmuir.L[i] / constant.L[i];
+    least = Math.min(least, ratio); most = Math.max(most, ratio);
+    if (ratio > cap - 1e-12) capped++;
+  }
+  console.log(`${cells} heated cells, 6 and 80 m deep: L at 2.5 and at 2.5ε within ${worst.toExponential(2)} of the faded rule's u*³/(−B) times their constants, and the 2.5 rule within ${closed.toExponential(2)} of 2.5u*³ρc_p/(gα·${net} W/m²); ε from ${least.toFixed(3)} to ${most.toFixed(3)}, ${capped} cells at the cap ${cap}`);
+  assert.ok(cells > 600, `${cells} cells retreated`);
+  assert.ok(worst < 1e-12, `the retreat depth is ${worst} off its closed form`);
+  assert.ok(closed < 1e-9, `the 2.5 rule is ${closed} off the flux's Monin–Obukhov depth`);
+  assert.ok(least >= 1 && most <= cap * (1 + 1e-15) && least < 1.5 && capped > 0, `ε from ${least} to ${most}`);
+
+  const { ocean, surfaceT, ice } = uniformOcean({ mixedDepth: 30, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, carryMomentum: true, shearEntrainment: 0.65, ekmanDepth: 0.4, stressThickness: THIN, retreatStirring: 2.5, langmuir: cap });
+  for (let e = 0; e < E; e++) {
+    if (Math.abs(mesh.latEdge[e]) > 30 * DEG) continue;
+    const x = mesh.xEdge[3 * e], y = mesh.xEdge[3 * e + 1], r = Math.hypot(x, y) || 1e-12;
+    ocean.u[e] += 0.4 * ((-y / r) * mesh.nEdge[3 * e] + (x / r) * mesh.nEdge[3 * e + 1]);
+  }
+  for (let i = 0; i < C; i++) surfaceT[i] += dt * net / ocean.capacity[i];
+  ocean.setStress(stress, ice);
+  ocean.readSurface(surfaceT, ice);
+  const sums = columnSums(ocean), start = { h: Float64Array.from(ocean.h), u: Float64Array.from(ocean.u), eta: Float64Array.from(ocean.eta) };
+  ocean.mixedLayer(dt);
+  const after = columnSums(ocean), books = Math.max(...after.flatMap((cells, n) => cells.map(([s], i) => Math.abs(s - sums[n][i][0]) / sums[n][i][1])));
+  const a = columnMomentum(mesh, ocean.layers, start, ocean.D), b = columnMomentum(mesh, ocean.layers, ocean, ocean.D);
+  let momentum = 0, retreated = 0, entrained = 0;
+  for (let e = 0; e < E; e++) momentum = Math.max(momentum, Math.abs(b.momentum[e] - a.momentum[e]) / Math.max(a.scale[e], 1e-30));
+  for (let i = 0; i < C; i++) { if (ocean.h[i] < start.h[i] - 1e-9) retreated++; if (ocean.sheared[i] > 0) entrained++; }
+  console.log(`with the whole package, ${retreated} cells retreat and ${entrained} entrain by shear in one step; columns keep water, heat and salt within ${books.toExponential(2)} and edges their momentum within ${momentum.toExponential(2)}`);
+  assert.ok(retreated > 100 && entrained > 100, `${retreated} retreated, ${entrained} entrained`);
+  assert.ok(books < 1e-12 && momentum < 1e-12, `columns ${books}, momentum ${momentum}`);
+});
+
+/*
+ * CVMix's cvmix_kpp_ustokes_SL_model, the surface-layer Stokes drift of
+ * the theory wave, written out with erfc from its Maclaurin series.
+ */
+function publishedStokes(u10, h) {
+  const erfc = (x) => { let term = x, sum = x; for (let n = 1; n < 80; n++) { term *= -x * x / n; sum += term / (2 * n + 1); } return 1 - 2 / Math.sqrt(Math.PI) * sum; };
+  const us = 0.0162 * u10, hm0 = 0.0246 * u10 ** 2, fp = 0.877 * 9.81 / (2 * Math.PI * 1.075 * u10), fm = 1.296 * fp;
+  const vstokes = 0.125 * Math.PI * 0.667 * fm * hm0 ** 2, kphil = 0.176 * us / vstokes, kstar = 2.56 * kphil, z0 = 0.2 * h;
+  const r1 = (0.151 / kphil / z0 - 0.84) * (1 - Math.exp(-2 * kphil * z0));
+  const r2 = -(0.84 + 0.0591 / kphil / z0) * Math.sqrt(2 * Math.PI * kphil * z0) * erfc(Math.sqrt(2 * kphil * z0));
+  const r3 = (0.0632 / kstar / z0 + 0.125) * (1 - Math.exp(-2 * kstar * z0));
+  const r4 = (0.125 + 0.0946 / kstar / z0) * Math.sqrt(2 * Math.PI * kstar * z0) * erfc(Math.sqrt(2 * kstar * z0));
+  return us * (0.715 + r1 + r2 + r3 + r4);
+}
+
+test('the surface-layer Langmuir number of a 10 m/s theory wave over a 10 m layer is the published formula\'s, and the factor is 1 in a calm and never below 1 nor above its cap', () => {
+  const ustar = 10 * FRICTION_PER_WIND, published = publishedStokes(10, 10), model = stokesSurfaceLayer(10, 10);
+  const la = Math.sqrt(ustar / model), laPublished = Math.sqrt(ustar / published);
+  console.log(`U10 10 m/s, h 10 m: u_SL ${model.toFixed(6)} m/s against the formula's ${published.toFixed(6)}, La_SL ${la.toFixed(4)} against ${laPublished.toFixed(4)}, ε ${langmuirFactor(ustar, 10, 5).toFixed(4)}`);
+  assert.ok(Math.abs(la / laPublished - 1) < 0.01 && Math.abs(model / 0.07161749 - 1) < 0.01, `La_SL ${la} against ${laPublished}`);
+  assert.ok(Math.abs(langmuirFactor(ustar, 10, 5) - Math.sqrt(1 + la ** -2 / 1.5 ** 2 + la ** -4 / 5.4 ** 4)) < 1e-12);
+  assert.equal(langmuirFactor(0, 10, 2), 1);
+  let previous = Infinity;
+  for (const h of [1, 3, 10, 30, 100, 300, 600]) {
+    const at = langmuirFactor(ustar, h, 5);
+    assert.ok(at <= previous + 1e-12, `the factor grows from ${previous} to ${at} at ${h} m`);
+    previous = at;
+    for (const u10 of [0.002, 0.1, 1, 3, 10, 20, 40]) { const e = langmuirFactor(u10 * FRICTION_PER_WIND, h, 2); assert.ok(e >= 1 && e <= 2 && Number.isFinite(e), `ε ${e} at ${u10} m/s over ${h} m`); }
+  }
 });

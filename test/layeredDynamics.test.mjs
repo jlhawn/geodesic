@@ -232,6 +232,55 @@ test('the wind gives every sea edge\'s column τ/ρ₀, over the top momentumDep
   assert.ok(depthOff < 1e-12);
 });
 
+test('under ekmanDepth the wind gives every sea edge\'s column τ/ρ₀ over the larger of the mixed layer and the wind\'s Ekman depth min(momentumDepth, max(momentumFloor, c_E u*/|f|)), on the mixed layer and the classes at least stressThickness thick', () => {
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C);
+  const tau = Float64Array.from(zonalWindOnEdges(mesh, (lat) => 8 * Math.cos(3 * lat)), (w) => RHO_AIR * DRAG * 8 * w);
+  for (const stressThickness of [PV_FLOOR, THIN]) {
+    const column = { ocean: createOcean(mesh, { everySteps: 1, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, ekmanDepth: 0.4, momentumFloor: 10, stressThickness }), surfaceT, ice };
+    const { ocean } = column, L = ocean.layers;
+    ocean.initialize(Float64Array.from(surfaceT), ice);
+    deepen(column, [...Array(C).keys()].filter((i) => i % 3 !== 0), 80, -0.02);
+    for (let n = 0; n < ocean.u.length; n++) ocean.u[n] = 0.2 * Math.sin(0.7 * Math.floor(n / E) + 0.37 * (n % E));
+    ocean.setStress(new Float64Array(E), ice);
+    ocean.tendency(ocean.state, ocean.stages[0]);
+    const still = Float64Array.from(ocean.stages[0][1]);
+    ocean.setStress(tau, ice);
+    ocean.tendency(ocean.state, ocean.stages[0]);
+    const du = ocean.stages[0][1], hEdge = new Float64Array(ocean.shared.hEdge);
+    let worst = 0, depthWorst = 0, alone = 0, spread = 0, between = 0, thinReceivers = 0;
+    for (let e = 0; e < E; e++) {
+      if (!ocean.edgeOcean[e] || Math.abs(tau[e]) < 1e-6) continue;
+      let along = 0;
+      for (let s = 0; s < mesh.nEdgesOnEdge[e]; s++) { const o = mesh.edgesOnEdge[mesh.maxEdgesOnEdge * e + s]; along += mesh.weightsOnEdge[mesh.maxEdgesOnEdge * e + s] * mesh.dvEdge[o] * ocean.stress[o]; }
+      const ustar = Math.sqrt(Math.hypot(ocean.stress[e], along / mesh.dcEdge[e]) / RHO), hm = Math.min(50, Math.max(10, 0.4 * ustar / Math.abs(mesh.fEdge[e])));
+      depthWorst = Math.max(depthWorst, Math.abs(ocean.windDepth[e] - hm) / hm);
+      if (hm > 10 && hm < 50) between++;
+      const push = tau[e] / RHO, h0 = hEdge[e];
+      let total = 0, receivers = 0;
+      for (let k = 0; k < L; k++) {
+        const n = k * E + e, gain = du[n] - still[n];
+        total += hEdge[n] * gain;
+        if (k > 0 && gain !== 0) { receivers++; assert.ok(hEdge[n] >= stressThickness, `edge ${e}: a class ${hEdge[n]} m thick took the stress`); if (hEdge[n] < PV_FLOOR) thinReceivers++; }
+      }
+      worst = Math.max(worst, Math.abs(total - push) / Math.abs(push));
+      const depth = push / (du[e] - still[e]);
+      if (h0 >= hm) {
+        alone++;
+        assert.equal(receivers, 0, `edge ${e}: a ${h0} m mixed layer over its ${hm} m Ekman depth shares the stress`);
+        assert.ok(Math.abs(depth - h0) <= 1e-12 * h0, `edge ${e}: the ${h0} m mixed layer takes the stress over ${depth} m`);
+      } else {
+        if (receivers) spread++;
+        assert.ok(depth > h0 * (1 - 1e-12) && depth < hm * (1 + 1e-12), `edge ${e}: the mixed layer, ${h0} m at the edge, takes the stress over ${depth} m within an Ekman depth of ${hm} m`);
+      }
+    }
+    console.log(`stressThickness ${stressThickness}: ${between} sea edges with the Ekman depth between its bounds, ${alone} with the mixed layer as deep, ${spread} sharing the stress with the classes beneath (${thinReceivers} classes under PV_FLOOR among the receivers); the column's gain within ${worst.toExponential(2)} of τ/ρ₀, the Ekman depth within ${depthWorst.toExponential(2)} of min(50, max(10, 0.4u*/|f|))`);
+    assert.ok(between > 100 && alone > 50 && spread > 50, `${between} edges between, ${alone} alone, ${spread} shared`);
+    assert.ok(worst < 1e-12, `a column gains ${worst} off τ/ρ₀`);
+    assert.ok(depthWorst < 1e-12, `the Ekman depth is ${depthWorst} off`);
+    if (stressThickness === THIN) assert.ok(thinReceivers > 0);
+  }
+});
+
 test('the interfacial drag keeps each column\'s momentum under a 10 m mixed layer, whatever the refill floor', () => {
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C);
   for (const floors of [{}, { minimumThickness: 10, shallowestMixedDepth: 10 }]) {
@@ -273,11 +322,11 @@ test('the interfacial drag keeps each column\'s momentum under a 10 m mixed laye
  * class relative to it, and the mixed layer's own velocity relative to
  * it, averaged over two inertial periods after four days.
  */
-async function ekmanStack(momentumDepth) {
+async function ekmanStack(stacked, latitude = 45) {
   const classes = { densities: [1023, 1024, 1025, 1026, 1026.95], salinities: [35, 35, 35, 34.9, 34.8], bottoms: [35, 60, 90, 500, 12000] };
-  const options = { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, stirring: 0, momentumDepth, ...classes };
+  const options = { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, stirring: 0, ...stacked, ...classes };
   const ocean = await slowOcean(mesh, { ocean: options, surfaceT: new Float64Array(C).fill(303) });
-  const tau = 0.1, dt = 1350, latitude = 45, shape = (lat) => Math.exp(-(((lat / DEG - latitude) / 10) ** 2));
+  const tau = 0.1, dt = 1350, shape = (lat) => Math.exp(-(((lat / DEG - latitude) / 10) ** 2));
   const stress = zonalWindOnEdges(mesh, (lat) => tau * shape(lat));
   let spacing = 0;
   for (let e = 0; e < E; e++) spacing += mesh.dcEdge[e];
@@ -307,7 +356,7 @@ async function ekmanStack(momentumDepth) {
 }
 
 test('under a 10 m mixed layer the wind spread over momentumDepth drives the Ekman transport at 45°N within 7 % of τ/(ρ₀f), the mixed layer moving as a 50 m one would, and at momentumDepth 10 the mixed layer feels its full Coriolis force', async () => {
-  const spread = await ekmanStack(50), alone = await ekmanStack(10);
+  const spread = await ekmanStack({ momentumDepth: 50 }), alone = await ekmanStack({ momentumDepth: 10 });
   const bound = 1.3 * 0.1 / (RHO * spread.f * 50);
   for (const [label, run] of [['momentumDepth 50', spread], ['momentumDepth 10', alone]]) console.log(`${label} on the ${run.engine} ocean, a ${run.depth.toFixed(1)} m mixed layer: the transport above the deepest class ${run.ratio.toFixed(3)} of τ/(ρ₀f) (${run.theory.toFixed(3)} m²/s) at ${run.angle.toFixed(1)}° to the right of the wind; the mixed layer at ${run.speed.toFixed(4)} m/s relative to the deepest class`);
   for (const run of [spread, alone]) {
@@ -482,4 +531,19 @@ test('closureAdjoint returns the closure on the fitted token edges to the edges 
   }
   console.log(`the work of the closure on the thick edges with the adjoint matches the filled flow's ∇⁴ energy to ${worst.toExponential(2)}; without it as little as ${unextended.toFixed(2)} of it`);
   assert.ok(worst < 1e-9 && least > 0);
+});
+
+test('under ekmanDepth 0.4 the wind spread over its own Ekman depth drives the transport of a stack under a 10 m mixed layer within 5 % of τ/(ρ₀f) at about 90° at 45°N, where that depth is 38 m, and within 5 % at 15°N, where it is momentumDepth', async () => {
+  const north = await ekmanStack({ momentumDepth: 50, ekmanDepth: 0.4 }), south = await ekmanStack({ momentumDepth: 50, ekmanDepth: 0.4 }, 15);
+  const hm = 0.4 * Math.sqrt(0.1 / RHO) / north.f, spread = 0.1 / (RHO * north.f * hm);
+  for (const [label, run] of [['45°N', north], ['15°N', south]]) console.log(`ekmanDepth 0.4 at ${label} on the ${run.engine} ocean, a ${run.depth.toFixed(1)} m mixed layer: the transport above the deepest class ${run.ratio.toFixed(3)} of τ/(ρ₀f) (${run.theory.toFixed(3)} m²/s) at ${run.angle.toFixed(1)}° to the right of the wind; the mixed layer at ${run.speed.toFixed(4)} m/s relative to the deepest class`);
+  console.log(`at 45°N the peak stress's Ekman depth is ${hm.toFixed(1)} m, over which the stress alone would move the mixed layer at ${spread.toFixed(4)} m/s`);
+  assert.ok(Math.abs(hm - 38) < 1);
+  for (const run of [north, south]) {
+    assert.ok(Math.abs(run.ratio - 1) < 0.05, `the stack carries ${run.ratio} of τ/(ρ₀f)`);
+    assert.ok(Math.abs(run.depth - 10) < 0.5, `the mixed layer is ${run.depth} m`);
+    assert.equal(run.limited, 0);
+  }
+  assert.ok(Math.abs(north.angle - 90) < 5, `the transport turns ${north.angle}° from the wind`);
+  assert.ok(north.speed > 0.8 * spread && north.speed < 1.3 * spread, `the mixed layer runs at ${north.speed} m/s against ${spread} over the Ekman depth`);
 });
