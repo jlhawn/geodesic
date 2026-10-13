@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createOcean, LAYER_BOTTOMS } from '../js/ocean/layered.module.js';
-import { seawaterDensity, thermalExpansion } from '../js/ocean/seawater.module.js';
-import { RHO_AIR, DRAG, RHO, DEG, mesh, C, zonalWindOnEdges, UNIFORM, uniformOcean, deepen, slowOcean } from './helpers/layered.mjs';
+import { seawaterDensity, thermalExpansion, labelTemperature } from '../js/ocean/seawater.module.js';
+import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, UNIFORM, uniformOcean, deepen, slowOcean, columnMomentum } from './helpers/layered.mjs';
 
 test('surface warming shallows the mixed layer by detrainment; surface cooling deepens it by entrainment', () => {
   const ocean = createOcean(mesh, { everySteps: 1 });
@@ -184,4 +184,120 @@ test('the thinned share counts the sea whose mixed layer is below its floor whil
   assert.ok(ocean.refilled.water.every((x) => x >= 0));
   assert.ok(h[short] >= 50 - 1e-9);
   assert.ok(Math.abs(ocean.diagnostics().oceanThinned) < 1e-12, 'the instant refill leaves nothing thinned that could be filled');
+});
+
+test('at 10 m floors a 600 m mixed layer beside 10 m ones at 60°S, and the remnant under one at 45°S, run no faster than 1 m/s and reach no clamp', async () => {
+  const floors = { mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10 };
+  const runs = [];
+  const coarse = buildMesh(new Grid(16)), fine = buildMesh(new Grid(32));
+  for (const [m, latitude, options, depth, offset, steps, dt] of [
+    [coarse, -60, { ...UNIFORM, mixedNeighbourRatio: 0, bottoms: LAYER_BOTTOMS.map((z) => 0.6 * z) }, 600, -0.002, 5 * 16, 5400],
+    [fine, -45, { everySteps: 1, vorticityCentring: 0.5 }, 600, -0.05, 2 * 32, 2700],
+  ]) {
+    const offsetFrom = (i) => Math.abs(m.latCell[i] - latitude * DEG) + Math.abs(m.lonCell[i]);
+    let centre = 0;
+    for (let i = 1; i < m.nCells; i++) if (offsetFrom(i) < offsetFrom(centre)) centre = i;
+    const ocean = await slowOcean(m, {
+      ocean: { ...options, ...floors },
+      surfaceT: latitude === -60 ? new Float64Array(m.nCells).fill(278) : Float64Array.from(m.latCell, (lat) => Math.max(272, 302 - 32 * Math.sin(lat) ** 2)),
+      start: (column) => deepen(column, [centre], depth, offset),
+    });
+    const calm = new Float64Array(m.nEdges);
+    let fastest = 0, thinnest = Infinity;
+    for (let n = 0; n < steps; n++) {
+      await ocean.advance(calm, dt);
+      const { h, u } = await ocean.download();
+      for (const v of u) fastest = Math.max(fastest, Math.abs(v));
+      for (let i = 0; i < m.nCells; i++) if (ocean.cellOcean[i]) thinnest = Math.min(thinnest, h[i]);
+    }
+    const limited = (await ocean.diagnostics()).oceanLimited, { h } = await ocean.download();
+    runs.push({ latitude, engine: ocean.engine, fastest, thinnest, limited, deep: h[centre] });
+    await ocean.close();
+  }
+  for (const run of runs) console.log(`a 600 m mixed layer at ${-run.latitude}°S among 10 m ones on the ${run.engine} ocean: fastest water ${run.fastest.toFixed(3)} m/s, the thinnest mixed layer ${run.thinnest.toFixed(1)} m, the deep one ${run.deep.toFixed(0)} m, ${run.limited} clamped edges`);
+  for (const run of runs) {
+    assert.ok(run.fastest < 1, `${run.latitude}: ${run.fastest} m/s`);
+    assert.equal(run.limited, 0);
+    assert.ok(run.thinnest > 9.9 && run.thinnest < 11, `${run.latitude}: the thin mixed layers are ${run.thinnest} m`);
+  }
+});
+
+/*
+ * A 50 m mixed layer at 303 K over classes 30, 70, 150, 300 and 3400 m
+ * thick on a flat 4000 m sea, each layer given its own velocities, the
+ * classes kept on their labels.
+ */
+const STACK = { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34, mixedDepth: 50, restoreTime: 1e30, densities: [1026.0, 1026.1, 1026.2, 1026.3, 1026.95], salinities: [34.9, 34.9, 34.9, 34.9, 34.8], bottoms: [80, 150, 300, 600, 12000] };
+function stacked(options = {}, mixedDensity = null) {
+  const ocean = createOcean(mesh, { ...STACK, carryMomentum: true, ...options });
+  const surfaceT = new Float64Array(C).fill(303), ice = new Float64Array(C);
+  ocean.initialize(surfaceT, ice);
+  if (mixedDensity) {
+    const t = labelTemperature(mixedDensity, 34);
+    for (let i = 0; i < C; i++) { ocean.Q[i] = ocean.h[i] * t; surfaceT[i] = t; }
+    ocean.load(ocean.serialize(), surfaceT, ice);
+  }
+  for (let k = 0; k < ocean.layers; k++) for (let e = 0; e < E; e++) ocean.u[k * E + e] = (0.3 - 0.04 * k) * Math.sin(0.37 * e + 1.3 * k) + 0.02 * k;
+  const start = { h: Float64Array.from(ocean.h), u: Float64Array.from(ocean.u), eta: Float64Array.from(ocean.eta) };
+  return { ocean, surfaceT, ice, start };
+}
+function columnChange({ ocean, start }) {
+  const before = columnMomentum(mesh, ocean.layers, start, ocean.D), after = columnMomentum(mesh, ocean.layers, ocean, ocean.D);
+  let worst = 0;
+  for (let e = 0; e < E; e++) worst = Math.max(worst, Math.abs(after.momentum[e] - before.momentum[e]) / before.scale[e]);
+  return worst;
+}
+
+test('with carryMomentum every edge\'s column keeps its momentum through the mixed layer\'s retreat, refill and convection: the water a retreat leaves keeps the mixed layer\'s velocity, a refill takes the mean of what the layer now holds and convection the mean of the water it swallows; without it the velocities are left alone', () => {
+  const dt = 1350, cells = [...Array(C).keys()], { cellsOnEdge } = mesh, a = (e) => cellsOnEdge[2 * e], b = (e) => cellsOnEdge[2 * e + 1];
+  const warmed = (column) => { column.ocean.readSurface(Float64Array.from(column.surfaceT, (t) => t + 0.05), column.ice); column.ocean.mixedLayer(dt); };
+
+  const retreat = stacked({ shallowestMixedDepth: 10, minimumThickness: 10, detrainmentTime: dt, buoyancyMemory: 0 });
+  warmed(retreat);
+  const { u: u0 } = retreat.start, { h, u } = retreat.ocean;
+  assert.ok(cells.every((i) => Math.abs(h[i] - 10) < 1e-9 && Math.abs(h[C + i] - 70) < 1e-9), 'every cell detrains 40 m into the first class');
+  let off = 0;
+  for (let e = 0; e < E; e++) off = Math.max(off, Math.abs(u[e] - u0[e]), Math.abs(u[E + e] - (40 * u0[e] + 30 * u0[E + e]) / 70));
+  const retreatKept = columnChange(retreat);
+  console.log(`retreat 50 → 10 m: the class takes (40 u₀ + 30 u₁)/70 and the mixed layer keeps u₀ to ${off.toExponential(2)} m/s; the columns keep their momentum to ${retreatKept.toExponential(2)}`);
+  assert.ok(off < 1e-12 && retreatKept < 1e-12);
+
+  const refill = stacked({ minimumThickness: 10 });
+  const patch = new Set(cells.filter((i) => Math.abs(mesh.latCell[i] - 30 * DEG) < 15 * DEG && Math.abs(mesh.lonCell[i]) < 20 * DEG));
+  const { ocean: r } = refill;
+  for (const i of patch) { const f = 47 / r.h[i]; r.h[C + i] += 47; r.Q[C + i] += r.Q[i] * f; r.W[C + i] += r.W[i] * f; r.h[i] -= 47; r.Q[i] -= r.Q[i] * f; r.W[i] -= r.W[i] * f; }
+  refill.start.h.set(r.h);
+  r.readSurface(refill.surfaceT, refill.ice);
+  r.mixedLayer(dt);
+  let inside = 0, border = 0, mixedOff = 0;
+  for (let e = 0; e < E; e++) {
+    const ina = patch.has(a(e)), inb = patch.has(b(e));
+    if (ina && inb) { inside++; mixedOff = Math.max(mixedOff, Math.abs(r.u[e] - (3 * refill.start.u[e] + 7 * refill.start.u[E + e]) / 10)); } else if (ina || inb) border++;
+  }
+  const refillKept = columnChange(refill);
+  console.log(`refill 3 → 10 m over ${patch.size} cells: inside the patch the mixed layer takes (3 u₀ + 7 u₁)/10 to ${mixedOff.toExponential(2)} m/s on ${inside} edges; the columns keep their momentum to ${refillKept.toExponential(2)}, the ${border} edges on the patch's border included`);
+  assert.ok([...patch].every((i) => Math.abs(r.h[i] - 10) < 1e-9));
+  assert.ok(inside > 5 && border > 5 && mixedOff < 1e-12 && refillKept < 1e-12);
+
+  const convection = stacked({ maximumMixedDepth: 300, convectiveRate: 1e5 / 86400 }, 1026.8);
+  const { ocean: c, start } = convection;
+  const before = Float64Array.from(c.h);
+  c.readSurface(convection.surfaceT, convection.ice);
+  c.mixedLayer(dt);
+  assert.ok(cells.every((i) => c.h[i] > 299.9), `convection deepens every mixed layer to 300 m (${Math.min(...cells.map((i) => c.h[i]))})`);
+  let meanOff = 0, moved = 0;
+  for (let e = 0; e < E; e++) {
+    const reach = Math.max(0.5 * (before[a(e)] + before[b(e)]), 0.5 * (c.h[a(e)] + c.h[b(e)]));
+    let top = 0, sum = 0;
+    for (let k = 0; k < c.layers && top < reach; k++) { const hk = Math.min(before[k * C + a(e)], before[k * C + b(e)]), part = Math.min(k ? hk : 0.5 * (before[a(e)] + before[b(e)]), reach - top); sum += part * start.u[k * E + e]; top += k ? hk : 0.5 * (before[a(e)] + before[b(e)]); }
+    meanOff = Math.max(meanOff, Math.abs(c.u[e] - sum / reach)); moved = Math.max(moved, Math.abs(c.u[e] - start.u[e]));
+  }
+  const convectionKept = columnChange(convection);
+  console.log(`convection 50 → 300 m: the mixed layer takes the mean of the old top 300 m to ${meanOff.toExponential(2)} m/s, moving by up to ${moved.toFixed(3)} m/s; the columns keep their momentum to ${convectionKept.toExponential(2)}`);
+  assert.ok(meanOff < 1e-5 && moved > 0.1 && convectionKept < 1e-12);
+
+  const still = stacked({ shallowestMixedDepth: 10, minimumThickness: 10, detrainmentTime: dt, buoyancyMemory: 0, carryMomentum: false });
+  warmed(still);
+  assert.ok(Math.abs(still.ocean.h[0] - 10) < 1e-9);
+  assert.deepEqual(still.ocean.u, still.start.u);
 });

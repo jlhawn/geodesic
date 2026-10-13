@@ -53,6 +53,21 @@ export function northwardMixedTransport(ocean, m) {
   return out;
 }
 
+// Each edge's column momentum Σ h_e u and its scale Σ h_e |u|, on the ocean's edge thicknesses.
+export function columnMomentum(m, L, { h, u, eta }, D) {
+  const C = m.nCells, E = m.nEdges, momentum = new Float64Array(E), scale = new Float64Array(E), column = new Float64Array(L);
+  for (let e = 0; e < E; e++) {
+    const a = m.cellsOnEdge[2 * e], b = m.cellsOnEdge[2 * e + 1];
+    column[0] = 0.5 * (h[a] + h[b]);
+    for (let k = 1; k < L; k++) column[k] = Math.min(h[k * C + a], h[k * C + b]);
+    let sum = 0;
+    for (let k = 0; k < L; k++) sum += column[k];
+    const sill = Math.max(EPS, Math.min(D[a], D[b]) + 0.5 * (eta[a] + eta[b])), f = sum > sill ? sill / sum : 1;
+    for (let k = 0; k < L; k++) { momentum[e] += f * column[k] * u[k * E + e]; scale[e] += f * column[k] * Math.abs(u[k * E + e]); }
+  }
+  return { momentum, scale };
+}
+
 // A flat ocean the same in every column, 34.5 psu water at 278 K over the
 // interior classes denser than it, with a 50 m mixed layer: no pressure
 // gradient anywhere until a column is changed.

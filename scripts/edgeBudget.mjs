@@ -29,7 +29,7 @@ const du = stage[1], { h, u, edgeOcean } = ocean;
 const hEdge = new Float64Array(ocean.shared.hEdge), pressure = new Float64Array(ocean.shared.pressure), gradEta = new Float64Array(ocean.shared.gradEta), gradRho = new Float64Array(ocean.shared.gradRho);
 const { nEdgesOnEdge, edgesOnEdge, weightsOnEdge, maxEdgesOnEdge, dcEdge, dvEdge, cellsOnEdge, verticesOnEdge, fVertex } = mesh;
 let spacing = 0; for (let e = 0; e < E; e++) spacing += dcEdge[e]; spacing /= E;
-const nu4 = closureCoefficient(spacing, OCEAN.closureHours ?? 12), centring = OCEAN.vorticityCentring ?? 0.5, floor = OCEAN.minimumThickness ?? 50;
+const nu4 = closureCoefficient(spacing, OCEAN.closureHours ?? 12), centring = OCEAN.vorticityCentring ?? 0.5;
 const zeta = new Float64Array(mesh.nVertices), Kc = new Float64Array(C), gK = new Float64Array(E), phi = new Float64Array(C), gP = new Float64Array(E), lap = new Float64Array(E), lap2 = new Float64Array(E), dS = new Float64Array(C), cS = new Float64Array(mesh.nVertices), fluxPV = new Float64Array(E), q = new Float64Array(E);
 const ae = (k, e) => k * E + e, at = (k, i) => k * C + i;
 console.log(`== ${FILE.split('/').pop()} day ${saved.day} step ${saved.step ?? 0}; terms in 1e-5 m/s2`);
@@ -39,7 +39,7 @@ for (let k = 0; k < L; k++) {
   const uk = u.subarray(k * E, (k + 1) * E);
   for (let e = 0; e < E; e++) fluxPV[e] = edgeOcean[e] ? hEdge[ae(k, e)] * uk[e] : 0;
   curl(mesh, uk, zeta);
-  for (let e = 0; e < E; e++) { const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1]; q[e] = 0.5 * (zeta[verticesOnEdge[2 * e]] + fVertex[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]] + fVertex[verticesOnEdge[2 * e + 1]]) / Math.max(hEdge[ae(k, e)], k > 0 ? centring * 0.5 * (h[at(k, a)] + h[at(k, b)]) : 0, PV_FLOOR); }
+  for (let e = 0; e < E; e++) { const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1]; q[e] = 0.5 * (zeta[verticesOnEdge[2 * e]] + fVertex[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]] + fVertex[verticesOnEdge[2 * e + 1]]) / Math.max(hEdge[ae(k, e)], k > 0 ? centring * 0.5 * (h[at(k, a)] + h[at(k, b)]) : 0, k > 0 ? PV_FLOOR : THIN); }
   kineticEnergy(mesh, uk, Kc); gradient(mesh, Kc, gK);
   for (let i = 0; i < C; i++) phi[i] = k === 0 ? 0 : g * pressure[at(k, i)] / rho0;
   gradient(mesh, phi, gP);
@@ -48,7 +48,7 @@ for (let k = 0; k < L; k++) {
     let cor = 0; for (let s = 0; s < nEdgesOnEdge[e]; s++) { const o = edgesOnEdge[maxEdgesOnEdge * e + s]; cor += weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[o] * fluxPV[o] * 0.5 * (q[e] + q[o]); }
     cor /= dcEdge[e];
     const eta = -g * gradEta[e], bc = k === 0 ? -g / rho0 * 0.5 * hEdge[e] * gradRho[e] : -gP[e];
-    const he = Math.max(hEdge[ae(k, e)], floor), st = k === 0 ? ocean.stress[e] / rho0 / he : 0;
+    const st = ocean.windAcceleration(k, e);
     const closure = -nu4 * lap2[e];
     const rest = du[ae(k, e)] - (cor - gK[e] + eta + bc + st + closure);
     console.log(`edge ${e} ${k === 0 ? 'ML' : rho[k].toFixed(2)} hEdge ${hEdge[ae(k, e)].toFixed(0)} u ${uk[e].toFixed(2)} | -g grad eta ${(eta * 1e5).toFixed(2)} baroclinic ${(bc * 1e5).toFixed(2)} Coriolis ${(cor * 1e5).toFixed(2)} -grad K ${(-gK[e] * 1e5).toFixed(2)} stress ${(st * 1e5).toFixed(2)} nu4 ${(closure * 1e5).toFixed(2)} drag+rest ${(rest * 1e5).toFixed(2)} | du/dt ${(du[ae(k, e)] * 1e5).toFixed(2)}`);

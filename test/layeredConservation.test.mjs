@@ -5,6 +5,7 @@ import { buildMesh } from '../js/mesh.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
+import { columnMomentum } from './helpers/layered.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -24,8 +25,9 @@ const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges, AREA = m
  * so the currents, the eddy transport and the mixed layer's exchanges are
  * all under way and no heat crosses the surface.
  */
-function spunUp(steps = SPINUP) {
-  const ocean = createOcean(mesh, { everySteps: 1 });
+const CARRIED = { carryMomentum: true };
+function spunUp(steps = SPINUP, options = {}) {
+  const ocean = createOcean(mesh, { everySteps: 1, ...options });
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => {
     const polar = Math.max(0, Math.min(1, (Math.abs(lat) / DEG - 50) / 20));
     return Math.max(FREEZING_POINT + 0.3, 273.15 + 30 * Math.cos(lat) ** 2 - 2 - 4 * polar);
@@ -37,7 +39,7 @@ function spunUp(steps = SPINUP) {
   }
   ocean.initialize(surfaceT, ice);
   for (let n = 0; n < steps; n++) ocean.advance(surfaceT, ice, flux, stress, DT);
-  return { ocean, surfaceT, ice, flux, stress };
+  return { ocean, surfaceT, ice, flux, stress, options };
 }
 
 /*
@@ -45,11 +47,12 @@ function spunUp(steps = SPINUP) {
  * snapshots of the stores (h, heat as h·(T − HEAT_REFERENCE), salt h·S),
  * summed over every layer and cell in double precision: the heat as a
  * global-mean flux over the step (W/m²), the salt and the volume as
- * global means (psu·m, m), and `offMean`, the heat and salt a column
+ * global means (psu·m, m), `offMean`, the heat and salt a column
  * changed beyond what its change of volume carries at the column's own
- * mean temperature and salinity.
+ * mean temperature and salinity, and `momentum`, the largest change of an
+ * edge's column momentum Σ h_e u relative to its Σ h_e |u|.
  */
-function books(before, after, layers, rhoCp) {
+function books(before, after, layers, rhoCp, D) {
   let heat = 0, salt = 0, volume = 0, offHeat = 0, offSalt = 0;
   for (let i = 0; i < C; i++) {
     let dh = 0, dq = 0, dw = 0, h = 0, q = 0, w = 0;
@@ -63,17 +66,20 @@ function books(before, after, layers, rhoCp) {
     if (h > 0) { offHeat += a * (dq - q / h * dh); offSalt += a * (dw - w / h * dh); }
   }
   const watts = (x) => rhoCp * x / (AREA * DT);
-  return { heat: watts(heat), salt: salt / AREA, volume: volume / AREA, offMean: { heat: watts(offHeat), salt: offSalt / AREA } };
+  const was = columnMomentum(mesh, layers, before, D), is = columnMomentum(mesh, layers, after, D);
+  let momentum = 0;
+  for (let e = 0; e < E; e++) momentum = Math.max(momentum, Math.abs(is.momentum[e] - was.momentum[e]) / was.scale[e]);
+  return { heat: watts(heat), salt: salt / AREA, volume: volume / AREA, offMean: { heat: watts(offHeat), salt: offSalt / AREA }, momentum };
 }
 
-async function follow(phases, snapshot, steps, layers, rhoCp) {
+async function follow(phases, snapshot, steps, layers, rhoCp, D) {
   const record = Object.fromEntries(phases.map(([name]) => [name, []]));
   let before = await snapshot();
   for (let n = 0; n < steps; n++) {
     for (const [name, run] of phases) {
       await run();
       const after = await snapshot();
-      record[name].push(books(before, after, layers, rhoCp));
+      record[name].push(books(before, after, layers, rhoCp, D));
       before = after;
     }
   }
@@ -88,14 +94,14 @@ const volume = (r) => r.volume;
 function report(label, record) {
   for (const [name, rows] of Object.entries(record)) {
     const [heat, salt] = kept(name);
-    console.log(`${label} ${name}: heat ${name === 'rescale' ? 'off the columns\' means' : 'changed'} by ${show(mean(rows, heat))} W/m² on average, ${show(largest(rows, heat))} at most; salt ${show(mean(rows, salt))}, ${show(largest(rows, salt))} psu·m; volume ${show(mean(rows, volume))}, ${show(largest(rows, volume))} m`);
+    console.log(`${label} ${name}: heat ${name === 'rescale' ? 'off the columns\' means' : 'changed'} by ${show(mean(rows, heat))} W/m² on average, ${show(largest(rows, heat))} at most; salt ${show(mean(rows, salt))}, ${show(largest(rows, salt))} psu·m; volume ${show(mean(rows, volume))}, ${show(largest(rows, volume))} m${name === 'mixedLayer' ? `; an edge's column momentum by ${show(largest(rows, (r) => r.momentum))} of its Σ h|u| at most` : ''}`);
   }
 }
 
-test('in double precision every phase of the CPU ocean\'s step keeps the heat and salt it holds, and the rescale to the averaged free surface changes them only with its water, at each column\'s mean temperature and salinity', async () => {
-  const { ocean, surfaceT, ice, flux, stress } = spunUp();
+test('in double precision every phase of the CPU ocean\'s step keeps the heat and salt it holds, the rescale to the averaged free surface changes them only with its water, at each column\'s mean temperature and salinity, and the mixed layer\'s exchanges keep each edge\'s column momentum', async () => {
+  const { ocean, surfaceT, ice, flux, stress } = spunUp(SPINUP, CARRIED);
   ocean.setStress(stress, ice);
-  const snapshot = async () => ({ h: Float64Array.from(ocean.h), q: Float64Array.from(ocean.Q, (q, n) => q - HEAT_REFERENCE * ocean.h[n]), w: Float64Array.from(ocean.W) });
+  const snapshot = async () => ({ h: Float64Array.from(ocean.h), q: Float64Array.from(ocean.Q, (q, n) => q - HEAT_REFERENCE * ocean.h[n]), w: Float64Array.from(ocean.W), u: Float64Array.from(ocean.u), eta: Float64Array.from(ocean.eta) });
   const record = await follow([
     ['readSurface', () => ocean.readSurface(surfaceT, ice)],
     ['dynamics', () => ocean.phases.dynamics(DT)],
@@ -104,7 +110,7 @@ test('in double precision every phase of the CPU ocean\'s step keeps the heat an
     ['shift', () => ocean.phases.shift()],
     ['mixedLayer', () => ocean.mixedLayer(DT)],
     ['salt and surface', () => { ocean.salt(); ocean.writeSurface(surfaceT, flux, DT); }],
-  ], snapshot, 4, ocean.layers, ocean.rhoCp);
+  ], snapshot, 4, ocean.layers, ocean.rhoCp, ocean.D);
   report('CPU', record);
   for (const [name, rows] of Object.entries(record)) {
     const [heat, salt] = kept(name);
@@ -113,6 +119,7 @@ test('in double precision every phase of the CPU ocean\'s step keeps the heat an
     if (name !== 'rescale') assert.ok(largest(rows, volume) < 1e-12, `${name}: volume ${largest(rows, volume)} m`);
   }
   assert.ok(largest(record.rescale, (r) => r.heat) > 1e-3, 'the rescale moves water, and heat with it');
+  assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-12, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
 });
 
 /*
@@ -122,8 +129,8 @@ test('in double precision every phase of the CPU ocean\'s step keeps the heat an
  * reads the device's h, heat and salt as stored, `snapshot` as books
  * takes them, the salt as h·S.
  */
-async function onGpu({ ocean: cpu, surfaceT, ice, stress }) {
-  const model = await createGpuModel(mesh, { ocean: { everySteps: 1 } });
+async function onGpu({ ocean: cpu, surfaceT, ice, stress, options }) {
+  const model = await createGpuModel(mesh, { ocean: { everySteps: 1, ...options } });
   const { gpu, oceanEngine: ocean } = model, layers = ocean.layers, { OS } = ocean.layout;
   ocean.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, surfaceT, ice);
   gpu.uploadSurfaceTemperature(surfaceT);
@@ -135,7 +142,8 @@ async function onGpu({ ocean: cpu, surfaceT, ice, stress }) {
   };
   const snapshot = async () => {
     const [h, q, w] = await stores();
-    return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w, (x, n) => x + SALT_REFERENCE * h[n]) };
+    const [[u], [eta]] = await Promise.all([readRanges(gpu.device, ocean.buffers.S, [{ offset: OS.OU, length: layers * E }]), readRanges(gpu.device, ocean.buffers.OD, [{ offset: ocean.layout.OD.ETA, length: C }])]);
+    return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w, (x, n) => x + SALT_REFERENCE * h[n]), u: Float64Array.from(u), eta: Float64Array.from(eta) };
   };
   const phases = [
     ['readSurface', () => ocean.readSurfaceFromAtmosphere()],
@@ -146,7 +154,7 @@ async function onGpu({ ocean: cpu, surfaceT, ice, stress }) {
     ['mixedLayer', () => ocean.mixedLayer(DT)],
     ['salt and surface', () => { ocean.salt(DT); ocean.writeSurface(DT); }],
   ];
-  return { model, ocean, stores, follow: (steps) => follow(phases, snapshot, steps, layers, ocean.options.density * ocean.options.specificHeat) };
+  return { model, ocean, stores, follow: (steps) => follow(phases, snapshot, steps, layers, ocean.options.density * ocean.options.specificHeat, ocean.D) };
 }
 
 function within(label, record, floors) {
@@ -188,6 +196,15 @@ test('in single precision every phase of the GPU ocean\'s step keeps the heat, s
   sea.model.destroy();
   report('GPU', record);
   within('GPU', record, GPU_FLOORS);
+});
+
+test('with carryMomentum the GPU mixed layer\'s exchanges keep each edge\'s column momentum to single-precision rounding, and its heat, salt and volume as without', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const sea = await onGpu(spunUp(SPINUP, CARRIED));
+  const record = await sea.follow(8);
+  sea.model.destroy();
+  report('GPU carried', { mixedLayer: record.mixedLayer });
+  within('GPU carried', record, { mixedLayer: GPU_FLOORS.mixedLayer });
+  assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-5, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
 });
 
 /*

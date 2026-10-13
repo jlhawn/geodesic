@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { cellVector, laplacianVelocity } from '../js/dynamics/operators.module.js';
-import { createOcean, closureVelocity, closureAdjoint, THIN, EPS } from '../js/ocean/layered.module.js';
+import { createOcean, closureVelocity, closureAdjoint, THIN, EPS, PV_FLOOR } from '../js/ocean/layered.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
-import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, totalHeatSalt, northwardMixedTransport, slowOcean } from './helpers/layered.mjs';
+import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, totalHeatSalt, northwardMixedTransport, slowOcean, deepen } from './helpers/layered.mjs';
 
 test('the ocean at rest under zero stress on a bumpy bottom stays at rest and conserves heat, salt and surface temperature', () => {
   const bathymetry = new Float64Array(C);
@@ -189,6 +189,135 @@ test('interfacial drag, constant or from the shear, moves momentum between the l
     assert.ok(thin > 100, `only ${thin} thin layer edges`);
     assert.ok(largest > 1e-7 && worst < 1e-12 * largest, `the drag changes a column's momentum by ${worst} against ${largest} moved`);
   }
+});
+
+test('the wind gives every sea edge\'s column τ/ρ₀, over the top momentumDepth on the mixed layer and the classes at least PV_FLOOR thick, and over the mixed layer alone where it is deeper than that', () => {
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C);
+  const column = { ocean: createOcean(mesh, { everySteps: 1, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10 }), surfaceT, ice };
+  const { ocean } = column, L = ocean.layers;
+  ocean.initialize(surfaceT, ice);
+  deepen(column, [...Array(C).keys()].filter((i) => i % 3 !== 0), 80, -0.02);
+  for (let n = 0; n < ocean.u.length; n++) ocean.u[n] = 0.2 * Math.sin(0.7 * Math.floor(n / E) + 0.37 * (n % E));
+  const tau = Float64Array.from(zonalWindOnEdges(mesh, (lat) => 8 * Math.cos(3 * lat)), (w) => RHO_AIR * DRAG * 8 * w);
+  ocean.setStress(new Float64Array(E), ice);
+  ocean.tendency(ocean.state, ocean.stages[0]);
+  const still = Float64Array.from(ocean.stages[0][1]);
+  ocean.setStress(tau, ice);
+  ocean.tendency(ocean.state, ocean.stages[0]);
+  const du = ocean.stages[0][1], hEdge = new Float64Array(ocean.shared.hEdge);
+  let worst = 0, depthOff = 0, alone = 0, spread = 0, deep = 0;
+  for (let e = 0; e < E; e++) {
+    if (!ocean.edgeOcean[e] || Math.abs(tau[e]) < 1e-6) continue;
+    const push = tau[e] / RHO, h0 = hEdge[e];
+    let total = 0, receivers = 0;
+    for (let k = 0; k < L; k++) {
+      const n = k * E + e, gain = du[n] - still[n];
+      total += hEdge[n] * gain;
+      if (k > 0 && gain !== 0) { receivers++; assert.ok(hEdge[n] >= PV_FLOOR, `edge ${e}: a class ${hEdge[n]} m thick took the stress`); }
+    }
+    worst = Math.max(worst, Math.abs(total - push) / Math.abs(push));
+    const depth = push / (du[e] - still[e]);
+    if (h0 >= 50) {
+      deep++;
+      assert.equal(receivers, 0, `edge ${e}: a ${h0} m mixed layer shares the stress`);
+      depthOff = Math.max(depthOff, Math.abs(depth - h0) / h0);
+    } else {
+      if (receivers) spread++; else alone++;
+      assert.ok(depth > h0 * (1 - 1e-12) && depth < 50 * (1 + 1e-12), `edge ${e}: the mixed layer, ${h0} m at the edge, takes the stress over ${depth} m`);
+    }
+  }
+  console.log(`${deep} sea edges with the mixed layer at least 50 m thick, ${spread} thinner ones sharing the stress with the classes beneath, ${alone} taking it alone: the column's gain within ${worst.toExponential(2)} of τ/ρ₀, the deep mixed layer's divisor within ${depthOff.toExponential(2)} of its thickness`);
+  assert.ok(deep > 50 && spread > 50, `${deep} deep and ${spread} shared edges`);
+  assert.ok(worst < 1e-12, `a column gains ${worst} off τ/ρ₀`);
+  assert.ok(depthOff < 1e-12);
+});
+
+test('the interfacial drag keeps each column\'s momentum under a 10 m mixed layer, whatever the refill floor', () => {
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C);
+  for (const floors of [{}, { minimumThickness: 10, shallowestMixedDepth: 10 }]) {
+    const build = (options) => {
+      const ocean = createOcean(mesh, { everySteps: 1, mixedDepth: 10, ...floors, ...options });
+      ocean.initialize(Float64Array.from(surfaceT), ice);
+      for (let n = 0; n < ocean.u.length; n++) ocean.u[n] = 0.2 * Math.sin(0.7 * Math.floor(n / E) + 0.37 * (n % E));
+      ocean.tendency(ocean.state, ocean.stages[0]);
+      return ocean;
+    };
+    const du0 = build({ interfacialDrag: 0 }).stages[0][1];
+    for (const options of [{ interfacialDrag: 5e-5 }, { shearMixing: true, interfacialDrag: 5e-5 }]) {
+      const dragging = build(options), L = dragging.layers;
+      const hEdge = new Float64Array(dragging.shared.hEdge), du = dragging.stages[0][1];
+      let worst = 0, largest = 0, thin = 0;
+      for (let e = 0; e < E; e++) {
+        if (!dragging.edgeOcean[e]) continue;
+        if (hEdge[e] < 50) thin++;
+        let net = 0;
+        for (let k = 0; k < L; k++) {
+          const n = k * E + e;
+          if (k > 0 && hEdge[n] < THIN) continue;
+          const moved = hEdge[n] * (du[n] - du0[n]);
+          net += moved; largest = Math.max(largest, Math.abs(moved));
+        }
+        worst = Math.max(worst, Math.abs(net));
+      }
+      console.log(`floors ${JSON.stringify(floors)}, ${JSON.stringify(options)}: ${thin} sea edges with the mixed layer under 50 m; the largest momentum moved by the drag ${largest.toExponential(2)} m²/s², the largest column imbalance ${worst.toExponential(2)}`);
+      assert.ok(thin > 1000, `only ${thin} thin mixed-layer edges`);
+      assert.ok(largest > 1e-7 && worst < 1e-12 * largest, `the drag changes a column's momentum by ${worst} against ${largest} moved`);
+    }
+  }
+});
+
+/*
+ * A 10 m mixed layer over 25, 25, 30 and 410 m classes and a deep one, at
+ * 45°N under a zonal stress of 0.1 N/m² peaking there, with no stirring
+ * and no surface flux: the transport of everything above the deepest
+ * class relative to it, and the mixed layer's own velocity relative to
+ * it, averaged over two inertial periods after four days.
+ */
+async function ekmanStack(momentumDepth) {
+  const classes = { densities: [1023, 1024, 1025, 1026, 1026.95], salinities: [35, 35, 35, 34.9, 34.8], bottoms: [35, 60, 90, 500, 12000] };
+  const options = { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, stirring: 0, momentumDepth, ...classes };
+  const ocean = await slowOcean(mesh, { ocean: options, surfaceT: new Float64Array(C).fill(303) });
+  const tau = 0.1, dt = 1350, latitude = 45, shape = (lat) => Math.exp(-(((lat / DEG - latitude) / 10) ** 2));
+  const stress = zonalWindOnEdges(mesh, (lat) => tau * shape(lat));
+  let spacing = 0;
+  for (let e = 0; e < E; e++) spacing += mesh.dcEdge[e];
+  const half = 0.5 * spacing / E / mesh.radius / DEG, ring = [];
+  for (let i = 0; i < C; i++) if (Math.abs(mesh.latCell[i] / DEG - latitude) < half) ring.push(i);
+  const area = ring.reduce((sum, i) => sum + mesh.areaCell[i], 0), f = (lat) => 2 * mesh.omega * Math.sin(lat);
+  const theory = ring.reduce((sum, i) => sum + mesh.areaCell[i] / area * tau * shape(mesh.latCell[i]) / (RHO * f(mesh.latCell[i])), 0);
+  const L = ocean.layers, deepest = L - 1, period = 2 * Math.PI / f(latitude * DEG), steps = Math.round(2 * period / dt);
+  await ocean.advance(stress, dt, Math.round(4 * 86400 / dt));
+  const vectors = Array.from({ length: L }, () => new Float64Array(3 * C));
+  let east = 0, north = 0, mlEast = 0, mlNorth = 0, depth = 0;
+  for (let n = 0; n < steps; n++) {
+    await ocean.advance(stress, dt);
+    const { h, u } = await ocean.download();
+    for (let k = 0; k < L; k++) cellVector(mesh, u.subarray(k * E, (k + 1) * E), vectors[k]);
+    for (const i of ring) {
+      const x = mesh.xCell[3 * i], y = mesh.xCell[3 * i + 1], z = mesh.xCell[3 * i + 2], r = Math.hypot(x, y), w = mesh.areaCell[i] / area / steps;
+      const toEast = [-y / r, x / r, 0], toNorth = [-z * x / r, -z * y / r, r];
+      const along = (k, axis) => (vectors[k][3 * i] - vectors[deepest][3 * i]) * axis[0] + (vectors[k][3 * i + 1] - vectors[deepest][3 * i + 1]) * axis[1] + (vectors[k][3 * i + 2] - vectors[deepest][3 * i + 2]) * axis[2];
+      for (let k = 0; k < deepest; k++) { east += w * h[k * C + i] * along(k, toEast); north += w * h[k * C + i] * along(k, toNorth); }
+      mlEast += w * along(0, toEast); mlNorth += w * along(0, toNorth); depth += w * h[i];
+    }
+  }
+  const limited = (await ocean.diagnostics()).oceanLimited;
+  await ocean.close();
+  return { engine: ocean.engine, ratio: Math.hypot(east, north) / theory, angle: Math.atan2(-north, east) / DEG, speed: Math.hypot(mlEast, mlNorth), theory, depth, limited, f: f(latitude * DEG) };
+}
+
+test('under a 10 m mixed layer the wind spread over momentumDepth drives the Ekman transport at 45°N within 5 % of τ/(ρ₀f), the mixed layer moving as a 50 m one would, and at momentumDepth 10 the mixed layer feels its full Coriolis force', async () => {
+  const spread = await ekmanStack(50), alone = await ekmanStack(10);
+  const bound = 1.3 * 0.1 / (RHO * spread.f * 50);
+  for (const [label, run] of [['momentumDepth 50', spread], ['momentumDepth 10', alone]]) console.log(`${label} on the ${run.engine} ocean, a ${run.depth.toFixed(1)} m mixed layer: the transport above the deepest class ${run.ratio.toFixed(3)} of τ/(ρ₀f) (${run.theory.toFixed(3)} m²/s) at ${run.angle.toFixed(1)}° to the right of the wind; the mixed layer at ${run.speed.toFixed(4)} m/s relative to the deepest class`);
+  for (const run of [spread, alone]) {
+    assert.ok(Math.abs(run.ratio - 1) < 0.05, `the stack carries ${run.ratio} of τ/(ρ₀f)`);
+    assert.ok(Math.abs(run.depth - 10) < 0.5, `the mixed layer is ${run.depth} m`);
+    assert.equal(run.limited, 0);
+  }
+  assert.ok(Math.abs(spread.angle - 90) < 3, `the transport turns ${spread.angle}° from the wind`);
+  assert.ok(spread.speed < bound, `the mixed layer runs at ${spread.speed} m/s, more than ${bound}`);
+  assert.ok(alone.speed > 3 * spread.speed, `with momentumDepth 10 the mixed layer runs at ${alone.speed} m/s against ${spread.speed}`);
 });
 
 test('under shearMixing the drag between the mixed layer and the class beneath follows the Pacanowski–Philander viscosity of their Richardson number from the full velocity difference, no less than interfacialDrag', () => {
