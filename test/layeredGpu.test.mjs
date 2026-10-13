@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES } from '../js/ocean/layered.module.js';
-import { UNLISTED_OCEANS } from './helpers/layered.mjs';
+import { UNLISTED_OCEANS, columnMomentum } from './helpers/layered.mjs';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { labelTemperature } from '../js/ocean/seawater.module.js';
@@ -115,6 +115,41 @@ test('one and twenty GPU ocean steps track the CPU layered ocean at N=8', { skip
     const c = cpuDiag[key], g = gpuDiag[key];
     assert.ok(Math.abs(c - g) < 0.05 * Math.max(Math.abs(c), 1) + 1e-3, `${key} diff too large: cpu=${c} gpu=${g}`);
   }
+});
+
+test('under 10 m floors, with the wind over a 50 m momentumDepth and the mixed layer carrying its momentum, one and twenty-one GPU ocean steps track the CPU layered ocean at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const thin = { ...OCEAN_OPTIONS, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, momentumDepth: 50, carryMomentum: true };
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350;
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: thin });
+  const gpuOcean = gpuModel.oceanEngine;
+  const cpuOcean = (options) => { const ocean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options }); ocean.initialize(surfaceT0, ice); return ocean; };
+  const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
+  const cpu = cpuOcean(thin), today = cpuOcean({ ...thin, momentumDepth: 10, carryMomentum: false }), flux = new Float64Array(C);
+  gpuOcean.initialize(surfaceT0, ice);
+  for (const steps of [1, 20]) {
+    for (let n = 0; n < steps; n++) {
+      cpu.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+      today.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+      await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, dt);
+    }
+    const cpuState = cpu.serialize(), todayState = today.serialize(), gpuState = await gpuOcean.serialize();
+    const wet = Array.from(cpuState.h, (v) => v > 1);
+    let shallow = 0;
+    for (let i = 0; i < C; i++) if (cpu.cellOcean[i] && cpuState.h[i] < 20) shallow++;
+    const lines = [];
+    for (const f of ['h', 'u', 'T', 'S', 'eta']) {
+      const mask = f === 'T' || f === 'S' ? wet : null, gap = rms(cpuState[f], gpuState[f], mask), effect = rms(cpuState[f], todayState[f], mask);
+      lines.push(`${f} ${gap.toExponential(2)} against ${effect.toExponential(2)}`);
+      assert.ok(gap < 2e-3, `${f} rms relative diff ${gap} after ${steps === 1 ? 1 : 21} steps`);
+      if (f === 'u') assert.ok(effect > 5 * gap, `u: the momentum depth and its carriage changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
+    }
+    console.log(`${steps === 1 ? 1 : 21} ocean steps under 10 m floors at N=8 (${shallow} sea cells with the mixed layer under 20 m), the engines' rms relative difference against the effect of the stress over momentumDepth 50 and the carriage: ${lines.join(', ')}`);
+    assert.ok(shallow > 100, `${shallow} shallow mixed layers`);
+  }
+  for (const v of (await gpuOcean.download()).u) assert.ok(Number.isFinite(v));
+  assert.equal((await gpuOcean.diagnostics()).oceanLimited, 0);
+  gpuModel.destroy();
 });
 
 test('the GPU ocean keeps its water volume over 400 wind-driven steps at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -291,13 +326,13 @@ test('under interiorShearMixing the GPU drag between interior classes follows th
   gpuModel.destroy();
 });
 
-test('the GPU mixed layer holds, retreats, convects, keeps to its neighbours and, under the old options, snaps back as the CPU one does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the GPU mixed layer holds, retreats, convects, keeps to its neighbours and, under the old options, snaps back as the CPU one does, carrying the momentum of the water it moves as the CPU one does and keeping each edge\'s column momentum', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
-  const mesh = cpuModel.mesh, C = mesh.nCells;
+  const mesh = cpuModel.mesh, C = mesh.nCells, E = mesh.nEdges;
   const sea = [...Array(C).keys()].filter((i) => cpuModel.geography.land[i] === 0);
   const neutral = sea.filter((_, n) => n % 5 === 0), stable = sea.filter((_, n) => n % 5 === 1), dense = sea.filter((_, n) => n % 5 === 2);
   const oldRules = { neutralSnap: true, convectiveErosion: false, buoyancyMemory: 0, maximumMixedDepth: 200, mixedNeighbourRatio: 0, vorticityCentring: 0 };
-  for (const options of [{ ...OCEAN_OPTIONS, mixedNeighbourRatio: 3 }, { ...OCEAN_OPTIONS, ...oldRules }]) {
+  for (const options of [{ ...OCEAN_OPTIONS, mixedNeighbourRatio: 3, carryMomentum: true }, { ...OCEAN_OPTIONS, ...oldRules }]) {
     const cpuOcean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options });
     const surfaceT = Float64Array.from(surfaceT0);
     cpuOcean.initialize(surfaceT, ice);
@@ -316,15 +351,35 @@ test('the GPU mixed layer holds, retreats, convects, keeps to its neighbours and
         Q[i] = h[i] * t; surfaceT[i] = t;
       }
     }
+    for (let n = 0; n < cpuOcean.u.length; n++) cpuOcean.u[n] = 0.2 * Math.sin(0.7 * Math.floor(n / E) + 0.37 * (n % E));
     const saved = cpuOcean.serialize();
     cpuOcean.load(saved, surfaceT, ice);
+    const still = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options, carryMomentum: false });
+    still.load(saved, Float64Array.from(surfaceT), ice);
     const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: options });
     const gpuOcean = gpuModel.oceanEngine;
     await gpuOcean.upload(saved, Float64Array.from(surfaceT), ice);
     const warmed = Float64Array.from(surfaceT, (t, i) => (neutral.includes(i) ? t + 0.05 : t));
     cpuOcean.advance(Float64Array.from(warmed), ice, new Float64Array(C), stress, 1350);
-    await gpuOcean.advance(Float64Array.from(warmed), ice, stress, 1350);
-    const cpu = cpuOcean.serialize(), gpu = await gpuOcean.serialize();
+    still.advance(Float64Array.from(warmed), ice, new Float64Array(C), stress, 1350);
+    gpuOcean.readSurface(Float64Array.from(warmed), ice);
+    gpuOcean.setStress(stress, ice);
+    gpuOcean.step(1350);
+    const stepped = await gpuOcean.download();
+    gpuOcean.mixedLayer(1350);
+    const mixed = await gpuOcean.download();
+    gpuOcean.salt(1350);
+    gpuOcean.writeSurface(1350);
+    await gpuModel.gpu.device.queue.onSubmittedWorkDone();
+    const before = columnMomentum(mesh, gpuOcean.layers, stepped, gpuOcean.D), after = columnMomentum(mesh, gpuOcean.layers, mixed, gpuOcean.D);
+    let kept = 0;
+    for (let e = 0; e < E; e++) if (cpuModel.geography.edgeOcean[e]) kept = Math.max(kept, Math.abs(after.momentum[e] - before.momentum[e]) / before.scale[e]);
+    const cpu = cpuOcean.serialize(), gpu = await gpuOcean.serialize(), stillState = still.serialize();
+    const uGap = stats(cpu.u, gpu.u).rmsRel, uEffect = stats(cpu.u, stillState.u).rmsRel;
+    console.log(`${options.neutralSnap ? 'old' : 'new'} rules${options.carryMomentum ? ', momentum carried' : ''}: the engines' u within ${uGap.toExponential(2)} rms relative, the carriage moving it by ${uEffect.toExponential(2)}; the GPU's exchanges change an edge's column momentum by ${kept.toExponential(2)} of its Σ h|u| at most`);
+    assert.ok(uGap < 2e-3, `u rms relative diff ${uGap}`);
+    if (options.carryMomentum) assert.ok(uEffect > 5 * uGap && kept < 1e-5, `the carriage moved u by ${uEffect} against the engines' ${uGap}; the exchanges changed a column's momentum by ${kept}`);
+    else assert.ok(uEffect === 0 && kept > 1e-3, `without the carriage u moved by ${uEffect} and the columns by ${kept}`);
     let worst = 0, at = -1;
     for (let i = 0; i < C; i++) { const d = Math.abs(cpu.h[i] - gpu.h[i]); if (d > worst) { worst = d; at = i; } }
     const depths = (cells) => cells.map((i) => cpu.h[i].toFixed(0)).slice(0, 4).join(', ');

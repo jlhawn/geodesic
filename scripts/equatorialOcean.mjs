@@ -21,7 +21,7 @@ const FILE = process.argv[2];
 if (!FILE) throw new Error('usage: node scripts/equatorialOcean.mjs <state.bin>');
 const LAT = Number(process.env.LAT ?? 2);
 const OCEAN = { everySteps: 8, ...JSON.parse(process.env.OCEAN ?? '{}') };
-const DEFAULTS = { bottomDrag: 3e-3, minimumThickness: 50, vorticityCentring: 0.5, closureHours: 12, closureFill: 1, closureTokens: 'interior', density: 1025, gravity: 9.81 };
+const DEFAULTS = { bottomDrag: 3e-3, minimumThickness: 50, momentumDepth: 50, vorticityCentring: 0.5, closureHours: 12, closureFill: 1, closureTokens: 'interior', density: 1025, gravity: 9.81 };
 const opt = { ...DEFAULTS, ...OCEAN };
 const say = (s = '') => console.log(s);
 const f = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '—');
@@ -180,7 +180,7 @@ for (let k = 0; k < L; k++) {
   curl(mesh, uk, zeta);
   for (let e = 0; e < E; e++) {
     const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], va = verticesOnEdge[2 * e], vb = verticesOnEdge[2 * e + 1];
-    const denom = Math.max(hEdge[oe + e], k > 0 ? opt.vorticityCentring * 0.5 * (h[at(k, a)] + h[at(k, b)]) : 0, PV_FLOOR);
+    const denom = Math.max(hEdge[oe + e], k > 0 ? opt.vorticityCentring * 0.5 * (h[at(k, a)] + h[at(k, b)]) : 0, k > 0 ? PV_FLOOR : THIN);
     qf[e] = 0.5 * (fVertex[va] + fVertex[vb]) / denom;
     qz[e] = 0.5 * (zeta[va] + zeta[vb]) / denom;
   }
@@ -198,13 +198,13 @@ for (let k = 0; k < L; k++) {
       const o = edgesOnEdge[maxEdgesOnEdge * e + s], w = weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[o] * fluxPV[o];
       sf += w * 0.5 * (qf[e] + qf[o]); sz += w * 0.5 * (qz[e] + qz[o]);
     }
-    const n = oe + e, he = Math.max(hEdge[n], opt.minimumThickness), hd = k === 0 ? he : Math.max(hEdge[n], THIN);
+    const n = oe + e, he = Math.max(hEdge[n], opt.momentumDepth), hd = Math.max(hEdge[n], THIN);
     budget[0][n] = sf / dcEdge[e];
     budget[1][n] = sz / dcEdge[e];
     budget[2][n] = -grad[e];
     budget[3][n] = -g * gradEta[e];
     budget[4][n] = k === 0 ? -g / rho0 * 0.5 * hEdge[e] * gradRho[e] : -gradP[e];
-    if (k === 0) budget[5][n] = ocean.stress[e] / rho0 / he;
+    budget[5][n] = ocean.windAcceleration(k, e);
     if (k > 0) { let j = k - 1; while (j > 0 && hEdge[ae(j, e)] < THIN) j--; budget[6][n] = ocean.interfaceRate(e, j, k) * (u[ae(j, e)] - u[n]) / hd; }
     if (k < L - 1) { let j = k + 1; while (j < L - 1 && hEdge[ae(j, e)] < THIN) j++; if (hEdge[ae(j, e)] >= THIN) budget[7][n] = -ocean.interfaceRate(e, k, j) * (u[n] - u[ae(j, e)]) / hd; }
     let isBottom = k === L - 1;
@@ -235,7 +235,7 @@ for (let e = 0; e < E; e++) {
     weightE[e] += hEdge[n];
   }
 }
-say(`\nlayers above the ${THERMOCLINE_DENSITY} class (k = 0..${upperLayers}), depth-integrated h*term (1e-5 m2/s2, h-weighted; the stress row is tau/rho0 where h0 >= minimumThickness):`);
+say(`\nlayers above the ${THERMOCLINE_DENSITY} class (k = 0..${upperLayers}), depth-integrated h*term (1e-5 m2/s2, h-weighted; the stress row is tau/rho0 where the top momentumDepth lies within them):`);
 for (let t = 0; t < terms.length; t++) if (t !== 10 && t !== 8) row(`  ${terms[t]}`, binMean(zonal(integrated[t])), 2, 1e5);
 row('  sum', binMean(zonal(Float64Array.from({ length: E }, (_, e) => integrated.reduce((s, x) => s + x[e], 0)))), 2, 1e5);
 const pgf = binMean(zonal(Float64Array.from({ length: E }, (_, e) => integrated[3][e] + integrated[4][e])));
@@ -261,7 +261,7 @@ for (const b of [2, 3, 4, 5, 6]) {
 
 const columns = [];
 const column = (t) => { if (columns[t]) return columns[t]; const out = new Float64Array(E); for (let e = 0; e < E; e++) for (let k = 0; k < L; k++) out[e] += hEdge[ae(k, e)] * budget[t][ae(k, e)]; return (columns[t] = out); };
-say('\nwhole column, depth-integrated h*term (1e-5 m2/s2): interfacial drag sums to zero where the mixed layer is at least minimumThickness thick at the edge');
+say('\nwhole column, depth-integrated h*term (1e-5 m2/s2): the stress is tau/rho0 and the interfacial drag sums to zero');
 header();
 row('  stress', binMean(zonal(column(5))), 2, 1e5);
 row('  -g grad eta + baroclinic PGF', binMean(zonal(Float64Array.from(column(3), (x, e) => x + column(4)[e]))), 2, 1e5);

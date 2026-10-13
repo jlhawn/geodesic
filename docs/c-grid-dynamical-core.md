@@ -1874,10 +1874,14 @@ cell's temperature and salinity: a centred edge value let a step that
 moves a large share of a thin cell's water leave the remainder at a
 temperature outside anything in the neighbourhood (370 K off Chile on
 day 34 of the first N=64 run). The edge potential vorticity is
-(ζ̄ + f̄)/max(h, 20 m) with h the same edge thickness, except that an
+(ζ̄ + f̄)/max(h, 20 m) for an interior class and (ζ̄ + f̄)/max(h, 5 m) for
+the mixed layer, with h the same edge thickness, except that an
 interior layer's is at least `vorticityCentring` = ½ of its two cells'
 mean thickness ½(h_a + h_b); the floor keeps the term bounded where a
-layer thins to nothing. On the smaller thickness alone, a layer left a
+layer thins to nothing, which the mixed layer, refilled to its floor
+every step, does not (on a 20 m floor a 10 m mixed layer feels half its
+Coriolis force: 1.86 τ/(ρ₀f) of Ekman transport at 45°, and a frictional
+band at the equator twice as wide). On the smaller thickness alone, a layer left a
 few metres thick under a deep mixed layer beside the full layer next
 door assembles a Coriolis force from its thick neighbours' fluxes many
 times what its pressure gradient balances: a 12 m remnant under a
@@ -1997,6 +2001,25 @@ Ocean's columns still differ by more than 25 m from all their
 neighbours, most of them in those deepest regions, where the depth
 turns on how near the surface water is to the density of the whole
 class beneath it.
+
+**Momentum through the exchanges.** The exchanges move water between
+the mixed layer and the classes, and velocities live on edges, layer by
+layer, so an exchange that leaves u alone creates Δ(u_from − u_to) of
+momentum at each edge of the cell: a retreat hands the water it leaves
+the class's velocity, a refill or convection gives the new mixed-layer
+water the mixed layer's. Under `carryMomentum` (M27, off by default
+until its N=64 pair has run) the momentum moves with the water, as in
+HYCOM's Kraus–Turner code: after the exchanges each edge's velocities
+are made uniform down to the deeper of its old and new mixed-layer
+base, measured at the edge, and the column's Σ h_e u is then restored by
+a uniform shift, which also takes up what the edge thickness rule does
+when only one of its cells refills. A retreat from 50 to 10 m leaves its
+40 m with the mixed layer's velocity, a refill from 3 to 10 m gives
+(3u₀ + 7u₁)/10 and convection to 300 m the mean of the old top 300 m,
+each edge's column momentum unchanged to rounding
+(`test/layeredMixedLayer.test.mjs`, `test/layeredConservation.test.mjs`).
+The restoring's moves between classes keep the column's momentum but do
+not carry their own.
 
 **Salinity.** Evaporation minus rain is accumulated per cell over the
 atmosphere steps between ocean steps, and each land cell's runoff flows
@@ -2199,16 +2222,29 @@ worst 0.002 off, from an 8-layer one 0.0015 and 0.03, and the restoring
 takes it from there (`test/layeredState.test.mjs`). An ocean already on
 these classes loads as it did.
 
+**Wind.** The wind stress τ is a body force over the top
+H = max(`momentumDepth`, h₀) of each edge's column, `momentumDepth` = 50 m
+(M27), tokens counted for depth, shared by the mixed layer and the classes
+at least 20 m thick within it in proportion to the thickness o_k each
+holds there: layer k gains (τ/ρ₀)(o_k/h_k)/Σo, so the column always takes
+τ/ρ₀, the layers wholly within H move alike, and a mixed layer thinner
+than H runs at the speed of one H thick (HYCOM spreads the stress over the
+mixed layer the same way, and MOM6's `DIRECT_STRESS` over `HMIX_STRESS`).
+A class 5–20 m thick feels only part of its Coriolis force and takes its
+share through the drag. Where the mixed layer is at least 50 m thick at
+the edge, as the 50 m floor keeps it nearly everywhere, it takes the
+whole stress over its own thickness. Dividing the stress by a floor
+thicker than the layer, as the mixed layer did on `minimumThickness`,
+handed a 10 m layer a fifth of the wind's momentum.
+
 **Drag.** Interfacial drag is the linear stress ρ₀ r Δu between each
 layer holding water at an edge and the nearest ones above and below that
 do, with r = `interfacialDrag` = 2×10⁻⁴ m/s. Each layer divides the
-stress by its own edge thickness, no less than THIN for an interior class
-and no less than `minimumThickness` for the mixed layer, which divides its
-wind stress and bottom drag the same way, so the momentum one layer loses
-the other gains wherever the mixed layer is that thick at the edge; a
-divisor of `minimumThickness` on every layer made an eastward column
-source of 0.9–1.3×10⁻⁵ m²/s² on the equator at 180–100W (N=64, day 365),
-a quarter to three quarters of the wind's. Under the option
+stress by its own edge thickness, no less than THIN, so the momentum one
+layer loses the other gains; a divisor of `minimumThickness` on every
+layer made an eastward column source of 0.9–1.3×10⁻⁵ m²/s² on the
+equator at 180–100W (N=64, day 365), a quarter to three quarters of the
+wind's. Under the option
 `shearMixing`, r is instead the Pacanowski and Philander (1981)
 viscosity ν = ν₀/(1 + 5 Ri)² + ν_b, ν₀ = 10⁻² m²/s (`shearViscosity`)
 and ν_b = 10⁻⁴ m²/s (`backgroundViscosity`), over the distance Δz between
@@ -2227,7 +2263,8 @@ layer's base keeps `interfacialDrag`. In 60 coupled N=64 days it let
 thermocline classes run at 1.5–3 m/s beside the coasts near the equator
 (M23). Bottom drag is quadratic,
 C_D |u| u with C_D = 3×10⁻³, applied to the deepest layer with water at
-the edge. A linear bottom drag of
+the edge and divided by its edge thickness, no less than
+`momentumDepth`. A linear bottom drag of
 2×10⁻⁴ m/s let a 28 m bottom layer slide down the flank of a seamount
 at 4.5 m/s (60 times weaker than the quadratic law at that speed); the
 quadratic law holds such layers near the gravity-current speed

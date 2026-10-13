@@ -34,6 +34,7 @@ export const OCEAN_DEFAULTS = {
   densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS, mixedDepth: 60, minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
+  momentumDepth: 50, carryMomentum: false,
   interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200,
   gustiness: 3,
@@ -67,7 +68,7 @@ ${labelLine}
 ${constLine('RHO0', o.density)} ${constLine('RHOCP', o.density * o.specificHeat)}
 ${constLine('OGRAV', o.gravity)}
 ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)} ${constLine('DENSTOL', DENSITY_TOLERANCE)} ${constLine('RESTTOL', RESTORE_TOLERANCE)} ${constLine('RESTORET', o.restoreTime)}
-${constLine('MINTHICK', o.minimumThickness)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
+${constLine('MINTHICK', o.minimumThickness)} ${constLine('MOMDEPTH', o.momentumDepth)} ${constLine('SHALLOWMIXED', o.shallowestMixedDepth)} ${constLine('MAXMIXED', o.maximumMixedDepth)} ${constLine('CONVRATE', o.convectiveRate)}
 ${constLine('NEUTRALSNAP', o.neutralSnap ? 1 : 0)} ${constLine('EROSION', o.convectiveErosion ? 1 : 0)} ${constLine('BUOYMEM', o.buoyancyMemory)} ${constLine('NBRRATIO', o.mixedNeighbourRatio)} ${constLine('CENTRING', o.vorticityCentring)}
 ${constLine('STIRRING', o.stirring)} ${constLine('STIRDEPTH', o.stirringDepth)} ${constLine('DETRAINT', o.detrainmentTime)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('RINT', o.interfacialDrag)} ${constLine('SHEARMIX', o.shearMixing ? 1 : 0)} ${constLine('INTSHEAR', o.interiorShearMixing ? 1 : 0)} ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundViscosity)} ${constLine('RBOT', o.bottomDrag)} ${constLine('NU4O', o.nu4)} ${constLine('DIFFUSION', o.diffusion)}
@@ -213,7 +214,7 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
     let n = k * E + e;
     var hq = OD[O_HEDGE + n];
     if (k > 0) { hq = max(hq, CENTRING * 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b])); }
-    OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, PVFLOOR);
+    OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, select(PVFLOOR, THINO, k == 0));
   }
 }`,
     oKineticPhi: `${K}  let i = ${idx}; if (i >= C) { return; }
@@ -342,7 +343,8 @@ fn moveLayer(i: i32, srcK: i32, dstK: i32, amount: f32) {
   for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; sum += MF[F_PVW + slot] * IN[uOff(k) + MI[EOE + slot]]; }
   return sum / MF[F_DC + e];
 }
-fn dragThickness(k: i32, e: i32) -> f32 { return select(max(OD[O_HEDGE + k * E + e], THINO), max(OD[O_HEDGE + e], MINTHICK), k == 0); }
+// The mixed layer's term stays apart: Metal's fast math hoists it out of the layer loop, and folding it changes the drag's rounding.
+fn dragThickness(k: i32, e: i32) -> f32 { return select(max(OD[O_HEDGE + k * E + e], THINO), max(OD[O_HEDGE + e], THINO), k == 0); }
 fn interfaceRate(e: i32, up: i32, down: i32) -> f32 {
   let interior = up > 0 && INTSHEAR > 0.5;
   if (SHEARMIX < 0.5 && !interior) { return RINT; }
@@ -386,9 +388,9 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
     var du = pv / dc - gradPhi;
     if (k == 0) { du -= OGRAV / RHO0 * 0.5 * OD[O_HEDGE + e] * OD[O_GRADRHO + e]; }
     let hk = OD[O_HEDGE + n];
-    let he = max(hk, MINTHICK);
+    let he = max(hk, MOMDEPTH);
     var force = 0.0; var drag = 0.0;
-    if (k == 0) { force += OD[O_STRESS + e] / RHO0; }
+    if (k == 0 && hk >= MOMDEPTH) { force += OD[O_STRESS + e] / RHO0; }
     if (k > 0) { drag += interfaceRate(e, above, k) * (IN[uOff(above) + e] - u); }
     let below = firstThickBelow(k, thickLo, thickHi);
     if (below >= 0) { drag -= interfaceRate(e, k, below) * (u - IN[uOff(below) + e]); }
@@ -399,6 +401,19 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
     OUT[uOff(k) + e] = du;
     if (k >= 1 && hk >= THINO) { above = k; }
     uAbove = u;
+  }
+  if (OD[O_HEDGE + e] < MOMDEPTH) {
+    var top = 0.0; var depth = 0.0; var last = 0; var fraction = 1.0;
+    for (var j = 0; j < L; j++) {
+      let hj = OD[O_HEDGE + j * E + e]; let part = min(hj, max(0.0, MOMDEPTH - top));
+      if (j == 0 || hj >= PVFLOOR) { depth += part; }
+      top += hj; last = j; fraction = select(1.0, part / hj, hj > 0.0);
+      if (top >= MOMDEPTH) { break; }
+    }
+    if (depth > 0.0) {
+      let push = OD[O_STRESS + e] / RHO0 / depth;
+      for (var k = 0; k <= last; k++) { if (k == 0 || OD[O_HEDGE + k * E + e] >= PVFLOOR) { OUT[uOff(k) + e] += push * select(fraction, 1.0, k < last); } }
+    }
   }
 }`,
     /*
@@ -622,6 +637,40 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
   let shift = (OD[B_BAVG + C + e] - transport) / max(sumH, EPSO);
   for (var k = 0; k < L; k++) { let n = uOff(k) + e; IN[n] = clamp(IN[n] + shift, -SPEEDLIM, SPEEDLIM); }
   for (var k = 1; k < L; k++) { if (OD[O_HEDGE + k * E + e] < THINO) { IN[uOff(k) + e] = IN[uOff(k - 1) + e]; } }
+}`,
+    /*
+     * The mixed layer's momentum through its exchanges, exchangeMomentum
+     * of ocean/layered.module.js, one edge a thread: HEDGE holds the edge
+     * thicknesses the exchanges started from and is left holding the new.
+     */
+    oExchangeMomentum: `${K}  let e = ${idx}; if (e >= E) { return; }
+  if (OD[O_EMASK + e] < 0.5) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  let sill = max(EPSO, min(OD[O_BATH + a], OD[O_BATH + b]) + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
+  var sum = 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]); var carried = OD[O_HEDGE + e] * IN[uOff(0) + e];
+  for (var k = 1; k < L; k++) { sum += min(IN[hOff(k) + a], IN[hOff(k) + b]); carried += OD[O_HEDGE + k * E + e] * IN[uOff(k) + e]; }
+  let scale = select(1.0, sill / sum, sum > sill);
+  let reach = max(OD[O_HEDGE + e], 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]) * scale);
+  var top = 0.0; var within = 0.0; var mixed = 0.0;
+  for (var k = 0; k < L; k++) {
+    if (top >= reach) { break; }
+    let old = OD[O_HEDGE + k * E + e]; let part = min(old, reach - top);
+    mixed += part * IN[uOff(k) + e]; within += part; top += old;
+  }
+  let uMixed = select(IN[uOff(0) + e], mixed / within, within > 0.0);
+  top = 0.0;
+  var total = 0.0; var held = 0.0; var above = 0.0;
+  for (var k = 0; k < L; k++) {
+    let n = uOff(k) + e;
+    let hk = select(min(IN[hOff(k) + a], IN[hOff(k) + b]), 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]), k == 0) * scale;
+    let inside = max(0.0, min(hk, reach - top));
+    var v = IN[n];
+    if (k > 0 && hk < THINO) { v = above; } else if (hk > 0.0) { v = (inside * uMixed + (hk - inside) * v) / hk; }
+    IN[n] = v; OD[O_HEDGE + k * E + e] = hk;
+    total += hk; held += hk * v; top += hk; above = v;
+  }
+  let shift = (carried - held) / max(total, EPSO);
+  for (var k = 0; k < L; k++) { let n = uOff(k) + e; IN[n] = clamp(IN[n] + shift, -SPEEDLIM, SPEEDLIM); }
 }`,
     oReadSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
   let iced = OD[O_SURFICE + i] > 0.0;
@@ -1029,6 +1078,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   }
   const rescalePass = (pass, g) => dispatch(pass, 'oRescale', g, C);
   const shiftPass = (pass, g) => { dispatch(pass, 'oEdgeThickness', g, E); dispatch(pass, 'oVelocityShiftClamp', g, E); };
+  let edgesCurrent = false;
   function step(dt) {
     dynamics(dt);
     const g = group(ob.S, ob.T);
@@ -1038,16 +1088,17 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
       if (eddyLimit > 0) eddyPasses(pass, g);
       shiftPass(pass, g);
     });
+    edgesCurrent = true;
   }
   /*
    * step's parts in its order, for the tests that follow heat and salt
    * through it: dynamics(dt), rescale(), eddy(dt), shift().
    */
   const phases = {
-    dynamics,
-    rescale() { compute((pass) => rescalePass(pass, group(ob.S, ob.T))); },
+    dynamics(dt) { dynamics(dt); edgesCurrent = false; },
+    rescale() { compute((pass) => rescalePass(pass, group(ob.S, ob.T))); edgesCurrent = false; },
     eddy: eddyTransport,
-    shift() { compute((pass) => shiftPass(pass, group(ob.S, ob.T))); },
+    shift() { compute((pass) => shiftPass(pass, group(ob.S, ob.T))); edgesCurrent = true; },
   };
 
   function eddyPasses(pass, g) {
@@ -1059,6 +1110,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     if (!(eddyLimit > 0)) return;
     setParams([dt, eddyLimit / dt]);
     compute((pass) => eddyPasses(pass, group(ob.S, ob.T)));
+    edgesCurrent = false;
   }
 
   function readSurface(surfaceT, ice, concentration = seaCover) {
@@ -1086,10 +1138,14 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   }
   function mixedLayer(dt) {
     setParams([0, 0, relaxRate, 0, 0, 0, dt]);
+    const g = group(ob.S, ob.T);
     compute((pass) => {
-      dispatch(pass, 'oMixedReach', group(ob.S, ob.T), C);
-      dispatch(pass, 'oMixedLayer', group(ob.S, ob.T), C);
+      if (o.carryMomentum && !edgesCurrent) dispatch(pass, 'oEdgeThickness', g, E);
+      dispatch(pass, 'oMixedReach', g, C);
+      dispatch(pass, 'oMixedLayer', g, C);
+      if (o.carryMomentum) dispatch(pass, 'oExchangeMomentum', g, E);
     });
+    edgesCurrent = o.carryMomentum;
   }
   function salt(dt) {
     setParams([0, 0, 0, 0, 0, 0, dt]);
@@ -1238,6 +1294,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     return { h, u, Q, W, eta, T0, previousT0, filled };
   }
   function uploadArrays({ h, u, Q, Qref, W, Wref, eta }, surfaceT, ice, restart = null, concentration = seaCover) {
+    edgesCurrent = false;
     const packed = new Float32Array(OS.total);
     packed.set(h, OS.OH); packed.set(u, OS.OU);
     packed.set(Qref ?? Float64Array.from(Q, (q, n) => q - HEAT_REFERENCE * h[n]), OS.OQ);

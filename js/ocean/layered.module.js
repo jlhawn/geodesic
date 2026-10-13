@@ -34,7 +34,20 @@ import { profileAt } from './climatology.module.js';
  * layer is often a remnant a few metres thick beside the full layer next
  * door, and on the smaller thickness alone the Coriolis force it
  * assembles from its thick neighbours' fluxes is many times what its
- * pressure gradient balances, a jet at metres a second.
+ * pressure gradient balances, a jet at metres a second. The potential
+ * vorticity's thickness is no less than PV_FLOOR for a class and THIN for
+ * the mixed layer.
+ *
+ * The wind stress τ is a body force over the top H = max(momentumDepth,
+ * h₀) of each edge's column, tokens counted for depth, on the mixed layer
+ * and the classes at least PV_FLOOR thick: a layer with o_k of its edge
+ * thickness h_k within H gains (τ/ρ₀)(o_k/h_k)/Σo, so the column takes
+ * τ/ρ₀ whatever the mixed layer's depth and a mixed layer thinner than H
+ * runs at the speed of one H thick. A thinner class, which feels only a
+ * fraction of its Coriolis force, takes its share through the drag. Each
+ * layer divides its interfacial drag by its own edge thickness, no less
+ * than THIN, so the drag moves momentum between layers without making
+ * any, and the bottom drag by no less than momentumDepth.
  *
  * The free surface η = Σh − D moves at √(gD), too fast for the ocean's
  * step, so the depth-integrated flow is sub-stepped: the baroclinic
@@ -67,6 +80,12 @@ import { profileAt } from './climatology.module.js';
  * `shallowestMixedDepth` whenever the layer is as dense as the water
  * beneath it, and `convectiveErosion: false` swallows every class no
  * denser than the mixed layer at `convectiveRate`.
+ * With `carryMomentum`, momentum moves with the water: after the
+ * exchanges each edge's velocities are made uniform down to the deeper of
+ * its old and new mixed-layer base, and its column's Σ h_e u is then
+ * restored by a uniform shift, so the water a retreat leaves keeps the
+ * mixed layer's momentum and a refill or convection gives the mixed layer
+ * the mean of what it now holds.
  * Detrained water goes to the interior layer whose density is nearest
  * its own, so water swallowed from a layer returns to that layer; a
  * mass-conserving split between the two bracketing layers instead
@@ -737,6 +756,7 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
+  momentumDepth = 50, carryMomentum = false,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200,
   geography = null, bathymetry = null, buffers = null, climatology = null,
@@ -780,6 +800,7 @@ export function createOcean(mesh, {
   const stress = shared('stress', E), fresh = new Float64Array(C);
   const iced = new Uint8Array(C);
   const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E);
+  const stressDepth = shared('stressDepth', E), stressLayer = shared('stressLayer', E), stressFraction = shared('stressFraction', E), column = new Float64Array(L);
   const T = new Float64Array(C), S = new Float64Array(C), lapT = new Float64Array(C);
   const zeta = new Float64Array(V), qEdge = new Float64Array(E);
   const K = new Float64Array(C), phi = new Float64Array(C), gradPhi = new Float64Array(E), gradEta = shared('gradEta', E), gradRho = shared('gradRho', E);
@@ -821,19 +842,17 @@ export function createOcean(mesh, {
    * shelf break or a coast the thicknesses are scaled to the shallower
    * side's depth.
    */
+  function edgeColumn(hIn, e, out, base, stride) {
+    const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+    out[base] = 0.5 * (hIn[a] + hIn[b]);
+    for (let k = 1; k < L; k++) out[base + k * stride] = Math.min(hIn[at(k, a)], hIn[at(k, b)]);
+    const sill = Math.max(EPS, Math.min(D[a], D[b]) + 0.5 * (eta[a] + eta[b]));
+    let sum = 0;
+    for (let k = 0; k < L; k++) sum += out[base + k * stride];
+    if (sum > sill) { const f = sill / sum; for (let k = 0; k < L; k++) out[base + k * stride] *= f; }
+  }
   function edgeThicknesses(hIn) {
-    for (let e = 0; e < E; e++) {
-      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
-      hEdge[e] = 0.5 * (hIn[a] + hIn[b]);
-      for (let k = 1; k < L; k++) hEdge[ae(k, e)] = Math.min(hIn[at(k, a)], hIn[at(k, b)]);
-    }
-    for (let e = 0; e < E; e++) {
-      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
-      const sill = Math.max(EPS, Math.min(D[a], D[b]) + 0.5 * (eta[a] + eta[b]));
-      let sum = 0;
-      for (let k = 0; k < L; k++) sum += hEdge[ae(k, e)];
-      if (sum > sill) { const f = sill / sum; for (let k = 0; k < L; k++) hEdge[ae(k, e)] *= f; }
-    }
+    for (let e = 0; e < E; e++) edgeColumn(hIn, e, hEdge, e, E);
   }
   function coriolisTransport(Ue, out) {
     for (let e = 0; e < E; e++) {
@@ -851,7 +870,27 @@ export function createOcean(mesh, {
     for (let s = 0; s < nEdgesOnEdge[e]; s++) { const o = edgesOnEdge[maxEdgesOnEdge * e + s]; sum += weightsOnEdge[maxEdgesOnEdge * e + s] * dvEdge[o] * uIn[ae(k, o)]; }
     return sum / dcEdge[e];
   }
-  const dragThickness = (k, e) => (k === 0 ? Math.max(hEdge[e], minimumThickness) : Math.max(hEdge[ae(k, e)], THIN));
+  const dragThickness = (k, e) => Math.max(hEdge[ae(k, e)], THIN);
+  function stressReach() {
+    for (let e = 0; e < E; e++) {
+      stressLayer[e] = -1; stressDepth[e] = 0; stressFraction[e] = 0;
+      if (!edgeOcean[e]) continue;
+      const reach = Math.max(momentumDepth, hEdge[e]);
+      let top = 0, depth = 0;
+      for (let k = 0; k < L; k++) {
+        const hk = hEdge[ae(k, e)], part = Math.min(hk, Math.max(0, reach - top));
+        if (k === 0 || hk >= PV_FLOOR) depth += part;
+        top += hk;
+        if (top >= reach || k === L - 1) { stressLayer[e] = depth > 0 ? k : -1; stressFraction[e] = hk > 0 ? part / hk : 1; break; }
+      }
+      stressDepth[e] = depth;
+    }
+  }
+  function windAcceleration(k, e) {
+    const last = stressLayer[e];
+    if (k > last || (k > 0 && hEdge[ae(k, e)] < PV_FLOOR)) return 0;
+    return stress[e] / rho0 * (k < last ? 1 : stressFraction[e]) / stressDepth[e];
+  }
   /*
    * The drag coefficient r (m/s) between layer `up` and the layer `down`
    * beneath it at edge e, from the edge thicknesses and mixed-layer
@@ -911,6 +950,7 @@ export function createOcean(mesh, {
     gradient(mesh, eta, gradEta);
     gradient(mesh, rhoMl, gradRho);
     edgeThicknesses(hIn);
+    stressReach();
     if (closureRings) {
       for (let e = 0; e < E; e++) {
         const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
@@ -977,7 +1017,7 @@ export function createOcean(mesh, {
       }
       if (!momentum) continue;
       curl(mesh, uIn.subarray(oe, oe + E), zeta);
-      for (let e = 0; e < E; e++) qEdge[e] = 0.5 * (zeta[verticesOnEdge[2 * e]] + fVertex[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]] + fVertex[verticesOnEdge[2 * e + 1]]) / Math.max(hEdge[oe + e], k > 0 ? vorticityCentring * 0.5 * (hIn[oc + cellsOnEdge[2 * e]] + hIn[oc + cellsOnEdge[2 * e + 1]]) : 0, PV_FLOOR);
+      for (let e = 0; e < E; e++) qEdge[e] = 0.5 * (zeta[verticesOnEdge[2 * e]] + fVertex[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]] + fVertex[verticesOnEdge[2 * e + 1]]) / Math.max(hEdge[oe + e], k > 0 ? vorticityCentring * 0.5 * (hIn[oc + cellsOnEdge[2 * e]] + hIn[oc + cellsOnEdge[2 * e + 1]]) : 0, k > 0 ? PV_FLOOR : THIN);
       kineticEnergy(mesh, uIn.subarray(oe, oe + E), K);
       if (k === 0) {
         for (let i = 0; i < C; i++) phi[i] = K[i] + g * eta[i];
@@ -995,9 +1035,10 @@ export function createOcean(mesh, {
       }
       if (k === 0) for (let e = 0; e < E; e++) du[e] -= g / rho0 * 0.5 * hEdge[e] * gradRho[e];
       for (let e = 0; e < E; e++) {
-        const he = Math.max(hEdge[oe + e], minimumThickness);
-        let force = 0, drag = 0;
-        if (k === 0) force += stress[e] / rho0;
+        const he = Math.max(hEdge[oe + e], momentumDepth);
+        let force = 0, drag = 0, push = 0;
+        if (k === 0 && hEdge[e] >= momentumDepth) force += stress[e] / rho0;
+        else push = windAcceleration(k, e);
         if (k > 0) {
           let j = k - 1;
           while (j > 0 && hEdge[ae(j, e)] < THIN) j--;
@@ -1011,7 +1052,7 @@ export function createOcean(mesh, {
         let bottom = k === L - 1;
         if (!bottom) { bottom = true; for (let j = k + 1; j < L; j++) if (hEdge[ae(j, e)] >= THIN) { bottom = false; break; } }
         if (bottom) force -= bottomDrag * Math.abs(uIn[oe + e]) * uIn[oe + e];
-        du[oe + e] += force / he + drag / dragThickness(k, e);
+        du[oe + e] += force / he + drag / dragThickness(k, e) + push;
       }
       if (nu4 > 0) {
         const uk = uIn.subarray(oe, oe + E);
@@ -1238,6 +1279,7 @@ export function createOcean(mesh, {
   }
 
   function mixedLayer(dt) {
+    if (carryMomentum) edgeThicknesses(h);
     cellVector(mesh, stress, tauCell);
     if (mixedNeighbourRatio > 0) neighbourReach();
     for (let i = 0; i < C; i++) {
@@ -1286,6 +1328,35 @@ export function createOcean(mesh, {
         refilled.heat[i] += rhoCp * (Q[i] - q0 - (h[i] - h0) * q0 / h0);
       }
       restoreDensities(i, Math.min(1, dt / restoreTime));
+    }
+    if (carryMomentum) exchangeMomentum();
+  }
+
+  function exchangeMomentum() {
+    for (let e = 0; e < E; e++) {
+      if (!edgeOcean[e]) continue;
+      edgeColumn(h, e, column, 0, 1);
+      let carried = 0;
+      for (let k = 0; k < L; k++) carried += hEdge[ae(k, e)] * u[ae(k, e)];
+      const reach = Math.max(hEdge[e], column[0]);
+      let top = 0, within = 0, mixed = 0;
+      for (let k = 0; k < L && top < reach; k++) {
+        const old = hEdge[ae(k, e)], part = Math.min(old, reach - top);
+        mixed += part * u[ae(k, e)]; within += part; top += old;
+      }
+      const uMixed = within > 0 ? mixed / within : u[e];
+      let total = 0, held = 0;
+      top = 0;
+      for (let k = 0; k < L; k++) {
+        const n = ae(k, e), hk = column[k], inside = Math.max(0, Math.min(hk, reach - top));
+        if (k > 0 && hk < THIN) u[n] = u[n - E];
+        else if (hk > 0) u[n] = (inside * uMixed + (hk - inside) * u[n]) / hk;
+        hEdge[n] = hk; total += hk; held += hk * u[n]; top += hk;
+      }
+      const shift = (carried - held) / Math.max(total, EPS);
+      let clamped = false;
+      for (let k = 0; k < L; k++) { const n = ae(k, e); u[n] += shift; if (Math.abs(u[n]) > SPEED_LIMIT) { u[n] = Math.sign(u[n]) * SPEED_LIMIT; clamped = true; } }
+      if (clamped) limited++;
     }
   }
 
@@ -1594,7 +1665,7 @@ export function createOcean(mesh, {
 
   if (!adopting) build(new Float64Array(C).fill(288), new Float64Array(C), null);
   initialised = false;
-  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
+  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, stressDepth: stressDepth.buffer, stressLayer: stressLayer.buffer, stressFraction: stressFraction.buffer, deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, refilled, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, refilled, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }
