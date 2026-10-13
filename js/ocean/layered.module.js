@@ -85,7 +85,12 @@ import { profileAt } from './climatology.module.js';
  * fluxes. The mixed
  * layer's temperature is the sea surface temperature the atmosphere sees, its
  * heat capacity is published per cell, and the heat converged under ice
- * is handed to the ice base.
+ * is handed to the ice base. With `penetration` a Jerlov water type, the
+ * ocean also publishes `transmission`, the share of the absorbed sunlight
+ * that passes the mixed layer (penetrationShares); the surface update
+ * keeps that part of open water's sunlight out of the sea surface
+ * temperature and adds it to `penetrated` (J/m²), which the next
+ * readSurface deposits in the classes below by depth.
  *
  * Mesoscale eddies, 10–30 km across and unresolved on these meshes, flatten
  * the interfaces between the interior classes (Gent and McWilliams 1990,
@@ -225,6 +230,48 @@ export function interiorWater(rho, t, s, lat) {
   return [tp, salinityForDensity(rho, tp)];
 }
 export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLERANCE = 0.005, RESTORE_TOLERANCE = 0.01, THINNED_MARGIN = 0.01;
+
+/*
+ * The share of the absorbed surface shortwave that passes depth z, two
+ * bands R e^(−z/ζ₁) + (1 − R) e^(−z/ζ₂) with [R, ζ₁, ζ₂] by Jerlov water
+ * type (Paulson and Simpson 1977, table 2), less its value at
+ * PENETRATION_DEPTH so that none passes below that.
+ */
+export const JERLOV = { I: [0.58, 0.35, 23], IA: [0.62, 0.6, 20], IB: [0.67, 1.0, 17], II: [0.77, 1.5, 14], III: [0.78, 1.4, 7.9] };
+export const PENETRATION_DEPTH = 300;
+const jerlovShare = ([R, z1, z2], z) => R * Math.exp(-z / z1) + (1 - R) * Math.exp(-z / z2);
+export function transmitted(z, type = 'IB') {
+  const bands = JERLOV[type];
+  return jerlovShare(bands, Math.min(z, PENETRATION_DEPTH)) - jerlovShare(bands, PENETRATION_DEPTH);
+}
+
+/*
+ * The fraction of the light a column takes below its mixed layer,
+ * transmitted(h₀) − transmitted(depth), 0 unless an interior class is
+ * thicker than THIN (a receiver), and in `share` each class's part of
+ * it: a receiver takes what is absorbed over its own depths and over the
+ * thin classes above it, and the last receiver also what passes it, so
+ * the shares sum to 1. layeredOcean.gpu.js's oReadSurface follows the
+ * same loop.
+ */
+export function penetrationShares(h, L, depth, type = 'IB', share = null) {
+  let receiver = false;
+  for (let k = 1; k < L && !receiver; k++) receiver = h[k] > THIN;
+  const taken = receiver ? transmitted(h[0], type) - transmitted(depth, type) : 0;
+  if (!share) return taken;
+  share.fill(0);
+  if (!(taken > 0)) return taken;
+  let z = h[0], top = transmitted(z, type), carry = 0, given = 0, last = 0;
+  for (let k = 1; k < L; k++) {
+    z += h[k];
+    const bottom = transmitted(z, type), part = carry + (top - bottom) / taken;
+    if (h[k] > THIN) { share[k] = part; given += part; carry = 0; last = k; } else carry = part;
+    top = bottom;
+    if (z >= PENETRATION_DEPTH && last > 0) break;
+  }
+  share[last] += 1 - given;
+  return taken;
+}
 
 /*
  * Columns from an ocean climatology (./climatology.module.js), sampled at
@@ -738,7 +785,7 @@ export function createOcean(mesh, {
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
-  eddyDiffusivity = 1000, eddyTaperDepth = 200,
+  eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = null,
   geography = null, bathymetry = null, buffers = null, climatology = null,
 } = {}) {
   const {
@@ -747,6 +794,7 @@ export function createOcean(mesh, {
     maxEdges, nEdgesOnCell, edgesOnCell, cellsOnCell,
   } = mesh;
   if (climatology && typeof climatology.columnAt !== 'function') throw new Error('the ocean climatology must be decoded (loadClimatology in ./climatology.module.js) before the ocean is built');
+  if (penetration !== null && !JERLOV[penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${penetration}`);
   const L = densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = [rho0, ...densities];
   const labelS = [referenceS, ...salinities];
@@ -777,6 +825,7 @@ export function createOcean(mesh, {
   let seaCover = null;
   const capacity = shared('capacity', C);
   if (!adopting) capacity.fill(rhoCp * mixedDepth);
+  const transmission = shared('transmission', C), penetrated = shared('penetrated', C), column = new Float64Array(L), shares = new Float64Array(L);
   const stress = shared('stress', E), fresh = new Float64Array(C);
   const iced = new Uint8Array(C);
   const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E);
@@ -1322,7 +1371,24 @@ export function createOcean(mesh, {
       T0[i] = iced[i] ? FREEZING_POINT : surfaceT[i];
       surfaceIn[i] = T0[i];
       Q[i] = h[i] * T0[i];
+      if (penetrated[i] !== 0) depositLight(i);
     }
+  }
+  function depositLight(i) {
+    const light = penetrated[i];
+    penetrated[i] = 0;
+    if (!(transmission[i] > 0)) { Q[i] += light / rhoCp; return; }
+    for (let k = 0; k < L; k++) column[k] = h[at(k, i)];
+    penetrationShares(column, L, D[i] + eta[i], penetration, shares);
+    for (let k = 1; k < L; k++) if (shares[k] !== 0) Q[at(k, i)] += light * shares[k] / rhoCp;
+  }
+  function transmissionAt(i) {
+    for (let k = 0; k < L; k++) column[k] = h[at(k, i)];
+    return penetrationShares(column, L, D[i] + eta[i], penetration);
+  }
+  function publishTransmission() {
+    transmission.fill(0);
+    if (penetration) for (let i = 0; i < C; i++) if (cellOcean[i]) transmission[i] = transmissionAt(i);
   }
   function accumulate(evaporation, rain, dt, runoff = null) {
     for (let i = 0; i < C; i++) if (cellOcean[i]) fresh[i] += (evaporation ? evaporation[i] * dt : 0) - (rain ? rain[i] : 0);
@@ -1344,6 +1410,7 @@ export function createOcean(mesh, {
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) { oceanFlux[i] = 0; continue; }
       capacity[i] = rhoCp * Math.max(h[i], 1);
+      if (penetration) transmission[i] = transmissionAt(i);
       S0[i] = W[i] / h[i];
       if (iced[i]) {
         oceanFlux[i] = rhoCp * (Q[i] - h[i] * FREEZING_POINT) / dt;
@@ -1443,6 +1510,8 @@ export function createOcean(mesh, {
     }
     surfaceDensity(h, Q, W);
     stericSurface();
+    publishTransmission();
+    penetrated.fill(0);
     counter = 0;
     initialised = true;
     return filled;
@@ -1511,7 +1580,8 @@ export function createOcean(mesh, {
    * that carries every array of the GPU's restartArrays, its columns within
    * a meter of this bathymetry and dry on land, brings back the mixed
    * layer's last temperature, the ice volume it last saw, the freshwater
-   * not yet taken, the remembered buoyancy loss and the heat capacity.
+   * not yet taken, the remembered buoyancy loss and the heat capacity,
+   * and the sunlight not yet deposited when it carries `penetrated`.
    */
   const RESTART = ['previousT0', 'previousIceVolume', 'fresh', 'buoyancy', 'flux', 'capacity'];
   function restartable(saved) {
@@ -1544,9 +1614,11 @@ export function createOcean(mesh, {
     measureIce(ice, concentration, previousVolume);
     for (let i = 0; i < C; i++) { iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = Q[i] / Math.max(EPS, h[i]); S0[i] = W[i] / Math.max(EPS, h[i]); previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
     for (const i of fromNeighbors) if (!iced[i]) surfaceT[i] = T0[i];
-    fresh.fill(0); buoyancyLoss.fill(0);
+    fresh.fill(0); buoyancyLoss.fill(0); penetrated.fill(0);
+    publishTransmission();
     if (restartable(saved)) {
       previousT0.set(saved.previousT0); previousVolume.set(saved.previousIceVolume); fresh.set(saved.fresh); buoyancyLoss.set(saved.buoyancy); capacity.set(saved.capacity);
+      if (saved.penetrated && saved.penetrated.length === C) penetrated.set(saved.penetrated);
     }
     counter = 0;
     initialised = true;
@@ -1594,7 +1666,7 @@ export function createOcean(mesh, {
 
   if (!adopting) build(new Float64Array(C).fill(288), new Float64Array(C), null);
   initialised = false;
-  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, stress: stress.buffer, hEdge: hEdge.buffer, deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
+  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, hEdge: hEdge.buffer, deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, stress, fresh, refilled, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }

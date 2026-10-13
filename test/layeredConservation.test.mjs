@@ -11,7 +11,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
-const DT = 1800, SPINUP = 24, DEG = Math.PI / 180;
+const DT = 1800, SPINUP = 24, DEG = Math.PI / 180, LIGHT = 250;
 const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges, AREA = mesh.areaCell.reduce((s, a) => s + a, 0);
 
 /*
@@ -22,10 +22,12 @@ const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges, AREA = m
  * classes at the outcrops and tokens above them; then `steps` steps under
  * easterly trades and westerlies, each reading back the surface it wrote,
  * so the currents, the eddy transport and the mixed layer's exchanges are
- * all under way and no heat crosses the surface.
+ * all under way and no heat crosses the surface. The sea publishes the
+ * share of the sunlight that passes its mixed layer, and none is passed
+ * to it.
  */
 function spunUp(steps = SPINUP) {
-  const ocean = createOcean(mesh, { everySteps: 1 });
+  const ocean = createOcean(mesh, { everySteps: 1, penetration: 'IB' });
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => {
     const polar = Math.max(0, Math.min(1, (Math.abs(lat) / DEG - 50) / 20));
     return Math.max(FREEZING_POINT + 0.3, 273.15 + 30 * Math.cos(lat) ** 2 - 2 - 4 * polar);
@@ -42,15 +44,17 @@ function spunUp(steps = SPINUP) {
 
 /*
  * What one phase did to the sea, from cell-by-cell differences of two
- * snapshots of the stores (h, heat as h·(T − HEAT_REFERENCE), salt h·S),
- * summed over every layer and cell in double precision: the heat as a
- * global-mean flux over the step (W/m²), the salt and the volume as
- * global means (psu·m, m), and `offMean`, the heat and salt a column
- * changed beyond what its change of volume carries at the column's own
- * mean temperature and salinity.
+ * snapshots of the stores (h, heat as h·(T − HEAT_REFERENCE), salt h·S)
+ * and of the sunlight waiting to be deposited (J/m²), summed over every
+ * layer and cell in double precision: the heat, the stores' with the
+ * waiting light's, as a global-mean flux over the step (W/m²), and
+ * `stored`, the stores' alone, the salt and the volume as global means
+ * (psu·m, m), and `offMean`, the heat and salt a column changed beyond
+ * what its change of volume carries at the column's own mean temperature
+ * and salinity.
  */
 function books(before, after, layers, rhoCp) {
-  let heat = 0, salt = 0, volume = 0, offHeat = 0, offSalt = 0;
+  let heat = 0, waiting = 0, salt = 0, volume = 0, offHeat = 0, offSalt = 0;
   for (let i = 0; i < C; i++) {
     let dh = 0, dq = 0, dw = 0, h = 0, q = 0, w = 0;
     for (let k = 0; k < layers; k++) {
@@ -59,18 +63,23 @@ function books(before, after, layers, rhoCp) {
       h += before.h[n]; q += before.q[n]; w += before.w[n];
     }
     const a = mesh.areaCell[i];
-    heat += a * dq; salt += a * dw; volume += a * dh;
+    heat += a * dq; salt += a * dw; volume += a * dh; waiting += a * (after.pen[i] - before.pen[i]);
     if (h > 0) { offHeat += a * (dq - q / h * dh); offSalt += a * (dw - w / h * dh); }
   }
   const watts = (x) => rhoCp * x / (AREA * DT);
-  return { heat: watts(heat), salt: salt / AREA, volume: volume / AREA, offMean: { heat: watts(offHeat), salt: offSalt / AREA } };
+  return { heat: watts(heat) + waiting / (AREA * DT), stored: watts(heat), salt: salt / AREA, volume: volume / AREA, offMean: { heat: watts(offHeat), salt: offSalt / AREA } };
 }
 
+/*
+ * `phases` as [name, run, prepare]: a phase's `prepare`, when it has one,
+ * runs outside the books, before the snapshot the phase is measured from.
+ */
 async function follow(phases, snapshot, steps, layers, rhoCp) {
   const record = Object.fromEntries(phases.map(([name]) => [name, []]));
   let before = await snapshot();
   for (let n = 0; n < steps; n++) {
-    for (const [name, run] of phases) {
+    for (const [name, run, prepare] of phases) {
+      if (prepare) { await prepare(); before = await snapshot(); }
       await run();
       const after = await snapshot();
       record[name].push(books(before, after, layers, rhoCp));
@@ -79,6 +88,13 @@ async function follow(phases, snapshot, steps, layers, rhoCp) {
   }
   return record;
 }
+
+/*
+ * LIGHT W/m² of absorbed sunlight over the step on every sea cell, the
+ * share each passes below its mixed layer as the pending light.
+ */
+const passing = (transmission) => Float64Array.from(transmission, (t) => LIGHT * DT * t);
+const meanOf = (perCell) => perCell.reduce((s, x, i) => s + mesh.areaCell[i] * x, 0) / (AREA * DT);
 
 const largest = (rows, pick) => Math.max(...rows.map((row) => Math.abs(pick(row))));
 const mean = (rows, pick) => rows.reduce((s, row) => s + pick(row), 0) / rows.length;
@@ -92,10 +108,11 @@ function report(label, record) {
   }
 }
 
-test('in double precision every phase of the CPU ocean\'s step keeps the heat and salt it holds, and the rescale to the averaged free surface changes them only with its water, at each column\'s mean temperature and salinity', async () => {
+test('in double precision every phase of the CPU ocean\'s step keeps the heat and salt it holds, and the rescale to the averaged free surface changes them only with its water, at each column\'s mean temperature and salinity; the surface read deposits all the sunlight that passed the mixed layer', async () => {
   const { ocean, surfaceT, ice, flux, stress } = spunUp();
   ocean.setStress(stress, ice);
-  const snapshot = async () => ({ h: Float64Array.from(ocean.h), q: Float64Array.from(ocean.Q, (q, n) => q - HEAT_REFERENCE * ocean.h[n]), w: Float64Array.from(ocean.W) });
+  const snapshot = async () => ({ h: Float64Array.from(ocean.h), q: Float64Array.from(ocean.Q, (q, n) => q - HEAT_REFERENCE * ocean.h[n]), w: Float64Array.from(ocean.W), pen: Float64Array.from(ocean.penetrated) });
+  const light = [];
   const record = await follow([
     ['readSurface', () => ocean.readSurface(surfaceT, ice)],
     ['dynamics', () => ocean.phases.dynamics(DT)],
@@ -104,6 +121,7 @@ test('in double precision every phase of the CPU ocean\'s step keeps the heat an
     ['shift', () => ocean.phases.shift()],
     ['mixedLayer', () => ocean.mixedLayer(DT)],
     ['salt and surface', () => { ocean.salt(); ocean.writeSurface(surfaceT, flux, DT); }],
+    ['deposit', () => ocean.readSurface(surfaceT, ice), () => { ocean.penetrated.set(passing(ocean.transmission)); light.push(meanOf(ocean.penetrated)); }],
   ], snapshot, 4, ocean.layers, ocean.rhoCp);
   report('CPU', record);
   for (const [name, rows] of Object.entries(record)) {
@@ -113,29 +131,40 @@ test('in double precision every phase of the CPU ocean\'s step keeps the heat an
     if (name !== 'rescale') assert.ok(largest(rows, volume) < 1e-12, `${name}: volume ${largest(rows, volume)} m`);
   }
   assert.ok(largest(record.rescale, (r) => r.heat) > 1e-3, 'the rescale moves water, and heat with it');
+  const deposited = record.deposit.map((r, n) => r.stored - light[n]);
+  console.log(`CPU deposit: ${show(mean(light, (x) => x))} W/m² of sunlight passed the mixed layer each step; the stores took it to ${show(largest(deposited, (x) => x))} W/m², and none waits after it`);
+  assert.ok(Math.min(...light) > 0.5 && largest(deposited, (x) => x) < 1e-6 && ocean.penetrated.every((x) => x === 0), `the stores took ${record.deposit.map((r) => r.stored)} of ${light} W/m²`);
 });
 
 /*
  * A GPU ocean holding a CPU ocean's sea, uploaded from its h·T and h·S
  * as a file from before Qref and Wref would be, the surface it last
  * wrote in the atmosphere's buffers and its wind on the sea; `stores`
- * reads the device's h, heat and salt as stored, `snapshot` as books
- * takes them, the salt as h·S.
+ * reads the device's h, heat and salt as stored and the light waiting
+ * to be deposited, `snapshot` as books takes them, the salt as h·S.
  */
 async function onGpu({ ocean: cpu, surfaceT, ice, stress }) {
-  const model = await createGpuModel(mesh, { ocean: { everySteps: 1 } });
-  const { gpu, oceanEngine: ocean } = model, layers = ocean.layers, { OS } = ocean.layout;
+  const model = await createGpuModel(mesh, { ocean: { everySteps: 1, penetration: 'IB' } });
+  const { gpu, oceanEngine: ocean } = model, layers = ocean.layers, { OS } = ocean.layout, PH = gpu.layout.PH;
   ocean.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, surfaceT, ice);
   gpu.uploadSurfaceTemperature(surfaceT);
   gpu.device.queue.writeBuffer(gpu.buffers.S, 4 * gpu.layout.S.ICE, new Float32Array(C));
   ocean.setStress(stress, ice);
   const stores = async () => {
     await gpu.device.queue.onSubmittedWorkDone();
-    return readRanges(gpu.device, ocean.buffers.S, [{ offset: OS.OH, length: layers * C }, { offset: OS.OQ, length: layers * C }, { offset: OS.OW, length: layers * C }]);
+    const [[h, q, w], [pen]] = await Promise.all([readRanges(gpu.device, ocean.buffers.S, [{ offset: OS.OH, length: layers * C }, { offset: OS.OQ, length: layers * C }, { offset: OS.OW, length: layers * C }]), readRanges(gpu.device, gpu.buffers.PH, [{ offset: PH.PEN, length: C }])]);
+    return [h, q, w, pen];
   };
   const snapshot = async () => {
-    const [h, q, w] = await stores();
-    return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w, (x, n) => x + SALT_REFERENCE * h[n]) };
+    const [h, q, w, pen] = await stores();
+    return { h: Float64Array.from(h), q: Float64Array.from(q), w: Float64Array.from(w, (x, n) => x + SALT_REFERENCE * h[n]), pen: Float64Array.from(pen) };
+  };
+  const light = [];
+  const pass = async () => {
+    const [[transmission], [pen]] = await Promise.all([readRanges(gpu.device, gpu.buffers.PH, [{ offset: PH.TRANS, length: C }]), readRanges(gpu.device, gpu.buffers.PH, [{ offset: PH.PEN, length: C }])]);
+    const added = Float32Array.from(passing(transmission));
+    light.push(meanOf(added));
+    gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.PEN, Float32Array.from(added, (x, i) => x + pen[i]));
   };
   const phases = [
     ['readSurface', () => ocean.readSurfaceFromAtmosphere()],
@@ -145,8 +174,9 @@ async function onGpu({ ocean: cpu, surfaceT, ice, stress }) {
     ['shift', () => ocean.phases.shift()],
     ['mixedLayer', () => ocean.mixedLayer(DT)],
     ['salt and surface', () => { ocean.salt(DT); ocean.writeSurface(DT); }],
+    ['deposit', () => ocean.readSurfaceFromAtmosphere(), pass],
   ];
-  return { model, ocean, stores, follow: (steps) => follow(phases, snapshot, steps, layers, ocean.options.density * ocean.options.specificHeat) };
+  return { model, ocean, stores, light, follow: (steps) => follow(phases, snapshot, steps, layers, ocean.options.density * ocean.options.specificHeat) };
 }
 
 function within(label, record, floors) {
@@ -170,6 +200,10 @@ function within(label, record, floors) {
  * spacing; the eddy transport moves them across each edge and gives what
  * rounding leaves in a column to its finest stores; the RK4 and the
  * rescale round each cell's update, and the RK4's water carries its salt.
+ * The deposit of the passed sunlight changes each class by whole multiples
+ * of its store's spacing and keeps the rest waiting, so only the sums of
+ * its float32 subtractions round, and the surface read deposits what
+ * waited from the step before.
  */
 const EXACT = [1e-9, 1e-9, 1e-12, 1e-12, 1e-15, 1e-15];
 const GPU_FLOORS = {
@@ -180,14 +214,56 @@ const GPU_FLOORS = {
   shift: EXACT,
   mixedLayer: [1e-4, 2e-3, 1e-9, 1e-8, 1e-12, 1e-11],
   'salt and surface': EXACT,
+  deposit: [1e-7, 2e-7, 1e-12, 1e-12, 1e-15, 1e-15],
 };
 
-test('in single precision every phase of the GPU ocean\'s step keeps the heat, salt and volume it stores to its rounding, and the rescale changes heat and salt only with its water', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('in single precision every phase of the GPU ocean\'s step keeps the heat, salt and volume it stores to its rounding, and the rescale changes heat and salt only with its water; the surface read deposits the sunlight that passed the mixed layer, keeping what its stores cannot take waiting', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const sea = await onGpu(spunUp());
   const record = await sea.follow(16);
   sea.model.destroy();
   report('GPU', record);
   within('GPU', record, GPU_FLOORS);
+  const taken = record.deposit.map((r, n) => r.stored / sea.light[n]), overall = record.deposit.reduce((s, r) => s + r.stored, 0) / sea.light.reduce((s, x) => s + x, 0);
+  console.log(`GPU deposit: ${show(mean(sea.light, (x) => x))} W/m² of sunlight passed the mixed layer each step; the stores took ${Math.min(...taken).toFixed(4)} to ${Math.max(...taken).toFixed(4)} of each step's, with what waited from the step before, and ${overall.toFixed(5)} of all of it`);
+  assert.ok(Math.min(...taken) > 0.95 && Math.max(...taken) < 1.05 && Math.abs(overall - 1) < 0.01, `the stores took ${taken} of the light`);
+});
+
+/*
+ * The float32 spacing of a store holding x, as the kernels' grain() has
+ * it: 2^(e − 24) for x = m·2^e with ½ ≤ |m| < 1.
+ */
+const bits = new Float32Array(1), word = new Uint32Array(bits.buffer);
+const spacing = (x) => { bits[0] = x; return x === 0 ? 2 ** -24 : 2 ** Math.max(((word[0] >>> 23) & 255) - 150, -126); };
+
+test('the GPU deposit changes each class\'s heat by whole multiples of its store\'s spacing and keeps the rest waiting, so that in every column the stores\' change and the waiting light add up to the light passed, to the rounding of one subtraction', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const sea = await onGpu(spunUp()), { model, ocean, stores } = sea, { gpu } = model, PH = gpu.layout.PH, layers = ocean.layers;
+  const rhoCp = Math.fround(ocean.options.density * ocean.options.specificHeat);
+  ocean.readSurfaceFromAtmosphere();
+  const [, transmission] = await Promise.all([stores(), readRanges(gpu.device, gpu.buffers.PH, [{ offset: PH.TRANS, length: C }]).then(([t]) => t)]);
+  const given = Float32Array.from(passing(transmission));
+  gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.PEN, given);
+  const [, before] = await stores();
+  ocean.readSurfaceFromAtmosphere();
+  const [, after, , waiting] = await stores();
+  let classes = 0, off = 0, cells = 0, worst = 0, kept = 0;
+  for (let i = 0; i < C; i++) {
+    if (!(given[i] > 0)) continue;
+    cells++;
+    let change = 0;
+    for (let k = 0; k < layers; k++) {
+      const n = k * C + i, dq = after[n] - before[n];
+      if (dq === 0) continue;
+      classes++;
+      if (dq % spacing(before[n]) !== 0) off++;
+      change += dq;
+    }
+    worst = Math.max(worst, Math.abs(rhoCp * change + waiting[i] - given[i]) / given[i]);
+    kept = Math.max(kept, Math.abs(waiting[i]) / given[i]);
+  }
+  model.destroy();
+  console.log(`${cells} columns took the light passed in ${classes} class changes, ${off} of them not whole multiples of their store's spacing; the stores and the waiting light add up to the light passed within ${worst.toExponential(2)} of it, the most left waiting ${(100 * kept).toFixed(2)} % of a column's light`);
+  assert.ok(cells > 0 && off === 0, `${off} of ${classes} changes are not whole multiples of their store's spacing`);
+  assert.ok(worst < 1e-6, `a column's stores and waiting light differ from the light passed by ${worst} of it`);
 });
 
 /*

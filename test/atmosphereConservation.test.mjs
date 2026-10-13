@@ -7,6 +7,7 @@ import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 import { divergence } from '../js/dynamics/operators.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { withCadence } from '../js/cadence.module.js';
+import { FREEZING_POINT } from '../js/physics/ice.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -32,12 +33,26 @@ function spunUp() {
 }
 
 /*
+ * The spun-up air over a layered ocean started under it, with the
+ * penetrating sunlight `penetration`.
+ */
+function overOcean(penetration) {
+  const slab = spunUp(), model = createModel(new Grid(N), { ...OPTIONS, ocean: { penetration } });
+  slab.state.forEach((values, s) => model.state[s].set(values));
+  model.seaIce.load(model.state[6], slab.seaIce.concentration);
+  model.ocean.initialize(model.state[3], model.state[6]);
+  model.time = slab.time;
+  return model;
+}
+
+/*
  * The air's enthalpy c_p T, latent heat L q and kinetic energy, and the
- * surface's store (seaIce.energy), as global means in J/m², summed in
- * double precision with the Exner function of each state's own π.
+ * surface's store (seaIce.energy, with an ocean's heat capacity over open
+ * water), as global means in J/m², summed in double precision with the
+ * Exner function of each state's own π.
  */
 function bookkeeper(model) {
-  const { mesh, core, seaIce } = model, { K, C, E, dSigma, cp, g } = core.diagnostics, L = model.moist.latentHeat;
+  const { mesh, core, seaIce, ocean } = model, { K, C, E, dSigma, cp, g } = core.diagnostics, L = model.moist.latentHeat;
   const { areaCell, cellsOnEdge, dcEdge, dvEdge } = mesh, area = areaCell.reduce((s, a) => s + a, 0);
   const look = createSigmaCore(mesh, { levels: core.levels }), exner = look.diagnostics.exnerLayer;
   return (state) => {
@@ -46,7 +61,7 @@ function bookkeeper(model) {
     let H = 0, Lq = 0, KE = 0, S = 0;
     for (let i = 0; i < C; i++) {
       for (let k = 0; k < K; k++) { const n = k * C + i, m = areaCell[i] * pi[i] * dSigma[k] / g; H += m * cp * theta[n] * exner[n]; Lq += m * L * q[n]; }
-      S += areaCell[i] * seaIce.energy(surfaceT[i], ice[i], seaIce.snow[i], seaIce.cover(i, ice[i]));
+      S += areaCell[i] * (ocean && !(ice[i] > 0) ? ocean.capacity[i] * (surfaceT[i] - FREEZING_POINT) : seaIce.energy(surfaceT[i], ice[i], seaIce.snow[i], seaIce.cover(i, ice[i])));
     }
     for (let k = 0; k < K; k++) for (let e = 0; e < E; e++) {
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
@@ -60,8 +75,8 @@ const largest = (rows) => Math.max(...rows.map(Math.abs));
 const mean = (rows) => rows.reduce((s, x) => s + x, 0) / rows.length;
 const show = (x) => x.toExponential(1);
 
-test('in double precision the CPU model\'s step keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer\'s mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation', () => {
-  const model = spunUp(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
+for (const [label, build] of [['over a slab', spunUp], ['over a layered ocean', () => overOcean(null)], ['over a layered ocean that takes the penetrating sunlight', () => overOcean('IB')]]) test(`in double precision the CPU model's step ${label} keeps the energy of the air and its surface through the ∇⁴ closure, the boundary layer's mixing, the moist physics and the momentum mixing with the heat it returns, and the RK4 dynamics within its truncation`, () => {
+  const model = build(), { core, boundaryLayer, phases, state, radiation } = model, { K, C, E } = core.diagnostics;
   const books = bookkeeper(model), rk4 = createRK4Arrays(state.map((a) => a.length));
   const shadow = state.map((a) => Float64Array.from(a));
   const record = { dynamics: [], closure: [], boundaryLayer: [], adjust: [], momentum: [] };
@@ -95,7 +110,7 @@ test('in double precision the CPU model\'s step keeps the energy of the air and 
     model.time += DT;
     model.radiationSteps++;
   }
-  for (const [name, rows] of Object.entries(record)) console.log(`CPU ${name}: ${show(mean(rows))} W/m² on average, ${show(largest(rows))} at most`);
+  for (const [name, rows] of Object.entries(record)) console.log(`CPU ${label} ${name}: ${show(mean(rows))} W/m² on average, ${show(largest(rows))} at most`);
   for (const name of ['closure', 'boundaryLayer', 'adjust', 'momentum']) assert.ok(largest(record[name]) < 1e-6, `${name}: ${largest(record[name])} W/m²`);
   assert.ok(Math.abs(mean(record.dynamics)) < 0.05, `dynamics: ${mean(record.dynamics)} W/m²`);
 });
