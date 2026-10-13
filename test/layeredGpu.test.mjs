@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES, langmuirFactor, THIN_LAYER_CLASSES } from '../js/ocean/layered.module.js';
+import { createOcean as createCpuLayeredOcean, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, langmuirFactor } from '../js/ocean/layered.module.js';
 import { UNLISTED_OCEANS, columnMomentum } from './helpers/layered.mjs';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
@@ -127,7 +127,7 @@ test('under 10 m floors, with the wind over a 50 m momentumDepth and the mixed l
   const gpuOcean = gpuModel.oceanEngine;
   const cpuOcean = (options) => { const ocean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options }); ocean.initialize(surfaceT0, ice); return ocean; };
   const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
-  const cpu = cpuOcean(thin), today = cpuOcean({ ...thin, momentumDepth: 10, carryMomentum: false }), flux = new Float64Array(C);
+  const cpu = cpuOcean(thin), today = cpuOcean({ ...thin, momentumDepth: 10, carryMomentum: false, shearEntrainment: 0 }), flux = new Float64Array(C);
   gpuOcean.initialize(surfaceT0, ice);
   for (const steps of [1, 20]) {
     for (let n = 0; n < steps; n++) {
@@ -334,7 +334,8 @@ test('the GPU mixed layer holds, retreats, convects, keeps to its neighbors and,
   const sea = [...Array(C).keys()].filter((i) => cpuModel.geography.land[i] === 0);
   const neutral = sea.filter((_, n) => n % 5 === 0), stable = sea.filter((_, n) => n % 5 === 1), dense = sea.filter((_, n) => n % 5 === 2);
   const oldRules = { neutralSnap: true, convectiveErosion: false, buoyancyMemory: 0, maximumMixedDepth: 200, mixedNeighbourRatio: 0, vorticityCentring: 0 };
-  for (const options of [{ ...OCEAN_OPTIONS, mixedNeighbourRatio: 3, carryMomentum: true }, { ...OCEAN_OPTIONS, ...oldRules }]) {
+  const kraus = { penetration: null, refillRate: 0, shearEntrainment: 0, ekmanDepth: 0, retreatStirring: 0, langmuir: 0, retreatEkman: 0, densities: LAYER_DENSITIES.slice(2), salinities: LAYER_SALINITIES.slice(2), bottoms: LAYER_BOTTOMS.slice(2) };
+  for (const options of [{ ...OCEAN_OPTIONS, ...kraus, mixedNeighbourRatio: 3, carryMomentum: true }, { ...OCEAN_OPTIONS, ...kraus, carryMomentum: false, ...oldRules }]) {
     const cpuOcean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options });
     const surfaceT = Float64Array.from(surfaceT0);
     cpuOcean.initialize(surfaceT, ice);
@@ -356,7 +357,7 @@ test('the GPU mixed layer holds, retreats, convects, keeps to its neighbors and,
     for (let n = 0; n < cpuOcean.u.length; n++) cpuOcean.u[n] = 0.2 * Math.sin(0.7 * Math.floor(n / E) + 0.37 * (n % E));
     const saved = cpuOcean.serialize();
     cpuOcean.load(saved, surfaceT, ice);
-    const still = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options, carryMomentum: false });
+    const still = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options, carryMomentum: false, shearEntrainment: 0 });
     still.load(saved, Float64Array.from(surfaceT), ice);
     const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: options });
     const gpuOcean = gpuModel.oceanEngine;
@@ -555,7 +556,7 @@ test('under shearEntrainment the GPU mixed layer takes in the class beneath as t
 });
 
 test('under the mixing package the GPU ocean takes the wind over its Ekman depth and retreats to the Langmuir-enhanced Monin–Obukhov depth as the CPU ocean does, and twenty steps under 10 m floors track it at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const packaged = { ...OCEAN_OPTIONS, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, momentumDepth: 50, carryMomentum: true, shearEntrainment: 0.65, ekmanDepth: 0.4, momentumFloor: 10, stressThickness: 5, retreatStirring: 2.5, langmuir: 2 };
+  const packaged = { ...OCEAN_OPTIONS, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, momentumDepth: 50, carryMomentum: true, shearEntrainment: 0.65, ekmanDepth: 0.4, momentumFloor: 10, stressThickness: 5, retreatStirring: 2.5, langmuir: 2, retreatEkman: 0 };
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
   const mesh = cpuModel.mesh, C = mesh.nCells, E = mesh.nEdges, dt = 1350, net = 150, flux = new Float64Array(C);
   const cpuOcean = (options) => createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options });
@@ -710,25 +711,26 @@ test('on the two lighter classes under the mixing package, the sunlight and a 20
 
 async function lighterClasses(extra, name) {
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
-  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350, light = { ...OCEAN_OPTIONS, ...THIN_LAYER_CLASSES, ...extra };
-  const before = await createGpuModel(new Grid(8), { topography, ocean: OCEAN_OPTIONS });
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350, light = { ...OCEAN_OPTIONS, ...extra };
+  const fortyFour = { densities: LAYER_DENSITIES.slice(2), salinities: LAYER_SALINITIES.slice(2), bottoms: LAYER_BOTTOMS.slice(2) };
+  const before = await createGpuModel(new Grid(8), { topography, ocean: { ...OCEAN_OPTIONS, ...fortyFour } });
   before.oceanEngine.initialize(Float64Array.from(surfaceT0), ice);
   for (let n = 0; n < 5; n++) await before.oceanEngine.advance(Float64Array.from(surfaceT0), ice, stress, dt);
   const saved = { ...(await before.oceanEngine.serialize()), ...(await before.oceanEngine.restartArrays()) };
   before.destroy();
-  assert.deepEqual(saved.densities, LAYER_DENSITIES);
+  assert.deepEqual(saved.densities, fortyFour.densities);
   const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: light });
   const gpuOcean = gpuModel.oceanEngine;
   const cpuOcean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...light });
   await gpuOcean.upload(saved, Float64Array.from(surfaceT0), ice);
   cpuOcean.load(saved, Float64Array.from(surfaceT0), ice);
-  assert.equal(gpuOcean.layers, THIN_LAYER_CLASSES.densities.length + 1);
+  assert.equal(gpuOcean.layers, LAYER_DENSITIES.length + 1);
   const restart = await gpuOcean.restartArrays();
   for (const name of ['previousT0', 'fresh', 'buoyancy', 'capacity']) assert.deepEqual(Array.from(restart[name]), Array.from(saved[name]), `the GPU's ${name}`);
   for (const name of ['fresh', 'capacity']) assert.deepEqual(Array.from(cpuOcean[name]), Array.from(saved[name]), `the CPU's ${name}`);
   const compare = async (limit, label) => {
     const cpu = cpuOcean.serialize(), gpu = await gpuOcean.serialize();
-    assert.deepEqual(gpu.densities, THIN_LAYER_CLASSES.densities);
+    assert.deepEqual(gpu.densities, LAYER_DENSITIES);
     const wet = Array.from(cpu.h, (v) => v > 1), lines = [];
     for (const f of ['h', 'u', 'T', 'S', 'eta']) {
       const r = f === 'T' || f === 'S' ? stats(cpu[f].filter((_, x) => wet[x]), gpu[f].filter((_, x) => wet[x])) : stats(cpu[f], gpu[f]);

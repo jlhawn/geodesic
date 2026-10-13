@@ -2,10 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, LAYER_BOTTOMS, transmitted, THIN, langmuirFactor, stokesSurfaceLayer, FRICTION_PER_WIND } from '../js/ocean/layered.module.js';
+import { createOcean, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, transmitted, THIN, langmuirFactor, stokesSurfaceLayer, FRICTION_PER_WIND } from '../js/ocean/layered.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion, labelTemperature } from '../js/ocean/seawater.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
-import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, UNIFORM, uniformOcean, deepen, slowOcean, columnMomentum } from './helpers/layered.mjs';
+import { OCEAN_DEFAULTS } from '../js/gpu/layeredOcean.gpu.js';
+import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, UNIFORM, PLAIN_MIXING, uniformOcean, deepen, slowOcean, columnMomentum } from './helpers/layered.mjs';
 
 test('surface warming shallows the mixed layer by detrainment; surface cooling deepens it by entrainment', () => {
   const ocean = createOcean(mesh, { everySteps: 1 });
@@ -69,7 +70,7 @@ test('with the same net flux, part of it sunlight, the mixed layer retreats to a
   const dt = 2700, g = 9.81, tau = 0.05, sunlight = 200, net = 50, stirring = 0.8, stirringDepth = 100, days = 4;
   const band = [...Array(C).keys()].filter((i) => Math.abs(mesh.latCell[i]) < 50 * DEG), runs = {};
   for (const penetration of [null, 'IB']) {
-    const { ocean, surfaceT, ice, flux } = uniformOcean({ penetration, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, stirring, stirringDepth });
+    const { ocean, surfaceT, ice, flux } = uniformOcean({ ...PLAIN_MIXING, penetration, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, stirring, stirringDepth });
     const stress = zonalWindOnEdges(mesh, () => tau);
     for (let n = 0; n < days * 86400 / dt; n++) {
       for (let i = 0; i < C; i++) {
@@ -205,7 +206,7 @@ test('the layer left a few metres thick under a 600 m mixed layer at 45°S stays
 });
 
 test('the thinned share counts the sea whose mixed layer is below its floor while the water beneath could fill it, and the refill tally takes what the floor drew', () => {
-  const ocean = createOcean(mesh, { everySteps: 1 });
+  const ocean = createOcean(mesh, { everySteps: 1, ...PLAIN_MIXING });
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => 275 + 25 * Math.cos(lat) ** 2), ice = new Float64Array(C), flux = new Float64Array(C);
   ocean.initialize(surfaceT, ice);
   assert.equal(ocean.diagnostics().oceanThinned, 0);
@@ -267,7 +268,7 @@ test('at 10 m floors a 600 m mixed layer beside 10 m ones at 60°S, and the remn
  * thick on a flat 4000 m sea, each layer given its own velocities, the
  * classes kept on their labels.
  */
-const STACK = { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34, mixedDepth: 50, restoreTime: 1e30, densities: [1026.0, 1026.1, 1026.2, 1026.3, 1026.95], salinities: [34.9, 34.9, 34.9, 34.9, 34.8], bottoms: [80, 150, 300, 600, 12000] };
+const STACK = { ...PLAIN_MIXING, everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34, mixedDepth: 50, restoreTime: 1e30, densities: [1026.0, 1026.1, 1026.2, 1026.3, 1026.95], salinities: [34.9, 34.9, 34.9, 34.9, 34.8], bottoms: [80, 150, 300, 600, 12000] };
 function stacked(options = {}, mixedDensity = null) {
   const ocean = createOcean(mesh, { ...STACK, carryMomentum: true, ...options });
   const surfaceT = new Float64Array(C).fill(303), ice = new Float64Array(C);
@@ -363,7 +364,7 @@ function cut(options, dt) {
   return column;
 }
 
-test('under refillRate a mixed layer below its floor deepens by refillRate·dt and never stays thinner than refillFloor, keeping each column\'s water, heat, salt and each edge\'s momentum, and counts as thinned; at refillRate 0 it refills at once, bit for bit as by default', () => {
+test('under refillRate a mixed layer below its floor deepens by refillRate·dt and never stays thinner than refillFloor, keeping each column\'s water, heat, salt and each edge\'s momentum, and counts as thinned; at refillRate 0 it refills at once, whatever refillFloor', () => {
   const dt = 1350, rate = 24 / 86400, expected = [30 + rate * dt, 5, 50];
   const capped = cut({ refillRate: rate }, dt), { ocean } = capped;
   let off = 0, tally = 0;
@@ -379,9 +380,9 @@ test('under refillRate a mixed layer below its floor deepens by refillRate·dt a
   assert.ok(capped.kept < 1e-12 && momentum < 1e-12, `the columns changed by ${capped.kept}, an edge's momentum by ${momentum}`);
   assert.ok(Math.abs(thinned - short / area) < 1e-12, `thinned ${thinned} against ${short / area}`);
 
-  const instant = cut({ refillRate: 0, refillFloor: 7 }, dt), plain = cut({}, dt);
+  const instant = cut({ refillRate: 0, refillFloor: 7 }, dt), plain = cut({ refillRate: 0 }, dt);
   assert.ok(Array.from({ length: C }, (_, i) => instant.ocean.h[i]).every((x) => Math.abs(x - 50) < 1e-9), 'at refillRate 0 every mixed layer is back on its floor');
-  for (const name of ['h', 'u', 'Q', 'W', 'eta']) assert.deepEqual(instant.ocean[name], plain.ocean[name], `${name} at refillRate 0 is the default's`);
+  for (const name of ['h', 'u', 'Q', 'W', 'eta']) assert.deepEqual(instant.ocean[name], plain.ocean[name], `${name} at refillRate 0 does not depend on refillFloor`);
   assert.equal(instant.ocean.diagnostics().oceanThinned, 0);
 });
 
@@ -484,7 +485,7 @@ test('under shearEntrainment a heated mixed layer whose bulk Richardson number i
 });
 
 test('shearEntrainment without carryMomentum throws: the base\'s Richardson number would never rise', () => {
-  assert.throws(() => createOcean(mesh, { shearEntrainment: RIC }), /carryMomentum/);
+  assert.throws(() => createOcean(mesh, { shearEntrainment: RIC, carryMomentum: false }), /carryMomentum/);
   assert.throws(() => pwpColumns({ carryMomentum: false }), /carryMomentum/);
 });
 
@@ -512,15 +513,19 @@ test('under shearEntrainment a 5 m mixed layer at 45°N over a stratification of
   assert.ok(Math.abs(still - 5) < 0.5, `without shear entrainment the layer is ${still} m`);
 });
 
-test('with shearEntrainment, ekmanDepth, retreatStirring and langmuir 0 and stressThickness PV_FLOOR the ocean steps as without the options, bit for bit, over 48 steps from the analytic start', () => {
+test('by default the ocean runs the Jerlov IB sunlight, carried momentum, the 24 m a day refill and the mixing package, bit for bit as with them given, and the GPU engine has the same defaults', () => {
+  const ADOPTED = { penetration: 'IB', carryMomentum: true, refillRate: 0.00027778, refillFloor: 5, shearEntrainment: 0.65, ekmanDepth: 0.4, momentumFloor: 10, stressThickness: 20, retreatStirring: 2.5, langmuir: 2, retreatEkman: 0.7, shallowestMixedDepth: 50, minimumThickness: 50, momentumDepth: 50 };
   const run = (options) => {
-    const { ocean, surfaceT, ice, flux } = uniformOcean({ penetration: 'IB', carryMomentum: true, minimumThickness: 10, shallowestMixedDepth: 10, refillRate: 24 / 86400, ...options });
+    const { ocean, surfaceT, ice, flux } = uniformOcean(options);
     const stress = zonalWindOnEdges(mesh, (lat) => -0.1 * Math.cos(3 * lat));
     for (let n = 0; n < 48; n++) { for (let i = 0; i < C; i++) surfaceT[i] = 278 + 2 * Math.cos(mesh.latCell[i]) - 0.01 * n; ocean.advance(surfaceT, ice, flux, stress, 1350); }
     return ocean;
   };
-  const off = run({ shearEntrainment: 0, ekmanDepth: 0, momentumFloor: 10, stressThickness: 20, retreatStirring: 0, langmuir: 0 }), plain = run({});
-  for (const name of ['h', 'u', 'Q', 'W', 'eta']) assert.deepEqual(off[name], plain[name], `${name} with the options off is the default's`);
+  const given = run(ADOPTED), plain = run({});
+  for (const name of ['h', 'u', 'Q', 'W', 'eta']) assert.deepEqual(plain[name], given[name], `${name} by default is the adopted options'`);
+  for (const [name, value] of Object.entries(ADOPTED)) assert.equal(OCEAN_DEFAULTS[name], value, `the GPU's ${name}`);
+  for (const name of ['densities', 'salinities', 'bottoms']) assert.deepEqual(OCEAN_DEFAULTS[name], { densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS }[name], `the GPU's ${name}`);
+  assert.equal(LAYER_DENSITIES.length, 46);
 });
 
 test('under retreatStirring and langmuir a heated mixed layer retreats toward C_r·ε·u*³/(−B), unfaded, with ε the Langmuir factor at the depth the step began with, between 1 and its cap', () => {
@@ -528,7 +533,7 @@ test('under retreatStirring and langmuir a heated mixed layer retreats toward C_
   const stress = zonalWindOnEdges(mesh, (lat) => 0.01 + 0.2 * Math.cos(lat) ** 4);
   const tauCell = cellVector(mesh, stress);
   const run = (mixedDepth, options) => {
-    const { ocean, surfaceT, ice } = uniformOcean({ mixedDepth, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, ...options });
+    const { ocean, surfaceT, ice } = uniformOcean({ ...PLAIN_MIXING, mixedDepth, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, ...options });
     for (let i = 0; i < C; i++) surfaceT[i] += dt * net / ocean.capacity[i];
     ocean.setStress(stress, ice);
     ocean.readSurface(surfaceT, ice);
@@ -581,7 +586,7 @@ test('under retreatEkman the heated mixed layer retreats toward no more than ret
   const stress = zonalWindOnEdges(mesh, (lat) => 0.01 + 0.2 * Math.cos(lat) ** 4);
   const tauCell = cellVector(mesh, stress);
   const run = (mixedDepth, options) => {
-    const { ocean, surfaceT, ice } = uniformOcean({ mixedDepth, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, detrainmentTime: dt, retreatStirring: 2.5, langmuir: 2, ...options });
+    const { ocean, surfaceT, ice } = uniformOcean({ ...PLAIN_MIXING, mixedDepth, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, detrainmentTime: dt, retreatStirring: 2.5, langmuir: 2, ...options });
     for (let i = 0; i < C; i++) surfaceT[i] += dt * net / ocean.capacity[i];
     ocean.setStress(stress, ice);
     ocean.readSurface(surfaceT, ice);
@@ -616,7 +621,7 @@ test('under langmuir the Langmuir factor\'s excess over 1 scales with the open w
   const ice = Float64Array.from({ length: C }, (_, i) => (Math.abs(mesh.latCell[i]) > 40 * DEG ? 1 : 0));
   const concentration = Float64Array.from({ length: C }, (_, i) => (i % 3 === 0 ? 0 : 0.1 + 0.8 * (i % 7) / 6));
   const run = (options) => {
-    const ocean = createOcean(mesh, { ...UNIFORM, mixedDepth: 30, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, retreatStirring: 2.5, ...options });
+    const ocean = createOcean(mesh, { ...UNIFORM, ...PLAIN_MIXING, mixedDepth: 30, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, retreatStirring: 2.5, ...options });
     const surfaceT = new Float64Array(C).fill(278);
     ocean.initialize(surfaceT, ice, { concentration });
     for (let i = 0; i < C; i++) if (!ice[i]) surfaceT[i] += dt * 150 / ocean.capacity[i];

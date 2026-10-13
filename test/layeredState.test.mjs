@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createOcean, rebinOcean, savedDensities, LAYER_DENSITIES, LAYER_SALINITIES, UNLISTED_LAYER_DENSITIES, THIN_LAYER_CLASSES, REBIN_CARRIED, EPS, THIN } from '../js/ocean/layered.module.js';
+import { createOcean, rebinOcean, savedDensities, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, UNLISTED_LAYER_DENSITIES, REBIN_CARRIED, EPS, THIN } from '../js/ocean/layered.module.js';
 import { seawaterDensity, labelTemperature } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { encodeState, decodeState } from '../js/stateFile.module.js';
@@ -142,6 +142,8 @@ const columnSums = ({ h, T, S }, L) => Array.from({ length: C }, (_, i) => {
   return [water, heat, salt];
 });
 const drift = (a, b) => Math.max(...a.flatMap((column, i) => column.map((x, q) => (x === 0 ? Math.abs(b[i][q]) : Math.abs(b[i][q] - x) / Math.abs(x)))));
+const FORTY_FOUR = { densities: LAYER_DENSITIES.slice(2), salinities: LAYER_SALINITIES.slice(2), bottoms: LAYER_BOTTOMS.slice(2) };
+
 function unlistedState(classes) {
   const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.abs(lon) < 40 * DEG && lat > 12 * DEG && lat < 48 * DEG ? 500 : -4000 + 1500 * Math.sin(3 * lon) * Math.cos(2 * lat))));
   const ocean = createOcean(mesh, { everySteps: 1, geography, ...classes });
@@ -222,10 +224,10 @@ function withRestart(saved) {
 }
 
 test('rebinOcean carries a stepped 44-class ocean onto the two lighter classes, the classes from 1021 to 1028 kept but for their tokens, each column\'s water, heat and salt to 1e-14, the restart arrays carried and the result restarting on the CPU loader', () => {
-  const { geography, surfaceT, ice, saved: plain } = unlistedState({});
-  const saved = withRestart(plain), from = savedDensities(saved, C), to = THIN_LAYER_CLASSES.densities;
-  assert.deepEqual(from, LAYER_DENSITIES);
-  const onto = rebinOcean(saved, from, to, C, labels(to, THIN_LAYER_CLASSES.salinities));
+  const { geography, surfaceT, ice, saved: plain } = unlistedState(FORTY_FOUR);
+  const saved = withRestart(plain), from = savedDensities(saved, C), to = LAYER_DENSITIES;
+  assert.deepEqual(from, FORTY_FOUR.densities);
+  const onto = rebinOcean(saved, from, to, C, labels(to, LAYER_SALINITIES));
   const Lo = from.length + 1, Ln = to.length + 1, shift = Ln - Lo;
   assert.equal(onto.h.length, Ln * C);
   assert.ok(drift(columnSums(saved, Lo), columnSums(onto, Ln)) < 1e-14, `column sums moved by ${drift(columnSums(saved, Lo), columnSums(onto, Ln))}`);
@@ -247,21 +249,21 @@ test('rebinOcean carries a stepped 44-class ocean onto the two lighter classes, 
   for (let k = 0; k < Ln; k++) assert.deepEqual(Array.from(onto.u.subarray(k * E, (k + 1) * E)), Array.from(saved.u.slice(Math.max(k - shift, Math.min(k, 1)) * E, (Math.max(k - shift, Math.min(k, 1)) + 1) * E)), `layer ${k}'s velocity`);
   for (const name of REBIN_CARRIED) assert.deepEqual(Array.from(onto[name]), Array.from(saved[name]), name);
   console.log(`44 classes onto 46: ${tokens} class cells from 1021 to 1028 gave tokens, at most ${largest.toFixed(4)} m`);
-  const ocean = createOcean(mesh, { everySteps: 1, geography, ...THIN_LAYER_CLASSES });
+  const ocean = createOcean(mesh, { everySteps: 1, geography });
   ocean.load(onto, Float64Array.from(surfaceT), ice);
   assert.equal(ocean.layers, Ln);
   for (const name of ['fresh', 'capacity', 'penetrated']) assert.deepEqual(Array.from(ocean[name]), Array.from(saved[name]), `the loaded ocean's ${name}`);
 });
 
 test('a 45-layer ocean that carries no class list loads onto the two lighter classes as the 44-class list rebinned, not rebuilt', () => {
-  const { geography, surfaceT, ice, saved } = unlistedState({});
+  const { geography, surfaceT, ice, saved } = unlistedState(FORTY_FOUR);
   assert.deepEqual(savedDensities(saved, C), UNLISTED_LAYER_DENSITIES[2]);
-  const listed = createOcean(mesh, { everySteps: 1, geography, ...THIN_LAYER_CLASSES }), unlisted = createOcean(mesh, { everySteps: 1, geography, ...THIN_LAYER_CLASSES });
-  listed.load({ ...saved, densities: LAYER_DENSITIES }, Float64Array.from(surfaceT), ice);
+  const listed = createOcean(mesh, { everySteps: 1, geography }), unlisted = createOcean(mesh, { everySteps: 1, geography });
+  listed.load({ ...saved, densities: FORTY_FOUR.densities }, Float64Array.from(surfaceT), ice);
   unlisted.load(saved, Float64Array.from(surfaceT), ice);
-  assert.equal(unlisted.layers, THIN_LAYER_CLASSES.densities.length + 1);
+  assert.equal(unlisted.layers, LAYER_DENSITIES.length + 1);
   for (const name of ['h', 'u', 'Q', 'W', 'eta']) assert.deepEqual(Array.from(unlisted[name]), Array.from(listed[name]), name);
-  const before = columnSums(saved, LAYER_DENSITIES.length + 1);
+  const before = columnSums(saved, FORTY_FOUR.densities.length + 1);
   for (let i = 0; i < C; i++) {
     if (!unlisted.cellOcean[i]) continue;
     assert.equal(unlisted.h[i], saved.h[i]);

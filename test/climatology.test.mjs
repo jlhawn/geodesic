@@ -166,8 +166,8 @@ test('a sea cell under an atlas column that ends far above its bottom takes the 
   const show = (layers) => layers.map((l) => `${l.rho}: ${l.top.toFixed(0)}–${l.bottom.toFixed(0)}`).join(', ');
   console.log(`a 1200 m cell under a 50 m atlas column 2° from a 2000 m one: ${show(reached)}; with no deep column in reach ${show(plugged)}`);
   assert.ok(reached.filter((l) => l.rho !== 'ML' && l.rho > 1025 && l.bottom > 100).length >= 3, 'classes denser than 1025 below 100 m');
-  assert.ok(!reached.some((l) => l.rho === 1020.5 && l.bottom > 75), 'no 1020.5 water below 75 m');
-  assert.ok(plugged.some((l) => l.rho === 1020.5 && l.bottom > 1000), 'without a deep column within reach the surface water fills the column');
+  assert.ok(!reached.some((l) => l.rho !== 'ML' && l.rho <= 1020.5 && l.bottom > 75), 'no water of 1020.5 or lighter below 75 m');
+  assert.ok(plugged.some((l) => l.rho === 1020 && l.bottom > 1000), 'without a deep column within reach the surface water fills the column in its own class');
 });
 
 let built = null;

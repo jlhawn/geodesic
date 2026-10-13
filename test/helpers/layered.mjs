@@ -72,6 +72,7 @@ export function columnMomentum(m, L, { h, u, eta }, D) {
 // interior classes denser than it, with a 50 m mixed layer: no pressure
 // gradient anywhere until a column is changed.
 export const UNIFORM = { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5, mixedDepth: 50 };
+export const PLAIN_MIXING = { penetration: null, carryMomentum: false, refillRate: 0, shearEntrainment: 0, ekmanDepth: 0, retreatStirring: 0, langmuir: 0, retreatEkman: 0 };
 export function uniformOcean(options = {}, m = mesh) {
   const ocean = createOcean(m, { ...UNIFORM, ...options });
   const surfaceT = new Float64Array(m.nCells).fill(278), ice = new Float64Array(m.nCells), flux = new Float64Array(m.nCells);

@@ -14,7 +14,7 @@ const C = (celsius) => celsius + CELSIUS;
 
 test('the class points sit on their label densities, none floored at freezing', () => {
   const points = classPoints();
-  assert.equal(points.length, 44);
+  assert.equal(points.length, 46);
   for (const p of points) close(seawaterDensity(p.t, p.s), p.rho, 1e-9, `class ${p.rho}`);
   assert.ok(points.every((p) => p.t > FREEZING_POINT));
   const coldest = points.reduce((a, b) => (b.t < a.t ? b : a));
@@ -88,7 +88,7 @@ test('the start depends on latitude alone', () => {
 test('the classes by latitude at the start', () => {
   const [all, four] = classesByLatitude(16);
   assert.equal(all.latitude.length, 289);
-  assert.equal(all.layers, 45);
+  assert.equal(all.layers, 47);
   const L = all.layers, k1024 = Array.from(all.densities).indexOf(1024), k1026 = Array.from(all.densities).indexOf(1026.2);
   const equator = nearestLatitude(all, 0), bases = columnAt(all, equator);
   assert.equal(thickClasses(all, equator), 34);
@@ -117,7 +117,7 @@ test('the classes by latitude at the start', () => {
   assert.equal(four.layers, 5);
   const fourBases = columnAt(four, equator);
   [60, 220.3, 650.0, 1305.2].forEach((z, k) => close(fourBases[k], z, 0.05, `four-class base ${k}`));
-  [1023, 1025, 1026.5].forEach((rho, k) => close(fourBases[k + 1], bases[Array.from(all.densities).indexOf(rho, 1)], 0.7, `the four nearly share the 44’s base of ${rho}`));
+  [1023, 1025, 1026.5].forEach((rho, k) => close(fourBases[k + 1], bases[Array.from(all.densities).indexOf(rho, 1)], 0.7, `the four nearly share the 46’s base of ${rho}`));
   assert.equal(layerAt(all, equator, 30).k, 0);
   assert.equal(layerAt(all, equator, 1000).k, k1026);
   assert.equal(layerAt(all, equator, 4002), null);

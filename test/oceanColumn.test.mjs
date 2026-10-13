@@ -29,7 +29,7 @@ test('the column is the cell of Grid(2) nearest the latitude asked for, and the 
   const column = createSeasonalColumn({ days: 0 });
   close(column.latitude, 31.72, 0.01, 'the default column');
   close(column.stirring, 0.05, 0.0015, 'the stress at the column');
-  assert.equal(column.layers, 45, 'the mixed layer and all 44 classes');
+  assert.equal(column.layers, 47, 'the mixed layer and all 46 classes');
   close(m.latCell[nearestCell(m, 60)] * 180 / Math.PI, 58.28, 0.01, 'the cell nearest 60°');
 });
 
@@ -49,12 +49,12 @@ test('the slabs answer a year of heating as the linear response says: 4.6 K and 
   }
 });
 
-test('heated without damping, the model\'s mixed layer sits on its 50 m floor through the half-year of heating while its surface warms from 15.0 to 21.4 °C, and the column stores the 1.51 GJ/m² it is given', () => {
+test('heated without damping, the model\'s mixed layer sits on its 50 m floor from day 30 of the half-year of heating while its surface warms from 15.0 to 21.4 °C, and the column stores the 1.51 GJ/m² it is given', () => {
   const t0 = performance.now();
   const column = seasonalColumn({ damping: 0, days: YEAR_DAYS / 2 });
   const seconds = (performance.now() - t0) / 1000, { record: r } = column, N = column.samples - 1;
   let low = Infinity, high = 0;
-  for (let n = 10 * PER_DAY; n <= N; n++) { low = Math.min(low, r.mixedDepth[n]); high = Math.max(high, r.mixedDepth[n]); }
+  for (let n = 30 * PER_DAY; n <= N; n++) { low = Math.min(low, r.mixedDepth[n]); high = Math.max(high, r.mixedDepth[n]); }
   const given = 150 * YEAR_DAYS * DAY / Math.PI;
   console.log(`half a year in ${seconds.toFixed(1)} s (${(1000 * seconds / column.steps).toFixed(2)} ms a step): mixed layer ${low.toFixed(2)}–${high.toFixed(2)} m from day 10; SST ${C(r.seas.model.sst[0]).toFixed(2)} → ${C(r.seas.model.sst[N]).toFixed(2)} °C, a fixed 50 m layer's ${C(r.seas.fixed.sst[N]).toFixed(2)}; the column gained ${(r.seas.model.heat[N] / 1e9).toFixed(4)} GJ/m² of the ${(given / 1e9).toFixed(4)} given, ${(r.stored[N] / 1e9).toFixed(4)} of it above 600 m`);
   close(r.time[N], 182.5, 1e-9, 'half a year');
@@ -69,32 +69,30 @@ test('heated without damping, the model\'s mixed layer sits on its 50 m floor th
   assert.ok(seasonal.length >= 5 && seasonal.every((layer) => layer.density < 1025.25 && layer.temperature < r.seas.model.sst[N]), `the summer leaves thin, light classes under the mixed layer: ${seasonal.map((layer) => layer.density).join(', ')}`);
 });
 
-test('a year with damping: the floor while the column gains heat, convection to 356 m by the end of winter, and a spring retreat that halves in 0.69 days, the model\'s one-day detrainment', () => {
+test('a year with damping: the floor from day 30 while the column gains heat, convection to 356 m by the end of winter, and a spring retreat that halves in 0.75 days, the model\'s one-day detrainment, and stands 15 m above the floor at the March equinox', () => {
   const t0 = performance.now();
   const column = seasonalColumn();
   const seconds = (performance.now() - t0) / 1000, { record: r } = column, N = column.samples - 1;
   let warming = 0, high = 0;
-  for (let n = 10 * PER_DAY; n <= N && r.time[n] < 200; n++) if (r.seas.model.flux[n] > 0) { warming = r.time[n]; high = Math.max(high, r.mixedDepth[n]); }
+  for (let n = 30 * PER_DAY; n <= N && r.time[n] < 200; n++) if (r.seas.model.flux[n] > 0) { warming = r.time[n]; high = Math.max(high, r.mixedDepth[n]); }
   let deepest = 0;
   for (let n = 0; n <= N; n++) if (r.mixedDepth[n] > r.mixedDepth[deepest]) deepest = n;
-  let half = deepest, near = deepest;
+  let half = deepest;
   while (r.mixedDepth[half] - FLOOR > (r.mixedDepth[deepest] - FLOOR) / 2) half++;
-  while (r.mixedDepth[near] > FLOOR + 5) near++;
   const at = (day) => r.mixedDepth[day * PER_DAY];
   const events = column.events().filter((e) => e.meters > 10);
   const model = column.readouts(N, 'model'), slab = column.readouts(N, 'slab'), fixed = column.readouts(N, 'fixed');
-  console.log(`a year in ${seconds.toFixed(1)} s (${(1000 * seconds / column.steps).toFixed(2)} ms a step); the column gains heat until day ${warming.toFixed(1)}, the mixed layer within ${(high - FLOOR).toFixed(2)} m of its floor from day 10; ${at(240).toFixed(1)}, ${at(270).toFixed(1)}, ${at(300).toFixed(1)} and ${at(330).toFixed(1)} m on days 240, 270, 300 and 330; deepest ${r.mixedDepth[deepest].toFixed(1)} m on day ${r.time[deepest].toFixed(2)}; half-way back in ${(r.time[half] - r.time[deepest]).toFixed(2)} days, within 5 m of the floor in ${(r.time[near] - r.time[deepest]).toFixed(2)}; ${events.map((e) => `${e.kind} ${e.meters.toFixed(0)} m, days ${e.from.toFixed(1)}–${e.to.toFixed(1)}, class ${e.classes.join('/')}`).join('; ')}`);
+  console.log(`a year in ${seconds.toFixed(1)} s (${(1000 * seconds / column.steps).toFixed(2)} ms a step); the column gains heat until day ${warming.toFixed(1)}, the mixed layer within ${(high - FLOOR).toFixed(2)} m of its floor from day 30; ${at(240).toFixed(1)}, ${at(270).toFixed(1)}, ${at(300).toFixed(1)} and ${at(330).toFixed(1)} m on days 240, 270, 300 and 330; deepest ${r.mixedDepth[deepest].toFixed(1)} m on day ${r.time[deepest].toFixed(2)}; half-way back in ${(r.time[half] - r.time[deepest]).toFixed(2)} days, ${at(YEAR_DAYS).toFixed(1)} m at the March equinox; ${events.map((e) => `${e.kind} ${e.meters.toFixed(0)} m, days ${e.from.toFixed(1)}–${e.to.toFixed(1)}, class ${e.classes.join('/')}`).join('; ')}`);
   console.log(`SST range and lag behind the strongest heating: 10 m slab ${slab.range.toFixed(2)} K, ${slab.lag.toFixed(1)} d; 50 m ${fixed.range.toFixed(2)} K, ${fixed.lag.toFixed(1)} d; the model's mixed layer ${model.range.toFixed(2)} K, ${model.lag.toFixed(1)} d; the column ends ${(r.seas.model.heat[N] / 1e9).toFixed(3)} GJ/m² against ${(column.heatIn.model / 1e9).toFixed(3)} put in`);
   close(warming, 153.0, 0.1, 'the last day the column gains heat');
-  assert.ok(high < FLOOR + 0.6, `the floor while the column gains heat: ${high} m`);
-  close(at(240), 66.9, 0.1, 'day 240'); close(at(270), 128.2, 0.1, 'day 270'); close(at(300), 279.4, 0.1, 'day 300'); close(at(330), 341.7, 0.1, 'day 330');
+  assert.ok(high < FLOOR + 1, `the floor while the column gains heat: ${high} m`);
+  close(at(240), 66.9, 0.1, 'day 240'); close(at(270), 128.7, 0.1, 'day 270'); close(at(300), 279.6, 0.1, 'day 300'); close(at(330), 341.7, 0.1, 'day 330');
   close(r.mixedDepth[deepest], 356.5, 0.1, 'the deepest mixed layer');
   close(r.time[deepest], 356.19, 0.01, 'on day');
-  close(r.time[half] - r.time[deepest], 0.69, 0.01, 'half the excess detrained');
-  close(r.time[near] - r.time[deepest], 4.94, 0.01, 'within 5 m of the floor');
-  close(at(YEAR_DAYS), 50.6, 0.05, 'back on the floor at the March equinox');
+  close(r.time[half] - r.time[deepest], 0.75, 0.01, 'half the excess detrained');
+  close(at(YEAR_DAYS), 64.8, 0.05, 'above the floor at the March equinox');
   assert.deepEqual(events.map((e) => [e.kind, e.classes]), [['entrains', [1025.25]], ['detrains', [1025.25]]], 'winter swallows the class beneath and spring gives its water back');
-  close(events[0].meters, 265.9, 0.1, 'entrained from day 265 to 330'); close(events[1].meters, 304.9, 0.1, 'detrained in spring');
+  close(events[0].meters, 265.9, 0.1, 'entrained from day 265 to 330'); close(events[1].meters, 290.6, 0.1, 'detrained in spring');
   const winter = column.layersAt(deepest), spring = column.layersAt(N);
   close(winter[0].bottom, r.mixedDepth[deepest], 1e-3, 'the profile\'s mixed layer');
   close(C(spring[0].temperature), 13.69, 0.01, 'the spring surface'); close(C(spring[1].temperature), 13.71, 0.01, 'the winter water left in the class beneath');

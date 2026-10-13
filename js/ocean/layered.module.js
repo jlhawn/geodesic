@@ -164,7 +164,8 @@ import { profileAt } from './climatology.module.js';
  */
 /*
  * The interior classes, placed where the World Ocean Atlas holds its water
- * in this equation of state: 1020.5–1021.5 for the warm pool, 0.25 apart
+ * in this equation of state: 1019.5–1021.5 for the warm pool, the two
+ * lightest at WOA23's tropical surface salinities, 0.25 apart
  * through the thermocline, 0.1 apart for the intermediate water to 1026.6,
  * 0.03 apart from 1026.65 to 1026.98 so that the Southern Ocean's winter
  * water (1026.79), Circumpolar Deep Water (1026.85), North Atlantic Deep
@@ -176,35 +177,26 @@ import { profileAt } from './climatology.module.js';
  * class fills the deep columns and the denser ones start as tokens.
  */
 export const LAYER_DENSITIES = [
-  1020.5, 1021.0, 1021.5,
+  1019.5, 1020.0, 1020.5, 1021.0, 1021.5,
   1022.0, 1022.25, 1022.5, 1022.75, 1023.0, 1023.25, 1023.5, 1023.75, 1024.0, 1024.25, 1024.5, 1024.75, 1025.0, 1025.25, 1025.5, 1025.75, 1026.0,
   1026.1, 1026.2, 1026.3, 1026.4, 1026.5, 1026.6,
   1026.65, 1026.68, 1026.71, 1026.74, 1026.77, 1026.8, 1026.83, 1026.86, 1026.89, 1026.92, 1026.95, 1026.98,
   1027.05, 1027.15, 1027.3, 1027.5, 1027.75, 1028.0,
 ];
 export const LAYER_BOTTOMS = [
-  65, 74, 83,
+  60, 62, 65, 74, 83,
   90, 110, 130, 150, 170, 205, 235, 270, 300, 350, 400, 450, 500, 550, 600, 650, 689,
   734, 801, 867, 933, 1004, 1061,
   1092, 1180, 1300, 1420, 1540, 1735, 2005, 2275, 2650, 3550, 12000, 12000,
   12000, 12000, 12000, 12000, 12000,
 ];
 export const LAYER_SALINITIES = [
-  34.0, 34.5, 34.85,
+  33.0, 33.5, 34.0, 34.5, 34.85,
   35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 34.98, 34.95, 34.92, 34.9,
   34.89, 34.88, 34.875, 34.87, 34.86, 34.85,
   34.843, 34.839, 34.835, 34.831, 34.826, 34.82, 34.814, 34.809, 34.806, 34.803, 34.8, 34.82,
   34.91, 34.94, 35.05, 39.9, 39.0, 38.65,
 ];
-/*
- * The same classes with two lighter ones, 1019.5 and 1020.0 at WOA23's
- * tropical surface salinities, for the warm pool's water lighter than
- * 1020.25: createOcean's densities, salinities and bottoms.
- */
-export const THIN_LAYER_DENSITIES = [1019.5, 1020.0, ...LAYER_DENSITIES];
-export const THIN_LAYER_SALINITIES = [33.0, 33.5, ...LAYER_SALINITIES];
-export const THIN_LAYER_BOTTOMS = [60, 62, ...LAYER_BOTTOMS];
-export const THIN_LAYER_CLASSES = { densities: THIN_LAYER_DENSITIES, salinities: THIN_LAYER_SALINITIES, bottoms: THIN_LAYER_BOTTOMS };
 /*
  * The interior classes of saved oceans that carry no list of their own,
  * told apart by their layer count: the seven of the page's saved runs,
@@ -895,10 +887,10 @@ export function createOcean(mesh, {
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
-  momentumDepth = 50, carryMomentum = false, refillRate = 0, refillFloor = 5, shearEntrainment = 0,
-  ekmanDepth = 0, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 0, langmuir = 0, retreatEkman = 0,
+  momentumDepth = 50, carryMomentum = true, refillRate = 0.00027778, refillFloor = 5, shearEntrainment = 0.65,
+  ekmanDepth = 0.4, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 2.5, langmuir = 2, retreatEkman = 0.7,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
-  eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = null,
+  eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, buffers = null, climatology = null,
 } = {}) {
   const {
