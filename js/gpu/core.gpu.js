@@ -16,6 +16,7 @@ import { GRAVITY_WAVES, gravityWaveSpectrum, gravityWaveSums, gravityWaveColumns
 export { PHYSICS_PASSES };
 
 const MAX_EDGES = 6, MAX_EDGES_ON_EDGE = 10, WORKGROUP = 64, RING_SLOTS = 16384, MAXIMUM_SURFACE_PRESSURE = 110000;
+const ELEMENTS_PER_THREAD = { advance: 2, combine: 2, dissipationClear: 8 };
 
 /*
  * The hydrostatic sigma-coordinate core of sigmaCore.module.js on the
@@ -458,13 +459,13 @@ const KERNELS = {
     uAbove = u; u = uBelow; upperFlow = lowerFlow;
   }
 }`,
-  advance: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= ${'S_TOTAL'}) { return; }
-  OUT[n] = IN[n] + P[0] * D[n];
+  advance: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+  let stride = i32(groups.x * groups.y) * ${WORKGROUP};
+  for (var n = i32(id.x); n < ${'S_TOTAL'}; n += stride) { OUT[n] = IN[n] + P[0] * D[n]; }
 }`,
-  combine: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= ${'S_TOTAL'}) { return; }
-  IN[n] += P[0] * (OUT[n] + 2.0 * D[n] + 2.0 * MF[n] + LV[n]);
+  combine: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+  let stride = i32(groups.x * groups.y) * ${WORKGROUP};
+  for (var n = i32(id.x); n < ${'S_TOTAL'}; n += stride) { IN[n] += P[0] * (OUT[n] + 2.0 * D[n] + 2.0 * MF[n] + LV[n]); }
 }`,
   lapScalar1: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
@@ -715,9 +716,9 @@ const GW_SHARE = array<f32, GW_LID>(GW_LID_SHARES);
     IN[S_TH + n] += 0.25 * sum / area / (CP * D[D_EXM + n]);
   }
 }`,
-  dissipationClear: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-  let n = i32(id.x); if (n >= K * E) { return; }
-  D[D_DISS + n] = 0.0;
+  dissipationClear: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+  let stride = i32(groups.x * groups.y) * ${WORKGROUP};
+  for (var n = i32(id.x); n < K * E; n += stride) { D[D_DISS + n] = 0.0; }
 }`,
 };
 
@@ -927,7 +928,7 @@ export async function createGpuCore(mesh, {
   function dispatch(pass, name, bindGroup, count) {
     pass.setPipeline(kernels[name]);
     pass.setBindGroup(0, bindGroup);
-    const groups = Math.ceil(count / WORKGROUP);
+    const groups = Math.ceil(count / (WORKGROUP * (ELEMENTS_PER_THREAD[name] ?? 1)));
     pass.dispatchWorkgroups(Math.min(groups, 65535), Math.ceil(groups / 65535));
   }
 

@@ -527,11 +527,13 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
   IN[qOff(heatHolder) + i] += settle(IN[qOff(heatHolder) + i], owedQ);
   IN[wOff(saltHolder) + i] += settle(IN[wOff(saltHolder) + i], owedW);
 }`,
-    oAdvance: `${K}  let n = ${idx}; if (n >= OSTOTAL) { return; }
-  OUT[n] = IN[n] + P[0] * OD[n];
+    oAdvance: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+  let stride = i32(groups.x * groups.y) * ${WORKGROUP};
+  for (var n = ${idx}; n < OSTOTAL; n += stride) { OUT[n] = IN[n] + P[0] * OD[n]; }
 }`,
-    oCombine: `${K}  let n = ${idx}; if (n >= OSTOTAL) { return; }
-  IN[n] += P[0] * (OUT[n] + 2.0 * OD[n] + 2.0 * PH[n] + S[n]);
+    oCombine: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+  let stride = i32(groups.x * groups.y) * ${WORKGROUP};
+  for (var n = ${idx}; n < OSTOTAL; n += stride) { IN[n] += P[0] * (OUT[n] + 2.0 * OD[n] + 2.0 * PH[n] + S[n]); }
 }`,
     oBarotropicSetup: `${K}  let n = ${idx};
   if (n < C) { OD[B_BCUR + n] = OD[O_ETA + n]; }
@@ -559,43 +561,39 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
      * calls to the params buffer all land before any dispatch actually
      * runs on the device, so a dispatch sequence that needs a different
      * parameter per step must either resubmit between them or, as here,
-     * bake the varying offsets into the shader at build time.
+     * bake the varying offsets into the shader at build time. Each stage
+     * reads its trial state across neighbors but writes only its own
+     * cell and edge, so the trial alternates between two blocks and no
+     * stage writes the block it reads.
      */
     ...Object.fromEntries([1, 2, 3, 4].map((stage) => {
-      const inBase = stage === 1 ? 'B_BCUR' : 'B_BTRIAL';
-      const outBase = `B_BK${stage}`;
-      return [`oBarotropicTendency${stage}`, `${K}  let n = ${idx};
+      const inBase = ['B_BCUR', 'B_BTRIALA', 'B_BTRIALB', 'B_BTRIALA'][stage - 1];
+      const finish = (m) => (stage < 4 ? `OD[B_BK${stage} + ${m}] = t;
+    OD[${stage === 2 ? 'B_BTRIALB' : 'B_BTRIALA'} + ${m}] = OD[B_BCUR + ${m}] + ${stage === 3 ? 'P[1]' : 'P[0]'} * t;` : `let next = OD[B_BCUR + ${m}] + P[2] * (OD[B_BK1 + ${m}] + 2.0 * OD[B_BK2 + ${m}] + 2.0 * OD[B_BK3 + ${m}] + t);
+    OD[B_BCUR + ${m}] = next;
+    OD[B_BAVG + ${m}] += next * P[3];`);
+      return [`oBarotropicStage${stage}`, `${K}  let n = ${idx};
   if (n < C) {
     let i = n;
     var sum = 0.0;
     for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; sum += f32(MI[ESC + MAXE * i + m]) * OD[${inBase} + C + e] * MF[F_DV + e]; }
-    OD[${outBase} + i] = select(0.0, -(sum / MF[F_AREA + i]), OD[O_CMASK + i] > 0.5);
+    let t = select(0.0, -(sum / MF[F_AREA + i]), OD[O_CMASK + i] > 0.5);
+    ${finish('i')}
   }
   if (n < E) {
     let e = n;
-    if (OD[O_EMASK + e] < 0.5) { OD[${outBase} + C + e] = 0.0; } else {
+    var t = 0.0;
+    if (OD[O_EMASK + e] >= 0.5) {
       let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
       let gradEtaB = (OD[${inBase} + b] - OD[${inBase} + a]) / MF[F_DC + e];
       var cor = 0.0;
       for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; let other = MI[EOE + slot]; cor += MF[F_PVW + slot] * OD[${inBase} + C + other] * 0.5 * (OD[O_FEDGE + e] + OD[O_FEDGE + other]); }
-      OD[${outBase} + C + e] = -OGRAV * OD[O_DEPTHEDGE + e] * gradEtaB + cor / MF[F_DC + e] + OD[O_SLOW + e];
+      t = -OGRAV * OD[O_DEPTHEDGE + e] * gradEtaB + cor / MF[F_DC + e] + OD[O_SLOW + e];
     }
+    ${finish('C + e')}
   }
 }`];
     })),
-    ...Object.fromEntries([1, 2, 3].map((stage) => {
-      const stageBase = `B_BK${stage}`;
-      const factorSlot = stage === 3 ? 'P[1]' : 'P[0]';
-      return [`oBarotropicCombine${stage}`, `${K}  let n = ${idx}; if (n >= C + E) { return; }
-  OD[B_BTRIAL + n] = OD[B_BCUR + n] + ${factorSlot} * OD[${stageBase} + n];
-}`];
-    })),
-    oBarotropicFinalCombine: `${K}  let n = ${idx}; if (n >= C + E) { return; }
-  OD[B_BCUR + n] += P[2] * (OD[B_BK1 + n] + 2.0 * OD[B_BK2 + n] + 2.0 * OD[B_BK3 + n] + OD[B_BK4 + n]);
-}`,
-    oBarotropicAccumulate: `${K}  let n = ${idx}; if (n >= C + E) { return; }
-  OD[B_BAVG + n] += OD[B_BCUR + n] * P[3];
-}`,
     oRescale: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
   var sum = 0.0; var dh = 0.0; var dQ = 0.0; var dW = 0.0;
@@ -884,10 +882,9 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ['EDDYK', E], ['TEDGE', 3 * E], ['DEEPEST', E],
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
-  // array (see oceanKernels' barotropic tendency/combine kernels), so their
-  // offsets must continue on from OD's own sections rather than starting a
-  // second, colliding index space at 0.
-  const B = seq([['BCUR', C + E], ['BK1', C + E], ['BK2', C + E], ['BK3', C + E], ['BK4', C + E], ['BTRIAL', C + E], ['BAVG', C + E]]);
+  // array, so their offsets must continue on from OD's own sections rather
+  // than starting a second, colliding index space at 0.
+  const B = seq([['BCUR', C + E], ['BK1', C + E], ['BK2', C + E], ['BK3', C + E], ['BTRIALA', C + E], ['BTRIALB', C + E], ['BAVG', C + E]]);
   const bTotal = B.total;
   for (const k of Object.keys(B)) if (k !== 'total') B[k] += OD.total;
   B.total = bTotal;
@@ -998,7 +995,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   }
   function advanceState(next, stage, factor) {
     setParams([factor]);
-    compute((pass) => dispatch(pass, 'oAdvance', group(ob.S, next, stage), OS.total));
+    compute((pass) => dispatch(pass, 'oAdvance', group(ob.S, next, stage), Math.ceil(OS.total / 4)));
   }
 
   let relaxRate = 1 / 3600, stepDt = 3600;
@@ -1014,17 +1011,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     // P0=dtb/2 (stage1,2 trial factor), P1=dtb (stage3 trial factor), P2=dtb/6 (final combine), P3=1/M (average accumulation).
     setParams([dtb / 2, dtb, dtb / 6, 1 / M]);
     compute((pass) => {
-      for (let m = 0; m < M; m++) {
-        dispatch(pass, 'oBarotropicTendency1', gAny, Math.max(C, E));
-        dispatch(pass, 'oBarotropicCombine1', gAny, C + E);
-        dispatch(pass, 'oBarotropicTendency2', gAny, Math.max(C, E));
-        dispatch(pass, 'oBarotropicCombine2', gAny, C + E);
-        dispatch(pass, 'oBarotropicTendency3', gAny, Math.max(C, E));
-        dispatch(pass, 'oBarotropicCombine3', gAny, C + E);
-        dispatch(pass, 'oBarotropicTendency4', gAny, Math.max(C, E));
-        dispatch(pass, 'oBarotropicFinalCombine', gAny, C + E);
-        dispatch(pass, 'oBarotropicAccumulate', gAny, C + E);
-      }
+      for (let m = 0; m < M; m++) for (let stage = 1; stage <= 4; stage++) dispatch(pass, `oBarotropicStage${stage}`, gAny, Math.max(C, E));
     });
   }
 
@@ -1038,7 +1025,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     tendency(ob.T, ob.K3); advanceState(ob.T, ob.K3, dt);
     tendency(ob.T, ob.K4);
     setParams([dt / 6]);
-    compute((pass) => dispatch(pass, 'oCombine', group(ob.S, ob.K1, ob.K2, ob.K3, ob.K4), OS.total));
+    compute((pass) => dispatch(pass, 'oCombine', group(ob.S, ob.K1, ob.K2, ob.K3, ob.K4), Math.ceil(OS.total / 2)));
   }
   const rescalePass = (pass, g) => dispatch(pass, 'oRescale', g, C);
   const shiftPass = (pass, g) => { dispatch(pass, 'oEdgeThickness', g, E); dispatch(pass, 'oVelocityShiftClamp', g, E); };
