@@ -89,7 +89,7 @@ fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
   ].filter((line) => line).map((line) => `${line}\n`).join('');
   const momentumReach = o.ekmanDepth > 0 ? 'hm' : 'MOMDEPTH', stressFloor = o.stressThickness !== PV_FLOOR ? 'STRESSTHICK' : 'PVFLOOR';
   const unboundedRetreat = o.retreatStirring > 0 || o.langmuir > 0
-    ? `${o.retreatStirring > 0 ? 'RETREATSTIR' : '2.0 * stir'} * ${o.langmuir > 0 ? 'langmuirFactor(sqrt(tau / RHO0), began)' : '1.0'} * ustar3 / -loss`
+    ? `${o.retreatStirring > 0 ? 'RETREATSTIR' : '2.0 * stir'} * ${o.langmuir > 0 ? '(1.0 + (langmuirFactor(sqrt(tau / RHO0), began) - 1.0) * openSea)' : '1.0'} * ustar3 / -loss`
     : '2.0 * stir * ustar3 / -loss';
   const retreatTerm = o.retreatEkman > 0 ? `min(${unboundedRetreat}, select(1.0e30, RETREATEKMAN * sqrt(tau / RHO0) / fCell, fCell > 0.0))` : unboundedRetreat;
   const offsetLines = Object.entries(OD).filter(([k]) => k !== 'total').map(([k, v]) => `const O_${k}: i32 = ${v};`).join('\n');
@@ -807,7 +807,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
   wv = wv / MF[F_AREA + i];
   let tau = length(wv);
   let ustar3 = pow(tau / RHO0, 1.5); let stir = STIRRING * exp(-IN[hOff(0) + i] / STIRDEPTH);
-${o.langmuir > 0 ? '  let began = IN[hOff(0) + i];\n' : ''}${o.retreatEkman > 0 ? '  let fCell = abs(TWOOMEGA * sin(MF[F_LAT + i]));\n' : ''}  let reach = OD[O_REACH + i];
+${o.langmuir > 0 ? '  let began = IN[hOff(0) + i];\n  let openSea = 1.0 - select(0.0, select(1.0, OD[O_SURFCONC + i], OD[O_SURFCONC + i] > 0.0), OD[O_SURFICE + i] > 0.0);\n' : ''}${o.retreatEkman > 0 ? '  let fCell = abs(TWOOMEGA * sin(MF[F_LAT + i]));\n' : ''}  let reach = OD[O_REACH + i];
   let deepest = min(MAXMIXED, reach);
   let s0 = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
   let salted = s0 * OD[O_FRESH + i] / 1000.0 + (s0 - ICESAL) * (iceVolume(i) - OD[O_PREVVOL + i]) * ICEDENS / 1000.0;

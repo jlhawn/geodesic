@@ -590,6 +590,37 @@ test('under retreatEkman the heated mixed layer retreats toward no more than ret
   console.log(`the Ekman bound ${c}u*/|f| under ${net} W/m²: ${lines.join('; ')}`);
 });
 
+test('under langmuir the Langmuir factor\'s excess over 1 scales with the open water\'s share of the cell, so a melting layer under full pack ice retreats toward C_r·u*³/(−B) and one under partial cover toward C_r·(1 + (ε − 1)(1 − a))·u*³/(−B)', () => {
+  const dt = 1350, cap = 2;
+  const stress = zonalWindOnEdges(mesh, (lat) => 0.05 + 0.2 * Math.cos(lat) ** 4);
+  const ice = Float64Array.from({ length: C }, (_, i) => (Math.abs(mesh.latCell[i]) > 40 * DEG ? 1 : 0));
+  const concentration = Float64Array.from({ length: C }, (_, i) => (i % 3 === 0 ? 0 : 0.1 + 0.8 * (i % 7) / 6));
+  const run = (options) => {
+    const ocean = createOcean(mesh, { ...UNIFORM, mixedDepth: 30, minimumThickness: 5, shallowestMixedDepth: 5, buoyancyMemory: 0, retreatStirring: 2.5, ...options });
+    const surfaceT = new Float64Array(C).fill(278);
+    ocean.initialize(surfaceT, ice, { concentration });
+    for (let i = 0; i < C; i++) if (!ice[i]) surfaceT[i] += dt * 150 / ocean.capacity[i];
+    ocean.setStress(stress, ice, concentration);
+    ocean.readSurface(surfaceT, ice, concentration);
+    const began = Float64Array.from(ocean.h.subarray(0, C));
+    ocean.mixedLayer(dt);
+    return { L: Float64Array.from(ocean.retreatDepth), began, tauCell: cellVector(mesh, ocean.stress) };
+  };
+  const plain = run({}), waved = run({ langmuir: cap });
+  let full = 0, partial = 0, open = 0, damped = 0, worst = 0;
+  for (let i = 0; i < C; i++) {
+    if (!(plain.L[i] > 0)) continue;
+    const cover = ice[i] > 0 ? (concentration[i] > 0 ? concentration[i] : 1) : 0, t = plain.tauCell;
+    const epsilon = langmuirFactor(Math.sqrt(Math.hypot(t[3 * i], t[3 * i + 1], t[3 * i + 2]) / RHO), plain.began[i], cap);
+    worst = Math.max(worst, Math.abs(waved.L[i] / plain.L[i] - (1 + (epsilon - 1) * (1 - cover))));
+    if (cover === 1) full++; else if (cover > 0) partial++; else open++;
+    if (cover > 0 && epsilon > 1.05) damped++;
+  }
+  console.log(`${full} heated cells under full ice, ${partial} under partial cover and ${open} in open water: the Langmuir retreat over the plain one within ${worst.toExponential(2)} of 1 + (ε − 1)(1 − a), ${damped} iced cells with ε above 1.05`);
+  assert.ok(full > 30 && partial > 50 && open > 100 && damped > 50, `${full} full, ${partial} partial, ${open} open, ${damped} damped`);
+  assert.ok(worst < 1e-12, `the Langmuir factor is ${worst} off its open-water share`);
+});
+
 /*
  * CVMix's cvmix_kpp_ustokes_SL_model, the surface-layer Stokes drift of
  * the theory wave, written out with erfc from its Maclaurin series.

@@ -577,6 +577,34 @@ test('under the mixing package the GPU ocean takes the wind over its Ekman depth
   console.log(`under 30 W/m² ${binding} heated cells retreat in one step to the Ekman bound 0.7u*/|f| at least a third below C_r·ε·u*³/(−B), which the bound frees of the engines' buoyancies, the GPU's depths within ${boundGap.toExponential(2)} of the CPU's`);
   assert.ok(binding > 10 && boundGap < 1e-5, `${binding} cells at the bound, the engines ${boundGap} apart`);
 
+  const iceA = Float64Array.from({ length: C }, (_, i) => (Math.abs(mesh.latCell[i]) > 50 * Math.PI / 180 ? 1 : 0)), iceB = Float64Array.from(iceA, (x) => (x > 0 ? x - 1e-3 : 0));
+  const cover = Float64Array.from({ length: C }, (_, i) => (iceA[i] > 0 ? 0.1 + 0.8 * (i % 9) / 8 : 0));
+  const meltOn = async (options) => {
+    const melting = { ...options, mixedDepth: 60, detrainmentTime: dt, buoyancyMemory: 0 };
+    const deep = cpuOcean(melting);
+    deep.initialize(Float64Array.from(surfaceT0), iceA, { concentration: cover });
+    const deepState = deep.serialize(), cpu = cpuOcean(melting);
+    cpu.load(deepState, Float64Array.from(surfaceT0), iceA, cover);
+    cpu.advance(Float64Array.from(surfaceT0), iceB, flux, stress, dt, cover);
+    const model = await createGpuModel(new Grid(8), { topography, ocean: melting }), gpu = model.oceanEngine;
+    await gpu.upload(deepState, Float64Array.from(surfaceT0), iceA, cover);
+    await gpu.advance(Float64Array.from(surfaceT0), iceB, stress, dt, cover);
+    const { h } = await gpu.download();
+    model.destroy();
+    return { L: Float64Array.from(cpu.retreatDepth), cpu: Float64Array.from(cpu.h.subarray(0, C)), gpu: h };
+  };
+  const meltPlain = await meltOn({ ...packaged, langmuir: 0 }), meltWaved = await meltOn(packaged);
+  let melting = 0, iceGap = 0, waveless = Infinity;
+  for (let i = 0; i < C; i++) {
+    const landed = (r) => r.L[i] > 10.5 && r.L[i] < 59.5 && Math.abs(r.cpu[i] - r.L[i]) < 1e-9 * r.L[i];
+    if (!(iceA[i] > 0) || !landed(meltPlain) || !landed(meltWaved) || !(meltWaved.L[i] > 1.02 * meltPlain.L[i])) continue;
+    melting++;
+    iceGap = Math.max(iceGap, Math.abs((meltWaved.gpu[i] / meltPlain.gpu[i]) / (meltWaved.L[i] / meltPlain.L[i]) - 1));
+    waveless = Math.min(waveless, 1 - cover[i]);
+  }
+  console.log(`under ice covers of 0.1 to 0.9 melting 1 mm in a step, ${melting} cells retreat to a Langmuir-enhanced depth on both engines, the GPU's enhancement within ${iceGap.toExponential(2)} of the CPU's open-water share of it`);
+  assert.ok(melting > 5 && iceGap < 1e-5, `${melting} melting cells, the engines' enhancements ${iceGap} apart`);
+
   const seeded = cpuOcean(packaged);
   seeded.initialize(Float64Array.from(surfaceT0), ice);
   for (let e = 0; e < E; e++) {

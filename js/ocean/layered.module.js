@@ -88,7 +88,8 @@ import { profileAt } from './climatology.module.js';
  * C_r ε u*³/(−B) while it gains buoyancy, and what lies beyond its
  * neighbors' reach. C_r is the entrainment's 2m, or `retreatStirring`
  * without the fading with depth; ε is 1 or, with `langmuir` as its cap,
- * the Langmuir factor at the depth the step began with. With
+ * the Langmuir factor at the depth the step began with, its excess over 1
+ * scaled by the cell's open water, as pack ice damps the waves. With
  * `retreatEkman` c that depth is at most c u* / |f|, the Ekman bound of
  * Large, McWilliams and Doney (1994), and unbounded where f is 0.
  * `neutralSnap` returns everything below
@@ -941,7 +942,7 @@ export function createOcean(mesh, {
   if (!adopting) capacity.fill(rhoCp * mixedDepth);
   const transmission = shared('transmission', C), penetrated = shared('penetrated', C), column = new Float64Array(L), shares = new Float64Array(L);
   const stress = shared('stress', E), fresh = new Float64Array(C);
-  const iced = new Uint8Array(C);
+  const iced = new Uint8Array(C), iceCover = langmuir > 0 ? new Float64Array(C) : null;
   const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E);
   const stressDepth = shared('stressDepth', E), stressLayer = shared('stressLayer', E), stressFraction = shared('stressFraction', E);
   const windDepth = ekmanDepth > 0 ? shared('windDepth', E) : null;
@@ -1495,7 +1496,7 @@ export function createOcean(mesh, {
       retreatDepth[i] = 0;
       if (buoyancyLoss[i] < -1e-9) {
         retreatDepth[i] = retreatStirring > 0 || langmuir > 0
-          ? (retreatStirring > 0 ? retreatStirring : 2 * stir) * (langmuir > 0 ? langmuirFactor(Math.sqrt(tau / rho0), began, langmuir) : 1) * ustar3 / -buoyancyLoss[i]
+          ? (retreatStirring > 0 ? retreatStirring : 2 * stir) * (langmuir > 0 ? 1 + (langmuirFactor(Math.sqrt(tau / rho0), began, langmuir) - 1) * (1 - iceCover[i]) : 1) * ustar3 / -buoyancyLoss[i]
           : 2 * stir * ustar3 / -buoyancyLoss[i];
         if (retreatEkman > 0 && fCell[i] !== 0) retreatDepth[i] = Math.min(retreatDepth[i], retreatEkman * Math.sqrt(tau / rho0) / Math.abs(fCell[i]));
         const monin = Math.max(shallowestMixedDepth, retreatDepth[i], hold);
@@ -1572,9 +1573,10 @@ export function createOcean(mesh, {
   function measureIce(ice, concentration, out) {
     for (let i = 0; i < C; i++) out[i] = coverOf(ice, concentration, i) * ice[i];
   }
-  function readSurface(surfaceT, ice) {
+  function readSurface(surfaceT, ice, concentration = seaCover) {
     for (let i = 0; i < C; i++) {
       iced[i] = ice[i] > 0 ? 1 : 0;
+      if (iceCover) iceCover[i] = coverOf(ice, concentration, i);
       T0[i] = iced[i] ? FREEZING_POINT : surfaceT[i];
       surfaceIn[i] = T0[i];
       Q[i] = h[i] * T0[i];
@@ -1636,7 +1638,7 @@ export function createOcean(mesh, {
     if (++counter % everySteps !== 0) return false;
     if (!initialised) initialize(surfaceT, ice, { concentration });
     const dtOcean = everySteps * dt;
-    readSurface(surfaceT, ice);
+    readSurface(surfaceT, ice, concentration);
     measureIce(ice, concentration, iceVolume);
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
     step(dtOcean);
