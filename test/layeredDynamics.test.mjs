@@ -5,7 +5,7 @@ import { buildMesh } from '../js/mesh.module.js';
 import { cellVector, laplacianVelocity } from '../js/dynamics/operators.module.js';
 import { createOcean, closureVelocity, closureAdjoint, THIN, EPS, PV_FLOOR } from '../js/ocean/layered.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
-import { seawaterDensity } from '../js/ocean/seawater.module.js';
+import { seawaterDensity, labelTemperature } from '../js/ocean/seawater.module.js';
 import { RHO_AIR, DRAG, RHO, DEG, mesh, C, E, zonalWindOnEdges, totalHeatSalt, northwardMixedTransport, slowOcean, deepen } from './helpers/layered.mjs';
 
 test('the ocean at rest under zero stress on a bumpy bottom stays at rest and conserves heat, salt and surface temperature', () => {
@@ -292,7 +292,7 @@ test('the interfacial drag keeps each column\'s momentum under a 10 m mixed laye
       return ocean;
     };
     const du0 = build({ interfacialDrag: 0 }).stages[0][1];
-    for (const options of [{ interfacialDrag: 5e-5 }, { shearMixing: true, interfacialDrag: 5e-5 }]) {
+    for (const options of [{ interfacialDrag: 5e-5 }, { shearMixing: true, interfacialDrag: 5e-5 }, { blockDrag: true, interfacialDrag: 5e-5 }]) {
       const dragging = build(options), L = dragging.layers;
       const hEdge = new Float64Array(dragging.shared.hEdge), du = dragging.stages[0][1];
       let worst = 0, largest = 0, thin = 0;
@@ -441,6 +441,181 @@ test('under interiorShearMixing the drag between two interior classes follows th
   assert.ok(quiet.length > 1000 && Math.abs(at(quiet, 0) - 1) < 1e-9 && Math.abs(at(quiet, 1) - 1) < 1e-9);
   assert.ok(errors.length > 100 && at(errors, 0.5) < 0.05, `median ${at(errors, 0.5)}`);
   assert.ok(bases > 100 && base === 0 && unchanged === pairs, `mixed-layer bases off interfacialDrag by ${base}; ${unchanged} of ${pairs} interior interfaces at interfacialDrag without the option`);
+});
+
+const solidBody = (e) => -mesh.xEdge[3 * e + 1] * mesh.nEdge[3 * e] + mesh.xEdge[3 * e] * mesh.nEdge[3 * e + 1];
+const eastward = zonalWindOnEdges(mesh, () => 1);
+
+function dragColumn(ocean, { h0, up, hUp, down, lighter = 0.33 }) {
+  const L = ocean.layers, rho = ocean.densities;
+  for (let i = 0; i < C; i++) {
+    const was = [];
+    for (let k = 0; k < L; k++) was.push([ocean.Q[k * C + i] / ocean.h[k * C + i], ocean.W[k * C + i] / ocean.h[k * C + i]]);
+    for (let k = 0; k < L; k++) {
+      const a = k * C + i, thickness = k === 0 ? h0 : k === up ? hUp : k === down ? ocean.D[i] - h0 - hUp - (L - 3) * EPS : EPS;
+      const [T, S] = k === 0 ? [labelTemperature(rho[up] - lighter, was[0][1]), was[0][1]] : was[k];
+      ocean.h[a] = thickness; ocean.Q[a] = thickness * T; ocean.W[a] = thickness * S;
+    }
+  }
+}
+
+test('under blockDrag the drag is interfacialDrag where the interface lies within the Ekman block, the deeper of the wind depth and the mixed layer, and the unfloored Pacanowski–Philander viscosity below it, the mixed layer\'s base included', () => {
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C);
+  const stress = zonalWindOnEdges(mesh, (lat) => 0.1 * (0.05 + 0.95 * Math.cos(lat) ** 2));
+  const build = (options) => {
+    const ocean = createOcean(mesh, { everySteps: 1, mixedDepth: 20, ...options });
+    ocean.initialize(Float64Array.from(surfaceT), ice);
+    ocean.setStress(stress, ice);
+    for (let n = 0; n < ocean.u.length; n++) ocean.u[n] = (Math.floor(n / E) % 2 ? 0.2 : 0) * solidBody(n % E);
+    ocean.tendency(ocean.state, ocean.stages[0]);
+    return ocean;
+  };
+  const block = build({ blockDrag: true }), twin = build({ shearMixing: true, interfacialDrag: 0 });
+  const L = block.layers, hEdge = new Float64Array(block.shared.hEdge);
+  const count = { baseInside: 0, baseBelow: 0, interiorInside: 0, interiorBelow: 0 };
+  let differs = 0, wrong = 0, shallow = Infinity, deep = 0;
+  for (let e = 0; e < E; e++) {
+    if (!block.edgeOcean[e]) continue;
+    const present = [0];
+    for (let k = 1; k < L; k++) if (hEdge[k * E + e] >= THIN) present.push(k);
+    const reach = Math.max(block.windDepth[e], hEdge[e]);
+    shallow = Math.min(shallow, block.windDepth[e]); deep = Math.max(deep, block.windDepth[e]);
+    for (let m = 0; m + 1 < present.length; m++) {
+      const up = present[m], down = present[m + 1];
+      let depth = 0;
+      for (let k = 0; k < down; k++) depth += hEdge[k * E + e];
+      const inside = depth < reach, rate = block.interfaceRate(e, up, down), viscous = twin.interfaceRate(e, up, down);
+      count[`${up === 0 ? 'base' : 'interior'}${inside ? 'Inside' : 'Below'}`]++;
+      if (inside) { if (rate !== 2e-4) wrong++; if (viscous !== 2e-4) differs++; } else if (rate !== viscous || !(rate < 2e-4)) wrong++;
+    }
+  }
+  console.log(`wind depths ${shallow.toFixed(1)}–${deep.toFixed(1)} m over a 20 m mixed layer: ${JSON.stringify(count)} interfaces; ${differs} of those within the block would differ under the viscosity alone`);
+  assert.ok(shallow < 20 && deep > 49, 'the wind depth straddles the mixed layer');
+  for (const [name, n] of Object.entries(count)) assert.ok(n > 100, `${name}: ${n} interfaces`);
+  assert.ok(differs > 100, 'the block\'s drag is not the viscosity\'s');
+  assert.equal(wrong, 0, `${wrong} interfaces off interfacialDrag within the block or off the unfloored viscosity below it`);
+});
+
+test('under blockDrag the viscosity beneath the Ekman block takes the design\'s reference values over 50 m, from the Richardson number of the full velocity difference, where interfacialDrag over the same distance is the 10⁻² m²/s of a wind-mixed layer', () => {
+  const surfaceT = new Float64Array(C).fill(300), ice = new Float64Array(C);
+  const lighter = 0.33, g = 9.81, rho0 = 1025, dz = 50, buoyancy = g * lighter / rho0;
+  const ocean = createOcean(mesh, { everySteps: 1, blockDrag: true, bathymetry: new Float64Array(C).fill(180) });
+  ocean.initialize(Float64Array.from(surfaceT), ice);
+  dragColumn(ocean, { h0: 60, up: 8, hUp: 40, down: 12, lighter });
+  ocean.setStress(zonalWindOnEdges(mesh, () => 0.05), ice);
+  ocean.tendency(ocean.state, ocean.stages[0]);
+  const edges = [];
+  for (let e = 0; e < E; e++) if (ocean.edgeOcean[e] && Math.abs(mesh.latEdge[e]) < 20 * DEG) edges.push(e);
+  const tangent = (field, e) => {
+    let sum = 0;
+    for (let s = 0; s < mesh.nEdgesOnEdge[e]; s++) { const o = mesh.edgesOnEdge[mesh.maxEdgesOnEdge * e + s]; sum += mesh.weightsOnEdge[mesh.maxEdgesOnEdge * e + s] * mesh.dvEdge[o] * field[o]; }
+    return sum / mesh.dcEdge[e];
+  };
+  const shear = edges.map((e) => eastward[e] ** 2 + tangent(eastward, e) ** 2).sort((p, q) => p - q), typical = Math.sqrt(shear[Math.floor(shear.length / 2)]);
+  const reference = [[0.1, 9e-5], [0.25, 4.2e-5], [0.5, 1.8e-5], [1, 7.6e-6], [5, 2.3e-6]], lines = [];
+  for (const [target, expected] of reference) {
+    const speed = Math.sqrt(buoyancy * dz / target) / typical;
+    ocean.u.fill(0);
+    for (let e = 0; e < E; e++) ocean.u[8 * E + e] = speed * eastward[e];
+    const near = [];
+    for (const e of edges) {
+      const richardson = buoyancy * dz / (speed * speed * (eastward[e] ** 2 + tangent(eastward, e) ** 2) + 1e-12);
+      const rate = ocean.interfaceRate(e, 0, 8), viscosity = (1e-2 / (1 + 5 * richardson) ** 2 + 1e-4) / dz;
+      assert.ok(Math.abs(rate / viscosity - 1) < 1e-9, `Ri ${richardson}: r ${rate} against ${viscosity}`);
+      if (Math.abs(richardson / target - 1) < 0.02) near.push(rate);
+    }
+    near.sort((p, q) => p - q);
+    const median = near[Math.floor(near.length / 2)];
+    lines.push(`Ri ${target}: ${median.toExponential(2)} m/s over ${near.length} edges`);
+    assert.ok(near.length >= 5 && Math.abs(median / expected - 1) < 0.05, `Ri ${target}: r ${median} against the design's ${expected} (${near.length} edges)`);
+  }
+  console.log(`r over 50 m at the design's Richardson numbers: ${lines.join('; ')}`);
+  assert.ok(Math.abs(2e-4 * dz / (1e-2 + 1e-4) - 1) < 0.01, 'interfacialDrag over 50 m is the viscosity at Ri 0');
+});
+
+test('blockDrag excludes shearMixing and interiorShearMixing, and with an Ekman block deeper than the ocean it leaves the constant drag\'s run unchanged to the bit', () => {
+  assert.throws(() => createOcean(mesh, { blockDrag: true, shearMixing: true }), /blockDrag/);
+  assert.throws(() => createOcean(mesh, { blockDrag: true, interiorShearMixing: true }), /blockDrag/);
+  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C), flux = new Float64Array(C);
+  const stress = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(3 * lat));
+  const run = (options) => {
+    const ocean = createOcean(mesh, { everySteps: 1, ekmanDepth: 0, momentumDepth: 6000, ...options });
+    ocean.initialize(Float64Array.from(surfaceT), ice);
+    for (let n = 0; n < 6; n++) ocean.advance(Float64Array.from(surfaceT), ice, flux, stress, 1350);
+    return ocean;
+  };
+  const constant = run({}), block = run({ blockDrag: true });
+  for (const name of ['u', 'h', 'Q', 'W', 'eta']) assert.deepEqual(Array.from(block[name]), Array.from(constant[name]), name);
+  let top = 0;
+  for (const x of block.u) top = Math.max(top, Math.abs(x));
+  assert.ok(top > 0.01, `the run moved (${top} m/s)`);
+});
+
+test('under blockDrag the drag across the Ekman block\'s base steps from interfacialDrag to the Richardson-number viscosity as the mixed layer deepens through the wind depth', () => {
+  const surfaceT = new Float64Array(C).fill(300), ice = new Float64Array(C);
+  const stress = zonalWindOnEdges(mesh, () => 0.08);
+  const g = 9.81, rho0 = 1025, dz = 0.5 * (100 + 2 * EPS);
+  const rates = [];
+  for (const h0 of [20, 49.9, 50.1, 80]) {
+    const ocean = createOcean(mesh, { everySteps: 1, blockDrag: true, bathymetry: new Float64Array(C).fill(400) });
+    ocean.initialize(Float64Array.from(surfaceT), ice);
+    dragColumn(ocean, { h0, up: 8, hUp: 100, down: 12 });
+    ocean.setStress(stress, ice);
+    for (let e = 0; e < E; e++) { ocean.u[e] = -0.3 * eastward[e]; ocean.u[8 * E + e] = 0.4 * eastward[e]; }
+    ocean.tendency(ocean.state, ocean.stages[0]);
+    const hEdge = new Float64Array(ocean.shared.hEdge), seen = [];
+    for (let e = 0; e < E; e++) {
+      if (!ocean.edgeOcean[e] || Math.abs(mesh.latEdge[e]) > 20 * DEG || ocean.windDepth[e] !== 50) continue;
+      assert.ok(Math.abs(hEdge[e] - h0) < 1e-9 && hEdge[8 * E + e] === 100 && hEdge[9 * E + e] === EPS, `edge column ${hEdge[e]}, ${hEdge[8 * E + e]}, ${hEdge[9 * E + e]}`);
+      seen.push(ocean.interfaceRate(e, 0, 8));
+    }
+    rates.push([h0, seen]);
+  }
+  for (const [h0, seen] of rates) {
+    const inside = h0 < 50, uniform = seen.every((r) => r === 2e-4), viscous = seen.every((r) => r < 2e-4);
+    console.log(`mixed layer ${h0} m over the 50 m wind depth: ${seen.length} equatorial bases, r from ${Math.min(...seen).toExponential(2)} to ${Math.max(...seen).toExponential(2)} m/s`);
+    assert.ok(seen.length > 50 && (inside ? uniform : viscous), `h0 ${h0}: ${seen.slice(0, 3)}`);
+  }
+});
+
+test('under blockDrag the undercurrent slab sets free beneath the Ekman block: a 100 m slab between a 0.3 m/s westward current above and still water below, driven by 0.05 N/m² over 175 m, balances eastward at 0.7 m/s with the mixed layer\'s base under the block, and westward within it as under the constant drag', () => {
+  const surfaceT = new Float64Array(C).fill(300), ice = new Float64Array(C);
+  const stress = zonalWindOnEdges(mesh, () => 0.05);
+  const hSlab = 100, push = 0.05 / (1025 * 175), upper = -0.3;
+  const speeds = Array.from({ length: 111 }, (_, n) => -0.5 + 0.02 * n);
+  const balance = (options, h0) => {
+    const ocean = createOcean(mesh, { everySteps: 1, bathymetry: new Float64Array(C).fill(h0 + hSlab + 80), ...options });
+    ocean.initialize(Float64Array.from(surfaceT), ice);
+    dragColumn(ocean, { h0, up: 8, hUp: hSlab, down: 12, lighter: 0.33 });
+    ocean.setStress(stress, ice);
+    const edges = [];
+    for (let e = 0; e < E; e++) if (ocean.edgeOcean[e] && Math.abs(mesh.latEdge[e]) < 8 * DEG && Math.abs(eastward[e]) > 0.7 && ocean.windDepth[e] === 50) edges.push(e);
+    ocean.tendency(ocean.state, ocean.stages[0]);
+    const at = (speed) => {
+      for (let e = 0; e < E; e++) { ocean.u[e] = upper * eastward[e]; ocean.u[8 * E + e] = speed * eastward[e]; }
+      return edges.map((e) => {
+        const r1 = ocean.interfaceRate(e, 0, 8), r2 = ocean.interfaceRate(e, 8, 12);
+        return { r1, r2, residual: push + (r1 * (upper - speed) - r2 * speed) / hSlab };
+      });
+    };
+    const roots = [];
+    let last = at(speeds[0]);
+    for (let n = 1; n < speeds.length; n++) {
+      const now = at(speeds[n]);
+      for (let m = 0; m < edges.length; m++) if (last[m].residual > 0 && now[m].residual <= 0) roots.push({ speed: speeds[n - 1] + 0.02 * last[m].residual / (last[m].residual - now[m].residual), r1: now[m].r1, r2: now[m].r2 });
+      last = now;
+    }
+    roots.sort((p, q) => p.speed - q.speed);
+    return { roots, edges: edges.length, median: roots[Math.floor(roots.length / 2)] };
+  };
+  const control = balance({}, 60), under = balance({ blockDrag: true }, 60), within = balance({ blockDrag: true }, 40);
+  const show = (name, b) => console.log(`${name}: ${b.roots.length} of ${b.edges} equatorial edges balance, median ${b.median.speed.toFixed(3)} m/s at r ${b.median.r1.toExponential(2)} above and ${b.median.r2.toExponential(2)} below`);
+  show('constant drag', control); show('blockDrag, mixed layer 60 m', under); show('blockDrag, mixed layer 40 m', within);
+  const balanced = (hP, r1, r2) => (hP + r1 * upper) / (r1 + r2);
+  assert.ok(control.roots.length > 20 && control.median.speed > -0.095 && control.median.speed < -0.06, `the slab's balance at the constant 2e-4 m/s is ${control.median.speed} m/s`);
+  assert.ok(under.roots.length > 20 && under.median.speed > 0.3 && under.median.speed < 1, `the slab's balance beneath the block is ${under.median.speed} m/s`);
+  assert.ok(within.roots.length > 20 && within.median.speed < 0 && within.median.r1 === 2e-4, `within the block the slab stays coupled to the current above: ${within.median.speed} m/s at r ${within.median.r1}`);
+  for (const b of [control, under, within]) assert.ok(Math.abs(b.median.speed / balanced(push * hSlab, b.median.r1, b.median.r2) - 1) < 0.1, 'the balance is the slab formula');
 });
 
 test('closureVelocity gives the token edges beside a class a weighted share of the class\'s own flow, and the closure then pulls the class less toward the flow of the layer above them', () => {

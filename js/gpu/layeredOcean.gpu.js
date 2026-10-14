@@ -38,7 +38,7 @@ export const OCEAN_DEFAULTS = {
   minimumThickness: 50, shallowestMixedDepth: 50, stirringDepth: 100, maximumMixedDepth: 600, convectiveRate: 100 / 86400, neutralSnap: false, convectiveErosion: true, buoyancyMemory: 86400, mixedNeighbourRatio: 0, vorticityCentring: 0.5, stirring: 0.8, detrainmentTime: 86400, restoreTime: 2 * 86400, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917,
   momentumDepth: 50, carryMomentum: true, refillRate: 0.00027778, refillFloor: 5, shearEntrainment: 0.65,
   ekmanDepth: 0.4, momentumFloor: 10, stressThickness: PV_FLOOR, retreatStirring: 2.5, langmuir: 2, retreatEkman: RETREAT_EKMAN, retreatDaily: false, retreatLight: 0,
-  interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
+  interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: false, blockDrag: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200, ekmanBlock: false, upwellingSource: 0, penetration: 'IB',
   gustiness: 3,
 };
@@ -89,6 +89,32 @@ fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
     o.upwellingSource > 0 ? constLine('UPSRC', o.upwellingSource) : '',
     o.retreatLight > 0 ? `${constLine('RETREATLIGHT', o.retreatLight)}\nfn deposited(z: f32) -> f32 { return select(0.0, JER_R1 / JER_Z1 * exp(-z / JER_Z1) + JER_R2 / JER_Z2 * exp(-z / JER_Z2), z < PENDEPTH); }` : '',
   ].filter((line) => line).map((line) => `${line}\n`).join('');
+  const viscosityLines = `  let dz = max(THINO, 0.5 * (OD[O_HEDGE + up * E + e] + OD[O_HEDGE + down * E + e]));
+  let upper = select(RHO[up], 0.5 * (OD[O_RHOML + MI[COE + 2 * e]] + OD[O_RHOML + MI[COE + 2 * e + 1]]), up == 0);
+  let buoyancy = max(0.0, OGRAV * (RHO[down] - upper) / RHO0);
+  let du = IN[uOff(up) + e] - IN[uOff(down) + e]; let dv = tangentialU(up, e) - tangentialU(down, e);
+  let ri = buoyancy * dz / (du * du + dv * dv + 1e-12);
+  let nu = SHEARNU / ((1.0 + 5.0 * ri) * (1.0 + 5.0 * ri)) + BACKNU;
+`;
+  const rateFunction = o.blockDrag ? `fn depthTo(e: i32, first: i32, past: i32, start: f32) -> f32 {
+  var z = start;
+  for (var j = first; j < past; j++) { z += OD[O_HEDGE + j * E + e]; }
+  return z;
+}
+fn interfaceRate(e: i32, up: i32, down: i32, depth: f32, block: f32) -> f32 {
+  if (depth < block) { return RINT; }
+${viscosityLines}  return min(nu / dz, 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
+}
+` : `fn interfaceRate(e: i32, up: i32, down: i32) -> f32 {
+  let interior = up > 0 && INTSHEAR > 0.5;
+  if (SHEARMIX < 0.5 && !interior) { return RINT; }
+${viscosityLines}  return min(max(select(RINT, 0.0, interior), nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
+}
+`;
+  const blockTop = o.blockDrag ? `  let block = max(${o.ekmanDepth > 0 ? 'OD[O_HM + e]' : 'MOMDEPTH'}, OD[O_HEDGE + e]);\n  var zTop = 0.0;\n` : '';
+  const upperRate = o.blockDrag ? 'interfaceRate(e, above, k, zTop, block)' : 'interfaceRate(e, above, k)';
+  const lowerRate = o.blockDrag ? 'interfaceRate(e, k, below, depthTo(e, k + 1, below, zTop + hk), block)' : 'interfaceRate(e, k, below)';
+  const topStep = o.blockDrag ? '    zTop += hk;\n' : '';
   const momentumReach = o.ekmanDepth > 0 ? 'hm' : 'MOMDEPTH', stressFloor = o.stressThickness !== PV_FLOOR ? 'STRESSTHICK' : 'PVFLOOR';
   const retreatLoss = o.retreatDaily ? 'dayDrive' : 'loss';
   const unboundedRetreat = o.retreatStirring > 0 || o.langmuir > 0
@@ -499,18 +525,7 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
 }
 // Folding the k == 0 branch into the general one changes the drag's float32 rounding under Metal's fast math.
 fn dragThickness(k: i32, e: i32) -> f32 { return select(max(OD[O_HEDGE + k * E + e], THINO), max(OD[O_HEDGE + e], THINO), k == 0); }
-fn interfaceRate(e: i32, up: i32, down: i32) -> f32 {
-  let interior = up > 0 && INTSHEAR > 0.5;
-  if (SHEARMIX < 0.5 && !interior) { return RINT; }
-  let dz = max(THINO, 0.5 * (OD[O_HEDGE + up * E + e] + OD[O_HEDGE + down * E + e]));
-  let upper = select(RHO[up], 0.5 * (OD[O_RHOML + MI[COE + 2 * e]] + OD[O_RHOML + MI[COE + 2 * e + 1]]), up == 0);
-  let buoyancy = max(0.0, OGRAV * (RHO[down] - upper) / RHO0);
-  let du = IN[uOff(up) + e] - IN[uOff(down) + e]; let dv = tangentialU(up, e) - tangentialU(down, e);
-  let ri = buoyancy * dz / (du * du + dv * dv + 1e-12);
-  let nu = SHEARNU / ((1.0 + 5.0 * ri) * (1.0 + 5.0 * ri)) + BACKNU;
-  return min(max(select(RINT, 0.0, interior), nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
-}
-fn firstThickBelow(k: i32, lo: u32, hi: u32) -> i32 {
+${rateFunction}fn firstThickBelow(k: i32, lo: u32, hi: u32) -> i32 {
   let start = k + 1;
   if (start < 32) {
     let m = lo & (0xffffffffu << u32(start));
@@ -532,7 +547,7 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
   var thickLo = 0u; var thickHi = 0u;
   for (var j = 0; j < L; j++) { if (OD[O_HEDGE + j * E + e] >= THINO) { if (j < 32) { thickLo |= 1u << u32(j); } else { thickHi |= 1u << u32(j - 32); } } }
   var above = 0; var uAbove = 0.0;
-  for (var k = 0; k < L; k++) {
+${blockTop}  for (var k = 0; k < L; k++) {
     let n = k * E + e;
     let u = IN[uOff(k) + e];
     let qHere = 0.5 * OD[O_QE + n];
@@ -545,9 +560,9 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
     let he = max(hk, MOMDEPTH);
     var force = 0.0; var drag = 0.0;
 ${o.ekmanDepth > 0 ? '    if (k == 0 && hk >= OD[O_HM + e]) { force += OD[O_STRESS + e] / RHO0 * he / hk; }' : '    if (k == 0 && hk >= MOMDEPTH) { force += OD[O_STRESS + e] / RHO0; }'}
-    if (k > 0) { drag += interfaceRate(e, above, k) * (IN[uOff(above) + e] - u); }
+    if (k > 0) { drag += ${upperRate} * (IN[uOff(above) + e] - u); }
     let below = firstThickBelow(k, thickLo, thickHi);
-    if (below >= 0) { drag -= interfaceRate(e, k, below) * (u - IN[uOff(below) + e]); }
+    if (below >= 0) { drag -= ${lowerRate} * (u - IN[uOff(below) + e]); }
     if (below < 0) { force -= RBOT * abs(u) * u; }
     du += force / he + drag / dragThickness(k, e);
     if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
@@ -555,7 +570,7 @@ ${o.ekmanDepth > 0 ? '    if (k == 0 && hk >= OD[O_HM + e]) { force += OD[O_STRE
     OUT[uOff(k) + e] = du;
     if (k >= 1 && hk >= THINO) { above = k; }
     uAbove = u;
-  }
+${topStep}  }
 ${o.ekmanDepth > 0 ? '  let hm = OD[O_HM + e];\n' : ''}  if (OD[O_HEDGE + e] < ${momentumReach}) {
     var top = 0.0; var depth = 0.0; var last = 0; var fraction = 1.0;
     for (var j = 0; j < L; j++) {

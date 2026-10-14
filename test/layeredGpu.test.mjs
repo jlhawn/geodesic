@@ -472,6 +472,52 @@ test('under interiorShearMixing the GPU drag between interior classes follows th
   gpuModel.destroy();
 });
 
+test('under blockDrag the GPU drag follows the Ekman block and the Richardson number beneath it as the CPU\'s does, through one and twenty-one ocean steps at N=8 under 10 m floors', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const mixing = { ...OCEAN_OPTIONS, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, blockDrag: true };
+  const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350;
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: mixing });
+  const gpuOcean = gpuModel.oceanEngine;
+  const cpuOcean = (options) => { const ocean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options }); ocean.initialize(surfaceT0, ice); return ocean; };
+  const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
+  const cpu = cpuOcean(mixing), constant = cpuOcean({ ...mixing, blockDrag: false }), flux = new Float64Array(C);
+  gpuOcean.initialize(surfaceT0, ice);
+  for (const steps of [1, 20]) {
+    for (let n = 0; n < steps; n++) {
+      cpu.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+      constant.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+      await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, dt);
+    }
+    const cpuState = cpu.serialize(), constantState = constant.serialize(), gpuState = await gpuOcean.serialize();
+    const wet = Array.from(cpuState.h, (v) => v > 1);
+    const lines = [];
+    for (const f of ['h', 'u', 'T', 'S', 'eta']) {
+      const mask = f === 'T' || f === 'S' ? wet : null, gap = rms(cpuState[f], gpuState[f], mask), effect = rms(cpuState[f], constantState[f], mask);
+      lines.push(`${f} ${gap.toExponential(2)} against ${effect.toExponential(2)}`);
+      assert.ok(gap < 2e-3, `${f} rms relative diff ${gap} after ${steps === 1 ? 1 : 21} steps`);
+      if (f === 'u' && steps > 1) assert.ok(effect > 5 * gap, `u: blockDrag changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
+    }
+    console.log(`${steps === 1 ? 1 : 21} ocean steps with blockDrag at N=8, the engines' rms relative difference against the option's effect over the constant drag: ${lines.join(', ')}`);
+  }
+  gpuModel.destroy();
+});
+
+test('with blockDrag present but off, the GPU ocean lays out the same buffers and holds the same ones after 64 steps at N=8 as without it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { surfaceT0, ice, stress } = buildScenario(8);
+  const run = async (extra) => {
+    const model = await createGpuModel(new Grid(8), { topography, ocean: { ...OCEAN_OPTIONS, ...extra } }), gpu = model.oceanEngine;
+    gpu.initialize(Float64Array.from(surfaceT0), ice);
+    for (let n = 0; n < 64; n++) await gpu.advance(Float64Array.from(surfaceT0), ice, stress, 1350, undefined, (n + 1) * 1350);
+    const [{ h, u, T, S, eta }, restart] = await Promise.all([gpu.download(), gpu.restartArrays()]);
+    const layout = JSON.stringify(gpu.layout);
+    model.destroy();
+    return { layout, arrays: { h, u, T, S, eta, ...restart } };
+  };
+  const absent = await run({}), present = await run({ blockDrag: false });
+  assert.equal(present.layout, absent.layout);
+  for (const [name, values] of Object.entries(absent.arrays)) assert.deepEqual(Array.from(present.arrays[name]), Array.from(values), name);
+});
+
 test('the GPU mixed layer holds, retreats, convects, keeps to its neighbors and, under the old options, snaps back as the CPU one does, carrying the momentum of the water it moves as the CPU one does and keeping each edge\'s column momentum', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
   const mesh = cpuModel.mesh, C = mesh.nCells, E = mesh.nEdges;
