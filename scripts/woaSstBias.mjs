@@ -22,6 +22,7 @@ export const dayOfYear = (modelDay) => (((modelDay + EQUINOX_DAY_OF_YEAR) % 365)
 
 const inLon = (lon, a, b) => (a <= b ? lon >= a && lon <= b : lon >= a || lon <= b);
 export const BOXES = [
+  { name: '60S–60N', lat: [-60, 60] },
   { name: '60–40S', lat: [-60, -40] },
   { name: '40–20S', lat: [-40, -20] },
   { name: '20S–20N', lat: [-20, 20] },
