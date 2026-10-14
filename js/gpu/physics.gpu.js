@@ -1386,7 +1386,8 @@ ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var
     upwardHeating += upwardAerosol;
     if (ozoneLoss > 0.0) {
       let upwardOzone = incident * (esc.x * (1.0 - aerosolLoss) + esc.z) * ozoneLoss;
-      for (var k = 0; k < K; k++) { netFlux[k] += upwardOzone * layerOzone[k] / ozoneColumn; }
+      // reads OUT, not layerOzone: after solarGases has read layerOzone through a pointer, Apple M5's Metal compiler reads it back here as zeros
+      for (var k = 0; k < K; k++) { netFlux[k] += upwardOzone * OUT[LWS_OZONE + k * C + i] / ozoneColumn; }
       upwardHeating += upwardOzone;
     }
   }
