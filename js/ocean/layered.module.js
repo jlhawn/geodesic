@@ -180,7 +180,7 @@ import { profileAt } from './climatology.module.js';
  * r = interfacialDrag/H with H the reach of the stress (stressReach), as
  * the balance of the edge's Coriolis term against that drag. It crosses
  * with the composition of the donor cell's top B = max(wind depth, h₀)
- * metres, h₀ its mixed layer's thickness, each layer's part o_k in
+ * meters, h₀ its mixed layer's thickness, each layer's part o_k in
  * proportion to its thickness there above the token thickness, the shares
  * ω_k = o_k/Σo, where the dynamics gave the edge's own layers the stress
  * shares σ_k. Layer k's flux changes by
@@ -203,6 +203,29 @@ import { profileAt } from './climatology.module.js';
  * narrow strip carries is smaller than a cell, so the water rising there
  * is not the cell's top class but the one the block's base is in.
  */
+
+/*
+ * With `intakeLedger` (true for every sea cell, or a mask of the cells to
+ * record) the ocean's `intake` holds, for every recorded cell, the water the
+ * mixed layer takes from each class and the heat content it carries, by the
+ * process that took it: the convective loop's erosion and swallowing, the
+ * shear entrainment, the stirring entrainment, the refill to the minimum
+ * thickness, and the draw from the upwelling source (`upwellingSource`),
+ * which meets a share of the shear, stirring and refill demands. The water,
+ * in meters, and its temperature times meters, in K m, for process p in
+ * INTAKE_PROCESSES, class k and recorded cell i are at
+ * (p L + k) cells.length + slot[i] of `water` and `degrees`, summed since the
+ * arrays were last filled with zeros. The ledger changes no state.
+ */
+export const INTAKE_PROCESSES = ['convective', 'shear', 'stirring', 'refill', 'upwelled'];
+const [INTAKE_CONVECTIVE, INTAKE_SHEAR, INTAKE_STIRRING, INTAKE_REFILL, INTAKE_UPWELLED] = INTAKE_PROCESSES.map((name, p) => p);
+
+function intakeArrays(C, L, mask, cellOcean) {
+  const slot = new Int32Array(C).fill(-1), cells = [];
+  for (let i = 0; i < C; i++) if (cellOcean[i] && (mask === true || mask[i])) { slot[i] = cells.length; cells.push(i); }
+  const size = INTAKE_PROCESSES.length * L * cells.length;
+  return { processes: INTAKE_PROCESSES, cells: Int32Array.from(cells), slot, water: new Float64Array(size), degrees: new Float64Array(size) };
+}
 /*
  * The interior classes, placed where the World Ocean Atlas holds its water
  * in this equation of state: 1019.5–1021.5 for the warm pool, the two
@@ -958,7 +981,7 @@ export function createOcean(mesh, {
   momentumDepth = 50, carryMomentum = true, refillRate = 0.00027778, refillFloor = 5, shearEntrainment = 0.65,
   ekmanDepth = 0.4, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 2.5, langmuir = 2, retreatEkman = RETREAT_EKMAN, retreatDaily = false, retreatLight = 0,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, blockDrag = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
-  eddyDiffusivity = 1000, eddyTaperDepth = 200, ekmanBlock = false, upwellingSource = 0, penetration = 'IB',
+  eddyDiffusivity = 1000, eddyTaperDepth = 200, ekmanBlock = false, upwellingSource = 0, intakeLedger = false, penetration = 'IB',
   geography = null, bathymetry = null, buffers = null, climatology = null,
 } = {}) {
   const {
@@ -994,6 +1017,7 @@ export function createOcean(mesh, {
     return 0;
   }) : null;
   const upwelled = upwellingSource > 0 ? new Float64Array(C) : null;
+  const intake = intakeLedger ? intakeArrays(C, L, intakeLedger, cellOcean) : null;
   const D = bathymetry ? Float64Array.from(bathymetry, (d, i) => (cellOcean[i] ? d : 0)) : bathymetryFrom(mesh, geography, { minimumDepth, flatDepth });
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
@@ -1550,12 +1574,16 @@ export function createOcean(mesh, {
     }
   }
 
-  function move(i, from, to, amount) {
+  function move(i, from, to, amount, process = 0) {
     const a = at(from, i), b = at(to, i);
     const f = amount / h[a];
     const dQ = Q[a] * f, dW = W[a] * f;
     h[a] -= amount; Q[a] -= dQ; W[a] -= dW;
     h[b] += amount; Q[b] += dQ; W[b] += dW;
+    if (intake && to === 0 && intake.slot[i] >= 0) {
+      const n = (process * L + from) * intake.cells.length + intake.slot[i];
+      intake.water[n] += amount; intake.degrees[n] += dQ;
+    }
   }
 
   function detrain(i, amount, rm) {
@@ -1603,7 +1631,7 @@ export function createOcean(mesh, {
       if (source < 0) return 0;
       const part = Math.min(want, left, h[at(source, i)] - EPS);
       if (!(part > 0)) return 0;
-      move(i, source, 0, part);
+      move(i, source, 0, part, INTAKE_UPWELLED);
       left -= part; upwelled[i] += part;
       return part;
     };
@@ -1642,7 +1670,7 @@ export function createOcean(mesh, {
         const eroding = convectiveErosion && rm < densest[k];
         if (eroding) take = rm >= lightest[k] && buoyancyLoss[i] > 0 ? Math.min(take, buoyancyLoss[i] * dt * rho0 * h[n] / (g * h[i] * (densest[k] - rm))) : 0;
         else if (!convectiveErosion && rho[k] > rm) continue;
-        if (take > 0) { move(i, k, 0, take); budget -= take; rm = eos(Q[i] / h[i], W[i] / h[i]); }
+        if (take > 0) { move(i, k, 0, take, INTAKE_CONVECTIVE); budget -= take; rm = eos(Q[i] / h[i], W[i] / h[i]); }
         if (eroding) break;
       }
       let below = -1, hold = 0;
@@ -1653,7 +1681,7 @@ export function createOcean(mesh, {
         if (ri < shearEntrainment) {
           const reached = h0 * Math.sqrt(shearEntrainment / ri), want = Math.min(reached - h0, deepest - h0);
           const drawn = fromSource(i, want), take = Math.min(want - drawn, h[at(below, i)] - EPS);
-          if (take > 0) move(i, below, 0, take);
+          if (take > 0) move(i, below, 0, take, INTAKE_SHEAR);
           if (drawn + take > 0) { sheared[i] += drawn + take; rm = eos(Q[i] / h[i], W[i] / h[i]); }
           hold = Math.min(reached, h[i]);
           below = -1;
@@ -1664,7 +1692,7 @@ export function createOcean(mesh, {
         const db = Math.max(1e-3, g * (rho[below] - rm) / rho0);
         const want = Math.min(2 * stir * ustar3 / (h[i] * db) * dt, reach[i] - h[i]);
         const drawn = fromSource(i, want), entrain = Math.min(want - drawn, h[at(below, i)] - EPS);
-        if (entrain > 0) move(i, below, 0, entrain);
+        if (entrain > 0) move(i, below, 0, entrain, INTAKE_STIRRING);
         if (drawn + entrain > 0) rm = eos(Q[i] / h[i], W[i] / h[i]);
       }
       below = -1;
@@ -1694,7 +1722,7 @@ export function createOcean(mesh, {
         fromSource(i, refillTo - h[i]);
         for (let k = 1; k < L && h[i] < refillTo; k++) {
           const available = h[at(k, i)] - EPS;
-          if (available > 0) move(i, k, 0, Math.min(available, refillTo - h[i]));
+          if (available > 0) move(i, k, 0, Math.min(available, refillTo - h[i]), INTAKE_REFILL);
         }
         refilled.water[i] += h[i] - h0;
         refilled.heat[i] += rhoCp * (Q[i] - q0 - (h[i] - h0) * q0 / h0);
@@ -2084,5 +2112,5 @@ export function createOcean(mesh, {
   initialised = false;
   const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, hEdge: hEdge.buffer, stressDepth: stressDepth.buffer, stressLayer: stressLayer.buffer, stressFraction: stressFraction.buffer, ...(windDepth ? { windDepth: windDepth.buffer } : {}), deepestEdge: deepestEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, gradRho: gradRho.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, upwelled, retreatDepth, windDepth, avgU, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, daily, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, ekmanTransport, ekmanFlux, ekmanMoved, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, upwelled, intake, retreatDepth, windDepth, avgU, tendency, tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, daily, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, ekmanTransport, ekmanFlux, ekmanMoved, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers };
 }

@@ -434,6 +434,68 @@ test('the shear entrainment, the stirring and the refill share one budget, and a
   assert.ok(spent >= 8 && whole >= 4);
 });
 
+test('the intake ledger splits the mixed layer\'s intake by process and class without changing the ocean, its upwelled share is the source\'s draw, and a mask records only its cells', () => {
+  const all = { refillRate: 3 / 86400, minimumThickness: 50, stirring: 100, shearEntrainment: 0.65, carryMomentum: true, upwellingSource: 20 };
+  const scenarios = [
+    { options: all, fixture: { shear: 1.5 } },
+    { options: { ...all, refillRate: 0, minimumThickness: 1, stirring: 0 }, fixture: { shear: 3.5 } },
+    { options: all, fixture: { shear: 1.5 }, cool: 29 },
+  ];
+  const total = { convective: 0, shear: 0, stirring: 0, refill: 0, upwelled: 0 };
+  let cold = 0, outside = 0, first = null;
+  for (const { options, fixture, cool } of scenarios) {
+    const make = (extra) => {
+      const { ocean, surfaceT, ice } = coastSea({ ...options, ...extra }, fixture);
+      if (cool) { surfaceT.fill(303 - cool); ocean.readSurface(surfaceT, ice); }
+      return ocean;
+    };
+    const plain = make({}), ocean = make({ intakeLedger: true });
+    const start = snapshot(ocean), L = ocean.layers, { intake } = ocean;
+    assert.equal(plain.intake, null);
+    assert.deepEqual(Array.from(intake.processes), ['convective', 'shear', 'stirring', 'refill', 'upwelled']);
+    assert.equal(intake.cells.length, Array.from(ocean.cellOcean).filter((x) => x).length);
+    plain.mixedLayer(DT); ocean.mixedLayer(DT);
+    assert.equal(differing([ocean.h, ocean.Q, ocean.W], [plain.h, plain.Q, plain.W]), 0);
+    for (let slot = 0; slot < intake.cells.length; slot++) {
+      const i = intake.cells[slot], by = {};
+      let sum = 0;
+      for (let p = 0; p < intake.processes.length; p++) {
+        let water = 0;
+        for (let k = 0; k < L; k++) {
+          const n = (p * L + k) * intake.cells.length + slot;
+          assert.ok(intake.water[n] >= 0);
+          if (intake.water[n] > 0) assert.ok(intake.degrees[n] / intake.water[n] > 250 && intake.degrees[n] / intake.water[n] < 320, `class ${k} at ${intake.degrees[n] / intake.water[n]}`);
+          if (k === 0) assert.equal(intake.water[n], 0, 'the mixed layer is not its own source');
+          water += intake.water[n];
+        }
+        by[intake.processes[p]] = water; total[intake.processes[p]] += water; sum += water;
+      }
+      assert.ok(Math.abs(by.upwelled - (ocean.upwelled[i] ?? 0)) <= 1e-12 * Math.max(1, ocean.upwelled[i]), `cell ${i}: ${by.upwelled} against ${ocean.upwelled[i]}`);
+      assert.ok(by.shear <= ocean.sheared[i] + 1e-12 && ocean.sheared[i] - by.shear <= by.upwelled + 1e-12);
+      assert.ok(ocean.refilled.water[i] - by.refill <= by.upwelled + 1e-12);
+      assert.ok(sum >= ocean.h[i] - start.h[i] - 1e-12, `cell ${i} gained ${ocean.h[i] - start.h[i]} m from ${sum} m`);
+      if (by.upwelled > 0) cold++; else if (ocean.upwelled[i] === 0) outside++;
+    }
+    first ??= { make, intake, L };
+  }
+  console.log(`intake in m over ${scenarios.length} scenarios: ${JSON.stringify(Object.fromEntries(Object.entries(total).map(([name, x]) => [name, +x.toFixed(2)])))}`);
+  assert.ok(cold >= 8 && outside > cold);
+  for (const [name, x] of Object.entries(total)) assert.ok(x > 0, `no ${name} intake`);
+  const { make, intake, L } = first, mask = new Uint8Array(C);
+  for (let slot = 0; slot < intake.cells.length; slot += 5) mask[intake.cells[slot]] = 1;
+  const masked = make({ intakeLedger: mask }), full = make({ intakeLedger: true });
+  masked.mixedLayer(DT); full.mixedLayer(DT);
+  assert.equal(masked.intake.cells.length, mask.reduce((a, b) => a + b, 0));
+  for (let slot = 0; slot < masked.intake.cells.length; slot++) {
+    const i = masked.intake.cells[slot], at = full.intake.slot[i];
+    assert.ok(mask[i] && at >= 0);
+    for (let p = 0; p < intake.processes.length; p++) for (let k = 0; k < L; k++) {
+      assert.equal(masked.intake.water[(p * L + k) * masked.intake.cells.length + slot], full.intake.water[(p * L + k) * full.intake.cells.length + at]);
+    }
+  }
+  for (let i = 0; i < C; i++) if (!mask[i]) assert.equal(masked.intake.slot[i], -1);
+});
+
 test('upwellingSource needs ekmanBlock and no less than zero, and at zero the ocean is the same bit for bit with no source array', () => {
   assert.throws(() => createOcean(mesh, { ...SEA, ekmanBlock: false, upwellingSource: 1 }), /upwellingSource/);
   assert.throws(() => createOcean(mesh, { ...SEA, upwellingSource: -1 }), /upwellingSource/);
