@@ -1061,6 +1061,39 @@ test('with upwellingSource present but zero, the GPU ocean with the Ekman block 
   await assert.rejects(createGpuModel(new Grid(8), { topography, ocean: { ...THIN_FLOORS, upwellingSource: 1 } }), /upwellingSource/);
 });
 
+test('with ekmanBlock, upwellingSource and blockDrag together, the GPU ocean tracks the CPU\'s through one and twenty-one ocean steps at N=8 under 10 m floors', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const all = { ...THIN_FLOORS, ekmanBlock: true, upwellingSource: UPWELLING_STEPPED, blockDrag: true };
+  const { cpuModel, surfaceT0, ice, stress: weak } = buildScenario(8);
+  const stress = Float64Array.from(weak, (x) => 10 * x);
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350;
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: all });
+  const gpuOcean = gpuModel.oceanEngine;
+  const cpuOcean = (options) => { const ocean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options }); ocean.initialize(surfaceT0, ice); return ocean; };
+  const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
+  const cpu = cpuOcean(all), off = cpuOcean(THIN_FLOORS), flux = new Float64Array(C);
+  gpuOcean.initialize(surfaceT0, ice);
+  for (const steps of [1, 20]) {
+    for (let n = 0; n < steps; n++) {
+      cpu.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+      off.advance(Float64Array.from(surfaceT0), ice, flux, stress, dt);
+      await gpuOcean.advance(Float64Array.from(surfaceT0), ice, stress, dt);
+    }
+    const cpuState = cpu.serialize(), offState = off.serialize(), gpuState = await gpuOcean.serialize();
+    const wet = Array.from(cpuState.h, (v) => v > 1), upper = Array.from(cpuState.h, (_, x) => x < 6 * C);
+    const lines = [];
+    for (const f of ['h', 'u', 'T', 'S', 'eta']) {
+      const mask = f === 'T' || f === 'S' ? wet : null, gap = rms(cpuState[f], gpuState[f], mask);
+      lines.push(`${f} ${gap.toExponential(2)}`);
+      assert.ok(gap < 2e-3, `${f} rms relative diff ${gap} after ${steps === 1 ? 1 : 21} steps`);
+    }
+    const hGap = rms(cpuState.h, gpuState.h, upper), hEffect = rms(cpuState.h, offState.h, upper), uGap = rms(cpuState.u, gpuState.u), uEffect = rms(cpuState.u, offState.u);
+    console.log(`${steps === 1 ? 1 : 21} ocean steps with the three options at N=8 under 10 m floors, the engines' rms relative difference: ${lines.join(', ')}; the options' effect over none on the upper layers' h ${hEffect.toExponential(2)} against ${hGap.toExponential(2)}, on u ${uEffect.toExponential(2)} against ${uGap.toExponential(2)}`);
+    if (steps > 1) assert.ok(hEffect > 5 * hGap && uEffect > 5 * uGap, `the options changed h by ${hEffect} and u by ${uEffect}, no more than the engines differ (${hGap}, ${uGap})`);
+  }
+  for (const v of (await gpuOcean.download()).u) assert.ok(Number.isFinite(v));
+  assert.equal((await gpuOcean.diagnostics()).oceanLimited, 0);
+  gpuModel.destroy();
+});
 test('the GPU ocean takes an 8-layer state that carries no class list, as the page\'s saved runs are, onto the class list as the CPU ocean does', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { cpuModel, surfaceT0, ice, stress } = buildScenario(8);
   const mesh = cpuModel.mesh, C = mesh.nCells;
