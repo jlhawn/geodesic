@@ -452,6 +452,60 @@ test('after the velocity shift every edge\'s column transport, tokens included, 
   landed('CPU', rows, 1e-12);
 });
 
+/*
+ * The mixing package on spunUp's 10 m floors with the Ekman block, every
+ * mixed layer thinner than the wind depth: the block's phase keeps each
+ * class's volume, heat and salt, each column's water and so each edge's
+ * column transport, and the shift after it lands every edge on the
+ * barotropic transport.
+ */
+const EKMAN = { ...PACKAGED, ekmanBlock: true };
+test('in double precision the Ekman block keeps every class\'s volume, heat and salt and each column\'s water through its phase, moving the mixed layer\'s water and the classes under it, and the velocity shift then lands every edge on the barotropic transport', async () => {
+  const { ocean, surfaceT, ice, flux, stress } = sheared(EKMAN);
+  ocean.setStress(stress, ice);
+  const snapshot = async () => ({ h: Float64Array.from(ocean.h), q: Float64Array.from(ocean.Q, (q, n) => q - HEAT_REFERENCE * ocean.h[n]), w: Float64Array.from(ocean.W), u: Float64Array.from(ocean.u), eta: Float64Array.from(ocean.eta), pen: Float64Array.from(ocean.penetrated) });
+  const totals = () => Array.from({ length: ocean.layers }, (_, k) => {
+    let volume = 0, heat = 0, salt = 0;
+    for (let i = 0; i < C; i++) { const n = k * C + i; volume += mesh.areaCell[i] * ocean.h[n]; heat += mesh.areaCell[i] * ocean.Q[n]; salt += mesh.areaCell[i] * ocean.W[n]; }
+    return { volume, heat, salt };
+  });
+  const hEdge = new Float64Array(ocean.shared.hEdge), landings = [], drifts = [], columns = [], layerMoves = [], gross = [];
+  const record = await follow([
+    ['readSurface', () => ocean.readSurface(surfaceT, ice)],
+    ['dynamics', () => ocean.phases.dynamics(DT)],
+    ['rescale', () => ocean.phases.rescale()],
+    ['eddy', () => ocean.phases.eddy(DT)],
+    ['ekman', () => {
+      const was = totals(), h = Float64Array.from(ocean.h);
+      ocean.phases.ekman(DT);
+      const is = totals();
+      for (let k = 0; k < ocean.layers; k++) for (const q of ['volume', 'heat', 'salt']) drifts.push(Math.abs(is[k][q] - was[k][q]) / Math.max(Math.abs(was[k][q]), 1e-300));
+      let column = 0, layer = 0;
+      for (let i = 0; i < C; i++) {
+        let sum = 0;
+        for (let k = 0; k < ocean.layers; k++) sum += ocean.h[k * C + i] - h[k * C + i];
+        column = Math.max(column, Math.abs(sum));
+        layer = Math.max(layer, Math.abs(ocean.h[i] - h[i]));
+      }
+      columns.push(column); layerMoves.push(layer); gross.push(ocean.ekmanMoved.reduce((x, y) => x + y, 0));
+    }],
+    ['shift', () => { ocean.phases.shift(); landings.push(landing(hEdge, ocean.u, ocean.avgU, ocean.edgeOcean, ocean.layers)); }],
+    ['mixedLayer', () => ocean.mixedLayer(DT)],
+    ['salt and surface', () => { ocean.salt(); ocean.writeSurface(surfaceT, flux, DT); }],
+  ], snapshot, 4, ocean.layers, ocean.rhoCp, ocean.D);
+  report('CPU Ekman block', { ekman: record.ekman });
+  for (const [name, rows] of Object.entries(record)) {
+    const [heat, salt] = kept(name);
+    assert.ok(largest(rows, heat) < 1e-6, `${name}: heat ${largest(rows, heat)} W/m²`);
+    assert.ok(largest(rows, salt) < 1e-9, `${name}: salt ${largest(rows, salt)} psu·m`);
+    if (name !== 'rescale') assert.ok(largest(rows, volume) < 1e-12, `${name}: volume ${largest(rows, volume)} m`);
+  }
+  console.log(`CPU Ekman block: every class's volume, heat and salt drift at most ${show(Math.max(...drifts))} of its total; a column's water changes by ${show(Math.max(...columns))} m at most, the mixed layer by ${Math.min(...layerMoves).toFixed(3)} to ${Math.max(...layerMoves).toFixed(3)} m, and ${gross.map((x) => x.toFixed(0)).join(', ')} km³/day are moved in the four steps`);
+  assert.ok(Math.max(...drifts) < 1e-12 && Math.max(...columns) < 1e-9, `drift ${Math.max(...drifts)}, columns ${Math.max(...columns)} m`);
+  assert.ok(Math.min(...layerMoves) > 1e-3 && Math.min(...gross) > 100, `layer moves ${layerMoves}, gross ${gross} km³/day`);
+  landed('CPU Ekman block', landings, 1e-12);
+});
+
 test('after the velocity shift every edge\'s column transport, tokens included, is the barotropic average transport to single-precision rounding on the GPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const start = spunUp(), sea = await onGpu(start), { model, ocean } = sea, { device } = model.gpu, layers = ocean.layers, { OS, OD, B } = ocean.layout, rows = [];
   for (let n = 0; n < 4; n++) {
