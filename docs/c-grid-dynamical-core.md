@@ -2024,6 +2024,46 @@ neighbours, most of them in those deepest regions, where the depth
 turns on how near the surface water is to the density of the whole
 class beneath it.
 
+**The night's retreat (M30, off by default).** Under `retreatDaily`
+the retreat alone reads the previous UTC day instead of B̄: the day's
+mean sunlight handed below the mixed layer over the share τ that passed
+it, S̄, and its mean dark loss, D̄ (B with the sunlight the mixed layer
+kept, b S (1 − τ), put back, b = gα/ρ₀c_p), means over a whole day of
+ocean calls that ends at a UTC midnight (`closeDay`, which both engines
+use; a partial day after a start or a load is dropped), so that
+B = D̄ − b S̄ (1 − τ(h₀)) at the depth the layer has now. Erosion keeps
+B̄. Under `retreatLight` λ (0 to 1; it needs `retreatDaily` and
+`penetration`) the layer retreats only while also
+D̄ − b S̄ (1 − τ(h₀) − λ h₀ q(h₀)) < 0, q the light absorbed per meter
+at its base (`deposited`): it holds the depth to which the night's
+convection carries the day's light, the zero-wind trapping depth. On
+the page's June and March states at the 50 m floor the gate holds 2–4 %
+of the heated column-steps on the floor, and the share within a meter
+of the floor rises (60 → 69 % at 20–60N in June): the binding columns
+lose at night 0.38 of their day's sunlight (median), shallow by their
+own physics, so the floor there stands in for missing shear and
+advection rather than for the night. Not adopted (M30).
+
+**The sea's skin (M30, off by default).** Over open water, stepped
+with the atmosphere in the surface step (`js/physics/skin.module.js`,
+`SKIN_WGSL` on the GPU; both need exchange 'roughness'), a diurnal warm
+layer and a cool skin sit inside the mixed layer's heat as a profile
+that stores none of its own. `warmLayer` is Zeng and Beljaars (2005)
+with the stable φ and Langmuir factor of Takaya et al. (2010), as NEMO's
+diu_bulk codes it: over the top d = min(3 m, h₀) the profile is
+T_f + ΔT_w [1 − (z/d)^ν], ν = 0.3, and ΔT_w steps implicitly under the
+non-solar flux plus the sunlight absorbed above d, damped by
+(ν+1) κ u*_w f_La/(d φ(ζ)), f_La = 2.23, φ the stability function of
+ζ = d κ g α Q_w/(ρc_p u*_w³), capped at 5 K and never below 0. `coolSkin`
+is Fairall et al. (1996a) as COARE 3.6 codes it, two passes from a 1 mm
+sublayer: ΔT_c = Q_c δ/k_w, δ = min(1 cm, λ ν_w/u*_w), at most 1 K. The
+air sees T₀ + s ΔT_w − ΔT_c, s = 1 − ν d/((ν+1) h₀), so that the
+profile's mean over the mixed layer is T₀ and the ocean's books are
+untouched. In the June N=64 arms it gives 23 of 24 low-wind bins within
+0.5–1.5× of Gentemann et al. (2003) and a 20S–20N mean range of 0.26 K,
+but the Benguela box lies 0.34–0.53 K further from WOA23 in April and
+May. Not adopted (M30).
+
 **Momentum through the exchanges.** The exchanges move water between
 the mixed layer and the classes, and velocities live on edges, layer by
 layer, so an exchange that leaves u alone creates Δ(u_from − u_to) of

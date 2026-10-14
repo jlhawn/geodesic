@@ -307,8 +307,8 @@ and where it binds the depth a column asks for rises 2.7×, from 1.4 to
 `penetration` 'IB', `carryMomentum`, `refillRate` 24 m a day,
 `shearEntrainment` 0.65, `ekmanDepth` 0.4, `retreatStirring` 2.5,
 `langmuir` 2, `retreatEkman` 0.7 and the 46 classes. Part 8's live
-figures run these defaults; its recorded run, regenerated on them,
-waits on its rewritten prose and re-pinned tests. The cost at N=128
+figures run these defaults, and its recorded run is regenerated on
+them, with its run sentences rewritten and its tests re-pinned. The cost at N=128
 on the M1 Max is about 0.65 ms a model step for this round (+0.33 s
 a simulated day) and 0.83–0.92 ms with
 M27's additions (+0.43–0.47 s). Between the floor and 20 m stand, in
@@ -435,3 +435,46 @@ About 8–10 hours.
 conservation tests; heat conserved through the skin; then M27's
 judging rules at 20 and 10 m floors, where the floor should bind only
 where the nights are calm enough to leave a thin layer.
+
+**Judged (Oct 13, 2026).** Both halves landed on both engines, off by
+default and bit for bit when off: `warmLayer` and `coolSkin` in the
+surface step (they need exchange 'roughness'), `retreatDaily` and
+`retreatLight` in the retreat, with parity tests at N=8, conservation
+rows, and `SKIN_WATCH`, a daily skin and exchange recorder in
+scripts/spinup.mjs. The arms ran on the M5 Max at the 50 m floor with
+the skin (A), the night rule (C) and both, and with both at 10 and 5 m:
+N=64 from eleven's June state for 30 days and its March state for 60,
+and the N=16 water planet for two years. The skin does what it was
+built for: 23 of 24 low-wind bins within 0.5–1.5× of the satellite
+regression of Gentemann et al. (2003), the day's maximum at 12–16 h in
+91 % of the cells with a range of 0.3 K or more, a 20S–20N mean range
+of 0.26 K, and the surface exchange's extremes within +10 % of the
+control's. It is not adopted. The Benguela box lies 0.34–0.53 K further
+from WOA23 in April and May in both the M5 and the M1 realizations,
+which points at the cool skin under the stratocumulus deck. On the
+50 m slab only 55 % of the day's minima fall at 05–09 h (the rule asks
+70 %; 76 % at 10 m), and a warm layer outlives the night at local
+03 h, nearly all of it in polar-day and cold-water cells. The night
+rule is not adopted either. It does not thin the pile on the floor:
+the share within a meter of it rises from 60 to 69 % at 20–60N in June
+and from 54 to 55 % at 10S–10N in March, and at 10 m from 23 to 26 % in
+June. The gate holds only 2–4 % of the heated column-steps on the
+floor, and the depth a binding column asks for rises 1.1× in June
+(4.2 → 4.6 m) against the 1.5× asked. Those columns' dark loss is 0.38
+of their sunlight (median, June), where the night's convection alone
+keeps a column shallow: the floor there stands in for missing shear
+and advection, not for the night. California and Canary also lie
+0.4–0.7 K further from WOA23 in May. The 10 m and 5 m floors fail as
+in M27: June's global SST 0.36–0.37 K above the control, the
+Benguela–Peru mean 1.2–1.3 K further from WOA23, the May cold tongue
+0.8–1.1 K warmer on day 60 of the M5 run (0.05–0.17 K on the M1's) and
+the June 10S–10N median mixed layer 41–46 m. The floor stays at 50 m
+with every M30 option off, and Part 8's recorded run is M27's defaults'.
+Still open: the coastal upwelling under a thin layer; the Mediterranean
+outflow pulse (2.12 m/s in the Gulf of Cadiz on March day 25 at 50 m);
+the southeast Pacific's winter columns at the 600 m cap (9 to 14 in the
+June 50 m arms, 20 at 10 m); and a `coolSkin`-only and a
+`warmLayer`-only arm over March–May to find which half warms the deck.
+On the M5 the N=16 atmosphere's books close about 2 W/m² lower than on
+the M1 with otherwise identical weather, to be read before the M5 is
+trusted for books.
