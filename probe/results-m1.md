@@ -62,3 +62,36 @@ this path runs the changed loops with n < K):
 **The fix changes nothing on the M1 Max**: every state hash is identical, every test count is
 the same, the bisect harness prints the same digits, and the day-mean ASR is 228.08 in both.
 m5-fix can be merged.
+
+## m5-fix, the extra items the README asks for (2026-10-14 17:00–17:08 UTC, m5-fix worktree at 2391a70)
+
+| Job | M1 Max |
+|---|---|
+| `test/skinGpu.test.mjs` | 6/6. Parity after one step, the four cases (slab from no skin; slab from a 1 K warm layer; layered ocean with 2 m mixed layers under IB light; layered ocean under type III light): ΔT_w 1.4e-6 / 1.0e-5 / 1.3e-5 / 7.1e-6 K, ΔT_c 3.7e-6 / 4.2e-6 / 4.3e-6 / 4.9e-6 K, T_s 2.9e-5 / 3.2e-5 / 3.3e-5 / 3.3e-5 K. Worst over 20 steps: ΔT_w 9.7e-6 / 6.9e-5 / 1.4e-5 / 1.5e-5 K (the M5's 2e-4 to 1e-3 K drift does not occur here), ΔT_c 5.7e-3 / 1.1e-2 / 5.7e-3 / 1.0e-2 K, T_s 5.9e-3 / 4.0e-2 / 1.3e-2 / 1.2e-2 K, with the bulk temperatures drifting 5.3e-4 / 4.0e-2 / 1.3e-2 / 1.2e-2 K apart; net 2.3e-2 / 1.9 / 1.0e-1 / 5.5e-1 and sensible 1.2e-3 / 1.5e-2 / 2.0e-3 / 4.8e-3 relative |
+| `paceGpu` on eleven128_day1825 (N = 128, 512 steps awaited one at a time) | 45.4 s per model day, 88.7 ms per step; **day mean ASR 237.00**, OLR 234.60 W/m², Ts 14.766 °C (the M5 gives 236.82) |
+
+## Step 3: m5-books at ad60082 (2026-10-14 17:00–17:04 UTC)
+
+Base b3 = origin/c-grid-mesh-prep e1909fb (m5-fix merged, Part 8's run recorded); fix f3 =
+origin/m5-books ad60082 (94d4285: the upward ozone heating reads its layers from the OUT stash;
+ad60082: the Node 22 guard, no kernel change). Detached worktrees, each GPU job alone, `/usr/bin/log`
+found no aborted command buffer (the only hit is a Wi-Fi auto-join line).
+
+| Hash | e1909fb | ad60082 (m5-books) |
+|---|---|---|
+| GPU coupled N = 6 stepBatch(33): S / PH / D / OS / OD | ef02e2aee9ca / 674f74199bfb / 2432f16e14b9 / 0451a6f1246d / 1479957dc347 | identical |
+| GPU ocean N = 8, 21 advances: OS / OD / PH | e6ffe7267fc9 / a8b028262b02 / 2b991f687529 | identical |
+| `pagecmp` eleven64_day1825, 32 steps: S / PH / D | 338567a3639b / b7e7737821f2 / 144631da4b8b | identical |
+
+All three sets of hashes are also identical to those of 421662b and 2391a70 above: neither fix
+changes a bit on the M1.
+
+Tests in the f3 worktree, one file at a time:
+
+| File | M1 Max |
+|---|---|
+| `test/gpuModel.test.mjs` | 30/31. Test 17 fails at its last assertion, "the limiter over 16 steps binds" (AssertionError, expected true, actual false, at test/gpuModel.test.mjs:535), the same place the fix fails on the M5; the earlier CPU/GPU comparisons of the test (beta and the drags) pass here |
+| `test/atmosphereConservation.test.mjs` | 6/6 |
+| `test/physics.test.mjs` | 33/37; 34–37 fail (the known CPU digest cases: the mixed-layer deck's bit-identity, the moist defaults' digest, the fog scheme's digest, the deck's sunlight) |
+
+**m5-books changes nothing on the M1 Max** and can be merged.
