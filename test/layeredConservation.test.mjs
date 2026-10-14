@@ -343,17 +343,24 @@ async function onGpu({ ocean: cpu, surfaceT, ice, stress, options }) {
     light.push(meanOf(added));
     gpu.device.queue.writeBuffer(gpu.buffers.PH, 4 * PH.PEN, Float32Array.from(added, (x, i) => x + pen[i]));
   };
+  const moves = [];
   const phases = [
     ['readSurface', () => ocean.readSurfaceFromAtmosphere()],
     ['dynamics', () => ocean.phases.dynamics(DT)],
     ['rescale', () => ocean.phases.rescale()],
     ['eddy', () => ocean.phases.eddy(DT)],
+    ...(options.ekmanBlock ? [['ekman', async () => {
+      const [before] = await stores();
+      ocean.phases.ekman(DT);
+      const [after] = await stores();
+      moves.push(after.slice(0, C).reduce((m, x, i) => Math.max(m, Math.abs(x - before[i])), 0));
+    }]] : []),
     ['shift', () => ocean.phases.shift()],
     ['mixedLayer', () => ocean.mixedLayer(DT)],
     ['salt and surface', () => { ocean.salt(DT); ocean.writeSurface(DT); }],
     ['deposit', () => ocean.readSurfaceFromAtmosphere(), pass],
   ];
-  return { model, ocean, stores, light, follow: (steps) => follow(phases, snapshot, steps, layers, ocean.options.density * ocean.options.specificHeat, ocean.D) };
+  return { model, ocean, stores, light, moves, follow: (steps) => follow(phases, snapshot, steps, layers, ocean.options.density * ocean.options.specificHeat, ocean.D) };
 }
 
 function within(label, record, floors) {
@@ -506,18 +513,43 @@ test('in double precision the Ekman block keeps every class\'s volume, heat and 
   landed('CPU Ekman block', landings, 1e-12);
 });
 
-test('after the velocity shift every edge\'s column transport, tokens included, is the barotropic average transport to single-precision rounding on the GPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const start = spunUp(), sea = await onGpu(start), { model, ocean } = sea, { device } = model.gpu, layers = ocean.layers, { OS, OD, B } = ocean.layout, rows = [];
+async function gpuLanding(start) {
+  const sea = await onGpu(start), { model, ocean } = sea, { device } = model.gpu, layers = ocean.layers, { OS, OD, B } = ocean.layout, rows = [];
   for (let n = 0; n < 4; n++) {
     ocean.readSurfaceFromAtmosphere();
-    ocean.phases.dynamics(DT); ocean.phases.rescale(); ocean.phases.eddy(DT); ocean.phases.shift();
+    ocean.phases.dynamics(DT); ocean.phases.rescale(); ocean.phases.eddy(DT); ocean.phases.ekman(DT); ocean.phases.shift();
     await device.queue.onSubmittedWorkDone();
     const [[u], [hEdge, avgU]] = await Promise.all([readRanges(device, ocean.buffers.S, [{ offset: OS.OU, length: layers * E }]), readRanges(device, ocean.buffers.OD, [{ offset: OD.HEDGE, length: layers * E }, { offset: B.BAVG + C, length: E }])]);
     rows.push(landing(hEdge, u, avgU, start.ocean.edgeOcean, layers));
     ocean.mixedLayer(DT); ocean.salt(DT); ocean.writeSurface(DT);
   }
   model.destroy();
-  landed('GPU', rows, 2e-6);
+  return rows;
+}
+
+test('after the velocity shift every edge\'s column transport, tokens included, is the barotropic average transport to single-precision rounding on the GPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  landed('GPU', await gpuLanding(spunUp()), 2e-6);
+});
+
+/*
+ * The most the GPU Ekman block may change the stored heat (W/m²), salt
+ * (psu·m) and volume (m) of the sheared start on the mixing package, as
+ * [mean over the steps, largest step] for each, three to five times what
+ * an M5 Max leaves here: it moves whole multiples of the coarser cell's
+ * spacing across each edge, as the eddy transport does, and gives what
+ * rounding leaves in a column to its finest stores.
+ */
+const EKMAN_FLOORS = { ekman: [1e-3, 2e-3, 4e-6, 8e-6, 1e-7, 2e-7] };
+
+test('in single precision the Ekman block keeps the heat, salt and volume it moves to the stores\' rounding, moving the mixed layer\'s water, and the velocity shift after it lands every edge on the barotropic average transport', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const start = sheared(EKMAN), sea = await onGpu(start);
+  const record = await sea.follow(8);
+  sea.model.destroy();
+  report('GPU Ekman', { ekman: record.ekman });
+  within('GPU Ekman', record, EKMAN_FLOORS);
+  console.log(`GPU Ekman block: the mixed layer moves ${Math.min(...sea.moves).toFixed(4)} to ${Math.max(...sea.moves).toFixed(4)} m a step`);
+  assert.ok(Math.min(...sea.moves) > 1e-3, `the mixed layer moved ${sea.moves} m`);
+  landed('GPU Ekman block', await gpuLanding(start), 2e-6);
 });
 
 /*

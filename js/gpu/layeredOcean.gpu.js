@@ -26,7 +26,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
  * are cheap relative to a step, so they stay in JavaScript at double
  * precision, exactly porting the CPU functions over plain arrays before
  * uploading; only the per-step dynamics (tendency, barotropic, eddy
- * transport, mixed layer, salt, surface write-back) are WGSL.
+ * transport, Ekman block, mixed layer, salt, surface write-back) are WGSL.
  */
 const WORKGROUP = 64;
 // Float32 values, so the host's conversions use the numbers the kernels do.
@@ -39,7 +39,7 @@ export const OCEAN_DEFAULTS = {
   momentumDepth: 50, carryMomentum: true, refillRate: 0.00027778, refillFloor: 5, shearEntrainment: 0.65,
   ekmanDepth: 0.4, momentumFloor: 10, stressThickness: PV_FLOOR, retreatStirring: 2.5, langmuir: 2, retreatEkman: RETREAT_EKMAN, retreatDaily: false, retreatLight: 0,
   interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
-  eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB',
+  eddyDiffusivity: 1000, eddyTaperDepth: 200, ekmanBlock: false, penetration: 'IB',
   gustiness: 3,
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
@@ -218,6 +218,53 @@ fn placeLeft(at: i32, change: f32) -> f32 {
 `;
   const idx = `(i32(id.x) + i32(id.y) * 4194240)`;
   const K = `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n`;
+  const eddyShared = `${constLine('EDDYSLACK', EDDY_SLACK)}
+fn eddyAllowance(k: i32, i: i32) -> f32 {
+  return (max(0.0, IN[hOff(k) + i] - EPSO) + EDDYSLACK) * MF[F_AREA + i] / (f32(MI[NEC + i]) * P[0]);
+}
+fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
+  let ga = grain(max(abs(xa), abs(xa - moved / sa))); let gb = grain(max(abs(xb), abs(xb + moved / sb)));
+  let q = max(ga, gb); let area = select(sb, sa, ga > gb || (ga == gb && moved > 0.0));
+  return round(moved / area / q) * q * area;
+}
+`;
+  const eddyApply = (fromK) => `${K}  let n = ${idx}; if (n >= L * C) { return; }
+  let k = n / C; let i = n % C;
+  if (${fromK ? 'k == 0 || ' : ''}OD[O_CMASK + i] < 0.5) { return; }
+  var volume = 0.0; var heat = 0.0; var salt = 0.0;
+  for (var m = 0; m < MI[NEC + i]; m++) {
+    let e = MI[EOC + MAXE * i + m]; let s = f32(MI[ESC + MAXE * i + m]);
+    volume += s * OD[O_EDDYV + k * E + e]; heat += s * OD[O_EDDYQ + k * E + e]; salt += s * OD[O_EDDYW + k * E + e];
+  }
+  let factor = P[0] / MF[F_AREA + i];
+  let dq = -factor * heat; let dw = -factor * salt;
+  let rh = settle(IN[hOff(k) + i], -factor * volume); let rq = settle(IN[qOff(k) + i], dq); let rw = settle(IN[wOff(k) + i], dw);
+  IN[hOff(k) + i] += rh; IN[qOff(k) + i] += rq; IN[wOff(k) + i] += rw;
+  OUT[hOff(k) + i] = rh; OUT[qOff(k) + i] = dq - rq; OUT[wOff(k) + i] = dw - rw;
+}`;
+  const eddyLeftover = (fromK) => `${K}  let i = ${idx}; if (i >= C) { return; }
+  if (OD[O_CMASK + i] < 0.5) { return; }
+  var kept = 0.0; var owedQ = 0.0; var owedW = 0.0; var holder = ${fromK - 1}; var finest = 0.0;
+  for (var k = ${fromK}; k < L; k++) {
+    kept += OUT[hOff(k) + i]; owedQ += OUT[qOff(k) + i]; owedW += OUT[wOff(k) + i];
+    let hk = IN[hOff(k) + i];
+    if (hk > THINO && (holder == ${fromK - 1} || grain(hk) < finest)) { holder = k; finest = grain(hk); }
+  }
+  if (holder == ${fromK - 1}) { return; }
+  let hh = IN[hOff(holder) + i];
+  let rh = settle(hh, -kept); let rq = settle(IN[qOff(holder) + i], rh * IN[qOff(holder) + i] / hh); let rw = settle(IN[wOff(holder) + i], rh * IN[wOff(holder) + i] / hh);
+  IN[hOff(holder) + i] = hh + rh; IN[qOff(holder) + i] += rq; IN[wOff(holder) + i] += rw;
+  owedQ -= rq; owedW -= rw;
+  var heatHolder = holder; var saltHolder = holder; var finestQ = grain(IN[qOff(holder) + i]); var finestW = grain(IN[wOff(holder) + i]);
+  for (var k = ${fromK}; k < L; k++) {
+    if (IN[hOff(k) + i] <= THINO) { continue; }
+    let gq = grain(IN[qOff(k) + i]); let gw = grain(IN[wOff(k) + i]);
+    if (gq < finestQ) { heatHolder = k; finestQ = gq; }
+    if (gw < finestW) { saltHolder = k; finestW = gw; }
+  }
+  IN[qOff(heatHolder) + i] += settle(IN[qOff(heatHolder) + i], owedQ);
+  IN[wOff(saltHolder) + i] += settle(IN[wOff(saltHolder) + i], owedW);
+}`;
   return {
     head,
     oGradEta: `${K}  let e = ${idx}; if (e >= E) { return; }
@@ -503,16 +550,7 @@ ${o.ekmanDepth > 0 ? '  let hm = OD[O_HM + e];\n' : ''}  if (OD[O_HEDGE + e] < $
      * stores, so the column keeps its thickness to its finest layer's
      * rounding and gains the heat and salt its edges carried.
      */
-    oEddyFlux: `${constLine('EDDYTOP', o.eddyTaperDepth)} ${constLine('EDDYBOTTOM', EDDY_BOTTOM_TAPER)} ${constLine('EDDYSLACK', EDDY_SLACK)}
-fn eddyAllowance(k: i32, i: i32) -> f32 {
-  return (max(0.0, IN[hOff(k) + i] - EPSO) + EDDYSLACK) * MF[F_AREA + i] / (f32(MI[NEC + i]) * P[0]);
-}
-fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
-  let ga = grain(max(abs(xa), abs(xa - moved / sa))); let gb = grain(max(abs(xb), abs(xb + moved / sb)));
-  let q = max(ga, gb); let area = select(sb, sa, ga > gb || (ga == gb && moved > 0.0));
-  return round(moved / area / q) * q * area;
-}
-${K}  let e = ${idx}; if (e >= E) { return; }
+    oEddyFlux: `${constLine('EDDYTOP', o.eddyTaperDepth)} ${constLine('EDDYBOTTOM', EDDY_BOTTOM_TAPER)} ${eddyShared}${K}  let e = ${idx}; if (e >= E) { return; }
   for (var k = 0; k < L; k++) { OD[O_EDDYV + k * E + e] = 0.0; OD[O_EDDYQ + k * E + e] = 0.0; OD[O_EDDYW + k * E + e] = 0.0; }
   let kappa = min(OD[O_EDDYK + e], P[1]);
   if (OD[O_EMASK + e] < 0.5 || !(kappa > 0.0)) { return; }
@@ -579,43 +617,96 @@ ${K}  let e = ${idx}; if (e >= E) { return; }
     OD[O_EDDYW + k * E + e] = eddyShare(wa, wb, sa, sb, carried * select(wb, wa, toB)) / P[0];
   }
 }`,
-    oEddyApply: `${K}  let n = ${idx}; if (n >= L * C) { return; }
-  let k = n / C; let i = n % C;
-  if (k == 0 || OD[O_CMASK + i] < 0.5) { return; }
-  var volume = 0.0; var heat = 0.0; var salt = 0.0;
-  for (var m = 0; m < MI[NEC + i]; m++) {
-    let e = MI[EOC + MAXE * i + m]; let s = f32(MI[ESC + MAXE * i + m]);
-    volume += s * OD[O_EDDYV + k * E + e]; heat += s * OD[O_EDDYQ + k * E + e]; salt += s * OD[O_EDDYW + k * E + e];
+    oEddyApply: eddyApply(1),
+    oEddyLeftover: eddyLeftover(1),
+    /*
+     * The Ekman block of ocean/layered.module.js, one edge a thread, in the
+     * eddy transport's scratch: each class's change in the edge's volume
+     * flux, in whole multiples of the coarser cell's spacing and with the
+     * thinnest class thick in both cells taking back what the rounding left
+     * of the edge's net, and the heat and salt it carries from its upwind
+     * cell. The stress shares and the block's parts wait in EDDYQ and EDDYW
+     * until the changes are made; UEK keeps the edge's Ekman transport.
+     * oEkmanApply and oEkmanLeftover are the eddy pass's, mixed layer
+     * included.
+     */
+    ...(o.ekmanBlock ? {
+      oEkmanFlux: `fn ekmanColumn(k: i32, a: i32, b: i32, squeeze: f32) -> f32 {
+  return select(min(IN[hOff(k) + a], IN[hOff(k) + b]), 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]), k == 0) * squeeze;
+}
+${eddyShared}${K}  let e = ${idx}; if (e >= E) { return; }
+  OD[O_UEK + e] = 0.0;
+  for (var k = 0; k < L; k++) { OD[O_EDDYV + k * E + e] = 0.0; OD[O_EDDYQ + k * E + e] = 0.0; OD[O_EDDYW + k * E + e] = 0.0; }
+  if (OD[O_EMASK + e] < 0.5) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  let sill = max(EPSO, min(OD[O_BATH + a], OD[O_BATH + b]) + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
+  var sum = 0.0;
+  for (var k = 0; k < L; k++) { sum += ekmanColumn(k, a, b, 1.0); }
+  let squeeze = select(1.0, sill / sum, sum > sill);
+  let wind = ${o.ekmanDepth > 0 ? 'OD[O_HM + e]' : 'MOMDEPTH'};
+  let reach = max(wind, ekmanColumn(0, a, b, squeeze));
+  let rate = RINT / reach; let f = OD[O_FEDGE + e];
+  let denominator = RHO0 * (rate * rate + f * f);
+  if (!(denominator > 0.0)) { return; }
+  var along = 0.0;
+  for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; along += MF[F_PVW + slot] * OD[O_STRESS + MI[EOE + slot]]; }
+  let transport = (rate * OD[O_STRESS + e] + f * (along / MF[F_DC + e])) / denominator;
+  OD[O_UEK + e] = transport;
+  if (transport == 0.0) { return; }
+  let donor = select(b, a, transport > 0.0);
+  let blockDepth = max(wind, IN[hOff(0) + donor]);
+  var top = 0.0; var depth = 0.0; var reaching = true; var z = 0.0; var total = 0.0;
+  for (var k = 0; k < L; k++) {
+    var share = 0.0;
+    if (reaching) {
+      let hk = ekmanColumn(k, a, b, squeeze);
+      let part = min(hk, max(0.0, reach - top));
+      if (k == 0 || hk >= ${stressFloor}) { share = part; depth += part; }
+      top += hk; reaching = top < reach;
+    }
+    let hd = IN[hOff(k) + donor];
+    let inBlock = min(select(max(0.0, hd - EPSO), hd, k == 0), max(0.0, blockDepth - z));
+    z += hd; total += inBlock;
+    OD[O_EDDYQ + k * E + e] = share; OD[O_EDDYW + k * E + e] = inBlock;
   }
-  let factor = P[0] / MF[F_AREA + i];
-  let dq = -factor * heat; let dw = -factor * salt;
-  let rh = settle(IN[hOff(k) + i], -factor * volume); let rq = settle(IN[qOff(k) + i], dq); let rw = settle(IN[wOff(k) + i], dw);
-  IN[hOff(k) + i] += rh; IN[qOff(k) + i] += rq; IN[wOff(k) + i] += rw;
-  OUT[hOff(k) + i] = rh; OUT[qOff(k) + i] = dq - rq; OUT[wOff(k) + i] = dw - rw;
+  if (!(depth > 0.0) || !(total > 0.0)) {
+    for (var k = 0; k < L; k++) { OD[O_EDDYQ + k * E + e] = 0.0; OD[O_EDDYW + k * E + e] = 0.0; }
+    return;
+  }
+  let volumeFlux = transport * MF[F_DV + e];
+  var scale = 1.0;
+  for (var k = 0; k < L; k++) {
+    let change = volumeFlux * (OD[O_EDDYW + k * E + e] / total - OD[O_EDDYQ + k * E + e] / depth);
+    OD[O_EDDYV + k * E + e] = change;
+    if (change != 0.0) {
+      let allowed = eddyAllowance(k, select(b, a, change > 0.0));
+      if (abs(change) > allowed) { scale = min(scale, allowed / abs(change)); }
+    }
+  }
+  let sa = MF[F_AREA + a]; let sb = MF[F_AREA + b];
+  var net = 0.0; var taker = -1; var finest = 0.0;
+  for (var k = 0; k < L; k++) {
+    let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
+    let change = scale * OD[O_EDDYV + k * E + e];
+    var moved = 0.0;
+    if (change != 0.0) { moved = eddyShare(ha, hb, sa, sb, change * P[0]); net += moved; }
+    OD[O_EDDYV + k * E + e] = moved;
+    if (min(ha, hb) > THINO) { let g = grain(max(ha, hb)); if (taker < 0 || g < finest) { taker = k; finest = g; } }
+  }
+  if (taker >= 0) { OD[O_EDDYV + taker * E + e] -= net; }
+  for (var k = 0; k < L; k++) {
+    let moved = OD[O_EDDYV + k * E + e];
+    if (moved == 0.0) { OD[O_EDDYQ + k * E + e] = 0.0; OD[O_EDDYW + k * E + e] = 0.0; continue; }
+    let qa = IN[qOff(k) + a]; let qb = IN[qOff(k) + b]; let wa = IN[wOff(k) + a]; let wb = IN[wOff(k) + b];
+    let toB = moved > 0.0; let carried = moved / IN[hOff(k) + select(b, a, toB)];
+    OD[O_EDDYV + k * E + e] = moved / P[0];
+    OD[O_EDDYQ + k * E + e] = eddyShare(qa, qb, sa, sb, carried * select(qb, qa, toB)) / P[0];
+    OD[O_EDDYW + k * E + e] = eddyShare(wa, wb, sa, sb, carried * select(wb, wa, toB)) / P[0];
+  }
 }`,
-    oEddyLeftover: `${K}  let i = ${idx}; if (i >= C) { return; }
-  if (OD[O_CMASK + i] < 0.5) { return; }
-  var kept = 0.0; var owedQ = 0.0; var owedW = 0.0; var holder = 0; var finest = 0.0;
-  for (var k = 1; k < L; k++) {
-    kept += OUT[hOff(k) + i]; owedQ += OUT[qOff(k) + i]; owedW += OUT[wOff(k) + i];
-    let hk = IN[hOff(k) + i];
-    if (hk > THINO && (holder == 0 || grain(hk) < finest)) { holder = k; finest = grain(hk); }
-  }
-  if (holder == 0) { return; }
-  let hh = IN[hOff(holder) + i];
-  let rh = settle(hh, -kept); let rq = settle(IN[qOff(holder) + i], rh * IN[qOff(holder) + i] / hh); let rw = settle(IN[wOff(holder) + i], rh * IN[wOff(holder) + i] / hh);
-  IN[hOff(holder) + i] = hh + rh; IN[qOff(holder) + i] += rq; IN[wOff(holder) + i] += rw;
-  owedQ -= rq; owedW -= rw;
-  var heatHolder = holder; var saltHolder = holder; var finestQ = grain(IN[qOff(holder) + i]); var finestW = grain(IN[wOff(holder) + i]);
-  for (var k = 1; k < L; k++) {
-    if (IN[hOff(k) + i] <= THINO) { continue; }
-    let gq = grain(IN[qOff(k) + i]); let gw = grain(IN[wOff(k) + i]);
-    if (gq < finestQ) { heatHolder = k; finestQ = gq; }
-    if (gw < finestW) { saltHolder = k; finestW = gw; }
-  }
-  IN[qOff(heatHolder) + i] += settle(IN[qOff(heatHolder) + i], owedQ);
-  IN[wOff(saltHolder) + i] += settle(IN[wOff(saltHolder) + i], owedW);
-}`,
+      oEkmanApply: eddyApply(0),
+      oEkmanLeftover: eddyLeftover(0),
+    } : {}),
     oAdvance: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
   let stride = i32(groups.x * groups.y) * ${WORKGROUP};
   for (var n = ${idx}; n < OSTOTAL; n += stride) { OUT[n] = IN[n] + P[0] * OD[n]; }
@@ -1076,11 +1167,12 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
    * before oMomentum, to oMomentum share another. With the closure's
    * rings FLUX marks the fitted edges and LAPA and LAPB hold the rings
    * until oClosureBack2, so those three stay apart. After the combine the
-   * eddy passes leave their fluxes in EDDYV, EDDYQ and EDDYW over FLUX,
+   * eddy and Ekman passes leave their fluxes in EDDYV, EDDYQ and EDDYW over FLUX,
    * HEDGE and QE (over FLUX, LAPA and LAPB with the rings), which
    * oEdgeThickness and every tendency recompute before reading them.
    * DU, the shear at the mixed layer's base from oShearEdge to
-   * oMixedLayer, sits in FLUX's slot.
+   * oMixedLayer, sits in FLUX's slot. UEK, the Ekman transport of each
+   * edge, has a slot of its own.
    */
   const sheared = o.shearEntrainment > 0 ? ['DU'] : [];
   const OD = seq([
@@ -1094,6 +1186,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ['EDDYK', E], ['TEDGE', 3 * E], ['DEEPEST', E], ['REM', 3 * C],
     ...(o.ekmanDepth > 0 ? [['HM', E]] : []),
     ...(o.retreatDaily ? [['SUNSTEP', C], ['SUNSUM', C], ['DARKSUM', C], ['SUNDAY', C], ['DARKDAY', C]] : []),
+    ...(o.ekmanBlock ? [['UEK', E]] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -1250,22 +1343,24 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   function step(dt) {
     dynamics(dt);
     const g = group(ob.S, ob.T);
-    if (eddyLimit > 0) setParams([dt, eddyLimit / dt]);
+    if (eddyLimit > 0 || o.ekmanBlock) setParams([dt, eddyLimit / dt]);
     compute((pass) => {
       rescalePass(pass, g);
       if (eddyLimit > 0) eddyPasses(pass, g);
+      if (o.ekmanBlock) ekmanPasses(pass, g);
       shiftPass(pass, g);
     });
     edgesCurrent = true;
   }
   /*
    * step's parts in its order, for the tests that follow heat and salt
-   * through it: dynamics(dt), rescale(), eddy(dt), shift().
+   * through it: dynamics(dt), rescale(), eddy(dt), ekman(dt), shift().
    */
   const phases = {
     dynamics(dt) { dynamics(dt); edgesCurrent = false; },
     rescale() { compute((pass) => rescalePass(pass, group(ob.S, ob.T))); edgesCurrent = false; },
     eddy: eddyTransport,
+    ekman: ekmanTransport,
     shift() { compute((pass) => shiftPass(pass, group(ob.S, ob.T))); edgesCurrent = true; },
   };
 
@@ -1278,6 +1373,17 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     if (!(eddyLimit > 0)) return;
     setParams([dt, eddyLimit / dt]);
     compute((pass) => eddyPasses(pass, group(ob.S, ob.T)));
+    edgesCurrent = false;
+  }
+  function ekmanPasses(pass, g) {
+    dispatch(pass, 'oEkmanFlux', g, E);
+    dispatch(pass, 'oEkmanApply', g, L * C);
+    dispatch(pass, 'oEkmanLeftover', g, C);
+  }
+  function ekmanTransport(dt) {
+    if (!o.ekmanBlock) return;
+    setParams([dt, eddyLimit / dt]);
+    compute((pass) => ekmanPasses(pass, group(ob.S, ob.T)));
     edgesCurrent = false;
   }
 
@@ -1656,7 +1762,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     useSeaIce(concentration) { seaCover = concentration; },
     initialize, upload, download, serialize, serializeFrom, restartArrays, diagnostics, frame,
     advance, advanceCoupled, accumulateFreshwater, forgetAccumulated,
-    setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, mixedLayer, dayClosing, salt, writeSurface, step, phases, eddyTransport,
+    setStress, readSurface, readSurfaceFromAtmosphere, stressFromAtmosphere, mixedLayer, dayClosing, salt, writeSurface, step, phases, eddyTransport, ekmanTransport,
     buffers: ob, layout: { OS, OD, B },
   };
 }
