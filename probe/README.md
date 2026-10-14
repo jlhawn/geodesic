@@ -43,3 +43,27 @@ fail on the M5 by 2e-4 to 1e-3 K of warm-layer drift over 20 steps, a separate q
 node scripts/paceGpu.mjs runs/eleven128_day1825.bin (report the day-mean ASR; the M5 gives 236.82).
 Write everything to probe/results-m1.md, commit on m5-probe, push. Use /usr/bin/log, not log: in
 zsh `log` is a builtin and the abort check silently prints nothing.
+
+## Step 3: verify branch m5-books on the M1 Max (bit identity again)
+
+A second M5-only compiler bug: in the radiation kernel the private array layerOzone, after
+being passed by pointer to solarGases, reads back as zeros in the upward-ozone heating loop,
+so the M5 lost about 2 W/m² of stratospheric heating (N = 16 books air −2.60 against the
+M1's −0.48; the page at N = 64 lost 1.75 W/m²). The fix (one loop reads the same values from
+the OUT stash instead) is on origin/m5-books, one commit on e1909fb. On the M1 the old code is
+right, so the fix must be bit-identical there:
+
+    git fetch origin m5-books m5-probe && git checkout m5-probe
+    B=$TMPDIR/b3; F=$TMPDIR/f3
+    git worktree add --detach $B origin/c-grid-mesh-prep      # e1909fb
+    git worktree add --detach $F origin/m5-books
+    node probe/gpuIdentity.mjs $B; node probe/gpuIdentity.mjs $F          # must match
+    node probe/pagecmp.mjs $B $PWD/runs/eleven64_day1825.bin 32            # S, PH, D hashes
+    node probe/pagecmp.mjs $F $PWD/runs/eleven64_day1825.bin 32            # must match the line above
+    /usr/bin/log show --last 15m --predicate 'eventMessage CONTAINS "aborted"' --style compact | tail -3
+    git worktree remove $B; git worktree remove $F
+
+In the f3 worktree, one at a time: test/gpuModel.test.mjs (record WHICH assertion of test 17
+fails on the M1: on the M5 the base fails its first CPU/GPU comparison, beta off by 2.2e-2,
+and the fix fails later at "the limiter over 16 steps binds"), test/atmosphereConservation,
+test/physics (34–37 are known CPU digest failures). Append to probe/results-m1.md, commit, push.
