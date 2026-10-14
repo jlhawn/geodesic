@@ -67,3 +67,7 @@ In the f3 worktree, one at a time: test/gpuModel.test.mjs (record WHICH assertio
 fails on the M1: on the M5 the base fails its first CPU/GPU comparison, beta off by 2.2e-2,
 and the fix fails later at "the limiter over 16 steps binds"), test/atmosphereConservation,
 test/physics (34–37 are known CPU digest failures). Append to probe/results-m1.md, commit, push.
+
+Step 3 note: origin/m5-books now has a second commit (the Node 22 guard, no kernel change); verify at
+its tip. On the M5 with Node 22 and the fix, paceGpu on eleven64_day1825 gives ASR 228.10, OLR 229.36,
+Ts 14.442 against the M1's 228.08 / 229.36 / 14.442, so the two machines now agree.
