@@ -9,3 +9,4 @@ runs/*
 !runs/twelve192_day0020.bin.gz.*
 node_modules/
 node_modules
+probe/out/
