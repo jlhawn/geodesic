@@ -11,7 +11,7 @@ WebGCM: a browser climate model (JavaScript; CPU and WebGPU engines under `js/`)
 
 ## The GPU
 
-- One GPU model at a time on this Mac: macOS aborts command buffers under contention, silently. Before any GPU run (a test file that steps a GPU model, `scripts/spinup.mjs`, `oceanSpinup.mjs`, `explainOcean.mjs`, a profile) check that no page server listens on port 8000 (`lsof -nP -iTCP:8000 -sTCP:LISTEN`) and no other node job is running (`ps -axo pid,command | grep -E 'node (scripts/|--test)'`); if one is, wait, polling every 30 s. Afterward: `log show --last 15m --predicate 'eventMessage CONTAINS "aborted"' --style compact | tail -3`.
+- One GPU model at a time on this Mac: macOS aborts command buffers under contention, silently. Before any GPU run (a test file that steps a GPU model, `scripts/spinup.mjs`, `oceanSpinup.mjs`, `explainOcean.mjs`, a profile) check that no page server listens on port 8000 (`lsof -nP -iTCP:8000 -sTCP:LISTEN`) and no other node job is running (`ps -axo pid,command | grep -E 'node (scripts/|--test)'`); if one is, wait, polling every 30 s. Afterward: `/usr/bin/log show --last 15m --predicate 'eventMessage CONTAINS "aborted"' --style compact | tail -3`.
 - Timings taken under contention are worthless; alternate base and candidate runs and repeat them. The page loop on the M1 Max is already about 96 percent GPU-busy.
 - Run GPU test files one at a time; CPU test files together as concurrent runners.
 
