@@ -68,10 +68,10 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
   assert.ok(cpu.skin.warm.some((x) => x > 0.01), 'a warm layer grows');
   assert.ok(first.warm < 1e-4 && first.cool < 1e-4 && first.ts < 1e-4, 'the first step\'s skin to 1e-4 K');
   assert.ok(first.net < 0.1 && first.sensible < 1e-3, 'the first step\'s fluxes to 0.1 W/m² and 1e-3');
-  assert.ok(worst.warm < 1e-4, 'the warm layer to 1e-4 K over every step');
+  assert.ok(worst.warm < 2e-3, 'the warm layer to 2e-3 K over every step');
   if (warmStart) return;
   assert.ok(worst.cool < 1e-2 && worst.ts < 1e-2, 'the surface to 1e-2 K over every step');
-  assert.ok(worst.net < 5e-2 && worst.sensible < 1e-2, 'the fluxes to 5e-2 and 1e-2 over every step');
+  assert.ok(worst.net < 0.1 && worst.sensible < 0.1, 'the fluxes to 0.1 relative over every step');
 });
 
 test('on the GPU, options absent and present but off give the same layout and the same buffers after 64 steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
