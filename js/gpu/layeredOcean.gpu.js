@@ -89,10 +89,10 @@ fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
     o.upwellingSource > 0 ? constLine('UPSRC', o.upwellingSource) : '',
     o.retreatLight > 0 ? `${constLine('RETREATLIGHT', o.retreatLight)}\nfn deposited(z: f32) -> f32 { return select(0.0, JER_R1 / JER_Z1 * exp(-z / JER_Z1) + JER_R2 / JER_Z2 * exp(-z / JER_Z2), z < PENDEPTH); }` : '',
   ].filter((line) => line).map((line) => `${line}\n`).join('');
-  const viscosityLines = `  let dz = max(THINO, 0.5 * (OD[O_HEDGE + up * E + e] + OD[O_HEDGE + down * E + e]));
-  let upper = select(RHO[up], 0.5 * (OD[O_RHOML + MI[COE + 2 * e]] + OD[O_RHOML + MI[COE + 2 * e + 1]]), up == 0);
+  const spanLine = `  let dz = max(THINO, 0.5 * (OD[O_HEDGE + up * E + e] + OD[O_HEDGE + down * E + e]));\n`;
+  const viscosityLines = (dv) => `  let upper = select(RHO[up], 0.5 * (OD[O_RHOML + MI[COE + 2 * e]] + OD[O_RHOML + MI[COE + 2 * e + 1]]), up == 0);
   let buoyancy = max(0.0, OGRAV * (RHO[down] - upper) / RHO0);
-  let du = IN[uOff(up) + e] - IN[uOff(down) + e]; let dv = tangentialU(up, e) - tangentialU(down, e);
+  let du = IN[uOff(up) + e] - IN[uOff(down) + e]; let dv = ${dv};
   let ri = buoyancy * dz / (du * du + dv * dv + 1e-12);
   let nu = SHEARNU / ((1.0 + 5.0 * ri) * (1.0 + 5.0 * ri)) + BACKNU;
 `;
@@ -101,22 +101,25 @@ fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
   for (var j = first; j < past; j++) { z += OD[O_HEDGE + j * E + e]; }
   return z;
 }
-fn interfaceRate(e: i32, up: i32, down: i32, depth: f32, block: f32) -> f32 {
-  if (depth < block) { return RINT; }
-${viscosityLines}  return min(nu / dz, 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
+fn interfaceRate(e: i32, up: i32, down: i32, dz: f32, held: f32) -> f32 {
+${viscosityLines('tangentialU(up, e) - tangentialU(down, e)')}  let viscous = min(nu / dz, 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
+  return viscous + (RINT - viscous) * held;
 }
 ` : `fn interfaceRate(e: i32, up: i32, down: i32) -> f32 {
   let interior = up > 0 && INTSHEAR > 0.5;
   if (SHEARMIX < 0.5 && !interior) { return RINT; }
-${viscosityLines}  return min(max(select(RINT, 0.0, interior), nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
+${spanLine}${viscosityLines('tangentialU(up, e) - tangentialU(down, e)')}  return min(max(select(RINT, 0.0, interior), nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
 }
 `;
-  const blockTop = o.blockDrag ? `  let block = max(${o.ekmanDepth > 0 ? 'OD[O_HM + e]' : 'MOMDEPTH'}, OD[O_HEDGE + e]);\n  var zTop = 0.0; var rateAbove = 0.0;\n` : '';
+  const blockTop = o.blockDrag ? `  let block = ${o.ekmanDepth > 0 ? 'OD[O_HM + e]' : 'MOMDEPTH'};\n  var zTop = 0.0; var rateAbove = 0.0;\n` : '';
   const dragLines = o.blockDrag ? `    let below = firstThickBelow(k, thickLo, thickHi);
     if (k == 0 || hk >= THINO) {
       if (k > 0) { drag += rateAbove * (IN[uOff(above) + e] - u); }
       if (below >= 0) {
-        rateAbove = interfaceRate(e, k, below, depthTo(e, k + 1, below, zTop + hk), block);
+        let span = max(THINO, 0.5 * (hk + OD[O_HEDGE + below * E + e]));
+        let held = min(1.0, (block - depthTo(e, k + 1, below, zTop + hk)) / span);
+        rateAbove = RINT;
+        if (held < 1.0) { rateAbove = interfaceRate(e, k, below, span, max(held, 0.0)); }
         drag -= rateAbove * (u - IN[uOff(below) + e]);
       }
     }

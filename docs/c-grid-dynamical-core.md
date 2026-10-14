@@ -2378,11 +2378,12 @@ against Earth's 10⁻⁴ to 10⁻³ below the undercurrent core; the mixed
 layer's base keeps `interfacialDrag`. In 60 coupled N=64 days it let
 thermocline classes run at 1.5–3 m/s beside the coasts near the equator
 (M23). Under the option `blockDrag` (off; it excludes the two shear
-options) r is `interfacialDrag` at every interface shallower than the
-Ekman block, the deeper of the wind depth and the mixed layer at the edge,
-the interface's depth being the edge thicknesses summed down to the lower
-layer, and beneath it the same viscosity with no floor, the mixed layer's
-base included. Inside a wind-mixed layer r Δz over 50 m is the 10⁻² m²/s
+options) r is `interfacialDrag` at every interface lying the distance Δz
+between the layers' middles or more above the wind depth at the edge, the
+interface's depth being the edge thicknesses summed down to the lower
+layer, and from the wind depth down the same viscosity with no floor, the
+mixed layer's base included; in the Δz above the wind depth the two blend
+linearly, so that no interface switches as a layer crosses it. Inside a wind-mixed layer r Δz over 50 m is the 10⁻² m²/s
 of Chereskin (1995), which holds the South Equatorial Current to its
 Ekman layer; beneath it Ri of ¼ to ½ in the shear above the undercurrent
 core gives r of 4×10⁻⁵ to 2×10⁻⁵ m/s over 50 m, where a one-slab balance

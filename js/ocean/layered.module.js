@@ -1129,25 +1129,30 @@ export function createOcean(mesh, {
    * the mixed layer's base; r is held to half of what either layer's drag
    * thickness can take in one step (params[1] seconds). Under `blockDrag`,
    * interfacialDrag holds wherever the interface, the summed edge
-   * thickness down to the lower layer, is shallower than the Ekman block
-   * max(windDepth, mixed layer), and the viscosity with no floor
-   * everywhere beneath it, the mixed layer's base included.
+   * thickness down to the lower layer, lies the distance Δz between the
+   * layers' middles or more above the wind depth, the viscosity with no
+   * floor from the wind depth down, the mixed layer's base included, and
+   * the two blend linearly in the Δz above it.
    */
   function interfaceRate(uIn, e, up, down) {
-    if (blockDrag) {
-      let depth = 0;
-      for (let j = 0; j < down; j++) depth += hEdge[ae(j, e)];
-      if (depth < Math.max(windDepth ? windDepth[e] : momentumDepth, hEdge[e])) return interfacialDrag;
-    }
     const interior = up > 0 && interiorShearMixing;
     if (!shearMixing && !interior && !blockDrag) return interfacialDrag;
     const dz = Math.max(THIN, 0.5 * (hEdge[ae(up, e)] + hEdge[ae(down, e)]));
+    let held = 0;
+    if (blockDrag) {
+      let depth = 0;
+      for (let j = 0; j < down; j++) depth += hEdge[ae(j, e)];
+      held = Math.min(1, ((windDepth ? windDepth[e] : momentumDepth) - depth) / dz);
+      if (held >= 1) return interfacialDrag;
+      held = Math.max(0, held);
+    }
     const upper = up === 0 ? 0.5 * (rhoMl[cellsOnEdge[2 * e]] + rhoMl[cellsOnEdge[2 * e + 1]]) : rho[up];
     const buoyancy = Math.max(0, g * (rho[down] - upper) / rho0);
     const du = uIn[ae(up, e)] - uIn[ae(down, e)], dv = tangential(uIn, up, e) - tangential(uIn, down, e);
     const richardson = buoyancy * dz / (du * du + dv * dv + 1e-12);
     const nu = shearViscosity / (1 + 5 * richardson) ** 2 + backgroundViscosity;
-    return Math.min(Math.max(interior || blockDrag ? 0 : interfacialDrag, nu / dz), 0.5 * Math.min(dragThickness(up, e), dragThickness(down, e)) / params[1]);
+    const rate = Math.min(Math.max(interior || blockDrag ? 0 : interfacialDrag, nu / dz), 0.5 * Math.min(dragThickness(up, e), dragThickness(down, e)) / params[1]);
+    return blockDrag ? rate + (interfacialDrag - rate) * held : rate;
   }
 
   function surfaceDensity(hIn, QIn, WIn) {
