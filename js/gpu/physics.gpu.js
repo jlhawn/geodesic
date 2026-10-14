@@ -568,6 +568,7 @@ fn relaxedFraction(x: f32) -> f32 {
 }
 // both forms, no branch: the longwave's neighbouring columns straddle the cutoff often enough that branching costs more
 fn relaxedFractionBoth(x: f32) -> f32 { return select(1.0 - exp(-x), relaxedSeries(x), x < 1e-2); }
+// the back-substitutions count up: Apple M5's Metal compiler miscompiles a constant-bounds down-counting loop over private arrays under Tint's index clamps
 fn thomas(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, array<f32, K>>, rhs: ptr<function, array<f32, K>>) {
   var gain: array<f32, K>;
   var denominator = 1.0 + (*upper)[0] + (*lower)[0];
@@ -578,7 +579,7 @@ fn thomas(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, arra
     gain[j] = -(*lower)[j] / denominator;
     (*rhs)[j] = ((*rhs)[j] + (*upper)[j] * (*rhs)[j - 1]) / denominator;
   }
-  for (var j = n - 2; j >= 0; j--) { (*rhs)[j] -= gain[j] * (*rhs)[j + 1]; }
+  for (var m = 0; m < n - 1; m++) { let j = n - 2 - m; (*rhs)[j] -= gain[j] * (*rhs)[j + 1]; }
 }
 fn thomasRate(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, array<f32, K>>, own: ptr<function, array<f32, K>>, rhs: ptr<function, array<f32, K>>, dt: f32) {
   var gain: array<f32, K>;
@@ -590,7 +591,7 @@ fn thomasRate(n: i32, upper: ptr<function, array<f32, K>>, lower: ptr<function, 
     gain[j] = -(*lower)[j] / denominator;
     (*rhs)[j] = ((*rhs)[j] + (*upper)[j] * (*rhs)[j - 1]) / denominator;
   }
-  for (var j = n - 2; j >= 0; j--) { (*rhs)[j] -= gain[j] * (*rhs)[j + 1]; }
+  for (var m = 0; m < n - 1; m++) { let j = n - 2 - m; (*rhs)[j] -= gain[j] * (*rhs)[j + 1]; }
 }
 `;
 
