@@ -11,6 +11,7 @@ export async function getDevice() {
   if (cached) return cached;
   let gpu = globalThis.navigator && globalThis.navigator.gpu;
   if (!gpu) {
+    if (!globalThis.process?.getBuiltinModule) throw new Error(`Node 22 or newer is required: this is ${globalThis.process?.version}, whose process.getBuiltinModule is missing, so the state-grid and geography loaders would read no files`);
     const { create, globals } = await import('webgpu');
     Object.assign(globalThis, globals);
     gpu = create([]);
