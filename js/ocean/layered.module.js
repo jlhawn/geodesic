@@ -296,7 +296,8 @@ export const EPS = 0.01, THIN = 5, PV_FLOOR = 20, SPEED_LIMIT = 5, DENSITY_TOLER
  * than `cap`. erfc is Abramowitz and Stegun's 7.1.26, as on the GPU.
  */
 export const FRICTION_PER_WIND = 1.19e-3, CALM_WIND = 1e-3, RETREAT_EKMAN = 0.7;
-export function mixingOptionCheck({ stressThickness, langmuir, retreatEkman = 0, retreatDaily = false, retreatLight = 0, penetration = null }) {
+export function mixingOptionCheck({ stressThickness, langmuir, retreatEkman = 0, retreatDaily = false, retreatLight = 0, penetration = null, blockDrag = false, shearMixing = false, interiorShearMixing = false }) {
+  if (blockDrag && (shearMixing || interiorShearMixing)) throw new Error('blockDrag sets the viscosity below the Ekman block itself, so it excludes shearMixing and interiorShearMixing');
   if (!(retreatEkman >= 0 && retreatEkman < Infinity)) throw new Error(`retreatEkman bounds the retreat at that multiple of u*/|f|, so it is 0 (no bound) or positive, not ${retreatEkman}`);
   if (!(retreatLight >= 0 && retreatLight <= 1)) throw new Error(`retreatLight weighs the light the night's convection carries down to the mixed layer's base, from 0 (no gate) to 1, not ${retreatLight}`);
   if (retreatLight > 0 && !retreatDaily) throw new Error('retreatLight gates the retreat on the previous day\'s sunlight and dark loss, so it needs retreatDaily');
@@ -926,7 +927,7 @@ export function createOcean(mesh, {
   minimumThickness = 50, shallowestMixedDepth = 50, maximumMixedDepth = 600, convectiveRate = 100 / 86400, neutralSnap = false, convectiveErosion = true, buoyancyMemory = 86400, mixedNeighbourRatio = 0, vorticityCentring = 0.5, stirring = 0.8, stirringDepth = 100, detrainmentTime = 86400, restoreTime = 2 * 86400, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917,
   momentumDepth = 50, carryMomentum = true, refillRate = 0.00027778, refillFloor = 5, shearEntrainment = 0.65,
   ekmanDepth = 0.4, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 2.5, langmuir = 2, retreatEkman = RETREAT_EKMAN, retreatDaily = false, retreatLight = 0,
-  interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
+  interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, blockDrag = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, buffers = null, climatology = null,
 } = {}) {
@@ -938,7 +939,7 @@ export function createOcean(mesh, {
   if (climatology && typeof climatology.columnAt !== 'function') throw new Error('the ocean climatology must be decoded (loadClimatology in ./climatology.module.js) before the ocean is built');
   if (penetration !== null && !JERLOV[penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${penetration}`);
   if (shearEntrainment > 0 && !carryMomentum) throw new Error('shearEntrainment needs carryMomentum: without the entrained water\'s momentum mixed in, the base\'s Richardson number never rises and the mixed layer swallows a class a step');
-  mixingOptionCheck({ stressThickness, langmuir, retreatEkman, retreatDaily, retreatLight, penetration });
+  mixingOptionCheck({ stressThickness, langmuir, retreatEkman, retreatDaily, retreatLight, penetration, blockDrag, shearMixing, interiorShearMixing });
   const L = densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = [rho0, ...densities];
   const labelS = [referenceS, ...salinities];
@@ -1088,18 +1089,27 @@ export function createOcean(mesh, {
    * step and the difference of their full velocities, the tangential part
    * reconstructed as the Coriolis term's, no less than interfacialDrag at
    * the mixed layer's base; r is held to half of what either layer's drag
-   * thickness can take in one step (params[1] seconds).
+   * thickness can take in one step (params[1] seconds). Under `blockDrag`,
+   * interfacialDrag holds wherever the interface, the summed edge
+   * thickness down to the lower layer, is shallower than the Ekman block
+   * max(windDepth, mixed layer), and the viscosity with no floor
+   * everywhere beneath it, the mixed layer's base included.
    */
   function interfaceRate(uIn, e, up, down) {
+    if (blockDrag) {
+      let depth = 0;
+      for (let j = 0; j < down; j++) depth += hEdge[ae(j, e)];
+      if (depth < Math.max(windDepth ? windDepth[e] : momentumDepth, hEdge[e])) return interfacialDrag;
+    }
     const interior = up > 0 && interiorShearMixing;
-    if (!shearMixing && !interior) return interfacialDrag;
+    if (!shearMixing && !interior && !blockDrag) return interfacialDrag;
     const dz = Math.max(THIN, 0.5 * (hEdge[ae(up, e)] + hEdge[ae(down, e)]));
     const upper = up === 0 ? 0.5 * (rhoMl[cellsOnEdge[2 * e]] + rhoMl[cellsOnEdge[2 * e + 1]]) : rho[up];
     const buoyancy = Math.max(0, g * (rho[down] - upper) / rho0);
     const du = uIn[ae(up, e)] - uIn[ae(down, e)], dv = tangential(uIn, up, e) - tangential(uIn, down, e);
     const richardson = buoyancy * dz / (du * du + dv * dv + 1e-12);
     const nu = shearViscosity / (1 + 5 * richardson) ** 2 + backgroundViscosity;
-    return Math.min(Math.max(interior ? 0 : interfacialDrag, nu / dz), 0.5 * Math.min(dragThickness(up, e), dragThickness(down, e)) / params[1]);
+    return Math.min(Math.max(interior || blockDrag ? 0 : interfacialDrag, nu / dz), 0.5 * Math.min(dragThickness(up, e), dragThickness(down, e)) / params[1]);
   }
 
   function surfaceDensity(hIn, QIn, WIn) {

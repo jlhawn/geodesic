@@ -2377,7 +2377,17 @@ is a viscosity r Δz of 5×10⁻³ to 10⁻² m²/s through the thermocline
 against Earth's 10⁻⁴ to 10⁻³ below the undercurrent core; the mixed
 layer's base keeps `interfacialDrag`. In 60 coupled N=64 days it let
 thermocline classes run at 1.5–3 m/s beside the coasts near the equator
-(M23). Bottom drag is quadratic,
+(M23). Under the option `blockDrag` (off; it excludes the two shear
+options) r is `interfacialDrag` at every interface shallower than the
+Ekman block, the deeper of the wind depth and the mixed layer at the edge,
+the interface's depth being the edge thicknesses summed down to the lower
+layer, and beneath it the same viscosity with no floor, the mixed layer's
+base included. Inside a wind-mixed layer r Δz over 50 m is the 10⁻² m²/s
+of Chereskin (1995), which holds the South Equatorial Current to its
+Ekman layer; beneath it Ri of ¼ to ½ in the shear above the undercurrent
+core gives r of 4×10⁻⁵ to 2×10⁻⁵ m/s over 50 m, where a one-slab balance
+of a 100 m undercurrent between a 0.3 m/s westward current and still water
+passes from −0.08 m/s at 2×10⁻⁴ to 0.7 m/s. Bottom drag is quadratic,
 C_D |u| u with C_D = 3×10⁻³, applied to the deepest layer with water at
 the edge and divided by its edge thickness, no less than
 `momentumDepth`. A linear bottom drag of
