@@ -35,9 +35,9 @@ export const PH_MAP = {
   REGIME: 'boundaryLayer.regime', ENTRAIN: 'boundaryLayer.entrainment', VRAD: 'boundaryLayer.radiativeVelocity', CTCOOL: 'boundaryLayer.cloudTopCooling',
   DECK: 'radiation.stratus', DECKF: 'radiation.stratusFraction', STRAT: 'radiation.stratiform', MLMCOVER: 'radiation.mlmCover', MLMWATER: 'radiation.mlmWater', MLMENT: 'radiation.mlmEntrainment',
   MLMTOP: 'radiation.mlmTop', MLMH: 'radiation.mlmHeight', MLMSUB: 'radiation.mlmSubsidence', MLMGATE: 'radiation.mlmGate', LWH: 'radiation.longwave',
-  REFL: 'radiation.summed.reflectedSolar', REFLSUM: 'radiation.summed.reflectedSolar', ABS: 'radiation.summed.absorbedSolar', ABSSUM: 'radiation.summed.absorbedSolar',
-  OLR: 'radiation.held.outgoing', OLRSUM: 'radiation.held.outgoing', ATMSW: 'radiation.summed.atmosphereSolar', ATMSUM: 'radiation.summed.atmosphereSolar',
-  INS: 'radiation.summed.insolation', INSSUM: 'radiation.summed.insolation', ABSCLRSUM: 'radiation.summed.clearAbsorbedSolar', OLRCLRSUM: 'radiation.held.clearOutgoing',
+  REFLSUM: 'radiation.summed.reflectedSolar', ABSSUM: 'radiation.summed.absorbedSolar',
+  OLR: 'radiation.held.outgoing', OLRSUM: 'radiation.summed.outgoingLongwave', ATMSUM: 'radiation.summed.atmosphereSolar',
+  INSSUM: 'radiation.summed.insolation', ABSCLRSUM: 'radiation.summed.clearAbsorbedSolar', OLRCLRSUM: 'radiation.summed.clearOutgoingLongwave',
   ASRMEAN: 'radiation.meanAbsorbedSolar', OLRMEAN: 'radiation.meanOutgoingLongwave', ALBMEAN: 'radiation.meanPlanetaryAlbedo', SWCREMEAN: 'radiation.meanShortwaveCloudEffect', LWCREMEAN: 'radiation.meanLongwaveCloudEffect',
   CUMF: 'moist.cumulusBaseFlux', CUTOP: 'moist.cumulusTop', CUCOVER: 'moist.cumulusCover[tail]', CUWATER: 'moist.cumulusWater[tail]', SUBTV: 'moist.subcloudVirtual', CONVMEAN: 'moist.convectiveRain', CONDMEAN: 'moist.largeScaleRain',
   PEN: 'ocean.penetrated', TRANS: 'ocean.transmission', CONC: 'seaIce.concentration', SNOW: 'seaIce.snow', SNOWALB: 'seaIce.snowAlbedo',
@@ -54,6 +54,7 @@ export const PH_INPUT = {
   TAU: 'relaxation time, an input', ADIF: 'diffuse albedo, a local of model.module.js', LAND: 'surface flags 0/1/2, an input', CUFALL: 'plume-to-rain hand-off', CURESERVE: 'plume-to-rain hand-off', CUFROZEN: 'plume-to-rain hand-off',
   CUDEEP: 'plume-to-rain hand-off', CUBASE: 'plume-to-rain hand-off', CURAIN: 'cumulus part of CONV', LWSFCSUM: 'running sum for the means', CLOUDK: 'cloud layer index, written inside the physics kernel',
   CUSHALLOW: 'plume diagnostic', CUSNOW: 'plume diagnostic', MOMU: 'momentum-layer scratch', MOMK: 'momentum-layer scratch', MOMD: 'momentum-layer scratch', MOMKD: 'momentum-layer scratch', MOMS: 'momentum-layer scratch',
+  ABS: 'per-step value whose CPU counterpart is the running sum ABSSUM compares', INS: 'per-step value whose CPU counterpart is the running sum INSSUM compares', REFL: 'per-step value whose CPU counterpart is the running sum REFLSUM compares', ATMSW: 'per-step value whose CPU counterpart is the running sum ATMSUM compares',
   FOGMEAN: 'running mean', FSTRESS: 'form drag, off unless formDrag is on', OFLT: 'orographic filter scratch', TOFD: 'form drag profile', RADP: 'held radiation scratch',
 };
 // mapped regions that may legitimately be all zero in a configuration (env MAY_BE_ZERO_EXTRA adds names, comma separated); the land
