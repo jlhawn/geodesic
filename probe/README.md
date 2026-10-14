@@ -20,3 +20,26 @@ instrumented mixField described in the session notes; without it the qc column i
 the plain result); `node probe/lengths.mjs` and `node probe/arrlen.mjs` check
 robustness clamping of buffer reads in helper functions and across eight bindings.
 On the M5 Max all three small probes pass; only the full kernels fail.
+
+## Verifying the fix (branch m5-fix) on the M1 Max: bit identity
+
+The fix only reverses the direction of three loops; the arithmetic is the same, so the
+M1's results must not change at all. From the repo root, nothing else on the GPU:
+
+    git fetch origin m5-fix m5-probe && git checkout m5-probe
+    B=$TMPDIR/m5base; F=$TMPDIR/m5fix
+    git worktree add --detach $B origin/c-grid-mesh-prep
+    git worktree add --detach $F origin/m5-fix
+    node probe/gpuIdentity.mjs $B; node probe/gpuIdentity.mjs $F     # must match line for line
+    node probe/cpu20.mjs $B; node probe/cpu20.mjs $F                 # must match
+    node probe/pagecmp.mjs $B $PWD/runs/eleven64_day1825.bin 32      # the check that matters: S, PH, D hashes after 32 page steps
+    node probe/pagecmp.mjs $F $PWD/runs/eleven64_day1825.bin 32      # must match the line above
+    /usr/bin/log show --last 15m --predicate 'eventMessage CONTAINS "aborted"' --style compact | tail -3
+    git worktree remove $B; git worktree remove $F
+
+Also run, in the m5fix worktree, one file at a time: test/boundaryLayer.test.mjs (12/12),
+test/gpuModel.test.mjs (30/31), test/skinGpu.test.mjs (report every number: tests 1, 3 and 4
+fail on the M5 by 2e-4 to 1e-3 K of warm-layer drift over 20 steps, a separate question), and
+node scripts/paceGpu.mjs runs/eleven128_day1825.bin (report the day-mean ASR; the M5 gives 236.82).
+Write everything to probe/results-m1.md, commit on m5-probe, push. Use /usr/bin/log, not log: in
+zsh `log` is a builtin and the abort check silently prints nothing.
