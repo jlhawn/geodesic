@@ -1,0 +1,70 @@
+/* Dumped generated MSL */
+#ifdef __clang__
+#pragma clang diagnostic ignored "-Wall"
+#endif
+
+#pragma METAL fp math_mode(relaxed)
+#include <metal_stdlib>
+using namespace metal;
+
+template<typename T, size_t N>
+struct tint_array {
+  const constant T& operator[](size_t i) const constant { return elements[i]; }
+  device T& operator[](size_t i) device { return elements[i]; }
+  const device T& operator[](size_t i) const device { return elements[i]; }
+  thread T& operator[](size_t i) thread { return elements[i]; }
+  const thread T& operator[](size_t i) const thread { return elements[i]; }
+  threadgroup T& operator[](size_t i) threadgroup { return elements[i]; }
+  const threadgroup T& operator[](size_t i) const threadgroup { return elements[i]; }
+  T elements[N];
+};
+
+struct tint_module_vars_struct {
+  const device tint_array<float, 1>* L;
+  device tint_array<float, 1>* OUT;
+};
+
+void solve(int i, int m, tint_module_vars_struct tint_module_vars) {
+  tint_array<float, 34> gain = {};
+  gain[0] = (*tint_module_vars.L)[i];
+  {
+    int j = 1;
+    while(true) {
+      if ((j < m)) {
+      } else {
+        break;
+      }
+      gain[j] = ((*tint_module_vars.L)[as_type<int>((as_type<uint>(as_type<int>((as_type<uint>(j) * 4096u))) + as_type<uint>(i)))] * gain[as_type<int>((as_type<uint>(j) - 1u))]);
+      {
+        j = as_type<int>((as_type<uint>(j) + 1u));
+      }
+    }
+  }
+  {
+    int j = as_type<int>((as_type<uint>(m) - 1u));
+    while(true) {
+      if ((j >= 0)) {
+      } else {
+        break;
+      }
+      (*tint_module_vars.OUT)[as_type<int>((as_type<uint>(as_type<int>((as_type<uint>(j) * 4096u))) + as_type<uint>(i)))] = gain[j];
+      {
+        j = as_type<int>((as_type<uint>(j) - 1u));
+      }
+    }
+  }
+}
+
+void main_inner(uint3 id, tint_module_vars_struct tint_module_vars) {
+  int const i = int(id.x);
+  if ((i >= 4096)) {
+    return;
+  }
+  (solve(i, 15, tint_module_vars));
+}
+
+[[max_total_threads_per_threadgroup(64)]]
+kernel void dawn_entry_point(uint3 id [[thread_position_in_grid]], const device tint_array<float, 1>* L [[buffer(0)]], device tint_array<float, 1>* OUT [[buffer(1)]]) {
+  tint_module_vars_struct const tint_module_vars = tint_module_vars_struct{.L=L, .OUT=OUT};
+  (main_inner(id, tint_module_vars));
+}
