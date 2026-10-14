@@ -111,9 +111,19 @@ ${viscosityLines}  return min(nu / dz, 0.5 * min(dragThickness(up, e), dragThick
 ${viscosityLines}  return min(max(select(RINT, 0.0, interior), nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
 }
 `;
-  const blockTop = o.blockDrag ? `  let block = max(${o.ekmanDepth > 0 ? 'OD[O_HM + e]' : 'MOMDEPTH'}, OD[O_HEDGE + e]);\n  var zTop = 0.0;\n` : '';
-  const upperRate = o.blockDrag ? 'interfaceRate(e, above, k, zTop, block)' : 'interfaceRate(e, above, k)';
-  const lowerRate = o.blockDrag ? 'interfaceRate(e, k, below, depthTo(e, k + 1, below, zTop + hk), block)' : 'interfaceRate(e, k, below)';
+  const blockTop = o.blockDrag ? `  let block = max(${o.ekmanDepth > 0 ? 'OD[O_HM + e]' : 'MOMDEPTH'}, OD[O_HEDGE + e]);\n  var zTop = 0.0; var rateAbove = 0.0;\n` : '';
+  const dragLines = o.blockDrag ? `    let below = firstThickBelow(k, thickLo, thickHi);
+    if (k == 0 || hk >= THINO) {
+      if (k > 0) { drag += rateAbove * (IN[uOff(above) + e] - u); }
+      if (below >= 0) {
+        rateAbove = interfaceRate(e, k, below, depthTo(e, k + 1, below, zTop + hk), block);
+        drag -= rateAbove * (u - IN[uOff(below) + e]);
+      }
+    }
+` : `    if (k > 0) { drag += interfaceRate(e, above, k) * (IN[uOff(above) + e] - u); }
+    let below = firstThickBelow(k, thickLo, thickHi);
+    if (below >= 0) { drag -= interfaceRate(e, k, below) * (u - IN[uOff(below) + e]); }
+`;
   const topStep = o.blockDrag ? '    zTop += hk;\n' : '';
   const momentumReach = o.ekmanDepth > 0 ? 'hm' : 'MOMDEPTH', stressFloor = o.stressThickness !== PV_FLOOR ? 'STRESSTHICK' : 'PVFLOOR';
   const retreatLoss = o.retreatDaily ? 'dayDrive' : 'loss';
@@ -560,10 +570,7 @@ ${blockTop}  for (var k = 0; k < L; k++) {
     let he = max(hk, MOMDEPTH);
     var force = 0.0; var drag = 0.0;
 ${o.ekmanDepth > 0 ? '    if (k == 0 && hk >= OD[O_HM + e]) { force += OD[O_STRESS + e] / RHO0 * he / hk; }' : '    if (k == 0 && hk >= MOMDEPTH) { force += OD[O_STRESS + e] / RHO0; }'}
-    if (k > 0) { drag += ${upperRate} * (IN[uOff(above) + e] - u); }
-    let below = firstThickBelow(k, thickLo, thickHi);
-    if (below >= 0) { drag -= ${lowerRate} * (u - IN[uOff(below) + e]); }
-    if (below < 0) { force -= RBOT * abs(u) * u; }
+${dragLines}    if (below < 0) { force -= RBOT * abs(u) * u; }
     du += force / he + drag / dragThickness(k, e);
     if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
     if (k > 0 && hk < THINO) { du = (uAbove - u) * P[2]; }
