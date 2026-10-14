@@ -2683,7 +2683,8 @@ fn mixEdge(e: i32, a: i32, b: i32) {
     gain[j] = -lower / denominator;
     mixAbove = mixHere;
   }
-  for (var j = n - 2; j >= 0; j--) { rhs[j] -= gain[j] * rhs[j + 1]; }
+  // counts up, as in thomas()
+  for (var m = 0; m < n - 1; m++) { let j = n - 2 - m; rhs[j] -= gain[j] * rhs[j + 1]; }
   if (IMPLICIT_DRAG) { PH[PH_STRESS + e] = surfaceDrag * rhs[n - 1]; PH[PH_STRESSOK] = 1.0; }
   if (forming) {
     var formed = 0.0;
