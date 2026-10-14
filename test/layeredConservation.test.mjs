@@ -5,6 +5,7 @@ import { buildMesh } from '../js/mesh.module.js';
 import { createOcean, THIN, SPEED_LIMIT, PV_FLOOR, closeDay } from '../js/ocean/layered.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
+import { createGeography, syntheticTopography } from '../js/geography.module.js';
 import { columnMomentum } from './helpers/layered.mjs';
 
 let gpuAvailable = true;
@@ -77,7 +78,7 @@ function books(before, after, layers, rhoCp, D) {
   const watts = (x) => rhoCp * x / (AREA * DT);
   const was = columnMomentum(mesh, layers, before, D), is = columnMomentum(mesh, layers, after, D);
   let momentum = 0;
-  for (let e = 0; e < E; e++) momentum = Math.max(momentum, Math.abs(is.momentum[e] - was.momentum[e]) / was.scale[e]);
+  for (let e = 0; e < E; e++) if (was.scale[e] > 0) momentum = Math.max(momentum, Math.abs(is.momentum[e] - was.momentum[e]) / was.scale[e]);
   return { heat: watts(heat) + waiting / (AREA * DT), stored: watts(heat), salt: salt / AREA, volume: volume / AREA, offMean: { heat: watts(offHeat), salt: offSalt / AREA }, momentum };
 }
 
@@ -155,8 +156,8 @@ test('in double precision every phase of the CPU ocean\'s step keeps the heat an
  * class, so that those refill from the 5 m refillFloor.
  */
 const RATE = 24 / 86400, CAPPED = { ...CARRIED, minimumThickness: 80, refillRate: RATE };
-function capped() {
-  const sea = spunUp(SPINUP, CAPPED), { ocean } = sea, { h, Q, W } = ocean;
+function capped(options = CAPPED) {
+  const sea = spunUp(SPINUP, options), { ocean } = sea, { h, Q, W } = ocean;
   sea.cut = [];
   for (let i = 0, n = 0; i < C; i++) {
     if (!ocean.cellOcean[i] || n++ % 13) continue;
@@ -201,6 +202,64 @@ test('in double precision the mixed layer\'s refill under refillRate keeps each 
   console.log(`CPU capped: at least ${(100 * thinned).toFixed(1)} % of the sea thinned after each mixed-layer step, the thinnest mixed layer ${thinnest.toFixed(3)} m; the refill drew at most ${drawn.toFixed(4)} m in a step from a column not cut, against refillRate·dt ${(RATE * DT).toFixed(4)} m`);
   assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-12, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
   assert.ok(thinned > 0.5 && thinnest >= 5 - 1e-9 && drawn > 0 && drawn <= RATE * DT + 1e-12, `thinned ${thinned}, thinnest ${thinnest} m, drawn ${drawn} m`);
+});
+
+/*
+ * capped()'s sea beside a continent from 55°S to 55°N, with the Ekman
+ * block and upwellingSource 40, so that the refill of every coastal cell
+ * with an Ekman divergence takes what the budget allows from the class
+ * under the block's base.
+ */
+const COAST_TOPOGRAPHY = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0.4 && Math.abs(lat) < 55 * DEG ? 300 : -4000));
+const COAST = createGeography(mesh, COAST_TOPOGRAPHY);
+const UPWELLING = { ...CAPPED, ekmanBlock: true, upwellingSource: 40, geography: COAST, topography: COAST_TOPOGRAPHY };
+
+test('in double precision the mixed layer\'s refill under upwellingSource keeps each column\'s heat, salt and water and each edge\'s momentum while the coastal columns draw from the class under the Ekman block\'s base, no more than their budget', async () => {
+  const { ocean, surfaceT, ice, flux, stress, cut } = capped(UPWELLING);
+  ocean.setStress(stress, ice);
+  ocean.refilled.water.fill(0); ocean.upwelled.fill(0);
+  const snapshot = async () => ({ h: Float64Array.from(ocean.h), q: Float64Array.from(ocean.Q, (q, n) => q - HEAT_REFERENCE * ocean.h[n]), w: Float64Array.from(ocean.W), u: Float64Array.from(ocean.u), eta: Float64Array.from(ocean.eta), pen: Float64Array.from(ocean.penetrated) });
+  let budgets = null, over = 0, drew = 0, taken = 0, within = 0;
+  const record = await follow([
+    ['readSurface', () => ocean.readSurface(surfaceT, ice)],
+    ['dynamics', () => ocean.phases.dynamics(DT)],
+    ['rescale', () => ocean.phases.rescale()],
+    ['eddy', () => ocean.phases.eddy(DT)],
+    ['ekman', () => {
+      ocean.phases.ekman(DT);
+      budgets = new Float64Array(C);
+      for (let i = 0; i < C; i++) {
+        let divergence = 0, coast = false;
+        for (let m = 0; m < mesh.nEdgesOnCell[i]; m++) {
+          divergence += mesh.edgeSignOnCell[mesh.maxEdges * i + m] * ocean.ekmanFlux[mesh.edgesOnCell[mesh.maxEdges * i + m]] * mesh.dvEdge[mesh.edgesOnCell[mesh.maxEdges * i + m]];
+          if (!ocean.cellOcean[mesh.cellsOnCell[mesh.maxEdges * i + m]]) coast = true;
+        }
+        if (ocean.cellOcean[i] && coast) budgets[i] = UPWELLING.upwellingSource * Math.max(0, divergence / mesh.areaCell[i]) * DT;
+      }
+    }],
+    ['shift', () => ocean.phases.shift()],
+    ['mixedLayer', () => {
+      const was = Float64Array.from(ocean.upwelled), refilled = Float64Array.from(ocean.refilled.water);
+      ocean.mixedLayer(DT);
+      for (let i = 0; i < C; i++) {
+        const used = ocean.upwelled[i] - was[i];
+        if (used > budgets[i] * (1 + 1e-12) + 1e-15) over++;
+        if (used > 0) { drew++; taken += used; }
+        if (used > 0 && !cut.includes(i) && ocean.refilled.water[i] - refilled[i] >= used - 1e-12) within++;
+      }
+    }],
+    ['salt and surface', () => { ocean.salt(); ocean.writeSurface(surfaceT, flux, DT); }],
+  ], snapshot, 4, ocean.layers, ocean.rhoCp, ocean.D);
+  report('CPU upwelling', { mixedLayer: record.mixedLayer });
+  for (const [name, rows] of Object.entries(record)) {
+    const [heat, salt] = kept(name);
+    assert.ok(largest(rows, heat) < 1e-6, `${name}: heat ${largest(rows, heat)} W/m²`);
+    assert.ok(largest(rows, salt) < 1e-9, `${name}: salt ${largest(rows, salt)} psu·m`);
+    if (name !== 'rescale') assert.ok(largest(rows, volume) < 1e-12, `${name}: volume ${largest(rows, volume)} m`);
+  }
+  console.log(`CPU upwelling: ${drew} column-steps drew ${taken.toFixed(3)} m from the source in four steps, ${within} of them inside the refill a column not cut took, none over its budget (${over})`);
+  assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-12, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
+  assert.ok(over === 0 && drew >= 8 && taken > 0.01 && within > 0, `${over} over, ${drew} drew ${taken} m, ${within} inside the refill`);
 });
 
 /*
@@ -319,8 +378,8 @@ test('in double precision the daily-mean retreat under the night gate keeps each
  * reads the device's h, heat and salt as stored and the light waiting
  * to be deposited, `snapshot` as books takes them, the salt as h·S.
  */
-async function onGpu({ ocean: cpu, surfaceT, ice, stress, options }) {
-  const model = await createGpuModel(mesh, { ocean: { everySteps: 1, penetration: 'IB', ...options } });
+async function onGpu({ ocean: cpu, surfaceT, ice, stress, options: { topography, geography, ...options } }) {
+  const model = await createGpuModel(mesh, { ...(topography ? { topography } : {}), ocean: { everySteps: 1, penetration: 'IB', ...options } });
   const { gpu, oceanEngine: ocean } = model, layers = ocean.layers, { OS } = ocean.layout, PH = gpu.layout.PH;
   ocean.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, surfaceT, ice);
   gpu.uploadSurfaceTemperature(surfaceT);
@@ -623,6 +682,20 @@ test('under refillRate the GPU mixed layer\'s refill keeps heat, salt, volume an
   within('GPU capped', record, { mixedLayer: GPU_FLOORS.mixedLayer });
   assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-5, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
   assert.ok(thinned > 0.5 && thinnest >= 5 - 1e-4, `thinned ${thinned}, thinnest ${thinnest} m`);
+});
+
+test('under upwellingSource the GPU mixed layer\'s refill keeps heat, salt, volume and each edge\'s column momentum to single-precision rounding while the coastal columns draw from the class under the Ekman block\'s base', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const sea = await onGpu(capped(UPWELLING)), { ocean, stores } = sea;
+  const [before] = await stores();
+  const record = await sea.follow(8);
+  const [h] = await stores();
+  sea.model.destroy();
+  report('GPU upwelling', { mixedLayer: record.mixedLayer, ekman: record.ekman });
+  within('GPU upwelling', record, { mixedLayer: GPU_FLOORS.mixedLayer, ...EKMAN_FLOORS });
+  assert.ok(largest(record.mixedLayer, (r) => r.momentum) < 1e-5, `the mixed layer changes an edge's momentum by ${largest(record.mixedLayer, (r) => r.momentum)}`);
+  let thickened = 0;
+  for (let i = 0; i < C; i++) if (ocean.cellOcean[i] && h[i] > before[i]) thickened++;
+  assert.ok(thickened > 100, `${thickened} mixed layers deepened`);
 });
 
 /*

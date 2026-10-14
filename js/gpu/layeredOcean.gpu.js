@@ -39,7 +39,7 @@ export const OCEAN_DEFAULTS = {
   momentumDepth: 50, carryMomentum: true, refillRate: 0.00027778, refillFloor: 5, shearEntrainment: 0.65,
   ekmanDepth: 0.4, momentumFloor: 10, stressThickness: PV_FLOOR, retreatStirring: 2.5, langmuir: 2, retreatEkman: RETREAT_EKMAN, retreatDaily: false, retreatLight: 0,
   interfacialDrag: 2e-4, shearMixing: false, interiorShearMixing: false, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, closureFill: 0, closureTokens: 'interior', diffusivity: 0.01, everySteps: 4,
-  eddyDiffusivity: 1000, eddyTaperDepth: 200, ekmanBlock: false, penetration: 'IB',
+  eddyDiffusivity: 1000, eddyTaperDepth: 200, ekmanBlock: false, upwellingSource: 0, penetration: 'IB',
   gustiness: 3,
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
@@ -86,6 +86,7 @@ fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
     o.retreatStirring > 0 ? constLine('RETREATSTIR', o.retreatStirring) : '',
     o.langmuir > 0 ? `${constLine('LANGMUIR', o.langmuir)}\n${langmuirLines}` : '',
     o.retreatEkman > 0 ? `${constLine('RETREATEKMAN', o.retreatEkman)} ${constLine('TWOOMEGA', 2 * o.omega)}` : '',
+    o.upwellingSource > 0 ? constLine('UPSRC', o.upwellingSource) : '',
     o.retreatLight > 0 ? `${constLine('RETREATLIGHT', o.retreatLight)}\nfn deposited(z: f32) -> f32 { return select(0.0, JER_R1 / JER_Z1 * exp(-z / JER_Z1) + JER_R2 / JER_Z2 * exp(-z / JER_Z2), z < PENDEPTH); }` : '',
   ].filter((line) => line).map((line) => `${line}\n`).join('');
   const momentumReach = o.ekmanDepth > 0 ? 'hm' : 'MOMDEPTH', stressFloor = o.stressThickness !== PV_FLOOR ? 'STRESSTHICK' : 'PVFLOOR';
@@ -111,6 +112,38 @@ ${o.penetration ? `  var dayReceiver = false;
   let dayDrive = OD[O_DARKDAY + i] - daySun * (1.0 - dayPassing);
   let dayGate = ${o.retreatLight > 0 ? 'select(dayDrive, dayDrive + RETREATLIGHT * daySun * dayDepth * deposited(dayDepth), dayPassing > 0.0)' : 'dayDrive'};
 `;
+  const upwellingFunctions = o.upwellingSource > 0 ? `fn upwellingBudget(i: i32) -> vec2<f32> {
+  var coast = false; var divergence = 0.0; var wind = 0.0; var sea = 0.0;
+  for (var m = 0; m < MAXE; m++) {
+    let sign = MI[ESC + MAXE * i + m];
+    if (sign == 0) { continue; }
+    let e = MI[EOC + MAXE * i + m];
+    if (OD[O_CMASK + MI[COC + MAXE * i + m]] < 0.5) { coast = true; }
+    divergence += f32(sign) * OD[O_UEK + e] * MF[F_DV + e];
+    if (OD[O_EMASK + e] > 0.5) { wind += ${o.ekmanDepth > 0 ? 'OD[O_HM + e]' : 'MOMDEPTH'}; sea += 1.0; }
+  }
+  if (!coast || sea < 0.5) { return vec2<f32>(0.0, 0.0); }
+  return vec2<f32>(UPSRC * max(0.0, divergence / MF[F_AREA + i]) * P[6], wind / sea);
+}
+fn upwellingSource(i: i32, wind: f32) -> i32 {
+  let depth = max(wind, IN[hOff(0) + i]);
+  var top = IN[hOff(0) + i];
+  for (var k = 1; k < L; k++) {
+    let hk = IN[hOff(k) + i];
+    if (hk > THINO && top + hk > depth) { return k; }
+    top += hk;
+  }
+  return -1;
+}
+` : '';
+  const drawFromSource = (want) => `var drawn = 0.0;
+      if (upLeft > 0.0 && ${want} > 0.0) {
+        let source = upwellingSource(i, upwelling.y);
+        if (source > 0) {
+          let part = min(min(${want}, upLeft), IN[hOff(source) + i] - EPSO);
+          if (part > 0.0) { moveLayer(i, source, 0, part); upLeft -= part; drawn = part; }
+        }
+      }`;
   const retreatTerm = o.retreatEkman > 0 ? `min(${unboundedRetreat}, select(1.0e30, RETREATEKMAN * sqrt(tau / RHO0) / fCell, fCell > 0.0))` : unboundedRetreat;
   const offsetLines = Object.entries(OD).filter(([k]) => k !== 'total').map(([k, v]) => `const O_${k}: i32 = ${v};`).join('\n');
   const bLines = Object.entries(B).filter(([k]) => k !== 'total').map(([k, v]) => `const B_${k}: i32 = ${v};`).join('\n');
@@ -215,7 +248,7 @@ fn placeLeft(at: i32, change: f32) -> f32 {
   IN[at] = x + r;
   return change - r;
 }
-`;
+${upwellingFunctions}`;
   const idx = `(i32(id.x) + i32(id.y) * 4194240)`;
   const K = `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n`;
   const eddyShared = `${constLine('EDDYSLACK', EDDY_SLACK)}
@@ -909,7 +942,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
 }`,
     oMixedLayer: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
-  var wv = vec3<f32>(0.0, 0.0, 0.0);
+${o.upwellingSource > 0 ? '  let upwelling = upwellingBudget(i);\n  var upLeft = upwelling.x;\n' : ''}  var wv = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m];
     let s = abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + e] * MF[F_DV + e] * OD[O_STRESS + e];
@@ -958,18 +991,28 @@ ${o.shearEntrainment > 0 ? `  var hold = 0.0;
     let ri = db * h0 / (dot(sv, sv) + 1e-12);
     if (ri < RICRIT) {
       let reached = h0 * sqrt(RICRIT / ri);
-      let take = min(min(reached - h0, IN[hOff(below) + i] - EPSO), deepest - h0);
+${o.upwellingSource > 0 ? `      let want = min(reached - h0, deepest - h0);
+      ${drawFromSource('want')}
+      let take = min(want - drawn, IN[hOff(below) + i] - EPSO);
+      if (take > 0.0) { moveLayer(i, below, 0, take); }
+      if (drawn + take > 0.0) { rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i] + SREF); }
+` : `      let take = min(min(reached - h0, IN[hOff(below) + i] - EPSO), deepest - h0);
       if (take > 0.0) { moveLayer(i, below, 0, take); rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i] + SREF); }
-      hold = min(reached, IN[hOff(0) + i]);
+`}      hold = min(reached, IN[hOff(0) + i]);
       below = -1;
       for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { below = k; break; } }
     }
   }
 ` : ''}  if (below > 0 && IN[hOff(0) + i] < deepest) {
     let db = max(1e-3, OGRAV * (RHO[below] - rm) / RHO0);
-    let entrain = min(min(2.0 * stir * ustar3 / (IN[hOff(0) + i] * db) * P[6], IN[hOff(below) + i] - EPSO), reach - IN[hOff(0) + i]);
+${o.upwellingSource > 0 ? `    let want = min(2.0 * stir * ustar3 / (IN[hOff(0) + i] * db) * P[6], reach - IN[hOff(0) + i]);
+    ${drawFromSource('want')}
+    let entrain = min(want - drawn, IN[hOff(below) + i] - EPSO);
+    if (entrain > 0.0) { moveLayer(i, below, 0, entrain); }
+    if (drawn + entrain > 0.0) { rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i] + SREF); }
+` : `    let entrain = min(min(2.0 * stir * ustar3 / (IN[hOff(0) + i] * db) * P[6], IN[hOff(below) + i] - EPSO), reach - IN[hOff(0) + i]);
     if (entrain > 0.0) { moveLayer(i, below, 0, entrain); rm = eos(IN[qOff(0) + i] / IN[hOff(0) + i] + TREF, IN[wOff(0) + i] / IN[hOff(0) + i] + SREF); }
-  }
+`}  }
   below = -1;
   for (var k = 1; k < L; k++) { if (IN[hOff(k) + i] > THINO) { below = k; break; } }
   var excess = max(0.0, IN[hOff(0) + i] - MAXMIXED);
@@ -982,7 +1025,9 @@ ${o.retreatDaily ? dailyDrive : ''}  if (${o.retreatDaily ? 'dayDrive < -1e-9 &&
   }
   if (IN[hOff(0) + i] < MINTHICK) {
     let refillTo = ${o.refillRate > 0 ? 'max(min(MINTHICK, IN[hOff(0) + i] + REFILLRATE * P[6]), min(MINTHICK, REFILLFLOOR))' : 'MINTHICK'};
-    for (var k = 1; k < L; k++) {
+${o.upwellingSource > 0 ? `    let wanted = refillTo - IN[hOff(0) + i];
+    ${drawFromSource('wanted')}
+` : ''}    for (var k = 1; k < L; k++) {
       if (IN[hOff(0) + i] >= refillTo) { break; }
       let available = IN[hOff(k) + i] - EPSO;
       if (available > 0.0) { moveLayer(i, k, 0, min(available, refillTo - IN[hOff(0) + i])); }
@@ -1118,6 +1163,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   if (o.closureTokens !== 'interior' && o.closureTokens !== 'beside') throw new Error(`closureTokens is 'interior' or 'beside', not ${o.closureTokens}`);
   if (o.penetration !== null && !JERLOV[o.penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${o.penetration}`);
   if (o.shearEntrainment > 0 && !o.carryMomentum) throw new Error('shearEntrainment needs carryMomentum: without the entrained water\'s momentum mixed in, the base\'s Richardson number never rises and the mixed layer swallows a class a step');
+  if (!(o.upwellingSource >= 0) || (o.upwellingSource > 0 && !o.ekmanBlock)) throw new Error(`upwellingSource is a share of the Ekman divergence, not negative, and needs ekmanBlock for the transport it divides; not ${o.upwellingSource} with ekmanBlock ${o.ekmanBlock}`);
   mixingOptionCheck(o);
   const day = { span: 0 };
   o.closureRings = o.closureTokens === 'interior' && o.closureFill > 0;
