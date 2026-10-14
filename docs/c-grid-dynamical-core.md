@@ -2037,8 +2037,8 @@ B̄. Under `retreatLight` λ (0 to 1; it needs `retreatDaily` and
 D̄ − b S̄ (1 − τ(h₀) − λ h₀ q(h₀)) < 0, q the light absorbed per meter
 at its base (`deposited`): it holds the depth to which the night's
 convection carries the day's light, the zero-wind trapping depth. On
-the page's June and March states at the 50 m floor the gate holds 2–4 %
-of the heated column-steps on the floor, and the share within a meter
+eleven's N = 64 June and March states at the 50 m floor the gate holds
+2–4 % of the heated column-steps on the floor, and the share within a meter
 of the floor rises (60 → 69 % at 20–60N in June): the binding columns
 lose at night 0.38 of their day's sunlight (median), shallow by their
 own physics, so the floor there stands in for missing shear and
@@ -2061,8 +2061,8 @@ air sees T₀ + s ΔT_w − ΔT_c, s = 1 − ν d/((ν+1) h₀), so that the
 profile's mean over the mixed layer is T₀ and the ocean's books are
 untouched. In the June N=64 arms it gives 23 of 24 low-wind bins within
 0.5–1.5× of Gentemann et al. (2003) and a 20S–20N mean range of 0.26 K,
-but the Benguela box lies 0.34–0.53 K further from WOA23 in April and
-May. Not adopted (M30).
+but in the March arms the Benguela box lies 0.34–0.53 K further from
+WOA23 in April and May. Not adopted (M30).
 
 **Momentum through the exchanges.** The exchanges move water between
 the mixed layer and the classes, and velocities live on edges, layer by

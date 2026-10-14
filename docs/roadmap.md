@@ -214,7 +214,8 @@ snapshot store and the regrid must cope.
 ## Milestones 27 to 30
 
 The milestones after M26 (fog). M27 is adopted at a 50 m floor; M28
-follows it, M29 follows M28, and M30 takes the floor further.
+follows it, M29 follows M28, and M30, judged without adoption, keeps the
+floor at 50 m.
 
 | # | Milestone | What it delivers | Depends on |
 |---|-----------|------------------|------------|
@@ -457,9 +458,10 @@ which points at the cool skin under the stratocumulus deck. On the
 03 h, nearly all of it in polar-day and cold-water cells. The night
 rule is not adopted either. It does not thin the pile on the floor:
 the share within a meter of it rises from 60 to 69 % at 20–60N in June
-and from 54 to 55 % at 10S–10N in March, and at 10 m from 23 to 26 % in
-June. The gate holds only 2–4 % of the heated column-steps on the
-floor, and the depth a binding column asks for rises 1.1× in June
+and from 54 to 55 % at 10S–10N in March; with both halves at 10 m it is
+26 % in June against the floor round's 23 % on the M1. The gate holds
+only 2–4 % of the heated column-steps on the floor, and the depth a
+binding column asks for rises 1.1× in June
 (4.2 → 4.6 m) against the 1.5× asked. Those columns' dark loss is 0.38
 of their sunlight (median, June), where the night's convection alone
 keeps a column shallow: the floor there stands in for missing shear
@@ -477,4 +479,6 @@ June 50 m arms, 20 at 10 m); and a `coolSkin`-only and a
 `warmLayer`-only arm over March–May to find which half warms the deck.
 On the M5 the N=16 atmosphere's books close about 2 W/m² lower than on
 the M1 with otherwise identical weather, to be read before the M5 is
-trusted for books.
+trusted for books. Its skin parity (`test/skinGpu.test.mjs`) drifts
+2e-4 to 1e-3 K in the warm layer over 20 steps against under 1e-4 K on
+the M1; the test allows what the M5 shows until that cause is read too.

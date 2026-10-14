@@ -192,6 +192,7 @@ test('the prose numbers: the planet’s year and its books', () => {
   const sigmaT4 = header.zonalBudget.surfaceTemperature.reduce((sum, t, b) => sum + 5.670374419e-8 * t ** 4 * area[b], 0) / sphere;
   close(1 - globalMean(header.zonalBudget.outgoingLongwave, area) / sigmaT4, 0.452, 0.0005, 'infrared held back');
   close(year.precipitableWater, 31.9, 0.05, 'vapor'); close(part7Year.precipitableWater, 23.0, 0.05, 'Part 7’s vapor');
+  close(year.precipitableWater / part7Year.precipitableWater - 1, 0.384, 0.0005, '38 percent more vapor');
 });
 
 test('the prose numbers: why it is warmer than Part 7', () => {
@@ -218,7 +219,7 @@ test('the prose numbers: the drift through the spin-up and the ice that went', (
   close(toa[9], 1.38, 0.005, 'the top in year 10');
   const daily = header.daily, residualYear = (y) => (daily.surfaceResidual[y * YEAR - 1] * y - daily.surfaceResidual[(y - 1) * YEAR - 1] * (y - 1));
   for (let y = 3; y <= 11; y++) { const r = residualYear(y); assert.ok(r > 0.13 && r < 0.18, `the sea’s unplaced heat in year ${y}: ${r}`); }
-  close(0.15 * YEAR * DAY / (header.constants.rhoCp * year.mixedLayerDepth), 0.016, 0.0005, 'K a year over the mean mixed layer');
+  close(books.global.surfaceResidual * YEAR * DAY / (header.constants.rhoCp * year.mixedLayerDepth), 0.016, 0.0005, 'K a year over the mean mixed layer');
   const lastDay = (name) => { let n = -1; daily[name].forEach((v, d) => { if (v > 0) n = d; }); return n + 1; };
   assert.equal(lastDay('iceNorth'), 428); assert.equal(date(daily.from / DAY + 428), 'May 22');
   assert.equal(lastDay('ice'), 968); assert.equal(date(daily.from / DAY + 968), 'November 13');
@@ -352,6 +353,8 @@ test('the prose numbers: the cells of the section, its salt, and the September r
   const psi = (z) => { let j = 0; while (j < L - 1 && sep.depth[c * M + j + 1] < z) j++; const d0 = sep.depth[c * M + j], d1 = sep.depth[c * M + j + 1], t = Math.min(1, Math.max(0, (z - d0) / (d1 - d0))); return sep.psi[c * M + j] + t * (sep.psi[c * M + j + 1] - sep.psi[c * M + j]); };
   close(psi(100), -41.0, 0.05, 'south above 100 m'); close(psi(400), -43.5, 0.05, 'above 400 m'); close(psi(1000), -24.6, 0.05, 'above 1,000 m'); close(psi(3000), -10.0, 0.05, 'above 3,000 m');
   close(sep.imbalance[c], 5.8, 0.05, 'what the samples miss there');
+  const gap = (m) => Math.max(...Array.from(classOverturning(header, m).imbalance, Math.abs));
+  close(gap(), 11.9, 0.05, 'the samples miss up to 12 Sv over the year'); close(Math.max(...header.overturning.months.map((m) => gap(m.name))), 29.7, 0.05, 'and up to 30 Sv in a month');
   const section = classSection(header), column = (l) => section.columns[section.centers.indexOf(l)];
   for (const l of [-22.5, 22.5]) {
     const salty = column(l).filter((x) => x.S > 35);
