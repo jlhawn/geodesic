@@ -56,7 +56,7 @@ function spunUp(steps = SPINUP, options = {}, wind = 0.1) {
  * (psu·m, m), `offMean`, the heat and salt a column changed beyond what
  * its change of volume carries at the column's own mean temperature and
  * salinity, and `momentum`, the largest change of an edge's column
- * momentum Σ h_e u relative to its Σ h_e |u|.
+ * momentum Σ h_e u relative to its Σ h_e |u|, or in m²/s where an edge is at rest.
  */
 function books(before, after, layers, rhoCp, D) {
   let heat = 0, waiting = 0, salt = 0, volume = 0, offHeat = 0, offSalt = 0;
@@ -78,7 +78,10 @@ function books(before, after, layers, rhoCp, D) {
   const watts = (x) => rhoCp * x / (AREA * DT);
   const was = columnMomentum(mesh, layers, before, D), is = columnMomentum(mesh, layers, after, D);
   let momentum = 0;
-  for (let e = 0; e < E; e++) if (was.scale[e] > 0) momentum = Math.max(momentum, Math.abs(is.momentum[e] - was.momentum[e]) / was.scale[e]);
+  for (let e = 0; e < E; e++) {
+    const change = Math.abs(is.momentum[e] - was.momentum[e]);
+    momentum = Math.max(momentum, was.scale[e] > 0 ? change / was.scale[e] : change);
+  }
   return { heat: watts(heat) + waiting / (AREA * DT), stored: watts(heat), salt: salt / AREA, volume: volume / AREA, offMean: { heat: watts(offHeat), salt: offSalt / AREA }, momentum };
 }
 

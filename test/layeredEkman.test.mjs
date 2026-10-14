@@ -496,6 +496,40 @@ test('the intake ledger splits the mixed layer\'s intake by process and class wi
   for (let i = 0; i < C; i++) if (!mask[i]) assert.equal(masked.intake.slot[i], -1);
 });
 
+test('an equatorward wind along an eastern ocean boundary drives the Ekman transport offshore and upwells, along a western boundary it drives it onshore and downwells, and a poleward wind reverses both', () => {
+  const rows = [];
+  for (const [name, sign] of [['equatorward', -1], ['poleward', 1]]) {
+    const { ocean, ice } = coastSea({ upwellingSource: 1 });
+    ocean.setStress(windOnEdges(() => 0, (lat) => sign * 0.1 * Math.sign(lat)), ice);
+    ocean.ekmanTransport(DT);
+    const vector = cellVector(mesh, ocean.ekmanFlux), offshore = { east: [], west: [] }, upwelling = { east: [], west: [] };
+    for (let i = 0; i < C; i++) {
+      const lat = mesh.latCell[i] / DEG;
+      if (!ocean.cellOcean[i] || Math.abs(lat) < 10 || Math.abs(lat) > 45) continue;
+      let land = -1, divergence = 0;
+      for (let m = 0; m < mesh.nEdgesOnCell[i]; m++) {
+        const j = mesh.cellsOnCell[mesh.maxEdges * i + m], e = mesh.edgesOnCell[mesh.maxEdges * i + m];
+        divergence += mesh.edgeSignOnCell[mesh.maxEdges * i + m] * ocean.ekmanFlux[e] * mesh.dvEdge[e];
+        if (!ocean.cellOcean[j]) land = j;
+      }
+      if (land < 0) continue;
+      const x = mesh.xCell[3 * i], y = mesh.xCell[3 * i + 1], r = Math.hypot(x, y), east = [-y / r, x / r, 0];
+      const toLand = [0, 1, 2].map((d) => mesh.xCell[3 * land + d] - mesh.xCell[3 * i + d]);
+      const side = toLand[0] * east[0] + toLand[1] * east[1] > 0 ? 'east' : 'west';
+      offshore[side].push(side === 'east' ? -(vector[3 * i] * east[0] + vector[3 * i + 1] * east[1]) : vector[3 * i] * east[0] + vector[3 * i + 1] * east[1]);
+      upwelling[side].push(divergence / mesh.areaCell[i] * 86400);
+    }
+    rows.push({ name, sign, offshore, upwelling });
+  }
+  const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+  for (const { name, sign, offshore, upwelling } of rows) {
+    console.log(`${name}: ${offshore.east.length} cells of an eastern coast, offshore transport ${mean(offshore.east).toFixed(2)} m²/s, w ${mean(upwelling.east).toFixed(2)} m/day; ${offshore.west.length} of a western coast, offshore ${mean(offshore.west).toFixed(2)} m²/s, w ${mean(upwelling.west).toFixed(2)} m/day`);
+    assert.ok(offshore.east.length >= 8 && offshore.west.length >= 8);
+    assert.ok(sign * mean(offshore.east) < 0 && sign * mean(upwelling.east) < 0, `${name} at an eastern boundary`);
+    assert.ok(sign * mean(offshore.west) > 0 && sign * mean(upwelling.west) > 0, `${name} at a western boundary`);
+  }
+});
+
 test('upwellingSource needs ekmanBlock and no less than zero, and at zero the ocean is the same bit for bit with no source array', () => {
   assert.throws(() => createOcean(mesh, { ...SEA, ekmanBlock: false, upwellingSource: 1 }), /upwellingSource/);
   assert.throws(() => createOcean(mesh, { ...SEA, upwellingSource: -1 }), /upwellingSource/);
