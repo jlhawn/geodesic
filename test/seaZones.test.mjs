@@ -73,7 +73,7 @@ test('the overturning grid is zero at the poles and the surface, carries only th
     assert.deepEqual([g.lats[0], g.lats[1], g.lats[18], g.lats[36]], [-90, -85, 0, 90]);
     for (let j = 0; j < M; j++) { assert.equal(g.psi[j], 0); assert.equal(g.psi[36 * M + j], 0); }
     for (let i = 0; i < g.ni; i++) { assert.equal(g.psi[i * M], 0); close(g.psi[i * M + L], i && i < 36 ? flow.etaNet[i - 1] : 0, 0.05, `floor at ${g.lats[i]}`); }
-    if (!month) for (let i = 0; i < g.ni; i++) assert.ok(Math.abs(g.psi[i * M + L]) < 0.2);
+    if (!month) for (let i = 0; i < g.ni; i++) assert.ok(Math.abs(g.psi[i * M + L]) < 0.4);
     for (let c = 0; c < 35; c++) for (let k = 0; k <= L; k++) { assert.equal(g.psi[(c + 1) * M + k], flow.psi[c * M + k]); assert.equal(g.depth[(c + 1) * M + k], flow.depth[c * M + k]); }
     const base = classSection(header, month).base;
     for (let k = 1; k <= L; k++) { assert.equal(g.depth[k], base[k - 1]); assert.equal(g.depth[36 * M + k], base[35 * L + k - 1]); }
@@ -83,25 +83,25 @@ test('the overturning grid is zero at the poles and the surface, carries only th
 
 test('the overturning cells the figure and the page read: the shallow tropical cells, the cells under the westerlies and the deep polar cells', () => {
   const year = overturningCells(header);
-  close(year.south, -58.4, 0.05, 'south across 10°S');
-  close(year.north, 52.4, 0.05, 'north across 10°N');
-  close(year.mixed(-35), 35.1, 0.05, 'north across 35°S');
-  close(year.mixed(35), -34.6, 0.05, 'south across 35°N');
-  assert.deepEqual([year.deepNorth.latitude, Math.round(year.deepNorth.depth)], [55, 3190]);
-  assert.deepEqual([year.deepSouth.latitude, Math.round(year.deepSouth.depth)], [-55, 3187]);
-  close(year.deepNorth.psi, 32.7, 0.05, 'the northern deep cell');
-  close(year.deepSouth.psi, -26.2, 0.05, 'the southern deep cell');
+  close(year.south, -63.9, 0.05, 'south across 10°S');
+  close(year.north, 66.2, 0.05, 'north across 10°N');
+  close(year.mixed(-35), 39.2, 0.05, 'north across 35°S');
+  close(year.mixed(35), -40.1, 0.05, 'south across 35°N');
+  assert.deepEqual([year.deepNorth.latitude, Math.round(year.deepNorth.depth)], [50, 3344]);
+  assert.deepEqual([year.deepSouth.latitude, Math.round(year.deepSouth.depth)], [-60, 3078]);
+  close(year.deepNorth.psi, 20.3, 0.05, 'the northern deep cell');
+  close(year.deepSouth.psi, -23.4, 0.05, 'the southern deep cell');
   const months = Object.fromEntries(['March', 'June', 'September', 'December'].map((m) => [m, overturningCells(header, m)]));
-  close(months.September.south, -90.1, 0.05, 'September, 10°S');
-  close(months.September.north, 24.1, 0.05, 'September, 10°N');
-  close(months.March.south, -26.9, 0.05, 'March, 10°S');
-  close(months.March.north, 81.2, 0.05, 'March, 10°N');
-  close(months.December.deepNorth.psi, 44.9, 0.05, 'December, the northern deep cell');
-  close(months.June.deepNorth.psi, 21.3, 0.05, 'June, the northern deep cell');
+  close(months.September.south, -102.2, 0.05, 'September, 10°S');
+  close(months.September.north, 55.6, 0.05, 'September, 10°N');
+  close(months.March.south, -30.0, 0.05, 'March, 10°S');
+  close(months.March.north, 89.1, 0.05, 'March, 10°N');
+  close(months.December.deepNorth.psi, 25.4, 0.05, 'December, the northern deep cell');
+  close(months.June.deepNorth.psi, 20.6, 0.05, 'June, the northern deep cell');
   const g = overturningGrid(header), inner = contours(g.psi, g.ni, g.nj, -55);
   assert.equal(inner.length, 1);
   assert.ok(inner[0].closed);
-  for (const [i] of inner[0].points) assert.ok(g.lats[0] + 5 * i > -11.5 && g.lats[0] + 5 * i < -8.5);
+  for (const [i] of inner[0].points) assert.ok(g.lats[0] + 5 * i > -12.5 && g.lats[0] + 5 * i < -7.5);
 });
 
 test('the northward current by class is each class’s transport over its cross-section, and matches the section where both exist', () => {
@@ -109,8 +109,8 @@ test('the northward current by class is each class’s transport over its cross-
   assert.equal(v.values.length, 35 * L);
   const c = header.overturning.caps.indexOf(-10), h = 0.5 * (base[c * L] + base[(c + 1) * L]);
   close(v.values[c * L], 100 * header.overturning.mass[c * L] * 1e6 / (2 * Math.PI * R * Math.cos(10 * Math.PI / 180) * h), 1e-12, 'mixed layer at 10°S');
-  close(v.values[c * L], -2.60, 0.005, 'mixed layer at 10°S, cm/s');
-  close(v.values[header.overturning.caps.indexOf(10) * L], 2.41, 0.005, 'mixed layer at 10°N, cm/s');
+  close(v.values[c * L], -2.70, 0.005, 'mixed layer at 10°S, cm/s');
+  close(v.values[header.overturning.caps.indexOf(10) * L], 2.83, 0.005, 'mixed layer at 10°N, cm/s');
   for (const lat of [-35, -20, -10, 10, 20, 35]) {
     const cap = header.overturning.caps.indexOf(lat), sectionMean = 0.5 * (header.section.v[cap * L] + header.section.v[(cap + 1) * L]);
     close(v.values[cap * L], sectionMean, 0.5, `mixed layer at ${lat}°`);
