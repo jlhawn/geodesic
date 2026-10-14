@@ -13,3 +13,10 @@ Scripts (run from the repo root, nothing else on the GPU, `log show` afterward):
     FORM=ptr node probe/thomas.mjs             # the kernel's Thomas solve alone (forms ptr, inline, fwd)
 
 Results from another machine go in probe/results-<machine>.md on this branch.
+
+More probes: `COEF=1 node probe/bisect.mjs` prints the mixing coefficients the GPU kernel
+holds after its solve against the expected values for two columns (needs the
+instrumented mixField described in the session notes; without it the qc column is
+the plain result); `node probe/lengths.mjs` and `node probe/arrlen.mjs` check
+robustness clamping of buffer reads in helper functions and across eight bindings.
+On the M5 Max all three small probes pass; only the full kernels fail.

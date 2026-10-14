@@ -46,7 +46,7 @@ async function engines(entrainment) {
   device.queue.writeBuffer(buffers.PH, 4 * gpu.layout.PH.STRAT, Float32Array.from(radiation.stratiform));
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
   const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
-  for (const [name, count] of [['pblDiagnose', nC], ...ADJUST_KERNELS.map((name) => [name, nC]), ['mixMomentum', nE]]) {
+  for (const [name, count] of (process.env.COEF ? [['pblDiagnose', nC], ['adjustMix', nC]] : [['pblDiagnose', nC], ...ADJUST_KERNELS.map((name) => [name, nC]), ['mixMomentum', nE]])) {
     pass.setPipeline(kernels[name]);
     pass.setBindGroup(0, device.createBindGroup({ layout: kernels[name].getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
     pass.dispatchWorkgroups(Math.ceil(count / 64));
@@ -63,6 +63,7 @@ async function engines(entrainment) {
 }
 
 const on = await engines({});
+if (process.env.COEF) { await import('./coef.mjs'); globalThis.__coefHook(on); process.exit(0); }
 const { K: nK, C: nC, E: nE, kTop } = on;
 const names = ['pi', 'theta', 'u', 'Ts', 'q', 'qc'];
 for (const a of [1, 4, 5]) {
