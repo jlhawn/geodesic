@@ -5,7 +5,10 @@
 // over the open water (sea, ice-free cells): the open cell-steps, those
 // with the warm layer at its cap, the warmest skin outside the Persian
 // Gulf, the Gulf of Oman and the Red Sea, the warm layer at local 03 h,
-// the largest C_H over its neutral value, and sparse histograms of C_H,
+// the largest C_H over its neutral value, the same warm layer at 03 h in the
+// cells that are dark from local 00 h and lose heat over those hours (dark,
+// darkWarm, darkOver01, darkOver1, darkWarmest, darkAt; scripts/nightCensus.mjs),
+// and sparse histograms of C_H,
 // the sensible plus latent heat and the physics' step of the lowest
 // layer's θ. On the days in fieldDays it writes <prefix>.skin_dayD.f32,
 // the per-cell fields FIELDS one after another as float32 (C each).
@@ -15,6 +18,7 @@ import { appendFileSync, writeFileSync } from 'node:fs';
 import { readRanges } from '../js/gpu/device.module.js';
 import { skinOptions, SEA_RHO_CP } from '../js/physics/skin.module.js';
 import { LATENT_HEAT } from '../js/physics/moist.module.js';
+import { createNightCensus } from './nightCensus.mjs';
 
 export const FIELDS = ['skinMax', 'skinMin', 'skinHourMax', 'skinHourMin', 'warmMax', 'coolMean', 'dawnH0', 'wind', 'insolation', 'slabMean', 'open'];
 export const HISTOGRAMS = { exchange: { from: 0, width: 1e-5 }, ratio: { from: 0, width: 0.01 }, heat: { from: -1000, width: 1 }, theta: { from: 0, width: 1e-3 } };
@@ -28,6 +32,7 @@ export function watchSkin(model, { prefix, sea, surface = {}, fieldDays = [], fr
   const gulf = Uint8Array.from({ length: C }, (_, i) => (GULFS.some(([s, n, w, e]) => lat[i] >= s && lat[i] <= n && lon[i] >= w && lon[i] <= e) ? 1 : 0));
   const want = new Set(fieldDays.map(Number));
   const f = Object.fromEntries(FIELDS.map((name) => [name, new Float64Array(C)]));
+  const census = createNightCensus(C);
   let steps = 0, totals = null, before = null;
   const histogram = () => new Map();
   const add = (map, name, x) => { const { from, width } = HISTOGRAMS[name], b = Math.max(0, Math.floor((x - from) / width)); map.set(b, (map.get(b) ?? 0) + 1); };
@@ -52,10 +57,10 @@ export function watchSkin(model, { prefix, sea, surface = {}, fieldDays = [], fr
     const time = model.time;
     const [[ts, ice, theta], ph, [wind]] = await Promise.all([
       readRanges(device, gpu.buffers.S, [{ offset: S.TS, length: C }, { offset: S.ICE, length: C }, { offset: S.TH + (K - 1) * C, length: C }]),
-      readRanges(device, gpu.buffers.PH, [PH.CAP, PH.HEATX, PH.REFX, PH.SH, PH.EVAP, PH.INS, ...(skinned ? [PH.WARM, PH.COOL] : [])].map((offset) => ({ offset, length: C }))),
+      readRanges(device, gpu.buffers.PH, [PH.CAP, PH.HEATX, PH.REFX, PH.SH, PH.EVAP, PH.INS, ...(skinned ? [PH.WARM, PH.COOL] : []), PH.SFLUX].map((offset) => ({ offset, length: C }))),
       readRanges(device, gpu.buffers.D, [{ offset: D.WIND, length: C }]),
     ]);
-    const [cap, heatx, refx, sensible, evap, ins] = ph, warm = skinned ? ph[6] : null, cool = skinned ? ph[7] : null;
+    const [cap, heatx, refx, sensible, evap, ins] = ph, warm = skinned ? ph[6] : null, cool = skinned ? ph[7] : null, sflux = ph[ph.length - 1];
     const solarHour = 12 + ((time + 0.5 * dt) % DAY) / 3600;
     steps++;
     for (let i = 0; i < C; i++) {
@@ -66,6 +71,7 @@ export function watchSkin(model, { prefix, sea, surface = {}, fieldDays = [], fr
       const w = warm ? warm[i] : 0, c = cool ? cool[i] : 0, d = Math.min(o.warmLayerDepth, h0);
       const skin = ts[i] + (o.warmLayer ? (1 - o.warmLayerProfile * d / ((o.warmLayerProfile + 1) * h0)) * w : 0) - c - 273.15;
       f.open[i]++; f.slabMean[i] += ts[i] - 273.15; f.coolMean[i] += c;
+      census.observe(i, hour, ins[i], sflux[i], dt, w);
       if (skin > f.skinMax[i]) { f.skinMax[i] = skin; f.skinHourMax[i] = hour; }
       if (skin < f.skinMin[i]) { f.skinMin[i] = skin; f.skinHourMin[i] = hour; }
       if (w > f.warmMax[i]) f.warmMax[i] = w;
@@ -92,8 +98,8 @@ export function watchSkin(model, { prefix, sea, surface = {}, fieldDays = [], fr
       f.open[i] /= steps;
     }
     const sparse = (map) => [...map.entries()].sort((a, b) => a[0] - b[0]);
-    const { hist, ...rest } = totals;
-    appendFileSync(`${prefix}.skin.jsonl`, JSON.stringify({ day, steps, ...rest, capShare: totals.open ? totals.capped / totals.open : 0, hist: Object.fromEntries(Object.entries(hist).map(([k, m]) => [k, sparse(m)])) }) + '\n');
+    const { hist, ...rest } = totals, dark = census.take(), { darkCell, ...darkCounts } = dark;
+    appendFileSync(`${prefix}.skin.jsonl`, JSON.stringify({ day, steps, ...rest, ...darkCounts, darkAt: darkCell >= 0 ? [+lat[darkCell].toFixed(1), +lon[darkCell].toFixed(1)] : null, capShare: totals.open ? totals.capped / totals.open : 0, hist: Object.fromEntries(Object.entries(hist).map(([k, m]) => [k, sparse(m)])) }) + '\n');
     if (want.has(day)) {
       const out = new Float32Array(FIELDS.length * C);
       FIELDS.forEach((name, k) => out.set(f[name], k * C));
