@@ -101,8 +101,8 @@ fn langmuirFactor(ustar: f32, depth: f32) -> f32 {
   for (var j = first; j < past; j++) { z += OD[O_HEDGE + j * E + e]; }
   return z;
 }
-fn interfaceRate(e: i32, up: i32, down: i32, dz: f32, held: f32) -> f32 {
-${viscosityLines('tangentialU(up, e) - tangentialU(down, e)')}  let viscous = min(nu / dz, 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
+fn interfaceRate(e: i32, up: i32, down: i32, dz: f32, held: f32, tangentUp: f32, tangentDown: f32) -> f32 {
+${viscosityLines('tangentUp - tangentDown')}  let viscous = min(nu / dz, 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
   return viscous + (RINT - viscous) * held;
 }
 ` : `fn interfaceRate(e: i32, up: i32, down: i32) -> f32 {
@@ -111,15 +111,21 @@ ${viscosityLines('tangentialU(up, e) - tangentialU(down, e)')}  let viscous = mi
 ${spanLine}${viscosityLines('tangentialU(up, e) - tangentialU(down, e)')}  return min(max(select(RINT, 0.0, interior), nu / dz), 0.5 * min(dragThickness(up, e), dragThickness(down, e)) / P[3]);
 }
 `;
-  const blockTop = o.blockDrag ? `  let block = ${o.ekmanDepth > 0 ? 'OD[O_HM + e]' : 'MOMDEPTH'};\n  var zTop = 0.0; var rateAbove = 0.0;\n` : '';
+  const blockTop = o.blockDrag ? `  let block = ${o.ekmanDepth > 0 ? 'OD[O_HM + e]' : 'MOMDEPTH'};\n  var zTop = 0.0; var rateAbove = 0.0; var tangent = 0.0; var tangentOf = -1;\n` : '';
   const dragLines = o.blockDrag ? `    let below = firstThickBelow(k, thickLo, thickHi);
     if (k == 0 || hk >= THINO) {
       if (k > 0) { drag += rateAbove * (IN[uOff(above) + e] - u); }
       if (below >= 0) {
         let span = max(THINO, 0.5 * (hk + OD[O_HEDGE + below * E + e]));
         let held = min(1.0, (block - depthTo(e, k + 1, below, zTop + hk)) / span);
-        rateAbove = RINT;
-        if (held < 1.0) { rateAbove = interfaceRate(e, k, below, span, max(held, 0.0)); }
+        if (held >= 1.0) {
+          rateAbove = RINT;
+        } else {
+          if (tangentOf != k) { tangent = tangentialU(k, e); }
+          let tangentBelow = tangentialU(below, e);
+          rateAbove = interfaceRate(e, k, below, span, max(held, 0.0), tangent, tangentBelow);
+          tangent = tangentBelow; tangentOf = below;
+        }
         drag -= rateAbove * (u - IN[uOff(below) + e]);
       }
     }
