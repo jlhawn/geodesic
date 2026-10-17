@@ -739,3 +739,30 @@ test('the GPU ocean loads a saved W of h·S, as files from before Wref carry it,
   }
   first.model.destroy();
 });
+
+/*
+ * spunUp's sea under a thickness-weighted mixed-layer diffusion strong
+ * enough to move more heat between neighboring mixed layers in a step
+ * than the currents do, so that the dynamics phase's books show it.
+ */
+const DIFFUSING = { ...CARRIED, mixedDiffusivity: 1e7 };
+test('in double precision the dynamics under mixedDiffusivity keep each column\'s heat, salt and water, and the mixed layer\'s own heat, while spreading more heat between the mixed layers than the currents alone', async () => {
+  const spread = async (options) => {
+    const { ocean, surfaceT, ice, stress } = spunUp(SPINUP, options);
+    ocean.setStress(stress, ice);
+    const snapshot = async () => ({ h: Float64Array.from(ocean.h), q: Float64Array.from(ocean.Q, (q, n) => q - HEAT_REFERENCE * ocean.h[n]), w: Float64Array.from(ocean.W), u: Float64Array.from(ocean.u), eta: Float64Array.from(ocean.eta), pen: Float64Array.from(ocean.penetrated) });
+    const before = await snapshot();
+    ocean.readSurface(surfaceT, ice);
+    const read = await snapshot();
+    ocean.phases.dynamics(DT);
+    const after = await snapshot();
+    let moved = 0, mixed = 0;
+    for (let i = 0; i < C; i++) { moved += mesh.areaCell[i] * Math.abs(after.q[i] - read.q[i]); mixed += mesh.areaCell[i] * (after.q[i] - read.q[i]); }
+    return { moved: moved / AREA, mixed: ocean.rhoCp * mixed / (AREA * DT), book: books(read, after, ocean.layers, ocean.rhoCp, ocean.D), before, after };
+  };
+  const diffusing = await spread(DIFFUSING), still = await spread(CARRIED);
+  console.log(`CPU dynamics under mixedDiffusivity 1e7: heat changed by ${show(diffusing.book.heat)} W/m², salt ${show(diffusing.book.salt)} psu·m, volume ${show(diffusing.book.volume)} m; the mixed layers' heat moved by ${show(diffusing.moved)} K·m against ${show(still.moved)} K·m without, their total changing by ${show(diffusing.mixed)} W/m²`);
+  assert.ok(Math.abs(diffusing.book.heat) < 1e-6 && Math.abs(diffusing.book.salt) < 1e-9 && Math.abs(diffusing.book.volume) < 1e-12, 'the dynamics keep heat, salt and water under mixedDiffusivity');
+  assert.ok(Math.abs(diffusing.mixed) < 1e-6, `the diffusion changed the mixed layers' total heat by ${diffusing.mixed} W/m²`);
+  assert.ok(diffusing.moved > 3 * still.moved, `the diffusion moved ${diffusing.moved} K·m of mixed-layer heat against ${still.moved} without it`);
+});

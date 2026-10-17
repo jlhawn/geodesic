@@ -10,7 +10,7 @@ const SHADERS = {
   rings: { ...PACKAGE, closureFill: 1 },
   shearMix: { ...PACKAGE, interiorShearMixing: true },
 };
-const SHADER_PINS = { layered: '42:acc5dab238e1ece3', packaged: '42:8a1be7753ab9db69', daily: '42:f5390582335fd054', rings: '42:599097d39e56fecd', shearMix: '42:ae5b07c9a880c062' };
+const SHADER_PINS = { layered: '42:c41257a0f2c7e2de', packaged: '42:c5daa5fa716866eb', daily: '42:efb745172441ecb8', rings: '42:a6781fd2cac846d2', shearMix: '42:3f48faa3aa7ddb01' };
 const STATE_PINS = ['6c8721dcf7cb8b3d', 'c09cf1bf7adb3fa9', '73ebe79a3a9f7785'];
 const OFF = { ekmanBlock: false, upwellingSource: 0, blockDrag: false };
 

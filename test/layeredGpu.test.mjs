@@ -1264,3 +1264,35 @@ test('the GPU ocean starts and loads under partly covered ice without salting it
   assert.ok(after[0] < before[0] - 10, `an ocean uploaded under full cover books the cover falling to 0.4 as melt: ${before[0]} -> ${after[0]}`);
   gpuModel.destroy();
 });
+
+test('under mixedDiffusivity the GPU dynamics diffuse the mixed layer\'s heat and salt across each edge\'s harmonic-mean thickness as the CPU\'s do, after one and twenty rounds of the dynamics, the rescale and the shift under 10 m floors at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const diffusing = { ...OCEAN_OPTIONS, mixedDepth: 10, minimumThickness: 10, shallowestMixedDepth: 10, mixedDiffusivity: 3e7 };
+  const { cpuModel, surfaceT0, ice } = buildScenario(8);
+  const mesh = cpuModel.mesh, C = mesh.nCells, dt = 1350;
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: diffusing });
+  const gpuOcean = gpuModel.oceanEngine;
+  const cpuOcean = (options) => { const ocean = createCpuLayeredOcean(mesh, { geography: cpuModel.geography, ...options }); ocean.initialize(surfaceT0, ice); return ocean; };
+  const rms = (a, b, mask = null) => { let d = 0, r = 0; for (let x = 0; x < a.length; x++) if (!mask || mask[x]) { d += (a[x] - b[x]) ** 2; r += a[x] * a[x]; } return Math.sqrt(d / Math.max(r, 1e-300)); };
+  const cpu = cpuOcean(diffusing), still = cpuOcean({ ...diffusing, mixedDiffusivity: 0, diffusivity: 0 });
+  still.h.set(cpu.h); still.Q.set(cpu.Q); still.W.set(cpu.W); still.u.set(cpu.u);
+  await gpuOcean.upload(cpu.serialize(), Float64Array.from(surfaceT0), ice);
+  const round = async () => {
+    for (const ocean of [cpu, still]) { ocean.phases.dynamics(dt); ocean.phases.rescale(); ocean.phases.shift(); }
+    gpuOcean.phases.dynamics(dt); gpuOcean.phases.rescale(); gpuOcean.phases.shift();
+  };
+  for (const rounds of [1, 19]) {
+    for (let n = 0; n < rounds; n++) await round();
+    const cpuState = cpu.serialize(), stillState = still.serialize(), gpuState = await gpuOcean.serialize();
+    const wet = Array.from(cpuState.h, (v) => v > 1);
+    const lines = [];
+    for (const f of ['h', 'u', 'T', 'S']) {
+      const mask = f === 'T' || f === 'S' ? wet : null, gap = rms(cpuState[f], gpuState[f], mask), effect = rms(cpuState[f], stillState[f], mask);
+      lines.push(`${f} ${gap.toExponential(2)} against ${effect.toExponential(2)}`);
+      assert.ok(gap < 2e-3, `${f} rms relative diff ${gap} after ${rounds === 1 ? 1 : 20} rounds`);
+      if (f === 'T' || f === 'S') assert.ok(effect > 5 * gap, `${f}: the diffusion changed the CPU ocean by ${effect}, no more than the engines differ (${gap})`);
+    }
+    console.log(`${rounds === 1 ? 1 : 20} rounds of the dynamics with mixedDiffusivity 3e7 under 10 m floors at N=8, the engines' rms relative difference against the diffusion's effect: ${lines.join(', ')}`);
+  }
+  for (const v of (await gpuOcean.download()).T) assert.ok(Number.isFinite(v));
+  gpuModel.destroy();
+});

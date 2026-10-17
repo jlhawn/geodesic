@@ -1,6 +1,6 @@
 import { meshFromShared } from './mesh.module.js';
 import { createModel } from './model.module.js';
-import { PHASE, TOTALS, phaseChunks } from './parallel.module.js';
+import { PHASE, TOTALS, phaseChunks, OCEAN_PASS_FUNCTIONS } from './parallel.module.js';
 import { STATE_NAMES } from './model.module.js';
 import { workerInit } from './threads.module.js';
 
@@ -61,7 +61,11 @@ function unit(phase, chunk, input, out) {
       ocean.tendencyLayers(Atomics.load(ctrl, 3) ? ocean.trial : ocean.state, ocean.stages[Atomics.load(ctrl, 4)], from, to, chunk.kind);
       break;
     }
-    default: break;
+    case PHASE.OCEAN_PREPARE_CELLS: model.ocean.prepareCells(from, to, Atomics.load(ctrl, 3) ? model.ocean.trial : model.ocean.state); break;
+    case PHASE.OCEAN_PREPARE_EDGES: model.ocean.prepareEdges(from, to, Atomics.load(ctrl, 3) ? model.ocean.trial : model.ocean.state); break;
+    default:
+      if (OCEAN_PASS_FUNCTIONS[phase]) model.ocean[OCEAN_PASS_FUNCTIONS[phase]](from, to);
+      break;
   }
 }
 

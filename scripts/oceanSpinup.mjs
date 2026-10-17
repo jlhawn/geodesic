@@ -5,7 +5,8 @@
 // its atmosphere never steps: each day of FORCING in turn, in day order,
 // drives the sea surface, the ice and the ocean at the coupled model's dt
 // and ocean cadence (createForcedOcean in js/gpu/forcing.gpu.js), with the
-// open water restored to the recorded SST at RESTORE W/m²/K. At each
+// open water restored to the recorded SST, or WOA23's (RESTORE_TO), at
+// RESTORE W/m²/K. At each
 // year's end it saves OUT/<TAG>_yearYYYY.bin, a full state whose
 // atmosphere and land are those loaded (the land keeps the snow the ice
 // carries), its time advanced by the days run, keeps the KEEP newest,
@@ -31,7 +32,9 @@
 //
 // Environment: N (64), STATE, FORCING, YEARS (1, the year to stop after),
 // DAYS_PER_YEAR (365), LOOP_DAYS (DAYS_PER_YEAR: the first that many days
-// of FORCING are looped, a whole number of years), RESTORE (30), TAG
+// of FORCING are looped, a whole number of years), RESTORE (30), RESTORE_TO
+// ('recorded', or 'woa' to restore toward WOA23's monthly SST on the
+// forcing day's date, the recorded SST where WOA23 has none), TAG
 // (ocean<N>), OUT (runs/), KEEP (2), SNAPSHOT_DAYS (30; 0 saves at the
 // years' ends alone), OCEAN and RADIATION (JSON options as in spinup.mjs;
 // OCEAN's everySteps sets the ocean step, by default from
@@ -49,11 +52,14 @@ import { withCadence } from '../js/cadence.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { createForcedOcean } from '../js/gpu/forcing.gpu.js';
 import { decodeForcing, forcingDay } from '../js/forcing.module.js';
+import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
 import { stopOnSignal, syncAfterSave } from './runControl.mjs';
 
 const N = Number(process.env.N ?? 64), TAG = process.env.TAG ?? `ocean${N}`, YEARS = Number(process.env.YEARS ?? 1), KEEP = Number(process.env.KEEP ?? 2);
 const DAYS_PER_YEAR = Number(process.env.DAYS_PER_YEAR ?? 365), LOOP_DAYS = Number(process.env.LOOP_DAYS ?? DAYS_PER_YEAR), RESTORE = Number(process.env.RESTORE ?? 30);
 const SNAPSHOT_DAYS = Number(process.env.SNAPSHOT_DAYS ?? 30), STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
+const RESTORE_TO = process.env.RESTORE_TO ?? 'recorded';
+if (!['recorded', 'woa'].includes(RESTORE_TO)) throw new Error(`RESTORE_TO is recorded or woa, not ${RESTORE_TO}`);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname, FORCING = process.env.FORCING;
 const OCEAN = withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}') }, 1350 * 16 / N, N).ocean, RADIATION = JSON.parse(process.env.RADIATION ?? '{}');
 if (!FORCING) throw new Error('FORCING must name a directory of recorded forcing');
@@ -101,7 +107,15 @@ const kT = LAYER_DENSITIES.filter((r) => r < THERMOCLINE_DENSITY).length;
 const sea = (a, b, c, e) => [...Array(C).keys()].filter((i) => !land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && (c <= e ? mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e : mesh.lonCell[i] * deg >= c || mesh.lonCell[i] * deg <= e));
 const meanOf = (cells, f) => cells.reduce((s, i) => s + f(i), 0) / Math.max(1, cells.length);
 const warmPool = sea(-10, 10, 120, 160), coldTongue = sea(-2, 2, -110, -90), westPacific = sea(-5, 5, 140, 170), eastPacific = sea(-5, 5, -120, -90);
-const southern = sea(-70, -60, -180, 180), ocean = sea(-90, 90, -180, 180);
+const southern = sea(-70, -60, -180, 180), ocean = sea(-90, 90, -180, 180), tropics = sea(-20, 20, -180, 180);
+const EQUINOX_DAY_OF_YEAR = 78;
+const woa = RESTORE_TO === 'woa' ? decodeMonthlySst(readFileSync(new URL(`../${MONTHLY_SST_FILE}`, import.meta.url))) : null;
+function targetSst(fields, day) {
+  if (!woa) return fields.sst;
+  const months = monthWeights(woa, (((day + EQUINOX_DAY_OF_YEAR) % 365) + 365) % 365), out = Float32Array.from(fields.sst);
+  for (const i of ocean) { const t = climatologyAt(woa, months, mesh.latCell[i], mesh.lonCell[i]); if (Number.isFinite(t)) out[i] = t; }
+  return out;
+}
 const BANDS = [[0, 60], [60, 200], [200, 500], [500, 1000]];
 const S = gpu.layout.S, PH = gpu.layout.PH;
 const globalSST = (surfaceT, ice) => {
@@ -116,6 +130,7 @@ const fixed = (x, digits) => (Number.isFinite(x) ? x.toFixed(digits) : '—');
 const where = (done, step) => `${Math.floor(done / DAYS_PER_YEAR)} years${done % DAYS_PER_YEAR || step ? ` ${done % DAYS_PER_YEAR} days` : ''}${step ? ` ${step} of ${perDay} steps` : ''} alone`;
 const phase = ((forcingDay(days[doneBefore % LOOP_DAYS]) - 1 - (baseDay + doneBefore)) % DAYS_PER_YEAR + DAYS_PER_YEAR) % DAYS_PER_YEAR;
 log(`--- ${new Date().toISOString()} ocean spin-up at N=${N} from ${from} (day ${saved.day}, ${where(doneBefore, stepBefore)}) under ${FORCING} days ${forcingDay(days[0])}–${forcingDay(days[days.length - 1])}, restoring ${RESTORE} W/m²/K, dt ${dt} s, ocean step ${oceanDt} s, after ${((performance.now() - t0) / 1000).toFixed(0)} s of setup${phase ? `; the forcing is ${phase} days out of season with the state` : ''}`);
+log(`restoring open water at ${RESTORE} W/m²/K toward ${RESTORE_TO === 'woa' ? "WOA23's monthly SST on each forcing day's date" : 'the recorded SST'}`);
 
 async function readSurface() {
   const [surfaceT, ice] = await readRanges(gpu.device, gpu.buffers.S, [{ offset: S.TS, length: C }, { offset: S.ICE, length: C }]);
@@ -169,9 +184,11 @@ async function yearEnd(done, last, seconds, daysRun) {
     if (cover >= 0.15) extent[north ? 'north' : 'south'] += a;
     if (last.fields.concentration[i] >= 0.15) extent[north ? 'recordedNorth' : 'recordedSouth'] += a;
   }
+  let tropicArea = 0, tropicDrift = 0;
+  for (const i of tropics) { const a = mesh.areaCell[i]; tropicArea += a; tropicDrift += a * ((ice[i] > 0 ? FREEZING_POINT : surfaceT[i]) - last.fields.sst[i]); }
   const mean = globalSST(surfaceT, ice), back = Math.min(10, year);
   history[year] = mean;
-  log(`year ${year}: Southern Ocean 60–70S ${column.join(', ')} °C; SST − recorded day ${last.day} mean ${(drift / area).toFixed(3)} K, rms ${Math.sqrt(square / area).toFixed(3)} K; global SST ${fixed(mean - 273.15, 2)} °C, drift ${fixed(mean - history[0], 3)} K since the start, ${fixed(mean - history[year - back], 3)} K over the last ${back} years; ice extent N ${(extent.north / 1e12).toFixed(1)} (recorded ${(extent.recordedNorth / 1e12).toFixed(1)}) S ${(extent.south / 1e12).toFixed(1)} (recorded ${(extent.recordedSouth / 1e12).toFixed(1)}) Mkm²; interior ${fixed(d.oceanInteriorT - 273.15, 2)} °C, currents ≤ ${fixed(d.oceanSpeed, 2)} m/s, transport ${fixed(d.oceanTransport, 0)} Sv, clamped ${d.oceanLimited}; ${seconds.toFixed(0)} s (${(seconds / daysRun).toFixed(2)} s a day)`);
+  log(`year ${year}: Southern Ocean 60–70S ${column.join(', ')} °C; SST − ${RESTORE_TO === 'woa' ? 'WOA23 on' : 'recorded'} day ${last.day} mean ${(drift / area).toFixed(3)} K (20S–20N ${(tropicDrift / tropicArea).toFixed(3)} K), rms ${Math.sqrt(square / area).toFixed(3)} K; global SST ${fixed(mean - 273.15, 2)} °C, drift ${fixed(mean - history[0], 3)} K since the start, ${fixed(mean - history[year - back], 3)} K over the last ${back} years; ice extent N ${(extent.north / 1e12).toFixed(1)} (recorded ${(extent.recordedNorth / 1e12).toFixed(1)}) S ${(extent.south / 1e12).toFixed(1)} (recorded ${(extent.recordedSouth / 1e12).toFixed(1)}) Mkm²; interior ${fixed(d.oceanInteriorT - 273.15, 2)} °C, currents ≤ ${fixed(d.oceanSpeed, 2)} m/s, transport ${fixed(d.oceanTransport, 0)} Sv, clamped ${d.oceanLimited}; ${seconds.toFixed(0)} s (${(seconds / daysRun).toFixed(2)} s a day)`);
   if (!Number.isFinite(mean) || !Number.isFinite(d.oceanSpeed) || !Number.isFinite(d.oceanInteriorT)) { log(`NaN in year ${year}; stopping`); await hook.drain(); process.exit(2); }
   await save(done, 0, read);
 }
@@ -183,6 +200,7 @@ while (done < YEARS * DAYS_PER_YEAR) {
   const last = await decodeForcing(new Uint8Array(readFileSync(`${FORCING}/${days[done % LOOP_DAYS]}`)));
   if (last.N !== N) throw new Error(`${days[done % LOOP_DAYS]} is N=${last.N}`);
   if (last.grid && last.grid.relax !== mesh.relax) throw new Error(`${days[done % LOOP_DAYS]} was recorded on a mesh of ${last.grid.relax} Lloyd passes, the state is on ${mesh.relax}`);
+  last.fields.sst = targetSst(last.fields, last.day);
   forced.setDay(last.fields, oceanDt);
   let oceanSteps = 0;
   while (step < perDay) {

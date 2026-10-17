@@ -3,7 +3,9 @@ import { shareMesh } from './mesh.module.js';
 import { parallelism, spawn } from './threads.module.js';
 import { loadClimatology } from './ocean/climatology.module.js';
 
-export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, PHYSICS: 4, ADVANCE: 5, COMBINE: 6, CLOSURE: 7, ADJUST: 8, DISSIPATE: 9, OCEAN: 10, MIX: 11, EXIT: 12 };
+export const PHASE = { IDLE: 0, FLUX: 1, COLUMN: 2, LAYER: 3, PHYSICS: 4, ADVANCE: 5, COMBINE: 6, CLOSURE: 7, ADJUST: 8, DISSIPATE: 9, OCEAN: 10, MIX: 11, OCEAN_TARGETS: 12, OCEAN_UREMAP: 13, OCEAN_REMAP: 14, OCEAN_COLUMN: 15, OCEAN_USOLVE: 16, OCEAN_PREPARE_CELLS: 17, OCEAN_PREPARE_EDGES: 18, OCEAN_RESCALE: 19, OCEAN_SHIFT: 20, OCEAN_EDDY_EDGES: 21, OCEAN_EDDY_CELLS: 22, OCEAN_EDDY_APPLY: 23, OCEAN_BARO_PREP: 24, OCEAN_BARO_CORIOLIS: 25, OCEAN_BARO_EDGES: 26, OCEAN_BARO_CELLS: 27, EXIT: 28 };
+export const OCEAN_PASSES = { targets: PHASE.OCEAN_TARGETS, uremap: PHASE.OCEAN_UREMAP, remap: PHASE.OCEAN_REMAP, column: PHASE.OCEAN_COLUMN, usolve: PHASE.OCEAN_USOLVE, prepareCells: PHASE.OCEAN_PREPARE_CELLS, prepareEdges: PHASE.OCEAN_PREPARE_EDGES, rescale: PHASE.OCEAN_RESCALE, shift: PHASE.OCEAN_SHIFT, eddyEdges: PHASE.OCEAN_EDDY_EDGES, eddyCells: PHASE.OCEAN_EDDY_CELLS, eddyApply: PHASE.OCEAN_EDDY_APPLY, baroPrep: PHASE.OCEAN_BARO_PREP, baroCoriolis: PHASE.OCEAN_BARO_CORIOLIS, baroEdges: PHASE.OCEAN_BARO_EDGES, baroCells: PHASE.OCEAN_BARO_CELLS };
+export const OCEAN_PASS_FUNCTIONS = { [PHASE.OCEAN_TARGETS]: 'regridTargets', [PHASE.OCEAN_UREMAP]: 'regridEdges', [PHASE.OCEAN_REMAP]: 'regridCells', [PHASE.OCEAN_COLUMN]: 'columnCells', [PHASE.OCEAN_USOLVE]: 'columnEdges', [PHASE.OCEAN_RESCALE]: 'rescaleCells', [PHASE.OCEAN_SHIFT]: 'shiftEdges', [PHASE.OCEAN_EDDY_EDGES]: 'eddyEdges', [PHASE.OCEAN_EDDY_CELLS]: 'eddyCells', [PHASE.OCEAN_EDDY_APPLY]: 'eddyApply', [PHASE.OCEAN_BARO_PREP]: 'baroPrep', [PHASE.OCEAN_BARO_CORIOLIS]: 'baroCoriolis', [PHASE.OCEAN_BARO_EDGES]: 'baroEdges', [PHASE.OCEAN_BARO_CELLS]: 'baroCells' };
 
 function blocks(kind, n, size, extra = {}) {
   const chunks = [];
@@ -35,6 +37,22 @@ export function phaseChunks({ K, C, E, V, L = 0 }, workers = 8) {
     [PHASE.MIX]: blocks('edges', E, size(E, 64)),
     [PHASE.DISSIPATE]: blocks('cells', C, size(C, 32)),
     [PHASE.OCEAN]: [...blocks('momentum', L, 1), ...blocks('tracers', L, 1)],
+    [PHASE.OCEAN_TARGETS]: blocks('cells', C, size(C, 32)),
+    [PHASE.OCEAN_UREMAP]: blocks('edges', E, size(E, 64)),
+    [PHASE.OCEAN_REMAP]: blocks('cells', C, size(C, 32)),
+    [PHASE.OCEAN_COLUMN]: blocks('cells', C, size(C, 32)),
+    [PHASE.OCEAN_USOLVE]: blocks('edges', E, size(E, 64)),
+    [PHASE.OCEAN_PREPARE_CELLS]: blocks('cells', C, size(C, 32)),
+    [PHASE.OCEAN_PREPARE_EDGES]: blocks('edges', E, size(E, 64)),
+    [PHASE.OCEAN_RESCALE]: blocks('cells', C, size(C, 32)),
+    [PHASE.OCEAN_SHIFT]: blocks('edges', E, size(E, 64)),
+    [PHASE.OCEAN_EDDY_EDGES]: blocks('edges', E, size(E, 64)),
+    [PHASE.OCEAN_EDDY_CELLS]: blocks('cells', C, size(C, 32)),
+    [PHASE.OCEAN_EDDY_APPLY]: blocks('cells', C, size(C, 32)),
+    [PHASE.OCEAN_BARO_PREP]: blocks('edges', E, size(E, 64)),
+    [PHASE.OCEAN_BARO_CORIOLIS]: blocks('edges', E, size(E, 256)),
+    [PHASE.OCEAN_BARO_EDGES]: blocks('edges', E, size(E, 256)),
+    [PHASE.OCEAN_BARO_CELLS]: blocks('cells', C, size(C, 128)),
   };
 }
 
@@ -52,6 +70,8 @@ export const TOTALS = ['absorbedSolar', 'atmosphereSolar', 'outgoingLongwave', '
  * tendency evaluations to the workers a layer at a time; the workers
  * adopt its state rather than building their own, so their ocean options
  * leave out the climatology and the functions, which only the build reads.
+ * The hybrid ocean's regrid and column passes go to the workers the same
+ * way, in blocks of cells or edges (OCEAN_PASSES).
  */
 export async function createParallelModel(grid, options = {}, workers = null) {
   workers ??= Math.max(1, await parallelism());
@@ -114,6 +134,7 @@ export async function createParallelModel(grid, options = {}, workers = null) {
     phaseTime[phase] += performance.now() - started;
   }
   if (model.ocean) model.ocean.setLayerRunner((useTrial, stage) => run(PHASE.OCEAN, { useTrial, stage }));
+  if (model.ocean && model.ocean.setColumnRunner) model.ocean.setColumnRunner((pass, useTrial = 0) => run(OCEAN_PASSES[pass], { useTrial }));
 
   function tendencyPhases(useTrial, stage) {
     run(PHASE.FLUX, { useTrial, stage });
