@@ -11,7 +11,7 @@ import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
 import { initialHumidity } from './physics/init.module.js';
-import { fetchState, stateName, savedLevels } from './stateFile.module.js';
+import { fetchState, stateName, savedLevels, groupHeader, groupArrays } from './stateFile.module.js';
 import { stateGrid, stateRelax, savedRelax, gridHeader } from './stateGrid.module.js';
 import { runStore } from './snapshots.module.js';
 import { sigmaInterfaces } from './dynamics/sigmaCore.module.js';
@@ -591,6 +591,14 @@ async function profile() {
 let lastStart = null, currentN = null;
 
 /*
+ * The ocean a model runs, 'slab' or 'hybrid', and what the page is told of
+ * it. A start follows the page's `ocean` when it names one, else the saved
+ * state's `vertical`, else the slab.
+ */
+const oceanVertical = (model) => (model.oceanEngine ?? model.ocean)?.vertical ?? 'slab';
+const oceanMessage = (model) => (model.ocean ? { ocean: true, vertical: oceanVertical(model), oceanLayers: (model.oceanEngine ?? model.ocean).layers ?? null } : { ocean: false });
+
+/*
  * While holding the model: refreshes the mirrors from the device if the
  * engine keeps them there, and hands the page a copy of the state and the
  * ocean as transferable buffers.
@@ -609,13 +617,13 @@ async function snapshot() {
   let ocean = null, land = null;
   if (model.ocean) {
     const o = await model.ocean.serialize();
-    ocean = Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Float64Array.from(v).buffer]));
+    ocean = { ...groupHeader(o), ...Object.fromEntries(Object.entries(groupArrays(o)).map(([k, v]) => [k, Float64Array.from(v).buffer])) };
   }
   if (model.land) {
     const l = await model.land.serialize();
     land = Object.fromEntries(Object.entries(l).map(([k, v]) => [k, Float64Array.from(v).buffer]));
   }
-  const transfer = [...Object.values(arrays), ...(ocean ? Object.values(ocean) : []), ...(land ? Object.values(land) : [])];
+  const transfer = [...Object.values(arrays), ...(ocean ? Object.values(groupArrays(ocean)) : []), ...(land ? Object.values(land) : [])];
   self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), arrays, ocean, land }, transfer);
   refresh();
 }
@@ -629,10 +637,10 @@ async function snapshot() {
 async function restore(snapshot) {
   const saved = { N: snapshot.N, K: snapshot.K, day: snapshot.day, time: snapshot.time, terrain: !!snapshot.terrain, ...(snapshot.grid ? { grid: snapshot.grid } : {}) };
   for (const [name, buffer] of Object.entries(snapshot.arrays)) saved[name] = new Float64Array(buffer);
-  if (snapshot.ocean) saved.ocean = Object.fromEntries(Object.entries(snapshot.ocean).map(([k, buffer]) => [k, new Float64Array(buffer)]));
+  if (snapshot.ocean) saved.ocean = { ...groupHeader(snapshot.ocean), ...Object.fromEntries(Object.entries(groupArrays(snapshot.ocean)).map(([k, buffer]) => [k, new Float64Array(buffer)])) };
   if (snapshot.land) saved.land = Object.fromEntries(Object.entries(snapshot.land).map(([k, buffer]) => [k, new Float64Array(buffer)]));
   if (model && saved.N === currentN && savedRelax(saved) === null) saved.grid = { relax: stateRelax(saved, currentTopography).relax };
-  if (!model || saved.N !== currentN || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels)) { await start({ ...lastStart, saved, paused: true }); return; }
+  if (!model || saved.N !== currentN || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || oceanVertical(model) !== (lastStart?.ocean ?? saved.ocean?.vertical ?? 'slab')) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);
   const init = initialState(model, saved, currentN);
@@ -650,7 +658,7 @@ async function restore(snapshot) {
   model.time = saved.time;
   restartRain();
   serving = true;
-  self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, ocean: !!model.ocean, ...geographyMessage(model) });
+  self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, ...oceanMessage(model), ...geographyMessage(model) });
   await sendFrame();
   sourceModel = null;
 }
@@ -670,6 +678,8 @@ async function start(message) {
     if (climatology) options.ocean = { ...(options.ocean ?? {}), climatology };
   }
   options.terrain = message.terrain !== false;
+  const vertical = message.ocean ?? saved?.ocean?.vertical ?? null;
+  if (vertical) options.ocean = { ...(options.ocean ?? {}), vertical, ...(vertical === 'hybrid' && saved?.ocean?.generator ? { generator: saved.ocean.generator } : {}) };
   if (saved) options.levels = savedLevels(saved);
   else if (message.levels) options.levels = sigmaInterfaces(message.levels);
   const workers = message.workers ?? 1;
@@ -709,7 +719,7 @@ async function start(message) {
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
   restartRain();
   serving = true;
-  self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, ocean: !!model.ocean, ...geographyMessage(model) });
+  self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, ...oceanMessage(model), ...geographyMessage(model) });
   refresh();
   sourceModel = null;
 }

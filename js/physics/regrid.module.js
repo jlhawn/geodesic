@@ -3,6 +3,7 @@ import { UNDECIDED } from './radiation.module.js';
 import { SNOW_AGEING } from './ice.module.js';
 import { seasonEstimate, treelineFactor, moistureEstimate, aridityFactor, airCycle, carbonEquilibrium, carbonRecord } from './land.module.js';
 import { R_DRY, CP_DRY } from '../dynamics/sigmaCore.module.js';
+import { groupHeader, groupArrays } from '../stateFile.module.js';
 
 /*
  * Barycentric weights of p in the plane through unit vectors a, b, c:
@@ -188,7 +189,8 @@ export function regridEdgeField(source, target, u, weights = interpolationWeight
 }
 
 export function regridOcean(source, target, ocean, progress = null) {
-  if (source.mesh.nCells === target.mesh.nCells) return Object.fromEntries(Object.entries(ocean).map(([k, v]) => [k, Float64Array.from(v)]));
+  const header = groupHeader(ocean);
+  if (source.mesh.nCells === target.mesh.nCells) return { ...header, ...Object.fromEntries(Object.entries(groupArrays(ocean)).map(([k, v]) => [k, Float64Array.from(v)])) };
   if (progress) progress(0, 'the ocean');
   const atCells = interpolationWeights(source.mesh, target.mesh.xCell), atEdges = interpolationWeights(source.mesh, target.mesh.xEdge);
   const sea = seaMask(source);
@@ -196,7 +198,7 @@ export function regridOcean(source, target, ocean, progress = null) {
   if (!ocean.h) return {};
   const sc = source.mesh.nCells, se = source.mesh.nEdges, tc = target.mesh.nCells, te = target.mesh.nEdges, layers = ocean.h.length / sc;
   const perLayer = (field, per, count, regridOne) => { const out = new Float64Array(layers * count); for (let k = 0; k < layers; k++) out.set(regridOne(field.slice(k * per, (k + 1) * per)), k * count); return out; };
-  return { h: perLayer(ocean.h, sc, tc, cell), T: perLayer(ocean.T, sc, tc, cell), S: perLayer(ocean.S, sc, tc, cell), u: perLayer(ocean.u, se, te, edge), eta: cell(ocean.eta), ...(ocean.densities ? { densities: Float64Array.from(ocean.densities) } : {}) };
+  return { ...header, h: perLayer(ocean.h, sc, tc, cell), T: perLayer(ocean.T, sc, tc, cell), S: perLayer(ocean.S, sc, tc, cell), u: perLayer(ocean.u, se, te, edge), eta: cell(ocean.eta), ...(ocean.densities ? { densities: Float64Array.from(ocean.densities) } : {}) };
 }
 
 export function regridLand(source, target, land, progress = null, { ice = null, surfaceT = null } = {}) {

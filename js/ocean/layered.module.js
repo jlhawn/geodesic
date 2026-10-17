@@ -288,7 +288,7 @@ export const POLAR_INTERIOR_T = 272.15;
 /*
  * The fields at a depth below the surface, per cell: the layer holding
  * that depth (the first whose base lies below it, interior layers no
- * thicker than THIN being tokens and passed over), its temperature, its
+ * thicker than `thin`, THIN for the slab's tokens, passed over), its temperature, its
  * current as a cell vector and as a speed, and the vertical velocity
  * there, upward positive, as the divergence of the transport above the
  * depth with the free surface held: h and u are the L layers'
@@ -296,12 +296,12 @@ export const POLAR_INTERIOR_T = 272.15;
  * temperature. Cells that are land or whose water column ends above the
  * depth are NaN, their current vector zero.
  */
-export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth) {
+export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth, { thin = THIN } = {}) {
   const { nCells: C, nEdges: E, maxEdges, nEdgesOnCell, edgesOnCell, edgeSignOnCell, cellsOnEdge, dcEdge, dvEdge, nEdge, areaCell } = mesh;
   const out = { temperature: new Float32Array(C), current: new Float32Array(3 * C), speed: new Float32Array(C), upwelling: new Float32Array(C) };
   for (let i = 0; i < C; i++) {
     let layer = -1, top = 0;
-    if (cellOcean[i]) for (let k = 0; k < L; k++) { const hk = h[k * C + i]; if (k > 0 && hk <= THIN) continue; if (depth < top + hk) { layer = k; break; } top += hk; }
+    if (cellOcean[i]) for (let k = 0; k < L; k++) { const hk = h[k * C + i]; if (k > 0 && hk <= thin) continue; if (depth < top + hk) { layer = k; break; } top += hk; }
     if (layer < 0) { out.temperature[i] = NaN; out.speed[i] = NaN; out.upwelling[i] = NaN; continue; }
     out.temperature[i] = temperature(layer, i);
     let x = 0, y = 0, z = 0, w = 0;
@@ -313,7 +313,7 @@ export function depthFields(mesh, L, { h, u, temperature, cellOcean }, depth) {
       let above = 0, transport = 0;
       for (let k = 0; k < L && above < depth; k++) {
         const he = 0.5 * (h[k * C + a] + h[k * C + b]);
-        if (k > 0 && he <= THIN) continue;
+        if (k > 0 && he <= thin) continue;
         transport += u[k * E + e] * Math.min(he, depth - above);
         above += he;
       }
@@ -1180,6 +1180,14 @@ export function createOcean(mesh, {
    * (ρ_ml − ρ_k) h₀ + Σ_{j<k} (ρ_j − ρ_k) h_j as two running sums down
    * the column.
    */
+  function mixedDepthsAll() {
+    const { h: hCol, rho: rhoCol } = cols;
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i]) { mixedDepths[i] = 0; continue; }
+      for (let k = 0; k < L; k++) { hCol[k] = h[at(k, i)]; rhoCol[k] = layerRho[at(k, i)]; }
+      mixedDepths[i] = mixedLayerDepth(hCol, rhoCol, L);
+    }
+  }
   function layerDensitiesAll(hIn = h, QIn = Q, WIn = W) {
     for (let k = 0; k < L; k++) for (let i = 0; i < C; i++) { const n = at(k, i), hv = hIn[n]; layerRho[n] = hv > 1e-6 ? eos(QIn[n] / hv, WIn[n] / hv) : rho[k]; }
     for (let i = 0; i < C; i++) rhoMl[i] = layerRho[i];
@@ -2401,6 +2409,7 @@ export function createOcean(mesh, {
       capacity[i] = rhoCp * Math.max(h[i], 1);
     }
     layerDensitiesAll();
+    mixedDepthsAll();
     stericSurface();
     regrid(Infinity);
     publishTransmission();
@@ -2599,6 +2608,7 @@ export function createOcean(mesh, {
     fresh.fill(0); buoyancyLoss.fill(0); penetrated.fill(0);
     forgetDays();
     layerDensitiesAll();
+    mixedDepthsAll();
     publishTransmission();
     if (restartable(saved)) {
       previousT0.set(saved.previousT0); previousVolume.set(saved.previousIceVolume); fresh.set(saved.fresh); capacity.set(saved.capacity);
@@ -2609,6 +2619,7 @@ export function createOcean(mesh, {
   }
   function load(saved, surfaceT, ice, concentration = seaCover) {
     if (hybrid) return loadHybrid(saved, surfaceT, ice, concentration);
+    if (saved && saved.vertical === 'hybrid') throw new Error("a hybrid ocean state loads into the ocean with vertical: 'hybrid'");
     const classes = savedDensities(saved, C);
     if (classes && !sameDensities(classes, densities)) saved = rebinOcean(saved, classes, densities, C, { labelT, labelS });
     if (!saved.h || saved.h.length !== L * C) {
@@ -2682,7 +2693,7 @@ export function createOcean(mesh, {
     if (hybrid) layerDensitiesAll();
     for (let i = 0; i < C; i++) thermoclineDepth[i] = cellOcean[i] ? thermocline(i) : NaN;
     const layerT = (k, i) => (k === 0 ? T0[i] : Q[at(k, i)] / h[at(k, i)]);
-    return { h1: hybrid ? mixedDepths : h.subarray(0, C), T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth) };
+    return { h1: hybrid ? mixedDepths : h.subarray(0, C), T1: T0, S1: S0, u1: u.subarray(0, E), eta, thermoclineDepth, ...depthFields(mesh, L, { h, u, temperature: layerT, cellOcean }, depth, { thin: hybrid ? 0 : THIN }) };
   }
 
   function diagnostics() {

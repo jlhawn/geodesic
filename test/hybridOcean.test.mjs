@@ -112,6 +112,17 @@ test('a slab ocean converts into the hybrid layers with every column\'s heat and
   assert.ok(hybrid.u.every(Number.isFinite) && hybrid.Q.every(Number.isFinite));
 });
 
+test('the fields at a depth take the hybrid layer that holds it, however thin, with the mixed-layer depth as h1', () => {
+  const { mesh, C, ocean } = hybridOcean(8);
+  for (let i = 0; i < C; i++) ocean.Q[C + i] = ocean.h[C + i] * 280;
+  const top = ocean.h[C], surface = ocean.fields(0), within = ocean.fields(0.5 * (ocean.h[0] + ocean.h[C]));
+  assert.ok(top < 5, `the second layer is ${top} m thick`);
+  assert.ok(Math.abs(surface.temperature[0] - ocean.T0[0]) < 1e-3 && Math.abs(within.temperature[0] - 280) < 1e-9, `${surface.temperature[0]} at the surface against T0 ${ocean.T0[0]}, ${within.temperature[0]} within the second layer`);
+  assert.equal(surface.h1, ocean.mixedDepths);
+  assert.ok(surface.h1.every((d, i) => d > 0 && d <= 4000.5) && Number.isFinite(surface.thermoclineDepth[0]), `mixed layer ${surface.h1[0]} m, thermocline ${surface.thermoclineDepth[0]} m`);
+  assert.equal(mesh.nCells, C);
+});
+
 test('over a seamount the pressure force at the depths the layers share leaves a uniform stratification nearly at rest', () => {
   const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean(16, {}, (lat, lon) => 4000 - 3500 * Math.exp(-((lat / (8 * DEG)) ** 2 + (lon / (8 * DEG)) ** 2)));
   for (let n = 0; n < 64; n++) ocean.advance(surfaceT, ice, flux, calm, DT);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { decodeState, encodeState, fetchState, runId, stateName, listedStates, stateDay } from '../js/stateFile.module.js';
+import { decodeState, encodeState, fetchState, runId, stateName, listedStates, stateDay, groupHeader, groupArrays } from '../js/stateFile.module.js';
 
 const state = { N: 4, day: 12, pi: [1e5, 99999.5], theta: [[300, 301], [302, 303]] };
 const text = JSON.stringify(state);
@@ -70,6 +70,39 @@ test('a binary state decodes to the JSON state shape, float32 by default and flo
     assertClose(decoded.land.soil, saved.land.soil, 'land.soil');
     assert.equal(decoded.arrays, undefined);
   }
+});
+
+test("the ocean's vertical and generator ride in the header of a binary state, through its parts, and in a JSON state", async () => {
+  const saved = { ...binarySample(), ocean: { ...binarySample().ocean, vertical: 'hybrid', generator: 'zstar' } };
+  const encoded = encodeState(saved, { f64: ['ocean.eta'] });
+  const header = JSON.parse(new TextDecoder().decode(encoded.subarray(8, 8 + new DataView(encoded.buffer).getUint32(4, true))));
+  assert.deepEqual(header.ocean, { vertical: 'hybrid', generator: 'zstar' });
+  assert.ok(header.arrays.every(({ name }) => !['ocean.vertical', 'ocean.generator'].includes(name)));
+  for (const bytes of [encoded, new Uint8Array(gzipSync(encoded))]) {
+    const decoded = await decodeState(bytes);
+    assert.equal(decoded.ocean.vertical, 'hybrid');
+    assert.equal(decoded.ocean.generator, 'zstar');
+    assert.deepEqual(Array.from(decoded.ocean.eta), Array.from(saved.ocean.eta));
+    assertClose(decoded.ocean.h, saved.ocean.h, 'ocean.h');
+  }
+  const gz = gzipSync(encoded), cut = Math.floor(gz.length / 2);
+  const files = {
+    'http://h/runs/b_day12.bin.gz.000': gz.subarray(0, cut), 'http://h/runs/b_day12.bin.gz.001': gz.subarray(cut),
+    'http://h/runs/b_day12.parts.json': new TextEncoder().encode(JSON.stringify({ parts: [{ file: 'b_day12.bin.gz.000', bytes: cut }, { file: 'b_day12.bin.gz.001', bytes: gz.length - cut }] })),
+  };
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => (files[url] ? new Response(files[url]) : new Response('', { status: 404 }));
+  try {
+    const fetched = await fetchState('http://h/runs/b_day12.parts.json');
+    assert.equal(fetched.ocean.vertical, 'hybrid');
+    assert.equal(fetched.ocean.generator, 'zstar');
+    assert.deepEqual(Array.from(fetched.ocean.eta), Array.from(saved.ocean.eta));
+  } finally { globalThis.fetch = realFetch; }
+  const json = await decodeState(new TextEncoder().encode(JSON.stringify({ N: 4, ocean: { h: [1, 2], vertical: 'slab' } })));
+  assert.equal(json.ocean.vertical, 'slab');
+  assert.deepEqual(groupHeader(saved.ocean), { vertical: 'hybrid', generator: 'zstar' });
+  assert.deepEqual(Object.keys(groupArrays(saved.ocean)), ['h', 'eta']);
+  assert.deepEqual(groupHeader(null), {});
 });
 
 test("a binary state in the spin-up driver's layout, at a misaligned offset, or cut short", async () => {

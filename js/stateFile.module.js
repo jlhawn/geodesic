@@ -9,11 +9,13 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * so that a run is named by its content and a store can keep its chunks
  * under their hashes; or the same state in binary: 'GCMS', a
  * little-endian u32 header length, the JSON header { N, K, day, time,
- * terrain, grid, arrays: [{ name, length, offset, type }] } (which may end in
- * spaces counted in that length), zero padding to a multiple of 4, then
- * each array at its byte offset from the end of the padding, as float32
- * unless its type is 'f64'. Array names are the JSON
- * state's keys, with 'ocean.' and 'land.' prefixes for the nested ones.
+ * terrain, grid, ocean, land, arrays: [{ name, length, offset, type }] }
+ * (which may end in spaces counted in that length), zero padding to a
+ * multiple of 4, then each array at its byte offset from the end of the
+ * padding, as float32 unless its type is 'f64'. Array names are the JSON
+ * state's keys, with 'ocean.' and 'land.' prefixes for the nested ones;
+ * the header's `ocean` and `land` hold those groups' scalar entries, the
+ * ocean's `vertical` ('slab' or 'hybrid') and `generator`.
  * Gzip and the binary format are recognised by their magic bytes rather
  * than the file name, since a server may already have inflated a .gz
  * file on the way. The array 'levels' holds the interface σ values of the
@@ -78,11 +80,27 @@ export function savedLevels(saved) {
  * 'ocean.densities', 'land.record' or 'energyRecord', float64, with the header padded with spaces so the
  * arrays start 8-byte aligned.
  */
+const GROUPS = ['ocean', 'land'];
+const isArray = (value) => ArrayBuffer.isView(value) || Array.isArray(value) || value instanceof ArrayBuffer;
+const isScalar = (value) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+
+/*
+ * A saved group's (`ocean`, `land`) scalar entries, and its arrays, as
+ * two objects: the arrays travel as buffers or typed arrays while the
+ * scalars ride along as they are.
+ */
+export function groupHeader(group) {
+  return Object.fromEntries(Object.entries(group ?? {}).filter(([, value]) => isScalar(value)));
+}
+export function groupArrays(group) {
+  return Object.fromEntries(Object.entries(group ?? {}).filter(([, value]) => isArray(value)));
+}
+
 export function encodeState(state, { f64 = [] } = {}) {
   const named = [];
   for (const [key, value] of Object.entries(state)) {
-    if (ArrayBuffer.isView(value) || Array.isArray(value)) named.push([key, value]);
-    else if ((key === 'ocean' || key === 'land') && value) for (const [inner, values] of Object.entries(value)) named.push([`${key}.${inner}`, values]);
+    if (isArray(value)) named.push([key, value]);
+    else if (GROUPS.includes(key) && value) for (const [inner, values] of Object.entries(groupArrays(value))) named.push([`${key}.${inner}`, values]);
   }
   let offset = 0;
   const arrays = named.map(([name, values]) => {
@@ -92,7 +110,8 @@ export function encodeState(state, { f64 = [] } = {}) {
     offset += size * values.length;
     return entry;
   });
-  const meta = Object.fromEntries(Object.entries(state).filter(([key, value]) => typeof value !== 'object' || (key === 'grid' && value && !ArrayBuffer.isView(value) && !Array.isArray(value))));
+  const meta = Object.fromEntries(Object.entries(state).filter(([key, value]) => typeof value !== 'object' || (key === 'grid' && value && !isArray(value))));
+  for (const key of GROUPS) if (state[key] && !isArray(state[key])) { const header = groupHeader(state[key]); if (Object.keys(header).length) meta[key] = header; }
   const json = JSON.stringify({ ...meta, arrays });
   const header = new TextEncoder().encode(json.padEnd(json.length + ((8 - ((8 + new TextEncoder().encode(json).length) % 8)) % 8)));
   const start = 8 + header.length;

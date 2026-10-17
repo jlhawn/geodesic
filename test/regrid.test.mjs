@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
-import { interpolationWeights, regridState } from '../js/physics/regrid.module.js';
+import { interpolationWeights, regridState, regridOcean } from '../js/physics/regrid.module.js';
 import { P0 } from '../js/dynamics/sigmaCore.module.js';
 
 const coarse = createModel(new Grid(8));
@@ -54,6 +54,22 @@ test('a state regridded to a finer mesh keeps its mass, its profile, and its sol
   assert.ok(worstPi < 20);
   assert.ok(worstU < 0.05 * fm.radius * omega);
   assert.ok(fTheta.every((t) => t > 250 && t < 600) && fSurfaceT.every((t) => t > 250 && t < 300));
+});
+
+test('a regridded ocean keeps its vertical and generator beside its arrays, onto the same mesh and onto another', () => {
+  const sc = coarse.mesh.nCells, se = coarse.mesh.nEdges, L = 2;
+  const ocean = { h: new Float64Array(L * sc).fill(100), T: new Float64Array(L * sc).fill(285), S: new Float64Array(L * sc).fill(35), u: new Float64Array(L * se), eta: new Float64Array(sc), densities: [1023, 1025], vertical: 'hybrid', generator: 'hybrid' };
+  const same = regridOcean(coarse, coarse, ocean), other = regridOcean(coarse, fine, ocean);
+  for (const out of [same, other]) {
+    assert.equal(out.vertical, 'hybrid');
+    assert.equal(out.generator, 'hybrid');
+    assert.deepEqual(Array.from(out.densities), [1023, 1025]);
+    assert.ok(out.h.every((v) => Math.abs(v - 100) < 1e-9) && out.T.every((v) => Math.abs(v - 285) < 1e-9));
+  }
+  assert.equal(same.h.length, L * sc);
+  assert.equal(other.h.length, L * fine.mesh.nCells);
+  const plain = regridOcean(coarse, fine, { h: ocean.h, T: ocean.T, S: ocean.S, u: ocean.u, eta: ocean.eta });
+  assert.ok(!('vertical' in plain) && !('generator' in plain) && !('densities' in plain));
 });
 
 test('tile sampling keeps a step field exact and, masked, takes a neighbour or the guess', async () => {

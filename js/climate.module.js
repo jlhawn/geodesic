@@ -1,7 +1,7 @@
 import { Grid } from "./grid.module.js";
 import { initUnifiedViewer } from "./unifiedViewer.module.js";
 import { createWindParticles } from "./windParticles.module.js";
-import { fetchState, stateName, decodeState, encodeState, listedStates, stateDay } from './stateFile.module.js';
+import { fetchState, stateName, decodeState, encodeState, listedStates, stateDay, groupHeader, groupArrays } from './stateFile.module.js';
 import { seasonPhrase } from "./levels.module.js";
 import { sigmaInterfaces } from "./dynamics/sigmaCore.module.js";
 import { LAYER_BOTTOMS } from "./ocean/layered.module.js";
@@ -299,7 +299,7 @@ const VIEW_NOTES = [
   ['Ocean', 'Paints the chosen ocean overlay on an evenly lit globe; the current at the chosen depth is what the animation follows.'],
   ['Wind animation', 'Particles trace the wind at the chosen height as fading trails, brighter where it blows faster; Vectors draw one arrow per cell; None hides the motion.'],
   ['Height', 'The pressure level shown by the wind, temperature, humidity and vertical-motion views and followed by the animation: Surface is the lowest layer, 20 to 60 m up depending on the model\'s layers, and the slider climbs from 1000 to 10 hPa giving each of the model\'s layers the same width, so the thin layers near the ground get as much room as the deep ones aloft. Where the ground rises above the level the map shows its relief in gray and the particles stop. Column views hide it and use the surface wind.'],
-  ['Depth', 'The depth shown by the sea temperature, current and upwelling views and followed by the animation: Surface is the mixed layer, and the slider descends to 5500 m giving each of the ocean\'s layers the same width by its subtropical depth, each cell showing the isopycnal layer that holds the depth. Where the sea floor rises above the depth the map shows its relief in gray, as it shows the land. Column views hide it and use the surface current.'],
+  ['Depth', 'The depth shown by the sea temperature, current and upwelling views and followed by the animation: Surface is the mixed layer, and the slider descends to 5500 m giving each of the ocean\'s layers the same width by its subtropical depth, each cell showing the layer that holds the depth. Where the sea floor rises above the depth the map shows its relief in gray, as it shows the land. Column views hide it and use the surface current.'],
   ['Vertical motion', 'The air\'s vertical velocity at the chosen height, upward positive: rising air in warm fronts, storms and the tropical rain belt, sinking air under the subtropical highs. Diagnosed from the convergence of the flow, then averaged with the neighboring cells and over a two-hour memory, so gravity waves and single convecting cells do not speckle it.'],
   ['Wind speed', 'Speed at the chosen height.'],
   ['Temperature', 'Air temperature at the chosen height.'],
@@ -315,7 +315,7 @@ const VIEW_NOTES = [
   ['Current speed', 'The current at the chosen depth, up to a meter a second in the surface boundary currents and weaker below. With any ocean view selected, Particles and Vectors trace the current instead of the wind.'],
   ['Upwelling', 'The water\'s vertical velocity through the chosen depth, upward positive, from the convergence of the flow above it: up along the equator and the eastern boundaries where the wind drives the surface water away, down under the subtropical gyres.'],
   ['Mixed layer depth', 'The thickness of the surface mixed layer: deep where winter cooling and wind stirring reach down, shallow under summer warming and along upwelling coasts.'],
-  ['Thermocline depth', 'The depth of the boundary between the 20.4 °C and the 19.4 °C water classes, the 20 °C isotherm: deep in the western tropical Pacific and the subtropical gyres where the wind piles warm water up, shallow in the east and toward the poles, where it outcrops.'],
+  ['Thermocline depth', 'The depth where the water reaches 1024 kg/m³, between the 20.4 °C and the 19.4 °C classes of the slab ocean and interpolated between the hybrid ocean\'s layers, the 20 °C isotherm: deep in the western tropical Pacific and the subtropical gyres where the wind piles warm water up, shallow in the east and toward the poles, where it outcrops.'],
   ['Sea surface salinity', 'The salinity of the ocean\'s upper layer: saltier where evaporation outpaces rain, as under the subtropical highs, and fresher under heavy rain and where rivers reach the sea.'],
   ['Sea surface height', 'The free surface: high over the subtropical gyres and low around the poles, with the currents flowing along its contours.'],
   ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Where a pressure level lies below the ground, wind, temperature and humidity show the lowest layer of that column, and only the height is extrapolated hydrostatically so its contours stay a pressure field.'],
@@ -340,7 +340,7 @@ const VIEW_NOTES = [
 ];
 const NOTES = new Map(VIEW_NOTES);
 
-export default function runClimate({ N = null, from = null, levels = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, climatology = null, terrain = true, settings: overrides = {}, view = null, pace = true, auto = false, defaults = {} } = {}) {
+export default function runClimate({ N = null, from = null, levels = null, workers = 1, engine = 'cpu', ocean = null, paused = false, land = true, topography = null, climatology = null, terrain = true, settings: overrides = {}, view = null, pace = true, auto = false, defaults = {} } = {}) {
   const settings = loadSettings();
   applyOverrides(settings, overrides);
   const panel = document.getElementById('panel');
@@ -762,7 +762,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       ...(latest.engine === 'gpu' ? [['Pacing', latest.pause ? `<b>${latest.pause} ms</b> of idle GPU after each step, so the page can draw every frame.` : '<b>none</b> — the steps run back to back.']] : []),
       ['Chosen by', deviceChoice ? `the device test: <b>${deviceChoice.engine === 'gpu' ? 'GPU' : 'CPU'} at N=${deviceChoice.N}</b>, projected ${(1440 / deviceChoice.rate).toFixed(0)} seconds per simulated day from ${deviceChoice.measured}. <button class="flat" data-action="retest">Test again</button>` : 'the page\'s address, which names the resolution, the engine or the saved run.'],
     );
-    if (d && d.oceanUpperDepth !== undefined) rows.push(['Ocean', `mixed layer <b>${d.oceanUpperDepth.toFixed(0)} m</b> deep on average, currents to <b>${d.oceanSpeed.toFixed(2)} m/s</b>${d.oceanTransport !== undefined ? `, the strongest transport <b>${d.oceanTransport.toFixed(0)} Sv</b>` : ''}${d.oceanThermoclineDepth !== undefined ? `, thermocline <b>${d.oceanThermoclineDepth.toFixed(0)} m</b>` : ''}.`]);
+    if (d && d.oceanUpperDepth !== undefined) rows.push(['Ocean', `${ready && ready.vertical === 'hybrid' ? `the <b>hybrid</b> ocean on ${ready.oceanLayers} layers, isopycnal below the mixed layer and in depth where the water is light or shallow; ` : ready && ready.vertical ? `the <b>slab</b> ocean, a mixed layer over ${ready.oceanLayers - 1} isopycnal classes; ` : ''}mixed layer <b>${d.oceanUpperDepth.toFixed(0)} m</b> deep on average, currents to <b>${d.oceanSpeed.toFixed(2)} m/s</b>${d.oceanTransport !== undefined ? `, the strongest transport <b>${d.oceanTransport.toFixed(0)} Sv</b>` : ''}${d.oceanThermoclineDepth !== undefined ? `, thermocline <b>${d.oceanThermoclineDepth.toFixed(0)} m</b>` : ''}.`]);
     if (d && d.landFraction !== undefined) rows.push(['Land', `<b>${(100 * d.landFraction).toFixed(0)}%</b> of the area${ready && ready.terrain ? ' with terrain' : ', flat'}; surface <b>${(d.landMeanT + CELSIUS).toFixed(1)} °C</b>, soil water <b>${d.soilWater.toFixed(0)} kg/m²</b>, snow on <b>${(100 * d.snowFraction).toFixed(0)}%</b> of it.`]);
     document.getElementById('modelDetails').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   }
@@ -950,7 +950,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
   const maxN = isMobileBrowser(navigator) ? MOBILE_MAX_N : DESKTOP_MAX_N;
   const begin = (choice = auto ? { N: maxN } : {}) => {
     const run = (auto && choice.N && Object.keys(defaults).length && defaultRunFor(choice.N, defaults)) || from;
-    worker.postMessage({ type: 'start', N: choice.N ?? N, from: run ? new URL(run, location.href).href : null, levels, workers: threads, engine: choice.engine ?? engine, paused: !running, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl, climatology: climatologyUrl });
+    worker.postMessage({ type: 'start', N: choice.N ?? N, from: run ? new URL(run, location.href).href : null, levels, workers: threads, engine: choice.engine ?? engine, ocean, paused: !running, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl, climatology: climatologyUrl });
   };
   const PROBE_TIMEOUT = 120000;
   let deviceChoice = null, probed = null;
@@ -1002,9 +1002,9 @@ export default function runClimate({ N = null, from = null, levels = null, worke
   };
   const toSnapshot = (saved, url = null) => {
     const arrays = Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice', 'concentration', 'mlmSubsidence', 'mlmHeight', 'mlmGate', 'convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'warmLayer', 'coolSkin', 'levels'].filter((k) => saved[k]).map((k) => [k, Float64Array.from(saved[k]).buffer]));
-    const ocean = saved.ocean ? Object.fromEntries(Object.entries(saved.ocean).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
+    const ocean = saved.ocean ? { ...groupHeader(saved.ocean), ...Object.fromEntries(Object.entries(groupArrays(saved.ocean)).map(([k, v]) => [k, Float64Array.from(v).buffer])) } : null;
     const land = saved.land ? Object.fromEntries(Object.entries(saved.land).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
-    const size = (o) => (o ? Object.values(o).reduce((n, b) => n + b.byteLength, 0) : 0);
+    const size = (o) => (o ? Object.values(groupArrays(o)).reduce((n, b) => n + b.byteLength, 0) : 0);
     const bytes = size(arrays) + size(ocean) + size(land);
     return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, grid: saved.grid ?? null, bytes, source: url }, data: { arrays, ocean, land } };
   };
@@ -1051,7 +1051,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     } catch (error) { document.getElementById('date').textContent = `download failed: ${error.message}`; return null; }
   }
   async function storeSnapshot(message) {
-    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, grid: message.grid, ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? Object.fromEntries(Object.entries(message.ocean).map(([k, b]) => [k, new Float64Array(b)])) : null, land: message.land ? Object.fromEntries(Object.entries(message.land).map(([k, b]) => [k, new Float64Array(b)])) : null });
+    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, grid: message.grid, ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? { ...groupHeader(message.ocean), ...Object.fromEntries(Object.entries(groupArrays(message.ocean)).map(([k, b]) => [k, new Float64Array(b)])) } : null, land: message.land ? Object.fromEntries(Object.entries(message.land).map(([k, b]) => [k, new Float64Array(b)])) : null });
     const name = `Day ${Math.floor(message.day)} · ${new Date().toLocaleString()}`;
     await saveSnapshot({ name, created: Date.now(), ...meta }, data);
     await refreshSnapshots();
@@ -1066,7 +1066,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     closeModals();
     scheduleUrl();
     render();
-    const transfer = [...Object.values(data.arrays), ...(data.ocean ? Object.values(data.ocean) : []), ...(data.land ? Object.values(data.land) : [])];
+    const transfer = [...Object.values(data.arrays), ...(data.ocean ? Object.values(groupArrays(data.ocean)) : []), ...(data.land ? Object.values(data.land) : [])];
     worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, grid: meta.grid ?? null, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
   }
   const slug = (name) => name.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'snapshot';
@@ -1076,9 +1076,9 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     document.getElementById('date').textContent = `exporting "${meta.name}"…`;
     const saved = { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, ...(meta.grid ? { grid: meta.grid } : {}) };
     for (const [key, buffer] of Object.entries(data.arrays)) saved[key] = new Float64Array(buffer);
-    if (data.ocean) saved.ocean = Object.fromEntries(Object.entries(data.ocean).map(([k, b]) => [k, new Float64Array(b)]));
+    if (data.ocean) saved.ocean = { ...groupHeader(data.ocean), ...Object.fromEntries(Object.entries(groupArrays(data.ocean)).map(([k, b]) => [k, new Float64Array(b)])) };
     if (data.land) saved.land = Object.fromEntries(Object.entries(data.land).map(([k, b]) => [k, new Float64Array(b)]));
-    const names = [...Object.keys(data.arrays), ...Object.keys(data.ocean ?? {}).map((k) => `ocean.${k}`), ...Object.keys(data.land ?? {}).map((k) => `land.${k}`)];
+    const names = [...Object.keys(data.arrays), ...Object.keys(groupArrays(data.ocean)).map((k) => `ocean.${k}`), ...Object.keys(data.land ?? {}).map((k) => `land.${k}`)];
     const gz = await new Response(new Blob([encodeState(saved, { f64: names })]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
     const link = document.createElement('a');
     link.href = URL.createObjectURL(gz);

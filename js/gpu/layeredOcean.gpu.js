@@ -1,7 +1,7 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
 import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares, FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, mixingOptionCheck, closeDay, DAILY } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
-import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, transmitted as transmittedShare } from '../ocean/column.module.js';
+import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
 import { FREEZING_POINT } from '../physics/ice.module.js';
 
@@ -2321,6 +2321,7 @@ ${hybrid ? `  OUT[${OF.H1} + i] = OD[O_MIXED + i];
     device.queue.writeBuffer(ob.OD, 4 * OD.EDDYK, Float32Array.from(eddyKappa));
     device.queue.writeBuffer(ob.OD, 4 * OD.TEDGE, Float32Array.from(mesh.tEdge));
     if (hybrid) device.queue.writeBuffer(ob.OD, 4 * OD.FCELL, Float32Array.from(mesh.fCell));
+    if (hybrid) device.queue.writeBuffer(ob.OD, 4 * OD.MIXED, mixedDepthsOf(h, Q, W));
     device.queue.writeBuffer(ob.OD, 4 * OD.DRAINSTART, drainStart);
     if (drainCells.length) { device.queue.writeBuffer(ob.OD, 4 * OD.DRAINCELL, Float32Array.from(drainCells)); device.queue.writeBuffer(ob.OD, 4 * OD.DRAINW, Float32Array.from(drainWeights)); }
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVVOL, restart ? Float32Array.from(restart.previousIceVolume) : Float32Array.from(ice, (_, i) => coverOf(ice, concentration, i) * ice[i]));
@@ -2335,6 +2336,15 @@ ${hybrid ? `  OUT[${OF.H1} + i] = OD[O_MIXED + i];
     const kept = (name) => (restart && restart[name] && restart[name].length === C ? restart[name] : null);
     core.uploadPhysics({ capacity, oceanFlux: restart ? restart.flux : null, transmission: o.penetration ? kept('transmission') ?? transmissionOf(h, eta) : null, penetrated: kept('penetrated') });
     if (regridOnDevice) regrid(Infinity);
+  }
+  function mixedDepthsOf(h, Q, W) {
+    const out = new Float32Array(C), hCol = new Float64Array(L), rhoCol = new Float64Array(L);
+    for (let i = 0; i < C; i++) {
+      if (!cellOcean[i]) continue;
+      for (let k = 0; k < L; k++) { const n = k * C + i, hk = Math.max(EPS, h[n]); hCol[k] = h[n]; rhoCol[k] = eos(Q[n] / hk, W[n] / hk); }
+      out[i] = mixedLayerDepth(hCol, rhoCol, L);
+    }
+    return out;
   }
   function transmissionOf(h, eta) {
     const out = new Float64Array(C), column = new Float64Array(L);
@@ -2436,6 +2446,7 @@ ${hybrid ? `  OUT[${OF.H1} + i] = OD[O_MIXED + i];
   }
   function upload(saved, surfaceT, ice, concentration = seaCover) {
     if (hybrid) return uploadHybrid(saved, surfaceT, ice, concentration);
+    if (saved && saved.vertical === 'hybrid') throw new Error("a hybrid ocean state loads into the ocean with vertical: 'hybrid'");
     const classes = savedDensities(saved, C);
     if (classes && !sameDensities(classes, o.densities)) saved = rebinOcean(saved, classes, o.densities, C, { labelT, labelS });
     if (restartable(saved)) {
