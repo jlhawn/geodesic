@@ -46,7 +46,7 @@ export const OCEAN_DEFAULTS = {
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
 };
 const HYBRID_REFUSED = ['ekmanBlock', 'intakeLedger', 'retreatDaily', 'shearMixing', 'interiorShearMixing', 'blockDrag'];
-const SLAB_ONLY_KERNELS = ['oSurfaceDensity', 'oGradRho', 'oDeepestEdge', 'oClosureFill', 'oClosureRing', 'oClosureBack1', 'oClosureBack2', 'oMixedReach', 'oMixedLayer', 'oExchangeMomentum', 'oShearEdge', 'oWindDepth', 'oEkmanFlux', 'oEkmanApply', 'oEkmanLeftover'];
+const SLAB_ONLY_KERNELS = ['oSurfaceDensity', 'oGradRho', 'oFlux', 'oEdgePV', 'oDeepestEdge', 'oClosureFill', 'oClosureRing', 'oClosureBack1', 'oClosureBack2', 'oMixedReach', 'oMixedLayer', 'oExchangeMomentum', 'oShearEdge', 'oWindDepth', 'oEkmanFlux', 'oEkmanApply', 'oEkmanLeftover'];
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
 
 export function oceanStateLength(C, E, options = {}) {
@@ -210,19 +210,6 @@ function hybridKernels(o, K, idx) {
       let excess = (worked - supplied) / (worked + supplied);
 `;
   return {
-    /*
-     * prepareCells: each cell's layer densities as anomalies and the
-     * running sums of ρ'h and h above each layer.
-     */
-    oLayerDensity: `${K}  let i = ${idx}; if (i >= C) { return; }
-  var weighted = 0.0; var total = 0.0;
-  for (var k = 0; k < L; k++) {
-    let n = k * C + i; let hv = IN[hOff(k) + i];
-    let r = select(RHOA[k], eosAnomaly(IN[qOff(k) + i] / hv + TREF, IN[wOff(k) + i] / hv + SREF), hv > 1e-6);
-    OD[O_RHOL + n] = r; OD[O_PRESS + n] = weighted; OD[O_HABOVE + n] = total;
-    weighted += r * hv; total += hv;
-  }
-}`,
     oKineticPhi: `${K}  let i = ${idx}; if (i >= C) { return; }
   var edges: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>;
   for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; edges[m] = e; signs[m] = f32(MI[ESC + MAXE * i + m]); dcs[m] = MF[F_DC + e]; dvs[m] = MF[F_DV + e]; }
@@ -249,7 +236,7 @@ function hybridKernels(o, K, idx) {
   for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; others[s] = MI[EOE + slot]; weights[s] = MF[F_PVW + slot]; live[s] = OD[O_EMASK + others[s]] > 0.5; }
   var floor = 0.0;
   for (var k = 0; k < L; k++) { floor += OD[O_HEDGE + k * E + e]; }
-  var layerTop = 0.0; var uAbove = 0.0;
+  var layerTop = 0.0; var uAbove = 0.0; var Ha = 0.0; var Hb = 0.0;
   for (var k = 0; k < L; k++) {
     let n = k * E + e;
     let u = IN[uOff(k) + e];
@@ -257,11 +244,10 @@ function hybridKernels(o, K, idx) {
     var pv = 0.0;
     for (var s = 0; s < MAXEE; s++) { let other = others[s]; let fo = select(0.0, OD[O_HEDGE + k * E + other] * IN[uOff(k) + other], live[s]); pv += weights[s] * fo * (qHere + 0.5 * OD[O_QE + k * E + other]); }
     let gradK = (OD[O_PHI + k * C + b] - OD[O_PHI + k * C + a]) / dc;
-    let na = k * C + a; let nb = k * C + b;
-    let Ha = OD[O_HABOVE + na]; let Hb = OD[O_HABOVE + nb]; let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
+    let pa = O_PR + 2 * (k * C + a); let pb = O_PR + 2 * (k * C + b); let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
     let top = max(Ha, Hb); let bottom = min(Ha + ha, Hb + hb);
     let zR = select(0.5 * (Ha + 0.5 * ha + Hb + 0.5 * hb), 0.5 * (top + bottom), bottom > top);
-    let force = OD[O_PRESS + nb] + OD[O_RHOL + nb] * (zR - Hb) - OD[O_PRESS + na] - OD[O_RHOL + na] * (zR - Ha);
+    let force = OD[pb] + OD[pb + 1] * (zR - Hb) - OD[pa] - OD[pa + 1] * (zR - Ha);
     var du = pv / dc - gradK - OGRAV * OD[O_GRADETA + e] - OGRAV / RHO0 * force / dc;
     let he = OD[O_HEDGE + n];
     if (k == 0) { du += OD[O_STRESS + e] / RHO0 / max(he, HMIN); }
@@ -270,7 +256,31 @@ function hybridKernels(o, K, idx) {
     if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
     if (k > 0 && he <= THINEDGE) { du = (uAbove - u) * P[2]; }
     OUT[uOff(k) + e] = du;
-    uAbove = u; layerTop += he;
+    uAbove = u; layerTop += he; Ha += ha; Hb += hb;
+  }
+}`,
+    /*
+     * oEdgeThickness, oFlux and oEdgePV in one sweep of the edge column:
+     * the edge thicknesses clipped to the sill, the mass flux from the
+     * donor cell, and the edge PV from the vertex vorticities oVertexVort
+     * has left in AVORT.
+     */
+    oEdgeFluxPV: `${K}  let e = ${idx}; if (e >= E) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1]; let v1 = MI[VOE + 2 * e]; let v2 = MI[VOE + 2 * e + 1];
+  let sill = max(EPSO, min(OD[O_BATH + a], OD[O_BATH + b]) + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
+  var sum = 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]);
+  for (var k = 1; k < L; k++) { sum += min(IN[hOff(k) + a], IN[hOff(k) + b]); }
+  let clipped = sum > sill; let f = sill / sum;
+  let wet = OD[O_EMASK + e] > 0.5;
+  for (var k = 0; k < L; k++) {
+    let n = k * E + e; let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
+    var he = select(min(ha, hb), 0.5 * (ha + hb), k == 0);
+    if (clipped) { he *= f; }
+    OD[O_HEDGE + n] = he;
+    let ue = IN[uOff(k) + e];
+    OD[O_FLUX + n] = select(0.0, min(he, max(0.0, select(hb, ha, ue > 0.0))) * ue, wet);
+    let hq = max(he, CENTRING * 0.5 * (ha + hb));
+    OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, PVFLOORK[k]);
   }
 }`,
     oRescale: `${K}  let i = ${idx}; if (i >= C) { return; }
@@ -939,14 +949,7 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
   for (var k = 0; k < L; k++) { sum += OD[O_HEDGE + k * E + e]; }
   if (sum > sill) { let f = sill / sum; for (var k = 0; k < L; k++) { OD[O_HEDGE + k * E + e] *= f; } }
 }`,
-    oFlux: hy ? `${K}  let e = ${idx}; if (e >= E) { return; }
-  let wet = OD[O_EMASK + e] > 0.5;
-  for (var k = 0; k < L; k++) {
-    let n = k * E + e; let ue = IN[uOff(k) + e];
-    let donor = MI[COE + 2 * e + select(1, 0, ue > 0.0)];
-    OD[O_FLUX + n] = select(0.0, min(OD[O_HEDGE + n], max(0.0, IN[hOff(k) + donor])) * ue, wet);
-  }
-}` : `${K}  let e = ${idx}; if (e >= E) { return; }
+    oFlux: `${K}  let e = ${idx}; if (e >= E) { return; }
   let wet = OD[O_EMASK + e] > 0.5;
   for (var k = 0; k < L; k++) {
     let n = k * E + e;
@@ -958,7 +961,36 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
     OD[O_FLUX + n] = select(0.0, he * IN[uOff(k) + e], wet);
   }
 }`,
-    oCellTendency: `${K}  let i = ${idx}; if (i >= C) { return; }
+    /*
+     * The hybrid's oCellTendency also prepares the cells for oMomentum:
+     * each cell-layer's running sum of ρ'h above it and its density
+     * anomaly as the adjacent pair PR (the sum of h above is re-summed
+     * where it is read).
+     */
+    oCellTendency: hy ? `${K}  let i = ${idx}; if (i >= C) { return; }
+  var edges: array<i32, MAXE>; var nbrs: array<i32, MAXE>;
+  for (var m = 0; m < MAXE; m++) { edges[m] = MI[EOC + MAXE * i + m]; nbrs[m] = MI[COC + MAXE * i + m]; }
+  var weighted = 0.0;
+  for (var k = 0; k < L; k++) {
+    let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k] - TREF, IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k] - SREF, IN[wOff(k) + i] / hv, hv > 1e-6);
+    let r = select(RHOA[k], eosAnomaly(IN[qOff(k) + i] / hv + TREF, IN[wOff(k) + i] / hv + SREF), hv > 1e-6);
+    let n = k * C + i; OD[O_PR + 2 * n] = weighted; OD[O_PR + 2 * n + 1] = r; weighted += r * hv;
+    var divH = 0.0; var divQ = 0.0; var divW = 0.0; var lapQ = 0.0; var lapW = 0.0;
+    for (var m = 0; m < MAXE; m++) {
+      let e = edges[m]; let j = nbrs[m];
+      let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
+      divH += f;
+      let hvj = IN[hOff(k) + j]; let Tj = select(LABEL_T[k] - TREF, IN[qOff(k) + j] / hvj, hvj > 1e-6); let Sj = select(LABEL_S[k] - SREF, IN[wOff(k) + j] / hvj, hvj > 1e-6);
+      divQ += f * select(Tj, Ti, f > 0.0); divW += f * select(Sj, Si, f > 0.0);
+      if (k == 0 && OD[O_EMASK + e] > 0.5) { let wd = select(1.0, 2.0 * hv * hvj / max(hv + hvj, 1e-6), MIXDIFF > 0.0); lapQ += wd * MF[F_DV + e] * (Tj - Ti) / MF[F_DC + e]; lapW += wd * MF[F_DV + e] * (Sj - Si) / MF[F_DC + e]; }
+    }
+    let area = MF[F_AREA + i];
+    var dh = -divH / area; var dQ = -divQ / area; var dW = -divW / area;
+    if (k == 0) { let coefficient = select(DIFFUSION, MIXDIFF, MIXDIFF > 0.0); if (coefficient > 0.0) { dQ += coefficient * lapQ / area; dW += coefficient * lapW / area; } }
+    if (OD[O_CMASK + i] < 0.5) { dh = 0.0; dQ = 0.0; dW = 0.0; }
+    OUT[hOff(k) + i] = dh; OUT[qOff(k) + i] = dQ; OUT[wOff(k) + i] = dW;
+  }
+}` : `${K}  let i = ${idx}; if (i >= C) { return; }
   var edges: array<i32, MAXE>; var nbrs: array<i32, MAXE>;
   for (var m = 0; m < MAXE; m++) { edges[m] = MI[EOC + MAXE * i + m]; nbrs[m] = MI[COC + MAXE * i + m]; }
   for (var k = 0; k < L; k++) {
@@ -994,8 +1026,8 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
   for (var k = 0; k < L; k++) {
     let n = k * E + e;
     var hq = OD[O_HEDGE + n];
-    if (${hy ? 'true' : 'k > 0'}) { hq = max(hq, CENTRING * 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b])); }
-    OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, ${hy ? 'PVFLOORK[k]' : 'select(PVFLOOR, THINO, k == 0)'});
+    if (k > 0) { hq = max(hq, CENTRING * 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b])); }
+    OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, select(PVFLOOR, THINO, k == 0));
   }
 }`,
     oKineticPhi: `${K}  let i = ${idx}; if (i >= C) { return; }
@@ -1904,7 +1936,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ...(o.ekmanDepth > 0 ? [['HM', E]] : []),
     ...(o.retreatDaily ? [['SUNSTEP', C], ['SUNSUM', C], ['DARKSUM', C], ['SUNDAY', C], ['DARKDAY', C]] : []),
     ...(o.ekmanBlock ? [['UEK', E]] : []),
-    ...(hybrid ? [['RHOL', L * C], ['PRESS', L * C], ['HABOVE', L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C]] : []),
+    ...(hybrid ? [['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C]] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -1996,13 +2028,18 @@ ${hybrid ? `  OUT[${OF.H1} + i] = OD[O_MIXED + i];
     const g = group(IN, OUT);
     setParams([0, 0]);
     compute((pass) => {
-      if (hybrid) dispatch(pass, 'oLayerDensity', g, C);
-      else { dispatch(pass, 'oSurfaceDensity', g, C); dispatch(pass, 'oGradRho', g, E); }
-      dispatch(pass, 'oEdgeThickness', g, E);
-      dispatch(pass, 'oFlux', g, E);
-      dispatch(pass, 'oCellTendency', g, C);
-      dispatch(pass, 'oVertexVort', g, V);
-      dispatch(pass, 'oEdgePV', g, E);
+      if (hybrid) {
+        dispatch(pass, 'oVertexVort', g, V);
+        dispatch(pass, 'oEdgeFluxPV', g, E);
+        dispatch(pass, 'oCellTendency', g, C);
+      } else {
+        dispatch(pass, 'oSurfaceDensity', g, C); dispatch(pass, 'oGradRho', g, E);
+        dispatch(pass, 'oEdgeThickness', g, E);
+        dispatch(pass, 'oFlux', g, E);
+        dispatch(pass, 'oCellTendency', g, C);
+        dispatch(pass, 'oVertexVort', g, V);
+        dispatch(pass, 'oEdgePV', g, E);
+      }
       if (o.closureRings) dispatch(pass, 'oDeepestEdge', g, E);
       if (o.closureFill > 0) dispatch(pass, 'oClosureFill', g, L * E);
       if (o.closureRings) dispatch(pass, 'oClosureRing', g, L * E);
