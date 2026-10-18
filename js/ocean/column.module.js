@@ -153,7 +153,7 @@ export function hybridLayerTable({ top = 3, growth = 1.08, thermocline = 10, dee
   for (let j = 0; j < deep.length; j++) { densities.push(deep[j]); minimum.push(deepTop * (deepBottom / deepTop) ** (j / (deep.length - 1))); }
   const K = densities.length, depths = new Float64Array(K + 1);
   for (let k = 0; k < K; k++) depths[k + 1] = depths[k] + minimum[k];
-  return { densities: Float64Array.from(densities), minimum: Float64Array.from(minimum), depths, K, fixed: 12 };
+  return { densities: Float64Array.from(densities), minimum: Float64Array.from(minimum), depths, K, fixed: 12, spacing: thermocline };
 }
 export const HYBRID_LAYERS = hybridLayerTable();
 
