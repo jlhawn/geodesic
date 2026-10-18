@@ -1898,6 +1898,7 @@ export function createOcean(mesh, {
       cellColumn(i, hCol, TCol, SCol);
       for (let k = 0; k < L; k++) cellVectorAt(k, i, vector, 3 * k);
       for (let k = 0; k < L - 1; k++) shear[k] = (vector[3 * k] - vector[3 * k + 3]) ** 2 + (vector[3 * k + 1] - vector[3 * k + 4]) ** 2 + (vector[3 * k + 2] - vector[3 * k + 5]) ** 2;
+      options.guess = boundaryDepths[i];
       const result = mixColumn({ h: hCol, T: TCol, S: SCol, shear, K: L, ustar: Math.sqrt(stressAt(i) / rho0), f: fCell[i], dt, options }, out, cs);
       for (let k = 0; k < L; k++) { const n = at(k, i); Q[n] = hCol[k] * TCol[k]; W[n] = hCol[k] * SCol[k]; viscosity[n] = nu[k]; }
       layerDensities(TCol, SCol, L, rhoCol);

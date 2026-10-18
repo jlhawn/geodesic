@@ -46,7 +46,7 @@ export const OCEAN_DEFAULTS = {
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
 };
 const HYBRID_REFUSED = ['ekmanBlock', 'intakeLedger', 'retreatDaily', 'shearMixing', 'interiorShearMixing', 'blockDrag'];
-const SLAB_ONLY_KERNELS = ['oSurfaceDensity', 'oGradRho', 'oDeepestEdge', 'oClosureFill', 'oClosureRing', 'oClosureBack1', 'oClosureBack2', 'oMixedReach', 'oMixedLayer', 'oExchangeMomentum', 'oShearEdge', 'oWindDepth', 'oEkmanFlux', 'oEkmanApply', 'oEkmanLeftover'];
+const SLAB_ONLY_KERNELS = ['oSurfaceDensity', 'oGradRho', 'oFlux', 'oEdgePV', 'oDeepestEdge', 'oClosureFill', 'oClosureRing', 'oClosureBack1', 'oClosureBack2', 'oMixedReach', 'oMixedLayer', 'oExchangeMomentum', 'oShearEdge', 'oWindDepth', 'oEkmanFlux', 'oEkmanApply', 'oEkmanLeftover'];
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
 
 export function oceanStateLength(C, E, options = {}) {
@@ -67,9 +67,10 @@ function seq(names) { const out = {}; let off = 0; for (const [name, n] of names
  * rather than called as WGSL functions, since Tint hands a function its
  * arrays by pointer and Apple's compilers then lose writes to them (the
  * forms in CLAUDE.md). Every loop over an array counts up; the solve's
- * back substitution runs over j with k = L − 2 − j and carries the value
- * it just wrote in a scalar, since Metal loses the read of an element
- * written in the previous iteration. The
+ * elimination carries the layer above's coefficient and gain in scalars
+ * and its back substitution runs over j with k = n − 2 − j carrying the
+ * value it just wrote, since Metal loses the read of an element written
+ * in the previous iteration. The
  * remap gives each old layer's pieces to the new layers and its rounding
  * residual to the last of them, so a column's water, heat and salt are
  * kept to the stores' rounding. Heat and salt are the stores' anomalies
@@ -77,116 +78,53 @@ function seq(names) { const out = {}; let off = 0; for (const [name, n] of names
  * sees the absolute values.
  */
 const declareArrays = (names, n = 'L') => names.map((name) => `var ${name}: array<f32, ${n}>;`).join(' ');
-// solveColumn: the implicit diffusion of Q over the H layers with KAPPA at their interfaces, when any is positive.
-const solveInline = ({ h, kappa, q, dt }, body = '') => `{
-    var mixing = false;
-    for (var k = 0; k < L - 1; k++) { if (${kappa}[k] > 0.0) { mixing = true; } }
-    if (mixing) {
-      for (var k = 0; k < L; k++) {
-        SUP[k] = select(0.0, ${dt} * ${kappa}[max(k - 1, 0)] / max(0.5 * (${h}[max(k - 1, 0)] + ${h}[k]), DZFLOOR), k > 0);
-        SLO[k] = select(0.0, ${dt} * ${kappa}[k] / max(0.5 * (${h}[k] + ${h}[min(k + 1, L - 1)]), DZFLOOR), k < L - 1);
+// solveLayers: the implicit diffusion of the first N layers of H with KAPPA at their interfaces, the one below layer N − 1 closed, from Q1 (and Q2) into D1 (and D2), an output may be its input: the elimination carries the layer above's coefficient and gain in scalars, the substitution the value it just wrote; GAIN holds the gains.
+const solveInline = ({ h, kappa, n, dt, q1, d1, q2 = null, d2 = null, gain = 'SG' }, body = '') => `{
+      var wPrev = 0.0; var gPrev = 0.0; var r1 = 0.0;${q2 ? ' var r2 = 0.0;' : ''}
+      for (var k = 0; k < ${n}; k++) {
+        let w = select(0.0, ${dt} * ${kappa}[k] / max(0.5 * (${h}[k] + ${h}[min(k + 1, L - 1)]), DZFLOOR), k < ${n} - 1);
+        let m = ${h}[k] + wPrev + w + wPrev * gPrev; let g = -w / m;
+        r1 = (${h}[k] * ${q1}[k] + wPrev * r1) / m; ${d1}[k] = r1;${q2 ? ` r2 = (${h}[k] * ${q2}[k] + wPrev * r2) / m; ${d2}[k] = r2;` : ''}
+        ${gain}[k] = g; wPrev = w; gPrev = g;
       }
-      var m = ${h}[0] + SUP[0] + SLO[0];
-      SG[0] = -SLO[0] / m;
-      SR[0] = ${h}[0] * ${q}[0] / m;
-      for (var k = 1; k < L; k++) {
-        m = ${h}[k] + SUP[k] + SLO[k] + SUP[k] * SG[k - 1];
-        SG[k] = -SLO[k] / m;
-        SR[k] = (${h}[k] * ${q}[k] + SUP[k] * SR[k - 1]) / m;
+      var n1 = ${d1}[${n} - 1];${q2 ? ` var n2 = ${d2}[${n} - 1];` : ''}
+      for (var j = 0; j < ${n} - 1; j++) { let k = ${n} - 2 - j; n1 = ${d1}[k] - ${gain}[k] * n1; ${d1}[k] = n1;${q2 ? ` n2 = ${d2}[k] - ${gain}[k] * n2; ${d2}[k] = n2;` : ''} }
+${body}    }`;
+/*
+ * The regrid kernels sweep a column once, old layer by old layer, with
+ * the layers an interface value needs held in scalars (the four around it
+ * for the quartic, the three around a layer for the linear slope) and the
+ * new layer being filled in one accumulator, so they keep no private
+ * array. A sweep reads old layer j + 3 (j + 2 on an edge) after finishing
+ * old layer j, so a new layer up to that index is written in place and a
+ * later one into OUT, free after the dynamics, and copied back at the end.
+ */
+const ppmEdgeInline = ({ k, hm1, h0, h1, h2, tracers }) => `    ${tracers.map(({ q0, out }) => `${out} = ${q0};`).join(' ')}
+    if (${k} < L) {
+      if (${k} >= 2 && ${k} <= L - 2 && ${hm1} > HNEGLECT && ${h0} > HNEGLECT && ${h1} > HNEGLECT && ${h2} > HNEGLECT) {
+        let x0 = -(${hm1} + ${h0}); let x1 = -${h0}; let x3 = ${h1}; let x4 = ${h1} + ${h2};
+        let c1 = -(x0 * x3 * x4) / ((x1 - x0) * x1 * (x1 - x3) * (x1 - x4));
+        let c2 = -(1.0 / x0 + 1.0 / x1 + 1.0 / x3 + 1.0 / x4);
+        let c3 = -(x0 * x1 * x4) / ((x3 - x0) * (x3 - x1) * x3 * (x3 - x4));
+        let c4 = -(x0 * x1 * x3) / ((x4 - x0) * (x4 - x1) * (x4 - x3) * x4);
+${tracers.map(({ qm1, q0, q1, q2, out }) => `        { let p1 = ${hm1} * ${qm1}; let p2 = p1 + ${h0} * ${q0}; let p3 = p2 + ${h1} * ${q1}; let p4 = p3 + ${h2} * ${q2}; ${out} = c1 * p1 + c2 * p2 + c3 * p3 + c4 * p4; }`).join('\n')}
+      } else {
+        let d = max(${h0} + ${h1}, HNEGLECT);
+        ${tracers.map(({ q0, q1, out }) => `${out} = (${h1} * ${q0} + ${h0} * ${q1}) / d;`).join(' ')}
       }
-      var next = SR[L - 1];
-      ${q}[L - 1] = next;
-      for (var j = 0; j < L - 1; j++) { let k = L - 2 - j; next = SR[k] - SG[k] * next; ${q}[k] = next; }
-${body}    }
-  }`;
-// The limited reconstruction of RQ on the RH layers, RZO their interfaces: order 2 the monotonized central slope, order 3 the parabolas with the interface values from the quartic through the running integrals.
-const reconstructInline = (order) => (order === 2 ? `  for (var k = 0; k < L; k++) {
-    var s = 0.0;
-    if (k > 0 && k < L - 1) {
-      let below = RQ[min(k + 1, L - 1)] - RQ[k]; let above = RQ[k] - RQ[max(k - 1, 0)];
-      if (below * above > 0.0) {
-        let central = RH[k] * (RQ[min(k + 1, L - 1)] - RQ[max(k - 1, 0)]) / max(0.5 * (RH[max(k - 1, 0)] + 2.0 * RH[k] + RH[min(k + 1, L - 1)]), DZFLOOR);
-        s = sign(central) * min(abs(central), min(2.0 * abs(below), 2.0 * abs(above)));
-      }
+      ${tracers.map(({ q0, q1, out }) => `${out} = clamp(${out}, min(${q0}, ${q1}), max(${q0}, ${q1}));`).join(' ')}
     }
-    RL[k] = RQ[k] - 0.5 * s; RS[k] = s; RC[k] = 0.0;
-  }
-` : `  RE[0] = RQ[0]; RE[L] = RQ[L - 1];
-  for (var k = 1; k < L; k++) {
-    let a = k - 1; let low = min(RQ[a], RQ[k]); let high = max(RQ[a], RQ[k]);
-    var value = 0.0;
-    let wide = k >= 2 && k <= L - 2 && RH[max(k - 2, 0)] > HNEGLECT && RH[a] > HNEGLECT && RH[k] > HNEGLECT && RH[min(k + 1, L - 1)] > HNEGLECT;
-    if (wide) {
-      RK[0] = RZO[k - 2] - RZO[k]; RK[1] = RZO[k - 1] - RZO[k]; RK[2] = 0.0; RK[3] = RZO[k + 1] - RZO[k]; RK[4] = RZO[k + 2] - RZO[k];
-      RP[0] = 0.0; RP[1] = RH[k - 2] * RQ[k - 2]; RP[2] = RP[1] + RH[k - 1] * RQ[k - 1]; RP[3] = RP[2] + RH[k] * RQ[k]; RP[4] = RP[3] + RH[k + 1] * RQ[k + 1];
-      var sum = 0.0;
-      for (var p = 0; p < 5; p++) {
-        if (p == 2) {
-          var s = 0.0;
-          for (var j = 0; j < 5; j++) { if (j != 2) { s += 1.0 / (RK[2] - RK[j]); } }
-          sum += RP[2] * s;
-        } else {
-          var numerator = 1.0; var denominator = 1.0;
-          for (var j = 0; j < 5; j++) {
-            if (j == p) { continue; }
-            denominator *= RK[p] - RK[j];
-            if (j != 2) { numerator *= RK[2] - RK[j]; }
-          }
-          sum += RP[p] * numerator / denominator;
-        }
-      }
-      value = sum;
-    } else {
-      value = (RH[k] * RQ[a] + RH[a] * RQ[k]) / max(RH[a] + RH[k], HNEGLECT);
-    }
-    RE[k] = clamp(value, low, high);
-  }
-  for (var k = 0; k < L; k++) {
-    var qL = RE[k]; var qR = RE[k + 1]; let mean = RQ[k];
-    if ((qR - mean) * (mean - qL) <= 0.0) { qL = mean; qR = mean; } else {
-      let d = qR - qL; let excess = d * (mean - 0.5 * (qL + qR));
-      if (excess > d * d / 6.0) { qL = 3.0 * mean - 2.0 * qR; } else if (excess < -d * d / 6.0) { qR = 3.0 * mean - 2.0 * qL; }
-    }
-    RL[k] = qL; RS[k] = qR - qL; RC[k] = 6.0 * (mean - 0.5 * (qL + qR));
-  }
-`);
-const interfacesInline = (h, z) => `  ${z}[0] = 0.0;
-  for (var k = 0; k < L; k++) { ${z}[k + 1] = ${z}[k] + ${h}[k]; }
 `;
-// remapColumn: RQ on the RH layers, RO their amounts, integrated over the RHN layers into RA, old layer by old layer.
-const remapInline = (order) => `${interfacesInline('RH', 'RZO')}  let H = RZO[L];
-${interfacesInline('RHN', 'RZN')}  RZN[L] = H;
-${reconstructInline(order)}  for (var i = 0; i < L; i++) { RA[i] = 0.0; }
-  var inew = 0;
-  for (var j = 0; j < L; j++) {
-    let hj = RH[j];
-    if (!(hj > 0.0)) { continue; }
-    let zLo = RZO[j]; let zHi = RZO[j + 1];
-    while (inew < L - 1 && RZN[inew + 1] <= zLo) { inew++; }
-    var given = 0.0; var last = inew;
-    for (var ii = inew; ii < L; ii++) {
-      let lo = max(zLo, RZN[ii]); let hi = min(zHi, RZN[ii + 1]);
-      if (hi > lo) {
-        let a = clamp((lo - zLo) / hj, 0.0, 1.0); let b = clamp((hi - zLo) / hj, 0.0, 1.0);
-        let d1 = b - a; let d2 = 0.5 * (b * b - a * a); let d3 = (b * b * b - a * a * a) / 3.0;
-        let p = hj * (RL[j] * d1 + RS[j] * d2 + RC[j] * (d2 - d3));
-        RA[ii] += p; given += p; last = ii;
-      }
-      if (RZN[ii + 1] >= zHi) { break; }
+const ppmLimitInline = ({ left, right, mean, out }) => `    l${out} = ${left}; r${out} = ${right};
+    if ((r${out} - ${mean}) * (${mean} - l${out}) <= 0.0) { l${out} = ${mean}; r${out} = ${mean}; } else {
+      let d = r${out} - l${out}; let excess = d * (${mean} - 0.5 * (l${out} + r${out}));
+      if (excess > d * d / 6.0) { l${out} = 3.0 * ${mean} - 2.0 * r${out}; } else if (excess < -d * d / 6.0) { r${out} = 3.0 * ${mean} - 2.0 * l${out}; }
     }
-    RA[last] += RO[j] - given;
-  }
+    s${out} = r${out} - l${out}; c${out} = 6.0 * (${mean} - 0.5 * (l${out} + r${out}));
 `;
-const REMAP_ARRAYS = ['RH', 'RQ', 'RO', 'RHN', 'RA', 'RL', 'RS', 'RC'], REMAP_INTERFACES = ['RZO', 'RZN', 'RE'], SOLVE_ARRAYS = ['SUP', 'SLO', 'SG', 'SR'];
-// cellColumn: the cell's layers into CH, CT, CS, the tracers as the stores' anomalies.
-const loadColumnInline = `  var tLoad = LABEL_T[0] - TREF; var sLoad = LABEL_S[0] - SREF;
-  for (var k = 0; k < L; k++) {
-    let hv = IN[hOff(k) + i];
-    CH[k] = hv;
-    if (hv > 1e-9) { tLoad = IN[qOff(k) + i] / hv; sLoad = IN[wOff(k) + i] / hv; }
-    CT[k] = tLoad; CS[k] = sLoad;
-  }
-`;
+const limiterVars = (out) => `var l${out} = 0.0; var r${out} = 0.0; var s${out} = 0.0; var c${out} = 0.0;`;
+const pendingBit = `if (cur < 32) { pendLo |= 1u << u32(cur); } else { pendHi |= 1u << u32(cur - 32); }`;
+const pendingTest = `let pending = select((pendHi >> u32(max(k - 32, 0))) & 1u, (pendLo >> u32(min(k, 31))) & 1u, k < 32);`;
 // The solved tracer's implicit fluxes through the interfaces, taken from one store and given to the next, so the column's amount is kept.
 const fluxInline = ({ h, kappa, q, amount, dt }) => `  for (var k = 0; k < L - 1; k++) {
     let moved = ${dt} * ${kappa}[k] * (${q}[k] - ${q}[k + 1]) / max(0.5 * (${h}[k] + ${h}[k + 1]), DZFLOOR);
@@ -209,6 +147,7 @@ const GEN: i32 = ${GENERATORS.indexOf(o.generator)};
 const LP1: i32 = ${L + 1};
 ${constLine('HMIN', o.minimumLayer)} ${constLine('THINEDGE', 2 * o.minimumLayer)} ${constLine('MODEDEPTH', o.modeDepth)} ${constLine('MSTAR', o.mstar)} ${constLine('EKMANF', o.ekmanFactor)} ${constLine('NSTAR', o.nstar)}
 ${constLine('BACKKAPPA', o.backgroundDiffusivity)} ${constLine('CONVKAPPA', o.convectiveDiffusivity)} ${constLine('VONK', 0.4)} ${constLine('BLFLOOR', 0.1)} ${constLine('DZFLOOR', 1e-3)} ${constLine('HNEGLECT', 1e-6)} ${constLine('MLEXCESS', 0.03)}
+${constLine('BLTOL', 1e-6)} const BLITER: i32 = 24;
 fn eosA(t: f32, s: f32) -> f32 { return eos(t + TREF, s + SREF); }
 fn modeWeight(k: i32, i: i32) -> f32 {
   if (GEN == 0) { return 1.0; }
@@ -243,33 +182,34 @@ function hybridKernels(o, K, idx) {
     wv += s * vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
   }
   wv = wv / MF[F_AREA + i];`;
-  // boundaryLayer's work: the potential energy the diffusivity to `depth` raises in a step, the diffusivity left in CK and the trial tracers in CTT, CTS.
-  const blWork = `      for (var k = 0; k < L - 1; k++) { let z = CI[k + 1]; CK[k] = select(0.0, VONK * vstar * z * (1.0 - z / depth) * (1.0 - z / depth), z < depth); }
-      CK[L - 1] = 0.0;
-      for (var k = 0; k < L; k++) { CTT[k] = CT[k]; CTS[k] = CS[k]; }
-      ${solveInline({ h: 'CH', kappa: 'CK', q: 'CTT', dt: 'dt' })}
-      ${solveInline({ h: 'CH', kappa: 'CK', q: 'CTS', dt: 'dt' })}
-      var raised = 0.0;
-      for (var k = 0; k < L - 1; k++) {
-        let dz = max(0.5 * (CH[k] + CH[k + 1]), DZFLOOR); let lift = CC[k + 1] - CC[k];
-        let heatDown = dt * CK[k] * (CTT[k] - CTT[k + 1]) / dz; let saltDown = dt * CK[k] * (CTS[k] - CTS[k + 1]) / dz;
+  // boundaryLayer's work: the elimination down the layers the depth couples, setting CK at each interface it reaches and stopping at the first it does not, then the substitution back up summing the potential energy the trial profile raises; NL the layers solved.
+  const blWork = `      var z = 0.0; var wPrev = 0.0; var gPrev = 0.0; var rT = 0.0; var rS = 0.0;
+      NL = 0;
+      for (var k = 0; k < L; k++) {
+        let hk = CH[k]; z += hk;
+        let inside = k < L - 1 && z < depth;
+        let kap = select(0.0, VONK * vstar * z * (1.0 - z / depth) * (1.0 - z / depth), inside);
+        CK[k] = kap;
+        let w = select(0.0, dt * kap / max(0.5 * (hk + CH[min(k + 1, L - 1)]), DZFLOOR), inside);
+        let m = hk + wPrev + w + wPrev * gPrev; let g = -w / m;
+        rT = (hk * CT[k] + wPrev * rT) / m; CTT[k] = rT;
+        rS = (hk * CS[k] + wPrev * rS) / m; CTS[k] = rS;
+        SG[k] = g; wPrev = w; gPrev = g;
+        NL = k + 1;
+        if (!inside) { break; }
+      }
+      var raised = 0.0; var nT = CTT[NL - 1]; var nS = CTS[NL - 1];
+      for (var j = 0; j < NL - 1; j++) {
+        let k = NL - 2 - j; let tBelow = nT; let sBelow = nS;
+        nT = CTT[k] - SG[k] * nT; nS = CTS[k] - SG[k] * nS;
+        let lift = 0.5 * (CH[k] + CH[k + 1]); let dz = max(lift, DZFLOOR);
+        let heatDown = dt * CK[k] * (nT - tBelow) / dz; let saltDown = dt * CK[k] * (nS - sBelow) / dz;
         raised += OGRAV * RHO0 * lift * (CA[k] * heatDown - CB[k] * saltDown);
       }
+      let supplied = blEnergy(depth, ustar, f, dt, convective); let worked = max(raised, 0.0);
+      let excess = (worked - supplied) / (worked + supplied);
 `;
   return {
-    /*
-     * prepareCells: each cell's layer densities as anomalies and the
-     * running sums of ρ'h and h above each layer.
-     */
-    oLayerDensity: `${K}  let i = ${idx}; if (i >= C) { return; }
-  var weighted = 0.0; var total = 0.0;
-  for (var k = 0; k < L; k++) {
-    let n = k * C + i; let hv = IN[hOff(k) + i];
-    let r = select(RHOA[k], eosAnomaly(IN[qOff(k) + i] / hv + TREF, IN[wOff(k) + i] / hv + SREF), hv > 1e-6);
-    OD[O_RHOL + n] = r; OD[O_PRESS + n] = weighted; OD[O_HABOVE + n] = total;
-    weighted += r * hv; total += hv;
-  }
-}`,
     oKineticPhi: `${K}  let i = ${idx}; if (i >= C) { return; }
   var edges: array<i32, MAXE>; var signs: array<f32, MAXE>; var dcs: array<f32, MAXE>; var dvs: array<f32, MAXE>;
   for (var m = 0; m < MAXE; m++) { let e = MI[EOC + MAXE * i + m]; edges[m] = e; signs[m] = f32(MI[ESC + MAXE * i + m]); dcs[m] = MF[F_DC + e]; dvs[m] = MF[F_DV + e]; }
@@ -296,7 +236,7 @@ function hybridKernels(o, K, idx) {
   for (var s = 0; s < MAXEE; s++) { let slot = MAXEE * e + s; others[s] = MI[EOE + slot]; weights[s] = MF[F_PVW + slot]; live[s] = OD[O_EMASK + others[s]] > 0.5; }
   var floor = 0.0;
   for (var k = 0; k < L; k++) { floor += OD[O_HEDGE + k * E + e]; }
-  var layerTop = 0.0; var uAbove = 0.0;
+  var layerTop = 0.0; var uAbove = 0.0; var Ha = 0.0; var Hb = 0.0;
   for (var k = 0; k < L; k++) {
     let n = k * E + e;
     let u = IN[uOff(k) + e];
@@ -304,11 +244,10 @@ function hybridKernels(o, K, idx) {
     var pv = 0.0;
     for (var s = 0; s < MAXEE; s++) { let other = others[s]; let fo = select(0.0, OD[O_HEDGE + k * E + other] * IN[uOff(k) + other], live[s]); pv += weights[s] * fo * (qHere + 0.5 * OD[O_QE + k * E + other]); }
     let gradK = (OD[O_PHI + k * C + b] - OD[O_PHI + k * C + a]) / dc;
-    let na = k * C + a; let nb = k * C + b;
-    let Ha = OD[O_HABOVE + na]; let Hb = OD[O_HABOVE + nb]; let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
+    let pa = O_PR + 2 * (k * C + a); let pb = O_PR + 2 * (k * C + b); let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
     let top = max(Ha, Hb); let bottom = min(Ha + ha, Hb + hb);
     let zR = select(0.5 * (Ha + 0.5 * ha + Hb + 0.5 * hb), 0.5 * (top + bottom), bottom > top);
-    let force = OD[O_PRESS + nb] + OD[O_RHOL + nb] * (zR - Hb) - OD[O_PRESS + na] - OD[O_RHOL + na] * (zR - Ha);
+    let force = OD[pb] + OD[pb + 1] * (zR - Hb) - OD[pa] - OD[pa + 1] * (zR - Ha);
     var du = pv / dc - gradK - OGRAV * OD[O_GRADETA + e] - OGRAV / RHO0 * force / dc;
     let he = OD[O_HEDGE + n];
     if (k == 0) { du += OD[O_STRESS + e] / RHO0 / max(he, HMIN); }
@@ -317,7 +256,31 @@ function hybridKernels(o, K, idx) {
     if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
     if (k > 0 && he <= THINEDGE) { du = (uAbove - u) * P[2]; }
     OUT[uOff(k) + e] = du;
-    uAbove = u; layerTop += he;
+    uAbove = u; layerTop += he; Ha += ha; Hb += hb;
+  }
+}`,
+    /*
+     * oEdgeThickness, oFlux and oEdgePV in one sweep of the edge column:
+     * the edge thicknesses clipped to the sill, the mass flux from the
+     * donor cell, and the edge PV from the vertex vorticities oVertexVort
+     * has left in AVORT.
+     */
+    oEdgeFluxPV: `${K}  let e = ${idx}; if (e >= E) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1]; let v1 = MI[VOE + 2 * e]; let v2 = MI[VOE + 2 * e + 1];
+  let sill = max(EPSO, min(OD[O_BATH + a], OD[O_BATH + b]) + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
+  var sum = 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]);
+  for (var k = 1; k < L; k++) { sum += min(IN[hOff(k) + a], IN[hOff(k) + b]); }
+  let clipped = sum > sill; let f = sill / sum;
+  let wet = OD[O_EMASK + e] > 0.5;
+  for (var k = 0; k < L; k++) {
+    let n = k * E + e; let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
+    var he = select(min(ha, hb), 0.5 * (ha + hb), k == 0);
+    if (clipped) { he *= f; }
+    OD[O_HEDGE + n] = he;
+    let ue = IN[uOff(k) + e];
+    OD[O_FLUX + n] = select(0.0, min(he, max(0.0, select(hb, ha, ue > 0.0))) * ue, wet);
+    let hq = max(he, CENTRING * 0.5 * (ha + hb));
+    OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, PVFLOORK[k]);
   }
 }`,
     oRescale: `${K}  let i = ${idx}; if (i >= C) { return; }
@@ -336,172 +299,338 @@ function hybridKernels(o, K, idx) {
     /*
      * regridTargets: the column's target interfaces from its generator
      * (targetInterfaces in ocean/column.module.js) into TARGET; P[0] is
-     * the regrid's relax.
+     * the regrid's relax. The sorted density's reconstruction is produced
+     * layer by layer as the boundaries' crossing search descends.
      */
-    oRegridTargets: `${K}  let i = ${idx}; if (i >= C) { return; }
+    oRegridTargets: (() => {
+      const load = (n, s) => `  { let n = ${n}; var hv = 0.0;
+    if (n < L) { hv = IN[hOff(n) + i]; if (hv > 1e-9) { tLoad = IN[qOff(n) + i] / hv; sLoad = IN[wOff(n) + i] / hv; } rMax = max(rMax, eosA(tLoad, sLoad)); }
+    h${s} = hv; r${s} = rMax; }
+`;
+      const produce = `  {
+${ppmEdgeInline({ k: 'j + 1', hm1: 'hm1', h0: 'h0', h1: 'h1', h2: 'h2', tracers: [{ qm1: 'rm1', q0: 'r0', q1: 'r1', q2: 'r2', out: 'eR1' }] })}${ppmLimitInline({ left: 'eR', right: 'eR1', mean: 'r0', out: 'R' })}    let below = select(0.0, select(clamp((h0 - MINIMUM[j]) / MODEDEPTH, 0.0, 1.0), 1.0, GEN == 0), j + 1 < L);
+    let aboveW = select(0.0, select(clamp((hm1 - MINIMUM[max(j - 1, 0)]) / MODEDEPTH, 0.0, 1.0), 1.0, GEN == 0), j > 0);
+    let keep = 1.0 - min(aboveW, below);
+    lR = r0 + keep * (lR - r0); sR *= keep; cR *= keep;
+  }
+`;
+      return `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
-  ${declareArrays(['CH', 'CT', 'CS', 'RH', 'RQ', 'RL', 'RS', 'RC', 'FL'])} ${declareArrays(['RZO', 'RZN', 'RE'], 'LP1')} ${declareArrays(['RK', 'RP'], 5)}
-${loadColumnInline}  for (var k = 0; k < L; k++) { RH[k] = CH[k]; RQ[k] = eosA(CT[k], CS[k]); }
-${interfacesInline('RH', 'RZO')}  let H = RZO[L];
-  let depth = OD[O_BATH + i];
-  RZN[0] = 0.0; RZN[L] = H;
+  var H = 0.0;
+  for (var k = 0; k < L; k++) { H += IN[hOff(k) + i]; }
+  let depth = OD[O_BATH + i]; let spacing = min(HMIN, H / f32(L));
+  OD[O_TARGET + i] = 0.0; OD[O_TARGET + L * C + i] = H;
+  var prev = 0.0;
   if (GEN == 1) {
-    for (var k = 1; k < L; k++) { RZN[k] = min(DEPTHS[k], depth) * H / depth; }
-  } else {
-    for (var k = 0; k < L; k++) {
-      let below = select(0.0, select(clamp((RH[k] - MINIMUM[k]) / MODEDEPTH, 0.0, 1.0), 1.0, GEN == 0), k + 1 < L);
-      let above = select(0.0, select(clamp((RH[max(k - 1, 0)] - MINIMUM[max(k - 1, 0)]) / MODEDEPTH, 0.0, 1.0), 1.0, GEN == 0), k > 0);
-      FL[k] = min(above, below);
-    }
-    for (var k = 1; k < L; k++) { RQ[k] = max(RQ[k - 1], RQ[k]); }
-${reconstructInline(3)}    for (var k = 0; k < L; k++) { let keep = 1.0 - FL[k]; RL[k] = RQ[k] + keep * (RL[k] - RQ[k]); RS[k] *= keep; RC[k] *= keep; }
-    var j = 0;
     for (var k = 1; k < L; k++) {
-      let bk = BOUNDARY[k - 1];
-      while (j < L && RL[min(j, L - 1)] + RS[min(j, L - 1)] < bk) { j++; }
-      if (j >= L) { RZN[k] = H; continue; }
-      if (bk <= RL[j]) { RZN[k] = RZO[j]; continue; }
-      RZN[k] = RZO[j] + RH[j] * crossing(RL[j], RS[j], RC[j], bk);
+      let fwd = max(min(DEPTHS[k], depth) * H / depth, prev + spacing);
+      OD[O_TARGET + k * C + i] = min(fwd, H - f32(L - k) * spacing); prev = fwd;
     }
-    var above = 0.0;
-    for (var k = 1; k < L; k++) {
-      let floor = select(0.0, above + MINIMUM[k - 1], GEN == 2);
-      var wanted = max(RZN[k], floor);
-      if (wanted > floor) { wanted = max(floor, RZO[k] + P[0] * (wanted - RZO[k])); }
-      RZN[k] = wanted;
-      above = wanted;
-    }
+    return;
   }
-  let spacing = min(HMIN, H / f32(L));
-  for (var k = 1; k < L; k++) { RZN[k] = max(RZN[k], RZN[k - 1] + spacing); }
-  for (var j = 0; j < L - 1; j++) { let k = L - 1 - j; RZN[k] = min(RZN[k], H - f32(L - k) * spacing); }
-  for (var k = 0; k <= L; k++) { OD[O_TARGET + k * C + i] = RZN[k]; }
-}`,
+  var tLoad = LABEL_T[0] - TREF; var sLoad = LABEL_S[0] - SREF; var rMax = -1.0e30;
+  var hm1 = 0.0; var rm1 = 0.0; var h0 = 0.0; var r0 = 0.0; var h1 = 0.0; var r1 = 0.0; var h2 = 0.0; var r2 = 0.0;
+${load('0', '0')}${load('1', '1')}${load('2', '2')}  var j = 0; var zj = 0.0; var eR = r0; var eR1 = 0.0; ${limiterVars('R')}
+${produce}  var above = 0.0; var zk = 0.0;
+  for (var k = 1; k < L; k++) {
+    zk += IN[hOff(k - 1) + i];
+    let bk = BOUNDARY[k - 1];
+    while (j < L && lR + sR < bk) {
+      j++;
+      if (j < L) {
+        zj += h0; eR = eR1;
+        hm1 = h0; rm1 = r0; h0 = h1; r0 = r1; h1 = h2; r1 = r2;
+${load('j + 2', '2')}${produce}      }
+    }
+    var d = H;
+    if (j < L) { if (bk <= lR) { d = zj; } else { d = zj + h0 * crossing(lR, sR, cR, bk); } }
+    let floor = select(0.0, above + MINIMUM[k - 1], GEN == 2);
+    var wanted = max(d, floor);
+    if (wanted > floor) { wanted = max(floor, zk + P[0] * (wanted - zk)); }
+    above = wanted;
+    let fwd = max(wanted, prev + spacing);
+    OD[O_TARGET + k * C + i] = min(fwd, H - f32(L - k) * spacing); prev = fwd;
+  }
+}`;
+    })(),
     // regridEdges: each edge's velocity remapped piecewise-linearly onto the mean of its cells' new thicknesses.
-    oRegridEdges: `${K}  let e = ${idx}; if (e >= E) { return; }
+    oRegridEdges: (() => {
+      const load = (n, s) => `  { let n = ${n}; var hv = 0.0; var uv = 0.0; if (n < L) { hv = 0.5 * (IN[hOff(n) + a] + IN[hOff(n) + b]); uv = IN[uOff(n) + e]; } h${s} = hv; u${s} = uv; }
+`;
+      const flush = (safe) => `      { let value = select(IN[uOff(cur) + e], acc / hn, hn > 0.0);
+        if (${safe}) { IN[uOff(cur) + e] = value; } else { OUT[uOff(cur) + e] = value; ${pendingBit} }
+        cur++; znLo = znHi; taL = taH; tbL = tbH; let kn = min(cur + 1, L); taH = OD[O_TARGET + kn * C + a]; tbH = OD[O_TARGET + kn * C + b];
+        hn = 0.5 * (taH - taL + tbH - tbL); znHi = znLo + hn; acc = 0.0; }
+`;
+      return `${K}  let e = ${idx}; if (e >= E) { return; }
   if (OD[O_EMASK + e] < 0.5) { return; }
-  ${declareArrays(REMAP_ARRAYS)} ${declareArrays(REMAP_INTERFACES, 'LP1')}
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
-  for (var k = 0; k < L; k++) {
-    RH[k] = 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b]);
-    RHN[k] = 0.5 * (OD[O_TARGET + (k + 1) * C + a] - OD[O_TARGET + k * C + a] + OD[O_TARGET + (k + 1) * C + b] - OD[O_TARGET + k * C + b]);
-    RQ[k] = IN[uOff(k) + e]; RO[k] = RH[k] * RQ[k];
+  var hm1 = 0.0; var um1 = 0.0; var h0 = 0.0; var u0 = 0.0; var h1 = 0.0; var u1 = 0.0;
+${load('0', '0')}${load('1', '1')}  var z = 0.0; var cur = 0; var znLo = 0.0;
+  var taL = 0.0; var tbL = 0.0; var taH = OD[O_TARGET + C + a]; var tbH = OD[O_TARGET + C + b];
+  var hn = 0.5 * (taH - taL + tbH - tbL); var znHi = hn;
+  var acc = 0.0; var pendLo = 0u; var pendHi = 0u;
+  for (var j = 0; j < L; j++) {
+    var s = 0.0;
+    if (j > 0 && j < L - 1) {
+      let below = u1 - u0; let above = u0 - um1;
+      if (below * above > 0.0) {
+        let central = h0 * (u1 - um1) / max(0.5 * (hm1 + 2.0 * h0 + h1), DZFLOOR);
+        s = sign(central) * min(abs(central), min(2.0 * abs(below), 2.0 * abs(above)));
+      }
+    }
+    let lU = u0 - 0.5 * s;
+    let zLo = z; let zHi = z + h0;
+    if (h0 > 0.0) {
+      while (cur < L - 1 && znHi <= zLo) {
+${flush('cur <= j + 1')}      }
+      var given = 0.0;
+      loop {
+        let lo = max(zLo, znLo); let hi = min(zHi, znHi);
+        if (hi > lo) {
+          let pa = clamp((lo - zLo) / h0, 0.0, 1.0); let pb = clamp((hi - zLo) / h0, 0.0, 1.0);
+          let p = h0 * (lU * (pb - pa) + s * 0.5 * (pb * pb - pa * pa));
+          acc += p; given += p;
+        }
+        if (znHi >= zHi || cur >= L - 1) { break; }
+${flush('cur <= j + 1')}      }
+      acc += h0 * u0 - given;
+    }
+    z = zHi; hm1 = h0; um1 = u0; h0 = h1; u0 = u1;
+${load('j + 2', '1')}  }
+  while (cur < L) {
+${flush('true')}  }
+  if ((pendLo | pendHi) != 0u) {
+    for (var k = 0; k < L; k++) { ${pendingTest} if (pending != 0u) { IN[uOff(k) + e] = OUT[uOff(k) + e]; } }
   }
-${remapInline(2)}  for (var k = 0; k < L; k++) { IN[uOff(k) + e] = select(RQ[k], RA[k] / RHN[k], RHN[k] > 0.0); }
-}`,
-    // regridCells: heat and salt remapped by the parabolas onto the targets, which set the thicknesses.
-    oRegridCells: `${K}  let i = ${idx}; if (i >= C) { return; }
+}`;
+    })(),
+    // regridCells: heat and salt remapped by the parabolas onto the targets, which set the thicknesses; the interface geometry is shared between the two tracers.
+    oRegridCells: (() => {
+      const load = (n, s) => `  { let n = ${n}; var hv = 0.0; var qv = 0.0; var wv = 0.0;
+    if (n < L) { hv = IN[hOff(n) + i]; qv = IN[qOff(n) + i]; wv = IN[wOff(n) + i]; if (hv > 1e-9) { tLoad = qv / hv; sLoad = wv / hv; } }
+    h${s} = hv; q${s} = qv; w${s} = wv; t${s} = tLoad; s${s} = sLoad; }
+`;
+      const flush = (safe) => `      { let hn = znHi - znLo;
+        if (${safe}) { IN[hOff(cur) + i] = hn; IN[qOff(cur) + i] = accT; IN[wOff(cur) + i] = accS; }
+        else { OUT[hOff(cur) + i] = hn; OUT[qOff(cur) + i] = accT; OUT[wOff(cur) + i] = accS; ${pendingBit} }
+        cur++; znLo = znHi; znHi = OD[O_TARGET + min(cur + 1, L) * C + i]; accT = 0.0; accS = 0.0; }
+`;
+      return `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
-  ${declareArrays(['CH', 'CT', 'CS', ...REMAP_ARRAYS])} ${declareArrays(REMAP_INTERFACES, 'LP1')} ${declareArrays(['RK', 'RP'], 5)}
-${loadColumnInline}  for (var k = 0; k < L; k++) { RH[k] = CH[k]; RHN[k] = OD[O_TARGET + (k + 1) * C + i] - OD[O_TARGET + k * C + i]; RQ[k] = CT[k]; RO[k] = IN[qOff(k) + i]; }
-  {
-${remapInline(3)}  }
-  for (var k = 0; k < L; k++) { IN[qOff(k) + i] = RA[k]; RQ[k] = CS[k]; RO[k] = IN[wOff(k) + i]; }
-  {
-${remapInline(3)}  }
-  for (var k = 0; k < L; k++) { IN[wOff(k) + i] = RA[k]; IN[hOff(k) + i] = RHN[k]; }
-}`,
+  var tLoad = LABEL_T[0] - TREF; var sLoad = LABEL_S[0] - SREF;
+  var hm1 = 0.0; var tm1 = 0.0; var sm1 = 0.0;
+  var h0 = 0.0; var t0 = 0.0; var s0 = 0.0; var q0 = 0.0; var w0 = 0.0;
+  var h1 = 0.0; var t1 = 0.0; var s1 = 0.0; var q1 = 0.0; var w1 = 0.0;
+  var h2 = 0.0; var t2 = 0.0; var s2 = 0.0; var q2 = 0.0; var w2 = 0.0;
+${load('0', '0')}${load('1', '1')}${load('2', '2')}  var eT = t0; var eS = s0; var eT1 = 0.0; var eS1 = 0.0; var z = 0.0;
+  ${limiterVars('T')} ${limiterVars('S')}
+  var cur = 0; var znLo = 0.0; var znHi = OD[O_TARGET + C + i];
+  var accT = 0.0; var accS = 0.0; var pendLo = 0u; var pendHi = 0u;
+  for (var j = 0; j < L; j++) {
+${ppmEdgeInline({ k: 'j + 1', hm1: 'hm1', h0: 'h0', h1: 'h1', h2: 'h2', tracers: [{ qm1: 'tm1', q0: 't0', q1: 't1', q2: 't2', out: 'eT1' }, { qm1: 'sm1', q0: 's0', q1: 's1', q2: 's2', out: 'eS1' }] })}${ppmLimitInline({ left: 'eT', right: 'eT1', mean: 't0', out: 'T' })}${ppmLimitInline({ left: 'eS', right: 'eS1', mean: 's0', out: 'S' })}    let zLo = z; let zHi = z + h0;
+    if (h0 > 0.0) {
+      while (cur < L - 1 && znHi <= zLo) {
+${flush('cur <= j + 2')}      }
+      var givenT = 0.0; var givenS = 0.0;
+      loop {
+        let lo = max(zLo, znLo); let hi = min(zHi, znHi);
+        if (hi > lo) {
+          let pa = clamp((lo - zLo) / h0, 0.0, 1.0); let pb = clamp((hi - zLo) / h0, 0.0, 1.0);
+          let d1 = pb - pa; let d2 = 0.5 * (pb * pb - pa * pa); let d3 = (pb * pb * pb - pa * pa * pa) / 3.0;
+          let pT = h0 * (lT * d1 + sT * d2 + cT * (d2 - d3)); let pS = h0 * (lS * d1 + sS * d2 + cS * (d2 - d3));
+          accT += pT; givenT += pT; accS += pS; givenS += pS;
+        }
+        if (znHi >= zHi || cur >= L - 1) { break; }
+${flush('cur <= j + 2')}      }
+      accT += q0 - givenT; accS += w0 - givenS;
+    }
+    z = zHi; eT = eT1; eS = eS1;
+    hm1 = h0; tm1 = t0; sm1 = s0;
+    h0 = h1; t0 = t1; s0 = s1; q0 = q1; w0 = w1;
+    h1 = h2; t1 = t2; s1 = s2; q1 = q2; w1 = w2;
+${load('j + 3', '2')}  }
+  while (cur < L) {
+${flush('true')}  }
+  if ((pendLo | pendHi) != 0u) {
+    for (var k = 0; k < L; k++) { ${pendingTest} if (pending != 0u) { IN[hOff(k) + i] = OUT[hOff(k) + i]; IN[qOff(k) + i] = OUT[qOff(k) + i]; IN[wOff(k) + i] = OUT[wOff(k) + i]; } }
+  }
+}`;
+    })(),
     /*
      * columnCells: mixColumn of ocean/column.module.js on each sea column
      * with the cell's stress and the shear of its reconstructed velocities:
-     * convective adjustment, the energetic boundary layer by bisection, the
-     * Pacanowski–Philander interior, one implicit solve of heat and salt;
-     * the viscosity profile into VISC for the edges, the mixed-layer and
-     * boundary-layer depths into MIXED and BLD; P[0] is the step. The
-     * bisection's loop evaluates the work at the whole column first (it
-     * -1), then halves the interval 24 times, then once more at the depth
-     * it settled on.
+     * convective adjustment, the Pacanowski–Philander interior and the
+     * interfaces' expansion coefficients computed as the velocities are
+     * gathered, the energetic boundary layer, one implicit solve of heat
+     * and salt together whose substitution moves the stores' amounts and
+     * writes them; the viscosity profile into VISC for the edges, the
+     * mixed-layer and boundary-layer depths into MIXED and BLD; P[0] is
+     * the step. The boundary layer's loop is the search of boundaryLayer
+     * in ocean/column.module.js, phase for phase: the excess
+     * (work − energy)/(work + energy) at the whole column (0), the floor
+     * (1), the previous step's depth from BLD (2) and half (3) or twice (4)
+     * it, the whole column again (5), the Anderson–Björck secant points
+     * until the bracket is BLTOL wide in log depth or BLITER have been
+     * tried (6), and the depth settled on (7), so that CK holds its
+     * diffusivity over the NL layers that trial solved. The slabs of the
+     * convective adjustment borrow CK (their first layer), CTT (thickness),
+     * CTS (heat), CA (salt) and CB (density), which are filled afterward.
      */
     oColumnCells: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { OD[O_MIXED + i] = 0.0; OD[O_BLD + i] = 0.0; return; }
-  ${declareArrays(['CH', 'CT', 'CS', 'CQ', 'CW', 'CSH', 'CK', 'CIK', 'CINU', 'CC', 'CA', 'CB', 'CTT', 'CTS', 'CR', 'CTH', 'CHE', 'CSA', 'CSR', ...SOLVE_ARRAYS])} ${declareArrays(['CI'], 'LP1')} var CST: array<i32, LP1>;
+  ${declareArrays(['CH', 'CT', 'CS', 'CQ', 'CW', 'CA', 'CB', 'CK', 'CIK', 'CINU', 'CTT', 'CTS', 'SG'])}
+  var edges: array<i32, MAXE>; var weights: array<f32, MAXE>; var normals: array<vec3<f32>, MAXE>;
   let dt = P[0];
-${loadColumnInline}  for (var k = 0; k < L; k++) { CQ[k] = IN[qOff(k) + i]; CW[k] = IN[wOff(k) + i]; }
-  var previous = vec3<f32>(0.0, 0.0, 0.0);
+  var tLoad = LABEL_T[0] - TREF; var sLoad = LABEL_S[0] - SREF; var H = 0.0;
   for (var k = 0; k < L; k++) {
-    var wv = ${cellVector('IN[uOff(k) + e]')}
-    if (k > 0) { let d = previous - wv; CSH[k - 1] = dot(d, d); }
-    previous = wv;
+    let hv = IN[hOff(k) + i]; let qv = IN[qOff(k) + i]; let wv = IN[wOff(k) + i];
+    CH[k] = hv; CQ[k] = qv; CW[k] = wv; H += hv;
+    if (hv > 1e-9) { tLoad = qv / hv; sLoad = wv / hv; }
+    CT[k] = tLoad; CS[k] = sLoad;
   }
-  var wv = ${cellVector('OD[O_STRESS + e]')}
-  let ustar = sqrt(length(wv) / RHO0); let f = abs(OD[O_FCELL + i]);
-  var z = 0.0;
-  for (var k = 0; k < L; k++) { CC[k] = z + 0.5 * CH[k]; z += CH[k]; CR[k] = eosA(CT[k], CS[k]); }
+  let area = MF[F_AREA + i];
+  for (var m = 0; m < MAXE; m++) {
+    let e = MI[EOC + MAXE * i + m];
+    edges[m] = e; weights[m] = abs(f32(MI[ESC + MAXE * i + m])) * 0.5 * MF[F_DC + e] * MF[F_DV + e];
+    normals[m] = vec3<f32>(MF[F_NEDGE + 3 * e], MF[F_NEDGE + 3 * e + 1], MF[F_NEDGE + 3 * e + 2]);
+  }
+  var sv = vec3<f32>(0.0, 0.0, 0.0);
+  for (var m = 0; m < MAXE; m++) { sv += weights[m] * OD[O_STRESS + edges[m]] * normals[m]; }
+  sv = sv / area;
+  let ustar = sqrt(length(sv) / RHO0); let f = abs(OD[O_FCELL + i]);
   var n = 0;
   for (var k = 0; k < L; k++) {
-    CST[n] = k; CTH[n] = CH[k]; CHE[n] = CQ[k]; CSA[n] = CW[k]; CSR[n] = CR[k];
+    CK[n] = f32(k); CTT[n] = CH[k]; CTS[n] = CQ[k]; CA[n] = CW[k]; CB[n] = eosA(CT[k], CS[k]);
     n++;
     loop {
-      if (!(n >= 2 && CSR[n - 2] > CSR[n - 1])) { break; }
-      CTH[n - 2] += CTH[n - 1]; CHE[n - 2] += CHE[n - 1]; CSA[n - 2] += CSA[n - 1];
-      CSR[n - 2] = select(CSR[n - 2], eosA(CHE[n - 2] / CTH[n - 2], CSA[n - 2] / CTH[n - 2]), CTH[n - 2] > 0.0);
+      if (!(n >= 2 && CB[n - 2] > CB[n - 1])) { break; }
+      CTT[n - 2] += CTT[n - 1]; CTS[n - 2] += CTS[n - 1]; CA[n - 2] += CA[n - 1];
+      CB[n - 2] = select(CB[n - 2], eosA(CTS[n - 2] / CTT[n - 2], CA[n - 2] / CTT[n - 2]), CTT[n - 2] > 0.0);
       n--;
     }
   }
-  CST[n] = L;
-  var released = 0.0;
+  var released = 0.0; var zTop = 0.0;
   for (var s = 0; s < n; s++) {
-    let first = CST[s]; let past = CST[s + 1];
-    if (past - first < 2) { continue; }
-    let t = CHE[s] / CTH[s]; let w = CSA[s] / CTH[s]; let mixed = eosA(t, w);
+    let first = i32(CK[s]); let past = select(L, i32(CK[min(s + 1, L - 1)]), s + 1 < n);
+    if (past - first < 2) { zTop += CH[first]; continue; }
+    let t = CTS[s] / CTT[s]; let w = CA[s] / CTT[s]; let mixed = eosA(t, w);
     var drop = 0.0; var sumQ = 0.0; var sumW = 0.0;
-    for (var k = first; k < past; k++) { drop += OGRAV * CC[k] * CH[k] * (mixed - CR[k]); CT[k] = t; CS[k] = w; CQ[k] = CH[k] * t; CW[k] = CH[k] * w; sumQ += CQ[k]; sumW += CW[k]; }
-    CQ[past - 1] += CHE[s] - sumQ; CW[past - 1] += CSA[s] - sumW;
+    for (var k = first; k < past; k++) {
+      let hk = CH[k]; drop += OGRAV * (zTop + 0.5 * hk) * hk * (mixed - eosA(CT[k], CS[k])); zTop += hk;
+      CT[k] = t; CS[k] = w; CQ[k] = hk * t; CW[k] = hk * w; sumQ += CQ[k]; sumW += CW[k];
+    }
+    CQ[past - 1] += CTS[s] - sumQ; CW[past - 1] += CA[s] - sumW;
     if (first == 0) { released = drop; }
   }
-${interfacesInline('CH', 'CI')}  let H = CI[L];
-  for (var k = 0; k < L - 1; k++) {
-    CA[k] = 0.5 * (alphaT(CT[k] + TREF, CS[k] + SREF) + alphaT(CT[k + 1] + TREF, CS[k + 1] + SREF));
-    CB[k] = 0.5 * (betaS(CT[k] + TREF, CS[k] + SREF) + betaS(CT[k + 1] + TREF, CS[k + 1] + SREF));
-  }
-  let convective = max(0.0, released); let vstar = pow(ustar * ustar * ustar + convective / (RHO0 * dt), 1.0 / 3.0);
-  for (var k = 0; k < L; k++) { CK[k] = 0.0; }
-  var depth = 0.0;
-  if (vstar > 0.0) {
-    depth = H;
-    var low = log(min(BLFLOOR, H)); var high = log(H); var searching = false;
-    for (var it = -1; it <= 24; it++) {
-      if (it >= 0 && !searching) { break; }
-      let middle = 0.5 * (low + high);
-      if (it >= 0 && it < 24) { depth = exp(middle); } else if (it == 24) { depth = exp(low); }
-${blWork}      if (it == -1) { searching = raised > blEnergy(depth, ustar, f, dt, convective); } else if (it < 24) { if (raised <= blEnergy(depth, ustar, f, dt, convective)) { low = middle; } else { high = middle; } }
+  var previous = vec3<f32>(0.0, 0.0, 0.0); var rPrev = 0.0; var hPrev = 0.0; var aPrev = 0.0; var bPrev = 0.0; var mixing = false;
+  for (var k = 0; k < L; k++) {
+    let hk = CH[k]; let tk = CT[k] + TREF; let sk = CS[k] + SREF;
+    let rk = eos(tk, sk); let ak = alphaT(tk, sk); let bk = betaS(tk, sk);
+    var wv = vec3<f32>(0.0, 0.0, 0.0);
+    for (var m = 0; m < MAXE; m++) { wv += weights[m] * IN[uOff(k) + edges[m]] * normals[m]; }
+    wv = wv / area;
+    if (k > 0) {
+      let j = k - 1; let d = previous - wv;
+      let dz = max(0.5 * (hPrev + hk), DZFLOOR); let buoyancy = OGRAV * (rk - rPrev) / RHO0;
+      var kap = CONVKAPPA; var nu = CONVKAPPA;
+      if (buoyancy >= 0.0) {
+        let richardson = buoyancy * dz / (dot(d, d) + 1e-12);
+        nu = SHEARNU / ((1.0 + 5.0 * richardson) * (1.0 + 5.0 * richardson)) + BACKNU;
+        kap = nu / (1.0 + 5.0 * richardson) + BACKKAPPA;
+      }
+      CIK[j] = kap; CINU[j] = nu; CA[j] = 0.5 * (aPrev + ak); CB[j] = 0.5 * (bPrev + bk);
+      if (kap > 0.0) { mixing = true; }
     }
-    if (searching && depth <= BLFLOOR) { depth = 0.0; for (var k = 0; k < L; k++) { CK[k] = 0.0; } }
-  }
-  for (var k = 0; k < L; k++) { CR[k] = eosA(CT[k], CS[k]); }
-  for (var k = 0; k < L - 1; k++) {
-    let dz = max(0.5 * (CH[k] + CH[k + 1]), DZFLOOR); let buoyancy = OGRAV * (CR[k + 1] - CR[k]) / RHO0;
-    if (buoyancy < 0.0) { CIK[k] = CONVKAPPA; CINU[k] = CONVKAPPA; continue; }
-    let richardson = buoyancy * dz / (CSH[k] + 1e-12);
-    let viscosity = SHEARNU / ((1.0 + 5.0 * richardson) * (1.0 + 5.0 * richardson)) + BACKNU;
-    CINU[k] = viscosity;
-    CIK[k] = viscosity / (1.0 + 5.0 * richardson) + BACKKAPPA;
+    previous = wv; rPrev = rk; hPrev = hk; aPrev = ak; bPrev = bk;
   }
   CIK[L - 1] = 0.0; CINU[L - 1] = 0.0;
-  for (var k = 0; k < L; k++) { CIK[k] += CK[k]; CINU[k] += CK[k]; }
-  ${solveInline({ h: 'CH', kappa: 'CIK', q: 'CT', dt: 'dt' }, fluxInline({ h: 'CH', kappa: 'CIK', q: 'CT', amount: 'CQ', dt: 'dt' }))}
-  ${solveInline({ h: 'CH', kappa: 'CIK', q: 'CS', dt: 'dt' }, fluxInline({ h: 'CH', kappa: 'CIK', q: 'CS', amount: 'CW', dt: 'dt' }))}
-  for (var k = 0; k < L; k++) {
-    let m = k * C + i;
-    IN[qOff(k) + i] = CQ[k]; IN[wOff(k) + i] = CW[k]; OD[O_VISC + m] = CINU[k];
-    CR[k] = eosA(CT[k], CS[k]);
+  let convective = max(0.0, released); let vstar = pow(ustar * ustar * ustar + convective / (RHO0 * dt), 1.0 / 3.0);
+  var depth = 0.0; var NL = 0;
+  if (vstar > 0.0) {
+    let lowest = min(BLFLOOR, H); let guess = OD[O_BLD + i]; let half = max(lowest, 0.5 * guess); let twice = min(H, 2.0 * guess);
+    var phase = select(0, 2, guess > lowest && guess < H);
+    var a = log(lowest); var b = log(H); var fa = 0.0; var fb = 0.0; var x = 0.0; var side = 0; var count = 0;
+    depth = H;
+    for (var it = 0; it < BLITER + 5; it++) {
+      if (phase == 1) { depth = lowest; } else if (phase == 2) { depth = guess; } else if (phase == 3) { depth = half; } else if (phase == 4) { depth = twice; } else if (phase == 0 || phase == 5) { depth = H; }
+      else if (phase == 6) {
+        x = (a * fb - b * fa) / (fb - fa);
+        if (!(x > a && x < b)) { x = 0.5 * (a + b); }
+        if (!(x > a && x < b)) { phase = 7; } else { depth = exp(x); }
+      }
+      if (phase == 7) { depth = exp(a); }
+${blWork}      if (phase == 0 || phase == 5) { if (excess <= 0.0) { break; } fb = excess; phase = select(6, 1, phase == 0); }
+      else if (phase == 1) { if (excess >= 0.0) { depth = lowest; break; } fa = excess; phase = 6; }
+      else if (phase == 2) { if (excess > 0.0) { b = log(guess); fb = excess; phase = 3; } else { a = log(guess); fa = excess; phase = 4; } }
+      else if (phase == 3) { if (excess < 0.0) { a = log(half); fa = excess; phase = 6; } else { b = log(half); fb = excess; if (half <= lowest) { depth = lowest; break; } phase = 1; } }
+      else if (phase == 4) { if (excess > 0.0) { b = log(twice); fb = excess; phase = 6; } else { a = log(twice); fa = excess; if (twice >= H) { depth = H; break; } phase = 5; } }
+      else if (phase == 6) {
+        if (excess > 0.0) { if (side > 0) { let m = 1.0 - excess / fb; fa *= select(0.5, m, m > 0.0); } b = x; fb = excess; side = 1; }
+        else { if (side < 0) { let m = 1.0 - excess / fa; fb *= select(0.5, m, m > 0.0); } a = x; fa = excess; side = -1; }
+        count++;
+        if (b - a <= BLTOL || count >= BLITER) { phase = 7; }
+      } else { break; }
+    }
+    if (depth <= BLFLOOR) { depth = 0.0; NL = 0; }
+    if (NL > 1) { mixing = true; }
   }
-  var mixed = H; var zc = 0.5 * CH[0]; var prior = CR[0]; let limit = CR[0] + MLEXCESS; var found = false;
+  {
+    var wPrev = 0.0; var gPrev = 0.0; var rT = 0.0; var rS = 0.0;
+    for (var k = 0; k < L; k++) {
+      let hk = CH[k]; let boundary = select(0.0, CK[k], k < NL); let kap = CIK[k] + boundary;
+      CIK[k] = kap; OD[O_VISC + k * C + i] = CINU[k] + boundary;
+      let w = select(0.0, dt * kap / max(0.5 * (hk + CH[min(k + 1, L - 1)]), DZFLOOR), k < L - 1);
+      let m = hk + wPrev + w + wPrev * gPrev; let g = -w / m;
+      rT = (hk * CT[k] + wPrev * rT) / m; rS = (hk * CS[k] + wPrev * rS) / m;
+      CTT[k] = rT; CTS[k] = rS; SG[k] = g; wPrev = w; gPrev = g;
+    }
+    if (mixing) {
+      var nT = CTT[L - 1]; var nS = CTS[L - 1]; var carriedQ = 0.0; var carriedW = 0.0;
+      CT[L - 1] = nT; CS[L - 1] = nS;
+      for (var j = 0; j < L - 1; j++) {
+        let k = L - 2 - j; let tBelow = nT; let sBelow = nS;
+        nT = CTT[k] - SG[k] * nT; nS = CTS[k] - SG[k] * nS; CT[k] = nT; CS[k] = nS;
+        let dz = max(0.5 * (CH[k] + CH[k + 1]), DZFLOOR);
+        let movedQ = dt * CIK[k] * (nT - tBelow) / dz; let movedW = dt * CIK[k] * (nS - sBelow) / dz;
+        IN[qOff(k + 1) + i] = (CQ[k + 1] + movedQ) - carriedQ; IN[wOff(k + 1) + i] = (CW[k + 1] + movedW) - carriedW;
+        carriedQ = movedQ; carriedW = movedW;
+      }
+      IN[qOff(0) + i] = CQ[0] - carriedQ; IN[wOff(0) + i] = CW[0] - carriedW;
+    } else {
+      for (var k = 0; k < L; k++) { IN[qOff(k) + i] = CQ[k]; IN[wOff(k) + i] = CW[k]; }
+    }
+  }
+  var mixed = H; var hAbove = CH[0]; var zc = 0.5 * hAbove; var prior = eosA(CT[0], CS[0]); let limit = prior + MLEXCESS; var found = false;
   for (var k = 1; k < L; k++) {
     if (found) { continue; }
-    let center = zc + 0.5 * (CH[k - 1] + CH[k]);
-    if (CR[k] > limit) { mixed = zc + (limit - prior) / (CR[k] - prior) * (center - zc); found = true; }
-    zc = center; prior = CR[k];
+    let hk = CH[k]; let center = zc + 0.5 * (hAbove + hk); let rk = eosA(CT[k], CS[k]);
+    if (rk > limit) { mixed = zc + (limit - prior) / (rk - prior) * (center - zc); found = true; }
+    zc = center; prior = rk; hAbove = hk;
   }
   OD[O_MIXED + i] = mixed; OD[O_BLD + i] = depth;
 }`,
-    // columnEdges: the implicit solve of each edge's velocity with the mean of its cells' viscosity profiles.
+    // columnEdges: the implicit solve of each edge's velocity with the mean of its cells' viscosity profiles, the thicknesses and viscosities read as the elimination descends.
     oColumnEdges: `${K}  let e = ${idx}; if (e >= E) { return; }
   if (OD[O_EMASK + e] < 0.5) { return; }
-  ${declareArrays(['SH', 'SK', 'SQ', ...SOLVE_ARRAYS])}
-  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
-  for (var k = 0; k < L; k++) { SH[k] = 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b]); SK[k] = 0.5 * (OD[O_VISC + k * C + a] + OD[O_VISC + k * C + b]); SQ[k] = IN[uOff(k) + e]; }
-  ${solveInline({ h: 'SH', kappa: 'SK', q: 'SQ', dt: 'P[0]' }, '      for (var k = 0; k < L; k++) { IN[uOff(k) + e] = SQ[k]; }\n')}
+  ${declareArrays(['SQ', 'SG'])}
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1]; let dt = P[0];
+  var mixing = false; var wPrev = 0.0; var gPrev = 0.0; var r = 0.0;
+  var hk = 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]);
+  for (var k = 0; k < L; k++) {
+    let kn = min(k + 1, L - 1); let below = k < L - 1;
+    let hNext = 0.5 * (IN[hOff(kn) + a] + IN[hOff(kn) + b]);
+    let kap = 0.5 * (OD[O_VISC + k * C + a] + OD[O_VISC + k * C + b]);
+    if (below && kap > 0.0) { mixing = true; }
+    let w = select(0.0, dt * kap / max(0.5 * (hk + hNext), DZFLOOR), below);
+    let m = hk + wPrev + w + wPrev * gPrev; let g = -w / m;
+    r = (hk * IN[uOff(k) + e] + wPrev * r) / m;
+    SQ[k] = r; SG[k] = g; wPrev = w; gPrev = g; hk = hNext;
+  }
+  if (mixing) {
+    var next = SQ[L - 1]; IN[uOff(L - 1) + e] = next;
+    for (var j = 0; j < L - 1; j++) { let k = L - 2 - j; next = SQ[k] - SG[k] * next; IN[uOff(k) + e] = next; }
+  }
 }`,
   };
 }
@@ -820,14 +949,7 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
   for (var k = 0; k < L; k++) { sum += OD[O_HEDGE + k * E + e]; }
   if (sum > sill) { let f = sill / sum; for (var k = 0; k < L; k++) { OD[O_HEDGE + k * E + e] *= f; } }
 }`,
-    oFlux: hy ? `${K}  let e = ${idx}; if (e >= E) { return; }
-  let wet = OD[O_EMASK + e] > 0.5;
-  for (var k = 0; k < L; k++) {
-    let n = k * E + e; let ue = IN[uOff(k) + e];
-    let donor = MI[COE + 2 * e + select(1, 0, ue > 0.0)];
-    OD[O_FLUX + n] = select(0.0, min(OD[O_HEDGE + n], max(0.0, IN[hOff(k) + donor])) * ue, wet);
-  }
-}` : `${K}  let e = ${idx}; if (e >= E) { return; }
+    oFlux: `${K}  let e = ${idx}; if (e >= E) { return; }
   let wet = OD[O_EMASK + e] > 0.5;
   for (var k = 0; k < L; k++) {
     let n = k * E + e;
@@ -839,7 +961,36 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
     OD[O_FLUX + n] = select(0.0, he * IN[uOff(k) + e], wet);
   }
 }`,
-    oCellTendency: `${K}  let i = ${idx}; if (i >= C) { return; }
+    /*
+     * The hybrid's oCellTendency also prepares the cells for oMomentum:
+     * each cell-layer's running sum of ρ'h above it and its density
+     * anomaly as the adjacent pair PR (the sum of h above is re-summed
+     * where it is read).
+     */
+    oCellTendency: hy ? `${K}  let i = ${idx}; if (i >= C) { return; }
+  var edges: array<i32, MAXE>; var nbrs: array<i32, MAXE>;
+  for (var m = 0; m < MAXE; m++) { edges[m] = MI[EOC + MAXE * i + m]; nbrs[m] = MI[COC + MAXE * i + m]; }
+  var weighted = 0.0;
+  for (var k = 0; k < L; k++) {
+    let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k] - TREF, IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k] - SREF, IN[wOff(k) + i] / hv, hv > 1e-6);
+    let r = select(RHOA[k], eosAnomaly(IN[qOff(k) + i] / hv + TREF, IN[wOff(k) + i] / hv + SREF), hv > 1e-6);
+    let n = k * C + i; OD[O_PR + 2 * n] = weighted; OD[O_PR + 2 * n + 1] = r; weighted += r * hv;
+    var divH = 0.0; var divQ = 0.0; var divW = 0.0; var lapQ = 0.0; var lapW = 0.0;
+    for (var m = 0; m < MAXE; m++) {
+      let e = edges[m]; let j = nbrs[m];
+      let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
+      divH += f;
+      let hvj = IN[hOff(k) + j]; let Tj = select(LABEL_T[k] - TREF, IN[qOff(k) + j] / hvj, hvj > 1e-6); let Sj = select(LABEL_S[k] - SREF, IN[wOff(k) + j] / hvj, hvj > 1e-6);
+      divQ += f * select(Tj, Ti, f > 0.0); divW += f * select(Sj, Si, f > 0.0);
+      if (k == 0 && OD[O_EMASK + e] > 0.5) { let wd = select(1.0, 2.0 * hv * hvj / max(hv + hvj, 1e-6), MIXDIFF > 0.0); lapQ += wd * MF[F_DV + e] * (Tj - Ti) / MF[F_DC + e]; lapW += wd * MF[F_DV + e] * (Sj - Si) / MF[F_DC + e]; }
+    }
+    let area = MF[F_AREA + i];
+    var dh = -divH / area; var dQ = -divQ / area; var dW = -divW / area;
+    if (k == 0) { let coefficient = select(DIFFUSION, MIXDIFF, MIXDIFF > 0.0); if (coefficient > 0.0) { dQ += coefficient * lapQ / area; dW += coefficient * lapW / area; } }
+    if (OD[O_CMASK + i] < 0.5) { dh = 0.0; dQ = 0.0; dW = 0.0; }
+    OUT[hOff(k) + i] = dh; OUT[qOff(k) + i] = dQ; OUT[wOff(k) + i] = dW;
+  }
+}` : `${K}  let i = ${idx}; if (i >= C) { return; }
   var edges: array<i32, MAXE>; var nbrs: array<i32, MAXE>;
   for (var m = 0; m < MAXE; m++) { edges[m] = MI[EOC + MAXE * i + m]; nbrs[m] = MI[COC + MAXE * i + m]; }
   for (var k = 0; k < L; k++) {
@@ -875,8 +1026,8 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
   for (var k = 0; k < L; k++) {
     let n = k * E + e;
     var hq = OD[O_HEDGE + n];
-    if (${hy ? 'true' : 'k > 0'}) { hq = max(hq, CENTRING * 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b])); }
-    OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, ${hy ? 'PVFLOORK[k]' : 'select(PVFLOOR, THINO, k == 0)'});
+    if (k > 0) { hq = max(hq, CENTRING * 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b])); }
+    OD[O_QE + n] = 0.5 * (OD[O_AVORT + k * V + v1] + OD[O_AVORT + k * V + v2]) / max(hq, select(PVFLOOR, THINO, k == 0));
   }
 }`,
     oKineticPhi: `${K}  let i = ${idx}; if (i >= C) { return; }
@@ -1785,7 +1936,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ...(o.ekmanDepth > 0 ? [['HM', E]] : []),
     ...(o.retreatDaily ? [['SUNSTEP', C], ['SUNSUM', C], ['DARKSUM', C], ['SUNDAY', C], ['DARKDAY', C]] : []),
     ...(o.ekmanBlock ? [['UEK', E]] : []),
-    ...(hybrid ? [['RHOL', L * C], ['PRESS', L * C], ['HABOVE', L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C]] : []),
+    ...(hybrid ? [['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C]] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -1877,13 +2028,18 @@ ${hybrid ? `  OUT[${OF.H1} + i] = OD[O_MIXED + i];
     const g = group(IN, OUT);
     setParams([0, 0]);
     compute((pass) => {
-      if (hybrid) dispatch(pass, 'oLayerDensity', g, C);
-      else { dispatch(pass, 'oSurfaceDensity', g, C); dispatch(pass, 'oGradRho', g, E); }
-      dispatch(pass, 'oEdgeThickness', g, E);
-      dispatch(pass, 'oFlux', g, E);
-      dispatch(pass, 'oCellTendency', g, C);
-      dispatch(pass, 'oVertexVort', g, V);
-      dispatch(pass, 'oEdgePV', g, E);
+      if (hybrid) {
+        dispatch(pass, 'oVertexVort', g, V);
+        dispatch(pass, 'oEdgeFluxPV', g, E);
+        dispatch(pass, 'oCellTendency', g, C);
+      } else {
+        dispatch(pass, 'oSurfaceDensity', g, C); dispatch(pass, 'oGradRho', g, E);
+        dispatch(pass, 'oEdgeThickness', g, E);
+        dispatch(pass, 'oFlux', g, E);
+        dispatch(pass, 'oCellTendency', g, C);
+        dispatch(pass, 'oVertexVort', g, V);
+        dispatch(pass, 'oEdgePV', g, E);
+      }
       if (o.closureRings) dispatch(pass, 'oDeepestEdge', g, E);
       if (o.closureFill > 0) dispatch(pass, 'oClosureFill', g, L * E);
       if (o.closureRings) dispatch(pass, 'oClosureRing', g, L * E);

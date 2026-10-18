@@ -70,11 +70,16 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  * κ v* z (1 − z/h)², v*³ = u*³ + E_c/(ρ₀ dt), equals the energy
  * ρ₀ m* u*³ dt + n* E_c, E_c the energy the surface slab's convection
  * released, m* = mstar Λ / (1 + (h |f| / (ekman u*))²) with Λ the
- * Langmuir factor of the wind over the depth h, found by bisection on the
- * potential energy the implicit mixing raises, interface by interface
- * from the heat and salt it moves and the thermal expansion and haline
- * contraction there (Reichl and Hallberg 2018 in its budget, Kraus and
- * Turner in its sources); below and beside it the Pacanowski and Philander
+ * Langmuir factor of the wind over the depth h. The work is the potential
+ * energy the implicit mixing raises, interface by interface from the heat
+ * and salt it moves and the thermal expansion and haline contraction
+ * there (Reichl and Hallberg 2018 in its budget, Kraus and Turner in its
+ * sources), each trial solving only the layers the mixing reaches; h is
+ * the root in log depth of (work − energy)/(work + energy), a bounded
+ * function that is near ±1 away from the root, found by the
+ * Anderson–Björck secant to a part in 10⁶ in a bracket around the
+ * previous step's depth, or between the floor and the whole column, the
+ * side where the work is within the energy taken; below and beside it the Pacanowski and Philander
  * (1981) interior viscosity ν = ν₀/(1 + 5Ri)² + ν_b and diffusivity
  * ν/(1 + 5Ri) + κ_b on the gradient Richardson number of the resolved
  * shear and stratification, a convective diffusivity where the column is
@@ -165,7 +170,7 @@ export function columnScratch(K) {
   return {
     K, centers: array(K), sorted: array(K), flat: array(K), interfaces: array(K + 1), target: array(K + 1), weight: array(K + 1),
     edges: array(K + 1), left: array(K), slope: array(K), curve: array(K), zOld: array(K + 1), zNew: array(K + 1), knots: array(5), primitive: array(5),
-    upper: array(K), lower: array(K), gain: array(K), rhs: array(K), trialT: array(K), trialS: array(K), alpha: array(K), beta: array(K), rho: array(K),
+    gain: array(K), trialT: array(K), trialS: array(K), alpha: array(K), beta: array(K), rho: array(K),
     boundaryKappa: array(K), interiorKappa: array(K), interiorNu: array(K), start: new Int32Array(K), thick: array(K), heat: array(K), salt: array(K), slabRho: array(K), shares: array(K),
   };
 }
@@ -360,25 +365,40 @@ export function remapMeans(hOld, qOld, K, hNew, out, scratch, options = {}) {
   return out;
 }
 
+/*
+ * The implicit diffusion of the first n layers of a column with kappa at
+ * their interfaces, kappa[k] between layers k and k + 1 and the interface
+ * below layer n − 1 taken as closed: the elimination down the layers with
+ * the coefficient and gain of the layer above carried in scalars and the
+ * eliminated right-hand sides written to the outputs, then the
+ * substitution back up. Two tracers share the matrix, so a pair is solved
+ * in one sweep; an output may be its own input.
+ */
+function solveLayers(h, n, kappa, dt, gain, q1, out1, q2 = null, out2 = null) {
+  let wPrev = 0, gPrev = 0, r1 = 0, r2 = 0;
+  for (let k = 0; k < n; k++) {
+    const w = k < n - 1 ? dt * kappa[k] / Math.max(0.5 * (h[k] + h[k + 1]), DZ_FLOOR) : 0;
+    const m = h[k] + wPrev + w + wPrev * gPrev, g = -w / m;
+    r1 = (h[k] * q1[k] + wPrev * r1) / m;
+    out1[k] = r1;
+    if (q2) { r2 = (h[k] * q2[k] + wPrev * r2) / m; out2[k] = r2; }
+    gain[k] = g;
+    wPrev = w;
+    gPrev = g;
+  }
+  let n1 = out1[n - 1], n2 = q2 ? out2[n - 1] : 0;
+  for (let k = n - 2; k >= 0; k--) {
+    n1 = out1[k] - gain[k] * n1;
+    out1[k] = n1;
+    if (q2) { n2 = out2[k] - gain[k] * n2; out2[k] = n2; }
+  }
+}
+
+const anyMixing = (kappa, K) => { for (let k = 0; k < K - 1; k++) if (kappa[k] > 0) return true; return false; };
+
 export function solveColumn(h, q, K, kappa, dt, scratch) {
-  const { upper, lower, gain, rhs } = scratch;
-  let active = false;
-  for (let k = 0; k < K - 1; k++) if (kappa[k] > 0) { active = true; break; }
-  if (!active) return false;
-  for (let k = 0; k < K; k++) {
-    upper[k] = k > 0 ? dt * kappa[k - 1] / Math.max(0.5 * (h[k - 1] + h[k]), DZ_FLOOR) : 0;
-    lower[k] = k < K - 1 ? dt * kappa[k] / Math.max(0.5 * (h[k] + h[k + 1]), DZ_FLOOR) : 0;
-  }
-  let m = h[0] + upper[0] + lower[0];
-  gain[0] = -lower[0] / m;
-  rhs[0] = h[0] * q[0] / m;
-  for (let k = 1; k < K; k++) {
-    m = h[k] + upper[k] + lower[k] + upper[k] * gain[k - 1];
-    gain[k] = -lower[k] / m;
-    rhs[k] = (h[k] * q[k] + upper[k] * rhs[k - 1]) / m;
-  }
-  q[K - 1] = rhs[K - 1];
-  for (let k = K - 2; k >= 0; k--) q[k] = rhs[k] - gain[k] * q[k + 1];
+  if (!anyMixing(kappa, K)) return false;
+  solveLayers(h, K, kappa, dt, scratch.gain, q, q);
   return true;
 }
 
@@ -436,10 +456,10 @@ export function convectiveAdjustment(h, T, S, K, scratch, { gravity = GRAVITY } 
   return { released, interior, depth };
 }
 
-export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, mstar = 1.25, ekman = 0.5, nstar = 0.2, langmuir = 2, vonKarman = 0.4, iterations = 24, floor = 0.1 }, kappa, scratch) {
-  const { interfaces, centers, alpha, beta, trialT, trialS } = scratch;
-  const H = interfacesOf(h, K, interfaces);
-  for (let k = 0; k < K; k++) centers[k] = interfaces[k] + 0.5 * h[k];
+export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, guess = 0, rho0 = SEAWATER.rho0, gravity = GRAVITY, mstar = 1.25, ekman = 0.5, nstar = 0.2, langmuir = 2, vonKarman = 0.4, iterations = 24, tolerance = 1e-6, floor = 0.1 }, kappa, scratch) {
+  const { alpha, beta, trialT, trialS, gain } = scratch;
+  let H = 0;
+  for (let k = 0; k < K; k++) H += h[k];
   for (let k = 0; k < K - 1; k++) {
     alpha[k] = 0.5 * (thermalExpansion(T[k], S[k]) + thermalExpansion(T[k + 1], S[k + 1]));
     beta[k] = 0.5 * (halineContraction(T[k], S[k]) + halineContraction(T[k + 1], S[k + 1]));
@@ -452,31 +472,83 @@ export function boundaryLayer({ h, T, S, K, ustar, f, dt, released = 0, rho0 = S
     const factor = ustar > 0 && langmuir > 0 ? langmuirFactor(ustar, Math.max(depth, 1), langmuir) : 1;
     return rho0 * dt * mstar * factor * ustar * ustar * ustar / rotation + nstar * convective;
   };
+  /*
+   * The work of mixing to `depth`: the diffusivity at each interface the
+   * depth reaches is set as the elimination descends the layers it
+   * couples, which stops at the first interface it does not, and the
+   * potential energy the trial profile raises is summed as the
+   * substitution climbs back. kappa[k] is left for k < solved, the layers
+   * the last trial solved.
+   */
+  let solved = 0;
   const work = (depth) => {
-    for (let k = 0; k < K - 1; k++) { const z = interfaces[k + 1]; kappa[k] = z < depth ? vonKarman * vstar * z * (1 - z / depth) ** 2 : 0; }
-    for (let k = 0; k < K; k++) { trialT[k] = T[k]; trialS[k] = S[k]; }
-    solveColumn(h, trialT, K, kappa, dt, scratch);
-    solveColumn(h, trialS, K, kappa, dt, scratch);
-    let raised = 0;
-    for (let k = 0; k < K - 1; k++) {
-      const dz = Math.max(0.5 * (h[k] + h[k + 1]), DZ_FLOOR), lift = centers[k + 1] - centers[k];
-      const heatDown = dt * kappa[k] * (trialT[k] - trialT[k + 1]) / dz, saltDown = dt * kappa[k] * (trialS[k] - trialS[k + 1]) / dz;
+    let z = 0, wPrev = 0, gPrev = 0, rT = 0, rS = 0;
+    solved = 0;
+    for (let k = 0; k < K; k++) {
+      z += h[k];
+      const inside = k < K - 1 && z < depth, kap = inside ? vonKarman * vstar * z * (1 - z / depth) ** 2 : 0;
+      kappa[k] = kap;
+      const w = inside ? dt * kap / Math.max(0.5 * (h[k] + h[k + 1]), DZ_FLOOR) : 0;
+      const m = h[k] + wPrev + w + wPrev * gPrev, g = -w / m;
+      rT = (h[k] * T[k] + wPrev * rT) / m;
+      rS = (h[k] * S[k] + wPrev * rS) / m;
+      trialT[k] = rT;
+      trialS[k] = rS;
+      gain[k] = g;
+      wPrev = w;
+      gPrev = g;
+      solved = k + 1;
+      if (!inside) break;
+    }
+    let raised = 0, nT = trialT[solved - 1], nS = trialS[solved - 1];
+    for (let k = solved - 2; k >= 0; k--) {
+      const tBelow = nT, sBelow = nS;
+      nT = trialT[k] - gain[k] * nT;
+      nS = trialS[k] - gain[k] * nS;
+      const lift = 0.5 * (h[k] + h[k + 1]), dz = Math.max(lift, DZ_FLOOR);
+      const heatDown = dt * kappa[k] * (nT - tBelow) / dz, saltDown = dt * kappa[k] * (nS - sBelow) / dz;
       raised += gravity * rho0 * lift * (alpha[k] * heatDown - beta[k] * saltDown);
     }
     return raised;
   };
-  let depth = H, done = work(H), available = energy(H);
-  if (done > available) {
-    let low = Math.log(Math.min(floor, H)), high = Math.log(H);
-    for (let i = 0; i < iterations; i++) {
-      const middle = 0.5 * (low + high);
-      if (work(Math.exp(middle)) <= energy(Math.exp(middle))) low = middle; else high = middle;
+  let done = 0, available = 0;
+  const excess = (depth) => { done = work(depth); available = energy(depth); const w = Math.max(0, done); return (w - available) / (w + available); };
+  /*
+   * The search evaluates the excess at the whole column (phase 0) and, when
+   * the work exceeds the energy there, at the floor (1), then at the
+   * Anderson–Björck secant points of the bracket (6) until it is
+   * `tolerance` wide in log depth or `iterations` points have been tried,
+   * then once more at the depth settled on (7) so that kappa holds its
+   * diffusivity. A guess, the previous step's depth, is tried first (2),
+   * then half (3) or twice (4) of it, which brackets the root in three
+   * evaluations when it has moved by less than a factor two, else the
+   * whole column (5) or the floor completes the bracket.
+   */
+  const lowest = Math.min(floor, H), half = Math.max(lowest, 0.5 * guess), twice = Math.min(H, 2 * guess);
+  let phase = guess > lowest && guess < H ? 2 : 0, a = Math.log(lowest), b = Math.log(H), fa = 0, fb = 0, x = 0, side = 0, count = 0, depth = H;
+  for (;;) {
+    if (phase === 1) depth = lowest; else if (phase === 2) depth = guess; else if (phase === 3) depth = half; else if (phase === 4) depth = twice; else if (phase === 0 || phase === 5) depth = H;
+    else if (phase === 6) {
+      x = (a * fb - b * fa) / (fb - fa);
+      if (!(x > a && x < b)) x = 0.5 * (a + b);
+      if (!(x > a && x < b)) phase = 7; else depth = Math.exp(x);
     }
-    depth = Math.exp(low);
-    done = work(depth);
-    available = energy(depth);
-    if (depth <= floor) { depth = 0; for (let k = 0; k < K; k++) kappa[k] = 0; done = 0; }
+    if (phase === 7) depth = Math.exp(a);
+    const fx = excess(depth);
+    if (phase === 0 || phase === 5) { if (fx <= 0) break; fb = fx; phase = phase === 0 ? 1 : 6; }
+    else if (phase === 1) { if (fx >= 0) { depth = lowest; break; } fa = fx; phase = 6; }
+    else if (phase === 2) { if (fx > 0) { b = Math.log(guess); fb = fx; phase = 3; } else { a = Math.log(guess); fa = fx; phase = 4; } }
+    else if (phase === 3) { if (fx < 0) { a = Math.log(half); fa = fx; phase = 6; } else { b = Math.log(half); fb = fx; if (half <= lowest) { depth = lowest; break; } phase = 1; } }
+    else if (phase === 4) { if (fx > 0) { b = Math.log(twice); fb = fx; phase = 6; } else { a = Math.log(twice); fa = fx; if (twice >= H) { depth = H; break; } phase = 5; } }
+    else if (phase === 6) {
+      if (fx > 0) { if (side > 0) { const m = 1 - fx / fb; fa *= m > 0 ? m : 0.5; } b = x; fb = fx; side = 1; }
+      else { if (side < 0) { const m = 1 - fx / fa; fb *= m > 0 ? m : 0.5; } a = x; fa = fx; side = -1; }
+      count++;
+      if (b - a <= tolerance || count >= iterations) phase = 7;
+    } else break;
   }
+  if (depth <= floor) { depth = 0; solved = 0; done = 0; }
+  for (let k = solved; k < K; k++) kappa[k] = 0;
   return { depth, energy: available, work: done, velocity: vstar };
 }
 
@@ -509,7 +581,6 @@ export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat =
   const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: convection.released, ...options }, boundaryKappa, scratch);
   interiorMixing({ h, T, S, u, v, shear, K, ...options }, interiorKappa, interiorNu, scratch);
   for (let k = 0; k < K; k++) { kappa[k] = boundaryKappa[k] + interiorKappa[k]; nu[k] = boundaryKappa[k] + interiorNu[k]; }
-  solveColumn(h, T, K, kappa, dt, scratch);
-  solveColumn(h, S, K, kappa, dt, scratch);
+  if (anyMixing(kappa, K)) solveLayers(h, K, kappa, dt, scratch.gain, T, T, S, S);
   return { depth: layer.depth, energy: layer.energy, work: layer.work, released: convection.released, convectiveDepth: convection.depth };
 }
