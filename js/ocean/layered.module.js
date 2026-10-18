@@ -125,7 +125,8 @@ import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, erfc, stokesSurfaceLayer, 
  * temperature and salinity stay those of its class; the curvature of the
  * equation of state makes a mixture denser than the linear estimate, and
  * the gradual, dead-banded correction keeps that from overshooting.
- * Tracers are carried by the flux with the donor cell's value; the mixed
+ * Tracers are carried by the flux with the donor cell's value (the hybrid's
+ * with the limited third-order edge value of limitedEdgeValue); the mixed
  * layer's heat and salt also diffuse, as ∇·(h κ ∇T) with κ
  * `mixedDiffusivity` and the harmonic mean of the two cells' thickness on
  * each edge, or, with `diffusivity` alone, as a flux of heat per unit
@@ -609,6 +610,56 @@ export function eddyDiffusionLimit(mesh) {
 }
 
 /*
+ * For each edge, the cell beyond each of its two cells along the edge's
+ * own direction: beyond cell a, the neighbor of a whose direction from a
+ * is most nearly opposite to b's, and beyond b the neighbor of b most
+ * nearly continuing from a. With the edge between them these make the
+ * four-point line the upwind-biased tracer reconstruction reads; `edge`
+ * holds the edge from the cell to its beyond cell, whose length is the
+ * upwind spacing.
+ */
+export function beyondCells(mesh) {
+  const { nEdges: E, cellsOnEdge, cellsOnCell, edgesOnCell, nEdgesOnCell, maxEdges, xCell } = mesh;
+  const cell = new Int32Array(2 * E).fill(-1), edge = new Int32Array(2 * E).fill(-1);
+  const pick = (from, exclude, dx, dy, dz, sign) => {
+    let best = -Infinity, cellAt = -1, edgeAt = -1;
+    for (let m = 0; m < nEdgesOnCell[from]; m++) {
+      const j = cellsOnCell[maxEdges * from + m];
+      if (j === exclude || j < 0) continue;
+      const jx = xCell[3 * j] - xCell[3 * from], jy = xCell[3 * j + 1] - xCell[3 * from + 1], jz = xCell[3 * j + 2] - xCell[3 * from + 2];
+      const score = sign * (jx * dx + jy * dy + jz * dz) / Math.hypot(jx, jy, jz);
+      if (score > best) { best = score; cellAt = j; edgeAt = edgesOnCell[maxEdges * from + m]; }
+    }
+    return [cellAt, edgeAt];
+  };
+  for (let e = 0; e < E; e++) {
+    const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+    const dx = xCell[3 * b] - xCell[3 * a], dy = xCell[3 * b + 1] - xCell[3 * a + 1], dz = xCell[3 * b + 2] - xCell[3 * a + 2];
+    [cell[2 * e], edge[2 * e]] = pick(a, b, dx, dy, dz, -1);
+    [cell[2 * e + 1], edge[2 * e + 1]] = pick(b, a, dx, dy, dz, 1);
+  }
+  return { cell, edge };
+}
+
+/*
+ * The edge value of a tracer carried from the cell `up` to the cell
+ * `down`: the upwind cell's value plus half the central difference scaled
+ * by Koren's limiter on the ratio of the upwind gradient (over the spacing
+ * `dUp` to the cell `uu` beyond the upwind one) to the central gradient
+ * (over `dCentral`), which is the third-order upwind-biased (κ = 1/3)
+ * scheme where the field is smooth and monotone everywhere. The caller
+ * falls back to the upwind value where `uu` is land or either cell beyond
+ * the upwind one holds no water in the layer.
+ */
+export const TRACER_ADVECTIONS = ['upwind', 'third'], SHEAR_DIFFUSIVITY = 0.2;
+export function limitedEdgeValue(field, up, down, uu, dUp, dCentral) {
+  const phiU = field[up], central = field[down] - phiU;
+  if (central === 0) return phiU;
+  const r = (phiU - field[uu]) * dCentral / dUp / central;
+  return phiU + 0.5 * Math.max(0, Math.min(2 * r, (2 + r) / 3, 2)) * central;
+}
+
+/*
  * The open ocean's abyss: the sea cells at least `depth` deep that connect
  * to one another through such cells over the largest area. A deep basin
  * behind a shallower sill, as the Mediterranean behind Gibraltar or the
@@ -941,6 +992,7 @@ export function createOcean(mesh, {
   eddyDiffusivity = 1000, eddyTaperDepth = 200, ekmanBlock = false, upwellingSource = 0, intakeLedger = false, penetration = 'IB',
   geography = null, bathymetry = null, buffers = null, climatology = null,
   vertical = 'slab', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
+  tracerAdvection = null, shearDiffusivity = null, shearDiffusivityCap = 4000,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -955,6 +1007,13 @@ export function createOcean(mesh, {
   const hybrid = vertical === 'hybrid';
   if (vertical !== 'slab' && !hybrid) throw new Error(`vertical is 'slab' or 'hybrid', not ${vertical}`);
   if (hybrid && (ekmanBlock || upwellingSource > 0 || intakeLedger || retreatDaily || closureFill > 0 || shearMixing || interiorShearMixing || blockDrag)) throw new Error('ekmanBlock, upwellingSource, intakeLedger, retreatDaily, closureFill, shearMixing, interiorShearMixing and blockDrag belong to the slab ocean');
+  const advection = tracerAdvection ?? (hybrid ? 'third' : 'upwind');
+  if (!TRACER_ADVECTIONS.includes(advection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${advection}`);
+  if (!hybrid && advection !== 'upwind') throw new Error("tracerAdvection 'third' belongs to the hybrid ocean");
+  const beyond = hybrid && advection === 'third' ? beyondCells(mesh) : null;
+  const shearDiffusion = shearDiffusivity ?? (hybrid ? SHEAR_DIFFUSIVITY : 0);
+  if (!hybrid && shearDiffusion > 0) throw new Error('shearDiffusivity belongs to the hybrid ocean');
+  if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
   const table = hybrid ? layerTable : null;
   const L = hybrid ? table.K : densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = hybrid ? Array.from(table.densities) : [rho0, ...densities];
@@ -999,7 +1058,7 @@ export function createOcean(mesh, {
   const stress = shared('stress', E), fresh = new Float64Array(C);
   const daily = retreatDaily ? { sunStep: new Float64Array(C), sunSum: new Float64Array(C), darkSum: new Float64Array(C), sunDay: new Float64Array(C), darkDay: new Float64Array(C) } : null, day = { span: 0 };
   const iced = new Uint8Array(C), iceCover = langmuir > 0 ? new Float64Array(C) : null;
-  const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E);
+  const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E), edgeS = new Float64Array(E);
   const stressDepth = shared('stressDepth', E), stressLayer = shared('stressLayer', E), stressFraction = shared('stressFraction', E);
   const windDepth = ekmanDepth > 0 ? shared('windDepth', E) : null;
   if (windDepth && !adopting) windDepth.fill(momentumDepth);
@@ -1390,12 +1449,38 @@ export function createOcean(mesh, {
           const hv = hIn[oc + i];
           if (hv > 1e-6) { T[i] = QIn[oc + i] / hv; S[i] = WIn[oc + i] / hv; } else { T[i] = labelT[k]; S[i] = labelS[k]; }
         }
-        for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * T[cellsOnEdge[2 * e + (flux[e] > 0 ? 0 : 1)]];
-        divergence(mesh, tracerFlux, divScratch);
-        for (let i = 0; i < C; i++) dQ[oc + i] = -divScratch[i];
-        for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * S[cellsOnEdge[2 * e + (flux[e] > 0 ? 0 : 1)]];
+        if (beyond) {
+          for (let e = 0; e < E; e++) {
+            const f = flux[e], side = f > 0 ? 0 : 1, up = cellsOnEdge[2 * e + side], down = cellsOnEdge[2 * e + 1 - side], uu = beyond.cell[2 * e + side];
+            if (f === 0 || !cellOcean[uu] || hIn[oc + uu] <= 1e-6 || hIn[oc + down] <= 1e-6) { tracerFlux[e] = f * T[up]; edgeS[e] = S[up]; continue; }
+            const dUp = dcEdge[beyond.edge[2 * e + side]], dCentral = dcEdge[e];
+            tracerFlux[e] = f * limitedEdgeValue(T, up, down, uu, dUp, dCentral);
+            edgeS[e] = limitedEdgeValue(S, up, down, uu, dUp, dCentral);
+          }
+          divergence(mesh, tracerFlux, divScratch);
+          for (let i = 0; i < C; i++) dQ[oc + i] = -divScratch[i];
+          for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * edgeS[e];
+        } else {
+          for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * T[cellsOnEdge[2 * e + (flux[e] > 0 ? 0 : 1)]];
+          divergence(mesh, tracerFlux, divScratch);
+          for (let i = 0; i < C; i++) dQ[oc + i] = -divScratch[i];
+          for (let e = 0; e < E; e++) tracerFlux[e] = flux[e] * S[cellsOnEdge[2 * e + (flux[e] > 0 ? 0 : 1)]];
+        }
         divergence(mesh, tracerFlux, divScratch);
         for (let i = 0; i < C; i++) dW[oc + i] = -divScratch[i];
+        if (shearDiffusion > 0 && k < table.fixed) {
+          curl(mesh, uIn.subarray(oe, oe + E), zeta);
+          for (let e = 0; e < E; e++) {
+            const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], dc = dcEdge[e];
+            const kappa = Math.min(shearDiffusivityCap, shearDiffusion * Math.abs(0.5 * (zeta[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]])) * dc * dc);
+            const weight = edgeOcean[e] ? kappa * hEdge[oe + e] / dc : 0;
+            tracerFlux[e] = -weight * (T[b] - T[a]); edgeS[e] = -weight * (S[b] - S[a]);
+          }
+          divergence(mesh, tracerFlux, divScratch);
+          for (let i = 0; i < C; i++) dQ[oc + i] -= divScratch[i];
+          divergence(mesh, edgeS, divScratch);
+          for (let i = 0; i < C; i++) dW[oc + i] -= divScratch[i];
+        }
         if (k === 0 && mixedDiffusivity > 0) {
           maskedLaplacian(T, lapT, hIn);
           for (let i = 0; i < C; i++) dQ[i] += mixedDiffusivity * lapT[i];
@@ -2727,5 +2812,5 @@ export function createOcean(mesh, {
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
   if (hybrid) Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer });
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, upwelled, intake, retreatDepth, windDepth, avgU, tendency, tendencyLayers: hybrid ? hybridTendencyLayers : tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, daily, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, ekmanTransport, ekmanFlux, ekmanMoved, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, ...(hybrid ? { generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, hybridTendencyLayers, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, baroPrep, baroCoriolis, baroEdges, baroCells } : {}) };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, upwelled, intake, retreatDepth, windDepth, avgU, tendency, prepare, tendencyLayers: hybrid ? hybridTendencyLayers : tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, daily, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, ekmanTransport, ekmanFlux, ekmanMoved, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, ...(hybrid ? { generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, hybridTendencyLayers, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, baroPrep, baroCoriolis, baroEdges, baroCells } : {}) };
 }

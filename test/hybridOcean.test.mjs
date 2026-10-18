@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean } from '../js/ocean/layered.module.js';
+import { createOcean, beyondCells, limitedEdgeValue } from '../js/ocean/layered.module.js';
 import { HYBRID_LAYERS, H_MIN } from '../js/ocean/column.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
 import { zonalWindOnEdges, totalHeatSalt, uniformOcean } from './helpers/layered.mjs';
@@ -56,6 +56,102 @@ test('through dynamics, regrid and column physics the hybrid ocean conserves wat
   assert.equal(d.oceanDried, 0);
   assert.ok(d.oceanSpeed > 0.01 && d.oceanSpeed < 1, `speed ${d.oceanSpeed}`);
   assert.ok(d.oceanUpperDepth > 5 && d.oceanUpperDepth < 100, `mixed layer ${d.oceanUpperDepth} m`);
+});
+
+test('the beyond cell of each edge lies on the far side of its cell along the edge, joined to it by the recorded edge', () => {
+  const mesh = meshOf(8), { nEdges: E, cellsOnEdge, xCell } = mesh, { cell, edge } = beyondCells(mesh);
+  let worst = 1;
+  for (let e = 0; e < E; e++) {
+    const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+    const d = [0, 1, 2].map((c) => xCell[3 * b + c] - xCell[3 * a + c]);
+    for (const side of [0, 1]) {
+      const from = side ? b : a, j = cell[2 * e + side], ee = edge[2 * e + side];
+      assert.ok(j >= 0 && j !== a && j !== b, `edge ${e} side ${side} has a beyond cell`);
+      assert.ok((cellsOnEdge[2 * ee] === from && cellsOnEdge[2 * ee + 1] === j) || (cellsOnEdge[2 * ee + 1] === from && cellsOnEdge[2 * ee] === j), 'the beyond edge joins the cell to its beyond cell');
+      const v = [0, 1, 2].map((c) => xCell[3 * j + c] - xCell[3 * from + c]);
+      const cos = (side ? 1 : -1) * (v[0] * d[0] + v[1] * d[1] + v[2] * d[2]) / Math.hypot(...v) / Math.hypot(...d);
+      worst = Math.min(worst, cos);
+    }
+  }
+  console.log(`beyond cells at N=8: the worst alignment with the edge's line is ${worst.toFixed(3)}`);
+  assert.ok(worst > 0.5, `every beyond cell lies within 60° of the edge's line, worst cosine ${worst}`);
+});
+
+test('the limited edge value is the midpoint on a linear field, the third-order upwind value on a smooth monotone one, bounded by its cells, and the upwind value at an extremum', () => {
+  const at = (values) => limitedEdgeValue(Float64Array.from(values), 1, 2, 0, 1, 1);
+  assert.ok(Math.abs(at([-1, 0, 1]) - 0.5) < 1e-15, 'linear');
+  const smooth = [Math.exp(-0.1), 1, Math.exp(0.1)], quick = (2 * smooth[2] + 5 * smooth[1] - smooth[0]) / 6;
+  assert.ok(Math.abs(at(smooth) - quick) < 1e-15, `third-order upwind ${quick} against ${at(smooth)}`);
+  assert.equal(at([1, 0, 1]), 0, 'a minimum takes the upwind value');
+  assert.equal(at([0, 1, 0]), 1, 'a maximum takes the upwind value');
+  assert.equal(at([5, 5, 5]), 5, 'uniform');
+  for (const [uu, u, d] of [[0, 1, 10], [0, 9, 10], [-50, 1, 2], [3, 1, 2], [1, 1, 2]]) {
+    const v = at([uu, u, d]);
+    assert.ok(v >= Math.min(u, d) - 1e-15 && v <= Math.max(u, d) + 1e-15, `${[uu, u, d]} gives ${v} within its cells`);
+  }
+  assert.ok(Math.abs(limitedEdgeValue(Float64Array.from([-2, 0, 1]), 1, 2, 0, 2, 1) - 0.5) < 1e-15, 'a linear field over a doubled upwind spacing is still the midpoint');
+});
+
+test('on a smooth field under solid-body rotation the third-order tracer tendency is far closer to the exact one than upwind, and conserves heat', () => {
+  const run = (tracerAdvection) => {
+    const { mesh, C, E, ocean } = hybridOcean(8, { tracerAdvection });
+    const { xCell, xEdge, nEdge, areaCell, radius } = mesh, omega = 1e-7, h = ocean.h, L = ocean.layers;
+    for (let e = 0; e < E; e++) {
+      const r = Math.hypot(xEdge[3 * e], xEdge[3 * e + 1], xEdge[3 * e + 2]), y = xEdge[3 * e + 1] / r, z = xEdge[3 * e + 2] / r;
+      const ue = omega * radius * (-z * nEdge[3 * e + 1] + y * nEdge[3 * e + 2]);
+      for (let k = 0; k < L; k++) ocean.u[k * E + e] = ue;
+    }
+    const field = (i) => { const r = Math.hypot(xCell[3 * i], xCell[3 * i + 1], xCell[3 * i + 2]); return 290 + 5 * (xCell[3 * i + 2] / r) ** 2; };
+    for (let i = 0; i < C; i++) for (let k = 0; k < L; k++) ocean.Q[k * C + i] = h[k * C + i] * field(i);
+    ocean.prepare(ocean.state);
+    const [dh, , dQ] = ocean.stages[0];
+    ocean.tendencyLayers(ocean.state, ocean.stages[0], 0, 1, 'tracers');
+    let err = 0, ref = 0, net = 0, gross = 0;
+    for (let i = 0; i < C; i++) {
+      const r = Math.hypot(xCell[3 * i], xCell[3 * i + 1], xCell[3 * i + 2]), y = xCell[3 * i + 1] / r, z = xCell[3 * i + 2] / r;
+      const exact = -h[i] * 10 * omega * y * z, got = dQ[i] - field(i) * dh[i];
+      err += areaCell[i] * (got - exact) ** 2; ref += areaCell[i] * exact ** 2; net += areaCell[i] * dQ[i]; gross += areaCell[i] * Math.abs(dQ[i]);
+    }
+    return { error: Math.sqrt(err / ref), net: Math.abs(net) / gross };
+  };
+  const upwind = run('upwind'), third = run('third');
+  console.log(`tracer tendency on a smooth field at N=8: rms error ${(100 * third.error).toFixed(1)} % third-order against ${(100 * upwind.error).toFixed(1)} % upwind; net heat tendency ${third.net.toExponential(1)} of the gross`);
+  assert.ok(third.net < 1e-12 && upwind.net < 1e-12, 'the tendency moves heat without making it');
+  assert.ok(third.error < 0.5 * upwind.error, `the third-order error ${third.error} is well under the upwind error ${upwind.error}`);
+  assert.ok(third.error < 0.25, 'and small in itself');
+});
+
+test('the shear-scaled diffusivity moves heat down the gradient in the fixed-depth layers only, under the cap, and makes none', () => {
+  const run = (shearDiffusivity) => {
+    const { mesh, C, E, ocean } = hybridOcean(8, { shearDiffusivity });
+    const { xCell, xEdge, nEdge, areaCell, radius, cellsOnCell, nEdgesOnCell, maxEdges } = mesh, omega = 1e-7, h = ocean.h, L = ocean.layers;
+    for (let e = 0; e < E; e++) {
+      const r = Math.hypot(xEdge[3 * e], xEdge[3 * e + 1], xEdge[3 * e + 2]), y = xEdge[3 * e + 1] / r, z = xEdge[3 * e + 2] / r;
+      for (let k = 0; k < L; k++) ocean.u[k * E + e] = omega * radius * (-z * nEdge[3 * e + 1] + y * nEdge[3 * e + 2]);
+    }
+    const field = (i) => { const r = Math.hypot(xCell[3 * i], xCell[3 * i + 1], xCell[3 * i + 2]); return 290 + 5 * (xCell[3 * i + 2] / r) ** 2; };
+    for (let i = 0; i < C; i++) for (let k = 0; k < L; k++) ocean.Q[k * C + i] = h[k * C + i] * field(i);
+    ocean.prepare(ocean.state);
+    ocean.tendencyLayers(ocean.state, ocean.stages[0], 0, L, 'tracers');
+    const dQ = Float64Array.from(ocean.stages[0][2]);
+    return { dQ, C, L, areaCell, field, cellsOnCell, nEdgesOnCell, maxEdges, fixed: ocean.table.fixed, h };
+  };
+  const off = run(0), on = run(0.2), { C, L, areaCell, field, cellsOnCell, nEdgesOnCell, maxEdges, fixed } = on;
+  let net = 0, gross = 0, agree = 0, counted = 0, deepChanged = 0;
+  for (let i = 0; i < C; i++) {
+    const d = on.dQ[i] - off.dQ[i];
+    net += areaCell[i] * d; gross += areaCell[i] * Math.abs(d);
+    let nbr = 0; for (let m = 0; m < nEdgesOnCell[i]; m++) nbr += field(cellsOnCell[maxEdges * i + m]); nbr = nbr / nEdgesOnCell[i] - field(i);
+    if (Math.abs(nbr) > 1e-3) { counted++; if (Math.sign(d) === Math.sign(nbr)) agree++; }
+    for (let k = fixed; k < L; k++) if (on.dQ[k * C + i] !== off.dQ[k * C + i]) deepChanged++;
+  }
+  const maxRate = Math.max(...Array.from({ length: C }, (_, i) => Math.abs(on.dQ[i] - off.dQ[i]) / on.h[i]));
+  console.log(`shear diffusivity at N=8: down-gradient on ${agree} of ${counted} cells, net ${(net / gross).toExponential(1)} of the gross, the largest surface rate ${(maxRate * 86400).toExponential(2)} K/day, no change in ${L - fixed} deep layers`);
+  assert.ok(Math.abs(net) < 1e-12 * gross, 'conserves heat');
+  assert.ok(agree > 0.95 * counted, 'down the gradient');
+  assert.equal(deepChanged, 0, 'the layers below the fixed-depth ones are untouched');
+  assert.ok(gross > 0, 'it acts');
+  assert.ok(maxRate * 86400 < 0.2, `under the cap the surface warms or cools by less than 0.2 K/day on a 5 K field at N=8, not ${maxRate * 86400}`);
 });
 
 test('tropical easterlies drive equatorial upwelling and a poleward surface drift, and the mixed layer deepens under the stronger wind', () => {

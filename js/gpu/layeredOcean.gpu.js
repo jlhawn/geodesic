@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
-import { LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares, FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, mixingOptionCheck, closeDay, DAILY } from '../ocean/layered.module.js';
+import { beyondCells, SHEAR_DIFFUSIVITY, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares, FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, mixingOptionCheck, closeDay, DAILY } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -636,7 +636,7 @@ ${blWork}      if (phase == 0 || phase == 5) { if (excess <= 0.0) { break; } fb 
 }
 
 function oceanKernels(o) {
-  const { L, C, E, V, OS, OD, B } = o, hy = !!o.hybrid;
+  const { L, C, E, V, OS, OD, B } = o, hy = !!o.hybrid, third = hy && (o.tracerAdvection ?? 'third') === 'third', shear = hy && (o.shearDiffusivity ?? SHEAR_DIFFUSIVITY) > 0;
   if (L > 64) throw new Error(`oMomentum marks an edge's thick classes in 64 bits, and the ocean has ${L} classes`);
   const constLine = (name, value) => `const ${name}: f32 = ${Number(value).toExponential(10)};`;
   const jerlov = JERLOV[o.penetration ?? 'IB'];
@@ -808,7 +808,14 @@ fn hOff(k: i32) -> i32 { return OH + k * C; }
 fn uOff(k: i32) -> i32 { return OU + k * E; }
 fn qOff(k: i32) -> i32 { return OQ + k * C; }
 fn wOff(k: i32) -> i32 { return OW + k * C; }
-fn iceVolume(i: i32) -> f32 {
+${shear ? `${constLine('SHEARDIFF', o.shearDiffusivity ?? SHEAR_DIFFUSIVITY)} ${constLine('SHEARCAP', o.shearDiffusivityCap ?? 4000)} const FIXEDL: i32 = ${o.table.fixed};
+` : ''}${third ? `fn limitedValue(u: f32, d: f32, uu: f32, ratio: f32) -> f32 {
+  let central = d - u;
+  if (central == 0.0) { return u; }
+  let r = (u - uu) * ratio / central;
+  return u + 0.5 * max(0.0, min(min(2.0 * r, (2.0 + r) / 3.0), 2.0)) * central;
+}
+` : ''}fn iceVolume(i: i32) -> f32 {
   let h = OD[O_SURFICE + i]; let a = OD[O_SURFCONC + i];
   return select(0.0, h * select(1.0, a, a > 0.0), h > 0.0);
 }
@@ -975,17 +982,33 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
     let hv = IN[hOff(k) + i]; let Ti = select(LABEL_T[k] - TREF, IN[qOff(k) + i] / hv, hv > 1e-6); let Si = select(LABEL_S[k] - SREF, IN[wOff(k) + i] / hv, hv > 1e-6);
     let r = select(RHOA[k], eosAnomaly(IN[qOff(k) + i] / hv + TREF, IN[wOff(k) + i] / hv + SREF), hv > 1e-6);
     let n = k * C + i; OD[O_PR + 2 * n] = weighted; OD[O_PR + 2 * n + 1] = r; weighted += r * hv;
-    var divH = 0.0; var divQ = 0.0; var divW = 0.0; var lapQ = 0.0; var lapW = 0.0;
+    var divH = 0.0; var divQ = 0.0; var divW = 0.0; var lapQ = 0.0; var lapW = 0.0; var difQ = 0.0; var difW = 0.0;
     for (var m = 0; m < MAXE; m++) {
       let e = edges[m]; let j = nbrs[m];
       let f = f32(MI[ESC + MAXE * i + m]) * OD[O_FLUX + k * E + e] * MF[F_DV + e];
       divH += f;
       let hvj = IN[hOff(k) + j]; let Tj = select(LABEL_T[k] - TREF, IN[qOff(k) + j] / hvj, hvj > 1e-6); let Sj = select(LABEL_S[k] - SREF, IN[wOff(k) + j] / hvj, hvj > 1e-6);
-      divQ += f * select(Tj, Ti, f > 0.0); divW += f * select(Sj, Si, f > 0.0);
+      ${shear ? `if (k < FIXEDL && OD[O_EMASK + e] > 0.5) {
+        let v1 = MI[VOE + 2 * e]; let v2 = MI[VOE + 2 * e + 1];
+        let zeta = 0.5 * ((OD[O_AVORT + k * V + v1] - MF[F_FV + v1]) + (OD[O_AVORT + k * V + v2] - MF[F_FV + v2]));
+        let dc = MF[F_DC + e]; let kappa = min(SHEARCAP, SHEARDIFF * abs(zeta) * dc * dc);
+        let wd = kappa * OD[O_HEDGE + k * E + e] / dc * MF[F_DV + e];
+        difQ += wd * (Tj - Ti); difW += wd * (Sj - Si);
+      }` : ''}
+      var Te = select(Tj, Ti, f > 0.0); var Se = select(Sj, Si, f > 0.0);
+      ${third ? `if (f != 0.0) {
+        let side = select(1, 0, OD[O_FLUX + k * E + e] > 0.0); let uu = i32(OD[O_BEY + 2 * e + side]); let huu = IN[hOff(k) + uu];
+        if (OD[O_CMASK + uu] > 0.5 && huu > 1e-6 && select(hv, hvj, f > 0.0) > 1e-6) {
+          let ratio = MF[F_DC + e] / MF[F_DC + i32(OD[O_BED + 2 * e + side])];
+          Te = limitedValue(Te, select(Ti, Tj, f > 0.0), IN[qOff(k) + uu] / huu, ratio); Se = limitedValue(Se, select(Si, Sj, f > 0.0), IN[wOff(k) + uu] / huu, ratio);
+        }
+      }` : ''}
+      divQ += f * Te; divW += f * Se;
       if (k == 0 && OD[O_EMASK + e] > 0.5) { let wd = select(1.0, 2.0 * hv * hvj / max(hv + hvj, 1e-6), MIXDIFF > 0.0); lapQ += wd * MF[F_DV + e] * (Tj - Ti) / MF[F_DC + e]; lapW += wd * MF[F_DV + e] * (Sj - Si) / MF[F_DC + e]; }
     }
     let area = MF[F_AREA + i];
     var dh = -divH / area; var dQ = -divQ / area; var dW = -divW / area;
+    ${shear ? 'dQ += difQ / area; dW += difW / area;' : ''}
     if (k == 0) { let coefficient = select(DIFFUSION, MIXDIFF, MIXDIFF > 0.0); if (coefficient > 0.0) { dQ += coefficient * lapQ / area; dW += coefficient * lapW / area; } }
     if (OD[O_CMASK + i] < 0.5) { dh = 0.0; dQ = 0.0; dW = 0.0; }
     OUT[hOff(k) + i] = dh; OUT[qOff(k) + i] = dQ; OUT[wOff(k) + i] = dW;
@@ -1862,6 +1885,8 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     if (!GENERATORS.includes(o.generator)) throw new Error(`the generator is one of ${GENERATORS.join(', ')}, not ${o.generator}`);
   }
   const table = hybrid ? o.layerTable ?? HYBRID_LAYERS : null;
+  const third = hybrid && (o.tracerAdvection ?? 'third') === 'third';
+  if (!hybrid && o.tracerAdvection && o.tracerAdvection !== 'upwind') throw new Error("tracerAdvection 'third' belongs to the hybrid ocean");
   if (o.closureTokens !== 'interior' && o.closureTokens !== 'beside') throw new Error(`closureTokens is 'interior' or 'beside', not ${o.closureTokens}`);
   if (o.penetration !== null && !JERLOV[o.penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${o.penetration}`);
   if (o.shearEntrainment > 0 && !o.carryMomentum) throw new Error('shearEntrainment needs carryMomentum: without the entrained water\'s momentum mixed in, the base\'s Richardson number never rises and the mixed layer swallows a class a step');
@@ -1937,6 +1962,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ...(o.retreatDaily ? [['SUNSTEP', C], ['SUNSUM', C], ['DARKSUM', C], ['SUNDAY', C], ['DARKDAY', C]] : []),
     ...(o.ekmanBlock ? [['UEK', E]] : []),
     ...(hybrid ? [['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C]] : []),
+    ...(third ? [['BEY', 2 * E], ['BED', 2 * E]] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
   // array, so their offsets must continue on from OD's own sections rather
@@ -2474,6 +2500,7 @@ ${hybrid ? `  OUT[${OF.H1} + i] = OD[O_MIXED + i];
     device.queue.writeBuffer(ob.OD, 4 * OD.CMASK, Float32Array.from(cellOcean));
     device.queue.writeBuffer(ob.OD, 4 * OD.BATH, Float32Array.from(D));
     device.queue.writeBuffer(ob.OD, 4 * OD.FEDGE, Float32Array.from(mesh.fEdge));
+    if (third) { const beyond = beyondCells(mesh); device.queue.writeBuffer(ob.OD, 4 * OD.BEY, Float32Array.from(beyond.cell)); device.queue.writeBuffer(ob.OD, 4 * OD.BED, Float32Array.from(beyond.edge)); }
     device.queue.writeBuffer(ob.OD, 4 * OD.EDDYK, Float32Array.from(eddyKappa));
     device.queue.writeBuffer(ob.OD, 4 * OD.TEDGE, Float32Array.from(mesh.tEdge));
     if (hybrid) device.queue.writeBuffer(ob.OD, 4 * OD.FCELL, Float32Array.from(mesh.fCell));
