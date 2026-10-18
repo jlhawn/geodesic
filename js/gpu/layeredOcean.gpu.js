@@ -90,94 +90,41 @@ const solveInline = ({ h, kappa, n, dt, q1, d1, q2 = null, d2 = null, gain = 'SG
       var n1 = ${d1}[${n} - 1];${q2 ? ` var n2 = ${d2}[${n} - 1];` : ''}
       for (var j = 0; j < ${n} - 1; j++) { let k = ${n} - 2 - j; n1 = ${d1}[k] - ${gain}[k] * n1; ${d1}[k] = n1;${q2 ? ` n2 = ${d2}[k] - ${gain}[k] * n2; ${d2}[k] = n2;` : ''} }
 ${body}    }`;
-// The limited reconstruction of RQ on the RH layers, RZO their interfaces: order 2 the monotonized central slope, order 3 the parabolas with the interface values from the quartic through the running integrals.
-const reconstructInline = (order) => (order === 2 ? `  for (var k = 0; k < L; k++) {
-    var s = 0.0;
-    if (k > 0 && k < L - 1) {
-      let below = RQ[min(k + 1, L - 1)] - RQ[k]; let above = RQ[k] - RQ[max(k - 1, 0)];
-      if (below * above > 0.0) {
-        let central = RH[k] * (RQ[min(k + 1, L - 1)] - RQ[max(k - 1, 0)]) / max(0.5 * (RH[max(k - 1, 0)] + 2.0 * RH[k] + RH[min(k + 1, L - 1)]), DZFLOOR);
-        s = sign(central) * min(abs(central), min(2.0 * abs(below), 2.0 * abs(above)));
+/*
+ * The regrid kernels sweep a column once, old layer by old layer, with
+ * the layers an interface value needs held in scalars (the four around it
+ * for the quartic, the three around a layer for the linear slope) and the
+ * new layer being filled in one accumulator, so they keep no private
+ * array. A sweep reads old layer j + 3 (j + 2 on an edge) after finishing
+ * old layer j, so a new layer up to that index is written in place and a
+ * later one into OUT, free after the dynamics, and copied back at the end.
+ */
+const ppmEdgeInline = ({ k, hm1, h0, h1, h2, tracers }) => `    ${tracers.map(({ q0, out }) => `${out} = ${q0};`).join(' ')}
+    if (${k} < L) {
+      if (${k} >= 2 && ${k} <= L - 2 && ${hm1} > HNEGLECT && ${h0} > HNEGLECT && ${h1} > HNEGLECT && ${h2} > HNEGLECT) {
+        let x0 = -(${hm1} + ${h0}); let x1 = -${h0}; let x3 = ${h1}; let x4 = ${h1} + ${h2};
+        let c1 = -(x0 * x3 * x4) / ((x1 - x0) * x1 * (x1 - x3) * (x1 - x4));
+        let c2 = -(1.0 / x0 + 1.0 / x1 + 1.0 / x3 + 1.0 / x4);
+        let c3 = -(x0 * x1 * x4) / ((x3 - x0) * (x3 - x1) * x3 * (x3 - x4));
+        let c4 = -(x0 * x1 * x3) / ((x4 - x0) * (x4 - x1) * (x4 - x3) * x4);
+${tracers.map(({ qm1, q0, q1, q2, out }) => `        { let p1 = ${hm1} * ${qm1}; let p2 = p1 + ${h0} * ${q0}; let p3 = p2 + ${h1} * ${q1}; let p4 = p3 + ${h2} * ${q2}; ${out} = c1 * p1 + c2 * p2 + c3 * p3 + c4 * p4; }`).join('\n')}
+      } else {
+        let d = max(${h0} + ${h1}, HNEGLECT);
+        ${tracers.map(({ q0, q1, out }) => `${out} = (${h1} * ${q0} + ${h0} * ${q1}) / d;`).join(' ')}
       }
+      ${tracers.map(({ q0, q1, out }) => `${out} = clamp(${out}, min(${q0}, ${q1}), max(${q0}, ${q1}));`).join(' ')}
     }
-    RL[k] = RQ[k] - 0.5 * s; RS[k] = s; RC[k] = 0.0;
-  }
-` : `  RE[0] = RQ[0]; RE[L] = RQ[L - 1];
-  for (var k = 1; k < L; k++) {
-    let a = k - 1; let low = min(RQ[a], RQ[k]); let high = max(RQ[a], RQ[k]);
-    var value = 0.0;
-    let wide = k >= 2 && k <= L - 2 && RH[max(k - 2, 0)] > HNEGLECT && RH[a] > HNEGLECT && RH[k] > HNEGLECT && RH[min(k + 1, L - 1)] > HNEGLECT;
-    if (wide) {
-      RK[0] = RZO[k - 2] - RZO[k]; RK[1] = RZO[k - 1] - RZO[k]; RK[2] = 0.0; RK[3] = RZO[k + 1] - RZO[k]; RK[4] = RZO[k + 2] - RZO[k];
-      RP[0] = 0.0; RP[1] = RH[k - 2] * RQ[k - 2]; RP[2] = RP[1] + RH[k - 1] * RQ[k - 1]; RP[3] = RP[2] + RH[k] * RQ[k]; RP[4] = RP[3] + RH[k + 1] * RQ[k + 1];
-      var sum = 0.0;
-      for (var p = 0; p < 5; p++) {
-        if (p == 2) {
-          var s = 0.0;
-          for (var j = 0; j < 5; j++) { if (j != 2) { s += 1.0 / (RK[2] - RK[j]); } }
-          sum += RP[2] * s;
-        } else {
-          var numerator = 1.0; var denominator = 1.0;
-          for (var j = 0; j < 5; j++) {
-            if (j == p) { continue; }
-            denominator *= RK[p] - RK[j];
-            if (j != 2) { numerator *= RK[2] - RK[j]; }
-          }
-          sum += RP[p] * numerator / denominator;
-        }
-      }
-      value = sum;
-    } else {
-      value = (RH[k] * RQ[a] + RH[a] * RQ[k]) / max(RH[a] + RH[k], HNEGLECT);
-    }
-    RE[k] = clamp(value, low, high);
-  }
-  for (var k = 0; k < L; k++) {
-    var qL = RE[k]; var qR = RE[k + 1]; let mean = RQ[k];
-    if ((qR - mean) * (mean - qL) <= 0.0) { qL = mean; qR = mean; } else {
-      let d = qR - qL; let excess = d * (mean - 0.5 * (qL + qR));
-      if (excess > d * d / 6.0) { qL = 3.0 * mean - 2.0 * qR; } else if (excess < -d * d / 6.0) { qR = 3.0 * mean - 2.0 * qL; }
-    }
-    RL[k] = qL; RS[k] = qR - qL; RC[k] = 6.0 * (mean - 0.5 * (qL + qR));
-  }
-`);
-const interfacesInline = (h, z) => `  ${z}[0] = 0.0;
-  for (var k = 0; k < L; k++) { ${z}[k + 1] = ${z}[k] + ${h}[k]; }
 `;
-// remapColumn: RQ on the RH layers, RO their amounts, integrated over the RHN layers into RA, old layer by old layer.
-const remapInline = (order) => `${interfacesInline('RH', 'RZO')}  let H = RZO[L];
-${interfacesInline('RHN', 'RZN')}  RZN[L] = H;
-${reconstructInline(order)}  for (var i = 0; i < L; i++) { RA[i] = 0.0; }
-  var inew = 0;
-  for (var j = 0; j < L; j++) {
-    let hj = RH[j];
-    if (!(hj > 0.0)) { continue; }
-    let zLo = RZO[j]; let zHi = RZO[j + 1];
-    while (inew < L - 1 && RZN[inew + 1] <= zLo) { inew++; }
-    var given = 0.0; var last = inew;
-    for (var ii = inew; ii < L; ii++) {
-      let lo = max(zLo, RZN[ii]); let hi = min(zHi, RZN[ii + 1]);
-      if (hi > lo) {
-        let a = clamp((lo - zLo) / hj, 0.0, 1.0); let b = clamp((hi - zLo) / hj, 0.0, 1.0);
-        let d1 = b - a; let d2 = 0.5 * (b * b - a * a); let d3 = (b * b * b - a * a * a) / 3.0;
-        let p = hj * (RL[j] * d1 + RS[j] * d2 + RC[j] * (d2 - d3));
-        RA[ii] += p; given += p; last = ii;
-      }
-      if (RZN[ii + 1] >= zHi) { break; }
+const ppmLimitInline = ({ left, right, mean, out }) => `    l${out} = ${left}; r${out} = ${right};
+    if ((r${out} - ${mean}) * (${mean} - l${out}) <= 0.0) { l${out} = ${mean}; r${out} = ${mean}; } else {
+      let d = r${out} - l${out}; let excess = d * (${mean} - 0.5 * (l${out} + r${out}));
+      if (excess > d * d / 6.0) { l${out} = 3.0 * ${mean} - 2.0 * r${out}; } else if (excess < -d * d / 6.0) { r${out} = 3.0 * ${mean} - 2.0 * l${out}; }
     }
-    RA[last] += RO[j] - given;
-  }
+    s${out} = r${out} - l${out}; c${out} = 6.0 * (${mean} - 0.5 * (l${out} + r${out}));
 `;
-const REMAP_ARRAYS = ['RH', 'RQ', 'RO', 'RHN', 'RA', 'RL', 'RS', 'RC'], REMAP_INTERFACES = ['RZO', 'RZN', 'RE'];
-// cellColumn: the cell's layers into CH, CT, CS, the tracers as the stores' anomalies.
-const loadColumnInline = `  var tLoad = LABEL_T[0] - TREF; var sLoad = LABEL_S[0] - SREF;
-  for (var k = 0; k < L; k++) {
-    let hv = IN[hOff(k) + i];
-    CH[k] = hv;
-    if (hv > 1e-9) { tLoad = IN[qOff(k) + i] / hv; sLoad = IN[wOff(k) + i] / hv; }
-    CT[k] = tLoad; CS[k] = sLoad;
-  }
-`;
+const limiterVars = (out) => `var l${out} = 0.0; var r${out} = 0.0; var s${out} = 0.0; var c${out} = 0.0;`;
+const pendingBit = `if (cur < 32) { pendLo |= 1u << u32(cur); } else { pendHi |= 1u << u32(cur - 32); }`;
+const pendingTest = `let pending = select((pendHi >> u32(max(k - 32, 0))) & 1u, (pendLo >> u32(min(k, 31))) & 1u, k < 32);`;
 // The solved tracer's implicit fluxes through the interfaces, taken from one store and given to the next, so the column's amount is kept.
 const fluxInline = ({ h, kappa, q, amount, dt }) => `  for (var k = 0; k < L - 1; k++) {
     let moved = ${dt} * ${kappa}[k] * (${q}[k] - ${q}[k + 1]) / max(0.5 * (${h}[k] + ${h}[k + 1]), DZFLOOR);
@@ -342,71 +289,164 @@ function hybridKernels(o, K, idx) {
     /*
      * regridTargets: the column's target interfaces from its generator
      * (targetInterfaces in ocean/column.module.js) into TARGET; P[0] is
-     * the regrid's relax.
+     * the regrid's relax. The sorted density's reconstruction is produced
+     * layer by layer as the boundaries' crossing search descends.
      */
-    oRegridTargets: `${K}  let i = ${idx}; if (i >= C) { return; }
+    oRegridTargets: (() => {
+      const load = (n, s) => `  { let n = ${n}; var hv = 0.0;
+    if (n < L) { hv = IN[hOff(n) + i]; if (hv > 1e-9) { tLoad = IN[qOff(n) + i] / hv; sLoad = IN[wOff(n) + i] / hv; } rMax = max(rMax, eosA(tLoad, sLoad)); }
+    h${s} = hv; r${s} = rMax; }
+`;
+      const produce = `  {
+${ppmEdgeInline({ k: 'j + 1', hm1: 'hm1', h0: 'h0', h1: 'h1', h2: 'h2', tracers: [{ qm1: 'rm1', q0: 'r0', q1: 'r1', q2: 'r2', out: 'eR1' }] })}${ppmLimitInline({ left: 'eR', right: 'eR1', mean: 'r0', out: 'R' })}    let below = select(0.0, select(clamp((h0 - MINIMUM[j]) / MODEDEPTH, 0.0, 1.0), 1.0, GEN == 0), j + 1 < L);
+    let aboveW = select(0.0, select(clamp((hm1 - MINIMUM[max(j - 1, 0)]) / MODEDEPTH, 0.0, 1.0), 1.0, GEN == 0), j > 0);
+    let keep = 1.0 - min(aboveW, below);
+    lR = r0 + keep * (lR - r0); sR *= keep; cR *= keep;
+  }
+`;
+      return `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
-  ${declareArrays(['CH', 'CT', 'CS', 'RH', 'RQ', 'RL', 'RS', 'RC', 'FL'])} ${declareArrays(['RZO', 'RZN', 'RE'], 'LP1')} ${declareArrays(['RK', 'RP'], 5)}
-${loadColumnInline}  for (var k = 0; k < L; k++) { RH[k] = CH[k]; RQ[k] = eosA(CT[k], CS[k]); }
-${interfacesInline('RH', 'RZO')}  let H = RZO[L];
-  let depth = OD[O_BATH + i];
-  RZN[0] = 0.0; RZN[L] = H;
+  var H = 0.0;
+  for (var k = 0; k < L; k++) { H += IN[hOff(k) + i]; }
+  let depth = OD[O_BATH + i]; let spacing = min(HMIN, H / f32(L));
+  OD[O_TARGET + i] = 0.0; OD[O_TARGET + L * C + i] = H;
+  var prev = 0.0;
   if (GEN == 1) {
-    for (var k = 1; k < L; k++) { RZN[k] = min(DEPTHS[k], depth) * H / depth; }
-  } else {
-    for (var k = 0; k < L; k++) {
-      let below = select(0.0, select(clamp((RH[k] - MINIMUM[k]) / MODEDEPTH, 0.0, 1.0), 1.0, GEN == 0), k + 1 < L);
-      let above = select(0.0, select(clamp((RH[max(k - 1, 0)] - MINIMUM[max(k - 1, 0)]) / MODEDEPTH, 0.0, 1.0), 1.0, GEN == 0), k > 0);
-      FL[k] = min(above, below);
-    }
-    for (var k = 1; k < L; k++) { RQ[k] = max(RQ[k - 1], RQ[k]); }
-${reconstructInline(3)}    for (var k = 0; k < L; k++) { let keep = 1.0 - FL[k]; RL[k] = RQ[k] + keep * (RL[k] - RQ[k]); RS[k] *= keep; RC[k] *= keep; }
-    var j = 0;
     for (var k = 1; k < L; k++) {
-      let bk = BOUNDARY[k - 1];
-      while (j < L && RL[min(j, L - 1)] + RS[min(j, L - 1)] < bk) { j++; }
-      if (j >= L) { RZN[k] = H; continue; }
-      if (bk <= RL[j]) { RZN[k] = RZO[j]; continue; }
-      RZN[k] = RZO[j] + RH[j] * crossing(RL[j], RS[j], RC[j], bk);
+      let fwd = max(min(DEPTHS[k], depth) * H / depth, prev + spacing);
+      OD[O_TARGET + k * C + i] = min(fwd, H - f32(L - k) * spacing); prev = fwd;
     }
-    var above = 0.0;
-    for (var k = 1; k < L; k++) {
-      let floor = select(0.0, above + MINIMUM[k - 1], GEN == 2);
-      var wanted = max(RZN[k], floor);
-      if (wanted > floor) { wanted = max(floor, RZO[k] + P[0] * (wanted - RZO[k])); }
-      RZN[k] = wanted;
-      above = wanted;
-    }
+    return;
   }
-  let spacing = min(HMIN, H / f32(L));
-  for (var k = 1; k < L; k++) { RZN[k] = max(RZN[k], RZN[k - 1] + spacing); }
-  for (var j = 0; j < L - 1; j++) { let k = L - 1 - j; RZN[k] = min(RZN[k], H - f32(L - k) * spacing); }
-  for (var k = 0; k <= L; k++) { OD[O_TARGET + k * C + i] = RZN[k]; }
-}`,
+  var tLoad = LABEL_T[0] - TREF; var sLoad = LABEL_S[0] - SREF; var rMax = -1.0e30;
+  var hm1 = 0.0; var rm1 = 0.0; var h0 = 0.0; var r0 = 0.0; var h1 = 0.0; var r1 = 0.0; var h2 = 0.0; var r2 = 0.0;
+${load('0', '0')}${load('1', '1')}${load('2', '2')}  var j = 0; var zj = 0.0; var eR = r0; var eR1 = 0.0; ${limiterVars('R')}
+${produce}  var above = 0.0; var zk = 0.0;
+  for (var k = 1; k < L; k++) {
+    zk += IN[hOff(k - 1) + i];
+    let bk = BOUNDARY[k - 1];
+    while (j < L && lR + sR < bk) {
+      j++;
+      if (j < L) {
+        zj += h0; eR = eR1;
+        hm1 = h0; rm1 = r0; h0 = h1; r0 = r1; h1 = h2; r1 = r2;
+${load('j + 2', '2')}${produce}      }
+    }
+    var d = H;
+    if (j < L) { if (bk <= lR) { d = zj; } else { d = zj + h0 * crossing(lR, sR, cR, bk); } }
+    let floor = select(0.0, above + MINIMUM[k - 1], GEN == 2);
+    var wanted = max(d, floor);
+    if (wanted > floor) { wanted = max(floor, zk + P[0] * (wanted - zk)); }
+    above = wanted;
+    let fwd = max(wanted, prev + spacing);
+    OD[O_TARGET + k * C + i] = min(fwd, H - f32(L - k) * spacing); prev = fwd;
+  }
+}`;
+    })(),
     // regridEdges: each edge's velocity remapped piecewise-linearly onto the mean of its cells' new thicknesses.
-    oRegridEdges: `${K}  let e = ${idx}; if (e >= E) { return; }
+    oRegridEdges: (() => {
+      const load = (n, s) => `  { let n = ${n}; var hv = 0.0; var uv = 0.0; if (n < L) { hv = 0.5 * (IN[hOff(n) + a] + IN[hOff(n) + b]); uv = IN[uOff(n) + e]; } h${s} = hv; u${s} = uv; }
+`;
+      const flush = (safe) => `      { let value = select(IN[uOff(cur) + e], acc / hn, hn > 0.0);
+        if (${safe}) { IN[uOff(cur) + e] = value; } else { OUT[uOff(cur) + e] = value; ${pendingBit} }
+        cur++; znLo = znHi; taL = taH; tbL = tbH; let kn = min(cur + 1, L); taH = OD[O_TARGET + kn * C + a]; tbH = OD[O_TARGET + kn * C + b];
+        hn = 0.5 * (taH - taL + tbH - tbL); znHi = znLo + hn; acc = 0.0; }
+`;
+      return `${K}  let e = ${idx}; if (e >= E) { return; }
   if (OD[O_EMASK + e] < 0.5) { return; }
-  ${declareArrays(REMAP_ARRAYS)} ${declareArrays(REMAP_INTERFACES, 'LP1')}
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
-  for (var k = 0; k < L; k++) {
-    RH[k] = 0.5 * (IN[hOff(k) + a] + IN[hOff(k) + b]);
-    RHN[k] = 0.5 * (OD[O_TARGET + (k + 1) * C + a] - OD[O_TARGET + k * C + a] + OD[O_TARGET + (k + 1) * C + b] - OD[O_TARGET + k * C + b]);
-    RQ[k] = IN[uOff(k) + e]; RO[k] = RH[k] * RQ[k];
+  var hm1 = 0.0; var um1 = 0.0; var h0 = 0.0; var u0 = 0.0; var h1 = 0.0; var u1 = 0.0;
+${load('0', '0')}${load('1', '1')}  var z = 0.0; var cur = 0; var znLo = 0.0;
+  var taL = 0.0; var tbL = 0.0; var taH = OD[O_TARGET + C + a]; var tbH = OD[O_TARGET + C + b];
+  var hn = 0.5 * (taH - taL + tbH - tbL); var znHi = hn;
+  var acc = 0.0; var pendLo = 0u; var pendHi = 0u;
+  for (var j = 0; j < L; j++) {
+    var s = 0.0;
+    if (j > 0 && j < L - 1) {
+      let below = u1 - u0; let above = u0 - um1;
+      if (below * above > 0.0) {
+        let central = h0 * (u1 - um1) / max(0.5 * (hm1 + 2.0 * h0 + h1), DZFLOOR);
+        s = sign(central) * min(abs(central), min(2.0 * abs(below), 2.0 * abs(above)));
+      }
+    }
+    let lU = u0 - 0.5 * s;
+    let zLo = z; let zHi = z + h0;
+    if (h0 > 0.0) {
+      while (cur < L - 1 && znHi <= zLo) {
+${flush('cur <= j + 1')}      }
+      var given = 0.0;
+      loop {
+        let lo = max(zLo, znLo); let hi = min(zHi, znHi);
+        if (hi > lo) {
+          let pa = clamp((lo - zLo) / h0, 0.0, 1.0); let pb = clamp((hi - zLo) / h0, 0.0, 1.0);
+          let p = h0 * (lU * (pb - pa) + s * 0.5 * (pb * pb - pa * pa));
+          acc += p; given += p;
+        }
+        if (znHi >= zHi || cur >= L - 1) { break; }
+${flush('cur <= j + 1')}      }
+      acc += h0 * u0 - given;
+    }
+    z = zHi; hm1 = h0; um1 = u0; h0 = h1; u0 = u1;
+${load('j + 2', '1')}  }
+  while (cur < L) {
+${flush('true')}  }
+  if ((pendLo | pendHi) != 0u) {
+    for (var k = 0; k < L; k++) { ${pendingTest} if (pending != 0u) { IN[uOff(k) + e] = OUT[uOff(k) + e]; } }
   }
-${remapInline(2)}  for (var k = 0; k < L; k++) { IN[uOff(k) + e] = select(RQ[k], RA[k] / RHN[k], RHN[k] > 0.0); }
-}`,
-    // regridCells: heat and salt remapped by the parabolas onto the targets, which set the thicknesses.
-    oRegridCells: `${K}  let i = ${idx}; if (i >= C) { return; }
+}`;
+    })(),
+    // regridCells: heat and salt remapped by the parabolas onto the targets, which set the thicknesses; the interface geometry is shared between the two tracers.
+    oRegridCells: (() => {
+      const load = (n, s) => `  { let n = ${n}; var hv = 0.0; var qv = 0.0; var wv = 0.0;
+    if (n < L) { hv = IN[hOff(n) + i]; qv = IN[qOff(n) + i]; wv = IN[wOff(n) + i]; if (hv > 1e-9) { tLoad = qv / hv; sLoad = wv / hv; } }
+    h${s} = hv; q${s} = qv; w${s} = wv; t${s} = tLoad; s${s} = sLoad; }
+`;
+      const flush = (safe) => `      { let hn = znHi - znLo;
+        if (${safe}) { IN[hOff(cur) + i] = hn; IN[qOff(cur) + i] = accT; IN[wOff(cur) + i] = accS; }
+        else { OUT[hOff(cur) + i] = hn; OUT[qOff(cur) + i] = accT; OUT[wOff(cur) + i] = accS; ${pendingBit} }
+        cur++; znLo = znHi; znHi = OD[O_TARGET + min(cur + 1, L) * C + i]; accT = 0.0; accS = 0.0; }
+`;
+      return `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { return; }
-  ${declareArrays(['CH', 'CT', 'CS', ...REMAP_ARRAYS])} ${declareArrays(REMAP_INTERFACES, 'LP1')} ${declareArrays(['RK', 'RP'], 5)}
-${loadColumnInline}  for (var k = 0; k < L; k++) { RH[k] = CH[k]; RHN[k] = OD[O_TARGET + (k + 1) * C + i] - OD[O_TARGET + k * C + i]; RQ[k] = CT[k]; RO[k] = IN[qOff(k) + i]; }
-  {
-${remapInline(3)}  }
-  for (var k = 0; k < L; k++) { IN[qOff(k) + i] = RA[k]; RQ[k] = CS[k]; RO[k] = IN[wOff(k) + i]; }
-  {
-${remapInline(3)}  }
-  for (var k = 0; k < L; k++) { IN[wOff(k) + i] = RA[k]; IN[hOff(k) + i] = RHN[k]; }
-}`,
+  var tLoad = LABEL_T[0] - TREF; var sLoad = LABEL_S[0] - SREF;
+  var hm1 = 0.0; var tm1 = 0.0; var sm1 = 0.0;
+  var h0 = 0.0; var t0 = 0.0; var s0 = 0.0; var q0 = 0.0; var w0 = 0.0;
+  var h1 = 0.0; var t1 = 0.0; var s1 = 0.0; var q1 = 0.0; var w1 = 0.0;
+  var h2 = 0.0; var t2 = 0.0; var s2 = 0.0; var q2 = 0.0; var w2 = 0.0;
+${load('0', '0')}${load('1', '1')}${load('2', '2')}  var eT = t0; var eS = s0; var eT1 = 0.0; var eS1 = 0.0; var z = 0.0;
+  ${limiterVars('T')} ${limiterVars('S')}
+  var cur = 0; var znLo = 0.0; var znHi = OD[O_TARGET + C + i];
+  var accT = 0.0; var accS = 0.0; var pendLo = 0u; var pendHi = 0u;
+  for (var j = 0; j < L; j++) {
+${ppmEdgeInline({ k: 'j + 1', hm1: 'hm1', h0: 'h0', h1: 'h1', h2: 'h2', tracers: [{ qm1: 'tm1', q0: 't0', q1: 't1', q2: 't2', out: 'eT1' }, { qm1: 'sm1', q0: 's0', q1: 's1', q2: 's2', out: 'eS1' }] })}${ppmLimitInline({ left: 'eT', right: 'eT1', mean: 't0', out: 'T' })}${ppmLimitInline({ left: 'eS', right: 'eS1', mean: 's0', out: 'S' })}    let zLo = z; let zHi = z + h0;
+    if (h0 > 0.0) {
+      while (cur < L - 1 && znHi <= zLo) {
+${flush('cur <= j + 2')}      }
+      var givenT = 0.0; var givenS = 0.0;
+      loop {
+        let lo = max(zLo, znLo); let hi = min(zHi, znHi);
+        if (hi > lo) {
+          let pa = clamp((lo - zLo) / h0, 0.0, 1.0); let pb = clamp((hi - zLo) / h0, 0.0, 1.0);
+          let d1 = pb - pa; let d2 = 0.5 * (pb * pb - pa * pa); let d3 = (pb * pb * pb - pa * pa * pa) / 3.0;
+          let pT = h0 * (lT * d1 + sT * d2 + cT * (d2 - d3)); let pS = h0 * (lS * d1 + sS * d2 + cS * (d2 - d3));
+          accT += pT; givenT += pT; accS += pS; givenS += pS;
+        }
+        if (znHi >= zHi || cur >= L - 1) { break; }
+${flush('cur <= j + 2')}      }
+      accT += q0 - givenT; accS += w0 - givenS;
+    }
+    z = zHi; eT = eT1; eS = eS1;
+    hm1 = h0; tm1 = t0; sm1 = s0;
+    h0 = h1; t0 = t1; s0 = s1; q0 = q1; w0 = w1;
+    h1 = h2; t1 = t2; s1 = s2; q1 = q2; w1 = w2;
+${load('j + 3', '2')}  }
+  while (cur < L) {
+${flush('true')}  }
+  if ((pendLo | pendHi) != 0u) {
+    for (var k = 0; k < L; k++) { ${pendingTest} if (pending != 0u) { IN[hOff(k) + i] = OUT[hOff(k) + i]; IN[qOff(k) + i] = OUT[qOff(k) + i]; IN[wOff(k) + i] = OUT[wOff(k) + i]; } }
+  }
+}`;
+    })(),
     /*
      * columnCells: mixColumn of ocean/column.module.js on each sea column
      * with the cell's stress and the shear of its reconstructed velocities:
