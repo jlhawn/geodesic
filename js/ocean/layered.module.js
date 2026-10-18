@@ -651,7 +651,7 @@ export function beyondCells(mesh) {
  * falls back to the upwind value where `uu` is land or either cell beyond
  * the upwind one holds no water in the layer.
  */
-export const TRACER_ADVECTIONS = ['upwind', 'third'], SHEAR_DIFFUSIVITY = 0.2;
+export const TRACER_ADVECTIONS = ['upwind', 'third'], SHEAR_DIFFUSIVITY = 0.2, LATERAL_DIFFUSION_SPEED = 0.005;
 export function limitedEdgeValue(field, up, down, uu, dUp, dCentral) {
   const phiU = field[up], central = field[down] - phiU;
   if (central === 0) return phiU;
@@ -992,7 +992,7 @@ export function createOcean(mesh, {
   eddyDiffusivity = 1000, eddyTaperDepth = 200, ekmanBlock = false, upwellingSource = 0, intakeLedger = false, penetration = 'IB',
   geography = null, bathymetry = null, buffers = null, climatology = null,
   vertical = 'slab', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
-  tracerAdvection = null, shearDiffusivity = null, shearDiffusivityCap = 4000,
+  tracerAdvection = null, shearDiffusivity = null, shearDiffusivityCap = 4000, lateralDiffusionSpeed = null,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -1014,6 +1014,9 @@ export function createOcean(mesh, {
   const shearDiffusion = shearDiffusivity ?? (hybrid ? SHEAR_DIFFUSIVITY : 0);
   if (!hybrid && shearDiffusion > 0) throw new Error('shearDiffusivity belongs to the hybrid ocean');
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
+  const lateralSpeed = lateralDiffusionSpeed ?? (hybrid ? LATERAL_DIFFUSION_SPEED : 0);
+  if (!hybrid && lateralSpeed > 0) throw new Error('lateralDiffusionSpeed belongs to the hybrid ocean');
+  if (!(lateralSpeed >= 0)) throw new Error(`lateralDiffusionSpeed is a non-negative velocity scale, not ${lateralSpeed}`);
   const table = hybrid ? layerTable : null;
   const L = hybrid ? table.K : densities.length + 1, g = gravity, rho0 = density, rhoCp = density * specificHeat;
   const rho = hybrid ? Array.from(table.densities) : [rho0, ...densities];
@@ -1468,11 +1471,12 @@ export function createOcean(mesh, {
         }
         divergence(mesh, tracerFlux, divScratch);
         for (let i = 0; i < C; i++) dW[oc + i] = -divScratch[i];
-        if (shearDiffusion > 0 && k < table.fixed) {
-          curl(mesh, uIn.subarray(oe, oe + E), zeta);
+        if ((shearDiffusion > 0 && k < table.fixed) || lateralSpeed > 0) {
+          const sheared = shearDiffusion > 0 && k < table.fixed;
+          if (sheared) curl(mesh, uIn.subarray(oe, oe + E), zeta);
           for (let e = 0; e < E; e++) {
             const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], dc = dcEdge[e];
-            const kappa = Math.min(shearDiffusivityCap, shearDiffusion * Math.abs(0.5 * (zeta[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]])) * dc * dc);
+            const kappa = lateralSpeed * dc + (sheared ? Math.min(shearDiffusivityCap, shearDiffusion * Math.abs(0.5 * (zeta[verticesOnEdge[2 * e]] + zeta[verticesOnEdge[2 * e + 1]])) * dc * dc) : 0);
             const weight = edgeOcean[e] ? kappa * hEdge[oe + e] / dc : 0;
             tracerFlux[e] = -weight * (T[b] - T[a]); edgeS[e] = -weight * (S[b] - S[a]);
           }

@@ -121,9 +121,9 @@ test('on a smooth field under solid-body rotation the third-order tracer tendenc
   assert.ok(third.error < 0.25, 'and small in itself');
 });
 
-test('the shear-scaled diffusivity moves heat down the gradient in the fixed-depth layers only, under the cap, and makes none', () => {
-  const run = (shearDiffusivity) => {
-    const { mesh, C, E, ocean } = hybridOcean(8, { shearDiffusivity });
+test('the shear-scaled diffusivity moves heat down the gradient in the fixed-depth layers only, under the cap, and makes none, and the background diffusion reaches every layer', () => {
+  const run = (shearDiffusivity, lateralDiffusionSpeed = 0) => {
+    const { mesh, C, E, ocean } = hybridOcean(8, { shearDiffusivity, lateralDiffusionSpeed });
     const { xCell, xEdge, nEdge, areaCell, radius, cellsOnCell, nEdgesOnCell, maxEdges } = mesh, omega = 1e-7, h = ocean.h, L = ocean.layers;
     for (let e = 0; e < E; e++) {
       const r = Math.hypot(xEdge[3 * e], xEdge[3 * e + 1], xEdge[3 * e + 2]), y = xEdge[3 * e + 1] / r, z = xEdge[3 * e + 2] / r;
@@ -152,6 +152,14 @@ test('the shear-scaled diffusivity moves heat down the gradient in the fixed-dep
   assert.equal(deepChanged, 0, 'the layers below the fixed-depth ones are untouched');
   assert.ok(gross > 0, 'it acts');
   assert.ok(maxRate * 86400 < 0.2, `under the cap the surface warms or cools by less than 0.2 K/day on a 5 K field at N=8, not ${maxRate * 86400}`);
+  const back = run(0, 0.005);
+  let backNet = 0, backGross = 0, deepAgree = 0, deepCounted = 0;
+  for (let i = 0; i < C; i++) {
+    let nbr = 0; for (let m = 0; m < nEdgesOnCell[i]; m++) nbr += field(cellsOnCell[maxEdges * i + m]); nbr = nbr / nEdgesOnCell[i] - field(i);
+    for (let k = 0; k < L; k++) { const d = back.dQ[k * C + i] - off.dQ[k * C + i]; backNet += areaCell[i] * d; backGross += areaCell[i] * Math.abs(d); if (k >= fixed && back.h[k * C + i] > 1 && Math.abs(nbr) > 1e-3) { deepCounted++; if (Math.sign(d) === Math.sign(nbr)) deepAgree++; } }
+  }
+  console.log(`background diffusion at 5 mm/s: down-gradient on ${deepAgree} of ${deepCounted} deep cell-layers, net ${(backNet / backGross).toExponential(1)} of the gross`);
+  assert.ok(Math.abs(backNet) < 1e-12 * backGross && deepAgree > 0.95 * deepCounted && deepCounted > 0, 'the background diffusion is conservative and down-gradient in the deep layers');
 });
 
 test('tropical easterlies drive equatorial upwelling and a poleward surface drift, and the mixed layer deepens under the stronger wind', () => {
