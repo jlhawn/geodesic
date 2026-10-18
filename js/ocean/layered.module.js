@@ -651,7 +651,7 @@ export function beyondCells(mesh) {
  * falls back to the upwind value where `uu` is land or either cell beyond
  * the upwind one holds no water in the layer.
  */
-export const TRACER_ADVECTIONS = ['upwind', 'third'], SHEAR_DIFFUSIVITY = 0.2, LATERAL_DIFFUSION_SPEED = 0.005;
+export const TRACER_ADVECTIONS = ['upwind', 'third'], SHEAR_DIFFUSIVITY = 0.2, HYCOM_DIFFUSION_SPEED = 0.005;
 export function limitedEdgeValue(field, up, down, uu, dUp, dCentral) {
   const phiU = field[up], central = field[down] - phiU;
   if (central === 0) return phiU;
@@ -1015,7 +1015,7 @@ export function createOcean(mesh, {
   if (!hybrid && shearDiffusion > 0) throw new Error('shearDiffusivity belongs to the hybrid ocean');
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
   if (advection === 'third' && !(shearDiffusion > 0)) throw new Error('the limited third-order tracer flux admits grid-scale noise that the shear-scaled diffusion of the surface layers damps, so tracerAdvection third needs shearDiffusivity above zero');
-  const lateralSpeed = lateralDiffusionSpeed ?? (hybrid ? LATERAL_DIFFUSION_SPEED : 0);
+  const lateralSpeed = lateralDiffusionSpeed ?? 0;
   if (!hybrid && lateralSpeed > 0) throw new Error('lateralDiffusionSpeed belongs to the hybrid ocean');
   if (!(lateralSpeed >= 0)) throw new Error(`lateralDiffusionSpeed is a non-negative velocity scale, not ${lateralSpeed}`);
   const table = hybrid ? layerTable : null;

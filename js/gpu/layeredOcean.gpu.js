@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
-import { beyondCells, SHEAR_DIFFUSIVITY, LATERAL_DIFFUSION_SPEED, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares, FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, mixingOptionCheck, closeDay, DAILY } from '../ocean/layered.module.js';
+import { beyondCells, SHEAR_DIFFUSIVITY, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares, FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, mixingOptionCheck, closeDay, DAILY } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -636,7 +636,7 @@ ${blWork}      if (phase == 0 || phase == 5) { if (excess <= 0.0) { break; } fb 
 }
 
 function oceanKernels(o) {
-  const { L, C, E, V, OS, OD, B } = o, hy = !!o.hybrid, third = hy && (o.tracerAdvection ?? 'third') === 'third', shearOn = hy && (o.shearDiffusivity ?? SHEAR_DIFFUSIVITY) > 0, lateralOn = hy && (o.lateralDiffusionSpeed ?? LATERAL_DIFFUSION_SPEED) > 0, shear = shearOn || lateralOn;
+  const { L, C, E, V, OS, OD, B } = o, hy = !!o.hybrid, third = hy && (o.tracerAdvection ?? 'third') === 'third', shearOn = hy && (o.shearDiffusivity ?? SHEAR_DIFFUSIVITY) > 0, lateralOn = hy && (o.lateralDiffusionSpeed ?? 0) > 0, shear = shearOn || lateralOn;
   if (L > 64) throw new Error(`oMomentum marks an edge's thick classes in 64 bits, and the ocean has ${L} classes`);
   const constLine = (name, value) => `const ${name}: f32 = ${Number(value).toExponential(10)};`;
   const jerlov = JERLOV[o.penetration ?? 'IB'];
@@ -808,7 +808,7 @@ fn hOff(k: i32) -> i32 { return OH + k * C; }
 fn uOff(k: i32) -> i32 { return OU + k * E; }
 fn qOff(k: i32) -> i32 { return OQ + k * C; }
 fn wOff(k: i32) -> i32 { return OW + k * C; }
-${shear ? `${constLine('SHEARDIFF', shearOn ? o.shearDiffusivity ?? SHEAR_DIFFUSIVITY : 0)} ${constLine('SHEARCAP', o.shearDiffusivityCap ?? 4000)} ${constLine('LATSPEED', lateralOn ? o.lateralDiffusionSpeed ?? LATERAL_DIFFUSION_SPEED : 0)} const FIXEDL: i32 = ${shearOn ? o.table.fixed : 0};
+${shear ? `${constLine('SHEARDIFF', shearOn ? o.shearDiffusivity ?? SHEAR_DIFFUSIVITY : 0)} ${constLine('SHEARCAP', o.shearDiffusivityCap ?? 4000)} ${constLine('LATSPEED', lateralOn ? o.lateralDiffusionSpeed : 0)} const FIXEDL: i32 = ${shearOn ? o.table.fixed : 0};
 ` : ''}${third ? `fn limitedValue(u: f32, d: f32, uu: f32, ratio: f32) -> f32 {
   let central = d - u;
   if (central == 0.0) { return u; }
