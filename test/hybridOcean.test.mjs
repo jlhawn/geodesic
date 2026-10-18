@@ -43,6 +43,19 @@ test('the hybrid start puts every column on the depth table clipped to its floor
   assert.ok(Math.max(...ocean.eta.map(Math.abs)) < 1e-9, 'the free surface stays level');
 });
 
+test('a brackish sea keeps its fixed-depth surface layers, hands back its first layer\'s temperature, and keeps its heat once stepping', () => {
+  const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean(8, { salinityProfile: () => 12 }, () => 200, 283);
+  const atMinimum = (tolerance, when) => { for (let i = 0; i < C; i++) for (let k = 0; k < HYBRID_LAYERS.fixed; k++) assert.ok(Math.abs(ocean.h[k * C + i] - HYBRID_LAYERS.minimum[k]) < tolerance, `surface layer ${k} of column ${i} ${when}: ${ocean.h[k * C + i]} m`); };
+  atMinimum(1e-9, 'at the start');
+  for (let i = 0; i < C; i++) assert.ok(Math.abs(surfaceT[i] - ocean.Q[i] / ocean.h[i]) < 0.1, `the surface temperature handed back is within the analytic profile's first-layer mean at ${i}`);
+  ocean.advance(surfaceT, ice, flux, calm, DT);
+  const before = totalHeatSalt(ocean, mesh);
+  for (let n = 0; n < 4; n++) ocean.advance(surfaceT, ice, flux, calm, DT);
+  const after = totalHeatSalt(ocean, mesh);
+  assert.ok(Math.abs(after.heat - before.heat) < 1e-9 * Math.abs(before.heat), `heat kept: ${before.heat} → ${after.heat}`);
+  atMinimum(1e-6, 'after five steps');
+});
+
 test('through dynamics, regrid and column physics the hybrid ocean conserves water, heat and salt to rounding, with no dried layer', () => {
   const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean(8);
   const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));

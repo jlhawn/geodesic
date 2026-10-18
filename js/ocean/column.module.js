@@ -247,7 +247,8 @@ export function targetInterfaces(kind, { h, rho, K, depth, table, boundaries, hM
   for (let k = 1; k < K; k++) {
     const floor = kind === 'hybrid' ? above + table.minimum[k - 1] : 0;
     let target = Math.max(out[k], floor);
-    if (target > floor) target = Math.max(floor, current[k] + relax * (target - current[k]));
+    if (kind === 'hybrid' && k <= (table.fixed ?? 0)) target = floor;
+    else if (target > floor) target = Math.max(floor, current[k] + relax * (target - current[k]));
     out[k] = target;
     weight[k] = kind === 'hybrid' ? Math.min(1, Math.max(0, (target - floor) / modeDepth)) : 1;
     above = target;

@@ -6,6 +6,7 @@ import { createOcean as createCpuOcean } from '../js/ocean/layered.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { HEAT_REFERENCE, SALT_REFERENCE } from '../js/gpu/layeredOcean.gpu.js';
+import { HYBRID_LAYERS } from '../js/ocean/column.module.js';
 
 /*
  * The GPU hybrid ocean (vertical: 'hybrid' in js/gpu/layeredOcean.gpu.js)
@@ -203,4 +204,38 @@ test('in single precision the GPU hybrid ocean keeps the heat, salt and water it
   for (const f of ['h', 'u', 'T', 'S', 'eta']) for (const v of final[f]) assert.ok(Number.isFinite(v), `${f} finite`);
   assert.equal(final.u.length, L * E);
   gpuModel.destroy();
+});
+
+test('the GPU hybrid ocean keeps a brackish band\'s fixed-depth surface layers as the CPU does and tracks it over five steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const brackish = (lat) => (Math.abs(lat) < 0.35 ? 12 : 34.5);
+  const { mesh, cpuModel, surfaceT, ice, stress } = scenario(8), C = mesh.nCells;
+  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID, salinityProfile: brackish });
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: { ...HYBRID, salinityProfile: brackish } });
+  const gpu = gpuModel.oceanEngine;
+  const cpuT = Float64Array.from(surfaceT);
+  cpu.initialize(cpuT, ice);
+  gpu.initialize(Float64Array.from(surfaceT), ice);
+  const start = await gpu.download();
+  let band = 0;
+  for (let i = 0; i < C; i++) {
+    if (!cpu.cellOcean[i] || Math.abs(mesh.latCell[i]) >= 0.35) continue;
+    band++;
+    for (let k = 0; k < HYBRID_LAYERS.fixed; k++) {
+      assert.ok(Math.abs(cpu.h[k * C + i] - HYBRID_LAYERS.minimum[k]) < 1e-9, `CPU surface layer ${k} of brackish column ${i}: ${cpu.h[k * C + i]} m`);
+      assert.ok(Math.abs(start.h[k * C + i] - HYBRID_LAYERS.minimum[k]) < 1e-3, `GPU surface layer ${k} of brackish column ${i}: ${start.h[k * C + i]} m`);
+    }
+  }
+  assert.ok(band > 0, 'the band holds brackish columns');
+  const wet = Array.from(cpu.h, (v) => v > 1), flux = new Float64Array(C);
+  for (let n = 0; n < 5; n++) {
+    cpu.advance(cpuT, ice, flux, stress, DT);
+    await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
+  }
+  const after = await gpu.download(), fixed = HYBRID_LAYERS.fixed * C;
+  // The deep classes of a uniform column swap their water between f32 and f64, so the thicknesses are held to parity in the fixed-depth layers only.
+  compare('five steps with a brackish band', cpuFields(cpu, C), after, wet, { h: 1, u: 2e-2, T: 1e-3, S: 1e-4, eta: 1e-2 });
+  const top = stats(cpu.h.subarray(0, fixed), after.h.subarray(0, fixed));
+  assert.ok(top.rmsRel < 1e-3, `fixed-depth thicknesses rms relative diff ${top.rmsRel} (largest ${top.maxDiff} at ${top.at})`);
+  const sst = stats(cpuT, after.T.subarray(0, C), cpu.cellOcean);
+  assert.ok(sst.maxDiff < 0.2, `the surface temperature the engines hand back differs by ${sst.maxDiff} K at ${sst.at}`);
 });

@@ -140,6 +140,7 @@ function hybridHead(o) {
   const floors = Array.from(table.minimum, (m) => Math.min(PV_FLOOR, m));
   return `
 ${arr('MINIMUM', table.minimum)}
+const FIXEDTOP: i32 = ${table.fixed ?? 0};
 ${arr('TOKENEDGE', Array.from(table.minimum, (m) => 2 * Math.min(m, table.spacing ?? m)))}
 ${arr('DEPTHS', table.depths)}
 ${arr('PVFLOORK', floors)}
@@ -346,7 +347,7 @@ ${load('j + 2', '2')}${produce}      }
     if (j < L) { if (bk <= lR) { d = zj; } else { d = zj + h0 * crossing(lR, sR, cR, bk); } }
     let floor = select(0.0, above + MINIMUM[k - 1], GEN == 2);
     var wanted = max(d, floor);
-    if (wanted > floor) { wanted = max(floor, zk + P[0] * (wanted - zk)); }
+    if (GEN == 2 && k <= FIXEDTOP) { wanted = floor; } else if (wanted > floor) { wanted = max(floor, zk + P[0] * (wanted - zk)); }
     above = wanted;
     let fwd = max(wanted, prev + spacing);
     OD[O_TARGET + k * C + i] = min(fwd, H - f32(L - k) * spacing); prev = fwd;
