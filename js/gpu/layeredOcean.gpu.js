@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
-import { beyondCells, SHEAR_DIFFUSIVITY, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares, FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, mixingOptionCheck, closeDay, DAILY } from '../ocean/layered.module.js';
+import { beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, DENSITY_TOLERANCE, RESTORE_TOLERANCE, THINNED_MARGIN, CLOSURE_SPACING, CLOSURE_RIDGE, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, edgeSills, fitColumns, runoffOutlets, interiorWater, atlasColumns, abyssalCells, savedDensities, sameDensities, rebinOcean, JERLOV, PENETRATION_DEPTH, penetrationShares, FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, mixingOptionCheck, closeDay, DAILY } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -140,6 +140,8 @@ function hybridHead(o) {
   const floors = Array.from(table.minimum, (m) => Math.min(PV_FLOOR, m));
   return `
 ${arr('MINIMUM', table.minimum)}
+const FIXEDTOP: i32 = ${table.fixed ?? 0};
+${arr('TOKENEDGE', Array.from(table.minimum, (m) => 2 * Math.min(m, table.spacing ?? m)))}
 ${arr('DEPTHS', table.depths)}
 ${arr('PVFLOORK', floors)}
 ${arr('BOUNDARY', boundaries.subarray(1, L))}
@@ -225,8 +227,9 @@ function hybridKernels(o, K, idx) {
      * free-surface gradients, the pressure force at the depth the layer
      * occupies in both cells or the middle of the gap between them, the
      * stress on layer 0, the bottom drag on the part of the layer within
-     * MOMDEPTH of the edge column's floor, the ∇⁴ closure, and the pin of
-     * a layer no thicker than THINEDGE to the one above; P[2] is relax.
+     * MOMDEPTH of the edge column's floor, the ∇⁴ closure, and the pin to
+     * the layer above of a layer no thicker than THINEDGE, or no thicker
+     * than TOKENEDGE while its two cells' spans share no depth; P[2] is relax.
      */
     oMomentum: `${K}  let e = ${idx}; if (e >= E) { return; }
   if (OD[O_EMASK + e] < 0.5) { for (var k = 0; k < L; k++) { OUT[uOff(k) + e] = 0.0; } return; }
@@ -254,7 +257,7 @@ function hybridKernels(o, K, idx) {
     let overlap = min(layerTop + he, floor) - max(layerTop, floor - MOMDEPTH);
     if (overlap > 0.0) { du -= RBOT * abs(u) * u * (overlap / MOMDEPTH) / max(he, HMIN); }
     if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
-    if (k > 0 && he <= THINEDGE) { du = (uAbove - u) * P[2]; }
+    if (k > 0 && (he <= THINEDGE || (he <= TOKENEDGE[k] && !(bottom > top)))) { du = (uAbove - u) * P[2]; }
     OUT[uOff(k) + e] = du;
     uAbove = u; layerTop += he; Ha += ha; Hb += hb;
   }
@@ -267,15 +270,13 @@ function hybridKernels(o, K, idx) {
      */
     oEdgeFluxPV: `${K}  let e = ${idx}; if (e >= E) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1]; let v1 = MI[VOE + 2 * e]; let v2 = MI[VOE + 2 * e + 1];
-  let sill = max(EPSO, min(OD[O_BATH + a], OD[O_BATH + b]) + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
-  var sum = 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]);
-  for (var k = 1; k < L; k++) { sum += min(IN[hOff(k) + a], IN[hOff(k) + b]); }
-  let clipped = sum > sill; let f = sill / sum;
+  let sill = max(EPSO, OD[O_SILL + e] + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
   let wet = OD[O_EMASK + e] > 0.5;
+  var above = 0.0;
   for (var k = 0; k < L; k++) {
     let n = k * E + e; let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b];
-    var he = select(min(ha, hb), 0.5 * (ha + hb), k == 0);
-    if (clipped) { he *= f; }
+    let hk = select(min(ha, hb), 0.5 * (ha + hb), k == 0);
+    let he = min(hk, max(0.0, sill - above)); above += hk;
     OD[O_HEDGE + n] = he;
     let ue = IN[uOff(k) + e];
     OD[O_FLUX + n] = select(0.0, min(he, max(0.0, select(hb, ha, ue > 0.0))) * ue, wet);
@@ -346,7 +347,7 @@ ${load('j + 2', '2')}${produce}      }
     if (j < L) { if (bk <= lR) { d = zj; } else { d = zj + h0 * crossing(lR, sR, cR, bk); } }
     let floor = select(0.0, above + MINIMUM[k - 1], GEN == 2);
     var wanted = max(d, floor);
-    if (wanted > floor) { wanted = max(floor, zk + P[0] * (wanted - zk)); }
+    if (GEN == 2 && k <= FIXEDTOP) { wanted = floor; } else if (wanted > floor) { wanted = max(floor, zk + P[0] * (wanted - zk)); }
     above = wanted;
     let fwd = max(wanted, prev + spacing);
     OD[O_TARGET + k * C + i] = min(fwd, H - f32(L - k) * spacing); prev = fwd;
@@ -636,7 +637,7 @@ ${blWork}      if (phase == 0 || phase == 5) { if (excess <= 0.0) { break; } fb 
 }
 
 function oceanKernels(o) {
-  const { L, C, E, V, OS, OD, B } = o, hy = !!o.hybrid, third = hy && (o.tracerAdvection ?? 'third') === 'third', shearOn = hy && (o.shearDiffusivity ?? SHEAR_DIFFUSIVITY) > 0, lateralOn = hy && (o.lateralDiffusionSpeed ?? 0) > 0, shear = shearOn || lateralOn;
+  const { L, C, E, V, OS, OD, B } = o, hy = !!o.hybrid, third = hy && (o.tracerAdvection ?? 'third') === 'third', shearOn = hy && (o.shearDiffusivity ?? SHEAR_DIFFUSIVITY) > 0, lateralOn = hy && (o.lateralDiffusionSpeed ?? HYCOM_DIFFUSION_SPEED) > 0, shear = shearOn || lateralOn;
   if (L > 64) throw new Error(`oMomentum marks an edge's thick classes in 64 bits, and the ocean has ${L} classes`);
   const constLine = (name, value) => `const ${name}: f32 = ${Number(value).toExponential(10)};`;
   const jerlov = JERLOV[o.penetration ?? 'IB'];
@@ -808,7 +809,7 @@ fn hOff(k: i32) -> i32 { return OH + k * C; }
 fn uOff(k: i32) -> i32 { return OU + k * E; }
 fn qOff(k: i32) -> i32 { return OQ + k * C; }
 fn wOff(k: i32) -> i32 { return OW + k * C; }
-${shear ? `${constLine('SHEARDIFF', shearOn ? o.shearDiffusivity ?? SHEAR_DIFFUSIVITY : 0)} ${constLine('SHEARCAP', o.shearDiffusivityCap ?? 4000)} ${constLine('LATSPEED', lateralOn ? o.lateralDiffusionSpeed : 0)} const FIXEDL: i32 = ${shearOn ? o.table.fixed : 0};
+${shear ? `${constLine('SHEARDIFF', shearOn ? o.shearDiffusivity ?? SHEAR_DIFFUSIVITY : 0)} ${constLine('SHEARCAP', o.shearDiffusivityCap ?? 4000)} ${constLine('LATSPEED', lateralOn ? o.lateralDiffusionSpeed ?? HYCOM_DIFFUSION_SPEED : 0)} const FIXEDL: i32 = ${shearOn ? o.table.fixed : 0};
 ` : ''}${third ? `fn limitedValue(u: f32, d: f32, uu: f32, ratio: f32) -> f32 {
   let central = d - u;
   if (central == 0.0) { return u; }
@@ -951,10 +952,12 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   OD[O_HEDGE + e] = 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]);
   for (var k = 1; k < L; k++) { OD[O_HEDGE + k * E + e] = min(IN[hOff(k) + a], IN[hOff(k) + b]); }
-  let sill = max(EPSO, min(OD[O_BATH + a], OD[O_BATH + b]) + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
+${hy ? `  let sill = max(EPSO, OD[O_SILL + e] + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
+  var above = 0.0;
+  for (var k = 0; k < L; k++) { let hk = OD[O_HEDGE + k * E + e]; OD[O_HEDGE + k * E + e] = min(hk, max(0.0, sill - above)); above += hk; }` : `  let sill = max(EPSO, min(OD[O_BATH + a], OD[O_BATH + b]) + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
   var sum = 0.0;
   for (var k = 0; k < L; k++) { sum += OD[O_HEDGE + k * E + e]; }
-  if (sum > sill) { let f = sill / sum; for (var k = 0; k < L; k++) { OD[O_HEDGE + k * E + e] *= f; } }
+  if (sum > sill) { let f = sill / sum; for (var k = 0; k < L; k++) { OD[O_HEDGE + k * E + e] *= f; } }`}
 }`,
     oFlux: `${K}  let e = ${idx}; if (e >= E) { return; }
   let wet = OD[O_EMASK + e] > 0.5;
@@ -1261,7 +1264,7 @@ ${o.ekmanDepth > 0 ? '  let hm = OD[O_HM + e];\n' : ''}  if (OD[O_HEDGE + e] < $
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
   var overlap = 0.0;
   for (var k = 1; k < L; k++) { overlap += max(0.0, min(IN[hOff(k) + a], IN[hOff(k) + b]) - EPSO); }
-  let sill = min(OD[O_BATH + a], OD[O_BATH + b]) + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]);
+  let sill = ${hy ? 'OD[O_SILL + e]' : 'min(OD[O_BATH + a], OD[O_BATH + b])'} + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]);
   let coefficient = kappa * MF[F_DV + e] / MF[F_DC + e];
   var za = IN[hOff(0) + a]; var zb = IN[hOff(0) + b];
   var aboveA = 0.0; var aboveB = 0.0; var overlapAbove = 0.0; var upper = 0.0;
@@ -1501,7 +1504,13 @@ ${eddyShared}${K}  let e = ${idx}; if (e >= E) { return; }
 }`,
     oVelocityShiftClamp: `${K}  let e = ${idx}; if (e >= E) { return; }
   if (OD[O_EMASK + e] < 0.5) { return; }
-  for (var k = 1; k < L; k++) { if (OD[O_HEDGE + k * E + e] < ${hy ? 'THINEDGE' : 'THINO'}) { IN[uOff(k) + e] = IN[uOff(k - 1) + e]; } }
+${hy ? `  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  var Ha = IN[hOff(0) + a]; var Hb = IN[hOff(0) + b];
+  for (var k = 1; k < L; k++) {
+    let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b]; let he = OD[O_HEDGE + k * E + e];
+    if (he < THINEDGE || (he <= TOKENEDGE[k] && min(Ha + ha, Hb + hb) <= max(Ha, Hb))) { IN[uOff(k) + e] = IN[uOff(k - 1) + e]; }
+    Ha += ha; Hb += hb;
+  }` : `  for (var k = 1; k < L; k++) { if (OD[O_HEDGE + k * E + e] < THINO) { IN[uOff(k) + e] = IN[uOff(k - 1) + e]; } }`}
   var sumH = 0.0; var transport = 0.0;
   for (var k = 0; k < L; k++) { let he = OD[O_HEDGE + k * E + e]; sumH += he; transport += he * IN[uOff(k) + e]; }
   let shift = (OD[B_BAVG + C + e] - transport) / max(sumH, EPSO);
@@ -1870,10 +1879,10 @@ const hybridReducedSetup = `    let a = MF[F_AREA + i];
       for (var k = 0; k < L; k++) { clamped = clamped || abs(abs(IN[uOff(k) + e]) - SPEEDLIM) < 1e-4; }
       limited += select(0.0, 1.0, clamped);
       let ca = MI[COE + 2 * e]; let cb = MI[COE + 2 * e + 1];
-      let sill = max(EPSO, min(OD[O_BATH + ca], OD[O_BATH + cb]) + 0.5 * (OD[O_ETA + ca] + OD[O_ETA + cb]));
-      var sum = 0.5 * (IN[hOff(0) + ca] + IN[hOff(0) + cb]); var flow = sum * u0;
-      for (var k = 1; k < L; k++) { let hk = min(IN[hOff(k) + ca], IN[hOff(k) + cb]); sum += hk; flow += hk * IN[uOff(k) + e]; }
-      transport = max(transport, abs(select(1.0, sill / sum, sum > sill) * flow) * MF[F_DV + e]);
+      let sill = max(EPSO, OD[O_SILL + e] + 0.5 * (OD[O_ETA + ca] + OD[O_ETA + cb]));
+      var above = 0.0; var flow = 0.0;
+      for (var k = 0; k < L; k++) { let hk = select(min(IN[hOff(k) + ca], IN[hOff(k) + cb]), 0.5 * (IN[hOff(0) + ca] + IN[hOff(0) + cb]), k == 0); flow += min(hk, max(0.0, sill - above)) * IN[uOff(k) + e]; above += hk; }
+      transport = max(transport, abs(flow) * MF[F_DV + e]);
     }`;
 
 export function createLayeredOcean(core, { registers = null, ...options } = {}) {
@@ -1917,6 +1926,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const D = new Float64Array(C);
   const smoothed = o.bathymetry ? null : bathymetryFrom(mesh, geography, { minimumDepth: o.minimumDepth, flatDepth: o.flatDepth });
   for (let i = 0; i < C; i++) D[i] = !cellOcean[i] ? 0 : o.bathymetry ? o.bathymetry[i] : smoothed[i];
+  const sillEdge = edgeSills(mesh, D, edgeOcean, hybrid ? (o.edgeSill === undefined ? (geography ? geography.edgeSill ?? null : null) : o.edgeSill) : null, o.sillFloor ?? o.minimumDepth);
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
   const substepLimit = 0.35 * minSpacing / Math.sqrt(o.gravity * Math.max(deepest, 1));
@@ -1965,7 +1975,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ...(o.ekmanDepth > 0 ? [['HM', E]] : []),
     ...(o.retreatDaily ? [['SUNSTEP', C], ['SUNSUM', C], ['DARKSUM', C], ['SUNDAY', C], ['DARKDAY', C]] : []),
     ...(o.ekmanBlock ? [['UEK', E]] : []),
-    ...(hybrid ? [['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C]] : []),
+    ...(hybrid ? [['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C], ['SILL', E]] : []),
     ...(third ? [['BEY', 2 * E], ['BED', 2 * E]] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
@@ -2508,6 +2518,7 @@ ${hybrid ? `  OUT[${OF.H1} + i] = OD[O_MIXED + i];
     device.queue.writeBuffer(ob.OD, 4 * OD.EDDYK, Float32Array.from(eddyKappa));
     device.queue.writeBuffer(ob.OD, 4 * OD.TEDGE, Float32Array.from(mesh.tEdge));
     if (hybrid) device.queue.writeBuffer(ob.OD, 4 * OD.FCELL, Float32Array.from(mesh.fCell));
+    if (hybrid) device.queue.writeBuffer(ob.OD, 4 * OD.SILL, Float32Array.from(sillEdge));
     if (hybrid) device.queue.writeBuffer(ob.OD, 4 * OD.MIXED, mixedDepthsOf(h, Q, W));
     device.queue.writeBuffer(ob.OD, 4 * OD.DRAINSTART, drainStart);
     if (drainCells.length) { device.queue.writeBuffer(ob.OD, 4 * OD.DRAINCELL, Float32Array.from(drainCells)); device.queue.writeBuffer(ob.OD, 4 * OD.DRAINW, Float32Array.from(drainWeights)); }
@@ -2762,7 +2773,7 @@ ${hybrid ? `  OUT[${OF.H1} + i] = OD[O_MIXED + i];
   async function diagnostics() { return (await frame({ diagnostics: true })).diagnostics; }
 
   return {
-    layers: L, everySteps: o.everySteps, options: o, D, cellOcean, vertical: hybrid ? 'hybrid' : 'slab', ...(hybrid ? { generator: o.generator, table } : {}),
+    layers: L, everySteps: o.everySteps, options: o, D, sillEdge, cellOcean, vertical: hybrid ? 'hybrid' : 'slab', ...(hybrid ? { generator: o.generator, table } : {}),
     useSeaIce(concentration) { seaCover = concentration; },
     initialize, upload, download, serialize, serializeFrom, restartArrays, diagnostics, frame,
     advance, advanceCoupled, accumulateFreshwater, forgetAccumulated,

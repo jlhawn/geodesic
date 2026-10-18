@@ -16,7 +16,15 @@
  * applied: a cell of 75–150 km opening a strait a few km wide would
  * exchange water far too freely. edgeOcean marks the edges between two ocean
  * cells, the only ones the ocean flows through; coastEdges lists the
- * edges between land and ocean.
+ * edges between land and ocean. edgeSill is each ocean edge's sill: the
+ * greatest depth to which the two cells' deepest raster points stay
+ * joined through the raster points of those two cells (eight-connected),
+ * so the deepest channel the two cells hold between them, 0 where raster
+ * land parts them; where the two cells' points never touch (an edge
+ * shorter than the raster spacing) the shallowest point along the great
+ * circle between the centers, sampled every 0.1°. Along a seaStraits
+ * polyline the edges between its cells are at least the strait's sill
+ * deep, whether or not the mesh resolves it.
  */
 export function topographyFromInt16(buffer, rows = 720, cols = 1440) {
   return { rows, cols, data: new Int16Array(buffer) };
@@ -47,9 +55,9 @@ export const NARROW_STRAITS = {
 };
 
 export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS } = {}) {
-  const { nCells: C, nEdges: E, xCell, cellsOnCell, nEdgesOnCell, cellsOnEdge, areaCell, latCell, lonCell } = mesh;
+  const { nCells: C, nEdges: E, xCell, cellsOnCell, nEdgesOnCell, edgesOnCell, cellsOnEdge, areaCell, latCell, lonCell } = mesh;
   const { rows, cols, data } = topography;
-  const count = new Int32Array(C), landCount = new Int32Array(C), sum = new Float64Array(C);
+  const count = new Int32Array(C), landCount = new Int32Array(C), sum = new Float64Array(C), owner = new Int32Array(rows * cols);
   const nearest = (x, y, z, start) => {
     let best = start, bestDot = x * xCell[3 * start] + y * xCell[3 * start + 1] + z * xCell[3 * start + 2];
     for (;;) {
@@ -70,6 +78,7 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
       const lon = -Math.PI + (c + 0.5) * 2 * Math.PI / cols;
       cell = nearest(cosLat * Math.cos(lon), cosLat * Math.sin(lon), sinLat, cell);
       const elevation = data[r * cols + c];
+      owner[r * cols + c] = cell;
       count[cell]++;
       sum[cell] += elevation;
       if (elevation > 0) landCount[cell]++;
@@ -133,6 +142,73 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
     edgeOcean[e] = !a && !b ? 1 : 0;
     if (a !== b) coast.push(e);
   }
+  const edgeSill = new Float64Array(E);
+  const pointStart = new Int32Array(C + 1), pointList = new Int32Array(rows * cols);
+  for (let n = 0; n < rows * cols; n++) pointStart[owner[n] + 1]++;
+  for (let i = 0; i < C; i++) pointStart[i + 1] += pointStart[i];
+  {
+    const fill = Int32Array.from(pointStart.subarray(0, C));
+    for (let n = 0; n < rows * cols; n++) pointList[fill[owner[n]]++] = n;
+  }
+  const local = new Int32Array(rows * cols).fill(-1), parent = new Int32Array(rows * cols);
+  const find = (p) => { while (parent[p] !== p) { parent[p] = parent[parent[p]]; p = parent[p]; } return p; };
+  const depthOf = (n) => Math.max(0, -data[n]);
+  const depthAt = (x, y, z) => {
+    const r = Math.min(rows - 1, Math.max(0, Math.floor((Math.PI / 2 - Math.asin(Math.max(-1, Math.min(1, z)))) / (Math.PI / rows))));
+    const c = ((Math.floor((Math.atan2(y, x) + Math.PI) / (2 * Math.PI / cols)) % cols) + cols) % cols;
+    return depthOf(r * cols + c);
+  };
+  const sampleStep = 0.1 * Math.PI / 180;
+  const alongCenters = (a, b) => {
+    const ax = xCell[3 * a], ay = xCell[3 * a + 1], az = xCell[3 * a + 2], bx = xCell[3 * b], by = xCell[3 * b + 1], bz = xCell[3 * b + 2];
+    const theta = Math.acos(Math.max(-1, Math.min(1, ax * bx + ay * by + az * bz))), sinTheta = Math.sin(theta), n = Math.max(1, Math.ceil(theta / sampleStep));
+    let sill = Infinity;
+    for (let s = 0; s <= n && sill > 0; s++) {
+      const t = s / n, wa = sinTheta > 0 ? Math.sin((1 - t) * theta) / sinTheta : 1 - t, wb = sinTheta > 0 ? Math.sin(t * theta) / sinTheta : t;
+      sill = Math.min(sill, depthAt(wa * ax + wb * bx, wa * ay + wb * by, wa * az + wb * bz));
+    }
+    return sill;
+  };
+  const deepestOf = (i) => { let best = -1, depth = -1; for (let p = pointStart[i]; p < pointStart[i + 1]; p++) { const d = depthOf(pointList[p]); if (d > depth) { depth = d; best = pointList[p]; } } return best; };
+  for (let e = 0; e < E; e++) {
+    if (!edgeOcean[e]) continue;
+    const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], da = deepestOf(a), db = deepestOf(b);
+    if (da < 0 || db < 0) { edgeSill[e] = alongCenters(a, b); continue; }
+    const points = [];
+    for (const i of [a, b]) for (let p = pointStart[i]; p < pointStart[i + 1]; p++) points.push(pointList[p]);
+    points.sort((m, n) => depthOf(n) - depthOf(m));
+    let sill = -1;
+    for (let q = 0; q < points.length; q++) {
+      const n = points[q], r = Math.floor(n / cols), c = n - r * cols;
+      local[n] = q; parent[n] = n;
+      for (let dr = -1; dr <= 1; dr++) {
+        const rr = r + dr;
+        if (rr < 0 || rr >= rows) continue;
+        for (let dc = -1; dc <= 1; dc++) {
+          const m = rr * cols + ((c + dc + cols) % cols);
+          if (m === n || local[m] < 0) continue;
+          const x = find(n), y = find(m);
+          if (x !== y) parent[x] = y;
+        }
+      }
+      if (local[da] >= 0 && local[db] >= 0 && find(da) === find(db)) { sill = depthOf(n); break; }
+    }
+    for (const n of points) local[n] = -1;
+    edgeSill[e] = sill >= 0 ? sill : alongCenters(a, b);
+  }
+  for (const { sill, points } of Object.values(seaStraits)) {
+    let previous = -1;
+    trace(points, (i) => {
+      if (previous >= 0 && previous !== i) {
+        for (let m = 0; m < nEdgesOnCell[previous]; m++) {
+          if (cellsOnCell[mesh.maxEdges * previous + m] !== i) continue;
+          const e = edgesOnCell[mesh.maxEdges * previous + m];
+          if (edgeOcean[e]) edgeSill[e] = Math.max(edgeSill[e], sill);
+        }
+      }
+      previous = i;
+    });
+  }
   // The topography carries no ice mask: the ice sheets are Antarctica's land and Greenland's interior above 800 m.
   const iceSheet = new Uint8Array(C);
   for (let i = 0; i < C; i++) {
@@ -142,7 +218,7 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
   }
   let landArea = 0, total = 0;
   for (let i = 0; i < C; i++) { total += areaCell[i]; if (land[i]) landArea += areaCell[i]; }
-  return { land, landFraction, elevation, iceSheet, edgeOcean, coastEdges: Int32Array.from(coast), landArea: landArea / total };
+  return { land, landFraction, elevation, iceSheet, edgeOcean, edgeSill, coastEdges: Int32Array.from(coast), landArea: landArea / total };
 }
 
 /*

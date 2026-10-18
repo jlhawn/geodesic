@@ -153,7 +153,7 @@ export function hybridLayerTable({ top = 3, growth = 1.08, thermocline = 10, dee
   for (let j = 0; j < deep.length; j++) { densities.push(deep[j]); minimum.push(deepTop * (deepBottom / deepTop) ** (j / (deep.length - 1))); }
   const K = densities.length, depths = new Float64Array(K + 1);
   for (let k = 0; k < K; k++) depths[k + 1] = depths[k] + minimum[k];
-  return { densities: Float64Array.from(densities), minimum: Float64Array.from(minimum), depths, K, fixed: 12 };
+  return { densities: Float64Array.from(densities), minimum: Float64Array.from(minimum), depths, K, fixed: 12, spacing: thermocline };
 }
 export const HYBRID_LAYERS = hybridLayerTable();
 
@@ -247,7 +247,8 @@ export function targetInterfaces(kind, { h, rho, K, depth, table, boundaries, hM
   for (let k = 1; k < K; k++) {
     const floor = kind === 'hybrid' ? above + table.minimum[k - 1] : 0;
     let target = Math.max(out[k], floor);
-    if (target > floor) target = Math.max(floor, current[k] + relax * (target - current[k]));
+    if (kind === 'hybrid' && k <= (table.fixed ?? 0)) target = floor;
+    else if (target > floor) target = Math.max(floor, current[k] + relax * (target - current[k]));
     out[k] = target;
     weight[k] = kind === 'hybrid' ? Math.min(1, Math.max(0, (target - floor) / modeDepth)) : 1;
     above = target;
