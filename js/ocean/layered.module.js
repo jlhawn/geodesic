@@ -1088,7 +1088,7 @@ export function createOcean(mesh, {
   const layerRho = hybrid ? shared('layerRho', L * C) : null, columnAbove = hybrid ? shared('columnAbove', L * C) : null, targetZ = hybrid ? shared('targetZ', (L + 1) * C) : null, viscosity = hybrid ? shared('viscosity', L * C) : null, edgeBottom = hybrid ? shared('edgeBottom', E) : null;
   const mixedDepths = hybrid ? shared('mixedDepths', C) : null, boundaryDepths = hybrid ? shared('boundaryDepths', C) : null;
   const edgeAbove = hybrid ? shared('edgeAbove', L * E) : null, eddyFlux = hybrid ? shared('eddyFlux', L * E) : null, eddyVolume = hybrid ? shared('eddyVolume', L * C) : null, eddyHeat = hybrid ? shared('eddyHeat', L * C) : null, eddySalt = hybrid ? shared('eddySalt', L * C) : null;
-  const pvFloor = hybrid ? Float64Array.from(table.minimum, (m) => Math.min(PV_FLOOR, m)) : null;
+  const pvFloor = hybrid ? Float64Array.from(table.minimum, (m) => Math.min(PV_FLOOR, m)) : null, tokenEdge = hybrid ? Float64Array.from(table.minimum, (m) => 2 * Math.min(m, table.spacing ?? m)) : null, pinned = hybrid ? new Uint8Array(E) : null;
   const boundaries = hybrid ? labelBoundaries(rho) : null, cs = hybrid ? columnScratch(L) : null;
   const cols = hybrid ? Object.fromEntries(['h', 'T', 'S', 'rho', 'shear', 'kappa', 'nu', 'hNew', 'amount', 'hOld', 'hEdgeNew', 'uCol', 'nuEdge'].map((name) => [name, new Float64Array(L)])) : null;
   if (hybrid) { cols.z = new Float64Array(L + 1); cols.w = new Float64Array(L + 1); cols.vector = new Float64Array(3 * L); }
@@ -1427,9 +1427,13 @@ export function createOcean(mesh, {
    * label and the layer-mean term ½ h Δρ for a layer at the same depths
    * on both sides. The edge thickness of a layer is the smaller of its
    * two cells', so a layer that has vanished on either side carries next
-   * to nothing, and a layer no thicker than twice minimumLayer at an edge
-   * follows the layer above, relaxing to its velocity here and copied
-   * from it after the barotropic shift, as the slab's tokens do; the
+   * to nothing, and a layer no thicker than twice minimumLayer at an edge,
+   * or one that occupies no depth in common between its two cells while
+   * no thicker than tokenEdge (twice its minimum, at most twice the
+   * thermocline spacing: a class held at its floor on one side against
+   * water of that class elsewhere in the other column), follows the
+   * layer above, relaxing to its velocity here and copied from it after
+   * the barotropic shift, as the slab's tokens do; the
    * stress is a flux into the top layer; the bottom drag acts on the part
    * of each layer within momentumDepth of the floor, both measured down
    * the edge column's own thicknesses (edgeAbove, edgeBottom); the ∇⁴
@@ -1514,6 +1518,7 @@ export function createOcean(mesh, {
         const layerForce = pressure[nb] + layerRho[nb] * (zR - Hb) - pressure[na] - layerRho[na] * (zR - Ha);
         du[oe + e] = sum / dcEdge[e] - gradPhi[e] - g * gradEta[e] - g / rho0 * layerForce / dcEdge[e];
         const he = hEdge[oe + e];
+        pinned[e] = he <= thinEdge || (he <= tokenEdge[k] && !(bottom > top)) ? 1 : 0;
         if (k === 0) du[e] += stress[e] / rho0 / Math.max(he, minimumLayer);
         const layerTop = edgeAbove[oe + e], floor = edgeBottom[e];
         const overlap = Math.min(layerTop + he, floor) - Math.max(layerTop, floor - momentumDepth);
@@ -1524,7 +1529,7 @@ export function createOcean(mesh, {
         laplacianVelocity(mesh, lap, lap2, divScratch, curlScratch);
         for (let e = 0; e < E; e++) du[oe + e] -= nu4 * lap2[e];
       }
-      if (k > 0) for (let e = 0; e < E; e++) if (hEdge[oe + e] <= thinEdge) du[oe + e] = (uIn[ae(k - 1, e)] - uIn[oe + e]) * relax;
+      if (k > 0) for (let e = 0; e < E; e++) if (pinned[e]) du[oe + e] = (uIn[ae(k - 1, e)] - uIn[oe + e]) * relax;
       for (let e = 0; e < E; e++) if (!edgeOcean[e]) du[oe + e] = 0;
     }
   }
@@ -1703,7 +1708,13 @@ export function createOcean(mesh, {
       edgeColumn(h, e, hEdge, e, E);
       if (!edgeOcean[e]) continue;
       let sumH = 0, transport = 0, clamped = false;
-      for (let k = 1; k < L; k++) if (hEdge[ae(k, e)] < 2 * minimumLayer) u[ae(k, e)] = u[ae(k - 1, e)];
+      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+      let Ha = h[a], Hb = h[b];
+      for (let k = 1; k < L; k++) {
+        const ha = h[at(k, a)], hb = h[at(k, b)], he = hEdge[ae(k, e)];
+        if (he < 2 * minimumLayer || (he <= tokenEdge[k] && Math.min(Ha + ha, Hb + hb) <= Math.max(Ha, Hb))) u[ae(k, e)] = u[ae(k - 1, e)];
+        Ha += ha; Hb += hb;
+      }
       for (let k = 0; k < L; k++) { sumH += hEdge[ae(k, e)]; transport += hEdge[ae(k, e)] * u[ae(k, e)]; }
       const shift = (avgU[e] - transport) / Math.max(sumH, EPS);
       for (let k = 0; k < L; k++) { const n = ae(k, e); u[n] += shift; if (Math.abs(u[n]) > SPEED_LIMIT) { u[n] = Math.sign(u[n]) * SPEED_LIMIT; clamped = true; } }

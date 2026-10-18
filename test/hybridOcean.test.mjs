@@ -162,6 +162,35 @@ test('the shear-scaled diffusivity moves heat down the gradient in the fixed-dep
   assert.ok(Math.abs(backNet) < 1e-12 * backGross && deepAgree > 0.95 * deepCounted && deepCounted > 0, 'the background diffusion is conservative and down-gradient in the deep layers');
 });
 
+test('a class held at its floor on one side of an edge, with no depth in common with the layer across it, follows the layer above while the front between two stratifications adjusts', () => {
+  const mesh = meshOf(8), C = mesh.nCells, E = mesh.nEdges, deep = (i) => Math.cos(mesh.lonCell[i]) > 0;
+  const bathymetry = Float64Array.from({ length: C }, (_, i) => (deep(i) ? 4000 : 1500));
+  const ocean = createOcean(mesh, { ...FLAT, bathymetry });
+  const surfaceT = Float64Array.from({ length: C }, (_, i) => (deep(i) ? 300 : 280)), ice = new Float64Array(C), flux = new Float64Array(C), calm = new Float64Array(E);
+  ocean.initialize(surfaceT, ice);
+  const L = ocean.layers, { cellsOnEdge } = mesh, tokenEdge = Array.from(HYBRID_LAYERS.minimum, (m) => 2 * Math.min(m, HYBRID_LAYERS.spacing));
+  const tokens = () => {
+    const Ha = new Float64Array(E), Hb = new Float64Array(E), list = [];
+    for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) {
+      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], ha = ocean.h[k * C + a], hb = ocean.h[k * C + b], he = Math.min(ha, hb);
+      if (k >= HYBRID_LAYERS.fixed && ocean.edgeOcean[e] && he > 2 * H_MIN && he <= tokenEdge[k] && Math.min(Ha[e] + ha, Hb[e] + hb) <= Math.max(Ha[e], Hb[e])) list.push([k, e]);
+      Ha[e] += ha; Hb[e] += hb;
+    }
+    return list;
+  };
+  let shear = 0, count = Infinity;
+  for (let n = 0; n < 64; n++) {
+    ocean.advance(surfaceT, ice, flux, calm, DT);
+    const list = tokens();
+    count = Math.min(count, list.length);
+    for (const [k, e] of list) shear = Math.max(shear, Math.abs(ocean.u[k * E + e] - ocean.u[(k - 1) * E + e]));
+  }
+  assert.ok(count > 500, `${count} token edge-layers`);
+  assert.ok(maxSpeed(ocean) > 0.5, `the front adjusts: ${maxSpeed(ocean)} m/s`);
+  assert.ok(shear < 1e-2, `a token's shear to the layer above reached ${shear} m/s`);
+  assert.equal(ocean.diagnostics().oceanLimited, 0);
+});
+
 test('tropical easterlies drive equatorial upwelling and a poleward surface drift, and the mixed layer deepens under the stronger wind', () => {
   const { mesh, C, ocean, surfaceT, ice, flux } = hybridOcean(16);
   const wind = zonalWindOnEdges(mesh, (lat) => -0.08 * Math.exp(-((lat / (15 * DEG)) ** 2)));

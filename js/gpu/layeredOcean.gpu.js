@@ -140,6 +140,7 @@ function hybridHead(o) {
   const floors = Array.from(table.minimum, (m) => Math.min(PV_FLOOR, m));
   return `
 ${arr('MINIMUM', table.minimum)}
+${arr('TOKENEDGE', Array.from(table.minimum, (m) => 2 * Math.min(m, table.spacing ?? m)))}
 ${arr('DEPTHS', table.depths)}
 ${arr('PVFLOORK', floors)}
 ${arr('BOUNDARY', boundaries.subarray(1, L))}
@@ -225,8 +226,9 @@ function hybridKernels(o, K, idx) {
      * free-surface gradients, the pressure force at the depth the layer
      * occupies in both cells or the middle of the gap between them, the
      * stress on layer 0, the bottom drag on the part of the layer within
-     * MOMDEPTH of the edge column's floor, the ∇⁴ closure, and the pin of
-     * a layer no thicker than THINEDGE to the one above; P[2] is relax.
+     * MOMDEPTH of the edge column's floor, the ∇⁴ closure, and the pin to
+     * the layer above of a layer no thicker than THINEDGE, or no thicker
+     * than TOKENEDGE while its two cells' spans share no depth; P[2] is relax.
      */
     oMomentum: `${K}  let e = ${idx}; if (e >= E) { return; }
   if (OD[O_EMASK + e] < 0.5) { for (var k = 0; k < L; k++) { OUT[uOff(k) + e] = 0.0; } return; }
@@ -254,7 +256,7 @@ function hybridKernels(o, K, idx) {
     let overlap = min(layerTop + he, floor) - max(layerTop, floor - MOMDEPTH);
     if (overlap > 0.0) { du -= RBOT * abs(u) * u * (overlap / MOMDEPTH) / max(he, HMIN); }
     if (NU4O > 0.0) { du -= NU4O * OD[O_LAPB + n]; }
-    if (k > 0 && he <= THINEDGE) { du = (uAbove - u) * P[2]; }
+    if (k > 0 && (he <= THINEDGE || (he <= TOKENEDGE[k] && !(bottom > top)))) { du = (uAbove - u) * P[2]; }
     OUT[uOff(k) + e] = du;
     uAbove = u; layerTop += he; Ha += ha; Hb += hb;
   }
@@ -1501,7 +1503,13 @@ ${eddyShared}${K}  let e = ${idx}; if (e >= E) { return; }
 }`,
     oVelocityShiftClamp: `${K}  let e = ${idx}; if (e >= E) { return; }
   if (OD[O_EMASK + e] < 0.5) { return; }
-  for (var k = 1; k < L; k++) { if (OD[O_HEDGE + k * E + e] < ${hy ? 'THINEDGE' : 'THINO'}) { IN[uOff(k) + e] = IN[uOff(k - 1) + e]; } }
+${hy ? `  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  var Ha = IN[hOff(0) + a]; var Hb = IN[hOff(0) + b];
+  for (var k = 1; k < L; k++) {
+    let ha = IN[hOff(k) + a]; let hb = IN[hOff(k) + b]; let he = OD[O_HEDGE + k * E + e];
+    if (he < THINEDGE || (he <= TOKENEDGE[k] && min(Ha + ha, Hb + hb) <= max(Ha, Hb))) { IN[uOff(k) + e] = IN[uOff(k - 1) + e]; }
+    Ha += ha; Hb += hb;
+  }` : `  for (var k = 1; k < L; k++) { if (OD[O_HEDGE + k * E + e] < THINO) { IN[uOff(k) + e] = IN[uOff(k - 1) + e]; } }`}
   var sumH = 0.0; var transport = 0.0;
   for (var k = 0; k < L; k++) { let he = OD[O_HEDGE + k * E + e]; sumH += he; transport += he * IN[uOff(k) + e]; }
   let shift = (OD[B_BAVG + C + e] - transport) / max(sumH, EPSO);
