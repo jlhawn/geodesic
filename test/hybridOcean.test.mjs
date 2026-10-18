@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { createOcean, beyondCells, limitedEdgeValue } from '../js/ocean/layered.module.js';
+import { createGeography, syntheticTopography } from '../js/geography.module.js';
 import { HYBRID_LAYERS, H_MIN } from '../js/ocean/column.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
 import { zonalWindOnEdges, totalHeatSalt, uniformOcean } from './helpers/layered.mjs';
@@ -286,6 +287,50 @@ test('the z* and isopycnal generators run the same ocean and conserve it, and a 
   const sums = columnSums(shelf.ocean, shelf.C);
   for (let i = 0; i < shelf.C; i++) assert.ok(Math.abs(sums[i] - shelf.ocean.D[i] - shelf.ocean.eta[i]) < 1e-9, `shelf column ${i}`);
   assert.equal(shelf.ocean.diagnostics().oceanDried, 0);
+});
+
+test('an edge takes the deepest channel its two cells hold between them as its sill, the hybrid ocean cuts the edge column there so the classes below carry nothing across, and the slab ocean is untouched', () => {
+  const mesh = meshOf(8), C = mesh.nCells, E = mesh.nEdges, { cellsOnEdge, lonCell, latCell } = mesh;
+  const wrap = (x) => Math.atan2(Math.sin(x), Math.cos(x));
+  const ridge = (lon) => Math.abs(lon) < 1.5 * DEG, strip = (lon) => Math.abs(wrap(lon - Math.PI)) < 1.5 * DEG, within = (lat) => Math.abs(lat) < 40 * DEG;
+  const topography = syntheticTopography(180, 360, (lat, lon) => (within(lat) && ridge(lon) ? -300 : within(lat) && strip(lon) ? 100 : -4000));
+  const geography = createGeography(mesh, topography);
+  const across = (e, lon0) => { const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], la = wrap(lonCell[a] - lon0), lb = wrap(lonCell[b] - lon0); return geography.edgeOcean[e] && la * lb < 0 && Math.abs(la) > 3.3 * DEG && Math.abs(lb) > 3.3 * DEG && Math.abs(la) < 15 * DEG && Math.abs(lb) < 15 * DEG && Math.abs(latCell[a]) < 30 * DEG && Math.abs(latCell[b]) < 30 * DEG; };
+  const ridgeEdges = [], stripEdges = [], openEdges = [];
+  for (let e = 0; e < E; e++) {
+    if (across(e, 0)) ridgeEdges.push(e);
+    else if (across(e, Math.PI)) stripEdges.push(e);
+    else if (geography.edgeOcean[e] && Math.abs(lonCell[cellsOnEdge[2 * e]]) > 20 * DEG && Math.abs(lonCell[cellsOnEdge[2 * e]]) < 70 * DEG) openEdges.push(e);
+  }
+  assert.ok(ridgeEdges.length >= 4 && stripEdges.length >= 4 && openEdges.length > 20, `${ridgeEdges.length} ridge, ${stripEdges.length} strip, ${openEdges.length} open edges`);
+  for (const e of ridgeEdges) assert.equal(geography.edgeSill[e], 300, `ridge edge ${e}`);
+  for (const e of stripEdges) assert.equal(geography.edgeSill[e], 0, `land-strip edge ${e}`);
+  for (const e of openEdges) assert.equal(geography.edgeSill[e], 4000, `open edge ${e}`);
+  const slab = createOcean(mesh, { everySteps: 1, geography }), hybrid = createOcean(mesh, { ...FLAT, geography });
+  const floor = (e) => Math.min(hybrid.D[cellsOnEdge[2 * e]], hybrid.D[cellsOnEdge[2 * e + 1]]);
+  for (const e of ridgeEdges) { assert.equal(hybrid.sillEdge[e], 300); assert.ok(slab.sillEdge[e] > 1000 && slab.sillEdge[e] === floor(e), `the slab keeps min(D) at ${e}: ${slab.sillEdge[e]}`); }
+  for (const e of stripEdges) { assert.equal(hybrid.sillEdge[e], 50); assert.equal(slab.sillEdge[e], floor(e)); }
+  for (const e of openEdges) { assert.equal(hybrid.sillEdge[e], floor(e)); assert.equal(slab.sillEdge[e], floor(e)); }
+  const front = Float64Array.from({ length: C }, (_, i) => (lonCell[i] < 0 ? 280 : 300)), ice = new Float64Array(C), flux = new Float64Array(C), calm = new Float64Array(E);
+  const L = hybrid.layers;
+  const transport = (ocean) => { let through = 0, below = 0; for (const e of ridgeEdges) { let z = 0; for (let k = 0; k < L; k++) { const t = Math.abs(ocean.hEdge[k * E + e] * ocean.u[k * E + e]) * mesh.dvEdge[e]; through += t; if (z >= 300) below += t; z += ocean.hEdge[k * E + e]; } } return { through, below }; };
+  const open = createOcean(mesh, { ...FLAT, geography, edgeSill: null });
+  hybrid.initialize(front, ice); open.initialize(front, ice);
+  let sillThrough = 0, sillBelow = 0, openThrough = 0;
+  for (let n = 0; n < 48; n++) {
+    hybrid.advance(front, ice, flux, calm, DT); open.advance(front, ice, flux, calm, DT);
+    const a = transport(hybrid), b = transport(open);
+    sillThrough += a.through; sillBelow += a.below; openThrough += b.through;
+  }
+  for (const e of ridgeEdges) {
+    let z = 0, sum = 0;
+    for (let k = 0; k < L; k++) { const he = hybrid.hEdge[k * E + e]; if (z >= 300) assert.equal(he, 0, `layer ${k} of ridge edge ${e} at ${z} m`); z += Math.min(hybrid.h[k * C + cellsOnEdge[2 * e]], hybrid.h[k * C + cellsOnEdge[2 * e + 1]]); sum += he; }
+    assert.ok(Math.abs(sum - 300) < 1, `ridge edge ${e} column ${sum} m`);
+  }
+  assert.ok(maxSpeed(hybrid) > 0.1 && maxSpeed(open) > 0.1, 'the front adjusts');
+  assert.equal(sillBelow, 0);
+  assert.ok(openThrough > 0 && sillThrough < 0.5 * openThrough, `transport through the ridge edges over 48 steps: ${(sillThrough / 48 / 1e6).toFixed(1)} Sv with the sill, ${(openThrough / 48 / 1e6).toFixed(1)} Sv without`);
+  assert.equal(hybrid.diagnostics().oceanLimited, 0);
 });
 
 test('the slab options that have no hybrid meaning are refused', () => {

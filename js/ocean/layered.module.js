@@ -981,6 +981,22 @@ export function bathymetryFrom(mesh, geography, { minimumDepth = 50, neighbourRa
   return D;
 }
 
+/*
+ * The depth each edge's column is clipped to: the shallower cell, and for
+ * the hybrid ocean the geography's edge sill where it is shallower still,
+ * no shallower than `floor`, so raster land parting two sea cells narrows
+ * the edge rather than closing it.
+ */
+export function edgeSills(mesh, D, edgeOcean, edgeSill, floor) {
+  const { nEdges: E, cellsOnEdge } = mesh, out = new Float64Array(E);
+  for (let e = 0; e < E; e++) {
+    const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+    out[e] = Math.min(D[a], D[b]);
+    if (edgeSill && edgeOcean[e]) out[e] = Math.min(out[e], Math.max(floor, edgeSill[e]));
+  }
+  return out;
+}
+
 export function createOcean(mesh, {
   densities = LAYER_DENSITIES, salinities = LAYER_SALINITIES, bottoms = LAYER_BOTTOMS, mixedDepth = 60, minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
@@ -990,7 +1006,7 @@ export function createOcean(mesh, {
   ekmanDepth = 0.4, momentumFloor = 10, stressThickness = PV_FLOOR, retreatStirring = 2.5, langmuir = 2, retreatEkman = RETREAT_EKMAN, retreatDaily = false, retreatLight = 0,
   interfacialDrag = 2e-4, shearMixing = false, interiorShearMixing = false, blockDrag = false, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, closureFill = 0, closureTokens = 'interior', diffusivity = 0.01, mixedDiffusivity = 0, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, ekmanBlock = false, upwellingSource = 0, intakeLedger = false, penetration = 'IB',
-  geography = null, bathymetry = null, buffers = null, climatology = null,
+  geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'slab', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
   tracerAdvection = null, shearDiffusivity = null, shearDiffusivityCap = 4000, lateralDiffusionSpeed = null,
 } = {}) {
@@ -1045,6 +1061,7 @@ export function createOcean(mesh, {
   const upwelled = upwellingSource > 0 ? new Float64Array(C) : null;
   const intake = intakeLedger ? intakeArrays(C, L, intakeLedger, cellOcean) : null;
   const D = bathymetry ? Float64Array.from(bathymetry, (d, i) => (cellOcean[i] ? d : 0)) : bathymetryFrom(mesh, geography, { minimumDepth, flatDepth });
+  const sillEdge = edgeSills(mesh, D, edgeOcean, hybrid ? (edgeSill === undefined ? (geography ? geography.edgeSill ?? null : null) : edgeSill) : null, sillFloor);
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
   const substepLimit = 0.35 * minSpacing / Math.sqrt(g * Math.max(deepest, 1));
@@ -1117,13 +1134,19 @@ export function createOcean(mesh, {
    * outcropped there or the bottom lies above it. A column can only
    * flow through the water that exists on both sides of an edge, so at a
    * shelf break or a coast the thicknesses are scaled to the shallower
-   * side's depth.
+   * side's depth; the hybrid ocean instead cuts the column at the edge's
+   * sill, the layers below it carrying nothing across.
    */
   function edgeColumn(hIn, e, out, base, stride) {
     const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
     out[base] = 0.5 * (hIn[a] + hIn[b]);
     for (let k = 1; k < L; k++) out[base + k * stride] = Math.min(hIn[at(k, a)], hIn[at(k, b)]);
-    const sill = Math.max(EPS, Math.min(D[a], D[b]) + 0.5 * (eta[a] + eta[b]));
+    const sill = Math.max(EPS, sillEdge[e] + 0.5 * (eta[a] + eta[b]));
+    if (hybrid) {
+      let above = 0;
+      for (let k = 0; k < L; k++) { const hk = out[base + k * stride]; out[base + k * stride] = Math.min(hk, Math.max(0, sill - above)); above += hk; }
+      return;
+    }
     let sum = 0;
     for (let k = 0; k < L; k++) sum += out[base + k * stride];
     if (sum > sill) { const f = sill / sum; for (let k = 0; k < L; k++) out[base + k * stride] *= f; }
@@ -1762,7 +1785,7 @@ export function createOcean(mesh, {
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
       let shared = 0;
       for (let k = 1; k < L; k++) shared += Math.max(0, Math.min(h[at(k, a)], h[at(k, b)]) - EPS);
-      const sill = Math.min(D[a], D[b]) + 0.5 * (eta[a] + eta[b]), coefficient = kappa * dvEdge[e] / dcEdge[e];
+      const sill = sillEdge[e] + 0.5 * (eta[a] + eta[b]), coefficient = kappa * dvEdge[e] / dcEdge[e];
       let za = h[a], zb = h[b], aboveA = 0, aboveB = 0, sharedAbove = 0, upper = 0;
       for (let k = 1; k < L; k++) {
         const ha = h[at(k, a)], hb = h[at(k, b)], common = Math.max(0, Math.min(ha, hb) - EPS);
@@ -1843,7 +1866,7 @@ export function createOcean(mesh, {
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
       let shared = 0;
       for (let k = 1; k < L; k++) shared += Math.max(0, Math.min(h[at(k, a)], h[at(k, b)]) - EPS);
-      const sill = Math.min(D[a], D[b]) + 0.5 * (eta[a] + eta[b]), coefficient = kappa * dvEdge[e] / dcEdge[e];
+      const sill = sillEdge[e] + 0.5 * (eta[a] + eta[b]), coefficient = kappa * dvEdge[e] / dcEdge[e];
       let za = h[a], zb = h[b], aboveA = 0, aboveB = 0, sharedAbove = 0, upper = 0;
       for (let k = 1; k < L; k++) {
         const ha = h[at(k, a)], hb = h[at(k, b)], common = Math.max(0, Math.min(ha, hb) - EPS);
@@ -2828,5 +2851,5 @@ export function createOcean(mesh, {
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
   if (hybrid) Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer });
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, upwelled, intake, retreatDepth, windDepth, avgU, tendency, prepare, tendencyLayers: hybrid ? hybridTendencyLayers : tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, daily, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, ekmanTransport, ekmanFlux, ekmanMoved, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, ...(hybrid ? { generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, hybridTendencyLayers, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, baroPrep, baroCoriolis, baroEdges, baroCells } : {}) };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, refilled, sheared, upwelled, intake, retreatDepth, windDepth, avgU, tendency, prepare, tendencyLayers: hybrid ? hybridTendencyLayers : tendencyLayers, interfaceRate: (e, up, down, input = state) => interfaceRate(input[1], e, up, down), windAcceleration, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, daily, diagnostics, fields, setStress, readSurface, mixedLayer, salt, writeSurface, phases, eddyTransport, ekmanTransport, ekmanFlux, ekmanMoved, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, ...(hybrid ? { generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, hybridTendencyLayers, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, baroPrep, baroCoriolis, baroEdges, baroCells } : {}) };
 }
