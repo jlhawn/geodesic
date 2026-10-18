@@ -1014,6 +1014,7 @@ export function createOcean(mesh, {
   const shearDiffusion = shearDiffusivity ?? (hybrid ? SHEAR_DIFFUSIVITY : 0);
   if (!hybrid && shearDiffusion > 0) throw new Error('shearDiffusivity belongs to the hybrid ocean');
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
+  if (advection === 'third' && !(shearDiffusion > 0)) throw new Error('the limited third-order tracer flux admits grid-scale noise that the shear-scaled diffusion of the surface layers damps, so tracerAdvection third needs shearDiffusivity above zero');
   const lateralSpeed = lateralDiffusionSpeed ?? (hybrid ? LATERAL_DIFFUSION_SPEED : 0);
   if (!hybrid && lateralSpeed > 0) throw new Error('lateralDiffusionSpeed belongs to the hybrid ocean');
   if (!(lateralSpeed >= 0)) throw new Error(`lateralDiffusionSpeed is a non-negative velocity scale, not ${lateralSpeed}`);

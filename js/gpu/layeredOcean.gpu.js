@@ -1890,6 +1890,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const table = hybrid ? o.layerTable ?? HYBRID_LAYERS : null;
   const third = hybrid && (o.tracerAdvection ?? 'third') === 'third';
   if (!hybrid && o.tracerAdvection && o.tracerAdvection !== 'upwind') throw new Error("tracerAdvection 'third' belongs to the hybrid ocean");
+  if (third && !((o.shearDiffusivity ?? SHEAR_DIFFUSIVITY) > 0)) throw new Error('tracerAdvection third needs shearDiffusivity above zero');
   if (o.closureTokens !== 'interior' && o.closureTokens !== 'beside') throw new Error(`closureTokens is 'interior' or 'beside', not ${o.closureTokens}`);
   if (o.penetration !== null && !JERLOV[o.penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${o.penetration}`);
   if (o.shearEntrainment > 0 && !o.carryMomentum) throw new Error('shearEntrainment needs carryMomentum: without the entrained water\'s momentum mixed in, the base\'s Richardson number never rises and the mixed layer swallows a class a step');

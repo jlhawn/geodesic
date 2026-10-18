@@ -123,7 +123,7 @@ test('on a smooth field under solid-body rotation the third-order tracer tendenc
 
 test('the shear-scaled diffusivity moves heat down the gradient in the fixed-depth layers only, under the cap, and makes none, and the background diffusion reaches every layer', () => {
   const run = (shearDiffusivity, lateralDiffusionSpeed = 0) => {
-    const { mesh, C, E, ocean } = hybridOcean(8, { shearDiffusivity, lateralDiffusionSpeed });
+    const { mesh, C, E, ocean } = hybridOcean(8, { shearDiffusivity, lateralDiffusionSpeed, tracerAdvection: 'upwind' });
     const { xCell, xEdge, nEdge, areaCell, radius, cellsOnCell, nEdgesOnCell, maxEdges } = mesh, omega = 1e-7, h = ocean.h, L = ocean.layers;
     for (let e = 0; e < E; e++) {
       const r = Math.hypot(xEdge[3 * e], xEdge[3 * e + 1], xEdge[3 * e + 2]), y = xEdge[3 * e + 1] / r, z = xEdge[3 * e + 2] / r;
@@ -263,6 +263,11 @@ test('the slab options that have no hybrid meaning are refused', () => {
   const mesh = meshOf(8), C = mesh.nCells;
   assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), ekmanBlock: true }), /slab/);
   assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), vertical: 'sigma' }), /vertical/);
+  assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), shearDiffusivity: 0 }), /shearDiffusivity/);
+  assert.throws(() => createOcean(mesh, { bathymetry: new Float64Array(C).fill(4000), tracerAdvection: 'third' }), /hybrid/);
+  assert.throws(() => createOcean(mesh, { bathymetry: new Float64Array(C).fill(4000), shearDiffusivity: 0.2 }), /hybrid/);
+  assert.throws(() => createOcean(mesh, { bathymetry: new Float64Array(C).fill(4000), lateralDiffusionSpeed: 0.005 }), /hybrid/);
+  createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), tracerAdvection: 'upwind', shearDiffusivity: 0 });
 });
 
 test('the worker engine computes the hybrid ocean bit for bit as the serial one, tendencies, regrid and column physics alike', async () => {
