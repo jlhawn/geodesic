@@ -7687,7 +7687,16 @@ eight64_day0183; under the defaults below it does not):
   and the jumps in θ_l and q_t as the deck model takes it, 0.2 under a
   clear top (the M21 form); untapered (`entrainment.taper` restores the
   M21 taper; `jumpLayers` 1 the one-layer jump). A decoupled column also
-  entrains across its surface-driven top.
+  entrains across its surface-driven top. `entrainment.subsidence` (off)
+  makes the interface's coefficient max(0, ρ w_e − F) + t F, F =
+  max(0, π σ̇)/g the mass flux the resolved flow sinks through it and t
+  the core's interface weight toward the layer below: the flux-form
+  transport carries a near-centered interface value across the
+  inversion, so t F lets the sinking air cross at its own value and the
+  exchange supplies only the entrainment beyond the subsidence. At
+  N = 128 over the observed sea surface it warms the mixed layer by a
+  third of a kelvin, lifts the deck and strengthens the trades by a
+  tenth (docs/equatorial-wind-bias.md), so it stays off.
 - Regimes, per cell (`regime`, PH `REGIME`, saved as `boundaryRegime`
   with the mixing top `mixingTop`): stable, surface-driven, decoupled
   (a cloud-top layer whose z_b lies above h_s: the plume runs into the

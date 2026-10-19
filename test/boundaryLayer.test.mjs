@@ -237,6 +237,30 @@ test('a dry stable layer over a convective boundary layer is entrained at the cl
   console.log(`entraining column: h ${(layer.depth[i] - geopotential[(K - 1) * C + i] / g).toFixed(0)} m, B0 ${buoyancy.toExponential(2)} m²/s³, Δθv ${(jump * 300 / g).toFixed(2)} K, w_e ${(1000 * velocity).toFixed(2)} mm/s; one 900 s step moves ${(1000 * (qAbove - plainQ[idx] + q[idx] - qAbove) * mass).toFixed(1)} g/m² of water above h; column enthalpy, water and momentum change by ${((after[0] - before[0]) / before[0]).toExponential(1)}, ${((after[1] + after[2] - before[1] - before[2]) / (before[1] + before[2])).toExponential(1)}, ${((momentum() - m0) / m0).toExponential(1)}`);
 });
 
+test('a mass flux sinking through the interface above h shares the entrainment: the coefficient is max(0, ρ w_e − F) + t F with F the flux and t the core\'s interface weight, ρ w_e again where the flow rises or with entrainment.subsidence off, and w_e itself stays the closure\'s', () => {
+  const state = entrainingColumn();
+  const [pi, theta] = state;
+  const i = 0, { piSigmaDot, exnerLayer, exnerLower, sigmaMid, R } = core.diagnostics;
+  const layer = createBoundaryLayer(mesh, core, { turbulence: 'dry', entrainment: { subsidence: true } }), plain = createBoundaryLayer(mesh, core, { turbulence: 'dry' });
+  layer.diagnose(state);
+  const { above, velocity } = expectedEntrainment(state, layer, i), idx = above * C + i;
+  const rho = 0.5 * (pi[i] * sigmaMid[above] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[above + 1] / (R * theta[idx + C] * exnerLayer[idx + C]));
+  const t = (exnerLower[idx] - exnerLayer[idx]) / (exnerLayer[idx + C] - exnerLayer[idx]);
+  assert.ok(t > 0.3 && t < 0.7, `interface weight ${t}`);
+  const saved = Float64Array.from(piSigmaDot);
+  const coefficient = (flow, which = layer) => { piSigmaDot.fill(0); piSigmaDot[(above + 1) * C + i] = flow; which.diagnose(state); return which.mixing[idx]; };
+  const close = (a, b, what) => assert.ok(Math.abs(a - b) < 1e-12 * Math.abs(b), `${what}: ${a} against ${b}`);
+  close(coefficient(0), rho * velocity, 'no flow');
+  close(coefficient(-0.5 * g * rho * velocity), rho * velocity, 'rising flow');
+  close(coefficient(0.5 * g * rho * velocity), (0.5 + 0.5 * t) * rho * velocity, 'subsidence below w_e');
+  assert.ok(Math.abs(layer.entrainment[i] - velocity) < 1e-12 * velocity, `w_e ${layer.entrainment[i]} against the closure's ${velocity}`);
+  close(coefficient(3 * g * rho * velocity), 3 * t * rho * velocity, 'subsidence beyond w_e');
+  close(coefficient(3 * g * rho * velocity, plain), rho * velocity, 'without the option');
+  piSigmaDot.set(saved);
+  layer.diagnose(state);
+  console.log(`subsiding interface: t ${t.toFixed(3)}, ρ w_e ${(1000 * rho * velocity).toFixed(2)} g/m²/s`);
+});
+
 test('the deck\'s opening and the stratiform share taper w_e: a half-open gate or a share of one half halves it, a closed gate or an EIS of 12 K stops it; a stable surface, zero coefficients, the cap and the jump floor bound it', () => {
   const deckGate = new Float64Array(C).fill(0.3), stratiform = new Float64Array(C);
   const layer = createBoundaryLayer(mesh, core, { turbulence: 'dry', deckGate, stratiform });
@@ -331,9 +355,13 @@ async function engines(entrainment) {
   for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   for (const a of [radiation.mlmGate, radiation.stratiform]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   c.diagnose(pi, theta, q, qc);
+  const { piSigmaDot, exnerLower } = c.diagnostics;
+  for (let k = 1; k < nK; k++) for (let i = 0; i < nC; i++) piSigmaDot[k * nC + i] = Math.fround(0.6 * (random() - 0.4));
   const gpu = await createGpuCore(m, { levels, physics: { entrainment, turbulence: 'dry', surfaceExchange: 'fixed' } });
   const { device, buffers, kernels } = gpu, dt = 900;
   gpu.upload(state);
+  device.queue.writeBuffer(buffers.D, 4 * gpu.layout.D.PSD, Float32Array.from(piSigmaDot));
+  device.queue.writeBuffer(buffers.D, 4 * gpu.layout.D.EXL, Float32Array.from(exnerLower));
   gpu.uploadPhysics({ mlmGate: radiation.mlmGate });
   device.queue.writeBuffer(buffers.PH, 4 * gpu.layout.PH.STRAT, Float32Array.from(radiation.stratiform));
   device.queue.writeBuffer(buffers.P, 0, Float32Array.from([dt, 0, 1, 0, 0, 0, 0, 0]));
@@ -383,6 +411,25 @@ test('the dry boundary layer with entrainment matches between the engines on a r
   assert.ok(worstW < 1e-3 && worstMix < 1e-3, `w_e ${worstW}, coefficients ${worstMix}`);
   assert.ok(theta < 1e-3 && q < 1e-6 && qc < 1e-7 && wind < 1e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
   assert.ok(moved > 100 * q && movedWind > 100 * wind, `entrainment moves q by ${moved} and the wind by ${movedWind}`);
+});
+
+test('the subsidence share matches between the engines on the random columns: with entrainment.subsidence the interface coefficient max(0, ρ w_e − F) + t F agrees, and it differs from the plain coefficient where the flow sinks', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const shared = await engines({ subsidence: true }), plain = await engines({});
+  const { K: nK, C: nC, kTop } = shared;
+  let worstMix = 0, flips = 0, differing = 0, compared = 0;
+  for (let i = 0; i < nC; i++) {
+    const cpu = shared.cpu.entrainment[i], gpu = shared.ph.ENTRAIN[i];
+    if ((cpu > 0) !== (gpu > 0)) { flips++; continue; }
+    if (!(cpu > 0)) continue;
+    compared++;
+    let largest = 0;
+    for (let k = kTop; k < nK - 1; k++) largest = Math.max(largest, shared.cpu.mixing[k * nC + i]);
+    for (let k = kTop; k < nK - 1; k++) { const x = k * nC + i; if (largest > 0) worstMix = Math.max(worstMix, Math.abs(shared.cpu.mixing[x] - shared.ph.MIX[x]) / largest); }
+    for (let k = kTop; k < nK - 1; k++) { const x = k * nC + i; if (Math.abs(shared.cpu.mixing[x] - plain.cpu.mixing[x]) > 1e-9 * largest) { differing++; break; } }
+  }
+  console.log(`subsidence share: ${compared} entraining columns, the coefficient differs from the plain one on ${differing}; engines within ${worstMix.toExponential(1)} of each column's largest coefficient, ${flips} flips`);
+  assert.ok(compared > nC / 4 && differing > compared / 4, `${compared} compared, ${differing} differ`);
+  assert.ok(flips <= nC / 100 && worstMix < 2e-3, `${flips} flips, coefficients ${worstMix}`);
 });
 
 test('a surface parcel that tops out at the base of a stratocumulus whose descending parcel stops there is coupled to it in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

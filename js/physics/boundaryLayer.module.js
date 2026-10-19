@@ -72,8 +72,16 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * DECK_CLOSED, as convection takes it, and s the radiation's stratiform
  * share `stratiform` (radiation.stratiform), 0 below an estimated
  * inversion strength of 8 K and 1 above 12 K. It enters as the
- * coefficient ρ w_e of that layer's lower interface, so the exchange of
- * θ, q, qc and momentum across h goes through the same conservative
+ * coefficient ρ w_e of that layer's lower interface, or with
+ * `entrainment.subsidence` as max(0, ρ w_e − F) + t F, F = max(0, π σ̇)/g
+ * the mass flux the resolved flow sinks through the interface and t the
+ * core's interface weight toward the layer below: the flux-form transport
+ * carries a near-centered interface value, so t F lets the sinking air
+ * cross the inversion at its own value and the exchange supplies only
+ * the entrainment beyond the subsidence (it is off: at N = 128 over the
+ * observed sea surface it warms the mixed layer, lifts the deck and
+ * strengthens the trades, docs/equatorial-wind-bias.md). The exchange
+ * of θ, q, qc and momentum across h goes through the same conservative
  * implicit solve; `entrainment` keeps each cell's w_e (m/s). The depth
  * stays diagnostic. All of the above is `turbulence` 'dry'.
  *
@@ -131,7 +139,9 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * `maximumEfficiency` (1), χ* and Δθ_vs from the cloudy top layer's
  * state and the jumps in θ_l and q_t, and a_1 alone where the top layer
  * holds no cloud, which is the dry scheme's form above. A decoupled
- * column also entrains across its surface-driven top at that form. Nothing is
+ * column also entrains across its surface-driven top at that form, and
+ * every entraining interface takes `entrainment.subsidence` as the dry
+ * scheme does. Nothing is
  * tapered by the deck unless `entrainment.taper`. The diagnosis keeps
  * per cell the cloud-top cooling ΔF (`cloudTopCooling`, W/m²), V
  * (`radiativeVelocity`), the decoupling height z_b (`decoupling`, in
@@ -140,7 +150,7 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * a cloud top), whose layers the moist physics condenses as it does above
  * the mixing top.
  */
-export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5, evaporativeEnhancement: 25, maximumEfficiency: 1, taper: false, jumpLayers: 2 };
+export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5, evaporativeEnhancement: 25, maximumEfficiency: 1, taper: false, jumpLayers: 2, subsidence: false };
 export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, perturbation: 0.2, profile: 0.85, excess: 8.5, tolerance: 0.5, cumulusDepth: 400 };
 export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 
@@ -149,10 +159,10 @@ export function createBoundaryLayer(mesh, core, {
   entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT, formDrag = null,
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
-  const { efficiency, shear, cap, jumpFloor, shearOnset, evaporativeEnhancement, maximumEfficiency, taper: tapered, jumpLayers } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
+  const { efficiency, shear, cap, jumpFloor, shearOnset, evaporativeEnhancement, maximumEfficiency, taper: tapered, jumpLayers, subsidence: subsiding } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
   const { threshold: cloudThreshold, maximumHeight: cloudTopHeight, perturbation, profile, excess: excessCoefficient, tolerance, cumulusDepth } = { ...CLOUD_TOP_DEFAULTS, ...cloudTopOptions };
   const moistScheme = turbulence === 'moist';
-  const { K, C, E, dSigma, sigmaMid, R, g, cp, kappa, exnerLayer, geopotential } = core.diagnostics;
+  const { K, C, E, dSigma, sigmaMid, R, g, cp, kappa, exnerLayer, geopotential, piSigmaDot } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
   const { cellsOnEdge } = mesh;
   const bottom = K - 1;
@@ -177,6 +187,12 @@ export function createBoundaryLayer(mesh, core, {
   const formStressBuffer = formDrag ? (buffers && buffers.formStress ? buffers.formStress : new SharedArrayBuffer(8 * E)) : null;
   const formRate = formDrag ? new Float64Array(formRateBuffer) : null, formStress = formDrag ? new Float64Array(formStressBuffer) : null;
   const { exnerLower } = core.diagnostics;
+  const interfaceExchange = (kE, i, rho, velocity) => {
+    const flux = subsiding ? Math.max(0, piSigmaDot[(kE + 1) * C + i]) / g : 0;
+    if (!(flux > 0)) return rho * velocity;
+    const idx = kE * C + i, t = (exnerLower[idx] - exnerLayer[idx]) / (exnerLayer[idx + C] - exnerLayer[idx]);
+    return Math.max(0, rho * velocity - flux) + t * flux;
+  };
   const heatCoefficient = (i) => (heatCoefficients ? heatCoefficients[i] : dragCoefficients ? dragCoefficients[i] : dragCoefficient);
   const regime = new Float64Array(regimeBuffer), cloudLayer = new Float64Array(cloudLayerBuffer), mixingTop = new Float64Array(mixingTopBuffer), cloudTopCooling = new Float64Array(coolingBuffer), radiativeVelocity = new Float64Array(velocityBuffer), decoupling = new Float64Array(decouplingBuffer);
   const staticEnergy = new Float64Array(K), totalWater = new Float64Array(K);
@@ -260,7 +276,7 @@ export function createBoundaryLayer(mesh, core, {
         const onset = shearOnset > 0 ? Math.min(1, buoyancy / shearOnset) : 1;
         const velocity = taper * Math.min(cap, (efficiency * buoyancy + shear * onset * friction[i] ** 3 / h) / Math.max(jump, jumpFloor));
         entrainmentVelocity[i] = velocity;
-        mixing[idx] = 0.5 * (pi[i] * sigmaMid[entrainK] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[entrainK + 1] / (R * theta[below] * exnerLayer[below])) * velocity;
+        mixing[idx] = interfaceExchange(entrainK, i, 0.5 * (pi[i] * sigmaMid[entrainK] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[entrainK + 1] / (R * theta[below] * exnerLayer[below])), velocity);
       }
     }
   }
@@ -321,8 +337,9 @@ export function createBoundaryLayer(mesh, core, {
       const open = deckGate ? Math.min(1, Math.max(0, (DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN))) : 1;
       velocity *= open * (stratiform ? 1 - stratiform[i] : 1);
     }
-    if (!(velocity > 0)) return 0;
-    mixing[kE * C + i] += 0.5 * (density(pi, kE, i, theta) + density(pi, kE + 1, i, theta)) * velocity;
+    if (!(velocity > 0)) velocity = 0;
+    const coefficient = interfaceExchange(kE, i, 0.5 * (density(pi, kE, i, theta) + density(pi, kE + 1, i, theta)), velocity);
+    if (coefficient > 0) mixing[kE * C + i] += coefficient;
     return velocity;
   }
 

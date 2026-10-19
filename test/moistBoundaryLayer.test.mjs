@@ -298,9 +298,13 @@ async function moistEngines(options = {}, moist = {}) {
   for (let k = 0; k < nK; k++) for (let e = 0; e < nE; e++) u[k * nE + e] = k === nK - 1 ? 2 * (random() - 0.5) : 12 * (random() - 0.5);
   for (const a of [...state, longwave, r.mlmGate, r.stratiform]) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
   c.diagnose(pi, theta, q, qc);
+  const { piSigmaDot, exnerLower } = c.diagnostics;
+  for (let k = 1; k < nK; k++) for (let i = 0; i < nC; i++) piSigmaDot[k * nC + i] = Math.fround(0.6 * (random() - 0.4));
   const gpu = await createGpuCore(m, { levels, physics: { ...options, ...moist, surfaceExchange: 'fixed' } });
   const { device, buffers, kernels, layout } = gpu, dt = 900;
   gpu.upload(state);
+  device.queue.writeBuffer(buffers.D, 4 * layout.D.PSD, Float32Array.from(piSigmaDot));
+  device.queue.writeBuffer(buffers.D, 4 * layout.D.EXL, Float32Array.from(exnerLower));
   gpu.uploadPhysics({ mlmGate: r.mlmGate });
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.STRAT, Float32Array.from(r.stratiform));
   device.queue.writeBuffer(buffers.PH, 4 * layout.PH.LWH, Float32Array.from(longwave));
@@ -322,7 +326,7 @@ async function moistEngines(options = {}, moist = {}) {
 }
 
 test('the moist boundary layer matches between the engines on a random set of columns in every regime: the regime, V, w_e, the coefficients, the depths and θ, q, qc and the wind after the step, with convection vetoed under coupled stratocumulus as well', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  for (const [label, options, moist] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }], ['no convection under coupled stratocumulus', {}, { coupledVeto: true }]]) {
+  for (const [label, options, moist] of [['defaults', {}], ['the jump across one layer', { entrainment: { jumpLayers: 1 } }], ['the M21 taper', { entrainment: { taper: true } }], ['no surface parcel', { cloudTop: { cumulusDepth: 0 } }], ['no convection under coupled stratocumulus', {}, { coupledVeto: true }], ['the subsidence share', { entrainment: { subsidence: true } }]]) {
     const run = await moistEngines(options, moist), { K: nK, C: nC, E: nE, kTop, cpu, ph } = run;
     let coupledPlumes = 0;
     for (let i = 0; i < nC; i++) if (ph.REGIME[i] === REGIME.COUPLED && ph.CUMF[i] > 0) coupledPlumes++;

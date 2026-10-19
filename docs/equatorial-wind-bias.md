@@ -216,6 +216,7 @@ the wind −6, −6, −5.5 m/s at 20 m.
 | turbulence 'dry' | −3.95 | −91 | −68 | −57 | −7.9 | −6.4 | −5.4 | 1912 | 12.6 | 12.7 |
 | cloudTop.maximumHeight 1000 m | −3.98 | −93 | −77 | −62 | −8.0 | −6.9 | −5.7 | 1802 | 12.8 | 13.0 |
 | plumeMomentum off | −5.01 | −130 | −108 | −80 | −9.5 | −8.4 | −6.5 | 1695 | 13.0 | 12.8 |
+| entrainment.subsidence on | −4.60 | −122 | −101 | −70 | −9.2 | −8.0 | −5.9 | 1871 | 12.9 | 12.2 |
 
 Single states (day 1609 of twelve-day runs) also showed the Gregory
 entrainment law (`plumeEntrainmentLaw: 'gregory'`) at −124 and −130 mN/m²
@@ -230,6 +231,46 @@ cloud-top mixing ceiling at 1 km (−11 percent) and the dry turbulence
 closure (−18 percent), are mitigations: if their effects multiplied,
 160W–140W would still carry 1.4 times the observed stress, and none
 touches the free-tropospheric part.
+
+### 5. The inversion layer's budget and the subsidence share
+
+`tropicalHeating.mjs` on the base arm's day-1617 state (one day of CPU
+steps over the 3S–3N 140W–100W sea box) gives the heat budget of the
+layer that holds the smeared inversion (k = 24, 1.83–2.63 km) and of the
+mixed layer's top layer below it (k = 25, 1.29–1.83 km), K/day:
+
+| layer | dynamics | longwave | shortwave | boundary-layer mixing | shallow plume | deep plume's transport | resolved condensation |
+|---|---|---|---|---|---|---|---|
+| k = 24, 2.1 km | +4.28 | −3.35 | +0.33 | −0.92 | −0.85 | −0.65 | +0.48 |
+| k = 25, 1.5 km | +3.70 | −3.70 | +0.45 | −3.13 | −1.10 | +0.44 | +3.16 |
+
+The inversion layer is warmed by the subsidence alone and cooled two
+thirds by the longwave, a quarter by the shallow and deep plumes
+detraining into it (they moisten it at 3.4 K/day equivalent as well)
+and least by the boundary layer's entrainment exchange (0.9 K/day: an
+exchange velocity near 1.6 mm/s against a subsidence of 6.5 mm/s). The
+mixed layer's top layer is cooled by the mixing that carries its heat
+down to the subcloud layer and by the plumes, and held by condensation.
+With a centered interface value the flux-form vertical transport hands
+the mixed layer only 1 − t of the sinking air's excess heat across the
+inversion interface (t ≈ 0.5, the core's interface weight), about
+11 W/m² short of the upwind value here; the inversion layer keeps that
+share.
+
+`entrainment.subsidence` (both engines; the unit test and the parity
+cases in `boundaryLayer.test.mjs` and `moistBoundaryLayer.test.mjs`)
+makes the entrainment interface's coefficient max(0, ρ w_e − F) + t F,
+F the sinking mass flux: the exchange passes the missing share down and
+supplies only the entrainment beyond the subsidence. Its arm (the
+`entrainment.subsidence on` row) warms the eastern mixed layer by a
+third of a kelvin at 1.1 and 1.5 km, cools the inversion layer by 0.3 K
+and the 3 km layer by 0.5 K while moistening it (RH 0.61 against 0.40),
+lifts the deck 100 m and raises the stress by 12 percent: the weaker
+jump lets the plumes through, the feedback that holds the structure.
+The option stays off. The lever is not the exchange but what cools the
+inversion layer, the plumes' detrainment and the longwave, together
+with the vertical transport across both of the inversion layer's
+interfaces.
 
 ## What remains
 
@@ -254,6 +295,15 @@ The cause is identified to two structures and not yet fixed:
    is not the lever (`noprog`): the layer stays cold with the deck at
    0.75 km, so the smearing is the moist physics' (the shallow plume,
    the resolved cloud and its longwave cooling) on a 600 m layer.
+   Finding 5's budget puts the inversion layer's loss two thirds in
+   the longwave and a quarter in the plumes' detrainment, and passing
+   the subsidence's share of the transport to the mixed layer
+   (`entrainment.subsidence`) warms the mixed layer and lifts the deck
+   instead. The candidates are a plume that stops at the deck's
+   inversion where the deck runs, and an upwind-biased vertical
+   transport across the inversion layer's two interfaces in the core
+   (both engines, with the conservation rows), judged together on the
+   20-day means.
 3. The warm pool's part of the coupled bias is the ocean's cold warm
    pool under the recorded winds, closed in the coupled run by the
    Bjerknes loop; it needs no atmospheric change and will follow the

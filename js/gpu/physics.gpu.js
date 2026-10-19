@@ -190,7 +190,7 @@ const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.p
 const PL_SURFACE50: bool = ${o.plumeSourceDepth === 'surface50'}; const EX_COEF: f32 = ${SOURCE_EXCESS.coefficient}; const EX_T: f32 = ${SOURCE_EXCESS.temperature}; const EX_Q: f32 = ${SOURCE_EXCESS.humidity};
 const EX_LAYER: bool = ${o.excessVelocity === 'surfaceLayer'}; const EX_SCALE: f32 = ${SOURCE_EXCESS.scale}; const EX_STAB: f32 = ${SOURCE_EXCESS.layer}; const EX_KARMAN: f32 = ${SOURCE_EXCESS.karman}; const EX_USTAR: f32 = ${SOURCE_EXCESS.friction}; const EX_VIRT: f32 = ${SOURCE_EXCESS.virtual};
 const PL_BECHTOLD: bool = ${o.capeClosure === 'bechtold'}; const BT_POSITIVE: bool = ${o.pcapeBoundary === 'positive'}; const BT_SCALE: f32 = ${BECHTOLD.resolution / BECHTOLD.reference}; const BT_SHORT: f32 = ${BECHTOLD.shortest}; const BT_LONG: f32 = ${BECHTOLD.longest}; const BT_WIND: f32 = ${BECHTOLD.boundaryWind}; const BT_TSTAR: f32 = ${BECHTOLD.temperatureScale}; const SUB_K: i32 = ${o.subcloudLayers ?? 0};
-const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
+const BL_ENTRAIN: bool = ${entrainment.efficiency > 0 || entrainment.shear > 0}; const BL_SUBSIDENCE: bool = ${!!entrainment.subsidence}; const BL_A: f32 = ${entrainment.efficiency}; const BL_AS: f32 = ${entrainment.shear}; const BL_WEMAX: f32 = ${entrainment.cap}; const BL_BMIN: f32 = ${entrainment.jumpFloor}; const BL_ONSET: f32 = ${entrainment.shearOnset}; const RIC: f32 = ${o.richardsonCritical}; const KARMAN: f32 = ${o.vonKarman}; const STABILITY: bool = ${o.stability ? 'true' : 'false'}; const KTOP: i32 = ${o.kTop};
 const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; const BUCKET: f32 = ${o.bucketCapacity}; const WETT: f32 = ${o.wetnessThreshold}; const ALB_LAND: f32 = ${o.landAlbedo}; const VEGETATED: bool = ${!!o.vegetation}; const ALB_BARE: f32 = ${o.bareAlbedo}; const ALB_VEG: f32 = ${o.vegetatedAlbedo}; const DARKENING: bool = ${darkening !== false}; const DARK_SURFACE: bool = ${darkening === 'surface'}; const ALB_WETSOIL: f32 = ${o.wetSoilAlbedo}; const DARK_FROM: f32 = ${wetting[0]}; const DARK_SPAN: f32 = ${wetting[1] - wetting[0]}; const ROOTCAP: f32 = ${o.rootZoneCapacity};
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_CEILINV: f32 = ${o.ceilingInversion ?? o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
@@ -2180,6 +2180,13 @@ fn blSurfaceInterface(i: i32, zb: f32, depthAbove: f32) -> i32 {
   for (var k = KTOP; k < K - 1; k++) { if (blInterface(k, i, zb) >= depthAbove) { kE = k; } }
   return kE;
 }
+fn blExchange(kE: i32, i: i32, rho: f32, velocity: f32) -> f32 {
+  var flux = 0.0;
+  if (BL_SUBSIDENCE) { flux = max(0.0, D[D_PSD + (kE + 1) * C + i]) / GRAV; }
+  if (!(flux > 0.0)) { return rho * velocity; }
+  let idx = kE * C + i; let t = (D[D_EXL + idx] - D[D_EXM + idx]) / (D[D_EXM + idx + C] - D[D_EXM + idx]);
+  return max(0.0, rho * velocity - flux) + t * flux;
+}
 fn blEntrain(i: i32, pi: f32, kE: i32, lowest: i32, h: f32, buoyant: f32, sheared: f32) -> f32 {
   if (kE < KTOP || !(h > 0.0)) { return 0.0; }
   var weight = 0.0; var sumV = 0.0; var sumL = 0.0; var sumQ = 0.0;
@@ -2206,8 +2213,9 @@ fn blEntrain(i: i32, pi: f32, kE: i32, lowest: i32, h: f32, buoyant: f32, sheare
   }
   var velocity = min(BL_WEMAX, (efficiency * buoyant + BL_AS * sheared) / (h * max(jump, BL_BMIN)));
   if (BL_TAPER) { velocity *= clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0) * (1.0 - PH[PH_STRAT + i]); }
-  if (!(velocity > 0.0)) { return 0.0; }
-  PH[PH_MIX + kE * C + i] += 0.5 * (blDensity(kE, i, pi) + blDensity(kE + 1, i, pi)) * velocity;
+  if (!(velocity > 0.0)) { velocity = 0.0; }
+  let coefficient = blExchange(kE, i, 0.5 * (blDensity(kE, i, pi) + blDensity(kE + 1, i, pi)), velocity);
+  if (coefficient > 0.0) { PH[PH_MIX + kE * C + i] += coefficient; }
   return velocity;
 }
 fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, friction: f32) {
@@ -2357,7 +2365,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     if (BL_ONSET > 0.0) { onset = min(1.0, buoyancy / BL_ONSET); }
     let velocity = taper * min(BL_WEMAX, (BL_A * buoyancy + BL_AS * onset * friction * friction * friction / h) / max(jump, BL_BMIN));
     PH[PH_ENTRAIN + i] = velocity;
-    PH[PH_MIX + idx] = 0.5 * (pi * LV[L_SM + entrainK] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]) + pi * LV[L_SM + entrainK + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below])) * velocity;
+    PH[PH_MIX + idx] = blExchange(entrainK, i, 0.5 * (pi * LV[L_SM + entrainK] / (RGAS * IN[S_TH + idx] * D[D_EXM + idx]) + pi * LV[L_SM + entrainK + 1] / (RGAS * IN[S_TH + below] * D[D_EXM + below])), velocity);
   }
 }`,
   adjustMix: `${ADJUST_FUNCTIONS}
