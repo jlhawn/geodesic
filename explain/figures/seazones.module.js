@@ -170,7 +170,7 @@ export function mountSeazones(root) {
   }
 
   function report(p) {
-    const n = L(), bases = basesAt(p, probe.lat, new Float64Array(n)), k = layerAt(bases, probe.z), label = header.classes[k], thick = bases[k] - (k ? bases[k - 1] : 0), weight = k < header.fixedLayers ? 0 : modeWeight(thick, header.minimumThickness[k]);
+    const n = L(), bases = basesAt(p, probe.lat, new Float64Array(n)), k = layerAt(bases, probe.z), label = header.labels[k], thick = bases[k] - (k ? bases[k - 1] : 0), weight = k < header.fixedLayers ? 0 : modeWeight(thick, header.minimumThickness[k]);
     const at = (which) => valueAt(p, which, k, probe.lat), T = at('T'), S = at('S'), u = at('u'), v = at('v');
     const { lats, nj, psi, depth } = p.grid, i0 = Math.min(lats.length - 2, Math.floor((probe.lat + 90) / 5)), s = (probe.lat - lats[i0]) / 5;
     const column = (c) => {

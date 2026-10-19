@@ -9,8 +9,8 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  * one of three generators and remaps the water onto it, then runs the
  * column physics on the new layers.
  *
- * Layers (hybridLayerTable): label densities ρ_k, as the slab ocean's
- * classes, and a minimum thickness Δz_k per layer whose running sum is
+ * Layers (hybridLayerTable): label densities ρ_k and a minimum
+ * thickness Δz_k per layer whose running sum is
  * the depth table z_k, the z grid a column takes where every layer is
  * held at its minimum. Twelve surface layers have labels lighter than any
  * seawater, so they are fixed-depth everywhere, 3 m at the top growing
@@ -86,8 +86,8 @@ import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction } from '
  * still unstable; and one implicit solve (solveColumn) of the column's
  * heat and salt with the summed diffusivities, which conserves both. The
  * viscosity profile is published for the edges' solve of their normal
- * velocity, which the same solver does with the stress as a flux into
- * the top layer. The mixed-layer depth (mixedLayerDepth) is where the
+ * velocity, which the same solver does; the wind's stress enters the top
+ * layer's tendency in the dynamics, not this solve. The mixed-layer depth (mixedLayerDepth) is where the
  * density first exceeds the surface layer's by an excess.
  */
 /*

@@ -67,8 +67,8 @@ export function layerGroups(header, month = null) {
   const groups = GROUPS.map((name) => ({ name, mass: caps.map(() => 0), eddyMass: caps.map(() => 0), heat: caps.map(() => 0), eddyHeat: caps.map(() => 0) }));
   caps.forEach((_, c) => {
     for (let k = 0; k < L; k++) {
-      const g = groups[groupOf(k, header.classes[k], header.fixedLayers)], i = c * L + k;
-      g.mass[c] += flow.mass[i]; g.eddyMass[c] += flow.eddyMass[i]; g.heat[c] += flow.heat[i]; g.eddyHeat[c] += flow.eddyHeat[i];
+      const g = groups[groupOf(k, header.labels[k], header.fixedLayers)], i = c * L + k;
+      g.mass[c] += flow.mass[i]; g.eddyMass[c] += flow.eddyMass[i]; g.heat[c] += flow.heat[i] + flow.diffusionHeat[i]; g.eddyHeat[c] += flow.eddyHeat[i];
     }
   });
   return { caps, groups };
@@ -156,11 +156,11 @@ export function layerSection(header, month = null) {
     const out = [];
     for (let k = 0; k < L; k++) {
       const i = b * L + k, top = k ? block.base[i - 1] : 0, thickness = block.base[i] - top, weight = k < header.fixedLayers ? 0 : modeWeight(thickness, header.minimumThickness[k]);
-      if (block.T[i] !== null) out.push({ layer: k, label: header.classes[k], top, base: block.base[i], thickness, weight, mode: modeName(weight), T: block.T[i], S: block.S[i], u: block.u[i], v: block.v ? block.v[i] : null });
+      if (block.T[i] !== null) out.push({ layer: k, label: header.labels[k], top, base: block.base[i], thickness, weight, mode: modeName(weight), T: block.T[i], S: block.S[i], u: block.u[i], v: block.v ? block.v[i] : null });
     }
     return out;
   });
-  return { name: month ?? 'year', centers, labels: header.classes, layers: L, base: block.base, T: block.T, S: block.S, u: block.u, v: block.v ?? null, columns, samples: block.samples };
+  return { name: month ?? 'year', centers, labels: header.labels, layers: L, base: block.base, T: block.T, S: block.S, u: block.u, v: block.v ?? null, columns, samples: block.samples };
 }
 
 export function layerOverturning(header, month = null, { closed = true } = {}) {
@@ -178,7 +178,7 @@ export function layerOverturning(header, month = null, { closed = true } = {}) {
     bottom[c] = psi[c * M + L];
   });
   return {
-    name: month ?? 'year', caps, labels: header.classes, layers: L, psi, depth, bottom, imbalance: flow.imbalance, etaNet: flow.etaNet, net: flow.net,
+    name: month ?? 'year', caps, labels: header.labels, layers: L, psi, depth, bottom, imbalance: flow.imbalance, etaNet: flow.etaNet, net: flow.net,
     cell(sign, from = -90, to = 90) {
       let best = { psi: 0 };
       caps.forEach((lat, c) => { if (lat >= from && lat <= to) for (let k = 0; k <= L; k++) if (sign * psi[c * M + k] > sign * best.psi) best = { psi: psi[c * M + k], latitude: lat, boundary: k, depth: depth[c * M + k] }; });

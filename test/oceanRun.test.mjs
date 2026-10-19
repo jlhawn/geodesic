@@ -32,7 +32,7 @@ const lastDay = (name, over = 0) => { let n = -1; header.daily[name].forEach((v,
 test('the run is Part 7’s wet planet with the hybrid sea let go: ten years of spin-up and a recorded year from the March equinox', () => {
   assert.equal(new URL(DATA_URL).pathname.endsWith('/explain/data/ocean_N16.bin'), true);
   assert.deepEqual([header.case, header.engine, header.N, header.K, header.layers, header.dt, header.grid, header.spinupDays, header.recordDays], ['ocean', 'gpu', 16, 36, 58, 450, 'bl36', 3650, 365]);
-  assert.equal(header.commit, '40fdb03');
+  assert.equal(header.commit, '0b650a8');
   assert.equal(header.date.slice(0, 10), '2026-10-19');
   assert.equal(header.options.ocean.everySteps, 4);
   assert.deepEqual(header.ice.options, part7.header.ice.options);
@@ -46,14 +46,14 @@ test('the run is Part 7’s wet planet with the hybrid sea let go: ten years of 
 });
 
 test('the layers are the model’s hybrid table: twelve fixed-depth surface layers, labels and minimum thicknesses as the code has them', () => {
-  assert.deepEqual(header.classes, Array.from(HYBRID_LAYERS.densities));
+  assert.deepEqual(header.labels, Array.from(HYBRID_LAYERS.densities));
   assert.deepEqual(header.minimumThickness, Array.from(HYBRID_LAYERS.minimum));
   assert.equal(F, HYBRID_LAYERS.fixed); assert.equal(F, 12); assert.equal(L, 58);
   assert.equal(MODE_DEPTH, MODEL_MODE_DEPTH); assert.equal(MODE_DEPTH, header.oceanOptions.modeDepth);
   assert.equal(header.oceanOptions.minimumLayer, 0.5); assert.equal(header.oceanOptions.generator, 'hybrid');
   const depths = HYBRID_LAYERS.depths;
   close(depths[12], 56.9, 0.05, 'the twelve surface layers'); close(depths[21], 144, 0.5, 'the warm-pool layers end'); close(depths[44], 374, 0.5, 'the thermocline layers end'); close(depths[58], 3019, 0.5, 'the minima');
-  assert.deepEqual([header.classes[0], header.classes[11], header.classes[12], header.classes[20], header.classes[21], header.classes[43], header.classes[44], header.classes[57]], [1016.5, 1019.25, 1019.5, 1021.875, 1022, 1026.6, 1026.65, 1027.5]);
+  assert.deepEqual([header.labels[0], header.labels[11], header.labels[12], header.labels[20], header.labels[21], header.labels[43], header.labels[44], header.labels[57]], [1016.5, 1019.25, 1019.5, 1021.875, 1022, 1026.6, 1026.65, 1027.5]);
   assert.deepEqual([GROUPS.length, groupOf(0, 1016.5, F), groupOf(11, 1019.25, F), groupOf(12, 1019.5, F), groupOf(38, 1026.1, F), groupOf(49, 1026.8, F), groupOf(57, 1027.5, F)], [4, 0, 0, 1, 2, 3, 3]);
   const { groups } = layerGroups(header);
   assert.deepEqual(groups.map((g) => g.name), GROUPS);
@@ -158,7 +158,7 @@ test('Part 7’s air and Part 6’s dry sphere are their own runs’, and give t
   close(split.peak('part6', 1).transport, 1.1, 0.005, 'Part 6');
 });
 
-test('the sea’s flow by layer: its water adds up to the free surface’s, its eddies move none, its groups are the file’s, and its cells’ heat is what the page draws', () => {
+test('the sea’s flow by layer: its water adds up to the free surface’s, its eddies move none, its heat adds up to the books’, its groups are the file’s, and its cells’ heat is what the page draws', () => {
   const { direct, sea, edges } = split, ov = header.overturning;
   assert.equal(direct.transport[0], 0); assert.equal(direct.transport.at(-1), 0);
   ov.caps.forEach((l, c) => close(direct.mass[c + 1], ov.etaNet[c] + ov.imbalance[c], 0.05, `the layer sum is etaNet plus the imbalance at ${l}`));
@@ -166,14 +166,20 @@ test('the sea’s flow by layer: its water adds up to the free surface’s, its 
   const { groups } = layerGroups(header);
   for (const flow of ov.returnFlow) {
     const c = ov.caps.indexOf(flow.latitude);
-    assert.deepEqual(flow.groups.map((g) => g.name), ['fixed-depth layers', 'classes lighter than 1026', 'classes 1026 to 1026.8', 'classes from 1026.8']);
+    assert.deepEqual(flow.groups.map((g) => g.name), ['fixed-depth layers', 'layers lighter than 1026', 'layers 1026 to 1026.8', 'layers from 1026.8']);
     flow.groups.forEach((g, n) => { close(groups[n].mass[c], g.mass, 0.02, `${GROUPS[n]} at ${flow.latitude}`); close(groups[n].eddyMass[c], g.eddyMass, 0.02, 'its eddies'); });
   }
   const top = ov.returnFlow.find((r) => r.latitude === -10).groups[0];
   close(top.southward.mass, -271.78, 0.01, 'the surface layers’ flow south across 10° S, at its edges and snapshots'); close(top.northward.mass, 234.5, 0.01, 'and north'); close(top.mass, -37.29, 0.01, 'a net south of');
-  assert.deepEqual(split.peak('direct', 1).latitude, -5);
-  const gap = (l) => Math.abs(direct.transport[edges.indexOf(l)] - sea.transport[edges.indexOf(l)]);
-  assert.ok(gap(-5) > 5 && gap(5) > 5, `the snapshots’ heat sum is far from the books near the equator: ${gap(-5)}, ${gap(5)}`);
+  for (const l of ov.caps) close(direct.transport[edges.indexOf(l)], sea.transport[edges.indexOf(l)], 0.035, `the layers’ own heat fluxes against the books at ${l}`);
+  const part = (l, name, from = 0) => { const c = ov.caps.indexOf(l); let sum = 0; for (let k = from; k < L; k++) sum += ov[name][c * L + k]; return sum; }, cells = (l) => direct.cells[edges.indexOf(l)];
+  close(part(-10, 'eddyHeat'), 0.42, 0.01, 'the eddies across 10° S'); close(part(-10, 'diffusionHeat'), 0.37, 0.01, 'the mixing across 10° S');
+  close(part(-5, 'heat') - cells(-5), 2.20, 0.01, 'the currents within the layers across 5° S'); close(part(5, 'heat') - cells(5), -2.12, 0.01, 'across 5° N');
+  close(part(-5, 'eddyHeat') + part(-5, 'diffusionHeat'), 0.95, 0.01, 'eddies and mixing across 5° S'); close(part(5, 'eddyHeat') + part(5, 'diffusionHeat'), -0.93, 0.01, 'across 5° N');
+  for (const [l, currents, mixing, eddies, below] of [[35, -0.32, 0.70, 0.23, 0.48], [40, -0.40, 0.62, 0.19, 0.44]]) {
+    close(part(l, 'heat'), currents, 0.01, `the currents across ${l}° N`); close(part(l, 'diffusionHeat'), mixing, 0.01, `the mixing across ${l}° N`);
+    close(part(l, 'eddyHeat'), eddies, 0.01, `the eddies across ${l}° N`); close(part(l, 'diffusionHeat', header.fixedLayers), below, 0.01, `the mixing below the surface layers across ${l}° N`);
+  }
   const cellsHeat = cellHeat(header);
   assert.equal(cellsHeat.length, ov.caps.length);
   ov.caps.forEach((l, c) => close(direct.cells[c + 1], cellsHeat[c], 1e-12, `the page’s cells at ${l}`));
@@ -437,8 +443,8 @@ test('the prose numbers: the spin-up’s first current and the polar sea', () =>
   let coldest = Infinity, densest = 0;
   times.forEach((_, k) => { const t = run.values('year', k, sst), s = run.values('year', k, sss); t.forEach((v, i) => { coldest = Math.min(coldest, v); densest = Math.max(densest, seawaterDensity(v + 273.15, s[i])); }); });
   close(coldest, -1.86, 0.005, 'the coldest cell, °C'); close(densest, 1026.60, 0.005, 'the densest surface water');
-  assert.ok(densest < header.classes[44], 'lighter than the 1026.65 layer');
-  close(seawaterDensity(275.15, 34.7), 1026.77, 0.005, 'the start’s deep water'); assert.equal(header.classes[48], 1026.77);
+  assert.ok(densest < header.labels[44], 'lighter than the 1026.65 layer');
+  close(seawaterDensity(275.15, 34.7), 1026.77, 0.005, 'the start’s deep water'); assert.equal(header.labels[48], 1026.77);
   const tops = layerSection(header).columns.map((c) => c.find((x) => x.layer === 48));
   tops.forEach((x, b) => { assert.ok(x.T > 1.96 && x.T < 2.1 && x.S > 34.68 && x.S < 34.705, `the deepest layer at ${lat(b)}`); if (Math.abs(lat(b)) < 30) assert.ok(x.top > 1900 && x.top < 2340, `its top at ${lat(b)}`); if (Math.abs(lat(b)) > 60) assert.ok(x.top > 700 && x.top < 1000, `its top at ${lat(b)}`); });
   close(tops[0].top, 712, 1, 'the deepest layer’s top at the South Pole'); close(tops[35].top, 713, 1, 'and the North Pole'); close(Math.min(...tops.filter((_, b) => Math.abs(lat(b)) < 30).map((x) => x.top)), 1914, 1, 'its shallowest within 30°'); close(Math.max(...tops.map((x) => x.top)), 2339, 1, 'and deepest');
