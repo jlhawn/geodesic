@@ -140,7 +140,7 @@ export function physicsConstants(o) {
 fn visibleStreams(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec4<f32> { return ${visibleSum((depth) => `stream(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
 fn visibleEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `streamEscape(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
 fn visibleReflection(cloudDepth: f32, keep: f32, mu: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `reflection(cloudDepth + ${depth}, keep, mu)`)}; }
-const MOIST_BL: bool = ${moistTurbulence}; const CT_THRESH: f32 = ${cloudTop.threshold}; const CT_HMAX: f32 = ${cloudTop.maximumHeight}; const CT_PERT: f32 = ${cloudTop.perturbation}; const CT_PROFILE: f32 = ${cloudTop.profile}; const CT_EXCESS: f32 = ${cloudTop.excess}; const CT_TOLERANCE: f32 = ${cloudTop.tolerance}; const CT_CUMULUS: f32 = ${cloudTop.cumulusDepth};
+const MOIST_BL: bool = ${moistTurbulence}; const CT_THRESH: f32 = ${cloudTop.threshold}; const CT_HMAX: f32 = ${cloudTop.maximumHeight}; const CT_PERT: f32 = ${cloudTop.perturbation}; const CT_PROFILE: f32 = ${cloudTop.profile}; const CT_EXCESS: f32 = ${cloudTop.excess}; const CT_TOLERANCE: f32 = ${cloudTop.tolerance}; const CT_CUMULUS: f32 = ${cloudTop.cumulusDepth}; const CT_CAPPED: bool = ${!!cloudTop.cumulusCapped};
 const BL_A2: f32 = ${entrainment.evaporativeEnhancement}; const BL_AMAX: f32 = ${entrainment.maximumEfficiency}; const BL_TAPER: bool = ${!!entrainment.taper}; const BL_JUMP2: bool = ${entrainment.jumpLayers > 1};
 const VARIANCE_COVER: bool = ${moistTurbulence && o.boundaryCover === 'variance'}; const VAR_FLOOR: f32 = ${o.varianceFloor}; const VAR_SCALE: f32 = ${o.varianceScale}; const MIX_LENGTH: f32 = ${o.mixingLength}; const STABLE_LENGTH: f32 = ${o.stableMixingLength};
 const MLM_BL_GATE: bool = ${o.deckRegime === 'boundaryLayer'}; const MLM_BYPASS: bool = ${!!o.deckBypass};
@@ -2220,7 +2220,7 @@ fn blEntrain(i: i32, pi: f32, kE: i32, lowest: i32, h: f32, buoyant: f32, sheare
 }
 fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, friction: f32) {
   let bottom = K - 1;
-  var surfaceDepth = richardsonDepth; var surfaceLevel = -1;
+  var surfaceDepth = richardsonDepth; var surfaceLevel = -1; var cumulusBase = -1.0;
   if (buoyancy > 0.0 && CT_CUMULUS > 0.0) {
     let base = bottom * C + i;
     let mixed = pow(friction * friction * friction + 0.6 * buoyancy * max(0.0, surfaceDepth), 1.0 / 3.0);
@@ -2233,9 +2233,11 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
       if (!(parcelVirtual(level, total, k, i, pi) + CT_TOLERANCE > D[D_THV + k * C + i])) { break; }
       k--;
     }
-    if (condensation > k && k >= KTOP) {
-      let parcelTop = blInterface(k, i, zb); let cloudBase = blInterface(condensation, i, zb);
+    if (condensation > k) {
+      var parcelTop = 1e30; if (k >= KTOP) { parcelTop = blInterface(k, i, zb); }
+      let cloudBase = blInterface(condensation, i, zb);
       if (parcelTop - cloudBase <= CT_CUMULUS && parcelTop <= CT_HMAX && parcelTop > surfaceDepth) { surfaceDepth = parcelTop; surfaceLevel = k; }
+      else if (CT_CAPPED && parcelTop - cloudBase > CT_CUMULUS) { cumulusBase = cloudBase; }
     }
   }
   var top = -1; var cooling = 0.0;
@@ -2253,17 +2255,21 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   if (top >= 0) {
     let idx = top * C + i;
     let level = IN[S_TH + idx] - LHEAT * IN[S_QC + idx] / (CP * D[D_EXM + idx]) - CT_PERT; let total = IN[S_Q + idx] + IN[S_QC + idx];
+    cloudTopZ = blInterface(top - 1, i, zb);
+    let floor = select(-1.0, max(surfaceDepth, cumulusBase), cumulusBase >= 0.0);
+    let capped = floor >= 0.0 && blInterface(top, i, zb) >= floor;
     var k = top + 1;
     loop {
       if (k > bottom) { break; }
       if (!(parcelVirtual(level, total, k, i, pi) < D[D_THV + k * C + i])) { break; }
+      if (capped && k == bottom) { break; }
+      if (capped && blInterface(k, i, zb) < floor) { break; }
       k++;
     }
     lowest = k - 1;
     if (k <= bottom) { base0 = blInterface(k - 1, i, zb); }
-    coupled = k > bottom || select(base0 <= surfaceDepth, k - 1 >= surfaceLevel, surfaceLevel >= 0);
+    coupled = !capped && (k > bottom || select(base0 <= surfaceDepth, k - 1 >= surfaceLevel, surfaceLevel >= 0));
     if (coupled) { base0 = 0.0; }
-    cloudTopZ = blInterface(top - 1, i, zb);
   }
   var h = select(surfaceDepth, cloudTopZ, coupled);
   PH[PH_DEPTH + i] = zb + h;

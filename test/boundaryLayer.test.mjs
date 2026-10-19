@@ -491,3 +491,101 @@ test('a surface parcel that tops out at the base of a stratocumulus whose descen
   assert.equal(flips, 0);
   assert.ok(worstDepth < 0.5, `depth ${worstDepth}`);
 });
+
+function cumulusColumns(pair) {
+  const { core: c, mesh: m, state, radiation } = pair;
+  const { K: nK, C: nC, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
+  const [pi, theta, u, surfaceT, q, qc] = state;
+  const init = initializeState(pair, {});
+  for (let a = 0; a < init.length; a++) state[a].set(init[a]);
+  c.diagnose(pi, theta, q, qc);
+  const topLayer = new Int32Array(nC).fill(-1);
+  for (let i = 0; i < nC; i++) {
+    const zb = phi[(nK - 1) * nC + i] / grav, height = (k) => phi[k * nC + i] / grav - zb;
+    for (let k = 0; k < nK; k++) {
+      const x = k * nC + i, z = height(k), moisture = z < 1800 ? 0.0153 - 3e-6 * z : 0.003;
+      const virtual = z < 1800 ? 303.3 + 1e-3 * Math.max(0, z - 300) : 303.3 + 1.5 + 6 + 6e-3 * (z - 1800);
+      theta[x] = Math.max(virtual / (1 + 0.61 * moisture), init[1][x]);
+      q[x] = Math.min(moisture, 0.9 * saturationHumidity(theta[x] * exnerLayer[x], pi[i] * sigmaMid[k]));
+      qc[x] = z > 950 && z < 1350 ? 5e-4 : 0;
+      radiation.longwave[x] = 0;
+      if (qc[x] > 0 && (topLayer[i] < 0 || k < topLayer[i])) topLayer[i] = k;
+    }
+    radiation.longwave[topLayer[i] * nC + i] = -60;
+    surfaceT[i] = theta[(nK - 1) * nC + i] * exnerLayer[(nK - 1) * nC + i] * Math.pow(sigmaMid[nK - 1], -kappa) + 0.5;
+  }
+  u.fill(0);
+  c.diagnose(pi, theta, q, qc);
+  return { topLayer, nC, nK };
+}
+
+test('a cumulus-capped column keeps its cloud-top layer decoupled: with cloudTop.cumulusCapped the descending parcel stops at the cumulus base, the surface-driven depth stays the Richardson depth and no mixing crosses the layer between', () => {
+  const levels = sigmaInterfaces('bl42');
+  const build = (cloudTop) => createModel(new Grid(3), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { cloudTop } });
+  const plain = build({}), capped = build({ cumulusCapped: true });
+  const { topLayer, nC, nK } = cumulusColumns(plain);
+  cumulusColumns(capped);
+  plain.boundaryLayer.diagnose(plain.state);
+  capped.boundaryLayer.diagnose(capped.state);
+  const { geopotential: phi, g: grav } = plain.core.diagnostics;
+  let coupledPlain = 0, decoupledCapped = 0, crossing = 0, inside = 0;
+  for (let i = 0; i < nC; i++) {
+    const zb = phi[(nK - 1) * nC + i] / grav, interfaceZ = (k) => 0.5 * (phi[k * nC + i] + phi[(k + 1) * nC + i]) / grav - zb, cloudTop = interfaceZ(topLayer[i] - 1);
+    if (plain.boundaryLayer.regime[i] === 3) coupledPlain++;
+    const layer = capped.boundaryLayer, depth = layer.depth[i] - zb, base = layer.decoupling[i] - zb;
+    if (layer.regime[i] === 2) decoupledCapped++;
+    assert.ok(depth > 50 && depth < 800, `surface-driven depth ${depth.toFixed(0)} m`);
+    assert.ok(base >= depth && base < cloudTop - 100, `decoupling height ${base.toFixed(0)} m over depth ${depth.toFixed(0)} m, cloud top ${cloudTop.toFixed(0)} m`);
+    assert.ok(Math.abs(layer.mixingTop[i] - zb - cloudTop) < 1, `mixing top ${(layer.mixingTop[i] - zb).toFixed(0)} m`);
+    assert.ok(layer.entrainment[i] > 0, 'the cloud-top layer entrains');
+    let entrained = Infinity;
+    for (let k = 0; k < nK - 1; k++) if (interfaceZ(k) >= depth) entrained = interfaceZ(k);
+    for (let k = 0; k < nK - 1; k++) {
+      const z = interfaceZ(k), mixed = layer.mixing[k * nC + i] > 0;
+      if (z > entrained + 1 && z < base - 1) { crossing++; assert.equal(mixed, false, `mixing across the cumulus layer at ${z.toFixed(0)} m`); }
+      if (z > base + 1 && z < cloudTop - 1) { inside++; assert.equal(mixed, true, `no cloud-top mixing at ${z.toFixed(0)} m`); }
+    }
+  }
+  console.log(`${nC} cumulus-capped columns under a stratus: ${coupledPlain} coupled by default, ${decoupledCapped} decoupled with cumulusCapped; ${crossing} interfaces between the surface-driven depth and the decoupling height unmixed, ${inside} inside the cloud-top layer mixed`);
+  assert.equal(coupledPlain, nC);
+  assert.equal(decoupledCapped, nC);
+  assert.ok(inside > 0);
+});
+
+test('the cumulus-capped rule matches between the engines: the cumulus columns come out decoupled at the same surface-driven depth on both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { createGpuCore } = await import('../js/gpu/core.gpu.js');
+  const levels = sigmaInterfaces('bl42');
+  const pair = createModel(new Grid(6), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { cloudTop: { cumulusCapped: true } } });
+  const { core: c, mesh: m, state, radiation, boundaryLayer: layer } = pair;
+  const { K: nK, C: nC } = c.diagnostics;
+  cumulusColumns(pair);
+  for (const a of state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
+  c.diagnose(state[0], state[1], state[4], state[5]);
+  const gpu = await createGpuCore(m, { levels, physics: { surfaceExchange: 'fixed', cloudTop: { cumulusCapped: true } } });
+  const { device, buffers, kernels } = gpu;
+  gpu.upload(state);
+  gpu.uploadPhysics();
+  device.queue.writeBuffer(buffers.PH, 4 * gpu.layout.PH.LWH, Float32Array.from(radiation.longwave.subarray(0, nK * nC)));
+  device.queue.writeBuffer(buffers.P, 0, Float32Array.from([900, 0, 1, 0, 0, 0, 0, 0]));
+  const encoder = device.createCommandEncoder(), pass = encoder.beginComputePass();
+  pass.setPipeline(kernels.pblDiagnose);
+  pass.setBindGroup(0, device.createBindGroup({ layout: kernels.pblDiagnose.getBindGroupLayout(0), entries: [buffers.MI, buffers.MF, buffers.LV, buffers.S, buffers.K1, buffers.D, buffers.P, buffers.PH].map((buffer, binding) => ({ binding, resource: { buffer } })) }));
+  pass.dispatchWorkgroups(Math.ceil(nC / 64));
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+  const ph = await gpu.downloadPhysics();
+  layer.diagnose(state);
+  let flips = 0, worstDepth = 0, worstTop = 0;
+  const regimes = [0, 0, 0, 0];
+  for (let i = 0; i < nC; i++) {
+    regimes[layer.regime[i]]++;
+    if (layer.regime[i] !== ph.REGIME[i]) flips++;
+    worstDepth = Math.max(worstDepth, Math.abs(layer.depth[i] - ph.DEPTH[i]));
+    worstTop = Math.max(worstTop, Math.abs(layer.mixingTop[i] - ph.MIXTOP[i]));
+  }
+  console.log(`${nC} cumulus-capped columns: regimes (stable, surface, decoupled, coupled) ${regimes.join(', ')}; the engines' regimes differ in ${flips}, the depths by up to ${worstDepth.toFixed(2)} m, the mixing tops by ${worstTop.toFixed(2)} m`);
+  assert.equal(regimes[2], nC);
+  assert.equal(flips, 0);
+  assert.ok(worstDepth < 0.5, `depth ${worstDepth}`);
+  assert.ok(worstTop < 0.5, `mixing top ${worstTop}`);
+});

@@ -105,7 +105,12 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  *    cloudTop.maximumHeight, and lies above the Richardson depth: a
  *    stratocumulus-capped layer, whose turbulence reaches its inversion
  *    (Lock et al.'s parcel test); a parcel that rises further is cumulus,
- *    left to the plume, and its column keeps the Richardson depth;
+ *    left to the plume, and its column keeps the Richardson depth. With
+ *    cloudTop.cumulusCapped such a column never couples a cloud-top
+ *    layer lying wholly above that depth and above the parcel's cloud
+ *    base to the surface: the descending parcel stops at the higher of
+ *    the two and the cumulus layer between is the plume's alone (Lock
+ *    et al.'s stratocumulus over cumulus);
  *  - a cloud-top-driven profile where the lowest run of cloudy layers
  *    (q_c above cloudTop.threshold 10⁻⁶) tops out below
  *    cloudTop.maximumHeight (3 km) and cools: ΔF, the longwave cooling
@@ -151,7 +156,7 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * the mixing top.
  */
 export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5, evaporativeEnhancement: 25, maximumEfficiency: 1, taper: false, jumpLayers: 2, subsidence: false };
-export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, perturbation: 0.2, profile: 0.85, excess: 8.5, tolerance: 0.5, cumulusDepth: 400 };
+export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, perturbation: 0.2, profile: 0.85, excess: 8.5, tolerance: 0.5, cumulusDepth: 400, cumulusCapped: false };
 export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 
 export function createBoundaryLayer(mesh, core, {
@@ -160,7 +165,7 @@ export function createBoundaryLayer(mesh, core, {
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
   const { efficiency, shear, cap, jumpFloor, shearOnset, evaporativeEnhancement, maximumEfficiency, taper: tapered, jumpLayers, subsidence: subsiding } = { ...ENTRAINMENT_DEFAULTS, ...entrainmentOptions };
-  const { threshold: cloudThreshold, maximumHeight: cloudTopHeight, perturbation, profile, excess: excessCoefficient, tolerance, cumulusDepth } = { ...CLOUD_TOP_DEFAULTS, ...cloudTopOptions };
+  const { threshold: cloudThreshold, maximumHeight: cloudTopHeight, perturbation, profile, excess: excessCoefficient, tolerance, cumulusDepth, cumulusCapped } = { ...CLOUD_TOP_DEFAULTS, ...cloudTopOptions };
   const moistScheme = turbulence === 'moist';
   const { K, C, E, dSigma, sigmaMid, R, g, cp, kappa, exnerLayer, geopotential, piSigmaDot } = core.diagnostics;
   const thetaV = core.arrays.thetaV;
@@ -350,7 +355,7 @@ export function createBoundaryLayer(mesh, core, {
     entrainmentVelocity[i] = 0;
     const buoyancy = surfaceBuoyancy(i, pi, theta, surfaceT, q);
     buoyancyFlux[i] = buoyancy;
-    let surfaceDepth = depth[i] - zb;
+    let surfaceDepth = depth[i] - zb, cumulusBase = -1;
     if (buoyancy > 0 && q && qc && cumulusDepth > 0) {
       const mixed = Math.cbrt(friction[i] ** 3 + 0.6 * buoyancy * Math.max(0, surfaceDepth));
       const level = theta[base] - latentHeat * qc[base] / (cp * exnerLayer[base]) + excessCoefficient * buoyancy * thetaV[base] / (g * mixed), total = q[base] + qc[base];
@@ -360,12 +365,12 @@ export function createBoundaryLayer(mesh, core, {
         if (condensation < 0 && total > saturationHumidity(level * ex, pi[i] * sigmaMid[k])) condensation = k;
         if (!(parcelVirtual(level, total, k, i, pi) + tolerance > thetaV[k * C + i])) break;
       }
-      if (condensation > k && k >= kTop) {
-        const parcelTop = interfaceZ(k), cloudBase = interfaceZ(condensation);
+      if (condensation > k) {
+        const parcelTop = k >= kTop ? interfaceZ(k) : Infinity, cloudBase = interfaceZ(condensation);
         if (parcelTop - cloudBase <= cumulusDepth && parcelTop <= cloudTopHeight && parcelTop > surfaceDepth) {
           surfaceDepth = parcelTop;
           depth[i] = zb + parcelTop;
-        }
+        } else if (cumulusCapped && parcelTop - cloudBase > cumulusDepth) cumulusBase = cloudBase;
       }
     }
     let top = -1, cooling = 0, runBottom = -1;
@@ -382,13 +387,14 @@ export function createBoundaryLayer(mesh, core, {
     let coupled = false, lowest = bottom, base0 = 0, cloudTopZ = 0;
     if (top >= 0) {
       const idx = top * C + i, level = theta[idx] - latentHeat * qc[idx] / (cp * exnerLayer[idx]) - perturbation, total = q[idx] + qc[idx];
+      cloudTopZ = interfaceZ(top - 1);
+      const floor = cumulusBase >= 0 ? Math.max(surfaceDepth, cumulusBase) : -1, capped = floor >= 0 && interfaceZ(top) >= floor;
       let k = top + 1;
-      while (k <= bottom && parcelVirtual(level, total, k, i, pi) < thetaV[k * C + i]) k++;
+      while (k <= bottom && parcelVirtual(level, total, k, i, pi) < thetaV[k * C + i] && !(capped && (k === bottom || interfaceZ(k) < floor))) k++;
       lowest = k - 1;
       base0 = k > bottom ? 0 : interfaceZ(k - 1);
-      coupled = k > bottom || base0 <= surfaceDepth;
+      coupled = !capped && (k > bottom || base0 <= surfaceDepth);
       if (coupled) base0 = 0;
-      cloudTopZ = interfaceZ(top - 1);
     }
     let h = coupled ? cloudTopZ : surfaceDepth;
     depth[i] = zb + h;
