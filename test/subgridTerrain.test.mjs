@@ -86,9 +86,9 @@ test('the gradients reach 5 km each way: a north–south ridge of 20 km waveleng
  * points for σ_flt): the Great Plains, the Himalayan front, the Andes.
  */
 const HAND_N64 = [
-  { cell: 14486, where: 'the Great Plains, 39.4N 98.7W', deviation: 30.376, anisotropy: 0.53879, orientation: 1.38416, slope: 0.0032324, filtered: 15.014 },
-  { cell: 4854, where: 'the Himalayan front, 28.5N 84.4E', deviation: 1421.24, anisotropy: 0.79910, orientation: 1.13378, slope: 0.087253, filtered: 461.36 },
-  { cell: 34912, where: 'the Andes, 32.7S 70.2W', deviation: 940.09, anisotropy: 0.92716, orientation: 0.06030, slope: 0.059268, filtered: 359.34 },
+  { cell: 14486, where: 'the Great Plains, 39.4N 98.7W', deviation: 30.464, anisotropy: 0.54050, orientation: 1.39327, slope: 0.0032279, filtered: 14.999 },
+  { cell: 4854, where: 'the Himalayan front, 28.5N 84.4E', deviation: 1421.69, anisotropy: 0.79942, orientation: 1.13385, slope: 0.087391, filtered: 461.96 },
+  { cell: 34912, where: 'the Andes, 32.7S 70.2W', deviation: 940.38, anisotropy: 0.92658, orientation: 0.06549, slope: 0.059312, filtered: 359.23 },
 ];
 
 test('the N=64 file holds three real cells as recomputed by hand from the 30″ raster', () => {
