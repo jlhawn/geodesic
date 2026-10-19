@@ -71,12 +71,15 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  * raster's (`raster` true), which carry no σ_flt and so no form drag and
  * take Lott and Miller's constants, not the IFS's for 5 km fields. The
  * files' fields hold the scales below the resolved terrain on the bundled
- * land mask, so a run without terrain or on another mask takes the raster's.
+ * land mask of the mesh whose Lloyd passes they record, so a run without
+ * terrain, on another mask or on a mesh of other passes takes the raster's.
  */
 export function orographyFields(mesh, topography, geography, phis, subgrid, g) {
-  const fields = phis ? meshSubgrid(mesh, subgrid) : null, fitted = fields ? landSubgrid(fields, geography.land) : null;
+  const fields = phis ? meshSubgrid(mesh, subgrid) : null;
+  const otherMesh = fields && Number.isInteger(fields.relax) && Number.isInteger(mesh.relax) && fields.relax !== mesh.relax;
+  const fitted = fields && !otherMesh ? landSubgrid(fields, geography.land) : null;
   if (fitted) return fitted;
-  subgridFallbackNote(mesh, !phis ? 'terrain' : fields ? 'land' : subgrid === false ? 'off' : 'missing');
+  subgridFallbackNote(mesh, !phis ? 'terrain' : otherMesh ? 'relax' : fields ? 'land' : subgrid === false ? 'off' : 'missing', fields);
   return { ...subgridOrography(mesh, topography, phis ? Float64Array.from(phis, (p) => p / g) : null, geography.land), raster: true };
 }
 
