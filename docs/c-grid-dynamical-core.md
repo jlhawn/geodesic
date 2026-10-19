@@ -7683,7 +7683,12 @@ eight64_day0183; under the defaults below it does not):
   400 m of the base of its first saturated layer and below 3 km, and
   lies above the Richardson depth (Lock et al. 2000's parcel test for a
   stratocumulus-capped layer; a parcel that rises further is cumulus and
-  keeps the Richardson depth). The cloud-top profile, where the lowest
+  keeps the Richardson depth; with `cloudTop.cumulusCapped`, off by
+  default, such a cumulus-capped column never couples a cloud-top layer
+  lying wholly above that depth and above the parcel's cloud base to the
+  surface: the descending parcel stops at the higher of the two and the
+  cumulus layer between is the plume's alone, Lock et al.'s
+  stratocumulus over cumulus). The cloud-top profile, where the lowest
   run of cloudy layers (q_c > 10⁻⁶) tops out below 3 km and cools:
   ΔF the longwave cooling summed over the run's layers (the radiation
   keeps each layer's longwave heating, `longwave`, PH `LWH`),
