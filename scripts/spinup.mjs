@@ -116,6 +116,9 @@
 // when it exists, the World Ocean Atlas) and the sea surface from its
 // mixed layer; CLIMATOLOGY=none starts it from the analytic climatology
 // under the atmosphere's initial sea surface.
+// OCEAN_START=climatology with FROM keeps FROM's atmosphere, land and
+// (with ICE_FROM) sea ice but starts the ocean and the open sea's surface
+// from the climatology, as a run without FROM does.
 // scripts/spinup.sh runs segments back to back, scripts/asyncSpinup.sh
 // alternates them with ocean-only spin-ups.
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -181,7 +184,10 @@ const levels = saved ? savedLevels(saved) : sigmaInterfaces(process.env.LEVELS ?
 const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} layers)`;
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
 const fallback = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');
-const climatology = !saved && !process.env.FROM && chosen !== 'none' ? chosen : null;
+const OCEAN_START = process.env.OCEAN_START ?? 'from';
+if (OCEAN_START !== 'from' && OCEAN_START !== 'climatology') throw new Error(`OCEAN_START is from or climatology, not ${OCEAN_START}`);
+const oceanFromAtlas = !saved && !!process.env.FROM && OCEAN_START === 'climatology';
+const climatology = !saved && (!process.env.FROM || oceanFromAtlas) && chosen !== 'none' ? chosen : null;
 const fromState = !saved && process.env.FROM ? await decodeState(new Uint8Array(readFileSync(process.env.FROM))) : null;
 if (fromState && fromState.N !== N) throw new Error(`FROM ${process.env.FROM} is N=${fromState.N}, not ${N}`);
 const found = saved || fromState ? stateGrid(saved ?? fromState, topography) : null;
@@ -250,15 +256,17 @@ if (saved) {
       if (land[i]) { state[3][i] = from.surfaceT[i]; continue; }
       if (iceFrom) state[6][i] = from.ice[i];
       if (iceFrom && state[6][i] > 0) state[3][i] = from.surfaceT[i];
-      else if (!(state[6][i] > 0) && from.ocean.h[i] > 1) state[3][i] = from.ocean.T[i];
+      else if (!oceanFromAtlas && !(state[6][i] > 0) && from.ocean.h[i] > 1) state[3][i] = from.ocean.T[i];
     }
     if (iceFrom) model.seaIce.load(state[6], from.concentration ?? null);
   }
   model.load();
   if (from) {
-    model.ocean.load(from.ocean, state[3], state[6]);
+    const started = oceanFromAtlas ? model.ocean.initialize(state[3], state[6]) : null;
+    if (!oceanFromAtlas) model.ocean.load(from.ocean, state[3], state[6]);
     model.land.load(from.land, iceFrom ? state[6] : null);
-    log(`seeded from ${process.env.FROM} (N=${from.N}, day ${from.day}, ${fromGrid}): the ocean, the land (soil, snow, ${from.land.snowAlbedo ? 'snow albedo, ' : ''}${from.land.vegetation ? 'vegetation, ' : ''}${from.land.canopy ? 'standing cover, ' : ''}${from.land.seasonLength ? 'season means, ' : ''}${from.land.surface ? 'surface water, ' : ''}surface temperature) and the sea-surface temperature of its mixed layer, ${iceFrom ? 'and its sea ice (thickness, concentration, snow, skin temperature)' : 'with fresh sea ice'}; ${atmosphere}; the clock at day 0`);
+    log(`seeded from ${process.env.FROM} (N=${from.N}, day ${from.day}, ${fromGrid}): ${oceanFromAtlas ? '' : 'the ocean, '}the land (soil, snow, ${from.land.snowAlbedo ? 'snow albedo, ' : ''}${from.land.vegetation ? 'vegetation, ' : ''}${from.land.canopy ? 'standing cover, ' : ''}${from.land.seasonLength ? 'season means, ' : ''}${from.land.surface ? 'surface water, ' : ''}surface temperature)${oceanFromAtlas ? '' : ' and the sea-surface temperature of its mixed layer'}, ${iceFrom ? 'and its sea ice (thickness, concentration, snow, skin temperature)' : 'with fresh sea ice'}; ${atmosphere}; the clock at day 0`);
+    if (started) log(`ocean and the open sea's surface from ${climatology}: ${started.atlas} sea cells, ${started.analytic} from the analytic climatology where it has no water`);
   } else {
     const started = model.ocean.initialize(state[3], state[6]);
     model.land.initialize();

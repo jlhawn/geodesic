@@ -10,7 +10,8 @@
 # snapshot day at or past it). A resolution
 # that hits NaN drops out and the others go on; any other failure is
 # retried three times from the last snapshot. The environment reaches
-# scripts/spinup.mjs: a fresh start's land holds its trees and topsoil carbon
+# scripts/spinup.mjs, and FROM_<N> seeds that resolution's fresh start (its
+# FROM): a fresh start's land holds its trees and topsoil carbon
 # at the placeholders of LAND's "start" (neutral by default) while its record
 # builds, and at the ends of days 365 and 730, in whichever segment holds
 # them, every land cell's trees and carbon jump to the equilibrium of its own
@@ -37,7 +38,7 @@ while [ ! -f "$OUT/STOP_$PREFIX" ] && [ -n "$alive" ]; do
     [ -f "$OUT/STOP_$PREFIX" ] && break
     failures=0
     while [ "$(dayOf "$n")" -lt "$target" ]; do
-      N=$n TAG=$PREFIX$n DAYS=$target MINUTES=100000 KEEP=$KEEP node scripts/spinup.mjs > "$OUT/$PREFIX$n.segment.out" 2>&1
+      FROM="$(eval echo "\${FROM_$n:-}")" N=$n TAG=$PREFIX$n DAYS=$target MINUTES=100000 KEEP=$KEEP node scripts/spinup.mjs > "$OUT/$PREFIX$n.segment.out" 2>&1
       status=$?
       [ $status -eq 0 ] && continue
       if [ $status -eq 2 ]; then note "N=$n stopped on NaN before day $target"; alive=$(echo " $alive " | sed "s/ $n / /;s/^ *//;s/ *$//"); break; fi

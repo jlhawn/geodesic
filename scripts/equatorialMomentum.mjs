@@ -11,7 +11,9 @@
 // the lowest layer; sumK1 their sum, beside the core's own tendency), then
 // the step's actual increments over dt: rk4, the closure split into nu4 and
 // divDamp, blMix the boundary layer's implicit mixing, plume the plume's
-// momentum transport, total. BOUNDARY_LAYER and SURFACE (JSON) pass options.
+// momentum transport, total; then the sea-level pressure of each bin less
+// 120W–100W's by the height band that carries it. MOIST, BOUNDARY_LAYER
+// and SURFACE (JSON) pass options.
 import { readFileSync } from 'node:fs';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
@@ -26,7 +28,7 @@ const FILE = process.argv[2], LAT = Number(process.env.LAT ?? 3);
 const BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: false, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE });
+const model = createModel(stateGrid(saved, topography).mesh, { topography, levels: savedLevels(saved), ocean: false, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, moist: JSON.parse(process.env.MOIST ?? "{}") });
 const { mesh, core, state, phases, radiation, boundaryLayer: bl, moist, seaIce, land, surface } = model;
 const { K, C, E, V, sigmaMid, sigmaLower, dSigma, R, g, exnerLayer, geopotential, piSigmaDot } = core.diagnostics;
 const { thetaV } = core.arrays;
@@ -228,6 +230,51 @@ console.log('| ' + BINS.slice(0, -1).map((b, j) => `${binName(b)} to ${binName(B
 console.log('| ' + BINS.slice(0, -1).map((_, j) => s5(-(slpBins[j + 1] - slpBins[j]) * 100 / (1.18 * dx))).join(' | ') + ' |');
 console.log(`basin 140E-80W: SLP ${f(slpBins[0])} -> ${f(slpBins[NB - 1])} hPa, max ${f(Math.max(...slpBins))}, min ${f(Math.min(...slpBins))}`);
 
+
+console.log('\n-- pressure-gradient force by layer and bin (1e-5 m/s2)');
+console.log(head);
+for (const k of [35, 32, 30, 28, 26, 25, 24, 23, 22, 21, 19]) { const z = binMean((i) => zMid[k * C + i] - zs[i]); console.log(row(`pgf k=${k} z~${f(z.reduce((a, b) => a + b, 0) / NB, 0)} m`, binMean((i) => T.pgf[k * C + i]))); }
+console.log('\n-- temperature by layer and bin (C), and u at 3 and 5.6 km');
+console.log(head);
+for (const k of [35, 30, 26, 25, 24, 23, 22, 21, 19]) console.log(row(`T k=${k}`, binMean((i) => theta[k * C + i] * exL[k * C + i] - 273.15), (x) => f(x, 2)));
+console.log(row('u k=23', binMean((i) => uEast[23 * C + i]), (x) => f(x)));
+console.log(row('u k=21', binMean((i) => uEast[21 * C + i]), (x) => f(x)));
+
+const BANDS = [0, 1000, 2000, 3000, 5000, 8000, 12000, 18000];
+const REF = 5;
+const bandOf = new Float64Array(C * (BANDS.length - 1));
+for (const i of cells) {
+  const zsI = zs[i], zk = [], lr = [];
+  zk.push(0); lr.push(Math.log(pi[i] / (R * thv[(K - 1) * C + i] * exL[(K - 1) * C + i])));
+  for (let k = K - 1; k >= 0; k--) { zk.push(zMid[k * C + i] - zsI); lr.push(Math.log(pi[i] * sigmaMid[k] / (R * thv[k * C + i] * exL[k * C + i]))); }
+  let j = 0;
+  for (let b = 0; b < BANDS.length - 1; b++) {
+    let sum = 0;
+    for (let z = BANDS[b] + 25; z < BANDS[b + 1]; z += 50) {
+      while (j < zk.length - 2 && z > zk[j + 1]) j++;
+      const t = (z - zk[j]) / (zk[j + 1] - zk[j]);
+      sum += Math.exp(lr[j] + t * (lr[j + 1] - lr[j])) * 50;
+    }
+    bandOf[b * C + i] = g * sum / 100;
+  }
+}
+console.log('\n-- sea-level pressure less that of ' + binName(BINS[REF]) + ' by height band (hPa; the hydrostatic weight of each band, interpolated in ln rho; the rest is the air above 18 km and the interpolation)');
+console.log(head);
+let sumBands = new Float64Array(NB);
+for (let b = 0; b < BANDS.length - 1; b++) {
+  const vals = binMean((i) => bandOf[b * C + i]);
+  const rel = vals.map((v) => v - vals[REF]);
+  rel.forEach((v, n) => sumBands[n] += v);
+  console.log(row(`${BANDS[b] / 1000}-${BANDS[b + 1] / 1000} km`, rel, (x) => f(x, 2)));
+}
+console.log(row('sum of the bands', Array.from(sumBands), (x) => f(x, 2)));
+console.log(row('sea-level pressure difference', slpBins.map((v) => v - slpBins[REF]), (x) => f(x, 2)));
+for (const zq of [500, 1000, 1500, 2000, 3000, 4000, 6000, 9000, 12000]) console.log(row(`Tv at ${zq} m less ${binName(BINS[REF])}'s (K)`, (() => { const v = binMean((i) => atHeight(thv, i, zq) * atHeight(exL, i, zq)); return v.map((x) => x - v[REF]); })(), (x) => f(x, 2)));
+const band = (lat0, lat1, fn) => { const s = new Float64Array(NB), a = new Float64Array(NB); for (let i = 0; i < C; i++) { const lat = latCell[i] * deg; if (lat < lat0 || lat > lat1) continue; const lon = ((lonCell[i] * deg) % 360 + 360) % 360; const b = BINS.findIndex(([p, q]) => lon >= p && lon < q); if (b < 0) continue; s[b] += areaCell[i] * fn(i); a[b] += areaCell[i]; } return Array.from(s, (v, j) => v / a[j]); };
+console.log('\n-- sea-level pressure in the bands beside the equator, all cells');
+console.log(head);
+console.log(row('5N-12N SLP (hPa)', band(5, 12, (i) => slp(i) / 100), (x) => f(x, 2)));
+console.log(row('12S-5S SLP (hPa)', band(-12, -5, (i) => slp(i) / 100), (x) => f(x, 2)));
 console.log('\n-- profiles by layer (bins pooled 180-100W and 140E-180)');
 for (const [label, set] of [['180-100W', [2, 3, 4, 5]], ['140E-180', [0, 1]]]) {
   const sel = cells.filter((i) => set.includes(binOf[i]));
