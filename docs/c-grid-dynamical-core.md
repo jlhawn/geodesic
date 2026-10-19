@@ -5659,7 +5659,12 @@ The work, in order:
      thin layer; the sponge, the lid friction and the longwave table are
      bl36's (the same top layers). `remapLevels` carries bl36 states
      onto it (`test/levels.test.mjs`). Built for the cold-tongue
-     inversion of docs/equatorial-wind-bias.md.
+     inversion of docs/equatorial-wind-bias.md, and the default of
+     `scripts/spinup.mjs` (`LEVELS`), the paired drivers and the Verda
+     benchmark since Oct 19; a run resumed from a saved state keeps the
+     state's grid, and the page runs on its state's grid (eleven's bl36
+     states until a bl42 run replaces them). It costs about 18 percent
+     over bl36 at N=128.
    - Final defaults: `topDragDays` 0 (was 5; `topSigma` 0.02 unused),
      `spongeSigma` 0.005 and `spongeDays` 1 (`SPONGE`, the sponge on the
      eddies; `surface` options), `gravityWaves` on with `flux` 4.3·10⁻³
