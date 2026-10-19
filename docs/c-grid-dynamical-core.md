@@ -7183,7 +7183,7 @@ below the cloud-base layer it evaporates into cloud-free subsaturated
 layers at 1 − exp(−`plumeRainEvaporation` (1 − q/q_s) Δz) of what falls,
 10⁻³ m⁻¹, within `rainEvaporation` of the deficit; what reaches the ground
 is the cell's convective rain. The cumulus cover below the shallow top is
-the larger of the two plumes' M/(ρ w_u), w_u ≥ w0. `plumeMomentum` (off)
+the larger of the two plumes' M/(ρ w_u), w_u ≥ w0. `plumeMomentum` (on)
 moves each edge's normal velocity by the mean of its cells' deep updraft
 and downdraft in the same flux form, its kinetic-energy loss returned as
 heat. Column enthalpy, water and (with momentum) each edge's momentum
