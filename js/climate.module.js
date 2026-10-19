@@ -4,7 +4,7 @@ import { createWindParticles } from "./windParticles.module.js";
 import { fetchState, stateName, decodeState, encodeState, listedStates, stateDay, groupHeader, groupArrays } from './stateFile.module.js';
 import { seasonPhrase } from "./levels.module.js";
 import { sigmaInterfaces } from "./dynamics/sigmaCore.module.js";
-import { LAYER_BOTTOMS } from "./ocean/layered.module.js";
+import { HYBRID_LAYERS } from "./ocean/column.module.js";
 import { sunDirection, DAY, YEAR } from "./physics/radiation.module.js";
 import { createDisplayClock } from "./displayClock.module.js";
 import { listSnapshots, saveSnapshot, getSnapshot, renameSnapshot, deleteSnapshot, cloneSnapshot, listRuns, deleteRun, runStore } from "./snapshots.module.js";
@@ -39,7 +39,7 @@ function atLevel(table, level) {
  */
 const levelStops = (levels) => Array.from(levels, (sigma) => Math.round(LEVEL_BOTTOM * sigma)).filter((p) => p >= LEVEL_TOP);
 let LEVEL_STOPS = levelStops(sigmaInterfaces());
-const DEPTH_STOPS = [0, 60, ...new Set(LAYER_BOTTOMS.filter((depth) => depth > 60 && depth < DEPTH_BOTTOM)), DEPTH_BOTTOM];
+const DEPTH_STOPS = [0, 60, ...new Set(Array.from(HYBRID_LAYERS.depths, Math.round).filter((depth) => depth > 60 && depth < DEPTH_BOTTOM)), DEPTH_BOTTOM];
 function levelFromSlider(t) {
   const m = (LEVEL_STOPS.length - 1) * (1 - Math.min(1, Math.max(0, t))), i = Math.min(LEVEL_STOPS.length - 2, Math.floor(m)), fraction = m - i;
   return Math.round(LEVEL_STOPS[i] * Math.pow(LEVEL_STOPS[i + 1] / LEVEL_STOPS[i], fraction));
@@ -315,7 +315,7 @@ const VIEW_NOTES = [
   ['Current speed', 'The current at the chosen depth, up to a meter a second in the surface boundary currents and weaker below. With any ocean view selected, Particles and Vectors trace the current instead of the wind.'],
   ['Upwelling', 'The water\'s vertical velocity through the chosen depth, upward positive, from the convergence of the flow above it: up along the equator and the eastern boundaries where the wind drives the surface water away, down under the subtropical gyres.'],
   ['Mixed layer depth', 'The thickness of the surface mixed layer: deep where winter cooling and wind stirring reach down, shallow under summer warming and along upwelling coasts.'],
-  ['Thermocline depth', 'The depth where the water reaches 1024 kg/m³, between the 20.4 °C and the 19.4 °C classes of the slab ocean and interpolated between the hybrid ocean\'s layers, the 20 °C isotherm: deep in the western tropical Pacific and the subtropical gyres where the wind piles warm water up, shallow in the east and toward the poles, where it outcrops.'],
+  ['Thermocline depth', 'The depth where the water reaches 1024 kg/m³, interpolated between the ocean\'s layers, the 20 °C isotherm: deep in the western tropical Pacific and the subtropical gyres where the wind piles warm water up, shallow in the east and toward the poles, where it outcrops.'],
   ['Sea surface salinity', 'The salinity of the ocean\'s upper layer: saltier where evaporation outpaces rain, as under the subtropical highs, and fresher under heavy rain and where rivers reach the sea.'],
   ['Sea surface height', 'The free surface: high over the subtropical gyres and low around the poles, with the currents flowing along its contours.'],
   ['Sea-level pressure', 'Surface pressure reduced to sea level through a standard-lapse-rate column below the terrain; the isobars use it too. Where a pressure level lies below the ground, wind, temperature and humidity show the lowest layer of that column, and only the height is extrapolated hydrostatically so its contours stay a pressure field.'],
@@ -340,7 +340,7 @@ const VIEW_NOTES = [
 ];
 const NOTES = new Map(VIEW_NOTES);
 
-export default function runClimate({ N = null, from = null, levels = null, workers = 1, engine = 'cpu', ocean = null, paused = false, land = true, topography = null, climatology = null, terrain = true, settings: overrides = {}, view = null, pace = true, auto = false, defaults = {} } = {}) {
+export default function runClimate({ N = null, from = null, levels = null, workers = 1, engine = 'cpu', paused = false, land = true, topography = null, climatology = null, terrain = true, settings: overrides = {}, view = null, pace = true, auto = false, defaults = {} } = {}) {
   const settings = loadSettings();
   applyOverrides(settings, overrides);
   const panel = document.getElementById('panel');
@@ -762,7 +762,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
       ...(latest.engine === 'gpu' ? [['Pacing', latest.pause ? `<b>${latest.pause} ms</b> of idle GPU after each step, so the page can draw every frame.` : '<b>none</b> — the steps run back to back.']] : []),
       ['Chosen by', deviceChoice ? `the device test: <b>${deviceChoice.engine === 'gpu' ? 'GPU' : 'CPU'} at N=${deviceChoice.N}</b>, projected ${(1440 / deviceChoice.rate).toFixed(0)} seconds per simulated day from ${deviceChoice.measured}. <button class="flat" data-action="retest">Test again</button>` : 'the page\'s address, which names the resolution, the engine or the saved run.'],
     );
-    if (d && d.oceanUpperDepth !== undefined) rows.push(['Ocean', `${ready && ready.vertical === 'hybrid' ? `the <b>hybrid</b> ocean on ${ready.oceanLayers} layers, isopycnal below the mixed layer and in depth where the water is light or shallow; ` : ready && ready.vertical ? `the <b>slab</b> ocean, a mixed layer over ${ready.oceanLayers - 1} isopycnal classes; ` : ''}mixed layer <b>${d.oceanUpperDepth.toFixed(0)} m</b> deep on average, currents to <b>${d.oceanSpeed.toFixed(2)} m/s</b>${d.oceanTransport !== undefined ? `, the strongest transport <b>${d.oceanTransport.toFixed(0)} Sv</b>` : ''}${d.oceanThermoclineDepth !== undefined ? `, thermocline <b>${d.oceanThermoclineDepth.toFixed(0)} m</b>` : ''}.`]);
+    if (d && d.oceanUpperDepth !== undefined) rows.push(['Ocean', `${ready && ready.oceanLayers ? `<b>${ready.oceanLayers} hybrid layers</b>, isopycnal below the mixed layer and in depth where the water is light or shallow; ` : ''}mixed layer <b>${d.oceanUpperDepth.toFixed(0)} m</b> deep on average, currents to <b>${d.oceanSpeed.toFixed(2)} m/s</b>${d.oceanTransport !== undefined ? `, the strongest transport <b>${d.oceanTransport.toFixed(0)} Sv</b>` : ''}${d.oceanThermoclineDepth !== undefined ? `, thermocline <b>${d.oceanThermoclineDepth.toFixed(0)} m</b>` : ''}.`]);
     if (d && d.landFraction !== undefined) rows.push(['Land', `<b>${(100 * d.landFraction).toFixed(0)}%</b> of the area${ready && ready.terrain ? ' with terrain' : ', flat'}; surface <b>${(d.landMeanT + CELSIUS).toFixed(1)} °C</b>, soil water <b>${d.soilWater.toFixed(0)} kg/m²</b>, snow on <b>${(100 * d.snowFraction).toFixed(0)}%</b> of it.`]);
     document.getElementById('modelDetails').innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
   }
@@ -950,7 +950,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
   const maxN = isMobileBrowser(navigator) ? MOBILE_MAX_N : DESKTOP_MAX_N;
   const begin = (choice = auto ? { N: maxN } : {}) => {
     const run = (auto && choice.N && Object.keys(defaults).length && defaultRunFor(choice.N, defaults)) || from;
-    worker.postMessage({ type: 'start', N: choice.N ?? N, from: run ? new URL(run, location.href).href : null, levels, workers: threads, engine: choice.engine ?? engine, ocean, paused: !running, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl, climatology: climatologyUrl });
+    worker.postMessage({ type: 'start', N: choice.N ?? N, from: run ? new URL(run, location.href).href : null, levels, workers: threads, engine: choice.engine ?? engine, paused: !running, subscription: JSON.parse(subscribed), land, terrain, topography: topographyUrl, climatology: climatologyUrl });
   };
   const PROBE_TIMEOUT = 120000;
   let deviceChoice = null, probed = null;

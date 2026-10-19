@@ -15,50 +15,6 @@ test('the equation of state recovers each class label at its label salinity abov
   assert.ok(seawaterDensity(FREEZING_POINT, 34.5) < LAYER_DENSITIES[LAYER_DENSITIES.length - 1], 'polar surface water floats on the deepest class');
 });
 
-test('every initial column is statically stable, polar columns under ice included', () => {
-  const ocean = createOcean(mesh, { everySteps: 1 });
-  const surfaceT = Float64Array.from(mesh.latCell, (lat) => Math.max(FREEZING_POINT, 302 - 35 * Math.sin(lat) ** 2));
-  const ice = Float64Array.from(surfaceT, (t) => (t <= FREEZING_POINT ? 1 : 0));
-  ocean.initialize(surfaceT, ice);
-  const L = ocean.layers;
-  for (let i = 0; i < C; i++) {
-    let above = seawaterDensity(ocean.Q[i] / ocean.h[i], ocean.W[i] / ocean.h[i]);
-    for (let k = 1; k < L; k++) {
-      const n = k * C + i;
-      if (ocean.h[n] <= 5) continue;
-      const r = seawaterDensity(ocean.Q[n] / ocean.h[n], ocean.W[n] / ocean.h[n]);
-      assert.ok(Math.abs(r - ocean.densities[k]) < 1e-9, `layer ${k} of cell ${i} starts at ${r} against its label ${ocean.densities[k]}`);
-      assert.ok(r >= above - 1e-9, `cell ${i} at ${(mesh.latCell[i] / DEG).toFixed(0)}°: layer ${k} (${r.toFixed(3)}) lies under denser water (${above.toFixed(3)})`);
-      above = r;
-    }
-  }
-});
-
-test('interior layers relax back to their label densities without losing heat or salt', () => {
-  const ocean = createOcean(mesh, { everySteps: 1 });
-  const surfaceT = Float64Array.from(mesh.latCell, (lat) => 300 - 25 * Math.sin(lat) ** 2), ice = new Float64Array(C), flux = new Float64Array(C);
-  ocean.initialize(surfaceT, ice);
-  const L = ocean.layers;
-  const error = () => {
-    let sum = 0, count = 0;
-    for (let i = 0; i < C; i++) for (let k = 2; k < L - 1; k++) {
-      const n = k * C + i;
-      if (ocean.h[n] <= 20) continue;
-      sum += Math.abs(seawaterDensity(ocean.Q[n] / ocean.h[n], ocean.W[n] / ocean.h[n]) - ocean.densities[k]); count++;
-    }
-    return sum / count;
-  };
-  for (let i = 0; i < C; i++) for (let k = 2; k < L - 1; k++) {
-    const n = k * C + i;
-    if (ocean.h[n] > 20) ocean.Q[n] += ocean.h[n] * ((i + k) % 2 ? 0.3 : -0.3);
-  }
-  const before = totalHeatSalt(ocean, mesh), start = error();
-  for (let n = 0; n < 400; n++) ocean.advance(surfaceT, ice, flux, new Float64Array(E), 1350);
-  const after = totalHeatSalt(ocean, mesh), end = error();
-  assert.ok(Math.abs(after.heat - before.heat) < 1e-8 * before.heat && Math.abs(after.salt - before.salt) < 1e-8 * before.salt, `heat ${before.heat} -> ${after.heat}, salt ${before.salt} -> ${after.salt}`);
-  assert.ok(start > 0.04 && end < 0.5 * start, `mean distance from the labels ${start} -> ${end} kg/m³`);
-});
-
 test('runoff reaches the coastal sea beside the land it ran off, freshening it by exactly that water', () => {
   const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.abs(lon) < 40 * DEG && lat > 12 * DEG && lat < 48 * DEG ? -4000 : 500)));
   const ocean = createOcean(mesh, { everySteps: 1, geography });

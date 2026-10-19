@@ -174,9 +174,9 @@ const binCells = new Int32Array(BINS);
 for (let i = 0; i < C; i++) binCells[bin[i]]++;
 const exactRatio = Array.from(binArea, (a, b) => a / (2 * Math.PI * radius ** 2 * (Math.sin(-Math.PI / 2 + (b + 1) * Math.PI / BINS) - Math.sin(-Math.PI / 2 + b * Math.PI / BINS))));
 const PARTITION = `bins and caps partition the cells by center latitude: a cell belongs to the 5° bin its center falls in, a cap holds the cells whose centers lie south of its latitude, and the edges whose two cells lie on opposite sides carry the transport across it; binArea (m²) is the summed area of the bin's cells, from ${(100 * (Math.min(...exactRatio) - 1)).toFixed(0)} % to +${(100 * (Math.max(...exactRatio) - 1)).toFixed(0)} % off the exact 5° band's at N = ${N}, so integrate band means with binArea`;
-const CLASSES = ['mixed', ...Array.from(ocean.options.densities)];
-const groupOf = (k) => (k === 0 ? 0 : CLASSES[k] < 1026 ? 1 : CLASSES[k] < 1026.8 ? 2 : 3);
-const GROUPS = ['mixed layer', 'classes lighter than 1026', 'classes 1026 to 1026.8', 'classes from 1026.8'];
+const CLASSES = Array.from(ocean.table.densities), FIXED = ocean.table.fixed ?? 0;
+const groupOf = (k) => (k < FIXED ? 0 : CLASSES[k] < 1026 ? 1 : CLASSES[k] < 1026.8 ? 2 : 3);
+const GROUPS = ['fixed-depth layers', 'classes lighter than 1026', 'classes 1026 to 1026.8', 'classes from 1026.8'];
 
 async function oceanSnapshot() {
   const [o, [eddy], [iceNow, skin], [concentration]] = await Promise.all([
@@ -578,7 +578,7 @@ const residuals = (start, stop, integral, seconds) => (start && stop && seconds 
 } : null);
 const adapter = (await getDevice()).adapter, info = adapter.info ?? {};
 const probe = (h, snowCover, T) => +seaIce.albedo(h, null, snowCover, h > 0 ? 1 : 0, T).toFixed(3);
-const { geography, climatology, buffers, salinityProfile, closureRings, ...oceanScalars } = ocean.options;
+const { geography, climatology, buffers, salinityProfile, layerTable, ...oceanScalars } = ocean.options;
 const lighterClasses = CLASSES.filter((density, k) => k > 0 && density < 1024).length, endTime = model.time;
 const relativeSegments = segments.map(({ fromTime, toTime, ...rest }) => ({ from: fromTime - recordStart, to: (toTime ?? endTime) - recordStart, ...rest }));
 const bins = { bins: BINS, binArea: Array.from(binArea, (a) => +a.toPrecision(9)), binCells: Array.from(binCells), partition: PARTITION };
@@ -591,7 +591,7 @@ const header = {
   time: 'seconds from the March equinox (March 20) that begins the recorded year; the model clock reads recordStart + time, and its day 0 and every 365th day are March equinoxes',
   intervals: `netSurfaceHeat and rain in a frame are means over the days since the sequence\'s previous frame (5 for year, 1 for spinup; year\'s first frame takes the spin-up\'s last 5 days), 0 in the run\'s first frame; netSurfaceHeat is the surface flux into the sea and ice and leaves out L_f × snowfall, the heat they give up melting the snow that lands on them (frames hold no snowfall; zonalBudget\'s snowFusion has it by band), so where snow falls it is more than the sea and ice take; every other field is the state at the frame\'s time; cloudWater adds the cumulus and the deck to the resolved condensate and clips at 8191.75 g/m² (clipped counts it); iceVolume is cover × thickness; seaSurfaceTemperature is the mixed layer\'s, at freezing under ice; thermoclineTop is the depth of the top of the 1024.0 class, which where the lighter classes have outcropped is the mixed layer's base plus their ${lighterClasses} token thicknesses of ${EPS} m; upwelling50 is the vertical velocity at 50 m, upward positive`,
   spinupDays: Math.round((recordStart - runStartTime) / DAY), recordDays: RECORD_DAYS, startTime: runStartTime, recordStart,
-  options: { ...options, levels: GRID, ocean: { ...options.ocean, layers: L, densities: Array.from(ocean.options.densities) } }, cadence: { radiationEvery: options.radiation.radiationEvery, dragEvery: options.dragEvery, oceanEvery: everySteps },
+  options: { ...options, levels: GRID, ocean: { ...options.ocean, layers: L, densities: Array.from(ocean.table.densities) } }, cadence: { radiationEvery: options.radiation.radiationEvery, dragEvery: options.dragEvery, oceanEvery: everySteps },
   segments: relativeSegments, resumedFrom: shown(process.env.RESUME), resumeCheck,
   checkpoint: shown(checkpoints.filter((c) => c.kept).at(-1)?.path), checkpoints: checkpoints.map(({ path, time, ...c }) => ({ path: shown(path), ...c, time: time - recordStart })),
   oceanOptions: Object.fromEntries(Object.entries(oceanScalars).filter(([, v]) => typeof v !== 'function')),

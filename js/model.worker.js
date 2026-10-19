@@ -591,12 +591,10 @@ async function profile() {
 let lastStart = null, currentN = null;
 
 /*
- * The ocean a model runs, 'slab' or 'hybrid', and what the page is told of
- * it. A start follows the page's `ocean` when it names one, else the saved
- * state's `vertical`, else the slab.
+ * What the page is told of the ocean a model runs: its generator and its
+ * layer count. A saved state's generator is kept on a start from it.
  */
-const oceanVertical = (model) => (model.oceanEngine ?? model.ocean)?.vertical ?? 'slab';
-const oceanMessage = (model) => (model.ocean ? { ocean: true, vertical: oceanVertical(model), oceanLayers: (model.oceanEngine ?? model.ocean).layers ?? null } : { ocean: false });
+const oceanMessage = (model) => (model.ocean ? { ocean: true, generator: (model.oceanEngine ?? model.ocean).generator ?? null, oceanLayers: (model.oceanEngine ?? model.ocean).layers ?? null } : { ocean: false });
 
 /*
  * While holding the model: refreshes the mirrors from the device if the
@@ -640,7 +638,7 @@ async function restore(snapshot) {
   if (snapshot.ocean) saved.ocean = { ...groupHeader(snapshot.ocean), ...Object.fromEntries(Object.entries(groupArrays(snapshot.ocean)).map(([k, buffer]) => [k, new Float64Array(buffer)])) };
   if (snapshot.land) saved.land = Object.fromEntries(Object.entries(snapshot.land).map(([k, buffer]) => [k, new Float64Array(buffer)]));
   if (model && saved.N === currentN && savedRelax(saved) === null) saved.grid = { relax: stateRelax(saved, currentTopography).relax };
-  if (!model || saved.N !== currentN || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || oceanVertical(model) !== (lastStart?.ocean ?? saved.ocean?.vertical ?? 'slab')) { await start({ ...lastStart, saved, paused: true }); return; }
+  if (!model || saved.N !== currentN || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels)) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);
   const init = initialState(model, saved, currentN);
@@ -678,8 +676,7 @@ async function start(message) {
     if (climatology) options.ocean = { ...(options.ocean ?? {}), climatology };
   }
   options.terrain = message.terrain !== false;
-  const vertical = message.ocean ?? saved?.ocean?.vertical ?? null;
-  if (vertical) options.ocean = { ...(options.ocean ?? {}), vertical, ...(vertical === 'hybrid' && saved?.ocean?.generator ? { generator: saved.ocean.generator } : {}) };
+  if (saved?.ocean?.generator) options.ocean = { ...(options.ocean ?? {}), generator: saved.ocean.generator };
   if (saved) options.levels = savedLevels(saved);
   else if (message.levels) options.levels = sigmaInterfaces(message.levels);
   const workers = message.workers ?? 1;

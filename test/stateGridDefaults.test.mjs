@@ -22,15 +22,14 @@ for (const [name, offCoast] of [['eleven64_day1825', 45], ['eleven128_day1825', 
     const ocean = createOcean(found.mesh, { geography: createGeography(found.mesh, topography) });
     const surfaceT = Float64Array.from(saved.surfaceT), ice = Float64Array.from(saved.ice);
     ocean.load(saved.ocean, surfaceT, ice, Float64Array.from(saved.concentration));
-    const C = found.mesh.nCells, L = ocean.layers, shift = L - saved.ocean.h.length / C;
+    const C = found.mesh.nCells, L = ocean.layers, Ls = saved.ocean.h.length / C;
     for (let i = 0; i < C; i++) {
       if (!ocean.cellOcean[i]) continue;
-      for (let k = 0; k < L - shift; k++) {
-        let now = ocean.h[(k > 0 ? k + shift : 0) * C + i];
-        if (k === 1) for (let j = 1; j <= shift; j++) now += ocean.h[j * C + i];
-        assert.ok(Math.abs(now - saved.ocean.h[k * C + i]) < 1, `cell ${i} saved layer ${k} keeps its water`);
-      }
-      assert.ok(Math.abs(ocean.T0[i] - saved.ocean.T[i]) < 0.02, `cell ${i} keeps its saved SST, less the light classes' tokens (${ocean.T0[i]} vs ${saved.ocean.T[i]})`);
+      let now = 0, was = 0;
+      for (let k = 0; k < L; k++) now += ocean.h[k * C + i];
+      for (let k = 0; k < Ls; k++) was += saved.ocean.h[k * C + i];
+      assert.ok(Math.abs(now - was) < 1, `cell ${i} keeps its water through the conversion (${now} against ${was})`);
+      assert.ok(Math.abs(ocean.T0[i] - saved.ocean.T[i]) < 0.02, `cell ${i} keeps its saved SST (${ocean.T0[i]} vs ${saved.ocean.T[i]})`);
       assert.equal(surfaceT[i], saved.surfaceT[i]);
     }
   });

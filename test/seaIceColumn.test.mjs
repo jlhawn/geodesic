@@ -39,35 +39,6 @@ test('seawater freezes at −1.8 °C, cools only a few thousandths of a kelvin b
   assert.equal(DEEP_CLASS, 1026.95, 'the class beneath');
 });
 
-test('brine: a meter of ice frozen out of a 50 m layer adds 0.532 psu and 0.42 kg/m³, 1.13 m makes it as dense as the 1026.95 class at 34.6 psu, and the ocean books brine the same way, by volume', () => {
-  close(brine(34, 1, 50), 0.532, 0.0005, 'psu from a meter of ice');
-  close(seawaterDensity(FREEZING_POINT, 34 + brine(34, 1, 50)) - seawaterDensity(FREEZING_POINT, 34), 0.42, 0.005, 'density from a meter of ice');
-  const needed = iceForDensity();
-  close(needed, 1.13, 0.005, 'ice to reach the class'); close(34 + brine(34, needed, 50), 34.6, 0.005, 'salinity at the class');
-  close(iceForDensity({ depth: DEPTHS.slab }), 0.232, 0.001, 'from Part 7\'s slab'); close(iceForDensity({ depth: 200 }), 4.52, 0.005, 'from 200 m');
-  console.log(`a meter of ice salts 50 m of 34 psu water by ${brine(34, 1, 50).toFixed(4)} psu; ${needed.toFixed(3)} m brings it to the ${DEEP_CLASS} class (${iceForDensity({ depth: DEPTHS.slab }).toFixed(3)} m from a 10.28 m slab, ${iceForDensity({ depth: 200 }).toFixed(2)} m from 200 m)`);
-
-  const mesh = buildMesh(new Grid(2)), n = mesh.nCells;
-  const ocean = createOcean(mesh, { everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34, mixedDepth: 50, convectiveRate: 0, stirring: 0 });
-  const surfaceT = new Float64Array(n).fill(FREEZING_POINT + 0.001), ice = new Float64Array(n), flux = new Float64Array(n);
-  const sea = createSeaIce(mesh, { heatCapacity: ocean.capacity });
-  ocean.useSeaIce(sea.concentration);
-  ocean.initialize(surfaceT, ice);
-  const S0 = ocean.W[0] / ocean.h[0], depth = ocean.h[0];
-  flux[0] = -400;
-  for (let k = 0; k < 2; k++) sea.update(surfaceT, ice, flux, 0, 3600);
-  ocean.advance(surfaceT, ice, sea.oceanFlux, new Float64Array(mesh.nEdges), 3600, sea.concentration);
-  const volume = sea.concentration[0] * ice[0];
-  close(ocean.W[0] / ocean.h[0] - S0, brine(S0, volume, depth), 1e-9, `the ocean's brine for ${volume.toFixed(4)} m of ice over ${(100 * sea.concentration[0]).toFixed(1)} percent of the cell`);
-  assert.equal(ICE_SALINITY, 5); assert.equal(ICE_DENSITY, 917);
-
-  const run = seaIceColumn({ years: 6 }), r = run.record;
-  let worst = 0;
-  for (let d = 0; d < run.days; d++) worst = Math.max(worst, Math.abs(r.salinity[d] - (ICE_SALINITY + (34 - ICE_SALINITY) * Math.exp(ICE_DENSITY * r.volume[d] / 1000 / 50))));
-  assert.ok(worst < 1e-3, `the column's salinity follows its ice volume to ${worst} psu`);
-  const seasonal = seaIceColumn({ ice: 'dark' }).year();
-  close(seasonal.salinityDrift, 0, 1e-4, 'a year of seasonal ice gives its salt back');
-});
 
 test('the feedback: over 50 m at 75°N with 85 W/m² brought in, the model\'s bright ice lasts the year 3.6 to 5.3 m thick, where Part 7\'s dark ice is gone for 274 days; deeper water stays open longer', () => {
   const bright = seaIceColumn().year(), dark = seaIceColumn({ ice: 'dark' }).year();

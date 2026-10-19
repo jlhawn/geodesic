@@ -302,7 +302,7 @@ test('the z* and isopycnal generators run the same ocean and conserve it, and a 
   assert.equal(shelf.ocean.diagnostics().oceanDried, 0);
 });
 
-test('an edge takes the deepest channel its two cells hold between them as its sill, the hybrid ocean cuts the edge column there so the classes below carry nothing across, and the slab ocean is untouched', () => {
+test('an edge takes the deepest channel its two cells hold between them as its sill and the ocean cuts the edge column there so the classes below carry nothing across', () => {
   const mesh = meshOf(8), C = mesh.nCells, E = mesh.nEdges, { cellsOnEdge, lonCell, latCell } = mesh;
   const wrap = (x) => Math.atan2(Math.sin(x), Math.cos(x));
   const ridge = (lon) => Math.abs(lon) < 1.5 * DEG, strip = (lon) => Math.abs(wrap(lon - Math.PI)) < 1.5 * DEG, within = (lat) => Math.abs(lat) < 40 * DEG;
@@ -319,11 +319,11 @@ test('an edge takes the deepest channel its two cells hold between them as its s
   for (const e of ridgeEdges) assert.equal(geography.edgeSill[e], 300, `ridge edge ${e}`);
   for (const e of stripEdges) assert.equal(geography.edgeSill[e], 0, `land-strip edge ${e}`);
   for (const e of openEdges) assert.equal(geography.edgeSill[e], 4000, `open edge ${e}`);
-  const slab = createOcean(mesh, { everySteps: 1, geography }), hybrid = createOcean(mesh, { ...FLAT, geography });
+  const hybrid = createOcean(mesh, { ...FLAT, geography });
   const floor = (e) => Math.min(hybrid.D[cellsOnEdge[2 * e]], hybrid.D[cellsOnEdge[2 * e + 1]]);
-  for (const e of ridgeEdges) { assert.equal(hybrid.sillEdge[e], 300); assert.ok(slab.sillEdge[e] > 1000 && slab.sillEdge[e] === floor(e), `the slab keeps min(D) at ${e}: ${slab.sillEdge[e]}`); }
-  for (const e of stripEdges) { assert.equal(hybrid.sillEdge[e], 50); assert.equal(slab.sillEdge[e], floor(e)); }
-  for (const e of openEdges) { assert.equal(hybrid.sillEdge[e], floor(e)); assert.equal(slab.sillEdge[e], floor(e)); }
+  for (const e of ridgeEdges) { assert.equal(hybrid.sillEdge[e], 300); assert.ok(floor(e) > 1000, `the cells stay deep at ${e}: ${floor(e)}`); }
+  for (const e of stripEdges) assert.equal(hybrid.sillEdge[e], 50);
+  for (const e of openEdges) assert.equal(hybrid.sillEdge[e], floor(e));
   const front = Float64Array.from({ length: C }, (_, i) => (lonCell[i] < 0 ? 280 : 300)), ice = new Float64Array(C), flux = new Float64Array(C), calm = new Float64Array(E);
   const L = hybrid.layers;
   const transport = (ocean) => { let through = 0, below = 0; for (const e of ridgeEdges) { let z = 0; for (let k = 0; k < L; k++) { const t = Math.abs(ocean.hEdge[k * E + e] * ocean.u[k * E + e]) * mesh.dvEdge[e]; through += t; if (z >= 300) below += t; z += ocean.hEdge[k * E + e]; } } return { through, below }; };
@@ -346,14 +346,12 @@ test('an edge takes the deepest channel its two cells hold between them as its s
   assert.equal(hybrid.diagnostics().oceanLimited, 0);
 });
 
-test('the slab options that have no hybrid meaning are refused', () => {
+test('the slab\'s coordinate and the options without a hybrid meaning are refused', () => {
   const mesh = meshOf(8), C = mesh.nCells;
-  assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), ekmanBlock: true }), /slab/);
+  assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), vertical: 'slab' }), /vertical/);
   assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), vertical: 'sigma' }), /vertical/);
   assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), shearDiffusivity: 0 }), /shearDiffusivity/);
-  assert.throws(() => createOcean(mesh, { bathymetry: new Float64Array(C).fill(4000), tracerAdvection: 'third' }), /hybrid/);
-  assert.throws(() => createOcean(mesh, { bathymetry: new Float64Array(C).fill(4000), shearDiffusivity: 0.2 }), /hybrid/);
-  assert.throws(() => createOcean(mesh, { bathymetry: new Float64Array(C).fill(4000), lateralDiffusionSpeed: 0.005 }), /hybrid/);
+  assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), tracerAdvection: 'central' }), /tracerAdvection/);
   createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), tracerAdvection: 'upwind', shearDiffusivity: 0 });
 });
 

@@ -13,8 +13,8 @@
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { cellVector, gradient, tangential } from '../js/dynamics/operators.module.js';
-import { createOcean, depthFields, THIN } from '../js/ocean/layered.module.js';
-import { labelTemperature } from '../js/ocean/seawater.module.js';
+import { createOcean, depthFields } from '../js/ocean/layered.module.js';
+import { labelTemperature, seawaterDensity } from '../js/ocean/seawater.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
 
 export const RHO = 1025, G = 9.81, DEG = Math.PI / 180, DAY = 86400;
@@ -159,7 +159,7 @@ function layerSpeeds(mesh, ocean, cells) {
     cellVector(mesh, ocean.u.subarray(k * E, (k + 1) * E), vector);
     let sum = 0, area = 0;
     for (const i of cells) {
-      if (k > 0 && ocean.h[k * C + i] <= THIN) continue;
+      if (!(ocean.h[k * C + i] > 0)) continue;
       sum += mesh.areaCell[i] * Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]); area += mesh.areaCell[i];
     }
     out[k] = area > 0 ? sum / area : NaN;
@@ -172,15 +172,32 @@ function fastestCurrent(mesh, ocean) {
   let fastest = 0;
   for (let k = 0; k < ocean.layers; k++) {
     cellVector(mesh, ocean.u.subarray(k * E, (k + 1) * E), vector);
-    for (let i = 0; i < C; i++) if (ocean.cellOcean[i] && (k === 0 || ocean.h[k * C + i] > THIN)) fastest = Math.max(fastest, Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]));
+    for (let i = 0; i < C; i++) if (ocean.cellOcean[i] && ocean.h[k * C + i] > 0) fastest = Math.max(fastest, Math.hypot(vector[3 * i], vector[3 * i + 1], vector[3 * i + 2]));
   }
   return fastest;
 }
 
-function firstThickClass(ocean, C, i) {
-  let k = 1;
-  while (k < ocean.layers - 1 && ocean.h[k * C + i] <= THIN) k++;
-  return k;
+// The first layer below the mixed layer: the one holding the mixed-layer depth, or the next if that one ends there.
+function firstBelow(ocean, C, i) {
+  const depth = ocean.mixedDepths[i];
+  let k = 0, top = 0;
+  while (k < ocean.layers - 1 && top + ocean.h[k * C + i] <= depth + 1e-9) { top += ocean.h[k * C + i]; k++; }
+  return Math.max(1, k);
+}
+// The mixed layer's mean velocity: the thickness-weighted mean of the layers within its depth.
+function mixedVectors(mesh, ocean, layerVectors, out) {
+  const C = mesh.nCells;
+  out.fill(0);
+  for (let i = 0; i < C; i++) {
+    const depth = ocean.mixedDepths[i];
+    let top = 0, within = 0;
+    for (let k = 0; k < ocean.layers && top < depth; k++) {
+      const part = Math.min(ocean.h[k * C + i], depth - top);
+      for (let c = 0; c < 3; c++) out[3 * i + c] += part * layerVectors[k][3 * i + c];
+      within += part; top += ocean.h[k * C + i];
+    }
+    if (within > 0) for (let c = 0; c < 3; c++) out[3 * i + c] /= within;
+  }
 }
 
 function drift(east, north, theory) {
@@ -220,7 +237,8 @@ export function ekmanCase({ N = 8, tau = 0.1, latitude = 45, days = 4, dt = 1350
   const stress = zonalWindOnEdges(mesh, (lat) => tau * shape(lat));
   const basis = cellBasis(mesh), half = 0.5 * meanSpacing(mesh) / mesh.radius / DEG;
   const coriolis = (lat) => 2 * mesh.omega * Math.sin(lat);
-  const ml = new Float64Array(3 * C), beneath = new Float64Array(3 * C);
+  const ml = new Float64Array(3 * C), beneath = new Float64Array(3 * C), layerVectors = Array.from({ length: ocean.layers }, () => new Float64Array(3 * C));
+  const allLayers = () => { for (let k = 0; k < ocean.layers; k++) cellVector(mesh, ocean.u.subarray(k * E, (k + 1) * E), layerVectors[k]); };
   const sim = { kind: 'ekman', view, mesh, ocean, time: 0, end: days * DAY, nextDt: () => dt };
   let advanceExtra = () => {}, frameExtra = () => ({}), layoutExtra = () => ({});
 
@@ -237,11 +255,12 @@ export function ekmanCase({ N = 8, tau = 0.1, latitude = 45, days = 4, dt = 1350
     const f = coriolis(latitude * DEG), period = 2 * Math.PI / Math.abs(f);
     const series = { time: [0], east: [0], north: [0], relativeEast: [0], relativeNorth: [0], cellEast: [0], cellNorth: [0], mixedDepth: [], transportEast: [0], transportNorth: [0], ekmanEast: [0], ekmanNorth: [0] };
     const record = () => {
-      cellVector(mesh, ocean.u.subarray(0, E), ml);
+      allLayers();
+      mixedVectors(mesh, ocean, layerVectors, ml);
       let e0 = 0, n0 = 0, re = 0, rn = 0, depth = 0, te = 0, tn = 0, ke = 0, kn = 0;
       for (const i of ring) {
-        const w = areaCell[i] / ringArea, h = ocean.h[i], k = firstThickClass(ocean, C, i);
-        cellVector(mesh, ocean.u.subarray(k * E, (k + 1) * E), beneath, i, i + 1);
+        const w = areaCell[i] / ringArea, h = ocean.mixedDepths[i], k = firstBelow(ocean, C, i);
+        for (let c = 0; c < 3; c++) beneath[3 * i + c] = layerVectors[k][3 * i + c];
         const ue = dot(ml, basis.east, i), un = dot(ml, basis.north, i), be = dot(beneath, basis.east, i), bn = dot(beneath, basis.north, i);
         e0 += w * ue; n0 += w * un; re += w * (ue - be); rn += w * (un - bn); depth += w * h;
         te += w * h * ue; tn += w * h * un; ke += w * h * (ue - be); kn += w * h * (un - bn);
@@ -261,7 +280,7 @@ export function ekmanCase({ N = 8, tau = 0.1, latitude = 45, days = 4, dt = 1350
       for (let k = 0; k < ocean.layers; k++) {
         cellVector(mesh, ocean.u.subarray(k * E, (k + 1) * E), vector);
         let se = 0, sn = 0, area = 0;
-        for (const i of ring) if (k === 0 || ocean.h[k * C + i] > THIN) { se += areaCell[i] * dot(vector, basis.east, i); sn += areaCell[i] * dot(vector, basis.north, i); area += areaCell[i]; }
+        for (const i of ring) if (ocean.h[k * C + i] > 0) { se += areaCell[i] * dot(vector, basis.east, i); sn += areaCell[i] * dot(vector, basis.north, i); area += areaCell[i]; }
         east[k] = area > 0 ? se / area : NaN; north[k] = area > 0 ? sn / area : NaN;
       }
       return { east, north };
@@ -283,18 +302,18 @@ export function ekmanCase({ N = 8, tau = 0.1, latitude = 45, days = 4, dt = 1350
   } else {
     const capacity = Math.max(1, Math.ceil(averaging / dt)), width = 5 * C, snapshots = new Float32Array(capacity * width), sums = new Float64Array(width);
     let count = 0, next = 0;
-    const vectors = Array.from({ length: ocean.layers }, () => new Float64Array(3 * C));
-    const meanDepth = () => { let s = 0, a = 0; for (let i = 0; i < C; i++) { s += areaCell[i] * ocean.h[i]; a += areaCell[i]; } return s / a; };
+    const meanDepth = () => { let s = 0, a = 0; for (let i = 0; i < C; i++) { s += areaCell[i] * ocean.mixedDepths[i]; a += areaCell[i]; } return s / a; };
     advanceExtra = () => {
-      for (let k = 0; k < ocean.layers; k++) cellVector(mesh, ocean.u.subarray(k * E, (k + 1) * E), vectors[k]);
-      const w = depthFields(mesh, ocean.layers, { h: ocean.h, u: ocean.u, temperature: () => 0, cellOcean: ocean.cellOcean }, meanDepth()).upwelling;
+      allLayers();
+      mixedVectors(mesh, ocean, layerVectors, ml);
+      const w = depthFields(mesh, ocean.layers, { h: ocean.h, u: ocean.u, temperature: () => 0, cellOcean: ocean.cellOcean }, meanDepth(), { thin: 0 }).upwelling;
       const slot = snapshots.subarray(next * width, (next + 1) * width);
       if (count === capacity) for (let j = 0; j < width; j++) sums[j] -= slot[j];
       for (let i = 0; i < C; i++) {
-        const h = ocean.h[i], k = firstThickClass(ocean, C, i);
-        const ue = dot(vectors[0], basis.east, i), un = dot(vectors[0], basis.north, i);
+        const h = ocean.mixedDepths[i], k = firstBelow(ocean, C, i);
+        const ue = dot(ml, basis.east, i), un = dot(ml, basis.north, i);
         slot[i] = h * ue; slot[C + i] = h * un;
-        slot[2 * C + i] = h * (ue - dot(vectors[k], basis.east, i)); slot[3 * C + i] = h * (un - dot(vectors[k], basis.north, i));
+        slot[2 * C + i] = h * (ue - dot(layerVectors[k], basis.east, i)); slot[3 * C + i] = h * (un - dot(layerVectors[k], basis.north, i));
         slot[4 * C + i] = w[i];
       }
       for (let j = 0; j < width; j++) sums[j] += slot[j];
@@ -319,7 +338,7 @@ export function ekmanCase({ N = 8, tau = 0.1, latitude = 45, days = 4, dt = 1350
       }
       return {
         wind, transportEast, transportNorth, ekmanEast, ekmanNorth, upwelling, zonal, equatorUpwelling: equator / equatorArea,
-        eta: Float32Array.from(ocean.eta), mixedDepth: Float32Array.from(ocean.h.subarray(0, C)),
+        eta: Float32Array.from(ocean.eta), mixedDepth: Float32Array.from(ocean.mixedDepths),
         stress: Float32Array.from(mesh.latCell, (lat) => tau * shape(lat)), averagedOver: count * dt,
       };
     };
@@ -373,7 +392,8 @@ function pileCase(kind, { N, latitude, width, days, dt, sst, classes, disturb })
   const sliceCells = Int32Array.from(slice, ([, i]) => i), sliceDistance = Float32Array.from(slice, ([d]) => d);
 
   const meanOf = (field, cells) => { let s = 0, a = 0; for (const i of cells) { s += areaCell[i] * field(i); a += areaCell[i]; } return s / a; };
-  const thermocline = (i) => { let z = 0; for (let k = 0; k <= thermoclineClass; k++) z += ocean.h[k * C + i]; return z; };
+  const boundary = 0.5 * (ocean.densities[thermoclineClass] + ocean.densities[Math.min(ocean.layers - 1, thermoclineClass + 1)]);
+  const thermocline = (i) => { let z = 0; for (let k = 0; k < ocean.layers; k++) { const n = k * C + i, hk = ocean.h[n]; if (hk > 1e-6 && seawaterDensity(ocean.Q[n] / hk, ocean.W[n] / hk) >= boundary) return z; z += hk; } return z; };
   const gradEta = new Float64Array(E), tangent = new Float64Array(E), vector = new Float64Array(3 * C);
 
   const sim = { kind, mesh, ocean, time: 0, end: days * DAY, nextDt: typeof dt === 'function' ? () => dt(sim.time) : () => dt, centre, distance };
@@ -416,7 +436,7 @@ function pileCase(kind, { N, latitude, width, days, dt, sst, classes, disturb })
   return sim;
 }
 
-export function lensCase({ N = 16, latitude = 45, depth = 60, width = 1.5e6, days = 30, dt = 3600, sst = 300, classes = FOUR_CLASSES, light = 1023, dense = 1026.5 } = {}) {
+export function lensCase({ N = 16, latitude = 45, depth = 60, width = 1.5e6, days = 30, dt = 3600, sst = 300, classes = FOUR_CLASSES, light = 1023, dense = 1026.77 } = {}) {
   let up = -1, down = -1;
   const sim = pileCase('lens', {
     N, latitude, width, days, dt, sst, classes,
@@ -426,6 +446,7 @@ export function lensCase({ N = 16, latitude = 45, depth = 60, width = 1.5e6, day
       const amount = Float64Array.from(shape, (s, i) => Math.min(depth * s, ocean.h[down * C + i] - 1));
       reshape(up, (i) => amount[i]);
       reshape(down, (i) => -amount[i]);
+      for (let i = 0; i < C; i++) { const n = up * C + i; if (amount[i] > 0) ocean.Q[n] = ocean.h[n] * labelTemperature(light, ocean.W[n] / ocean.h[n]); }
       return up;
     },
   });

@@ -7,12 +7,12 @@
  */
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, LAYER_DENSITIES, LAYER_SALINITIES, LAYER_BOTTOMS, THIN } from '../js/ocean/layered.module.js';
+import { createOcean, LAYER_DENSITIES, LAYER_SALINITIES, THIN } from '../js/ocean/layered.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion, halineContraction, labelTemperature } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 import { FOUR_CLASSES } from './oceanCases.module.js';
 
-export const ALL_CLASSES = { densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES, bottoms: LAYER_BOTTOMS };
+export const ALL_CLASSES = { densities: LAYER_DENSITIES, salinities: LAYER_SALINITIES };
 export { FOUR_CLASSES, FREEZING_POINT, THIN };
 export const CELSIUS = 273.15;
 

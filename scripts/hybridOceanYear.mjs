@@ -43,7 +43,8 @@
 // js/gpu/layeredOcean.gpu.js, the surface budget still on this thread,
 // with the surface temperature and the sunlight not yet deposited
 // handed to the device and read back each ocean step; one GPU model at
-// a time on this Mac).
+// a time on this Mac), STRESS_SCALE (1; multiplies the recorded stress,
+// an instrument for the recording's wind bias).
 import { readFileSync, writeFileSync, readdirSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { gridMesh, stateGrid } from '../js/stateGrid.module.js';
@@ -63,6 +64,7 @@ import { createParallelModel } from '../js/parallel.module.js';
 const N = Number(process.env.N ?? 32), FORCING = process.env.FORCING ?? 'runs/twelve-local/forcing', OUT = process.env.OUT ?? 'runs/hybrid', TAG = process.env.TAG ?? `hybrid${N}`;
 const DAYS = Number(process.env.DAYS ?? 365), RESTORE = Number(process.env.RESTORE ?? 30), RESTORE_ICE = Number(process.env.RESTORE_ICE ?? 100), LOG_DAYS = Number(process.env.LOG_DAYS ?? 10), SAVE_DAYS = Number(process.env.SAVE_DAYS ?? 30);
 const STEP = Number(process.env.STEP ?? oceanMinutes(N) * 60), OCEAN = JSON.parse(process.env.OCEAN ?? '{}'), DIURNAL = (process.env.DIURNAL ?? '1') !== '0';
+const STRESS_SCALE = Number(process.env.STRESS_SCALE ?? 1);
 const RESTORE_TO = process.env.RESTORE_TO ?? 'woa', EQUINOX_DAY_OF_YEAR = 78, WORKERS = Number(process.env.WORKERS ?? Math.max(1, await parallelism() - 1));
 if (!['woa', 'recorded'].includes(RESTORE_TO)) throw new Error(`RESTORE_TO is woa or recorded, not ${RESTORE_TO}`);
 if (86400 % STEP) throw new Error(`STEP ${STEP} s does not divide a day`);
@@ -267,7 +269,7 @@ for (let day = dayDone; day < DAYS; day++) {
     const salinity = land[i] ? 35 : Math.max(1, io.surfaceS(i));
     evaporation[i] = forcing.evaporation[i] + growth * ICE_DENSITY * (1 - ICE_SALINITY / salinity);
   }
-  stress.set(forcing.stress);
+  for (let e = 0; e < E; e++) stress[e] = STRESS_SCALE * forcing.stress[e];
   io.setDay();
   for (let s = 0; s < perDay; s++) {
     const middle = ((time + 0.5 * STEP) % 86400) / 3600;

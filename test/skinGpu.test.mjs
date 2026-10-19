@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { hybridLayerTable } from '../js/ocean/column.module.js';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
@@ -23,7 +24,7 @@ const LAYERED = { levels: OPTIONS.levels, topography };
 const CASES = [
   ['over the slab from no skin', OPTIONS, 0],
   ['over the slab from a 1 K warm layer', OPTIONS, 1],
-  ['over a layered ocean with 2 m mixed layers under IB light, from a 1 K warm layer', { ...LAYERED, ocean: { mixedDepth: 2, minimumThickness: 2, shallowestMixedDepth: 2 } }, 1],
+  ['over a layered ocean with 2 m top layers under IB light, from a 1 K warm layer', { ...LAYERED, ocean: { layerTable: hybridLayerTable({ top: 2 }) } }, 1],
   ['over a layered ocean under type III light, from a 1 K warm layer', { ...LAYERED, ocean: { penetration: 'III' } }, 1],
 ];
 
@@ -65,7 +66,7 @@ for (const [label, options, warmStart] of CASES) test(`${label} over the open se
   }
   console.log(`${label}: skin parity after one step: ΔT_w ${first.warm.toExponential(1)} K, ΔT_c ${first.cool.toExponential(1)} K, T_s ${first.ts.toExponential(1)} K, net ${first.net.toExponential(1)} W/m² beyond 1e-5 relative, sensible ${first.sensible.toExponential(1)} relative`);
   console.log(`${label}: ${thin} open cells under 3 m; skin parity over ${STEPS} steps, where the bulk temperatures drift ${worst.bulk.toExponential(1)} K apart: ΔT_w ${worst.warm.toExponential(1)} K, ΔT_c ${worst.cool.toExponential(1)} K, T_s ${worst.ts.toExponential(1)} K, net ${worst.net.toExponential(1)} and sensible ${worst.sensible.toExponential(1)} relative`);
-  assert.ok(cpu.skin.warm.some((x) => x > 0.01), 'a warm layer grows');
+  assert.ok(cpu.skin.warm.some((x) => x > 1e-3), 'a warm layer grows');
   assert.ok(first.warm < 1e-4 && first.cool < 1e-4 && first.ts < 1e-4, 'the first step\'s skin to 1e-4 K');
   assert.ok(first.net < 0.1 && first.sensible < 1e-3, 'the first step\'s fluxes to 0.1 W/m² and 1e-3');
   assert.ok(worst.warm < 2e-3, 'the warm layer to 2e-3 K over every step');

@@ -1,15 +1,13 @@
 /*
  * Prescribed seasons over one column of the model's own ocean: createOcean
- * on the 42 cells of Grid(2), with all its classes, a flat 4000 m floor and
- * the same start in every column, a mixed layer FLOOR meters deep at `mean`
- * and 35 psu over the classes at their subtropical depths. Before every
+ * on the 42 cells of Grid(2), with all its layers, a flat 4000 m floor and
+ * the same start in every column, the analytic profile at `mean` and 35 psu. Before every
  * step each cell's surface temperature takes F = F₁ sin(2πt/year) −
  * λ(T − mean), t at the middle of the step from the March equinox, at the
  * capacity the ocean publishes, as the coupled model's surface update
  * does, and every edge carries the same eastward stress. With `currents`
  * false the edge velocities are set back to rest after every step, so
- * each column keeps to itself and only the mixed layer's exchanges and
- * the restoring of the classes change it; the column read is the cell
+ * each column keeps to itself and only the column physics change it; the column read is the cell
  * nearest `latitude`. The slabs take the same F at a fixed capacity from
  * the same start. With `sunlight`, absorbed sunlight (W/m², a function of
  * the seconds from day 0 at the middle of the step) also falls on every
@@ -114,7 +112,7 @@ export function createSeasonalColumn({
     if (!live) return;
     const s = record.seas.model;
     s.sst[n] = ocean.T0[cell]; s.heat[n] = columnHeat() - startHeat; s.flux[n] = applied.model;
-    record.mixedDepth[n] = ocean.h[cell];
+    record.mixedDepth[n] = ocean.mixedDepths[cell];
     record.salinity[n] = ocean.S0[cell];
     let z = 0;
     for (let k = 0; k < L; k++) {
@@ -170,7 +168,7 @@ export function createSeasonalColumn({
     let top = 0;
     for (let k = 0; k < L; k++) {
       const bottom = record.bases[n * L + k];
-      if (bottom - top > 2 * EPS) out.push({ layer: k, density: k === 0 ? null : ocean.densities[k], top, bottom, temperature: record.temperatures[n * L + k] });
+      if (bottom - top > 2 * EPS) out.push({ layer: k, density: ocean.densities[k], top, bottom, temperature: record.temperatures[n * L + k] });
       top = bottom;
     }
     return out;

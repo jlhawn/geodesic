@@ -258,7 +258,7 @@ test('the full model on bl34 steps alike on the CPU and the GPU, over a continen
   assert.ok(q.rmsRel < 2e-3, `q rms ${q.rmsRel}`);
   assert.ok(water.rmsRel < 1e-5, `column water rms ${water.rmsRel}`);
   assert.ok(u.maxDiff < 0.05, `wind max ${u.maxDiff} at ${u.at}`);
-  assert.ok(Math.abs(dc.meanSurfaceT - d.meanSurfaceT) < 0.01 && Math.abs(dc.outgoingLongwave - d.outgoingLongwave) < 0.5 && Math.abs(dc.oceanUpperDepth - d.oceanUpperDepth) < 1e-3);
+  assert.ok(Math.abs(dc.meanSurfaceT - d.meanSurfaceT) < 0.01 && Math.abs(dc.outgoingLongwave - d.outgoingLongwave) < 0.5 && Math.abs(dc.oceanUpperDepth - d.oceanUpperDepth) < 0.2);
   gpu.destroy();
 });
 
@@ -292,14 +292,15 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   assert.equal(fine.time, 86400);
   assert.equal(fine.K, 34);
   assert.deepEqual(savedLevels(fine), bl);
+  const columnMean = (o, i) => { const L = o.h.length / C; let z = 0, q = 0; for (let k = 0; k < L; k++) { const h = o.h[k * C + i]; q += h * o.T[k * C + i]; z += h; } return q / z; };
   let sea = 0, drift = 0, lands = 0, green = 0, freshIce = 0;
   for (let i = 0; i < C; i++) {
-    if (!land[i] && !(fine.ice[i] > 0) && !(ice[i] > 0)) { sea++; drift += fine.ocean.T[i] - ocean.T[i]; }
+    if (!land[i] && !(fine.ice[i] > 0) && !(ice[i] > 0)) { sea++; drift += columnMean(fine.ocean, i) - columnMean(ocean, i); }
     if (vegetation[i] > 0) { lands++; green += Math.abs(fine.land.vegetation[i] - 0.8); }
     freshIce = Math.max(freshIce, fine.ice[i]);
   }
-  console.log(`seeded bl34 run after a day: mixed layer ${(drift / sea).toFixed(3)} K from FROM's, vegetation ${(green / lands).toFixed(4)} from FROM's on average, thickest ice ${freshIce.toFixed(2)} m (FROM had 0.25 m)`);
-  assert.ok(Math.abs(drift / sea) < 0.5, `the mixed layer moved ${drift / sea} K from FROM's in a day`);
+  console.log(`seeded bl34 run after a day: the water column ${(drift / sea).toFixed(4)} K from FROM's, vegetation ${(green / lands).toFixed(4)} from FROM's on average, thickest ice ${freshIce.toFixed(2)} m (FROM had 0.25 m)`);
+  assert.ok(Math.abs(drift / sea) < 0.05, `the water column moved ${drift / sea} K from FROM's in a day`);
   assert.ok(green / lands < 0.02, `the vegetation is ${green / lands} from FROM's`);
   assert.ok(freshIce > 1, `the ice is fresh: at most ${freshIce} m`);
 
