@@ -217,6 +217,7 @@ the wind −6, −6, −5.5 m/s at 20 m.
 | cloudTop.maximumHeight 1000 m | −3.98 | −93 | −77 | −62 | −8.0 | −6.9 | −5.7 | 1802 | 12.8 | 13.0 |
 | plumeMomentum off | −5.01 | −130 | −108 | −80 | −9.5 | −8.4 | −6.5 | 1695 | 13.0 | 12.8 |
 | entrainment.subsidence on | −4.60 | −122 | −101 | −70 | −9.2 | −8.0 | −5.9 | 1871 | 12.9 | 12.2 |
+| cloudTop 1000 m + prognosticHeight off | −4.35 | −106 | −85 | −61 | −8.6 | −7.3 | −5.4 | 733 | 13.4 | 13.0 |
 
 Single states (day 1609 of twelve-day runs) also showed the Gregory
 entrainment law (`plumeEntrainmentLaw: 'gregory'`) at −124 and −130 mN/m²
@@ -267,10 +268,17 @@ third of a kelvin at 1.1 and 1.5 km, cools the inversion layer by 0.3 K
 and the 3 km layer by 0.5 K while moistening it (RH 0.61 against 0.40),
 lifts the deck 100 m and raises the stress by 12 percent: the weaker
 jump lets the plumes through, the feedback that holds the structure.
-The option stays off. The lever is not the exchange but what cools the
-inversion layer, the plumes' detrainment and the longwave, together
-with the vertical transport across both of the inversion layer's
-interfaces.
+The option stays off. Nor is the lever the mixing depth's loop through
+the resolved cloud top: with the cloud-top search capped at 1 km and
+the deck resting at the Richardson depth together (the `cloudTop
+1000 m + prognosticHeight off` row; each alone is in finding 4) the
+K-profile stops near 0.75 km, the deck's gate closes everywhere, and
+the eastern 1.5 km layer warms 0.9 K, the 1–2 km band gives up 0.3 hPa
+and the stress 4 percent, while the shallow and deep plumes and the
+resolved condensation keep the cloud layer to 1.8 km on their own. The
+lever is what cools the inversion layer, the plumes' detrainment and
+the longwave, together with the vertical transport across both of the
+inversion layer's interfaces.
 
 ## What remains
 
