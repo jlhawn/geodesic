@@ -1,13 +1,13 @@
 /* Grids here are indexed i * nj + j, with i running north along the circles of latitude and j down through the
-   boundaries between classes. contours() orients every line so that larger values lie on its right in a frame
-   drawn with i to the right and j down the page; for the overturning streamfunction, the northward flow above
-   each boundary, that orientation is the direction the water moves. */
-import { classOverturning, classSection } from './oceanRun.module.js';
+   interfaces between the ocean's layers. contours() orients every line so that larger values lie on its right in a
+   frame drawn with i to the right and j down the page; for the overturning streamfunction, the northward flow above
+   each interface, that orientation is the direction the water moves. */
+import { layerOverturning, layerSection } from './oceanRun.module.js';
 
-export const SHALLOW = 500, FLOOR = 4000, THICK = 1;
+export const SHALLOW = 500, FLOOR = 4000, THICK = 1, CELL_DEPTH = 700;
 
 export function overturningGrid(header, month = null) {
-  const flow = classOverturning(header, month), base = classSection(header, month).base, L = header.layers, M = L + 1, caps = flow.caps;
+  const flow = layerOverturning(header, month), base = layerSection(header, month).base, L = header.layers, M = L + 1, caps = flow.caps;
   const lats = [-90, ...caps, 90], ni = lats.length, psi = new Float64Array(ni * M), depth = new Float64Array(ni * M);
   const pole = (i, b) => { for (let k = 1; k <= L; k++) depth[i * M + k] = base[b * L + k - 1]; };
   pole(0, 0);
@@ -16,8 +16,8 @@ export function overturningGrid(header, month = null) {
   return { lats, ni, nj: M, psi, depth, flow };
 }
 
-export function northwardByClass(header, month = null) {
-  const flow = month ? header.overturning.months.find((m) => m.name === month) : header.overturning, base = classSection(header, month).base;
+export function northwardByLayer(header, month = null) {
+  const flow = month ? header.overturning.months.find((m) => m.name === month) : header.overturning, base = layerSection(header, month).base;
   const L = header.layers, caps = header.overturning.caps, R = header.constants.radius, values = [];
   caps.forEach((lat, c) => {
     const span = 2 * Math.PI * R * Math.cos(lat * Math.PI / 180);
@@ -30,14 +30,25 @@ export function northwardByClass(header, month = null) {
 }
 
 export function overturningCells(header, month = null) {
-  const { flow } = overturningGrid(header, month), M = header.layers + 1, caps = flow.caps;
-  const mixed = (lat) => flow.psi[caps.indexOf(lat) * M + 1];
-  const deep = (sign, from, to) => {
+  const { flow } = overturningGrid(header, month), L = header.layers, M = L + 1, F = header.fixedLayers, caps = flow.caps;
+  const surface = (lat) => flow.psi[caps.indexOf(lat) * M + F];
+  const extreme = (sign, from, to, shallow, deep) => {
     let best = { psi: 0 };
-    caps.forEach((lat, c) => { if (lat >= from && lat <= to) for (let k = 0; k <= header.layers; k++) if (flow.depth[c * M + k] >= 1000 && sign * flow.psi[c * M + k] > sign * best.psi) best = { psi: flow.psi[c * M + k], latitude: lat, depth: flow.depth[c * M + k] }; });
+    caps.forEach((lat, c) => { if (lat >= from && lat <= to) for (let k = 0; k <= L; k++) { const z = flow.depth[c * M + k]; if (z >= shallow && z <= deep && sign * flow.psi[c * M + k] > sign * best.psi) best = { psi: flow.psi[c * M + k], latitude: lat, depth: z }; } });
     return best;
   };
-  return { mixed, south: mixed(-10), north: mixed(10), deepNorth: deep(1, 40, 90), deepSouth: deep(-1, -90, -40) };
+  return {
+    surface, base: header.minimumThickness.slice(0, F).reduce((sum, v) => sum + v, 0),
+    south: surface(-5), north: surface(5), westerlySouth: surface(-45), westerlyNorth: surface(45),
+    peak: (sign, from, to) => extreme(sign, from, to, 0, CELL_DEPTH), deep: (sign, from, to) => extreme(sign, from, to, 1000, FLOOR),
+    at: (lat, z) => {
+      const c = caps.indexOf(lat);
+      let j = 0;
+      while (j < L - 1 && flow.depth[c * M + j + 1] < z) j++;
+      const d0 = flow.depth[c * M + j], d1 = flow.depth[c * M + j + 1], t = d1 > d0 ? Math.min(1, Math.max(0, (z - d0) / (d1 - d0))) : 1;
+      return flow.psi[c * M + j] + t * (flow.psi[c * M + j + 1] - flow.psi[c * M + j]);
+    },
+  };
 }
 
 export function contours(values, ni, nj, level) {

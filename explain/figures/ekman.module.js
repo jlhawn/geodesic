@@ -1,13 +1,12 @@
 import { Figure, slider, choice, buttons, readout, legend, caption, text, arrow, termColor, rampRGB, clamp, DARK_NEUTRAL, ACCENT, INK, MUTED, GRID, LINE } from '../runtime.module.js';
 import { Grid } from '../../js/grid.module.js';
-import { ekmanSpiral, windForStress, tracks, coriolis, inertialPeriod, RHO, DAY } from '../ekmanTheory.module.js';
+import { ekmanSpiral, fitViscosity, windForStress, tracks, coriolis, inertialPeriod, columnDays, RHO, DAY } from '../ekmanTheory.module.js';
 
-const N = 8, WIDE = 560, LOOP_SECONDS = 4, PLANET_DAYS = 4, PLANET_SPEED = 8 * 3600, CENTER_LONGITUDE = -20 * Math.PI / 180;
+const N = 8, PUMP_DEPTH = 100, WIDE = 560, LOOP_SECONDS = 4, PLANET_DAYS = 4, PLANET_SPEED = 8 * 3600, CENTER_LONGITUDE = -20 * Math.PI / 180;
 const LATITUDES = [...Array.from({ length: 16 }, (_, k) => -80 + 5 * k), ...Array.from({ length: 16 }, (_, k) => 5 + 5 * k)];
 const FAINT = 'rgba(255,255,255,0.55)', HALO = 'rgba(20, 20, 22, 0.85)', DARK = `rgb(${DARK_NEUTRAL.join(', ')})`;
 const NICE = [1, 1.5, 2, 3, 5, 7];
 
-const columnDays = (latitude) => Math.max(4, Math.ceil(2.25 * inertialPeriod(latitude) / DAY));
 const place = (latitude) => (latitude ? `${Math.abs(latitude)}°${latitude > 0 ? 'N' : 'S'}` : '0°');
 const tidy = (v) => Number(v.toPrecision(3));
 const niceStep = (span) => { const p = 10 ** Math.floor(Math.log10(span)), m = span / p; return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * p; };
@@ -16,7 +15,7 @@ const css = (rgb) => `rgb(${Math.round(rgb[0] * 255)}, ${Math.round(rgb[1] * 255
 
 export function mountEkman(root) {
   const controls = root.querySelector('.controls'), color = { a: termColor('a'), e: termColor('e') };
-  let view = 'column', tau = 0.1, latitude = 45, wind = 'trades', viscosity = 0.02;
+  let view = 'column', tau = 0.1, latitude = 45, wind = 'trades', match = null, matchFrame = null;
   let layout = null, latest = null, pending = false, run = 0, owed = 0, speed = 1, plan = null, scale = 0, path = null, pathFrame = null, cells = null, restartTimer = 0;
 
   let failed = null;
@@ -48,33 +47,33 @@ export function mountEkman(root) {
   slider(controls, { label: 'Latitude', min: 0, max: LATITUDES.length - 1, step: 1, value: LATITUDES.indexOf(latitude), format: (k) => place(LATITUDES[k]), onInput: (k) => { latitude = LATITUDES[k]; if (view === 'column') later(); else { report(); fig.render(); } }, span: true });
   choice(controls, { label: 'Wind over the planet', options: [['trades and westerlies', 'trades'], ['westerlies only', 'westerlies']], value: wind, onChange: (v) => { wind = v; restart(); }, span: true });
   const planetRow = controls.lastElementChild;
-  slider(controls, { label: 'Eddy viscosity in the theory', min: 0.005, max: 0.1, step: 0.005, value: viscosity, format: (v) => `${v.toFixed(3)} m²/s`, onInput: (v) => { viscosity = v; report(); fig.render(); }, span: true });
-  const viscosityRow = controls.lastElementChild;
   buttons(controls, [['Restart', restart]]);
   const out = readout(controls), theoryOut = readout(controls), theoryRow = controls.lastElementChild;
 
   function reveal() {
     planetRow.style.display = view === 'planet' ? '' : 'none';
-    viscosityRow.style.display = theoryRow.style.display = view === 'column' ? '' : 'none';
+    theoryRow.style.display = view === 'column' ? '' : 'none';
     note.textContent = view === 'column'
-      ? 'The model’s own ocean on the N = 8 grid: a mixed layer 60 m deep over four classes of denser water, at rest until a band of eastward wind stress, about 20° wide, starts to blow along the chosen latitude. The ocean steps every 22.5 minutes, and everything shown is averaged over the ring of cells nearest that latitude. The panel of paths shows where the mixed layer and the water beneath it would carry a float, seen from above. The velocity panel shows the mixed layer’s velocity measured against the water beneath, its tip tracing a hodograph as the velocity changes, with the two forces that act on it. The third panel is Ekman’s spiral for the same wind, the steady current the theory gives at each depth for the eddy viscosity chosen, which the model does not compute. Time runs one inertial period every four seconds.'
-      : `The same ocean with the wind over the whole planet, ${wind === 'trades' ? 'the trades blowing west within 30° of the equator and the westerlies east from 30° to 65°' : 'westerlies only, centered on 45° in each hemisphere'}, for ${PLANET_DAYS} days. The strip on the left is the wind’s stress at each latitude. On the globe the colors are the water moving up or down through the base of the mixed layer and the arrows the Ekman transport, both averaged over the last two days; arrows longer than twice the one at the bottom are drawn at that length. The dashed line is the latitude the readout describes.`;
+      ? 'The model’s own ocean on the N = 8 grid, with its 58 layers, at rest until a band of eastward wind stress, about 20° wide, starts to blow along the chosen latitude. The ocean steps every 22.5 minutes, and everything shown is averaged over the ring of cells nearest that latitude. The wind’s push goes into the top layer, 3 m thick, and the model’s turbulent mixing carries it down through the layers beneath. The panel of paths shows where the top layer, the mixed layer and the water well below them would carry a float, seen from above. The velocity panel shows the top layer’s and the mixed layer’s velocity measured against the water well below, their tips tracing hodographs as the velocities change, with the two forces that act on the mixed layer. The third panel shows the model’s current in each layer, averaged over the last two inertial periods, beside Ekman’s spiral for the one eddy viscosity that fits it best, which is theory, not the model. Time runs as fast as your computer allows, up to one inertial period every four seconds.'
+      : `The same ocean with the wind over the whole planet, ${wind === 'trades' ? 'the trades blowing west within 30° of the equator and the westerlies east from 30° to 65°' : 'westerlies only, centered on 45° in each hemisphere'}, for ${PLANET_DAYS} days. The strip on the left is the wind’s stress at each latitude. On the globe the colors are the water moving up or down ${PUMP_DEPTH} m below the surface and the arrows the Ekman transport, the water above twice the boundary layer’s depth times its current against the water below that, both averaged over the last two days; arrows longer than twice the one at the bottom are drawn at that length. The dashed line is the latitude the readout describes.`;
     key.set(legendItems());
   }
 
   function legendItems() {
     if (view === 'column') return [
-      ['line', 'the mixed layer: its path, and its velocity against the water beneath', ACCENT],
-      ['dash', 'the path of the water beneath it', FAINT],
+      ['line', 'the top layer, 3 m thick: its path, and its velocity against the water below', INK],
+      ['line', 'the mixed layer: the same', ACCENT],
+      ['dash', 'the path of the water well below', FAINT],
       ['arrow', 'wind', color.e],
       ['force', 'the wind’s push on the mixed layer', color.e],
       ['force', 'Coriolis force on its drift', color.a],
-      ['arrow', 'Ekman’s spiral: the current at each depth, in theory', INK],
+      ['arrow', 'the model’s current in a layer, in the third panel', ACCENT],
+      ['dash', 'Ekman’s spiral, in theory', INK],
     ];
     const s = scale ? `${tidy(scale)}` : '…';
     return [
-      ['ramp', `water at the mixed layer’s base rising ${s} m a day to sinking ${s} m a day`, 'cool', 'warm', DARK],
-      ['arrow', 'Ekman transport: the mixed layer’s drift against the water beneath, times its depth', INK],
+      ['ramp', `water ${PUMP_DEPTH} m down rising ${s} m a day to sinking ${s} m a day`, 'cool', 'warm', DARK],
+      ['arrow', 'Ekman transport: the water above twice the boundary layer’s depth, against the water below', INK],
       ['line', 'wind stress', color.e],
     ];
   }
@@ -100,22 +99,30 @@ export function mountEkman(root) {
   }
 
   function planBox(frame) {
-    const reach = frame.theory / frame.mixedDepth * columnDays(frame.latitude) * DAY, south = frame.f > 0;
+    const reach = frame.theory / 20 * columnDays(frame.latitude) * DAY, south = frame.f > 0;
     return { west: -0.2 * reach, east: 0.45 * reach, south: south ? -1.05 * reach : -0.1 * reach, north: south ? 0.1 * reach : 1.05 * reach };
   }
 
-  function spiralNow() { return ekmanSpiral({ tau, f: coriolis(latitude), viscosity }); }
+  function matched() {
+    if (matchFrame !== latest) {
+      const p = latest.profile;
+      const fit = fitViscosity({ tau: latest.stressMean, f: latest.fMean, center: p.center, thickness: p.thickness, east: p.east, north: p.north, reach: latest.reach });
+      match = { ...fit, spiral: ekmanSpiral({ tau: latest.stressMean, f: latest.fMean, viscosity: fit.viscosity }) };
+      matchFrame = latest;
+    }
+    return match;
+  }
 
   function report() {
     if (!latest || latest.view !== view) { out.set([['starting', '…']]); theoryOut.set([]); return; }
     if (view === 'column') {
-      const f = latest, side = f.f > 0 ? 'right' : 'left', ek = f.ekman;
+      const f = latest, side = f.f > 0 ? 'right' : 'left', tr = f.transport, cms = (v) => (v * 100).toFixed(1);
       const drift = f.settled
-        ? [['drift against the water beneath', `${(ek.magnitude / f.mixedDepth * 100).toFixed(2)} cm/s, ${Math.abs(ek.angle).toFixed(0)}° to the ${side} of the wind`], ['Ekman transport', `${ek.magnitude.toFixed(3)} m²/s, ${ek.ratio.toFixed(2)} times τ/(ρ₀f) = ${f.theory.toFixed(3)} m²/s`]]
-        : [['drift', `measured once two inertial periods have passed, at ${(2 * f.inertialPeriod / 3600).toFixed(0)} h`]];
-      out.set([['averaged over', ringSpan()], ['inertial period', `${(f.inertialPeriod / 3600).toFixed(1)} h`], ...drift, ['mixed layer', `${f.mixedDepth.toFixed(1)} m deep`]]);
-      const s = spiralNow();
-      theoryOut.set([['Ekman’s spiral, in theory', `${(Math.abs(s.surface) * 100).toFixed(1)} cm/s at the surface, 45° to the ${side} of the wind`], ['the current reverses at', `${s.reversal.toFixed(0)} m`]]);
+        ? [['Ekman transport', `${tr.magnitude.toFixed(3)} m²/s, ${tr.ratio.toFixed(2)} times τ/(ρ₀f), ${Math.abs(tr.angle).toFixed(0)}° to the ${side} of the wind`], ['top layer', `${cms(f.top.magnitude)} cm/s, ${Math.abs(f.top.angle).toFixed(0)}° to the ${side}`], ['mixed layer', `${f.mixedDepth.toFixed(0)} m deep, drifting ${cms(f.mixed.magnitude)} cm/s, ${Math.abs(f.mixed.angle).toFixed(0)}° to the ${side}`], ['boundary layer', `${f.boundaryDepth.toFixed(0)} m deep`]]
+        : [['drift', `measured once two inertial periods have passed, at ${(2 * f.inertialPeriod / 3600).toFixed(0)} h`], ['mixed layer', `${f.mixedDepth.toFixed(0)} m deep`]];
+      out.set([['averaged over', ringSpan()], ['inertial period', `${(f.inertialPeriod / 3600).toFixed(1)} h`], ...drift]);
+      const m = matched(), s = m.spiral;
+      theoryOut.set([['Ekman’s spiral, in theory, at the viscosity that fits the model', `${m.viscosity.toFixed(3)} m²/s: ${(Math.abs(s.surface) * 100).toFixed(1)} cm/s at the surface, 45° to the ${side} of the wind, reversing at ${s.reversal.toFixed(0)} m`], ['the model’s own viscosity, averaged over its boundary layer', `${f.meanViscosity.toFixed(3)} m²/s`]]);
       return;
     }
     if (!layout) return;
@@ -123,7 +130,7 @@ export function mountEkman(root) {
     const rows = [[`at ${place(latitude)}, wind`, Math.abs(band.stress) < 5e-4 ? 'none' : `${Math.abs(band.stress).toFixed(3)} N/m² ${band.stress > 0 ? 'east' : 'west'}`]];
     const flow = (m) => (Math.abs(m) < 5e-3 ? 'none' : `${Math.abs(m).toFixed(2)} m²/s ${m < 0 ? 'south' : 'north'}`);
     rows.push(['Ekman transport', Math.abs(latitude) > 5 ? `${flow(band.ekman)} against τ/(ρ₀f) = ${flow(band.theory)}` : `${flow(band.ekman)}; τ/(ρ₀f) is no guide this close to the equator`]);
-    rows.push(['at the mixed layer’s base the water', vertical(band.upwelling)]);
+    rows.push([`${PUMP_DEPTH} m down the water`, vertical(band.upwelling)]);
     rows.push(['on the equator it', vertical(latest.equatorUpwelling)]);
     out.set(rows);
   }
@@ -183,8 +190,8 @@ export function mountEkman(root) {
   }
 
   function drawPath(ctx, P) {
-    const f = latest, n = f.series.time.length, box = { ...plan };
-    for (const track of [path.slab, path.beneath]) for (let s = 0; s < n; s++) {
+    const f = latest, n = f.series.time.length, box = { ...plan }, tracks3 = [path.top, path.mixed, path.deep];
+    for (const track of tracks3) for (let s = 0; s < n; s++) {
       box.west = Math.min(box.west, track[2 * s]); box.east = Math.max(box.east, track[2 * s]);
       box.south = Math.min(box.south, track[2 * s + 1]); box.north = Math.max(box.north, track[2 * s + 1]);
     }
@@ -200,11 +207,13 @@ export function mountEkman(root) {
       for (let y = Math.floor((cy - P.y - P.h) / k / spacing) * spacing; sy(y) > P.y + 40; y += spacing) { ctx.moveTo(P.x, Math.round(sy(y)) + 0.5); ctx.lineTo(P.x + P.w, Math.round(sy(y)) + 0.5); }
       ctx.stroke();
       ctx.lineJoin = 'round';
-      ctx.strokeStyle = FAINT; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]); polyline(ctx, path.beneath, sx, sy, n); ctx.setLineDash([]);
-      ctx.strokeStyle = ACCENT; ctx.lineWidth = 2; polyline(ctx, path.slab, sx, sy, n);
+      ctx.strokeStyle = FAINT; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]); polyline(ctx, path.deep, sx, sy, n); ctx.setLineDash([]);
+      ctx.strokeStyle = ACCENT; ctx.lineWidth = 2; polyline(ctx, path.mixed, sx, sy, n);
+      ctx.strokeStyle = INK; ctx.lineWidth = 1.5; polyline(ctx, path.top, sx, sy, n);
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(sx(0), sy(0), 4, 0, 2 * Math.PI); ctx.stroke();
-      ctx.fillStyle = MUTED; ctx.beginPath(); ctx.arc(sx(path.beneath[2 * n - 2]), sy(path.beneath[2 * n - 1]), 3.5, 0, 2 * Math.PI); ctx.fill();
-      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(sx(path.slab[2 * n - 2]), sy(path.slab[2 * n - 1]), 4.5, 0, 2 * Math.PI); ctx.fill();
+      ctx.fillStyle = MUTED; ctx.beginPath(); ctx.arc(sx(path.deep[2 * n - 2]), sy(path.deep[2 * n - 1]), 3.5, 0, 2 * Math.PI); ctx.fill();
+      ctx.fillStyle = ACCENT; ctx.beginPath(); ctx.arc(sx(path.mixed[2 * n - 2]), sy(path.mixed[2 * n - 1]), 4, 0, 2 * Math.PI); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(sx(path.top[2 * n - 2]), sy(path.top[2 * n - 1]), 4.5, 0, 2 * Math.PI); ctx.fill();
       text(ctx, 'start', sx(0) - 8, sy(0), { align: 'right', color: MUTED, size: 10, halo: HALO });
     });
     text(ctx, 'paths, seen from above', P.x + 12, P.y + 14, { color: INK, size: 11.5 });
@@ -229,8 +238,12 @@ export function mountEkman(root) {
   }
 
   function drawHodograph(ctx, P, narrow) {
-    const f = latest, s = f.series, n = s.time.length, sign = Math.sign(f.f), D = f.theory / f.mixedDepth;
-    const head = title(ctx, P, narrow ? ['velocity against', 'the water beneath'] : ['velocity against the water beneath']);
+    const f = latest, s = f.series, n = s.time.length, sign = Math.sign(f.f), h1 = s.mixedDepth[n - 1], D0 = f.theory / Math.max(h1, 1);
+    const head = title(ctx, P, narrow ? ['velocity against', 'the water well below'] : ['velocity against the water well below']);
+    const rel = (name, deep) => Float64Array.from(s[name], (v, j) => v - s[deep][j]);
+    const topE = rel('topEast', 'deepEast'), topN = rel('topNorth', 'deepNorth'), mixE = rel('mixedEast', 'deepEast'), mixN = rel('mixedNorth', 'deepNorth');
+    let D = D0;
+    for (let j = 0; j < n; j++) D = Math.max(D, Math.hypot(topE[j], topN[j]));
     const room = { x: P.x + 14, y: P.y + head + 6, w: P.w - 28, h: P.h - head - 18 };
     const k = Math.min(room.w, room.h) / (2.7 * D), cx = room.x + room.w / 2, cy = room.y + room.h / 2 - sign * k * D;
     const sx = (u) => cx + k * u, sy = (v) => cy - k * v;
@@ -246,17 +259,22 @@ export function mountEkman(root) {
         const name = `${(r * 100).toFixed(ring * 100 < 1 ? 1 : 0)} cm/s`;
         if (sx(r) + 3 + ctx.measureText(name).width < P.x + P.w - 4) label(ctx, P, name, sx(r) + 3, sy(0) - sign * 8, { size: 9.5 });
       }
-      const tx = sx(0), ty = sy(-sign * D);
+      const tx = sx(0), ty = sy(-sign * D0);
       ctx.strokeStyle = INK; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(tx - 5, ty - 5); ctx.lineTo(tx + 5, ty + 5); ctx.moveTo(tx - 5, ty + 5); ctx.lineTo(tx + 5, ty - 5); ctx.stroke();
       label(ctx, P, 'τ/(ρ₀fh)', tx, ty + sign * 16, { align: 'center', color: INK, size: 10.5 });
-      ctx.strokeStyle = ACCENT; ctx.globalAlpha = 0.75; ctx.lineWidth = 1.3; ctx.lineJoin = 'round';
-      ctx.beginPath();
-      for (let j = 0; j < n; j++) { const x = sx(s.relativeEast[j]), y = sy(s.relativeNorth[j]); if (j) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
-      ctx.stroke(); ctx.globalAlpha = 1;
-      const u = s.relativeEast[n - 1], v = s.relativeNorth[n - 1], px = sx(u), py = sy(v);
+      ctx.lineJoin = 'round'; ctx.globalAlpha = 0.75; ctx.lineWidth = 1.3;
+      for (const [east, north, c] of [[topE, topN, INK], [mixE, mixN, ACCENT]]) {
+        ctx.strokeStyle = c;
+        ctx.beginPath();
+        for (let j = 0; j < n; j++) { const x = sx(east[j]), y = sy(north[j]); if (j) ctx.lineTo(x, y); else ctx.moveTo(x, y); }
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      arrow(ctx, sx(0), sy(0), sx(topE[n - 1]), sy(topN[n - 1]), { color: INK, width: 1.6, head: 6 });
+      const u = mixE[n - 1], v = mixN[n - 1], px = sx(u), py = sy(v);
       arrow(ctx, sx(0), sy(0), px, py, { color: ACCENT, width: 2, head: 7 });
-      const reach = 0.6 / Math.abs(f.f), push = f.theory * Math.abs(f.f) / f.mixedDepth;
+      const reach = 0.6 / Math.abs(f.f), push = f.theory * Math.abs(f.f) / Math.max(h1, 1);
       const forces = [[push, 0, color.e, 'wind'], [f.f * v, -f.f * u, color.a, 'Coriolis']];
       for (const [ax, ay, c, name] of forces) {
         const ex = px + ax * reach * k, ey = py - ay * reach * k;
@@ -269,12 +287,14 @@ export function mountEkman(root) {
   }
 
   function drawSpiral(ctx, P, narrow) {
-    const f = latest, sign = Math.sign(coriolis(latitude)), spiral = spiralNow(), V = Math.abs(spiral.surface);
-    const head = title(ctx, P, narrow ? ['Ekman’s spiral:', 'the theory, not the model'] : ['Ekman’s spiral: the theory, not the model']);
+    const f = latest, sign = Math.sign(coriolis(latitude)), m = matched(), spiral = m.spiral, V = Math.abs(spiral.surface), p = f.profile;
+    const head = title(ctx, P, narrow ? ['the model’s layers (dots)', 'and Ekman’s theory (dashed)'] : ['the model’s layers (dots) and Ekman’s theory (dashed)']);
+    const cut = Math.max(1.5 * f.boundaryDepth, 30), tips = [];
+    for (let k = 0; k < p.center.length && p.center[k] < cut; k++) tips.push([p.east[k], p.north[k], p.center[k]]);
     const curve = [];
     for (let j = 0; j <= 120; j++) curve.push(spiral.at(-2 * spiral.reversal * j / 120));
     let west = 0, east = 0.35 * V, south = 0, north = 0;
-    for (const [u, v] of curve) { west = Math.min(west, u); east = Math.max(east, u); south = Math.min(south, v); north = Math.max(north, v); }
+    for (const [u, v] of curve.concat(tips)) { west = Math.min(west, u); east = Math.max(east, u); south = Math.min(south, v); north = Math.max(north, v); }
     const room = { x: P.x + 16, y: P.y + head + 10, w: P.w - 32, h: P.h - head - 22 };
     const k = Math.min(room.w / (east - west), room.h / (north - south)) * 0.92;
     const cx = room.x + room.w / 2 - k * (west + east) / 2, cy = room.y + room.h / 2 + k * (south + north) / 2;
@@ -288,17 +308,21 @@ export function mountEkman(root) {
       ctx.beginPath(); curve.forEach(([u, v], j) => { if (j) ctx.lineTo(sx(u), sy(v)); else ctx.moveTo(sx(u), sy(v)); }); ctx.stroke(); ctx.setLineDash([]);
       for (let j = 9; j >= 0; j--) {
         const [u, v] = spiral.at(-j * spiral.reversal / 6);
-        arrow(ctx, sx(0), sy(0), sx(u), sy(v), { color: `rgba(255,255,255,${(0.95 - 0.07 * j).toFixed(2)})`, width: j ? 1.2 : 2, head: j ? 5 : 7 });
+        arrow(ctx, sx(0), sy(0), sx(u), sy(v), { color: `rgba(255,255,255,${(0.7 - 0.05 * j).toFixed(2)})`, width: 1, head: 4, dash: [3, 3] });
       }
-      const labels = [[0, 'surface'], [2, `${(spiral.reversal / 3).toFixed(0)} m`], [4, `${(2 * spiral.reversal / 3).toFixed(0)} m`]];
-      for (const [j, name] of labels) {
-        const [u, v] = spiral.at(-j * spiral.reversal / 6), r = Math.hypot(u, v) || 1;
-        const lx = sx(u) + 7 * u / r, ly = sy(v) - 7 * v / r;
-        label(ctx, P, name, lx, ly + (j === 0 ? sign * 4 : 0), { align: u >= 0 ? 'left' : 'right' });
+      if (tips.length) {
+        ctx.strokeStyle = ACCENT; ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
+        ctx.beginPath(); tips.forEach(([u, v], j) => { if (j) ctx.lineTo(sx(u), sy(v)); else ctx.moveTo(sx(u), sy(v)); }); ctx.stroke();
+        arrow(ctx, sx(0), sy(0), sx(tips[0][0]), sy(tips[0][1]), { color: ACCENT, width: 2.2, head: 7 });
+        ctx.fillStyle = ACCENT;
+        for (const [u, v] of tips) { ctx.beginPath(); ctx.arc(sx(u), sy(v), 2.6, 0, 2 * Math.PI); ctx.fill(); }
+        for (const target of [0, 10, 20, 30]) {
+          let best = 0;
+          tips.forEach(([, , z], j) => { if (Math.abs(z - target) < Math.abs(tips[best][2] - target)) best = j; });
+          const [u, v, z] = tips[best], r = Math.hypot(u, v) || 1;
+          label(ctx, P, target === 0 ? `${z.toFixed(0)} m, the top layer` : `${z.toFixed(0)} m`, sx(u) + 7 * u / r, sy(v) - 7 * v / r + (target === 0 ? sign * 4 : 0), { align: u >= 0 ? 'left' : 'right', color: ACCENT });
+        }
       }
-      const ek = f.settled ? f.ekman : null, u = ek ? ek.east / f.mixedDepth : f.series.relativeEast.at(-1), v = ek ? ek.north / f.mixedDepth : f.series.relativeNorth.at(-1);
-      arrow(ctx, sx(0), sy(0), sx(u), sy(v), { color: ACCENT, width: 2.5, head: 7 });
-      if (Math.hypot(u, v) * k > 12) label(ctx, P, narrow ? 'slab' : 'the model’s slab', sx(u) - 6, sy(v) + sign * 11, { align: 'right', color: ACCENT });
     });
   }
 

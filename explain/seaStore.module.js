@@ -1,26 +1,20 @@
 /*
  * The seastore figure's year: oceanColumn's column of the model's own ocean,
  * started as the model's analytic start leaves the sea at a latitude no
- * further from the equator than 45°, where the start's classes still hold
- * their label water: initializeState's sea temperature, createOcean's
- * salinity profile and mixed-layer depth, and its classes at the depths
- * its thermocline tilt gives that latitude. The column read is Grid(2)'s
- * 31.72° cell, whose start equals that latitude's once thermoclineTilt is
- * chosen so that its stretch there matches, and whose retreat's Ekman bound
- * is scaled to that latitude's Coriolis parameter. The heating swings with the
+ * further from the equator than 45°, where the sea carries no ice: the
+ * start's surface temperature from initializeState, its salinity from
+ * createOcean's profile and its e-folding depth stretched by createOcean's
+ * thermocline tilt, all at that latitude. The heating swings with the
  * annual harmonic of the sunlight a sea absorbs there under a sky that
  * passes TRANSMISSION of it, peaking at the June solstice, and the sea
  * loses DAMPING W/m² for each kelvin it is warmer than the start.
  */
-import { createSeasonalColumn, columnMesh, nearestCell, RHO_CP, AIR_COLUMN, SLAB, DAY, YEAR_DAYS } from './oceanColumn.module.js';
+import { createSeasonalColumn, RHO_CP, AIR_COLUMN, SLAB, STORE, DAY, YEAR_DAYS } from './oceanColumn.module.js';
 import { dailySunlight, TOY } from './seaIceColumn.module.js';
-import { LAYER_DENSITIES, LAYER_SALINITIES, RETREAT_EKMAN } from '../js/ocean/layered.module.js';
-import { labelTemperature } from '../js/ocean/seawater.module.js';
 import { FREEZING_POINT } from '../js/physics/ice.module.js';
 
-export { RHO_CP, AIR_COLUMN, SLAB, YEAR_DAYS };
-export const DAMPING = 10, STEP = 10800, STORE = 100, START_DEPTH = 60, TILT = 0.3, TRANSMISSION = TOY.transmission;
-export const POLEWARD = 45, CELL = 32;
+export { RHO_CP, AIR_COLUMN, SLAB, STORE, YEAR_DAYS };
+export const DAMPING = 10, STEP = 10800, TILT = 0.3, TRANSMISSION = TOY.transmission, POLEWARD = 45;
 const RAD = Math.PI / 180;
 
 export function startingSea(latitude) {
@@ -39,16 +33,9 @@ export function sunSwing(latitude, transmission = TRANSMISSION) {
   return 2 * sum / YEAR_DAYS;
 }
 
-export const classLabels = () => LAYER_DENSITIES.map((rho, k) => Math.max(FREEZING_POINT, labelTemperature(rho, LAYER_SALINITIES[k])));
-
 export function columnOptions({ latitude = POLEWARD, heating = sunSwing(latitude), wind = 0.1, days = YEAR_DAYS } = {}) {
-  if (!(Math.abs(latitude) <= POLEWARD)) throw new Error(`the column's start holds for latitudes within ${POLEWARD}° of the equator, not ${latitude}`);
-  const m = columnMesh(), phi = m.latCell[nearestCell(m, CELL)], cos2 = Math.cos(phi) ** 2, sea = startingSea(latitude);
-  const retreatEkman = latitude === 0 ? 0 : RETREAT_EKMAN * Math.abs(Math.sin(phi) / Math.sin(latitude * RAD));
-  return {
-    latitude: CELL, heating, wind, damping: DAMPING, dt: STEP, days, mean: sea.temperature, every: DAY / STEP, storeDepth: STORE,
-    ocean: { mixedDepth: START_DEPTH, salinityProfile: () => sea.salinity, thermoclineTilt: (sea.stretch - 1) / (2 * cos2 - 1), retreatEkman },
-  };
+  if (!(Math.abs(latitude) <= POLEWARD)) throw new Error(`the column carries no ice, so it holds for latitudes within ${POLEWARD}° of the equator, not ${latitude}`);
+  return { latitude, heating, wind, damping: DAMPING, dt: STEP, days, mean: startingSea(latitude).temperature, every: DAY / STEP, storeDepth: STORE, light: true };
 }
 
 export function createSeaStore(settings = {}) {
@@ -56,14 +43,14 @@ export function createSeaStore(settings = {}) {
   let sent = 0;
   return {
     column,
-    layout: { heating: options.heating, wind: options.wind, mean: options.mean, layers: L, samples: Math.floor(column.steps / column.every) + 1, labels: classLabels() },
+    layout: { heating: options.heating, wind: options.wind, mean: options.mean, layers: L, samples: Math.floor(column.steps / column.every) + 1, minimum: column.minimum },
     run(steps) { column.run(steps); },
     get done() { return column.done; },
     batch() {
       const from = sent, to = column.samples, slice = (a) => a.slice(from, to), wide = (a) => a.slice(from * L, to * L);
       sent = to;
       return {
-        from, time: slice(r.time), forcing: slice(r.forcing), sst: slice(r.seas.model.sst), slab: slice(r.seas.slab.sst), depth: slice(r.mixedDepth),
+        from, time: slice(r.time), forcing: slice(r.forcing), sst: slice(r.seas.model.sst), slab: slice(r.seas.slab.sst), depth: slice(r.mixedDepth), boundary: slice(r.boundaryDepth),
         salinity: slice(r.salinity), stored: slice(r.stored), heat: slice(r.seas.model.heat), slabHeat: slice(r.seas.slab.heat), bases: wide(r.bases), temperatures: wide(r.temperatures),
       };
     },

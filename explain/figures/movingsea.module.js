@@ -24,7 +24,7 @@ const dateText = (day) => { const { month, date } = calendarDate(day); return `$
 export function mountMovingsea(root) {
   let spinupDays = 3650;
   const runDay = (t) => Math.round(t / 86400 + spinupDays);
-  const speedRamp = stops([[0, DARK_NEUTRAL], [0.3, CURRENT], [0.6, PALE]]), depthRamp = stops([[0, DARK_NEUTRAL], [0.5, VAPOR], [1, PALE]]), rainRamp = stops([[0, DARK_NEUTRAL], [0.5, VAPOR], [1, PALE]]);
+  const speedRamp = stops([[0, DARK_NEUTRAL], [0.5, CURRENT], [1, PALE]]), depthRamp = stops([[0, DARK_NEUTRAL], [0.5, VAPOR], [1, PALE]]), rainRamp = stops([[0, DARK_NEUTRAL], [0.5, VAPOR], [1, PALE]]);
   const fields = [
     { name: 'seaSurfaceTemperature', format: signed, label: 'sea surface temperature', unit: '°C', digits: 1, color: (v, rgb) => rampRGB((v + 2) / 34, rgb, DARK_NEUTRAL), legend: [['ramp', 'temperature of the sea’s surface, from −2 to 32\u00a0°C', 'cool', 'warm', DARK]] },
     {
@@ -35,12 +35,12 @@ export function mountMovingsea(root) {
         out[0] = east * length; out[1] = north * length;
       },
       color: speedRamp,
-      legend: [['ramp', 'speed of the mixed layer’s current, from 0 to 0.6\u00a0m/s', DARK, PALE, CURRENT], ['arrow', 'its direction, the arrows longer for faster currents', 'rgba(255, 255, 255, 0.9)']],
+      legend: [['ramp', 'speed of the top layer’s current, from 0 to 1\u00a0m/s', DARK, PALE, CURRENT], ['arrow', 'its direction, the arrows longer for faster currents', 'rgba(255, 255, 255, 0.9)']],
     },
-    { name: 'mixedLayerDepth', format: signed, label: 'mixed-layer depth', unit: 'm', digits: 0, color: (v, rgb) => depthRamp(Math.log(Math.max(v, 50) / 50) / Math.log(8), rgb), legend: [['ramp', 'depth of the mixed layer, from its 50\u00a0m floor to 400\u00a0m and more, on a logarithmic scale', DARK, PALE, VAPOR]] },
+    { name: 'mixedLayerDepth', format: signed, label: 'mixed-layer depth', unit: 'm', digits: 0, color: (v, rgb) => depthRamp(Math.log(Math.max(v, 2) / 2) / Math.log(256), rgb), legend: [['ramp', 'depth of the mixed layer, from 2\u00a0m to 500\u00a0m on a logarithmic scale', DARK, PALE, VAPOR]] },
     { name: 'seaSurfaceHeight', format: signed, label: 'sea level', unit: 'm', digits: 2, mean: false, color: (v, rgb) => rampRGB(0.5 + v / 3, rgb, DARK_NEUTRAL), legend: [['ramp', 'sea surface 1.5\u00a0m below to 1.5\u00a0m above its mean', 'cool', 'warm', DARK]] },
-    { name: 'upwelling50', format: signed, label: 'upwelling at 50\u00a0m', unit: 'm a day', digits: 2, mean: false, color: (v, rgb) => rampRGB(0.5 - v / 2, rgb, DARK_NEUTRAL), legend: [['ramp', 'water 50\u00a0m down rising 1\u00a0m a day to sinking 1\u00a0m a day', 'cool', 'warm', DARK]] },
-    { name: 'surfaceSalinity', format: signed, label: 'surface salinity', unit: 'psu', digits: 2, meanDigits: 2, color: (v, rgb) => rampRGB((v - 33.6) / 2, rgb, DARK_NEUTRAL), legend: [['ramp', 'salinity of the mixed layer, from 33.6 to 35.6\u00a0psu', 'cool', 'warm', DARK]] },
+    { name: 'upwelling50', format: signed, label: 'upwelling at 50\u00a0m', unit: 'm a day', digits: 2, mean: false, color: (v, rgb) => rampRGB(0.5 - v / 4, rgb, DARK_NEUTRAL), legend: [['ramp', 'water 50\u00a0m down rising 2\u00a0m a day to sinking 2\u00a0m a day', 'cool', 'warm', DARK]] },
+    { name: 'surfaceSalinity', format: signed, label: 'surface salinity', unit: 'psu', digits: 2, meanDigits: 2, color: (v, rgb) => rampRGB((v - 33.6) / 2, rgb, DARK_NEUTRAL), legend: [['ramp', 'salinity of the top layer, from 33.6 to 35.6\u00a0psu', 'cool', 'warm', DARK]] },
     { name: 'rain', format: signed, label: 'rain', unit: 'mm a day', digits: 1, meanDigits: 2, color: (v, rgb) => rainRamp(Math.sqrt(Math.max(0, v) / 30), rgb), legend: [['ramp', 'rain, from none to 30\u00a0mm a day and more, averaged since the frame before', DARK, PALE, VAPOR]] },
   ];
   playbackGlobe(root, {
@@ -54,7 +54,7 @@ export function mountMovingsea(root) {
         return [['day', sequence === 'year' ? `${Math.round(day)}, ${dateText(day)}` : `${runDay(t)} of the run, ${dateText(day)}`], ['season', `${north} in the north, ${south} in the south, ${seasonPhrase(day)}`]];
       },
     },
-    note: 'Computed in advance: Part 7’s wet planet, with the climate model’s own winds, radiation, evaporation, convection and clouds on the N = 16 grid with 36 layers, its slab replaced by the model’s own ocean, a mixed layer over 46 classes of water 4,000\u00a0m deep. There is no land, so the sea has no coasts. It shows one model year from the March equinox after ten years of spin-up, and the first 60 days of the spin-up, a frame a day, as the sea starts moving from rest. Temperature, salinity and current are the mixed layer’s; the rain is an average since the frame before. The run’s starting ice, its bare ice as dark as the sea, still caps the polar seas in the first 60 days, but it melted in the first three years and never formed again, and the recorded year has none. Drag the globe to turn it, or the time slider to step through the days.',
+    note: 'Computed in advance: Part 7’s wet planet, with the climate model’s own winds, radiation, evaporation, convection and clouds on the N = 16 grid with 36 layers, its slab replaced by the model’s own ocean, 58 layers of water over a flat floor 4,000\u00a0m down. There is no land, so the sea has no coasts. It shows one model year from the March equinox after ten years of spin-up, and the first 60 days of the spin-up, a frame a day, as the sea starts moving from rest. Temperature, salinity and current are the top layer’s, 3\u00a0m thick; the mixed-layer depth is the one the ocean measures after it has mixed the water; the rain is an average since the frame before. The run’s starting ice, its bare ice as dark as the sea, caps the polar seas in the first 60 days, but almost all of it melted in the first years. Drag the globe to turn it, or the time slider to step through the days.',
   });
   loadFrames(DATA_URL).then(({ header }) => { spinupDays = header.spinupDays; }).catch(() => {});
 }

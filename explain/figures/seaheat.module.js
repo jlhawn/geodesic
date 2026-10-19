@@ -2,7 +2,7 @@ import { Figure, choice, slider, readout, legend, caption, text, termColor, clam
 import { loadFrames } from '../frames.module.js';
 import { DATA_URL, transportSplit } from '../oceanRun.module.js';
 
-const D = Math.PI / 180, PW_SPAN = 7, SV_SPAN = 70, HALO = 'rgba(21, 21, 21, 0.85)', PROBE = 'rgba(255, 255, 255, 0.28)';
+const D = Math.PI / 180, PW_SPAN = 7, SV_SPAN = 120, HALO = 'rgba(21, 21, 21, 0.85)', PROBE = 'rgba(255, 255, 255, 0.28)';
 const SEA = 'rgb(120, 140, 255)', STORED = 'rgba(255, 255, 255, 0.75)', PART7 = 'rgba(255, 255, 255, 0.6)', PART6 = 'rgba(255, 255, 255, 0.3)';
 const TOP = { sea: { range: [-60, 60], ticks: [-60, -30, 0, 30, 60] }, surface: { range: [-25, 200], ticks: [0, 50, 100, 150, 200] } };
 const VIEWS = { heat: { top: 'sea', bottom: 'heat' }, surface: { top: 'surface', bottom: 'heat' }, flow: { top: 'sea', bottom: 'flow' } };
@@ -31,13 +31,13 @@ export function mountSeaheat(root) {
   let run = null, view = 'heat', probe = -10, geometry = null, failed = false;
 
   const fig = new Figure(root, { height: (w) => (w < 520 ? 440 : 480), draw });
-  caption(root, 'Above, the year’s average of the heat going into the sea through its surface, in bands 5° of latitude wide, from the run of the last section, and of the heat the sea stored or gave up; the shading between them is what its currents must carry away or bring. Below, the heat carried north across each latitude, added up from the South Pole, in all and by each carrier, and the sea’s own flow added up class by class, relative to water at 0\u00a0°C. The latitude scale shrinks toward the poles so that equal widths hold equal areas of the planet. Each part is corrected for the heat it stored over the year, so the curves include the heat the polar sea is storing. The heat the run’s books cannot place is spread evenly over the globe. The sea’s overturning is sampled every six hours, and the samples miss up to 12\u00a0Sv, so its layers do not quite cancel. Poleward of 45° the flow of its densest classes is the densest water of the run’s start draining toward the equator. Tap or drag across the chart to read one latitude.');
+  caption(root, 'Above, the year’s average of the heat going into the sea through its surface, in bands 5° of latitude wide, from the run of the last section, and of the heat the sea stored or gave up; the shading between them is what its currents must carry away or bring. Below, the heat carried north across each latitude, added up from the South Pole, in all and by each carrier. Each part is corrected for the heat it stored over the year, so the curves include the heat the sea is storing; the 0.003\u00a0W/m² the run’s books cannot place is spread evenly over the globe. The dots are the heat the sea’s overturning cells carry: the six-hourly flow of each layer across the latitude at that layer’s mean temperature, relative to water at 0\u00a0°C. The difference between the dots and the sea’s line is carried within the layers. In the flow view the layers are grouped, the twelve fixed-depth layers of the top 57\u00a0m and the others by their label density; the samples miss up to 0.5\u00a0Sv, so a latitude’s layers do not quite cancel. The latitude scale shrinks toward the poles so that equal widths hold equal areas of the planet. Tap or drag across the chart to read one latitude.');
   const below = legend(root, []), above = legend(root, []);
   const keys = {
     sea: [['line', 'above: heat into the sea through its surface', SEA], ['dash', 'heat the sea stored, below zero where it gave heat up', STORED], ['bar', 'heat left for the currents to carry away', surplus], ['bar', 'heat the currents bring', deficit]],
     surface: [['line', 'above: sunlight absorbed by the sea', sun], ['line', 'infrared it sends up, less what comes back', infrared], ['line', 'sensible heat', sensible], ['line', 'latent heat of the water it evaporates', latentColor], ['line', 'heat into the sea, what is left', totalColor]],
-    heat: [['line', 'below: heat carried north, in all', totalColor], ['line', 'by the air, as the heat of dry air', sensible], ['line', 'by the air, as latent heat in its vapor', latentColor], ['line', 'by the sea', SEA], ['dots', 'by the sea, its flow added up class by class', SEA], ['dash', 'in all by Part 7’s air, over a sea that did not move', PART7], ['faint', 'in all on Part 6’s dry sphere', PART6]],
-    flow: [['line', 'below: water carried north by the sea’s mixed layer', ACCENT], ['line', 'by the classes lighter than 1026 kg/m³', SEA], ['dash', 'by the classes from 1026 to 1026.8 kg/m³', SEA], ['dots', 'by the classes from 1026.8 kg/m³ down', SEA]],
+    heat: [['line', 'below: heat carried north, in all', totalColor], ['line', 'by the air, as the heat of dry air', sensible], ['line', 'by the air, as latent heat in its vapor', latentColor], ['line', 'by the sea', SEA], ['dots', 'by the sea’s cells, layer by layer at each layer’s mean temperature', SEA], ['dash', 'in all by Part 7’s air, over a sea that did not move', PART7], ['faint', 'in all on Part 6’s dry sphere', PART6]],
+    flow: [['line', 'below: water carried north by the twelve surface layers, the top 57 m', ACCENT], ['line', 'by the layers lighter than 1026 kg/m³ below them', SEA], ['dash', 'by the layers from 1026 to 1026.8 kg/m³', SEA], ['dots', 'by the layers from 1026.8 kg/m³ down', SEA]],
   };
   const relabel = () => { above.set(keys[VIEWS[view].top]); below.set(keys[VIEWS[view].bottom]); };
   relabel();
@@ -61,7 +61,7 @@ export function mountSeaheat(root) {
       text(ctx, minus(v), left - 6, y(v), { align: 'right', color: MUTED, size });
     }
     text(ctx, 'W/m²', left - 6, top - 12, { align: 'right', color: MUTED, size });
-    for (const v of bottomView === 'flow' ? [-60, -30, 0, 30, 60] : [-6, -4, -2, 0, 2, 4, 6]) {
+    for (const v of bottomView === 'flow' ? [-120, -80, -40, 0, 40, 80, 120] : [-6, -4, -2, 0, 2, 4, 6]) {
       ctx.strokeStyle = v ? GRID : LINE; ctx.beginPath(); ctx.moveTo(left, z(v)); ctx.lineTo(w - right, z(v)); ctx.stroke();
       text(ctx, minus(v), left - 6, z(v), { align: 'right', color: MUTED, size });
     }
@@ -109,7 +109,7 @@ export function mountSeaheat(root) {
       curve((s) => s.dry, z, sensible, 2);
       curve((s) => s.latent, z, latentColor, 2);
       curve((s) => s.sea, z, SEA, 2);
-      curve((s) => s.direct, z, SEA, 2.5, [0.5, 5]);
+      curve((s) => s.cells, z, SEA, 2.5, [0.5, 5]);
       curve((s) => s.total, z, totalColor, 2.5);
       for (const sign of [1, -1]) {
         const peak = run.split.peak('total', sign);
@@ -136,8 +136,8 @@ export function mountSeaheat(root) {
         : [['sunlight absorbed', plain(at.sunlight)], ['infrared up, less what comes back', plain(at.infrared)], ['sensible heat', plain(at.sensibleHeat)], ['latent heat', plain(at.latentHeat)], ['into the sea', flux(at.input)]]),
     ]);
     lower.set(bottomView === 'heat'
-      ? [['heat carried', carried(at.total)], ['by the air, as the heat of dry air', carried(at.dry)], ['as latent heat', carried(at.latent)], ['by the sea', carried(at.sea)], ['by its classes, added up', carried(at.direct)]]
-      : [['water carried by the mixed layer', flowing(at.groups[0])], ['lighter than 1026', flowing(at.groups[1])], ['1026 to 1026.8', flowing(at.groups[2])], ['from 1026.8', flowing(at.groups[3])], ['heat carried by the sea', carried(at.sea)], ['by its classes, added up', carried(at.direct)]]);
+      ? [['heat carried', carried(at.total)], ['by the air, as the heat of dry air', carried(at.dry)], ['as latent heat', carried(at.latent)], ['by the sea', carried(at.sea)], ['by its cells', carried(at.cells)]]
+      : [['water carried by the top 57 m', flowing(at.groups[0])], ['lighter than 1026, below them', flowing(at.groups[1])], ['1026 to 1026.8', flowing(at.groups[2])], ['from 1026.8', flowing(at.groups[3])], ['heat carried by the sea', carried(at.sea)], ['by its cells', carried(at.cells)]]);
   }
 
   function summarize() {
@@ -145,7 +145,8 @@ export function mountSeaheat(root) {
     global.set([
       ['most heat carried, in all', most('total')], ['by the air', most('air')], ['by the sea', most('sea')],
       ['across the equator', `${carried(equator.total, 1)}: by the sea ${carried(equator.sea, 1)}, by the air ${carried(equator.air, 1)}`],
-      ['heat the run’s books cannot place', `${split.books.global.residual.toFixed(1)} W/m², spread evenly`],
+      ['heat the sea takes in, and stores', `${split.books.global.seaInput.toFixed(1)} W/m², ${split.books.global.sea.toFixed(1)} W/m²`],
+      ['heat the run’s books cannot place', `${split.books.global.residual.toFixed(3)} W/m², spread evenly`],
     ]);
   }
 
@@ -169,7 +170,7 @@ export function mountSeaheat(root) {
       split,
       at(lat) {
         const edge = split.at(lat), out = { lat, groups: edge.groups.map((g) => g.mass) };
-        for (const name of ['total', 'sea', 'air', 'latent', 'dry', 'direct', 'part7', 'part6']) out[name] = edge[name];
+        for (const name of ['total', 'sea', 'air', 'latent', 'dry', 'cells', 'part7', 'part6']) out[name] = edge[name];
         for (const [name, values] of Object.entries(bands)) out[name] = banded(values, lat);
         return out;
       },
