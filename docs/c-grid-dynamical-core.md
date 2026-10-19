@@ -5652,6 +5652,14 @@ The work, in order:
      by band (MLS) rises on bl36, 630-700 cm⁻¹ 0.32 → 0.59, 700-820 0.17
      → 0.25, 10-350 0.26 → 0.32 K/day: the reduction was binned on bl34's
      columns, and a bl36 run would want its own (`LEVELS=bl36 WRITE=1`).
+   - bl42 (`sigmaInterfaces('bl42')`, `LEVELS=bl42`): bl36 with its
+     1.2-4.7 km span cut into layers of 237 to 338 m up to 3.5 km and
+     two of about 600 m to the cam26 interface at 4.7 km (standard
+     heights; 42 layers), so that a trade inversion falls within one
+     thin layer; the sponge, the lid friction and the longwave table are
+     bl36's (the same top layers). `remapLevels` carries bl36 states
+     onto it (`test/levels.test.mjs`). Built for the cold-tongue
+     inversion of docs/equatorial-wind-bias.md.
    - Final defaults: `topDragDays` 0 (was 5; `topSigma` 0.02 unused),
      `spongeSigma` 0.005 and `spongeDays` 1 (`SPONGE`, the sponge on the
      eddies; `surface` options), `gravityWaves` on with `flux` 4.3·10⁻³

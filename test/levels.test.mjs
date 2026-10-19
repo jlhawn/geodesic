@@ -38,7 +38,7 @@ function prepare(model) {
 }
 
 test('the sigma grids go by name, cam26 by default, and a grid is named again from its interfaces in single precision', () => {
-  assert.deepEqual(SIGMA_GRIDS, ['cam26', 'bl34', 'bl36']);
+  assert.deepEqual(SIGMA_GRIDS, ['cam26', 'bl34', 'bl36', 'bl42']);
   assert.deepEqual(sigmaInterfaces(), cam);
   assert.equal(cam.length - 1, 27);
   assert.equal(bl.length - 1, 34);
@@ -211,6 +211,35 @@ test('bl36 is bl34 with its top layer split at 0.3 and 1 hPa, and remapLevels ca
   assert.deepEqual(up.u.subarray(3 * E), state.u.subarray(E));
   const back = remapLevels(top, bl, up, mesh);
   for (const name of ['theta', 'u']) for (let x = 0; x < state[name].length; x++) assert.ok(Math.abs(back[name][x] - state[name][x]) <= 1e-12 * Math.abs(state[name][x]), `${name} at ${x}`);
+});
+
+test('bl42 is bl36 with its 1.2 to 4.7 km span cut into layers of 237 to 641 m: 42 layers, bl36 above 4.7 km and below 1.2 km exactly, no layer more than 1.9 times as thick as the one below it, and remapLevels carries a bl36 state onto it keeping every column\'s water, enthalpy and momentum', () => {
+  const fine = sigmaInterfaces('bl42'), top = sigmaInterfaces('bl36');
+  assert.equal(fine.length - 1, 42);
+  assert.equal(sigmaGridName(Float32Array.from(fine)), 'bl42');
+  assert.deepEqual(fine.subarray(0, 23), top.subarray(0, 23));
+  assert.deepEqual(fine.subarray(32), top.subarray(26));
+  const heights = Array.from(fine, standardHeight);
+  assert.ok(Math.abs(heights[22] - 4741) < 1 && Math.abs(heights[32] - 1213) < 1, `the cut spans ${heights[32]} to ${heights[22]} m`);
+  for (let k = 21; k < 32; k++) {
+    const thick = heights[k] - heights[k + 1], below = heights[k + 1] - heights[k + 2];
+    if (k > 21) assert.ok(thick > 230 && thick < 650, `layer ${k} is ${thick} m thick`);
+    assert.ok(thick <= 1.9 * below, `layer ${k} is ${thick} m over ${below} m`);
+  }
+  const mesh = buildMesh(new Grid(2)), C = mesh.nCells, E = mesh.nEdges;
+  const state = { pi: new Float64Array(C).fill(1e5), theta: Float64Array.from({ length: 36 * C }, (_, x) => 300 + x % 97), q: Float64Array.from({ length: 36 * C }, (_, x) => 1e-3 * (1 + x % 7)), qc: null, u: Float64Array.from({ length: 36 * E }, (_, x) => (x % 13) - 6) };
+  const up = remapLevels(top, fine, state, mesh);
+  const kappa = R_DRY / CP_DRY, exner = (levels, k) => (levels[k + 1] ** (1 + kappa) - levels[k] ** (1 + kappa)) / ((1 + kappa) * (levels[k + 1] - levels[k]));
+  const column = (levels, values, i, n, weight = () => 1) => { let s = 0; for (let k = 0; k < levels.length - 1; k++) s += (levels[k + 1] - levels[k]) * weight(levels, k) * values[k * n + i]; return s; };
+  for (let i = 0; i < C; i++) {
+    const water = column(top, state.q, i, C), enthalpy = column(top, state.theta, i, C, exner);
+    assert.ok(Math.abs(column(fine, up.q, i, C) - water) <= 1e-12 * water, `cell ${i}: water ${water} becomes ${column(fine, up.q, i, C)}`);
+    assert.ok(Math.abs(column(fine, up.theta, i, C, exner) - enthalpy) <= 1e-12 * enthalpy, `cell ${i}: enthalpy ${enthalpy} becomes ${column(fine, up.theta, i, C, exner)}`);
+  }
+  for (let e = 0; e < E; e++) { const m = column(top, state.u, e, E); assert.ok(Math.abs(column(fine, up.u, e, E) - m) <= 1e-12 * Math.max(1, Math.abs(m)), `edge ${e}: momentum ${m}`); }
+  assert.deepEqual(up.theta.subarray(0, 22 * C), state.theta.subarray(0, 22 * C));
+  assert.deepEqual(up.theta.subarray(32 * C), state.theta.subarray(26 * C));
+  console.log(`bl42: ${fine.length - 1} layers; standard thicknesses from 4.7 km down ${heights.slice(22, 32).map((z, j) => (z - heights[23 + j]).toFixed(0)).join(', ')} m`);
 });
 
 test('the worker-thread engine on bl34 reproduces the single-thread step bit for bit', async () => {

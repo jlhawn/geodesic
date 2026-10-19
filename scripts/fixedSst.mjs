@@ -7,15 +7,17 @@
 // SST=woa sets every open-sea cell to WOA23's monthly SST
 // (data/woa_sst_monthly_1deg.bin) on the state's date. MOIST,
 // BOUNDARY_LAYER, SURFACE and RADIATION (JSON) pass options as
-// scripts/spinup.mjs does. The AMIP question for one state: what the
-// atmosphere does over the observed sea.
+// scripts/spinup.mjs does; LEVELS (a grid of SIGMA_GRIDS) runs the arm on
+// that grid with the state remapped onto it. The AMIP question for one
+// state: what the atmosphere does over the observed sea.
 //   SST=woa DAYS=12 SAVE_DAYS=3 node scripts/fixedSst.mjs STATE.bin OUT TAG
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { withCadence } from '../js/cadence.module.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
-import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
+import { savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS, remapLevels } from '../js/physics/regrid.module.js';
+import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { stateGrid, gridHeader } from '../js/stateGrid.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt } from '../js/ocean/climatology.module.js';
 
@@ -25,9 +27,11 @@ const env = (name) => JSON.parse(process.env[name] ?? '{}');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 const mesh = stateGrid(saved, topography).mesh, dt = 1350 * 16 / saved.N, perDay = Math.round(86400 / dt);
-const model = await createGpuModel(mesh, { topography, levels: savedLevels(saved), ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
+const levels = process.env.LEVELS ? sigmaInterfaces(process.env.LEVELS) : savedLevels(saved);
+const model = await createGpuModel(mesh, { topography, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
 const { state, core } = model, C = mesh.nCells;
-['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
+const carried = { ...saved, ...(process.env.LEVELS ? remapLevels(savedLevels(saved), levels, saved, mesh) : {}) };
+['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(carried[name]));
 model.seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
 for (const field of Object.keys(MOIST_FIELDS)) model.moist[field].set(savedMoistField(saved, field, model));

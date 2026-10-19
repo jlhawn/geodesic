@@ -39,8 +39,9 @@ export function standardHeight(sigma) {
   return STANDARD.T0 / STANDARD.lapse * (1 - Math.pow(sigma, STANDARD.R * STANDARD.lapse / STANDARD.g));
 }
 
-export const SIGMA_GRIDS = ['cam26', 'bl34', 'bl36'];
+export const SIGMA_GRIDS = ['cam26', 'bl34', 'bl36', 'bl42'];
 const STRATOPAUSE_INTERFACES = [30, 100];
+const INVERSION_HEIGHTS = [4100, 3498, 3160, 2830, 2520, 2230, 1960, 1698, 1450, ...BOUNDARY_LAYER_HEIGHTS.slice(1)];
 
 /*
  * Interface sigma values, top (0) to ground (1), of the grid by that
@@ -56,14 +57,19 @@ const STRATOPAUSE_INTERFACES = [30, 100];
  * top layer split at STRATOPAUSE_INTERFACES (Pa over p0): 0-0.3,
  * 0.3-1 and 1-2.19 hPa, so the stratopause near 1 hPa lies between
  * layer midpoints and the mesosphere above it has a layer of its own.
+ * 'bl42' is bl36 with its 1.2-4.7 km span cut at INVERSION_HEIGHTS:
+ * layers of 237 to 338 m up to 3.5 km and two of about 600 m to the
+ * cam26 interface at 4.7 km (standard-atmosphere heights, about 8 %
+ * higher in the tropics), so that a trade inversion falls within one
+ * thin layer instead of across a 500-1100 m one.
  */
 export function sigmaInterfaces(name = 'cam26') {
   const levels = [0];
   for (let k = 0; k < CAM_L26_HYAI.length; k++) levels.push(CAM_L26_HYAI[k] + CAM_L26_HYBI[k]);
   levels[levels.length - 1] = 1;
   if (name === 'cam26') return Float64Array.from(levels);
-  if (name === 'bl34' || name === 'bl36') {
-    const refined = BOUNDARY_LAYER_HEIGHTS.map(standardSigma), top = name === 'bl36' ? STRATOPAUSE_INTERFACES.map((p) => p / P0) : [];
+  if (name === 'bl34' || name === 'bl36' || name === 'bl42') {
+    const refined = (name === 'bl42' ? INVERSION_HEIGHTS : BOUNDARY_LAYER_HEIGHTS).map(standardSigma), top = name === 'bl34' ? [] : STRATOPAUSE_INTERFACES.map((p) => p / P0);
     return Float64Array.from([0, ...top, ...levels.filter((sigma) => sigma > 0 && sigma < refined[0]), ...refined, 1]);
   }
   throw new Error(`no sigma grid is named ${name}; the grids are ${SIGMA_GRIDS.join(', ')}`);

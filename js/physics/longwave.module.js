@@ -38,11 +38,12 @@ const BL36_TABLE = { ...BL36_SPECTRAL_MODEL, points: normalizedPoints(BL36_POINT
 export const LONGWAVE_TABLE_FILES = { bl34: 'longwaveTable.module.js', bl36: 'longwaveTableBl36.module.js' };
 
 /*
- * The table fitted on a grid's own columns: bl36's for bl36, the one fitted
- * on bl34 for every other grid.
+ * The table fitted on a grid's own columns: bl36's for bl36 and for bl42,
+ * which shares its top layers, the one fitted on bl34 for every other grid.
  */
 export function longwaveTableFor(levels) {
-  return levels && sigmaGridName(levels) === 'bl36' ? BL36_TABLE : LONGWAVE_TABLE;
+  const name = levels ? sigmaGridName(levels) : null;
+  return name === 'bl36' || name === 'bl42' ? BL36_TABLE : LONGWAVE_TABLE;
 }
 export const GAS_MOLAR = { air: 28.964, h2o: 18.015, co2: 44.01, o3: 47.997, ch4: 16.04, n2o: 44.013 };
 const STEFAN = 5.670374419e-8;
