@@ -4,9 +4,8 @@ import { Grid } from '../../js/grid.module.js';
 const N = 16, RADIUS = 6371e3, DEG = Math.PI / 180, HOUR = 3600, DAY = 86400, WIDE = 540;
 const ETA_RANGE = 0.25, SPEED_RANGE = 0.02, ARROW_SPEED = 0.01, BALANCED = 0.95;
 const DEPTHS = [0, 200, 1000, 4000], SHARES = [0, 0.45, 0.75, 1], DEPTH_TICKS = [100, 200, 500, 1000, 2000, 4000];
-const SURFACE = '#fff', HALO = 'rgba(20, 20, 22, 0.85)', CHIP = 'rgba(30, 32, 36, 0.88)';
-const WATER_ALPHA = [0.3, 0, 0.2, 0.13, 0.07];
-const BUMP_HEIGHT = 1;
+const FINE = 'rgba(255, 255, 255, 0.13)', SURFACE = '#fff', HALO = 'rgba(20, 20, 22, 0.85)', CHIP = 'rgba(30, 32, 36, 0.88)';
+const BUMP_HEIGHT = 1, RHO = 1025;
 
 const km = (m) => Math.round(m / 1000).toLocaleString('en-US');
 const minus = (s) => s.replace('-', '−');
@@ -49,10 +48,10 @@ export function mountSeasurface(root) {
   const words = caption(root, '');
   legend(root, [
     ['line', 'sea surface, drawn far taller than the depths', SURFACE],
-    ['line', 'thermocline: the base of the light water', ACCENT],
-    ['faint', 'base of each class', LINE],
+    ['line', 'base of the 1025.25 kg/m³ layer, the one the lens thickens', ACCENT],
+    ['faint', 'base of each layer', LINE],
     ['ramp', `sea surface ${ETA_RANGE * 100} cm below to ${ETA_RANGE * 100} cm above its mean`, 'cool', 'warm', `rgb(${DARK_NEUTRAL.join(', ')})`],
-    ['arrow', 'current in the mixed layer', INK],
+    ['arrow', 'current in the top layer', INK],
     ['dots', 'the sea surface at rest', 'rgba(255, 255, 255, 0.5)'],
     ['dash', 'where the slice cuts', 'rgba(255, 255, 255, 0.55)'],
   ]);
@@ -75,9 +74,11 @@ export function mountSeasurface(root) {
     depthRow.style.display = lens ? '' : 'none';
     leftBox.style.display = lens ? 'none' : '';
     const across = `about ${km(2 * state.width)} km across`;
+    const start = `The model’s own ocean, run live in your browser on the N = ${N} grid with its 58 layers, at 27 °C at the surface and cooling with depth, over a flat floor 4,000 m deep, with no wind and no heating. Down to 264 m the layers are fixed in depth, 33 of them from 3 m thick at the top, and below them each layer holds water of one density and follows it up and down.`;
+    const slice = 'The slice runs from west to east through the center, with the depths stretched toward the surface; the sea surface on top of it is drawn far taller still. The circles are the current through the slice, in the top layer, in the lens layer, in the layers between it and the bottom water and in the bottom water, crossed where it flows north, away from you, and dotted where it flows south, toward you, their area in proportion to its speed up to 2 cm/s, where they stop growing. The map is the sea surface seen from above.';
     words.textContent = lens
-      ? `The model’s own ocean, run live in your browser on the N = ${N} grid with four classes of water, 1023, 1025, 1026.5 and 1026.95 kg/m³, under a mixed layer at 27 °C, over a flat floor 4,000 m deep, with no wind and no heating. At the start, water of the light 1023 class has taken the place of water of the 1026.5 class over a patch ${across}, so the thermocline lies deeper at its center, but the sea surface is flat. The slice runs from west to east through the center, with the depths stretched toward the surface; the sea surface on top of it is drawn far taller still. The circles are the current through the slice in each layer, crossed where it flows north, away from you, and dotted where it flows south, toward you, their area in proportion to its speed up to 2 cm/s, where they stop growing, and smaller in a layer drawn too thin to hold them. The map is the sea surface seen from above. Time runs at up to a day each second.`
-      : `The model’s own ocean, run live in your browser on the N = ${N} grid with four classes of water, 1023, 1025, 1026.5 and 1026.95 kg/m³, under a mixed layer at 27 °C, over a flat floor 4,000 m deep, with no wind and no heating. At the start, the deepest class is ${BUMP_HEIGHT} m thicker over a patch ${across}, which raises the sea surface there by up to ${BUMP_HEIGHT} m without making any water lighter or denser, as Part 5 dropped its stone. The slice runs from west to east through the center, with the depths stretched toward the surface; the sea surface on top of it is drawn far taller still. The circles are the current through the slice in each layer, crossed where it flows north, away from you, and dotted where it flows south, toward you, their area in proportion to its speed up to 2 cm/s, where they stop growing, and smaller in a layer drawn too thin to hold them. The map is the sea surface seen from above. Time runs at up to an hour each second for the first 8 hours, then faster.`;
+      ? `${start} At the start the 1025.25 kg/m³ layer is thicker over a patch ${across}, by up to 60 m at its center, with the same water taken from the bottom water, so every layer between them is pushed down by the same amount, but the sea surface is flat. ${slice} Time runs as fast as your computer allows, up to a day each second.`
+      : `${start} At the start the bottom water is ${BUMP_HEIGHT} m thicker over a patch ${across}, which raises the sea surface there by up to ${BUMP_HEIGHT} m without making any water lighter or denser, as Part 5 dropped its stone. ${slice} Time runs as fast as your computer allows, up to an hour each second for the first 8 hours, then faster.`;
   }
 
   function later() { clearTimeout(timer); timer = setTimeout(() => { arrange(); restart(); }, 250); }
@@ -141,17 +142,17 @@ export function mountSeasurface(root) {
   }
 
   function report(f) {
-    const L = f.layerSpeeds.length, g = f.geostrophic;
+    const g = f.geostrophic, deep = layout.donor ?? layout.bumped;
     const balance = g.correlation >= BALANCED ? `${g.ratio.toFixed(2)} times the geostrophic` : 'not yet in balance';
     if (f.kind === 'lens') {
       timeOut.set([['day', f.day.toFixed(1)]]);
-      levelOut.set([['sea surface at the center', signedCm(f.rise)], ['thermocline', `${f.depression.toFixed(1)} m deeper`], ['mirror of the thermocline', `${(100 * f.expected).toFixed(1)} cm`]]);
+      levelOut.set([['sea surface at the center', signedCm(f.rise)], ['base of the lens layer', `${f.depression.toFixed(1)} m deeper`], ['mirror of the lens', `${(100 * f.expected).toFixed(1)} cm`]]);
     } else {
       timeOut.set(f.time < 48 * HOUR ? [['time', clock(f.time)]] : [['day', (f.time / DAY).toFixed(1)]]);
       levelOut.set([['wave’s leading edge', lastFront == null ? 'timing it' : `${lastFront.toFixed(0)} m/s`], ['√(gD)', `${f.gravitySpeed.toFixed(0)} m/s`]]);
       leftOut.set([['sea surface at the center', signedCm(f.centreHeight)], [`still within ${km(2 * f.width)} km`, f.time < 12 * HOUR ? 'the wave is still passing' : f.kept > 0.0005 ? `${(100 * f.kept).toFixed(0)}% of the raised water` : 'none of the raised water']]);
     }
-    flowOut.set([['surface current around it', `${cms(f.layerSpeeds[0])} cm/s, ${balance}`], ['deepest class', `${cms(f.layerSpeeds[L - 1])} cm/s`]]);
+    flowOut.set([['top layer’s current around it', `${cms(f.layerSpeeds[0])} cm/s, ${balance}`], ['bottom water', `${cms(f.layerSpeeds[deep])} cm/s`]]);
   }
 
   function step(dt) {
@@ -187,10 +188,12 @@ export function mountSeasurface(root) {
   function section(ctx, g, f) {
     const { left, right, top, strip, surface, bottom } = g.section, size = g.size;
     const L = layout.layers, d = f.slice.distance, n = d.length, half = patch.sliceHalf + 0.5 * spacing(layout);
+    const lens = layout.lens ?? layout.marker, donor = layout.donor ?? layout.bumped, fixed = layout.fixedDepth;
+    const groups = [[0, fixed - 1, 'fixed-depth layers', MUTED], [fixed, lens - 1, '', MUTED], [lens, lens, `${layout.densities[lens]} kg/m³`, ACCENT], [lens + 1, donor - 1, 'layers that follow density', MUTED], [donor, donor, `${layout.densities[donor]} kg/m³`, MUTED]].filter(([k0, k1]) => k1 >= k0);
     const X = (m) => (left + right) / 2 + (m / half) * (right - left) / 2;
     const Y = (z) => surface + depthShare(z) * (bottom - surface);
     const ref = f.kind === 'bump' ? f.level : 0;
-    const scale = f.kind === 'lens' ? niceStep(1.1 * (layout.dense - layout.light) / layout.densities[0] * f.depth) : BUMP_HEIGHT;
+    const scale = f.kind === 'lens' ? niceStep(1.1 * (layout.dense - layout.light) / RHO * f.depth) : BUMP_HEIGHT;
     const E = (strip - 8) / scale;
     const etaY = (s) => surface - (f.slice.eta[s] - ref) * E;
     const interfaceY = (s, k) => Y(-f.slice.interfaces[s * L + k]);
@@ -209,20 +212,21 @@ export function mountSeasurface(root) {
     };
     ctx.save();
     ctx.beginPath(); ctx.rect(left, top, right - left, bottom - top + 1); ctx.clip();
-    for (let k = 0; k < L; k++) {
-      const upper = trace((s) => topOf(s, k)), lower = trace((s) => interfaceY(s, k), true);
+    for (const [k0, k1] of groups) {
+      const upper = trace((s) => topOf(s, k0)), lower = trace((s) => interfaceY(s, k1), true);
       ctx.beginPath();
       [...upper, ...lower].forEach(([x, y], j) => (j ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
       ctx.closePath();
-      ctx.fillStyle = k === 1 ? anomalyColor(1, 0.32) : `rgba(105, 155, 215, ${WATER_ALPHA[Math.min(k, WATER_ALPHA.length - 1)]})`;
+      ctx.fillStyle = k0 === lens ? anomalyColor(1, 0.32) : `rgba(105, 155, 215, ${k0 === 0 ? 0.2 : k0 > lens ? 0.12 : 0.16})`;
       ctx.fill();
     }
     ctx.setLineDash([1.5, 3.5]); ctx.lineCap = 'round'; ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(left, surface); ctx.lineTo(right, surface); ctx.stroke();
     ctx.setLineDash([]); ctx.lineCap = 'butt';
     const line = (points, color, width) => { ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath(); points.forEach(([x, y], j) => (j ? ctx.lineTo(x, y) : ctx.moveTo(x, y))); ctx.stroke(); };
-    for (let k = 0; k < L - 1; k++) if (k !== 1) line(trace((s) => interfaceY(s, k)), LINE, 1);
-    line(trace((s) => interfaceY(s, 1)), ACCENT, 1.75);
+    for (let k = 0; k < donor; k++) if (k !== lens && k !== lens - 1) line(trace((s) => interfaceY(s, k)), FINE, 1);
+    line(trace((s) => interfaceY(s, lens - 1)), ACCENT, 1);
+    line(trace((s) => interfaceY(s, lens)), ACCENT, 1.75);
     line(trace(etaY), SURFACE, 2);
     ctx.restore();
     ctx.strokeStyle = GRID; ctx.lineWidth = 1;
@@ -230,9 +234,10 @@ export function mountSeasurface(root) {
 
     const gap = n > 1 ? (xs[n - 1] - xs[0]) / (n - 1) : 20;
     for (let s = 0; s < n; s++) {
-      for (let k = 0; k < L; k++) {
-        const y0 = topOf(s, k), y1 = interfaceY(s, k), room = Math.min(0.42 * gap, 0.42 * (y1 - y0), 7);
-        const v = f.slice.across[s * L + k], r = room * Math.sqrt(Math.min(1, Math.abs(v) / SPEED_RANGE));
+      for (const [k0, k1] of groups) {
+        const rep = k0 === 0 ? 0 : Math.floor((k0 + k1) / 2);
+        const y0 = topOf(s, k0), y1 = interfaceY(s, k1), room = Math.min(0.42 * gap, 0.42 * (y1 - y0), 7);
+        const v = f.slice.across[s * L + rep], r = room * Math.sqrt(Math.min(1, Math.abs(v) / SPEED_RANGE));
         if (r < 0.9) continue;
         mark(ctx, xs[s], (y0 + y1) / 2, r, v > 0);
       }
@@ -245,19 +250,19 @@ export function mountSeasurface(root) {
     for (const z of DEPTH_TICKS) tick(Y(z), z === 4000 ? '4000 m' : `${z}`);
 
     const labelX = right - 4;
-    for (let k = 0; k < L; k++) {
-      const y0 = topOf(n - 1, k), y1 = interfaceY(n - 1, k);
+    for (const [k0, k1, name, c] of groups) {
+      if (!name) continue;
+      const y0 = topOf(n - 1, k0), y1 = interfaceY(n - 1, k1);
       if (y1 - y0 < size + 2) continue;
-      const name = k === 0 ? 'mixed layer' : k === 1 ? `${layout.densities[k]} kg/m³` : `${layout.densities[k]}`;
       ctx.font = `400 ${size - 1}px system-ui, sans-serif`;
       const width = ctx.measureText(name).width + 8, y = (y0 + y1) / 2;
       ctx.fillStyle = CHIP;
       ctx.beginPath(); ctx.roundRect(labelX - width + 4, y - size / 2 - 2, width, size + 4, 3); ctx.fill();
-      text(ctx, name, labelX, y, { align: 'right', color: k === 1 ? ACCENT : MUTED, size: size - 1 });
+      text(ctx, name, labelX, y, { align: 'right', color: c, size: size - 1 });
     }
 
     if (f.kind === 'lens') {
-      const c = xs[Math.floor(n / 2)], tip = etaY(Math.floor(n / 2)), deep = interfaceY(Math.floor(n / 2), 1);
+      const c = xs[Math.floor(n / 2)], tip = etaY(Math.floor(n / 2)), deep = interfaceY(Math.floor(n / 2), lens);
       text(ctx, signedCm(f.rise), c + 10, Math.max(top + 7, tip - 9), { color: SURFACE, size, halo: HALO });
       text(ctx, `${minus((-f.depression).toFixed(0))} m`, c + 10, deep + 10, { color: ACCENT, size, halo: HALO });
     }

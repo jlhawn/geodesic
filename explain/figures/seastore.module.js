@@ -1,10 +1,10 @@
 import { Figure, slider, choice, buttons, readout, legend, caption, text, clamp, rampRGB, paletteVersion, INK, MUTED, GRID, LINE, ACCENT } from '../runtime.module.js';
 import { seasonPhrase, MARKERS } from '../insolation.module.js';
-import { slabCycle, FLOOR } from '../oceanColumn.module.js';
+import { slabCycle } from '../oceanColumn.module.js';
 import { sunSwing, startingSea, airWarming, RHO_CP, SLAB, STORE, DAMPING, POLEWARD, YEAR_DAYS } from '../seaStore.module.js';
 
 const WIDE = 560, DEPTH = 450, ROWS = 225, SPAN = 6, SPEED = 30, AIR = [-50, 150], HALO = 'rgba(20, 20, 22, 0.85)';
-const SLAB_DEPTH = SLAB / RHO_CP, SNAP = 4;
+const SLAB_DEPTH = SLAB / RHO_CP, SNAP = 4, MODE_DEPTH = 5, TOP_LAYER = 3;
 const SHORT = ['Mar', 'Jun', 'Sep', 'Dec', 'Mar'], LONG = ['March equinox', 'June solstice', 'Sept. equinox', 'Dec. solstice', 'March'];
 const signed = (v, d) => (Math.abs(v) < 0.5 * 10 ** -d ? (0).toFixed(d) : `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(d)}`);
 const celsius = (k, d = 1) => `${(k - 273.15).toFixed(d).replace('-', '−')} °C`;
@@ -16,7 +16,7 @@ export function mountSeastore(root) {
   let compare = true, worker = null, run = 0, data = null, day = 0, reached = 0, running = true, geometry = null, painted = 0, paintedPalette = -1, keyed = -1, dragging = false, failed = null;
 
   const fig = new Figure(root, { height: (w) => layout(w).h, step, draw });
-  caption(root, 'One column of the model’s own ocean, its mixed layer and the 46 classes of water beneath it, through a year from the March equinox, stepped every 3 hours from the model’s starting sea at the chosen latitude. The heating is prescribed for this figure, not computed by the climate model: it swings with the sunlight a sea absorbs at that latitude under a sky that lets 70 percent of it through, strongest at the June solstice, and takes back 10 W/m² for every kelvin the surface is warmer than at the start. Choosing a latitude sets the heating to that latitude’s swing; the slider changes it. The wind’s stress stirs the mixed layer, and its currents are held at rest. Part 7’s slab, a sea 10 m deep, takes the same heating; in the column it is the bar 10 m deep. At the top is the surface temperature through the year, with a dot on each sea’s warmest day so far, and under it the temperature at every depth and the base of the mixed layer. The column on the day marked is drawn on its own, each class labeled with its label temperature. Tap the year or drag the marker to pick a day.');
+  caption(root, 'One column of the model’s own ocean, its 58 layers, through a year from the March equinox, stepped every 3 hours from the model’s starting sea at the chosen latitude. The heating is prescribed for this figure, not computed by the climate model: it swings with the sunlight a sea absorbs at that latitude under a sky that lets 70 percent of it through, strongest at the June solstice, and takes back 10 W/m² for every kelvin the surface is warmer than at the start. Choosing a latitude sets the heating to that latitude’s swing; the slider changes it. The wind’s stress stirs the sea, and its currents are held at rest. Part 7’s slab, a sea 10 m deep, takes the same heating; in the column it is the bar 10 m deep. At the top is the surface temperature through the year, with a dot on each sea’s warmest day so far, and under it the temperature at every depth, the interfaces between the layers and the base of the mixed layer, the depth to which the water is as dense as the surface. The column on the day marked is drawn on its own, the bar at its left showing how far each layer is held at its minimum thickness or follows its isopycnals. Tap the year or drag the marker to pick a day.');
   const key = legend(root, legendItems());
   slider(controls, { label: 'Latitude', min: 0, max: POLEWARD, step: 5, value: settings.latitude, format: (v) => (v ? `${v}°N` : '0°'), onInput: (v) => { settings.latitude = v; settings.heating = Math.round(sunSwing(v)); heatingControl.value = settings.heating; restart(); } });
   const heatingControl = slider(controls, { label: 'Seasonal heating', min: 0, max: 180, step: 1, value: settings.heating, format: (v) => `±${v} W/m²`, onInput: (v) => { settings.heating = v; restart(); } });
@@ -29,12 +29,12 @@ export function mountSeastore(root) {
     const mean = startingSea(settings.latitude).temperature;
     return [
       ['ramp', `water temperature, ${celsius(mean - SPAN, 0)} to ${celsius(mean + SPAN, 0)}`, rgb(0), rgb(1), rgb(0.5)],
-      ['line', 'the mixed layer: its surface temperature and its base', ACCENT],
+      ['line', 'the surface temperature and the mixed layer’s base', ACCENT],
       ['line', 'the column’s temperature on the day marked', INK],
       ['dash', 'the column at the start', 'rgba(255, 255, 255, 0.45)'],
       ['gradient', `heat the top ${STORE} m has gained or lost`, rgb(0.08), rgb(0.92)],
       ...(compare ? [['dash', 'Part 7’s slab, 10 m deep', INK]] : []),
-      ['dash', 'the mixed layer’s 50 m floor', LINE],
+      ['gradient', 'a layer: at its minimum thickness (fixed-depth) to following its isopycnals', 'rgba(255, 255, 255, 0.1)', 'rgba(255, 255, 255, 0.8)'],
     ];
   }
 
@@ -56,7 +56,7 @@ export function mountSeastore(root) {
     const n = layout.samples, L = layout.layers;
     data = {
       layout, received: 0, done: false,
-      time: new Float64Array(n), sst: new Float32Array(n), slab: new Float32Array(n), depth: new Float32Array(n), stored: new Float64Array(n),
+      time: new Float64Array(n), sst: new Float32Array(n), slab: new Float32Array(n), depth: new Float32Array(n), boundary: new Float32Array(n), salinity: new Float32Array(n), stored: new Float64Array(n),
       bases: new Float32Array(n * L), temperatures: new Float32Array(n * L), range: null,
     };
     field.width = n; field.height = ROWS;
@@ -66,7 +66,7 @@ export function mountSeastore(root) {
   function receive(batch) {
     if (!data) return;
     const { layout: { layers: L } } = data, from = batch.from;
-    for (const name of ['time', 'sst', 'slab', 'depth', 'stored']) data[name].set(batch[name], from);
+    for (const name of ['time', 'sst', 'slab', 'depth', 'boundary', 'salinity', 'stored']) data[name].set(batch[name], from);
     data.bases.set(batch.bases, from * L); data.temperatures.set(batch.temperatures, from * L);
     data.received = from + batch.time.length;
     data.done = batch.done;
@@ -78,8 +78,8 @@ export function mountSeastore(root) {
     const reach = (capacity) => slabCycle({ capacity, heating: layout.heating, damping: DAMPING }).amplitude + 1.5;
     let coldest = mean;
     for (let k = 0, top = 0; k < L && top < DEPTH; k++) { if (bases[k] - top > 0.1) coldest = Math.min(coldest, temperatures[k]); top = bases[k]; }
-    const around = (r) => [Math.floor(mean - 273.15 - Math.max(r, 2)), Math.ceil(mean - 273.15 + Math.max(r, 2))];
-    return { slab: around(reach(SLAB)), fixed: around(reach(FLOOR * RHO_CP)), coldest: Math.floor(coldest - 273.15 - 0.5) };
+    const around = (r) => [Math.floor(mean - 273.15 - Math.max(r, 3)), Math.ceil(mean - 273.15 + Math.max(r, 3))];
+    return { slab: around(reach(SLAB)), model: around(reach(20 * RHO_CP)), coldest: Math.floor(coldest - 273.15 - 0.5) };
   }
 
   function restart() { day = reached = 0; key.set(legendItems()); start(); resume(); }
@@ -154,7 +154,7 @@ export function mountSeastore(root) {
     }
     shade();
     const n = Math.min(data.received - 1, Math.round(day)), L = data.layout.layers, upto = Math.min(data.received - 1, Math.max(n, Math.round(reached)));
-    const [lo, hi] = compare ? data.range.slab : data.range.fixed, S = (k) => stripBottom - (k - 273.15 - lo) / (hi - lo) * (stripBottom - stripTop);
+    const [lo, hi] = compare ? data.range.slab : data.range.model, S = (k) => stripBottom - (k - 273.15 - lo) / (hi - lo) * (stripBottom - stripTop);
     const tick = hi - lo > 30 ? 10 : hi - lo > 8 ? 5 : 2;
     for (let t = Math.ceil(lo / tick) * tick; t <= hi; t += tick) {
       ctx.strokeStyle = GRID; ctx.beginPath(); ctx.moveTo(yearL, S(t + 273.15)); ctx.lineTo(yearR, S(t + 273.15)); ctx.stroke();
@@ -168,7 +168,14 @@ export function mountSeastore(root) {
     ctx.restore();
     ctx.save();
     ctx.beginPath(); ctx.rect(yearL, top, yearR - yearL, bottom - top); ctx.clip();
-    ctx.strokeStyle = LINE; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(yearL, Y(FLOOR)); ctx.lineTo(yearR, Y(FLOOR)); ctx.stroke(); ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)'; ctx.lineWidth = 1; ctx.beginPath();
+    for (let k = 0; k < L - 1 && data.bases[k] < DEPTH + 30; k++) {
+      let low = Infinity, high = -Infinity;
+      for (let j = 0; j <= upto; j++) { const z = data.bases[j * L + k]; low = Math.min(low, z); high = Math.max(high, z); }
+      if (high - low < 0.3) { ctx.moveTo(X(0), Y(low)); ctx.lineTo(X(upto), Y(low)); continue; }
+      for (let j = 0; j <= upto; j++) (j ? ctx.lineTo(X(j), Y(data.bases[j * L + k])) : ctx.moveTo(X(j), Y(data.bases[j * L + k])));
+    }
+    ctx.stroke();
     for (const [color, width] of [[HALO, 4], [ACCENT, 2]]) {
       ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineJoin = 'round'; ctx.beginPath();
       for (let j = 0; j <= upto; j++) (j ? ctx.lineTo(X(j), Y(data.depth[j])) : ctx.moveTo(X(j), Y(data.depth[j])));
@@ -227,7 +234,7 @@ export function mountSeastore(root) {
   }
 
   function drawColumn(ctx, g, n, L) {
-    const { colL: plotL, colR: plotR, columnTop: top, columnBottom: bottom } = g, { layout } = data, range = compare ? data.range.slab : data.range.fixed;
+    const { colL: plotL, colR: plotR, columnTop: top, columnBottom: bottom } = g, { layout } = data, range = compare ? data.range.slab : data.range.model;
     const Y = (z) => top + Math.min(z, DEPTH) / DEPTH * (bottom - top), lo = Math.min(data.range.coldest, range[0]), hi = range[1];
     const P = (k) => plotL + (k - 273.15 - lo) / (hi - lo) * (plotR - plotL);
     text(ctx, `the column on day ${n}`, plotL, top - 26, { color: MUTED, size: 10 });
@@ -246,7 +253,7 @@ export function mountSeastore(root) {
       const out = [];
       for (let k = 0, z = 0; k < L && z < DEPTH; k++) {
         const base = data.bases[j * L + k];
-        if (base - z > 0.05) out.push({ k, top: z, bottom: base, t: data.temperatures[j * L + k] });
+        if (base - z > 0.05) out.push({ k, top: z, bottom: base, t: data.temperatures[j * L + k], mode: clamp((base - z - layout.minimum[k]) / MODE_DEPTH, 0, 1) });
         z = base;
       }
       return out;
@@ -260,7 +267,6 @@ export function mountSeastore(root) {
       if (Math.abs(b - a) < 0.5) continue;
       ctx.fillStyle = rgb(b > a ? 0.92 : 0.08); ctx.globalAlpha = 0.45; ctx.fillRect(Math.min(a, b), y, Math.abs(b - a), 1); ctx.globalAlpha = 1;
     }
-    ctx.strokeStyle = LINE; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(plotL, Y(FLOOR)); ctx.lineTo(plotR, Y(FLOOR)); ctx.stroke(); ctx.setLineDash([]);
     ctx.strokeStyle = GRID; ctx.setLineDash([1, 3]); ctx.beginPath(); ctx.moveTo(plotL, Y(STORE)); ctx.lineTo(plotR, Y(STORE)); ctx.stroke(); ctx.setLineDash([]);
     let labelBottom = Y(data.depth[n]) + 4;
     for (const layer of now.slice(1)) {
@@ -268,9 +274,13 @@ export function mountSeastore(root) {
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)'; ctx.beginPath(); ctx.moveTo(plotL, y0); ctx.lineTo(plotR, y0); ctx.stroke();
       const mid = (y0 + y1) / 2;
       if (y1 - y0 >= 14 && mid - 6 > labelBottom) {
-        text(ctx, `${celsius(layout.labels[layer.k - 1])} class`, plotR - 5, mid, { align: 'right', color: MUTED, size: 10, halo: HALO });
+        text(ctx, `layer ${layer.k}, ${(layer.bottom - layer.top).toFixed(0)} m`, plotR - 5, mid, { align: 'right', color: MUTED, size: 10, halo: HALO });
         labelBottom = mid + 6;
       }
+    }
+    for (const layer of now) {
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.1 + 0.7 * layer.mode})`;
+      ctx.fillRect(plotL + 1, Y(layer.top) + 0.5, 5, Math.max(0.5, Y(layer.bottom) - Y(layer.top) - 1));
     }
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]); ctx.beginPath();
     then.forEach((layer, i) => { const x = P(layer.t); if (i) ctx.lineTo(x, Y(layer.top)); else ctx.moveTo(x, Y(layer.top)); ctx.lineTo(x, Y(layer.bottom)); });
@@ -296,10 +306,18 @@ export function mountSeastore(root) {
 
   function report(n = null) {
     if (n === null || !data) { out.set([['day', '0, the March equinox'], ['the model', failed ? `could not start: ${failed}` : 'starting']]); heatOut.set([]); swingOut.set([]); return; }
-    const air = airWarming(data.stored[n]), phrase = seasonPhrase(n), every = running ? 3 : 1;
+    const air = airWarming(data.stored[n]), phrase = seasonPhrase(n), every = running ? 3 : 1, { layers: L, minimum } = data.layout;
+    let held = 0, following = 0;
+    for (let k = 0, z = 0; k < L && z < DEPTH; k++) {
+      const base = data.bases[n * L + k];
+      if (clamp((base - z - minimum[k]) / MODE_DEPTH, 0, 1) < 0.5) held++; else following++;
+      z = base;
+    }
     out.set([
       ['day', `${n}, ${phrase}`],
-      ['mixed layer', `${data.depth[n].toFixed(0)} m deep, at ${celsius(data.sst[n])}`],
+      ['mixed layer', `${data.depth[n].toFixed(0)} m deep, the wind’s boundary layer ${data.boundary[n].toFixed(0)} m`],
+      [`top layer, ${TOP_LAYER} m`, `${celsius(data.sst[n])}, ${data.salinity[n].toFixed(2)} psu`],
+      [`layers in the top ${DEPTH} m`, `${held} at their minimum thickness, ${following} following their isopycnals`],
       ...(compare ? [['slab', celsius(data.slab[n])]] : []),
     ], every);
     heatOut.set([
@@ -309,7 +327,7 @@ export function mountSeastore(root) {
     const swing = (values) => { let low = Infinity, high = -Infinity; for (let j = 0; j <= n; j++) { low = Math.min(low, values[j]); high = Math.max(high, values[j]); } return high - low; };
     const peak = (values) => { const w0 = warmest(values, n); return w0 === null ? '' : `, warmest on day ${w0}`; };
     swingOut.set([
-      [n >= YEAR_DAYS ? 'over the year the mixed layer swung by' : 'so far the mixed layer has swung by', `${swing(data.sst).toFixed(1)} K${peak(data.sst)}`],
+      [n >= YEAR_DAYS ? 'over the year the surface swung by' : 'so far the surface has swung by', `${swing(data.sst).toFixed(1)} K${peak(data.sst)}`],
       ...(compare ? [['the slab by', `${swing(data.slab).toFixed(1)} K${peak(data.slab)}`]] : []),
     ], every);
   }

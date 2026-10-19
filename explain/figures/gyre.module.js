@@ -30,7 +30,7 @@ export function mountGyre(root) {
   slider(controls, { label: 'Wind stress', min: 0, max: TAU_MAX, step: 0.01, value: state.tau0, format: (v) => `${v.toFixed(2)} N/m² at its strongest`, onInput: (v) => { state.tau0 = v; describe(); clearTimeout(timer); timer = setTimeout(restart, 150); } });
   choice(controls, { label: 'Coriolis parameter', options: [['grows toward the pole', 'beta'], ['the same everywhere', 'constant']], value: 'beta', onChange: (v) => { state.beta = v === 'beta'; describe(); restart(); } });
   choice(controls, { label: 'Walls', options: [['a basin', 'on'], ['none', 'off']], value: 'on', onChange: (v) => { state.walls = v === 'on'; describe(); restart(); } });
-  choice(controls, { label: 'Arrows', options: [['the mixed layer’s current', 'surface'], ['the current averaged over the depth', 'depth']], value: state.arrows, onChange: (v) => { state.arrows = v; describe(); fig.render(); } });
+  choice(controls, { label: 'Arrows', options: [['the top layer’s current', 'surface'], ['the current averaged over the depth', 'depth']], value: state.arrows, onChange: (v) => { state.arrows = v; describe(); fig.render(); } });
   const [toggle] = buttons(controls, [['Pause', () => { if (latest?.done) restart(); else fig.play(!fig.running); label(); }], ['Restart', () => restart()]]);
   const outs = [readout(controls), readout(controls), readout(controls), readout(controls)];
   describe();
@@ -38,11 +38,11 @@ export function mountGyre(root) {
   function label() { toggle.textContent = fig.running ? 'Pause' : latest?.done ? 'Play again' : 'Play'; }
 
   function describe() {
-    words.textContent = `A sea ${DEPTH.toLocaleString('en-US')} m deep${state.walls ? ', walled in from 40°W to 40°E and from 12° to 48°N,' : ' that covers the whole planet'} starts at rest under a wind that blows west over 15–30°N and east over 30–45°N, drawn at the right. The model’s own ocean runs in your browser on the N = ${N} grid, in steps of an hour and a half for ${DAYS} days, with four layers of fixed density under its mixed layer instead of 44. Arrows grow with the square root of the speed, so that slow currents show too; the arrow under the map is the length for the speed beside it. The bars are the northward speed across 30°N, averaged from the surface to the floor; the readouts average the western current over 25–35°N west of 32°W, and the interior over 25–35°N between 20°W and 20°E.`;
+    words.textContent = `A sea ${DEPTH.toLocaleString('en-US')} m deep${state.walls ? ', walled in from 40°W to 40°E and from 12° to 48°N,' : ' that covers the whole planet'} starts at rest under a wind that blows west over 15–30°N and east over 30–45°N, drawn at the right. The model’s own ocean runs in your browser on the N = ${N} grid, in steps of an hour and a half for ${DAYS} days, with all of its 58 layers, the top one 3 m thick. Arrows grow with the square root of the speed, so that slow currents show too; the arrow under the map is the length for the speed beside it. The bars are the northward speed across 30°N, averaged from the surface to the floor; the readouts average the western current over 25–35°N west of 32°W, and the interior over 25–35°N between 20°W and 20°E.`;
     const range = surface?.range ?? pick(SURFACE, 4.5 * windFactor(state.tau0));
     key.set([
       ['ramp', `sea surface ${range} cm below to ${range} cm above its average`, 'cool', 'warm', 'rgb(52, 55, 62)'],
-      ['arrow', state.arrows === 'surface' ? 'current in the mixed layer' : 'current averaged over the depth', INK],
+      ['arrow', state.arrows === 'surface' ? 'current in the top layer, 3 m thick' : 'current averaged over the depth', INK],
       ['line', 'wind stress', push],
       ['bar', 'northward speed across 30°N', BAR],
       ...(state.beta && state.walls ? [['dash', 'Sverdrup’s balance', INK]] : []),

@@ -1,12 +1,13 @@
-import { Figure, choice, readout, legend, caption, text, rampRGB, clamp, INK, MUTED, GRID, LINE, ACCENT, CLOUD, DARK_NEUTRAL, paletteVersion } from '../runtime.module.js';
+import { Figure, choice, readout, legend, caption, text, rampRGB, clamp, INK, MUTED, LINE, ACCENT, CLOUD, DARK_NEUTRAL, paletteVersion } from '../runtime.module.js';
 import { salinityForDensity, labelTemperature } from '../../js/ocean/seawater.module.js';
-import { classPoints, water, nearestClass, mixture, classesByLatitude, columnAt, layerAt, thickClasses, nearestLatitude, ALL_CLASSES, FOUR_CLASSES, FREEZING_POINT, THIN, CELSIUS } from '../seaClasses.module.js';
+import { HYBRID_LAYERS, SURFACE_LAYERS, SURFACE_DEPTH, FREEZING_POINT, CELSIUS, water, mixture, labelOf, labelRange, isopycnalLine, depthFraction, depthAt, layersByLatitude, layerAt, modeCounts, emptyEverywhere, nearestLatitude } from '../seaClasses.module.js';
 
 const WIDE = 520, S_LO = 30, S_HI = 40, T_LO = -2, T_HI = 32, RHO_MID = 1024.8, RHO_SCALE = 1.3, LEVELS = Array.from({ length: 15 }, (_, n) => 1017 + n);
-const SHALLOW = 1000, FLOOR = 4000, STRETCH = 4 / 7, HALO = 'rgba(20, 20, 22, 0.85)', DARK = `rgb(${DARK_NEUTRAL.join(', ')})`;
-const ALL = classPoints(ALL_CLASSES), FOUR = classPoints(FOUR_CLASSES);
+const HALO = 'rgba(20, 20, 22, 0.85)', DARK = `rgb(${DARK_NEUTRAL.join(', ')})`;
+const BAND = 'rgba(255, 232, 160, 0.4)', LABEL_LINE = 'rgba(255, 255, 255, 0.26)', ISOPYCNAL_EDGE = 'rgba(255, 255, 255, 0.55)', FIXED_EDGE = 'rgba(255, 255, 255, 0.34)';
 const PAIR = [{ t: CELSIUS, s: salinityForDensity(1026.8, CELSIUS) }, { t: CELSIUS + 15, s: salinityForDensity(1026.8, CELSIUS + 15) }];
-const GROUPS = [['warm pool', 1021], ['thermocline', 1024.75], ['deep and bottom water', 1026.8]];
+const DEEP = [['NADW', 2.5, 34.92], ['AABW', -0.5, 34.66]];
+const DENSITIES = HYBRID_LAYERS.densities, LAYERS = HYBRID_LAYERS.K;
 
 const minus = (s) => s.replace(/^-/, '−');
 const celsius = (t, d = 1) => `${minus((t - CELSIUS).toFixed(d)).replace(/^−(?=0\.0*$)/, '')} °C`;
@@ -16,40 +17,43 @@ const signed = (v, d = 3) => `${v < 0 ? '−' : '+'}${Math.abs(v).toFixed(d)}`;
 const label = (r) => (Number.isInteger(r) ? r.toFixed(1) : `${r}`);
 const trim = (r) => label(Number(r.toFixed(3)));
 const meters = (z) => `${Math.round(z).toLocaleString('en-US')} m`;
+const depthText = (z) => (z < 100 ? `${z.toFixed(1)} m` : meters(z));
 const degrees = (lat) => { const a = Math.abs(lat); return a < 0.05 ? 'the equator' : `${a.toFixed(1)}°${lat > 0 ? 'N' : 'S'}`; };
+const ordinal = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`;
 const shadeOf = (rho, out) => rampRGB(0.5 / (1 + Math.exp(-(rho - RHO_MID) / RHO_SCALE)), out, DARK_NEUTRAL);
 const css = (c, a = 1) => `rgba(${Math.round(255 * c[0])}, ${Math.round(255 * c[1])}, ${Math.round(255 * c[2])}, ${a})`;
-const isopycnal = (rho) => { const out = []; for (let t = T_LO; t <= T_HI + 1e-9; t += 0.25) out.push([salinityForDensity(rho, t + CELSIUS), t]); return out; };
+const isopycnal = (rho) => isopycnalLine(rho, T_LO, T_HI);
 const LINES = new Map(LEVELS.map((r) => [r, isopycnal(r)]));
+const LABEL_LINES = Array.from(DENSITIES, (r) => isopycnal(r));
+const BOUNDS = Array.from({ length: LAYERS }, (_, k) => { const { below, above } = labelRange(k); return [isopycnal(Number.isFinite(below) ? below : 900), isopycnal(Number.isFinite(above) ? above : 1100)]; });
 
 export function mountSeawater(root) {
   const controls = root.querySelector('.controls');
-  const state = { view: 'plane', probe: 'one', classes: 'all', water: { t: CELSIUS + 25, s: 35 }, waters: PAIR.map((w) => ({ ...w })), at: { lat: 0, z: 1000 } };
-  let geometry = null, shading = null, sections = null, building = false, failed = false, touched = false;
+  const state = { view: 'plane', probe: 'one', water: { t: CELSIUS + 25, s: 35 }, waters: PAIR.map((w) => ({ ...w })), at: { lat: 0, z: 870 } };
+  let geometry = null, shading = null, backdrop = null, section = null, building = false, failed = false, touched = false;
   const rgb = [0, 0, 0];
 
   const fig = new Figure(root, { height: (w) => (w < WIDE ? Math.round(clamp(w * 1.12, 360, 420)) : 440), draw });
   const words = caption(root, '');
   const key = legend(root, []);
-  choice(controls, { label: 'Show', options: [['temperature and salinity', 'plane'], ['the classes by latitude', 'section']], value: state.view, onChange: (v) => { state.view = v; arrange(); } });
+  choice(controls, { label: 'Show', options: [['temperature and salinity', 'plane'], ['the layers by latitude', 'section']], value: state.view, onChange: (v) => { state.view = v; arrange(); } });
   choice(controls, { label: 'Probe', options: [['one water', 'one'], ['mix two waters', 'mix']], value: state.probe, onChange: (v) => { state.probe = v; touched = false; arrange(); } });
   const probeRow = controls.lastElementChild;
-  choice(controls, { label: 'Classes', options: [['all 46', 'all'], ['the four of the next figures', 'four']], value: state.classes, onChange: (v) => { state.classes = v; arrange(); } });
   const first = readout(controls), second = readout(controls), third = readout(controls);
 
   function arrange() {
-    const plane = state.view === 'plane', four = state.classes === 'four';
+    const plane = state.view === 'plane';
     probeRow.style.display = plane ? '' : 'none';
     if (plane) {
-      words.textContent = `The model’s equation of state for seawater on a plane of salinity, left to right, and temperature, up the page, shaded by density, with lines of equal density every 1 kg/m³. The dots are ${four ? 'the four classes that the next figures use, among the model’s 46' : 'the 46 classes of the model’s interior'}, each at the temperature and salinity of its label. ${state.probe === 'one' ? 'Hover or tap to move the probe, or drag it.' : 'Drag either water. The dot between them is the two mixed half and half, which averages their temperatures and salinities.'}`;
-      const items = [['ramp', 'density, lighter water brighter', 'cool', DARK], ['faint', 'equal density, every 1 kg/m³', LINE], ['dash', 'the model’s freezing point', CLOUD], ['dots', four ? 'the four classes' : 'the 46 classes', four ? ACCENT : INK]];
+      words.textContent = `The model’s equation of state for seawater on a plane of salinity, left to right, and temperature, up the page, shaded by density, with lines of equal density every 1 kg/m³. The faint lines are the 58 label densities of the model’s layers; the twelve lightest, dotted, lie in the warm, fresh corner. NADW and AABW mark North Atlantic Deep Water and Antarctic Bottom Water. ${state.probe === 'one' ? 'Hover or tap to move the probe, or drag it. The yellow band is the water that the nearest label stands for.' : 'Drag either water. The dot between them is the two mixed half and half, which averages their temperatures and salinities.'}`;
+      const items = [['ramp', 'density, lighter water brighter', 'cool', DARK], ['faint', 'equal density, every 1 kg/m³', LINE], ['faint', 'the 58 labels', LABEL_LINE], ['dots', 'the twelve surface labels', LABEL_LINE], ['dash', 'the model’s freezing point', CLOUD]];
       if (state.probe === 'mix') items.push(['dash', 'the density of each water', '#fff'], ['dash', 'the density of the mix', ACCENT]);
-      else items.push(['dash', 'the density of the probe’s water; the nearest class is ringed', ACCENT]);
+      else items.push(['dash', 'the density of the probe’s water', ACCENT], ['bar', 'the water of the nearest label', BAND]);
       key.set(items);
     } else {
-      words.textContent = `The start the model builds when it has no ocean atlas to begin from, here for a sea 4000 m deep with no land, under the climate model’s opening sea surface: 28 °C on the equator and ice poleward of 72°N and 68°S. It is the same at every longitude, so each latitude has one column. Each band is ${four ? 'one of the four classes of the next figures, the same start built with those four instead of 46' : 'one of the 46 classes'}; a class thinner than 5 m is not drawn. The top kilometer is drawn four times as tall for each meter as the water below it. Hover or tap to read a class, or drag the probe.`;
-      key.set([['ramp', 'density, lighter water brighter', 'cool', DARK], ['faint', 'boundaries between classes', LINE], ['line', 'the base of the mixed layer', ACCENT], ...(four ? [] : [['dash', 'the top of the 1024.0 class', '#fff']]), ['bar', 'sea ice', CLOUD]]);
-      if (!sections && !building) build();
+      words.textContent = 'The start the model builds when it has no ocean atlas to begin from, here for a sea 4000 m deep with no land, under the climate model’s opening sea surface: 28 °C on the equator and ice poleward of 72°N and 68°S. It is the same at every longitude, so each latitude has one column. Each band is one of the 58 layers, shaded by the density of its water, as the first regrid leaves them. Depth is stretched toward the surface, so the twelve surface layers, 3 to 7 m each, can be seen. Hover or tap to read a layer, or drag the probe.';
+      key.set([['ramp', 'density, lighter water brighter', 'cool', DARK], ['faint', 'interface of an isopycnal layer', ISOPYCNAL_EDGE], ['dots', 'interface of a fixed-depth layer', FIXED_EDGE], ['dash', 'the base of the twelve surface layers', '#fff'], ['bar', 'sea ice', CLOUD]]);
+      if (!section && !building) build();
     }
     report();
     fig.render();
@@ -59,10 +63,7 @@ export function mountSeawater(root) {
     building = true;
     fig.render();
     setTimeout(() => {
-      try {
-        const [all, four] = classesByLatitude(16);
-        sections = { all, four };
-      } catch (error) { failed = true; console.info('seawater figure', error.message); }
+      try { section = layersByLatitude(16); } catch (error) { failed = true; console.info('seawater figure', error.message); }
       building = false;
       report();
       fig.render();
@@ -74,37 +75,38 @@ export function mountSeawater(root) {
   }
 
   function reportPlane() {
-    const points = state.classes === 'four' ? FOUR : ALL;
     if (state.probe === 'one') {
-      const w = water(state.water.t, state.water.s), k = nearestClass(w.rho, points), c = points[k];
+      const w = water(state.water.t, state.water.s), k = labelOf(w.rho), { below, above } = labelRange(k);
       first.set([['water', `${celsius(w.t)}, ${psu(w.s)}`], ['density', density(w.rho)], ...(w.t < FREEZING_POINT - 1e-6 ? [['below', 'the model’s freezing point']] : [])]);
       second.set([['thermal expansion', `${(w.alpha * 1e4).toFixed(2)} × 10⁻⁴ per K: ${signed(w.perKelvin)} kg/m³ for each kelvin`], ['haline contraction', `${(w.beta * 1e4).toFixed(2)} × 10⁻⁴ per psu: ${signed(w.perPsu)} kg/m³ for each psu`]]);
-      const below = k > 0 ? 0.5 * (points[k - 1].rho + c.rho) : null, above = k < points.length - 1 ? 0.5 * (c.rho + points[k + 1].rho) : null;
-      const span = below === null ? `water lighter than ${trim(above)}` : above === null ? `water denser than ${trim(below)}` : `water from ${trim(below)} to ${trim(above)}`;
-      third.set([['nearest class', `${label(c.rho)} kg/m³, labeled ${celsius(c.t, 2)} at ${psu(c.s)}; it stands for ${span} kg/m³`]]);
+      const span = !Number.isFinite(below) ? `water lighter than ${trim(above)}` : !Number.isFinite(above) ? `water denser than ${trim(below)}` : `water from ${trim(below)} to ${trim(above)}`;
+      const minimum = HYBRID_LAYERS.minimum[k];
+      const rule = k < SURFACE_LAYERS ? 'a surface label, so its layer is fixed-depth whatever its water' : `its layer is isopycnal only where that water spans more than ${Number(minimum.toFixed(1))} m`;
+      third.set([['nearest label', `${label(DENSITIES[k])} kg/m³, the ${ordinal(k + 1)} of ${LAYERS}; it stands for ${span} kg/m³; ${rule}`]]);
     } else {
       const [a, b] = state.waters, m = mixture(a, b);
       const ra = water(a.t, a.s).rho, rb = water(b.t, b.s).rho;
       first.set([['water 1', `${celsius(a.t)}, ${psu(a.s)}, ${density(ra, 3)}`], ['water 2', `${celsius(b.t)}, ${psu(b.s)}, ${density(rb, 3)}`]]);
       second.set([['half and half', `${celsius(m.t, 2)}, ${psu(m.s)}, ${density(m.rho, 3)}`]]);
-      third.set([['the mix against the two waters’ average', `${signed(m.excess)} kg/m³`], ['against the denser water', `${signed(m.overDenser)} kg/m³`]]);
+      const ka = labelOf(ra), kb = labelOf(rb), km = labelOf(m.rho);
+      third.set([['the mix against the two waters’ average', `${signed(m.excess)} kg/m³`], ['against the denser water', `${signed(m.overDenser)} kg/m³`], ['labels', `the waters ${ka === kb ? `share ${label(DENSITIES[ka])}` : `have ${label(DENSITIES[ka])} and ${label(DENSITIES[kb])}`}; the mix has ${label(DENSITIES[km])}`]]);
     }
   }
 
   function reportSection() {
-    const s = sections?.[state.classes];
-    if (!s) { first.set([['the classes by latitude', failed ? 'could not be built' : 'building the start…']]); second.set([]); third.set([]); return; }
-    const j = nearestLatitude(s, state.at.lat), L = s.layers, layer = layerAt(s, j, state.at.z), T0 = s.temperature[j * L], S0 = s.salinity[j * L];
-    const mixed = water(T0, S0).rho;
-    if (!layer) first.set([['at', `${degrees(s.latitude[j])}, ${meters(state.at.z)}, below the sea floor`]]);
-    else if (layer.k === 0) first.set([['at', `${degrees(s.latitude[j])}, ${meters(state.at.z)}`], ['in', `the mixed layer, 0 to ${meters(layer.base)}`]]);
-    else first.set([['at', `${degrees(s.latitude[j])}, ${meters(state.at.z)}`], ['class', `${label(s.densities[layer.k])} kg/m³, ${meters(layer.top)} to ${meters(layer.base)} down`]]);
-    if (layer && layer.k > 0) {
-      const n = j * L + layer.k, points = state.classes === 'four' ? FOUR : ALL, c = points[layer.k - 1];
-      second.set([['its water here', `${celsius(s.temperature[n], 2)}, ${psu(s.salinity[n])}`], ['its label', `${celsius(c.t, 2)}, ${psu(c.s)}`]]);
-    } else second.set([['the mixed layer here', `${celsius(T0, 2)}, ${psu(S0)}, ${density(mixed)}`]]);
-    const thick = thickClasses(s, j);
-    third.set([['this column', `the mixed layer over ${thick} ${thick === 1 ? 'class' : 'classes'} thicker than 5 m`], ['sea surface', `${signed(s.eta[j], 2)} m`]]);
+    if (!section) { first.set([['the layers by latitude', failed ? 'could not be built' : 'building the start…']]); second.set([]); third.set([]); return; }
+    const s = section, j = nearestLatitude(s, state.at.lat), K = s.layers, layer = layerAt(s, j, state.at.z), at = `${degrees(s.latitude[j])}, ${depthText(state.at.z)}`;
+    const counts = modeCounts(s, j), column = ['this column', `${counts.fixed} fixed-depth, ${counts.isopycnal + counts.between} isopycnal and ${counts.empty} empty layers`];
+    if (!layer) { first.set([['at', `${at}, below the sea floor`]]); second.set([]); third.set([column]); return; }
+    const { k } = layer, n = j * K + k, rho = s.density[n], thick = layer.base - layer.top, minimum = Number(HYBRID_LAYERS.minimum[k].toFixed(1));
+    first.set([['at', at], ['layer', `labeled ${label(DENSITIES[k])} kg/m³, the ${ordinal(k + 1)} of ${K}, ${depthText(layer.top)} to ${depthText(layer.base)} down`]]);
+    second.set([['its water here', `${celsius(s.temperature[n], 2)}, ${psu(s.salinity[n])}, ${density(rho)}`]]);
+    const gap = rho - DENSITIES[k], against = Math.abs(gap) < 0.005 ? 'at its label’s density' : `${Math.abs(gap).toFixed(2)} kg/m³ ${gap > 0 ? 'denser' : 'lighter'} than its label`;
+    const mode = layer.mode === 'empty' ? 'empty: no water here has its density, so it is a sheet 0.5 m thick on the floor'
+      : layer.mode === 'fixed' ? `fixed-depth: held at its minimum of ${minimum} m, with water ${against}`
+      : layer.mode === 'isopycnal' ? `isopycnal: ${Number(thick.toFixed(1))} m thick against a minimum of ${minimum} m, with water ${against}`
+      : `between the two: ${Number(thick.toFixed(1))} m thick against a minimum of ${minimum} m, mode weight ${layer.weight.toFixed(2)}`;
+    third.set([['the layer is', mode], column]);
   }
 
   function layout(w, h) {
@@ -116,7 +118,7 @@ export function mountSeawater(root) {
 
   function draw(ctx, w, h) {
     const g = layout(w, h);
-    if (state.view === 'plane') plane(ctx, w, h, g); else section(ctx, w, h, g);
+    if (state.view === 'plane') plane(ctx, w, h, g); else sea(ctx, w, h, g);
   }
 
   function paintShading(g) {
@@ -137,7 +139,7 @@ export function mountSeawater(root) {
   }
 
   function plane(ctx, w, h, g) {
-    const { narrow, size, left, right, top, bottom } = g, four = state.classes === 'four';
+    const { narrow, size, left, right, top, bottom } = g;
     const x = (s) => left + (s - S_LO) / (S_HI - S_LO) * (right - left), y = (t) => bottom - (t - T_LO) / (T_HI - T_LO) * (bottom - top);
     const sOf = (px) => S_LO + (px - left) / (right - left) * (S_HI - S_LO), tOf = (py) => T_LO + (bottom - py) / (bottom - top) * (T_HI - T_LO);
     geometry = { kind: 'plane', left, right, top, bottom, x, y, sOf, tOf };
@@ -148,6 +150,9 @@ export function mountSeawater(root) {
     ctx.save(); ctx.beginPath(); ctx.rect(left, top, right - left, bottom - top); ctx.clip();
     ctx.strokeStyle = LINE; ctx.lineWidth = 1;
     for (const line of LINES.values()) curve(ctx, line, x, y);
+    ctx.strokeStyle = LABEL_LINE; ctx.lineWidth = 0.8;
+    LABEL_LINES.forEach((line, k) => { ctx.setLineDash(k < SURFACE_LAYERS ? [1.5, 3] : []); curve(ctx, line, x, y); });
+    ctx.setLineDash([]);
     ctx.strokeStyle = CLOUD; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
     ctx.beginPath(); ctx.moveTo(left, y(FREEZING_POINT - CELSIUS)); ctx.lineTo(right, y(FREEZING_POINT - CELSIUS)); ctx.stroke(); ctx.setLineDash([]);
     ctx.restore();
@@ -166,35 +171,23 @@ export function mountSeawater(root) {
     for (let s = S_LO; s <= S_HI; s += narrow ? 2 : 1) { ctx.strokeStyle = LINE; ctx.beginPath(); ctx.moveTo(x(s), bottom); ctx.lineTo(x(s), bottom + 4); ctx.stroke(); text(ctx, `${s}`, x(s), bottom + 13, { align: 'center', color: MUTED, size }); }
     text(ctx, 'salinity, psu', (left + right) / 2, bottom + 28, { align: 'center', color: MUTED, size });
 
-    const points = four ? FOUR : ALL;
-    for (const p of ALL) {
-      const lit = !four || FOUR.some((q) => q.rho === p.rho);
-      if (lit && four) continue;
-      dot(ctx, x(p.s), y(p.t - CELSIUS), narrow ? 1.9 : 2.3, four ? 'rgba(221, 221, 221, 0.3)' : INK);
-    }
-    if (four) for (const p of FOUR) { dot(ctx, x(p.s), y(p.t - CELSIUS), 4, ACCENT); text(ctx, label(p.rho), x(p.s) + 8, y(p.t - CELSIUS), { color: ACCENT, size, halo: HALO }); }
-    else if (state.probe === 'one') groups(ctx, g, x, y);
+    for (const [name, t, s] of DEEP) { dot(ctx, x(s), y(t), 3.2, INK); text(ctx, name, x(s) + 7, y(t) + 1, { color: INK, size, halo: HALO }); }
 
     if (state.probe === 'one') {
-      const w0 = water(state.water.t, state.water.s), k = nearestClass(w0.rho, points), c = points[k];
+      const w0 = water(state.water.t, state.water.s), k = labelOf(w0.rho);
       ctx.save(); ctx.beginPath(); ctx.rect(left, top, right - left, bottom - top); ctx.clip();
-      ctx.strokeStyle = ACCENT; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); curve(ctx, isopycnal(w0.rho), x, y); ctx.setLineDash([]);
+      const [lighter, denser] = BOUNDS[k];
+      ctx.fillStyle = BAND; ctx.beginPath(); trace(ctx, denser, x, y, false, false); trace(ctx, lighter, x, y, true, true); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = ACCENT; ctx.lineWidth = 1.5; curve(ctx, LABEL_LINES[k], x, y);
+      ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); curve(ctx, isopycnal(w0.rho), x, y); ctx.setLineDash([]);
       ctx.restore();
-      ctx.strokeStyle = ACCENT; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x(c.s), y(c.t - CELSIUS), 5.5, 0, Math.PI * 2); ctx.stroke();
       const px = x(w0.s), py = y(w0.t - CELSIUS);
       ring(ctx, px, py);
-      const right_ = px > (left + right) / 2, words2 = density(w0.rho);
-      text(ctx, words2, right_ ? px - 12 : px + 12, py - 12, { align: right_ ? 'right' : 'left', color: '#fff', size, weight: 500, halo: HALO });
+      const right_ = px > (left + right) / 2, sx = right_ ? px - 12 : px + 12, align = right_ ? 'right' : 'left';
+      text(ctx, density(w0.rho), sx, py - 12, { align, color: '#fff', size, weight: 500, halo: HALO });
+      text(ctx, `label ${label(DENSITIES[k])}`, sx, clamp(py - 25, top + 8, bottom), { align, color: ACCENT, size, halo: HALO });
       geometry.handles = [[px, py]];
-      if (!touched) {
-        ctx.font = `400 ${size}px system-ui, sans-serif`;
-        const taken = four ? FOUR.map((p) => { const lx = x(p.s) + 8, ly = y(p.t - CELSIUS); return [lx - 4, ly - 7, lx + ctx.measureText(label(p.rho)).width + 2, ly + 7]; }) : [];
-        ctx.font = '400 11px system-ui, sans-serif';
-        const width = ctx.measureText('drag').width, spots = [[right_, py + 12], [!right_, py + 12], [!right_, py - 12]];
-        const box = ([leftward, hy]) => (leftward ? [px - 12 - width, hy - 7, px - 12, hy + 7] : [px + 12, hy - 7, px + 12 + width, hy + 7]);
-        const free = spots.find((spot) => { const [a0, b0, a1, b1] = box(spot); return taken.every(([c0, d0, c1, d1]) => a1 < c0 || a0 > c1 || b1 < d0 || b0 > d1); }) ?? spots[0];
-        text(ctx, 'drag', free[0] ? px - 12 : px + 12, free[1], { align: free[0] ? 'right' : 'left', color: ACCENT, size: 11, halo: HALO });
-      }
+      if (!touched) text(ctx, 'drag', sx, py + 12, { align, color: ACCENT, size: 11, halo: HALO });
     } else {
       const [a, b] = state.waters, m = mixture(a, b);
       ctx.save(); ctx.beginPath(); ctx.rect(left, top, right - left, bottom - top); ctx.clip();
@@ -220,79 +213,80 @@ export function mountSeawater(root) {
     }
   }
 
-  function groups(ctx, g, x, y) {
-    const { narrow, size, left, right, top, bottom } = g;
-    for (const [name, rho] of GROUPS) {
-      if (narrow && name === 'warm pool') continue;
-      const p = ALL.find((q) => q.rho === rho), px = x(p.s), py = y(p.t - CELSIUS);
-      const words = narrow && name === 'deep and bottom water' ? 'deep water' : name;
-      ctx.font = `400 ${size}px system-ui, sans-serif`;
-      const width = ctx.measureText(words).width, leftward = px + 10 + width > right - 4;
-      const ly = clamp(name === 'deep and bottom water' ? py + 2 : py, top + 10, bottom - 10);
-      text(ctx, words, leftward ? px - 10 : px + 10, ly, { align: leftward ? 'right' : 'left', color: INK, size, halo: HALO });
+  function paintLayers(g) {
+    const pw = Math.round(g.right - g.left), ph = Math.round(g.bottom - g.top), dpr = fig.dpr || 1, keyOf = `${pw}x${ph}@${dpr}:${paletteVersion}`;
+    if (backdrop?.key === keyOf && backdrop.section === section) return backdrop.canvas;
+    const s = section, K = s.layers, n = s.latitude.length, canvas = document.createElement('canvas');
+    canvas.width = Math.round(pw * dpr); canvas.height = Math.round(ph * dpr);
+    const c2 = canvas.getContext('2d');
+    c2.scale(dpr, dpr);
+    const x = (lat) => (lat + 90) / 180 * pw, y = (z) => depthFraction(z) * ph;
+    const edgeX = (j) => x(j ? 0.5 * (s.latitude[j - 1] + s.latitude[j]) : -90), edgeEnd = (j) => x(j < n - 1 ? 0.5 * (s.latitude[j] + s.latitude[j + 1]) : 90);
+    for (let j = 0; j < n; j++) {
+      const a = edgeX(j), b = edgeEnd(j), base = j * (K + 1);
+      for (let k = 0; k < K; k++) {
+        const z0 = s.interface[base + k], z1 = s.interface[base + k + 1];
+        if (z1 - z0 < 1e-6 || z0 >= s.floor[j] - 1) continue;
+        shadeOf(s.density[j * K + k], rgb);
+        c2.fillStyle = css(rgb, 1);
+        c2.fillRect(a, y(z0), b - a + 0.5, y(z1) - y(z0) + 0.5);
+      }
     }
-    const outflow = ALL.slice(-3), words = narrow ? 'Red Sea, Mediterranean' : 'Red Sea and Mediterranean';
-    ctx.font = `400 ${size}px system-ui, sans-serif`;
-    const width = ctx.measureText(words).width, cx = clamp(outflow.reduce((sum, p) => sum + x(p.s), 0) / 3, left + width / 2 + 3, right - width / 2 - (narrow ? 3 : 34));
-    text(ctx, words, cx, y(Math.min(...outflow.map((p) => p.t - CELSIUS))) + 14, { align: 'center', color: INK, size, halo: HALO });
+    c2.lineWidth = 1;
+    for (const iso of [false, true]) {
+      c2.strokeStyle = iso ? ISOPYCNAL_EDGE : FIXED_EDGE;
+      c2.setLineDash(iso ? [] : [1.5, 3]);
+      c2.beginPath();
+      for (let k = 1; k < K; k++) {
+        let on = false;
+        for (let j = 1; j < n; j++) {
+          const a = (j - 1) * (K + 1) + k, b = j * (K + 1) + k, z0 = s.interface[a], z1 = s.interface[b];
+          const here = (s.weight[(j - 1) * K + k - 1] + s.weight[j * K + k - 1]) / 2 >= 0.5 === iso && !(z0 > s.floor[j - 1] - 1 && z1 > s.floor[j] - 1);
+          if (!here) { on = false; continue; }
+          if (!on) c2.moveTo(x(s.latitude[j - 1]), y(z0));
+          c2.lineTo(x(s.latitude[j]), y(z1));
+          on = true;
+        }
+      }
+      c2.stroke();
+    }
+    backdrop = { key: keyOf, section, canvas };
+    return canvas;
   }
 
-  function section(ctx, w, h, g) {
-    const { narrow, size, left, right, top, bottom } = g, s = sections?.[state.classes];
-    const x = (lat) => left + (lat + 90) / 180 * (right - left), H1 = STRETCH * (bottom - top), H2 = bottom - top - H1;
-    const y = (z) => (z <= SHALLOW ? top + z / SHALLOW * H1 : top + H1 + (Math.min(z, FLOOR) - SHALLOW) / (FLOOR - SHALLOW) * H2);
-    const zOf = (py) => { const d = py - top; return d <= H1 ? d / H1 * SHALLOW : SHALLOW + (d - H1) / H2 * (FLOOR - SHALLOW); };
+  function sea(ctx, w, h, g) {
+    const { narrow, size, left, right, top, bottom } = g, s = section;
+    const x = (lat) => left + (lat + 90) / 180 * (right - left), y = (z) => top + depthFraction(z) * (bottom - top);
+    const zOf = (py) => depthAt((py - top) / (bottom - top));
     geometry = { kind: 'section', left, right, top, bottom, x, y, latOf: (px) => -90 + (px - left) / (right - left) * 180, zOf };
-    text(ctx, narrow ? 'the classes at the start' : 'the classes at the start, by latitude', left, top - 18, { color: INK, size: size + 0.5, weight: 500 });
+    text(ctx, narrow ? 'the layers at the start' : 'the layers at the start, by latitude', left, top - 18, { color: INK, size: size + 0.5, weight: 500 });
     if (!s) { text(ctx, failed ? 'The start could not be built.' : 'Building the start with the model’s ocean…', (left + right) / 2, (top + bottom) / 2, { align: 'center', color: MUTED, size: 12 }); return; }
-    const L = s.layers, n = s.latitude.length, bases = Array.from({ length: n }, (_, j) => columnAt(s, j));
-    const highlight = (() => { const j = nearestLatitude(s, state.at.lat), layer = layerAt(s, j, state.at.z); return layer ? layer.k : -1; })();
+    const K = s.layers, n = s.latitude.length, layer = layerAt(s, nearestLatitude(s, state.at.lat), state.at.z), highlight = layer ? layer.k : -1;
+    ctx.drawImage(paintLayers(g), left, top, right - left, bottom - top);
 
-    for (let k = 1; k < L; k++) {
-      shadeOf(s.densities[k], rgb);
-      ctx.fillStyle = css(rgb, 0.92);
-      band(ctx, bases, k, x, y, s);
-      ctx.fill();
-    }
-    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)';
-    for (let k = 1; k < L - 1; k++) edge(ctx, s, bases, k, x, y, (j) => (s.thickness[j * L + k] > THIN || s.thickness[j * L + k + 1] > THIN) && bases[j][k] < FLOOR - 1);
-    for (let j = 0; j < n; j++) {
-      const a = x(j ? 0.5 * (s.latitude[j - 1] + s.latitude[j]) : -90), b = x(j < n - 1 ? 0.5 * (s.latitude[j] + s.latitude[j + 1]) : 90);
-      shadeOf(water(s.temperature[j * L], s.salinity[j * L]).rho, rgb);
-      ctx.fillStyle = css(rgb, 0.92); ctx.fillRect(a, top, b - a + 0.5, y(bases[j][0]) - top);
-    }
-    ctx.strokeStyle = ACCENT; ctx.lineWidth = 2; ctx.beginPath();
-    for (let j = 0; j < n; j++) { const px = x(s.latitude[j]), py = y(bases[j][0]); if (j) ctx.lineTo(px, py); else ctx.moveTo(px, py); }
-    ctx.stroke();
     ctx.fillStyle = CLOUD;
     for (let j = 0; j < n; j++) if (s.iced[j]) { const a = x(j ? 0.5 * (s.latitude[j - 1] + s.latitude[j]) : -90), b = x(j < n - 1 ? 0.5 * (s.latitude[j] + s.latitude[j + 1]) : 90); ctx.fillRect(a, top - 4, b - a + 0.5, 4); }
 
-    const marker = state.classes === 'four' ? -1 : s.densities.indexOf(1024);
-    if (marker > 0) {
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.beginPath();
-      let on = false, peak = null;
-      for (let j = 0; j < n; j++) {
-        const thick = s.thickness[j * L + marker] > THIN, px = x(s.latitude[j]), py = y(bases[j][marker - 1]);
-        if (thick) { if (on) ctx.lineTo(px, py); else ctx.moveTo(px, py); on = true; if (!peak || Math.abs(s.latitude[j]) < Math.abs(peak[2])) peak = [px, py, s.latitude[j], bases[j][marker - 1]]; } else on = false;
-      }
-      ctx.stroke(); ctx.setLineDash([]);
-      if (peak) text(ctx, `${narrow ? '' : 'top of '}1024.0: ${meters(peak[3])}`, peak[0] + 6, peak[1] - 9, { color: '#fff', size, halo: HALO });
-    }
-    if (highlight > 0) {
-      ctx.fillStyle = 'rgba(255, 232, 160, 0.12)';
-      band(ctx, bases, highlight, x, y, s); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(left, y(SURFACE_DEPTH)); ctx.lineTo(right, y(SURFACE_DEPTH)); ctx.stroke(); ctx.setLineDash([]);
+    text(ctx, narrow ? `surface layers, ${Math.round(SURFACE_DEPTH)} m` : `the twelve surface layers, to ${Math.round(SURFACE_DEPTH)} m`, left + 6, y(SURFACE_DEPTH) - 9, { color: '#fff', size, halo: HALO });
+    const empty = emptyEverywhere(s);
+    if (empty) text(ctx, narrow ? `${empty} empty layers on the floor` : `the ${empty} densest layers are empty, on the floor`, left + 6, bottom - 9, { color: '#fff', size, halo: HALO });
+
+    if (highlight >= 0) {
+      const edge = (k) => { ctx.beginPath(); for (let j = 0; j < n; j++) { const px = x(s.latitude[j]), py = y(s.interface[j * (K + 1) + k]); if (j) ctx.lineTo(px, py); else ctx.moveTo(px, py); } };
+      ctx.fillStyle = 'rgba(255, 232, 160, 0.16)'; edge(highlight);
+      for (let j = n - 1; j >= 0; j--) ctx.lineTo(x(s.latitude[j]), y(s.interface[j * (K + 1) + highlight + 1]));
+      ctx.closePath(); ctx.fill();
       ctx.strokeStyle = ACCENT; ctx.lineWidth = 1.5;
-      const thick = (j) => s.thickness[j * L + highlight] > THIN;
-      edge(ctx, s, bases, highlight - 1, x, y, thick);
-      edge(ctx, s, bases, highlight, x, y, thick);
+      edge(highlight); ctx.stroke();
+      edge(highlight + 1); ctx.stroke();
     }
-    text(ctx, narrow ? 'mixed layer' : 'the mixed layer, 60 m', x(narrow ? -86 : -86), y(30) + 0.5, { color: '#fff', size, halo: HALO });
 
     ctx.lineWidth = 1;
-    const depths = narrow ? [0, 250, 500, 750, 1000, 2000, 3000, 4000] : [0, 200, 400, 600, 800, 1000, 2000, 3000, 4000];
+    const depths = narrow ? [0, 20, 50, 100, 200, 500, 1000, 2000, 4000] : [0, 10, 20, 50, 100, 200, 500, 1000, 2000, 3000, 4000];
     for (const z of depths) { ctx.strokeStyle = LINE; ctx.beginPath(); ctx.moveTo(left - 4, y(z)); ctx.lineTo(left, y(z)); ctx.stroke(); text(ctx, z ? z.toLocaleString('en-US') : '0', left - 6, y(z), { align: 'right', color: MUTED, size }); }
     text(ctx, 'm', left - 6, top - 18, { align: 'right', color: MUTED, size });
-    ctx.strokeStyle = GRID; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(left - 10, y(SHALLOW)); ctx.lineTo(left, y(SHALLOW)); ctx.stroke(); ctx.setLineDash([]);
     for (let lat = -90; lat <= 90; lat += 30) {
       ctx.strokeStyle = LINE; ctx.beginPath(); ctx.moveTo(x(lat), bottom); ctx.lineTo(x(lat), bottom + 4); ctx.stroke();
       if (narrow && Math.abs(lat) === 90) continue;
@@ -308,24 +302,6 @@ export function mountSeawater(root) {
     if (!touched) { const side = px > (left + right) / 2; text(ctx, 'drag', side ? px - 12 : px + 12, py - 12, { align: side ? 'right' : 'left', color: ACCENT, size: 11, halo: HALO }); }
   }
 
-  function edge(ctx, s, bases, k, x, y, keep) {
-    ctx.beginPath();
-    let on = false;
-    for (let j = 0; j < bases.length; j++) {
-      const px = x(s.latitude[j]), py = y(bases[j][k]);
-      if (keep(j)) { if (on) ctx.lineTo(px, py); else ctx.moveTo(px, py); on = true; } else on = false;
-    }
-    ctx.stroke();
-  }
-
-  function band(ctx, bases, k, x, y, s) {
-    const n = bases.length;
-    ctx.beginPath();
-    for (let j = 0; j < n; j++) { const px = x(s.latitude[j]), py = y(k ? bases[j][k - 1] : 0); if (j) ctx.lineTo(px, py); else ctx.moveTo(px, py); }
-    for (let j = n - 1; j >= 0; j--) ctx.lineTo(x(s.latitude[j]), y(bases[j][k]));
-    ctx.closePath();
-  }
-
   function pick(at) {
     const gm = geometry;
     if (!gm || at.x < gm.left - 10 || at.x > gm.right + 10 || at.y < gm.top - 10 || at.y > gm.bottom + 10) return false;
@@ -338,7 +314,7 @@ export function mountSeawater(root) {
         const [a, b] = gm.handles, n = Math.hypot(at.x - a[0], at.y - a[1]) <= Math.hypot(at.x - b[0], at.y - b[1]) ? 0 : 1;
         state.waters[grabbed ?? n] = { t, s };
       }
-    } else state.at = { lat: Math.round(gm.latOf(px) * 10) / 10, z: Math.round(gm.zOf(py)) };
+    } else state.at = { lat: Math.round(gm.latOf(px) * 10) / 10, z: Math.round(gm.zOf(py) * 10) / 10 };
     report();
     fig.render();
     return true;
@@ -368,6 +344,15 @@ function curve(ctx, points, x, y) {
     on = true;
   }
   ctx.stroke();
+}
+
+function trace(ctx, points, x, y, join, backward) {
+  let joined = join;
+  for (const [s, t] of backward ? points.slice().reverse() : points) {
+    if (!Number.isFinite(s)) continue;
+    if (joined) ctx.lineTo(x(s), y(t)); else ctx.moveTo(x(s), y(t));
+    joined = true;
+  }
 }
 
 function dot(ctx, px, py, r, color) {

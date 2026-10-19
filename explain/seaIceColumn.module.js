@@ -16,21 +16,21 @@
  * the melting point. The mixed layer's salinity changes only by brine, the
  * change in the ice's volume per unit area (cover times thickness) at the
  * ocean's ICE_SALINITY and ICE_DENSITY, as the ocean books it: no
- * evaporation, rain or melt water freshens it, and the layer never mixes
- * with the water below. The record is daily, states at the end of each day
+ * evaporation or rain freshens it, melting only by that rule run backward,
+ * and the layer never mixes with the water below. The record is daily, states at the end of each day
  * and fluxes as day means; temperatures are kelvin.
  */
 import { createSeaIce, openWaterAlbedo, FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
 import { SOLAR_CONSTANT } from '../js/physics/radiation.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
-import { LAYER_DENSITIES } from '../js/ocean/layered.module.js';
 import { sunTrack, DAYS } from './insolation.module.js';
 
 export const DAY = 86400, STEP = 3600, RHO_CP = 1025 * 3985, ICE_SALINITY = 5, ICE_DENSITY = 917;
-export const DEEP_CLASS = LAYER_DENSITIES[LAYER_DENSITIES.indexOf(1026.95)];
+export const DEEP_WATER = { T: 275.15, S: 34.7 };
+export const DEEP_DENSITY = seawaterDensity(DEEP_WATER.T, DEEP_WATER.S);
 export const DARK_ICE = { iceAlbedo: 0.07, meltingIceAlbedo: 0.07, iceSnowAlbedo: 0.07 };
 export const TOY = { A: 200, B: 2.1, transmission: 0.7 };
-export const DEPTHS = { slab: 4.2e7 / RHO_CP, floor: 50, deep: 200 };
+export const DEPTHS = { slab: 4.2e7 / RHO_CP, fifty: 50, deep: 200 };
 const unit = () => ({ nCells: 1, areaCell: [1] });
 
 let darkest = 0;
@@ -77,7 +77,7 @@ export function brine(salinity, grown, depth) {
   return (salinity - ICE_SALINITY) * grown * ICE_DENSITY / 1000 / depth;
 }
 
-export function iceForDensity({ salinity = 34, depth = 50, density = DEEP_CLASS } = {}) {
+export function iceForDensity({ salinity = 34, depth = 50, density = DEEP_DENSITY } = {}) {
   let low = 0, high = 100;
   for (let n = 0; n < 60; n++) {
     const mid = 0.5 * (low + high);
@@ -155,7 +155,7 @@ export function seaIceColumn({
       year: y, thinnest, thickest, thickestIce: span('thickness')[1], deepestSnow: span('snow')[1], iceFreeDays: iceFree, openDays: open,
       waterLow, waterHigh, waterRange: waterHigh - waterLow, surfaceLow, surfaceHigh,
       salinityLow: freshest, salinityHigh: saltiest, salinityGained: saltiest - freshest, salinityDrift: record.salinity[to - 1] - (from > 0 ? record.salinity[from - 1] : salinity),
-      densityLow: lightest, densityHigh: densest, againstClass: densest - DEEP_CLASS,
+      densityLow: lightest, densityHigh: densest, againstDeep: densest - DEEP_DENSITY,
     };
   }
 

@@ -4,12 +4,12 @@
  */
 import { FREEZING_POINT, MELTING_POINT } from '../js/physics/ice.module.js';
 import { salinityForDensity } from '../js/ocean/seawater.module.js';
-import { seaIceColumn, RHO_CP, DEEP_CLASS, DEPTHS } from './seaIceColumn.module.js';
+import { seaIceColumn, RHO_CP, DEEP_DENSITY, DEEP_WATER, DEPTHS } from './seaIceColumn.module.js';
 
 export const START_DAY = 183, START_T = MELTING_POINT, YEARS = 20, SNOWFALL = 100;
 export const CONDUCTIVITY = 2.0, SNOW_CONDUCTIVITY = 0.31, SNOW_DENSITY = 300, MINIMUM_THICKNESS = 0.1;
-export const SINKING_SALINITY = salinityForDensity(DEEP_CLASS, FREEZING_POINT);
-export { DEPTHS, DEEP_CLASS, FREEZING_POINT };
+export const SINKING_SALINITY = salinityForDensity(DEEP_DENSITY, FREEZING_POINT);
+export { DEPTHS, DEEP_DENSITY, DEEP_WATER, FREEZING_POINT };
 
 export function conduction(thickness, snow, skin) {
   if (!(thickness > 0)) return 0;
@@ -33,7 +33,7 @@ export function iceSeason(present, from, to) {
   return { forms: carried ? null : first, melts: lasting ? null : end, days: end - first, allYear: end - first === to - from, none: false };
 }
 
-export function seaIceYears({ latitude = 75, depth = DEPTHS.floor, ice = 'bright', convergence = 85, snow = false, years = YEARS } = {}) {
+export function seaIceYears({ latitude = 75, depth = DEPTHS.fifty, ice = 'bright', convergence = 85, snow = false, years = YEARS } = {}) {
   const run = seaIceColumn({ latitude, depth, ice, convergence, snowfall: snow ? SNOWFALL : 0, years, startDay: START_DAY, start: START_T });
   const r = run.record, skin = new Float32Array(run.days), conducted = new Float32Array(run.days);
   for (let d = 0; d < run.days; d++) {

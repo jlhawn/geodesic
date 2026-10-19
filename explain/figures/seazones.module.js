@@ -1,20 +1,20 @@
 import { Figure, choice, readout, legend, caption, text, rampRGB, clamp, paletteVersion, DARK_NEUTRAL, ACCENT, MUTED, GRID, LINE } from '../runtime.module.js';
 import { loadFrames } from '../frames.module.js';
-import { DATA_URL, classSection } from '../oceanRun.module.js';
-import { overturningGrid, overturningCells, northwardByClass, contours, SHALLOW, FLOOR } from '../seaZones.module.js';
+import { DATA_URL, layerSection, zonalMeans, modeWeight, modeName } from '../oceanRun.module.js';
+import { overturningGrid, overturningCells, northwardByLayer, contours, SHALLOW, FLOOR } from '../seaZones.module.js';
 
-const DARK = 'rgb(52, 55, 62)', HALO = 'rgba(21, 21, 21, 0.7)', PROBE = 'rgba(255, 255, 255, 0.45)', BOUNDARY = 'rgba(255, 255, 255, 0.16)';
+const DARK = 'rgb(52, 55, 62)', HALO = 'rgba(21, 21, 21, 0.7)', PROBE = 'rgba(255, 255, 255, 0.45)';
 const MONTHS = [['the year', ''], ['March', 'March'], ['June', 'June'], ['September', 'September'], ['December', 'December']];
-const LEVELS = Array.from({ length: 9 }, (_, n) => 10 + 10 * n).flatMap((v) => [v, -v]);
+const LEVELS = Array.from({ length: 25 }, (_, n) => 10 + 10 * n).flatMap((v) => [v, -v]);
 const signedRoot = (v, top) => 0.5 + 0.5 * Math.sign(v) * Math.sqrt(Math.min(1, Math.abs(v) / top));
 const VIEWS = [
-  { key: 'T', label: 'temperature', color: (v, rgb) => rampRGB((v + 2) / 32, rgb, DARK_NEUTRAL), legend: ['ramp', 'temperature, from −2 to 30\u00a0°C', 'cool', 'warm', DARK] },
+  { key: 'T', label: 'temperature', color: (v, rgb) => rampRGB((v + 2) / 26, rgb, DARK_NEUTRAL), legend: ['ramp', 'temperature, from −2 to 24\u00a0°C', 'cool', 'warm', DARK] },
   { key: 'S', label: 'salinity', color: (v, rgb) => rampRGB((v - 33.6) / 2, rgb, DARK_NEUTRAL), legend: ['ramp', 'salinity, from 33.6 to 35.6\u00a0psu', 'cool', 'warm', DARK] },
-  { key: 'u', label: 'eastward current', color: (v, rgb) => rampRGB(signedRoot(v, 30), rgb, DARK_NEUTRAL), legend: ['ramp', 'current toward the west in cool colors and the east in warm, up to 30\u00a0cm/s on a square-root scale', 'cool', 'warm', DARK] },
+  { key: 'u', label: 'eastward current', color: (v, rgb) => rampRGB(signedRoot(v, 100), rgb, DARK_NEUTRAL), legend: ['ramp', 'current toward the west in cool colors and the east in warm, up to 100\u00a0cm/s on a square-root scale', 'cool', 'warm', DARK] },
 ];
 const POLAR = 40;
-const interval = (step) => (step === 10 ? '10\u00a0Sv between lines' : `${step}\u00a0Sv between lines, 10\u00a0Sv poleward of ${POLAR}°`);
-const lines = (step) => [['line', 'the base of the mixed layer', ACCENT], ['faint', 'boundaries between classes', 'rgba(255, 255, 255, 0.5)'], ['dash', 'the top of the 1024.0 class', '#fff'], ['arrow', `the overturning, ${interval(step)}`, 'rgba(255, 255, 255, 0.9)']];
+const interval = (step) => (step === 20 ? `20\u00a0Sv between lines, 10\u00a0Sv poleward of ${POLAR}°` : `${step}\u00a0Sv between lines, 20\u00a0Sv poleward of ${POLAR}°`);
+const lines = (step) => [['line', 'the base of the mixed layer', ACCENT], ['faint', 'interfaces between layers, brighter where they follow isopycnals', 'rgba(255, 255, 255, 0.5)'], ['dash', 'the 1024.0 isopycnal', '#fff'], ['arrow', `the overturning, ${interval(step)}`, 'rgba(255, 255, 255, 0.9)']];
 
 const place = (lat) => (Math.abs(lat) < 0.05 ? '0°' : `${Math.abs(lat).toFixed(Math.abs(lat) % 1 ? 1 : 0)}°${lat > 0 ? 'N' : 'S'}`);
 const meters = (z) => `${Math.round(z).toLocaleString('en-US')}\u00a0m`;
@@ -23,11 +23,11 @@ const toward = (v, plus, minus, digits = 1) => `${Math.abs(v).toFixed(digits)}\u
 
 export function mountSeazones(root) {
   const controls = root.querySelector('.controls');
-  let header = null, failed = false, view = 0, month = '', probe = { lat: 2.5, z: 30 }, geometry = null, image = null, shown = null, step = 10;
+  let header = null, failed = false, view = 0, month = '', probe = { lat: 2.5, z: 30 }, geometry = null, image = null, shown = null, step = 20;
   const periods = new Map();
 
   const fig = new Figure(root, { height: (w) => (w < 520 ? 390 : 440), draw });
-  caption(root, 'The sea of the run above, averaged around each circle of latitude over the year or over one month, from the surface to the floor 4,000\u00a0m down; the top 500\u00a0m is drawn seven times as tall for each meter as the water below. Each band between the faint lines is one class of water. The white lines are the overturning, the flow north or south of all the water above, the eddy transport included: water moves along them the way their arrows point, 10\u00a0Sv between neighboring lines, or on a narrow screen 20\u00a0Sv except poleward of 40°. The six-hourly samples miss up to 12\u00a0Sv over the year and up to 30\u00a0Sv in a month; the figure spreads what they miss through the depth so that every line closes. The deep cells poleward of 45° are the densest water of the run’s start draining toward the equator over the floor, not a lasting circulation. The probe’s northward current is each class’s flow across the circles 5° apart over its cross-section. Tap or hover over the section to read one place.');
+  caption(root, 'The sea of the run above, averaged around each circle of latitude over the year or over one month, from the surface to the floor 4,000\u00a0m down; the top 500\u00a0m is drawn seven times as tall for each meter as the water below. Each band between the faint lines is one of the model’s 58 layers. An interface is faint where its layer is held at its minimum thickness, as the layers are down to 234 to 284\u00a0m in the tropics, and brighter where the layer follows a surface of equal density. The mixed layer is not one of the layers; its base and the 1024.0 isopycnal are the model’s own measures, averaged. The white lines are the overturning, the flow north or south of all the water above, the eddy transport included: water moves along them the way their arrows point, 20\u00a0Sv between neighboring lines, or on a narrow screen 40\u00a0Sv, and 10 or 20\u00a0Sv poleward of 40°. “The top 57\u00a0m carry” is that flow above the base of the twelve surface layers; the wind’s flow is not closed there, for most of it goes on to 300\u00a0m and turns back below. The six-hourly samples miss up to 0.5\u00a0Sv over the year and up to 3\u00a0Sv in a month; the figure spreads what they miss through the depth so that every line closes. The probe’s northward current is each layer’s flow across the circles 5° apart over its cross-section. Tap or hover over the section to read one place.');
   const key = legend(root, [VIEWS[view].legend, ...lines(step)]);
   const relabel = () => key.set([VIEWS[view].legend, ...lines(step)]);
   choice(controls, { label: 'Color shows', options: VIEWS.map((v, n) => [v.label, String(n)]), value: '0', onChange: (v) => { view = Number(v); relabel(); fig.render(); }, span: true });
@@ -38,7 +38,7 @@ export function mountSeazones(root) {
     if (!periods.has(month)) {
       const name = month || null, grid = overturningGrid(header, name);
       periods.set(month, {
-        section: classSection(header, name), grid, north: northwardByClass(header, name), cells: overturningCells(header, name),
+        section: layerSection(header, name), zonal: zonalMeans(header, name), grid, north: northwardByLayer(header, name), cells: overturningCells(header, name),
         lines: LEVELS.flatMap((level) => contours(grid.psi, grid.ni, grid.nj, level).map((line) => ({ ...line, level, polar: line.points.every(([i]) => Math.abs(grid.lats[0] + i * (grid.lats[1] - grid.lats[0])) >= POLAR) }))),
       });
     }
@@ -55,7 +55,7 @@ export function mountSeazones(root) {
     const [b, t] = binOf(lat), values = p.section[which];
     return mix(values[b * n + k], values[(b + 1) * n + k], t);
   };
-  const classAt = (bases, z) => { let k = 0; while (k < bases.length - 1 && z > bases[k]) k++; return k; };
+  const layerAt = (bases, z) => { let k = 0; while (k < bases.length - 1 && z > bases[k]) k++; return k; };
 
   function paint(box) {
     const width = Math.round(box.right - box.left), height = Math.round(box.bottom - box.top), id = `${view}/${month}/${width}x${height}/${paletteVersion}`;
@@ -67,11 +67,11 @@ export function mountSeazones(root) {
     for (let x = 0; x < width; x++) {
       const lat = box.latitude(box.left + x + 0.5);
       basesAt(p, lat, bases);
-      let k = 0, shownClass = -1, value = null, last = null;
+      let k = 0, shownLayer = -1, value = null, last = null;
       for (let y = 0; y < height; y++) {
         const z = box.depth(box.top + y + 0.5);
         while (k < n - 1 && z > bases[k]) k++;
-        if (k !== shownClass) { shownClass = k; value = valueAt(p, which, k, lat) ?? last; if (value !== null) { last = value; color(value, rgb); } }
+        if (k !== shownLayer) { shownLayer = k; value = valueAt(p, which, k, lat) ?? last; if (value !== null) { last = value; color(value, rgb); } }
         const i = 4 * (y * width + x);
         pixels.data[i] = rgb[0] * 255; pixels.data[i + 1] = rgb[1] * 255; pixels.data[i + 2] = rgb[2] * 255; pixels.data[i + 3] = 255;
       }
@@ -84,7 +84,7 @@ export function mountSeazones(root) {
   function draw(ctx, w, h) {
     if (!header) { text(ctx, failed ? 'The run could not be loaded.' : 'Loading the run…', w / 2, h / 2, { align: 'center', color: MUTED }); return; }
     const narrow = w < 520, size = narrow ? 10 : 11, left = narrow ? 40 : 48, right = w - (narrow ? 10 : 14), top = 22, bottom = h - 26;
-    if (step !== (narrow ? 20 : 10)) { step = narrow ? 20 : 10; relabel(); }
+    if (step !== (narrow ? 40 : 20)) { step = narrow ? 40 : 20; relabel(); }
     const half = (bottom - top) / 2;
     const box = {
       left, right, top, bottom,
@@ -97,25 +97,25 @@ export function mountSeazones(root) {
     const p = period(), n = L(), section = p.section, centers = section.centers;
     ctx.drawImage(paint(box), left, top, right - left, bottom - top);
 
-    const boundary = (k, keep) => {
-      const points = [[-90, section.base[k]], ...centers.map((lat, b) => [lat, section.base[b * n + k]]), [90, section.base[35 * n + k]]];
-      const bins = [0, ...centers.map((_, b) => b), 35];
-      ctx.beginPath();
-      for (let m = 0; m + 1 < points.length; m++) {
-        if (!keep(bins[m]) && !keep(bins[m + 1])) continue;
-        ctx.moveTo(box.x(points[m][0]), box.y(points[m][1])); ctx.lineTo(box.x(points[m + 1][0]), box.y(points[m + 1][1]));
+    const sides = [-90, ...centers, 90], bins = [0, ...centers.map((_, b) => b), centers.length - 1];
+    const trace = (depthAt, keep, style) => {
+      const z = bins.map(depthAt);
+      for (let m = 0; m + 1 < sides.length; m++) {
+        if (!keep(bins[m], bins[m + 1])) continue;
+        if (style) ctx.strokeStyle = style(bins[m], bins[m + 1]);
+        ctx.beginPath(); ctx.moveTo(box.x(sides[m]), box.y(z[m])); ctx.lineTo(box.x(sides[m + 1]), box.y(z[m + 1])); ctx.stroke();
       }
-      ctx.stroke();
     };
     const thickness = (b, k) => section.base[b * n + k] - (k ? section.base[b * n + k - 1] : 0);
-    ctx.lineWidth = 1; ctx.strokeStyle = BOUNDARY;
-    for (let k = 1; k < n - 1; k++) boundary(k, (b) => thickness(b, k) >= 2 || thickness(b, k + 1) >= 2);
-    const marker = header.classes.indexOf(1024);
+    const follows = (b, k) => (k < header.fixedLayers ? 0 : modeWeight(thickness(b, k), header.minimumThickness[k]));
+    ctx.lineWidth = 1;
+    for (let k = 1; k < n; k++) trace((b) => section.base[b * n + k - 1], (a, c) => thickness(a, k - 1) >= 2 || thickness(c, k - 1) >= 2, (a, c) => `rgba(255, 255, 255, ${(0.06 + 0.26 * 0.5 * (follows(a, k - 1) + follows(c, k - 1))).toFixed(3)})`);
+    const { mixedLayerDepth: mixed, thermoclineTop: iso } = p.zonal;
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
-    boundary(marker - 1, (b) => section.T[b * n + marker] !== null && section.base[b * n + marker - 1] - section.base[b * n] >= 1);
+    trace((b) => iso[b], (a, c) => iso[a] >= 1 && iso[c] >= 1);
     ctx.setLineDash([]);
     ctx.strokeStyle = ACCENT; ctx.lineWidth = 2;
-    boundary(0, () => true);
+    trace((b) => mixed[b], () => true);
 
     ctx.strokeStyle = GRID; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
     ctx.beginPath(); ctx.moveTo(left, box.y(SHALLOW)); ctx.lineTo(right, box.y(SHALLOW)); ctx.stroke(); ctx.setLineDash([]);
@@ -160,7 +160,7 @@ export function mountSeazones(root) {
       text(ctx, place(lat), box.x(lat), bottom + 13, { align: 'center', color: MUTED, size });
     }
     const labelAt = centers.indexOf(17.5);
-    if (section.T[labelAt * n + marker] !== null) text(ctx, '1024.0', box.x(17.5) + 4, box.y(section.base[labelAt * n + marker - 1]) - 8, { color: '#fff', size, halo: HALO });
+    if (p.zonal.thermoclineTop[labelAt] >= 1) text(ctx, '1024.0', box.x(17.5) + 4, box.y(p.zonal.thermoclineTop[labelAt]) - 8, { color: '#fff', size, halo: HALO });
 
     const px = box.x(probe.lat), py = box.y(probe.z);
     ctx.strokeStyle = PROBE; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
@@ -170,7 +170,7 @@ export function mountSeazones(root) {
   }
 
   function report(p) {
-    const n = L(), bases = basesAt(p, probe.lat, new Float64Array(n)), k = classAt(bases, probe.z), label = header.classes[k];
+    const n = L(), bases = basesAt(p, probe.lat, new Float64Array(n)), k = layerAt(bases, probe.z), label = header.labels[k], thick = bases[k] - (k ? bases[k - 1] : 0), weight = k < header.fixedLayers ? 0 : modeWeight(thick, header.minimumThickness[k]);
     const at = (which) => valueAt(p, which, k, probe.lat), T = at('T'), S = at('S'), u = at('u'), v = at('v');
     const { lats, nj, psi, depth } = p.grid, i0 = Math.min(lats.length - 2, Math.floor((probe.lat + 90) / 5)), s = (probe.lat - lats[i0]) / 5;
     const column = (c) => {
@@ -182,7 +182,8 @@ export function mountSeazones(root) {
     const above = (1 - s) * column(i0) + s * column(i0 + 1);
     local.set([
       ['latitude', place(probe.lat)], ['depth', meters(probe.z)],
-      ['in', `${label === 'mixed' ? 'the mixed layer' : `the ${Number.isInteger(label) ? label.toFixed(1) : label} class`}, ${meters(k ? bases[k - 1] : 0)} to ${meters(bases[k])}`],
+      ['in', `layer ${k + 1} of ${L()}, ${meters(k ? bases[k - 1] : 0)} to ${meters(bases[k])}`],
+      ['its label', `${Number.isInteger(label) ? label.toFixed(1) : label}\u00a0kg/m³, ${modeName(weight)}`],
       ['temperature', T === null ? '–' : `${T.toFixed(1)}\u00a0°C`], ['salinity', S === null ? '–' : `${S.toFixed(2)}\u00a0psu`],
       ['current', `${u === null ? '–' : toward(u, 'east', 'west')}, ${v === null ? '–' : toward(v, 'north', 'south', 2)}`],
       ['overturning above', `${Math.abs(above).toFixed(1)}\u00a0Sv ${above >= 0 ? 'north' : 'south'}`],
@@ -190,14 +191,12 @@ export function mountSeazones(root) {
   }
 
   function summarize() {
-    const p = period(), n = L(), { section, cells } = p;
-    let deepest = { z: 0 };
-    section.centers.forEach((lat, b) => { if (section.base[b * n] > deepest.z) deepest = { z: section.base[b * n], lat }; });
+    const p = period(), { zonal, cells } = p, deepest = zonal.mixedLayerDepth.reduce((best, z, b) => (z > best.z ? { z, lat: zonal.centers[b] } : best), { z: 0 });
     const across = (psi, lat) => `${Math.abs(psi).toFixed(1)}\u00a0Sv ${psi >= 0 ? 'north' : 'south'} across ${place(lat)}`;
     global.set([
       ['deepest mixed layer', `${meters(deepest.z)} at ${place(deepest.lat)}`],
-      ['the mixed layer carries', `${across(cells.south, -10)}, ${across(cells.north, 10)}`],
-      ['and under the westerlies', `${across(cells.mixed(-35), -35)}, ${across(cells.mixed(35), 35)}`],
+      [`the top ${Math.round(cells.base)}\u00a0m carry`, `${across(cells.south, -5)}, ${across(cells.north, 5)}`],
+      ['and under the westerlies', `${across(cells.westerlySouth, -45)}, ${across(cells.westerlyNorth, 45)}`],
     ]);
   }
 

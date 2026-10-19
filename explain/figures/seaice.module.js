@@ -1,11 +1,11 @@
 import { Figure, slider, choice, buttons, readout, legend, caption, text, arrow, termColor, clamp, INK, MUTED, GRID, LINE } from '../runtime.module.js';
 import { seasonPhrase, DAYS } from '../insolation.module.js';
-import { seaIceYears, heatAboveFreezing, snowDepth, DEPTHS, DEEP_CLASS, FREEZING_POINT, SINKING_SALINITY, SNOWFALL, YEARS } from '../seaIceYears.module.js';
+import { seaIceYears, heatAboveFreezing, snowDepth, DEPTHS, DEEP_DENSITY, FREEZING_POINT, SINKING_SALINITY, SNOWFALL, YEARS } from '../seaIceYears.module.js';
 
 const WIDE = 520, PACE = 60, HEAD = 16, HALO = 'rgba(20, 20, 22, 0.85)', CHIP = 'rgba(30, 32, 36, 0.88)', PROBE = 'rgba(255, 255, 255, 0.3)', FAINT = 'rgba(255, 255, 255, 0.22)';
 const WATER = 'rgb(95, 165, 225)', SALT = 'rgb(214, 190, 140)', ICE = { bright: 'rgb(205, 218, 228)', dark: 'rgb(78, 84, 92)' }, SNOW = 'rgb(246, 248, 251)';
 const SEA = 'rgba(55, 115, 175, 0.42)', DEEP = 'rgba(25, 55, 105, 0.6)', SUN_SCALE = 400, ZERO = 273.15;
-const MIXED = { slab: DEPTHS.slab, floor: DEPTHS.floor, deep: DEPTHS.deep }, SHARE = { slab: 0.3, floor: 0.5, deep: 0.75 };
+const MIXED = { slab: DEPTHS.slab, fifty: DEPTHS.fifty, deep: DEPTHS.deep }, SHARE = { slab: 0.3, fifty: 0.5, deep: 0.75 };
 const NAMES = ['Sept. equinox', 'Dec. solstice', 'March equinox', 'June solstice', 'Sept. equinox'], SHORT = ['Sep', 'Dec', 'Mar', 'Jun', 'Sep'];
 const MARKS = [0, 91, 182, 273, 365];
 
@@ -20,18 +20,18 @@ const heat = (joules) => (joules >= 1e9 ? `${(joules / 1e9).toFixed(2)} GJ/m²` 
 
 export function mountSeaice(root) {
   const controls = root.querySelector('.controls'), sun = termColor('a');
-  const state = { ice: 'bright', depth: 'floor', convergence: 85, latitude: 75, snow: false };
+  const state = { ice: 'bright', depth: 'fifty', convergence: 85, latitude: 75, snow: false };
   let run = null, scales = null, position = 0, playing = true, geometry = null, summaries = new Map(), pending = 0;
 
   const fig = new Figure(root, { height: (w) => layout(w).h, step, draw });
-  caption(root, 'One column of the model’s own sea ice over a mixed layer of seawater, stepped hourly with the model’s ice code for 20 years from open water at 0\u00a0°C on the September equinox. The air above it is a toy written for this figure, not the model’s, and the heat the winds bring is a fixed amount. Snow, when it is on, falls at 100\u00a0kg/m² a year whenever the surface is below 0\u00a0°C. The mixed layer never mixes with the water beneath it and no current brings it heat, so the brine of its ice stays in it until the ice melts. The cartoon draws the ice and snow to a scale of their own, with the leads, the open water between the floes, on the right, and under the mixed layer the 1026.95 class, the densest water the model’s ocean starts with on a planet without land. The gauge places the water’s density against that class: water below the line is the denser, and in the model it would sink. The charts run from one September equinox to the next, with the year being played drawn bright and earlier years faint. Tap the charts to pick a day, or drag the marker.');
+  caption(root, 'One column of the model’s own sea ice over a mixed layer of seawater, stepped hourly with the model’s ice code for 20 years from open water at 0\u00a0°C on the September equinox. The air above it is a toy written for this figure, not the model’s, and the heat the winds bring is a fixed amount. Snow, when it is on, falls at 100\u00a0kg/m² a year whenever the surface is below 0\u00a0°C. The mixed layer never mixes with the water beneath it and no current brings it heat, so the brine of its ice stays in it until the ice melts. The cartoon draws the ice and snow to a scale of their own, with the leads, the open water between the floes, on the right, and under the mixed layer the deep water the model’s ocean starts with, 2\u00a0°C at 34.7\u00a0psu. The gauge places the mixed layer’s density against that water’s: water below the line is the denser, and in the model it would sink. The charts run from one September equinox to the next, with the year being played drawn bright and earlier years faint. Tap the charts to pick a day, or drag the marker.');
   const legendItems = () => [
     ['arrow', 'sunlight reaching the surface', sun], ['arrow', 'sunlight reflected', fade(sun, 0.55)], ['line', 'ice, its volume per square meter of sea', ICE.bright], ...(state.snow ? [['dots', 'snow depth', SNOW]] : []),
     ['line', 'mixed layer’s temperature', WATER], ['line', 'temperature at the surface', INK], ['line', 'mixed layer’s salinity', SALT], ['faint', 'earlier years', 'rgba(255, 255, 255, 0.35)'],
   ];
   const key = legend(root, legendItems());
   choice(controls, { label: 'Ice', options: [['the model’s, bright', 'bright'], ['Part 7’s, dark', 'dark']], value: state.ice, onChange: (v) => change({ ice: v }) });
-  choice(controls, { label: 'Mixed layer', options: [['10 m, Part 7’s slab', 'slab'], ['50 m', 'floor'], ['200 m', 'deep']], value: state.depth, onChange: (v) => change({ depth: v }) });
+  choice(controls, { label: 'Mixed layer', options: [['10 m, Part 7’s slab', 'slab'], ['50 m', 'fifty'], ['200 m', 'deep']], value: state.depth, onChange: (v) => change({ depth: v }) });
   slider(controls, { label: 'Heat the winds bring', min: 60, max: 110, step: 1, value: state.convergence, format: (v) => `${v} W/m²`, onInput: (v) => change({ convergence: v }) });
   slider(controls, { label: 'Latitude', min: 60, max: 90, step: 1, value: state.latitude, format: (v) => `${v}°N`, onInput: (v) => change({ latitude: v }) });
   choice(controls, { label: 'Snow', options: [['none', 'off'], [`${SNOWFALL} kg/m² a year`, 'on']], value: 'off', onChange: (v) => { change({ snow: v === 'on' }); key.set(legendItems()); } });
@@ -47,7 +47,7 @@ export function mountSeaice(root) {
     run = seaIceYears({ latitude: state.latitude, depth: MIXED[state.depth], ice: state.ice, convergence: state.convergence, snow: state.snow });
     summaries = new Map();
     const r = run.record;
-    let iceTop = 1, low = FREEZING_POINT, high = FREEZING_POINT + 2, sLow = Math.min(34, SINKING_SALINITY), sHigh = SINKING_SALINITY + 0.1, dLow = DEEP_CLASS - 0.2, dHigh = DEEP_CLASS + 0.1;
+    let iceTop = 1, low = FREEZING_POINT, high = FREEZING_POINT + 2, sLow = Math.min(34, SINKING_SALINITY), sHigh = SINKING_SALINITY + 0.1, dLow = DEEP_DENSITY - 0.2, dHigh = DEEP_DENSITY + 0.1;
     for (let d = 0; d < run.days; d++) {
       iceTop = Math.max(iceTop, r.thickness[d] + snowDepth(r.snow[d]), r.volume[d]);
       low = Math.min(low, r.surface[d]); high = Math.max(high, r.water[d]);
@@ -135,22 +135,22 @@ export function mountSeaice(root) {
     const deep = MIXED[state.depth];
     text(ctx, `mixed layer, ${deep < 20 ? deep.toFixed(1) : Math.round(deep)} m`, colX + 6, yW + 11, { color: INK, size: 10.5 });
     if (yM - yW > 34) text(ctx, `${celsius(r.water[d], 2)} · ${r.salinity[d].toFixed(2)} psu`, colX + 6, yW + 25, { color: INK, size: 10.5 });
-    text(ctx, narrow ? 'the deepest class' : 'the deepest class, 1026.95', colX + 6, Math.max(yM + 10, bottom - 9), { color: MUTED, size: 10.5 });
+    text(ctx, narrow ? 'deep water' : `deep water, ${DEEP_DENSITY.toFixed(2)}`, colX + 6, Math.max(yM + 10, bottom - 9), { color: MUTED, size: 10.5 });
 
-    const rho = r.density[d], above = Math.max(0.05, DEEP_CLASS - scales.dLow), below = Math.max(0.05, scales.dHigh - DEEP_CLASS);
-    const k = Math.min((yM - yW - 10) / above, (bottom - yM - 8) / below), Y = (v) => yM + (v - DEEP_CLASS) * k;
+    const rho = r.density[d], above = Math.max(0.05, DEEP_DENSITY - scales.dLow), below = Math.max(0.05, scales.dHigh - DEEP_DENSITY);
+    const k = Math.min((yM - yW - 10) / above, (bottom - yM - 8) / below), Y = (v) => yM + (v - DEEP_DENSITY) * k;
     const tick = niceStep(Math.max(above, below) * 2, Math.max(2, (bottom - yW) / 14));
     ctx.strokeStyle = LINE; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(gaugeX, yW); ctx.lineTo(gaugeX, bottom); ctx.stroke();
-    for (let v = Math.ceil((DEEP_CLASS - above) / tick) * tick; v <= DEEP_CLASS + below + 1e-9; v += tick) {
+    for (let v = Math.ceil((DEEP_DENSITY - above) / tick) * tick; v <= DEEP_DENSITY + below + 1e-9; v += tick) {
       const ty = Y(v);
       if (ty < yW + 2 || ty > bottom - 1) continue;
       ctx.strokeStyle = LINE; ctx.beginPath(); ctx.moveTo(gaugeX, ty); ctx.lineTo(gaugeX + 3, ty); ctx.stroke();
     }
     text(ctx, 'density,', gaugeX - 2, yW - 19, { color: MUTED, size: 9.5 });
     text(ctx, 'kg/m³', gaugeX - 2, yW - 8, { color: MUTED, size: 9.5 });
-    const my = clamp(Y(rho), yW + 2, bottom - 2), denser = rho > DEEP_CLASS, apart = Math.abs(my - yM) >= 11;
+    const my = clamp(Y(rho), yW + 2, bottom - 2), denser = rho > DEEP_DENSITY, apart = Math.abs(my - yM) >= 11;
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)'; ctx.beginPath(); ctx.moveTo(gaugeX, yM + 0.5); ctx.lineTo(gaugeX + 5, yM + 0.5); ctx.stroke();
-    text(ctx, DEEP_CLASS.toFixed(2), gaugeX + 6, apart ? yM : yM + (my < yM ? 6 : -6), { color: MUTED, size: 9.5 });
+    text(ctx, DEEP_DENSITY.toFixed(2), gaugeX + 6, apart ? yM : yM + (my < yM ? 6 : -6), { color: MUTED, size: 9.5 });
     ctx.fillStyle = denser ? SALT : INK;
     ctx.beginPath(); ctx.moveTo(gaugeX - 1, my); ctx.lineTo(gaugeX - 9, my - 4.5); ctx.lineTo(gaugeX - 9, my + 4.5); ctx.closePath(); ctx.fill();
     ctx.strokeStyle = denser ? SALT : 'rgba(255, 255, 255, 0.5)'; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(colX + colW, my); ctx.lineTo(gaugeX - 10, my); ctx.stroke(); ctx.setLineDash([]);
@@ -168,7 +168,7 @@ export function mountSeaice(root) {
     const panels = [
       { name: 'ice, m', lo: 0, hi: scales.iceTop * 1.05, lines: [['volume', ICE.bright, 2]], extra: state.snow ? [['snow', SNOW]] : [], faint: 'volume' },
       { name: 'temperature, °C', lo: scales.low - ZERO, hi: scales.high - ZERO, lines: [['surface', INK, 1.4], ['water', WATER, 2]], guide: [FREEZING_POINT - ZERO, 'freezing'], faint: 'water', shift: -ZERO },
-      { name: 'salinity, psu', lo: scales.sLow, hi: scales.sHigh, lines: [['salinity', SALT, 2]], guide: [SINKING_SALINITY, 'as dense as the deepest class'], faint: 'salinity' },
+      { name: 'salinity, psu', lo: scales.sLow, hi: scales.sHigh, lines: [['salinity', SALT, 2]], guide: [SINKING_SALINITY, 'as dense as the deep water'], faint: 'salinity' },
     ];
     text(ctx, `year ${y + 1}, ${seasonPhrase(r.day[d])}`, x + w / 2, top - 13, { color: MUTED, size: 11, align: 'center' });
     panels.forEach((p, n) => {
@@ -236,8 +236,8 @@ export function mountSeaice(root) {
 
   function report(d, y) {
     const r = run.record, h = r.thickness[d], every = playing ? 4 : 1, s = summary(y), latent = run.sea.latent;
-    const c = run.conducted[d], growth = 100 * 86400 * c / latent, rho = r.density[d] - DEEP_CLASS, light = r.sunlight[d];
-    const against = (v) => `${num(Math.abs(v), 2)} kg/m³ ${v > 0 ? 'denser' : 'lighter'} than the deepest class`;
+    const c = run.conducted[d], growth = 100 * 86400 * c / latent, rho = r.density[d] - DEEP_DENSITY, light = r.sunlight[d];
+    const against = (v) => `${num(Math.abs(v), 2)} kg/m³ ${v > 0 ? 'denser' : 'lighter'} than the deep water`;
     dayOut.set([
       [`year ${y + 1},`, seasonPhrase(r.day[d])],
       ['ice', h > 0 ? `${h.toFixed(2)} m thick over ${percent(r.cover[d])} of the sea` : 'none'],
@@ -252,7 +252,7 @@ export function mountSeaice(root) {
     yearOut.set([
       [`year ${y + 1}: ice`, season],
       ['brine of the winter', `${s.brine.toFixed(2)} psu`],
-      ['densest water', against(s.againstClass)],
+      ['densest water', against(s.againstDeep)],
       ...(s.summerHeat >= 1e6 ? [['most heat above freezing', `${heat(s.summerHeat)}, enough to melt ${(s.summerHeat / latent).toFixed(1)} m of ice`]] : []),
     ], every);
     if (yearControl.value !== y + 1) yearControl.value = y + 1;
