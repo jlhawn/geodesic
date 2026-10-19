@@ -146,3 +146,16 @@ test('the files serve the bundled land mask with its terrain only: given fields 
   assert.equal(createModel(new Grid(N), { topography: other }).boundaryLayer.formDrag, null);
   assert.equal(createModel(new Grid(N), { topography, terrain: false }).boundaryLayer.formDrag, null);
 });
+
+test('the files record the Lloyd passes of their meshes, and a mesh of other passes takes the raster’s and says so', () => {
+  for (const N of [16, 32, 64, 128, 192]) assert.equal(decodeSubgrid(readFileSync(subgridUrl(N))).relax, new Grid(N).relaxPasses, `data/subgrid_N${N}.bin`);
+  const N = 16, g = 9.80616, file = meshSubgrid(buildMesh(new Grid(N)));
+  assert.equal(decodeSubgrid(encodeSubgrid({ ...file, relax: undefined })).relax, null, 'fields without passes write the first version');
+  const model = createModel(new Grid(N, { relax: 8 }), { physics: false, topography }), { mesh, geography, surfaceGeopotential: phis } = model;
+  const said = [], log = console.log;
+  console.log = (line) => said.push(line);
+  const fields = orographyFields(mesh, topography, geography, phis, undefined, g);
+  console.log = log;
+  assert.ok(fields.raster, 'the 8-pass mesh takes the raster’s fields');
+  assert.ok(said.some((line) => line.includes(`mesh of ${file.relax} Lloyd passes, not this one of 8`)), said.join(' | '));
+});

@@ -67,7 +67,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   for (const N of Ns) {
     const start = performance.now();
     const model = createModel(new Grid(N), { physics: false, topography });
-    const fields = meshFields(model, h5, flt2);
+    const fields = { ...meshFields(model, h5, flt2), relax: model.mesh.relax };
     const bytes = encodeSubgrid(fields);
     writeFileSync(subgridUrl(N), new Uint8Array(bytes));
     const back = decodeSubgrid(bytes);

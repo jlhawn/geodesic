@@ -349,8 +349,11 @@ export function subgridOrography(mesh, topography, resolved = null, land = null,
 /*
  * The per-mesh subgrid orography files data/subgrid_N<N>.bin that
  * scripts/subgridTerrain.mjs writes from GMTED2010: a 16-byte header
- * ('SGO1', the cell count, the field count, 0) and per field one uint16
- * per cell, value = q × scale + offset, in SUBGRID_FIELDS' order.
+ * ('SGO2', the cell count, the field count, the Lloyd passes of the mesh
+ * the fields were computed on) and per field one uint16 per cell,
+ * value = q × scale + offset, in SUBGRID_FIELDS' order. Fields without an
+ * integer `relax` are written as 'SGO1' with 0 in its place, and 'SGO1'
+ * files decode with relax null.
  */
 export const SUBGRID_FIELDS = [
   ['deviation', 0.1, 0],
@@ -363,8 +366,9 @@ export const SUBGRID_FIELDS = [
 export function encodeSubgrid(fields) {
   const C = fields.deviation.length, out = new ArrayBuffer(16 + 2 * C * SUBGRID_FIELDS.length);
   const head = new DataView(out);
-  [83, 71, 79, 49].forEach((b, j) => head.setUint8(j, b));
-  head.setUint32(4, C, true); head.setUint32(8, SUBGRID_FIELDS.length, true);
+  const relax = Number.isInteger(fields.relax) && fields.relax >= 0 ? fields.relax : null;
+  [83, 71, 79, relax === null ? 49 : 50].forEach((b, j) => head.setUint8(j, b));
+  head.setUint32(4, C, true); head.setUint32(8, SUBGRID_FIELDS.length, true); head.setUint32(12, relax ?? 0, true);
   SUBGRID_FIELDS.forEach(([name, scale, offset], f) => {
     const q = new Uint16Array(out, 16 + 2 * C * f, C), values = fields[name];
     for (let i = 0; i < C; i++) q[i] = Math.min(65535, Math.max(0, Math.round((values[i] - offset) / scale)));
@@ -375,10 +379,11 @@ export function encodeSubgrid(fields) {
 export function decodeSubgrid(buffer) {
   const bytes = buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
   const head = new DataView(bytes);
-  if (String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'SGO1') throw new Error('not a subgrid orography file');
+  const magic = String.fromCharCode(...new Uint8Array(bytes, 0, 4));
+  if (magic !== 'SGO1' && magic !== 'SGO2') throw new Error('not a subgrid orography file');
   const C = head.getUint32(4, true), count = head.getUint32(8, true);
   if (count !== SUBGRID_FIELDS.length || bytes.byteLength !== 16 + 2 * C * count) throw new Error('subgrid orography file of the wrong size');
-  const fields = {};
+  const fields = { relax: magic === 'SGO2' ? head.getUint32(12, true) : null };
   SUBGRID_FIELDS.forEach(([name, scale, offset], f) => {
     const q = new Uint16Array(bytes, 16 + 2 * C * f, C);
     fields[name] = Float64Array.from(q, (v) => v * scale + offset);
@@ -426,13 +431,14 @@ const SUBGRID_FALLBACK = {
   off: () => 'the subgrid files are turned off (subgrid false)',
   terrain: () => 'the terrain is off, and the files hold only the scales below the resolved terrain',
   land: (N) => `data/subgrid_N${N}.bin was made for another land mask`,
+  relax: (N, mesh, fields) => `data/subgrid_N${N}.bin was made for the mesh of ${fields.relax} Lloyd passes, not this one of ${mesh.relax}`,
 };
 const fallbackSaid = new Set();
-export function subgridFallbackNote(mesh, reason = 'missing') {
+export function subgridFallbackNote(mesh, reason = 'missing', fields = null) {
   const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
   if (fallbackSaid.has(`${N} ${reason}`)) return;
   fallbackSaid.add(`${N} ${reason}`);
-  console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](N)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);
+  console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](N, mesh, fields)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);
 }
 
 /*
