@@ -226,6 +226,13 @@ the wind −6, −6, −5.5 m/s at 20 m.
 | bl42 + cumulusOvershoot 0 + deck gate 2 K, capping 3 K | −5.10 | −123 | −95 | −61 | −9.3 | −7.8 | −5.6 | 1474 | 12.6 | 14.0 |
 | bl42 + cumulusOvershoot 0 + deck gate 2 K, capping 3 K + maximumEfficiency 0.5 | −4.93 | −116 | −88 | −50 | −9.0 | −7.6 | −5.0 | 1244 | 14.8 | 14.7 |
 | bl42 + cumulusOvershoot 0 + cloudLifetime 3 h (1 h above 700 hPa) | −5.35 | −132 | −93 | −54 | −9.6 | −7.7 | −5.2 | 1186 | 13.8 | 14.3 |
+| bl42 + cumulusOvershoot 0 + autoconversionFloor 'boundaryLayer' | −4.97 | −116 | −85 | −50 | −9.0 | −7.3 | −5.1 | 1179 | 15.5 | 14.3 |
+| bl42 + cumulusOvershoot 0 + autoconversionFloor 'mixingTop' | −5.32 | −137 | −93 | −69 | −9.8 | −7.7 | −5.9 | 1219 | 13.5 | 14.0 |
+| bl42 + cloudTop.cumulusCapped | −4.66 | −127 | −90 | −69 | −9.4 | −7.5 | −5.8 | 1265 | 12.9 | 14.3 |
+| bl42 + cumulusOvershoot 0 + cloudTop.cumulusCapped | −4.33 | −108 | −79 | −44 | −8.6 | −7.1 | −4.6 | 1077 | 15.2 | 15.6 |
+| bl42 + cumulusOvershoot 0 + maximumEfficiency 0.5 + autoconversionFloor 'mixingTop' | −4.79 | −122 | −102 | −65 | −9.2 | −8.1 | −5.6 | 1338 | 13.2 | 14.0 |
+| bl42 + cumulusOvershoot 0 + cloudTop.cumulusCapped + maximumEfficiency 0.5 + autoconversionFloor 'mixingTop' | −4.71 | −124 | −85 | −58 | −9.2 | −7.3 | −5.4 | 1316 | 14.7 | 14.8 |
+| bl42 + cumulusOvershoot 'kinetic' + cloudTop.cumulusCapped | −4.66 | −116 | −87 | −59 | −9.0 | −7.3 | −5.2 | 1165 | 13.7 | 14.7 |
 
 Single states (day 1609 of twelve-day runs) also showed the Gregory
 entrainment law (`plumeEntrainmentLaw: 'gregory'`) at −124 and −130 mN/m²
@@ -347,9 +354,55 @@ Pacific inversion sits in one layer. Over WOA23's sea the 20-day means
   Pacific mixed layer that the moist closure's cloud-top mixing keeps
   about 1 K warmer than the dry closure does.
 
+### 7. The central Pacific's cumulus layer: coupling, overshoot and cloud-top cooling
+
+Where the stress is twice observed (160W–140W, −113 against about −55
+mN/m²), the trade-cumulus layer between 1.4 and 1.9 km is in the moist
+closure's coupled regime in about half the cells, with mixed layers of
+1.05 to 1.1 km: the parcel descending from the stratiform top of the
+cumulus layer reaches the surface-driven layer, so the closure runs its
+K-profile through the whole cumulus layer, carrying heat down its stable
+gradient (−2.7 K/day at 1.4–1.65 km, +2 to +3.4 K/day in the mixed
+layer, 6 to 8 mm/s of entrainment at the top), and the flattened layer
+keeps passing the descent test on the next step. Lock et al.'s regime
+logic keeps a stratocumulus layer above cumulus decoupled from the
+surface; `cloudTop.cumulusCapped` does that (the descent stops at the
+greater of the surface-driven depth and the parcel's cloud base once the
+parcel test has found cumulus). Alone it makes the stress worse
+(−127/−90/−69): the layer at 1.64 km is 0.2 K colder than the base's
+14.5 °C, since the mixing had also been carrying the cloud-top cooling
+down into the mixed layer.
+
+The shallow plume's overshoot sets where that cooling lands. The
+default deposits the whole mass flux in the first non-buoyant layer
+(the plume's detrainment is −4.2 K/day at 1.9 km in the base's budget,
+beside LW −4.0 and the dynamics' +4.8); detraining at the level of
+neutral buoyancy instead (`cumulusOvershoot` 0, with the cap) gives
+−108/−79/−44 and a 1.64 km layer 1.1 K warmer, the best arm so far, but
+the plume's condensate then saturates the 1.64 km layer, which cools by
+13 K/day of LW like a stratocumulus top. `cumulusOvershoot` 'kinetic'
+replaces the fixed share by the reach of the plume's kinetic energy into
+the non-buoyant layer over the layer's depth: the shares are 0.95 to
+0.97 over the warm pool, 0.73 to 0.77 at 180–140W and 0.20 to 0.43 east
+of 140W, so in the central Pacific the plume reaches three quarters of
+the 250 m inversion layer and the arm (−116/−87/−59, −4.66 hPa) sits
+near the full deposit; only the east moves toward the neutral-buoyancy
+result.
+
+Across every arm in sections 4 to 7 the 160W–140W stress has moved by
+at most 5 percent. What cools the inversion layer there is the
+stratiform top of the cumulus layer: 4 to 5 K/day of LW per 250 m layer
+is 40 to 55 W/m² of grid-mean cloud-top cooling, a 30 to 40 percent
+cloud cover at 1.4 to 1.9 km, plus the plume's own detrainment, both
+physical processes whose size is set by the cumulus layer's cloud
+fraction and the lifetime of its detrained condensate. The drizzle and
+efficiency arms (the fog scheme under the mixing top −100, with
+maximumEfficiency 0.5 −96, with the cap as well −89 mN/m² mean) are all
+worse than the cap with neutral-buoyancy detrainment (−77).
+
 ## What remains
 
-The cause is identified to two structures and not yet fixed:
+The cause is identified to three structures and not yet fixed:
 
 1. The free-tropospheric warm column over the central Pacific (finding
    2, part 2): a weak-temperature-gradient violation of 1 to 2 K at 3 to
@@ -382,6 +435,14 @@ The cause is identified to two structures and not yet fixed:
    pool under the recorded winds, closed in the coupled run by the
    Bjerknes loop; it needs no atmospheric change and will follow the
    central Pacific's.
+3. The cumulus-layer top over the central Pacific (finding 7). Its
+   cloud fraction and the lifetime of the detrained condensate set the
+   cloud-top LW cooling that, with the plume's detrainment, holds the
+   1.4 to 1.9 km layer 2 K colder than over the warm pool; compare the
+   cover with observation (about 20 to 30 percent low cloud at
+   160W–140W in August) before touching either, since the drizzle and
+   efficiency arms show that lowering the cooling by other means makes
+   the stress worse.
 
 Until 1 and 2 are fixed, spin-ups that start the ocean from WOA23
 (`OCEAN_START=climatology`) avoid the warm-pool Bjerknes start but will
