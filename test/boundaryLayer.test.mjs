@@ -522,7 +522,7 @@ function cumulusColumns(pair) {
 test('a cumulus-capped column keeps its cloud-top layer decoupled: with cloudTop.cumulusCapped the descending parcel stops at the cumulus base, the surface-driven depth stays the Richardson depth and no mixing crosses the layer between', () => {
   const levels = sigmaInterfaces('bl42');
   const build = (cloudTop) => createModel(new Grid(3), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { cloudTop } });
-  const plain = build({}), capped = build({ cumulusCapped: true });
+  const plain = build({ cumulusCapped: false }), capped = build({});
   const { topLayer, nC, nK } = cumulusColumns(plain);
   cumulusColumns(capped);
   plain.boundaryLayer.diagnose(plain.state);
@@ -546,7 +546,7 @@ test('a cumulus-capped column keeps its cloud-top layer decoupled: with cloudTop
       if (z > base + 1 && z < cloudTop - 1) { inside++; assert.equal(mixed, true, `no cloud-top mixing at ${z.toFixed(0)} m`); }
     }
   }
-  console.log(`${nC} cumulus-capped columns under a stratus: ${coupledPlain} coupled by default, ${decoupledCapped} decoupled with cumulusCapped; ${crossing} interfaces between the surface-driven depth and the decoupling height unmixed, ${inside} inside the cloud-top layer mixed`);
+  console.log(`${nC} cumulus-capped columns under a stratus: ${coupledPlain} coupled without the cap, ${decoupledCapped} decoupled with cumulusCapped; ${crossing} interfaces between the surface-driven depth and the decoupling height unmixed, ${inside} inside the cloud-top layer mixed`);
   assert.equal(coupledPlain, nC);
   assert.equal(decoupledCapped, nC);
   assert.ok(inside > 0);

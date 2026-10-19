@@ -7046,8 +7046,10 @@ branch's ramp from 0.5 to 0.6), below 10⁻⁶ kg/m²/s, and, without
 the plume entrains at `cumulusEntrainment` 2.5·10⁻³ m⁻¹ and detrains at
 `cumulusDetrainment` 3·10⁻³ m⁻¹, buoyant in virtual temperature with
 condensate loading, and ends in its first non-buoyant cloudy layer or
-the last below 700 hPa, `cumulusOvershoot` 1 of the flux entering that
-layer detraining there. s_l and q_t move in flux form, M (X_u − X_above)
+the last below 700 hPa, the reach of the plume's kinetic energy into
+that layer over the layer's depth setting the share of the flux
+entering it that detrains there (`cumulusOvershoot` 'kinetic'; a number
+gives the share). s_l and q_t move in flux form, M (X_u − X_above)
 at each interface, M g Δt/Δp ≤ 1 in every layer, followed by a
 saturation adjustment; no rain unless `cumulusRain` (kg/kg of plume
 condensate). The deep branch acts on tops above 700 hPa only. The
@@ -7683,7 +7685,7 @@ eight64_day0183; under the defaults below it does not):
   400 m of the base of its first saturated layer and below 3 km, and
   lies above the Richardson depth (Lock et al. 2000's parcel test for a
   stratocumulus-capped layer; a parcel that rises further is cumulus and
-  keeps the Richardson depth; with `cloudTop.cumulusCapped`, off by
+  keeps the Richardson depth; with `cloudTop.cumulusCapped`, on by
   default, such a cumulus-capped column never couples a cloud-top layer
   lying wholly above that depth and above the parcel's cloud base to the
   surface: the descending parcel stops at the higher of the two and the

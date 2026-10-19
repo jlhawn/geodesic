@@ -2274,7 +2274,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     let level = IN[S_TH + idx] - LHEAT * IN[S_QC + idx] / (CP * D[D_EXM + idx]) - CT_PERT; let total = IN[S_Q + idx] + IN[S_QC + idx];
     cloudTopZ = blInterface(top - 1, i, zb);
     let floor = select(-1.0, max(surfaceDepth, cumulusBase), cumulusBase >= 0.0);
-    let capped = floor >= 0.0 && blInterface(top, i, zb) >= floor;
+    let capped = floor >= 0.0 && top < bottom && blInterface(top, i, zb) >= floor;
     var k = top + 1;
     loop {
       if (k > bottom) { break; }

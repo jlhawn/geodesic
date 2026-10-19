@@ -1504,7 +1504,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ plumeMomentum: true, downdraftShare: 0 }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });
   await parity({ autoconversionFloor: 'mixingTop' });
-  await parity({ cumulusOvershoot: 'kinetic' });
+  await parity({ cumulusOvershoot: 1 });
   await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, virtualBuoyancy: false });
   await parity({ condensation: 'saturation', iceSaturation: false, iceFall: null });
   await parity({ iceNucleation: true, iceFall: 3.29 });
@@ -1578,7 +1578,7 @@ test("with cumulusOvershoot 'kinetic' the plume's reach into its first non-buoya
     assert.ok(Math.abs(after.water - before.water) < 1e-12 * before.water, `water ${before.water} → ${after.water}`);
     return { share: moist.cumulus.overshoot, top, topWater: q[top * C] + qc[top * C] - snap.q[top] - snap.qc[top], belowWater: q[(top + 1) * C] + qc[(top + 1) * C] - snap.q[top + 1] - snap.qc[top + 1] };
   };
-  const full = run({}, 0), kinetic = run({ cumulusOvershoot: 'kinetic' }, 0), stronger = run({ cumulusOvershoot: 'kinetic' }, 4);
+  const full = run({ cumulusOvershoot: 1 }, 0), kinetic = run({}, 0), stronger = run({}, 4);
   console.log(`kinetic overshoot: share ${kinetic.share.toFixed(3)} into layer ${kinetic.top} (the full overshoot's share ${full.share}); with the inversion 4 K stronger ${stronger.share.toFixed(3)}; the top layer's moistening ${kinetic.topWater.toExponential(3)} against ${full.topWater.toExponential(3)}, the layer below's ${kinetic.belowWater.toExponential(3)} against ${full.belowWater.toExponential(3)}`);
   assert.equal(full.share, 1);
   assert.ok(kinetic.share > 0 && kinetic.share < 1, `share ${kinetic.share}`);

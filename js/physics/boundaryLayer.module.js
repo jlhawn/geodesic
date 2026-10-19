@@ -106,7 +106,7 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  *    stratocumulus-capped layer, whose turbulence reaches its inversion
  *    (Lock et al.'s parcel test); a parcel that rises further is cumulus,
  *    left to the plume, and its column keeps the Richardson depth. With
- *    cloudTop.cumulusCapped such a column never couples a cloud-top
+ *    cloudTop.cumulusCapped (the default) such a column never couples a cloud-top
  *    layer lying wholly above that depth and above the parcel's cloud
  *    base to the surface: the descending parcel stops at the higher of
  *    the two and the cumulus layer between is the plume's alone (Lock
@@ -156,7 +156,7 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * the mixing top.
  */
 export const ENTRAINMENT_DEFAULTS = { efficiency: 0.2, shear: 5, cap: 0.05, jumpFloor: 0.015, shearOnset: 5e-5, evaporativeEnhancement: 25, maximumEfficiency: 1, taper: false, jumpLayers: 2, subsidence: false };
-export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, perturbation: 0.2, profile: 0.85, excess: 8.5, tolerance: 0.5, cumulusDepth: 400, cumulusCapped: false };
+export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, perturbation: 0.2, profile: 0.85, excess: 8.5, tolerance: 0.5, cumulusDepth: 400, cumulusCapped: true };
 export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 
 export function createBoundaryLayer(mesh, core, {
@@ -388,7 +388,7 @@ export function createBoundaryLayer(mesh, core, {
     if (top >= 0) {
       const idx = top * C + i, level = theta[idx] - latentHeat * qc[idx] / (cp * exnerLayer[idx]) - perturbation, total = q[idx] + qc[idx];
       cloudTopZ = interfaceZ(top - 1);
-      const floor = cumulusBase >= 0 ? Math.max(surfaceDepth, cumulusBase) : -1, capped = floor >= 0 && interfaceZ(top) >= floor;
+      const floor = cumulusBase >= 0 ? Math.max(surfaceDepth, cumulusBase) : -1, capped = floor >= 0 && top < bottom && interfaceZ(top) >= floor;
       let k = top + 1;
       while (k <= bottom && parcelVirtual(level, total, k, i, pi) < thetaV[k * C + i] && !(capped && (k === bottom || interfaceZ(k) < floor))) k++;
       lowest = k - 1;

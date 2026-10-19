@@ -192,13 +192,14 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * Its inhibition is the negative buoyant energy from the source's top to
  * the first layer where it is saturated; from there on the plume ends in
  * the first layer where it is not buoyant, or in the last layer below
- * `shallowTop`, and detrains all it carries there, `cumulusOvershoot` of
- * the mass flux entering that layer and the rest in the layer below;
- * with `cumulusOvershoot` 'kinetic' that share is the reach of the
- * plume's kinetic energy into the layer over the layer's depth, w²
+ * `shallowTop`, and detrains all it carries there, a share of the mass
+ * flux entering that layer in it and the rest in the layer below. With
+ * `cumulusOvershoot` 'kinetic' (the default) that share is the reach of
+ * the plume's kinetic energy into the layer over the layer's depth, w²
  * carried from `plumeVelocity`² at its first cloudy layer by the deep
  * plume's law (`plumeAcceleration` a, `plumeDrag` b: dw²/dz = 2 a B −
- * 2 b ε w²) and spent against the layer's negative buoyancy. The
+ * 2 b ε w²) and spent against the layer's negative buoyancy; a number
+ * gives the share directly. The
  * base mass flux is ρ_LCL c w exp(−inhibition / w²), c the
  * `cumulusClosure`, w the larger of (B₀ h)^⅓ and `cumulusFriction` u*,
  * B₀ the boundary layer's surface buoyancy flux and h its depth above the
@@ -468,7 +469,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * fogDroplets [150, 60] /cm³, fogDeposition 1, fogDepositionLimit 0.25 m/s, rainEvaporation 1,
  * cumulusClosure 0.03 (Grant 2001), cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
  * 3e-3 /m, cumulusSourceDepth 50 hPa, cumulusBoundaryLoss 0.1,
- * cumulusFriction 1, cumulusOvershoot 1, cumulusUpdraft 1 m/s, cumulusMemory
+ * cumulusFriction 1, cumulusOvershoot 'kinetic', cumulusUpdraft 1 m/s, cumulusMemory
  * 1800 s, no cumulusRain, cumulusSource 'mean' (or 'lowest': the plume leaves with
  * the lowest layer's air), plumeClosure 'separate',
  * plumeCapeParcel 'plume', plumeSource 'mean', plumeVelocity 1 m/s,
@@ -487,7 +488,7 @@ export const MOIST_DEFAULTS = {
   autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
   deckVeto: true, coupledVeto: false, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
-  cumulusFriction: 1, cumulusOvershoot: 1, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
+  cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', excessVelocity: 'surfaceLayer', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainmentLaw: 'ifs', plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, plumePhase: 'mixed', plumeConversion: 'sundqvist', convectionType: 'testParcel', downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: true, plumeConsumption: 'all',
   condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
