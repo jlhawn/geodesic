@@ -588,7 +588,7 @@ three arrays (`createRK4Arrays`).
   a layer is split: M21), so cam26 and bl34 exchange their layers above
   2.4 km unchanged; a spin-up seeded from a state on the other grid
   carries its atmosphere across with it. The page starts a run from
-  nothing (`climate.html?from=none`) on bl36; a run started from a saved
+  nothing (`climate.html?from=none`) on bl42; a run started from a saved
   state is on that state's grid.
 - **A required closure on θ.** Without any θ dissipation the A-grid
   set's thin top layers (Δσ ≈ 0.0008 above ~2 hPa) went unstable from
@@ -5954,7 +5954,7 @@ The work, in order:
      94 m/s, Courant 0.25 / 0.30, day 2 ASR 201.4, OLR 213.6, albedo 0.408.
    - Defaults for new runs. `scripts/spinup.mjs` starts a fresh run on
      bl36 (`LEVELS` was cam26 by default) and the page's fresh start
-     (`from=none`) on bl36; a run continues on its snapshot's grid, the
+     (`from=none`) on bl42; a run continues on its snapshot's grid, the
      page loads whatever levels a saved state carries, bl34 stays
      selectable (`LEVELS=bl34`) and its states load and remap as before
      (`test/levels.test.mjs`). A paired spin-up runs on bl36 when it
