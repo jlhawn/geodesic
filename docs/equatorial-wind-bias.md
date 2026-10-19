@@ -218,6 +218,9 @@ the wind −6, −6, −5.5 m/s at 20 m.
 | plumeMomentum off | −5.01 | −130 | −108 | −80 | −9.5 | −8.4 | −6.5 | 1695 | 13.0 | 12.8 |
 | entrainment.subsidence on | −4.60 | −122 | −101 | −70 | −9.2 | −8.0 | −5.9 | 1871 | 12.9 | 12.2 |
 | cloudTop 1000 m + prognosticHeight off | −4.35 | −106 | −85 | −61 | −8.6 | −7.3 | −5.4 | 733 | 13.4 | 13.0 |
+| bl42 levels (the inversion resolved) | −4.45 | −113 | −90 | −68 | −8.9 | −7.5 | −5.8 | 1472 | 12.6 | 14.5 |
+| bl42 + maximumEfficiency 0.5 (boundary layer and deck) | −4.84 | −128 | −93 | −70 | −9.4 | −7.6 | −5.8 | 1251 | 13.7 | 14.0 |
+| bl42 + turbulence 'dry' | −3.70 | −87 | −67 | −56 | −7.7 | −6.5 | −5.3 | 1967 | 12.4 | 13.4 |
 
 Single states (day 1609 of twelve-day runs) also showed the Gregory
 entrainment law (`plumeEntrainmentLaw: 'gregory'`) at −124 and −130 mN/m²
@@ -280,6 +283,65 @@ lever is what cools the inversion layer, the plumes' detrainment and
 the longwave, together with the vertical transport across both of the
 inversion layer's interfaces.
 
+### 6. Resolving the inversion: the bl42 arms
+
+bl42 (`sigmaInterfaces('bl42')`, `LEVELS=bl42`) cuts bl36's four layers
+between 1.2 and 4.7 km into ten of 237 to 641 m, so that the east
+Pacific inversion sits in one layer. Over WOA23's sea the 20-day means
+(the three bl42 rows above) say:
+
+- The structure is right where bl36's was not. At 120W–100W the
+  inversion is a 2.5 K jump between 1.62 and 2.17 km (RH 0.87 to 0.43)
+  where bl36 smeared it from 1.5 to 3 km, and the lapse above it is 5 to
+  6 K/km where bl36's 2.1–3.1 km layer was nearly isothermal. The 1–3 km
+  share of the SLP difference falls from 2.21 to 1.66 hPa.
+- The bias does not move. The cloud layer still tops at 1.7 km with
+  12.2–12.9 °C at 1.4–1.6 km (moist-adiabatic from the 0.8 km mixed-layer
+  top), the 3–5 km share rises from 0.40 to 0.74 hPa, and the stress mean
+  is −90 against −87 mN/m².
+- The deck's gate (minimumInversion 4 K, on the jump between the slab and
+  the first layer above h) opens in 0.17–0.29 of the east cells against
+  0.5 on bl36, so on bl42 the east's structure is the plumes' and the
+  resolved condensation's. The metric "share of cells with cumulus cover
+  above 0.01" is a threshold artifact: the shallow cover is about 1
+  percent on both grids.
+- The resolved column's heat budget (day 1617, cold tongue 3S–3N
+  140W–100W, K/day): in the inversion layer at 1.9 km dynamics +6.0,
+  longwave −3.3, shallow plumes −1.7, boundary-layer exchange −0.7; at
+  the cloud top at 1.6 km dynamics +5.6, longwave −2.7, shallow plumes
+  −2.7, boundary layer −0.5, condensation +0.3. The plumes' detrainment,
+  not the boundary layer's exchange, is the largest non-radiative sink
+  holding the cloud top at 1.7 km. Their base flux is Grant's closure
+  value (15–22 g/m²/s over the cold tongue, where the surface buoyancy
+  flux is 2–4·10⁻⁴ m²/s³ from the latent flux's virtual effect under
+  8–9 m/s of wind; the friction-velocity term never sets it), so the
+  plumes are as designed; whether cumulus of that strength exist under
+  the cold tongue's stratus is the open question.
+- Above the inversion the east cools. At 2.5–3.5 km the longwave takes
+  2.8–2.9 K/day against 1.8–2.0 K/day of subsidence warming at this
+  snapshot (the box at 170W–140W balances at 2.0–2.6), and in the means
+  the column at 120W–100W is 1.2 K colder than the central Pacific at
+  3 km and 1.35 K at 4 km (bl36: 0.96 and 0.84), a weak-temperature-
+  gradient violation worth about 1 hPa of the difference.
+- maximumEfficiency 0.5 in both the boundary layer and the deck (the
+  DYCOMS-II value of the Nicholls–Turton efficiency; the default formula
+  saturates at its cap of 1 nearly everywhere, which is why no earlier
+  efficiency arm changed the entrainment): the inversion comes down
+  250 m (14.0 °C at 1.6 km) and the 1–2 km share falls to 1.23 hPa, but
+  the air above it cools further (2.1 K colder than the central Pacific
+  at 3 km), the 2–5 km share rises to 1.36 hPa and the stress mean to
+  −97 mN/m². Lowering the inversion alone moves the cold bias up, not
+  away.
+- turbulence 'dry' on bl42: −3.70 hPa and −70 mN/m² (−22 percent, the
+  best so far, still 1.4 times observed), but through the central
+  Pacific: without the cloud-top-driven mixing the 180–160W mixed layer
+  is 0.9 K cooler and moister (RH 0.83 against 0.75 at 440 m) and the
+  0–1 km share falls 0.42 hPa, while the east's inversion rises to
+  1.9–2.2 km. On bl42 the trade bias therefore has two parts: the east's
+  deep cold cloud layer with the cold column above it, and a central
+  Pacific mixed layer that the moist closure's cloud-top mixing keeps
+  about 1 K warmer than the dry closure does.
+
 ## What remains
 
 The cause is identified to two structures and not yet fixed:
@@ -293,25 +355,24 @@ The cause is identified to two structures and not yet fixed:
    closure's timescale (`BECHTOLD`, α_x = 1.8 at N=128) and the deep
    plume's entrainment are the candidate levers, and the Gregory arm shows
    the stress follows the deep convection's vigor.
-2. The inversion over the cold tongue (finding 2, part 1): 200 to 400 m
-   too high and smeared over a 600 m layer. The deck's ceiling rule
-   (radiation.module.js `inversionLayer`: the ceiling 1 m below the
-   midpoint of the layer above the inversion interface) lets the deck
-   and the boundary layer's mixing stand half a layer above the
-   inversion; a ceiling at the interface itself, and a finer vertical
-   grid between 1.5 and 3 km, are the candidates. The deck's height alone
-   is not the lever (`noprog`): the layer stays cold with the deck at
-   0.75 km, so the smearing is the moist physics' (the shallow plume,
-   the resolved cloud and its longwave cooling) on a 600 m layer.
-   Finding 5's budget puts the inversion layer's loss two thirds in
-   the longwave and a quarter in the plumes' detrainment, and passing
-   the subsidence's share of the transport to the mixed layer
-   (`entrainment.subsidence`) warms the mixed layer and lifts the deck
-   instead. The candidates are a plume that stops at the deck's
-   inversion where the deck runs, and an upwind-biased vertical
-   transport across the inversion layer's two interfaces in the core
-   (both engines, with the conservation rows), judged together on the
-   20-day means.
+2. The inversion over the cold tongue (finding 2, part 1). On bl42
+   (finding 6) it is resolved as a 2.5 K jump but still sits at 1.7 km,
+   about 0.5 km too high, over a cloud layer that is 3 K too cold at
+   1.5 km, and the column above it is 1 to 2 K colder than the central
+   Pacific. The deck's height is not the lever (`noprog`), nor the
+   boundary layer's exchange (`entrainment.subsidence` warms the mixed
+   layer and lifts the deck; maximumEfficiency 0.5 lowers the inversion
+   and strengthens the trades), nor the grid alone. What holds the cloud
+   top is the shallow plumes' detrainment into the inversion layer
+   (−1.7 to −2.7 K/day on bl42, with base fluxes at Grant's closure
+   value) and the longwave above it; the candidates are the plume's
+   overshoot into the layer above its last buoyant one (`cumulusOvershoot`,
+   1: a full layer on bl42 is 250 m), the resolved cloud's cover over the
+   cold tongue against ISCCP (the column above an overcast deck cools
+   0.8 K/day faster than the central Pacific's), and the moist closure's
+   cloud-top mixing over the central Pacific, which keeps that mixed
+   layer about 1 K warmer than the dry closure (turbulence 'dry' on bl42:
+   −22 percent of stress). Judge each on the 20-day means on bl42.
 3. The warm pool's part of the coupled bias is the ocean's cold warm
    pool under the recorded winds, closed in the coupled run by the
    Bjerknes loop; it needs no atmospheric change and will follow the
