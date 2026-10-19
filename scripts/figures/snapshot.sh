@@ -1,7 +1,7 @@
 #!/bin/bash
-# The four report figures of one saved state, one after another, each dump
-# run under the GPU lock: the state maps, the equatorial section, the
-# equatorial panels and the mixed-layer deck, as
+# The five report figures of one saved state, one after another, each dump
+# run under the GPU lock: the state maps, the ocean panels, the equatorial
+# section, the equatorial panels and the mixed-layer deck, as
 # <outdir>/<tag>_<figure>_dayNNNN.png with the dump's JSON and both
 # steps' output beside it in .json and .log. Prints each figure's path and
 # wall time, the deck's night-side LWP check and its area and box
@@ -32,7 +32,7 @@ DAY=$(node -e 'const b=require("fs").readFileSync(process.argv[1]);if(b.toString
 [ -z "$DAY" ] && DAY=$(echo "$NAME" | sed -nE 's/.*_day([0-9]+).*/\1/p')
 [ -z "$DAY" ] && DAY=0000
 failed=0
-for FIGURE in stateMaps eqsection eqpanels mlmdeck; do
+for FIGURE in stateMaps oceanPanels eqsection eqpanels mlmdeck; do
   BASE="$OUT/${TAG}_${FIGURE}_day$DAY"
   rm -f "$BASE.json" "$BASE.log" "$BASE.png"
   start=$(date +%s)
@@ -44,5 +44,6 @@ for FIGURE in stateMaps eqsection eqpanels mlmdeck; do
   fi
   echo "$BASE.png ($(( $(date +%s) - start )) s)"
   [ "$FIGURE" = mlmdeck ] && grep -E '^(deck:|deck boxes:|night LWP)' "$BASE.log"
+  [ "$FIGURE" = oceanPanels ] && grep -E '^ocean:' "$BASE.log"
 done
 exit $failed
