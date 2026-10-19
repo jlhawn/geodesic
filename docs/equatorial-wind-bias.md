@@ -221,6 +221,11 @@ the wind −6, −6, −5.5 m/s at 20 m.
 | bl42 levels (the inversion resolved) | −4.45 | −113 | −90 | −68 | −8.9 | −7.5 | −5.8 | 1472 | 12.6 | 14.5 |
 | bl42 + maximumEfficiency 0.5 (boundary layer and deck) | −4.84 | −128 | −93 | −70 | −9.4 | −7.6 | −5.8 | 1251 | 13.7 | 14.0 |
 | bl42 + turbulence 'dry' | −3.70 | −87 | −67 | −56 | −7.7 | −6.5 | −5.3 | 1967 | 12.4 | 13.4 |
+| bl42 + cumulusOvershoot 0 | −4.85 | −113 | −83 | −44 | −8.9 | −7.3 | −4.5 | 957 | 15.1 | 14.4 |
+| bl42 + cumulusOvershoot 0.5 | −4.63 | −123 | −87 | −68 | −9.2 | −7.3 | −5.7 | 1098 | 13.4 | 14.0 |
+| bl42 + cumulusOvershoot 0 + deck gate 2 K, capping 3 K | −5.10 | −123 | −95 | −61 | −9.3 | −7.8 | −5.6 | 1474 | 12.6 | 14.0 |
+| bl42 + cumulusOvershoot 0 + deck gate 2 K, capping 3 K + maximumEfficiency 0.5 | −4.93 | −116 | −88 | −50 | −9.0 | −7.6 | −5.0 | 1244 | 14.8 | 14.7 |
+| bl42 + cumulusOvershoot 0 + cloudLifetime 3 h (1 h above 700 hPa) | −5.35 | −132 | −93 | −54 | −9.6 | −7.7 | −5.2 | 1186 | 13.8 | 14.3 |
 
 Single states (day 1609 of twelve-day runs) also showed the Gregory
 entrainment law (`plumeEntrainmentLaw: 'gregory'`) at −124 and −130 mN/m²

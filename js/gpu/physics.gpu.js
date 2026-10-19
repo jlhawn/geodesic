@@ -115,7 +115,7 @@ export function physicsConstants(o) {
   if (o.capeClosure !== 'bechtold' && o.capeClosure !== 'threshold') throw new Error(`capeClosure must be 'bechtold' or 'threshold', not ${o.capeClosure}`);
   if (o.pcapeBoundary !== 'positive' && o.pcapeBoundary !== 'signed') throw new Error(`pcapeBoundary must be 'positive' or 'signed', not ${o.pcapeBoundary}`);
   if (o.condensation !== 'uniform' && o.condensation !== 'saturation') throw new Error(`condensation must be 'uniform' or 'saturation', not ${o.condensation}`);
-  if (o.autoconversionFloor !== 'lowest' && o.autoconversionFloor !== 'boundaryLayer' && o.autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer' or 'none', not ${o.autoconversionFloor}`);
+  if (o.autoconversionFloor !== 'lowest' && o.autoconversionFloor !== 'boundaryLayer' && o.autoconversionFloor !== 'mixingTop' && o.autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer', 'mixingTop' or 'none', not ${o.autoconversionFloor}`);
   if (o.fogDroplets !== null && !(Array.isArray(o.fogDroplets) && o.fogDroplets.length === 2 && o.fogDroplets.every((n) => Number.isFinite(n) && n > 0))) throw new Error(`fogDroplets must be null or [continental, sea] droplet numbers above 0 per cm³, not ${JSON.stringify(o.fogDroplets)}`);
   if (!(Number.isFinite(o.fogDeposition) && o.fogDeposition >= 0)) throw new Error(`fogDeposition must be an efficiency of 0 or more, not ${o.fogDeposition}`);
   if (!(Number.isFinite(o.fogDepositionLimit) && o.fogDepositionLimit > 0)) throw new Error(`fogDepositionLimit must be a speed above 0 in m/s, not ${o.fogDepositionLimit}`);
@@ -179,7 +179,7 @@ const UNIFORM: bool = ${o.condensation === 'uniform'}; const BL_UNIFORM: bool = 
 const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 0}; const FALL_EXP: f32 = ${o.iceFallExponent};
 const FOG: bool = ${o.fogDroplets !== null}; const FOG_SETTLE_LAND: f32 = ${fog.settleLand}; const FOG_SETTLE_SEA: f32 = ${fog.settleSea}; const FOG_KK_LAND: f32 = ${fog.drizzleLand}; const FOG_KK_SEA: f32 = ${fog.drizzleSea}; const FOG_THIRDS: f32 = 0.6666666666666666;
 const FOG_DEP: bool = ${o.fogDeposition > 0 && o.surfaceExchange === 'roughness' && !!o.implicitDrag}; const FOG_E: f32 = ${o.fogDeposition}; const FOG_VMAX: f32 = ${o.fogDepositionLimit};
-const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
+const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const AUTO_MIX: bool = ${o.autoconversionFloor === 'mixingTop'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
 const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
 const DECK_OPEN: f32 = ${DECK_OPEN}; const DECK_CLOSED: f32 = ${DECK_CLOSED}; const PARCEL_VIRT: f32 = ${o.virtualBuoyancy === false ? 0 : 'VIRT'};
 const CU_FLOOR: f32 = ${CUMULUS_FLOOR}; const CU_K0: i32 = ${o.cumulusK0 ?? 0}; const CU_C: f32 = ${o.cumulusClosure}; const CU_EPS: f32 = ${o.cumulusEntrainment}; const CU_DEL: f32 = ${o.cumulusDetrainment}; const CU_SOURCE: f32 = ${o.cumulusSourceDepth}; const CU_LOSS: f32 = ${o.cumulusBoundaryLoss};
@@ -2405,7 +2405,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
   let produced = PH[PH_CURAIN + i]; let deep = PH[PH_CUDEEP + i] > 0.0; let plumeBase = i32(PH[PH_CUBASE + i]);
   // autoconversion, and the rain evaporating as it falls
   var rained = 0.0; var convective = 0.0; var descending = 0.0; var moved = false; var frozen = 0.0; var settling = 0.0; var fogged = 0.0;
-  let floor = PH[PH_DEPTH + i];
+  let floor = select(PH[PH_DEPTH + i], PH[PH_MIXTOP + i], AUTO_MIX && MOIST_BL);
   let iceConc = PH[PH_CONC + i]; let iced = select(0.0, select(iceConc, 1.0, iceConc <= 0.0), IN[S_ICE + i] > 0.0);
   for (var k = 0; k < K; k++) {
     let idx = k * C + i;
@@ -2484,7 +2484,7 @@ fn blMoist(i: i32, pi: f32, richardsonDepth: f32, zb: f32, buoyancy: f32, fricti
     let qc = IN[S_QC + idx];
     if (!(qc > 0.0)) { continue; }
     var floored = false;
-    if (AUTO_NONE) { } else if (AUTO_BL) { floored = k > 0 && upperInterface(i, k) < floor; } else { floored = k >= K - 2; }
+    if (AUTO_NONE) { } else if (AUTO_BL || AUTO_MIX) { floored = k > 0 && upperInterface(i, k) < floor; } else { floored = k >= K - 2; }
     if (floored) {
       if ((FOG || (FOG_DEP && k == K - 1)) && liquid > 0.0) {
         let temperature = IN[S_TH + idx] * D[D_EXM + idx]; let pressure = pi * LV[L_SM + k];

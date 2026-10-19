@@ -309,7 +309,7 @@ test('without the fog scheme autoconversion stays out of the lowest two layers, 
   assert.ok(qcl[(KL - 1) * CL] === 2e-3 && qcl[(KL - 2) * CL] === 2e-3);
   qcl[(KL - 3) * CL] = 2e-3;
   assert.ok(lowest.moist.autoconvertColumn(0, pl, tl, ql, qcl, 600) > 0 || qcl[(KL - 3) * CL] < 2e-3, 'the third layer converts');
-  assert.throws(() => build({ autoconversionFloor: 'surface' }), /'lowest', 'boundaryLayer' or 'none'/);
+  assert.throws(() => build({ autoconversionFloor: 'surface' }), /'lowest', 'boundaryLayer', 'mixingTop' or 'none'/);
   const model = build({ autoconversionFloor: 'boundaryLayer', ...off }), { moist } = model, [pi, theta, , , q, qc] = model.state;
   const { K, C, geopotential, g } = model.core.diagnostics;
   jordanColumn(model, 0);
@@ -398,6 +398,34 @@ test('with autoconversionFloor boundaryLayer the fog scheme settles cloud down t
   for (let k = top; k < K; k++) assert.ok(now.qc[k] > 0 && now.qc[k] < was.qc[k] + 2e-3, `layer ${k}: ${now.qc[k]}`);
   assert.ok(rain > 0 && Math.abs(after.water + rain - before.water) <= 1e-15 * before.water);
   assert.ok(moist.falling.fog > 0 && moist.falling.fog < rain);
+});
+
+test('with autoconversionFloor mixingTop the cloud between the boundary-layer depth and the mixing top is floored too, settling and drizzling instead of converting over the lifetime, and the layers above the mixing top are left alone', () => {
+  const dt = 600, run = (floor) => {
+    const model = build({ autoconversionFloor: floor }), { moist } = model, [pi, theta, , , q, qc] = model.state;
+    const { K, C, geopotential, g, exnerLayer, sigmaMid } = model.core.diagnostics;
+    jordanColumn(model, 0);
+    setDepth(model, 0, 700);
+    model.boundaryLayer.mixingTop[0] = model.boundaryLayer.depth[0] + 600;
+    model.boundaryLayer.surfaceDrag.fill(0);
+    const height = (k) => geopotential[k * C] / g - geopotential[(K - 1) * C] / g;
+    for (let k = 0; k < K; k++) { q[k * C] = 0.5 * saturationHumidity(theta[k * C] * exnerLayer[k * C], pi[0] * sigmaMid[k]); qc[k * C] = height(k) < 1500 ? 2e-4 : 0; }
+    const was = snapshot(model, 0);
+    moist.autoconvertColumn(0, pi, theta, q, qc, dt);
+    return { was, now: snapshot(model, 0), height, K };
+  };
+  const mixed = run('mixingTop'), layer = run('boundaryLayer'), lifetime = 1 - Math.exp(-dt / 3600);
+  let checked = 0;
+  for (let k = 0; k < mixed.K; k++) {
+    const z = mixed.height(k);
+    if (z > 1500) { assert.equal(mixed.now.qc[k], mixed.was.qc[k], `layer ${k} above the mixing top changed`); continue; }
+    if (z > 750 && z < 1200) {
+      checked++;
+      assert.ok(layer.was.qc[k] - layer.now.qc[k] > 0.9 * lifetime * layer.was.qc[k], `boundaryLayer: layer ${k} converts over the lifetime`);
+      assert.ok(mixed.now.qc[k] > 0 && mixed.was.qc[k] - mixed.now.qc[k] < 0.5 * lifetime * mixed.was.qc[k], `mixingTop: layer ${k} keeps its cloud but for settling and drizzle (${mixed.was.qc[k]} to ${mixed.now.qc[k]})`);
+    }
+  }
+  assert.ok(checked >= 2, `${checked} layers between the depth and the mixing top`);
 });
 
 test('fog settles implicitly and conservatively: a floored layer keeps 1/(1 + c) of its liquid, at the mass-weighted Stokes speed of a gamma distribution, never emptying a layer it feeds, with moist enthalpy exact, and only from the liquid share while ice falls', () => {
@@ -1475,6 +1503,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ plumeMomentum: true }, { momentum: true });
   await parity({ plumeMomentum: true, downdraftShare: 0 }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });
+  await parity({ autoconversionFloor: 'mixingTop' });
   await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, virtualBuoyancy: false });
   await parity({ condensation: 'saturation', iceSaturation: false, iceFall: null });
   await parity({ iceNucleation: true, iceFall: 3.29 });

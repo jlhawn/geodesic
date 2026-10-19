@@ -411,10 +411,12 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * 1 below the mixing top of a coupled column, 0 below that of a
  * surface-driven, decoupled or stable one and the radiation's EIS share
  * (`stratiform`) above it. Every layer converts except the floored
- * ones: the lowest two (`autoconversionFloor` 'lowest') or those wholly
+ * ones: the lowest two (`autoconversionFloor` 'lowest'), those wholly
  * below the boundary-layer top ('boundaryLayer'; the lowest two without
- * a boundary layer). Their cloud is fog, and its liquid leaves by the
- * fog scheme instead. It settles at the mass-weighted Stokes speed of a
+ * a boundary layer) or those wholly below its mixing top ('mixingTop':
+ * the stratocumulus and the cumulus cloud of the moist boundary layer,
+ * its top under the dry closure). Their cloud is fog, and its liquid
+ * leaves by the fog scheme instead. It settles at the mass-weighted Stokes speed of a
  * gamma distribution of shape 8 (the Morrison–Gettelman form, as the
  * UM settles fog, Wilkinson et al. 2013), v_s = S_N (ρ l)^(2/3) with
  * S_N = 7.32e5 (N·1e6)^(−2/3) for N droplets per cm³ (`fogDroplets`,
@@ -531,7 +533,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const undilute = plumeCapeParcel === 'undilute';
   if (typeof cumulusMemory !== 'number' || !(cumulusMemory >= 0 && cumulusMemory < Infinity)) throw new Error(`cumulusMemory must be a time in seconds, 0 or more, not ${cumulusMemory}`);
   if (cumulusSource !== 'mean' && cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${cumulusSource}`);
-  if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer' or 'none', not ${autoconversionFloor}`);
+  if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'mixingTop' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer', 'mixingTop' or 'none', not ${autoconversionFloor}`);
   if (fogDroplets !== null && !(Array.isArray(fogDroplets) && fogDroplets.length === 2 && fogDroplets.every((n) => Number.isFinite(n) && n > 0))) throw new Error(`fogDroplets must be null or [continental, sea] droplet numbers above 0 per cm³, not ${JSON.stringify(fogDroplets)}`);
   if (!(Number.isFinite(fogDeposition) && fogDeposition >= 0)) throw new Error(`fogDeposition must be an efficiency of 0 or more, not ${fogDeposition}`);
   if (!(Number.isFinite(fogDepositionLimit) && fogDepositionLimit > 0)) throw new Error(`fogDepositionLimit must be a speed above 0 in m/s, not ${fogDepositionLimit}`);
@@ -653,7 +655,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   function autoconvertColumn(i, pi, theta, q, qc, dt, stream = null, iced = 0, frozenStream = null) {
     let rain = 0, convective = 0, streamed = 0, descending = 0, frozen = 0, settling = 0, fog = 0;
     falling.moved = false;
-    const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : null;
+    const floor = autoconversionFloor === 'boundaryLayer' && boundaryDepth ? boundaryDepth[i] : autoconversionFloor === 'mixingTop' && (boundaryTop ?? boundaryDepth) ? (boundaryTop ?? boundaryDepth)[i] : null;
     if (trace.convection) downdraftCooling.fill(0);
     for (let k = 0; k < K; k++) {
       const idx = k * C + i;
