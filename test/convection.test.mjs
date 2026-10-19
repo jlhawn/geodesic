@@ -1504,6 +1504,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ plumeMomentum: true, downdraftShare: 0 }, { momentum: true });
   await parity({ autoconversionFloor: 'boundaryLayer' });
   await parity({ autoconversionFloor: 'mixingTop' });
+  await parity({ cumulusOvershoot: 'kinetic' });
   await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, virtualBuoyancy: false });
   await parity({ condensation: 'saturation', iceSaturation: false, iceFall: null });
   await parity({ iceNucleation: true, iceFall: 3.29 });
@@ -1555,4 +1556,34 @@ test('the retired Betts–Miller options are refused on both engines', async () 
   const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
   const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
   assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, convection: 'bettsMiller' }), /retired Betts–Miller/);
+});
+
+test("with cumulusOvershoot 'kinetic' the plume's reach into its first non-buoyant layer sets the share it detrains there: a share within (0, 1) for the trade-wind inversion that falls as the inversion strengthens, the layer below taking the rest, and the budgets stay exact", () => {
+  const column = (options, jump) => {
+    const model = build(options);
+    place(model, 0, 101500, (z, p) => { const air = tradeWind(z, p); return z >= 1300 ? { T: air.T + jump, q: air.q } : air; });
+    setDepth(model, 0, 600);
+    model.boundaryLayer.buoyancyFlux[0] = 4e-4;
+    model.boundaryLayer.friction[0] = 0.25;
+    model.radiation.mlmGate[0] = 0.3;
+    return model;
+  };
+  const run = (options, jump) => {
+    const model = column(options, jump), { moist } = model, [pi, theta, , , q, qc] = model.state;
+    const before = budget(model, 0), snap = snapshot(model, 0);
+    moist.cumulusColumn(0, pi, theta, q, qc, 600);
+    const after = budget(model, 0), { top } = moist.cumulus, C = model.core.diagnostics.C;
+    assert.ok(top > 0 && moist.cumulusBaseFlux[0] > 0, `a plume topping in layer ${top}`);
+    assert.ok(Math.abs(after.enthalpy - before.enthalpy) < 1e-12 * before.enthalpy, `enthalpy ${before.enthalpy} → ${after.enthalpy}`);
+    assert.ok(Math.abs(after.water - before.water) < 1e-12 * before.water, `water ${before.water} → ${after.water}`);
+    return { share: moist.cumulus.overshoot, top, topWater: q[top * C] + qc[top * C] - snap.q[top] - snap.qc[top], belowWater: q[(top + 1) * C] + qc[(top + 1) * C] - snap.q[top + 1] - snap.qc[top + 1] };
+  };
+  const full = run({}, 0), kinetic = run({ cumulusOvershoot: 'kinetic' }, 0), stronger = run({ cumulusOvershoot: 'kinetic' }, 4);
+  console.log(`kinetic overshoot: share ${kinetic.share.toFixed(3)} into layer ${kinetic.top} (the full overshoot's share ${full.share}); with the inversion 4 K stronger ${stronger.share.toFixed(3)}; the top layer's moistening ${kinetic.topWater.toExponential(3)} against ${full.topWater.toExponential(3)}, the layer below's ${kinetic.belowWater.toExponential(3)} against ${full.belowWater.toExponential(3)}`);
+  assert.equal(full.share, 1);
+  assert.ok(kinetic.share > 0 && kinetic.share < 1, `share ${kinetic.share}`);
+  assert.ok(stronger.share < kinetic.share, `${stronger.share} under a stronger inversion against ${kinetic.share}`);
+  assert.equal(kinetic.top, full.top);
+  assert.ok(Math.abs(kinetic.topWater - kinetic.share * full.topWater) < 1e-3 * Math.abs(full.topWater), `the top layer takes the share: ${kinetic.topWater} against ${kinetic.share * full.topWater}`);
+  assert.ok(kinetic.belowWater > full.belowWater, 'the layer below takes the rest');
 });

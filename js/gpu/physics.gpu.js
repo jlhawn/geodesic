@@ -183,7 +183,7 @@ const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const AUTO_M
 const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
 const DECK_OPEN: f32 = ${DECK_OPEN}; const DECK_CLOSED: f32 = ${DECK_CLOSED}; const PARCEL_VIRT: f32 = ${o.virtualBuoyancy === false ? 0 : 'VIRT'};
 const CU_FLOOR: f32 = ${CUMULUS_FLOOR}; const CU_K0: i32 = ${o.cumulusK0 ?? 0}; const CU_C: f32 = ${o.cumulusClosure}; const CU_EPS: f32 = ${o.cumulusEntrainment}; const CU_DEL: f32 = ${o.cumulusDetrainment}; const CU_SOURCE: f32 = ${o.cumulusSourceDepth}; const CU_LOSS: f32 = ${o.cumulusBoundaryLoss};
-const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvershoot}; const CU_WU: f32 = ${o.cumulusUpdraft}; const CU_RAIN: bool = ${o.cumulusRain != null}; const CU_RAIN_Q: f32 = ${o.cumulusRain ?? 0}; const CU_LOWEST: bool = ${o.cumulusSource === 'lowest'};
+const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvershoot === 'kinetic' ? 1 : o.cumulusOvershoot}; const CU_KINETIC: bool = ${o.cumulusOvershoot === 'kinetic'}; const CU_WU: f32 = ${o.cumulusUpdraft}; const CU_RAIN: bool = ${o.cumulusRain != null}; const CU_RAIN_Q: f32 = ${o.cumulusRain ?? 0}; const CU_LOWEST: bool = ${o.cumulusSource === 'lowest'};
 const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: bool = ${o.cumulusCloud !== false && o.cloudCover === 'pdf'}; const CU_MEMORY: f32 = ${o.cumulusMemory}; const CU_TRACE: f32 = ${CUMULUS_TRACE};
 const PL_SEPARATE: bool = ${o.plumeClosure === 'separate' && o.convectionType === 'top'}; const PL_BY_DEPTH: bool = ${o.convectionType === 'cloudDepth'}; const PL_PARCEL: bool = ${o.convectionType === 'testParcel'}; const PL_MIXED: bool = ${o.plumePhase === 'mixed'}; const PL_SUNDQVIST: bool = ${o.plumeConversion === 'sundqvist'}; const SQ_C00: f32 = ${IFS_PRECIPITATION.conversion}; const SQ_LIQ: f32 = ${IFS_PRECIPITATION.liquidFactor}; const SQ_CRIT: f32 = ${IFS_PRECIPITATION.critical}; const SQ_SEA: f32 = ${IFS_PRECIPITATION.seaThreshold}; const SQ_LAND: f32 = ${IFS_PRECIPITATION.landThreshold}; const SQ_BF: f32 = ${IFS_PRECIPITATION.bergeron}; const SQ_ICE: f32 = ${IFS_PRECIPITATION.ice}; const SQ_SPEED: f32 = ${IFS_PRECIPITATION.speed}; const SQ_VSCALE: f32 = ${IFS_PRECIPITATION.velocityScale}; const TP_EPS: f32 = ${TEST_PARCEL.entrainment}; const TP_REMOVE: f32 = ${TEST_PARCEL.removal}; const PL_IFS: bool = ${o.plumeEntrainmentLaw === 'ifs'}; const IFS_EPS: f32 = ${IFS_ENTRAINMENT.entrainment}; const IFS_RH: f32 = ${IFS_ENTRAINMENT.humidity}; const IFS_DEL: f32 = ${IFS_ENTRAINMENT.detrainment}; const IFS_DRH: f32 = ${IFS_ENTRAINMENT.detrainmentHumidity}; const IFS_DRAG: f32 = ${IFS_ENTRAINMENT.drag}; const DEEP_DEPTH: f32 = ${DEEP_CLOUD_DEPTH}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
 const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.plumeConsumption === 'buoyant'}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
@@ -1658,7 +1658,7 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   let lcl = condensationLevel((sourceS - GRAV * plumeZ(i, bottom)) / CP, sourceQ, layerP(pi, bottom));
   if (!(lcl.y > SHALLOW_TOP)) { return 0.0; }
   var plumeS: array<f32, K + 1>; var plumeQ: array<f32, K + 1>; var liquid: array<f32, K>; var flux: array<f32, K + 1>; var fallout: array<f32, K>; var frozenOut: array<f32, K>;
-  var s = sourceS; var w = sourceQ; var inhibition = 0.0; var cloudy = false; var top = -1; var guess = 0.0;
+  var s = sourceS; var w = sourceQ; var inhibition = 0.0; var cloudy = false; var top = -1; var guess = 0.0; var w2 = PL_W0 * PL_W0; var share = 1.0;
   plumeS[source] = s; plumeQ[source] = w;
   for (var k = source - 1; k >= 0; k--) {
     let pk = layerP(pi, k);
@@ -1673,7 +1673,24 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
     let idx = k * C + i; let air = max(0.0, IN[S_Q + idx]); let cloud = max(0.0, IN[S_QC + idx]);
     let work = RGAS * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - plumeT(i, k) * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud)) * layerDp(pi, k) / pk;
     if (mid.y > 0.0) { cloudy = true; }
-    if (!cloudy) { if (work < 0.0) { inhibition -= work; } } else if (!(work > 0.0)) { top = k; break; }
+    if (!cloudy) { if (work < 0.0) { inhibition -= work; } }
+    else if (!(work > 0.0)) {
+      top = k;
+      if (CU_KINETIC) {
+        if (!(work < 0.0)) { share = 1.0; }
+        else if (!(w2 > 0.0)) { share = 0.0; }
+        else {
+          let depth = above - below; let mixing = PL_DRAG * epsilon;
+          let lift = -PL_ACC * work / depth; let y = mixing * w2 / lift;
+          let reach = select(w2 / (2.0 * lift), select(y * (1.0 - 0.5 * y), log(1.0 + y), y > 1e-3) / (2.0 * mixing), mixing > 0.0);
+          share = min(1.0, reach / depth);
+        }
+      }
+      break;
+    } else if (CU_KINETIC) {
+      let x = 2.0 * PL_DRAG * epsilon * (above - below);
+      w2 = w2 * exp(-x) + 2.0 * PL_ACC * work * select(1.0, relaxedFraction(x) / x, x > 0.0);
+    }
     let full = exp(-epsilon * (above - below));
     s = env.x + (s - env.x) * full; w = env.y + (w - env.y) * full;
     if (CU_RAIN) {
@@ -1703,7 +1720,7 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   for (var j = bottom; j > source; j--) { sourceBelow += layerDp(pi, j); flux[j] = base * sourceBelow / mass; }
   flux[source] = base;
   for (var k = source - 1; k > top; k--) { flux[k] = flux[k + 1] * flux[k]; }
-  flux[top + 1] *= CU_OVER;
+  flux[top + 1] *= select(CU_OVER, share, CU_KINETIC);
   var scale = 1.0;
   for (var k = top; k <= bottom; k++) {
     let courant = max(flux[k], flux[k + 1]) * GRAV * dt / layerDp(pi, k);
