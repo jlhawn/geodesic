@@ -8,11 +8,13 @@
 // (data/woa_sst_monthly_1deg.bin) on the state's date. MOIST,
 // BOUNDARY_LAYER, SURFACE and RADIATION (JSON) pass options as
 // scripts/spinup.mjs does; LEVELS (a grid of SIGMA_GRIDS) runs the arm on
-// that grid with the state remapped onto it. Each day's means (surface
-// temperature, absorbed sunlight, OLR, albedo, the cloud effects, the
-// clear-sky OLR, rain) are printed from a diagnostics frame, and the saves
-// carry the day's per-cell means. The AMIP question for one state: what
-// the atmosphere does over the observed sea.
+// that grid with the state remapped onto it; PERTURB makes a replicate,
+// every θ scaled by 1 + PERTURB·u with u uniform in ±1/2, each SEED
+// (default 12345) another. Each day's means (surface temperature, absorbed
+// sunlight, OLR, albedo, the cloud effects, the clear-sky OLR, rain) are
+// printed from a diagnostics frame, and the saves carry the day's per-cell
+// means. The AMIP question for one state: what the atmosphere does over
+// the observed sea.
 //   SST=woa DAYS=12 SAVE_DAYS=3 node scripts/fixedSst.mjs STATE.bin OUT TAG
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { topographyFromInt16 } from '../js/geography.module.js';
@@ -34,6 +36,12 @@ const levels = process.env.LEVELS ? sigmaInterfaces(process.env.LEVELS) : savedL
 const model = await createGpuModel(mesh, { topography, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
 const { state, core } = model, C = mesh.nCells;
 const carried = { ...saved, ...(process.env.LEVELS ? remapLevels(savedLevels(saved), levels, saved, mesh) : {}) };
+const PERTURB = Number(process.env.PERTURB ?? 0);
+if (PERTURB) {
+  let seed = Number(process.env.SEED ?? 12345);
+  const uniform = () => { seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff; return seed / 2147483648 - 0.5; };
+  carried.theta = Float64Array.from(carried.theta, (x) => x * (1 + PERTURB * uniform()));
+}
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(carried[name]));
 model.seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));

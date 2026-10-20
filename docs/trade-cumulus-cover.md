@@ -464,10 +464,19 @@ Entraining at 1/z, the model's shallow plume is BOMEX's plume: it tops
 where the LES's cores do. In the arms it removes the kinetic share's
 brightening as fully as the variance pair does, 4.6 W/m² at N=64 and at
 N=128, by thinning the cloudy layers below the inversion. On its own it
-is not the trade cumulus's fix. The trade stress does not move, with the
-pair it gives back half of the pair's gain, and the SE Pacific box loses
-cover it should keep. The variance pair remains the change that both the
-cover and the stress support. Neither is made a default here.
+is not the trade cumulus's fix. The trade stress does not move beyond
+one realization's spread, alone or with the pair, and the SE Pacific box
+loses cover it should keep. The variance pair remains the change that
+both the cover and the stress support. Neither is made a default here.
+
+Replicated (`docs/toa-radiation-bias.md`, finding 8: three realizations
+each of the defaults, the pair and the pair with cloudColumns and
+cloudSpread), one run of the protocol carries a standard deviation of
+4.4 mN/m² in the central three bins' mean and 0.14 hPa in the gradient.
+The pair takes 11.9 ± 3.6 mN/m² off the stress (−98.5 to −86.5), 12
+percent rather than the single runs' 22, and 1.13 ± 0.11 hPa off the
+gradient. The buoyant plume's single runs, −102.1 alone and −90.7 with
+the pair, sit within one realization of those means.
 
 ## Tests
 
