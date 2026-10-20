@@ -64,7 +64,9 @@
 # `run` writes the value it uses
 # to OUT/UNTIL_<PREFIX>, which a later run or resume without UNTIL takes, so
 # a run extended by hand stays extended after an eviction), KEEP (1000), LEVELS (bl42),
-# OCEAN ('{"everySteps":8}'), STRATOSPHERE (1), for DRIVER=async CYCLES
+# OCEAN ('{"everySteps":8}'), STRATOSPHERE (1), SEGMENT_MINUTES (none:
+# pairedSpinup.sh's segment length in minutes of wall time, each segment
+# ending with a snapshot), for DRIVER=async CYCLES
 # (9), COUPLED_YEARS (10), RECORD_YEARS (1), OCEAN_YEARS (100),
 # FINAL_YEARS (0), OCEAN_ONLY (OCEAN), RESTORE (30), OCEAN_KEEP (2),
 # SNAPSHOT_DAYS (30) and KEEP_FORCING (0) (asyncSpinup.sh's defaults),
@@ -83,7 +85,7 @@ cd "$(dirname "$0")/.."
 PREFIX=${PREFIX:-eleven}
 OUT=${OUT:-$HOME/runs/$PREFIX}
 SETTINGS=$OUT/SETTINGS_$PREFIX
-COMMON="DRIVER NS PER_YEAR KEEP LEVELS OCEAN STRATOSPHERE"
+COMMON="DRIVER NS PER_YEAR KEEP LEVELS OCEAN STRATOSPHERE SEGMENT_MINUTES"
 SCHEDULE="CYCLES COUPLED_YEARS RECORD_YEARS OCEAN_YEARS FINAL_YEARS OCEAN_ONLY RESTORE OCEAN_KEEP SNAPSHOT_DAYS KEEP_FORCING"
 for name in $COMMON $SCHEDULE; do
   [ -z "${!name}" ] && grep -q "^$name=" "$SETTINGS" 2>/dev/null && printf -v "$name" '%s' "$(sed -n "s/^$name=//p" "$SETTINGS" | tail -1)"
@@ -91,7 +93,7 @@ done
 DRIVER=${DRIVER:-paired}
 NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-36} YEARS=${YEARS:-3} KEEP=${KEEP:-1000}
 UNTIL=${UNTIL:-$(cat "$OUT/UNTIL_$PREFIX" 2>/dev/null || echo $((365 * YEARS)))}
-LEVELS=${LEVELS:-bl42} OCEAN=${OCEAN:-'{"everySteps":8}'} STRATOSPHERE=${STRATOSPHERE:-1}
+LEVELS=${LEVELS:-bl42} OCEAN=${OCEAN:-'{"everySteps":8}'} STRATOSPHERE=${STRATOSPHERE:-1} SEGMENT_MINUTES=${SEGMENT_MINUTES:-}
 CYCLES=${CYCLES:-9} COUPLED_YEARS=${COUPLED_YEARS:-10} RECORD_YEARS=${RECORD_YEARS:-1} OCEAN_YEARS=${OCEAN_YEARS:-100} FINAL_YEARS=${FINAL_YEARS:-0}
 OCEAN_ONLY=${OCEAN_ONLY:-$OCEAN} RESTORE=${RESTORE:-30} OCEAN_KEEP=${OCEAN_KEEP:-2} SNAPSHOT_DAYS=${SNAPSHOT_DAYS:-30} KEEP_FORCING=${KEEP_FORCING:-0}
 PRICE=${PRICE:-1.85} CASES=${CASES:-"128:2 64:5"} GPU_WAIT=${GPU_WAIT:-600} MARGIN_GB=${MARGIN_GB:-5}
@@ -272,9 +274,9 @@ run() {
   rm -f "$OUT/ENDED_$PREFIX"
   local stops
   stops=$(grep -c 'stopped (' "$OUT/$PREFIX.log" 2>/dev/null); stops=${stops:-0}
-  say "run: NS=\"$NS\" PREFIX=$PREFIX LEVELS=$LEVELS PER_YEAR=$PER_YEAR KEEP=$KEEP OCEAN=$OCEAN STRATOSPHERE=$STRATOSPHERE UNTIL=$UNTIL OUT=$OUT${schedule[*]:+ ${schedule[*]}} $PAIRED"
+  say "run: NS=\"$NS\" PREFIX=$PREFIX LEVELS=$LEVELS PER_YEAR=$PER_YEAR KEEP=$KEEP OCEAN=$OCEAN STRATOSPHERE=$STRATOSPHERE SEGMENT_MINUTES=$SEGMENT_MINUTES UNTIL=$UNTIL OUT=$OUT${schedule[*]:+ ${schedule[*]}} $PAIRED"
   env -u FROM -u OCEAN_FROM -u LAND_FROM -u ICE_FROM -u RECORD -u STOP_AFTER_STEPS -u N SYNC_CMD='sync "$1"' \
-    NS="$NS" PREFIX="$PREFIX" LEVELS="$LEVELS" PER_YEAR="$PER_YEAR" KEEP="$KEEP" OCEAN="$OCEAN" STRATOSPHERE="$STRATOSPHERE" UNTIL="$UNTIL" OUT="$OUT" "${schedule[@]}" bash "$PAIRED"
+    NS="$NS" PREFIX="$PREFIX" LEVELS="$LEVELS" PER_YEAR="$PER_YEAR" KEEP="$KEEP" OCEAN="$OCEAN" STRATOSPHERE="$STRATOSPHERE" SEGMENT_MINUTES="$SEGMENT_MINUTES" UNTIL="$UNTIL" OUT="$OUT" "${schedule[@]}" bash "$PAIRED"
   local code=$? reason
   reason=$(grep 'stopped (' "$OUT/$PREFIX.log" 2>/dev/null | tail -n +"$((stops + 1))" | tail -1)
   if [ -z "$reason" ]; then say "run: interrupted (exit $code) before $PAIRED logged a stop; not marked ended, so resume continues it"; return 1; fi

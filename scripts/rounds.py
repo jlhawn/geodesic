@@ -12,7 +12,7 @@ cal = lambda d: (date(2001, 3, 20) + timedelta(days=d)).strftime('%b %-d')
 qend = lambda k: int(k * YEAR / PER_YEAR + 0.5)
 EARTH = {'ts': 14.85, 'albedo': 0.30, 'rain': 2.7}
 EARTH_RAIN = {'sahara': 0.2, 'arabia': 0.2, 'sahel': 1.5, 'india': 3.0, 'congo': 4.5, 'amazon': 6.0, 'seAsia': 5.0, 'borneo': 8.0, 'europe': 2.0, 'eastUS': 3.0, 'siberia': 1.2, 'ausInterior': 0.7, 'kalahari': 1.0, 'gobi': 0.5, 'usSouthwest': 0.8, 'cerrado': 4.0, 'ausNorth': 2.7, 'ausEast': 2.5, 'ausSoutheast': 1.8, 'ausWest': 0.7, 'newGuinea': 8.0}
-DAY = re.compile(r'day (\d+) .*Ts (-?[\d.]+) °C, ASR ([\d.]+)(?: \(atmosphere [\d.]+\))? OLR ([\d.]+).*precip ([\d.]+) mm/d, ice ([\d.]+)% \(N ([\d.]+) S ([\d.]+) Mkm²\), albedo ([\d.]+)')
+DAY = re.compile(r'day (\d+) .*Ts (-?[\d.]+) °C, ASR ([\d.]+)(?: \(atmosphere [\d.]+\))? OLR ([\d.]+).*precip ([\d.]+) mm/d, .*?ice ([\d.]+)% \(N ([\d.]+) S ([\d.]+) Mkm²\), albedo ([\d.]+)')
 
 def load(tag):
     rows, segments, last = [], [], 0

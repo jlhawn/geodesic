@@ -56,8 +56,9 @@ create() {
   fi
   [ -n "$os" ] || { log "no OS volume known and no OS image set; not creating $NAME"; return; }
   log "creating $NAME: $INSTANCE_TYPE spot in $LOCATION on $os ($size GiB)"
+  local fresh=(); [ "$os" = "$volume" ] || fresh=(--os-volume-size "$size" --os-volume-on-spot-discontinue keep_detached)
   if out=$($VERDA --agent vm create --kind gpu --instance-type "$INSTANCE_TYPE" --location "$LOCATION" --is-spot \
-      --os "$os" --os-volume-size "$size" --os-volume-on-spot-discontinue keep_detached \
+      --os "$os" "${fresh[@]}" \
       --ssh-key "$SSH_KEY" --hostname "$NAME" --startup-script "$STARTUP_SCRIPT" --wait -o json 2>&1); then
     log "created $NAME: $(echo "$out" | tr '\n' ' ' | cut -c1-300)"
   else

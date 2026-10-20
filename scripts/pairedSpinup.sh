@@ -16,10 +16,13 @@
 # builds, and at the ends of days 365 and 730, in whichever segment holds
 # them, every land cell's trees and carbon jump to the equilibrium of its own
 # record, logged in <OUT>/<PREFIX><N>.log (LAND_JUMPS: 'fresh', the default;
-# 'none'; or model days such as 365,730).
+# 'none'; or model days such as 365,730). SEGMENT_MINUTES (none by
+# default) ends a segment after that many minutes of wall time, at the next
+# day's end with a snapshot, and the round goes on from it: on a spot
+# instance a preemption then loses no more than that.
 #   NS="64 128" PER_YEAR=4 PREFIX=twin scripts/pairedSpinup.sh
 cd "$(dirname "$0")/.."
-NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-4} PREFIX=${PREFIX:-twin} KEEP=${KEEP:-4} UNTIL=${UNTIL:-}
+NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-4} PREFIX=${PREFIX:-twin} KEEP=${KEEP:-4} UNTIL=${UNTIL:-} SEGMENT_MINUTES=${SEGMENT_MINUTES:-100000}
 export OUT=${OUT:-$PWD/runs}
 LOG=$OUT/$PREFIX.log
 alive=$NS
@@ -38,7 +41,7 @@ while [ ! -f "$OUT/STOP_$PREFIX" ] && [ -n "$alive" ]; do
     [ -f "$OUT/STOP_$PREFIX" ] && break
     failures=0
     while [ "$(dayOf "$n")" -lt "$target" ]; do
-      FROM="$(eval echo "\${FROM_$n:-}")" N=$n TAG=$PREFIX$n DAYS=$target MINUTES=100000 KEEP=$KEEP node scripts/spinup.mjs > "$OUT/$PREFIX$n.segment.out" 2>&1
+      FROM="$(eval echo "\${FROM_$n:-}")" N=$n TAG=$PREFIX$n DAYS=$target MINUTES=$SEGMENT_MINUTES KEEP=$KEEP node scripts/spinup.mjs > "$OUT/$PREFIX$n.segment.out" 2>&1
       status=$?
       [ $status -eq 0 ] && continue
       if [ $status -eq 2 ]; then note "N=$n stopped on NaN before day $target"; alive=$(echo " $alive " | sed "s/ $n / /;s/^ *//;s/ *$//"); break; fi
