@@ -1,4 +1,4 @@
-import { LATENT_HEAT, EPSILON, R_VAPOR, saturationHumidity, liftingCondensationLevel, cloudSaturation, criticalHumidityAt, uniformCover } from './moist.module.js';
+import { LATENT_HEAT, EPSILON, R_VAPOR, saturationHumidity, liftingCondensationLevel, cloudSaturation, criticalHumidityAt, uniformCover, moistLapse, inversionStrength } from './moist.module.js';
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { createMixedLayer, dycomsLongwave } from './mixedLayer.module.js';
 import { REGIME } from './boundaryLayer.module.js';
@@ -521,14 +521,7 @@ export function stratusFraction(index, surfaceT) {
   return Math.min(1, Math.max(0, 0.19 + 0.08 * (index - 1))) * Math.min(1, Math.max(0, (surfaceT - 278.15) / 5));
 }
 
-function moistLapse(T, qs, cp, R, g, latentHeat) {
-  return g / cp * (1 + latentHeat * qs / (R * T)) / (1 + latentHeat * latentHeat * qs / (cp * (R / EPSILON) * T * T));
-}
-
-export function inversionStrength(stability, lowerT, upperT, depth, cp, R, g, latentHeat = LATENT_HEAT) {
-  const T = 0.5 * (lowerT + upperT);
-  return stability - (g / cp - moistLapse(T, saturationHumidity(T, 85000), cp, R, g, latentHeat)) * depth;
-}
+export { inversionStrength };
 
 export function entrainmentIndex(inversion, lowerQ, upperQ, cp, latentHeat = LATENT_HEAT) {
   return inversion - 0.23 * latentHeat / cp * (lowerQ - upperQ);
