@@ -211,6 +211,109 @@ Day means, days 6–20:
 | defaults | 235.8 | 239.1 | −60.3 | +29.0 | 268.1 | −3.3 | 3.08 |
 | both | 239.6 | 239.6 | −56.4 | +28.5 | 268.1 | 0.0 | 3.01 |
 
+## The plume's reach
+
+Under 'kinetic' the share is the reach of w², from `plumeVelocity` 1 m/s
+at the first cloudy layer by dw²/dz = 2aB − 2bεw² (a = 1/3, b = 1, ε the
+shallow plume's 2.5·10⁻³/m), into the first non-buoyant layer.
+`scripts/plumeReach.mjs` repeats `cumulusColumn`'s ascent column by
+column. It agrees with the model's top layer and share in all 7,911–7,943
+plume columns of each state.
+
+### On BOMEX's profile
+
+The same ascent, source and w equation through Table B1's profile, with
+the source the mean of the lowest 500 m. Siebesma et al.'s Figs. 7e and 10
+give the LES's values: cloud base 0.5 km, core w 0.6 m/s there (the
+cloud ensemble's too, about w*), core about 2.7 m/s at 1.5 km, core top
+1.75–1.8 km and cloud top about 2.0 km over an inversion base at 1.48 km.
+
+| plume | top, 20 m layers (km) | w at 1.5 km (m/s) | implied top on the model's levels (km) |
+|---|---|---|---|
+| the model's | 0.95 | 0 | 0.68 |
+| w0 0.6 | 0.81 | 0 | 0.68 |
+| a 1/3, b 2 (Gregory 2001), w0 0.6 | 0.75 | 0 | 0.68 |
+| a 2/3, b 2 (Simpson and Wiggert 1969), w0 0.6 | 0.68 | 0 | 0.60 |
+| ε = 1/z | 1.75 | 1.73 | 0.68 |
+| the adiabat's source | 1.20 | 0 | 1.27 |
+| ε = 1/z and the adiabat's source | 1.83 | 2.30 | 1.78 |
+| Siebesma et al.'s eq. (15) (a 1/3, b 2, ε = 1/z, w0 0.6), the adiabat's source | 1.76 | 1.84 | 1.78 |
+
+The adiabat is that of Siebesma et al.'s Fig. 7 (θ_l 298.8 K, q_t 17.25
+g/kg), 0.6 g/kg moister than the source mean. Their eq. (15) solution
+reaches about 1.75 km at about 2 m/s (Fig. 10), as the last row does, so
+the setup holds. The model's plume is negatively buoyant from cloud base in
+BOMEX: w falls from 1 to 0.28 m/s by 0.9 km. On the model's levels it ends
+in its first cloudy layer.
+
+The speed is not what is short. The model's w0 of 1 m/s is above the LES's
+0.6 m/s at cloud base. It is also above EUREC4A's: Vogel et al. (2022)
+give a cloud-base mass flux of 17.4 ± 7.5 mm/s and a cloud-base cover of
+5.4 ± 3.1 percent, with C ≈ 2 C_core ∝ 2M/w*, so the core rises at about
+w*. The model's b = 1 is half the b = 2 of Gregory (2001) and of Siebesma
+and Holtslag. The LES fits make the reach shorter still. Tian et al.
+(2019) find a ≈ 0.6–0.7 in their shallow-cumulus LES, with b varying by
+more than a factor of three across datasets. de Roode et al. (2012) find
+the pressure term the dominant sink, with a and b linearly related.
+
+What is short is the buoyancy. Entraining at 2.5·10⁻³/m from the LCL and
+leaving with the mean air below 500 m, the plume is never buoyant in
+BOMEX. With either ε ∝ 1/z (the rate Siebesma et al. 2003 use, falling from
+2·10⁻³/m at cloud base) or the updraft's own cloud-base air alone, it falls
+short. With both, the same code gives the LES's core top and speeds.
+
+ε = 1/z alone reaches 1.75 km on 20 m layers, but on the model's levels it
+still ends in its first cloudy layer. The ascent stops at the first
+non-buoyant cloudy layer, and at that layer's midpoint, 11 m above the
+LCL, the plume has hardly condensed. On 20 m layers the same plume slows
+to 0.78 m/s through the transition layer and then accelerates.
+
+### In the trade boxes
+
+The kinetic arm's states on days 1835, 1840 and 1845; box medians, the
+range over the three days:
+
+| | N Pacific trades | S Pacific trades | Atlantic trades | SE Pacific | sea 20–40S | sea 20–40N |
+|---|---|---|---|---|---|---|
+| plumes with no buoyant cloudy layer | 0.41–0.58 | 0.23–0.25 | 0.12–0.24 | 0.18–0.24 | 0.30–0.36 | 0.35–0.40 |
+| largest speed, m/s | 1.00 | 1.25–1.54 | 1.08–1.39 | 1.31–1.36 | 1.00–1.04 | 1.00 |
+| share | 0.19–0.31 | 0.42–0.44 | 0.09–0.26 | 0.16–0.26 | 0.23–0.25 | 0.17–0.23 |
+| implied top, km | 1.31–1.51 | 1.32–1.50 | 1.52–1.53 | 1.51–1.77 | 1.45–1.53 | 1.45–1.56 |
+| implied top less the inversion, km | −0.2 to −1.7 | −0.1 to −0.2 | 0 to −1.1 | −0.2 to −1.1 | −0.24 to −0.38 | −0.21 to −0.25 |
+| ε = 1/z: no buoyant cloudy layer | 0.26–0.40 | 0.16–0.19 | 0.11–0.14 | 0.12–0.18 | 0.24–0.29 | 0.30–0.33 |
+| ε = 1/z: implied top, km | 1.48–1.61 | 1.52–1.84 | 1.57–1.75 | 1.75–1.91 | 1.63–1.76 | 1.51–1.73 |
+| ε = 1/z: less the inversion, km | 0 to −1.6 | +0.25 to +0.26 | +0.02 to −0.9 | 0 to −0.85 | −0.11 to −0.25 | −0.04 to −0.21 |
+
+The inversion here is the interface of strongest θ_l stability between the
+LCL and 4 km, at 1.5–2.9 km. In 12–58 percent of the plume columns the
+plume saturates but is not buoyant in its first cloudy layer. There its
+share is only the 1 m/s start's reach into that layer. Elsewhere it is
+buoyant for one or two layers, at 1.0–1.5 m/s (upper quartiles 1.3–1.8).
+w* is 0.70–0.85 m/s.
+
+The literature's w equations lower the shares on day 1845, from 0.09–0.42
+to:
+- 0.05–0.24 with a 1/3, b 2;
+- 0.05–0.17 with a 2/3, b 2 and w0 = w*.
+
+ε = 1/z raises the tops by 0.05–0.37 km. The S Pacific trades' clouds then
+reach 0.25 km into the inversion, as BOMEX's do.
+
+So the reach is too short, and the water's placement is part of the
+excess. A third to a half of the trade plumes detrain at cloud base
+because they are not buoyant there, not because they rise too slowly.
+Faster plumes would not move the water up. A return to share 1 would not
+either: it detrains the same plumes one layer up. Three changes would carry
+the water up toward the inversion:
+- an entrainment rate that falls with height;
+- a source that is the updraft's air;
+- an ascent that w² carries through a non-buoyant layer, as the w equation
+  itself does.
+
+None is tried in the model here. How large the source excess should be is open:
+the IFS test parcel's excess (Cy43r1 eq. 6.19) gives about 0.15 g/kg on
+BOMEX's fluxes, while the LES adiabat holds 0.6.
+
 ## Tests
 
 - `test/gpuModel.test.mjs`: a parity test of 'water', `buoyancyLength`
@@ -233,6 +336,9 @@ Day means, days 6–20:
 - The regime covers at N=128 (measured here at N=64 only), and the path
   by which the pair warms the 120W–100W column at 2–4 km.
 - A coupled arm: the stress and the cover both act on the ocean.
+- The shallow plume's buoyancy (its entrainment profile, its source and
+  its ascent through the transition layer), on both engines, judged on
+  BOMEX's profile and in arms.
 - With `cloudColumns` and `cloudSpread` (`toa-radiation-bias.md`) the pair
   is the shortwave's remaining cloud-amount change; the net balance needs
   the clear-sky column first.
