@@ -217,6 +217,56 @@ under the lid. There 4.8 × 10⁸ kg/s rises into the lid layers over
 ascent is 0.5–0.9 times ERA5's, yet the layers are 2.4–5.5 K colder, so
 there the cold bias is not the ascent's.
 
+### 5. bl60: 1.2 km layers up to 1 hPa, stable over a month, not yet judged
+
+bl60 (`js/dynamics/sigmaCore.module.js`) is bl42 with its 1–93.6 hPa span
+cut into 27 layers equal in ln σ, 1.18 km of log-pressure height each,
+where bl42 has nine of 1.1–5.7 km. That makes 60 layers, with bl42's
+troposphere and lid unchanged. Its longwave table is fitted on its own
+columns (`scripts/longwaveFit.mjs`, UPPER_WEIGHT 100). Over bl42's layer
+spans its cooling at 1–2.2 hPa is within 0.1–0.3 K/day of RRTMG in the
+four atmospheres; bl36's table on bl60's layers misses by 0.6–0.9 K/day.
+Nothing selects bl60 by default. It costs 1.47 times bl42 at N=64 and
+1.40 times at N=128 (`fixedSst.mjs` on the M5 Max, the grids alternated,
+seconds per simulated day):
+
+| N | bl42 | bl60 |
+|---|---|---|
+| 64 | 3.9, 4.0 | 5.9, 5.8 |
+| 128 | 27.8, 28.2 | 39.4, 39.2 |
+
+A 30-day arm on bl60 starts from thirteen's day-1825 state remapped onto
+its layers, otherwise as finding 1's control on bl42. Against that
+control and ERA5's same weeks, w* (mm/s) and T (K) over 15° S–15° N:
+
+| hPa | w*, bl60 | bl42 | ERA5 | T, bl60 | bl42 | ERA5 |
+|---|---|---|---|---|---|---|
+| 1 | 0.66 | 3.88 | 0.05 | 257.8 | 253.2 | 265.6 |
+| 1.5 | 2.25 | 2.30 | | 256.5 | 256.4 | |
+| 2 | 2.17 | 1.60 | −0.15 | 254.2 | 253.5 | 264.5 |
+| 3 | 1.22 | 0.89 | −0.06 | 247.2 | 247.8 | 256.9 |
+| 5 | 0.44 | 0.46 | 0.28 | 238.0 | 239.2 | 244.6 |
+| 7 | 0.21 | 0.18 | 0.38 | 232.1 | 233.2 | 237.9 |
+| 10 | 0.10 | −0.01 | 0.43 | 226.3 | 227.2 | 232.5 |
+| 20 | 0.21 | 0.19 | 0.32 | 215.3 | 215.9 | 222.2 |
+| 50 | 0.24 | 0.24 | 0.26 | 199.1 | 200.5 | 205.0 |
+
+The arm runs clean. Its Courant numbers stay at or below 0.47
+horizontally and 0.2 vertically, and the divergence in the layers just
+under 1 hPa is steady from day 4.
+- Under the lid, the excess ascent is gone and the layer is 4.6 K warmer
+  than on bl42, though still 7.8 K short of ERA5.
+- At 2–3 hPa the ascent is a third stronger than on bl42.
+- From 3 to 50 hPa the temperatures are within 1.4 K of bl42's and 5–10 K
+  colder than ERA5's.
+
+A month cannot show a QBO. The judgment the references call for follows
+QBOi's experiment 2 (Butchart et al. 2018), now `fixedSst.mjs` with
+`SST=cycle WINDS=1 TEM_HOURS=27 TEM_FROM=365`: six years on each grid
+from the same state, judged over years 2–6 against finding 3's QBO and
+SAO statistics and finding 4's annual w*. It has not been run. At 1.4–1.5
+times the cost, bl60 waits until the model's other fixes are in.
+
 ## What this means
 
 - Finding 6's ascent is too strong against ERA5's residual circulation
@@ -243,12 +293,12 @@ there the cold bias is not the ascent's.
   lower stratosphere (Garfinkel et al. 2022; Richter et al. 2014; Geller
   et al. 2016), and bl42's above 62 hPa are 2–5 times as thick as MiMA's.
 
-No option comes of this finding. The change the references point to is
-the stratosphere's vertical resolution. A level set with layers near
-1.2 km from 100 to 1 hPa would have to be judged over several years
-against ERA5's QBO (the anomalies' standard deviation and the mean by
-level), its SAO, and the five-phase w* here. That is more than a 30-day
-arm can show. Before the lid is touched, the absolute momentum flux
+The change the references point to is the stratosphere's vertical
+resolution, now the option bl60 (finding 5). A month on bl60 is stable and
+removes the excess ascent under the lid. It still has to be judged over
+several years against ERA5's QBO (the anomalies' standard deviation and
+the mean by level), its SAO, and the five-phase w* here. Before the lid
+is touched, the absolute momentum flux
 that reaches 1 hPa (1.77 mPa at the equator in the arm's weeks) should
 be measured against the satellite climatologies (Ern et al. 2018).
 
@@ -259,6 +309,10 @@ be measured against the satellite climatologies (Ern et al. 2018).
   J. Atmos. Sci., 56, 4167–4182.
 - Andrews, D. G., J. R. Holton, and C. B. Leovy, 1987: Middle Atmosphere
   Dynamics. Academic Press, 489 pp.
+- Butchart, N., et al., 2018: Overview of experiment design and
+  comparison of models participating in phase 1 of the SPARC
+  Quasi-Biennial Oscillation initiative (QBOi). Geosci. Model Dev., 11,
+  1009–1032.
 - Ern, M., Q. T. Trinh, P. Preusse, J. C. Gille, M. G. Mlynczak, J. M.
   Russell III, and M. Riese, 2018: GRACILE: a comprehensive climatology
   of atmospheric gravity wave parameters based on satellite limb
