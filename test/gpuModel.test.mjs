@@ -467,6 +467,29 @@ test('the variance cover of the cloudy layers below the moist boundary layer\'s 
   assert.ok(longwave < 1e-4 * longwaveScale, `longwave differs by ${longwave} W/m²`);
 });
 
+test('the variance cover that holds each layer\'s cloud water, and the turbulence length bounded by the layer\'s stratification, agree between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { base } = cloudyState(), C = base.mesh.nCells, K = base.core.K, depth = base.boundaryLayer.depth;
+  const mixingTop = Float64Array.from(depth, (d, i) => Math.fround(i % 3 === 0 ? 0 : d + (i % 3) * 400));
+  const deficit = await physicsHeating(base, {}, 864000, null, mixingTop), report = [];
+  for (const [name, options] of Object.entries({ water: { varianceCover: 'water' }, length: { buoyancyLength: 0.53 }, both: { varianceCover: 'water', buoyancyLength: 0.53 } })) {
+    const run = await physicsHeating(base, options, 864000, null, mixingTop);
+    let engines = 0, scale = 0, moved = 0;
+    for (let i = 0; i < C; i++) {
+      if (!(base.radiation.insolation(i) > 0)) continue;
+      for (let k = 0; k < K - 1; k++) {
+        const x = k * C + i;
+        engines = Math.max(engines, Math.abs(run.cpu[x] - run.gpu[x]));
+        scale = Math.max(scale, Math.abs(run.cpu[x]));
+        moved = Math.max(moved, Math.abs(run.cpu[x] - deficit.cpu[x]));
+      }
+    }
+    report.push(`${name} moves the layer heating by up to ${moved.toFixed(3)} K/day, the engines differ by ${engines.toExponential(1)} against a largest ${scale.toFixed(1)}`);
+    assert.ok(moved > 0, `${name} leaves the heating unmoved`);
+    assert.ok(engines < 5e-5 * scale, `${name}: layer heating differs by ${engines} K/day against ${scale}`);
+  }
+  console.log(report.join('; '));
+});
+
 test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   for (const options of [{ deckRegime: 'boundaryLayer' }, { deckRegime: 'boundaryLayer', deckBypass: true }, {}]) {
     const run = await mixedLayerPair(4, { turbulence: 'moist', ...options });

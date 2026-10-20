@@ -1,4 +1,5 @@
 import { LATENT_HEAT, EPSILON, R_VAPOR, saturationHumidity, liftingCondensationLevel, cloudSaturation, criticalHumidityAt, uniformCover } from './moist.module.js';
+import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { createMixedLayer, dycomsLongwave } from './mixedLayer.module.js';
 import { REGIME } from './boundaryLayer.module.js';
 import { SEA_DRAG } from './surface.module.js';
@@ -211,7 +212,20 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * inside the mixed layer; erf is Abramowitz and Stegun's 7.1.26. Such a
  * layer is half covered at s = 0 and overcast once s exceeds 2–3 σ_s,
  * and blends on the overcast ramp of the estimated inversion strength
- * into the bounded cover above as the humidity PDF does. The layers
+ * into the bounded cover above as the humidity PDF does. With
+ * `varianceCover` 'water' ('deficit', the default, is the cover above)
+ * the same Gaussian is placed to hold the layer's cloud water instead of
+ * its mean deficit: f = ½ [1 + erf(Q/√2)] with σ_s G(Q) = q_c, G(Q) =
+ * Q Φ(Q) + φ(Q) the Gaussian's condensate over σ_s (Sommeria and
+ * Deardorff 1977; Bougeault 1981), solved by eight Newton steps from Q =
+ * q_c/σ_s (G is convex, so they descend onto the root), as the layers
+ * above cover the uniform distribution's water by sqrt(q_c/b). With
+ * `buoyancyLength` c (null: none) the length in a layer whose θ_v rises to
+ * its neighbors (the same ones) under a buoyant surface is at most
+ * c w_* / N, w_* = (B₀ h)^⅓ from the boundary layer's surface buoyancy flux
+ * and depth and N the layer's buoyancy frequency, the stable limit of
+ * the turbulence length (Galperin et al. 1988's 0.53 q/N, w_* standing for
+ * q; Deardorff 1980's 0.76 e^½/N). The layers
  * above keep the cover above. The longwave heating of each layer
  * (W/m²) is kept in `longwave` for the
  * boundary layer's cloud-top cooling. Per cell, for the audit (this
@@ -489,6 +503,17 @@ export function varianceCover(deficit, spread) {
   return 0.5 * (1 + erf(deficit / (Math.SQRT2 * spread)));
 }
 
+export function heldCover(water, spread) {
+  if (!(spread > 0)) return water > 0 ? 1 : 0;
+  const ratio = water / spread;
+  let x = ratio;
+  for (let n = 0; n < 8; n++) {
+    const below = 0.5 * (1 + erf(x / Math.SQRT2));
+    x = Math.max(-6, x - (x * below + Math.exp(-0.5 * x * x) * 0.3989422804014327 - ratio) / Math.max(below, 1e-30));
+  }
+  return 0.5 * (1 + erf(x / Math.SQRT2));
+}
+
 export function waterVaporAbsorptivity(path) {
   return 2.9 * path / (Math.pow(1 + 141.5 * path, 0.635) + 5.925 * path);
 }
@@ -588,7 +613,7 @@ export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = null, cloudScattering = null, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 4, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
   prognosticHeight = true, deckRest = 'regime', deckSlab = 'fraction', deckReference = 'layer', cumulusCeiling = 2000, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'exponentialRandom', decorrelationLength = DECORRELATION_LENGTH, decorrelationSlope = DECORRELATION_SLOPE, cloudColumns = false, cloudSpread = 0,
-  boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, deckRegime = 'inversion', deckBypass = false,
+  boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, varianceCover: varianceRule = 'deficit', buoyancyLength = null, deckRegime = 'inversion', deckBypass = false,
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, referenceCoefficients = null, surfaceLayer = false, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
@@ -686,6 +711,8 @@ export function createRadiation(mesh, core, {
   if (deckReference !== 'interpolate' && deckReference !== 'layer') throw new Error(`deckReference must be 'interpolate' or 'layer', not ${deckReference}`);
   const interpolatedReference = deckReference === 'interpolate';
   if (boundaryCover !== 'variance' && boundaryCover !== 'pdf') throw new Error(`boundaryCover must be 'variance' or 'pdf', not ${boundaryCover}`);
+  if (varianceRule !== 'deficit' && varianceRule !== 'water') throw new Error(`varianceCover must be 'deficit' or 'water', not ${varianceRule}`);
+  if (buoyancyLength !== null && !(buoyancyLength > 0 && buoyancyLength < Infinity)) throw new Error(`buoyancyLength must be null or a coefficient above 0, not ${buoyancyLength}`);
   if (deckRegime !== 'inversion' && deckRegime !== 'boundaryLayer') throw new Error(`deckRegime must be 'inversion' or 'boundaryLayer', not ${deckRegime}`);
   const longwaveBuffer = buffers && buffers.longwave ? buffers.longwave : new SharedArrayBuffer(8 * K * C);
   const longwave = new Float64Array(longwaveBuffer), beforeBands = new Float64Array(K);
@@ -1037,27 +1064,30 @@ export function createRadiation(mesh, core, {
     return deckLight.incident * probe.cloud / total * (deckLight.layer + water) - deckLight.clear;
   }
 
-  function turbulentCover(i, k, pi, theta, q, qc, mixingDepth) {
+  function turbulentCover(i, k, pi, theta, q, qc, mixingDepth, mixedDepth) {
     const bottom = (K - 1) * C + i, idx = k * C + i, ex = exnerLayer[idx], water = Math.max(0, qc[idx]), total = Math.max(0, q[idx]) + water;
     const level = theta[idx] - latentHeat * water / (cp * ex), liquidT = level * ex;
     const iced = condensing !== null && condensing.iceSaturation;
     const qs = iced ? cloudSaturation(liquidT, pi * sigmaMid[k], true, condensing.liquidTemperature, condensing.iceTemperature, saturated).qs : saturationHumidity(liquidT, pi * sigmaMid[k]);
     const slope = iced ? saturated.slope : qs * latentHeat / (R_VAPOR * liquidT * liquidT);
     const a = 1 / (1 + latentHeat / cp * slope);
-    let gradientQ = 0, gradientL = 0, n = 0;
+    const thetaVirtual = theta[idx] * (1 + VIRTUAL_FACTOR * Math.max(0, q[idx]) - water);
+    let gradientQ = 0, gradientL = 0, gradientV = 0, n = 0;
     for (const j of [k - 1, k + 1]) {
       if (j < 0 || j > K - 1 || (j < k && (geopotential[j * C + i] - geopotential[bottom]) / g >= mixingDepth)) continue;
       const jdx = j * C + i, jWater = Math.max(0, qc[jdx]), dz = (geopotential[jdx] - geopotential[idx]) / g;
       gradientQ += (Math.max(0, q[jdx]) + jWater - total) / dz;
       gradientL += (theta[jdx] - latentHeat * jWater / (cp * exnerLayer[jdx]) - level) / dz;
+      gradientV += (theta[jdx] * (1 + VIRTUAL_FACTOR * Math.max(0, q[jdx]) - jWater) - thetaVirtual) / dz;
       n++;
     }
-    if (n > 1) { gradientQ /= n; gradientL /= n; }
+    if (n > 1) { gradientQ /= n; gradientL /= n; gradientV /= n; }
     const surface = geopotential[bottom] - cp * thetaV[bottom] * (exnerLower[bottom] - exnerLayer[bottom]), z = (geopotential[idx] - surface) / g;
-    const asymptote = boundaryBuoyancy !== null && !(boundaryBuoyancy[i] > 0) ? stableMixingLength : mixingLength;
-    const length = 0.4 * z / (1 + 0.4 * z / asymptote);
+    const stable = boundaryBuoyancy !== null && !(boundaryBuoyancy[i] > 0);
+    let length = 0.4 * z / (1 + 0.4 * z / (stable ? stableMixingLength : mixingLength));
+    if (buoyancyLength !== null && boundaryBuoyancy !== null && !stable && gradientV > 0) length = Math.min(length, buoyancyLength * Math.cbrt(boundaryBuoyancy[i] * Math.max(0, mixedDepth)) * Math.sqrt(thetaVirtual / (g * gradientV)));
     const spread = Math.max(varianceFloor * qs, varianceScale * length * a * Math.abs(gradientQ - ex * slope * gradientL));
-    return varianceCover(a * (total - qs), spread);
+    return varianceRule === 'water' ? heldCover(water, spread) : varianceCover(a * (total - qs), spread);
   }
 
   function overcastCover(idx, k, pi, theta, q, qc, rhc) {
@@ -1128,7 +1158,7 @@ export function createRadiation(mesh, core, {
       }
       layerCover[k] = 1;
       if (cloudCover === 'pdf' && q !== null && cloudWater[k] > 0 && boundaryCover === 'variance' && (geopotential[idx] - geopotential[bottom * C + i]) / g < mixingDepth) {
-        layerCover[k] = Math.min(1, Math.max(coverFloor, turbulentCover(i, k, pi, theta, q, qc, mixingDepth)));
+        layerCover[k] = Math.min(1, Math.max(coverFloor, turbulentCover(i, k, pi, theta, q, qc, mixingDepth, mixedDepth)));
         if (stratiform > 0) layerCover[k] = (1 - stratiform) * layerCover[k] + stratiform * overcastCover(idx, k, pi, theta, q, qc, boundaryCriticalHumidity);
       } else if (cloudCover === 'pdf' && q !== null && cloudWater[k] > 0) {
         const inside = (geopotential[idx] - geopotential[bottom * C + i]) / g < mixedDepth;

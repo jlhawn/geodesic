@@ -199,7 +199,16 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * carried from `plumeVelocity`² at its first cloudy layer by the deep
  * plume's law (`plumeAcceleration` a, `plumeDrag` b: dw²/dz = 2 a B −
  * 2 b ε w²) and spent against the layer's negative buoyancy; a number
- * gives the share directly. The
+ * gives the share directly. With `cumulusAscent` 'kinetic' ('buoyant',
+ * the default, is the rule above) the plume crosses each non-buoyant
+ * cloudy layer its w² carries it through and ends in the first one it
+ * does not, as the w equation tops cumulus where w vanishes (Siebesma et
+ * al. 2003). With `cumulusEntrainmentHeight` c
+ * (null: none) it entrains at ε = c / z, z the layer midpoint's height
+ * above the surface, in place of `cumulusEntrainment` (Siebesma et al.
+ * 2003 fit 1/z to BOMEX's cloud cores), and detrains at ε +
+ * `cumulusDetrainment` − `cumulusEntrainment`, so its mass flux falls
+ * with height at the constant rates' pace. The
  * base mass flux is ρ_LCL c w exp(−inhibition / w²), c the
  * `cumulusClosure`, w the larger of (B₀ h)^⅓ and `cumulusFriction` u*,
  * B₀ the boundary layer's surface buoyancy flux and h its depth above the
@@ -469,7 +478,8 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * fogDroplets [150, 60] /cm³, fogDeposition 1, fogDepositionLimit 0.25 m/s, rainEvaporation 1,
  * cumulusClosure 0.03 (Grant 2001), cumulusEntrainment 2.5e-3 /m, cumulusDetrainment
  * 3e-3 /m, cumulusSourceDepth 50 hPa, cumulusBoundaryLoss 0.1,
- * cumulusFriction 1, cumulusOvershoot 'kinetic', cumulusUpdraft 1 m/s, cumulusMemory
+ * cumulusFriction 1, cumulusOvershoot 'kinetic', cumulusAscent 'buoyant', no
+ * cumulusEntrainmentHeight, cumulusUpdraft 1 m/s, cumulusMemory
  * 1800 s, no cumulusRain, cumulusSource 'mean' (or 'lowest': the plume leaves with
  * the lowest layer's air), plumeClosure 'separate',
  * plumeCapeParcel 'plume', plumeSource 'mean', plumeVelocity 1 m/s,
@@ -488,7 +498,7 @@ export const MOIST_DEFAULTS = {
   autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
   deckVeto: true, coupledVeto: false, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
-  cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
+  cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'buoyant', cumulusEntrainmentHeight: null, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', excessVelocity: 'surfaceLayer', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainmentLaw: 'ifs', plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
   plumeRainRate: 3e-3, plumeRainThreshold: 0, plumeRainEvaporation: 1e-3, plumePhase: 'mixed', plumeConversion: 'sundqvist', convectionType: 'testParcel', downdraftShare: 0.3, downdraftEntrainment: 1e-4, capeClosure: 'bechtold', pcapeBoundary: 'positive', plumeCape: 120, plumeRelaxation: 3600, plumeMomentum: true, plumeConsumption: 'all',
   condensation: 'uniform', boundaryCondensation: 'uniform', iceSaturation: true, iceNucleation: false, surfaceCriticalHumidity: 0.975, topCriticalHumidity: 0.75, criticalExponent: 2, iceFall: 2.5, iceFallExponent: 0.16,
@@ -502,7 +512,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   const {
     latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, stratiformLifetime, rainEvaporation, autoconversionFloor, fogDroplets, fogDeposition, fogDepositionLimit,
     deckVeto, coupledVeto, evaporationInCloud, virtualBuoyancy,
-    cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
+    cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusAscent, cumulusEntrainmentHeight, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, excessVelocity, plumePhase, plumeConversion, convectionType, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainmentLaw, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
     downdraftShare, downdraftEntrainment, capeClosure, pcapeBoundary, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption,
     condensation, boundaryCondensation, iceSaturation, iceNucleation, surfaceCriticalHumidity, topCriticalHumidity, criticalExponent, iceFall, iceFallExponent, liquidTemperature, iceTemperature,
@@ -541,6 +551,9 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   if (cumulusSource !== 'mean' && cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${cumulusSource}`);
   if (autoconversionFloor !== 'lowest' && autoconversionFloor !== 'boundaryLayer' && autoconversionFloor !== 'mixingTop' && autoconversionFloor !== 'none') throw new Error(`autoconversionFloor must be 'lowest', 'boundaryLayer', 'mixingTop' or 'none', not ${autoconversionFloor}`);
   if (cumulusOvershoot !== 'kinetic' && !(cumulusOvershoot >= 0 && cumulusOvershoot <= 1)) throw new Error(`cumulusOvershoot must be a share between 0 and 1 or 'kinetic', not ${cumulusOvershoot}`);
+  if (cumulusAscent !== 'buoyant' && cumulusAscent !== 'kinetic') throw new Error(`cumulusAscent must be 'buoyant' or 'kinetic', not ${cumulusAscent}`);
+  if (cumulusAscent === 'kinetic' && cumulusOvershoot !== 'kinetic') throw new Error(`cumulusAscent 'kinetic' needs cumulusOvershoot 'kinetic', whose w² carries the plume`);
+  if (cumulusEntrainmentHeight !== null && !(Number.isFinite(cumulusEntrainmentHeight) && cumulusEntrainmentHeight > 0)) throw new Error(`cumulusEntrainmentHeight must be null or a factor above 0, not ${cumulusEntrainmentHeight}`);
   if (fogDroplets !== null && !(Array.isArray(fogDroplets) && fogDroplets.length === 2 && fogDroplets.every((n) => Number.isFinite(n) && n > 0))) throw new Error(`fogDroplets must be null or [continental, sea] droplet numbers above 0 per cm³, not ${JSON.stringify(fogDroplets)}`);
   if (!(Number.isFinite(fogDeposition) && fogDeposition >= 0)) throw new Error(`fogDeposition must be an efficiency of 0 or more, not ${fogDeposition}`);
   if (!(Number.isFinite(fogDepositionLimit) && fogDepositionLimit > 0)) throw new Error(`fogDepositionLimit must be a speed above 0 in m/s, not ${fogDepositionLimit}`);
@@ -855,7 +868,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     return { source, mass, sourceS: lowest ? envS[bottom] : energy / mass, sourceQ: lowest ? envQ[bottom] : water / mass };
   }
 
-  const kineticOvershoot = cumulusOvershoot === 'kinetic';
+  const kineticOvershoot = cumulusOvershoot === 'kinetic', carriedAscent = cumulusAscent === 'kinetic', byHeight = cumulusEntrainmentHeight !== null;
 
   function plumeKinetic(w2, work, depth, mixing) {
     const x = 2 * mixing * depth;
@@ -889,11 +902,12 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     cumulus.source = source; cumulus.lclPressure = lcl.pressure;
     const virtual = virtualBuoyancy ? VIRTUAL_FACTOR : 0, loading = virtualBuoyancy ? 1 : 0;
     let s = sourceS, w = sourceQ, inhibition = 0, cloudy = false, top = -1, guess = 0, w2 = plumeVelocity * plumeVelocity, share = 1;
+    const surface = byHeight ? (geopotential[bottom * C + i] - cp * thetaV[bottom * C + i] * (exnerLower[bottom * C + i] - exnerLayer[bottom * C + i])) / g : 0;
     plumeS[source] = s; plumeQ[source] = w;
     for (let k = source - 1; k >= 0; k--) {
       if (!(p[k] > shallowTop)) { if (cloudy) top = k + 1; break; }
       const below = upperInterface(i, k + 1), above = upperInterface(i, k);
-      const mixes = pi[i] * levels[k + 1] <= lcl.pressure, epsilon = mixes ? cumulusEntrainment : 0;
+      const mixes = pi[i] * levels[k + 1] <= lcl.pressure, epsilon = mixes ? (byHeight ? cumulusEntrainmentHeight / Math.max(z[k] - surface, 1) : cumulusEntrainment) : 0;
       const half = Math.exp(-epsilon * (z[k] - below));
       const midS = envS[k] + (s - envS[k]) * half, midQ = envQ[k] + (w - envQ[k]) * half;
       plumeState(midS, midQ, z[k], p[k], guess);
@@ -903,8 +917,13 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       const work = R * (plume.T * (1 + virtual * (midQ - plume.liquid) - loading * plume.liquid) - T[k] * (1 + virtual * air - loading * cloud)) * dp[k] / p[k];
       if (plume.liquid > 0) cloudy = true;
       if (!cloudy) { if (work < 0) inhibition -= work; }
-      else if (!(work > 0)) { top = k; if (kineticOvershoot) share = overshootShare(w2, work, above - below, plumeDrag * epsilon); break; }
-      else if (kineticOvershoot) w2 = plumeKinetic(w2, work, above - below, plumeDrag * epsilon);
+      else {
+        if (!(work > 0)) {
+          if (kineticOvershoot) share = overshootShare(w2, work, above - below, plumeDrag * epsilon);
+          if (!(carriedAscent && share >= 1)) { top = k; break; }
+        }
+        if (kineticOvershoot) w2 = plumeKinetic(w2, work, above - below, plumeDrag * epsilon);
+      }
       const full = Math.exp(-epsilon * (above - below));
       s = envS[k] + (s - envS[k]) * full; w = envQ[k] + (w - envQ[k]) * full;
       plumeRain[k] = 0; plumeFrozen[k] = 0;
@@ -914,7 +933,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
         if (excess > 0) { w -= excess; s += latentHeat * excess; plumeRain[k] = excess; if (mixedPlume) { plumeFrozen[k] = excess * plume.ice / plume.liquid; s += FUSION_HEAT * plumeFrozen[k]; } }
       }
       plumeS[k] = s; plumeQ[k] = w;
-      plumeGrowth[k] = Math.exp((epsilon - (mixes ? cumulusDetrainment : 0)) * (above - below));
+      plumeGrowth[k] = Math.exp((mixes ? cumulusEntrainment - cumulusDetrainment : 0) * (above - below));
     }
     cumulus.inhibition = inhibition;
     if (top < 0) return 0;
