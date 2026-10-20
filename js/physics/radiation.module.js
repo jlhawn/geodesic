@@ -159,6 +159,29 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * plume's own path, so that its in-cloud path is the plume's however
  * small the fraction.
  *
+ * With `cloudColumns` the shortwave's cloudy column is split into the
+ * independent columns of that overlap (the 'pdf' cover under
+ * 'exponentialRandom' only): a column is cloudy in a layer or not as a
+ * Markov chain down the layers whose pair covers are those of
+ * `overlapped`, so that its total cover is f̄ and each layer's cloud holds
+ * its path in its own seen cover. The chain carries the mean and mean
+ * square of the column's cloud depth τ' and the mean of its path; the
+ * cloudy columns' τ' is taken as lognormal with those moments, and the
+ * shortwave is the sum over four of its values (`lognormalNodes`,
+ * Gauss-Hermite in its logarithm), each with its path in proportion,
+ * blended with the clear column at f̄ — the independent-column
+ * approximation (Cahalan et al. 1994) over the overlap's columns,
+ * integrated where Räisänen et al. (2004) sample them. The deck overlaps
+ * the resolved cloud at random. A column whose mean in-cloud τ' is below
+ * 10⁻⁶ keeps the two-column blend and the relative variance is held to at
+ * most 10⁴, so that the GPU's f32 moments of a trace of cloud stay
+ * finite. `cloudSpread`, the fractional standard deviation of the water
+ * inside each layer's cloud (0, uniform, by default; 0.75 ± 0.18
+ * observed, Shonk et al. 2010; 0.6 for ice in CloudSat, Hill et al.
+ * 2012), adds its variance to each layer's τ' and the deck's, and in the
+ * longwave makes each cloud's transmission the mean of exp(−κ W x / f)
+ * over a lognormal x of mean 1 and that spread, at the same four values.
+ *
  * In the correlated longwave, `longwaveOverlap` 'exponentialRandom' (the
  * default) overlaps the cloudy layers as the shortwave's cover does: in
  * each g-point every layer is two regions, its cloud's f with emissivity
@@ -447,6 +470,20 @@ export function overlapped(cumulative, previous, cover, alpha) {
   return 1 - (1 - cumulative) * (1 - pair) / (1 - previous);
 }
 
+const COLUMN_DEPTH_FLOOR = 1e-6, COLUMN_VARIANCE_CAP = 1e4;
+const HERMITE_NODES = [[-1.650680123885785, 0.08131283544724518], [-0.5246476232752903, 0.8049140900055128], [0.5246476232752903, 0.8049140900055128], [1.650680123885785, 0.08131283544724518]];
+
+/*
+ * Four values of a lognormal variable of mean 1 and relative variance
+ * `variance`, with the weights that integrate a smooth function of it
+ * (Gauss-Hermite in its logarithm), as [value, weight] pairs.
+ */
+export function lognormalNodes(variance) {
+  if (!(variance > 0)) return [[1, 1]];
+  const sigma = Math.sqrt(Math.log(1 + Math.max(0, variance)));
+  return HERMITE_NODES.map(([x, w]) => [Math.exp(Math.SQRT2 * sigma * x - 0.5 * sigma * sigma), w / Math.sqrt(Math.PI)]);
+}
+
 export function varianceCover(deficit, spread) {
   if (!(spread > 0)) return deficit > 0 ? 1 : deficit < 0 ? 0 : 0.5;
   return 0.5 * (1 + erf(deficit / (Math.SQRT2 * spread)));
@@ -550,7 +587,7 @@ export function cloudOptics(T, continental, options = CLOUD_OPTICS, out = { liqu
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = null, cloudScattering = null, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 4, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
-  prognosticHeight = true, deckRest = 'regime', deckSlab = 'fraction', deckReference = 'layer', cumulusCeiling = 2000, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'exponentialRandom', decorrelationLength = DECORRELATION_LENGTH, decorrelationSlope = DECORRELATION_SLOPE,
+  prognosticHeight = true, deckRest = 'regime', deckSlab = 'fraction', deckReference = 'layer', cumulusCeiling = 2000, gateMemory = DAY, subsidenceSmoothing = 2, cloudCover = 'pdf', criticalHumidity = 0.8, boundaryCriticalHumidity = 0.85, coverFloor = 0.01, overcastWater = 5e-5, overcastInversion = [8, 12], cloudOverlap = 'exponentialRandom', decorrelationLength = DECORRELATION_LENGTH, decorrelationSlope = DECORRELATION_SLOPE, cloudColumns = false, cloudSpread = 0,
   boundaryCover = 'variance', varianceFloor = 0.002, varianceScale = 5, mixingLength = 300, stableMixingLength = 30, deckRegime = 'inversion', deckBypass = false,
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
@@ -637,6 +674,9 @@ export function createRadiation(mesh, core, {
   if (stratusIndex !== 'eis' && stratusIndex !== 'ectei') throw new Error(`stratusIndex must be 'eis' or 'ectei', not ${stratusIndex}`);
   if (cloudOverlap !== 'maximum' && cloudOverlap !== 'maximumRandom' && cloudOverlap !== 'exponentialRandom') throw new Error(`cloudOverlap must be 'maximum', 'maximumRandom' or 'exponentialRandom', not ${cloudOverlap}`);
   const exponential = cloudOverlap === 'exponentialRandom';
+  if (cloudColumns && !(exponential && cloudCover === 'pdf')) throw new Error(`cloudColumns needs cloudCover 'pdf' and cloudOverlap 'exponentialRandom', not ${cloudCover} and ${cloudOverlap}`);
+  if (!(cloudSpread >= 0) || (cloudSpread > 0 && !cloudColumns)) throw new Error(`cloudSpread must be a fractional standard deviation of at least 0, and needs cloudColumns, not ${cloudSpread}`);
+  const spreadNodes = lognormalNodes(cloudSpread * cloudSpread);
   const decorrelation = Float64Array.from({ length: C }, (_, i) => decorrelationLength - decorrelationSlope * Math.abs(mesh.latCell[i]) * 180 / Math.PI);
   if (!(overcastInversion?.[1] > overcastInversion?.[0])) throw new Error(`overcastInversion must rise from its first to its second EIS, not ${overcastInversion}`);
   if (![0, 1, 2].includes(subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${subsidenceSmoothing}`);
@@ -679,7 +719,7 @@ export function createRadiation(mesh, core, {
   const sun = new Float64Array([1, 0, 0]), ozoneWeight = new Float64Array(5);
   let yearFraction = 0;
   const budget = { absorbedSolar: 0, atmosphereSolar: 0, aerosolSolar: 0, outgoingLongwave: 0, clearAbsorbedSolar: 0, clearOutgoingLongwave: 0, sensibleHeat: 0, evaporation: 0, surfaceBuoyancy: 0, surfaceFlux: 0, insolation: 0, reflectedSolar: 0, cloudReflectance: 0, cloudCover: 0, cloudSolar: 0, stratus: 0, stratusFraction: 0, stabilityIndex: NaN, mlmCover: 0, mlmWater: 0, mlmEntrainment: 0, mlmSolar: 0, mlmTop: 0, mlmThetaL: NaN, mlmTotalWater: NaN, mlmThetaLAbove: NaN, mlmTotalWaterAbove: NaN, stratiform: 0, ozoneSolar: 0, vaporSolar: 0, oxygenSolar: 0, carbonDioxideSolar: 0, upwardGasSolar: 0, downwardLongwave: 0 };
-  const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0, visibleEscape: 0, restEscape: 0, visibleReflectance: 0 }, decked = { ...sky }, probe = { ...sky };
+  const sky = { absorbed: 0, down: 0, direct: 0, reflectance: 0, cloud: 0, visibleEscape: 0, restEscape: 0, visibleReflectance: 0 }, decked = { ...sky }, probe = { ...sky }, columnLight = { ...sky };
   const deckLight = { incident: 0, mu: 0, direct: 0, diffuse: 0, path: 0, depth: 0, layer: 0, clear: 0 };
 
   function setTime(t) {
@@ -960,6 +1000,20 @@ export function createRadiation(mesh, core, {
     }
   }
 
+  function transmitted(depth) {
+    let through = 0;
+    for (const [x, w] of spreadNodes) through += w * Math.exp(-depth * x);
+    return through;
+  }
+
+  function cloudyColumns(out, nodes, depth, path, mu, surfaceAlbedo, diffuseAlbedo, share, adding = false) {
+    if (!adding) for (const key of SHORTWAVE_KEYS) out[key] = 0;
+    for (const [x, w] of nodes) {
+      shortwave(columnLight, depth * x, Math.exp(-cloudSolarAbsorption * path * x), mu, surfaceAlbedo, diffuseAlbedo);
+      for (const key of SHORTWAVE_KEYS) out[key] += share * w * columnLight[key];
+    }
+  }
+
   function stream(out, cloudDepth, keep, mu, surfaceAlbedo, diffuseAlbedo) {
     const reflectance = mu > 0 && cloudDepth > 0 ? cloudDepth / (cloudDepth + 2 * mu) : 0;
     let direct = (1 - skylight) * (cloudDepth > 0 && mu > 0 ? Math.exp(-cloudDepth / mu) : 1);
@@ -1051,6 +1105,7 @@ export function createRadiation(mesh, core, {
     }
     let cloudPath = 0, cloudDepth = 0, columnCover = 0, block = 0, clearColumn = 1, inversionShare = 0, lowBlock = 0, lowClear = 1, lowMaximum = 0, lowPath = 0;
     let previous = 0, cumulative = 0, lowPrevious = 0, lowCumulative = 0;
+    let inside = 0, outside = 1, depthIn = 0, depthOut = 0, squareIn = 0, squareOut = 0, pathIn = 0, pathOut = 0;
     if (qAir !== null) {
       const lcl = liftingCondensationLevel(airTemperature, qAir, pi * sigmaMid[bottom], kappa);
       if (lcl) {
@@ -1101,6 +1156,25 @@ export function createRadiation(mesh, core, {
       if (block > 0 && (!(seen > 0) || k === K - 1)) { clearColumn *= 1 - block; columnCover = Math.max(columnCover, block); block = 0; }
       if (exponential) {
         const alpha = k > 0 ? Math.exp(-(geopotential[(k - 1) * C + i] - geopotential[idx]) / (g * decorrelation[i])) : 0;
+        if (cloudColumns) {
+          let stay = 0, start = seen;
+          if (previous > 0) {
+            const joint = previous + seen - (alpha * Math.max(previous, seen) + (1 - alpha) * (previous + seen - previous * seen));
+            stay = Math.min(1, Math.max(0, joint / previous));
+            start = previous < 1 ? Math.min(1, Math.max(0, (seen - joint) / (1 - previous))) : 0;
+          }
+          const depth = seen > 0 ? (graySolar ? cloudScattering : solarDepth[k]) * cloudWater[k] / seen : 0, water = seen > 0 ? cloudWater[k] / seen : 0;
+          const nowIn = inside * stay + outside * start, carried = depthIn * stay + depthOut * start;
+          const squareCarried = squareIn * stay + squareOut * start, pathCarried = pathIn * stay + pathOut * start;
+          outside = inside * (1 - stay) + outside * (1 - start);
+          depthOut = depthIn * (1 - stay) + depthOut * (1 - start);
+          squareOut = squareIn * (1 - stay) + squareOut * (1 - start);
+          pathOut = pathIn * (1 - stay) + pathOut * (1 - start);
+          squareIn = squareCarried + 2 * depth * carried + (1 + cloudSpread * cloudSpread) * depth * depth * nowIn;
+          depthIn = carried + depth * nowIn;
+          pathIn = pathCarried + water * nowIn;
+          inside = nowIn;
+        }
         cumulative = overlapped(cumulative, previous, seen, alpha);
         previous = seen;
         if (pi * sigmaMid[k] > LOW_CLOUD_PRESSURE) { lowCumulative = overlapped(lowCumulative, lowPrevious, seen, alpha); lowPrevious = seen; }
@@ -1147,8 +1221,14 @@ export function createRadiation(mesh, core, {
         }
       }
     }
-    const inCloud = cloudPath / columnCover;
-    shortwave(sky, graySolar ? cloudScattering * inCloud : cloudDepth / columnCover, Math.exp(-cloudSolarAbsorption * inCloud), mu, surfaceAlbedo, diffuseAlbedo);
+    const columns = cloudColumns && cloudPath > 0 && (depthIn + depthOut) / columnCover > COLUMN_DEPTH_FLOOR;
+    const columnDepth = columns ? (depthIn + depthOut) / columnCover : 0, columnPath = columns ? (pathIn + pathOut) / columnCover : 0;
+    const columnVariance = columns ? Math.min(COLUMN_VARIANCE_CAP, Math.max(0, (squareIn + squareOut) / (depthIn + depthOut) / columnDepth - 1)) : 0;
+    if (columns) cloudyColumns(sky, lognormalNodes(columnVariance), columnDepth, columnPath, mu, surfaceAlbedo, diffuseAlbedo, 1);
+    else {
+      const inCloud = cloudPath / columnCover;
+      shortwave(sky, graySolar ? cloudScattering * inCloud : cloudDepth / columnCover, Math.exp(-cloudSolarAbsorption * inCloud), mu, surfaceAlbedo, diffuseAlbedo);
+    }
     if (columnCover < 1) {
       shortwave(clearSky, 0, 1, mu, surfaceAlbedo, diffuseAlbedo);
       for (const key of SHORTWAVE_KEYS) sky[key] = columnCover * sky[key] + (1 - columnCover) * clearSky[key];
@@ -1199,8 +1279,8 @@ export function createRadiation(mesh, core, {
       const mass = pi * dSigma[k] / g;
       emissivity[k] = 1 - Math.exp(coupled ? -vaporCoupling * Math.max(0, q[k * C + i]) * mass : -tau0 * shape[k]);
       const water = cloudWater[k];
-      cloudEmissivity[k] = water > 0 ? layerCover[k] * (1 - Math.exp(-infrared[k] * water / layerCover[k])) : 0;
-      if (deck > 0 && k === stratusLayer) cloudEmissivity[k] = fraction * (1 - Math.exp(-infrared[k] * (water + deck))) + (1 - fraction) * cloudEmissivity[k];
+      cloudEmissivity[k] = water > 0 ? layerCover[k] * (1 - transmitted(infrared[k] * water / layerCover[k])) : 0;
+      if (deck > 0 && k === stratusLayer) cloudEmissivity[k] = fraction * (1 - transmitted(infrared[k] * (water + deck))) + (1 - fraction) * cloudEmissivity[k];
       const clear = 1 - cloudEmissivity[k];
       vaporEmissivity[k] = 1 - (1 - emissivity[k]) * clear;
       mixedEmissivity[k] = 1 - (1 - gasEmissivity[k]) * clear;
@@ -1224,8 +1304,15 @@ export function createRadiation(mesh, core, {
       }
     }
     if (deck > 0) {
-      const total = cloudPath + deck;
-      shortwave(decked, graySolar ? cloudScattering * total : cloudDepth + solarDepth[stratusLayer] * deck, Math.exp(-cloudSolarAbsorption * total), mu, surfaceAlbedo, diffuseAlbedo);
+      const total = cloudPath + deck, deckDepth = (graySolar ? cloudScattering : solarDepth[stratusLayer]) * deck;
+      if (cloudColumns) {
+        const resolved = columns ? columnCover : 0;
+        cloudyColumns(decked, spreadNodes, deckDepth, deck, mu, surfaceAlbedo, diffuseAlbedo, 1 - resolved);
+        if (resolved > 0) {
+          const depth = columnDepth + deckDepth, variance = (columnVariance * columnDepth * columnDepth + cloudSpread * cloudSpread * deckDepth * deckDepth) / (depth * depth);
+          cloudyColumns(decked, lognormalNodes(variance), depth, columnPath + deck, mu, surfaceAlbedo, diffuseAlbedo, resolved, true);
+        }
+      } else shortwave(decked, graySolar ? cloudScattering * total : cloudDepth + solarDepth[stratusLayer] * deck, Math.exp(-cloudSolarAbsorption * total), mu, surfaceAlbedo, diffuseAlbedo);
       deckShare = fraction * incident * decked.cloud / total;
       clearShare *= 1 - fraction;
       sky.absorbed = fraction * decked.absorbed + (1 - fraction) * sky.absorbed;
@@ -1269,7 +1356,7 @@ export function createRadiation(mesh, core, {
         for (let k = 0; k < K; k++) {
           const water = cloudWater[k], decked = deck > 0 && k === stratusLayer;
           chainCover[k] = water > 0 && !decked ? layerCover[k] : 0;
-          chainCloud[k] = chainCover[k] > 0 ? -Math.expm1(-infrared[k] * water / chainCover[k]) : 0;
+          chainCloud[k] = chainCover[k] > 0 ? (cloudSpread > 0 ? 1 - transmitted(infrared[k] * water / chainCover[k]) : -Math.expm1(-infrared[k] * water / chainCover[k])) : 0;
           chainOutside[k] = decked ? cloudEmissivity[k] : 0;
           clearShareInverse[k] = chainCover[k] < 1 ? 1 / (1 - chainCover[k]) : 0;
           cloudShareInverse[k] = chainCover[k] > 0 ? 1 / chainCover[k] : 0;
