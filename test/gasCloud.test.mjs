@@ -84,10 +84,10 @@ test('under the spectral gases in a humid column the cloud joins every g-point a
   for (const [name, [T, path]] of Object.entries(CLOUDS)) {
     if (!HAND[name].emissivity && !HAND[name].reflectance) continue;
     const sigma = T > 273 ? 0.8 : 0.25;
-    const probe = cloudColumn({ ...SPECTRAL }, { T, path, humid: true, sigma });
+    const probe = cloudColumn({ ...SPECTRAL, longwaveLines: 'scaled' }, { T, path, humid: true, sigma });
     const { K } = probe.model.core.diagnostics;
     const ozoneProfile = Float64Array.from({ length: K }, (_, j) => 0.3 * (probe.model.core.diagnostics.levels[j + 1] ** 3 - probe.model.core.diagnostics.levels[j] ** 3) * (j < K / 3 ? 1 : 0.1));
-    const c = cloudColumn({ ...SPECTRAL, ozoneProfile }, { T, path, humid: true, sigma }), gray = cloudColumn({ ...GRAY_GASES }, { T, path, humid: true, sigma });
+    const c = cloudColumn({ ...SPECTRAL, longwaveLines: 'scaled', ozoneProfile }, { T, path, humid: true, sigma }), gray = cloudColumn({ ...GRAY_GASES }, { T, path, humid: true, sigma });
     const emissivity = HAND[name].emissivity ?? (1 - Math.exp(-1.66 * 1000 * 0.090361 * path));
     const reference = referenceLongwave(c, emissivity, ozoneProfile), referenceClear = referenceLongwave(c, 0, ozoneProfile);
     assert.ok(close(c.cloudy.outgoingLongwave, reference, 1e-12) && close(c.cloudy.clearOutgoingLongwave, referenceClear, 1e-12), `${name}: OLR ${c.cloudy.outgoingLongwave} against ${reference}, clear ${c.cloudy.clearOutgoingLongwave} against ${referenceClear}`);
@@ -259,7 +259,7 @@ async function gpuLongwave({ model, levels }, radiation, water) {
 
 test('on the midlatitude-summer profile 100 g/m2 of liquid at 285 K under 20 g/m2 of ice at 220 K change the OLR and the downward longwave by the g-point sums of their phase emissivities on the clear-sky fluxes, overcast and under the uniform cover, on both engines', async () => {
   const lines = [];
-  for (const [label, radiation] of [['overcast', { cloudCover: 'overcast' }], ['uniform cover', {}]]) {
+  for (const [label, radiation] of [['overcast', { cloudCover: 'overcast', longwaveLines: 'scaled' }], ['uniform cover', { longwaveLines: 'scaled' }]]) {
     const column = layeredColumns(radiation), { model, cloud } = column, C = model.mesh.nCells, rad = model.radiation, [pi, theta, , surfaceT, q] = model.state;
     const { K } = model.core.diagnostics, none = new Float64Array(K * C);
     const run = (i, water) => { rad.column(i, pi[i], theta, surfaceT[i], 5, undefined, 0, q[(K - 1) * C + i], q, water, 0.07, 0.07); return { ...rad.budget, covers: column.layers.map(([k]) => rad.layerCover[k]) }; };

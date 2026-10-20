@@ -119,7 +119,7 @@ test('one cloud layer: the overcast and clear calls blended by the cover reprodu
   core.diagnoseColumn(0, pi, theta);
   for (let k = 0; k < K; k++) theta[k * C] = MLS.temperature[k] / exnerLayer[k * C];
   core.diagnoseColumn(0, pi, theta);
-  const pdf = createRadiation(mesh, core, { solarConstant: 340.5 * 1.5, ozoneProfile: MLS.ozone, nearInfrared: 'clirad' });
+  const pdf = createRadiation(mesh, core, { longwaveLines: 'scaled', solarConstant: 340.5 * 1.5, ozoneProfile: MLS.ozone, nearInfrared: 'clirad' });
   for (const [k, water] of [[22, 0.03], [26, 0.05]]) {
     const humidity = Float64Array.from(MLS.humidity);
     humidity[k] = 0.85 * saturationHumidity(MLS.temperature[k], ps * sigmaMid[k]);

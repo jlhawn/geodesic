@@ -1,6 +1,8 @@
 import { LONGWAVE_SPECTRAL_MODEL, LONGWAVE_POINTS } from './longwaveTable.module.js';
 import { LONGWAVE_SPECTRAL_MODEL as BL36_SPECTRAL_MODEL, LONGWAVE_POINTS as BL36_POINTS } from './longwaveTableBl36.module.js';
 import { LONGWAVE_SPECTRAL_MODEL as BL60_SPECTRAL_MODEL, LONGWAVE_POINTS as BL60_POINTS } from './longwaveTableBl60.module.js';
+import { LONGWAVE_SPECTRAL_MODEL as BL36_VOIGT_SPECTRAL_MODEL, LONGWAVE_POINTS as BL36_VOIGT_POINTS } from './longwaveTableBl36Voigt.module.js';
+import { LONGWAVE_SPECTRAL_MODEL as BL36_BY_GAS_SPECTRAL_MODEL, LONGWAVE_POINTS as BL36_BY_GAS_POINTS } from './longwaveTableBl36ByGas.module.js';
 import { sigmaGridName } from '../dynamics/sigmaCore.module.js';
 
 /*
@@ -18,6 +20,18 @@ import { sigmaGridName } from '../dynamics/sigmaCore.module.js';
  * and dopplerO3) the pressure at which the gas's Lorentz half-width equals
  * its Doppler half-width at 250 K. The g-point emits the share of sigma T^4
  * its row's quartic in (T - 250)/100 gives.
+ *
+ * A table with Doppler cores (dopplerCoreH2o, dopplerCoreCo2, dopplerCoreO3)
+ * has twelve more coefficients at the end of each row (LONGWAVE_CORES): for
+ * the vapor, CO2 and ozone, one per node of a line's core, x = |nu -
+ * nu_line|/alpha_D between consecutive CORE_EDGES, alpha_D the Doppler 1/e
+ * half-width. A node's coefficient is its mean absorption in the Doppler
+ * limit, and its path the gas's own (the vapor mass, the CO2 mass times
+ * exp(tCo2 (T - 250)), the ozone mass) times coreFactor: the node's mean of
+ * the Voigt function H(a, x) over its mean of exp(-x^2), a = sqrt(ln 2) p/p_D
+ * the Lorentz half-width over alpha_D. Such a table's dopplerH2o, dopplerCo2
+ * and dopplerO3 are 0: the far wings scale with the Lorentz width alone, as a
+ * Voigt line's do.
  */
 export const LONGWAVE_CONSTANTS = { pRef: 50000, diffusivity: 1.66, gravity: 9.806 };
 
@@ -37,16 +51,25 @@ export function normalizedPoints(points) {
 export const LONGWAVE_TABLE = { ...LONGWAVE_SPECTRAL_MODEL, points: normalizedPoints(LONGWAVE_POINTS) };
 const BL36_TABLE = { ...BL36_SPECTRAL_MODEL, points: normalizedPoints(BL36_POINTS) };
 const BL60_TABLE = { ...BL60_SPECTRAL_MODEL, points: normalizedPoints(BL60_POINTS) };
-export const LONGWAVE_TABLE_FILES = { bl34: 'longwaveTable.module.js', bl36: 'longwaveTableBl36.module.js', bl60: 'longwaveTableBl60.module.js' };
+const BL36_VOIGT_TABLE = { ...BL36_VOIGT_SPECTRAL_MODEL, points: normalizedPoints(BL36_VOIGT_POINTS) };
+const BL36_BY_GAS_TABLE = { ...BL36_BY_GAS_SPECTRAL_MODEL, points: normalizedPoints(BL36_BY_GAS_POINTS) };
+export const LONGWAVE_TABLE_FILES = { bl34: 'longwaveTable.module.js', bl36: 'longwaveTableBl36.module.js', bl36Voigt: 'longwaveTableBl36Voigt.module.js', bl36ByGas: 'longwaveTableBl36ByGas.module.js', bl60: 'longwaveTableBl60.module.js' };
 
 /*
  * The table fitted on a grid's own columns: bl36's for bl36 and for bl42,
  * which shares its top layers, bl60's for bl60, the one fitted on bl34 for
- * every other grid.
+ * every other grid. With lines 'voigt', the table with Doppler cores fitted
+ * on bl36's columns; with 'scaledByGas', bl36's scaled lines refitted against
+ * each gas's RRTMG bands as well. bl60 keeps its own table whatever the lines:
+ * on its layers the bl36 'voigt' fit's heating errors at 3-30 hPa are two to
+ * four times larger.
  */
-export function longwaveTableFor(levels) {
+export function longwaveTableFor(levels, lines = 'scaled') {
+  if (lines !== 'scaled' && lines !== 'scaledByGas' && lines !== 'voigt') throw new Error(`longwaveLines must be 'scaled', 'scaledByGas' or 'voigt', not ${lines}`);
   const name = levels ? sigmaGridName(levels) : null;
   if (name === 'bl60') return BL60_TABLE;
+  if (lines === 'voigt') return BL36_VOIGT_TABLE;
+  if (lines === 'scaledByGas') return BL36_BY_GAS_TABLE;
   return name === 'bl36' || name === 'bl42' ? BL36_TABLE : LONGWAVE_TABLE;
 }
 export const GAS_MOLAR = { air: 28.964, h2o: 18.015, co2: 44.01, o3: 47.997, ch4: 16.04, n2o: 44.013 };
@@ -71,6 +94,43 @@ export function voigtScale(p, doppler) {
   return (doppler > 0 ? Math.sqrt(p * p + doppler * doppler) : p) / LONGWAVE_CONSTANTS.pRef;
 }
 
+export const longwaveCores = (model) => model.dopplerCoreCo2 > 0;
+export const LONGWAVE_ABSORBERS = ['line', 'continuum', 'co2', 'o3', 'ch4', 'n2o'];
+export const CORE_EDGES = [0, 0.6, 1.2, 1.8, 2.6], CORE_GASES = ['lineCore', 'co2Core', 'o3Core'];
+export const LONGWAVE_CORES = CORE_GASES.flatMap((n) => CORE_EDGES.slice(1).map((_, j) => `${n}${j + 1}`));
+
+/*
+ * The core nodes' factors at log2 a = -10, -10 + 1/3, ... 10 (CORE_FACTOR_POINTS
+ * each, node by node), with H(a, x) = (1/pi) ∫ exp(-(x + a tan t)^2) dt over
+ * |t| < pi/2 and the node means taken at the midpoints of 32 equal parts.
+ */
+export const CORE_FACTOR_POINTS = 61;
+let coreFactorTable = null;
+export function coreFactors() {
+  if (coreFactorTable) return coreFactorTable;
+  const nodes = CORE_EDGES.length - 1, parts = 32, steps = 400, out = new Float64Array(nodes * CORE_FACTOR_POINTS);
+  const voigt = (a, x) => {
+    const lo = Math.atan((-x - 7) / a), h = (Math.atan((7 - x) / a) - lo) / steps;
+    let s = 0;
+    for (let i = 0; i < steps; i++) { const u = x + a * Math.tan(lo + (i + 0.5) * h); s += Math.exp(-u * u); }
+    return s * h / Math.PI;
+  };
+  for (let j = 0; j < nodes; j++) {
+    const xs = Array.from({ length: parts }, (_, i) => CORE_EDGES[j] + (i + 0.5) * (CORE_EDGES[j + 1] - CORE_EDGES[j]) / parts);
+    const gauss = xs.reduce((s, x) => s + Math.exp(-x * x), 0);
+    for (let t = 0; t < CORE_FACTOR_POINTS; t++) {
+      const a = 2 ** (-10 + t / 3);
+      out[j * CORE_FACTOR_POINTS + t] = xs.reduce((s, x) => s + voigt(a, x), 0) / gauss;
+    }
+  }
+  return (coreFactorTable = out);
+}
+
+export function coreFactor(table, node, logA) {
+  const u = Math.min(Math.max((logA + 10) * 3, 0), CORE_FACTOR_POINTS - 1), i = Math.min(Math.floor(u), CORE_FACTOR_POINTS - 2), w = u - i, r = node * CORE_FACTOR_POINTS + i;
+  return table[r] * (1 - w) + table[r + 1] * w;
+}
+
 export function layerPaths(out, p, mass, T, q, ozone, co2, ch4, n2o, model = LONGWAVE_TABLE) {
   const scale = p / LONGWAVE_CONSTANTS.pRef, vapour = Math.max(0, q) * mass;
   out[0] = vapour * voigtScale(p, model.dopplerH2o ?? 0);
@@ -79,8 +139,18 @@ export function layerPaths(out, p, mass, T, q, ozone, co2, ch4, n2o, model = LON
   out[3] = ozone * Math.pow(voigtScale(p, model.dopplerO3 ?? 0), model.nO3);
   out[4] = ch4 * mass * scale;
   out[5] = n2o * mass * scale;
+  if (model.dopplerCoreCo2 > 0) {
+    const table = coreFactors(), nodes = CORE_EDGES.length - 1, carbon = co2 * mass * Math.exp(model.tCo2 * (T - 250));
+    const logH2o = Math.log2(SQRT_LN2 * p / model.dopplerCoreH2o), logCo2 = Math.log2(SQRT_LN2 * p / model.dopplerCoreCo2), logO3 = Math.log2(SQRT_LN2 * p / model.dopplerCoreO3);
+    for (let j = 0; j < nodes; j++) {
+      out[6 + j] = vapour * coreFactor(table, j, logH2o);
+      out[6 + nodes + j] = carbon * coreFactor(table, j, logCo2);
+      out[6 + 2 * nodes + j] = ozone * coreFactor(table, j, logO3);
+    }
+  }
   return out;
 }
+const SQRT_LN2 = Math.sqrt(Math.LN2);
 
 /*
  * The paths of a whole column given as layer means (column.levels sigma
@@ -88,8 +158,8 @@ export function layerPaths(out, p, mass, T, q, ozone, co2, ch4, n2o, model = LON
  * ch4, n2o), for scripts.
  */
 export function gasPaths(column, model = LONGWAVE_TABLE) {
-  const K = column.T.length, names = ['line', 'continuum', 'co2', 'o3', 'ch4', 'n2o'];
-  const out = Object.fromEntries(names.map((n) => [n, new Float64Array(K)])), row = new Float64Array(6);
+  const K = column.T.length, names = longwaveCores(model) ? [...LONGWAVE_ABSORBERS, ...LONGWAVE_CORES] : LONGWAVE_ABSORBERS;
+  const out = Object.fromEntries(names.map((n) => [n, new Float64Array(K)])), row = new Float64Array(names.length);
   for (let k = 0; k < K; k++) {
     const p = 0.5 * (column.levels[k] + column.levels[k + 1]) * column.ps, mass = (column.levels[k + 1] - column.levels[k]) * column.ps / LONGWAVE_CONSTANTS.gravity;
     layerPaths(row, p, mass, column.T[k], column.q[k], column.o3[k] * mass, column.co2[k], column.ch4[k], column.n2o[k], model);
@@ -99,7 +169,9 @@ export function gasPaths(column, model = LONGWAVE_TABLE) {
 }
 
 export function opticalDepth(row, paths, k) {
-  return LONGWAVE_CONSTANTS.diffusivity * (row[0] * paths.line[k] + row[1] * paths.continuum[k] + row[2] * paths.co2[k] + row[3] * paths.o3[k] + row[4] * paths.ch4[k] + row[5] * paths.n2o[k]);
+  let cores = 0;
+  if (row.length > 11) for (let m = 0; m < LONGWAVE_CORES.length; m++) if (row[11 + m]) cores += row[11 + m] * paths[LONGWAVE_CORES[m]][k];
+  return LONGWAVE_CONSTANTS.diffusivity * (row[0] * paths.line[k] + row[1] * paths.continuum[k] + row[2] * paths.co2[k] + row[3] * paths.o3[k] + row[4] * paths.ch4[k] + row[5] * paths.n2o[k] + cores);
 }
 
 /*

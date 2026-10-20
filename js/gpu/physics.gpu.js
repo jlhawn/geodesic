@@ -5,7 +5,7 @@ import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFEREN
 import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, fogConstants } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
-import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwave.module.js';
+import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR, longwaveCores, LONGWAVE_CORES, CORE_EDGES, CORE_FACTOR_POINTS, coreFactors } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
 import { SUMMER_DAY } from '../physics/ozone.module.js';
 import { OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR, VAPOR_COEFFICIENTS, VAPOR_WEIGHTS, OXYGEN, CO2_COEFFICIENT, STP_DEPTH, OZONE_CM_ATM, SCALING_PRESSURE, SCALING_EXPONENT, NEAR_INFRARED_BANDS, NEAR_INFRARED_P_REF, NEAR_INFRARED_MOLAR, VISIBLE_VAPOR_BANDS } from '../physics/shortwaveGases.module.js';
@@ -246,7 +246,7 @@ export function physicsConstants(o) {
   const nir = o.nearInfrared === 'bands' ? nearInfraredWgsl(o) : null;
   if (o.ozoneProfile) throw new Error('the GPU radiation takes its ozone from its climatology, not an ozoneProfile');
   if (o.ozone !== 'afgl' && o.ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${o.ozone}`);
-  const LONGWAVE_TABLE = o.longwaveTable ?? DEFAULT_LONGWAVE_TABLE, points = LONGWAVE_TABLE.points, f32 = (values) => `array<f32, ${values.length}>(${values.map((v) => v.toPrecision(9)).join(', ')})`;
+  const LONGWAVE_TABLE = o.longwaveTable ?? DEFAULT_LONGWAVE_TABLE, points = LONGWAVE_TABLE.points, LW_CORED = longwaveCores(LONGWAVE_TABLE), LW_NP = LW_CORED ? 6 + LONGWAVE_CORES.length : 6, LW_NODES = CORE_EDGES.length - 1, f32 = (values) => `array<f32, ${values.length}>(${values.map((v) => v.toPrecision(9)).join(', ')})`;
   const rayleigh = o.rayleighDepth != null ? [[1, o.rayleighDepth]] : o.rayleighBands;
   if (!(rayleigh.length >= 1 && rayleigh.length <= 3 && Math.abs(rayleigh.reduce((sum, [w]) => sum + w, 0) - 1) < 1e-9 && rayleigh.every(([w, tau]) => w > 0 && tau >= 0))) throw new Error(`rayleighBands must be one to three [weight, depth] pairs whose weights sum to 1, not ${JSON.stringify(rayleigh)}`);
   const visibleSum = (term) => rayleigh.map(([w, tau]) => `${w} * ${term(`${tau / REFERENCE_PRESSURE} * light.y + light.z`)}`).join(' + ');
@@ -271,8 +271,25 @@ const VCOUP: f32 = ${o.vaporCoupling}; const COUPLED: bool = ${o.vaporCoupling >
 const LW_CORRELATED: bool = ${o.longwaveScheme === 'correlated'}; const LW_CHAIN: bool = ${o.longwaveOverlap === 'exponentialRandom'}; const SOLAR_CLIRAD: bool = ${o.solarGases === 'clirad'}; const NG: i32 = ${points.length}; const LW_D: f32 = ${LONGWAVE_CONSTANTS.diffusivity}; const LW_PREF: f32 = ${LONGWAVE_CONSTANTS.pRef};
 const LW_TSELF: f32 = ${LONGWAVE_TABLE.tSelf}; const LW_TCO2: f32 = ${LONGWAVE_TABLE.tCo2}; const LW_NO3: f32 = ${LONGWAVE_TABLE.nO3};
 const LW_DH2O: f32 = ${LONGWAVE_TABLE.dopplerH2o ?? 0}; const LW_DCO2: f32 = ${LONGWAVE_TABLE.dopplerCo2 ?? 0}; const LW_DO3: f32 = ${LONGWAVE_TABLE.dopplerO3 ?? 0};
+const LW_CH2O: f32 = ${LONGWAVE_TABLE.dopplerCoreH2o ?? 1}; const LW_CCO2: f32 = ${LONGWAVE_TABLE.dopplerCoreCo2 ?? 1}; const LW_CO3: f32 = ${LONGWAVE_TABLE.dopplerCoreO3 ?? 1};
 const CO2_MASS: f32 = ${o.carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air}; const CH4_MASS: f32 = ${o.methane * GAS_MOLAR.ch4 / GAS_MOLAR.air}; const N2O_MASS: f32 = ${o.nitrousOxide * GAS_MOLAR.n2o / GAS_MOLAR.air};
-const LW_K: array<f32, ${6 * points.length}> = ${f32(points.flatMap((row) => row.slice(0, 6)))};
+const LW_K: array<f32, ${LW_NP * points.length}> = ${f32(points.flatMap((row) => (LW_CORED ? [...row.slice(0, 6), ...row.slice(11, 11 + LONGWAVE_CORES.length)] : row.slice(0, 6))))};
+fn longwavePaths(i: i32, k: i32, pi: f32, T: f32, ozone: f32) -> array<f32, ${LW_NP}> {
+  let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
+  let scale = p / LW_PREF; let vapour = q * mass; let dry = max(0.0, 1.0 - q) * mass * scale;
+  let co2 = max(0.0, 1.0 - q) * mass * sqrt(p * p + LW_DCO2 * LW_DCO2) / LW_PREF;
+${LW_CORED ? `  let lh = log2(0.8325546 * p / LW_CH2O); let lc = log2(0.8325546 * p / LW_CCO2); let lo = log2(0.8325546 * p / LW_CO3);
+  let carbon = CO2_MASS * max(0.0, 1.0 - q) * mass * exp(LW_TCO2 * (T - 250.0)); let oz = ozone * OZ_KG;
+` : ''}  return array<f32, ${LW_NP}>(vapour * sqrt(p * p + LW_DH2O * LW_DH2O) / LW_PREF, vapour * (q * p / (0.622 + 0.378 * q)) * exp(LW_TSELF * (1.0 / T - 1.0 / 296.0)), CO2_MASS * co2 * exp(LW_TCO2 * (T - 250.0)),
+    ozone * OZ_KG * pow(sqrt(p * p + LW_DO3 * LW_DO3) / LW_PREF, LW_NO3), CH4_MASS * dry, N2O_MASS * dry${LW_CORED ? `,
+    ${[['vapour', 'lh'], ['carbon', 'lc'], ['oz', 'lo']].flatMap(([path, la]) => Array.from({ length: LW_NODES }, (_, j) => `${path} * coreFactor(${j}, ${la})`)).join(', ')}` : ''});
+}
+${LW_CORED ? `const LW_CF: array<f32, ${LW_NODES * CORE_FACTOR_POINTS}> = ${f32(Array.from(coreFactors()))};
+fn coreFactor(j: i32, logA: f32) -> f32 { let u = clamp((logA + 10.0) * 3.0, 0.0, ${CORE_FACTOR_POINTS - 1}.0); let i = min(i32(u), ${CORE_FACTOR_POINTS - 2}); let r = j * ${CORE_FACTOR_POINTS} + i; return mix(LW_CF[r], LW_CF[r + 1], u - f32(i)); }
+` : ''}fn longwaveDepth(g: i32, row: array<f32, ${LW_NP}>) -> f32 {
+  let r = ${LW_NP} * g;
+  return LW_D * (${Array.from({ length: LW_NP }, (_, j) => `LW_K[r${j ? ` + ${j}` : ''}] * row[${j}]`).join(' + ')});
+}
 const LW_PLANCK: array<f32, ${5 * points.length}> = ${f32(points.flatMap((row) => row.slice(6, 11)))};
 const OZ_AFGL: bool = ${o.ozone === 'afgl'}; const OZ_N: i32 = ${OZONE_GRID.points}; const OZ_LOW: f32 = ${OZONE_GRID.lowest}; const OZ_STEP: f32 = ${Math.log(OZONE_GRID.highest / OZONE_GRID.lowest) / (OZONE_GRID.points - 1)}; const OZ_SUMMER: f32 = ${SUMMER_DAY / 365};
 const OZ_TABLE: array<f32, ${5 * OZONE_GRID.points}> = ${f32(OZONE_PROFILES.flat())};
@@ -439,17 +456,6 @@ fn columnOzone(i: i32, pi: f32, layers: ptr<function, array<f32, K>>) -> f32 {
   let w = ozoneWeightsAt(i); var above = 0.0;
   for (var k = 0; k < K; k++) { let below = ozoneAboveAt(pi * LV[L_SL + k], w); (*layers)[k] = below - above; above = below; }
   return above;
-}
-fn longwavePaths(i: i32, k: i32, pi: f32, T: f32, ozone: f32) -> array<f32, 6> {
-  let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
-  let scale = p / LW_PREF; let vapour = q * mass; let dry = max(0.0, 1.0 - q) * mass * scale;
-  let co2 = max(0.0, 1.0 - q) * mass * sqrt(p * p + LW_DCO2 * LW_DCO2) / LW_PREF;
-  return array<f32, 6>(vapour * sqrt(p * p + LW_DH2O * LW_DH2O) / LW_PREF, vapour * (q * p / (0.622 + 0.378 * q)) * exp(LW_TSELF * (1.0 / T - 1.0 / 296.0)), CO2_MASS * co2 * exp(LW_TCO2 * (T - 250.0)),
-    ozone * OZ_KG * pow(sqrt(p * p + LW_DO3 * LW_DO3) / LW_PREF, LW_NO3), CH4_MASS * dry, N2O_MASS * dry);
-}
-fn longwaveDepth(g: i32, row: array<f32, 6>) -> f32 {
-  let r = 6 * g;
-  return LW_D * (LW_K[r] * row[0] + LW_K[r + 1] * row[1] + LW_K[r + 2] * row[2] + LW_K[r + 3] * row[3] + LW_K[r + 4] * row[4] + LW_K[r + 5] * row[5]);
 }
 fn planckShare(g: i32, t: f32) -> f32 {
   let b = 5 * g;

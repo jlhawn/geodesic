@@ -99,7 +99,7 @@ test('restart returns the column to its start', () => {
 
 test('ozoneAt is the model\'s own climatology at that latitude and day', () => {
   const mesh = buildMesh(new Grid(2)), core = createSigmaCore(mesh, { levels: LEVELS }), { C, exnerLayer } = core.diagnostics;
-  const radiation = createRadiation(mesh, core);
+  const radiation = createRadiation(mesh, core, { longwaveLines: 'scaled' });
   const pi = new Float64Array(C).fill(101325), theta = new Float64Array(K * C), q = new Float64Array(K * C);
   for (const [i, day] of [[2, 0], [9, 120], [24, 120], [41, 250]]) {
     radiation.setTime(day * DAY);

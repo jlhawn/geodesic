@@ -263,6 +263,28 @@ test('with the near infrared in bands, each layer of the sunlit columns heats al
   assert.ok(worstChange < 3e-4, `the bands' change differs by ${worstChange} K/day`);
 });
 
+test('with longwaveLines \'scaled\' and \'voigt\' each layer heats alike in both engines at N=8, and so does the change between them above 10 hPa', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const base = heatingState({}, 8);
+  const voigt = await physicsHeating(base, { longwaveLines: 'voigt' }), scaled = await physicsHeating(base, { longwaveLines: 'scaled' });
+  const { K, C } = voigt, sigma = base.core.sigmaMid, pi = base.state[0];
+  let worst = 0, worstScaled = 0, worstChange = 0, at = null, upper = 0, upperGpu = 0, count = 0;
+  for (let i = 0; i < C; i++) {
+    for (let k = 0; k < K - 1; k++) {
+      const x = k * C + i, change = voigt.cpu[x] - scaled.cpu[x], d = Math.abs(voigt.cpu[x] - voigt.gpu[x]);
+      worstChange = Math.max(worstChange, Math.abs(change - (voigt.gpu[x] - scaled.gpu[x])));
+      worstScaled = Math.max(worstScaled, Math.abs(scaled.cpu[x] - scaled.gpu[x]));
+      if (d > worst) { worst = d; at = [i, k, voigt.cpu[x]]; }
+      if (sigma[k] * pi[i] < 1000) { upper += Math.abs(change); upperGpu += Math.abs(voigt.gpu[x] - scaled.gpu[x]); count++; }
+    }
+  }
+  console.log(`physics alone at N=8: the Doppler cores change the layers above 10 hPa by ${(upper / count).toFixed(3)} K/day on the CPU and ${(upperGpu / count).toFixed(3)} on the GPU (mean magnitude); a layer's heating differs between the engines by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(3)} K/day), the change by ${worstChange.toExponential(1)}`);
+  assert.ok(count > 0 && upper / count > 0.05, `the layers above 10 hPa changed by ${upper / count} K/day`);
+  assert.ok(Math.abs(upperGpu - upper) < 1e-3 * upper, `the cores change the layers above 10 hPa by ${upper / count} K/day on the CPU and ${upperGpu / count} on the GPU`);
+  assert.ok(worst < 3e-4, `layer heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
+  assert.ok(worstScaled < 3e-4, `with the scaled lines layer heating differs by ${worstScaled} K/day`);
+  assert.ok(worstChange < 3e-4, `the cores' change differs by ${worstChange} K/day`);
+});
+
 test('shallow cumulus of partial cover beside and without resolved cloud heats the layers of sunlit columns alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const base = heatingState(), { K, sigmaMid } = base.core, C = base.mesh.nCells;
   const cover = new Float64Array(K * C), water = new Float64Array(K * C);
@@ -581,7 +603,7 @@ test('with the radiation held between full calls every fourth step, twelve GPU s
 
 test('with the gravity-wave drag laid every fourth step, twelve GPU steps track the CPU model and its energy budget, both engines holding the accelerations between', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const laid = [];
-  const { model, state, physics } = await pair(6, 12, 900, 0, false, { dragEvery: 4 }, {}, {}, (cpu, device) => { laid.push([Float64Array.from(cpu.gravityWaves.east), Float32Array.from(device.GWE.subarray(0, cpu.core.K * cpu.mesh.nCells))]); });
+  const { model, state, physics } = await pair(6, 12, 900, 0, false, { dragEvery: 4, longwaveLines: 'scaled' }, {}, {}, (cpu, device) => { laid.push([Float64Array.from(cpu.gravityWaves.east), Float32Array.from(device.GWE.subarray(0, cpu.core.K * cpu.mesh.nCells))]); });
   const read = model.diagnostics(), d = { ...read, ...read.instantaneous };
   const C = model.mesh.nCells, K = model.core.K;
   for (let n = 1; n < laid.length; n++) {

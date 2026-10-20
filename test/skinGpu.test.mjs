@@ -18,7 +18,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 const { readRanges, readBuffer } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
 const N = 8, DT = 1350, STEPS = 20, ON = { warmLayer: true, coolSkin: true };
-const OPTIONS = { ocean: false, levels: sigmaInterfaces('bl36') };
+const OPTIONS = { ocean: false, levels: sigmaInterfaces('bl36'), radiation: { longwaveLines: 'scaled' } };
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const LAYERED = { levels: OPTIONS.levels, topography };
 const CASES = [
