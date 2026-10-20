@@ -343,9 +343,12 @@ RRTMG_LW's top layers. Two items don't earn a pass of their own:
 
 The ozone climatology is not a cause: it matches AER's tropical profile
 within 3 percent at 0.3–5 hPa (12 percent less in the top layer). The
-ascent is the circulation's question. Is 1.0–1.9 K/day at 1.6–3.5 hPa
-too much against a reanalysis's residual circulation? And how much of
-the gravity-wave drag's share is what it deposits at the lid?
+ascent is the circulation's question, taken up in
+`docs/tropical-upper-stratosphere.md`. Against ERA5's residual
+circulation for the same weeks it is 1.7–3.8 mm/s too strong at
+1–2 hPa. Those weeks fall in the westerly phase at 3–7 hPa of a
+two-year mode that the model carries too high. Over the mode's phases
+only 1–1.5 hPa, the layer under the lid, ascends faster than ERA5.
 
 ## The ledger
 
