@@ -239,3 +239,62 @@ test('the GPU hybrid ocean keeps a brackish band\'s fixed-depth surface layers a
   const sst = stats(cpuT, after.T.subarray(0, C), cpu.cellOcean);
   assert.ok(sst.maxDiff < 0.2, `the surface temperature the engines hand back differs by ${sst.maxDiff} K at ${sst.at}`);
 });
+
+/*
+ * Each edge's transport as the continuity, the barotropic solver and the
+ * shift count it: the top layer's centered thickness, the smaller of the
+ * two below, the column cut at the edge's sill.
+ */
+function edgeTransports(fields, ocean, mesh) {
+  const C = mesh.nCells, E = mesh.nEdges, L = ocean.layers, out = new Float64Array(E);
+  for (let e = 0; e < E; e++) {
+    if (!ocean.edgeOcean[e]) continue;
+    const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1], sill = Math.max(1e-9, ocean.sillEdge[e] + 0.5 * (fields.eta[a] + fields.eta[b]));
+    let above = 0;
+    for (let k = 0; k < L; k++) {
+      const hk = k === 0 ? 0.5 * (fields.h[a] + fields.h[b]) : Math.min(fields.h[k * C + a], fields.h[k * C + b]);
+      out[e] += Math.min(hk, Math.max(0, sill - above)) * fields.u[k * E + e]; above += hk;
+    }
+  }
+  return out;
+}
+
+test('with edgeTransport kept the GPU hybrid ocean holds every edge\'s transport through its regrid and column physics and tracks the CPU at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, mesh, surfaceT, ice, stress } = scenario(8), C = mesh.nCells, E = mesh.nEdges, KEPT = { ...HYBRID, edgeTransport: 'kept' };
+  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...KEPT });
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: KEPT });
+  const gpu = gpuModel.oceanEngine, flux = new Float64Array(C);
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  gpu.initialize(Float64Array.from(surfaceT), ice);
+  const wet = Array.from(cpu.h, (v) => v > 1), loose = { h: 2e-2, u: 2e-3, T: 2e-4, S: 2e-5, eta: 2e-3 };
+  for (let n = 0; n < 4; n++) cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, DT);
+  await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
+  cpu.readSurface(Float64Array.from(surfaceT), ice); cpu.setStress(stress, ice);
+  gpu.readSurface(Float64Array.from(surfaceT), ice); gpu.setStress(stress, ice);
+  cpu.phases.dynamics(DT); gpu.phases.dynamics(DT);
+  cpu.phases.rescale(); gpu.phases.rescale();
+  cpu.phases.eddy(DT); gpu.phases.eddy(DT);
+  cpu.phases.shift(); gpu.phases.shift();
+  let fields = await gpu.download(), before = edgeTransports(fields, cpu, mesh);
+  let largest = 0;
+  for (let e = 0; e < E; e++) largest = Math.max(largest, Math.abs(before[e]));
+  for (const [name, onCpu, onGpu] of [['regrid', () => cpu.phases.regrid(DT), () => gpu.phases.regrid(DT)], ['column', () => cpu.phases.column(DT), () => gpu.phases.column(DT)]]) {
+    onCpu(); onGpu();
+    fields = await gpu.download();
+    compare(`kept, after ${name}`, cpuFields(cpu, C), fields, wet, loose);
+    const after = edgeTransports(fields, cpu, mesh);
+    let worst = 0;
+    for (let e = 0; e < E; e++) worst = Math.max(worst, Math.abs(after[e] - before[e]));
+    console.log(`kept, ${name}: largest change of an edge's transport ${(worst / largest).toExponential(2)} of the largest transport ${largest.toFixed(2)} m²/s`);
+    assert.ok(worst < 1e-5 * largest, `the GPU's ${name} moved an edge's transport by ${worst} m²/s`);
+    before = after;
+  }
+  for (let n = 0; n < 16; n++) {
+    cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, DT);
+    await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
+  }
+  const final = await gpu.download();
+  compare('kept, sixteen more steps', cpuFields(cpu, C), final, wet, { h: 1e-2, u: 2e-2, T: 1e-3, S: 1e-4, eta: 1e-2 });
+  for (const f of ['h', 'u', 'T', 'S', 'eta']) for (const v of final[f]) assert.ok(Number.isFinite(v), `${f} has a non-finite value`);
+  gpuModel.destroy();
+});

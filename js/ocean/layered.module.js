@@ -182,7 +182,7 @@ export function beyondCells(mesh) {
  * falls back to the upwind value where `uu` is land or either cell beyond
  * the upwind one holds no water in the layer.
  */
-export const TRACER_ADVECTIONS = ['upwind', 'third'], SHEAR_DIFFUSIVITY = 0.2, HYCOM_DIFFUSION_SPEED = 0.005;
+export const TRACER_ADVECTIONS = ['upwind', 'third'], EDGE_TRANSPORTS = ['remapped', 'kept'], SHEAR_DIFFUSIVITY = 0.2, HYCOM_DIFFUSION_SPEED = 0.005;
 export function limitedEdgeValue(field, up, down, uu, dUp, dCentral) {
   const phiU = field[up], central = field[down] - phiU;
   if (central === 0) return phiU;
@@ -327,6 +327,7 @@ export function createOcean(mesh, {
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
+  edgeTransport = 'kept',
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -339,6 +340,7 @@ export function createOcean(mesh, {
   if (langmuir !== 0 && !(langmuir >= 1)) throw new Error(`langmuir caps a factor of at least 1, so it is 0 or at least 1, not ${langmuir}`);
   const advection = tracerAdvection;
   if (!TRACER_ADVECTIONS.includes(advection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${advection}`);
+  if (!EDGE_TRANSPORTS.includes(edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${edgeTransport}`);
   const beyond = advection === 'third' ? beyondCells(mesh) : null;
   const shearDiffusion = shearDiffusivity;
   if (!(shearDiffusion >= 0) || !(shearDiffusivityCap > 0)) throw new Error(`shearDiffusivity is a non-negative coefficient and shearDiffusivityCap a positive diffusivity, not ${shearDiffusion} and ${shearDiffusivityCap}`);
@@ -421,6 +423,25 @@ export function createOcean(mesh, {
     let above = 0;
     for (let k = 0; k < L; k++) { const hk = out[base + k * stride]; out[base + k * stride] = Math.min(hk, Math.max(0, sill - above)); above += hk; }
   }
+  let flowDepth = 0;
+  function edgeFlow(thickness, e) {
+    const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
+    const sill = Math.max(EPS, sillEdge[e] + 0.5 * (eta[a] + eta[b]));
+    let above = 0, transport = 0, depth = 0;
+    for (let k = 0; k < L; k++) {
+      const hk = k === 0 ? 0.5 * (thickness(0, a) + thickness(0, b)) : Math.min(thickness(k, a), thickness(k, b)), he = Math.min(hk, Math.max(0, sill - above));
+      above += hk; transport += he * u[ae(k, e)]; depth += he;
+    }
+    flowDepth = depth;
+    return transport;
+  }
+  function keepFlow(thickness, e, before) {
+    const after = edgeFlow(thickness, e);
+    if (!(flowDepth > EPS)) return;
+    const shift = (before - after) / flowDepth;
+    for (let k = 0; k < L; k++) u[ae(k, e)] += shift;
+  }
+  const stateThickness = (k, i) => h[at(k, i)], targetThickness = (k, i) => targetZ[(k + 1) * C + i] - targetZ[k * C + i];
   function freeSurface() {
     for (let i = 0; i < C; i++) {
       let sum = 0;
@@ -859,7 +880,7 @@ export function createOcean(mesh, {
     }
   }
   function regridEdges(from, to) {
-    const { amount, hOld, hEdgeNew, uCol } = cols;
+    const { amount, hOld, hEdgeNew, uCol } = cols, kept = edgeTransport === 'kept';
     for (let e = from; e < to; e++) {
       if (!edgeOcean[e]) continue;
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
@@ -868,8 +889,10 @@ export function createOcean(mesh, {
         hEdgeNew[k] = 0.5 * (targetZ[(k + 1) * C + a] - targetZ[k * C + a] + targetZ[(k + 1) * C + b] - targetZ[k * C + b]);
         uCol[k] = u[ae(k, e)];
       }
+      const before = kept ? edgeFlow(stateThickness, e) : 0;
       remapColumn(hOld, uCol, L, hEdgeNew, amount, cs, { order: 2 });
       for (let k = 0; k < L; k++) u[ae(k, e)] = hEdgeNew[k] > 0 ? amount[k] / hEdgeNew[k] : uCol[k];
+      if (kept) keepFlow(targetThickness, e, before);
     }
   }
   function regridCells(from, to) {
@@ -924,12 +947,15 @@ export function createOcean(mesh, {
     }
   }
   function columnEdges(from, to) {
-    const dt = params[1], { hOld, uCol, nuEdge } = cols;
+    const dt = params[1], { hOld, uCol, nuEdge } = cols, kept = edgeTransport === 'kept';
     for (let e = from; e < to; e++) {
       if (!edgeOcean[e]) continue;
       const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
       for (let k = 0; k < L; k++) { hOld[k] = 0.5 * (h[at(k, a)] + h[at(k, b)]); nuEdge[k] = 0.5 * (viscosity[at(k, a)] + viscosity[at(k, b)]); uCol[k] = u[ae(k, e)]; }
-      if (solveColumn(hOld, uCol, L, nuEdge, dt, cs)) for (let k = 0; k < L; k++) u[ae(k, e)] = uCol[k];
+      if (!solveColumn(hOld, uCol, L, nuEdge, dt, cs)) continue;
+      const before = kept ? edgeFlow(stateThickness, e) : 0;
+      for (let k = 0; k < L; k++) u[ae(k, e)] = uCol[k];
+      if (kept) keepFlow(stateThickness, e, before);
     }
   }
   function columnPhysics(dt) {
