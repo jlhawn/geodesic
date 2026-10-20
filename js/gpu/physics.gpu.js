@@ -2,6 +2,7 @@ import { MINIMUM_CONCENTRATION, MINIMUM_VOLUME, MELTING_POINT } from '../physics
 import { DARKENING_WETNESS, TRACE_SNOW, LLOYD_TAYLOR, MIAMI, startPlaceholders } from '../physics/land.module.js';
 import { MIXED_LAYER_DEFAULTS, DYCOMS_LONGWAVE } from '../physics/mixedLayer.module.js';
 import { DECK_CLOUD_LEVELS, UNDECIDED, VISIBLE_PATH, REFERENCE_PRESSURE, REFERENCE_RESISTANCE } from '../physics/radiation.module.js';
+import { VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
 import { CLEAR_AIR, DECK_OPEN, DECK_CLOSED, CUMULUS_FLOOR, CUMULUS_TRACE, DEEP_REFERENCE, DEEP_CLOUD_DEPTH, IFS_ENTRAINMENT, TEST_PARCEL, IFS_PRECIPITATION, RETIRED_OPTIONS, FUSION_HEAT, BECHTOLD, SOURCE_EXCESS, fogConstants } from '../physics/moist.module.js';
 import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLayer.module.js';
 import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwave.module.js';
@@ -142,7 +143,7 @@ fn visibleEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, ligh
 fn visibleReflection(cloudDepth: f32, keep: f32, mu: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `reflection(cloudDepth + ${depth}, keep, mu)`)}; }
 const MOIST_BL: bool = ${moistTurbulence}; const CT_THRESH: f32 = ${cloudTop.threshold}; const CT_HMAX: f32 = ${cloudTop.maximumHeight}; const CT_PERT: f32 = ${cloudTop.perturbation}; const CT_PROFILE: f32 = ${cloudTop.profile}; const CT_EXCESS: f32 = ${cloudTop.excess}; const CT_TOLERANCE: f32 = ${cloudTop.tolerance}; const CT_CUMULUS: f32 = ${cloudTop.cumulusDepth}; const CT_CAPPED: bool = ${!!cloudTop.cumulusCapped};
 const BL_A2: f32 = ${entrainment.evaporativeEnhancement}; const BL_AMAX: f32 = ${entrainment.maximumEfficiency}; const BL_TAPER: bool = ${!!entrainment.taper}; const BL_JUMP2: bool = ${entrainment.jumpLayers > 1};
-const VARIANCE_COVER: bool = ${moistTurbulence && o.boundaryCover === 'variance'}; const VAR_FLOOR: f32 = ${o.varianceFloor}; const VAR_SCALE: f32 = ${o.varianceScale}; const MIX_LENGTH: f32 = ${o.mixingLength}; const STABLE_LENGTH: f32 = ${o.stableMixingLength};
+const VARIANCE_COVER: bool = ${moistTurbulence && o.boundaryCover === 'variance'}; const VAR_FLOOR: f32 = ${o.varianceFloor}; const VAR_SCALE: f32 = ${o.varianceScale}; const MIX_LENGTH: f32 = ${o.mixingLength}; const STABLE_LENGTH: f32 = ${o.stableMixingLength}; const VAR_WATER: bool = ${o.varianceCover === 'water'}; const BUOY_LENGTH: f32 = ${o.buoyancyLength ?? 0}; const VIRTUAL: f32 = ${VIRTUAL_FACTOR};
 const MLM_BL_GATE: bool = ${o.deckRegime === 'boundaryLayer'}; const MLM_BYPASS: bool = ${!!o.deckBypass};
 const S0: f32 = ${o.solarConstant}; const STEFAN: f32 = 5.670374419e-8; const LHEAT: f32 = ${o.latentHeat}; const EPSILON: f32 = 0.622; const RVAP: f32 = ${o.R / 0.622};
 const PDF_COVER: bool = ${o.cloudCover === 'pdf'}; const VISIBLE_PATH: f32 = ${VISIBLE_PATH}; const RHC: f32 = ${o.criticalHumidity}; const RHC_BL: f32 = ${o.boundaryCriticalHumidity}; const COVER_FLOOR: f32 = ${o.coverFloor ?? 0.01}; const BOUND_WIDTH: bool = ${o.overcastWater != null}; const OVERCAST_WATER: f32 = ${o.overcastWater ?? 0}; const OVERCAST_EIS: f32 = ${o.overcastInversion[0]}; const OVERCAST_RAMP: f32 = ${o.overcastInversion[1] - o.overcastInversion[0]}; const RANDOM_OVERLAP: bool = ${o.cloudOverlap === 'maximumRandom'}; const EXP_OVERLAP: bool = ${o.cloudOverlap === 'exponentialRandom'}; const DECOR_LEN: f32 = ${o.decorrelationLength}; const DECOR_SLOPE: f32 = ${o.decorrelationSlope};
@@ -422,20 +423,32 @@ fn varianceCover(deficit: f32, spread: f32) -> f32 {
   if (!(spread > 0.0)) { return select(select(0.5, 0.0, deficit < 0.0), 1.0, deficit > 0.0); }
   return 0.5 * (1.0 + erfApprox(deficit / (1.4142135623730951 * spread)));
 }
-fn turbulentCover(i: i32, k: i32, pi: f32, mixTop: f32) -> f32 {
+fn heldCover(water: f32, spread: f32) -> f32 {
+  if (!(spread > 0.0)) { return select(0.0, 1.0, water > 0.0); }
+  let ratio = water / spread;
+  var x = ratio;
+  for (var n = 0; n < 8; n++) {
+    let below = 0.5 * (1.0 + erfApprox(x / 1.4142135623730951));
+    x = max(-6.0, x - (x * below + exp(-0.5 * x * x) * 0.3989422804014327 - ratio) / max(below, 1e-30));
+  }
+  return 0.5 * (1.0 + erfApprox(x / 1.4142135623730951));
+}
+fn turbulentCover(i: i32, k: i32, pi: f32, mixTop: f32, mixedDepth: f32) -> f32 {
   let bottom = (K - 1) * C + i; let idx = k * C + i; let ex = D[D_EXM + idx];
   let water = max(0.0, IN[S_QC + idx]); let total = max(0.0, IN[S_Q + idx]) + water;
   let level = IN[S_TH + idx] - LHEAT * water / (CP * ex); let liquidT = level * ex;
   let saturated = cloudSat(liquidT, pi * LV[L_SM + k]); let qs = saturated.x; let slope = saturated.y;
   let a = 1.0 / (1.0 + LHEAT / CP * slope);
   let zk = D[D_GEO + idx] + LV[L_GABS + k]; let zs = D[D_GEO + bottom] + LV[L_GABS + K - 1];
-  var gradientQ = 0.0; var gradientL = 0.0; var n = 0.0;
+  let thetaVirtual = IN[S_TH + idx] * (1.0 + VIRTUAL * max(0.0, IN[S_Q + idx]) - water);
+  var gradientQ = 0.0; var gradientL = 0.0; var gradientV = 0.0; var n = 0.0;
   if (k > 0) {
     let jdx = idx - C; let zj = D[D_GEO + jdx] + LV[L_GABS + k - 1];
     if (!((zj - zs) / GRAV >= mixTop)) {
       let jWater = max(0.0, IN[S_QC + jdx]); let dz = (zj - zk) / GRAV;
       gradientQ += (max(0.0, IN[S_Q + jdx]) + jWater - total) / dz;
       gradientL += (IN[S_TH + jdx] - LHEAT * jWater / (CP * D[D_EXM + jdx]) - level) / dz;
+      gradientV += (IN[S_TH + jdx] * (1.0 + VIRTUAL * max(0.0, IN[S_Q + jdx]) - jWater) - thetaVirtual) / dz;
       n += 1.0;
     }
   }
@@ -444,13 +457,17 @@ fn turbulentCover(i: i32, k: i32, pi: f32, mixTop: f32) -> f32 {
     let jWater = max(0.0, IN[S_QC + jdx]); let dz = (zj - zk) / GRAV;
     gradientQ += (max(0.0, IN[S_Q + jdx]) + jWater - total) / dz;
     gradientL += (IN[S_TH + jdx] - LHEAT * jWater / (CP * D[D_EXM + jdx]) - level) / dz;
+    gradientV += (IN[S_TH + jdx] * (1.0 + VIRTUAL * max(0.0, IN[S_Q + jdx]) - jWater) - thetaVirtual) / dz;
     n += 1.0;
   }
-  if (n > 1.0) { gradientQ /= n; gradientL /= n; }
+  if (n > 1.0) { gradientQ /= n; gradientL /= n; gradientV /= n; }
   let z = zk / GRAV;
-  let asymptote = select(STABLE_LENGTH, MIX_LENGTH, PH[PH_BUOY + i] > 0.0);
-  let length = 0.4 * z / (1.0 + 0.4 * z / asymptote);
+  let buoyancy = PH[PH_BUOY + i];
+  let asymptote = select(STABLE_LENGTH, MIX_LENGTH, buoyancy > 0.0);
+  var length = 0.4 * z / (1.0 + 0.4 * z / asymptote);
+  if (BUOY_LENGTH > 0.0 && buoyancy > 0.0 && gradientV > 0.0) { length = min(length, BUOY_LENGTH * pow(buoyancy * max(0.0, mixedDepth), 1.0 / 3.0) * sqrt(thetaVirtual / (GRAV * gradientV))); }
   let spread = max(VAR_FLOOR * qs, VAR_SCALE * length * a * abs(gradientQ - ex * slope * gradientL));
+  if (VAR_WATER) { return heldCover(water, spread); }
   return varianceCover(a * (total - qs), spread);
 }
 fn layerCover(idx: i32, k: i32, bottom: i32, pi: f32, water: f32, mixedDepth: f32, stratiform: f32, mixTop: f32) -> f32 {
@@ -458,7 +475,7 @@ fn layerCover(idx: i32, k: i32, bottom: i32, pi: f32, water: f32, mixedDepth: f3
   let height = (D[D_GEO + idx] + LV[L_GABS + k] - D[D_GEO + bottom] - LV[L_GABS + K - 1]) / GRAV;
   let inside = height < mixedDepth;
   if (VARIANCE_COVER && height < mixTop) {
-    let fv = clamp(turbulentCover(idx - k * C, k, pi, mixTop), COVER_FLOOR, 1.0);
+    let fv = clamp(turbulentCover(idx - k * C, k, pi, mixTop, mixedDepth), COVER_FLOOR, 1.0);
     if (!(stratiform > 0.0)) { return fv; }
     return (1.0 - stratiform) * fv + stratiform * overcastCover(idx, k, pi, RHC_BL);
   }
