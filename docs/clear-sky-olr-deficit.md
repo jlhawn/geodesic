@@ -38,7 +38,8 @@ troposphere is too moist against an observed climatology.
   layers between 50 hPa and the surface. Each state keeps its own day-to-day
   departures, so the swap moves the mean state only.
 - The scripts are archived outside the repository with the side sessions' notes (`swapOlr.mjs`,
-  `profiles.mjs`, `stratProfile.mjs`, `zarr.mjs`, `reduceEra5.mjs`).
+  `profiles.mjs`, `stratProfile.mjs`, `zarr.mjs`, `reduceEra5.mjs`; for finding 6
+  `heatBudget.mjs`, `swOzoneBands.mjs`, `rrtmgRun.mjs`, `lwTop.mjs`, `lwDecomp.mjs`, `lwRows.mjs`).
 
 ## Findings
 
@@ -113,7 +114,7 @@ biases behind it:
   poleward of 40°.
 - **The stratosphere** is cold: 3–7 K at 50 hPa against ERA5 at every
   latitude but the Antarctic's (−0.5 K), and against the AFGL profiles 5–11 K from 14 to 100 hPa
-  outside the poles and 14–18 K at the tropical stratopause. At
+  outside the poles and 14–18 K at the tropical stratopause (finding 6). At
   0.22 W/m² per kelvin above 50 hPa, a 5 K bias is worth +1.1 W/m².
 
 ### 3. The stratosphere's missing shortwave heating
@@ -243,6 +244,108 @@ OLR by 1.0–1.1 W/m² (clear-sky longwave of every eighth column). At day
 30 the stratosphere's part is +0.7 W/m² and the pair's net −0.03: its
 troposphere is 0.06–0.25 K cooler, within the ±0.3 K the pair's
 difference wanders over the 30 days.
+
+### 6. The upper stratosphere, 0.1–3 hPa
+
+The control arm's last state (day 1855, the sun at 11.6° N) is colder
+than AFGL's tropical atmosphere in every layer above 10 hPa: 14 K in the
+top layer, 17 K at 0.64 hPa and 7–8 K at 1.6–7 hPa. Its clear-sky
+heating over 15° S–15° N, the mean of 24 hours on every sixteenth column
+with the model's ozone, at its own temperatures and with AFGL's above
+8 hPa, in K/day (with `nearInfrared: 'bands'` in parentheses; the
+equilibrium is where the net heating vanishes, interpolated between the
+two temperatures, extrapolated at 1.6 hPa):
+
+| hPa | T, K | AFGL | shortwave | longwave | net | net at AFGL's T | equilibrium, K |
+|---|---|---|---|---|---|---|---|
+| 0.15 | 227.4 | 241.2 | 4.21 (5.26) | −4.42 | −0.22 (+0.83) | −2.25 (−1.22) | 226 (233) |
+| 0.64 | 250.1 | 266.9 | 9.40 (9.95) | −8.03 | +1.37 (+1.92) | −3.12 (−2.55) | 255 (257) |
+| 1.59 | 256.6 | 264.7 | 10.37 (10.80) | −8.50 | +1.88 (+2.30) | +0.92 (+1.35) | about 272 (276) |
+| 3.54 | 244.5 | 251.5 | 6.46 (6.78) | −5.47 | +1.00 (+1.31) | +0.08 (+0.40) | 252 (255) |
+
+In a steady state a layer's net radiative heating is what the
+circulation removes. At 1.6–3.5 hPa the radiation alone would hold
+AFGL's temperature or more, and the tropical ascent's 1.0–1.9 K/day of
+adiabatic cooling holds the layers 7–8 K below it. At 0.64 hPa the two
+share the bias: the radiation's own equilibrium is 12 K below AFGL's (10
+with the bands), and the ascent holds the layer 5 K below that. In
+30–60° S, in autumn, the circulation instead warms 0.15–3.6 hPa by
+1.0–2.4 K/day, and in 30–60° N, in spring, it cools them by 0.4–0.5;
+AFGL has no spring or autumn profile to set against them.
+
+The radiation's errors, each against RRTMG on the same column, in K/day:
+
+| | 0.15 | 0.65 | 1.6 | 3.6 hPa |
+|---|---|---|---|---|
+| CLIRAD-SW's near infrared, the tropical mean above (what the bands add back) | −1.05 | −0.55 | −0.43 | −0.32 |
+| the longwave table against RRTMG_LW, AER's tropical atmosphere | +0.37 | −1.12 | +0.62 | +0.03 |
+| the same, midlatitude summer, midlatitude winter, subarctic winter | +1.71, −0.86, −2.16 | +0.28, −1.33, −0.79 | +0.21, +0.51, +0.65 | −0.07, −0.03, +0.14 |
+| ozone's ultraviolet and visible on the same ozone, overhead sun, tropical and midlatitude summer (percent) | −0.2, +13 | +0.9, −5.2 | +4.7, +6.6 | +3.0, +3.3 |
+| O₂'s ultraviolet (RRTMG's bands 27–28), which the model lacks, under any sun | −0.23 | −0.23 | −0.23 | −0.22 |
+
+The near infrared's part in the top layer includes O₂'s A and B bands
+(RRTMG's band 24, 0.55 K/day under an overhead sun). The CO₂ amount is no error
+but counts against AFGL's profile: 388.75 ppmv against the 354.8 of
+AER's tropical column cools the four layers by 0.32, 0.52, 0.43 and
+0.32 K/day (the table). At 0.64 hPa, at the 0.27 K/day per kelvin
+between the two temperatures, the 16.8 K divides:
+
+| part | K |
+|---|---|
+| the ascent | −5.1 |
+| the longwave table | −4.2 |
+| CLIRAD-SW's near infrared (the bands take it back) | −2.1 |
+| CO₂ at 388.75 against 354.8 ppmv | −1.9 |
+| the model's colder layers at 8–30 hPa | −0.7 |
+| O₂'s ultraviolet (0.11 K/day in the tropical mean, the sun up half the day) | −0.4 |
+| ozone's optics (about +1.5 percent between overhead and 60°) | about +0.5 |
+| the rest: RRTMG's own equilibrium against AFGL's measured profile, and the layers below 30 hPa | −2.9 |
+
+Two more 30-day arms from the same state (SST=woa) each take away one
+driver at the top. Tropical means at day 30, temperature (K) and net
+radiative heating (K/day):
+
+| arm | 0.15 | 0.64 | 1.59 | 3.54 hPa |
+|---|---|---|---|---|
+| control | 227.4, −0.22 | 250.1, +1.37 | 256.6, +1.88 | 244.5, +1.00 |
+| no lid friction (`SURFACE='{"lidFriction":null}'`) | 224.6, +0.51 | 249.5, +1.42 | 256.2, +1.98 | 244.9, +0.89 |
+| no gravity-wave drag (`GRAVITY_WAVES=false`) | 224.9, +0.70 | 251.4, +1.19 | 260.0, +0.96 | 246.4, +0.58 |
+
+The non-orographic gravity-wave drag (`js/physics/gravityWaves.module.js`,
+which spreads what reaches the lid over the layers above 85 Pa) drives
+half of the ascent's cooling at 1.6 hPa and 40 percent at 3.5 hPa:
+without it 1.6 hPa warms 3.4 K in 30 days. The lid friction moves no
+tropical layer below the top by more than 0.6 K. Each keeps the top
+layer warmer, by 2.8 K (the friction) and 2.5 K (the waves).
+
+No option comes of this finding. After the bands, the radiation's
+largest error at 0.1–3 hPa is the longwave table's. It alternates
+between layers: it over-cools 0.65 hPa and under-cools 1.6 hPa, and the
+top layer goes either way by atmosphere. The table's CO₂ g-points reach unit
+optical depth from the top at 0.011, 0.035 and 0.44 hPa, then not until
+about 10 hPa; its opaque bins are 90-fold wide (`THICK_BIN` 4.5 in
+`scripts/longwaveFit.mjs`). Narrower opaque bins with the same spectral
+model (37, 41 and 46 g-points) put the tropical miss at 0.65 hPa at
+−1.78, −0.91 and −1.57 K/day. Meanwhile the midlatitude atmospheres'
+3–30 hPa rms grows from 0.06–0.07 to 0.09–0.20 K/day. A 300-step refit
+with ten times the upper layers' weight moves the tropical miss to
+−0.81, and the midlatitude summer's top layer from +1.71 to +1.94.
+
+The likely cause is the spectral model itself, which the bins only
+sample: above 7 hPa (p_D 727 Pa) its CO₂ lines keep a Lorentz profile at
+the Doppler width, with far wings a Doppler line does not have. The
+change to try is a line shape for the Doppler regime, refitted to
+RRTMG_LW's top layers. Two items don't earn a pass of their own:
+
+- ozone's optics, which stay within the spread between RRTMG_SW and
+  CLIRAD-SW;
+- O₂'s ultraviolet, worth 0.4 K at 0.64 hPa.
+
+The ozone climatology is not a cause: it matches AER's tropical profile
+within 3 percent at 0.3–5 hPa (12 percent less in the top layer). The
+ascent is the circulation's question. Is 1.0–1.9 K/day at 1.6–3.5 hPa
+too much against a reanalysis's residual circulation? And how much of
+the gravity-wave drag's share is what it deposits at the lid?
 
 ## The ledger
 

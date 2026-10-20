@@ -6,10 +6,10 @@
 // scripts/spinup.mjs saves them). SST=own keeps the state's sea surface;
 // SST=woa sets every open-sea cell to WOA23's monthly SST
 // (data/woa_sst_monthly_1deg.bin) on the state's date. MOIST,
-// BOUNDARY_LAYER, SURFACE and RADIATION (JSON) pass options as
-// scripts/spinup.mjs does; LEVELS (a grid of SIGMA_GRIDS) runs the arm on
-// that grid with the state remapped onto it. The AMIP question for one
-// state: what the atmosphere does over the observed sea.
+// BOUNDARY_LAYER, SURFACE, RADIATION and GRAVITY_WAVES (JSON, or false)
+// pass options as scripts/spinup.mjs does; LEVELS (a grid of SIGMA_GRIDS)
+// runs the arm on that grid with the state remapped onto it. The AMIP
+// question for one state: what the atmosphere does over the observed sea.
 //   SST=woa DAYS=12 SAVE_DAYS=3 node scripts/fixedSst.mjs STATE.bin OUT TAG
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { topographyFromInt16 } from '../js/geography.module.js';
@@ -28,7 +28,7 @@ const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 const mesh = stateGrid(saved, topography).mesh, dt = 1350 * 16 / saved.N, perDay = Math.round(86400 / dt);
 const levels = process.env.LEVELS ? sigmaInterfaces(process.env.LEVELS) : savedLevels(saved);
-const model = await createGpuModel(mesh, { topography, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
+const model = await createGpuModel(mesh, { topography, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), gravityWaves: env('GRAVITY_WAVES') });
 const { state, core } = model, C = mesh.nCells;
 const carried = { ...saved, ...(process.env.LEVELS ? remapLevels(savedLevels(saved), levels, saved, mesh) : {}) };
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(carried[name]));
