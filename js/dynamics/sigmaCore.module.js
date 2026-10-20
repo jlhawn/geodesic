@@ -39,8 +39,9 @@ export function standardHeight(sigma) {
   return STANDARD.T0 / STANDARD.lapse * (1 - Math.pow(sigma, STANDARD.R * STANDARD.lapse / STANDARD.g));
 }
 
-export const SIGMA_GRIDS = ['cam26', 'bl34', 'bl36', 'bl42'];
+export const SIGMA_GRIDS = ['cam26', 'bl34', 'bl36', 'bl42', 'bl60'];
 const STRATOPAUSE_INTERFACES = [30, 100];
+const STRATOSPHERE = { base: 0.09, layers: 27 };
 const INVERSION_HEIGHTS = [4100, 3498, 3160, 2830, 2520, 2230, 1960, 1698, 1450, ...BOUNDARY_LAYER_HEIGHTS.slice(1)];
 
 /*
@@ -61,16 +62,25 @@ const INVERSION_HEIGHTS = [4100, 3498, 3160, 2830, 2520, 2230, 1960, 1698, 1450,
  * layers of 237 to 338 m up to 3.5 km and two of about 600 m to the
  * cam26 interface at 4.7 km (standard-atmosphere heights, about 8 %
  * higher in the tropics), so that a trade inversion falls within one
- * thin layer instead of across a 500-1100 m one.
+ * thin layer instead of across a 500-1100 m one. 'bl60' is bl42 with
+ * its 1-93.6 hPa span cut into STRATOSPHERE.layers layers equal in ln σ,
+ * 1.18 km each in log-pressure height (H = 7 km): the 1.2 km of MiMA's
+ * lower stratosphere (Garfinkel et al. 2022) carried up to the
+ * stratopause, where bl42's are 1.1-5.7 km.
  */
 export function sigmaInterfaces(name = 'cam26') {
   const levels = [0];
   for (let k = 0; k < CAM_L26_HYAI.length; k++) levels.push(CAM_L26_HYAI[k] + CAM_L26_HYBI[k]);
   levels[levels.length - 1] = 1;
   if (name === 'cam26') return Float64Array.from(levels);
-  if (name === 'bl34' || name === 'bl36' || name === 'bl42') {
-    const refined = (name === 'bl42' ? INVERSION_HEIGHTS : BOUNDARY_LAYER_HEIGHTS).map(standardSigma), top = name === 'bl34' ? [] : STRATOPAUSE_INTERFACES.map((p) => p / P0);
-    return Float64Array.from([0, ...top, ...levels.filter((sigma) => sigma > 0 && sigma < refined[0]), ...refined, 1]);
+  if (name === 'bl34' || name === 'bl36' || name === 'bl42' || name === 'bl60') {
+    const refined = (name === 'bl42' || name === 'bl60' ? INVERSION_HEIGHTS : BOUNDARY_LAYER_HEIGHTS).map(standardSigma), top = name === 'bl34' ? [] : STRATOPAUSE_INTERFACES.map((p) => p / P0);
+    let free = levels.filter((sigma) => sigma > 0 && sigma < refined[0]);
+    if (name === 'bl60') {
+      const from = top.at(-1), to = free.find((sigma) => sigma > STRATOSPHERE.base), n = STRATOSPHERE.layers;
+      free = [...Array.from({ length: n - 1 }, (_, j) => from * (to / from) ** ((j + 1) / n)), ...free.filter((sigma) => sigma >= to)];
+    }
+    return Float64Array.from([0, ...top, ...free, ...refined, 1]);
   }
   throw new Error(`no sigma grid is named ${name}; the grids are ${SIGMA_GRIDS.join(', ')}`);
 }

@@ -8,7 +8,7 @@ import { ENTRAINMENT_DEFAULTS, CLOUD_TOP_DEFAULTS } from '../physics/boundaryLay
 import { LONGWAVE_TABLE as DEFAULT_LONGWAVE_TABLE, LONGWAVE_CONSTANTS, GAS_MOLAR } from '../physics/longwave.module.js';
 import { OZONE_GRID, OZONE_PROFILES } from '../physics/ozoneTable.module.js';
 import { SUMMER_DAY } from '../physics/ozone.module.js';
-import { OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR, VAPOR_COEFFICIENTS, VAPOR_WEIGHTS, OXYGEN, CO2_COEFFICIENT, STP_DEPTH, OZONE_CM_ATM, SCALING_PRESSURE, SCALING_EXPONENT } from '../physics/shortwaveGases.module.js';
+import { OZONE_SHARES, OZONE_COEFFICIENTS, VISIBLE_VAPOR, VAPOR_COEFFICIENTS, VAPOR_WEIGHTS, OXYGEN, CO2_COEFFICIENT, STP_DEPTH, OZONE_CM_ATM, SCALING_PRESSURE, SCALING_EXPONENT, NEAR_INFRARED_BANDS, NEAR_INFRARED_P_REF, NEAR_INFRARED_MOLAR, VISIBLE_VAPOR_BANDS } from '../physics/shortwaveGases.module.js';
 import { exchangeConstants, EXCHANGE_WGSL } from './exchange.gpu.js';
 import { SKIN, SEA_RHO_CP } from '../physics/skin.module.js';
 
@@ -84,6 +84,113 @@ fn skinStep(i: i32, iceBefore: f32, iceAfter: f32, nonSolar: f32, solar: f32, us
 }
 `;
 
+// nearInfrared 'bands' (js/physics/shortwaveGases.module.js's nearInfraredBands) unrolled, every band's
+// terms summed in scalars: solarGases's per-layer shares, nirBandsColumn's column total and the
+// reflected beam's climb in nearInfraredUpward, which takes the beam's magnification as down.x.
+function nearInfraredWgsl(o) {
+  const mixing = { co2: o.carbonDioxide * NEAR_INFRARED_MOLAR.co2, ch4: o.methane * NEAR_INFRARED_MOLAR.ch4, o2: OXYGEN.mixingRatio * NEAR_INFRARED_MOLAR.o2 };
+  const x = (v) => { if (!Number.isFinite(v)) throw new Error(`the near-infrared table holds ${v}`); return v.toPrecision(9); };
+  const gasesOf = (band) => Object.entries(band.gases).map(([gas, par], g) => ({ gas, par, g, self: gas === 'h2o' && par.self > 0, w0: 1 - par.w.reduce((a, b) => a + b, 0) }));
+  const increments = (band) => gasesOf(band).map(({ gas, par, g, self }) => [`let v${g} = log(sqrt(a.p2 + ${x(par.pD * par.pD)}) / ${x(NEAR_INFRARED_P_REF)});`,
+    ...par.k.map((k, j) => `let d${g}_${j} = ${x(k)} * ${gas === 'h2o' ? 'a.vapour' : `${x(mixing[gas])} * a.dry`} * exp(${x(par.n[j])} * v${g} + ${x(par.t[j])} * a.dT);`),
+    ...(self ? [`let d${g}_s = ${x(par.self)} * a.vapourE * exp(${x(par.selfT)} * a.lnT);`] : [])].join(' ')).join(' ');
+  const names = (band) => gasesOf(band).flatMap(({ par, g, self }) => [...par.k.map((_, j) => `${g}_${j}`), ...(self ? [`${g}_s`] : [])]);
+  const declare = (band, prefix) => names(band).map((n) => `var ${prefix}${n} = 0.0;`).join(' ');
+  const add = (band, prefix) => names(band).map((n) => `${prefix}${n} += d${n};`).join(' ');
+  const vapour = (gas, t) => (gas === 'h2o' ? `(1.0 - VAPOR_ABS * (1.0 - (${t})))` : `(${t})`);
+  const down = (band, m) => gasesOf(band).map(({ gas, par, g, self, w0 }) => vapour(gas, [self ? `${x(w0)} * exp(-${m} * s${g}_s)` : x(w0),
+    ...par.w.map((w, j) => `${x(w)} * exp(-${m} * (s${g}_${j}${self ? ` + s${g}_s` : ''}))`)].join(' + '))).join(' * ');
+  const up = (band, m, s) => gasesOf(band).map(({ gas, par, g, self, w0 }) => vapour(gas, [self ? `${x(w0)} * exp(-(${m} * c${g}_s + DIFFUSE_PATH * (c${g}_s - ${s(`${g}_s`)})))` : x(w0),
+    ...par.w.map((w, j) => `${x(w)} * exp(-(${m} * (c${g}_${j}${self ? ` + c${g}_s` : ''}) + DIFFUSE_PATH * (c${g}_${j} - ${s(`${g}_${j}`)}${self ? ` + c${g}_s - ${s(`${g}_s`)}` : ''})))`)].join(' + '))).join(' * ');
+  const sums = (band, prefix) => `${declare(band, prefix)}
+    for (var k = 0; k < K; k++) { let a = nirAir(i, k, pi); ${increments(band)} ${add(band, prefix)} }`;
+  return {
+    down: NEAR_INFRARED_BANDS.map((band) => `  {
+    ${declare(band, 's')}
+    for (var k = 0; k < K; k++) {
+      let a = nirAir(i, k, pi); ${increments(band)} ${add(band, 's')}
+      nir[k] += ${x(band.share)} * (1.0 - ${down(band, 'magnification')});
+    }
+  }`).join('\n'),
+    functions: `struct NirAir { vapour: f32, dry: f32, p2: f32, dT: f32, lnT: f32, vapourE: f32 }
+fn nirAir(i: i32, k: i32, pi: f32) -> NirAir {
+  let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]); let t = IN[S_TH + idx] * D[D_EXM + idx];
+  return NirAir(q * mass, mass * max(0.0, 1.0 - q), p * p, t - 250.0, log(296.0 / t), q * mass * (q * p / (0.622 + 0.378 * q)) / ${x(NEAR_INFRARED_P_REF)});
+}
+fn nirBandsColumn(i: i32, pi: f32, magnification: f32) -> f32 {
+  var total = 0.0;
+${NEAR_INFRARED_BANDS.map((band) => `  {
+    ${sums(band, 's')}
+    total += ${x(band.share)} * (1.0 - ${down(band, 'magnification')});
+  }`).join('\n')}
+  return total;
+}
+fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, array<f32, K>>) -> f32 {
+  let magnification = down.x; var climb: array<f32, K>; var loss = 0.0;
+${NEAR_INFRARED_BANDS.map((band) => `  {
+    ${sums(band, 'c')}
+    ${declare(band, 's')}
+    let start = ${up(band, 'magnification', () => '0.0')};
+    var before = start;
+    for (var k = 0; k < K; k++) {
+      let a = nirAir(i, k, pi); ${increments(band)} ${add(band, 's')}
+      let through = ${up(band, 'magnification', (n) => `s${n}`)};
+      climb[k] += ${x(band.share)} * (through - before);
+      before = through;
+    }
+    loss += ${x(band.share)} * (before - start);
+  }`).join('\n')}
+  for (var k = 0; k < K; k++) { (*upward)[k] = climb[k]; }
+  return loss;
+}
+`,
+  };
+}
+
+// solarGases, solarGasTotals and nearInfraredUpward, with the near infrared of `nir` (nearInfraredWgsl) when given.
+const solarGasFunctions = (nir) => `fn solarGases(i: i32, pi: f32, mu: f32, layerOzone: ptr<function, array<f32, K>>, ozoneTaken: ptr<function, array<f32, K>>, gasTaken: ptr<function, array<f32, K>>) -> vec4<f32> {
+  let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
+${nir ? `  var nir: array<f32, K>;\n${nir.down}\n` : ''}  var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
+    let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * max(0.0, 1.0 - q);
+    ozone += (*layerOzone)[k] * magnification;
+    vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
+    oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
+    (*ozoneTaken)[k] = ozoneAbsorb(ozone);
+    (*gasTaken)[k] = VAPOR_ABS * visibleVapour(vapour) + ${nir ? 'nir[k]' : 'nearInfraredGases(vapour, oxygen, co2)'};
+  }
+  return ${nir ? 'vec4<f32>(VAPOR_ABS * visibleVapour(vapour), magnification, 0.0, 0.0)' : 'vec4<f32>(VAPOR_ABS * visibleVapour(vapour), vapour, oxygen, co2)'};
+}
+fn solarGasTotals(i: i32, pi: f32, mu: f32, layerOzone: ptr<function, array<f32, K>>) -> vec3<f32> {
+  let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
+  var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
+  for (var k = 0; k < K; k++) {
+    let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
+    let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * max(0.0, 1.0 - q);
+    ozone += (*layerOzone)[k] * magnification;
+    vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
+    oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
+  }
+  return vec3<f32>(VAPOR_ABS * visibleVapour(vapour), ozoneAbsorb(ozone), VAPOR_ABS * visibleVapour(vapour) + ${nir ? 'nirBandsColumn(i, pi, magnification)' : 'nearInfraredGases(vapour, oxygen, co2)'});
+}
+${nir ? nir.functions : `fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, array<f32, K>>) -> f32 {
+  var vapour = down.x; var oxygen = down.y; var co2 = down.z;
+  var before = nearInfraredGases(vapour, oxygen, co2); var loss = 0.0;
+  for (var k = K - 1; k >= 0; k--) {
+    let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
+    let scaling = pow(p / SCALE_P, SCALE_N) * DIFFUSE_PATH; let dry = mass * max(0.0, 1.0 - q);
+    vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
+    oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
+    let through = nearInfraredGases(vapour, oxygen, co2);
+    (*upward)[k] = through - before;
+    loss += through - before;
+    before = through;
+  }
+  return loss;
+}
+`}`;
+
 export function physicsConstants(o) {
   if (o.plumeEntrainmentLaw !== 'ifs' && o.plumeEntrainmentLaw !== 'gregory') throw new Error(`plumeEntrainmentLaw must be 'ifs' or 'gregory', not ${o.plumeEntrainmentLaw}`);
   if (o.plumeConversion !== 'sundqvist' && o.plumeConversion !== 'zhangMcFarlane') throw new Error(`plumeConversion must be 'sundqvist' or 'zhangMcFarlane', not ${o.plumeConversion}`);
@@ -135,6 +242,8 @@ export function physicsConstants(o) {
   if (o.longwaveScheme !== 'correlated' && o.longwaveScheme !== 'gray') throw new Error(`longwaveScheme must be 'correlated' or 'gray', not ${o.longwaveScheme}`);
   if (o.longwaveOverlap !== 'exponentialRandom' && o.longwaveOverlap !== 'random') throw new Error(`longwaveOverlap must be 'exponentialRandom' or 'random', not ${o.longwaveOverlap}`);
   if (o.solarGases !== 'clirad' && o.solarGases !== 'lacisHansen') throw new Error(`solarGases must be 'clirad' or 'lacisHansen', not ${o.solarGases}`);
+  if (o.nearInfrared !== 'clirad' && o.nearInfrared !== 'bands') throw new Error(`nearInfrared must be 'clirad' or 'bands', not ${o.nearInfrared}`);
+  const nir = o.nearInfrared === 'bands' ? nearInfraredWgsl(o) : null;
   if (o.ozoneProfile) throw new Error('the GPU radiation takes its ozone from its climatology, not an ozoneProfile');
   if (o.ozone !== 'afgl' && o.ozone !== 'idealized') throw new Error(`ozone must be 'afgl' or 'idealized', not ${o.ozone}`);
   const LONGWAVE_TABLE = o.longwaveTable ?? DEFAULT_LONGWAVE_TABLE, points = LONGWAVE_TABLE.points, f32 = (values) => `array<f32, ${values.length}>(${values.map((v) => v.toPrecision(9)).join(', ')})`;
@@ -142,7 +251,7 @@ export function physicsConstants(o) {
   if (!(rayleigh.length >= 1 && rayleigh.length <= 3 && Math.abs(rayleigh.reduce((sum, [w]) => sum + w, 0) - 1) < 1e-9 && rayleigh.every(([w, tau]) => w > 0 && tau >= 0))) throw new Error(`rayleighBands must be one to three [weight, depth] pairs whose weights sum to 1, not ${JSON.stringify(rayleigh)}`);
   const visibleSum = (term) => rayleigh.map(([w, tau]) => `${w} * ${term(`${tau / REFERENCE_PRESSURE} * light.y + light.z`)}`).join(' + ');
   return `
-fn visibleStreams(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec4<f32> { return ${visibleSum((depth) => `stream(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
+${solarGasFunctions(nir)}fn visibleStreams(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> vec4<f32> { return ${visibleSum((depth) => `stream(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
 fn visibleEscape(cloudDepth: f32, keep: f32, mu: f32, adir: f32, adif: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `streamEscape(cloudDepth + ${depth}, keep, mu, adir, adif)`)}; }
 fn visibleReflection(cloudDepth: f32, keep: f32, mu: f32, light: vec3<f32>) -> f32 { return ${visibleSum((depth) => `reflection(cloudDepth + ${depth}, keep, mu)`)}; }
 const MOIST_BL: bool = ${moistTurbulence}; const CT_THRESH: f32 = ${cloudTop.threshold}; const CT_HMAX: f32 = ${cloudTop.maximumHeight}; const CT_PERT: f32 = ${cloudTop.perturbation}; const CT_PROFILE: f32 = ${cloudTop.profile}; const CT_EXCESS: f32 = ${cloudTop.excess}; const CT_TOLERANCE: f32 = ${cloudTop.tolerance}; const CT_CUMULUS: f32 = ${cloudTop.cumulusDepth}; const CT_CAPPED: bool = ${!!cloudTop.cumulusCapped};
@@ -171,7 +280,7 @@ const OZ_P: array<f32, ${OZONE_GRID.points}> = ${f32(Array.from({ length: OZONE_
 const OZ_EQ: f32 = ${o.ozoneColumn[0]}; const OZ_POLE: f32 = ${o.ozoneColumn[1]}; const OZ_KG: f32 = ${OZONE_CM_ATM}; const VIS_O3: f32 = ${(OZONE_SHARES[6] * OZONE_COEFFICIENTS[6] + OZONE_SHARES[7] * OZONE_COEFFICIENTS[7]) / (OZONE_SHARES[6] + OZONE_SHARES[7])};
 const O3_SHARE: array<f32, 8> = ${f32(OZONE_SHARES)}; const O3_COEF: array<f32, 8> = ${f32(OZONE_COEFFICIENTS)};
 const H2O_K: array<f32, 10> = ${f32(VAPOR_COEFFICIENTS)}; const H2O_W: array<f32, 10> = ${f32(VAPOR_WEIGHTS)};
-const VIS_H2O_S: f32 = ${VISIBLE_VAPOR.share}; const VIS_H2O_K: f32 = ${VISIBLE_VAPOR.coefficient}; const VAP_STRENGTH: f32 = ${o.vaporStrength};
+const VIS_H2O_S: f32 = ${VISIBLE_VAPOR.share}; const VIS_H2O_K: f32 = ${VISIBLE_VAPOR.coefficient}; const VAP_STRENGTH: f32 = ${o.vaporStrength}; const VIS_STRENGTH: f32 = ${nir ? VISIBLE_VAPOR_BANDS : o.vaporStrength};
 const O2_SHARE: f32 = ${OXYGEN.share}; const O2_K: f32 = ${OXYGEN.coefficient}; const O2_PATH: f32 = ${OXYGEN.mixingRatio * STP_DEPTH}; const CO2_PATH: f32 = ${o.carbonDioxide * STP_DEPTH}; const CO2_SW_K: f32 = ${CO2_COEFFICIENT};
 const SCALE_P: f32 = ${SCALING_PRESSURE}; const SCALE_N: f32 = ${SCALING_EXPONENT};
 const SCATTER: bool = ${rayleigh.some(([, tau]) => tau > 0) || o.nearInfraredRayleigh > 0 || o.landAerosol > 0 || o.seaAerosol > 0}; const NIR_RAY: f32 = ${o.nearInfraredRayleigh / REFERENCE_PRESSURE}; const UPWARD: bool = ${!!o.upwardAbsorption}; const DIFFUSE_PATH: f32 = ${5 / 3}; const VIS_FRAC: f32 = ${o.visibleFraction}; const LAND_AER: f32 = ${o.landAerosol}; const SEA_AER: f32 = ${o.seaAerosol}; const AER_ABS: f32 = ${1 - o.aerosolAlbedo}; const AER_SCAT: f32 = ${(1 - o.aerosolAsymmetry) * o.aerosolAlbedo};
@@ -303,7 +412,7 @@ fn ozoneAbsorb(path: f32) -> f32 {
   for (var b = 0; b < 8; b++) { a += O3_SHARE[b] * relaxedFraction(O3_COEF[b] * path); }
   return a;
 }
-fn visibleVapour(path: f32) -> f32 { return VIS_H2O_S * relaxedFraction(VIS_H2O_K * VAP_STRENGTH * path); }
+fn visibleVapour(path: f32) -> f32 { return VIS_H2O_S * relaxedFraction(VIS_H2O_K * VIS_STRENGTH * path); }
 fn nearInfraredGases(vapour: f32, oxygen: f32, co2: f32) -> f32 {
   var a = 0.0;
   for (var j = 0; j < 10; j++) { a += H2O_W[j] * relaxedFraction(H2O_K[j] * VAP_STRENGTH * vapour); }
@@ -330,47 +439,6 @@ fn columnOzone(i: i32, pi: f32, layers: ptr<function, array<f32, K>>) -> f32 {
   let w = ozoneWeightsAt(i); var above = 0.0;
   for (var k = 0; k < K; k++) { let below = ozoneAboveAt(pi * LV[L_SL + k], w); (*layers)[k] = below - above; above = below; }
   return above;
-}
-fn solarGases(i: i32, pi: f32, mu: f32, layerOzone: ptr<function, array<f32, K>>, ozoneTaken: ptr<function, array<f32, K>>, gasTaken: ptr<function, array<f32, K>>) -> vec4<f32> {
-  let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
-  var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
-  for (var k = 0; k < K; k++) {
-    let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
-    let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * max(0.0, 1.0 - q);
-    ozone += (*layerOzone)[k] * magnification;
-    vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
-    oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
-    (*ozoneTaken)[k] = ozoneAbsorb(ozone);
-    (*gasTaken)[k] = VAPOR_ABS * visibleVapour(vapour) + nearInfraredGases(vapour, oxygen, co2);
-  }
-  return vec4<f32>(VAPOR_ABS * visibleVapour(vapour), vapour, oxygen, co2);
-}
-fn solarGasTotals(i: i32, pi: f32, mu: f32, layerOzone: ptr<function, array<f32, K>>) -> vec3<f32> {
-  let magnification = 35.0 / sqrt(1224.0 * mu * mu + 1.0);
-  var ozone = 0.0; var vapour = 0.0; var oxygen = 0.0; var co2 = 0.0;
-  for (var k = 0; k < K; k++) {
-    let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
-    let scaling = pow(p / SCALE_P, SCALE_N) * magnification; let dry = mass * max(0.0, 1.0 - q);
-    ozone += (*layerOzone)[k] * magnification;
-    vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
-    oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
-  }
-  return vec3<f32>(VAPOR_ABS * visibleVapour(vapour), ozoneAbsorb(ozone), VAPOR_ABS * visibleVapour(vapour) + nearInfraredGases(vapour, oxygen, co2));
-}
-fn nearInfraredUpward(i: i32, pi: f32, down: vec3<f32>, upward: ptr<function, array<f32, K>>) -> f32 {
-  var vapour = down.x; var oxygen = down.y; var co2 = down.z;
-  var before = nearInfraredGases(vapour, oxygen, co2); var loss = 0.0;
-  for (var k = K - 1; k >= 0; k--) {
-    let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);
-    let scaling = pow(p / SCALE_P, SCALE_N) * DIFFUSE_PATH; let dry = mass * max(0.0, 1.0 - q);
-    vapour += q * mass * 0.1 * scaling * (1.0 + 0.00135 * (IN[S_TH + idx] * D[D_EXM + idx] - 240.0));
-    oxygen += O2_PATH * dry * scaling; co2 += CO2_PATH * dry * scaling;
-    let through = nearInfraredGases(vapour, oxygen, co2);
-    (*upward)[k] = through - before;
-    loss += through - before;
-    before = through;
-  }
-  return loss;
 }
 fn longwavePaths(i: i32, k: i32, pi: f32, T: f32, ozone: f32) -> array<f32, 6> {
   let idx = k * C + i; let p = pi * LV[L_SM + k]; let mass = pi * LV[L_DS + k] / GRAV; let q = max(0.0, IN[S_Q + idx]);

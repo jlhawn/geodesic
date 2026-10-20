@@ -1,3 +1,5 @@
+import { NEAR_INFRARED_TABLE } from './nearInfraredTable.module.js';
+
 /*
  * Gas absorption of sunlight after CLIRAD-SW (Chou & Suarez 1999, NASA
  * TM-1999-104606 vol. 15, section 3). Every path is along the beam, in the
@@ -69,4 +71,85 @@ export function oxygenAbsorptivity(path) {
 
 export function carbonDioxideAbsorptivity(path) {
   return CO2_COEFFICIENT * Math.sqrt(path);
+}
+
+/*
+ * The near infrared's gases in bands (radiation option nearInfrared 'bands'):
+ * the k-distributions of nearInfraredTable.module.js, fitted by
+ * scripts/nearInfraredFit.mjs to RRTMG_SW in its bands 16-24 and 29
+ * (820-16000 cm-1). Band b carries the share s_b of the beam; each of its
+ * gases (water vapor, CO2, CH4, O2) transmits
+ * w0 exp(-m S) + sum_j w_j exp(-m (tau_j + S)) of it along a path of
+ * magnification m, tau_j summing over the layers above
+ * k_j u (p_V/p_ref)^n_j exp(t_j (T - 250)) for each layer's mass u (kg/m2)
+ * of the gas, p_V = sqrt(p^2 + p_D^2), and S, water vapor's self continuum,
+ * summing self u e/p_ref (296/T)^selfT with e the vapor pressure; the
+ * band's gases' transmissions multiply. The visible band's water vapor
+ * takes the strength VISIBLE_VAPOR_BANDS in place of VAPOR_STRENGTH.
+ */
+export const NEAR_INFRARED_BANDS = NEAR_INFRARED_TABLE.bands;
+export const NEAR_INFRARED_P_REF = NEAR_INFRARED_TABLE.pRef;
+export const VISIBLE_VAPOR_BANDS = NEAR_INFRARED_TABLE.visibleVaporStrength;
+export const NEAR_INFRARED_MOLAR = { co2: 44.01 / 28.964, ch4: 16.04 / 28.964, o2: 31.999 / 28.964 };
+
+let bandScratch = null;
+
+/*
+ * air: per layer from the top, the masses (kg/m2) of water vapor (`vapour`)
+ * and dry air (`dry`), the mid-pressure p (Pa), temperature T and vapor
+ * pressure e (Pa); mixing: the mass of CO2, CH4 and O2 per mass of dry air;
+ * vaporFactor scales water vapor's absorptivity in every band. Fills
+ * taken[k], the share of the beam absorbed above the bottom of layer k, and
+ * upward[k], the share absorbed in layer k by the beam that, reflected whole
+ * at the surface, climbs back at the path D per unit of the vertical; split,
+ * when given, gets each gas's part of the beam's absorption (a band's in
+ * proportion to its gases' absorptivities alone). Returns the upward total.
+ */
+export function nearInfraredBands(air, m, D, mixing, vaporFactor, taken, upward, split = null) {
+  const { K, vapour, dry, p, T, e } = air;
+  if (!bandScratch || bandScratch.down.length < K + 1) bandScratch = { down: new Float64Array(K + 1), up: new Float64Array(K + 1), increments: new Float64Array(8 * K), total: new Float64Array(8), sum: new Float64Array(8) };
+  const { down, up, increments, total, sum } = bandScratch;
+  taken.fill(0, 0, K);
+  upward.fill(0, 0, K);
+  if (split) { split.h2o = 0; split.co2 = 0; split.ch4 = 0; split.o2 = 0; }
+  let loss = 0;
+  for (const band of NEAR_INFRARED_BANDS) {
+    down.fill(1, 0, K + 1);
+    up.fill(1, 0, K + 1);
+    let absorptivities = 0;
+    const alone = {};
+    for (const gas in band.gases) {
+      const par = band.gases[gas], J = par.w.length, isVapor = gas === 'h2o', self = isVapor ? par.self : 0;
+      let w0 = 1;
+      for (let j = 0; j < J; j++) w0 -= par.w[j];
+      total.fill(0);
+      for (let k = 0; k < K; k++) {
+        const u = isVapor ? vapour[k] : mixing[gas] * dry[k], lnV = Math.log(Math.sqrt(p[k] * p[k] + par.pD * par.pD) / NEAR_INFRARED_P_REF), dT = T[k] - 250;
+        for (let j = 0; j < J; j++) { increments[j * K + k] = par.k[j] * u * Math.exp(par.n[j] * lnV + par.t[j] * dT); total[j] += increments[j * K + k]; }
+        increments[J * K + k] = self > 0 ? self * u * e[k] / NEAR_INFRARED_P_REF * Math.exp(par.selfT * Math.log(296 / T[k])) : 0;
+        total[J] += increments[J * K + k];
+      }
+      sum.fill(0);
+      for (let l = 0; l <= K; l++) {
+        if (l > 0) for (let j = 0; j <= J; j++) sum[j] += increments[j * K + l - 1];
+        const S = sum[J], ST = total[J];
+        let through = w0 * Math.exp(-m * S), back = w0 * Math.exp(-(m * ST + D * (ST - S)));
+        for (let j = 0; j < J; j++) {
+          through += par.w[j] * Math.exp(-m * (sum[j] + S));
+          back += par.w[j] * Math.exp(-(m * (total[j] + ST) + D * (total[j] - sum[j] + ST - S)));
+        }
+        if (isVapor) { through = 1 - vaporFactor * (1 - through); back = 1 - vaporFactor * (1 - back); }
+        down[l] *= through;
+        up[l] *= back;
+        if (l === K) { alone[gas] = 1 - through; absorptivities += 1 - through; }
+      }
+    }
+    for (let k = 0; k < K; k++) {
+      taken[k] += band.share * (1 - down[k + 1]);
+      upward[k] += band.share * (up[k + 1] - up[k]);
+    }
+    loss += band.share * (up[K] - up[0]);
+    if (split && absorptivities > 0) for (const gas in alone) split[gas] += band.share * (1 - down[K]) * alone[gas] / absorptivities;
+  }
+  return loss;
 }

@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { clearLongwave, longwaveTableFor, LONGWAVE_TABLE } from '../js/physics/longwave.module.js';
-import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
+import { sigmaInterfaces, GRAVITY, CP_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, interfaceAt, layerHeating, referenceHeating, MOLAR } from '../scripts/standardAtmospheres.mjs';
 import { runColumn } from '../scripts/radiationBenchmark.mjs';
 import { SOLAR_CONSTANT, GREENHOUSE_GASES, VISIBLE_FRACTION } from '../js/physics/radiation.module.js';
@@ -64,6 +64,31 @@ test('on bl36 the g-points fitted on bl36 columns follow RRTMG in every layer ab
   for (const level of ['toa', 'p20000', 'surface']) assert.ok(Math.abs(forcing[level] / ref[level] - 1) < 0.1, `doubled CO2 at ${level}: ${forcing[level]} against ${ref[level]}`);
 });
 
+test('on bl60 the g-points fitted on bl60 columns follow RRTMG over each of bl42\'s layers between 1 and 93.6 hPa, the fluxes and doubled CO2', () => {
+  const levels = sigmaInterfaces('bl60'), coarse = sigmaInterfaces('bl42'), table = longwaveTableFor(levels), lines = [];
+  assert.notEqual(table, longwaveTableFor(coarse));
+  for (const a of ['TROP', 'MLS', 'MLW', 'SAW']) {
+    const column = modelColumn(BENCHMARK.atmospheres[a], levels), ref = BENCHMARK.rrtmgLongwave[a].levels, r = clearLongwave(column, { table }), K = column.T.length;
+    const olr = r.up[0] - ref[ref.length - 1].up, dlr = r.down[K] - ref[0].down, net = interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000);
+    for (const x of [olr, dlr, net]) assert.ok(Math.abs(x) < 3, `${a}: OLR, DLR and 200 hPa misses ${olr}, ${dlr}, ${net} W/m2`);
+    const spans = [];
+    for (let k = 2; k < 11; k++) {
+      const top = coarse[k] * column.ps, bottom = coarse[k + 1] * column.ps, per = 86400 * GRAVITY / CP_DRY / (bottom - top);
+      const heat = per * (interfaceAt(column, r.net, bottom) - interfaceAt(column, r.net, top)), refHeat = per * (referenceAt(ref, bottom) - referenceAt(ref, top));
+      spans.push(`${heat.toFixed(2)} (${refHeat.toFixed(2)})`);
+      if (top < 1000) assert.ok(Math.abs(heat / refHeat - 1) < 0.05, `${a}: ${top} to ${bottom} Pa cools ${heat} against ${refHeat} K/day`);
+      else assert.ok(Math.abs(heat - refHeat) < 0.15, `${a}: ${top} to ${bottom} Pa cools ${heat} against ${refHeat} K/day`);
+    }
+    lines.push(`${a} ${spans.join(' / ')}`);
+  }
+  const mls = modelColumn(BENCHMARK.atmospheres.MLS, levels), K = mls.T.length;
+  const withCo2 = (vmr) => ({ ...mls, co2: mls.co2.map((_, k) => vmr * MOLAR.co2 / MOLAR.air * (1 - mls.q[k])), ch4: mls.ch4.map((_, k) => 806e-9 * MOLAR.ch4 / MOLAR.air * (1 - mls.q[k])), n2o: mls.n2o.map((_, k) => 275e-9 * MOLAR.n2o / MOLAR.air * (1 - mls.q[k])) });
+  const one = clearLongwave(withCo2(287e-6), { table }), two = clearLongwave(withCo2(574e-6), { table }), ref = BENCHMARK.iacono.co2Doubling.longwave;
+  const forcing = { toa: one.net[0] - two.net[0], p20000: interfaceAt(mls, one.net, 20000) - interfaceAt(mls, two.net, 20000), surface: two.down[K] - one.down[K] };
+  console.log(`bl60, the cooling over bl42's layers from 1 to 93.6 hPa (RRTMG): ${lines.join(', ')} K/day; doubled CO2 TOA ${forcing.toa.toFixed(2)} 200 hPa ${forcing.p20000.toFixed(2)} surface ${forcing.surface.toFixed(2)} W/m2`);
+  for (const level of ['toa', 'p20000', 'surface']) assert.ok(Math.abs(forcing[level] / ref[level] - 1) < 0.1, `doubled CO2 at ${level}: ${forcing[level]} against ${ref[level]}`);
+});
+
 test('the radiation column carries the g-points: a cloudless column at night has the clear-sky longwave of the same layers', () => {
   const column = modelColumn(BENCHMARK.atmospheres.MLW);
   const r = runColumn(SPECTRAL, column), clear = clearLongwave(column);
@@ -80,6 +105,27 @@ test('the solar gases absorb what RRTMG gives within 2 per cent at an overhead s
     const layers = r.sw.reduce((s, x) => s + x, 0);
     assert.ok(Math.abs(layers - r.budget.atmosphereSolar) < 1e-9 * top.down, `${a}: the layers take the atmosphere's absorption, ${layers} against ${r.budget.atmosphereSolar}`);
     assert.ok(r.budget.oxygenSolar > 0 && r.budget.carbonDioxideSolar > 0, `${a}: O2 and CO2 absorb`);
+  }
+});
+
+test('with the near infrared in bands the solar gases absorb what RRTMG gives within 1 percent at an overhead sun and heat each layer between 5 and 150 hPa within 9 percent of it, where CLIRAD\'s near infrared leaves a layer over 25 percent short; the layers take the column\'s absorption and every gas absorbs', () => {
+  for (const a of ['TROP', 'MLS', 'MLW', 'SAW']) {
+    const column = modelColumn(BENCHMARK.atmospheres[a]), ref = BENCHMARK.rrtmgShortwave[a].levels, top = ref[ref.length - 1], sfc = ref[0], K = column.T.length;
+    const refHeat = referenceHeating(column, ref).map((x) => -x), atmosphere = top.net - sfc.net;
+    const [clirad, bands] = [SPECTRAL, { ...SPECTRAL, nearInfrared: 'bands' }].map((o) => {
+      const r = runColumn(o, column, { beam: top.down, albedo: 0.2, solarConstant: top.down }), net = [0];
+      for (let k = 0; k < K; k++) net.push(net[k] + r.sw[k]);
+      const heat = layerHeating(column, net), misses = [];
+      for (let k = 0; k < K; k++) { const p = 0.5 * (column.levels[k] + column.levels[k + 1]) * column.ps; if (p > 500 && p < 15000) misses.push(heat[k] / refHeat[k] - 1); }
+      return { r, low: Math.min(...misses), high: Math.max(...misses) };
+    });
+    const miss = bands.r.budget.atmosphereSolar / atmosphere - 1;
+    assert.ok(Math.abs(miss) < 0.01, `${a}: the atmosphere absorbs ${bands.r.budget.atmosphereSolar} against ${atmosphere}`);
+    assert.ok(bands.low > -0.09 && bands.high < 0.09, `${a}: the layers between 5 and 150 hPa heat ${bands.low} to ${bands.high} off RRTMG`);
+    assert.ok(clirad.low < -0.25, `${a}: CLIRAD's near infrared leaves the layers between 5 and 150 hPa at worst ${clirad.low} off RRTMG`);
+    const layers = bands.r.sw.reduce((s, x) => s + x, 0);
+    assert.ok(Math.abs(layers - bands.r.budget.atmosphereSolar) < 1e-9 * top.down, `${a}: the layers take the atmosphere's absorption, ${layers} against ${bands.r.budget.atmosphereSolar}`);
+    assert.ok(bands.r.budget.oxygenSolar > 0 && bands.r.budget.carbonDioxideSolar > 0 && bands.r.budget.methaneSolar > 0 && bands.r.budget.vaporSolar > 0, `${a}: water vapor, O2, CO2 and CH4 absorb`);
   }
 });
 
