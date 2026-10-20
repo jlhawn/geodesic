@@ -83,6 +83,27 @@ test('the solar gases absorb what RRTMG gives within 2 per cent at an overhead s
   }
 });
 
+test('with the near infrared in bands the solar gases absorb what RRTMG gives within 1 percent at an overhead sun and heat each layer between 5 and 150 hPa within 9 percent of it, where CLIRAD\'s near infrared leaves a layer over 25 percent short; the layers take the column\'s absorption and every gas absorbs', () => {
+  for (const a of ['TROP', 'MLS', 'MLW', 'SAW']) {
+    const column = modelColumn(BENCHMARK.atmospheres[a]), ref = BENCHMARK.rrtmgShortwave[a].levels, top = ref[ref.length - 1], sfc = ref[0], K = column.T.length;
+    const refHeat = referenceHeating(column, ref).map((x) => -x), atmosphere = top.net - sfc.net;
+    const [clirad, bands] = [SPECTRAL, { ...SPECTRAL, nearInfrared: 'bands' }].map((o) => {
+      const r = runColumn(o, column, { beam: top.down, albedo: 0.2, solarConstant: top.down }), net = [0];
+      for (let k = 0; k < K; k++) net.push(net[k] + r.sw[k]);
+      const heat = layerHeating(column, net), misses = [];
+      for (let k = 0; k < K; k++) { const p = 0.5 * (column.levels[k] + column.levels[k + 1]) * column.ps; if (p > 500 && p < 15000) misses.push(heat[k] / refHeat[k] - 1); }
+      return { r, low: Math.min(...misses), high: Math.max(...misses) };
+    });
+    const miss = bands.r.budget.atmosphereSolar / atmosphere - 1;
+    assert.ok(Math.abs(miss) < 0.01, `${a}: the atmosphere absorbs ${bands.r.budget.atmosphereSolar} against ${atmosphere}`);
+    assert.ok(bands.low > -0.09 && bands.high < 0.09, `${a}: the layers between 5 and 150 hPa heat ${bands.low} to ${bands.high} off RRTMG`);
+    assert.ok(clirad.low < -0.25, `${a}: CLIRAD's near infrared leaves the layers between 5 and 150 hPa at worst ${clirad.low} off RRTMG`);
+    const layers = bands.r.sw.reduce((s, x) => s + x, 0);
+    assert.ok(Math.abs(layers - bands.r.budget.atmosphereSolar) < 1e-9 * top.down, `${a}: the layers take the atmosphere's absorption, ${layers} against ${bands.r.budget.atmosphereSolar}`);
+    assert.ok(bands.r.budget.oxygenSolar > 0 && bands.r.budget.carbonDioxideSolar > 0 && bands.r.budget.methaneSolar > 0 && bands.r.budget.vaporSolar > 0, `${a}: water vapor, O2, CO2 and CH4 absorb`);
+  }
+});
+
 test('without scattering the solar gases take the CLIRAD absorptivities of their paths down, and of the path down plus 5/3 of the column from the light the surface reflects', () => {
   const grid = new Grid(4), plain = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, clearSkyPass: true };
   const make = (options) => { const m = createModel(grid, { ocean: false, radiation: { ...plain, ...options } }); initializeState(m, {}).forEach((v, a) => m.state[a].set(v)); return m; };

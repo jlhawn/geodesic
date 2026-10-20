@@ -132,8 +132,8 @@ test('with the ∇⁴ closures off, the divergence damping alone and the heat it
  * imposed): the heating of every layer, (θ' − θ)Π/dt, over a step long
  * enough that the rounding of θ is far below the tolerance.
  */
-function heatingState(radiation = {}) {
-  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false, exchangeCoefficient: 1.5e-3, ...radiation }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 } });
+function heatingState(radiation = {}, n = 6) {
+  const model = createModel(new Grid(n), { ocean: false, divergenceDamping: 0, radiation: { stratus: true, mixedLayerDeck: false, exchangeCoefficient: 1.5e-3, ...radiation }, boundaryLayer: { entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3 } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
@@ -239,6 +239,28 @@ test('the change the Rayleigh and aerosol scattering makes to the heating of eac
   console.log(`physics alone at N=6 on ${lit} sunlit columns: the scattering changes a layer's heating by up to ${largest.toFixed(3)} K/day, and the engines' change differs by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(3)} K/day)`);
   assert.ok(lit > 0.3 * C && largest > 0.02, `${lit} sunlit columns, largest change ${largest} K/day`);
   assert.ok(worst < 2e-5, `the scattering's heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
+});
+
+test('with the near infrared in bands, each layer of the sunlit columns heats alike in both engines at N=8, in all and by the change from CLIRAD\'s near infrared, which warms the layers above 100 hPa', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const base = heatingState({}, 8);
+  const bands = await physicsHeating(base, { nearInfrared: 'bands' }), clirad = await physicsHeating(base, {});
+  const { K, C } = bands, sigma = base.core.sigmaMid, pi = base.state[0];
+  let worst = 0, worstChange = 0, at = null, lit = 0, upper = 0, upperGpu = 0, count = 0;
+  for (let i = 0; i < C; i++) {
+    if (!(base.radiation.insolation(i) > 0)) continue;
+    lit++;
+    for (let k = 0; k < K - 1; k++) {
+      const x = k * C + i, change = bands.cpu[x] - clirad.cpu[x], d = Math.abs(bands.cpu[x] - bands.gpu[x]);
+      worstChange = Math.max(worstChange, Math.abs(change - (bands.gpu[x] - clirad.gpu[x])));
+      if (d > worst) { worst = d; at = [i, k, bands.cpu[x]]; }
+      if (sigma[k] * pi[i] < 10000) { upper += change; upperGpu += bands.gpu[x] - clirad.gpu[x]; count++; }
+    }
+  }
+  console.log(`physics alone at N=8 on ${lit} sunlit columns: the bands warm the layers above 100 hPa by ${(upper / count).toFixed(3)} K/day on the CPU and ${(upperGpu / count).toFixed(3)} on the GPU; a layer's heating differs between the engines by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(3)} K/day), the bands' change by ${worstChange.toExponential(1)}`);
+  assert.ok(lit > 0.3 * C && upper / count > 0.05, `${lit} sunlit columns, the layers above 100 hPa warmed by ${upper / count} K/day`);
+  assert.ok(Math.abs(upperGpu - upper) < 1e-3 * upper, `the bands warm the layers above 100 hPa by ${upper / count} K/day on the CPU and ${upperGpu / count} on the GPU`);
+  assert.ok(worst < 3e-4, `layer heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
+  assert.ok(worstChange < 3e-4, `the bands' change differs by ${worstChange} K/day`);
 });
 
 test('shallow cumulus of partial cover beside and without resolved cloud heats the layers of sunlit columns alike in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

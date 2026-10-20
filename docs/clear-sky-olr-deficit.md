@@ -118,48 +118,46 @@ biases behind it:
 
 ### 3. The stratosphere's missing shortwave heating
 
-The radiation's shortwave heats the lower stratosphere 10–35 percent less
-than RRTMG for the same atmosphere and sun (`scripts/radiationBenchmark.mjs`
-columns, bl42, overhead sun, K/day, model / RRTMG / model without ozone):
+Between 5 and 150 hPa the radiation's shortwave heats AER's four
+standard atmospheres 4–36 percent less than RRTMG for the same sun
+(`scripts/radiationBenchmark.mjs` columns on bl42, surface albedo 0.2,
+overhead sun, K/day, CLIRAD-SW's near infrared / the bands of finding 5 /
+RRTMG):
 
-| hPa | TROP | MLS | SAW |
-|---|---|---|---|
-| 7.5 | 8.86 / 9.32 / 0.15 | 9.19 / 9.57 | 7.18 / 7.52 |
-| 14 | 4.60 / 5.19 / 0.15 | 4.79 / 5.34 | 4.13 / 4.58 |
-| 24 | 2.83 / 3.29 / 0.15 | 2.93 / 3.42 | 2.94 / 3.36 |
-| 38 | 1.72 / 2.10 / 0.15 | 1.80 / 2.17 | 2.27 / 2.63 |
-| 54 | 1.13 / 1.44 / 0.16 | 1.17 / 1.48 | 1.74 / 2.03 |
-| 71 | 0.70 / 1.00 / 0.17 | 0.78 / 1.04 | 1.13 / 1.45 |
-| 102 | 0.48 / 0.70 / 0.19 | 0.44 / 0.67 | 0.76 / 0.98 |
-| 141 | 0.41 / 0.57 / 0.21 | 0.38 / 0.57 | 0.49 / 0.68 |
+| hPa | TROP | MLS |
+|---|---|---|
+| 1.6 | 29.03 / 30.01 / 28.88 | 26.66 / 27.65 / 26.15 |
+| 7.5 | 8.86 / 9.43 / 9.32 | 9.19 / 9.76 / 9.57 |
+| 14 | 4.60 / 5.06 / 5.19 | 4.79 / 5.24 / 5.34 |
+| 24 | 2.83 / 3.21 / 3.29 | 2.93 / 3.30 / 3.42 |
+| 38 | 1.72 / 2.02 / 2.10 | 1.80 / 2.08 / 2.17 |
+| 54 | 1.13 / 1.39 / 1.44 | 1.17 / 1.41 / 1.48 |
+| 71 | 0.70 / 0.94 / 1.00 | 0.78 / 0.99 / 1.04 |
+| 102 | 0.48 / 0.67 / 0.70 | 0.44 / 0.62 / 0.67 |
+| 141 | 0.41 / 0.56 / 0.57 | 0.38 / 0.54 / 0.57 |
 
-The upper stratosphere (1.6–3.6 hPa) matches. The deficit, 0.15–0.6
-K/day, peaks with the ozone at 14–24 hPa and grows in relative terms
-downward, where the Chappuis band carries the heating; at 100–170 hPa,
-where the model's ozone heating is 0.2–0.3 K/day, part of it must be
-the near infrared. Two pieces of `js/physics/shortwaveGases.module.js`
-fit that pattern:
+RRTMG_SW (AER's column model, built here and run by
+`scripts/nearInfraredFit.mjs`) puts the deficit in the near infrared. Run
+with each gas alone, its direct beam heats TROP's stratosphere at 14, 54
+and 102 hPa (overhead sun) by: CO₂ 0.44, 0.25 and 0.21 K/day (its 4.3,
+2.7 and 2.0 µm bands); water vapor 0.19, 0.15 and 0.14; CH₄ 0.03, 0.02
+and 0.03; O₂ 0.08, 0.08 and 0.07, about the model's. The four together
+heat 0.67, 0.44 and 0.40 K/day; the model's near infrared heats 0.13,
+0.16 and 0.19, its CO₂ 0.05 at each.
 
-- ozone in CLIRAD-SW's eight bands of one absorption coefficient each
-  (Chou and Suarez 1999, Table 3). Inside a band the cross-section spans
-  one to two orders of magnitude (the Huggins bands at 310–340 nm), and a
-  single mean coefficient spends the band's sunlight too high: the weakly
-  absorbed part that reaches the lower stratosphere decays as exp(−k̄O)
-  instead of as the slower mixture of its own coefficients. The column's
-  ozone absorption is RRTMG's within a few W/m² (38.0 W/m², MLS
-  overhead, about 23 of it below 0.4 µm, against RRTMG's 24.7 in the
-  ultraviolet), so the error is where, not how much;
-- vapor, O₂ and CO₂ paths scaled by (p/300 hPa)^0.8 without a Doppler
-  limit. Near-infrared lines turn Doppler-broadened at about 50 hPa
-  (CO₂ near 4000 cm⁻¹), 80 hPa (vapor near 6000 cm⁻¹) and 260 hPa (the
-  O₂ A band), so the scaling starves the stratosphere of their
-  absorption. The longwave already carries this limit (`voigtScale`).
-
-The column totals agree with RRTMG because `VAPOR_STRENGTH` (1.48) is
-fitted to the column's absorption, so what the stratosphere misses the
-troposphere's vapor takes. With radiative damping times of weeks to
-months in the lower stratosphere (Fels 1982), a 0.2–0.3 K/day (overhead)
-deficit is worth several kelvin, the size of the bias.
+CLIRAD-SW's near infrared (`js/physics/shortwaveGases.module.js`)
+starves the stratosphere three ways: the paths of vapor, O₂ and CO₂ scale
+as (p/300 hPa)^0.8, a strong-line law with no Doppler floor, which divides
+a layer's path by 5 at 40 hPa and by 12 at 14 hPa; CO₂ is a√u, calibrated
+to what it adds to the vapor's absorption over a whole column; CH₄ is
+absent. `VAPOR_STRENGTH` (1.48), fitted to RRTMG's column absorption,
+gives the troposphere what the stratosphere misses. A Doppler floor on
+the scaling alone recovers 10–30 percent of the deficit from 100 to
+14 hPa (most of the vapor's, little of the CO₂'s) and has O₂ heat two to
+three times RRTMG's at 7–14 hPa, so the remedy is a refit of the near
+infrared (finding 5). With radiative damping times of weeks to months in
+the lower stratosphere (Fels 1982), a deficit of 0.2–0.6 K/day under an
+overhead sun is worth several kelvin; finding 5's arm measures it.
 
 ### 4. The humidity's spread
 
@@ -172,6 +170,80 @@ interannual variability and ERA5's sub-cell variance. They therefore
 read low against a real atmosphere of the same mean by an amount of this
 order. This term is not measured here.
 
+### 5. The near infrared in bands
+
+The radiation option `nearInfrared: 'bands'` (`nearInfraredBands` in
+`js/physics/shortwaveGases.module.js`, its table
+`js/physics/nearInfraredTable.module.js` written by
+`scripts/nearInfraredFit.mjs`) replaces CLIRAD-SW's near infrared with a
+k-distribution in each of RRTMG_SW's bands 16–24 and 29
+(820–16000 cm⁻¹). Each gas (water vapor, CO₂, CH₄, O₂) has four terms,
+each coefficient scaled by the Voigt pressure √(p² + p_D²) to a fitted
+power and by exp(t (T − 250 K)), with vapor's self continuum; a band's
+gases overlap at random. The beam's magnification 35/√(1224μ² + 1) and
+the reflected beam's 5/3 stay. Ozone and the visible band's vapor stay
+CLIRAD-SW's, the visible vapor's strength refitted to RRTMG's bands 25–28
+(0.68 against 1.48), since the bands take all of band 24 (625–778 nm).
+
+The fit is to RRTMG_SW's direct beam over 25 columns: AER's four
+standard atmospheres, the five AFGL atmospheres, and sixteen columns of
+thirteen's day 1825, from the warm pool to the Antarctic plateau. Each
+column is run at sun cosines 1, 0.5 and 0.25, with each gas alone and
+with the four together. Each gas is fitted alone, then a band's gases
+together against the four-gas run: multiplying the gases' own
+transmissions from RRTMG takes 1.3–4.5 W/m² too much from a column
+(2.5 on average). Against the four-gas run the heating misses by
+0.027 K/day rms, both between 5 and 200 hPa and below, and the column's
+absorption by +0.19 W/m² on average (rms 0.28, −0.36 to +0.68).
+Overhead, the fit stays 2–13 percent short at 10–30 hPa (11 at the
+median); weighting the layers above 100 hPa three times over moves that
+by under a percent.
+
+On the benchmark's four atmospheres under an overhead sun (table in
+finding 3) the atmosphere absorbs 0.1–0.5 percent less than RRTMG
+(CLIRAD-SW 0.1–1.3 percent more), and the layers between 5 and 150 hPa
+heat within −9 and +3 percent of RRTMG (CLIRAD-SW −36 to −4). At
+1.6 hPa the heating is 1.1–1.5 K/day above RRTMG's: that is the ozone's
+excess there, which CLIRAD-SW's missing near infrared had hidden.
+
+What CO₂ adds is still too much. On MLS, removing it takes 2.6 W/m² from
+the atmosphere's absorption under a 60° sun (RRTMG 1.5, CLIRAD-SW 3.3,
+calibrated to Chou and Suarez's line-by-line 3.3), and doubling it adds
+0.8 (RRTMG 0.6, CLIRAD-SW 1.4); overhead, doubling adds 1.5 (RRTMG 1.1,
+CLIRAD-SW 2.2). A joint fit under random overlap gets a band's sum
+right, not each gas's margin. The budget's terms split a band's
+absorption among its gases by what each absorbs alone (MLS overhead:
+CO₂ 11.4 W/m², O₂ 7.0, CH₄ 1.8), so they are not what each gas adds.
+
+Both engines carry it: `test/gpuModel.test.mjs` holds an N=8 parity test
+(the layers above 100 hPa warm 0.357 K/day on each, every layer within
+1.7e-4 K/day), and `test/gasRadiation.test.mjs` the benchmark's numbers.
+`scripts/compareEngines.mjs` (env RADIATION) on eleven128_day1825 flags
+the same fields with the option on as with it off. On the M5 Max the
+passes that hold the radiation take 1.80 → 2.22 ms (0.8 a step) and
+2.60 → 3.34 ms (0.3 a step) at N=128 (`scripts/profileGpu.mjs` on
+eleven128_day1825, alternated twice): 0.56 ms a step, 1.3 percent of
+42 ms. The N=64 fixed-SST arm ran 4.1 s/day against 3.7.
+
+The arm: N=64 from thirteen64_day1825 over WOA23's sea surface for 30
+days, against the same arm with CLIRAD-SW's near infrared
+(`scripts/fixedSst.mjs`, states every 3 days). The global-mean warming,
+with the approach dT = A (1 − e^(−t/τ)) fitted at each level:
+
+| hPa | 1.6 | 3.5 | 7.3 | 24 | 37 | 52 | 69 | 99 | 161 |
+|---|---|---|---|---|---|---|---|---|---|
+| day 30 (K) | 2.7 | 2.5 | 2.6 | 2.4 | 2.3 | 2.1 | 1.9 | 1.1 | 0.3 |
+| A (K) | 2.7 | 2.6 | 3.0 | 3.4 | 3.8 | 4.4 | 4.5 | 2.7 | |
+| τ (days) | 8 | 9 | 14 | 24 | 34 | 46 | 56 | 48 | |
+
+At equilibrium the warming at 50 hPa, about 4.4 K, is the size of the
+stratosphere's cold bias against ERA5 there (3–7 K, finding 2). Added
+above 100–150 hPa to the control's day-30 state, it raises the clear-sky
+OLR by 1.0–1.1 W/m² (clear-sky longwave of every eighth column). At day
+30 the stratosphere's part is +0.7 W/m² and the pair's net −0.03: its
+troposphere is 0.06–0.25 K cooler, within the ±0.3 K the pair's
+difference wanders over the 30 days.
+
 ## The ledger
 
 | part | W/m² | |
@@ -180,7 +252,7 @@ order. This term is not measured here.
 | the arm's dates against the annual mean | −0.6 | ERA5's annual T, q and surface against its days 85–99 |
 | the model's tropospheric temperature at fixed RH (50 hPa–surface) | −1.3 | lower troposphere −1.2, middle −0.2, upper and tropopause −1.0 (by layer at fixed q, which sums to 2.45) |
 | the model's relative humidity | −0.2 | the drier tropical upper troposphere +, the moist 850 hPa and extratropics − |
-| the stratosphere above 50 hPa | −1.1 | if its 50 hPa bias holds to the top (5 K) |
+| the stratosphere above 50 hPa | −1.1 | if its 50 hPa bias holds to the top (5 K); the bands' equilibrium warming gives +1.0 to +1.1 (finding 5) |
 | gas optics | about −0.3 | bl42 against RRTMG by atmosphere, equinox weights |
 | unexplained | −2.1 | the humidity's spread (finding 4), ERA5, EBAF |
 | the model, eight states | 260.3 | |
@@ -189,7 +261,7 @@ order. This term is not measured here.
 
 | | change | references | clear-sky OLR | status |
 |---|---|---|---|---|
-| 1 | The stratosphere's shortwave heating: split the ozone bands whose coefficient varies most (6 and 7, the Huggins bands) into sub-bands of their own coefficients, give the near-infrared path scaling the Doppler limit the longwave has, then refit VAPOR_STRENGTH, all against RRTMG's heating profiles by level and band. No free parameters: the targets are the reference's heating. | Chou and Suarez 1999; Iacono et al. 2008; Mlawer et al. 1997; Freidenreich and Ramaswamy 1999 | about +1 to +1.5 once the stratosphere adjusts (months) | needs RRTMG's band-by-level heating (the repo holds totals by level and by band, not both) |
+| 1 | The stratosphere's shortwave heating: the near infrared's gases in RRTMG_SW's bands, fitted to its transmissions by level (finding 5), with nothing tuned to the model's climate. | Chou and Suarez 1999; Iacono et al. 2008; Mlawer et al. 1997 | +1.0 to +1.1 once the stratosphere adjusts (τ up to 56 days) | done: `nearInfrared: 'bands'`, off by default |
 | 2 | The extratropical tropopause: the lowermost stratosphere's vapor at 1.3–2.2 times ERA5's, and its temperature 5–14 K low. Trace the cross-tropopause vapor transport (vertical advection, diffusion, the ice cloud's sublimation) and the radiative cooling of the excess vapor. 1 adds part of the heating. | Krüger et al. 2022; Charlesworth et al. 2023 | up to +1.0 | to trace |
 | 3 | The trade boundary layer through 850 hPa (−1.6 K, RH +0.1): the inversion's height and sharpness, in the cumulus and boundary-layer work already open (equatorial-wind-bias.md; toa-radiation-bias.md change 3) | Siebesma et al. 2003; Mellor and Yamada 1982 | up to +1.2, and less low cloud | with that work |
 | 4 | Measure the unexplained 2.1 W/m²: EBAF Ed4.2's whole-region clear sky by latitude and month (toa_lw_clr_t; NASA Earthdata login), and ERA5's 6-hourly humidity for the spread | Loeb et al. 2020 | | data to fetch |
@@ -202,10 +274,9 @@ upper troposphere 0.7–0.8 times as moist as ERA5 at 150–250 hPa, within
 the spread of reanalyses and AIRS there (AIRS, which sees clear and
 partly cloudy scenes, is drier than ERA5 in the convective tropics).
 
-No model change was made: the lead, 1, is a refit of the shortwave gas
-scheme against a reference the repository does not yet hold, and its
-effect on the OLR takes the stratosphere's months to show, beyond a 20-day
-fixed-SST arm.
+Change 1 is the option `nearInfrared: 'bands'` (finding 5), off by
+default. Its effect on the OLR takes the stratosphere's one to two months
+to show: a 30-day arm reaches about half of it at 50–70 hPa.
 
 ## References
 
