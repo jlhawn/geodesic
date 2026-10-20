@@ -20,13 +20,16 @@ import { sigmaGridName } from '../dynamics/sigmaCore.module.js';
  * its row's quartic in (T - 250)/100 gives.
  *
  * A table with Doppler cores (dopplerCoreH2o, dopplerCoreCo2, dopplerCoreO3)
- * has three more coefficients at the end of each row, for the line centers of
- * the vapor, CO2 and ozone. Their paths are the gas's own (the vapor mass,
- * the CO2 mass times exp(tCo2 (T - 250)), the ozone mass) times lineCenter(p,
- * p_D): each coefficient is the Doppler limit S/(sqrt(pi) alpha_D) of a line
- * center, which the Lorentz width takes down to S/(pi gamma_L) at high
- * pressure. Such a table's dopplerH2o, dopplerCo2 and dopplerO3 are 0: the
- * far wings scale with the Lorentz width alone, as a Voigt line's do.
+ * has twelve more coefficients at the end of each row (LONGWAVE_CORES): for
+ * the vapor, CO2 and ozone, one per node of a line's core, x = |nu -
+ * nu_line|/alpha_D between consecutive CORE_EDGES, alpha_D the Doppler 1/e
+ * half-width. A node's coefficient is its mean absorption in the Doppler
+ * limit, and its path the gas's own (the vapor mass, the CO2 mass times
+ * exp(tCo2 (T - 250)), the ozone mass) times coreFactor: the node's mean of
+ * the Voigt function H(a, x) over its mean of exp(-x^2), a = sqrt(ln 2) p/p_D
+ * the Lorentz half-width over alpha_D. Such a table's dopplerH2o, dopplerCo2
+ * and dopplerO3 are 0: the far wings scale with the Lorentz width alone, as a
+ * Voigt line's do.
  */
 export const LONGWAVE_CONSTANTS = { pRef: 50000, diffusivity: 1.66, gravity: 9.806 };
 
@@ -82,18 +85,42 @@ export function voigtScale(p, doppler) {
   return (doppler > 0 ? Math.sqrt(p * p + doppler * doppler) : p) / LONGWAVE_CONSTANTS.pRef;
 }
 
-/*
- * A Voigt line's center as a share of its Doppler limit, e^(y^2) erfc(y) in
- * the upper bound 2/(sqrt(pi) (y + sqrt(y^2 + 4/pi))) (within 5 percent), y
- * the Lorentz half-width over the Doppler 1/e half-width, sqrt(ln 2) p/p_D.
- */
-export function lineCenter(p, doppler) {
-  const y = 0.8325546111576977 * p / doppler;
-  return 1.1283791670955126 / (y + Math.sqrt(y * y + 1.2732395447351628));
-}
 export const longwaveCores = (model) => model.dopplerCoreCo2 > 0;
 export const LONGWAVE_ABSORBERS = ['line', 'continuum', 'co2', 'o3', 'ch4', 'n2o'];
-export const LONGWAVE_CORES = ['lineCore', 'co2Core', 'o3Core'];
+export const CORE_EDGES = [0, 0.6, 1.2, 1.8, 2.6], CORE_GASES = ['lineCore', 'co2Core', 'o3Core'];
+export const LONGWAVE_CORES = CORE_GASES.flatMap((n) => CORE_EDGES.slice(1).map((_, j) => `${n}${j + 1}`));
+
+/*
+ * The core nodes' factors at log2 a = -10, -10 + 1/3, ... 10 (CORE_FACTOR_POINTS
+ * each, node by node), with H(a, x) = (1/pi) ∫ exp(-(x + a tan t)^2) dt over
+ * |t| < pi/2 and the node means taken at the midpoints of 32 equal parts.
+ */
+export const CORE_FACTOR_POINTS = 61;
+let coreFactorTable = null;
+export function coreFactors() {
+  if (coreFactorTable) return coreFactorTable;
+  const nodes = CORE_EDGES.length - 1, parts = 32, steps = 400, out = new Float64Array(nodes * CORE_FACTOR_POINTS);
+  const voigt = (a, x) => {
+    const lo = Math.atan((-x - 7) / a), h = (Math.atan((7 - x) / a) - lo) / steps;
+    let s = 0;
+    for (let i = 0; i < steps; i++) { const u = x + a * Math.tan(lo + (i + 0.5) * h); s += Math.exp(-u * u); }
+    return s * h / Math.PI;
+  };
+  for (let j = 0; j < nodes; j++) {
+    const xs = Array.from({ length: parts }, (_, i) => CORE_EDGES[j] + (i + 0.5) * (CORE_EDGES[j + 1] - CORE_EDGES[j]) / parts);
+    const gauss = xs.reduce((s, x) => s + Math.exp(-x * x), 0);
+    for (let t = 0; t < CORE_FACTOR_POINTS; t++) {
+      const a = 2 ** (-10 + t / 3);
+      out[j * CORE_FACTOR_POINTS + t] = xs.reduce((s, x) => s + voigt(a, x), 0) / gauss;
+    }
+  }
+  return (coreFactorTable = out);
+}
+
+export function coreFactor(table, node, logA) {
+  const u = Math.min(Math.max((logA + 10) * 3, 0), CORE_FACTOR_POINTS - 1), i = Math.min(Math.floor(u), CORE_FACTOR_POINTS - 2), w = u - i, r = node * CORE_FACTOR_POINTS + i;
+  return table[r] * (1 - w) + table[r + 1] * w;
+}
 
 export function layerPaths(out, p, mass, T, q, ozone, co2, ch4, n2o, model = LONGWAVE_TABLE) {
   const scale = p / LONGWAVE_CONSTANTS.pRef, vapour = Math.max(0, q) * mass;
@@ -104,12 +131,17 @@ export function layerPaths(out, p, mass, T, q, ozone, co2, ch4, n2o, model = LON
   out[4] = ch4 * mass * scale;
   out[5] = n2o * mass * scale;
   if (model.dopplerCoreCo2 > 0) {
-    out[6] = vapour * lineCenter(p, model.dopplerCoreH2o);
-    out[7] = co2 * mass * lineCenter(p, model.dopplerCoreCo2) * Math.exp(model.tCo2 * (T - 250));
-    out[8] = ozone * lineCenter(p, model.dopplerCoreO3);
+    const table = coreFactors(), nodes = CORE_EDGES.length - 1, carbon = co2 * mass * Math.exp(model.tCo2 * (T - 250));
+    const logH2o = Math.log2(SQRT_LN2 * p / model.dopplerCoreH2o), logCo2 = Math.log2(SQRT_LN2 * p / model.dopplerCoreCo2), logO3 = Math.log2(SQRT_LN2 * p / model.dopplerCoreO3);
+    for (let j = 0; j < nodes; j++) {
+      out[6 + j] = vapour * coreFactor(table, j, logH2o);
+      out[6 + nodes + j] = carbon * coreFactor(table, j, logCo2);
+      out[6 + 2 * nodes + j] = ozone * coreFactor(table, j, logO3);
+    }
   }
   return out;
 }
+const SQRT_LN2 = Math.sqrt(Math.LN2);
 
 /*
  * The paths of a whole column given as layer means (column.levels sigma
@@ -128,7 +160,8 @@ export function gasPaths(column, model = LONGWAVE_TABLE) {
 }
 
 export function opticalDepth(row, paths, k) {
-  const cores = row.length > 11 ? row[11] * paths.lineCore[k] + row[12] * paths.co2Core[k] + row[13] * paths.o3Core[k] : 0;
+  let cores = 0;
+  if (row.length > 11) for (let m = 0; m < LONGWAVE_CORES.length; m++) if (row[11 + m]) cores += row[11 + m] * paths[LONGWAVE_CORES[m]][k];
   return LONGWAVE_CONSTANTS.diffusivity * (row[0] * paths.line[k] + row[1] * paths.continuum[k] + row[2] * paths.co2[k] + row[3] * paths.o3[k] + row[4] * paths.ch4[k] + row[5] * paths.n2o[k] + cores);
 }
 

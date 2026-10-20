@@ -2,7 +2,7 @@ import { LATENT_HEAT, EPSILON, R_VAPOR, saturationHumidity, liftingCondensationL
 import { createMixedLayer, dycomsLongwave } from './mixedLayer.module.js';
 import { REGIME } from './boundaryLayer.module.js';
 import { SEA_DRAG } from './surface.module.js';
-import { longwaveTableFor, longwaveCores, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from './longwave.module.js';
+import { longwaveTableFor, longwaveCores, LONGWAVE_CORES, LONGWAVE_CONSTANTS, GAS_MOLAR, layerPaths, planckShare } from './longwave.module.js';
 import { ozoneWeights, ozoneAbove as climatologyAbove } from './ozone.module.js';
 import { ozoneAbsorptivity, visibleVaporAbsorptivity, nearInfraredVaporAbsorptivity, oxygenAbsorptivity, carbonDioxideAbsorptivity, pressureScaling, vaporScaling, OXYGEN, OZONE_CM_ATM, STP_DEPTH, OZONE_SHARES, OZONE_COEFFICIENTS, VAPOR_STRENGTH } from './shortwaveGases.module.js';
 export const STEFAN_BOLTZMANN = 5.670374419e-8;
@@ -547,6 +547,12 @@ export function cloudOptics(T, continental, options = CLOUD_OPTICS, out = { liqu
   return out;
 }
 
+function coreDepth(row, paths, k) {
+  let s = 0;
+  for (let m = 0; m < LONGWAVE_CORES.length; m++) s += row[11 + m] * paths[6 + m][k];
+  return s;
+}
+
 export function createRadiation(mesh, core, {
   solarConstant = SOLAR_CONSTANT, albedo = 0.07, cloudAbsorption = null, cloudScattering = null, stratus = true, stratusIndex = 'eis', stratusScale = 0.15, stratusWaterMax = 0.15, stratusSigma = 0.92,
   mixedLayerDeck = true, mixedLayer: mixedLayerOptions = {}, stratusSubsidence = -1e-3, minimumInversion = 4, ceilingInversion = null, subsidenceMemory = 2 * DAY, stratusSolar = true, cloudSolarAbsorption = 0.4,
@@ -578,7 +584,7 @@ export function createRadiation(mesh, core, {
   const ozoneShare = Float64Array.from({ length: K }, (_, k) => ozoneAbove(levels[k + 1]) - ozoneAbove(levels[k]));
   const ozoneCell = Float64Array.from({ length: C }, (_, i) => ozoneColumn[0] + (ozoneColumn[1] - ozoneColumn[0]) * Math.sin(mesh.latCell[i]) ** 2);
   const wellMixed = [carbonDioxide * GAS_MOLAR.co2 / GAS_MOLAR.air, methane * GAS_MOLAR.ch4 / GAS_MOLAR.air, nitrousOxide * GAS_MOLAR.n2o / GAS_MOLAR.air];
-  const layerOzone = new Float64Array(K), paths = Array.from({ length: cored ? 9 : 6 }, () => new Float64Array(K)), pathRow = new Float64Array(9);
+  const layerOzone = new Float64Array(K), paths = Array.from({ length: 6 + (cored ? LONGWAVE_CORES.length : 0) }, () => new Float64Array(K)), pathRow = new Float64Array(6 + LONGWAVE_CORES.length);
   const gasEmissivityG = new Float64Array(K), totalEmissivity = new Float64Array(K), planck = new Float64Array(K);
   const chained = longwaveOverlap === 'exponentialRandom';
   const chainCover = new Float64Array(K), chainCloud = new Float64Array(K), chainOutside = new Float64Array(K), clearShareInverse = new Float64Array(K), cloudShareInverse = new Float64Array(K);
@@ -1281,7 +1287,7 @@ export function createRadiation(mesh, core, {
       }
       for (const row of gasTable.points) {
         for (let k = 0; k < K; k++) {
-          const tau = LONGWAVE_CONSTANTS.diffusivity * (row[0] * paths[0][k] + row[1] * paths[1][k] + row[2] * paths[2][k] + row[3] * paths[3][k] + row[4] * paths[4][k] + row[5] * paths[5][k] + (cored ? row[11] * paths[6][k] + row[12] * paths[7][k] + row[13] * paths[8][k] : 0));
+          const tau = LONGWAVE_CONSTANTS.diffusivity * (row[0] * paths[0][k] + row[1] * paths[1][k] + row[2] * paths[2][k] + row[3] * paths[3][k] + row[4] * paths[4][k] + row[5] * paths[5][k] + (cored ? coreDepth(row, paths, k) : 0));
           gasEmissivityG[k] = -Math.expm1(-tau);
           totalEmissivity[k] = 1 - (1 - gasEmissivityG[k]) * (1 - cloudEmissivity[k]);
           planck[k] = planckShare(row, temperature[k]) * STEFAN_BOLTZMANN * temperature[k] ** 4;

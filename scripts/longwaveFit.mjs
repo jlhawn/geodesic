@@ -41,7 +41,10 @@
 // the reference covers to 90 %: the top layer on bl34, three on bl36) and against LBLRTM's
 // forcing for doubled CO2 (DOUBLING_WEIGHT) and for methane and nitrous
 // oxide from none to their 1860 amounts (MINOR_WEIGHT) on the midlatitude
-// summer profile (Iacono et al. 2008), with the spectral model's own misses
+// summer profile (Iacono et al. 2008), with PARTITION_WEIGHT on each of CO2's,
+// ozone's and the vapor's cooling there (the change without it) against
+// RRTMG's bands where it absorbs, 0.3-200 hPa (above 3 hPa as a share of the
+// layer's cooling), with the spectral model's own misses
 // in the midlatitude summer's sixteen RRTMG bands at the top and the surface
 // and in each band's cooling above 200 hPa (BAND_WEIGHT), in LBLRTM's
 // doubled-CO2 forcing by band (Mlawer et al. 1997, Table 6), and the change
@@ -58,7 +61,7 @@
 import { writeFileSync } from 'node:fs';
 import { GRAVITY, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, referenceHeating, layerHeating, interfaceAt, MOLAR } from './standardAtmospheres.mjs';
-import { LONGWAVE_CONSTANTS, gasPaths, clearLongwave, normalizedPoints, longwaveTableFor, LONGWAVE_TABLE_FILES, LONGWAVE_ABSORBERS, LONGWAVE_CORES, longwaveCores } from '../js/physics/longwave.module.js';
+import { LONGWAVE_CONSTANTS, gasPaths, clearLongwave, normalizedPoints, longwaveTableFor, LONGWAVE_TABLE_FILES, LONGWAVE_ABSORBERS, LONGWAVE_CORES, CORE_EDGES, CORE_GASES, longwaveCores } from '../js/physics/longwave.module.js';
 
 const H = 6.62607015e-34, CL = 2.99792458e8, KB = 1.380649e-23, SIGMA = 5.670374419e-8;
 const { pRef, diffusivity } = LONGWAVE_CONSTANTS;
@@ -100,10 +103,10 @@ const TAIL_NODES = Number(process.env.TAIL_NODES ?? 4);
 // 9.6 um band), in nodes of |nu - nu_line|/alpha_D between CORE_EDGES, each
 // with the Gaussian's mean. Each node's share of the interval is
 // 2 alpha_D dx/delta (all of an absorber's together at most CORE_FILL, its
-// strength kept), and its coefficient the Doppler limit that lineCenter takes
-// down at high pressure.
+// strength kept), and its coefficient that mean, which coreFactor carries to
+// the Voigt function's at every pressure.
 const CORES = [['line', 'lineCore', 'coreH2o', 'spacingH2o', 1.6024e-6], ['co2', 'co2Core', 'coreCo2', 'spacingCo2', 1.0251e-6], ['o3', 'o3Core', 'coreO3', 'spacingO3', 9.817e-7]];
-const CORE_EDGES = [0, 0.6, 1.2, 1.8, 2.6], CORE_FILL = 0.25;
+const CORE_FILL = 0.25;
 const erf = (x) => { const t = 1 / (1 + 0.3275911 * x); return 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x); };
 function dopplerCores(P, nu, envelope) {
   if (!longwaveCores(P)) return [];
@@ -113,7 +116,7 @@ function dopplerCores(P, nu, envelope) {
     const alpha = doppler * nu, fill = Math.min(1, CORE_FILL * P[spacing] / (2 * CORE_EDGES[CORE_EDGES.length - 1] * alpha));
     for (let j = 1; j < CORE_EDGES.length; j++) {
       const share = 2 * alpha * (CORE_EDGES[j] - CORE_EDGES[j - 1]) / P[spacing] * fill;
-      out.push({ name, share, k: P[strength] * envelope[gas] * (erf(CORE_EDGES[j]) - erf(CORE_EDGES[j - 1])) / share });
+      out.push({ name, node: `${name}${j}`, share, k: P[strength] * envelope[gas] * (erf(CORE_EDGES[j]) - erf(CORE_EDGES[j - 1])) / share });
     }
   }
   return out;
@@ -138,18 +141,18 @@ export function subIntervals(P, nu, width) {
   const n2o = (nu >= 1200 && nu <= 1350 ? P.kN2o * Math.exp(-Math.abs(nu - 1285) / 20) : 0) + (nu >= 550 && nu <= 630 ? 0.1 * P.kN2o * Math.exp(-Math.abs(nu - 589) / 15) : 0);
   const bulk = { line: line * Math.cosh(P.spread), co2: co2 * Math.cosh(P.spreadC), o3 };
   const tails = TAILS.filter(([gas, share]) => P[share] > 0 && bulk[gas] > 0 && !(gas === 'line' && nu > (P.tailH2oTo ?? Infinity)));
-  const cores = dopplerCores(P, nu, { line, co2: nu >= 500 && nu <= 850 ? co2 : 0, o3 }), zero = longwaveCores(P) ? { lineCore: 0, co2Core: 0, o3Core: 0 } : {};
+  const cores = dopplerCores(P, nu, { line, co2: nu >= 500 && nu <= 850 ? co2 : 0, o3 });
   const kept = 1 - tails.reduce((s, [, share, depth]) => s + P[share] * -Math.expm1(-P[depth]), 0) - cores.reduce((s, c) => s + c.share, 0);
-  const out = [1, -1].map((sign) => ({ nu, width: width * kept / 2, line: line * Math.exp(sign * P.spread), continuum, co2: co2 * Math.exp(sign * P.spreadC), o3, ch4, n2o, ...zero }));
+  const out = [1, -1].map((sign) => ({ nu, width: width * kept / 2, line: line * Math.exp(sign * P.spread), continuum, co2: co2 * Math.exp(sign * P.spreadC), o3, ch4, n2o }));
   const co2Core = P.lTailCo2 > 0 && nu >= 500 && nu <= 850 ? P.kCo2 * Math.exp(-Math.abs(nu - 667.5) / P.lTailCo2) : co2;
   for (const [gas, share, depth] of tails) {
     const g0 = P[share], top = gas === 'line' ? line * Math.exp(P.spread) : gas === 'co2' ? co2Core * Math.exp(P.spreadC) : o3;
     for (let j = 1; j <= TAIL_NODES; j++) {
       const b = g0 * Math.exp(-P[depth] * (j - 1) / TAIL_NODES), a = g0 * Math.exp(-P[depth] * j / TAIL_NODES);
-      out.push({ nu, width: width * (b - a), ...bulk, continuum, ch4, n2o, ...zero, [gas]: top * g0 * g0 / (a * b) });
+      out.push({ nu, width: width * (b - a), ...bulk, continuum, ch4, n2o, [gas]: top * g0 * g0 / (a * b) });
     }
   }
-  for (const c of cores) out.push({ nu, width: width * c.share, ...bulk, continuum, ch4, n2o, ...zero, [c.name]: c.k, core: c.name });
+  for (const c of cores) out.push({ nu, width: width * c.share, ...bulk, continuum, ch4, n2o, [c.node]: c.k, core: c.name, node: c.node });
   return out;
 }
 
@@ -161,13 +164,15 @@ export function spectrum(P, step = 1, from = 10, to = 3250) {
 
 // Two-stream fluxes of a set of sub-intervals (each with its own Planck density) on a column.
 export function spectralFluxes(P, column, intervals) {
-  const paths = gasPaths(column, P), names = Object.keys(paths);
+  const paths = gasPaths(column, P);
   const K = column.T.length, up = new Float64Array(K + 1), down = new Float64Array(K + 1);
   const tr = new Float64Array(K), B = new Float64Array(K);
   for (const s of intervals) {
+    const node = s.node ? paths[s.node] : null, kNode = s.node ? s[s.node] : 0;
     for (let k = 0; k < K; k++) {
       let tau = 0;
-      for (const n of names) tau += s[n] * paths[n][k];
+      for (const n of LONGWAVE_ABSORBERS) tau += s[n] * paths[n][k];
+      if (node) tau += kNode * node[k];
       tau *= diffusivity;
       tr[k] = Math.exp(-tau);
       B[k] = planckDensity(s.nu, column.T[k]) * s.width;
@@ -198,6 +203,8 @@ const mls = columns.MLS;
 const scaled = (column, gas, factor) => ({ ...column, [gas]: column[gas].map((x) => x * factor) });
 const withGas = (column, gas, vmr) => ({ ...column, [gas]: column[gas].map((_, k) => vmr * MOLAR[gas] / MOLAR.air * (1 - column.q[k])) });
 const rtmip = (co2) => withGas(withGas(withGas(mls, 'co2', co2), 'ch4', 806e-9), 'n2o', 275e-9);
+const PARTITION_WEIGHT = Number(process.env.PARTITION_WEIGHT ?? 0), PARTITION_BANDS = { co2: [500, 630, 700, 2250, 2380], o3: [980, 1080], q: [10, 350, 1390, 1480, 1800] };
+const partition = Object.entries(PARTITION_BANDS).map(([gas, from]) => [gas, BENCHMARK.rrtmgLongwave.MLS.bands.filter((b) => from.includes(b.from)).map((b) => referenceHeating(mls, b.levels)).reduce((a, h) => a.map((v, k) => v + h[k]))]);
 
 const linearAt = (ref, p) => {
   const j = ref.findIndex((l, i) => i < ref.length - 1 && p <= l.p && p >= ref[i + 1].p);
@@ -252,6 +259,24 @@ export function score(P, verbose = false, keys = null) {
     bandCooling += ` ${b.from}:${Math.sqrt(miss / n).toFixed(2)}`;
   }
   if (verbose) console.log(`MLS by RRTMG band, cooling rms above 200 hPa, K/day:${bandCooling}`);
+  if (table && (PARTITION_WEIGHT > 0 || verbose)) {
+    const all = layerHeating(mls, total(mls).net), refAll = referenceHeating(mls, BENCHMARK.rrtmgLongwave.MLS.levels);
+    let line = '';
+    for (const [gas, want] of partition) {
+      const without = layerHeating(mls, total(gas === 'q' ? { ...mls, q: mls.q.map(() => 1e-9) } : scaled(mls, gas, 0)).net);
+      let miss = 0, n = 0, top = '';
+      for (let k = 0; k < K; k++) {
+        const p = 0.5 * (mls.levels[k] + mls.levels[k + 1]) * mls.ps;
+        if (p < 30 || p > 20000) continue;
+        const d = all[k] - without[k] - (p > 300 ? want[k] : want[k] * all[k] / refAll[k]);
+        miss += d * d; n++;
+        if (p < 300) top += ` ${(all[k] - without[k]).toFixed(2)} (${(want[k] * all[k] / refAll[k]).toFixed(2)})`;
+      }
+      s += PARTITION_WEIGHT * miss;
+      line += ` ${gas === 'q' ? 'h2o' : gas} ${Math.sqrt(miss / n).toFixed(3)}${top}`;
+    }
+    if (verbose) console.log(`MLS cooling by gas against its RRTMG bands, rms 0.3-200 hPa and the layers above 3 hPa, K/day:${line}`);
+  }
   let doublingLine = '';
   const twice = scaled(mls, 'co2', 2);
   for (const [a, b, tT, tP, tS] of BENCHMARK.mlawerMls.doubling.bands) {
@@ -324,7 +349,7 @@ const BIN_WIDTH = Number(process.env.BIN ?? 1.5), THICK = Number(process.env.THI
 // thin where it differs from the far wings, joins its interval's other nodes.
 const CORE_BIN = Number(process.env.CORE_BIN ?? 1.6), CORE_CLEAR = Number(process.env.CORE_CLEAR ?? 0.1), CORE_OPAQUE = Number(process.env.CORE_OPAQUE ?? 300), CORE_TOP = 1000;
 function binKey(s, columnPaths, topPaths) {
-  const coreTau = s.core ? s[s.core] * topPaths[s.core] : 0;
+  const coreTau = s.core ? s[s.node] * topPaths[s.node] : 0;
   if (coreTau >= CORE_CLEAR) return `${s.core}:${coreTau > CORE_OPAQUE ? 'opaque' : Math.floor(Math.log(coreTau / CORE_CLEAR) / CORE_BIN)}`;
   const parts = LONGWAVE_ABSORBERS.map((n) => s[n] * columnPaths[n]);
   const total = parts.reduce((a, b) => a + b, 0), kind = ['h2o', 'cont', 'co2', 'o3', 'minor', 'minor'][parts.indexOf(Math.max(...parts))];
@@ -359,16 +384,21 @@ export function reduce(P, keys = binning(P), step = 1) {
     const cacheKey = `${key}:${members.length}:${members[0].nu}`;
     if (!shareCache.has(cacheKey)) shareCache.set(cacheKey, members.map((s) => temperatures.map((T) => planckDensity(s.nu, T) / (SIGMA * T ** 4))));
     const density = shareCache.get(cacheKey), planck = fitQuartic(temperatures, temperatures.map((_, t) => members.reduce((a, s, j) => a + density[j][t] * s.width, 0)));
-    const core = LONGWAVE_CORES.find((n) => key.startsWith(`${n}:`)), tau = core ? (s) => s[core] * topPaths[core] : (s) => LONGWAVE_ABSORBERS.reduce((a, n) => a + s[n] * columnPaths[n], 0), meanTau = mean(tau);
+    const core = CORE_GASES.find((n) => key.startsWith(`${n}:`)), tau = core ? (s) => s[s.node] * topPaths[s.node] : (s) => LONGWAVE_ABSORBERS.reduce((a, n) => a + s[n] * columnPaths[n], 0), meanTau = mean(tau);
     const scale = meanTau > 0 ? -Math.log(mean((s) => Math.exp(-tau(s) / meanTau))) : 1;
     const g = { key, nu: mean((s) => s.nu), planck };
-    for (const n of names) g[n] = (!core || n === core ? scale : 1) * mean((s) => s[n]);
+    for (const n of LONGWAVE_ABSORBERS) g[n] = (!core ? scale : 1) * mean((s) => s[n]);
+    if (names.length > LONGWAVE_ABSORBERS.length) {
+      for (const n of LONGWAVE_CORES) g[n] = 0;
+      for (const s of members) if (s.node) g[s.node] += s.width * s[s.node];
+      for (const n of LONGWAVE_CORES) g[n] *= (!core || n.startsWith(core) ? scale : 1) / weight;
+    }
     points.push(g);
   }
   return points.sort((a, b) => a.nu - b.nu);
 }
 
-const rowOf = (g) => [g.line, g.continuum, g.co2, g.o3, g.ch4, g.n2o, ...g.planck, ...(g.co2Core !== undefined ? LONGWAVE_CORES.map((n) => g[n]) : [])];
+const rowOf = (g) => [g.line, g.continuum, g.co2, g.o3, g.ch4, g.n2o, ...g.planck, ...(g.co2Core1 !== undefined ? LONGWAVE_CORES.map((n) => g[n]) : [])];
 export const tableOf = (P, points) => ({ ...P, points: normalizedPoints(points.map(rowOf)) });
 
 function fitQuartic(x, y) {
@@ -408,7 +438,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (process.env.WRITE) {
     const lines = table.points.map((p) => `  [${p.join(', ')}],`).join('\n');
     const file = LINES === 'voigt' ? LONGWAVE_TABLE_FILES[`${LEVELS}Voigt`] : LONGWAVE_TABLE_FILES[LEVELS] ?? LONGWAVE_TABLE_FILES.bl34;
-    const cores = longwaveCores(P) ? ',\n// then the Doppler limits (m2/kg) of the vapor\'s, CO2\'s and ozone\'s line centers' : '';
+    const cores = longwaveCores(P) ? ',\n// then the means (m2/kg) in the Doppler limit of the vapor\'s, CO2\'s and ozone\'s core nodes' : '';
     writeFileSync(new URL(`../js/physics/${file}`, import.meta.url), `// Generated by scripts/longwaveFit.mjs; each row a g-point: mass absorption coefficients (m2/kg) at\n// p_ref of the water vapour lines, the self continuum (per Pa of vapour pressure), CO2, ozone, methane\n// and nitrous oxide, then the quartic in (T - 250)/100 of its share of sigma T^4${cores}.\nexport const LONGWAVE_SPECTRAL_MODEL = ${JSON.stringify(Object.fromEntries(Object.entries(P).map(([k, v]) => [k, +v.toPrecision(6)])))};\nexport const LONGWAVE_POINTS = [\n${lines}\n];\n`);
   }
 }
