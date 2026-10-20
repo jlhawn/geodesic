@@ -975,8 +975,8 @@ test('with mixedLayerDeck: false and the purely scattering clouds of cloudSolarA
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }, {}, {}, RAYLEIGH_TOP).digest, '377b814c338cd1c4473dd89e6a4936fb', 'with the Rayleigh top and neither sponge nor gravity waves, the engine before the model top');
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }, {}, GREY_ICE, RAYLEIGH_TOP).digest, '86b09bb9d0b54ea3757f9ecbcb375595', 'on grey ice with unaged snow and the Rayleigh top, the engine before the ice and snow albedo depended on temperature and age');
   assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, ...GRAY_GASES }, {}, GREY_ICE).digest, '81dffa9fbd963d77ef3961a8f93d0586', 'on grey ice with unaged snow, the model-top parent\'s digest');
-  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, longwaveOverlap: 'random' }, {}, GREY_ICE, RAYLEIGH_TOP).digest, '40f4bd57b23aab9cdee3dc72098bb710', 'on grey ice under the spectral gases with the longwave\'s random overlap and the Rayleigh top, the gas parent\'s digest before the model top');
-  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED }, {}, GREY_ICE, RAYLEIGH_TOP).digest, 'b326117bf875f03065fee12a9fa205f8', 'on grey ice under the spectral gases with the longwave\'s exponential-random overlap and the Rayleigh top');
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED, longwaveOverlap: 'random' }, {}, GREY_ICE, RAYLEIGH_TOP).digest, 'e9f42b497bda3539e65ce8dd6d37e962', 'on grey ice under the spectral gases with the longwave\'s random overlap and the Rayleigh top, the gas parent\'s digest before the model top');
+  assert.equal(modelDigest({ mixedLayerDeck: false, cloudSolarAbsorption: 0, cloudScattering: 55, cloudAbsorption: 130, ...OVERCAST, ...UNSCATTERED }, {}, GREY_ICE, RAYLEIGH_TOP).digest, '6166f855989309930db01078f3963b69', 'on grey ice under the spectral gases with the longwave\'s exponential-random overlap and the Rayleigh top');
   assert.notEqual(modelDigest({ mixedLayerDeck: false }).digest, before, 'by default cloud water absorbs sunlight');
   const fresh = modelDigest();
   assert.equal(fresh.digest, modelDigest({ mixedLayerDeck: true }).digest);
@@ -998,12 +998,12 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   const now = modelDigest({}, defaults).digest, random = modelDigest({ cloudOverlap: 'maximumRandom' }, defaults).digest;
   const remembered = { ...defaults, cumulusMemory: MOIST_DEFAULTS.cumulusMemory }, memory = modelDigest({}, remembered).digest, memoryRandom = modelDigest({ cloudOverlap: 'maximumRandom' }, remembered).digest;
   console.log(`12 steps at N=4: ${now} under the defaults without the cumulus memory, ${random} with maximum-random overlap; ${memory} and ${memoryRandom} with it`);
-  assert.equal(now, 'b1b36c9aec5b51fef77e3e9acb0b8d54');
-  assert.equal(memory, 'a3d3326e194da9c3328773b6bdc72aaf');
-  assert.equal(memoryRandom, 'c1452ac5b284cdb2cd6efd697e3b24ba');
-  assert.equal(modelDigest({ longwaveOverlap: 'random' }, defaults).digest, '417aec667adbf32efa9b5378f8225d76', 'with the longwave\'s random overlap, the integration parent\'s digest');
-  assert.equal(modelDigest({ longwaveOverlap: 'random' }, defaults, {}, RAYLEIGH_TOP).digest, 'c62e31e05b7c8f141fc9f0a022de2951', 'with the longwave\'s random overlap and the Rayleigh top, the engine before the longwave overlapped as the shortwave does');
-  assert.equal(modelDigest({}, defaults, {}, RAYLEIGH_TOP).digest, '9c15ff08d8d2a31ff0cec8a795c8d714', 'with the Rayleigh top, the convection parent\'s digest');
+  assert.equal(now, 'b3d0f994cf75008ab0ebd0c1d30e4c8e');
+  assert.equal(memory, '7beb7bfcb6c38728370f370b200c881b');
+  assert.equal(memoryRandom, 'd4810b3ee5fcb293967b0cfe335824ae');
+  assert.equal(modelDigest({ longwaveOverlap: 'random' }, defaults).digest, '7c51b190728029d23775a7a1cb251f69', 'with the longwave\'s random overlap, the integration parent\'s digest');
+  assert.equal(modelDigest({ longwaveOverlap: 'random' }, defaults, {}, RAYLEIGH_TOP).digest, 'f3470f7fdc73f8baa71094c01b5590b9', 'with the longwave\'s random overlap and the Rayleigh top, the engine before the longwave overlapped as the shortwave does');
+  assert.equal(modelDigest({}, defaults, {}, RAYLEIGH_TOP).digest, '03150852070a23403e5a4ac007019a59', 'with the Rayleigh top, the convection parent\'s digest');
   assert.equal(modelDigest({ ...GRAY_GASES, visibleFraction: 0.5, rayleighBands: [[0.712, 0.0874], [0.288, 0.5687]], nearInfraredRayleigh: 0 }, defaults, {}, RAYLEIGH_TOP).digest, '04c399ce82d605d7471beb1e6f2dee88', 'under the gray gases, the visible split and Rayleigh bands before the gas branch\'s and the Rayleigh top, the cloud parent\'s digest');
   assert.notEqual(random, now);
   assert.notEqual(modelDigest({ cloudOverlap: 'maximumRandom' }).digest, random);
@@ -1013,11 +1013,11 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   const positive = modelDigest({}, { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure, pcapeBoundary: MOIST_DEFAULTS.pcapeBoundary }, {}, RAYLEIGH_TOP).digest;
   const layer = modelDigest({}, { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure, pcapeBoundary: MOIST_DEFAULTS.pcapeBoundary, excessVelocity: MOIST_DEFAULTS.excessVelocity }, {}, RAYLEIGH_TOP).digest;
   console.log(`12 steps at N=4 with the Rayleigh top under the Bechtold closure: ${bechtold}; with the deep source from the lowest 50 hPa: ${surface}; with Grant's shallow closure: ${grant}; with PCAPE_bl at least 0: ${positive}; with the excess over the IFS's w*: ${layer}`);
-  assert.equal(bechtold, '6bbe33fbf6f116987443d3f145ac3bbc');
-  assert.equal(surface, 'cfac93052041bf3e6682d51c662b4da0');
-  assert.equal(grant, '50082deaa4fa0f738a0295c701405d87');
+  assert.equal(bechtold, '2312b3aff2cf76c7cf7c987e71de3530');
+  assert.equal(surface, '49f2a22691a182c64d2674f752d8da38');
+  assert.equal(grant, '7cf52292844929865f8bc518dec033ee');
   assert.equal(positive, grant, 'these twelve steps do not tell the two apart');
-  assert.equal(layer, 'cbad792343b33fd09361776fe561aa6c');
+  assert.equal(layer, '65c6a669682aaf8ec70b214015ec1ba8');
   const elements = { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure, pcapeBoundary: MOIST_DEFAULTS.pcapeBoundary, excessVelocity: MOIST_DEFAULTS.excessVelocity };
   const merged = modelDigest({}, elements).digest, typed = modelDigest({}, { ...elements, convectionType: 'cloudDepth' }).digest;
   const entraining = modelDigest({}, { ...elements, convectionType: 'cloudDepth', plumeEntrainmentLaw: MOIST_DEFAULTS.plumeEntrainmentLaw }).digest;
@@ -1025,17 +1025,17 @@ test('the uniform condensation, saturation over ice and falling ice of the moist
   const frozen = modelDigest({}, { ...elements, convectionType: MOIST_DEFAULTS.convectionType, plumeEntrainmentLaw: MOIST_DEFAULTS.plumeEntrainmentLaw, plumePhase: MOIST_DEFAULTS.plumePhase }).digest;
   const converted = modelDigest({}, { ...elements, convectionType: MOIST_DEFAULTS.convectionType, plumeEntrainmentLaw: MOIST_DEFAULTS.plumeEntrainmentLaw, plumePhase: MOIST_DEFAULTS.plumePhase, plumeConversion: MOIST_DEFAULTS.plumeConversion }).digest;
   console.log(`12 steps at N=4 under the model top and the convection's elements 2-4: ${merged}; with the deep type by the cloud's depth: ${typed}; with the IFS entrainment: ${entraining}; typed by the IFS test parcel: ${parcel}; with the mixed-phase plume: ${frozen}; with the IFS updraught conversion: ${converted}`);
-  assert.equal(merged, '1cbba0851406bf37867a1478c761c7f0');
-  assert.equal(typed, '872bbc4c04ed4449a8c19fb3123c9de4');
-  assert.equal(entraining, '55b941ee9f6c3d243dc861f685613155');
-  assert.equal(parcel, '05c0251cfd6c7c8926bf33de5e6a6e53');
-  assert.equal(frozen, 'c74e6c420ed587bdfee1440f6e92cb45');
-  assert.equal(converted, 'ac93702c5873bc5734812b60e48fea86');
+  assert.equal(merged, '9a2ceb09f831b6c81b0a547b8b43158a');
+  assert.equal(typed, 'a98f10a67279cb45f5fe26a7660a5fc8');
+  assert.equal(entraining, '4ee9e1a06e989dfb93155ffc907c3017');
+  assert.equal(parcel, '38955913933f699d926a31758be826e7');
+  assert.equal(frozen, 'b1ba168c6b11b370c21c5fd1513c825b');
+  assert.equal(converted, '1975603ce4738eccba049efdcbb95134');
 });
 
 test('the fog scheme of the moist defaults leaves the twelve-step digest as it is: no lowest-layer cloud forms in twelve steps from rest at N=4', () => {
   const fog = modelDigest({}, { fogDroplets: MOIST_DEFAULTS.fogDroplets, fogDeposition: MOIST_DEFAULTS.fogDeposition });
-  assert.equal(fog.digest, '2453a42fc7b10633d96a380e96e1082a');
+  assert.equal(fog.digest, '4da10721ecac3bccaa89af7358bda326');
   assert.equal(fog.digest, modelDigest({}).digest);
 });
 

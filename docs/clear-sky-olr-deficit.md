@@ -252,9 +252,9 @@ than AFGL's tropical atmosphere in every layer above 10 hPa: 14 K in the
 top layer, 17 K at 0.64 hPa and 7–8 K at 1.6–7 hPa. Its clear-sky
 heating over 15° S–15° N, the mean of 24 hours on every sixteenth column
 with the model's ozone, at its own temperatures and with AFGL's above
-8 hPa, in K/day (with `nearInfrared: 'bands'` in parentheses; the
-equilibrium is where the net heating vanishes, interpolated between the
-two temperatures, extrapolated at 1.6 hPa):
+8 hPa, in K/day, with `nearInfrared: 'clirad'` (with 'bands' in
+parentheses; the equilibrium is where the net heating vanishes,
+interpolated between the two temperatures, extrapolated at 1.6 hPa):
 
 | hPa | T, K | AFGL | shortwave | longwave | net | net at AFGL's T | equilibrium, K |
 |---|---|---|---|---|---|---|---|
@@ -364,7 +364,7 @@ the gravity-wave drag's share is what it deposits at the lid?
 
 | | change | references | clear-sky OLR | status |
 |---|---|---|---|---|
-| 1 | The stratosphere's shortwave heating: the near infrared's gases in RRTMG_SW's bands, fitted to its transmissions by level (finding 5), with nothing tuned to the model's climate. | Chou and Suarez 1999; Iacono et al. 2008; Mlawer et al. 1997 | +1.0 to +1.1 once the stratosphere adjusts (τ up to 56 days) | done: `nearInfrared: 'bands'`, off by default |
+| 1 | The stratosphere's shortwave heating: the near infrared's gases in RRTMG_SW's bands, fitted to its transmissions by level (finding 5), with nothing tuned to the model's climate. | Chou and Suarez 1999; Iacono et al. 2008; Mlawer et al. 1997 | +1.0 to +1.1 once the stratosphere adjusts (τ up to 56 days) | done: `nearInfrared: 'bands'`, the default |
 | 2 | The extratropical tropopause: the lowermost stratosphere's vapor at 1.3–2.2 times ERA5's, and its temperature 5–14 K low. Trace the cross-tropopause vapor transport (vertical advection, diffusion, the ice cloud's sublimation) and the radiative cooling of the excess vapor. 1 adds part of the heating. | Krüger et al. 2022; Charlesworth et al. 2023 | up to +1.0 | to trace |
 | 3 | The trade boundary layer through 850 hPa (−1.6 K, RH +0.1): the inversion's height and sharpness, in the cumulus and boundary-layer work already open (equatorial-wind-bias.md; toa-radiation-bias.md change 3) | Siebesma et al. 2003; Mellor and Yamada 1982 | up to +1.2, and less low cloud | with that work |
 | 4 | Measure the unexplained 2.1 W/m²: EBAF Ed4.2's whole-region clear sky by latitude and month (toa_lw_clr_t; NASA Earthdata login), and ERA5's 6-hourly humidity for the spread | Loeb et al. 2020 | | data to fetch |
@@ -377,9 +377,9 @@ upper troposphere 0.7–0.8 times as moist as ERA5 at 150–250 hPa, within
 the spread of reanalyses and AIRS there (AIRS, which sees clear and
 partly cloudy scenes, is drier than ERA5 in the convective tropics).
 
-Change 1 is the option `nearInfrared: 'bands'` (finding 5), off by
-default. Its effect on the OLR takes the stratosphere's one to two months
-to show: a 30-day arm reaches about half of it at 50–70 hPa.
+Change 1 is `nearInfrared: 'bands'` (finding 5), the default. Its effect
+on the OLR takes the stratosphere's one to two months to show: a 30-day
+arm reaches about half of it at 50–70 hPa.
 
 ## References
 

@@ -87,7 +87,7 @@ test('with the near infrared in bands the solar gases absorb what RRTMG gives wi
   for (const a of ['TROP', 'MLS', 'MLW', 'SAW']) {
     const column = modelColumn(BENCHMARK.atmospheres[a]), ref = BENCHMARK.rrtmgShortwave[a].levels, top = ref[ref.length - 1], sfc = ref[0], K = column.T.length;
     const refHeat = referenceHeating(column, ref).map((x) => -x), atmosphere = top.net - sfc.net;
-    const [clirad, bands] = [SPECTRAL, { ...SPECTRAL, nearInfrared: 'bands' }].map((o) => {
+    const [clirad, bands] = [{ ...SPECTRAL, nearInfrared: 'clirad' }, { ...SPECTRAL, nearInfrared: 'bands' }].map((o) => {
       const r = runColumn(o, column, { beam: top.down, albedo: 0.2, solarConstant: top.down }), net = [0];
       for (let k = 0; k < K; k++) net.push(net[k] + r.sw[k]);
       const heat = layerHeating(column, net), misses = [];
@@ -105,7 +105,7 @@ test('with the near infrared in bands the solar gases absorb what RRTMG gives wi
 });
 
 test('without scattering the solar gases take the CLIRAD absorptivities of their paths down, and of the path down plus 5/3 of the column from the light the surface reflects', () => {
-  const grid = new Grid(4), plain = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, clearSkyPass: true };
+  const grid = new Grid(4), plain = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0, seaAerosol: 0, clearSkyPass: true, nearInfrared: 'clirad' };
   const make = (options) => { const m = createModel(grid, { ocean: false, radiation: { ...plain, ...options } }); initializeState(m, {}).forEach((v, a) => m.state[a].set(v)); return m; };
   const on = make({}), off = make({ upwardAbsorption: false });
   const { core, mesh } = on, { K, C, dSigma, sigmaMid, g, exnerLayer } = core.diagnostics, [pi, theta] = on.state, bottom = (K - 1) * C;
