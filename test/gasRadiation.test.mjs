@@ -66,9 +66,11 @@ test('on bl36 the g-points fitted on bl36 columns follow RRTMG in every layer ab
 
 test('the radiation column carries the g-points: a cloudless column at night has the clear-sky longwave of the same layers', () => {
   const column = modelColumn(BENCHMARK.atmospheres.MLW);
-  const r = runColumn(SPECTRAL, column), clear = clearLongwave(column);
-  assert.ok(Math.abs(r.olr - clear.up[0]) < 0.2 && Math.abs(r.dlr - clear.down[column.T.length]) < 0.2, `OLR ${r.olr} against ${clear.up[0]}, DLR ${r.dlr} against ${clear.down[column.T.length]}`);
-  assert.ok(Math.abs(r.budget.clearOutgoingLongwave - r.olr) <= 1e-12 * r.olr, 'no cloud: the clear-sky OLR is the OLR');
+  for (const longwaveLines of ['scaled', 'voigt']) {
+    const r = runColumn({ ...SPECTRAL, longwaveLines }, column), clear = clearLongwave(column, { table: longwaveTableFor(column.levels, longwaveLines) });
+    assert.ok(Math.abs(r.olr - clear.up[0]) < 0.2 && Math.abs(r.dlr - clear.down[column.T.length]) < 0.2, `${longwaveLines}: OLR ${r.olr} against ${clear.up[0]}, DLR ${r.dlr} against ${clear.down[column.T.length]}`);
+    assert.ok(Math.abs(r.budget.clearOutgoingLongwave - r.olr) <= 1e-12 * r.olr, 'no cloud: the clear-sky OLR is the OLR');
+  }
 });
 
 test('the solar gases absorb what RRTMG gives within 2 per cent at an overhead sun, and close the column budget', () => {
