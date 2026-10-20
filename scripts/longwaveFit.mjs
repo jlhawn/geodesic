@@ -58,7 +58,7 @@
 import { writeFileSync } from 'node:fs';
 import { GRAVITY, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, referenceHeating, layerHeating, interfaceAt, MOLAR } from './standardAtmospheres.mjs';
-import { LONGWAVE_CONSTANTS, gasPaths, clearLongwave, normalizedPoints, longwaveTableFor, LONGWAVE_TABLE_FILES } from '../js/physics/longwave.module.js';
+import { LONGWAVE_CONSTANTS, gasPaths, clearLongwave, normalizedPoints, longwaveTableFor, LONGWAVE_TABLE_FILES, LONGWAVE_ABSORBERS, LONGWAVE_CORES, longwaveCores } from '../js/physics/longwave.module.js';
 
 const H = 6.62607015e-34, CL = 2.99792458e8, KB = 1.380649e-23, SIGMA = 5.670374419e-8;
 const { pRef, diffusivity } = LONGWAVE_CONSTANTS;
@@ -77,7 +77,9 @@ export const BINNING_MODEL = {
 };
 // The line-core tails the g-points' membership is fixed by, for a model that has them.
 export const BINNING_TAILS = { tailH2o: 0.05, depthH2o: 6, tailCo2: 0.05, depthCo2: 6, tailO3: 0.05, depthO3: 6 };
-export const binningModel = (P) => ({ ...BINNING_MODEL, ...Object.fromEntries(Object.entries(BINNING_TAILS).filter(([key]) => P[key.startsWith('tail') ? key : `tail${key.slice(5)}`] > 0)), ...(P.tailH2oTo ? { tailH2oTo: P.tailH2oTo } : {}) });
+// The Doppler cores the g-points' membership is fixed by, for a model that has them.
+export const BINNING_CORES = { coreH2o: 1, coreCo2: 3, coreO3: 2, spacingH2o: 5, spacingCo2: 1.5, spacingO3: 0.1, dopplerCoreH2o: 400, dopplerCoreCo2: 727, dopplerCoreO3: 1012 };
+export const binningModel = (P) => ({ ...BINNING_MODEL, ...Object.fromEntries(Object.entries(BINNING_TAILS).filter(([key]) => P[key.startsWith('tail') ? key : `tail${key.slice(5)}`] > 0)), ...(P.tailH2oTo ? { tailH2oTo: P.tailH2oTo } : {}), ...(longwaveCores(P) ? BINNING_CORES : {}) });
 const LINEAR = new Set(['tCo2', 'nO3', 'spread', 'spreadC']);
 
 // Each absorber's line cores: the share g0 of every interval where it absorbs
@@ -86,6 +88,36 @@ const LINEAR = new Set(['tCo2', 'nO3', 'spread', 'spreadC']);
 // nodes of equal width in ln g, each with its mean k.
 const TAILS = [['line', 'tailH2o', 'depthH2o'], ['co2', 'tailCo2', 'depthCo2'], ['o3', 'tailO3', 'depthO3']];
 const TAIL_NODES = Number(process.env.TAIL_NODES ?? 4);
+
+// A model with Doppler cores (longwaveCores) gives each absorber's lines a
+// Voigt shape. Their far wings, the two halves and the tails above, scale
+// with the Lorentz width p/p_ref at every pressure (its dopplerH2o,
+// dopplerCo2 and dopplerO3 are 0). Each line's center holds its strength S in
+// a Gaussian of the Doppler 1/e half-width alpha_D = nu sqrt(2 k T/m)/c at
+// 250 K: lines spaced spacingH2o, spacingCo2 and spacingO3 (cm-1) apart, of
+// mean strength S/delta = coreH2o, coreCo2 and coreO3 times the absorber's
+// envelope at p_ref (the vapor's lines, CO2's 500-850 cm-1 band, ozone's
+// 9.6 um band), in nodes of |nu - nu_line|/alpha_D between CORE_EDGES, each
+// with the Gaussian's mean. Each node's share of the interval is
+// 2 alpha_D dx/delta (all of an absorber's together at most CORE_FILL, its
+// strength kept), and its coefficient the Doppler limit that lineCenter takes
+// down at high pressure.
+const CORES = [['line', 'lineCore', 'coreH2o', 'spacingH2o', 1.6024e-6], ['co2', 'co2Core', 'coreCo2', 'spacingCo2', 1.0251e-6], ['o3', 'o3Core', 'coreO3', 'spacingO3', 9.817e-7]];
+const CORE_EDGES = [0, 0.6, 1.2, 1.8, 2.6], CORE_FILL = 0.25;
+const erf = (x) => { const t = 1 / (1 + 0.3275911 * x); return 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x); };
+function dopplerCores(P, nu, envelope) {
+  if (!longwaveCores(P)) return [];
+  const out = [];
+  for (const [gas, name, strength, spacing, doppler] of CORES) {
+    if (!(envelope[gas] > 0 && P[strength] > 0)) continue;
+    const alpha = doppler * nu, fill = Math.min(1, CORE_FILL * P[spacing] / (2 * CORE_EDGES[CORE_EDGES.length - 1] * alpha));
+    for (let j = 1; j < CORE_EDGES.length; j++) {
+      const share = 2 * alpha * (CORE_EDGES[j] - CORE_EDGES[j - 1]) / P[spacing] * fill;
+      out.push({ name, share, k: P[strength] * envelope[gas] * (erf(CORE_EDGES[j]) - erf(CORE_EDGES[j - 1])) / share });
+    }
+  }
+  return out;
+}
 
 export function planckDensity(nu, T) {
   const m = nu * 100;
@@ -106,16 +138,18 @@ export function subIntervals(P, nu, width) {
   const n2o = (nu >= 1200 && nu <= 1350 ? P.kN2o * Math.exp(-Math.abs(nu - 1285) / 20) : 0) + (nu >= 550 && nu <= 630 ? 0.1 * P.kN2o * Math.exp(-Math.abs(nu - 589) / 15) : 0);
   const bulk = { line: line * Math.cosh(P.spread), co2: co2 * Math.cosh(P.spreadC), o3 };
   const tails = TAILS.filter(([gas, share]) => P[share] > 0 && bulk[gas] > 0 && !(gas === 'line' && nu > (P.tailH2oTo ?? Infinity)));
-  const kept = 1 - tails.reduce((s, [, share, depth]) => s + P[share] * -Math.expm1(-P[depth]), 0);
-  const out = [1, -1].map((sign) => ({ nu, width: width * kept / 2, line: line * Math.exp(sign * P.spread), continuum, co2: co2 * Math.exp(sign * P.spreadC), o3, ch4, n2o }));
+  const cores = dopplerCores(P, nu, { line, co2: nu >= 500 && nu <= 850 ? co2 : 0, o3 }), zero = longwaveCores(P) ? { lineCore: 0, co2Core: 0, o3Core: 0 } : {};
+  const kept = 1 - tails.reduce((s, [, share, depth]) => s + P[share] * -Math.expm1(-P[depth]), 0) - cores.reduce((s, c) => s + c.share, 0);
+  const out = [1, -1].map((sign) => ({ nu, width: width * kept / 2, line: line * Math.exp(sign * P.spread), continuum, co2: co2 * Math.exp(sign * P.spreadC), o3, ch4, n2o, ...zero }));
   const co2Core = P.lTailCo2 > 0 && nu >= 500 && nu <= 850 ? P.kCo2 * Math.exp(-Math.abs(nu - 667.5) / P.lTailCo2) : co2;
   for (const [gas, share, depth] of tails) {
     const g0 = P[share], top = gas === 'line' ? line * Math.exp(P.spread) : gas === 'co2' ? co2Core * Math.exp(P.spreadC) : o3;
     for (let j = 1; j <= TAIL_NODES; j++) {
       const b = g0 * Math.exp(-P[depth] * (j - 1) / TAIL_NODES), a = g0 * Math.exp(-P[depth] * j / TAIL_NODES);
-      out.push({ nu, width: width * (b - a), ...bulk, continuum, ch4, n2o, [gas]: top * g0 * g0 / (a * b) });
+      out.push({ nu, width: width * (b - a), ...bulk, continuum, ch4, n2o, ...zero, [gas]: top * g0 * g0 / (a * b) });
     }
   }
+  for (const c of cores) out.push({ nu, width: width * c.share, ...bulk, continuum, ch4, n2o, ...zero, [c.name]: c.k, core: c.name });
   return out;
 }
 
@@ -127,12 +161,14 @@ export function spectrum(P, step = 1, from = 10, to = 3250) {
 
 // Two-stream fluxes of a set of sub-intervals (each with its own Planck density) on a column.
 export function spectralFluxes(P, column, intervals) {
-  const paths = gasPaths(column, P);
+  const paths = gasPaths(column, P), names = Object.keys(paths);
   const K = column.T.length, up = new Float64Array(K + 1), down = new Float64Array(K + 1);
   const tr = new Float64Array(K), B = new Float64Array(K);
   for (const s of intervals) {
     for (let k = 0; k < K; k++) {
-      const tau = diffusivity * (s.line * paths.line[k] + s.continuum * paths.continuum[k] + s.co2 * paths.co2[k] + s.o3 * paths.o3[k] + s.ch4 * paths.ch4[k] + s.n2o * paths.n2o[k]);
+      let tau = 0;
+      for (const n of names) tau += s[n] * paths[n][k];
+      tau *= diffusivity;
       tr[k] = Math.exp(-tau);
       B[k] = planckDensity(s.nu, column.T[k]) * s.width;
     }
@@ -146,30 +182,50 @@ export function spectralFluxes(P, column, intervals) {
 }
 
 const RRTMG = ['TROP', 'MLS', 'MLW', 'SAW'];
-const UPPER_WEIGHT = Number(process.env.UPPER_WEIGHT ?? 30), BAND_WEIGHT = Number(process.env.BAND_WEIGHT ?? 3), MINOR_WEIGHT = Number(process.env.MINOR_WEIGHT ?? 20), DOUBLING_WEIGHT = Number(process.env.DOUBLING_WEIGHT ?? 150), DLR_WEIGHT = Number(process.env.DLR_WEIGHT ?? 3), TROPOSPHERE_WEIGHT = Number(process.env.TROPOSPHERE_WEIGHT ?? 1000);
-const LEVELS = process.env.LEVELS ?? 'bl34';
-const columns = Object.fromEntries(Object.keys(BENCHMARK.atmospheres).map((a) => [a, modelColumn(BENCHMARK.atmospheres[a], sigmaInterfaces(LEVELS))]));
+const UPPER_WEIGHT = Number(process.env.UPPER_WEIGHT ?? 30), OLR_WEIGHT = Number(process.env.OLR_WEIGHT ?? 1), BAND_WEIGHT = Number(process.env.BAND_WEIGHT ?? 3), MINOR_WEIGHT = Number(process.env.MINOR_WEIGHT ?? 20), DOUBLING_WEIGHT = Number(process.env.DOUBLING_WEIGHT ?? 150), DLR_WEIGHT = Number(process.env.DLR_WEIGHT ?? 3), TROPOSPHERE_WEIGHT = Number(process.env.TROPOSPHERE_WEIGHT ?? 1000);
+const LEVELS = process.env.LEVELS ?? 'bl34', LINES = process.env.LINE_SHAPE ?? 'scaled', TOP_WEIGHT = Number(process.env.TOP_WEIGHT ?? 0);
+// With FAIR the RRTMG atmospheres' columns end where the reference's does
+// (6.7 Pa in the midlatitude summer, 10 Pa in the subarctic winter), not at 0.
+const FAIR = process.env.FAIR ? process.env.FAIR === '1' : LINES === 'voigt';
+const columns = Object.fromEntries(Object.keys(BENCHMARK.atmospheres).map((a) => {
+  const column = modelColumn(BENCHMARK.atmospheres[a], sigmaInterfaces(LEVELS)), ref = BENCHMARK.rrtmgLongwave[a]?.levels;
+  if (!FAIR || !ref) return [a, column];
+  const levels = Float64Array.from(column.levels);
+  levels[0] = ref[ref.length - 1].p / column.ps;
+  return [a, { ...column, levels }];
+}));
 const mls = columns.MLS;
 const scaled = (column, gas, factor) => ({ ...column, [gas]: column[gas].map((x) => x * factor) });
 const withGas = (column, gas, vmr) => ({ ...column, [gas]: column[gas].map((_, k) => vmr * MOLAR[gas] / MOLAR.air * (1 - column.q[k])) });
 const rtmip = (co2) => withGas(withGas(withGas(mls, 'co2', co2), 'ch4', 806e-9), 'n2o', 275e-9);
 
+const linearAt = (ref, p) => {
+  const j = ref.findIndex((l, i) => i < ref.length - 1 && p <= l.p && p >= ref[i + 1].p);
+  if (j < 0) return p > ref[0].p ? ref[0].net : ref[ref.length - 1].net;
+  return ref[j].net + (ref[j + 1].net - ref[j].net) * (ref[j].p - p) / (ref[j].p - ref[j + 1].p);
+};
+
 // Misses of a flux function (column -> {up, down, net}) against the references.
+// A layer above 3 hPa counts only where RRTMG's levels resolve it: its heating
+// from the reference fluxes interpolated in p and in ln p agree to 0.25 K/day
+// (not so at 0.65 and 1.6 hPa in the midlatitude summer, which has no level
+// between 1.3 and 0.59 hPa).
 export function misses(fluxes) {
   const out = { atmospheres: {}, bands: [], doubling: {} };
   for (const a of RRTMG) {
     const column = columns[a], ref = BENCHMARK.rrtmgLongwave[a].levels, r = fluxes(column);
     const K = column.T.length, top = ref[ref.length - 1], sfc = ref[0];
     const heat = layerHeating(column, r.net), refHeat = referenceHeating(column, ref);
-    let trop = 0, nt = 0, strat = 0, ns = 0, upper = 0, nu = 0, tops = 0;
+    const linear = layerHeating(column, Array.from(column.levels, (s) => linearAt(ref, Math.max(s * column.ps, top.p))));
+    let trop = 0, nt = 0, strat = 0, ns = 0, upper = 0, nu = 0, tops = 0, topMiss = 0;
     for (let k = 0; k < K; k++) {
       const p = 0.5 * (column.levels[k] + column.levels[k + 1]) * column.ps, d = (heat[k] - refHeat[k]) ** 2;
       if (p > 20000) { trop += d; nt++; } else if (p > 300) { strat += d; ns++; }
       if (p > 300 && p < 3000) { upper += d; nu++; }
       const covered = (column.levels[k + 1] * column.ps - Math.max(column.levels[k] * column.ps, top.p)) / ((column.levels[k + 1] - column.levels[k]) * column.ps);
-      if (p < 300 && covered >= 0.9) tops += (heat[k] / refHeat[k] - 1) ** 2;
+      if (p < 300 && covered >= 0.9 && Math.abs(refHeat[k] - linear[k]) < 0.25) { tops += (heat[k] / refHeat[k] - 1) ** 2; topMiss += (heat[k] - refHeat[k]) ** 2; }
     }
-    out.atmospheres[a] = { olr: r.up[0] - top.up, dlr: r.down[K] - sfc.down, net200: interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000), troposphere: Math.sqrt(trop / nt), stratosphere: Math.sqrt(strat / ns), upper: Math.sqrt(upper / nu), top: heat[0] / refHeat[0] - 1, tops, heat, refHeat };
+    out.atmospheres[a] = { olr: r.up[0] - top.up, dlr: r.down[K] - sfc.down, net200: interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000), troposphere: Math.sqrt(trop / nt), stratosphere: Math.sqrt(strat / ns), upper: Math.sqrt(upper / nu), top: heat[0] / refHeat[0] - 1, tops, topMiss, heat, refHeat };
   }
   return out;
 }
@@ -180,7 +236,7 @@ export function score(P, verbose = false, keys = null) {
   const total = (c) => (table ? clearLongwave(c, { table }) : spectralFluxes(P, c, intervals));
   const m = misses(total);
   let s = 0;
-  for (const a of RRTMG) { const e = m.atmospheres[a]; s += e.olr ** 2 + DLR_WEIGHT * e.dlr ** 2 + e.net200 ** 2 + TROPOSPHERE_WEIGHT * e.troposphere ** 2 + 2 * e.stratosphere ** 2 * 10 + UPPER_WEIGHT * (4 * e.upper ** 2 + e.tops); }
+  for (const a of RRTMG) { const e = m.atmospheres[a]; s += OLR_WEIGHT * e.olr ** 2 + DLR_WEIGHT * e.dlr ** 2 + e.net200 ** 2 + TROPOSPHERE_WEIGHT * e.troposphere ** 2 + 2 * e.stratosphere ** 2 * 10 + UPPER_WEIGHT * (4 * e.upper ** 2 + e.tops) + TOP_WEIGHT * e.topMiss; }
   const K = mls.T.length;
   let bandLine = '', bandCooling = '';
   for (const b of BENCHMARK.rrtmgLongwave.MLS.bands) {
@@ -263,8 +319,14 @@ function nelderMead(f, x0, steps, iterations) {
 // of its total in bins of BIN_WIDTH, with the opaque (above OPAQUE) and the
 // transparent (below CLEAR) in one g-point per absorber.
 const BIN_WIDTH = Number(process.env.BIN ?? 1.5), THICK = Number(process.env.THICK ?? 1e4), THICK_WIDTH = Number(process.env.THICK_BIN ?? 4.5), OPAQUE = Number(process.env.OPAQUE ?? 1e9), CLEAR = Number(process.env.CLEAR ?? 0.02);
-function binKey(s, columnPaths) {
-  const parts = ['line', 'continuum', 'co2', 'o3', 'ch4', 'n2o'].map((n) => s[n] * columnPaths[n]);
+// A Doppler core's g-point is decided by its own optical depth above 10 hPa
+// in bins of CORE_BIN, those over CORE_OPAQUE together; one under CORE_CLEAR,
+// thin where it differs from the far wings, joins its interval's other nodes.
+const CORE_BIN = Number(process.env.CORE_BIN ?? 1.6), CORE_CLEAR = Number(process.env.CORE_CLEAR ?? 0.1), CORE_OPAQUE = Number(process.env.CORE_OPAQUE ?? 300), CORE_TOP = 1000;
+function binKey(s, columnPaths, topPaths) {
+  const coreTau = s.core ? s[s.core] * topPaths[s.core] : 0;
+  if (coreTau >= CORE_CLEAR) return `${s.core}:${coreTau > CORE_OPAQUE ? 'opaque' : Math.floor(Math.log(coreTau / CORE_CLEAR) / CORE_BIN)}`;
+  const parts = LONGWAVE_ABSORBERS.map((n) => s[n] * columnPaths[n]);
   const total = parts.reduce((a, b) => a + b, 0), kind = ['h2o', 'cont', 'co2', 'o3', 'minor', 'minor'][parts.indexOf(Math.max(...parts))];
   if (total > OPAQUE) return `${kind}:opaque`;
   if (total < CLEAR) return `${kind}:clear`;
@@ -272,16 +334,19 @@ function binKey(s, columnPaths) {
   return `${kind}:${Math.floor(Math.log(total / CLEAR) / BIN_WIDTH)}`;
 }
 
+function pathSums(P) {
+  const paths = gasPaths(mls, P), top = Array.from(mls.levels.slice(1), (s) => s * mls.ps <= CORE_TOP);
+  const sum = (v, only) => diffusivity * v.reduce((a, b, k) => a + (!only || top[k] ? b : 0), 0);
+  return [Object.fromEntries(Object.entries(paths).map(([n, v]) => [n, sum(v)])), Object.fromEntries(Object.entries(paths).map(([n, v]) => [n, sum(v, true)]))];
+}
 export function binning(P, step = 1) {
-  const paths = gasPaths(mls, P);
-  const columnPaths = Object.fromEntries(Object.entries(paths).map(([n, v]) => [n, diffusivity * v.reduce((a, b) => a + b, 0)]));
-  return spectrum(P, step).map((s) => binKey(s, columnPaths));
+  const [columnPaths, topPaths] = pathSums(P);
+  return spectrum(P, step).map((s) => binKey(s, columnPaths, topPaths));
 }
 
 const shareCache = new Map();
 export function reduce(P, keys = binning(P), step = 1) {
-  const bins = new Map(), paths = gasPaths(mls, P);
-  const columnPaths = Object.fromEntries(Object.entries(paths).map(([n, v]) => [n, diffusivity * v.reduce((a, b) => a + b, 0)]));
+  const bins = new Map(), [columnPaths, topPaths] = pathSums(P), names = Object.keys(columnPaths);
   spectrum(P, step).forEach((s, j) => {
     if (!bins.has(keys[j])) bins.set(keys[j], []);
     bins.get(keys[j]).push(s);
@@ -294,16 +359,17 @@ export function reduce(P, keys = binning(P), step = 1) {
     const cacheKey = `${key}:${members.length}:${members[0].nu}`;
     if (!shareCache.has(cacheKey)) shareCache.set(cacheKey, members.map((s) => temperatures.map((T) => planckDensity(s.nu, T) / (SIGMA * T ** 4))));
     const density = shareCache.get(cacheKey), planck = fitQuartic(temperatures, temperatures.map((_, t) => members.reduce((a, s, j) => a + density[j][t] * s.width, 0)));
-    const tau = (s) => ['line', 'continuum', 'co2', 'o3', 'ch4', 'n2o'].reduce((a, n) => a + s[n] * columnPaths[n], 0), meanTau = mean(tau);
+    const core = LONGWAVE_CORES.find((n) => key.startsWith(`${n}:`)), tau = core ? (s) => s[core] * topPaths[core] : (s) => LONGWAVE_ABSORBERS.reduce((a, n) => a + s[n] * columnPaths[n], 0), meanTau = mean(tau);
     const scale = meanTau > 0 ? -Math.log(mean((s) => Math.exp(-tau(s) / meanTau))) : 1;
     const g = { key, nu: mean((s) => s.nu), planck };
-    for (const n of ['line', 'continuum', 'co2', 'o3', 'ch4', 'n2o']) g[n] = scale * mean((s) => s[n]);
+    for (const n of names) g[n] = (!core || n === core ? scale : 1) * mean((s) => s[n]);
     points.push(g);
   }
   return points.sort((a, b) => a.nu - b.nu);
 }
 
-export const tableOf = (P, points) => ({ ...P, points: normalizedPoints(points.map((g) => [g.line, g.continuum, g.co2, g.o3, g.ch4, g.n2o, ...g.planck])) });
+const rowOf = (g) => [g.line, g.continuum, g.co2, g.o3, g.ch4, g.n2o, ...g.planck, ...(g.co2Core !== undefined ? LONGWAVE_CORES.map((n) => g[n]) : [])];
+export const tableOf = (P, points) => ({ ...P, points: normalizedPoints(points.map(rowOf)) });
 
 function fitQuartic(x, y) {
   const t = x.map((T) => (T - 250) / 100), n = 5;
@@ -318,11 +384,11 @@ function fitQuartic(x, y) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const { points: _points, ...levelModel } = longwaveTableFor(sigmaInterfaces(LEVELS));
+  const { points: _points, ...levelModel } = longwaveTableFor(sigmaInterfaces(LEVELS), LINES);
   let P = { ...SPECTRAL_MODEL, ...levelModel, ...JSON.parse(process.env.P ?? '{}') };
-  const keys = binning(binningModel(P));
+  const keys = binning(process.env.BIN_BY === 'model' ? P : binningModel(P));
   if (process.env.FIT) {
-    const names = (process.env.KEYS ?? 'kRot,lRot,kVr,kCo2,lCo2,lCo2Hi,spread,spreadC,kO3,nO3,kCh4,kN2o,tCo2,kLaser,roberts,tSelf,tailCo2,depthCo2,lTailCo2,tailH2o,depthH2o,tailO3,depthO3').split(',');
+    const names = (process.env.KEYS ?? `kRot,lRot,kVr,kCo2,lCo2,lCo2Hi,spread,spreadC,kO3,nO3,kCh4,kN2o,tCo2,kLaser,roberts,tSelf,tailCo2,depthCo2,lTailCo2,tailH2o,depthH2o,tailO3,depthO3${longwaveCores(P) ? ',coreH2o,coreCo2,coreO3,spacingH2o,spacingCo2,spacingO3' : ''}`).split(',');
     const toX = (p) => names.map((k) => (LINEAR.has(k) ? p[k] : Math.log(p[k])));
     const fromX = (x) => ({ ...P, ...Object.fromEntries(names.map((k, i) => [k, LINEAR.has(k) ? x[i] : Math.exp(x[i])])) });
     P = fromX(nelderMead((x) => { const v = score(fromX(x), false, keys); return Number.isFinite(v) ? v : 1e12; }, toX(P), names.map((k) => (LINEAR.has(k) ? 0.05 : 0.2)), Number(process.env.FIT)));
@@ -333,7 +399,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const points = reduce(P, keys);
   console.log(`${points.length} g-points:`);
   score(P, true, keys);
-  const table = { ...P, points: points.map((g) => [g.line, g.continuum, g.co2, g.o3, g.ch4, g.n2o, ...g.planck].map((v) => +v.toPrecision(6))) };
+  const table = { ...P, points: points.map((g) => rowOf(g).map((v) => +v.toPrecision(6))) };
   for (const a of Object.keys(BENCHMARK.iae)) {
     if (a === 'note') continue;
     const c = columns[a], g = clearLongwave(c, { table: tableOf(P, points) }), [, down, olr] = BENCHMARK.iae[a];
@@ -341,6 +407,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   if (process.env.WRITE) {
     const lines = table.points.map((p) => `  [${p.join(', ')}],`).join('\n');
-    writeFileSync(new URL(`../js/physics/${LONGWAVE_TABLE_FILES[LEVELS] ?? LONGWAVE_TABLE_FILES.bl34}`, import.meta.url), `// Generated by scripts/longwaveFit.mjs; each row a g-point: mass absorption coefficients (m2/kg) at\n// p_ref of the water vapour lines, the self continuum (per Pa of vapour pressure), CO2, ozone, methane\n// and nitrous oxide, then the quartic in (T - 250)/100 of its share of sigma T^4.\nexport const LONGWAVE_SPECTRAL_MODEL = ${JSON.stringify(Object.fromEntries(Object.entries(P).map(([k, v]) => [k, +v.toPrecision(6)])))};\nexport const LONGWAVE_POINTS = [\n${lines}\n];\n`);
+    const file = LINES === 'voigt' ? LONGWAVE_TABLE_FILES[`${LEVELS}Voigt`] : LONGWAVE_TABLE_FILES[LEVELS] ?? LONGWAVE_TABLE_FILES.bl34;
+    const cores = longwaveCores(P) ? ',\n// then the Doppler limits (m2/kg) of the vapor\'s, CO2\'s and ozone\'s line centers' : '';
+    writeFileSync(new URL(`../js/physics/${file}`, import.meta.url), `// Generated by scripts/longwaveFit.mjs; each row a g-point: mass absorption coefficients (m2/kg) at\n// p_ref of the water vapour lines, the self continuum (per Pa of vapour pressure), CO2, ozone, methane\n// and nitrous oxide, then the quartic in (T - 250)/100 of its share of sigma T^4${cores}.\nexport const LONGWAVE_SPECTRAL_MODEL = ${JSON.stringify(Object.fromEntries(Object.entries(P).map(([k, v]) => [k, +v.toPrecision(6)])))};\nexport const LONGWAVE_POINTS = [\n${lines}\n];\n`);
   }
 }
