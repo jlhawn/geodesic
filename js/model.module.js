@@ -119,7 +119,7 @@ export function createModel(gridOrMesh, {
   const surface = createSurface(mesh, core, { topSigma: TOP_DRAG.sigma, topDragDays: TOP_DRAG.days, buffers: buffers ? buffers.surface : null, dragCoefficients, ...surfaceOptions, implicitStress: implicitDrag ? boundaryLayer : null });
   const gustiness = surfaceOptions.gustiness ?? 3;
   const moistPhysics = createMoistPhysics(mesh, core, {
-    buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, boundaryRegime: boundaryLayer ? boundaryLayer.regime : null, deckGate: radiation.mlmGate,
+    buffers: buffers ? buffers.moist : null, boundaryDepth: boundaryLayer ? boundaryLayer.depth : null, boundaryRegime: boundaryLayer ? boundaryLayer.regime : null, deckGate: radiation.mlmGate, stabilityLayer: radiation.stabilityLayer,
     boundaryTop: boundaryLayer && boundaryLayer.turbulence === 'moist' ? boundaryLayer.mixingTop : null, boundaryCloudLayer: boundaryLayer && boundaryLayer.turbulence === 'moist' ? boundaryLayer.cloudLayer : null, stratiform: radiation.stratiform,
     surfaceBuoyancy: boundaryLayer ? boundaryLayer.buoyancyFlux : null, frictionVelocity: boundaryLayer ? boundaryLayer.friction : null, land: geography ? geography.land : null, iceSheet: geography ? geography.iceSheet : null, surfaceDrag: boundaryLayer && boundaryLayer.implicitDrag ? boundaryLayer.surfaceDrag : null, surfaceSensible: radiation.sensibleHeat, surfaceEvaporation: radiation.evaporation,
     ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in radiationOptions).map((key) => [key, radiationOptions[key]])), ...moistOptions,

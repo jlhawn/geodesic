@@ -6,7 +6,8 @@
 // (TROPICAL_BOXES of js/audit.module.js): the Pacific ITCZ (5-12N 160E-100W,
 // all cells, the audit's), the warm pool (10S-10N 120-170E sea), the SPCZ
 // (20-5S 160E-150W sea), the north Pacific trades (15-25N 170-130W sea) and
-// the Amazon (10S-2N 70-50W land).
+// the Amazon (10S-2N 70-50W land); BOXES (JSON, [[name, [south, north, west,
+// east], 'sea' | 'land' | 'all'], ...]) replaces them.
 //
 // Every phase of every step is measured in each box column as it runs: the
 // dynamics (the RK4 step, the closure, the kinetic energy returned as heat),
@@ -96,14 +97,14 @@ const O = { ...MOIST_DEFAULTS, ...MOIST }, bechtold = O.capeClosure === 'bechtol
 if (O.plumeClosure === 'maximum') throw new Error('the deep and shallow split needs plumeClosure separate or cape');
 const L = O.latentHeat;
 const lon = Float64Array.from(mesh.lonCell, (x) => x * deg);
-const BOX_LIST = TROPICAL_BOXES;
-const boxOf = tropicalBoxOf(mesh, landMask);
+const BOX_LIST = process.env.BOXES ? JSON.parse(process.env.BOXES) : TROPICAL_BOXES;
+const boxOf = tropicalBoxOf(mesh, landMask, BOX_LIST);
 const traced = [];
 for (let i = 0; i < C; i++) if (boxOf[i] >= 0) traced.push(i);
 const NB = BOX_LIST.length;
 
 const twinOptions = (extra) => ({
-  boundaryDepth: bl.depth, boundaryRegime: bl.regime, deckGate: radiation.mlmGate,
+  boundaryDepth: bl.depth, boundaryRegime: bl.regime, deckGate: radiation.mlmGate, stabilityLayer: radiation.stabilityLayer,
   boundaryTop: bl.turbulence === 'moist' ? bl.mixingTop : null, boundaryCloudLayer: bl.turbulence === 'moist' ? bl.cloudLayer : null, stratiform: radiation.stratiform,
   surfaceBuoyancy: bl.buoyancyFlux, frictionVelocity: bl.friction, land: model.geography.land, iceSheet: model.geography.iceSheet ?? null, surfaceDrag: bl.implicitDrag ? bl.surfaceDrag : null, surfaceSensible: radiation.sensibleHeat, surfaceEvaporation: radiation.evaporation, buffers: { subcloudVirtual: moist.shared.subcloudVirtual },
   ...Object.fromEntries(['liquidTemperature', 'iceTemperature'].filter((key) => key in RADIATION).map((key) => [key, RADIATION[key]])),

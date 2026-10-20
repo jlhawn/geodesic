@@ -109,6 +109,7 @@ export function physicsConstants(o) {
   if (o.cumulusSource !== 'mean' && o.cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${o.cumulusSource}`);
   if (o.cumulusAscent !== 'buoyant' && o.cumulusAscent !== 'kinetic') throw new Error(`cumulusAscent must be 'buoyant' or 'kinetic', not ${o.cumulusAscent}`);
   if (o.cumulusAscent === 'kinetic' && o.cumulusOvershoot !== 'kinetic') throw new Error(`cumulusAscent 'kinetic' needs cumulusOvershoot 'kinetic', whose w² carries the plume`);
+  if (o.stratocumulusInversion != null && !Number.isFinite(o.stratocumulusInversion)) throw new Error(`stratocumulusInversion must be null or an estimated inversion strength in K, not ${o.stratocumulusInversion}`);
   if (o.cumulusEntrainmentHeight != null && !(Number.isFinite(o.cumulusEntrainmentHeight) && o.cumulusEntrainmentHeight > 0)) throw new Error(`cumulusEntrainmentHeight must be null or a factor above 0, not ${o.cumulusEntrainmentHeight}`);
   if (o.plumeClosure !== 'maximum' && o.plumeClosure !== 'separate' && o.plumeClosure !== 'cape') throw new Error(`plumeClosure must be 'maximum', 'separate' or 'cape', not ${o.plumeClosure}`);
   if (o.plumeCapeParcel !== 'plume' && o.plumeCapeParcel !== 'undilute') throw new Error(`plumeCapeParcel must be 'plume' or 'undilute', not ${o.plumeCapeParcel}`);
@@ -186,7 +187,7 @@ const ICE_FALL: bool = ${o.iceFall != null}; const FALL_C: f32 = ${o.iceFall ?? 
 const FOG: bool = ${o.fogDroplets !== null}; const FOG_SETTLE_LAND: f32 = ${fog.settleLand}; const FOG_SETTLE_SEA: f32 = ${fog.settleSea}; const FOG_KK_LAND: f32 = ${fog.drizzleLand}; const FOG_KK_SEA: f32 = ${fog.drizzleSea}; const FOG_THIRDS: f32 = 0.6666666666666666;
 const FOG_DEP: bool = ${o.fogDeposition > 0 && o.surfaceExchange === 'roughness' && !!o.implicitDrag}; const FOG_E: f32 = ${o.fogDeposition}; const FOG_VMAX: f32 = ${o.fogDepositionLimit};
 const AUTO_BL: bool = ${o.autoconversionFloor === 'boundaryLayer'}; const AUTO_MIX: bool = ${o.autoconversionFloor === 'mixingTop'}; const CLEAR_AIR: f32 = ${CLEAR_AIR}; const CIN_MAX: f32 = ${o.inhibitionThreshold}; const SHALLOW_TOP: f32 = ${o.shallowTop};
-const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
+const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!o.coupledVeto && o.turbulence !== 'dry'}; const SC_SWITCH: bool = ${o.stratocumulusInversion != null}; const SC_INVERSION: f32 = ${o.stratocumulusInversion ?? 0}; const EVAP_IN_CLOUD: bool = ${!!o.evaporationInCloud}; const AUTO_NONE: bool = ${o.autoconversionFloor === 'none'};
 const DECK_OPEN: f32 = ${DECK_OPEN}; const DECK_CLOSED: f32 = ${DECK_CLOSED}; const PARCEL_VIRT: f32 = ${o.virtualBuoyancy === false ? 0 : 'VIRT'};
 const CU_FLOOR: f32 = ${CUMULUS_FLOOR}; const CU_K0: i32 = ${o.cumulusK0 ?? 0}; const CU_C: f32 = ${o.cumulusClosure}; const CU_EPS: f32 = ${o.cumulusEntrainment}; const CU_DEL: f32 = ${o.cumulusDetrainment}; const CU_SOURCE: f32 = ${o.cumulusSourceDepth}; const CU_LOSS: f32 = ${o.cumulusBoundaryLoss};
 const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvershoot === 'kinetic' ? 1 : o.cumulusOvershoot}; const CU_KINETIC: bool = ${o.cumulusOvershoot === 'kinetic'}; const CU_WU: f32 = ${o.cumulusUpdraft}; const CU_RAIN: bool = ${o.cumulusRain != null}; const CU_RAIN_Q: f32 = ${o.cumulusRain ?? 0}; const CU_LOWEST: bool = ${o.cumulusSource === 'lowest'};
@@ -1731,11 +1732,20 @@ fn layerTop(i: i32, k: i32) -> f32 {
   return max(fma(max(CP * D[D_THV + idx], -3.4e38), max(D[D_EXM + idx] - D[D_EXL + idx - C], -3.4e38), max(D[D_GEO + idx] + LV[L_GABS + k], -3.4e38)) / GRAV, -3.4e38);
 }
 fn layerDepth(i: i32, k: i32) -> f32 { return max(layerTop(i, k) - layerTop(i, k + 1), -3.4e38); }
+fn stratocumulusTopped(i: i32, pi: f32) -> bool {
+  let bottom = (K - 1) * C + i;
+  if (!(IN[S_Q + bottom] > 0.0)) { return false; }
+  let upper = STABILITY_K * C + i; let lowerT = IN[S_TH + bottom] * D[D_EXM + bottom];
+  let lcl = condensationLevel(lowerT, IN[S_Q + bottom], pi * LV[L_SM + K - 1]);
+  let base = max(0.0, CP * (lowerT - lcl.x) / GRAV);
+  let height = (D[D_GEO + upper] - D[D_GEO + bottom] + LV[L_GABS + STABILITY_K] - LV[L_GABS + K - 1]) / GRAV;
+  return inversionStrength(IN[S_TH + upper] - IN[S_TH + bottom], lowerT, IN[S_TH + upper] * D[D_EXM + upper], height - base) > SC_INVERSION;
+}
 // the shallow cumulus mass flux of moist.module.js's cumulusColumn; returns its rain
 fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   clearCumulus(i);
   cuSnow = 0.0;
-  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0);
+  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0) * select(1.0, 0.0, SC_SWITCH && stratocumulusTopped(i, pi));
   let buoyancy = PH[PH_BUOY + i];
   if (!(open > 0.0) || !(buoyancy > 0.0)) { return 0.0; }
   let bottom = K - 1;
@@ -1887,7 +1897,7 @@ fn diagnosedPlume(i: i32, pi: f32, dt: f32) -> f32 {
     for (var k = 0; k <= K; k++) { PH[PH_MOMU + k * C + i] = 0.0; PH[PH_MOMD + k * C + i] = 0.0; }
     for (var k = 0; k < K; k++) { PH[PH_MOMK + k * C + i] = 1.0; PH[PH_MOMKD + k * C + i] = 1.0; }
   }
-  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0);
+  let open = select(1.0, clamp((DECK_CLOSED - PH[PH_MLMGATE + i]) / (DECK_CLOSED - DECK_OPEN), 0.0, 1.0), DECK_VETO) * select(1.0, 0.0, COUPLED_VETO && PH[PH_REGIME + i] == 3.0) * select(1.0, 0.0, SC_SWITCH && stratocumulusTopped(i, pi));
   if (!(open > 0.0)) { return cumulusColumn(i, pi, dt); }
   let bottom = K - 1;
   let depthTop = PH[PH_DEPTH + i];

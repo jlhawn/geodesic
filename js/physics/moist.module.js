@@ -113,6 +113,15 @@ export function fogConstants(fogDroplets) {
  * eq. 15, and the pressure along the dry adiabat. Returns null when the
  * parcel is already saturated or has no vapour.
  */
+export function moistLapse(T, qs, cp, R, g, latentHeat) {
+  return g / cp * (1 + latentHeat * qs / (R * T)) / (1 + latentHeat * latentHeat * qs / (cp * (R / EPSILON) * T * T));
+}
+
+export function inversionStrength(stability, lowerT, upperT, depth, cp, R, g, latentHeat = LATENT_HEAT) {
+  const T = 0.5 * (lowerT + upperT);
+  return stability - (g / cp - moistLapse(T, saturationHumidity(T, 85000), cp, R, g, latentHeat)) * depth;
+}
+
 export function liftingCondensationLevel(T, q, p, kappa) {
   if (q <= 0) return null;
   const e = q * p / (EPSILON + (1 - EPSILON) * q);
@@ -174,7 +183,14 @@ export function liftingCondensationLevel(T, q, p, kappa) {
  * DECK_OPEN, falling linearly to 0 at DECK_CLOSED (`deckVeto` false:
  * 1 everywhere), and with `coupledVeto` not at all where the moist
  * boundary layer (`boundaryRegime`) is a coupled stratocumulus-topped
- * layer, COUPLED_REGIME.
+ * layer, COUPLED_REGIME. With `stratocumulusInversion` (K; null: none)
+ * neither runs where the column's estimated inversion strength exceeds it,
+ * the IFS's switch between a well-mixed stratocumulus-topped boundary
+ * layer and a decoupled one that convects (7 K; Bechtold et al. 2014,
+ * ECMWF Tech. Memo. 725, §2.1): the EIS of Wood and Bretherton (2006) as
+ * the radiation takes it, the layer `stabilityLayer` (σ = 0.7) against the
+ * lowest one, moist-adiabatic above that layer's LCL, from the column the
+ * plume starts on.
  *
  * The shallow cumulus mass flux, a bulk entraining plume after
  * Bretherton, McCaa and Grenier (2004), simplified. Its source is the
@@ -496,7 +512,7 @@ export function liftingCondensationLevel(T, q, p, kappa) {
 export const MOIST_DEFAULTS = {
   latentHeat: LATENT_HEAT, inhibitionThreshold: 50, shallowTop: 700e2,
   autoconversionThreshold: 2e-4, autoconversionRate: 1e-3, cloudLifetime: 3600, upperCloudLifetime: null, stratiformLifetime: 3 * 3600, rainEvaporation: 1, autoconversionFloor: 'lowest', fogDroplets: [150, 60], fogDeposition: 1, fogDepositionLimit: 0.25,
-  deckVeto: true, coupledVeto: false, evaporationInCloud: false, virtualBuoyancy: true,
+  deckVeto: true, coupledVeto: false, stratocumulusInversion: null, evaporationInCloud: false, virtualBuoyancy: true,
   cumulusClosure: 0.03, cumulusEntrainment: 2.5e-3, cumulusDetrainment: 3e-3, cumulusSourceDepth: 50e2, cumulusBoundaryLoss: 0.1,
   cumulusFriction: 1, cumulusOvershoot: 'kinetic', cumulusAscent: 'buoyant', cumulusEntrainmentHeight: null, cumulusUpdraft: 1, cumulusRain: null, cumulusSource: 'mean', cumulusMemory: 1800,
   plumeClosure: 'separate', plumeCapeParcel: 'plume', plumeSource: 'mean', plumeSourceDepth: 'surface50', excessVelocity: 'surfaceLayer', plumeVelocity: 1, plumeAcceleration: 1 / 3, plumeDrag: 1, plumeEntrainmentLaw: 'ifs', plumeEntrainment: 0.1, plumeEntrainmentFloor: 1e-4, plumeMassGrowth: 0,
@@ -507,11 +523,11 @@ export const MOIST_DEFAULTS = {
 export const RETIRED_OPTIONS = ['convection', 'shallowScheme', 'cumulusWithDeep', 'relaxationTime', 'referenceHumidity', 'parcelDepth', 'entrainmentRate', 'capeThreshold', 'activityMemory', 'detrainment', 'anvilDepth',
   'downdraftEvaporation', 'downdraftSpread', 'shallowHumidity', 'shallowCape', 'shallowInhibition', 'shallowStability', 'shallowReference', 'shallowRain', 'boundaryParcel', 'adjustFrom'];
 
-export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, boundaryTop = null, boundaryCloudLayer = null, stratiform = null, deckGate = null, surfaceBuoyancy = null, frictionVelocity = null, land = null, iceSheet = null, surfaceDrag = null, surfaceSensible = null, surfaceEvaporation = null, buffers = null, ...options } = {}) {
+export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryRegime = null, boundaryTop = null, boundaryCloudLayer = null, stratiform = null, deckGate = null, stabilityLayer = null, surfaceBuoyancy = null, frictionVelocity = null, land = null, iceSheet = null, surfaceDrag = null, surfaceSensible = null, surfaceEvaporation = null, buffers = null, ...options } = {}) {
   for (const retired of RETIRED_OPTIONS) if (retired in options) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
   const {
     latentHeat, inhibitionThreshold, shallowTop, autoconversionThreshold, autoconversionRate, cloudLifetime, upperCloudLifetime, stratiformLifetime, rainEvaporation, autoconversionFloor, fogDroplets, fogDeposition, fogDepositionLimit,
-    deckVeto, coupledVeto, evaporationInCloud, virtualBuoyancy,
+    deckVeto, coupledVeto, stratocumulusInversion, evaporationInCloud, virtualBuoyancy,
     cumulusClosure, cumulusEntrainment, cumulusDetrainment, cumulusSourceDepth, cumulusBoundaryLoss, cumulusFriction, cumulusOvershoot, cumulusAscent, cumulusEntrainmentHeight, cumulusUpdraft, cumulusRain, cumulusSource, cumulusMemory,
     plumeClosure, plumeCapeParcel, plumeSource, plumeSourceDepth, excessVelocity, plumePhase, plumeConversion, convectionType, plumeVelocity, plumeAcceleration, plumeDrag, plumeEntrainmentLaw, plumeEntrainment, plumeEntrainmentFloor, plumeMassGrowth, plumeRainRate, plumeRainThreshold, plumeRainEvaporation,
     downdraftShare, downdraftEntrainment, capeClosure, pcapeBoundary, plumeCape, plumeRelaxation, plumeMomentum, plumeConsumption,
@@ -553,6 +569,8 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   if (cumulusOvershoot !== 'kinetic' && !(cumulusOvershoot >= 0 && cumulusOvershoot <= 1)) throw new Error(`cumulusOvershoot must be a share between 0 and 1 or 'kinetic', not ${cumulusOvershoot}`);
   if (cumulusAscent !== 'buoyant' && cumulusAscent !== 'kinetic') throw new Error(`cumulusAscent must be 'buoyant' or 'kinetic', not ${cumulusAscent}`);
   if (cumulusAscent === 'kinetic' && cumulusOvershoot !== 'kinetic') throw new Error(`cumulusAscent 'kinetic' needs cumulusOvershoot 'kinetic', whose w² carries the plume`);
+  if (stratocumulusInversion !== null && !Number.isFinite(stratocumulusInversion)) throw new Error(`stratocumulusInversion must be null or an estimated inversion strength in K, not ${stratocumulusInversion}`);
+  if (stratocumulusInversion !== null && !Number.isInteger(stabilityLayer)) throw new Error('stratocumulusInversion needs the stabilityLayer its EIS is taken at');
   if (cumulusEntrainmentHeight !== null && !(Number.isFinite(cumulusEntrainmentHeight) && cumulusEntrainmentHeight > 0)) throw new Error(`cumulusEntrainmentHeight must be null or a factor above 0, not ${cumulusEntrainmentHeight}`);
   if (fogDroplets !== null && !(Array.isArray(fogDroplets) && fogDroplets.length === 2 && fogDroplets.every((n) => Number.isFinite(n) && n > 0))) throw new Error(`fogDroplets must be null or [continental, sea] droplet numbers above 0 per cm³, not ${JSON.stringify(fogDroplets)}`);
   if (!(Number.isFinite(fogDeposition) && fogDeposition >= 0)) throw new Error(`fogDeposition must be an efficiency of 0 or more, not ${fogDeposition}`);
@@ -869,6 +887,16 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
   }
 
   const kineticOvershoot = cumulusOvershoot === 'kinetic', carriedAscent = cumulusAscent === 'kinetic', byHeight = cumulusEntrainmentHeight !== null;
+  const capped = stratocumulusInversion !== null;
+
+  function stratocumulusTopped(i, pi, theta, q) {
+    const lower = (K - 1) * C + i, upper = stabilityLayer * C + i;
+    if (!(q[lower] > 0)) return false;
+    const lowerT = theta[lower] * exnerLayer[lower];
+    const lcl = liftingCondensationLevel(lowerT, q[lower], pi[i] * sigmaMid[K - 1], kappa);
+    const base = Math.max(0, cp * (lowerT - lcl.temperature) / g);
+    return inversionStrength(theta[upper] - theta[lower], lowerT, theta[upper] * exnerLayer[upper], (geopotential[upper] - geopotential[lower]) / g - base, cp, R, g, latentHeat) > stratocumulusInversion;
+  }
 
   function plumeKinetic(w2, work, depth, mixing) {
     const x = 2 * mixing * depth;
@@ -891,7 +919,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
     const bottom = K - 1;
     cumulus.top = -1; cumulus.inhibition = 0; cumulus.baseFlux = 0; cumulus.velocity = 0; cumulus.snow = 0; cumulus.overshoot = 1;
     clearCumulus(i);
-    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1);
+    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1) * (capped && stratocumulusTopped(i, pi, theta, q) ? 0 : 1);
     const buoyancy = surfaceBuoyancy ? surfaceBuoyancy[i] : 0;
     if (!(open > 0) || !(buoyancy > 0) || !boundaryDepth) return 0;
     fillEnvironment(i, pi, theta, q, qc);
@@ -1087,7 +1115,7 @@ export function createMoistPhysics(mesh, core, { boundaryDepth = null, boundaryR
       for (let k = 0; k <= K; k++) { momentumUp[k * C + i] = 0; momentumDown[k * C + i] = 0; }
       for (let k = 0; k < K; k++) { momentumUpKeep[k * C + i] = 1; momentumDownKeep[k * C + i] = 1; }
     }
-    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1);
+    const open = (deckVeto && deckGate !== null ? ramp((DECK_CLOSED - deckGate[i]) / (DECK_CLOSED - DECK_OPEN)) : 1) * (coupledVeto && boundaryRegime !== null && boundaryRegime[i] === COUPLED_REGIME ? 0 : 1) * (capped && stratocumulusTopped(i, pi, theta, q) ? 0 : 1);
     if (!(open > 0) || !boundaryDepth) return cumulusColumn(i, pi, theta, q, qc, dt);
     fillEnvironment(i, pi, theta, q, qc);
     const { source, mass, sourceS: meanS, sourceQ: meanQ } = sourceLayers(i, pi, false, surfaceSource);

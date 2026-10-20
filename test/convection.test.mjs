@@ -1495,7 +1495,7 @@ async function parity(options, { momentum = false } = {}) {
   return { cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared };
 }
 
-test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, carried through non-buoyant layers by its w² and entraining at 1/z, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, carried through non-buoyant layers by its w² and entraining at 1/z, shut where the EIS of its column passes stratocumulusInversion, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   await parity({});
   await parity({ plumeClosure: 'maximum', plumeSource: 'lowest', plumeCapeParcel: 'undilute', plumeMassGrowth: 2e-4 });
   await parity({ plumeClosure: 'cape', downdraftShare: 0.5, downdraftEntrainment: 0, plumeRainThreshold: 5e-4, autoconversionFloor: 'boundaryLayer', upperCloudLifetime: 1800 });
@@ -1508,6 +1508,7 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, virtualBuoyancy: false });
   await parity({ cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1 });
   await parity({ cumulusAscent: 'kinetic', cumulusSource: 'lowest', cumulusRain: 5e-4 });
+  await parity({ stratocumulusInversion: 2 });
   await parity({ condensation: 'saturation', iceSaturation: false, iceFall: null });
   await parity({ iceNucleation: true, iceFall: 3.29 });
   await parity({ capeClosure: 'threshold' });
@@ -1559,6 +1560,42 @@ test("a cumulusAscent other than 'buoyant' or 'kinetic', the kinetic ascent with
   const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
   const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
   for (const options of refused) assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, ...options }), /cumulusAscent|cumulusEntrainmentHeight/, `GPU: ${JSON.stringify(options)}`);
+});
+
+test("stratocumulusInversion shuts both plumes where the column's estimated inversion strength exceeds it: under a threshold below every column's EIS no plume runs, above every one the step is the default's, and at 2 K every column whose plume still runs steps as by default", () => {
+  const step = (options) => {
+    const model = build(options, 6), C = model.mesh.nCells;
+    randomColumns(model);
+    model.phases.adjust(0, C, 900);
+    return { C, flux: Float64Array.from(model.moist.cumulusBaseFlux), rain: Float64Array.from(model.moist.convectivePrecipitation), state: model.state.map((a) => Float64Array.from(a)) };
+  };
+  const base = step({}), none = step({ stratocumulusInversion: -1e3 }), every = step({ stratocumulusInversion: 1e3 }), capped = step({ stratocumulusInversion: 2 }), C = base.C;
+  const plumes = (run) => run.flux.reduce((n, flux) => n + (flux > 0 ? 1 : 0), 0);
+  let shut = 0, kept = 0;
+  for (let i = 0; i < C; i++) {
+    if (base.flux[i] > 0 && !(capped.flux[i] > 0)) shut++;
+    if (!(capped.flux[i] > 0)) continue;
+    kept++;
+    assert.equal(capped.flux[i], base.flux[i], `column ${i}'s base flux`);
+    assert.equal(capped.rain[i], base.rain[i], `column ${i}'s convective rain`);
+    capped.state.forEach((field, n) => { if (n !== 2 && field.length % C === 0) for (let x = i; x < field.length; x += C) assert.equal(field[x], base.state[n][x], `column ${i}, field ${n}`); });
+  }
+  console.log(`${C} random columns: ${plumes(base)} plumes by default, ${plumes(none)} under a threshold of -1000 K, ${plumes(every)} under 1000 K; at 2 K ${shut} shut and ${kept} kept`);
+  assert.ok(plumes(base) > C / 10, `${plumes(base)} plumes by default`);
+  assert.equal(plumes(none), 0);
+  assert.ok(none.rain.every((rain) => rain === 0), 'convective rain under the lowest threshold');
+  assert.deepEqual(every.flux, base.flux);
+  for (const [n, field] of every.state.entries()) assert.deepEqual(field, base.state[n], `field ${n} under the highest threshold`);
+  assert.ok(shut > C / 40 && kept > C / 20, `${shut} shut, ${kept} kept at 2 K`);
+});
+
+test('a stratocumulusInversion other than null or a finite EIS is refused on both engines', async () => {
+  const refused = [{ stratocumulusInversion: NaN }, { stratocumulusInversion: Infinity }, { stratocumulusInversion: '7' }];
+  for (const options of refused) assert.throws(() => build(options), /stratocumulusInversion/, `CPU: ${JSON.stringify(options)}`);
+  if (!gpuAvailable) return;
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
+  for (const options of refused) assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, ...options }), /stratocumulusInversion/, `GPU: ${JSON.stringify(options)}`);
 });
 
 test('the retired Betts–Miller options are refused on both engines', async () => {
