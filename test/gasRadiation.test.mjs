@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { clearLongwave, longwaveTableFor, LONGWAVE_TABLE } from '../js/physics/longwave.module.js';
-import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
+import { sigmaInterfaces, GRAVITY, CP_DRY } from '../js/dynamics/sigmaCore.module.js';
 import { BENCHMARK, modelColumn, referenceAt, interfaceAt, layerHeating, referenceHeating, MOLAR } from '../scripts/standardAtmospheres.mjs';
 import { runColumn } from '../scripts/radiationBenchmark.mjs';
 import { SOLAR_CONSTANT, GREENHOUSE_GASES, VISIBLE_FRACTION } from '../js/physics/radiation.module.js';
@@ -61,6 +61,31 @@ test('on bl36 the g-points fitted on bl36 columns follow RRTMG in every layer ab
   const one = clearLongwave(withCo2(287e-6), { table }), two = clearLongwave(withCo2(574e-6), { table }), ref = BENCHMARK.iacono.co2Doubling.longwave;
   const forcing = { toa: one.net[0] - two.net[0], p20000: interfaceAt(mls, one.net, 20000) - interfaceAt(mls, two.net, 20000), surface: two.down[K] - one.down[K] };
   console.log(`bl36, the cooling of the layers above 3 hPa (RRTMG): ${lines.join(', ')} K/day; doubled CO2 TOA ${forcing.toa.toFixed(2)} 200 hPa ${forcing.p20000.toFixed(2)} surface ${forcing.surface.toFixed(2)} W/m2`);
+  for (const level of ['toa', 'p20000', 'surface']) assert.ok(Math.abs(forcing[level] / ref[level] - 1) < 0.1, `doubled CO2 at ${level}: ${forcing[level]} against ${ref[level]}`);
+});
+
+test('on bl60 the g-points fitted on bl60 columns follow RRTMG over each of bl42\'s layers between 1 and 93.6 hPa, the fluxes and doubled CO2', () => {
+  const levels = sigmaInterfaces('bl60'), coarse = sigmaInterfaces('bl42'), table = longwaveTableFor(levels), lines = [];
+  assert.notEqual(table, longwaveTableFor(coarse));
+  for (const a of ['TROP', 'MLS', 'MLW', 'SAW']) {
+    const column = modelColumn(BENCHMARK.atmospheres[a], levels), ref = BENCHMARK.rrtmgLongwave[a].levels, r = clearLongwave(column, { table }), K = column.T.length;
+    const olr = r.up[0] - ref[ref.length - 1].up, dlr = r.down[K] - ref[0].down, net = interfaceAt(column, r.net, 20000) - referenceAt(ref, 20000);
+    for (const x of [olr, dlr, net]) assert.ok(Math.abs(x) < 3, `${a}: OLR, DLR and 200 hPa misses ${olr}, ${dlr}, ${net} W/m2`);
+    const spans = [];
+    for (let k = 2; k < 11; k++) {
+      const top = coarse[k] * column.ps, bottom = coarse[k + 1] * column.ps, per = 86400 * GRAVITY / CP_DRY / (bottom - top);
+      const heat = per * (interfaceAt(column, r.net, bottom) - interfaceAt(column, r.net, top)), refHeat = per * (referenceAt(ref, bottom) - referenceAt(ref, top));
+      spans.push(`${heat.toFixed(2)} (${refHeat.toFixed(2)})`);
+      if (top < 1000) assert.ok(Math.abs(heat / refHeat - 1) < 0.05, `${a}: ${top} to ${bottom} Pa cools ${heat} against ${refHeat} K/day`);
+      else assert.ok(Math.abs(heat - refHeat) < 0.15, `${a}: ${top} to ${bottom} Pa cools ${heat} against ${refHeat} K/day`);
+    }
+    lines.push(`${a} ${spans.join(' / ')}`);
+  }
+  const mls = modelColumn(BENCHMARK.atmospheres.MLS, levels), K = mls.T.length;
+  const withCo2 = (vmr) => ({ ...mls, co2: mls.co2.map((_, k) => vmr * MOLAR.co2 / MOLAR.air * (1 - mls.q[k])), ch4: mls.ch4.map((_, k) => 806e-9 * MOLAR.ch4 / MOLAR.air * (1 - mls.q[k])), n2o: mls.n2o.map((_, k) => 275e-9 * MOLAR.n2o / MOLAR.air * (1 - mls.q[k])) });
+  const one = clearLongwave(withCo2(287e-6), { table }), two = clearLongwave(withCo2(574e-6), { table }), ref = BENCHMARK.iacono.co2Doubling.longwave;
+  const forcing = { toa: one.net[0] - two.net[0], p20000: interfaceAt(mls, one.net, 20000) - interfaceAt(mls, two.net, 20000), surface: two.down[K] - one.down[K] };
+  console.log(`bl60, the cooling over bl42's layers from 1 to 93.6 hPa (RRTMG): ${lines.join(', ')} K/day; doubled CO2 TOA ${forcing.toa.toFixed(2)} 200 hPa ${forcing.p20000.toFixed(2)} surface ${forcing.surface.toFixed(2)} W/m2`);
   for (const level of ['toa', 'p20000', 'surface']) assert.ok(Math.abs(forcing[level] / ref[level] - 1) < 0.1, `doubled CO2 at ${level}: ${forcing[level]} against ${ref[level]}`);
 });
 

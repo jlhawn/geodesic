@@ -179,10 +179,13 @@ peak: 21 m/s at 20 hPa). Its mean is 6–44 m/s more westerly than ERA5's
 at 1.6–37 hPa, where ERA5's is easterly. The arm's weeks fall in its
 westerly phase at 3–7 hPa. MiMA, whose cg_drag settings the model takes
 (B_eq = B₀ = 4.3 mPa, what reaches the lid spread over the layers above
-0.85 hPa), keeps a QBO with 1.2 km layers in the lower stratosphere. At
-coarser resolution its QBO's westerly regime grows too strong and its
-easterly regime too weak (Garfinkel et al. 2022). bl42's layers above
-100 hPa are 2.5–6 km thick.
+0.85 hPa), keeps a QBO with 1.2 km layers in its lower stratosphere (40
+levels). Its QBO's period and its amplitude in the lowermost stratosphere
+grow steadily from 30 to 120 levels, and only the 120-level run (400 m)
+has the observed asymmetry between the westerly and easterly regimes
+(Garfinkel et al. 2022). CAM5 and the GISS model need about 500 m for a
+realistic QBO (Richter et al. 2014; Geller et al. 2016). bl42's layers
+are 1.1–1.7 km thick at 62–110 hPa and 2.3–5.7 km from 62 up to 1 hPa.
 
 ### 4. Over the mode's phases only the layer under the lid ascends too fast
 
@@ -235,10 +238,10 @@ there the cold bias is not the ascent's.
   the radiation and the other terms of the heat budget, not with the
   residual ascent.
 - The SAO is close: 73–85 percent of ERA5's amplitude at 1.6–3.5 hPa and
-  5–6 days late, and ERA5's own SAO is stronger than the satellites'. The
-  two-year mode's westerly mean is what Garfinkel et al. (2022) find for
-  a QBO at too coarse a vertical resolution, and bl42's stratospheric
-  layers are 2–5 times as thick as MiMA's.
+  5–6 days late, and ERA5's own SAO is stronger than the satellites'. A
+  QBO driven by parameterized waves needs layers of 0.4–1.2 km in the
+  lower stratosphere (Garfinkel et al. 2022; Richter et al. 2014; Geller
+  et al. 2016), and bl42's above 62 hPa are 2–5 times as thick as MiMA's.
 
 No option comes of this finding. The change the references point to is
 the stratosphere's vertical resolution. A level set with layers near
@@ -268,12 +271,18 @@ be measured against the satellite climatologies (Ern et al. 2018).
   Shine, 1991: On the "downward control" of extratropical diabatic
   circulations by eddy-induced mean zonal forces. J. Atmos. Sci., 48,
   651–678.
+- Geller, M. A., et al., 2016: Modeling the QBO—Improvements resulting
+  from higher-model vertical resolution. J. Adv. Model. Earth Syst., 8,
+  1092–1105.
 - Hersbach, H., et al., 2020: The ERA5 global reanalysis. Q. J. R.
   Meteorol. Soc., 146, 1999–2049.
 - Kawatani, Y., T. Hirooka, K. Hamilton, A. K. Smith, and M. Fujiwara,
   2020: Representation of the equatorial stratopause semiannual
   oscillation in global atmospheric reanalyses. Atmos. Chem. Phys., 20,
   9115–9133.
+- Richter, J. H., A. Solomon, and J. T. Bacmeister, 2014: On the
+  simulation of the quasi-biennial oscillation in the Community
+  Atmosphere Model, version 5. J. Geophys. Res. Atmos., 119, 3045–3062.
 - Shepherd, T. G., and T. A. Shaw, 2004: The angular momentum constraint
   on climate sensitivity and downward influence in the middle atmosphere.
   J. Atmos. Sci., 61, 2899–2908.

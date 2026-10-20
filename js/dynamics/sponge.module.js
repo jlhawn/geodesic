@@ -58,12 +58,12 @@ export function spongeGeometry(mesh) {
 export const SPONGE = { sigma: 0.005, days: 1 };
 
 /*
- * The sponge's onset on a grid by name: on bl36 and bl42 the 78 Pa (over p0) at
+ * The sponge's onset on a grid by name: on bl36, bl42 and bl60 the 78 Pa (over p0) at
  * which the IFS's begins (IFS CY48r1 Part III, 2.2.11), so that the
  * 0.3-1 hPa layer keeps its equatorial waves; SPONGE.sigma elsewhere.
  */
 export function spongeSigmaFor(gridName) {
-  return gridName === 'bl36' || gridName === 'bl42' ? 78 / 101325 : SPONGE.sigma;
+  return gridName === 'bl36' || gridName === 'bl42' || gridName === 'bl60' ? 78 / 101325 : SPONGE.sigma;
 }
 
 /*
@@ -120,11 +120,11 @@ export function lidFrictionRates(levels, profile, p0 = 101325) {
 }
 
 /*
- * The lid friction of a grid by name: the GISS profile on bl36 and bl42, whose
- * 0-0.3 hPa layer it reaches alone; none on the other grids.
+ * The lid friction of a grid by name: the GISS profile on bl36, bl42 and
+ * bl60, whose 0-0.3 hPa layer it reaches alone; none on the other grids.
  */
 export function lidFrictionFor(gridName) {
-  return gridName === 'bl36' || gridName === 'bl42' ? 'rind' : null;
+  return gridName === 'bl36' || gridName === 'bl42' || gridName === 'bl60' ? 'rind' : null;
 }
 
 /*

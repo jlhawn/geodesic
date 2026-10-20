@@ -47,15 +47,15 @@ function cloudDecisions(C, limit = 1) {
  * device) as an ocean publishing it would have them.
  */
 async function pair(N, steps, dt, inversion = 0, stratus = inversion > 0, options = {}, moist = {}, boundaryLayer = {}, each = null, { transmission = null } = {}) {
-  const { dragEvery = 1, ...radiation } = options;
+  const { dragEvery = 1, levels, ...radiation } = options;
   const grid = new Grid(N), shares = transmission ? new Float64Array(grid.size) : null, penetrated = transmission ? new Float64Array(grid.size) : null;
-  const model = createModel(grid, { ocean: false, radiation: { stratus, ...radiation }, moist, boundaryLayer, surface: { exchange: options.surfaceExchange ?? 'roughness' }, dragEvery, ...(shares ? { ice: { transmission: shares, penetrated } } : {}) });
+  const model = createModel(grid, { ocean: false, ...(levels ? { levels } : {}), radiation: { stratus, ...radiation }, moist, boundaryLayer, surface: { exchange: options.surfaceExchange ?? 'roughness' }, dragEvery, ...(shares ? { ice: { transmission: shares, penetrated } } : {}) });
   if (shares) model.mesh.latCell.forEach((lat, i) => { shares[i] = transmission(lat); });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { K, sigmaMid } = model.core, C = model.mesh.nCells;
   for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += inversion;
-  const gpu = await createGpuCore(model.mesh, { nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, ...options, ...moist, ...boundaryLayer, ...(shares ? { penetration: 'IB' } : {}) } });
+  const gpu = await createGpuCore(model.mesh, { ...(levels ? { levels } : {}), nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { stratus, dragEvery, ...radiation, ...moist, ...boundaryLayer, ...(shares ? { penetration: 'IB' } : {}) } });
   gpu.upload(model.state);
   gpu.uploadPhysics(shares ? { transmission: shares } : {});
   for (let n = 0; n < steps; n++) { const time = model.time; model.step(dt); await gpu.stepModel(dt, time); if (each) await each(model, await gpu.downloadPhysics(), gpu); }
@@ -552,6 +552,41 @@ test('with the gravity-wave drag laid every fourth step, twelve GPU steps track 
   assert.ok(d.atmosphereSolar > 0 && Math.abs(d.atmosphereSolar - atmosphere) < 0.5, `absorbed in the atmosphere ${d.atmosphereSolar} vs ${atmosphere}`);
   assert.ok(Math.abs(d.outgoingLongwave - olr) < 0.5, `OLR ${d.outgoingLongwave} vs ${olr}`);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
+});
+
+test('on bl60 twelve full GPU steps at N=8 track the CPU model and its energy budget, cool each layer above 30 hPa alike with bl60\'s longwave table outside the columns whose cloud decided apart, and lay the same gravity-wave drag in each of its layers', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
+  let decisions = null;
+  const { model, state, physics } = await pair(8, 12, 900, 0, false, { levels: sigmaInterfaces('bl60'), clearSkyPass: true }, {}, {}, (cpu, device) => {
+    decisions ??= cloudDecisions(cpu.mesh.nCells);
+    decisions.check(cpu, device);
+  });
+  const C = model.mesh.nCells, K = model.core.K, levels = model.core.levels;
+  assert.equal(K, 60);
+  const clearOlr = stats(model.radiation.summed.clearOutgoingLongwave, physics.OLRCLRSUM.subarray(0, C)), clearAbsorbed = stats(model.radiation.summed.clearAbsorbedSolar, physics.ABSCLRSUM.subarray(0, C)), top = [];
+  const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !decisions.parted.has(i));
+  for (let k = 0; 0.5 * (levels[k] + levels[k + 1]) < 0.03; k++) top.push(stats(Float64Array.from(kept, (i) => model.radiation.longwave[k * C + i]), Float64Array.from(kept, (i) => physics.LWH[k * C + i])));
+  const worstLayer = top.reduce((w, s, k) => (s.rms > top[w].rms ? k : w), 0), { rms: worstRms, rmsRel: worstRel } = top[worstLayer];
+  console.log(`bl60 at N=8, 12 steps: clear-sky sums per-cell rms OLR ${clearOlr.rmsRel.toExponential(1)}, absorbed ${clearAbsorbed.rmsRel.toExponential(1)}; outside the ${decisions.parted.size} columns whose cloud parted, the ${top.length} layers above 30 hPa absorb longwave alike to ${worstRms.toExponential(1)} W/m² rms per cell at most (layer ${worstLayer}, ${worstRel.toExponential(1)} of its own)`);
+  assert.ok(decisions.parted.size <= C / 20 && top.length > 20 && worstRms < 2e-4 && clearOlr.rmsRel < 1e-5 && clearAbsorbed.rmsRel < 1e-5, `${decisions.parted.size} parted, ${top.length} layers, longwave rms ${worstRms} W/m² in layer ${worstLayer}; clear-sky OLR ${clearOlr.rmsRel}, absorbed ${clearAbsorbed.rmsRel}`);
+  const read = model.diagnostics(), d = { ...read, ...read.instantaneous };
+  let area = 0, ts = 0, abs = 0, olr = 0;
+  for (let i = 0; i < C; i++) { const a = model.mesh.areaCell[i]; area += a; ts += a * state[3][i]; abs += a * physics.ABS[i]; olr += a * physics.OLR[i]; }
+  ts /= area; abs /= area; olr /= area;
+  let worst = 0, scale = 0, rms = 0;
+  for (let x = 0; x < K * C; x++) {
+    worst = Math.max(worst, Math.abs(model.gravityWaves.east[x] - physics.GWE[x]));
+    scale = Math.max(scale, Math.abs(model.gravityWaves.east[x]));
+    rms += (model.gravityWaves.east[x] - physics.GWE[x]) ** 2;
+  }
+  rms = Math.sqrt(rms / (K * C));
+  const theta = stats(model.state[1], state[1]), u = stats(model.state[2], state[2]), pi = stats(model.state[0], state[0]);
+  console.log(`twelve steps at N=8 on bl60: θ rms ${theta.rmsRel.toExponential(1)}, u rms ${u.rms.toExponential(1)} m/s (largest ${u.maxDiff.toExponential(1)}), π rms ${pi.rmsRel.toExponential(1)}; mean Ts ${d.meanSurfaceT.toFixed(3)} vs ${ts.toFixed(3)} K, solar ${d.absorbedSolar.toFixed(2)} vs ${abs.toFixed(2)}, OLR ${d.outgoingLongwave.toFixed(2)} vs ${olr.toFixed(2)} W/m²; the drag apart by ${(86400 * worst).toExponential(1)} m/s/day at most (rms ${(86400 * rms).toExponential(1)}) of up to ${(86400 * scale).toFixed(2)}`);
+  assert.ok(theta.rmsRel < 1e-4 && pi.rmsRel < 1e-5, `θ rms ${theta.rmsRel}, π rms ${pi.rmsRel}`);
+  assert.ok(u.rms < 1e-2, `u rms ${u.rms} m/s`);
+  assert.ok(Math.abs(d.meanSurfaceT - ts) < 0.02, `mean Ts ${d.meanSurfaceT} vs ${ts}`);
+  assert.ok(Math.abs(d.absorbedSolar - abs) < 0.5 && Math.abs(d.outgoingLongwave - olr) < 0.5, `absorbed solar ${d.absorbedSolar} vs ${abs}, OLR ${d.outgoingLongwave} vs ${olr}`);
+  assert.ok(scale > 0 && rms < 1e-3 * scale, `the drag's rms difference ${rms} against ${scale}`);
 });
 
 test('with the drags laid every fourth step over terrain, both engines lay the same blocking and wave drag, take the same stress while they hold them, and lay them anew at the fifth step; laid every 16 steps, the waves\' limiter takes the 16 steps alike in both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

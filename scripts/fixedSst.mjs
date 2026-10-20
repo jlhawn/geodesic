@@ -5,14 +5,17 @@
 // format, no ocean; the land and the atmosphere's carried fields as
 // scripts/spinup.mjs saves them). SST=own keeps the state's sea surface;
 // SST=woa sets every open-sea cell to WOA23's monthly SST
-// (data/woa_sst_monthly_1deg.bin) on the state's date. MOIST,
+// (data/woa_sst_monthly_1deg.bin) on the state's date, and SST=cycle sets
+// it again at the start of every day on that day's date, the annually
+// repeating SST of QBOi's experiment 2 (Butchart et al. 2018). MOIST,
 // BOUNDARY_LAYER, SURFACE, RADIATION and GRAVITY_WAVES (JSON, or false)
 // pass options as scripts/spinup.mjs does; LEVELS (a grid of SIGMA_GRIDS)
 // runs the arm on that grid with the state remapped onto it. TEM_HOURS
 // samples the transformed Eulerian mean (scripts/residualCirculation.mjs)
 // every TEM_HOURS hours after day TEM_FROM, with the gravity waves' zonal
 // force and absolute flux by layer from the CPU engine's drag on the same
-// state, and writes their means to OUT/TAG_tem.json. The AMIP question
+// state, and writes their means to OUT/TAG_tem.json. WINDS=1 logs
+// scripts/upperAtmosphere.mjs's upper-winds line every day. The AMIP question
 // for one state: what the atmosphere does over the observed sea.
 //   SST=woa DAYS=12 SAVE_DAYS=3 node scripts/fixedSst.mjs STATE.bin OUT TAG
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -26,10 +29,11 @@ import { stateGrid, gridHeader } from '../js/stateGrid.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt } from '../js/ocean/climatology.module.js';
 import { createGravityWaveDrag } from '../js/physics/gravityWaves.module.js';
 import { pressureColumns, residualCirculation, temSums, tropicalTable, temJson, TEM_PRESSURES } from './residualCirculation.mjs';
+import { upperWindLine } from './upperAtmosphere.mjs';
 
 const [FILE, OUT, TAG] = process.argv.slice(2);
 const DAYS = Number(process.env.DAYS ?? 12), SAVE_DAYS = Number(process.env.SAVE_DAYS ?? 3), SAVE_FROM = Number(process.env.SAVE_FROM ?? 0), SST = process.env.SST ?? 'own', CAP = Number(process.env.CAP ?? 1e12), BATCH = 8;
-const TEM_HOURS = Number(process.env.TEM_HOURS ?? 0), TEM_FROM = Number(process.env.TEM_FROM ?? 0);
+const TEM_HOURS = Number(process.env.TEM_HOURS ?? 0), TEM_FROM = Number(process.env.TEM_FROM ?? 0), WINDS = process.env.WINDS === '1';
 const env = (name) => JSON.parse(process.env[name] ?? '{}');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
@@ -52,17 +56,19 @@ for (const field of ['cumulusCover', 'cumulusWater']) if (saved[field] && saved[
 if (saved.subcloudVirtual && saved.subcloudVirtual.length === model.moist.subcloudVirtual.length) model.moist.subcloudVirtual.set(saved.subcloudVirtual); else model.moist.subcloudVirtual.fill(0);
 model.time = saved.time;
 const land = model.geography.land;
-let changed = 0, shift = 0;
-if (SST === 'woa') {
-  const sst = decodeMonthlySst(readFileSync(new URL('../data/woa_sst_monthly_1deg.bin', import.meta.url)));
-  const months = monthWeights(sst, (((saved.day + 78) % 365) + 365) % 365);
+const sst = SST === 'woa' || SST === 'cycle' ? decodeMonthlySst(readFileSync(new URL('../data/woa_sst_monthly_1deg.bin', import.meta.url))) : null;
+function setSst(day) {
+  const months = monthWeights(sst, (((day + 78) % 365) + 365) % 365);
+  let changed = 0, shift = 0;
   for (let i = 0; i < C; i++) {
     if (land[i] || state[6][i] > 0) continue;
     const t = climatologyAt(sst, months, mesh.latCell[i], mesh.lonCell[i]);
     if (!Number.isFinite(t)) continue;
     shift += t - state[3][i]; state[3][i] = t; changed++;
   }
+  return [changed, shift];
 }
+const [changed, shift] = sst ? setSst(saved.day) : [0, 0];
 console.log(`${TAG}: day ${saved.day}, SST ${SST}${changed ? ` set on ${changed} open-sea cells, mean shift ${(shift / changed).toFixed(2)} K` : ''}, slab ${CAP.toExponential(0)} J/m²/K, ${DAYS} days`);
 model.load({ ocean: false });
 model.land.load(saved.land);
@@ -87,12 +93,15 @@ async function sampleTem() {
 }
 const seaMean = () => { let s = 0, n = 0; for (let i = 0; i < C; i++) if (!land[i]) { s += state[3][i]; n++; } return s / n; };
 const t0 = performance.now();
+let steps = 0;
 for (let day = 1; day <= DAYS; day++) {
+  if (SST === 'cycle' && day > 1) { await model.sync(); setSst(saved.day + day - 1); model.gpu.uploadSurfaceTemperature(state[3]); }
   for (let done = 0; done < perDay;) {
-    const count = Math.min(BATCH, perDay - done, every - (done % every));
-    await model.stepBatch(count, dt); done += count;
-    if (day > TEM_FROM && done % every === 0) await sampleTem();
+    const count = Math.min(BATCH, perDay - done, every - (steps % every));
+    await model.stepBatch(count, dt); done += count; steps += count;
+    if (day > TEM_FROM && steps % every === 0) await sampleTem();
   }
+  if (WINDS) { await model.sync(); console.log(upperWindLine(mesh, levels, state, dt, saved.day + day)); }
   if (day >= SAVE_FROM && (day % SAVE_DAYS === 0 || day === DAYS)) {
     await model.sync();
     const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, r = model.radiation, b = model.boundaryLayer;
