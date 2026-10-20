@@ -110,7 +110,7 @@ test('the suite report names every failing test with its error and output, and t
 });
 
 const PAIRED = `#!/bin/bash
-env | grep -E '^(NS|PREFIX|LEVELS|PER_YEAR|KEEP|OCEAN|STRATOSPHERE|UNTIL|OUT|FROM|SYNC_CMD)=' | sort > "$OUT/paired.env"
+env | grep -E '^(NS|PREFIX|LEVELS|PER_YEAR|KEEP|OCEAN|STRATOSPHERE|UNTIL|OUT|FROM|SYNC_CMD|RADIATION|MOIST)=' | sort > "$OUT/paired.env"
 echo call >> "$OUT/paired.calls"
 [ -f "$OUT/killed" ] && exit 143
 echo "2026-10-02 12:00 stopped (day $UNTIL reached)" >> "$OUT/$PREFIX.log"
@@ -187,6 +187,22 @@ test('verdaEleven runs the paired spin-up with the run\'s settings, marks it, an
   assert.match(readFileSync(join(out, 'paired.env'), 'utf8'), /UNTIL=1825/, 'a resume without UNTIL keeps the extended end');
   assert.match(r.stdout, /N=128 day 10, 179 segments left/);
   assert.match(eleven(out, ['status']).stdout, /day 10 of 1825, 179 segments left/);
+});
+
+test('verdaEleven keeps the run\'s RADIATION and MOIST in its settings, and the resume runs with them', () => {
+  script('paired', { 'paired.sh': PAIRED });
+  const out = join(dir, 'options'), RADIATION = '{"cloudColumns":true,"cloudSpread":0.75}', MOIST = '{"stratocumulusInversion":7}';
+  mkdirSync(out, { recursive: true });
+  writeFileSync(join(out, 'killed'), '');
+  eleven(out, ['run'], { RADIATION, MOIST });
+  const settings = readFileSync(join(out, 'SETTINGS_eleven'), 'utf8');
+  assert.ok(settings.includes(`RADIATION=${RADIATION}\n`) && settings.includes(`MOIST=${MOIST}\n`), settings);
+  rmSync(join(out, 'killed'));
+  writeFileSync(join(out, 'eleven128_day0010.bin'), Buffer.alloc(1000));
+  const r = eleven(out, ['resume']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const env = readFileSync(join(out, 'paired.env'), 'utf8');
+  assert.ok(env.includes(`RADIATION=${RADIATION}\n`) && env.includes(`MOIST=${MOIST}\n`), env);
 });
 
 const ASYNC = `#!/bin/bash
