@@ -1495,7 +1495,7 @@ async function parity(options, { momentum = false } = {}) {
   return { cloud: Float64Array.from(model.state[5]), gpuCloud: Float64Array.from(after[5]), shared };
 }
 
-test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('the shallow and deep plume and the rain they leave match between the engines on a random set of columns, with the plume under each closure and with its F from the buoyant layers alone, from either source, with either CAPE parcel and its downdraft, carrying momentum with or without a downdraft, the column momentum of each edge exact, with the shallow plume from the lowest layer, raining and overshooting by half without virtual buoyancy, carried through non-buoyant layers by its w² and entraining at 1/z, under either autoconversion floor and with a shorter lifetime for the cloud above the shallow top', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   await parity({});
   await parity({ plumeClosure: 'maximum', plumeSource: 'lowest', plumeCapeParcel: 'undilute', plumeMassGrowth: 2e-4 });
   await parity({ plumeClosure: 'cape', downdraftShare: 0.5, downdraftEntrainment: 0, plumeRainThreshold: 5e-4, autoconversionFloor: 'boundaryLayer', upperCloudLifetime: 1800 });
@@ -1506,6 +1506,8 @@ test('the shallow and deep plume and the rain they leave match between the engin
   await parity({ autoconversionFloor: 'mixingTop' });
   await parity({ cumulusOvershoot: 1 });
   await parity({ cumulusSource: 'lowest', cumulusRain: 5e-4, cumulusOvershoot: 0.5, virtualBuoyancy: false });
+  await parity({ cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1 });
+  await parity({ cumulusAscent: 'kinetic', cumulusSource: 'lowest', cumulusRain: 5e-4 });
   await parity({ condensation: 'saturation', iceSaturation: false, iceFall: null });
   await parity({ iceNucleation: true, iceFall: 3.29 });
   await parity({ capeClosure: 'threshold' });
@@ -1550,6 +1552,15 @@ test('a cumulusMemory other than a finite time of 0 s or more is refused on both
   for (const value of refused) assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, cumulusMemory: value }), /cumulusMemory/, `GPU: ${value}`);
 });
 
+test("a cumulusAscent other than 'buoyant' or 'kinetic', the kinetic ascent without the kinetic overshoot and a cumulusEntrainmentHeight other than null or a factor above 0 are refused on both engines", async () => {
+  const refused = [{ cumulusAscent: 'carried' }, { cumulusAscent: 'kinetic', cumulusOvershoot: 1 }, { cumulusEntrainmentHeight: 0 }, { cumulusEntrainmentHeight: -1 }, { cumulusEntrainmentHeight: Infinity }, { cumulusEntrainmentHeight: '1' }];
+  for (const options of refused) assert.throws(() => build(options), /cumulusAscent|cumulusEntrainmentHeight/, `CPU: ${JSON.stringify(options)}`);
+  if (!gpuAvailable) return;
+  const { physicsConstants } = await import('../js/gpu/physics.gpu.js');
+  const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
+  for (const options of refused) assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, ...options }), /cumulusAscent|cumulusEntrainmentHeight/, `GPU: ${JSON.stringify(options)}`);
+});
+
 test('the retired Betts–Miller options are refused on both engines', async () => {
   for (const options of [{ convection: 'bettsMiller' }, { convection: 'plume' }, { shallowScheme: 'massFlux' }, { capeThreshold: 100 }]) assert.throws(() => build(options), /retired Betts–Miller/);
   if (!gpuAvailable) return;
@@ -1586,4 +1597,35 @@ test("with cumulusOvershoot 'kinetic' the plume's reach into its first non-buoya
   assert.equal(kinetic.top, full.top);
   assert.ok(Math.abs(kinetic.topWater - kinetic.share * full.topWater) < 1e-3 * Math.abs(full.topWater), `the top layer takes the share: ${kinetic.topWater} against ${kinetic.share * full.topWater}`);
   assert.ok(kinetic.belowWater > full.belowWater, 'the layer below takes the rest');
+});
+
+test("on BOMEX's profile (Siebesma et al. 2003, Table B1) the shallow plume carried through non-buoyant layers by its w² and entraining at 1/z tops in the LES's cloud layer, above the plume that ends in its first non-buoyant layer, enthalpy and water conserved", () => {
+  const profile = (table) => (z) => { let n = 1; while (n < table.length - 1 && z > table[n][0]) n++; const [z0, v0] = table[n - 1], [z1, v1] = table[n]; return v0 + (v1 - v0) * (z - z0) / (z1 - z0); };
+  const thetaL = profile([[0, 298.7], [520, 298.7], [1480, 302.4], [2000, 308.2], [3000, 311.85]]);
+  const water = profile([[0, 17e-3], [520, 16.3e-3], [1480, 10.7e-3], [2000, 4.2e-3], [3000, 3e-3]]);
+  const run = (options, set) => {
+    const model = createModel(new Grid(2), { ocean: false, levels: sigmaInterfaces(set), moist: options }), { moist } = model, [pi, theta, , , q, qc] = model.state, { C, cp, kappa, geopotential, exnerLayer, exnerLower, g } = model.core.diagnostics;
+    place(model, 0, 101500, (z, p) => { const T = thetaL(z) * (p / 1e5) ** kappa; return { T, q: Math.max(5e-4, Math.min(water(z), saturationHumidity(T, p))) }; });
+    setDepth(model, 0, 500);
+    model.boundaryLayer.buoyancyFlux[0] = 5.7e-4;
+    model.boundaryLayer.friction[0] = 0.28;
+    model.radiation.mlmGate[0] = 0.3;
+    const before = budget(model, 0);
+    moist.cumulusColumn(0, pi, theta, q, qc, 600);
+    const after = budget(model, 0), { top } = moist.cumulus;
+    assert.ok(top > 0 && moist.cumulusBaseFlux[0] > 0, `a plume topping in layer ${top}`);
+    assert.ok(Math.abs(after.enthalpy - before.enthalpy) < 1e-12 * before.enthalpy, `enthalpy ${before.enthalpy} → ${after.enthalpy}`);
+    assert.ok(Math.abs(after.water - before.water) < 1e-12 * before.water, `water ${before.water} → ${after.water}`);
+    const thetaV = model.core.arrays.thetaV, upper = (k) => (geopotential[k * C] + cp * thetaV[k * C] * (exnerLayer[k * C] - exnerLower[(k - 1) * C])) / g;
+    const base = upper(top + 1);
+    return base + moist.cumulus.overshoot * (upper(top) - base);
+  };
+  const arms = { defaults: {}, carried: { cumulusAscent: 'kinetic' }, perHeight: { cumulusEntrainmentHeight: 1 }, both: { cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1 }, lowest: { cumulusAscent: 'kinetic', cumulusEntrainmentHeight: 1, cumulusSource: 'lowest' } };
+  for (const set of ['bl34', 'bl36', 'bl42']) {
+    const tops = Object.fromEntries(Object.entries(arms).map(([name, options]) => [name, run(options, set)]));
+    console.log(`BOMEX cumulus top on ${set}, the top layer's base + its share of the layer (km): ${Object.entries(tops).map(([name, z]) => `${name} ${(z / 1000).toFixed(2)}`).join(', ')}`);
+    assert.ok(tops.defaults < 1100, `${set}: the plume ending in its first non-buoyant layer tops at ${tops.defaults} m`);
+    assert.ok(tops.carried >= tops.defaults, `${set}: carried ${tops.carried} m against ${tops.defaults} m`);
+    for (const name of ['perHeight', 'both', 'lowest']) assert.ok(tops[name] > 1600 && tops[name] < 2100, `${set}: ${name} tops at ${tops[name]} m, the LES's core top 1.75–1.8 km and cloud top about 2 km`);
+  }
 });

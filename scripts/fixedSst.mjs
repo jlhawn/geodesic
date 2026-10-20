@@ -8,8 +8,13 @@
 // (data/woa_sst_monthly_1deg.bin) on the state's date. MOIST,
 // BOUNDARY_LAYER, SURFACE and RADIATION (JSON) pass options as
 // scripts/spinup.mjs does; LEVELS (a grid of SIGMA_GRIDS) runs the arm on
-// that grid with the state remapped onto it. The AMIP question for one
-// state: what the atmosphere does over the observed sea.
+// that grid with the state remapped onto it; PERTURB makes a replicate,
+// every θ scaled by 1 + PERTURB·u with u uniform in ±1/2, each SEED
+// (default 12345) another. Each day's means (surface temperature, absorbed
+// sunlight, OLR, albedo, the cloud effects, the clear-sky OLR, rain) are
+// printed from a diagnostics frame, and the saves carry the day's per-cell
+// means. The AMIP question for one state: what the atmosphere does over
+// the observed sea.
 //   SST=woa DAYS=12 SAVE_DAYS=3 node scripts/fixedSst.mjs STATE.bin OUT TAG
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { topographyFromInt16 } from '../js/geography.module.js';
@@ -31,6 +36,12 @@ const levels = process.env.LEVELS ? sigmaInterfaces(process.env.LEVELS) : savedL
 const model = await createGpuModel(mesh, { topography, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE') });
 const { state, core } = model, C = mesh.nCells;
 const carried = { ...saved, ...(process.env.LEVELS ? remapLevels(savedLevels(saved), levels, saved, mesh) : {}) };
+const PERTURB = Number(process.env.PERTURB ?? 0);
+if (PERTURB) {
+  let seed = Number(process.env.SEED ?? 12345);
+  const uniform = () => { seed = (Math.imul(seed, 1103515245) + 12345) & 0x7fffffff; return seed / 2147483648 - 0.5; };
+  carried.theta = Float64Array.from(carried.theta, (x) => x * (1 + PERTURB * uniform()));
+}
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(carried[name]));
 model.seaIce.load(state[6], saved.concentration ?? null);
 for (const field of Object.keys(DECK_FIELDS)) model.radiation[field].set(savedDeckField(saved, field, model));
@@ -62,14 +73,17 @@ model.land.load(saved.land);
 mkdirSync(OUT, { recursive: true });
 const seaMean = () => { let s = 0, n = 0; for (let i = 0; i < C; i++) if (!land[i]) { s += state[3][i]; n++; } return s / n; };
 const t0 = performance.now();
+await model.diagnostics();
 for (let day = 1; day <= DAYS; day++) {
   for (let done = 0; done < perDay;) { const count = Math.min(BATCH, perDay - done); await model.stepBatch(count, dt); done += count; }
+  const d = await model.diagnostics();
+  console.log(`day +${day} means: Ts ${(d.meanSurfaceT - 273.15).toFixed(2)} °C, ASR ${d.absorbedSolar.toFixed(1)} OLR ${d.outgoingLongwave.toFixed(1)} W/m², albedo ${d.planetaryAlbedo.toFixed(4)},${d.shortwaveCloudEffect === undefined ? '' : ` SWCRE ${d.shortwaveCloudEffect.toFixed(1)} LWCRE ${d.longwaveCloudEffect.toFixed(1)}, clear-sky OLR ${d.clearOutgoingLongwave.toFixed(1)},`} precip ${(86400 * d.precipitation).toFixed(2)} mm/d`);
   if (day >= SAVE_FROM && (day % SAVE_DAYS === 0 || day === DAYS)) {
     await model.sync();
     const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, r = model.radiation, b = model.boundaryLayer;
     const header = { N: saved.N, ...gridHeader(mesh), K: core.K, day: saved.day + day, time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels };
     const name = `${OUT}/${TAG}_day${String(saved.day + day).padStart(4, '0')}.bin`;
-    writeFileSync(name, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence: r.mlmSubsidence, mlmHeight: r.mlmHeight, mlmGate: r.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo, boundaryDepth: b.depth, mixingTop: b.mixingTop, boundaryRegime: b.regime, boundaryBuoyancy: b.buoyancyFlux, windSpeed: model.surface.windSpeed, evaporation: r.evaporation, ...(model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {}), cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual, land: await model.land.serialize() }));
+    writeFileSync(name, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence: r.mlmSubsidence, mlmHeight: r.mlmHeight, mlmGate: r.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo, meanShortwaveCloudEffect: r.meanShortwaveCloudEffect, meanLongwaveCloudEffect: r.meanLongwaveCloudEffect, boundaryDepth: b.depth, mixingTop: b.mixingTop, boundaryRegime: b.regime, boundaryBuoyancy: b.buoyancyFlux, windSpeed: model.surface.windSpeed, evaporation: r.evaporation, ...(model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {}), cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual, land: await model.land.serialize() }));
     console.log(`day +${day}: sea-mean surface ${(seaMean() - 273.15).toFixed(3)} °C, ${((performance.now() - t0) / 1000 / day).toFixed(1)} s/day, saved ${name.replace(/.*\//, '')}`);
   }
 }

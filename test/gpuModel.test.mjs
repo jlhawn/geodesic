@@ -191,7 +191,7 @@ async function physicsHeating(base, options, dt = 864000, cumulus = null, mixing
     if (model.radiation.insolation(i) > 0 && (water > 1e-3 || model.radiation.stratus[i] > 0)) cloudy.push(i);
   }
   const power = (rate, i) => { let sum = 0; for (let k = 0; k < K; k++) sum += rate[k * C + i] / 86400 * cp * pi[i] * dSigma[k] / g; return sum; };
-  return { K, C, cloudy, cpu: heating(model.state[1]), gpu: heating(after), power, area: model.mesh.areaCell, cpuDeck: Float64Array.from(model.radiation.stratusFraction), gpuDeck: ph.DECKF.subarray(0, C), cpuLongwave: Float64Array.from(model.radiation.longwave), gpuLongwave: ph.LWH.subarray(0, K * C), cpuOutgoing: Float64Array.from(model.radiation.outgoing), gpuOutgoing: ph.OLR.subarray(0, C), gpuSurfaceLongwave: ph.LWSFCSUM.subarray(0, C) };
+  return { K, C, cloudy, cpu: heating(model.state[1]), gpu: heating(after), power, area: model.mesh.areaCell, cpuDeck: Float64Array.from(model.radiation.stratusFraction), gpuDeck: ph.DECKF.subarray(0, C), cpuLongwave: Float64Array.from(model.radiation.longwave), gpuLongwave: ph.LWH.subarray(0, K * C), cpuOutgoing: Float64Array.from(model.radiation.outgoing), gpuOutgoing: ph.OLR.subarray(0, C), cpuAbsorbed: Float64Array.from(model.radiation.summed.absorbedSolar), gpuAbsorbed: ph.ABS.subarray(0, C), gpuSurfaceLongwave: ph.LWSFCSUM.subarray(0, C) };
 }
 
 test('the heating of each layer of the sunlit cloudy columns, and the part of it the cloud water absorbs, agree between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
@@ -382,6 +382,38 @@ test('the longwave\'s exponential-random overlap of resolved cloud of partial co
   assert.ok(closure < 1e-3, `the GPU's longwave closes to ${closure} W/m2`);
 });
 
+test('the shortwave\'s independent columns of the overlap, with the water inside each cloud uniform or spread, heat the layers, absorb the sunlight and emit alike in both engines, and the columns absorb more than the pooled column', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { base } = cloudyState();
+  const pooled = await physicsHeating(base, {}), columns = await physicsHeating(base, { cloudColumns: true }), spread = await physicsHeating(base, { cloudColumns: true, cloudSpread: 0.75 });
+  const { K, C } = pooled;
+  let engines = 0, scale = 0, absorbed = 0, olr = 0, gained = 0, lost = 0;
+  for (let i = 0; i < C; i++) {
+    for (const r of [columns, spread]) { absorbed = Math.max(absorbed, Math.abs(r.cpuAbsorbed[i] - r.gpuAbsorbed[i])); olr = Math.max(olr, Math.abs(r.cpuOutgoing[i] - r.gpuOutgoing[i])); }
+    if (columns.cpuAbsorbed[i] > pooled.cpuAbsorbed[i] + 1e-6) gained++; else if (columns.cpuAbsorbed[i] < pooled.cpuAbsorbed[i] - 1e-6) lost++;
+    for (let k = 0; k < K - 1; k++) {
+      const x = k * C + i;
+      engines = Math.max(engines, ...[columns, spread].map((r) => Math.abs(r.cpu[x] - r.gpu[x])));
+      scale = Math.max(scale, Math.abs(columns.cpu[x]));
+    }
+  }
+  const mean = (r, key) => r[key].reduce((s, x, i) => s + x * r.area[i], 0) / r.area.reduce((s, a) => s + a, 0);
+  const [a0, a1, a2] = [pooled, columns, spread].map((r) => mean(r, 'cpuAbsorbed')), [o1, o2] = [columns, spread].map((r) => mean(r, 'cpuOutgoing'));
+  console.log(`${C} columns: absorbed sunlight ${a0.toFixed(2)} pooled, ${a1.toFixed(2)} in independent columns (more in ${gained} columns, less in ${lost}), ${a2.toFixed(2)} with spread 0.75, whose OLR is ${(o2 - o1).toFixed(2)} W/m2 above; the engines differ by ${engines.toExponential(1)} K/day of a largest ${scale.toFixed(1)}, ${absorbed.toExponential(1)} W/m2 in absorbed sunlight and ${olr.toExponential(1)} in OLR`);
+  assert.ok(a1 > a0 + 0.5 && a2 > a1 && o2 > o1, `absorbed ${a0}, ${a1}, ${a2}; OLR ${o1}, ${o2} W/m2`);
+  assert.ok(engines < 1.5e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}`);
+  assert.ok(absorbed < 2e-5 * 1362 && olr < 2e-5 * 300, `absorbed sunlight apart by ${absorbed}, OLR by ${olr} W/m2`);
+  const traced = cloudyState().base, qc = traced.state[5], { K: layers } = traced.core, cells = traced.mesh.nCells;
+  for (let i = 0; i < cells; i += 2) for (let k = 0; k < layers; k++) qc[k * cells + i] = k === layers - 6 ? Math.fround(1e-30) : 0;
+  const trace = await physicsHeating(traced, { cloudColumns: true, cloudSpread: 0.75 });
+  let finite = true, traceEngines = 0;
+  for (let i = 0; i < cells; i++) {
+    finite &&= Number.isFinite(trace.gpuAbsorbed[i]) && Number.isFinite(trace.gpuOutgoing[i]);
+    traceEngines = Math.max(traceEngines, Math.abs(trace.cpuAbsorbed[i] - trace.gpuAbsorbed[i]));
+    for (let k = 0; k < layers; k++) finite &&= Number.isFinite(trace.gpu[k * cells + i]);
+  }
+  assert.ok(finite && traceEngines < 2e-5 * 1362, `columns whose only cloud is a trace: finite ${finite}, absorbed sunlight apart by ${traceEngines} W/m2`);
+});
+
 test('under maximum-random overlap a layer of trace cloud water joins the layers either side into one block in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { base } = cloudyState(), traced = cloudyState().base;
   const { K } = base.core, C = base.mesh.nCells, qc = traced.state[5];
@@ -433,6 +465,29 @@ test('the variance cover of the cloudy layers below the moist boundary layer\'s 
   assert.ok(moved > 0.1 && unmoved === 0 && blended > 0.1, `variance moves ${moved}, 'pdf' ${unmoved}, the ramp ${blended}`);
   assert.ok(engines < 5e-5 * scale, `layer heating differs by ${engines} K/day against ${scale}; the cover reads the f32 difference of q_t and q_s, as the bounded half-width does`);
   assert.ok(longwave < 1e-4 * longwaveScale, `longwave differs by ${longwave} W/m²`);
+});
+
+test('the variance cover that holds each layer\'s cloud water, and the turbulence length bounded by the layer\'s stratification, agree between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { base } = cloudyState(), C = base.mesh.nCells, K = base.core.K, depth = base.boundaryLayer.depth;
+  const mixingTop = Float64Array.from(depth, (d, i) => Math.fround(i % 3 === 0 ? 0 : d + (i % 3) * 400));
+  const deficit = await physicsHeating(base, {}, 864000, null, mixingTop), report = [];
+  for (const [name, options] of Object.entries({ water: { varianceCover: 'water' }, length: { buoyancyLength: 0.53 }, both: { varianceCover: 'water', buoyancyLength: 0.53 } })) {
+    const run = await physicsHeating(base, options, 864000, null, mixingTop);
+    let engines = 0, scale = 0, moved = 0;
+    for (let i = 0; i < C; i++) {
+      if (!(base.radiation.insolation(i) > 0)) continue;
+      for (let k = 0; k < K - 1; k++) {
+        const x = k * C + i;
+        engines = Math.max(engines, Math.abs(run.cpu[x] - run.gpu[x]));
+        scale = Math.max(scale, Math.abs(run.cpu[x]));
+        moved = Math.max(moved, Math.abs(run.cpu[x] - deficit.cpu[x]));
+      }
+    }
+    report.push(`${name} moves the layer heating by up to ${moved.toFixed(3)} K/day, the engines differ by ${engines.toExponential(1)} against a largest ${scale.toFixed(1)}`);
+    assert.ok(moved > 0, `${name} leaves the heating unmoved`);
+    assert.ok(engines < 5e-5 * scale, `${name}: layer heating differs by ${engines} K/day against ${scale}`);
+  }
+  console.log(report.join('; '));
 });
 
 test('under the moist boundary layer the deck gated by its coupled stratocumulus, with the mixed-layer model or bypassed, matches between the engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {

@@ -13,8 +13,9 @@
 // state arrays are only reported).
 //   --cpu-only   builds only the CPU model (no GPU is imported), steps it, and checks that every
 //                mapped CPU array exists and is not all zero: the dry run of this tool
-//   --out FILE   also writes the report to FILE;  env FLAGS sets Dawn toggles for the GPU adapter and
-//                env OCEAN a JSON object of ocean options for both models
+//   --out FILE   also writes the report to FILE;  env FLAGS sets Dawn toggles for the GPU adapter,
+//                env OCEAN a JSON object of ocean options for both models, env RADIATION one of
+//                radiation options and env MOIST one of moist options
 // Run it with the GPU free (CLAUDE.md): one GPU model at a time.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -89,7 +90,7 @@ async function build(file) {
   const saved = await fs.readState(file), topography = fs.readTopography(), dt = fs.dt(saved.N);
   const mesh = stateGrid(saved, topography).mesh;
   const subgridOf = () => { if (process.env.NO_SUBGRID) return undefined; try { const b = readFileSync(`${REPO}/data/subgrid_N${saved.N}.bin`); return decodeSubgrid(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)); } catch { return undefined; } };
-  const options = { topography, levels: savedLevels(saved), ...withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}'), radiation: { clearSkyPass: true } }, dt, saved.N) };
+  const options = { topography, levels: savedLevels(saved), ...(process.env.MOIST ? { moist: JSON.parse(process.env.MOIST) } : {}), ...withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}'), radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, dt, saved.N) };
   const load = (model) => {
     const { state } = model, C = model.mesh.nCells, K = model.core.K;
     ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => state[a].set(saved[name]));
