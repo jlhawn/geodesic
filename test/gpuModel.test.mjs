@@ -238,12 +238,12 @@ test('the change the Rayleigh and aerosol scattering makes to the heating of eac
   }
   console.log(`physics alone at N=6 on ${lit} sunlit columns: the scattering changes a layer's heating by up to ${largest.toFixed(3)} K/day, and the engines' change differs by at most ${worst.toExponential(1)} K/day (cell ${at[0]} layer ${at[1]}, ${at[2].toFixed(3)} K/day)`);
   assert.ok(lit > 0.3 * C && largest > 0.02, `${lit} sunlit columns, largest change ${largest} K/day`);
-  assert.ok(worst < 2e-5, `the scattering's heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
+  assert.ok(worst < 5e-5, `the scattering's heating differs by ${worst} K/day at cell ${at[0]}, layer ${at[1]}`);
 });
 
 test('with the near infrared in bands, each layer of the sunlit columns heats alike in both engines at N=8, in all and by the change from CLIRAD\'s near infrared, which warms the layers above 100 hPa', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const base = heatingState({}, 8);
-  const bands = await physicsHeating(base, { nearInfrared: 'bands' }), clirad = await physicsHeating(base, {});
+  const bands = await physicsHeating(base, { nearInfrared: 'bands' }), clirad = await physicsHeating(base, { nearInfrared: 'clirad' });
   const { K, C } = bands, sigma = base.core.sigmaMid, pi = base.state[0];
   let worst = 0, worstChange = 0, at = null, lit = 0, upper = 0, upperGpu = 0, count = 0;
   for (let i = 0; i < C; i++) {

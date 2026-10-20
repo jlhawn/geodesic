@@ -1,9 +1,10 @@
 /*
  * One column of the model's own radiation on the bl36 layers over a slab
  * ground: createRadiation(...).column on cell 0 of a 42-cell mesh with the
- * shipped correlated-k and CLIRAD gases (q is always an array, zero when
- * dry, never the gray q = null path), θ stepped by dt·Q/(c_p Δm Π) and the
- * ground by dt·F/C, then a convective adjustment: the model's dry one, or
+ * shipped correlated-k and CLIRAD gases, CLIRAD-SW's near infrared too
+ * (nearInfrared 'clirad'; q is always an array, zero when dry, never the
+ * gray q = null path), θ stepped by dt·Q/(c_p Δm Π) and the ground by
+ * dt·F/C, then a convective adjustment: the model's dry one, or
  * moistParcel.module.js's adjustment to a moist adiabat, which is explainer
  * code, not the model's. Vapor is a fixed q profile or a fixed relative
  * humidity recomputed from T; under moist convection the ground evaporates
@@ -157,6 +158,7 @@ export function makeColumn(options = {}) {
       nitrousOxide: on.nitrousOxide ? GREENHOUSE_GASES.nitrousOxide : 0,
       ozoneProfile: ozone,
       cloudCover: 'overcast',
+      nearInfrared: 'clirad',
       buffers: radiationBuffers(C),
     });
     pi[0] = surfacePressure;

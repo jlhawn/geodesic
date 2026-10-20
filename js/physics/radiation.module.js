@@ -414,10 +414,11 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * 1 − exp(−0.0542 Ω 5/3) (the ozone coefficients of the 0.32-0.7 µm bands
  * weighted by their share), and the near-infrared light the gases'
  * absorption of the path down plus 5/3 of the column's beyond the first.
- * With nearInfrared 'bands' the near infrared's gases (water vapor, O₂,
- * CO₂ and CH₄) absorb in RRTMG_SW's bands by nearInfraredBands, the
- * reflected light climbing back through them at 5/3, and the visible
- * band's vapor takes the strength VISIBLE_VAPOR_BANDS.
+ * With nearInfrared 'bands' (the default) the near infrared's gases (water
+ * vapor, O₂, CO₂ and CH₄) absorb in RRTMG_SW's bands by nearInfraredBands,
+ * the reflected light climbing back through them at 5/3, and the visible
+ * band's vapor takes the strength VISIBLE_VAPOR_BANDS; with 'clirad' they
+ * absorb as in CLIRAD-SW.
  * Without humidity, or with 'lacisHansen', the fraction `ozoneAbsorption`
  * of the incoming beam is absorbed aloft. The ozone column follows Lacis & Hansen (1974)
  * (centred at ozoneHeight with width ozoneWidth, heights from σ with the
@@ -614,7 +615,7 @@ export function createRadiation(mesh, core, {
   cumulusCloud = true, window = 0.25, tauEquator = 5.3, tauPole = 1.325, linearFraction = 0.1, gasFraction = 0.2, gasOpticalDepth = 7,
   ozoneAbsorption = 0.03, ozoneHeight = 25e3, ozoneWidth = 5e3, ozoneOpacity = 4, scaleHeight = 7e3, vaporAbsorption = 1,
   exchangeCoefficient = SEA_DRAG, exchangeCoefficients = null, referenceCoefficients = null, surfaceLayer = false, gustiness = 3, latentHeat = LATENT_HEAT, vaporCoupling = 0.55, skylight = 0, clearSkyPass = false, buffers = null,
-  longwaveScheme = 'correlated', longwaveOverlap = 'exponentialRandom', solarGases = 'clirad', nearInfrared = 'clirad', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
+  longwaveScheme = 'correlated', longwaveOverlap = 'exponentialRandom', solarGases = 'clirad', nearInfrared = 'bands', carbonDioxide = GREENHOUSE_GASES.carbonDioxide, methane = GREENHOUSE_GASES.methane, nitrousOxide = GREENHOUSE_GASES.nitrousOxide, ozone = 'afgl', ozoneColumn = OZONE_COLUMN, ozoneProfile = null, vaporStrength = VAPOR_STRENGTH,
   rayleighBands = RAYLEIGH_BANDS, rayleighDepth = null, nearInfraredRayleigh = NEAR_INFRARED_RAYLEIGH, upwardAbsorption = true, visibleFraction = VISIBLE_FRACTION, landAerosol = LAND_AEROSOL, seaAerosol = SEA_AEROSOL, aerosolAlbedo = 0.95, aerosolAsymmetry = 0.7, aerosolHeight = 2000, land = null, iceSheet = null, longwaveTable = null,
   liquidTemperature = CLOUD_OPTICS.liquidTemperature, iceTemperature = CLOUD_OPTICS.iceTemperature, seaDropletRadius = CLOUD_OPTICS.seaDropletRadius, landDropletRadius = CLOUD_OPTICS.landDropletRadius,
   liquidInfrared = CLOUD_OPTICS.liquidInfrared, diffusivity = CLOUD_OPTICS.diffusivity, iceFitWarmest = CLOUD_OPTICS.iceFitWarmest, iceFitColdest = CLOUD_OPTICS.iceFitColdest, radiationEvery = 1,
