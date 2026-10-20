@@ -1,7 +1,7 @@
 # The trade cumulus's cover
 
 Why the shallow plumes' detrained water brightens the subtropics under
-`cumulusOvershoot` 'kinetic', measured on 2026-10-19 on N=64 fixed-SST
+`cumulusOvershoot` 'kinetic', measured on 2026-10-19 and 20 on N=64 fixed-SST
 arms from `runs/thirteen/thirteen64_day1825.bin` over WOA23's sea surface
 (days 6–20) and the N=128 stress protocol of `equatorial-wind-bias.md`.
 
@@ -310,9 +310,164 @@ the water up toward the inversion:
 - an ascent that w² carries through a non-buoyant layer, as the w equation
   itself does.
 
-None is tried in the model here. How large the source excess should be is open:
-the IFS test parcel's excess (Cy43r1 eq. 6.19) gives about 0.15 g/kg on
-BOMEX's fluxes, while the LES adiabat holds 0.6.
+The next section tries them in the model. How large the source excess
+should be is open: the IFS test parcel's excess (Cy43r1 eq. 6.19) gives
+about 0.15 g/kg on BOMEX's fluxes, while the LES adiabat holds 0.6.
+
+## The plume's buoyancy
+
+Two options, on both engines and off by default (the defaults' fields are
+bitwise unchanged):
+
+- `cumulusEntrainmentHeight` c: above the LCL the shallow plume entrains
+  at ε = c/z, z the layer midpoint's height above the surface, in place of
+  `cumulusEntrainment`. Siebesma et al. (2003, section 6) find the LES's
+  entrainment rate about 2·10⁻³/m near cloud base and falling with height,
+  and with a fit ε ≈ 1/z their plume model reproduces the cores' q_t and
+  θ_l. The plume detrains at ε + `cumulusDetrainment` −
+  `cumulusEntrainment`, so its mass flux falls with height as it does with
+  the constant rates. Siebesma et al. diagnose δ as the residual that the
+  core mass flux's decrease requires, so the option changes the dilution
+  alone.
+- `cumulusAscent` 'kinetic' (with `cumulusOvershoot` 'kinetic'): the plume
+  crosses a cloudy layer where it is not buoyant when its w² carries it
+  through the whole layer (share 1). It ends in the first layer where w²
+  does not, and detrains there by the share. This is the w equation's
+  cloud top, "the height where the vertical velocity vanishes" (Siebesma
+  et al. 2003), at the resolution of the layers.
+- The updraft's air as the source is the existing `cumulusSource`
+  'lowest', the lowest layer's air in place of the source layers' mean.
+
+### On BOMEX's profile, in the model
+
+`test/convection.test.mjs` places Table B1's profile over 1015 hPa. The
+boundary layer is 500 m deep, the surface buoyancy flux 5.7·10⁻⁴ m²/s³
+(BOMEX's 8·10⁻³ K m/s and 5.2·10⁻⁵ m/s) and u* 0.28 m/s. The test runs
+`cumulusColumn` once and takes the top layer's base plus the share of its
+depth (km):
+
+| plume | bl34 | bl36 | bl42 |
+|---|---|---|---|
+| defaults | 0.92 | 0.92 | 0.92 |
+| `cumulusAscent` 'kinetic' | 0.93 | 0.93 | 0.93 |
+| `cumulusEntrainmentHeight` 1 | 1.80 | 1.80 | 1.69 |
+| both | 1.80 | 1.80 | 1.69 |
+| both, `cumulusSource` 'lowest' | 1.84 | 1.84 | 1.80 |
+| LES | | core top 1.75–1.8, cloud top about 2.0 | |
+
+The entrainment profile alone carries the plume to the LES's core top.
+On these levels a plume entraining at 1/z is buoyant in its first cloudy
+layer, so the carried ascent adds nothing on BOMEX. The test holds the
+defaults below 1.1 km and the three 1/z plumes within 1.6–2.1 km.
+
+### In the trade boxes
+
+`plumeReach.mjs` follows both options. Under each set it agrees with the
+model's top and share in every plume column (7,911–8,677 per state).
+Median implied tops (km) on the defaults' day-1845 state, after one step:
+
+| plume | N Pacific trades | S Pacific trades | Atlantic trades | SE Pacific | sea 20–40S | sea 20–40N |
+|---|---|---|---|---|---|---|
+| defaults | 1.31 | 1.32 | 1.52 | 1.51 | 1.45 | 1.45 |
+| 'kinetic' ascent | 1.31 | 1.32 | 1.52 | 1.51 | 1.47 | 1.46 |
+| 1/z | 1.48 | 1.52 | 1.57 | 1.75 | 1.62 | 1.53 |
+| both | 1.48 | 1.71 | 1.57 | 1.83 | 1.68 | 1.57 |
+| both, 'lowest' | 1.68 | 1.99 | 1.61 | 2.02 | 1.84 | 1.71 |
+
+With 1/z the share of plumes that are not buoyant in their first cloudy
+layer falls from 0.12–0.51 to 0.13–0.39 (0.01–0.31 with 'lowest'). In the
+trades the carried ascent adds up to 0.19 km, where the 1/z plume meets a
+non-buoyant layer it can cross. In each arm's own day-1845 state (the
+arms below), the 1/z plume with the carried ascent tops at 1.69, 1.60,
+1.26, 1.74, 1.54 and 1.57 km, against the defaults' 1.31–1.52.
+
+### Arms at N=64
+
+The protocol of the arms above. "1/z + ascent" is the two options
+together, "both" the variance pair:
+
+| arm | ASR | OLR | SWCRE | LWCRE | clear-sky OLR | net | rain mm/d |
+|---|---|---|---|---|---|---|---|
+| defaults (kinetic) | 229.7 | 226.1 | −60.5 | +33.7 | 259.8 | +3.6 | 3.12 |
+| both | 234.2 | 227.4 | −55.9 | +32.5 | 260.0 | +6.8 | 3.02 |
+| **1/z + ascent** | 234.3 | 226.6 | **−55.9** | +33.1 | 259.8 | +7.7 | 3.10 |
+| 1/z + ascent, 'lowest' | 232.3 | 227.2 | −57.9 | +33.0 | 260.2 | +5.1 | 3.15 |
+| 1/z + ascent, both | 237.4 | 226.9 | −52.9 | +32.9 | 259.9 | +10.5 | 3.03 |
+| 1/z + ascent, 'lowest', both | 235.3 | 227.9 | −54.9 | +32.5 | 260.4 | +7.4 | 3.13 |
+
+| arm | N Pacific trades | S Pacific trades | Atlantic trades | SE Pacific | sea 20–40S | sea 20–40N |
+|---|---|---|---|---|---|---|
+| defaults | 0.515 | 0.522 | 0.513 | 0.583 | 0.549 | 0.527 |
+| both | 0.424 | 0.317 | 0.441 | 0.472 | 0.448 | 0.463 |
+| 1/z + ascent | 0.466 | 0.498 | 0.295 | 0.350 | 0.406 | 0.403 |
+| 1/z + ascent, 'lowest' | 0.493 | 0.498 | 0.299 | 0.326 | 0.411 | 0.380 |
+| 1/z + ascent, both | 0.400 | 0.351 | 0.232 | 0.291 | 0.347 | 0.354 |
+| 1/z + ascent, 'lowest', both | 0.489 | 0.454 | 0.262 | 0.189 | 0.353 | 0.373 |
+| Earth | 0.2–0.4 | 0.2–0.4 | 0.2–0.4 | 0.6–0.8 | | |
+
+The buoyant plume removes 4.6 of the kinetic share's 5.8 W/m², as much as
+the variance pair, with LWCRE 0.6 W/m² lower. With the pair it removes 7.6,
+1.8 more than share 1. The lowest-layer source puts back 2.0 W/m²
+(−57.9) and raises BOMEX's top by only 0.04–0.11 km, so it is not taken.
+Low cover falls in the Atlantic trades to 0.30 (0.23 with the pair) and
+in the subtropical bands to 0.40–0.41 (0.35). The Pacific trade boxes
+move less: 0.47 and 0.50, or 0.40 and 0.35 with the pair. The cost is the
+SE Pacific box, from 0.58 to 0.35 (0.29 with the pair) against Klein and
+Hartmann's 0.6–0.8 for the deck's core (their Peruvian region, 10–20S
+80–90W). There the layers from 0.4 to 1.6 km lose most of their cover
+(0.06–0.35 per layer to 0.00–0.16 over the three days) under plumes that
+top higher (1.74 km against 1.51 in each arm's own day-1845 state). The
+deck's gate is open on few of the box's columns, so the defaults' 0.58
+there was itself resolved cumulus layers covered at about one half
+(finding 2).
+
+### The trade stress at N=128
+
+The protocol above, with the 1/z plume and the carried ascent alone and
+with the pair:
+
+| τ_x, mN/m² | 140E–160E | 160E–180 | 180–160W | 160W–140W | 140W–120W | 120W–100W | 100W–80W |
+|---|---|---|---|---|---|---|---|
+| observed, about | −15 | −20 | −40 | −50 | −55 | −50 | −30 |
+| defaults | −7.3 | −45.0 | −116.2 | −142.7 | −100.2 | −63.1 | −15.9 |
+| both | −9.0 | −30.4 | −85.5 | −99.7 | −81.4 | −57.7 | −18.0 |
+| 1/z + ascent | −10.2 | −32.6 | −110.5 | −132.4 | −99.8 | −74.0 | −21.4 |
+| 1/z + ascent, both | −17.8 | −20.5 | −94.5 | −116.4 | −87.9 | −67.8 | −20.5 |
+
+The buoyant plume leaves the mean of the three central bins where the
+defaults have it, −102.1 against −102.0. It weakens 180–140W by 5–7
+percent and strengthens 120W–100W by 17 percent. With the pair it gives
+back half of the pair's gain: −90.7 against −79.6. The sea-level pressure
+of 180–160W less 120W–100W's goes from −5.34 to −4.88 hPa (−4.44 with the
+pair, against the pair's −3.85). Like the pair, the buoyant plume warms
+the 120W–100W column by 0.7–0.9 K at 2.8–4 km, and the layers of 2–5 km
+give back 0.77 hPa of the gradient (the pair 0.99). But that column stays
+moist there (relative humidity 0.33–0.50, the pair's 0.20–0.39, the
+defaults' 0.45–0.49), the layers below 2 km give nothing back (the pair
+0.41), and those of 5–12 km take 0.44 hPa more (the pair gives back
+0.33). Each arm is one realization, so how much of the 5–12 km part is
+noise is not measured. Over 180–160W the cumulus layer's top is 1.78 km
+(defaults 1.91, the pair 1.69).
+
+Day means, days 6–20:
+
+| arm | ASR | OLR | SWCRE | LWCRE | clear-sky OLR | net | rain mm/d |
+|---|---|---|---|---|---|---|---|
+| defaults | 235.8 | 239.1 | −60.3 | +29.0 | 268.1 | −3.3 | 3.08 |
+| both | 239.6 | 239.6 | −56.4 | +28.5 | 268.1 | 0.0 | 3.01 |
+| 1/z + ascent | 240.4 | 239.6 | −55.7 | +28.3 | 267.9 | +0.8 | 3.06 |
+| 1/z + ascent, both | 243.4 | 240.1 | −52.6 | +28.2 | 268.3 | +3.3 | 3.00 |
+
+### What the arms say
+
+Entraining at 1/z, the model's shallow plume is BOMEX's plume: it tops
+where the LES's cores do. In the arms it removes the kinetic share's
+brightening as fully as the variance pair does, 4.6 W/m² at N=64 and at
+N=128, by thinning the cloudy layers below the inversion. On its own it
+is not the trade cumulus's fix. The trade stress does not move, with the
+pair it gives back half of the pair's gain, and the SE Pacific box loses
+cover it should keep. The variance pair remains the change that both the
+cover and the stress support. Neither is made a default here.
 
 ## Tests
 
@@ -327,6 +482,18 @@ BOMEX's fluxes, while the LES adiabat holds 0.6.
   off: 37 of 37. `test/gpuModel.test.mjs` 32 of 32 and
   `test/boundaryLayer.test.mjs` 16 of 16, with no command-buffer aborts
   during the arms or the tests.
+- `test/convection.test.mjs` for the buoyant plume. The engine parity test
+  also runs the carried ascent with ε = 1/z, and the carried ascent from
+  the lowest layer with rain. Under them 169 and 138 of 362 random columns
+  convect shallow (112 under the defaults). The engines agree to 1.7·10⁻⁴
+  K and in every plume's top. A refusal test covers both options, and
+  BOMEX's test is the one above. With the kinetic share's test, 6 of 6.
+- The moist, plume and pinned CPU files (physics, moist, moistConvective,
+  moistParcel, plumeColumn, plumePath, column, radiativeConvective,
+  cloudEffects, cloudHeights, defaultRun): 115 of 115, the pinned digests
+  holding with both options off. After the kernel change,
+  `test/gpuModel.test.mjs` 32 of 32 and `test/boundaryLayer.test.mjs` 16 of
+  16, with no command-buffer aborts.
 
 ## What remains
 
@@ -336,9 +503,11 @@ BOMEX's fluxes, while the LES adiabat holds 0.6.
 - The regime covers at N=128 (measured here at N=64 only), and the path
   by which the pair warms the 120W–100W column at 2–4 km.
 - A coupled arm: the stress and the cover both act on the ocean.
-- The shallow plume's buoyancy (its entrainment profile, its source and
-  its ascent through the transition layer), on both engines, judged on
-  BOMEX's profile and in arms.
+- The buoyant plume's 17 percent stronger stress at 120W–100W, its moist
+  east column at 2.8–4 km and its SE Pacific cover; whether the 5–12 km
+  part of its pressure gradient is beyond the protocol's noise.
+- A CPU/GPU field comparison at the page's configuration with the options
+  of either change on.
 - With `cloudColumns` and `cloudSpread` (`toa-radiation-bias.md`) the pair
   is the shortwave's remaining cloud-amount change; the net balance needs
   the clear-sky column first.

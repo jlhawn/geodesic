@@ -14,9 +14,13 @@
 // 2 a B − 2 b ε w² from w0 at the first cloudy layer, the speed at z_b,
 // the overshoot share, and the implied top z_b + share × depth less the
 // inversion's height; the same ascent with ε = 1/z; and the median speed
-// by height. For BOMEX: the speed every 100 m and the top where w² reaches
-// zero for each equation on 20 m layers, and the share and implied top on
-// the state's levels.
+// by height; and the model's own plume: its implied top (the top layer's
+// base + share × depth), that less the inversion, and its share. The check
+// and the first set follow MOIST's cumulusEntrainmentHeight and
+// cumulusAscent; the other sets and z_b assume the buoyant ascent. For
+// BOMEX: the speed every 100 m and the top where w² reaches zero for each
+// equation on 20 m layers, and the share and implied top on the state's
+// levels.
 import { readFileSync } from 'node:fs';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { createModel, STATE_NAMES } from '../js/model.module.js';
@@ -51,6 +55,7 @@ model.step(dt);
 
 const M = { ...MOIST_DEFAULTS, ...MOIST }, Lv = M.latentHeat;
 const virtual = M.virtualBuoyancy ? VIRTUAL_FACTOR : 0, loading = M.virtualBuoyancy ? 1 : 0;
+const entrainmentRate = M.cumulusEntrainmentHeight != null ? (z) => M.cumulusEntrainmentHeight / Math.max(z, 1) : () => M.cumulusEntrainment, carried = M.cumulusAscent === 'kinetic';
 const [pi, theta, , , q, qc, ice] = state;
 
 const kinetic = (w2, work, depth, mixing, a) => { const x = 2 * mixing * depth; return w2 * Math.exp(-x) + 2 * a * work * (x > 0 ? -Math.expm1(-x) / x : 1); };
@@ -64,7 +69,7 @@ function overshoot(w2, work, depth, mixing, a) {
 
 // col: arrays over layers k = 0 (top) … n − 1 (bottom): T, p, dp, z (midpoint heights), S, Q, air, cloud,
 // upper (height of layer k's upper interface), lowerP (pressure of its lower interface); entrainment(z) per meter.
-function ascend(col, source, sourceS, sourceQ, lcl, entrainment, through = false) {
+function ascend(col, source, sourceS, sourceQ, lcl, entrainment, through = false, carry = false) {
   const n = col.T.length, layers = [];
   let s = sourceS, w = sourceQ, cloudy = false, guess = 0, top = -1, capped = false, base = NaN;
   for (let k = source - 1; k >= 0; k--) {
@@ -78,7 +83,7 @@ function ascend(col, source, sourceS, sourceQ, lcl, entrainment, through = false
     const work = R * (plume.T * (1 + virtual * (midQ - plume.liquid) - loading * plume.liquid) - col.T[k] * (1 + virtual * col.air[k] - loading * col.cloud[k])) * col.dp[k] / col.p[k];
     if (plume.liquid > 0 && !cloudy) { cloudy = true; base = below; }
     if (cloudy) layers.push({ k, work, depth: above - below, epsilon, below, above, deficit: work / (above - below) * col.T[k] / g });
-    if (cloudy && !(work > 0) && !through) { top = k; break; }
+    if (cloudy && !(work > 0) && !through && !carry) { top = k; break; }
     const full = Math.exp(-epsilon * (above - below));
     s = col.S[k] + (s - col.S[k]) * full; w = col.Q[k] + (w - col.Q[k]) * full;
   }
@@ -92,7 +97,7 @@ function reach(layers, w0, a, b, through = false) {
   for (const L of layers) {
     if (!(L.work > 0)) {
       const share = overshoot(w2, L.work, L.depth, b * L.epsilon, a);
-      if (!through || share < 1) return { atTop: Math.sqrt(w2), share, top: L.below + share * L.depth, speeds };
+      if (!through || share < 1) return { atTop: Math.sqrt(w2), share, top: L.below + share * L.depth, speeds, k: L.k };
     }
     w2 = kinetic(w2, L.work, L.depth, b * L.epsilon, a);
     if (!(w2 > 0)) return { atTop: 0, share: 0, top: L.above, speeds };
@@ -145,7 +150,7 @@ const BOXES = [
 ];
 let checked = 0, mismatched = 0, worst = 0;
 for (const [name, [south, north, west, east]] of BOXES) {
-  const rows = { n: 0, cells: 0, capped: 0, forced: 0, buoyant: [], base: [], lcl: [], star: [], zb: [], depth: [], deficit: [], inversion: [], gradient: [], wmax: [], topz: [], sets: SETS.map(() => ({ atTop: [], share: [], over: [] })), alt: { n: 0, forced: 0, capped: 0, share: [], over: [], top: [] }, profile: new Map() };
+  const rows = { n: 0, cells: 0, capped: 0, forced: 0, buoyant: [], base: [], lcl: [], star: [], zb: [], depth: [], deficit: [], inversion: [], gradient: [], wmax: [], topz: [], sets: SETS.map(() => ({ atTop: [], share: [], over: [] })), model: { top: [], over: [], share: [] }, alt: { n: 0, forced: 0, capped: 0, share: [], over: [], top: [] }, profile: new Map() };
   for (let i = 0; i < C; i++) {
     const lat = mesh.latCell[i] * deg, lon = mesh.lonCell[i] * deg;
     if (landMask[i] || ice[i] > 0 || lat < south || lat > north || !inLongitudes(lon, west, east)) continue;
@@ -164,17 +169,21 @@ for (const [name, [south, north, west, east]] of BOXES) {
     }
     const sourceS = M.cumulusSource === 'lowest' ? col.S[bottom] : energy / mass, sourceQ = M.cumulusSource === 'lowest' ? col.Q[bottom] : water / mass;
     const lcl = liftingCondensationLevel((sourceS - g * col.z[bottom]) / cp, sourceQ, col.p[bottom], kappa);
-    const run = ascend(col, source, sourceS, sourceQ, lcl, () => M.cumulusEntrainment);
-    const mine = reach(run.layers, M.plumeVelocity, M.plumeAcceleration, M.plumeDrag);
+    const run = ascend(col, source, sourceS, sourceQ, lcl, entrainmentRate, false, carried);
+    const mine = reach(run.layers, M.plumeVelocity, M.plumeAcceleration, M.plumeDrag, carried);
     checked++;
-    const miss = run.top !== topModel ? 1 : Math.abs((run.capped ? 1 : mine.share) - shareModel);
+    const stopped = carried && mine.k !== undefined, myTop = stopped ? mine.k : run.top, myShare = carried ? (stopped ? mine.share : 1) : (run.capped ? 1 : mine.share);
+    const miss = myTop !== topModel ? 1 : Math.abs(myShare - shareModel);
     if (miss > 1e-9) mismatched++;
     worst = Math.max(worst, miss);
     rows.n++;
-    if (run.capped) { rows.capped++; continue; }
+    const modelTop = col.upper[topModel + 1] + shareModel * (col.upper[topModel] - col.upper[topModel + 1]) - col.surface;
+    rows.model.top.push(modelTop); rows.model.share.push(shareModel);
+    if (run.capped && !stopped) { rows.capped++; continue; }
     const star = Math.cbrt(Math.max(0, bl.buoyancyFlux[i]) * Math.max(0, depth - col.z[bottom]));
-    const zLcl = lclHeight(col, lcl.pressure), last = run.layers[run.layers.length - 1];
-    const buoyant = run.layers.filter((L) => L.work > 0).length; if (!buoyant) rows.forced++; rows.buoyant.push(buoyant); rows.base.push(run.base - col.surface);
+    const first = run.layers.findIndex((L) => !(L.work > 0)), buoyant = first < 0 ? run.layers.length : first;
+    const zLcl = lclHeight(col, lcl.pressure), last = run.layers[first < 0 ? run.layers.length - 1 : first];
+    if (!buoyant) rows.forced++; rows.buoyant.push(buoyant); rows.base.push(run.base - col.surface);
     rows.lcl.push(zLcl); rows.star.push(star); rows.zb.push(last.below - col.surface); rows.depth.push(last.depth); rows.deficit.push(last.deficit);
     let best = -Infinity, at = NaN;
     for (let k = K - 2; k >= 0; k--) {
@@ -183,7 +192,7 @@ for (const [name, [south, north, west, east]] of BOXES) {
       const gradient = (col.level[k] - col.level[k + 1]) / (col.z[k] - col.z[k + 1]);
       if (gradient > best) { best = gradient; at = col.upper[k + 1] - col.surface; }
     }
-    rows.inversion.push(at); rows.gradient.push(1e3 * best);
+    rows.inversion.push(at); rows.gradient.push(1e3 * best); rows.model.over.push(modelTop - at);
     SETS.forEach(([, set], n) => {
       const { w0, a, b } = coefficients(set, star), r = reach(run.layers, w0, a, b);
       rows.sets[n].atTop.push(r.atTop); rows.sets[n].share.push(r.share); rows.sets[n].over.push(r.top - col.surface - at);
@@ -205,6 +214,7 @@ for (const [name, [south, north, west, east]] of BOXES) {
   console.log(`  strongest θ_l interface above the LCL ${show(rows.inversion)} m at ${show(rows.gradient, 1)} K/km; model's largest speed ${show(rows.wmax, 2)} m/s`);
   SETS.forEach(([label], n) => console.log(`  ${label}: w at z_b ${show(rows.sets[n].atTop, 2)} m/s, share ${show(rows.sets[n].share, 2)}, implied top less inversion ${show(rows.sets[n].over)} m${n === 0 ? `, implied top ${show(rows.topz)} m` : ''}`));
   console.log(`  the ascent with ε = 1/z (Siebesma et al. 2003), the model's w equation: ${rows.alt.forced} of ${rows.alt.n} with no buoyant cloudy layer, ${rows.alt.capped} capped at shallowTop; share ${show(rows.alt.share, 2)}, implied top ${show(rows.alt.top)} m, less inversion ${show(rows.alt.over)} m`);
+  console.log(`  the model's plume: implied top ${show(rows.model.top)} m, less inversion ${show(rows.model.over)} m, share ${show(rows.model.share, 2)}`);
   console.log(`  model's speed by height (m: median m/s, columns): ${[...rows.profile.keys()].sort((x, y) => x - y).filter((z) => z <= 3000).map((z) => `${z}: ${quart(rows.profile.get(z))[1].toFixed(2)} (${rows.profile.get(z).length})`).join(', ')}`);
 }
 console.log(`\nascent check: ${checked} columns, ${mismatched} differ from cumulusColumn's top or share (largest ${worst.toExponential(1)})`);

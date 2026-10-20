@@ -107,6 +107,9 @@ export function physicsConstants(o) {
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
   for (const retired of RETIRED_OPTIONS) if (retired in o) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
   if (o.cumulusSource !== 'mean' && o.cumulusSource !== 'lowest') throw new Error(`cumulusSource must be 'mean' or 'lowest', not ${o.cumulusSource}`);
+  if (o.cumulusAscent !== 'buoyant' && o.cumulusAscent !== 'kinetic') throw new Error(`cumulusAscent must be 'buoyant' or 'kinetic', not ${o.cumulusAscent}`);
+  if (o.cumulusAscent === 'kinetic' && o.cumulusOvershoot !== 'kinetic') throw new Error(`cumulusAscent 'kinetic' needs cumulusOvershoot 'kinetic', whose w² carries the plume`);
+  if (o.cumulusEntrainmentHeight != null && !(Number.isFinite(o.cumulusEntrainmentHeight) && o.cumulusEntrainmentHeight > 0)) throw new Error(`cumulusEntrainmentHeight must be null or a factor above 0, not ${o.cumulusEntrainmentHeight}`);
   if (o.plumeClosure !== 'maximum' && o.plumeClosure !== 'separate' && o.plumeClosure !== 'cape') throw new Error(`plumeClosure must be 'maximum', 'separate' or 'cape', not ${o.plumeClosure}`);
   if (o.plumeCapeParcel !== 'plume' && o.plumeCapeParcel !== 'undilute') throw new Error(`plumeCapeParcel must be 'plume' or 'undilute', not ${o.plumeCapeParcel}`);
   if (o.plumeSource !== 'mean' && o.plumeSource !== 'lowest') throw new Error(`plumeSource must be 'mean' or 'lowest', not ${o.plumeSource}`);
@@ -185,6 +188,7 @@ const DECK_VETO: bool = ${o.deckVeto !== false}; const COUPLED_VETO: bool = ${!!
 const DECK_OPEN: f32 = ${DECK_OPEN}; const DECK_CLOSED: f32 = ${DECK_CLOSED}; const PARCEL_VIRT: f32 = ${o.virtualBuoyancy === false ? 0 : 'VIRT'};
 const CU_FLOOR: f32 = ${CUMULUS_FLOOR}; const CU_K0: i32 = ${o.cumulusK0 ?? 0}; const CU_C: f32 = ${o.cumulusClosure}; const CU_EPS: f32 = ${o.cumulusEntrainment}; const CU_DEL: f32 = ${o.cumulusDetrainment}; const CU_SOURCE: f32 = ${o.cumulusSourceDepth}; const CU_LOSS: f32 = ${o.cumulusBoundaryLoss};
 const CU_FRIC: f32 = ${o.cumulusFriction}; const CU_OVER: f32 = ${o.cumulusOvershoot === 'kinetic' ? 1 : o.cumulusOvershoot}; const CU_KINETIC: bool = ${o.cumulusOvershoot === 'kinetic'}; const CU_WU: f32 = ${o.cumulusUpdraft}; const CU_RAIN: bool = ${o.cumulusRain != null}; const CU_RAIN_Q: f32 = ${o.cumulusRain ?? 0}; const CU_LOWEST: bool = ${o.cumulusSource === 'lowest'};
+const CU_CARRY: bool = ${o.cumulusAscent === 'kinetic'}; const CU_BY_Z: bool = ${o.cumulusEntrainmentHeight != null}; const CU_EPS_Z: f32 = ${o.cumulusEntrainmentHeight ?? 0};
 const CU_LOADING: f32 = ${o.virtualBuoyancy === false ? 0 : 1}; const CU_CLOUD: bool = ${o.cumulusCloud !== false && o.cloudCover === 'pdf'}; const CU_MEMORY: f32 = ${o.cumulusMemory}; const CU_TRACE: f32 = ${CUMULUS_TRACE};
 const PL_SEPARATE: bool = ${o.plumeClosure === 'separate' && o.convectionType === 'top'}; const PL_BY_DEPTH: bool = ${o.convectionType === 'cloudDepth'}; const PL_PARCEL: bool = ${o.convectionType === 'testParcel'}; const PL_MIXED: bool = ${o.plumePhase === 'mixed'}; const PL_SUNDQVIST: bool = ${o.plumeConversion === 'sundqvist'}; const SQ_C00: f32 = ${IFS_PRECIPITATION.conversion}; const SQ_LIQ: f32 = ${IFS_PRECIPITATION.liquidFactor}; const SQ_CRIT: f32 = ${IFS_PRECIPITATION.critical}; const SQ_SEA: f32 = ${IFS_PRECIPITATION.seaThreshold}; const SQ_LAND: f32 = ${IFS_PRECIPITATION.landThreshold}; const SQ_BF: f32 = ${IFS_PRECIPITATION.bergeron}; const SQ_ICE: f32 = ${IFS_PRECIPITATION.ice}; const SQ_SPEED: f32 = ${IFS_PRECIPITATION.speed}; const SQ_VSCALE: f32 = ${IFS_PRECIPITATION.velocityScale}; const TP_EPS: f32 = ${TEST_PARCEL.entrainment}; const TP_REMOVE: f32 = ${TEST_PARCEL.removal}; const PL_IFS: bool = ${o.plumeEntrainmentLaw === 'ifs'}; const IFS_EPS: f32 = ${IFS_ENTRAINMENT.entrainment}; const IFS_RH: f32 = ${IFS_ENTRAINMENT.humidity}; const IFS_DEL: f32 = ${IFS_ENTRAINMENT.detrainment}; const IFS_DRH: f32 = ${IFS_ENTRAINMENT.detrainmentHumidity}; const IFS_DRAG: f32 = ${IFS_ENTRAINMENT.drag}; const DEEP_DEPTH: f32 = ${DEEP_CLOUD_DEPTH}; const PL_RELAXED: bool = ${o.plumeClosure !== 'maximum'}; const PL_LOWEST: bool = ${o.plumeSource === 'lowest'}; const PL_UNDILUTE: bool = ${o.plumeCapeParcel === 'undilute'}; const PL_W0: f32 = ${o.plumeVelocity}; const PL_ACC: f32 = ${o.plumeAcceleration}; const PL_DRAG: f32 = ${o.plumeDrag}; const PL_EPS: f32 = ${o.plumeEntrainment}; const PL_FLOOR: f32 = ${o.plumeEntrainmentFloor}; const PL_GROWTH: f32 = ${o.plumeMassGrowth};
 const PL_MOMENTUM: bool = ${!!o.plumeMomentum}; const PL_BUOYANT_F: bool = ${o.plumeConsumption === 'buoyant'}; const PL_RAIN_RATE: f32 = ${o.plumeRainRate}; const PL_RAIN_Q: f32 = ${o.plumeRainThreshold}; const PL_EVAP: f32 = ${o.plumeRainEvaporation}; const DD_SHARE: f32 = ${o.downdraftShare}; const DD_EPS: f32 = ${o.downdraftEntrainment}; const PL_CAPE: f32 = ${o.plumeCape}; const PL_TAU: f32 = ${o.plumeRelaxation}; const DEEP_REFERENCE: f32 = ${DEEP_REFERENCE};
@@ -1676,13 +1680,15 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
   if (!(lcl.y > SHALLOW_TOP)) { return 0.0; }
   var plumeS: array<f32, K + 1>; var plumeQ: array<f32, K + 1>; var liquid: array<f32, K>; var flux: array<f32, K + 1>; var fallout: array<f32, K>; var frozenOut: array<f32, K>;
   var s = sourceS; var w = sourceQ; var inhibition = 0.0; var cloudy = false; var top = -1; var guess = 0.0; var w2 = PL_W0 * PL_W0; var share = 1.0;
+  let b = bottom * C + i; let ground = (D[D_GEO + b] + LV[L_GABS + bottom] - CP * D[D_THV + b] * (D[D_EXL + b] - D[D_EXM + b])) / GRAV;
   plumeS[source] = s; plumeQ[source] = w;
   for (var k = source - 1; k >= 0; k--) {
     let pk = layerP(pi, k);
     if (!(pk > SHALLOW_TOP)) { if (cloudy) { top = k + 1; } break; }
     let below = upperInterface(i, k + 1); let above = upperInterface(i, k);
-    let mixes = pi * LV[L_SL + k] <= lcl.y; let epsilon = select(0.0, CU_EPS, mixes);
+    let mixes = pi * LV[L_SL + k] <= lcl.y;
     let zk = plumeZ(i, k); let env = plumeEnv(i, k);
+    let epsilon = select(0.0, select(CU_EPS, CU_EPS_Z / max(zk - ground, 1.0), CU_BY_Z), mixes);
     let half = exp(-epsilon * (zk - below));
     let midS = env.x + (s - env.x) * half; let midQ = env.y + (w - env.y) * half;
     let mid = plumeState(midS, midQ, zk, pk, guess);
@@ -1691,22 +1697,24 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
     let work = RGAS * (mid.x * (1.0 + PARCEL_VIRT * (midQ - mid.y) - CU_LOADING * mid.y) - plumeT(i, k) * (1.0 + PARCEL_VIRT * air - CU_LOADING * cloud)) * layerDp(pi, k) / pk;
     if (mid.y > 0.0) { cloudy = true; }
     if (!cloudy) { if (work < 0.0) { inhibition -= work; } }
-    else if (!(work > 0.0)) {
-      top = k;
-      if (CU_KINETIC) {
-        if (!(work < 0.0)) { share = 1.0; }
-        else if (!(w2 > 0.0)) { share = 0.0; }
-        else {
-          let depth = above - below; let mixing = PL_DRAG * epsilon;
-          let lift = -PL_ACC * work / depth; let y = mixing * w2 / lift;
-          let reach = select(w2 / (2.0 * lift), select(y * (1.0 - 0.5 * y), log(1.0 + y), y > 1e-3) / (2.0 * mixing), mixing > 0.0);
-          share = min(1.0, reach / depth);
+    else {
+      if (!(work > 0.0)) {
+        if (CU_KINETIC) {
+          if (!(work < 0.0)) { share = 1.0; }
+          else if (!(w2 > 0.0)) { share = 0.0; }
+          else {
+            let depth = above - below; let mixing = PL_DRAG * epsilon;
+            let lift = -PL_ACC * work / depth; let y = mixing * w2 / lift;
+            let reach = select(w2 / (2.0 * lift), select(y * (1.0 - 0.5 * y), log(1.0 + y), y > 1e-3) / (2.0 * mixing), mixing > 0.0);
+            share = min(1.0, reach / depth);
+          }
         }
+        if (!(CU_CARRY && share >= 1.0)) { top = k; break; }
       }
-      break;
-    } else if (CU_KINETIC) {
-      let x = 2.0 * PL_DRAG * epsilon * (above - below);
-      w2 = w2 * exp(-x) + 2.0 * PL_ACC * work * select(1.0, relaxedFraction(x) / x, x > 0.0);
+      if (CU_KINETIC) {
+        let x = 2.0 * PL_DRAG * epsilon * (above - below);
+        w2 = w2 * exp(-x) + 2.0 * PL_ACC * work * select(1.0, relaxedFraction(x) / x, x > 0.0);
+      }
     }
     let full = exp(-epsilon * (above - below));
     s = env.x + (s - env.x) * full; w = env.y + (w - env.y) * full;
@@ -1723,7 +1731,7 @@ fn cumulusColumn(i: i32, pi: f32, dt: f32) -> f32 {
       }
     }
     plumeS[k] = s; plumeQ[k] = w;
-    flux[k] = exp((epsilon - select(0.0, CU_DEL, mixes)) * (above - below));
+    flux[k] = exp(select(0.0, CU_EPS - CU_DEL, mixes) * (above - below));
   }
   if (top < 0) { return 0.0; }
   flux[top] = 0.0; plumeS[top] = 0.0; plumeQ[top] = 0.0;
