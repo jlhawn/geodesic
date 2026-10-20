@@ -1,6 +1,7 @@
 import { LONGWAVE_SPECTRAL_MODEL, LONGWAVE_POINTS } from './longwaveTable.module.js';
 import { LONGWAVE_SPECTRAL_MODEL as BL36_SPECTRAL_MODEL, LONGWAVE_POINTS as BL36_POINTS } from './longwaveTableBl36.module.js';
 import { LONGWAVE_SPECTRAL_MODEL as BL36_VOIGT_SPECTRAL_MODEL, LONGWAVE_POINTS as BL36_VOIGT_POINTS } from './longwaveTableBl36Voigt.module.js';
+import { LONGWAVE_SPECTRAL_MODEL as BL36_BY_GAS_SPECTRAL_MODEL, LONGWAVE_POINTS as BL36_BY_GAS_POINTS } from './longwaveTableBl36ByGas.module.js';
 import { sigmaGridName } from '../dynamics/sigmaCore.module.js';
 
 /*
@@ -49,17 +50,20 @@ export function normalizedPoints(points) {
 export const LONGWAVE_TABLE = { ...LONGWAVE_SPECTRAL_MODEL, points: normalizedPoints(LONGWAVE_POINTS) };
 const BL36_TABLE = { ...BL36_SPECTRAL_MODEL, points: normalizedPoints(BL36_POINTS) };
 const BL36_VOIGT_TABLE = { ...BL36_VOIGT_SPECTRAL_MODEL, points: normalizedPoints(BL36_VOIGT_POINTS) };
-export const LONGWAVE_TABLE_FILES = { bl34: 'longwaveTable.module.js', bl36: 'longwaveTableBl36.module.js', bl36Voigt: 'longwaveTableBl36Voigt.module.js' };
+const BL36_BY_GAS_TABLE = { ...BL36_BY_GAS_SPECTRAL_MODEL, points: normalizedPoints(BL36_BY_GAS_POINTS) };
+export const LONGWAVE_TABLE_FILES = { bl34: 'longwaveTable.module.js', bl36: 'longwaveTableBl36.module.js', bl36Voigt: 'longwaveTableBl36Voigt.module.js', bl36ByGas: 'longwaveTableBl36ByGas.module.js' };
 
 /*
  * The table fitted on a grid's own columns: bl36's for bl36 and for bl42,
  * which shares its top layers, the one fitted on bl34 for every other grid.
  * With lines 'voigt', the table with Doppler cores fitted on bl36's columns,
- * on every grid.
+ * on every grid; with 'scaledByGas', bl36's scaled lines refitted against
+ * each gas's RRTMG bands as well, on every grid.
  */
 export function longwaveTableFor(levels, lines = 'scaled') {
   if (lines === 'voigt') return BL36_VOIGT_TABLE;
-  if (lines !== 'scaled') throw new Error(`longwaveLines must be 'scaled' or 'voigt', not ${lines}`);
+  if (lines === 'scaledByGas') return BL36_BY_GAS_TABLE;
+  if (lines !== 'scaled') throw new Error(`longwaveLines must be 'scaled', 'scaledByGas' or 'voigt', not ${lines}`);
   const name = levels ? sigmaGridName(levels) : null;
   return name === 'bl36' || name === 'bl42' ? BL36_TABLE : LONGWAVE_TABLE;
 }
