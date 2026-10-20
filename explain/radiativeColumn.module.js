@@ -151,6 +151,7 @@ export function makeColumn(options = {}) {
     const { surfacePressure, mu, beam, carbonDioxide, gases: on } = settings;
     ozone = Float64Array.from(settings.ozoneProfile ?? meanOzone(null, surfacePressure), (x) => (on.ozone ? x : 0));
     radiation = createRadiation(mesh, core, {
+      longwaveLines: 'scaled',
       solarConstant: beam > 0 ? beam / mu : SOLAR_CONSTANT,
       carbonDioxide: on.carbonDioxide ? carbonDioxide * GREENHOUSE_GASES.carbonDioxide : 0,
       methane: on.methane ? GREENHOUSE_GASES.methane : 0,

@@ -961,7 +961,7 @@ test('with deckRest \'regime\' (the default) a surface-driven or decoupled colum
 const GREY_ICE = { iceAlbedo: 0.5, meltingIceAlbedo: 0.5, snowAgeing: false };
 const RAYLEIGH_TOP = { surface: { topDragDays: 5, spongeDays: 0 }, gravityWaves: false };
 function modelDigest(radiation, moist = {}, ice = {}, { surface = {}, gravityWaves = {} } = {}) {
-  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06, convectionType: 'top', plumeEntrainmentLaw: 'gregory', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane', plumeCape: 70, stratiformLifetime: null, condensation: 'saturation', iceSaturation: false, iceFall: null, fogDroplets: null, fogDeposition: 0, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3, ...surface }, radiation: { exchangeCoefficient: 1.5e-3, ...radiation }, ice, gravityWaves });
+  const model = createModel(new Grid(4), { ocean: { eddyDiffusivity: 0, closureFill: 0 }, divergenceDamping: 0, moist: { cloudLifetime: 3 * 3600, capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06, convectionType: 'top', plumeEntrainmentLaw: 'gregory', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane', plumeCape: 70, stratiformLifetime: null, condensation: 'saturation', iceSaturation: false, iceFall: null, fogDroplets: null, fogDeposition: 0, ...moist }, boundaryLayer: { turbulence: 'dry', entrainment: { efficiency: 0, shear: 0 }, dragCoefficient: 1.5e-3 }, surface: { dragCoefficient: 1.5e-3, ...surface }, radiation: { exchangeCoefficient: 1.5e-3, longwaveLines: 'scaled', ...radiation }, ice, gravityWaves });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   for (let n = 0; n < 12; n++) model.step(900);
   const hash = createHash('sha256');
@@ -1037,6 +1037,10 @@ test('the fog scheme of the moist defaults leaves the twelve-step digest as it i
   const fog = modelDigest({}, { fogDroplets: MOIST_DEFAULTS.fogDroplets, fogDeposition: MOIST_DEFAULTS.fogDeposition });
   assert.equal(fog.digest, '2453a42fc7b10633d96a380e96e1082a');
   assert.equal(fog.digest, modelDigest({}).digest);
+});
+
+test('the Doppler-core lines of longwaveLines \'voigt\', the default, give their own twelve-step digest (the digests above run with the scaled lines and are the parent\'s)', () => {
+  assert.equal(modelDigest({ longwaveLines: 'voigt' }).digest, '8ee3c4395126647bb5e4bb92410801ce');
 });
 
 test('the mixed layer feels the sunlight the column absorbs in the deck\'s layer: with the purely scattering clouds of cloudSolarAbsorption: 0, cloudScattering: 55 it feels none and the engine is bit-identical to the deck before it absorbed sunlight, with stratusSolar: false it feels none while the column absorbs', () => {

@@ -121,7 +121,7 @@ test('the uniform distribution: cloud begins at the critical humidity, covers ha
 test('the cloud a layer\'s humidity makes, blended by its cover, is the model\'s own partial cover: the same infrared, and the same sunlight once the cloud holds more than a few g/m²', () => {
   const mesh = buildMesh(new Grid(2)), C = mesh.nCells, core = createSigmaCore(mesh, { levels: LEVELS }), { exnerLayer } = core.diagnostics, ps = MLS.surfacePressure;
   const pi = new Float64Array(C).fill(ps), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
-  const pdf = createRadiation(mesh, core, { solarConstant: 340.5 * 1.5, ozoneProfile: MLS.ozone });
+  const pdf = createRadiation(mesh, core, { longwaveLines: 'scaled', solarConstant: 340.5 * 1.5, ozoneProfile: MLS.ozone });
   pdf.useCondensation(createModel(new Grid(2), { ocean: false, levels: LEVELS }).moist.condensation);
   const column = makeColumn({ profile: MLS, humidity: MLS.humidity });
   const call = (water) => {
