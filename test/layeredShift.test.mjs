@@ -12,8 +12,8 @@ const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges;
  * An aquaplanet's sea a few steps into its life under trades and
  * westerlies, with tokens at the outcrops and under the thermocline.
  */
-function spunUp(steps = 8) {
-  const ocean = createOcean(mesh, { everySteps: 1 });
+function spunUp(steps = 8, options = {}) {
+  const ocean = createOcean(mesh, { everySteps: 1, ...options });
   const surfaceT = Float64Array.from(mesh.latCell, (lat) => {
     const polar = Math.max(0, Math.min(1, (Math.abs(lat) / DEG - 50) / 20));
     return Math.max(FREEZING_POINT + 0.3, 273.15 + 30 * Math.cos(lat) ** 2 - 2 - 4 * polar);
@@ -47,4 +47,41 @@ test('the velocity shift leaves the column transport on the barotropic transport
   }
   assert.ok(thinEdges > 50, `only ${thinEdges} edges hold a class thinner than THIN`);
   assert.ok(worst < 1e-10, `a second shift moved a velocity by ${worst.toExponential(2)} m/s`);
+});
+
+/*
+ * Each edge's transport as the continuity, the barotropic solver and the
+ * shift count it: the top layer's centered thickness, the smaller of the
+ * two below, the column cut at the edge's sill.
+ */
+function edgeTransports(ocean) {
+  const L = ocean.layers, { h, u, eta, sillEdge } = ocean, out = new Float64Array(E);
+  for (let e = 0; e < E; e++) {
+    if (!ocean.edgeOcean[e]) continue;
+    const a = mesh.cellsOnEdge[2 * e], b = mesh.cellsOnEdge[2 * e + 1], sill = Math.max(1e-9, sillEdge[e] + 0.5 * (eta[a] + eta[b]));
+    let above = 0;
+    for (let k = 0; k < L; k++) {
+      const hk = k === 0 ? 0.5 * (h[a] + h[b]) : Math.min(h[k * C + a], h[k * C + b]);
+      out[e] += Math.min(hk, Math.max(0, sill - above)) * u[k * E + e]; above += hk;
+    }
+  }
+  return out;
+}
+const largestChange = (from, to) => { let worst = 0, scale = 0; for (let e = 0; e < E; e++) { worst = Math.max(worst, Math.abs(to[e] - from[e])); scale = Math.max(scale, Math.abs(from[e])); } return worst / scale; };
+
+test('with edgeTransport kept the regrid and the vertical viscosity leave every edge\'s transport where the shift put it; remapped, they move it', () => {
+  const changes = {};
+  for (const edgeTransport of ['kept', 'remapped']) {
+    const ocean = spunUp(8, { edgeTransport });
+    ocean.phases.dynamics(DT); ocean.phases.rescale(); ocean.phases.eddy(DT); ocean.phases.shift();
+    const shifted = edgeTransports(ocean);
+    ocean.phases.regrid(DT);
+    const regridded = edgeTransports(ocean);
+    ocean.phases.column(DT);
+    changes[edgeTransport] = { regrid: largestChange(shifted, regridded), column: largestChange(regridded, edgeTransports(ocean)) };
+  }
+  for (const phase of ['regrid', 'column']) {
+    assert.ok(changes.kept[phase] < 1e-12, `kept: the ${phase} moved an edge's transport by ${changes.kept[phase].toExponential(2)} of the largest`);
+    assert.ok(changes.remapped[phase] > 1e-7, `remapped: the ${phase} moved no edge's transport (${changes.remapped[phase].toExponential(2)})`);
+  }
 });

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, beyondCells, limitedEdgeValue } from '../js/ocean/layered.module.js';
+import { createOcean, beyondCells, limitedEdgeValue, EDGE_TRANSPORTS } from '../js/ocean/layered.module.js';
 import { createGeography, syntheticTopography } from '../js/geography.module.js';
 import { HYBRID_LAYERS, H_MIN } from '../js/ocean/column.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
@@ -56,20 +56,22 @@ test('a brackish sea keeps its fixed-depth surface layers, hands back its first 
   atMinimum(1e-6, 'after five steps');
 });
 
-test('through dynamics, regrid and column physics the hybrid ocean conserves water, heat and salt to rounding, with no dried layer', () => {
-  const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean(8);
-  const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
-  ocean.advance(surfaceT, ice, flux, wind, DT);
-  const before = totalHeatSalt(ocean, mesh), volume = volumeOf(ocean, mesh);
-  for (let n = 0; n < 24; n++) ocean.advance(surfaceT, ice, flux, wind, DT);
-  const after = totalHeatSalt(ocean, mesh);
-  assert.ok(Math.abs(after.heat - before.heat) < 1e-10 * before.heat, `heat ${before.heat} → ${after.heat}`);
-  assert.ok(Math.abs(after.salt - before.salt) < 1e-10 * before.salt, `salt ${before.salt} → ${after.salt}`);
-  assert.ok(Math.abs(volumeOf(ocean, mesh) - volume) < 1e-10 * volume, 'volume');
-  const d = ocean.diagnostics();
-  assert.equal(d.oceanDried, 0);
-  assert.ok(d.oceanSpeed > 0.01 && d.oceanSpeed < 1, `speed ${d.oceanSpeed}`);
-  assert.ok(d.oceanUpperDepth > 5 && d.oceanUpperDepth < 100, `mixed layer ${d.oceanUpperDepth} m`);
+test('through dynamics, regrid and column physics the hybrid ocean conserves water, heat and salt to rounding, with no dried layer, whichever edge transport it keeps', () => {
+  for (const edgeTransport of EDGE_TRANSPORTS) {
+    const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean(8, { edgeTransport });
+    const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
+    ocean.advance(surfaceT, ice, flux, wind, DT);
+    const before = totalHeatSalt(ocean, mesh), volume = volumeOf(ocean, mesh);
+    for (let n = 0; n < 24; n++) ocean.advance(surfaceT, ice, flux, wind, DT);
+    const after = totalHeatSalt(ocean, mesh);
+    assert.ok(Math.abs(after.heat - before.heat) < 1e-10 * before.heat, `${edgeTransport}: heat ${before.heat} → ${after.heat}`);
+    assert.ok(Math.abs(after.salt - before.salt) < 1e-10 * before.salt, `${edgeTransport}: salt ${before.salt} → ${after.salt}`);
+    assert.ok(Math.abs(volumeOf(ocean, mesh) - volume) < 1e-10 * volume, `${edgeTransport}: volume`);
+    const d = ocean.diagnostics();
+    assert.equal(d.oceanDried, 0);
+    assert.ok(d.oceanSpeed > 0.01 && d.oceanSpeed < 1, `${edgeTransport}: speed ${d.oceanSpeed}`);
+    assert.ok(d.oceanUpperDepth > 5 && d.oceanUpperDepth < 100, `${edgeTransport}: mixed layer ${d.oceanUpperDepth} m`);
+  }
 });
 
 test('the beyond cell of each edge lies on the far side of its cell along the edge, joined to it by the recorded edge', () => {

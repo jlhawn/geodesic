@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
-import { beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -43,6 +43,7 @@ export const OCEAN_DEFAULTS = {
   gustiness: 3,
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
+  edgeTransport: 'kept',
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
 
@@ -172,7 +173,19 @@ fn blEnergy(depth: f32, ustar: f32, f: f32, dt: f32, convective: f32) -> f32 {
 }
 
 function hybridKernels(o, K, idx) {
-  const { L, C, E } = o;
+  const { L, C, E } = o, kept = o.edgeTransport === 'kept';
+  const edgeFlow = (thickness, sum) => `  { var zAbove = 0.0;
+    for (var k = 0; k < L; k++) {
+      let ha = ${thickness('a')}; let hb = ${thickness('b')}; let hk = select(min(ha, hb), 0.5 * (ha + hb), k == 0);
+      let he = min(hk, max(0.0, sillTop - zAbove)); zAbove += hk; ${sum}
+    } }
+`;
+  const sillTop = kept ? `  let sillTop = max(EPSO, OD[O_SILL + e] + 0.5 * (OD[O_ETA + a] + OD[O_ETA + b]));
+` : '';
+  const stateThickness = (c) => `IN[hOff(k) + ${c}]`, targetThickness = (c) => `OD[O_TARGET + (k + 1) * C + ${c}] - OD[O_TARGET + k * C + ${c}]`;
+  const keepFlow = (thickness, before) => `  var keptAfter = 0.0; var keptDepth = 0.0;
+${edgeFlow(thickness, 'keptAfter += he * IN[uOff(k) + e]; keptDepth += he;')}  if (keptDepth > EPSO) { let shift = (${before} - keptAfter) / keptDepth; for (var k = 0; k < L; k++) { IN[uOff(k) + e] += shift; } }
+`;
   const cellVector = (field) => `vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) {
     let e = MI[EOC + MAXE * i + m];
@@ -362,7 +375,8 @@ ${load('j + 2', '2')}${produce}      }
       return `${K}  let e = ${idx}; if (e >= E) { return; }
   if (OD[O_EMASK + e] < 0.5) { return; }
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
-  var hm1 = 0.0; var um1 = 0.0; var h0 = 0.0; var u0 = 0.0; var h1 = 0.0; var u1 = 0.0;
+${kept ? `${sillTop}  var keptBefore = 0.0;
+${edgeFlow(stateThickness, 'keptBefore += he * IN[uOff(k) + e];')}` : ''}  var hm1 = 0.0; var um1 = 0.0; var h0 = 0.0; var u0 = 0.0; var h1 = 0.0; var u1 = 0.0;
 ${load('0', '0')}${load('1', '1')}  var z = 0.0; var cur = 0; var znLo = 0.0;
   var taL = 0.0; var tbL = 0.0; var taH = OD[O_TARGET + C + a]; var tbH = OD[O_TARGET + C + b];
   var hn = 0.5 * (taH - taL + tbH - tbL); var znHi = hn;
@@ -400,7 +414,7 @@ ${flush('true')}  }
   if ((pendLo | pendHi) != 0u) {
     for (var k = 0; k < L; k++) { ${pendingTest} if (pending != 0u) { IN[uOff(k) + e] = OUT[uOff(k) + e]; } }
   }
-}`;
+${kept ? keepFlow(targetThickness, 'keptBefore') : ''}}`;
     })(),
     // regridCells: heat and salt remapped by the parabolas onto the targets, which set the thicknesses; the interface geometry is shared between the two tracers.
     oRegridCells: (() => {
@@ -612,7 +626,8 @@ ${blWork}      if (phase == 0 || phase == 5) { if (excess <= 0.0) { break; } fb 
   if (OD[O_EMASK + e] < 0.5) { return; }
   ${declareArrays(['SQ', 'SG'])}
   let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1]; let dt = P[0];
-  var mixing = false; var wPrev = 0.0; var gPrev = 0.0; var r = 0.0;
+${kept ? `${sillTop}  var keptBefore = 0.0;
+${edgeFlow(stateThickness, 'keptBefore += he * IN[uOff(k) + e];')}` : ''}  var mixing = false; var wPrev = 0.0; var gPrev = 0.0; var r = 0.0;
   var hk = 0.5 * (IN[hOff(0) + a] + IN[hOff(0) + b]);
   for (var k = 0; k < L; k++) {
     let kn = min(k + 1, L - 1); let below = k < L - 1;
@@ -627,7 +642,7 @@ ${blWork}      if (phase == 0 || phase == 5) { if (excess <= 0.0) { break; } fb 
   if (mixing) {
     var next = SQ[L - 1]; IN[uOff(L - 1) + e] = next;
     for (var j = 0; j < L - 1; j++) { let k = L - 2 - j; next = SQ[k] - SG[k] * next; IN[uOff(k) + e] = next; }
-  }
+${kept ? keepFlow(stateThickness, 'keptBefore') : ''}  }
 }`,
   };
 }
@@ -1158,6 +1173,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   if (!GENERATORS.includes(o.generator)) throw new Error(`the generator is one of ${GENERATORS.join(', ')}, not ${o.generator}`);
   const table = o.layerTable ?? HYBRID_LAYERS;
   if (!TRACER_ADVECTIONS.includes(o.tracerAdvection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${o.tracerAdvection}`);
+  if (!EDGE_TRANSPORTS.includes(o.edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${o.edgeTransport}`);
   const third = o.tracerAdvection === 'third';
   if (third && !(o.shearDiffusivity > 0)) throw new Error('tracerAdvection third needs shearDiffusivity above zero');
   if (o.penetration !== null && !JERLOV[o.penetration]) throw new Error(`penetration is one of ${Object.keys(JERLOV).join(', ')} or null, not ${o.penetration}`);
