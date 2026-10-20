@@ -26,9 +26,12 @@ drag deposits at the lid, or what breaks below it?
   force and absolute flux by layer from the CPU engine on the same state.
 - ERA5 (Hersbach et al. 2020) from ARCO-ERA5's raw pressure-level files
   (public; one variable, one level and 24 hours of 0.25° int16 per
-  file), range reads of the rows within 20° of the equator at 1, 2, 3, 5,
-  7, 10, 20, 30, 50 and 70 hPa, and the same TEM on each sample over
-  1440 longitudes, the eddy term's φ-derivative over ±1°.
+  file), range reads (`scripts/era5Raw.mjs`) of the rows within 20° of
+  the equator at 1, 2, 3, 5, 7, 10, 20, 30, 50 and 70 hPa, and the same
+  TEM on each sample over 1440 longitudes, the eddy term's φ-derivative
+  over ±1° (`scripts/era5Tem.mjs`). Finding 4's annual mean is
+  `data/era5_tem_annual.json`, and finding 3's 5° S–5° N wind is
+  `data/era5_equatorial_wind.json` (`scripts/era5EquatorialWind.mjs`).
 - The equatorial wind's annual cycle from `runs/verda-eleven/eleven64.log`,
   whose daily `upper winds` line has the 5° S–5° N zonal-mean wind of
   every layer above 200 hPa for five years (bl36, whose layers above
@@ -96,8 +99,9 @@ At the equator 4.4 mPa of absolute flux (both directions) leaves the
 54 hPa layer upward, 2.8 mPa leaves the 7.5 hPa layer, and 1.77 mPa
 reaches 1 hPa, where all of it is spread over the two lid layers.
 
-By downward control (Haynes et al. 1991), the upward mass flux through p
-over |φ| < 15° is the poleward residual mass flux above p across ±15°.
+By downward control (Haynes et al. 1991; `scripts/downwardControl.mjs`),
+the upward mass flux through p over |φ| < 15° is the poleward residual
+mass flux above p across ±15°.
 In a steady state that flux is −X/f̂ for each zonal force X, with
 f̂ = f − (ū cos φ)_φ/(a cos φ). The drag's share, 10⁸ kg/s (with f
 alone in parentheses):
@@ -264,8 +268,12 @@ A month cannot show a QBO. The judgment the references call for follows
 QBOi's experiment 2 (Butchart et al. 2018), now `fixedSst.mjs` with
 `SST=cycle WINDS=1 TEM_HOURS=27 TEM_FROM=365`: six years on each grid
 from the same state, judged over years 2–6 against finding 3's QBO and
-SAO statistics and finding 4's annual w*. It has not been run. At 1.4–1.5
-times the cost, bl60 waits until the model's other fixes are in.
+SAO statistics and finding 4's annual w* by `scripts/qboCompare.mjs`
+(`scripts/upperWindHealth.mjs` gives a line per simulated year of a
+running log). It has not been run. At 1.4–1.5 times the cost, bl60
+waits for a spin-up with the model's other fixes in: the pair starts
+from that spin-up's stable state, and bl60 is a candidate for the
+default only if it forms a QBO there.
 
 ## What this means
 
