@@ -16,6 +16,12 @@
 // so the polling gates of older scripts see the GPU busy throughout, gaps
 // and handoffs included. CPU-only jobs do not use the queue and never wait
 // for it.
+// GPU_WHO (a short name for the session) and GPU_JOB (one line on what CMD
+// is) label a run. <dir>/status.md lists the holder and the queue in order
+// by these labels, or by worktree and command for a run without them. A run
+// rewrites it when it queues, takes the lock, starts and exits, the holder
+// at each of its checks and the waiters every 30 s; `status` rewrites it and
+// prints the same text.
 // The lock is an O_EXLOCK flock on <dir>/lock, which the kernel drops when
 // its holders exit; CMD inherits it as fd 19, so a job outliving a killed
 // holder keeps it. Waiters hold flocks on their tickets in <dir>/queue.
@@ -38,6 +44,17 @@ const TICKET = /^(\d+)-(\d+)-(\d+)\.json$/;
 const LSTART = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/;
 const USAGE = 'usage: gpuQueue.mjs run LOG CMD [ARG...] | gpuQueue.mjs status';
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const pad = (n) => String(n).padStart(2, '0');
+const clock = (ms = Date.now()) => new Date(ms).toTimeString().slice(0, 8);
+const day = (ms = Date.now()) => new Date(ms).toDateString().slice(4, 10);
+const when = (ms) => (day(ms) === day() ? clock(ms) : `${day(ms)} ${clock(ms)}`);
+const cut = (text = '', n = 100) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
+const oneLine = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
+const quote = (argv) => argv.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(' ');
+const pidList = (text) => [...new Set(text.split(/\s+/).filter((s) => /^\d+$/.test(s)).map(Number))].filter((pid) => pid > 1);
+
 export function config(env = process.env) {
   const tick = Number(env.GPU_QUEUE_TICK_MS) > 0 ? Number(env.GPU_QUEUE_TICK_MS) : 200;
   const dir = path.resolve(env.GPU_QUEUE_DIR || path.join(os.homedir(), '.cache', 'webgcm-gpu-queue'));
@@ -46,27 +63,60 @@ export function config(env = process.env) {
     : new URL('../js/gpu/device.module.js', import.meta.url).href;
   return {
     dir, lock: path.join(dir, 'lock'), holder: path.join(dir, 'holder.json'), queue: path.join(dir, 'queue'),
+    status: path.join(dir, 'status.md'), statusLock: path.join(dir, 'status.lock'),
     tick, recheck: 10 * tick, settle: 15 * tick, grace: 100 * tick, linger: 100 * tick,
-    monitor: 150 * tick, nestedEvery: 25, stale: 300 * tick,
+    monitor: 150 * tick, nestedEvery: 25, refreshEvery: 150, stale: 300 * tick,
     port: env.GPU_QUEUE_PORT ? Number(env.GPU_QUEUE_PORT) : env.GPU_QUEUE_PORT === '' ? 0 : 8000,
     probe: env.GPU_QUEUE_PROBE || '', device, aborts: env.GPU_QUEUE_ABORTS !== 'off',
+    who: oneLine(env.GPU_WHO), what: oneLine(env.GPU_JOB),
   };
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const pad = (n) => String(n).padStart(2, '0');
-const clock = (ms = Date.now()) => new Date(ms).toTimeString().slice(0, 8);
-const cut = (text = '', n = 100) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
-const brief = (command = '') => cut(command.replace(/^\S*\//, ''), 120);
-const quote = (argv) => argv.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(' ');
-const pidList = (text) => [...new Set(text.split(/\s+/).filter((s) => /^\d+$/.test(s)).map(Number))].filter((pid) => pid > 1);
-
-export function duration(ms) {
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m${pad(s % 60)}s`;
-  return `${Math.floor(s / 3600)}h${pad(Math.floor(s / 60) % 60)}m`;
+export function whoFrom(cwd = '') {
+  const worktree = /\/\.claude\/worktrees\/([^/]+)/.exec(cwd) || /--claude-worktrees-([^/]+)/.exec(cwd);
+  return worktree ? worktree[1] : path.basename(cwd) || '?';
 }
+
+function words(command) {
+  const out = [];
+  let word = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (/\s/.test(c)) {
+      if (word !== null) out.push(word);
+      word = null;
+      continue;
+    }
+    word ??= '';
+    if (c === "'") {
+      const end = command.indexOf("'", i + 1);
+      word += command.slice(i + 1, end < 0 ? undefined : end);
+      i = end < 0 ? command.length : end;
+    } else {
+      word += c === '\\' && i + 1 < command.length ? command[++i] : c;
+    }
+  }
+  return word === null ? out : [...out, word];
+}
+
+export function shortCommand(command = '') {
+  let argv = words(command);
+  if (path.basename(argv[0] || '') === 'env') {
+    argv = argv.slice(1);
+    while (argv.length > 1 && /^[A-Za-z_]\w*=/.test(argv[0])) argv.shift();
+  }
+  if (argv[0]?.startsWith('/')) argv[0] = path.basename(argv[0]);
+  return cut(argv.filter((a) => !a.startsWith('--test-reporter'))
+    .map((a) => a.replace(/^([^/]*=)?\/[^=]*?\/([^/=]+\/[^/=]+)$/, '$1…/$2'))
+    .map((a) => (!a || /[\s'"\\]/.test(a) ? `'${a.replace(/'/g, `'\\''`)}'` : a))
+    .join(' '), 120);
+}
+
+const labels = (info) => ({ who: oneLine(info.who) || whoFrom(info.cwd), what: oneLine(info.what) || shortCommand(info.command) });
+const named = (info) => {
+  const { who, what } = labels(info);
+  return `${who}, ${what}`;
+};
 
 function output(file, args) {
   return spawnSync(file, args, { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, maxBuffer: 1 << 26 }).stdout || '';
@@ -121,9 +171,9 @@ export function gpuUsers(cfg = config()) {
 const listeners = (port) => (port ? pidList(output('/usr/sbin/lsof', ['-w', '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'])) : []);
 const lockHolders = (cfg) => pidList(output('/usr/sbin/lsof', ['-w', '-t', '--', cfg.lock]));
 
-function tryLock(cfg) {
+function tryLock(file) {
   try {
-    return fs.openSync(cfg.lock, O_RDONLY | O_CREAT | O_EXLOCK | O_NONBLOCK, 0o644);
+    return fs.openSync(file, O_RDONLY | O_CREAT | O_EXLOCK | O_NONBLOCK, 0o644);
   } catch (error) {
     if (error.code === 'EAGAIN') return null;
     throw error;
@@ -163,7 +213,7 @@ function waiting(cfg, file) {
 
 function sweep(cfg) {
   const leftovers = (dir, pattern) => { try { return fs.readdirSync(dir).filter((n) => pattern.test(n)).map((n) => path.join(dir, n)); } catch { return []; } };
-  for (const file of [...leftovers(cfg.queue, /^\./), ...leftovers(cfg.dir, /^holder\.json\.\d+$/)]) {
+  for (const file of [...leftovers(cfg.queue, /^\./), ...leftovers(cfg.dir, /^(holder\.json|\.status\.md)\.\d+$/)]) {
     try { if (Date.now() - fs.statSync(file).mtimeMs > cfg.stale) fs.unlinkSync(file); } catch {}
   }
 }
@@ -204,7 +254,7 @@ function holderAbove(cfg, line, probe) {
   const inherits = inheritsLock(cfg);
   if (!inherits) {
     if (liveRecord(record)) return 0;
-    const fd = probe ? tryLock(cfg) : null;
+    const fd = probe ? tryLock(cfg.lock) : null;
     if (fd !== null) { fs.closeSync(fd); return 0; }
   }
   const holders = new Set(lockHolders(cfg));
@@ -222,16 +272,82 @@ function survey(cfg, self) {
     if (AGENT.test(proc.command)) queue.push(pid);
     else outside.push({ pid, command: proc.command, age: age(proc) });
   }
-  return { outside, port: listeners(cfg.port), covered: queue.length > 0 };
+  return { outside, port: listeners(cfg.port), covered: queue.length > 0, table, users };
 }
 
 const pageServer = (cfg, pids) => `the page server on port ${cfg.port} (pid ${pids.join(', ')})`;
 
 function describeBlock(cfg, net) {
-  const parts = net.outside.map((u) => `pid ${u.pid} (${brief(u.command)})`);
+  const parts = net.outside.map((u) => `pid ${u.pid} (${shortCommand(u.command)})`);
   if (net.port.length) parts.push(pageServer(cfg, net.port));
   return parts.join(' and ');
 }
+
+function holderState(record) {
+  const since = record.stateSince ? ` since ${when(record.stateSince)}` : '';
+  if (record.state === 'running') return `running since ${when(record.started)}`;
+  if (record.state === 'waiting') return `waiting${since} for ${record.blockers}`;
+  return `checking for GPU users outside the queue${since}`;
+}
+
+function statusText(cfg, net) {
+  const now = Date.now();
+  const table = net?.table || processes();
+  const out = [`# GPU queue at ${clock(now)}, ${day(now)}`, ''];
+  const record = readRecord(cfg);
+  const holder = record?.start && (table.get(record.pid)?.start ?? startOf(record.pid)) === record.start ? record : null;
+  if (holder) {
+    const { who, what } = labels(holder);
+    out.push(`Holder: **${who}**, ${what}`, `- ${holderState(holder)}`,
+      `- pid ${holder.pid}, took the lock at ${when(holder.acquired)}${holder.deviceReady ? ', idle device open' : ''}`, `- log ${holder.log}`);
+  } else {
+    const free = tryLock(cfg.lock);
+    if (free !== null) fs.closeSync(free);
+    const holders = free === null ? lockHolders(cfg).filter((pid) => table.has(pid)) : [];
+    if (!holders.length) out.push('Holder: none');
+    else {
+      out.push(`Holder: no live agent; the lock is held by ${holders.map((pid) => `pid ${pid} (${shortCommand(table.get(pid).command)})`).join(', ')}`);
+      if (record) out.push(`- the recorded holder, pid ${record.pid} (${named(record)}), has exited`);
+    }
+  }
+  const queue = tickets(cfg).filter((t) => waiting(cfg, t.file)).map((t) => ({ ...t, info: readJson(t.file) })).filter((t) => t.info);
+  out.push('', queue.length ? 'Queue:' : 'Queue: empty');
+  queue.forEach((t, i) => {
+    const { who, what } = labels(t.info);
+    const indent = ' '.repeat(`${i + 1}. `.length);
+    out.push(`${i + 1}. **${who}**, ${what}`, `${indent}- queued since ${when(t.ms)}, pid ${t.pid}`, `${indent}- log ${t.info.log}`);
+  });
+  const family = holder ? new Set([...lineage(table, holder.pid).keys(), ...descendants(table, holder.pid)]) : new Set();
+  const outside = [...(net?.users || gpuUsers(cfg))].map((pid) => table.get(pid)).filter((p) => p && !family.has(p.pid) && !AGENT.test(p.command));
+  out.push('', outside.length ? 'Outside the queue:' : 'Outside the queue: none');
+  for (const p of outside) out.push(`- pid ${p.pid} since ${when(Date.parse(p.start))}: ${shortCommand(p.command)}`);
+  if (cfg.port) {
+    const port = net?.port || listeners(cfg.port);
+    const listener = (pid) => `pid ${pid}${table.has(pid) ? ` (${shortCommand(table.get(pid).command)})` : ''}`;
+    out.push('', port.length ? `Port ${cfg.port}: listening, ${port.map(listener).join(', ')}` : `Port ${cfg.port}: free`);
+  }
+  return out.join('\n');
+}
+
+function writeStatus(cfg, net) {
+  fs.mkdirSync(cfg.dir, { recursive: true });
+  let fd = tryLock(cfg.statusLock);
+  for (let tries = 0; fd === null && tries < 100; tries++) {
+    pause(50);
+    fd = tryLock(cfg.statusLock);
+  }
+  try {
+    const text = statusText(cfg, net);
+    const temp = path.join(cfg.dir, `.status.md.${process.pid}`);
+    fs.writeFileSync(temp, `${text}\n`);
+    fs.renameSync(temp, cfg.status);
+    return text;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+const refresh = (cfg, net) => { try { writeStatus(cfg, net); } catch {} };
 
 export function finished(log) {
   try { return /^exit 0\b/m.test(fs.readFileSync(log, 'utf8')); } catch { return false; }
@@ -291,7 +407,10 @@ export async function run(cfg, logArg, argv) {
   fs.mkdirSync(path.dirname(log), { recursive: true });
   fs.mkdirSync(cfg.queue, { recursive: true });
   const line = lineage(processes(), process.pid);
-  const self = { pid: process.pid, start: line.get(process.pid) || startOf(process.pid), log, command: quote(argv), cwd: process.cwd(), since: Date.now() };
+  const self = {
+    pid: process.pid, start: line.get(process.pid) || startOf(process.pid), log, command: quote(argv), cwd: process.cwd(),
+    since: Date.now(), who: cfg.who || undefined, what: cfg.what || undefined,
+  };
 
   let phase = 'queued', ticket = null, lockFd = null, device = null, job = null, rc = 0;
   const release = () => {
@@ -308,6 +427,7 @@ export async function run(cfg, logArg, argv) {
         dequeue(ticket);
         release();
         say(`exit ${code} ${clock()} (${signal} before the job started)`);
+        refresh(cfg);
       }
       try { device?.destroy(); } catch {}
       process.exit(phase === 'done' ? rc : code);
@@ -319,18 +439,19 @@ export async function run(cfg, logArg, argv) {
     ticket = enqueue(cfg, self);
     for (let n = 1; ; n++) {
       const ahead = tickets(cfg).filter((t) => order(t, ticket) < 0 && waiting(cfg, t.file));
-      if (!ahead.length && (lockFd = tryLock(cfg)) !== null) break;
+      if (!ahead.length && (lockFd = tryLock(cfg.lock)) !== null) break;
       if (n === 1) {
         const holder = liveRecord(readRecord(cfg));
-        const parts = [holder && `pid ${holder.pid} (${brief(holder.command)})`, ahead.length && `${ahead.length} waiting`].filter(Boolean);
+        const parts = [holder && `pid ${holder.pid} (${named(holder)})`, ahead.length && `${ahead.length} waiting`].filter(Boolean);
         say(`queued ${clock()} behind ${parts.join(' and ') || "the lock's holder"}`);
       }
+      if (n % cfg.refreshEvery === 1) refresh(cfg);
       if (n % cfg.nestedEvery === 0 && (above = holderAbove(cfg, line, false))) break;
       await sleep(cfg.tick);
     }
   }
   if (above) {
-    dequeue(ticket);
+    if (ticket) { dequeue(ticket); refresh(cfg); }
     phase = 'running';
     say(`start ${clock()} nested in pid ${above}`);
     job = launch(argv, log, inheritsLock(cfg) ? INHERITED_FD : null);
@@ -341,8 +462,13 @@ export async function run(cfg, logArg, argv) {
   }
 
   phase = 'holding';
-  const record = { ...self, acquired: Date.now(), state: 'checking', deviceReady: false };
-  writeRecord(cfg, record);
+  const record = { ...self, acquired: Date.now(), deviceReady: false };
+  const enter = (state, extra = {}) => {
+    if (record.state !== state) record.stateSince = Date.now();
+    Object.assign(record, { state, blockers: undefined }, extra);
+    writeRecord(cfg, record);
+  };
+  enter('checking');
   dequeue(ticket);
 
   let opening = null, clearSince = 0, said = '';
@@ -356,6 +482,8 @@ export async function run(cfg, logArg, argv) {
       }, (error) => say(`device ${clock()} unavailable: ${error.message}`));
     }
     if (!net.outside.length && !net.port.length) {
+      if (said) { said = ''; enter('checking'); }
+      refresh(cfg, net);
       await opening;
       if (net.covered || (clearSince && Date.now() - clearSince >= cfg.settle)) break;
       clearSince ||= Date.now();
@@ -367,68 +495,40 @@ export async function run(cfg, logArg, argv) {
     if (text !== said) {
       say(`waiting ${clock()} for ${text}`);
       said = text;
-      Object.assign(record, { state: 'waiting', blockers: text });
-      writeRecord(cfg, record);
+      enter('waiting', { blockers: text });
     }
+    refresh(cfg, net);
     await sleep(cfg.recheck);
   }
 
   const started = Date.now();
-  Object.assign(record, { state: 'running', started, blockers: undefined });
-  writeRecord(cfg, record);
+  enter('running', { started });
   say(`start ${clock(started)}`);
   phase = 'running';
   job = launch(argv, log, lockFd);
+  refresh(cfg);
   const seen = new Set();
   const monitor = setInterval(() => {
     const net = survey(cfg, process.pid);
     for (const u of net.outside) {
-      if (!seen.has(u.pid)) { seen.add(u.pid); say(`overlap ${clock()} pid ${u.pid}: ${brief(u.command)}`); }
+      if (!seen.has(u.pid)) { seen.add(u.pid); say(`overlap ${clock()} pid ${u.pid}: ${shortCommand(u.command)}`); }
     }
     if (net.port.length && !seen.has('port')) { seen.add('port'); say(`overlap ${clock()} ${pageServer(cfg, net.port)}`); }
+    refresh(cfg, net);
   }, cfg.monitor);
   rc = await job.done;
   clearInterval(monitor);
   phase = 'done';
   release();
   say(`exit ${rc} ${clock()}`);
+  refresh(cfg);
   const [, aborts] = await Promise.all([linger(cfg, device), cfg.aborts ? scanAborts(started) : []]);
   for (const text of aborts) say(text);
   return rc;
 }
 
 export function status(cfg = config()) {
-  const now = Date.now();
-  const table = processes();
-  const out = [`GPU queue ${cfg.dir.replace(os.homedir(), '~')}, ${clock(now)}`];
-  const record = readRecord(cfg);
-  const holder = record && table.get(record.pid)?.start === record.start ? record : null;
-  if (holder) {
-    const state = holder.state === 'running' ? `running ${duration(now - holder.started)}`
-      : holder.state === 'waiting' ? `waiting for ${holder.blockers}` : 'checking for other GPU users';
-    out.push(`holder   pid ${holder.pid}, ${state}; holds the lock since ${clock(holder.acquired)} (${duration(now - holder.acquired)})${holder.deviceReady ? ', idle device open' : ''}`);
-    out.push(`         ${holder.command}`, `         log ${holder.log}`);
-  } else {
-    const holders = lockHolders(cfg).filter((pid) => table.has(pid));
-    const left = record ? `; holder pid ${record.pid} (${brief(record.command)}) has exited` : '';
-    out.push(holders.length ? `holder   none recorded, but the lock is held by ${holders.map((pid) => `pid ${pid} (${brief(table.get(pid).command)})`).join(', ')}${left}` : 'holder   none');
-  }
-  const queue = tickets(cfg).filter((t) => waiting(cfg, t.file));
-  if (!queue.length) out.push('queue    empty');
-  queue.forEach((t, i) => {
-    const info = readJson(t.file) || {};
-    out.push(`${i ? '         ' : 'queue    '}${i + 1}. pid ${t.pid}, waiting ${duration(now - t.ms)} (since ${clock(t.ms)}): ${info.command}`);
-    out.push(`            log ${info.log}`);
-  });
-  const family = holder ? new Set([...lineage(table, holder.pid).keys(), ...descendants(table, holder.pid)]) : new Set();
-  const outside = [...gpuUsers(cfg)].map((pid) => table.get(pid)).filter((p) => p && !family.has(p.pid) && !AGENT.test(p.command));
-  if (!outside.length) out.push('outside  no GPU users outside the queue');
-  outside.forEach((p, i) => out.push(`${i ? '         ' : 'outside  '}pid ${p.pid}, up ${duration(age(p))}: ${p.command}`));
-  if (cfg.port) {
-    const port = listeners(cfg.port);
-    out.push(port.length ? `port     ${cfg.port} has a listener: pid ${port.join(', ')}` : `port     ${cfg.port} free`);
-  }
-  return out.join('\n');
+  return writeStatus(cfg);
 }
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
