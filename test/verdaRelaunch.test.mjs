@@ -90,7 +90,8 @@ test('the relauncher remembers the OS volume, waits for it to detach after an ev
   assert.equal(readFileSync(join(at, 'state'), 'utf8').trim(), 'vol-1');
   assert.equal(creates(calls).length, 1);
   const create = creates(calls)[0];
-  for (const flag of ['--agent', 'vm create', '--kind gpu', '--instance-type 1A100.22V', '--location FIN-01', '--is-spot', '--os vol-1', '--os-volume-size 150', '--os-volume-on-spot-discontinue keep_detached', '--ssh-key key-1', '--hostname gcm64', '--startup-script script-1', '--wait', '-o json']) assert.ok(create.includes(flag), `${flag} in: ${create}`);
+  for (const flag of ['--agent', 'vm create', '--kind gpu', '--instance-type 1A100.22V', '--location FIN-01', '--is-spot', '--os vol-1', '--ssh-key key-1', '--hostname gcm64', '--startup-script script-1', '--wait', '-o json']) assert.ok(create.includes(flag), `${flag} in: ${create}`);
+  assert.ok(!create.includes('--os-volume'), `no OS volume options on an existing volume: ${create}`);
   assert.ok(calls.includes('--agent vm start i-2 -o json'), calls.join('\n'));
   assert.match(log, /\d{4}-\d\d-\d\d \d\d:\d\d:\d\d gcm64 is running \(i-1\)/);
   assert.match(log, /remembering OS volume vol-1 of gcm64/);
