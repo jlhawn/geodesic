@@ -3,6 +3,7 @@ import { FREEZING_POINT } from '../physics/ice.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 import { profileAt } from './climatology.module.js';
 import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
+import { basalMelt, baseFreezing, SHELF_MELT } from './iceShelfMelt.module.js';
 
 /*
  * The ocean on the C-grid: the ALE hybrid vertical coordinate of
@@ -380,7 +381,7 @@ export function createOcean(mesh, {
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
-  edgeTransport = 'kept',
+  edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -451,6 +452,9 @@ export function createOcean(mesh, {
   let counter = 0, limited = 0, initialised = false, layerRunner = null, columnRunner = null, dried = 0;
   const relaxRate = () => params[0];
   const shelfLoad = shared('shelfLoad', C);
+  const melted = shared('melted', C), meltBase = shared('meltBase', C), shelfMelted = shared('shelfMelted', C), shelfDraw = shared('shelfDraw', C);
+  const meltOn = shelfMelt && shelf.some((s) => s), meltPool = (i) => (fCell[i] < 0 ? 0 : 1), meltConstants = { rho0, rhoCp, latentHeat: latentHeatFusion, heatTransfer: shelfHeatTransfer, saltTransfer: shelfSaltTransfer };
+  const shelfBudget = { discharge: [0, 0], melt: [0, 0], moved: [0, 0], drawn: [0, 0], keep: [1, 1], share: [0, 0] };
   const layerRho = shared('layerRho', L * C), columnAbove = shared('columnAbove', L * C), targetZ = shared('targetZ', (L + 1) * C), viscosity = shared('viscosity', L * C), edgeBottom = shared('edgeBottom', E);
   const mixedDepths = shared('mixedDepths', C), boundaryDepths = shared('boundaryDepths', C);
   const edgeAbove = shared('edgeAbove', L * E), eddyFlux = shared('eddyFlux', L * E), eddyVolume = shared('eddyVolume', L * C), eddyHeat = shared('eddyHeat', L * C), eddySalt = shared('eddySalt', L * C);
@@ -1000,7 +1004,15 @@ export function createOcean(mesh, {
       for (let k = 0; k < L; k++) cellVectorAt(k, i, vector, 3 * k);
       for (let k = 0; k < L - 1; k++) shear[k] = (vector[3 * k] - vector[3 * k + 3]) ** 2 + (vector[3 * k + 1] - vector[3 * k + 4]) ** 2 + (vector[3 * k + 2] - vector[3 * k + 5]) ** 2;
       options.guess = boundaryDepths[i]; options.langmuir = shelf[i] ? 0 : langmuir;
-      const result = mixColumn({ h: hCol, T: TCol, S: SCol, shear, K: L, ustar: shelf[i] ? Math.sqrt(topDrag) * Math.hypot(vector[0], vector[1], vector[2]) : Math.sqrt(stressAt(i) / rho0), f: fCell[i], dt, capped: shelf[i] === 1, options }, out, cs);
+      let meltHeat = 0, meltSalt = 0;
+      if (shelf[i] && meltOn) {
+        const speed2 = vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
+        const { melt, Tb } = basalMelt(TCol[0], SCol[0], baseFreezing(g * shelfLoad[i]), Math.sqrt(topDrag * (speed2 + tidalSpeed * tidalSpeed)), meltConstants);
+        const mass = melt * dt, water = mass / SHELF_MELT.freshDensity;
+        meltHeat = -(latentHeatFusion * mass / rhoCp + water * (TCol[0] - Tb)); meltSalt = -SCol[0] * water;
+        melted[i] = mass; meltBase[i] = Tb; shelfMelted[i] += mass;
+      }
+      const result = mixColumn({ h: hCol, T: TCol, S: SCol, shear, K: L, ustar: shelf[i] ? Math.sqrt(topDrag) * Math.hypot(vector[0], vector[1], vector[2]) : Math.sqrt(stressAt(i) / rho0), f: fCell[i], dt, heat: meltHeat, salt: meltSalt, capped: shelf[i] === 1 && !(meltOn && melted[i] < 0), options }, out, cs);
       for (let k = 0; k < L; k++) { const n = at(k, i); Q[n] = hCol[k] * TCol[k]; W[n] = hCol[k] * SCol[k]; viscosity[n] = nu[k]; }
       layerDensities(TCol, SCol, L, rhoCol);
       mixedDepths[i] = mixedLayerDepth(hCol, rhoCol, L);
@@ -1075,7 +1087,35 @@ export function createOcean(mesh, {
       calved[i] = 0;
     }
   }
+  /*
+   * The shelves stay as they are, so what melts from them is ice the
+   * sheets discharge: each sheet's calving at its outlets is its discharge
+   * less its shelves' melt, and the outlets give up that much of their
+   * fresh water and latent heat. Melt beyond the discharge comes out of
+   * the sheet's store, kept per cell in shelfDraw; freezing beyond it
+   * goes into the store. Antarctica's shelves draw on the southern
+   * discharge, the rest on the northern.
+   */
+  function budgetShelves() {
+    const { discharge, melt, moved, drawn, keep, share } = shelfBudget;
+    discharge.fill(0); melt.fill(0); keep.fill(1); share.fill(0);
+    for (let i = 0; i < C; i++) {
+      if (shelf[i]) melt[meltPool(i)] += melted[i] * areaCell[i];
+      else if (cellOpen[i] && calved[i] !== 0) discharge[meltPool(i)] += calved[i] * areaCell[i];
+    }
+    for (let p = 0; p < 2; p++) {
+      moved[p] = discharge[p] > 0 ? Math.min(melt[p], discharge[p]) : 0;
+      drawn[p] = melt[p] - moved[p];
+      if (discharge[p] > 0) keep[p] = 1 - moved[p] / discharge[p];
+      if (melt[p] !== 0) share[p] = drawn[p] / melt[p];
+    }
+    for (let i = 0; i < C; i++) {
+      if (shelf[i]) shelfDraw[i] += share[meltPool(i)] * melted[i];
+      else if (cellOpen[i] && calved[i] !== 0) { const p = meltPool(i); fresh[i] += (1 - keep[p]) * calved[i]; calved[i] *= keep[p]; }
+    }
+  }
   function salt() {
+    if (meltOn) budgetShelves();
     for (let i = 0; i < C; i++) {
       if (!cellOpen[i]) continue;
       const s = W[i] / h[i];
@@ -1387,6 +1427,7 @@ export function createOcean(mesh, {
     }
     for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) if (!edgeOcean[e]) u[ae(k, e)] = 0;
     if (hasShelves) for (let i = 0; i < C; i++) shelfLoad[i] = !shelf[i] ? 0 : saved.shelfLoad && saved.shelfLoad.length === C ? saved.shelfLoad[i] : draft[i] * eos(saved.T[i], saved.S[i]);
+    for (const [name, field] of [['shelfMelted', shelfMelted], ['shelfDraw', shelfDraw]]) field.set(saved[name] && saved[name].length === C ? saved[name] : new Float64Array(C));
     if (!own) regrid(Infinity);
     measureIce(ice, concentration, previousVolume);
     for (let i = 0; i < C; i++) { iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = cellOcean[i] ? Q[i] / h[i] : surfaceTAt(i); S0[i] = cellOcean[i] ? W[i] / h[i] : referenceS; previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
@@ -1414,7 +1455,7 @@ export function createOcean(mesh, {
   function serialize() {
     const Tall = new Array(L * C), Sall = new Array(L * C);
     for (let n = 0; n < L * C; n++) { const hh = Math.max(EPS, h[n]); Tall[n] = Q[n] / hh; Sall[n] = W[n] / hh; }
-    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad) } : {}) };
+    return { h: Array.from(h), u: Array.from(u), T: Tall, S: Sall, eta: Array.from(eta), densities: Array.from(labels), vertical, generator, ...(hasShelves ? { shelfLoad: Array.from(shelfLoad), shelfMelted: Array.from(shelfMelted), shelfDraw: Array.from(shelfDraw) } : {}) };
   }
 
   const thermoclineDepth = new Float64Array(C), sst = T0, sss = S0;
@@ -1461,5 +1502,5 @@ export function createOcean(mesh, {
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
   Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, shelfLoad: shelfLoad.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer });
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, baroPrep, baroCoriolis, baroEdges, baroCells };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, meltCalved, melted, meltBase, shelfMelted, shelfDraw, shelfBudget, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, baroPrep, baroCoriolis, baroEdges, baroCells };
 }
