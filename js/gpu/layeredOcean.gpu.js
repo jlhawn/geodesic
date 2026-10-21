@@ -1638,7 +1638,9 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
    * The start, build of ocean/layered.module.js: every
    * sea column on the depth table clipped to its floor, the atlas's layer
    * means where the atlas covers the cell, the nearest covered column's
-   * where it does not, the analytic profile without an atlas; the steric
+   * where it does not, under a shelf the nearest open column's at the same
+   * depth (its bottom water below its floor, no colder than the in-situ
+   * freezing point), the analytic profile without an atlas; the steric
    * free surface; then one regrid on the device once uploaded.
    */
   function hybridGrid(i, eta, zCol) {
@@ -1666,7 +1668,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
       if (!cellOcean[i]) continue;
       hybridGrid(i, eta, zCol);
       const lid = draft[i], bed = lid + D[i];
-      let column = atlas ? atlas.columnAt(lat, mesh.lonCell[i]) : null;
+      let column = atlas && !shelf[i] ? atlas.columnAt(lat, mesh.lonCell[i]) : null;
       if (column) {
         const reached = column.depths.length;
         if (atlas.columnReaching && atlas.depths && reached < atlas.depths.length && atlas.depths[reached] <= bed) {
@@ -1712,9 +1714,9 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
         ring = next;
       }
       const sourceAt = (y) => {
-        let top = draft[source], j = 0;
-        while (j < L - 1 && top + h[at(j, source)] < y) { top += h[at(j, source)]; j++; }
-        return at(j, source);
+        let top = draft[source], j = 0, last = at(0, source);
+        while (j < L - 1 && top + h[at(j, source)] < y) { if (h[at(j, source)] > 1e-9) last = at(j, source); top += h[at(j, source)]; j++; }
+        return shelf[i] && !(h[at(j, source)] > 1e-9) ? last : at(j, source);
       };
       if (draft[i] > 0) shelfLoad[i] = displacedWeight(draft[i], (y) => { const m = source >= 0 ? sourceAt(y) : -1; return m >= 0 && h[m] > 1e-9 ? [Q[m] / h[m], W[m] / h[m]] : [FREEZING_POINT, o.referenceS]; });
       let z = draft[i];
@@ -1723,11 +1725,10 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
         z += hk;
         let t = T0[i], sal = o.referenceS;
         if (source >= 0) {
-          let top = draft[source], j = 0;
-          while (j < L - 1 && top + h[at(j, source)] < center) { top += h[at(j, source)]; j++; }
-          const m = at(j, source);
+          const m = sourceAt(center);
           if (h[m] > 1e-9) { t = Q[m] / h[m]; sal = W[m] / h[m]; }
         }
+        if (shelf[i]) t = Math.max(t, SHELF_MELT.liquidusSlope * sal + baseFreezing(o.gravity * (shelfLoad[i] + o.density * (center - draft[i]))));
         Q[n] = hk * t; W[n] = hk * sal;
       }
     }

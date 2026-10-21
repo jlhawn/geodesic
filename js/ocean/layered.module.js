@@ -352,11 +352,13 @@ export function oceanCells(C, geography) {
 /*
  * A column under a shelf rests between the shelf's draft and the bed: its
  * resting thickness D is the bed's depth less the draft, and an edge
- * passes water from the deeper of its two drafts down to its sill.
+ * passes water from the deeper of its two drafts down to its sill, or
+ * through the sill floor where that is less: across a cell the shelf's
+ * base slopes, and the water beneath it follows.
  */
 export function restingColumns(mesh, bed, draft, edgeOcean, edgeSill, floor) {
   const D = Float64Array.from(bed, (d, i) => d - draft[i]), sillEdge = edgeSills(mesh, bed, edgeOcean, edgeSill, floor);
-  for (let e = 0; e < mesh.nEdges; e++) sillEdge[e] = Math.max(0, sillEdge[e] - Math.max(draft[mesh.cellsOnEdge[2 * e]], draft[mesh.cellsOnEdge[2 * e + 1]]));
+  for (let e = 0; e < mesh.nEdges; e++) { const top = Math.max(draft[mesh.cellsOnEdge[2 * e]], draft[mesh.cellsOnEdge[2 * e + 1]]); if (top > 0) sillEdge[e] = Math.max(edgeOcean[e] ? floor : 0, sillEdge[e] - top); }
   return { D, sillEdge };
 }
 
@@ -1181,7 +1183,9 @@ export function createOcean(mesh, {
    * its floor (the z grid of a column held at its minima), with the
    * atlas's layer means of temperature and salinity where the atlas
    * (`climatology`, decoded by ./climatology.module.js) covers the cell,
-   * the nearest covered column's where it does not, and without an atlas
+   * the nearest covered column's where it does not, under a shelf the
+   * nearest open column's at the same depth (its bottom water below its
+   * floor, no colder than the in-situ freezing point), and without an atlas
    * the analytic profile T = T_d + (T₀ − T_d) e^(−z/λ), T_d 2 °C, λ 400 m
    * stretched by the thermocline tilt, the salinity from salinityProfile
    * to 34.7 the same way; the steric free surface; then one regrid, so
@@ -1225,7 +1229,7 @@ export function createOcean(mesh, {
       if (!cellOcean[i]) { for (let k = 0; k < L; k++) { h[at(k, i)] = 0; Q[at(k, i)] = 0; W[at(k, i)] = 0; } T0[i] = iced[i] ? FREEZING_POINT : surfaceT[i]; S0[i] = referenceS; continue; }
       hybridGrid(i, zCol);
       const lid = draft[i], bed = lid + D[i];
-      let column = atlas ? atlas.columnAt(latCell[i], mesh.lonCell[i]) : null;
+      let column = atlas && !shelf[i] ? atlas.columnAt(latCell[i], mesh.lonCell[i]) : null;
       if (column) {
         const reached = column.depths.length;
         if (atlas.columnReaching && atlas.depths && reached < atlas.depths.length && atlas.depths[reached] <= bed) {
@@ -1271,9 +1275,9 @@ export function createOcean(mesh, {
         ring = next;
       }
       const sourceAt = (y) => {
-        let top = draft[source], j = 0;
-        while (j < L - 1 && top + h[at(j, source)] < y) { top += h[at(j, source)]; j++; }
-        return at(j, source);
+        let top = draft[source], j = 0, last = at(0, source);
+        while (j < L - 1 && top + h[at(j, source)] < y) { if (h[at(j, source)] > 1e-9) last = at(j, source); top += h[at(j, source)]; j++; }
+        return shelf[i] && !(h[at(j, source)] > 1e-9) ? last : at(j, source);
       };
       if (draft[i] > 0) shelfLoad[i] = displacedWeight(draft[i], (y) => { const m = source >= 0 ? sourceAt(y) : -1; return m >= 0 && h[m] > 1e-9 ? [Q[m] / h[m], W[m] / h[m]] : [FREEZING_POINT, referenceS]; }, eos);
       let z = draft[i];
@@ -1282,11 +1286,10 @@ export function createOcean(mesh, {
         z += hk;
         let t = iced[i] ? FREEZING_POINT : surfaceT[i], s = referenceS;
         if (source >= 0) {
-          let top = draft[source], j = 0;
-          while (j < L - 1 && top + h[at(j, source)] < center) { top += h[at(j, source)]; j++; }
-          const m = at(j, source);
+          const m = sourceAt(center);
           if (h[m] > 1e-9) { t = Q[m] / h[m]; s = W[m] / h[m]; }
         }
+        if (shelf[i]) t = Math.max(t, SHELF_MELT.liquidusSlope * s + baseFreezing(g * (shelfLoad[i] + rho0 * (center - draft[i]))));
         Q[n] = hk * t; W[n] = hk * s;
       }
     }
