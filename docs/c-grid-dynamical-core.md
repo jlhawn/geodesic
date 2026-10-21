@@ -558,15 +558,16 @@ three arrays (`createRK4Arrays`).
   bit-identical state after 50 steps; an isentropic column reproduces
   the analytic hydrostatic geopotential and the exact layer-mean Exner
   to 1e-12.
-- **Jablonowski & Williamson 2006** (`test/sigma_jw06.test.mjs`, N=16,
-  θ initialized so the model's own hydrostatic integration reproduces
-  the analytic geopotential, `π` uniform, the JW06 surface
-  geopotential): the balanced base state holds for five days with
-  surface pressure within 999.5–1000.8 hPa and winds within 0.9 m/s of
-  the initial field, mass to 1e-15. The 1 m/s perturbation grows into
-  the baroclinic wave on schedule — surface pressure 961/1023 hPa at
-  day 10 at this 480 km resolution, deepening fastest through days
-  7–10, against the paper's ~940 hPa at high resolution.
+- **Jablonowski & Williamson 2006** (`test/sigma_jw06.test.mjs` and
+  `test/sigma_jw06Wave.test.mjs`, N=16, θ initialized so the model's
+  own hydrostatic integration reproduces the analytic geopotential, `π`
+  uniform, the JW06 surface geopotential): the balanced base state
+  holds for five days with surface pressure within 999.5–1000.8 hPa and
+  winds within 0.9 m/s of the initial field, mass to 1e-15. The 1 m/s
+  perturbation grows into the baroclinic wave on schedule — surface
+  pressure 961/1023 hPa at day 10 at this 480 km resolution, deepening
+  fastest through days 7–10, against the paper's ~940 hPa at high
+  resolution.
 - **Levels.** The model's default is the CAM 26-level grid the paper was
   run on (`sigmaInterfaces()`: HOMME's `cami-26.ascii` read as σ with
   `p_s = p0`, plus the cap above CAM's 2.19 hPa lid, 27 layers). The
