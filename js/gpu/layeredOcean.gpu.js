@@ -44,7 +44,7 @@ export const OCEAN_DEFAULTS = {
   gustiness: 3,
   generator: 'hybrid', regridTime: 0, minimumLayer: H_MIN, modeDepth: MODE_DEPTH, mstar: 1.25, ekmanFactor: 0.5, nstar: 0.2, backgroundDiffusivity: 1e-5, convectiveDiffusivity: 0.1,
   tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED,
-  edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer,
+  edgeTransport: 'kept', shelfMelt: true, tidalSpeed: SHELF_MELT.tidalSpeed, shelfHeatTransfer: SHELF_MELT.heatTransfer, shelfSaltTransfer: SHELF_MELT.saltTransfer, shelfMeltLayer: 0,
 };
 const defaultSalinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2));
 
@@ -515,11 +515,24 @@ ${flush('true')}  }
   let capped = OD[O_SHELF + i] > 0.5; let ustar = select(sqrt(length(sv) / RHO0), sqrt(TOPDRAG) * length(vt), capped); let f = abs(OD[O_FCELL + i]);
 ${o.shelfMelt ? `  var freezing = false;
   if (capped) {
-    let melt = basalMelt(CT[0], CS[0] + SREF, OD[O_LIQUIDUS + i], sqrt(TOPDRAG * (dot(vt, vt) + TIDE2)));
+${o.shelfMeltLayer > 0 ? `    var slab = 0.0; var sumT = 0.0; var sumS = 0.0;
+    for (var k = 0; k < L; k++) { if (slab >= MELTLAYER) { break; } let part = min(CH[k], MELTLAYER - slab); sumT += part * CT[k]; sumS += part * CS[k]; slab += part; }
+    let meanT = sumT / slab; let meanS = sumS / slab + SREF;
+    let melt = basalMelt(meanT, meanS, OD[O_LIQUIDUS + i], sqrt(TOPDRAG * (dot(vt, vt) + TIDE2)));
+    let m = melt.x * dt; let water = m / FRESHRHO;
+    let meltHeat = -(OLFUS * m / RHOCP + water * (meanT - melt.y)); let meltSalt = -meanS * water;
+    var given = 0.0;
+    for (var k = 0; k < L; k++) {
+      if (given >= slab) { break; }
+      let part = min(CH[k], slab - given);
+      if (part > 0.0) { CQ[k] += meltHeat * part / slab; CW[k] += meltSalt * part / slab; CT[k] = CQ[k] / CH[k]; CS[k] = CW[k] / CH[k]; }
+      given += part;
+    }
+` : `    let melt = basalMelt(CT[0], CS[0] + SREF, OD[O_LIQUIDUS + i], sqrt(TOPDRAG * (dot(vt, vt) + TIDE2)));
     let m = melt.x * dt; let water = m / FRESHRHO;
     CQ[0] -= OLFUS * m / RHOCP + water * (CT[0] - melt.y); CW[0] -= (CS[0] + SREF) * water;
     CT[0] = CQ[0] / CH[0]; CS[0] = CW[0] / CH[0];
-    OD[O_MELT + i] = m; OD[O_MELTSUM + i] += m; freezing = m < 0.0;
+`}    OD[O_MELT + i] = m; OD[O_MELTSUM + i] += m; freezing = m < 0.0;
   }
 ` : ''}  var n = 0;
   for (var k = 0; k < L; k++) {
@@ -696,7 +709,7 @@ ${constLine('OGRAV', o.gravity)}
 ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)}
 ${langmuirHead}${constLine('MOMDEPTH', o.momentumDepth)} ${constLine('CENTRING', o.vorticityCentring)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
 ${constLine('SHEARNU', o.shearViscosity)} ${constLine('BACKNU', o.backgroundViscosity)} ${constLine('RBOT', o.bottomDrag)} ${constLine('TOPDRAG', o.topDrag)} ${constLine('NU4O', o.nu4)}
-${constLine('TIDE2', o.tidalSpeed * o.tidalSpeed)} ${constLine('FRESHRHO', SHELF_MELT.freshDensity)}
+${constLine('TIDE2', o.tidalSpeed * o.tidalSpeed)} ${constLine('FRESHRHO', SHELF_MELT.freshDensity)} ${constLine('MELTLAYER', o.shelfMeltLayer)}
 ${basalMeltWgsl({ rho0: o.density, rhoCp: o.density * o.specificHeat, latentHeat: o.latentHeatFusion, heatTransfer: o.shelfHeatTransfer, saltTransfer: o.shelfSaltTransfer })}
 ${constLine('FREEZE', FREEZING_POINT)} ${constLine('TREF', HEAT_REFERENCE)} ${constLine('SREF', SALT_REFERENCE)} ${constLine('GUSTO', o.gustiness)}
 ${constLine('JER_R1', jerlov[0])} ${constLine('JER_R2', 1 - jerlov[0])} ${constLine('JER_Z1', jerlov[1])} ${constLine('JER_Z2', jerlov[2])} ${constLine('PENDEPTH', PENETRATION_DEPTH)} ${constLine('JER_FLOOR', jerlov[0] * Math.exp(-PENETRATION_DEPTH / jerlov[1]) + (1 - jerlov[0]) * Math.exp(-PENETRATION_DEPTH / jerlov[2]))}
@@ -1102,7 +1115,7 @@ ${K}  let t = i32(id.x);
     for (var p = 0; p < 2; p++) {
       let d = POOLED[0][p]; let m = POOLED[0][2 + p]; let moved = select(0.0, min(m, d), d > 0.0);
       OD[O_POOLS + p] = d; OD[O_POOLS + 2 + p] = m; OD[O_POOLS + 4 + p] = moved; OD[O_POOLS + 6 + p] = m - moved;
-      OD[O_POOLS + 8 + p] = select(1.0, 1.0 - moved / d, d > 0.0); OD[O_POOLS + 10 + p] = select(0.0, (m - moved) / m, m != 0.0);
+      OD[O_POOLS + 8 + p] = select(1.0, (d - moved) / d, d > 0.0); OD[O_POOLS + 10 + p] = select(0.0, (m - moved) / m, m != 0.0);
     }
   }
 }`,

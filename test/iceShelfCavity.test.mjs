@@ -372,6 +372,101 @@ test('with the melt off, a homogeneous ocean under a sloping shelf with a front 
   for (const [u, eta] of [['cpu', 'cpuEta'], ['gpu', 'gpuEta']]) assert.ok(shelves[u] < 10 * bare[u] && shelves[eta] < 10 * bare[eta], `${u}: ${show(shelves)} against ${show(bare)}`);
 });
 
+test('with a 20 m melt layer, as in Losch (2008), the melt reads T_w and S_w as the mean of the 20 m below the ice base, spreads its heat and salt over them, closes both in each column, and melts more by the grounding line than the 3 m top layer does', () => {
+  const { mesh, raster, options } = shelfBands(8, 250), geography = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' }), C = mesh.nCells, E = mesh.nEdges, DT = 3600;
+  const cells = [...geography.cavity.keys()].filter((i) => geography.cavity[i]), { ocean } = warmOcean(mesh, geography, { shelfMeltLayer: 20 }), L = ocean.layers, load = ocean.serialize().shelfLoad;
+  const k = { rho0: 1025, rhoCp: ocean.rhoCp, latentHeat: 3.34e5 };
+  ocean.u.fill(0);
+  const before = cells.map((i) => {
+    let slab = 0, t = 0, s = 0, q = 0, w = 0;
+    for (let n = 0; n < L; n++) {
+      const j = n * C + i, part = Math.min(ocean.h[j], 20 - slab);
+      if (part > 0) { t += part * ocean.Q[j] / ocean.h[j]; s += part * ocean.W[j] / ocean.h[j]; slab += part; }
+      q += ocean.Q[j]; w += ocean.W[j];
+    }
+    return { i, T: t / slab, S: s / slab, q, w };
+  });
+  ocean.phases.column(DT);
+  for (const { i, T, S, q, w } of before) {
+    const { melt, Tb } = basalMelt(T, S, baseFreezing(9.81 * load[i]), Math.sqrt(2.5e-3 * SHELF_MELT.tidalSpeed ** 2), k), m = melt * DT;
+    let q1 = 0, w1 = 0;
+    for (let n = 0; n < L; n++) { q1 += ocean.Q[n * C + i]; w1 += ocean.W[n * C + i]; }
+    assert.ok(Math.abs(ocean.melted[i] - m) < 1e-12 * Math.abs(m) && Math.abs(ocean.meltBase[i] - Tb) < 1e-12 * Tb, `cell ${i}: melt ${ocean.melted[i]} against ${m} from the 20 m means ${T} K, ${S} psu`);
+    assert.ok(Math.abs(q1 - q + 3.34e5 * m / ocean.rhoCp + m / 1000 * (T - Tb)) < 1e-12 * q && Math.abs(w1 - w + S * m / 1000) < 1e-12 * w, `cell ${i}: heat ${q1 - q}, salt ${w1 - w}`);
+  }
+  const run = (shelfMeltLayer) => {
+    const { ocean: o, surfaceT, ice } = warmOcean(mesh, geography, { shelfMeltLayer }), flux = new Float64Array(C), calm = new Float64Array(E);
+    for (let n = 0; n < 2 * 64; n++) o.advance(surfaceT, ice, flux, calm, 1350);
+    return o;
+  };
+  const top = run(0), losch = run(20), deep = Math.max(...cells.map((i) => geography.iceDraft[i]));
+  const mean = (o, where) => { let a = 0, m = 0; for (const i of cells) if (where(i)) { a += mesh.areaCell[i]; m += mesh.areaCell[i] * o.shelfMelted[i]; } return m / a / (2 * 86400) * 365.25 * 86400 / ICE_DENSITY; };
+  const near = [mean(top, (i) => geography.iceDraft[i] > deep - 1), mean(losch, (i) => geography.iceDraft[i] > deep - 1)], all = [mean(top, () => true), mean(losch, () => true)];
+  console.log(`warm profile, N=8, 2 days, m/yr of ice: by the grounding line ${near.map((x) => x.toFixed(2)).join(' (3 m top layer) against ')} (20 m layer); mean ${all.map((x) => x.toFixed(2)).join(' against ')}`);
+  assert.ok(near[1] > near[0] && all[1] > all[0], `the 20 m layer's melt ${near[1]}, ${all[1]} against the top layer's ${near[0]}, ${all[0]}`);
+});
+
+test('under a still shelf the release of convection from an unstable top reaches the boundary layer only while the base freezes: supercooled water deepens it on both engines, and water as far above its freezing point melts the base and has none', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { raster, options } = shelfBands(8, 250), setup = { topography: raster, geography: { ...options, iceShelves: 'cavity' }, ocean: { everySteps: 1 } };
+  const { mesh, geography } = createModel(new Grid(8), setup), C = mesh.nCells, cells = [...geography.cavity.keys()].filter((i) => geography.cavity[i]);
+  const columns = async (offset) => {
+    const cpu = createOcean(mesh, { geography, everySteps: 1 }), L = cpu.layers, ice = new Float64Array(C), skin = new Float64Array(C).fill(275);
+    cpu.initialize(skin, ice);
+    const saved = { ...cpu.serialize(), ...cpu.restartArrays(), flux: new Float64Array(C) };
+    for (const i of cells) {
+      let z = 0;
+      for (let k = 0; k < L; k++) {
+        const n = k * C + i, S = 34.5 + (k === 0 ? 0.05 : 0) + (z >= 10 ? 0.1 : 0), T = SHELF_MELT.liquidusSlope * S + baseFreezing(9.81 * saved.shelfLoad[i]) + offset;
+        saved.Q[n] = saved.h[n] * T; saved.W[n] = saved.h[n] * S; saved.T[n] = T; saved.S[n] = S; z += saved.h[n];
+        if (k === 0) saved.previousT0[i] = T;
+      }
+    }
+    saved.u.fill(0);
+    const gpu = (await createGpuModel(new Grid(8), setup)).oceanEngine;
+    cpu.load(saved, skin, ice);
+    gpu.upload(saved, Float64Array.from(skin), ice);
+    cpu.phases.column(3600);
+    gpu.phases.column(3600);
+    const { melted } = await gpu.readShelfMelt(), { boundaryDepths } = await gpu.restartArrays();
+    return cells.map((i) => [cpu.melted[i], melted[i], cpu.boundaryDepths[i], boundaryDepths[i]]);
+  };
+  const frozen = await columns(-0.05), melting = await columns(0.05), least = (rows, m) => Math.min(...rows.map((r) => r[m]));
+  console.log(`0.05 K supercooled under a top 0.05 psu saltier than the 10 m below it: boundary layer CPU ${least(frozen, 2).toFixed(1)}–${Math.max(...frozen.map((r) => r[2])).toFixed(1)} m, GPU ${least(frozen, 3).toFixed(1)}–${Math.max(...frozen.map((r) => r[3])).toFixed(1)} m; melt CPU ${frozen[0][0].toExponential(4)}, GPU ${frozen[0][1].toExponential(4)} kg/m² in an hour`);
+  for (const [cpuMelt, gpuMelt, cpuDepth, gpuDepth] of frozen) assert.ok(cpuMelt < 0 && gpuMelt < 0 && cpuDepth > 1 && gpuDepth > 1, `supercooled: melt ${cpuMelt} / ${gpuMelt}, boundary layer ${cpuDepth} / ${gpuDepth} m`);
+  for (const [cpuMelt, gpuMelt, cpuDepth, gpuDepth] of melting) assert.ok(cpuMelt > 0 && gpuMelt > 0 && cpuDepth === 0 && gpuDepth === 0, `above freezing: melt ${cpuMelt} / ${gpuMelt}, boundary layer ${cpuDepth} / ${gpuDepth} m`);
+});
+
+test('with discharge at the outlets both engines take the melt out of the calving alike, when the discharge covers the melt and when the melt outruns it and draws on the store, with T_w from the top layer or the 20 m layer', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { raster, options } = shelfBands(8, 250), geo = { ...options, iceShelves: 'cavity' }, { mesh, geography } = createModel(new Grid(8), { topography: raster, geography: geo });
+  const C = mesh.nCells, E = mesh.nEdges, area = mesh.areaCell, cells = [...geography.cavity.keys()].filter((i) => geography.cavity[i]), calm = new Float64Array(E), flux = new Float64Array(C);
+  const total = (field) => cells.reduce((sum, i) => sum + area[i] * field[i], 0), near = (x, y, tol) => Math.abs(x - y) <= tol * Math.max(Math.abs(x), Math.abs(y));
+  for (const shelfMeltLayer of [0, 20]) {
+    const { ocean: cpu, surfaceT, ice } = warmOcean(mesh, geography, { shelfMeltLayer });
+    const model = await createGpuModel(new Grid(8), { topography: raster, geography: geo, ocean: { everySteps: 1, shelfMeltLayer } }), gpu = model.oceanEngine, core = model.gpu;
+    gpu.upload({ ...cpu.serialize(), ...cpu.restartArrays(), flux: new Float64Array(C) }, Float64Array.from(surfaceT), ice);
+    const shed = new Float32Array(C), land = Array.from({ length: C }, (_, j) => !cpu.cellOcean[j] && mesh.latCell[j] < -Math.PI / 3);
+    for (const amount of [10, 0.3]) {
+      const runoff = Float64Array.from(land, (x) => (x ? amount : 0));
+      runoff.forEach((x, j) => { shed[j] += x; });
+      cpu.accumulate(null, null, 3600, runoff, runoff);
+      core.device.queue.writeBuffer(core.buffers.PH, 4 * core.layout.PH.RUNOFF, shed);
+      core.device.queue.writeBuffer(core.buffers.PH, 4 * core.layout.PH.DISCHARGE, shed);
+      gpu.accumulateFreshwater(3600);
+      const outlets = [...cpu.calved.keys()].filter((i) => cpu.calved[i] > 0), cooling = Math.max(...outlets.map((i) => 3.34e5 * cpu.calved[i] / cpu.rhoCp / cpu.h[i])), skin = Float64Array.from(surfaceT);
+      cpu.advance(surfaceT, ice, flux, calm, 3600);
+      await gpu.advance(skin, ice, calm, 3600);
+      const B = cpu.shelfBudget, { pools, melted, shelfDraw } = await gpu.readShelfMelt(), b = await gpu.download();
+      const dT = Math.max(...outlets.map((i) => Math.abs(cpu.Q[i] / cpu.h[i] - b.T1[i]))), dS = Math.max(...outlets.map((i) => Math.abs(cpu.W[i] / cpu.h[i] - b.S1[i])));
+      const label = `${shelfMeltLayer || 3} m layer, ${amount} kg/m² discharged`;
+      console.log(`${label}: southern discharge ${B.discharge[0].toExponential(3)} / ${pools[0].toExponential(3)} kg, melt ${B.melt[0].toExponential(4)} / ${pools[2].toExponential(4)}, calving kept ${B.keep[0].toFixed(4)} / ${pools[8].toFixed(4)}; ${outlets.length} outlets cooled by up to ${cooling.toFixed(3)} K differ by ${dT.toExponential(1)} K and ${dS.toExponential(1)} psu`);
+      assert.ok(amount > 1 ? B.discharge[0] > B.melt[0] && B.keep[0] > 0 : B.melt[0] > B.discharge[0] && B.keep[0] === 0 && pools[8] === 0 && B.drawn[0] > 0, `${label}: ${JSON.stringify(B)}, GPU keeps ${pools[8]}`);
+      assert.ok(near(pools[0], B.discharge[0], 1e-5) && near(pools[2], B.melt[0], 1e-3) && near(pools[4], B.moved[0], 1e-3) && Math.abs(pools[8] - B.keep[0]) < 1e-3 && near(total(melted), total(cpu.melted), 1e-3), `${label}: GPU pools ${Array.from(pools)} against ${JSON.stringify(B)}`);
+      assert.ok(outlets.length > 0 && dT < 1e-3 && dS < 1e-3 && cooling > 0.02, `${label}: outlets differ by ${dT} K and ${dS} psu against a calving cooling of up to ${cooling} K`);
+      if (amount < 1) assert.ok(near(total(shelfDraw), total(cpu.shelfDraw), 1e-3) && total(cpu.shelfDraw) > 0, `${label}: the store pays ${total(cpu.shelfDraw)} kg on the CPU, ${total(shelfDraw)} on the GPU`);
+    }
+  }
+});
+
 test('on ETOPO 2022 the cavities lie under the Antarctic shelves near their observed extent, Ross and Filchner–Ronne the largest, the Amundsen Sea shelves resolved at N=128', () => {
   const topography = readTopography('etopo2022'), { geography: base } = geographyOptions(FRESH_GEOGRAPHY);
   const regions = {

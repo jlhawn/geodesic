@@ -381,7 +381,7 @@ export function createOcean(mesh, {
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
   vertical = 'hybrid', generator = 'hybrid', layerTable = HYBRID_LAYERS, regridTime = 0, minimumLayer = H_MIN, modeDepth = MODE_DEPTH, mstar = 1.25, ekmanFactor = 0.5, nstar = 0.2, backgroundDiffusivity = 1e-5, convectiveDiffusivity = 0.1,
   tracerAdvection = 'third', shearDiffusivity = SHEAR_DIFFUSIVITY, shearDiffusivityCap = 4000, lateralDiffusionSpeed = HYCOM_DIFFUSION_SPEED,
-  edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer,
+  edgeTransport = 'kept', shelfMelt = true, tidalSpeed = SHELF_MELT.tidalSpeed, shelfHeatTransfer = SHELF_MELT.heatTransfer, shelfSaltTransfer = SHELF_MELT.saltTransfer, shelfMeltLayer = 0,
 } = {}) {
   const {
     nCells: C, nEdges: E, nVertices: V, maxEdgesOnEdge, nEdgesOnEdge, edgesOnEdge, weightsOnEdge,
@@ -1007,9 +1007,24 @@ export function createOcean(mesh, {
       let meltHeat = 0, meltSalt = 0;
       if (shelf[i] && meltOn) {
         const speed2 = vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
-        const { melt, Tb } = basalMelt(TCol[0], SCol[0], baseFreezing(g * shelfLoad[i]), Math.sqrt(topDrag * (speed2 + tidalSpeed * tidalSpeed)), meltConstants);
+        let Tw = TCol[0], Sw = SCol[0], slab = 0;
+        if (shelfMeltLayer > 0) {
+          let sumT = 0, sumS = 0;
+          for (let k = 0; k < L && slab < shelfMeltLayer; k++) { const part = Math.min(hCol[k], shelfMeltLayer - slab); sumT += part * TCol[k]; sumS += part * SCol[k]; slab += part; }
+          Tw = sumT / slab; Sw = sumS / slab;
+        }
+        const { melt, Tb } = basalMelt(Tw, Sw, baseFreezing(g * shelfLoad[i]), Math.sqrt(topDrag * (speed2 + tidalSpeed * tidalSpeed)), meltConstants);
         const mass = melt * dt, water = mass / SHELF_MELT.freshDensity;
-        meltHeat = -(latentHeatFusion * mass / rhoCp + water * (TCol[0] - Tb)); meltSalt = -SCol[0] * water;
+        meltHeat = -(latentHeatFusion * mass / rhoCp + water * (Tw - Tb)); meltSalt = -Sw * water;
+        if (shelfMeltLayer > 0) {
+          let given = 0;
+          for (let k = 0; k < L && given < slab; k++) {
+            const part = Math.min(hCol[k], slab - given);
+            if (part > 0) { TCol[k] += meltHeat * part / slab / hCol[k]; SCol[k] += meltSalt * part / slab / hCol[k]; }
+            given += part;
+          }
+          meltHeat = 0; meltSalt = 0;
+        }
         melted[i] = mass; meltBase[i] = Tb; shelfMelted[i] += mass;
       }
       const result = mixColumn({ h: hCol, T: TCol, S: SCol, shear, K: L, ustar: shelf[i] ? Math.sqrt(topDrag) * Math.hypot(vector[0], vector[1], vector[2]) : Math.sqrt(stressAt(i) / rho0), f: fCell[i], dt, heat: meltHeat, salt: meltSalt, capped: shelf[i] === 1 && !(meltOn && melted[i] < 0), options }, out, cs);
@@ -1106,7 +1121,7 @@ export function createOcean(mesh, {
     for (let p = 0; p < 2; p++) {
       moved[p] = discharge[p] > 0 ? Math.min(melt[p], discharge[p]) : 0;
       drawn[p] = melt[p] - moved[p];
-      if (discharge[p] > 0) keep[p] = 1 - moved[p] / discharge[p];
+      if (discharge[p] > 0) keep[p] = (discharge[p] - moved[p]) / discharge[p];
       if (melt[p] !== 0) share[p] = drawn[p] / melt[p];
     }
     for (let i = 0; i < C; i++) {
