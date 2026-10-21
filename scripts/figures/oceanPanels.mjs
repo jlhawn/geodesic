@@ -15,16 +15,16 @@ import { THIN } from '../../js/ocean/layered.module.js';
 import { layerDensities, mixedLayerDepth } from '../../js/ocean/column.module.js';
 import { decodeMonthlySst, climatologyAt, MONTHLY_SST_FILE } from '../../js/ocean/climatology.module.js';
 import { stateSst } from '../woaSstBias.mjs';
-import { readState, readTopography, figureHeader, DEG, eastNorth, rounded } from './figureState.mjs';
+import { readState, readGeography, figureHeader, DEG, eastNorth, rounded } from './figureState.mjs';
 import { stateGrid } from '../../js/stateGrid.module.js';
 
 const [file, out] = process.argv.slice(2);
 if (!file || !out) { console.error('usage: node scripts/figures/oceanPanels.mjs <state.bin> <out.json>'); process.exit(2); }
 const KELVIN = 273.15, SURFACE_DEPTH = 15;
 const saved = await readState(file);
-const topography = readTopography();
+const { topography, geography } = readGeography(saved);
 const mesh = stateGrid(saved, topography).mesh, C = mesh.nCells, E = mesh.nEdges;
-const geo = createGeography(mesh, topography);
+const geo = createGeography(mesh, topography, geography);
 const woa = decodeMonthlySst(readFileSync(new URL(`../../${MONTHLY_SST_FILE}`, import.meta.url)));
 const judged = stateSst(saved, woa), { months } = judged, mean = judged.kind === 'mean';
 const { ocean } = saved, hybrid = ocean.vertical === 'hybrid', L = ocean.densities.length, { h, u, T, S } = ocean;

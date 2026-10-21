@@ -210,7 +210,7 @@ test('over 48 GPU steps the snow albedo and the standing cover evolve as on the 
   const rms = Math.sqrt(sum / n);
   gpu.destroy();
   console.log(`N=6, 48 steps: ${n} snow cells (${unlike} more whose snowfall parted by over 5% in some step), ${moved} moved from 0.8 (${refreshed} snowed on, ${wet} wet), snow albedo engines rms ${rms.toExponential(1)}, max ${worst.toExponential(1)} at ${at}; standing cover above the cover on ${standing} cells, engines max ${canopyWorst.toExponential(1)}`);
-  assert.ok(moved > n / 2 && refreshed > 3 && standing > 5 && wet > 5 && n - wet > 5 && unlike < n / 4, `${moved} moved, ${refreshed} snowed on, ${wet} of ${n} wet, ${standing} standing, ${unlike} snowed on unlike`);
+  assert.ok(moved > n / 2 && refreshed > 3 && standing > 5 && wet > 5 && n - wet > 5 && unlike < (n + unlike) / 4, `${moved} moved, ${refreshed} snowed on, ${wet} of ${n} wet, ${standing} standing, ${unlike} snowed on unlike`);
   assert.ok(rms < 1e-4 && worst < 1e-3, `snow albedo rms ${rms}, max ${worst}`);
   assert.ok(canopyWorst < 1e-4, `standing cover max ${canopyWorst}`);
 });

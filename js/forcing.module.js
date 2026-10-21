@@ -1,3 +1,4 @@
+import { geographyHeader, pickGeography } from './geography.module.js';
 import { encodeState, decodeState } from './stateFile.module.js';
 
 /*
@@ -61,10 +62,10 @@ function check(N, fields) {
   }
 }
 
-export function encodeForcing({ N, grid = null, day, time, seconds, steps, oceanSteps }, fields) {
+export function encodeForcing({ N, grid = null, geography = null, day, time, seconds, steps, oceanSteps }, fields) {
   check(N, fields);
   const arrays = Object.fromEntries(FORCING_FIELDS.map(([name]) => [name, fields[name]]));
-  return encodeState({ kind: 'forcing', version: FORCING_VERSION, N, ...(grid ? { grid } : {}), day, time, seconds, steps, oceanSteps, ...arrays });
+  return encodeState({ kind: 'forcing', version: FORCING_VERSION, N, ...(grid ? { grid } : {}), ...(geography ? geographyHeader(geography) : {}), day, time, seconds, steps, oceanSteps, ...arrays });
 }
 
 export async function decodeForcing(bytes) {
@@ -73,5 +74,5 @@ export async function decodeForcing(bytes) {
   if (version !== FORCING_VERSION) throw new Error(`forcing version ${version}, not ${FORCING_VERSION}`);
   const fields = Object.fromEntries(FORCING_FIELDS.map(([name]) => [name, rest[name]]));
   check(N, fields);
-  return { N, ...(grid ? { grid } : {}), day, time, seconds, steps, oceanSteps, fields };
+  return { N, ...(grid ? { grid } : {}), ...pickGeography(rest), day, time, seconds, steps, oceanSteps, fields };
 }

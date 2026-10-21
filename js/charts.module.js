@@ -1,5 +1,5 @@
 import { createModel } from './model.module.js';
-import { topographyFromInt16 } from './geography.module.js';
+import { topographyFromInt16, savedGeography, topographyUrl } from './geography.module.js';
 import { stateGrid } from './stateGrid.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { LEVELS, levelFields } from './levels.module.js';
@@ -226,7 +226,12 @@ export default async function runCharts(directory = 'runs/') {
   if (params.get('state') && names.includes(params.get('state'))) stateSelect.value = params.get('state');
   if (params.get('level')) levelSelect.value = params.get('level');
   const states = new Map();
-  const topography = fetch(new URL('../data/topography_0p25.bin', import.meta.url)).then((response) => (response.ok ? response.arrayBuffer() : null)).then((buffer) => (buffer ? topographyFromInt16(buffer) : null)).catch(() => null);
+  const topographies = new Map();
+  const topographyFor = (state) => {
+    const name = savedGeography(state).topography;
+    if (!topographies.has(name)) topographies.set(name, fetch(topographyUrl(name)).then((response) => (response.ok ? response.arrayBuffer() : null)).then((buffer) => (buffer ? topographyFromInt16(buffer, 720, 1440, name) : null)).catch(() => null));
+    return topographies.get(name);
+  };
   let current = '';
   async function render() {
     const name = stateSelect.value, level = levelSelect.value;
@@ -236,7 +241,7 @@ export default async function runCharts(directory = 'runs/') {
     status.textContent = `rendering ${level === 'surface' ? 'surface' : level + ' hPa'}…`;
     await new Promise((resolve) => setTimeout(resolve, 0));
     const t0 = performance.now();
-    current = chartFor(state, level, await topography);
+    current = chartFor(state, level, await topographyFor(state));
     holder.innerHTML = current;
     status.textContent = `${name} · ${level === 'surface' ? 'surface' : level + ' hPa'} · ${(performance.now() - t0).toFixed(0)} ms`;
     history.replaceState(null, '', `?state=${encodeURIComponent(name)}&level=${level}`);
