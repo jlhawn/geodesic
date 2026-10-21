@@ -4,9 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { config, gpuUsers, parseLsof, whoFrom, shortCommand } from '../scripts/gpuQueue.mjs';
+import { config, gpuUsers, parseLsof, whoFrom, shortCommand, serve, appendHistory, recentRuns } from '../scripts/gpuQueue.mjs';
 
 const script = fileURLToPath(new URL('../scripts/gpuQueue.mjs', import.meta.url));
 const wrapper = fileURLToPath(new URL('../scripts/gpuQueue.zsh', import.meta.url));
@@ -26,7 +27,10 @@ export async function getDevice() {
   await new Promise((resolve) => setTimeout(resolve, 50));
   fs.writeFileSync(\`\${process.env.FAKE_GPU}/\${process.pid}\`, '');
   fs.appendFileSync(process.env.TRACE, \`device \${process.pid} \${Date.now()}\\n\`);
-  return { device: { destroy() { fs.appendFileSync(process.env.TRACE, \`destroy \${process.pid} \${Date.now()}\\n\`); } } };
+  return { device: { destroy() {
+    fs.rmSync(\`\${process.env.FAKE_GPU}/\${process.pid}\`, { force: true });
+    fs.appendFileSync(process.env.TRACE, \`destroy \${process.pid} \${Date.now()}\\n\`);
+  } } };
 }
 `;
 const UNLABELED = `import fs from 'node:fs';
@@ -58,7 +62,25 @@ async function waitFor(check, seconds = 30) {
     if (Date.now() > until) throw new Error(`timed out waiting for ${check}`);
   }
 }
+async function until(check, seconds = 30) {
+  for (const deadline = Date.now() + seconds * 1000; ; await sleep(50)) {
+    const value = await check();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${check}`);
+  }
+}
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+function get(url, headers = {}, agent = false) {
+  return new Promise((resolve, reject) => {
+    http.get(url, { headers, agent }, (res) => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
+    }).on('error', reject);
+  });
+}
+const json = async (url) => JSON.parse((await get(url)).body);
 
 function bench(t, extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpu-queue-'));
@@ -89,6 +111,14 @@ function bench(t, extra = {}) {
     foreign: (argv) => start(argv[0], argv.slice(1)),
     job: (name, ms, gpuUser = true) => [process.execPath, path.join(dir, 'job.mjs'), name, String(ms), gpuUser ? '1' : '0'],
     status: () => spawnSync('/bin/zsh', ['-c', `source '${wrapper}'; gpu_status`], { env, encoding: 'utf8' }).stdout,
+    async monitor() {
+      const child = spawn('/bin/zsh', ['-c', `source '${wrapper}'; gpu_serve 0`], { env, stdio: ['ignore', 'pipe', 'inherit'], detached: true });
+      spawned.push(child);
+      let out = '';
+      child.stdout.setEncoding('utf8').on('data', (chunk) => { out += chunk; });
+      await waitFor(() => /http:\/\/127\.0\.0\.1:\d+\//.test(out), 10);
+      return /http:\/\/127\.0\.0\.1:\d+\//.exec(out)[0];
+    },
     file: () => read('queue/status.md'),
     trace() {
       const events = { start: {}, end: {}, pid: {}, device: {}, destroy: {} };
@@ -375,4 +405,133 @@ test('lsof output, worktrees and commands parse', () => {
   assert.equal(shortCommand(`env GPULOCK=/nonexistent PATH=/usr/bin:/bin 'OCEAN={"everySteps":8}' bash /private/tmp/s/scratchpad/fifteen/scripts/figures/snapshot.sh /private/tmp/s/n6/n6_day0003.bin 'N=6 ETOPO 2022 check'`),
     "bash …/figures/snapshot.sh …/n6/n6_day0003.bin 'N=6 ETOPO 2022 check'");
   assert.equal(shortCommand(`${node} x.mjs --state=/a/b/c/d.bin --out=/a/b 'it'\\''s'`), "node x.mjs --state=…/c/d.bin --out=/a/b 'it'\\''s'");
+});
+
+test('the monitor serves its page and the status as JSON', { skip }, async (t) => {
+  const b = bench(t);
+  const url = await b.monitor();
+  const page = await get(url);
+  assert.equal(page.status, 200);
+  assert.match(page.headers['content-type'], /^text\/html/);
+  assert.match(page.headers['content-security-policy'], /script-src 'sha256-[\w+/]+=*'; style-src 'sha256-[\w+/]+=*'/);
+  assert.match(page.body, /<title>GPU queue<\/title>/);
+  assert.match(page.body, /fetch\('status\.json'/);
+  assert.doesNotMatch(page.body, /\b(src|href)=["']?(https?:)?\/\/|@import|url\(/);
+  const status = await get(`${url}status.json`);
+  assert.equal(status.status, 200);
+  assert.match(status.headers['content-type'], /^application\/json/);
+  const s = JSON.parse(status.body);
+  assert.ok(Math.abs(s.now - Date.now()) < 5000);
+  assert.deepEqual({ ...s, now: 0 }, { now: 0, holder: null, exited: null, lock: [], queue: [], outside: [], port: null, dir: path.join(b.dir, 'queue'), history: [] });
+  assert.equal((await get(url, { host: 'gpu.example.com' })).status, 403);
+  assert.equal((await get(`${url}queue/holder.json`)).status, 404);
+  assert.equal(fs.existsSync(path.join(b.dir, 'queue')), false, 'the monitor wrote to the queue directory');
+});
+
+test('the monitor shows a labeled job as the holder, then in the history with its exit code', { skip }, async (t) => {
+  const b = bench(t);
+  const url = `${await b.monitor()}status.json`;
+  const alpha = b.run('alpha.log', [process.execPath, '-e', 'setTimeout(() => process.exit(3), 2000)'], { env: { GPU_WHO: 'alpha', GPU_JOB: 'labeled check' } });
+  const running = await until(async () => { const s = await json(url); return s.holder?.state === 'running' && s.holder; });
+  assert.deepEqual([running.who, running.what, running.pid, running.log], ['alpha', 'labeled check', alpha.pid, path.join(b.dir, 'alpha.log')]);
+  assert.ok(running.started >= running.acquired && running.acquired >= running.since);
+  const beta = b.run('beta.log', b.job('beta', 50), { env: { GPU_WHO: 'beta', GPU_JOB: 'second in line' } });
+  const [waiter] = await until(async () => { const { queue } = await json(url); return queue.length && queue; });
+  assert.deepEqual([waiter.who, waiter.what, waiter.pid, waiter.log], ['beta', 'second in line', beta.pid, path.join(b.dir, 'beta.log')]);
+  assert.equal((await json(url)).holder.pid, alpha.pid);
+  assert.deepEqual(await Promise.all([alpha.exited, beta.exited]), [3, 0]);
+  const done = await until(async () => { const s = await json(url); return s.history.length === 2 && s; });
+  assert.equal(done.holder, null);
+  const [second, first] = done.history;
+  assert.deepEqual({ ...first, queued: 0, started: 0, ended: 0 },
+    { who: 'alpha', what: 'labeled check', log: path.join(b.dir, 'alpha.log'), pid: alpha.pid, queued: 0, started: 0, ended: 0, rc: 3, aborts: null });
+  assert.ok(first.queued <= first.started && first.ended - first.started >= 2000);
+  assert.deepEqual([second.who, second.what, second.pid, second.rc, second.aborts], ['beta', 'second in line', beta.pid, 0, null]);
+  assert.ok(second.started >= first.ended);
+  assert.deepEqual(b.read('queue/history.jsonl').trim().split('\n').map((line) => JSON.parse(line)).sort((x, y) => x.ended - y.ended), [first, second]);
+});
+
+test('polling the monitor never opens the lock or a ticket, so no waiter waits on it', { skip }, async (t) => {
+  const b = bench(t);
+  const cfg = config(b.env);
+  const touched = [];
+  for (const name of ['openSync', 'writeFileSync', 'appendFileSync', 'renameSync', 'rmSync', 'unlinkSync', 'mkdirSync']) {
+    const original = fs[name];
+    fs[name] = function (file, ...rest) {
+      if (typeof file === 'string' && path.resolve(file).startsWith(cfg.dir)) touched.push(`${name} ${file}`);
+      return original.call(this, file, ...rest);
+    };
+    t.after(() => { fs[name] = original; });
+  }
+  const server = await serve(cfg, 0);
+  const agent = new http.Agent({ keepAlive: true });
+  const url = `http://127.0.0.1:${server.address().port}/status.json`;
+  let polling = true;
+  const codes = [];
+  const pollers = Array.from({ length: 4 }, async () => {
+    for (; polling; await sleep(5)) codes.push(await get(url, {}, agent).then((res) => res.status, (error) => error.code));
+  });
+  t.after(async () => {
+    polling = false;
+    await Promise.all(pollers);
+    agent.destroy();
+    server.close();
+  });
+
+  const holder = b.run('holder.log', b.job('orphan', 2500, false));
+  await waitFor(() => b.trace().start.orphan);
+  const first = b.run('first.log', b.job('first', 200));
+  await waitFor(() => /^queued /m.test(b.read('first.log')));
+  process.kill(holder.pid, 'SIGKILL');
+  await holder.exited;
+  const stuck = await until(async () => { const s = await json(url); return s.lock.length && s; });
+  assert.equal(stuck.holder, null);
+  assert.deepEqual(stuck.lock.map((p) => p.pid), [b.trace().pid.orphan]);
+  assert.equal(stuck.exited.pid, holder.pid);
+  assert.deepEqual(stuck.queue.map((w) => w.pid), [first.pid]);
+  const second = b.run('second.log', b.job('second', 200));
+  assert.deepEqual(await Promise.all([first.exited, second.exited]), [0, 0]);
+  polling = false;
+  await Promise.all(pollers);
+  assert.deepEqual(touched, [], 'the monitor opened or wrote a file in the queue directory');
+  assert.ok(codes.length > 20 && codes.every((code) => code === 200), `${codes.length} polls, codes ${[...new Set(codes)]}`);
+  const { start, end } = b.trace();
+  assert.ok(start.first >= end.orphan && start.second >= end.first);
+  assert.ok(start.first - end.orphan < 3000 && start.second - end.first < 3000, 'a waiter was slow to take its turn');
+});
+
+test('the monitor refuses the ports the queue and the page use, and a busy one', { skip }, async (t) => {
+  const b = bench(t, { GPU_QUEUE_PORT: '9123' });
+  const serveOn = (port) => spawnSync(process.execPath, [script, 'serve', port], { env: b.env, encoding: 'utf8', timeout: 10000 });
+  for (const port of ['8000', '8001', '9123']) {
+    const refused = serveOn(port);
+    assert.equal(refused.status, 2);
+    assert.match(refused.stderr, new RegExp(`^gpu_serve: port ${port} is reserved`));
+  }
+  assert.match(serveOn('http').stderr, /^gpu_serve: not a port: http$/m);
+  const busy = net.createServer();
+  await new Promise((resolve) => busy.listen(0, '127.0.0.1', resolve));
+  t.after(() => busy.close());
+  const taken = serveOn(String(busy.address().port));
+  assert.equal(taken.status, 1);
+  assert.match(taken.stderr, new RegExp(`^gpu_serve: port ${busy.address().port} is in use by pid ${process.pid}$`, 'm'));
+});
+
+test('the history keeps its last 500 runs once it passes 1000', { skip }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpu-queue-history-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const cfg = config({ GPU_QUEUE_DIR: dir });
+  fs.writeFileSync(cfg.history, Array.from({ length: 999 }, (_, n) => `${JSON.stringify({ n })}\n`).join(''));
+  appendHistory(cfg, { n: 999 });
+  assert.equal(fs.readFileSync(cfg.history, 'utf8').split('\n').filter(Boolean).length, 1000);
+  appendHistory(cfg, { n: 1000 });
+  const kept = fs.readFileSync(cfg.history, 'utf8').split('\n');
+  assert.equal(kept.pop(), '');
+  assert.deepEqual(kept.map((line) => JSON.parse(line).n), Array.from({ length: 500 }, (_, i) => 501 + i));
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['history.jsonl', 'status.lock']);
+  assert.deepEqual(recentRuns(cfg, 3).map((run) => run.n), [1000, 999, 998]);
+  appendHistory(cfg, { n: 'long scan', ended: 2000 });
+  appendHistory(cfg, { n: 'short scan', ended: 3000 });
+  fs.appendFileSync(cfg.history, '{"n":1001,"cut sh');
+  assert.deepEqual(recentRuns(cfg, 3).map((run) => run.n), ['short scan', 'long scan', 1000]);
 });
