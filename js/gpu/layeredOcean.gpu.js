@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
-import { beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { oceanCells, beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -509,7 +509,7 @@ ${flush('true')}  }
   var sv = vec3<f32>(0.0, 0.0, 0.0);
   for (var m = 0; m < MAXE; m++) { sv += weights[m] * OD[O_STRESS + edges[m]] * normals[m]; }
   sv = sv / area;
-  let ustar = sqrt(length(sv) / RHO0); let f = abs(OD[O_FCELL + i]);
+  let capped = OD[O_SHELF + i] > 0.5; let ustar = select(sqrt(length(sv) / RHO0), 0.0, capped); let f = abs(OD[O_FCELL + i]);
   var n = 0;
   for (var k = 0; k < L; k++) {
     CK[n] = f32(k); CTT[n] = CH[k]; CTS[n] = CQ[k]; CA[n] = CW[k]; CB[n] = eosA(CT[k], CS[k]);
@@ -556,7 +556,7 @@ ${flush('true')}  }
     previous = wv; rPrev = rk; hPrev = hk; aPrev = ak; bPrev = bk;
   }
   CIK[L - 1] = 0.0; CINU[L - 1] = 0.0;
-  let convective = max(0.0, released); let vstar = pow(ustar * ustar * ustar + convective / (RHO0 * dt), 1.0 / 3.0);
+  let convective = select(max(0.0, released), 0.0, capped); let vstar = select(pow(ustar * ustar * ustar + convective / (RHO0 * dt), 1.0 / 3.0), 0.0, capped);
   var depth = 0.0; var NL = 0;
   if (vstar > 0.0) {
     let lowest = min(BLFLOOR, H); let guess = OD[O_BLD + i]; let half = max(lowest, 0.5 * guess); let twice = min(H, 2.0 * guess);
@@ -1029,6 +1029,7 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
   for (var k = 0; k < L; k++) { let n = uOff(k) + e; IN[n] = clamp(IN[n] + shift, -SPEEDLIM, SPEEDLIM); }
 }`,
     oReadSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
+  if (OD[O_SHELF + i] > 0.5) { OD[O_ICED + i] = 0.0; return; }
   let iced = OD[O_SURFICE + i] > 0.0;
   OD[O_ICED + i] = select(0.0, 1.0, iced);
   let t0 = select(OD[O_SURFT + i], FREEZE, iced);
@@ -1063,7 +1064,7 @@ fn eddyShare(xa: f32, xb: f32, sa: f32, sb: f32, moved: f32) -> f32 {
   if (OD[O_EMASK + e] < 0.5) { OD[O_STRESS + e] = 0.0; return; }
   let coverA = select(0.0, select(1.0, PH[PH_CONC + a], PH[PH_CONC + a] > 0.0), OD[O_ICED + a] > 0.5);
   let coverB = select(0.0, select(1.0, PH[PH_CONC + b], PH[PH_CONC + b] > 0.0), OD[O_ICED + b] > 0.5);
-  let through = 1.0 - 0.5 * (coverA + coverB) * (1.0 - TRANSMIT);
+  let through = (1.0 - 0.5 * (coverA + coverB) * (1.0 - TRANSMIT)) * (1.0 - 0.5 * (OD[O_SHELF + a] + OD[O_SHELF + b]));
 ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through * PH[PH_STRESS + e]; return; }\n' : ''}  let bottom = (K - 1) * C;
   let rhoA = S[S_PI + a] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + a] * D[D_EXM + bottom + a]);
   let rhoB = S[S_PI + b] * LV[L_SM + K - 1] / (RGAS * S[S_TH + bottom + b] * D[D_EXM + bottom + b]);
@@ -1071,7 +1072,7 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
   OD[O_STRESS + e] = through * 0.5 * (fa + fb) * S[S_U + (K - 1) * E + e];
 }`,
     oSalt: `${K}  let i = ${idx}; if (i >= C) { return; }
-  if (OD[O_CMASK + i] < 0.5) { return; }
+  if (OD[O_CMASK + i] < 0.5 || OD[O_SHELF + i] > 0.5) { return; }
   let s = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
   var w = IN[wOff(0) + i] + s * OD[O_FRESH + i] / 1000.0;
   let volume = iceVolume(i);
@@ -1086,6 +1087,13 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
 }`,
     oWriteSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { PH[PH_OFLUX + i] = 0.0; return; }
+  if (OD[O_SHELF + i] > 0.5) {
+    PH[PH_OFLUX + i] = 0.0;
+    OD[O_S0 + i] = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
+    OD[O_T0 + i] = IN[qOff(0) + i] / IN[hOff(0) + i] + TREF;
+    OD[O_PREVT0 + i] = OD[O_T0 + i];
+    return;
+  }
   PH[PH_CAP + i] = RHOCP * max(IN[hOff(0) + i], 1.0);
 ${o.penetration ? '  PH[PH_TRANS + i] = transmitted(IN[hOff(0) + i]);\n' : ''}  OD[O_S0 + i] = IN[wOff(0) + i] / IN[hOff(0) + i] + SREF;
   if (OD[O_ICED + i] > 0.5) {
@@ -1102,7 +1110,7 @@ ${o.penetration ? '  PH[PH_TRANS + i] = transmitted(IN[hOff(0) + i]);\n' : ''}  
     oAccumulateFresh: `${K}  let i = ${idx}; if (i >= C) { return; }
   let rain = PH[PH_RAIN + i]; let seen = OD[O_RAINSEEN + i];
   let delta = select(rain, rain - seen, rain >= seen);
-  if (OD[O_CMASK + i] > 0.5) {
+  if (OD[O_CMASK + i] > 0.5 && OD[O_SHELF + i] < 0.5) {
     var fresh = PH[PH_EVAP + i] * P[6] - delta;
     var calved = 0.0;
     for (var p = i32(OD[O_DRAINSTART + i]); p < i32(OD[O_DRAINSTART + i + 1]); p++) {
@@ -1196,13 +1204,12 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const eddyKappa = eddyDiffusivities(mesh, o.eddyDiffusivity), eddyLimit = o.eddyDiffusivity > 0 ? eddyDiffusionLimit(mesh) : 0;
   let minSpacing = Infinity;
   for (let e = 0; e < E; e++) minSpacing = Math.min(minSpacing, mesh.dcEdge[e]);
-  const geography = o.geography || null;
-  const edgeOcean = geography ? geography.edgeOcean : new Uint8Array(E).fill(1);
-  const cellOcean = geography ? Uint8Array.from(geography.land, (l) => (l ? 0 : 1)) : new Uint8Array(C).fill(1);
+  const geography = o.geography || null, { water, cellOcean, shelf, cellOpen } = oceanCells(C, geography);
+  const edgeOcean = water ? water.edgeOcean : new Uint8Array(E).fill(1);
   const D = new Float64Array(C);
-  const smoothed = o.bathymetry ? null : bathymetryFrom(mesh, geography, { minimumDepth: o.minimumDepth, flatDepth: o.flatDepth });
+  const smoothed = o.bathymetry ? null : bathymetryFrom(mesh, water, { minimumDepth: o.minimumDepth, flatDepth: o.flatDepth });
   for (let i = 0; i < C; i++) D[i] = !cellOcean[i] ? 0 : o.bathymetry ? o.bathymetry[i] : smoothed[i];
-  const sillEdge = edgeSills(mesh, D, edgeOcean, o.edgeSill === undefined ? (geography ? geography.edgeSill ?? null : null) : o.edgeSill, o.sillFloor ?? o.minimumDepth);
+  const sillEdge = edgeSills(mesh, D, edgeOcean, o.edgeSill === undefined ? (water ? water.edgeSill ?? null : null) : o.edgeSill, o.sillFloor ?? o.minimumDepth);
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
   const substepLimit = 0.35 * minSpacing / Math.sqrt(o.gravity * Math.max(deepest, 1));
@@ -1215,7 +1222,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const drainStart = new Float32Array(C + 1), drainCells = [], drainWeights = [];
   {
     const byOutlet = Array.from({ length: C }, () => []);
-    for (let j = 0; j < C; j++) if (!cellOcean[j] && outlet[j] >= 0) byOutlet[outlet[j]].push(j);
+    for (let j = 0; j < C; j++) if (!cellOpen[j] && outlet[j] >= 0) byOutlet[outlet[j]].push(j);
     for (let i = 0; i < C; i++) {
       drainStart[i] = drainCells.length;
       for (const j of byOutlet[i]) { drainCells.push(j); drainWeights.push(mesh.areaCell[j] / mesh.areaCell[i]); }
@@ -1243,7 +1250,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
     ['RUNOFFSEEN', C], ['DISCHARGESEEN', C], ['CALVED', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
     ['EDDYK', E],
-    ['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C], ['SILL', E],
+    ['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C], ['SILL', E], ['SHELF', C],
     ...(third ? [['BEY', 2 * E], ['BED', 2 * E]] : []),
   ]);
   // The barotropic RK4's fixed-offset blocks index into the same OD storage
@@ -1463,8 +1470,8 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   }
   const coverOf = (ice, concentration, i) => (ice[i] > 0 ? (concentration && concentration[i] > 0 ? concentration[i] : 1) : 0);
   function setStress(total, ice, concentration = null) {
-    const masked = new Float32Array(E), cover = (i) => coverOf(ice, concentration, i);
-    for (let e = 0; e < E; e++) masked[e] = edgeOcean[e] ? total[e] * (1 - 0.5 * (cover(mesh.cellsOnEdge[2 * e]) + cover(mesh.cellsOnEdge[2 * e + 1])) * (1 - o.iceStressTransmission)) : 0;
+    const masked = new Float32Array(E), cover = (i) => (shelf[i] ? 0 : coverOf(ice, concentration, i));
+    for (let e = 0; e < E; e++) masked[e] = edgeOcean[e] ? total[e] * (1 - 0.5 * (cover(mesh.cellsOnEdge[2 * e]) + cover(mesh.cellsOnEdge[2 * e + 1])) * (1 - o.iceStressTransmission)) * (1 - 0.5 * (shelf[mesh.cellsOnEdge[2 * e]] + shelf[mesh.cellsOnEdge[2 * e + 1]])) : 0;
     device.queue.writeBuffer(ob.OD, 4 * OD.STRESS, masked);
   }
   function salt(dt) {
@@ -1602,7 +1609,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
       return sum;
     };
     for (let i = 0; i < C; i++) {
-      const iced = ice[i] > 0, lat = mesh.latCell[i];
+      const iced = ice[i] > 0 || shelf[i] === 1, lat = mesh.latCell[i];
       T0[i] = iced ? FREEZING_POINT : surfaceT[i];
       if (!cellOcean[i]) continue;
       hybridGrid(i, eta, zCol);
@@ -1665,7 +1672,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     }
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
-      T0[i] = ice[i] > 0 ? FREEZING_POINT : Math.max(FREEZING_POINT, Q[i] / h[i]);
+      T0[i] = ice[i] > 0 || shelf[i] ? FREEZING_POINT : Math.max(FREEZING_POINT, Q[i] / h[i]);
       Q[i] = h[i] * T0[i];
       previousT0[i] = T0[i];
     }
@@ -1688,6 +1695,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     device.queue.writeBuffer(ob.OD, 4 * OD.ETA, Float32Array.from(eta));
     device.queue.writeBuffer(ob.OD, 4 * OD.EMASK, Float32Array.from(edgeOcean));
     device.queue.writeBuffer(ob.OD, 4 * OD.CMASK, Float32Array.from(cellOcean));
+    device.queue.writeBuffer(ob.OD, 4 * OD.SHELF, Float32Array.from(shelf));
     device.queue.writeBuffer(ob.OD, 4 * OD.BATH, Float32Array.from(D));
     device.queue.writeBuffer(ob.OD, 4 * OD.FEDGE, Float32Array.from(mesh.fEdge));
     if (third) { const beyond = beyondCells(mesh); device.queue.writeBuffer(ob.OD, 4 * OD.BEY, Float32Array.from(beyond.cell)); device.queue.writeBuffer(ob.OD, 4 * OD.BED, Float32Array.from(beyond.edge)); }
@@ -1718,7 +1726,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   }
   function transmissionOf(h) {
     const out = new Float64Array(C);
-    for (let i = 0; i < C; i++) if (cellOcean[i]) out[i] = transmittedShare(h[i], o.penetration);
+    for (let i = 0; i < C; i++) if (cellOpen[i]) out[i] = transmittedShare(h[i], o.penetration);
     return out;
   }
   function initialize(surfaceT, ice, { climatology: atlas = o.climatology ?? null, concentration = seaCover } = {}) {
@@ -1731,7 +1739,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     for (let i = 0; i < C; i++) {
       if (!cellOcean[i]) continue;
       if (filled[i]) covered++; else other++;
-      if (filled[i] && !(ice[i] > 0)) surfaceT[i] = T0[i];
+      if (filled[i] && !(ice[i] > 0) && !shelf[i]) surfaceT[i] = T0[i];
     }
     return { atlas: covered, analytic: other };
   }

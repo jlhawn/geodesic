@@ -2,9 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
+import { initializeState } from '../js/physics/init.module.js';
 import { gridMesh } from '../js/stateGrid.module.js';
-import { bathymetryFrom } from '../js/ocean/layered.module.js';
+import { bathymetryFrom, createOcean } from '../js/ocean/layered.module.js';
 import { syntheticTopography, createGeography, encodeLandIce, decodeLandIce, readTopography, geographyOptions, FRESH_GEOGRAPHY, ICE_DENSITY, SEAWATER_DENSITY } from '../js/geography.module.js';
+
+let gpuAvailable = true;
+try { await import('webgpu'); } catch { gpuAvailable = false; }
+const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
 const deg = 180 / Math.PI;
 const sparse = ({ rows, cols, points, count, ...fields }) => {
@@ -15,8 +20,8 @@ const sparse = ({ rows, cols, points, count, ...fields }) => {
   }));
 };
 
-test('a cavity is land to the atmosphere and sea beneath its shelf, from the draft of the floating ice down to the bed, and stays land where less than cavityDepth of water lies under the shelf', () => {
-  const mesh = gridMesh(new Grid(8)), rows = 90, cols = 180, points = 225, freeboard = 50, H = 400, draft = H * ICE_DENSITY / SEAWATER_DENSITY, deep = -800, shallow = -Math.round(draft + 30);
+function shelfBands(N = 8) {
+  const mesh = gridMesh(new Grid(N)), rows = 90, cols = 180, points = 225, freeboard = 50, H = 400, draft = H * ICE_DENSITY / SEAWATER_DENSITY, deep = -800, shallow = -Math.round(draft + 30);
   const zone = (lat) => (lat < -70 ? 'grounded' : lat < -54 ? 'shallow' : lat < -38 ? 'deep' : 'sea');
   const raster = syntheticTopography(rows, cols, (lat) => ({ grounded: 500, shallow: freeboard, deep: freeboard, sea: -4000 })[zone(lat * deg)]);
   const pixels = (f) => Array.from({ length: rows * cols }, (_, n) => f(zone(90 - (Math.floor(n / cols) + 0.5) * 180 / rows))), afloat = (z) => z === 'shallow' || z === 'deep';
@@ -25,7 +30,39 @@ test('a cavity is land to the atmosphere and sea beneath its shelf, from the dra
     floating: pixels((z) => (afloat(z) ? points : 0)), floatThickness: pixels((z) => (afloat(z) ? H : 0)), floatSurface: pixels((z) => (afloat(z) ? freeboard : 0)),
     floatBed: pixels((z) => (z === 'deep' ? deep : z === 'shallow' ? shallow : 0)),
   });
-  const options = { landBridges: {}, seaStraits: {}, landIce: ice }, shelf = createGeography(mesh, raster, options), cavity = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' });
+  return { mesh, raster, zone, draft, deep, options: { landBridges: {}, seaStraits: {}, landIce: ice } };
+}
+
+async function prepare(model) {
+  const init = initializeState(model, {});
+  for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
+  for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
+  if (model.load) model.load();
+  model.ocean.initialize(model.state[3], model.state[6]);
+  model.land.initialize();
+  return model;
+}
+
+// Under a shelf the water starts on ISOMIP+'s warm profile: in a neutral column rounding decides convection, and f32 and f64 round apart.
+function stratify(cpu, gpu) {
+  const ocean = cpu.ocean, C = cpu.mesh.nCells, cavity = cpu.geography.cavity ?? new Uint8Array(C), saved = { ...ocean.serialize(), ...ocean.restartArrays(), flux: new Float64Array(C) };
+  for (let i = 0; i < C; i++) {
+    if (!cavity[i]) continue;
+    let z = 0;
+    for (let k = 0; k < ocean.layers; k++) {
+      const n = k * C + i, hk = ocean.h[n], f = (z + 0.5 * hk) / 720;
+      saved.Q[n] = hk * (271.25 + 2.9 * f);
+      saved.W[n] = hk * (33.8 + 0.9 * f);
+      z += hk;
+    }
+    saved.previousT0[i] = saved.Q[i] / ocean.h[i];
+  }
+  ocean.load(saved, cpu.state[3], cpu.state[6]);
+  gpu.ocean.load(saved, gpu.state[3], gpu.state[6]);
+}
+
+test('a cavity is land to the atmosphere and sea beneath its shelf, from the draft of the floating ice down to the bed, and stays land where less than cavityDepth of water lies under the shelf', () => {
+  const { mesh, raster, zone, draft, deep, options } = shelfBands(), shelf = createGeography(mesh, raster, options), cavity = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' });
   for (const name of ['land', 'landFraction', 'elevation', 'iceSheet', 'iceFraction', 'iceThickness', 'shelfFraction', 'shelfThickness', 'wetDepth', 'edgeOcean', 'edgeSill', 'coastEdges']) {
     assert.deepEqual(Array.from(cavity[name]), Array.from(shelf[name]), `the atmosphere's ${name}`);
   }
@@ -53,7 +90,111 @@ test('a cavity is land to the atmosphere and sea beneath its shelf, from the dra
   assert.ok(inner >= 5, `${inner} edges inside the cavity`);
   const thin = createGeography(mesh, raster, { ...options, iceShelves: 'cavity', cavityDepth: 20 });
   for (let i = 0; i < mesh.nCells; i++) if (pure[i] > 0 && zone(mesh.latCell[i] * deg) === 'shallow') assert.equal(thin.cavity[i], 1, `shallow cell ${i} holds 30 m under its shelf`);
-  assert.throws(() => createModel(new Grid(8), { topography: raster, geography: { ...options, iceShelves: 'cavity' } }), /does not take ice-shelf cavities yet/);
+});
+
+test('under a shelf the ocean takes nothing from the air: the temperature, ice, rain, evaporation and stress there change nothing in the water, and the ocean writes no surface temperature, flux, light share or fresh water there', () => {
+  const { mesh, raster, options } = shelfBands(), geography = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' });
+  const C = mesh.nCells, E = mesh.nEdges, { cavity } = geography, cellsOf = (e) => [mesh.cellsOnEdge[2 * e], mesh.cellsOnEdge[2 * e + 1]];
+  const inside = (e) => cellsOf(e).every((c) => cavity[c]), front = (e) => geography.ocean.edgeOcean[e] && cavity[cellsOf(e)[0]] !== cavity[cellsOf(e)[1]];
+  const volume = (ocean) => { let sum = 0; for (let n = 0; n < ocean.h.length; n++) sum += mesh.areaCell[n % C] * ocean.h[n]; return sum; };
+  const run = (over) => {
+    const ocean = createOcean(mesh, { geography, everySteps: 1 });
+    const surfaceT = Float64Array.from({ length: C }, (_, i) => (cavity[i] ? over.T : 285 - 15 * Math.sin(mesh.latCell[i]) ** 2)), flux = new Float64Array(C);
+    const ice = Float64Array.from({ length: C }, (_, i) => (cavity[i] ? over.ice : 0));
+    const stress = Float64Array.from({ length: E }, (_, e) => (inside(e) ? over.stress : 0.1 * Math.cos(3 * mesh.latCell[cellsOf(e)[0]])));
+    const evaporation = Float64Array.from({ length: C }, (_, i) => (cavity[i] ? over.evaporation : 3e-5)), rain = Float64Array.from({ length: C }, (_, i) => (cavity[i] ? over.rain : 0.05));
+    ocean.initialize(surfaceT, ice);
+    const before = volume(ocean);
+    for (let n = 0; n < 24; n++) { ocean.accumulate(evaporation, rain, 3600); ocean.advance(surfaceT, ice, flux, stress, 3600); }
+    return { ocean, surfaceT, flux, before, after: volume(ocean) };
+  };
+  const a = run({ T: 240, ice: 2, stress: 0.8, evaporation: 1e-4, rain: 3 }), b = run({ T: 300, ice: 0, stress: 0, evaporation: 0, rain: 0 });
+  for (const name of ['h', 'u', 'Q', 'W', 'eta']) {
+    let differ = 0;
+    for (let n = 0; n < a.ocean[name].length; n++) if (a.ocean[name][n] !== b.ocean[name][n]) differ++;
+    assert.equal(differ, 0, `${name}: ${differ} values differ`);
+  }
+  let cells = 0, inner = 0, fronts = 0, moving = 0;
+  for (let i = 0; i < C; i++) {
+    if (!cavity[i]) continue;
+    cells++;
+    assert.deepEqual([a.surfaceT[i], b.surfaceT[i], a.flux[i], b.flux[i], a.ocean.transmission[i], a.ocean.fresh[i], a.ocean.calved[i]], [240, 300, 0, 0, 0, 0, 0], `cavity cell ${i}`);
+  }
+  for (let e = 0; e < E; e++) {
+    if (inside(e)) { inner++; assert.equal(a.ocean.stress[e], 0, `edge ${e} inside the cavity`); }
+    if (front(e)) { fronts++; moving = Math.max(moving, Math.abs(a.ocean.u[e])); }
+  }
+  assert.ok(cells >= 10 && inner >= 10 && fronts >= 10, `${cells} cavity cells, ${inner} edges inside, ${fronts} on the front`);
+  assert.ok(moving > 1e-4, `the water at the front moves (${moving} m/s), so the cavity is not walled off`);
+  assert.ok(Math.abs(a.after - a.before) < 1e-12 * a.before, `the sea and its cavities hold their water: ${a.after - a.before} m³ of ${a.before}`);
+});
+
+test('under a shelf the column has no boundary layer, stirred by neither the wind nor the release of convection: the stress on a cavity\'s front deepens the open water\'s boundary layer beside it and leaves the cavity\'s column as it was', () => {
+  const { mesh, raster, options } = shelfBands(), geography = createGeography(mesh, raster, { ...options, iceShelves: 'cavity' });
+  const C = mesh.nCells, E = mesh.nEdges, { cavity } = geography, cellsOf = (e) => [mesh.cellsOnEdge[2 * e], mesh.cellsOnEdge[2 * e + 1]];
+  const front = (e) => geography.ocean.edgeOcean[e] && cavity[cellsOf(e)[0]] !== cavity[cellsOf(e)[1]];
+  const mixed = (scale) => {
+    const ocean = createOcean(mesh, { geography, everySteps: 1 }), surfaceT = new Float64Array(C).fill(300), ice = new Float64Array(C);
+    ocean.initialize(surfaceT, ice);
+    ocean.setStress(Float64Array.from({ length: E }, (_, e) => (front(e) ? 0.3 * scale : 0.05)), ice);
+    ocean.columnPhysics(3600);
+    return ocean;
+  };
+  const calm = mixed(1), stormy = mixed(10), L = calm.layers, beside = new Set();
+  for (let e = 0; e < E; e++) if (front(e)) for (const c of cellsOf(e)) if (!cavity[c]) beside.add(c);
+  for (let i = 0; i < C; i++) {
+    if (!cavity[i]) continue;
+    for (let k = 0; k < L; k++) assert.deepEqual([stormy.Q[k * C + i], stormy.W[k * C + i]], [calm.Q[k * C + i], calm.W[k * C + i]], `cavity cell ${i}, layer ${k}`);
+    assert.deepEqual([stormy.boundaryDepths[i], calm.boundaryDepths[i]], [0, 0], `cavity cell ${i}'s boundary layer`);
+  }
+  let deepened = 0;
+  for (const i of beside) if (stormy.boundaryDepths[i] > calm.boundaryDepths[i]) deepened++;
+  assert.ok(beside.size >= 10 && deepened > beside.size / 2, `${deepened} of ${beside.size} open cells beside the front deepened their boundary layer`);
+});
+
+test('both engines run the cavities alike at N=8: the water under the shelves tracks across engines as the open sea does without them, with no sea ice, ocean flux or light share in a cavity and the land\'s skin over it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { raster, options } = shelfBands();
+  const pair = async (iceShelves) => {
+    const setup = { topography: raster, geography: { ...options, iceShelves } };
+    const cpu = await prepare(createModel(new Grid(8), setup)), gpu = await prepare(await createGpuModel(new Grid(8), setup));
+    stratify(cpu, gpu);
+    for (let n = 0; n < 48; n++) { cpu.step(900); await gpu.step(900); }
+    await gpu.sync();
+    return { cpu, gpu, a: cpu.ocean.serialize(), b: await gpu.ocean.serialize(), end: await gpu.gpu.downloadPhysics() };
+  };
+  const shelves = await pair('cavity'), bare = await pair('land');
+  const { cavity } = shelves.cpu.geography, mesh = shelves.cpu.mesh, C = mesh.nCells, E = mesh.nEdges, L = shelves.cpu.ocean.layers;
+  const edgeWhere = (e) => ['sea', 'front', 'inside'][cavity[mesh.cellsOnEdge[2 * e]] + cavity[mesh.cellsOnEdge[2 * e + 1]]];
+  const spread = ({ cpu, a, b }) => {
+    const sums = {}, add = (where, name, d) => { const s = (sums[`${where} ${name}`] ??= { sq: 0, n: 0, max: 0 }); s.sq += d * d; s.n++; s.max = Math.max(s.max, Math.abs(d)); };
+    for (let i = 0; i < C; i++) {
+      if (cpu.ocean.D[i] === 0) continue;
+      const where = cavity[i] ? 'cavity' : 'sea';
+      add(where, 'eta', a.eta[i] - b.eta[i]);
+      for (let k = 0; k < L; k++) {
+        const n = k * C + i;
+        add(where, 'h', a.h[n] - b.h[n]);
+        if (a.h[n] > 1 && b.h[n] > 1) { add(where, 'T', a.T[n] - b.T[n]); add(where, 'S', a.S[n] - b.S[n]); }
+      }
+    }
+    for (let e = 0; e < E; e++) if (cpu.ocean.sillEdge[e] > 0) for (let k = 0; k < L; k++) add(edgeWhere(e), 'u', a.u[k * E + e] - b.u[k * E + e]);
+    return Object.fromEntries(Object.entries(sums).map(([key, s]) => [key, { rms: Math.sqrt(s.sq / s.n), max: s.max }]));
+  };
+  const withShelves = spread(shelves), without = spread(bare), show = (o) => Object.entries(o).map(([k, v]) => `${k} rms ${v.rms.toExponential(1)} max ${v.max.toExponential(1)}`).join(', ');
+  console.log(`N=8, twelve hours, CPU − GPU with cavities: ${show(withShelves)}`);
+  console.log(`N=8, twelve hours, CPU − GPU with the shelves as land: ${show(without)}`);
+  for (const name of ['h', 'u', 'T', 'S', 'eta']) {
+    const base = without[`sea ${name}`].rms;
+    for (const where of name === 'u' ? ['front', 'inside', 'sea'] : ['cavity', 'sea']) assert.ok(withShelves[`${where} ${name}`].rms < 3 * base, `${where} ${name}: rms ${withShelves[`${where} ${name}`].rms} against ${base} in the open sea without cavities`);
+  }
+  let skin = 0;
+  for (let i = 0; i < C; i++) {
+    if (!cavity[i]) continue;
+    const { cpu, gpu, end } = shelves;
+    assert.deepEqual([cpu.state[6][i], gpu.state[6][i], end.OFLUX[i], end.TRANS ? end.TRANS[i] : 0], [0, 0, 0, 0], `cavity cell ${i}: sea ice, the ocean's flux and its light share`);
+    skin = Math.max(skin, Math.abs(cpu.state[3][i] - gpu.state[3][i]));
+  }
+  assert.ok(skin < 0.05, `the skin over the cavities: ${skin} K apart`);
 });
 
 test('on ETOPO 2022 the cavities lie under the Antarctic shelves near their observed extent, Ross and Filchner–Ronne the largest, the Amundsen Sea shelves resolved at N=128', () => {
