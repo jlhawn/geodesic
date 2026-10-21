@@ -14,7 +14,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
 const DAY = 86400, YEAR = 365 * DAY;
-const mesh = createModel(new Grid(8), { physics: false }).mesh;
+const mesh = createModel(new Grid(16), { physics: false }).mesh;
 const flat = (height = 100) => createGeography(mesh, syntheticTopography(90, 180, () => height), { landBridges: {}, seaStraits: {} });
 const near = (a, b, tol = 1e-12) => Math.abs(a - b) < tol;
 const deg = Math.PI / 180;
@@ -104,7 +104,7 @@ test('an older state starts the trees at the cover times the estimated season\'s
     if (lat > 78) { polar++; assert.equal(land.canopy[i], 0, `no trees at ${lat.toFixed(1)}°`); }
     if (lat < 45) { temperate++; assert.equal(land.canopy[i], 0.5, `full potential at ${lat.toFixed(1)}°`); }
   }
-  assert.ok(polar >= 2 && temperate > 50 && sheet > 3, `${polar} polar, ${temperate} temperate, ${sheet} ice-sheet cells`);
+  assert.ok(polar > 0.003 * C && temperate > 0.2 * C && sheet > 0.02 * C, `${polar} polar, ${temperate} temperate, ${sheet} ice-sheet cells of ${C}`);
   const vegetation = Float64Array.from({ length: C }, (_, i) => (i % 5) / 5), snow = Float64Array.from({ length: C }, (_, i) => (i % 3 === 0 ? 30 : 0));
   const older = { soil: new Float64Array(C).fill(50), snow, vegetation, canopy: Float64Array.from(vegetation, (v) => Math.min(1, v + 0.25)) };
   land.load(older);
@@ -112,7 +112,7 @@ test('an older state starts the trees at the cover times the estimated season\'s
   const seasonLength = Float64Array.from({ length: C }, (_, i) => (i % 7) / 7), seasonWarmth = Float64Array.from({ length: C }, (_, i) => (i % 11) / 2);
   const canopy = Float64Array.from({ length: C }, (_, i) => (i % 13) / 13);
   land.load({ ...older, seasonLength, seasonWarmth, canopy });
-  const saved = await decodeState(encodeState({ N: 8, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
+  const saved = await decodeState(encodeState({ N: 16, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
   const back = createLandSurface(mesh, geography, { treeMoisture: false });
   back.load(saved.land);
   for (let i = 0; i < C; i++) {
@@ -125,7 +125,7 @@ test('an older state starts the trees at the cover times the estimated season\'s
 test('the model hands the land its lowest air temperature each step: after the step on the fixed exchange, before the physics heats it under roughness', () => {
   const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
   for (const exchange of ['fixed', 'roughness']) {
-    const model = createModel(new Grid(6), { topography, land: { seasonMemory: 2 * 900 }, surface: { exchange } });
+    const model = createModel(new Grid(16), { topography, land: { seasonMemory: 2 * 900 }, surface: { exchange } });
     const init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
     for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
@@ -137,15 +137,16 @@ test('the model hands the land its lowest air temperature each step: after the s
       return apply(state, ...rest);
     };
     model.step(900);
-    let toward = 0, away = 0;
+    let toward = 0, away = 0, cells = 0;
     for (let i = 0; i < C; i++) {
       if (!model.geography.land[i]) continue;
+      cells++;
       const air = exchange === 'fixed' ? model.state[1][(K - 1) * C + i] * exnerLayer[(K - 1) * C + i] : heated[i];
       const excess = Math.max(0, air - MELTING_POINT - 0.9), moved = model.land.seasonWarmth[i] - start[i];
       if (Math.abs(excess - start[i]) < 2) continue;
       if (Math.sign(moved) === Math.sign(excess - start[i]) && Math.abs(moved) > 0.2 * Math.abs(excess - start[i])) toward++; else away++;
     }
-    assert.ok(toward > 50 && away === 0, `${exchange}: ${toward} land cells moved toward their air, ${away} did not`);
+    assert.ok(toward > cells / 4 && away === 0, `${exchange}: ${toward} of ${cells} land cells moved toward their air, ${away} did not`);
   }
 });
 
@@ -169,8 +170,8 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
     return model;
   };
   const surface = { exchange: 'fixed' };
-  const cpu = prepare(createModel(new Grid(6), { topography, land, surface }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land, surface }));
+  const cpu = prepare(createModel(new Grid(16), { topography, land, surface }));
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, surface }));
   const C = cpu.mesh.nCells, before = Float64Array.from(cpu.land.canopy), lengthBefore = Float64Array.from(cpu.land.seasonLength);
   const { K, exnerLayer } = cpu.core.diagnostics;
   const target = (record, i) => treelineFactor(record.seasonLength[i], record.seasonWarmth[i], { treelineWarmth: land.treelineWarmth }) * aridityFactor(record.rainMean[i], record.demandMean[i]) * record.vegetation[i];
@@ -208,8 +209,8 @@ test('over 48 GPU steps the season means and the tree cover evolve as on the CPU
     widestGap = Math.max(widestGap, targetGap[i]);
   }
   gpu.destroy();
-  console.log(`N=6, 48 steps over ${cells} land cells (${snowy} under snow, ${seasonal} in season): trees grew on ${grew} and died back on ${died}; a step fell in season or under snow on one engine only in ${parted.size} cells (${[...parted].join(', ')}), ${left} land cells left out with those within two cells; over the other ${cells - left} engines apart by ${worstLength.toExponential(1)} in season length, ${worstWarmth.toExponential(1)} K in season warmth (the lowest air by up to ${worstAir.toExponential(1)} K over the run), ${worstTrees.toExponential(1)} in tree cover, which the trees' targets (treeline factor times moisture factor times cover, from each engine's own means) parted by up to ${widestGap.toExponential(1)} over the run; no cell's trees part by more than ${beyond.toExponential(1)} beyond their target's largest gap`);
-  assert.ok(grew > 10 && died > 10 && snowy > 5 && seasonal > 10 && cells - seasonal > 5, `${grew} grew, ${died} died, ${snowy} snowy, ${seasonal} in season`);
+  console.log(`N=16, 48 steps over ${cells} land cells (${snowy} under snow, ${seasonal} in season): trees grew on ${grew} and died back on ${died}; a step fell in season or under snow on one engine only in ${parted.size} cells (${[...parted].join(', ')}), ${left} land cells left out with those within two cells; over the other ${cells - left} engines apart by ${worstLength.toExponential(1)} in season length, ${worstWarmth.toExponential(1)} K in season warmth (the lowest air by up to ${worstAir.toExponential(1)} K over the run), ${worstTrees.toExponential(1)} in tree cover, which the trees' targets (treeline factor times moisture factor times cover, from each engine's own means) parted by up to ${widestGap.toExponential(1)} over the run; no cell's trees part by more than ${beyond.toExponential(1)} beyond their target's largest gap`);
+  assert.ok(grew > cells / 10 && died > cells / 10 && snowy > cells / 20 && seasonal > cells / 10 && cells - seasonal > cells / 10, `${grew} grew, ${died} died, ${snowy} snowy, ${seasonal} in season of ${cells}`);
   assert.ok(parted.size <= 0.04 * cells && left <= 0.4 * cells, `${parted.size} of ${cells} land cells' season or snow parted, ${left} left out with their neighbours`);
   assert.ok(worstLength < 1e-4 && worstWarmth <= worstAir && beyond < 1e-4, `season length ${worstLength}, warmth ${worstWarmth} under air ${worstAir}, trees ${worstTrees}, ${beyond} beyond their target's gap`);
 });
@@ -218,7 +219,7 @@ test('land regridding carries the season means and fills land the source lacks f
   const { regridLand } = await import('../js/physics/regrid.module.js');
   const make = (N, relief) => { const m = createModel(new Grid(N), { physics: false, topography: relief }); return { mesh: m.mesh, geography: createGeography(m.mesh, relief, { landBridges: {}, seaStraits: {} }) }; };
   const islands = syntheticTopography(90, 180, (lat, lon) => (lat > 1.3 && Math.cos(lon) < 0 ? 50 : 0) || (((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15) ? 300 : -4000));
-  const source = make(6, topography), target = make(8, islands), C = source.mesh.nCells;
+  const source = make(16, topography), target = make(24, islands), C = source.mesh.nCells;
   const land = { soil: new Float64Array(C).fill(100), snow: new Float64Array(C), vegetation: new Float64Array(C).fill(0.5), canopy: new Float64Array(C).fill(0.3), seasonLength: new Float64Array(C).fill(0.45), seasonWarmth: new Float64Array(C).fill(4) };
   const out = regridLand(source, target, land);
   let carried = 0, filled = 0, partial = 0;
@@ -229,7 +230,8 @@ test('land regridding carries the season means and fills land the source lacks f
     assert.ok(near(out.canopy[n], 0.5 * treelineFactor(out.seasonLength[n], out.seasonWarmth[n])), `cell ${n}: trees ${out.canopy[n]} on new land`);
     filled++; if (out.canopy[n] < 0.5) partial++;
   }
-  assert.ok(carried > 0.8 * [...target.geography.land].filter(Boolean).length && filled > 5 && partial > 5, `${carried} carried, ${filled} filled, ${partial} of them under the full cover`);
+  const lands = [...target.geography.land].filter(Boolean).length;
+  assert.ok(carried > 0.8 * lands && filled > 0.01 * lands && partial > 0.01 * lands, `${carried} carried, ${filled} filled of ${lands} land cells, ${partial} of them under the full cover`);
   const same = regridLand(source, source, land);
   assert.deepEqual([...same.seasonWarmth], [...land.seasonWarmth]);
   assert.equal(regridLand(source, target, { soil: land.soil, snow: land.snow, vegetation: land.vegetation }).seasonLength, undefined);

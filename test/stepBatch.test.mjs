@@ -11,10 +11,10 @@ const { readBuffer } = gpuAvailable ? await import('../js/gpu/device.module.js')
 const { createForcingRecorder } = gpuAvailable ? await import('../js/gpu/forcing.gpu.js') : {};
 
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 + 2500 * Math.exp(-(((lat - 0.3) / 0.3) ** 2)) : -4000));
-const DT = 900;
+const N = 16, DT = 900;
 
 async function prepared(radiation = {}) {
-  const model = await createGpuModel(new Grid(6), { topography, radiation, land: { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600 } });
+  const model = await createGpuModel(new Grid(N), { topography, radiation, land: { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600 } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
@@ -71,7 +71,7 @@ test('stepBatch leaves the device exactly where the same steps taken one at a ti
   assert.deepEqual(b, a);
   assert.deepEqual(c, a);
   assert.ok(Number.isFinite(a.evaporation) && a.evaporation > 0 && Number.isFinite(a.oceanUpperDepth));
-  console.log(`N=6 with land and ocean: 32 steps in ${submissions} submission(s), and 32 + 1 and 3 + 30 batched steps, match 33 single steps bit for bit in the atmosphere, physics and ocean buffers and in the diagnostics (Ts ${(a.meanSurfaceT - 273.15).toFixed(3)} °C, OLR ${a.outgoingLongwave.toFixed(3)} W/m², evaporation ${(86400 * a.evaporation).toFixed(4)} mm/d)`);
+  console.log(`N=${N} with land and ocean: 32 steps in ${submissions} submission(s), and 32 + 1 and 3 + 30 batched steps, match 33 single steps bit for bit in the atmosphere, physics and ocean buffers and in the diagnostics (Ts ${(a.meanSurfaceT - 273.15).toFixed(3)} °C, OLR ${a.outgoingLongwave.toFixed(3)} W/m², evaporation ${(86400 * a.evaporation).toFixed(4)} mm/d)`);
   for (const model of [single, whole, split]) model.destroy();
 });
 
@@ -89,7 +89,7 @@ test('the forcing recorder writes the same day inside batches as after single st
   let differ = 0;
   for (let x = 0; x < days[0].length; x++) if (days[0][x] !== days[1][x]) differ++;
   assert.equal(differ, 0, `the recorded day differs in ${differ} of ${days[0].length} bytes`);
-  console.log(`33 recorded steps at N=6, batched as 5 + 28 in ${submissions} submissions: the ${days[0].length}-byte forcing day matches the single steps' byte for byte`);
+  console.log(`33 recorded steps at N=${N}, batched as 5 + 28 in ${submissions} submissions: the ${days[0].length}-byte forcing day matches the single steps' byte for byte`);
   for (const model of [single, batched]) model.destroy();
 });
 
@@ -103,6 +103,6 @@ test('with the radiation held between calls every third step, steps batched with
   assertIdentical('5 + 9 steps', await snapshot(single), await snapshot(batched));
   const [a, b] = [await single.diagnostics(), await batched.diagnostics()];
   assert.deepEqual(b, a);
-  console.log(`N=6, radiation every 3 steps: 5 + 9 batched steps queued without waiting match 14 single steps bit for bit (OLR ${a.outgoingLongwave.toFixed(3)} W/m²)`);
+  console.log(`N=${N}, radiation every 3 steps: 5 + 9 batched steps queued without waiting match 14 single steps bit for bit (OLR ${a.outgoingLongwave.toFixed(3)} W/m²)`);
   for (const model of [single, batched]) model.destroy();
 });

@@ -23,7 +23,7 @@ const CLOUDS = { liquid: [285, 0.1], thinLiquid: [285, 0.01], ice: [213.15, 0.02
 const close = (a, b, tolerance) => Math.abs(a - b) <= tolerance * Math.abs(b);
 
 function cloudColumn(radiation, { T, path, humid, sigma }) {
-  const model = createModel(new Grid(4), { ocean: false, radiation: { ...PLAIN, ...radiation } });
+  const model = createModel(new Grid(16), { ocean: false, radiation: { ...PLAIN, ...radiation } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   const { core, radiation: rad } = model, { K, sigmaMid } = core.diagnostics, C = model.mesh.nCells, [pi, theta] = model.state;
   const i = 0, q = new Float64Array(K * C), none = new Float64Array(K * C), qc = new Float64Array(K * C);
@@ -106,7 +106,7 @@ test('under the spectral gases in a humid column the cloud joins every g-point a
 });
 
 function cloudyGrid() {
-  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { mixedLayerDeck: false } });
+  const model = createModel(new Grid(16), { ocean: false, divergenceDamping: 0, radiation: { mixedLayerDeck: false } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   model.step(900);
   for (const a of model.state) for (let x = 0; x < a.length; x++) a[x] = Math.fround(a[x]);
@@ -182,14 +182,14 @@ test('with a liquid and an ice layer in every column and every default on but th
   const mean = (r, side, key) => Array.from({ length: C }, (_, i) => i).reduce((s, i) => s + base.mesh.areaCell[i] * r[side][key][i], 0) / base.mesh.areaCell.reduce((a, b) => a + b, 0);
   for (const r of runs) for (const side of ['cpu', 'gpu']) for (const key of [...keys, 'heating']) assert.ok(r[side][key].every(Number.isFinite), `${side} ${key}: finite`);
   const apart = Object.fromEntries(keys.map((key) => [key, worst(key)]));
-  console.log(`${C} columns at N=6 (${lit.length} lit), a 100 g/m2 layer near 282 K and a 20 g/m2 layer near 222 K in each: layer heating apart by at most ${heating.toExponential(1)} K/day of ${scale.toFixed(1)}, the spectral gases' change of it alike to ${movedApart.toExponential(1)}; ${keys.map((key) => `${key} ${apart[key].toExponential(1)} of ${size(key).toFixed(0)}`).join(', ')} W/m2; means CPU / GPU, spectral then gray: SWCRE ${runs.map((r) => `${mean(r, 'cpu', 'shortwaveEffect').toFixed(2)} / ${mean(r, 'gpu', 'shortwaveEffect').toFixed(2)}`).join(', ')}, LWCRE ${runs.map((r) => `${mean(r, 'cpu', 'longwaveEffect').toFixed(2)} / ${mean(r, 'gpu', 'longwaveEffect').toFixed(2)}`).join(', ')}`);
+  console.log(`${C} columns at N=16 (${lit.length} lit), a 100 g/m2 layer near 282 K and a 20 g/m2 layer near 222 K in each: layer heating apart by at most ${heating.toExponential(1)} K/day of ${scale.toFixed(1)}, the spectral gases' change of it alike to ${movedApart.toExponential(1)}; ${keys.map((key) => `${key} ${apart[key].toExponential(1)} of ${size(key).toFixed(0)}`).join(', ')} W/m2; means CPU / GPU, spectral then gray: SWCRE ${runs.map((r) => `${mean(r, 'cpu', 'shortwaveEffect').toFixed(2)} / ${mean(r, 'gpu', 'shortwaveEffect').toFixed(2)}`).join(', ')}, LWCRE ${runs.map((r) => `${mean(r, 'cpu', 'longwaveEffect').toFixed(2)} / ${mean(r, 'gpu', 'longwaveEffect').toFixed(2)}`).join(', ')}`);
   assert.ok(heating < 1e-5 * scale && movedApart < 1e-5 * scale, `layer heating apart by ${heating} K/day, the gases' change of it by ${movedApart}`);
   for (const [key, d] of Object.entries(apart)) assert.ok(d < 2e-5 * size(key), `${key} apart by ${d} W/m2 of ${size(key)}`);
 });
 
 function layeredColumns(radiation) {
   const levels = sigmaInterfaces('bl34'), mls = modelColumn(BENCHMARK.atmospheres.MLS, levels);
-  const model = createModel(new Grid(4), { ocean: false, levels, radiation: { mixedLayerDeck: false, stratus: false, clearSkyPass: true, ozone: 'idealized', ozoneColumn: [0, 0], ...radiation } });
+  const model = createModel(new Grid(16), { ocean: false, levels, radiation: { mixedLayerDeck: false, stratus: false, clearSkyPass: true, ozone: 'idealized', ozoneColumn: [0, 0], ...radiation } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   const { core } = model, { K } = core.diagnostics, C = model.mesh.nCells, [pi, theta, u, surfaceT, q, qc, ice] = model.state;
   pi.fill(mls.ps); u.fill(0); surfaceT.fill(mls.Ts); ice.fill(0); qc.fill(0);

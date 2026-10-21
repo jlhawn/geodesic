@@ -4,7 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
 import { divergence, gradient, curl, tangential, kineticEnergy, cellVector, laplacianVelocity } from '../js/dynamics/operators.module.js';
 
-const SIZES = (process.env.MESH_TEST_N ?? '4,8,16').split(',').map(Number);
+const SIZES = (process.env.MESH_TEST_N ?? '16,17,24,32').split(',').map(Number);
 const RELAX = (process.env.MESH_TEST_RELAX ?? '0,10').split(',').map(Number);
 const EPS = 1e-12;
 const OMEGA = 1e-5;
@@ -176,7 +176,7 @@ for (const relax of RELAX) for (const N of SIZES) {
       worst = Math.max(worst, Math.abs(zeta[v] - 2 * OMEGA * Math.sin(mesh.latVertex[v])) / (2 * OMEGA));
     }
     report(tag('curl of solid rotation, max relative error', relax), N, worst);
-    assert.ok(worst < 0.05);
+    assert.ok(worst < 0.01);
     const zetaRandom = curl(mesh, randomArray(nEdges, 37));
     let total = 0, scale = 0;
     for (let v = 0; v < nVertices; v++) {
@@ -225,7 +225,7 @@ for (const relax of RELAX) for (const N of SIZES) {
     const speed = radius * OMEGA;
     report(tag('T2 max tangential error / speed', relax), N, worst / speed);
     record(tag('T2 mean tangential error / mean speed', relax), N, sumError / sumExact);
-    assert.ok(worst / speed < 0.15);
+    assert.ok(worst / speed < 0.13);
   });
 
   test(`N=${N} relax=${relax}: T3 — flux out of every dual triangle equals its kite-weighted divergence`, () => {
@@ -283,7 +283,7 @@ for (const relax of RELAX) for (const N of SIZES) {
     }
     report(tag('KE max relative error', relax), N, worstK);
     report(tag('cell vector max relative error', relax), N, worstV);
-    assert.ok(worstK < 0.2 && worstV < 0.2);
+    assert.ok(worstK < 0.1 && worstV < 0.1);
   });
 }
 

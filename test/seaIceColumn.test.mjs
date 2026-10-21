@@ -40,7 +40,7 @@ test('seawater freezes at −1.8 °C, cools only a few thousandths of a kelvin b
 });
 
 test('the deep water the gauge compares with is the bottom of the model\'s own start: 2 °C at 34.7 psu, 1026.77 kg/m³, at every latitude', () => {
-  const m = buildMesh(new Grid(2)), ocean = createOcean(m, { everySteps: 1 }), surfaceT = new Float64Array(m.nCells).fill(288), n = m.nCells, k = ocean.layers - 1;
+  const m = buildMesh(new Grid(16)), ocean = createOcean(m, { everySteps: 1 }), surfaceT = new Float64Array(m.nCells).fill(288), n = m.nCells, k = ocean.layers - 1;
   ocean.initialize(surfaceT, new Float64Array(n));
   let worst = 0;
   for (let i = 0; i < n; i++) {
@@ -110,7 +110,7 @@ test('every meter of ice frozen out of 50 m at 34 psu adds 0.53 psu and 0.42 kg/
 });
 
 test('the ocean under ice: the top layer is 3 m, a centimeter of ice salts it by 0.09 psu and makes it denser than the layer beneath, and the wind\'s stress reaches the water at 0.8 under full cover', () => {
-  const m = buildMesh(new Grid(2)), ocean = createOcean(m, { everySteps: 1 }), n = m.nCells, surfaceT = new Float64Array(n).fill(274), ice = new Float64Array(n);
+  const m = buildMesh(new Grid(16)), ocean = createOcean(m, { everySteps: 1 }), n = m.nCells, surfaceT = new Float64Array(n).fill(274), ice = new Float64Array(n);
   ocean.initialize(surfaceT, ice);
   close(ocean.h[0], 3, 1e-9, 'the top layer, meters'); close(ocean.capacity[0], 3 * RHO_CP, 1e-3 * RHO_CP, 'its capacity');
   const S0 = ocean.W[0] / ocean.h[0], perCentimeter = (S0 - ICE_SALINITY) * ICE_DENSITY / 1000 * 0.01 / 3;

@@ -9,11 +9,13 @@ import { depthFields } from '../js/ocean/layered.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS, CLOUD_TYPES, CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, visibleCloudHeights } from '../js/frames.module.js';
 import { createModel } from '../js/model.module.js';
+import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
+const N = 16;
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 + 2500 * Math.exp(-(((lat - 0.3) / 0.3) ** 2)) : -4000));
 
 function worst(reference, got, { skipNaN = false } = {}) {
@@ -27,7 +29,7 @@ function worst(reference, got, { skipNaN = false } = {}) {
 }
 
 test('the GPU frame matches the fields and diagnostics computed from the full state in double precision', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const model = await createGpuModel(new Grid(6), { topography });
+  const model = await createGpuModel(new Grid(N), { topography });
   const { mesh, core, state } = model;
   const C = mesh.nCells, E = mesh.nEdges;
   const init = initializeState(model, {});
@@ -152,7 +154,7 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
   let oceanArea = 0, depth = 0, ssh = 0;
   for (let i = 0; i < C; i++) if (!model.geography.land[i]) { const a = mesh.areaCell[i]; oceanArea += a; depth += a * ocean.h1[i]; ssh = Math.max(ssh, Math.abs(ocean.eta[i])); }
   close('oceanUpperDepth', depth / oceanArea, d.oceanUpperDepth); close('oceanSSH', ssh, d.oceanSSH);
-  console.log(`GPU frame at N=6: Ts ${d.meanSurfaceT.toFixed(3)} K, OLR ${d.outgoingLongwave.toFixed(2)} W/m², precipitation ${(86400 * d.precipitation).toFixed(3)} mm/day, ocean h1 ${d.oceanUpperDepth.toFixed(2)} m`);
+  console.log(`GPU frame at N=${N}: Ts ${d.meanSurfaceT.toFixed(3)} K, OLR ${d.outgoingLongwave.toFixed(2)} W/m², precipitation ${(86400 * d.precipitation).toFixed(3)} mm/day, ocean h1 ${d.oceanUpperDepth.toFixed(2)} m`);
 
   const column = await model.oceanEngine.serialize();
   const L = model.oceanEngine.layers, cellOcean = model.oceanEngine.cellOcean;
@@ -199,17 +201,18 @@ test('the GPU frame matches the fields and diagnostics computed from the full st
 test('the EIS deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (stratus) => {
     const radiation = { stratus, mixedLayerDeck: false };
-    const cpu = createModel(new Grid(6), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation });
+    const cpu = createModel(new Grid(N), { ocean: false, radiation }), gpu = await createGpuModel(new Grid(N), { ocean: false, radiation });
     const C = cpu.mesh.nCells, { K, sigmaMid } = cpu.core;
     const init = initializeState(cpu, {});
     for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
     for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) { cpu.state[1][k * C + i] += 10; gpu.state[1][k * C + i] += 10; }
     gpu.load();
-    for (let n = 0; n < 2; n++) { cpu.step(900); await gpu.step(900); }
+    const decisions = decisionTracker(K, C);
+    for (let n = 0; n < 2; n++) { cpu.step(900); await gpu.step(900); decisions.check(cpuDecisions(cpu), gpuDecisions(await gpu.gpu.download(), await gpu.gpu.downloadPhysics())); }
     const frame = await gpu.beginFrame({ fields: ['cloud', ...CLOUD_TYPES, 'cloudTop', 'cloudBase'] }), physics = await gpu.gpu.downloadPhysics(), K0 = gpu.moist.cumulusK0, { dSigma, g } = cpu.core.diagnostics, pi = cpu.state[0];
     const gpuCumulus = Float64Array.from({ length: C }, (_, i) => { let path = 0; for (let k = K0; k < K; k++) { const slot = (k - K0) * C + i; path += pi[i] * dSigma[k] / g * physics.CUCOVER[slot] * physics.CUWATER[slot]; } return path; });
     const parted = [];
-    for (let i = 0; i < C; i++) if ((cpu.moist.cumulusCloudPath(pi, i) > 0) !== (gpuCumulus[i] > 0)) parted.push(i);
+    for (let i = 0; i < C; i++) if (decisions.parted.has(i) || (cpu.moist.cumulusCloudPath(pi, i) > 0) !== (gpuCumulus[i] > 0)) parted.push(i);
     const kept = (values) => Float64Array.from(values, (x, i) => (parted.includes(i) ? NaN : x));
     const parts = Array.from({ length: C }, (_, i) => cpu.cloudParts(i));
     const types = Object.fromEntries(CLOUD_TYPES.map((name) => [name, { cpu: kept(parts.map((part) => part[name])), gpu: kept(frame.fields[name]) }]));
@@ -226,7 +229,7 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
     const { max, at } = worst(r.all, r.summed);
     assert.ok(max <= 1e-6 * Math.max(...r.all), `deck ${label}: the GPU's types sum to its cloud to ${max} at ${at}`);
   }
-  assert.ok(on.parted.length + off.parted.length <= 0.02 * on.cpu.length, `the cumulus fired on one engine only in ${on.parted.length} + ${off.parted.length} of ${on.cpu.length} columns`);
+  assert.ok(on.parted.length + off.parted.length <= 0.02 * on.cpu.length, `a discrete decision parted in ${on.parted.length} + ${off.parted.length} of ${on.cpu.length} columns`);
   let at = 0;
   for (let i = 0; i < on.deck.length; i++) if (on.deck[i] > on.deck[at] && Number.isFinite(on.cpu[i]) && Number.isFinite(off.cpu[i])) at = i;
   const engines = worst(on.cpu, on.gpu, { skipNaN: true });
@@ -241,7 +244,7 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
 test('the mixed-layer deck shows in the cloud field, the same in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const radiation = {};
   const surface = { exchange: 'fixed' };
-  const cpu = createModel(new Grid(6), { ocean: false, radiation, surface }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation, surface });
+  const cpu = createModel(new Grid(N), { ocean: false, radiation, surface }), gpu = await createGpuModel(new Grid(N), { ocean: false, radiation, surface });
   const C = cpu.mesh.nCells, { K, sigmaMid } = cpu.core;
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) cpu.state[a].set(init[a]);
@@ -278,7 +281,7 @@ test('the mixed-layer deck shows in the cloud field, the same in both engines', 
 
 test('frames leave the model state bit-identical whichever fields they carry', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (fields) => {
-    const model = await createGpuModel(new Grid(6), { topography });
+    const model = await createGpuModel(new Grid(N), { topography });
     const init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
     for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;

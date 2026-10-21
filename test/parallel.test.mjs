@@ -7,8 +7,8 @@ import { createParallelModel } from '../js/parallel.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 
 test('the worker-thread step reproduces the single-thread step bit for bit', async () => {
-  const serial = createModel(new Grid(8));
-  const parallel = await createParallelModel(new Grid(8), {}, 3);
+  const serial = createModel(new Grid(16));
+  const parallel = await createParallelModel(new Grid(16), {}, 3);
   const init = initializeState(serial, {});
   for (let a = 0; a < 4; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
   try {
@@ -31,8 +31,8 @@ test('the worker-thread step reproduces the single-thread step bit for bit', asy
 
 test('with penetrating sunlight the worker-thread step reproduces the single-thread step bit for bit, the light waiting below the mixed layer included', async () => {
   const options = { ocean: { penetration: 'IB' } };
-  const serial = createModel(new Grid(8), options);
-  const parallel = await createParallelModel(new Grid(8), options, 3);
+  const serial = createModel(new Grid(16), options);
+  const parallel = await createParallelModel(new Grid(16), options, 3);
   const init = initializeState(serial, {});
   for (let a = 0; a < 4; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
   try {
@@ -91,8 +91,8 @@ test('worker threads speed up an N=16 atmosphere step by a fair share of the cor
 });
 
 test('the workers sum the convective and large-scale rain into the arrays the diagnostics read, as one thread does', async () => {
-  const serial = createModel(new Grid(8), { ocean: false });
-  const parallel = await createParallelModel(new Grid(8), { ocean: false }, 3);
+  const serial = createModel(new Grid(16), { ocean: false });
+  const parallel = await createParallelModel(new Grid(16), { ocean: false }, 3);
   const init = initializeState(serial, {});
   for (let a = 0; a < init.length; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
   try {

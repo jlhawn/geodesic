@@ -8,8 +8,23 @@ import { createGeography } from '../../js/geography.module.js';
 
 export const RHO_AIR = 1.2, DRAG = 1.5e-3, RHO = 1025, DEG = Math.PI / 180;
 
-export const mesh = buildMesh(new Grid(8));
+export const mesh = buildMesh(new Grid(16));
 export const { nCells: C, nEdges: E } = mesh;
+
+export const DT = 1350;
+
+// The hybrid ocean on flat floors from an analytic start with no tilt and 34.5 psu everywhere, driven through advance with the ocean's own surface temperature handed back.
+export const FLAT = { vertical: 'hybrid', everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5 };
+export function hybridOcean(options = {}, depth = () => 4000, surface = 290) {
+  const bathymetry = Float64Array.from({ length: C }, (_, i) => depth(mesh.latCell[i], mesh.lonCell[i], i));
+  const ocean = createOcean(mesh, { ...FLAT, bathymetry, ...options });
+  const surfaceT = new Float64Array(C).fill(surface), ice = new Float64Array(C), flux = new Float64Array(C), calm = new Float64Array(E);
+  ocean.initialize(surfaceT, ice);
+  return { mesh, C, E, ocean, surfaceT, ice, flux, calm };
+}
+export const columnSums = (ocean) => Float64Array.from({ length: C }, (_, i) => { let s = 0; for (let k = 0; k < ocean.layers; k++) s += ocean.h[k * C + i]; return s; });
+export const maxSpeed = (ocean) => { let m = 0; for (let n = 0; n < ocean.u.length; n++) m = Math.max(m, Math.abs(ocean.u[n])); return m; };
+export const volumeOf = (ocean) => { let v = 0; for (let i = 0; i < C; i++) if (ocean.cellOcean[i]) for (let k = 0; k < ocean.layers; k++) v += mesh.areaCell[i] * ocean.h[k * C + i]; return v; };
 
 export function zonalWindOnEdges(m, speedAt) {
   const u = new Float64Array(m.nEdges);

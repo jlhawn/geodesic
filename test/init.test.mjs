@@ -8,11 +8,11 @@ import { readFileSync } from 'node:fs';
 import { P0, sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 
-const N = +(process.env.INIT_TEST_N ?? 8);
+const N = +(process.env.INIT_TEST_N ?? 16);
 const DAYS = +(process.env.INIT_TEST_DAYS ?? 3);
 
 test('the radiative-convective equilibrium column is stable, warm at the ground, and in balance', () => {
-  const model = createModel(new Grid(2));
+  const model = createModel(new Grid(16));
   const { core, radiation } = model;
   const { K, C, dSigma, cp, g, exnerLayer, sigmaMid } = core.diagnostics;
   const surfaceT = 305.086;
@@ -63,7 +63,7 @@ test(`N=${N}: the balanced initial state rings quietly for ${DAYS} days with the
   const init = initializeState(model, { seedAmplitude: 0 });
   for (let a = 0; a < 4; a++) state[a].set(init[a]);
   const pi0 = Float64Array.from(state[0]);
-  const dt = 450 * 16 / N;
+  const dt = 1350 * 16 / N;
   const perDay = Math.round(86400 / dt);
   const rows = [];
   for (let d = 1; d <= DAYS; d++) {
@@ -74,16 +74,16 @@ test(`N=${N}: the balanced initial state rings quietly for ${DAYS} days with the
   }
   console.log(`ringing N=${N}: ${rows.join(' | ')}`);
   const d = model.diagnostics();
-  assert.ok(Number.isFinite(d.maxWind) && d.maxWind < 100);
+  assert.ok(Number.isFinite(d.maxWind) && d.maxWind < 20);
   assert.ok(Math.abs(d.mass - P0) / P0 < 1e-12);
   let worst = 0;
   for (let i = 0; i < mesh.nCells; i++) worst = Math.max(worst, Math.abs(state[0][i] - pi0[i]));
-  assert.ok(worst < 300);
+  assert.ok(worst < 200);
 });
 
 test('over terrain the fresh stratosphere is read at each layer\'s pressure, so 32 dynamics steps from rest on bl36 at N=16 keep the top layer below 80 m/s', () => {
   const levels = sigmaInterfaces('bl36'), topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-  const profile = equilibriumProfile(createModel(new Grid(4), { levels, ocean: false }));
+  const profile = equilibriumProfile(createModel(new Grid(16), { levels, ocean: false }));
   const model = createModel(new Grid(16), { levels, topography, ocean: false, physics: false });
   const init = initializeState(model, { profile, geostrophic: false });
   for (let a = 0; a < 3; a++) model.state[a].set(init[a]);

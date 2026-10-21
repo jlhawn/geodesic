@@ -20,10 +20,10 @@ function prepare(model) {
 }
 
 test('with a continent the ocean flows only through ocean edges, land carries no sea ice, and the bucket accounts for every drop', async () => {
-  const model = prepare(createModel(new Grid(8), { topography }));
+  const model = prepare(createModel(new Grid(16), { topography }));
   const { mesh, geography, land, ocean } = model;
   assert.ok(geography.landArea > 0.35 && geography.landArea < 0.55, `land area ${geography.landArea.toFixed(2)}`);
-  const dt = 1350 * 16 / 8;
+  const dt = 1350;
   const waterBefore = land.water();
   let rainOnLand = 0, evaporationFromLand = 0;
   for (let n = 0; n < 12; n++) {
@@ -46,9 +46,9 @@ test('with a continent the ocean flows only through ocean edges, land carries no
 });
 
 test('the parallel engine reproduces the serial model over a continent', async () => {
-  const serial = prepare(createModel(new Grid(6), { topography }));
-  const parallel = prepare(await createParallelModel(new Grid(6), { topography }, 3));
-  const dt = 1350 * 16 / 6;
+  const serial = prepare(createModel(new Grid(16), { topography }));
+  const parallel = prepare(await createParallelModel(new Grid(16), { topography }, 3));
+  const dt = 1350;
   for (let n = 0; n < 4; n++) { serial.step(dt); await parallel.step(dt); }
   let maxT = 0, maxSoil = 0, maxTheta = 0;
   for (let i = 0; i < serial.mesh.nCells; i++) {
@@ -61,7 +61,7 @@ test('the parallel engine reproduces the serial model over a continent', async (
 });
 
 test('under a capping inversion the stratocumulus deck forms over the warm sea and never over land', () => {
-  const model = prepare(createModel(new Grid(6), { topography, radiation: { stratus: true, mixedLayerDeck: false } }));
+  const model = prepare(createModel(new Grid(16), { topography, radiation: { stratus: true, mixedLayerDeck: false } }));
   const { mesh, geography, core } = model, C = mesh.nCells;
   for (let k = 0; k < core.K; k++) if (core.sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) model.state[1][k * C + i] += 10;
   model.step(900);
@@ -76,7 +76,7 @@ test('under a capping inversion the stratocumulus deck forms over the warm sea a
     }
   }
   assert.ok(decked > 0.1 * sea, `stratus on ${decked} of ${sea} sea cells`);
-  const mixed = prepare(createModel(new Grid(6), { topography }));
+  const mixed = prepare(createModel(new Grid(16), { topography }));
   mixed.radiation.mlmSubsidence.fill(-1e-3);
   for (let k = 0; k < core.K; k++) if (core.sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) mixed.state[1][k * C + i] += 10;
   mixed.step(900);

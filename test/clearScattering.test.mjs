@@ -18,7 +18,7 @@ function random(seed) {
 }
 
 test('over a black surface the clear column reflects the two-stream value of its Rayleigh sub-bands and aerosol, the weighted τ/(τ + 2μ) of the visible beam less ozone and aerosol absorption, at three zenith angles over sea and over land (with the fixed ozone share)', () => {
-  const grid = new Grid(4), C = createModel(grid, { ocean: false }).mesh.nCells, land = Uint8Array.from({ length: C }, (_, i) => i % 2);
+  const grid = new Grid(16), C = createModel(grid, { ocean: false }).mesh.nCells, land = Uint8Array.from({ length: C }, (_, i) => i % 2);
   const model = createModel(grid, { ocean: false, radiation: { land, clearSkyPass: true, solarGases: 'lacisHansen' } });
   const init = initializeState(model, {});
   init.forEach((values, a) => model.state[a].set(values));
@@ -48,10 +48,10 @@ test('over a black surface the clear column reflects the two-stream value of its
 
 test('in every column of a state with real geography, cloud, deck and cumulus, the absorbed and reflected sunlight add up to the incident beam, the layers take what the atmosphere absorbs, and aerosol heats the lowest kilometres', () => {
   const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-  const model = createModel(new Grid(12), { topography, ocean: false, radiation: { clearSkyPass: true } });
+  const model = createModel(new Grid(16), { topography, ocean: false, radiation: { clearSkyPass: true } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   model.land.initialize();
-  for (let n = 0; n < 6; n++) model.step(1800);
+  for (let n = 0; n < 8; n++) model.step(1350);
   const { radiation, core } = model, { K, C, geopotential, g } = core.diagnostics, [pi, theta, , surfaceT, q, qc, ice] = model.state;
   for (let i = 0; i < C; i++) core.diagnoseColumn(i, pi, theta, q, qc);
   const bottom = (K - 1) * C;
@@ -85,7 +85,7 @@ test('in every column of a state with real geography, cloud, deck and cumulus, t
 
 async function enginePair(radiation, seed) {
   const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
-  const cpu = createModel(new Grid(6), { topography, ocean: false, radiation }), gpu = await createGpuModel(new Grid(6), { topography, ocean: false, radiation });
+  const cpu = createModel(new Grid(16), { topography, ocean: false, radiation }), gpu = await createGpuModel(new Grid(16), { topography, ocean: false, radiation });
   const init = initializeState(cpu, {});
   const { K, sigmaMid } = cpu.core, C = cpu.mesh.nCells, rnd = random(seed);
   const [pi, theta] = init, q = init[4], qc = init[5];
@@ -129,8 +129,8 @@ test('both engines give a random set of sunlit columns over sea and land, clear 
       worstEffect = Math.max(worstEffect, Math.abs(effect - gpuEffect) / scale);
     }
   }
-  console.log(`one step at N=6 from a random humid, cloudy state: ${lit} sunlit columns (${landLit} over land); the engines' fluxes differ by at most ${worst.toExponential(1)} of the beam (${name}), the scattering moves them by up to ${largest.toFixed(3)} of it and the engines' change differs by ${worstEffect.toExponential(1)}`);
-  assert.ok(lit > 100 && landLit > 20, `${lit} sunlit, ${landLit} over land`);
+  console.log(`one step at N=16 from a random humid, cloudy state: ${lit} sunlit columns (${landLit} over land); the engines' fluxes differ by at most ${worst.toExponential(1)} of the beam (${name}), the scattering moves them by up to ${largest.toFixed(3)} of it and the engines' change differs by ${worstEffect.toExponential(1)}`);
+  assert.ok(lit > C / 4 && landLit > C / 20, `${lit} sunlit, ${landLit} over land`);
   assert.ok(worst < 2e-5, `engines apart by ${worst} of the beam at ${name}`);
   assert.ok(largest > 0.02 && worstEffect < 2e-5, `effect ${largest}, engines' effect apart by ${worstEffect}`);
   on.done(); off.done();
@@ -138,7 +138,7 @@ test('both engines give a random set of sunlit columns over sea and land, clear 
 
 test('the light the surface reflects loses to vapour what the path it crossed coming down plus 5/3 of the column\'s absorbs beyond the first, and in the visible what the aerosol absorbs over 5/3 of its depth (Lacis-Hansen vapour)', async () => {
   const { waterVaporAbsorptivity } = await import('../js/physics/radiation.module.js');
-  const grid = new Grid(4), C = createModel(grid, { ocean: false }).mesh.nCells, land = Uint8Array.from({ length: C }, (_, i) => i % 2);
+  const grid = new Grid(16), C = createModel(grid, { ocean: false }).mesh.nCells, land = Uint8Array.from({ length: C }, (_, i) => i % 2);
   const make = (options) => {
     const model = createModel(grid, { ocean: false, radiation: { land, clearSkyPass: true, ...options } });
     initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
@@ -189,7 +189,7 @@ test('both engines take the same light from the surface\'s reflection on its way
       worstEffect = Math.max(worstEffect, Math.abs(effect - gpuEffect) / scale);
     }
   }
-  console.log(`one step at N=6: ${lit} sunlit columns; engines apart by ${worst.toExponential(1)} of the beam (${name}); the upward absorption moves the fluxes by up to ${largest.toFixed(4)} of it and the engines' change differs by ${worstEffect.toExponential(1)}`);
+  console.log(`one step at N=16: ${lit} sunlit columns; engines apart by ${worst.toExponential(1)} of the beam (${name}); the upward absorption moves the fluxes by up to ${largest.toFixed(4)} of it and the engines' change differs by ${worstEffect.toExponential(1)}`);
   assert.ok(worst < 2e-5, `engines apart by ${worst} at ${name}`);
   assert.ok(largest > 0.002 && worstEffect < 2e-5, `effect ${largest}, engines' effect apart by ${worstEffect}`);
   on.done(); off.done();

@@ -87,7 +87,7 @@ test('the lid friction profiles averaged over each layer\'s mass reach only the 
   assert.equal(lidFrictionFor('cam26'), null);
   assert.equal(lidFrictionFor('bl36'), 'rind');
   for (const name of ['bl34', 'bl36']) {
-    const levels = sigmaInterfaces(name), model = createModel(new Grid(4), { ocean: false, levels });
+    const levels = sigmaInterfaces(name), model = createModel(new Grid(16), { ocean: false, levels });
     assert.deepEqual(Array.from(model.core.spongeMeanRates), Array.from(lidFrictionRates(levels, lidFrictionFor(name))), `the model takes ${name}'s lid friction`);
   }
   assert.ok(Math.abs(1 / (lidFrictionRates(bl36, 'rind')[0] * 86400) - 2.71) < 0.01 && Math.abs(1 / (lidFrictionRates(bl36, 'holtonWehrbein')[0] * 86400) - 9.30) < 0.01, 'the 0-0.3 hPa layer\'s decay times');
@@ -104,7 +104,7 @@ test('the sponge begins at 78 Pa on bl36 and at σ 0.005 on the other grids, and
   assert.equal(spongeSigmaFor('bl36'), 78 / 101325);
   for (const name of ['bl34', 'cam26', null]) assert.equal(spongeSigmaFor(name), SPONGE.sigma);
   for (const name of ['bl34', 'bl36']) {
-    const levels = sigmaInterfaces(name), model = createModel(new Grid(4), { ocean: false, levels });
+    const levels = sigmaInterfaces(name), model = createModel(new Grid(16), { ocean: false, levels });
     const expected = spongeRates(model.core.sigmaMid, spongeSigmaFor(name), SPONGE.days);
     assert.deepEqual(Array.from(model.core.spongeRates), Array.from(expected));
     for (let k = 0; k < model.core.K; k++) if (model.core.sigmaMid[k] * P0 > (name === 'bl36' ? 78 : 0.005 * P0)) assert.equal(model.core.spongeRates[k], 0);
@@ -112,7 +112,7 @@ test('the sponge begins at 78 Pa on bl36 and at σ 0.005 on the other grids, and
 });
 
 test('the model returns the kinetic energy the sponge and the lid friction remove as heat', () => {
-  const model = createModel(new Grid(4), { ocean: false, nu4Hours: Infinity, divergenceDamping: 0, levels: sigmaInterfaces('bl36'), surface: { spongeSigma: 0.05, spongeDays: 1, lidFriction: 'rind' } });
+  const model = createModel(new Grid(16), { ocean: false, nu4Hours: Infinity, divergenceDamping: 0, levels: sigmaInterfaces('bl36'), surface: { spongeSigma: 0.05, spongeDays: 1, lidFriction: 'rind' } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const { state, mesh, core } = model;
@@ -129,7 +129,7 @@ test('the model returns the kinetic energy the sponge and the lid friction remov
     return sum;
   };
   const kineticBefore = kinetic(), thetaBefore = Float64Array.from(state[1]);
-  model.phases.closure(0, K, 3600);
+  model.phases.closure(0, K, 1350);
   const lost = kineticBefore - kinetic();
   model.phases.dissipate(0, C);
   let heat = 0;
@@ -140,7 +140,7 @@ test('the model returns the kinetic energy the sponge and the lid friction remov
 
 test('twenty GPU steps with the sponge, and with the lid friction, track twenty CPU steps, and the top treatment moves the flow by far more than the engines differ', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = (sponge, friction = null) => {
-    const model = createModel(new Grid(8), { physics: false, nu4Hours: Infinity, divergenceDamping: 0, core: sponge ? { spongeRates: sponge, spongeMeanRates: friction } : {} });
+    const model = createModel(new Grid(16), { physics: false, nu4Hours: Infinity, divergenceDamping: 0, core: sponge ? { spongeRates: sponge, spongeMeanRates: friction } : {} });
     const init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
     const E = model.mesh.nEdges;
@@ -158,7 +158,7 @@ test('twenty GPU steps with the sponge, and with the lid friction, track twenty 
     const got = await gpu.download();
     let uDiff = 0, uMoved = 0;
     for (let x = 0; x < got[2].length; x++) { uDiff = Math.max(uDiff, Math.abs(model.state[2][x] - got[2][x])); uMoved = Math.max(uMoved, Math.abs(model.state[2][x] - free.state[2][x])); }
-    console.log(`20 steps at N=8 with a half-day sponge over σ < 0.02 (${Array.from(sponge).filter((r) => r > 0).length} layers)${friction ? ' and a two-day friction on the top two layers\' zonal mean' : ''}: the top treatment moves the wind by up to ${uMoved.toFixed(2)} m/s, the engines differ by ${uDiff.toExponential(1)}`);
+    console.log(`20 steps at N=16 with a half-day sponge over σ < 0.02 (${Array.from(sponge).filter((r) => r > 0).length} layers)${friction ? ' and a two-day friction on the top two layers\' zonal mean' : ''}: the top treatment moves the wind by up to ${uMoved.toFixed(2)} m/s, the engines differ by ${uDiff.toExponential(1)}`);
     assert.ok(uDiff < 0.01 * uMoved, `engines differ by ${uDiff} m/s, the top treatment moved the wind by ${uMoved}`);
   }
 });

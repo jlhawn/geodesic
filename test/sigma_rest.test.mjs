@@ -5,10 +5,11 @@ import { buildMesh } from '../js/mesh.module.js';
 import { createSigmaCore, sigmaInterfaces, CP_DRY, P0 } from '../js/dynamics/sigmaCore.module.js';
 import { createRK4Arrays } from '../js/dynamics/integrators.module.js';
 
-const N = +(process.env.SIGMA_TEST_N ?? 8);
+const N = +(process.env.SIGMA_TEST_N ?? 16);
 const grid = new Grid(N);
 const mesh = buildMesh(grid);
 const C = mesh.nCells, E = mesh.nEdges;
+const peak = (values, offset = 0) => values.reduce((largest, x) => Math.max(largest, Math.abs(x - offset)), 0);
 
 test(`N=${N}: an atmosphere at rest with horizontally uniform theta stays at rest to roundoff`, () => {
   const core = createSigmaCore(mesh);
@@ -21,12 +22,12 @@ test(`N=${N}: an atmosphere at rest with horizontally uniform theta stays at res
   const step = createRK4Arrays([C, K * C, K * E]);
   const out = [new Float64Array(C), new Float64Array(K * C), new Float64Array(K * E)];
   core.tendency(state, out);
-  assert.equal(Math.max(...out[0].map(Math.abs)), 0);
-  assert.equal(Math.max(...out[1].map(Math.abs)), 0);
-  assert.equal(Math.max(...out[2].map(Math.abs)), 0);
+  assert.equal(peak(out[0]), 0);
+  assert.equal(peak(out[1]), 0);
+  assert.equal(peak(out[2]), 0);
   for (let n = 0; n < 50; n++) step(core.tendency, state, 300);
-  assert.equal(Math.max(...pi.map((p) => Math.abs(p - P0))), 0);
-  assert.equal(Math.max(...u.map(Math.abs)), 0);
+  assert.equal(peak(pi, P0), 0);
+  assert.equal(peak(u), 0);
 });
 
 test(`N=${N}: an isentropic column reproduces the analytic hydrostatic geopotential`, () => {

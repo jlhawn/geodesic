@@ -20,15 +20,15 @@ function savedOn(relax) {
 }
 
 test('a grid keeps its Lloyd passes, its mesh carries them, and a state written with them reads them back from its header', async () => {
-  assert.equal(new Grid(4).relaxPasses, DEFAULT_RELAX);
-  const grid = new Grid(4, { relax: 8 }), mesh = gridMesh(grid);
+  assert.equal(new Grid(N).relaxPasses, DEFAULT_RELAX);
+  const grid = new Grid(N, { relax: 8 }), mesh = gridMesh(grid);
   assert.equal(grid.relaxPasses, 8);
   assert.equal(mesh.relax, 8);
   assert.deepEqual(gridHeader(mesh), { grid: { relax: 8 } });
   assert.deepEqual(gridHeader(grid), { grid: { relax: 8 } });
   assert.deepEqual(gridHeader({ nCells: 1 }), {});
   const model = createModel(mesh, { physics: false });
-  const bytes = encodeState({ N: 4, ...gridHeader(model.mesh), K: model.core.K, day: 3, time: 3 * 86400, pi: model.state[0] });
+  const bytes = encodeState({ N, ...gridHeader(model.mesh), K: model.core.K, day: 3, time: 3 * 86400, pi: model.state[0] });
   const saved = await decodeState(bytes);
   assert.deepEqual(saved.grid, { relax: 8 });
   assert.equal(saved.pi.length, model.state[0].length);
@@ -37,7 +37,7 @@ test('a grid keeps its Lloyd passes, its mesh carries them, and a state written 
   assert.equal(found.source, 'header');
   assert.equal(found.grid.relaxPasses, 8);
   assert.deepEqual(Array.from(found.mesh.xCell), Array.from(mesh.xCell));
-  const json = await decodeState(new TextEncoder().encode(JSON.stringify({ N: 4, grid: { relax: 0 } })));
+  const json = await decodeState(new TextEncoder().encode(JSON.stringify({ N, grid: { relax: 0 } })));
   assert.equal(stateGrid(json, null).relax, 0);
 });
 

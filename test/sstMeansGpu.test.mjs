@@ -13,9 +13,9 @@ import { createSstRecorder } from '../js/sstMeans.module.js';
 
 /*
  * The SST recorders of js/sstMeans.module.js and js/gpu/sstMeans.gpu.js
- * against each other and the engines' own top layers at N=8, the GPU
+ * against each other and the engines' own top layers at N=16, the GPU
  * model with and without one, and the daily means scripts/spinup.mjs
- * keeps in its states at N=6. One GPU model at a time (CLAUDE.md).
+ * keeps in its states at N=16. One GPU model at a time (CLAUDE.md).
  */
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -27,13 +27,13 @@ const skip = !gpuAvailable && 'webgpu not installed';
 const root = new URL('..', import.meta.url).pathname;
 const topography = topographyFromInt16(readFileSync(join(root, 'data/topography_0p25.bin')).buffer);
 const same = (a, b) => !!a && !!b && a.length === b.length && Array.prototype.every.call(a, (v, n) => Object.is(v, b[n]));
-const DT = 2700, PER_DAY = 32;
+const N = 16, DT = 1350 * 16 / N, PER_DAY = 86400 / DT;
 let dir;
 before(() => { dir = mkdtempSync(join(tmpdir(), 'sstMeansGpu-')); });
 after(() => rmSync(dir, { recursive: true, force: true }));
 
 async function fresh(engine) {
-  const model = engine === 'gpu' ? await createGpuModel(new Grid(8), { topography }) : createModel(new Grid(8), { topography });
+  const model = engine === 'gpu' ? await createGpuModel(new Grid(N), { topography }) : createModel(new Grid(N), { topography });
   const { state, mesh } = model;
   initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => state[a].set(values));
   for (let i = 0; i < mesh.nCells; i++) if (model.geography.land[i]) state[6][i] = 0;
@@ -43,7 +43,7 @@ async function fresh(engine) {
   return model;
 }
 
-test('the CPU and GPU recorders agree at N=8: each day\'s mean is its engine\'s top layer averaged over the day\'s ocean steps, and the engines\' means part by no more than their top layers do', { skip }, async () => {
+test('the CPU and GPU recorders agree at N=16: each day\'s mean is its engine\'s top layer averaged over the day\'s ocean steps, and the engines\' means part by no more than their top layers do', { skip }, async () => {
   const days = 2;
   const run = async (engine) => {
     const model = await fresh(engine), C = model.mesh.nCells, gpu = engine === 'gpu', ocean = gpu ? model.oceanEngine : model.ocean;
@@ -118,7 +118,7 @@ test('a GPU recorder leaves the model bit for bit as it steps without one, a ste
   }
 });
 
-const N = 6, STEPS = 24, OCEAN_STEPS = STEPS / 4;
+const STEPS = PER_DAY, OCEAN_STEPS = STEPS / 4, INSIDE = `s_day0001_step${String(STEPS / 2).padStart(4, '0')}.bin`;
 const runDir = (name) => { const out = join(dir, name); mkdirSync(out); return out; };
 function spin(out, env) {
   const result = spawnSync(process.execPath, [join(root, 'scripts/spinup.mjs')], { cwd: root, env: { ...process.env, N: String(N), TAG: 's', MINUTES: '100', OUT: out, ...env }, encoding: 'utf8' });
@@ -153,15 +153,15 @@ test('a spin-up keeps the daily means of its last SST_WINDOW days in its states,
     assert.ok(day2 > 270 && day2 < 310 && day3 > 270 && day3 < 310, `cell ${i}: ${day2} and ${day3} K`);
     if (day3 !== day2) moved++;
   }
-  assert.ok(sea > 150 && moved > sea / 2, `${sea} sea cells, ${moved} changed from day 2 to 3`);
+  assert.ok(sea > 0.4 * C && moved > sea / 2, `${sea} sea cells, ${moved} changed from day 2 to 3`);
 
   assert.equal(spin(parts, { DAYS: '1', SST_WINDOW: '2' }), 0);
   assert.deepEqual(Array.from((await load(join(parts, 's_day0001.bin'))).sstMeanDays), [1]);
   await withoutMeans(join(parts, 's_day0001.bin'), join(runDir('oldDay'), 's_day0001.bin'));
   assert.equal(spin(parts, { DAYS: '3', SST_WINDOW: '2', STOP_AFTER_STEPS: String(STEPS / 2) }), 0);
-  const inside = await load(join(parts, 's_day0001_step0012.bin'));
+  const inside = await load(join(parts, INSIDE));
   assert.deepEqual([inside.sstSamples, inside.sstSum.length, Array.from(inside.sstMeanDays)], [OCEAN_STEPS / 2, C, [1]]);
-  await withoutMeans(join(parts, 's_day0001_step0012.bin'), join(runDir('oldInside'), 's_day0001_step0012.bin'));
+  await withoutMeans(join(parts, INSIDE), join(runDir('oldInside'), INSIDE));
   assert.equal(spin(parts, { DAYS: '3', SST_WINDOW: '2' }), 0);
   const split = await load(join(parts, 's_day0003.bin')), dayMeans = ['convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'energyRecord'];
   assert.deepEqual(arraysOf(whole).filter(([name, values]) => !dayMeans.includes(name) && !same(values, at(split, name))).map(([name]) => name), [], 'arrays the split run saved otherwise');

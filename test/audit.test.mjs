@@ -75,14 +75,14 @@ test('scripts/verticalAudit.mjs prints every headline number of a saved state wi
   const { initializeState } = await import('../js/physics/init.module.js');
   const { encodeState } = await import('../js/stateFile.module.js');
   const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-  const model = createModel(new Grid(12), { topography, ocean: false });
+  const model = createModel(new Grid(16), { topography, ocean: false });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   model.land.initialize();
   const [pi, theta, u, surfaceT, q, qc, ice] = model.state, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
-  const dir = mkdtempSync(join(tmpdir(), 'verticalAudit-')), file = join(dir, 'audit12_day0000.bin');
-  writeFileSync(file, encodeState({ N: 12, K: model.core.K, day: 0, time: 0, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
-  const withEffects = join(dir, 'audit12_day0001.bin'), C = model.mesh.nCells;
-  writeFileSync(withEffects, encodeState({ N: 12, K: model.core.K, day: 1, time: 0, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize(), meanShortwaveCloudEffect: new Float64Array(C).fill(-40), meanLongwaveCloudEffect: new Float64Array(C).fill(25) }));
+  const dir = mkdtempSync(join(tmpdir(), 'verticalAudit-')), file = join(dir, 'audit16_day0000.bin');
+  writeFileSync(file, encodeState({ N: 16, K: model.core.K, day: 0, time: 0, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
+  const withEffects = join(dir, 'audit16_day0001.bin'), C = model.mesh.nCells;
+  writeFileSync(withEffects, encodeState({ N: 16, K: model.core.K, day: 1, time: 0, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize(), meanShortwaveCloudEffect: new Float64Array(C).fill(-41), meanLongwaveCloudEffect: new Float64Array(C).fill(25) }));
   const audit = (state) => spawnSync(process.execPath, [new URL('../scripts/verticalAudit.mjs', import.meta.url).pathname, state], { env: { ...process.env, STEPS: '2' }, encoding: 'utf8' });
   const run = audit(file), saved = audit(withEffects);
   rmSync(dir, { recursive: true, force: true });
@@ -97,7 +97,7 @@ test('scripts/verticalAudit.mjs prints every headline number of a saved state wi
   assert.match(run.stdout, /global clear-sky albedo, mean over the window's 2 steps +0\.[0-9]{3}  Earth n\/a\.\.n\/a  -> n\/a  \[the window's 2 steps 0\.[0-9]{3}; an outcome of the surface classes below, Earth about 0\.15 globally\]/);
   assert.match(run.stdout, /30S-30N clear-sky albedo, mean over the window's 2 steps +0\.[0-9]{3}  Earth n\/a\.\.n\/a  -> n\/a  \[the window's 2 steps 0\.[0-9]{3}; an outcome/);
   for (const name of ['global shortwave cloud effect', 'global longwave cloud effect', '30S-30N shortwave cloud effect', '30S-30N longwave cloud effect']) assert.ok(lines.some((line) => line.includes(`${name}, mean over the window's 2 steps (W/m2)`)), `a row for the window's ${name}`);
-  assert.match(saved.stdout, /global shortwave cloud effect, day mean of the state's last day \(W\/m2\) +-40\.0  Earth -43\.0\.\.-51\.0  -> too weak by x1\.08  \[the window's 2 steps -?[0-9.]+\]/);
+  assert.match(saved.stdout, /global shortwave cloud effect, day mean of the state's last day \(W\/m2\) +-41\.0  Earth -43\.0\.\.-51\.0  -> too weak by x1\.05  \[the window's 2 steps -?[0-9.]+\]/);
   assert.match(saved.stdout, /30S-30N longwave cloud effect, day mean of the state's last day \(W\/m2\) +25\.0  Earth n\/a\.\.n\/a  -> n\/a  \[the window's 2 steps -?[0-9.]+; Earth \+26 \+- 3 globally\]/);
   for (const name of ['SE Pacific 10-30S 110-80W: rain', 'Peru 5-20S 90-75W: columns firing a step', "deck's virtual jump above h", 'estimated inversion strength', 'saved running-mean deck sink', 'deck-height sink now, as the dynamics leaves it', 'deck-height sink now, as the deck reads it, 2 ring passes', 'omega700 (Pa/s)', 'low cloud', "deck's start height h", 'deck runs, share of column-steps', 'deck height where it runs', "deck's cloud-layer thickness where it runs", "deck's liquid water path where it runs", 'global evaporation (mm/d)', 'resolved inversion (m)', "resolved inversion's thetaV jump", 'Pacific ITCZ 5-12N 160E-100W: omega500', 'zonal-mean rain peak', 'omega700 grid-scale share', 'SH Hadley peak', 'NH Hadley peak', 'Pacific ITCZ 5-12N 160E-100W: Q1-QR peak over 50 hPa bins (hPa)', 'Pacific ITCZ 5-12N 160E-100W: Q1-QR centroid (hPa)', 'warm pool 10S-10N 120-170E sea: Q1-QR peak over 50 hPa bins (hPa)', 'warm pool 10S-10N 120-170E sea: Q1-QR centroid (hPa)', 'large-scale heating below 1 km', 'global rain (mm/d)', 'convective share of the rain, 15S-15N', 'low-cloud cover, radiative', 'low-cloud water path in cloud', 'coupled stratocumulus share', 'cloud-top cooling', 'Namibia 10-20S 0-10E: rain', 'California 20-30N 130-120W: low-cloud cover']) {
     assert.ok(lines.some((line) => line.includes(name)), `a row for ${name}`);
@@ -114,13 +114,13 @@ test('scripts/tropicalHeating.mjs replays the moist step exactly, closes the hea
   const { initializeState } = await import('../js/physics/init.module.js');
   const { encodeState } = await import('../js/stateFile.module.js');
   const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-  const model = createModel(new Grid(12), { topography, ocean: false });
+  const model = createModel(new Grid(16), { topography, ocean: false });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   model.land.initialize();
-  for (let n = 0; n < 6; n++) model.step(1800);
+  for (let n = 0; n < 6; n++) model.step(1350);
   const [pi, theta, u, surfaceT, q, qc, ice] = model.state, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
-  const dir = mkdtempSync(join(tmpdir(), 'tropicalHeating-')), file = join(dir, 'heat12_day0000.bin');
-  writeFileSync(file, encodeState({ N: 12, K: model.core.K, day: 0, time: model.time, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
+  const dir = mkdtempSync(join(tmpdir(), 'tropicalHeating-')), file = join(dir, 'heat16_day0000.bin');
+  writeFileSync(file, encodeState({ N: 16, K: model.core.K, day: 0, time: model.time, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
   const run = spawnSync(process.execPath, [new URL('../scripts/tropicalHeating.mjs', import.meta.url).pathname, file], { env: { ...process.env, STEPS: '3' }, encoding: 'utf8' });
   rmSync(dir, { recursive: true, force: true });
   assert.equal(run.status, 0, run.stderr);

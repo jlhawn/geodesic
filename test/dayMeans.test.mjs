@@ -15,7 +15,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 const SUM_SLOTS = { absorbedSolar: 'ABSSUM', atmosphereSolar: 'ATMSUM', outgoingLongwave: 'OLRSUM', insolation: 'INSSUM', reflectedSolar: 'REFLSUM' };
 const STEP_SLOTS = { absorbedSolar: 'ABS', atmosphereSolar: 'ATMSW', outgoingLongwave: 'OLR', insolation: 'INS', reflectedSolar: 'REFL' };
 const MEAN_SLOTS = { meanAbsorbedSolar: 'ASRMEAN', meanOutgoingLongwave: 'OLRMEAN', meanPlanetaryAlbedo: 'ALBMEAN' };
-const DT = 900;
+const N = 16, DT = 900;
 
 function stats(cpu, gpu) {
   let maxDiff = 0, sumSq = 0, sumRef = 0;
@@ -27,7 +27,7 @@ const UNSCATTERED = { rayleighDepth: 0, nearInfraredRayleigh: 0, landAerosol: 0,
 
 async function engines() {
   const surface = { exchange: 'fixed' };
-  const cpu = createModel(new Grid(6), { ocean: false, radiation: UNSCATTERED, surface, moist: { excessVelocity: 'convective', convectionType: 'cloudDepth', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' } }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation: UNSCATTERED, surface, moist: { excessVelocity: 'convective', convectionType: 'cloudDepth', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' } });
+  const cpu = createModel(new Grid(N), { ocean: false, radiation: UNSCATTERED, surface, moist: { excessVelocity: 'convective', convectionType: 'cloudDepth', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' } }), gpu = await createGpuModel(new Grid(N), { ocean: false, radiation: UNSCATTERED, surface, moist: { excessVelocity: 'convective', convectionType: 'cloudDepth', plumePhase: 'liquid', plumeConversion: 'zhangMcFarlane' } });
   const init = initializeState(cpu, {});
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
   gpu.load();
@@ -79,7 +79,7 @@ test('both engines sum each cell\'s radiation over the steps alike, and their da
   const gpuSums = Object.fromEntries(SUMMED.map((name) => [name, Float64Array.from(device[SUM_SLOTS[name]].subarray(0, C))]));
   const parity = Object.fromEntries(SUMMED.map((name) => [name, stats(agreed.map((i) => cpuSums[name][i]), agreed.map((i) => gpuSums[name][i]))]));
   const whole = Object.fromEntries(SUMMED.map((name) => [name, stats(cpuSums[name], gpuSums[name])]));
-  console.log(`24 steps at N=6, per-cell sums CPU against GPU over the ${agreed.length} of ${C} columns more than two cells from the ${parted.size} whose decisions or radiation parted (over all columns reflectedSolar rms ${whole.reflectedSolar.rmsRel.toExponential(1)}): ${SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
+  console.log(`24 steps at N=${N}, per-cell sums CPU against GPU over the ${agreed.length} of ${C} columns more than two cells from the ${parted.size} whose decisions or radiation parted (over all columns reflectedSolar rms ${whole.reflectedSolar.rmsRel.toExponential(1)}): ${SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m²)`).join(', ')}`);
   assert.ok(parted.size <= C / 5 && near.size <= 0.8 * C, `${parted.size} of ${C} columns' decisions or radiation parted, ${near.size} with their neighbours within two cells`);
   for (const name of SUMMED) assert.ok(parity[name].rmsRel < 1e-4, `${name}: per-cell rms ${parity[name].rmsRel}`);
   assert.ok(whole.insolation.rmsRel < 1e-6, `the incoming sunlight differs by ${whole.insolation.rmsRel}`);
@@ -130,13 +130,13 @@ test('the GPU model sends the per-cell means of a saved state to the device on l
   await stepBoth(run, 12);
   cpu.diagnostics(); await gpu.diagnostics();
   await gpu.sync();
-  const header = { N: 6, K: gpu.core.K, day: 0, time: gpu.time };
+  const header = { N, K: gpu.core.K, day: 0, time: gpu.time };
   const state = Object.fromEntries(['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].map((name, a) => [name, gpu.state[a]]));
   const withMeans = await decodeState(encodeState({ ...header, ...state, ...Object.fromEntries(Object.keys(RADIATION_FIELDS).map((name) => [name, gpu.radiation[name]])) }));
   const older = await decodeState(encodeState({ ...header, ...state }));
   assert.ok(gpu.radiation.meanAbsorbedSolar.some((x) => x > 0) && gpu.radiation.meanPlanetaryAlbedo.some((x) => x > 0), 'the run has per-cell means to save');
 
-  const fresh = await createGpuModel(new Grid(6), { ocean: false });
+  const fresh = await createGpuModel(new Grid(N), { ocean: false });
   ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => fresh.state[a].set(withMeans[name]));
   for (const name of Object.keys(RADIATION_FIELDS)) fresh.radiation[name].set(savedRadiationField(withMeans, name, fresh));
   fresh.load();
@@ -172,15 +172,15 @@ test('the GPU model sends the per-cell means of a saved state to the device on l
 });
 
 test('a state carries the per-cell radiation means, regridded at another resolution, and one saved without them gives zeros', async () => {
-  const model = createModel(new Grid(6), { ocean: false, physics: false }), target = createModel(new Grid(8), { ocean: false, physics: false });
+  const model = createModel(new Grid(N), { ocean: false, physics: false }), target = createModel(new Grid(20), { ocean: false, physics: false });
   const C = model.mesh.nCells, albedo = Float64Array.from({ length: C }, (_, i) => 0.2 + 0.01 * (i % 7));
-  const saved = await decodeState(encodeState({ N: 6, K: model.core.K, day: 0, time: 0, pi: model.state[0], meanAbsorbedSolar: albedo.map((a) => 400 * (1 - a)), meanOutgoingLongwave: new Float64Array(C).fill(240), meanPlanetaryAlbedo: albedo }));
+  const saved = await decodeState(encodeState({ N, K: model.core.K, day: 0, time: 0, pi: model.state[0], meanAbsorbedSolar: albedo.map((a) => 400 * (1 - a)), meanOutgoingLongwave: new Float64Array(C).fill(240), meanPlanetaryAlbedo: albedo }));
   assert.deepEqual(Object.keys(RADIATION_FIELDS), ['meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect']);
   for (const name of Object.keys(RADIATION_FIELDS)) model.radiation[name].set(savedRadiationField(saved, name, model));
   for (let i = 0; i < C; i++) assert.equal(model.radiation.meanPlanetaryAlbedo[i], Math.fround(albedo[i]), `albedo of cell ${i}`);
   const moved = savedRadiationField(saved, 'meanOutgoingLongwave', target, model);
   assert.equal(moved.length, target.mesh.nCells);
   assert.ok(moved.every((x) => Math.abs(x - 240) < 1e-9), 'a uniform field regrids to itself');
-  const legacy = await decodeState(encodeState({ N: 6, K: model.core.K, day: 0, time: 0, pi: model.state[0] }));
+  const legacy = await decodeState(encodeState({ N, K: model.core.K, day: 0, time: 0, pi: model.state[0] }));
   assert.ok(Object.keys(RADIATION_FIELDS).every((name) => savedRadiationField(legacy, name, model).every((x) => x === 0) && savedRadiationField(null, name, target).every((x) => x === 0)), 'a state saved without them, or a fresh start, starts from zero');
 });

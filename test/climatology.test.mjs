@@ -193,7 +193,7 @@ test('climatology: null gives the analytic start byte for byte and leaves the su
 
 test('the GPU ocean starts from the atlas as the CPU ocean does and sends the device the sea surface it sets', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const atlas = await loadClimatology(FILE.pathname);
-  const model = await createGpuModel(new Grid(8), { topography, ocean: { climatology: FILE.pathname } });
+  const model = await createGpuModel(new Grid(16), { topography, ocean: { climatology: FILE.pathname } });
   const { mesh, state } = model, C = mesh.nCells;
   for (let i = 0; i < C; i++) { state[3][i] = 272 + 30 * Math.cos(mesh.latCell[i]) ** 2; state[6][i] = !model.geography.land[i] && mesh.latCell[i] < -68 * DEG ? 0.7 : 0; }
   const surfaceT = Float64Array.from(state[3]);

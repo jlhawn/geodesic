@@ -8,6 +8,8 @@ let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuCore } = gpuAvailable ? await import('../js/gpu/core.gpu.js') : {};
 
+const N = 16;
+
 function meanTheta(model) {
   const { K } = model.core, C = model.mesh.nCells, theta = model.state[1];
   return Float64Array.from({ length: K }, (_, k) => { let s = 0, a = 0; for (let i = 0; i < C; i++) { s += model.mesh.areaCell[i] * theta[k * C + i]; a += model.mesh.areaCell[i]; } return s / a; });
@@ -22,7 +24,7 @@ function compare(label, cpu, gpu, tolerance) {
 }
 
 test('the GPU tendency matches the CPU core to single precision', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const model = createModel(new Grid(8), { physics: false });
+  const model = createModel(new Grid(N), { physics: false });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const out = model.state.map((s) => new Float64Array(s.length));
@@ -32,11 +34,11 @@ test('the GPU tendency matches the CPU core to single precision', { skip: !gpuAv
   await gpu.tendency();
   const got = await gpu.download(gpu.buffers.K1);
   const r = ['dπ', 'dθ', 'du', '', 'dq', 'dqc'].map((name, a) => (name ? compare(name, out[a], got[a], name === 'du' ? 2e-3 : 1e-4) : 0));
-  console.log(`GPU tendency at N=8: relative differences dπ ${r[0].toExponential(1)} dθ ${r[1].toExponential(1)} du ${r[2].toExponential(1)} dq ${r[4].toExponential(1)}`);
+  console.log(`GPU tendency at N=${N}: relative differences dπ ${r[0].toExponential(1)} dθ ${r[1].toExponential(1)} du ${r[2].toExponential(1)} dq ${r[4].toExponential(1)}`);
 });
 
 test('a rest state stays at rest on the GPU', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const model = createModel(new Grid(6), { physics: false });
+  const model = createModel(new Grid(N), { physics: false });
   const [pi, theta, u] = model.state;
   pi.fill(101325); u.fill(0);
   for (let k = 0; k < model.core.K; k++) for (let i = 0; i < model.mesh.nCells; i++) theta[k * model.mesh.nCells + i] = 300 + 2 * (model.core.K - 1 - k);
@@ -52,7 +54,7 @@ test('a rest state stays at rest on the GPU', { skip: !gpuAvailable && 'webgpu n
 });
 
 test('twenty GPU steps track twenty CPU steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const model = createModel(new Grid(8), { physics: false });
+  const model = createModel(new Grid(N), { physics: false });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const gpu = await createGpuCore(model.mesh, { dragCoefficient: 0, topDragDays: 0, spongeRates: null, gravityWaves: false, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model) });
@@ -66,13 +68,13 @@ test('twenty GPU steps track twenty CPU steps', { skip: !gpuAvailable && 'webgpu
   rms = Math.sqrt(rms / model.mesh.nCells);
   let uMax = 0, uDiff = 0; for (let x = 0; x < got[2].length; x++) { uMax = Math.max(uMax, Math.abs(model.state[2][x])); uDiff = Math.max(uDiff, Math.abs(model.state[2][x] - got[2][x])); }
   assert.ok(uDiff < 1e-2 * Math.max(uMax, 1), `wind difference ${uDiff} m/s against ${uMax}`);
-  console.log(`GPU vs CPU after 20 steps at N=8: ps RMS ${rms.toFixed(3)} Pa, π ${piRel.toExponential(1)}, θ ${thetaRel.toExponential(1)}, wind ${uDiff.toExponential(1)} m/s of ${uMax.toFixed(1)}`);
+  console.log(`GPU vs CPU after 20 steps at N=${N}: ps RMS ${rms.toFixed(3)} Pa, π ${piRel.toExponential(1)}, θ ${thetaRel.toExponential(1)}, wind ${uDiff.toExponential(1)} m/s of ${uMax.toFixed(1)}`);
 });
 
 test('twenty GPU steps with divergence damping track twenty CPU steps, and the damping moves the flow by far more than the engines differ', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { divergence } = await import('../js/dynamics/operators.module.js');
   const run = (divergenceDamping) => {
-    const model = createModel(new Grid(8), { physics: false, divergenceDamping });
+    const model = createModel(new Grid(N), { physics: false, divergenceDamping });
     const init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
     return model;
@@ -89,7 +91,7 @@ test('twenty GPU steps with divergence damping track twenty CPU steps, and the d
   const rmsDivergence = (u) => { let s = 0; const d = new Float64Array(C); for (let k = 0; k < K; k++) { divergence(model.mesh, u.subarray(k * E, (k + 1) * E), d); for (let i = 0; i < C; i++) s += d[i] * d[i]; } return Math.sqrt(s / (K * C)); };
   let uDiff = 0, uMoved = 0;
   for (let x = 0; x < got[2].length; x++) { uDiff = Math.max(uDiff, Math.abs(model.state[2][x] - got[2][x])); uMoved = Math.max(uMoved, Math.abs(model.state[2][x] - free.state[2][x])); }
-  console.log(`20 steps at N=8 with c = 0.05: rms divergence ${rmsDivergence(model.state[2]).toExponential(2)} /s on the CPU, ${rmsDivergence(Float64Array.from(got[2])).toExponential(2)} on the GPU, ${rmsDivergence(free.state[2]).toExponential(2)} undamped; the damping moves the wind by up to ${uMoved.toFixed(3)} m/s, the engines differ by ${uDiff.toExponential(1)}`);
+  console.log(`20 steps at N=${N} with c = 0.05: rms divergence ${rmsDivergence(model.state[2]).toExponential(2)} /s on the CPU, ${rmsDivergence(Float64Array.from(got[2])).toExponential(2)} on the GPU, ${rmsDivergence(free.state[2]).toExponential(2)} undamped; the damping moves the wind by up to ${uMoved.toFixed(3)} m/s, the engines differ by ${uDiff.toExponential(1)}`);
   assert.ok(uDiff < 0.02 * uMoved, `engines differ by ${uDiff} m/s, the damping moved the wind by ${uMoved}`);
   assert.ok(rmsDivergence(model.state[2]) < rmsDivergence(free.state[2]), 'the damping lowers the divergence');
 });

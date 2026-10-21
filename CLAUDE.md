@@ -22,5 +22,6 @@ WebGCM: a browser climate model (JavaScript; CPU and WebGPU engines under `js/`)
 - Never commit `socol.txt`, anything under `runs/` beyond the page's default state parts, or scratch files.
 - American spelling in prose, UI text, messages and comments. Code comments default to none and never narrate a change.
 - The static server on http://localhost:8001 serves the repo root; do not start another, and do not open a GUI browser from an agent.
-- Both engines must stay in step: a model change lands on the CPU (f64) and the WGSL (f32) together, with a parity test at N = 8 and, where it touches storage or transport, a row in `test/layeredConservation.test.mjs` or `test/atmosphereConservation.test.mjs`.
+- No test builds or runs anything below N = 16, the coarsest grid the model runs at (its step is 1350 s, 64 a day).
+- Both engines must stay in step: a model change lands on the CPU (f64) and the WGSL (f32) together, with a parity test at N = 16 and, where it touches storage or transport, a row in `test/layeredConservation.test.mjs` or `test/atmosphereConservation.test.mjs`.
 - Saved states record their grid (`grid: { relax }`); loaders use `js/stateGrid.module.js`.

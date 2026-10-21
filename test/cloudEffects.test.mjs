@@ -80,7 +80,7 @@ test('zeroCrossings interpolates in the logarithm of the water path and skips ro
 });
 
 test('uniformCloud is the model\'s own condensation and the radiation\'s own cover, layer by layer', () => {
-  const model = createModel(new Grid(2), { ocean: false, levels: sigmaInterfaces('bl36') });
+  const model = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces('bl36') });
   const { C, sigmaMid, exnerLayer, dSigma, g } = model.core.diagnostics, [pi, theta, , , q, qc] = model.state;
   for (const k of [26, 22, 17, HIGHEST]) for (const humidity of [0.8, 0.95, 1, 1.1, 1.3]) {
     pi.fill(MLS.surfacePressure);
@@ -119,10 +119,10 @@ test('the uniform distribution: cloud begins at the critical humidity, covers ha
 });
 
 test('the cloud a layer\'s humidity makes, blended by its cover, is the model\'s own partial cover: the same infrared, and the same sunlight once the cloud holds more than a few g/m²', () => {
-  const mesh = buildMesh(new Grid(2)), C = mesh.nCells, core = createSigmaCore(mesh, { levels: LEVELS }), { exnerLayer } = core.diagnostics, ps = MLS.surfacePressure;
+  const mesh = buildMesh(new Grid(16)), C = mesh.nCells, core = createSigmaCore(mesh, { levels: LEVELS }), { exnerLayer } = core.diagnostics, ps = MLS.surfacePressure;
   const pi = new Float64Array(C).fill(ps), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
   const pdf = createRadiation(mesh, core, { longwaveLines: 'scaled', solarConstant: 340.5 * 1.5, ozoneProfile: MLS.ozone, nearInfrared: 'clirad' });
-  pdf.useCondensation(createModel(new Grid(2), { ocean: false, levels: LEVELS }).moist.condensation);
+  pdf.useCondensation(createModel(new Grid(16), { ocean: false, levels: LEVELS }).moist.condensation);
   const column = makeColumn({ profile: MLS, humidity: MLS.humidity });
   const call = (water) => {
     qc.fill(0);
