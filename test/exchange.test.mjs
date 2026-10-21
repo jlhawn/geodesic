@@ -128,14 +128,14 @@ test('both engines give every surface the same transfer coefficients and fluxes'
     const k = classOf(i), w = (worst[k] ??= { cells: 0, drag: 0, heat: 0, reference: 0, evaporation: 0, flux: 0, cd: 0 });
     w.cells++;
     w.cd += cpu.exchange.drag[i];
-    w.drag = Math.max(w.drag, Math.abs(drag[i] / cpu.exchange.drag[i] - 1));
-    w.heat = Math.max(w.heat, Math.abs(heat[i] / cpu.exchange.heat[i] - 1));
+    w.drag = Math.max(w.drag, Math.abs(drag[i] - cpu.exchange.drag[i]) / Math.max(cpu.exchange.drag[i], 1e-5));
+    w.heat = Math.max(w.heat, Math.abs(heat[i] - cpu.exchange.heat[i]) / Math.max(cpu.exchange.heat[i], 1e-5));
     w.reference = Math.max(w.reference, Math.abs(reference[i] / cpu.exchange.reference[i] - 1));
     w.evaporation = Math.max(w.evaporation, (Math.abs(evaporation[i] - cpu.radiation.evaporation[i]) * 2.5e6 - 1e-5 * Math.abs(cpu.radiation.evaporation[i]) * 2.5e6));
     w.flux = Math.max(w.flux, Math.abs(surfaceFlux[i] - cpu.radiation.surfaceFlux[i]) - 1e-5 * Math.abs(cpu.radiation.surfaceFlux[i]));
   }
   for (const [k, w] of Object.entries(worst)) {
-    console.log(`${k}: ${w.cells} cells, mean C_D ${(w.cd / w.cells * 1e3).toFixed(3)}e-3; engines apart: C_D ${w.drag.toExponential(1)}, C_H ${w.heat.toExponential(1)}, reference ${w.reference.toExponential(1)} relative; latent heat ${w.evaporation.toExponential(1)}, net surface flux ${w.flux.toExponential(1)} W/m² beyond 1e-5 of each cell's own`);
+    console.log(`${k}: ${w.cells} cells, mean C_D ${(w.cd / w.cells * 1e3).toFixed(3)}e-3; engines apart: C_D ${w.drag.toExponential(1)} and C_H ${w.heat.toExponential(1)} relative to the coefficient or 1e-5 if larger, reference ${w.reference.toExponential(1)} relative; latent heat ${w.evaporation.toExponential(1)}, net surface flux ${w.flux.toExponential(1)} W/m² beyond 1e-5 of each cell's own`);
     assert.ok(w.drag < 2e-4 && w.heat < 2e-4 && w.reference < 1e-5, `${k} coefficients`);
     assert.ok(w.evaporation < 0.05 && w.flux < 0.1, `${k} fluxes`);
   }

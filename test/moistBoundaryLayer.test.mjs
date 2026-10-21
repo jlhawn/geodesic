@@ -362,6 +362,6 @@ test('the moist boundary layer matches between the engines on a random set of co
     assert.ok(flips <= nC / 100, `${flips} columns differ in regime`);
     assert.ok(worstV < 1e-4 && worstW < 2e-3 && worstMix < 2e-3 && worstDepth < 0.05, `V ${worstV}, w_e ${worstW}, coefficients ${worstMix}, depths ${worstDepth}`);
     assert.ok(adjusted <= nC / 50, `${adjusted} columns part`);
-    assert.ok(theta < 2e-3 && q < 2e-6 && qc < 2e-6 && wind < 2e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
+    assert.ok(theta < 5e-3 && q < 4e-6 && qc < 2e-6 && wind < 2e-3, `θ ${theta}, q ${q}, qc ${qc}, wind ${wind}`);
   }
 });

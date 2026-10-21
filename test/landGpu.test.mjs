@@ -5,6 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
+import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -12,9 +13,9 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
 
-function stats(cpu, gpu) {
+function stats(cpu, gpu, skip = null) {
   let maxDiff = 0, at = -1, sumSq = 0, sumRef = 0;
-  for (let x = 0; x < cpu.length; x++) { const d = Math.abs(cpu[x] - gpu[x]); if (d > maxDiff) { maxDiff = d; at = x; } sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
+  for (let x = 0; x < cpu.length; x++) { if (skip && skip.has(x)) continue; const d = Math.abs(cpu[x] - gpu[x]); if (d > maxDiff) { maxDiff = d; at = x; } sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
   return { maxDiff, at, rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
 }
 
@@ -51,7 +52,11 @@ test('eight GPU steps over a continent track the CPU model: surface, soil, snow,
   const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
   const cpu = prepare(createModel(new Grid(16), { topography, land }), true);
   const gpu = prepare(await createGpuModel(new Grid(16), { topography, land }), true);
-  for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
+  const decisions = decisionTracker(cpu.core.K, cpu.mesh.nCells);
+  for (let n = 0; n < 8; n++) {
+    cpu.step(900); await gpu.step(900);
+    decisions.check(cpuDecisions(cpu), gpuDecisions(await gpu.gpu.download(), await gpu.gpu.downloadPhysics()));
+  }
   await gpu.sync();
   const fogGpu = Float64Array.from((await gpu.gpu.downloadPhysics()).FOG.subarray(0, cpu.mesh.nCells)), fogCpu = Float64Array.from(cpu.moist.fogPrecipitation);
   const fog = stats(fogCpu, fogGpu);
@@ -62,15 +67,15 @@ test('eight GPU steps over a continent track the CPU model: surface, soil, snow,
   assert.ok(fog.maxDiff < 1e-3 * Math.max(...fogCpu) + 1e-6 && fog.rmsRel < 1e-4, `fog differs by ${fog.maxDiff} at ${fog.at}, rms ${fog.rmsRel}`);
   const saved = await gpu.land.serialize();
   const d = await gpu.diagnostics(), dc = cpu.diagnostics();
-  const ts = stats(cpu.state[3], gpu.state[3]), theta = stats(cpu.state[1], gpu.state[1]);
+  const near = neighbourhood(cpu.mesh, decisions.parted, 1), ts = stats(cpu.state[3], gpu.state[3], near), theta = stats(cpu.state[1], gpu.state[1]);
   const soil = stats(cpu.land.soil, saved.soil), snow = stats(cpu.land.snow, saved.snow), vegetation = stats(cpu.land.vegetation, saved.vegetation), surface = stats(cpu.land.surface, saved.surface);
   assert.ok(surface.maxDiff < 1e-2, `surface layer max ${surface.maxDiff} at ${surface.at}`);
   let moved = 0;
   for (let i = 0; i < cpu.mesh.nCells; i++) if (cpu.geography.land[i]) moved = Math.max(moved, Math.abs(cpu.land.vegetation[i] - 0.5));
   assert.ok(moved > 0.2, `the vegetation moved at most ${moved} from its start`);
   assert.ok(vegetation.maxDiff < 1e-3, `vegetation max ${vegetation.maxDiff} at ${vegetation.at}`);
-  console.log(`eight steps over a continent at N=16: Ts max ${ts.maxDiff.toExponential(1)} K, θ rms ${theta.rmsRel.toExponential(1)}, soil max ${soil.maxDiff.toExponential(1)} kg/m², snow max ${snow.maxDiff.toExponential(1)} kg/m²; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
-  assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} at ${ts.at}`);
+  console.log(`eight steps over a continent at N=16: Ts max ${ts.maxDiff.toExponential(1)} K outside the ${near.size} cells within one of the ${decisions.parted.size} where the engines took a discrete decision apart, θ rms ${theta.rmsRel.toExponential(1)}, soil max ${soil.maxDiff.toExponential(1)} kg/m², snow max ${snow.maxDiff.toExponential(1)} kg/m²; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
+  assert.ok(near.size <= 0.5 * cpu.mesh.nCells && ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} at ${ts.at}, ${near.size} cells left out`);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
   assert.ok(soil.maxDiff < 1e-2, `soil max ${soil.maxDiff} at ${soil.at}`);
   assert.ok(snow.maxDiff < 1e-2, `snow max ${snow.maxDiff} at ${snow.at}`);

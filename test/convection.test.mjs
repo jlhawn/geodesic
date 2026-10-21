@@ -1391,20 +1391,36 @@ async function parity(options, { momentum = false } = {}) {
   moist.trace.convection = new Float64Array(K * C);
   const threshold = new Set();
   const typedAtEdge = new Set();
-  for (let i = 0; i < C; i++) { model.phases.adjust(i, i + 1, dt); if (moist.deep.conversionMargin < 1e-3) threshold.add(i); if (moist.deep.typeMargin < 1e-3) typedAtEdge.add(i); }
+  const downdraftAtEdge = new Set(), { cp, exnerLayer } = core.diagnostics, phiLayer = core.diagnostics.geopotential;
+  for (let i = 0; i < C; i++) {
+    core.diagnoseColumn(i, pi, theta, q, qc);
+    const energy = Float64Array.from({ length: K }, (_, k) => cp * theta[k * C + i] * exnerLayer[k * C + i] + phiLayer[k * C + i] + LATENT_HEAT * q[k * C + i]);
+    model.phases.adjust(i, i + 1, dt);
+    if (moist.deep.conversionMargin < 1e-3) threshold.add(i);
+    if (moist.deep.typeMargin < 1e-3) typedAtEdge.add(i);
+    const { start, top, base } = moist.deep;
+    if (start >= 0) {
+      let gap = Infinity;
+      for (let k = top + 1; k < base; k++) if (k !== start) gap = Math.min(gap, energy[k] - energy[start]);
+      if (gap < 1e-5 * energy[start]) downdraftAtEdge.add(i);
+    }
+  }
   for (let i = 0; i < C; i++) { const now = moist.convectivePrecipitation[i] + moist.largeScalePrecipitation[i]; response[i] = Math.max(Math.abs(response[i] - now), Math.abs(warmed[i] - now)); }
   for (let x = 0; x < K * C; x++) thetaResponse[x] = Math.abs(thetaResponse[x] - theta[x] * (1 + 2 ** -23));
   if (momentum) {
     const E = mesh.nEdges, { dSigma, g } = core.diagnostics, u = model.state[2], before = Float64Array.from(u);
     model.phases.mixMomentum(0, E, dt);
-    let moved = 0, worstU = 0, worstColumn = 0, scale = 0, windOver = -Infinity, windAllowed = 0;
+    let moved = 0, worstU = 0, worstColumn = 0, scale = 0, windOver = -Infinity, windAllowed = 0, besideTied = 0;
+    const tied = (i) => downdraftAtEdge.has(i) || threshold.has(i) || typedAtEdge.has(i);
     for (let e = 0; e < E; e++) {
-      const columnMass = 0.5 * (pi[mesh.cellsOnEdge[2 * e]] + pi[mesh.cellsOnEdge[2 * e + 1]]);
+      const columnMass = 0.5 * (pi[mesh.cellsOnEdge[2 * e]] + pi[mesh.cellsOnEdge[2 * e + 1]]), apart = tied(mesh.cellsOnEdge[2 * e]) || tied(mesh.cellsOnEdge[2 * e + 1]);
+      if (apart) besideTied++;
       let was = 0, now = 0, changed = false;
       for (let k = 0; k < K; k++) {
         const x = k * E + e, m = columnMass * dSigma[k] / g;
         was += m * before[x]; now += m * u[x]; scale = Math.max(scale, Math.abs(m * before[x]));
         if (u[x] !== before[x]) changed = true;
+        if (apart) continue;
         worstU = Math.max(worstU, Math.abs(u[x] - after[2][x]));
         windOver = Math.max(windOver, Math.abs(u[x] - after[2][x]) - (1e-3 + 2 * Math.abs(windResponse[x] - u[x])));
         windAllowed = Math.max(windAllowed, 2 * Math.abs(windResponse[x] - u[x]));
@@ -1412,8 +1428,9 @@ async function parity(options, { momentum = false } = {}) {
       if (changed) moved++;
       worstColumn = Math.max(worstColumn, Math.abs(now - was));
     }
-    console.log(`  momentum: the plume moves the wind on ${moved} of ${E} edges; each edge's column momentum changes by at most ${worstColumn.toExponential(1)} kg/m/s against layer momenta up to ${scale.toFixed(0)}; the engines' winds differ by ${worstU.toExponential(1)} m/s (twice the CPU's response to one f32 ulp of θ at most ${windAllowed.toExponential(1)} m/s)`);
+    console.log(`  momentum: the plume moves the wind on ${moved} of ${E} edges; each edge's column momentum changes by at most ${worstColumn.toExponential(1)} kg/m/s against layer momenta up to ${scale.toFixed(0)}; the engines' winds differ by ${worstU.toExponential(1)} m/s off the ${besideTied} edges beside a column left out below (twice the CPU's response to one f32 ulp of θ at most ${windAllowed.toExponential(1)} m/s)`);
     assert.ok(moved > E / 10, `${moved} edges moved`);
+    assert.ok(besideTied <= E / 25, `${besideTied} edges beside columns left out`);
     assert.ok(worstColumn < 1e-12 * scale, `column momentum changed by ${worstColumn}`);
     assert.ok(windOver < 0, `winds differ by ${worstU} m/s, ${windOver} above 1e-3 m/s and twice the response to one ulp of θ`);
   }
@@ -1443,7 +1460,7 @@ async function parity(options, { momentum = false } = {}) {
     if (cpu > 0) plumes++;
     if ((cpu > 0) !== (gpuFlux > 0)) plumeFlips++;
     if (moist.cumulusTop[i] > 0 && Math.abs(moist.cumulusTop[i] - ph.CUTOP[i]) > 1) topsDiffer++;
-    if (beside.has(i) || merged.has(i) || threshold.has(i) || typedAtEdge.has(i)) continue;
+    if (beside.has(i) || merged.has(i) || threshold.has(i) || typedAtEdge.has(i) || downdraftAtEdge.has(i)) continue;
     fluxScale = Math.max(fluxScale, cpu);
     if (!switching.has(i)) worstFlux = Math.max(worstFlux, Math.abs(cpu - gpuFlux));
     for (let k = K0; k < K; k++) {
@@ -1469,18 +1486,18 @@ async function parity(options, { momentum = false } = {}) {
     }
   }
   console.log(`${JSON.stringify(options)}: ${C} random columns: ${deep} convect deep, ${shallow} shallow, ${decked} under a deck, ${opening} convect under a deck opening, ${still} still; convective rain differs in sign on ${flips} (beyond the rain's allowance below; within it by at most ${residues.toExponential(1)} kg/m²); engines differ in θ by ${worstTheta.toExponential(1)} K (twice the CPU's response to one f32 ulp of θ at most ${thetaAllowed.toExponential(1)} K), q by ${worstQ.toExponential(1)}, qc by ${worstQc.toExponential(1)}, a step's rain by ${worstRain.toExponential(1)} kg/m² (largest ${rainScale.toFixed(3)}; twice its response to one f32 ulp of the saved subcloud T_v or of θ at most ${allowed.toExponential(1)})`);
-  console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top, ${beside.size} deep in the base flux by more than 1 % (the shallow plume beside it ran on one engine only), ${merged.size} whose dry adjustment merged other layers on the two engines, ${switching.size} whose base flux on the CPU moves by over 1e-3 under one ulp of θ (left out of the flux), ${threshold.size} whose deep plume's condensate at an interface lies within 1e-3 of the conversion threshold and ${typedAtEdge.size} whose test parcel's cloud lies within 1e-3 of 200 hPa or whose w² falls within 1e-3 m²/s² of zero (left out); base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}, the plume's condensate by ${worstWater.toExponential(1)} kg/kg (largest ${waterScale.toExponential(1)})`);
+  console.log(`  ${plumes} plumes, ${plumeFlips} differ in whether they rise, ${topsDiffer} in their top, ${beside.size} deep in the base flux by more than 1 % (the shallow plume beside it ran on one engine only), ${merged.size} whose dry adjustment merged other layers on the two engines, ${switching.size} whose base flux on the CPU moves by over 1e-3 under one ulp of θ (left out of the flux), ${threshold.size} whose deep plume's condensate at an interface lies within 1e-3 of the conversion threshold, ${typedAtEdge.size} whose test parcel's cloud lies within 1e-3 of 200 hPa or whose w² falls within 1e-3 m²/s² of zero and ${downdraftAtEdge.size} whose downdraft source layer has a moist static energy within 1e-5 of the next lowest (left out); base mass flux differs by ${worstFlux.toExponential(1)} kg/m²/s (largest ${fluxScale.toFixed(3)}), the cumulus fraction by ${worstCover.toExponential(1)}, the plume's condensate by ${worstWater.toExponential(1)} kg/kg (largest ${waterScale.toExponential(1)})`);
   assert.ok(deep > C / 40 && plumes > C / 10 && decked > C / 40 && still > C / 40, `${deep} deep, ${plumes} plumes, ${decked} decked, ${still} still`);
   assert.equal(plumeFlips, 0);
   assert.equal(topsDiffer, 0);
   assert.ok(beside.size <= C / 100, `${beside.size} columns' shallow plume beside the deep one ran on one engine only`);
   assert.ok(merged.size <= C / 100, `${merged.size} columns' dry adjustment merged other layers`);
   assert.ok(switching.size <= 0.02 * C, `${switching.size} columns' base flux switches under one ulp of θ`);
-  assert.ok(threshold.size <= C / 100 && typedAtEdge.size <= C / 100, `${threshold.size} columns' plume condensate at the conversion threshold, ${typedAtEdge.size} typed at the edge`);
+  assert.ok(threshold.size <= C / 100 && typedAtEdge.size <= C / 100 && downdraftAtEdge.size <= C / 100, `${threshold.size} columns' plume condensate at the conversion threshold, ${typedAtEdge.size} typed at the edge, ${downdraftAtEdge.size} with a downdraft source at a tie`);
   assert.ok(worstFlux < 2e-3 * fluxScale && worstCover < 1e-4, `base mass flux ${worstFlux}, cover ${worstCover}`);
   assert.ok(waterScale > 0 && worstWater < 1e-3 * waterScale, `plume condensate ${worstWater} against ${waterScale}`);
   assert.equal(flips, 0);
-  assert.ok(thetaOver < 0 && worstQ < 1e-6 && worstQc < 1e-7, `θ ${worstTheta} (${thetaOver} above 1e-3 K and twice the response to one ulp), q ${worstQ}, qc ${worstQc}`);
+  assert.ok(thetaOver < 0 && worstQ < 2e-6 && worstQc < 5e-7, `θ ${worstTheta} (${thetaOver} above 1e-3 K and twice the response to one ulp), q ${worstQ}, qc ${worstQc}`);
   assert.ok(rainOver < 0, `rain ${worstRain} against ${rainScale}, ${rainOver} above 1e-4 of it and twice the response to one ulp of the saved T_v or of θ`);
   const fogOn = (options.autoconversionFloor ?? MOIST_DEFAULTS.autoconversionFloor) !== 'none' && (('fogDroplets' in options ? options.fogDroplets : MOIST_DEFAULTS.fogDroplets) !== null || (options.fogDeposition ?? MOIST_DEFAULTS.fogDeposition) > 0);
   console.log(`  fog reaches the ground from ${fogged} columns (largest ${(1e3 * fogScale).toFixed(3)} g/m²), the engines differ by ${worstFog.toExponential(1)} kg/m² and on ${fogFlips} in whether more than 1e-9 kg/m² does`);

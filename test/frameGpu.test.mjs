@@ -9,6 +9,7 @@ import { depthFields } from '../js/ocean/layered.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { FIELDS, CLOUD_TYPES, CLOUD_LOW_PRESSURE, CLOUD_HIGH_PRESSURE, CLOUD_OPACITY_PATH, CLOUD_SEEN, visibleCloudHeights } from '../js/frames.module.js';
 import { createModel } from '../js/model.module.js';
+import { decisionTracker, cpuDecisions, gpuDecisions } from './helpers/decisions.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -206,11 +207,12 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
     for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
     for (let k = 0; k < K; k++) if (sigmaMid[k] < 0.75) for (let i = 0; i < C; i++) { cpu.state[1][k * C + i] += 10; gpu.state[1][k * C + i] += 10; }
     gpu.load();
-    for (let n = 0; n < 2; n++) { cpu.step(900); await gpu.step(900); }
+    const decisions = decisionTracker(K, C);
+    for (let n = 0; n < 2; n++) { cpu.step(900); await gpu.step(900); decisions.check(cpuDecisions(cpu), gpuDecisions(await gpu.gpu.download(), await gpu.gpu.downloadPhysics())); }
     const frame = await gpu.beginFrame({ fields: ['cloud', ...CLOUD_TYPES, 'cloudTop', 'cloudBase'] }), physics = await gpu.gpu.downloadPhysics(), K0 = gpu.moist.cumulusK0, { dSigma, g } = cpu.core.diagnostics, pi = cpu.state[0];
     const gpuCumulus = Float64Array.from({ length: C }, (_, i) => { let path = 0; for (let k = K0; k < K; k++) { const slot = (k - K0) * C + i; path += pi[i] * dSigma[k] / g * physics.CUCOVER[slot] * physics.CUWATER[slot]; } return path; });
     const parted = [];
-    for (let i = 0; i < C; i++) if ((cpu.moist.cumulusCloudPath(pi, i) > 0) !== (gpuCumulus[i] > 0)) parted.push(i);
+    for (let i = 0; i < C; i++) if (decisions.parted.has(i) || (cpu.moist.cumulusCloudPath(pi, i) > 0) !== (gpuCumulus[i] > 0)) parted.push(i);
     const kept = (values) => Float64Array.from(values, (x, i) => (parted.includes(i) ? NaN : x));
     const parts = Array.from({ length: C }, (_, i) => cpu.cloudParts(i));
     const types = Object.fromEntries(CLOUD_TYPES.map((name) => [name, { cpu: kept(parts.map((part) => part[name])), gpu: kept(frame.fields[name]) }]));
@@ -227,7 +229,7 @@ test('the EIS deck shows in the cloud field, the same in both engines', { skip: 
     const { max, at } = worst(r.all, r.summed);
     assert.ok(max <= 1e-6 * Math.max(...r.all), `deck ${label}: the GPU's types sum to its cloud to ${max} at ${at}`);
   }
-  assert.ok(on.parted.length + off.parted.length <= 0.02 * on.cpu.length, `the cumulus fired on one engine only in ${on.parted.length} + ${off.parted.length} of ${on.cpu.length} columns`);
+  assert.ok(on.parted.length + off.parted.length <= 0.02 * on.cpu.length, `a discrete decision parted in ${on.parted.length} + ${off.parted.length} of ${on.cpu.length} columns`);
   let at = 0;
   for (let i = 0; i < on.deck.length; i++) if (on.deck[i] > on.deck[at] && Number.isFinite(on.cpu[i]) && Number.isFinite(off.cpu[i])) at = i;
   const engines = worst(on.cpu, on.gpu, { skipNaN: true });
