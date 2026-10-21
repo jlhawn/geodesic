@@ -9,7 +9,8 @@
  * mixed-layer deck's carried state (mlmSubsidence, mlmHeight, mlmGate),
  * the land cells, the day and the time stay those of `coupled`.
  * `oceanYears`, the model years the ocean has spent alone, adds up the
- * two.
+ * two. The coupled state's SST ring (sstMeans.module.js) is left behind,
+ * since it records the sea surface the hand-off replaces.
  */
 export function withOceanOf(coupled, ocean, land) {
   if (coupled.N !== ocean.N) throw new Error(`the ocean comes from N=${ocean.N}, the coupled state is N=${coupled.N}`);
@@ -18,8 +19,9 @@ export function withOceanOf(coupled, ocean, land) {
   if (!ocean.ocean || !ocean.ocean.h) throw new Error('the state to take the ocean from has no ocean');
   const sea = (mine, theirs) => Float32Array.from(mine, (x, i) => (land[i] ? x : theirs[i]));
   const concentration = ocean.concentration ? (coupled.concentration ? sea(coupled.concentration, ocean.concentration) : Float32Array.from(ocean.concentration)) : null;
+  const { sstMeans, sstMeanDays, sstSum, sstSamples, ...kept } = coupled;
   return {
-    ...coupled,
+    ...kept,
     surfaceT: sea(coupled.surfaceT, ocean.surfaceT),
     ice: sea(coupled.ice, ocean.ice),
     concentration,

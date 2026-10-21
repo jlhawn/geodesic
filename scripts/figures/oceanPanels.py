@@ -1,6 +1,8 @@
 # Four panels of the ocean from oceanPanels.mjs: the sea surface temperature,
-# its difference from WOA23's monthly climatology on the state's date, the
-# current over the top 15 m and the mixed-layer depth.
+# its difference from WOA23's monthly climatology (the state's window-mean
+# SST against the climatology over the window's days when the dump carries
+# one, else the instant against the state's date), the current over the
+# top 15 m and the mixed-layer depth.
 #   python3 scripts/figures/oceanPanels.py <json> <png> [title]
 import sys, numpy as np
 import matplotlib; matplotlib.use('Agg')
@@ -14,7 +16,14 @@ lon, lat = array(d['lon']), array(d['lat'])
 land = array(d['land']) > 0.5
 sea = ~land
 sst, woa, ue, vn, mld, ice = (array(d[k]) for k in ('sst', 'woa', 'ue', 'vn', 'mld', 'ice'))
-bias = sst - woa
+window = d.get('sstWindow') or {'kind': 'instant'}
+windowed = window['kind'] == 'mean'
+if windowed:
+    first, last = window['days']
+    judged, judgedLabel, judgedName = array(d['sstMean']), f"{window['length']}-day mean SST − WOA23, days {first}–{last}", f"{window['length']}-day mean SST of days {first}–{last}"
+else:
+    judged, judgedLabel, judgedName = sst, 'SST − WOA23 on this date, instant', 'instant SST'
+bias = judged - woa
 speed = np.hypot(ue, vn)
 coslat = np.cos(np.radians(lat))
 raster = Raster(lon, lat, 0.25 if d['N'] > 64 else 0.5)
@@ -48,9 +57,9 @@ def panel(ax, field, cmap, vmin, vmax, label, under, extend='neither'):
 
 
 iceG = raster(np.where(sea & (ice > 0), 1.0, np.nan))
-panel(axes[0, 0], raster(sst), 'RdYlBu_r', -2, 30, 'Sea surface temperature °C (ice-covered cells stippled)', '°C', extend='both')
+panel(axes[0, 0], raster(sst), 'RdYlBu_r', -2, 30, f"Sea surface temperature °C{', instant' if windowed else ''} (ice-covered cells stippled)", '°C', extend='both')
 axes[0, 0].contourf(raster.LON, raster.LAT, np.ma.masked_invalid(iceG), levels=[0.5, 1.5], colors='none', hatches=['....'])
-panel(axes[0, 1], raster(bias), 'RdBu_r', -5, 5, f"SST − WOA23 on this date, K (60S–60N {globalBias:+.2f}, 20S–20N {tropics:+.2f}, cold tongue 5S–5N 130–90W {tongue:+.2f})", 'K', extend='both')
+panel(axes[0, 1], raster(bias), 'RdBu_r', -5, 5, f"{judgedLabel}, K\n60S–60N {globalBias:+.2f}, 20S–20N {tropics:+.2f}, cold tongue 5S–5N 130–90W {tongue:+.2f}", 'K', extend='both')
 ax = panel(axes[1, 0], raster(speed), 'magma', 0, 1.2, f"Current over the top {d.get('surfaceDepth', 15)} m, m/s (max {np.nanmax(speed):.2f})", 'm/s', extend='max')
 step = 12 if d['N'] > 64 else 6
 U, V = raster(ue), raster(vn)
@@ -60,4 +69,4 @@ panel(axes[1, 1], raster(mld), 'viridis_r', 0, 300, f"Mixed-layer depth m, densi
 fig.suptitle(f"{title}, {d.get('vertical', 'slab')} ocean", color=TEXT, fontsize=13)
 plt.tight_layout(rect=(0, 0, 1, 0.965))
 fig.savefig(sys.argv[2], dpi=100 if d['N'] > 64 else 80, facecolor=fig.get_facecolor())
-print(f"ocean: SST − WOA 60S–60N {globalBias:+.3f} K, 20S–20N {tropics:+.3f} K, cold tongue {tongue:+.3f} K; max surface current {np.nanmax(speed):.2f} m/s; mixed layer 60S–60N {mean(mld, sea & (np.abs(lat) <= 60)):.1f} m")
+print(f"ocean: {judgedName} − WOA 60S–60N {globalBias:+.3f} K, 20S–20N {tropics:+.3f} K, cold tongue {tongue:+.3f} K; max surface current {np.nanmax(speed):.2f} m/s; mixed layer 60S–60N {mean(mld, sea & (np.abs(lat) <= 60)):.1f} m")

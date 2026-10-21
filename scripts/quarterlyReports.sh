@@ -151,20 +151,26 @@ woa_table() { # <parts>
     }' "${args[@]}"
 }
 
+woa_dates() { # <parts>: what each resolution's table compares, over which days, and the notes on it
+  local N any=0
+  for N in $NS; do [ -s "$1/woa$N.md" ] && { sed -n "1s/^- [^:]*: /- N=$N: /p" "$1/woa$N.md"; any=1; }; done
+  [ "$any" = 1 ] || return 0
+  echo; for N in $NS; do [ -s "$1/woa$N.md" ] && sed -n '3s/^- //p' "$1/woa$N.md"; done | awk '!seen[$0]++'; echo
+}
+
 section() { if [ -s "$1" ]; then cat "$1"; else echo "_$(basename "$1") is missing; see reports.log._"; fi; echo; }
 code() { if [ -s "$1" ]; then echo '```text'; cat "$1"; echo '```'; else echo "_$(basename "$1") is missing; see reports.log._"; fi; echo; }
 
 assemble() { # <day> <k>
-  local D=$1 k=$2 parts=$(parts_of "$1") md=$(day_dir "$1")/$(tag_of "$1").md N F png first
+  local D=$1 k=$2 parts=$(parts_of "$1") md=$(day_dir "$1")/$(tag_of "$1").md N F png
   local year=$(( (k - 1) / PER_YEAR + 1 )) quarter=$(( (k - 1) % PER_YEAR + 1 )) prev=$(qday $((k - 1)))
-  first=${NS%% *}
   {
     echo "# $PREFIX, day $D: year $year, quarter $quarter ($(calendar "$D"))"; echo
     [ -n "$NOTE" ] && { echo "$NOTE"; echo; }
     echo "States:$(for N in $NS; do printf ' %s' "$(state_of "$N" "$D")"; done). The log means cover days $((prev + 1))–$D. Written $(date '+%F %H:%M')."; echo
     echo "## Side by side"; echo; section "$parts/compare.md"
     echo "## Sea surface temperature against WOA23"; echo
-    [ -s "$parts/woa$first.md" ] && { sed -n '1s/^- [^:]*: model day/Model day/p; 3s/^- //p' "$parts/woa$first.md"; echo; }
+    woa_dates "$parts"
     woa_table "$parts"; echo
     echo "## Cloud by regime"; echo
     for N in $NS; do echo "### N=$N"; echo; code "$parts/cloud$N.txt"; done

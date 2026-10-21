@@ -76,11 +76,10 @@ export function savedLevels(saved) {
 
 /*
  * The binary form of a state: its top-level arrays and those under
- * `ocean` and `land`, as float32 or, listed in `f64` or named 'levels',
- * 'ocean.densities', 'land.record' or 'energyRecord', float64, with the header padded with spaces so the
- * arrays start 8-byte aligned.
+ * `ocean` and `land`, as float32 or, listed in `f64` or in F64, float64,
+ * with the header padded with spaces so the arrays start 8-byte aligned.
  */
-const GROUPS = ['ocean', 'land'];
+const GROUPS = ['ocean', 'land'], F64 = ['levels', 'ocean.densities', 'land.record', 'energyRecord', 'sstMeanDays', 'sstSum'];
 const isArray = (value) => ArrayBuffer.isView(value) || Array.isArray(value) || value instanceof ArrayBuffer;
 const isScalar = (value) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 
@@ -104,7 +103,7 @@ export function encodeState(state, { f64 = [] } = {}) {
   }
   let offset = 0;
   const arrays = named.map(([name, values]) => {
-    const type = f64.includes(name) || name === 'levels' || name === 'ocean.densities' || name === 'land.record' || name === 'energyRecord' ? 'f64' : 'f32', size = type === 'f64' ? 8 : 4;
+    const type = f64.includes(name) || F64.includes(name) ? 'f64' : 'f32', size = type === 'f64' ? 8 : 4;
     offset = Math.ceil(offset / size) * size;
     const entry = { name, length: values.length, offset, type };
     offset += size * values.length;
