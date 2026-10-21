@@ -1331,7 +1331,7 @@ export const physicsKernel = (seaSkin = false) => `${MIXED_LAYER_WGSL}${EXCHANGE
   if (STRATUS && MLM_DECK && !onLand && 1.0 - cover > 0.0 && mixedDepth > 0.0) {
     let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
     let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-    let exchange = rho * PH[PH_HEATX + i] * xWind(i, ws);
+    let exchange = min(rho * PH[PH_HEATX + i] * xWind(i, ws), pi * LV[L_DS + K - 1] / (GRAV * max(P[0], 1e-6)));
     let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
     let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
     var deckSun = MlmSun(0.0, mu, adir, adif, 0.0, 0.0, 0.0, vec3<f32>(0.0, 0.0, 0.0), 0.0, 0.0);
@@ -1621,7 +1621,7 @@ ${held ? HELD_REST : `  let absorbed = stashed(14, i); let swdn = stashed(15, i)
   let back = stashed(20, i); let outgoing = stashed(21, i);
 `}  let airT = IN[S_TH + bottom] * D[D_EXM + bottom];
   let rho = pi * LV[L_SM + K - 1] / (RGAS * airT);
-  let exchange = rho * PH[PH_HEATX + i] * xWind(i, ws);
+  let exchange = min(rho * PH[PH_HEATX + i] * xWind(i, ws), pi * LV[L_DS + K - 1] / (GRAV * max(P[0], 1e-6)));
   let sensible = select(exchange * CP * (ts - airT), exchange * (CP * (ts - airT) - CP * D[D_THV + bottom] * (D[D_EXL + bottom] - D[D_EXM + bottom])), ROUGH);
   let evap = wetness * max(0.0, exchange * (qsat(ts, pi) - IN[S_Q + bottom]));
   if (ROUGH) { PH[PH_BUOY + i] = GRAV / IN[S_TH + bottom] * (sensible / (rho * CP * D[D_EXM + bottom]) + 0.61 * IN[S_TH + bottom] * evap / rho); }
