@@ -84,7 +84,7 @@ new time integrator (AB4 stays; RK3 is an optional later swap).
   `grid: { relax }`, and `js/stateGrid.module.js` loads a state on the
   grid it was made on: one saved without the header goes on whichever of
   30 and 8 passes puts land exactly where its ocean's columns are dry.
-- `test/grid.test.mjs` certifies all of the above at N = 2, 3, 5, 8, 16
+- `test/grid.test.mjs` certifies all of the above at N = 16, 17, 24, 25, 32
   (`node --test`).
 
 Measured at N=32 (10,242 cells, ≈240 km spacing): 30,720 edges (= 3C−6),
@@ -488,7 +488,7 @@ work; `three.module.js` imports cleanly in Node).
 
 `buildMesh(grid, {radius, omega})` emits the arrays of Section 2.4;
 `js/dynamics/operators.module.js` implements 3.1–3.5 and 3.7.
-`test/mesh.test.mjs` (`node --test`) certifies at N = 4, 8, 16: the
+`test/mesh.test.mjs` (`node --test`) certifies at N = 16, 17, 24, 32: the
 counts and connectivity of 2.5; kites partitioning every cell and dual
 triangle and summing to `4πa²` (1e-12); edge frames orthogonal and
 oriented as documented; divergence conserving mass and the gradient its
