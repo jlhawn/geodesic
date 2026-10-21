@@ -172,7 +172,7 @@ export const columnWind = (latitude) => (lat) => Math.exp(-(((lat / DEG - latitu
 
 export function ekmanCase({ N = 8, tau = 0.1, latitude = 45, days = 4, dt = 1350, view = 'column', wind = 'trades', averaging = 2 * DAY, sst = 290 } = {}) {
   const mesh = caseMesh(N), { nCells: C, nEdges: E, areaCell } = mesh;
-  const ocean = createOcean(mesh, recipe()), L = ocean.layers;
+  const oceanOptions = recipe(), ocean = createOcean(mesh, oceanOptions), L = ocean.layers;
   const surfaceT = new Float64Array(C).fill(sst), ice = new Float64Array(C), flux = new Float64Array(C);
   ocean.initialize(surfaceT, ice);
   if (view !== 'column' && view !== 'planet') throw new Error(`the Ekman view is 'column' or 'planet', not ${view}`);
@@ -183,7 +183,7 @@ export function ekmanCase({ N = 8, tau = 0.1, latitude = 45, days = 4, dt = 1350
   const coriolis = (lat) => 2 * mesh.omega * Math.sin(lat);
   const layerVectors = Array.from({ length: L }, () => new Float64Array(3 * C));
   const allLayers = () => { for (let k = 0; k < L; k++) cellVector(mesh, ocean.u.subarray(k * E, (k + 1) * E), layerVectors[k]); };
-  const sim = { kind: 'ekman', view, mesh, ocean, time: 0, end: days * DAY, nextDt: () => dt };
+  const sim = { kind: 'ekman', view, mesh, ocean, oceanOptions, time: 0, end: days * DAY, nextDt: () => dt };
   let advanceExtra = () => {}, frameExtra = () => ({}), layoutExtra = () => ({});
 
   if (view === 'column') {
@@ -336,7 +336,7 @@ export function internalWaveSpeed(thickness, density, { gravity = G, reference =
 
 function pileCase(kind, { N, latitude, width, days, dt, sst, disturb }) {
   const mesh = caseMesh(N), { nCells: C, nEdges: E, areaCell } = mesh;
-  const ocean = createOcean(mesh, recipe());
+  const oceanOptions = recipe(), ocean = createOcean(mesh, oceanOptions);
   const surfaceT = new Float64Array(C).fill(sst), ice = new Float64Array(C), flux = new Float64Array(C), calm = new Float64Array(E);
   ocean.initialize(surfaceT, ice);
   const distance = distancesFrom(mesh, latitude, 0), edgeDistance = distancesFrom(mesh, latitude, 0, 'edge');
@@ -381,7 +381,7 @@ function pileCase(kind, { N, latitude, width, days, dt, sst, disturb }) {
   let fixedDepth = 0;
   while (fixedDepth < ocean.layers && farThickness[fixedDepth] - ocean.table.minimum[fixedDepth] < 0.5) fixedDepth++;
 
-  const sim = { kind, mesh, ocean, time: 0, end: days * DAY, nextDt: typeof dt === 'function' ? () => dt(sim.time) : () => dt, centre, distance, marker, waveSpeed };
+  const sim = { kind, mesh, ocean, oceanOptions, time: 0, end: days * DAY, nextDt: typeof dt === 'function' ? () => dt(sim.time) : () => dt, centre, distance, marker, waveSpeed };
   sim.step = () => {
     const step = sim.nextDt();
     ocean.advance(surfaceT, ice, flux, calm, step);
@@ -513,7 +513,7 @@ export function basinMesh(N, beta = true, latitude = 30) {
 export function basinCase({ N = 16, dt = 5400, walls = true, beta = true, tau0 = 0.1, days = 100, sst = 300, ocean: options = {} } = {}) {
   const mesh = basinMesh(N, beta), { nCells: C, nEdges: E, areaCell } = mesh;
   const geography = walls ? createGeography(mesh, syntheticTopography(180, 360, basinElevation), { landBridges: {}, seaStraits: {} }) : null;
-  const ocean = createOcean(mesh, recipe({ geography, ...options }));
+  const oceanOptions = recipe({ geography, ...options }), ocean = createOcean(mesh, oceanOptions);
   const surfaceT = Float64Array.from(mesh.latCell, typeof sst === 'function' ? sst : () => sst), ice = new Float64Array(C), flux = new Float64Array(C);
   ocean.initialize(surfaceT, ice);
   const stress = zonalWindOnEdges(mesh, (lat) => tau0 * basinWind(lat));
@@ -526,7 +526,7 @@ export function basinCase({ N = 16, dt = 5400, walls = true, beta = true, tau0 =
   const sverdrup = beta ? -tau0 * Math.PI / (30 * DEG * mesh.radius) / (RHO * beta30) : null;
   const basinWidth = (BASIN.east - BASIN.west) * DEG * mesh.radius * Math.cos(30 * DEG);
   const total = new Float64Array(E), vector = new Float64Array(3 * C);
-  const sim = { kind: 'basin', mesh, ocean, time: 0, end: days * DAY, nextDt: () => dt };
+  const sim = { kind: 'basin', mesh, ocean, oceanOptions, time: 0, end: days * DAY, nextDt: () => dt };
   sim.step = () => { ocean.advance(surfaceT, ice, flux, stress, dt); sim.time += dt; };
   const transports = () => {
     for (let e = 0; e < E; e++) {

@@ -2,12 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { basinCase, runCase } from '../explain/oceanCases.module.js';
 import { gyreReadings, DEPTH } from '../explain/gyreReadings.module.js';
+import { threaded } from './helpers/oceanThreads.mjs';
 
 const between = (v, lo, hi, what) => assert.ok(v >= lo && v <= hi, `${what}: ${v} not within ${lo} to ${hi}`);
 const describe = (f, r) => `day ${f.day}: western band ${(100 * r.west).toFixed(3)} cm/s north, interior ${(100 * r.interior).toFixed(4)}, eastern band ${(100 * r.east).toFixed(3)}; current ${(r.current.width / 1e3).toFixed(0)} km wide at ${(100 * r.current.peak).toFixed(3)} cm/s carrying ${r.current.transport.toFixed(1)} Sv; ${f.northward.toFixed(1)} Sv north and ${f.southward.toFixed(1)} Sv south across 30°N; ratio ${r.ratio.toFixed(1)}; strongest 4° band at ${f.strongest}°; fastest ${f.fastest.toFixed(3)} m/s`;
 
-test('the subtropical wind over a walled basin on the sphere drives a western boundary current that carries about what Sverdrup’s balance asks, with an interior 13 to 15 times slower', () => {
-  const sim = basinCase();
+test('the subtropical wind over a walled basin on the sphere drives a western boundary current that carries about what Sverdrup’s balance asks, with an interior 13 to 15 times slower', async () => {
+  const sim = await threaded(basinCase());
   for (const day of [20, 100]) {
     const f = runCase(sim, day), r = gyreReadings(f);
     console.log(`${describe(f, r)}; Sverdrup ${(100 * r.sverdrup.speed).toFixed(4)} cm/s, ${r.sverdrup.transport.toFixed(1)} Sv across the basin`);
@@ -27,6 +28,7 @@ test('the subtropical wind over a walled basin on the sphere drives a western bo
       between(r.across.north, 38, 43, 'Sv north across 30°N on day 100');
     }
   }
+  await sim.close();
   const r = gyreReadings(sim.frame());
   assert.ok(Math.abs(r.sverdrup.speed * DEPTH + 4.63) < 0.01 && Math.abs(r.sverdrup.transport + 35.7) < 0.1, 'Sverdrup’s balance at 30°N for 0.1 N/m²: −4.63 m²/s, −35.7 Sv');
 });

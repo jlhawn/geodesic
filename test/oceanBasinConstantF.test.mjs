@@ -1,15 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { basin, basinCase, basinMesh, caseMesh, runCase } from '../explain/oceanCases.module.js';
+import { basinCase, basinMesh, caseMesh, runCase } from '../explain/oceanCases.module.js';
 import { gyreReadings } from '../explain/gyreReadings.module.js';
+import { threaded, runThreaded } from './helpers/oceanThreads.mjs';
 
 const between = (v, lo, hi, what) => assert.ok(v >= lo && v <= hi, `${what}: ${v} not within ${lo} to ${hi}`);
 
-test('with the same f everywhere the basin has no Sverdrup interior and its western current is matched by an eastern one that spins up', () => {
+test('with the same f everywhere the basin has no Sverdrup interior and its western current is matched by an eastern one that spins up', async () => {
   const planet = caseMesh(16), flat = basinMesh(16, false), f30 = 2 * planet.omega * Math.sin(Math.PI / 6);
   assert.ok(flat.fEdge.every((f) => f === f30) && flat.fVertex.every((f) => f === f30));
   assert.notEqual(planet.fEdge[0], f30);
-  const sim = basinCase({ beta: false }), seen = {};
+  const sim = await threaded(basinCase({ beta: false })), seen = {};
   for (const day of [20, 100]) {
     const f = runCase(sim, day);
     seen[day] = f;
@@ -21,13 +22,14 @@ test('with the same f everywhere the basin has no Sverdrup interior and its west
     assert.ok(Math.abs(f.northward + f.southward) < 0.05 * f.northward, 'what goes north comes back south');
     assert.equal(f.limited, 0);
   }
+  await sim.close();
   between(seen[20].northward, 70, 80, 'Sv each way across 30°N on day 20'); between(seen[100].northward, 245, 270, 'Sv each way across 30°N on day 100');
   between(100 * seen[100].west / 4000, 1.7, 1.95, 'western band cm/s on day 100'); between(-100 * seen[100].east / 4000, 1.25, 1.45, 'eastern band cm/s on day 100');
   assert.ok(seen[100].northward > 3 * seen[20].northward, 'the gyre keeps spinning up');
 });
 
-test('doubling the wind doubles the speeds and the transports on day 20', () => {
-  const one = gyreReadings(basin({ days: 20 })), two = gyreReadings(basin({ days: 20, tau0: 0.2 }));
+test('doubling the wind doubles the speeds and the transports on day 20', async () => {
+  const one = gyreReadings(await runThreaded(basinCase({ days: 20 }))), two = gyreReadings(await runThreaded(basinCase({ days: 20, tau0: 0.2 })));
   const ratios = [two.west / one.west, two.interior / one.interior, two.current.transport / one.current.transport, two.across.north / one.across.north];
   console.log(`doubling the wind: western band ${ratios[0].toFixed(3)}, interior ${ratios[1].toFixed(3)}, western current ${ratios[2].toFixed(3)}, north across 30°N ${ratios[3].toFixed(3)} times`);
   for (const r of ratios) between(r, 1.9, 2.1, 'ratio of speeds and transports');
