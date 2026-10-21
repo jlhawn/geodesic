@@ -2,12 +2,12 @@
 # Quarterly reports of a paired spin-up whose resolutions may run on
 # different machines. For each snapshot day round(k·365/PER_YEAR) up to
 # UNTIL with a state <PREFIX><N>_dayDDDD.bin for every N in NS, writes
-# <REPORTS>/<PREFIX>_dayDDDD.md: scripts/compareStates.mjs side by side over
-# the quarter, scripts/woaSstBias.mjs merged by box, scripts/cloudRegimes.mjs
-# per resolution, scripts/rounds.py and a top-of-the-atmosphere table by
-# quarter over the logs up to that day, and the
-# five figures of scripts/figures/snapshot.sh per resolution under
-# <REPORTS>/figures; the tools' raw outputs stay under <REPORTS>/parts, and a
+# <REPORTS>/dayDDDD/<PREFIX>_dayDDDD.md: scripts/compareStates.mjs side by
+# side over the quarter, scripts/woaSstBias.mjs merged by box,
+# scripts/cloudRegimes.mjs per resolution, scripts/rounds.py and a
+# top-of-the-atmosphere table by quarter over the logs up to that day, and
+# the five figures of scripts/figures/snapshot.sh per resolution, which sit
+# beside it; the tools' raw outputs stay under <REPORTS>/dayDDDD/parts, and a
 # part that failed is marked <name>.failed there and not retried (delete the
 # marker to retry). The figure dumps use the GPU, so they wait while another
 # node script or a page server on port 8000 has it; a report is rewritten
@@ -23,15 +23,17 @@
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/.." && pwd)
 OUT=${OUT:?OUT: the run directory}; PREFIX=${PREFIX:-thirteen}; NS=${NS:-"64 128"}; PER_YEAR=${PER_YEAR:-4}
 UNTIL=${UNTIL:-1825}; INTERVAL=${INTERVAL:-300}; NOTE=${NOTE:-}; NODE=${NODE:-node}; PYTHON=${PYTHON:-python3}
-REPORTS=${REPORTS:-$OUT/reports}; FIG=$REPORTS/figures; PARTS=$REPORTS/parts; LOG=$REPORTS/reports.log
+REPORTS=${REPORTS:-$OUT/reports}; LOG=$REPORTS/reports.log
 SNAPSHOT=${SNAPSHOT:-$HERE/figures/snapshot.sh}; FIGURES="stateMaps oceanPanels eqsection eqpanels mlmdeck"
-mkdir -p "$FIG" "$PARTS" || exit 1
+mkdir -p "$REPORTS" || exit 1
 cd "$REPO" || exit 1
 
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 dir_of() { local v=DIR_$1; echo "${!v:-$OUT}"; }
 state_of() { printf '%s/%s%s_day%04d.bin' "$(dir_of "$1")" "$PREFIX" "$1" "$2"; }
 tag_of() { printf '%s_day%04d' "$PREFIX" "$1"; }
+day_dir() { printf '%s/day%04d' "$REPORTS" "$1"; }
+parts_of() { echo "$(day_dir "$1")/parts"; }
 qday() { echo $(( ($1 * 365 * 2 + PER_YEAR) / (2 * PER_YEAR) )); }
 calendar() { "$PYTHON" -c "from datetime import date, timedelta; print((date(2001, 3, 20) + timedelta(days=$1)).strftime('%b %-d'))"; }
 gpu_user() {
@@ -40,12 +42,12 @@ gpu_user() {
   lsof -nP -iTCP:8000 -sTCP:LISTEN > /dev/null 2>&1 && echo "a page server on port 8000"
 }
 
-run_part() { # <parts> <name> <command...>: the command's stdout becomes <parts>/<name>
-  local parts=$1 name=$2; shift 2
+run_part() { # <day> <name> <command...>: the command's stdout becomes <name> in the day's parts
+  local tag=$(tag_of "$1") parts=$(parts_of "$1") name=$2; shift 2
   [ -s "$parts/$name" ] || [ -e "$parts/$name.failed" ] && return 0
-  log "$(basename "$parts"): $name"
+  log "$tag: $name"
   if "$@" > "$parts/$name.tmp" 2> "$parts/$name.err"; then mv "$parts/$name.tmp" "$parts/$name"
-  else rm -f "$parts/$name.tmp"; touch "$parts/$name.failed"; log "$(basename "$parts"): $name failed: $(tail -n 1 "$parts/$name.err" | cut -c1-200)"; fi
+  else rm -f "$parts/$name.tmp"; touch "$parts/$name.failed"; log "$tag: $name failed: $(tail -n 1 "$parts/$name.err" | cut -c1-200)"; fi
 }
 
 log_to_day() { # <N> <day> <dir>: a copy of resolution N's log up to that day
@@ -83,29 +85,29 @@ PY
 }
 
 make_parts() { # <day> <k>
-  local D=$1 k=$2 parts=$PARTS/$(tag_of "$1") N states=() logs=()
+  local D=$1 k=$2 parts=$(parts_of "$1") N states=() logs=()
   local window=$((D - $(qday $((k - 1)))))
   mkdir -p "$parts"
   for N in $NS; do states+=("$(state_of "$N" "$D")"); done
-  run_part "$parts" compare.md "$NODE" scripts/compareStates.mjs "${states[@]}" --window "$window"
+  run_part "$D" compare.md "$NODE" scripts/compareStates.mjs "${states[@]}" --window "$window"
   for N in $NS; do
-    run_part "$parts" "woa$N.md" "$NODE" scripts/woaSstBias.mjs "$(state_of "$N" "$D")" --json "$parts/woa$N.json"
-    run_part "$parts" "cloud$N.txt" "$NODE" scripts/cloudRegimes.mjs "$(state_of "$N" "$D")"
+    run_part "$D" "woa$N.md" "$NODE" scripts/woaSstBias.mjs "$(state_of "$N" "$D")" --json "$parts/woa$N.json"
+    run_part "$D" "cloud$N.txt" "$NODE" scripts/cloudRegimes.mjs "$(state_of "$N" "$D")"
   done
   if [ ! -s "$parts/rounds.txt" ] || [ ! -s "$parts/toa.md" ]; then
     for N in $NS; do logs+=("$(log_to_day "$N" "$D" "$parts")"); done
-    PER_YEAR=$PER_YEAR run_part "$parts" rounds.txt "$PYTHON" scripts/rounds.py "${logs[@]}"
-    run_part "$parts" toa.md toa_table "$D" "${logs[@]}"
+    PER_YEAR=$PER_YEAR run_part "$D" rounds.txt "$PYTHON" scripts/rounds.py "${logs[@]}"
+    run_part "$D" toa.md toa_table "$D" "${logs[@]}"
   fi
 }
 
-figure_png() { printf '%s/%s%s_%s_day%04d.png' "$FIG" "$PREFIX" "$1" "$2" "$3"; }
+figure_png() { printf '%s/%s%s_%s_day%04d.png' "$(day_dir "$3")" "$PREFIX" "$1" "$2" "$3"; }
 figures_missing() { # <N> <day>: 0 when a figure is still to be dumped
   local F; for F in $FIGURES; do [ -s "$(figure_png "$1" "$F" "$2")" ] || return 0; done; return 1
 }
 
 make_figures() { # <day>: 1 when a dump waits for the GPU
-  local D=$1 parts=$PARTS/$(tag_of "$1") N F busy tmp start png aborts
+  local D=$1 parts=$(parts_of "$1") N F busy tmp start png aborts
   for N in $NS; do
     figures_missing "$N" "$D" || continue
     [ -e "$parts/figures$N.failed" ] && continue
@@ -126,7 +128,7 @@ make_figures() { # <day>: 1 when a dump waits for the GPU
   return 0
 }
 
-figures_done() { local N; for N in $NS; do figures_missing "$N" "$1" && [ ! -e "$PARTS/$(tag_of "$1")/figures$N.failed" ] && return 1; done; return 0; }
+figures_done() { local N; for N in $NS; do figures_missing "$N" "$1" && [ ! -e "$(parts_of "$1")/figures$N.failed" ] && return 1; done; return 0; }
 
 woa_table() { # <parts>
   local args=() N
@@ -153,7 +155,7 @@ section() { if [ -s "$1" ]; then cat "$1"; else echo "_$(basename "$1") is missi
 code() { if [ -s "$1" ]; then echo '```text'; cat "$1"; echo '```'; else echo "_$(basename "$1") is missing; see reports.log._"; fi; echo; }
 
 assemble() { # <day> <k>
-  local D=$1 k=$2 parts=$PARTS/$(tag_of "$1") md=$REPORTS/$(tag_of "$1").md N F png first
+  local D=$1 k=$2 parts=$(parts_of "$1") md=$(day_dir "$1")/$(tag_of "$1").md N F png first
   local year=$(( (k - 1) / PER_YEAR + 1 )) quarter=$(( (k - 1) % PER_YEAR + 1 )) prev=$(qday $((k - 1)))
   first=${NS%% *}
   {
@@ -173,7 +175,7 @@ assemble() { # <day> <k>
       echo "### N=$N"; echo
       for F in $FIGURES; do
         png=$(figure_png "$N" "$F" "$D")
-        if [ -s "$png" ]; then echo "![$F, N=$N, day $D](figures/$(basename "$png"))"; else echo "- $F: not dumped yet"; fi; echo
+        if [ -s "$png" ]; then echo "![$F, N=$N, day $D]($(basename "$png"))"; else echo "- $F: not dumped yet"; fi; echo
       done
     done
   } > "$md.tmp" && mv "$md.tmp" "$md"
