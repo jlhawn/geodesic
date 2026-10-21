@@ -1,6 +1,6 @@
 import { buildMesh } from './mesh.module.js';
 import { createEnergyRecord } from './physics/energyRecord.module.js';
-import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING } from './dynamics/sigmaCore.module.js';
+import { createSigmaCore, sigmaInterfaces, sigmaGridName, DIVERGENCE_DAMPING, dynamicsOptions } from './dynamics/sigmaCore.module.js';
 import { spongeRates, spongeSigmaFor, SPONGE, lidFrictionRates, lidFrictionFor } from './dynamics/sponge.module.js';
 import { createRK4Arrays } from './dynamics/integrators.module.js';
 import { createRadiation } from './physics/radiation.module.js';
@@ -50,7 +50,9 @@ export const stateLengths = ({ K, C, E }) => ({ pi: C, theta: K * C, u: K * E, s
  *                  physics)
  *   physics(cells) radiation, surface fluxes, evaporation, sea ice
  *   closure(layers) the ∇⁴ closures, the divergence damping
- *                  (`divergenceDamping`, DIVERGENCE_DAMPING) and the sponge
+ *                  (`divergenceDamping`, DIVERGENCE_DAMPING, along the
+ *                  surfaces of `dynamics.divergenceSurfaces`; 'hybrid'
+ *                  closes the momentum of all layers at once) and the sponge
  *   adjust(cells)  boundary-layer mixing, condensation, convection, filler
  *   mixMomentum(edges) boundary-layer mixing of the normal velocity and
  *                  the gravity-wave drag the physics phase computed
@@ -88,7 +90,7 @@ export const dragConstants = (fields, options) => (fields.raster ? { ...LOTT_MIL
 export function createModel(gridOrMesh, {
   radius, core: coreOptions = {}, radiation: radiationOptions = {}, surface: surfaceOptions = {}, moist: moistOptions = {}, ice: iceOptions = {}, ocean: oceanOptions = {}, boundaryLayer: boundaryLayerOptions = {},
   topography = null, geography: geographyOptions = {}, land: landOptions = {}, terrain = true, gravityWaves: gravityWaveOptions = {}, orography: orographyOptions = {}, subgrid = undefined,
-  physics = true, moist = true, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, buffers = null, levels = sigmaInterfaces(), dragEvery = 1,
+  physics = true, moist = true, nu4Hours = 3, divergenceDamping = DIVERGENCE_DAMPING, dynamics = {}, buffers = null, levels = sigmaInterfaces(), dragEvery = 1,
 } = {}) {
   if (!(Number.isInteger(dragEvery) && dragEvery >= 1)) throw new Error(`dragEvery must be a whole number of steps, 1 or more, not ${dragEvery}`);
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
@@ -105,7 +107,7 @@ export function createModel(gridOrMesh, {
   const sigmaMid = Float64Array.from({ length: levels.length - 1 }, (_, k) => 0.5 * (levels[k] + levels[k + 1]));
   const sponge = physics ? spongeRates(sigmaMid, surfaceOptions.spongeSigma ?? spongeSigmaFor(sigmaGridName(levels)), surfaceOptions.spongeDays ?? SPONGE.days) : null;
   const lidFriction = physics ? lidFrictionRates(levels, surfaceOptions.lidFriction === undefined ? lidFrictionFor(sigmaGridName(levels)) : surfaceOptions.lidFriction) : null;
-  const core = createSigmaCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, spongeRates: sponge, spongeMeanRates: lidFriction, ...coreOptions });
+  const core = createSigmaCore(mesh, { levels, nu4, nu4Theta: nu4, divergenceDamping, ...dynamicsOptions(dynamics), splitClosure: true, buffers: buffers ? buffers.core : null, surfaceGeopotential: phis, spongeRates: sponge, spongeMeanRates: lidFriction, ...coreOptions });
   const { K, C, E, V } = core.diagnostics;
   const subgridFields = physics && geography && orographyOptions !== false ? orographyFields(mesh, topography, geography, phis, subgrid, core.diagnostics.g) : null;
   const { formDrag: formDragOptions = {}, ...dragOptions } = orographyOptions || {};

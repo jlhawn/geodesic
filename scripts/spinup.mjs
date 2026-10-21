@@ -79,6 +79,9 @@
 // DIVERGENCE_DAMPING (the model's DIVERGENCE_DAMPING: the coefficient c of the
 // core's divergence damping, the tendency c d²/dt ∇δ with d the mean
 // distance between cell centres),
+// DYNAMICS (JSON options for the dynamical core, e.g.
+// '{"divergenceSurfaces":"hybrid"}' for the divergence damping along hybrid
+// σ–p surfaces; see dynamicsOptions in js/dynamics/sigmaCore.module.js),
 // RECORD (a directory to write each day's ocean and sea-ice forcing into as
 // forcing-DDDD.bin, see js/forcing.module.js), BATCH (1: the steps are queued
 // one at a time, and every eighth waits for the device to finish the eight
@@ -163,7 +166,7 @@ const BOXES = {
 const N = Number(process.env.N ?? 128), TAG = process.env.TAG ?? `spin${N}`, MINUTES = Number(process.env.MINUTES ?? 15), DAYS = Number(process.env.DAYS ?? Infinity), KEEP = Number(process.env.KEEP ?? 2);
 const OUT = process.env.OUT ?? new URL('../runs/', import.meta.url).pathname;
 const OCEAN = withCadence({ ocean: JSON.parse(process.env.OCEAN ?? '{}') }, 1350 * 16 / N, N).ocean;
-const RADIATION = withCadence({ radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
+const RADIATION = withCadence({ radiation: { clearSkyPass: true, ...JSON.parse(process.env.RADIATION ?? '{}') } }, 1350 * 16 / N, N).radiation, MOIST = JSON.parse(process.env.MOIST ?? '{}'), BOUNDARY_LAYER = JSON.parse(process.env.BOUNDARY_LAYER ?? '{}'), SURFACE = JSON.parse(process.env.SURFACE ?? '{}'), LAND = JSON.parse(process.env.LAND ?? '{}'), DYNAMICS = JSON.parse(process.env.DYNAMICS ?? '{}'), DAMPING = process.env.DIVERGENCE_DAMPING === undefined ? {} : { divergenceDamping: Number(process.env.DIVERGENCE_DAMPING) };
 const GRAVITY_WAVES = process.env.GRAVITY_WAVES === undefined ? {} : { gravityWaves: JSON.parse(process.env.GRAVITY_WAVES) };
 const DRAG_EVERY = withCadence({ dragEvery: process.env.DRAG_EVERY === undefined ? undefined : Number(process.env.DRAG_EVERY) }, 1350 * 16 / N, N).dragEvery;
 const OCEAN_FROM = process.env.OCEAN_FROM, STOP_AFTER_STEPS = Number(process.env.STOP_AFTER_STEPS ?? Infinity);
@@ -201,7 +204,7 @@ const climatology = !saved && (!process.env.FROM || oceanFromAtlas) && chosen !=
 const fromState = !saved && process.env.FROM ? await decodeState(new Uint8Array(readFileSync(process.env.FROM))) : null;
 if (fromState && fromState.N !== N) throw new Error(`FROM ${process.env.FROM} is N=${fromState.N}, not ${N}`);
 const found = saved || fromState ? stateGrid(saved ?? fromState, topography) : null;
-const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: LAND, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
+const model = await createGpuModel(found ? found.mesh : new Grid(N), { topography, ocean: climatology ? { ...OCEAN, climatology } : OCEAN, radiation: RADIATION, moist: MOIST, boundaryLayer: BOUNDARY_LAYER, surface: SURFACE, land: LAND, dynamics: DYNAMICS, ...DAMPING, ...GRAVITY_WAVES, dragEvery: DRAG_EVERY, levels });
 const { mesh, core, state } = model;
 const meshNote = `${mesh.relax} Lloyd passes${found ? `, ${found.source === 'mask' ? `matched by the coast of ${saved ? file : process.env.FROM}` : found.source === 'header' ? 'as its header records' : 'the default'}` : ''}`;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), BATCH = Math.max(1, Math.round(Number(process.env.BATCH ?? 1)));
