@@ -3,8 +3,8 @@
 runs/*
 !runs/fourteen128_day1825.parts.json
 !runs/fourteen128_day1825.bin.gz.*
-!runs/eleven64_day1825.parts.json
-!runs/eleven64_day1825.bin.gz.*
+!runs/fourteen64_day1825.parts.json
+!runs/fourteen64_day1825.bin.gz.*
 !runs/twelve192_day0020.parts.json
 !runs/twelve192_day0020.bin.gz.*
 node_modules/
