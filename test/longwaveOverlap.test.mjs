@@ -13,7 +13,7 @@ import { topographyFromInt16 } from '../js/geography.module.js';
 import { encodeState } from '../js/stateFile.module.js';
 
 function partlyCloudy() {
-  const model = createModel(new Grid(6), { ocean: false, divergenceDamping: 0, radiation: { mixedLayerDeck: false } });
+  const model = createModel(new Grid(16), { ocean: false, divergenceDamping: 0, radiation: { mixedLayerDeck: false } });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   model.step(900);
   const [pi, theta, , , q, qc] = model.state, { K } = model.core, C = model.mesh.nCells;
@@ -60,7 +60,7 @@ test('under exponential-random overlap in the longwave the layers\' longwave hea
     moved = Math.max(moved, Math.abs(exponential.outgoing[i] - random.outgoing[i]));
     assert.equal(exponential.clear[i], random.clear[i], `the clear-sky OLR of cell ${i}`);
   }
-  console.log(`${C} partly cloudy columns at N=6: the layers' longwave closes on the flux difference to ${exponential.closure.toExponential(1)} W/m2 (random ${random.closure.toExponential(1)}); exponential-random less random OLR ${(raised / C).toFixed(3)}, back radiation ${(-lowered / C).toFixed(3)} W/m2 in the mean, at most ${moved.toFixed(2)} in a column`);
+  console.log(`${C} partly cloudy columns at N=16: the layers' longwave closes on the flux difference to ${exponential.closure.toExponential(1)} W/m2 (random ${random.closure.toExponential(1)}); exponential-random less random OLR ${(raised / C).toFixed(3)}, back radiation ${(-lowered / C).toFixed(3)} W/m2 in the mean, at most ${moved.toFixed(2)} in a column`);
   assert.ok(exponential.closure < 1e-11 * exponential.scale && random.closure < 1e-11 * random.scale, `closure ${exponential.closure} and ${random.closure} W/m2`);
   assert.ok(raised > 0 && lowered > 0 && moved > 0.5, `the overlap raises the OLR by ${raised / C} and lowers the back radiation by ${lowered / C} W/m2, at most ${moved}`);
 });
@@ -78,19 +78,19 @@ test('with a decorrelation length so short that adjacent cloudy layers overlap a
 });
 
 test('longwave overlap rejects an unknown overlap', () => {
-  const model = createModel(new Grid(4), { ocean: false });
+  const model = createModel(new Grid(16), { ocean: false });
   assert.throws(() => createModel(model.mesh, { ocean: false, radiation: { longwaveOverlap: 'maximum' } }), /longwaveOverlap must be 'exponentialRandom' or 'random'/);
 });
 
 test('scripts/longwaveOverlap.mjs repeats the radiation\'s OLR and surface downward longwave under its own overlap, exponential-random by default and random on request, and finds the exponential-random OLR above the random', () => {
   const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-  const model = createModel(new Grid(12), { topography, ocean: false });
+  const model = createModel(new Grid(16), { topography, ocean: false });
   initializeState(model, {}).forEach((values, a) => model.state[a].set(values));
   model.land.initialize();
-  for (let n = 0; n < 6; n++) model.step(1800);
+  for (let n = 0; n < 6; n++) model.step(1350);
   const [pi, theta, u, surfaceT, q, qc, ice] = model.state, { mlmSubsidence, mlmHeight, mlmGate } = model.radiation;
-  const dir = mkdtempSync(join(tmpdir(), 'longwaveOverlap-')), file = join(dir, 'overlap12_day0000.bin');
-  writeFileSync(file, encodeState({ N: 12, K: model.core.K, day: 0, time: model.time, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
+  const dir = mkdtempSync(join(tmpdir(), 'longwaveOverlap-')), file = join(dir, 'overlap16_day0000.bin');
+  writeFileSync(file, encodeState({ N: 16, K: model.core.K, day: 0, time: model.time, terrain: true, levels: model.core.levels, pi, theta, u, surfaceT, q, qc, ice, concentration: model.seaIce.concentration, mlmSubsidence, mlmHeight, mlmGate, land: model.land.serialize() }));
   const script = (radiation) => spawnSync(process.execPath, [new URL('../scripts/longwaveOverlap.mjs', import.meta.url).pathname, file], { env: { ...process.env, RADIATION: JSON.stringify(radiation) }, encoding: 'utf8' });
   const runs = [script({}), script({ longwaveOverlap: 'random' })];
   rmSync(dir, { recursive: true, force: true });

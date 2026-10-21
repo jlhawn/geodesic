@@ -33,8 +33,8 @@ const CASES = [];
 for (const seaT of [271.5, 288, 300, 304]) for (const airColder of [-2, 0, 1, 3]) for (const rh of [0.6, 0.8, 1]) for (const wind of [1, 3, 7, 12]) CASES.push({ seaT, airT: seaT - airColder, rh, wind });
 
 test('bulkFluxes gives the model\'s own C_H, E and sensible heat over the open sea, without the gust and with it', () => {
-  const still = createModel(new Grid(2), { ocean: false, levels, surface: { convectiveGust: false, gustiness: 0 }, radiation: { gustiness: 0 } });
-  const gusty = createModel(new Grid(2), { ocean: false, levels });
+  const still = createModel(new Grid(16), { ocean: false, levels, surface: { convectiveGust: false, gustiness: 0 }, radiation: { gustiness: 0 } });
+  const gusty = createModel(new Grid(16), { ocean: false, levels });
   assert.ok(!still.exchange.gusty && gusty.exchange.gusty);
   let worst = 0;
   for (const c of CASES) for (const [model, depth] of [[still, 0], [gusty, 600]]) {

@@ -23,7 +23,7 @@ let dir;
 before(() => { dir = mkdtempSync(join(tmpdir(), 'sstMeans-')); });
 after(() => rmSync(dir, { recursive: true, force: true }));
 
-function cpuModel(N = 8) {
+function cpuModel(N = 16) {
   const model = createModel(new Grid(N), { topography });
   const { state, mesh } = model;
   initializeState(model, { geostrophic: !model.surfaceGeopotential }).forEach((values, a) => state[a].set(values));
@@ -83,16 +83,16 @@ test('a state keeps the ring and the part of a day bit for bit through its file,
 });
 
 test('the CPU recorder\'s day is the mean of the top layer after every ocean step, a checkpoint carries the day on, and the model steps bit for bit as without it', async () => {
-  const a = cpuModel(), b = cpuModel(), C = a.mesh.nCells, dt = 2700, perDay = 32, { cellOcean } = a.ocean;
+  const a = cpuModel(), b = cpuModel(), C = a.mesh.nCells, dt = 1350, steps = 8, { cellOcean } = a.ocean;
   const recorder = createSstRecorder(a), sum = new Float64Array(C);
   let taken = 0, second = null;
-  for (let n = 1; n <= perDay; n++) {
+  for (let n = 1; n <= steps; n++) {
     a.step(dt); recorder.step(); second?.step(); b.step(dt);
     if (n % a.ocean.everySteps === 0) { taken++; for (let i = 0; i < C; i++) sum[i] += a.ocean.T0[i]; }
-    if (n === perDay / 2) second = createSstRecorder(a, await recorder.checkpoint());
+    if (n === steps / 2) second = createSstRecorder(a, await recorder.checkpoint());
   }
   const [whole, carried] = await Promise.all([recorder.day(), second.day()]);
-  assert.equal(whole.samples, perDay / a.ocean.everySteps);
+  assert.equal(whole.samples, steps / a.ocean.everySteps);
   assert.equal(carried.samples, whole.samples);
   assert.ok(same(whole.mean, carried.mean), 'a recorder carried on from a checkpoint ends the day with the same mean');
   let worst = 0;
@@ -110,8 +110,8 @@ test('the CPU recorder\'s day is the mean of the top layer after every ocean ste
 
 async function windowState() {
   const model = cpuModel(), C = model.mesh.nCells, { state } = model, ocean = model.ocean.serialize();
-  const header = { N: 8, ...gridHeader(model.mesh), K: model.core.K, day: 730, time: 730 * 86400, terrain: true, levels: model.core.levels };
-  const plain = join(dir, 'w8_day0730.bin'), windowed = join(dir, 'w8m_day0730.bin');
+  const header = { N: 16, ...gridHeader(model.mesh), K: model.core.K, day: 730, time: 730 * 86400, terrain: true, levels: model.core.levels };
+  const plain = join(dir, 'w16_day0730.bin'), windowed = join(dir, 'w16m_day0730.bin');
   writeFileSync(plain, encodeState({ ...header, surfaceT: state[3], ice: state[6], ocean }));
   const ring = createSstRing(C), days = Array.from({ length: SST_WINDOW }, (_, d) => 701 + d), offset = (day) => 0.1 * (day - 715);
   for (const day of days) ring.push(day, Float32Array.from({ length: C }, (_, i) => ocean.T[i] + offset(day)));
@@ -136,11 +136,11 @@ test('woaSstBias judges a state that carries a whole window by its mean against 
     assert.ok(Math.abs(row.woa - dated.rows[n].woa) < 1e-9, `${row.box}: WOA23 over the window ${row.woa} against the mean over its days' middles ${dated.rows[n].woa}`);
     assert.equal(forced.rows[n].model, instant.rows[n].model);
   }
-  assert.ok(boxes >= 6, `${boxes} boxes with water at N=8`);
+  assert.ok(boxes >= 16, `${boxes} boxes with water at N=16`);
   const [line, , note] = markdown(mean).split('\n');
-  assert.match(line, /^- w8m_day0730\.bin: model days 701–730 \(Feb 18 – Mar 20\), the 30-day mean SST against WOA23 over the same days, /);
+  assert.match(line, /^- w16m_day0730\.bin: model days 701–730 \(Feb 18 – Mar 20\), the 30-day mean SST against WOA23 over the same days, /);
   assert.match(note, /mean SST averages its daily means/);
-  assert.match(markdown(instant).split('\n')[0], /^- w8_day0730\.bin: model day 730, Mar 20 \(day of year 78\.0\), the state's instant SST against WOA23 /);
+  assert.match(markdown(instant).split('\n')[0], /^- w16_day0730\.bin: model day 730, Mar 20 \(day of year 78\.0\), the state's instant SST against WOA23 /);
 });
 
 test('the ocean figure plots the window\'s mean SST against WOA23 over the same days and names the window, or the instant when the state carries none', async () => {
@@ -166,7 +166,7 @@ test('the ocean figure plots the window\'s mean SST against WOA23 over the same 
   }
   assert.ok(sea > 100, `${sea} sea cells`);
   if (!plotting) return;
-  const printed = (json, png) => execFileSync('python3', [join(root, 'scripts/figures/oceanPanels.py'), json, png, 'w8'], { cwd: join(root, 'scripts/figures'), encoding: 'utf8' });
+  const printed = (json, png) => execFileSync('python3', [join(root, 'scripts/figures/oceanPanels.py'), json, png, 'w16'], { cwd: join(root, 'scripts/figures'), encoding: 'utf8' });
   assert.match(printed(mean.out, join(dir, 'mean.png')), /^ocean: 30-day mean SST of days 701–730 − WOA 60S–60N/m);
   assert.match(printed(instant.out, join(dir, 'instant.png')), /^ocean: instant SST − WOA 60S–60N/m);
 });
@@ -190,7 +190,7 @@ test('the page\'s worker starts from a state that carries an SST ring as from th
       assert.ok(found, `no ${type} message`);
       return found;
     };
-    const start = (from = null) => send({ type: 'start', N: 8, engine: 'cpu', paused: true, ...(from ? { from: pathToFileURL(from).href } : {}) }, 'ready');
+    const start = (from = null) => send({ type: 'start', N: 16, engine: 'cpu', paused: true, ...(from ? { from: pathToFileURL(from).href } : {}) }, 'ready');
     const snapshot = () => send({ type: 'snapshot' }, 'snapshotData');
     await start();
     const fresh = await snapshot();

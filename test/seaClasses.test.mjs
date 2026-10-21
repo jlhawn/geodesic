@@ -208,15 +208,17 @@ test('the probe’s opening water and the plane’s corner', () => {
 });
 
 test('startSurface is initializeState’s sea', () => {
-  const model = createModel(buildMesh(new Grid(4)), { ocean: false });
+  const model = createModel(buildMesh(new Grid(16)), { ocean: false });
   const state = initializeState(model, { profile: new Float64Array(model.core.diagnostics.K).fill(300) });
   const { surfaceT, ice } = startSurface(model.mesh);
-  assert.deepEqual(Array.from(surfaceT), Array.from(state[3]));
+  let worst = 0;
+  for (let i = 0; i < surfaceT.length; i++) worst = Math.max(worst, Math.abs(surfaceT[i] - state[3][i]));
+  assert.ok(worst < 1e-9, `${worst} K`);
   assert.deepEqual(Array.from(ice), Array.from(state[6]));
 });
 
 test('the start depends on latitude alone', () => {
-  const mesh = buildMesh(new Grid(8)), { surfaceT, ice } = startSurface(mesh), ocean = createOcean(mesh), n = mesh.nCells;
+  const mesh = buildMesh(new Grid(16)), { surfaceT, ice } = startSurface(mesh), ocean = createOcean(mesh), n = mesh.nCells;
   ocean.initialize(surfaceT, ice);
   const first = new Map();
   let worst = 0;

@@ -1,0 +1,32 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { MOIST_DEFAULTS } from '../js/physics/moist.module.js';
+import { modelDigest, RAYLEIGH_TOP } from './helpers/modelDigest.mjs';
+
+test('the convection\'s closure, source depth, shallow closure, PCAPE boundary and excess velocity under the Rayleigh top, then the deep type, entrainment law, plume phase and updraught conversion under the model top, each give their own twelve-step digest, the two PCAPE boundaries not told apart', () => {
+  const defaults = { condensation: MOIST_DEFAULTS.condensation, iceSaturation: MOIST_DEFAULTS.iceSaturation, iceFall: MOIST_DEFAULTS.iceFall, cumulusMemory: 0 };
+  const signed = { ...defaults, capeClosure: MOIST_DEFAULTS.capeClosure, pcapeBoundary: 'signed', excessVelocity: 'convective' };
+  const bechtold = modelDigest({}, signed, {}, RAYLEIGH_TOP).digest, surface = modelDigest({}, { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth }, {}, RAYLEIGH_TOP).digest;
+  const grant = modelDigest({}, { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure }, {}, RAYLEIGH_TOP).digest;
+  const positive = modelDigest({}, { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure, pcapeBoundary: MOIST_DEFAULTS.pcapeBoundary }, {}, RAYLEIGH_TOP).digest;
+  const layer = modelDigest({}, { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure, pcapeBoundary: MOIST_DEFAULTS.pcapeBoundary, excessVelocity: MOIST_DEFAULTS.excessVelocity }, {}, RAYLEIGH_TOP).digest;
+  console.log(`12 steps at N=16 with the Rayleigh top under the Bechtold closure: ${bechtold}; with the deep source from the lowest 50 hPa: ${surface}; with Grant's shallow closure: ${grant}; with PCAPE_bl at least 0: ${positive}; with the excess over the IFS's w*: ${layer}`);
+  assert.equal(bechtold, 'ffb50431423d27683aa1b3f2d18a40b7');
+  assert.equal(surface, 'aa4e0230246e504585012bae4b2e20db');
+  assert.equal(grant, 'a94c28762b9606239e8dee0a0dfa1c3c');
+  assert.equal(positive, grant, 'these twelve steps do not tell the two apart');
+  assert.equal(layer, '0a18cf40643a9e5265114af8b33c4a9e');
+  const elements = { ...signed, plumeSourceDepth: MOIST_DEFAULTS.plumeSourceDepth, cumulusClosure: MOIST_DEFAULTS.cumulusClosure, pcapeBoundary: MOIST_DEFAULTS.pcapeBoundary, excessVelocity: MOIST_DEFAULTS.excessVelocity };
+  const merged = modelDigest({}, elements).digest, typed = modelDigest({}, { ...elements, convectionType: 'cloudDepth' }).digest;
+  const entraining = modelDigest({}, { ...elements, convectionType: 'cloudDepth', plumeEntrainmentLaw: MOIST_DEFAULTS.plumeEntrainmentLaw }).digest;
+  const parcel = modelDigest({}, { ...elements, convectionType: MOIST_DEFAULTS.convectionType, plumeEntrainmentLaw: MOIST_DEFAULTS.plumeEntrainmentLaw }).digest;
+  const frozen = modelDigest({}, { ...elements, convectionType: MOIST_DEFAULTS.convectionType, plumeEntrainmentLaw: MOIST_DEFAULTS.plumeEntrainmentLaw, plumePhase: MOIST_DEFAULTS.plumePhase }).digest;
+  const converted = modelDigest({}, { ...elements, convectionType: MOIST_DEFAULTS.convectionType, plumeEntrainmentLaw: MOIST_DEFAULTS.plumeEntrainmentLaw, plumePhase: MOIST_DEFAULTS.plumePhase, plumeConversion: MOIST_DEFAULTS.plumeConversion }).digest;
+  console.log(`12 steps at N=16 under the model top and the convection's elements 2-4: ${merged}; with the deep type by the cloud's depth: ${typed}; with the IFS entrainment: ${entraining}; typed by the IFS test parcel: ${parcel}; with the mixed-phase plume: ${frozen}; with the IFS updraught conversion: ${converted}`);
+  assert.equal(merged, 'f77862fcf6f9f1990001a6f8012735ac');
+  assert.equal(typed, '117a8ab976f445de85e3978f763825ac');
+  assert.equal(entraining, 'c03375baf110a33b8d0751d35f68980d');
+  assert.equal(parcel, '67ff7c5b4e8f2fa64cbbe2cbbc35a10a');
+  assert.equal(frozen, '682ec97debcc52a4963e99316b3ff8d0');
+  assert.equal(converted, '24a23a0da19b1a94e0e038acb833bf24');
+});

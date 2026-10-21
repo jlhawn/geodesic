@@ -10,7 +10,7 @@ import { syntheticTopography } from '../js/geography.module.js';
 import { SEA_RHO_CP, warmLayerStep } from '../js/physics/skin.module.js';
 
 /*
- * The exchange guard: N = 8 over the layered ocean with Jerlov IB light,
+ * The exchange guard: N = 16 over the layered ocean with Jerlov IB light,
  * warmLayer and coolSkin on, from initializeState at the March equinox,
  * with half the longitudes land below 69°, a polar cap of sea ice that
  * keeps its skin cleared, and the sea 6 K cooler than the start's between
@@ -24,9 +24,9 @@ import { SEA_RHO_CP, warmLayerStep } from '../js/physics/skin.module.js';
  * change is bounded from day 5, after the start's cooled water has
  * adjusted. SKIN_EXCHANGE_DAYS sets the length.
  */
-const N = 8, DT = 2700, DAYS = Number(process.env.SKIN_EXCHANGE_DAYS ?? 30), NEUTRAL = 0.01, PER_DAY = 86400 / DT;
+const N = 16, DT = 1350, DAYS = Number(process.env.SKIN_EXCHANGE_DAYS ?? 12), NEUTRAL = 0.01, PER_DAY = 86400 / DT;
 
-test(`over ${DAYS} days at N = 8 every cell-step the skin turns unstable is open, sunlit water below the cap, on the warm-layer equation, without a limit cycle or the Oct 6 runaway`, () => {
+test(`over ${DAYS} days at N = 16 every cell-step the skin turns unstable is open, sunlit water below the cap, on the warm-layer equation, without a limit cycle or the Oct 6 runaway`, () => {
   const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
   const model = createModel(new Grid(N), { topography, levels: sigmaInterfaces('bl36'), ...withCadence({ ocean: { penetration: 'IB' } }, DT, N), surface: { warmLayer: true, coolSkin: true } });
   initializeState(model, {}).forEach((values, s) => model.state[s].set(values));

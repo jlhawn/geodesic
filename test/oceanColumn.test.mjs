@@ -12,7 +12,7 @@ const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: $
 const C = (k) => k - 273.15;
 
 test('a cubic meter of seawater holds 4.08 MJ per kelvin, and the whole column of air above a square meter holds as much as the top 2.5 m of the sea', () => {
-  const ocean = createOcean(buildMesh(new Grid(2)), { everySteps: 1 });
+  const ocean = createOcean(buildMesh(new Grid(16)), { everySteps: 1 });
   assert.equal(RHO_CP, ocean.rhoCp, 'the ocean\'s own ρc_p');
   close(RHO_CP, 4.08e6, 0.005e6, 'ρc_p');
   close(AIR_COLUMN, 1.02e7, 0.005e7, 'c_p·1000 hPa/g');

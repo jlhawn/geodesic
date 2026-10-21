@@ -6,15 +6,16 @@ import { createGeography, syntheticTopography } from '../js/geography.module.js'
 import { createLandSurface } from '../js/physics/land.module.js';
 import { MELTING_POINT } from '../js/physics/ice.module.js';
 
-const mesh = createModel(new Grid(8), { physics: false }).mesh;
+const N = 16;
+const mesh = createModel(new Grid(N), { physics: false }).mesh;
 
 test('a hemisphere continent covers half the area, its coast rings the meridian, and edges are classified consistently', () => {
   const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (Math.cos(lon) > 0 ? 500 : -4000)), { landBridges: {}, seaStraits: {} });
-  assert.ok(Math.abs(geography.landArea - 0.5) < 0.03, `land area ${geography.landArea.toFixed(3)}`);
+  assert.ok(Math.abs(geography.landArea - 0.5) < 0.01, `land area ${geography.landArea.toFixed(3)}`);
   for (let i = 0; i < mesh.nCells; i++) {
     const inland = Math.abs(Math.cos(mesh.lonCell[i])) > 0.2 && Math.abs(mesh.latCell[i]) < 1.4;
     if (inland) assert.equal(geography.land[i], Math.cos(mesh.lonCell[i]) > 0 ? 1 : 0, `cell ${i} at lon ${mesh.lonCell[i].toFixed(2)}`);
-    if (inland && Math.abs(Math.cos(mesh.lonCell[i])) > 0.4) assert.ok(Math.abs(geography.elevation[i] - (Math.cos(mesh.lonCell[i]) > 0 ? 500 : -4000)) < 1);
+    if (inland && Math.abs(Math.cos(mesh.lonCell[i])) > 0.2) assert.ok(Math.abs(geography.elevation[i] - (Math.cos(mesh.lonCell[i]) > 0 ? 500 : -4000)) < 1);
   }
   for (let e = 0; e < mesh.nEdges; e++) {
     const a = geography.land[mesh.cellsOnEdge[2 * e]], b = geography.land[mesh.cellsOnEdge[2 * e + 1]];
@@ -26,7 +27,7 @@ test('a hemisphere continent covers half the area, its coast rings the meridian,
     const lon = 0.5 * (mesh.lonCell[a] + mesh.lonCell[b]);
     assert.ok(Math.abs(Math.cos(lon)) < 0.25, `coast edge at lon ${lon.toFixed(2)}`);
   }
-  assert.ok(geography.coastEdges.length > 0.8 * mesh.nCells / 8 && geography.coastEdges.length < 1.5 * mesh.nCells / 8);
+  assert.ok(geography.coastEdges.length > 10 * N && geography.coastEdges.length < 14 * N);
 });
 
 test('an all-ocean raster leaves no land and no coast', () => {

@@ -6,7 +6,7 @@ import { createOcean, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED } from '../js/oce
 import { edgeLayerFluxes } from '../scripts/oceanEdgeFlux.mjs';
 
 test('the heat the edge fluxes carry across a latitude is the heat that leaves the cells south of it in a step', () => {
-  const CELSIUS = 273.15, mesh = buildMesh(new Grid(8)), { nCells: C, nEdges: E, cellsOnEdge, latCell, areaCell } = mesh, dt = 1800;
+  const CELSIUS = 273.15, mesh = buildMesh(new Grid(16)), { nCells: C, nEdges: E, cellsOnEdge, latCell, areaCell } = mesh, dt = 1350;
   const ocean = createOcean(mesh, { everySteps: 1, eddyDiffusivity: 0 }), L = ocean.layers;
   const surfaceT = Float64Array.from(latCell, (lat) => 300 - 26 * Math.sin(lat) ** 2), ice = new Float64Array(C), oceanFlux = new Float64Array(C);
   ocean.initialize(surfaceT, ice);
@@ -16,7 +16,7 @@ test('the heat the edge fluxes carry across a latitude is the heat that leaves t
     stress[e] = r > 0 ? -0.1 * Math.cos(3 * mesh.latEdge[e]) * (-y * mesh.nEdge[3 * e] + x * mesh.nEdge[3 * e + 1]) / r : 0;
   }
   const step = () => { surfaceT.set(ocean.T0); ocean.advance(surfaceT, ice, oceanFlux, stress, dt); };
-  for (let n = 0; n < 96; n++) step();
+  for (let n = 0; n < 2 * 86400 / dt; n++) step();
   const fluxes = edgeLayerFluxes(mesh, { layers: L, fixed: ocean.table.fixed, options: { tracerAdvection: 'third', shearDiffusivity: SHEAR_DIFFUSIVITY, shearDiffusivityCap: 4000, lateralDiffusionSpeed: HYCOM_DIFFUSION_SPEED }, cellOcean: ocean.cellOcean, depth: ocean.D, sill: ocean.sillEdge });
   const out = { volume: new Float64Array(L), net: new Float64Array(L), heat: new Float64Array(L), diffusion: new Float64Array(L), donor: new Int32Array(L) };
   const caps = [-30, -10, -5, 5, 10, 30].map((degrees) => {
@@ -43,7 +43,7 @@ test('the heat the edge fluxes carry across a latitude is the heat that leaves t
   };
   const total = () => { let q = 0; for (let n = 0; n < L * C; n++) q += areaCell[n % C] * (ocean.Q[n] - CELSIUS * ocean.h[n]); return q; };
   const areaSouth = caps.map(({ phi }) => { let a = 0, all = 0; for (let i = 0; i < C; i++) { all += areaCell[i]; if (latCell[i] < phi) a += areaCell[i]; } return a / all; });
-  const steps = 24, start = total(), first = snapshot(), sums = caps.map(() => ({ model: 0, donor: 0, volume: 0, mean: 0 }));
+  const steps = 12 * 3600 / dt, start = total(), first = snapshot(), sums = caps.map(() => ({ model: 0, donor: 0, volume: 0, mean: 0 }));
   let previous = first;
   for (let n = 0; n < steps; n++) {
     step();

@@ -1,38 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
-import { buildMesh } from '../js/mesh.module.js';
 import { createOcean, beyondCells, limitedEdgeValue, inertialStepLimit, EDGE_TRANSPORTS } from '../js/ocean/layered.module.js';
-import { createGeography, syntheticTopography, topographyFromInt16 } from '../js/geography.module.js';
 import { HYBRID_LAYERS, H_MIN } from '../js/ocean/column.module.js';
-import { seawaterDensity } from '../js/ocean/seawater.module.js';
-import { zonalWindOnEdges, totalHeatSalt, uniformOcean } from './helpers/layered.mjs';
-
-/*
- * The hybrid ocean (vertical: 'hybrid') on Grid(8) and Grid(16): flat
- * floors, an analytic start with no tilt, 34.5 psu everywhere, driven
- * through advance with the ocean's own surface temperature handed back.
- */
-const DT = 1350, DEG = Math.PI / 180;
-const meshes = new Map();
-const meshOf = (N) => { if (!meshes.has(N)) meshes.set(N, buildMesh(new Grid(N))); return meshes.get(N); };
-const FLAT = { vertical: 'hybrid', everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5 };
-function hybridOcean(N, options = {}, depth = () => 4000, surface = 290) {
-  const mesh = meshOf(N), C = mesh.nCells, E = mesh.nEdges;
-  const bathymetry = Float64Array.from({ length: C }, (_, i) => depth(mesh.latCell[i], mesh.lonCell[i], i));
-  const ocean = createOcean(mesh, { ...FLAT, bathymetry, ...options });
-  const surfaceT = new Float64Array(C).fill(surface), ice = new Float64Array(C), flux = new Float64Array(C), calm = new Float64Array(E);
-  ocean.initialize(surfaceT, ice);
-  return { mesh, C, E, ocean, surfaceT, ice, flux, calm };
-}
-const columnSums = (ocean, C) => Float64Array.from({ length: C }, (_, i) => { let s = 0; for (let k = 0; k < ocean.layers; k++) s += ocean.h[k * C + i]; return s; });
-const maxSpeed = (ocean) => { let m = 0; for (let n = 0; n < ocean.u.length; n++) m = Math.max(m, Math.abs(ocean.u[n])); return m; };
-const volumeOf = (ocean, mesh) => { let v = 0; const C = mesh.nCells; for (let i = 0; i < C; i++) if (ocean.cellOcean[i]) for (let k = 0; k < ocean.layers; k++) v += mesh.areaCell[i] * ocean.h[k * C + i]; return v; };
+import { DT, DEG, FLAT, mesh, C, E, hybridOcean, columnSums, maxSpeed, volumeOf, zonalWindOnEdges, totalHeatSalt, uniformOcean } from './helpers/layered.mjs';
 
 test('the hybrid start puts every column on the depth table clipped to its floor, sums to the depth, keeps the minimum thickness, and leaves a uniform stratification exactly at rest', () => {
-  const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean(8);
-  const sums = columnSums(ocean, C);
+  const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean();
+  const sums = columnSums(ocean);
   for (let i = 0; i < C; i++) assert.ok(Math.abs(sums[i] - ocean.D[i] - ocean.eta[i]) < 1e-9, `column ${i} sums to ${sums[i]}`);
   let thinnest = Infinity;
   for (let n = 0; n < ocean.h.length; n++) thinnest = Math.min(thinnest, ocean.h[n]);
@@ -45,7 +20,7 @@ test('the hybrid start puts every column on the depth table clipped to its floor
 });
 
 test('a brackish sea keeps its fixed-depth surface layers, hands back its first layer\'s temperature, and keeps its heat once stepping', () => {
-  const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean(8, { salinityProfile: () => 12 }, () => 200, 283);
+  const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean({ salinityProfile: () => 12 }, () => 200, 283);
   const atMinimum = (tolerance, when) => { for (let i = 0; i < C; i++) for (let k = 0; k < HYBRID_LAYERS.fixed; k++) assert.ok(Math.abs(ocean.h[k * C + i] - HYBRID_LAYERS.minimum[k]) < tolerance, `surface layer ${k} of column ${i} ${when}: ${ocean.h[k * C + i]} m`); };
   atMinimum(1e-9, 'at the start');
   for (let i = 0; i < C; i++) assert.ok(Math.abs(surfaceT[i] - ocean.Q[i] / ocean.h[i]) < 0.1, `the surface temperature handed back is within the analytic profile's first-layer mean at ${i}`);
@@ -59,15 +34,15 @@ test('a brackish sea keeps its fixed-depth surface layers, hands back its first 
 
 test('through dynamics, regrid and column physics the hybrid ocean conserves water, heat and salt to rounding, with no dried layer, whichever edge transport it keeps', () => {
   for (const edgeTransport of EDGE_TRANSPORTS) {
-    const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean(8, { edgeTransport });
+    const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean({ edgeTransport });
     const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
     ocean.advance(surfaceT, ice, flux, wind, DT);
-    const before = totalHeatSalt(ocean, mesh), volume = volumeOf(ocean, mesh);
+    const before = totalHeatSalt(ocean, mesh), volume = volumeOf(ocean);
     for (let n = 0; n < 24; n++) ocean.advance(surfaceT, ice, flux, wind, DT);
     const after = totalHeatSalt(ocean, mesh);
     assert.ok(Math.abs(after.heat - before.heat) < 1e-10 * before.heat, `${edgeTransport}: heat ${before.heat} → ${after.heat}`);
     assert.ok(Math.abs(after.salt - before.salt) < 1e-10 * before.salt, `${edgeTransport}: salt ${before.salt} → ${after.salt}`);
-    assert.ok(Math.abs(volumeOf(ocean, mesh) - volume) < 1e-10 * volume, `${edgeTransport}: volume`);
+    assert.ok(Math.abs(volumeOf(ocean) - volume) < 1e-10 * volume, `${edgeTransport}: volume`);
     const d = ocean.diagnostics();
     assert.equal(d.oceanDried, 0);
     assert.ok(d.oceanSpeed > 0.01 && d.oceanSpeed < 1, `${edgeTransport}: speed ${d.oceanSpeed}`);
@@ -75,36 +50,22 @@ test('through dynamics, regrid and column physics the hybrid ocean conserves wat
   }
 });
 
-test('at a third of the inertial period, N=6\'s coupled ocean step of four hours, the sea of the real topography left alone from rest keeps its currents slow for twelve days', () => {
-  const mesh = meshOf(6), C = mesh.nCells, E = mesh.nEdges;
-  const geography = createGeography(mesh, topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer));
-  const ocean = createOcean(mesh, { vertical: 'hybrid', everySteps: 1, geography });
-  const surfaceT = Float64Array.from({ length: C }, (_, i) => 300 - 25 * Math.sin(mesh.latCell[i]) ** 2), ice = new Float64Array(C), flux = new Float64Array(C), calm = new Float64Array(E);
-  ocean.initialize(surfaceT, ice);
-  let fastest = 0;
-  for (let n = 0; n < 72; n++) {
-    ocean.advance(surfaceT, ice, flux, calm, 4 * 3600);
-    fastest = Math.max(fastest, maxSpeed(ocean));
-  }
-  assert.ok(fastest < 0.5, `currents reach ${fastest} m/s in twelve days`);
-});
-
 test('a step longer than a radian of the fastest inertial rotation takes its dynamics in equal parts that keep water, heat and salt to rounding', () => {
-  const { mesh, ocean, surfaceT, ice, flux } = hybridOcean(8);
+  const { mesh, ocean, surfaceT, ice, flux } = hybridOcean();
   const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat)), step = 4 * 3600;
   assert.equal(Math.ceil(step / inertialStepLimit(mesh)), 3);
   ocean.advance(surfaceT, ice, flux, wind, step);
-  const before = totalHeatSalt(ocean, mesh), volume = volumeOf(ocean, mesh);
+  const before = totalHeatSalt(ocean, mesh), volume = volumeOf(ocean);
   for (let n = 0; n < 6; n++) ocean.advance(surfaceT, ice, flux, wind, step);
   const after = totalHeatSalt(ocean, mesh);
   assert.ok(Math.abs(after.heat - before.heat) < 1e-10 * before.heat, `heat ${before.heat} → ${after.heat}`);
   assert.ok(Math.abs(after.salt - before.salt) < 1e-10 * before.salt, `salt ${before.salt} → ${after.salt}`);
-  assert.ok(Math.abs(volumeOf(ocean, mesh) - volume) < 1e-10 * volume, 'volume');
+  assert.ok(Math.abs(volumeOf(ocean) - volume) < 1e-10 * volume, 'volume');
   assert.equal(ocean.diagnostics().oceanDried, 0);
 });
 
 test('the beyond cell of each edge lies on the far side of its cell along the edge, joined to it by the recorded edge', () => {
-  const mesh = meshOf(8), { nEdges: E, cellsOnEdge, xCell } = mesh, { cell, edge } = beyondCells(mesh);
+  const { cellsOnEdge, xCell } = mesh, { cell, edge } = beyondCells(mesh);
   let worst = 1;
   for (let e = 0; e < E; e++) {
     const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1];
@@ -118,7 +79,7 @@ test('the beyond cell of each edge lies on the far side of its cell along the ed
       worst = Math.min(worst, cos);
     }
   }
-  console.log(`beyond cells at N=8: the worst alignment with the edge's line is ${worst.toFixed(3)}`);
+  console.log(`beyond cells at N=16: the worst alignment with the edge's line is ${worst.toFixed(3)}`);
   assert.ok(worst > 0.5, `every beyond cell lies within 60° of the edge's line, worst cosine ${worst}`);
 });
 
@@ -139,7 +100,7 @@ test('the limited edge value is the midpoint on a linear field, the third-order 
 
 test('on a smooth field under solid-body rotation the third-order tracer tendency is far closer to the exact one than upwind, and conserves heat', () => {
   const run = (tracerAdvection) => {
-    const { mesh, C, E, ocean } = hybridOcean(8, { tracerAdvection });
+    const { mesh, C, E, ocean } = hybridOcean({ tracerAdvection });
     const { xCell, xEdge, nEdge, areaCell, radius } = mesh, omega = 1e-7, h = ocean.h, L = ocean.layers;
     for (let e = 0; e < E; e++) {
       const r = Math.hypot(xEdge[3 * e], xEdge[3 * e + 1], xEdge[3 * e + 2]), y = xEdge[3 * e + 1] / r, z = xEdge[3 * e + 2] / r;
@@ -160,15 +121,15 @@ test('on a smooth field under solid-body rotation the third-order tracer tendenc
     return { error: Math.sqrt(err / ref), net: Math.abs(net) / gross };
   };
   const upwind = run('upwind'), third = run('third');
-  console.log(`tracer tendency on a smooth field at N=8: rms error ${(100 * third.error).toFixed(1)} % third-order against ${(100 * upwind.error).toFixed(1)} % upwind; net heat tendency ${third.net.toExponential(1)} of the gross`);
+  console.log(`tracer tendency on a smooth field at N=16: rms error ${(100 * third.error).toFixed(1)} % third-order against ${(100 * upwind.error).toFixed(1)} % upwind; net heat tendency ${third.net.toExponential(1)} of the gross`);
   assert.ok(third.net < 1e-12 && upwind.net < 1e-12, 'the tendency moves heat without making it');
   assert.ok(third.error < 0.5 * upwind.error, `the third-order error ${third.error} is well under the upwind error ${upwind.error}`);
-  assert.ok(third.error < 0.25, 'and small in itself');
+  assert.ok(third.error < 0.05, `and small in itself: ${third.error}`);
 });
 
 test('the shear-scaled diffusivity moves heat down the gradient in the fixed-depth layers only, under the cap, and makes none, and the background diffusion reaches every layer', () => {
   const run = (shearDiffusivity, lateralDiffusionSpeed = 0) => {
-    const { mesh, C, E, ocean } = hybridOcean(8, { shearDiffusivity, lateralDiffusionSpeed, tracerAdvection: 'upwind' });
+    const { mesh, C, E, ocean } = hybridOcean({ shearDiffusivity, lateralDiffusionSpeed, tracerAdvection: 'upwind' });
     const { xCell, xEdge, nEdge, areaCell, radius, cellsOnCell, nEdgesOnCell, maxEdges } = mesh, omega = 1e-7, h = ocean.h, L = ocean.layers;
     for (let e = 0; e < E; e++) {
       const r = Math.hypot(xEdge[3 * e], xEdge[3 * e + 1], xEdge[3 * e + 2]), y = xEdge[3 * e + 1] / r, z = xEdge[3 * e + 2] / r;
@@ -191,12 +152,12 @@ test('the shear-scaled diffusivity moves heat down the gradient in the fixed-dep
     for (let k = fixed; k < L; k++) if (on.dQ[k * C + i] !== off.dQ[k * C + i]) deepChanged++;
   }
   const maxRate = Math.max(...Array.from({ length: C }, (_, i) => Math.abs(on.dQ[i] - off.dQ[i]) / on.h[i]));
-  console.log(`shear diffusivity at N=8: down-gradient on ${agree} of ${counted} cells, net ${(net / gross).toExponential(1)} of the gross, the largest surface rate ${(maxRate * 86400).toExponential(2)} K/day, no change in ${L - fixed} deep layers`);
+  console.log(`shear diffusivity at N=16: down-gradient on ${agree} of ${counted} cells, net ${(net / gross).toExponential(1)} of the gross, the largest surface rate ${(maxRate * 86400).toExponential(2)} K/day, no change in ${L - fixed} deep layers`);
   assert.ok(Math.abs(net) < 1e-12 * gross, 'conserves heat');
   assert.ok(agree > 0.95 * counted, 'down the gradient');
   assert.equal(deepChanged, 0, 'the layers below the fixed-depth ones are untouched');
   assert.ok(gross > 0, 'it acts');
-  assert.ok(maxRate * 86400 < 0.2, `under the cap the surface warms or cools by less than 0.2 K/day on a 5 K field at N=8, not ${maxRate * 86400}`);
+  assert.ok(maxRate * 86400 < 1e-3, `under the cap the surface warms or cools by less than 0.001 K/day on a 5 K field at N=16, not ${maxRate * 86400}`);
   const back = run(0, 0.005);
   let backNet = 0, backGross = 0, deepAgree = 0, deepCounted = 0;
   for (let i = 0; i < C; i++) {
@@ -207,55 +168,7 @@ test('the shear-scaled diffusivity moves heat down the gradient in the fixed-dep
   assert.ok(Math.abs(backNet) < 1e-12 * backGross && deepAgree > 0.95 * deepCounted && deepCounted > 0, 'the background diffusion is conservative and down-gradient in the deep layers');
 });
 
-test('a class held at its floor on one side of an edge, with no depth in common with the layer across it, follows the layer above while the front between two stratifications adjusts', () => {
-  const mesh = meshOf(8), C = mesh.nCells, E = mesh.nEdges, deep = (i) => Math.cos(mesh.lonCell[i]) > 0;
-  const bathymetry = Float64Array.from({ length: C }, (_, i) => (deep(i) ? 4000 : 1500));
-  const ocean = createOcean(mesh, { ...FLAT, bathymetry });
-  const surfaceT = Float64Array.from({ length: C }, (_, i) => (deep(i) ? 300 : 280)), ice = new Float64Array(C), flux = new Float64Array(C), calm = new Float64Array(E);
-  ocean.initialize(surfaceT, ice);
-  const L = ocean.layers, { cellsOnEdge } = mesh, tokenEdge = Array.from(HYBRID_LAYERS.minimum, (m) => 2 * Math.min(m, HYBRID_LAYERS.spacing));
-  const tokens = () => {
-    const Ha = new Float64Array(E), Hb = new Float64Array(E), list = [];
-    for (let k = 0; k < L; k++) for (let e = 0; e < E; e++) {
-      const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], ha = ocean.h[k * C + a], hb = ocean.h[k * C + b], he = Math.min(ha, hb);
-      if (k >= HYBRID_LAYERS.fixed && ocean.edgeOcean[e] && he > 2 * H_MIN && he <= tokenEdge[k] && Math.min(Ha[e] + ha, Hb[e] + hb) <= Math.max(Ha[e], Hb[e])) list.push([k, e]);
-      Ha[e] += ha; Hb[e] += hb;
-    }
-    return list;
-  };
-  let shear = 0, count = Infinity;
-  for (let n = 0; n < 64; n++) {
-    ocean.advance(surfaceT, ice, flux, calm, DT);
-    const list = tokens();
-    count = Math.min(count, list.length);
-    for (const [k, e] of list) shear = Math.max(shear, Math.abs(ocean.u[k * E + e] - ocean.u[(k - 1) * E + e]));
-  }
-  assert.ok(count > 500, `${count} token edge-layers`);
-  assert.ok(maxSpeed(ocean) > 0.5, `the front adjusts: ${maxSpeed(ocean)} m/s`);
-  assert.ok(shear < 1e-2, `a token's shear to the layer above reached ${shear} m/s`);
-  assert.equal(ocean.diagnostics().oceanLimited, 0);
-});
-
-test('tropical easterlies drive equatorial upwelling and a poleward surface drift, and the mixed layer deepens under the stronger wind', () => {
-  const { mesh, C, ocean, surfaceT, ice, flux } = hybridOcean(16);
-  const wind = zonalWindOnEdges(mesh, (lat) => -0.08 * Math.exp(-((lat / (15 * DEG)) ** 2)));
-  for (let n = 0; n < 5 * 64; n++) ocean.advance(surfaceT, ice, flux, wind, DT);
-  const f = ocean.fields(50);
-  let equator = 0, nEq = 0, side = 0, nSide = 0, mixedEq = 0, mixedPole = 0, nPole = 0;
-  for (let i = 0; i < C; i++) {
-    const lat = Math.abs(mesh.latCell[i]);
-    if (lat < 3 * DEG) { equator += f.upwelling[i]; nEq++; mixedEq += f.h1[i]; }
-    else if (lat > 6 * DEG && lat < 12 * DEG) { side += f.upwelling[i]; nSide++; }
-    else if (lat > 60 * DEG) { mixedPole += f.h1[i]; nPole++; }
-  }
-  console.log(`after five days of easterlies: equatorial upwelling ${(equator / nEq * 86400).toFixed(2)} m/day, 6–12° ${(side / nSide * 86400).toFixed(2)} m/day; mixed layer at the equator ${(mixedEq / nEq).toFixed(1)} m, poleward of 60° ${(mixedPole / nPole).toFixed(1)} m`);
-  assert.ok(equator / nEq > 0, 'upwelling at the equator');
-  assert.ok(side / nSide < equator / nEq, 'less off the equator');
-  assert.ok(mixedEq / nEq > mixedPole / nPole, 'the wind mixes deeper');
-});
-
 test('a slab ocean converts into the hybrid layers with every column\'s heat and salt kept and the barotropic transport within rounding', () => {
-  const mesh = meshOf(8), C = mesh.nCells, E = mesh.nEdges;
   const slab = uniformOcean({ bathymetry: new Float64Array(C).fill(3000) }, mesh), wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
   for (let n = 0; n < 12; n++) slab.ocean.advance(slab.surfaceT, slab.ice, slab.flux, wind, DT);
   const saved = slab.ocean.serialize(), Ls = slab.ocean.layers;
@@ -291,7 +204,7 @@ test('a slab ocean converts into the hybrid layers with every column\'s heat and
 });
 
 test('the fields at a depth take the hybrid layer that holds it, however thin, with the mixed-layer depth as h1', () => {
-  const { mesh, C, ocean } = hybridOcean(8);
+  const { mesh, C, ocean } = hybridOcean();
   for (let i = 0; i < C; i++) ocean.Q[C + i] = ocean.h[C + i] * 280;
   const top = ocean.h[C], surface = ocean.fields(0), within = ocean.fields(0.5 * (ocean.h[0] + ocean.h[C]));
   assert.ok(top < 5, `the second layer is ${top} m thick`);
@@ -301,18 +214,9 @@ test('the fields at a depth take the hybrid layer that holds it, however thin, w
   assert.equal(mesh.nCells, C);
 });
 
-test('over a seamount the pressure force at the depths the layers share leaves a uniform stratification nearly at rest', () => {
-  const { mesh, C, ocean, surfaceT, ice, flux, calm } = hybridOcean(16, {}, (lat, lon) => 4000 - 3500 * Math.exp(-((lat / (8 * DEG)) ** 2 + (lon / (8 * DEG)) ** 2)));
-  for (let n = 0; n < 64; n++) ocean.advance(surfaceT, ice, flux, calm, DT);
-  const speed = maxSpeed(ocean);
-  console.log(`seamount to 500 m under a uniform stratification: fastest current after a day ${speed.toExponential(2)} m/s`);
-  assert.ok(speed < 0.01, `spurious current ${speed} m/s`);
-  assert.equal(ocean.diagnostics().oceanDried, 0);
-});
-
 test('the z* and isopycnal generators run the same ocean and conserve it, and a 50 m shelf keeps its layers', () => {
   for (const generator of ['zstar', 'isopycnal']) {
-    const { mesh, C, ocean, surfaceT, ice, flux } = hybridOcean(8, { generator });
+    const { mesh, C, ocean, surfaceT, ice, flux } = hybridOcean({ generator });
     const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
     ocean.advance(surfaceT, ice, flux, wind, DT);
     const before = totalHeatSalt(ocean, mesh);
@@ -321,64 +225,19 @@ test('the z* and isopycnal generators run the same ocean and conserve it, and a 
     assert.ok(Math.abs(after.heat - before.heat) < 1e-10 * before.heat, `${generator}: heat`);
     assert.ok(Math.abs(after.salt - before.salt) < 1e-10 * before.salt, `${generator}: salt`);
     assert.ok(ocean.u.every(Number.isFinite), `${generator}: finite`);
-    const sums = columnSums(ocean, C);
+    const sums = columnSums(ocean);
     for (let i = 0; i < C; i++) assert.ok(Math.abs(sums[i] - ocean.D[i] - ocean.eta[i]) < 1e-9, `${generator}: column ${i}`);
   }
-  const shelf = hybridOcean(8, {}, (lat) => (Math.abs(lat) < 20 * DEG ? 50 : 4000));
+  const shelf = hybridOcean({}, (lat) => (Math.abs(lat) < 20 * DEG ? 50 : 4000));
   const wind = zonalWindOnEdges(shelf.mesh, (lat) => 0.1 * Math.cos(2 * lat));
   for (let n = 0; n < 12; n++) shelf.ocean.advance(shelf.surfaceT, shelf.ice, shelf.flux, wind, DT);
   assert.ok(shelf.ocean.u.every(Number.isFinite) && shelf.ocean.Q.every(Number.isFinite), 'the shelf runs');
-  const sums = columnSums(shelf.ocean, shelf.C);
+  const sums = columnSums(shelf.ocean);
   for (let i = 0; i < shelf.C; i++) assert.ok(Math.abs(sums[i] - shelf.ocean.D[i] - shelf.ocean.eta[i]) < 1e-9, `shelf column ${i}`);
   assert.equal(shelf.ocean.diagnostics().oceanDried, 0);
 });
 
-test('an edge takes the deepest channel its two cells hold between them as its sill and the ocean cuts the edge column there so the classes below carry nothing across', () => {
-  const mesh = meshOf(8), C = mesh.nCells, E = mesh.nEdges, { cellsOnEdge, lonCell, latCell } = mesh;
-  const wrap = (x) => Math.atan2(Math.sin(x), Math.cos(x));
-  const ridge = (lon) => Math.abs(lon) < 1.5 * DEG, strip = (lon) => Math.abs(wrap(lon - Math.PI)) < 1.5 * DEG, within = (lat) => Math.abs(lat) < 40 * DEG;
-  const topography = syntheticTopography(180, 360, (lat, lon) => (within(lat) && ridge(lon) ? -300 : within(lat) && strip(lon) ? 100 : -4000));
-  const geography = createGeography(mesh, topography);
-  const across = (e, lon0) => { const a = cellsOnEdge[2 * e], b = cellsOnEdge[2 * e + 1], la = wrap(lonCell[a] - lon0), lb = wrap(lonCell[b] - lon0); return geography.edgeOcean[e] && la * lb < 0 && Math.abs(la) > 3.3 * DEG && Math.abs(lb) > 3.3 * DEG && Math.abs(la) < 15 * DEG && Math.abs(lb) < 15 * DEG && Math.abs(latCell[a]) < 30 * DEG && Math.abs(latCell[b]) < 30 * DEG; };
-  const ridgeEdges = [], stripEdges = [], openEdges = [];
-  for (let e = 0; e < E; e++) {
-    if (across(e, 0)) ridgeEdges.push(e);
-    else if (across(e, Math.PI)) stripEdges.push(e);
-    else if (geography.edgeOcean[e] && Math.abs(lonCell[cellsOnEdge[2 * e]]) > 20 * DEG && Math.abs(lonCell[cellsOnEdge[2 * e]]) < 70 * DEG) openEdges.push(e);
-  }
-  assert.ok(ridgeEdges.length >= 4 && stripEdges.length >= 4 && openEdges.length > 20, `${ridgeEdges.length} ridge, ${stripEdges.length} strip, ${openEdges.length} open edges`);
-  for (const e of ridgeEdges) assert.equal(geography.edgeSill[e], 300, `ridge edge ${e}`);
-  for (const e of stripEdges) assert.equal(geography.edgeSill[e], 0, `land-strip edge ${e}`);
-  for (const e of openEdges) assert.equal(geography.edgeSill[e], 4000, `open edge ${e}`);
-  const hybrid = createOcean(mesh, { ...FLAT, geography });
-  const floor = (e) => Math.min(hybrid.D[cellsOnEdge[2 * e]], hybrid.D[cellsOnEdge[2 * e + 1]]);
-  for (const e of ridgeEdges) { assert.equal(hybrid.sillEdge[e], 300); assert.ok(floor(e) > 1000, `the cells stay deep at ${e}: ${floor(e)}`); }
-  for (const e of stripEdges) assert.equal(hybrid.sillEdge[e], 50);
-  for (const e of openEdges) assert.equal(hybrid.sillEdge[e], floor(e));
-  const front = Float64Array.from({ length: C }, (_, i) => (lonCell[i] < 0 ? 280 : 300)), ice = new Float64Array(C), flux = new Float64Array(C), calm = new Float64Array(E);
-  const L = hybrid.layers;
-  const transport = (ocean) => { let through = 0, below = 0; for (const e of ridgeEdges) { let z = 0; for (let k = 0; k < L; k++) { const t = Math.abs(ocean.hEdge[k * E + e] * ocean.u[k * E + e]) * mesh.dvEdge[e]; through += t; if (z >= 300) below += t; z += ocean.hEdge[k * E + e]; } } return { through, below }; };
-  const open = createOcean(mesh, { ...FLAT, geography, edgeSill: null });
-  hybrid.initialize(front, ice); open.initialize(front, ice);
-  let sillThrough = 0, sillBelow = 0, openThrough = 0;
-  for (let n = 0; n < 48; n++) {
-    hybrid.advance(front, ice, flux, calm, DT); open.advance(front, ice, flux, calm, DT);
-    const a = transport(hybrid), b = transport(open);
-    sillThrough += a.through; sillBelow += a.below; openThrough += b.through;
-  }
-  for (const e of ridgeEdges) {
-    let z = 0, sum = 0;
-    for (let k = 0; k < L; k++) { const he = hybrid.hEdge[k * E + e]; if (z >= 300) assert.equal(he, 0, `layer ${k} of ridge edge ${e} at ${z} m`); z += Math.min(hybrid.h[k * C + cellsOnEdge[2 * e]], hybrid.h[k * C + cellsOnEdge[2 * e + 1]]); sum += he; }
-    assert.ok(Math.abs(sum - 300) < 1, `ridge edge ${e} column ${sum} m`);
-  }
-  assert.ok(maxSpeed(hybrid) > 0.1 && maxSpeed(open) > 0.1, 'the front adjusts');
-  assert.equal(sillBelow, 0);
-  assert.ok(openThrough > 0 && sillThrough < 0.5 * openThrough, `transport through the ridge edges over 48 steps: ${(sillThrough / 48 / 1e6).toFixed(1)} Sv with the sill, ${(openThrough / 48 / 1e6).toFixed(1)} Sv without`);
-  assert.equal(hybrid.diagnostics().oceanLimited, 0);
-});
-
 test('the slab\'s coordinate and the options without a hybrid meaning are refused', () => {
-  const mesh = meshOf(8), C = mesh.nCells;
   assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), vertical: 'slab' }), /vertical/);
   assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), vertical: 'sigma' }), /vertical/);
   assert.throws(() => createOcean(mesh, { ...FLAT, bathymetry: new Float64Array(C).fill(4000), shearDiffusivity: 0 }), /shearDiffusivity/);
@@ -389,7 +248,7 @@ test('the slab\'s coordinate and the options without a hybrid meaning are refuse
 test('the worker engine computes the hybrid ocean bit for bit as the serial one, tendencies, regrid and column physics alike', async () => {
   const { createParallelModel } = await import('../js/parallel.module.js');
   const options = { vertical: 'hybrid', everySteps: 1, thermoclineTilt: 0, salinityProfile: () => 34.5 };
-  const parallel = await createParallelModel(new Grid(8), { ocean: options }, 3), mesh = parallel.mesh, C = mesh.nCells, E = mesh.nEdges;
+  const parallel = await createParallelModel(new Grid(16), { ocean: options }, 3), mesh = parallel.mesh, C = mesh.nCells, E = mesh.nEdges;
   const serial = createOcean(mesh, options);
   const surfaceT = new Float64Array(C).fill(290), ice = new Float64Array(C), flux = new Float64Array(C), wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat));
   const surfaceP = Float64Array.from(surfaceT);

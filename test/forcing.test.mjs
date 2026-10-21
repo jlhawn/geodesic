@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { encodeForcing, decodeForcing, FORCING_FIELDS, forcingName, forcingDay } from '../js/forcing.module.js';
 import { encodeState } from '../js/stateFile.module.js';
 
-const N = 6, C = 10 * N * N + 2, E = 30 * N * N;
-const header = { N, grid: { relax: 30 }, day: 1827, time: 1827 * 86400, seconds: 86400, steps: 24, oceanSteps: 6 };
+const N = 16, C = 10 * N * N + 2, E = 30 * N * N;
+const header = { N, grid: { relax: 30 }, day: 1827, time: 1827 * 86400, seconds: 86400, steps: 64, oceanSteps: 16 };
 const day = () => Object.fromEntries(FORCING_FIELDS.map(([name, where], f) => [name, Float32Array.from({ length: where === 'edges' ? E : C }, (_, i) => Math.sin(0.37 * i + f) * (f + 1) * 100)]));
 
 test('a day of forcing comes back from its bytes as it went in', async () => {
@@ -24,5 +24,5 @@ test('a state file, a missing field or a field of the wrong size is refused', as
   await assert.rejects(decodeForcing(encodeState({ N, day: 1, surfaceT: new Float32Array(C) })), /not a forcing file/);
   const { rain, ...partial } = day();
   assert.throws(() => encodeForcing(header, partial), /lacks rain/);
-  assert.throws(() => encodeForcing(header, { ...day(), stress: new Float32Array(C) }), /stress has 362 values/);
+  assert.throws(() => encodeForcing(header, { ...day(), stress: new Float32Array(C) }), /stress has 2562 values/);
 });

@@ -113,7 +113,7 @@ test('doubling CO₂ warms the wet column by 2.36 K with fixed relative humidity
 });
 
 test('one cloud layer: the overcast and clear calls blended by the cover reproduce the model\'s own partial cover', () => {
-  const mesh = buildMesh(new Grid(2)), C = mesh.nCells, core = createSigmaCore(mesh, { levels: LEVELS });
+  const mesh = buildMesh(new Grid(16)), C = mesh.nCells, core = createSigmaCore(mesh, { levels: LEVELS });
   const { exnerLayer, dSigma, g, sigmaMid } = core.diagnostics, ps = MLS.surfacePressure;
   const pi = new Float64Array(C).fill(ps), theta = new Float64Array(K * C), q = new Float64Array(K * C), qc = new Float64Array(K * C);
   core.diagnoseColumn(0, pi, theta);

@@ -5,7 +5,7 @@ import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { saturationHumidity, LATENT_HEAT, createMoistPhysics, cloudSaturation, criticalHumidityAt, LIQUID_TEMPERATURE, ICE_TEMPERATURE } from '../js/physics/moist.module.js';
 
-const model = createModel(new Grid(3));
+const model = createModel(new Grid(16));
 const { core, moist } = model;
 const { K, C, dSigma, sigmaMid, cp, g, exnerLayer } = core.diagnostics;
 
@@ -116,7 +116,7 @@ test('rain evaporates into the dry layers it falls through, conserving water and
     const rain = m.autoconvertColumn(0, pi, theta, q, qc, 900);
     return { pi, theta, q, qc, qBefore, rain, water, enthalpy };
   };
-  const { moist: noEvaporation, core: noEvaporationCore } = createModel(new Grid(3), { moist: { rainEvaporation: 0 } });
+  const { moist: noEvaporation, core: noEvaporationCore } = createModel(new Grid(16), { moist: { rainEvaporation: 0 } });
   const reference = converted(noEvaporation, noEvaporationCore);
   const r = converted(moist);
   assert.ok(reference.rain > 1e-3, `the cloud converts ${reference.rain} kg/m²`);
@@ -150,7 +150,7 @@ test('the plume leaves a stable dry column alone', () => {
 });
 
 test('transport alone conserves total water', () => {
-  const dry = createModel(new Grid(4), { physics: false });
+  const dry = createModel(new Grid(16), { physics: false });
   const init = initializeState(dry, {});
   for (let a = 0; a < init.length; a++) dry.state[a].set(init[a]);
   dry.state[5].set(dry.state[4].map((x) => 0.05 * x));
@@ -163,10 +163,10 @@ test('transport alone conserves total water', () => {
 });
 
 test('with sources on, the water column change over a day matches evaporation minus precipitation', () => {
-  const wet = createModel(new Grid(4));
+  const wet = createModel(new Grid(16));
   const init = initializeState(wet, {});
   for (let a = 0; a < init.length; a++) wet.state[a].set(init[a]);
-  const dt = 900, steps = 96;
+  const dt = 1350, steps = 64;
   const total = (d) => d.columnWater + d.columnCloud;
   const water0 = total(wet.diagnostics());
   let evaporated = 0, precipitated = 0, diag = null;
@@ -175,10 +175,10 @@ test('with sources on, the water column change over a day matches evaporation mi
   let area = 0; for (let i = 0; i < wet.mesh.nCells; i++) area += wet.mesh.areaCell[i];
   const rained = (wet.moist.budget.condensation + wet.moist.budget.convection) / area;
   const residual = (water1 - water0) - (evaporated - precipitated);
-  console.log(`one day at N=4: evaporation ${evaporated.toFixed(3)} mm, precipitation ${precipitated.toFixed(3)} mm (budget ${rained.toFixed(3)}), water ${water0.toFixed(2)} → ${water1.toFixed(2)} mm of which cloud ${(1000 * diag.columnCloud).toFixed(0)} g/m², residual ${residual.toExponential(2)} mm, lost ${(wet.moist.budget.lost / area).toExponential(1)}`);
+  console.log(`one day at N=16: evaporation ${evaporated.toFixed(3)} mm, precipitation ${precipitated.toFixed(3)} mm (budget ${rained.toFixed(3)}), water ${water0.toFixed(2)} → ${water1.toFixed(2)} mm of which cloud ${(1000 * diag.columnCloud).toFixed(0)} g/m², residual ${residual.toExponential(2)} mm, lost ${(wet.moist.budget.lost / area).toExponential(1)}`);
   assert.ok(evaporated > 0.5 && evaporated < 15, `evaporation ${evaporated} mm/day out of range`);
   assert.ok(Math.abs(rained - precipitated) < 1e-9 * (1 + rained));
   assert.ok(wet.moist.budget.fog >= 0 && wet.moist.budget.fog <= wet.moist.budget.condensation, `fog ${wet.moist.budget.fog} of the large-scale ${wet.moist.budget.condensation} kg`);
-  assert.ok(Math.abs(residual) < 0.05 * evaporated, `residual ${residual} vs evaporation ${evaporated}`);
+  assert.ok(Math.abs(residual) < 1e-5 * evaporated, `residual ${residual} vs evaporation ${evaporated}`);
   assert.ok(Number.isFinite(diag.maxWind) && diag.maxWind < 80);
 });

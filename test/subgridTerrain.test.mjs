@@ -121,7 +121,7 @@ test('every mesh the page offers has its file; sea cells hold nothing and the co
     const again = decodeSubgrid(encodeSubgrid(fields));
     for (const [name, scale] of SUBGRID_FIELDS) for (let i = 0; i < mesh.nCells; i++) assert.ok(Math.abs(again[name][i] - fields[name][i]) <= 0.5 * scale + 1e-12, `${name} round trip`);
   }
-  assert.equal(meshSubgrid(buildMesh(new Grid(8))), null, 'no file for N=8');
+  assert.equal(meshSubgrid(buildMesh(new Grid(24))), null, 'no file for N=24');
 });
 
 test('the files serve the bundled land mask with its terrain only: given fields lose their sea cells, and a run without terrain, on another mask or with the files off takes the raster’s', () => {

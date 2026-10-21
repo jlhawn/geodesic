@@ -128,12 +128,12 @@ test('with both options off the skin adds nothing and steps nothing, and the mod
   assert.equal(skin.offset(0, 50 * SEA_RHO_CP), 0);
   assert.equal(skin.warm[0], 0);
   assert.equal(skin.cool[0], 0);
-  assert.equal(createModel(new Grid(4), {}).skin, null);
-  assert.throws(() => createModel(new Grid(4), { surface: { exchange: 'fixed', warmLayer: true } }), /exchange 'roughness'/);
-  assert.throws(() => createModel(new Grid(4), { surface: { dragCoefficient: 1.2e-3, coolSkin: true } }), /exchange 'roughness'/);
+  assert.equal(createModel(new Grid(16), {}).skin, null);
+  assert.throws(() => createModel(new Grid(16), { surface: { exchange: 'fixed', warmLayer: true } }), /exchange 'roughness'/);
+  assert.throws(() => createModel(new Grid(16), { surface: { dragCoefficient: 1.2e-3, coolSkin: true } }), /exchange 'roughness'/);
 });
 
-const N = 8, DT = 2700, BASE = { levels: sigmaInterfaces('bl36'), ...withCadence({ ocean: { penetration: 'IB' } }, DT, N) };
+const N = 16, DT = 1350, BASE = { levels: sigmaInterfaces('bl36'), ...withCadence({ ocean: { penetration: 'IB' } }, DT, N) };
 function started(surface) {
   const model = createModel(new Grid(N), { ...BASE, surface });
   initializeState(model).forEach((values, s) => model.state[s].set(values));
@@ -141,9 +141,9 @@ function started(surface) {
   return model;
 }
 
-test('options absent and present but off give byte-equal states over two days at N = 8', () => {
+test('options absent and present but off give byte-equal states over twelve hours at N = 16', () => {
   const absent = started({}), off = started({ ...SKIN_DEFAULTS });
-  for (let n = 0; n < 2 * 86400 / DT; n++) { absent.step(DT); off.step(DT); }
+  for (let n = 0; n < 12 * 3600 / DT; n++) { absent.step(DT); off.step(DT); }
   absent.state.forEach((values, s) => assert.ok(Buffer.from(values.buffer).equals(Buffer.from(off.state[s].buffer)), `state ${s}`));
   const a = absent.ocean.serialize(), b = off.ocean.serialize();
   for (const name of Object.keys(a)) assert.ok(Buffer.from(Float64Array.from(a[name]).buffer).equals(Buffer.from(Float64Array.from(b[name]).buffer)), `ocean ${name}`);

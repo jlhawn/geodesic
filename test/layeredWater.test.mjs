@@ -38,17 +38,19 @@ test('runoff flows down the terrain to the coast the land slopes toward', () => 
   const west = -40 * DEG, east = 40 * DEG;
   const geography = createGeography(mesh, syntheticTopography(180, 360, (lat, lon) => (lon > west && lon < east && Math.abs(lat) < 50 * DEG ? 100 + 2000 * (lon - west) / (east - west) : -4000)));
   const outlet = runoffOutlets(mesh, geography);
-  let land = 0, westward = 0;
+  let land = 0, slope = 0, westward = 0;
   for (let i = 0; i < C; i++) {
     if (!geography.land[i]) { assert.equal(outlet[i], i); continue; }
     land++;
     assert.ok(outlet[i] >= 0 && !geography.land[outlet[i]], `land cell ${i} has no sea outlet`);
     if (mesh.lonCell[i] < 0 || mesh.lonCell[i] > east - 10 * DEG || Math.abs(mesh.latCell[i]) > 30 * DEG) continue;
+    slope++;
     const lon = Math.atan2(mesh.xCell[3 * outlet[i] + 1], mesh.xCell[3 * outlet[i]]);
     assert.ok(lon < mesh.lonCell[i], `cell ${i} on the eastern slope drains uphill to lon ${(lon / DEG).toFixed(0)}`);
     if (lon < west + 5 * DEG) westward++;
   }
-  assert.ok(land > 50 && westward > 5, `${westward} high cells reach the western coast`);
+  assert.ok(land > 0.1 * C, `${land} land cells`);
+  assert.ok(westward > 0.9 * slope, `${westward} of ${slope} high cells reach the western coast`);
 });
 
 test('wind stress reaches the water under sea ice, scaled by the cover and the transmission factor', () => {

@@ -39,7 +39,7 @@ test('the subsolar latitude is 23.44°·sin(2πt/YEAR): 23.44° N at the June so
 });
 
 test('every cell gets exactly the sunlight the model\'s own radiation gives it', () => {
-  const mesh = buildMesh(new Grid(8)), radiation = createRadiation(mesh, createSigmaCore(mesh)), out = new Float64Array(mesh.nCells);
+  const mesh = buildMesh(new Grid(16)), radiation = createRadiation(mesh, createSigmaCore(mesh)), out = new Float64Array(mesh.nCells);
   for (const t of [0, 0.3 * DAY, 91.25 * DAY + 5000, 200.7 * DAY, 300 * DAY + 77]) {
     radiation.setTime(t);
     sunlightOnCells(mesh.xCell, sunDirection(t), out);

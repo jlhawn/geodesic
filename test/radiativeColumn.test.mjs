@@ -98,10 +98,11 @@ test('restart returns the column to its start', () => {
 });
 
 test('ozoneAt is the model\'s own climatology at that latitude and day', () => {
-  const mesh = buildMesh(new Grid(2)), core = createSigmaCore(mesh, { levels: LEVELS }), { C, exnerLayer } = core.diagnostics;
+  const mesh = buildMesh(new Grid(16)), core = createSigmaCore(mesh, { levels: LEVELS }), { C, exnerLayer } = core.diagnostics;
+  const cellAt = (degrees) => { let best = 0; for (let i = 1; i < mesh.nCells; i++) if (Math.abs(mesh.latCell[i] - degrees * Math.PI / 180) < Math.abs(mesh.latCell[best] - degrees * Math.PI / 180)) best = i; return best; };
   const radiation = createRadiation(mesh, core, { longwaveLines: 'scaled' });
   const pi = new Float64Array(C).fill(101325), theta = new Float64Array(K * C), q = new Float64Array(K * C);
-  for (const [i, day] of [[2, 0], [9, 120], [24, 120], [41, 250]]) {
+  for (const [i, day] of [[cellAt(31.7), 0], [cellAt(58.3), 120], [cellAt(-58.3), 120], [cellAt(-90), 250]]) {
     radiation.setTime(day * DAY);
     core.diagnoseColumn(i, pi, theta);
     for (let k = 0; k < K; k++) theta[k * C + i] = MLS.temperature[k] / exnerLayer[k * C + i];

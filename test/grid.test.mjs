@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Grid, GridVertex } from '../js/grid.module.js';
 
-const SIZES = (process.env.GRID_TEST_N ?? '2,3,5,8,16').split(',').map(Number);
+const SIZES = (process.env.GRID_TEST_N ?? '16,17,24,25,32').split(',').map(Number);
 const RELAX = (process.env.GRID_TEST_RELAX ?? '0,10').split(',').map(Number);
 const EPS = 1e-12;
 
