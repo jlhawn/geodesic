@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { gridHeader, stateGrid } from '../js/stateGrid.module.js';
-import { encodeState, decodeState } from '../js/stateFile.module.js';
+import { encodeState, decodeState, groupHeader, groupArrays, f64Names } from '../js/stateFile.module.js';
 import { decodeMonthlySst, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
-import { createSstRing, createSstRecorder, sstWindowOf, SST_WINDOW } from '../js/sstMeans.module.js';
+import { createSstRing, createSstRecorder, sstWindowOf, SST_WINDOW, SST_FIELDS } from '../js/sstMeans.module.js';
 import { biasTable, markdown, windowMonths } from '../scripts/woaSstBias.mjs';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -168,4 +169,50 @@ test('the ocean figure plots the window\'s mean SST against WOA23 over the same 
   const printed = (json, png) => execFileSync('python3', [join(root, 'scripts/figures/oceanPanels.py'), json, png, 'w8'], { cwd: join(root, 'scripts/figures'), encoding: 'utf8' });
   assert.match(printed(mean.out, join(dir, 'mean.png')), /^ocean: 30-day mean SST of days 701–730 − WOA 60S–60N/m);
   assert.match(printed(instant.out, join(dir, 'instant.png')), /^ocean: instant SST − WOA 60S–60N/m);
+});
+
+test('the page\'s worker starts from a state that carries an SST ring as from the same state without it, and its snapshots carry no ring', async () => {
+  const messages = [], fetched = globalThis.fetch;
+  globalThis.self = { postMessage: (message) => messages.push(message) };
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).startsWith('file:')) return fetched(url, init);
+    try { return new Response(readFileSync(new URL(String(url)))); } catch { return new Response(null, { status: 404 }); }
+  };
+  try {
+    await import('../js/model.worker.js');
+    const send = async (data, type) => {
+      messages.length = 0;
+      await self.onmessage({ data });
+      for (let wait = 0; wait < 6000 && !messages.some((m) => m.type === 'frame'); wait++) await new Promise((resolve) => setTimeout(resolve, 10));
+      const failed = messages.find((m) => m.type === 'status' && String(m.text).startsWith('error'));
+      assert.equal(failed, undefined, failed && failed.text);
+      const found = messages.find((m) => m.type === type);
+      assert.ok(found, `no ${type} message`);
+      return found;
+    };
+    const start = (from = null) => send({ type: 'start', N: 8, engine: 'cpu', paused: true, ...(from ? { from: pathToFileURL(from).href } : {}) }, 'ready');
+    const snapshot = () => send({ type: 'snapshot' }, 'snapshotData');
+    await start();
+    const fresh = await snapshot();
+    const saved = { N: fresh.N, K: fresh.K, day: 5, time: 5 * 86400, terrain: fresh.terrain, ...(fresh.grid ? { grid: fresh.grid } : {}) };
+    for (const [key, buffer] of Object.entries(fresh.arrays)) saved[key] = new Float64Array(buffer);
+    saved.ocean = { ...groupHeader(fresh.ocean), ...Object.fromEntries(Object.entries(groupArrays(fresh.ocean)).map(([key, buffer]) => [key, new Float64Array(buffer)])) };
+    saved.land = Object.fromEntries(Object.entries(fresh.land).map(([key, buffer]) => [key, new Float64Array(buffer)]));
+    const C = saved.surfaceT.length, plain = join(dir, 'plain_day0005.bin'), ringed = join(dir, 'ringed_day0005.bin');
+    writeFileSync(plain, encodeState(saved, { f64: f64Names(saved) }));
+    writeFileSync(ringed, encodeState({ ...saved, sstMeans: new Float32Array(2 * C).fill(290), sstMeanDays: Float64Array.of(4, 5), sstSum: new Float64Array(C).fill(0.5), sstSamples: 3 }, { f64: f64Names(saved) }));
+    const fromPlain = { ready: await start(plain), snapshot: await snapshot() };
+    const fromRinged = { ready: await start(ringed), snapshot: await snapshot() };
+    const names = ({ arrays, ocean, land, ...rest }) => [...Object.keys(rest), ...Object.keys(arrays), ...Object.keys(ocean ?? {}), ...Object.keys(land ?? {})];
+    for (const name of SST_FIELDS) assert.ok(!names(fromRinged.snapshot).includes(name), name);
+    assert.deepEqual(names(fromRinged.snapshot), names(fromPlain.snapshot));
+    assert.equal(fromPlain.ready.day, 5);
+    assert.equal(fromRinged.ready.day, 5);
+    for (const group of ['arrays', 'ocean', 'land']) {
+      for (const [key, buffer] of Object.entries(groupArrays(fromPlain.snapshot[group]))) assert.ok(Buffer.from(buffer).equals(Buffer.from(fromRinged.snapshot[group][key])), `${group}.${key}`);
+    }
+  } finally {
+    globalThis.fetch = fetched;
+    delete globalThis.self;
+  }
 });

@@ -27,6 +27,17 @@
  * checkpoint as `sstSum` and `sstSamples`.
  */
 export const SST_WINDOW = 30, SST_REFERENCE = 273.15;
+export const SST_FIELDS = ['sstMeans', 'sstMeanDays', 'sstSum', 'sstSamples'];
+
+/*
+ * A saved state less the ring's fields, as whatever saves a state without
+ * a recorder writes it.
+ */
+export function withoutSstRing(saved) {
+  const kept = { ...saved };
+  for (const name of SST_FIELDS) delete kept[name];
+  return kept;
+}
 
 export const sstMeanOf = (sum, samples, ocean) => Float32Array.from(sum, (s, i) => (ocean[i] && samples > 0 ? SST_REFERENCE + s / samples : 0));
 

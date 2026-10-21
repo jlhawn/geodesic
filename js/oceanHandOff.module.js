@@ -1,3 +1,5 @@
+import { withoutSstRing } from './sstMeans.module.js';
+
 /*
  * The hand-off of asynchronous coupling (scripts/asyncSpinup.sh): a
  * decoded coupled state whose ocean, sea ice and sea surface are taken
@@ -19,9 +21,8 @@ export function withOceanOf(coupled, ocean, land) {
   if (!ocean.ocean || !ocean.ocean.h) throw new Error('the state to take the ocean from has no ocean');
   const sea = (mine, theirs) => Float32Array.from(mine, (x, i) => (land[i] ? x : theirs[i]));
   const concentration = ocean.concentration ? (coupled.concentration ? sea(coupled.concentration, ocean.concentration) : Float32Array.from(ocean.concentration)) : null;
-  const { sstMeans, sstMeanDays, sstSum, sstSamples, ...kept } = coupled;
   return {
-    ...kept,
+    ...withoutSstRing(coupled),
     surfaceT: sea(coupled.surfaceT, ocean.surfaceT),
     ice: sea(coupled.ice, ocean.ice),
     concentration,

@@ -122,6 +122,19 @@ export function encodeState(state, { f64 = [] } = {}) {
   return bytes;
 }
 
+/*
+ * The names of a decoded state's float64 arrays, as encodeState's `f64`
+ * takes them, so that the state written again keeps their precision.
+ */
+export function f64Names(saved) {
+  const names = [];
+  for (const [key, value] of Object.entries(saved)) {
+    if (value instanceof Float64Array) names.push(key);
+    else if (GROUPS.includes(key) && value) for (const [inner, values] of Object.entries(groupArrays(value))) if (values instanceof Float64Array) names.push(`${key}.${inner}`);
+  }
+  return names;
+}
+
 async function sha256Hex(bytes) {
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
