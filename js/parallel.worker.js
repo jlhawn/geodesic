@@ -88,7 +88,7 @@ function run(phase) {
 post({ type: 'ready', index });
 let generation = 0;
 for (;;) {
-  Atomics.wait(ctrl, 0, generation);
+  while (Atomics.load(ctrl, 0) === generation) Atomics.wait(ctrl, 0, generation);
   generation = Atomics.load(ctrl, 0);
   const phase = Atomics.load(ctrl, 1);
   if (phase === PHASE.EXIT) break;
