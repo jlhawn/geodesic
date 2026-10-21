@@ -11,7 +11,8 @@
 # ENDED_<PREFIX>; its next segment would load the new code) unless
 # ALLOW_RUNNING=1. The data the model reads
 # is tracked and travels with it (data/topography_0p25.bin,
-# woa_annual_1deg.bin, subgrid_N*.bin, radiationBenchmark.json); after
+# topography2022_0p25.bin, landice_0p25.bin, woa_annual_1deg.bin,
+# subgrid_*N*.bin, radiationBenchmark.json); after
 # the copy the instance's HEAD and the size of every file in data/ are
 # checked against the stage. A checkout with uncommitted changes to
 # tracked files is refused unless ALLOW_DIRTY=1 (the stage is the
@@ -37,7 +38,7 @@ git clone -q --no-checkout --depth 1 --filter=blob:none --upload-pack='git -c up
   && git -C "$STAGE/repo" sparse-checkout set --no-cone '/*' '!/runs/' 2>/dev/null \
   && git -C "$STAGE/repo" checkout -q "$commit" 2>/dev/null || { echo "staging $commit failed" >&2; exit 1; }
 [ "$(git -C "$STAGE/repo" rev-parse HEAD)" = "$commit" ] || { echo "the stage is not at $commit" >&2; exit 1; }
-for f in data/topography_0p25.bin data/woa_annual_1deg.bin data/subgrid_N64.bin data/subgrid_N128.bin; do
+for f in data/topography_0p25.bin data/topography2022_0p25.bin data/landice_0p25.bin data/woa_annual_1deg.bin data/subgrid_N64.bin data/subgrid_N128.bin data/subgrid_etopo2022_N64.bin data/subgrid_etopo2022_N128.bin; do
   [ -s "$STAGE/repo/$f" ] || { echo "$f is not in $commit" >&2; exit 1; }
 done
 kb() { du -sk "$1" | awk '{ print $1 }'; }

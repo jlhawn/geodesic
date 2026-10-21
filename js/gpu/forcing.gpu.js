@@ -130,7 +130,7 @@ export async function createForcingRecorder(model, from = null) {
       const fields = Object.fromEntries(SUMMED.map((name, n) => [name, Float32Array.from(views[n], (x) => x / (PER_SECOND.has(name) ? seconds : steps))]));
       fields.stress = Float32Array.from(views[SUMMED.length], (x) => x / Math.max(1, oceanSteps));
       fields.runoff = model.land ? Float32Array.from(model.land.runoff, (x, i) => (x - runoffBefore[i]) / seconds) : new Float32Array(C);
-      const bytes = encodeForcing({ N: Math.round(Math.sqrt((C - 2) / 10)), ...gridHeader(mesh), day, time: model.time, seconds, steps, oceanSteps }, fields);
+      const bytes = encodeForcing({ N: Math.round(Math.sqrt((C - 2) / 10)), ...gridHeader(mesh), geography: model.geographyRecord ?? null, day, time: model.time, seconds, steps, oceanSteps }, fields);
       device.queue.writeBuffer(acc, 0, new Float32Array(A.total));
       runoffBefore = model.land ? Float64Array.from(model.land.runoff) : null; timeBefore = model.time;
       steps = 0; oceanSteps = 0;

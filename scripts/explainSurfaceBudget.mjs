@@ -15,7 +15,7 @@ const file = process.argv[2] ?? new URL('../runs/eleven64_day1825.bin', import.m
 const out = process.argv[3] ?? new URL('../explain/data/surface_budget.json', import.meta.url).pathname;
 const saved = await readState(file);
 const dt = 1350 * 16 / saved.N, steps = Number(process.env.STEPS ?? Math.round(86400 / dt));
-const topography = readTopography();
+const topography = readTopography(saved);
 const model = createModel(stateGrid(saved, topography).mesh, { ...withCadence({ ocean: false }, dt, saved.N), ocean: false, levels: savedLevels(saved), topography });
 const { moist, boundaryLayer, radiation, mesh, geography } = model, C = mesh.nCells;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => model.state[a].set(saved[name]));

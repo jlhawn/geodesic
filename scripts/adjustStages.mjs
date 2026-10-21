@@ -46,7 +46,7 @@ device.createShaderModule = (descriptor) => {
 };
 
 const moistOptions = { boundaryCondensation: BC };
-const topography = readTopography();
+const topography = readTopography(saved);
 const model = createModel(stateGrid(saved, topography).mesh, { ocean: false, levels, moist: moistOptions, topography });
 const { core, moist, boundaryLayer: bl, radiation, mesh } = model, C = mesh.nCells, { K, geopotential, g } = core.diagnostics, dt = 1350 * 16 / saved.N;
 ['pi', 'theta', 'u', 'surfaceT', 'q', 'qc', 'ice'].forEach((name, a) => model.state[a].set(saved[name]));

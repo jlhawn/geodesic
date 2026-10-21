@@ -1,6 +1,6 @@
 import { Grid, DEFAULT_RELAX } from './grid.module.js';
 import { buildMesh } from './mesh.module.js';
-import { createGeography, topographyFromInt16 } from './geography.module.js';
+import { createGeography, readTopography, savedGeography, TOPOGRAPHIES } from './geography.module.js';
 import { SIDEREAL_DAY } from './model.module.js';
 
 /*
@@ -10,9 +10,10 @@ import { SIDEREAL_DAY } from './model.module.js';
  * `topography` matches the saved ocean's dry columns exactly winning, else
  * the one with the fewest mismatches. A state with no ocean, or no dry
  * column, or nothing to match against, is on the default grid. Under node
- * an undefined `topography` is the repository's; null matches nothing.
- * The candidates' land masks are kept per topography, so a second state
- * of the same size is matched without building a grid.
+ * an undefined `topography` is the repository's raster of the state's
+ * recorded geography; null matches nothing; a named raster other than the
+ * state's is refused. The candidates' land masks are kept per topography,
+ * so a second state of the same size is matched without building a grid.
  */
 export const STATE_RELAX = [DEFAULT_RELAX, 8];
 
@@ -46,14 +47,13 @@ export function maskMismatches(dry, land) {
   return count;
 }
 
-let repository;
-function repositoryTopography() {
-  if (repository !== undefined) return repository;
+const repository = new Map();
+function repositoryTopography(name) {
+  if (repository.has(name)) return repository.get(name);
   const fs = globalThis.process?.getBuiltinModule?.('node:fs');
-  const url = new URL('../data/topography_0p25.bin', import.meta.url);
-  if (!fs || !fs.existsSync(url)) return (repository = null);
-  const bytes = fs.readFileSync(url);
-  return (repository = topographyFromInt16(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)));
+  const url = new URL(`../data/${TOPOGRAPHIES[name]}`, import.meta.url);
+  repository.set(name, fs && fs.existsSync(url) ? readTopography(name) : null);
+  return repository.get(name);
 }
 
 export const gridMesh = (grid) => buildMesh(grid, { omega: 2 * Math.PI / SIDEREAL_DAY });
@@ -76,9 +76,11 @@ function landMask(N, relax, topography, geography, built) {
 }
 
 function find(saved, topography, { candidates = STATE_RELAX, geography = {} }, built) {
+  const named = savedGeography(saved).topography;
+  if (topography?.name && topography.name !== named) throw new Error(`the state is on the ${named} topography, not ${topography.name}: read its geography with stateGeography`);
   const recorded = savedRelax(saved);
   if (recorded !== null) return { relax: recorded, source: 'header', mismatches: null };
-  const dry = savedDryColumns(saved), land = topography === undefined ? repositoryTopography() : topography;
+  const dry = savedDryColumns(saved), land = topography === undefined ? repositoryTopography(named) : topography;
   if (!dry || !land || !dry.some(Boolean)) return { relax: candidates[0], source: 'default', mismatches: null };
   let best = null;
   for (const relax of candidates) {

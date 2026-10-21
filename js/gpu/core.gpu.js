@@ -52,7 +52,7 @@ export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orogra
   // The RK stages' scratch fields and the closures' share memory: neither set is read outside its own passes.
   const stage = seq([['FLUX', KE], ['QV', KV], ['QE', KE], ['PHI', KC]]), closure = seq([['LAPA', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC]]);
   const D = { ...stage, ...closure, ...seq([['SCRATCH', Math.max(stage.total, closure.total)], ['PSD', (K + 1) * C], ['EXL', KC], ['EXM', KC], ['THV', KC], ['GEO', KC], ['PIV', V], ['DRAG', C], ['WIND', C], ['LNPI', C], ['DISS', KE], ['SPM', 2 * SPK * SPB]]) };
-  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['CLOUDK', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['CUFALL', KC], ['CURESERVE', KC], ['CUFROZEN', KC], ['CURAIN', C], ['CUDEEP', C], ['CUBASE', C], ['CUSHALLOW', C], ['CUSNOW', C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E], ['FOG', C], ['FOGMEAN', C], ['SUBTV', subcloudLayers * C], ['PEN', C], ['TRANS', C], ...(heldRadiation ? HELD_RADIATION.map((name) => [name, name === 'RADP' ? 8 : name === 'RADSW' || name === 'RADDF' ? KC : C]) : []), ...(skin ? [['WARM', C], ['COOL', C]] : [])]);
+  const PH = seq([['SFLUX', C], ['OFLUX', C], ['CAP', C], ['ADIF', C], ['MIX', KC], ['DEPTH', C], ['RAIN', C], ['ABS', C], ['OLR', C], ['SH', C], ['EVAP', C], ['INS', C], ['REFL', C], ['TAU', C], ['CONV', C], ['COND', C], ['SWDN', C], ['LAND', C], ['DRAG', C], ['SOIL', C], ['SNOW', C], ['CONC', C], ['RUNOFF', C], ['DISCHARGE', C], ['ICELOSS', C], ['VEG', C], ['SURF', C], ['DECK', C], ['DECKF', C], ['MLMSUB', C], ['MLMCOVER', C], ['MLMWATER', C], ['MLMENT', C], ['MLMH', C], ['MLMGATE', C], ['MLMTOP', C], ['ATMSW', C], ['CONVMEAN', C], ['CONDMEAN', C], ['STEPRAIN', C], ['ENTRAIN', C], ['BUOY', C], ['USTAR', C], ['STRAT', C], ['REGIME', C], ['MIXTOP', C], ['VRAD', C], ['CTCOOL', C], ['CLOUDK', C], ['LWH', KC], ['CUMF', C], ['CUTOP', C], ['CUCOVER', cumulusLayers * C], ['CUWATER', cumulusLayers * C], ['CUFALL', KC], ['CURESERVE', KC], ['CUFROZEN', KC], ['CURAIN', C], ['CUDEEP', C], ['CUBASE', C], ['CUSHALLOW', C], ['CUSNOW', C], ['MOMU', (momentumLayers + 1) * C], ['MOMK', momentumLayers * C], ['MOMD', (momentumLayers + 1) * C], ['MOMKD', momentumLayers * C], ['MOMS', C], ['ABSSUM', C], ['ATMSUM', C], ['OLRSUM', C], ['INSSUM', C], ['REFLSUM', C], ['ASRMEAN', C], ['OLRMEAN', C], ['ALBMEAN', C], ['ABSCLRSUM', C], ['OLRCLRSUM', C], ['SWCREMEAN', C], ['LWCREMEAN', C], ['SNOWALB', C], ['CANOPY', C], ['SEASONL', C], ['SEASONW', C], ['RAINMEAN', C], ['DEMAND', C], ['SOILC', C], ['LITTERM', C], ['DECAYM', C], ['SNOWFREEV', C], ['LWSFCSUM', C], ['HEATX', C], ['REFX', C], ['SDRAG', C], ['STRESS', E], ['STRESSOK', 1], ['GWE', K * waveCells], ['GWN', K * waveCells], ['XWIND', C], ['OSTD', C], ['OANI', C], ['OORI', C], ['OSLP', C], ['OBETA', orographyLayers * C], ['OWAVE', orographyLayers * C], ['ODIR', 3 * C], ['OBLOCK', C], ['OLAUNCH', C], ['OSTRESS', E], ['OFLT', C], ['TOFD', formLayers * C], ['FSTRESS', E], ['FOG', C], ['FOGMEAN', C], ['SUBTV', subcloudLayers * C], ['PEN', C], ['TRANS', C], ...(heldRadiation ? HELD_RADIATION.map((name) => [name, name === 'RADP' ? 8 : name === 'RADSW' || name === 'RADDF' ? KC : C]) : []), ...(skin ? [['WARM', C], ['COOL', C]] : [])]);
   const FR = seq([['T', C], ['Z', C], ['RH', C], ['SPD', C], ['WIND', 3 * C], ['DP', C], ['WB', C], ['MI', C], ['W', C], ['WM', C], ['TPW', C], ['TCW', C], ['CLOW', C], ['CMID', C], ['CHIGH', C], ['CCU', C], ['CDECK', C], ['CTOP', C], ['CBASE', C], ['MSLP', C], ['RAIN', C], ['RUNOFF', C], ['RDONE', C], ['PART', REDUCED.length * groupsOf(C)]]);
   return { C, E, V, K, KC, KE, KV, SPK, SPB, MI, MF, LV, S, D, PH, FR };
 }
@@ -150,7 +150,8 @@ const REDUCED_SETUP = `    let a = MF[F_AREA + i]; let pi = IN[S_PI + i];
  * its memory, WM ← WM·P[4] + smoothed·(1 − P[4]).
  * frameRain folds the step accumulators into the three-hour rain,
  * S ← S·P[1] + rain, and the running runoff, which moves to RDONE for
- * the host to count when the diagnostics are taken (P[2] = 1); when
+ * the host to count when the diagnostics are taken (P[2] = 1), and
+ * clears the running discharge, which the ocean has taken; when
  * P[5] is 86400 over the seconds since the last frame, it turns the
  * convective and large-scale sums into their means in mm/d, CONVMEAN and
  * CONDMEAN, and the fog's FOG into FOGMEAN, and every frame clears the
@@ -332,7 +333,7 @@ const CLOUD_PATH: f32 = ${CLOUD_OPACITY_PATH}; const CLOUD_SEEN_OPACITY: f32 = $
   let tally = OUT[FR_RUNOFF + i] + PH[PH_RUNOFF + i];
   if (P[2] > 0.5) { OUT[FR_RDONE + i] = tally; OUT[FR_RUNOFF + i] = 0.0; } else { OUT[FR_RUNOFF + i] = tally; }
   if (P[5] > 0.0) { PH[PH_CONVMEAN + i] = PH[PH_CONV + i] * P[5]; PH[PH_CONDMEAN + i] = PH[PH_COND + i] * P[5]; PH[PH_FOGMEAN + i] = PH[PH_FOG + i] * P[5]; }
-  PH[PH_RAIN + i] = 0.0; PH[PH_RUNOFF + i] = 0.0; PH[PH_CONV + i] = 0.0; PH[PH_COND + i] = 0.0; PH[PH_FOG + i] = 0.0;
+  PH[PH_RAIN + i] = 0.0; PH[PH_RUNOFF + i] = 0.0; PH[PH_DISCHARGE + i] = 0.0; PH[PH_CONV + i] = 0.0; PH[PH_COND + i] = 0.0; PH[PH_FOG + i] = 0.0;
   if (P[6] > 0.0) {
     PH[PH_ASRMEAN + i] = PH[PH_ABSSUM + i] * P[6]; PH[PH_OLRMEAN + i] = PH[PH_OLRSUM + i] * P[6];
     PH[PH_ALBMEAN + i] = select(0.0, PH[PH_REFLSUM + i] / PH[PH_INSSUM + i], PH[PH_INSSUM + i] > 0.0);
@@ -774,7 +775,7 @@ export const PHYSICS_DEFAULTS = {
   richardsonCritical: 0.5, vonKarman: 0.4, searchTop: 0.5, stability: true, turbulence: 'moist', cloudTop: {},
   boundaryCover: 'variance', varianceFloor: 0.002, varianceScale: 5, mixingLength: 300, stableMixingLength: 30, varianceCover: 'deficit', buoyancyLength: null, deckRegime: 'inversion', deckBypass: false,
   landed: false, landHeatCapacity: 1e6, bucketCapacity: 150, wetnessThreshold: 0.75, landAlbedo: 0.2, snowAlbedo: 0.55, fullSnow: 20,
-  vegetation: true, bareAlbedo: 0.30, vegetatedAlbedo: 0.13, soilDarkening: 'surface', wetSoilAlbedo: 0.15, darkeningWetness: null, rootZoneCapacity: 300, dryWetness: 0.1, wetWetness: 0.6, iceSheetAlbedo: 0.8,
+  vegetation: true, bareAlbedo: 0.30, vegetatedAlbedo: 0.13, soilDarkening: 'surface', wetSoilAlbedo: 0.15, darkeningWetness: null, rootZoneCapacity: 300, dryWetness: 0.1, wetWetness: 0.6, iceSheetAlbedo: 0.8, iceSheetBalance: false, snowCap: 1000, bareIceAlbedo: 0.5,
   oldSnowAlbedo: 0.50, snowMasking: true, forestSnowAlbedo: 0.27, closedCanopy: 0.7, canopyMemory: 365 * 86400,
   treeline: true, seasonThreshold: 0.9, minimumSeason: 94, treelineWarmth: [6.4, 8.0], seasonMemory: 3 * 365 * 86400, treeGrowthTime: 10 * 365 * 86400, treeDeclineTime: 3 * 365 * 86400,
   treeMoisture: true, moistureMemory: 3 * 365 * 86400, forestAridity: FOREST_ARIDITY, grassland: true, forestAlbedo: 0.13, grassAlbedo: 0.20, grassSnowDarkening: 0.06, ...SOIL_CARBON,
@@ -1123,6 +1124,7 @@ export async function createGpuCore(mesh, {
       ph[L.PH.LITTERM + i] = retained.litterMean ? retained.litterMean[i] : 0;
       ph[L.PH.DECAYM + i] = retained.decayMean ? retained.decayMean[i] : 0;
       ph[L.PH.SNOWFREEV + i] = retained.snowFreeCover ? retained.snowFreeCover[i] : 0;
+      ph[L.PH.ICELOSS + i] = retained.iceLoss ? retained.iceLoss[i] : 0;
       ph[L.PH.SURF + i] = retained.surface ? retained.surface[i] : 0;
       ph[L.PH.MLMSUB + i] = retained.mlmSubsidence ? retained.mlmSubsidence[i] : 0;
       ph[L.PH.MLMH + i] = retained.mlmHeight ? retained.mlmHeight[i] : 0;
@@ -1156,8 +1158,8 @@ export async function createGpuCore(mesh, {
     }
     dragCall = -1;
   }
-  function uploadLand({ soil, snow, vegetation, surface = null, snowAlbedo = null, canopy = null, seasonLength = null, seasonWarmth = null, rainMean = null, demandMean = null, soilCarbon = null, litterMean = null, decayMean = null, snowFreeCover = null }) {
-    retained.soil = soil; retained.snow = snow; retained.vegetation = vegetation; retained.surface = surface; retained.snowAlbedo = snowAlbedo; retained.canopy = canopy; retained.seasonLength = seasonLength; retained.seasonWarmth = seasonWarmth; retained.rainMean = rainMean; retained.demandMean = demandMean; retained.soilCarbon = soilCarbon; retained.litterMean = litterMean; retained.decayMean = decayMean; retained.snowFreeCover = snowFreeCover;
+  function uploadLand({ soil, snow, vegetation, surface = null, snowAlbedo = null, canopy = null, seasonLength = null, seasonWarmth = null, rainMean = null, demandMean = null, soilCarbon = null, litterMean = null, decayMean = null, snowFreeCover = null, iceLoss = null }) {
+    retained.soil = soil; retained.snow = snow; retained.vegetation = vegetation; retained.surface = surface; retained.snowAlbedo = snowAlbedo; retained.canopy = canopy; retained.seasonLength = seasonLength; retained.seasonWarmth = seasonWarmth; retained.rainMean = rainMean; retained.demandMean = demandMean; retained.soilCarbon = soilCarbon; retained.litterMean = litterMean; retained.decayMean = decayMean; retained.snowFreeCover = snowFreeCover; retained.iceLoss = iceLoss;
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.LITTERM, litterMean ? Float32Array.from(litterMean) : new Float32Array(C));
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.DECAYM, decayMean ? Float32Array.from(decayMean) : new Float32Array(C));
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.SNOWFREEV, snowFreeCover ? Float32Array.from(snowFreeCover) : new Float32Array(C));
@@ -1173,6 +1175,8 @@ export async function createGpuCore(mesh, {
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.VEG, Float32Array.from(vegetation));
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.SURF, surface ? Float32Array.from(surface) : new Float32Array(C));
     device.queue.writeBuffer(buffers.PH, 4 * L.PH.RUNOFF, new Float32Array(C));
+    device.queue.writeBuffer(buffers.PH, 4 * L.PH.DISCHARGE, new Float32Array(C));
+    device.queue.writeBuffer(buffers.PH, 4 * L.PH.ICELOSS, iceLoss ? Float32Array.from(iceLoss) : new Float32Array(C));
   }
   function uploadIce(concentration) {
     retained.concentration = concentration;

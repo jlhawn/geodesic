@@ -42,7 +42,7 @@
 // (as in spinup.mjs).
 import { readFileSync, writeFileSync, readdirSync, renameSync, unlinkSync, appendFileSync } from 'node:fs';
 import { stateGrid, gridHeader } from '../js/stateGrid.module.js';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography, geographyHeader } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
 import { savedDeckField, DECK_FIELDS, MOIST_FIELDS, RADIATION_FIELDS } from '../js/physics/regrid.module.js';
@@ -85,8 +85,8 @@ if (!from) throw new Error(`no ${TAG}_yearYYYY.bin in ${OUT} and no STATE to sta
 const saved = await decodeState(new Uint8Array(readFileSync(from)));
 if (saved.N !== N) throw new Error(`${from} is N=${saved.N}`);
 
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-const model = await createGpuModel(stateGrid(saved, topography).mesh, { topography, ocean: OCEAN, radiation: RADIATION, levels: savedLevels(saved) });
+const { record, topography, geography, land: landOptions } = stateGeography(saved);
+const model = await createGpuModel(stateGrid(saved, topography).mesh, { topography, geography, land: landOptions, ocean: OCEAN, radiation: RADIATION, levels: savedLevels(saved) });
 const { mesh, core, state, gpu } = model;
 const C = mesh.nCells, dt = 1350 * 16 / N, perDay = Math.round(86400 / dt), everySteps = model.oceanEngine.everySteps, oceanDt = everySteps * dt;
 const doneBefore = existing.length ? saved.oceanDays ?? (saved.oceanYears ?? 0) * DAYS_PER_YEAR : 0;
@@ -143,7 +143,7 @@ async function save(done, step, read = null) {
   const { o, surfaceT, ice, concentration } = read ?? await readSurface();
   const name = nameAt(done, step), landState = await model.land.serialize();
   writeFileSync(`${OUT}/${name}.partial`, encodeState({
-    N, ...gridHeader(mesh), K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: !!model.surfaceGeopotential, levels: core.levels,
+    N, ...gridHeader(mesh), K: core.K, day: baseDay + done, time: baseTime + done * 86400 + step * dt, terrain: !!model.surfaceGeopotential, ...geographyHeader(record), levels: core.levels,
     oceanYears: Math.floor(done / DAYS_PER_YEAR), oceanDays: done, ...(step ? { oceanStep: step } : {}),
     pi: saved.pi, theta: saved.theta, u: saved.u, surfaceT, q: saved.q, qc: saved.qc, ice, concentration, mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight, mlmGate: model.radiation.mlmGate,
     ...Object.fromEntries([...Object.keys(MOIST_FIELDS), ...Object.keys(RADIATION_FIELDS)].filter((name) => saved[name]).map((name) => [name, saved[name]])),

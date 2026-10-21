@@ -28,9 +28,11 @@ continental interiors, a cold winter continental high, seasonal snow
 cover, and wind-driven gyres with western boundary currents in the
 ocean layer.
 
-**Data.** ETOPO 2022 (ice-surface elevation) downsampled to a 0.5°
-grid of int16 metres, about 500 KB, committed under `data/` with the
-script that made it. Per cell the mesh takes the area mean elevation
+**Data.** ETOPO 2022 (ETOPO1 for states saved before it) block-averaged
+to a 0.25° grid of int16 meters, about 2 MB each, committed under `data/`
+with the scripts that made them (`scripts/landIce.mjs`,
+`scripts/topography.mjs`). ETOPO 2022's surface is the bed with the ice
+on top where the ice is grounded. Per cell the mesh takes the area mean elevation
 and the land fraction (share of sub-cells above sea level); a cell is
 land when its fraction exceeds one half. Fractional cells are a later
 refinement. M17 reuses the same file for elevation.

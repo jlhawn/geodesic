@@ -5,14 +5,14 @@
 //   node scripts/figures/stateMaps.mjs <state.bin> <out.json>
 import { writeFileSync } from 'node:fs';
 import { createGeography } from '../../js/geography.module.js';
-import { readState, readTopography, figureHeader, DEG, rounded } from './figureState.mjs';
+import { readState, readGeography, figureHeader, DEG, rounded } from './figureState.mjs';
 import { stateGrid } from '../../js/stateGrid.module.js';
 
 const [file, out] = process.argv.slice(2);
 if (!file || !out) { console.error('usage: node scripts/figures/stateMaps.mjs <state.bin> <out.json>'); process.exit(2); }
 const saved = await readState(file);
-const mesh = stateGrid(saved).mesh, C = mesh.nCells;
-const geo = createGeography(mesh, readTopography());
+const ground = readGeography(saved), mesh = stateGrid(saved, ground.topography).mesh, C = mesh.nCells;
+const geo = createGeography(mesh, ground.topography, ground.geography);
 const { ocean, land } = saved, zero = new Float32Array(C);
 const vegetation = land.vegetation ?? zero, trees = land.canopy ?? zero, snow = land.snow ?? zero, concentration = saved.concentration ?? zero;
 const columns = { lat: [], lon: [], land: [], iceSheet: [], ice: [], concentration: [], snow: [], sst: [], ts: [], vegetation: [], trees: [] };

@@ -37,7 +37,7 @@ export const HEAT_REFERENCE = Math.fround(273.15), SALT_REFERENCE = Math.fround(
 export const OCEAN_DEFAULTS = {
   minimumDepth: 50, flatDepth: 4000, thermoclineTilt: 0.3,
   density: 1025, specificHeat: 3985, referenceS: 35, gravity: 9.81,
-  vorticityCentring: 0.5, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917, langmuir: 2,
+  vorticityCentring: 0.5, iceSalinity: 5, iceStressTransmission: 0.8, iceDensity: 917, latentHeatFusion: 3.34e5, langmuir: 2,
   momentumDepth: 50, shearViscosity: 1e-2, backgroundViscosity: 1e-4, bottomDrag: 3e-3, closureHours: 12, closureSpacing: CLOSURE_SPACING, everySteps: 4,
   eddyDiffusivity: 1000, eddyTaperDepth: 200, penetration: 'IB',
   gustiness: 3,
@@ -680,7 +680,7 @@ ${offsetLines}
 ${bLines}
 ${rhoLine}
 ${labelLine}
-${constLine('RHO0', o.density)} ${constLine('RHOCP', o.density * o.specificHeat)}
+${constLine('RHO0', o.density)} ${constLine('RHOCP', o.density * o.specificHeat)} ${constLine('OLFUS', o.latentHeatFusion)}
 ${constLine('OGRAV', o.gravity)}
 ${constLine('EPSO', EPS)} ${constLine('THINO', THIN)} ${constLine('PVFLOOR', PV_FLOOR)} ${constLine('SPEEDLIM', SPEED_LIMIT)}
 ${langmuirHead}${constLine('MOMDEPTH', o.momentumDepth)} ${constLine('CENTRING', o.vorticityCentring)} ${constLine('ICESAL', o.iceSalinity)} ${constLine('TRANSMIT', o.iceStressTransmission)} ${constLine('ICEDENS', o.iceDensity)}
@@ -1081,6 +1081,8 @@ ${o.implicitStress ? '  if (PH[PH_STRESSOK] > 0.5) { OD[O_STRESS + e] = through 
   IN[wOff(0) + i] = w;
   OD[O_FRESH + i] = 0.0;
   OD[O_PREVVOL + i] = volume;
+  IN[qOff(0) + i] -= OLFUS * OD[O_CALVED + i] / RHOCP;
+  OD[O_CALVED + i] = 0.0;
 }`,
     oWriteSurface: `${K}  let i = ${idx}; if (i >= C) { return; }
   if (OD[O_CMASK + i] < 0.5) { PH[PH_OFLUX + i] = 0.0; return; }
@@ -1102,13 +1104,18 @@ ${o.penetration ? '  PH[PH_TRANS + i] = transmitted(IN[hOff(0) + i]);\n' : ''}  
   let delta = select(rain, rain - seen, rain >= seen);
   if (OD[O_CMASK + i] > 0.5) {
     var fresh = PH[PH_EVAP + i] * P[6] - delta;
+    var calved = 0.0;
     for (var p = i32(OD[O_DRAINSTART + i]); p < i32(OD[O_DRAINSTART + i + 1]); p++) {
       let j = i32(OD[O_DRAINCELL + p]);
       let runoff = PH[PH_RUNOFF + j]; let ran = OD[O_RUNOFFSEEN + j];
       fresh -= select(runoff, runoff - ran, runoff >= ran) * OD[O_DRAINW + p];
       OD[O_RUNOFFSEEN + j] = runoff;
+      let shed = PH[PH_DISCHARGE + j]; let taken = OD[O_DISCHARGESEEN + j];
+      calved += select(shed, shed - taken, shed >= taken) * OD[O_DRAINW + p];
+      OD[O_DISCHARGESEEN + j] = shed;
     }
     OD[O_FRESH + i] += fresh;
+    OD[O_CALVED + i] += calved;
   }
   OD[O_RAINSEEN + i] = rain;
 }`,
@@ -1234,7 +1241,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     ['ETA', C], ['FRESH', C], ['PREVT0', C], ['PREVVOL', C], ['ICED', C], ['STRESS', E],
     ['SURFT', C], ['SURFICE', C], ['SURFCONC', C], ['T0', C], ['S0', C], ['RAINSEEN', C],
     ['EMASK', E], ['CMASK', C], ['BATH', C], ['FEDGE', E],
-    ['RUNOFFSEEN', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
+    ['RUNOFFSEEN', C], ['DISCHARGESEEN', C], ['CALVED', C], ['DRAINSTART', C + 1], ['DRAINCELL', Math.max(1, drainCells.length)], ['DRAINW', Math.max(1, drainCells.length)],
     ['EDDYK', E],
     ['PR', 2 * L * C], ['MIXED', C], ['BLD', C], ['DRIED', C], ['FCELL', C], ['SILL', E],
     ...(third ? [['BEY', 2 * E], ['BED', 2 * E]] : []),
@@ -1474,6 +1481,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   }
   function forgetAccumulated(which) {
     device.queue.writeBuffer(ob.OD, 4 * (which === 'rain' ? OD.RAINSEEN : OD.RUNOFFSEEN), new Float32Array(C));
+    if (which !== 'rain') device.queue.writeBuffer(ob.OD, 4 * OD.DISCHARGESEEN, new Float32Array(C));
   }
 
   /*
@@ -1692,6 +1700,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
     if (drainCells.length) { device.queue.writeBuffer(ob.OD, 4 * OD.DRAINCELL, Float32Array.from(drainCells)); device.queue.writeBuffer(ob.OD, 4 * OD.DRAINW, Float32Array.from(drainWeights)); }
     device.queue.writeBuffer(ob.OD, 4 * OD.PREVVOL, restart ? Float32Array.from(restart.previousIceVolume) : Float32Array.from(ice, (_, i) => coverOf(ice, concentration, i) * ice[i]));
     if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.FRESH, Float32Array.from(restart.fresh));
+    if (restart && restart.calved && restart.calved.length === C) device.queue.writeBuffer(ob.OD, 4 * OD.CALVED, Float32Array.from(restart.calved));
     if (restart) device.queue.writeBuffer(ob.OD, 4 * OD.BUOY, Float32Array.from(restart.buoyancy));
     const capacity = restart ? restart.capacity : Float64Array.from({ length: C }, (_, i) => o.density * o.specificHeat * Math.max(h[i], 1));
     const kept = (name) => (restart && restart[name] && restart[name].length === C ? restart[name] : null);
@@ -1840,25 +1849,26 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
    * exactly as it stands between two ocean steps: the heat and salt
    * contents as stored, Qref and Wref (upload also takes a Q of h·T and a
    * W of h·S), the surface's last temperature and the ice volume it
-   * last saw, the freshwater not yet taken, the heat flux and capacity
+   * last saw, the freshwater not yet taken, the land's ice not yet
+   * melted, `calved`, the heat flux and capacity
    * the surface update is using, the sunlight not yet deposited,
    * `penetrated`, the mixed-layer and boundary-layer depths the column
    * physics left, and with penetration the share of the sunlight that
    * passes the top layer,
    * `transmission`. A saved ocean that carries all of them at this mesh's
-   * sizes, the last two optional, its columns within a meter of this
+   * sizes, the last two and `calved` optional, its columns within a meter of this
    * bathymetry and dry on land, is uploaded as it is, without fitting its
    * columns.
    */
   async function restartArrays() {
     const PHL = core.layout.PH;
-    const [[Qref, Wref], [previousT0, previousIceVolume, fresh, buoyancy, mixedDepths, boundaryDepths], [flux, capacity, penetrated]] = await Promise.all([
+    const [[Qref, Wref], [previousT0, previousIceVolume, fresh, buoyancy, mixedDepths, boundaryDepths, calved], [flux, capacity, penetrated]] = await Promise.all([
       readRanges(device, ob.S, [{ offset: OS.OQ, length: L * C }, { offset: OS.OW, length: L * C }]),
-      readRanges(device, ob.OD, [{ offset: OD.PREVT0, length: C }, { offset: OD.PREVVOL, length: C }, { offset: OD.FRESH, length: C }, { offset: OD.BUOY, length: C }, { offset: OD.MIXED, length: C }, { offset: OD.BLD, length: C }]),
+      readRanges(device, ob.OD, [{ offset: OD.PREVT0, length: C }, { offset: OD.PREVVOL, length: C }, { offset: OD.FRESH, length: C }, { offset: OD.BUOY, length: C }, { offset: OD.MIXED, length: C }, { offset: OD.BLD, length: C }, { offset: OD.CALVED, length: C }]),
       readRanges(device, buffers.PH, [{ offset: PHL.OFLUX, length: C }, { offset: PHL.CAP, length: C }, { offset: PHL.PEN, length: C }]),
     ]);
     const transmission = o.penetration ? (await readRanges(device, buffers.PH, [{ offset: PHL.TRANS, length: C }]))[0] : null;
-    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, buoyancy, flux, capacity, penetrated, mixedDepths, boundaryDepths, ...(transmission ? { transmission } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
+    return Object.fromEntries(Object.entries({ Qref, Wref, previousT0, previousIceVolume, fresh, calved, buoyancy, flux, capacity, penetrated, mixedDepths, boundaryDepths, ...(transmission ? { transmission } : {}) }).map(([name, values]) => [name, Float32Array.from(values)]));
   }
 
   function diagnosticsFrom(sums) {

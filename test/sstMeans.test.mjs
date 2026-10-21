@@ -123,8 +123,8 @@ const statesOnce = async () => (states ??= await windowState());
 
 test('woaSstBias judges a state that carries a whole window by its mean against WOA23 averaged over the window\'s days, and one without, or under --instant, by its instant', async () => {
   const { plain, windowed, days, shift } = await statesOnce();
-  const [mean, instant, forced] = await Promise.all([biasTable([{ path: windowed }], woa, topography), biasTable([{ path: plain }], woa, topography), biasTable([{ path: windowed }], woa, topography, { instant: true })]);
-  const dated = await biasTable(days.map((day) => ({ path: plain, day: day - 0.5 })), woa, topography);
+  const [mean, instant, forced] = await Promise.all([biasTable([{ path: windowed }], woa), biasTable([{ path: plain }], woa), biasTable([{ path: windowed }], woa, { instant: true })]);
+  const dated = await biasTable(days.map((day) => ({ path: plain, day: day - 0.5 })), woa);
   assert.deepEqual(mean.dates.map((d) => [d.kind, d.days, d.length]), [['mean', [701, 730], SST_WINDOW]]);
   assert.deepEqual([instant.dates[0].kind, instant.dates[0].day, forced.dates[0].kind], ['instant', 730, 'instant']);
   let boxes = 0;

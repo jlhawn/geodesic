@@ -12,6 +12,7 @@ import { Stats } from "./stats.module.js";
 import { pickDevice, isMobileBrowser, probeN, PROBE_VERSION, DESKTOP_MAX_N, MOBILE_MAX_N } from "./deviceChoice.module.js";
 import { defaultRunFor } from "./defaultRun.module.js";
 import { CLOUD_RANGES, CLOUD_OPACITY_PATH } from "./frames.module.js";
+import { pickGeography } from "./geography.module.js";
 
 const WIND_MAX = { surface: 25, 1000: 30, 850: 40, 700: 40, 500: 50, 250: 70, 70: 100, 10: 150 };
 const VERTICAL_MAX = { surface: 3, 1000: 3, 850: 10, 700: 10, 500: 10, 250: 10, 70: 3, 10: 1 };
@@ -322,7 +323,7 @@ const VIEW_NOTES = [
   ['Soil water', 'The land bucket: soil water from 50 kg/m² under bare ground to 500 under dense vegetation; evaporation slows as it dries and rain beyond its capacity runs off.'],
   ['Vegetation', 'Plant cover from 0, bare ground, to 1, dense forest. It grows where the bucket stays wet and dies back where it stays dry, over about half a year, and fades under lasting snow; denser cover darkens the ground and deepens the bucket.'],
   ['Snow', 'Snow on land in water equivalent; it falls when the lowest air is below freezing and melts into the bucket.'],
-  ['Elevation', 'The mean elevation of each cell from ETOPO 2022; negative under the sea.'],
+  ['Elevation', 'The mean elevation of each cell from ETOPO 2022 (ETOPO1 for states saved before it), the top of the ice where there are ice sheets; negative under the sea.'],
   ['Coastlines', 'The mesh edges between land and ocean cells, drawn in the Atmosphere and Ocean modes.'],
   ['Misery index', 'How the air feels: the heat index where it is warmer than 26.7 °C, the wind chill where it is colder than 10 °C, the air temperature between.'],
   ['Wet-bulb temperature', 'The coolest a wet surface can get by evaporation at the chosen height; above about 35 °C the body can no longer shed heat.'],
@@ -1006,7 +1007,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     const land = saved.land ? Object.fromEntries(Object.entries(saved.land).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
     const size = (o) => (o ? Object.values(groupArrays(o)).reduce((n, b) => n + b.byteLength, 0) : 0);
     const bytes = size(arrays) + size(ocean) + size(land);
-    return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, grid: saved.grid ?? null, bytes, source: url }, data: { arrays, ocean, land } };
+    return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, grid: saved.grid ?? null, ...pickGeography(saved), bytes, source: url }, data: { arrays, ocean, land } };
   };
   async function refreshSnapshots() {
     const list = await listSnapshots();
@@ -1051,7 +1052,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     } catch (error) { document.getElementById('date').textContent = `download failed: ${error.message}`; return null; }
   }
   async function storeSnapshot(message) {
-    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, grid: message.grid, ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? { ...groupHeader(message.ocean), ...Object.fromEntries(Object.entries(groupArrays(message.ocean)).map(([k, b]) => [k, new Float64Array(b)])) } : null, land: message.land ? Object.fromEntries(Object.entries(message.land).map(([k, b]) => [k, new Float64Array(b)])) : null });
+    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, grid: message.grid, ...pickGeography(message), ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? { ...groupHeader(message.ocean), ...Object.fromEntries(Object.entries(groupArrays(message.ocean)).map(([k, b]) => [k, new Float64Array(b)])) } : null, land: message.land ? Object.fromEntries(Object.entries(message.land).map(([k, b]) => [k, new Float64Array(b)])) : null });
     const name = `Day ${Math.floor(message.day)} · ${new Date().toLocaleString()}`;
     await saveSnapshot({ name, created: Date.now(), ...meta }, data);
     await refreshSnapshots();
@@ -1067,14 +1068,14 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     scheduleUrl();
     render();
     const transfer = [...Object.values(data.arrays), ...(data.ocean ? Object.values(groupArrays(data.ocean)) : []), ...(data.land ? Object.values(data.land) : [])];
-    worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, grid: meta.grid ?? null, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
+    worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, grid: meta.grid ?? null, ...pickGeography(meta), arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
   }
   const slug = (name) => name.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'snapshot';
   async function exportSnapshot(meta) {
     const { data } = await getSnapshot(meta.id);
     if (!data) return;
     document.getElementById('date').textContent = `exporting "${meta.name}"…`;
-    const saved = { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, ...(meta.grid ? { grid: meta.grid } : {}) };
+    const saved = { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, ...(meta.grid ? { grid: meta.grid } : {}), ...pickGeography(meta) };
     for (const [key, buffer] of Object.entries(data.arrays)) saved[key] = new Float64Array(buffer);
     if (data.ocean) saved.ocean = { ...groupHeader(data.ocean), ...Object.fromEntries(Object.entries(groupArrays(data.ocean)).map(([k, b]) => [k, new Float64Array(b)])) };
     if (data.land) saved.land = Object.fromEntries(Object.entries(data.land).map(([k, b]) => [k, new Float64Array(b)]));
