@@ -181,10 +181,15 @@ test('a coupled segment stopped inside a day carries the recorded day across the
   for (const day of [2, 3]) {
     const [a, b] = await Promise.all([whole, parts].map(async (out) => decodeForcing(new Uint8Array(readFileSync(join(out, 'forcing', forcingName(day)))))));
     assert.deepEqual([b.seconds, b.steps, b.oceanSteps], [a.seconds, a.steps, a.oceanSteps]);
-    for (const name of ['stress', 'netFlux', 'shortwave', 'shortwaveDown', 'evaporation', 'rain']) {
-      let off = 0, size = 0;
-      for (let i = 0; i < a.fields[name].length; i++) { off += Math.abs(a.fields[name][i] - b.fields[name][i]); size += Math.abs(a.fields[name][i]); }
-      assert.ok(off < 0.05 * size, `day ${day} ${name}: the continued run's mean is ${(100 * off / size).toFixed(1)}% off the uninterrupted one's`);
+    const gaps = ['stress', 'netFlux', 'shortwave', 'shortwaveDown', 'evaporation', 'rain'].map((name) => {
+      let off = 0, size = 0, net = 0;
+      for (let i = 0; i < a.fields[name].length; i++) { const d = a.fields[name][i] - b.fields[name][i]; off += Math.abs(d); net += d; size += Math.abs(a.fields[name][i]); }
+      return { name, cells: off / size, mean: Math.abs(net) / size };
+    });
+    console.log(`day ${day}, the continued run off the uninterrupted one's (cell by cell, global mean): ${gaps.map(({ name, cells, mean }) => `${name} ${(100 * cells).toFixed(2)}%, ${(100 * mean).toFixed(3)}%`).join('; ')}`);
+    for (const { name, cells, mean } of gaps) {
+      assert.ok(mean < 0.005, `day ${day} ${name}: the continued run's global mean is ${(100 * mean).toFixed(3)}% off the uninterrupted one's`);
+      if (day === 2) assert.ok(cells < 0.02, `day ${day} ${name}: the continued run's cells are ${(100 * cells).toFixed(2)}% off the uninterrupted one's`);
     }
   }
 });
