@@ -117,6 +117,22 @@ export function closureCoefficient(spacing, closureHours, closureSpacing = CLOSU
   return closureHours > 0 ? Math.pow(spacing / Math.PI, 4) / (closureHours * 3600) * Math.max(1, closureSpacing / spacing) ** 3 : 0;
 }
 
+/*
+ * The longest step of the dynamics: one radian of the fastest inertial
+ * rotation on the mesh. The layers carry the Coriolis force explicitly,
+ * and the part of its depth sum that the barotropic solver's f·U⊥ misses
+ * (a large part where the depth changes between neighboring edges) is
+ * held over the step, so longer steps grow inertial oscillations. The
+ * closure's grid-scale damping, about 2Ω on meshes of closureSpacing and
+ * coarser, stays inside RK4's stability region at this step.
+ */
+export function inertialStepLimit(mesh) {
+  let f = 0;
+  for (let e = 0; e < mesh.nEdges; e++) f = Math.max(f, Math.abs(mesh.fEdge[e]));
+  for (let v = 0; v < mesh.nVertices; v++) f = Math.max(f, Math.abs(mesh.fVertex[v]));
+  return 1 / f;
+}
+
 export const EDDY_WAVE_SPEED = 2, EDDY_BOTTOM_TAPER = 100, EDDY_SLACK = 1e-6;
 export function eddyDiffusivities(mesh, kappa, waveSpeed = EDDY_WAVE_SPEED) {
   const { nEdges: E, latEdge, dcEdge, radius, omega } = mesh;
@@ -368,6 +384,7 @@ export function createOcean(mesh, {
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
   const substepLimit = 0.35 * minSpacing / Math.sqrt(g * Math.max(deepest, 1));
+  const inertialLimit = inertialStepLimit(mesh);
 
   const adopting = !!(buffers && buffers.h);
   const shared = (name, n) => new Float64Array(buffers && buffers[name] ? buffers[name] : new SharedArrayBuffer(8 * n));
@@ -743,10 +760,13 @@ export function createOcean(mesh, {
     limited = Atomics.load(counts, 1);
   }
   function step(dt) {
-    dynamics(dt);
-    rescale();
-    if (eddyLimit > 0) eddyTransport(dt);
-    shiftVelocities();
+    const parts = Math.max(1, Math.ceil(dt / inertialLimit)), part = dt / parts;
+    for (let m = 0; m < parts; m++) {
+      dynamics(part);
+      rescale();
+      if (eddyLimit > 0) eddyTransport(part);
+      shiftVelocities();
+    }
   }
   const phases = { dynamics, rescale, eddy: eddyTransport, shift: shiftVelocities, regrid, column: columnPhysics };
 

@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
 import { buildMesh } from '../js/mesh.module.js';
-import { createOcean, beyondCells, limitedEdgeValue, EDGE_TRANSPORTS } from '../js/ocean/layered.module.js';
-import { createGeography, syntheticTopography } from '../js/geography.module.js';
+import { createOcean, beyondCells, limitedEdgeValue, inertialStepLimit, EDGE_TRANSPORTS } from '../js/ocean/layered.module.js';
+import { createGeography, syntheticTopography, topographyFromInt16 } from '../js/geography.module.js';
 import { HYBRID_LAYERS, H_MIN } from '../js/ocean/column.module.js';
 import { seawaterDensity } from '../js/ocean/seawater.module.js';
 import { zonalWindOnEdges, totalHeatSalt, uniformOcean } from './helpers/layered.mjs';
@@ -72,6 +73,34 @@ test('through dynamics, regrid and column physics the hybrid ocean conserves wat
     assert.ok(d.oceanSpeed > 0.01 && d.oceanSpeed < 1, `${edgeTransport}: speed ${d.oceanSpeed}`);
     assert.ok(d.oceanUpperDepth > 5 && d.oceanUpperDepth < 100, `${edgeTransport}: mixed layer ${d.oceanUpperDepth} m`);
   }
+});
+
+test('at a third of the inertial period, N=6\'s coupled ocean step of four hours, the sea of the real topography left alone from rest keeps its currents slow for twelve days', () => {
+  const mesh = meshOf(6), C = mesh.nCells, E = mesh.nEdges;
+  const geography = createGeography(mesh, topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer));
+  const ocean = createOcean(mesh, { vertical: 'hybrid', everySteps: 1, geography });
+  const surfaceT = Float64Array.from({ length: C }, (_, i) => 300 - 25 * Math.sin(mesh.latCell[i]) ** 2), ice = new Float64Array(C), flux = new Float64Array(C), calm = new Float64Array(E);
+  ocean.initialize(surfaceT, ice);
+  let fastest = 0;
+  for (let n = 0; n < 72; n++) {
+    ocean.advance(surfaceT, ice, flux, calm, 4 * 3600);
+    fastest = Math.max(fastest, maxSpeed(ocean));
+  }
+  assert.ok(fastest < 0.5, `currents reach ${fastest} m/s in twelve days`);
+});
+
+test('a step longer than a radian of the fastest inertial rotation takes its dynamics in equal parts that keep water, heat and salt to rounding', () => {
+  const { mesh, ocean, surfaceT, ice, flux } = hybridOcean(8);
+  const wind = zonalWindOnEdges(mesh, (lat) => 0.1 * Math.cos(2 * lat)), step = 4 * 3600;
+  assert.equal(Math.ceil(step / inertialStepLimit(mesh)), 3);
+  ocean.advance(surfaceT, ice, flux, wind, step);
+  const before = totalHeatSalt(ocean, mesh), volume = volumeOf(ocean, mesh);
+  for (let n = 0; n < 6; n++) ocean.advance(surfaceT, ice, flux, wind, step);
+  const after = totalHeatSalt(ocean, mesh);
+  assert.ok(Math.abs(after.heat - before.heat) < 1e-10 * before.heat, `heat ${before.heat} → ${after.heat}`);
+  assert.ok(Math.abs(after.salt - before.salt) < 1e-10 * before.salt, `salt ${before.salt} → ${after.salt}`);
+  assert.ok(Math.abs(volumeOf(ocean, mesh) - volume) < 1e-10 * volume, 'volume');
+  assert.equal(ocean.diagnostics().oceanDried, 0);
 });
 
 test('the beyond cell of each edge lies on the far side of its cell along the edge, joined to it by the recorded edge', () => {

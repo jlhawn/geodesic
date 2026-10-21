@@ -1,5 +1,5 @@
 import { emptyBuffer, readRanges, reductionKernel, finishReduction, reductionGroups, writeInPieces } from './device.module.js';
-import { beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
+import { beyondCells, SHEAR_DIFFUSIVITY, HYCOM_DIFFUSION_SPEED, TRACER_ADVECTIONS, EDGE_TRANSPORTS, LAYER_DENSITIES, LAYER_SALINITIES, THERMOCLINE_DENSITY, EPS, THIN, PV_FLOOR, SPEED_LIMIT, CLOSURE_SPACING, EDDY_BOTTOM_TAPER, EDDY_SLACK, closureCoefficient, inertialStepLimit, eddyDiffusivities, eddyDiffusionLimit, bathymetryFrom, edgeSills, runoffOutlets, abyssalCells, savedDensities, sameDensities, JERLOV, PENETRATION_DEPTH, FRICTION_PER_WIND, CALM_WIND } from '../ocean/layered.module.js';
 import { SEAWATER, SEAWATER_WGSL, seawaterDensity, labelTemperature } from '../ocean/seawater.module.js';
 import { HYBRID_LAYERS, H_MIN, MODE_DEPTH, GENERATORS, labelBoundaries, columnScratch, spaceInterfaces, remapColumn, mixedLayerDepth, transmitted as transmittedShare } from '../ocean/column.module.js';
 import { profileAt } from '../ocean/climatology.module.js';
@@ -1199,6 +1199,7 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   let deepest = 0;
   for (let i = 0; i < C; i++) deepest = Math.max(deepest, D[i]);
   const substepLimit = 0.35 * minSpacing / Math.sqrt(o.gravity * Math.max(deepest, 1));
+  const inertialLimit = inertialStepLimit(mesh);
   const salinityProfile = o.salinityProfile || defaultSalinityProfile;
   let seaCover = null;
 
@@ -1375,14 +1376,17 @@ export function createLayeredOcean(core, { registers = null, ...options } = {}) 
   const shiftPass = (pass, g) => { dispatch(pass, 'oEdgeThickness', g, E); dispatch(pass, 'oVelocityShiftClamp', g, E); };
   let edgesCurrent = false;
   function step(dt) {
-    dynamics(dt);
-    const g = group(ob.S, ob.T);
-    if (eddyLimit > 0) setParams([dt, eddyLimit / dt]);
-    compute((pass) => {
-      rescalePass(pass, g);
-      if (eddyLimit > 0) eddyPasses(pass, g);
-      shiftPass(pass, g);
-    });
+    const parts = Math.max(1, Math.ceil(dt / inertialLimit)), part = dt / parts;
+    for (let m = 0; m < parts; m++) {
+      dynamics(part);
+      const g = group(ob.S, ob.T);
+      if (eddyLimit > 0) setParams([part, eddyLimit / part]);
+      compute((pass) => {
+        rescalePass(pass, g);
+        if (eddyLimit > 0) eddyPasses(pass, g);
+        shiftPass(pass, g);
+      });
+    }
     edgesCurrent = true;
   }
   /*

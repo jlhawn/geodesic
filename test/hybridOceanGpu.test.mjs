@@ -298,3 +298,23 @@ test('with edgeTransport kept the GPU hybrid ocean holds every edge\'s transport
   for (const f of ['h', 'u', 'T', 'S', 'eta']) for (const v of final[f]) assert.ok(Number.isFinite(v), `${f} has a non-finite value`);
   gpuModel.destroy();
 });
+
+test('at a six-hour ocean step, N=4\'s coupled one, the GPU hybrid ocean takes the CPU\'s parts of its dynamics, tracks it over two days at N=8 and keeps its currents slow', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const LONG = 6 * 3600;
+  const { mesh, cpu, surfaceT, ice, stress } = scenario(8), C = mesh.nCells;
+  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: HYBRID });
+  const gpu = gpuModel.oceanEngine;
+  cpu.initialize(Float64Array.from(surfaceT), ice);
+  gpu.initialize(Float64Array.from(surfaceT), ice);
+  const wet = Array.from(cpu.h, (v) => v > 1), flux = new Float64Array(C);
+  await gpu.upload({ ...cpu.serialize(), Q: cpu.Q, W: cpu.W, previousT0: cpu.T0, previousIceVolume: ice, fresh: new Float64Array(C), buoyancy: new Float64Array(C), flux: new Float64Array(C), capacity: cpu.capacity }, Float64Array.from(surfaceT), ice);
+  for (let n = 0; n < 8; n++) {
+    cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, LONG);
+    await gpu.advance(Float64Array.from(surfaceT), ice, stress, LONG);
+  }
+  const final = await gpu.download();
+  compare('eight six-hour steps', cpuFields(cpu, C), final, wet, { h: 1e-2, u: 2e-2, T: 1e-3, S: 1e-4, eta: 1e-2 });
+  const fastest = (u) => u.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  assert.ok(fastest(cpu.u) < 1 && fastest(final.u) < 1, `currents reach ${fastest(cpu.u)} m/s on the CPU and ${fastest(final.u)} on the GPU`);
+  gpuModel.destroy();
+});
