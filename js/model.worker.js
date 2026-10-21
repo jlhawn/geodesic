@@ -588,7 +588,19 @@ async function profile() {
   self.postMessage({ type: 'profile', result: { ...result, N: currentN, dt, queueDepth: QUEUE_DEPTH, pause: pace.pause } });
 }
 
-let lastStart = null, currentN = null;
+let lastStart = null, currentN = null, currentOptions = {};
+
+/*
+ * The model options a run starts with: those its saved state records
+ * (stateFile.module.js), each group overridden by the start message's.
+ */
+const runOptions = (saved, given) => {
+  const options = { ...(given ?? {}) };
+  for (const [group, values] of Object.entries(saved ?? {})) options[group] = { ...values, ...(options[group] ?? {}) };
+  return options;
+};
+const canonical = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value));
+const sameOptions = (a, b) => canonical(a) === canonical(b);
 
 /*
  * What the page is told of the ocean a model runs: its generator and its
@@ -622,7 +634,7 @@ async function snapshot() {
     land = Object.fromEntries(Object.entries(l).map(([k, v]) => [k, Float64Array.from(v).buffer]));
   }
   const transfer = [...Object.values(arrays), ...(ocean ? Object.values(groupArrays(ocean)) : []), ...(land ? Object.values(land) : [])];
-  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), arrays, ocean, land }, transfer);
+  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), options: currentOptions, arrays, ocean, land }, transfer);
   refresh();
 }
 
@@ -637,8 +649,9 @@ async function restore(snapshot) {
   for (const [name, buffer] of Object.entries(snapshot.arrays)) saved[name] = new Float64Array(buffer);
   if (snapshot.ocean) saved.ocean = { ...groupHeader(snapshot.ocean), ...Object.fromEntries(Object.entries(groupArrays(snapshot.ocean)).map(([k, buffer]) => [k, new Float64Array(buffer)])) };
   if (snapshot.land) saved.land = Object.fromEntries(Object.entries(snapshot.land).map(([k, buffer]) => [k, new Float64Array(buffer)]));
+  if (snapshot.options) saved.options = snapshot.options;
   if (model && saved.N === currentN && savedRelax(saved) === null) saved.grid = { relax: stateRelax(saved, currentTopography).relax };
-  if (!model || saved.N !== currentN || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels)) { await start({ ...lastStart, saved, paused: true }); return; }
+  if (!model || saved.N !== currentN || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels) || !sameOptions(runOptions(saved.options, lastStart.options), currentOptions)) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);
   const init = initialState(model, saved, currentN);
@@ -656,7 +669,7 @@ async function restore(snapshot) {
   model.time = saved.time;
   restartRain();
   serving = true;
-  self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, ...oceanMessage(model), ...geographyMessage(model) });
+  self.postMessage({ type: 'ready', N: currentN, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers: lastStart?.workers ?? 1, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
   await sendFrame();
   sourceModel = null;
 }
@@ -669,7 +682,7 @@ async function start(message) {
   }
   const N = message.N ?? saved?.N ?? 16;
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
-  const options = { ...(message.options ?? {}) };
+  const given = runOptions(saved?.options, message.options), options = { ...given };
   if (message.land !== false) { status('loading the topography…', 0.52); options.topography = await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href); options.subgrid = await loadSubgrid(N); }
   if (!saved && message.land !== false && message.climatology !== false) {
     const climatology = await loadOceanClimatology(message.climatology ?? null, 0.53, 0.55);
@@ -693,6 +706,7 @@ async function start(message) {
   model = built;
   if (built.gpu) built.gpu.device.lost.then((info) => { if (info.reason === 'destroyed' || model !== built) return; running = false; self.postMessage({ type: 'halted', day: model.time / 86400, reason: `the GPU device was lost (${info.message || info.reason}) — reload the page` }); });
   currentN = N;
+  currentOptions = given;
   currentTopography = options.topography ?? null;
   dt = step;
   stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round((gpuWanted ? 24 : 8) * 16 / N));
@@ -716,7 +730,7 @@ async function start(message) {
   if (message.subscription) subscription = { ...subscription, ...message.subscription };
   restartRain();
   serving = true;
-  self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, ...oceanMessage(model), ...geographyMessage(model) });
+  self.postMessage({ type: 'ready', N, relax: model.mesh.relax, cells: model.mesh.nCells, layers: model.core.K, levels: Array.from(model.core.levels), dt, day: model.time / 86400, workers, options: currentOptions, ...oceanMessage(model), ...geographyMessage(model) });
   refresh();
   sourceModel = null;
 }

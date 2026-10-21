@@ -1006,7 +1006,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     const land = saved.land ? Object.fromEntries(Object.entries(saved.land).map(([k, v]) => [k, Float64Array.from(v).buffer])) : null;
     const size = (o) => (o ? Object.values(groupArrays(o)).reduce((n, b) => n + b.byteLength, 0) : 0);
     const bytes = size(arrays) + size(ocean) + size(land);
-    return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, grid: saved.grid ?? null, bytes, source: url }, data: { arrays, ocean, land } };
+    return { meta: { N: saved.N, K: saved.K, day: saved.day, time: saved.time, terrain: !!saved.terrain, grid: saved.grid ?? null, options: saved.options ?? null, bytes, source: url }, data: { arrays, ocean, land } };
   };
   async function refreshSnapshots() {
     const list = await listSnapshots();
@@ -1051,7 +1051,7 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     } catch (error) { document.getElementById('date').textContent = `download failed: ${error.message}`; return null; }
   }
   async function storeSnapshot(message) {
-    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, grid: message.grid, ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? { ...groupHeader(message.ocean), ...Object.fromEntries(Object.entries(groupArrays(message.ocean)).map(([k, b]) => [k, new Float64Array(b)])) } : null, land: message.land ? Object.fromEntries(Object.entries(message.land).map(([k, b]) => [k, new Float64Array(b)])) : null });
+    const { meta, data } = toSnapshot({ N: message.N, K: message.K, day: message.day, time: message.time, terrain: message.terrain, grid: message.grid, options: message.options, ...Object.fromEntries(Object.entries(message.arrays).map(([k, b]) => [k, new Float64Array(b)])), ocean: message.ocean ? { ...groupHeader(message.ocean), ...Object.fromEntries(Object.entries(groupArrays(message.ocean)).map(([k, b]) => [k, new Float64Array(b)])) } : null, land: message.land ? Object.fromEntries(Object.entries(message.land).map(([k, b]) => [k, new Float64Array(b)])) : null });
     const name = `Day ${Math.floor(message.day)} · ${new Date().toLocaleString()}`;
     await saveSnapshot({ name, created: Date.now(), ...meta }, data);
     await refreshSnapshots();
@@ -1067,14 +1067,14 @@ export default function runClimate({ N = null, from = null, levels = null, worke
     scheduleUrl();
     render();
     const transfer = [...Object.values(data.arrays), ...(data.ocean ? Object.values(groupArrays(data.ocean)) : []), ...(data.land ? Object.values(data.land) : [])];
-    worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, grid: meta.grid ?? null, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
+    worker.postMessage({ type: 'restore', snapshot: { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, grid: meta.grid ?? null, options: meta.options ?? null, arrays: data.arrays, ocean: data.ocean, land: data.land ?? null } }, transfer);
   }
   const slug = (name) => name.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'snapshot';
   async function exportSnapshot(meta) {
     const { data } = await getSnapshot(meta.id);
     if (!data) return;
     document.getElementById('date').textContent = `exporting "${meta.name}"…`;
-    const saved = { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, ...(meta.grid ? { grid: meta.grid } : {}) };
+    const saved = { N: meta.N, K: meta.K, day: meta.day, time: meta.time, terrain: !!meta.terrain, ...(meta.grid ? { grid: meta.grid } : {}), ...(meta.options ? { options: meta.options } : {}) };
     for (const [key, buffer] of Object.entries(data.arrays)) saved[key] = new Float64Array(buffer);
     if (data.ocean) saved.ocean = { ...groupHeader(data.ocean), ...Object.fromEntries(Object.entries(groupArrays(data.ocean)).map(([k, b]) => [k, new Float64Array(b)])) };
     if (data.land) saved.land = Object.fromEntries(Object.entries(data.land).map(([k, b]) => [k, new Float64Array(b)]));
