@@ -1,5 +1,5 @@
 import { getDevice, storageBuffer, emptyBuffer, readBuffer, readRanges, reductionKernel, finishReduction, reductionGroups as groupsOf, writeInPieces, WRITE_PIECE } from './device.module.js';
-import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../dynamics/sigmaCore.module.js';
+import { sigmaInterfaces, sigmaGridName, R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR, DIVERGENCE_SURFACES, hybridWeights, logSigmaSteps } from '../dynamics/sigmaCore.module.js';
 import { sunDirection, DAY, nearestLayer, STABILITY_SIGMA, UNDECIDED, RAYLEIGH_BANDS, LAND_AEROSOL, SEA_AEROSOL, CLOUD_OPTICS, DECORRELATION_LENGTH, DECORRELATION_SLOPE, GREENHOUSE_GASES, OZONE_COLUMN, YEAR, NEAR_INFRARED_RAYLEIGH, VISIBLE_FRACTION } from '../physics/radiation.module.js';
 import { VAPOR_STRENGTH } from '../physics/shortwaveGases.module.js';
 import { physicsConstants, PHYSICS_FUNCTIONS, PHYSICS_KERNELS, physicsKernel, ADJUST_KERNELS, PHYSICS_PASSES, radiationKernel, longwaveKernel, physicsSurfaceKernel, LONGWAVE_STASH_FLOATS } from './physics.gpu.js';
@@ -40,14 +40,14 @@ const ELEMENTS_PER_THREAD = { advance: 2, combine: 2, dissipationClear: 8 };
  * momentum mixing. Every kernel binds the same seven buffers in the same
  * order.
  */
-export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orographyLayers = 0, sponge = null, waves = false, formLayers = 0, subcloudLayers = 0, heldRadiation = false, skin = false) {
+export function layoutFor(mesh, K, cumulusLayers = 0, momentumLayers = 0, orographyLayers = 0, sponge = null, waves = false, formLayers = 0, subcloudLayers = 0, heldRadiation = false, skin = false, hybrid = false) {
   const C = mesh.nCells, E = mesh.nEdges, V = mesh.nVertices, waveCells = waves ? C : 0, waveEdges = waves ? E : 0;
   const SPK = sponge ? sponge.layers : 0, SPB = sponge ? sponge.bands : 0, spongeCells = SPK ? C : 0, spongeEdges = SPK ? E : 0;
   const KC = K * C, KE = K * E, KV = K * V;
   const seq = (names) => { const out = {}; let off = 0; for (const [name, n] of names) { out[name] = off; off += n; } out.total = off; return out; };
   const MI = seq([['COE', 2 * E], ['VOE', 2 * E], ['EOC', MAX_EDGES * C], ['ESC', MAX_EDGES * C], ['COC', MAX_EDGES * C], ['NEC', C], ['COV', 3 * V], ['EOV', 3 * V], ['ESV', 3 * V], ['EOE', MAX_EDGES_ON_EDGE * E], ['NEE', E], ['SBC', spongeCells], ['SBS', SPK ? SPB + 1 : 0], ['SEB', spongeEdges], ['GWS', waveCells]]);
   const MF = seq([['AREA', C], ['ATRI', V], ['DC', E], ['DV', E], ['FV', V], ['KAV', 3 * V], ['PVW', MAX_EDGES_ON_EDGE * E], ['NEDGE', 3 * E], ['LAT', C], ['XC', 3 * C], ['GPHIS', E], ['PHIS', C], ['SEW', MAX_EDGES * spongeCells], ['SNW', MAX_EDGES * spongeCells], ['SES', spongeEdges], ['SEE', spongeEdges], ['SEN', spongeEdges], ['GWX', 6 * waveCells], ['GWP', 4 * waveEdges], ['GWF', waveCells]]);
-  const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K], ['SPG', K], ['SPMR', K]]);
+  const LV = seq([['SL', K], ['SU', K], ['DS', K], ['SM', K], ['TOP', K], ['CL', K], ['CM', K], ['CD', K], ['CA', K], ['CB', K], ['CT', K], ['GR', K], ['GABS', K], ['SHAPE', K], ['OZ', K], ['GASE', K], ['AER', K], ['OZS', K], ['SPG', K], ['SPMR', K], ...(hybrid ? [['HW', K], ['DLS', K]] : [])]);
   const S = seq([['PI', C], ['TH', KC], ['U', KE], ['TS', C], ['Q', KC], ['QC', KC], ['ICE', C]]);
   // The RK stages' scratch fields and the closures' share memory: neither set is read outside its own passes.
   const stage = seq([['FLUX', KE], ['QV', KV], ['QE', KE], ['PHI', KC]]), closure = seq([['LAPA', KE], ['DIVS', KC], ['CURLS', KV], ['LAP1', 3 * KC]]);
@@ -600,6 +600,43 @@ const KERNELS = {
     if (accumulate) { D[D_DISS + n] += lost; } else { D[D_DISS + n] = lost; }
   }
 }`,
+  divergenceHybrid: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let i = i32(id.x); if (i >= C) { return; }
+  let area = MF[F_AREA + i];
+  var edges: array<i32, MAXE>; var sides: array<f32, MAXE>; var tilts: array<f32, MAXE>;
+  for (var m = 0; m < MAXE; m++) {
+    let slot = MAXE * i + m; let e = MI[EOC + slot]; let a = MI[COE + 2 * e];
+    let halfLog = 0.5 * log(IN[S_PI + MI[COE + 2 * e + 1]] / IN[S_PI + a]);
+    let side = f32(MI[ESC + slot]) * MF[F_DV + e];
+    edges[m] = e; sides[m] = side; tilts[m] = side * select(halfLog, -halfLog, a == i);
+  }
+  for (var k = 0; k < K; k++) {
+    let above = max(k - 1, 0) * E; let below = min(k + 1, K - 1) * E;
+    var flow = 0.0; var tilted = 0.0;
+    for (var m = 0; m < MAXE; m++) {
+      let e = edges[m];
+      flow += sides[m] * IN[S_U + k * E + e];
+      tilted += tilts[m] * (IN[S_U + below + e] - IN[S_U + above + e]);
+    }
+    D[D_DIVS + k * C + i] = (flow + LV[L_HW + k] * LV[L_DLS + k] * tilted) / area;
+  }
+}`,
+  divergenceDampHybrid: `@compute @workgroup_size(${WORKGROUP}) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  let e = i32(id.x); if (e >= E) { return; }
+  let a = MI[COE + 2 * e]; let b = MI[COE + 2 * e + 1];
+  let dc = MF[F_DC + e];
+  let lnRatio = log(IN[S_PI + b] / IN[S_PI + a]);
+  let accumulate = P[2] > 0.5;
+  for (var k = 0; k < K; k++) {
+    let here = k * C; let above = max(k - 1, 0) * C; let below = min(k + 1, K - 1) * C;
+    let slope = 0.5 * LV[L_DLS + k] * (D[D_DIVS + below + a] - D[D_DIVS + above + a] + D[D_DIVS + below + b] - D[D_DIVS + above + b]);
+    let n = k * E + e;
+    let before = IN[S_U + n]; let after = before + P[0] * (D[D_DIVS + here + b] - D[D_DIVS + here + a] - LV[L_HW + k] * slope * lnRatio) / dc;
+    IN[S_U + n] = after;
+    let lost = before * before - after * after;
+    if (accumulate) { D[D_DISS + n] += lost; } else { D[D_DISS + n] = lost; }
+  }
+}`,
   spongeMean: `var<workgroup> partEast: array<f32, ${WORKGROUP}>;
 var<workgroup> partNorth: array<f32, ${WORKGROUP}>;
 @compute @workgroup_size(${WORKGROUP}) fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid: vec3<u32>) {
@@ -784,10 +821,12 @@ export const PHYSICS_DEFAULTS = {
 };
 
 export async function createGpuCore(mesh, {
-  levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0, divergenceDamping = 0,
+  levels = sigmaInterfaces(), g = GRAVITY, cp = CP_DRY, R = R_DRY, p0 = P0, nu4 = 0, nu4Theta = 0, divergenceDamping = 0, divergenceSurfaces = 'sigma',
   dragCoefficient = SEA_DRAG, gustiness = 3, topSigma = TOP_DRAG.sigma, topDragDays = TOP_DRAG.days, spongeRates: spongeOption, spongeMeanRates: meanOption, gravityWaves = {}, referenceTheta = null, surfaceGeopotential = null, physics: physicsOptions = {},
   registerLength = 0,
 } = {}) {
+  if (!DIVERGENCE_SURFACES.includes(divergenceSurfaces)) throw new Error(`divergenceSurfaces is ${DIVERGENCE_SURFACES.join(' or ')}, not ${divergenceSurfaces}`);
+  const hybrid = divergenceSurfaces === 'hybrid' && divergenceDamping > 0;
   const phys = { ...PHYSICS_DEFAULTS, ...physicsOptions, R };
   phys.longwaveTable ??= longwaveTableFor(levels, phys.longwaveLines);
   const { device } = await getDevice();
@@ -807,7 +846,7 @@ export async function createGpuCore(mesh, {
   if (!(Number.isInteger(phys.radiationEvery) && phys.radiationEvery >= 1)) throw new Error(`radiationEvery must be a whole number of steps, 1 or more, not ${phys.radiationEvery}`);
   if (!(Number.isInteger(phys.dragEvery) && phys.dragEvery >= 1)) throw new Error(`dragEvery must be a whole number of steps, 1 or more, not ${phys.dragEvery}`);
   const heldRadiation = phys.radiationEvery > 1, skinOn = !!(phys.warmLayer || phys.coolSkin);
-  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0, phys.orography ? K : 0, sponge, !!waves, phys.formDrag ? K - formTop : 0, Math.min(SUBCLOUD_LAYERS, K), heldRadiation, skinOn);
+  const L = layoutFor(mesh, K, K - cumulusK0, phys.plumeMomentum ? K : 0, phys.orography ? K : 0, sponge, !!waves, phys.formDrag ? K - formTop : 0, Math.min(SUBCLOUD_LAYERS, K), heldRadiation, skinOn, hybrid);
   phys.subcloudLayers = Math.min(SUBCLOUD_LAYERS, K);
   const { C, E, V } = L;
   const kappa = R / cp;
@@ -870,6 +909,7 @@ export async function createGpuCore(mesh, {
   put(lv, L.LV.SL, sigmaLower); put(lv, L.LV.SU, sigmaUpper); put(lv, L.LV.DS, dSigma); put(lv, L.LV.SM, sigmaMid); put(lv, L.LV.TOP, topRate);
   if (spongeRates) put(lv, L.LV.SPG, spongeRates);
   if (spongeMeanRates) put(lv, L.LV.SPMR, spongeMeanRates);
+  if (hybrid) { put(lv, L.LV.HW, hybridWeights(sigmaMid)); put(lv, L.LV.DLS, logSigmaSteps(sigmaMid)); }
   const cl = Float64Array.from(sigmaLower, (s) => Math.pow(s, kappa));
   const cm = Float64Array.from(sigmaLower, (s, k) => (Math.pow(s, 1 + kappa) - Math.pow(sigmaUpper[k], 1 + kappa)) / ((1 + kappa) * dSigma[k]));
   const cd = Float64Array.from(sigmaLower, (s, k) => (kappa / (1 + kappa)) * (Math.pow(s, 1 + kappa) - Math.pow(sigmaUpper[k], 1 + kappa)) / dSigma[k]);
@@ -912,6 +952,7 @@ export async function createGpuCore(mesh, {
   const kernelBodies = { ...KERNELS, ...PHYSICS_KERNELS, radiation: radiationKernel(heldRadiation), longwave: longwaveKernel(heldRadiation, phys.longwaveTable.points.length), physics: physicsKernel(skinOn), physicsSurface: physicsSurfaceKernel(heldRadiation, skinOn), ...(phys.orography ? OROGRAPHY_KERNELS : {}), ...FRAME_KERNELS, frameReduce: reductionKernel(REDUCED, { count: C, base: 'FR_PART', setup: REDUCED_SETUP }) };
   if (!waves) { delete kernelBodies.gravityWaves; delete kernelBodies.gravityWaveDrag; }
   if (!sponge) { delete kernelBodies.spongeMean; delete kernelBodies.spongeApply; }
+  if (!hybrid) { delete kernelBodies.divergenceHybrid; delete kernelBodies.divergenceDampHybrid; }
   for (const [name, raw] of Object.entries(kernelBodies)) {
     const body = waveConstants(raw);
     const code = head + body.replaceAll('S_TOTAL', String(L.S.total)).replaceAll('i32(id.x)', '(i32(id.x) + i32(id.y) * 4194240)');
@@ -1046,8 +1087,8 @@ export async function createGpuCore(mesh, {
     if (divergenceStep > 0) {
       setParams([divergenceStep, 0, nu4 > 0 ? 1 : 0]);
       compute((pass) => {
-        dispatch(pass, 'divCurl', g, C);
-        dispatch(pass, 'divergenceDamp', g, E);
+        dispatch(pass, hybrid ? 'divergenceHybrid' : 'divCurl', g, C);
+        dispatch(pass, hybrid ? 'divergenceDampHybrid' : 'divergenceDamp', g, E);
       });
     }
     if (sponge) {
@@ -1278,5 +1319,5 @@ export async function createGpuCore(mesh, {
   function clearFrame() { submitNow((encoder) => encoder.clearBuffer(buffers.FR, 0, 4 * L.FR.total)); }
   function setWindSpeed(windSpeed) { device.queue.writeBuffer(buffers.D, 4 * L.D.WIND, Float32Array.from(windSpeed)); }
 
-  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
+  return { device, mesh, meshSpacing, preludeConstants, layout: L, buffers, kernels, step, closure: closurePasses, stepModel, hooks, batched, encode, compute, writeParams, clearBuffer, get stepCount() { return stepCount; }, tendency, upload, uploadSurfaceTemperature, download, downloadDiagnostics, frame, clearFrame, uploadPhysics, uploadLand, uploadIce, downloadPhysics, setWindSpeed, K, C, E, V, kTop, dSigma, sigmaMid, physics: phys };
 }
