@@ -13,7 +13,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
 const DAY = 86400, YEAR = 365 * DAY;
-const mesh = createModel(new Grid(8), { physics: false }).mesh;
+const mesh = createModel(new Grid(16), { physics: false }).mesh;
 const flat = (height = 100) => createGeography(mesh, syntheticTopography(90, 180, () => height), { landBridges: {}, seaStraits: {} });
 const near = (a, b, tol = 1e-12) => Math.abs(a - b) < tol;
 const deg = Math.PI / 180;
@@ -108,15 +108,16 @@ test('a fresh start begins its moisture means empty with its trees at half the c
   const soil = Float64Array.from({ length: C }, (_, i) => 300 * ((i % 9) / 8)), vegetation = Float64Array.from({ length: C }, (_, i) => (i % 5) / 5), snow = new Float64Array(C);
   const seasonLength = new Float64Array(C).fill(0.6), seasonWarmth = new Float64Array(C).fill(8);
   land.load({ soil, snow, vegetation, canopy: new Float64Array(C).fill(0.9), seasonLength, seasonWarmth });
-  let gated = 0;
+  let gated = 0, cells = 0;
   for (let i = 0; i < C; i++) {
     if (!geography.land[i] || geography.iceSheet[i]) continue;
+    cells++;
     const e = moistureEstimate(mesh.latCell[i], soil[i] / 300, vegetation[i]);
     assert.ok(near(land.rainMean[i], e.rain) && near(land.demandMean[i], e.demand), `cell ${i}: estimated from its own fill`);
     assert.ok(near(land.canopy[i], vegetation[i] * treelineFactor(0.6, 8) * aridityFactor(e.rain, e.demand)), `cell ${i}: an older state's trees restart at the potential`);
     if (aridityFactor(e.rain, e.demand) < 1 && vegetation[i] > 0) gated++;
   }
-  assert.ok(gated > 20, `${gated} cells held below the season's potential by their moisture`);
+  assert.ok(gated > cells / 3, `${gated} of ${cells} cells held below the season's potential by their moisture`);
   const young = Float64Array.from({ length: C }, (_, i) => (i % 3) / 20);
   land.load({ soil, snow, vegetation, canopy: young, seasonLength, seasonWarmth });
   let kept = 0;
@@ -126,10 +127,10 @@ test('a fresh start begins its moisture means empty with its trees at half the c
     assert.ok(near(land.canopy[i], Math.min(young[i], potential)), `cell ${i}: an older state's trees below the potential stand`);
     if (young[i] < potential) kept++;
   }
-  assert.ok(kept > 20, `${kept} cells keep their younger trees`);
+  assert.ok(kept > cells / 3, `${kept} of ${cells} cells keep their younger trees`);
   const rainMean = Float64Array.from({ length: C }, (_, i) => (i % 7) / 2), demandMean = Float64Array.from({ length: C }, (_, i) => 1 + (i % 11) / 3), canopy = Float64Array.from({ length: C }, (_, i) => (i % 13) / 13);
   land.load({ soil, snow, vegetation, canopy, seasonLength, seasonWarmth, rainMean, demandMean });
-  const saved = await decodeState(encodeState({ N: 8, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
+  const saved = await decodeState(encodeState({ N: 16, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
   const back = createLandSurface(mesh, geography);
   back.load(saved.land);
   for (let i = 0; i < C; i++) {
@@ -143,23 +144,24 @@ const RAINING_START = { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLay
 
 test('the model hands the land each step\'s rain and potential evaporation', () => {
   const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
-  const model = createModel(new Grid(6), { topography, land: { moistureMemory: 900 }, moist: RAINING_START });
+  const model = createModel(new Grid(16), { topography, land: { moistureMemory: 900 }, moist: RAINING_START });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
   model.land.initialize();
   for (let n = 0; n < 4; n++) model.step(900);
   const keep = 1 - Math.exp(-1);
-  let checked = 0, rained = 0;
+  let checked = 0, rained = 0, cells = 0;
   for (let i = 0; i < model.mesh.nCells; i++) {
     if (!model.geography.land[i]) continue;
+    cells++;
     const before = model.land.rainMean[i];
     model.land.deposit(i, 0, 290, 900);
     assert.ok(near(model.land.rainMean[i], before * (1 - keep), 1e-9));
     if (before > 0.1) rained++;
     if (model.land.demandMean[i] > 0.1) checked++;
   }
-  assert.ok(rained > 10 && checked > 50, `${rained} land cells with rain, ${checked} with a potential evaporation`);
+  assert.ok(rained > cells / 4 && checked > cells / 2, `${rained} of ${cells} land cells with rain, ${checked} with a potential evaporation`);
 });
 
 test('land regridding carries the moisture means and fills new land from the estimate', async () => {
@@ -167,7 +169,7 @@ test('land regridding carries the moisture means and fills new land from the est
   const make = (N, relief) => { const m = createModel(new Grid(N), { physics: false, topography: relief }); return { mesh: m.mesh, geography: createGeography(m.mesh, relief, { landBridges: {}, seaStraits: {} }) }; };
   const continent = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
   const islands = syntheticTopography(90, 180, (lat, lon) => (lat > 1.3 && Math.cos(lon) < 0 ? 50 : 0) || (((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15) ? 300 : -4000));
-  const source = make(6, continent), target = make(8, islands), C = source.mesh.nCells;
+  const source = make(16, continent), target = make(24, islands), C = source.mesh.nCells;
   const land = { soil: new Float64Array(C).fill(150), snow: new Float64Array(C), vegetation: new Float64Array(C).fill(0.5), canopy: new Float64Array(C).fill(0.3), seasonLength: new Float64Array(C).fill(0.45), seasonWarmth: new Float64Array(C).fill(4), rainMean: new Float64Array(C).fill(2.5), demandMean: new Float64Array(C).fill(3.5) };
   const out = regridLand(source, target, land);
   let carried = 0, filled = 0;
@@ -177,14 +179,15 @@ test('land regridding carries the moisture means and fills new land from the est
     assert.ok(out.demandMean[n] > 0, `cell ${n}: estimated demand ${out.demandMean[n]}`);
     filled++;
   }
-  assert.ok(carried > 0.8 * [...target.geography.land].filter(Boolean).length && filled > 5, `${carried} carried, ${filled} filled`);
+  const lands = [...target.geography.land].filter(Boolean).length;
+  assert.ok(carried > 0.8 * lands && filled > 0.01 * lands, `${carried} carried, ${filled} filled of ${lands} land cells`);
   assert.equal(regridLand(source, target, { soil: land.soil, snow: land.snow, vegetation: land.vegetation }).rainMean, undefined);
 });
 
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
 
 test('both engines give land the same albedo from random cover, trees, snow and snow albedo, forest and grass blended', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const cpu = createModel(new Grid(6), { topography }), gpu = await createGpuModel(new Grid(6), { topography });
+  const cpu = createModel(new Grid(16), { topography }), gpu = await createGpuModel(new Grid(16), { topography });
   const C = cpu.mesh.nCells, landMask = cpu.geography.land;
   let s = 5;
   const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
@@ -202,7 +205,7 @@ test('both engines give land the same albedo from random cover, trees, snow and 
   }
   gpu.load();
   const expected = Float64Array.from({ length: C }, (_, i) => (landMask[i] ? cpu.land.albedo(i) : NaN));
-  const plain = createModel(new Grid(6), { topography, land: { grassland: false } });
+  const plain = createModel(new Grid(16), { topography, land: { grassland: false } });
   plain.land.load({ soil, surface, snow, vegetation, canopy, snowAlbedo, seasonLength, seasonWarmth, rainMean, demandMean }, init[6]);
   await gpu.step(900);
   const ph = await gpu.gpu.downloadPhysics();
@@ -215,8 +218,8 @@ test('both engines give land the same albedo from random cover, trees, snow and 
     most = Math.max(most, Math.abs(expected[i] - plain.land.albedo(i)));
   }
   gpu.destroy();
-  console.log(`N=6: ${cells} land cells (${grassy} with grass above 0.2, ${buried} of them under snow): albedo engines apart by ${worst.toExponential(1)}; grass moves it by up to ${most.toFixed(3)}`);
-  assert.ok(grassy > 20 && buried > 5 && most > 0.03, `${grassy} grassy, ${buried} buried, most ${most}`);
+  console.log(`N=16: ${cells} land cells (${grassy} with grass above 0.2, ${buried} of them under snow): albedo engines apart by ${worst.toExponential(1)}; grass moves it by up to ${most.toFixed(3)}`);
+  assert.ok(grassy > cells / 5 && buried > cells / 12 && most > 0.03, `${grassy} of ${cells} grassy, ${buried} buried, most ${most}`);
   assert.ok(worst < 1e-6, `engines apart by ${worst}`);
 });
 
@@ -238,8 +241,8 @@ test('over 48 GPU steps the moisture means and the gated trees evolve as on the 
     model.land.load({ soil: Float64Array.from({ length: C }, () => 300 * rnd()), snow, vegetation, canopy, seasonLength, seasonWarmth, rainMean, demandMean }, model.state[6]);
     return model;
   };
-  const cpu = prepare(createModel(new Grid(6), { topography, land, moist: RAINING_START }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land, moist: RAINING_START }));
+  const cpu = prepare(createModel(new Grid(16), { topography, land, moist: RAINING_START }));
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land, moist: RAINING_START }));
   const C = cpu.mesh.nCells, rainBefore = Float64Array.from(cpu.land.rainMean), demandBefore = Float64Array.from(cpu.land.demandMean), treesBefore = Float64Array.from(cpu.land.canopy);
   for (let n = 0; n < 48; n++) { cpu.step(900); await gpu.step(900); }
   await gpu.sync();
@@ -257,7 +260,7 @@ test('over 48 GPU steps the moisture means and the gated trees evolve as on the 
     if (cpu.land.moistureFactor(i) < 0.9 && cpu.land.canopy[i] < treesBefore[i] - 0.05) gated++;
   }
   gpu.destroy();
-  console.log(`N=6, 48 steps over ${cells} land cells: rain means moved on ${rainMoved} (to ${scaleRain.toFixed(1)} mm/d), demand on ${demandMoved} (to ${scaleDemand.toFixed(1)} mm/d), trees thinned by moisture on ${gated}; engines apart by ${worstRain.toExponential(1)} and ${worstDemand.toExponential(1)} mm/d and ${worstTrees.toExponential(1)} in tree cover`);
-  assert.ok(rainMoved > 10 && demandMoved > 10 && gated > 10, `${rainMoved}, ${demandMoved}, ${gated}`);
+  console.log(`N=16, 48 steps over ${cells} land cells: rain means moved on ${rainMoved} (to ${scaleRain.toFixed(1)} mm/d), demand on ${demandMoved} (to ${scaleDemand.toFixed(1)} mm/d), trees thinned by moisture on ${gated}; engines apart by ${worstRain.toExponential(1)} and ${worstDemand.toExponential(1)} mm/d and ${worstTrees.toExponential(1)} in tree cover`);
+  assert.ok(rainMoved > cells / 3 && demandMoved > cells / 3 && gated > cells / 3, `${rainMoved}, ${demandMoved}, ${gated} of ${cells}`);
   assert.ok(worstRain < 0.1 * scaleRain && worstDemand < 0.1 * scaleDemand && worstTrees < 0.02, `rain ${worstRain}, demand ${worstDemand}, trees ${worstTrees}`);
 });

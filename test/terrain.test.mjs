@@ -31,7 +31,7 @@ function isothermalAtRest(model) {
 function maxWind(u) { let m = 0; for (const x of u) m = Math.max(m, Math.abs(x)); return m; }
 
 test('the smoothed surface geopotential is zero over the sea, positive on the mountain, and gentler than the raw elevation', () => {
-  const model = createModel(new Grid(8), { physics: false, topography: mountain });
+  const model = createModel(new Grid(16), { physics: false, topography: mountain });
   const { geography, mesh } = model;
   const phis = surfaceGeopotential(mesh, geography);
   let peak = 0, rawPeak = 0;
@@ -40,7 +40,7 @@ test('the smoothed surface geopotential is zero over the sea, positive on the mo
     peak = Math.max(peak, phis[i] / 9.80616);
     rawPeak = Math.max(rawPeak, geography.elevation[i]);
   }
-  assert.ok(peak > 1500 && peak < rawPeak, `peak ${peak.toFixed(0)} m of raw ${rawPeak.toFixed(0)} m`);
+  assert.ok(peak > 2000 && peak < rawPeak, `peak ${peak.toFixed(0)} m of raw ${rawPeak.toFixed(0)} m`);
 });
 
 test('an isothermal atmosphere at rest over a 3 km mountain stays nearly at rest for five days', () => {
@@ -56,15 +56,15 @@ test('an isothermal atmosphere at rest over a 3 km mountain stays nearly at rest
 });
 
 test('the GPU engine reproduces the CPU engine over terrain', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const cpu = isothermalAtRest(createModel(new Grid(8), { physics: false, topography: mountain }));
-  const gpu = isothermalAtRest(await createGpuModel(new Grid(8), { topography: mountain }));
+  const cpu = isothermalAtRest(createModel(new Grid(16), { physics: false, topography: mountain }));
+  const gpu = isothermalAtRest(await createGpuModel(new Grid(16), { topography: mountain }));
   gpu.gpu.hooks.beforePhysics = null;
-  for (let n = 0; n < 6; n++) { cpu.step(1800); await gpu.gpu.step(1800); }
+  for (let n = 0; n < 8; n++) { cpu.step(1350); await gpu.gpu.step(1350); }
   const state = await gpu.gpu.download();
   let du = 0, dpi = 0;
   const E = cpu.mesh.nEdges, sigmaMid = cpu.core.sigmaMid;
   for (let x = 0; x < cpu.state[2].length; x++) if (sigmaMid[Math.floor(x / E)] > 0.05) du = Math.max(du, Math.abs(cpu.state[2][x] - state[2][x]));
   for (let i = 0; i < cpu.mesh.nCells; i++) dpi = Math.max(dpi, Math.abs(cpu.state[0][i] - state[0][i]));
-  console.log(`terrain dynamics at N=8: GPU vs CPU max |Δu| ${du.toExponential(1)} m/s, max |Δπ| ${dpi.toExponential(1)} Pa, CPU max |u| ${maxWind(cpu.state[2]).toFixed(3)}`);
+  console.log(`terrain dynamics at N=16: GPU vs CPU max |Δu| ${du.toExponential(1)} m/s, max |Δπ| ${dpi.toExponential(1)} Pa, CPU max |u| ${maxWind(cpu.state[2]).toFixed(3)}`);
   assert.ok(du < 2e-3 && dpi < 2, `Δu ${du} Δπ ${dpi}`);
 });

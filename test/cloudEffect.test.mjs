@@ -14,7 +14,7 @@ const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js')
 
 const CLEAR_SLOTS = { clearAbsorbedSolar: 'ABSCLRSUM', clearOutgoingLongwave: 'OLRCLRSUM' };
 const EFFECT_SLOTS = { meanShortwaveCloudEffect: 'SWCREMEAN', meanLongwaveCloudEffect: 'LWCREMEAN' };
-const DT = 900;
+const N = 16, DT = 900;
 const STEPS = 16;
 
 function stats(cpu, gpu) {
@@ -24,7 +24,7 @@ function stats(cpu, gpu) {
 }
 
 test('the clear-sky pass gives each column the top-of-atmosphere fluxes of the same column with its resolved cloud taken away', () => {
-  const model = createModel(new Grid(6), { ocean: false, radiation: { clearSkyPass: true } });
+  const model = createModel(new Grid(N), { ocean: false, radiation: { clearSkyPass: true } });
   const init = initializeState(model, {});
   init.forEach((values, a) => model.state[a].set(values));
   const { radiation, core } = model, { K, C } = core.diagnostics;
@@ -55,7 +55,7 @@ test('the clear-sky pass gives each column the top-of-atmosphere fluxes of the s
 
 async function engines(radiation, cloud = 0) {
   const surface = { exchange: 'fixed' };
-  const cpu = createModel(new Grid(6), { ocean: false, radiation, surface, moist: { excessVelocity: 'convective', plumeEntrainmentLaw: 'gregory' } }), gpu = await createGpuModel(new Grid(6), { ocean: false, radiation, surface, moist: { excessVelocity: 'convective', plumeEntrainmentLaw: 'gregory' } });
+  const cpu = createModel(new Grid(N), { ocean: false, radiation, surface, moist: { excessVelocity: 'convective', plumeEntrainmentLaw: 'gregory' } }), gpu = await createGpuModel(new Grid(N), { ocean: false, radiation, surface, moist: { excessVelocity: 'convective', plumeEntrainmentLaw: 'gregory' } });
   const init = initializeState(cpu, {}), { K, C, sigmaMid } = cpu.core.diagnostics;
   for (let k = 0; k < K; k++) if (sigmaMid[k] > 0.5 && sigmaMid[k] < 0.9) for (let i = 0; i < C; i++) init[5][k * C + i] = cloud;
   for (let a = 0; a < init.length; a++) { cpu.state[a].set(init[a]); gpu.state[a].set(init[a]); }
@@ -87,7 +87,7 @@ test('both engines sum the clear-sky fluxes per cell alike and read out the day-
   const cpuSums = Object.fromEntries(CLEAR_SUMMED.map((name) => [name, Float64Array.from(cpu.radiation.summed[name])]));
   const gpuSums = Object.fromEntries(CLEAR_SUMMED.map((name) => [name, Float64Array.from(device[CLEAR_SLOTS[name]].subarray(0, C))]));
   const parity = Object.fromEntries(CLEAR_SUMMED.map((name) => [name, stats(cpuSums[name], gpuSums[name])]));
-  console.log(`${STEPS} steps at N=6, per-cell clear-sky sums CPU against GPU: ${CLEAR_SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m² summed)`).join(', ')}`);
+  console.log(`${STEPS} steps at N=${N}, per-cell clear-sky sums CPU against GPU: ${CLEAR_SUMMED.map((name) => `${name} rms ${parity[name].rmsRel.toExponential(1)} (max ${parity[name].maxDiff.toExponential(1)} W/m² summed)`).join(', ')}`);
   for (const name of CLEAR_SUMMED) assert.ok(parity[name].rmsRel < 1e-4, `${name}: per-cell rms ${parity[name].rmsRel}`);
 
   const dc = cpu.diagnostics(), dg = await gpu.diagnostics();
@@ -115,8 +115,8 @@ test('both engines sum the clear-sky fluxes per cell alike and read out the day-
   assert.ok(parted.size <= C / 10 && C - agreed.length <= 0.8 * C, `${parted.size} of ${C} columns parted, ${C - agreed.length} left out with their neighbours within two cells`);
   for (const s of Object.values(effects)) assert.ok(s.rmsRel < 2e-3 && s.maxDiff < 0.5, `per-cell effects apart by ${s.maxDiff} W/m² (rms ${s.rmsRel})`);
 
-  const saved = await decodeState(encodeState({ N: 6, K: gpu.core.K, day: 0, time: gpu.time, pi: gpu.state[0], ...Object.fromEntries(Object.keys(RADIATION_FIELDS).map((name) => [name, gpu.radiation[name]])) }));
-  const fresh = await createGpuModel(new Grid(6), { ocean: false, radiation: { clearSkyPass: true } });
+  const saved = await decodeState(encodeState({ N, K: gpu.core.K, day: 0, time: gpu.time, pi: gpu.state[0], ...Object.fromEntries(Object.keys(RADIATION_FIELDS).map((name) => [name, gpu.radiation[name]])) }));
+  const fresh = await createGpuModel(new Grid(N), { ocean: false, radiation: { clearSkyPass: true } });
   fresh.state.forEach((values, a) => values.set(gpu.state[a]));
   for (const name of Object.keys(RADIATION_FIELDS)) fresh.radiation[name].set(savedRadiationField(saved, name, fresh));
   fresh.load();

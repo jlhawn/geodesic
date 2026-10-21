@@ -51,7 +51,7 @@ test('the source flux follows Garfinkel et al. (2022) eq. A3, uniform by default
 });
 
 test('on bl36 the flux that rises into the layers above 0.85 hPa is spread over them at one acceleration, whatever their winds, and each column keeps its momentum, with the lid layers tested as well', () => {
-  const model = createModel(new Grid(8), { ocean: false, levels: sigmaInterfaces('bl36'), gravityWaves: { breakingAmplitude: null, flux: 1e-9, equatorialFlux: 1e-9 } });
+  const model = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces('bl36'), gravityWaves: { breakingAmplitude: null, flux: 1e-9, equatorialFlux: 1e-9 } });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   model.state[2].fill(0);
@@ -67,9 +67,9 @@ test('on bl36 the flux that rises into the layers above 0.85 hPa is spread over 
     for (let k = 2; k < core.K; k++) assert.equal(gravityWaves.east[k * C + i], 0);
   }
   assert.ok(launched > 0);
-  const bl34 = createModel(new Grid(8), { ocean: false, levels: sigmaInterfaces('bl34'), gravityWaves: {} });
+  const bl34 = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces('bl34'), gravityWaves: {} });
   assert.equal(bl34.gravityWaves.lid, 1);
-  const windy = windyModel(8, { levels: sigmaInterfaces('bl36') }), { dSigma, g } = windy.core.diagnostics;
+  const windy = windyModel(16, { levels: sigmaInterfaces('bl36') }), { dSigma, g } = windy.core.diagnostics;
   windy.gravityWaves.compute(windy.state);
   let worst = 0, scale = 0;
   for (let i = 0; i < C; i++) {
@@ -80,7 +80,7 @@ test('on bl36 the flux that rises into the layers above 0.85 hPa is spread over 
     worst = Math.max(worst, Math.abs(east)); scale = Math.max(scale, absolute);
   }
   assert.ok(worst < 1e-12 * scale, `a column gains ${worst} Pa`);
-  const tested = windyModel(8, { levels: sigmaInterfaces('bl36'), gravityWaves: { lidTests: true } });
+  const tested = windyModel(16, { levels: sigmaInterfaces('bl36'), gravityWaves: { lidTests: true } });
   tested.gravityWaves.compute(tested.state);
   let apart = 0, testedWorst = 0;
   for (let i = 0; i < C; i++) {
@@ -94,7 +94,7 @@ test('on bl36 the flux that rises into the layers above 0.85 hPa is spread over 
 });
 
 test('each column keeps its momentum: what the drag takes from one layer it gives to another, and the westward waves that rise through a strengthening westerly reach the top layer', () => {
-  const model = windyModel(8), { mesh, core, gravityWaves, state } = model;
+  const model = windyModel(16), { mesh, core, gravityWaves, state } = model;
   const { K, C, dSigma, g } = core.diagnostics;
   gravityWaves.compute(state);
   let worst = 0, scale = 0, topWestward = 0, columns = 0;
@@ -108,14 +108,14 @@ test('each column keeps its momentum: what the drag takes from one layer it give
     worst = Math.max(worst, Math.abs(east), Math.abs(north)); scale = Math.max(scale, absolute);
     if (Math.abs(mesh.latCell[i]) < 1.2) { columns++; if (gravityWaves.east[i] < 0) topWestward++; }
   }
-  console.log(`N=8: the largest column momentum change ${worst.toExponential(1)} Pa against ${scale.toExponential(1)} Pa of absolute deposit; the top layer is pushed westward in ${topWestward} of ${columns} columns within 69 degrees of the equator`);
+  console.log(`N=16: the largest column momentum change ${worst.toExponential(1)} Pa against ${scale.toExponential(1)} Pa of absolute deposit; the top layer is pushed westward in ${topWestward} of ${columns} columns within 69 degrees of the equator`);
   assert.ok(worst < 1e-12 * scale, `a column gains ${worst} Pa`);
   assert.ok(topWestward > 0.9 * columns, `westward in ${topWestward} of ${columns}`);
   for (let k = gravityWaves.source; k < K; k++) for (let i = 0; i < C; i++) assert.equal(gravityWaves.east[k * C + i], 0);
 });
 
 test('the model returns the kinetic energy the gravity-wave drag removes as heat', () => {
-  const model = windyModel(4, { nu4Hours: Infinity, divergenceDamping: 0, boundaryLayer: false, moist: false });
+  const model = windyModel(16, { nu4Hours: Infinity, divergenceDamping: 0, boundaryLayer: false, moist: false });
   const { state, mesh, core } = model, { K, C, E, dSigma, g, cp } = core.diagnostics;
   state[0].fill(P0);
   core.diagnose(state[0], state[1]);
@@ -133,7 +133,7 @@ test('the model returns the kinetic energy the gravity-wave drag removes as heat
 });
 
 async function engineAgreement(waves, levels = undefined) {
-  const model = windyModel(8, { gravityWaves: waves, ...(levels ? { levels } : {}) });
+  const model = windyModel(16, { gravityWaves: waves, ...(levels ? { levels } : {}) });
   const { K } = model.core, C = model.mesh.nCells;
   const meanTheta = Float64Array.from({ length: K }, (_, k) => { let s = 0, a = 0; for (let i = 0; i < C; i++) { s += model.mesh.areaCell[i] * model.state[1][k * C + i]; a += model.mesh.areaCell[i]; } return s / a; });
   const gpu = await createGpuCore(model.mesh, { levels: model.core.levels, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta, gravityWaves: waves });
@@ -151,7 +151,7 @@ async function engineAgreement(waves, levels = undefined) {
   for (let x = 0; x < K * C; x++) rms += (model.gravityWaves.east[x] - physics.GWE[x]) ** 2;
   rms = Math.sqrt(rms / (K * C));
   for (let x = 0; x < u.length; x++) uDiff = Math.max(uDiff, Math.abs(model.state[2][x] - u[x]));
-  console.log(`one step at N=8 on ${K} layers with ${JSON.stringify(waves)}: the accelerations differ by ${(86400 * worst).toExponential(1)} m/s/day at most (rms ${(86400 * rms).toExponential(1)}) of up to ${(86400 * scale).toFixed(2)}; the wind by ${uDiff.toExponential(1)} m/s`);
+  console.log(`one step at N=16 on ${K} layers with ${JSON.stringify(waves)}: the accelerations differ by ${(86400 * worst).toExponential(1)} m/s/day at most (rms ${(86400 * rms).toExponential(1)}) of up to ${(86400 * scale).toFixed(2)}; the wind by ${uDiff.toExponential(1)} m/s`);
   assert.ok(rms < 1e-3 * scale, `rms difference ${rms} against ${scale}`);
   assert.ok(uDiff < 1e-2, `wind differs by ${uDiff} m/s`);
   return model;
@@ -166,7 +166,7 @@ test('the GPU gravity-wave drag matches the CPU model after a step', { skip: !gp
 
 test('the intermittent breaking amplitude makes waves break below the top layer that otherwise reach it', () => {
   const absoluteAt = (waves) => {
-    const model = windyModel(8, { gravityWaves: { ...waves, diagnose: true } }), { gravityWaves, state, mesh } = model;
+    const model = windyModel(16, { gravityWaves: { ...waves, diagnose: true } }), { gravityWaves, state, mesh } = model;
     gravityWaves.compute(state);
     const C = mesh.nCells;
     let top = 0, source = 0;
@@ -174,6 +174,6 @@ test('the intermittent breaking amplitude makes waves break below the top layer 
     return { top, source };
   };
   const mean = absoluteAt({ breakingAmplitude: null }), present = absoluteAt({ breakingAmplitude: 0.4 });
-  console.log(`N=8: the share of the flux that rises from the source layer into the top layer, ${(present.top / present.source).toFixed(3)} with B_w 0.4 m²/s², ${(mean.top / mean.source).toFixed(3)} with the grid-box mean flux tested`);
+  console.log(`N=16: the share of the flux that rises from the source layer into the top layer, ${(present.top / present.source).toFixed(3)} with B_w 0.4 m²/s², ${(mean.top / mean.source).toFixed(3)} with the grid-box mean flux tested`);
   assert.ok(present.top < 0.9 * mean.top, `top-layer flux ${present.top} against ${mean.top}`);
 });

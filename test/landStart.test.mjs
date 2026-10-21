@@ -14,7 +14,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 
 const DAY = 86400, YEAR = 365 * DAY;
-const mesh = createModel(new Grid(8), { physics: false }).mesh;
+const mesh = createModel(new Grid(16), { physics: false }).mesh;
 const flat = () => createGeography(mesh, syntheticTopography(90, 180, () => 100), { landBridges: {}, seaStraits: {} });
 const near = (a, b, tol = 1e-12) => Math.abs(a - b) <= tol * Math.max(1, Math.abs(b));
 const topography = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
@@ -40,7 +40,7 @@ test('the start options set the cover, the held trees and the held topsoil carbo
       assert.equal(land.soilCarbon[i], p[start].carbon);
       assert.equal(land.soil[i], 150);
     }
-    assert.ok(cells > 50);
+    assert.ok(cells > 0.3 * mesh.nCells, `${start}: ${cells} land cells`);
   }
   assert.throws(() => createLandSurface(mesh, geography, { start: 'atlas' }), /start/);
   const old = createLandSurface(mesh, geography);
@@ -185,7 +185,7 @@ test('a state saved after the jump reloads its record exactly and its fields as 
   direct.load(land.serialize());
   for (const name of ['canopy', 'soilCarbon', 'seasonLength', 'seasonWarmth', 'rainMean', 'demandMean', 'litterMean', 'decayMean', 'vegetation', 'snowFreeCover', 'soil']) assert.deepEqual([...direct[name]], [...land[name]], name);
   assert.deepEqual([...direct.record], [5 * 3600, 0, 3]);
-  const file = await decodeState(encodeState({ N: 8, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
+  const file = await decodeState(encodeState({ N: 16, K: 1, day: 0, time: 0, terrain: true, land: land.serialize() }));
   assert.ok(file.land.record instanceof Float64Array);
   const back = createLandSurface(mesh, flat());
   back.load(file.land);
@@ -207,7 +207,7 @@ test('a fresh record jumps at 365 and 730 days of its age, and a state without o
 test('land regridding carries the record and the carbon\'s record and fills new land from the sine year', () => {
   const make = (N, relief) => { const m = createModel(new Grid(N), { physics: false, topography: relief }); return { mesh: m.mesh, geography: createGeography(m.mesh, relief, { landBridges: {}, seaStraits: {} }) }; };
   const islands = syntheticTopography(90, 180, (lat, lon) => (lat > 1.3 && Math.cos(lon) < 0 ? 50 : 0) || (((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15) ? 300 : -4000));
-  const source = make(6, topography), target = make(8, islands), C = source.mesh.nCells;
+  const source = make(16, topography), target = make(24, islands), C = source.mesh.nCells;
   const land = { soil: new Float64Array(C).fill(150), snow: new Float64Array(C), vegetation: new Float64Array(C).fill(0.5), snowFreeCover: new Float64Array(C).fill(0.4), soilCarbon: new Float64Array(C).fill(3), litterMean: new Float64Array(C).fill(0.25), decayMean: new Float64Array(C).fill(0.75), record: Float64Array.of(1e6, 1, 1) };
   const out = regridLand(source, target, land);
   assert.deepEqual([...out.record], [1e6, 1, 1]);
@@ -220,14 +220,15 @@ test('land regridding carries the record and the carbon\'s record and fills new 
     const e = carbonRecord(0, 0, 0.5);
     assert.ok(out.decayMean[n] > 0 && out.litterMean[n] >= 0 && e.decay > 0, `cell ${n}: ${out.litterMean[n]}, ${out.decayMean[n]}`);
   }
-  assert.ok(carried > 50 && filled > 3, `${carried} carried, ${filled} filled`);
+  const lands = [...target.geography.land].filter(Boolean).length;
+  assert.ok(carried > 0.8 * lands && filled > 0.01 * lands, `${carried} carried, ${filled} filled of ${lands} land cells`);
   assert.deepEqual([...regridLand(source, source, land).record], [1e6, 1, 1]);
 });
 
 const RAINING_START = { capeClosure: 'threshold', plumeSourceDepth: 'boundaryLayer', cumulusClosure: 0.06 };
 
 test('a CPU model\'s fresh land holds its trees and carbon through its steps, and after the jump they run free', () => {
-  const model = createModel(new Grid(6), { topography, land: { start: 'neutral', treeGrowthTime: 3600, treeDeclineTime: 3600 }, moist: RAINING_START });
+  const model = createModel(new Grid(16), { topography, land: { start: 'neutral', treeGrowthTime: 3600, treeDeclineTime: 3600 }, moist: RAINING_START });
   const init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   for (let i = 0; i < model.mesh.nCells; i++) if (model.geography.land[i]) model.state[6][i] = 0;
@@ -240,11 +241,11 @@ test('a CPU model\'s fresh land holds its trees and carbon through its steps, an
   const jumped = Float64Array.from(land.canopy);
   model.step(900);
   const moved = cells.filter((i) => Math.abs(land.canopy[i] - jumped[i]) > 1e-6).length, off = cells.filter((i) => Math.abs(land.canopy[i] - 0.5 * land.vegetation[i]) > 1e-3).length;
-  assert.ok(moved > 10 && off > 10, `${moved} cells' trees moved after the jump, ${off} away from half the cover`);
+  assert.ok(moved > cells.length / 5 && off > cells.length / 2, `${moved} of ${cells.length} cells' trees moved after the jump, ${off} away from half the cover`);
 });
 
 const prepareGpu = async (land, start = 'neutral') => {
-  const model = await createGpuModel(new Grid(6), { topography, land: { start, ...land }, moist: RAINING_START });
+  const model = await createGpuModel(new Grid(16), { topography, land: { start, ...land }, moist: RAINING_START });
   const C = model.mesh.nCells, init = initializeState(model, {});
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   for (let i = 0; i < C; i++) if (model.geography.land[i]) model.state[6][i] = 0;
@@ -278,7 +279,7 @@ test('on the GPU the fresh record is the plain average of each step\'s own value
     if (n === 10) for (const i of cells) { assert.equal(mean.canopy[i], 0.5 * mean.vegetation[i]); assert.equal(mean.soilCarbon[i], Math.fround(2.6 * Math.LN2)); }
   }
   averaged.destroy(); single.destroy();
-  console.log(`N=6, 10 steps (6 within the memory) over ${cells.length} land cells, worst against the mean of each step's own values: ${RECORDS.map((name) => `${name} ${worst[name].toExponential(1)} of ${scale[name].toFixed(2)}`).join(', ')}`);
+  console.log(`N=16, 10 steps (6 within the memory) over ${cells.length} land cells, worst against the mean of each step's own values: ${RECORDS.map((name) => `${name} ${worst[name].toExponential(1)} of ${scale[name].toFixed(2)}`).join(', ')}`);
   for (const name of RECORDS) assert.ok(scale[name] > 0 && worst[name] <= 2e-6 * scale[name], `${name}: ${worst[name]} of ${scale[name]}`);
 });
 
@@ -325,12 +326,12 @@ test('the GPU holds the start\'s placeholders, jumps to the hand-computed equili
     assert.ok(near(jumped.soilCarbon[i], carbon, 1e-7), `cell ${i}: carbon ${jumped.soilCarbon[i]} against ${carbon}`);
     if (trees > 0.05) treed++;
   }
-  assert.ok(treed > 10 && green.land.record[1] === 0 && report.global.carbon[1] < 13, `${treed} cells with trees; carbon ${report.global.carbon}`);
+  assert.ok(treed > cells.length / 5 && green.land.record[1] === 0 && report.global.carbon[1] < 13, `${treed} of ${cells.length} cells with trees; carbon ${report.global.carbon}`);
   console.log(`GPU jump: ${treed} cells with trees, ${snowy} under snow whose snow-free cover differs from their cover`);
   await green.land.jump();
   const repeated = await green.land.serialize();
   for (const name of ['canopy', 'soilCarbon']) assert.deepEqual([...repeated[name]], [...jumped[name]], `${name} repeated`);
-  const file = await decodeState(encodeState({ N: 6, K: 1, day: 0, time: 0, terrain: true, land: repeated }));
+  const file = await decodeState(encodeState({ N: 16, K: 1, day: 0, time: 0, terrain: true, land: repeated }));
   const reloaded = await prepareGpu(options, 'neutral');
   reloaded.land.load(file.land);
   const back = await reloaded.land.serialize();
@@ -338,6 +339,6 @@ test('the GPU holds the start\'s placeholders, jumps to the hand-computed equili
   assert.deepEqual([...back.record], [...repeated.record]);
   await green.step(900); await reloaded.step(900);
   const freed = await green.land.serialize();
-  assert.ok(cells.filter((i) => Math.abs(freed.canopy[i] - jumped.canopy[i]) > 1e-6).length > 10, 'after the jump the trees run free');
+  assert.ok(cells.filter((i) => Math.abs(freed.canopy[i] - jumped.canopy[i]) > 1e-6).length > cells.length / 5, 'after the jump the trees run free');
   green.destroy(); reloaded.destroy();
 });

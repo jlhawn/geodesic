@@ -55,7 +55,7 @@ function uniformWind(model, speed) {
 }
 
 test('a column of the edge solve against the hand profile: σ_flt 100 m on every cell, 10 m/s, no mixing and no surface drag; none over the sea', () => {
-  const N = 4, mesh = buildMesh(new Grid(N)), C = mesh.nCells;
+  const N = 16, mesh = buildMesh(new Grid(N)), C = mesh.nCells;
   const sigma = 100, fields = { deviation: new Float64Array(C), anisotropy: new Float64Array(C), orientation: new Float64Array(C), slope: new Float64Array(C), filtered: new Float64Array(C).fill(sigma) };
   const model = prepare(createModel(mesh, { topography, levels: sigmaInterfaces('bl34'), subgrid: fields }));
   const { core, boundaryLayer: bl, geography } = model, { K, E, dSigma, g, geopotential } = core.diagnostics, dt = 1350 * 16 / N;
@@ -120,7 +120,7 @@ test('on a real state the form drag conserves each edge column’s momentum agai
 });
 
 test('the form drag is off without fields, without σ_flt or when asked', () => {
-  assert.equal(createModel(new Grid(8), { topography }).boundaryLayer.formDrag, null, 'N=8 has no file');
+  assert.equal(createModel(new Grid(24), { topography }).boundaryLayer.formDrag, null, 'N=24 has no file');
   assert.equal(createModel(new Grid(16), { topography, orography: { formDrag: false } }).boundaryLayer.formDrag, null);
   assert.equal(createModel(new Grid(16), { topography, orography: false }).boundaryLayer.formDrag, null);
   const fields = meshSubgrid(buildMesh(new Grid(16)));

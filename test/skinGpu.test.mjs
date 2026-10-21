@@ -9,7 +9,7 @@ import { SKIN_DEFAULTS, surfaceShare } from '../js/physics/skin.module.js';
 import { syntheticTopography } from '../js/geography.module.js';
 
 /*
- * The sea's skin on both engines at N = 8. A GPU file: run it alone,
+ * The sea's skin on both engines at N = 16. A GPU file: run it alone,
  * with the GPU free.
  */
 let gpuAvailable = true;
@@ -17,7 +17,7 @@ try { await import('webgpu'); } catch { gpuAvailable = false; }
 const { createGpuModel } = gpuAvailable ? await import('../js/gpu/model.gpu.js') : {};
 const { readRanges, readBuffer } = gpuAvailable ? await import('../js/gpu/device.module.js') : {};
 
-const N = 8, DT = 1350, STEPS = 20, ON = { warmLayer: true, coolSkin: true };
+const N = 16, DT = 1350, STEPS = 20, ON = { warmLayer: true, coolSkin: true };
 const OPTIONS = { ocean: false, levels: sigmaInterfaces('bl36'), radiation: { longwaveLines: 'scaled' } };
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const LAYERED = { levels: OPTIONS.levels, topography };

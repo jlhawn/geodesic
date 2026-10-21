@@ -82,11 +82,11 @@ test('the exchange is physical by default and fixed where an option set names a 
   assert.equal(exchangeMode({ exchange: 'fixed' }, {}), 'fixed');
   assert.throws(() => exchangeMode({ exchange: 'roughness', dragCoefficient: 1e-3 }, {}));
   const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
-  const fixed = createModel(new Grid(4), { topography, surface: { dragCoefficient: 1.1e-3 } });
+  const fixed = createModel(new Grid(16), { topography, surface: { dragCoefficient: 1.1e-3 } });
   for (let i = 0; i < fixed.mesh.nCells; i++) assert.equal(fixed.exchange.drag[i], fixed.geography.land[i] ? LAND_DRAG : 1.1e-3);
   assert.equal(fixed.exchange.heat, fixed.exchange.drag);
-  assert.equal(createModel(new Grid(4), {}).exchange.mode, 'roughness');
-  assert.equal(createModel(new Grid(4), { surface: { exchange: 'fixed' } }).exchange, null);
+  assert.equal(createModel(new Grid(16), {}).exchange.mode, 'roughness');
+  assert.equal(createModel(new Grid(16), { surface: { exchange: 'fixed' } }).exchange, null);
   assert.ok(SEA_DRAG === 1.2e-3);
 });
 
@@ -116,8 +116,8 @@ function prepare(model) {
 }
 
 test('both engines give every surface the same transfer coefficients and fluxes', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const cpu = prepare(createModel(new Grid(6), { topography }));
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography }));
+  const cpu = prepare(createModel(new Grid(16), { topography }));
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography }));
   cpu.step(900); await gpu.step(900); await gpu.settle();
   const PH = gpu.gpu.layout.PH, C = cpu.mesh.nCells;
   const [drag, heat, reference, evaporation, surfaceFlux] = await readRanges(gpu.gpu.device, gpu.gpu.buffers.PH, ['DRAG', 'HEATX', 'REFX', 'EVAP', 'SFLUX'].map((name) => ({ offset: PH[name], length: C })));
@@ -143,7 +143,7 @@ test('both engines give every surface the same transfer coefficients and fluxes'
 });
 
 test('snow smooths grass and bare soil but leaves the trees, and the implicit drag applies the stress it stores', () => {
-  const model = prepare(createModel(new Grid(6), { topography, orography: false }));
+  const model = prepare(createModel(new Grid(16), { topography, orography: false }));
   model.step(900);
   const { land, iceSheet } = model.geography, C = model.mesh.nCells;
   const i = [...Array(C).keys()].find((n) => land[n] && !iceSheet[n]);
@@ -165,7 +165,7 @@ test('snow smooths grass and bare soil but leaves the trees, and the implicit dr
 });
 
 test('the gustiness is the free-convection velocity of the step\'s own flux, and the land\'s surface humidity is the one its evaporation implies', () => {
-  const model = prepare(createModel(new Grid(6), { topography }));
+  const model = prepare(createModel(new Grid(16), { topography }));
   model.step(900);
   const { land, iceSheet } = model.geography, C = model.mesh.nCells, { exchange } = model;
   const i = [...Array(C).keys()].find((n) => land[n] && !iceSheet[n]), sea = [...Array(C).keys()].find((n) => !land[n] && model.state[6][n] <= 0);
@@ -188,14 +188,14 @@ test('the gustiness is the free-convection velocity of the step\'s own flux, and
   assert.ok(exchange.wind[i] > 0.5, `with no wind and no depth yet the surface layer's own depth sets w* (${exchange.wind[i]})`);
   const wet = call(i, air + 2, 3, 1, 800).ri, dry = call(i, air + 2, 3, 0, 800).ri;
   assert.ok(wet < dry, `a transpiring surface is the more unstable (Ri ${wet} against ${dry})`);
-  const airHumidity = prepare(createModel(new Grid(6), { topography, surface: { landHumidity: 'air' } }));
+  const airHumidity = prepare(createModel(new Grid(16), { topography, surface: { landHumidity: 'air' } }));
   airHumidity.step(900);
   const other = (wetness) => airHumidity.exchange.cell(i, airHumidity.state[0], airHumidity.state[1], airHumidity.state[4], airHumidity.state[5], air + 2, 3, 0, 0, 1, 1, wetness, 800).ri;
   assert.equal(other(1), other(0), '\'air\' takes the lowest layer\'s humidity whatever the wetness');
 });
 
 test('a saturated, fog-filled lowest layer over a sea 3 K warmer counts its vapor only, so its Ri_b, C_H and gust stay those of moist air; with its cloud water as loading it would read far more unstable', () => {
-  const model = prepare(createModel(new Grid(6), { topography }));
+  const model = prepare(createModel(new Grid(16), { topography }));
   model.step(900);
   const { exchange, state, core, mesh } = model, C = mesh.nCells, K = core.K, b = (K - 1) * C;
   const { exnerLayer, exnerLower, sigmaMid, g } = core.diagnostics;

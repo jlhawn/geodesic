@@ -13,7 +13,7 @@ let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 
 const levels = sigmaInterfaces('bl34');
-const build = (moist = {}, N = 2) => createModel(new Grid(N), { ocean: false, levels, moist });
+const build = (moist = {}, N = 16) => createModel(new Grid(N), { ocean: false, levels, moist });
 const FOG_TOPOGRAPHY = syntheticTopography(90, 180, (lat, lon) => ((Math.cos(lon) > 0 && Math.abs(lat) < 1.2) || lat < -1.15 ? 300 : -4000));
 
 /*
@@ -523,7 +523,7 @@ test('the floored layers drizzle by Khairoutdinov and Kogan, negligibly at fog\'
 });
 
 test('fog stays bounded: a lowest layer fed 200 mm/d holds under 10 g/kg, one fed 50 g/mÂ²/h sits at the scalar fixed point near observed fog water, and 75 g/kg falls below 1 g/kg within six steps over the sea and seven over land, with water exact', () => {
-  const model = createModel(new Grid(6), { topography: FOG_TOPOGRAPHY, ocean: false, levels: sigmaInterfaces('bl36') }), { moist } = model, { K, C, g, dSigma } = model.core.diagnostics;
+  const model = createModel(new Grid(16), { topography: FOG_TOPOGRAPHY, ocean: false, levels: sigmaInterfaces('bl36') }), { moist } = model, { K, C, g, dSigma } = model.core.diagnostics;
   const [pi, theta, , , q, qc] = model.state, land = model.geography.land, iceSheet = model.geography.iceSheet;
   const landCell = [...Array(C).keys()].find((i) => land[i] && !iceSheet[i] && Math.abs(model.mesh.latCell[i]) < 0.8), seaCell = [...Array(C).keys()].find((i) => !land[i] && Math.abs(model.mesh.latCell[i]) < 0.8);
   const rows = [];
@@ -566,7 +566,7 @@ test('fog stays bounded: a lowest layer fed 200 mm/d holds under 10 g/kg, one fe
 });
 
 test('fog deposits onto the surface at E C_D W up to fogDepositionLimit, with the continental droplet number on land and the sea\'s on ice sheets, and not without the implicit drag', () => {
-  const dt = 600, make = (moist = {}, surface = {}) => createModel(new Grid(6), { topography: FOG_TOPOGRAPHY, ocean: false, levels, moist, surface });
+  const dt = 600, make = (moist = {}, surface = {}) => createModel(new Grid(16), { topography: FOG_TOPOGRAPHY, ocean: false, levels, moist, surface });
   const model = make(), { K, C } = model.core.diagnostics, land = model.geography.land, iceSheet = model.geography.iceSheet;
   const landCell = [...Array(C).keys()].find((i) => land[i] && !iceSheet[i] && Math.abs(model.mesh.latCell[i]) < 0.8), sheetCell = [...Array(C).keys()].find((i) => iceSheet[i]);
   assert.ok(landCell !== undefined && sheetCell !== undefined);
@@ -598,7 +598,7 @@ test('fog deposits onto the surface at E C_D W up to fogDepositionLimit, with th
 });
 
 test('fog reaching the ground follows the surface\'s phase rule: over cold land it is snow and its fusion heat warms the lowest layer, over warm sea it is rain', () => {
-  const dt = 600, model = createModel(new Grid(6), { topography: FOG_TOPOGRAPHY, ocean: false, levels, boundaryLayer: false, moist: { cumulusMemory: 0 } });
+  const dt = 600, model = createModel(new Grid(16), { topography: FOG_TOPOGRAPHY, ocean: false, levels, boundaryLayer: false, moist: { cumulusMemory: 0 } });
   const { moist, seaIce } = model, { K, C, g, cp, dSigma, exnerLayer } = model.core.diagnostics, [pi, theta] = model.state, land = model.geography.land, iceSheet = model.geography.iceSheet;
   const landCell = [...Array(C).keys()].find((i) => land[i] && !iceSheet[i] && Math.abs(model.mesh.latCell[i]) < 0.8), seaCell = [...Array(C).keys()].find((i) => !land[i] && Math.abs(model.mesh.latCell[i]) < 0.8);
   const fog = (i, surfaceT) => place(model, i, 100000, (height, p) => { const z = height - (model.surfaceGeopotential ? model.surfaceGeopotential[i] / g : 0), T = surfaceT + 0.03 * Math.min(z, 300) - 0.0065 * Math.max(0, z - 300); return { T, q: (z < 150 ? 1 : 0.6) * cloudSaturation(T, p, true, 273.15, 235.15, {}).qs, qc: z < 100 ? 1.5e-3 : 0 }; });
@@ -692,7 +692,7 @@ test('stratiform cloud converts over stratiformLifetime: below the mixing top of
   console.log(`a layer at ${(model.state[0][0] * sigmaMid[k] / 100).toFixed(0)} hPa keeps ${(100 * converts(long) / 1e-4).toFixed(2)} % of its cloud water over ${dt} s as stratiform cloud, ${(100 * converts(short) / 1e-4).toFixed(2)} % otherwise`);
 });
 
-function plumeColumn(options = {}, profile = null, N = 2) {
+function plumeColumn(options = {}, profile = null, N = 16) {
   const model = build(options, N);
   if (profile) place(model, 0, 101500, profile); else jordanColumn(model, 0);
   setDepth(model, 0, 500);
@@ -894,7 +894,7 @@ test('the deep plume leaves the lowest 50 hPa with the IFS surface-flux excess, 
  * Random columns of five kinds (Jordan's sounding warmed or cooled, trade
  * cumulus, stratocumulus, trade wind, a cold dry Jordan) with random
  * boundary layers, deck gates, regimes, mixing tops, sea ice, saved
- * subcloud T_v and surface fluxes, all in single precision, on an N=6 model.
+ * subcloud T_v and surface fluxes, all in single precision.
  */
 function randomColumns(model) {
   const { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics;
@@ -1003,7 +1003,7 @@ test('the IFS entrainment: on Jordan\'s column the plume entrains 1.75e-3 (1.3 â
 
 test('a column convects deep where its plume\'s cloud is deeper than 200 hPa and then as one type only, the deep plume alone, as convectionType top with plumeClosure cape does where both call it deep; elsewhere the shallow plume alone; column enthalpy and water exact', () => {
   const dt = 900, run = (options) => {
-    const model = build(options, 6), C = model.mesh.nCells;
+    const model = build(options), C = model.mesh.nCells;
     randomColumns(model);
     const [pi, theta, , , q, qc] = model.state, { moist, core } = model, { levels } = core.diagnostics;
     const out = [];
@@ -1033,7 +1033,7 @@ test('a column convects deep where its plume\'s cloud is deeper than 200 hPa and
     if (topSeparate[i].deep && topSeparate[i].flux > topSeparate[i].deepFlux) both++;
   });
   console.log(`${depth.length} random columns: ${deep} deep by the cloud's depth (${alone} with a flux, all alone), ${same} deep by both rules and as top with cape, ${onlyDepth} deep by the depth only, ${onlyTop} by the 700 hPa top only; under top with separate ${both} columns run both plumes; enthalpy and water within ${worst.toExponential(1)}`);
-  assert.ok(deep > 10 && same > 10 && alone > 10 && both > 0, `${deep} deep, ${same} alike, ${alone} alone, ${both} with both under top`);
+  assert.ok(deep > depth.length / 30 && same > depth.length / 30 && alone > depth.length / 30 && both > depth.length / 100, `${deep} deep, ${same} alike, ${alone} alone, ${both} with both under top`);
   assert.ok(worst < 1e-15, `enthalpy and water ${worst}`);
 });
 
@@ -1085,7 +1085,7 @@ function handParcel(model) {
   const bottom = K - 1;
   let source = bottom;
   while (source > 0 && p(source - 1) >= pi[0] - O.cumulusSourceDepth) source--;
-  const twin = build({}, 2); twin.state.forEach((a, n) => a.set(model.state[n])); twin.boundaryLayer.depth.set(model.boundaryLayer.depth); twin.radiation.mlmGate.set(model.radiation.mlmGate);
+  const twin = build({}); twin.state.forEach((a, n) => a.set(model.state[n])); twin.boundaryLayer.depth.set(model.boundaryLayer.depth); twin.radiation.mlmGate.set(model.radiation.mlmGate);
   twin.core.diagnoseColumn(0, twin.state[0], twin.state[1], twin.state[4], twin.state[5]);
   twin.moist.plumeColumn(0, twin.state[0], twin.state[1], twin.state[4], twin.state[5], 600);
   let sl = twin.moist.deep.sourceS, qt = twin.moist.deep.sourceQ, w2 = 1, base = 0, deepAt = NaN;
@@ -1147,7 +1147,7 @@ test('the IFS test parcel types the column: from the deep source at 1 m/s, mixin
 });
 
 test('under the test parcel a column whose test cloud is deeper than 200 hPa runs the deep plume alone and every other column the shallow plume alone, with column enthalpy and water exact on random columns', () => {
-  const dt = 900, model = build({}, 6), C = model.mesh.nCells;
+  const dt = 900, model = build({}), C = model.mesh.nCells;
   randomColumns(model);
   const [pi, theta, , , q, qc] = model.state, { moist, core } = model;
   let typed = 0, fired = 0, shallowTyped = 0, shallowRun = 0, worst = 0, deeperThanPlume = 0;
@@ -1165,7 +1165,7 @@ test('under the test parcel a column whose test cloud is deeper than 200 hPa run
     } else if (moist.cumulusBaseFlux[i] > 0) shallowRun++;
   }
   console.log(`${C} random columns: ${typed} typed deep by the test parcel (${fired} fire the deep plume, ${deeperThanPlume} of them with the plume's own cloud no deeper than 200 hPa), ${shallowTyped} typed shallow, ${shallowRun} run the shallow plume; enthalpy and water within ${worst.toExponential(1)}`);
-  assert.ok(typed > 10 && fired > 10 && shallowTyped > 10 && shallowRun > 10, `${typed}, ${fired}, ${shallowTyped}, ${shallowRun}`);
+  assert.ok(typed > C / 30 && fired > C / 30 && shallowTyped > C / 30 && shallowRun > C / 30, `${typed}, ${fired}, ${shallowTyped}, ${shallowRun}`);
   assert.ok(worst < 1e-15, `enthalpy and water ${worst}`);
 });
 
@@ -1237,7 +1237,7 @@ const coldBase = (Ts, base, humid) => (z, p) => {
 const COLD_BASES = [276, 278, 280, 283].flatMap((Ts) => [800, 1200, 1600].flatMap((base) => [0.8, 0.95].map((humid) => [Ts, base, humid])));
 
 test('a deep plume whose frozen rain sublimates in the unsaturated air below its cloud base before it melts, or is taken by the downdraft, changes column enthalpy by L_f times the snow reaching the ground only, on the CPU exactly and on the GPU to single precision, alike on both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const dt = 900, model = build({}, 6), C = model.mesh.nCells, { K, exnerLayer } = model.core.diagnostics, { moist } = model;
+  const dt = 900, model = build({}), C = model.mesh.nCells, { K, exnerLayer } = model.core.diagnostics, { moist } = model;
   for (let i = 0; i < C; i++) {
     place(model, i, 101500, coldBase(...COLD_BASES[i % COLD_BASES.length]));
     setDepth(model, i, 500);
@@ -1259,7 +1259,7 @@ test('a deep plume whose frozen rain sublimates in the unsaturated air below its
   pass.end();
   device.queue.submit([encoder.finish()]);
   const gpuState = await gpu.download(), ph = await gpu.downloadPhysics(), gpuBefore = model.state.map((a) => Float64Array.from(a));
-  const twin = build({}, 6);
+  const twin = build({});
   twin.state.forEach((a, n) => a.set(model.state[n]));
   for (const field of ['depth', 'buoyancyFlux', 'friction']) twin.boundaryLayer[field].set(model.boundaryLayer[field]);
   twin.radiation.mlmGate.set(model.radiation.mlmGate);
@@ -1335,7 +1335,7 @@ test('the IFS updraught conversion: on Jordan\'s column each layer rains l (1 âˆ
 
 async function parity(options, { momentum = false } = {}) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
-  const model = build(options, 6), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
+  const model = build(options), { moist, core, mesh } = model, C = mesh.nCells, { K } = core.diagnostics, dt = 900;
   const [pi, theta, , surfaceT, q, qc] = model.state;
   const { buoyancy, friction, regime, mixingTop, stratiform, concentration, saved, sensible, evaporation } = randomColumns(model);
   let cloudSeed = 4242;
@@ -1564,7 +1564,7 @@ test("a cumulusAscent other than 'buoyant' or 'kinetic', the kinetic ascent with
 
 test("stratocumulusInversion shuts both plumes where the column's estimated inversion strength exceeds it: under a threshold below every column's EIS no plume runs, above every one the step is the default's, and at 2 K every column whose plume still runs steps as by default", () => {
   const step = (options) => {
-    const model = build(options, 6), C = model.mesh.nCells;
+    const model = build(options), C = model.mesh.nCells;
     randomColumns(model);
     model.phases.adjust(0, C, 900);
     return { C, flux: Float64Array.from(model.moist.cumulusBaseFlux), rain: Float64Array.from(model.moist.convectivePrecipitation), state: model.state.map((a) => Float64Array.from(a)) };
@@ -1641,7 +1641,7 @@ test("on BOMEX's profile (Siebesma et al. 2003, Table B1) the shallow plume carr
   const thetaL = profile([[0, 298.7], [520, 298.7], [1480, 302.4], [2000, 308.2], [3000, 311.85]]);
   const water = profile([[0, 17e-3], [520, 16.3e-3], [1480, 10.7e-3], [2000, 4.2e-3], [3000, 3e-3]]);
   const run = (options, set) => {
-    const model = createModel(new Grid(2), { ocean: false, levels: sigmaInterfaces(set), moist: options }), { moist } = model, [pi, theta, , , q, qc] = model.state, { C, cp, kappa, geopotential, exnerLayer, exnerLower, g } = model.core.diagnostics;
+    const model = createModel(new Grid(16), { ocean: false, levels: sigmaInterfaces(set), moist: options }), { moist } = model, [pi, theta, , , q, qc] = model.state, { C, cp, kappa, geopotential, exnerLayer, exnerLower, g } = model.core.diagnostics;
     place(model, 0, 101500, (z, p) => { const T = thetaL(z) * (p / 1e5) ** kappa; return { T, q: Math.max(5e-4, Math.min(water(z), saturationHumidity(T, p))) }; });
     setDepth(model, 0, 500);
     model.boundaryLayer.buoyancyFlux[0] = 5.7e-4;

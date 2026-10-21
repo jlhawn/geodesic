@@ -49,8 +49,8 @@ function prepare(model, fog = false) {
 
 test('eight GPU steps over a continent track the CPU model: surface, soil, snow, vegetation, and the coast-bound ocean', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const land = { growthTime: 3 * 3600, declineTime: 2 * 3600, snowDeclineTime: 4 * 3600, percolationTime: 1800, stomatalResistance: 140, growthColdest: 283.15, growthWarmest: 303.15 };
-  const cpu = prepare(createModel(new Grid(6), { topography, land }), true);
-  const gpu = prepare(await createGpuModel(new Grid(6), { topography, land }), true);
+  const cpu = prepare(createModel(new Grid(16), { topography, land }), true);
+  const gpu = prepare(await createGpuModel(new Grid(16), { topography, land }), true);
   for (let n = 0; n < 8; n++) { cpu.step(900); await gpu.step(900); }
   await gpu.sync();
   const fogGpu = Float64Array.from((await gpu.gpu.downloadPhysics()).FOG.subarray(0, cpu.mesh.nCells)), fogCpu = Float64Array.from(cpu.moist.fogPrecipitation);
@@ -69,7 +69,7 @@ test('eight GPU steps over a continent track the CPU model: surface, soil, snow,
   for (let i = 0; i < cpu.mesh.nCells; i++) if (cpu.geography.land[i]) moved = Math.max(moved, Math.abs(cpu.land.vegetation[i] - 0.5));
   assert.ok(moved > 0.2, `the vegetation moved at most ${moved} from its start`);
   assert.ok(vegetation.maxDiff < 1e-3, `vegetation max ${vegetation.maxDiff} at ${vegetation.at}`);
-  console.log(`eight steps over a continent at N=6: Ts max ${ts.maxDiff.toExponential(1)} K, θ rms ${theta.rmsRel.toExponential(1)}, soil max ${soil.maxDiff.toExponential(1)} kg/m², snow max ${snow.maxDiff.toExponential(1)} kg/m²; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
+  console.log(`eight steps over a continent at N=16: Ts max ${ts.maxDiff.toExponential(1)} K, θ rms ${theta.rmsRel.toExponential(1)}, soil max ${soil.maxDiff.toExponential(1)} kg/m², snow max ${snow.maxDiff.toExponential(1)} kg/m²; land T ${dc.landMeanT.toFixed(2)} vs ${d.landMeanT.toFixed(2)}, soil ${dc.soilWater.toFixed(2)} vs ${d.soilWater.toFixed(2)}, ocean h1 ${dc.oceanUpperDepth.toFixed(2)} vs ${d.oceanUpperDepth.toFixed(2)}`);
   assert.ok(ts.maxDiff < 0.02, `Ts max ${ts.maxDiff} at ${ts.at}`);
   assert.ok(theta.rmsRel < 1e-4, `θ rms ${theta.rmsRel}`);
   assert.ok(soil.maxDiff < 1e-2, `soil max ${soil.maxDiff} at ${soil.at}`);
@@ -88,30 +88,31 @@ test('the stratiform share that tapers the boundary layer\'s entrainment is zero
     if (model.load) model.load();
     return model;
   };
-  const cpu = inverted(createModel(new Grid(6), { topography })), gpu = inverted(await createGpuModel(new Grid(6), { topography }));
-  const allSea = inverted(createModel(new Grid(6), {}));
+  const cpu = inverted(createModel(new Grid(16), { topography })), gpu = inverted(await createGpuModel(new Grid(16), { topography }));
+  const allSea = inverted(createModel(new Grid(16), {}));
   cpu.step(900); await gpu.step(900); allSea.step(900);
   await gpu.sync();
   const ph = await gpu.gpu.downloadPhysics(), C = cpu.mesh.nCells, land = cpu.geography.land;
   const share = stats(cpu.radiation.stratiform, ph.STRAT.subarray(0, C)), entrain = stats(cpu.boundaryLayer.entrainment, ph.ENTRAIN.subarray(0, C));
-  let landRamp = 0, seaRamp = 0, landEntraining = 0;
+  let landRamp = 0, seaRamp = 0, landEntraining = 0, lands = 0;
   for (let i = 0; i < C; i++) {
     if (land[i]) {
+      lands++;
       assert.equal(cpu.radiation.stratiform[i], 0, `cell ${i}: CPU share over land`);
       assert.equal(ph.STRAT[i], 0, `cell ${i}: GPU share over land`);
       if (allSea.radiation.stratiform[i] > 0) landRamp++;
       if (cpu.boundaryLayer.entrainment[i] > 0) landEntraining++;
     } else if (cpu.radiation.stratiform[i] > 0) seaRamp++;
   }
-  console.log(`one step at N=6 over a continent under a 9 K inversion: the share would be positive on ${landRamp} land cells and is on ${seaRamp} sea cells, engines to ${share.maxDiff.toExponential(1)}; ${landEntraining} land cells entrain, w_e engines to ${(1000 * entrain.maxDiff).toExponential(1)} mm/s`);
-  assert.ok(landRamp > 20 && seaRamp > 20, `share on ${landRamp} land and ${seaRamp} sea cells`);
+  console.log(`one step at N=16 over a continent under a 9 K inversion: the share would be positive on ${landRamp} land cells and is on ${seaRamp} sea cells, engines to ${share.maxDiff.toExponential(1)}; ${landEntraining} land cells entrain, w_e engines to ${(1000 * entrain.maxDiff).toExponential(1)} mm/s`);
+  assert.ok(landRamp > 0.1 * lands && seaRamp > 0.1 * (C - lands), `share on ${landRamp} of ${lands} land and ${seaRamp} of ${C - lands} sea cells`);
   assert.ok(share.maxDiff < 2e-3, `share differs by ${share.maxDiff} at ${share.at}`);
   assert.ok(entrain.maxDiff < 2e-5, `w_e differs by ${entrain.maxDiff} at ${entrain.at}`);
 });
 
 test('both engines give each land cell the same albedo from its surface layer, soil water, vegetation and snow, with the wet-soil darkening by the surface layer, by the root zone and without it', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const run = async (land) => {
-    const cpu = createModel(new Grid(6), { topography, land }), gpu = await createGpuModel(new Grid(6), { topography, land });
+    const cpu = createModel(new Grid(16), { topography, land }), gpu = await createGpuModel(new Grid(16), { topography, land });
     const C = cpu.mesh.nCells;
     let s = 7;
     const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
@@ -147,7 +148,7 @@ test('both engines give each land cell the same albedo from its surface layer, s
 
 test('a trace of snow on land leaves the bucket its own wetness in both engines, a snow cover evaporates at the potential rate', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const evaporation = async (engine, snow) => {
-    const model = engine === 'cpu' ? createModel(new Grid(6), { topography }) : await createGpuModel(new Grid(6), { topography });
+    const model = engine === 'cpu' ? createModel(new Grid(16), { topography }) : await createGpuModel(new Grid(16), { topography });
     const C = model.mesh.nCells, init = initializeState(model, {});
     for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
     for (let i = 0; i < C; i++) if (model.geography.land[i]) { model.state[6][i] = 0; model.state[3][i] = 268; }
@@ -160,7 +161,7 @@ test('a trace of snow on land leaves the bucket its own wetness in both engines,
     model.destroy();
     return Float64Array.from(ph.EVAP);
   };
-  const land = createModel(new Grid(6), { topography }).geography.land, cells = [...land.keys()].filter((i) => land[i]);
+  const land = createModel(new Grid(16), { topography }).geography.land, cells = [...land.keys()].filter((i) => land[i]);
   for (const engine of ['cpu', 'gpu']) {
     const [bare, trace, covered] = [await evaporation(engine, 0), await evaporation(engine, 1e-20), await evaporation(engine, 5)];
     let apart = 0, wetter = 0;

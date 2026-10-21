@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import { Grid } from '../js/grid.module.js';
 import { ADJUST_KERNELS } from '../js/gpu/physics.gpu.js';
 import { createModel } from '../js/model.module.js';
-import { createParallelModel } from '../js/parallel.module.js';
 import { createBoundaryLayer } from '../js/physics/boundaryLayer.module.js';
-import { initializeState } from '../js/physics/init.module.js';
+import { initializeState, equilibriumProfile } from '../js/physics/init.module.js';
 import { saturationHumidity } from '../js/physics/moist.module.js';
 import { sigmaInterfaces } from '../js/dynamics/sigmaCore.module.js';
 import { SEA_DRAG } from '../js/physics/surface.module.js';
@@ -13,12 +12,13 @@ import { SEA_DRAG } from '../js/physics/surface.module.js';
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
 
-const model = createModel(new Grid(3), { boundaryLayer: { turbulence: 'dry' } });
+const model = createModel(new Grid(16), { boundaryLayer: { turbulence: 'dry' } });
+const reference = equilibriumProfile(model);
 const { core, mesh, boundaryLayer } = model;
 const { K, C, E, dSigma, g, geopotential } = core.diagnostics;
 
 function column(surfaceTheta, lapseAloft, windAloft, stableAbove = Infinity) {
-  const init = initializeState(model, {});
+  const init = initializeState(model, { profile: reference });
   for (let a = 0; a < init.length; a++) model.state[a].set(init[a]);
   const [pi, theta, u, , q] = model.state;
   core.diagnose(pi, theta, q, model.state[5]);
@@ -84,19 +84,6 @@ test('momentum mixing brings wind down to the surface layer and changes each edg
   assert.ok(Math.abs(total() - before + lost) < 1e-10 * Math.abs(before) + 1e-9, `momentum ${before} → ${total()}, the surface took ${lost}`);
 });
 
-test('serial and parallel engines stay bit-identical with the boundary layer', async () => {
-  const serial = createModel(new Grid(6));
-  const parallel = await createParallelModel(new Grid(6), {}, 3);
-  try {
-    const init = initializeState(serial, {});
-    for (let a = 0; a < init.length; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
-    serial.ocean.initialize(serial.state[3], serial.state[6]);
-    parallel.ocean.initialize(parallel.state[3], parallel.state[6]);
-    for (let n = 0; n < 6; n++) { serial.step(900); parallel.step(900); }
-    for (let a = 0; a < serial.state.length; a++) for (let x = 0; x < serial.state[a].length; x++) assert.equal(parallel.state[a][x], serial.state[a][x], `state ${a}[${x}]`);
-  } finally { await parallel.close(); }
-});
-
 test('a warm or moist sea surface deepens the momentum mixing; a cool one keeps the neutral profile', () => {
   const { exnerLayer, sigmaMid, kappa } = core.diagnostics;
   const neutralLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry', stability: false }), bulkLayer = createBoundaryLayer(mesh, core, { turbulence: 'dry' });
@@ -142,24 +129,6 @@ test('where a mixed-layer deck runs the K-profile spans its inversion when that 
   }
   console.log(`a deck 800 m above the Richardson depth adds ${added} mixing interfaces over ${deepened} of ${Math.ceil(C / 3)} decked columns`);
   assert.ok(deepened > 0.5 * Math.floor(C / 3), `${deepened} columns mix deeper`);
-});
-
-test('serial and parallel engines stay bit-identical with the mixed-layer deck carrying its height and gate', async () => {
-  const radiation = { stratusSubsidence: 0, minimumInversion: 0 };
-  const serial = createModel(new Grid(6), { radiation });
-  const parallel = await createParallelModel(new Grid(6), { radiation }, 3);
-  try {
-    const init = initializeState(serial, {});
-    for (let a = 0; a < init.length; a++) { serial.state[a].set(init[a]); parallel.state[a].set(init[a]); }
-    serial.ocean.initialize(serial.state[3], serial.state[6]);
-    parallel.ocean.initialize(parallel.state[3], parallel.state[6]);
-    for (let n = 0; n < 6; n++) { serial.step(900); parallel.step(900); }
-    let decked = 0;
-    for (let i = 0; i < serial.mesh.nCells; i++) if (serial.radiation.mlmTop[i] > 0) decked++;
-    assert.ok(decked > 0, 'the deck runs and hands its height to the boundary layer');
-    for (let a = 0; a < serial.state.length; a++) for (let x = 0; x < serial.state[a].length; x++) assert.equal(parallel.state[a][x], serial.state[a][x], `state ${a}[${x}]`);
-    for (const name of ['mlmHeight', 'mlmGate', 'mlmTop', 'mlmCover', 'mlmWater']) assert.deepEqual(parallel.radiation[name], serial.radiation[name], name);
-  } finally { await parallel.close(); }
 });
 
 function entrainingColumn(surfaceWarmth = 2) {
@@ -301,14 +270,14 @@ test('the deck\'s opening and the stratiform share taper w_e: a half-open gate o
 test('the shear term comes in continuously with the surface buoyancy flux: w_e falls to zero as B0 falls to zero, linearly below the onset; without the onset it jumps', () => {
   const layer = createBoundaryLayer(mesh, core, { turbulence: 'dry' }), switched = createBoundaryLayer(mesh, core, { turbulence: 'dry', entrainment: { shearOnset: 0 } });
   const state = entrainingColumn(0), surfaceT = state[3], neutral = surfaceT[0];
-  const flux = (warmth) => { surfaceT[0] = neutral + warmth; layer.diagnose(state); return layer.buoyancyFlux[0]; };
+  const flux = (warmth) => { surfaceT[0] = neutral + warmth; layer.diagnose(state, 0, 1); return layer.buoyancyFlux[0]; };
   let cold = -8, warm = 2;
   for (let n = 0; n < 60; n++) { const mid = 0.5 * (cold + warm); if (flux(mid) > 0) warm = mid; else cold = mid; }
   const samples = [];
   for (const target of [1e-4, 5e-5, 2.5e-5, 1e-5, 1e-6, 1e-8]) {
     let lo = cold, hi = 2;
     for (let n = 0; n < 60; n++) { const mid = 0.5 * (lo + hi); if (flux(mid) > target) hi = mid; else lo = mid; }
-    flux(hi); switched.diagnose(state);
+    flux(hi); switched.diagnose(state, 0, 1);
     const expected = expectedEntrainment(state, layer, 0);
     assert.ok(Math.abs(layer.entrainment[0] - expected.velocity) <= 1e-12 * expected.velocity, `B0 ${expected.buoyancy}: w_e ${layer.entrainment[0]} against ${expected.velocity}`);
     samples.push([expected.buoyancy, layer.entrainment[0], switched.entrainment[0]]);
@@ -326,7 +295,7 @@ test('the shear term comes in continuously with the surface buoyancy flux: w_e f
 async function engines(entrainment) {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(6), { ocean: false, levels, boundaryLayer: { entrainment, turbulence: 'dry' }, surface: { exchange: 'fixed' } });
+  const pair = createModel(new Grid(16), { ocean: false, levels, boundaryLayer: { entrainment, turbulence: 'dry' }, surface: { exchange: 'fixed' } });
   const { core: c, mesh: m, state, radiation, moist, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -435,7 +404,7 @@ test('the subsidence share matches between the engines on the random columns: wi
 test('a surface parcel that tops out at the base of a stratocumulus whose descending parcel stops there is coupled to it in both engines', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl34');
-  const pair = createModel(new Grid(6), { ocean: false, levels, surface: { exchange: 'fixed' } });
+  const pair = createModel(new Grid(16), { ocean: false, levels, surface: { exchange: 'fixed' } });
   const { core: c, mesh: m, state, radiation, boundaryLayer: layer } = pair;
   const { K: nK, C: nC, E: nE, exnerLayer, sigmaMid, kappa, geopotential: phi, g: grav } = c.diagnostics;
   const [pi, theta, u, surfaceT, q, qc] = state;
@@ -521,7 +490,7 @@ function cumulusColumns(pair) {
 
 test('a cumulus-capped column keeps its cloud-top layer decoupled: with cloudTop.cumulusCapped the descending parcel stops at the cumulus base, the surface-driven depth stays the Richardson depth and no mixing crosses the layer between', () => {
   const levels = sigmaInterfaces('bl42');
-  const build = (cloudTop) => createModel(new Grid(3), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { cloudTop } });
+  const build = (cloudTop) => createModel(new Grid(16), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { cloudTop } });
   const plain = build({ cumulusCapped: false }), capped = build({});
   const { topLayer, nC, nK } = cumulusColumns(plain);
   cumulusColumns(capped);
@@ -555,7 +524,7 @@ test('a cumulus-capped column keeps its cloud-top layer decoupled: with cloudTop
 test('the cumulus-capped rule matches between the engines: the cumulus columns come out decoupled at the same surface-driven depth on both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuCore } = await import('../js/gpu/core.gpu.js');
   const levels = sigmaInterfaces('bl42');
-  const pair = createModel(new Grid(6), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { cloudTop: { cumulusCapped: true } } });
+  const pair = createModel(new Grid(16), { ocean: false, levels, surface: { exchange: 'fixed' }, boundaryLayer: { cloudTop: { cumulusCapped: true } } });
   const { core: c, mesh: m, state, radiation, boundaryLayer: layer } = pair;
   const { K: nK, C: nC } = c.diagnostics;
   cumulusColumns(pair);

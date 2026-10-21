@@ -10,7 +10,7 @@ import { HYBRID_LAYERS } from '../js/ocean/column.module.js';
 
 /*
  * The GPU hybrid ocean (vertical: 'hybrid' in js/gpu/layeredOcean.gpu.js)
- * against the serial CPU hybrid ocean at N=8 on a sea with a continent,
+ * against the serial CPU hybrid ocean at N=16 on a sea with a continent,
  * phase by phase through a step and over twenty-one steps, and the float32
  * water, heat and salt it keeps through each phase of its step, the regrid
  * and the column physics above all. One GPU model at a time (CLAUDE.md).
@@ -22,7 +22,7 @@ const { readRanges } = gpuAvailable ? await import('../js/gpu/device.module.js')
 
 const topography = syntheticTopography(90, 180, (lat, lon) => (Math.cos(lon) > 0 && Math.abs(lat) < 1.2 ? 300 : -4000));
 const HYBRID = { vertical: 'hybrid', everySteps: 1 };
-const DT = 1350;
+const N = 16, DT = 1350;
 
 function stats(cpu, gpu, mask = null) {
   let maxDiff = 0, at = -1, sumSq = 0, sumRef = 0, n = 0;
@@ -63,9 +63,9 @@ const compare = (label, a, b, wet, limit) => {
   return results;
 };
 
-test('the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=8: the start, every phase of a step, and twenty-one steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { mesh, cpu, surfaceT, ice, stress } = scenario(8), C = mesh.nCells, E = mesh.nEdges;
-  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: HYBRID });
+test('the GPU hybrid ocean tracks the serial CPU hybrid ocean at N=16: the start, every phase of a step, and twenty-one steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { mesh, cpu, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, E = mesh.nEdges;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID });
   const gpu = gpuModel.oceanEngine;
   assert.equal(gpu.layers, cpu.layers);
   cpu.initialize(Float64Array.from(surfaceT), ice);
@@ -143,8 +143,8 @@ const FLOORS = {
   column: [0.05, 0.2, 3e-4, 1e-3, 1e-15, 1e-15],
 };
 test('in single precision the GPU hybrid ocean keeps the heat, salt and water it stores through the regrid and the column physics to the stores\' rounding, and through the other phases of its step', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { mesh, surfaceT, ice, stress } = scenario(8), C = mesh.nCells, E = mesh.nEdges;
-  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: HYBRID });
+  const { mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, E = mesh.nEdges;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID });
   const gpu = gpuModel.oceanEngine, { device } = gpuModel.gpu, { OS } = gpu.layout, L = gpu.layers, rhoCp = gpu.options.density * gpu.options.specificHeat;
   gpu.initialize(Float64Array.from(surfaceT), ice);
   for (let n = 0; n < 4; n++) await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
@@ -208,9 +208,9 @@ test('in single precision the GPU hybrid ocean keeps the heat, salt and water it
 
 test('the GPU hybrid ocean keeps a brackish band\'s fixed-depth surface layers as the CPU does and tracks it over five steps', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const brackish = (lat) => (Math.abs(lat) < 0.35 ? 12 : 34.5);
-  const { mesh, cpuModel, surfaceT, ice, stress } = scenario(8), C = mesh.nCells;
+  const { mesh, cpuModel, surfaceT, ice, stress } = scenario(N), C = mesh.nCells;
   const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID, salinityProfile: brackish });
-  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: { ...HYBRID, salinityProfile: brackish } });
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: { ...HYBRID, salinityProfile: brackish } });
   const gpu = gpuModel.oceanEngine;
   const cpuT = Float64Array.from(surfaceT);
   cpu.initialize(cpuT, ice);
@@ -259,10 +259,10 @@ function edgeTransports(fields, ocean, mesh) {
   return out;
 }
 
-test('with edgeTransport kept the GPU hybrid ocean holds every edge\'s transport through its regrid and column physics and tracks the CPU at N=8', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
-  const { cpuModel, mesh, surfaceT, ice, stress } = scenario(8), C = mesh.nCells, E = mesh.nEdges, KEPT = { ...HYBRID, edgeTransport: 'kept' };
+test('with edgeTransport kept the GPU hybrid ocean holds every edge\'s transport through its regrid and column physics and tracks the CPU at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, E = mesh.nEdges, KEPT = { ...HYBRID, edgeTransport: 'kept' };
   const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...KEPT });
-  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: KEPT });
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: KEPT });
   const gpu = gpuModel.oceanEngine, flux = new Float64Array(C);
   cpu.initialize(Float64Array.from(surfaceT), ice);
   gpu.initialize(Float64Array.from(surfaceT), ice);
@@ -299,10 +299,10 @@ test('with edgeTransport kept the GPU hybrid ocean holds every edge\'s transport
   gpuModel.destroy();
 });
 
-test('at a six-hour ocean step, N=4\'s coupled one, the GPU hybrid ocean takes the CPU\'s parts of its dynamics, tracks it over two days at N=8 and keeps its currents slow', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+test('at a six-hour ocean step, four times the coupled ocean\'s at N=16, the GPU hybrid ocean takes the CPU\'s parts of its dynamics, tracks it over two days at N=16 and keeps its currents slow', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const LONG = 6 * 3600;
-  const { mesh, cpu, surfaceT, ice, stress } = scenario(8), C = mesh.nCells;
-  const gpuModel = await createGpuModel(new Grid(8), { topography, ocean: HYBRID });
+  const { mesh, cpu, surfaceT, ice, stress } = scenario(N), C = mesh.nCells;
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: HYBRID });
   const gpu = gpuModel.oceanEngine;
   cpu.initialize(Float64Array.from(surfaceT), ice);
   gpu.initialize(Float64Array.from(surfaceT), ice);
