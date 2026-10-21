@@ -1,7 +1,8 @@
 # The GPU queue of scripts/gpuQueue.mjs for zsh:
 #   source scripts/gpuQueue.zsh
-#   gpu_run LOG CMD [ARG...]   waits its turn, holds the GPU for all of CMD, exits with its status
-#   gpu_status                 the holder, its command and age, and the queue in order
+#   export GPU_WHO=<session name>                  once per session
+#   GPU_JOB='<one line>' gpu_run LOG CMD [ARG...]  waits its turn, holds the GPU for all of CMD, exits with its status
+#   gpu_status                                     rewrites and prints <queue dir>/status.md: the holder and the queue in order
 # or, without sourcing, zsh scripts/gpuQueue.zsh run LOG CMD [ARG...] | status.
 typeset -g GPU_QUEUE_SCRIPT=${${(%):-%x}:A:h}/gpuQueue.mjs
 
