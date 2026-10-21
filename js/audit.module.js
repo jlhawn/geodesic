@@ -76,17 +76,18 @@ export function heatingProfile(Q, p, dp, { top = 100e2, width = 50e2 } = {}) {
  * open water at the freezing point) and `height`, lowestHeight's value
  * before the step. The coefficient is the surface exchange's C_H of the
  * step where the model has one, seaDrag and landDrag otherwise, and the
- * wind the surface layer's gust wind where it has one.
+ * wind the surface layer's gust wind where it has one. Like the model's,
+ * the exchange is capped at the lowest layer's mass over the step dt.
  */
-export function bulkSensible(model, i, airT, surfaceT, cover, height, { seaDrag, landDrag, freezing, gustiness = 3 }) {
-  const pi = model.state[0], { sigmaMid, K, R, cp } = model.core.diagnostics;
+export function bulkSensible(model, i, airT, surfaceT, cover, height, { seaDrag, landDrag, freezing, gustiness = 3, dt = 0 }) {
+  const pi = model.state[0], { sigmaMid, dSigma, K, R, cp, g } = model.core.diagnostics;
   let skin = surfaceT;
   const land = model.geography.land[i], exchange = model.exchange;
   if (!land && cover > 0 && cover < 1) skin = cover * surfaceT + (1 - cover) * freezing;
   const density = pi[i] * sigmaMid[K - 1] / (R * airT);
   const coefficient = exchange ? exchange.heat[i] : land ? landDrag : seaDrag;
   const wind = exchange && exchange.gusty ? exchange.wind[i] : Math.max(model.surface.windSpeed[i], gustiness);
-  return density * coefficient * wind * (cp * (skin - airT) - height);
+  return Math.min(density * coefficient * wind, dt > 0 ? pi[i] * dSigma[K - 1] / (g * dt) : Infinity) * (cp * (skin - airT) - height);
 }
 
 /*
