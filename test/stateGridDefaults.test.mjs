@@ -1,23 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { Grid } from '../js/grid.module.js';
 import { createOcean } from '../js/ocean/layered.module.js';
 import { createGeography, topographyFromInt16 } from '../js/geography.module.js';
 import { decodeState } from '../js/stateFile.module.js';
-import { stateGrid, gridMesh, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
+import { stateGrid, savedDryColumns, maskMismatches } from '../js/stateGrid.module.js';
+import { DEFAULT_RUNS } from '../js/defaultRun.module.js';
 
 const runs = new URL('../runs/', import.meta.url);
 const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 const readParts = async (manifest) => decodeState(Buffer.concat(JSON.parse(readFileSync(new URL(manifest, runs))).parts.map(({ file }) => readFileSync(new URL(file, runs)))));
 
-for (const [name, offCoast] of [['eleven64_day1825', 45], ['eleven128_day1825', 91]]) {
-  test(`${name}, saved without a grid header, loads on the 8-pass grid it was made on with no cell off its coast (${offCoast} on the 30-pass grid)`, async () => {
-    const saved = await readParts(`${name}.parts.json`);
-    assert.equal(saved.grid, undefined);
-    const found = stateGrid(saved, topography), dry = savedDryColumns(saved);
-    assert.deepEqual({ relax: found.relax, source: found.source, mismatches: found.mismatches }, { relax: 8, source: 'mask', mismatches: 0 });
-    assert.equal(maskMismatches(dry, createGeography(gridMesh(new Grid(saved.N, { relax: 30 })), topography).land), offCoast);
+for (const N of [64, 128]) {
+  const manifest = DEFAULT_RUNS[N].replace(/^runs\//, '');
+  test(`the N=${N} default, ${manifest}, loads on the grid it was made on with no cell off its coast, and without a grid header its coast finds that grid`, async () => {
+    const saved = await readParts(manifest);
+    const found = stateGrid(saved, topography);
+    assert.equal(maskMismatches(savedDryColumns(saved), createGeography(found.mesh, topography).land), 0);
+    const bare = stateGrid({ ...saved, grid: undefined }, topography);
+    assert.deepEqual({ relax: bare.relax, source: bare.source, mismatches: bare.mismatches }, { relax: found.relax, source: 'mask', mismatches: 0 });
     if (saved.N > 64) return;
     const ocean = createOcean(found.mesh, { geography: createGeography(found.mesh, topography) });
     const surfaceT = Float64Array.from(saved.surfaceT), ice = Float64Array.from(saved.ice);

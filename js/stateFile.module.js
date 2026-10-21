@@ -9,7 +9,7 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * so that a run is named by its content and a store can keep its chunks
  * under their hashes; or the same state in binary: 'GCMS', a
  * little-endian u32 header length, the JSON header { N, K, day, time,
- * terrain, grid, ocean, land, arrays: [{ name, length, offset, type }] }
+ * terrain, grid, options, ocean, land, arrays: [{ name, length, offset, type }] }
  * (which may end in spaces counted in that length), zero padding to a
  * multiple of 4, then each array at its byte offset from the end of the
  * padding, as float32 unless its type is 'f64'. Array names are the JSON
@@ -22,6 +22,8 @@ import { sigmaInterfaces, sigmaGridName } from './dynamics/sigmaCore.module.js';
  * atmosphere's grid, top to ground; a state without it is on 'cam26'.
  * `grid` is { relax }, the Lloyd passes of the mesh the state was made on
  * (stateGrid.module.js finds them for a state saved without it).
+ * `options`, when present, holds the model options the run was made with
+ * by group ({ radiation, moist }), which the page's model starts with.
  */
 export function stateName(file) {
   return file.replace(/(?:\.json(?:\.gz)?|\.parts\.json|\.bin(?:\.gz)?)$/, '');
@@ -109,7 +111,7 @@ export function encodeState(state, { f64 = [] } = {}) {
     offset += size * values.length;
     return entry;
   });
-  const meta = Object.fromEntries(Object.entries(state).filter(([key, value]) => typeof value !== 'object' || (key === 'grid' && value && !isArray(value))));
+  const meta = Object.fromEntries(Object.entries(state).filter(([key, value]) => typeof value !== 'object' || ((key === 'grid' || key === 'options') && value && !isArray(value))));
   for (const key of GROUPS) if (state[key] && !isArray(state[key])) { const header = groupHeader(state[key]); if (Object.keys(header).length) meta[key] = header; }
   const json = JSON.stringify({ ...meta, arrays });
   const header = new TextEncoder().encode(json.padEnd(json.length + ((8 - ((8 + new TextEncoder().encode(json).length) % 8)) % 8)));
