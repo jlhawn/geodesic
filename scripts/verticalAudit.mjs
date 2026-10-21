@@ -292,7 +292,7 @@ const heated = [];
 for (let i = 0; i < C; i++) if (HEATED.includes(boxOf[i])) heated.push(i);
 const source = HEATED.map(() => ({ q1r: new Float64Array(K), pressure: new Float64Array(K), thickness: new Float64Array(K), areaSteps: 0 }));
 const afterClosure = new Float64Array(heated.length * K), sensibleHeat = new Float64Array(heated.length), lowestExner = new Float64Array(heated.length), layerEx = new Float64Array(K);
-const sensibleOptions = { seaDrag: SURFACE.dragCoefficient ?? SEA_DRAG, landDrag: LAND_DRAG, freezing: FREEZING_POINT, gustiness: RADIATION.gustiness ?? 3 };
+const sensibleOptions = { seaDrag: SURFACE.dragCoefficient ?? SEA_DRAG, landDrag: LAND_DRAG, freezing: FREEZING_POINT, gustiness: RADIATION.gustiness ?? 3, dt };
 const physicsPhase = phases.physics, closurePhase = phases.closure;
 phases.physics = (...args) => {
   deckStart();

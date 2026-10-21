@@ -10,7 +10,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { createModel } from '../js/model.module.js';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { decodeState, savedLevels } from '../js/stateFile.module.js';
 import { cellVector } from '../js/dynamics/operators.module.js';
 import { THERMOCLINE_DENSITY, LAYER_DENSITIES, savedDensities } from '../js/ocean/layered.module.js';
@@ -22,11 +22,10 @@ const WINDOW = at >= 0 ? Number(args.splice(at, 2)[1]) : 90;
 const files = args;
 if (!files.length) { console.error('usage: node scripts/compareStates.mjs <state> [<state> ...] [--window days]'); process.exit(1); }
 
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
 const meshes = new Map();
 const modelFor = (saved) => {
-  const levels = savedLevels(saved), key = `${saved.N} ${stateRelax(saved, topography).relax} ${levels.join(' ')}`;
-  return meshes.get(key) ?? meshes.set(key, createModel(stateGrid(saved, topography).mesh, { physics: false, topography, levels })).get(key);
+  const { record, topography, geography } = stateGeography(saved), levels = savedLevels(saved), key = `${saved.N} ${stateRelax(saved, topography).relax} ${levels.join(' ')} ${JSON.stringify(record)}`;
+  return meshes.get(key) ?? meshes.set(key, createModel(stateGrid(saved, topography).mesh, { physics: false, topography, geography, levels })).get(key);
 };
 
 /*

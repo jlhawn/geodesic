@@ -8,23 +8,23 @@
 // (data/woa_sst_monthly_1deg.bin) on the state's date, and SST=cycle sets
 // it again at the start of every day on that day's date, the annually
 // repeating SST of QBOi's experiment 2 (Butchart et al. 2018). MOIST,
-// BOUNDARY_LAYER, SURFACE, RADIATION and GRAVITY_WAVES (JSON, or false)
-// pass options as scripts/spinup.mjs does; LEVELS (a grid of SIGMA_GRIDS)
-// runs the arm on that grid with the state remapped onto it; PERTURB makes
-// a replicate, every θ scaled by 1 + PERTURB·u with u uniform in ±1/2, each
-// SEED (default 12345) another. TEM_HOURS samples the transformed Eulerian
-// mean (scripts/residualCirculation.mjs) every TEM_HOURS hours after day
-// TEM_FROM, with the gravity waves' zonal force and absolute flux by layer
-// from the CPU engine's drag on the same state, and writes their means to
-// OUT/TAG_tem.json. WINDS=1 logs scripts/upperAtmosphere.mjs's upper-winds
-// line every day. Each day's means (surface temperature, absorbed sunlight,
-// OLR, albedo, the cloud effects, the clear-sky OLR, rain) are printed from
-// a diagnostics frame, and the saves carry the day's per-cell means. The
-// AMIP question for one state: what the atmosphere does over the observed
-// sea.
+// BOUNDARY_LAYER, SURFACE, RADIATION and GRAVITY_WAVES (JSON, or false) and
+// DYNAMICS (JSON) pass options as scripts/spinup.mjs does; LEVELS (a grid
+// of SIGMA_GRIDS) runs the arm on that grid with the state remapped onto
+// it; PERTURB makes a replicate, every θ scaled by 1 + PERTURB·u with u
+// uniform in ±1/2, each SEED (default 12345) another. TEM_HOURS samples
+// the transformed Eulerian mean (scripts/residualCirculation.mjs) every
+// TEM_HOURS hours after day TEM_FROM, with the gravity waves' zonal force
+// and absolute flux by layer from the CPU engine's drag on the same state,
+// and writes their means to OUT/TAG_tem.json. WINDS=1 logs
+// scripts/upperAtmosphere.mjs's upper-winds line every day. Each day's
+// means (surface temperature, absorbed sunlight, OLR, albedo, the cloud
+// effects, the clear-sky OLR, rain) are printed from a diagnostics frame,
+// and the saves carry the day's per-cell means. The AMIP question for one
+// state: what the atmosphere does over the observed sea.
 //   SST=woa DAYS=12 SAVE_DAYS=3 node scripts/fixedSst.mjs STATE.bin OUT TAG
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography, geographyHeader } from '../js/geography.module.js';
 import { createGpuModel } from '../js/gpu/model.gpu.js';
 import { withCadence } from '../js/cadence.module.js';
 import { decodeState, encodeState, savedLevels } from '../js/stateFile.module.js';
@@ -41,10 +41,10 @@ const DAYS = Number(process.env.DAYS ?? 12), SAVE_DAYS = Number(process.env.SAVE
 const TEM_HOURS = Number(process.env.TEM_HOURS ?? 0), TEM_FROM = Number(process.env.TEM_FROM ?? 0), WINDS = process.env.WINDS === '1';
 const env = (name) => JSON.parse(process.env[name] ?? '{}');
 const saved = await decodeState(new Uint8Array(readFileSync(FILE)));
-const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
+const { record, topography, geography, land: landOptions } = stateGeography(saved);
 const mesh = stateGrid(saved, topography).mesh, dt = 1350 * 16 / saved.N, perDay = Math.round(86400 / dt);
 const levels = process.env.LEVELS ? sigmaInterfaces(process.env.LEVELS) : savedLevels(saved);
-const model = await createGpuModel(mesh, { topography, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), gravityWaves: env('GRAVITY_WAVES') });
+const model = await createGpuModel(mesh, { topography, geography, land: landOptions, levels, ...withCadence({ ocean: false, radiation: { clearSkyPass: true, ...env('RADIATION') } }, dt, saved.N), ice: { slabHeatCapacity: CAP }, moist: env('MOIST'), boundaryLayer: env('BOUNDARY_LAYER'), surface: env('SURFACE'), gravityWaves: env('GRAVITY_WAVES'), dynamics: env('DYNAMICS') });
 const { state, core } = model, C = mesh.nCells;
 const carried = { ...saved, ...(process.env.LEVELS ? remapLevels(savedLevels(saved), levels, saved, mesh) : {}) };
 const PERTURB = Number(process.env.PERTURB ?? 0);
@@ -119,7 +119,7 @@ for (let day = 1; day <= DAYS; day++) {
   if (day >= SAVE_FROM && (day % SAVE_DAYS === 0 || day === DAYS)) {
     await model.sync();
     const [pi, theta, u, surfaceT, q, qc, ice] = state, { concentration } = model.seaIce, r = model.radiation, b = model.boundaryLayer;
-    const header = { N: saved.N, ...gridHeader(mesh), K: core.K, day: saved.day + day, time: model.time, terrain: !!model.surfaceGeopotential, levels: core.levels };
+    const header = { N: saved.N, ...gridHeader(mesh), K: core.K, day: saved.day + day, time: model.time, terrain: !!model.surfaceGeopotential, ...geographyHeader(record), levels: core.levels };
     const name = `${OUT}/${TAG}_day${String(saved.day + day).padStart(4, '0')}.bin`;
     writeFileSync(name, encodeState({ ...header, pi, theta, u, surfaceT, q, qc, ice, concentration, mlmSubsidence: r.mlmSubsidence, mlmHeight: r.mlmHeight, mlmGate: r.mlmGate, convectiveRain: model.moist.convectiveRain, largeScaleRain: model.moist.largeScaleRain, meanAbsorbedSolar: r.meanAbsorbedSolar, meanOutgoingLongwave: r.meanOutgoingLongwave, meanPlanetaryAlbedo: r.meanPlanetaryAlbedo, meanShortwaveCloudEffect: r.meanShortwaveCloudEffect, meanLongwaveCloudEffect: r.meanLongwaveCloudEffect, boundaryDepth: b.depth, mixingTop: b.mixingTop, boundaryRegime: b.regime, boundaryBuoyancy: b.buoyancyFlux, windSpeed: model.surface.windSpeed, evaporation: r.evaporation, ...(model.exchange ? { ...(model.exchange.fixed ? {} : { exchangeHeat: model.exchange.heat }), exchangeWind: model.exchange.wind } : {}), cumulusCover: model.moist.cumulusCover, cumulusWater: model.moist.cumulusWater, subcloudVirtual: model.moist.subcloudVirtual, land: await model.land.serialize() }));
     console.log(`day +${day}: sea-mean surface ${(seaMean() - 273.15).toFixed(3)} °C, ${((performance.now() - t0) / 1000 / day).toFixed(1)} s/day, saved ${name.replace(/.*\//, '')}`);

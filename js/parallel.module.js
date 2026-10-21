@@ -19,9 +19,10 @@ function blocks(kind, n, size, extra = {}) {
  * a time for the layer-partitioned phases, and for the rest blocks of
  * cells, vertices or array elements sized to give every worker several
  * units whatever the resolution; the ocean's tendency goes a layer at a
- * time over its L layers, momentum and tracers apart.
+ * time over its L layers, momentum and tracers apart. A coupledClosure
+ * (the hybrid divergence damping) closes the momentum as one unit.
  */
-export function phaseChunks({ K, C, E, V, L = 0 }, workers = 8) {
+export function phaseChunks({ K, C, E, V, L = 0, coupledClosure = false }, workers = 8) {
   const lengths = stateLengths({ K, C, E });
   const size = (n, floor) => Math.max(floor, Math.ceil(n / (4 * workers)));
   const arrays = STATE_NAMES.flatMap((name, a) => blocks('array', lengths[name], size(lengths[name], 4096), { a }));
@@ -32,7 +33,7 @@ export function phaseChunks({ K, C, E, V, L = 0 }, workers = 8) {
     [PHASE.PHYSICS]: blocks('cells', C, size(C, 32)),
     [PHASE.ADVANCE]: arrays,
     [PHASE.COMBINE]: arrays,
-    [PHASE.CLOSURE]: [...blocks('momentum', K, 1), ...blocks('tracers', K, 1)],
+    [PHASE.CLOSURE]: [...blocks('momentum', K, coupledClosure ? K : 1), ...blocks('tracers', K, 1)],
     [PHASE.ADJUST]: blocks('cells', C, size(C, 16)),
     [PHASE.MIX]: blocks('edges', E, size(E, 64)),
     [PHASE.DISSIPATE]: blocks('cells', C, size(C, 32)),

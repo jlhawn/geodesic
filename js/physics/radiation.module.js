@@ -1139,7 +1139,8 @@ export function createRadiation(mesh, core, {
     const bottom = K - 1;
     const airTemperature = theta[bottom * C + i] * exnerLayer[bottom * C + i];
     const airDensity = pi * sigmaMid[bottom] / (R * airTemperature);
-    const exchange = airDensity * exchangeCoefficientAt * Math.max(windSpeed, gustiness);
+    // At most the bottom layer's mass a step: the explicit fluxes take the air to the surface's temperature and humidity, never past them.
+    const exchange = Math.min(airDensity * exchangeCoefficientAt * Math.max(windSpeed, gustiness), dt > 0 ? pi * dSigma[bottom] / (g * dt) : Infinity);
     const sensible = surfaceLayer ? exchange * (cp * (surfaceT - airTemperature) - cp * thetaV[bottom * C + i] * (exnerLower[bottom * C + i] - exnerLayer[bottom * C + i])) : exchange * cp * (surfaceT - airTemperature);
     const evaporation = qAir === null ? 0 : wetness * Math.max(0, exchange * (saturationHumidity(surfaceT, pi) - qAir));
     budget.surfaceBuoyancy = g / theta[bottom * C + i] * (sensible / (airDensity * cp * exnerLayer[bottom * C + i]) + 0.61 * theta[bottom * C + i] * evaporation / airDensity);

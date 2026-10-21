@@ -6,7 +6,7 @@ import { withCadence } from './cadence.module.js';
 import { initializeState } from './physics/init.module.js';
 import { cellVector } from './dynamics/operators.module.js';
 import { regridState, regridOcean, regridLand, regridConcentration, savedDeckField, DECK_FIELDS, savedMoistField, MOIST_FIELDS, savedRadiationField, RADIATION_FIELDS } from './physics/regrid.module.js';
-import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl } from './geography.module.js';
+import { topographyFromInt16, rebalanceSurfacePressure, surfaceGeopotential, decodeSubgrid, subgridUrl, decodeLandIce, landIceUrl, geographyOptions, savedGeography, geographyHeader, checkGeography, topographyUrl, LEGACY_GEOGRAPHY, FRESH_GEOGRAPHY } from './geography.module.js';
 import { decodeClimatology, CLIMATOLOGY_FILE } from './ocean/climatology.module.js';
 import { regridCellField } from './physics/regrid.module.js';
 import { levelFields, dewPoint, wetBulb, miseryIndex, verticalVelocity, smoothCells } from './levels.module.js';
@@ -400,23 +400,33 @@ function placeLand(model, saved, N) {
 }
 
 let currentTopography = null;
+let currentGeography = { ...LEGACY_GEOGRAPHY };
 const topographies = new Map();
-async function loadTopography(url) {
+async function loadTopography(url, name = 'etopo1') {
   if (topographies.has(url)) return topographies.get(url);
   const response = await fetch(url);
   if (!response.ok) throw new Error(`topography ${url}: ${response.status}`);
-  const topography = topographyFromInt16(await response.arrayBuffer());
+  const topography = topographyFromInt16(await response.arrayBuffer(), 720, 1440, name);
   topographies.set(url, topography);
   return topography;
 }
 
 const subgrids = new Map();
-async function loadSubgrid(N) {
-  if (subgrids.has(N)) return subgrids.get(N);
-  const response = await fetch(subgridUrl(N)).catch(() => null);
+async function loadSubgrid(N, topography = 'etopo1') {
+  const key = `${topography} ${N}`;
+  if (subgrids.has(key)) return subgrids.get(key);
+  const response = await fetch(subgridUrl(N, topography)).catch(() => null);
   const fields = response && response.ok ? await response.arrayBuffer().then(decodeSubgrid).catch(() => null) : null;
-  subgrids.set(N, fields);
+  subgrids.set(key, fields);
   return fields;
+}
+
+let landIce = null;
+async function loadLandIce() {
+  if (landIce) return landIce;
+  const response = await fetch(landIceUrl);
+  if (!response.ok) throw new Error(`land ice ${landIceUrl}: ${response.status}`);
+  return (landIce = decodeLandIce(await response.arrayBuffer()));
 }
 
 /*
@@ -622,7 +632,7 @@ async function snapshot() {
     land = Object.fromEntries(Object.entries(l).map(([k, v]) => [k, Float64Array.from(v).buffer]));
   }
   const transfer = [...Object.values(arrays), ...(ocean ? Object.values(groupArrays(ocean)) : []), ...(land ? Object.values(land) : [])];
-  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), arrays, ocean, land }, transfer);
+  self.postMessage({ type: 'snapshotData', N: currentN, K: model.core.K, day: model.time / 86400, time: model.time, terrain: !!model.surfaceGeopotential, ...gridHeader(model.mesh), ...geographyHeader(currentGeography), arrays, ocean, land }, transfer);
   refresh();
 }
 
@@ -633,12 +643,13 @@ async function snapshot() {
  * paused afterwards unless the page asked meanwhile for it to run.
  */
 async function restore(snapshot) {
-  const saved = { N: snapshot.N, K: snapshot.K, day: snapshot.day, time: snapshot.time, terrain: !!snapshot.terrain, ...(snapshot.grid ? { grid: snapshot.grid } : {}) };
+  const saved = { N: snapshot.N, K: snapshot.K, day: snapshot.day, time: snapshot.time, terrain: !!snapshot.terrain, ...(snapshot.grid ? { grid: snapshot.grid } : {}), ...geographyHeader(savedGeography(snapshot)) };
   for (const [name, buffer] of Object.entries(snapshot.arrays)) saved[name] = new Float64Array(buffer);
   if (snapshot.ocean) saved.ocean = { ...groupHeader(snapshot.ocean), ...Object.fromEntries(Object.entries(groupArrays(snapshot.ocean)).map(([k, buffer]) => [k, new Float64Array(buffer)])) };
   if (snapshot.land) saved.land = Object.fromEntries(Object.entries(snapshot.land).map(([k, buffer]) => [k, new Float64Array(buffer)]));
-  if (model && saved.N === currentN && savedRelax(saved) === null) saved.grid = { relax: stateRelax(saved, currentTopography).relax };
-  if (!model || saved.N !== currentN || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels)) { await start({ ...lastStart, saved, paused: true }); return; }
+  const sameGeography = JSON.stringify(savedGeography(saved)) === JSON.stringify(currentGeography);
+  if (model && saved.N === currentN && sameGeography && savedRelax(saved) === null) saved.grid = { relax: stateRelax(saved, currentTopography).relax };
+  if (!model || saved.N !== currentN || !sameGeography || savedRelax(saved) !== model.mesh.relax || !sameLevels(savedLevels(saved), model.core.levels)) { await start({ ...lastStart, saved, paused: true }); return; }
   serving = false;
   status('restoring the snapshot…', 0.8);
   const init = initialState(model, saved, currentN);
@@ -670,7 +681,15 @@ async function start(message) {
   const N = message.N ?? saved?.N ?? 16;
   const gpuWanted = message.engine === 'gpu' && typeof navigator !== 'undefined' && navigator.gpu;
   const options = { ...(message.options ?? {}) };
-  if (message.land !== false) { status('loading the topography…', 0.52); options.topography = await loadTopography(message.topography ?? new URL('../data/topography_0p25.bin', import.meta.url).href); options.subgrid = await loadSubgrid(N); }
+  const geography = message.land === false ? { ...LEGACY_GEOGRAPHY } : saved ? savedGeography(saved) : checkGeography({ ...FRESH_GEOGRAPHY, ...(message.geography ?? {}) });
+  if (message.land !== false) {
+    status('loading the topography…', 0.52);
+    options.topography = await loadTopography(message.topography ?? topographyUrl(geography.topography).href, geography.topography);
+    options.subgrid = await loadSubgrid(N, geography.topography);
+    const sheets = geographyOptions(geography, geography.iceSheets === 'rule' ? null : await loadLandIce());
+    options.geography = { ...(options.geography ?? {}), ...sheets.geography };
+    options.land = { ...sheets.land, ...(options.land ?? {}) };
+  }
   if (!saved && message.land !== false && message.climatology !== false) {
     const climatology = await loadOceanClimatology(message.climatology ?? null, 0.53, 0.55);
     if (climatology) options.ocean = { ...(options.ocean ?? {}), climatology };
@@ -694,6 +713,7 @@ async function start(message) {
   if (built.gpu) built.gpu.device.lost.then((info) => { if (info.reason === 'destroyed' || model !== built) return; running = false; self.postMessage({ type: 'halted', day: model.time / 86400, reason: `the GPU device was lost (${info.message || info.reason}) — reload the page` }); });
   currentN = N;
   currentTopography = options.topography ?? null;
+  currentGeography = geography;
   dt = step;
   stepsPerFrame = message.stepsPerFrame ?? Math.max(2, Math.round((gpuWanted ? 24 : 8) * 16 / N));
   status(saved ? 'placing the saved state…' : 'building the initial state…', 0.8);

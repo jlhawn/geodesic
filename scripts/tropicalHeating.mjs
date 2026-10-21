@@ -173,7 +173,7 @@ phases.ocean = (...args) => {
   oceanPhase(...args);
 };
 const staleExner = new Float64Array(nT * K), physicsAir = new Float64Array(C), physicsSurface = new Float64Array(C), physicsExner = new Float64Array(C);
-const sensibleOptions = { seaDrag: SURFACE.dragCoefficient ?? SEA_DRAG, landDrag: LAND_DRAG, freezing: FREEZING_POINT, gustiness };
+const sensibleOptions = { seaDrag: SURFACE.dragCoefficient ?? SEA_DRAG, landDrag: LAND_DRAG, freezing: FREEZING_POINT, gustiness, dt };
 phases.physics = (iFrom, iTo, step, sums) => {
   for (let i = 0; i < C; i++) { physicsExner[i] = exnerLayer[bottom * C + i]; physicsAir[i] = theta[bottom * C + i] * physicsExner[i]; physicsSurface[i] = surfaceT[i]; }
   traced.forEach((i, n) => { for (let k = 0; k < K; k++) staleExner[n * K + k] = exnerLayer[k * C + i]; });

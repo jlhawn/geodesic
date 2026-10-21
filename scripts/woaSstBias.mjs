@@ -20,7 +20,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { decodeState } from '../js/stateFile.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
-import { topographyFromInt16 } from '../js/geography.module.js';
+import { stateGeography } from '../js/geography.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../js/ocean/climatology.module.js';
 import { sstWindowOf } from '../js/sstMeans.module.js';
 
@@ -80,12 +80,12 @@ function coastalCells(mesh, sea, rings = 2) {
   return near;
 }
 
-export async function biasTable(entries, sst, topography, { instant = false } = {}) {
+export async function biasTable(entries, sst, { instant = false } = {}) {
   let mesh = null, C = 0, model = null, clim = null, iced = null, sea = null;
   const dates = [];
   for (const { path, day } of entries) {
     const st = await decodeState(new Uint8Array(readFileSync(path)));
-    const grid = stateGrid(st, topography).mesh;
+    const grid = stateGrid(st, stateGeography(st).topography).mesh;
     if (!mesh) { mesh = grid; C = mesh.nCells; model = new Float64Array(C); clim = new Float64Array(C); iced = new Float64Array(C); sea = new Uint8Array(C).fill(1); }
     else if (grid.nCells !== C) throw new Error(`${path} is on another grid`);
     const ocean = st.ocean, L = ocean.h.length / C, judged = stateSst(st, sst, { day, instant }), { months } = judged;
@@ -163,8 +163,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   }
   if (!entries.length) { console.error('usage: node scripts/woaSstBias.mjs STATE.bin[@DAY] [STATE.bin[@DAY] ...] [--instant] [--woa FILE] [--json OUT]'); process.exit(1); }
   const sst = decodeMonthlySst(readFileSync(woaPath));
-  const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
-  const table = await biasTable(entries, sst, topography, { instant });
+  const table = await biasTable(entries, sst, { instant });
   console.log(markdown(table));
   if (jsonOut) writeFileSync(jsonOut, JSON.stringify(table, null, 1));
 }

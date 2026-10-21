@@ -24,10 +24,118 @@
  * shorter than the raster spacing) the shallowest point along the great
  * circle between the centers, sampled every 0.1°. Along a seaStraits
  * polyline the edges between its cells are at least the strait's sill
- * deep, whether or not the mesh resolves it.
+ * deep, whether or not the mesh resolves it. With `landIce`
+ * (decodeLandIce, on the topography's grid), a land cell is ice sheet
+ * where ice covers more than half of its land; iceFraction is the share
+ * of its raster points under ice, iceThickness the mean thickness of that
+ * ice (m) and shelfFraction the share afloat. Without it the ice sheets
+ * are Antarctica's land and Greenland's interior above 800 m. With
+ * `iceShelves` 'sea' the floating ice is taken away: its points count
+ * at the depth of the bed beneath them and hold no ice.
  */
-export function topographyFromInt16(buffer, rows = 720, cols = 1440) {
-  return { rows, cols, data: new Int16Array(buffer) };
+export function topographyFromInt16(buffer, rows = 720, cols = 1440, name = 'etopo1') {
+  return { rows, cols, data: new Int16Array(buffer), name };
+}
+
+/*
+ * The rasters under data/ a geography is built on, 0.25° block means of
+ * the elevation in meters: ETOPO1's ice surface (scripts/topography.mjs)
+ * and ETOPO 2022's (scripts/landIce.mjs), the bed plus the ice above it.
+ * A state records its geography where it differs from LEGACY_GEOGRAPHY,
+ * so one without the record is on ETOPO1 with the latitude and elevation
+ * rule; fresh starts take FRESH_GEOGRAPHY. `iceShelves` is the floating
+ * ice: 'land', an ice surface at its freeboard with the coastline at the
+ * shelf front, or 'sea', open water down to the bed.
+ */
+export const TOPOGRAPHIES = { etopo1: 'topography_0p25.bin', etopo2022: 'topography2022_0p25.bin' };
+export const ICE_SHEETS = ['rule', 'observed'], ICE_SHELVES = ['land', 'sea'];
+export const LEGACY_GEOGRAPHY = { topography: 'etopo1', iceSheets: 'rule', iceShelves: 'land' };
+export const FRESH_GEOGRAPHY = { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'land' };
+export const topographyUrl = (name = 'etopo1') => new URL(`../data/${TOPOGRAPHIES[name]}`, import.meta.url);
+
+export function checkGeography(record) {
+  const { topography, iceSheets, iceShelves } = { ...LEGACY_GEOGRAPHY, ...record };
+  if (!TOPOGRAPHIES[topography]) throw new Error(`topography is ${Object.keys(TOPOGRAPHIES).join(' or ')}, not ${topography}`);
+  if (!ICE_SHEETS.includes(iceSheets)) throw new Error(`iceSheets is ${ICE_SHEETS.join(' or ')}, not ${iceSheets}`);
+  if (!ICE_SHELVES.includes(iceShelves)) throw new Error(`iceShelves is ${ICE_SHELVES.join(' or ')}, not ${iceShelves}`);
+  if (iceShelves !== 'land' && iceSheets !== 'observed') throw new Error(`ice shelves at ${iceShelves} need the observed ice sheets`);
+  return { topography, iceSheets, iceShelves };
+}
+
+export const savedGeography = (saved) => checkGeography(Object.fromEntries(Object.keys(LEGACY_GEOGRAPHY).map((key) => [key, saved?.[key] ?? LEGACY_GEOGRAPHY[key]])));
+export const geographyHeader = (record) => Object.fromEntries(Object.entries(checkGeography(record)).filter(([key, value]) => value !== LEGACY_GEOGRAPHY[key]));
+export const pickGeography = (source) => geographyHeader(savedGeography(source));
+export const geographyRecordOf = (topography, options = {}) => (topography?.name ? checkGeography({ topography: topography.name, iceSheets: options.landIce ? 'observed' : 'rule', iceShelves: options.iceShelves ?? 'land' }) : null);
+
+export function readTopography(name = 'etopo1') {
+  const fs = globalThis.process?.getBuiltinModule?.('node:fs');
+  if (!fs) throw new Error(`data/${TOPOGRAPHIES[name]} is read under node only`);
+  const bytes = fs.readFileSync(topographyUrl(name));
+  return topographyFromInt16(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), 720, 1440, name);
+}
+
+/*
+ * Under node, what a model of a saved state (or of a fresh start, with
+ * null) needs of its geography: the record, the raster, and the
+ * geography and land options.
+ */
+export function stateGeography(saved) {
+  const record = saved ? savedGeography(saved) : { ...FRESH_GEOGRAPHY };
+  return { record, topography: readTopography(record.topography), ...geographyOptions(record) };
+}
+
+/*
+ * data/landice_0p25.bin, which scripts/landIce.mjs writes from ETOPO
+ * 2022 on the topography's grid: a 20-byte header ('LIC2', rows,
+ * columns, raster points per pixel, the n pixels holding ice), then for
+ * those pixels their indices (uint32), the mean thickness of their ice
+ * points and of those afloat and the mean bed under those afloat, in
+ * meters (uint16, uint16, int16), and the counts of their ice points and
+ * of those afloat (uint8, uint8).
+ */
+export const ICE_DENSITY = 917, SEAWATER_DENSITY = 1028;
+export const landIceUrl = new URL('../data/landice_0p25.bin', import.meta.url);
+
+export function encodeLandIce({ rows, cols, points, index, count, floating, thickness, floatThickness, floatBed }) {
+  const n = index.length, out = new ArrayBuffer(20 + 12 * n), head = new DataView(out);
+  [76, 73, 67, 50].forEach((b, j) => head.setUint8(j, b));
+  head.setUint32(4, rows, true); head.setUint32(8, cols, true); head.setUint32(12, points, true); head.setUint32(16, n, true);
+  new Uint32Array(out, 20, n).set(index);
+  new Uint16Array(out, 20 + 4 * n, n).set(thickness);
+  new Uint16Array(out, 20 + 6 * n, n).set(floatThickness);
+  new Int16Array(out, 20 + 8 * n, n).set(floatBed);
+  new Uint8Array(out, 20 + 10 * n, n).set(count);
+  new Uint8Array(out, 20 + 11 * n, n).set(floating);
+  return out;
+}
+
+export function decodeLandIce(buffer) {
+  const bytes = buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  const head = new DataView(bytes);
+  if (String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'LIC2') throw new Error('not a land-ice file');
+  const rows = head.getUint32(4, true), cols = head.getUint32(8, true), points = head.getUint32(12, true), n = head.getUint32(16, true);
+  if (bytes.byteLength !== 20 + 12 * n) throw new Error('land-ice file of the wrong size');
+  return {
+    rows, cols, points, index: new Uint32Array(bytes, 20, n), thickness: new Uint16Array(bytes, 20 + 4 * n, n), floatThickness: new Uint16Array(bytes, 20 + 6 * n, n),
+    floatBed: new Int16Array(bytes, 20 + 8 * n, n), count: new Uint8Array(bytes, 20 + 10 * n, n), floating: new Uint8Array(bytes, 20 + 11 * n, n),
+  };
+}
+
+/*
+ * The geography and land options of a geography record: the observed
+ * ice sheets take the ice of data/landice_0p25.bin (`landIce` when
+ * given, else read from the file under node) and the land's
+ * iceSheetBalance.
+ */
+export function geographyOptions(record = {}, landIce = null) {
+  const { iceSheets, iceShelves } = checkGeography(record);
+  if (iceSheets === 'rule') return { geography: {}, land: {} };
+  if (!landIce) {
+    const fs = globalThis.process?.getBuiltinModule?.('node:fs');
+    if (!fs) throw new Error('the observed ice sheets need the land ice of data/landice_0p25.bin');
+    landIce = decodeLandIce(fs.readFileSync(landIceUrl));
+  }
+  return { geography: { landIce, ...(iceShelves !== 'land' ? { iceShelves } : {}) }, land: { iceSheetBalance: true } };
 }
 
 export function syntheticTopography(rows, cols, elevationAt) {
@@ -54,10 +162,28 @@ export const NARROW_STRAITS = {
   danish: { sill: 50, points: [[55.5, 12.7], [56.1, 12.3], [56.8, 11.5], [57.6, 10.5]] },
 };
 
-export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS } = {}) {
+export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS, landIce = null, iceShelves = 'land' } = {}) {
   const { nCells: C, nEdges: E, xCell, cellsOnCell, nEdgesOnCell, edgesOnCell, cellsOnEdge, areaCell, latCell, lonCell } = mesh;
-  const { rows, cols, data } = topography;
+  const { rows, cols } = topography;
+  if (landIce && (landIce.rows !== rows || landIce.cols !== cols)) throw new Error(`the land ice is ${landIce.rows} × ${landIce.cols}, the topography ${rows} × ${cols}`);
+  if (!ICE_SHELVES.includes(iceShelves)) throw new Error(`iceShelves is ${ICE_SHELVES.join(' or ')}, not ${iceShelves}`);
+  if (iceShelves !== 'land' && !landIce) throw new Error(`ice shelves at ${iceShelves} need the land ice`);
+  const slot = landIce ? new Int32Array(rows * cols).fill(-1) : null, afloat = iceShelves === 'sea';
+  if (landIce) landIce.index.forEach((n, k) => { slot[n] = k; });
+  const data = !afloat ? topography.data : Float64Array.from(topography.data, (value, n) => {
+    const k = slot[n];
+    if (k < 0 || !landIce.floating[k]) return value;
+    return value + landIce.floating[k] / landIce.points * (landIce.floatBed[k] - landIce.floatThickness[k] * (1 - ICE_DENSITY / SEAWATER_DENSITY));
+  });
   const count = new Int32Array(C), landCount = new Int32Array(C), sum = new Float64Array(C), owner = new Int32Array(rows * cols);
+  const iceShare = landIce ? new Float64Array(C) : null, icePoints = landIce ? new Float64Array(C) : null, iceVolume = landIce ? new Float64Array(C) : null, shelfShare = landIce ? new Float64Array(C) : null;
+  const addIce = (i, n) => {
+    const k = slot[n];
+    if (k < 0) return;
+    const { count: ice, floating, thickness, floatThickness } = landIce, held = afloat ? ice[k] - floating[k] : ice[k];
+    iceShare[i] += held / landIce.points; icePoints[i] += held; shelfShare[i] += floating[k] / landIce.points;
+    iceVolume[i] += Math.max(0, ice[k] * thickness[k] - (afloat ? floating[k] * floatThickness[k] : 0));
+  };
   const nearest = (x, y, z, start) => {
     let best = start, bestDot = x * xCell[3 * start] + y * xCell[3 * start + 1] + z * xCell[3 * start + 2];
     for (;;) {
@@ -82,6 +208,7 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
       count[cell]++;
       sum[cell] += elevation;
       if (elevation > 0) landCount[cell]++;
+      if (landIce) addIce(cell, r * cols + c);
     }
   }
   const land = new Uint8Array(C), landFraction = new Float64Array(C), elevation = new Float64Array(C);
@@ -91,6 +218,7 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
       const c = ((Math.floor((lonCell[i] + Math.PI) / (2 * Math.PI / cols)) % cols) + cols) % cols;
       const value = data[r * cols + c];
       count[i] = 1; sum[i] = value; landCount[i] = value > 0 ? 1 : 0;
+      if (landIce) addIce(i, r * cols + c);
     }
     landFraction[i] = landCount[i] / count[i];
     elevation[i] = sum[i] / count[i];
@@ -209,16 +337,21 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
       previous = i;
     });
   }
-  // The topography carries no ice mask: the ice sheets are Antarctica's land and Greenland's interior above 800 m.
-  const iceSheet = new Uint8Array(C);
+  const iceSheet = new Uint8Array(C), iceFraction = landIce ? new Float64Array(C) : null, iceThickness = landIce ? new Float64Array(C) : null, shelfFraction = landIce ? new Float64Array(C) : null;
   for (let i = 0; i < C; i++) {
+    if (landIce) shelfFraction[i] = shelfShare[i] / count[i];
     if (!land[i]) continue;
+    if (landIce) {
+      iceFraction[i] = iceShare[i] / count[i];
+      if (iceFraction[i] > 0.5 * landFraction[i]) { iceSheet[i] = 1; iceThickness[i] = iceVolume[i] / icePoints[i]; }
+      continue;
+    }
     const lat = latCell[i] * 180 / Math.PI, lon = lonCell[i] * 180 / Math.PI;
     if (lat < -60 || (lat > 60 && lat < 84 && lon > -73 && lon < -12 && elevation[i] > 800)) iceSheet[i] = 1;
   }
   let landArea = 0, total = 0;
   for (let i = 0; i < C; i++) { total += areaCell[i]; if (land[i]) landArea += areaCell[i]; }
-  return { land, landFraction, elevation, iceSheet, edgeOcean, edgeSill, coastEdges: Int32Array.from(coast), landArea: landArea / total };
+  return { land, landFraction, elevation, iceSheet, ...(landIce ? { iceFraction, iceThickness, shelfFraction } : {}), edgeOcean, edgeSill, coastEdges: Int32Array.from(coast), landArea: landArea / total };
 }
 
 /*
@@ -392,20 +525,20 @@ export function decodeSubgrid(buffer) {
   return fields;
 }
 
-export const subgridUrl = (N) => new URL(`../data/subgrid_N${N}.bin`, import.meta.url);
+export const subgridUrl = (N, topography = 'etopo1') => new URL(`../data/subgrid_${topography === 'etopo1' ? '' : `${topography}_`}N${N}.bin`, import.meta.url);
 
 /*
  * The fields for a mesh: `given` when it has the mesh's cell count, else
- * under node the file for N if there is one, else null (the caller
- * computes them from the 0.25° raster and says so).
+ * under node the file for N and the topography if there is one, else null
+ * (the caller computes them from the 0.25° raster and says so).
  */
-export function meshSubgrid(mesh, given = undefined) {
+export function meshSubgrid(mesh, given = undefined, topography = 'etopo1') {
   if (given === false) return null;
   if (given) return given.deviation.length === mesh.nCells ? given : null;
   const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
   const fs = globalThis.process?.getBuiltinModule?.('node:fs');
   if (!fs || 10 * N * N + 2 !== mesh.nCells) return null;
-  const url = subgridUrl(N);
+  const url = subgridUrl(N, topography);
   if (!fs.existsSync(url)) return null;
   return decodeSubgrid(fs.readFileSync(url));
 }
@@ -427,18 +560,18 @@ export function landSubgrid(fields, land) {
 }
 
 const SUBGRID_FALLBACK = {
-  missing: (N) => `no data/subgrid_N${N}.bin for this mesh`,
+  missing: (file) => `no ${file} for this mesh`,
   off: () => 'the subgrid files are turned off (subgrid false)',
   terrain: () => 'the terrain is off, and the files hold only the scales below the resolved terrain',
-  land: (N) => `data/subgrid_N${N}.bin was made for another land mask`,
-  relax: (N, mesh, fields) => `data/subgrid_N${N}.bin was made for the mesh of ${fields.relax} Lloyd passes, not this one of ${mesh.relax}`,
+  land: (file) => `${file} was made for another land mask`,
+  relax: (file, mesh, fields) => `${file} was made for the mesh of ${fields.relax} Lloyd passes, not this one of ${mesh.relax}`,
 };
 const fallbackSaid = new Set();
-export function subgridFallbackNote(mesh, reason = 'missing', fields = null) {
-  const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10));
-  if (fallbackSaid.has(`${N} ${reason}`)) return;
-  fallbackSaid.add(`${N} ${reason}`);
-  console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](N, mesh, fields)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);
+export function subgridFallbackNote(mesh, reason = 'missing', fields = null, topography = 'etopo1') {
+  const N = Math.round(Math.sqrt((mesh.nCells - 2) / 10)), file = `data/${subgridUrl(N, topography).pathname.split('/').pop()}`;
+  if (fallbackSaid.has(`${file} ${reason}`)) return;
+  fallbackSaid.add(`${file} ${reason}`);
+  console.log(`subgrid orography: ${SUBGRID_FALLBACK[reason](file, mesh, fields)}; computed from the topography's raster (at 0.25°, σ about a third of the 5 km fields') with Lott and Miller's constants, and no form drag`);
 }
 
 /*
