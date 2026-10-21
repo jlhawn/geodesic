@@ -21,23 +21,23 @@ const topography = readTopography('etopo2022'), etopo1 = readTopography('etopo1'
 const landIce = decodeLandIce(readFileSync(landIceUrl));
 const observed = geographyOptions(FRESH_GEOGRAPHY, landIce);
 const deg = 180 / Math.PI;
-const sparse = ({ rows, cols, points, count, thickness, floating = null, floatThickness = null, floatBed = null }) => {
+const sparse = ({ rows, cols, points, count, thickness, floating = null, floatThickness = null, floatSurface = null, floatBed = null }) => {
   const index = Uint32Array.from(Array.from(count.keys()).filter((p) => count[p] > 0)), at = (field) => (p) => (field ? field[p] : 0);
   return decodeLandIce(encodeLandIce({
-    rows, cols, points, index, count: Uint8Array.from(index, at(count)), thickness: Uint16Array.from(index, at(thickness)),
-    floating: Uint8Array.from(index, at(floating)), floatThickness: Uint16Array.from(index, at(floatThickness)), floatBed: Int16Array.from(index, at(floatBed)),
+    rows, cols, points, index, count: Uint8Array.from(index, at(count)), thickness: Uint16Array.from(index, at(thickness)), floating: Uint8Array.from(index, at(floating)),
+    floatThickness: Uint16Array.from(index, at(floatThickness)), floatSurface: Uint16Array.from(index, at(floatSurface)), floatBed: Int16Array.from(index, at(floatBed)),
   }));
 };
 
-test('the land-ice file carries the pixels holding ice: their ice points and those afloat, the thickness of each and the bed under the floating ice', () => {
+test('the land-ice file carries the pixels holding ice: their ice points and those afloat, the thickness of each, and the surface of the floating ice and the bed under it', () => {
   const field = (f) => Array.from({ length: 7 }, (_, k) => f(k));
   const given = {
-    rows: 3, cols: 5, points: 225, index: Uint32Array.from(field((k) => 2 * k + 1)), count: Uint8Array.from(field((k) => 30 * k + 15)), floating: Uint8Array.from(field((k) => 10 * k)),
-    thickness: Uint16Array.from(field((k) => 4099 * k + 7)), floatThickness: Uint16Array.from(field((k) => 977 * k)), floatBed: Int16Array.from(field((k) => -900 * k + 50)),
+    rows: 3, cols: 5, points: 225, firnAir: 15, index: Uint32Array.from(field((k) => 2 * k + 1)), count: Uint8Array.from(field((k) => 30 * k + 15)), floating: Uint8Array.from(field((k) => 10 * k)),
+    thickness: Uint16Array.from(field((k) => 4099 * k + 7)), floatThickness: Uint16Array.from(field((k) => 977 * k)), floatSurface: Uint16Array.from(field((k) => 11 * k + 3)), floatBed: Int16Array.from(field((k) => -900 * k + 50)),
   };
   const back = decodeLandIce(encodeLandIce(given));
-  assert.deepEqual([back.rows, back.cols, back.points], [3, 5, 225]);
-  for (const name of ['index', 'count', 'floating', 'thickness', 'floatThickness', 'floatBed']) assert.deepEqual(Array.from(back[name]), Array.from(given[name]), name);
+  assert.deepEqual([back.rows, back.cols, back.points, back.firnAir], [3, 5, 225, 15]);
+  for (const name of ['index', 'count', 'floating', 'thickness', 'floatThickness', 'floatSurface', 'floatBed']) assert.deepEqual(Array.from(back[name]), Array.from(given[name]), name);
   assert.throws(() => decodeLandIce(new Uint8Array(40)), /not a land-ice file/);
 });
 
@@ -75,7 +75,8 @@ test('with the ice shelves at sea the floating ice is taken away: its points cou
   const where = (f, yes) => (h, n) => (f(lonOf(n)) ? yes : 0);
   const ice = sparse({
     rows, cols, points: 225, count: Uint8Array.from(raster.data, (h, n) => (grounded(lonOf(n)) || afloat(lonOf(n)) ? 225 : 0)), thickness: Uint16Array.from(raster.data, (h, n) => (grounded(lonOf(n)) ? 1500 : afloat(lonOf(n)) ? H : 0)),
-    floating: Uint8Array.from(raster.data, where(afloat, 225)), floatThickness: Uint16Array.from(raster.data, where(afloat, H)), floatBed: Int16Array.from(raster.data, where(afloat, bed)),
+    floating: Uint8Array.from(raster.data, where(afloat, 225)), floatThickness: Uint16Array.from(raster.data, where(afloat, H)), floatSurface: Uint16Array.from(raster.data, where(afloat, freeboard)),
+    floatBed: Int16Array.from(raster.data, where(afloat, bed)),
   });
   const options = { landBridges: {}, seaStraits: {}, landIce: ice }, onLand = createGeography(mesh, raster, options), atSea = createGeography(mesh, raster, { ...options, iceShelves: 'sea' });
   let shelves = 0, sheets = 0;
@@ -91,7 +92,7 @@ test('with the ice shelves at sea the floating ice is taken away: its points cou
   }
   assert.ok(shelves > 20 && sheets > 20, `${shelves} shelf cells, ${sheets} grounded`);
   assert.throws(() => createGeography(mesh, raster, { iceShelves: 'sea' }), /need the land ice/);
-  assert.throws(() => createGeography(mesh, raster, { ...options, iceShelves: 'cavity' }), /iceShelves is land or sea/);
+  assert.throws(() => createGeography(mesh, raster, { ...options, iceShelves: 'lid' }), /iceShelves is land or sea or cavity, not lid/);
 });
 
 test('the repository\'s land ice puts the Antarctic and Greenland ice sheets on the ETOPO 2022 mesh at their observed area and volume', () => {

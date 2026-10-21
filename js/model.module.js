@@ -92,6 +92,7 @@ export function createModel(gridOrMesh, {
 } = {}) {
   if (!(Number.isInteger(dragEvery) && dragEvery >= 1)) throw new Error(`dragEvery must be a whole number of steps, 1 or more, not ${dragEvery}`);
   const mesh = gridOrMesh.nCells ? gridOrMesh : buildMesh(gridOrMesh, { radius, omega: 2 * Math.PI / SIDEREAL_DAY });
+  if (geographyOptions.iceShelves === 'cavity') throw new Error('the ocean does not take ice-shelf cavities yet: iceShelves is land or sea here');
   const geography = topography ? createGeography(mesh, topography, geographyOptions) : null;
   const phis = geography && terrain ? surfaceGeopotential(mesh, geography) : null;
   const mode = exchangeMode(surfaceOptions, landOptions), rough = mode === 'roughness';
