@@ -1,6 +1,6 @@
-// One GPU job at a time on this Mac, in order of arrival, for every session:
-// macOS aborts the command buffers of node WebGPU models that share the GPU,
-// and Dawn never reports it.
+// One GPU job at a time on this Mac, by level and then in order of arrival,
+// for every session: macOS aborts the command buffers of node WebGPU models
+// that share the GPU, and Dawn never reports it.
 //   node scripts/gpuQueue.mjs run LOG CMD [ARG...]
 //   node scripts/gpuQueue.mjs status
 //   node scripts/gpuQueue.mjs serve [PORT]
@@ -17,14 +17,23 @@
 // so the polling gates of older scripts see the GPU busy throughout, gaps
 // and handoffs included. CPU-only jobs do not use the queue and never wait
 // for it.
+// GPU_PRIORITY (1-5, default 3) sets a run's level, 1 the highest. A waiter
+// tries the lock only when no live ticket is ahead of it in (level, seq, ms,
+// pid) order: a level waits until every higher one is empty, runs in order
+// of arrival, and never preempts a running job. A level-4 waiter takes a free
+// lock only once it has stayed free for 15 s, a level-5 waiter 60 s, with no
+// ticket arriving ahead of it meanwhile, so neither takes the GPU in the gap
+// between another session's runs; a finished holder keeps its idle device
+// for a waiter of levels 1-3 only.
 // GPU_WHO (a short name for the session) and GPU_JOB (one line on what CMD
-// is) label a run. <dir>/status.md lists the holder and the queue in order
-// by these labels, or by worktree and command for a run without them. A run
-// rewrites it when it queues, takes the lock, starts and exits, the holder
-// at each of its checks and the waiters every 30 s; `status` rewrites it and
-// prints the same text.
+// is) label a run. <dir>/status.md lists the holder and the queue in order,
+// each with its level, by these labels, or by worktree and command for a run
+// without them. A run rewrites it when it queues, takes the lock, starts and
+// exits, the holder at each of its checks and the waiters every 30 s;
+// `status` rewrites it and prints the same text.
 // A run that held the lock appends a line to <dir>/history.jsonl once its
-// abort scan ends: who, what, log, pid, queued, started, ended, rc and aborts.
+// abort scan ends: who, what, priority, log, pid, queued, started, ended, rc
+// and aborts.
 // The file keeps its last 500 lines once it passes 1000. `serve` answers on
 // 127.0.0.1:PORT (8008) with scripts/gpuQueue.html, a page that polls
 // /status.json: the status as JSON, reused for 10 ticks once computed, and
@@ -32,12 +41,16 @@
 // writes nothing, so no run ever waits on it.
 // The lock is an O_EXLOCK flock on <dir>/lock, which the kernel drops when
 // its holders exit; CMD inherits it as fd 19, so a job outliving a killed
-// holder keeps it. Waiters hold flocks on their tickets in <dir>/queue.
+// holder keeps it. Waiters hold flocks on their tickets in <dir>/queue, named
+// p<level>-<seq>-<ms>-<pid>.json; a ticket named <seq>-<ms>-<pid>.json is
+// level 3.
 // GPU_QUEUE_DIR (~/.cache/webgcm-gpu-queue), GPU_QUEUE_TICK_MS (200; every
 // wait is a multiple of it), GPU_QUEUE_PORT (8000; 0 for none),
 // GPU_QUEUE_PROBE (a shell command that prints the pids using the GPU, in
 // place of lsof), GPU_QUEUE_DEVICE (off, or a module whose getDevice stands
-// in for js/gpu/device.module.js) and GPU_QUEUE_ABORTS (off) serve tests.
+// in for js/gpu/device.module.js), GPU_QUEUE_COURTESY_MS (15000,60000: how
+// long levels 4 and 5 wait for the lock to stay free) and GPU_QUEUE_ABORTS
+// (off) serve tests.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,7 +63,8 @@ const O_EXLOCK = 0x20;
 const { O_RDONLY, O_WRONLY, O_CREAT, O_EXCL, O_NONBLOCK } = fs.constants;
 const INHERITED_FD = 19;
 const AGENT = /(^|[\s/])gpuQueue\.mjs run\b/;
-const TICKET = /^(\d+)-(\d+)-(\d+)\.json$/;
+const TICKET = /^(?:p([1-5])-)?(\d+)-(\d+)-(\d+)\.json$/;
+const LEVELS = [1, 2, 3, 4, 5], DEFAULT_LEVEL = 3, COURTESY_MS = [15000, 60000];
 const LSTART = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3} [ \d]\d \d\d:\d\d:\d\d \d{4})\s+(.*)$/;
 const USAGE = 'usage: gpuQueue.mjs run LOG CMD [ARG...] | gpuQueue.mjs status | gpuQueue.mjs serve [PORT]';
 const PAGE = new URL('./gpuQueue.html', import.meta.url);
@@ -75,6 +89,7 @@ export function config(env = process.env) {
   const device = env.GPU_QUEUE_DEVICE === 'off' ? null
     : env.GPU_QUEUE_DEVICE ? pathToFileURL(path.resolve(env.GPU_QUEUE_DEVICE)).href
     : new URL('../js/gpu/device.module.js', import.meta.url).href;
+  const courtesy = String(env.GPU_QUEUE_COURTESY_MS ?? '').split(',').map((ms) => (ms.trim() ? Number(ms) : NaN));
   return {
     dir, lock: path.join(dir, 'lock'), holder: path.join(dir, 'holder.json'), queue: path.join(dir, 'queue'),
     status: path.join(dir, 'status.md'), statusLock: path.join(dir, 'status.lock'), history: path.join(dir, 'history.jsonl'),
@@ -82,9 +97,13 @@ export function config(env = process.env) {
     monitor: 150 * tick, nestedEvery: 25, refreshEvery: 150, stale: 300 * tick,
     port: env.GPU_QUEUE_PORT ? Number(env.GPU_QUEUE_PORT) : env.GPU_QUEUE_PORT === '' ? 0 : 8000,
     probe: env.GPU_QUEUE_PROBE || '', device, aborts: env.GPU_QUEUE_ABORTS !== 'off',
-    who: oneLine(env.GPU_WHO), what: oneLine(env.GPU_JOB),
+    who: oneLine(env.GPU_WHO), what: oneLine(env.GPU_JOB), priority: oneLine(env.GPU_PRIORITY) || String(DEFAULT_LEVEL),
+    courtesy: courtesy.length === 2 && courtesy.every((ms) => ms >= 0) ? courtesy : COURTESY_MS,
   };
 }
+
+const delayOf = (cfg, level) => (level > DEFAULT_LEVEL ? cfg.courtesy[level - DEFAULT_LEVEL - 1] : 0);
+const levelOf = (info) => (LEVELS.includes(info?.priority) ? info.priority : DEFAULT_LEVEL);
 
 export function whoFrom(cwd = '') {
   const worktree = /\/\.claude\/worktrees\/([^/]+)/.exec(cwd) || /--claude-worktrees-([^/]+)/.exec(cwd);
@@ -203,13 +222,16 @@ function inheritsLock(cfg) {
   }
 }
 
-const order = (a, b) => a.seq - b.seq || a.ms - b.ms || a.pid - b.pid;
+const order = (a, b) => a.priority - b.priority || a.seq - b.seq || a.ms - b.ms || a.pid - b.pid;
 
 function tickets(cfg) {
   let names = [];
   try { names = fs.readdirSync(cfg.queue); } catch { return []; }
   return names.map((name) => TICKET.exec(name)).filter(Boolean)
-    .map((m) => ({ name: m[0], file: path.join(cfg.queue, m[0]), seq: Number(m[1]), ms: Number(m[2]), pid: Number(m[3]) }))
+    .map((m) => ({
+      name: m[0], file: path.join(cfg.queue, m[0]),
+      priority: m[1] ? Number(m[1]) : DEFAULT_LEVEL, seq: Number(m[2]), ms: Number(m[3]), pid: Number(m[4]),
+    }))
     .sort(order);
 }
 
@@ -237,12 +259,12 @@ function enqueue(cfg, info) {
   sweep(cfg);
   const seq = 1 + Math.max(0, ...tickets(cfg).map((t) => t.seq));
   const ms = Date.now();
-  const name = `${seq}-${ms}-${process.pid}.json`;
+  const name = `p${info.priority}-${seq}-${ms}-${process.pid}.json`;
   const temp = path.join(cfg.queue, `.${name}`);
   const fd = fs.openSync(temp, O_WRONLY | O_CREAT | O_EXCL | O_EXLOCK | O_NONBLOCK, 0o644);
   fs.writeSync(fd, JSON.stringify(info));
   fs.renameSync(temp, path.join(cfg.queue, name));
-  return { fd, name, file: path.join(cfg.queue, name), seq, ms, pid: process.pid };
+  return { fd, name, file: path.join(cfg.queue, name), priority: info.priority, seq, ms, pid: process.pid };
 }
 
 function dequeue(ticket) {
@@ -336,7 +358,7 @@ function snapshot(cfg, net = {}, how = probing) {
   const table = net.table || processes();
   const holder = record?.start && (table.get(record.pid)?.start ?? startOf(record.pid)) === record.start ? record : null;
   const queue = listed.filter((t) => how.waiting(cfg, t, table) && t.info)
-    .map((t) => ({ ...labels(t.info), pid: t.pid, since: t.ms, log: t.info.log, command: t.info.command, cwd: t.info.cwd }));
+    .map((t) => ({ ...labels(t.info), priority: t.priority, pid: t.pid, since: t.ms, log: t.info.log, command: t.info.command, cwd: t.info.cwd }));
   const lock = holder ? [] : how.holders(cfg, record, queue).filter((pid) => table.has(pid)).map((pid) => described(table.get(pid)));
   const family = holder ? new Set([...lineage(table, holder.pid).keys(), ...descendants(table, holder.pid)]) : new Set();
   const outside = [...(net.users || gpuUsers(cfg))].map((pid) => table.get(pid))
@@ -345,7 +367,7 @@ function snapshot(cfg, net = {}, how = probing) {
   const listening = cfg.port ? net.port || listeners(cfg.port) : [];
   return {
     now,
-    holder: holder && { ...holder, ...labels(holder) },
+    holder: holder && { ...holder, ...labels(holder), priority: levelOf(holder) },
     exited: !holder && record ? { pid: record.pid, ...labels(record) } : null,
     lock, queue, outside,
     port: cfg.port ? { port: cfg.port, listening: listening.map((pid) => (table.has(pid) ? described(table.get(pid)) : { pid, command: null, short: null })) } : null,
@@ -357,7 +379,7 @@ function statusText(cfg, net) {
   const out = [`# GPU queue at ${clock(s.now)}, ${day(s.now)}`, ''];
   const h = s.holder;
   if (h) {
-    out.push(`Holder: **${h.who}**, ${h.what}`, `- ${holderState(h)}`,
+    out.push(`Holder: **${h.who}**, ${h.what}`, `- level ${h.priority}, ${holderState(h)}`,
       `- pid ${h.pid}, took the lock at ${when(h.acquired)}${h.deviceReady ? ', idle device open' : ''}`, `- log ${h.log}`);
   } else if (!s.lock.length) out.push('Holder: none');
   else {
@@ -367,7 +389,7 @@ function statusText(cfg, net) {
   out.push('', s.queue.length ? 'Queue:' : 'Queue: empty');
   s.queue.forEach((t, i) => {
     const indent = ' '.repeat(`${i + 1}. `.length);
-    out.push(`${i + 1}. **${t.who}**, ${t.what}`, `${indent}- queued since ${when(t.since)}, pid ${t.pid}`, `${indent}- log ${t.log}`);
+    out.push(`${i + 1}. **${t.who}**, ${t.what}`, `${indent}- level ${t.priority}, queued since ${when(t.since)}, pid ${t.pid}`, `${indent}- log ${t.log}`);
   });
   out.push('', s.outside.length ? 'Outside the queue:' : 'Outside the queue: none');
   for (const p of s.outside) out.push(`- pid ${p.pid} since ${when(p.start)}: ${p.short}`);
@@ -471,13 +493,18 @@ async function linger(cfg, device) {
   if (!device) return;
   for (const until = Date.now() + cfg.linger; Date.now() < until; await sleep(cfg.tick)) {
     const next = readRecord(cfg);
-    if (next && next.pid !== process.pid ? next.deviceReady : !tickets(cfg).some((t) => waiting(cfg, t.file))) break;
+    if (next && next.pid !== process.pid ? next.deviceReady : !tickets(cfg).some((t) => !delayOf(cfg, t.priority) && waiting(cfg, t.file))) break;
   }
   try { device.destroy(); } catch {}
 }
 
 export async function run(cfg, logArg, argv) {
   if (!logArg || !argv.length) { console.error(USAGE); return 2; }
+  if (!/^[1-5]$/.test(cfg.priority)) {
+    console.error(`gpu_run: GPU_PRIORITY is '${cfg.priority}'; use 1, 2, 3, 4 or 5 (1 runs first, 3 is the default)`);
+    return 2;
+  }
+  const priority = Number(cfg.priority);
   const log = path.resolve(logArg);
   if (finished(log)) { console.error(`gpu_run: skipped, ${log} already holds "exit 0"`); return 0; }
   const say = (text) => fs.appendFileSync(log, `${text}\n`);
@@ -486,7 +513,7 @@ export async function run(cfg, logArg, argv) {
   const line = lineage(processes(), process.pid);
   const self = {
     pid: process.pid, start: line.get(process.pid) || startOf(process.pid), log, command: quote(argv), cwd: process.cwd(),
-    since: Date.now(), who: cfg.who || undefined, what: cfg.what || undefined,
+    since: Date.now(), who: cfg.who || undefined, what: cfg.what || undefined, priority,
   };
 
   let phase = 'queued', ticket = null, lockFd = null, device = null, job = null, rc = 0, remember = null;
@@ -515,13 +542,20 @@ export async function run(cfg, logArg, argv) {
   let above = holderAbove(cfg, line, true);
   if (!above) {
     ticket = enqueue(cfg, self);
+    const delay = delayOf(cfg, priority);
+    const at = priority === DEFAULT_LEVEL ? '' : ` at level ${priority}`;
+    let freeSince = 0;
     for (let n = 1; ; n++) {
       const ahead = tickets(cfg).filter((t) => order(t, ticket) < 0 && waiting(cfg, t.file));
-      if (!ahead.length && (lockFd = tryLock(cfg.lock)) !== null) break;
+      const free = !ahead.length && (lockFd = tryLock(cfg.lock)) !== null;
+      if (!free) freeSince = 0;
+      else if (Date.now() - (freeSince ||= Date.now()) >= delay) break;
+      else { fs.closeSync(lockFd); lockFd = null; }
       if (n === 1) {
         const holder = liveRecord(readRecord(cfg));
         const parts = [holder && `pid ${holder.pid} (${named(holder)})`, ahead.length && `${ahead.length} waiting`].filter(Boolean);
-        say(`queued ${clock()} behind ${parts.join(' and ') || "the lock's holder"}`);
+        say(free ? `queued ${clock()}${at} until the GPU has stayed free for ${delay / 1000} s`
+          : `queued ${clock()}${at} behind ${parts.join(' and ') || "the lock's holder"}`);
       }
       if (n % cfg.refreshEvery === 1) refresh(cfg);
       if (n % cfg.nestedEvery === 0 && (above = holderAbove(cfg, line, false))) break;
@@ -600,7 +634,7 @@ export async function run(cfg, logArg, argv) {
   phase = 'done';
   remember = (aborts) => {
     remember = null;
-    try { appendHistory(cfg, { ...labels(self), log, pid: process.pid, queued: self.since, started, ended, rc, aborts }); } catch {}
+    try { appendHistory(cfg, { ...labels(self), priority, log, pid: process.pid, queued: self.since, started, ended, rc, aborts }); } catch {}
   };
   release();
   say(`exit ${rc} ${clock()}`);
