@@ -182,6 +182,7 @@ function holderView({ holder: h, lock, exited }) {
       h.state === 'waiting' && h.blockers && el('p', { class: 'blockers' }, `for ${h.blockers}`),
       el('dl', { class: 'facts' },
         el('dt', null, 'pid'), el('dd', { class: 'mono' }, h.pid),
+        el('dt', null, 'Level'), el('dd', null, h.priority),
         el('dt', null, 'Lock'), el('dd', null, h.acquired && `taken at ${when(h.acquired)}`, h.deviceReady && ', idle device open'),
         h.since && [el('dt', null, 'Queued'), el('dd', null, when(h.since))],
         el('dt', null, 'Log'), el('dd', null, copyable(h.log)),
@@ -205,7 +206,7 @@ function queueView(queue) {
   return el('ol', { class: 'list' }, queue.map((t, i) => el('li', null,
     el('span', { class: 'pos' }, i + 1),
     el('div', { class: 'body' },
-      el('div', { class: 'title' }, el('span', { class: 'who' }, t.who), el('span', { class: 'mono' }, `pid ${t.pid}`)),
+      el('div', { class: 'title' }, el('span', { class: 'badge' }, `level ${t.priority}`), el('span', { class: 'who' }, t.who), el('span', { class: 'mono' }, `pid ${t.pid}`)),
       el('p', null, t.what),
       el('p', { class: 'line' }, 'queued since ', el('b', null, when(t.since)), dot, elapsed(t.since)),
       copyable(t.log)))));
@@ -234,12 +235,13 @@ function portView(port) {
 
 function historyView(runs) {
   if (!runs.length) return none('No finished runs recorded yet.');
-  const head = ['Who', 'What', 'Start', 'End', 'Duration', 'Exit', 'Aborts'];
+  const head = ['Who', 'What', 'Level', 'Start', 'End', 'Duration', 'Exit', 'Aborts'];
   return el('table', null,
     el('thead', null, el('tr', null, head.map((name) => el('th', { scope: 'col' }, name)))),
     el('tbody', null, runs.map((r) => el('tr', null,
       el('td', { class: 'who' }, r.who),
       el('td', { class: 'what', title: r.log }, r.what),
+      el('td', { class: 'num', 'data-label': 'level' }, r.priority ?? 3),
       el('td', { class: 'when', 'data-label': 'start', title: `queued at ${when(r.queued)}, waited ${span(r.started - r.queued)}` }, when(r.started)),
       el('td', { class: 'when', 'data-label': 'end' }, when(r.ended)),
       el('td', { class: 'num', 'data-label': 'took' }, span(r.ended - r.started)),
