@@ -337,7 +337,7 @@ export function createOcean(mesh, {
   minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
-  vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, langmuir = 2,
+  vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, latentHeatFusion = 3.34e5, langmuir = 2,
   momentumDepth = 50, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
@@ -396,7 +396,7 @@ export function createOcean(mesh, {
   const capacity = shared('capacity', C);
   if (!adopting) capacity.fill(rhoCp * table.depths[1]);
   const transmission = shared('transmission', C), penetrated = shared('penetrated', C), shares = new Float64Array(L);
-  const stress = shared('stress', E), fresh = new Float64Array(C);
+  const stress = shared('stress', E), fresh = new Float64Array(C), calved = new Float64Array(C);
   const iced = new Uint8Array(C);
   const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E), edgeS = new Float64Array(E);
   const T = new Float64Array(C), S = new Float64Array(C);
@@ -1018,9 +1018,20 @@ export function createOcean(mesh, {
     transmission.fill(0);
     if (penetration) for (let i = 0; i < C; i++) if (cellOcean[i]) transmission[i] = transmissionAt(i);
   }
-  function accumulate(evaporation, rain, dt, runoff = null) {
+  /*
+   * `discharge`, the part of `runoff` that leaves the land as ice, is
+   * melted at the next ocean step by the top layer of its outlet.
+   */
+  function accumulate(evaporation, rain, dt, runoff = null, discharge = null) {
     for (let i = 0; i < C; i++) if (cellOcean[i]) fresh[i] += (evaporation ? evaporation[i] * dt : 0) - (rain ? rain[i] : 0);
     if (runoff) for (let j = 0; j < C; j++) if (!cellOcean[j] && runoff[j] > 0 && outlet[j] >= 0) fresh[outlet[j]] -= runoff[j] * areaCell[j] / areaCell[outlet[j]];
+    if (discharge) for (let j = 0; j < C; j++) if (!cellOcean[j] && discharge[j] > 0 && outlet[j] >= 0) calved[outlet[j]] += discharge[j] * areaCell[j] / areaCell[outlet[j]];
+  }
+  function meltCalved() {
+    for (let i = 0; i < C; i++) {
+      if (cellOcean[i] && calved[i] !== 0) Q[i] -= latentHeatFusion * calved[i] / rhoCp;
+      calved[i] = 0;
+    }
   }
   function salt() {
     for (let i = 0; i < C; i++) {
@@ -1062,7 +1073,7 @@ export function createOcean(mesh, {
     setStress(typeof totalStress === 'function' ? totalStress() : totalStress, ice, concentration);
     step(dtOcean);
     regrid(dtOcean); columnPhysics(dtOcean);
-    salt();
+    salt(); meltCalved();
     writeSurface(surfaceT, oceanFlux, dtOcean);
     return true;
   }
@@ -1098,7 +1109,7 @@ export function createOcean(mesh, {
     return H;
   }
   function build(surfaceT, ice, atlas, concentration = seaCover) {
-    u.fill(0); eta.fill(0); fresh.fill(0); buoyancyLoss.fill(0);
+    u.fill(0); eta.fill(0); fresh.fill(0); calved.fill(0); buoyancyLoss.fill(0);
     measureIce(ice, concentration, previousVolume);
     const filled = new Uint8Array(C), { z: zCol } = cols, zs = [], ts = [], ss = [];
     const integral = (v, a, b) => {
@@ -1251,7 +1262,8 @@ export function createOcean(mesh, {
    * meter of this bathymetry and dry on land, brings back the surface's
    * last temperature, the ice volume it last saw, the freshwater not yet
    * taken and the heat capacity, the sunlight not yet deposited when it
-   * carries `penetrated`, the boundary-layer depths the column physics
+   * carries `penetrated`, the ice not yet melted when it carries
+   * `calved`, the boundary-layer depths the column physics
    * search from when it carries `boundaryDepths`, and the heat and salt
    * stores as they were when it carries `Q` and `W`.
    */
@@ -1325,13 +1337,14 @@ export function createOcean(mesh, {
     if (!own) regrid(Infinity);
     measureIce(ice, concentration, previousVolume);
     for (let i = 0; i < C; i++) { iced[i] = ice[i] > 0 ? 1 : 0; T0[i] = cellOcean[i] ? Q[i] / h[i] : surfaceTAt(i); S0[i] = cellOcean[i] ? W[i] / h[i] : referenceS; previousT0[i] = T0[i]; capacity[i] = rhoCp * Math.max(h[i], 1); }
-    fresh.fill(0); buoyancyLoss.fill(0); penetrated.fill(0);
+    fresh.fill(0); calved.fill(0); buoyancyLoss.fill(0); penetrated.fill(0);
     layerDensitiesAll();
     mixedDepthsAll();
     publishTransmission();
     if (restartable(saved)) {
       previousT0.set(saved.previousT0); previousVolume.set(saved.previousIceVolume); fresh.set(saved.fresh); capacity.set(saved.capacity);
       if (saved.penetrated && saved.penetrated.length === C) penetrated.set(saved.penetrated);
+      if (saved.calved && saved.calved.length === C) calved.set(saved.calved);
       if (saved.boundaryDepths && saved.boundaryDepths.length === C) boundaryDepths.set(saved.boundaryDepths);
     }
     counter = 0;
@@ -1340,7 +1353,7 @@ export function createOcean(mesh, {
   function restartArrays() {
     const copy = (values) => Float64Array.from(values);
     return {
-      Q: copy(Q), W: copy(W), previousT0: copy(previousT0), previousIceVolume: copy(previousVolume), fresh: copy(fresh), buoyancy: copy(buoyancyLoss), capacity: copy(capacity), penetrated: copy(penetrated), boundaryDepths: copy(boundaryDepths),
+      Q: copy(Q), W: copy(W), previousT0: copy(previousT0), previousIceVolume: copy(previousVolume), fresh: copy(fresh), calved: copy(calved), buoyancy: copy(buoyancyLoss), capacity: copy(capacity), penetrated: copy(penetrated), boundaryDepths: copy(boundaryDepths),
       ...(penetration ? { transmission: copy(transmission) } : {}),
     };
   }
@@ -1395,5 +1408,5 @@ export function createOcean(mesh, {
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
   Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer });
   stages.forEach((stage, s) => { sharedBuffers[`stage${s}h`] = stage[0].buffer; sharedBuffers[`stage${s}u`] = stage[1].buffer; sharedBuffers[`stage${s}Q`] = stage[2].buffer; sharedBuffers[`stage${s}W`] = stage[3].buffer; });
-  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, baroPrep, baroCoriolis, baroEdges, baroCells };
+  return { state, trial, stages, layers: L, h, u, Q, W, eta, D, sillEdge, hEdge, T0, S0, capacity, transmission, penetrated, penetration, stress, fresh, calved, avgU, tendency, prepare, tendencyLayers, setLayerRunner(fn) { layerRunner = fn; }, setColumnRunner(fn) { columnRunner = fn; }, useSeaIce(concentration) { seaCover = concentration; }, advance, accumulate, initialize, load, serialize, restartArrays, diagnostics, fields, setStress, readSurface, salt, writeSurface, phases, eddyTransport, rhoCp, edgeOcean, cellOcean, densities: rho, shared: sharedBuffers, vertical, generator, table, mixedDepths, boundaryDepths, viscosity, layerRho, regrid, columnPhysics, regridTargets, regridEdges, regridCells, columnCells, columnEdges, prepareCells, prepareEdges, rescaleCells, shiftEdges, eddyEdges, eddyCells, eddyApply, baroPrep, baroCoriolis, baroEdges, baroCells };
 }

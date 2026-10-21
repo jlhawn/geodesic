@@ -7,14 +7,14 @@
 import { writeFileSync } from 'node:fs';
 import { createGeography } from '../../js/geography.module.js';
 import { EPS } from '../../js/ocean/layered.module.js';
-import { readState, readTopography, figureHeader, DEG, rounded } from './figureState.mjs';
+import { readState, readGeography, figureHeader, DEG, rounded } from './figureState.mjs';
 import { stateGrid } from '../../js/stateGrid.module.js';
 
 const [file, out] = process.argv.slice(2);
 if (!file || !out) { console.error('usage: node scripts/figures/eqsection.mjs <state.bin> <out.json>'); process.exit(2); }
 const s = await readState(file);
-const mesh = stateGrid(s).mesh, C = mesh.nCells, L = s.ocean.h.length / C;
-const geo = createGeography(mesh, readTopography());
+const ground = readGeography(s), mesh = stateGrid(s, ground.topography).mesh, C = mesh.nCells, L = s.ocean.h.length / C;
+const geo = createGeography(mesh, ground.topography, ground.geography);
 const DEPTHS = Array.from({ length: 61 }, (_, i) => 5 * i);
 const LONS = Array.from({ length: 81 }, (_, i) => 120 + 2 * i);
 const sums = LONS.map(() => DEPTHS.map(() => [0, 0]));

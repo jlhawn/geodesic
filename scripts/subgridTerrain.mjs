@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /*
- * Writes data/subgrid_N<N>.bin, each land cell's subgrid orography from
+ * Writes data/subgrid_N<N>.bin (TOPOGRAPHY=etopo2022: the
+ * subgrid_etopo2022_N<N>.bin of that raster's land mask and resolved
+ * terrain), each land cell's subgrid orography from
  * GMTED2010's 30″ mean elevation as the IFS defines its fields (Cy47r3
  * Part IV §11.3.3–11.3.4), from the 2′30″ grids of
  * scripts/subgridTerrain.py's `filter` in the download cache:
@@ -18,7 +20,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Grid } from '../js/grid.module.js';
-import { topographyFromInt16, subgridOrography, encodeSubgrid, decodeSubgrid, subgridUrl } from '../js/geography.module.js';
+import { readTopography, subgridOrography, encodeSubgrid, decodeSubgrid, subgridUrl } from '../js/geography.module.js';
 import { createModel } from '../js/model.module.js';
 
 export const FINE_ROWS = 4320, FINE_COLS = 8640, GRADIENT_SPACING = 5000;
@@ -62,14 +64,14 @@ function summary(N, model, fields) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const cache = process.argv[2] ?? new URL('../../geodesic-terrain-cache', import.meta.url).pathname;
   const Ns = process.argv.length > 3 ? process.argv.slice(3).map(Number) : [16, 32, 64, 128];
-  const topography = topographyFromInt16(readFileSync(new URL('../data/topography_0p25.bin', import.meta.url)).buffer);
+  const topography = readTopography(process.env.TOPOGRAPHY ?? 'etopo1'), url = (N) => subgridUrl(N, topography.name);
   const h5 = readFine(cache, 'h5'), flt2 = readFine(cache, 'flt2');
   for (const N of Ns) {
     const start = performance.now();
     const model = createModel(new Grid(N), { physics: false, topography });
     const fields = { ...meshFields(model, h5, flt2), relax: model.mesh.relax };
     const bytes = encodeSubgrid(fields);
-    writeFileSync(subgridUrl(N), new Uint8Array(bytes));
+    writeFileSync(url(N), new Uint8Array(bytes));
     const back = decodeSubgrid(bytes);
     const worst = Object.fromEntries([['deviation', 1], ['anisotropy', 0.01], ['orientation', 0.01], ['slope', 1e-3], ['filtered', 1]].map(([name, floor]) => {
       let w = 0;
@@ -77,6 +79,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       return [name, w.toExponential(1)];
     }));
     summary(N, model, fields);
-    console.log(`  ${subgridUrl(N).pathname.split('/').slice(-2).join('/')}: ${bytes.byteLength} bytes, ${((performance.now() - start) / 1000).toFixed(1)} s, quantization's worst relative error ${JSON.stringify(worst)} (floors 1 m, 0.01, 0.01 rad, 10⁻³, 1 m)`);
+    console.log(`  ${url(N).pathname.split('/').slice(-2).join('/')}: ${bytes.byteLength} bytes, ${((performance.now() - start) / 1000).toFixed(1)} s, quantization's worst relative error ${JSON.stringify(worst)} (floors 1 m, 0.01, 0.01 rad, 10⁻³, 1 m)`);
   }
 }

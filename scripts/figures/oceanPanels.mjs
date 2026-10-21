@@ -11,16 +11,16 @@ import { cellVector } from '../../js/dynamics/operators.module.js';
 import { THIN } from '../../js/ocean/layered.module.js';
 import { layerDensities, mixedLayerDepth } from '../../js/ocean/column.module.js';
 import { decodeMonthlySst, monthWeights, climatologyAt, MONTHLY_SST_FILE } from '../../js/ocean/climatology.module.js';
-import { readState, readTopography, figureHeader, DEG, eastNorth, rounded } from './figureState.mjs';
+import { readState, readGeography, figureHeader, DEG, eastNorth, rounded } from './figureState.mjs';
 import { stateGrid } from '../../js/stateGrid.module.js';
 
 const [file, out] = process.argv.slice(2);
 if (!file || !out) { console.error('usage: node scripts/figures/oceanPanels.mjs <state.bin> <out.json>'); process.exit(2); }
 const KELVIN = 273.15, EQUINOX_DAY_OF_YEAR = 78, SURFACE_DEPTH = 15;
 const saved = await readState(file);
-const topography = readTopography();
+const { topography, geography } = readGeography(saved);
 const mesh = stateGrid(saved, topography).mesh, C = mesh.nCells, E = mesh.nEdges;
-const geo = createGeography(mesh, topography);
+const geo = createGeography(mesh, topography, geography);
 const woa = decodeMonthlySst(readFileSync(new URL(`../../${MONTHLY_SST_FILE}`, import.meta.url)));
 const months = monthWeights(woa, (((saved.day + EQUINOX_DAY_OF_YEAR) % 365) + 365) % 365);
 const { ocean } = saved, hybrid = ocean.vertical === 'hybrid', L = ocean.densities.length, { h, u, T, S } = ocean;
