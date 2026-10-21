@@ -84,7 +84,7 @@
 // one at a time, and every eighth waits for the device to finish the eight
 // before; more: that many steps go to the GPU in one submission, each
 // waiting for the one before, byte-identical, for drivers where submitting
-// costs more than it does on Metal), LEVELS (bl42: the sigma grid of a
+// costs more than it does on Metal), LEVELS (bl60: the sigma grid of a
 // fresh start, one of SIGMA_GRIDS in js/dynamics/sigmaCore.module.js; a
 // run continues on its snapshot's grid), OCEAN_FROM (a state of the same
 // N whose ocean, sea ice and sea surface replace the snapshot's, see
@@ -190,7 +190,7 @@ if (saved && PERTURB) {
   const uniform = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 - 0.5; };
   saved.theta = Float64Array.from(saved.theta, (x) => x * (1 + PERTURB * uniform()));
 }
-const levels = saved ? savedLevels(saved) : sigmaInterfaces(process.env.LEVELS ?? 'bl42');
+const levels = saved ? savedLevels(saved) : sigmaInterfaces(process.env.LEVELS ?? 'bl60');
 const grid = `${sigmaGridName(levels) ?? 'a saved grid'} (${levels.length - 1} layers)`;
 if (saved && process.env.LEVELS && sigmaGridName(levels) !== process.env.LEVELS) throw new Error(`${file} is on ${grid}, not ${process.env.LEVELS}`);
 const fallback = new URL(`../${CLIMATOLOGY_FILE}`, import.meta.url).pathname, chosen = process.env.CLIMATOLOGY ?? (existsSync(fallback) ? fallback : 'none');

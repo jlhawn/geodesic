@@ -1,5 +1,5 @@
 // A saved state carried onto another sigma grid:
-//   LEVELS=bl42 node scripts/remapState.mjs <in.bin> <out.bin>
+//   LEVELS=bl60 node scripts/remapState.mjs <in.bin> <out.bin>
 // The atmosphere (theta, u, q, qc) goes through remapLevels
 // (js/physics/regrid.module.js); everything else but the SST ring, the
 // clock included, is kept as saved, so a spin-up continues from the result

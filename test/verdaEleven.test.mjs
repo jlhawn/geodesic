@@ -130,7 +130,7 @@ test('verdaEleven runs the paired spin-up with the run\'s settings, marks it, an
   r = eleven(out, ['run']);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(calls(), 1);
-  assert.equal(readFileSync(join(out, 'paired.env'), 'utf8'), [`KEEP=1000`, `LEVELS=bl42`, `NS=64 128`, `OCEAN={"everySteps":8}`, `OUT=${out}`, `PER_YEAR=36`, `PREFIX=eleven`, `STRATOSPHERE=1`, `SYNC_CMD=sync "$1"`, `UNTIL=1095`, ''].join('\n'));
+  assert.equal(readFileSync(join(out, 'paired.env'), 'utf8'), [`KEEP=1000`, `LEVELS=bl60`, `NS=64 128`, `OCEAN={"everySteps":8}`, `OUT=${out}`, `PER_YEAR=36`, `PREFIX=eleven`, `STRATOSPHERE=1`, `SYNC_CMD=sync "$1"`, `UNTIL=1095`, ''].join('\n'));
   assert.match(readFileSync(join(out, 'STARTED_eleven'), 'utf8'), /commit [0-9a-f]+/);
   assert.match(readFileSync(join(out, 'ENDED_eleven'), 'utf8'), /exit 0: .*stopped \(day 1095 reached\)/);
   assert.match(r.stdout, /disk: N=64 day 0, 108 segments left × 106 MB; N=128 day 0, 108 segments left × 425 MB; the states take 57\.4 GB at day 1095/);
@@ -172,7 +172,7 @@ test('verdaEleven runs the paired spin-up with the run\'s settings, marks it, an
   r = eleven(out, ['status']);
   assert.match(r.stdout, /N=128: eleven128_day0010\.bin \(day 10 of 1095, 107 segments left\)/);
   assert.match(r.stdout, /STARTED_eleven: /);
-  assert.match(readFileSync(join(out, 'eleven.stages.log'), 'utf8'), /\d{4}-\d\d-\d\d \d\d:\d\d:\d\d run: NS="64 128" PREFIX=eleven LEVELS=bl42 PER_YEAR=36 KEEP=1000/);
+  assert.match(readFileSync(join(out, 'eleven.stages.log'), 'utf8'), /\d{4}-\d\d-\d\d \d\d:\d\d:\d\d run: NS="64 128" PREFIX=eleven LEVELS=bl60 PER_YEAR=36 KEEP=1000/);
   assert.equal(eleven(out, ['nonsense']).status, 2);
 
   rmSync(join(out, 'ENDED_eleven'));
@@ -242,13 +242,13 @@ test('verdaEleven DRIVER=async runs the asynchronous schedule for each N in turn
   assert.match(r.stdout, /run: NS="64 128" PREFIX=twelve .* UNTIL=1825 OUT=\S+ DRIVER=async CYCLES=1 COUPLED_YEARS=3 RECORD_YEARS=1 OCEAN_YEARS=20 FINAL_YEARS=2 OCEAN_ONLY=\{"everySteps":8\} RESTORE=30 OCEAN_KEEP=2 SNAPSHOT_DAYS=30 KEEP_FORCING=0 scripts\/asyncPair\.sh/);
   assert.match(r.stdout, /run: interrupted \(exit 143\) before scripts\/asyncPair\.sh logged a stop; not marked ended, so resume continues it/);
   assert.deepEqual(calls(out).map((c) => c.split(' ')[0]), ['N=64', 'N=128']);
-  for (const word of ['PREFIX=twelve', 'CYCLES=1', 'COUPLED_YEARS=3', 'RECORD_YEARS=1', 'OCEAN_YEARS=20', 'FINAL_YEARS=2', 'OCEAN_ONLY={"everySteps":8}', 'OCEAN={"everySteps":8}', 'RESTORE=30', 'OCEAN_KEEP=2', 'SNAPSHOT_DAYS=30', 'KEEP_FORCING=0', 'KEEP=1000', 'PER_YEAR=36', 'LEVELS=bl42', 'STRATOSPHERE=1', 'SYNC_CMD=sync "$1"']) assert.ok(calls(out)[0].includes(` ${word} `), `${word} in ${calls(out)[0]}`);
+  for (const word of ['PREFIX=twelve', 'CYCLES=1', 'COUPLED_YEARS=3', 'RECORD_YEARS=1', 'OCEAN_YEARS=20', 'FINAL_YEARS=2', 'OCEAN_ONLY={"everySteps":8}', 'OCEAN={"everySteps":8}', 'RESTORE=30', 'OCEAN_KEEP=2', 'SNAPSHOT_DAYS=30', 'KEEP_FORCING=0', 'KEEP=1000', 'PER_YEAR=36', 'LEVELS=bl60', 'STRATOSPHERE=1', 'SYNC_CMD=sync "$1"']) assert.ok(calls(out)[0].includes(` ${word} `), `${word} in ${calls(out)[0]}`);
   assert.doesNotMatch(calls(out)[0], /FROM=/);
   assert.ok(existsSync(join(out, 'STARTED_twelve')));
   assert.ok(!existsSync(join(out, 'ENDED_twelve')), 'an interrupted schedule is not marked ended');
   assert.equal(readFileSync(join(out, 'UNTIL_twelve'), 'utf8').trim(), '1825');
   const settings = readFileSync(join(out, 'SETTINGS_twelve'), 'utf8');
-  for (const line of ['DRIVER=async', 'NS=64 128', 'PER_YEAR=36', 'KEEP=1000', 'LEVELS=bl42', 'OCEAN={"everySteps":8}', 'STRATOSPHERE=1', 'CYCLES=1', 'COUPLED_YEARS=3', 'OCEAN_YEARS=20', 'FINAL_YEARS=2', 'OCEAN_ONLY={"everySteps":8}']) assert.match(settings, new RegExp(`^${line.replace(/[{}"]/g, '\\$&')}$`, 'm'), line);
+  for (const line of ['DRIVER=async', 'NS=64 128', 'PER_YEAR=36', 'KEEP=1000', 'LEVELS=bl60', 'OCEAN={"everySteps":8}', 'STRATOSPHERE=1', 'CYCLES=1', 'COUPLED_YEARS=3', 'OCEAN_YEARS=20', 'FINAL_YEARS=2', 'OCEAN_ONLY={"everySteps":8}']) assert.match(settings, new RegExp(`^${line.replace(/[{}"]/g, '\\$&')}$`, 'm'), line);
   const log = readFileSync(join(out, 'twelve.log'), 'utf8');
   assert.match(log, /N=64 ended: done at coupled day 1825\n/);
   assert.match(log, /N=128 interrupted by a signal at coupled day 400; a new start carries on from there\n/);

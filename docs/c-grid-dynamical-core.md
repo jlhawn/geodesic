@@ -588,7 +588,7 @@ three arrays (`createRK4Arrays`).
   a layer is split: M21), so cam26 and bl34 exchange their layers above
   2.4 km unchanged; a spin-up seeded from a state on the other grid
   carries its atmosphere across with it. The page starts a run from
-  nothing (`climate.html?from=none`) on bl42; a run started from a saved
+  nothing (`climate.html?from=none`) on bl60; a run started from a saved
   state is on that state's grid.
 - **A required closure on θ.** Without any θ dissipation the A-grid
   set's thin top layers (Δσ ≈ 0.0008 above ~2 hPa) went unstable from
@@ -5661,10 +5661,23 @@ The work, in order:
      onto it (`test/levels.test.mjs`). Built for the cold-tongue
      inversion of docs/equatorial-wind-bias.md, and the default of
      `scripts/spinup.mjs` (`LEVELS`), the paired drivers and the Verda
-     benchmark since Oct 19; a run resumed from a saved state keeps the
+     benchmark from Oct 19 to Oct 21; a run resumed from a saved state keeps the
      state's grid, and the page runs on its state's grid (eleven's bl36
      states until a bl42 run replaces them). It costs about 18 percent
      over bl36 at N=128.
+   - bl60 (`sigmaInterfaces('bl60')`, `LEVELS=bl60`): bl42 with its
+     1-93.6 hPa span cut into 27 layers equal in ln σ, 1.18 km each in
+     log-pressure height (MiMA's lower-stratosphere spacing carried to
+     the stratopause; 60 layers), with its own longwave table
+     (`js/physics/longwaveTableBl60.module.js`) and bl42's sponge and lid
+     friction. `remapLevels` carries bl42 states onto it
+     (`test/levels.test.mjs`). The default of `scripts/spinup.mjs`, the
+     paired drivers, the Verda benchmark and the page's fresh start since
+     Oct 21, after spin-up fourteen (N=128, five years from nothing)
+     formed a descending QBO-like oscillation on it: a period of 20-21
+     months at 3-20 hPa (ERA5 32) whose easterly phase never forms below
+     about 20 hPa, so the 2-30 hPa mean is westerly, +9 to +16 m/s where
+     ERA5's is easterly. It costs 1.4-1.5 times bl42.
    - Final defaults: `topDragDays` 0 (was 5; `topSigma` 0.02 unused),
      `spongeSigma` 0.005 and `spongeDays` 1 (`SPONGE`, the sponge on the
      eddies; `surface` options), `gravityWaves` on with `flux` 4.3·10⁻³
@@ -5954,7 +5967,7 @@ The work, in order:
      94 m/s, Courant 0.25 / 0.30, day 2 ASR 201.4, OLR 213.6, albedo 0.408.
    - Defaults for new runs. `scripts/spinup.mjs` starts a fresh run on
      bl36 (`LEVELS` was cam26 by default) and the page's fresh start
-     (`from=none`) on bl42; a run continues on its snapshot's grid, the
+     (`from=none`) on bl60; a run continues on its snapshot's grid, the
      page loads whatever levels a saved state carries, bl34 stays
      selectable (`LEVELS=bl34`) and its states load and remap as before
      (`test/levels.test.mjs`). A paired spin-up runs on bl36 when it

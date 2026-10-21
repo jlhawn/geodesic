@@ -63,7 +63,7 @@
 # or async), NS ("64 128"), PER_YEAR (36), YEARS (3), UNTIL (365·YEARS;
 # `run` writes the value it uses
 # to OUT/UNTIL_<PREFIX>, which a later run or resume without UNTIL takes, so
-# a run extended by hand stays extended after an eviction), KEEP (1000), LEVELS (bl42),
+# a run extended by hand stays extended after an eviction), KEEP (1000), LEVELS (bl60),
 # OCEAN ('{"everySteps":8}'), STRATOSPHERE (1), SEGMENT_MINUTES (none:
 # pairedSpinup.sh's segment length in minutes of wall time, each segment
 # ending with a snapshot), RADIATION and MOIST (none: spinup.mjs's option
@@ -95,7 +95,7 @@ done
 DRIVER=${DRIVER:-paired}
 NS=${NS:-"64 128"} PER_YEAR=${PER_YEAR:-36} YEARS=${YEARS:-3} KEEP=${KEEP:-1000}
 UNTIL=${UNTIL:-$(cat "$OUT/UNTIL_$PREFIX" 2>/dev/null || echo $((365 * YEARS)))}
-LEVELS=${LEVELS:-bl42} OCEAN=${OCEAN:-'{"everySteps":8}'} STRATOSPHERE=${STRATOSPHERE:-1} SEGMENT_MINUTES=${SEGMENT_MINUTES:-}
+LEVELS=${LEVELS:-bl60} OCEAN=${OCEAN:-'{"everySteps":8}'} STRATOSPHERE=${STRATOSPHERE:-1} SEGMENT_MINUTES=${SEGMENT_MINUTES:-}
 for name in RADIATION MOIST; do if [ -n "${!name}" ]; then export "$name"; else unset "$name"; fi; done
 CYCLES=${CYCLES:-9} COUPLED_YEARS=${COUPLED_YEARS:-10} RECORD_YEARS=${RECORD_YEARS:-1} OCEAN_YEARS=${OCEAN_YEARS:-100} FINAL_YEARS=${FINAL_YEARS:-0}
 OCEAN_ONLY=${OCEAN_ONLY:-$OCEAN} RESTORE=${RESTORE:-30} OCEAN_KEEP=${OCEAN_KEEP:-2} SNAPSHOT_DAYS=${SNAPSHOT_DAYS:-30} KEEP_FORCING=${KEEP_FORCING:-0}
