@@ -678,6 +678,53 @@ test('on bl60 twelve full GPU steps track the CPU model and its energy budget, c
   assert.ok(plumes.parted.size <= C / 3 && scale > 0 && rms < 1e-3 * scale, `the drag's rms difference ${rms} against ${scale}; a regime or plume decision parted in ${plumes.parted.size} columns`);
 });
 
+test('on bl48 twelve full GPU steps track the CPU model and its energy budget, cool each layer above 30 hPa alike with bl48\'s longwave table outside the columns whose OLR or absorbed sunlight parted by more than 10⁻² W/m², and lay the same gravity-wave drag in each of its layers outside the columns where the regime or the plume decided apart or a wave left its momentum in another layer', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { sigmaInterfaces } = await import('../js/dynamics/sigmaCore.module.js');
+  let decisions = null, finely = null, plumes = null;
+  const waves = new Set();
+  const { model, state, physics } = await pair(12, 900, 0, false, { levels: sigmaInterfaces('bl48'), clearSkyPass: true }, {}, {}, async (cpu, device, core) => {
+    decisions ??= cloudDecisions(cpu.mesh.nCells);
+    decisions.check(cpu, device);
+    finely ??= cloudDecisions(cpu.mesh.nCells, 1e-2);
+    finely.check(cpu, device);
+    plumes ??= decisionTracker(cpu.core.K, cpu.mesh.nCells);
+    plumes.check(cpuDecisions(cpu), gpuDecisions(await core.download(), device));
+    const C = cpu.mesh.nCells, east = cpu.gravityWaves.east, scale = east.reduce((m, x) => Math.max(m, Math.abs(x)), 0);
+    for (let i = 0; i < C; i++) for (let k = 0; k < cpu.core.K; k++) if (Math.abs(east[k * C + i] - device.GWE[k * C + i]) > 1e-2 * scale) { waves.add(i); break; }
+  });
+  const C = model.mesh.nCells, K = model.core.K, levels = model.core.levels;
+  assert.equal(K, 48);
+  const kept = Array.from({ length: C }, (_, i) => i).filter((i) => !decisions.parted.has(i)), agreed = Array.from({ length: C }, (_, i) => i).filter((i) => !finely.parted.has(i)), top = [];
+  const keptStats = (sums, slot) => stats(Float64Array.from(kept, (i) => sums[i]), Float64Array.from(kept, (i) => slot[i]));
+  const clearOlr = keptStats(model.radiation.summed.clearOutgoingLongwave, physics.OLRCLRSUM), clearAbsorbed = keptStats(model.radiation.summed.clearAbsorbedSolar, physics.ABSCLRSUM);
+  for (let k = 0; 0.5 * (levels[k] + levels[k + 1]) < 0.03; k++) top.push(stats(Float64Array.from(agreed, (i) => model.radiation.longwave[k * C + i]), Float64Array.from(agreed, (i) => physics.LWH[k * C + i])));
+  const worstLayer = top.reduce((w, s, k) => (s.rms > top[w].rms ? k : w), 0), { rms: worstRms, rmsRel: worstRel } = top[worstLayer];
+  console.log(`bl48 at N=${N}, 12 steps, outside the ${decisions.parted.size} columns whose cloud parted: clear-sky sums per-cell rms OLR ${clearOlr.rmsRel.toExponential(1)}, absorbed ${clearAbsorbed.rmsRel.toExponential(1)}; outside the ${finely.parted.size} whose OLR or absorbed sunlight parted by more than 10⁻² W/m² the ${top.length} layers above 30 hPa absorb longwave alike to ${worstRms.toExponential(1)} W/m² rms per cell at most (layer ${worstLayer}, ${worstRel.toExponential(1)} of its own)`);
+  assert.ok(decisions.parted.size <= C / 20 && agreed.length >= C / 4 && top.length > 10 && worstRms < 5e-5 && clearOlr.rmsRel < 1e-5 && clearAbsorbed.rmsRel < 1e-5, `${decisions.parted.size} parted, ${finely.parted.size} by 10⁻² W/m², ${top.length} layers, longwave rms ${worstRms} W/m² in layer ${worstLayer}; clear-sky OLR ${clearOlr.rmsRel}, absorbed ${clearAbsorbed.rmsRel}`);
+  const read = model.diagnostics(), d = { ...read, ...read.instantaneous };
+  let area = 0, ts = 0, abs = 0, olr = 0;
+  for (let i = 0; i < C; i++) { const a = model.mesh.areaCell[i]; area += a; ts += a * state[3][i]; abs += a * physics.ABS[i]; olr += a * physics.OLR[i]; }
+  ts /= area; abs /= area; olr /= area;
+  const sourced = Array.from({ length: C }, (_, i) => i).filter((i) => !plumes.parted.has(i) && !waves.has(i)), moved = [...waves].filter((i) => !plumes.parted.has(i)).length;
+  let worst = 0, scale = 0, rms = 0;
+  for (const i of sourced) {
+    for (let k = 0; k < K; k++) {
+      const x = k * C + i;
+      worst = Math.max(worst, Math.abs(model.gravityWaves.east[x] - physics.GWE[x]));
+      scale = Math.max(scale, Math.abs(model.gravityWaves.east[x]));
+      rms += (model.gravityWaves.east[x] - physics.GWE[x]) ** 2;
+    }
+  }
+  rms = Math.sqrt(rms / (K * sourced.length));
+  const theta = stats(model.state[1], state[1]), u = stats(model.state[2], state[2]), pi = stats(model.state[0], state[0]);
+  console.log(`twelve steps at N=${N} on bl48: θ rms ${theta.rmsRel.toExponential(1)}, u rms ${u.rms.toExponential(1)} m/s (largest ${u.maxDiff.toExponential(1)}), π rms ${pi.rmsRel.toExponential(1)}; mean Ts ${d.meanSurfaceT.toFixed(3)} vs ${ts.toFixed(3)} K, solar ${d.absorbedSolar.toFixed(2)} vs ${abs.toFixed(2)}, OLR ${d.outgoingLongwave.toFixed(2)} vs ${olr.toFixed(2)} W/m²; the drag apart by ${(86400 * worst).toExponential(1)} m/s/day at most (rms ${(86400 * rms).toExponential(1)}) of up to ${(86400 * scale).toFixed(2)} over the ${sourced.length} columns where no regime or plume decision parted (${plumes.parted.size} did: ${Object.entries(plumes.kinds).map(([kind, cells]) => `${kind} ${cells.size}`).join(', ')}) and no wave left its momentum in another layer (the drag parted by more than 1 % of its largest in ${waves.size}, ${moved} of them where no regime or plume decision did)`);
+  assert.ok(theta.rmsRel < 1e-4 && pi.rmsRel < 1e-5, `θ rms ${theta.rmsRel}, π rms ${pi.rmsRel}`);
+  assert.ok(u.rms < 1e-2, `u rms ${u.rms} m/s`);
+  assert.ok(Math.abs(d.meanSurfaceT - ts) < 0.02, `mean Ts ${d.meanSurfaceT} vs ${ts}`);
+  assert.ok(Math.abs(d.absorbedSolar - abs) < 0.5 && Math.abs(d.outgoingLongwave - olr) < 0.5, `absorbed solar ${d.absorbedSolar} vs ${abs}, OLR ${d.outgoingLongwave} vs ${olr}`);
+  assert.ok(plumes.parted.size <= C / 3 && moved <= C / 50 && scale > 0 && rms < 1e-5 * scale, `the drag's rms difference ${rms} against ${scale}; a regime or plume decision parted in ${plumes.parted.size} columns, a wave's layer in ${moved} more`);
+});
+
 test('with the drags laid every fourth step over terrain, both engines lay the same blocking and wave drag, take the same stress while they hold them, and lay them anew at the fifth step; laid every 16 steps, the waves\' limiter takes the 16 steps alike in both', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
   const { createGpuModel } = await import('../js/gpu/model.gpu.js');
   const { readRanges } = await import('../js/gpu/device.module.js');

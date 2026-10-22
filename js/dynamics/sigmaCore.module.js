@@ -68,21 +68,46 @@ export function logSigmaSteps(sigmaMid) {
 const BOUNDARY_LAYER_HEIGHTS = [1698, 1213, 882, 649, 482, 359, 265, 192, 133, 83, 40];
 
 /*
- * σ at a height (m) in the troposphere of the standard atmosphere, and
- * the height at a σ.
+ * σ at a geopotential height (m) in the US Standard Atmosphere 1976, and
+ * the height at a σ. Its layers from the ground up, each as its base
+ * height, temperature, lapse rate (K/m, positive where it cools upward)
+ * and σ, the base temperature and σ carried up from the layer below.
  */
 const STANDARD = { T0: 288.15, lapse: 0.0065, g: 9.80665, R: 287.053 };
+const STANDARD_LAYERS = [[11000, 0], [20000, -0.001], [32000, -0.0028], [47000, 0], [51000, 0.0028], [71000, 0.002], [84852, 0]].reduce((layers, [z, lapse]) => {
+  const [z0, T0, lapse0] = layers.at(-1);
+  return [...layers, [z, T0 - lapse0 * (z - z0), lapse, sigmaInLayer(layers.at(-1), z)]];
+}, [[0, STANDARD.T0, STANDARD.lapse, 1]]);
+function sigmaInLayer([z0, T0, lapse, sigma0], z) {
+  return lapse === 0 ? sigma0 * Math.exp(-STANDARD.g * (z - z0) / (STANDARD.R * T0)) : sigma0 * Math.pow(1 - lapse * (z - z0) / T0, STANDARD.g / (STANDARD.R * lapse));
+}
 export function standardSigma(z) {
-  return Math.pow(1 - STANDARD.lapse * z / STANDARD.T0, STANDARD.g / (STANDARD.R * STANDARD.lapse));
+  return sigmaInLayer(STANDARD_LAYERS.findLast((layer) => layer[0] <= z) ?? STANDARD_LAYERS[0], z);
 }
 export function standardHeight(sigma) {
-  return STANDARD.T0 / STANDARD.lapse * (1 - Math.pow(sigma, STANDARD.R * STANDARD.lapse / STANDARD.g));
+  const [z0, T0, lapse, sigma0] = STANDARD_LAYERS.findLast((layer) => layer[3] >= sigma) ?? STANDARD_LAYERS[0];
+  return lapse === 0 ? z0 + STANDARD.R * T0 / STANDARD.g * Math.log(sigma0 / sigma) : z0 + T0 / lapse * (1 - Math.pow(sigma / sigma0, STANDARD.R * lapse / STANDARD.g));
 }
 
-export const SIGMA_GRIDS = ['cam26', 'bl34', 'bl36', 'bl42', 'bl60'];
+export const SIGMA_GRIDS = ['cam26', 'bl34', 'bl36', 'bl42', 'bl48', 'bl60'];
 const STRATOPAUSE_INTERFACES = [30, 100];
 const STRATOSPHERE = { base: 0.09, layers: 27 };
 const INVERSION_HEIGHTS = [4100, 3498, 3160, 2830, 2520, 2230, 1960, 1698, 1450, ...BOUNDARY_LAYER_HEIGHTS.slice(1)];
+const LADDER = { bottom: 40, ratio: 2 ** (1 / 5), troposphere: [25, 7], stratosphere: [5, 9] };
+
+/*
+ * The interfaces from the ground up, as σ, of `growing` layers in the
+ * standard atmosphere from σ `from`, the first `first` m thick and each
+ * after it LADDER.ratio times the one below, then `equal` layers of one
+ * thickness up to σ `to`; and that thickness.
+ */
+function ladder(from, to, first, growing, equal) {
+  const heights = [standardHeight(from)];
+  for (let j = 0; j < growing; j++) heights.push(heights[j] + first * LADDER.ratio ** j);
+  const step = (standardHeight(to) - heights[growing]) / equal;
+  for (let j = 1; j < equal; j++) heights.push(heights[growing] + j * step);
+  return { sigma: [...heights.slice(1).map(standardSigma), to], step };
+}
 
 /*
  * Interface sigma values, top (0) to ground (1), of the grid by that
@@ -106,13 +131,26 @@ const INVERSION_HEIGHTS = [4100, 3498, 3160, 2830, 2520, 2230, 1960, 1698, 1450,
  * its 1-93.6 hPa span cut into STRATOSPHERE.layers layers equal in ln σ,
  * 1.18 km each in log-pressure height (H = 7 km): the 1.2 km of MiMA's
  * lower stratosphere (Garfinkel et al. 2022) carried up to the
- * stratopause, where bl42's are 1.1-5.7 km.
+ * stratopause, where bl42's are 1.1-5.7 km. 'bl48' keeps bl60's lid and
+ * 93.6 hPa interface and lays out the rest in standard-atmosphere
+ * heights by LADDER: from a 40 m lowest layer, 25 layers each 2^(1/5)
+ * times as thick as the one below, to 8.34 km, then 7 of 1.18 km to
+ * 93.6 hPa; above it 5 more that keep growing by 2^(1/5) from 1.18 km,
+ * to 25.7 km, then 9 of 2.46 km to 1 hPa. No layer below 1 hPa is more
+ * than 1.15 times as thick as the one below it, and those of 1.4-2.5 km
+ * in the stratosphere are finer than GFDL AM3's 3-4 km (Donner et al.
+ * 2011): 48 layers.
  */
 export function sigmaInterfaces(name = 'cam26') {
   const levels = [0];
   for (let k = 0; k < CAM_L26_HYAI.length; k++) levels.push(CAM_L26_HYAI[k] + CAM_L26_HYBI[k]);
   levels[levels.length - 1] = 1;
   if (name === 'cam26') return Float64Array.from(levels);
+  if (name === 'bl48') {
+    const top = STRATOPAUSE_INTERFACES.map((p) => p / P0), base = levels.find((sigma) => sigma > STRATOSPHERE.base);
+    const troposphere = ladder(1, base, LADDER.bottom, ...LADDER.troposphere), stratosphere = ladder(base, top.at(-1), troposphere.step * LADDER.ratio, ...LADDER.stratosphere);
+    return Float64Array.from([0, ...top, ...stratosphere.sigma.slice(0, -1).reverse(), ...troposphere.sigma.reverse(), 1]);
+  }
   if (name === 'bl34' || name === 'bl36' || name === 'bl42' || name === 'bl60') {
     const refined = (name === 'bl42' || name === 'bl60' ? INVERSION_HEIGHTS : BOUNDARY_LAYER_HEIGHTS).map(standardSigma), top = name === 'bl34' ? [] : STRATOPAUSE_INTERFACES.map((p) => p / P0);
     let free = levels.filter((sigma) => sigma > 0 && sigma < refined[0]);

@@ -38,7 +38,7 @@ function prepare(model) {
 }
 
 test('the sigma grids go by name, cam26 by default, and a grid is named again from its interfaces in single precision', () => {
-  assert.deepEqual(SIGMA_GRIDS, ['cam26', 'bl34', 'bl36', 'bl42', 'bl60']);
+  assert.deepEqual(SIGMA_GRIDS, ['cam26', 'bl34', 'bl36', 'bl42', 'bl48', 'bl60']);
   assert.deepEqual(sigmaInterfaces(), cam);
   assert.equal(cam.length - 1, 27);
   assert.equal(bl.length - 1, 34);
@@ -265,6 +265,41 @@ test('bl60 is bl42 with its 1-93.6 hPa span cut into 27 layers equal in ln σ, 1
   assert.deepEqual(up.theta.subarray(29 * C), state.theta.subarray(11 * C));
 });
 
+test('the standard atmosphere is the US Standard Atmosphere 1976 to 84.852 km: the layers\' lapse rates give its base pressures, and the height of a σ inverts the σ of a height', () => {
+  for (const [z, p] of [[11000, 22632.06], [20000, 5474.889], [32000, 868.0187], [47000, 110.9063], [51000, 66.93887], [71000, 3.956420], [84852, 0.37338]]) assert.ok(Math.abs(standardSigma(z) * P0 / p - 1) < 1e-5, `${z} m: ${standardSigma(z) * P0} Pa against ${p}`);
+  for (const z of [0, 40, 5000, 11000, 16600, 25700, 47820, 60000, 90000]) assert.ok(Math.abs(standardHeight(standardSigma(z)) - z) < 1e-9 * Math.max(z, 1), `${z} m comes back as ${standardHeight(standardSigma(z))} m`);
+  assert.equal(standardHeight(0), Infinity);
+});
+
+test('bl48 keeps bl60\'s lid and 93.6 hPa interface and lays out the rest in standard-atmosphere heights: 25 layers from 40 m each 2^(1/5) times the one below to 8.34 km, 7 of 1.18 km, 5 more growing by 2^(1/5) to 25.7 km and 9 of 2.46 km to 1 hPa, no layer below 1 hPa more than 1.15 times the one below it, and remapLevels carries a bl60 state onto it keeping every column\'s water, enthalpy and momentum', () => {
+  const fine = sigmaInterfaces('bl48'), coarse = sigmaInterfaces('bl60'), K = fine.length - 1, ratio = 2 ** (1 / 5);
+  assert.equal(K, 48);
+  assert.equal(sigmaGridName(Float32Array.from(fine)), 'bl48');
+  assert.deepEqual(fine.subarray(0, 3), coarse.subarray(0, 3));
+  assert.equal(fine[16], coarse[29]);
+  const heights = Array.from(fine, (sigma) => standardHeight(sigma)), thick = (k) => heights[k] - heights[k + 1];
+  assert.ok(Math.abs(thick(K - 1) - 40) < 1e-6, `the lowest layer is ${thick(K - 1)} m`);
+  for (const [from, to] of [[23, K - 1], [11, 16]]) for (let k = from; k < to; k++) assert.ok(Math.abs(thick(k) / thick(k + 1) - ratio) < 1e-9, `layer ${k} is ${thick(k)} m over ${thick(k + 1)} m`);
+  assert.ok(Math.abs(heights[23] - 8339) < 1 && Math.abs(thick(23) - 1114) < 1, `the ladder's 25th layer is ${thick(23)} m to ${heights[23]} m`);
+  for (let k = 16; k < 23; k++) assert.ok(Math.abs(thick(k) - 1180) < 1, `layer ${k} is ${thick(k)} m`);
+  assert.ok(Math.abs(heights[11] - 25716) < 1, `the stratosphere grows to ${heights[11]} m`);
+  for (let k = 2; k < 11; k++) assert.ok(Math.abs(thick(k) - 2456) < 1, `layer ${k} is ${thick(k)} m`);
+  for (let k = 2; k < K - 1; k++) assert.ok(thick(k) / thick(k + 1) > 1 - 1e-9 && thick(k) / thick(k + 1) <= 1.15, `layer ${k} is ${thick(k) / thick(k + 1)} times the one below it`);
+  const mesh = buildMesh(new Grid(16)), C = mesh.nCells, E = mesh.nEdges;
+  const state = { pi: new Float64Array(C).fill(1e5), theta: Float64Array.from({ length: 60 * C }, (_, x) => 300 + x % 97), q: Float64Array.from({ length: 60 * C }, (_, x) => 1e-3 * (1 + x % 7)), qc: null, u: Float64Array.from({ length: 60 * E }, (_, x) => (x % 13) - 6) };
+  const up = remapLevels(coarse, fine, state, mesh);
+  const kappa = R_DRY / CP_DRY, exner = (levels, k) => (levels[k + 1] ** (1 + kappa) - levels[k] ** (1 + kappa)) / ((1 + kappa) * (levels[k + 1] - levels[k]));
+  const column = (levels, values, i, n, weight = () => 1) => { let s = 0; for (let k = 0; k < levels.length - 1; k++) s += (levels[k + 1] - levels[k]) * weight(levels, k) * values[k * n + i]; return s; };
+  for (let i = 0; i < C; i++) {
+    const water = column(coarse, state.q, i, C), enthalpy = column(coarse, state.theta, i, C, exner);
+    assert.ok(Math.abs(column(fine, up.q, i, C) - water) <= 1e-12 * water, `cell ${i}: water ${water} becomes ${column(fine, up.q, i, C)}`);
+    assert.ok(Math.abs(column(fine, up.theta, i, C, exner) - enthalpy) <= 1e-12 * enthalpy, `cell ${i}: enthalpy ${enthalpy} becomes ${column(fine, up.theta, i, C, exner)}`);
+  }
+  for (let e = 0; e < E; e++) { const m = column(coarse, state.u, e, E); assert.ok(Math.abs(column(fine, up.u, e, E) - m) <= 1e-12 * Math.max(1, Math.abs(m)), `edge ${e}: momentum ${m}`); }
+  assert.deepEqual(up.theta.subarray(0, 2 * C), state.theta.subarray(0, 2 * C));
+  console.log(`bl48: thicknesses from 1 hPa down ${Array.from({ length: K - 2 }, (_, j) => thick(j + 2).toFixed(0)).join(', ')} m`);
+});
+
 test('the worker-thread engine on bl34 reproduces the single-thread step bit for bit', async () => {
   const serial = createModel(new Grid(16), { levels: bl });
   const parallel = await createParallelModel(new Grid(16), { levels: bl }, 2);
@@ -396,4 +431,22 @@ test('spinup.mjs starts a bl34 run from a cam26 state\'s ocean and land at day 0
   assert.ok(covered > 0 && thickest < 0.4, `${covered} iced cells, the thickest ${thickest} m`);
 
   assert.throws(() => run({ N: '32', TAG: 'coarse' }), /is N=16, not 32/);
+});
+
+test('with LEVELS=bl48, spinup.mjs starts a fresh run on bl48 and carries a bl60 state onto it, and fixedSst.mjs runs a day on bl48 from that state', { skip: !gpuAvailable && 'webgpu not installed' }, async (t) => {
+  const root = new URL('..', import.meta.url).pathname, dir = mkdtempSync(join(tmpdir(), 'bl48-')), fine = sigmaInterfaces('bl48');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const node = (script, args, env) => execFileSync(process.execPath, [join(root, script), ...args], { cwd: root, env: { ...process.env, ...env }, encoding: 'utf8', stdio: 'pipe' });
+  const spinup = (env) => node('scripts/spinup.mjs', [], { N: '16', OUT: dir, DAYS: '1', MINUTES: '100', STOP_AFTER_STEPS: '4', ...env });
+  assert.match(spinup({ TAG: 'source', LEVELS: 'bl60' }), /fresh start at N=16 on bl60 \(60 layers\)/);
+  assert.match(spinup({ TAG: 'fresh', LEVELS: 'bl48' }), /fresh start at N=16 on bl48 \(48 layers\)/);
+  const source = join(dir, 'source_day0000_step0004.bin');
+  assert.match(spinup({ TAG: 'carried', LEVELS: 'bl48', FROM: source }), /its atmosphere remapped from bl60 on bl48 \(48 layers\) and its deck/);
+  assert.match(node('scripts/fixedSst.mjs', [source, dir, 'arm'], { LEVELS: 'bl48', DAYS: '1', SAVE_DAYS: '1' }), /saved arm_day0001\.bin/);
+  for (const name of ['fresh_day0000_step0004.bin', 'carried_day0000_step0004.bin', 'arm_day0001.bin']) {
+    const saved = await decodeState(new Uint8Array(readFileSync(join(dir, name))));
+    assert.equal(saved.K, 48, name);
+    assert.deepEqual(savedLevels(saved), fine, name);
+    for (const field of ['pi', 'theta', 'u', 'surfaceT', 'q']) assert.ok(saved[field].every(Number.isFinite), `${name}: ${field}`);
+  }
 });
