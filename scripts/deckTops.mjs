@@ -1,13 +1,17 @@
 // Where the stratocumulus deck's top sits against the grid over saved states
-// (ocean columns; deck columns have mlmGate > 0.5). Per box: the deck's share,
-// tops within 5 m of the ceiling, 100 m bins of the top, and the top's place in
-// its layer by fifths. Per site: the 4 K and the largest θv jumps below 3 km,
+// (sea columns: those with ocean, or the geography's sea in states saved
+// without one, as scripts/fixedSst.mjs saves them; deck columns have
+// mlmGate > 0.5). Per box: the deck's share, the day-mean shortwave and
+// longwave cloud effects where the states carry them, tops within 5 m of the
+// ceiling, 100 m bins of the top, and the top's place in its layer by fifths,
+// all layers together and then by layer (a fifth in each where the tops are
+// not locked to the grid). Per site: the 4 K and the largest θv jumps below 3 km,
 // the deck's top, and the 4 K jump's height in deck columns by 50 m bins:
 //   node scripts/deckTops.mjs <state.bin>...
 import { readFileSync } from 'node:fs';
 import { decodeState } from '../js/stateFile.module.js';
 import { stateGrid } from '../js/stateGrid.module.js';
-import { stateGeography } from '../js/geography.module.js';
+import { stateGeography, createGeography } from '../js/geography.module.js';
 import { R_DRY, CP_DRY, P0, GRAVITY, VIRTUAL_FACTOR } from '../js/dynamics/sigmaCore.module.js';
 
 const FILES = process.argv.slice(2), KAPPA = R_DRY / CP_DRY, JUMP = 4, TOP = 3000;
@@ -27,11 +31,13 @@ const SITES = {
   '20S 85W 22-18S 87-83W': box(-22, -18, -87, -83),
 };
 const boxes = {}, sites = {};
-let mesh = null;
+let mesh = null, land = null;
 for (const file of FILES) {
   const saved = await decodeState(new Uint8Array(readFileSync(file)));
-  mesh ??= stateGrid(saved, stateGeography(saved).topography).mesh;
-  const C = mesh.nCells, K = saved.K, levels = saved.levels, L = saved.ocean.h.length / C;
+  const { topography, geography } = stateGeography(saved);
+  mesh ??= stateGrid(saved, topography).mesh;
+  if (!saved.ocean) land ??= createGeography(mesh, topography, geography).land;
+  const C = mesh.nCells, K = saved.K, levels = saved.levels, L = saved.ocean ? saved.ocean.h.length / C : 0, effects = !!saved.meanShortwaveCloudEffect;
   const z = new Float64Array(K + 1), tv = new Float64Array(K);
   for (let i = 0; i < C; i++) {
     const lat = mesh.latCell[i] * 180 / Math.PI, east = mesh.lonCell[i] * 180 / Math.PI, lon = east > 180 ? east - 360 : east;
@@ -39,7 +45,7 @@ for (const file of FILES) {
     if (!inBoxes.length && !inSites.length) continue;
     let depth = 0;
     for (let k = 0; k < L; k++) depth += saved.ocean.h[k * C + i];
-    if (!(depth > 1)) continue;
+    if (saved.ocean ? !(depth > 1) : land[i]) continue;
     const exner = (sigma) => sigma > 0 ? (saved.pi[i] * sigma / P0) ** KAPPA : 0;
     z[K] = 0;
     for (let k = K - 1; k >= 0; k--) {
@@ -58,8 +64,9 @@ for (const file of FILES) {
     let layer = -1;
     for (let k = K - 1; k >= 0; k--) if (h >= z[k + 1] && h < z[k]) { layer = k; break; }
     for (const name of inBoxes) {
-      const b = boxes[name] ??= { columns: 0, decks: 0, atCeiling: 0, bins: {}, layers: {} };
+      const b = boxes[name] ??= { columns: 0, decks: 0, atCeiling: 0, bins: {}, layers: {}, fifths: [0, 0, 0, 0, 0], effects: 0, shortwave: 0, longwave: 0 };
       b.columns++;
+      if (effects) { b.effects++; b.shortwave += saved.meanShortwaveCloudEffect[i]; b.longwave += saved.meanLongwaveCloudEffect[i]; }
       if (!deck) continue;
       b.decks++;
       if (Math.abs(h - ceiling) < 5) b.atCeiling++;
@@ -67,8 +74,8 @@ for (const file of FILES) {
       b.bins[bin] = (b.bins[bin] ?? 0) + 1;
       if (layer < 0) continue;
       const l = b.layers[layer] ??= { n: 0, bottom: 0, top: 0, fifths: [0, 0, 0, 0, 0] };
-      l.n++; l.bottom += z[layer + 1]; l.top += z[layer];
-      l.fifths[Math.min(4, Math.floor(5 * (h - z[layer + 1]) / (z[layer] - z[layer + 1])))]++;
+      const fifth = Math.min(4, Math.floor(5 * (h - z[layer + 1]) / (z[layer] - z[layer + 1])));
+      l.n++; l.bottom += z[layer + 1]; l.top += z[layer]; l.fifths[fifth]++; b.fifths[fifth]++;
     }
     for (const name of inSites) {
       const t = sites[name] ??= { columns: 0, largest: 0, largestJump: 0, capped: 0, cap: 0, decks: 0, top: 0, caps: {} };
@@ -85,7 +92,7 @@ for (const file of FILES) {
 const pct = (a, b) => (100 * a / Math.max(1, b)).toFixed(0);
 console.log(`${FILES.length} states; deck columns have mlmGate > 0.5`);
 for (const [name, b] of Object.entries(boxes)) {
-  console.log(`\n${name}: ${b.columns} columns, deck in ${pct(b.decks, b.columns)} %, ${pct(b.atCeiling, b.decks)} % of deck tops within 5 m of the ceiling`);
+  console.log(`\n${name}: ${b.columns} columns, deck in ${pct(b.decks, b.columns)} %${b.effects ? `, cloud effects SW ${(b.shortwave / b.effects).toFixed(1)} LW ${(b.longwave / b.effects).toFixed(1)} W/m²` : ''}, ${pct(b.atCeiling, b.decks)} % of deck tops within 5 m of the ceiling, ${pct(b.fifths[2], b.fifths.reduce((x, y) => x + y))} % in the middle fifth of their layer`);
   console.log('  top, 100 m bins (% of deck tops): ' + Object.keys(b.bins).map(Number).sort((x, y) => x - y).filter((bin) => b.bins[bin] / b.decks > 0.01).map((bin) => `${bin}: ${pct(b.bins[bin], b.decks)}`).join(', '));
   console.log('  layer holding the top (bottom-top m, % of deck tops; fifths bottom to top, %):');
   for (const [k, l] of Object.entries(b.layers).sort((x, y) => y[0] - x[0])) if (l.n / b.decks > 0.03) console.log(`    k ${k}: ${(l.bottom / l.n).toFixed(0)}-${(l.top / l.n).toFixed(0)}, ${pct(l.n, b.decks)} %; ${l.fifths.map((v) => pct(v, l.n)).join(' ')}`);
