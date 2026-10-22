@@ -513,6 +513,7 @@ if (step) {
     Object.assign(partial, { rainSeen, runoffSeen, dischargeSeen });
   }
 }
+const ocean = await model.ocean.serialize({ restart: true });
 if (step && recorder) {
   await model.diagnostics();
   const part = await recorder.checkpoint();
@@ -521,7 +522,7 @@ if (step && recorder) {
 await model.sync();
 const sstFields = sstRing ? { ...sstRing.serialize(), ...(step ? await sstRecorder.checkpoint().then(({ sum, samples }) => ({ sstSum: sum, sstSamples: samples })) : {}) } : {};
 const days = day - day0;
-const ocean = await model.ocean.serialize({ restart: true }), landState = await model.land.serialize();
+const landState = await model.land.serialize();
 const kT = ocean.densities.filter((r) => r < THERMOCLINE_DENSITY).length;
 const sea = (a, b, c, e) => [...Array(C).keys()].filter((i) => !land[i] && mesh.latCell[i] * deg >= a && mesh.latCell[i] * deg <= b && (c <= e ? mesh.lonCell[i] * deg >= c && mesh.lonCell[i] * deg <= e : mesh.lonCell[i] * deg >= c || mesh.lonCell[i] * deg <= e));
 const meanOf = (cells, f) => cells.reduce((s, i) => s + f(i), 0) / Math.max(1, cells.length);

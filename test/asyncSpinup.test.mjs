@@ -8,7 +8,7 @@ import { Grid } from '../js/grid.module.js';
 import { topographyFromInt16 } from '../js/geography.module.js';
 import { initializeState } from '../js/physics/init.module.js';
 import { decodeState, encodeState } from '../js/stateFile.module.js';
-import { decodeForcing, forcingName } from '../js/forcing.module.js';
+import { forcingName } from '../js/forcing.module.js';
 import { withOceanOf } from '../js/oceanHandOff.module.js';
 import { SST_FIELDS } from '../js/sstMeans.module.js';
 
@@ -33,6 +33,15 @@ function driver(env) {
 }
 const load = async (file) => decodeState(new Uint8Array(readFileSync(file)));
 const text = (file) => readFileSync(file, 'utf8');
+function apart(a, b, skip = []) {
+  const names = [];
+  for (const [name, x] of [...Object.entries(a), ...Object.entries(a.ocean).map(([k, v]) => [`ocean.${k}`, v]), ...Object.entries(a.land).map(([k, v]) => [`land.${k}`, v])]) {
+    if (!ArrayBuffer.isView(x) || skip.includes(name)) continue;
+    const y = name.startsWith('ocean.') ? b.ocean[name.slice(6)] : name.startsWith('land.') ? b.land[name.slice(5)] : b[name];
+    if (!x.every((v, n) => Object.is(v, y[n]))) names.push(name);
+  }
+  return names;
+}
 async function waitFor(check, seconds = 120) {
   const until = Date.now() + seconds * 1000;
   while (!check()) {
@@ -165,7 +174,7 @@ test('SIGTERM makes an ocean-only run save and exit 0, and the run continues to 
   assert.ok(readFileSync(join(whole, 'alone_year0020.bin')).equals(readFileSync(join(parts, 'alone_year0020.bin'))));
 });
 
-test('a coupled segment stopped inside a day carries the recorded day across the interruption', { skip }, async () => {
+test('a coupled segment stopped inside a day records each day byte for byte as the uninterrupted run does and ends in its state, all but the energy record, which leaves the interrupted day out', { skip }, async () => {
   const whole = outDir('coupledWhole', 'c_day0000.bin'), parts = outDir('coupledParts', 'c_day0000.bin');
   const env = { TAG: 'c', DAYS: '3', MINUTES: '100' };
   assert.equal(run('spinup.mjs', { ...env, OUT: whole, RECORD: join(whole, 'forcing') }), 0);
@@ -177,21 +186,9 @@ test('a coupled segment stopped inside a day carries the recorded day across the
   assert.match(text(join(parts, 'c.log')), new RegExp(`stopped by STOP_AFTER_STEPS=${PER_DAY + 12} at day 1 and 12 of ${PER_DAY} steps`));
   assert.equal(run('spinup.mjs', { ...env, OUT: parts, RECORD: join(parts, 'forcing') }), 0);
   assert.deepEqual(readdirSync(parts).filter((f) => f.endsWith('.bin')).sort(), ['c_day0000.bin', 'c_day0003.bin']);
-  assert.ok(readFileSync(join(whole, 'forcing', forcingName(1))).equals(readFileSync(join(parts, 'forcing', forcingName(1)))));
-  for (const day of [2, 3]) {
-    const [a, b] = await Promise.all([whole, parts].map(async (out) => decodeForcing(new Uint8Array(readFileSync(join(out, 'forcing', forcingName(day)))))));
-    assert.deepEqual([b.seconds, b.steps, b.oceanSteps], [a.seconds, a.steps, a.oceanSteps]);
-    const gaps = ['stress', 'netFlux', 'shortwave', 'shortwaveDown', 'evaporation', 'rain'].map((name) => {
-      let off = 0, size = 0, net = 0;
-      for (let i = 0; i < a.fields[name].length; i++) { const d = a.fields[name][i] - b.fields[name][i]; off += Math.abs(d); net += d; size += Math.abs(a.fields[name][i]); }
-      return { name, cells: off / size, mean: Math.abs(net) / size };
-    });
-    console.log(`day ${day}, the continued run off the uninterrupted one's (cell by cell, global mean): ${gaps.map(({ name, cells, mean }) => `${name} ${(100 * cells).toFixed(2)}%, ${(100 * mean).toFixed(3)}%`).join('; ')}`);
-    for (const { name, cells, mean } of gaps) {
-      assert.ok(mean < 0.005, `day ${day} ${name}: the continued run's global mean is ${(100 * mean).toFixed(3)}% off the uninterrupted one's`);
-      if (day === 2) assert.ok(cells < 0.02, `day ${day} ${name}: the continued run's cells are ${(100 * cells).toFixed(2)}% off the uninterrupted one's`);
-    }
-  }
+  for (const day of [1, 2, 3]) assert.ok(readFileSync(join(whole, 'forcing', forcingName(day))).equals(readFileSync(join(parts, 'forcing', forcingName(day)))), `day ${day}'s record`);
+  const [a, b] = await Promise.all([whole, parts].map((out) => load(join(out, 'c_day0003.bin'))));
+  assert.deepEqual(apart(a, b, ['energyRecord']), []);
 });
 
 test('a coupled run split at each day\'s end ends byte for byte where the uninterrupted run does', { skip }, async () => {
@@ -253,13 +250,7 @@ test('a coupled run split inside a day ends the day with the uninterrupted run\'
   assert.equal(run('spinup.mjs', { ...env, OUT: parts }), 0);
   const [a, b] = await Promise.all([whole, parts].map((out) => load(join(out, 'h_day0001.bin'))));
   const means = ['convectiveRain', 'largeScaleRain', 'meanAbsorbedSolar', 'meanOutgoingLongwave', 'meanPlanetaryAlbedo', 'meanShortwaveCloudEffect', 'meanLongwaveCloudEffect', 'energyRecord'];
-  const apart = [];
-  for (const [name, x] of [...Object.entries(a), ...Object.entries(a.ocean).map(([k, v]) => [`ocean.${k}`, v]), ...Object.entries(a.land).map(([k, v]) => [`land.${k}`, v])]) {
-    if (!ArrayBuffer.isView(x) || means.includes(name)) continue;
-    const y = name.startsWith('ocean.') ? b.ocean[name.slice(6)] : name.startsWith('land.') ? b.land[name.slice(5)] : b[name];
-    if (!x.every((v, n) => Object.is(v, y[n]))) apart.push(name);
-  }
-  assert.deepEqual(apart, []);
+  assert.deepEqual(apart(a, b, means), []);
 });
 
 test('the asynchronous driver alternates coupled and ocean-only phases, hands the ocean over and picks up where it stands', { skip }, async () => {
