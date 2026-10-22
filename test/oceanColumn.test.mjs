@@ -158,3 +158,14 @@ test('with rotationLimit rh18 the wind\'s energy decays in x = h|f|/u* as Reichl
   assert.ok(rh18.depth - 100 < 0.5 * (algebraic.depth - 100), `rh18 erodes ${rh18.depth - 100} m of the halocline against ${algebraic.depth - 100}`);
   assert.throws(() => createOcean(buildMesh(new Grid(16)), { everySteps: 1, rotationLimit: 'ekman' }), /rotationLimit is one of algebraic, rh18/);
 });
+
+test('the waves weight scales the Langmuir factor\'s excess over 1, as sea ice damps the waves: the whole factor at 1, none at 0, part of it between', () => {
+  const K = 60, h = new Float64Array(K).fill(5), T = new Float64Array(K).fill(272), S = Float64Array.from({ length: K }, (_, k) => 34 + 0.005 * k), kappa = new Float64Array(K), scratch = columnScratch(K);
+  const depth = (options) => boundaryLayer({ h, T, S, K, ustar: 0.0098, f: 1e-4, dt: 2700, ...options }, kappa, scratch).depth;
+  const full = depth({}), still = depth({ langmuir: 0 }), half = depth({ waves: 0.5 });
+  console.log(`Langmuir factor whole ${full.toFixed(2)} m, half ${half.toFixed(2)} m, none ${still.toFixed(2)} m`);
+  assert.equal(depth({ waves: 1 }), full);
+  assert.equal(depth({ waves: 0 }), still);
+  assert.ok(still + 1 < half && half + 1 < full, `${still} < ${half} < ${full} m`);
+  assert.throws(() => createOcean(buildMesh(new Grid(16)), { everySteps: 1, langmuirIce: 'linear' }), /langmuirIce is one of none, tanh/);
+});

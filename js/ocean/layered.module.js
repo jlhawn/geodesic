@@ -2,7 +2,7 @@ import { divergence, gradient, curl, kineticEnergy, laplacianVelocity, cellVecto
 import { FREEZING_POINT } from '../physics/ice.module.js';
 import { SEAWATER, seawaterDensity, thermalExpansion as expansionOf, halineContraction as contractionOf, labelTemperature, salinityForDensity } from './seawater.module.js';
 import { profileAt } from './climatology.module.js';
-import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
+import { FRICTION_PER_WIND, CALM_WIND, RETREAT_EKMAN, ROTATION_LIMITS, LANGMUIR_ICE, ICE_WAVE_DAMPING, erfc, stokesSurfaceLayer, langmuirFactor, JERLOV, PENETRATION_DEPTH, transmitted, deposited, HYBRID_LAYERS, H_MIN, MODE_DEPTH, labelBoundaries, columnScratch, targetInterfaces, remapColumn, solveColumn, mixColumn, mixedLayerDepth, spaceInterfaces, layerDensities } from './column.module.js';
 import { basalMelt, baseFreezing, SHELF_MELT } from './iceShelfMelt.module.js';
 
 /*
@@ -377,7 +377,7 @@ export function createOcean(mesh, {
   minimumDepth = 50, flatDepth = 4000, thermoclineTilt = 0.3,
   salinityProfile = (lat) => 34 + 2 * Math.exp(-(((Math.abs(lat) * 180 / Math.PI - 25) / 20) ** 2)),
   density = 1025, specificHeat = 3985, referenceS = 35, gravity = 9.81,
-  vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, latentHeatFusion = 3.34e5, langmuir = 2,
+  vorticityCentring = 0.5, iceStressTransmission = 0.8, iceSalinity = 5, iceDensity = 917, latentHeatFusion = 3.34e5, langmuir = 2, langmuirIce = 'none',
   momentumDepth = 50, shearViscosity = 1e-2, backgroundViscosity = 1e-4, bottomDrag = 3e-3, topDrag = 2.5e-3, closureHours = 12, closureSpacing = CLOSURE_SPACING, everySteps = 4,
   eddyDiffusivity = 1000, eddyTaperDepth = 200, penetration = 'IB',
   geography = null, bathymetry = null, edgeSill = undefined, sillFloor = minimumDepth, buffers = null, climatology = null,
@@ -395,6 +395,7 @@ export function createOcean(mesh, {
   if (vertical !== 'hybrid') throw new Error(`the ocean's vertical coordinate is 'hybrid'; a saved slab ocean is converted on load, not run (vertical ${vertical})`);
   if (langmuir !== 0 && !(langmuir >= 1)) throw new Error(`langmuir caps a factor of at least 1, so it is 0 or at least 1, not ${langmuir}`);
   if (!ROTATION_LIMITS.includes(rotationLimit)) throw new Error(`rotationLimit is one of ${ROTATION_LIMITS.join(', ')}, not ${rotationLimit}`);
+  if (!LANGMUIR_ICE.includes(langmuirIce)) throw new Error(`langmuirIce is one of ${LANGMUIR_ICE.join(', ')}, not ${langmuirIce}`);
   const advection = tracerAdvection;
   if (!TRACER_ADVECTIONS.includes(advection)) throw new Error(`tracerAdvection is one of ${TRACER_ADVECTIONS.join(', ')}, not ${advection}`);
   if (!EDGE_TRANSPORTS.includes(edgeTransport)) throw new Error(`edgeTransport is one of ${EDGE_TRANSPORTS.join(', ')}, not ${edgeTransport}`);
@@ -438,6 +439,8 @@ export function createOcean(mesh, {
   const capacity = shared('capacity', C);
   if (!adopting) capacity.fill(rhoCp * table.depths[1]);
   const transmission = shared('transmission', C), penetrated = shared('penetrated', C), shares = new Float64Array(L);
+  const waves = shared('waves', C);
+  if (!(buffers && buffers.waves)) waves.fill(1);
   const stress = shared('stress', E), fresh = new Float64Array(C), calved = new Float64Array(C);
   const iced = new Uint8Array(C);
   const hEdge = shared('hEdge', L * E), pressure = shared('pressure', L * C), flux = new Float64Array(E), fluxPV = new Float64Array(E), tracerFlux = new Float64Array(E), edgeS = new Float64Array(E);
@@ -1006,7 +1009,7 @@ export function createOcean(mesh, {
       cellColumn(i, hCol, TCol, SCol);
       for (let k = 0; k < L; k++) cellVectorAt(k, i, vector, 3 * k);
       for (let k = 0; k < L - 1; k++) shear[k] = (vector[3 * k] - vector[3 * k + 3]) ** 2 + (vector[3 * k + 1] - vector[3 * k + 4]) ** 2 + (vector[3 * k + 2] - vector[3 * k + 5]) ** 2;
-      options.guess = boundaryDepths[i]; options.langmuir = shelf[i] ? 0 : langmuir;
+      options.guess = boundaryDepths[i]; options.langmuir = shelf[i] ? 0 : langmuir; options.waves = waves[i];
       let meltHeat = 0, meltSalt = 0;
       if (shelf[i] && meltOn) {
         const speed2 = vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2];
@@ -1059,6 +1062,7 @@ export function createOcean(mesh, {
   const coverOf = (ice, concentration, i) => (ice[i] > 0 ? (concentration && concentration[i] > 0 ? concentration[i] : 1) : 0);
   function setStress(total, ice, concentration = null) {
     const cover = (i) => (shelf[i] ? 0 : coverOf(ice, concentration, i));
+    if (langmuirIce === 'tanh') for (let i = 0; i < C; i++) waves[i] = 1 - Math.tanh(ICE_WAVE_DAMPING * cover(i));
     for (let e = 0; e < E; e++) stress[e] = edgeOcean[e] ? total[e] * (1 - 0.5 * (cover(cellsOnEdge[2 * e]) + cover(cellsOnEdge[2 * e + 1])) * (1 - iceStressTransmission)) * (1 - 0.5 * (shelf[cellsOnEdge[2 * e]] + shelf[cellsOnEdge[2 * e + 1]])) : 0;
   }
   function measureIce(ice, concentration, out) {
@@ -1516,7 +1520,7 @@ export function createOcean(mesh, {
 
   if (!adopting) build(new Float64Array(C).fill(288), new Float64Array(C), null);
   initialised = false;
-  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
+  const sharedBuffers = { h: h.buffer, u: u.buffer, Q: Q.buffer, W: W.buffer, eta: eta.buffer, rhoMl: rhoMl.buffer, capacity: capacity.buffer, transmission: transmission.buffer, penetrated: penetrated.buffer, stress: stress.buffer, waves: waves.buffer, hEdge: hEdge.buffer, pressure: pressure.buffer, gradEta: gradEta.buffer, params: params.buffer, trialh: trial[0].buffer, trialu: trial[1].buffer, trialQ: trial[2].buffer, trialW: trial[3].buffer };
   Object.assign(sharedBuffers, { baroSlow: slow.buffer, baroU: U.buffer, baroDepth: depthEdge.buffer, baroEta: etaB.buffer, baroAvgU: avgU.buffer, baroAvgEta: avgEta.buffer, baroTrialEtaA: bTrial[0].buffer, baroTrialUA: bTrial[1].buffer, baroTrialEtaB: bTrialB[0].buffer, baroTrialUB: bTrialB[1].buffer, counts: countBuffer });
   bStages.forEach((stage, s) => { sharedBuffers[`baroStage${s}Eta`] = stage[0].buffer; sharedBuffers[`baroStage${s}U`] = stage[1].buffer; });
   Object.assign(sharedBuffers, { layerRho: layerRho.buffer, columnAbove: columnAbove.buffer, targetZ: targetZ.buffer, viscosity: viscosity.buffer, edgeBottom: edgeBottom.buffer, edgeAbove: edgeAbove.buffer, mixedDepths: mixedDepths.buffer, boundaryDepths: boundaryDepths.buffer, shelfLoad: shelfLoad.buffer, eddyFlux: eddyFlux.buffer, eddyVolume: eddyVolume.buffer, eddyHeat: eddyHeat.buffer, eddySalt: eddySalt.buffer });

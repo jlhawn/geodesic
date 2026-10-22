@@ -338,3 +338,26 @@ test('with rotationLimit rh18 the GPU hybrid ocean\'s boundary layer takes Reich
   assert.ok(engines < 0.1 * limits, `the engines part by ${engines} m, the two limits by ${limits} m`);
   gpuModel.destroy();
 });
+
+test('with langmuirIce tanh the GPU hybrid ocean weights the Langmuir factor by the open water as the CPU does and tracks it over sixteen steps at N=16', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  const { cpuModel, mesh, surfaceT, ice, stress } = scenario(N), C = mesh.nCells, DAMPED = { ...HYBRID, langmuirIce: 'tanh' };
+  const cpu = createCpuOcean(mesh, { geography: cpuModel.geography, ...DAMPED }), kept = createCpuOcean(mesh, { geography: cpuModel.geography, ...HYBRID });
+  const gpuModel = await createGpuModel(new Grid(N), { topography, ocean: DAMPED });
+  const gpu = gpuModel.oceanEngine, flux = new Float64Array(C);
+  for (const ocean of [cpu, kept, gpu]) ocean.initialize(Float64Array.from(surfaceT), ice);
+  for (let n = 0; n < 16; n++) {
+    cpu.advance(Float64Array.from(surfaceT), ice, flux, stress, DT);
+    kept.advance(Float64Array.from(surfaceT), ice, flux, stress, DT);
+    await gpu.advance(Float64Array.from(surfaceT), ice, stress, DT);
+  }
+  const final = await gpu.download(), { boundaryDepths } = await gpu.restartArrays(), wet = Array.from(cpu.h, (v) => v > 1);
+  compare('langmuirIce tanh, sixteen steps', cpuFields(cpu, C), final, wet, { h: 1e-2, u: 2e-2, T: 1e-3, S: 1e-4, eta: 1e-2 });
+  let engines = 0, iced = 0, cells = 0;
+  for (let i = 0; i < C; i++) if (wet[i]) {
+    engines += Math.abs(boundaryDepths[i] - cpu.boundaryDepths[i]);
+    if (ice[i] > 0) { iced += Math.abs(kept.boundaryDepths[i] - cpu.boundaryDepths[i]); cells++; }
+  }
+  console.log(`boundary depths: GPU against CPU ${engines.toFixed(2)} m summed; under ice (${cells} cells) tanh against none on the CPU ${iced.toFixed(2)} m`);
+  assert.ok(cells > 0 && engines < 0.1 * iced, `the engines part by ${engines} m, the two options under ice by ${iced} m`);
+  gpuModel.destroy();
+});
