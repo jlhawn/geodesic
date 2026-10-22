@@ -18,7 +18,7 @@ function deckRun(levels, radiation = {}, turbulence = 'dry') {
   model.state.forEach((a, n) => a.set(saved[n]));
   model.step(900);
   const C = model.mesh.nCells;
-  return { model, ...profile, C, decked: Array.from({ length: C }, (_, i) => i).filter((i) => model.radiation.mlmTop[i] > 0) };
+  return { model, ...profile, saved, C, decked: Array.from({ length: C }, (_, i) => i).filter((i) => model.radiation.mlmTop[i] > 0) };
 }
 
 test('the sub-grid inversion finds the share of free troposphere mixed into the layer above the mixed layer, on bl60, cam26 and bl48 where it is built, and puts the deck\'s top inside that layer', () => {
@@ -102,9 +102,47 @@ test('the inversion\'s layer hands its heating down inside its column: each colu
   }
 });
 
+test('with deckResolved \'above\' the deck replaces the resolved cloud of the layer holding its top and every layer below it inside its fraction: columns without a deck are untouched, each column keeps its energy, and the decked columns carry less water and pass more sunlight', () => {
+  const options = { deckInversion: 'subgrid', deckCloud: 'top', cloudColumns: true, cloudSpread: 0.75 };
+  for (const radiationEvery of [1, 2]) {
+    const added = deckRun('bl48', { ...options, radiationEvery }, 'moist'), above = deckRun('bl48', { ...options, radiationEvery, deckResolved: 'above' }, 'moist');
+    if (radiationEvery > 1) for (const { model, saved } of [added, above]) { model.state.forEach((a, n) => a.set(saved[n])); model.step(900); }
+    const a = added.model.radiation, r = above.model.radiation, C = above.C, K = above.model.core.K;
+    let bare = 0, decked = 0, affected = 0, wetter = 0, darker = 0, lighter = 0, gain = 0, worst = 0, fromMiss = 0;
+    for (let i = 0; i < C; i++) {
+      let sum = 0;
+      if (radiationEvery === 1) {
+        for (let k = 0; k < K; k++) sum += r.longwave[k * C + i];
+        worst = Math.max(worst, Math.abs(sum + r.outgoing[i] + r.surfaceFlux[i] - r.surfaceSolar[i] + r.sensibleHeat[i] + LATENT_HEAT * r.evaporation[i]));
+      } else {
+        for (let k = 0; k < K; k++) sum += r.held.shortwave[k * C + i];
+        worst = Math.max(worst, Math.abs(sum - r.held.atmosphere[i]));
+      }
+      if (!(r.stratus[i] > 0 && r.stratusFraction[i] > 0)) {
+        bare++;
+        assert.ok(r.outgoing[i] === a.outgoing[i] && r.surfaceShortwave[i] === a.surfaceShortwave[i] && r.lowWater[i] === a.lowWater[i], `cell ${i}: changed without a deck`);
+        for (let k = 0; k < K; k++) assert.equal(r.longwave[k * C + i], a.longwave[k * C + i], `cell ${i} layer ${k}`);
+        continue;
+      }
+      decked++;
+      if (r.deckFrom[i] !== r.deckLayer[i]) fromMiss++;
+      if (r.lowWater[i] > a.lowWater[i]) wetter++;
+      if (r.surfaceShortwave[i] < a.surfaceShortwave[i] - 1e-9) darker++;
+      if (!(a.lowWater[i] - r.lowWater[i] > 1e-6 && a.surfaceShortwave[i] > 1)) continue;
+      affected++;
+      if (r.surfaceShortwave[i] > a.surfaceShortwave[i]) lighter++;
+      gain += r.surfaceShortwave[i] - a.surfaceShortwave[i];
+    }
+    const label = radiationEvery === 1 ? 'radiation every step' : 'radiation held';
+    console.log(`${label}: ${decked} decked and ${bare} bare columns; the replaced layers start at the deck's own layer on all but ${fromMiss}; of ${affected} sunlit columns losing water, ${lighter} lighter at the surface, by ${(gain / affected).toFixed(2)} W/m² on average; ${darker} decked columns darker; worst column off its boundary fluxes by ${worst.toExponential(2)} W/m²`);
+    assert.ok(decked > 0.5 * C && fromMiss === 0 && wetter === 0, `${label}: ${decked} decked, ${fromMiss} replaced from another layer, ${wetter} wetter`);
+    assert.ok(affected > 0.1 * decked && lighter === affected && darker === 0 && worst < 1e-9, `${label}: ${lighter} of ${affected} lighter, ${darker} darker, ${worst} W/m² off`);
+  }
+});
+
 test('the deck options refuse other values and need the mixed-layer deck, in both engines', async () => {
   const { PHYSICS_DEFAULTS } = await import('../js/gpu/core.gpu.js');
-  for (const [options, message] of [[{ deckInversion: 'cell' }, /deckInversion must be/], [{ deckCloud: 'layer' }, /deckCloud must be/], [{ deckInversion: 'subgrid', prognosticHeight: false }, /needs the mixed-layer deck/], [{ deckCloud: 'top', mixedLayerDeck: false }, /needs the mixed-layer deck/]]) {
+  for (const [options, message] of [[{ deckInversion: 'cell' }, /deckInversion must be/], [{ deckCloud: 'layer' }, /deckCloud must be/], [{ deckResolved: 'twice' }, /deckResolved must be/], [{ mixedLayer: { cloudLayer: 'stacked' } }, /cloudLayer must be/],[{ deckInversion: 'subgrid', prognosticHeight: false }, /needs the mixed-layer deck/], [{ deckCloud: 'top', mixedLayerDeck: false }, /needs the mixed-layer deck/], [{ deckResolved: 'above', prognosticHeight: false }, /needs the mixed-layer deck/]]) {
     assert.throws(() => createModel(new Grid(N), { ocean: false, radiation: options }), message, `CPU: ${JSON.stringify(options)}`);
     assert.throws(() => physicsConstants({ ...PHYSICS_DEFAULTS, R: 287, ...options }), message, `GPU: ${JSON.stringify(options)}`);
   }

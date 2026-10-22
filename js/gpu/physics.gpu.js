@@ -200,6 +200,8 @@ export function physicsConstants(o) {
   const m = { ...MIXED_LAYER_DEFAULTS, cloudLevels: DECK_CLOUD_LEVELS, ...o.mixedLayer };
   if (m.closure !== 'radiative' && m.closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${m.closure}`);
   if (m.drizzle) throw new Error('the GPU mixed-layer deck runs without drizzle');
+  if (m.cloudLayer !== 'mixed' && m.cloudLayer !== 'decoupled') throw new Error(`cloudLayer must be 'mixed' or 'decoupled', not ${m.cloudLayer}`);
+  if (!(m.cloudLayerDepth > 0 && m.cloudLayerExponent > 0 && m.cloudLayerHeat >= 0 && m.cloudLayerHeat <= 1)) throw new Error(`cloudLayerDepth and cloudLayerExponent must be above 0 and cloudLayerHeat from 0 to 1, not ${m.cloudLayerDepth}, ${m.cloudLayerExponent} and ${m.cloudLayerHeat}`);
   if (o.cloudOverlap !== 'maximum' && o.cloudOverlap !== 'maximumRandom' && o.cloudOverlap !== 'exponentialRandom') throw new Error(`cloudOverlap must be 'maximum', 'maximumRandom' or 'exponentialRandom', not ${o.cloudOverlap}`);
   const darkening = o.soilDarkening === true ? 'surface' : o.soilDarkening;
   if (darkening !== false && !DARKENING_WETNESS[darkening]) throw new Error(`soilDarkening is 'surface', 'rootZone' or false, not ${o.soilDarkening}`);
@@ -215,6 +217,9 @@ export function physicsConstants(o) {
   if (deckCloud !== 'sigma' && deckCloud !== 'top') throw new Error(`deckCloud must be 'sigma' or 'top', not ${deckCloud}`);
   if (deckInversion === 'subgrid' && !(o.mixedLayerDeck && o.prognosticHeight)) throw new Error(`deckInversion 'subgrid' needs the mixed-layer deck with its prognostic height`);
   if (deckCloud === 'top' && !o.mixedLayerDeck) throw new Error(`deckCloud 'top' needs the mixed-layer deck`);
+  const deckResolved = o.deckResolved ?? 'added';
+  if (deckResolved !== 'added' && deckResolved !== 'above') throw new Error(`deckResolved must be 'added' or 'above', not ${deckResolved}`);
+  if (deckResolved === 'above' && !(o.mixedLayerDeck && o.prognosticHeight)) throw new Error(`deckResolved 'above' needs the mixed-layer deck with its prognostic height`);
   if (o.deckRest !== 'depth' && o.deckRest !== 'inversion' && o.deckRest !== 'regime') throw new Error(`deckRest must be 'depth', 'inversion' or 'regime', not ${o.deckRest}`);
   if (![0, 1, 2].includes(o.subsidenceSmoothing)) throw new Error(`subsidenceSmoothing must be 0, 1 or 2, not ${o.subsidenceSmoothing}`);
   for (const retired of RETIRED_OPTIONS) if (retired in o) throw new Error(`${retired} belongs to the retired Betts–Miller convection; the plume is the only scheme`);
@@ -334,8 +339,9 @@ const LANDED: bool = ${!!o.landed}; const LANDC: f32 = ${o.landHeatCapacity}; co
 const MLM_DECK: bool = ${!!o.mixedLayerDeck}; const STRATUS_SOLAR: bool = ${!!o.stratusSolar}; const MLM_SUBSIDENCE: f32 = ${o.stratusSubsidence}; const MLM_MININV: f32 = ${o.minimumInversion}; const MLM_CEILINV: f32 = ${o.ceilingInversion ?? o.minimumInversion}; const MLM_MEMORY: f32 = ${o.subsidenceMemory};
 const MLM_LEVELS: i32 = ${m.cloudLevels}; const MLM_NODES: i32 = ${m.cloudLevels + 1}; const MLM_BUOYANCY: bool = ${m.closure === 'buoyancy'}; const MLM_DELTA: f32 = 1.0 / EPSILON - 1.0; const MLM_LC: f32 = LHEAT / CP;
 const MLM_A1: f32 = ${m.entrainmentEfficiency}; const MLM_A2: f32 = ${m.evaporativeEnhancement}; const MLM_AMAX: f32 = ${m.maximumEfficiency}; const MLM_WEMAX: f32 = ${m.maximumEntrainment}; const MLM_MINJUMP: f32 = ${m.minimumJump};
-const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
-const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_FRACTION: bool = ${o.deckSlab === 'fraction'}; const MLM_INTERPOLATE: bool = ${o.deckReference === 'interpolate'}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling}; const MLM_SUBGRID: bool = ${deckInversion === 'subgrid'}; const DECK_TOP: bool = ${deckCloud === 'top'};
+const MLM_ONSET: f32 = ${m.decouplingOnset}; const MLM_DRATIO: f32 = ${m.decoupledRatio}; const MLM_DCOVER: f32 = ${m.decoupledCover};
+const MLM_DECOUPLED: bool = ${m.cloudLayer === 'decoupled'}; const MLM_DSCALE: f32 = ${m.cloudLayerDepth}; const MLM_DEXP: f32 = ${m.cloudLayerExponent}; const MLM_DTHETA: f32 = ${m.cloudLayerHeat}; const DYC_F0: f32 = ${DYCOMS_LONGWAVE.F0}; const DYC_F1: f32 = ${DYCOMS_LONGWAVE.F1}; const DYC_K: f32 = ${DYCOMS_LONGWAVE.kappa};
+const MLM_PASSES: i32 = ${o.subsidenceSmoothing}; const MLM_FRACTION: bool = ${o.deckSlab === 'fraction'}; const MLM_INTERPOLATE: bool = ${o.deckReference === 'interpolate'}; const MLM_PROGNOSTIC: bool = ${o.prognosticHeight ? 'true' : 'false'}; const MLM_GATEMEM: f32 = ${o.gateMemory}; const MLM_UNDECIDED: f32 = ${UNDECIDED}; const MLM_HMEM: f32 = ${m.heightMemory}; const MLM_HMAX: f32 = ${m.maximumHeight}; const MLM_REST_INVERSION: bool = ${o.deckRest !== 'depth'}; const MLM_REST_REGIME: bool = ${o.deckRest === 'regime' && moistTurbulence}; const MLM_CUCEIL: f32 = ${o.cumulusCeiling}; const MLM_SUBGRID: bool = ${deckInversion === 'subgrid'}; const DECK_TOP: bool = ${deckCloud === 'top'}; const DECK_ABOVE: bool = ${deckResolved === 'above'};
 const ALB_ICESHEET: f32 = ${o.iceSheetAlbedo}; const ICE_BALANCE: bool = ${!!o.iceSheetBalance}; const SNOWCAP: f32 = ${o.snowCap}; const ALB_BAREICE: f32 = ${o.bareIceAlbedo}; const SURFCAP: f32 = ${o.surfaceCapacity}; const PERCT: f32 = ${o.percolationTime}; const RSTOM: f32 = ${o.stomatalResistance}; const GROWCOLD: f32 = ${o.growthColdest}; const GROWWARM: f32 = ${o.growthWarmest}; const VEG_DRY: f32 = ${o.dryWetness}; const VEG_WET: f32 = ${o.wetWetness}; const VEG_GROW: f32 = ${o.growthTime}; const VEG_DECLINE: f32 = ${o.declineTime}; const VEG_SNOW: f32 = ${o.snowDeclineTime}; const ALB_SNOW: f32 = ${o.snowAlbedo}; const FULLSNOW: f32 = ${o.fullSnow}; const LFUS: f32 = ${o.latentHeatFusion};
 const ALB_OLDSNOW: f32 = ${o.oldSnowAlbedo}; const MASKED: bool = ${!!o.snowMasking && !!o.vegetation}; const ALB_FOREST: f32 = ${o.forestSnowAlbedo}; const CLOSED_CANOPY: f32 = ${o.closedCanopy}; const CANOPY_MEM: f32 = ${o.canopyMemory};
 const TREELINE: bool = ${!!o.treeline}; const SEASON_C: f32 = ${o.seasonThreshold}; const SEASON_K: f32 = ${MELTING_POINT + o.seasonThreshold}; const SEASON_SHORTEST: f32 = ${o.minimumSeason / 365}; const SEASON_MEM: f32 = ${o.seasonMemory}; const TREE_LO: f32 = ${o.treelineWarmth[0]}; const TREE_SPAN: f32 = ${o.treelineWarmth[1] - o.treelineWarmth[0]}; const TREE_GROW: f32 = ${o.treeGrowthTime}; const TREE_DECLINE: f32 = ${o.treeDeclineTime};
@@ -749,7 +755,7 @@ const MIXED_LAYER_WGSL = `
 struct MlmAir { T: f32, ql: f32, qv: f32, qs: f32, dqs: f32 }
 struct MlmState { h: f32, thetaL: f32, qt: f32 }
 struct MlmOut { lwp: f32, cover: f32, entrainment: f32, jump: f32, heat: f32, water: f32 }
-struct MlmDeck { ok: bool, cover: f32, water: f32, entrainment: f32, top: f32, layer: f32, share: f32, home: f32 }
+struct MlmDeck { ok: bool, cover: f32, water: f32, entrainment: f32, top: f32, layer: f32, share: f32, home: f32, replaced: f32 }
 struct MlmJump { layer: i32, share: f32, height: f32, thetaL: f32, qt: f32 }
 struct MlmSun { incident: f32, mu: f32, adir: f32, adif: f32, path: f32, layer: f32, clear: f32, light: vec3<f32>, depth: f32, unit: f32, rate: f32, continental: bool }
 fn mlmFinite(x: f32) -> bool { return (bitcast<u32>(x) & 0x7f800000u) != 0x7f800000u; }
@@ -814,19 +820,27 @@ fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove
   let thetaVDry = thetaL * (1.0 + MLM_DELTA * qt);
   var zb = 0.0; var piB = piS;
   if (!(qt >= qsat(thetaL * piS, ps))) { piB = mlmCloudBase(thetaL, qt, piS); zb = CP * thetaVDry * (piS - piB) / GRAV; }
+  var cloudThetaL = thetaL; var cloudQt = qt;
+  if (MLM_DECOUPLED && zb < h) {
+    let mixing = min(1.0, pow((h - zb) / MLM_DSCALE, MLM_DEXP));
+    cloudThetaL = thetaL + MLM_DTHETA * mixing * (thetaAbove - thetaL);
+    cloudQt = qt + mixing * (qtAbove - qt);
+    zb = 0.0; piB = piS;
+    if (!(cloudQt >= qsat(cloudThetaL * piS, ps))) { piB = mlmCloudBase(cloudThetaL, cloudQt, piS); zb = CP * thetaVDry * (piS - piB) / GRAV; }
+  }
   let cloudy = zb < h;
   let dz = (h - zb) / f32(MLM_LEVELS);
   var lwp = 0.0; var piH = 0.0; var thetaVTop = 0.0; var qlTop = 0.0; var topA = 0.0; var topB = 0.0; var topGamma = 0.0; var topSlope = 0.0;
   if (cloudy) {
     var x = piB;
-    var air = mlmSaturate(thetaL, qt, x);
+    var air = mlmSaturate(cloudThetaL, cloudQt, x);
     var tv = mlmVirtual(air, x);
     for (var j = 0; j <= MLM_LEVELS; j++) {
       if (j > 0) {
         let predicted = x - GRAV * dz / (CP * tv);
-        let tvPredicted = mlmVirtual(mlmSaturate(thetaL, qt, predicted), predicted);
+        let tvPredicted = mlmVirtual(mlmSaturate(cloudThetaL, cloudQt, predicted), predicted);
         x -= 0.5 * GRAV * dz / CP * (1.0 / tv + 1.0 / tvPredicted);
-        air = mlmSaturate(thetaL, qt, x);
+        air = mlmSaturate(cloudThetaL, cloudQt, x);
         tv = mlmVirtual(air, x);
       }
       let p = mlmPressure(x); let gamma = MLM_LC * air.dqs; let theta = air.T / x;
@@ -854,8 +868,9 @@ fn mlmDiagnose(s: MlmState, ps: f32, sensible: f32, evaporation: f32, thetaAbove
   let netDivergence = divergence - absorbed;
   var efficiency = MLM_A1;
   if (cloudy && qlTop > 0.0 && capped) {
-    let saturatedJump = topA * jumpTheta + topB * jumpQ;
-    let demand = topSlope * piH * jumpTheta - jumpQ;
+    let topJumpTheta = thetaAbove - cloudThetaL; let topJumpQ = qtAbove - cloudQt;
+    let saturatedJump = topA * topJumpTheta + topB * topJumpQ;
+    let demand = topSlope * piH * topJumpTheta - topJumpQ;
     var chi = 1.0;
     if (demand > 0.0) { chi = min(1.0, qlTop * (1.0 + topGamma) / demand); }
     efficiency = min(MLM_AMAX, MLM_A1 * (1.0 + MLM_A2 * max(0.0, chi * (1.0 - saturatedJump / jump))));
@@ -958,7 +973,7 @@ fn mlmJump(i: i32, capping: i32) -> MlmJump {
   return MlmJump(a, share, upper - share * (upper - lower), jumpLevel(i, a - 1) + level * (sigma - LV[L_SM + a - 1]), max(0.0, jumpTotal(i, a - 1) + total * (sigma - LV[L_SM + a - 1])));
 }
 fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, dt: f32, sun: MlmSun) -> MlmDeck {
-  let none = MlmDeck(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, f32(STRATUS_K));
+  let none = MlmDeck(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, f32(STRATUS_K), f32(K));
   let bottom = (K - 1) * C + i;
   let depth = mixedDepth + (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
   let regime = PH[PH_REGIME + i];
@@ -1064,7 +1079,13 @@ fn mlmColumn(i: i32, pi: f32, mixedDepth: f32, sensible: f32, evaporation: f32, 
   }
   if (!(mlmFinite(next.lwp) && mlmFinite(next.cover) && mlmFinite(now.entrainment))) { mlmRest(i, resting, dt); return none; }
   PH[PH_MLMH + i] = top;
-  return MlmDeck(true, next.cover, next.lwp, now.entrainment, select(0.0, select(top, jump.height, jump.layer >= 0), MLM_PROGNOSTIC), f32(max(jump.layer, 0)), select(0.0, jump.share, jump.layer >= 0), f32(home));
+  var replaced = K;
+  if (DECK_ABOVE) {
+    let deckTop = select(top, jump.height, jump.layer >= 0);
+    replaced = K - 1;
+    for (; replaced > 1; replaced--) { if (!(mlmInterface(i, replaced) < deckTop)) { break; } }
+  }
+  return MlmDeck(true, next.cover, next.lwp, now.entrainment, select(0.0, select(top, jump.height, jump.layer >= 0), MLM_PROGNOSTIC), f32(max(jump.layer, 0)), select(0.0, jump.share, jump.layer >= 0), f32(home), f32(replaced));
 }
 `;
 
@@ -1376,7 +1397,7 @@ export const physicsKernel = (seaSkin = false) => `${MIXED_LAYER_WGSL}${EXCHANGE
   let visibleTaken = ozoneHeating + beam * gases.x;
   let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
   let surfaceEmission = STEFAN * ts * ts * ts * ts;
-  var deck = 0.0; var fraction = 0.0; var mlmCover = 0.0; var mlmWater = 0.0; var mlmEntrainment = 0.0; var mlmTop = 0.0; var mlmLayer = 0.0; var mlmShare = 0.0; var deckHome = f32(STRATUS_K);
+  var deck = 0.0; var fraction = 0.0; var mlmCover = 0.0; var mlmWater = 0.0; var mlmEntrainment = 0.0; var mlmTop = 0.0; var mlmLayer = 0.0; var mlmShare = 0.0; var deckHome = f32(STRATUS_K); var deckFrom = f32(K);
   let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
   let mixTop = PH[PH_MIXTOP + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
   let inversionShare = stratiformShare(i, bottom, pi);
@@ -1429,7 +1450,7 @@ export const physicsKernel = (seaSkin = false) => `${MIXED_LAYER_WGSL}${EXCHANGE
     }
     let mixed = mlmColumn(i, pi, mixedDepth, sensible, evap, P[0], deckSun);
     if (mixed.ok) {
-      mlmCover = mixed.cover; mlmWater = mixed.water; mlmEntrainment = mixed.entrainment; mlmTop = mixed.top; mlmLayer = mixed.layer; mlmShare = mixed.share; deckHome = mixed.home;
+      mlmCover = mixed.cover; mlmWater = mixed.water; mlmEntrainment = mixed.entrainment; mlmTop = mixed.top; mlmLayer = mixed.layer; mlmShare = mixed.share; deckHome = mixed.home; deckFrom = mixed.replaced;
       fraction = mixed.cover * (1.0 - cover);
       if (fraction > 0.0) { deck = min(STRATUS_MAX, mixed.water); }
     }
@@ -1447,7 +1468,7 @@ export const physicsKernel = (seaSkin = false) => `${MIXED_LAYER_WGSL}${EXCHANGE
     if (deck <= 0.0) { fraction = 0.0; }
   }
   PH[PH_DECK + i] = deck; PH[PH_DECKF + i] = fraction;
-  PH[PH_MLMCOVER + i] = mlmCover; PH[PH_MLMWATER + i] = mlmWater; PH[PH_MLMENT + i] = mlmEntrainment; PH[PH_MLMTOP + i] = mlmTop; PH[PH_MLMK + i] = mlmLayer; PH[PH_MLMM + i] = mlmShare; PH[PH_DECKK + i] = deckHome;
+  PH[PH_MLMCOVER + i] = mlmCover; PH[PH_MLMWATER + i] = mlmWater; PH[PH_MLMENT + i] = mlmEntrainment; PH[PH_MLMTOP + i] = mlmTop; PH[PH_MLMK + i] = mlmLayer; PH[PH_MLMM + i] = mlmShare; PH[PH_DECKK + i] = deckHome; PH[PH_DECKFROM + i] = deckFrom;
   for (var k = 0; k < K; k++) { OUT[LWS_OZONE + k * C + i] = layerOzone[k]; }
   stash(1, i, ws); stash(2, i, mu); stash(3, i, beam); stash(4, i, cover); stash(5, i, waterDir); stash(6, i, iceDif); stash(7, i, iceDir); stash(8, i, adif);
   stash(9, i, ts); stash(10, i, warmth); stash(11, i, wetness); stash(12, i, bareShare); stash(13, i, surfaceEmission);
@@ -1471,16 +1492,19 @@ ${held ? '' : `  let mu = stashed(2, i); let beam = stashed(3, i); let adir = st
   for (var k = 0; k < K; k++) { layerOzone[k] = OUT[LWS_OZONE + k * C + i]; }
   let aerosol = select(SEA_AER, LAND_AER, onLand && !onIceSheet);
   let tau0 = PH[PH_TAU + i]; let deck = PH[PH_DECK + i]; let fraction = PH[PH_DECKF + i]; let deckK = select(STRATUS_K, i32(PH[PH_DECKK + i]), DECK_TOP);
+  let replaced = select(K, i32(PH[PH_DECKFROM + i]), DECK_ABOVE && deck > 0.0);
   let mixedDepth = PH[PH_DEPTH + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
   let mixTop = PH[PH_MIXTOP + i] - (D[D_GEO + bottom] + LV[L_GABS + K - 1]) / GRAV;
   var vaporE: array<f32, K>; var mixedE: array<f32, K>; var cloudE: array<f32, K>; var clearE: array<f32, K>; var temperature: array<f32, K>; var netFlux: array<f32, K>; var chainF: array<f32, K>;
   var cloudPath = 0.0; var cloudDepth = 0.0; var deckUnit = 0.0; var blocks = vec3<f32>(0.0, 1.0, 0.0); var layered = vec2<f32>(0.0, 0.0);
   var columnIn = vec4<f32>(0.0, 0.0, 0.0, 0.0); var columnOut = vec4<f32>(1.0, 0.0, 0.0, 0.0);
+  var aboveCover = 0.0; var aboveIn = vec4<f32>(0.0, 0.0, 0.0, 0.0); var aboveOut = vec4<f32>(1.0, 0.0, 0.0, 0.0); var abovePath = 0.0; var aboveSolar = 0.0;
 ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var solar = vec4<f32>(0.0, 0.0, 0.0, 0.0);
   if (SOLAR_CLIRAD && mu > 0.0) { solar = solarGases(i, pi, mu, &layerOzone, &ozoneTaken, &gasTaken); }
   let ozoneHeating = select(beam * OZONE_ABS, beam * ozoneTaken[K - 1], SOLAR_CLIRAD);
   let visibleTaken = ozoneHeating + beam * solar.x;
 `}${held ? HELD_OPEN : ''}  for (var k = 0; k < K; k++) {
+    if (DECK_ABOVE && k == replaced) { aboveCover = layered.x; aboveIn = columnIn; aboveOut = columnOut; abovePath = cloudPath; aboveSolar = cloudDepth; }
     let idx = k * C + i;
     let mass = pi * LV[L_DS + k] / GRAV;
     var eps = 1.0 - exp(-tau0 * LV[L_SHAPE + k]);
@@ -1501,8 +1525,9 @@ ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var
     if (EXP_OVERLAP) { overlapLayer(seen, alpha, &layered); }
     if (LW_CORRELATED && LW_CHAIN) { OUT[LWS_ALPHA + idx] = alpha; }
     cloudE[k] = select(0.0, f * (1.0 - transmitted(optics.y * water / f)), water > 0.0);
-    if (STRATUS && k == deckK && deck > 0.0) { cloudE[k] = fraction * (1.0 - transmitted(optics.y * (water + deck))) + (1.0 - fraction) * cloudE[k]; }
-    if (LW_CHAIN) { chainF[k] = select(0.0, f, water > 0.0 && !(STRATUS && k == deckK && deck > 0.0)); }
+    if (STRATUS && k == deckK && deck > 0.0) { cloudE[k] = fraction * (1.0 - transmitted(optics.y * (select(water, 0.0, k >= replaced) + deck))) + (1.0 - fraction) * cloudE[k]; }
+    else if (k >= replaced) { cloudE[k] *= 1.0 - fraction; }
+    if (LW_CHAIN) { chainF[k] = select(0.0, f * select(1.0, 1.0 - fraction, k >= replaced), water > 0.0 && !(STRATUS && k == deckK && deck > 0.0)); }
     let clear = 1.0 - cloudE[k];
     vaporE[k] = 1.0 - (1.0 - eps) * clear;
     mixedE[k] = 1.0 - (1.0 - LV[L_GASE + k]) * clear;
@@ -1540,6 +1565,13 @@ ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var
   let moments = columnMoments(columnCover, columnIn, columnOut);
   let columns = COLUMNS && cloudPath > 0.0 && moments.x > 0.0;
   let resolved = select(0.0, columnCover, columns);
+  var overPath = cloudPath; var overSolar = cloudDepth; var overCover = resolved; var overMoments = moments;
+  if (DECK_ABOVE && replaced < K) {
+    var seenAbove = aboveCover;
+    if (!(seenAbove > 0.0)) { seenAbove = 1.0; }
+    overPath = abovePath; overSolar = aboveSolar; overMoments = columnMoments(seenAbove, aboveIn, aboveOut);
+    overCover = select(0.0, seenAbove, COLUMNS && abovePath > 0.0 && overMoments.x > 0.0);
+  }
   var sw: vec4<f32>;
   if (columns) { sw = columnsShortwave(moments.x, moments.y, moments.z, mu, adir, adif, light); }
   else { sw = shortwave(select(cloudDepth / columnCover, CLOUD_SCAT * cloudPath / columnCover, GRAY_SW), cloudKeep(cloudPath / columnCover), mu, adir, adif, light); }
@@ -1548,9 +1580,9 @@ ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var
   var deckShare = 0.0;
   if (deck > 0.0) {
     var decked: vec4<f32>;
-    if (COLUMNS) { decked = deckedShortwave(resolved, moments, select(deckUnit * deck, CLOUD_SCAT * deck, GRAY_SW), deck, mu, adir, adif, light); }
-    else { decked = shortwave(select(cloudDepth + deckUnit * deck, CLOUD_SCAT * (cloudPath + deck), GRAY_SW), cloudKeep(cloudPath + deck), mu, adir, adif, light); }
-    deckShare = fraction * incident * decked.w / (cloudPath + deck);
+    if (COLUMNS) { decked = deckedShortwave(overCover, overMoments, select(deckUnit * deck, CLOUD_SCAT * deck, GRAY_SW), deck, mu, adir, adif, light); }
+    else { decked = shortwave(select(overSolar + deckUnit * deck, CLOUD_SCAT * (overPath + deck), GRAY_SW), cloudKeep(overPath + deck), mu, adir, adif, light); }
+    deckShare = fraction * incident * decked.w / (overPath + deck);
     clearShare *= 1.0 - fraction;
     sw = fraction * decked + (1.0 - fraction) * sw;
   }
@@ -1559,7 +1591,7 @@ ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var
     for (var k = 0; k < K; k++) {
       let mass = pi * LV[L_DS + k] / GRAV;
       let water = max(0.0, IN[S_QC + k * C + i]) * mass + cumulusCloud(k, i).y * mass;
-      let share = clearShare * water + deckShare * (water + select(0.0, deck, k == deckK));
+      let share = clearShare * water + deckShare * (select(water, 0.0, k >= replaced) + select(0.0, deck, k == deckK));
       netFlux[k] += share;
       cloudHeating += share;
     }
@@ -1577,8 +1609,8 @@ ${held ? '' : `  var ozoneTaken: array<f32, K>; var gasTaken: array<f32, K>; var
     if (PDF_COVER && columnCover < 1.0) { esc = columnCover * esc + (1.0 - columnCover) * escapes(0.0, 1.0, mu, adir, adif, light); }
     if (deck > 0.0) {
       var deckedEsc: vec3<f32>;
-      if (COLUMNS) { deckedEsc = deckedEscapes(resolved, moments, select(deckUnit * deck, CLOUD_SCAT * deck, GRAY_SW), deck, mu, adir, adif, light); }
-      else { deckedEsc = escapes(select(cloudDepth + deckUnit * deck, CLOUD_SCAT * (cloudPath + deck), GRAY_SW), cloudKeep(cloudPath + deck), mu, adir, adif, light); }
+      if (COLUMNS) { deckedEsc = deckedEscapes(overCover, overMoments, select(deckUnit * deck, CLOUD_SCAT * deck, GRAY_SW), deck, mu, adir, adif, light); }
+      else { deckedEsc = escapes(select(overSolar + deckUnit * deck, CLOUD_SCAT * (overPath + deck), GRAY_SW), cloudKeep(overPath + deck), mu, adir, adif, light); }
       esc = fraction * deckedEsc + (1.0 - fraction) * esc;
     }
     if (SOLAR_CLIRAD && restAfter > 0.0) {

@@ -73,6 +73,21 @@ import { CP_DRY, R_DRY, GRAVITY } from '../dynamics/sigmaCore.module.js';
  * A layer with no virtual jump (Δθ_v ≤ 0) is uncapped: it neither
  * entrains nor carries cover.
  *
+ * Cloud layer, 'mixed' (the default): the cloud's air is the layer's
+ * own. 'decoupled' takes it instead from a cloud layer mixed with the
+ * free troposphere (Wood & Bretherton 2004, WB04, their Eqs. 4–5):
+ * q_t,c = q_t + α_q (q_t⁺ − q_t) and θ_l,c = θ_l + α_θ (θ_l⁺ − θ_l), with
+ * α_q = min(1, (Δz/2750 m)^1.2), Δz the depth of the layer above its own
+ * condensation level (Park, Leovy & Rozendaal 2004, as Park & Shin 2019
+ * write it, their Eq. 3; `cloudLayerDepth`, `cloudLayerExponent`), and
+ * α_θ = 0.8 α_q, WB04's (1 − 0.2 CF) α_q under full cover
+ * (`cloudLayerHeat`). Cloud base is that air's condensation level, at
+ * the height the layer's own θ_v gives its pressure; the cloud, its
+ * liquid water path and the cloud-top jumps take that air, while the
+ * budgets and the flux profiles keep the layer's own jumps. The
+ * buoyancy-flux integral runs dry up to the higher base, so a deep
+ * layer's ratio rises and its cover falls.
+ *
  * Shortwave: with forcing.solar, the shortwave flux (W/m²) incident at
  * the cloud top, the cloud absorbs S = solar × min(0.15, 0.4 W) for a
  * liquid water path W in kg/m² — about 4 % per 100 g/m², at most 15 %
@@ -128,6 +143,7 @@ export const MIXED_LAYER_DEFAULTS = {
   closure: 'radiative', entrainmentEfficiency: 0.2, evaporativeEnhancement: 25,
   maximumEfficiency: 1, maximumEntrainment: 0.02, minimumJump: 0.1,
   decouplingOnset: 0.15, decoupledRatio: 0.4, decoupledCover: 0.3,
+  cloudLayer: 'mixed', cloudLayerDepth: 2750, cloudLayerExponent: 1.2, cloudLayerHeat: 0.8,
   drizzle: false, dropletNumber: 100, cloudLevels: 20, shortwaveAbsorption: 0.4, maximumShortwaveAbsorption: 0.15,
   heightMemory: 86400, maximumHeight: 3000,
 };
@@ -135,10 +151,13 @@ export const MIXED_LAYER_DEFAULTS = {
 export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHeat = LATENT_HEAT, referencePressure = 1e5, ...options } = {}) {
   const {
     closure, entrainmentEfficiency, evaporativeEnhancement, maximumEfficiency, maximumEntrainment, minimumJump,
-    decouplingOnset, decoupledRatio, decoupledCover, drizzle, dropletNumber, cloudLevels, shortwaveAbsorption, maximumShortwaveAbsorption,
-    heightMemory, maximumHeight,
+    decouplingOnset, decoupledRatio, decoupledCover, cloudLayer, cloudLayerDepth, cloudLayerExponent, cloudLayerHeat,
+    drizzle, dropletNumber, cloudLevels, shortwaveAbsorption, maximumShortwaveAbsorption, heightMemory, maximumHeight,
   } = { ...MIXED_LAYER_DEFAULTS, ...options };
   if (closure !== 'radiative' && closure !== 'buoyancy') throw new Error(`closure must be 'radiative' or 'buoyancy', not ${closure}`);
+  if (cloudLayer !== 'mixed' && cloudLayer !== 'decoupled') throw new Error(`cloudLayer must be 'mixed' or 'decoupled', not ${cloudLayer}`);
+  if (!(cloudLayerDepth > 0 && cloudLayerExponent > 0 && cloudLayerHeat >= 0 && cloudLayerHeat <= 1)) throw new Error(`cloudLayerDepth and cloudLayerExponent must be above 0 and cloudLayerHeat from 0 to 1, not ${cloudLayerDepth}, ${cloudLayerExponent} and ${cloudLayerHeat}`);
+  const decoupledLayer = cloudLayer === 'decoupled';
   const kappa = R / cp, delta = 1 / EPSILON - 1, Lc = latentHeat / cp;
   const n = cloudLevels;
   const zNode = new Float64Array(n + 1), piNode = new Float64Array(n + 1), rhoNode = new Float64Array(n + 1), qlNode = new Float64Array(n + 1);
@@ -189,23 +208,32 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
     const { h, thetaL, qt } = state;
     const ps = forcing.surfacePressure, piS = Math.pow(ps / referencePressure, kappa);
     const thetaVDry = thetaL * (1 + delta * qt);
+    const thetaAbove = value(forcing.thetaLAbove, h), qtAbove = value(forcing.qtAbove, h);
     let zb, piB;
     if (qt >= saturationHumidity(thetaL * piS, ps)) { zb = 0; piB = piS; }
     else { piB = cloudBaseExner(thetaL, qt, piS); zb = cp * thetaVDry * (piS - piB) / g; }
+    let cloudThetaL = thetaL, cloudQt = qt, mixing = 0;
+    if (decoupledLayer && zb < h) {
+      mixing = Math.min(1, Math.pow((h - zb) / cloudLayerDepth, cloudLayerExponent));
+      cloudThetaL = thetaL + cloudLayerHeat * mixing * (thetaAbove - thetaL);
+      cloudQt = qt + mixing * (qtAbove - qt);
+      if (cloudQt >= saturationHumidity(cloudThetaL * piS, ps)) { zb = 0; piB = piS; }
+      else { piB = cloudBaseExner(cloudThetaL, cloudQt, piS); zb = cp * thetaVDry * (piS - piB) / g; }
+    }
     const cloudy = zb < h;
     let lwp = 0, piH, thetaVTop, qlTop = 0, topA = 0, topB = 0, topGamma = 0, topSlope = 0;
     if (cloudy) {
       const dz = (h - zb) / n;
       let pi = piB;
-      saturate(thetaL, qt, pi);
+      saturate(cloudThetaL, cloudQt, pi);
       let tv = virtualTheta(air, pi);
       for (let j = 0; j <= n; j++) {
         if (j > 0) {
           const predicted = pi - g * dz / (cp * tv);
-          saturate(thetaL, qt, predicted);
+          saturate(cloudThetaL, cloudQt, predicted);
           const tvPredicted = virtualTheta(air, predicted);
           pi -= 0.5 * g * dz / cp * (1 / tv + 1 / tvPredicted);
-          saturate(thetaL, qt, pi);
+          saturate(cloudThetaL, cloudQt, pi);
           tv = virtualTheta(air, pi);
         }
         const p = pressure(pi), gamma = Lc * air.dqs, theta = air.T / pi;
@@ -226,7 +254,6 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
     const pH = pressure(piH);
     const density = forcing.density ?? (ps - pH) / (g * h);
 
-    const thetaAbove = value(forcing.thetaLAbove, h), qtAbove = value(forcing.qtAbove, h);
     const jumpTheta = thetaAbove - thetaL, jumpQ = qtAbove - qt;
     const above = saturate(thetaAbove, qtAbove, piH, {});
     const jumpVirtual = virtualTheta(above, piH) - thetaVTop, capped = jumpVirtual > 0, jump = Math.max(minimumJump, jumpVirtual);
@@ -251,8 +278,9 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
 
     let chi = 0, efficiency = entrainmentEfficiency;
     if (cloudy && qlTop > 0 && capped) {
-      const saturatedJump = topA * jumpTheta + topB * jumpQ;
-      const demand = topSlope * piH * jumpTheta - jumpQ;
+      const topJumpTheta = thetaAbove - cloudThetaL, topJumpQ = qtAbove - cloudQt;
+      const saturatedJump = topA * topJumpTheta + topB * topJumpQ;
+      const demand = topSlope * piH * topJumpTheta - topJumpQ;
       chi = demand > 0 ? Math.min(1, qlTop * (1 + topGamma) / demand) : 1;
       efficiency = Math.min(maximumEfficiency, entrainmentEfficiency * (1 + evaporativeEnhancement * Math.max(0, chi * (1 - saturatedJump / jump))));
     }
@@ -303,7 +331,7 @@ export function createMixedLayer({ cp = CP_DRY, R = R_DRY, g = GRAVITY, latentHe
     const thetaSource = entrainment * thetaAbove + subsidence * thetaL + heat0 - netDivergence / (density * cp) + drizzleHeat * rain / density;
     const waterSource = entrainment * qtAbove + subsidence * qt + water0 - rain / density;
     return {
-      h, thetaL, qt, cloudBase: Math.min(zb, h), liquidWaterPath: lwp, topLiquid: qlTop, cover, cloudy,
+      h, thetaL, qt, cloudBase: Math.min(zb, h), liquidWaterPath: lwp, topLiquid: qlTop, cover, cloudy, cloudMixing: mixing,
       density, surfacePressure: ps, topPressure: pH, cloudBaseExner: piB,
       entrainment, subsidence, efficiency, mixingFraction: chi,
       thetaLAbove: thetaAbove, qtAbove, thetaLJump: jumpTheta, qtJump: jumpQ, virtualJump: jumpVirtual,
