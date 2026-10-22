@@ -281,10 +281,10 @@ with the ranges taken over the 15-day log lines and the equator lines:
   (regrid) and 9·10⁻⁷ (viscosity).
 - `test/hybridOcean.test.mjs`: water, heat and salt conserved to
   rounding over 24 steps under both settings.
-- `test/hybridOceanGpu.test.mjs`: at N=8 with `kept`, the GPU tracks the
+- `test/hybridOceanGpu.test.mjs`: at N=16 with `kept`, the GPU tracks the
   CPU through the regrid, the column physics and sixteen more steps.
-  Its regrid and viscosity hold every edge's transport to 7·10⁻⁷ of the
-  largest, float32 rounding.
+  Its regrid and column physics hold every edge's transport to 1.0·10⁻⁶
+  of the largest, float32 rounding.
 
 ## Open
 
