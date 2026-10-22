@@ -2,14 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { caseMesh, lensCase, runCase, DEG, DAY } from '../explain/oceanCases.module.js';
 import { HYBRID_LAYERS } from '../js/ocean/column.module.js';
+import { threaded } from './helpers/oceanThreads.mjs';
 
 const N = 16;
 const mesh = caseMesh(N);
 const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
 const between = (v, lo, hi, what) => assert.ok(v >= lo && v <= hi, `${what}: ${v} not within ${lo} to ${hi}`);
 
-test('a lens of one layer 60 m thick pushes the layers beneath it down and raises the sea surface by Δρ/ρ₀ of that, less the bottom pressure the barotropic waves leave, with the surface current geostrophic and the deep water slow', () => {
-  const sim = lensCase({ N, days: 30 }), layout = sim.layout(), { ocean } = sim, Cn = sim.mesh.nCells;
+test('a lens of one layer 60 m thick pushes the layers beneath it down and raises the sea surface by Δρ/ρ₀ of that, less the bottom pressure the barotropic waves leave, with the surface current geostrophic and the deep water slow', async () => {
+  const sim = await threaded(lensCase({ N, days: 30 })), layout = sim.layout(), { ocean } = sim, Cn = sim.mesh.nCells;
   assert.equal(layout.densities[layout.lens], 1025.25); assert.equal(layout.densities[layout.donor], 1026.77); assert.equal(layout.fixedDepth, 33);
   let top = 0;
   for (let k = 0; k < layout.fixedDepth; k++) { close(ocean.h[k * Cn + sim.centre], HYBRID_LAYERS.minimum[k], 1e-9, `fixed-depth layer ${k} at the lens`); top += ocean.h[k * Cn + sim.centre]; }
@@ -41,6 +42,7 @@ test('a lens of one layer 60 m thick pushes the layers beneath it down and raise
 
   const frames = {};
   for (const day of [1, 5, 10, 20, 30]) { runCase(sim, day); frames[day] = sim.frame(); }
+  await sim.close();
   for (const f of Object.values(frames)) console.log(`day ${f.day}: surface ${(100 * f.rise).toFixed(2)} cm up over a lens base ${f.depression.toFixed(2)} m down (expected ${(100 * f.expected).toFixed(2)} cm, bottom pressure ${(100 * f.bottomPressure).toFixed(2)} cm); f·u against g∂η/∂n ${f.geostrophic.ratio.toFixed(3)}, correlation ${f.geostrophic.correlation.toFixed(4)}; speeds top ${(100 * f.layerSpeeds[0]).toFixed(3)}, lens layer ${(100 * f.layerSpeeds[layout.lens]).toFixed(3)}, bottom water ${(100 * f.layerSpeeds[layout.donor]).toFixed(3)} cm/s`);
   for (const day of [5, 10, 20, 30]) {
     const f = frames[day];

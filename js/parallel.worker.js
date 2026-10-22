@@ -5,6 +5,7 @@ import { STATE_NAMES } from './model.module.js';
 import { workerInit } from './threads.module.js';
 
 const { data, post } = await workerInit();
+const probe = data.probe ? (await import(data.probe.module)).default : null;
 try {
   main(data);
 } catch (error) {
@@ -15,6 +16,7 @@ try {
 function main({ index, workers, meshShared, buffers, options, control }) {
 const mesh = meshFromShared(meshShared);
 const model = createModel(mesh, { ...options, buffers });
+if (probe) probe(model, data.probe.data);
 const { K, C, E, V } = model.core.diagnostics;
 const ctrl = new Int32Array(control.ints);
 const params = new Float64Array(control.floats);

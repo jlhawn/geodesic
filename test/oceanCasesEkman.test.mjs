@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { caseMesh, ekman, EKMAN_REACH, RHO, DEG } from '../explain/oceanCases.module.js';
+import { caseMesh, ekmanCase, EKMAN_REACH, RHO, DEG } from '../explain/oceanCases.module.js';
 import { ekmanSpiral, fitViscosity, columnDays } from '../explain/ekmanTheory.module.js';
 import { HYBRID_LAYERS } from '../js/ocean/column.module.js';
+import { runThreaded } from './helpers/oceanThreads.mjs';
 
 const N = 16;
 const mesh = caseMesh(N);
@@ -10,8 +11,8 @@ const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: $
 const between = (v, lo, hi, what) => assert.ok(v >= lo && v <= hi, `${what}: ${v} not within ${lo} to ${hi}`);
 const angles = (profile, upTo) => Array.from({ length: upTo }, (_, k) => Math.atan2(-profile.north[k], profile.east[k]) / DEG);
 
-test('a band of westerlies at 45°N drives a spiral of currents whose water carries τ/(ρ₀f) at right angles to the wind, to the right, and to the left at 45°S', () => {
-  const north = ekman({ N, latitude: 45, days: columnDays(45) }), south = ekman({ N, latitude: -45, days: columnDays(-45) });
+test('a band of westerlies at 45°N drives a spiral of currents whose water carries τ/(ρ₀f) at right angles to the wind, to the right, and to the left at 45°S', async () => {
+  const north = await runThreaded(ekmanCase({ N, latitude: 45, days: columnDays(45) })), south = await runThreaded(ekmanCase({ N, latitude: -45, days: columnDays(-45) }));
   const show = (r) => `${r.transport.magnitude.toFixed(4)} m²/s at ${r.transport.angle.toFixed(1)}° (${r.transport.ratio.toFixed(3)} of τ/(ρ₀f) = ${r.theory.toFixed(4)}); top layer ${(100 * r.top.magnitude).toFixed(2)} cm/s at ${r.top.angle.toFixed(1)}°; mixed layer ${(100 * r.mixed.magnitude).toFixed(2)} cm/s at ${r.mixed.angle.toFixed(1)}°, ${r.mixedDepth.toFixed(1)} m deep, boundary layer ${r.boundaryDepth.toFixed(1)} m, summed over ${r.reach.toFixed(1)} m; mean viscosity ${r.meanViscosity.toFixed(4)} m²/s`;
   console.log(`45°N: ${show(north)}; inertial period ${(north.inertialPeriod / 3600).toFixed(2)} h, ${north.ringCells} cells`);
   console.log(`45°S: ${show(south)}`);
