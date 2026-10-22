@@ -56,6 +56,15 @@ import { formDragCoefficient, formDragScale, FORM_DRAG_DEFAULTS } from './formDr
  * deck's layer is mixed through to its inversion. `depth` itself stays
  * the Richardson depth: the deck starts from it and relaxes toward it.
  *
+ * With `deckLayer`, per cell the layer that holds the deck's sub-grid
+ * inversion (radiation.module.js's mlmLayer, 0 where it has none),
+ * `deckShare` the share of that layer's mass above the inversion and
+ * `deckEntrainment` the deck's entrainment rate w_e, a cell whose
+ * Richardson depth stays under the inversion is mixed by the profile only
+ * below that layer, and the only exchange across the inversion is the
+ * deck's entrainment, ρ w_e / share at the layer's lower interface, which
+ * carries ρ w_e times the jump (Grenier and Bretherton 2001; Lock 2001).
+ *
  * The K-profile vanishes at h, so its top entrains nothing; an explicit
  * entrainment flux closes it (`entrainment`). Where the surface buoyancy
  * flux B0 (the one above, positive upward) is positive,
@@ -160,7 +169,7 @@ export const CLOUD_TOP_DEFAULTS = { threshold: 1e-6, maximumHeight: 3000, pertur
 export const REGIME = { STABLE: 0, SURFACE: 1, DECOUPLED: 2, COUPLED: 3 };
 
 export function createBoundaryLayer(mesh, core, {
-  dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, stratiform = null, buffers = null,
+  dragCoefficient = SEA_DRAG, dragCoefficients = null, heatCoefficients = null, surfaceBuoyancy: givenBuoyancy = null, implicitDrag = false, gustiness = 3, surfaceWind = null, richardsonCritical = 0.5, vonKarman = 0.4, searchTop = 0.5, stability = true, land = null, deckTop = null, deckGate = null, deckLayer = null, deckShare = null, deckEntrainment = null, stratiform = null, buffers = null,
   entrainment: entrainmentOptions = {}, turbulence = 'moist', cloudTop: cloudTopOptions = {}, longwave = null, latentHeat = LATENT_HEAT, formDrag = null,
 } = {}) {
   if (turbulence !== 'moist' && turbulence !== 'dry') throw new Error(`turbulence must be 'moist' or 'dry', not ${turbulence}`);
@@ -246,7 +255,7 @@ export function createBoundaryLayer(mesh, core, {
       }
     }
     if (moistScheme) {
-      for (let i = iFrom; i < iTo; i++) moistColumn(i, pi, theta, surfaceT, q, qc);
+      for (let i = iFrom; i < iTo; i++) { moistColumn(i, pi, theta, surfaceT, q, qc); if (deckLayer) sealDeck(i, pi, theta); }
       return;
     }
     for (let i = iFrom; i < iTo; i++) {
@@ -283,6 +292,7 @@ export function createBoundaryLayer(mesh, core, {
         entrainmentVelocity[i] = velocity;
         mixing[idx] = interfaceExchange(entrainK, i, 0.5 * (pi[i] * sigmaMid[entrainK] / (R * theta[idx] * exnerLayer[idx]) + pi[i] * sigmaMid[entrainK + 1] / (R * theta[below] * exnerLayer[below])), velocity);
       }
+      if (deckLayer) sealDeck(i, pi, theta);
     }
   }
 
@@ -346,6 +356,15 @@ export function createBoundaryLayer(mesh, core, {
     const coefficient = interfaceExchange(kE, i, 0.5 * (density(pi, kE, i, theta) + density(pi, kE + 1, i, theta)), velocity);
     if (coefficient > 0) mixing[kE * C + i] += coefficient;
     return velocity;
+  }
+
+  function sealDeck(i, pi, theta) {
+    const a = deckLayer[i];
+    if (!(a > 0) || depth[i] > deckTop[i]) return;
+    for (let k = kTop; k < a; k++) mixing[k * C + i] = 0;
+    const velocity = Math.max(0, deckEntrainment[i]);
+    mixing[a * C + i] = interfaceExchange(a, i, 0.5 * (density(pi, a, i, theta) + density(pi, a + 1, i, theta)), velocity / Math.max(deckShare[i], 1e-3));
+    entrainmentVelocity[i] = velocity;
   }
 
   function moistColumn(i, pi, theta, surfaceT, q, qc) {
