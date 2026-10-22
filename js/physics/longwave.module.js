@@ -1,5 +1,6 @@
 import { LONGWAVE_SPECTRAL_MODEL, LONGWAVE_POINTS } from './longwaveTable.module.js';
 import { LONGWAVE_SPECTRAL_MODEL as BL36_SPECTRAL_MODEL, LONGWAVE_POINTS as BL36_POINTS } from './longwaveTableBl36.module.js';
+import { LONGWAVE_SPECTRAL_MODEL as BL48_SPECTRAL_MODEL, LONGWAVE_POINTS as BL48_POINTS } from './longwaveTableBl48.module.js';
 import { LONGWAVE_SPECTRAL_MODEL as BL60_SPECTRAL_MODEL, LONGWAVE_POINTS as BL60_POINTS } from './longwaveTableBl60.module.js';
 import { LONGWAVE_SPECTRAL_MODEL as BL36_VOIGT_SPECTRAL_MODEL, LONGWAVE_POINTS as BL36_VOIGT_POINTS } from './longwaveTableBl36Voigt.module.js';
 import { LONGWAVE_SPECTRAL_MODEL as BL36_BY_GAS_SPECTRAL_MODEL, LONGWAVE_POINTS as BL36_BY_GAS_POINTS } from './longwaveTableBl36ByGas.module.js';
@@ -50,23 +51,25 @@ export function normalizedPoints(points) {
 }
 export const LONGWAVE_TABLE = { ...LONGWAVE_SPECTRAL_MODEL, points: normalizedPoints(LONGWAVE_POINTS) };
 const BL36_TABLE = { ...BL36_SPECTRAL_MODEL, points: normalizedPoints(BL36_POINTS) };
+const BL48_TABLE = { ...BL48_SPECTRAL_MODEL, points: normalizedPoints(BL48_POINTS) };
 const BL60_TABLE = { ...BL60_SPECTRAL_MODEL, points: normalizedPoints(BL60_POINTS) };
 const BL36_VOIGT_TABLE = { ...BL36_VOIGT_SPECTRAL_MODEL, points: normalizedPoints(BL36_VOIGT_POINTS) };
 const BL36_BY_GAS_TABLE = { ...BL36_BY_GAS_SPECTRAL_MODEL, points: normalizedPoints(BL36_BY_GAS_POINTS) };
-export const LONGWAVE_TABLE_FILES = { bl34: 'longwaveTable.module.js', bl36: 'longwaveTableBl36.module.js', bl36Voigt: 'longwaveTableBl36Voigt.module.js', bl36ByGas: 'longwaveTableBl36ByGas.module.js', bl60: 'longwaveTableBl60.module.js' };
+export const LONGWAVE_TABLE_FILES = { bl34: 'longwaveTable.module.js', bl36: 'longwaveTableBl36.module.js', bl36Voigt: 'longwaveTableBl36Voigt.module.js', bl36ByGas: 'longwaveTableBl36ByGas.module.js', bl48: 'longwaveTableBl48.module.js', bl60: 'longwaveTableBl60.module.js' };
 
 /*
  * The table fitted on a grid's own columns: bl36's for bl36 and for bl42,
- * which shares its top layers, bl60's for bl60, the one fitted on bl34 for
- * every other grid. With lines 'voigt', the table with Doppler cores fitted
- * on bl36's columns; with 'scaledByGas', bl36's scaled lines refitted against
- * each gas's RRTMG bands as well. bl60 keeps its own table whatever the lines:
- * on its layers the bl36 'voigt' fit's heating errors at 3-30 hPa are two to
- * four times larger.
+ * which shares its top layers, bl48's for bl48, bl60's for bl60, the one
+ * fitted on bl34 for every other grid. With lines 'voigt', the table with
+ * Doppler cores fitted on bl36's columns; with 'scaledByGas', bl36's scaled
+ * lines refitted against each gas's RRTMG bands as well. bl48 and bl60 keep
+ * their own tables whatever the lines: on their layers the bl36 'voigt'
+ * fit's heating errors at 3-30 hPa are 1.4 to four times larger.
  */
 export function longwaveTableFor(levels, lines = 'scaled') {
   if (lines !== 'scaled' && lines !== 'scaledByGas' && lines !== 'voigt') throw new Error(`longwaveLines must be 'scaled', 'scaledByGas' or 'voigt', not ${lines}`);
   const name = levels ? sigmaGridName(levels) : null;
+  if (name === 'bl48') return BL48_TABLE;
   if (name === 'bl60') return BL60_TABLE;
   if (lines === 'voigt') return BL36_VOIGT_TABLE;
   if (lines === 'scaledByGas') return BL36_BY_GAS_TABLE;
