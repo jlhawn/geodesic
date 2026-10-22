@@ -326,7 +326,17 @@ export function sunDirection(t, out = new Float64Array(3)) {
  * layers are thick enough that the free troposphere's own
  * stratification across one of them passes a 2 K test, and a deck
  * entraining under such a weak jump would deepen into it. A column with
- * no such interface has no ceiling but maximumHeight.
+ * no such interface has no ceiling but maximumHeight. With deckInversion
+ * 'subgrid' the ceiling is instead the inversion inside a layer
+ * (Grenier and Bretherton 2001, appendix C; subgridJump below), the
+ * boundary layer mixes only below that layer, the deck's entrainment the
+ * one exchange across it (boundaryLayer.module.js), and the layer's
+ * radiative heating goes to the layer under it: all of it under a deck,
+ * whose cloud-top cooling lies below the inversion (their eq. C15),
+ * elsewhere the share below the inversion. The layer takes none of the
+ * mixed layer's turbulent heating, so it takes none of its radiative
+ * heating either. With deckCloud 'top' the deck's water sits in the
+ * layer that holds its top (Wood 2012) instead of at stratusSigma.
  * With `deckRegime` 'boundaryLayer' the regime test is instead the moist
  * boundary layer's diagnosis of the step before: a coupled
  * stratocumulus-topped layer (REGIME.COUPLED) passes, and with
@@ -1005,6 +1015,11 @@ export function createRadiation(mesh, core, {
    * capping layer's share below. Gives the layer, that share, the
    * inversion's height, and θ_l and q_t just above it on the same slopes.
    */
+  function handOff(row, from, to, moved) {
+    const x = moved * row[from];
+    row[from] -= x; row[to] += x;
+  }
+
   function subgridJump(i, capping, interfaceHeight, theta, q, qc) {
     let a = capping, share = shareAbove(i, a, theta, q, qc);
     if (a + 2 <= K - 1) { const under = shareAbove(i, a + 1, theta, q, qc); if (under > 1 - share) { a += 1; share = under; } }
@@ -1516,6 +1531,12 @@ export function createRadiation(mesh, core, {
       }
     }
     for (let k = 0; k < K; k++) longwave[k * C + i] = netFlux[k] - beforeBands[k];
+    const sealed = !subgridInversion ? 0 : part === 'radiation' ? mlmLayer[i] : budget.mlmLayer;
+    if (sealed > 0) {
+      const moved = deck > 0 ? 1 : 1 - (part === 'radiation' ? mlmShare[i] : budget.mlmShare), from = sealed * C + i;
+      handOff(netFlux, sealed, sealed + 1, moved); handOff(beforeBands, sealed, sealed + 1, moved); handOff(longwave, from, from + C, moved);
+      if (part === 'radiation') handOff(liftShare, sealed, sealed + 1, moved);
+    }
     if (clearSkyPass) {
       shortwave(clearSky, 0, 1, mu, surfaceAlbedo, diffuseAlbedo);
       const clearUpward = restLoss > 0 || visibleLoss > 0 ? incident * clearSky.restEscape * restLoss + incident * clearSky.visibleEscape * aerosolLoss + (ozoneLoss > 0 ? incident * (clearSky.visibleEscape * (1 - aerosolLoss) + clearSky.visibleReflectance) * ozoneLoss : 0) : 0;

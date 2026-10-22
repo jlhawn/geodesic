@@ -6,7 +6,7 @@ import { sigmaInterfaces, SIGMA_GRIDS } from '../js/dynamics/sigmaCore.module.js
 
 const LEVELS = ['bl60', ...(SIGMA_GRIDS.includes('bl48') ? ['bl48'] : [])];
 import { deckProfile } from './helpers/deckProfile.mjs';
-import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood } from './helpers/decisions.mjs';
+import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, radiationTraces } from './helpers/decisions.mjs';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -27,7 +27,7 @@ function stats(cpu, gpu) {
 async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', ...options } = {}) {
   const physics = { mixedLayerDeck: true, deckRest: 'depth', minimumInversion: 2, ...options }, sigma = sigmaInterfaces(levels);
   const model = createModel(new Grid(N), { ocean: false, levels: sigma, radiation: physics, moist: MOIST, boundaryLayer: { turbulence }, surface: { exchange: 'roughness' } });
-  const { ambiguous } = deckProfile(model);
+  const { ambiguous } = deckProfile(model), traces = radiationTraces(model);
   const gpu = await createGpuCore(model.mesh, { levels: sigma, nu4: model.core.nu4, nu4Theta: model.core.nu4Theta, divergenceDamping: model.core.divergenceDamping, referenceTheta: meanTheta(model), physics: { ...physics, ...MOIST, turbulence, surfaceExchange: 'roughness', exchangeOptions: {} } });
   gpu.upload(model.state);
   gpu.uploadPhysics({ mlmSubsidence: model.radiation.mlmSubsidence, mlmHeight: model.radiation.mlmHeight });
@@ -36,7 +36,7 @@ async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', ...optio
     const time = model.time;
     model.step(900);
     await gpu.stepModel(900, time);
-    decisions.check(cpuDecisions(model), gpuDecisions(await gpu.download(), await gpu.downloadPhysics()));
+    decisions.check(cpuDecisions(model, traces), gpuDecisions(await gpu.download(), await gpu.downloadPhysics()));
   }
   const { parted } = decisions;
   const after = await gpu.downloadPhysics(), state = await gpu.download(), r = model.radiation, bl = model.boundaryLayer;

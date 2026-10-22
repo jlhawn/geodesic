@@ -59,16 +59,17 @@ test('where the deck runs on its sub-grid inversion the boundary layer mixes onl
   }
 });
 
-test('with deckCloud \'top\' the deck\'s water sits in the layer that holds its top, the sub-grid inversion or the carried height, and its longwave cooling moves there from σ 0.92', () => {
+test('with deckCloud \'top\' the deck\'s water sits in the layer that holds its top, the sub-grid inversion or the carried height; the inversion\'s layer hands its radiative heating under a deck to the mixed layer below it, so the deck\'s longwave cooling moves there from σ 0.92', () => {
   const sigma = deckRun('bl60', { deckInversion: 'subgrid' }), top = deckRun('bl60', { deckInversion: 'subgrid', deckCloud: 'top' }), grid = deckRun('bl60', { deckCloud: 'top' });
   const { ambiguous: a, C } = top, stratus = top.model.radiation.stratusLayer;
   for (const i of sigma.decked) assert.equal(sigma.model.radiation.deckLayer[i], stratus, `cell ${i}`);
   for (const i of top.decked) assert.equal(top.model.radiation.deckLayer[i], top.model.radiation.mlmShare[i] < 1 ? a : a + 1, `cell ${i}`);
   const both = top.decked.filter((i) => top.model.radiation.stratus[i] > 0 && sigma.model.radiation.stratus[i] > 0);
+  for (const run of [sigma, top]) for (const i of both) assert.equal(run.model.radiation.longwave[a * C + i], 0, `cell ${i}: the inversion's layer kept longwave heating`);
   const mean = (run, k) => both.reduce((s, i) => s + run.model.radiation.longwave[k * C + i], 0) / both.length;
-  console.log(`over ${both.length} cells clouded both ways, the longwave heating of the inversion's layer ${a} goes from ${mean(sigma, a).toFixed(2)} to ${mean(top, a).toFixed(2)}, of the σ 0.92 layer ${stratus} from ${mean(sigma, stratus).toFixed(2)} to ${mean(top, stratus).toFixed(2)}`);
+  console.log(`over ${both.length} cells clouded both ways, the longwave heating of the mixed layer's top layer ${a + 1} goes from ${mean(sigma, a + 1).toFixed(2)} to ${mean(top, a + 1).toFixed(2)}, of the σ 0.92 layer ${stratus} from ${mean(sigma, stratus).toFixed(2)} to ${mean(top, stratus).toFixed(2)}`);
   assert.ok(both.length > 0.5 * C, `${both.length} cells clouded both ways`);
-  assert.ok(mean(top, a) < mean(sigma, a) && mean(top, stratus) > mean(sigma, stratus), 'the cooling stayed at σ 0.92');
+  assert.ok(mean(top, a + 1) < mean(sigma, a + 1) - 20 && mean(top, stratus) > mean(sigma, stratus), 'the cooling stayed at σ 0.92');
   const { geopotential, g } = grid.model.core.diagnostics;
   let away = 0;
   for (const i of grid.decked) {

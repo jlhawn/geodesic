@@ -1311,6 +1311,15 @@ const HELD_THETA = `  for (var k = 0; k < K; k++) {
     IN[S_TH + idx] += dt * heat / (CP * mass) / D[D_EXM + idx];
   }
 `;
+const HAND_OFF = (held) => `  if (MLM_SUBGRID && stashed(0, i) > 0.0 && PH[PH_MLMK + i] > 0.5) {
+    let own = i32(PH[PH_MLMK + i]) * C + i; let under = own + C; let moved = select(1.0 - PH[PH_MLMM + i], 1.0, PH[PH_DECK + i] > 0.0);
+${held ? `    let sw = moved * PH[PH_RADSW + own]; PH[PH_RADSW + own] -= sw; PH[PH_RADSW + under] += sw;
+    let lw = moved * PH[PH_LWH + own]; PH[PH_LWH + own] -= lw; PH[PH_LWH + under] += lw;
+    let lifted = moved * PH[PH_RADDF + own]; PH[PH_RADDF + own] -= lifted; PH[PH_RADDF + under] += lifted;
+` : `    let flux = moved * OUT[LWS_FLUX + own]; OUT[LWS_FLUX + own] -= flux; OUT[LWS_FLUX + under] += flux;
+    if (MOIST_BL) { let lw = moved * PH[PH_LWH + own]; PH[PH_LWH + own] -= lw; PH[PH_LWH + under] += lw; }
+`}  }
+`;
 const HELD_TOA = `  let atmosphereSolar = sunScale * PH[PH_RADATM + i]; let absorbedSolar = sunScale * PH[PH_RADTOA + i]; let reflectedSolar = sunScale * PH[PH_RADREFL + i];
 `;
 const HELD_CLEAR = `  if (CLEAR_SKY) { PH[PH_ABSCLRSUM + i] += sunScale * PH[PH_RADCLRSW + i]; PH[PH_OLRCLRSUM + i] += PH[PH_RADCLROLR + i] + PH[PH_RADTC + i] * lift; }
@@ -1657,7 +1666,7 @@ ${held ? `  PH[PH_RADBACK + i] = back; PH[PH_RADOLR + i] = outgoing; PH[PH_RADT 
 export const physicsSurfaceKernel = (held, seaSkin = false) => `${EXCHANGE_WGSL}${seaSkin ? SKIN_WGSL : ''}${LONGWAVE_STASH}
 @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let i = i32(id.x); if (i >= C) { return; }
-  let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ice = IN[S_ICE + i]; let bottom = (K - 1) * C + i;
+${HAND_OFF(held)}  let pi = IN[S_PI + i]; let skin = IN[S_TS + i]; let ice = IN[S_ICE + i]; let bottom = (K - 1) * C + i;
   let onLand = PH[PH_LAND + i] > 0.5; let onIceSheet = PH[PH_LAND + i] > 1.5;
   let soil0 = PH[PH_SOIL + i]; let snow0 = PH[PH_SNOW + i]; let veg0 = PH[PH_VEG + i]; let surf0 = PH[PH_SURF + i];
   let bucket = select(BUCKET, ROOTCAP, VEGETATED);
