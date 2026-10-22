@@ -7,6 +7,7 @@ import { sigmaInterfaces, SIGMA_GRIDS } from '../js/dynamics/sigmaCore.module.js
 const LEVELS = ['bl60', ...(SIGMA_GRIDS.includes('bl48') ? ['bl48'] : [])];
 import { deckProfile } from './helpers/deckProfile.mjs';
 import { decisionTracker, cpuDecisions, gpuDecisions, neighbourhood, radiationTraces } from './helpers/decisions.mjs';
+import { LATENT_HEAT } from '../js/physics/moist.module.js';
 
 let gpuAvailable = true;
 try { await import('webgpu'); } catch { gpuAvailable = false; }
@@ -22,6 +23,21 @@ function stats(cpu, gpu) {
   let maxDiff = 0, sumSq = 0, sumRef = 0, at = -1;
   for (let x = 0; x < cpu.length; x++) { const d = Math.abs(cpu[x] - gpu[x]); if (d > maxDiff) { maxDiff = d; at = x; } sumSq += d * d; sumRef += cpu[x] * cpu[x]; }
   return { maxDiff, at, rms: Math.sqrt(sumSq / cpu.length), rmsRel: Math.sqrt(sumSq / Math.max(sumRef, 1e-300)) };
+}
+
+function columnEnergy(after, C, K, held) {
+  let worst = 0;
+  for (let i = 0; i < C; i++) {
+    let sum = 0;
+    if (held) {
+      for (let k = 0; k < K; k++) sum += after.RADSW[k * C + i];
+      worst = Math.max(worst, Math.abs(sum - after.RADATM[i]));
+    } else {
+      for (let k = 0; k < K; k++) sum += after.LWH[k * C + i];
+      worst = Math.max(worst, Math.abs(sum + after.OLR[i] + after.SFLUX[i] - after.ABS[i] + after.ATMSW[i] + after.SH[i] + LATENT_HEAT * after.EVAP[i]));
+    }
+  }
+  return worst;
 }
 
 async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', ...options } = {}) {
@@ -57,6 +73,7 @@ async function deckPair(steps, { levels = 'bl60', turbulence = 'moist', ...optio
     C, K, ambiguous, decked, gpuDecked, layerMiss, homeMiss, sealed, moved, parted: parted.size, near: near.size,
     share: cells(r.mlmShare, 'MLMM'), top: cells(r.mlmTop, 'MLMTOP'), height: cells(r.mlmHeight, 'MLMH'), water: cells(r.mlmWater, 'MLMWATER'), entrainment: cells(r.mlmEntrainment, 'MLMENT'),
     deck: cells(r.stratus, 'DECK'), fraction: cells(r.stratusFraction, 'DECKF'), olr: cells(r.outgoing, 'OLR'), sw: cells(r.surfaceShortwave, 'SWDN'), blEntrainment: cells(bl.entrainment, 'ENTRAIN'),
+    gpuSealed: Array.from({ length: C }, (_, i) => after.MLMK[i]).filter((k) => k > 0.5).length, gpuEnergy: columnEnergy(after, C, K, (physics.radiationEvery ?? 1) > 1),
     mixing: columns(bl.mixing, 'MIX'), longwave: turbulence === 'moist' ? columns(r.longwave, 'LWH') : null, theta: keptColumns(model.state[1], state[1]), q: keptColumns(model.state[4], state[4]),
   };
 }
@@ -88,5 +105,13 @@ test('on bl60, and bl48 where it is built, the deck\'s cloud at its own top, on 
     show(label, run);
     agree(label, run);
     assert.ok(run.moved > 0.5 * run.decked, `${label}: ${run.moved} of ${run.decked} decks off σ 0.92`);
+  }
+});
+
+test('on the GPU too the inversion\'s layer hands its heating down inside its column: each column\'s longwave heating sums to its outgoing longwave less the surface\'s net, and with the radiation held its shortwave heating to the sunlight its air absorbs, to single precision', { skip: !gpuAvailable && 'webgpu not installed' }, async () => {
+  for (const options of [...LEVELS.map((levels) => ({ levels })), { radiationEvery: 2 }]) {
+    const label = Object.entries(options).map(([key, value]) => `${key} ${value}`).join(', '), run = await deckPair(3, { ...options, deckCloud: 'top', deckInversion: 'subgrid' });
+    console.log(`${label}: ${run.gpuSealed} of ${run.C} columns sealed on the GPU, worst column off its boundary fluxes by ${run.gpuEnergy.toExponential(2)} W/m²`);
+    assert.ok(run.gpuSealed > 0.5 * run.C && run.gpuEnergy < 1e-2, `${label}: ${run.gpuSealed} sealed, ${run.gpuEnergy} W/m² off`);
   }
 });

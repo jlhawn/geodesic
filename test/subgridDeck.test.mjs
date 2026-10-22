@@ -4,6 +4,7 @@ import { Grid } from '../js/grid.module.js';
 import { createModel } from '../js/model.module.js';
 import { sigmaInterfaces, SIGMA_GRIDS } from '../js/dynamics/sigmaCore.module.js';
 import { physicsConstants } from '../js/gpu/physics.gpu.js';
+import { LATENT_HEAT } from '../js/physics/moist.module.js';
 import { deckProfile, SHARE } from './helpers/deckProfile.mjs';
 
 const N = 16;
@@ -78,6 +79,27 @@ test('with deckCloud \'top\' the deck\'s water sits in the layer that holds its 
   }
   console.log(`on the grid ceiling the deck's layer brackets its height on all but ${away} of ${grid.decked.length} cells`);
   assert.ok(grid.decked.length > 0.5 * C && away === 0, `${away} of ${grid.decked.length} away from their layer`);
+});
+
+test('the inversion\'s layer hands its heating down inside its column: each column\'s longwave heating sums to its outgoing longwave less the surface\'s net, and with the radiation held its shortwave heating to the sunlight its air absorbs', () => {
+  for (const levels of ['bl60', ...(SIGMA_GRIDS.includes('bl48') ? ['bl48'] : [])]) for (const radiationEvery of [1, 2]) {
+    const { model, C } = deckRun(levels, { deckInversion: 'subgrid', deckCloud: 'top', radiationEvery }, 'moist'), r = model.radiation, K = model.core.K;
+    let worst = 0, sealed = 0;
+    for (let i = 0; i < C; i++) {
+      if (r.mlmLayer[i] > 0) sealed++;
+      let sum = 0;
+      if (radiationEvery === 1) {
+        for (let k = 0; k < K; k++) sum += r.longwave[k * C + i];
+        worst = Math.max(worst, Math.abs(sum + r.outgoing[i] + r.surfaceFlux[i] - r.surfaceSolar[i] + r.sensibleHeat[i] + LATENT_HEAT * r.evaporation[i]));
+      } else {
+        for (let k = 0; k < K; k++) sum += r.held.shortwave[k * C + i];
+        worst = Math.max(worst, Math.abs(sum - r.held.atmosphere[i]));
+      }
+    }
+    const label = `${levels}, ${radiationEvery === 1 ? 'longwave' : 'held shortwave'}`;
+    console.log(`${label}: ${sealed} of ${C} columns sealed, worst column off its boundary fluxes by ${worst.toExponential(2)} W/m²`);
+    assert.ok(sealed > 0.5 * C && worst < 1e-9, `${label}: ${sealed} sealed, ${worst} W/m² off`);
+  }
 });
 
 test('the deck options refuse other values and need the mixed-layer deck, in both engines', async () => {
