@@ -1,14 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { caseMesh, ekman, PUMP_DEPTH, DEG, DAY } from '../explain/oceanCases.module.js';
+import { caseMesh, ekmanCase, PUMP_DEPTH, DEG, DAY } from '../explain/oceanCases.module.js';
+import { runThreaded } from './helpers/oceanThreads.mjs';
 
 const N = 16;
 const mesh = caseMesh(N), C = mesh.nCells;
 const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
 const between = (v, lo, hi, what) => assert.ok(v >= lo && v <= hi, `${what}: ${v} not within ${lo} to ${hi}`);
 
-test('over the planet the trades lift water at the equator and sink it in the belts near 15° and 30°, and the westerlies’ Ekman transport is τ/(ρ₀f)', () => {
-  const trades = ekman({ N, view: 'planet', wind: 'trades' }), westerlies = ekman({ N, view: 'planet', wind: 'westerlies' });
+test('over the planet the trades lift water at the equator and sink it in the belts near 15° and 30°, and the westerlies’ Ekman transport is τ/(ρ₀f)', async () => {
+  const trades = await runThreaded(ekmanCase({ N, view: 'planet', wind: 'trades' })), westerlies = await runThreaded(ekmanCase({ N, view: 'planet', wind: 'westerlies' }));
   const bin = (r, lat) => r.zonal.latitude.findIndex((l) => l === lat);
   const w = (r, lat) => r.zonal.upwelling[bin(r, lat)] * DAY;
   const belt = (r, from, to) => { let sum = 0, area = 0; for (let i = 0; i < C; i++) { const lat = Math.abs(mesh.latCell[i]) / DEG; if (lat >= from && lat < to) { sum += mesh.areaCell[i] * r.upwelling[i]; area += mesh.areaCell[i]; } } return sum / area * DAY; };

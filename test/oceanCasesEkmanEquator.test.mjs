@@ -1,14 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { caseMesh, ekman, DEG } from '../explain/oceanCases.module.js';
+import { caseMesh, ekmanCase, DEG } from '../explain/oceanCases.module.js';
 import { ekmanSpiral, fitViscosity, columnDays } from '../explain/ekmanTheory.module.js';
+import { runThreaded } from './helpers/oceanThreads.mjs';
 
 const N = 16;
 const mesh = caseMesh(N), C = mesh.nCells;
 const between = (v, lo, hi, what) => assert.ok(v >= lo && v <= hi, `${what}: ${v} not within ${lo} to ${hi}`);
 
-test('at 5°N the Ekman balance has weakened: the transport turns well short of a right angle and runs a third above the ring’s τ/(ρ₀f), and the boundary layer is deeper', () => {
-  const low = ekman({ N, latitude: 5, days: columnDays(5) });
+test('at 5°N the Ekman balance has weakened: the transport turns well short of a right angle and runs a third above the ring’s τ/(ρ₀f), and the boundary layer is deeper', async () => {
+  const low = await runThreaded(ekmanCase({ N, latitude: 5, days: columnDays(5) }));
   console.log(`5°N: ${low.transport.magnitude.toFixed(3)} m²/s at ${low.transport.angle.toFixed(1)}° (${low.transport.ratio.toFixed(3)} of τ/(ρ₀f) = ${low.theory.toFixed(3)}); top layer ${low.top.angle.toFixed(1)}°; mixed ${low.mixedDepth.toFixed(1)} m, boundary ${low.boundaryDepth.toFixed(1)} m; cells ${low.ringCells}`);
   const share = (r) => { const q = fitViscosity({ tau: r.stressMean, f: r.fMean, center: r.profile.center, thickness: r.profile.thickness, east: r.profile.east, north: r.profile.north, reach: r.reach }); return q.rms / Math.abs(ekmanSpiral({ tau: r.stressMean, f: r.fMean, viscosity: q.viscosity }).surface); };
   console.log(`the best constant viscosity misses the layers by ${(100 * share(low)).toFixed(1)} percent of its surface current at 5°N; boundary layer ${low.boundaryDepth.toFixed(2)} m`);
