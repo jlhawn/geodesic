@@ -28,10 +28,19 @@
  * (decodeLandIce, on the topography's grid), a land cell is ice sheet
  * where ice covers more than half of its land; iceFraction is the share
  * of its raster points under ice, iceThickness the mean thickness of that
- * ice (m) and shelfFraction the share afloat. Without it the ice sheets
- * are Antarctica's land and Greenland's interior above 800 m. With
- * `iceShelves` 'sea' the floating ice is taken away: its points count
- * at the depth of the bed beneath them and hold no ice.
+ * ice (m), shelfFraction the share afloat, shelfThickness the floating
+ * ice's thickness spread over the whole cell (m of ice) and wetDepth the
+ * depth of the sea beneath its points, land counting as none, averaged
+ * over the cell: the water a cell holds per unit area. Without it the
+ * ice sheets are Antarctica's land and Greenland's interior above 800 m.
+ * With `iceShelves` 'sea' the floating ice is taken away: its points
+ * count at the depth of the bed beneath them and hold no ice. With
+ * 'cavity' the atmosphere's geography is that of 'land', and `ocean` is
+ * the geography of the water: that of 'sea', except that a cell 'sea'
+ * turns to sea stays land where less than cavityDepth of water lies under
+ * its shelf. The others are cavities, land above and sea below, under a
+ * shelf of draft iceDraft = (ρi/ρw)·shelfThickness, their bed at wetDepth
+ * so that the column holds the water of the cell's points.
  */
 export function topographyFromInt16(buffer, rows = 720, cols = 1440, name = 'etopo1') {
   return { rows, cols, data: new Int16Array(buffer), name };
@@ -45,10 +54,11 @@ export function topographyFromInt16(buffer, rows = 720, cols = 1440, name = 'eto
  * so one without the record is on ETOPO1 with the latitude and elevation
  * rule; fresh starts take FRESH_GEOGRAPHY. `iceShelves` is the floating
  * ice: 'land', an ice surface at its freeboard with the coastline at the
- * shelf front, or 'sea', open water down to the bed.
+ * shelf front; 'sea', open water down to the bed; or 'cavity', the ice
+ * surface above and the sea beneath it.
  */
 export const TOPOGRAPHIES = { etopo1: 'topography_0p25.bin', etopo2022: 'topography2022_0p25.bin' };
-export const ICE_SHEETS = ['rule', 'observed'], ICE_SHELVES = ['land', 'sea'];
+export const ICE_SHEETS = ['rule', 'observed'], ICE_SHELVES = ['land', 'sea', 'cavity'];
 export const LEGACY_GEOGRAPHY = { topography: 'etopo1', iceSheets: 'rule', iceShelves: 'land' };
 export const FRESH_GEOGRAPHY = { topography: 'etopo2022', iceSheets: 'observed', iceShelves: 'land' };
 export const topographyUrl = (name = 'etopo1') => new URL(`../data/${TOPOGRAPHIES[name]}`, import.meta.url);
@@ -86,38 +96,41 @@ export function stateGeography(saved) {
 
 /*
  * data/landice_0p25.bin, which scripts/landIce.mjs writes from ETOPO
- * 2022 on the topography's grid: a 20-byte header ('LIC2', rows,
- * columns, raster points per pixel, the n pixels holding ice), then for
- * those pixels their indices (uint32), the mean thickness of their ice
- * points and of those afloat and the mean bed under those afloat, in
- * meters (uint16, uint16, int16), and the counts of their ice points and
- * of those afloat (uint8, uint8).
+ * 2022 on the topography's grid: a 24-byte header ('LIC3', rows,
+ * columns, raster points per pixel, the n pixels holding ice, and the
+ * firn air the flotation took off the floating ice's surface, float32
+ * meters), then for those pixels their indices (uint32), the mean
+ * thickness of their ice points and of those afloat (ice equivalent),
+ * the mean surface of those afloat and the mean bed under them, in
+ * meters (uint16, uint16, uint16, int16), and the counts of their ice
+ * points and of those afloat (uint8, uint8).
  */
 export const ICE_DENSITY = 917, SEAWATER_DENSITY = 1028;
 export const landIceUrl = new URL('../data/landice_0p25.bin', import.meta.url);
 
-export function encodeLandIce({ rows, cols, points, index, count, floating, thickness, floatThickness, floatBed }) {
-  const n = index.length, out = new ArrayBuffer(20 + 12 * n), head = new DataView(out);
-  [76, 73, 67, 50].forEach((b, j) => head.setUint8(j, b));
-  head.setUint32(4, rows, true); head.setUint32(8, cols, true); head.setUint32(12, points, true); head.setUint32(16, n, true);
-  new Uint32Array(out, 20, n).set(index);
-  new Uint16Array(out, 20 + 4 * n, n).set(thickness);
-  new Uint16Array(out, 20 + 6 * n, n).set(floatThickness);
-  new Int16Array(out, 20 + 8 * n, n).set(floatBed);
-  new Uint8Array(out, 20 + 10 * n, n).set(count);
-  new Uint8Array(out, 20 + 11 * n, n).set(floating);
+export function encodeLandIce({ rows, cols, points, firnAir = 0, index, count, floating, thickness, floatThickness, floatSurface, floatBed }) {
+  const n = index.length, out = new ArrayBuffer(24 + 14 * n), head = new DataView(out);
+  [76, 73, 67, 51].forEach((b, j) => head.setUint8(j, b));
+  head.setUint32(4, rows, true); head.setUint32(8, cols, true); head.setUint32(12, points, true); head.setUint32(16, n, true); head.setFloat32(20, firnAir, true);
+  new Uint32Array(out, 24, n).set(index);
+  new Uint16Array(out, 24 + 4 * n, n).set(thickness);
+  new Uint16Array(out, 24 + 6 * n, n).set(floatThickness);
+  new Uint16Array(out, 24 + 8 * n, n).set(floatSurface);
+  new Int16Array(out, 24 + 10 * n, n).set(floatBed);
+  new Uint8Array(out, 24 + 12 * n, n).set(count);
+  new Uint8Array(out, 24 + 13 * n, n).set(floating);
   return out;
 }
 
 export function decodeLandIce(buffer) {
   const bytes = buffer instanceof ArrayBuffer ? buffer : buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
   const head = new DataView(bytes);
-  if (String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'LIC2') throw new Error('not a land-ice file');
-  const rows = head.getUint32(4, true), cols = head.getUint32(8, true), points = head.getUint32(12, true), n = head.getUint32(16, true);
-  if (bytes.byteLength !== 20 + 12 * n) throw new Error('land-ice file of the wrong size');
+  if (bytes.byteLength < 24 || String.fromCharCode(...new Uint8Array(bytes, 0, 4)) !== 'LIC3') throw new Error('not a land-ice file');
+  const rows = head.getUint32(4, true), cols = head.getUint32(8, true), points = head.getUint32(12, true), n = head.getUint32(16, true), firnAir = head.getFloat32(20, true);
+  if (bytes.byteLength !== 24 + 14 * n) throw new Error('land-ice file of the wrong size');
   return {
-    rows, cols, points, index: new Uint32Array(bytes, 20, n), thickness: new Uint16Array(bytes, 20 + 4 * n, n), floatThickness: new Uint16Array(bytes, 20 + 6 * n, n),
-    floatBed: new Int16Array(bytes, 20 + 8 * n, n), count: new Uint8Array(bytes, 20 + 10 * n, n), floating: new Uint8Array(bytes, 20 + 11 * n, n),
+    rows, cols, points, firnAir, index: new Uint32Array(bytes, 24, n), thickness: new Uint16Array(bytes, 24 + 4 * n, n), floatThickness: new Uint16Array(bytes, 24 + 6 * n, n),
+    floatSurface: new Uint16Array(bytes, 24 + 8 * n, n), floatBed: new Int16Array(bytes, 24 + 10 * n, n), count: new Uint8Array(bytes, 24 + 12 * n, n), floating: new Uint8Array(bytes, 24 + 13 * n, n),
   };
 }
 
@@ -162,26 +175,31 @@ export const NARROW_STRAITS = {
   danish: { sill: 50, points: [[55.5, 12.7], [56.1, 12.3], [56.8, 11.5], [57.6, 10.5]] },
 };
 
-export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS, landIce = null, iceShelves = 'land' } = {}) {
+export function createGeography(mesh, topography, { landThreshold = 0.5, landBridges = LAND_BRIDGES, seaStraits = SEA_STRAITS, landIce = null, iceShelves = 'land', cavityDepth = 50 } = {}) {
   const { nCells: C, nEdges: E, xCell, cellsOnCell, nEdgesOnCell, edgesOnCell, cellsOnEdge, areaCell, latCell, lonCell } = mesh;
   const { rows, cols } = topography;
   if (landIce && (landIce.rows !== rows || landIce.cols !== cols)) throw new Error(`the land ice is ${landIce.rows} × ${landIce.cols}, the topography ${rows} × ${cols}`);
   if (!ICE_SHELVES.includes(iceShelves)) throw new Error(`iceShelves is ${ICE_SHELVES.join(' or ')}, not ${iceShelves}`);
   if (iceShelves !== 'land' && !landIce) throw new Error(`ice shelves at ${iceShelves} need the land ice`);
+  if (iceShelves === 'cavity') {
+    const options = { landThreshold, landBridges, seaStraits, landIce };
+    return cavityGeography(mesh, createGeography(mesh, topography, options), createGeography(mesh, topography, { ...options, iceShelves: 'sea' }), cavityDepth);
+  }
   const slot = landIce ? new Int32Array(rows * cols).fill(-1) : null, afloat = iceShelves === 'sea';
   if (landIce) landIce.index.forEach((n, k) => { slot[n] = k; });
   const data = !afloat ? topography.data : Float64Array.from(topography.data, (value, n) => {
     const k = slot[n];
     if (k < 0 || !landIce.floating[k]) return value;
-    return value + landIce.floating[k] / landIce.points * (landIce.floatBed[k] - landIce.floatThickness[k] * (1 - ICE_DENSITY / SEAWATER_DENSITY));
+    return value + landIce.floating[k] / landIce.points * (landIce.floatBed[k] - landIce.floatSurface[k]);
   });
   const count = new Int32Array(C), landCount = new Int32Array(C), sum = new Float64Array(C), owner = new Int32Array(rows * cols);
-  const iceShare = landIce ? new Float64Array(C) : null, icePoints = landIce ? new Float64Array(C) : null, iceVolume = landIce ? new Float64Array(C) : null, shelfShare = landIce ? new Float64Array(C) : null;
+  const iceShare = landIce ? new Float64Array(C) : null, icePoints = landIce ? new Float64Array(C) : null, iceVolume = landIce ? new Float64Array(C) : null, shelfShare = landIce ? new Float64Array(C) : null, shelfVolume = landIce ? new Float64Array(C) : null, wetSum = landIce ? new Float64Array(C) : null;
   const addIce = (i, n) => {
     const k = slot[n];
     if (k < 0) return;
     const { count: ice, floating, thickness, floatThickness } = landIce, held = afloat ? ice[k] - floating[k] : ice[k];
     iceShare[i] += held / landIce.points; icePoints[i] += held; shelfShare[i] += floating[k] / landIce.points;
+    shelfVolume[i] += floating[k] * floatThickness[k] / landIce.points;
     iceVolume[i] += Math.max(0, ice[k] * thickness[k] - (afloat ? floating[k] * floatThickness[k] : 0));
   };
   const nearest = (x, y, z, start) => {
@@ -208,7 +226,7 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
       count[cell]++;
       sum[cell] += elevation;
       if (elevation > 0) landCount[cell]++;
-      if (landIce) addIce(cell, r * cols + c);
+      if (landIce) { addIce(cell, r * cols + c); wetSum[cell] += Math.max(0, -elevation); }
     }
   }
   const land = new Uint8Array(C), landFraction = new Float64Array(C), elevation = new Float64Array(C);
@@ -218,7 +236,7 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
       const c = ((Math.floor((lonCell[i] + Math.PI) / (2 * Math.PI / cols)) % cols) + cols) % cols;
       const value = data[r * cols + c];
       count[i] = 1; sum[i] = value; landCount[i] = value > 0 ? 1 : 0;
-      if (landIce) addIce(i, r * cols + c);
+      if (landIce) { addIce(i, r * cols + c); wetSum[i] = Math.max(0, -value); }
     }
     landFraction[i] = landCount[i] / count[i];
     elevation[i] = sum[i] / count[i];
@@ -337,9 +355,9 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
       previous = i;
     });
   }
-  const iceSheet = new Uint8Array(C), iceFraction = landIce ? new Float64Array(C) : null, iceThickness = landIce ? new Float64Array(C) : null, shelfFraction = landIce ? new Float64Array(C) : null;
+  const iceSheet = new Uint8Array(C), iceFraction = landIce ? new Float64Array(C) : null, iceThickness = landIce ? new Float64Array(C) : null, shelfFraction = landIce ? new Float64Array(C) : null, shelfThickness = landIce ? new Float64Array(C) : null, wetDepth = landIce ? new Float64Array(C) : null;
   for (let i = 0; i < C; i++) {
-    if (landIce) shelfFraction[i] = shelfShare[i] / count[i];
+    if (landIce) { shelfFraction[i] = shelfShare[i] / count[i]; shelfThickness[i] = shelfVolume[i] / count[i]; wetDepth[i] = wetSum[i] / count[i]; }
     if (!land[i]) continue;
     if (landIce) {
       iceFraction[i] = iceShare[i] / count[i];
@@ -351,7 +369,27 @@ export function createGeography(mesh, topography, { landThreshold = 0.5, landBri
   }
   let landArea = 0, total = 0;
   for (let i = 0; i < C; i++) { total += areaCell[i]; if (land[i]) landArea += areaCell[i]; }
-  return { land, landFraction, elevation, iceSheet, ...(landIce ? { iceFraction, iceThickness, shelfFraction } : {}), edgeOcean, edgeSill, coastEdges: Int32Array.from(coast), landArea: landArea / total };
+  return { land, landFraction, elevation, iceSheet, ...(landIce ? { iceFraction, iceThickness, shelfFraction, shelfThickness, wetDepth } : {}), edgeOcean, edgeSill, coastEdges: Int32Array.from(coast), landArea: landArea / total };
+}
+
+function cavityGeography(mesh, shelf, sea, cavityDepth) {
+  const { nCells: C, nEdges: E, cellsOnEdge } = mesh;
+  const cavity = new Uint8Array(C), iceDraft = new Float64Array(C), land = Uint8Array.from(shelf.land), elevation = Float64Array.from(sea.elevation);
+  for (let i = 0; i < C; i++) {
+    if (!shelf.land[i] || sea.land[i]) continue;
+    const draft = shelf.shelfThickness[i] * ICE_DENSITY / SEAWATER_DENSITY;
+    if (sea.wetDepth[i] - draft < cavityDepth) continue;
+    cavity[i] = 1; iceDraft[i] = draft; land[i] = 0; elevation[i] = -sea.wetDepth[i];
+  }
+  for (let i = 0; i < C; i++) if (land[i]) elevation[i] = shelf.elevation[i];
+  const edgeOcean = new Uint8Array(E), edgeSill = new Float64Array(E), coast = [];
+  for (let e = 0; e < E; e++) {
+    const a = land[cellsOnEdge[2 * e]], b = land[cellsOnEdge[2 * e + 1]];
+    edgeOcean[e] = !a && !b ? 1 : 0;
+    if (edgeOcean[e]) edgeSill[e] = sea.edgeSill[e];
+    if (a !== b) coast.push(e);
+  }
+  return { ...shelf, cavity, iceDraft, ocean: { land, elevation, edgeOcean, edgeSill, coastEdges: Int32Array.from(coast) } };
 }
 
 /*

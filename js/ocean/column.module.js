@@ -569,7 +569,7 @@ export function interiorMixing({ h, T, S, u = null, v = null, shear = null, K, r
   nu[K - 1] = 0;
 }
 
-export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, type = 'IB', ustar, f, dt, options = {} }, { kappa, nu }, scratch) {
+export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat = 0, salt = 0, light = 0, type = 'IB', ustar, f, dt, capped = false, options = {} }, { kappa, nu }, scratch) {
   const { interfaces, shares, boundaryKappa, interiorKappa, interiorNu } = scratch;
   interfacesOf(h, K, interfaces);
   if (light !== 0) {
@@ -579,7 +579,7 @@ export function mixColumn({ h, T, S, u = null, v = null, shear = null, K, heat =
   T[0] += heat / h[0];
   S[0] += salt / h[0];
   const convection = convectiveAdjustment(h, T, S, K, scratch, options);
-  const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: convection.released, ...options }, boundaryKappa, scratch);
+  const layer = boundaryLayer({ h, T, S, K, ustar, f, dt, released: capped ? 0 : convection.released, ...options }, boundaryKappa, scratch);
   interiorMixing({ h, T, S, u, v, shear, K, ...options }, interiorKappa, interiorNu, scratch);
   for (let k = 0; k < K; k++) { kappa[k] = boundaryKappa[k] + interiorKappa[k]; nu[k] = boundaryKappa[k] + interiorNu[k]; }
   if (anyMixing(kappa, K)) solveLayers(h, K, kappa, dt, scratch.gain, T, T, S, S);
